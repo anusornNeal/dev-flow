@@ -28,6 +28,7 @@ import TaskDetailsDrawer from './components/TaskDetailsDrawer';
 import CreateTaskModal from './components/CreateTaskModal';
 import JsonTemplateModal from './components/JsonTemplateModal';
 import BatchImportModal from './components/BatchImportModal';
+import DocEditorModal from './components/DocEditorModal';
 
 // Standardized project lanes themed cleanly
 const COLUMNS: Column[] = [
@@ -47,6 +48,7 @@ export default function App() {
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isJsonModalOpen, setIsJsonModalOpen] = useState(false);
   const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
+  const [editingDocId, setEditingDocId] = useState<'schema' | 'playbook' | null>(null);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [mounted, setMounted] = useState(false);
 
@@ -501,6 +503,23 @@ export default function App() {
                 >
                   <FileCode size={11} /> Schema Spec
                 </button>
+                <div className="w-px h-4 bg-[#ebdcb9]"></div>
+                <button
+                  onClick={() => setEditingDocId('schema')}
+                  type="button"
+                  className="hover:bg-[#ebdcb9] hover:text-[#534135] px-2.5 py-1 text-[10px] font-mono rounded-lg flex items-center gap-1 transition-colors cursor-pointer text-[#a46c24] font-bold"
+                  title="Edit Schema Document"
+                >
+                  <FileCode size={11} /> Edit Schema
+                </button>
+                <button
+                  onClick={() => setEditingDocId('playbook')}
+                  type="button"
+                  className="hover:bg-[#ebdcb9] hover:text-[#534135] px-2.5 py-1 text-[10px] font-mono rounded-lg flex items-center gap-1 transition-colors cursor-pointer text-[#a46c24] font-bold"
+                  title="Edit Playbook Document"
+                >
+                  <Code size={11} /> Edit Playbook
+                </button>
               </div>
 
               {/* Launch Batch Import Modal */}
@@ -698,6 +717,14 @@ export default function App() {
       {isJsonModalOpen && (
         <JsonTemplateModal
           onClose={() => setIsJsonModalOpen(false)}
+        />
+      )}
+
+      {/* 6. Document Editor Modal */}
+      {editingDocId && (
+        <DocEditorModal
+          docId={editingDocId}
+          onClose={() => setEditingDocId(null)}
         />
       )}
     </div>

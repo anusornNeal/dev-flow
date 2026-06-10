@@ -397,6 +397,34 @@ async function startServer() {
 
   // ================= API ENDPOINTS =================
 
+  // ================= DOCUMENT ENDPOINTS =================
+  const DOCS = {
+    schema: 'C:\\\\Users\\\\tatar\\\\Downloads\\\\Documents\\\\Projects\\\\dev flow\\\\dev-flow-card-schema-and-template.md',
+    playbook: 'C:\\\\Users\\\\tatar\\\\Downloads\\\\Documents\\\\Projects\\\\dev flow\\\\dev-flow-agent-playbook.md'
+  };
+
+  app.get('/api/docs/:id', (req, res) => {
+    const docPath = DOCS[req.params.id as keyof typeof DOCS];
+    if (!docPath) return res.status(404).json({ error: 'Doc not found' });
+    try {
+      const content = fs.readFileSync(docPath, 'utf8');
+      res.json({ content });
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to read document' });
+    }
+  });
+
+  app.put('/api/docs/:id', (req, res) => {
+    const docPath = DOCS[req.params.id as keyof typeof DOCS];
+    if (!docPath) return res.status(404).json({ error: 'Doc not found' });
+    try {
+      fs.writeFileSync(docPath, req.body.content, 'utf8');
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to write document' });
+    }
+  });
+
   // GET: Fetch all projects
   app.get('/api/projects', (req, res) => {
     res.json(projectsCache);

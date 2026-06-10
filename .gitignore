@@ -1,0 +1,14 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+
+dev-flow-usage-guide.md
+tasks.json
+projects.json
+counters.json
+mcp-servers.json

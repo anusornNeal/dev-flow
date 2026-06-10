@@ -1,0 +1,65 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700;800&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "JetBrains Mono", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: #fbf9f6;
+  color: #3e322b;
+}
+
+/* Custom soft warm scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #f5eedf;
+}
+::-webkit-scrollbar-thumb {
+  background: #dacbb2;
+  border-radius: 9999px;
+  border: 2px solid #f5eedf;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #c3b499;
+}
+
+/* Text selections matching orange cream cat */
+::selection {
+  background-color: #ffdcb3;
+  color: #553412;
+}
+
+/* Keyframes for cute things */
+@keyframes wag {
+  0%, 100% { transform: rotate(0deg); }
+  50% { transform: rotate(12deg); }
+}
+
+@keyframes sleep-pulse {
+  0%, 100% { transform: scale(1); opacity: 0.8; }
+  50% { transform: scale(1.05); opacity: 1; }
+}
+
+@keyframes float-heart {
+  0% { transform: translateY(0) scale(1); opacity: 1; }
+  100% { transform: translateY(-30px) scale(0.8); opacity: 0; }
+}
+
+.animate-tail-wag {
+  animation: wag 1.2s ease-in-out infinite;
+  transform-origin: bottom center;
+}
+
+.animate-sleep-breath {
+  animation: sleep-pulse 3s ease-in-out infinite;
+}
+
+.animate-float-heart {
+  animation: float-heart 1s ease-out forwards;
+}

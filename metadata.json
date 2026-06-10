@@ -1,0 +1,6 @@
+{
+  "name": "Dev Kanban Board",
+  "description": "A refined mobile developer workspace with full-stack REST API endpoints, checklist action items, and native JetBrains Mono layout.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

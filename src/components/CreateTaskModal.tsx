@@ -23,7 +23,7 @@ export default function CreateTaskModal({ onClose, onSubmit, parentId, parentTit
   const [status, setStatus] = useState<TaskStatus>('backlog');
   const [filesInput, setFilesInput] = useState('');
   const [checklistInput, setChecklistInput] = useState('');
-  const [designImage, setDesignImage] = useState('');
+  const [designImages, setDesignImages] = useState<string[]>([]);
   const [specUrl, setSpecUrl] = useState('');
   const [agent, setAgent] = useState('');
   const [model, setModel] = useState('');
@@ -77,7 +77,7 @@ class MyViewModel: ViewModel() {
       tags: tagsArray,
       targetFiles: filesArray,
       checklist: parsedChecklist,
-      designImage: designImage.trim() || undefined,
+      designImages: designImages.length > 0 ? designImages : undefined,
       specUrl: specUrl.trim() || undefined,
       agent: agent || undefined,
       model: model || undefined,
@@ -294,47 +294,56 @@ class MyViewModel: ViewModel() {
                 <ImageIcon size={12} className="text-[#bf8a50]" /> Design Image (File or URL)
               </label>
               <div className="space-y-2">
-                <input
-                  type="text"
-                  className="w-full bg-white border border-[#ebdcb9] rounded-xl px-2.5 py-2 text-[11px] text-[#3a2f26] placeholder-[#c4b3a4] outline-none focus:border-[#d4994e] font-mono"
-                  placeholder="Paste Image URL or Base64..."
-                  value={designImage}
-                  onChange={(e) => setDesignImage(e.target.value)}
-                />
-                <div className="flex items-center gap-2">
-                  <label className="text-[10px] bg-white border border-[#ebdcb9] px-2.5 py-1.5 rounded-lg text-[#5c493c] hover:bg-[#fffcf6] cursor-pointer inline-flex items-center gap-1 font-bold">
-                    <span>Upload Image file</span>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <label className={`text-[10px] bg-white border border-[#ebdcb9] px-2.5 py-1.5 rounded-lg text-[#5c493c] hover:bg-[#fffcf6] cursor-pointer inline-flex items-center gap-1 font-bold ${designImages.length >= 5 ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                    <span>Upload Image(s) {designImages.length > 0 && `(${designImages.length}/5)`}</span>
                     <input
                       type="file"
                       accept="image/*"
+                      multiple
+                      disabled={designImages.length >= 5}
                       className="hidden"
                       onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file) {
+                        const files = Array.from(e.target.files || []);
+                        const availableSlots = 5 - designImages.length;
+                        const filesToProcess = files.slice(0, availableSlots);
+                        
+                        filesToProcess.forEach(file => {
                           const reader = new FileReader();
                           reader.onloadend = () => {
                             if (typeof reader.result === 'string') {
-                              setDesignImage(reader.result);
+                              setDesignImages(prev => [...prev, reader.result as string]);
                             }
                           };
                           reader.readAsDataURL(file);
-                        }
+                        });
                       }}
                     />
                   </label>
-                  {designImage && (
+                  {designImages.length > 0 && (
                     <button
                       type="button"
-                      onClick={() => setDesignImage('')}
+                      onClick={() => setDesignImages([])}
                       className="text-[10px] text-red-500 font-bold hover:underline cursor-pointer"
                     >
-                      Clear Image
+                      Clear All
                     </button>
                   )}
                 </div>
-                {designImage && (
-                  <div className="relative border border-[#ebdcb9] rounded-lg overflow-hidden h-14 w-auto max-w-[120px] bg-white">
-                    <img src={designImage} alt="Preview" className="h-full w-full object-cover" referrerPolicy="no-referrer" />
+                {designImages.length > 0 && (
+                  <div className="flex gap-2 overflow-x-auto pb-1 mt-2">
+                    {designImages.map((img, idx) => (
+                      <div key={idx} className="relative border border-[#ebdcb9] rounded-lg overflow-hidden h-14 w-14 shrink-0 bg-white group">
+                        <img src={img} alt={`Preview ${idx + 1}`} className="h-full w-full object-cover" referrerPolicy="no-referrer" />
+                        <button 
+                          type="button"
+                          onClick={() => setDesignImages(prev => prev.filter((_, i) => i !== idx))}
+                          className="absolute top-0 right-0 bg-red-500 text-white w-4 h-4 flex items-center justify-center text-[10px] opacity-0 group-hover:opacity-100 transition-opacity"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>

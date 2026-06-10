@@ -49,6 +49,68 @@ const VALID_MODELS = [
   'Claude 4.8 Opus', 'Claude 4.7 Opus', 'Claude 4.6 Opus', 'Claude 4.6 Sonnet'
 ];
 
+const VALID_STATUSES = ['backlog', 'todo', 'in-progress', 'ready-for-review', 'done'];
+const VALID_PRIORITIES = ['low', 'medium', 'high'];
+
+// --- Manual Validation Utilities ---
+function validateString(value: any, fieldName: string, required = false): string | null {
+  if (value === undefined || value === null) {
+    return required ? `Field '${fieldName}' is required.` : null;
+  }
+  if (typeof value !== 'string') return `Field '${fieldName}' must be a string.`;
+  if (required && value.trim() === '') return `Field '${fieldName}' cannot be empty.`;
+  return null;
+}
+
+function validateEnum(value: any, fieldName: string, validValues: string[], required = false): string | null {
+  if (value === undefined || value === null || value === '') {
+    return required ? `Field '${fieldName}' is required.` : null;
+  }
+  if (!validValues.includes(value)) {
+    return `Field '${fieldName}' must be one of: ${validValues.join(', ')}. Received: ${value}`;
+  }
+  return null;
+}
+
+function validateTaskPayload(item: any, isUpdate = false): string | null {
+  if (!item || typeof item !== 'object') return 'Task payload must be an object.';
+  
+  const titleErr = validateString(item.title, 'title', !isUpdate);
+  if (titleErr) return titleErr;
+  
+  const statusErr = validateEnum(item.status, 'status', VALID_STATUSES, false);
+  if (statusErr) return statusErr;
+
+  const priorityErr = validateEnum(item.priority, 'priority', VALID_PRIORITIES, false);
+  if (priorityErr) return priorityErr;
+
+  const effortErr = validateEnum(item.effort, 'effort', VALID_EFFORTS, false);
+  if (effortErr) return effortErr;
+
+  const modelErr = validateEnum(item.model, 'model', VALID_MODELS, false);
+  if (modelErr) return modelErr;
+
+  const agentErr = validateEnum(item.agent, 'agent', VALID_AGENTS, false);
+  if (agentErr) return agentErr;
+
+  if (item.tags !== undefined && !Array.isArray(item.tags)) return `Field 'tags' must be an array.`;
+  if (item.targetFiles !== undefined && !Array.isArray(item.targetFiles)) return `Field 'targetFiles' must be an array.`;
+  if (item.checklist !== undefined && !Array.isArray(item.checklist)) return `Field 'checklist' must be an array.`;
+  if (item.designImages !== undefined) {
+    if (!Array.isArray(item.designImages)) return `Field 'designImages' must be an array.`;
+    if (item.designImages.length > 5) return `Field 'designImages' can contain at most 5 images.`;
+  }
+  
+  return null;
+}
+
+function extractDesignImages(item: any, currentTask?: any): string[] | undefined {
+  if (item.designImages !== undefined) return item.designImages;
+  if (item.designImage !== undefined) return item.designImage ? [item.designImage] : [];
+  if (currentTask) return currentTask.designImages || (currentTask.designImage ? [currentTask.designImage] : undefined);
+  return undefined;
+}
+
 const TASK_SCHEMA_DEF = {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Task or Batch Task Payload",
@@ -94,7 +156,7 @@ const TASK_SCHEMA_DEF = {
       },
       "description": "Sub-tasks or checklist items"
     },
-    "designImage": { "type": "string", "description": "URL to a design mockup or image" },
+    "designImages": { "type": "array", "items": { "type": "string" }, "maxItems": 5, "description": "Array of up to 5 URLs or base64 strings to design mockups or images" },
     "specUrl": { "type": "string", "description": "URL to a specification document" },
     "agent": { 
       "type": "string", 
@@ -330,8 +392,8 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  // จำกัดให้ express.json() ทำงานเฉพาะกับ /api เพื่อไม่ให้ไปดึงข้อมูล Stream ของ /sse
-  app.use('/api', express.json());
+  // Use express.json() for /api routes with a larger limit for Base64 images
+  app.use('/api', express.json({ limit: '50mb' }));
 
   // ================= API ENDPOINTS =================
 
@@ -343,12 +405,12 @@ async function startServer() {
   // POST: Create a new project linked to a repo
   app.post('/api/projects', (req, res) => {
     const { name, repoUrl, description } = req.body;
-    if (!name || !name.trim()) {
-      return res.status(400).json({ error: 'Project name is required' });
-    }
-    if (!repoUrl || !repoUrl.trim()) {
-      return res.status(400).json({ error: 'Repository URL is required' });
-    }
+    
+    const nameErr = validateString(name, 'name', true);
+    if (nameErr) return res.status(400).json({ error: nameErr });
+    
+    const repoErr = validateString(repoUrl, 'repoUrl', true);
+    if (repoErr) return res.status(400).json({ error: repoErr });
 
     const newProject = {
       id: `project-${Date.now()}-${Math.floor(Math.random() * 1000000)}`,
@@ -442,14 +504,13 @@ async function startServer() {
 
     const createdTasks: any[] = [];
     for (const item of rawItems) {
-      const title = item.title;
-      if (!title) {
-        if (!isArray) {
-          return res.status(400).json({ error: 'Title is required' });
-        }
+      const validationErr = validateTaskPayload(item, false);
+      if (validationErr) {
+        if (!isArray) return res.status(400).json({ error: validationErr });
         continue; // Skip invalid items in batch array
       }
 
+      const title = item.title;
       const resolvedProjectId = resolveProjectIdFromRepo(item, req);
       if (!resolvedProjectId) {
         return res.status(400).json({ error: "Repository identifier ('repo' or 'repoUrl') is required to write a task" });
@@ -473,7 +534,7 @@ async function startServer() {
         tags: Array.isArray(item.tags) ? item.tags : [],
         targetFiles: Array.isArray(item.targetFiles) ? item.targetFiles : [],
         checklist: Array.isArray(item.checklist) ? item.checklist : [],
-        designImage: item.designImage || undefined,
+        designImages: extractDesignImages(item) || [],
         specUrl: item.specUrl || undefined,
         agent: item.agent || undefined,
         model: item.model || undefined,
@@ -545,16 +606,22 @@ async function startServer() {
     const updatedTasks: any[] = [];
 
     for (const item of rawItems) {
+      const existingIndex = item.id ? tasksCache.findIndex(t => t.id === item.id) : -1;
+      const isUpdate = existingIndex !== -1;
+      
+      const validationErr = validateTaskPayload(item, isUpdate);
+      if (validationErr) {
+        if (!Array.isArray(req.body)) return res.status(400).json({ error: validationErr });
+        continue;
+      }
+      
       const title = item.title;
-      if (!title) continue; // Skip item if title is missing
 
       const agentValidationError = validateAgentParams(item, tasksCache);
       if (agentValidationError) {
         if (!Array.isArray(req.body)) return res.status(400).json({ error: agentValidationError });
         continue;
       }
-
-      const existingIndex = item.id ? tasksCache.findIndex(t => t.id === item.id) : -1;
 
       if (existingIndex !== -1) {
         // Update existing task (Upsert Write)
@@ -569,7 +636,7 @@ async function startServer() {
           tags: Array.isArray(item.tags) ? item.tags : currentTask.tags,
           targetFiles: Array.isArray(item.targetFiles) ? item.targetFiles : currentTask.targetFiles,
           checklist: Array.isArray(item.checklist) ? item.checklist : currentTask.checklist,
-          designImage: item.designImage !== undefined ? item.designImage : currentTask.designImage,
+          designImages: extractDesignImages(item, currentTask) || [],
           specUrl: item.specUrl !== undefined ? item.specUrl : currentTask.specUrl,
           agent: item.agent !== undefined ? item.agent : currentTask.agent,
           model: item.model !== undefined ? item.model : currentTask.model,
@@ -611,7 +678,7 @@ async function startServer() {
           tags: Array.isArray(item.tags) ? item.tags : [],
           targetFiles: Array.isArray(item.targetFiles) ? item.targetFiles : [],
           checklist: Array.isArray(item.checklist) ? item.checklist : [],
-          designImage: item.designImage || undefined,
+          designImages: extractDesignImages(item) || [],
           specUrl: item.specUrl || undefined,
           agent: item.agent || undefined,
           model: item.model || undefined,
@@ -651,14 +718,8 @@ async function startServer() {
     const targetId = req.params.id;
     const { status } = req.body;
     
-    if (!status) {
-      return res.status(400).json({ error: 'Status is required in request body' });
-    }
-
-    const validStatuses = ['backlog', 'todo', 'in-progress', 'ready-for-review', 'done'];
-    if (!validStatuses.includes(status)) {
-      return res.status(400).json({ error: `Invalid status. Must be one of: ${validStatuses.join(', ')}` });
-    }
+    const statusErr = validateEnum(status, 'status', VALID_STATUSES, true);
+    if (statusErr) return res.status(400).json({ error: statusErr });
 
     const taskIndex = tasksCache.findIndex(t => t.id === targetId);
     if (taskIndex === -1) {
@@ -697,9 +758,8 @@ async function startServer() {
     const targetId = req.params.id;
     const { checklistId } = req.body;
     
-    if (!checklistId) {
-      return res.status(400).json({ error: 'checklistId is required' });
-    }
+    const checklistErr = validateString(checklistId, 'checklistId', true);
+    if (checklistErr) return res.status(400).json({ error: checklistErr });
 
     const taskIndex = tasksCache.findIndex(t => t.id === targetId);
     if (taskIndex === -1) {
@@ -734,6 +794,15 @@ async function startServer() {
   app.post('/api/tasks/:id/assign', (req, res) => {
     const targetId = req.params.id;
     const { agent, model, effort } = req.body;
+
+    const agentErr = validateEnum(agent, 'agent', VALID_AGENTS, false);
+    if (agentErr) return res.status(400).json({ error: agentErr });
+    
+    const modelErr = validateEnum(model, 'model', VALID_MODELS, false);
+    if (modelErr) return res.status(400).json({ error: modelErr });
+    
+    const effortErr = validateEnum(effort, 'effort', VALID_EFFORTS, false);
+    if (effortErr) return res.status(400).json({ error: effortErr });
 
     const taskIndex = tasksCache.findIndex(t => t.id === targetId);
     if (taskIndex === -1) {
@@ -794,16 +863,22 @@ async function startServer() {
     const updatedTasks: any[] = [];
 
     for (const item of rawItems) {
+      const existingIndex = item.id ? tasksCache.findIndex(t => t.id === item.id) : -1;
+      const isUpdate = existingIndex !== -1;
+      
+      const validationErr = validateTaskPayload(item, isUpdate);
+      if (validationErr) {
+        if (!Array.isArray(req.body)) return res.status(400).json({ error: validationErr });
+        continue;
+      }
+      
       const title = item.title;
-      if (!title) continue; // Skip item if title is missing
 
       const agentValidationError = validateAgentParams(item, tasksCache);
       if (agentValidationError) {
         if (!Array.isArray(req.body)) return res.status(400).json({ error: agentValidationError });
         continue;
       }
-
-      const existingIndex = item.id ? tasksCache.findIndex(t => t.id === item.id) : -1;
 
       if (existingIndex !== -1) {
         // Update existing task (Upsert Write)
@@ -818,7 +893,7 @@ async function startServer() {
           tags: Array.isArray(item.tags) ? item.tags : currentTask.tags,
           targetFiles: Array.isArray(item.targetFiles) ? item.targetFiles : currentTask.targetFiles,
           checklist: Array.isArray(item.checklist) ? item.checklist : currentTask.checklist,
-          designImage: item.designImage !== undefined ? item.designImage : currentTask.designImage,
+          designImages: extractDesignImages(item, currentTask) || [],
           specUrl: item.specUrl !== undefined ? item.specUrl : currentTask.specUrl,
           agent: item.agent !== undefined ? item.agent : currentTask.agent,
           model: item.model !== undefined ? item.model : currentTask.model,
@@ -856,7 +931,7 @@ async function startServer() {
           tags: Array.isArray(item.tags) ? item.tags : [],
           targetFiles: Array.isArray(item.targetFiles) ? item.targetFiles : [],
           checklist: Array.isArray(item.checklist) ? item.checklist : [],
-          designImage: item.designImage || undefined,
+          designImages: extractDesignImages(item) || [],
           specUrl: item.specUrl || undefined,
           agent: item.agent || undefined,
           model: item.model || undefined,
@@ -899,6 +974,11 @@ async function startServer() {
     const currentTask = tasksCache[taskIndex];
     let updateBody = req.body;
 
+    const validationErr = validateTaskPayload(updateBody, true);
+    if (validationErr) {
+      return res.status(400).json({ error: validationErr });
+    }
+
     const resolvedProjectId = resolveProjectIdFromRepo(updateBody, req);
     if (resolvedProjectId) {
       updateBody = { ...updateBody, projectId: resolvedProjectId };
@@ -912,6 +992,7 @@ async function startServer() {
     const updatedTask = {
       ...currentTask,
       ...updateBody,
+      designImages: extractDesignImages(updateBody, currentTask) || [],
       updatedAt: new Date().toISOString()
     };
 
@@ -1148,7 +1229,7 @@ async function startServer() {
           return { content: [{ type: "text", text: `Error: ${agentValidationError}` }] };
         }
 
-        const pId = args?.projectId || "project-default";
+        const pId = String(args?.projectId || "project-default");
         const newTask = {
           id: `task-${Date.now()}-${Math.floor(Math.random() * 1000000)}`,
           displayId: generateDisplayId(pId, projectsCache),

@@ -126,14 +126,19 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
         </h3>
 
         {/* Card Thumbnail Preview (if design image is attached) */}
-        {task.designImage && (
+        {((task.designImages && task.designImages.length > 0) || task.designImage) && (
           <div className="relative mb-3 rounded-xl overflow-hidden border border-[#ebdcb9] h-14 bg-white/50 pl-0.5">
             <img 
-              src={task.designImage} 
+              src={(task.designImages && task.designImages[0]) || task.designImage} 
               alt="Design Preview" 
               className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200" 
               referrerPolicy="no-referrer"
             />
+            {task.designImages && task.designImages.length > 1 && (
+              <div className="absolute top-1 right-1 bg-black/60 backdrop-blur-md text-white text-[9px] font-bold px-1.5 py-0.5 rounded shadow-sm border border-white/20">
+                +{task.designImages.length - 1}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -159,11 +164,11 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
       )}
 
       {/* Design mock and Spec sheet indicators */}
-      {(task.designImage || task.specUrl) && (
+      {((task.designImages && task.designImages.length > 0) || task.designImage || task.specUrl) && (
         <div className="flex flex-wrap items-center gap-2 mb-3 px-0.5 text-[8.5px] font-mono font-extrabold uppercase select-none">
-          {task.designImage && (
+          {((task.designImages && task.designImages.length > 0) || task.designImage) && (
             <span className="flex items-center gap-1 bg-[#fff2e0] text-[#9a6428] border border-[#fde5bd] px-1.5 py-0.5 rounded-lg">
-              <ImageIcon size={10} /> Design Doc
+              <ImageIcon size={10} /> Design Doc {task.designImages && task.designImages.length > 1 && `(${task.designImages.length})`}
             </span>
           )}
           {task.specUrl && (

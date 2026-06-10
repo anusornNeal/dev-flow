@@ -61,8 +61,27 @@ export default function TaskDetailsDrawer({
   // New properties editing states
   const [editedFilesStr, setEditedFilesStr] = useState((task.targetFiles || []).join('\n'));
   const [editedChecklistStr, setEditedChecklistStr] = useState((task.checklist || []).map(c => c.text).join('\n'));
-  const [editedDesignImage, setEditedDesignImage] = useState(task.designImage || '');
+  const [editedDesignImages, setEditedDesignImages] = useState<string[]>(task.designImages || (task.designImage ? [task.designImage] : []));
   const [editedSpecUrl, setEditedSpecUrl] = useState(task.specUrl || '');
+  
+  const handleViewImage = (e: React.MouseEvent, imageUrl: string) => {
+    e.preventDefault();
+    if (imageUrl.startsWith('data:')) {
+      const newTab = window.open();
+      if (newTab) {
+        newTab.document.write(`
+          <html>
+            <body style="margin:0;display:flex;justify-content:center;align-items:center;background:#0e0e0e;min-height:100vh;">
+              <img src="${imageUrl}" style="max-width:100%;max-height:100vh;" />
+            </body>
+          </html>
+        `);
+        newTab.document.close();
+      }
+    } else {
+      window.open(imageUrl, '_blank');
+    }
+  };
   const [editedAgent, setEditedAgent] = useState(task.agent || '');
   const [editedModel, setEditedModel] = useState(task.model || '');
   const [editedEffort, setEditedEffort] = useState(task.effort || '');
@@ -89,7 +108,7 @@ export default function TaskDetailsDrawer({
       setEditedTags(task.tags.join(', '));
       setEditedFilesStr((task.targetFiles || []).join('\n'));
       setEditedChecklistStr((task.checklist || []).map(c => c.text).join('\n'));
-      setEditedDesignImage(task.designImage || '');
+      setEditedDesignImages(task.designImages || (task.designImage ? [task.designImage] : []));
       setEditedSpecUrl(task.specUrl || '');
       setEditedAgent(task.agent || '');
       setEditedModel(task.model || '');
@@ -154,7 +173,7 @@ export default function TaskDetailsDrawer({
       tags: tagsArray,
       targetFiles: filesArray,
       checklist: parsedChecklist,
-      designImage: editedDesignImage.trim() || undefined,
+      designImages: editedDesignImages.length > 0 ? editedDesignImages : undefined,
       specUrl: editedSpecUrl.trim() || undefined,
       agent: editedAgent || undefined,
       model: editedModel || undefined,
@@ -475,47 +494,56 @@ export default function TaskDetailsDrawer({
                     <ImageIcon size={12} className="text-[#bf8a50]" /> Design Image (File or URL)
                   </label>
                   <div className="space-y-2">
-                    <input
-                      type="text"
-                      className="w-full bg-[#ffffff] border border-[#ebdcb9] rounded-xl px-2.5 py-2 text-[11px] text-[#3a2f26] placeholder-[#c4b3a4] outline-none focus:border-[#d7933f] font-mono"
-                      placeholder="Paste Image URL or Base64..."
-                      value={editedDesignImage}
-                      onChange={(e) => setEditedDesignImage(e.target.value)}
-                    />
-                    <div className="flex items-center gap-2">
-                      <label className="text-[10px] bg-white border border-[#ebdcb9] px-2.5 py-1.5 rounded-lg text-[#5c493c] hover:bg-[#fffcf6] cursor-pointer inline-flex items-center gap-1 font-bold">
-                        <span>Upload Image file</span>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <label className={`text-[10px] bg-white border border-[#ebdcb9] px-2.5 py-1.5 rounded-lg text-[#5c493c] hover:bg-[#fffcf6] cursor-pointer inline-flex items-center gap-1 font-bold ${editedDesignImages.length >= 5 ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                        <span>Upload Image(s) {editedDesignImages.length > 0 && `(${editedDesignImages.length}/5)`}</span>
                         <input
                           type="file"
                           accept="image/*"
+                          multiple
+                          disabled={editedDesignImages.length >= 5}
                           className="hidden"
                           onChange={(e) => {
-                            const file = e.target.files?.[0];
-                            if (file) {
+                            const files = Array.from(e.target.files || []);
+                            const availableSlots = 5 - editedDesignImages.length;
+                            const filesToProcess = files.slice(0, availableSlots);
+                            
+                            filesToProcess.forEach(file => {
                               const reader = new FileReader();
                               reader.onloadend = () => {
                                 if (typeof reader.result === 'string') {
-                                  setEditedDesignImage(reader.result);
+                                  setEditedDesignImages(prev => [...prev, reader.result as string]);
                                 }
                               };
                               reader.readAsDataURL(file);
-                            }
+                            });
                           }}
                         />
                       </label>
-                      {editedDesignImage && (
+                      {editedDesignImages.length > 0 && (
                         <button
                           type="button"
-                          onClick={() => setEditedDesignImage('')}
+                          onClick={() => setEditedDesignImages([])}
                           className="text-[10px] text-red-500 font-bold hover:underline cursor-pointer"
                         >
-                          Clear Image
+                          Clear All
                         </button>
                       )}
                     </div>
-                    {editedDesignImage && (
-                      <div className="relative border border-[#ebdcb9] rounded-lg overflow-hidden h-14 w-auto max-w-[120px] bg-white">
-                        <img src={editedDesignImage} alt="Preview" className="h-full w-full object-cover" referrerPolicy="no-referrer" />
+                    {editedDesignImages.length > 0 && (
+                      <div className="flex gap-2 overflow-x-auto pb-1 mt-2">
+                        {editedDesignImages.map((img, idx) => (
+                          <div key={idx} className="relative border border-[#ebdcb9] rounded-lg overflow-hidden h-14 w-14 shrink-0 bg-white group">
+                            <img src={img} alt={`Preview ${idx + 1}`} className="h-full w-full object-cover" referrerPolicy="no-referrer" />
+                            <button 
+                              type="button"
+                              onClick={() => setEditedDesignImages(prev => prev.filter((_, i) => i !== idx))}
+                              className="absolute top-0 right-0 bg-red-500 text-white w-4 h-4 flex items-center justify-center text-[10px] opacity-0 group-hover:opacity-100 transition-opacity"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ))}
                       </div>
                     )}
                   </div>
@@ -886,23 +914,27 @@ export default function TaskDetailsDrawer({
                 )}
               </div>
 
-              {/* 🎨 DESIGN IMAGE & SPECIFICATION REFERENCE SECTION */}
-              {(task.designImage || task.specUrl) && (
+              {/* 🎨 DESIGN IMAGES & SPECIFICATION REFERENCE SECTION */}
+              {((task.designImages && task.designImages.length > 0) || task.designImage || task.specUrl) && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-[#ebdcb9] pt-5 font-sans">
-                  {task.designImage && (
-                    <div className="space-y-2">
+                  {((task.designImages && task.designImages.length > 0) || task.designImage) && (
+                    <div className="space-y-2 col-span-1 md:col-span-2">
                       <h4 className="text-[10px] font-mono text-[#8a6e5a] uppercase tracking-widest flex items-center gap-1.5 font-bold">
                         <ImageIcon size={13} className="text-[#bf8a50]" /> Design Mockup / Layout
                       </h4>
-                      <div className="border border-[#ebdcb9] rounded-2xl overflow-hidden bg-white shadow-xs p-1">
-                        <a href={task.designImage} target="_blank" rel="noreferrer" title="Click to view full image in a new tab">
-                          <img 
-                            src={task.designImage} 
-                            alt="Design Mockup" 
-                            className="w-full max-h-56 object-contain rounded-xl hover:opacity-90 transition-opacity" 
-                            referrerPolicy="no-referrer"
-                          />
-                        </a>
+                      <div className="flex gap-2 overflow-x-auto pb-2 snap-x">
+                        {(task.designImages || (task.designImage ? [task.designImage] : [])).map((img, idx) => (
+                          <div key={idx} className="border border-[#ebdcb9] rounded-2xl overflow-hidden bg-white shadow-xs p-1 shrink-0 w-64 snap-center">
+                            <a href={img} onClick={(e) => handleViewImage(e, img)} title="Click to view full image in a new tab">
+                              <img 
+                                src={img} 
+                                alt={`Design Mockup ${idx + 1}`} 
+                                className="w-full h-48 object-cover rounded-xl hover:opacity-90 transition-opacity cursor-pointer" 
+                                referrerPolicy="no-referrer"
+                              />
+                            </a>
+                          </div>
+                        ))}
                       </div>
                     </div>
                   )}

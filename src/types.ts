@@ -34,7 +34,8 @@ export interface Task {
   logs: LogEntry[];
   targetFiles?: string[];
   checklist?: ChecklistItem[];
-  designImage?: string; // Image URL/Base64
+  designImage?: string; // DEPRECATED: use designImages
+  designImages?: string[]; // Array of up to 5 Image URLs/Base64s
   specUrl?: string; // Specification link or text
   agent?: string; // Codex | Antigravity | Claude
   model?: string; // Model name

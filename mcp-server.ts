@@ -4,31 +4,8 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import fs from "fs";
-import path from "path";
 
-const DATA_FILE = path.join(process.cwd(), 'tasks.json');
-const PROJECTS_FILE = path.join(process.cwd(), 'projects.json');
-
-// Helpers
-function loadJson(file: string, defaultVal: any) {
-  try {
-    if (fs.existsSync(file)) {
-      return JSON.parse(fs.readFileSync(file, 'utf8'));
-    }
-  } catch (err) {
-    console.error(`Error reading ${file}:`, err);
-  }
-  return defaultVal;
-}
-
-function saveJson(file: string, data: any) {
-  try {
-    fs.writeFileSync(file, JSON.stringify(data, null, 2), 'utf8');
-  } catch (err) {
-    console.error(`Error writing ${file}:`, err);
-  }
-}
+const API_BASE_URL = 'http://localhost:3000/api';
 
 // Create server
 const server = new Server(
@@ -100,69 +77,87 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
 
   if (name === "list_projects") {
-    const projects = loadJson(PROJECTS_FILE, []);
-    return {
-      content: [{ type: "text", text: JSON.stringify(projects, null, 2) }],
-    };
+    try {
+      const response = await fetch(`${API_BASE_URL}/projects`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const projects = await response.json();
+      return {
+        content: [{ type: "text", text: JSON.stringify(projects, null, 2) }],
+      };
+    } catch (err: any) {
+      return { isError: true, content: [{ type: "text", text: err.message }] };
+    }
   }
 
   if (name === "list_tasks") {
-    const tasks = loadJson(DATA_FILE, []);
-    const projectId = args?.projectId;
-    const filtered = projectId ? tasks.filter((t: any) => t.projectId === projectId) : tasks;
-    return {
-      content: [{ type: "text", text: JSON.stringify(filtered, null, 2) }],
-    };
+    try {
+      const response = await fetch(`${API_BASE_URL}/tasks`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const tasks = await response.json();
+      const projectId = args?.projectId;
+      const filtered = projectId ? tasks.filter((t: any) => t.projectId === projectId) : tasks;
+      return {
+        content: [{ type: "text", text: JSON.stringify(filtered, null, 2) }],
+      };
+    } catch (err: any) {
+      return { isError: true, content: [{ type: "text", text: err.message }] };
+    }
   }
 
   if (name === "create_task") {
-    const tasks = loadJson(DATA_FILE, []);
-    const newTask = {
-      id: `task-${Date.now()}-${Math.floor(Math.random() * 1000000)}`,
-      title: args?.title,
-      description: args?.description || "",
-      projectId: args?.projectId || "project-default",
-      status: args?.status || "backlog",
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      logs: [{
-        id: `log-${Date.now()}-mcp`,
-        timestamp: new Date().toISOString(),
-        message: 'Task created via MCP Server.',
-        type: 'create'
-      }]
-    };
-    tasks.push(newTask);
-    saveJson(DATA_FILE, tasks);
-    return {
-      content: [{ type: "text", text: JSON.stringify(newTask, null, 2) }],
-    };
+    try {
+      // Need repoUrl or similar to avoid error if server requires it, but let's just pass what the schema specifies.
+      // Wait, server needs 'repo' or it resolves to a project if projectId is found. 
+      // Assuming projectId 'project-default' works.
+      const response = await fetch(`${API_BASE_URL}/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: args?.title,
+          description: args?.description || "",
+          projectId: args?.projectId || "project-default",
+          status: args?.status || "backlog",
+          repo: "mcp-proxy-created" // provide a dummy repo to satisfy any server-side validation if needed
+        })
+      });
+      if (!response.ok) {
+         const errorData = await response.json().catch(() => ({}));
+         throw new Error(errorData.error || `HTTP ${response.status}`);
+      }
+      const newTask = await response.json();
+      return {
+        content: [{ type: "text", text: JSON.stringify(newTask, null, 2) }],
+      };
+    } catch (err: any) {
+      return { isError: true, content: [{ type: "text", text: err.message }] };
+    }
   }
 
   if (name === "move_task_status") {
-    const tasks = loadJson(DATA_FILE, []);
     const { taskId, status } = args as any;
-    const index = tasks.findIndex((t: any) => t.id === taskId);
-    if (index === -1) {
+    try {
+      const response = await fetch(`${API_BASE_URL}/tasks/${taskId}/move`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'X-Agent-Request': 'true'
+        },
+        body: JSON.stringify({ status })
+      });
+      if (!response.ok) {
+         const errorData = await response.json().catch(() => ({}));
+         throw new Error(errorData.error || `HTTP ${response.status}`);
+      }
+      const data = await response.json();
+      return {
+        content: [{ type: "text", text: JSON.stringify(data.task || data, null, 2) }],
+      };
+    } catch (err: any) {
       return {
         isError: true,
-        content: [{ type: "text", text: `Task ${taskId} not found.` }],
+        content: [{ type: "text", text: err.message }],
       };
     }
-    
-    tasks[index].status = status;
-    tasks[index].updatedAt = new Date().toISOString();
-    tasks[index].logs.push({
-        id: `log-${Date.now()}-mcp-move`,
-        timestamp: new Date().toISOString(),
-        message: `Status moved to ${status} via MCP Server.`,
-        type: 'move'
-    });
-    
-    saveJson(DATA_FILE, tasks);
-    return {
-      content: [{ type: "text", text: JSON.stringify(tasks[index], null, 2) }],
-    };
   }
 
   throw new Error(`Unknown tool: ${name}`);

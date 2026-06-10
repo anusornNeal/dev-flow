@@ -28,8 +28,9 @@ interface SidebarProps {
   projects: Project[];
   activeProjectId: string;
   setActiveProjectId: (id: string) => void;
-  onCreateProject: (name: string, repoUrl: string, description?: string) => Promise<boolean>;
+  onCreateProject: (name: string, repoUrl: string, description?: string, localPath?: string) => Promise<boolean>;
   onDeleteProject: (id: string) => Promise<boolean>;
+  onUpdateProject: (id: string, updates: Partial<Project>) => Promise<boolean>;
   selectedPriority: TaskPriority | 'all';
   setSelectedPriority: (priority: TaskPriority | 'all') => void;
   selectedTag: string | 'all';
@@ -45,6 +46,7 @@ export default function Sidebar({
   setActiveProjectId,
   onCreateProject,
   onDeleteProject,
+  onUpdateProject,
   selectedPriority,
   setSelectedPriority,
   selectedTag,
@@ -56,9 +58,11 @@ export default function Sidebar({
   const [cozySpeak, setCozySpeak] = useState('☕ Fuel configured! Time to inspect some specifications.');
   const [isProjectDropdownOpen, setIsProjectDropdownOpen] = useState(false);
   const [isAddingProject, setIsAddingProject] = useState(false);
+  const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectRepoUrl, setNewProjectRepoUrl] = useState('');
   const [newProjectDesc, setNewProjectDesc] = useState('');
+  const [newProjectLocalPath, setNewProjectLocalPath] = useState('');
   
   // Compute Stats
   const mainTasks = tasks.filter(t => !t.parentId);
@@ -154,6 +158,7 @@ export default function Sidebar({
           onClick={() => {
             setIsProjectDropdownOpen(!isProjectDropdownOpen);
             setIsAddingProject(false); // Reset add mode when toggling
+            setEditingProjectId(null);
           }}
           type="button"
           className="w-full text-left p-4 bg-[#fdfaf5] hover:bg-[#fffdf8] rounded-xl border border-[#e5d4bb] flex items-center justify-between gap-2.5 shadow-xs cursor-pointer transition-all active:scale-[0.99]"
@@ -170,6 +175,11 @@ export default function Sidebar({
               {projects.find(p => p.id === activeProjectId)?.repoUrl && (
                 <p className="text-[8px] text-[#9b8271] font-mono truncate max-w-full">
                   🔗 {projects.find(p => p.id === activeProjectId)?.repoUrl.replace(/^https?:\/\/(www\.)?/, '')}
+                </p>
+              )}
+              {projects.find(p => p.id === activeProjectId)?.localPath && (
+                <p className="text-[8px] text-[#9b8271] font-mono truncate max-w-full">
+                  📂 {projects.find(p => p.id === activeProjectId)?.localPath}
                 </p>
               )}
             </div>
@@ -191,6 +201,37 @@ export default function Sidebar({
                 <div className="space-y-1.5 max-h-56 overflow-y-auto scrollbar-thin">
                   {projects.map((project) => {
                     const isActive = project.id === activeProjectId;
+                    const isEditing = editingProjectId === project.id;
+                    
+                    if (isEditing) {
+                      return (
+                        <div key={project.id} className="p-2 rounded-lg border border-[#d89745] bg-[#fff9ee] mb-1" onClick={(e) => e.stopPropagation()}>
+                          <div className="space-y-1.5">
+                            <input
+                              type="text"
+                              value={newProjectLocalPath}
+                              onChange={(e) => setNewProjectLocalPath(e.target.value)}
+                              placeholder="Local absolute path (e.g. C:\Projects\app)"
+                              className="w-full bg-white border border-[#ebdcb9] px-2 py-1 rounded-md text-[9px] outline-none focus:border-[#d4994e] font-mono"
+                            />
+                            <div className="flex gap-1">
+                              <button
+                                onClick={() => setEditingProjectId(null)}
+                                className="flex-1 text-[9px] border border-[#ebdcb9] py-1 rounded hover:bg-white text-[#7a6455]"
+                              >Cancel</button>
+                              <button
+                                onClick={async () => {
+                                  const success = await onUpdateProject(project.id, { localPath: newProjectLocalPath });
+                                  if (success) setEditingProjectId(null);
+                                }}
+                                className="flex-1 text-[9px] bg-[#d89745] text-white py-1 rounded font-bold hover:bg-[#c08234]"
+                              >Save</button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    }
+
                     return (
                       <div
                         key={project.id}
@@ -211,33 +252,53 @@ export default function Sidebar({
                           <p className="text-[9px] text-[#917d71] font-mono truncate" title={project.repoUrl}>
                             {project.repoUrl.replace(/^https?:\/\/(www\.)?/, '')}
                           </p>
+                          {project.localPath && (
+                            <p className="text-[8px] text-[#b39e90] font-mono truncate" title={project.localPath}>
+                              📂 {project.localPath}
+                            </p>
+                          )}
                         </div>
                         
-                        <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
-                          <a
-                            href={project.repoUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="p-1 text-gray-400 hover:text-[#d89745] transition-colors"
-                            title="Open repository link in a new tab"
-                          >
-                            <ExternalLink size={12} />
-                          </a>
-                          
-                          {project.id !== 'project-default' && (
-                            <button
-                              onClick={() => {
-                                if (confirm(`Are you sure you want to delete project "${project.name}" and all its tasks?`)) {
-                                  onDeleteProject(project.id);
-                                }
-                              }}
-                              type="button"
-                              className="p-1 text-gray-400 hover:text-red-500 transition-colors cursor-pointer"
-                              title="Delete project"
+                        <div className="flex flex-col items-end gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+                          <div className="flex items-center gap-1">
+                            <a
+                              href={project.repoUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="p-1 text-gray-400 hover:text-[#d89745] transition-colors"
+                              title="Open repository link in a new tab"
                             >
-                              <Trash2 size={12} />
-                            </button>
-                          )}
+                              <ExternalLink size={12} />
+                            </a>
+                            
+                            {project.id !== 'project-default' && (
+                              <>
+                                <button
+                                  onClick={() => {
+                                    setNewProjectLocalPath(project.localPath || '');
+                                    setEditingProjectId(project.id);
+                                  }}
+                                  type="button"
+                                  className="p-1 text-gray-400 hover:text-[#d89745] transition-colors cursor-pointer"
+                                  title="Edit local path"
+                                >
+                                  <FolderGit size={12} />
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    if (confirm(`Are you sure you want to delete project "${project.name}" and all its tasks?`)) {
+                                      onDeleteProject(project.id);
+                                    }
+                                  }}
+                                  type="button"
+                                  className="p-1 text-gray-400 hover:text-red-500 transition-colors cursor-pointer"
+                                  title="Delete project"
+                                >
+                                  <Trash2 size={12} />
+                                </button>
+                              </>
+                            )}
+                          </div>
                         </div>
                       </div>
                     );
@@ -260,12 +321,14 @@ export default function Sidebar({
                   const success = await onCreateProject(
                     newProjectName.trim(),
                     newProjectRepoUrl.trim(),
-                    newProjectDesc.trim()
+                    newProjectDesc.trim(),
+                    newProjectLocalPath.trim()
                   );
                   if (success) {
                     setNewProjectName('');
                     setNewProjectRepoUrl('');
                     setNewProjectDesc('');
+                    setNewProjectLocalPath('');
                     setIsAddingProject(false);
                   }
                 }}
@@ -306,6 +369,16 @@ export default function Sidebar({
                       value={newProjectDesc}
                       onChange={(e) => setNewProjectDesc(e.target.value)}
                       className="w-full bg-white border border-[#ebdcb9] px-2 py-1 rounded-md text-[10px] outline-none focus:border-[#d4994e] font-sans"
+                    />
+                  </div>
+                  <div>
+                    <span className="text-[8px] text-[#8C7565] font-bold block mb-0.5">Local Path (Optional)</span>
+                    <input
+                      type="text"
+                      placeholder="C:\Projects\my-app"
+                      value={newProjectLocalPath}
+                      onChange={(e) => setNewProjectLocalPath(e.target.value)}
+                      className="w-full bg-white border border-[#ebdcb9] px-2 py-1 rounded-md text-[10px] outline-none focus:border-[#d4994e] font-mono"
                     />
                   </div>
                 </div>

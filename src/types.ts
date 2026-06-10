@@ -38,6 +38,7 @@ export interface Task {
   designImages?: string[]; // Array of up to 5 Image URLs/Base64s
   specUrl?: string; // Specification link or text
   agent?: string; // Codex | Antigravity | Claude
+  activeAgent?: string; // Currently working agent
   model?: string; // Model name
   parentId?: string; // ID of the parent task if this is a subtask
   effort?: string; // Effort level (low | medium | high | xhigh)
@@ -55,6 +56,7 @@ export interface Project {
   name: string;
   repoUrl: string;
   description?: string;
+  localPath?: string; // Absolute path to the local project directory
   createdAt: string;
 }
 

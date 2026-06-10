@@ -12,6 +12,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { execFile } from 'child_process';
 
 // Hardcoded seed array matching our beautiful mobile tasks
 const SEED_TASKS: any[] = [];
@@ -19,6 +20,18 @@ const SEED_TASKS: any[] = [];
 const DATA_FILE = path.join(process.cwd(), 'tasks.json');
 const PROJECTS_FILE = path.join(process.cwd(), 'projects.json');
 const COUNTERS_FILE = path.join(process.cwd(), 'counters.json');
+const AGENT_LOG_FILE = path.join(process.cwd(), 'agent-trigger.log');
+
+// Write a timestamped entry to the agent trigger log file
+function writeAgentLog(level: 'INFO' | 'ERROR' | 'TRIGGER', message: string) {
+  const entry = `[${new Date().toISOString()}] [${level}] ${message}\n`;
+  try {
+    fs.appendFileSync(AGENT_LOG_FILE, entry, 'utf8');
+  } catch (err) {
+    console.error('[agent-log] Failed to write log:', err);
+  }
+  console.log(entry.trim());
+}
 
 // Memory cache helpers
 let tasksCache: any[] = [];
@@ -432,7 +445,7 @@ async function startServer() {
 
   // POST: Create a new project linked to a repo
   app.post('/api/projects', (req, res) => {
-    const { name, repoUrl, description } = req.body;
+    const { name, repoUrl, description, localPath } = req.body;
     
     const nameErr = validateString(name, 'name', true);
     if (nameErr) return res.status(400).json({ error: nameErr });
@@ -445,12 +458,33 @@ async function startServer() {
       name: name.trim(),
       repoUrl: repoUrl.trim(),
       description: (description || '').trim(),
+      localPath: (localPath || '').trim() || undefined,
       createdAt: new Date().toISOString()
     };
 
     projectsCache.push(newProject);
     saveProjects();
     res.status(201).json(newProject);
+  });
+
+  // PUT: Update an existing project
+  app.put('/api/projects/:id', (req, res) => {
+    const projectId = req.params.id;
+    const index = projectsCache.findIndex(p => p.id === projectId);
+    if (index === -1) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+
+    const { name, repoUrl, description, localPath } = req.body;
+    const project = projectsCache[index];
+    
+    if (name !== undefined) project.name = name.trim();
+    if (repoUrl !== undefined) project.repoUrl = repoUrl.trim();
+    if (description !== undefined) project.description = description.trim();
+    if (localPath !== undefined) project.localPath = localPath.trim() || undefined;
+
+    saveProjects();
+    res.json(project);
   });
 
   // DELETE: Remove project & associated tasks
@@ -654,9 +688,19 @@ async function startServer() {
       if (existingIndex !== -1) {
         // Update existing task (Upsert Write)
         const currentTask = tasksCache[existingIndex];
+
+        // Enforce lock
+        if (currentTask.status === 'in-progress') {
+          const isAgentRequest = String(req.headers['x-agent-request']).toLowerCase() === 'true';
+          const isEmergency = item.emergency === true || String(item.emergency).toLowerCase() === 'true';
+          if (!isAgentRequest && !isEmergency) {
+            continue;
+          }
+        }
+
         const updatedTask = {
           ...currentTask,
-          title: title.trim(),
+          title: title !== undefined ? String(title).trim() : currentTask.title,
           description: item.description !== undefined ? item.description : currentTask.description,
           status: item.status !== undefined ? item.status : currentTask.status,
           branch: item.branch !== undefined ? item.branch : currentTask.branch,
@@ -685,6 +729,11 @@ async function startServer() {
             }
           ]
         };
+
+        if (['backlog', 'done', 'ready-for-review'].includes(updatedTask.status)) {
+          updatedTask.activeAgent = undefined;
+        }
+
         tasksCache[existingIndex] = updatedTask;
         updatedTasks.push(updatedTask);
       } else {
@@ -761,6 +810,15 @@ async function startServer() {
       return res.json({ message: 'Task is already in that lane', task });
     }
 
+    // Enforce lock
+    if (prevStatus === 'in-progress') {
+      const isAgentRequest = String(req.headers['x-agent-request']).toLowerCase() === 'true';
+      const isEmergency = req.body.emergency === true || String(req.body.emergency).toLowerCase() === 'true';
+      if (!isAgentRequest && !isEmergency) {
+        return res.status(403).json({ error: 'Task is locked by an agent. Use emergency flag to override.' });
+      }
+    }
+
     const updatedTask = {
       ...task,
       status: status,
@@ -775,6 +833,30 @@ async function startServer() {
         }
       ]
     };
+
+    if (['backlog', 'done', 'ready-for-review'].includes(status)) {
+      updatedTask.activeAgent = undefined;
+    }
+
+    // Trigger Agent
+    if (status === 'todo' && prevStatus !== 'todo') {
+      if (updatedTask.agent && !updatedTask.activeAgent) {
+        updatedTask.activeAgent = updatedTask.agent;
+        if (/^[a-zA-Z0-9-]+$/.test(updatedTask.agent) && /^[a-zA-Z0-9-]+$/.test(updatedTask.id)) {
+          const triggerBat = path.join(process.cwd(), 'trigger-agent.bat');
+          const proj = projectsCache.find(p => p.id === updatedTask.projectId);
+          const execOpts = proj?.localPath ? { cwd: proj.localPath } : undefined;
+          
+          writeAgentLog('TRIGGER', `Spawning agent=${updatedTask.agent} for task=${updatedTask.id} ("${updatedTask.title}") via /move endpoint${execOpts ? ' at ' + execOpts.cwd : ''}`);
+          execFile('cmd.exe', ['/c', triggerBat, updatedTask.agent, updatedTask.id], execOpts, (err) => {
+            if (err) writeAgentLog('ERROR', `trigger-agent.bat failed for task=${updatedTask.id}: ${err.message}`);
+            else writeAgentLog('INFO', `trigger-agent.bat exited OK for task=${updatedTask.id}`);
+          });
+        } else {
+          writeAgentLog('ERROR', `Blocked trigger due to invalid chars: agent=${updatedTask.agent} taskId=${updatedTask.id}`);
+        }
+      }
+    }
 
     tasksCache[taskIndex] = updatedTask;
     saveTasks();
@@ -800,6 +882,15 @@ async function startServer() {
     
     if (!item) {
       return res.status(404).json({ error: 'Checklist item not found' });
+    }
+
+    // Enforce lock
+    if (task.status === 'in-progress') {
+      const isAgentRequest = String(req.headers['x-agent-request']).toLowerCase() === 'true';
+      const isEmergency = req.body.emergency === true || String(req.body.emergency).toLowerCase() === 'true';
+      if (!isAgentRequest && !isEmergency) {
+        return res.status(403).json({ error: 'Task is locked by an agent. Use emergency flag to override.' });
+      }
     }
 
     item.completed = !item.completed;
@@ -838,6 +929,16 @@ async function startServer() {
     }
 
     const task = tasksCache[taskIndex];
+
+    // Enforce lock
+    if (task.status === 'in-progress') {
+      const isAgentRequest = String(req.headers['x-agent-request']).toLowerCase() === 'true';
+      const isEmergency = req.body.emergency === true || String(req.body.emergency).toLowerCase() === 'true';
+      if (!isAgentRequest && !isEmergency) {
+        return res.status(403).json({ error: 'Task is locked by an agent. Use emergency flag to override.' });
+      }
+    }
+
     task.agent = agent || undefined;
     task.model = model || undefined;
     task.effort = effort || undefined;
@@ -911,9 +1012,19 @@ async function startServer() {
       if (existingIndex !== -1) {
         // Update existing task (Upsert Write)
         const currentTask = tasksCache[existingIndex];
+
+        // Enforce lock
+        if (currentTask.status === 'in-progress') {
+          const isAgentRequest = String(req.headers['x-agent-request']).toLowerCase() === 'true';
+          const isEmergency = item.emergency === true || String(item.emergency).toLowerCase() === 'true';
+          if (!isAgentRequest && !isEmergency) {
+            continue;
+          }
+        }
+
         const updatedTask = {
           ...currentTask,
-          title: title.trim(),
+          title: title !== undefined ? String(title).trim() : currentTask.title,
           description: item.description !== undefined ? item.description : currentTask.description,
           status: item.status !== undefined ? item.status : currentTask.status,
           branch: item.branch !== undefined ? item.branch : currentTask.branch,
@@ -938,6 +1049,11 @@ async function startServer() {
             }
           ]
         };
+
+        if (['backlog', 'done', 'ready-for-review'].includes(updatedTask.status)) {
+          updatedTask.activeAgent = undefined;
+        }
+
         tasksCache[existingIndex] = updatedTask;
         updatedTasks.push(updatedTask);
       } else {
@@ -1002,6 +1118,15 @@ async function startServer() {
     const currentTask = tasksCache[taskIndex];
     let updateBody = req.body;
 
+    // Enforce lock
+    if (currentTask.status === 'in-progress') {
+      const isAgentRequest = String(req.headers['x-agent-request']).toLowerCase() === 'true';
+      const isEmergency = req.body.emergency === true || String(req.body.emergency).toLowerCase() === 'true';
+      if (!isAgentRequest && !isEmergency) {
+        return res.status(403).json({ error: 'Task is locked by an agent. Use emergency flag to override.' });
+      }
+    }
+
     const validationErr = validateTaskPayload(updateBody, true);
     if (validationErr) {
       return res.status(400).json({ error: validationErr });
@@ -1024,6 +1149,30 @@ async function startServer() {
       updatedAt: new Date().toISOString()
     };
 
+    if (['backlog', 'done', 'ready-for-review'].includes(updatedTask.status)) {
+      updatedTask.activeAgent = undefined;
+    }
+
+    // Trigger Agent
+    if (updatedTask.status === 'todo' && currentTask.status !== 'todo') {
+      if (updatedTask.agent && !updatedTask.activeAgent) {
+        updatedTask.activeAgent = updatedTask.agent;
+        if (/^[a-zA-Z0-9-]+$/.test(updatedTask.agent) && /^[a-zA-Z0-9-]+$/.test(updatedTask.id)) {
+          const triggerBat = path.join(process.cwd(), 'trigger-agent.bat');
+          const proj = projectsCache.find(p => p.id === updatedTask.projectId);
+          const execOpts = proj?.localPath ? { cwd: proj.localPath } : undefined;
+
+          writeAgentLog('TRIGGER', `Spawning agent=${updatedTask.agent} for task=${updatedTask.id} ("${updatedTask.title}") via PUT /tasks/:id endpoint${execOpts ? ' at ' + execOpts.cwd : ''}`);
+          execFile('cmd.exe', ['/c', triggerBat, updatedTask.agent, updatedTask.id], execOpts, (err) => {
+            if (err) writeAgentLog('ERROR', `trigger-agent.bat failed for task=${updatedTask.id}: ${err.message}`);
+            else writeAgentLog('INFO', `trigger-agent.bat exited OK for task=${updatedTask.id}`);
+          });
+        } else {
+          writeAgentLog('ERROR', `Blocked trigger due to invalid chars: agent=${updatedTask.agent} taskId=${updatedTask.id}`);
+        }
+      }
+    }
+
     tasksCache[taskIndex] = updatedTask;
     saveTasks();
     res.json(updatedTask);
@@ -1036,6 +1185,17 @@ async function startServer() {
 
     if (taskIndex === -1) {
       return res.status(404).json({ error: 'Task not found' });
+    }
+
+    const currentTask = tasksCache[taskIndex];
+    // Enforce lock
+    if (currentTask.status === 'in-progress') {
+      const isAgentRequest = String(req.headers['x-agent-request']).toLowerCase() === 'true';
+      // For DELETE, emergency might be passed in body or query depending on usage
+      const isEmergency = req.body?.emergency === true || String(req.body?.emergency).toLowerCase() === 'true' || String(req.query?.emergency).toLowerCase() === 'true';
+      if (!isAgentRequest && !isEmergency) {
+        return res.status(403).json({ error: 'Task is locked by an agent. Use emergency flag to override.' });
+      }
     }
 
     const removed = tasksCache.splice(taskIndex, 1);
@@ -1302,7 +1462,21 @@ async function startServer() {
         }
 
         const currentTask = tasksCache[index];
+
+        // Enforce lock
+        if (currentTask.status === 'in-progress') {
+          const isAgentRequest = args?.isAgentRequest === true || String(args?.isAgentRequest).toLowerCase() === 'true';
+          const isEmergency = args?.emergency === true || String(args?.emergency).toLowerCase() === 'true';
+          if (!isAgentRequest && !isEmergency) {
+            return { isError: true, content: [{ type: "text", text: "Task is locked by an agent. Use emergency flag to override." }] };
+          }
+        }
+
         const updatedTask = { ...currentTask, ...updateFields, updatedAt: new Date().toISOString() };
+
+        if (['backlog', 'done', 'ready-for-review'].includes(updatedTask.status)) {
+          updatedTask.activeAgent = undefined;
+        }
         updatedTask.logs = [...currentTask.logs, { id: `log-${Date.now()}-mcp-upd`, timestamp: new Date().toISOString(), message: 'Task updated via MCP Server.', type: 'update' }];
         tasksCache[index] = updatedTask;
         saveTasks();
@@ -1314,8 +1488,22 @@ async function startServer() {
         if (index === -1) {
           return { isError: true, content: [{ type: "text", text: `Task ${taskId} not found.` }] };
         }
+        
+        const currentTask = tasksCache[index];
+        // Enforce lock
+        if (currentTask.status === 'in-progress') {
+          const isAgentRequest = args?.isAgentRequest === true || String(args?.isAgentRequest).toLowerCase() === 'true';
+          const isEmergency = args?.emergency === true || String(args?.emergency).toLowerCase() === 'true';
+          if (!isAgentRequest && !isEmergency) {
+            return { isError: true, content: [{ type: "text", text: "Task is locked by an agent. Use emergency flag to override." }] };
+          }
+        }
+        
         tasksCache[index].status = status;
         tasksCache[index].updatedAt = new Date().toISOString();
+        if (['backlog', 'done', 'ready-for-review'].includes(status)) {
+          tasksCache[index].activeAgent = undefined;
+        }
         tasksCache[index].logs.push({ id: `log-${Date.now()}-mcp-move`, timestamp: new Date().toISOString(), message: `Status moved to ${status} via MCP Server.`, type: 'move' });
         saveTasks();
         return { content: [{ type: "text", text: JSON.stringify(tasksCache[index], null, 2) }] };
@@ -1326,6 +1514,17 @@ async function startServer() {
         if (index === -1) {
           return { isError: true, content: [{ type: "text", text: `Task ${taskId} not found.` }] };
         }
+        
+        const currentTask = tasksCache[index];
+        // Enforce lock
+        if (currentTask.status === 'in-progress') {
+          const isAgentRequest = args?.isAgentRequest === true || String(args?.isAgentRequest).toLowerCase() === 'true';
+          const isEmergency = args?.emergency === true || String(args?.emergency).toLowerCase() === 'true';
+          if (!isAgentRequest && !isEmergency) {
+            return { isError: true, content: [{ type: "text", text: "Task is locked by an agent. Use emergency flag to override." }] };
+          }
+        }
+        
         const removed = tasksCache.splice(index, 1);
         saveTasks();
         return { content: [{ type: "text", text: JSON.stringify({ success: true, removed: removed[0] }, null, 2) }] };

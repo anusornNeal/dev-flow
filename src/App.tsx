@@ -113,12 +113,12 @@ export default function App() {
     }
   };
 
-  const handleCreateProject = async (name: string, repoUrl: string, description?: string) => {
+  const handleCreateProject = async (name: string, repoUrl: string, description?: string, localPath?: string) => {
     try {
       const res = await fetch('/api/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, repoUrl, description })
+        body: JSON.stringify({ name, repoUrl, description, localPath })
       });
       if (res.ok) {
         const newProj = await res.json();
@@ -148,6 +148,24 @@ export default function App() {
       }
     } catch (err) {
       console.error('Failed to delete project:', err);
+    }
+    return false;
+  };
+
+  const handleUpdateProject = async (id: string, updates: Partial<Project>) => {
+    try {
+      const res = await fetch(`/api/projects/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates)
+      });
+      if (res.ok) {
+        const updatedProj = await res.json();
+        setProjects(prev => prev.map(p => p.id === id ? updatedProj : p));
+        return true;
+      }
+    } catch (err) {
+      console.error('Failed to update project:', err);
     }
     return false;
   };
@@ -194,6 +212,15 @@ export default function App() {
       return;
     }
 
+    if (sourceTask.status === 'in-progress') {
+      const lockOverride = window.prompt("Task is locked. Type 'Emergency Move' to force it:");
+      if (lockOverride !== 'Emergency Move') {
+        setDraggedTaskId(null);
+        setDraggedOverColumn(null);
+        return;
+      }
+    }
+
     const modifiedLogs: LogEntry[] = [
       ...sourceTask.logs,
       {
@@ -228,10 +255,12 @@ export default function App() {
 
     // Sync API update
     try {
+      const isEmergency = sourceTask.status === 'in-progress';
+      const payload = isEmergency ? { ...updatedTask, emergency: true } : updatedTask;
       await fetch(`/api/tasks/${taskId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updatedTask)
+        body: JSON.stringify(payload)
       });
     } catch (err) {
       console.error('API lane move sync failed:', err);
@@ -465,6 +494,7 @@ export default function App() {
           setActiveProjectId={setActiveProjectId}
           onCreateProject={handleCreateProject}
           onDeleteProject={handleDeleteProject}
+          onUpdateProject={handleUpdateProject}
           selectedPriority={selectedPriority}
           setSelectedPriority={setSelectedPriority}
           selectedTag={selectedTag}

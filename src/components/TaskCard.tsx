@@ -4,7 +4,7 @@
  */
 
 import React, { useState } from 'react';
-import { GitBranch, Copy, Check, Trash2, FileCode, CheckSquare, Image as ImageIcon, Link as LinkIcon } from 'lucide-react';
+import { GitBranch, Copy, Check, Trash2, FileCode, CheckSquare, Image as ImageIcon, Link as LinkIcon, Lock } from 'lucide-react';
 import { Task } from '../types';
 import { AGENTS_CONFIG, getModelConfig, defaultModelForAgent, defaultEffortForModel } from '../lib/agentsConfig';
 
@@ -97,6 +97,14 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
               <span className="flex h-1.5 w-1.5 relative">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75"></span>
                 <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-orange-500"></span>
+              </span>
+            )}
+
+            {/* Lock badge - shown when an agent is actively working */}
+            {task.activeAgent && (
+              <span className="flex items-center gap-1 text-[8.5px] font-mono font-extrabold px-1.5 py-0.5 rounded-lg bg-orange-50 text-orange-700 border border-orange-200 select-none" title={`Locked by ${task.activeAgent}`}>
+                <Lock size={8} className="shrink-0" />
+                {task.activeAgent}
               </span>
             )}
             

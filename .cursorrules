@@ -1,0 +1,14 @@
+# Project Rules and Guidelines
+
+## Branching Strategy & Git Flow
+1. **Develop Branch as Base**: All new features, bug fixes, or experimental work MUST branch off from the `develop` branch. Do not branch off from `main`.
+2. **Feature Branches**: Name your feature branches clearly (e.g., `feature/<feature-name>` or `fix/<bug-name>`).
+3. **Pull Requests (PR)**: Once the work on a feature branch is complete and tested, it will eventually be merged/PR'd into `main` (or back into `develop` and then `main`, depending on the release cycle).
+
+## API & Backend Rules
+- **Manual API Validation**: Do not use `zod` or heavy external libraries for API request validation. Use the custom manual validation helpers (`validateString`, `validateEnum`, `validateTaskPayload`) located in `server.ts`.
+- **Stateless/Cache Driven**: The backend uses an in-memory cache (`tasksCache`, `projectsCache`) backed by JSON files. Always validate before mutating the cache.
+
+## UI/UX Rules
+- **Task Cards**: Subtasks should be visualised in two lines without expanding the card into a scrollbar.
+- **Images**: Design images (`designImages`) support up to 5 images. Always render them appropriately in grids or carousels.

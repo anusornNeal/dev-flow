@@ -12,3 +12,6 @@ tasks.json
 projects.json
 counters.json
 mcp-servers.json
+
+.agents/
+ORIGINAL_REQUEST.md

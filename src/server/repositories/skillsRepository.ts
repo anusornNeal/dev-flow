@@ -64,20 +64,32 @@ function syncMasterSkillsFromFiles() {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
+  const MASTER_SKILLS = new Set([
+    'playbook',
+    'schema',
+    'agent-task-prompt-template',
+    'antigravity-workflow',
+    'claude-workflow',
+    'codex-workflow'
+  ]);
+
   db.transaction(() => {
     for (const filePath of skillFiles) {
       const id = path.basename(filePath, path.extname(filePath));
       const existing = existingSkillMap.get(id);
       const legacy = legacyMetadata.get(id);
       const content = fs.readFileSync(filePath, 'utf8');
+      
+      const isMaster = MASTER_SKILLS.has(id);
+      
       upsertSkill.run(
         id,
         existing?.name || legacy?.name || humanizeSkillId(id),
         existing?.description || legacy?.description || '',
-        0,
+        isMaster ? 0 : 1,
         content,
-        'master',
-        1,
+        isMaster ? 'master' : 'custom',
+        isMaster ? 1 : 0,
         'repo-file',
         filePath,
         existing?.createdAt || now,

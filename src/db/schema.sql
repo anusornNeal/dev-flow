@@ -55,3 +55,8 @@ CREATE TABLE IF NOT EXISTS skills (
   isCustom INTEGER DEFAULT 0,
   content TEXT
 );
+
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  id TEXT PRIMARY KEY,
+  appliedAt TEXT NOT NULL
+);

@@ -3,6 +3,9 @@ import path from 'path';
 import db from '../../db/index';
 import type { AppState } from '../types';
 
+const SKILLS_DIR = path.join(process.cwd(), 'skills');
+const LEGACY_REGISTRY_BACKUP_FILE = path.join(SKILLS_DIR, 'registry.json.bak');
+
 function ensureLegacySkillsColumns() {
   try {
     const tableInfo = db.pragma('table_info(skills)') as any[];
@@ -23,14 +26,81 @@ function getSkillColumns() {
   return (db.pragma('table_info(skills)') as any[]).map((column) => column.name);
 }
 
+function humanizeSkillId(id: string) {
+  return id
+    .replace(/[-_]+/g, ' ')
+    .replace(/\b\w/g, (char: string) => char.toUpperCase());
+}
+
+function loadLegacySkillMetadata() {
+  if (!fs.existsSync(LEGACY_REGISTRY_BACKUP_FILE)) {
+    return new Map<string, { name: string; description: string }>();
+  }
+
+  try {
+    const registry = JSON.parse(fs.readFileSync(LEGACY_REGISTRY_BACKUP_FILE, 'utf8')) as Array<{ id: string; name: string; description: string }>;
+    return new Map(registry.map((item) => [item.id, { name: item.name, description: item.description || '' }]));
+  } catch (error) {
+    console.error('Failed to read legacy skill registry backup', error);
+    return new Map<string, { name: string; description: string }>();
+  }
+}
+
+function syncMasterSkillsFromFiles() {
+  if (!fs.existsSync(SKILLS_DIR)) {
+    return;
+  }
+
+  const legacyMetadata = loadLegacySkillMetadata();
+  const now = new Date().toISOString();
+  const skillFiles = fs.readdirSync(SKILLS_DIR)
+    .filter((fileName) => fileName.endsWith('.md'))
+    .map((fileName) => path.join(SKILLS_DIR, fileName));
+
+  const existingSkills = db.prepare('SELECT * FROM skills').all() as any[];
+  const existingSkillMap = new Map(existingSkills.map((skill) => [skill.id, skill]));
+  const upsertSkill = db.prepare(`
+    INSERT OR REPLACE INTO skills (id, name, description, isCustom, content, kind, isProtected, sourceType, sourcePath, createdAt, updatedAt)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  db.transaction(() => {
+    for (const filePath of skillFiles) {
+      const id = path.basename(filePath, path.extname(filePath));
+      const existing = existingSkillMap.get(id);
+      const legacy = legacyMetadata.get(id);
+      const content = fs.readFileSync(filePath, 'utf8');
+      upsertSkill.run(
+        id,
+        existing?.name || legacy?.name || humanizeSkillId(id),
+        existing?.description || legacy?.description || '',
+        0,
+        content,
+        'master',
+        1,
+        'repo-file',
+        filePath,
+        existing?.createdAt || now,
+        now,
+      );
+    }
+  })();
+}
+
 export function loadSkillsRegistry(state: AppState) {
   ensureLegacySkillsColumns();
+  syncMasterSkillsFromFiles();
   state.skillsRegistry = db.prepare('SELECT * FROM skills').all() as any[];
   state.skillsRegistry.forEach((skill) => {
     skill.isCustom = Boolean(skill.isCustom);
-    if (!skill.filePath && !skill.isCustom) {
-      skill.filePath = path.join(process.cwd(), 'skills', skill.id + '.md');
+    skill.isProtected = Boolean(skill.isProtected);
+    skill.filePath = skill.sourcePath || skill.filePath || (!skill.isCustom ? path.join(process.cwd(), 'skills', skill.id + '.md') : undefined);
+  });
+  state.skillsRegistry.sort((left, right) => {
+    if (left.isCustom !== right.isCustom) {
+      return left.isCustom ? 1 : -1;
     }
+    return String(left.name || '').localeCompare(String(right.name || ''));
   });
 }
 
@@ -84,7 +154,7 @@ export function saveSkillsRegistry(state: AppState) {
 }
 
 export function readSkillContent(skill: any) {
-  if (skill.isCustom) {
+  if (typeof skill.content === 'string' && skill.content.length > 0) {
     return skill.content || '';
   }
   if (!skill.filePath) {

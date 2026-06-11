@@ -996,7 +996,7 @@ export default function TaskDetailsDrawer({
                   <h4 className="text-[10px] font-mono text-[#8a6e5a] uppercase tracking-widest flex items-center gap-1.5 mb-3 font-bold">
                     <AlignLeft size={13} className="text-[#bf8a50]" /> Specifications Instruction sheet
                   </h4>
-                  <div className="bg-[#ffffff] border border-[#ebdcb9] rounded-2xl p-4 text-[11px] font-mono text-[#5c493c] leading-relaxed overflow-x-auto shadow-2xs prose select-text">
+                  <div className="bg-[#ffffff] border border-[#ebdcb9] rounded-2xl p-4 text-[11px] font-mono text-[#5c493c] leading-relaxed overflow-x-auto shadow-2xs prose max-w-none select-text">
                     <MarkdownRenderer content={task.description} />
                   </div>
                 </div>

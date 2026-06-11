@@ -164,14 +164,14 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
   const getTabSkills = () => {
     switch (activeTab) {
       case 'authoring':
-        return skills.filter(s => ['schema', 'agent-playbook'].includes(s.id));
+        return skills.filter(s => ['schema', 'playbook'].includes(s.id));
       case 'workflow':
         return skills.filter(s => s.id.endsWith('-workflow'));
       case 'prompt':
         return skills.filter(s => s.id === 'agent-task-prompt-template');
       case 'custom':
       default:
-        return skills.filter(s => !['schema', 'agent-playbook', 'agent-task-prompt-template'].includes(s.id) && !s.id.endsWith('-workflow'));
+        return skills.filter(s => !['schema', 'playbook', 'agent-task-prompt-template'].includes(s.id) && !s.id.endsWith('-workflow'));
     }
   };
 

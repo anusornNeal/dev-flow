@@ -41,10 +41,11 @@ function writeAgentLog(level: 'INFO' | 'ERROR' | 'TRIGGER', message: string) {
 let tasksCache: any[] = [];
 let projectsCache: any[] = [];
 let countersCache: Record<string, number> = {};
+function broadcast(_message: unknown) {}
 
 function loadCounters() {
   countersCache = {};
-  const rows = db.prepare('SELECT prefix, count FROM counters').all();
+  const rows = db.prepare('SELECT prefix, count FROM counters').all() as Array<{ prefix: string; count: number }>;
   for (const row of rows) countersCache[row.prefix] = row.count;
 }
 
@@ -61,7 +62,7 @@ const SETTINGS_FILE = path.join(process.cwd(), 'settings.json');
 let settingsCache: { autoWorking: boolean } = { autoWorking: false };
 
 function loadSettings() {
-  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('autoWorking');
+  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('autoWorking') as { value?: string } | undefined;
   if (row && row.value) {
     try { settingsCache = { autoWorking: JSON.parse(row.value) }; } catch(e){}
   } else {
@@ -390,7 +391,7 @@ function saveProjects() {
 // Load from tasks.json
 function loadTasks() {
   loadCounters();
-  const rows = db.prepare('SELECT * FROM tasks').all();
+  const rows = db.prepare('SELECT * FROM tasks').all() as any[];
   tasksCache = rows.map(item => ({
     ...item,
     tags: item.tags ? JSON.parse(item.tags) : undefined,

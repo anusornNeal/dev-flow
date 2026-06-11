@@ -219,7 +219,9 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
                             <div className="flex-1 min-w-0 pr-2">
                               <div className="font-extrabold text-sm flex items-center gap-1.5">
                                 {skill.name}
-                                <Lock size={10} className="text-[#c4a991]" title="Protected Master Skill" />
+                                <span title="Protected Master Skill">
+                                  <Lock size={10} className="text-[#c4a991]" />
+                                </span>
                               </div>
                               <div className="text-[10px] font-mono text-[#8a725f] mt-1 line-clamp-1">{skill.description}</div>
                             </div>

@@ -24,6 +24,9 @@ Setup:
 
 Standard commands:
 
+- `npm run setup` creates the local `data/` directory when needed and bootstraps `.env` from `.env.example` when safe.
+- `npm run doctor` checks Node/npm, env file availability, writable SQLite storage, DB initialization, port `3000`, and backed-up project local paths.
+- `npm test` runs the lightweight verification flow for this repo (`lint` + `doctor`).
 - `npm run dev` starts the DevFlow server in development mode.
 - `npm run build` builds the frontend bundle and the Node server output into `dist/`.
 - `npm run start` runs the built server from `dist/server.cjs`.

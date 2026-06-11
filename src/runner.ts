@@ -78,7 +78,19 @@ function main() {
   }
   console.log(`[runner] Resolved executable: ${executable}`);
 
-  let prompt = `You are an AI developer agent. A task has been assigned to you in Dev Flow. Task ID: ${taskId}. Step 1: Immediately use the Dev Flow MCP tool to move this task to 'in-progress' status. Step 2: Read the task details. Use model '${model}' and reasoning effort '${effort}'. Step 3: If the task has checklist items or subtasks, use the invoke_subagent tool to call subagents for them, explicitly instructing them to use model '${model}' and effort '${effort}'. Step 4: When done, move the task to 'ready-for-review'. Step 5: Check if there are any other tasks in the 'todo' lane for this project. If there are, pick the oldest one, move it to 'in-progress', work on it, and repeat this loop until no 'todo' tasks remain.`;
+  let prompt = '';
+  try {
+    // Fetch compiled prompt from DevFlow backend
+    prompt = execSync(`curl -s "http://localhost:3000/api/tasks/${taskId}/prompt"`, { encoding: 'utf8' }).trim();
+  } catch (e) {
+    console.error(`[runner] Failed to fetch prompt from server for task ${taskId}`);
+    process.exit(1);
+  }
+
+  if (!prompt || prompt.includes('{"error"')) {
+    console.error(`[runner] Invalid prompt received from server for task ${taskId}:`, prompt);
+    process.exit(1);
+  }
 
   const spawnArgs: string[] = [];
 

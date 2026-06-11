@@ -1,0 +1,12 @@
+[
+  {
+    "id": "schema",
+    "name": "Task JSON Schema",
+    "description": "The JSON structure and templates for DevFlow tasks."
+  },
+  {
+    "id": "playbook",
+    "name": "Agent Playbook",
+    "description": "Instructions and rules for agents interacting with DevFlow."
+  }
+]

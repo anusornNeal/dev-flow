@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Save, FileText, Edit2, Ban, ChevronRight } from 'lucide-react';
+import { X, Save, FileText, Edit2, Ban, ChevronRight, Plus } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -28,6 +28,12 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
   
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState('');
+
+  const [isImporting, setIsImporting] = useState(false);
+  const [importId, setImportId] = useState('');
+  const [importName, setImportName] = useState('');
+  const [importDescription, setImportDescription] = useState('');
+  const [importContent, setImportContent] = useState('');
 
   // 1. Fetch Skill List on mount
   useEffect(() => {
@@ -89,6 +95,38 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
     }
   };
 
+  const handleImportSave = async () => {
+    if (!importId || !importName || !importDescription || !importContent) {
+      alert("All fields are required.");
+      return;
+    }
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/skills/import`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: importId,
+          name: importName,
+          description: importDescription,
+          content: importContent
+        })
+      });
+      if (!res.ok) {
+        throw new Error('Import failed');
+      }
+      
+      const data = await fetch('/api/skills').then(r => r.json());
+      setSkills(data);
+      setIsImporting(false);
+      setSelectedSkillId(importId);
+    } catch (err) {
+      console.error('Import failed:', err);
+      alert('Failed to import skill');
+    }
+    setSaving(false);
+  };
+
   return (
     <div className="fixed inset-0 bg-[#3e3129]/30 backdrop-blur-sm z-50 flex items-center justify-center p-4">
       <div className="bg-[#fffdfa] rounded-2xl shadow-xl w-full max-w-6xl h-[85vh] flex border border-[#e5d4bb] overflow-hidden select-none">
@@ -100,6 +138,23 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
               <FileText size={20} className="text-[#d89745]" />
               Agent Skills
             </h2>
+            <button
+              onClick={() => {
+                if ((isEditing || isImporting) && !confirm('You have unsaved changes. Discard them?')) return;
+                setIsEditing(false);
+                setSelectedSkillId(null);
+                setSkillDetail(null);
+                setIsImporting(true);
+                setImportId('');
+                setImportName('');
+                setImportDescription('');
+                setImportContent('');
+              }}
+              className="p-1.5 hover:bg-[#ebdcb9]/40 rounded-lg text-[#d89745] transition-colors"
+              title="Import Skill"
+            >
+              <Plus size={18} />
+            </button>
           </div>
           
           <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-2">
@@ -114,9 +169,13 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
                   <button
                     key={skill.id}
                     onClick={() => {
-                      if (!isEditing) setSelectedSkillId(skill.id);
-                      else {
+                      if (!isEditing && !isImporting) {
+                        setSelectedSkillId(skill.id);
+                        setIsImporting(false);
+                      } else {
                         if (confirm('You have unsaved changes. Discard them?')) {
+                          setIsImporting(false);
+                          setIsEditing(false);
                           setSelectedSkillId(skill.id);
                         }
                       }
@@ -142,7 +201,40 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
         {/* Right Area: Detail/Editor */}
         <div className="w-2/3 flex flex-col bg-[#f5f2eb]">
           <div className="px-6 py-4 border-b border-[#ebdcb9] bg-[#fdfbf6] flex items-center justify-between shrink-0 h-[69px]">
-            {loadingDetail ? (
+            {isImporting ? (
+              <div className="flex-1 flex items-center justify-between">
+                <div>
+                  <h3 className="text-[#534135] font-extrabold font-sans text-base">Import New Skill</h3>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => {
+                      if (skills.length > 0) setSelectedSkillId(skills[0].id);
+                      setIsImporting(false);
+                    }}
+                    disabled={saving}
+                    className="bg-white hover:bg-rose-50 border border-rose-200 text-rose-600 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors shadow-sm disabled:opacity-50"
+                  >
+                    <Ban size={14} /> Cancel
+                  </button>
+                  <button
+                    onClick={handleImportSave}
+                    disabled={saving}
+                    className="bg-[#2a7a8a] hover:bg-[#1a5b67] text-white px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors shadow-sm disabled:opacity-50"
+                  >
+                    <Save size={14} /> {saving ? 'Saving...' : 'Import'}
+                  </button>
+                  <div className="w-px h-5 bg-[#ebdcb9] mx-1"></div>
+                  <button
+                    onClick={onClose}
+                    className="text-[#8c7463] hover:bg-[#ebdcb9]/40 p-1.5 rounded-lg transition-colors"
+                    title="Close"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+              </div>
+            ) : loadingDetail ? (
               <div className="text-sm font-mono text-[#8c7463]">Loading details...</div>
             ) : skillDetail ? (
               <div className="flex-1 flex items-center justify-between">
@@ -199,7 +291,50 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
           </div>
 
           <div className="flex-1 p-4 overflow-hidden flex flex-col relative select-text">
-            {!skillDetail || loadingDetail ? (
+            {isImporting ? (
+              <div className="flex-1 flex flex-col gap-4 overflow-y-auto">
+                <div className="flex flex-col gap-1 shrink-0">
+                  <label className="text-xs font-extrabold text-[#534135]">ID (Filename)</label>
+                  <input
+                    type="text"
+                    value={importId}
+                    onChange={(e) => setImportId(e.target.value)}
+                    placeholder="e.g. my-new-skill"
+                    className="w-full p-2 border rounded-lg text-sm font-mono outline-none shadow-sm transition-colors bg-white border-[#d89745] text-[#3e3129] focus:ring-2 focus:ring-[#d89745]/30"
+                  />
+                </div>
+                <div className="flex flex-col gap-1 shrink-0">
+                  <label className="text-xs font-extrabold text-[#534135]">Name</label>
+                  <input
+                    type="text"
+                    value={importName}
+                    onChange={(e) => setImportName(e.target.value)}
+                    placeholder="e.g. My New Skill"
+                    className="w-full p-2 border rounded-lg text-sm font-mono outline-none shadow-sm transition-colors bg-white border-[#d89745] text-[#3e3129] focus:ring-2 focus:ring-[#d89745]/30"
+                  />
+                </div>
+                <div className="flex flex-col gap-1 shrink-0">
+                  <label className="text-xs font-extrabold text-[#534135]">Description</label>
+                  <input
+                    type="text"
+                    value={importDescription}
+                    onChange={(e) => setImportDescription(e.target.value)}
+                    placeholder="Brief description..."
+                    className="w-full p-2 border rounded-lg text-sm font-mono outline-none shadow-sm transition-colors bg-white border-[#d89745] text-[#3e3129] focus:ring-2 focus:ring-[#d89745]/30"
+                  />
+                </div>
+                <div className="flex flex-col gap-1 flex-1 min-h-[200px]">
+                  <label className="text-xs font-extrabold text-[#534135]">Content (Markdown)</label>
+                  <textarea
+                    className="flex-1 w-full p-4 border rounded-xl text-sm font-mono outline-none resize-none shadow-sm transition-colors bg-white border-[#d89745] text-[#3e3129] focus:ring-2 focus:ring-[#d89745]/30"
+                    value={importContent}
+                    onChange={(e) => setImportContent(e.target.value)}
+                    placeholder="Skill document content goes here..."
+                    spellCheck="false"
+                  />
+                </div>
+              </div>
+            ) : !skillDetail || loadingDetail ? (
               <div className="flex-1 flex items-center justify-center text-[#8a6e5a] font-mono text-sm">
                 No skill selected.
               </div>

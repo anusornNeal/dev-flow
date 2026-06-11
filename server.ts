@@ -511,20 +511,32 @@ async function startServer() {
   // ================= API ENDPOINTS =================
 
   // ================= SKILLS ENDPOINTS =================
-  const SKILLS_REGISTRY = [
-    {
-      id: 'schema',
-      name: 'Task JSON Schema',
-      description: 'The JSON structure and templates for DevFlow tasks.',
-      filePath: path.join(process.cwd(), 'skills', 'schema.md')
-    },
-    {
-      id: 'playbook',
-      name: 'Agent Playbook',
-      description: 'Instructions and rules for agents interacting with DevFlow.',
-      filePath: path.join(process.cwd(), 'skills', 'playbook.md')
+  let SKILLS_REGISTRY: any[] = [];
+  const REGISTRY_FILE = path.join(process.cwd(), 'skills', 'registry.json');
+  
+  function loadSkillsRegistry() {
+    try {
+      if (fs.existsSync(REGISTRY_FILE)) {
+        SKILLS_REGISTRY = JSON.parse(fs.readFileSync(REGISTRY_FILE, 'utf8'));
+        SKILLS_REGISTRY.forEach(s => {
+          s.filePath = path.join(process.cwd(), 'skills', s.id + '.md');
+        });
+      }
+    } catch (err) {
+      console.error('Failed to load skills registry', err);
     }
-  ];
+  }
+  
+  function saveSkillsRegistry() {
+    try {
+      const saveList = SKILLS_REGISTRY.map(({id, name, description}) => ({id, name, description}));
+      fs.writeFileSync(REGISTRY_FILE, JSON.stringify(saveList, null, 2), 'utf8');
+    } catch (err) {
+      console.error('Failed to save skills registry', err);
+    }
+  }
+
+  loadSkillsRegistry();
 
   app.get('/api/skills', (req, res) => {
     res.json(SKILLS_REGISTRY.map(s => ({ id: s.id, name: s.name, description: s.description })));
@@ -546,9 +558,35 @@ async function startServer() {
     if (!skill) return res.status(404).json({ error: 'Skill not found' });
     try {
       fs.writeFileSync(skill.filePath, req.body.content || '', 'utf8');
+      
+      // Update name/description if provided
+      if (req.body.name) skill.name = req.body.name;
+      if (req.body.description) skill.description = req.body.description;
+      saveSkillsRegistry();
+      
       res.json({ success: true });
     } catch (err) {
       res.status(500).json({ error: 'Failed to write skill' });
+    }
+  });
+
+  app.post('/api/skills/import', (req, res) => {
+    const { id, name, description, content } = req.body;
+    if (!id || !name || !content) return res.status(400).json({ error: 'Missing required fields' });
+    
+    // Check if ID already exists
+    if (SKILLS_REGISTRY.some(s => s.id === id)) {
+      return res.status(400).json({ error: 'Skill ID already exists' });
+    }
+
+    const filePath = path.join(process.cwd(), 'skills', id + '.md');
+    try {
+      fs.writeFileSync(filePath, content, 'utf8');
+      SKILLS_REGISTRY.push({ id, name, description: description || '', filePath });
+      saveSkillsRegistry();
+      res.status(201).json({ success: true, id });
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to import skill' });
     }
   });
 
@@ -775,6 +813,45 @@ async function startServer() {
       return res.status(404).json({ error: 'Task not found' });
     }
     res.json(context);
+  });
+
+  // GET: Build the compiled prompt
+  app.get('/api/tasks/:id/prompt', (req, res) => {
+    const targetId = req.params.id;
+    const includeLogs = req.query.includeLogs === 'true' || req.query.mode === 'full' || req.query.mode === 'debug';
+    
+    const context = getAgentTaskContextLogic(targetId, includeLogs);
+    if (!context) {
+      return res.status(404).json({ error: 'Task not found' });
+    }
+
+    let promptContent = "";
+
+    // Load prompt-template skill
+    const promptTemplateSkill = SKILLS_REGISTRY.find(s => s.id === 'prompt-template');
+    if (promptTemplateSkill && fs.existsSync(promptTemplateSkill.filePath)) {
+      promptContent = fs.readFileSync(promptTemplateSkill.filePath, 'utf8');
+    } else {
+      // Fallback
+      promptContent = `You are an AI developer agent. A task has been assigned to you in Dev Flow. Task ID: {TASK_ID}. Step 1: Immediately use the Dev Flow MCP tool to move this task to 'in-progress' status. Step 2: Read the task details. Step 3: If the task has checklist items or subtasks, use the invoke_subagent tool to call subagents for them. Step 4: When done, move the task to 'ready-for-review'. Step 5: Check if there are any other tasks in the 'todo' lane for this project. If there are, pick the oldest one, move it to 'in-progress', work on it, and repeat this loop until no 'todo' tasks remain.\n\n### Task Context\n{TASK_CONTEXT}\n\n{AGENT_WORKFLOW}`;
+    }
+
+    // Load agent-specific workflow skill
+    const agentId = context.assignment?.agent?.toLowerCase() || 'default';
+    const agentWorkflowSkill = SKILLS_REGISTRY.find(s => s.id === `agent-${agentId}-workflow`);
+    let agentWorkflowContent = "";
+    if (agentWorkflowSkill && fs.existsSync(agentWorkflowSkill.filePath)) {
+      agentWorkflowContent = fs.readFileSync(agentWorkflowSkill.filePath, 'utf8');
+    }
+
+    // Replace placeholders
+    promptContent = promptContent.replace(/\{TASK_ID\}/g, context.task.id);
+    promptContent = promptContent.replace(/\{TASK_CONTEXT\}/g, JSON.stringify(context, null, 2));
+    promptContent = promptContent.replace(/\{AGENT_WORKFLOW\}/g, agentWorkflowContent);
+
+    // Return as plain text
+    res.setHeader('Content-Type', 'text/plain');
+    res.send(promptContent);
   });
 
   // POST: Create a new issue card (supports single object or JSON Array of tasks for batch creation)

@@ -60,14 +60,45 @@ IF NOT "%LOCAL_PATH%"=="" IF NOT "%LOCAL_PATH%"=="none" (
 
 SET "AGENT_PROMPT=You are an AI developer agent. A task has been assigned to you in Dev Flow. Task ID: %TASK_ID%. Step 1: Immediately use the Dev Flow MCP tool to move this task to 'in-progress' status. Step 2: Read the task details. Use model '%MODEL%' and reasoning effort '%EFFORT%'. Step 3: If the task has checklist items or subtasks, use the invoke_subagent tool to call subagents for them, explicitly instructing them to use model '%MODEL%' and effort '%EFFORT%'. Step 4: When done, move the task to 'ready-for-review'. Step 5: Check if there are any other tasks in the 'todo' lane for this project. If there are, pick the oldest one, move it to 'in-progress', work on it, and repeat this loop until no 'todo' tasks remain."
 
-SET "MODEL_FLAG="
+SET "AGY_FLAGS="
+SET "SUPPORTED_MODEL="
+SET "SUPPORTED_EFFORT="
+SET "SUPPORTED_ALWAYS_ALLOW="
+
+"%AGY_EXE%" --help | findstr /c:"--model" >nul
+IF NOT ERRORLEVEL 1 SET "SUPPORTED_MODEL=1"
+
+"%AGY_EXE%" --help | findstr /c:"--effort" >nul
+IF NOT ERRORLEVEL 1 SET "SUPPORTED_EFFORT=1"
+
+"%AGY_EXE%" --help | findstr /c:"--dangerously-skip-permissions" >nul
+IF NOT ERRORLEVEL 1 SET "SUPPORTED_ALWAYS_ALLOW=1"
+
 IF NOT "%MODEL%"=="" IF NOT "%MODEL%"=="none" (
-  SET MODEL_FLAG=--model "%MODEL%"
+  IF DEFINED SUPPORTED_MODEL (
+    SET AGY_FLAGS=%AGY_FLAGS% --model "%MODEL%"
+  ) ELSE (
+    echo [trigger-agent] WARNING: agy CLI does not support --model flag. Using prompt fallback.
+  )
+)
+
+IF NOT "%EFFORT%"=="" IF NOT "%EFFORT%"=="none" (
+  IF DEFINED SUPPORTED_EFFORT (
+    SET AGY_FLAGS=%AGY_FLAGS% --effort "%EFFORT%"
+  ) ELSE (
+    echo [trigger-agent] WARNING: agy CLI does not support --effort flag. Using prompt fallback.
+  )
+)
+
+IF DEFINED SUPPORTED_ALWAYS_ALLOW (
+  SET AGY_FLAGS=%AGY_FLAGS% --dangerously-skip-permissions
+) ELSE (
+  echo [trigger-agent] WARNING: agy CLI does not support auto-approval/always allow flag. You may be prompted for permissions.
 )
 
 IF /I "%AGENT%"=="Antigravity" (
   REM Launch Antigravity (agy) with interactive mode so history appears in chat UI
-  start "Antigravity Agent" "%AGY_EXE%" %MODEL_FLAG% -i "%AGENT_PROMPT%"
+  start "Antigravity Agent" "%AGY_EXE%" %AGY_FLAGS% -i "%AGENT_PROMPT%"
 ) ELSE IF /I "%AGENT%"=="Codex" (
   REM .cmd files must be invoked via cmd /k so the window stays open
   start "Codex Agent" cmd /k ""%APPDATA%\npm\codex.cmd" "%AGENT_PROMPT%""

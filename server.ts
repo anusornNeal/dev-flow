@@ -13,6 +13,10 @@ import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { execFile } from 'child_process';
+import db from './src/db/index';
+import { migrateJsonToSqlite } from './src/db/migrate';
+
+migrateJsonToSqlite();
 
 // Hardcoded seed array matching our beautiful mobile tasks
 const SEED_TASKS: any[] = [];
@@ -39,40 +43,34 @@ let projectsCache: any[] = [];
 let countersCache: Record<string, number> = {};
 
 function loadCounters() {
-  if (fs.existsSync(COUNTERS_FILE)) {
-    try {
-      countersCache = JSON.parse(fs.readFileSync(COUNTERS_FILE, 'utf8'));
-    } catch (e) {
-      countersCache = {};
-    }
-  }
+  countersCache = {};
+  const rows = db.prepare('SELECT prefix, count FROM counters').all();
+  for (const row of rows) countersCache[row.prefix] = row.count;
 }
 
 function saveCounters() {
-  try {
-    fs.writeFileSync(COUNTERS_FILE, JSON.stringify(countersCache, null, 2), 'utf8');
-  } catch (err) {}
+  const stmt = db.prepare('INSERT OR REPLACE INTO counters (prefix, count) VALUES (?, ?)');
+  db.transaction(() => {
+    for (const [prefix, count] of Object.entries(countersCache)) {
+      stmt.run(prefix, count);
+    }
+  })();
 }
 
 const SETTINGS_FILE = path.join(process.cwd(), 'settings.json');
 let settingsCache: { autoWorking: boolean } = { autoWorking: false };
 
 function loadSettings() {
-  if (fs.existsSync(SETTINGS_FILE)) {
-    try {
-      settingsCache = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
-    } catch (e) {
-      settingsCache = { autoWorking: false };
-    }
+  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('autoWorking');
+  if (row && row.value) {
+    try { settingsCache = { autoWorking: JSON.parse(row.value) }; } catch(e){}
   } else {
     saveSettings();
   }
 }
 
 function saveSettings() {
-  try {
-    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settingsCache, null, 2), 'utf8');
-  } catch (err) {}
+  db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('autoWorking', JSON.stringify(settingsCache.autoWorking));
 }
 
 loadSettings();
@@ -367,85 +365,49 @@ function generateDisplayId(projectId: string, projects: any[]): string {
 
 // Load from projects.json
 function loadProjects() {
-  try {
-    if (fs.existsSync(PROJECTS_FILE)) {
-      const data = fs.readFileSync(PROJECTS_FILE, 'utf8');
-      projectsCache = JSON.parse(data);
-      console.log(`Loaded ${projectsCache.length} projects from projects.json`);
-    } else {
-      projectsCache = [];
-      saveProjects();
-      console.log('Seeded initial default project in projects.json');
-    }
-  } catch (err) {
-    console.error('Error reading/writing projects.json, falling back to cache:', err);
-    projectsCache = [];
-  }
+  projectsCache = db.prepare('SELECT * FROM projects').all();
+  console.log('Loaded ' + projectsCache.length + ' projects from DB');
 }
 
-// Save back to projects.json
 function saveProjects() {
-  try {
-    fs.writeFileSync(PROJECTS_FILE, JSON.stringify(projectsCache, null, 2), 'utf8');
-  } catch (err) {
-    console.error('Failed to write to projects.json:', err);
-  }
+  const stmt = db.prepare('INSERT OR REPLACE INTO projects (id, name, repoUrl, description, createdAt, localPath, taskIdPrefix) VALUES (?, ?, ?, ?, ?, ?, ?)');
+  db.transaction(() => {
+    for (const item of projectsCache) {
+      stmt.run(item.id, item.name, item.repoUrl, item.description, item.createdAt, item.localPath, item.taskIdPrefix);
+    }
+  })();
 }
 
 // Load from tasks.json
 function loadTasks() {
-  try {
-    loadCounters();
-    if (fs.existsSync(DATA_FILE)) {
-      const fileData = fs.readFileSync(DATA_FILE, 'utf8');
-      tasksCache = JSON.parse(fileData);
-      
-      // Auto-backfill displayId for existing tasks
-      let changed = false;
-      tasksCache.forEach((t: any) => {
-        if (!t.displayId) {
-          t.displayId = generateDisplayId(t.projectId, projectsCache);
-          changed = true;
-        }
-      });
-      if (changed) saveTasks();
-      console.log(`Loaded ${tasksCache.length} tasks from tasks.json`);
-    } else {
-      tasksCache = [...SEED_TASKS].map((t: any) => ({
-        ...t,
-        projectId: 'project-default'
-      }));
-      tasksCache.forEach((t: any) => {
-        if (!t.displayId) {
-          t.displayId = generateDisplayId(t.projectId, projectsCache);
-        }
-      });
-      saveTasks();
-      console.log('Seeded initial mobile tasks in tasks.json');
-    }
-  } catch (err) {
-    console.error('Error reading/writing tasks.json, falling back to cache:', err);
-    tasksCache = [...SEED_TASKS].map((t: any) => ({
-      ...t,
-      projectId: 'project-default'
-    }));
-    tasksCache.forEach((t: any) => {
-      if (!t.displayId) {
-        t.displayId = generateDisplayId(t.projectId, projectsCache);
-      }
-    });
-  }
+  loadCounters();
+  const rows = db.prepare('SELECT * FROM tasks').all();
+  tasksCache = rows.map(item => ({
+    ...item,
+    tags: item.tags ? JSON.parse(item.tags) : undefined,
+    targetFiles: item.targetFiles ? JSON.parse(item.targetFiles) : undefined,
+    checklist: item.checklist ? JSON.parse(item.checklist) : undefined,
+    logs: item.logs ? JSON.parse(item.logs) : undefined,
+    designImages: item.designImages ? JSON.parse(item.designImages) : undefined
+  }));
+  console.log('Loaded ' + tasksCache.length + ' tasks from DB');
 }
 
-// Save back to tasks.json
 function saveTasks() {
-  try {
-    fs.writeFileSync(DATA_FILE, JSON.stringify(tasksCache, null, 2), 'utf8');
-    console.log(`[Persistence] Wrote ${tasksCache.length} tasks to ${DATA_FILE}`);
-    console.log(`[Persistence] Wrote ${tasksCache.length} tasks to ${DATA_FILE}`);
-  } catch (err) {
-    console.error('Failed to write to tasks.json:', err);
-  }
+  const stmt = db.prepare('INSERT OR REPLACE INTO tasks (id, displayId, title, description, projectId, status, priority, branch, tags, targetFiles, checklist, effort, model, agent, parentId, reasoning, acceptanceCriteria, verification, repoContext, jiraKey, repo, createdAt, updatedAt, logs, designImages) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+  db.transaction(() => {
+    for (const item of tasksCache) {
+      stmt.run(
+        item.id, item.displayId, item.title, item.description, item.projectId, item.status, item.priority, item.branch,
+        item.tags ? JSON.stringify(item.tags) : null,
+        item.targetFiles ? JSON.stringify(item.targetFiles) : null,
+        item.checklist ? JSON.stringify(item.checklist) : null,
+        item.effort, item.model, item.agent, item.parentId, item.reasoning, item.acceptanceCriteria, item.verification, item.repoContext, item.jiraKey, item.repo, item.createdAt, item.updatedAt,
+        item.logs ? JSON.stringify(item.logs) : null,
+        item.designImages ? JSON.stringify(item.designImages) : null
+      );
+    }
+  })();
 }
 
 // Resolves repo/repoUrl/projectId to a valid project ID.
@@ -515,26 +477,17 @@ async function startServer() {
   const REGISTRY_FILE = path.join(process.cwd(), 'skills', 'registry.json');
   
   function loadSkillsRegistry() {
-    try {
-      if (fs.existsSync(REGISTRY_FILE)) {
-        SKILLS_REGISTRY = JSON.parse(fs.readFileSync(REGISTRY_FILE, 'utf8'));
-        SKILLS_REGISTRY.forEach(s => {
-          s.filePath = path.join(process.cwd(), 'skills', s.id + '.md');
-        });
-      }
-    } catch (err) {
-      console.error('Failed to load skills registry', err);
+  SKILLS_REGISTRY = db.prepare('SELECT * FROM skills').all();
+}
+
+function saveSkillsRegistry() {
+  const stmt = db.prepare('INSERT OR REPLACE INTO skills (id, name, description) VALUES (?, ?, ?)');
+  db.transaction(() => {
+    for (const item of SKILLS_REGISTRY) {
+      stmt.run(item.id, item.name, item.description);
     }
-  }
-  
-  function saveSkillsRegistry() {
-    try {
-      const saveList = SKILLS_REGISTRY.map(({id, name, description}) => ({id, name, description}));
-      fs.writeFileSync(REGISTRY_FILE, JSON.stringify(saveList, null, 2), 'utf8');
-    } catch (err) {
-      console.error('Failed to save skills registry', err);
-    }
-  }
+  })();
+}
 
   loadSkillsRegistry();
 

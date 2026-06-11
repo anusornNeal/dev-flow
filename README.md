@@ -27,3 +27,6 @@ The DevFlow backend stores tasks and projects in `tasks.json` and `projects.json
 The backend reads the latest disk state synchronously immediately before any mutation to `tasks.json`. This "safe reload" ensures that if an agent manually modifies `tasks.json` on disk, the backend will merge those changes and will not overwrite them with a stale in-memory cache. 
 
 However, to guarantee atomic updates and prevent race conditions when multiple agents are active, it is highly recommended to mutate tasks using the REST API or the provided MCP tools rather than modifying `tasks.json` directly.
+
+## Local Storage
+DevFlow uses a local SQLite database (data/devflow.db) to persist your tasks, projects, and settings. On the very first run, it will automatically migrate any existing .json persistence files into the database and back them up as .bak files. No manual database setup or external DB server is required.

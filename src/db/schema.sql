@@ -53,7 +53,13 @@ CREATE TABLE IF NOT EXISTS skills (
   name TEXT NOT NULL,
   description TEXT,
   isCustom INTEGER DEFAULT 0,
-  content TEXT
+  content TEXT,
+  kind TEXT DEFAULT 'master',
+  isProtected INTEGER DEFAULT 0,
+  sourceType TEXT,
+  sourcePath TEXT,
+  createdAt TEXT,
+  updatedAt TEXT
 );
 
 CREATE TABLE IF NOT EXISTS schema_migrations (

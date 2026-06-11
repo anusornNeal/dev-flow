@@ -179,7 +179,7 @@ const migrations: Migration[] = [
       const updateTask = db.prepare('UPDATE tasks SET displayId = ?, projectId = ?, parentId = ? WHERE id = ?');
 
       for (const task of tasks) {
-        let normalizedProjectId = task.projectId && projectIds.has(task.projectId)
+        const normalizedProjectId = task.projectId && projectIds.has(task.projectId)
           ? task.projectId
           : task.projectId && projectByName.has(task.projectId.toLowerCase())
             ? projectByName.get(task.projectId.toLowerCase())!
@@ -262,6 +262,40 @@ const migrations: Migration[] = [
       `);
 
       console.log('[migration] Repaired invalid task relations, duplicate display IDs, and created integrity indexes');
+    }
+  },
+  {
+    id: '003-skills-master-custom-metadata',
+    run: () => {
+      const tableInfo = db.pragma('table_info(skills)') as Array<{ name: string }>;
+      const existingColumns = new Set(tableInfo.map((column) => column.name));
+      const columnDefinitions = [
+        { name: 'kind', sql: "ALTER TABLE skills ADD COLUMN kind TEXT DEFAULT 'master'" },
+        { name: 'isProtected', sql: 'ALTER TABLE skills ADD COLUMN isProtected INTEGER DEFAULT 0' },
+        { name: 'sourceType', sql: 'ALTER TABLE skills ADD COLUMN sourceType TEXT' },
+        { name: 'sourcePath', sql: 'ALTER TABLE skills ADD COLUMN sourcePath TEXT' },
+        { name: 'createdAt', sql: 'ALTER TABLE skills ADD COLUMN createdAt TEXT' },
+        { name: 'updatedAt', sql: 'ALTER TABLE skills ADD COLUMN updatedAt TEXT' }
+      ];
+
+      for (const column of columnDefinitions) {
+        if (!existingColumns.has(column.name)) {
+          db.prepare(column.sql).run();
+        }
+      }
+
+      const now = new Date().toISOString();
+      db.prepare(`
+        UPDATE skills
+        SET
+          kind = COALESCE(kind, CASE WHEN COALESCE(isCustom, 0) = 1 THEN 'custom' ELSE 'master' END),
+          isProtected = COALESCE(isProtected, CASE WHEN COALESCE(isCustom, 0) = 1 THEN 0 ELSE 1 END),
+          sourceType = COALESCE(sourceType, CASE WHEN COALESCE(isCustom, 0) = 1 THEN 'import' ELSE 'repo-file' END),
+          createdAt = COALESCE(createdAt, ?),
+          updatedAt = COALESCE(updatedAt, ?)
+      `).run(now, now);
+
+      console.log('[migration] Added master/custom skill metadata columns');
     }
   }
 ];

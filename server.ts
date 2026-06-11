@@ -503,35 +503,128 @@ async function startServer() {
 
   // ================= SKILLS ENDPOINTS =================
   let SKILLS_REGISTRY: any[] = [];
-  const REGISTRY_FILE = path.join(process.cwd(), 'skills', 'registry.json');
+  const SKILLS_DIR = path.join(process.cwd(), 'skills');
+  const LEGACY_REGISTRY_BACKUP_FILE = path.join(SKILLS_DIR, 'registry.json.bak');
   
   // Migrate skills table if needed
   try {
     const tableInfo = db.pragma('table_info(skills)') as any[];
     const hasIsCustom = tableInfo.some(col => col.name === 'isCustom');
     const hasContent = tableInfo.some(col => col.name === 'content');
+    const hasKind = tableInfo.some(col => col.name === 'kind');
+    const hasIsProtected = tableInfo.some(col => col.name === 'isProtected');
+    const hasSourceType = tableInfo.some(col => col.name === 'sourceType');
+    const hasSourcePath = tableInfo.some(col => col.name === 'sourcePath');
+    const hasCreatedAt = tableInfo.some(col => col.name === 'createdAt');
+    const hasUpdatedAt = tableInfo.some(col => col.name === 'updatedAt');
     if (!hasIsCustom) {
       db.prepare('ALTER TABLE skills ADD COLUMN isCustom INTEGER DEFAULT 0').run();
     }
     if (!hasContent) {
       db.prepare('ALTER TABLE skills ADD COLUMN content TEXT').run();
     }
+    if (!hasKind) {
+      db.prepare("ALTER TABLE skills ADD COLUMN kind TEXT DEFAULT 'master'").run();
+    }
+    if (!hasIsProtected) {
+      db.prepare('ALTER TABLE skills ADD COLUMN isProtected INTEGER DEFAULT 0').run();
+    }
+    if (!hasSourceType) {
+      db.prepare('ALTER TABLE skills ADD COLUMN sourceType TEXT').run();
+    }
+    if (!hasSourcePath) {
+      db.prepare('ALTER TABLE skills ADD COLUMN sourcePath TEXT').run();
+    }
+    if (!hasCreatedAt) {
+      db.prepare('ALTER TABLE skills ADD COLUMN createdAt TEXT').run();
+    }
+    if (!hasUpdatedAt) {
+      db.prepare('ALTER TABLE skills ADD COLUMN updatedAt TEXT').run();
+    }
   } catch (e) {
     console.error('Failed to migrate skills table', e);
   }
 
+  function humanizeSkillId(id: string) {
+    return id
+      .replace(/[-_]+/g, ' ')
+      .replace(/\b\w/g, (char: string) => char.toUpperCase());
+  }
+
+  function loadLegacySkillMetadata() {
+    if (!fs.existsSync(LEGACY_REGISTRY_BACKUP_FILE)) {
+      return new Map<string, { name: string; description: string }>();
+    }
+
+    try {
+      const registry = JSON.parse(fs.readFileSync(LEGACY_REGISTRY_BACKUP_FILE, 'utf8')) as Array<{ id: string; name: string; description: string }>;
+      return new Map(registry.map((item) => [item.id, { name: item.name, description: item.description || '' }]));
+    } catch (error) {
+      console.error('Failed to read legacy skill registry backup', error);
+      return new Map<string, { name: string; description: string }>();
+    }
+  }
+
+  function syncMasterSkillsFromFiles() {
+    if (!fs.existsSync(SKILLS_DIR)) {
+      return;
+    }
+
+    const legacyMetadata = loadLegacySkillMetadata();
+    const now = new Date().toISOString();
+    const skillFiles = fs.readdirSync(SKILLS_DIR)
+      .filter((fileName) => fileName.endsWith('.md'))
+      .map((fileName) => path.join(SKILLS_DIR, fileName));
+
+    const existingSkills = db.prepare('SELECT * FROM skills').all() as any[];
+    const existingSkillMap = new Map(existingSkills.map((skill) => [skill.id, skill]));
+    const upsertSkill = db.prepare(`
+      INSERT OR REPLACE INTO skills (id, name, description, isCustom, content, kind, isProtected, sourceType, sourcePath, createdAt, updatedAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    const transaction = db.transaction(() => {
+      for (const filePath of skillFiles) {
+        const id = path.basename(filePath, path.extname(filePath));
+        const existing = existingSkillMap.get(id);
+        const legacy = legacyMetadata.get(id);
+        const content = fs.readFileSync(filePath, 'utf8');
+        upsertSkill.run(
+          id,
+          existing?.name || legacy?.name || humanizeSkillId(id),
+          existing?.description || legacy?.description || '',
+          0,
+          content,
+          'master',
+          1,
+          'repo-file',
+          filePath,
+          existing?.createdAt || now,
+          now
+        );
+      }
+    });
+
+    transaction();
+  }
+
   function loadSkillsRegistry() {
+    syncMasterSkillsFromFiles();
     SKILLS_REGISTRY = db.prepare('SELECT * FROM skills').all();
     SKILLS_REGISTRY.forEach(s => {
       s.isCustom = Boolean(s.isCustom);
-      if (!s.isCustom) {
-        s.filePath = path.join(process.cwd(), 'skills', s.id + '.md');
+      s.isProtected = Boolean(s.isProtected);
+    });
+    SKILLS_REGISTRY.sort((a, b) => {
+      if (a.isCustom !== b.isCustom) {
+        return a.isCustom ? 1 : -1;
       }
+      return a.name.localeCompare(b.name);
     });
   }
 
 function saveSkillsRegistry() {
-  const stmt = db.prepare('INSERT OR REPLACE INTO skills (id, name, description, isCustom, content) VALUES (?, ?, ?, ?, ?)');
+  const stmt = db.prepare('INSERT OR REPLACE INTO skills (id, name, description, isCustom, content, kind, isProtected, sourceType, sourcePath, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
   db.transaction(() => {
     // Clean up deleted ones
     const currentIds = SKILLS_REGISTRY.map(s => s.id);
@@ -543,7 +636,19 @@ function saveSkillsRegistry() {
     }
 
     for (const item of SKILLS_REGISTRY) {
-      stmt.run(item.id, item.name, item.description, item.isCustom ? 1 : 0, item.content || null);
+      stmt.run(
+        item.id,
+        item.name,
+        item.description,
+        item.isCustom ? 1 : 0,
+        item.content || null,
+        item.kind || (item.isCustom ? 'custom' : 'master'),
+        item.isProtected ? 1 : 0,
+        item.sourceType || (item.isCustom ? 'import' : 'repo-file'),
+        item.sourcePath || null,
+        item.createdAt || new Date().toISOString(),
+        item.updatedAt || new Date().toISOString()
+      );
     }
   })();
 }
@@ -551,38 +656,33 @@ function saveSkillsRegistry() {
   loadSkillsRegistry();
 
   app.get('/api/skills', (req, res) => {
-    res.json(SKILLS_REGISTRY.map(s => ({ id: s.id, name: s.name, description: s.description, isCustom: s.isCustom })));
+    loadSkillsRegistry();
+    res.json(SKILLS_REGISTRY.map(s => ({ id: s.id, name: s.name, description: s.description, isCustom: s.isCustom, isProtected: s.isProtected, kind: s.kind })));
   });
 
   app.get('/api/skills/:id', (req, res) => {
+    loadSkillsRegistry();
     const skill = SKILLS_REGISTRY.find(s => s.id === req.params.id);
     if (!skill) return res.status(404).json({ error: 'Skill not found' });
     try {
-      let content = '';
-      if (skill.isCustom) {
-        content = skill.content || '';
-      } else {
-        content = fs.existsSync(skill.filePath) ? fs.readFileSync(skill.filePath, 'utf8') : '';
-      }
-      res.json({ ...skill, content });
+      res.json({ ...skill, content: skill.content || '' });
     } catch (err) {
       res.status(500).json({ error: 'Failed to read skill' });
     }
   });
 
   app.put('/api/skills/:id', (req, res) => {
+    loadSkillsRegistry();
     const skill = SKILLS_REGISTRY.find(s => s.id === req.params.id);
     if (!skill) return res.status(404).json({ error: 'Skill not found' });
     try {
-      if (skill.isCustom) {
-        skill.content = req.body.content || '';
-      } else {
-        fs.writeFileSync(skill.filePath, req.body.content || '', 'utf8');
+      if (skill.isProtected) {
+        return res.status(403).json({ error: 'Master skills are read-only in the app. Edit the repo markdown file instead.' });
       }
-      
-      // Update name/description if provided
+      skill.content = req.body.content || '';
       if (req.body.name) skill.name = req.body.name;
       if (req.body.description) skill.description = req.body.description;
+      skill.updatedAt = new Date().toISOString();
       saveSkillsRegistry();
       
       res.json({ success: true });
@@ -601,12 +701,19 @@ function saveSkillsRegistry() {
     }
 
     try {
+      const now = new Date().toISOString();
       SKILLS_REGISTRY.push({ 
         id, 
         name, 
         description: description || '', 
         isCustom: true,
-        content: content 
+        isProtected: false,
+        kind: 'custom',
+        sourceType: 'import',
+        sourcePath: null,
+        content: content,
+        createdAt: now,
+        updatedAt: now
       });
       saveSkillsRegistry();
       res.status(201).json({ success: true, id });
@@ -616,11 +723,12 @@ function saveSkillsRegistry() {
   });
 
   app.delete('/api/skills/:id', (req, res) => {
+    loadSkillsRegistry();
     const index = SKILLS_REGISTRY.findIndex(s => s.id === req.params.id);
     if (index === -1) return res.status(404).json({ error: 'Skill not found' });
     
     const skill = SKILLS_REGISTRY[index];
-    if (!skill.isCustom) {
+    if (skill.isProtected || !skill.isCustom) {
       return res.status(403).json({ error: 'Cannot delete master skills' });
     }
     

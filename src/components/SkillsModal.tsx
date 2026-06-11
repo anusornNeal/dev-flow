@@ -12,6 +12,8 @@ interface SkillMeta {
   name: string;
   description: string;
   isCustom?: boolean;
+  isProtected?: boolean;
+  kind?: string;
 }
 
 interface SkillDetail extends SkillMeta {
@@ -330,12 +332,18 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
                 </div>
                 <div className="flex items-center gap-2">
                   {!isEditing ? (
-                    <button
-                      onClick={() => setIsEditing(true)}
-                      className="bg-white hover:bg-[#ebdcb9]/40 border border-[#ebdcb9] text-[#534135] px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors shadow-sm"
-                    >
-                      <Edit2 size={14} /> Edit Skill
-                    </button>
+                    skillDetail.isProtected ? (
+                      <span className="bg-[#fff7eb] border border-[#f0d9b2] text-[#9a6a27] px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-sm">
+                        <Lock size={14} /> Master skill
+                      </span>
+                    ) : (
+                      <button
+                        onClick={() => setIsEditing(true)}
+                        className="bg-white hover:bg-[#ebdcb9]/40 border border-[#ebdcb9] text-[#534135] px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors shadow-sm"
+                      >
+                        <Edit2 size={14} /> Edit Skill
+                      </button>
+                    )
                   ) : (
                     <>
                       <button

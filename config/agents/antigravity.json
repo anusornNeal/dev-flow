@@ -1,0 +1,18 @@
+{
+  "name": "Antigravity",
+  "executables": [
+    { "type": "env", "value": "DEVFLOW_AGY_EXE" },
+    { "type": "path", "value": "%LOCALAPPDATA%\\agy\\bin\\agy.exe" },
+    { "type": "command", "value": "agy" }
+  ],
+  "flags": {
+    "model": "--model",
+    "effort": null,
+    "alwaysAllow": "--dangerously-skip-permissions",
+    "interactiveArgs": ["-i"]
+  },
+  "promptFallback": {
+    "effort": "use reasoning effort '{EFFORT}'"
+  },
+  "launchStyle": "start"
+}

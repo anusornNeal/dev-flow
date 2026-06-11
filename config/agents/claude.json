@@ -1,0 +1,12 @@
+{
+  "name": "Claude",
+  "executables": [
+    { "type": "path", "value": "%APPDATA%\\npm\\claude.cmd" },
+    { "type": "command", "value": "claude" }
+  ],
+  "flags": {
+    "model": null,
+    "interactiveArgs": ["-p"]
+  },
+  "launchStyle": "cmd_k"
+}

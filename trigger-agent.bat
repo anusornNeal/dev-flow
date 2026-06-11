@@ -4,7 +4,43 @@ SET TASK_ID=%~2
 SET LOCAL_PATH=%~3
 SET MODEL=%~4
 SET EFFORT=%~5
-SET AGY_EXE=C:\Users\tatar\AppData\Local\agy\bin\agy.exe
+
+REM Resolve AGY_EXE
+SET "AGY_EXE="
+IF DEFINED DEVFLOW_AGY_EXE (
+  IF EXIST "%DEVFLOW_AGY_EXE%" (
+    SET "AGY_EXE=%DEVFLOW_AGY_EXE%"
+    echo [trigger-agent] Using AGY_EXE from DEVFLOW_AGY_EXE override: "%DEVFLOW_AGY_EXE%"
+  ) ELSE (
+    echo [trigger-agent] WARNING: DEVFLOW_AGY_EXE is set but file not found: "%DEVFLOW_AGY_EXE%"
+  )
+)
+
+IF NOT DEFINED AGY_EXE (
+  IF EXIST "%LOCALAPPDATA%\agy\bin\agy.exe" (
+    SET "AGY_EXE=%LOCALAPPDATA%\agy\bin\agy.exe"
+    echo [trigger-agent] Using AGY_EXE from LOCALAPPDATA: "%LOCALAPPDATA%\agy\bin\agy.exe"
+  )
+)
+
+IF NOT DEFINED AGY_EXE (
+  for /f "delims=" %%I in ('where agy 2^>nul') do (
+    SET "AGY_EXE=%%I"
+    echo [trigger-agent] Using AGY_EXE from PATH: "%%I"
+    goto :found_agy
+  )
+  :found_agy
+  REM continue
+)
+
+IF /I "%AGENT%"=="Antigravity" (
+  IF NOT DEFINED AGY_EXE (
+    echo [trigger-agent] ERROR: agy.exe not found.
+    echo [trigger-agent] Setup hint: Install Antigravity CLI, or set DEVFLOW_AGY_EXE env var to the full path of agy.exe.
+    exit /b 1
+  )
+)
+
 
 REM Strict input validation - only alphanumeric and hyphens allowed
 echo %AGENT%| findstr /r "^[a-zA-Z0-9]*$" >nul 2>&1

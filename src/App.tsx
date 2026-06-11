@@ -28,7 +28,7 @@ import TaskDetailsDrawer from './components/TaskDetailsDrawer';
 import CreateTaskModal from './components/CreateTaskModal';
 import JsonTemplateModal from './components/JsonTemplateModal';
 import BatchImportModal from './components/BatchImportModal';
-import DocEditorModal from './components/DocEditorModal';
+import SkillsModal from './components/SkillsModal';
 
 // Standardized project lanes themed cleanly
 const COLUMNS: Column[] = [
@@ -50,14 +50,43 @@ export default function App() {
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isJsonModalOpen, setIsJsonModalOpen] = useState(false);
   const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
-  const [editingDocId, setEditingDocId] = useState<'schema' | 'playbook' | null>(null);
+  const [isSkillsModalOpen, setIsSkillsModalOpen] = useState(false);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [mounted, setMounted] = useState(false);
+  const [autoWorking, setAutoWorking] = useState(false);
 
   // Filter States
   const [selectedPriority, setSelectedPriority] = useState<Task['priority'] | 'all'>('all');
   const [selectedTag, setSelectedTag] = useState<string | 'all'>('all');
   const [searchQuery, setSearchQuery] = useState('');
+
+  // 0. Load settings from REST API (GET /api/settings)
+  const fetchSettingsFromApi = async () => {
+    try {
+      const res = await fetch('/api/settings', { cache: 'no-store' });
+      if (res.ok) {
+        const data = await res.json();
+        setAutoWorking(!!data.autoWorking);
+      }
+    } catch (err) {
+      console.warn('Failed to fetch settings:', err);
+    }
+  };
+
+  const toggleAutoWorking = async () => {
+    const newState = !autoWorking;
+    setAutoWorking(newState);
+    try {
+      await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ autoWorking: newState })
+      });
+    } catch (err) {
+      console.error('Failed to update settings:', err);
+      setAutoWorking(!newState); // revert
+    }
+  };
 
   // 0. Load projects from REST API (GET /api/projects)
   const fetchProjectsFromApi = async () => {
@@ -184,6 +213,7 @@ export default function App() {
 
   useEffect(() => {
     setMounted(true);
+    fetchSettingsFromApi();
     fetchProjectsFromApi();
     fetchTasksFromApi();
 
@@ -554,22 +584,31 @@ export default function App() {
                 </button>
                 <div className="w-px h-4 bg-[#ebdcb9]"></div>
                 <button
-                  onClick={() => setEditingDocId('schema')}
+                  onClick={() => setIsSkillsModalOpen(true)}
                   type="button"
                   className="hover:bg-[#ebdcb9] hover:text-[#534135] px-2.5 py-1 text-[10px] font-mono rounded-lg flex items-center gap-1 transition-colors cursor-pointer text-[#a46c24] font-bold"
-                  title="Edit Schema Document"
+                  title="View and Edit Agent Skills"
                 >
-                  <FileCode size={11} /> Edit Schema
-                </button>
-                <button
-                  onClick={() => setEditingDocId('playbook')}
-                  type="button"
-                  className="hover:bg-[#ebdcb9] hover:text-[#534135] px-2.5 py-1 text-[10px] font-mono rounded-lg flex items-center gap-1 transition-colors cursor-pointer text-[#a46c24] font-bold"
-                  title="Edit Playbook Document"
-                >
-                  <Code size={11} /> Edit Playbook
+                  <Code size={11} /> Skills
                 </button>
               </div>
+
+              {/* Auto-Working Toggle */}
+              <button
+                onClick={toggleAutoWorking}
+                type="button"
+                className={`px-3 py-1.5 rounded-xl text-xs font-extrabold flex items-center gap-2 transition-all shadow-sm cursor-pointer ml-auto md:ml-0 border ${
+                  autoWorking 
+                    ? 'bg-emerald-500 hover:bg-emerald-600 text-white border-emerald-600 shadow-emerald-200' 
+                    : 'bg-[#f4efe6] hover:bg-[#ebdcb9] text-[#8c7463] border-[#e5d4bb]'
+                }`}
+                title="When ON, eligible agents will automatically pick up ready tasks in the background."
+              >
+                <div className={`relative inline-flex h-3.5 w-6 items-center rounded-full transition-colors ${autoWorking ? 'bg-white/30' : 'bg-[#d8c8b3]'}`}>
+                  <span className={`inline-block h-2.5 w-2.5 transform rounded-full bg-white transition-transform ${autoWorking ? 'translate-x-3' : 'translate-x-0.5'}`} />
+                </div>
+                🤖 Auto-Work: {autoWorking ? 'ON' : 'OFF'}
+              </button>
 
               {/* Launch Batch Import Modal */}
               <button
@@ -769,11 +808,10 @@ export default function App() {
         />
       )}
 
-      {/* 6. Document Editor Modal */}
-      {editingDocId && (
-        <DocEditorModal
-          docId={editingDocId}
-          onClose={() => setEditingDocId(null)}
+      {/* 6. Skills Modal */}
+      {isSkillsModalOpen && (
+        <SkillsModal
+          onClose={() => setIsSkillsModalOpen(false)}
         />
       )}
     </div>

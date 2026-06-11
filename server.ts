@@ -439,6 +439,27 @@ async function startServer() {
     }
   });
 
+  // GET: App settings
+  app.get('/api/settings', (req, res) => {
+    res.json(settingsCache);
+  });
+
+  // POST: Update App settings
+  app.post('/api/settings', (req, res) => {
+    const { autoWorking } = req.body;
+    if (typeof autoWorking === 'boolean') {
+      const wasOff = !settingsCache.autoWorking;
+      settingsCache.autoWorking = autoWorking;
+      saveSettings();
+      
+      if (wasOff && autoWorking) {
+        writeAgentLog('INFO', 'Auto-work enabled. Scanning for queued ready-to-do tasks...');
+        drainReadyToDoQueue();
+      }
+    }
+    res.json(settingsCache);
+  });
+
   // GET: Fetch all projects
   app.get('/api/projects', (req, res) => {
     res.json(projectsCache);
@@ -965,7 +986,9 @@ async function startServer() {
 
     // Trigger Agent
     if (status === 'todo' && prevStatus !== 'todo') {
-      if (updatedTask.agent && !updatedTask.activeAgent) {
+      if (!settingsCache.autoWorking) {
+        writeAgentLog('INFO', `Auto-work is disabled. Skipping automatic agent trigger for task=${updatedTask.id}`);
+      } else if (updatedTask.agent && !updatedTask.activeAgent) {
         const isAgentBusy = tasksCache.some(t => 
           t.projectId === updatedTask.projectId && 
           (t.status === 'in-progress' || t.status === 'todo') && 
@@ -1298,7 +1321,9 @@ async function startServer() {
 
     // Trigger Agent
     if (updatedTask.status === 'todo' && currentTask.status !== 'todo') {
-      if (updatedTask.agent && !updatedTask.activeAgent) {
+      if (!settingsCache.autoWorking) {
+        writeAgentLog('INFO', `Auto-work is disabled. Skipping automatic agent trigger for task=${updatedTask.id}`);
+      } else if (updatedTask.agent && !updatedTask.activeAgent) {
         const isAgentBusy = tasksCache.some(t => 
           t.projectId === updatedTask.projectId && 
           (t.status === 'in-progress' || t.status === 'todo') && 

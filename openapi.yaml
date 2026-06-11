@@ -128,6 +128,29 @@ paths:
       responses:
         '200':
           description: Task deleted
+  /api/tasks/{id}/agent-context:
+    get:
+      summary: Get clean agent-ready task context package
+      operationId: getAgentTaskContext
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: includeLogs
+          in: query
+          required: false
+          schema:
+            type: boolean
+        - name: mode
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Agent task context
   /api/tasks/{id}/move:
     post:
       summary: Move a task to a different status

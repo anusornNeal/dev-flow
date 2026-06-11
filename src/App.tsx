@@ -42,7 +42,9 @@ const COLUMNS: Column[] = [
 export default function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
-  const [activeProjectId, setActiveProjectId] = useState<string>('project-default');
+  const [activeProjectId, setActiveProjectId] = useState<string>(() => {
+    return localStorage.getItem('devflow_selected_project') || 'project-default';
+  });
   const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
   const [draggedOverColumn, setDraggedOverColumn] = useState<TaskStatus | null>(null);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -65,10 +67,11 @@ export default function App() {
         const data = await res.json();
         setProjects(data);
         if (data.length > 0) {
-          const isValidId = data.some((p: Project) => p.id === activeProjectId);
-          if (!isValidId) {
-            setActiveProjectId(data[0].id);
-          }
+          // Check against the current state using functional update to get the latest without dependency
+          setActiveProjectId(prev => {
+            const isValidId = data.some((p: Project) => p.id === prev);
+            return isValidId ? prev : data[0].id;
+          });
         }
       }
     } catch (err) {
@@ -139,10 +142,19 @@ export default function App() {
         method: 'DELETE'
       });
       if (res.ok) {
-        setProjects(prev => prev.filter(p => p.id !== id));
-        if (activeProjectId === id) {
-          setActiveProjectId('project-default');
-        }
+        let remainingProjects: Project[] = [];
+        setProjects(prev => {
+          remainingProjects = prev.filter(p => p.id !== id);
+          return remainingProjects;
+        });
+        
+        setActiveProjectId(prevId => {
+          if (prevId === id) {
+            return remainingProjects.length > 0 ? remainingProjects[0].id : 'project-default';
+          }
+          return prevId;
+        });
+        
         fetchTasksFromApi();
         return true;
       }
@@ -189,6 +201,13 @@ export default function App() {
       localStorage.setItem('devflow_workspace', JSON.stringify(tasks));
     }
   }, [tasks, mounted]);
+
+  // 3. Save selected project to localStorage
+  useEffect(() => {
+    if (mounted && activeProjectId && activeProjectId !== 'project-default') {
+      localStorage.setItem('devflow_selected_project', activeProjectId);
+    }
+  }, [activeProjectId, mounted]);
 
   // Handle Drag Start
   const handleDragStart = (e: React.DragEvent, id: string) => {

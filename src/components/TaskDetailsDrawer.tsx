@@ -193,17 +193,18 @@ export default function TaskDetailsDrawer({
     setIsEditing(false);
   };
 
-  const handleToggleChecklistItem = (itemId: string) => {
+  const handleToggleChecklistItem = (itemIdentifier: string) => {
     const updatedChecklist = (task.checklist || []).map(item => {
-      if (item.id === itemId) {
+      const currentIdentifier = item.id || item.text;
+      if (currentIdentifier === itemIdentifier) {
         const nextState = !item.completed;
         return { ...item, completed: nextState };
       }
       return item;
     });
 
-    const toggledItemText = (task.checklist || []).find(item => item.id === itemId)?.text || '';
-    const wasCompleted = (task.checklist || []).find(item => item.id === itemId)?.completed || false;
+    const toggledItemText = (task.checklist || []).find(item => (item.id || item.text) === itemIdentifier)?.text || '';
+    const wasCompleted = (task.checklist || []).find(item => (item.id || item.text) === itemIdentifier)?.completed || false;
 
     const newLogItem: LogEntry = {
       id: `log-cl-${Date.now()}`,
@@ -891,8 +892,8 @@ export default function TaskDetailsDrawer({
                   <div className="space-y-2">
                     {task.checklist.map((item) => (
                       <div 
-                        key={item.id}
-                        onClick={() => handleToggleChecklistItem(item.id)}
+                        key={item.id || item.text}
+                        onClick={() => handleToggleChecklistItem(item.id || item.text)}
                         className={`p-3 rounded-xl border flex items-start gap-2.5 cursor-pointer transition-all shadow-2xs select-none ${
                           item.completed 
                             ? 'bg-[#e2f0dc]/45 border-[#bddda4]/50 text-gray-400 line-through' 

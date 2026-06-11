@@ -521,6 +521,126 @@ async function startServer() {
     res.json(tasksCache);
   });
 
+  // Helper for agent task context
+  const getAgentTaskContextLogic = (targetId: string, includeLogs: boolean = false) => {
+    loadTasks();
+    const task = tasksCache.find(t => t.id === targetId || t.displayId === targetId);
+    if (!task) return null;
+
+    const subtasksRaw = tasksCache.filter(t => t.parentId === task.id);
+    const parentRaw = task.parentId ? tasksCache.find(t => t.id === task.parentId) : null;
+    
+    const hasSubtasks = subtasksRaw.length > 0;
+    let role = "standalone";
+    if (hasSubtasks) role = "parent";
+    else if (parentRaw) role = "subtask";
+
+    const project = projectsCache.find(p => p.id === task.projectId);
+
+    const cleanObject = (obj: any) => {
+      const cleaned = { ...obj };
+      for (const key in cleaned) {
+        if (
+          cleaned[key] === undefined || 
+          cleaned[key] === null || 
+          cleaned[key] === '' || 
+          (Array.isArray(cleaned[key]) && cleaned[key].length === 0) ||
+          (typeof cleaned[key] === 'object' && !Array.isArray(cleaned[key]) && Object.keys(cleaned[key]).length === 0)
+        ) {
+          delete cleaned[key];
+        }
+      }
+      return cleaned;
+    };
+
+    const agentContext: any = {
+      task: cleanObject({
+        id: task.id,
+        displayId: task.displayId,
+        title: task.title,
+        status: task.status,
+        priority: task.priority,
+        branch: task.branch
+      }),
+      assignment: cleanObject({
+        agent: task.agent,
+        model: task.model,
+        effort: task.effort
+      }),
+      workspace: cleanObject({
+        projectId: task.projectId,
+        repo: task.repo || project?.repoUrl,
+        localPath: project?.localPath
+      }),
+      instruction: cleanObject({
+        description: task.description,
+        reasoning: task.reasoning
+      }),
+      requirements: cleanObject({
+        acceptanceCriteria: task.acceptanceCriteria,
+        verification: task.verification,
+        checklist: task.checklist,
+        targetFiles: task.targetFiles
+      }),
+      repoContext: task.repoContext || undefined,
+      orchestration: cleanObject({
+        role,
+        hasSubtasks,
+        subtasks: hasSubtasks ? subtasksRaw.map(st => cleanObject({
+          id: st.id,
+          displayId: st.displayId,
+          title: st.title,
+          status: st.status,
+          priority: st.priority,
+          branch: st.branch,
+          spawnAgent: st.agent || 'Antigravity',
+          spawnModel: st.model || 'Gemini 3.5 Flash',
+          spawnEffort: st.effort || 'medium',
+          instruction: cleanObject({
+            description: st.description,
+            reasoning: st.reasoning
+          }),
+          acceptanceCriteria: st.acceptanceCriteria,
+          verification: st.verification,
+          checklist: st.checklist,
+          targetFiles: st.targetFiles
+        })) : undefined,
+        parentBoundary: parentRaw ? cleanObject({
+          id: parentRaw.id,
+          displayId: parentRaw.displayId,
+          title: parentRaw.title,
+          status: parentRaw.status,
+          branch: parentRaw.branch,
+          instruction: cleanObject({
+            description: parentRaw.description
+          })
+        }) : undefined
+      })
+    };
+
+    if (includeLogs) {
+      agentContext.logs = task.logs;
+    }
+    
+    if (!agentContext.repoContext) delete agentContext.repoContext;
+    if (Object.keys(agentContext.requirements).length === 0) delete agentContext.requirements;
+    if (Object.keys(agentContext.assignment).length === 0) delete agentContext.assignment;
+
+    return agentContext;
+  };
+
+  // GET: Fetch clean agent-ready task context
+  app.get('/api/tasks/:id/agent-context', (req, res) => {
+    const targetId = req.params.id;
+    const includeLogs = req.query.includeLogs === 'true' || req.query.mode === 'full' || req.query.mode === 'debug';
+    
+    const context = getAgentTaskContextLogic(targetId, includeLogs);
+    if (!context) {
+      return res.status(404).json({ error: 'Task not found' });
+    }
+    res.json(context);
+  });
+
   // POST: Create a new issue card (supports single object or JSON Array of tasks for batch creation)
   app.post('/api/tasks', (req, res) => {
     loadTasks();
@@ -898,7 +1018,7 @@ async function startServer() {
 
     const task = tasksCache[taskIndex];
     const checklist = task.checklist || [];
-    const item = checklist.find((c: any) => c.id === checklistId);
+    const item = checklist.find((c: any) => (c.id || c.text) === checklistId);
     
     if (!item) {
       return res.status(404).json({ error: 'Checklist item not found' });
@@ -1316,6 +1436,12 @@ async function startServer() {
             }
           },
           { 
+            name: "get_agent_task_context", 
+            description: "Get a clean, token-efficient agent-ready task context package. Excludes logs and noisy fields by default. Extracts subtask orchestration if task is a parent.", 
+            inputSchema: { type: "object", properties: { taskId: { type: "string", description: "The task id or displayId to fetch." }, includeLogs: { type: "boolean", description: "Set true to include the raw logs array." } }, required: ["taskId"] },
+            outputSchema: { type: "object" }
+          },
+          { 
             name: "create_task", 
             description: "Create a new task", 
             inputSchema: { 
@@ -1449,6 +1575,14 @@ async function startServer() {
         if (projectId) filtered = filtered.filter((t: any) => t.projectId === projectId);
         if (parentId) filtered = filtered.filter((t: any) => t.parentId === parentId);
         return { content: [{ type: "text", text: JSON.stringify(filtered, null, 2) }] };
+      }
+      if (name === "get_agent_task_context") {
+        const { taskId, includeLogs } = args as any;
+        const context = getAgentTaskContextLogic(taskId, !!includeLogs);
+        if (!context) {
+           return { isError: true, content: [{ type: "text", text: `Task ${taskId} not found.` }] };
+        }
+        return { content: [{ type: "text", text: JSON.stringify(context, null, 2) }] };
       }
       if (name === "create_task") {
         loadTasks();

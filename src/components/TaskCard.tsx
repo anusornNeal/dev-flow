@@ -121,14 +121,14 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
             <button
               type="button"
               onClick={handleCopyId}
-              className="flex items-center gap-1 text-[9.5px] font-bold text-[#b49f8e] hover:text-[#d89745] font-mono leading-none transition-colors cursor-pointer group/copy"
+              className="flex items-center gap-1.5 px-1.5 py-0.5 -ml-1 rounded hover:bg-[#ebdcb9]/30 text-[9.5px] font-bold text-[#b49f8e] hover:text-[#d89745] font-mono leading-none transition-all cursor-pointer"
               title="Copy Card ID"
             >
               #{task.displayId || task.id}
               {idCopied ? (
-                <Check size={10} className="text-emerald-500" />
+                <Check size={11} className="text-emerald-500" />
               ) : (
-                <Copy size={10} className="opacity-0 group-hover/copy:opacity-100 transition-opacity" />
+                <Copy size={11} className="opacity-40 hover:opacity-100" />
               )}
             </button>
           </div>

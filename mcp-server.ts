@@ -149,19 +149,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   if (name === "create_task") {
     try {
-      // Need repoUrl or similar to avoid error if server requires it, but let's just pass what the schema specifies.
-      // Wait, server needs 'repo' or it resolves to a project if projectId is found. 
-      // Assuming projectId 'project-default' works.
+      const taskBody: any = {
+        title: args?.title,
+        description: args?.description || "",
+        status: args?.status || "backlog",
+      };
+      if (args?.projectId) {
+        taskBody.projectId = args.projectId;
+      }
       const response = await fetch(`${API_BASE_URL}/tasks`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title: args?.title,
-          description: args?.description || "",
-          projectId: args?.projectId || "project-default",
-          status: args?.status || "backlog",
-          repo: "mcp-proxy-created" // provide a dummy repo to satisfy any server-side validation if needed
-        })
+        body: JSON.stringify(taskBody)
       });
       if (!response.ok) {
          const errorData = await response.json().catch(() => ({}));

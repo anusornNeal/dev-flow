@@ -411,53 +411,46 @@ function saveTasks() {
 }
 
 // Resolves repo/repoUrl/projectId to a valid project ID.
-// Returns null if absolutely no repo reference or valid project is supplied.
-function resolveProjectIdFromRepo(item: any, req: any): string | null {
+// Validates project existence and falls back to active workspace project if missing.
+// Throws an Error if validation fails or resolution cannot be safely performed.
+function resolveProjectIdFromRepo(item: any, req: any): string {
+  // 1. If item.projectId is provided (e.g. from request payload), validate it first.
+  if (item.projectId) {
+    const found = projectsCache.find(p => p.id === item.projectId);
+    if (found) {
+      return found.id;
+    } else {
+      throw new Error(`Target project with ID '${item.projectId}' does not exist. Task creation blocked.`);
+    }
+  }
+
+  // 2. If repoInput is provided, try to find a matching project.
   const repoInput = item.repo || item.repoUrl || (req.body && req.body.repo) || (req.body && req.body.repoUrl) || (req.query && req.query.repo) || (req.query && req.query.repoUrl) || (req.headers && req.headers['x-repo']) || (req.headers && req.headers['x-repo-url']);
   
-  if (!repoInput || typeof repoInput !== 'string' || !repoInput.trim()) {
-    if (item.projectId) {
-      const found = projectsCache.find(p => p.id === item.projectId);
-      if (found) {
-        return found.id;
-      }
+  if (repoInput && typeof repoInput === 'string' && repoInput.trim()) {
+    const cleanInput = repoInput.trim().toLowerCase().replace(/\/$/, '');
+
+    // Find matching project
+    const project = projectsCache.find(p => {
+      const cleanPRepo = p.repoUrl.trim().toLowerCase().replace(/\/$/, '');
+      return cleanPRepo === cleanInput || cleanPRepo.includes(cleanInput) || cleanInput.includes(cleanPRepo);
+    });
+
+    if (project) {
+      return project.id;
+    } else {
+      throw new Error(`Target project for repository '${repoInput}' does not exist. Please create the project first.`);
     }
-    return null;
   }
 
-  const cleanInput = repoInput.trim().toLowerCase().replace(/\/$/, '');
-
-  // Find matching project
-  let project = projectsCache.find(p => {
-    const cleanPRepo = p.repoUrl.trim().toLowerCase().replace(/\/$/, '');
-    return cleanPRepo === cleanInput || cleanPRepo.includes(cleanInput) || cleanInput.includes(cleanPRepo);
-  });
-
-  if (!project) {
-    let name = 'Sandbox Project';
-    try {
-      const urlParts = cleanInput.split('/');
-      if (urlParts.length >= 2) {
-        const rawName = urlParts[urlParts.length - 1] || urlParts[urlParts.length - 2];
-        if (rawName) {
-          name = rawName.charAt(0).toUpperCase() + rawName.slice(1);
-        }
-      }
-    } catch (e) {}
-
-    project = {
-      id: `project-${Date.now()}-${Math.floor(Math.random() * 1000000)}`,
-      name: `${name} (Auto-Registered)`,
-      repoUrl: repoInput.trim(),
-      description: 'Automatically registered via API ticket submission',
-      createdAt: new Date().toISOString()
-    };
-    projectsCache.push(project);
-    saveProjects();
-    console.log(`Auto-created project ${project.name} for repo ${project.repoUrl}`);
+  // 3. If neither projectId nor repoInput is provided, try to resolve active workspace project.
+  const activeProject = projectsCache.find(p => p.localPath && path.resolve(p.localPath) === path.resolve(process.cwd()));
+  if (activeProject) {
+    return activeProject.id;
   }
 
-  return project.id;
+  // If no active project can be resolved:
+  throw new Error("Target project could not be resolved. Please provide a valid 'projectId' or repository identifier.");
 }
 
 async function startServer() {
@@ -865,9 +858,12 @@ function saveSkillsRegistry() {
       }
 
       const title = item.title;
-      const resolvedProjectId = resolveProjectIdFromRepo(item, req);
-      if (!resolvedProjectId) {
-        return res.status(400).json({ error: "Repository identifier ('repo' or 'repoUrl') is required to write a task" });
+      let resolvedProjectId: string;
+      try {
+        resolvedProjectId = resolveProjectIdFromRepo(item, req);
+      } catch (err: any) {
+        if (!isArray) return res.status(400).json({ error: err.message });
+        continue; // Skip invalid items in batch array
       }
 
       const agentValidationError = validateAgentParams(item, tasksCache);
@@ -1031,9 +1027,11 @@ function saveSkillsRegistry() {
         updatedTasks.push(updatedTask);
       } else {
         // Create new task
-        const resolvedProjectId = resolveProjectIdFromRepo(item, req);
-        if (!resolvedProjectId) {
-          return res.status(400).json({ error: "Repository identifier ('repo' or 'repoUrl') is required to write a task" });
+        let resolvedProjectId: string;
+        try {
+          resolvedProjectId = resolveProjectIdFromRepo(item, req);
+        } catch (err: any) {
+          return res.status(400).json({ error: err.message });
         }
 
         const newTask = {
@@ -1371,9 +1369,11 @@ function saveSkillsRegistry() {
         updatedTasks.push(updatedTask);
       } else {
         // Create new task
-        const resolvedProjectId = resolveProjectIdFromRepo(item, req);
-        if (!resolvedProjectId) {
-          return res.status(400).json({ error: "Repository identifier ('repo' or 'repoUrl') is required to write a task" });
+        let resolvedProjectId: string;
+        try {
+          resolvedProjectId = resolveProjectIdFromRepo(item, req);
+        } catch (err: any) {
+          return res.status(400).json({ error: err.message });
         }
 
         const newTask = {
@@ -1446,9 +1446,19 @@ function saveSkillsRegistry() {
       return res.status(400).json({ error: validationErr });
     }
 
-    const resolvedProjectId = resolveProjectIdFromRepo(updateBody, req);
-    if (resolvedProjectId) {
-      updateBody = { ...updateBody, projectId: resolvedProjectId };
+    const hasProjectInfo = !!(
+      updateBody.projectId ||
+      updateBody.repo ||
+      updateBody.repoUrl ||
+      (req.headers && (req.headers['x-repo'] || req.headers['x-repo-url']))
+    );
+    if (hasProjectInfo) {
+      try {
+        const resolvedProjectId = resolveProjectIdFromRepo(updateBody, req);
+        updateBody = { ...updateBody, projectId: resolvedProjectId };
+      } catch (err: any) {
+        return res.status(400).json({ error: err.message });
+      }
     }
 
     const agentValidationError = validateAgentParams(updateBody, tasksCache);

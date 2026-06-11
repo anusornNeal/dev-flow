@@ -10,6 +10,13 @@ type Migration = {
   run: () => void;
 };
 
+type TaskRow = {
+  id: string;
+  displayId: string | null;
+  projectId: string | null;
+  parentId: string | null;
+};
+
 function ensureMigrationTable() {
   db.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -36,6 +43,33 @@ function finalizeLegacyMarker() {
   if (!fs.existsSync(MIGRATION_DONE_MARKER)) {
     fs.writeFileSync(MIGRATION_DONE_MARKER, 'migrated-with-versioned-history');
   }
+}
+
+function ensureDefaultProjectExists() {
+  db.prepare(`
+    INSERT OR IGNORE INTO projects (id, name, repoUrl, description, createdAt, localPath, taskIdPrefix)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    'project-default',
+    'Developer Sandbox Repo',
+    'https://github.com/google/ai-studio',
+    'Auto-created during SQLite integrity repair.',
+    new Date().toISOString(),
+    null,
+    'TASK'
+  );
+}
+
+function getNextDisplayId(prefix: string, usedIds: Set<string>) {
+  let counter = 1;
+  const normalizedPrefix = prefix || 'task';
+  let candidate = `${normalizedPrefix}-${counter.toString().padStart(4, '0')}`;
+  while (usedIds.has(candidate)) {
+    counter += 1;
+    candidate = `${normalizedPrefix}-${counter.toString().padStart(4, '0')}`;
+  }
+  usedIds.add(candidate);
+  return candidate;
 }
 
 function migrateProjectsFromJson() {
@@ -128,6 +162,106 @@ const migrations: Migration[] = [
       migrateSettingsFromJson();
       migrateSkillsFromJson();
       finalizeLegacyMarker();
+    }
+  },
+  {
+    id: '002-sqlite-integrity-repair-and-indexes',
+    run: () => {
+      ensureDefaultProjectExists();
+
+      const projectRows = db.prepare('SELECT id, name, taskIdPrefix FROM projects').all() as Array<{ id: string; name: string; taskIdPrefix?: string | null }>;
+      const projectIds = new Set(projectRows.map((project) => project.id));
+      const projectByName = new Map(projectRows.map((project) => [project.name.toLowerCase(), project.id]));
+      const projectById = new Map(projectRows.map((project) => [project.id, project]));
+      const tasks = db.prepare('SELECT id, displayId, projectId, parentId FROM tasks ORDER BY createdAt, id').all() as TaskRow[];
+      const validTaskIds = new Set(tasks.map((task) => task.id));
+      const usedDisplayIds = new Set<string>();
+      const updateTask = db.prepare('UPDATE tasks SET displayId = ?, projectId = ?, parentId = ? WHERE id = ?');
+
+      for (const task of tasks) {
+        let normalizedProjectId = task.projectId && projectIds.has(task.projectId)
+          ? task.projectId
+          : task.projectId && projectByName.has(task.projectId.toLowerCase())
+            ? projectByName.get(task.projectId.toLowerCase())!
+            : 'project-default';
+
+        const normalizedParentId = task.parentId && validTaskIds.has(task.parentId) && task.parentId !== task.id
+          ? task.parentId
+          : null;
+
+        let normalizedDisplayId = task.displayId && task.displayId.trim() !== '' ? task.displayId : null;
+        if (normalizedDisplayId && usedDisplayIds.has(normalizedDisplayId)) {
+          const prefix = normalizedDisplayId.includes('-') ? normalizedDisplayId.split('-')[0] : 'task';
+          normalizedDisplayId = getNextDisplayId(prefix, usedDisplayIds);
+        } else if (normalizedDisplayId) {
+          usedDisplayIds.add(normalizedDisplayId);
+        }
+
+        if (!normalizedDisplayId) {
+          const project = projectById.get(normalizedProjectId);
+          const prefix = project?.taskIdPrefix || normalizedProjectId.replace(/[^a-zA-Z0-9]/g, '').toLowerCase() || 'task';
+          normalizedDisplayId = getNextDisplayId(prefix, usedDisplayIds);
+        }
+
+        updateTask.run(normalizedDisplayId, normalizedProjectId, normalizedParentId, task.id);
+      }
+
+      db.exec(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_display_id_unique
+        ON tasks(displayId)
+        WHERE displayId IS NOT NULL AND displayId != '';
+
+        CREATE INDEX IF NOT EXISTS idx_tasks_project_status
+        ON tasks(projectId, status);
+
+        CREATE INDEX IF NOT EXISTS idx_tasks_parent_id
+        ON tasks(parentId);
+
+        CREATE INDEX IF NOT EXISTS idx_tasks_project_parent
+        ON tasks(projectId, parentId);
+
+        CREATE TRIGGER IF NOT EXISTS trg_tasks_validate_project_insert
+        BEFORE INSERT ON tasks
+        FOR EACH ROW
+        WHEN NEW.projectId IS NOT NULL AND NEW.projectId != '' AND NOT EXISTS (
+          SELECT 1 FROM projects WHERE id = NEW.projectId
+        )
+        BEGIN
+          SELECT RAISE(ABORT, 'Invalid task.projectId');
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS trg_tasks_validate_project_update
+        BEFORE UPDATE OF projectId ON tasks
+        FOR EACH ROW
+        WHEN NEW.projectId IS NOT NULL AND NEW.projectId != '' AND NOT EXISTS (
+          SELECT 1 FROM projects WHERE id = NEW.projectId
+        )
+        BEGIN
+          SELECT RAISE(ABORT, 'Invalid task.projectId');
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS trg_tasks_validate_parent_insert
+        BEFORE INSERT ON tasks
+        FOR EACH ROW
+        WHEN NEW.parentId IS NOT NULL AND NEW.parentId != '' AND (
+          NEW.parentId = NEW.id OR NOT EXISTS (SELECT 1 FROM tasks WHERE id = NEW.parentId)
+        )
+        BEGIN
+          SELECT RAISE(ABORT, 'Invalid task.parentId');
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS trg_tasks_validate_parent_update
+        BEFORE UPDATE OF parentId ON tasks
+        FOR EACH ROW
+        WHEN NEW.parentId IS NOT NULL AND NEW.parentId != '' AND (
+          NEW.parentId = NEW.id OR NOT EXISTS (SELECT 1 FROM tasks WHERE id = NEW.parentId)
+        )
+        BEGIN
+          SELECT RAISE(ABORT, 'Invalid task.parentId');
+        END;
+      `);
+
+      console.log('[migration] Repaired invalid task relations, duplicate display IDs, and created integrity indexes');
     }
   }
 ];

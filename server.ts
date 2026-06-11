@@ -407,13 +407,32 @@ function saveTasks() {
   const stmt = db.prepare('INSERT OR REPLACE INTO tasks (id, displayId, title, description, projectId, status, priority, branch, tags, targetFiles, checklist, effort, model, agent, parentId, reasoning, acceptanceCriteria, verification, repoContext, jiraKey, repo, createdAt, updatedAt, logs, designImages) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
   db.transaction(() => {
     const currentIds = tasksCache.map(t => t.id);
+    const tasksById = new Map(tasksCache.map(task => [task.id, task]));
+    const sortedTasks: any[] = [];
+    const visited = new Set<string>();
+
+    const visit = (taskId: string) => {
+      if (visited.has(taskId)) return;
+      visited.add(taskId);
+      const task = tasksById.get(taskId);
+      if (!task) return;
+      if (task.parentId && tasksById.has(task.parentId)) {
+        visit(task.parentId);
+      }
+      sortedTasks.push(task);
+    };
+
+    for (const task of tasksCache) {
+      visit(task.id);
+    }
+
     if (currentIds.length > 0) {
       const placeholders = currentIds.map(() => '?').join(',');
       db.prepare(`DELETE FROM tasks WHERE id NOT IN (${placeholders})`).run(...currentIds);
     } else {
       db.prepare('DELETE FROM tasks').run();
     }
-    for (const item of tasksCache) {
+    for (const item of sortedTasks) {
       stmt.run(
         item.id, item.displayId, item.title, item.description, item.projectId, item.status, item.priority, item.branch,
         item.tags ? JSON.stringify(item.tags) : null,

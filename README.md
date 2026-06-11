@@ -18,3 +18,12 @@ View your app in AI Studio: https://ai.studio/apps/fa2c1394-8daa-4368-b46b-523d2
 2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
 3. Run the app:
    `npm run dev`
+
+## Persistence & Concurrency
+
+The DevFlow backend stores tasks and projects in `tasks.json` and `projects.json`. 
+
+**Concurrent Updates & Safe Reloading:**
+The backend reads the latest disk state synchronously immediately before any mutation to `tasks.json`. This "safe reload" ensures that if an agent manually modifies `tasks.json` on disk, the backend will merge those changes and will not overwrite them with a stale in-memory cache. 
+
+However, to guarantee atomic updates and prevent race conditions when multiple agents are active, it is highly recommended to mutate tasks using the REST API or the provided MCP tools rather than modifying `tasks.json` directly.

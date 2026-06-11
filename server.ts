@@ -343,6 +343,7 @@ function loadTasks() {
 function saveTasks() {
   try {
     fs.writeFileSync(DATA_FILE, JSON.stringify(tasksCache, null, 2), 'utf8');
+    console.log(`[Persistence] Wrote ${tasksCache.length} tasks to ${DATA_FILE}`);
   } catch (err) {
     console.error('Failed to write to tasks.json:', err);
   }
@@ -489,6 +490,7 @@ async function startServer() {
 
   // DELETE: Remove project & associated tasks
   app.delete('/api/projects/:id', (req, res) => {
+    loadTasks();
     const projectId = req.params.id;
     if (projectId === 'project-default') {
       return res.status(400).json({ error: 'Cannot delete default project' });
@@ -521,6 +523,7 @@ async function startServer() {
 
   // POST: Create a new issue card (supports single object or JSON Array of tasks for batch creation)
   app.post('/api/tasks', (req, res) => {
+    loadTasks();
     let rawItems = req.body;
     
     // Support outer layer { repo: "", tasks: [] }
@@ -635,6 +638,7 @@ async function startServer() {
 
   // POST: Bulk / Batch creation and write updates of multiple task cards via JSON array (Upsert)
   app.post('/api/tasks/batch', (req, res) => {
+    loadTasks();
     let rawItems = req.body;
     
     // Support outer layer { repo: "", tasks: [] }
@@ -792,6 +796,7 @@ async function startServer() {
 
   // POST: Custom API endpoint to move/transition an issue card status (called by external scripts or webhooks)
   app.post('/api/tasks/:id/move', (req, res) => {
+    loadTasks();
     const targetId = req.params.id;
     const { status } = req.body;
     
@@ -879,6 +884,7 @@ async function startServer() {
 
   // POST: Specific API endpoint to toggle a checklist item's completion status
   app.post('/api/tasks/:id/checklist/toggle', (req, res) => {
+    loadTasks();
     const targetId = req.params.id;
     const { checklistId } = req.body;
     
@@ -925,6 +931,7 @@ async function startServer() {
 
   // POST: Specific API endpoint to assign agent, model and effort to a card
   app.post('/api/tasks/:id/assign', (req, res) => {
+    loadTasks();
     const targetId = req.params.id;
     const { agent, model, effort } = req.body;
 
@@ -973,6 +980,7 @@ async function startServer() {
 
   // PUT: Batch / List updates and upsert of multiple task cards via JSON array from the very beginning
   app.put('/api/tasks', (req, res) => {
+    loadTasks();
     let rawItems = req.body;
     
     // Support outer layer { repo: "", tasks: [] }
@@ -1122,6 +1130,7 @@ async function startServer() {
 
   // PUT: Update an issue card (such as step counts, state lanes, specs)
   app.put('/api/tasks/:id', (req, res) => {
+    loadTasks();
     const targetId = req.params.id;
     const taskIndex = tasksCache.findIndex(t => t.id === targetId);
 
@@ -1208,6 +1217,7 @@ async function startServer() {
 
   // DELETE: Terminate an issue card
   app.delete('/api/tasks/:id', (req, res) => {
+    loadTasks();
     const targetId = req.params.id;
     const taskIndex = tasksCache.findIndex(t => t.id === targetId);
 
@@ -1233,6 +1243,7 @@ async function startServer() {
 
   // POST: Reset back to initial seeds
   app.post('/api/tasks/reset', (req, res) => {
+    loadTasks();
     tasksCache = [...SEED_TASKS].map(t => ({
       ...t,
       createdAt: new Date().toISOString(),
@@ -1440,6 +1451,7 @@ async function startServer() {
         return { content: [{ type: "text", text: JSON.stringify(filtered, null, 2) }] };
       }
       if (name === "create_task") {
+        loadTasks();
         const agentValidationError = validateAgentParams(args, tasksCache);
         if (agentValidationError) {
           return { content: [{ type: "text", text: `Error: ${agentValidationError}` }] };
@@ -1478,6 +1490,7 @@ async function startServer() {
         return { content: [{ type: "text", text: JSON.stringify(newTask, null, 2) }] };
       }
       if (name === "update_task") {
+        loadTasks();
         const { taskId, ...updateFields } = args as any;
         const index = tasksCache.findIndex((t: any) => t.id === taskId);
         if (index === -1) {
@@ -1511,6 +1524,7 @@ async function startServer() {
         return { content: [{ type: "text", text: JSON.stringify(updatedTask, null, 2) }] };
       }
       if (name === "move_task_status") {
+        loadTasks();
         const { taskId, status } = args as any;
         const index = tasksCache.findIndex((t: any) => t.id === taskId);
         if (index === -1) {
@@ -1537,6 +1551,7 @@ async function startServer() {
         return { content: [{ type: "text", text: JSON.stringify(tasksCache[index], null, 2) }] };
       }
       if (name === "delete_task") {
+        loadTasks();
         const { taskId } = args as any;
         const index = tasksCache.findIndex((t: any) => t.id === taskId);
         if (index === -1) {

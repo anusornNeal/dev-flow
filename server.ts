@@ -344,23 +344,25 @@ function generateDisplayId(projectId: string, projects: any[]): string {
   
   if (!prefix) prefix = 'task';
 
-  if (countersCache[prefix] === undefined) {
-    let maxNum = 0;
-    for (const t of tasksCache) {
-      if (t.displayId && t.displayId.startsWith(prefix + '-')) {
-        const numPart = t.displayId.split('-').pop();
-        if (numPart && !isNaN(parseInt(numPart, 10))) {
-          maxNum = Math.max(maxNum, parseInt(numPart, 10));
-        }
+  let maxNum = countersCache[prefix] || 0;
+  for (const t of tasksCache) {
+    if (t.displayId && t.displayId.startsWith(prefix + '-')) {
+      const numPart = t.displayId.split('-').pop();
+      if (numPart && !isNaN(parseInt(numPart, 10))) {
+        maxNum = Math.max(maxNum, parseInt(numPart, 10));
       }
     }
-    countersCache[prefix] = maxNum;
   }
+  countersCache[prefix] = maxNum;
   
-  countersCache[prefix] += 1;
+  let newId;
+  do {
+    countersCache[prefix] += 1;
+    newId = `${prefix}-${countersCache[prefix].toString().padStart(4, '0')}`;
+  } while (tasksCache.some(t => t.displayId === newId));
+
   saveCounters();
-  
-  return `${prefix}-${countersCache[prefix].toString().padStart(4, '0')}`;
+  return newId;
 }
 
 // Load from projects.json

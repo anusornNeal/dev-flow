@@ -372,6 +372,13 @@ function loadProjects() {
 function saveProjects() {
   const stmt = db.prepare('INSERT OR REPLACE INTO projects (id, name, repoUrl, description, createdAt, localPath, taskIdPrefix) VALUES (?, ?, ?, ?, ?, ?, ?)');
   db.transaction(() => {
+    const currentIds = projectsCache.map(p => p.id);
+    if (currentIds.length > 0) {
+      const placeholders = currentIds.map(() => '?').join(',');
+      db.prepare(`DELETE FROM projects WHERE id NOT IN (${placeholders})`).run(...currentIds);
+    } else {
+      db.prepare('DELETE FROM projects').run();
+    }
     for (const item of projectsCache) {
       stmt.run(item.id, item.name, item.repoUrl, item.description, item.createdAt, item.localPath, item.taskIdPrefix);
     }
@@ -396,6 +403,13 @@ function loadTasks() {
 function saveTasks() {
   const stmt = db.prepare('INSERT OR REPLACE INTO tasks (id, displayId, title, description, projectId, status, priority, branch, tags, targetFiles, checklist, effort, model, agent, parentId, reasoning, acceptanceCriteria, verification, repoContext, jiraKey, repo, createdAt, updatedAt, logs, designImages) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
   db.transaction(() => {
+    const currentIds = tasksCache.map(t => t.id);
+    if (currentIds.length > 0) {
+      const placeholders = currentIds.map(() => '?').join(',');
+      db.prepare(`DELETE FROM tasks WHERE id NOT IN (${placeholders})`).run(...currentIds);
+    } else {
+      db.prepare('DELETE FROM tasks').run();
+    }
     for (const item of tasksCache) {
       stmt.run(
         item.id, item.displayId, item.title, item.description, item.projectId, item.status, item.priority, item.branch,

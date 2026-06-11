@@ -307,9 +307,9 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
                   const defaultEffort = val ? defaultEffortForModel(val, defaultModel) : '';
                   onUpdate({
                     ...task,
-                    agent: val || undefined,
-                    model: defaultModel || undefined,
-                    effort: defaultEffort || undefined
+                    agent: val || '',
+                    model: defaultModel || '',
+                    effort: defaultEffort || ''
                   });
                 }
               }}

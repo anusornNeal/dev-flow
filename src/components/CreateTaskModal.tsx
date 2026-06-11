@@ -79,9 +79,9 @@ class MyViewModel: ViewModel() {
       checklist: parsedChecklist,
       designImages: designImages.length > 0 ? designImages : undefined,
       specUrl: specUrl.trim() || undefined,
-      agent: agent || undefined,
-      model: model || undefined,
-      effort: effort || undefined,
+      agent: agent || '',
+      model: model || '',
+      effort: effort || '',
       parentId: parentId || undefined
     });
   };

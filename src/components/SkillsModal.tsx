@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Save, FileText, Edit2, Ban, ChevronRight, Plus } from 'lucide-react';
+import { X, Save, FileText, Edit2, Ban, ChevronRight, Plus, Lock, Trash2 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -11,6 +11,7 @@ interface SkillMeta {
   id: string;
   name: string;
   description: string;
+  isCustom?: boolean;
 }
 
 interface SkillDetail extends SkillMeta {
@@ -128,6 +129,29 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
     setSaving(false);
   };
 
+  const handleDelete = async (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    if (!confirm('Are you sure you want to delete this custom skill?')) return;
+    try {
+      const res = await fetch(`/api/skills/${id}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('Delete failed');
+      const data = await fetch('/api/skills').then(r => r.json());
+      setSkills(data);
+      if (selectedSkillId === id) {
+        setSelectedSkillId(data.length > 0 ? data[0].id : null);
+        setSkillDetail(null);
+        setIsEditing(false);
+      }
+    } catch (err) {
+      console.error('Delete failed:', err);
+      alert('Failed to delete skill');
+    }
+  };
+
+  const masterSkills = skills.filter(s => !s.isCustom);
+  const customSkills = skills.filter(s => s.isCustom);
+
+
   return (
     <div className="fixed inset-0 bg-[#3e3129]/30 backdrop-blur-sm z-50 flex items-center justify-center p-4">
       <div className="bg-[#fffdfa] rounded-2xl shadow-xl w-full max-w-6xl h-[85vh] flex border border-[#e5d4bb] overflow-hidden select-none">
@@ -164,37 +188,96 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
             ) : skills.length === 0 ? (
               <div className="text-sm font-mono text-[#8c7463] p-2">No skills available.</div>
             ) : (
-              skills.map(skill => {
-                const isSelected = skill.id === selectedSkillId;
-                return (
-                  <button
-                    key={skill.id}
-                    onClick={() => {
-                      if (!isEditing && !isImporting) {
-                        setSelectedSkillId(skill.id);
-                        setIsImporting(false);
-                      } else {
-                        if (confirm('You have unsaved changes. Discard them?')) {
-                          setIsImporting(false);
-                          setIsEditing(false);
-                          setSelectedSkillId(skill.id);
-                        }
-                      }
-                    }}
-                    className={`flex items-center justify-between p-3 rounded-xl border transition-all text-left ${
-                      isSelected
-                        ? 'bg-[#ffecca] border-[#e3a35a] shadow-sm text-[#935919]'
-                        : 'bg-white border-[#e5d4bb] hover:bg-[#faf6ef] text-[#534135]'
-                    }`}
-                  >
-                    <div>
-                      <div className="font-extrabold text-sm">{skill.name}</div>
-                      <div className="text-[10px] font-mono text-[#8a725f] mt-1 line-clamp-1">{skill.description}</div>
+              <>
+                {masterSkills.length > 0 && (
+                  <div className="mb-2">
+                    <div className="text-[10px] font-bold text-[#b89b82] uppercase tracking-wider mb-2 ml-1">Master Skills</div>
+                    <div className="flex flex-col gap-2">
+                      {masterSkills.map(skill => {
+                        const isSelected = skill.id === selectedSkillId;
+                        return (
+                          <button
+                            key={skill.id}
+                            onClick={() => {
+                              if (!isEditing && !isImporting) {
+                                setSelectedSkillId(skill.id);
+                                setIsImporting(false);
+                              } else {
+                                if (confirm('You have unsaved changes. Discard them?')) {
+                                  setIsImporting(false);
+                                  setIsEditing(false);
+                                  setSelectedSkillId(skill.id);
+                                }
+                              }
+                            }}
+                            className={`flex items-center justify-between p-3 rounded-xl border transition-all text-left ${
+                              isSelected
+                                ? 'bg-[#ffecca] border-[#e3a35a] shadow-sm text-[#935919]'
+                                : 'bg-white border-[#e5d4bb] hover:bg-[#faf6ef] text-[#534135]'
+                            }`}
+                          >
+                            <div className="flex-1 min-w-0 pr-2">
+                              <div className="font-extrabold text-sm flex items-center gap-1.5">
+                                {skill.name}
+                                <Lock size={10} className="text-[#c4a991]" title="Protected Master Skill" />
+                              </div>
+                              <div className="text-[10px] font-mono text-[#8a725f] mt-1 line-clamp-1">{skill.description}</div>
+                            </div>
+                            {isSelected && <ChevronRight size={16} className="text-[#d89745] shrink-0" />}
+                          </button>
+                        );
+                      })}
                     </div>
-                    {isSelected && <ChevronRight size={16} className="text-[#d89745]" />}
-                  </button>
-                );
-              })
+                  </div>
+                )}
+
+                {customSkills.length > 0 && (
+                  <div className="mt-2 mb-2">
+                    <div className="text-[10px] font-bold text-[#b89b82] uppercase tracking-wider mb-2 ml-1">Custom Skills</div>
+                    <div className="flex flex-col gap-2">
+                      {customSkills.map(skill => {
+                        const isSelected = skill.id === selectedSkillId;
+                        return (
+                          <div key={skill.id} className="relative group">
+                            <button
+                              onClick={() => {
+                                if (!isEditing && !isImporting) {
+                                  setSelectedSkillId(skill.id);
+                                  setIsImporting(false);
+                                } else {
+                                  if (confirm('You have unsaved changes. Discard them?')) {
+                                    setIsImporting(false);
+                                    setIsEditing(false);
+                                    setSelectedSkillId(skill.id);
+                                  }
+                                }
+                              }}
+                              className={`flex items-center w-full justify-between p-3 rounded-xl border transition-all text-left ${
+                                isSelected
+                                  ? 'bg-[#ffecca] border-[#e3a35a] shadow-sm text-[#935919]'
+                                  : 'bg-white border-[#e5d4bb] hover:bg-[#faf6ef] text-[#534135]'
+                              }`}
+                            >
+                              <div className="flex-1 min-w-0 pr-6">
+                                <div className="font-extrabold text-sm">{skill.name}</div>
+                                <div className="text-[10px] font-mono text-[#8a725f] mt-1 line-clamp-1">{skill.description}</div>
+                              </div>
+                              {isSelected && <ChevronRight size={16} className="text-[#d89745] shrink-0" />}
+                            </button>
+                            <button
+                              onClick={(e) => handleDelete(e, skill.id)}
+                              className="absolute right-2 top-3 p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity"
+                              title="Delete custom skill"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </>
             )}
           </div>
         </div>

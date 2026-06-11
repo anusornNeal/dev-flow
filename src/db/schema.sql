@@ -51,5 +51,7 @@ CREATE TABLE IF NOT EXISTS settings (
 CREATE TABLE IF NOT EXISTS skills (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
-  description TEXT
+  description TEXT,
+  isCustom INTEGER DEFAULT 0,
+  content TEXT
 );

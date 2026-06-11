@@ -28,7 +28,7 @@ interface SidebarProps {
   projects: Project[];
   activeProjectId: string;
   setActiveProjectId: (id: string) => void;
-  onCreateProject: (name: string, repoUrl: string, description?: string, localPath?: string) => Promise<boolean>;
+  onCreateProject: (name: string, repoUrl: string, description?: string, localPath?: string, taskIdPrefix?: string) => Promise<boolean>;
   onDeleteProject: (id: string) => Promise<boolean>;
   onUpdateProject: (id: string, updates: Partial<Project>) => Promise<boolean>;
   selectedPriority: TaskPriority | 'all';
@@ -63,6 +63,7 @@ export default function Sidebar({
   const [newProjectRepoUrl, setNewProjectRepoUrl] = useState('');
   const [newProjectDesc, setNewProjectDesc] = useState('');
   const [newProjectLocalPath, setNewProjectLocalPath] = useState('');
+  const [newProjectTaskIdPrefix, setNewProjectTaskIdPrefix] = useState('');
   
   // Compute Stats
   const mainTasks = tasks.filter(t => !t.parentId);
@@ -214,6 +215,13 @@ export default function Sidebar({
                               placeholder="Local absolute path (e.g. C:\Projects\app)"
                               className="w-full bg-white border border-[#ebdcb9] px-2 py-1 rounded-md text-[9px] outline-none focus:border-[#d4994e] font-mono"
                             />
+                            <input
+                              type="text"
+                              value={newProjectTaskIdPrefix}
+                              onChange={(e) => setNewProjectTaskIdPrefix(e.target.value)}
+                              placeholder="Task ID Prefix (e.g. DVF)"
+                              className="w-full bg-white border border-[#ebdcb9] px-2 py-1 rounded-md text-[9px] outline-none focus:border-[#d4994e] font-mono"
+                            />
                             <div className="flex gap-1">
                               <button
                                 onClick={() => setEditingProjectId(null)}
@@ -221,7 +229,10 @@ export default function Sidebar({
                               >Cancel</button>
                               <button
                                 onClick={async () => {
-                                  const success = await onUpdateProject(project.id, { localPath: newProjectLocalPath });
+                                  const success = await onUpdateProject(project.id, { 
+                                    localPath: newProjectLocalPath,
+                                    taskIdPrefix: newProjectTaskIdPrefix || undefined
+                                  });
                                   if (success) setEditingProjectId(null);
                                 }}
                                 className="flex-1 text-[9px] bg-[#d89745] text-white py-1 rounded font-bold hover:bg-[#c08234]"
@@ -257,6 +268,11 @@ export default function Sidebar({
                               📂 {project.localPath}
                             </p>
                           )}
+                          {project.taskIdPrefix && (
+                            <p className="text-[8px] text-[#b39e90] font-mono truncate">
+                              🏷️ Prefix: {project.taskIdPrefix}
+                            </p>
+                          )}
                         </div>
                         
                         <div className="flex flex-col items-end gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
@@ -276,11 +292,12 @@ export default function Sidebar({
                                 <button
                                   onClick={() => {
                                     setNewProjectLocalPath(project.localPath || '');
+                                    setNewProjectTaskIdPrefix(project.taskIdPrefix || '');
                                     setEditingProjectId(project.id);
                                   }}
                                   type="button"
                                   className="p-1 text-gray-400 hover:text-[#d89745] transition-colors cursor-pointer"
-                                  title="Edit local path"
+                                  title="Edit project settings"
                                 >
                                   <FolderGit size={12} />
                                 </button>
@@ -322,13 +339,15 @@ export default function Sidebar({
                     newProjectName.trim(),
                     newProjectRepoUrl.trim(),
                     newProjectDesc.trim(),
-                    newProjectLocalPath.trim()
+                    newProjectLocalPath.trim(),
+                    newProjectTaskIdPrefix.trim() || undefined
                   );
                   if (success) {
                     setNewProjectName('');
                     setNewProjectRepoUrl('');
                     setNewProjectDesc('');
                     setNewProjectLocalPath('');
+                    setNewProjectTaskIdPrefix('');
                     setIsAddingProject(false);
                   }
                 }}
@@ -378,6 +397,16 @@ export default function Sidebar({
                       placeholder="C:\Projects\my-app"
                       value={newProjectLocalPath}
                       onChange={(e) => setNewProjectLocalPath(e.target.value)}
+                      className="w-full bg-white border border-[#ebdcb9] px-2 py-1 rounded-md text-[10px] outline-none focus:border-[#d4994e] font-mono"
+                    />
+                  </div>
+                  <div>
+                    <span className="text-[8px] text-[#8C7565] font-bold block mb-0.5">Task ID Prefix (Optional)</span>
+                    <input
+                      type="text"
+                      placeholder="e.g. DVF"
+                      value={newProjectTaskIdPrefix}
+                      onChange={(e) => setNewProjectTaskIdPrefix(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6))}
                       className="w-full bg-white border border-[#ebdcb9] px-2 py-1 rounded-md text-[10px] outline-none focus:border-[#d4994e] font-mono"
                     />
                   </div>

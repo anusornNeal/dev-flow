@@ -334,9 +334,11 @@ function validateAgentParams(item: any, tasks: any[]): string | null {
 
 function generateDisplayId(projectId: string, projects: any[]): string {
   const project = projects.find(p => p.id === projectId);
-  // Default prefix to 'task' if project not found
+  
   let prefix = 'task';
-  if (project && project.name) {
+  if (project && project.taskIdPrefix) {
+    prefix = project.taskIdPrefix;
+  } else if (project && project.name) {
     prefix = project.name.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
   } else if (projectId && projectId !== 'project-default') {
     prefix = projectId.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
@@ -555,9 +557,9 @@ async function startServer() {
     res.json(projectsCache);
   });
 
-  // POST: Create a new project linked to a repo
+  // POST: Create a new project
   app.post('/api/projects', (req, res) => {
-    const { name, repoUrl, description, localPath } = req.body;
+    const { name, repoUrl, description, localPath, taskIdPrefix } = req.body;
     
     const nameErr = validateString(name, 'name', true);
     if (nameErr) return res.status(400).json({ error: nameErr });
@@ -571,6 +573,7 @@ async function startServer() {
       repoUrl: repoUrl.trim(),
       description: (description || '').trim(),
       localPath: (localPath || '').trim() || undefined,
+      taskIdPrefix: (taskIdPrefix || '').trim() || undefined,
       createdAt: new Date().toISOString()
     };
 
@@ -587,13 +590,14 @@ async function startServer() {
       return res.status(404).json({ error: 'Project not found' });
     }
 
-    const { name, repoUrl, description, localPath } = req.body;
+    const { name, repoUrl, description, localPath, taskIdPrefix } = req.body;
     const project = projectsCache[index];
     
     if (name !== undefined) project.name = name.trim();
     if (repoUrl !== undefined) project.repoUrl = repoUrl.trim();
     if (description !== undefined) project.description = description.trim();
     if (localPath !== undefined) project.localPath = localPath.trim() || undefined;
+    if (taskIdPrefix !== undefined) project.taskIdPrefix = taskIdPrefix.trim() || undefined;
 
     saveProjects();
     res.json(project);

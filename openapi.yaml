@@ -82,6 +82,10 @@ paths:
                   type: string
                 description:
                   type: string
+                localPath:
+                  type: string
+                taskIdPrefix:
+                  type: string
       responses:
         '201':
           description: Project created
@@ -98,6 +102,35 @@ paths:
       responses:
         '200':
           description: Project deleted
+    put:
+      summary: Update a project
+      operationId: updateProject
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                repoUrl:
+                  type: string
+                description:
+                  type: string
+                localPath:
+                  type: string
+                taskIdPrefix:
+                  type: string
+      responses:
+        '200':
+          description: Project updated
   /api/tasks:
     get:
       summary: Get all tasks

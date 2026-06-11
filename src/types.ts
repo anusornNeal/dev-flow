@@ -57,6 +57,7 @@ export interface Project {
   repoUrl: string;
   description?: string;
   localPath?: string; // Absolute path to the local project directory
+  taskIdPrefix?: string; // Custom prefix for task display IDs (e.g. DVF)
   createdAt: string;
 }
 

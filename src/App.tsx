@@ -145,12 +145,12 @@ export default function App() {
     }
   };
 
-  const handleCreateProject = async (name: string, repoUrl: string, description?: string, localPath?: string) => {
+  const handleCreateProject = async (name: string, repoUrl: string, description?: string, localPath?: string, taskIdPrefix?: string) => {
     try {
       const res = await fetch('/api/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, repoUrl, description, localPath })
+        body: JSON.stringify({ name, repoUrl, description, localPath, taskIdPrefix })
       });
       if (res.ok) {
         const newProj = await res.json();

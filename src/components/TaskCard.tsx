@@ -146,6 +146,20 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
           </button>
         </div>
 
+        {/* Agent & Model Metadata Badge - placed right under priority */}
+        {task.agent && task.model && (
+          <div className="flex flex-wrap items-center gap-1.5 mb-2.5 px-0.5 select-none font-mono font-bold">
+            <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-[#fae8ff] text-[#86198f] border border-[#f5d0fe] text-[8px]">
+              🤖 {task.agent} • {task.model}
+            </span>
+            {task.effort && (
+              <span className="px-1.5 py-0.5 rounded-md bg-[#f1f5f9] text-[#475569] border border-[#e2e8f0] text-[8px]">
+                ⚡ {task.effort.toUpperCase()} EFFORT
+              </span>
+            )}
+          </div>
+        )}
+
         {/* Title text */}
         <h3 className={`text-xs leading-relaxed mb-3.5 font-sans line-clamp-2 pl-0.5 select-text selection:bg-[#ffd9aa] select-none ${
           isDone ? 'text-gray-400 line-through font-normal' : 'text-[#3e3129] font-extrabold'
@@ -342,42 +356,35 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
             </select>
           </div>
 
-          {/* Model Selector */}
-          <div className="relative flex-1 min-w-0">
-            <select
-              value={task.model || ''}
-              disabled={!task.agent}
-              onChange={(e) => {
-                const val = e.target.value;
-                if (onUpdate) {
-                  const defaultEffort = (task.agent && val) ? defaultEffortForModel(task.agent, val) : '';
-                  onUpdate({
-                    ...task,
-                    model: val || undefined,
-                    effort: defaultEffort || undefined
-                  });
-                }
-              }}
-              className="w-full bg-[#fdfbf7] hover:bg-white border border-[#ebdcb9] hover:border-[#d4994e] rounded-xl text-[9px] py-1 px-1.5 focus:border-[#d4994e] outline-none text-[#564436] font-sans font-bold transition-all cursor-pointer truncate disabled:opacity-50"
-            >
-              <option value="">⚡ Default Model</option>
-              {task.agent && AGENTS_CONFIG[task.agent as import('../lib/agentsConfig').AgentName]?.map(m => (
-                <option key={m.model_name} value={m.model_name}>
-                  {m.model_name}
-                </option>
-              ))}
-            </select>
-          </div>
+          {/* Model Selector - only show if agent is assigned */}
+          {task.agent && (
+            <div className="relative flex-1 min-w-0">
+              <select
+                value={task.model || ''}
+                disabled={!task.agent}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (onUpdate) {
+                    const defaultEffort = (task.agent && val) ? defaultEffortForModel(task.agent, val) : '';
+                    onUpdate({
+                      ...task,
+                      model: val || undefined,
+                      effort: defaultEffort || undefined
+                    });
+                  }
+                }}
+                className="w-full bg-[#fdfbf7] hover:bg-white border border-[#ebdcb9] hover:border-[#d4994e] rounded-xl text-[9px] py-1 px-1.5 focus:border-[#d4994e] outline-none text-[#564436] font-sans font-bold transition-all cursor-pointer truncate disabled:opacity-50"
+              >
+                <option value="">⚡ Default Model</option>
+                {AGENTS_CONFIG[task.agent as import('../lib/agentsConfig').AgentName]?.map(m => (
+                  <option key={m.model_name} value={m.model_name}>
+                    {m.model_name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
         </div>
-
-        {/* Small badge display for effort if assigned */}
-        {task.agent && task.model && task.effort && (
-          <div className="flex flex-wrap items-center gap-1 mt-0.5 select-none font-mono text-[7px] font-bold">
-            <span className="px-1 py-0.2 rounded bg-[#f1f5f9] text-[#475569] border border-[#e2e8f0]">
-              ⚡ {task.effort.toUpperCase()} EFFORT
-            </span>
-          </div>
-        )}
 
         {/* Footer Metrics */}
         <div className="flex items-center justify-between pt-0.5 select-none text-[9px] font-mono">

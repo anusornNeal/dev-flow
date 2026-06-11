@@ -20,6 +20,7 @@ interface TaskCardProps {
 
 export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDragStart, onUpdate }: TaskCardProps) {
   const [copied, setCopied] = useState(false);
+  const [idCopied, setIdCopied] = useState(false);
   const [isDrag, setIsDrag] = useState(false);
 
   const handleCopyBranch = (e: React.MouseEvent) => {
@@ -28,6 +29,15 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
     navigator.clipboard.writeText(`git checkout -b ${task.branch}`);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleCopyId = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const idToCopy = task.displayId || task.id;
+    if (!idToCopy) return;
+    navigator.clipboard.writeText(idToCopy);
+    setIdCopied(true);
+    setTimeout(() => setIdCopied(false), 2000);
   };
 
   const isDone = task.status === 'done';
@@ -108,9 +118,19 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
               </span>
             )}
             
-            <span className="text-[9.5px] font-bold text-[#b49f8e] font-mono leading-none">
+            <button
+              type="button"
+              onClick={handleCopyId}
+              className="flex items-center gap-1 text-[9.5px] font-bold text-[#b49f8e] hover:text-[#d89745] font-mono leading-none transition-colors cursor-pointer group/copy"
+              title="Copy Card ID"
+            >
               #{task.displayId || task.id}
-            </span>
+              {idCopied ? (
+                <Check size={10} className="text-emerald-500" />
+              ) : (
+                <Copy size={10} className="opacity-0 group-hover/copy:opacity-100 transition-opacity" />
+              )}
+            </button>
           </div>
           
           <button

@@ -34,6 +34,7 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
   const [importName, setImportName] = useState('');
   const [importDescription, setImportDescription] = useState('');
   const [importContent, setImportContent] = useState('');
+  const [dragOver, setDragOver] = useState(false);
 
   // 1. Fetch Skill List on mount
   useEffect(() => {
@@ -292,7 +293,51 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
 
           <div className="flex-1 p-4 overflow-hidden flex flex-col relative select-text">
             {isImporting ? (
-              <div className="flex-1 flex flex-col gap-4 overflow-y-auto">
+              <div 
+                className={`flex-1 flex flex-col gap-4 overflow-y-auto transition-all duration-200 ${dragOver ? 'bg-[#d89745]/10 border-2 border-dashed border-[#d89745] p-4 rounded-xl shadow-inner' : ''}`}
+                onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+                onDragLeave={(e) => { e.preventDefault(); setDragOver(false); }}
+                onDrop={async (e) => {
+                  e.preventDefault();
+                  setDragOver(false);
+                  const files = Array.from(e.dataTransfer.files).filter(f => f.name.endsWith('.md') || f.name.endsWith('.markdown'));
+                  if (files.length === 0) {
+                    alert('Please drop valid .md files');
+                    return;
+                  }
+                  
+                  if (files.length === 1) {
+                    const file = files[0];
+                    const text = await file.text();
+                    setImportId(file.name.replace(/\.md$|\.markdown$/, ''));
+                    setImportName(file.name.replace(/\.md$|\.markdown$/, '').split(/[-_]/).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' '));
+                    setImportContent(text);
+                  } else {
+                    setSaving(true);
+                    let successCount = 0;
+                    for (const file of files) {
+                      try {
+                        const text = await file.text();
+                        const id = file.name.replace(/\.md$|\.markdown$/, '');
+                        const name = id.split(/[-_]/).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+                        const res = await fetch(`/api/skills/import`, {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ id, name, description: 'Imported via drag and drop', content: text })
+                        });
+                        if (res.ok) successCount++;
+                      } catch (err) {
+                        console.error('Failed to import', file.name, err);
+                      }
+                    }
+                    const data = await fetch('/api/skills').then(r => r.json());
+                    setSkills(data);
+                    setSaving(false);
+                    alert(`Successfully imported ${successCount} of ${files.length} skills`);
+                    setIsImporting(false);
+                  }
+                }}
+              >
                 <div className="flex flex-col gap-1 shrink-0">
                   <label className="text-xs font-extrabold text-[#534135]">ID (Filename)</label>
                   <input

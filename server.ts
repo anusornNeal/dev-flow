@@ -54,6 +54,102 @@ function saveCounters() {
   } catch (err) {}
 }
 
+const SETTINGS_FILE = path.join(process.cwd(), 'settings.json');
+let settingsCache: { autoWorking: boolean } = { autoWorking: false };
+
+function loadSettings() {
+  if (fs.existsSync(SETTINGS_FILE)) {
+    try {
+      settingsCache = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
+    } catch (e) {
+      settingsCache = { autoWorking: false };
+    }
+  } else {
+    saveSettings();
+  }
+}
+
+function saveSettings() {
+  try {
+    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settingsCache, null, 2), 'utf8');
+  } catch (err) {}
+}
+
+loadSettings();
+
+/// Auto-Dispatch Logic
+function drainReadyToDoQueue() {
+  if (!settingsCache.autoWorking) return;
+  loadTasks();
+  
+  // Group tasks by project
+  const projectTasks = new Map<string, any[]>();
+  for (const t of tasksCache) {
+    if (!projectTasks.has(t.projectId)) {
+      projectTasks.set(t.projectId, []);
+    }
+    projectTasks.get(t.projectId)!.push(t);
+  }
+
+  let changed = false;
+
+  for (const [projectId, tasks] of projectTasks.entries()) {
+    // Check if an agent is busy for this project
+    const isAgentBusy = tasks.some(t => 
+      (t.status === 'in-progress' || t.status === 'todo') && t.activeAgent
+    );
+    if (isAgentBusy) continue;
+
+    // Find first valid ready-to-do task
+    const readyTask = tasks.find(t => 
+      t.status === 'todo' && t.agent && t.model && t.effort && !t.activeAgent
+    );
+
+    if (readyTask) {
+      const proj = projectsCache.find(p => p.id === projectId);
+      if (!proj || !proj.localPath) {
+        continue;
+      }
+
+      // Claim it
+      readyTask.status = 'in-progress';
+      readyTask.activeAgent = readyTask.agent;
+      readyTask.updatedAt = new Date().toISOString();
+      readyTask.logs = [
+        ...(readyTask.logs || []),
+        {
+          id: `log-auto-${Date.now()}`,
+          timestamp: new Date().toISOString(),
+          message: 'Task auto-dispatched to IN-PROGRESS via Auto-Working loop.',
+          type: 'move'
+        }
+      ];
+      changed = true;
+
+      // Trigger it
+      const triggerBat = path.join(process.cwd(), 'trigger-agent.bat');
+      const execOpts = proj.localPath ? { cwd: proj.localPath } : undefined;
+      const safeLocalPath = `"${proj.localPath}"`;
+      const safeModel = `"${readyTask.model}"`;
+      const safeEffort = `"${readyTask.effort}"`;
+
+      writeAgentLog('TRIGGER', `Auto-dispatch spawning agent=${readyTask.agent} for task=${readyTask.id} ("${readyTask.title}") at ${proj.localPath}`);
+      execFile('cmd.exe', ['/c', triggerBat, readyTask.agent, readyTask.id, safeLocalPath, safeModel, safeEffort], execOpts, (err) => {
+        if (err) writeAgentLog('ERROR', `trigger-agent.bat failed for task=${readyTask.id}: ${err.message}`);
+        else writeAgentLog('INFO', `trigger-agent.bat exited OK for task=${readyTask.id}`);
+      });
+    }
+  }
+
+  if (changed) {
+    saveTasks();
+    broadcast({ type: 'tasks', data: tasksCache });
+  }
+}
+
+// Auto-Dispatch Loop
+setInterval(drainReadyToDoQueue, 5000);
+
 const VALID_AGENTS = ['Codex', 'Antigravity', 'Claude'];
 const VALID_EFFORTS = ['low', 'medium', 'high', 'xhigh'];
 const VALID_MODELS = [
@@ -344,6 +440,7 @@ function saveTasks() {
   try {
     fs.writeFileSync(DATA_FILE, JSON.stringify(tasksCache, null, 2), 'utf8');
     console.log(`[Persistence] Wrote ${tasksCache.length} tasks to ${DATA_FILE}`);
+    console.log(`[Persistence] Wrote ${tasksCache.length} tasks to ${DATA_FILE}`);
   } catch (err) {
     console.error('Failed to write to tasks.json:', err);
   }
@@ -411,53 +508,46 @@ async function startServer() {
 
   // ================= API ENDPOINTS =================
 
-  // ================= DOCUMENT ENDPOINTS =================
-  const DOCS = {
-    schema: 'C:\\\\Users\\\\tatar\\\\Downloads\\\\Documents\\\\Projects\\\\dev flow\\\\dev-flow-card-schema-and-template.md',
-    playbook: 'C:\\\\Users\\\\tatar\\\\Downloads\\\\Documents\\\\Projects\\\\dev flow\\\\dev-flow-agent-playbook.md'
-  };
+  // ================= SKILLS ENDPOINTS =================
+  const SKILLS_REGISTRY = [
+    {
+      id: 'schema',
+      name: 'Task JSON Schema',
+      description: 'The JSON structure and templates for DevFlow tasks.',
+      filePath: path.join(process.cwd(), 'skills', 'schema.md')
+    },
+    {
+      id: 'playbook',
+      name: 'Agent Playbook',
+      description: 'Instructions and rules for agents interacting with DevFlow.',
+      filePath: path.join(process.cwd(), 'skills', 'playbook.md')
+    }
+  ];
 
-  app.get('/api/docs/:id', (req, res) => {
-    const docPath = DOCS[req.params.id as keyof typeof DOCS];
-    if (!docPath) return res.status(404).json({ error: 'Doc not found' });
+  app.get('/api/skills', (req, res) => {
+    res.json(SKILLS_REGISTRY.map(s => ({ id: s.id, name: s.name, description: s.description })));
+  });
+
+  app.get('/api/skills/:id', (req, res) => {
+    const skill = SKILLS_REGISTRY.find(s => s.id === req.params.id);
+    if (!skill) return res.status(404).json({ error: 'Skill not found' });
     try {
-      const content = fs.readFileSync(docPath, 'utf8');
-      res.json({ content });
+      const content = fs.existsSync(skill.filePath) ? fs.readFileSync(skill.filePath, 'utf8') : '';
+      res.json({ ...skill, content });
     } catch (err) {
-      res.status(500).json({ error: 'Failed to read document' });
+      res.status(500).json({ error: 'Failed to read skill' });
     }
   });
 
-  app.put('/api/docs/:id', (req, res) => {
-    const docPath = DOCS[req.params.id as keyof typeof DOCS];
-    if (!docPath) return res.status(404).json({ error: 'Doc not found' });
+  app.put('/api/skills/:id', (req, res) => {
+    const skill = SKILLS_REGISTRY.find(s => s.id === req.params.id);
+    if (!skill) return res.status(404).json({ error: 'Skill not found' });
     try {
-      fs.writeFileSync(docPath, req.body.content, 'utf8');
+      fs.writeFileSync(skill.filePath, req.body.content || '', 'utf8');
       res.json({ success: true });
     } catch (err) {
-      res.status(500).json({ error: 'Failed to write document' });
+      res.status(500).json({ error: 'Failed to write skill' });
     }
-  });
-
-  // GET: App settings
-  app.get('/api/settings', (req, res) => {
-    res.json(settingsCache);
-  });
-
-  // POST: Update App settings
-  app.post('/api/settings', (req, res) => {
-    const { autoWorking } = req.body;
-    if (typeof autoWorking === 'boolean') {
-      const wasOff = !settingsCache.autoWorking;
-      settingsCache.autoWorking = autoWorking;
-      saveSettings();
-      
-      if (wasOff && autoWorking) {
-        writeAgentLog('INFO', 'Auto-work enabled. Scanning for queued ready-to-do tasks...');
-        drainReadyToDoQueue();
-      }
-    }
-    res.json(settingsCache);
   });
 
   // GET: Fetch all projects
@@ -540,6 +630,27 @@ async function startServer() {
   // GET: Fetch all issues
   app.get('/api/tasks', (req, res) => {
     res.json(tasksCache);
+  });
+
+  // GET: App settings
+  app.get('/api/settings', (req, res) => {
+    res.json(settingsCache);
+  });
+
+  // POST: Update App settings
+  app.post('/api/settings', (req, res) => {
+    const { autoWorking } = req.body;
+    if (typeof autoWorking === 'boolean') {
+      const wasOff = !settingsCache.autoWorking;
+      settingsCache.autoWorking = autoWorking;
+      saveSettings();
+      
+      if (wasOff && autoWorking) {
+        writeAgentLog('INFO', 'Auto-work enabled. Scanning for queued ready-to-do tasks...');
+        drainReadyToDoQueue();
+      }
+    }
+    res.json(settingsCache);
   });
 
   // Helper for agent task context
@@ -1552,6 +1663,24 @@ async function startServer() {
             description: "List files and directories in the project directory", 
             inputSchema: { type: "object", properties: { directoryPath: { type: "string", description: "Relative directory path (e.g. '.', 'src')" } } },
             outputSchema: { type: "object", properties: { files: { type: "array", items: { type: "string" } } } }
+          },
+          {
+            name: "list_skills",
+            description: "Get a list of all available DevFlow skills",
+            inputSchema: { type: "object", properties: {} },
+            outputSchema: { type: "array", items: { type: "object" } }
+          },
+          {
+            name: "get_skill",
+            description: "Get the content of a specific skill by ID",
+            inputSchema: { type: "object", properties: { id: { type: "string", description: "Skill ID (e.g. 'schema', 'playbook')" } }, required: ["id"] },
+            outputSchema: { type: "object" }
+          },
+          {
+            name: "update_skill",
+            description: "Update the content of a specific skill",
+            inputSchema: { type: "object", properties: { id: { type: "string", description: "Skill ID" }, content: { type: "string", description: "New skill content" } }, required: ["id", "content"] },
+            outputSchema: { type: "object", properties: { success: { type: "boolean" } } }
           }
         ] as any
       };

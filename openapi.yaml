@@ -14,6 +14,51 @@ paths:
       responses:
         '200':
           description: A JSON Schema describing the Task object
+  /api/skills:
+    get:
+      summary: Get all skills metadata
+      operationId: getSkills
+      responses:
+        '200':
+          description: A list of skills
+  /api/skills/{id}:
+    get:
+      summary: Get a skill by ID including its content
+      operationId: getSkillById
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The skill including its content
+        '404':
+          description: Skill not found
+    put:
+      summary: Update a skill content
+      operationId: updateSkill
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                content:
+                  type: string
+      responses:
+        '200':
+          description: Skill updated
+        '404':
+          description: Skill not found
   /api/projects:
     get:
       summary: Get all projects
@@ -173,29 +218,7 @@ paths:
                   enum: [backlog, todo, in-progress, ready-for-review, done]
       responses:
         '200':
-          description: Task status updated
-  /api/tasks/{id}/checklist/toggle:
-    post:
-      summary: Toggle a checklist item status
-      operationId: toggleTaskChecklist
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                checklistId:
-                  type: string
-      responses:
-        '200':
-          description: Checklist toggled
+          description: Task moved
   /api/tasks/{id}/assign:
     post:
       summary: Assign agent, model, and effort to a task

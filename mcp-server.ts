@@ -67,6 +67,37 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
           required: ["taskId", "status"],
         },
+      },
+      {
+        name: "list_skills",
+        description: "List all available agent skills in DevFlow",
+        inputSchema: {
+          type: "object",
+          properties: {},
+        },
+      },
+      {
+        name: "get_skill",
+        description: "Get the content of a specific skill",
+        inputSchema: {
+          type: "object",
+          properties: {
+            skillId: { type: "string", description: "The ID of the skill to fetch" }
+          },
+          required: ["skillId"],
+        },
+      },
+      {
+        name: "update_skill",
+        description: "Update the content of a specific skill",
+        inputSchema: {
+          type: "object",
+          properties: {
+            skillId: { type: "string", description: "The ID of the skill to update" },
+            content: { type: "string", description: "The new markdown content of the skill" }
+          },
+          required: ["skillId", "content"],
+        },
       }
     ],
   };
@@ -157,6 +188,54 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         isError: true,
         content: [{ type: "text", text: err.message }],
       };
+    }
+  }
+
+  if (name === "list_skills") {
+    try {
+      const response = await fetch(`${API_BASE_URL}/skills`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const skills = await response.json();
+      return {
+        content: [{ type: "text", text: JSON.stringify(skills, null, 2) }],
+      };
+    } catch (err: any) {
+      return { isError: true, content: [{ type: "text", text: err.message }] };
+    }
+  }
+
+  if (name === "get_skill") {
+    const { skillId } = args as any;
+    try {
+      const response = await fetch(`${API_BASE_URL}/skills/${skillId}`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const skill = await response.json();
+      return {
+        content: [{ type: "text", text: JSON.stringify(skill, null, 2) }],
+      };
+    } catch (err: any) {
+      return { isError: true, content: [{ type: "text", text: err.message }] };
+    }
+  }
+
+  if (name === "update_skill") {
+    const { skillId, content } = args as any;
+    try {
+      const response = await fetch(`${API_BASE_URL}/skills/${skillId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content })
+      });
+      if (!response.ok) {
+         const errorData = await response.json().catch(() => ({}));
+         throw new Error(errorData.error || `HTTP ${response.status}`);
+      }
+      const data = await response.json();
+      return {
+        content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+      };
+    } catch (err: any) {
+      return { isError: true, content: [{ type: "text", text: err.message }] };
     }
   }
 

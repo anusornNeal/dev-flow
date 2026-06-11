@@ -1,0 +1,67 @@
+import type express from 'express';
+import type { ApiRouteDeps } from '../types';
+import { loadSkillsRegistry, saveSkillsRegistry } from '../repositories/skillsRepository';
+import { getSkillById, getSkillDetail, updateSkillContent } from '../services/skillService';
+
+export function registerSkillRoutes(app: express.Express, deps: ApiRouteDeps) {
+  loadSkillsRegistry(deps.state);
+
+  app.get('/api/skills', (_req, res) => {
+    res.json(deps.state.skillsRegistry.map((skill) => ({
+      id: skill.id,
+      name: skill.name,
+      description: skill.description,
+      isCustom: skill.isCustom,
+    })));
+  });
+
+  app.get('/api/skills/:id', (req, res) => {
+    const skill = getSkillDetail(deps.state, req.params.id);
+    if (!skill) return res.status(404).json({ error: 'Skill not found' });
+    return res.json(skill);
+  });
+
+  app.put('/api/skills/:id', (req, res) => {
+    const skill = getSkillById(deps.state, req.params.id);
+    if (!skill) return res.status(404).json({ error: 'Skill not found' });
+    try {
+      updateSkillContent(skill, req.body);
+      saveSkillsRegistry(deps.state);
+      return res.json({ success: true });
+    } catch {
+      return res.status(500).json({ error: 'Failed to write skill' });
+    }
+  });
+
+  app.post('/api/skills/import', (req, res) => {
+    const { id, name, description, content } = req.body;
+    if (!id || !name || !content) return res.status(400).json({ error: 'Missing required fields' });
+    if (deps.state.skillsRegistry.some((skill) => skill.id === id)) {
+      return res.status(400).json({ error: 'Skill ID already exists' });
+    }
+
+    deps.state.skillsRegistry.push({
+      id,
+      name,
+      description: description || '',
+      isCustom: true,
+      content,
+    });
+    saveSkillsRegistry(deps.state);
+    return res.status(201).json({ success: true, id });
+  });
+
+  app.delete('/api/skills/:id', (req, res) => {
+    const index = deps.state.skillsRegistry.findIndex((skill) => skill.id === req.params.id);
+    if (index === -1) return res.status(404).json({ error: 'Skill not found' });
+
+    const skill = deps.state.skillsRegistry[index];
+    if (!skill.isCustom) {
+      return res.status(403).json({ error: 'Cannot delete master skills' });
+    }
+
+    deps.state.skillsRegistry.splice(index, 1);
+    saveSkillsRegistry(deps.state);
+    return res.json({ success: true });
+  });
+}

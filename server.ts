@@ -841,19 +841,33 @@ async function startServer() {
     // Trigger Agent
     if (status === 'todo' && prevStatus !== 'todo') {
       if (updatedTask.agent && !updatedTask.activeAgent) {
-        updatedTask.activeAgent = updatedTask.agent;
-        if (/^[a-zA-Z0-9-]+$/.test(updatedTask.agent) && /^[a-zA-Z0-9-]+$/.test(updatedTask.id)) {
-          const triggerBat = path.join(process.cwd(), 'trigger-agent.bat');
-          const proj = projectsCache.find(p => p.id === updatedTask.projectId);
-          const execOpts = proj?.localPath ? { cwd: proj.localPath } : undefined;
-          
-          writeAgentLog('TRIGGER', `Spawning agent=${updatedTask.agent} for task=${updatedTask.id} ("${updatedTask.title}") via /move endpoint${execOpts ? ' at ' + execOpts.cwd : ''}`);
-          execFile('cmd.exe', ['/c', triggerBat, updatedTask.agent, updatedTask.id], execOpts, (err) => {
-            if (err) writeAgentLog('ERROR', `trigger-agent.bat failed for task=${updatedTask.id}: ${err.message}`);
-            else writeAgentLog('INFO', `trigger-agent.bat exited OK for task=${updatedTask.id}`);
-          });
+        const isAgentBusy = tasksCache.some(t => 
+          t.projectId === updatedTask.projectId && 
+          (t.status === 'in-progress' || t.status === 'todo') && 
+          t.activeAgent && 
+          t.id !== updatedTask.id
+        );
+
+        if (!isAgentBusy) {
+          updatedTask.activeAgent = updatedTask.agent;
+          if (/^[a-zA-Z0-9-]+$/.test(updatedTask.agent) && /^[a-zA-Z0-9-]+$/.test(updatedTask.id)) {
+            const triggerBat = path.join(process.cwd(), 'trigger-agent.bat');
+            const proj = projectsCache.find(p => p.id === updatedTask.projectId);
+            const execOpts = proj?.localPath ? { cwd: proj.localPath } : undefined;
+            const safeLocalPath = `"${proj?.localPath || 'none'}"`;
+            const safeModel = `"${updatedTask.model || 'none'}"`;
+            const safeEffort = `"${updatedTask.effort || 'none'}"`;
+            
+            writeAgentLog('TRIGGER', `Spawning agent=${updatedTask.agent} for task=${updatedTask.id} ("${updatedTask.title}") via /move endpoint${execOpts ? ' at ' + execOpts.cwd : ''}`);
+            execFile('cmd.exe', ['/c', triggerBat, updatedTask.agent, updatedTask.id, safeLocalPath, safeModel, safeEffort], execOpts, (err) => {
+              if (err) writeAgentLog('ERROR', `trigger-agent.bat failed for task=${updatedTask.id}: ${err.message}`);
+              else writeAgentLog('INFO', `trigger-agent.bat exited OK for task=${updatedTask.id}`);
+            });
+          } else {
+            writeAgentLog('ERROR', `Blocked trigger due to invalid chars: agent=${updatedTask.agent} taskId=${updatedTask.id}`);
+          }
         } else {
-          writeAgentLog('ERROR', `Blocked trigger due to invalid chars: agent=${updatedTask.agent} taskId=${updatedTask.id}`);
+          writeAgentLog('INFO', `Agent already busy for project=${updatedTask.projectId}, skipping trigger for task=${updatedTask.id}`);
         }
       }
     }
@@ -1156,19 +1170,33 @@ async function startServer() {
     // Trigger Agent
     if (updatedTask.status === 'todo' && currentTask.status !== 'todo') {
       if (updatedTask.agent && !updatedTask.activeAgent) {
-        updatedTask.activeAgent = updatedTask.agent;
-        if (/^[a-zA-Z0-9-]+$/.test(updatedTask.agent) && /^[a-zA-Z0-9-]+$/.test(updatedTask.id)) {
-          const triggerBat = path.join(process.cwd(), 'trigger-agent.bat');
-          const proj = projectsCache.find(p => p.id === updatedTask.projectId);
-          const execOpts = proj?.localPath ? { cwd: proj.localPath } : undefined;
+        const isAgentBusy = tasksCache.some(t => 
+          t.projectId === updatedTask.projectId && 
+          (t.status === 'in-progress' || t.status === 'todo') && 
+          t.activeAgent && 
+          t.id !== updatedTask.id
+        );
 
-          writeAgentLog('TRIGGER', `Spawning agent=${updatedTask.agent} for task=${updatedTask.id} ("${updatedTask.title}") via PUT /tasks/:id endpoint${execOpts ? ' at ' + execOpts.cwd : ''}`);
-          execFile('cmd.exe', ['/c', triggerBat, updatedTask.agent, updatedTask.id], execOpts, (err) => {
-            if (err) writeAgentLog('ERROR', `trigger-agent.bat failed for task=${updatedTask.id}: ${err.message}`);
-            else writeAgentLog('INFO', `trigger-agent.bat exited OK for task=${updatedTask.id}`);
-          });
+        if (!isAgentBusy) {
+          updatedTask.activeAgent = updatedTask.agent;
+          if (/^[a-zA-Z0-9-]+$/.test(updatedTask.agent) && /^[a-zA-Z0-9-]+$/.test(updatedTask.id)) {
+            const triggerBat = path.join(process.cwd(), 'trigger-agent.bat');
+            const proj = projectsCache.find(p => p.id === updatedTask.projectId);
+            const execOpts = proj?.localPath ? { cwd: proj.localPath } : undefined;
+            const safeLocalPath = `"${proj?.localPath || 'none'}"`;
+            const safeModel = `"${updatedTask.model || 'none'}"`;
+            const safeEffort = `"${updatedTask.effort || 'none'}"`;
+
+            writeAgentLog('TRIGGER', `Spawning agent=${updatedTask.agent} for task=${updatedTask.id} ("${updatedTask.title}") via PUT /tasks/:id endpoint${execOpts ? ' at ' + execOpts.cwd : ''}`);
+            execFile('cmd.exe', ['/c', triggerBat, updatedTask.agent, updatedTask.id, safeLocalPath, safeModel, safeEffort], execOpts, (err) => {
+              if (err) writeAgentLog('ERROR', `trigger-agent.bat failed for task=${updatedTask.id}: ${err.message}`);
+              else writeAgentLog('INFO', `trigger-agent.bat exited OK for task=${updatedTask.id}`);
+            });
+          } else {
+            writeAgentLog('ERROR', `Blocked trigger due to invalid chars: agent=${updatedTask.agent} taskId=${updatedTask.id}`);
+          }
         } else {
-          writeAgentLog('ERROR', `Blocked trigger due to invalid chars: agent=${updatedTask.agent} taskId=${updatedTask.id}`);
+          writeAgentLog('INFO', `Agent already busy for project=${updatedTask.projectId}, skipping trigger for task=${updatedTask.id}`);
         }
       }
     }

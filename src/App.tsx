@@ -21,7 +21,6 @@ import {
   FileCode
 } from 'lucide-react';
 import { Task, TaskStatus, Column, LogEntry, Project } from './types';
-import { INITIAL_TASKS } from './data/initialTasks';
 import Sidebar from './components/Sidebar';
 import TaskCard from './components/TaskCard';
 import TaskDetailsDrawer from './components/TaskDetailsDrawer';
@@ -42,6 +41,7 @@ const COLUMNS: Column[] = [
 export default function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [persistenceError, setPersistenceError] = useState<string | null>(null);
   const [activeProjectId, setActiveProjectId] = useState<string>(() => {
     return localStorage.getItem('devflow_selected_project') || 'project-default';
   });
@@ -95,6 +95,7 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         setProjects(data);
+        setPersistenceError(null);
         if (data.length > 0) {
           // Check against the current state using functional update to get the latest without dependency
           setActiveProjectId(prev => {
@@ -104,25 +105,18 @@ export default function App() {
         }
       }
     } catch (err) {
-      console.warn('Backend projects API connection unavailable, using fallback:', err);
-      setProjects([
-        {
-          id: 'project-default',
-          name: 'Developer Sandbox Repo',
-          repoUrl: 'https://github.com/google/ai-studio',
-          description: 'Default sandbox developer workspace',
-          createdAt: new Date().toISOString()
-        }
-      ]);
+      console.warn('Backend projects API connection unavailable:', err);
+      setPersistenceError('Project data is unavailable because the backend could not be reached. No local fallback was used.');
     }
   };
 
-  // 1. Load tasks from REST API (GET /api/tasks) + Sync fallback to LocalStorage
+  // Tasks remain API-backed; we do not silently fall back to localStorage for source-of-truth data.
   const fetchTasksFromApi = async () => {
     try {
       const res = await fetch('/api/tasks', { cache: 'no-store' });
       if (res.ok) {
         const data = await res.json();
+        setPersistenceError(null);
         setTasks(prev => {
           if (JSON.stringify(prev) === JSON.stringify(data)) return prev;
           return data;
@@ -131,17 +125,8 @@ export default function App() {
         throw new Error('API unstable');
       }
     } catch (err) {
-      console.warn('Backend API connection unavailable, falling back to client-cache storage:', err);
-      const saved = localStorage.getItem('devflow_workspace');
-      if (saved) {
-        try {
-          setTasks(JSON.parse(saved));
-        } catch (_) {
-          setTasks(INITIAL_TASKS);
-        }
-      } else {
-        setTasks(INITIAL_TASKS);
-      }
+      console.warn('Backend API connection unavailable:', err);
+      setPersistenceError('Task data could not be refreshed from the backend. Existing on-screen data was kept unchanged.');
     }
   };
 
@@ -161,6 +146,7 @@ export default function App() {
       }
     } catch (err) {
       console.error('Failed to create project:', err);
+      setPersistenceError('Project creation failed before the backend confirmed persistence.');
     }
     return false;
   };
@@ -189,6 +175,7 @@ export default function App() {
       }
     } catch (err) {
       console.error('Failed to delete project:', err);
+      setPersistenceError('Project deletion failed before the backend confirmed persistence.');
     }
     return false;
   };
@@ -207,6 +194,7 @@ export default function App() {
       }
     } catch (err) {
       console.error('Failed to update project:', err);
+      setPersistenceError('Project update failed before the backend confirmed persistence.');
     }
     return false;
   };
@@ -225,14 +213,7 @@ export default function App() {
     return () => clearInterval(intervalId);
   }, []);
 
-  // 2. Save progress to localStorage as secondary backup
-  useEffect(() => {
-    if (mounted && tasks.length > 0) {
-      localStorage.setItem('devflow_workspace', JSON.stringify(tasks));
-    }
-  }, [tasks, mounted]);
-
-  // 3. Save selected project to localStorage
+  // Keep UI-only preference in localStorage; task data remains backend-owned.
   useEffect(() => {
     if (mounted && activeProjectId && activeProjectId !== 'project-default') {
       localStorage.setItem('devflow_selected_project', activeProjectId);
@@ -306,13 +287,18 @@ export default function App() {
     try {
       const isEmergency = sourceTask.status === 'in-progress';
       const payload = isEmergency ? { ...updatedTask, emergency: true } : updatedTask;
-      await fetch(`/api/tasks/${taskId}`, {
+      const response = await fetch(`/api/tasks/${taskId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
+      if (!response.ok) {
+        throw new Error(`Lane move failed with status ${response.status}`);
+      }
+      setPersistenceError(null);
     } catch (err) {
       console.error('API lane move sync failed:', err);
+      setPersistenceError('Lane move was shown optimistically, but backend persistence failed. Refresh after backend recovery to confirm final state.');
     }
   };
 
@@ -335,32 +321,14 @@ export default function App() {
         const createdTask = await response.json();
         setTasks(prev => [createdTask, ...prev]);
         setIsCreateModalOpen(false);
+        setPersistenceError(null);
         return;
       }
+      throw new Error(`Task creation failed with status ${response.status}`);
     } catch (err) {
-      console.error('API creation failed, using backup local creation:', err);
+      console.error('API creation failed:', err);
+      setPersistenceError('Task creation failed before the backend confirmed persistence. No local fallback task was created.');
     }
-
-    // Client-side offline fallback
-    const freshNewId = `id-${Date.now()}`;
-    const timestamp = new Date().toISOString();
-    const newTask: Task = {
-      ...taskWithProject,
-      id: freshNewId,
-      createdAt: timestamp,
-      updatedAt: timestamp,
-      logs: [
-        {
-          id: `log-creation-${Date.now()}`,
-          timestamp,
-          message: `Ticket initialized in offline workspace storage. Priority level: ${newTaskProps.priority.toUpperCase()}`,
-          type: 'create'
-        }
-      ]
-    };
-
-    setTasks(prev => [newTask, ...prev]);
-    setIsCreateModalOpen(false);
   };
 
   const handleBatchImport = async (parsedJson: any): Promise<boolean> => {
@@ -396,42 +364,15 @@ export default function App() {
       if (response.ok) {
         await fetchTasksFromApi();
         setIsBatchModalOpen(false);
+        setPersistenceError(null);
         return true;
       }
+      throw new Error(`Batch import failed with status ${response.status}`);
     } catch (err) {
-      console.error('API batch creation failed, attempting offline simulation:', err);
+      console.error('API batch creation failed:', err);
+      setPersistenceError('Batch import failed before the backend confirmed persistence. No offline import fallback was applied.');
     }
-
-    // Offline / client-only fallback simulation
-    const timestamp = new Date().toISOString();
-    const newTasks: Task[] = itemsWithProject.map((item: any, idx: number) => ({
-      id: item.id || `id-${Date.now()}-${idx}-${Math.floor(Math.random() * 100000)}`,
-      projectId: item.projectId,
-      title: item.title,
-      description: item.description || '',
-      status: item.status || 'backlog',
-      branch: item.branch || undefined,
-      priority: item.priority || 'medium',
-      tags: Array.isArray(item.tags) ? item.tags : [],
-      targetFiles: Array.isArray(item.targetFiles) ? item.targetFiles : [],
-      checklist: Array.isArray(item.checklist) ? item.checklist : [],
-      designImage: item.designImage || undefined,
-      specUrl: item.specUrl || undefined,
-      createdAt: timestamp,
-      updatedAt: timestamp,
-      logs: [
-        {
-          id: `log-batch-${Date.now()}-${idx}`,
-          timestamp,
-          message: 'Task imported in Offline Batch mode.',
-          type: 'create'
-        }
-      ]
-    }));
-
-    setTasks(prev => [...newTasks, ...prev]);
-    setIsBatchModalOpen(false);
-    return true;
+    return false;
   };
 
   const handleUpdateTask = async (updatedTask: Task) => {
@@ -445,7 +386,7 @@ export default function App() {
 
     // Sync update to API
     try {
-      await fetch(`/api/tasks/${updatedTask.id}`, {
+      const response = await fetch(`/api/tasks/${updatedTask.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -453,8 +394,13 @@ export default function App() {
           repo: taskProj ? taskProj.repoUrl : undefined
         })
       });
+      if (!response.ok) {
+        throw new Error(`Task update failed with status ${response.status}`);
+      }
+      setPersistenceError(null);
     } catch (err) {
       console.error('API modification update failed:', err);
+      setPersistenceError('Task update failed before the backend confirmed persistence.');
     }
   };
 
@@ -467,11 +413,16 @@ export default function App() {
 
     // Sync deletion to API
     try {
-      await fetch(`/api/tasks/${id}`, {
+      const response = await fetch(`/api/tasks/${id}`, {
         method: 'DELETE'
       });
+      if (!response.ok) {
+        throw new Error(`Task deletion failed with status ${response.status}`);
+      }
+      setPersistenceError(null);
     } catch (err) {
       console.error('API deletion sync failed:', err);
+      setPersistenceError('Task deletion failed before the backend confirmed persistence.');
     }
   };
 
@@ -629,6 +580,12 @@ export default function App() {
               </button>
             </div>
           </header>
+
+          {persistenceError && (
+            <div className="mx-5 mt-4 rounded-2xl border border-[#f0c48f] bg-[#fff7eb] px-4 py-3 text-[11px] font-mono font-bold text-[#9a5b13]">
+              Persistence warning: {persistenceError}
+            </div>
+          )}
 
           {/* Kanban Board Container scroll area */}
           <div className="flex-1 overflow-x-auto p-6 bg-[#faf7f0]">

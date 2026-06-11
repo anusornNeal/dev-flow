@@ -350,11 +350,18 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
                   />
                 ) : (
                   <div className="flex-1 overflow-y-auto w-full p-6 border rounded-xl bg-[#fdfbf6] border-[#ebdcb9] text-[#534135]/90 cursor-default h-full">
-                    <div className="prose prose-sm prose-orange max-w-none prose-headings:font-extrabold prose-a:text-[#d89745]">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                        {editContent}
-                      </ReactMarkdown>
-                    </div>
+                    {editContent.trim() === '' ? (
+                      <div className="h-full flex flex-col items-center justify-center text-center opacity-50">
+                        <FileText size={48} className="text-[#8c7463] mb-4" />
+                        <p className="text-sm font-mono text-[#8c7463]">This skill has no content yet.</p>
+                      </div>
+                    ) : (
+                      <div className="prose prose-sm prose-orange max-w-none prose-headings:font-extrabold prose-a:text-[#d89745]">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          {editContent}
+                        </ReactMarkdown>
+                      </div>
+                    )}
                   </div>
                 )}
                 

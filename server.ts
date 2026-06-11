@@ -478,6 +478,9 @@ async function startServer() {
   
   function loadSkillsRegistry() {
   SKILLS_REGISTRY = db.prepare('SELECT * FROM skills').all();
+  SKILLS_REGISTRY.forEach(s => {
+    s.filePath = path.join(process.cwd(), 'skills', s.id + '.md');
+  });
 }
 
 function saveSkillsRegistry() {

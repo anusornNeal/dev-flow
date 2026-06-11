@@ -1,5 +1,6 @@
 {
-  "name": "react-example",
+  "name": "dev-flow",
+  "description": "Local task board and agent orchestration app with SQLite-backed persistence.",
   "private": true,
   "version": "0.0.0",
   "type": "module",

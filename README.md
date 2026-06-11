@@ -1,32 +1,55 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# DevFlow
 
-# Run and deploy your AI Studio app
+DevFlow is a local task board and agent orchestration app for managing projects, cards, and AI-assisted execution from a Windows-first desktop workflow.
 
-This contains everything you need to run your app locally.
+## Current Architecture
 
-View your app in AI Studio: https://ai.studio/apps/fa2c1394-8daa-4368-b46b-523d22421e14
+- Runtime persistence uses SQLite at `data/devflow.db`.
+- Legacy JSON files are only migration inputs and backups, not the runtime source of truth.
+- On first SQLite startup, DevFlow can migrate old JSON data and keep `.bak` backups.
+- The app includes an MCP server layer for task/project operations used by agents and local tooling.
 
 ## Run Locally
 
-**Prerequisites:**  Node.js
+Prerequisites:
 
+- Node.js
+- npm
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+Setup:
 
-## Persistence & Concurrency
+1. Install dependencies with `npm install`.
+2. Create a local env file if needed from [`.env.example`](C:\Users\tatar\Projects\dev-flow\.env.example).
+3. Start the app with `npm run dev`.
 
-The DevFlow backend stores tasks and projects in `tasks.json` and `projects.json`. 
+Standard commands:
 
-**Concurrent Updates & Safe Reloading:**
-The backend reads the latest disk state synchronously immediately before any mutation to `tasks.json`. This "safe reload" ensures that if an agent manually modifies `tasks.json` on disk, the backend will merge those changes and will not overwrite them with a stale in-memory cache. 
+- `npm run dev` starts the DevFlow server in development mode.
+- `npm run build` builds the frontend bundle and the Node server output into `dist/`.
+- `npm run start` runs the built server from `dist/server.cjs`.
+- `npm run lint` runs the TypeScript no-emit verification used in this repo.
+- `npm run mcp` starts the DevFlow MCP server entrypoint.
 
-However, to guarantee atomic updates and prevent race conditions when multiple agents are active, it is highly recommended to mutate tasks using the REST API or the provided MCP tools rather than modifying `tasks.json` directly.
+## Windows Start Flow
 
-## Local Storage
-DevFlow uses a local SQLite database (data/devflow.db) to persist your tasks, projects, and settings. On the very first run, it will automatically migrate any existing .json persistence files into the database and back them up as .bak files. No manual database setup or external DB server is required.
+This repo keeps its Windows-first startup flow:
+
+- `start-all.bat`
+- `run-project.bat`
+- `run-server.vbs`
+- `Start DevFlow.lnk`
+
+Use these when you want the existing one-click local startup behavior instead of manual npm commands.
+
+## Persistence Notes
+
+- SQLite is the active source of truth for tasks, projects, skills, and settings.
+- Do not treat `tasks.json` or `projects.json` as active runtime storage.
+- Existing `.bak` files are backups created during migration/recovery flows.
+- No external database server is required.
+
+## Skills
+
+- Project skill markdown lives under [`skills/`](C:\Users\tatar\Projects\dev-flow\skills).
+- Runtime skill data should be read through the app/API and stored in SQLite, not assumed to come directly from markdown files after import.
+- Skill markdown content should be preserved exactly when imported or displayed.

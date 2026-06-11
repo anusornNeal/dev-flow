@@ -218,7 +218,29 @@ paths:
                   enum: [backlog, todo, in-progress, ready-for-review, done]
       responses:
         '200':
-          description: Task moved
+          description: Task status updated
+  /api/tasks/{id}/checklist/toggle:
+    post:
+      summary: Toggle a checklist item status
+      operationId: toggleTaskChecklist
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                checklistId:
+                  type: string
+      responses:
+        '200':
+          description: Checklist toggled
   /api/tasks/{id}/assign:
     post:
       summary: Assign agent, model, and effort to a task

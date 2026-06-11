@@ -98,6 +98,18 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
           required: ["skillId", "content"],
         },
+      },
+      {
+        name: "toggle_task_checklist",
+        description: "Toggle the completion status of a specific task checklist item (mini-task)",
+        inputSchema: {
+          type: "object",
+          properties: {
+            taskId: { type: "string", description: "The ID of the task" },
+            checklistId: { type: "string", description: "The ID or text of the checklist item to toggle" }
+          },
+          required: ["taskId", "checklistId"],
+        },
       }
     ],
   };
@@ -236,6 +248,33 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       };
     } catch (err: any) {
       return { isError: true, content: [{ type: "text", text: err.message }] };
+    }
+  }
+
+  if (name === "toggle_task_checklist") {
+    const { taskId, checklistId } = args as any;
+    try {
+      const response = await fetch(`${API_BASE_URL}/tasks/${taskId}/checklist/toggle`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'X-Agent-Request': 'true'
+        },
+        body: JSON.stringify({ checklistId })
+      });
+      if (!response.ok) {
+         const errorData = await response.json().catch(() => ({}));
+         throw new Error(errorData.error || `HTTP ${response.status}`);
+      }
+      const data = await response.json();
+      return {
+        content: [{ type: "text", text: JSON.stringify(data.task || data, null, 2) }],
+      };
+    } catch (err: any) {
+      return {
+        isError: true,
+        content: [{ type: "text", text: err.message }],
+      };
     }
   }
 

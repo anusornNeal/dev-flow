@@ -272,6 +272,18 @@ If Jira contains important images:
 
 If the image URL needs Jira authentication, it may not work for the agent. Prefer a stable accessible URL or summarize the image into requirements.
 
+## Agent Work Completion & Verification
+
+After finishing the implementation for a Dev Flow card, agents must use the task's checklist (mini-tasks) as a strict correctness verification gate before marking the task `ready-for-review`.
+
+Rules for mini-tasks/checklist:
+1. Review the checklist for the task.
+2. Verify that each checklist item has actually been implemented and functions correctly.
+3. Mark verified items as completed using the `toggle_task_checklist` MCP tool.
+4. If an item cannot be verified or is not completed, **do not** check it off. Instead, leave it unchecked and add a short note/log to the task explaining why.
+5. Do not blindly mark all items as completed without verification.
+6. Only move the card to `ready-for-review` after this checklist verification process is done.
+
 ## Final Response Pattern
 
 After creating cards, respond briefly:

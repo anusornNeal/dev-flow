@@ -4,7 +4,7 @@ export interface AppState {
   tasksCache: any[];
   projectsCache: any[];
   countersCache: Record<string, number>;
-  settingsCache: { autoWorking: boolean };
+  settingsCache: { autoWorking: boolean; ngrokUrl: string; envNotes: string };
   skillsRegistry: any[];
 }
 

@@ -19,7 +19,8 @@ import {
   ChevronUp,
   Trash2,
   Plus,
-  ExternalLink
+  ExternalLink,
+  Settings
 } from 'lucide-react';
 import { Task, TaskPriority, Project } from '../types';
 
@@ -37,6 +38,7 @@ interface SidebarProps {
   setSelectedTag: (tag: string | 'all') => void;
   searchQuery: string;
   setSearchQuery: (query: string) => void;
+  onOpenSettings: () => void;
 }
 
 export default function Sidebar({
@@ -52,7 +54,8 @@ export default function Sidebar({
   selectedTag,
   setSelectedTag,
   searchQuery,
-  setSearchQuery
+  setSearchQuery,
+  onOpenSettings
 }: SidebarProps) {
   const [hearts, setHearts] = useState<{ id: number; x: number; y: number }[]>([]);
   const [cozySpeak, setCozySpeak] = useState('☕ Fuel configured! Time to inspect some specifications.');
@@ -549,7 +552,14 @@ export default function Sidebar({
       {/* Decorative Bottom */}
       <div className="p-4 border-t border-[#e5d4bb] bg-[#ede0c9]/50 flex items-center justify-between text-[10px] text-[#816b5a] font-mono">
         <span>✨ Stay focused, build beautifully.</span>
-        <span className="tracking-widest">☕ ☕</span>
+        <button
+          onClick={onOpenSettings}
+          title="Open Settings"
+          className="flex items-center gap-1.5 text-[#b89b82] hover:text-[#935919] hover:bg-[#ebdcb9]/40 px-2 py-1 rounded-lg transition-colors"
+        >
+          <Settings size={13} />
+          <span className="font-bold">Settings</span>
+        </button>
       </div>
     </aside>
   );

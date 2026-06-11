@@ -28,6 +28,7 @@ import CreateTaskModal from './components/CreateTaskModal';
 import JsonTemplateModal from './components/JsonTemplateModal';
 import BatchImportModal from './components/BatchImportModal';
 import SkillsModal from './components/SkillsModal';
+import SettingsModal from './components/SettingsModal';
 
 // Standardized project lanes themed cleanly
 const COLUMNS: Column[] = [
@@ -51,6 +52,7 @@ export default function App() {
   const [isJsonModalOpen, setIsJsonModalOpen] = useState(false);
   const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
   const [isSkillsModalOpen, setIsSkillsModalOpen] = useState(false);
+  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [mounted, setMounted] = useState(false);
   const [autoWorking, setAutoWorking] = useState(false);
@@ -501,6 +503,7 @@ export default function App() {
           setSelectedTag={setSelectedTag}
           searchQuery={searchQuery}
           setSearchQuery={setSearchQuery}
+          onOpenSettings={() => setIsSettingsModalOpen(true)}
         />
 
         {/* 2. Main KanBan Board viewport area */}
@@ -769,6 +772,15 @@ export default function App() {
       {isSkillsModalOpen && (
         <SkillsModal
           onClose={() => setIsSkillsModalOpen(false)}
+        />
+      )}
+
+      {/* 7. Settings Modal */}
+      {isSettingsModalOpen && (
+        <SettingsModal
+          onClose={() => setIsSettingsModalOpen(false)}
+          autoWorking={autoWorking}
+          onToggleAutoWorking={toggleAutoWorking}
         />
       )}
     </div>

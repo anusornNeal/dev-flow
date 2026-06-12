@@ -52,6 +52,53 @@ $menu.MenuItems.Add($ngrokItem)
 
 $menu.MenuItems.Add("-")
 
+$restartItem = New-Object System.Windows.Forms.MenuItem
+$restartItem.Text = "Restart DevFlow"
+$restartItem.add_Click({
+    $logFile = Join-Path $projectDir "logs\tray.log"
+    if (-not (Test-Path (Join-Path $projectDir "logs"))) { New-Item -ItemType Directory -Path (Join-Path $projectDir "logs") | Out-Null }
+    
+    $timestamp = Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ"
+    Add-Content -Path $logFile -Value "[$timestamp] [INFO] Restarting DevFlow..."
+    
+    try {
+        Start-Process "taskkill" -ArgumentList "/T /F /PID $($script:process.Id)" -WindowStyle Hidden -Wait
+    } catch {}
+    try {
+        Start-Process "taskkill" -ArgumentList "/T /F /PID $($script:ngrokProcess.Id)" -WindowStyle Hidden -Wait
+    } catch {}
+    
+    foreach ($p in (netstat -ano | Select-String ":3000" | ForEach-Object { $_.Line.Split(' ', [StringSplitOptions]::RemoveEmptyEntries)[-1] })) {
+        if ($p -ne "0") {
+            try { Stop-Process -Id $p -Force -ErrorAction SilentlyContinue } catch {}
+        }
+    }
+    try { Stop-Process -Name "ngrok" -Force -ErrorAction SilentlyContinue } catch {}
+    
+    try {
+        $script:process = Start-Process -FilePath "cmd.exe" -ArgumentList "/c npm run dev" -WorkingDirectory $projectDir -WindowStyle Hidden -PassThru
+        $ngrokCommandArgs = "http 3000"
+        $script:ngrokProcess = Start-Process -FilePath "ngrok.exe" -ArgumentList $ngrokCommandArgs -WindowStyle Hidden -PassThru
+        
+        $timestamp = Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ"
+        Add-Content -Path $logFile -Value "[$timestamp] [INFO] Restart succeeded. New PID: $($script:process.Id)"
+        
+        $script:notifyIcon.BalloonTipTitle = "DevFlow Restarted"
+        $script:notifyIcon.BalloonTipText = "DevFlow has been restarted successfully."
+        $script:notifyIcon.ShowBalloonTip(3000)
+    } catch {
+        $timestamp = Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ"
+        Add-Content -Path $logFile -Value "[$timestamp] [ERROR] Restart failed: $_"
+        
+        $script:notifyIcon.BalloonTipTitle = "DevFlow Restart Failed"
+        $script:notifyIcon.BalloonTipText = "Check logs/tray.log for details."
+        $script:notifyIcon.ShowBalloonTip(5000)
+    }
+})
+$menu.MenuItems.Add($restartItem)
+
+$menu.MenuItems.Add("-")
+
 $exitItem = New-Object System.Windows.Forms.MenuItem
 $exitItem.Text = "Stop Server && Exit"
 $exitItem.add_Click({

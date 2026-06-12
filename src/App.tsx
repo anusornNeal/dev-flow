@@ -32,6 +32,7 @@ import BatchImportModal from './components/BatchImportModal';
 import SkillsModal from './components/SkillsModal';
 import SettingsModal from './components/SettingsModal';
 import NgrokStatusPanel from './components/NgrokStatusPanel';
+import AutoWorkToggle from './components/AutoWorkToggle';
 
 // Standardized project lanes themed cleanly
 const COLUMNS: Column[] = [
@@ -528,6 +529,8 @@ export default function App() {
                 onOpenSettings={() => setIsSettingsModalOpen(true)} 
               />
               
+              <AutoWorkToggle />
+
               {/* Backup actions */}
               <div className="flex items-center gap-1.5 bg-[#fdfbf6] border border-[#e5d4bb] rounded-xl p-1 shadow-2xs">
                 <button

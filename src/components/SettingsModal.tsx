@@ -7,7 +7,6 @@ interface SettingsData {
   jiraTokenMasked: boolean;
   jiraBaseUrl: string;
   jiraEmail: string;
-  autoWork: boolean;
 }
 
 interface SettingsModalProps {
@@ -25,7 +24,6 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
   const [showJiraToken, setShowJiraToken] = useState(false);
   const [jiraBaseUrl, setJiraBaseUrl] = useState('');
   const [jiraEmail, setJiraEmail] = useState('');
-  const [autoWork, setAutoWork] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'success' | 'error'>('idle');
@@ -40,7 +38,6 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
         setJiraTokenMasked(data.jiraTokenMasked ?? false);
         setJiraBaseUrl(data.jiraBaseUrl ?? '');
         setJiraEmail(data.jiraEmail ?? '');
-        setAutoWork(data.autoWork ?? false);
         setLoading(false);
       })
       .catch(() => setLoading(false));
@@ -50,7 +47,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
     setSaving(true);
     setSaveStatus('idle');
     try {
-      const payload: Record<string, unknown> = { ngrokUrl, jiraBaseUrl, jiraEmail, autoWork };
+      const payload: Record<string, unknown> = { ngrokUrl, jiraBaseUrl, jiraEmail };
       if (showGithubToken) payload.githubToken = githubToken;
       if (showJiraToken) payload.jiraToken = jiraToken;
 
@@ -114,27 +111,6 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
               />
             </div>
 
-            {/* Auto Work Toggle */}
-            <div className="flex items-center justify-between p-4 border border-[#e5d4bb] rounded-xl bg-[#fdfbf6]">
-              <div className="flex flex-col gap-1">
-                <label className="flex items-center gap-1.5 text-sm font-extrabold text-[#534135]">
-                  Auto Work
-                </label>
-                <p className="text-[11px] text-[#8a725f] font-mono">
-                  Automatically trigger agents when a task is moved to the "Ready To Do" (todo) lane.
-                </p>
-              </div>
-              <button
-                onClick={() => setAutoWork(!autoWork)}
-                className={`flex items-center p-1 rounded-full transition-colors w-12 border ${
-                  autoWork 
-                    ? 'bg-[#d89745] border-[#c07c28] justify-end' 
-                    : 'bg-[#faf7f0] border-[#ddd0ba] justify-start'
-                }`}
-              >
-                <div className="w-5 h-5 rounded-full bg-white shadow-sm" />
-              </button>
-            </div>
 
             {/* Integrations Section */}
             <div className="flex flex-col gap-5 border border-[#e5d4bb] rounded-xl p-4 bg-[#fdfbf6]">

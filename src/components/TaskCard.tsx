@@ -4,7 +4,7 @@
  */
 
 import React, { useState } from 'react';
-import { GitBranch, Copy, Check, Trash2, FileCode, CheckSquare, Image as ImageIcon, Link as LinkIcon, Lock } from 'lucide-react';
+import { GitBranch, Copy, Check, Trash2, FileCode, CheckSquare, Image as ImageIcon, Link as LinkIcon, Lock, AlertTriangle, Ban, CircleCheck } from 'lucide-react';
 import { Task } from '../types';
 import { AGENTS_CONFIG, getModelConfig, defaultModelForAgent, defaultEffortForModel } from '../lib/agentsConfig';
 
@@ -50,6 +50,10 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
   const totalSteps = task.checklist?.length || 0;
   const completedSteps = task.checklist?.filter(item => item.completed).length || 0;
   const filesCount = task.targetFiles?.length || 0;
+  const latestRun = task.latestAgentRun;
+  const settledRunBadge = latestRun && !task.activeAgent && ['failed', 'cancelled', 'succeeded'].includes(latestRun.status)
+    ? latestRun
+    : null;
 
 
 
@@ -115,6 +119,28 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
               <span className="flex items-center gap-1 text-[8.5px] font-mono font-extrabold px-1.5 py-0.5 rounded-lg bg-orange-50 text-orange-700 border border-orange-200 select-none" title={`Locked by ${task.activeAgent}`}>
                 <Lock size={8} className="shrink-0" />
                 {task.activeAgent}
+              </span>
+            )}
+
+            {settledRunBadge && (
+              <span
+                className={`flex items-center gap-1 text-[8.5px] font-mono font-extrabold px-1.5 py-0.5 rounded-lg border select-none ${
+                  settledRunBadge.status === 'failed'
+                    ? 'bg-red-50 text-red-700 border-red-200'
+                    : settledRunBadge.status === 'cancelled'
+                      ? 'bg-slate-50 text-slate-600 border-slate-200'
+                      : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                }`}
+                title={settledRunBadge.errorMessage || `Agent run ${settledRunBadge.status}`}
+              >
+                {settledRunBadge.status === 'failed' ? (
+                  <AlertTriangle size={8} className="shrink-0" />
+                ) : settledRunBadge.status === 'cancelled' ? (
+                  <Ban size={8} className="shrink-0" />
+                ) : (
+                  <CircleCheck size={8} className="shrink-0" />
+                )}
+                {settledRunBadge.status}
               </span>
             )}
             

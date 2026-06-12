@@ -39,6 +39,15 @@ export interface Task {
   specUrl?: string; // Specification link or text
   agent?: string; // Codex | Antigravity | Claude
   activeAgent?: string; // Currently working agent
+  latestAgentRun?: {
+    id: string;
+    status: 'queued' | 'starting' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+    agent: string;
+    errorMessage?: string | null;
+    createdAt: string;
+    startedAt?: string | null;
+    endedAt?: string | null;
+  };
   model?: string; // Model name
   parentId?: string; // ID of the parent task if this is a subtask
   effort?: string; // Effort level (low | medium | high | xhigh)

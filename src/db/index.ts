@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
 
-const DB_PATH = path.join(process.cwd(), 'data', 'devflow.db');
+const DB_PATH = process.env.DEVFLOW_DB_PATH || path.join(process.cwd(), 'data', 'devflow.db');
 const SCHEMA_PATH = path.join(process.cwd(), 'src', 'db', 'schema.sql');
 
 // Ensure data directory exists

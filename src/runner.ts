@@ -100,7 +100,10 @@ export function buildAgentCliArgs(input: BuildAgentCliArgsInput) {
   return spawnArgs;
 }
 
-export function createCodexLaunchScript(input: {
+export function createAgentLaunchScript(input: {
+  runId: string;
+  taskId: string;
+  apiBaseUrl: string;
   runDir: string;
   executable: string;
   args: string[];
@@ -110,9 +113,12 @@ export function createCodexLaunchScript(input: {
   fs.mkdirSync(input.runDir, { recursive: true });
   const launchScriptPath = path.join(input.runDir, 'launch.bat');
   const logLine = input.logPath
-    ? `echo [%DATE% %TIME%] Codex process exited with code %EXIT_CODE% >> ${quoteBatArg(input.logPath)}`
-    : 'echo Codex process exited with code %EXIT_CODE%';
+    ? `echo [%DATE% %TIME%] Agent process exited with code %EXIT_CODE% >> ${quoteBatArg(input.logPath)}`
+    : 'echo Agent process exited with code %EXIT_CODE%';
   const commandLine = [quoteBatArg(input.executable), ...input.args.map(quoteBatArg)].join(' ');
+  
+  // Create a PowerShell command for the completion webhook to avoid curl quoting issues
+  const pshWebhook = `powershell -NoProfile -Command "$success = if ($env:EXIT_CODE -eq '0') { 'true' } else { 'false' }; Invoke-RestMethod -Uri '${input.apiBaseUrl}/api/tasks/${input.taskId}/agent-runs/${input.runId}/complete' -Method Post -Headers @{'Content-Type'='application/json'} -Body \\"{\\`\\"success\\`\\":$success}\\""`;
 
   fs.writeFileSync(launchScriptPath, [
     '@echo off',
@@ -121,8 +127,9 @@ export function createCodexLaunchScript(input: {
     commandLine,
     'set EXIT_CODE=%ERRORLEVEL%',
     logLine,
+    pshWebhook,
     'echo.',
-    'echo Codex process exited with code %EXIT_CODE%. This window remains open for debugging.',
+    'echo Agent process exited with code %EXIT_CODE%. This window remains open for debugging.',
     'exit /b %EXIT_CODE%',
     '',
   ].join('\r\n'), 'utf8');
@@ -187,9 +194,16 @@ function main() {
 
   const spawnArgs = buildAgentCliArgs({ config, localPath, model, effort, promptReference, executionMode });
   const runDir = logPath ? path.dirname(logPath) : runId ? path.join(process.cwd(), '.devflow', 'runs', runId) : process.cwd();
-  const launchScriptPath = config.name.toLowerCase() === 'codex'
-    ? createCodexLaunchScript({ runDir, executable, args: spawnArgs, cwd: localPath || process.cwd(), logPath })
-    : '';
+  const launchScriptPath = createAgentLaunchScript({ 
+    runId, 
+    taskId, 
+    apiBaseUrl, 
+    runDir, 
+    executable, 
+    args: spawnArgs, 
+    cwd: localPath || process.cwd(), 
+    logPath 
+  });
 
   const spawnEnv = { ...process.env };
   if (process.env.GITHUB_PERSONAL_ACCESS_TOKEN) {
@@ -225,15 +239,10 @@ function main() {
 
   if (launchScriptPath) {
     finalCmd = 'cmd.exe';
-    finalArgs = ['/c', 'start', '/wait', `"${config.name} Agent"`, '/d', cwd, 'cmd.exe', '/k', launchScriptPath];
-  } else if (config.launchStyle === 'start') {
-    finalCmd = 'cmd.exe';
-    finalArgs = ['/c', 'start', '/wait', `"${config.name} Agent"`, '/d', cwd, executable, ...spawnArgs];
-  } else if (config.launchStyle === 'cmd_k') {
-    finalCmd = 'cmd.exe';
-    finalArgs = ['/c', 'start', '/wait', `"${config.name} Agent"`, '/d', cwd, 'cmd.exe', '/k', executable, ...spawnArgs];
+    // We remove /wait so the runner script exits immediately and DevFlow marks it as 'running'
+    finalArgs = ['/c', 'start', `"${config.name} Agent"`, '/d', cwd, 'cmd.exe', '/k', launchScriptPath];
   } else {
-    console.error(`[runner] Unknown launchStyle: ${config.launchStyle}`);
+    console.error(`[runner] Failed to generate launch script.`);
     process.exit(1);
   }
 
@@ -247,28 +256,19 @@ function main() {
   appendRunnerLog(logPath, `launchScriptPath=${launchScriptPath || 'none'}`);
 
   const child = spawn(finalCmd, finalArgs, {
-    detached: false,
+    detached: true,
     stdio: 'ignore',
     windowsVerbatimArguments: true,
     env: spawnEnv
   });
+  
+  child.unref();
 
-  console.log(`[runner] Trigger dispatched successfully. Waiting for agent...`);
-
-  child.on('exit', async (code) => {
-    appendRunnerLog(logPath, `Runner exited with code ${code}`);
-    try {
-      const success = code === 0;
-      await fetch(`${apiBaseUrl}/api/tasks/${taskId}/agent-runs/${runId}/complete`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ success })
-      });
-      appendRunnerLog(logPath, `Reported completion to DevFlow.`);
-    } catch (e: any) {
-      appendRunnerLog(logPath, `Failed to report completion: ${e.message}`);
-    }
-  });
+  console.log(`[runner] Trigger dispatched successfully. Agent launched in new window.`);
+  
+  // We don't wait for child 'exit' here because it exits immediately.
+  // The agent script itself handles completion reporting.
+  process.exit(0);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

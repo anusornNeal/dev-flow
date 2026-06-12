@@ -102,6 +102,17 @@ function saveTasks() {
   persistTasks(state);
 }
 
+function sanitizeStartupTasks() {
+  let changed = false;
+  for (const task of state.tasksCache) {
+    if (task.status === 'in-progress' && !task.activeAgent) {
+      task.status = 'todo';
+      changed = true;
+    }
+  }
+  if (changed) saveTasks();
+}
+
 function loadSkills() {
   loadSkillsRegistry(state);
 }
@@ -118,6 +129,7 @@ async function startServer() {
   loadProjects();
   loadTasks();
   loadSkills();
+  sanitizeStartupTasks();
 
   const app = express();
   const PORT = 3000;

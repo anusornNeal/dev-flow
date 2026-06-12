@@ -79,4 +79,30 @@ const resultDup = triggerTaskAgent(state.tasksCache[1], deps, 'test');
 assert.equal(resultDup?.triggered, false);
 assert.ok(resultDup?.reason.includes('Task already has active run'));
 
+console.log('[verify] Testing queue continuation skips invalid tasks...');
+state.tasksCache.push({ id: 'task-3', displayId: 'DVF-003', projectId: 'project-1', status: 'todo', agent: 'Bad@Agent', model: 'GPT-5.5', effort: 'high', title: 't3', description: 'd3', logs: [] });
+state.tasksCache.push({ id: 'task-4', displayId: 'DVF-004', projectId: 'project-1', status: 'todo', agent: 'Codex', model: 'GPT-5.5', effort: 'high', title: 't4', description: 'd4', logs: [] });
+
+// Simulate task-2 completing, which triggers autoWork
+state.settingsCache.autoWork = true;
+state.tasksCache[1].status = 'ready-for-review';
+updateAgentRunStatus(run2.id, 'succeeded');
+
+// trigger completion via the actual callback if we had one, or just manually simulate what tasks.ts does:
+const eligibleTasks = state.tasksCache.filter(t => t.projectId === 'project-1' && t.status === 'todo' && t.agent);
+eligibleTasks.sort((a, b) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime());
+let triggered = false;
+for (const nextTask of eligibleTasks) {
+  const result = triggerTaskAgent(nextTask, deps, 'queue continuation');
+  console.log(`Trigger result for ${nextTask.id}:`, result);
+  if (result.triggered) {
+    triggered = true;
+    break;
+  }
+}
+assert.ok(triggered);
+// task-3 should fail validation, so task-4 should be in-progress
+assert.equal(state.tasksCache[2].status, 'todo'); // Bad@Agent failed, but wait! triggerTaskAgent returns false before changing status
+assert.equal(state.tasksCache[3].status, 'in-progress');
+
 console.log('[verify-orchestration] all assertions passed');

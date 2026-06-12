@@ -130,6 +130,7 @@ export function triggerTaskAgent(task: any, deps: ApiRouteDeps, routeLabel: stri
   }
 
   if (!prompt) {
+    task.status = 'todo';
     const failedRun = updateAgentRunStatus(run.id, 'failed', { errorMessage: 'Task prompt could not be built.' });
     applyRunSummaryToTask(task, failedRun);
     return { triggered: false, reason: 'Task prompt could not be built.', run: failedRun };
@@ -179,6 +180,7 @@ export function triggerTaskAgent(task: any, deps: ApiRouteDeps, routeLabel: stri
     executionMode,
   ], execOpts, (error) => {
     if (error) {
+      task.status = 'todo';
       const failedRun = updateAgentRunStatus(run.id, 'failed', { errorMessage: error.message });
       appendAgentRunLog(files.logPath, `trigger-agent.bat failed: ${error.message}`);
       deps.writeAgentLog('ERROR', `trigger-agent.bat failed for run=${run.id} task=${task.id}: ${error.message}`);
@@ -311,10 +313,12 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     if (deps.state.settingsCache.autoWork) {
       const eligibleTasks = deps.state.tasksCache.filter(t => t.projectId === task.projectId && t.status === 'todo' && t.agent);
       eligibleTasks.sort((a, b) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime());
-      if (eligibleTasks.length > 0) {
-         triggerTaskAgent(eligibleTasks[0], deps, 'queue continuation');
-         saveTasks(deps.state);
+      
+      for (const nextTask of eligibleTasks) {
+        const result = triggerTaskAgent(nextTask, deps, 'queue continuation');
+        if (result.triggered) break;
       }
+      saveTasks(deps.state);
     }
 
     return res.json({ success: true, task });
@@ -832,7 +836,8 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
 
   app.delete('/api/tasks/:id', (req, res) => {
     loadTasks(deps.state);
-    const taskIndex = deps.state.tasksCache.findIndex((task) => task.id === req.params.id);
+    const taskIdToDelete = req.params.id;
+    const taskIndex = deps.state.tasksCache.findIndex((task) => task.id === taskIdToDelete);
     if (taskIndex === -1) return res.status(404).json({ error: 'Task not found' });
 
     const currentTask = deps.state.tasksCache[taskIndex];
@@ -840,8 +845,24 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
       return res.status(403).json({ error: 'Task is locked by an agent. Use emergency flag to override.' });
     }
 
-    const removed = deps.state.tasksCache.splice(taskIndex, 1);
+    // Collect all task IDs to delete (parent + all recursive children)
+    const idsToDelete = new Set<string>([taskIdToDelete]);
+    let added = true;
+    while (added) {
+      added = false;
+      for (const task of deps.state.tasksCache) {
+        if (task.parentId && idsToDelete.has(task.parentId) && !idsToDelete.has(task.id)) {
+          idsToDelete.add(task.id);
+          added = true;
+        }
+      }
+    }
+
+    // Filter them out
+    const removedTasks = deps.state.tasksCache.filter((task) => idsToDelete.has(task.id));
+    deps.state.tasksCache = deps.state.tasksCache.filter((task) => !idsToDelete.has(task.id));
+
     saveTasks(deps.state);
-    return res.json({ success: true, removed: removed[0] });
+    return res.json({ success: true, removed: removedTasks[0], removedCount: removedTasks.length });
   });
 }

@@ -38,7 +38,8 @@ function renderValue(val: any, isChecklistOrSubtasks = false): string {
   if (Array.isArray(val)) {
     if (val.length === 0) return '(none)';
     if (isChecklistOrSubtasks) {
-      return val.map(item => {
+      return val.map((item: any) => {
+        if (typeof item === 'string') return `- ${item}`;
         if (item.text) {
            return `- [${item.completed ? 'x' : ' '}] ${item.text}`;
         }
@@ -82,7 +83,7 @@ export function renderPromptTemplate(pipelineId: string, context: PromptRenderCo
       sections.push(interpolate(content, context));
       usedSkills.push(skillId);
     } else if (!rawSkillId.includes('agent-specific')) {
-      // It's ok if an agent-specific skill is missing, but otherwise warn or ignore
+      throw new Error(`Required prompt skill missing: ${skillId}`);
     }
   }
 

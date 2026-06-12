@@ -23,7 +23,7 @@ import { registerApiRoutes } from './src/server/routes/registerApiRoutes';
 import { getAgentTaskContext, validateAgentParams } from './src/server/services/taskService';
 import type { AppState } from './src/server/types';
 
-const AGENT_LOG_FILE = path.join(process.cwd(), 'agent-trigger.log');
+const AGENT_LOG_FILE = path.join(process.cwd(), 'logs', 'agent-trigger.log');
 
 // Write a timestamped entry to the agent trigger log file
 function writeAgentLog(level: 'INFO' | 'ERROR' | 'TRIGGER', message: string) {

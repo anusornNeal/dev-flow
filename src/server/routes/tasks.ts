@@ -43,7 +43,7 @@ function maybeTriggerTaskAgent(task: any, previousStatus: string | undefined, de
     return;
   }
 
-  const triggerBat = path.join(process.cwd(), 'trigger-agent.bat');
+  const triggerBat = path.join(process.cwd(), 'scripts', 'trigger-agent.bat');
   const project = deps.state.projectsCache.find((entry) => entry.id === task.projectId);
   const execOpts = project?.localPath ? { cwd: project.localPath } : undefined;
   const safeLocalPath = `"${project?.localPath || 'none'}"`;

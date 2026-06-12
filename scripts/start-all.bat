@@ -3,7 +3,7 @@ title Dev Flow Server + ngrok
 echo ==========================================
 echo Starting Dev Flow Project and ngrok...
 echo ==========================================
-cd /d "%~dp0"
+cd /d "%~dp0.."
 
 echo [1] Starting Dev Flow API (npm run dev)...
 start "Dev Flow API" cmd /k "npm run dev"

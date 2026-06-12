@@ -136,7 +136,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
               ) : (
                 <div className="px-4 py-3 rounded-xl border border-[#e5d4bb] bg-[#faf7f0] text-[11px] text-[#b89b82] font-mono">
                   {githubTokenMasked
-                    ? '••••••••••••••••••••••••••••••••••••••'
+                    ? 'Token securely stored.'
                     : 'No GitHub token stored.'
                   }
                 </div>
@@ -174,7 +174,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
               ) : (
                 <div className="px-4 py-3 rounded-xl border border-[#e5d4bb] bg-[#faf7f0] text-[11px] text-[#b89b82] font-mono">
                   {jiraTokenMasked
-                    ? '••••••••••••••••••••••••••••••••••••••'
+                    ? 'Token securely stored.'
                     : 'No Jira token stored.'
                   }
                 </div>

@@ -577,7 +577,7 @@ async function startServer() {
     mcpProxyServers['github'] = {
       command: "npx",
       args: ["-y", "@modelcontextprotocol/server-github"],
-      env: { GITHUB_PERSONAL_ACCESS_TOKEN: process.env.GITHUB_PERSONAL_ACCESS_TOKEN || '' }
+      env: { GITHUB_PERSONAL_ACCESS_TOKEN: state.settingsCache.githubToken || process.env.GITHUB_PERSONAL_ACCESS_TOKEN || '' }
     };
   }
 

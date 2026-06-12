@@ -8,8 +8,8 @@ export function loadSettings(state: AppState) {
   const map = new Map(rows.map(r => [r.key, r.value]));
 
   const ngrokUrl = map.get('ngrokUrl') ?? '';
-  const githubToken = map.get('githubToken') ?? '';
-  const jiraToken = map.get('jiraToken') ?? '';
+  const githubToken = map.get('githubToken') || process.env.GITHUB_PERSONAL_ACCESS_TOKEN || '';
+  const jiraToken = map.get('jiraToken') || process.env.JIRA_API_TOKEN || process.env.JIRA_PERSONAL_ACCESS_TOKEN || '';
 
   state.settingsCache = { ngrokUrl, githubToken, jiraToken };
 }

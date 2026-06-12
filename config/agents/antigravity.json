@@ -8,8 +8,15 @@
   "flags": {
     "model": "--model",
     "effort": null,
-    "alwaysAllow": "--dangerously-skip-permissions",
     "interactiveArgs": ["-i"]
+  },
+  "executionModes": {
+    "safe": { "args": [] },
+    "full": { "args": ["--dangerously-skip-permissions"] }
+  },
+  "modelMap": {
+    "Gemini 3.5 Flash": "gemini-3.5-flash",
+    "Gemini 3.1 Pro": "gemini-3.1-pro"
   },
   "promptFallback": {
     "effort": "use reasoning effort '{EFFORT}'"

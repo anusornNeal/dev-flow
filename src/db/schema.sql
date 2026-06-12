@@ -38,6 +38,28 @@ CREATE TABLE IF NOT EXISTS tasks (
   designImages TEXT -- JSON string
 );
 
+CREATE TABLE IF NOT EXISTS agent_runs (
+  id TEXT PRIMARY KEY,
+  taskId TEXT NOT NULL,
+  projectId TEXT NOT NULL,
+  agent TEXT NOT NULL,
+  model TEXT,
+  effort TEXT,
+  status TEXT NOT NULL,
+  createdAt TEXT NOT NULL,
+  startedAt TEXT,
+  endedAt TEXT,
+  promptPath TEXT,
+  contextRef TEXT,
+  logPath TEXT,
+  errorMessage TEXT,
+  retryOfRunId TEXT,
+  triggerSource TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_runs_task_status ON agent_runs(taskId, status);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_project_status ON agent_runs(projectId, status);
+
 CREATE TABLE IF NOT EXISTS counters (
   prefix TEXT PRIMARY KEY,
   count INTEGER NOT NULL DEFAULT 0

@@ -1,5 +1,6 @@
 import db from '../../db/index';
 import type { AppState } from '../types';
+import { getActiveRunForTask, getLatestAgentRunForTask } from './agentRunRepository';
 
 function loadCounters(state: AppState) {
   state.countersCache = {};
@@ -63,7 +64,23 @@ export function loadTasks(state: AppState) {
     checklist: item.checklist ? JSON.parse(item.checklist) : undefined,
     logs: item.logs ? JSON.parse(item.logs) : undefined,
     designImages: item.designImages ? JSON.parse(item.designImages) : undefined,
-  }));
+  })).map((task) => {
+    const activeRun = getActiveRunForTask(task.id);
+    const latestRun = getLatestAgentRunForTask(task.id);
+    return {
+      ...task,
+      activeAgent: activeRun?.agent || undefined,
+      latestAgentRun: latestRun ? {
+        id: latestRun.id,
+        status: latestRun.status,
+        agent: latestRun.agent,
+        errorMessage: latestRun.errorMessage,
+        createdAt: latestRun.createdAt,
+        startedAt: latestRun.startedAt,
+        endedAt: latestRun.endedAt,
+      } : undefined,
+    };
+  });
   console.log('Loaded ' + state.tasksCache.length + ' tasks from DB');
 }
 

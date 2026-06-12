@@ -1,7 +1,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { spawn, execSync } from 'child_process';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
+import { buildPromptReference, resolveAgentExecutionMode, type AgentExecutionMode } from './server/services/agentRunService';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -16,10 +17,21 @@ interface AgentConfig {
     alwaysAllow?: string | null;
     interactiveArgs?: string[];
   };
+  executionModes?: Partial<Record<AgentExecutionMode, { args: string[] }>>;
+  modelMap?: Record<string, string>;
   promptFallback?: {
     effort?: string;
   };
   launchStyle: 'start' | 'cmd_k';
+}
+
+interface BuildAgentCliArgsInput {
+  config: AgentConfig;
+  localPath: string;
+  model: string;
+  effort: string;
+  promptReference: string;
+  executionMode: AgentExecutionMode;
 }
 
 function resolveEnvVariables(str: string): string {
@@ -49,6 +61,58 @@ function resolveExecutable(executables: AgentConfig['executables']): string | nu
   return null;
 }
 
+export function mapModelForAgent(config: Pick<AgentConfig, 'modelMap'>, model: string) {
+  return config.modelMap?.[model] || model;
+}
+
+export function buildAgentCliArgs(input: BuildAgentCliArgsInput) {
+  const { config, localPath, effort, promptReference, executionMode } = input;
+  const model = input.model ? mapModelForAgent(config, input.model) : '';
+  const spawnArgs: string[] = [];
+
+  if (localPath && config.flags.workingDir) {
+    spawnArgs.push(config.flags.workingDir, localPath);
+  }
+
+  if (model) {
+    if (config.flags.model) {
+      spawnArgs.push(config.flags.model, model);
+    } else {
+      console.warn(`[runner] WARNING: ${config.name} does not support model flag natively via config.`);
+    }
+  }
+
+  if (effort) {
+    if (config.flags.effort) {
+      spawnArgs.push(config.flags.effort, effort);
+    } else if (config.promptFallback?.effort) {
+      console.warn(`[runner] WARNING: ${config.name} config states no effort flag. Using prompt fallback.`);
+      spawnArgs.push(config.promptFallback.effort.replace('{EFFORT}', effort));
+    }
+  }
+
+  if (config.flags.interactiveArgs) {
+    spawnArgs.push(...config.flags.interactiveArgs);
+  }
+
+  const modeArgs = config.executionModes?.[executionMode]?.args;
+  if (modeArgs) {
+    spawnArgs.push(...modeArgs);
+  } else if (executionMode === 'full' && config.flags.alwaysAllow) {
+    spawnArgs.push(config.flags.alwaysAllow);
+  }
+
+  spawnArgs.push(promptReference);
+  return spawnArgs;
+}
+
+function readPromptReference(taskId: string, promptPath: string, apiBaseUrl: string) {
+  if (promptPath && fs.existsSync(promptPath)) {
+    return buildPromptReference(promptPath);
+  }
+  return `Fetch and follow the DevFlow task prompt from: ${apiBaseUrl}/api/tasks/${taskId}/prompt`;
+}
+
 function main() {
   const args = process.argv.slice(2);
   const agentId = args[0]?.toLowerCase();
@@ -56,6 +120,11 @@ function main() {
   const localPath = args[2] === 'none' ? '' : args[2];
   const model = args[3] === 'none' ? '' : args[3];
   const effort = args[4] === 'none' ? '' : args[4];
+  const runId = args[5] === 'none' ? '' : args[5];
+  const promptPath = args[6] === 'none' ? '' : args[6];
+  const logPath = args[7] === 'none' ? '' : args[7];
+  const apiBaseUrl = (args[8] === 'none' || !args[8] ? process.env.DEVFLOW_API_BASE_URL || 'http://localhost:3000' : args[8]).replace(/\/$/, '');
+  const executionMode = resolveAgentExecutionMode(args[9] || process.env.DEVFLOW_AGENT_EXECUTION_MODE);
 
   if (!agentId || !taskId) {
     console.error('[runner] Missing required arguments: agentId taskId');
@@ -78,59 +147,15 @@ function main() {
   }
   console.log(`[runner] Resolved executable: ${executable}`);
 
-  let prompt = '';
-  try {
-    // Fetch compiled prompt from DevFlow backend
-    prompt = execSync(`curl -s "http://localhost:3000/api/tasks/${taskId}/prompt"`, { encoding: 'utf8' }).trim();
-  } catch (e) {
-    console.error(`[runner] Failed to fetch prompt from server for task ${taskId}`);
+  const promptReference = readPromptReference(taskId, promptPath, apiBaseUrl);
+  if (!promptReference) {
+    console.error(`[runner] Invalid prompt reference for task ${taskId}`);
     process.exit(1);
   }
 
-  if (!prompt || prompt.includes('{"error"')) {
-    console.error(`[runner] Invalid prompt received from server for task ${taskId}:`, prompt);
-    process.exit(1);
-  }
+  const spawnArgs = buildAgentCliArgs({ config, localPath, model, effort, promptReference, executionMode });
 
-  const spawnArgs: string[] = [];
-
-  // Working Directory Flag
-  if (localPath && config.flags.workingDir) {
-    spawnArgs.push(config.flags.workingDir, localPath);
-  }
-
-  // Model Flag
-  if (model) {
-    if (config.flags.model) {
-      spawnArgs.push(config.flags.model, model);
-    } else {
-      console.warn(`[runner] WARNING: ${config.name} does not support model flag natively via config.`);
-    }
-  }
-
-  // Effort Flag
-  if (effort) {
-    if (config.flags.effort) {
-      spawnArgs.push(config.flags.effort, effort);
-    } else if (config.promptFallback?.effort) {
-      console.warn(`[runner] WARNING: ${config.name} config states no effort flag. Using prompt fallback.`);
-      prompt += ' ' + config.promptFallback.effort.replace('{EFFORT}', effort);
-    }
-  }
-
-  // Always Allow / Approval Flag
-  if (config.flags.alwaysAllow) {
-    spawnArgs.push(config.flags.alwaysAllow);
-  }
-
-  // Interactive Args
-  if (config.flags.interactiveArgs) {
-    spawnArgs.push(...config.flags.interactiveArgs);
-  }
-
-  spawnArgs.push(prompt);
-
-  console.log(`[runner] Launching ${config.name} in a new window...`);
+  console.log(`[runner] Launching ${config.name} in a new window for run=${runId || 'none'} mode=${executionMode}...`);
 
   // We need to launch the agent in a new visible console window, starting in the localPath.
   const cwd = localPath || process.cwd();
@@ -165,7 +190,10 @@ function main() {
   });
 
   child.unref();
+  if (logPath) fs.appendFileSync(logPath, `[${new Date().toISOString()}] Runner dispatched ${config.name} for task ${taskId}\n`, 'utf8');
   console.log(`[runner] Trigger dispatched successfully.`);
 }
 
-main();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main();
+}

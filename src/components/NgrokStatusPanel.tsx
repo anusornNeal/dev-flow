@@ -30,9 +30,6 @@ export default function NgrokStatusPanel({ ngrokUrl, onOpenSettings }: NgrokStat
     );
   }
 
-  // To display compactly, we strip the protocol if it's there
-  const displayUrl = ngrokUrl.replace(/^https?:\/\//, '');
-
   return (
     <div className="flex items-center gap-1 bg-[#fdfbf6] border border-[#e5d4bb] rounded-lg p-1 shadow-2xs text-[#816b5a] text-[10px] font-mono">
       <div 
@@ -43,7 +40,7 @@ export default function NgrokStatusPanel({ ngrokUrl, onOpenSettings }: NgrokStat
           <Link size={12} className="text-[#659e51]" />
           <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse border border-[#fdfbf6]"></span>
         </div>
-        <span className="truncate max-w-[120px] sm:max-w-[160px]">{displayUrl}</span>
+        <span className="truncate max-w-[220px]">{ngrokUrl}</span>
       </div>
       
       <div className="w-px h-3 bg-[#e5d4bb]"></div>

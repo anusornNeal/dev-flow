@@ -20,7 +20,7 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
   });
 
   app.post('/api/settings', (req, res) => {
-    const { ngrokUrl, githubToken, jiraToken, jiraBaseUrl, jiraEmail, autoWork, agentExecutionMode } = req.body;
+    const { ngrokUrl, githubToken, jiraToken, jiraBaseUrl, jiraEmail, autoWork, agentExecutionMode, clearGithubToken, clearJiraToken } = req.body;
 
     // Validate types
     if (ngrokUrl !== undefined && typeof ngrokUrl !== 'string') {
@@ -47,17 +47,27 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
     if (agentExecutionMode !== undefined && agentExecutionMode !== '' && agentExecutionMode !== 'safe' && agentExecutionMode !== 'full') {
       return res.status(400).json({ error: 'agentExecutionMode must be safe or full' });
     }
+    if (clearGithubToken !== undefined && typeof clearGithubToken !== 'boolean') {
+      return res.status(400).json({ error: 'clearGithubToken must be a boolean' });
+    }
+    if (clearJiraToken !== undefined && typeof clearJiraToken !== 'boolean') {
+      return res.status(400).json({ error: 'clearJiraToken must be a boolean' });
+    }
 
     if (typeof ngrokUrl === 'string') {
       deps.state.settingsCache.ngrokUrl = ngrokUrl.trim();
     }
 
     if (typeof githubToken === 'string') {
-      deps.state.settingsCache.githubToken = githubToken;
+      if (githubToken !== '' || clearGithubToken === true) {
+        deps.state.settingsCache.githubToken = githubToken;
+      }
     }
 
     if (typeof jiraToken === 'string') {
-      deps.state.settingsCache.jiraToken = jiraToken;
+      if (jiraToken !== '' || clearJiraToken === true) {
+        deps.state.settingsCache.jiraToken = jiraToken;
+      }
     }
 
     if (typeof jiraBaseUrl === 'string') {

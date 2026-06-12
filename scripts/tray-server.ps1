@@ -10,7 +10,7 @@ public class IconExtractor {
 }
 "@
 
-$projectDir = "c:\Users\tatar\Projects\dev-flow"
+$projectDir = Split-Path -Parent $PSScriptRoot
 
 # Avoid multiple instances running at the same time by killing existing ones on port 3000
 foreach ($p in (netstat -ano | Select-String ":3000" | ForEach-Object { $_.Line.Split(' ', [StringSplitOptions]::RemoveEmptyEntries)[-1] })) {

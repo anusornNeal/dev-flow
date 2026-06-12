@@ -556,17 +556,18 @@ async function startServer() {
     github: {
       command: "npx",
       args: ["-y", "@modelcontextprotocol/server-github"],
-      env: { ...process.env, GITHUB_PERSONAL_ACCESS_TOKEN: state.settingsCache.githubToken || process.env.GITHUB_PERSONAL_ACCESS_TOKEN || '' }
+      getEnv: () => ({
+        GITHUB_PERSONAL_ACCESS_TOKEN: state.settingsCache.githubToken || process.env.GITHUB_PERSONAL_ACCESS_TOKEN || ''
+      })
     },
     jira: {
       command: "npx",
       args: ["-y", "mcp-jira-stdio"],
-      env: { 
-        ...process.env,
+      getEnv: () => ({
         JIRA_BASE_URL: state.settingsCache.jiraBaseUrl || process.env.JIRA_BASE_URL || '',
         JIRA_EMAIL: state.settingsCache.jiraEmail || process.env.JIRA_EMAIL || '',
         JIRA_API_TOKEN: state.settingsCache.jiraToken || process.env.JIRA_API_TOKEN || process.env.JIRA_PERSONAL_ACCESS_TOKEN || '' 
-      }
+      })
     }
   };
 
@@ -589,7 +590,7 @@ async function startServer() {
         const clientTransport = new StdioClientTransport({
           command: config.command === 'npx' && process.platform === 'win32' ? 'npx.cmd' : config.command,
           args: config.args,
-          env: { ...process.env, ...(config.env || {}) }
+          env: { ...process.env, ...(config.getEnv ? config.getEnv() : {}) }
         });
 
         sseTransport.onclose = () => {

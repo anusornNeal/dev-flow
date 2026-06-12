@@ -1,3 +1,8 @@
 Set objShell = WScript.CreateObject("WScript.Shell")
-objShell.CurrentDirectory = "c:\Users\tatar\Projects\dev-flow"
-objShell.Run "powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File ""c:\Users\tatar\Projects\dev-flow\scripts\tray-server.ps1""", 0, False
+Set fso = CreateObject("Scripting.FileSystemObject")
+
+scriptDir = fso.GetParentFolderName(WScript.ScriptFullName)
+projectDir = fso.GetParentFolderName(scriptDir)
+
+objShell.CurrentDirectory = projectDir
+objShell.Run "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -STA -File """ & scriptDir & "\tray-server.ps1""", 0, False

@@ -68,6 +68,7 @@ export function buildWindowsStartCommand(input: {
     quoteBatArg(input.cwd),
     'cmd.exe',
     '/k',
+    'call',
     quoteBatArg(input.launchScriptPath),
   ].join(' ');
 }

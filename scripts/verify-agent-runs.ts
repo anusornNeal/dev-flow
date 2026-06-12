@@ -242,8 +242,9 @@ const startCommand = buildWindowsStartCommand({
   cwd: 'C:\\work dir',
   launchScriptPath,
 });
-assert.equal(startCommand, `start "" /d "C:\\work dir" cmd.exe /k "${launchScriptPath}"`);
+assert.equal(startCommand, `start "" /d "C:\\work dir" cmd.exe /k call "${launchScriptPath}"`);
 assert.equal(startCommand.includes('Codex Agent'), false);
+assert.equal(startCommand.includes(`cmd.exe /k "${launchScriptPath}"`), false);
 
 const {
   validateAgentParams,

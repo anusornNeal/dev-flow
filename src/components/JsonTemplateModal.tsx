@@ -181,13 +181,6 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
       example: 'fetch(\'/api/tasks/task-1\', {\n  method: \'DELETE\'\n}).then(res => res.json());'
     },
     {
-      method: 'POST',
-      path: '/api/tasks/reset',
-      description: 'ล้างข้อมูลการสำรองข้อมูลชั่วคราวและทำการคืนค่าเซ็ตตั๋วตั้งต้น (Seed Tasks) ของระบบ',
-      response: '{ "success": true, "count": 3 }',
-      example: 'fetch(\'/api/tasks/reset\', {\n  method: \'POST\'\n}).then(res => res.json());'
-    },
-    {
       method: 'GET',
       path: '/api/schema/task',
       description: 'ดึงโครงสร้าง JSON Schema ของข้อมูลการ์ดงาน (Task) ที่ระบุ Type ของทุกฟิลด์ และ Enum ค่อนข้างครบถ้วน',

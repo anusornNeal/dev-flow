@@ -1,4 +1,4 @@
-export type LogLevel = 'INFO' | 'ERROR' | 'TRIGGER';
+type LogLevel = 'INFO' | 'ERROR' | 'TRIGGER';
 
 export interface AppState {
   tasksCache: any[];
@@ -16,7 +16,6 @@ export interface AppState {
 
 export interface ApiRouteDeps {
   state: AppState;
-  seedTasks: any[];
   writeAgentLog: (level: LogLevel, message: string) => void;
 
 }

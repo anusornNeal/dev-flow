@@ -585,15 +585,4 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     saveTasks(deps.state);
     return res.json({ success: true, removed: removed[0] });
   });
-
-  app.post('/api/tasks/reset', (_req, res) => {
-    loadTasks(deps.state);
-    deps.state.tasksCache = [...deps.seedTasks].map((task) => ({
-      ...task,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    }));
-    saveTasks(deps.state);
-    return res.json({ success: true, count: deps.state.tasksCache.length });
-  });
 }

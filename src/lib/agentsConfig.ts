@@ -1,4 +1,4 @@
-export interface ModelConfig {
+interface ModelConfig {
   model_name: string;
   reasoning_support: boolean;
   available_efforts: string[];

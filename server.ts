@@ -23,8 +23,6 @@ import { registerApiRoutes } from './src/server/routes/registerApiRoutes';
 import { getAgentTaskContext, validateAgentParams } from './src/server/services/taskService';
 import type { AppState } from './src/server/types';
 
-// Hardcoded seed array matching our beautiful mobile tasks
-const SEED_TASKS: any[] = [];
 const AGENT_LOG_FILE = path.join(process.cwd(), 'agent-trigger.log');
 
 // Write a timestamped entry to the agent trigger log file
@@ -126,7 +124,6 @@ async function startServer() {
 
   registerApiRoutes(app, {
     state,
-    seedTasks: SEED_TASKS,
     writeAgentLog,
   });
 

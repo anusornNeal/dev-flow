@@ -1,6 +1,6 @@
 import { TaskStatus } from '../types';
 
-export const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
+const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
   'backlog': ['todo'],
   'todo': ['backlog', 'in-progress'],
   'in-progress': ['todo', 'ready-for-review'],

@@ -3,7 +3,7 @@ import * as path from 'path';
 import { spawn, execSync } from 'child_process';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { buildPromptReference, resolveAgentExecutionMode, type AgentExecutionMode } from './server/services/agentRunService';
-import { buildLaunchMetadataBlock, resolveAgentLaunchPlan, type FileAgentConfig } from './lib/agentsConfig';
+import { buildLaunchMetadataBlock, resolveAgentLaunchPlan, type FileAgentConfig } from './server/services/agentLaunchConfig';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

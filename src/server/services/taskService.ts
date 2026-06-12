@@ -3,7 +3,7 @@ import path from 'path';
 import type { AppState } from '../types';
 import { VALID_AGENTS, VALID_EFFORTS, VALID_MODELS, VALID_PRIORITIES, VALID_STATUSES } from '../constants';
 import { validateEnum, validateString } from '../validation';
-import { buildLaunchMetadataBlock, resolveAgentLaunchPlan } from '../../lib/agentsConfig';
+import { buildLaunchMetadataBlock, resolveAgentLaunchPlan } from './agentLaunchConfig';
 import { resolveAgentExecutionMode } from './agentRunService';
 
 export function validateTaskPayload(item: any, isUpdate = false): string | null {

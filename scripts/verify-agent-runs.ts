@@ -112,7 +112,7 @@ assert.equal(getLatestAgentRunForTask('task-stale')?.status, 'cancelled');
 const {
   buildLaunchMetadataBlock,
   resolveAgentLaunchPlan,
-} = await import('../src/lib/agentsConfig');
+} = await import('../src/server/services/agentLaunchConfig');
 
 const codexPlan = resolveAgentLaunchPlan({
   agent: 'Codex',

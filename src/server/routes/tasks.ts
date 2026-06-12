@@ -8,7 +8,7 @@ import { appendAgentRunLog, createAgentRunFiles, getAgentTriggerScriptPath, getD
 import { buildTaskPrompt, extractDesignImages, getAgentTaskContext, resolveProjectIdFromRepo, validateAgentParams, validateTaskPayload } from '../services/taskService';
 import { validateEnum, validateString } from '../validation';
 import { isValidTransition, getValidationErrorMessage } from '../../lib/statusTransitions';
-import { resolveAgentLaunchPlan } from '../../lib/agentsConfig';
+import { resolveAgentLaunchPlan } from '../services/agentLaunchConfig';
 
 const STALE_AGENT_RUN_MS = 30 * 60 * 1000;
 

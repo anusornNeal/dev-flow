@@ -27,6 +27,9 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
   const [jiraEmail, setJiraEmail] = useState('');
   const [agentExecutionMode, setAgentExecutionMode] = useState('safe');
   
+  const [clearGithubToken, setClearGithubToken] = useState(false);
+  const [clearJiraToken, setClearJiraToken] = useState(false);
+  
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'success' | 'error'>('idle');
@@ -56,8 +59,19 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
     setSaveStatus('idle');
     try {
       const payload: Record<string, unknown> = { ngrokUrl, jiraBaseUrl, jiraEmail, agentExecutionMode };
-      if (showGithubToken) payload.githubToken = githubToken;
-      if (showJiraToken) payload.jiraToken = jiraToken;
+      if (showGithubToken) {
+        payload.githubToken = githubToken;
+      } else if (clearGithubToken) {
+        payload.githubToken = '';
+        payload.clearGithubToken = true;
+      }
+
+      if (showJiraToken) {
+        payload.jiraToken = jiraToken;
+      } else if (clearJiraToken) {
+        payload.jiraToken = '';
+        payload.clearJiraToken = true;
+      }
 
       const res = await fetch('/api/settings', {
         method: 'POST',
@@ -70,6 +84,8 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
         throw new Error(err.error ?? 'Save failed');
       }
       setSaveStatus('success');
+      setClearGithubToken(false);
+      setClearJiraToken(false);
       setTimeout(() => setSaveStatus('idle'), 3000);
     } catch (e: any) {
       setErrorMsg(e.message ?? 'Failed to save');
@@ -171,15 +187,31 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
               <div className="flex flex-col gap-1.5 pt-2 border-t border-[#ebdcb9]">
                 <div className="flex items-center justify-between">
                   <label className="text-xs font-bold text-[#685547]">GitHub Access Token</label>
-                  <button
-                    onClick={() => {
-                      setShowGithubToken(v => !v);
-                      if (!showGithubToken) setGithubToken('');
-                    }}
-                    className="text-[10px] text-[#d89745] font-bold hover:underline"
-                  >
-                    {showGithubToken ? 'Cancel edit' : githubTokenMasked ? 'Replace' : 'Add'}
-                  </button>
+                  <div className="flex gap-2">
+                    {githubTokenMasked && !showGithubToken && (
+                      <button
+                        onClick={() => {
+                          setClearGithubToken(true);
+                          setGithubTokenMasked(false);
+                        }}
+                        className="text-[10px] text-red-500 font-bold hover:underline"
+                      >
+                        Remove
+                      </button>
+                    )}
+                    <button
+                      onClick={() => {
+                        setShowGithubToken(v => !v);
+                        if (!showGithubToken) {
+                          setGithubToken('');
+                          setClearGithubToken(false);
+                        }
+                      }}
+                      className="text-[10px] text-[#d89745] font-bold hover:underline"
+                    >
+                      {showGithubToken ? 'Cancel edit' : githubTokenMasked ? 'Replace' : 'Add'}
+                    </button>
+                  </div>
                 </div>
                 <p className="text-[11px] text-[#8a725f] font-mono -mt-1">
                   Securely stored token for GitHub API integrations. Not shown in logs.
@@ -236,15 +268,31 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                 <div className="flex flex-col gap-1.5 mt-1">
                   <div className="flex items-center justify-between">
                     <label className="text-[10px] font-bold text-[#8a725f] uppercase tracking-wider">Access Token</label>
-                    <button
-                      onClick={() => {
-                        setShowJiraToken(v => !v);
-                        if (!showJiraToken) setJiraToken('');
-                      }}
-                      className="text-[10px] text-[#d89745] font-bold hover:underline"
-                    >
-                      {showJiraToken ? 'Cancel edit' : jiraTokenMasked ? 'Replace' : 'Add'}
-                    </button>
+                    <div className="flex gap-2">
+                      {jiraTokenMasked && !showJiraToken && (
+                        <button
+                          onClick={() => {
+                            setClearJiraToken(true);
+                            setJiraTokenMasked(false);
+                          }}
+                          className="text-[10px] text-red-500 font-bold hover:underline"
+                        >
+                          Remove
+                        </button>
+                      )}
+                      <button
+                        onClick={() => {
+                          setShowJiraToken(v => !v);
+                          if (!showJiraToken) {
+                            setJiraToken('');
+                            setClearJiraToken(false);
+                          }
+                        }}
+                        className="text-[10px] text-[#d89745] font-bold hover:underline"
+                      >
+                        {showJiraToken ? 'Cancel edit' : jiraTokenMasked ? 'Replace' : 'Add'}
+                      </button>
+                    </div>
                   </div>
                   {showJiraToken ? (
                     <input

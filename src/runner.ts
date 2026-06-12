@@ -155,6 +155,30 @@ function main() {
 
   const spawnArgs = buildAgentCliArgs({ config, localPath, model, effort, promptReference, executionMode });
 
+  const spawnEnv = { ...process.env };
+  if (process.env.GITHUB_PERSONAL_ACCESS_TOKEN) {
+    spawnEnv.GITHUB_TOKEN = process.env.GITHUB_PERSONAL_ACCESS_TOKEN;
+  }
+  if (process.env.JIRA_API_TOKEN) {
+    spawnEnv.JIRA_TOKEN = process.env.JIRA_API_TOKEN;
+    spawnEnv.JIRA_PERSONAL_ACCESS_TOKEN = process.env.JIRA_API_TOKEN;
+  }
+
+  const configSources: string[] = [];
+  if (spawnEnv.GITHUB_PERSONAL_ACCESS_TOKEN) {
+    configSources.push(`GitHub Token (length: ${spawnEnv.GITHUB_PERSONAL_ACCESS_TOKEN.length})`);
+  }
+  if (spawnEnv.JIRA_API_TOKEN) {
+    configSources.push(`Jira Token (length: ${spawnEnv.JIRA_API_TOKEN.length})`);
+  }
+  if (spawnEnv.JIRA_BASE_URL) {
+    configSources.push(`Jira Base URL: ${spawnEnv.JIRA_BASE_URL}`);
+  }
+  if (spawnEnv.JIRA_EMAIL) {
+    configSources.push(`Jira Email: ${spawnEnv.JIRA_EMAIL}`);
+  }
+  console.log(`[runner] Active runtime config: ${configSources.join(', ') || 'No custom tokens set'}`);
+
   console.log(`[runner] Launching ${config.name} in a new window for run=${runId || 'none'} mode=${executionMode}...`);
 
   // We need to launch the agent in a new visible console window, starting in the localPath.
@@ -186,7 +210,8 @@ function main() {
   const child = spawn(finalCmd, finalArgs, {
     detached: true,
     stdio: 'ignore',
-    windowsVerbatimArguments: true
+    windowsVerbatimArguments: true,
+    env: spawnEnv
   });
 
   child.unref();

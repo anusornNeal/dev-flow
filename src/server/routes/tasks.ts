@@ -90,11 +90,23 @@ function triggerTaskAgent(task: any, deps: ApiRouteDeps, routeLabel: string, ret
 
   const triggerBat = getAgentTriggerScriptPath();
   const project = deps.state.projectsCache.find((entry) => entry.id === task.projectId);
-  const execOpts = project?.localPath ? { cwd: project.localPath } : undefined;
   const executionMode = resolveAgentExecutionMode(deps.state.settingsCache.agentExecutionMode || process.env.DEVFLOW_AGENT_EXECUTION_MODE);
   const apiBaseUrl = getDevFlowApiBaseUrl();
 
-  deps.writeAgentLog('TRIGGER', `Spawning run=${run.id} agent=${task.agent} for task=${task.id} ("${task.title}") via ${routeLabel}${execOpts ? ' at ' + execOpts.cwd : ''}`);
+  const execOpts = {
+    cwd: project?.localPath || undefined,
+    env: {
+      ...process.env,
+      GITHUB_PERSONAL_ACCESS_TOKEN: deps.state.settingsCache.githubToken || process.env.GITHUB_PERSONAL_ACCESS_TOKEN || '',
+      JIRA_BASE_URL: deps.state.settingsCache.jiraBaseUrl || process.env.JIRA_BASE_URL || '',
+      JIRA_EMAIL: deps.state.settingsCache.jiraEmail || process.env.JIRA_EMAIL || '',
+      JIRA_API_TOKEN: deps.state.settingsCache.jiraToken || process.env.JIRA_API_TOKEN || process.env.JIRA_PERSONAL_ACCESS_TOKEN || '',
+      DEVFLOW_AGENT_EXECUTION_MODE: executionMode,
+      DEVFLOW_API_BASE_URL: apiBaseUrl,
+    }
+  };
+
+  deps.writeAgentLog('TRIGGER', `Spawning run=${run.id} agent=${task.agent} for task=${task.id} ("${task.title}") via ${routeLabel}${project?.localPath ? ' at ' + project.localPath : ''}`);
   execFile('cmd.exe', [
     '/c',
     triggerBat,

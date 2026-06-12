@@ -52,7 +52,7 @@ let countersCache: Record<string, number> = {};
 let skillsRegistry: any[] = [];
 function broadcast(_message: unknown) {}
 
-let settingsCache: { autoWorking: boolean } = { autoWorking: false };
+let settingsCache: { ngrokUrl: string; githubToken: string; jiraToken: string } = { ngrokUrl: '', githubToken: '', jiraToken: '' };
 
 const state: AppState = {
   get tasksCache() {
@@ -121,78 +121,7 @@ function generateDisplayId(projectId: string) {
 
 loadSettings();
 
-/// Auto-Dispatch Logic
-function drainReadyToDoQueue() {
-  if (!settingsCache.autoWorking) return;
-  loadTasks();
-  
-  // Group tasks by project
-  const projectTasks = new Map<string, any[]>();
-  for (const t of tasksCache) {
-    if (!projectTasks.has(t.projectId)) {
-      projectTasks.set(t.projectId, []);
-    }
-    projectTasks.get(t.projectId)!.push(t);
-  }
 
-  let changed = false;
-
-  for (const [projectId, tasks] of projectTasks.entries()) {
-    // Check if an agent is busy for this project
-    const isAgentBusy = tasks.some(t => 
-      (t.status === 'in-progress' || t.status === 'todo') && t.activeAgent
-    );
-    if (isAgentBusy) continue;
-
-    // Find first valid ready-to-do task
-    const readyTask = tasks.find(t => 
-      t.status === 'todo' && t.agent && t.model && t.effort && !t.activeAgent
-    );
-
-    if (readyTask) {
-      const proj = projectsCache.find(p => p.id === projectId);
-      if (!proj || !proj.localPath) {
-        continue;
-      }
-
-      // Claim it
-      readyTask.status = 'in-progress';
-      readyTask.activeAgent = readyTask.agent;
-      readyTask.updatedAt = new Date().toISOString();
-      readyTask.logs = [
-        ...(readyTask.logs || []),
-        {
-          id: `log-auto-${Date.now()}`,
-          timestamp: new Date().toISOString(),
-          message: 'Task auto-dispatched to IN-PROGRESS via Auto-Working loop.',
-          type: 'move'
-        }
-      ];
-      changed = true;
-
-      // Trigger it
-      const triggerBat = path.join(process.cwd(), 'trigger-agent.bat');
-      const execOpts = proj.localPath ? { cwd: proj.localPath } : undefined;
-      const safeLocalPath = `"${proj.localPath}"`;
-      const safeModel = `"${readyTask.model}"`;
-      const safeEffort = `"${readyTask.effort}"`;
-
-      writeAgentLog('TRIGGER', `Auto-dispatch spawning agent=${readyTask.agent} for task=${readyTask.id} ("${readyTask.title}") at ${proj.localPath}`);
-      execFile('cmd.exe', ['/c', triggerBat, readyTask.agent, readyTask.id, safeLocalPath, safeModel, safeEffort], execOpts, (err) => {
-        if (err) writeAgentLog('ERROR', `trigger-agent.bat failed for task=${readyTask.id}: ${err.message}`);
-        else writeAgentLog('INFO', `trigger-agent.bat exited OK for task=${readyTask.id}`);
-      });
-    }
-  }
-
-  if (changed) {
-    saveTasks();
-    broadcast({ type: 'tasks', data: tasksCache });
-  }
-}
-
-// Auto-Dispatch Loop
-setInterval(drainReadyToDoQueue, 5000);
 
 async function startServer() {
   loadProjects();
@@ -206,7 +135,6 @@ async function startServer() {
     state,
     seedTasks: SEED_TASKS,
     writeAgentLog,
-    drainReadyToDoQueue,
   });
 
   const getAgentTaskContextLogic = (targetId: string, includeLogs = false) => {

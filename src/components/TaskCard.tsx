@@ -114,14 +114,6 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
               </span>
             )}
 
-            {/* Lock badge - shown when an agent is actively working */}
-            {task.activeAgent && (
-              <span className="flex items-center gap-1 text-[8.5px] font-mono font-extrabold px-1.5 py-0.5 rounded-lg bg-orange-50 text-orange-700 border border-orange-200 select-none" title={`Locked by ${task.activeAgent}`}>
-                <Lock size={8} className="shrink-0" />
-                {task.activeAgent}
-              </span>
-            )}
-
             {settledRunBadge && (
               <span
                 className={`flex items-center gap-1 text-[8.5px] font-mono font-extrabold px-1.5 py-0.5 rounded-lg border select-none ${
@@ -176,7 +168,7 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
         {task.agent && task.model && (
           <div className="flex flex-wrap items-center gap-1.5 mb-2.5 px-0.5 select-none font-mono font-bold">
             <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-[#fae8ff] text-[#86198f] border border-[#f5d0fe] text-[8px]">
-              🤖 {task.agent} • {task.model}
+              🤖 {task.model}
             </span>
             {task.effort && (
               <span className="px-1.5 py-0.5 rounded-md bg-[#f1f5f9] text-[#475569] border border-[#e2e8f0] text-[8px]">
@@ -244,6 +236,14 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
               <LinkIcon size={10} /> Spec Link
             </span>
           )}
+        </div>
+      )}
+
+      {/* Lock badge - shown when an agent is actively working */}
+      {task.activeAgent && (
+        <div className="mb-2 mx-0.5 flex items-center gap-1 text-[10px] font-mono font-extrabold px-2 py-1.5 rounded-xl bg-orange-50 text-orange-700 border border-orange-200 select-none">
+          <Lock size={10} className="shrink-0" />
+          Locked by {task.activeAgent}
         </div>
       )}
 

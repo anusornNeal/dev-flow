@@ -4,7 +4,13 @@ export interface AppState {
   tasksCache: any[];
   projectsCache: any[];
   countersCache: Record<string, number>;
-  settingsCache: { ngrokUrl: string; githubToken: string; jiraToken: string };
+  settingsCache: { 
+    ngrokUrl: string; 
+    githubToken: string; 
+    jiraToken: string;
+    jiraBaseUrl: string;
+    jiraEmail: string;
+  };
   skillsRegistry: any[];
 }
 

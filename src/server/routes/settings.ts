@@ -12,11 +12,13 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
       ngrokUrl: deps.state.settingsCache.ngrokUrl ?? '',
       githubTokenMasked: (deps.state.settingsCache.githubToken?.length ?? 0) > 0,
       jiraTokenMasked: (deps.state.settingsCache.jiraToken?.length ?? 0) > 0,
+      jiraBaseUrl: deps.state.settingsCache.jiraBaseUrl ?? '',
+      jiraEmail: deps.state.settingsCache.jiraEmail ?? '',
     });
   });
 
   app.post('/api/settings', (req, res) => {
-    const { ngrokUrl, githubToken, jiraToken } = req.body;
+    const { ngrokUrl, githubToken, jiraToken, jiraBaseUrl, jiraEmail } = req.body;
 
     // Validate types
     if (ngrokUrl !== undefined && typeof ngrokUrl !== 'string') {
@@ -27,6 +29,12 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
     }
     if (jiraToken !== undefined && typeof jiraToken !== 'string') {
       return res.status(400).json({ error: 'jiraToken must be a string' });
+    }
+    if (jiraBaseUrl !== undefined && typeof jiraBaseUrl !== 'string') {
+      return res.status(400).json({ error: 'jiraBaseUrl must be a string' });
+    }
+    if (jiraEmail !== undefined && typeof jiraEmail !== 'string') {
+      return res.status(400).json({ error: 'jiraEmail must be a string' });
     }
 
     if (typeof ngrokUrl === 'string') {
@@ -39,6 +47,14 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
 
     if (typeof jiraToken === 'string') {
       deps.state.settingsCache.jiraToken = jiraToken;
+    }
+
+    if (typeof jiraBaseUrl === 'string') {
+      deps.state.settingsCache.jiraBaseUrl = jiraBaseUrl.trim();
+    }
+
+    if (typeof jiraEmail === 'string') {
+      deps.state.settingsCache.jiraEmail = jiraEmail.trim();
     }
 
     saveSettings(deps.state);

@@ -10,8 +10,10 @@ export function loadSettings(state: AppState) {
   const ngrokUrl = map.get('ngrokUrl') ?? '';
   const githubToken = map.get('githubToken') || process.env.GITHUB_PERSONAL_ACCESS_TOKEN || '';
   const jiraToken = map.get('jiraToken') || process.env.JIRA_API_TOKEN || process.env.JIRA_PERSONAL_ACCESS_TOKEN || '';
+  const jiraBaseUrl = map.get('jiraBaseUrl') || process.env.JIRA_BASE_URL || '';
+  const jiraEmail = map.get('jiraEmail') || process.env.JIRA_EMAIL || '';
 
-  state.settingsCache = { ngrokUrl, githubToken, jiraToken };
+  state.settingsCache = { ngrokUrl, githubToken, jiraToken, jiraBaseUrl, jiraEmail };
 }
 
 export function saveSettings(state: AppState) {
@@ -20,5 +22,7 @@ export function saveSettings(state: AppState) {
     stmt.run('ngrokUrl', state.settingsCache.ngrokUrl ?? '');
     stmt.run('githubToken', state.settingsCache.githubToken ?? '');
     stmt.run('jiraToken', state.settingsCache.jiraToken ?? '');
+    stmt.run('jiraBaseUrl', state.settingsCache.jiraBaseUrl ?? '');
+    stmt.run('jiraEmail', state.settingsCache.jiraEmail ?? '');
   })();
 }

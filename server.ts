@@ -52,7 +52,7 @@ let countersCache: Record<string, number> = {};
 let skillsRegistry: any[] = [];
 function broadcast(_message: unknown) {}
 
-let settingsCache: { ngrokUrl: string; githubToken: string; jiraToken: string } = { ngrokUrl: '', githubToken: '', jiraToken: '' };
+let settingsCache: { ngrokUrl: string; githubToken: string; jiraToken: string; jiraBaseUrl: string; jiraEmail: string } = { ngrokUrl: '', githubToken: '', jiraToken: '', jiraBaseUrl: '', jiraEmail: '' };
 
 const state: AppState = {
   get tasksCache() {
@@ -562,24 +562,23 @@ async function startServer() {
   });
 
   // ================= DYNAMIC MCP PROXY ENDPOINTS =================
-  const mcpServersConfigPath = path.resolve(process.cwd(), 'mcp-servers.json');
-  let mcpProxyServers: Record<string, any> = {};
-  if (fs.existsSync(mcpServersConfigPath)) {
-    try {
-      mcpProxyServers = JSON.parse(fs.readFileSync(mcpServersConfigPath, 'utf8')).mcpServers || {};
-    } catch (err) {
-      console.error('Error reading mcp-servers.json:', err);
-    }
-  }
-
-  // Fallback default github proxy for convenience
-  if (!mcpProxyServers['github']) {
-    mcpProxyServers['github'] = {
+  const mcpProxyServers: Record<string, any> = {
+    github: {
       command: "npx",
       args: ["-y", "@modelcontextprotocol/server-github"],
-      env: { GITHUB_PERSONAL_ACCESS_TOKEN: state.settingsCache.githubToken || process.env.GITHUB_PERSONAL_ACCESS_TOKEN || '' }
-    };
-  }
+      env: { ...process.env, GITHUB_PERSONAL_ACCESS_TOKEN: state.settingsCache.githubToken || process.env.GITHUB_PERSONAL_ACCESS_TOKEN || '' }
+    },
+    jira: {
+      command: "npx",
+      args: ["-y", "mcp-jira-stdio"],
+      env: { 
+        ...process.env,
+        JIRA_BASE_URL: state.settingsCache.jiraBaseUrl || process.env.JIRA_BASE_URL || '',
+        JIRA_EMAIL: state.settingsCache.jiraEmail || process.env.JIRA_EMAIL || '',
+        JIRA_API_TOKEN: state.settingsCache.jiraToken || process.env.JIRA_API_TOKEN || process.env.JIRA_PERSONAL_ACCESS_TOKEN || '' 
+      }
+    }
+  };
 
   const activeProxyTransports: Record<string, Set<SSEServerTransport>> = {};
 

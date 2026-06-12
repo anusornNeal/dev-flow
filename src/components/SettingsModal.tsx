@@ -5,6 +5,8 @@ interface SettingsData {
   ngrokUrl: string;
   githubTokenMasked: boolean;
   jiraTokenMasked: boolean;
+  jiraBaseUrl: string;
+  jiraEmail: string;
 }
 
 interface SettingsModalProps {
@@ -20,6 +22,8 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
   const [jiraToken, setJiraToken] = useState('');
   const [jiraTokenMasked, setJiraTokenMasked] = useState(false);
   const [showJiraToken, setShowJiraToken] = useState(false);
+  const [jiraBaseUrl, setJiraBaseUrl] = useState('');
+  const [jiraEmail, setJiraEmail] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'success' | 'error'>('idle');
@@ -32,6 +36,8 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
         setNgrokUrl(data.ngrokUrl ?? '');
         setGithubTokenMasked(data.githubTokenMasked ?? false);
         setJiraTokenMasked(data.jiraTokenMasked ?? false);
+        setJiraBaseUrl(data.jiraBaseUrl ?? '');
+        setJiraEmail(data.jiraEmail ?? '');
         setLoading(false);
       })
       .catch(() => setLoading(false));
@@ -41,7 +47,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
     setSaving(true);
     setSaveStatus('idle');
     try {
-      const payload: Record<string, unknown> = { ngrokUrl };
+      const payload: Record<string, unknown> = { ngrokUrl, jiraBaseUrl, jiraEmail };
       if (showGithubToken) payload.githubToken = githubToken;
       if (showJiraToken) payload.jiraToken = jiraToken;
 
@@ -143,13 +149,46 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
               )}
             </div>
 
-            {/* Jira Token (masked) */}
-            <div className="flex flex-col gap-2">
-              <div className="flex items-center justify-between">
-                <label className="flex items-center gap-1.5 text-sm font-extrabold text-[#534135]">
+            {/* Jira Integration Section */}
+            <div className="flex flex-col gap-4 border border-[#e5d4bb] rounded-xl p-4 bg-[#fdfbf6]">
+              <div>
+                <h3 className="text-sm font-extrabold text-[#534135] flex items-center gap-1.5 mb-1">
                   <FileText size={14} className="text-[#d89745]" />
-                  Jira Access Token
-                </label>
+                  Jira Integration
+                </h3>
+                <p className="text-[11px] text-[#8a725f] font-mono">
+                  Configure your Jira workspace connection.
+                </p>
+              </div>
+
+              {/* Jira Base URL */}
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs font-bold text-[#685547]">Jira Base URL</label>
+                <input
+                  type="url"
+                  value={jiraBaseUrl}
+                  onChange={e => setJiraBaseUrl(e.target.value)}
+                  placeholder="https://your-domain.atlassian.net"
+                  className="w-full px-3 py-2 text-sm font-mono rounded-lg border border-[#ddd0ba] bg-white text-[#3e3129] focus:outline-none focus:ring-2 focus:ring-[#d89745]/50 focus:border-[#d89745] transition"
+                />
+              </div>
+
+              {/* Jira Email */}
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs font-bold text-[#685547]">Jira Email</label>
+                <input
+                  type="email"
+                  value={jiraEmail}
+                  onChange={e => setJiraEmail(e.target.value)}
+                  placeholder="name@company.com"
+                  className="w-full px-3 py-2 text-sm font-mono rounded-lg border border-[#ddd0ba] bg-white text-[#3e3129] focus:outline-none focus:ring-2 focus:ring-[#d89745]/50 focus:border-[#d89745] transition"
+                />
+              </div>
+
+              {/* Jira Token (masked) */}
+              <div className="flex flex-col gap-1.5 pt-2 border-t border-[#ebdcb9]">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-[#685547]">Jira Access Token</label>
                 <button
                   onClick={() => {
                     setShowJiraToken(v => !v);
@@ -180,6 +219,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                 </div>
               )}
             </div>
+          </div>
 
             {/* Export Data */}
             <div className="pt-4 mt-2 border-t border-[#ebdcb9] flex flex-col gap-2">

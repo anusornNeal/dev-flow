@@ -18,7 +18,8 @@ import {
   Cat,
   Moon,
   Coffee,
-  FileCode
+  FileCode,
+  ChevronDown
 } from 'lucide-react';
 import { Task, TaskStatus, Column, LogEntry, Project } from './types';
 import Sidebar from './components/Sidebar';
@@ -54,6 +55,7 @@ export default function App() {
   const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
   const [isSkillsModalOpen, setIsSkillsModalOpen] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+  const [isActionMenuOpen, setIsActionMenuOpen] = useState(false);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [mounted, setMounted] = useState(false);
   const [autoWorking, setAutoWorking] = useState(false);
@@ -573,23 +575,39 @@ export default function App() {
                 🤖 Auto-Work: {autoWorking ? 'ON' : 'OFF'}
               </button>
 
-              {/* Launch Batch Import Modal */}
-              <button
-                onClick={() => setIsBatchModalOpen(true)}
-                type="button"
-                className="bg-[#2a7a8a] hover:bg-[#1a5b67] text-white px-3.5 py-1.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition-all shadow-md cursor-pointer ml-auto md:ml-0"
-              >
-                <Plus size={14} /> Batch Import JSON
-              </button>
-
-              {/* Launch Modal to Trigger task creation */}
-              <button
-                onClick={() => setIsCreateModalOpen(true)}
-                type="button"
-                className="bg-gradient-to-r from-[#df9433] to-[#cc7b26] hover:from-[#cc7b26] hover:to-[#b5671d] text-white px-4 py-1.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition-all shadow-md cursor-pointer ml-auto md:ml-0"
-              >
-                <Plus size={14} /> ✨ Commit Ticket ✨
-              </button>
+              {/* Combined Ticket Action Menu */}
+              <div className="relative">
+                <button
+                  onClick={() => setIsActionMenuOpen(!isActionMenuOpen)}
+                  type="button"
+                  className="bg-gradient-to-r from-[#df9433] to-[#cc7b26] hover:from-[#cc7b26] hover:to-[#b5671d] text-white px-4 py-1.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition-all shadow-md cursor-pointer ml-auto md:ml-0"
+                >
+                  <Plus size={14} /> ✨ Ticket Action <ChevronDown size={14} />
+                </button>
+                {isActionMenuOpen && (
+                  <div className="absolute top-full right-0 mt-2 bg-white rounded-xl shadow-xl border border-[#ebdcb9] py-1 min-w-[200px] z-50 flex flex-col">
+                    <button
+                      onClick={() => {
+                        setIsActionMenuOpen(false);
+                        setIsCreateModalOpen(true);
+                      }}
+                      className="w-full text-left px-4 py-2.5 hover:bg-[#ebdcb9]/40 text-xs font-bold text-[#df9433] flex items-center gap-2 transition-colors cursor-pointer"
+                    >
+                      <Sparkles size={14} /> Commit Ticket
+                    </button>
+                    <div className="h-px bg-[#ebdcb9]/40 w-full" />
+                    <button
+                      onClick={() => {
+                        setIsActionMenuOpen(false);
+                        setIsBatchModalOpen(true);
+                      }}
+                      className="w-full text-left px-4 py-2.5 hover:bg-[#ebdcb9]/40 text-xs font-bold text-[#2a7a8a] flex items-center gap-2 transition-colors cursor-pointer"
+                    >
+                      <Plus size={14} /> Batch Import JSON
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           </header>
 

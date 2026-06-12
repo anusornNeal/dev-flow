@@ -8,6 +8,7 @@ process.env.DEVFLOW_DB_PATH = path.join(tempDir, 'devflow.db');
 
 const {
   ACTIVE_AGENT_RUN_STATUSES,
+  cancelStaleActiveRuns,
   cancelActiveRunsForTask,
   createAgentRun,
   getActiveRunForProject,
@@ -98,8 +99,49 @@ const busyRun = createAgentRun({
 });
 assert.equal(getActiveRunForProject('project-busy')?.id, busyRun.id);
 
+const staleRun = createAgentRun({
+  taskId: 'task-stale',
+  projectId: 'project-stale',
+  agent: 'Codex',
+});
+updateAgentRunStatus(staleRun.id, 'running', { startedAt: '2026-06-12T00:00:00.000Z' });
+assert.equal(cancelStaleActiveRuns('2026-06-12T00:30:00.000Z', 'stale test cleanup'), 1);
+assert.equal(getActiveRunForProject('project-stale'), null);
+assert.equal(getLatestAgentRunForTask('task-stale')?.status, 'cancelled');
+
+const {
+  buildLaunchMetadataBlock,
+  resolveAgentLaunchPlan,
+} = await import('../src/lib/agentsConfig');
+
+const codexPlan = resolveAgentLaunchPlan({
+  agent: 'Codex',
+  model: 'GPT-5.5',
+  effort: 'xhigh',
+  executionMode: 'safe',
+});
+assert.equal(codexPlan.resolvedModel, 'gpt-5.5');
+assert.equal(codexPlan.effortHandling.mode, 'prompt-only');
+
+const antigravityInvalid = resolveAgentLaunchPlan({
+  agent: 'Antigravity',
+  model: 'GPT-5.5',
+  effort: 'high',
+  executionMode: 'safe',
+});
+assert.equal(antigravityInvalid.ok, false);
+assert.match(antigravityInvalid.error || '', /not supported by Antigravity/);
+
+const metadataBlock = buildLaunchMetadataBlock(codexPlan);
+assert.match(metadataBlock, /Selected agent: Codex/);
+assert.match(metadataBlock, /DevFlow model label: GPT-5\.5/);
+assert.match(metadataBlock, /Resolved CLI model id: gpt-5\.5/);
+assert.match(metadataBlock, /Selected effort: xhigh/);
+assert.match(metadataBlock, /Effort handling mode: prompt-only/);
+
 const {
   buildAgentCliArgs,
+  createCodexLaunchScript,
   mapModelForAgent,
 } = await import('../src/runner');
 
@@ -138,6 +180,61 @@ assert.deepEqual(cliArgs, [
 ]);
 assert.equal(cliArgs.includes('full prompt body that should stay off the command line'), false);
 assert.equal(mapModelForAgent({ modelMap: { 'GPT-5.5': 'gpt-5.5' } }, 'GPT-5.5'), 'gpt-5.5');
-assert.equal(mapModelForAgent({ modelMap: { 'GPT-5.5': 'gpt-5.5' } }, 'Unknown'), 'Unknown');
+assert.equal(mapModelForAgent({ modelMap: { 'GPT-5.5': 'gpt-5.5' } }, 'Unknown'), '');
+
+const agyArgs = buildAgentCliArgs({
+  config: {
+    name: 'Antigravity',
+    executables: [],
+    flags: {
+      model: '--model',
+      effort: null,
+      interactiveArgs: ['-i'],
+    },
+    executionModes: {
+      safe: { args: [] },
+    },
+    modelMap: {
+      'Gemini 3.1 Pro': 'gemini-3.1-pro',
+    },
+    promptFallback: {
+      effort: "use reasoning effort '{EFFORT}'",
+    },
+    launchStyle: 'start',
+  },
+  localPath: 'C:\\work',
+  model: 'Gemini 3.1 Pro',
+  effort: 'high',
+  promptReference: buildPromptReference(files.promptPath),
+  executionMode: 'safe',
+});
+assert.deepEqual(agyArgs, [
+  '--model', 'gemini-3.1-pro',
+  '-i',
+  buildPromptReference(files.promptPath),
+]);
+assert.equal(agyArgs.some((arg) => arg.includes('reasoning effort')), false);
+
+const launchScriptPath = createCodexLaunchScript({
+  runDir: files.runDir,
+  executable: 'C:\\Tools\\codex.cmd',
+  args: ['-C', 'C:\\work dir', '-m', 'gpt-5.5', buildPromptReference(files.promptPath)],
+  cwd: 'C:\\work dir',
+  logPath: files.logPath,
+});
+const launchScript = fs.readFileSync(launchScriptPath, 'utf8');
+assert.match(launchScript, /cd \/d "C:\\work dir"/);
+assert.match(launchScript, /"C:\\Tools\\codex.cmd" "-C" "C:\\work dir" "-m" "gpt-5.5"/);
+assert.equal(launchScript.includes('GITHUB_PERSONAL_ACCESS_TOKEN'), false);
+
+const {
+  validateAgentParams,
+} = await import('../src/server/services/taskService');
+
+assert.equal(validateAgentParams({ agent: 'Codex', model: 'GPT-5.5', effort: 'xhigh' }, []), null);
+assert.match(
+  validateAgentParams({ agent: 'Antigravity', model: 'GPT-5.5', effort: 'high' }, []) || '',
+  /not supported by Antigravity/,
+);
 
 console.log('[verify-agent-runs] all assertions passed');

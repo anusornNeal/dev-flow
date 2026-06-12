@@ -137,3 +137,14 @@ export function cancelActiveRunsForTask(taskId: string, reason = 'cancelled manu
   `).run(now, reason, taskId, ...ACTIVE_AGENT_RUN_STATUSES);
   return result.changes;
 }
+
+export function cancelStaleActiveRuns(cutoffIso: string, reason = 'stale run cancelled'): number {
+  const now = new Date().toISOString();
+  const result = db.prepare(`
+    UPDATE agent_runs
+    SET status = 'cancelled', endedAt = ?, errorMessage = ?
+    WHERE status IN (${ACTIVE_AGENT_RUN_STATUSES.map(() => '?').join(',')})
+      AND COALESCE(startedAt, createdAt) < ?
+  `).run(now, reason, ...ACTIVE_AGENT_RUN_STATUSES, cutoffIso);
+  return result.changes;
+}

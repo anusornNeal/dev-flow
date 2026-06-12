@@ -3,27 +3,12 @@ import * as path from 'path';
 import { spawn, execSync } from 'child_process';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { buildPromptReference, resolveAgentExecutionMode, type AgentExecutionMode } from './server/services/agentRunService';
+import { buildLaunchMetadataBlock, resolveAgentLaunchPlan, type FileAgentConfig } from './lib/agentsConfig';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-interface AgentConfig {
-  name: string;
-  executables: { type: 'env' | 'path' | 'command'; value: string }[];
-  flags: {
-    model: string | null;
-    effort?: string | null;
-    workingDir?: string | null;
-    alwaysAllow?: string | null;
-    interactiveArgs?: string[];
-  };
-  executionModes?: Partial<Record<AgentExecutionMode, { args: string[] }>>;
-  modelMap?: Record<string, string>;
-  promptFallback?: {
-    effort?: string;
-  };
-  launchStyle: 'start' | 'cmd_k';
-}
+type AgentConfig = FileAgentConfig;
 
 interface BuildAgentCliArgsInput {
   config: AgentConfig;
@@ -61,8 +46,18 @@ function resolveExecutable(executables: AgentConfig['executables']): string | nu
   return null;
 }
 
+function quoteBatArg(value: string) {
+  return `"${value.replace(/"/g, '""')}"`;
+}
+
+function appendRunnerLog(logPath: string | null | undefined, message: string) {
+  if (!logPath) return;
+  fs.mkdirSync(path.dirname(logPath), { recursive: true });
+  fs.appendFileSync(logPath, `[${new Date().toISOString()}] ${message}\n`, 'utf8');
+}
+
 export function mapModelForAgent(config: Pick<AgentConfig, 'modelMap'>, model: string) {
-  return config.modelMap?.[model] || model;
+  return config.modelMap?.[model] || '';
 }
 
 export function buildAgentCliArgs(input: BuildAgentCliArgsInput) {
@@ -87,7 +82,6 @@ export function buildAgentCliArgs(input: BuildAgentCliArgsInput) {
       spawnArgs.push(config.flags.effort, effort);
     } else if (config.promptFallback?.effort) {
       console.warn(`[runner] WARNING: ${config.name} config states no effort flag. Using prompt fallback.`);
-      spawnArgs.push(config.promptFallback.effort.replace('{EFFORT}', effort));
     }
   }
 
@@ -104,6 +98,36 @@ export function buildAgentCliArgs(input: BuildAgentCliArgsInput) {
 
   spawnArgs.push(promptReference);
   return spawnArgs;
+}
+
+export function createCodexLaunchScript(input: {
+  runDir: string;
+  executable: string;
+  args: string[];
+  cwd: string;
+  logPath?: string | null;
+}) {
+  fs.mkdirSync(input.runDir, { recursive: true });
+  const launchScriptPath = path.join(input.runDir, 'launch.bat');
+  const logLine = input.logPath
+    ? `echo [%DATE% %TIME%] Codex process exited with code %EXIT_CODE% >> ${quoteBatArg(input.logPath)}`
+    : 'echo Codex process exited with code %EXIT_CODE%';
+  const commandLine = [quoteBatArg(input.executable), ...input.args.map(quoteBatArg)].join(' ');
+
+  fs.writeFileSync(launchScriptPath, [
+    '@echo off',
+    'setlocal',
+    `cd /d ${quoteBatArg(input.cwd)}`,
+    commandLine,
+    'set EXIT_CODE=%ERRORLEVEL%',
+    logLine,
+    'echo.',
+    'echo Codex process exited with code %EXIT_CODE%. This window remains open for debugging.',
+    'exit /b %EXIT_CODE%',
+    '',
+  ].join('\r\n'), 'utf8');
+
+  return launchScriptPath;
 }
 
 function readPromptReference(taskId: string, promptPath: string, apiBaseUrl: string) {
@@ -140,9 +164,17 @@ function main() {
   const config: AgentConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
   console.log(`[runner] Loaded configuration for ${config.name}`);
 
+  const launchPlan = resolveAgentLaunchPlan({ agent: config.name, model, effort, executionMode, baseDir: path.join(__dirname, '..') });
+  if (!launchPlan.ok) {
+    console.error(`[runner] ${launchPlan.error}`);
+    appendRunnerLog(logPath, `Launch rejected: ${launchPlan.error}`);
+    process.exit(1);
+  }
+
   const executable = resolveExecutable(config.executables);
   if (!executable) {
     console.error(`[runner] Executable not found for ${config.name}. Checked:`, config.executables);
+    appendRunnerLog(logPath, `Executable not found for ${config.name}. Checked configured env/path/command sources.`);
     process.exit(1);
   }
   console.log(`[runner] Resolved executable: ${executable}`);
@@ -154,6 +186,10 @@ function main() {
   }
 
   const spawnArgs = buildAgentCliArgs({ config, localPath, model, effort, promptReference, executionMode });
+  const runDir = logPath ? path.dirname(logPath) : runId ? path.join(process.cwd(), '.devflow', 'runs', runId) : process.cwd();
+  const launchScriptPath = config.name.toLowerCase() === 'codex'
+    ? createCodexLaunchScript({ runDir, executable, args: spawnArgs, cwd: localPath || process.cwd(), logPath })
+    : '';
 
   const spawnEnv = { ...process.env };
   if (process.env.GITHUB_PERSONAL_ACCESS_TOKEN) {
@@ -184,28 +220,29 @@ function main() {
   // We need to launch the agent in a new visible console window, starting in the localPath.
   const cwd = localPath || process.cwd();
 
-  // Escape arguments for the command line execution
-  const escapedArgs = spawnArgs.map(arg => {
-    // If argument contains spaces and is not already quoted, quote it.
-    // Replace inner double quotes with \"
-    return `"${arg.replace(/"/g, '\\"')}"`;
-  });
-
-  const commandString = `"${executable}" ${escapedArgs.join(' ')}`;
-
   let finalCmd = '';
   let finalArgs: string[] = [];
 
-  if (config.launchStyle === 'start') {
+  if (launchScriptPath) {
     finalCmd = 'cmd.exe';
-    finalArgs = ['/c', 'start', `"${config.name} Agent"`, '/d', cwd, executable, ...escapedArgs];
+    finalArgs = ['/c', 'start', `"${config.name} Agent"`, '/d', cwd, 'cmd.exe', '/k', launchScriptPath];
+  } else if (config.launchStyle === 'start') {
+    finalCmd = 'cmd.exe';
+    finalArgs = ['/c', 'start', `"${config.name} Agent"`, '/d', cwd, executable, ...spawnArgs];
   } else if (config.launchStyle === 'cmd_k') {
     finalCmd = 'cmd.exe';
-    finalArgs = ['/c', 'start', `"${config.name} Agent"`, '/d', cwd, 'cmd.exe', '/k', commandString];
+    finalArgs = ['/c', 'start', `"${config.name} Agent"`, '/d', cwd, 'cmd.exe', '/k', executable, ...spawnArgs];
   } else {
     console.error(`[runner] Unknown launchStyle: ${config.launchStyle}`);
     process.exit(1);
   }
+
+  appendRunnerLog(logPath, buildLaunchMetadataBlock(launchPlan).trim());
+  appendRunnerLog(logPath, `cwd=${cwd}`);
+  appendRunnerLog(logPath, `resolvedExecutable=${executable}`);
+  appendRunnerLog(logPath, `argvPreview=${[finalCmd, ...finalArgs].join(' ')}`);
+  appendRunnerLog(logPath, `promptPath=${promptPath || 'none'}`);
+  appendRunnerLog(logPath, `launchScriptPath=${launchScriptPath || 'none'}`);
 
   const child = spawn(finalCmd, finalArgs, {
     detached: true,
@@ -215,7 +252,7 @@ function main() {
   });
 
   child.unref();
-  if (logPath) fs.appendFileSync(logPath, `[${new Date().toISOString()}] Runner dispatched ${config.name} for task ${taskId}\n`, 'utf8');
+  appendRunnerLog(logPath, `Runner handed off ${config.name} for task ${taskId}`);
   console.log(`[runner] Trigger dispatched successfully.`);
 }
 

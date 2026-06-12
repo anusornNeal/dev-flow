@@ -91,7 +91,7 @@ function triggerTaskAgent(task: any, deps: ApiRouteDeps, routeLabel: string, ret
   const triggerBat = getAgentTriggerScriptPath();
   const project = deps.state.projectsCache.find((entry) => entry.id === task.projectId);
   const execOpts = project?.localPath ? { cwd: project.localPath } : undefined;
-  const executionMode = resolveAgentExecutionMode(process.env.DEVFLOW_AGENT_EXECUTION_MODE);
+  const executionMode = resolveAgentExecutionMode(deps.state.settingsCache.agentExecutionMode || process.env.DEVFLOW_AGENT_EXECUTION_MODE);
   const apiBaseUrl = getDevFlowApiBaseUrl();
 
   deps.writeAgentLog('TRIGGER', `Spawning run=${run.id} agent=${task.agent} for task=${task.id} ("${task.title}") via ${routeLabel}${execOpts ? ' at ' + execOpts.cwd : ''}`);

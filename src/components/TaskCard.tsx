@@ -7,6 +7,7 @@ import React, { useState } from 'react';
 import { GitBranch, Copy, Check, Trash2, FileCode, CheckSquare, Image as ImageIcon, Link as LinkIcon, Lock, AlertTriangle, Ban, CircleCheck } from 'lucide-react';
 import { Task } from '../types';
 import { AGENTS_CONFIG, getModelConfig, defaultModelForAgent, defaultEffortForModel } from '../lib/agentsConfig';
+import CopyTemplateButton from './CopyTemplateButton';
 
 interface TaskCardProps {
   key?: string;
@@ -276,6 +277,11 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
           </button>
         </div>
       )}
+
+      {/* Copy Starting Template Action */}
+      <div className="mb-3 mx-0.5">
+        <CopyTemplateButton task={task} className="w-full justify-center py-1.5" />
+      </div>
 
       {/* Subtasks compact section */}
       {subtasks && subtasks.length > 0 && (

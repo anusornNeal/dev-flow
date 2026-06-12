@@ -15,11 +15,12 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
       jiraBaseUrl: deps.state.settingsCache.jiraBaseUrl ?? '',
       jiraEmail: deps.state.settingsCache.jiraEmail ?? '',
       autoWork: deps.state.settingsCache.autoWork ?? false,
+      agentExecutionMode: deps.state.settingsCache.agentExecutionMode ?? '',
     });
   });
 
   app.post('/api/settings', (req, res) => {
-    const { ngrokUrl, githubToken, jiraToken, jiraBaseUrl, jiraEmail, autoWork } = req.body;
+    const { ngrokUrl, githubToken, jiraToken, jiraBaseUrl, jiraEmail, autoWork, agentExecutionMode } = req.body;
 
     // Validate types
     if (ngrokUrl !== undefined && typeof ngrokUrl !== 'string') {
@@ -39,6 +40,12 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
     }
     if (autoWork !== undefined && typeof autoWork !== 'boolean') {
       return res.status(400).json({ error: 'autoWork must be a boolean' });
+    }
+    if (agentExecutionMode !== undefined && typeof agentExecutionMode !== 'string') {
+      return res.status(400).json({ error: 'agentExecutionMode must be a string' });
+    }
+    if (agentExecutionMode !== undefined && agentExecutionMode !== '' && agentExecutionMode !== 'safe' && agentExecutionMode !== 'full') {
+      return res.status(400).json({ error: 'agentExecutionMode must be safe or full' });
     }
 
     if (typeof ngrokUrl === 'string') {
@@ -63,6 +70,10 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
 
     if (typeof autoWork === 'boolean') {
       deps.state.settingsCache.autoWork = autoWork;
+    }
+
+    if (typeof agentExecutionMode === 'string') {
+      deps.state.settingsCache.agentExecutionMode = agentExecutionMode;
     }
 
     saveSettings(deps.state);

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Link, FileText, ToggleLeft, ToggleRight, Save, Loader2, CheckCircle2, AlertCircle, Database, Download } from 'lucide-react';
+import { X, Link, FileText, ToggleLeft, ToggleRight, Save, Loader2, CheckCircle2, AlertCircle, Database, Download, Activity } from 'lucide-react';
 
 interface SettingsData {
   ngrokUrl: string;
@@ -7,6 +7,7 @@ interface SettingsData {
   jiraTokenMasked: boolean;
   jiraBaseUrl: string;
   jiraEmail: string;
+  agentExecutionMode: string;
 }
 
 interface SettingsModalProps {
@@ -24,6 +25,8 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
   const [showJiraToken, setShowJiraToken] = useState(false);
   const [jiraBaseUrl, setJiraBaseUrl] = useState('');
   const [jiraEmail, setJiraEmail] = useState('');
+  const [agentExecutionMode, setAgentExecutionMode] = useState('safe');
+  
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'success' | 'error'>('idle');
@@ -38,6 +41,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
         setJiraTokenMasked(data.jiraTokenMasked ?? false);
         setJiraBaseUrl(data.jiraBaseUrl ?? '');
         setJiraEmail(data.jiraEmail ?? '');
+        setAgentExecutionMode(data.agentExecutionMode || 'safe');
         setLoading(false);
       })
       .catch(() => setLoading(false));
@@ -47,7 +51,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
     setSaving(true);
     setSaveStatus('idle');
     try {
-      const payload: Record<string, unknown> = { ngrokUrl, jiraBaseUrl, jiraEmail };
+      const payload: Record<string, unknown> = { ngrokUrl, jiraBaseUrl, jiraEmail, agentExecutionMode };
       if (showGithubToken) payload.githubToken = githubToken;
       if (showJiraToken) payload.jiraToken = jiraToken;
 
@@ -220,6 +224,35 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                     </div>
                   )}
                 </div>
+              </div>
+            </div>
+
+            {/* Agent Execution Mode */}
+            <div className="pt-4 mt-2 border-t border-[#ebdcb9] flex flex-col gap-3">
+              <div className="flex flex-col gap-1">
+                <label className="flex items-center gap-1.5 text-sm font-extrabold text-[#534135]">
+                  <Activity size={14} className="text-[#d89745]" />
+                  Agent Execution Mode
+                </label>
+                <p className="text-[11px] text-[#8a725f] font-mono leading-relaxed">
+                  Controls the permissions granted to agents when DevFlow auto-triggers runs.
+                </p>
+              </div>
+              <div className="flex flex-col gap-2">
+                <label className={`flex items-start gap-2 p-2.5 rounded-lg border cursor-pointer transition-colors ${agentExecutionMode === 'safe' ? 'bg-[#f0f9f4] border-[#a3e6cd] shadow-sm' : 'bg-white border-[#ebdcb9] hover:bg-[#faf7f0]'}`}>
+                  <input type="radio" name="executionMode" value="safe" checked={agentExecutionMode === 'safe'} onChange={() => setAgentExecutionMode('safe')} className="mt-1" />
+                  <div className="flex flex-col">
+                    <span className={`text-[12px] font-bold ${agentExecutionMode === 'safe' ? 'text-[#166534]' : 'text-[#534135]'}`}>Safe Mode (Recommended)</span>
+                    <span className="text-[10px] text-[#8a725f] font-mono">Restricts agents to editing files within the workspace. Blocks arbitrary system commands.</span>
+                  </div>
+                </label>
+                <label className={`flex items-start gap-2 p-2.5 rounded-lg border cursor-pointer transition-colors ${agentExecutionMode === 'full' ? 'bg-[#fff0f0] border-[#fecaca] shadow-sm' : 'bg-white border-[#ebdcb9] hover:bg-[#faf7f0]'}`}>
+                  <input type="radio" name="executionMode" value="full" checked={agentExecutionMode === 'full'} onChange={() => setAgentExecutionMode('full')} className="mt-1" />
+                  <div className="flex flex-col">
+                    <span className={`text-[12px] font-bold ${agentExecutionMode === 'full' ? 'text-[#991b1b]' : 'text-[#534135]'}`}>Full Mode</span>
+                    <span className="text-[10px] text-[#8a725f] font-mono">Grants broader permissions. Agents may run arbitrary system commands depending on their config.</span>
+                  </div>
+                </label>
               </div>
             </div>
 

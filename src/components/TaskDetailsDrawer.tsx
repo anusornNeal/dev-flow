@@ -28,6 +28,7 @@ import {
 import { Task, TaskPriority, TaskStatus, LogEntry, ChecklistItem } from '../types';
 import { AGENTS_CONFIG, getModelConfig, defaultModelForAgent, defaultEffortForModel } from '../lib/agentsConfig';
 import MarkdownRenderer from './MarkdownRenderer';
+import CopyTemplateButton from './CopyTemplateButton';
 import CreateTaskModal from './CreateTaskModal';
 
 interface TaskDetailsDrawerProps {
@@ -1022,6 +1023,14 @@ export default function TaskDetailsDrawer({
                   </div>
                 </div>
               )}
+
+              {/* Copy Starting Template Action */}
+              <div className="space-y-2 mt-4 border-t border-[#ebdcb9] pt-4">
+                <h4 className="text-[10px] font-mono text-[#8a6e5a] uppercase tracking-widest flex items-center gap-1.5 font-bold mb-2">
+                  <Copy size={13} className="text-[#bf8a50]" /> Agent Handoff
+                </h4>
+                <CopyTemplateButton task={task} className="w-full justify-center py-2 text-xs" />
+              </div>
 
               {/* Detailed specification display */}
               {task.description && (

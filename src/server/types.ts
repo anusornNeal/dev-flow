@@ -11,6 +11,7 @@ export interface AppState {
     jiraBaseUrl: string;
     jiraEmail: string;
     autoWork: boolean;
+    agentExecutionMode?: string;
   };
   skillsRegistry: any[];
 }

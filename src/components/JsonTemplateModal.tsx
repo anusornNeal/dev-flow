@@ -18,7 +18,7 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
   const sampleJson = [
     {
       "id": "spec-101",
-      "projectId": "project-default",
+      "projectId": "YOUR_PROJECT_ID",
       "parentId": "optional-parent-id",
       "title": "Setup Authentication API with Bearer Tokens",
       "description": "### Objective\nSecure all backend routes with JWT keys.\n\n### Requirements\n- Verify passwords using Argon2\n- Configure access-token expires boundary in 15m",

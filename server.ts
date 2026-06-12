@@ -450,7 +450,13 @@ async function startServer() {
           return { content: [{ type: "text", text: `Error: ${agentValidationError}` }] };
         }
 
-        const pId = String(args?.projectId || "project-default");
+        if (!args?.projectId) {
+          return { isError: true, content: [{ type: "text", text: "Task creation requires a valid explicit projectId" }] };
+        }
+        const pId = String(args.projectId);
+        if (pId === 'project-default') {
+          return { isError: true, content: [{ type: "text", text: "Target project 'project-default' is no longer supported." }] };
+        }
         const newTask = {
           id: `task-${Date.now()}-${Math.floor(Math.random() * 1000000)}`,
           displayId: generateDisplayId(pId),

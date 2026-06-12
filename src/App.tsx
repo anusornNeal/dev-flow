@@ -46,7 +46,7 @@ export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [persistenceError, setPersistenceError] = useState<string | null>(null);
   const [activeProjectId, setActiveProjectId] = useState<string>(() => {
-    return localStorage.getItem('devflow_selected_project') || 'project-default';
+    return localStorage.getItem('devflow_selected_project') || '';
   });
   const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
   const [draggedOverColumn, setDraggedOverColumn] = useState<TaskStatus | null>(null);
@@ -172,7 +172,7 @@ export default function App() {
         
         setActiveProjectId(prevId => {
           if (prevId === id) {
-            return remainingProjects.length > 0 ? remainingProjects[0].id : 'project-default';
+            return remainingProjects.length > 0 ? remainingProjects[0].id : '';
           }
           return prevId;
         });
@@ -222,7 +222,7 @@ export default function App() {
 
   // Keep UI-only preference in localStorage; task data remains backend-owned.
   useEffect(() => {
-    if (mounted && activeProjectId && activeProjectId !== 'project-default') {
+    if (mounted && activeProjectId) {
       localStorage.setItem('devflow_selected_project', activeProjectId);
     }
   }, [activeProjectId, mounted]);

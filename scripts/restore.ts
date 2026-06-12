@@ -33,9 +33,9 @@ async function runRestore() {
     isValid = requiredTables.every(t => tableNames.includes(t));
     
     if (isValid) {
-      counts.projects = tempDb.prepare('SELECT COUNT(*) AS c FROM projects').get().c;
-      counts.tasks = tempDb.prepare('SELECT COUNT(*) AS c FROM tasks').get().c;
-      counts.skills = tempDb.prepare('SELECT COUNT(*) AS c FROM skills').get().c;
+      counts.projects = (tempDb.prepare('SELECT COUNT(*) AS c FROM projects').get() as { c: number }).c;
+      counts.tasks = (tempDb.prepare('SELECT COUNT(*) AS c FROM tasks').get() as { c: number }).c;
+      counts.skills = (tempDb.prepare('SELECT COUNT(*) AS c FROM skills').get() as { c: number }).c;
     }
     tempDb.close();
   } catch (err) {

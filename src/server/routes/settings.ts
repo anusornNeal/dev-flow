@@ -166,12 +166,12 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
         isValid = requiredTables.every(t => tableNames.includes(t));
         
         if (isValid) {
-          counts.projects = tempDb.prepare('SELECT COUNT(*) AS c FROM projects').get().c;
-          counts.tasks = tempDb.prepare('SELECT COUNT(*) AS c FROM tasks').get().c;
-          counts.skills = tempDb.prepare('SELECT COUNT(*) AS c FROM skills').get().c;
-          counts.settings = tempDb.prepare('SELECT COUNT(*) AS c FROM settings').get().c;
-          counts.agent_runs = tempDb.prepare("SELECT COUNT(*) AS c FROM sqlite_master WHERE type='table' AND name='agent_runs'").get().c > 0 
-            ? tempDb.prepare('SELECT COUNT(*) AS c FROM agent_runs').get().c 
+          counts.projects = (tempDb.prepare('SELECT COUNT(*) AS c FROM projects').get() as { c: number }).c;
+          counts.tasks = (tempDb.prepare('SELECT COUNT(*) AS c FROM tasks').get() as { c: number }).c;
+          counts.skills = (tempDb.prepare('SELECT COUNT(*) AS c FROM skills').get() as { c: number }).c;
+          counts.settings = (tempDb.prepare('SELECT COUNT(*) AS c FROM settings').get() as { c: number }).c;
+          counts.agent_runs = (tempDb.prepare("SELECT COUNT(*) AS c FROM sqlite_master WHERE type='table' AND name='agent_runs'").get() as { c: number }).c > 0
+            ? (tempDb.prepare('SELECT COUNT(*) AS c FROM agent_runs').get() as { c: number }).c
             : 0;
         }
         tempDb.close();

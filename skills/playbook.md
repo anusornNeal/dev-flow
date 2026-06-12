@@ -51,9 +51,9 @@ When the user gives a Jira URL or Jira key:
 8. Read/list the created tasks if needed to verify fields were saved correctly.
 9. Reply to the user with task IDs, titles, agent/model/effort, and split rationale.
 
-## Task Execution Workflow
+## Agent Drive Workflow
 
-When an agent is assigned a specific task card to execute, it must strictly follow this lifecycle:
+When an agent is being explicitly driven by the user to execute a specific task card, it must strictly follow this lifecycle:
 
 1. **Read Task Content**: Read the task card details carefully, including all checklist items, acceptance criteria, and subtasks (if any).
 2. **Move to In Progress**: Before starting the actual work, update the task status and move the card to `in-progress`.

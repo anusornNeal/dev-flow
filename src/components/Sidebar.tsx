@@ -113,19 +113,19 @@ export default function Sidebar({
   };
 
   return (
-    <aside className="w-full lg:w-72 bg-[#f4ebd9] border-b lg:border-b-0 lg:border-r border-[#e5d4bb] flex flex-col h-full shrink-0 select-none">
+    <aside className="w-full lg:w-72 bg-[#f4ebd9] dark:bg-[#292119] border-b lg:border-b-0 lg:border-r border-[#e5d4bb] dark:border-[#584a3b] flex flex-col h-full shrink-0 select-none">
       
       {/* Cozy Warm Mascot Header */}
-      <div className="p-6 border-b border-[#e5d4bb] bg-[#ede0c9]">
+      <div className="p-6 border-b border-[#e5d4bb] dark:border-[#584a3b] bg-[#ede0c9] dark:bg-[#292119]">
         <div className="flex flex-col gap-3">
           <div className="flex items-center gap-3">
             <button
               onClick={handleEnjoyCoffee}
               type="button"
-              className="relative bg-[#ffb766] hover:bg-[#ffa23b] p-3 rounded-full border border-[#e5a043] shadow-sm transition-all active:scale-90 group cursor-pointer animate-pulse"
+              className="relative bg-[#ffb766] dark:bg-[#e0a070] hover:bg-[#ffa23b] dark:hover:bg-[#d6b56d] p-3 rounded-full border border-[#e5a043] dark:border-[#584a3b] shadow-sm transition-all active:scale-90 group cursor-pointer animate-pulse"
               title="Click to take a sip of espresso!"
             >
-              <Coffee size={24} className="text-[#553108] group-hover:scale-110 transition-transform" />
+              <Coffee size={24} className="text-[#553108] dark:text-[#f3eadf] group-hover:scale-110 transition-transform" />
               {/* Hearts float effect */}
               {hearts.map(h => (
                 <span
@@ -138,18 +138,18 @@ export default function Sidebar({
               ))}
             </button>
             <div>
-              <h2 className="text-xs font-extrabold text-[#534135] tracking-wide flex items-center gap-1.5 leading-none">
+              <h2 className="text-xs font-extrabold text-[#534135] dark:text-[#f3eadf] tracking-wide flex items-center gap-1.5 leading-none">
                 ✨ CozyFlow
               </h2>
-              <span className="text-[10px] text-[#8C7565] font-bold block mt-1">
+              <span className="text-[10px] text-[#8C7565] dark:text-[#f3eadf] font-bold block mt-1">
                 Minimalist Spec Space
               </span>
             </div>
           </div>
 
           {/* Dialog Bubble */}
-          <div className="bg-[#fffdfb] px-3.5 py-2.5 rounded-2xl relative border border-[#e5d4bb] shadow-xs text-[11px] text-[#55453B] font-mono leading-relaxed">
-            <span className="absolute left-5 -top-2 w-3 h-3 bg-[#fffdfb] border-t border-l border-[#e5d4bb] rotate-45" />
+          <div className="bg-[#fffdfb] dark:bg-[#292119] px-3.5 py-2.5 rounded-2xl relative border border-[#e5d4bb] dark:border-[#584a3b] shadow-xs text-[11px] text-[#55453B] dark:text-[#f3eadf] font-mono leading-relaxed">
+            <span className="absolute left-5 -top-2 w-3 h-3 bg-[#fffdfb] dark:bg-[#292119] border-t border-l border-[#e5d4bb] dark:border-[#584a3b] rotate-45" />
             <p className="relative z-10">{cozySpeak}</p>
           </div>
         </div>
@@ -165,41 +165,41 @@ export default function Sidebar({
             setEditingProjectId(null);
           }}
           type="button"
-          className="w-full text-left p-4 bg-[#fdfaf5] hover:bg-[#fffdf8] rounded-xl border border-[#e5d4bb] flex items-center justify-between gap-2.5 shadow-xs cursor-pointer transition-all active:scale-[0.99]"
+          className="w-full text-left p-4 bg-[#fdfaf5] dark:bg-[#292119] hover:bg-[#fffdf8] dark:hover:bg-[#1e1914] rounded-xl border border-[#e5d4bb] dark:border-[#584a3b] flex items-center justify-between gap-2.5 shadow-xs cursor-pointer transition-all active:scale-[0.99]"
         >
           <div className="flex items-center gap-2.5 min-w-0 flex-1">
-            <Sparkles size={15} className="text-[#d89745] shrink-0" />
+            <Sparkles size={15} className="text-[#d89745] dark:text-[#e0a070] shrink-0" />
             <div className="min-w-0 flex-1">
-              <p className="text-[9px] text-[#8C7565] font-bold tracking-wider uppercase flex items-center gap-1.5">
+              <p className="text-[9px] text-[#8C7565] dark:text-[#f3eadf] font-bold tracking-wider uppercase flex items-center gap-1.5">
                 ACTIVE WORKSPACE
               </p>
-              <p className="text-[11px] font-extrabold text-[#534135] truncate">
+              <p className="text-[11px] font-extrabold text-[#534135] dark:text-[#f3eadf] truncate">
                 {projects.find(p => p.id === activeProjectId)?.name || 'Developer Sandbox Repo'}
               </p>
               {projects.find(p => p.id === activeProjectId)?.repoUrl && (
-                <p className="text-[8px] text-[#9b8271] font-mono truncate max-w-full">
+                <p className="text-[8px] text-[#9b8271] dark:text-[#d6b56d] font-mono truncate max-w-full">
                   🔗 {projects.find(p => p.id === activeProjectId)?.repoUrl.replace(/^https?:\/\/(www\.)?/, '')}
                 </p>
               )}
               {projects.find(p => p.id === activeProjectId)?.localPath && (
-                <p className="text-[8px] text-[#9b8271] font-mono truncate max-w-full">
+                <p className="text-[8px] text-[#9b8271] dark:text-[#d6b56d] font-mono truncate max-w-full">
                   📂 {projects.find(p => p.id === activeProjectId)?.localPath}
                 </p>
               )}
             </div>
           </div>
           {isProjectDropdownOpen ? (
-            <ChevronUp size={14} className="text-[#8c7463]" />
+            <ChevronUp size={14} className="text-[#8c7463] dark:text-[#f3eadf]" />
           ) : (
-            <ChevronDown size={14} className="text-[#8c7463]" />
+            <ChevronDown size={14} className="text-[#8c7463] dark:text-[#f3eadf]" />
           )}
         </button>
 
         {isProjectDropdownOpen && (
-          <div className="absolute top-13 left-0 right-0 z-30 bg-[#fffefd] border border-[#d8c5aa] rounded-xl shadow-lg p-3 space-y-2 text-xs font-sans">
+          <div className="absolute top-13 left-0 right-0 z-30 bg-[#fffefd] dark:bg-[#292119] border border-[#d8c5aa] dark:border-[#584a3b] rounded-xl shadow-lg p-3 space-y-2 text-xs font-sans">
             {!isAddingProject ? (
               <>
-                <p className="text-[9px] text-[#8C7565] font-bold uppercase tracking-widest border-b border-[#f1e6d4] pb-1.5 mb-1">
+                <p className="text-[9px] text-[#8C7565] dark:text-[#f3eadf] font-bold uppercase tracking-widest border-b border-[#f1e6d4] dark:border-[#584a3b] pb-1.5 mb-1">
                   Selected Repository
                 </p>
                 <div className="space-y-1.5 max-h-56 overflow-y-auto scrollbar-thin">
@@ -209,26 +209,26 @@ export default function Sidebar({
                     
                     if (isEditing) {
                       return (
-                        <div key={project.id} className="p-2 rounded-lg border border-[#d89745] bg-[#fff9ee] mb-1" onClick={(e) => e.stopPropagation()}>
+                        <div key={project.id} className="p-2 rounded-lg border border-[#d89745] dark:border-[#e0a070] bg-[#fff9ee] dark:bg-[#292119] mb-1" onClick={(e) => e.stopPropagation()}>
                           <div className="space-y-1.5">
                             <input
                               type="text"
                               value={newProjectLocalPath}
                               onChange={(e) => setNewProjectLocalPath(e.target.value)}
                               placeholder="Local absolute path (e.g. C:\Projects\app)"
-                              className="w-full bg-white border border-[#ebdcb9] px-2 py-1 rounded-md text-[9px] outline-none focus:border-[#d4994e] font-mono"
+                              className="w-full bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] px-2 py-1 rounded-md text-[9px] outline-none focus:border-[#d4994e] dark:focus:border-[#584a3b] font-mono"
                             />
                             <input
                               type="text"
                               value={newProjectTaskIdPrefix}
                               onChange={(e) => setNewProjectTaskIdPrefix(e.target.value)}
                               placeholder="Task ID Prefix (e.g. DVF)"
-                              className="w-full bg-white border border-[#ebdcb9] px-2 py-1 rounded-md text-[9px] outline-none focus:border-[#d4994e] font-mono"
+                              className="w-full bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] px-2 py-1 rounded-md text-[9px] outline-none focus:border-[#d4994e] dark:focus:border-[#584a3b] font-mono"
                             />
                             <div className="flex gap-1">
                               <button
                                 onClick={() => setEditingProjectId(null)}
-                                className="flex-1 text-[9px] border border-[#ebdcb9] py-1 rounded hover:bg-white text-[#7a6455]"
+                                className="flex-1 text-[9px] border border-[#ebdcb9] dark:border-[#584a3b] py-1 rounded hover:bg-white dark:hover:bg-[#292119] text-[#7a6455] dark:text-[#f3eadf]"
                               >Cancel</button>
                               <button
                                 onClick={async () => {
@@ -238,7 +238,7 @@ export default function Sidebar({
                                   });
                                   if (success) setEditingProjectId(null);
                                 }}
-                                className="flex-1 text-[9px] bg-[#d89745] text-white py-1 rounded font-bold hover:bg-[#c08234]"
+                                className="flex-1 text-[9px] bg-[#d89745] dark:bg-[#e0a070] text-white dark:text-[#f3eadf] py-1 rounded font-bold hover:bg-[#c08234] dark:hover:bg-[#d6b56d]"
                               >Save</button>
                             </div>
                           </div>
@@ -255,24 +255,24 @@ export default function Sidebar({
                         }}
                         className={`p-2 rounded-lg border flex items-center justify-between gap-2 cursor-pointer transition-all ${
                           isActive
-                            ? 'bg-[#ffeecd] border-[#e4be93] text-[#69441a]'
-                            : 'bg-white hover:bg-[#fff9ee] border-[#ebdcb9] text-[#55453B]'
+                            ? 'bg-[#ffeecd] dark:bg-[#292119] border-[#e4be93] dark:border-[#584a3b] text-[#69441a] dark:text-[#f3eadf]'
+                            : 'bg-white dark:bg-[#292119] hover:bg-[#fff9ee] dark:hover:bg-[#1e1914] border-[#ebdcb9] dark:border-[#584a3b] text-[#55453B] dark:text-[#f3eadf]'
                         }`}
                       >
                         <div className="min-w-0 flex-1">
                           <p className="font-extrabold text-[11px] truncate flex items-center gap-1">
                             {isActive && '✨'} {project.name}
                           </p>
-                          <p className="text-[9px] text-[#917d71] font-mono truncate" title={project.repoUrl}>
+                          <p className="text-[9px] text-[#917d71] dark:text-[#d6b56d] font-mono truncate" title={project.repoUrl}>
                             {project.repoUrl.replace(/^https?:\/\/(www\.)?/, '')}
                           </p>
                           {project.localPath && (
-                            <p className="text-[8px] text-[#b39e90] font-mono truncate" title={project.localPath}>
+                            <p className="text-[8px] text-[#b39e90] dark:text-[#d6b56d] font-mono truncate" title={project.localPath}>
                               📂 {project.localPath}
                             </p>
                           )}
                           {project.taskIdPrefix && (
-                            <p className="text-[8px] text-[#b39e90] font-mono truncate">
+                            <p className="text-[8px] text-[#b39e90] dark:text-[#d6b56d] font-mono truncate">
                               🏷️ Prefix: {project.taskIdPrefix}
                             </p>
                           )}
@@ -284,7 +284,7 @@ export default function Sidebar({
                               href={project.repoUrl}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="p-1 text-gray-400 hover:text-[#d89745] transition-colors"
+                              className="p-1 text-gray-400 dark:text-[#b8ab9f] hover:text-[#d89745] dark:hover:text-[#e0a070] transition-colors"
                               title="Open repository link in a new tab"
                             >
                               <ExternalLink size={12} />
@@ -299,7 +299,7 @@ export default function Sidebar({
                                     setEditingProjectId(project.id);
                                   }}
                                   type="button"
-                                  className="p-1 text-gray-400 hover:text-[#d89745] transition-colors cursor-pointer"
+                                  className="p-1 text-gray-400 dark:text-[#b8ab9f] hover:text-[#d89745] dark:hover:text-[#e0a070] transition-colors cursor-pointer"
                                   title="Edit project settings"
                                 >
                                   <FolderGit size={12} />
@@ -311,7 +311,7 @@ export default function Sidebar({
                                     }
                                   }}
                                   type="button"
-                                  className="p-1 text-gray-400 hover:text-red-500 transition-colors cursor-pointer"
+                                  className="p-1 text-gray-400 dark:text-[#b8ab9f] hover:text-red-500 transition-colors cursor-pointer"
                                   title="Delete project"
                                 >
                                   <Trash2 size={12} />
@@ -328,7 +328,7 @@ export default function Sidebar({
                 <button
                   onClick={() => setIsAddingProject(true)}
                   type="button"
-                  className="w-full mt-2 bg-[#d89745] hover:bg-[#c08234] text-white py-1.5 rounded-lg text-[10px] font-extrabold flex items-center justify-center gap-1 transition-all cursor-pointer"
+                  className="w-full mt-2 bg-[#d89745] dark:bg-[#e0a070] hover:bg-[#c08234] dark:hover:bg-[#d6b56d] text-white dark:text-[#f3eadf] py-1.5 rounded-lg text-[10px] font-extrabold flex items-center justify-center gap-1 transition-all cursor-pointer"
                 >
                   <Plus size={11} /> Bind New Repository
                 </button>
@@ -357,60 +357,60 @@ export default function Sidebar({
                 className="space-y-2 mt-1"
                 onClick={(e) => e.stopPropagation()}
               >
-                <p className="text-[9px] text-[#8C7565] font-bold uppercase tracking-widest border-b border-[#f1e6d4] pb-1">
+                <p className="text-[9px] text-[#8C7565] dark:text-[#f3eadf] font-bold uppercase tracking-widest border-b border-[#f1e6d4] dark:border-[#584a3b] pb-1">
                   ➕ Bind New repository
                 </p>
                 <div className="space-y-1.5 text-[10px]">
                   <div>
-                    <span className="text-[8px] text-[#8C7565] font-bold block mb-0.5">Project Name</span>
+                    <span className="text-[8px] text-[#8C7565] dark:text-[#f3eadf] font-bold block mb-0.5">Project Name</span>
                     <input
                       type="text"
                       required
                       placeholder="e.g. Android Customer App"
                       value={newProjectName}
                       onChange={(e) => setNewProjectName(e.target.value)}
-                      className="w-full bg-white border border-[#ebdcb9] px-2 py-1 rounded-md text-[10px] outline-none focus:border-[#d4994e] font-sans"
+                      className="w-full bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] px-2 py-1 rounded-md text-[10px] outline-none focus:border-[#d4994e] dark:focus:border-[#584a3b] font-sans"
                     />
                   </div>
                   <div>
-                    <span className="text-[8px] text-[#8C7565] font-bold block mb-0.5">Git Repo URL (HTTPS)</span>
+                    <span className="text-[8px] text-[#8C7565] dark:text-[#f3eadf] font-bold block mb-0.5">Git Repo URL (HTTPS)</span>
                     <input
                       type="url"
                       required
                       placeholder="https://github.com/user/repo"
                       value={newProjectRepoUrl}
                       onChange={(e) => setNewProjectRepoUrl(e.target.value)}
-                      className="w-full bg-white border border-[#ebdcb9] px-2 py-1 rounded-md text-[10px] outline-none focus:border-[#d4994e] font-mono"
+                      className="w-full bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] px-2 py-1 rounded-md text-[10px] outline-none focus:border-[#d4994e] dark:focus:border-[#584a3b] font-mono"
                     />
                   </div>
                   <div>
-                    <span className="text-[8px] text-[#8C7565] font-bold block mb-0.5">Description (Optional)</span>
+                    <span className="text-[8px] text-[#8C7565] dark:text-[#f3eadf] font-bold block mb-0.5">Description (Optional)</span>
                     <input
                       type="text"
                       placeholder="Core mobile application"
                       value={newProjectDesc}
                       onChange={(e) => setNewProjectDesc(e.target.value)}
-                      className="w-full bg-white border border-[#ebdcb9] px-2 py-1 rounded-md text-[10px] outline-none focus:border-[#d4994e] font-sans"
+                      className="w-full bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] px-2 py-1 rounded-md text-[10px] outline-none focus:border-[#d4994e] dark:focus:border-[#584a3b] font-sans"
                     />
                   </div>
                   <div>
-                    <span className="text-[8px] text-[#8C7565] font-bold block mb-0.5">Local Path (Optional)</span>
+                    <span className="text-[8px] text-[#8C7565] dark:text-[#f3eadf] font-bold block mb-0.5">Local Path (Optional)</span>
                     <input
                       type="text"
                       placeholder="C:\Projects\my-app"
                       value={newProjectLocalPath}
                       onChange={(e) => setNewProjectLocalPath(e.target.value)}
-                      className="w-full bg-white border border-[#ebdcb9] px-2 py-1 rounded-md text-[10px] outline-none focus:border-[#d4994e] font-mono"
+                      className="w-full bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] px-2 py-1 rounded-md text-[10px] outline-none focus:border-[#d4994e] dark:focus:border-[#584a3b] font-mono"
                     />
                   </div>
                   <div>
-                    <span className="text-[8px] text-[#8C7565] font-bold block mb-0.5">Task ID Prefix (Optional)</span>
+                    <span className="text-[8px] text-[#8C7565] dark:text-[#f3eadf] font-bold block mb-0.5">Task ID Prefix (Optional)</span>
                     <input
                       type="text"
                       placeholder="e.g. DVF"
                       value={newProjectTaskIdPrefix}
                       onChange={(e) => setNewProjectTaskIdPrefix(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6))}
-                      className="w-full bg-white border border-[#ebdcb9] px-2 py-1 rounded-md text-[10px] outline-none focus:border-[#d4994e] font-mono"
+                      className="w-full bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] px-2 py-1 rounded-md text-[10px] outline-none focus:border-[#d4994e] dark:focus:border-[#584a3b] font-mono"
                     />
                   </div>
                 </div>
@@ -419,13 +419,13 @@ export default function Sidebar({
                   <button
                     type="button"
                     onClick={() => setIsAddingProject(false)}
-                    className="flex-1 border border-[#ebdcb9] py-1 rounded-md hover:bg-[#fff9ef] text-[#7a6455]"
+                    className="flex-1 border border-[#ebdcb9] dark:border-[#584a3b] py-1 rounded-md hover:bg-[#fff9ef] dark:hover:bg-[#292119] text-[#7a6455] dark:text-[#f3eadf]"
                   >
                     Back
                   </button>
                   <button
                     type="submit"
-                    className="flex-1 bg-[#d89745] hover:bg-[#c08234] text-white py-1 rounded-md font-extrabold"
+                    className="flex-1 bg-[#d89745] dark:bg-[#e0a070] hover:bg-[#c08234] dark:hover:bg-[#d6b56d] text-white dark:text-[#f3eadf] py-1 rounded-md font-extrabold"
                   >
                     Link Repo
                   </button>
@@ -437,33 +437,33 @@ export default function Sidebar({
       </div>
 
       {/* Stats Section with beautiful orange values */}
-      <div className="px-6 py-2 border-b border-[#e5d4bb]">
-        <h3 className="text-[10px] font-bold text-[#8C7565] uppercase tracking-widest mb-3.5 flex items-center gap-1.5">
-          <TrendingUp size={12} className="text-[#df9433]" /> Work Progress
+      <div className="px-6 py-2 border-b border-[#e5d4bb] dark:border-[#584a3b]">
+        <h3 className="text-[10px] font-bold text-[#8C7565] dark:text-[#f3eadf] uppercase tracking-widest mb-3.5 flex items-center gap-1.5">
+          <TrendingUp size={12} className="text-[#df9433] dark:text-[#e0a070]" /> Work Progress
         </h3>
         
         <div className="grid grid-cols-2 gap-2 text-xs">
-          <div className="bg-[#fffbf6] p-2.5 rounded-xl border border-[#e5d4bb] shadow-2xs">
-            <p className="text-[9px] text-[#8C7565] font-bold font-mono">COMPLETED</p>
-            <p className="text-sm font-extrabold text-[#534135] mt-1">
-              {completedTasks} <span className="text-[9px] font-normal text-[#9b8577] font-mono">/ {totalTasks}</span>
+          <div className="bg-[#fffbf6] dark:bg-[#292119] p-2.5 rounded-xl border border-[#e5d4bb] dark:border-[#584a3b] shadow-2xs">
+            <p className="text-[9px] text-[#8C7565] dark:text-[#f3eadf] font-bold font-mono">COMPLETED</p>
+            <p className="text-sm font-extrabold text-[#534135] dark:text-[#f3eadf] mt-1">
+              {completedTasks} <span className="text-[9px] font-normal text-[#9b8577] dark:text-[#d6b56d] font-mono">/ {totalTasks}</span>
             </p>
-            <div className="w-full bg-[#ebdcb9] h-1.5 rounded-full mt-2 overflow-hidden">
+            <div className="w-full bg-[#ebdcb9] dark:bg-[#584a3b] h-1.5 rounded-full mt-2 overflow-hidden">
               <div 
-                className="bg-[#38b000] h-1.5 rounded-full transition-all duration-500"
+                className="bg-[#38b000] dark:bg-[#d6b56d] h-1.5 rounded-full transition-all duration-500"
                 style={{ width: `${totalTasks > 0 ? (completedTasks / totalTasks) * 100 : 0}%` }}
               />
             </div>
           </div>
 
-          <div className="bg-[#fffbf6] p-2.5 rounded-xl border border-[#e5d4bb] flex flex-col justify-between shadow-2xs">
+          <div className="bg-[#fffbf6] dark:bg-[#292119] p-2.5 rounded-xl border border-[#e5d4bb] dark:border-[#584a3b] flex flex-col justify-between shadow-2xs">
             <div>
-              <p className="text-[9px] text-[#8C7565] font-bold font-mono">ACTIVE SPECS</p>
-              <p className="text-sm font-extrabold text-[#d8913b] mt-1 flex items-center gap-1">
+              <p className="text-[9px] text-[#8C7565] dark:text-[#f3eadf] font-bold font-mono">ACTIVE SPECS</p>
+              <p className="text-sm font-extrabold text-[#d8913b] dark:text-[#d6b56d] mt-1 flex items-center gap-1">
                 ⚙️ {activeBranches.length}
               </p>
             </div>
-            <p className="text-[8px] text-[#917d71] truncate font-mono mt-1">working branches</p>
+            <p className="text-[8px] text-[#917d71] dark:text-[#d6b56d] truncate font-mono mt-1">working branches</p>
           </div>
         </div>
       </div>
@@ -473,12 +473,12 @@ export default function Sidebar({
         
         {/* Search Input */}
         <div className="space-y-1.5">
-          <label className="text-[9px] font-bold text-[#8C7565] uppercase tracking-widest flex items-center gap-1.5">
-            <Filter size={11} className="text-[#bf843e]" /> Find Ticket
+          <label className="text-[9px] font-bold text-[#8C7565] dark:text-[#f3eadf] uppercase tracking-widest flex items-center gap-1.5">
+            <Filter size={11} className="text-[#bf843e] dark:text-[#f3eadf]" /> Find Ticket
           </label>
           <input
             type="text"
-            className="w-full bg-[#fdfaf5] border border-[#e5d4bb] rounded-xl px-3.5 py-2 text-[11px] text-[#534135] placeholder-[#c3b19e] outline-none focus:border-[#d4994e] font-mono transition-all"
+            className="w-full bg-[#fdfaf5] dark:bg-[#292119] border border-[#e5d4bb] dark:border-[#584a3b] rounded-xl px-3.5 py-2 text-[11px] text-[#534135] dark:text-[#f3eadf] placeholder-[#c3b19e] outline-none focus:border-[#d4994e] dark:focus:border-[#584a3b] font-mono transition-all"
             placeholder="Type files or keys..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
@@ -487,62 +487,62 @@ export default function Sidebar({
 
         {/* Priority Filter */}
         <div className="space-y-2">
-          <label className="text-[9px] font-bold text-[#8C7565] uppercase tracking-widest flex items-center gap-1.5">
-            <Flame size={12} className="text-[#de6b48]" /> Task Urgency
+          <label className="text-[9px] font-bold text-[#8C7565] dark:text-[#f3eadf] uppercase tracking-widest flex items-center gap-1.5">
+            <Flame size={12} className="text-[#de6b48] dark:text-[#d6b56d]" /> Task Urgency
           </label>
           <div className="space-y-1">
             <button
               onClick={() => setSelectedPriority('all')}
               className={`w-full text-left text-[11px] px-3 py-2 rounded-xl flex items-center justify-between font-mono transition-all border ${
                 selectedPriority === 'all' 
-                  ? 'bg-[#ffeace] border-[#e7bc8c] text-[#714a1a] font-extrabold shadow-2xs' 
-                  : 'text-[#6e584a] border-transparent hover:bg-[#fff9f1] hover:text-[#534135]'
+                  ? 'bg-[#ffeace] dark:bg-[#292119] border-[#e7bc8c] dark:border-[#584a3b] text-[#714a1a] dark:text-[#f3eadf] font-extrabold shadow-2xs' 
+                  : 'text-[#6e584a] dark:text-[#f3eadf] border-transparent dark:border-transparent hover:bg-[#fff9f1] dark:hover:bg-[#292119] hover:text-[#534135] dark:hover:text-[#f3eadf]'
               }`}
             >
               <span>★ All Tickets</span>
-              <span className="text-[9px] bg-[#ebd6bc]/60 text-[#7c624d] px-1.5 py-0.5 rounded-full font-bold">{totalTasks}</span>
+              <span className="text-[9px] bg-[#ebd6bc]/60 dark:bg-[#292119]/60 text-[#7c624d] dark:text-[#f3eadf] px-1.5 py-0.5 rounded-full font-bold">{totalTasks}</span>
             </button>
             <button
               onClick={() => setSelectedPriority('high')}
               className={`w-full text-left text-[11px] px-3 py-2 rounded-xl flex items-center justify-between font-mono transition-all border ${
                 selectedPriority === 'high' 
-                  ? 'bg-[#ffdacf] border-[#ffa995] text-[#b43a20] font-extrabold shadow-2xs' 
-                  : 'text-[#6e584a] border-transparent hover:bg-[#fff9f1] hover:text-[#534135]'
+                  ? 'bg-[#ffdacf] dark:bg-[#292119] border-[#ffa995] dark:border-[#584a3b] text-[#b43a20] dark:text-[#f3eadf] font-extrabold shadow-2xs' 
+                  : 'text-[#6e584a] dark:text-[#f3eadf] border-transparent dark:border-transparent hover:bg-[#fff9f1] dark:hover:bg-[#292119] hover:text-[#534135] dark:hover:text-[#f3eadf]'
               }`}
             >
               <div className="flex items-center gap-2">
-                <span className="w-1.5 h-1.5 rounded-full bg-[#de6b48]" />
+                <span className="w-1.5 h-1.5 rounded-full bg-[#de6b48] dark:bg-[#e0a070]" />
                 <span>High Severity</span>
               </div>
-              <span className="text-[9px] bg-[#ebd6bc]/60 text-[#7c624d] px-1.5 py-0.5 rounded-full font-bold">{highPriorityCount}</span>
+              <span className="text-[9px] bg-[#ebd6bc]/60 dark:bg-[#292119]/60 text-[#7c624d] dark:text-[#f3eadf] px-1.5 py-0.5 rounded-full font-bold">{highPriorityCount}</span>
             </button>
             <button
               onClick={() => setSelectedPriority('medium')}
               className={`w-full text-left text-[11px] px-3 py-2 rounded-xl flex items-center justify-between font-mono transition-all border ${
                 selectedPriority === 'medium' 
-                  ? 'bg-[#ffecca] border-[#f0cca3] text-[#a46c24] font-extrabold shadow-2xs' 
-                  : 'text-[#6e584a] border-transparent hover:bg-[#fff9f1] hover:text-[#534135]'
+                  ? 'bg-[#ffecca] dark:bg-[#292119] border-[#f0cca3] dark:border-[#584a3b] text-[#a46c24] dark:text-[#f3eadf] font-extrabold shadow-2xs' 
+                  : 'text-[#6e584a] dark:text-[#f3eadf] border-transparent dark:border-transparent hover:bg-[#fff9f1] dark:hover:bg-[#292119] hover:text-[#534135] dark:hover:text-[#f3eadf]'
               }`}
             >
               <div className="flex items-center gap-2">
-                <span className="w-1.5 h-1.5 rounded-full bg-[#e5a93b]" />
+                <span className="w-1.5 h-1.5 rounded-full bg-[#e5a93b] dark:bg-[#e0a070]" />
                 <span>Medium Severity</span>
               </div>
-              <span className="text-[9px] bg-[#ebd6bc]/60 text-[#7c624d] px-1.5 py-0.5 rounded-full font-bold">{mediumPriorityCount}</span>
+              <span className="text-[9px] bg-[#ebd6bc]/60 dark:bg-[#292119]/60 text-[#7c624d] dark:text-[#f3eadf] px-1.5 py-0.5 rounded-full font-bold">{mediumPriorityCount}</span>
             </button>
             <button
               onClick={() => setSelectedPriority('low')}
               className={`w-full text-left text-[11px] px-3 py-2 rounded-xl flex items-center justify-between font-mono transition-all border ${
                 selectedPriority === 'low' 
-                  ? 'bg-[#e2f0dc] border-[#bddda4] text-[#4d7e35] font-extrabold shadow-2xs' 
-                  : 'text-[#6e584a] border-transparent hover:bg-[#fff9f1] hover:text-[#534135]'
+                  ? 'bg-[#e2f0dc] dark:bg-[#292119] border-[#bddda4] dark:border-[#584a3b] text-[#4d7e35] dark:text-[#f3eadf] font-extrabold shadow-2xs' 
+                  : 'text-[#6e584a] dark:text-[#f3eadf] border-transparent dark:border-transparent hover:bg-[#fff9f1] dark:hover:bg-[#292119] hover:text-[#534135] dark:hover:text-[#f3eadf]'
               }`}
             >
               <div className="flex items-center gap-2">
-                <span className="w-1.5 h-1.5 rounded-full bg-[#7dad71]" />
+                <span className="w-1.5 h-1.5 rounded-full bg-[#7dad71] dark:bg-[#e0a070]" />
                 <span>Low Severity</span>
               </div>
-              <span className="text-[9px] bg-[#ebd6bc]/60 text-[#7c624d] px-1.5 py-0.5 rounded-full font-bold">{lowPriorityCount}</span>
+              <span className="text-[9px] bg-[#ebd6bc]/60 dark:bg-[#292119]/60 text-[#7c624d] dark:text-[#f3eadf] px-1.5 py-0.5 rounded-full font-bold">{lowPriorityCount}</span>
             </button>
           </div>
         </div>
@@ -550,12 +550,12 @@ export default function Sidebar({
       </div>
 
       {/* Decorative Bottom */}
-      <div className="p-4 border-t border-[#e5d4bb] bg-[#ede0c9]/50 flex items-center justify-between text-[10px] text-[#816b5a] font-mono">
+      <div className="p-4 border-t border-[#e5d4bb] dark:border-[#584a3b] bg-[#ede0c9]/50 dark:bg-[#292119]/50 flex items-center justify-between text-[10px] text-[#816b5a] dark:text-[#f3eadf] font-mono">
         <span>✨ Stay focused, build beautifully.</span>
         <button
           onClick={onOpenSettings}
           title="Open Settings"
-          className="flex items-center gap-1.5 text-[#b89b82] hover:text-[#935919] hover:bg-[#ebdcb9]/40 px-2 py-1 rounded-lg transition-colors"
+          className="flex items-center gap-1.5 text-[#b89b82] dark:text-[#d6b56d] hover:text-[#935919] dark:hover:text-[#e0a070] hover:bg-[#ebdcb9]/40 dark:hover:bg-[#584a3b]/40 px-2 py-1 rounded-lg transition-colors"
         >
           <Settings size={13} />
           <span className="font-bold">Settings</span>

@@ -12,14 +12,14 @@ interface MarkdownRendererProps {
 
 export default function MarkdownRenderer({ content }: MarkdownRendererProps) {
   if (!content) {
-    return <span className="text-[#8c7463] italic font-mono text-xs">No specifications details provided yet. =^.^=</span>;
+    return <span className="text-[#8c7463] dark:text-[#f3eadf] italic font-mono text-xs">No specifications details provided yet. =^.^=</span>;
   }
 
   // Simple and highly robust custom renderer for dev notebooks
   const parts = content.split(/(```[\s\S]*?```)/g);
 
   return (
-    <div className="space-y-3.5 text-xs leading-relaxed font-sans text-[#413129]">
+    <div className="space-y-3.5 text-xs leading-relaxed font-sans text-[#413129] dark:text-[#f3eadf]">
       {parts.map((part, index) => {
         // Code Block
         if (part.startsWith('```')) {
@@ -28,10 +28,10 @@ export default function MarkdownRenderer({ content }: MarkdownRendererProps) {
           const code = match ? match[2] : part.slice(3, -3);
 
           return (
-            <div key={index} className="border border-[#ebdcb9] rounded-2xl overflow-hidden bg-[#faf8f3] my-3 shadow-3xs">
-              <div className="bg-[#f5eedf] px-4 py-2 border-b border-[#ebdcb9] flex justify-between items-center text-[10px] text-[#715c4f] font-mono">
-                <span className="flex items-center gap-1.5 uppercase font-extrabold text-[#715c4d]">
-                  <Terminal size={12} className="text-[#bf8a50]" />
+            <div key={index} className="border border-[#ebdcb9] dark:border-[#584a3b] rounded-2xl overflow-hidden bg-[#faf8f3] dark:bg-[#292119] my-3 shadow-3xs">
+              <div className="bg-[#f5eedf] dark:bg-[#292119] px-4 py-2 border-b border-[#ebdcb9] dark:border-[#584a3b] flex justify-between items-center text-[10px] text-[#715c4f] dark:text-[#f3eadf] font-mono">
+                <span className="flex items-center gap-1.5 uppercase font-extrabold text-[#715c4d] dark:text-[#f3eadf]">
+                  <Terminal size={12} className="text-[#bf8a50] dark:text-[#d6b56d]" />
                   {lang || 'source code'}
                 </span>
                 <button
@@ -40,12 +40,12 @@ export default function MarkdownRenderer({ content }: MarkdownRendererProps) {
                     navigator.clipboard.writeText(code.trim());
                     alert('Code copied to clipboard! 🐾');
                   }}
-                  className="hover:text-[#3a2010] px-2.5 py-0.5 rounded-xl border border-[#ebdcb9] bg-white text-[9px] transition-all font-bold"
+                  className="hover:text-[#3a2010] dark:hover:text-[#f3eadf] px-2.5 py-0.5 rounded-xl border border-[#ebdcb9] dark:border-[#584a3b] bg-white dark:bg-[#292119] text-[9px] transition-all font-bold"
                 >
                   Copy
                 </button>
               </div>
-              <pre className="p-4 overflow-x-auto text-[11px] font-mono whitespace-pre text-[#915d2a] leading-relaxed scrollbar-thin font-bold bg-[#fffdfa]">
+              <pre className="p-4 overflow-x-auto text-[11px] font-mono whitespace-pre text-[#915d2a] dark:text-[#f3eadf] leading-relaxed scrollbar-thin font-bold bg-[#fffdfa] dark:bg-[#292119]">
                 <code>{code.trim()}</code>
               </pre>
             </div>
@@ -62,8 +62,8 @@ export default function MarkdownRenderer({ content }: MarkdownRendererProps) {
               // H3
               if (trimmed.startsWith('### ')) {
                 return (
-                  <h4 key={lineIdx} className="text-[#3c2a1a] font-extrabold font-sans text-xs mt-3 flex items-center gap-1.5">
-                    <span className="w-1.5 h-3 bg-[#e5a93b] rounded-full inline-block" />
+                  <h4 key={lineIdx} className="text-[#3c2a1a] dark:text-[#f3eadf] font-extrabold font-sans text-xs mt-3 flex items-center gap-1.5">
+                    <span className="w-1.5 h-3 bg-[#e5a93b] dark:bg-[#e0a070] rounded-full inline-block" />
                     {trimmed.replace('### ', '')}
                   </h4>
                 );
@@ -71,8 +71,8 @@ export default function MarkdownRenderer({ content }: MarkdownRendererProps) {
               // H2
               if (trimmed.startsWith('## ')) {
                 return (
-                  <h3 key={lineIdx} className="text-[#3c2a1a] font-black font-sans text-xs mt-4 flex items-center gap-1.5">
-                    <span className="w-2 h-3.5 bg-[#d89745] rounded-full inline-block" />
+                  <h3 key={lineIdx} className="text-[#3c2a1a] dark:text-[#f3eadf] font-black font-sans text-xs mt-4 flex items-center gap-1.5">
+                    <span className="w-2 h-3.5 bg-[#d89745] dark:bg-[#e0a070] rounded-full inline-block" />
                     {trimmed.replace('## ', '')}
                   </h3>
                 );
@@ -80,8 +80,8 @@ export default function MarkdownRenderer({ content }: MarkdownRendererProps) {
               // Bullet Points
               if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
                 return (
-                  <div key={lineIdx} className="pl-4 flex items-start gap-2 text-xs font-semibold text-[#5c493c]">
-                    <span className="text-[#d89745] mt-1 select-none font-extrabold">🐾</span>
+                  <div key={lineIdx} className="pl-4 flex items-start gap-2 text-xs font-semibold text-[#5c493c] dark:text-[#f3eadf]">
+                    <span className="text-[#d89745] dark:text-[#e0a070] mt-1 select-none font-extrabold">🐾</span>
                     <span>{parseInlineCode(trimmed.substring(2))}</span>
                   </div>
                 );
@@ -92,8 +92,8 @@ export default function MarkdownRenderer({ content }: MarkdownRendererProps) {
                 const number = match ? match[1] : '';
                 const text = match ? match[2] : trimmed;
                 return (
-                  <div key={lineIdx} className="pl-4 flex items-start gap-2 text-xs font-semibold text-[#5c493c]">
-                    <span className="text-[#df9433] font-mono mt-0.5 text-[10px] font-extrabold">{number}.</span>
+                  <div key={lineIdx} className="pl-4 flex items-start gap-2 text-xs font-semibold text-[#5c493c] dark:text-[#f3eadf]">
+                    <span className="text-[#df9433] dark:text-[#e0a070] font-mono mt-0.5 text-[10px] font-extrabold">{number}.</span>
                     <span>{parseInlineCode(text)}</span>
                   </div>
                 );
@@ -106,7 +106,7 @@ export default function MarkdownRenderer({ content }: MarkdownRendererProps) {
 
               // Standard line
               return (
-                <p key={lineIdx} className="text-[#5c493c] font-semibold">
+                <p key={lineIdx} className="text-[#5c493c] dark:text-[#f3eadf] font-semibold">
                   {parseInlineCode(line)}
                 </p>
               );
@@ -132,7 +132,7 @@ function parseInlineCode(text: string) {
     }
     // Add code segment
     parts.push(
-      <code key={match.index} className="px-2 py-0.5 bg-[#fefcf8] border border-[#e5d4bb] rounded-lg text-[10px] font-mono text-[#a46c24] font-bold shadow-3xs">
+      <code key={match.index} className="px-2 py-0.5 bg-[#fefcf8] dark:bg-[#292119] border border-[#e5d4bb] dark:border-[#584a3b] rounded-lg text-[10px] font-mono text-[#a46c24] dark:text-[#f3eadf] font-bold shadow-3xs">
         {match[1]}
       </code>
     );

@@ -268,15 +268,15 @@ export default function TaskDetailsDrawer({
       <div className="fixed inset-0" onClick={onClose} />
 
       {/* Centered Spec Sheet Modal Container */}
-      <div className="bg-[#fcf9f4] border border-[#ebdcb9] w-full max-w-2xl h-[85vh] rounded-3xl shadow-2xl relative z-10 overflow-hidden flex flex-col justify-between font-sans">
+      <div className="bg-[#fcf9f4] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] w-full max-w-2xl h-[85vh] rounded-3xl shadow-2xl relative z-10 overflow-hidden flex flex-col justify-between font-sans">
         
         {/* Custom Header bar */}
-        <div className="p-5 border-b border-[#ebdcb9] bg-[#ebdcb9]/40 flex items-center justify-between font-mono text-[#5c493c]">
+        <div className="p-5 border-b border-[#ebdcb9] dark:border-[#584a3b] bg-[#ebdcb9]/40 dark:bg-[#584a3b]/40 flex items-center justify-between font-mono text-[#5c493c] dark:text-[#f3eadf]">
           <div className="flex items-center gap-2">
             <button 
               type="button"
               onClick={handleCopyId}
-              className="flex items-center gap-1.5 text-[10px] uppercase font-bold text-[#8a6e5a] hover:text-[#d89745] bg-[#fffbf4] hover:bg-[#ebdcb9]/30 px-2.5 py-1 rounded-xl border border-[#ebdcb9] transition-colors cursor-pointer"
+              className="flex items-center gap-1.5 text-[10px] uppercase font-bold text-[#8a6e5a] dark:text-[#f3eadf] hover:text-[#d89745] dark:hover:text-[#e0a070] bg-[#fffbf4] dark:bg-[#292119] hover:bg-[#ebdcb9]/30 dark:hover:bg-[#584a3b]/30 px-2.5 py-1 rounded-xl border border-[#ebdcb9] dark:border-[#584a3b] transition-colors cursor-pointer"
               title="Copy Card ID"
             >
               ID: {task.displayId || task.id}
@@ -286,8 +286,8 @@ export default function TaskDetailsDrawer({
                 <Copy size={11} className="opacity-40 hover:opacity-100" />
               )}
             </button>
-            <span className="h-4 w-px bg-[#ebdcb9]" />
-            <span className="text-[10px] text-[#8a6e5a] font-semibold">
+            <span className="h-4 w-px bg-[#ebdcb9] dark:bg-[#584a3b]" />
+            <span className="text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] font-semibold">
               Updated at {new Date(task.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
             </span>
           </div>
@@ -296,16 +296,16 @@ export default function TaskDetailsDrawer({
             <button
               type="button"
               onClick={() => setIsEditing(!isEditing)}
-              className="text-[11px] font-mono bg-[#fffbf4] border border-[#ebdcb9] text-[#6e5340] hover:bg-[#fff9ed] px-3 py-1.5 rounded-xl flex items-center gap-2 transition-all cursor-pointer shadow-2xs mr-1"
+              className="text-[11px] font-mono bg-[#fffbf4] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] text-[#6e5340] dark:text-[#f3eadf] hover:bg-[#fff9ed] dark:hover:bg-[#1e1914] px-3 py-1.5 rounded-xl flex items-center gap-2 transition-all cursor-pointer shadow-2xs mr-1"
             >
               {isEditing ? (
                 <>
-                  <BookOpen size={13} className="text-[#38b000]" />
+                  <BookOpen size={13} className="text-[#38b000] dark:text-[#f3eadf]" />
                   <span className="font-bold">Preview Spec</span>
                 </>
               ) : (
                 <>
-                  <Edit3 size={13} className="text-[#e5a93b]" />
+                  <Edit3 size={13} className="text-[#e5a93b] dark:text-[#d6b56d]" />
                   <span className="font-bold">Edit Spec</span>
                 </>
               )}
@@ -313,7 +313,7 @@ export default function TaskDetailsDrawer({
             <button
               onClick={() => onDelete(task.id)}
               type="button"
-              className="text-[#9e8b7e] hover:text-red-500 p-2 rounded-full hover:bg-white/60 transition-all cursor-pointer"
+              className="text-[#9e8b7e] dark:text-[#d6b56d] hover:text-red-500 p-2 rounded-full hover:bg-white dark:hover:bg-[#292119]/60 transition-all cursor-pointer"
               title="Delete ticket"
             >
               <Trash2 size={16} />
@@ -321,7 +321,7 @@ export default function TaskDetailsDrawer({
             <button
               onClick={onClose}
               type="button"
-              className="text-[#9e8b7e] hover:text-[#5c493c] p-2 rounded-full hover:bg-white/60 transition-all cursor-pointer"
+              className="text-[#9e8b7e] dark:text-[#d6b56d] hover:text-[#5c493c] dark:hover:text-[#f3eadf] p-2 rounded-full hover:bg-white dark:hover:bg-[#292119]/60 transition-all cursor-pointer"
               title="Close panel"
             >
               <X size={17} />
@@ -334,15 +334,15 @@ export default function TaskDetailsDrawer({
           
           {/* Parent Context Banner */}
           {parentTask && (
-            <div className="bg-[#f2ece5]/80 border border-[#d6cbbe] rounded-2xl p-4.5 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 font-sans select-none animate-fade-in shadow-xs">
+            <div className="bg-[#f2ece5]/80 dark:bg-[#292119]/80 border border-[#d6cbbe] dark:border-[#584a3b] rounded-2xl p-4.5 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 font-sans select-none animate-fade-in shadow-xs">
               <div className="space-y-1">
-                <span className="text-[10px] font-mono uppercase bg-[#ffffff] text-[#8c7463] px-2 py-0.5 rounded-lg border border-[#ebdcb9] font-extrabold">
+                <span className="text-[10px] font-mono uppercase bg-[#ffffff] dark:bg-[#292119] text-[#8c7463] dark:text-[#f3eadf] px-2 py-0.5 rounded-lg border border-[#ebdcb9] dark:border-[#584a3b] font-extrabold">
                   🌿 Linked Subtask Spec
                 </span>
-                <h4 className="text-xs font-black text-[#5c493c] leading-snug line-clamp-1 mt-1 font-sans">
+                <h4 className="text-xs font-black text-[#5c493c] dark:text-[#f3eadf] leading-snug line-clamp-1 mt-1 font-sans">
                   Parent: #{parentTask.displayId || parentTask.id} • {parentTask.title}
                 </h4>
-                <p className="text-[10.5px] text-[#8c7463] font-sans">
+                <p className="text-[10.5px] text-[#8c7463] dark:text-[#f3eadf] font-sans">
                   This task constitutes a nested modular checkpoint of its parent workspace ticket.
                 </p>
               </div>
@@ -350,9 +350,9 @@ export default function TaskDetailsDrawer({
                 <button
                   type="button"
                   onClick={() => onSelectTask(parentTask)}
-                  className="bg-white hover:bg-[#fff9ed] border border-[#ebdcb9] hover:border-[#d4994e] text-[#6e5340] font-extrabold px-3 py-1.5 rounded-xl text-[10.5px] flex items-center gap-1.5 transition-all shadow-4xs cursor-pointer hover:shadow-2xs active:scale-[0.98] shrink-0"
+                  className="bg-white dark:bg-[#292119] hover:bg-[#fff9ed] dark:hover:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] hover:border-[#d4994e] dark:hover:border-[#584a3b] text-[#6e5340] dark:text-[#f3eadf] font-extrabold px-3 py-1.5 rounded-xl text-[10.5px] flex items-center gap-1.5 transition-all shadow-4xs cursor-pointer hover:shadow-2xs active:scale-[0.98] shrink-0"
                 >
-                  <Cat size={12} className="text-[#d89745]" /> Open Parent Card
+                  <Cat size={12} className="text-[#d89745] dark:text-[#e0a070]" /> Open Parent Card
                 </button>
               )}
             </div>
@@ -360,12 +360,12 @@ export default function TaskDetailsDrawer({
 
           {isEditing ? (
             /* ================= EDIT MODE SPECIFICATION ================= */
-            <div className="space-y-4 text-xs font-mono text-[#5c493c]">
+            <div className="space-y-4 text-xs font-mono text-[#5c493c] dark:text-[#f3eadf]">
               <div className="space-y-1">
-                <label className="block text-[10px] text-[#8a6e5a] uppercase tracking-widest font-extrabold">Issue Title</label>
+                <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold">Issue Title</label>
                 <input
                   type="text"
-                  className="w-full bg-[#ffffff] border border-[#ebdcb9] rounded-xl px-3 py-2 text-xs text-[#3a2f26] outline-none focus:border-[#d7933f] font-sans transition-all"
+                  className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] font-sans transition-all"
                   value={editedTitle}
                   onChange={(e) => setEditedTitle(e.target.value)}
                 />
@@ -373,9 +373,9 @@ export default function TaskDetailsDrawer({
 
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1">
-                  <label className="block text-[10px] text-[#8a6e5a] uppercase tracking-widest font-extrabold">Lane Status</label>
+                  <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold">Lane Status</label>
                   <select
-                    className="w-full bg-[#ffffff] border border-[#ebdcb9] rounded-xl px-3 py-2 text-xs text-[#3a2f26] outline-none focus:border-[#d7933f] transition-all"
+                    className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all"
                     value={editedStatus}
                     onChange={(e) => setEditedStatus(e.target.value as TaskStatus)}
                   >
@@ -388,9 +388,9 @@ export default function TaskDetailsDrawer({
                 </div>
 
                 <div className="space-y-1">
-                  <label className="block text-[10px] text-[#8a6e5a] uppercase tracking-widest font-extrabold">Urgency Level</label>
+                  <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold">Urgency Level</label>
                   <select
-                    className="w-full bg-[#ffffff] border border-[#ebdcb9] rounded-xl px-3 py-2 text-xs text-[#3a2f26] outline-none focus:border-[#d7933f] transition-all"
+                    className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all"
                     value={editedPriority}
                     onChange={(e) => setEditedPriority(e.target.value as TaskPriority)}
                   >
@@ -402,10 +402,10 @@ export default function TaskDetailsDrawer({
               </div>
 
               <div className="space-y-1">
-                <label className="block text-[10px] text-[#8a6e5a] uppercase tracking-widest font-extrabold">Checkout Branch</label>
+                <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold">Checkout Branch</label>
                 <input
                   type="text"
-                  className="w-full bg-[#ffffff] border border-[#ebdcb9] rounded-xl px-3 py-2 text-xs text-[#b87332] outline-none focus:border-[#d7933f] transition-all"
+                  className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#b87332] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all"
                   placeholder="feature/compose-ui-locks"
                   value={editedBranch}
                   onChange={(e) => setEditedBranch(e.target.value)}
@@ -414,9 +414,9 @@ export default function TaskDetailsDrawer({
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <div className="space-y-1">
-                  <label className="block text-[10px] text-[#8a6e5a] uppercase tracking-widest font-extrabold">Assigned Agent</label>
+                  <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold">Assigned Agent</label>
                   <select
-                    className="w-full bg-[#ffffff] border border-[#ebdcb9] rounded-xl px-3 py-2 text-xs text-[#3a2f26] outline-none focus:border-[#d7933f] transition-all font-bold"
+                    className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all font-bold"
                     value={editedAgent}
                     onChange={(e) => {
                       const val = e.target.value;
@@ -439,9 +439,9 @@ export default function TaskDetailsDrawer({
                 </div>
 
                 <div className="space-y-1">
-                  <label className="block text-[10px] text-[#8a6e5a] uppercase tracking-widest font-extrabold">AI Model Spec</label>
+                  <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold">AI Model Spec</label>
                   <select
-                    className="w-full bg-[#ffffff] border border-[#ebdcb9] rounded-xl px-3 py-2 text-xs text-[#3a2f26] outline-none focus:border-[#d7933f] transition-all font-bold disabled:bg-[#f5eeda]/50"
+                    className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all font-bold disabled:bg-[#f5eeda]/50 dark:disabled:bg-[#292119]/50"
                     value={editedModel}
                     disabled={!editedAgent}
                     onChange={(e) => {
@@ -464,9 +464,9 @@ export default function TaskDetailsDrawer({
                 </div>
 
                 <div className="space-y-1">
-                  <label className="block text-[10px] text-[#8a6e5a] uppercase tracking-widest font-extrabold">Effort Allocation</label>
+                  <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold">Effort Allocation</label>
                   <select
-                    className="w-full bg-[#ffffff] border border-[#ebdcb9] rounded-xl px-3 py-2 text-xs text-[#3a2f26] outline-none focus:border-[#d7933f] transition-all font-bold disabled:bg-[#f5eeda]/50"
+                    className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all font-bold disabled:bg-[#f5eeda]/50 dark:disabled:bg-[#292119]/50"
                     value={editedEffort}
                     disabled={!editedAgent || !editedModel}
                     onChange={(e) => setEditedEffort(e.target.value)}
@@ -484,12 +484,12 @@ export default function TaskDetailsDrawer({
 
               {/* Path Editor box */}
               <div className="space-y-1">
-                <label className="block text-[10px] text-[#8a6e5a] uppercase tracking-widest font-extrabold flex justify-between">
+                <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold flex justify-between">
                   <span>Target Files to Modify</span>
-                  <span className="text-[9px] text-[#9c8473] lowercase font-normal">(one relative file path per line)</span>
+                  <span className="text-[9px] text-[#9c8473] dark:text-[#d6b56d] lowercase font-normal">(one relative file path per line)</span>
                 </label>
                 <textarea
-                  className="w-full bg-[#ffffff] border border-[#ebdcb9] rounded-xl px-3 py-2 text-xs text-[#3a2f26] h-24 outline-none focus:border-[#d7933f] transition-all resize-y font-mono"
+                  className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] h-24 outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all resize-y font-mono"
                   placeholder="app/src/main/java/com/example/MainActivity.kt"
                   value={editedFilesStr}
                   onChange={(e) => setEditedFilesStr(e.target.value)}
@@ -498,26 +498,26 @@ export default function TaskDetailsDrawer({
 
               {/* Action checklist lines */}
               <div className="space-y-1">
-                <label className="block text-[10px] text-[#8a6e5a] uppercase tracking-widest font-extrabold flex justify-between">
+                <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold flex justify-between">
                   <span>Implementation Checklist Steps</span>
-                  <span className="text-[9px] text-[#9c8473] lowercase font-normal">(one task step per line)</span>
+                  <span className="text-[9px] text-[#9c8473] dark:text-[#d6b56d] lowercase font-normal">(one task step per line)</span>
                 </label>
                 <textarea
-                  className="w-full bg-[#ffffff] border border-[#ebdcb9] rounded-xl px-3 py-2 text-xs text-[#3a2f26] h-24 outline-none focus:border-[#d7933f] transition-all resize-y font-mono"
+                  className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] h-24 outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all resize-y font-mono"
                   value={editedChecklistStr}
                   onChange={(e) => setEditedChecklistStr(e.target.value)}
                 />
               </div>
 
               {/* Design Image & Spec URL Section */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-b border-[#ebdcb9]/45 py-3 font-sans">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-b border-[#ebdcb9]/45 dark:border-[#584a3b]/45 py-3 font-sans">
                 <div className="space-y-1">
-                  <label className="block text-[10px] text-[#8a6e5a] font-mono uppercase tracking-widest flex items-center gap-1 font-extrabold pl-0.5">
-                    <ImageIcon size={12} className="text-[#bf8a50]" /> Design Image (File or URL)
+                  <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] font-mono uppercase tracking-widest flex items-center gap-1 font-extrabold pl-0.5">
+                    <ImageIcon size={12} className="text-[#bf8a50] dark:text-[#d6b56d]" /> Design Image (File or URL)
                   </label>
                   <div className="space-y-2">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <label className={`text-[10px] bg-white border border-[#ebdcb9] px-2.5 py-1.5 rounded-lg text-[#5c493c] hover:bg-[#fffcf6] cursor-pointer inline-flex items-center gap-1 font-bold ${editedDesignImages.length >= 5 ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                      <label className={`text-[10px] bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] px-2.5 py-1.5 rounded-lg text-[#5c493c] dark:text-[#f3eadf] hover:bg-[#fffcf6] dark:hover:bg-[#1e1914] cursor-pointer inline-flex items-center gap-1 font-bold ${editedDesignImages.length >= 5 ? 'opacity-50 cursor-not-allowed' : ''}`}>
                         <span>Upload Image(s) {editedDesignImages.length > 0 && `(${editedDesignImages.length}/5)`}</span>
                         <input
                           type="file"
@@ -555,12 +555,12 @@ export default function TaskDetailsDrawer({
                     {editedDesignImages.length > 0 && (
                       <div className="flex gap-2 overflow-x-auto pb-1 mt-2">
                         {editedDesignImages.map((img, idx) => (
-                          <div key={idx} className="relative border border-[#ebdcb9] rounded-lg overflow-hidden h-14 w-14 shrink-0 bg-white group">
+                          <div key={idx} className="relative border border-[#ebdcb9] dark:border-[#584a3b] rounded-lg overflow-hidden h-14 w-14 shrink-0 bg-white dark:bg-[#292119] group">
                             <img src={img} alt={`Preview ${idx + 1}`} className="h-full w-full object-cover" referrerPolicy="no-referrer" />
                             <button 
                               type="button"
                               onClick={() => setEditedDesignImages(prev => prev.filter((_, i) => i !== idx))}
-                              className="absolute top-0 right-0 bg-red-500 text-white w-4 h-4 flex items-center justify-center text-[10px] opacity-0 group-hover:opacity-100 transition-opacity"
+                              className="absolute top-0 right-0 bg-red-500 text-white dark:text-[#f3eadf] w-4 h-4 flex items-center justify-center text-[10px] opacity-0 group-hover:opacity-100 transition-opacity"
                             >
                               ✕
                             </button>
@@ -572,27 +572,27 @@ export default function TaskDetailsDrawer({
                 </div>
 
                 <div className="space-y-1">
-                  <label className="block text-[10px] text-[#8a6e5a] font-mono uppercase tracking-widest flex items-center gap-1 font-extrabold pl-0.5">
-                    <LinkIcon size={12} className="text-[#3c829e]" /> Specification link / URL
+                  <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] font-mono uppercase tracking-widest flex items-center gap-1 font-extrabold pl-0.5">
+                    <LinkIcon size={12} className="text-[#3c829e] dark:text-[#f3eadf]" /> Specification link / URL
                   </label>
                   <input
                     type="text"
-                    className="w-full bg-[#ffffff] border border-[#ebdcb9] rounded-xl px-2.5 py-2 text-[11px] text-[#3a2f26] placeholder-[#c4b3a4] outline-none focus:border-[#d7933f] font-sans"
+                    className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-2.5 py-2 text-[11px] text-[#3a2f26] dark:text-[#f3eadf] placeholder-[#c4b3a4] outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] font-sans"
                     placeholder="e.g. Figma link or API Doc URL"
                     value={editedSpecUrl}
                     onChange={(e) => setEditedSpecUrl(e.target.value)}
                   />
-                  <p className="text-[9px] text-[#8c7463] font-mono pl-0.5 leading-relaxed">Link to external product design, spreadsheet, or spec sheet.</p>
+                  <p className="text-[9px] text-[#8c7463] dark:text-[#f3eadf] font-mono pl-0.5 leading-relaxed">Link to external product design, spreadsheet, or spec sheet.</p>
                 </div>
               </div>
 
               {/* Guideline Specifications markup area */}
               <div className="space-y-1">
-                <label className="block text-[10px] text-[#8a6e5a] uppercase tracking-widest font-extrabold flex justify-between">
+                <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold flex justify-between">
                   <span>Detailed Specifications & Code (Markdown)</span>
                 </label>
                 <textarea
-                  className="w-full bg-[#ffffff] border border-[#ebdcb9] rounded-xl px-3 py-2 text-xs text-[#3a2f26] h-32 outline-none focus:border-[#d7933f] transition-all resize-y font-mono"
+                  className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] h-32 outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all resize-y font-mono"
                   placeholder="Insert architecture blueprint markdown notes..."
                   value={editedDesc}
                   onChange={(e) => setEditedDesc(e.target.value)}
@@ -600,44 +600,44 @@ export default function TaskDetailsDrawer({
               </div>
 
               <div className="space-y-1">
-                <label className="block text-[10px] text-[#8a6e5a] uppercase tracking-widest font-extrabold flex justify-between">
+                <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold flex justify-between">
                   <span>Reasoning & Context</span>
                 </label>
                 <textarea
-                  className="w-full bg-[#ffffff] border border-[#ebdcb9] rounded-xl px-3 py-2 text-xs text-[#3a2f26] h-16 outline-none focus:border-[#d7933f] transition-all resize-y font-mono"
+                  className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] h-16 outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all resize-y font-mono"
                   value={editedReasoning}
                   onChange={(e) => setEditedReasoning(e.target.value)}
                 />
               </div>
 
               <div className="space-y-1">
-                <label className="block text-[10px] text-[#8a6e5a] uppercase tracking-widest font-extrabold flex justify-between">
+                <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold flex justify-between">
                   <span>Acceptance Criteria</span>
                 </label>
                 <textarea
-                  className="w-full bg-[#ffffff] border border-[#ebdcb9] rounded-xl px-3 py-2 text-xs text-[#3a2f26] h-16 outline-none focus:border-[#d7933f] transition-all resize-y font-mono"
+                  className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] h-16 outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all resize-y font-mono"
                   value={editedAcceptance}
                   onChange={(e) => setEditedAcceptance(e.target.value)}
                 />
               </div>
 
               <div className="space-y-1">
-                <label className="block text-[10px] text-[#8a6e5a] uppercase tracking-widest font-extrabold flex justify-between">
+                <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold flex justify-between">
                   <span>Verification Steps</span>
                 </label>
                 <textarea
-                  className="w-full bg-[#ffffff] border border-[#ebdcb9] rounded-xl px-3 py-2 text-xs text-[#3a2f26] h-16 outline-none focus:border-[#d7933f] transition-all resize-y font-mono"
+                  className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] h-16 outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all resize-y font-mono"
                   value={editedVerification}
                   onChange={(e) => setEditedVerification(e.target.value)}
                 />
               </div>
 
               <div className="space-y-1">
-                <label className="block text-[10px] text-[#8a6e5a] uppercase tracking-widest font-extrabold flex justify-between">
+                <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold flex justify-between">
                   <span>Repository Context</span>
                 </label>
                 <textarea
-                  className="w-full bg-[#ffffff] border border-[#ebdcb9] rounded-xl px-3 py-2 text-xs text-[#3a2f26] h-16 outline-none focus:border-[#d7933f] transition-all resize-y font-mono"
+                  className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] h-16 outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all resize-y font-mono"
                   value={editedRepoContext}
                   onChange={(e) => setEditedRepoContext(e.target.value)}
                 />
@@ -645,36 +645,36 @@ export default function TaskDetailsDrawer({
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <div className="space-y-1">
-                  <label className="block text-[10px] text-[#8a6e5a] uppercase tracking-widest font-extrabold flex justify-between">
+                  <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold flex justify-between">
                     <span>Jira Issue Key</span>
                   </label>
                   <input
                     type="text"
-                    className="w-full bg-[#ffffff] border border-[#ebdcb9] rounded-xl px-3 py-2 text-xs text-[#3a2f26] outline-none focus:border-[#d7933f] transition-all font-mono"
+                    className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all font-mono"
                     placeholder="QCA-3314"
                     value={editedJiraKey}
                     onChange={(e) => setEditedJiraKey(e.target.value)}
                   />
                 </div>
                 <div className="space-y-1">
-                  <label className="block text-[10px] text-[#8a6e5a] uppercase tracking-widest font-extrabold flex justify-between">
+                  <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold flex justify-between">
                     <span>Repository URL</span>
                   </label>
                   <input
                     type="text"
-                    className="w-full bg-[#ffffff] border border-[#ebdcb9] rounded-xl px-3 py-2 text-xs text-[#3a2f26] outline-none focus:border-[#d7933f] transition-all font-mono"
+                    className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all font-mono"
                     placeholder="https://github.com/org/repo"
                     value={editedRepo}
                     onChange={(e) => setEditedRepo(e.target.value)}
                   />
                 </div>
                 <div className="space-y-1">
-                  <label className="block text-[10px] text-[#8a6e5a] uppercase tracking-widest font-extrabold flex justify-between">
+                  <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold flex justify-between">
                     <span>Source URL</span>
                   </label>
                   <input
                     type="text"
-                    className="w-full bg-[#ffffff] border border-[#ebdcb9] rounded-xl px-3 py-2 text-xs text-[#3a2f26] outline-none focus:border-[#d7933f] transition-all font-mono"
+                    className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all font-mono"
                     placeholder="https://jira.../browse/..."
                     value={editedSourceUrl}
                     onChange={(e) => setEditedSourceUrl(e.target.value)}
@@ -686,14 +686,14 @@ export default function TaskDetailsDrawer({
                 <button
                   type="button"
                   onClick={() => setIsEditing(false)}
-                  className="flex-1 py-2 rounded-xl border border-[#ebdcb9] text-[#6e5a4d] bg-white hover:bg-[#fff9ed] transition-colors text-xs font-bold cursor-pointer"
+                  className="flex-1 py-2 rounded-xl border border-[#ebdcb9] dark:border-[#584a3b] text-[#6e5a4d] dark:text-[#f3eadf] bg-white dark:bg-[#292119] hover:bg-[#fff9ed] dark:hover:bg-[#1e1914] transition-colors text-xs font-bold cursor-pointer"
                 >
                   Discard Changes
                 </button>
                 <button
                   type="button"
                   onClick={handleSave}
-                  className="flex-1 bg-[#d89745] hover:bg-[#c08234] text-white font-extrabold py-2 rounded-xl text-xs transition-colors cursor-pointer"
+                  className="flex-1 bg-[#d89745] dark:bg-[#e0a070] hover:bg-[#c08234] dark:hover:bg-[#d6b56d] text-white dark:text-[#f3eadf] font-extrabold py-2 rounded-xl text-xs transition-colors cursor-pointer"
                 >
                   Save Modifications
                 </button>
@@ -701,48 +701,48 @@ export default function TaskDetailsDrawer({
             </div>
           ) : (
             /* ================= PREVIEW / VIEW MODE ================= */
-            <div className="space-y-6 text-[#5c493c]">
+            <div className="space-y-6 text-[#5c493c] dark:text-[#f3eadf]">
               <div>
                 <div className="flex items-center gap-1.5 mb-2 text-xs font-mono">
                   <span className={`w-1.5 h-1.5 rounded-full ${
-                    task.priority === 'high' ? 'bg-[#de6b48]' : task.priority === 'medium' ? 'bg-[#e5a93b]' : 'bg-[#7dad71]'
+                    task.priority === 'high' ? 'bg-[#de6b48] dark:bg-[#e0a070]' : task.priority === 'medium' ? 'bg-[#e5a93b] dark:bg-[#e0a070]' : 'bg-[#7dad71] dark:bg-[#e0a070]'
                   }`} />
-                  <span className="text-[10px] uppercase font-bold tracking-wider text-[#9b8575]">
+                  <span className="text-[10px] uppercase font-bold tracking-wider text-[#9b8575] dark:text-[#d6b56d]">
                     {task.priority || 'low'} Severity level
                   </span>
                 </div>
-                <h2 className="text-sm font-extrabold text-[#3a2f26] font-sans tracking-tight leading-snug">
+                <h2 className="text-sm font-extrabold text-[#3a2f26] dark:text-[#f3eadf] font-sans tracking-tight leading-snug">
                   {task.title}
                 </h2>
               </div>
 
               {/* Status Metadata Panel */}
-              <div className="bg-[#fffdfa] p-3.5 rounded-2xl border border-[#ebdcb9] text-xs font-mono flex items-center justify-between shadow-xs">
+              <div className="bg-[#fffdfa] dark:bg-[#292119] p-3.5 rounded-2xl border border-[#ebdcb9] dark:border-[#584a3b] text-xs font-mono flex items-center justify-between shadow-xs">
                 <div className="flex items-center gap-2">
-                  <Database size={13} className="text-[#bf8a50]" />
-                  <span className="text-[10px] uppercase text-[#816c5b] font-bold">Workspace Lane:</span>
+                  <Database size={13} className="text-[#bf8a50] dark:text-[#d6b56d]" />
+                  <span className="text-[10px] uppercase text-[#816c5b] dark:text-[#f3eadf] font-bold">Workspace Lane:</span>
                   <span className={`text-[9px] uppercase font-bold px-2 py-0.5 rounded-lg border ${
-                    task.status === 'done' ? 'bg-[#e2f0dc] text-[#4d7e35] border-[#bddda4]' :
-                    task.status === 'in-progress' ? 'bg-[#ffecca] text-[#a46c24] border-[#f0cca3]' : 
-                    'bg-[#f4ebd9]/60 text-[#715c4d] border-[#ebdcb9]'
+                    task.status === 'done' ? 'bg-[#e2f0dc] dark:bg-[#292119] text-[#4d7e35] dark:text-[#f3eadf] border-[#bddda4] dark:border-[#584a3b]' :
+                    task.status === 'in-progress' ? 'bg-[#ffecca] dark:bg-[#292119] text-[#a46c24] dark:text-[#f3eadf] border-[#f0cca3] dark:border-[#584a3b]' : 
+                    'bg-[#f4ebd9]/60 dark:bg-[#292119]/60 text-[#715c4d] dark:text-[#f3eadf] border-[#ebdcb9] dark:border-[#584a3b]'
                   }`}>{task.status}</span>
                 </div>
-                <div className="text-[9px] text-[#9b8575] font-bold">
+                <div className="text-[9px] text-[#9b8575] dark:text-[#d6b56d] font-bold">
                   born {new Date(task.createdAt).toLocaleDateString()}
                 </div>
               </div>
 
               {/* Agent & Model Info Panel */}
               {(task.agent || task.model) && (
-                <div className="bg-[#fcfbf9]/70 p-4 rounded-2xl border border-[#ebdcb9] text-xs font-mono flex flex-col gap-3 shadow-xs">
+                <div className="bg-[#fcfbf9]/70 dark:bg-[#292119]/70 p-4 rounded-2xl border border-[#ebdcb9] dark:border-[#584a3b] text-xs font-mono flex flex-col gap-3 shadow-xs">
                   <div className="flex flex-wrap gap-4 items-center justify-between">
                     {task.agent && (
                       <div className="flex items-center gap-2">
-                        <span className="text-[10px] uppercase text-[#816c5b] font-extrabold">Agent:</span>
+                        <span className="text-[10px] uppercase text-[#816c5b] dark:text-[#f3eadf] font-extrabold">Agent:</span>
                         <span className={`text-[9.5px] uppercase font-bold px-2 py-0.5 rounded-lg border ${
-                          task.agent === 'Codex' ? 'bg-[#e0eafc] text-[#1a56db] border-[#bcccf5]' :
-                          task.agent === 'Antigravity' ? 'bg-[#fae8ff] text-[#86198f] border-[#f5d0fe]' :
-                          'bg-[#fef3c7] text-[#92400e] border-[#fde68a]'
+                          task.agent === 'Codex' ? 'bg-[#e0eafc] dark:bg-[#292119] text-[#1a56db] dark:text-[#f3eadf] border-[#bcccf5] dark:border-[#584a3b]' :
+                          task.agent === 'Antigravity' ? 'bg-[#fae8ff] dark:bg-[#292119] text-[#86198f] dark:text-[#f3eadf] border-[#f5d0fe] dark:border-[#584a3b]' :
+                          'bg-[#fef3c7] dark:bg-[#292119] text-[#92400e] dark:text-[#f3eadf] border-[#fde68a] dark:border-[#584a3b]'
                         }`}>
                           🤖 {task.agent}
                         </span>
@@ -750,16 +750,16 @@ export default function TaskDetailsDrawer({
                     )}
                     {task.model && (
                       <div className="flex items-center gap-2">
-                        <span className="text-[10px] uppercase text-[#816c5b] font-extrabold">Model Spec:</span>
-                        <span className="bg-[#f0ece3] text-[#4d3d32] border border-[#d2c9b4] text-[9.5px] font-mono font-bold px-2 py-0.5 rounded-lg">
+                        <span className="text-[10px] uppercase text-[#816c5b] dark:text-[#f3eadf] font-extrabold">Model Spec:</span>
+                        <span className="bg-[#f0ece3] dark:bg-[#292119] text-[#4d3d32] dark:text-[#f3eadf] border border-[#d2c9b4] dark:border-[#584a3b] text-[9.5px] font-mono font-bold px-2 py-0.5 rounded-lg">
                           {task.model}
                         </span>
                       </div>
                     )}
                     {task.effort && (
                       <div className="flex items-center gap-2">
-                        <span className="text-[10px] uppercase text-[#816c5b] font-extrabold">Effort:</span>
-                        <span className="bg-[#f8fafc] text-[#475569] border border-[#e2e8f0] text-[9.5px] font-mono font-bold px-2 py-0.5 rounded-lg uppercase">
+                        <span className="text-[10px] uppercase text-[#816c5b] dark:text-[#f3eadf] font-extrabold">Effort:</span>
+                        <span className="bg-[#f8fafc] dark:bg-[#292119] text-[#475569] dark:text-[#f3eadf] border border-[#e2e8f0] dark:border-[#584a3b] text-[9.5px] font-mono font-bold px-2 py-0.5 rounded-lg uppercase">
                           ⚡ {task.effort}
                         </span>
                       </div>
@@ -772,16 +772,16 @@ export default function TaskDetailsDrawer({
 
               {/* 🌿 SUBTASKS SECTION */}
               {!task.parentId && (
-                <div className="space-y-3.5 border-t border-[#ebdcb9] pt-5 font-sans">
+                <div className="space-y-3.5 border-t border-[#ebdcb9] dark:border-[#584a3b] pt-5 font-sans">
                   <div className="flex items-center justify-between">
-                    <h4 className="text-[10px] font-mono text-[#8a6e5a] uppercase tracking-widest flex items-center gap-1.5 font-bold">
-                      <PawPrint size={13} className="text-[#d89745]" /> Subtasks Breakdown ({subTasks.filter(s => s.status === 'done').length}/{subTasks.length})
+                    <h4 className="text-[10px] font-mono text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest flex items-center gap-1.5 font-bold">
+                      <PawPrint size={13} className="text-[#d89745] dark:text-[#e0a070]" /> Subtasks Breakdown ({subTasks.filter(s => s.status === 'done').length}/{subTasks.length})
                     </h4>
                     {onCreateTask && (
                       <button
                         type="button"
                         onClick={() => setIsAddingSubtask(true)}
-                        className="bg-[#2a7a8a] text-white hover:bg-[#1a5b67] text-[10px] font-extrabold px-3 py-1.5 rounded-xl flex items-center gap-1 transition-all cursor-pointer shadow-4xs font-sans tracking-wide active:scale-[0.98]"
+                        className="bg-[#2a7a8a] dark:bg-[#d6b56d] text-white dark:text-[#f3eadf] hover:bg-[#1a5b67] dark:hover:bg-[#292119] text-[10px] font-extrabold px-3 py-1.5 rounded-xl flex items-center gap-1 transition-all cursor-pointer shadow-4xs font-sans tracking-wide active:scale-[0.98]"
                       >
                         <Plus size={11} /> Create Subtask Spec
                       </button>
@@ -791,14 +791,14 @@ export default function TaskDetailsDrawer({
                   {subTasks.length > 0 ? (
                     <div className="space-y-2.5">
                       {/* Visual progress bar */}
-                      <div className="bg-white border border-[#ebdcb9]/65 p-3 rounded-2xl flex items-center justify-between gap-4 shadow-3xs">
-                        <div className="flex-1 bg-[#ede6dc]/60 rounded-full h-1.5 overflow-hidden">
+                      <div className="bg-white dark:bg-[#292119] border border-[#ebdcb9]/65 dark:border-[#584a3b]/65 p-3 rounded-2xl flex items-center justify-between gap-4 shadow-3xs">
+                        <div className="flex-1 bg-[#ede6dc]/60 dark:bg-[#292119]/60 rounded-full h-1.5 overflow-hidden">
                           <div 
-                            className="bg-[#2a7a8a] h-full rounded-full transition-all duration-300"
+                            className="bg-[#2a7a8a] dark:bg-[#d6b56d] h-full rounded-full transition-all duration-300"
                             style={{ width: `${(subTasks.filter(s => s.status === 'done').length / subTasks.length) * 100}%` }}
                           />
                         </div>
-                        <span className="text-[10px] font-mono font-black text-[#2a7a8a]">
+                        <span className="text-[10px] font-mono font-black text-[#2a7a8a] dark:text-[#f3eadf]">
                           {Math.round((subTasks.filter(s => s.status === 'done').length / subTasks.length) * 100)}% complete
                         </span>
                       </div>
@@ -814,16 +814,16 @@ export default function TaskDetailsDrawer({
                               onClick={() => {
                                 if (onSelectTask) onSelectTask(sub);
                               }}
-                              className={`p-3.5 rounded-2xl border flex flex-col justify-between h-[90px] cursor-pointer transition-all hover:bg-[#fffcf8] active:scale-[0.98] hover:shadow-sm relative ${
+                              className={`p-3.5 rounded-2xl border flex flex-col justify-between h-[90px] cursor-pointer transition-all hover:bg-[#fffcf8] dark:hover:bg-[#1e1914] active:scale-[0.98] hover:shadow-sm relative ${
                                 subDone 
-                                  ? 'bg-[#edf7ed]/30 border-emerald-100/50 text-gray-400' 
+                                  ? 'bg-[#edf7ed]/30 dark:bg-[#292119]/30 border-emerald-100/50 text-gray-400 dark:text-[#b8ab9f]' 
                                   : subInProgress
-                                    ? 'bg-orange-50/15 border-[#e3a35a] shadow-2xs'
-                                    : 'bg-white border-[#ebdcb9]/65 text-[#3a2f26]'
+                                    ? 'bg-orange-50/15 border-[#e3a35a] dark:border-[#584a3b] shadow-2xs'
+                                    : 'bg-white dark:bg-[#292119] border-[#ebdcb9]/65 dark:border-[#584a3b]/65 text-[#3a2f26] dark:text-[#f3eadf]'
                               }`}
                             >
                               <div className="space-y-1 min-w-0 pr-1">
-                                <p className={`text-[11px] font-extrabold leading-snug truncate ${subDone ? 'line-through text-gray-400 font-normal' : 'text-[#3e3129]'}`}>
+                                <p className={`text-[11px] font-extrabold leading-snug truncate ${subDone ? 'line-through text-gray-400 dark:text-[#b8ab9f] font-normal' : 'text-[#3e3129] dark:text-[#f3eadf]'}`}>
                                   {sub.title}
                                 </p>
                                 <button 
@@ -835,7 +835,7 @@ export default function TaskDetailsDrawer({
                                     // A simple visual feedback, though using a dedicated state for subtasks is better, 
                                     // for now we'll just let it copy since it wasn't strictly requested for subtasks, but we'll add the button just in case.
                                   }}
-                                  className="flex items-center gap-1 text-[9px] font-mono text-gray-400/80 hover:text-[#d89745] font-bold cursor-pointer"
+                                  className="flex items-center gap-1 text-[9px] font-mono text-gray-400 dark:text-[#b8ab9f]/80 hover:text-[#d89745] dark:hover:text-[#e0a070] font-bold cursor-pointer"
                                   title="Copy Card ID"
                                 >
                                   ID: #{sub.displayId || sub.id}
@@ -846,14 +846,14 @@ export default function TaskDetailsDrawer({
                                 {/* Agent & priority */}
                                 <div className="flex items-center gap-1">
                                   {sub.model && (
-                                    <span className="px-1 py-0.2 rounded border bg-[#fae8ff] text-[#86198f] border-[#f5d0fe]">
+                                    <span className="px-1 py-0.2 rounded border bg-[#fae8ff] dark:bg-[#292119] text-[#86198f] dark:text-[#f3eadf] border-[#f5d0fe] dark:border-[#584a3b]">
                                       {sub.model}
                                     </span>
                                   )}
                                   <span className={`px-1 py-0.2 rounded border uppercase ${
-                                    sub.priority === 'high' ? 'bg-[#ffdacf] text-[#b43a20] border-[#ffa995]' :
-                                    sub.priority === 'medium' ? 'bg-[#ffecca] text-[#a46c24] border-[#f0cca3]' :
-                                    'bg-[#e2f0dc] text-[#4d7e35] border-[#bddda4]'
+                                    sub.priority === 'high' ? 'bg-[#ffdacf] dark:bg-[#292119] text-[#b43a20] dark:text-[#f3eadf] border-[#ffa995] dark:border-[#584a3b]' :
+                                    sub.priority === 'medium' ? 'bg-[#ffecca] dark:bg-[#292119] text-[#a46c24] dark:text-[#f3eadf] border-[#f0cca3] dark:border-[#584a3b]' :
+                                    'bg-[#e2f0dc] dark:bg-[#292119] text-[#4d7e35] dark:text-[#f3eadf] border-[#bddda4] dark:border-[#584a3b]'
                                   }`}>
                                     {sub.priority}
                                   </span>
@@ -861,9 +861,9 @@ export default function TaskDetailsDrawer({
 
                                 {/* Status badge */}
                                 <span className={`px-1.5 py-0.4 rounded-lg border uppercase font-extrabold ${
-                                  subDone ? 'bg-emerald-50 text-emerald-700 border-[#bddda4]/50' :
+                                  subDone ? 'bg-emerald-50 text-emerald-700 border-[#bddda4]/50 dark:border-[#584a3b]/50' :
                                   subInProgress ? 'bg-orange-50 text-orange-700 border-orange-200/50' :
-                                  'bg-white text-gray-400 border-gray-350/50'
+                                  'bg-white dark:bg-[#292119] text-gray-400 dark:text-[#b8ab9f] border-gray-350'
                                 }`}>
                                   {sub.status === 'in-progress' ? 'active' : sub.status}
                                 </span>
@@ -874,11 +874,11 @@ export default function TaskDetailsDrawer({
                       </div>
                     </div>
                   ) : (
-                    <div className="bg-white border-2 border-dashed border-[#e2d5c3]/60 rounded-2xl p-6 text-center select-none shadow-3xs">
-                      <p className="text-[10px] font-mono text-[#a59182] font-extrabold uppercase tracking-wide">
+                    <div className="bg-white dark:bg-[#292119] border-2 border-dashed border-[#e2d5c3]/60 dark:border-[#584a3b]/60 rounded-2xl p-6 text-center select-none shadow-3xs">
+                      <p className="text-[10px] font-mono text-[#a59182] dark:text-[#d6b56d] font-extrabold uppercase tracking-wide">
                         🌿 No Linked Subtasks Configured
                       </p>
-                      <p className="text-[9px] text-[#b4a091] font-mono mt-1 max-w-sm mx-auto">
+                      <p className="text-[9px] text-[#b4a091] dark:text-[#d6b56d] font-mono mt-1 max-w-sm mx-auto">
                         This spec ticket stands alone as a singular release epic. Split it to isolate task files, logs, and agent assignments.
                       </p>
                     </div>
@@ -887,16 +887,16 @@ export default function TaskDetailsDrawer({
               )}
 
               {/* 📂 TARGET FILES TO MODIFY SECTION */}
-              <div className="space-y-2.5 border-t border-[#ebdcb9] pt-5">
-                <h4 className="text-[10px] font-mono text-[#8a6e5a] uppercase tracking-widest flex items-center gap-1.5 font-bold">
-                  <FileCode size={13} className="text-[#bf8a50]" /> Target Files (ไฟล์ที่แก้ไข)
+              <div className="space-y-2.5 border-t border-[#ebdcb9] dark:border-[#584a3b] pt-5">
+                <h4 className="text-[10px] font-mono text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest flex items-center gap-1.5 font-bold">
+                  <FileCode size={13} className="text-[#bf8a50] dark:text-[#d6b56d]" /> Target Files (ไฟล์ที่แก้ไข)
                 </h4>
                 {task.targetFiles && task.targetFiles.length > 0 ? (
                   <div className="space-y-1.5">
                     {task.targetFiles.map((f, i) => (
                       <div 
                         key={i} 
-                        className="bg-[#ffffff] border border-[#ebdcb9] rounded-xl p-2.5 flex items-center justify-between text-[11px] font-mono text-[#bd7e3e] hover:border-[#dfa161] group/file shadow-2xs"
+                        className="bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl p-2.5 flex items-center justify-between text-[11px] font-mono text-[#bd7e3e] dark:text-[#f3eadf] hover:border-[#dfa161] dark:hover:border-[#584a3b] group/file shadow-2xs"
                       >
                         <span className="truncate pr-2 font-semibold">{f}</span>
                         <button
@@ -905,7 +905,7 @@ export default function TaskDetailsDrawer({
                             navigator.clipboard.writeText(f);
                             alert(`Copied file: ${f}`);
                           }}
-                          className="opacity-0 group-hover/file:opacity-100 text-[#856c5a] hover:text-[#3a2010] px-2.5 py-1 bg-[#fffbf6] border border-[#ebdcb9] rounded-xl text-[9px] transition-all cursor-pointer font-bold"
+                          className="opacity-0 group-hover/file:opacity-100 text-[#856c5a] dark:text-[#f3eadf] hover:text-[#3a2010] dark:hover:text-[#f3eadf] px-2.5 py-1 bg-[#fffbf6] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl text-[9px] transition-all cursor-pointer font-bold"
                         >
                           copy
                         </button>
@@ -913,14 +913,14 @@ export default function TaskDetailsDrawer({
                     ))}
                   </div>
                 ) : (
-                  <p className="text-[10px] text-[#a59182] italic font-mono pl-1">No target files specified. Edit properties to add files.</p>
+                  <p className="text-[10px] text-[#a59182] dark:text-[#d6b56d] italic font-mono pl-1">No target files specified. Edit properties to add files.</p>
                 )}
               </div>
 
               {/* Checklist steps SECTION */}
-              <div className="space-y-2.5 border-t border-[#ebdcb9] pt-5">
-                <h4 className="text-[10px] font-mono text-[#8a6e5a] uppercase tracking-widest flex items-center gap-1.5 font-bold">
-                  <CheckSquare size={13} className="text-[#728f44]" /> Mini-Tasks (สิ่งที่ต้องทำ)
+              <div className="space-y-2.5 border-t border-[#ebdcb9] dark:border-[#584a3b] pt-5">
+                <h4 className="text-[10px] font-mono text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest flex items-center gap-1.5 font-bold">
+                  <CheckSquare size={13} className="text-[#728f44] dark:text-[#f3eadf]" /> Mini-Tasks (สิ่งที่ต้องทำ)
                 </h4>
                 {task.checklist && task.checklist.length > 0 ? (
                   <div className="space-y-2">
@@ -930,36 +930,36 @@ export default function TaskDetailsDrawer({
                         onClick={() => handleToggleChecklistItem(item.id || item.text)}
                         className={`p-3 rounded-xl border flex items-start gap-2.5 cursor-pointer transition-all shadow-2xs select-none ${
                           item.completed 
-                            ? 'bg-[#e2f0dc]/45 border-[#bddda4]/50 text-gray-400 line-through' 
-                            : 'bg-white border-[#ebdcb9] text-[#4d3d32] hover:bg-[#fffdfb] hover:border-[#c5b497]'
+                            ? 'bg-[#e2f0dc]/45 dark:bg-[#292119]/45 border-[#bddda4]/50 dark:border-[#584a3b]/50 text-gray-400 dark:text-[#b8ab9f] line-through' 
+                            : 'bg-white dark:bg-[#292119] border-[#ebdcb9] dark:border-[#584a3b] text-[#4d3d32] dark:text-[#f3eadf] hover:bg-[#fffdfb] dark:hover:bg-[#292119] hover:border-[#c5b497] dark:hover:border-[#584a3b]'
                         }`}
                       >
                         <input
                           type="checkbox"
                           checked={item.completed}
                           onChange={() => {}} // toggled on container click
-                          className="mt-0.5 rounded border-[#ebdcb9] text-[#7dad71] focus:ring-0 cursor-pointer pointer-events-none"
+                          className="mt-0.5 rounded border-[#ebdcb9] dark:border-[#584a3b] text-[#7dad71] dark:text-[#d6b56d] focus:ring-0 cursor-pointer pointer-events-none"
                         />
                         <span className="text-[11px] font-semibold select-none leading-relaxed">{item.text}</span>
                       </div>
                     ))}
                   </div>
                 ) : (
-                  <p className="text-[10px] text-[#a59182] italic font-mono pl-1 font-bold">No steps configured. Edit properties to define steps.</p>
+                  <p className="text-[10px] text-[#a59182] dark:text-[#d6b56d] italic font-mono pl-1 font-bold">No steps configured. Edit properties to define steps.</p>
                 )}
               </div>
 
               {/* 🎨 DESIGN IMAGES & SPECIFICATION REFERENCE SECTION */}
               {((task.designImages && task.designImages.length > 0) || task.designImage || task.specUrl) && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-[#ebdcb9] pt-5 font-sans">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-[#ebdcb9] dark:border-[#584a3b] pt-5 font-sans">
                   {((task.designImages && task.designImages.length > 0) || task.designImage) && (
                     <div className="space-y-2 col-span-1 md:col-span-2">
-                      <h4 className="text-[10px] font-mono text-[#8a6e5a] uppercase tracking-widest flex items-center gap-1.5 font-bold">
-                        <ImageIcon size={13} className="text-[#bf8a50]" /> Design Mockup / Layout
+                      <h4 className="text-[10px] font-mono text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest flex items-center gap-1.5 font-bold">
+                        <ImageIcon size={13} className="text-[#bf8a50] dark:text-[#d6b56d]" /> Design Mockup / Layout
                       </h4>
                       <div className="flex gap-2 overflow-x-auto pb-2 snap-x">
                         {(task.designImages || (task.designImage ? [task.designImage] : [])).map((img, idx) => (
-                          <div key={idx} className="border border-[#ebdcb9] rounded-2xl overflow-hidden bg-white shadow-xs p-1 shrink-0 w-64 snap-center">
+                          <div key={idx} className="border border-[#ebdcb9] dark:border-[#584a3b] rounded-2xl overflow-hidden bg-white dark:bg-[#292119] shadow-xs p-1 shrink-0 w-64 snap-center">
                             <a href={img} onClick={(e) => handleViewImage(e, img)} title="Click to view full image in a new tab">
                               <img 
                                 src={img} 
@@ -976,26 +976,26 @@ export default function TaskDetailsDrawer({
 
                   {task.specUrl && (
                     <div className="space-y-2 flex flex-col justify-start">
-                      <h4 className="text-[10px] font-mono text-[#8a6e5a] uppercase tracking-widest flex items-center gap-1.5 font-bold">
-                        <LinkIcon size={13} className="text-[#3c829e]" /> Verification Specification Sheet
+                      <h4 className="text-[10px] font-mono text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest flex items-center gap-1.5 font-bold">
+                        <LinkIcon size={13} className="text-[#3c829e] dark:text-[#f3eadf]" /> Verification Specification Sheet
                       </h4>
-                      <div className="bg-[#fffdfa] border border-[#ebdcb9]/60 hover:border-[#ebdcb9] p-4 rounded-2xl shadow-2xs flex flex-col gap-2.5 h-full relative justify-center">
+                      <div className="bg-[#fffdfa] dark:bg-[#292119] border border-[#ebdcb9]/60 dark:border-[#584a3b]/60 hover:border-[#ebdcb9] dark:hover:border-[#584a3b] p-4 rounded-2xl shadow-2xs flex flex-col gap-2.5 h-full relative justify-center">
                         <div className="flex items-center gap-2">
-                          <div className="p-2 bg-[#e4eff3] rounded-xl text-[#3c829e]">
+                          <div className="p-2 bg-[#e4eff3] dark:bg-[#292119] rounded-xl text-[#3c829e] dark:text-[#f3eadf]">
                             <LinkIcon size={16} />
                           </div>
                           <div className="min-w-0 flex-1">
-                            <p className="text-[11px] font-bold text-[#354f59] tracking-tight truncate max-w-full">
+                            <p className="text-[11px] font-bold text-[#354f59] dark:text-[#f3eadf] tracking-tight truncate max-w-full">
                               {task.specUrl}
                             </p>
-                            <p className="text-[9px] text-[#6d848c] font-mono leading-tight">Click link below to browse the specification workspace</p>
+                            <p className="text-[9px] text-[#6d848c] dark:text-[#f3eadf] font-mono leading-tight">Click link below to browse the specification workspace</p>
                           </div>
                         </div>
                         <a 
                           href={task.specUrl.startsWith('http') ? task.specUrl : `https://${task.specUrl}`} 
                           target="_blank" 
                           rel="noreferrer" 
-                          className="w-full bg-[#3c829e] hover:bg-[#2e6d87] text-white text-center text-[10px] font-extrabold py-2 rounded-xl transition-all block cursor-pointer uppercase tracking-widest mt-1"
+                          className="w-full bg-[#3c829e] dark:bg-[#e0a070] hover:bg-[#2e6d87] dark:hover:bg-[#d6b56d] text-white dark:text-[#f3eadf] text-center text-[10px] font-extrabold py-2 rounded-xl transition-all block cursor-pointer uppercase tracking-widest mt-1"
                         >
                           OPEN EXTERNAL SPEC SHEET ↗
                         </a>
@@ -1008,15 +1008,15 @@ export default function TaskDetailsDrawer({
               {/* Git Branch Block */}
               {task.branch && (
                 <div className="space-y-2">
-                  <h4 className="text-[10px] font-mono text-[#8a6e5a] uppercase tracking-widest flex items-center gap-1.5 font-bold">
-                    <GitBranch size={13} className="text-[#bf8a50]" /> Active Branch
+                  <h4 className="text-[10px] font-mono text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest flex items-center gap-1.5 font-bold">
+                    <GitBranch size={13} className="text-[#bf8a50] dark:text-[#d6b56d]" /> Active Branch
                   </h4>
-                  <div className="bg-[#fff9ee] border border-[#f5cb93] rounded-xl p-3 flex justify-between items-center text-[11px] font-mono text-[#9e6224] shadow-2xs">
+                  <div className="bg-[#fff9ee] dark:bg-[#292119] border border-[#f5cb93] dark:border-[#584a3b] rounded-xl p-3 flex justify-between items-center text-[11px] font-mono text-[#9e6224] dark:text-[#f3eadf] shadow-2xs">
                     <span className="truncate pr-4 font-bold">git checkout -b {task.branch}</span>
                     <button
                       type="button"
                       onClick={handleCopyCommand}
-                      className="hover:text-[#ffffff] px-2.5 py-1 rounded-xl bg-white hover:bg-[#d89745] border border-[#ebdcb9] text-[10px] hover:border-transparent transition-all shrink-0 cursor-pointer text-[#816a5a] font-bold shadow-2xs"
+                      className="hover:text-[#ffffff] dark:hover:text-[#292119] px-2.5 py-1 rounded-xl bg-white dark:bg-[#292119] hover:bg-[#d89745] dark:hover:bg-[#d6b56d] border border-[#ebdcb9] dark:border-[#584a3b] text-[10px] hover:border-transparent dark:hover:border-transparent transition-all shrink-0 cursor-pointer text-[#816a5a] dark:text-[#f3eadf] font-bold shadow-2xs"
                     >
                       {copied ? <Check size={11} className="text-emerald-500 font-bold" /> : 'Copy'}
                     </button>
@@ -1025,20 +1025,20 @@ export default function TaskDetailsDrawer({
               )}
 
               {/* Copy Starting Template Action */}
-              <div className="space-y-2 mt-4 border-t border-[#ebdcb9] pt-4">
-                <h4 className="text-[10px] font-mono text-[#8a6e5a] uppercase tracking-widest flex items-center gap-1.5 font-bold mb-2">
-                  <Copy size={13} className="text-[#bf8a50]" /> Agent Handoff
+              <div className="space-y-2 mt-4 border-t border-[#ebdcb9] dark:border-[#584a3b] pt-4">
+                <h4 className="text-[10px] font-mono text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest flex items-center gap-1.5 font-bold mb-2">
+                  <Copy size={13} className="text-[#bf8a50] dark:text-[#d6b56d]" /> Agent Handoff
                 </h4>
                 <CopyTemplateButton task={task} className="w-full justify-center py-2 text-xs" />
               </div>
 
               {/* Detailed specification display */}
               {task.description && (
-                <div className="space-y-2 border-t border-[#ebdcb9] pt-5">
-                  <h4 className="text-[10px] font-mono text-[#8a6e5a] uppercase tracking-widest flex items-center gap-1.5 mb-3 font-bold">
-                    <AlignLeft size={13} className="text-[#bf8a50]" /> Specifications Instruction sheet
+                <div className="space-y-2 border-t border-[#ebdcb9] dark:border-[#584a3b] pt-5">
+                  <h4 className="text-[10px] font-mono text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest flex items-center gap-1.5 mb-3 font-bold">
+                    <AlignLeft size={13} className="text-[#bf8a50] dark:text-[#d6b56d]" /> Specifications Instruction sheet
                   </h4>
-                  <div className="bg-[#ffffff] border border-[#ebdcb9] rounded-2xl p-4 text-[11px] font-mono text-[#5c493c] leading-relaxed overflow-x-auto shadow-2xs prose max-w-none select-text">
+                  <div className="bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-2xl p-4 text-[11px] font-mono text-[#5c493c] dark:text-[#f3eadf] leading-relaxed overflow-x-auto shadow-2xs prose max-w-none select-text dark:prose-invert dark:prose-headings:text-[#e0a070]">
                     <MarkdownRenderer content={task.description} />
                   </div>
                 </div>
@@ -1046,23 +1046,23 @@ export default function TaskDetailsDrawer({
 
               {/* Extra Info Fields */}
               {(task.reasoning || task.acceptanceCriteria || task.verification || task.repoContext || task.jiraKey || task.repo || task.sourceUrl) && (
-                <div className="space-y-3 border-t border-[#ebdcb9] pt-5 font-mono text-[10.5px]">
+                <div className="space-y-3 border-t border-[#ebdcb9] dark:border-[#584a3b] pt-5 font-mono text-[10.5px]">
                   
                   {/* Inline Metadata (Jira/Repo/SourceUrl) */}
                   {(task.jiraKey || task.repo || task.sourceUrl) && (
                     <div className="flex flex-wrap gap-3 mb-4">
                       {task.jiraKey && (
-                        <div className="bg-[#e4eff3] text-[#354f59] px-2.5 py-1 rounded-lg shadow-2xs font-bold flex items-center gap-1.5">
+                        <div className="bg-[#e4eff3] dark:bg-[#292119] text-[#354f59] dark:text-[#f3eadf] px-2.5 py-1 rounded-lg shadow-2xs font-bold flex items-center gap-1.5">
                           <span className="text-[9px] uppercase tracking-wider opacity-80">Jira Key:</span> {task.jiraKey}
                         </div>
                       )}
                       {task.repo && (
-                        <div className="bg-[#fffdfa] border border-[#ebdcb9] text-[#8a6e5a] px-2.5 py-1 rounded-lg shadow-2xs font-bold flex items-center gap-1.5">
+                        <div className="bg-[#fffdfa] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] text-[#8a6e5a] dark:text-[#f3eadf] px-2.5 py-1 rounded-lg shadow-2xs font-bold flex items-center gap-1.5">
                           <span className="text-[9px] uppercase tracking-wider">Repo:</span> {task.repo}
                         </div>
                       )}
                       {task.sourceUrl && (
-                        <a href={task.sourceUrl} target="_blank" rel="noreferrer" className="bg-[#fffdfa] border border-[#ebdcb9] text-[#3c829e] hover:text-[#2a7a8a] px-2.5 py-1 rounded-lg shadow-2xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer">
+                        <a href={task.sourceUrl} target="_blank" rel="noreferrer" className="bg-[#fffdfa] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] text-[#3c829e] dark:text-[#f3eadf] hover:text-[#2a7a8a] dark:hover:text-[#f3eadf] px-2.5 py-1 rounded-lg shadow-2xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer">
                           <span className="text-[9px] uppercase tracking-wider">Source URL ↗</span>
                         </a>
                       )}
@@ -1070,27 +1070,27 @@ export default function TaskDetailsDrawer({
                   )}
 
                   {task.reasoning && (
-                    <div className="bg-[#fffdfa] border border-[#ebdcb9]/60 p-3 rounded-xl shadow-2xs">
-                      <strong className="block text-[#8a6e5a] uppercase tracking-widest font-extrabold mb-1 text-[9px]">Reasoning & Context</strong>
-                      <p className="text-[#5c493c] leading-relaxed whitespace-pre-wrap">{task.reasoning}</p>
+                    <div className="bg-[#fffdfa] dark:bg-[#292119] border border-[#ebdcb9]/60 dark:border-[#584a3b]/60 p-3 rounded-xl shadow-2xs">
+                      <strong className="block text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold mb-1 text-[9px]">Reasoning & Context</strong>
+                      <p className="text-[#5c493c] dark:text-[#f3eadf] leading-relaxed whitespace-pre-wrap">{task.reasoning}</p>
                     </div>
                   )}
                   {task.acceptanceCriteria && (
-                    <div className="bg-[#fffdfa] border border-[#ebdcb9]/60 p-3 rounded-xl shadow-2xs">
-                      <strong className="block text-[#8a6e5a] uppercase tracking-widest font-extrabold mb-1 text-[9px]">Acceptance Criteria</strong>
-                      <p className="text-[#5c493c] leading-relaxed whitespace-pre-wrap">{task.acceptanceCriteria}</p>
+                    <div className="bg-[#fffdfa] dark:bg-[#292119] border border-[#ebdcb9]/60 dark:border-[#584a3b]/60 p-3 rounded-xl shadow-2xs">
+                      <strong className="block text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold mb-1 text-[9px]">Acceptance Criteria</strong>
+                      <p className="text-[#5c493c] dark:text-[#f3eadf] leading-relaxed whitespace-pre-wrap">{task.acceptanceCriteria}</p>
                     </div>
                   )}
                   {task.verification && (
-                    <div className="bg-[#fffdfa] border border-[#ebdcb9]/60 p-3 rounded-xl shadow-2xs">
-                      <strong className="block text-[#8a6e5a] uppercase tracking-widest font-extrabold mb-1 text-[9px]">Verification Steps</strong>
-                      <p className="text-[#5c493c] leading-relaxed whitespace-pre-wrap">{task.verification}</p>
+                    <div className="bg-[#fffdfa] dark:bg-[#292119] border border-[#ebdcb9]/60 dark:border-[#584a3b]/60 p-3 rounded-xl shadow-2xs">
+                      <strong className="block text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold mb-1 text-[9px]">Verification Steps</strong>
+                      <p className="text-[#5c493c] dark:text-[#f3eadf] leading-relaxed whitespace-pre-wrap">{task.verification}</p>
                     </div>
                   )}
                   {task.repoContext && (
-                    <div className="bg-[#fffdfa] border border-[#ebdcb9]/60 p-3 rounded-xl shadow-2xs">
-                      <strong className="block text-[#8a6e5a] uppercase tracking-widest font-extrabold mb-1 text-[9px]">Repository Context</strong>
-                      <p className="text-[#5c493c] leading-relaxed whitespace-pre-wrap">{task.repoContext}</p>
+                    <div className="bg-[#fffdfa] dark:bg-[#292119] border border-[#ebdcb9]/60 dark:border-[#584a3b]/60 p-3 rounded-xl shadow-2xs">
+                      <strong className="block text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold mb-1 text-[9px]">Repository Context</strong>
+                      <p className="text-[#5c493c] dark:text-[#f3eadf] leading-relaxed whitespace-pre-wrap">{task.repoContext}</p>
                     </div>
                   )}
                 </div>
@@ -1099,9 +1099,9 @@ export default function TaskDetailsDrawer({
           )}
 
           {/* Activity Logs */}
-          <div className="border-t border-[#ebdcb9] pt-6 space-y-4">
-            <h4 className="text-[10px] font-mono text-[#8a6e5a] uppercase tracking-widest flex items-center gap-1.5 font-bold">
-              <Activity size={13} className="text-gray-500" /> Backlog Activity & Developer Logs
+          <div className="border-t border-[#ebdcb9] dark:border-[#584a3b] pt-6 space-y-4">
+            <h4 className="text-[10px] font-mono text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest flex items-center gap-1.5 font-bold">
+              <Activity size={13} className="text-gray-500 dark:text-[#b8ab9f]" /> Backlog Activity & Developer Logs
             </h4>
 
             {/* Event list */}
@@ -1112,13 +1112,13 @@ export default function TaskDetailsDrawer({
                   <div 
                     key={log.id} 
                     className={`p-3 rounded-xl border flex flex-col gap-1 text-[10px] font-mono leading-relaxed shadow-3xs transition-all ${
-                      log.type === 'create' ? 'bg-[#edf7ed] border-[#c9e7cb] text-[#427931]' : 
-                      log.type === 'move' ? 'bg-[#fff5e5] border-[#fde5bd] text-[#935919]' :
-                      log.type === 'comment' ? 'bg-[#fffdfa] border-[#ebdcb9] text-[#55453B] font-semibold' :
-                      'bg-white border-[#ebdcb9] text-[#715c4d]'
+                      log.type === 'create' ? 'bg-[#edf7ed] dark:bg-[#292119] border-[#c9e7cb] dark:border-[#584a3b] text-[#427931] dark:text-[#f3eadf]' : 
+                      log.type === 'move' ? 'bg-[#fff5e5] dark:bg-[#292119] border-[#fde5bd] dark:border-[#584a3b] text-[#935919] dark:text-[#e0a070]' :
+                      log.type === 'comment' ? 'bg-[#fffdfa] dark:bg-[#292119] border-[#ebdcb9] dark:border-[#584a3b] text-[#55453B] dark:text-[#f3eadf] font-semibold' :
+                      'bg-white dark:bg-[#292119] border-[#ebdcb9] dark:border-[#584a3b] text-[#715c4d] dark:text-[#f3eadf]'
                     }`}
                   >
-                    <div className="flex justify-between items-center text-[8px] text-[#a08b7e] font-extrabold uppercase">
+                    <div className="flex justify-between items-center text-[8px] text-[#a08b7e] dark:text-[#d6b56d] font-extrabold uppercase">
                       <span className="flex items-center gap-1">
                         <Clock size={10} />
                         {log.type} entry
@@ -1134,14 +1134,14 @@ export default function TaskDetailsDrawer({
             <form onSubmit={handleAddComment} className="flex gap-2 font-mono">
               <input
                 type="text"
-                className="flex-1 bg-white border border-[#ebdcb9] rounded-xl px-3.5 py-2 text-xs text-[#534135] placeholder-[#c4b3a4] outline-none focus:border-[#d4994e] font-mono"
+                className="flex-1 bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3.5 py-2 text-xs text-[#534135] dark:text-[#f3eadf] placeholder-[#c4b3a4] outline-none focus:border-[#d4994e] dark:focus:border-[#584a3b] font-mono"
                 placeholder="Drop developer run comments or logs..."
                 value={newComment}
                 onChange={(e) => setNewComment(e.target.value)}
               />
               <button
                 type="submit"
-                className="bg-[#fff9ee] hover:bg-[#ebdcb9] text-[#856b5a] border border-[#ebdcb9] px-4 rounded-xl flex items-center justify-center cursor-pointer transition-colors hover:shadow-2xs"
+                className="bg-[#fff9ee] dark:bg-[#292119] hover:bg-[#ebdcb9] dark:hover:bg-[#584a3b] text-[#856b5a] dark:text-[#f3eadf] border border-[#ebdcb9] dark:border-[#584a3b] px-4 rounded-xl flex items-center justify-center cursor-pointer transition-colors hover:shadow-2xs"
                 title="Append statement comment Log"
               >
                 <Plus size={15} />
@@ -1151,11 +1151,11 @@ export default function TaskDetailsDrawer({
         </div>
 
         {/* Footer actions */}
-        <div className="p-4 bg-[#ebdcb9]/40 border-t border-[#ebdcb9] flex justify-end gap-3 text-xs font-mono">
+        <div className="p-4 bg-[#ebdcb9]/40 dark:bg-[#584a3b]/40 border-t border-[#ebdcb9] dark:border-[#584a3b] flex justify-end gap-3 text-xs font-mono">
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2 bg-white border border-[#ebdcb9] text-[#6d5a4d] hover:bg-[#fffcf6] rounded-xl font-bold font-mono transition-colors cursor-pointer shadow-3xs"
+            className="px-4 py-2 bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] text-[#6d5a4d] dark:text-[#f3eadf] hover:bg-[#fffcf6] dark:hover:bg-[#1e1914] rounded-xl font-bold font-mono transition-colors cursor-pointer shadow-3xs"
           >
             Close Spec Sheets
           </button>

@@ -69,12 +69,12 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
       onClick={() => onSelect(task)}
       className={`relative select-none transition-all duration-150 flex flex-col justify-between h-fit p-4 rounded-2xl cursor-grab active:cursor-grabbing group border ${
         isDrag 
-          ? 'border-dashed border-[#e6b47c] bg-[#faf6ef]/50 opacity-60' 
+          ? 'border-dashed border-[#e6b47c] dark:border-[#584a3b] bg-[#faf6ef]/50 dark:bg-[#292119]/50 opacity-60' 
           : isInProgress
-            ? 'bg-[#ffffff] border-2 border-[#e3a35a] shadow-md ring-[4px] ring-[#f8ebd9]/40'
+            ? 'bg-[#ffffff] dark:bg-[#292119] border-2 border-[#e3a35a] dark:border-[#584a3b] shadow-md ring-[4px] ring-[#f8ebd9]/40 dark:ring-[#292119]/40'
             : isDone
-              ? 'bg-[#f7fdf7] border-[#d4ece3] border-l-4 border-l-emerald-500 shadow-2xs'
-              : 'bg-[#ffffff] border-[#e8dfcf] hover:border-[#cfc3b0] shadow-sm hover:shadow-md'
+              ? 'bg-[#f7fdf7] dark:bg-[#292119] border-[#d4ece3] dark:border-[#584a3b] border-l-4 border-l-emerald-500 shadow-2xs'
+              : 'bg-[#ffffff] dark:bg-[#292119] border-[#e8dfcf] dark:border-[#584a3b] hover:border-[#cfc3b0] dark:hover:border-[#584a3b] shadow-sm hover:shadow-md'
       }`}
       id={`task-card-${task.id}`}
     >
@@ -82,9 +82,9 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
       {!isDone && !isInProgress && (
         <span 
           className={`w-1 h-8 absolute left-0 top-1/2 -translate-y-1/2 rounded-r-md ${
-            task.priority === 'high' ? 'bg-[#de6b48]' : 
-            task.priority === 'medium' ? 'bg-[#e5a93b]' : 
-            'bg-[#7dad71]'
+            task.priority === 'high' ? 'bg-[#de6b48] dark:bg-[#e0a070]' : 
+            task.priority === 'medium' ? 'bg-[#e5a93b] dark:bg-[#e0a070]' : 
+            'bg-[#7dad71] dark:bg-[#e0a070]'
           }`}
         />
       )}
@@ -95,15 +95,15 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
           <div className="flex items-center gap-2.5">
             {/* Sleek Priority dot */}
             <span className={`flex items-center gap-1.5 text-[9px] uppercase font-mono tracking-wider font-extrabold px-2 py-0.5 rounded-lg border ${
-              isDone ? 'bg-[#f0f0f0] text-gray-400 border-gray-200' :
-              task.priority === 'high' ? 'bg-[#ffdacf] text-[#b43a20] border-[#ffa995]' :
-              task.priority === 'medium' ? 'bg-[#ffecca] text-[#a46c24] border-[#f0cca3]' :
-              'bg-[#e2f0dc] text-[#4d7e35] border-[#bddda4]'
+              isDone ? 'bg-[#f0f0f0] dark:bg-[#292119] text-gray-400 dark:text-[#b8ab9f] border-gray-200' :
+              task.priority === 'high' ? 'bg-[#ffdacf] dark:bg-[#292119] text-[#b43a20] dark:text-[#f3eadf] border-[#ffa995] dark:border-[#584a3b]' :
+              task.priority === 'medium' ? 'bg-[#ffecca] dark:bg-[#292119] text-[#a46c24] dark:text-[#f3eadf] border-[#f0cca3] dark:border-[#584a3b]' :
+              'bg-[#e2f0dc] dark:bg-[#292119] text-[#4d7e35] dark:text-[#f3eadf] border-[#bddda4] dark:border-[#584a3b]'
             }`}>
               <span className={`w-1.5 h-1.5 rounded-full ${
-                task.priority === 'high' ? 'bg-[#e05230]' :
-                task.priority === 'medium' ? 'bg-[#d28b26]' :
-                'bg-[#5b8c47]'
+                task.priority === 'high' ? 'bg-[#e05230] dark:bg-[#e0a070]' :
+                task.priority === 'medium' ? 'bg-[#d28b26] dark:bg-[#e0a070]' :
+                'bg-[#5b8c47] dark:bg-[#e0a070]'
               }`} />
               {task.priority}
             </span>
@@ -140,7 +140,7 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
             <button
               type="button"
               onClick={handleCopyId}
-              className="flex items-center gap-1.5 px-1.5 py-0.5 -ml-1 rounded hover:bg-[#ebdcb9]/30 text-[9.5px] font-bold text-[#b49f8e] hover:text-[#d89745] font-mono leading-none transition-all cursor-pointer"
+              className="flex items-center gap-1.5 px-1.5 py-0.5 -ml-1 rounded hover:bg-[#ebdcb9]/30 dark:hover:bg-[#584a3b]/30 text-[9.5px] font-bold text-[#b49f8e] dark:text-[#d6b56d] hover:text-[#d89745] dark:hover:text-[#e0a070] font-mono leading-none transition-all cursor-pointer"
               title="Copy Card ID"
             >
               #{task.displayId || task.id}
@@ -158,7 +158,7 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
               onDelete(task.id);
             }}
             type="button"
-            className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-500 p-1.5 rounded-full hover:bg-[#fff0ed] transition-all cursor-pointer duration-150"
+            className="opacity-0 group-hover:opacity-100 text-gray-400 dark:text-[#b8ab9f] hover:text-red-500 p-1.5 rounded-full hover:bg-[#fff0ed] dark:hover:bg-[#292119] transition-all cursor-pointer duration-150"
             title="Remove card"
           >
             <Trash2 size={13} />
@@ -168,11 +168,11 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
         {/* Agent & Model Metadata Badge - placed right under priority */}
         {task.agent && task.model && (
           <div className="flex flex-wrap items-center gap-1.5 mb-2.5 px-0.5 select-none font-mono font-bold">
-            <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-[#fae8ff] text-[#86198f] border border-[#f5d0fe] text-[8px]">
+            <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-[#fae8ff] dark:bg-[#292119] text-[#86198f] dark:text-[#f3eadf] border border-[#f5d0fe] dark:border-[#584a3b] text-[8px]">
               🤖 {task.model}
             </span>
             {task.effort && (
-              <span className="px-1.5 py-0.5 rounded-md bg-[#f1f5f9] text-[#475569] border border-[#e2e8f0] text-[8px]">
+              <span className="px-1.5 py-0.5 rounded-md bg-[#f1f5f9] dark:bg-[#292119] text-[#475569] dark:text-[#f3eadf] border border-[#e2e8f0] dark:border-[#584a3b] text-[8px]">
                 ⚡ {task.effort.toUpperCase()} EFFORT
               </span>
             )}
@@ -180,15 +180,15 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
         )}
 
         {/* Title text */}
-        <h3 className={`text-xs leading-relaxed mb-3.5 font-sans line-clamp-2 pl-0.5 select-text selection:bg-[#ffd9aa] select-none ${
-          isDone ? 'text-gray-400 line-through font-normal' : 'text-[#3e3129] font-extrabold'
+        <h3 className={`text-xs leading-relaxed mb-3.5 font-sans line-clamp-2 pl-0.5 select-text selection:bg-[#ffd9aa] dark:bg-[#292119] select-none ${
+          isDone ? 'text-gray-400 dark:text-[#b8ab9f] line-through font-normal' : 'text-[#3e3129] dark:text-[#f3eadf] font-extrabold'
         }`}>
           {task.title}
         </h3>
 
         {/* Card Thumbnail Preview (if design image is attached) */}
         {((task.designImages && task.designImages.length > 0) || task.designImage) && (
-          <div className="relative mb-3 rounded-xl overflow-hidden border border-[#ebdcb9] h-14 bg-white/50 pl-0.5">
+          <div className="relative mb-3 rounded-xl overflow-hidden border border-[#ebdcb9] dark:border-[#584a3b] h-14 bg-white dark:bg-[#292119]/50 pl-0.5">
             <img 
               src={(task.designImages && task.designImages[0]) || task.designImage} 
               alt="Design Preview" 
@@ -196,7 +196,7 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
               referrerPolicy="no-referrer"
             />
             {task.designImages && task.designImages.length > 1 && (
-              <div className="absolute top-1 right-1 bg-black/60 backdrop-blur-md text-white text-[9px] font-bold px-1.5 py-0.5 rounded shadow-sm border border-white/20">
+              <div className="absolute top-1 right-1 bg-black/60 backdrop-blur-md text-white dark:text-[#f3eadf] text-[9px] font-bold px-1.5 py-0.5 rounded shadow-sm border border-white">
                 +{task.designImages.length - 1}
               </div>
             )}
@@ -206,9 +206,9 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
 
       {/* Structured files/checklist progress details */}
       {(filesCount > 0 || totalSteps > 0) && (
-        <div className="flex flex-wrap items-center gap-2 mb-3.5 px-0.5 text-[9.5px] font-mono text-[#7a6455]">
+        <div className="flex flex-wrap items-center gap-2 mb-3.5 px-0.5 text-[9.5px] font-mono text-[#7a6455] dark:text-[#f3eadf]">
           {filesCount > 0 && (
-            <span className="flex items-center gap-1 bg-[#ede6dc]/30 border border-[#e8dfcf] px-2 py-0.5 rounded-lg font-bold">
+            <span className="flex items-center gap-1 bg-[#ede6dc]/30 dark:bg-[#292119]/30 border border-[#e8dfcf] dark:border-[#584a3b] px-2 py-0.5 rounded-lg font-bold">
               📁 {filesCount} {filesCount === 1 ? 'file' : 'files'}
             </span>
           )}
@@ -216,7 +216,7 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
             <span className={`flex items-center gap-1 border px-2 py-0.5 rounded-lg font-bold ${
               completedSteps === totalSteps 
                 ? 'bg-emerald-50 text-emerald-700 border-emerald-200/60' 
-                : 'bg-[#fffcf4] text-[#a47a32] border-[#f0e3cc]'
+                : 'bg-[#fffcf4] dark:bg-[#292119] text-[#a47a32] dark:text-[#f3eadf] border-[#f0e3cc] dark:border-[#584a3b]'
             }`}>
               ✓ {completedSteps}/{totalSteps} steps
             </span>
@@ -228,12 +228,12 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
       {((task.designImages && task.designImages.length > 0) || task.designImage || task.specUrl) && (
         <div className="flex flex-wrap items-center gap-2 mb-3 px-0.5 text-[8.5px] font-mono font-extrabold uppercase select-none">
           {((task.designImages && task.designImages.length > 0) || task.designImage) && (
-            <span className="flex items-center gap-1 bg-[#fff2e0] text-[#9a6428] border border-[#fde5bd] px-1.5 py-0.5 rounded-lg">
+            <span className="flex items-center gap-1 bg-[#fff2e0] dark:bg-[#292119] text-[#9a6428] dark:text-[#f3eadf] border border-[#fde5bd] dark:border-[#584a3b] px-1.5 py-0.5 rounded-lg">
               <ImageIcon size={10} /> Design Doc {task.designImages && task.designImages.length > 1 && `(${task.designImages.length})`}
             </span>
           )}
           {task.specUrl && (
-            <span className="flex items-center gap-1 bg-[#e0f1f7] text-[#2c6e85] border border-[#cbe4ee] px-1.5 py-0.5 rounded-lg">
+            <span className="flex items-center gap-1 bg-[#e0f1f7] dark:bg-[#292119] text-[#2c6e85] dark:text-[#f3eadf] border border-[#cbe4ee] dark:border-[#584a3b] px-1.5 py-0.5 rounded-lg">
               <LinkIcon size={10} /> Spec Link
             </span>
           )}
@@ -255,20 +255,20 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
             onClick={handleCopyBranch}
             className={`group/branch flex-1 min-w-0 p-2 rounded-xl border flex items-center justify-between text-[10px] font-mono font-medium cursor-pointer transition-all active:scale-[0.98] ${
               isDone 
-                ? 'bg-[#f8f5ee] border-[#ebdcb9] text-gray-400 border-dashed hover:border-gray-400'
+                ? 'bg-[#f8f5ee] dark:bg-[#292119] border-[#ebdcb9] dark:border-[#584a3b] text-gray-400 dark:text-[#b8ab9f] border-dashed hover:border-gray-400'
                 : isInProgress
-                  ? 'bg-[#fff9e6] border-[#fde5bd] text-[#935919] hover:bg-[#fff5d3] hover:border-[#fbc58e]'
-                  : 'bg-[#faf7f0] border-[#ebdcb9] text-[#715c4d] hover:bg-[#fff9e6] hover:border-[#fde5bd]'
+                  ? 'bg-[#fff9e6] dark:bg-[#292119] border-[#fde5bd] dark:border-[#584a3b] text-[#935919] dark:text-[#e0a070] hover:bg-[#fff5d3] dark:hover:bg-[#292119] hover:border-[#fbc58e] dark:hover:border-[#584a3b]'
+                  : 'bg-[#faf7f0] dark:bg-[#1e1914] border-[#ebdcb9] dark:border-[#584a3b] text-[#715c4d] dark:text-[#f3eadf] hover:bg-[#fff9e6] dark:hover:bg-[#292119] hover:border-[#fde5bd] dark:hover:border-[#584a3b]'
             }`}
             title="Click to copy Git Branch instruction"
           >
             <div className="flex items-center gap-1.5 truncate">
-              <GitBranch size={11} className={`${isDone ? 'text-emerald-500' : 'text-[#d89745]'} shrink-0 group-hover/branch:rotate-12 transition-transform`} />
+              <GitBranch size={11} className={`${isDone ? 'text-emerald-500' : 'text-[#d89745] dark:text-[#e0a070]'} shrink-0 group-hover/branch:rotate-12 transition-transform`} />
               <span className="truncate">{task.branch}</span>
             </div>
             <button
               type="button"
-              className="text-gray-400 group-hover/branch:text-[#d89745] shrink-0 transition-colors ml-2"
+              className="text-gray-400 dark:text-[#b8ab9f] group-hover/branch:text-[#d89745] dark:text-[#e0a070] shrink-0 transition-colors ml-2"
             >
               {copied ? (
                 <Check size={11} className="text-emerald-500 animate-scale" />
@@ -285,10 +285,10 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
 
       {/* Subtasks compact section */}
       {subtasks && subtasks.length > 0 && (
-        <div className="mt-2.5 mb-2.5 p-2 bg-[#fdfbf8]/90 border border-[#ede3d2] rounded-xl flex flex-col gap-1.5" onClick={(e) => e.stopPropagation()}>
-          <div className="flex justify-between items-center text-[9px] font-mono font-extrabold uppercase text-[#7a6455] tracking-wide mb-1 select-none">
+        <div className="mt-2.5 mb-2.5 p-2 bg-[#fdfbf8]/90 dark:bg-[#292119]/90 border border-[#ede3d2] dark:border-[#584a3b] rounded-xl flex flex-col gap-1.5" onClick={(e) => e.stopPropagation()}>
+          <div className="flex justify-between items-center text-[9px] font-mono font-extrabold uppercase text-[#7a6455] dark:text-[#f3eadf] tracking-wide mb-1 select-none">
             <span className="flex items-center gap-1">🌿 Subtasks ({subtasks.filter(s => s.status === 'done').length}/{subtasks.length})</span>
-            <span className="text-[#a47a32]">{Math.round((subtasks.filter(s => s.status === 'done').length / subtasks.length) * 100)}% done</span>
+            <span className="text-[#a47a32] dark:text-[#f3eadf]">{Math.round((subtasks.filter(s => s.status === 'done').length / subtasks.length) * 100)}% done</span>
           </div>
           <div className="flex flex-col gap-1 pr-0.5">
             {subtasks.map(sub => {
@@ -303,12 +303,12 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
                     onDragStart(e, sub.id);
                   }}
                   onClick={() => onSelect(sub)}
-                  className={`group/sub flex flex-col gap-1 p-1.5 rounded-xl border text-[10px] cursor-grab active:cursor-grabbing transition-all hover:bg-white select-none ${
+                  className={`group/sub flex flex-col gap-1 p-1.5 rounded-xl border text-[10px] cursor-grab active:cursor-grabbing transition-all hover:bg-white dark:hover:bg-[#1e1914] select-none ${
                     subDone 
-                      ? 'bg-emerald-50/20 border-emerald-100/50 text-gray-400' 
+                      ? 'bg-emerald-50/20 border-emerald-100/50 text-gray-400 dark:text-[#b8ab9f]' 
                       : subInProgress
-                        ? 'bg-orange-50/40 border-orange-100 text-[#715c4d] font-semibold'
-                        : 'bg-[#faf8f5]/60 border-[#ebdcb9]/20 text-[#5c493c]'
+                        ? 'bg-orange-50/40 border-orange-100 text-[#715c4d] dark:text-[#f3eadf] font-semibold'
+                        : 'bg-[#faf8f5]/60 dark:bg-[#292119]/60 border-[#ebdcb9]/20 dark:border-[#584a3b]/20 text-[#5c493c] dark:text-[#f3eadf]'
                   }`}
                 >
                   <div className="flex items-center gap-1.5 min-w-0 w-full">
@@ -327,8 +327,8 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
                       }}
                       className={`w-3.5 h-3.5 rounded flex items-center justify-center border transition-all cursor-pointer ${
                         subDone 
-                          ? 'bg-emerald-500 border-emerald-500 text-white' 
-                          : 'bg-white border-[#ebdcb9] hover:border-[#d4994e]'
+                          ? 'bg-emerald-500 border-emerald-500 text-white dark:text-[#f3eadf]' 
+                          : 'bg-white dark:bg-[#292119] border-[#ebdcb9] dark:border-[#584a3b] hover:border-[#d4994e] dark:hover:border-[#584a3b]'
                       }`}
                     >
                       {subDone && <span className="text-[8px] leading-none mb-0.5">✓</span>}
@@ -339,15 +339,15 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
                   {/* Small statuses/agent info */}
                   <div className="flex items-center gap-1 shrink-0 font-mono text-[7.5px] font-bold ml-[19px]">
                     {sub.model && (
-                      <span className="px-1 py-0.2 rounded border bg-[#fae8ff] text-[#86198f] border-[#f5d0fe]">
+                      <span className="px-1 py-0.2 rounded border bg-[#fae8ff] dark:bg-[#292119] text-[#86198f] dark:text-[#f3eadf] border-[#f5d0fe] dark:border-[#584a3b]">
                         {sub.model}
                       </span>
                     )}
                     <span className={`px-1 py-0.2 rounded uppercase border ${
                       subDone ? 'bg-emerald-50 text-emerald-700 border-emerald-200/40' :
                       subInProgress ? 'bg-orange-50 text-orange-700 border-orange-200/40' :
-                      sub.status === 'todo' ? 'bg-[#fffdf4] text-[#a47a32] border-[#f0e3cc]' :
-                      'bg-gray-50 text-gray-400 border-gray-200'
+                      sub.status === 'todo' ? 'bg-[#fffdf4] dark:bg-[#292119] text-[#a47a32] dark:text-[#f3eadf] border-[#f0e3cc] dark:border-[#584a3b]' :
+                      'bg-gray-50 dark:bg-[#292119] text-gray-400 dark:text-[#b8ab9f] border-gray-200'
                     }`}>
                       {sub.status === 'in-progress' ? 'active' : sub.status}
                     </span>
@@ -360,7 +360,7 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
       )}
 
       {/* Agent & Model Selectors */}
-      <div className="flex flex-col gap-2 mt-2 pt-2 border-t border-[#f2ece2]" onClick={(e) => e.stopPropagation()}>
+      <div className="flex flex-col gap-2 mt-2 pt-2 border-t border-[#f2ece2] dark:border-[#584a3b]" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center gap-1.5">
           {/* Agent Selector */}
           <div className="relative flex-1 min-w-0">
@@ -379,7 +379,7 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
                   });
                 }
               }}
-              className="w-full bg-[#fdfbf7] hover:bg-white border border-[#ebdcb9] hover:border-[#d4994e] rounded-xl text-[9px] py-1 px-1.5 focus:border-[#d4994e] outline-none text-[#564436] font-sans font-bold transition-all cursor-pointer truncate"
+              className="w-full bg-[#fdfbf7] dark:bg-[#292119] hover:bg-white dark:hover:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] hover:border-[#d4994e] dark:hover:border-[#584a3b] rounded-xl text-[9px] py-1 px-1.5 focus:border-[#d4994e] dark:focus:border-[#584a3b] outline-none text-[#564436] dark:text-[#f3eadf] font-sans font-bold transition-all cursor-pointer truncate"
             >
               <option value="">👤 Unassigned</option>
               <option value="Codex">🤖 Codex</option>
@@ -405,7 +405,7 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
                     });
                   }
                 }}
-                className="w-full bg-[#fdfbf7] hover:bg-white border border-[#ebdcb9] hover:border-[#d4994e] rounded-xl text-[9px] py-1 px-1.5 focus:border-[#d4994e] outline-none text-[#564436] font-sans font-bold transition-all cursor-pointer truncate disabled:opacity-50"
+                className="w-full bg-[#fdfbf7] dark:bg-[#292119] hover:bg-white dark:hover:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] hover:border-[#d4994e] dark:hover:border-[#584a3b] rounded-xl text-[9px] py-1 px-1.5 focus:border-[#d4994e] dark:focus:border-[#584a3b] outline-none text-[#564436] dark:text-[#f3eadf] font-sans font-bold transition-all cursor-pointer truncate disabled:opacity-50"
               >
                 <option value="">⚡ Default Model</option>
                 {AGENTS_CONFIG[task.agent as import('../lib/agentsConfig').AgentName]?.map(m => (
@@ -420,11 +420,11 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
 
         {/* Footer Metrics */}
         <div className="flex items-center justify-between pt-0.5 select-none text-[9px] font-mono">
-          <span className="text-[#a59082] italic">
+          <span className="text-[#a59082] dark:text-[#d6b56d] italic">
             {task.branch ? 'git checkouts configured' : 'no active branch'}
           </span>
           <div className="flex items-center gap-2 font-mono shrink-0">
-            <span className="text-[#9e8b7c] font-bold" title="Last updated">
+            <span className="text-[#9e8b7c] dark:text-[#d6b56d] font-bold" title="Last updated">
               {isDone ? '✓ merged' : formattedDate}
             </span>
           </div>

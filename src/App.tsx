@@ -17,6 +17,7 @@ import {
   GitMerge,
   Cat,
   Moon,
+  Sun,
   Coffee,
   FileCode,
   ChevronDown
@@ -36,11 +37,11 @@ import AutoWorkToggle from './components/AutoWorkToggle';
 
 // Standardized project lanes themed cleanly
 const COLUMNS: Column[] = [
-  { id: 'backlog', label: 'Backlog Specs 📂', iconName: 'Moon', color: 'border-[#dfd2be]/60 bg-[#fffdfa] text-[#816b5a]' },
-  { id: 'todo', label: 'Ready to Do 📌', iconName: 'ListTodo', color: 'border-[#dfd2be]/60 bg-[#fffdfa] text-[#816b5a]' },
-  { id: 'in-progress', label: 'In Progress ⚡', iconName: 'Terminal', color: 'border-[#f5cb93] bg-[#fffbf4] text-[#935919]' },
-  { id: 'ready-for-review', label: 'Ready for Review 🔍', iconName: 'GitMerge', color: 'border-[#b8cdfc] bg-[#f5f8ff] text-[#3b5eab]' },
-  { id: 'done', label: 'Completed ✓', iconName: 'GitPullRequest', color: 'border-[#bddda4] bg-[#edf7ed] text-[#4d7e35]' }
+  { id: 'backlog', label: 'Backlog Specs 📂', iconName: 'Moon', color: 'border-[#dfd2be]/60 dark:border-[#584a3b]/60 bg-[#fffdfa] dark:bg-[#292119] text-[#816b5a] dark:text-[#f3eadf]' },
+  { id: 'todo', label: 'Ready to Do 📌', iconName: 'ListTodo', color: 'border-[#dfd2be]/60 dark:border-[#584a3b]/60 bg-[#fffdfa] dark:bg-[#292119] text-[#816b5a] dark:text-[#f3eadf]' },
+  { id: 'in-progress', label: 'In Progress ⚡', iconName: 'Terminal', color: 'border-[#f5cb93] dark:border-[#584a3b] bg-[#fffbf4] dark:bg-[#292119] text-[#935919] dark:text-[#e0a070]' },
+  { id: 'ready-for-review', label: 'Ready for Review 🔍', iconName: 'GitMerge', color: 'border-[#b8cdfc] dark:border-[#584a3b] bg-[#f5f8ff] dark:bg-[#292119] text-[#3b5eab] dark:text-[#f3eadf]' },
+  { id: 'done', label: 'Completed ✓', iconName: 'GitPullRequest', color: 'border-[#bddda4] dark:border-[#584a3b] bg-[#edf7ed] dark:bg-[#292119] text-[#4d7e35] dark:text-[#f3eadf]' }
 ];
 
 export default function App() {
@@ -61,6 +62,24 @@ export default function App() {
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [mounted, setMounted] = useState(false);
   const [ngrokUrl, setNgrokUrl] = useState('');
+  
+  // Theme State
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    const saved = localStorage.getItem('devflow_theme');
+    if (saved === 'light' || saved === 'dark') return saved;
+    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) return 'dark';
+    return 'light';
+  });
+
+  // Apply Theme
+  useEffect(() => {
+    if (theme === 'dark') {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+    localStorage.setItem('devflow_theme', theme);
+  }, [theme]);
 
   // Filter States
   const [selectedPriority, setSelectedPriority] = useState<Task['priority'] | 'all'>('all');
@@ -472,15 +491,15 @@ export default function App() {
 
   if (!mounted) {
     return (
-      <div className="min-h-screen bg-[#faf6ef] flex flex-col items-center justify-center text-[#8a6e5a] font-mono text-xs gap-3">
-        <Cat size={40} className="text-[#d89745] animate-bounce" />
+      <div className="min-h-screen bg-[#faf6ef] dark:bg-[#292119] flex flex-col items-center justify-center text-[#8a6e5a] dark:text-[#f3eadf] font-mono text-xs gap-3">
+        <Cat size={40} className="text-[#d89745] dark:text-[#e0a070] animate-bounce" />
         <p>Waking up sleepy kittens... ฅ^•ﻌ•^ฅ</p>
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col h-screen bg-[#fcfaf4] text-[#3e3129] font-sans antialiased overflow-hidden select-none">
+    <div className="flex flex-col h-screen bg-[#fcfaf4] dark:bg-[#1e1914] text-[#3e3129] dark:text-[#f3eadf] font-sans antialiased overflow-hidden select-none">
       
       {/* Mid View container with Sidebar + Board */}
       <div className="flex flex-1 overflow-hidden flex-col lg:flex-row">
@@ -504,19 +523,19 @@ export default function App() {
         />
 
         {/* 2. Main KanBan Board viewport area */}
-        <main className="flex-1 flex flex-col h-full overflow-y-auto bg-[#faf7f0]">
+        <main className="flex-1 flex flex-col h-full overflow-y-auto bg-[#faf7f0] dark:bg-[#1e1914]">
           
           {/* Top Control Navigation bar */}
-          <header className="p-5 bg-white border-b border-[#e5d4bb] flex flex-col md:flex-row gap-4 justify-between items-start md:items-center">
+          <header className="p-5 bg-white dark:bg-[#292119] border-b border-[#e5d4bb] dark:border-[#584a3b] flex flex-col md:flex-row gap-4 justify-between items-start md:items-center">
             <div>
-              <h1 className="text-[#3c2a1a] font-extrabold font-sans text-base tracking-tight flex items-center gap-2">
-                <Cat className="text-[#d89745] shrink-0" size={17} />
+              <h1 className="text-[#3c2a1a] dark:text-[#f3eadf] font-extrabold font-sans text-base tracking-tight flex items-center gap-2">
+                <Cat className="text-[#d89745] dark:text-[#e0a070] shrink-0" size={17} />
                 Sprint Backlog Dashboard
               </h1>
-              <p className="text-[11px] text-[#816b5a] font-mono mt-0.5 flex items-center gap-1 font-bold">
+              <p className="text-[11px] text-[#816b5a] dark:text-[#f3eadf] font-mono mt-0.5 flex items-center gap-1 font-bold">
                 <span>Pocket Sandbox Launcher</span>
-                <span className="text-[#dcd0bc]">•</span>
-                <span className="text-[#d89745] font-extrabold">{filteredTasks.length} lazy tasks found</span>
+                <span className="text-[#dcd0bc] dark:text-[#d6b56d]">•</span>
+                <span className="text-[#d89745] dark:text-[#e0a070] font-extrabold">{filteredTasks.length} lazy tasks found</span>
               </p>
             </div>
 
@@ -531,21 +550,31 @@ export default function App() {
               
               <AutoWorkToggle />
 
+              {/* Theme Toggle */}
+              <button
+                onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
+                type="button"
+                className="bg-[#fdfbf6] dark:bg-[#292119] border border-[#e5d4bb] dark:border-[#584a3b] rounded-xl p-1.5 shadow-2xs hover:bg-[#ebdcb9] dark:hover:bg-[#584a3b]/50 transition-colors cursor-pointer text-[#a46c24] dark:text-[#d6b56d]"
+                title="Toggle Dark Mode"
+              >
+                {theme === 'light' ? <Moon size={14} /> : <Sun size={14} />}
+              </button>
+
               {/* Backup actions */}
-              <div className="flex items-center gap-1.5 bg-[#fdfbf6] border border-[#e5d4bb] rounded-xl p-1 shadow-2xs">
+              <div className="flex items-center gap-1.5 bg-[#fdfbf6] dark:bg-[#292119] border border-[#e5d4bb] dark:border-[#584a3b] rounded-xl p-1 shadow-2xs">
                 <button
                   onClick={() => setIsJsonModalOpen(true)}
                   type="button"
-                  className="hover:bg-[#ebdcb9] hover:text-[#534135] px-2.5 py-1 text-[10px] font-mono rounded-lg flex items-center gap-1 transition-colors cursor-pointer text-[#a46c24] font-bold"
+                  className="hover:bg-[#ebdcb9] dark:hover:bg-[#584a3b] hover:text-[#534135] dark:hover:text-[#f3eadf] px-2.5 py-1 text-[10px] font-mono rounded-lg flex items-center gap-1 transition-colors cursor-pointer text-[#a46c24] dark:text-[#f3eadf] font-bold"
                   title="View import JSON schema format"
                 >
                   <FileCode size={11} /> Schema Spec
                 </button>
-                <div className="w-px h-4 bg-[#ebdcb9]"></div>
+                <div className="w-px h-4 bg-[#ebdcb9] dark:bg-[#584a3b]"></div>
                 <button
                   onClick={() => setIsSkillsModalOpen(true)}
                   type="button"
-                  className="hover:bg-[#ebdcb9] hover:text-[#534135] px-2.5 py-1 text-[10px] font-mono rounded-lg flex items-center gap-1 transition-colors cursor-pointer text-[#a46c24] font-bold"
+                  className="hover:bg-[#ebdcb9] dark:hover:bg-[#584a3b] hover:text-[#534135] dark:hover:text-[#f3eadf] px-2.5 py-1 text-[10px] font-mono rounded-lg flex items-center gap-1 transition-colors cursor-pointer text-[#a46c24] dark:text-[#f3eadf] font-bold"
                   title="View and Edit Agent Skills"
                 >
                   <Code size={11} /> Skills
@@ -557,28 +586,28 @@ export default function App() {
                 <button
                   onClick={() => setIsActionMenuOpen(!isActionMenuOpen)}
                   type="button"
-                  className="bg-gradient-to-r from-[#df9433] to-[#cc7b26] hover:from-[#cc7b26] hover:to-[#b5671d] text-white px-4 py-1.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition-all shadow-md cursor-pointer ml-auto md:ml-0"
+                  className="bg-gradient-to-r from-[#df9433] dark:from-[#e0a070] to-[#cc7b26] dark:to-[#e0a070] hover:from-[#cc7b26] dark:hover:from-[#e0a070] hover:to-[#b5671d] dark:hover:to-[#e0a070] text-white dark:text-[#f3eadf] px-4 py-1.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition-all shadow-md cursor-pointer ml-auto md:ml-0"
                 >
                   <Plus size={14} /> ✨ Ticket Action <ChevronDown size={14} />
                 </button>
                 {isActionMenuOpen && (
-                  <div className="absolute top-full right-0 mt-2 bg-white rounded-xl shadow-xl border border-[#ebdcb9] py-1 min-w-[200px] z-50 flex flex-col">
+                  <div className="absolute top-full right-0 mt-2 bg-white dark:bg-[#292119] rounded-xl shadow-xl border border-[#ebdcb9] dark:border-[#584a3b] py-1 min-w-[200px] z-50 flex flex-col">
                     <button
                       onClick={() => {
                         setIsActionMenuOpen(false);
                         setIsCreateModalOpen(true);
                       }}
-                      className="w-full text-left px-4 py-2.5 hover:bg-[#ebdcb9]/40 text-xs font-bold text-[#df9433] flex items-center gap-2 transition-colors cursor-pointer"
+                      className="w-full text-left px-4 py-2.5 hover:bg-[#ebdcb9]/40 dark:hover:bg-[#584a3b]/40 text-xs font-bold text-[#df9433] dark:text-[#e0a070] flex items-center gap-2 transition-colors cursor-pointer"
                     >
                       <Sparkles size={14} /> Commit Ticket
                     </button>
-                    <div className="h-px bg-[#ebdcb9]/40 w-full" />
+                    <div className="h-px bg-[#ebdcb9]/40 dark:bg-[#584a3b]/40 w-full" />
                     <button
                       onClick={() => {
                         setIsActionMenuOpen(false);
                         setIsBatchModalOpen(true);
                       }}
-                      className="w-full text-left px-4 py-2.5 hover:bg-[#ebdcb9]/40 text-xs font-bold text-[#2a7a8a] flex items-center gap-2 transition-colors cursor-pointer"
+                      className="w-full text-left px-4 py-2.5 hover:bg-[#ebdcb9]/40 dark:hover:bg-[#584a3b]/40 text-xs font-bold text-[#2a7a8a] dark:text-[#f3eadf] flex items-center gap-2 transition-colors cursor-pointer"
                     >
                       <Plus size={14} /> Batch Import JSON
                     </button>
@@ -589,13 +618,13 @@ export default function App() {
           </header>
 
           {persistenceError && (
-            <div className="mx-5 mt-4 rounded-2xl border border-[#f0c48f] bg-[#fff7eb] px-4 py-3 text-[11px] font-mono font-bold text-[#9a5b13]">
+            <div className="mx-5 mt-4 rounded-2xl border border-[#f0c48f] dark:border-[#584a3b] bg-[#fff7eb] dark:bg-[#292119] px-4 py-3 text-[11px] font-mono font-bold text-[#9a5b13] dark:text-[#f3eadf]">
               Persistence warning: {persistenceError}
             </div>
           )}
 
           {/* Kanban Board Container scroll area */}
-          <div className="flex-1 overflow-x-auto p-6 bg-[#faf7f0]">
+          <div className="flex-1 overflow-x-auto p-6 bg-[#faf7f0] dark:bg-[#1e1914]">
             <div className="flex gap-4 w-max items-stretch min-h-[calc(100vh-210px)] pb-2">
               
               {COLUMNS.map(col => {
@@ -626,14 +655,14 @@ export default function App() {
                     onDrop={(e) => handleDrop(e, col.id)}
                     className={`w-[290px] shrink-0 flex flex-col pb-4 rounded-2xl p-2 transition-all border ${
                       isOver 
-                        ? 'bg-[#ffeccb]/40 border-dashed border-[#e3a35a]' 
+                        ? 'bg-[#ffeccb]/40 dark:bg-[#292119]/40 border-dashed border-[#e3a35a] dark:border-[#584a3b]' 
                         : isInProgressCol
-                          ? 'bg-[#fffcf7] border-[#ebdcb9]'
+                          ? 'bg-[#fffcf7] dark:bg-[#292119] border-[#ebdcb9] dark:border-[#584a3b]'
                           : isReviewCol
-                            ? 'bg-[#f5f8ff] border-[#b8cdfc]'
+                            ? 'bg-[#f5f8ff] dark:bg-[#292119] border-[#b8cdfc] dark:border-[#584a3b]'
                             : isDoneCol
-                              ? 'bg-[#f4faf4] border-[#d1e9cc]'
-                              : 'bg-[#fffdfb]/60 border-[#ebdcb9]/40'
+                              ? 'bg-[#f4faf4] dark:bg-[#292119] border-[#d1e9cc] dark:border-[#584a3b]'
+                              : 'bg-[#fffdfb]/60 dark:bg-[#292119]/60 border-[#ebdcb9]/40 dark:border-[#584a3b]/40'
                     }`}
                   >
                     {/* Status header lane metadata */}
@@ -641,41 +670,41 @@ export default function App() {
                       <div className="flex items-center gap-2">
                         <span className={`shrink-0 ${
                           isInProgressCol 
-                            ? 'text-[#d89745]' 
+                            ? 'text-[#d89745] dark:text-[#e0a070]' 
                             : isReviewCol 
-                              ? 'text-[#3b5eab]' 
+                              ? 'text-[#3b5eab] dark:text-[#f3eadf]' 
                               : isDoneCol 
-                                ? 'text-[#5fa84a]' 
-                                : 'text-[#8a725f]'
+                                ? 'text-[#5fa84a] dark:text-[#f3eadf]' 
+                                : 'text-[#8a725f] dark:text-[#f3eadf]'
                         }`}>{getColIcon(col.iconName)}</span>
                         
                         <h3 className={`text-[11px] font-extrabold uppercase tracking-wide font-mono ${
                           isInProgressCol 
-                            ? 'text-[#8f5e1f]' 
+                            ? 'text-[#8f5e1f] dark:text-[#f3eadf]' 
                             : isReviewCol 
-                              ? 'text-[#2b3a61]' 
+                              ? 'text-[#2b3a61] dark:text-[#f3eadf]' 
                               : isDoneCol 
-                                ? 'text-[#38622c]' 
-                                : 'text-[#614e41]'
+                                ? 'text-[#38622c] dark:text-[#f3eadf]' 
+                                : 'text-[#614e41] dark:text-[#f3eadf]'
                         }`}>
                           {col.label}
                         </h3>
                         
                         <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full font-bold shadow-4xs ${
                           isInProgressCol 
-                            ? 'bg-[#ffecca] text-[#935919]' 
+                            ? 'bg-[#ffecca] dark:bg-[#292119] text-[#935919] dark:text-[#e0a070]' 
                             : isReviewCol 
-                              ? 'bg-[#dbe4ff] text-[#2b4c9e]' 
+                              ? 'bg-[#dbe4ff] dark:bg-[#292119] text-[#2b4c9e] dark:text-[#f3eadf]' 
                               : isDoneCol 
-                                ? 'bg-[#edf7ed] text-[#4d7e35]' 
-                                : 'bg-[#f4ebd9] text-[#715c4d]'
+                                ? 'bg-[#edf7ed] dark:bg-[#292119] text-[#4d7e35] dark:text-[#f3eadf]' 
+                                : 'bg-[#f4ebd9] dark:bg-[#292119] text-[#715c4d] dark:text-[#f3eadf]'
                         }`}>
                           {columnTasks.length}
                         </span>
                       </div>
 
                       {totalStepsInLane > 0 && (
-                        <span className="text-[9px] font-mono text-[#8a705e] uppercase tracking-wider font-extrabold" title="Verification checklist completion ratio">
+                        <span className="text-[9px] font-mono text-[#8a705e] dark:text-[#f3eadf] uppercase tracking-wider font-extrabold" title="Verification checklist completion ratio">
                           {completedStepsInLane}/{totalStepsInLane} steps
                         </span>
                       )}
@@ -701,12 +730,12 @@ export default function App() {
                       })}
 
                       {columnTasks.length === 0 && (
-                        <div className="flex-1 flex flex-col items-center justify-start py-8 px-4 bg-transparent select-none">
-                          <div className="w-full max-w-[210px] bg-white/60 border border-[#e2d5c3]/60 rounded-2xl p-3.5 text-center shadow-xs">
-                            <span className="text-[10px] text-[#df9433] font-extrabold uppercase tracking-widest flex items-center justify-center gap-1">
+                        <div className="flex-1 flex flex-col items-center justify-start py-8 px-4 bg-transparent dark:bg-transparent select-none">
+                          <div className="w-full max-w-[210px] bg-white dark:bg-[#292119]/60 border border-[#e2d5c3]/60 dark:border-[#584a3b]/60 rounded-2xl p-3.5 text-center shadow-xs">
+                            <span className="text-[10px] text-[#df9433] dark:text-[#e0a070] font-extrabold uppercase tracking-widest flex items-center justify-center gap-1">
                               ✨ EMPTY LANE
                             </span>
-                            <p className="text-[9px] text-[#8c7463] font-mono mt-1 leading-snug">
+                            <p className="text-[9px] text-[#8c7463] dark:text-[#f3eadf] font-mono mt-1 leading-snug">
                               No active tickets. Drop cards or Commit to start.
                             </p>
                           </div>
@@ -722,16 +751,16 @@ export default function App() {
       </div>
 
       {/* Footer Status Bar */}
-      <footer className="h-6.5 bg-[#ebdcb9]/40 border-t border-[#ebdcb9] px-4 flex items-center justify-between shrink-0 select-none text-[10px] font-mono text-[#8c7463] font-bold">
+      <footer className="h-6.5 bg-[#ebdcb9]/40 dark:bg-[#584a3b]/40 border-t border-[#ebdcb9] dark:border-[#584a3b] px-4 flex items-center justify-between shrink-0 select-none text-[10px] font-mono text-[#8c7463] dark:text-[#f3eadf] font-bold">
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-1.5">
             <span className="w-1.5 h-1.5 rounded-full bg-orange-500 animate-pulse"></span>
             <span>Cozy Engine Active</span>
           </div>
-          <span className="text-[#ecd0bc]">•</span>
+          <span className="text-[#ecd0bc] dark:text-[#d6b56d]">•</span>
           <span>Workspace Latency: 2ms</span>
         </div>
-        <div className="text-[#8c7463]">
+        <div className="text-[#8c7463] dark:text-[#f3eadf]">
           Styled cozy & warm
         </div>
       </footer>

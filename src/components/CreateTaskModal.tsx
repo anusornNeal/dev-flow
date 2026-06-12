@@ -92,18 +92,18 @@ class MyViewModel: ViewModel() {
       <div className="fixed inset-0" onClick={onClose} />
 
       {/* Modal Card */}
-      <div className="bg-[#fcfaf5] border border-[#ebdcb9] w-full max-w-xl rounded-3xl shadow-2xl relative z-10 overflow-hidden flex flex-col justify-between font-sans">
+      <div className="bg-[#fcfaf5] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] w-full max-w-xl rounded-3xl shadow-2xl relative z-10 overflow-hidden flex flex-col justify-between font-sans">
         
         {/* Header toolbar */}
-        <div className="p-5 border-b border-[#ebdcb9] bg-[#ebdcb9]/40 flex items-center justify-between font-mono text-[#5c493c]">
+        <div className="p-5 border-b border-[#ebdcb9] dark:border-[#584a3b] bg-[#ebdcb9]/40 dark:bg-[#584a3b]/40 flex items-center justify-between font-mono text-[#5c493c] dark:text-[#f3eadf]">
           <div className="flex items-center gap-2">
-            <Sparkles size={18} className="text-[#bf8a50]" />
+            <Sparkles size={18} className="text-[#bf8a50] dark:text-[#d6b56d]" />
             <div>
-              <h2 className="text-xs font-black text-[#5c493c] tracking-tight uppercase">
+              <h2 className="text-xs font-black text-[#5c493c] dark:text-[#f3eadf] tracking-tight uppercase">
                 {parentId ? 'CREATE_SUBTASK_SPEC' : 'INIT_NEW_SPEC_TICKET'}
               </h2>
               {parentTitle && (
-                <p className="text-[10px] text-[#8a6e5a] mt-0.5 truncate max-w-[320px] font-bold font-sans">
+                <p className="text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] mt-0.5 truncate max-w-[320px] font-bold font-sans">
                   Parent: #{parentId} • {parentTitle}
                 </p>
               )}
@@ -112,25 +112,25 @@ class MyViewModel: ViewModel() {
           <button
             type="button"
             onClick={onClose}
-            className="text-gray-400 hover:text-red-500 p-1.5 rounded-full hover:bg-white/60 transition-all cursor-pointer"
+            className="text-gray-400 dark:text-[#b8ab9f] hover:text-red-500 p-1.5 rounded-full hover:bg-white dark:hover:bg-[#292119]/60 transition-all cursor-pointer"
           >
             <X size={17} />
           </button>
         </div>
 
         {/* Input fields Form */}
-        <form onSubmit={handleSubmit} className="p-6 space-y-4 max-h-[75vh] overflow-y-auto scrollbar-thin text-xs font-mono text-[#5c493c]">
+        <form onSubmit={handleSubmit} className="p-6 space-y-4 max-h-[75vh] overflow-y-auto scrollbar-thin text-xs font-mono text-[#5c493c] dark:text-[#f3eadf]">
           
           {/* Main Title input */}
           <div className="space-y-1">
-            <label className="block text-[10px] text-[#8a6e5a] uppercase tracking-widest font-extrabold pl-0.5">
+            <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold pl-0.5">
               Task Name / Ticket Title
             </label>
             <input
               type="text"
               required
               autoFocus
-              className="w-full bg-white border border-[#ebdcb9] rounded-xl px-3.5 py-2.5 text-xs text-[#3a2f26] placeholder-[#c4b3a4] outline-none focus:border-[#d4994e] font-sans"
+              className="w-full bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3.5 py-2.5 text-xs text-[#3a2f26] dark:text-[#f3eadf] placeholder-[#c4b3a4] outline-none focus:border-[#d4994e] dark:focus:border-[#584a3b] font-sans"
               placeholder="e.g., Setup ViewModel and StateFlow cache in Kotlin"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
@@ -140,12 +140,12 @@ class MyViewModel: ViewModel() {
           {/* Inline grid branch & tag info */}
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1">
-              <label className="block text-[10px] text-[#8a6e5a] uppercase tracking-widest flex items-center gap-1 font-extrabold pl-0.5">
-                <GitBranch size={11} className="text-[#b87332]" /> Git Checkout Branch
+              <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest flex items-center gap-1 font-extrabold pl-0.5">
+                <GitBranch size={11} className="text-[#b87332] dark:text-[#f3eadf]" /> Git Checkout Branch
               </label>
               <input
                 type="text"
-                className="w-full bg-white border border-[#ebdcb9] rounded-xl px-3.5 py-2.5 text-xs text-[#9d5b12] outline-none focus:border-[#d4994e]"
+                className="w-full bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3.5 py-2.5 text-xs text-[#9d5b12] dark:text-[#f3eadf] outline-none focus:border-[#d4994e] dark:focus:border-[#584a3b]"
                 placeholder="feature/swiftui-charts"
                 value={branch}
                 onChange={(e) => setBranch(e.target.value)}
@@ -153,11 +153,11 @@ class MyViewModel: ViewModel() {
             </div>
 
             <div className="space-y-1">
-              <label className="block text-[10px] text-[#8a6e5a] uppercase tracking-widest font-extrabold pl-0.5">
+              <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold pl-0.5">
                 Target Column Status
               </label>
               <select
-                className="w-full bg-white border border-[#ebdcb9] rounded-xl px-3.5 py-2.5 text-xs text-[#3a2f26] outline-none focus:border-[#d4994e]"
+                className="w-full bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3.5 py-2.5 text-xs text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d4994e] dark:focus:border-[#584a3b]"
                 value={status}
                 onChange={(e) => setStatus(e.target.value as TaskStatus)}
               >
@@ -171,11 +171,11 @@ class MyViewModel: ViewModel() {
           </div>
 
           <div className="space-y-1">
-            <label className="block text-[10px] text-[#8a6e5a] uppercase tracking-widest font-extrabold pl-0.5">
+            <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold pl-0.5">
               Severity Rating
             </label>
             <select
-              className="w-full bg-white border border-[#ebdcb9] rounded-xl px-3.5 py-2.5 text-xs text-[#3a2f26] outline-none focus:border-[#d4994e]"
+              className="w-full bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3.5 py-2.5 text-xs text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d4994e] dark:focus:border-[#584a3b]"
               value={priority}
               onChange={(e) => setPriority(e.target.value as TaskPriority)}
             >
@@ -187,11 +187,11 @@ class MyViewModel: ViewModel() {
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <div className="space-y-1">
-              <label className="block text-[10px] text-[#8a6e5a] uppercase tracking-widest font-extrabold pl-0.5">
+              <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold pl-0.5">
                 Assigned Agent
               </label>
               <select
-                className="w-full bg-white border border-[#ebdcb9] rounded-xl px-3 py-2 text-xs text-[#3a2f26] outline-none focus:border-[#d4994e] font-bold"
+                className="w-full bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d4994e] dark:focus:border-[#584a3b] font-bold"
                 value={agent}
                 onChange={(e) => {
                   const val = e.target.value;
@@ -214,11 +214,11 @@ class MyViewModel: ViewModel() {
             </div>
 
             <div className="space-y-1">
-              <label className="block text-[10px] text-[#8a6e5a] uppercase tracking-widest font-extrabold pl-0.5">
+              <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold pl-0.5">
                 AI Model Spec
               </label>
               <select
-                className="w-full bg-white border border-[#ebdcb9] rounded-xl px-3 py-2 text-xs text-[#3a2f26] outline-none focus:border-[#d4994e] font-bold disabled:bg-[#f5eeda]/50"
+                className="w-full bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d4994e] dark:focus:border-[#584a3b] font-bold disabled:bg-[#f5eeda]/50 dark:disabled:bg-[#292119]/50"
                 value={model}
                 disabled={!agent}
                 onChange={(e) => {
@@ -241,11 +241,11 @@ class MyViewModel: ViewModel() {
             </div>
 
             <div className="space-y-1">
-              <label className="block text-[10px] text-[#8a6e5a] uppercase tracking-widest font-extrabold pl-0.5">
+              <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold pl-0.5">
                 Effort Allocation
               </label>
               <select
-                className="w-full bg-white border border-[#ebdcb9] rounded-xl px-3 py-2 text-xs text-[#3a2f26] outline-none focus:border-[#d4994e] font-bold disabled:bg-[#f5eeda]/50"
+                className="w-full bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d4994e] dark:focus:border-[#584a3b] font-bold disabled:bg-[#f5eeda]/50 dark:disabled:bg-[#292119]/50"
                 value={effort}
                 disabled={!agent || !model}
                 onChange={(e) => setEffort(e.target.value)}
@@ -263,11 +263,11 @@ class MyViewModel: ViewModel() {
 
           {/* New target files text input area */}
           <div className="space-y-1">
-            <label className="block text-[10px] text-[#8a6e5a] uppercase tracking-widest flex items-center gap-1 font-extrabold pl-0.5">
-              <FileCode size={12} className="text-[#bf8a50]" /> Target Files to Edit (One path per line)
+            <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest flex items-center gap-1 font-extrabold pl-0.5">
+              <FileCode size={12} className="text-[#bf8a50] dark:text-[#d6b56d]" /> Target Files to Edit (One path per line)
             </label>
             <textarea
-              className="w-full bg-white border border-[#ebdcb9] rounded-xl px-3.5 py-2.5 h-20 outline-none focus:border-[#d4994e] font-mono resize-y text-[#3a2f26]"
+              className="w-full bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3.5 py-2.5 h-20 outline-none focus:border-[#d4994e] dark:focus:border-[#584a3b] font-mono resize-y text-[#3a2f26] dark:text-[#f3eadf]"
               placeholder="e.g.&#10;app/src/main/java/com/example/MainActivity.kt&#10;ios/Views/HomeView.swift"
               value={filesInput}
               onChange={(e) => setFilesInput(e.target.value)}
@@ -276,11 +276,11 @@ class MyViewModel: ViewModel() {
 
           {/* New checklist steps text input area */}
           <div className="space-y-1">
-            <label className="block text-[10px] text-[#8a6e5a] uppercase tracking-widest flex items-center gap-1 font-extrabold pl-0.5">
-              <CheckSquare size={12} className="text-[#728f44]" /> Implementation Steps (One task per line)
+            <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest flex items-center gap-1 font-extrabold pl-0.5">
+              <CheckSquare size={12} className="text-[#728f44] dark:text-[#f3eadf]" /> Implementation Steps (One task per line)
             </label>
             <textarea
-              className="w-full bg-white border border-[#ebdcb9] rounded-xl px-3.5 py-2.5 h-20 outline-none focus:border-[#d4994e] font-mono resize-y text-[#3a2f26]"
+              className="w-full bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3.5 py-2.5 h-20 outline-none focus:border-[#d4994e] dark:focus:border-[#584a3b] font-mono resize-y text-[#3a2f26] dark:text-[#f3eadf]"
               placeholder="e.g.&#10;Configure Room Entities and Dao database mappings&#10;Add dynamic Material-You dynamic colors support"
               value={checklistInput}
               onChange={(e) => setChecklistInput(e.target.value)}
@@ -288,14 +288,14 @@ class MyViewModel: ViewModel() {
           </div>
 
           {/* Design Image & Spec URL Section */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-b border-[#ebdcb9]/45 py-3 font-sans">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-b border-[#ebdcb9]/45 dark:border-[#584a3b]/45 py-3 font-sans">
             <div className="space-y-1">
-              <label className="block text-[10px] text-[#8a6e5a] font-mono uppercase tracking-widest flex items-center gap-1 font-extrabold pl-0.5">
-                <ImageIcon size={12} className="text-[#bf8a50]" /> Design Image (File or URL)
+              <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] font-mono uppercase tracking-widest flex items-center gap-1 font-extrabold pl-0.5">
+                <ImageIcon size={12} className="text-[#bf8a50] dark:text-[#d6b56d]" /> Design Image (File or URL)
               </label>
               <div className="space-y-2">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <label className={`text-[10px] bg-white border border-[#ebdcb9] px-2.5 py-1.5 rounded-lg text-[#5c493c] hover:bg-[#fffcf6] cursor-pointer inline-flex items-center gap-1 font-bold ${designImages.length >= 5 ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                  <label className={`text-[10px] bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] px-2.5 py-1.5 rounded-lg text-[#5c493c] dark:text-[#f3eadf] hover:bg-[#fffcf6] dark:hover:bg-[#1e1914] cursor-pointer inline-flex items-center gap-1 font-bold ${designImages.length >= 5 ? 'opacity-50 cursor-not-allowed' : ''}`}>
                     <span>Upload Image(s) {designImages.length > 0 && `(${designImages.length}/5)`}</span>
                     <input
                       type="file"
@@ -333,12 +333,12 @@ class MyViewModel: ViewModel() {
                 {designImages.length > 0 && (
                   <div className="flex gap-2 overflow-x-auto pb-1 mt-2">
                     {designImages.map((img, idx) => (
-                      <div key={idx} className="relative border border-[#ebdcb9] rounded-lg overflow-hidden h-14 w-14 shrink-0 bg-white group">
+                      <div key={idx} className="relative border border-[#ebdcb9] dark:border-[#584a3b] rounded-lg overflow-hidden h-14 w-14 shrink-0 bg-white dark:bg-[#292119] group">
                         <img src={img} alt={`Preview ${idx + 1}`} className="h-full w-full object-cover" referrerPolicy="no-referrer" />
                         <button 
                           type="button"
                           onClick={() => setDesignImages(prev => prev.filter((_, i) => i !== idx))}
-                          className="absolute top-0 right-0 bg-red-500 text-white w-4 h-4 flex items-center justify-center text-[10px] opacity-0 group-hover:opacity-100 transition-opacity"
+                          className="absolute top-0 right-0 bg-red-500 text-white dark:text-[#f3eadf] w-4 h-4 flex items-center justify-center text-[10px] opacity-0 group-hover:opacity-100 transition-opacity"
                         >
                           ✕
                         </button>
@@ -350,36 +350,36 @@ class MyViewModel: ViewModel() {
             </div>
 
             <div className="space-y-1">
-              <label className="block text-[10px] text-[#8a6e5a] font-mono uppercase tracking-widest flex items-center gap-1 font-extrabold pl-0.5">
-                <LinkIcon size={12} className="text-[#3c829e]" /> Specification link / URL
+              <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] font-mono uppercase tracking-widest flex items-center gap-1 font-extrabold pl-0.5">
+                <LinkIcon size={12} className="text-[#3c829e] dark:text-[#f3eadf]" /> Specification link / URL
               </label>
               <input
                 type="text"
-                className="w-full bg-white border border-[#ebdcb9] rounded-xl px-2.5 py-2 text-[11px] text-[#3a2f26] placeholder-[#c4b3a4] outline-none focus:border-[#d4994e] font-sans"
+                className="w-full bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-2.5 py-2 text-[11px] text-[#3a2f26] dark:text-[#f3eadf] placeholder-[#c4b3a4] outline-none focus:border-[#d4994e] dark:focus:border-[#584a3b] font-sans"
                 placeholder="e.g. Figma link or API Doc URL"
                 value={specUrl}
                 onChange={(e) => setSpecUrl(e.target.value)}
               />
-              <p className="text-[9px] text-[#8c7463] font-mono pl-0.5 leading-relaxed">Link to external product design, spreadsheet, or spec sheet.</p>
+              <p className="text-[9px] text-[#8c7463] dark:text-[#f3eadf] font-mono pl-0.5 leading-relaxed">Link to external product design, spreadsheet, or spec sheet.</p>
             </div>
           </div>
 
           {/* Spec details markdown */}
           <div className="space-y-2">
             <div className="flex justify-between items-center">
-              <label className="block text-[10px] text-[#8a6e5a] uppercase tracking-widest font-extrabold pl-0.5">
+              <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold pl-0.5">
                 Detailed Specs & Guidelines (Markdown)
               </label>
               <button
                 type="button"
                 onClick={injectTemplate}
-                className="text-[9px] bg-[#fffbf4] border border-[#ebdcb9] text-[#b47320] hover:bg-[#fff9ed] px-2.5 py-1 rounded-lg transition-colors cursor-pointer font-extrabold shadow-3xs"
+                className="text-[9px] bg-[#fffbf4] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] text-[#b47320] dark:text-[#f3eadf] hover:bg-[#fff9ed] dark:hover:bg-[#1e1914] px-2.5 py-1 rounded-lg transition-colors cursor-pointer font-extrabold shadow-3xs"
               >
                 + Inject Code Template
               </button>
             </div>
             <textarea
-              className="w-full bg-white border border-[#ebdcb9] rounded-xl px-3.5 py-2.5 h-24 outline-none focus:border-[#d4994e] resize-y text-[#3a2f26]"
+              className="w-full bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3.5 py-2.5 h-24 outline-none focus:border-[#d4994e] dark:focus:border-[#584a3b] resize-y text-[#3a2f26] dark:text-[#f3eadf]"
               placeholder="Supply code scripts or markdown blueprint notes..."
               value={description}
               onChange={(e) => setDescription(e.target.value)}
@@ -387,17 +387,17 @@ class MyViewModel: ViewModel() {
           </div>
 
           {/* Buttons bar */}
-          <div className="flex gap-3 pt-4 border-t border-[#ebdcb9]">
+          <div className="flex gap-3 pt-4 border-t border-[#ebdcb9] dark:border-[#584a3b]">
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 py-2.5 rounded-xl border border-[#ebdcb9] text-[#816b5a] bg-white hover:bg-[#fffcf6] transition-colors text-xs font-extrabold cursor-pointer transition-all"
+              className="flex-1 py-2.5 rounded-xl border border-[#ebdcb9] dark:border-[#584a3b] text-[#816b5a] dark:text-[#f3eadf] bg-white dark:bg-[#292119] hover:bg-[#fffcf6] dark:hover:bg-[#1e1914] transition-colors text-xs font-extrabold cursor-pointer transition-all"
             >
               Discard
             </button>
             <button
               type="submit"
-              className="flex-1 bg-[#d89745] hover:bg-[#c08234] text-white font-extrabold py-2.5 rounded-xl text-xs transition-colors shadow-md hover:shadow-orange-550/10 cursor-pointer transition-all"
+              className="flex-1 bg-[#d89745] dark:bg-[#e0a070] hover:bg-[#c08234] dark:hover:bg-[#d6b56d] text-white dark:text-[#f3eadf] font-extrabold py-2.5 rounded-xl text-xs transition-colors shadow-md hover:shadow-orange-550/10 cursor-pointer transition-all"
             >
               Commit Ticket ✨
             </button>

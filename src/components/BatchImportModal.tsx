@@ -96,37 +96,37 @@ export default function BatchImportModal({ onClose, onImport }: BatchImportModal
       <div className="fixed inset-0" onClick={onClose} />
 
       {/* Modal Card */}
-      <div className="bg-[#fcfaf5] border border-[#ebdcb9] w-full max-w-xl rounded-3xl shadow-2xl relative z-10 overflow-hidden flex flex-col justify-between font-sans">
+      <div className="bg-[#fcfaf5] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] w-full max-w-xl rounded-3xl shadow-2xl relative z-10 overflow-hidden flex flex-col justify-between font-sans">
         
         {/* Header toolbar */}
-        <div className="p-5 border-b border-[#ebdcb9] bg-[#ebdcb9]/40 flex items-center justify-between font-mono text-[#5c493c]">
+        <div className="p-5 border-b border-[#ebdcb9] dark:border-[#584a3b] bg-[#ebdcb9]/40 dark:bg-[#584a3b]/40 flex items-center justify-between font-mono text-[#5c493c] dark:text-[#f3eadf]">
           <div className="flex items-center gap-2">
-            <Terminal size={18} className="text-[#3c829e]" />
-            <h2 className="text-xs font-black text-[#5c493c] tracking-tight uppercase">
+            <Terminal size={18} className="text-[#3c829e] dark:text-[#f3eadf]" />
+            <h2 className="text-xs font-black text-[#5c493c] dark:text-[#f3eadf] tracking-tight uppercase">
               BATCH_IMPORT_JSON_TICKETS
             </h2>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="text-gray-400 hover:text-red-500 p-1.5 rounded-full hover:bg-white/60 transition-all cursor-pointer"
+            className="text-gray-400 dark:text-[#b8ab9f] hover:text-red-500 p-1.5 rounded-full hover:bg-white dark:hover:bg-[#292119]/60 transition-all cursor-pointer"
           >
             <X size={17} />
           </button>
         </div>
 
         {/* Input fields Form */}
-        <form onSubmit={handleSubmit} className="p-6 space-y-4 max-h-[75vh] overflow-y-auto scrollbar-thin text-xs font-mono text-[#5c493c]">
+        <form onSubmit={handleSubmit} className="p-6 space-y-4 max-h-[75vh] overflow-y-auto scrollbar-thin text-xs font-mono text-[#5c493c] dark:text-[#f3eadf]">
           
           <div className="space-y-1">
             <div className="flex justify-between items-center pr-1">
-              <label className="block text-[10px] text-[#8a6e5a] uppercase tracking-widest font-extrabold pl-0.5">
+              <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold pl-0.5">
                 Paste JSON Array or Object
               </label>
               <button
                 type="button"
                 onClick={handleApplySample}
-                className="text-[9px] bg-[#fffbf4] border border-[#ebdcb9] text-[#3c829e] hover:bg-[#fff9ed] px-2.5 py-1 rounded-lg transition-colors cursor-pointer font-extrabold shadow-3xs flex items-center gap-1"
+                className="text-[9px] bg-[#fffbf4] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] text-[#3c829e] dark:text-[#f3eadf] hover:bg-[#fff9ed] dark:hover:bg-[#1e1914] px-2.5 py-1 rounded-lg transition-colors cursor-pointer font-extrabold shadow-3xs flex items-center gap-1"
               >
                 <HelpCircle size={10} />
                 <span>+ Use Sample JSON Array</span>
@@ -135,7 +135,7 @@ export default function BatchImportModal({ onClose, onImport }: BatchImportModal
 
             <textarea
               required
-              className="w-full bg-white border border-[#ebdcb9] rounded-xl px-3.5 py-2.5 h-64 outline-none focus:border-[#3c829e] font-mono resize-y text-[#3a2f26] text-[11px] leading-relaxed shadow-3xs"
+              className="w-full bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3.5 py-2.5 h-64 outline-none focus:border-[#3c829e] dark:focus:border-[#584a3b] font-mono resize-y text-[#3a2f26] dark:text-[#f3eadf] text-[11px] leading-relaxed shadow-3xs"
               placeholder="e.g.&#10;[&#10;  {&#10;    &quot;title&quot;: &quot;Awesome Ticket&quot;,&#10;    &quot;priority&quot;: &quot;high&quot;,&#10;    &quot;status&quot;: &quot;backlog&quot;&#10;  }&#10;]"
               value={jsonText}
               onChange={(e) => {
@@ -147,7 +147,7 @@ export default function BatchImportModal({ onClose, onImport }: BatchImportModal
 
           {/* Feedback error notice logs */}
           {errorMsg && (
-            <div className="p-3 bg-[#fdf2f2] border border-[#fbd5d5] rounded-xl flex items-start gap-2.5 text-red-700 text-[10px] leading-relaxed">
+            <div className="p-3 bg-[#fdf2f2] dark:bg-[#292119] border border-[#fbd5d5] dark:border-[#584a3b] rounded-xl flex items-start gap-2.5 text-red-700 text-[10px] leading-relaxed">
               <AlertCircle size={14} className="shrink-0 mt-0.5" />
               <div>
                 <p className="font-extrabold uppercase tracking-wide">Validation Failure Log:</p>
@@ -157,9 +157,9 @@ export default function BatchImportModal({ onClose, onImport }: BatchImportModal
           )}
 
           {/* Instruction helper guidelines */}
-          <div className="p-3.5 bg-[#f5efdf]/60 border border-[#ebdcb9] rounded-2xl text-[9px] text-[#856e5f] leading-relaxed font-sans">
-            <p className="font-bold uppercase tracking-wider mb-1 flex items-center gap-1.5 font-mono text-[#5c493c]">
-              <Sparkles size={11} className="text-[#3c829e]" /> Importing Guidelines
+          <div className="p-3.5 bg-[#f5efdf]/60 dark:bg-[#292119]/60 border border-[#ebdcb9] dark:border-[#584a3b] rounded-2xl text-[9px] text-[#856e5f] dark:text-[#f3eadf] leading-relaxed font-sans">
+            <p className="font-bold uppercase tracking-wider mb-1 flex items-center gap-1.5 font-mono text-[#5c493c] dark:text-[#f3eadf]">
+              <Sparkles size={11} className="text-[#3c829e] dark:text-[#f3eadf]" /> Importing Guidelines
             </p>
             <ul className="list-disc pl-3.5 space-y-1 font-semibold">
               <li>Pasted blob must consist of a clean JSON Array containing ticket records.</li>
@@ -169,18 +169,18 @@ export default function BatchImportModal({ onClose, onImport }: BatchImportModal
           </div>
 
           {/* Buttons bar */}
-          <div className="flex gap-3 pt-4 border-t border-[#ebdcb9]">
+          <div className="flex gap-3 pt-4 border-t border-[#ebdcb9] dark:border-[#584a3b]">
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 py-2.5 rounded-xl border border-[#ebdcb9] text-[#816b5a] bg-white hover:bg-[#fffcf6] transition-all text-xs font-bold font-mono cursor-pointer"
+              className="flex-1 py-2.5 rounded-xl border border-[#ebdcb9] dark:border-[#584a3b] text-[#816b5a] dark:text-[#f3eadf] bg-white dark:bg-[#292119] hover:bg-[#fffcf6] dark:hover:bg-[#1e1914] transition-all text-xs font-bold font-mono cursor-pointer"
             >
               Discard
             </button>
             <button
               type="submit"
               disabled={importing || !jsonText.trim()}
-              className="flex-1 bg-[#3c829e] hover:bg-[#2d6277] disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-extrabold py-2.5 rounded-xl text-xs transition-all shadow-md cursor-pointer font-mono"
+              className="flex-1 bg-[#3c829e] dark:bg-[#e0a070] hover:bg-[#2d6277] dark:hover:bg-[#d6b56d] disabled:bg-gray-300 dark:disabled:bg-[#292119] disabled:cursor-not-allowed text-white dark:text-[#f3eadf] font-extrabold py-2.5 rounded-xl text-xs transition-all shadow-md cursor-pointer font-mono"
             >
               {importing ? 'Importing... 🚀' : 'Commit Batch JSON ✨'}
             </button>

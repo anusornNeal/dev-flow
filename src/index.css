@@ -7,10 +7,16 @@
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
 }
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 body {
   font-family: var(--font-sans);
   background-color: #fbf9f6;
   color: #3e322b;
+}
+.dark body {
+  background-color: #1e1914;
+  color: #f3eadf;
 }
 
 /* Custom soft warm scrollbar */
@@ -21,19 +27,33 @@ body {
 ::-webkit-scrollbar-track {
   background: #f5eedf;
 }
+.dark ::-webkit-scrollbar-track {
+  background: #1e1914;
+}
 ::-webkit-scrollbar-thumb {
   background: #dacbb2;
   border-radius: 9999px;
   border: 2px solid #f5eedf;
 }
+.dark ::-webkit-scrollbar-thumb {
+  background: #584a3b;
+  border: 2px solid #1e1914;
+}
 ::-webkit-scrollbar-thumb:hover {
   background: #c3b499;
+}
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #d6b56d;
 }
 
 /* Text selections matching orange cream cat */
 ::selection {
   background-color: #ffdcb3;
   color: #553412;
+}
+.dark ::selection {
+  background-color: #d6b56d;
+  color: #292119;
 }
 
 /* Keyframes for cute things */

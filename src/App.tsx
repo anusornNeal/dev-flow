@@ -29,6 +29,7 @@ import JsonTemplateModal from './components/JsonTemplateModal';
 import BatchImportModal from './components/BatchImportModal';
 import SkillsModal from './components/SkillsModal';
 import SettingsModal from './components/SettingsModal';
+import NgrokStatusPanel from './components/NgrokStatusPanel';
 
 // Standardized project lanes themed cleanly
 const COLUMNS: Column[] = [
@@ -56,6 +57,7 @@ export default function App() {
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [mounted, setMounted] = useState(false);
   const [autoWorking, setAutoWorking] = useState(false);
+  const [ngrokUrl, setNgrokUrl] = useState('');
 
   // Filter States
   const [selectedPriority, setSelectedPriority] = useState<Task['priority'] | 'all'>('all');
@@ -69,6 +71,7 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         setAutoWorking(!!data.autoWorking);
+        setNgrokUrl(data.ngrokUrl ?? '');
       }
     } catch (err) {
       console.warn('Failed to fetch settings:', err);
@@ -524,7 +527,13 @@ export default function App() {
             </div>
 
             {/* DevOps backup and Reset buttons */}
-            <div className="flex flex-wrap items-center gap-2.5 w-full md:w-auto">
+            <div className="flex flex-wrap items-center justify-end gap-3 w-full md:w-auto">
+              
+              {/* Ngrok Status */}
+              <NgrokStatusPanel 
+                ngrokUrl={ngrokUrl} 
+                onOpenSettings={() => setIsSettingsModalOpen(true)} 
+              />
               
               {/* Backup actions */}
               <div className="flex items-center gap-1.5 bg-[#fdfbf6] border border-[#e5d4bb] rounded-xl p-1 shadow-2xs">
@@ -778,7 +787,10 @@ export default function App() {
       {/* 7. Settings Modal */}
       {isSettingsModalOpen && (
         <SettingsModal
-          onClose={() => setIsSettingsModalOpen(false)}
+          onClose={() => {
+            setIsSettingsModalOpen(false);
+            fetchSettingsFromApi();
+          }}
           autoWorking={autoWorking}
           onToggleAutoWorking={toggleAutoWorking}
         />

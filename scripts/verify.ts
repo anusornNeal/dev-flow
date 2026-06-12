@@ -3,6 +3,8 @@ import { spawnSync } from 'child_process';
 const commands = [
   { label: 'lint', command: 'npm', args: ['run', 'lint'] },
   { label: 'agent runs', command: 'npm', args: ['run', 'test:agent-runs'] },
+  { label: 'prompt templates', command: 'npm', args: ['run', 'test:prompt-templates'] },
+  { label: 'orchestration', command: 'npm', args: ['run', 'test:orchestration'] },
   { label: 'doctor', command: 'npm', args: ['run', 'doctor'] },
 ];
 

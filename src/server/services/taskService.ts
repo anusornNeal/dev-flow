@@ -217,36 +217,3 @@ export function getAgentTaskContext(state: AppState, targetId: string, includeLo
   return agentContext;
 }
 
-export function buildTaskPrompt(state: AppState, targetId: string, includeLogs = false) {
-  const context = getAgentTaskContext(state, targetId, includeLogs);
-  if (!context) return null;
-  const executionMode = resolveAgentExecutionMode(state.settingsCache.agentExecutionMode || process.env.DEVFLOW_AGENT_EXECUTION_MODE);
-  const launchPlan = resolveAgentLaunchPlan({
-    agent: context.assignment?.agent,
-    model: context.assignment?.model,
-    effort: context.assignment?.effort,
-    executionMode,
-  });
-  const metadataBlock = buildLaunchMetadataBlock(launchPlan);
-
-  let promptContent = '';
-  const promptTemplateSkill = state.skillsRegistry.find((skill) => skill.id === 'prompt-template');
-  if (promptTemplateSkill && promptTemplateSkill.filePath && fs.existsSync(promptTemplateSkill.filePath)) {
-    promptContent = fs.readFileSync(promptTemplateSkill.filePath, 'utf8');
-  } else {
-    promptContent = "You are an AI developer agent. A task has been assigned to you in Dev Flow. Task ID: {TASK_ID}. Step 1: Immediately use the Dev Flow MCP tool to move this task to 'in-progress' status. Step 2: Read the task details. Step 3: If the task has checklist items or subtasks, use the invoke_subagent tool to call subagents for them. Step 4: When done, move the task to 'ready-for-review'. Step 5: Check if there are any other tasks in the 'todo' lane for this project. If there are, pick the oldest one, move it to 'in-progress', work on it, and repeat this loop until no 'todo' tasks remain.\n\n### Task Context\n{TASK_CONTEXT}\n\n{AGENT_WORKFLOW}";
-  }
-
-  const agentId = context.assignment?.agent?.toLowerCase() || 'default';
-  const agentWorkflowSkill = state.skillsRegistry.find((skill) => skill.id === `agent-${agentId}-workflow`);
-  let agentWorkflowContent = '';
-  if (agentWorkflowSkill && agentWorkflowSkill.filePath && fs.existsSync(agentWorkflowSkill.filePath)) {
-    agentWorkflowContent = fs.readFileSync(agentWorkflowSkill.filePath, 'utf8');
-  }
-
-  promptContent = promptContent.replace(/\{TASK_ID\}/g, context.task.id);
-  promptContent = promptContent.replace(/\{TASK_CONTEXT\}/g, JSON.stringify(context, null, 2));
-  promptContent = promptContent.replace(/\{AGENT_WORKFLOW\}/g, agentWorkflowContent);
-
-  return `${metadataBlock}\n${promptContent}`;
-}

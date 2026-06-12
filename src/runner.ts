@@ -58,13 +58,12 @@ function buildLaunchCommandLine(executable: string, args: string[]) {
 }
 
 export function buildWindowsStartCommand(input: {
-  windowTitle: string;
   cwd: string;
   launchScriptPath: string;
 }) {
   return [
     'start',
-    quoteBatArg(input.windowTitle),
+    '""',
     '/d',
     quoteBatArg(input.cwd),
     'cmd.exe',
@@ -131,6 +130,7 @@ export function createAgentLaunchScript(input: {
   executable: string;
   args: string[];
   cwd: string;
+  windowTitle?: string | null;
   logPath?: string | null;
 }) {
   fs.mkdirSync(input.runDir, { recursive: true });
@@ -148,6 +148,7 @@ export function createAgentLaunchScript(input: {
   fs.writeFileSync(launchScriptPath, [
     '@echo off',
     'setlocal',
+    input.windowTitle ? `title ${input.windowTitle}` : '',
     `cd /d ${quoteBatArg(input.cwd)}`,
     commandLine,
     'set EXIT_CODE=%ERRORLEVEL%',
@@ -234,6 +235,7 @@ function main() {
     executable, 
     args: spawnArgs, 
     cwd: localPath || getDevFlowAppRoot(), 
+    windowTitle: `${config.name} Agent`,
     logPath 
   });
 
@@ -272,7 +274,6 @@ function main() {
   if (launchScriptPath) {
     finalCmd = 'cmd.exe';
     finalArgs = ['/d', '/s', '/c', buildWindowsStartCommand({
-      windowTitle: `${config.name} Agent`,
       cwd,
       launchScriptPath,
     })];

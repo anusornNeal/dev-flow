@@ -224,9 +224,11 @@ const launchScriptPath = createAgentLaunchScript({
   executable: 'C:\\Tools\\codex.cmd',
   args: ['-C', 'C:\\work dir', '-m', 'gpt-5.5', buildPromptReference(files.promptPath)],
   cwd: 'C:\\work dir',
+  windowTitle: 'Codex Agent',
   logPath: files.logPath,
 });
 const launchScript = fs.readFileSync(launchScriptPath, 'utf8');
+assert.match(launchScript, /title Codex Agent/);
 assert.match(launchScript, /cd \/d "C:\\work dir"/);
 assert.match(launchScript, /call "C:\\Tools\\codex\.cmd"/);
 assert.match(launchScript, /"C:\\Tools\\codex.cmd" "-C" "C:\\work dir" "-m" "gpt-5.5"/);
@@ -237,11 +239,11 @@ assert.match(launchScript, /Agent process exited with code/);
 assert.match(launchScript, /completionCallback success=%CALLBACK_SUCCESS% exitCode=%EXIT_CODE% errorMessage=%CALLBACK_ERROR_MESSAGE%/);
 
 const startCommand = buildWindowsStartCommand({
-  windowTitle: 'Codex Agent',
   cwd: 'C:\\work dir',
   launchScriptPath,
 });
-assert.equal(startCommand, `start "Codex Agent" /d "C:\\work dir" cmd.exe /k "${launchScriptPath}"`);
+assert.equal(startCommand, `start "" /d "C:\\work dir" cmd.exe /k "${launchScriptPath}"`);
+assert.equal(startCommand.includes('Codex Agent'), false);
 
 const {
   validateAgentParams,

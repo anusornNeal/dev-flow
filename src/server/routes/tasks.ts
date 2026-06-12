@@ -5,10 +5,11 @@ import { TASK_SCHEMA_DEF, VALID_AGENTS, VALID_EFFORTS, VALID_MODELS, VALID_STATU
 import { cancelActiveRunsForTask, cancelStaleActiveRuns, createAgentRun, getActiveRunForProject, getActiveRunForTask, getLatestAgentRunForTask, listAgentRunsForTask, updateAgentRunStatus, type AgentRun } from '../repositories/agentRunRepository';
 import { loadTasks, generateDisplayId, saveTasks } from '../repositories/taskRepository';
 import { appendAgentRunLog, createAgentRunFiles, getAgentTriggerScriptPath, getDevFlowApiBaseUrl, resolveAgentExecutionMode } from '../services/agentRunService';
-import { buildTaskPrompt, extractDesignImages, getAgentTaskContext, resolveProjectIdFromRepo, validateAgentParams, validateTaskPayload } from '../services/taskService';
+import { extractDesignImages, getAgentTaskContext, resolveProjectIdFromRepo, validateAgentParams, validateTaskPayload } from '../services/taskService';
 import { validateEnum, validateString } from '../validation';
 import { isValidTransition, getValidationErrorMessage } from '../../lib/statusTransitions';
 import { resolveAgentLaunchPlan } from '../services/agentLaunchConfig';
+import { renderPromptTemplate } from '../services/promptTemplateService';
 
 const STALE_AGENT_RUN_MS = 30 * 60 * 1000;
 
@@ -71,6 +72,12 @@ function triggerTaskAgent(task: any, deps: ApiRouteDeps, routeLabel: string, ret
   cleanupStaleActiveRuns(deps);
 
   const project = deps.state.projectsCache.find((entry) => entry.id === task.projectId);
+  if (!project || !project.localPath) {
+    const reason = 'Project localPath is missing. Task cannot be run.';
+    deps.writeAgentLog('ERROR', `Blocked trigger for task=${task.id}: ${reason}`);
+    return { triggered: false, reason };
+  }
+
   const executionMode = resolveAgentExecutionMode(deps.state.settingsCache.agentExecutionMode || process.env.DEVFLOW_AGENT_EXECUTION_MODE);
   const launchPlan = resolveAgentLaunchPlan({
     agent: task.agent,
@@ -102,9 +109,26 @@ function triggerTaskAgent(task: any, deps: ApiRouteDeps, routeLabel: string, ret
     retryOfRunId: retryOfRunId || null,
     triggerSource: routeLabel,
   });
-  applyRunSummaryToTask(task, run);
 
-  const prompt = buildTaskPrompt(deps.state, task.id, false);
+  task.status = 'in-progress';
+  task.updatedAt = new Date().toISOString();
+  applyRunSummaryToTask(task, run);
+  saveTasks(deps.state);
+
+  const context = getAgentTaskContext(deps.state, task.id, false);
+  let prompt = '';
+  if (context) {
+    const renderResult = renderPromptTemplate('default', {
+      run: { id: run.id },
+      task: context.task,
+      project: context.workspace,
+      agent: task.agent,
+      model: task.model,
+      effort: task.effort
+    });
+    prompt = renderResult.content;
+  }
+
   if (!prompt) {
     const failedRun = updateAgentRunStatus(run.id, 'failed', { errorMessage: 'Task prompt could not be built.' });
     applyRunSummaryToTask(task, failedRun);
@@ -205,11 +229,23 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
   });
 
   app.get('/api/tasks/:id/prompt', (req, res) => {
+    loadTasks(deps.state);
     const includeLogs = req.query.includeLogs === 'true' || req.query.mode === 'full' || req.query.mode === 'debug';
-    const prompt = buildTaskPrompt(deps.state, req.params.id, includeLogs);
-    if (!prompt) return res.status(404).json({ error: 'Task not found' });
+    const context = getAgentTaskContext(deps.state, req.params.id, includeLogs);
+    if (!context) return res.status(404).json({ error: 'Task not found' });
+
+    const activeRun = getActiveRunForTask(context.task.id) || getLatestAgentRunForTask(context.task.id);
+    const renderResult = renderPromptTemplate('default', {
+      run: { id: activeRun?.id || 'preview-run-id' },
+      task: context.task,
+      project: context.workspace,
+      agent: context.assignment?.agent || 'default',
+      model: context.assignment?.model || '',
+      effort: context.assignment?.effort || ''
+    });
+
     res.setHeader('Content-Type', 'text/plain');
-    return res.send(prompt);
+    return res.send(renderResult.content);
   });
 
   app.get('/api/tasks/:id/agent-runs', (req, res) => {

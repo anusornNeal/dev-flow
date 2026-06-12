@@ -22,6 +22,7 @@ import {
   ChevronDown
 } from 'lucide-react';
 import { Task, TaskStatus, Column, LogEntry, Project } from './types';
+import { isValidTransition, getValidationErrorMessage } from './lib/statusTransitions';
 import Sidebar from './components/Sidebar';
 import TaskCard from './components/TaskCard';
 import TaskDetailsDrawer from './components/TaskDetailsDrawer';
@@ -227,6 +228,13 @@ export default function App() {
 
     // Prevent duplicate logs if same lane dropped
     if (sourceTask.status === status) {
+      setDraggedTaskId(null);
+      setDraggedOverColumn(null);
+      return;
+    }
+
+    if (!isValidTransition(sourceTask.status, status)) {
+      setPersistenceError(getValidationErrorMessage(sourceTask.status, status));
       setDraggedTaskId(null);
       setDraggedOverColumn(null);
       return;

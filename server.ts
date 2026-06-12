@@ -52,7 +52,7 @@ let countersCache: Record<string, number> = {};
 let skillsRegistry: any[] = [];
 function broadcast(_message: unknown) {}
 
-let settingsCache: { autoWorking: boolean } = { autoWorking: false };
+let settingsCache: { autoWorking: boolean; ngrokUrl: string; envNotes: string; } = { autoWorking: false, ngrokUrl: '', envNotes: '' };
 
 const state: AppState = {
   get tasksCache() {

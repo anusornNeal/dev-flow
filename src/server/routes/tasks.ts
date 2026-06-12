@@ -6,6 +6,7 @@ import { TASK_SCHEMA_DEF, VALID_AGENTS, VALID_EFFORTS, VALID_MODELS, VALID_STATU
 import { loadTasks, generateDisplayId, saveTasks } from '../repositories/taskRepository';
 import { buildTaskPrompt, extractDesignImages, getAgentTaskContext, resolveProjectIdFromRepo, validateAgentParams, validateTaskPayload } from '../services/taskService';
 import { validateEnum, validateString } from '../validation';
+import { isValidTransition, getValidationErrorMessage } from '../../lib/statusTransitions';
 
 function clearActiveAgentIfSettled(task: any) {
   if (['backlog', 'done', 'ready-for-review'].includes(task.status)) {
@@ -323,6 +324,10 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     const previousStatus = task.status;
     if (previousStatus === req.body.status) {
       return res.json({ message: 'Task is already in that lane', task });
+    }
+
+    if (!isValidTransition(previousStatus, req.body.status)) {
+      return res.status(400).json({ error: getValidationErrorMessage(previousStatus, req.body.status) });
     }
 
     if (previousStatus === 'in-progress' && !canOverrideTaskLock(task, req.body, undefined, req.headers['x-agent-request'])) {

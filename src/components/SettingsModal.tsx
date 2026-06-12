@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Link, FileText, ToggleLeft, ToggleRight, Save, Loader2, CheckCircle2, AlertCircle, Database, Download, Activity } from 'lucide-react';
+import { X, Link, FileText, ToggleLeft, ToggleRight, Save, Loader2, CheckCircle2, AlertCircle, Database, Download, Activity, Upload } from 'lucide-react';
 
 interface SettingsData {
   ngrokUrl: string;
@@ -31,6 +31,10 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [errorMsg, setErrorMsg] = useState('');
+
+  const [importStatus, setImportStatus] = useState<'idle' | 'importing' | 'success' | 'error'>('idle');
+  const [importMsg, setImportMsg] = useState('');
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     fetch('/api/settings', { cache: 'no-store' })
@@ -75,12 +79,46 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
     }
   };
 
+  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!window.confirm('Are you sure you want to restore from this backup? Your current DevFlow database will be overwritten. A safety backup will be created.')) {
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
+    setImportStatus('importing');
+    setImportMsg('');
+
+    try {
+      const res = await fetch('/api/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: file,
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error ?? 'Import failed');
+      }
+
+      setImportStatus('success');
+      setImportMsg('Import completed. Please restart DevFlow.');
+    } catch (err: any) {
+      setImportStatus('error');
+      setImportMsg(err.message ?? 'Failed to import backup');
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
   return (
     <div className="fixed inset-0 bg-[#3e3129]/30 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="bg-[#fffdfa] rounded-2xl shadow-xl w-full max-w-xl border border-[#e5d4bb] overflow-hidden">
+      <div className="bg-[#fffdfa] rounded-2xl shadow-xl w-full max-w-xl border border-[#e5d4bb] overflow-hidden flex flex-col max-h-[90vh]">
         
         {/* Header */}
-        <div className="px-6 py-4 border-b border-[#ebdcb9] bg-[#fdfbf6] flex items-center justify-between">
+        <div className="px-6 py-4 border-b border-[#ebdcb9] bg-[#fdfbf6] flex items-center justify-between shrink-0">
           <h2 className="text-[#534135] font-extrabold font-sans text-lg">⚙️ Settings</h2>
           <button
             onClick={onClose}
@@ -95,7 +133,8 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
             <Loader2 size={24} className="text-[#d89745] animate-spin" />
           </div>
         ) : (
-          <div className="p-6 flex flex-col gap-6">
+          <>
+            <div className="p-6 flex flex-col gap-6 overflow-y-auto min-h-0">
 
             {/* ngrok URL */}
             <div className="flex flex-col gap-2">
@@ -268,18 +307,46 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                     Download a portable backup of your DevFlow data (projects, tasks, skills) to migrate to another machine. Secrets are excluded.
                   </p>
                 </div>
-                <button
-                  onClick={() => window.location.href = '/api/export'}
-                  type="button"
-                  className="bg-[#faf7f0] border border-[#e5d4bb] hover:bg-[#ebdcb9] text-[#534135] px-3 py-1.5 rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 whitespace-nowrap"
-                >
-                  <Download size={14} /> Export Backup
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    type="button"
+                    disabled={importStatus === 'importing'}
+                    className="bg-[#faf7f0] border border-[#e5d4bb] hover:bg-[#ebdcb9] text-[#534135] px-3 py-1.5 rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 whitespace-nowrap disabled:opacity-50"
+                  >
+                    {importStatus === 'importing' ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />} 
+                    {importStatus === 'importing' ? 'Importing...' : 'Import Backup'}
+                  </button>
+                  <button
+                    onClick={() => window.location.href = '/api/export'}
+                    type="button"
+                    className="bg-[#faf7f0] border border-[#e5d4bb] hover:bg-[#ebdcb9] text-[#534135] px-3 py-1.5 rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 whitespace-nowrap"
+                  >
+                    <Download size={14} /> Export Backup
+                  </button>
+                  <input
+                    type="file"
+                    accept=".db"
+                    ref={fileInputRef}
+                    onChange={handleImportFile}
+                    className="hidden"
+                  />
+                </div>
               </div>
+              
+              {/* Import Messages */}
+              {importMsg && (
+                <div className={`mt-2 p-2 rounded-lg text-xs font-mono flex items-start gap-2 ${importStatus === 'error' ? 'bg-[#fff0f0] text-[#991b1b] border border-[#fecaca]' : 'bg-[#f0f9f4] text-[#166534] border border-[#a3e6cd]'}`}>
+                  {importStatus === 'error' ? <AlertCircle size={14} className="mt-0.5 shrink-0" /> : <CheckCircle2 size={14} className="mt-0.5 shrink-0" />}
+                  <span>{importMsg}</span>
+                </div>
+              )}
             </div>
 
-            {/* Save Button */}
-            <div className="flex items-center justify-between pt-1">
+            </div>
+            
+            {/* Save Button Footer */}
+            <div className="px-6 py-4 border-t border-[#ebdcb9] bg-[#fdfbf6] flex items-center justify-between shrink-0">
               <div className="flex items-center gap-1.5 text-xs font-mono">
                 {saveStatus === 'success' && (
                   <><CheckCircle2 size={14} className="text-green-500" /><span className="text-green-600">Saved successfully</span></>
@@ -297,7 +364,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                 {saving ? 'Saving...' : 'Save Settings'}
               </button>
             </div>
-          </div>
+          </>
         )}
       </div>
     </div>

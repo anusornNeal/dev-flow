@@ -248,39 +248,39 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
         </div>
       )}
 
-      {/* Git Branch Copy Trigger */}
-      {task.branch && (
-        <div 
-          onClick={handleCopyBranch}
-          className={`group/branch mb-3 mx-0.5 p-2 rounded-xl border flex items-center justify-between text-[10px] font-mono font-medium cursor-pointer transition-all active:scale-[0.98] ${
-            isDone 
-              ? 'bg-[#f8f5ee] border-[#ebdcb9] text-gray-400 border-dashed hover:border-gray-400'
-              : isInProgress
-                ? 'bg-[#fff9e6] border-[#fde5bd] text-[#935919] hover:bg-[#fff5d3] hover:border-[#fbc58e]'
-                : 'bg-[#faf7f0] border-[#ebdcb9] text-[#715c4d] hover:bg-[#fff9e6] hover:border-[#fde5bd]'
-          }`}
-          title="Click to copy Git Branch instruction"
-        >
-          <div className="flex items-center gap-1.5 truncate">
-            <GitBranch size={11} className={`${isDone ? 'text-emerald-500' : 'text-[#d89745]'} shrink-0 group-hover/branch:rotate-12 transition-transform`} />
-            <span className="truncate">{task.branch}</span>
-          </div>
-          <button
-            type="button"
-            className="text-gray-400 group-hover/branch:text-[#d89745] shrink-0 transition-colors"
+      {/* Actions: Git Branch Copy Trigger and Starting Template */}
+      <div className="flex gap-1.5 mb-3 mx-0.5">
+        {task.branch && (
+          <div 
+            onClick={handleCopyBranch}
+            className={`group/branch flex-1 min-w-0 p-2 rounded-xl border flex items-center justify-between text-[10px] font-mono font-medium cursor-pointer transition-all active:scale-[0.98] ${
+              isDone 
+                ? 'bg-[#f8f5ee] border-[#ebdcb9] text-gray-400 border-dashed hover:border-gray-400'
+                : isInProgress
+                  ? 'bg-[#fff9e6] border-[#fde5bd] text-[#935919] hover:bg-[#fff5d3] hover:border-[#fbc58e]'
+                  : 'bg-[#faf7f0] border-[#ebdcb9] text-[#715c4d] hover:bg-[#fff9e6] hover:border-[#fde5bd]'
+            }`}
+            title="Click to copy Git Branch instruction"
           >
-            {copied ? (
-              <Check size={11} className="text-emerald-500 animate-scale" />
-            ) : (
-              <Copy size={11} />
-            )}
-          </button>
+            <div className="flex items-center gap-1.5 truncate">
+              <GitBranch size={11} className={`${isDone ? 'text-emerald-500' : 'text-[#d89745]'} shrink-0 group-hover/branch:rotate-12 transition-transform`} />
+              <span className="truncate">{task.branch}</span>
+            </div>
+            <button
+              type="button"
+              className="text-gray-400 group-hover/branch:text-[#d89745] shrink-0 transition-colors ml-2"
+            >
+              {copied ? (
+                <Check size={11} className="text-emerald-500 animate-scale" />
+              ) : (
+                <Copy size={11} />
+              )}
+            </button>
+          </div>
+        )}
+        <div className={task.branch ? 'flex-none' : 'w-full'}>
+          <CopyTemplateButton task={task} className={`h-full ${task.branch ? 'px-3' : 'w-full justify-center py-1.5'}`} variant={task.branch ? 'icon' : 'full'} />
         </div>
-      )}
-
-      {/* Copy Starting Template Action */}
-      <div className="mb-3 mx-0.5">
-        <CopyTemplateButton task={task} className="w-full justify-center py-1.5" />
       </div>
 
       {/* Subtasks compact section */}

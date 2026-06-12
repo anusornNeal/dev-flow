@@ -1,4 +1,4 @@
-import type express from 'express';
+import express from 'express';
 import type { ApiRouteDeps } from '../types';
 import { saveSettings } from '../repositories/settingsRepository';
 import fs from 'fs';
@@ -123,6 +123,69 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
     } catch (error: any) {
       console.error('Export failed:', error);
       res.status(500).json({ error: error.message ?? 'Export failed' });
+    }
+  });
+
+  app.post('/api/import', express.raw({ type: '*/*', limit: '50mb' }), async (req, res) => {
+    try {
+      if (!Buffer.isBuffer(req.body)) {
+        return res.status(400).json({ error: 'Invalid file payload' });
+      }
+
+      const dataDir = path.join(process.cwd(), 'data');
+      if (!fs.existsSync(dataDir)) {
+        fs.mkdirSync(dataDir, { recursive: true });
+      }
+
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const tempFile = path.join(dataDir, `devflow-import-temp-${timestamp}.db`);
+      const safetyBackup = path.join(dataDir, `devflow-safety-${timestamp}.db`);
+      const targetDbFile = path.join(dataDir, 'devflow.db');
+
+      // 1. Save uploaded file to temp path
+      fs.writeFileSync(tempFile, req.body);
+
+      // 2. Validate the uploaded database
+      let isValid = false;
+      try {
+        const tempDb = new Database(tempFile);
+        
+        // Check for required tables
+        const requiredTables = ['projects', 'tasks', 'settings', 'skills', 'counters'];
+        const tables = tempDb.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[];
+        const tableNames = tables.map(t => t.name);
+        
+        isValid = requiredTables.every(t => tableNames.includes(t));
+        tempDb.close();
+      } catch (err) {
+        console.error('Validation failed:', err);
+        isValid = false;
+      }
+
+      if (!isValid) {
+        if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
+        return res.status(400).json({ error: 'Invalid DevFlow database file. Required tables are missing or file is corrupted.' });
+      }
+
+      // 3. Create safety backup of current DB
+      if (fs.existsSync(targetDbFile)) {
+        await db.backup(safetyBackup);
+      }
+
+      // 4. Replace current DB
+      fs.copyFileSync(tempFile, targetDbFile);
+
+      // Clean up temp file
+      if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
+
+      res.json({
+        success: true,
+        restartRequired: true,
+        safetyBackupPath: safetyBackup
+      });
+    } catch (error: any) {
+      console.error('Import failed:', error);
+      res.status(500).json({ error: error.message ?? 'Import failed' });
     }
   });
 }

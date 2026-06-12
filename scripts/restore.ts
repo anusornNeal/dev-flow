@@ -1,6 +1,7 @@
 import path from 'path';
 import fs from 'fs';
 import readline from 'readline';
+import Database from 'better-sqlite3';
 
 async function runRestore() {
   const args = process.argv.slice(2);
@@ -41,7 +42,6 @@ async function runRestore() {
     const safetyBackup = path.join(dataDir, `devflow-safety-${timestamp}.db`);
     console.log(`Creating safety backup of current DB to ${safetyBackup}...`);
     try {
-      const Database = require('better-sqlite3');
       const db = new Database(dbFile);
       await db.backup(safetyBackup);
       db.close();

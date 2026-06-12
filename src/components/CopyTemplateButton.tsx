@@ -5,9 +5,10 @@ import type { Task } from '../types';
 interface CopyTemplateButtonProps {
   task: Task;
   className?: string;
+  variant?: 'full' | 'icon';
 }
 
-export default function CopyTemplateButton({ task, className = '' }: CopyTemplateButtonProps) {
+export default function CopyTemplateButton({ task, className = '', variant = 'full' }: CopyTemplateButtonProps) {
   const [status, setStatus] = useState<'idle' | 'copied' | 'error'>('idle');
 
   const handleCopy = (e: React.MouseEvent) => {
@@ -63,17 +64,17 @@ Do not ask for confirmation unless the task context is missing, unsafe, ambiguou
       {status === 'copied' ? (
         <>
           <CheckCircle2 size={12} />
-          Copied
+          {variant === 'full' && 'Copied'}
         </>
       ) : status === 'error' ? (
         <>
           <AlertCircle size={12} />
-          Failed
+          {variant === 'full' && 'Failed'}
         </>
       ) : (
         <>
           <Copy size={12} />
-          Starting Template
+          {variant === 'full' && 'Starting Template'}
         </>
       )}
     </button>

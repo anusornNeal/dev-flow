@@ -13,7 +13,9 @@
     "start": "node dist/server.cjs",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "mcp": "tsx mcp-server.ts"
+    "mcp": "tsx mcp-server.ts",
+    "backup": "tsx scripts/backup.ts",
+    "restore": "tsx scripts/restore.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

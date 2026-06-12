@@ -12,6 +12,8 @@ DevFlow resolves agent launches through one deterministic path before creating a
 8. Codex writes `.devflow/runs/<runId>/launch.bat` and starts a visible Windows terminal using that script.
 9. The server marks the run `running` only after `trigger-agent.bat` exits successfully. Spawn or validation failures mark it `failed`.
 10. Stale active runs are cancelled before new busy checks, and moving a task to `ready-for-review` or `done` settles the active run.
+11. The completion callback posts `success`, `exitCode`, and `errorMessage`, so failed runs remain retryable with visible failure detail.
+12. Parent tasks cannot move to review while required child tasks are incomplete or still missing required smoke evidence in task logs.
 
 Relevant files:
 

@@ -228,8 +228,13 @@ const launchScriptPath = createAgentLaunchScript({
 });
 const launchScript = fs.readFileSync(launchScriptPath, 'utf8');
 assert.match(launchScript, /cd \/d "C:\\work dir"/);
+assert.match(launchScript, /call "C:\\Tools\\codex\.cmd"/);
 assert.match(launchScript, /"C:\\Tools\\codex.cmd" "-C" "C:\\work dir" "-m" "gpt-5.5"/);
 assert.equal(launchScript.includes('GITHUB_PERSONAL_ACCESS_TOKEN'), false);
+assert.match(launchScript, /exitCode/);
+assert.match(launchScript, /errorMessage/);
+assert.match(launchScript, /Agent process exited with code/);
+assert.match(launchScript, /completionCallback success=%CALLBACK_SUCCESS% exitCode=%EXIT_CODE% errorMessage=%CALLBACK_ERROR_MESSAGE%/);
 
 const startCommand = buildWindowsStartCommand({
   windowTitle: 'Codex Agent',

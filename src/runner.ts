@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { spawn, execSync } from 'child_process';
 import { fileURLToPath, pathToFileURL } from 'url';
-import { buildPromptReference, resolveAgentExecutionMode, type AgentExecutionMode } from './server/services/agentRunService';
+import { buildPromptReference, getDevFlowAppRoot, getAgentRunsBaseDir, resolveAgentExecutionMode, type AgentExecutionMode } from './server/services/agentRunService';
 import { buildLaunchMetadataBlock, resolveAgentLaunchPlan, type FileAgentConfig } from './server/services/agentLaunchConfig';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -48,6 +48,13 @@ function resolveExecutable(executables: AgentConfig['executables']): string | nu
 
 function quoteBatArg(value: string) {
   return `"${value.replace(/"/g, '""')}"`;
+}
+
+function buildLaunchCommandLine(executable: string, args: string[]) {
+  const quotedExecutable = quoteBatArg(executable);
+  const quotedArgs = args.map(quoteBatArg).join(' ');
+  const isBatchScript = /\.(cmd|bat)$/i.test(executable);
+  return `${isBatchScript ? 'call ' : ''}${quotedExecutable}${quotedArgs ? ` ${quotedArgs}` : ''}`;
 }
 
 export function buildWindowsStartCommand(input: {
@@ -131,9 +138,12 @@ export function createAgentLaunchScript(input: {
   const logLine = input.logPath
     ? `echo [%DATE% %TIME%] Agent process exited with code %EXIT_CODE% >> ${quoteBatArg(input.logPath)}`
     : 'echo Agent process exited with code %EXIT_CODE%';
-  const commandLine = [quoteBatArg(input.executable), ...input.args.map(quoteBatArg)].join(' ');
+  const commandLine = buildLaunchCommandLine(input.executable, input.args);
   
-  const pshWebhook = `powershell -NoProfile -Command "$success = $env:EXIT_CODE -eq '0'; $body = @{ success = $success } | ConvertTo-Json -Compress; Invoke-RestMethod -Uri '${input.apiBaseUrl}/api/tasks/${input.taskId}/agent-runs/${input.runId}/complete' -Method Post -ContentType 'application/json' -Body $body"`;
+  const callbackLogLine = input.logPath
+    ? `echo [%DATE% %TIME%] completionCallback success=%CALLBACK_SUCCESS% exitCode=%EXIT_CODE% errorMessage=%CALLBACK_ERROR_MESSAGE% >> ${quoteBatArg(input.logPath)}`
+    : 'echo completionCallback success=%CALLBACK_SUCCESS% exitCode=%EXIT_CODE% errorMessage=%CALLBACK_ERROR_MESSAGE%';
+  const pshWebhook = `powershell -NoProfile -Command "$exitCode = [int]$env:EXIT_CODE; $success = $env:CALLBACK_SUCCESS -eq 'true'; $errorMessage = $env:CALLBACK_ERROR_MESSAGE; $body = @{ success = $success; exitCode = $exitCode; errorMessage = $errorMessage } | ConvertTo-Json -Compress; Invoke-RestMethod -Uri '${input.apiBaseUrl}/api/tasks/${input.taskId}/agent-runs/${input.runId}/complete' -Method Post -ContentType 'application/json' -Body $body"`;
 
   fs.writeFileSync(launchScriptPath, [
     '@echo off',
@@ -141,7 +151,12 @@ export function createAgentLaunchScript(input: {
     `cd /d ${quoteBatArg(input.cwd)}`,
     commandLine,
     'set EXIT_CODE=%ERRORLEVEL%',
+    'set CALLBACK_SUCCESS=false',
+    'set "CALLBACK_ERROR_MESSAGE="',
+    'if "%EXIT_CODE%"=="0" set CALLBACK_SUCCESS=true',
+    'if not "%EXIT_CODE%"=="0" set "CALLBACK_ERROR_MESSAGE=Agent process exited with code %EXIT_CODE%"',
     logLine,
+    callbackLogLine,
     pshWebhook,
     'echo.',
     'echo Agent process exited with code %EXIT_CODE%. This window remains open for debugging.',
@@ -210,7 +225,7 @@ function main() {
   }
 
   const spawnArgs = buildAgentCliArgs({ config, localPath, model, effort, promptReference, executionMode });
-  const runDir = logPath ? path.dirname(logPath) : runId ? path.join(process.cwd(), '.devflow', 'runs', runId) : process.cwd();
+  const runDir = logPath ? path.dirname(logPath) : runId ? path.join(getAgentRunsBaseDir(), runId) : getDevFlowAppRoot();
   const launchScriptPath = createAgentLaunchScript({ 
     runId, 
     taskId, 
@@ -218,7 +233,7 @@ function main() {
     runDir, 
     executable, 
     args: spawnArgs, 
-    cwd: localPath || process.cwd(), 
+    cwd: localPath || getDevFlowAppRoot(), 
     logPath 
   });
 
@@ -249,7 +264,7 @@ function main() {
   console.log(`[runner] Launching ${config.name} in a new window for run=${runId || 'none'} mode=${executionMode}...`);
 
   // We need to launch the agent in a new visible console window, starting in the localPath.
-  const cwd = localPath || process.cwd();
+  const cwd = localPath || getDevFlowAppRoot();
 
   let finalCmd = '';
   let finalArgs: string[] = [];

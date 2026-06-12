@@ -13,8 +13,9 @@ This document describes the task execution flow in DevFlow, prioritizing a fresh
 - Once the task is marked as in-progress and a run is created, DevFlow renders the `prompt.md` file.
 - The rendering uses a skill-composed prompt template pipeline defined in `config/prompt-pipeline.json`.
 - It loads an ordered list of prompt fragments from `skills/prompt.*.md`.
-- Interpolation occurs for `{agent}` to allow dynamic agent-specific behaviors, along with task and project variables (`run.id`, `task.title`, `project.localPath`, etc.).
-- Missing templates are skipped gracefully.
+- Prompt pipeline config and prompt skill fragments resolve from the stable DevFlow app root, not only from the current working directory.
+- Interpolation occurs for `{agent}` to allow dynamic agent-specific behaviors, along with task and project variables (`run.id`, `task.title`, `workspace.localPath`, etc.).
+- Missing required templates fail fast so the task can return to a retryable state with a visible error.
 
 ## 3. Worker Execution
 
@@ -26,9 +27,15 @@ This document describes the task execution flow in DevFlow, prioritizing a fresh
 
 - The runner waits for the child process window to close.
 - When closed, it reads the exit code.
-- The runner issues an HTTP POST to `/api/tasks/:id/agent-runs/:runId/complete` with `{ success: true/false }`.
-- DevFlow updates the `agent_run` status to `succeeded` or `failed`.
+- The runner issues an HTTP POST to `/api/tasks/:id/agent-runs/:runId/complete` with `success`, `exitCode`, and `errorMessage`.
+- DevFlow updates the `agent_run` status to `succeeded` or `failed`, and failed runs keep the exit-code detail in the visible error message.
 - If successful, DevFlow marks the task as `ready-for-review`.
+
+## 4.1 Parent Review Gating
+
+- Parent tasks cannot move to `ready-for-review` or `done` while child cards are still incomplete.
+- If a child card requires manual smoke evidence, the child must also include visible `prompt.md` and `agent.log` excerpts in its task log before the parent can close.
+- When this gate blocks a review move, DevFlow returns a clear validation error instead of silently allowing the parent to close early.
 
 ## 5. Queue Continuation
 

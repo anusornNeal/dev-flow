@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { interpolate, renderPromptTemplate, type PromptRenderContext } from '../src/server/services/promptTemplateService';
 
 console.log('[verify] Testing prompt template interpolation with production-shaped context...');
@@ -77,6 +80,18 @@ assert.ok(renderResult.content.includes('https://github.com/anusornNeal/dev-flow
 assert.ok(renderResult.content.includes('C:\\Users\\tatar\\Projects\\dev-flow'));
 assert.ok(renderResult.content.includes('Agent: Codex, Model: GPT-5.5, Effort: xhigh'));
 assert.ok(renderResult.content.includes('DVF-0081: Use production task context'));
+
+console.log('[verify] Testing prompt skills resolve from stable app root...');
+const outsideCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-prompt-root-'));
+const originalCwd = process.cwd();
+process.chdir(outsideCwd);
+try {
+  const stableRootRender = renderPromptTemplate('default', mockContext);
+  assert.ok(stableRootRender.content.includes('Render prompts from the real agent task context.'));
+  assert.ok(stableRootRender.usedSkills.includes('prompt.header'));
+} finally {
+  process.chdir(originalCwd);
+}
 
 const missingAgentContext = { ...mockContext, agent: 'non-existent' };
 const missingRender = renderPromptTemplate('default', missingAgentContext);

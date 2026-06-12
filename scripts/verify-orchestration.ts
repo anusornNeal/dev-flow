@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import type { AppState, ApiRouteDeps } from '../src/server/types';
@@ -23,6 +24,7 @@ process.env.DEVFLOW_AGENT_TRIGGER_SCRIPT = triggerScriptPath;
 const {
   completeAgentRunForTask,
   continueTaskQueueForProject,
+  registerTaskRoutes,
   triggerTaskAgent,
 } = await import('../src/server/routes/tasks.js');
 
@@ -32,6 +34,8 @@ const {
 } = await import('../src/server/repositories/agentRunRepository.js');
 
 const { saveProjects } = await import('../src/server/repositories/projectRepository.js');
+const { saveTasks } = await import('../src/server/repositories/taskRepository.js');
+const express = (await import('express')).default;
 
 async function waitFor(predicate: () => boolean, timeoutMs = 2000) {
   const start = Date.now();
@@ -156,12 +160,13 @@ assert.ok(prompt.includes('Agent: Codex, Model: GPT-5.5, Effort: xhigh'));
 console.log('[verify] Testing failed completion leaves the card retryable...');
 completeAgentRunForTask(state.tasksCache[0], run1!, deps, {
   success: false,
-  errorMessage: 'agent exited 1',
+  exitCode: 1,
+  errorMessage: 'Agent process exited with code 1',
 });
 assert.equal(state.tasksCache[0].status, 'todo');
 assert.equal(getActiveRunForTask('task-1'), null);
 assert.equal(getLatestAgentRunForTask('task-1')?.status, 'failed');
-assert.match(state.tasksCache[0].logs.at(-1)?.message || '', /agent exited 1/);
+assert.match(state.tasksCache[0].logs.at(-1)?.message || '', /exitCode=1/);
 
 console.log('[verify] Testing queue continuation records visible skip reasons...');
 const queueResult = continueTaskQueueForProject('project-1', deps);
@@ -176,5 +181,112 @@ assert.equal(state.tasksCache[3].status, 'in-progress');
 assert.match(state.tasksCache[0].logs.at(-1)?.message || '', /Manual retry is required/);
 assert.match(state.tasksCache[2].logs.at(-1)?.message || '', /Invalid agent or task id characters/);
 assert.equal(getLatestAgentRunForTask('task-3')?.status, 'running');
+
+console.log('[verify] Testing parent review gating and evidence requirements...');
+const parentState: AppState = {
+  tasksCache: [
+    {
+      id: 'parent-1',
+      displayId: 'DVF-0089',
+      projectId: 'project-1',
+      status: 'in-progress',
+      agent: 'Codex',
+      model: 'GPT-5.5',
+      effort: 'high',
+      title: 'Parent review card',
+      description: 'Parent should stay out of review until children are complete.',
+      logs: [],
+    },
+    {
+      id: 'child-status',
+      displayId: 'DVF-0090',
+      projectId: 'project-1',
+      parentId: 'parent-1',
+      status: 'backlog',
+      agent: 'Codex',
+      model: 'GPT-5.5',
+      effort: 'medium',
+      title: 'Blocking child status',
+      acceptanceCriteria: 'Complete before parent review.',
+      logs: [],
+    },
+    {
+      id: 'child-evidence',
+      displayId: 'DVF-0093',
+      projectId: 'project-1',
+      parentId: 'parent-1',
+      status: 'ready-for-review',
+      agent: 'Codex',
+      model: 'GPT-5.5',
+      effort: 'medium',
+      title: 'Smoke evidence child',
+      acceptanceCriteria: 'Evidence must include prompt.md excerpt and agent.log lines.',
+      verification: 'Paste prompt.md and agent.log evidence into task logs before review.',
+      targetFiles: ['.devflow/runs'],
+      logs: [],
+    },
+  ],
+  projectsCache: [{ id: 'project-1', name: 'p1', repoUrl: 'repo', localPath: repoPathWithSpaces }],
+  countersCache: {},
+  settingsCache: { autoWork: false, ngrokUrl: '', githubToken: '', jiraToken: '', jiraBaseUrl: '', jiraEmail: '' },
+  skillsRegistry: [],
+};
+const parentDeps: ApiRouteDeps = {
+  state: parentState,
+  writeAgentLog: () => {},
+};
+saveTasks(parentState);
+const app = express();
+app.use(express.json());
+registerTaskRoutes(app, parentDeps);
+const server = http.createServer(app);
+await new Promise<void>((resolve) => server.listen(0, resolve));
+const address = server.address();
+if (!address || typeof address === 'string') throw new Error('Failed to bind test server.');
+const baseUrl = `http://127.0.0.1:${address.port}`;
+try {
+  const blockedByStatus = await fetch(`${baseUrl}/api/tasks/parent-1/move`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-agent-request': 'true' },
+    body: JSON.stringify({ status: 'ready-for-review' }),
+  });
+  assert.equal(blockedByStatus.status, 400);
+  const blockedByStatusBody = await blockedByStatus.json();
+  assert.match(blockedByStatusBody.error || '', /DVF-0090 is still backlog/);
+
+  parentState.tasksCache[1].status = 'ready-for-review';
+  saveTasks(parentState);
+  const blockedByEvidence = await fetch(`${baseUrl}/api/tasks/parent-1/move`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-agent-request': 'true' },
+    body: JSON.stringify({ status: 'ready-for-review' }),
+  });
+  assert.equal(blockedByEvidence.status, 400);
+  const blockedByEvidenceBody = await blockedByEvidence.json();
+  assert.match(blockedByEvidenceBody.error || '', /DVF-0093 is missing visible prompt\.md and agent\.log evidence/i);
+
+  parentState.tasksCache[2].logs.push({
+    id: 'evidence-1',
+    timestamp: '2026-06-13T00:04:00.000Z',
+    message: 'prompt.md excerpt: Task context and repo path verified.',
+    type: 'update',
+  });
+  parentState.tasksCache[2].logs.push({
+    id: 'evidence-2',
+    timestamp: '2026-06-13T00:05:00.000Z',
+    message: 'agent.log lines: completion callback posted success and fresh-session details.',
+    type: 'update',
+  });
+  saveTasks(parentState);
+
+  const allowedMove = await fetch(`${baseUrl}/api/tasks/parent-1/move`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-agent-request': 'true' },
+    body: JSON.stringify({ status: 'ready-for-review' }),
+  });
+  assert.equal(allowedMove.status, 200);
+} finally {
+  await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+}
 
 console.log('[verify-orchestration] all assertions passed');

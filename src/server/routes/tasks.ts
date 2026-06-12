@@ -5,7 +5,7 @@ import type { ApiRouteDeps } from '../types';
 import { TASK_SCHEMA_DEF, VALID_AGENTS, VALID_EFFORTS, VALID_MODELS, VALID_STATUSES } from '../constants';
 import { cancelActiveRunsForTask, cancelStaleActiveRuns, createAgentRun, getActiveRunForProject, getActiveRunForTask, getLatestAgentRunForTask, listAgentRunsForTask, updateAgentRunStatus, type AgentRun } from '../repositories/agentRunRepository';
 import { loadTasks, generateDisplayId, saveTasks } from '../repositories/taskRepository';
-import { appendAgentRunLog, createAgentRunFiles, getAgentTriggerScriptPath, getDevFlowApiBaseUrl, resolveAgentExecutionMode } from '../services/agentRunService';
+import { appendAgentRunLog, createAgentRunFiles, getAgentTriggerScriptPath, getDevFlowApiBaseUrl, resolveAgentExecutionMode, resolveFromDevFlowAppRoot } from '../services/agentRunService';
 import { extractDesignImages, getAgentTaskContext, resolveProjectIdFromRepo, validateAgentParams, validateTaskPayload } from '../services/taskService';
 import { validateEnum, validateString } from '../validation';
 import { isValidTransition, getValidationErrorMessage } from '../../lib/statusTransitions';
@@ -27,6 +27,47 @@ function appendTaskLog(task: any, message: string, type: string = 'update') {
   const lastLog = Array.isArray(task.logs) ? task.logs[task.logs.length - 1] : null;
   if (lastLog?.message === message && lastLog?.type === type) return;
   task.logs = [...(task.logs || []), createTaskLogEntry(message, type)];
+}
+
+function taskRequiresManualEvidence(task: any) {
+  const haystack = [
+    task?.description,
+    task?.acceptanceCriteria,
+    task?.verification,
+    ...(Array.isArray(task?.targetFiles) ? task.targetFiles : []),
+  ].filter(Boolean).join(' ').toLowerCase();
+  return /evidence|prompt\.md|agent\.log/.test(haystack);
+}
+
+function taskHasManualEvidence(task: any) {
+  const messages = (task.logs || []).map((entry: any) => String(entry?.message || ''));
+  const hasPromptExcerpt = messages.some((message: string) => /prompt\.md/i.test(message));
+  const hasAgentLogExcerpt = messages.some((message: string) => /agent\.log/i.test(message));
+  return hasPromptExcerpt && hasAgentLogExcerpt;
+}
+
+function getChildReviewBlockers(task: any, deps: ApiRouteDeps) {
+  const children = deps.state.tasksCache.filter((entry) => entry.parentId === task.id);
+  if (children.length === 0) return [];
+
+  const blockers: string[] = [];
+  for (const child of children) {
+    if (!['ready-for-review', 'done'].includes(child.status)) {
+      blockers.push(`${child.displayId || child.id} is still ${child.status}.`);
+      continue;
+    }
+    if (taskRequiresManualEvidence(child) && !taskHasManualEvidence(child)) {
+      blockers.push(`${child.displayId || child.id} is missing visible prompt.md and agent.log evidence in task logs.`);
+    }
+  }
+  return blockers;
+}
+
+function validateParentReviewMove(task: any, deps: ApiRouteDeps, nextStatus: string) {
+  if (!['ready-for-review', 'done'].includes(nextStatus)) return null;
+  const blockers = getChildReviewBlockers(task, deps);
+  if (blockers.length === 0) return null;
+  return `Parent task ${task.displayId || task.id} cannot move to ${nextStatus} yet: ${blockers.join(' ')}`;
 }
 
 function clearActiveAgentIfSettled(task: any) {
@@ -117,15 +158,24 @@ function failTaskRun(task: any, deps: ApiRouteDeps, runId: string, reason: strin
 
 export function completeAgentRunForTask(task: any, run: AgentRun, deps: ApiRouteDeps, options: {
   success: boolean;
+  exitCode?: number | null;
   errorMessage?: string;
 }) {
   let updatedRun: AgentRun | null;
   if (options.success) {
+    const reviewBlockError = validateParentReviewMove(task, deps, 'ready-for-review');
     updatedRun = updateAgentRunStatus(run.id, 'succeeded');
-    task.status = 'ready-for-review';
-    appendTaskLog(task, `Agent run ${run.id} completed successfully.`, 'update');
+    if (reviewBlockError) {
+      task.status = 'todo';
+      appendTaskLog(task, `Agent run ${run.id} completed successfully, but review is still blocked. ${reviewBlockError}`, 'update');
+    } else {
+      task.status = 'ready-for-review';
+      appendTaskLog(task, `Agent run ${run.id} completed successfully.`, 'update');
+    }
   } else {
-    const errorMessage = options.errorMessage || 'Run failed';
+    const exitCodeSuffix = options.exitCode !== undefined && options.exitCode !== null ? ` (exitCode=${options.exitCode})` : '';
+    const detail = options.errorMessage?.trim() || 'Run failed';
+    const errorMessage = `${detail}${exitCodeSuffix}`;
     updatedRun = updateAgentRunStatus(run.id, 'failed', { errorMessage });
     task.status = 'todo';
     appendTaskLog(task, `Agent run ${run.id} failed: ${errorMessage}`, 'update');
@@ -239,7 +289,7 @@ export function triggerTaskAgent(task: any, deps: ApiRouteDeps, routeLabel: stri
   saveTasks(deps.state);
 
   const triggerBat = getAgentTriggerScriptPath();
-  const invokeTriggerScript = path.join(process.cwd(), 'scripts', 'invoke-agent-trigger.ps1');
+  const invokeTriggerScript = resolveFromDevFlowAppRoot('scripts', 'invoke-agent-trigger.ps1');
   const apiBaseUrl = getDevFlowApiBaseUrl();
 
   const execOpts = {
@@ -397,6 +447,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     const success = req.body?.success !== false;
     completeAgentRunForTask(task, run, deps, {
       success,
+      exitCode: typeof req.body?.exitCode === 'number' ? req.body.exitCode : undefined,
       errorMessage: req.body?.errorMessage || 'Run failed',
     });
 
@@ -587,6 +638,13 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
           }],
         };
 
+        const parentReviewError = validateParentReviewMove(updatedTask, deps, updatedTask.status);
+        if (parentReviewError) {
+          appendTaskLog(currentTask, parentReviewError, 'update');
+          if (!Array.isArray(req.body)) return res.status(400).json({ error: parentReviewError });
+          continue;
+        }
+
         clearActiveAgentIfSettled(updatedTask);
         deps.state.tasksCache[existingIndex] = updatedTask;
         updatedTasks.push(updatedTask);
@@ -658,6 +716,13 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
 
     if (!isValidTransition(previousStatus, req.body.status)) {
       return res.status(400).json({ error: getValidationErrorMessage(previousStatus, req.body.status) });
+    }
+
+    const parentReviewError = validateParentReviewMove(task, deps, req.body.status);
+    if (parentReviewError) {
+      appendTaskLog(task, parentReviewError, 'update');
+      saveTasks(deps.state);
+      return res.status(400).json({ error: parentReviewError });
     }
 
     if (previousStatus === 'in-progress' && !canOverrideTaskLock(task, req.body, undefined, req.headers['x-agent-request'])) {
@@ -825,6 +890,13 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
           }],
         };
 
+        const parentReviewError = validateParentReviewMove(updatedTask, deps, updatedTask.status);
+        if (parentReviewError) {
+          appendTaskLog(currentTask, parentReviewError, 'update');
+          if (!Array.isArray(req.body)) return res.status(400).json({ error: parentReviewError });
+          continue;
+        }
+
         clearActiveAgentIfSettled(updatedTask);
         deps.state.tasksCache[existingIndex] = updatedTask;
         updatedTasks.push(updatedTask);
@@ -901,6 +973,13 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
 
     const agentValidationError = validateAgentParams({ ...currentTask, ...updateBody }, deps.state.tasksCache);
     if (agentValidationError) return res.status(400).json({ error: agentValidationError });
+
+    const parentReviewError = validateParentReviewMove({ ...currentTask, ...updateBody }, deps, updateBody.status ?? currentTask.status);
+    if (parentReviewError) {
+      appendTaskLog(currentTask, parentReviewError, 'update');
+      saveTasks(deps.state);
+      return res.status(400).json({ error: parentReviewError });
+    }
 
     const updatedTask = {
       ...currentTask,

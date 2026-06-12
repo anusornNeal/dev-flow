@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { getDevFlowAppRoot } from './agentRunService';
 
 export interface PromptRenderContext {
   run: { id: string };
@@ -15,8 +16,16 @@ export interface PromptRenderContext {
   effort: string;
 }
 
+function getPromptPipelineConfigPath() {
+  return path.join(getDevFlowAppRoot(), 'config', 'prompt-pipeline.json');
+}
+
+function getPromptSkillsDir() {
+  return path.join(getDevFlowAppRoot(), 'skills');
+}
+
 export function getPromptPipeline(pipelineId: string = 'default'): string[] {
-  const configPath = path.join(process.cwd(), 'config', 'prompt-pipeline.json');
+  const configPath = getPromptPipelineConfigPath();
   if (fs.existsSync(configPath)) {
     try {
       const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
@@ -97,7 +106,7 @@ export function renderPromptTemplate(pipelineId: string, context: PromptRenderCo
 
   for (const rawSkillId of pipeline) {
     const skillId = rawSkillId.replace('{agent}', (context.agent || 'default').toLowerCase());
-    const skillPath = path.join(process.cwd(), 'skills', `${skillId}.md`);
+    const skillPath = path.join(getPromptSkillsDir(), `${skillId}.md`);
     if (fs.existsSync(skillPath)) {
       const content = fs.readFileSync(skillPath, 'utf8');
       sections.push(interpolate(content, context));

@@ -3,6 +3,8 @@ import path from 'path';
 import type { AppState } from '../types';
 import { VALID_AGENTS, VALID_EFFORTS, VALID_MODELS, VALID_PRIORITIES, VALID_STATUSES } from '../constants';
 import { validateEnum, validateString } from '../validation';
+import { buildLaunchMetadataBlock, resolveAgentLaunchPlan } from './agentLaunchConfig';
+import { resolveAgentExecutionMode } from './agentRunService';
 
 export function validateTaskPayload(item: any, isUpdate = false): string | null {
   if (!item || typeof item !== 'object') return 'Task payload must be an object.';
@@ -45,6 +47,15 @@ export function validateAgentParams(item: any, tasks: any[]): string | null {
   }
   if (item.model && !VALID_MODELS.includes(item.model)) {
     return `Invalid model: ${item.model}. Must be one of: ${VALID_MODELS.join(', ')}`;
+  }
+  if (item.agent && item.model) {
+    const plan = resolveAgentLaunchPlan({
+      agent: item.agent,
+      model: item.model,
+      effort: item.effort,
+      executionMode: 'safe',
+    });
+    if (!plan.ok) return plan.error || `Invalid model ${item.model} for ${item.agent}.`;
   }
 
   if (item.parentId) {
@@ -209,6 +220,14 @@ export function getAgentTaskContext(state: AppState, targetId: string, includeLo
 export function buildTaskPrompt(state: AppState, targetId: string, includeLogs = false) {
   const context = getAgentTaskContext(state, targetId, includeLogs);
   if (!context) return null;
+  const executionMode = resolveAgentExecutionMode(state.settingsCache.agentExecutionMode || process.env.DEVFLOW_AGENT_EXECUTION_MODE);
+  const launchPlan = resolveAgentLaunchPlan({
+    agent: context.assignment?.agent,
+    model: context.assignment?.model,
+    effort: context.assignment?.effort,
+    executionMode,
+  });
+  const metadataBlock = buildLaunchMetadataBlock(launchPlan);
 
   let promptContent = '';
   const promptTemplateSkill = state.skillsRegistry.find((skill) => skill.id === 'prompt-template');
@@ -229,5 +248,5 @@ export function buildTaskPrompt(state: AppState, targetId: string, includeLogs =
   promptContent = promptContent.replace(/\{TASK_CONTEXT\}/g, JSON.stringify(context, null, 2));
   promptContent = promptContent.replace(/\{AGENT_WORKFLOW\}/g, agentWorkflowContent);
 
-  return promptContent;
+  return `${metadataBlock}\n${promptContent}`;
 }

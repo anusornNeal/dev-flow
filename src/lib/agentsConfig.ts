@@ -12,7 +12,7 @@ export const AGENTS_CONFIG: Record<AgentName, ModelConfig[]> = {
     {
       model_name: "GPT-5.5",
       reasoning_support: true,
-      available_efforts: ["low", "medium", "high"],
+      available_efforts: ["low", "medium", "high", "xhigh"],
       default_effort: "medium"
     },
     {

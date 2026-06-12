@@ -56,10 +56,16 @@ Set `DEVFLOW_AGENT_TRIGGER_SCRIPT` to override the default trigger script path (
 
 ## Agent Run Lifecycle
 
-- Moving an assigned task into `todo` is the automatic trigger point.
+- Moving an assigned task into `todo`, creating an eligible `todo` task, or assigning agent/model/effort to an already eligible `todo` task can trigger Auto Work when enabled.
+- DevFlow validates the selected agent/model through `config/agents/<agent>.json` before it creates a run. Invalid combinations fail before a misleading active run is created.
 - DevFlow creates an `agent_runs` row, writes the compiled prompt to `.devflow/runs/<runId>/prompt.md`, then launches `scripts/trigger-agent.bat` with a short prompt-file reference.
+- Prompt files start with launch metadata: selected agent, DevFlow model label, resolved CLI model id, selected effort, effort handling mode, and execution mode.
+- Reasoning effort is passed only through an explicit configured CLI flag. Agents without a verified effort flag use prompt metadata as the fallback; no effort text is appended as a positional CLI argument.
+- Codex runs generate `.devflow/runs/<runId>/launch.bat` and start that script in a visible Windows terminal. The script changes into the task project's local path and keeps the terminal open after the Codex process exits.
 - Active run statuses are `queued`, `starting`, and `running`; settled statuses are `succeeded`, `failed`, and `cancelled`.
 - Trigger failures mark the run `failed` and clear the active task lock so the task can be retried.
+- Runs older than 30 minutes in an active state are treated as stale and cancelled before new trigger busy checks.
+- Moving a task to `ready-for-review` or `done` settles its active run as `succeeded`.
 - Use `POST /api/tasks/:id/agent-runs/retry` to retry the latest failed run.
 - Use `POST /api/tasks/:id/agent-runs/cancel` to clear an active or stuck run.
 - Use `GET /api/tasks/:id/agent-runs` to inspect run history.
@@ -67,6 +73,13 @@ Set `DEVFLOW_AGENT_TRIGGER_SCRIPT` to override the default trigger script path (
 - The runner uses `DEVFLOW_API_BASE_URL` when it needs an API reference, defaulting to `http://localhost:3000`.
 - The runner defaults to safe execution mode. Set `DEVFLOW_AGENT_EXECUTION_MODE=full` only for trusted local full-access runs.
 - The previous trigger behavior is documented in [`docs/agent-trigger-legacy-behavior.md`](C:\Users\tatar\Projects\dev-flow\docs\agent-trigger-legacy-behavior.md).
+
+### Debugging Agent Launches
+
+- Inspect `.devflow/runs/<runId>/agent.log` for cwd, executable source, argv preview, prompt path, launch script path, model mapping, effort handling, execution mode, and errors.
+- For Codex, inspect `.devflow/runs/<runId>/launch.bat` to confirm the working directory and resolved executable/arguments.
+- If launch fails before terminal handoff, the run should be `failed` with an error message. If a detached process is stuck, cancel it with `POST /api/tasks/:id/agent-runs/cancel`.
+- Run artifacts intentionally avoid writing GitHub/Jira token values or secret environment values.
 
 ## Skills
 

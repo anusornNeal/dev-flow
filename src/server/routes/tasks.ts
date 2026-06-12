@@ -2,15 +2,22 @@ import { execFile } from 'child_process';
 import type express from 'express';
 import type { ApiRouteDeps } from '../types';
 import { TASK_SCHEMA_DEF, VALID_AGENTS, VALID_EFFORTS, VALID_MODELS, VALID_STATUSES } from '../constants';
-import { cancelActiveRunsForTask, createAgentRun, getActiveRunForProject, getActiveRunForTask, getLatestAgentRunForTask, listAgentRunsForTask, updateAgentRunStatus, type AgentRun } from '../repositories/agentRunRepository';
+import { cancelActiveRunsForTask, cancelStaleActiveRuns, createAgentRun, getActiveRunForProject, getActiveRunForTask, getLatestAgentRunForTask, listAgentRunsForTask, updateAgentRunStatus, type AgentRun } from '../repositories/agentRunRepository';
 import { loadTasks, generateDisplayId, saveTasks } from '../repositories/taskRepository';
 import { appendAgentRunLog, createAgentRunFiles, getAgentTriggerScriptPath, getDevFlowApiBaseUrl, resolveAgentExecutionMode } from '../services/agentRunService';
 import { buildTaskPrompt, extractDesignImages, getAgentTaskContext, resolveProjectIdFromRepo, validateAgentParams, validateTaskPayload } from '../services/taskService';
 import { validateEnum, validateString } from '../validation';
 import { isValidTransition, getValidationErrorMessage } from '../../lib/statusTransitions';
+import { resolveAgentLaunchPlan } from '../services/agentLaunchConfig';
+
+const STALE_AGENT_RUN_MS = 30 * 60 * 1000;
 
 function clearActiveAgentIfSettled(task: any) {
   if (['backlog', 'done', 'ready-for-review'].includes(task.status)) {
+    const activeRun = getActiveRunForTask(task.id);
+    if (activeRun && ['done', 'ready-for-review'].includes(task.status)) {
+      updateAgentRunStatus(activeRun.id, 'succeeded');
+    }
     task.activeAgent = undefined;
   }
 }
@@ -44,11 +51,37 @@ function clearTaskActiveRunState(taskId: string, deps: ApiRouteDeps) {
   saveTasks(deps.state);
 }
 
+function cleanupStaleActiveRuns(deps: ApiRouteDeps) {
+  const cutoff = new Date(Date.now() - STALE_AGENT_RUN_MS).toISOString();
+  const cancelledCount = cancelStaleActiveRuns(cutoff, `Stale active run cancelled after ${STALE_AGENT_RUN_MS / 60000} minutes.`);
+  if (cancelledCount > 0) {
+    deps.writeAgentLog('INFO', `Cancelled ${cancelledCount} stale active agent run(s).`);
+    for (const task of deps.state.tasksCache) applyRunSummaryToTask(task, getLatestAgentRunForTask(task.id));
+    saveTasks(deps.state);
+  }
+}
+
 function triggerTaskAgent(task: any, deps: ApiRouteDeps, routeLabel: string, retryOfRunId?: string | null) {
   if (!task.agent) return { triggered: false, reason: 'Task has no assigned agent.' };
   if (!/^[a-zA-Z0-9-]+$/.test(task.agent) || !/^[a-zA-Z0-9-]+$/.test(task.id)) {
     deps.writeAgentLog('ERROR', `Blocked trigger due to invalid chars: agent=${task.agent} taskId=${task.id}`);
     return { triggered: false, reason: 'Invalid agent or task id characters.' };
+  }
+
+  cleanupStaleActiveRuns(deps);
+
+  const project = deps.state.projectsCache.find((entry) => entry.id === task.projectId);
+  const executionMode = resolveAgentExecutionMode(deps.state.settingsCache.agentExecutionMode || process.env.DEVFLOW_AGENT_EXECUTION_MODE);
+  const launchPlan = resolveAgentLaunchPlan({
+    agent: task.agent,
+    model: task.model,
+    effort: task.effort,
+    executionMode,
+  });
+
+  if (!launchPlan.ok) {
+    deps.writeAgentLog('ERROR', `Blocked trigger for task=${task.id}: ${launchPlan.error}`);
+    return { triggered: false, reason: launchPlan.error || 'Agent launch configuration is invalid.' };
   }
 
   const activeTaskRun = getActiveRunForTask(task.id);
@@ -89,8 +122,6 @@ function triggerTaskAgent(task: any, deps: ApiRouteDeps, routeLabel: string, ret
   applyRunSummaryToTask(task, currentRun);
 
   const triggerBat = getAgentTriggerScriptPath();
-  const project = deps.state.projectsCache.find((entry) => entry.id === task.projectId);
-  const executionMode = resolveAgentExecutionMode(deps.state.settingsCache.agentExecutionMode || process.env.DEVFLOW_AGENT_EXECUTION_MODE);
   const apiBaseUrl = getDevFlowApiBaseUrl();
 
   const execOpts = {
@@ -107,6 +138,8 @@ function triggerTaskAgent(task: any, deps: ApiRouteDeps, routeLabel: string, ret
   };
 
   deps.writeAgentLog('TRIGGER', `Spawning run=${run.id} agent=${task.agent} for task=${task.id} ("${task.title}") via ${routeLabel}${project?.localPath ? ' at ' + project.localPath : ''}`);
+  appendAgentRunLog(files.logPath, `Launch plan: agent=${launchPlan.agent} model=${launchPlan.devFlowModel || 'none'} resolvedModel=${launchPlan.resolvedModel || 'none'} effort=${launchPlan.selectedEffort || 'none'} effortHandling=${launchPlan.effortHandling.mode} executionMode=${executionMode}`);
+  appendAgentRunLog(files.logPath, `cwd=${project?.localPath || 'none'} triggerScript=${triggerBat} promptPath=${files.promptPath}`);
   execFile('cmd.exe', [
     '/c',
     triggerBat,
@@ -130,21 +163,28 @@ function triggerTaskAgent(task: any, deps: ApiRouteDeps, routeLabel: string, ret
     }
 
     updateAgentRunStatus(run.id, 'running');
-    appendAgentRunLog(files.logPath, 'trigger-agent.bat dispatched runner successfully');
-    deps.writeAgentLog('INFO', `trigger-agent.bat dispatched run=${run.id} task=${task.id}`);
+    appendAgentRunLog(files.logPath, 'Runner completed launcher handoff successfully; run marked running.');
+    deps.writeAgentLog('INFO', `Runner completed launcher handoff for run=${run.id} task=${task.id}`);
     clearTaskActiveRunState(task.id, deps);
   });
 
   return { triggered: true, run: currentRun || run };
 }
 
-function maybeTriggerTaskAgent(task: any, previousStatus: string | undefined, deps: ApiRouteDeps, routeLabel: string) {
-  if (task.status !== 'todo' || previousStatus === 'todo') return;
+function maybeTriggerTaskAgent(task: any, previousTaskOrStatus: any, deps: ApiRouteDeps, routeLabel: string) {
+  const previousTask = typeof previousTaskOrStatus === 'string' ? null : previousTaskOrStatus;
+  const previousStatus = typeof previousTaskOrStatus === 'string' ? previousTaskOrStatus : previousTask?.status;
+  const assignmentChanged = previousTask
+    ? previousTask.agent !== task.agent || previousTask.model !== task.model || previousTask.effort !== task.effort
+    : true;
+  if (task.status !== 'todo') return;
+  if (previousStatus === 'todo' && !assignmentChanged) return;
   if (!deps.state.settingsCache.autoWork) {
     deps.writeAgentLog('INFO', `Auto Work is disabled. Task ${task.id} moved to todo but agent will not be triggered.`);
     return;
   }
-  triggerTaskAgent(task, deps, routeLabel);
+  const result = triggerTaskAgent(task, deps, routeLabel);
+  if (!result.triggered) deps.writeAgentLog('INFO', `Skipped agent trigger for task=${task.id}: ${result.reason}`);
 }
 
 export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
@@ -302,6 +342,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
 
       deps.state.tasksCache.push(newTask);
       createdTasks.push(newTask);
+      maybeTriggerTaskAgent(newTask, undefined, deps, 'POST /tasks endpoint');
     }
 
     saveTasks(deps.state);
@@ -353,6 +394,12 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
         if (currentTask.status === 'in-progress' && !canOverrideTaskLock(currentTask, item, undefined, req.headers['x-agent-request'])) {
           continue;
         }
+        const candidateTask = { ...currentTask, ...item };
+        const mergedAgentValidationError = validateAgentParams(candidateTask, deps.state.tasksCache);
+        if (mergedAgentValidationError) {
+          if (!Array.isArray(req.body)) return res.status(400).json({ error: mergedAgentValidationError });
+          continue;
+        }
 
         const updatedTask = {
           ...currentTask,
@@ -386,6 +433,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
         clearActiveAgentIfSettled(updatedTask);
         deps.state.tasksCache[existingIndex] = updatedTask;
         updatedTasks.push(updatedTask);
+        maybeTriggerTaskAgent(updatedTask, currentTask, deps, 'POST /tasks/batch update');
         continue;
       }
 
@@ -430,6 +478,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
 
       deps.state.tasksCache.push(newTask);
       importedTasks.push(newTask);
+      maybeTriggerTaskAgent(newTask, undefined, deps, 'POST /tasks/batch create');
     }
 
     saveTasks(deps.state);
@@ -520,11 +569,14 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     const taskIndex = deps.state.tasksCache.findIndex((task) => task.id === req.params.id);
     if (taskIndex === -1) return res.status(404).json({ error: 'Task not found' });
     const task = deps.state.tasksCache[taskIndex];
+    const agentValidationError = validateAgentParams({ ...task, ...req.body }, deps.state.tasksCache);
+    if (agentValidationError) return res.status(400).json({ error: agentValidationError });
 
     if (task.status === 'in-progress' && !canOverrideTaskLock(task, req.body, undefined, req.headers['x-agent-request'])) {
       return res.status(403).json({ error: 'Task is locked by an agent. Use emergency flag to override.' });
     }
 
+    const previousTask = { ...task };
     task.agent = req.body.agent || undefined;
     task.model = req.body.model || undefined;
     task.effort = req.body.effort || undefined;
@@ -536,6 +588,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
       type: 'update',
     }];
 
+    maybeTriggerTaskAgent(task, previousTask, deps, '/assign endpoint');
     saveTasks(deps.state);
     return res.json(task);
   });
@@ -583,6 +636,12 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
         if (currentTask.status === 'in-progress' && !canOverrideTaskLock(currentTask, item, undefined, req.headers['x-agent-request'])) {
           continue;
         }
+        const candidateTask = { ...currentTask, ...item };
+        const mergedAgentValidationError = validateAgentParams(candidateTask, deps.state.tasksCache);
+        if (mergedAgentValidationError) {
+          if (!Array.isArray(req.body)) return res.status(400).json({ error: mergedAgentValidationError });
+          continue;
+        }
 
         const updatedTask = {
           ...currentTask,
@@ -612,6 +671,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
         clearActiveAgentIfSettled(updatedTask);
         deps.state.tasksCache[existingIndex] = updatedTask;
         updatedTasks.push(updatedTask);
+        maybeTriggerTaskAgent(updatedTask, currentTask, deps, 'PUT /tasks list update');
         continue;
       }
 
@@ -651,6 +711,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
       };
       deps.state.tasksCache.push(newTask);
       importedTasks.push(newTask);
+      maybeTriggerTaskAgent(newTask, undefined, deps, 'PUT /tasks list create');
     }
 
     saveTasks(deps.state);
@@ -681,7 +742,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
       }
     }
 
-    const agentValidationError = validateAgentParams(updateBody, deps.state.tasksCache);
+    const agentValidationError = validateAgentParams({ ...currentTask, ...updateBody }, deps.state.tasksCache);
     if (agentValidationError) return res.status(400).json({ error: agentValidationError });
 
     const updatedTask = {
@@ -693,7 +754,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
 
     deps.state.tasksCache[taskIndex] = updatedTask;
     clearActiveAgentIfSettled(updatedTask);
-    maybeTriggerTaskAgent(updatedTask, currentTask.status, deps, 'PUT /tasks/:id endpoint');
+    maybeTriggerTaskAgent(updatedTask, currentTask, deps, 'PUT /tasks/:id endpoint');
 
     saveTasks(deps.state);
     return res.json(updatedTask);

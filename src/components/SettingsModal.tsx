@@ -2,24 +2,24 @@ import React, { useState, useEffect } from 'react';
 import { X, Link, FileText, ToggleLeft, ToggleRight, Save, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
 
 interface SettingsData {
-  autoWorking: boolean;
   ngrokUrl: string;
-  envNotesMasked: boolean;
-  envNotesLength: number;
+  githubTokenMasked: boolean;
+  jiraTokenMasked: boolean;
 }
 
 interface SettingsModalProps {
   onClose: () => void;
-  autoWorking: boolean;
-  onToggleAutoWorking: () => void;
 }
 
-export default function SettingsModal({ onClose, autoWorking, onToggleAutoWorking }: SettingsModalProps) {
+export default function SettingsModal({ onClose }: SettingsModalProps) {
   const [ngrokUrl, setNgrokUrl] = useState('');
-  const [envNotes, setEnvNotes] = useState('');
-  const [envNotesMasked, setEnvNotesMasked] = useState(false);
-  const [envNotesLength, setEnvNotesLength] = useState(0);
-  const [showEnvNotes, setShowEnvNotes] = useState(false);
+  const [githubToken, setGithubToken] = useState('');
+  const [githubTokenMasked, setGithubTokenMasked] = useState(false);
+  const [showGithubToken, setShowGithubToken] = useState(false);
+  
+  const [jiraToken, setJiraToken] = useState('');
+  const [jiraTokenMasked, setJiraTokenMasked] = useState(false);
+  const [showJiraToken, setShowJiraToken] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'success' | 'error'>('idle');
@@ -30,8 +30,8 @@ export default function SettingsModal({ onClose, autoWorking, onToggleAutoWorkin
       .then(r => r.json())
       .then((data: SettingsData) => {
         setNgrokUrl(data.ngrokUrl ?? '');
-        setEnvNotesMasked(data.envNotesMasked ?? false);
-        setEnvNotesLength(data.envNotesLength ?? 0);
+        setGithubTokenMasked(data.githubTokenMasked ?? false);
+        setJiraTokenMasked(data.jiraTokenMasked ?? false);
         setLoading(false);
       })
       .catch(() => setLoading(false));
@@ -42,7 +42,8 @@ export default function SettingsModal({ onClose, autoWorking, onToggleAutoWorkin
     setSaveStatus('idle');
     try {
       const payload: Record<string, unknown> = { ngrokUrl };
-      if (showEnvNotes) payload.envNotes = envNotes;
+      if (showGithubToken) payload.githubToken = githubToken;
+      if (showJiraToken) payload.jiraToken = jiraToken;
 
       const res = await fetch('/api/settings', {
         method: 'POST',
@@ -86,26 +87,6 @@ export default function SettingsModal({ onClose, autoWorking, onToggleAutoWorkin
         ) : (
           <div className="p-6 flex flex-col gap-6">
 
-            {/* Auto Working Toggle */}
-            <div className="flex items-center justify-between p-4 bg-[#faf7f0] border border-[#e5d4bb] rounded-xl">
-              <div>
-                <div className="font-extrabold text-sm text-[#534135]">Auto Working</div>
-                <div className="text-[11px] text-[#8a725f] font-mono mt-0.5">
-                  Automatically pick up ready-to-do tasks in the queue
-                </div>
-              </div>
-              <button
-                onClick={onToggleAutoWorking}
-                className="transition-colors"
-                title={autoWorking ? 'Disable auto working' : 'Enable auto working'}
-              >
-                {autoWorking
-                  ? <ToggleRight size={34} className="text-[#d89745]" />
-                  : <ToggleLeft size={34} className="text-[#c4a991]" />
-                }
-              </button>
-            </div>
-
             {/* ngrok URL */}
             <div className="flex flex-col gap-2">
               <label className="flex items-center gap-1.5 text-sm font-extrabold text-[#534135]">
@@ -124,44 +105,77 @@ export default function SettingsModal({ onClose, autoWorking, onToggleAutoWorkin
               />
             </div>
 
-            {/* Env Notes (masked) */}
+            {/* GitHub Token (masked) */}
             <div className="flex flex-col gap-2">
               <div className="flex items-center justify-between">
                 <label className="flex items-center gap-1.5 text-sm font-extrabold text-[#534135]">
                   <FileText size={14} className="text-[#d89745]" />
-                  Environment Notes
-                  {envNotesMasked && !showEnvNotes && (
-                    <span className="ml-1 text-[10px] bg-[#fde9c4] text-[#a0671a] px-2 py-0.5 rounded-full font-bold">
-                      {envNotesLength} chars stored
-                    </span>
-                  )}
+                  GitHub Access Token
                 </label>
                 <button
                   onClick={() => {
-                    setShowEnvNotes(v => !v);
-                    if (!showEnvNotes) setEnvNotes('');
+                    setShowGithubToken(v => !v);
+                    if (!showGithubToken) setGithubToken('');
                   }}
                   className="text-[10px] text-[#d89745] font-bold hover:underline"
                 >
-                  {showEnvNotes ? 'Cancel edit' : envNotesMasked ? 'Replace' : 'Add'}
+                  {showGithubToken ? 'Cancel edit' : githubTokenMasked ? 'Replace' : 'Add'}
                 </button>
               </div>
               <p className="text-[11px] text-[#8a725f] font-mono -mt-1">
-                Optional plain-text notes for local startup env values (e.g. GEMINI_API_KEY). Not shown in logs.
+                Securely stored token for GitHub API integrations. Not shown in logs.
               </p>
-              {showEnvNotes ? (
-                <textarea
-                  value={envNotes}
-                  onChange={e => setEnvNotes(e.target.value)}
-                  placeholder={"GEMINI_API_KEY=your-key-here\nOTHER_VAR=value"}
-                  rows={5}
-                  className="w-full px-4 py-2.5 text-sm font-mono rounded-xl border border-[#ddd0ba] bg-white text-[#3e3129] focus:outline-none focus:ring-2 focus:ring-[#d89745]/50 focus:border-[#d89745] transition resize-none"
+              {showGithubToken ? (
+                <input
+                  type="password"
+                  value={githubToken}
+                  onChange={e => setGithubToken(e.target.value)}
+                  placeholder="ghp_..."
+                  className="w-full px-4 py-2.5 text-sm font-mono rounded-xl border border-[#ddd0ba] bg-white text-[#3e3129] focus:outline-none focus:ring-2 focus:ring-[#d89745]/50 focus:border-[#d89745] transition"
                 />
               ) : (
                 <div className="px-4 py-3 rounded-xl border border-[#e5d4bb] bg-[#faf7f0] text-[11px] text-[#b89b82] font-mono">
-                  {envNotesMasked
+                  {githubTokenMasked
                     ? '••••••••••••••••••••••••••••••••••••••'
-                    : 'No environment notes stored.'
+                    : 'No GitHub token stored.'
+                  }
+                </div>
+              )}
+            </div>
+
+            {/* Jira Token (masked) */}
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center justify-between">
+                <label className="flex items-center gap-1.5 text-sm font-extrabold text-[#534135]">
+                  <FileText size={14} className="text-[#d89745]" />
+                  Jira Access Token
+                </label>
+                <button
+                  onClick={() => {
+                    setShowJiraToken(v => !v);
+                    if (!showJiraToken) setJiraToken('');
+                  }}
+                  className="text-[10px] text-[#d89745] font-bold hover:underline"
+                >
+                  {showJiraToken ? 'Cancel edit' : jiraTokenMasked ? 'Replace' : 'Add'}
+                </button>
+              </div>
+              <p className="text-[11px] text-[#8a725f] font-mono -mt-1">
+                Securely stored token for Jira API integrations. Not shown in logs.
+              </p>
+              {showJiraToken ? (
+                <input
+                  type="password"
+                  value={jiraToken}
+                  onChange={e => setJiraToken(e.target.value)}
+                  placeholder="Jira token..."
+                  className="w-full px-4 py-2.5 text-sm font-mono rounded-xl border border-[#ddd0ba] bg-white text-[#3e3129] focus:outline-none focus:ring-2 focus:ring-[#d89745]/50 focus:border-[#d89745] transition"
+                />
+              ) : (
+                <div className="px-4 py-3 rounded-xl border border-[#e5d4bb] bg-[#faf7f0] text-[11px] text-[#b89b82] font-mono">
+                  {jiraTokenMasked
+                    ? '••••••••••••••••••••••••••••••••••••••'
+                    : 'No Jira token stored.'
                   }
                 </div>
               )}

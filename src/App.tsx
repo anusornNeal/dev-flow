@@ -58,7 +58,6 @@ export default function App() {
   const [isActionMenuOpen, setIsActionMenuOpen] = useState(false);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [mounted, setMounted] = useState(false);
-  const [autoWorking, setAutoWorking] = useState(false);
   const [ngrokUrl, setNgrokUrl] = useState('');
 
   // Filter States
@@ -72,26 +71,10 @@ export default function App() {
       const res = await fetch('/api/settings', { cache: 'no-store' });
       if (res.ok) {
         const data = await res.json();
-        setAutoWorking(!!data.autoWorking);
         setNgrokUrl(data.ngrokUrl ?? '');
       }
     } catch (err) {
       console.warn('Failed to fetch settings:', err);
-    }
-  };
-
-  const toggleAutoWorking = async () => {
-    const newState = !autoWorking;
-    setAutoWorking(newState);
-    try {
-      await fetch('/api/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ autoWorking: newState })
-      });
-    } catch (err) {
-      console.error('Failed to update settings:', err);
-      setAutoWorking(!newState); // revert
     }
   };
 
@@ -558,23 +541,6 @@ export default function App() {
                 </button>
               </div>
 
-              {/* Auto-Working Toggle */}
-              <button
-                onClick={toggleAutoWorking}
-                type="button"
-                className={`px-3 py-1.5 rounded-xl text-xs font-extrabold flex items-center gap-2 transition-all shadow-sm cursor-pointer ml-auto md:ml-0 border ${
-                  autoWorking 
-                    ? 'bg-emerald-500 hover:bg-emerald-600 text-white border-emerald-600 shadow-emerald-200' 
-                    : 'bg-[#f4efe6] hover:bg-[#ebdcb9] text-[#8c7463] border-[#e5d4bb]'
-                }`}
-                title="When ON, eligible agents will automatically pick up ready tasks in the background."
-              >
-                <div className={`relative inline-flex h-3.5 w-6 items-center rounded-full transition-colors ${autoWorking ? 'bg-white/30' : 'bg-[#d8c8b3]'}`}>
-                  <span className={`inline-block h-2.5 w-2.5 transform rounded-full bg-white transition-transform ${autoWorking ? 'translate-x-3' : 'translate-x-0.5'}`} />
-                </div>
-                🤖 Auto-Work: {autoWorking ? 'ON' : 'OFF'}
-              </button>
-
               {/* Combined Ticket Action Menu */}
               <div className="relative">
                 <button
@@ -809,8 +775,6 @@ export default function App() {
             setIsSettingsModalOpen(false);
             fetchSettingsFromApi();
           }}
-          autoWorking={autoWorking}
-          onToggleAutoWorking={toggleAutoWorking}
         />
       )}
     </div>

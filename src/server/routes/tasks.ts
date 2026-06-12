@@ -22,10 +22,6 @@ function canOverrideTaskLock(task: any, body: any, query?: any, agentRequestValu
 
 function maybeTriggerTaskAgent(task: any, previousStatus: string | undefined, deps: ApiRouteDeps, routeLabel: string) {
   if (task.status !== 'todo' || previousStatus === 'todo') return;
-  if (!deps.state.settingsCache.autoWorking) {
-    deps.writeAgentLog('INFO', `Auto-work is disabled. Skipping automatic agent trigger for task=${task.id}`);
-    return;
-  }
   if (!task.agent || task.activeAgent) return;
 
   const isAgentBusy = deps.state.tasksCache.some((entry) =>

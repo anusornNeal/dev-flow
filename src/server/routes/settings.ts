@@ -1,6 +1,10 @@
 import type express from 'express';
 import type { ApiRouteDeps } from '../types';
 import { saveSettings } from '../repositories/settingsRepository';
+import fs from 'fs';
+import path from 'path';
+import db from '../../db/index';
+import Database from 'better-sqlite3';
 
 export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps) {
   app.get('/api/settings', (_req, res) => {
@@ -39,5 +43,51 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
 
     saveSettings(deps.state);
     return res.json({ success: true });
+  });
+
+  app.get('/api/export', async (_req, res) => {
+    try {
+      const dataDir = path.join(process.cwd(), 'data');
+      if (!fs.existsSync(dataDir)) {
+        fs.mkdirSync(dataDir, { recursive: true });
+      }
+
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const tempFile = path.join(dataDir, `devflow-export-temp-${timestamp}.db`);
+      const exportFilename = `devflow-backup-${timestamp}.db`;
+
+      // Perform a safe live backup
+      await db.backup(tempFile);
+
+      // Open the temp database to strip secrets
+      const tempDb = new Database(tempFile);
+      try {
+        tempDb.prepare("UPDATE settings SET value = '' WHERE key IN ('githubToken', 'jiraToken')").run();
+      } finally {
+        tempDb.close();
+      }
+
+      // Send file to client
+      res.download(tempFile, exportFilename, (err) => {
+        // Clean up the temp file after download finishes or errors
+        if (fs.existsSync(tempFile)) {
+          try {
+            fs.unlinkSync(tempFile);
+          } catch (unlinkErr) {
+            console.error('Failed to clean up temp export file:', unlinkErr);
+          }
+        }
+        if (err) {
+          console.error('Export download error:', err);
+          // Only send error if headers aren't sent yet
+          if (!res.headersSent) {
+            res.status(500).json({ error: 'Failed to send export file' });
+          }
+        }
+      });
+    } catch (error: any) {
+      console.error('Export failed:', error);
+      res.status(500).json({ error: error.message ?? 'Export failed' });
+    }
   });
 }

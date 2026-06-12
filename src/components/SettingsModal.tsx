@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Link, FileText, ToggleLeft, ToggleRight, Save, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
+import { X, Link, FileText, ToggleLeft, ToggleRight, Save, Loader2, CheckCircle2, AlertCircle, Database, Download } from 'lucide-react';
 
 interface SettingsData {
   ngrokUrl: string;
@@ -179,6 +179,28 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                   }
                 </div>
               )}
+            </div>
+
+            {/* Export Data */}
+            <div className="pt-4 mt-2 border-t border-[#ebdcb9] flex flex-col gap-2">
+              <div className="flex items-center justify-between">
+                <div>
+                  <label className="flex items-center gap-1.5 text-sm font-extrabold text-[#534135]">
+                    <Database size={14} className="text-[#d89745]" />
+                    Export Data
+                  </label>
+                  <p className="text-[11px] text-[#8a725f] font-mono mt-0.5">
+                    Download a portable backup of your DevFlow data (projects, tasks, skills) to migrate to another machine. Secrets are excluded.
+                  </p>
+                </div>
+                <button
+                  onClick={() => window.location.href = '/api/export'}
+                  type="button"
+                  className="bg-[#faf7f0] border border-[#e5d4bb] hover:bg-[#ebdcb9] text-[#534135] px-3 py-1.5 rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 whitespace-nowrap"
+                >
+                  <Download size={14} /> Export Backup
+                </button>
+              </div>
             </div>
 
             {/* Save Button */}

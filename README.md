@@ -60,7 +60,14 @@ Use these when you want the existing one-click local startup behavior instead of
 ## Backup and Restore
 
 - **Initial Seed**: On fresh SQLite DB creation, only built-in master skills are seeded. No custom skills or sample data are initialized.
-- **Backup**: Run \
-pm run backup\ to create a timestamped backup of the current DB in \data/\.
-- **Restore**: Run \
-pm run restore <path-to-backup-db>\. It requires explicit confirmation and creates a safety backup of your current DB before restoring.
+- **Backup**: Run `npm run backup` to create a timestamped backup of the current DB in `data/`.
+- **Restore**: Run `npm run restore <path-to-backup-db>`. It requires explicit confirmation and creates a safety backup of your current DB before restoring.
+
+## Migrating to Another Machine
+
+To move your DevFlow local setup to another computer:
+1. Open **Settings** in DevFlow on your old machine.
+2. Click **Export Backup** in the Data Management section to download a portable `.db` file (secrets like GitHub/Jira tokens are safely excluded).
+3. Copy the downloaded `.db` file to your new machine.
+4. Clone the repository on the new machine, run `npm install`, and start DevFlow.
+5. Either replace `data/devflow.db` with the exported file manually, or run `npm run restore <path-to-exported-db>` to load your data.

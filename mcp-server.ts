@@ -110,6 +110,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
           required: ["taskId", "checklistId"],
         },
+      },
+      {
+        name: "get_agent_context",
+        description: "Get the full agent-ready context for a specific task, including parent context, subtasks, checklist, and repo metadata",
+        inputSchema: {
+          type: "object",
+          properties: {
+            taskId: { type: "string", description: "The internal ID or display ID (e.g. DVF-0032) of the task" }
+          },
+          required: ["taskId"],
+        },
       }
     ],
   };
@@ -268,6 +279,29 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const data = await response.json();
       return {
         content: [{ type: "text", text: JSON.stringify(data.task || data, null, 2) }],
+      };
+    } catch (err: any) {
+      return {
+        isError: true,
+        content: [{ type: "text", text: err.message }],
+      };
+    }
+  }
+
+  if (name === "get_agent_context") {
+    const { taskId } = args as any;
+    try {
+      const response = await fetch(`${API_BASE_URL}/tasks/${taskId}/agent-context`);
+      if (!response.ok) {
+         if (response.status === 404) {
+           throw new Error(`Task not found`);
+         }
+         const errorData = await response.json().catch(() => ({}));
+         throw new Error(errorData.error || `HTTP ${response.status}`);
+      }
+      const data = await response.json();
+      return {
+        content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
       };
     } catch (err: any) {
       return {

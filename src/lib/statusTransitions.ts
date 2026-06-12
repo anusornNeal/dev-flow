@@ -3,8 +3,8 @@ import { TaskStatus } from '../types';
 const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
   'backlog': ['todo'],
   'todo': ['backlog', 'in-progress'],
-  'in-progress': ['todo', 'ready-for-review'],
-  'ready-for-review': ['in-progress', 'done'],
+  'in-progress': ['backlog', 'todo', 'ready-for-review'],
+  'ready-for-review': ['backlog', 'in-progress', 'done'],
   'done': ['ready-for-review']
 };
 

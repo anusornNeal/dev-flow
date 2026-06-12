@@ -80,6 +80,22 @@ function clearActiveAgentIfSettled(task: any) {
   }
 }
 
+function syncTaskAgentStateForStatus(task: any, previousStatus?: string) {
+  if (task.status === 'backlog') {
+    if (previousStatus !== 'backlog') {
+      const resetReason = 'Manual reset: moved task to backlog and cancelled the active agent run.';
+      cancelActiveRunsForTask(task.id, resetReason);
+      appendTaskLog(task, 'Manual reset: cleared active agent lock after moving task to BACKLOG.', 'update');
+    }
+    applyRunSummaryToTask(task, getLatestAgentRunForTask(task.id));
+    task.activeAgent = undefined;
+    return;
+  }
+
+  clearActiveAgentIfSettled(task);
+  applyRunSummaryToTask(task, getLatestAgentRunForTask(task.id));
+}
+
 function canOverrideTaskLock(task: any, body: any, query?: any, agentRequestValue?: any) {
   const isAgentRequest = String(agentRequestValue).toLowerCase() === 'true';
   const emergencyBody = body?.emergency === true || String(body?.emergency).toLowerCase() === 'true';
@@ -645,7 +661,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
           continue;
         }
 
-        clearActiveAgentIfSettled(updatedTask);
+        syncTaskAgentStateForStatus(updatedTask, currentTask.status);
         deps.state.tasksCache[existingIndex] = updatedTask;
         updatedTasks.push(updatedTask);
         maybeTriggerTaskAgent(updatedTask, currentTask, deps, 'POST /tasks/batch update');
@@ -742,7 +758,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     };
 
     deps.state.tasksCache[taskIndex] = updatedTask;
-    clearActiveAgentIfSettled(updatedTask);
+    syncTaskAgentStateForStatus(updatedTask, previousStatus);
     maybeTriggerTaskAgent(updatedTask, previousStatus, deps, '/move endpoint');
 
     saveTasks(deps.state);
@@ -897,7 +913,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
           continue;
         }
 
-        clearActiveAgentIfSettled(updatedTask);
+        syncTaskAgentStateForStatus(updatedTask, currentTask.status);
         deps.state.tasksCache[existingIndex] = updatedTask;
         updatedTasks.push(updatedTask);
         maybeTriggerTaskAgent(updatedTask, currentTask, deps, 'PUT /tasks list update');
@@ -989,7 +1005,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     };
 
     deps.state.tasksCache[taskIndex] = updatedTask;
-    clearActiveAgentIfSettled(updatedTask);
+    syncTaskAgentStateForStatus(updatedTask, currentTask.status);
     maybeTriggerTaskAgent(updatedTask, currentTask, deps, 'PUT /tasks/:id endpoint');
 
     saveTasks(deps.state);

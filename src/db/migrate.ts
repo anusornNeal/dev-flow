@@ -159,9 +159,7 @@ const migrations: Migration[] = [
       const projectByName = new Map(projectRows.map((project) => [project.name.toLowerCase(), project.id]));
       const projectById = new Map(projectRows.map((project) => [project.id, project]));
       const tasks = db.prepare('SELECT id, displayId, projectId, parentId FROM tasks ORDER BY createdAt, id').all() as TaskRow[];
-      if (tasks.length > 0) {
-        ensureDefaultProjectExists();
-      }
+
       const validTaskIds = new Set(tasks.map((task) => task.id));
       const usedDisplayIds = new Set<string>();
       const updateTask = db.prepare('UPDATE tasks SET displayId = ?, projectId = ?, parentId = ? WHERE id = ?');
@@ -289,10 +287,10 @@ const migrations: Migration[] = [
   , {
     id: '004-seed-master-skills',
     run: () => {
-      const SKILLS_DIR = require('path').join(process.cwd(), 'skills');
-      if (!require('fs').existsSync(SKILLS_DIR)) return;
+      const SKILLS_DIR = path.join(process.cwd(), 'skills');
+      if (!fs.existsSync(SKILLS_DIR)) return;
       
-      const skillFiles = require('fs').readdirSync(SKILLS_DIR).filter((f) => f.endsWith('.md'));
+      const skillFiles = fs.readdirSync(SKILLS_DIR).filter((f) => f.endsWith('.md'));
       const MASTER_SKILLS = new Set([
         'playbook',
         'schema',
@@ -305,15 +303,15 @@ const migrations: Migration[] = [
       const now = new Date().toISOString();
       const insertSkill = db.prepare('INSERT OR IGNORE INTO skills (id, name, description, isCustom, content, kind, isProtected, sourceType, sourcePath, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
 
-      const humanizeSkillId = (id) => id.replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+      const humanizeSkillId = (id: string) => id.replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 
       db.transaction(() => {
         for (const fileName of skillFiles) {
-          const id = require('path').basename(fileName, '.md');
+          const id = path.basename(fileName, '.md');
           if (!MASTER_SKILLS.has(id)) continue;
 
-          const filePath = require('path').join(SKILLS_DIR, fileName);
-          const content = require('fs').readFileSync(filePath, 'utf8');
+          const filePath = path.join(SKILLS_DIR, fileName);
+          const content = fs.readFileSync(filePath, 'utf8');
           
           insertSkill.run(
             id,

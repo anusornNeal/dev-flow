@@ -13,7 +13,7 @@ async function runRestore() {
 
   const backupFile = path.resolve(backupFileArg);
   if (!fs.existsSync(backupFile)) {
-    console.error(\Backup file not found: \\);
+    console.error(`Backup file not found: ${backupFile}`);
     process.exit(1);
   }
 
@@ -27,7 +27,7 @@ async function runRestore() {
 
   const question = (query: string): Promise<string> => new Promise(resolve => rl.question(query, resolve));
 
-  const answer = await question(\Are you sure you want to restore from \? This will overwrite your current DevFlow database. (yes/no): \);
+  const answer = await question(`Are you sure you want to restore from ${backupFile}? This will overwrite your current DevFlow database. (yes/no): `);
   
   if (answer.toLowerCase() !== 'yes') {
     console.log('Restore cancelled.');
@@ -38,8 +38,8 @@ async function runRestore() {
 
   if (fs.existsSync(dbFile)) {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const safetyBackup = path.join(dataDir, \devflow-safety-\.db\);
-    console.log(\Creating safety backup of current DB to \...\);
+    const safetyBackup = path.join(dataDir, `devflow-safety-${timestamp}.db`);
+    console.log(`Creating safety backup of current DB to ${safetyBackup}...`);
     try {
       const Database = require('better-sqlite3');
       const db = new Database(dbFile);

@@ -12,14 +12,14 @@ async function runBackup() {
   }
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const backupFile = path.join(dataDir, \devflow-backup-\.db\);
+  const backupFile = path.join(dataDir, `devflow-backup-${timestamp}.db`);
 
-  console.log(\Starting backup of \...\);
+  console.log(`Starting backup of ${dbFile}...`);
   const db = new Database(dbFile);
   
   try {
     await db.backup(backupFile);
-    console.log(\Backup completed successfully: \\);
+    console.log(`Backup completed successfully: ${backupFile}`);
   } catch (error) {
     console.error('Backup failed:', error);
     process.exit(1);

@@ -1,18 +1,18 @@
 ## Task Context
 **Description:**
-{{task.description}}
+{{instruction.description}}
 
 **Acceptance Criteria:**
-{{task.acceptanceCriteria}}
+{{requirements.acceptanceCriteria}}
 
 **Verification:**
-{{task.verification}}
+{{requirements.verification}}
 
 **Reasoning:**
-{{task.reasoning}}
+{{instruction.reasoning}}
 
 **Target Files:**
-{{task.targetFiles}}
+{{requirements.targetFiles}}
 
-**Tags:**
-{{task.tags}}
+**Repository Notes:**
+{{repoContext}}

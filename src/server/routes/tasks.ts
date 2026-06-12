@@ -1,4 +1,5 @@
 import { execFile } from 'child_process';
+import path from 'path';
 import type express from 'express';
 import type { ApiRouteDeps } from '../types';
 import { TASK_SCHEMA_DEF, VALID_AGENTS, VALID_EFFORTS, VALID_MODELS, VALID_STATUSES } from '../constants';
@@ -12,6 +13,21 @@ import { resolveAgentLaunchPlan } from '../services/agentLaunchConfig';
 import { renderPromptTemplate } from '../services/promptTemplateService';
 
 const STALE_AGENT_RUN_MS = 30 * 60 * 1000;
+
+function createTaskLogEntry(message: string, type: string = 'update') {
+  return {
+    id: `log-${Date.now()}-${Math.floor(Math.random() * 1000000)}`,
+    timestamp: new Date().toISOString(),
+    message,
+    type,
+  };
+}
+
+function appendTaskLog(task: any, message: string, type: string = 'update') {
+  const lastLog = Array.isArray(task.logs) ? task.logs[task.logs.length - 1] : null;
+  if (lastLog?.message === message && lastLog?.type === type) return;
+  task.logs = [...(task.logs || []), createTaskLogEntry(message, type)];
+}
 
 function clearActiveAgentIfSettled(task: any) {
   if (['backlog', 'done', 'ready-for-review'].includes(task.status)) {
@@ -45,13 +61,6 @@ function applyRunSummaryToTask(task: any, run: AgentRun | null) {
   } : undefined;
 }
 
-function clearTaskActiveRunState(taskId: string, deps: ApiRouteDeps) {
-  const task = deps.state.tasksCache.find((entry) => entry.id === taskId);
-  if (!task) return;
-  applyRunSummaryToTask(task, getLatestAgentRunForTask(taskId));
-  saveTasks(deps.state);
-}
-
 function cleanupStaleActiveRuns(deps: ApiRouteDeps) {
   const cutoff = new Date(Date.now() - STALE_AGENT_RUN_MS).toISOString();
   const cancelledCount = cancelStaleActiveRuns(cutoff, `Stale active run cancelled after ${STALE_AGENT_RUN_MS / 60000} minutes.`);
@@ -60,6 +69,96 @@ function cleanupStaleActiveRuns(deps: ApiRouteDeps) {
     for (const task of deps.state.tasksCache) applyRunSummaryToTask(task, getLatestAgentRunForTask(task.id));
     saveTasks(deps.state);
   }
+}
+
+function buildPromptRenderContext(taskContext: NonNullable<ReturnType<typeof getAgentTaskContext>>, runId: string) {
+  return {
+    run: { id: runId },
+    task: taskContext.task,
+    assignment: taskContext.assignment || {},
+    workspace: taskContext.workspace || {},
+    instruction: taskContext.instruction || {},
+    requirements: taskContext.requirements || {},
+    repoContext: taskContext.repoContext || '',
+    orchestration: taskContext.orchestration || {},
+    agent: taskContext.assignment?.agent || '',
+    model: taskContext.assignment?.model || '',
+    effort: taskContext.assignment?.effort || '',
+  };
+}
+
+function renderTaskPrompt(taskId: string, state: ApiRouteDeps['state'], runId: string) {
+  const context = getAgentTaskContext(state, taskId, false);
+  if (!context) {
+    throw new Error('Task agent context could not be built.');
+  }
+
+  const renderResult = renderPromptTemplate('default', buildPromptRenderContext(context, runId));
+  if (!renderResult.content.trim()) {
+    throw new Error('Task prompt could not be built.');
+  }
+
+  return { context, renderResult };
+}
+
+function failTaskRun(task: any, deps: ApiRouteDeps, runId: string, reason: string, options?: {
+  logPath?: string | null;
+  taskMessage?: string;
+}) {
+  const failedRun = updateAgentRunStatus(runId, 'failed', { errorMessage: reason });
+  task.status = 'todo';
+  task.updatedAt = new Date().toISOString();
+  appendTaskLog(task, options?.taskMessage || reason, 'update');
+  if (options?.logPath) appendAgentRunLog(options.logPath, reason);
+  applyRunSummaryToTask(task, failedRun);
+  saveTasks(deps.state);
+  return failedRun;
+}
+
+export function completeAgentRunForTask(task: any, run: AgentRun, deps: ApiRouteDeps, options: {
+  success: boolean;
+  errorMessage?: string;
+}) {
+  let updatedRun: AgentRun | null;
+  if (options.success) {
+    updatedRun = updateAgentRunStatus(run.id, 'succeeded');
+    task.status = 'ready-for-review';
+    appendTaskLog(task, `Agent run ${run.id} completed successfully.`, 'update');
+  } else {
+    const errorMessage = options.errorMessage || 'Run failed';
+    updatedRun = updateAgentRunStatus(run.id, 'failed', { errorMessage });
+    task.status = 'todo';
+    appendTaskLog(task, `Agent run ${run.id} failed: ${errorMessage}`, 'update');
+  }
+
+  task.updatedAt = new Date().toISOString();
+  applyRunSummaryToTask(task, updatedRun || getLatestAgentRunForTask(task.id));
+  saveTasks(deps.state);
+  return updatedRun;
+}
+
+export function continueTaskQueueForProject(projectId: string, deps: ApiRouteDeps) {
+  const eligibleTasks = deps.state.tasksCache.filter((entry) => entry.projectId === projectId && entry.status === 'todo' && entry.agent);
+  eligibleTasks.sort((a, b) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime());
+
+  for (const nextTask of eligibleTasks) {
+    const latestRun = getLatestAgentRunForTask(nextTask.id);
+    if (latestRun?.status === 'failed') {
+      appendTaskLog(nextTask, 'Queue continuation skipped: latest agent run failed. Manual retry is required before auto-work can pick this task again.', 'update');
+      continue;
+    }
+
+    const result = triggerTaskAgent(nextTask, deps, 'queue continuation');
+    if (result.triggered) {
+      saveTasks(deps.state);
+      return result;
+    }
+
+    appendTaskLog(nextTask, `Queue continuation skipped: ${result.reason}`, 'update');
+  }
+
+  saveTasks(deps.state);
+  return { triggered: false, reason: 'No eligible todo task could be started.' };
 }
 
 export function triggerTaskAgent(task: any, deps: ApiRouteDeps, routeLabel: string, retryOfRunId?: string | null) {
@@ -115,28 +214,20 @@ export function triggerTaskAgent(task: any, deps: ApiRouteDeps, routeLabel: stri
   applyRunSummaryToTask(task, run);
   saveTasks(deps.state);
 
-  const context = getAgentTaskContext(deps.state, task.id, false);
   let prompt = '';
-  if (context) {
-    const renderResult = renderPromptTemplate('default', {
-      run: { id: run.id },
-      task: context.task,
-      project: context.workspace,
-      agent: task.agent,
-      model: task.model,
-      effort: task.effort
+  let files: { runDir: string; promptPath: string; logPath: string };
+  try {
+    prompt = renderTaskPrompt(task.id, deps.state, run.id).renderResult.content;
+    files = createAgentRunFiles({ runId: run.id, prompt });
+  } catch (error: any) {
+    const reason = error?.message || 'Task prompt could not be built.';
+    deps.writeAgentLog('ERROR', `Agent startup preparation failed for run=${run.id} task=${task.id}: ${reason}`);
+    const failedRun = failTaskRun(task, deps, run.id, reason, {
+      taskMessage: `Agent startup failed before launch: ${reason}`,
     });
-    prompt = renderResult.content;
+    return { triggered: false, reason, run: failedRun };
   }
 
-  if (!prompt) {
-    task.status = 'todo';
-    const failedRun = updateAgentRunStatus(run.id, 'failed', { errorMessage: 'Task prompt could not be built.' });
-    applyRunSummaryToTask(task, failedRun);
-    return { triggered: false, reason: 'Task prompt could not be built.', run: failedRun };
-  }
-
-  const files = createAgentRunFiles({ runId: run.id, prompt });
   let currentRun = updateAgentRunStatus(run.id, 'queued', {
     promptPath: files.promptPath,
     contextRef: files.promptPath,
@@ -145,8 +236,10 @@ export function triggerTaskAgent(task: any, deps: ApiRouteDeps, routeLabel: stri
   appendAgentRunLog(files.logPath, `Queued ${task.agent} for task ${task.id} from ${routeLabel}`);
   currentRun = updateAgentRunStatus(run.id, 'starting', { startedAt: new Date().toISOString() }) || currentRun;
   applyRunSummaryToTask(task, currentRun);
+  saveTasks(deps.state);
 
   const triggerBat = getAgentTriggerScriptPath();
+  const invokeTriggerScript = path.join(process.cwd(), 'scripts', 'invoke-agent-trigger.ps1');
   const apiBaseUrl = getDevFlowApiBaseUrl();
 
   const execOpts = {
@@ -165,8 +258,12 @@ export function triggerTaskAgent(task: any, deps: ApiRouteDeps, routeLabel: stri
   deps.writeAgentLog('TRIGGER', `Spawning run=${run.id} agent=${task.agent} for task=${task.id} ("${task.title}") via ${routeLabel}${project?.localPath ? ' at ' + project.localPath : ''}`);
   appendAgentRunLog(files.logPath, `Launch plan: agent=${launchPlan.agent} model=${launchPlan.devFlowModel || 'none'} resolvedModel=${launchPlan.resolvedModel || 'none'} effort=${launchPlan.selectedEffort || 'none'} effortHandling=${launchPlan.effortHandling.mode} executionMode=${executionMode}`);
   appendAgentRunLog(files.logPath, `cwd=${project?.localPath || 'none'} triggerScript=${triggerBat} promptPath=${files.promptPath}`);
-  execFile('cmd.exe', [
-    '/c',
+  execFile('powershell.exe', [
+    '-NoProfile',
+    '-ExecutionPolicy',
+    'Bypass',
+    '-File',
+    invokeTriggerScript,
     triggerBat,
     task.agent,
     task.id,
@@ -177,21 +274,22 @@ export function triggerTaskAgent(task: any, deps: ApiRouteDeps, routeLabel: stri
     files.promptPath,
     files.logPath,
     apiBaseUrl,
-    executionMode,
   ], execOpts, (error) => {
     if (error) {
-      task.status = 'todo';
-      const failedRun = updateAgentRunStatus(run.id, 'failed', { errorMessage: error.message });
-      appendAgentRunLog(files.logPath, `trigger-agent.bat failed: ${error.message}`);
+      const reason = error.message || 'trigger-agent.bat failed.';
       deps.writeAgentLog('ERROR', `trigger-agent.bat failed for run=${run.id} task=${task.id}: ${error.message}`);
-      clearTaskActiveRunState(task.id, deps);
+      failTaskRun(task, deps, run.id, reason, {
+        logPath: files.logPath,
+        taskMessage: `Agent startup failed before launch: ${reason}`,
+      });
       return;
     }
 
-    updateAgentRunStatus(run.id, 'running');
+    const runningRun = updateAgentRunStatus(run.id, 'running');
     appendAgentRunLog(files.logPath, 'Runner completed launcher handoff successfully; run marked running.');
     deps.writeAgentLog('INFO', `Runner completed launcher handoff for run=${run.id} task=${task.id}`);
-    clearTaskActiveRunState(task.id, deps);
+    applyRunSummaryToTask(task, runningRun);
+    saveTasks(deps.state);
   });
 
   return { triggered: true, run: currentRun || run };
@@ -237,14 +335,12 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     if (!context) return res.status(404).json({ error: 'Task not found' });
 
     const activeRun = getActiveRunForTask(context.task.id) || getLatestAgentRunForTask(context.task.id);
-    const renderResult = renderPromptTemplate('default', {
-      run: { id: activeRun?.id || 'preview-run-id' },
-      task: context.task,
-      project: context.workspace,
-      agent: context.assignment?.agent || 'default',
-      model: context.assignment?.model || '',
-      effort: context.assignment?.effort || ''
-    });
+    let renderResult;
+    try {
+      renderResult = renderPromptTemplate('default', buildPromptRenderContext(context, activeRun?.id || 'preview-run-id'));
+    } catch (error: any) {
+      return res.status(500).json({ error: error?.message || 'Prompt could not be rendered.' });
+    }
 
     res.setHeader('Content-Type', 'text/plain');
     return res.send(renderResult.content);
@@ -299,26 +395,13 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     }
 
     const success = req.body?.success !== false;
-    if (success) {
-      updateAgentRunStatus(run.id, 'succeeded');
-      task.status = 'ready-for-review';
-    } else {
-      updateAgentRunStatus(run.id, 'failed', { errorMessage: req.body?.errorMessage || 'Run failed' });
-    }
-
-    task.updatedAt = new Date().toISOString();
-    applyRunSummaryToTask(task, getLatestAgentRunForTask(task.id));
-    saveTasks(deps.state);
+    completeAgentRunForTask(task, run, deps, {
+      success,
+      errorMessage: req.body?.errorMessage || 'Run failed',
+    });
 
     if (deps.state.settingsCache.autoWork) {
-      const eligibleTasks = deps.state.tasksCache.filter(t => t.projectId === task.projectId && t.status === 'todo' && t.agent);
-      eligibleTasks.sort((a, b) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime());
-      
-      for (const nextTask of eligibleTasks) {
-        const result = triggerTaskAgent(nextTask, deps, 'queue continuation');
-        if (result.triggered) break;
-      }
-      saveTasks(deps.state);
+      continueTaskQueueForProject(task.projectId, deps);
     }
 
     return res.json({ success: true, task });

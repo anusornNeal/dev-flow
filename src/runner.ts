@@ -50,6 +50,22 @@ function quoteBatArg(value: string) {
   return `"${value.replace(/"/g, '""')}"`;
 }
 
+export function buildWindowsStartCommand(input: {
+  windowTitle: string;
+  cwd: string;
+  launchScriptPath: string;
+}) {
+  return [
+    'start',
+    quoteBatArg(input.windowTitle),
+    '/d',
+    quoteBatArg(input.cwd),
+    'cmd.exe',
+    '/k',
+    quoteBatArg(input.launchScriptPath),
+  ].join(' ');
+}
+
 function appendRunnerLog(logPath: string | null | undefined, message: string) {
   if (!logPath) return;
   fs.mkdirSync(path.dirname(logPath), { recursive: true });
@@ -117,8 +133,7 @@ export function createAgentLaunchScript(input: {
     : 'echo Agent process exited with code %EXIT_CODE%';
   const commandLine = [quoteBatArg(input.executable), ...input.args.map(quoteBatArg)].join(' ');
   
-  // Create a PowerShell command for the completion webhook to avoid curl quoting issues
-  const pshWebhook = `powershell -NoProfile -Command "$success = if ($env:EXIT_CODE -eq '0') { 'true' } else { 'false' }; Invoke-RestMethod -Uri '${input.apiBaseUrl}/api/tasks/${input.taskId}/agent-runs/${input.runId}/complete' -Method Post -Headers @{'Content-Type'='application/json'} -Body \\"{\\`\\"success\\`\\":$success}\\""`;
+  const pshWebhook = `powershell -NoProfile -Command "$success = $env:EXIT_CODE -eq '0'; $body = @{ success = $success } | ConvertTo-Json -Compress; Invoke-RestMethod -Uri '${input.apiBaseUrl}/api/tasks/${input.taskId}/agent-runs/${input.runId}/complete' -Method Post -ContentType 'application/json' -Body $body"`;
 
   fs.writeFileSync(launchScriptPath, [
     '@echo off',
@@ -136,6 +151,8 @@ export function createAgentLaunchScript(input: {
 
   return launchScriptPath;
 }
+
+export const createCodexLaunchScript = createAgentLaunchScript;
 
 function readPromptReference(taskId: string, promptPath: string, apiBaseUrl: string) {
   if (promptPath && fs.existsSync(promptPath)) {
@@ -155,7 +172,7 @@ function main() {
   const promptPath = args[6] === 'none' ? '' : args[6];
   const logPath = args[7] === 'none' ? '' : args[7];
   const apiBaseUrl = (args[8] === 'none' || !args[8] ? process.env.DEVFLOW_API_BASE_URL || 'http://localhost:3000' : args[8]).replace(/\/$/, '');
-  const executionMode = resolveAgentExecutionMode(args[9] || process.env.DEVFLOW_AGENT_EXECUTION_MODE);
+  const executionMode = resolveAgentExecutionMode(process.env.DEVFLOW_AGENT_EXECUTION_MODE);
 
   if (!agentId || !taskId) {
     console.error('[runner] Missing required arguments: agentId taskId');
@@ -239,8 +256,11 @@ function main() {
 
   if (launchScriptPath) {
     finalCmd = 'cmd.exe';
-    // We remove /wait so the runner script exits immediately and DevFlow marks it as 'running'
-    finalArgs = ['/c', 'start', `"${config.name} Agent"`, '/d', cwd, 'cmd.exe', '/k', launchScriptPath];
+    finalArgs = ['/d', '/s', '/c', buildWindowsStartCommand({
+      windowTitle: `${config.name} Agent`,
+      cwd,
+      launchScriptPath,
+    })];
   } else {
     console.error(`[runner] Failed to generate launch script.`);
     process.exit(1);
@@ -258,7 +278,6 @@ function main() {
   const child = spawn(finalCmd, finalArgs, {
     detached: true,
     stdio: 'ignore',
-    windowsVerbatimArguments: true,
     env: spawnEnv
   });
   

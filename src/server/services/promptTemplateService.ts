@@ -4,7 +4,12 @@ import path from 'path';
 export interface PromptRenderContext {
   run: { id: string };
   task: any;
-  project: any;
+  assignment?: any;
+  workspace?: any;
+  instruction?: any;
+  requirements?: any;
+  repoContext?: any;
+  orchestration?: any;
   agent: string;
   model: string;
   effort: string;
@@ -41,10 +46,19 @@ function renderValue(val: any, isChecklistOrSubtasks = false): string {
       return val.map((item: any) => {
         if (typeof item === 'string') return `- ${item}`;
         if (item.text) {
-           return `- [${item.completed ? 'x' : ' '}] ${item.text}`;
+          return `- [${item.completed ? 'x' : ' '}] ${item.text}`;
         }
-        if (item.title) {
-           return `- ${item.title} (${item.status || 'todo'})`;
+        if (item.displayId || item.title || item.id) {
+          const identifier = item.displayId || item.id || 'task';
+          const title = item.title ? `: ${item.title}` : '';
+          const details = [
+            item.status || null,
+            item.spawnAgent ? `agent=${item.spawnAgent}` : null,
+            item.spawnModel ? `model=${item.spawnModel}` : null,
+            item.spawnEffort ? `effort=${item.spawnEffort}` : null,
+            item.branch ? `branch=${item.branch}` : null,
+          ].filter(Boolean);
+          return `- ${identifier}${title}${details.length > 0 ? ` (${details.join(', ')})` : ''}`;
         }
         return `- ${JSON.stringify(item)}`;
       }).join('\n');
@@ -57,7 +71,8 @@ function renderValue(val: any, isChecklistOrSubtasks = false): string {
 
 export function interpolate(template: string, context: PromptRenderContext): string {
   return template.replace(/\{\{([^}]+)\}\}/g, (match, key) => {
-    const path = key.trim().split('.');
+    const cleanKey = key.trim();
+    const path = cleanKey.split('.');
     let current: any = context;
     for (const p of path) {
       if (current === undefined || current === null) {
@@ -65,7 +80,12 @@ export function interpolate(template: string, context: PromptRenderContext): str
       }
       current = current[p];
     }
-    const isChecklistOrSubtasks = key.trim() === 'task.checklist' || key.trim() === 'task.subtasks';
+    const isChecklistOrSubtasks = [
+      'task.checklist',
+      'task.subtasks',
+      'requirements.checklist',
+      'orchestration.subtasks',
+    ].includes(cleanKey);
     return renderValue(current, isChecklistOrSubtasks);
   });
 }

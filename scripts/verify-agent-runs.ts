@@ -141,7 +141,8 @@ assert.match(metadataBlock, /Effort handling mode: prompt-only/);
 
 const {
   buildAgentCliArgs,
-  createCodexLaunchScript,
+  buildWindowsStartCommand,
+  createAgentLaunchScript,
   mapModelForAgent,
 } = await import('../src/runner');
 
@@ -215,7 +216,10 @@ assert.deepEqual(agyArgs, [
 ]);
 assert.equal(agyArgs.some((arg) => arg.includes('reasoning effort')), false);
 
-const launchScriptPath = createCodexLaunchScript({
+const launchScriptPath = createAgentLaunchScript({
+  runId: 'run-script-test',
+  taskId: 'task-script-test',
+  apiBaseUrl: 'http://localhost:3000',
   runDir: files.runDir,
   executable: 'C:\\Tools\\codex.cmd',
   args: ['-C', 'C:\\work dir', '-m', 'gpt-5.5', buildPromptReference(files.promptPath)],
@@ -226,6 +230,13 @@ const launchScript = fs.readFileSync(launchScriptPath, 'utf8');
 assert.match(launchScript, /cd \/d "C:\\work dir"/);
 assert.match(launchScript, /"C:\\Tools\\codex.cmd" "-C" "C:\\work dir" "-m" "gpt-5.5"/);
 assert.equal(launchScript.includes('GITHUB_PERSONAL_ACCESS_TOKEN'), false);
+
+const startCommand = buildWindowsStartCommand({
+  windowTitle: 'Codex Agent',
+  cwd: 'C:\\work dir',
+  launchScriptPath,
+});
+assert.equal(startCommand, `start "Codex Agent" /d "C:\\work dir" cmd.exe /k "${launchScriptPath}"`);
 
 const {
   validateAgentParams,

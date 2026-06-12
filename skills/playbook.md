@@ -51,6 +51,20 @@ When the user gives a Jira URL or Jira key:
 8. Read/list the created tasks if needed to verify fields were saved correctly.
 9. Reply to the user with task IDs, titles, agent/model/effort, and split rationale.
 
+## Task Execution Workflow
+
+When an agent is assigned a specific task card to execute, it must strictly follow this lifecycle:
+
+1. **Read Task Content**: Read the task card details carefully, including all checklist items, acceptance criteria, and subtasks (if any).
+2. **Move to In Progress**: Before starting the actual work, update the task status and move the card to `in-progress`.
+3. **Handle Subtasks**: If the task contains subtasks, spawn subagents to help work on them concurrently.
+4. **Commit to Branch**: Perform the implementation. When finished, commit the changes to the specific branch designated by the task card (`branch` field).
+5. **Move to Ready for Review**: Once all implementation and checklist items are verified, move the task card status to `ready-for-review` and wait for human feedback.
+6. **Merge and Push**: Wait for the user's approval. If the user says "ผ่าน" (Passed) or explicitly approves, merge the branch into `develop` and push the changes.
+7. **Complete Task**: Finally, update the task card status to `done` (Completed).
+
+Do not skip any steps. In particular, always pause at `ready-for-review` before merging.
+
 ## Default Project Mapping
 
 Known Dev Flow project:

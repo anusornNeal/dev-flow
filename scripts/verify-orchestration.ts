@@ -29,12 +29,15 @@ const {
 } = await import('../src/server/routes/tasks.js');
 
 const {
+  createAgentRun,
   getActiveRunForTask,
   getLatestAgentRunForTask,
+  updateAgentRunStatus,
 } = await import('../src/server/repositories/agentRunRepository.js');
 
 const { saveProjects } = await import('../src/server/repositories/projectRepository.js');
 const { saveTasks } = await import('../src/server/repositories/taskRepository.js');
+const { isValidTransition } = await import('../src/lib/statusTransitions.js');
 const express = (await import('express')).default;
 
 async function waitFor(predicate: () => boolean, timeoutMs = 2000) {
@@ -288,5 +291,124 @@ try {
 } finally {
   await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
 }
+
+console.log('[verify] Testing backlog reset clears locks and cancels active runs...');
+assert.equal(isValidTransition('todo', 'backlog'), true);
+assert.equal(isValidTransition('in-progress', 'backlog'), true);
+assert.equal(isValidTransition('ready-for-review', 'backlog'), true);
+
+const resetState: AppState = {
+  tasksCache: [
+    {
+      id: 'reset-todo',
+      displayId: 'DVF-0099-A',
+      projectId: 'project-1',
+      status: 'todo',
+      agent: 'Codex',
+      model: 'GPT-5.5',
+      effort: 'medium',
+      title: 'Todo lock reset',
+      description: 'Moving to backlog should clear a stale queued lock.',
+      logs: [],
+    },
+    {
+      id: 'reset-progress',
+      displayId: 'DVF-0099-B',
+      projectId: 'project-1',
+      status: 'in-progress',
+      agent: 'Codex',
+      model: 'GPT-5.5',
+      effort: 'medium',
+      title: 'In-progress lock reset',
+      description: 'Moving to backlog should cancel the active run immediately.',
+      logs: [],
+    },
+    {
+      id: 'reset-review',
+      displayId: 'DVF-0099-C',
+      projectId: 'project-1',
+      status: 'ready-for-review',
+      agent: 'Codex',
+      model: 'GPT-5.5',
+      effort: 'medium',
+      title: 'Review lock reset',
+      description: 'Moving to backlog should clear any lingering active lock state.',
+      logs: [],
+    },
+    {
+      id: 'queue-sibling',
+      displayId: 'DVF-0099-D',
+      projectId: 'project-1',
+      status: 'todo',
+      agent: 'Codex',
+      model: 'GPT-5.5',
+      effort: 'medium',
+      title: 'Sibling todo card',
+      description: 'Backlog reset must not re-trigger Auto Work.',
+      logs: [],
+    },
+  ],
+  projectsCache: [{ id: 'project-1', name: 'p1', repoUrl: 'repo', localPath: repoPathWithSpaces }],
+  countersCache: {},
+  settingsCache: { autoWork: true, ngrokUrl: '', githubToken: '', jiraToken: '', jiraBaseUrl: '', jiraEmail: '' },
+  skillsRegistry: [],
+};
+const resetDeps: ApiRouteDeps = {
+  state: resetState,
+  writeAgentLog: () => {},
+};
+saveTasks(resetState);
+
+const queuedRun = createAgentRun({ taskId: 'reset-todo', projectId: 'project-1', agent: 'Codex', model: 'GPT-5.5', effort: 'medium' });
+const runningRun = createAgentRun({ taskId: 'reset-progress', projectId: 'project-1', agent: 'Codex', model: 'GPT-5.5', effort: 'medium' });
+updateAgentRunStatus(runningRun.id, 'running', { startedAt: new Date().toISOString() });
+const startingRun = createAgentRun({ taskId: 'reset-review', projectId: 'project-1', agent: 'Codex', model: 'GPT-5.5', effort: 'medium' });
+updateAgentRunStatus(startingRun.id, 'starting');
+saveTasks(resetState);
+
+const resetApp = express();
+resetApp.use(express.json());
+registerTaskRoutes(resetApp, resetDeps);
+const resetServer = http.createServer(resetApp);
+await new Promise<void>((resolve) => resetServer.listen(0, resolve));
+const resetAddress = resetServer.address();
+if (!resetAddress || typeof resetAddress === 'string') throw new Error('Failed to bind reset test server.');
+const resetBaseUrl = `http://127.0.0.1:${resetAddress.port}`;
+try {
+  const todoBacklog = await fetch(`${resetBaseUrl}/api/tasks/reset-todo`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...resetState.tasksCache[0], status: 'backlog' }),
+  });
+  assert.equal(todoBacklog.status, 200);
+
+  const progressBacklog = await fetch(`${resetBaseUrl}/api/tasks/reset-progress`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...resetState.tasksCache[1], status: 'backlog', emergency: true }),
+  });
+  assert.equal(progressBacklog.status, 200);
+
+  const reviewBacklog = await fetch(`${resetBaseUrl}/api/tasks/reset-review`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...resetState.tasksCache[2], status: 'backlog' }),
+  });
+  assert.equal(reviewBacklog.status, 200);
+} finally {
+  await new Promise<void>((resolve, reject) => resetServer.close((error) => error ? reject(error) : resolve()));
+}
+
+for (const taskId of ['reset-todo', 'reset-progress', 'reset-review']) {
+  const task = resetState.tasksCache.find((entry) => entry.id === taskId);
+  assert.ok(task);
+  assert.equal(task?.status, 'backlog');
+  assert.equal(task?.activeAgent, undefined);
+  assert.equal(getActiveRunForTask(taskId), null);
+  assert.equal(getLatestAgentRunForTask(taskId)?.status, 'cancelled');
+  assert.match(getLatestAgentRunForTask(taskId)?.errorMessage || '', /Manual reset|backlog/i);
+  assert.ok(task?.logs.some((entry: any) => /Manual reset: cleared active agent lock/i.test(entry.message)));
+}
+assert.equal(getLatestAgentRunForTask('queue-sibling'), null);
 
 console.log('[verify-orchestration] all assertions passed');

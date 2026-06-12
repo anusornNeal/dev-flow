@@ -26,82 +26,10 @@ function getSkillColumns() {
   return (db.pragma('table_info(skills)') as any[]).map((column) => column.name);
 }
 
-function humanizeSkillId(id: string) {
-  return id
-    .replace(/[-_]+/g, ' ')
-    .replace(/\b\w/g, (char: string) => char.toUpperCase());
-}
-
-function loadLegacySkillMetadata() {
-  if (!fs.existsSync(LEGACY_REGISTRY_BACKUP_FILE)) {
-    return new Map<string, { name: string; description: string }>();
-  }
-
-  try {
-    const registry = JSON.parse(fs.readFileSync(LEGACY_REGISTRY_BACKUP_FILE, 'utf8')) as Array<{ id: string; name: string; description: string }>;
-    return new Map(registry.map((item) => [item.id, { name: item.name, description: item.description || '' }]));
-  } catch (error) {
-    console.error('Failed to read legacy skill registry backup', error);
-    return new Map<string, { name: string; description: string }>();
-  }
-}
-
-function syncMasterSkillsFromFiles() {
-  if (!fs.existsSync(SKILLS_DIR)) {
-    return;
-  }
-
-  const legacyMetadata = loadLegacySkillMetadata();
-  const now = new Date().toISOString();
-  const skillFiles = fs.readdirSync(SKILLS_DIR)
-    .filter((fileName) => fileName.endsWith('.md'))
-    .map((fileName) => path.join(SKILLS_DIR, fileName));
-
-  const existingSkills = db.prepare('SELECT * FROM skills').all() as any[];
-  const existingSkillMap = new Map(existingSkills.map((skill) => [skill.id, skill]));
-  const upsertSkill = db.prepare(`
-    INSERT OR REPLACE INTO skills (id, name, description, isCustom, content, kind, isProtected, sourceType, sourcePath, createdAt, updatedAt)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-
-  const MASTER_SKILLS = new Set([
-    'playbook',
-    'schema',
-    'agent-task-prompt-template',
-    'antigravity-workflow',
-    'claude-workflow',
-    'codex-workflow'
-  ]);
-
-  db.transaction(() => {
-    for (const filePath of skillFiles) {
-      const id = path.basename(filePath, path.extname(filePath));
-      const existing = existingSkillMap.get(id);
-      const legacy = legacyMetadata.get(id);
-      const content = fs.readFileSync(filePath, 'utf8');
-      
-      const isMaster = MASTER_SKILLS.has(id);\n      if (!isMaster) continue;
-      
-      upsertSkill.run(
-        id,
-        existing?.name || legacy?.name || humanizeSkillId(id),
-        existing?.description || legacy?.description || '',
-        isMaster ? 0 : 1,
-        content,
-        isMaster ? 'master' : 'custom',
-        isMaster ? 1 : 0,
-        'repo-file',
-        filePath,
-        existing?.createdAt || now,
-        now,
-      );
-    }
-  })();
-}
 
 export function loadSkillsRegistry(state: AppState) {
   ensureLegacySkillsColumns();
-  syncMasterSkillsFromFiles();
+
   state.skillsRegistry = db.prepare('SELECT * FROM skills').all() as any[];
   state.skillsRegistry.forEach((skill) => {
     skill.isCustom = Boolean(skill.isCustom);

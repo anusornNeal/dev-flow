@@ -286,6 +286,54 @@ const migrations: Migration[] = [
       console.log('[migration] Added master/custom skill metadata columns');
     }
   }
+  , {
+    id: '004-seed-master-skills',
+    run: () => {
+      const SKILLS_DIR = require('path').join(process.cwd(), 'skills');
+      if (!require('fs').existsSync(SKILLS_DIR)) return;
+      
+      const skillFiles = require('fs').readdirSync(SKILLS_DIR).filter((f) => f.endsWith('.md'));
+      const MASTER_SKILLS = new Set([
+        'playbook',
+        'schema',
+        'agent-task-prompt-template',
+        'antigravity-workflow',
+        'claude-workflow',
+        'codex-workflow'
+      ]);
+
+      const now = new Date().toISOString();
+      const insertSkill = db.prepare('INSERT OR IGNORE INTO skills (id, name, description, isCustom, content, kind, isProtected, sourceType, sourcePath, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+
+      const humanizeSkillId = (id) => id.replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+
+      db.transaction(() => {
+        for (const fileName of skillFiles) {
+          const id = require('path').basename(fileName, '.md');
+          if (!MASTER_SKILLS.has(id)) continue;
+
+          const filePath = require('path').join(SKILLS_DIR, fileName);
+          const content = require('fs').readFileSync(filePath, 'utf8');
+          
+          insertSkill.run(
+            id,
+            humanizeSkillId(id),
+            '',
+            0,
+            content,
+            'master',
+            1,
+            'repo-file',
+            filePath,
+            now,
+            now
+          );
+        }
+      })();
+
+      console.log('[migration] Seeded master skills into SQLite');
+    }
+  }
 ];
 
 export function migrateJsonToSqlite() {

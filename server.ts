@@ -43,7 +43,7 @@ let countersCache: Record<string, number> = {};
 let skillsRegistry: any[] = [];
 function broadcast(_message: unknown) {}
 
-let settingsCache: { ngrokUrl: string; githubToken: string; jiraToken: string; jiraBaseUrl: string; jiraEmail: string } = { ngrokUrl: '', githubToken: '', jiraToken: '', jiraBaseUrl: '', jiraEmail: '' };
+let settingsCache: { ngrokUrl: string; githubToken: string; jiraToken: string; jiraBaseUrl: string; jiraEmail: string; autoWork: boolean } = { ngrokUrl: '', githubToken: '', jiraToken: '', jiraBaseUrl: '', jiraEmail: '', autoWork: false };
 
 const state: AppState = {
   get tasksCache() {

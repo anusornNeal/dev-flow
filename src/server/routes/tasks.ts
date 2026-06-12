@@ -128,6 +128,10 @@ function triggerTaskAgent(task: any, deps: ApiRouteDeps, routeLabel: string, ret
 
 function maybeTriggerTaskAgent(task: any, previousStatus: string | undefined, deps: ApiRouteDeps, routeLabel: string) {
   if (task.status !== 'todo' || previousStatus === 'todo') return;
+  if (!deps.state.settingsCache.autoWork) {
+    deps.writeAgentLog('INFO', `Auto Work is disabled. Task ${task.id} moved to todo but agent will not be triggered.`);
+    return;
+  }
   triggerTaskAgent(task, deps, routeLabel);
 }
 

@@ -10,6 +10,7 @@ export interface AppState {
     jiraToken: string;
     jiraBaseUrl: string;
     jiraEmail: string;
+    autoWork: boolean;
   };
   skillsRegistry: any[];
 }

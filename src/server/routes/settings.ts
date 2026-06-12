@@ -14,11 +14,12 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
       jiraTokenMasked: (deps.state.settingsCache.jiraToken?.length ?? 0) > 0,
       jiraBaseUrl: deps.state.settingsCache.jiraBaseUrl ?? '',
       jiraEmail: deps.state.settingsCache.jiraEmail ?? '',
+      autoWork: deps.state.settingsCache.autoWork ?? false,
     });
   });
 
   app.post('/api/settings', (req, res) => {
-    const { ngrokUrl, githubToken, jiraToken, jiraBaseUrl, jiraEmail } = req.body;
+    const { ngrokUrl, githubToken, jiraToken, jiraBaseUrl, jiraEmail, autoWork } = req.body;
 
     // Validate types
     if (ngrokUrl !== undefined && typeof ngrokUrl !== 'string') {
@@ -35,6 +36,9 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
     }
     if (jiraEmail !== undefined && typeof jiraEmail !== 'string') {
       return res.status(400).json({ error: 'jiraEmail must be a string' });
+    }
+    if (autoWork !== undefined && typeof autoWork !== 'boolean') {
+      return res.status(400).json({ error: 'autoWork must be a boolean' });
     }
 
     if (typeof ngrokUrl === 'string') {
@@ -55,6 +59,10 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
 
     if (typeof jiraEmail === 'string') {
       deps.state.settingsCache.jiraEmail = jiraEmail.trim();
+    }
+
+    if (typeof autoWork === 'boolean') {
+      deps.state.settingsCache.autoWork = autoWork;
     }
 
     saveSettings(deps.state);

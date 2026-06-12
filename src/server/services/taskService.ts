@@ -66,6 +66,9 @@ export function extractDesignImages(item: any, currentTask?: any): string[] | un
 
 export function resolveProjectIdFromRepo(state: AppState, item: any, req: any): string {
   if (item.projectId) {
+    if (item.projectId === 'project-default') {
+      throw new Error("Creating tasks in the default project is no longer allowed. Please provide a valid 'projectId'.");
+    }
     const found = state.projectsCache.find((project) => project.id === item.projectId);
     if (found) {
       return found.id;

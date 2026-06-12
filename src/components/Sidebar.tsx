@@ -290,7 +290,7 @@ export default function Sidebar({
                               <ExternalLink size={12} />
                             </a>
                             
-                            {project.id !== 'project-default' && (
+                            {true && (
                               <>
                                 <button
                                   onClick={() => {

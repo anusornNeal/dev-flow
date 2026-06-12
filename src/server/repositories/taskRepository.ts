@@ -26,7 +26,7 @@ export function generateDisplayId(state: AppState, projectId: string): string {
     prefix = project.taskIdPrefix;
   } else if (project && project.name) {
     prefix = project.name.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
-  } else if (projectId && projectId !== 'project-default') {
+  } else if (projectId) {
     prefix = projectId.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
   }
 

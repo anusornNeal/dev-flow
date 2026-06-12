@@ -50,7 +50,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           properties: {
             title: { type: "string", description: "Task title" },
             description: { type: "string", description: "Task description" },
-            projectId: { type: "string", description: "Project ID (defaults to project-default)" },
+            projectId: { type: "string", description: "Project ID " },
             status: { type: "string", description: "Task status: backlog, todo, in-progress, ready-for-review, done" },
           },
           required: ["title"],

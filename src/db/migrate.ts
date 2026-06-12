@@ -45,20 +45,7 @@ function finalizeLegacyMarker() {
   }
 }
 
-function ensureDefaultProjectExists() {
-  db.prepare(`
-    INSERT OR IGNORE INTO projects (id, name, repoUrl, description, createdAt, localPath, taskIdPrefix)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    'project-default',
-    'Developer Sandbox Repo',
-    'https://github.com/google/ai-studio',
-    'Auto-created during SQLite integrity repair.',
-    new Date().toISOString(),
-    null,
-    'TASK'
-  );
-}
+
 
 function getNextDisplayId(prefix: string, usedIds: Set<string>) {
   let counter = 1;
@@ -167,8 +154,6 @@ const migrations: Migration[] = [
   {
     id: '002-sqlite-integrity-repair-and-indexes',
     run: () => {
-      ensureDefaultProjectExists();
-
       const projectRows = db.prepare('SELECT id, name, taskIdPrefix FROM projects').all() as Array<{ id: string; name: string; taskIdPrefix?: string | null }>;
       const projectIds = new Set(projectRows.map((project) => project.id));
       const projectByName = new Map(projectRows.map((project) => [project.name.toLowerCase(), project.id]));
@@ -183,7 +168,7 @@ const migrations: Migration[] = [
           ? task.projectId
           : task.projectId && projectByName.has(task.projectId.toLowerCase())
             ? projectByName.get(task.projectId.toLowerCase())!
-            : 'project-default';
+            : null;
 
         const normalizedParentId = task.parentId && validTaskIds.has(task.parentId) && task.parentId !== task.id
           ? task.parentId

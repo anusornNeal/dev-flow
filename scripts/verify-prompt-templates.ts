@@ -40,4 +40,8 @@ const missingAgentContext = { ...mockContext, agent: 'non-existent' };
 const missingRender = renderPromptTemplate('default', missingAgentContext);
 assert.ok(!missingRender.usedSkills.includes('prompt.agent-specific.non-existent'));
 
+// Verify single-task rules are present and old loop wording is excluded
+assert.ok(renderResult.content.includes('Work only from this prompt'));
+assert.ok(!renderResult.content.includes('repeat this loop until no \'todo\' tasks remain'));
+
 console.log('[verify] Prompt template coverage passed!');

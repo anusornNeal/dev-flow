@@ -62,7 +62,7 @@ function cleanupStaleActiveRuns(deps: ApiRouteDeps) {
   }
 }
 
-function triggerTaskAgent(task: any, deps: ApiRouteDeps, routeLabel: string, retryOfRunId?: string | null) {
+export function triggerTaskAgent(task: any, deps: ApiRouteDeps, routeLabel: string, retryOfRunId?: string | null) {
   if (!task.agent) return { triggered: false, reason: 'Task has no assigned agent.' };
   if (!/^[a-zA-Z0-9-]+$/.test(task.agent) || !/^[a-zA-Z0-9-]+$/.test(task.id)) {
     deps.writeAgentLog('ERROR', `Blocked trigger due to invalid chars: agent=${task.agent} taskId=${task.id}`);
@@ -284,6 +284,40 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     applyRunSummaryToTask(task, getLatestAgentRunForTask(task.id));
     saveTasks(deps.state);
     return res.json({ success: true, cancelledCount, task, runs: listAgentRunsForTask(task.id) });
+  });
+
+  app.post('/api/tasks/:id/agent-runs/:runId/complete', (req, res) => {
+    loadTasks(deps.state);
+    const task = deps.state.tasksCache.find((entry) => entry.id === req.params.id || entry.displayId === req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+
+    const run = getActiveRunForTask(task.id) || getLatestAgentRunForTask(task.id);
+    if (!run || run.id !== req.params.runId) {
+       return res.status(404).json({ error: 'Run not found or not associated with task.' });
+    }
+
+    const success = req.body?.success !== false;
+    if (success) {
+      updateAgentRunStatus(run.id, 'succeeded');
+      task.status = 'ready-for-review';
+    } else {
+      updateAgentRunStatus(run.id, 'failed', { errorMessage: req.body?.errorMessage || 'Run failed' });
+    }
+
+    task.updatedAt = new Date().toISOString();
+    applyRunSummaryToTask(task, getLatestAgentRunForTask(task.id));
+    saveTasks(deps.state);
+
+    if (deps.state.settingsCache.autoWork) {
+      const eligibleTasks = deps.state.tasksCache.filter(t => t.projectId === task.projectId && t.status === 'todo' && t.agent);
+      eligibleTasks.sort((a, b) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime());
+      if (eligibleTasks.length > 0) {
+         triggerTaskAgent(eligibleTasks[0], deps, 'queue continuation');
+         saveTasks(deps.state);
+      }
+    }
+
+    return res.json({ success: true, task });
   });
 
   app.post('/api/tasks', (req, res) => {

@@ -35,3 +35,44 @@ This document describes the task execution flow in DevFlow, prioritizing a fresh
 - During the completion callback, if `autoWork` is enabled, DevFlow inspects the same project for the oldest eligible `todo` task assigned to an agent.
 - DevFlow triggers the next task natively, completely independent of the previous worker's session.
 - A new fresh process loop (Trigger -> Prompt -> Execution) starts.
+
+## 6. Model & Effort Resolution
+
+- **Launch-Time Binding**: `model` and `effort` constraints are read only once per task execution, directly at worker launch (inside `runner.ts`).
+- **Why not during the session?**: By locking them at process launch and ensuring a fresh session per task, workers cannot silently inherit or change reasoning effort or models mid-flow. This guarantees every single run acts strictly within its assigned bounds.
+
+## 7. Customizing Prompt Skills
+
+DevFlow's prompt pipeline can be modified without altering backend code.
+- **Default Pipeline Order**: Found in `config/prompt-pipeline.json`, typical order is: `prompt.header`, `prompt.task-context`, `prompt.agent-specific.{agent}`, `prompt.project-rules`, `prompt.footer`.
+- **Editing Templates**: To change instructions, simply open `skills/prompt.header.md` or any other target fragment and edit the markdown directly. The next run will immediately use your updated content.
+
+## 8. Manual Verification
+
+To manually verify the fresh session orchestration:
+1. Create two `todo` tasks under the same project.
+2. Set the first task to model `GPT-5.5` with effort `low`.
+3. Set the second task to model `GPT-5.5` with effort `xhigh`.
+4. Trigger the first task.
+5. In `.devflow/runs/`, you will see a new run directory containing `prompt.md` and `agent.log` for the first task.
+6. Verify the launch log states effort `low`.
+7. Mark the task complete so auto-work picks up the second task.
+8. Verify a separate run directory is created for the second task, and its launch log correctly outputs effort `xhigh`.
+
+## 9. Example Prompt Outline
+
+The final generated prompt passed to the agent includes standard instructions:
+```markdown
+# DEVFLOW TASK ASSIGNMENT
+You are working as an autonomous agent to complete a task.
+
+## TASK CONTEXT
+Task: Implement User Login
+...
+## PROJECT RULES
+...
+## EXECUTION RULES
+1. Work only from this prompt.
+2. Do not change model or reasoning effort inside the session. DevFlow will start a new session for the next task.
+3. Finish your work and exit cleanly.
+```

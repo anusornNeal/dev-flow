@@ -59,14 +59,14 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
     setSaveStatus('idle');
     try {
       const payload: Record<string, unknown> = { ngrokUrl, jiraBaseUrl, jiraEmail, agentExecutionMode };
-      if (showGithubToken) {
+      if (showGithubToken && githubToken.trim() !== '') {
         payload.githubToken = githubToken;
       } else if (clearGithubToken) {
         payload.githubToken = '';
         payload.clearGithubToken = true;
       }
 
-      if (showJiraToken) {
+      if (showJiraToken && jiraToken.trim() !== '') {
         payload.jiraToken = jiraToken;
       } else if (clearJiraToken) {
         payload.jiraToken = '';
@@ -84,8 +84,25 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
         throw new Error(err.error ?? 'Save failed');
       }
       setSaveStatus('success');
-      setClearGithubToken(false);
-      setClearJiraToken(false);
+      if (showGithubToken && githubToken.trim() !== '') {
+        setGithubTokenMasked(true);
+        setShowGithubToken(false);
+        setGithubToken('');
+      }
+      if (clearGithubToken) {
+        setGithubTokenMasked(false);
+        setClearGithubToken(false);
+      }
+      
+      if (showJiraToken && jiraToken.trim() !== '') {
+        setJiraTokenMasked(true);
+        setShowJiraToken(false);
+        setJiraToken('');
+      }
+      if (clearJiraToken) {
+        setJiraTokenMasked(false);
+        setClearJiraToken(false);
+      }
       setTimeout(() => setSaveStatus('idle'), 3000);
     } catch (e: any) {
       setErrorMsg(e.message ?? 'Failed to save');
@@ -188,29 +205,31 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                 <div className="flex items-center justify-between">
                   <label className="text-xs font-bold text-[#685547]">GitHub Access Token</label>
                   <div className="flex gap-2">
-                    {githubTokenMasked && !showGithubToken && (
+                    {githubTokenMasked && !showGithubToken && !clearGithubToken && (
                       <button
                         onClick={() => {
                           setClearGithubToken(true);
-                          setGithubTokenMasked(false);
                         }}
                         className="text-[10px] text-red-500 font-bold hover:underline"
                       >
                         Remove
                       </button>
                     )}
-                    <button
-                      onClick={() => {
-                        setShowGithubToken(v => !v);
-                        if (!showGithubToken) {
-                          setGithubToken('');
-                          setClearGithubToken(false);
-                        }
-                      }}
-                      className="text-[10px] text-[#d89745] font-bold hover:underline"
-                    >
-                      {showGithubToken ? 'Cancel edit' : githubTokenMasked ? 'Replace' : 'Add'}
-                    </button>
+                    {!clearGithubToken && (
+                      <button
+                        onClick={() => {
+                          if (showGithubToken) {
+                            setShowGithubToken(false);
+                            setGithubToken('');
+                          } else {
+                            setShowGithubToken(true);
+                          }
+                        }}
+                        className="text-[10px] text-[#d89745] font-bold hover:underline"
+                      >
+                        {showGithubToken ? 'Cancel' : githubTokenMasked ? 'Replace' : 'Add'}
+                      </button>
+                    )}
                   </div>
                 </div>
                 <p className="text-[11px] text-[#8a725f] font-mono -mt-1">
@@ -219,11 +238,18 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                 {showGithubToken ? (
                   <input
                     type="password"
+                    name="githubToken_devflow_prevent_autofill"
+                    autoComplete="new-password"
                     value={githubToken}
                     onChange={e => setGithubToken(e.target.value)}
                     placeholder="ghp_..."
                     className="w-full px-3 py-2 text-sm font-mono rounded-lg border border-[#ddd0ba] bg-white text-[#3e3129] focus:outline-none focus:ring-2 focus:ring-[#d89745]/50 focus:border-[#d89745] transition"
                   />
+                ) : clearGithubToken ? (
+                  <div className="px-3 py-2 rounded-lg border border-[#fecaca] bg-[#fff0f0] text-[11px] text-[#991b1b] font-mono flex items-center justify-between">
+                    Pending removal (Save to apply)
+                    <button onClick={() => setClearGithubToken(false)} className="underline hover:text-[#7f1d1d] font-bold">Undo</button>
+                  </div>
                 ) : (
                   <div className="px-3 py-2 rounded-lg border border-[#e5d4bb] bg-[#faf7f0] text-[11px] text-[#b89b82] font-mono">
                     {githubTokenMasked
@@ -269,39 +295,48 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                   <div className="flex items-center justify-between">
                     <label className="text-[10px] font-bold text-[#8a725f] uppercase tracking-wider">Access Token</label>
                     <div className="flex gap-2">
-                      {jiraTokenMasked && !showJiraToken && (
+                      {jiraTokenMasked && !showJiraToken && !clearJiraToken && (
                         <button
                           onClick={() => {
                             setClearJiraToken(true);
-                            setJiraTokenMasked(false);
                           }}
                           className="text-[10px] text-red-500 font-bold hover:underline"
                         >
                           Remove
                         </button>
                       )}
-                      <button
-                        onClick={() => {
-                          setShowJiraToken(v => !v);
-                          if (!showJiraToken) {
-                            setJiraToken('');
-                            setClearJiraToken(false);
-                          }
-                        }}
-                        className="text-[10px] text-[#d89745] font-bold hover:underline"
-                      >
-                        {showJiraToken ? 'Cancel edit' : jiraTokenMasked ? 'Replace' : 'Add'}
-                      </button>
+                      {!clearJiraToken && (
+                        <button
+                          onClick={() => {
+                            if (showJiraToken) {
+                              setShowJiraToken(false);
+                              setJiraToken('');
+                            } else {
+                              setShowJiraToken(true);
+                            }
+                          }}
+                          className="text-[10px] text-[#d89745] font-bold hover:underline"
+                        >
+                          {showJiraToken ? 'Cancel' : jiraTokenMasked ? 'Replace' : 'Add'}
+                        </button>
+                      )}
                     </div>
                   </div>
                   {showJiraToken ? (
                     <input
                       type="password"
+                      name="jiraToken_devflow_prevent_autofill"
+                      autoComplete="new-password"
                       value={jiraToken}
                       onChange={e => setJiraToken(e.target.value)}
                       placeholder="Jira token..."
                       className="w-full px-3 py-2 text-sm font-mono rounded-lg border border-[#ddd0ba] bg-white text-[#3e3129] focus:outline-none focus:ring-2 focus:ring-[#d89745]/50 focus:border-[#d89745] transition"
                     />
+                  ) : clearJiraToken ? (
+                    <div className="px-3 py-2 rounded-lg border border-[#fecaca] bg-[#fff0f0] text-[11px] text-[#991b1b] font-mono flex items-center justify-between">
+                      Pending removal (Save to apply)
+                      <button onClick={() => setClearJiraToken(false)} className="underline hover:text-[#7f1d1d] font-bold">Undo</button>
+                    </div>
                   ) : (
                     <div className="px-3 py-2 rounded-lg border border-[#e5d4bb] bg-[#faf7f0] text-[11px] text-[#b89b82] font-mono">
                       {jiraTokenMasked

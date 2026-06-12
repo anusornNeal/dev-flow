@@ -20,6 +20,7 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
   });
 
   app.post('/api/settings', (req, res) => {
+    console.log('--- POST /api/settings PAYLOAD ---', JSON.stringify(req.body));
     const { ngrokUrl, githubToken, jiraToken, jiraBaseUrl, jiraEmail, autoWork, agentExecutionMode, clearGithubToken, clearJiraToken } = req.body;
 
     // Validate types
@@ -59,15 +60,11 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
     }
 
     if (typeof githubToken === 'string') {
-      if (githubToken !== '' || clearGithubToken === true) {
-        deps.state.settingsCache.githubToken = githubToken;
-      }
+      deps.state.settingsCache.githubToken = githubToken.trim();
     }
 
     if (typeof jiraToken === 'string') {
-      if (jiraToken !== '' || clearJiraToken === true) {
-        deps.state.settingsCache.jiraToken = jiraToken;
-      }
+      deps.state.settingsCache.jiraToken = jiraToken.trim();
     }
 
     if (typeof jiraBaseUrl === 'string') {

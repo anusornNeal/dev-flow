@@ -159,6 +159,9 @@ const migrations: Migration[] = [
       const projectByName = new Map(projectRows.map((project) => [project.name.toLowerCase(), project.id]));
       const projectById = new Map(projectRows.map((project) => [project.id, project]));
       const tasks = db.prepare('SELECT id, displayId, projectId, parentId FROM tasks ORDER BY createdAt, id').all() as TaskRow[];
+      if (tasks.length > 0) {
+        ensureDefaultProjectExists();
+      }
       const validTaskIds = new Set(tasks.map((task) => task.id));
       const usedDisplayIds = new Set<string>();
       const updateTask = db.prepare('UPDATE tasks SET displayId = ?, projectId = ?, parentId = ? WHERE id = ?');

@@ -56,3 +56,11 @@ Use these when you want the existing one-click local startup behavior instead of
 - Project skill markdown lives under [`skills/`](C:\Users\tatar\Projects\dev-flow\skills).
 - Runtime skill data should be read through the app/API and stored in SQLite, not assumed to come directly from markdown files after import.
 - Skill markdown content should be preserved exactly when imported or displayed.
+
+## Backup and Restore
+
+- **Initial Seed**: On fresh SQLite DB creation, only built-in master skills are seeded. No custom skills or sample data are initialized.
+- **Backup**: Run \
+pm run backup\ to create a timestamped backup of the current DB in \data/\.
+- **Restore**: Run \
+pm run restore <path-to-backup-db>\. It requires explicit confirmation and creates a safety backup of your current DB before restoring.

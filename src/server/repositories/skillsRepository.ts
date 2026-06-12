@@ -80,7 +80,7 @@ function syncMasterSkillsFromFiles() {
       const legacy = legacyMetadata.get(id);
       const content = fs.readFileSync(filePath, 'utf8');
       
-      const isMaster = MASTER_SKILLS.has(id);
+      const isMaster = MASTER_SKILLS.has(id);\n      if (!isMaster) continue;
       
       upsertSkill.run(
         id,

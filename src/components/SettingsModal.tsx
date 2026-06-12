@@ -381,17 +381,17 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
 
             {/* Export Data */}
             <div className="pt-4 mt-2 border-t border-[#ebdcb9] flex flex-col gap-2">
-              <div className="flex items-center justify-between">
-                <div>
+              <div className="flex flex-wrap items-start sm:items-center justify-between gap-4">
+                <div className="flex-1 min-w-[240px]">
                   <label className="flex items-center gap-1.5 text-sm font-extrabold text-[#534135]">
                     <Database size={14} className="text-[#d89745]" />
                     Export Data
                   </label>
-                  <p className="text-[11px] text-[#8a725f] font-mono mt-0.5">
+                  <p className="text-[11px] text-[#8a725f] font-mono mt-0.5 leading-relaxed">
                     Download a portable backup of your DevFlow data (projects, tasks, skills) to migrate to another machine. Secrets are excluded.
                   </p>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2 sm:justify-end">
                   <button
                     onClick={() => fileInputRef.current?.click()}
                     type="button"

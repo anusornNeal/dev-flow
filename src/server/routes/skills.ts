@@ -1,3 +1,4 @@
+import fs from 'fs';
 import type express from 'express';
 import type { ApiRouteDeps } from '../types';
 import { loadSkillsRegistry, saveSkillsRegistry } from '../repositories/skillsRepository';
@@ -76,7 +77,6 @@ export function registerSkillRoutes(app: express.Express, deps: ApiRouteDeps) {
       return res.status(403).json({ error: 'Cannot delete master skills' });
     }
 
-    const fs = require('fs');
     if (skill.sourcePath && fs.existsSync(skill.sourcePath)) {
       try { fs.unlinkSync(skill.sourcePath); } catch (e) { console.error('Failed to delete file', e); }
     } else if (skill.filePath && fs.existsSync(skill.filePath)) {

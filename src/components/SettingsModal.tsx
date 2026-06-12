@@ -137,7 +137,8 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
       }
 
       setImportStatus('success');
-      setImportMsg('Import completed. Please restart DevFlow.');
+      const countsStr = data.counts ? ` (Projects: ${data.counts.projects || 0}, Tasks: ${data.counts.tasks || 0})` : '';
+      setImportMsg(`Import completed${countsStr}. Please restart DevFlow.`);
     } catch (err: any) {
       setImportStatus('error');
       setImportMsg(err.message ?? 'Failed to import backup');

@@ -152,8 +152,9 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
       // 1. Save uploaded file to temp path
       fs.writeFileSync(tempFile, req.body);
 
-      // 2. Validate the uploaded database
+      // 2. Validate the uploaded database and get row counts
       let isValid = false;
+      const counts: Record<string, number> = {};
       try {
         const tempDb = new Database(tempFile);
         
@@ -163,6 +164,16 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
         const tableNames = tables.map(t => t.name);
         
         isValid = requiredTables.every(t => tableNames.includes(t));
+        
+        if (isValid) {
+          counts.projects = tempDb.prepare('SELECT COUNT(*) AS c FROM projects').get().c;
+          counts.tasks = tempDb.prepare('SELECT COUNT(*) AS c FROM tasks').get().c;
+          counts.skills = tempDb.prepare('SELECT COUNT(*) AS c FROM skills').get().c;
+          counts.settings = tempDb.prepare('SELECT COUNT(*) AS c FROM settings').get().c;
+          counts.agent_runs = tempDb.prepare("SELECT COUNT(*) AS c FROM sqlite_master WHERE type='table' AND name='agent_runs'").get().c > 0 
+            ? tempDb.prepare('SELECT COUNT(*) AS c FROM agent_runs').get().c 
+            : 0;
+        }
         tempDb.close();
       } catch (err) {
         console.error('Validation failed:', err);
@@ -179,8 +190,17 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
         await db.backup(safetyBackup);
       }
 
-      // 4. Replace current DB
+      // 4. Safely replace current DB
+      // Close active connection to release locks
+      try { db.close(); } catch (e) { /* ignore */ }
+      
       fs.copyFileSync(tempFile, targetDbFile);
+      
+      // Remove stale WAL and SHM files
+      const walFile = targetDbFile + '-wal';
+      const shmFile = targetDbFile + '-shm';
+      if (fs.existsSync(walFile)) fs.unlinkSync(walFile);
+      if (fs.existsSync(shmFile)) fs.unlinkSync(shmFile);
 
       // Clean up temp file
       if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
@@ -188,7 +208,8 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
       res.json({
         success: true,
         restartRequired: true,
-        safetyBackupPath: safetyBackup
+        safetyBackupPath: safetyBackup,
+        counts
       });
     } catch (error: any) {
       console.error('Import failed:', error);

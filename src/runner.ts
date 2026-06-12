@@ -225,19 +225,21 @@ function main() {
 
   if (launchScriptPath) {
     finalCmd = 'cmd.exe';
-    finalArgs = ['/c', 'start', `"${config.name} Agent"`, '/d', cwd, 'cmd.exe', '/k', launchScriptPath];
+    finalArgs = ['/c', 'start', '/wait', `"${config.name} Agent"`, '/d', cwd, 'cmd.exe', '/k', launchScriptPath];
   } else if (config.launchStyle === 'start') {
     finalCmd = 'cmd.exe';
-    finalArgs = ['/c', 'start', `"${config.name} Agent"`, '/d', cwd, executable, ...spawnArgs];
+    finalArgs = ['/c', 'start', '/wait', `"${config.name} Agent"`, '/d', cwd, executable, ...spawnArgs];
   } else if (config.launchStyle === 'cmd_k') {
     finalCmd = 'cmd.exe';
-    finalArgs = ['/c', 'start', `"${config.name} Agent"`, '/d', cwd, 'cmd.exe', '/k', executable, ...spawnArgs];
+    finalArgs = ['/c', 'start', '/wait', `"${config.name} Agent"`, '/d', cwd, 'cmd.exe', '/k', executable, ...spawnArgs];
   } else {
     console.error(`[runner] Unknown launchStyle: ${config.launchStyle}`);
     process.exit(1);
   }
 
   appendRunnerLog(logPath, buildLaunchMetadataBlock(launchPlan).trim());
+  appendRunnerLog(logPath, `runId=${runId || 'none'}`);
+  appendRunnerLog(logPath, `executionMode=${executionMode}`);
   appendRunnerLog(logPath, `cwd=${cwd}`);
   appendRunnerLog(logPath, `resolvedExecutable=${executable}`);
   appendRunnerLog(logPath, `argvPreview=${[finalCmd, ...finalArgs].join(' ')}`);
@@ -245,15 +247,28 @@ function main() {
   appendRunnerLog(logPath, `launchScriptPath=${launchScriptPath || 'none'}`);
 
   const child = spawn(finalCmd, finalArgs, {
-    detached: true,
+    detached: false,
     stdio: 'ignore',
     windowsVerbatimArguments: true,
     env: spawnEnv
   });
 
-  child.unref();
-  appendRunnerLog(logPath, `Runner handed off ${config.name} for task ${taskId}`);
-  console.log(`[runner] Trigger dispatched successfully.`);
+  console.log(`[runner] Trigger dispatched successfully. Waiting for agent...`);
+
+  child.on('exit', async (code) => {
+    appendRunnerLog(logPath, `Runner exited with code ${code}`);
+    try {
+      const success = code === 0;
+      await fetch(`${apiBaseUrl}/api/tasks/${taskId}/agent-runs/${runId}/complete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ success })
+      });
+      appendRunnerLog(logPath, `Reported completion to DevFlow.`);
+    } catch (e: any) {
+      appendRunnerLog(logPath, `Failed to report completion: ${e.message}`);
+    }
+  });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

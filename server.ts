@@ -14,7 +14,6 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { execFile } from 'child_process';
 import db from './src/db/index';
-import { migrateJsonToSqlite } from './src/db/migrate';
 import { TASK_SCHEMA_DEF, VALID_AGENTS, VALID_EFFORTS, VALID_MODELS } from './src/server/constants';
 import { saveProjects as persistProjects, loadProjects as hydrateProjects } from './src/server/repositories/projectRepository';
 import { saveSettings as persistSettings, loadSettings as hydrateSettings } from './src/server/repositories/settingsRepository';
@@ -24,14 +23,8 @@ import { registerApiRoutes } from './src/server/routes/registerApiRoutes';
 import { getAgentTaskContext, validateAgentParams } from './src/server/services/taskService';
 import type { AppState } from './src/server/types';
 
-migrateJsonToSqlite();
-
 // Hardcoded seed array matching our beautiful mobile tasks
 const SEED_TASKS: any[] = [];
-
-const DATA_FILE = path.join(process.cwd(), 'tasks.json');
-const PROJECTS_FILE = path.join(process.cwd(), 'projects.json');
-const COUNTERS_FILE = path.join(process.cwd(), 'counters.json');
 const AGENT_LOG_FILE = path.join(process.cwd(), 'agent-trigger.log');
 
 // Write a timestamped entry to the agent trigger log file

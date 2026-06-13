@@ -224,6 +224,9 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
                 <span className="leading-none mt-[1px]">{completedSteps}/{totalSteps}</span>
               </span>
             )}
+
+            {/* Prompt Template Quick Action */}
+            <CopyTemplateButton task={task} variant="icon" className="!p-0.5 !rounded hover:!bg-[#ebdcb9]/30 dark:hover:!bg-[#584a3b]/30 shrink-0 !text-[#8a725f] dark:!text-[#f3eadf] !border-transparent !bg-transparent" />
             
             {/* External Links */}
             {task.specUrl && (

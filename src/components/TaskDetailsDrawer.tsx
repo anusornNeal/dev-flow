@@ -1091,7 +1091,7 @@ export default function TaskDetailsDrawer({
                       <button
                         type="button"
                         onClick={() => setShowAllSubtasks(true)}
-                        className="text-[10px] font-mono text-[#a47a32] dark:text-[#d6b56d] hover:text-[#8a6020] dark:hover:text-[#e0a070] dark:text-[#d6b56d] font-bold transition-colors cursor-pointer pl-1"
+                        className="w-full text-center text-[10px] font-mono text-[#a47a32] dark:text-[#d6b56d] hover:text-[#8a6020] dark:hover:text-[#e0a070] font-bold transition-colors cursor-pointer pl-1"
                       >
                         show {subTasks.length - 4} more ↓
                       </button>
@@ -1100,7 +1100,7 @@ export default function TaskDetailsDrawer({
                       <button
                         type="button"
                         onClick={() => setShowAllSubtasks(false)}
-                        className="text-[10px] font-mono text-[#a47a32] dark:text-[#d6b56d] hover:text-[#8a6020] dark:hover:text-[#e0a070] dark:text-[#d6b56d] font-bold transition-colors cursor-pointer pl-1"
+                        className="w-full text-center text-[10px] font-mono text-[#a47a32] dark:text-[#d6b56d] hover:text-[#8a6020] dark:hover:text-[#e0a070] font-bold transition-colors cursor-pointer pl-1"
                       >
                         show less ↑
                       </button>
@@ -1146,7 +1146,7 @@ export default function TaskDetailsDrawer({
                       <button
                         type="button"
                         onClick={() => setShowAllFiles(true)}
-                        className="text-[10px] font-mono text-[#a47a32] dark:text-[#d6b56d] hover:text-[#8a6020] dark:hover:text-[#e0a070] dark:text-[#d6b56d] font-bold transition-colors cursor-pointer pl-1"
+                        className="w-full text-center text-[10px] font-mono text-[#a47a32] dark:text-[#d6b56d] hover:text-[#8a6020] dark:hover:text-[#e0a070] font-bold transition-colors cursor-pointer pl-1"
                       >
                         show {task.targetFiles.length - 3} more ↓
                       </button>
@@ -1155,7 +1155,7 @@ export default function TaskDetailsDrawer({
                       <button
                         type="button"
                         onClick={() => setShowAllFiles(false)}
-                        className="text-[10px] font-mono text-[#a47a32] dark:text-[#d6b56d] hover:text-[#8a6020] dark:hover:text-[#e0a070] dark:text-[#d6b56d] font-bold transition-colors cursor-pointer pl-1"
+                        className="w-full text-center text-[10px] font-mono text-[#a47a32] dark:text-[#d6b56d] hover:text-[#8a6020] dark:hover:text-[#e0a070] font-bold transition-colors cursor-pointer pl-1"
                       >
                         show less ↑
                       </button>
@@ -1198,7 +1198,7 @@ export default function TaskDetailsDrawer({
                       <button
                         type="button"
                         onClick={() => setShowAllChecklist(true)}
-                        className="text-[10px] font-mono text-[#a47a32] dark:text-[#d6b56d] hover:text-[#8a6020] dark:hover:text-[#e0a070] dark:text-[#d6b56d] font-bold transition-colors cursor-pointer pl-1"
+                        className="w-full text-center text-[10px] font-mono text-[#a47a32] dark:text-[#d6b56d] hover:text-[#8a6020] dark:hover:text-[#e0a070] font-bold transition-colors cursor-pointer pl-1"
                       >
                         show {task.checklist.length - 5} more ↓
                       </button>
@@ -1207,7 +1207,7 @@ export default function TaskDetailsDrawer({
                       <button
                         type="button"
                         onClick={() => setShowAllChecklist(false)}
-                        className="text-[10px] font-mono text-[#a47a32] dark:text-[#d6b56d] hover:text-[#8a6020] dark:hover:text-[#e0a070] dark:text-[#d6b56d] font-bold transition-colors cursor-pointer pl-1"
+                        className="w-full text-center text-[10px] font-mono text-[#a47a32] dark:text-[#d6b56d] hover:text-[#8a6020] dark:hover:text-[#e0a070] font-bold transition-colors cursor-pointer pl-1"
                       >
                         show less ↑
                       </button>

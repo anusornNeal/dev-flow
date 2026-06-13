@@ -428,10 +428,12 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
   });
 
   app.get('/api/tasks', (_req, res) => {
+    cleanupStaleActiveRuns(deps);
     res.json(deps.state.tasksCache);
   });
 
   app.get('/api/tasks/:id/agent-context', (req, res) => {
+    cleanupStaleActiveRuns(deps);
     loadTasks(deps.state);
     const includeLogs = req.query.includeLogs === 'true' || req.query.mode === 'full' || req.query.mode === 'debug';
     const context = getAgentTaskContext(deps.state, req.params.id, includeLogs);
@@ -440,6 +442,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
   });
 
   app.get('/api/tasks/:id/prompt', (req, res) => {
+    cleanupStaleActiveRuns(deps);
     loadTasks(deps.state);
     const includeLogs = req.query.includeLogs === 'true' || req.query.mode === 'full' || req.query.mode === 'debug';
     const context = getAgentTaskContext(deps.state, req.params.id, includeLogs);
@@ -461,6 +464,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
   });
 
   app.get('/api/tasks/:id/agent-runs', (req, res) => {
+    cleanupStaleActiveRuns(deps);
     loadTasks(deps.state);
     const task = deps.state.tasksCache.find((entry) => entry.id === req.params.id || entry.displayId === req.params.id);
     if (!task) return res.status(404).json({ error: 'Task not found' });
@@ -468,6 +472,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
   });
 
   app.get('/api/tasks/:id/agent-runs/:runId/history', (req, res) => {
+    cleanupStaleActiveRuns(deps);
     loadTasks(deps.state);
     const task = deps.state.tasksCache.find((entry) => entry.id === req.params.id || entry.displayId === req.params.id);
     if (!task) return res.status(404).json({ error: 'Task not found' });

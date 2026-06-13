@@ -578,4 +578,51 @@ for (const taskId of ['reset-todo', 'reset-progress', 'reset-review']) {
 }
 assert.equal(getLatestAgentRunForTask('queue-sibling'), null);
 
+console.log('[verify] Testing stale runs reconcile during normal reads...');
+const staleReadState: AppState = {
+  tasksCache: [
+    {
+      id: 'stale-read-task',
+      displayId: 'DVF-0112-X',
+      projectId: 'project-1',
+      status: 'in-progress',
+      agent: 'Codex',
+      model: 'GPT-5.5',
+      effort: 'medium',
+      title: 'Stale read cleanup',
+      description: 'Reading task state should cancel stale active runs.',
+      logs: [],
+    },
+  ],
+  projectsCache: [{ id: 'project-1', name: 'p1', repoUrl: 'repo', localPath: repoPathWithSpaces }],
+  countersCache: {},
+  settingsCache: { autoWork: false, ngrokUrl: '', githubToken: '', jiraToken: '', jiraBaseUrl: '', jiraEmail: '' },
+  skillsRegistry: [],
+};
+const staleReadDeps: ApiRouteDeps = {
+  state: staleReadState,
+  writeAgentLog: () => {},
+};
+saveTasks(staleReadState);
+const staleRun = createAgentRun({ taskId: 'stale-read-task', projectId: 'project-1', agent: 'Codex', model: 'GPT-5.5', effort: 'medium' });
+updateAgentRunStatus(staleRun.id, 'running', { startedAt: '2026-06-12T00:00:00.000Z' });
+const staleReadApp = express();
+staleReadApp.use(express.json());
+registerTaskRoutes(staleReadApp, staleReadDeps);
+const staleReadServer = http.createServer(staleReadApp);
+await new Promise<void>((resolve) => staleReadServer.listen(0, resolve));
+const staleReadAddress = staleReadServer.address();
+if (!staleReadAddress || typeof staleReadAddress === 'string') throw new Error('Failed to bind stale read server.');
+const staleReadBaseUrl = `http://127.0.0.1:${staleReadAddress.port}`;
+try {
+  const staleReadResponse = await fetch(`${staleReadBaseUrl}/api/tasks`);
+  assert.equal(staleReadResponse.status, 200);
+  const staleReadTasks = await staleReadResponse.json();
+  const staleReadTask = staleReadTasks.find((entry: any) => entry.id === 'stale-read-task');
+  assert.equal(staleReadTask.latestAgentRun.status, 'cancelled');
+  assert.match(staleReadTask.latestAgentRun.errorMessage || '', /stale active run cancelled/i);
+} finally {
+  await new Promise<void>((resolve, reject) => staleReadServer.close((error) => error ? reject(error) : resolve()));
+}
+
 console.log('[verify-orchestration] all assertions passed');

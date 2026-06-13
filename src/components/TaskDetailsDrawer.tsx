@@ -304,7 +304,7 @@ export default function TaskDetailsDrawer({
       <div className="fixed inset-0" onClick={onClose} />
 
       {/* Centered Spec Sheet Modal Container */}
-      <div className="bg-[#fcf9f4] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] w-full max-w-2xl h-[85vh] rounded-3xl shadow-2xl relative z-10 overflow-hidden flex flex-col justify-between font-sans">
+      <div className="bg-[#fcf9f4] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] w-full max-w-3xl h-[85vh] rounded-3xl shadow-2xl relative z-10 overflow-hidden flex flex-col justify-between font-sans">
         
         {/* Custom Header bar */}
         <div className="p-5 border-b border-[#ebdcb9] dark:border-[#584a3b] bg-[#ebdcb9]/40 dark:bg-[#584a3b]/40 flex items-center justify-between font-mono text-[#5c493c] dark:text-[#f3eadf]">
@@ -366,7 +366,7 @@ export default function TaskDetailsDrawer({
         </div>
 
         {/* Scrollable spec sheets details */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-6 scrollbar-thin">
+        <div className="flex-1 overflow-y-auto p-6 space-y-4 scrollbar-thin">
           
           {/* Parent Context Banner */}
           {parentTask && (
@@ -737,7 +737,7 @@ export default function TaskDetailsDrawer({
             </div>
           ) : (
             /* ================= PREVIEW / VIEW MODE ================= */
-            <div className="space-y-6 text-[#5c493c] dark:text-[#f3eadf]">
+            <div className="space-y-4 text-[#5c493c] dark:text-[#f3eadf]">
               <div className="space-y-2">
                 <h2 className="text-sm font-extrabold text-[#3a2f26] dark:text-[#f3eadf] font-sans tracking-tight leading-snug">
                   {task.title}

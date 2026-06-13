@@ -170,10 +170,7 @@ export default function Sidebar({
           <div className="flex items-center gap-2.5 min-w-0 flex-1">
             <Sparkles size={15} className="text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d] shrink-0" />
             <div className="min-w-0 flex-1">
-              <p className="text-[9px] text-[#8C7565] dark:text-[#f3eadf] font-bold tracking-wider uppercase flex items-center gap-1.5">
-                ACTIVE WORKSPACE
-              </p>
-              <p className="text-[11px] font-extrabold text-[#534135] dark:text-[#f3eadf] truncate">
+              <p className="text-[13px] font-extrabold text-[#534135] dark:text-[#f3eadf] truncate">
                 {projects.find(p => p.id === activeProjectId)?.name || 'Developer Sandbox Repo'}
               </p>
               {projects.find(p => p.id === activeProjectId)?.repoUrl && (

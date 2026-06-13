@@ -282,26 +282,32 @@ export default function TemplateModal({ projectId, onClose }: TemplateModalProps
              {previewContent !== null ? (
                 <div className="absolute inset-0 p-6 overflow-y-auto space-y-4">
                   {previewSections && previewSections.length > 0 ? (
-                    previewSections.map((sec, idx) => (
-                      <div key={idx} className="border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl overflow-hidden shadow-sm flex flex-col">
-                        <div className="bg-[#f4ebd9] dark:bg-[#292119] px-4 py-2 border-b border-[#ebdcb9] dark:border-[#584a3b] font-mono text-xs font-bold text-[#d89745] dark:text-[#e0a070]">
-                          {sec.skillId}
+                    previewSections.map((sec, idx) => {
+                      const sectionMeta = sections.find(s => s.id === sec.skillId);
+                      const orderStr = sectionMeta ? String(sectionMeta.order).padStart(2, '0') : String(idx + 1).padStart(2, '0');
+                      
+                      return (
+                        <div key={idx} className="flex flex-col gap-2">
+                          <div className="font-mono text-sm font-bold text-[#534135] dark:text-[#f3eadf] flex items-center gap-2">
+                            <span className="text-[#d89745] dark:text-[#e0a070]">{orderStr}</span>
+                            {sec.skillId}
+                          </div>
+                          <div className="border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl overflow-hidden shadow-sm bg-[#fffdfa] dark:bg-[#1e1914] min-h-[60px] p-4">
+                            {sec.isEmpty ? (
+                              <div className="text-center text-[#8C7565] dark:text-[#8c7463] font-mono text-xs italic py-4 opacity-60">
+                                Empty in preview
+                              </div>
+                            ) : (
+                              <div className="prose prose-sm prose-orange max-w-none prose-headings:font-extrabold prose-a:text-[#d89745] dark:prose-invert dark:prose-headings:text-[#e0a070] dark:text-[#f3eadf]">
+                                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                  {sec.content}
+                                </ReactMarkdown>
+                              </div>
+                            )}
+                          </div>
                         </div>
-                        <div className="p-4 bg-[#fffdfa] dark:bg-[#1e1914]">
-                          {sec.isEmpty ? (
-                            <div className="text-center text-[#8C7565] dark:text-[#8c7463] font-mono text-xs italic py-2 opacity-60">
-                              Empty in preview
-                            </div>
-                          ) : (
-                            <div className="prose prose-sm prose-orange max-w-none prose-headings:font-extrabold prose-a:text-[#d89745] dark:prose-invert dark:prose-headings:text-[#e0a070] dark:text-[#f3eadf]">
-                              <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                {sec.content}
-                              </ReactMarkdown>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    ))
+                      );
+                    })
                   ) : (
                     <div className="prose prose-sm prose-orange max-w-none prose-headings:font-extrabold prose-a:text-[#d89745] dark:prose-invert dark:prose-headings:text-[#e0a070] dark:text-[#f3eadf]">
                       <ReactMarkdown remarkPlugins={[remarkGfm]}>

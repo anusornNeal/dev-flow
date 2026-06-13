@@ -805,7 +805,7 @@ export default function TaskDetailsDrawer({
               </div>
 
               {/* 🌿 SUBTASKS SECTION */}
-              {!task.parentId && (
+              {!task.parentId && subTasks.length > 0 && (
                 <div className="space-y-3.5 border-t border-[#ebdcb9] dark:border-[#584a3b] pt-5 font-sans">
                   <div className="flex items-center justify-between">
                     <h4 className="text-[10px] font-mono text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest flex items-center gap-1.5 font-bold">
@@ -822,101 +822,88 @@ export default function TaskDetailsDrawer({
                     )}
                   </div>
 
-                  {subTasks.length > 0 ? (
-                    <div className="space-y-2.5">
-                      {/* Visual progress bar */}
-                      <div className="bg-white dark:bg-[#292119] border border-[#ebdcb9]/65 dark:border-[#584a3b]/65 p-3 rounded-2xl flex items-center justify-between gap-4 shadow-3xs">
-                        <div className="flex-1 bg-[#ede6dc]/60 dark:bg-[#292119]/60 rounded-full h-1.5 overflow-hidden">
-                          <div 
-                            className="bg-[#2a7a8a] dark:bg-[#d6b56d] h-full rounded-full transition-all duration-300"
-                            style={{ width: `${(subTasks.filter(s => s.status === 'done').length / subTasks.length) * 100}%` }}
-                          />
-                        </div>
-                        <span className="text-[10px] font-mono font-black text-[#2a7a8a] dark:text-[#f3eadf]">
-                          {Math.round((subTasks.filter(s => s.status === 'done').length / subTasks.length) * 100)}% complete
-                        </span>
+                  <div className="space-y-2.5">
+                    {/* Visual progress bar */}
+                    <div className="bg-white dark:bg-[#292119] border border-[#ebdcb9]/65 dark:border-[#584a3b]/65 p-3 rounded-2xl flex items-center justify-between gap-4 shadow-3xs">
+                      <div className="flex-1 bg-[#ede6dc]/60 dark:bg-[#292119]/60 rounded-full h-1.5 overflow-hidden">
+                        <div 
+                          className="bg-[#2a7a8a] dark:bg-[#d6b56d] h-full rounded-full transition-all duration-300"
+                          style={{ width: `${(subTasks.filter(s => s.status === 'done').length / subTasks.length) * 100}%` }}
+                        />
                       </div>
+                      <span className="text-[10px] font-mono font-black text-[#2a7a8a] dark:text-[#f3eadf]">
+                        {Math.round((subTasks.filter(s => s.status === 'done').length / subTasks.length) * 100)}% complete
+                      </span>
+                    </div>
 
-                      {/* Scrollable grid list */}
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 max-h-[220px] overflow-y-auto scrollbar-thin pr-1 select-none">
-                        {subTasks.map(sub => {
-                          const subDone = sub.status === 'done';
-                          const subInProgress = sub.status === 'in-progress';
-                          return (
-                            <div 
-                              key={sub.id}
-                              onClick={() => {
-                                if (onSelectTask) onSelectTask(sub);
-                              }}
-                              className={`p-3.5 rounded-2xl border flex flex-col justify-between h-[90px] cursor-pointer transition-all hover:bg-[#fffcf8] dark:hover:bg-[#1e1914] active:scale-[0.98] hover:shadow-sm relative ${
-                                subDone 
-                                  ? 'bg-[#edf7ed]/30 dark:bg-[#292119]/30 border-emerald-100/50 text-gray-400 dark:text-[#b8ab9f]' 
-                                  : subInProgress
-                                    ? 'bg-orange-50/15 border-[#e3a35a] dark:border-[#584a3b] shadow-2xs'
-                                    : 'bg-white dark:bg-[#292119] border-[#ebdcb9]/65 dark:border-[#584a3b]/65 text-[#3a2f26] dark:text-[#f3eadf]'
-                              }`}
-                            >
-                              <div className="space-y-1 min-w-0 pr-1">
-                                <p className={`text-[11px] font-extrabold leading-snug truncate ${subDone ? 'line-through text-gray-400 dark:text-[#b8ab9f] font-normal' : 'text-[#3e3129] dark:text-[#f3eadf]'}`}>
-                                  {sub.title}
-                                </p>
-                                <button 
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    const idToCopy = sub.displayId || sub.id;
-                                    navigator.clipboard.writeText(idToCopy);
-                                    // A simple visual feedback, though using a dedicated state for subtasks is better, 
-                                    // for now we'll just let it copy since it wasn't strictly requested for subtasks, but we'll add the button just in case.
-                                  }}
-                                  className="flex items-center gap-1 text-[9px] font-mono text-gray-400 dark:text-[#b8ab9f]/80 hover:text-[#d89745] dark:hover:text-[#e0a070] font-bold cursor-pointer"
-                                  title="Copy Card ID"
-                                >
-                                  ID: #{sub.displayId || sub.id}
-                                </button>
-                              </div>
+                    {/* Scrollable grid list */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 max-h-[220px] overflow-y-auto scrollbar-thin pr-1 select-none">
+                      {subTasks.map(sub => {
+                        const subDone = sub.status === 'done';
+                        const subInProgress = sub.status === 'in-progress';
+                        return (
+                          <div 
+                            key={sub.id}
+                            onClick={() => {
+                              if (onSelectTask) onSelectTask(sub);
+                            }}
+                            className={`p-3.5 rounded-2xl border flex flex-col justify-between h-[90px] cursor-pointer transition-all hover:bg-[#fffcf8] dark:hover:bg-[#1e1914] active:scale-[0.98] hover:shadow-sm relative ${
+                              subDone 
+                                ? 'bg-[#edf7ed]/30 dark:bg-[#292119]/30 border-emerald-100/50 text-gray-400 dark:text-[#b8ab9f]' 
+                                : subInProgress
+                                  ? 'bg-orange-50/15 border-[#e3a35a] dark:border-[#584a3b] shadow-2xs'
+                                  : 'bg-white dark:bg-[#292119] border-[#ebdcb9]/65 dark:border-[#584a3b]/65 text-[#3a2f26] dark:text-[#f3eadf]'
+                            }`}
+                          >
+                            <div className="space-y-1 min-w-0 pr-1">
+                              <p className={`text-[11px] font-extrabold leading-snug truncate ${subDone ? 'line-through text-gray-400 dark:text-[#b8ab9f] font-normal' : 'text-[#3e3129] dark:text-[#f3eadf]'}`}>
+                                {sub.title}
+                              </p>
+                              <button 
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const idToCopy = sub.displayId || sub.id;
+                                  navigator.clipboard.writeText(idToCopy);
+                                }}
+                                className="flex items-center gap-1 text-[9px] font-mono text-gray-400 dark:text-[#b8ab9f]/80 hover:text-[#d89745] dark:hover:text-[#e0a070] font-bold cursor-pointer"
+                                title="Copy Card ID"
+                              >
+                                ID: #{sub.displayId || sub.id}
+                              </button>
+                            </div>
 
-                              <div className="flex items-center justify-between select-none font-mono text-[7.5px] font-bold">
-                                {/* Agent & priority */}
-                                <div className="flex items-center gap-1">
-                                  {sub.model && (
-                                    <span className="px-1 py-0.2 rounded border bg-[#fae8ff] dark:bg-[#292119] text-[#86198f] dark:text-[#f3eadf] border-[#f5d0fe] dark:border-[#584a3b]">
-                                      {sub.model}
-                                    </span>
-                                  )}
-                                  <span className={`px-1 py-0.2 rounded border uppercase ${
-                                    sub.priority === 'high' ? 'bg-[#ffdacf] dark:bg-[#292119] text-[#b43a20] dark:text-[#f3eadf] border-[#ffa995] dark:border-[#584a3b]' :
-                                    sub.priority === 'medium' ? 'bg-[#ffecca] dark:bg-[#292119] text-[#a46c24] dark:text-[#f3eadf] border-[#f0cca3] dark:border-[#584a3b]' :
-                                    'bg-[#e2f0dc] dark:bg-[#292119] text-[#4d7e35] dark:text-[#f3eadf] border-[#bddda4] dark:border-[#584a3b]'
-                                  }`}>
-                                    {sub.priority}
+                            <div className="flex items-center justify-between select-none font-mono text-[7.5px] font-bold">
+                              {/* Agent & priority */}
+                              <div className="flex items-center gap-1">
+                                {sub.model && (
+                                  <span className="px-1 py-0.2 rounded border bg-[#fae8ff] dark:bg-[#292119] text-[#86198f] dark:text-[#f3eadf] border-[#f5d0fe] dark:border-[#584a3b]">
+                                    {sub.model}
                                   </span>
-                                </div>
-
-                                {/* Status badge */}
-                                <span className={`px-1.5 py-0.4 rounded-lg border uppercase font-extrabold ${
-                                  subDone ? 'bg-emerald-50 text-emerald-700 border-[#bddda4]/50 dark:border-[#584a3b]/50' :
-                                  subInProgress ? 'bg-orange-50 text-orange-700 border-orange-200/50' :
-                                  'bg-white dark:bg-[#292119] text-gray-400 dark:text-[#b8ab9f] border-gray-350'
+                                )}
+                                <span className={`px-1 py-0.2 rounded border uppercase ${
+                                  sub.priority === 'high' ? 'bg-[#ffdacf] dark:bg-[#292119] text-[#b43a20] dark:text-[#f3eadf] border-[#ffa995] dark:border-[#584a3b]' :
+                                  sub.priority === 'medium' ? 'bg-[#ffecca] dark:bg-[#292119] text-[#a46c24] dark:text-[#f3eadf] border-[#f0cca3] dark:border-[#584a3b]' :
+                                  'bg-[#e2f0dc] dark:bg-[#292119] text-[#4d7e35] dark:text-[#f3eadf] border-[#bddda4] dark:border-[#584a3b]'
                                 }`}>
-                                  {sub.status === 'in-progress' ? 'active' : sub.status}
+                                  {sub.priority}
                                 </span>
                               </div>
+
+                              {/* Status badge */}
+                              <span className={`px-1.5 py-0.4 rounded-lg border uppercase font-extrabold ${
+                                subDone ? 'bg-emerald-50 text-emerald-700 border-[#bddda4]/50 dark:border-[#584a3b]/50' :
+                                subInProgress ? 'bg-orange-50 text-orange-700 border-orange-200/50' :
+                                'bg-white dark:bg-[#292119] text-gray-400 dark:text-[#b8ab9f] border-gray-350'
+                              }`}>
+                                {sub.status === 'in-progress' ? 'active' : sub.status}
+                              </span>
                             </div>
-                          );
-                        })}
-                      </div>
+                          </div>
+                        );
+                      })}
                     </div>
-                  ) : (
-                    <div className="bg-white dark:bg-[#292119] border-2 border-dashed border-[#e2d5c3]/60 dark:border-[#584a3b]/60 rounded-2xl p-6 text-center select-none shadow-3xs">
-                      <p className="text-[10px] font-mono text-[#a59182] dark:text-[#d6b56d] font-extrabold uppercase tracking-wide">
-                        🌿 No Linked Subtasks Configured
-                      </p>
-                      <p className="text-[9px] text-[#b4a091] dark:text-[#d6b56d] font-mono mt-1 max-w-sm mx-auto">
-                        This spec ticket stands alone as a singular release epic. Split it to isolate task files, logs, and agent assignments.
-                      </p>
-                    </div>
-                  )}
+                  </div>
                 </div>
               )}
 

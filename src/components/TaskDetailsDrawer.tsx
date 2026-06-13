@@ -895,7 +895,8 @@ export default function TaskDetailsDrawer({
                 </h4>
                 {task.targetFiles && task.targetFiles.length > 0 ? (
                   <div className="space-y-1.5">
-                    {task.targetFiles.map((f, i) => (
+                    {/* Show max 5 files, rest hidden until expanded */}
+                    {(showAllFiles ? task.targetFiles : task.targetFiles.slice(0, 5)).map((f, i) => (
                       <div 
                         key={i} 
                         className="bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl p-2.5 flex items-center justify-between text-[11px] font-mono text-[#bd7e3e] dark:text-[#f3eadf] hover:border-[#dfa161] dark:hover:border-[#584a3b] group/file shadow-2xs"
@@ -913,6 +914,15 @@ export default function TaskDetailsDrawer({
                         </button>
                       </div>
                     ))}
+                    {task.targetFiles.length > 5 && !showAllFiles && (
+                      <button
+                        type="button"
+                        onClick={() => setShowAllFiles(true)}
+                        className="text-[10px] font-mono text-[#a47a32] dark:text-[#d6b56d] hover:text-[#8a6020] dark:hover:text-[#e0a070] font-bold transition-colors cursor-pointer pl-1"
+                      >
+                        show {task.targetFiles.length - 5} more ↓
+                      </button>
+                    )}
                   </div>
                 ) : (
                   <p className="text-[10px] text-[#a59182] dark:text-[#d6b56d] italic font-mono pl-1">No target files specified. Edit properties to add files.</p>
@@ -926,7 +936,7 @@ export default function TaskDetailsDrawer({
                 </h4>
                 {task.checklist && task.checklist.length > 0 ? (
                   <div className="space-y-2">
-                    {task.checklist.map((item) => (
+                    {(showAllChecklist ? task.checklist : task.checklist.slice(0, 10)).map((item) => (
                       <div 
                         key={item.id || item.text}
                         onClick={() => handleToggleChecklistItem(item.id || item.text)}
@@ -945,6 +955,15 @@ export default function TaskDetailsDrawer({
                         <span className="text-[11px] font-semibold select-none leading-relaxed">{item.text}</span>
                       </div>
                     ))}
+                    {task.checklist.length > 10 && !showAllChecklist && (
+                      <button
+                        type="button"
+                        onClick={() => setShowAllChecklist(true)}
+                        className="text-[10px] font-mono text-[#a47a32] dark:text-[#d6b56d] hover:text-[#8a6020] dark:hover:text-[#e0a070] font-bold transition-colors cursor-pointer pl-1"
+                      >
+                        show {task.checklist.length - 10} more ↓
+                      </button>
+                    )}
                   </div>
                 ) : (
                   <p className="text-[10px] text-[#a59182] dark:text-[#d6b56d] italic font-mono pl-1 font-bold">No steps configured. Edit properties to define steps.</p>

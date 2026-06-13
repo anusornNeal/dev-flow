@@ -789,6 +789,33 @@ export default function TaskDetailsDrawer({
                 </div>
               )}
 
+              {/* Git Branch & Agent Handoff */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  {task.branch ? (
+                    <h4 className="text-[10px] font-mono text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest flex items-center gap-1.5 font-bold">
+                      <GitBranch size={13} className="text-[#bf8a50] dark:text-[#d6b56d]" /> Active Branch
+                    </h4>
+                  ) : (
+                    <div />
+                  )}
+                  <CopyTemplateButton task={task} className="py-1 px-3 text-[10px] rounded-lg" />
+                </div>
+                
+                {task.branch && (
+                  <div className="bg-[#fff9ee] dark:bg-[#292119] border border-[#f5cb93] dark:border-[#584a3b] rounded-xl p-3 flex justify-between items-center text-[11px] font-mono text-[#9e6224] dark:text-[#f3eadf] shadow-2xs">
+                    <span className="truncate pr-4 font-bold">git checkout -b {task.branch}</span>
+                    <button
+                      type="button"
+                      onClick={handleCopyCommand}
+                      className="hover:text-[#ffffff] dark:hover:text-[#292119] px-2.5 py-1 rounded-xl bg-white dark:bg-[#292119] hover:bg-[#d89745] dark:hover:bg-[#d6b56d] border border-[#ebdcb9] dark:border-[#584a3b] text-[10px] hover:border-transparent dark:hover:border-transparent transition-all shrink-0 cursor-pointer text-[#816a5a] dark:text-[#f3eadf] font-bold shadow-2xs"
+                    >
+                      {copied ? <Check size={11} className="text-emerald-500 font-bold" /> : 'Copy'}
+                    </button>
+                  </div>
+                )}
+              </div>
+
               {/* 🌿 SUBTASKS SECTION */}
               {!task.parentId && (
                 <div className="space-y-3.5 border-t border-[#ebdcb9] dark:border-[#584a3b] pt-5 font-sans">
@@ -1090,32 +1117,7 @@ export default function TaskDetailsDrawer({
                 </div>
               )}
 
-              {/* Git Branch Block */}
-              {task.branch && (
-                <div className="space-y-2">
-                  <h4 className="text-[10px] font-mono text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest flex items-center gap-1.5 font-bold">
-                    <GitBranch size={13} className="text-[#bf8a50] dark:text-[#d6b56d]" /> Active Branch
-                  </h4>
-                  <div className="bg-[#fff9ee] dark:bg-[#292119] border border-[#f5cb93] dark:border-[#584a3b] rounded-xl p-3 flex justify-between items-center text-[11px] font-mono text-[#9e6224] dark:text-[#f3eadf] shadow-2xs">
-                    <span className="truncate pr-4 font-bold">git checkout -b {task.branch}</span>
-                    <button
-                      type="button"
-                      onClick={handleCopyCommand}
-                      className="hover:text-[#ffffff] dark:hover:text-[#292119] px-2.5 py-1 rounded-xl bg-white dark:bg-[#292119] hover:bg-[#d89745] dark:hover:bg-[#d6b56d] border border-[#ebdcb9] dark:border-[#584a3b] text-[10px] hover:border-transparent dark:hover:border-transparent transition-all shrink-0 cursor-pointer text-[#816a5a] dark:text-[#f3eadf] font-bold shadow-2xs"
-                    >
-                      {copied ? <Check size={11} className="text-emerald-500 font-bold" /> : 'Copy'}
-                    </button>
-                  </div>
-                </div>
-              )}
 
-              {/* Copy Starting Template Action */}
-              <div className="space-y-2 mt-4 border-t border-[#ebdcb9] dark:border-[#584a3b] pt-4">
-                <h4 className="text-[10px] font-mono text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest flex items-center gap-1.5 font-bold mb-2">
-                  <Copy size={13} className="text-[#bf8a50] dark:text-[#d6b56d]" /> Agent Handoff
-                </h4>
-                <CopyTemplateButton task={task} className="w-full justify-center py-2 text-xs" />
-              </div>
 
               {/* Detailed specification display */}
               {task.description && (

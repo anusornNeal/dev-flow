@@ -149,7 +149,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
 
   return (
     <div className="fixed inset-0 bg-[#3e3129]/30 dark:bg-[#f3eadf]/30 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="bg-[#fffdfa] dark:bg-[#292119] rounded-2xl shadow-xl w-full max-w-xl border border-[#e5d4bb] dark:border-[#584a3b] overflow-hidden flex flex-col max-h-[90vh]">
+      <div className="bg-[#fffdfa] dark:bg-[#1e1914] rounded-2xl shadow-xl w-full max-w-xl border border-[#e5d4bb] dark:border-[#584a3b] overflow-hidden flex flex-col max-h-[90vh]">
         
         {/* Header */}
         <div className="px-6 py-4 border-b border-[#ebdcb9] dark:border-[#584a3b] bg-[#fdfbf6] dark:bg-[#292119] flex items-center justify-between shrink-0">

@@ -194,7 +194,7 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
       {/* Click outside to close */}
       <div className="fixed inset-0" onClick={onClose} />
 
-      <div className="bg-[#fcfaf5] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] w-full max-w-2xl rounded-3xl shadow-2xl relative z-10 overflow-hidden flex flex-col justify-between font-sans max-h-[85vh]">
+      <div className="bg-[#fcfaf5] dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] w-full max-w-2xl rounded-3xl shadow-2xl relative z-10 overflow-hidden flex flex-col justify-between font-sans max-h-[85vh]">
         
         {/* Header toolbar */}
         <div className="p-5 border-b border-[#ebdcb9] dark:border-[#584a3b] bg-[#ebdcb9]/40 dark:bg-[#584a3b]/40 flex items-center justify-between font-mono text-[#5c493c] dark:text-[#f3eadf]">

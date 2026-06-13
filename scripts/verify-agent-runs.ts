@@ -121,7 +121,7 @@ const codexPlan = resolveAgentLaunchPlan({
   executionMode: 'safe',
 });
 assert.equal(codexPlan.resolvedModel, 'gpt-5.5');
-assert.equal(codexPlan.effortHandling.mode, 'prompt-only');
+assert.equal(codexPlan.effortHandling.mode, 'cli-flag');
 
 const antigravityInvalid = resolveAgentLaunchPlan({
   agent: 'Antigravity',
@@ -137,7 +137,7 @@ assert.match(metadataBlock, /Selected agent: Codex/);
 assert.match(metadataBlock, /DevFlow model label: GPT-5\.5/);
 assert.match(metadataBlock, /Resolved CLI model id: gpt-5\.5/);
 assert.match(metadataBlock, /Selected effort: xhigh/);
-assert.match(metadataBlock, /Effort handling mode: prompt-only/);
+assert.match(metadataBlock, /Effort handling mode: cli-flag/);
 
 const {
   buildAgentCliArgs,
@@ -154,7 +154,7 @@ const cliArgs = buildAgentCliArgs({
       model: '-m',
       workingDir: '-C',
       alwaysAllow: '--dangerously-bypass-approvals-and-sandbox',
-      interactiveArgs: ['-a', 'never'],
+      effort: ['--config', 'reasoning_effort='],
     },
     executionModes: {
       safe: { args: ['-s', 'workspace-write'] },
@@ -163,11 +163,11 @@ const cliArgs = buildAgentCliArgs({
     modelMap: {
       'GPT-5.5': 'gpt-5.5',
     },
-    launchStyle: 'cmd_k',
+    launchStyle: 'start',
   },
   localPath: 'C:\\work',
   model: 'GPT-5.5',
-  effort: '',
+  effort: 'high',
   promptReference: buildPromptReference(files.promptPath),
   executionMode: 'safe',
 });
@@ -175,13 +175,71 @@ const cliArgs = buildAgentCliArgs({
 assert.deepEqual(cliArgs, [
   '-C', 'C:\\work',
   '-m', 'gpt-5.5',
-  '-a', 'never',
+  '--config', 'reasoning_effort=high',
   '-s', 'workspace-write',
   buildPromptReference(files.promptPath),
 ]);
+assert.equal(cliArgs.includes('--config reasoning_effort=high'), false);
 assert.equal(cliArgs.includes('full prompt body that should stay off the command line'), false);
 assert.equal(mapModelForAgent({ modelMap: { 'GPT-5.5': 'gpt-5.5' } }, 'GPT-5.5'), 'gpt-5.5');
 assert.equal(mapModelForAgent({ modelMap: { 'GPT-5.5': 'gpt-5.5' } }, 'Unknown'), '');
+
+for (const effort of ['low', 'medium', 'high', 'xhigh']) {
+  const effortArgs = buildAgentCliArgs({
+    config: {
+      name: 'Codex',
+      executables: [],
+      flags: {
+        model: null,
+        effort: ['--config', 'reasoning_effort='],
+      },
+      launchStyle: 'start',
+    },
+    localPath: '',
+    model: '',
+    effort,
+    promptReference: 'prompt',
+    executionMode: 'safe',
+  });
+  assert.deepEqual(effortArgs, ['--config', `reasoning_effort=${effort}`, 'prompt']);
+  assert.equal(effortArgs.includes(`--config reasoning_effort=${effort}`), false);
+}
+
+const concatenatedEffortArgs = buildAgentCliArgs({
+  config: {
+    name: 'ConcatenatedAgent',
+    executables: [],
+    flags: {
+      model: null,
+      effort: '--effort=',
+    },
+    launchStyle: 'start',
+  },
+  localPath: '',
+  model: '',
+  effort: 'high',
+  promptReference: 'prompt',
+  executionMode: 'safe',
+});
+assert.deepEqual(concatenatedEffortArgs, ['--effort=high', 'prompt']);
+
+const pairedEffortArgs = buildAgentCliArgs({
+  config: {
+    name: 'PairedAgent',
+    executables: [],
+    flags: {
+      model: null,
+      effort: '--effort',
+    },
+    launchStyle: 'start',
+  },
+  localPath: '',
+  model: '',
+  effort: 'high',
+  promptReference: 'prompt',
+  executionMode: 'safe',
+});
+assert.deepEqual(pairedEffortArgs, ['--effort', 'high', 'prompt']);
 
 const agyArgs = buildAgentCliArgs({
   config: {
@@ -216,13 +274,15 @@ assert.deepEqual(agyArgs, [
 ]);
 assert.equal(agyArgs.some((arg) => arg.includes('reasoning effort')), false);
 
-const launchScriptPath = createAgentLaunchScript({
+const { createCodexLaunchScript } = await import('../src/runner');
+
+const launchScriptPath = createCodexLaunchScript({
   runId: 'run-script-test',
   taskId: 'task-script-test',
   apiBaseUrl: 'http://localhost:3000',
   runDir: files.runDir,
   executable: 'C:\\Tools\\codex.cmd',
-  args: ['-C', 'C:\\work dir', '-m', 'gpt-5.5', buildPromptReference(files.promptPath)],
+  args: ['-C', 'C:\\work dir', '-m', 'gpt-5.5', '--config', 'reasoning_effort=high', buildPromptReference(files.promptPath)],
   cwd: 'C:\\work dir',
   windowTitle: 'Codex Agent',
   logPath: files.logPath,
@@ -231,20 +291,14 @@ const launchScript = fs.readFileSync(launchScriptPath, 'utf8');
 assert.match(launchScript, /title Codex Agent/);
 assert.match(launchScript, /cd \/d "C:\\work dir"/);
 assert.match(launchScript, /call "C:\\Tools\\codex\.cmd"/);
-assert.match(launchScript, /"C:\\Tools\\codex.cmd" "-C" "C:\\work dir" "-m" "gpt-5.5"/);
+assert.match(launchScript, /"C:\\Tools\\codex.cmd" "-C" "C:\\work dir" "-m" "gpt-5.5" "--config" "reasoning_effort=high"/);
+assert.equal(launchScript.includes('"--config reasoning_effort=high"'), false);
 assert.equal(launchScript.includes('GITHUB_PERSONAL_ACCESS_TOKEN'), false);
 assert.match(launchScript, /exitCode/);
 assert.match(launchScript, /errorMessage/);
-assert.match(launchScript, /Agent process exited with code/);
+assert.match(launchScript, /Codex process exited with code/);
 assert.match(launchScript, /completionCallback success=%CALLBACK_SUCCESS% exitCode=%EXIT_CODE% errorMessage=%CALLBACK_ERROR_MESSAGE%/);
-
-const startCommand = buildWindowsStartCommand({
-  cwd: 'C:\\work dir',
-  launchScriptPath,
-});
-assert.equal(startCommand, `start "" /d "C:\\work dir" cmd.exe /k call "${launchScriptPath}"`);
-assert.equal(startCommand.includes('Codex Agent'), false);
-assert.equal(startCommand.includes(`cmd.exe /k "${launchScriptPath}"`), false);
+assert.match(launchScript, /pause/);
 
 const {
   validateAgentParams,

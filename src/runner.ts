@@ -79,6 +79,19 @@ function appendRunnerLog(logPath: string | null | undefined, message: string) {
   fs.appendFileSync(logPath, `[${new Date().toISOString()}] ${message}\n`, 'utf8');
 }
 
+function appendFlagValue(args: string[], flag: string | string[], value: string) {
+  const flagParts = Array.isArray(flag) ? flag : [flag];
+  const valueFlag = flagParts.at(-1);
+  if (!valueFlag) return;
+
+  args.push(...flagParts.slice(0, -1));
+  if (valueFlag.endsWith('=')) {
+    args.push(`${valueFlag}${value}`);
+  } else {
+    args.push(valueFlag, value);
+  }
+}
+
 export function mapModelForAgent(config: Pick<AgentConfig, 'modelMap'>, model: string) {
   return config.modelMap?.[model] || '';
 }
@@ -102,7 +115,7 @@ export function buildAgentCliArgs(input: BuildAgentCliArgsInput) {
 
   if (effort) {
     if (config.flags.effort) {
-      spawnArgs.push(config.flags.effort, effort);
+      appendFlagValue(spawnArgs, config.flags.effort, effort);
     } else if (config.promptFallback?.effort) {
       console.warn(`[runner] WARNING: ${config.name} config states no effort flag. Using prompt fallback.`);
     }
@@ -169,7 +182,52 @@ export function createAgentLaunchScript(input: {
   return launchScriptPath;
 }
 
-export const createCodexLaunchScript = createAgentLaunchScript;
+export function createCodexLaunchScript(input: {
+  runId: string;
+  taskId: string;
+  apiBaseUrl: string;
+  runDir: string;
+  executable: string;
+  args: string[];
+  cwd: string;
+  windowTitle?: string | null;
+  logPath?: string | null;
+}) {
+  fs.mkdirSync(input.runDir, { recursive: true });
+  const launchScriptPath = path.join(input.runDir, 'launch.bat');
+  const logLine = input.logPath
+    ? `echo [%DATE% %TIME%] Codex session exited with code %EXIT_CODE% >> ${quoteBatArg(input.logPath)}`
+    : 'echo Codex session exited with code %EXIT_CODE%';
+  const commandLine = buildLaunchCommandLine(input.executable, input.args);
+  
+  const callbackLogLine = input.logPath
+    ? `echo [%DATE% %TIME%] completionCallback success=%CALLBACK_SUCCESS% exitCode=%EXIT_CODE% errorMessage=%CALLBACK_ERROR_MESSAGE% >> ${quoteBatArg(input.logPath)}`
+    : 'echo completionCallback success=%CALLBACK_SUCCESS% exitCode=%EXIT_CODE% errorMessage=%CALLBACK_ERROR_MESSAGE%';
+  const pshWebhook = `powershell -NoProfile -Command "$exitCode = [int]$env:EXIT_CODE; $success = $env:CALLBACK_SUCCESS -eq 'true'; $errorMessage = $env:CALLBACK_ERROR_MESSAGE; $body = @{ success = $success; exitCode = $exitCode; errorMessage = $errorMessage } | ConvertTo-Json -Compress; Invoke-RestMethod -Uri '${input.apiBaseUrl}/api/tasks/${input.taskId}/agent-runs/${input.runId}/complete' -Method Post -ContentType 'application/json' -Body $body"`;
+
+  fs.writeFileSync(launchScriptPath, [
+    '@echo off',
+    'setlocal',
+    input.windowTitle ? `title ${input.windowTitle}` : '',
+    `cd /d ${quoteBatArg(input.cwd)}`,
+    commandLine,
+    'set EXIT_CODE=%ERRORLEVEL%',
+    'set CALLBACK_SUCCESS=false',
+    'set "CALLBACK_ERROR_MESSAGE="',
+    'if "%EXIT_CODE%"=="0" set CALLBACK_SUCCESS=true',
+    'if not "%EXIT_CODE%"=="0" set "CALLBACK_ERROR_MESSAGE=Codex process exited with code %EXIT_CODE%"',
+    logLine,
+    callbackLogLine,
+    pshWebhook,
+    'echo.',
+    'echo Codex interactive session ended. This window remains open for your review.',
+    'pause',
+    'exit /b %EXIT_CODE%',
+    '',
+  ].join('\r\n'), 'utf8');
+
+  return launchScriptPath;
+}
 
 function readPromptReference(taskId: string, promptPath: string, apiBaseUrl: string) {
   if (promptPath && fs.existsSync(promptPath)) {
@@ -228,17 +286,33 @@ function main() {
 
   const spawnArgs = buildAgentCliArgs({ config, localPath, model, effort, promptReference, executionMode });
   const runDir = logPath ? path.dirname(logPath) : runId ? path.join(getAgentRunsBaseDir(), runId) : getDevFlowAppRoot();
-  const launchScriptPath = createAgentLaunchScript({ 
-    runId, 
-    taskId, 
-    apiBaseUrl, 
-    runDir, 
-    executable, 
-    args: spawnArgs, 
-    cwd: localPath || getDevFlowAppRoot(), 
-    windowTitle: `${config.name} Agent`,
-    logPath 
-  });
+  
+  let launchScriptPath = '';
+  if (config.name === 'Codex') {
+    launchScriptPath = createCodexLaunchScript({ 
+      runId, 
+      taskId, 
+      apiBaseUrl, 
+      runDir, 
+      executable, 
+      args: spawnArgs, 
+      cwd: localPath || getDevFlowAppRoot(), 
+      windowTitle: `${config.name} Agent`,
+      logPath 
+    });
+  } else {
+    launchScriptPath = createAgentLaunchScript({ 
+      runId, 
+      taskId, 
+      apiBaseUrl, 
+      runDir, 
+      executable, 
+      args: spawnArgs, 
+      cwd: localPath || getDevFlowAppRoot(), 
+      windowTitle: `${config.name} Agent`,
+      logPath 
+    });
+  }
 
   const spawnEnv = { ...process.env };
   if (process.env.GITHUB_PERSONAL_ACCESS_TOKEN) {
@@ -273,11 +347,20 @@ function main() {
   let finalArgs: string[] = [];
 
   if (launchScriptPath) {
-    finalCmd = 'cmd.exe';
-    finalArgs = ['/d', '/s', '/c', buildWindowsStartCommand({
-      cwd,
-      launchScriptPath,
-    })];
+    if (config.name === 'Codex') {
+      finalCmd = 'cmd.exe';
+      finalArgs = [
+        '/s',
+        '/c',
+        `"start "" /d ${quoteBatArg(cwd)} ${quoteBatArg(launchScriptPath)}"`
+      ];
+    } else {
+      finalCmd = 'cmd.exe';
+      finalArgs = ['/d', '/s', '/c', buildWindowsStartCommand({
+        cwd,
+        launchScriptPath,
+      })];
+    }
   } else {
     console.error(`[runner] Failed to generate launch script.`);
     process.exit(1);
@@ -295,7 +378,8 @@ function main() {
   const child = spawn(finalCmd, finalArgs, {
     detached: true,
     stdio: 'ignore',
-    env: spawnEnv
+    env: spawnEnv,
+    windowsVerbatimArguments: config.name === 'Codex'
   });
   
   child.unref();

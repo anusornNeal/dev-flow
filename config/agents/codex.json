@@ -8,7 +8,7 @@
     "model": "-m",
     "workingDir": "-C",
     "alwaysAllow": "--dangerously-bypass-approvals-and-sandbox",
-    "interactiveArgs": ["-a", "never"]
+    "effort": ["--config", "reasoning_effort="]
   },
   "executionModes": {
     "safe": { "args": ["-s", "workspace-write"] },
@@ -22,5 +22,5 @@
   "promptFallback": {
     "effort": "use reasoning effort '{EFFORT}'"
   },
-  "launchStyle": "cmd_k"
+  "launchStyle": "start"
 }

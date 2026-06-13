@@ -108,6 +108,7 @@ export default function TaskDetailsDrawer({
   // Progressive disclosure state
   const [showAllFiles, setShowAllFiles] = useState(false);
   const [showAllChecklist, setShowAllChecklist] = useState(false);
+  const [showAllSubtasks, setShowAllSubtasks] = useState(false);
   // Accordion open state — empty = all collapsed
   const [openSections, setOpenSections] = useState<Set<string>>(new Set());
   const [copiedFile, setCopiedFile] = useState<string | null>(null);
@@ -837,9 +838,9 @@ export default function TaskDetailsDrawer({
                       </span>
                     </div>
 
-                    {/* Scrollable grid list */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 max-h-[220px] overflow-y-auto scrollbar-thin pr-1 select-none">
-                      {subTasks.map(sub => {
+                    {/* Grid list (limited to 4) */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 select-none">
+                      {(showAllSubtasks ? subTasks : subTasks.slice(0, 4)).map(sub => {
                         const subDone = sub.status === 'done';
                         const subInProgress = sub.status === 'in-progress';
                         return (
@@ -904,6 +905,24 @@ export default function TaskDetailsDrawer({
                         );
                       })}
                     </div>
+                    {subTasks.length > 4 && !showAllSubtasks && (
+                      <button
+                        type="button"
+                        onClick={() => setShowAllSubtasks(true)}
+                        className="text-[10px] font-mono text-[#a47a32] dark:text-[#d6b56d] hover:text-[#8a6020] dark:hover:text-[#e0a070] font-bold transition-colors cursor-pointer pl-1"
+                      >
+                        show {subTasks.length - 4} more ↓
+                      </button>
+                    )}
+                    {subTasks.length > 4 && showAllSubtasks && (
+                      <button
+                        type="button"
+                        onClick={() => setShowAllSubtasks(false)}
+                        className="text-[10px] font-mono text-[#a47a32] dark:text-[#d6b56d] hover:text-[#8a6020] dark:hover:text-[#e0a070] font-bold transition-colors cursor-pointer pl-1"
+                      >
+                        show less ↑
+                      </button>
+                    )}
                   </div>
                   )}
                 </div>

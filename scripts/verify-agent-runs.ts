@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -121,6 +122,7 @@ assert.equal(getLatestAgentRunForTask('task-stale')?.status, 'cancelled');
 
 const {
   buildLaunchMetadataBlock,
+  loadAgentLaunchConfig,
   runAgentLaunchPreflight,
   resolveAgentLaunchPlan,
 } = await import('../src/server/services/agentLaunchConfig');
@@ -239,6 +241,47 @@ assert.equal(missingExecutablePreflight.ok, false);
 assert.equal(missingExecutablePreflight.code, 'EXECUTABLE_NOT_FOUND');
 assert.match(missingExecutablePreflight.message, /executable/i);
 fs.writeFileSync(fixtureExecutablePath, '@echo off\r\n', 'utf8');
+
+const fakeRunnerScriptPath = path.resolve('scripts', 'fake-codex-runner.cmd');
+const fakeRunnerPromptReference = buildPromptReference(files.promptPath);
+const fakeRunnerSuccess = spawnSync('cmd.exe', ['/d', '/s', '/c', fakeRunnerScriptPath, fakeRunnerPromptReference], {
+  cwd: process.cwd(),
+  env: {
+    ...process.env,
+    DEVFLOW_FAKE_CODEX_MODE: 'success',
+  },
+  encoding: 'utf8',
+});
+assert.equal(fakeRunnerSuccess.status, 0);
+assert.match(fakeRunnerSuccess.stdout, /FAKE_CODEX_RESULT success/);
+assert.match(fakeRunnerSuccess.stdout, /full prompt body that should stay off the command line/);
+
+const fakeRunnerFailure = spawnSync('cmd.exe', ['/d', '/s', '/c', fakeRunnerScriptPath, fakeRunnerPromptReference], {
+  cwd: process.cwd(),
+  env: {
+    ...process.env,
+    DEVFLOW_FAKE_CODEX_MODE: 'error',
+    DEVFLOW_FAKE_CODEX_EXIT_CODE: '7',
+  },
+  encoding: 'utf8',
+});
+assert.equal(fakeRunnerFailure.status, 7);
+assert.match(fakeRunnerFailure.stderr, /FAKE_CODEX_RESULT error/);
+
+process.env.DEVFLOW_CODEX_EXE = fakeRunnerScriptPath;
+const codexConfig = loadAgentLaunchConfig('Codex');
+assert.ok(codexConfig);
+const fakeRunnerPreflight = runAgentLaunchPreflight({
+  agent: 'Codex',
+  localPath: fixtureProjectDir,
+  model: 'GPT-5.5',
+  effort: 'high',
+  executionMode: 'safe',
+  appRoot: process.cwd(),
+});
+assert.equal(fakeRunnerPreflight.ok, true);
+assert.equal(fakeRunnerPreflight.executablePath, fakeRunnerScriptPath);
+delete process.env.DEVFLOW_CODEX_EXE;
 
 const {
   buildAgentCliArgs,

@@ -1,6 +1,7 @@
 {
   "name": "Codex",
   "executables": [
+    { "type": "env", "value": "DEVFLOW_CODEX_EXE" },
     { "type": "path", "value": "%APPDATA%\\npm\\codex.cmd" },
     { "type": "command", "value": "codex" }
   ],

@@ -152,7 +152,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
       <div className="bg-[#fffdfa] dark:bg-[#1e1914] rounded-2xl shadow-xl w-full max-w-xl border border-[#e5d4bb] dark:border-[#584a3b] overflow-hidden flex flex-col max-h-[90vh]">
         
         {/* Header */}
-        <div className="px-6 py-4 border-b border-[#ebdcb9] dark:border-[#584a3b] bg-[#fdfbf6] dark:bg-[#292119] flex items-center justify-between shrink-0">
+        <div className="px-6 py-4 border-b border-[#ebdcb9] dark:border-[#584a3b] bg-[#fdfbf6] dark:bg-[#1e1914] flex items-center justify-between shrink-0">
           <h2 className="text-[#534135] dark:text-[#f3eadf] font-extrabold font-sans text-lg">⚙️ Settings</h2>
           <button
             onClick={onClose}
@@ -184,13 +184,13 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                 value={ngrokUrl}
                 onChange={e => setNgrokUrl(e.target.value)}
                 placeholder="https://xxxx.ngrok-free.app"
-                className="w-full px-4 py-2.5 text-sm font-mono rounded-xl border border-[#ddd0ba] dark:border-[#584a3b] bg-white dark:bg-[#292119] text-[#3e3129] dark:text-[#f3eadf] focus:outline-none focus:ring-2 focus:ring-[#d89745]/50 dark:focus:ring-[#e0a070]/50 focus:border-[#d89745] dark:border-[#e0a070] dark:focus:border-[#e0a070] transition"
+                className="w-full px-4 py-2.5 text-sm font-mono rounded-xl border border-[#ddd0ba] dark:border-[#584a3b] bg-white dark:bg-[#1e1914] text-[#3e3129] dark:text-[#f3eadf] focus:outline-none focus:ring-2 focus:ring-[#d89745]/50 dark:focus:ring-[#e0a070]/50 focus:border-[#d89745] dark:border-[#e0a070] dark:focus:border-[#e0a070] transition"
               />
             </div>
 
 
             {/* Integrations Section */}
-            <div className="flex flex-col gap-5 border border-[#e5d4bb] dark:border-[#584a3b] rounded-xl p-4 bg-[#fdfbf6] dark:bg-[#292119]">
+            <div className="flex flex-col gap-5 border border-[#e5d4bb] dark:border-[#584a3b] rounded-xl p-4 bg-[#fdfbf6] dark:bg-[#1e1914]">
               <div>
                 <h3 className="text-sm font-extrabold text-[#534135] dark:text-[#f3eadf] flex items-center gap-1.5 mb-1">
                   <FileText size={14} className="text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d]" />
@@ -244,10 +244,10 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                     value={githubToken}
                     onChange={e => setGithubToken(e.target.value)}
                     placeholder="ghp_..."
-                    className="w-full px-3 py-2 text-sm font-mono rounded-lg border border-[#ddd0ba] dark:border-[#584a3b] bg-white dark:bg-[#292119] text-[#3e3129] dark:text-[#f3eadf] focus:outline-none focus:ring-2 focus:ring-[#d89745]/50 dark:focus:ring-[#e0a070]/50 focus:border-[#d89745] dark:border-[#e0a070] dark:focus:border-[#e0a070] transition"
+                    className="w-full px-3 py-2 text-sm font-mono rounded-lg border border-[#ddd0ba] dark:border-[#584a3b] bg-white dark:bg-[#1e1914] text-[#3e3129] dark:text-[#f3eadf] focus:outline-none focus:ring-2 focus:ring-[#d89745]/50 dark:focus:ring-[#e0a070]/50 focus:border-[#d89745] dark:border-[#e0a070] dark:focus:border-[#e0a070] transition"
                   />
                 ) : clearGithubToken ? (
-                  <div className="px-3 py-2 rounded-lg border border-[#fecaca] dark:border-[#584a3b] bg-[#fff0f0] dark:bg-[#292119] text-[11px] text-[#991b1b] dark:text-[#f3eadf] font-mono flex items-center justify-between">
+                  <div className="px-3 py-2 rounded-lg border border-[#fecaca] dark:border-[#584a3b] bg-[#fff0f0] dark:bg-[#1e1914] text-[11px] text-[#991b1b] dark:text-[#f3eadf] font-mono flex items-center justify-between">
                     Pending removal (Save to apply)
                     <button onClick={() => setClearGithubToken(false)} className="underline hover:text-[#7f1d1d] dark:text-[#f3eadf] dark:hover:text-[#f3eadf] font-bold">Undo</button>
                   </div>
@@ -275,7 +275,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                     value={jiraBaseUrl}
                     onChange={e => setJiraBaseUrl(e.target.value)}
                     placeholder="https://your-domain.atlassian.net"
-                    className="w-full px-3 py-2 text-sm font-mono rounded-lg border border-[#ddd0ba] dark:border-[#584a3b] bg-white dark:bg-[#292119] text-[#3e3129] dark:text-[#f3eadf] focus:outline-none focus:ring-2 focus:ring-[#d89745]/50 dark:focus:ring-[#e0a070]/50 focus:border-[#d89745] dark:border-[#e0a070] dark:focus:border-[#e0a070] transition"
+                    className="w-full px-3 py-2 text-sm font-mono rounded-lg border border-[#ddd0ba] dark:border-[#584a3b] bg-white dark:bg-[#1e1914] text-[#3e3129] dark:text-[#f3eadf] focus:outline-none focus:ring-2 focus:ring-[#d89745]/50 dark:focus:ring-[#e0a070]/50 focus:border-[#d89745] dark:border-[#e0a070] dark:focus:border-[#e0a070] transition"
                   />
                 </div>
 
@@ -287,7 +287,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                     value={jiraEmail}
                     onChange={e => setJiraEmail(e.target.value)}
                     placeholder="name@company.com"
-                    className="w-full px-3 py-2 text-sm font-mono rounded-lg border border-[#ddd0ba] dark:border-[#584a3b] bg-white dark:bg-[#292119] text-[#3e3129] dark:text-[#f3eadf] focus:outline-none focus:ring-2 focus:ring-[#d89745]/50 dark:focus:ring-[#e0a070]/50 focus:border-[#d89745] dark:border-[#e0a070] dark:focus:border-[#e0a070] transition"
+                    className="w-full px-3 py-2 text-sm font-mono rounded-lg border border-[#ddd0ba] dark:border-[#584a3b] bg-white dark:bg-[#1e1914] text-[#3e3129] dark:text-[#f3eadf] focus:outline-none focus:ring-2 focus:ring-[#d89745]/50 dark:focus:ring-[#e0a070]/50 focus:border-[#d89745] dark:border-[#e0a070] dark:focus:border-[#e0a070] transition"
                   />
                 </div>
 
@@ -331,10 +331,10 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                       value={jiraToken}
                       onChange={e => setJiraToken(e.target.value)}
                       placeholder="Jira token..."
-                      className="w-full px-3 py-2 text-sm font-mono rounded-lg border border-[#ddd0ba] dark:border-[#584a3b] bg-white dark:bg-[#292119] text-[#3e3129] dark:text-[#f3eadf] focus:outline-none focus:ring-2 focus:ring-[#d89745]/50 dark:focus:ring-[#e0a070]/50 focus:border-[#d89745] dark:border-[#e0a070] dark:focus:border-[#e0a070] transition"
+                      className="w-full px-3 py-2 text-sm font-mono rounded-lg border border-[#ddd0ba] dark:border-[#584a3b] bg-white dark:bg-[#1e1914] text-[#3e3129] dark:text-[#f3eadf] focus:outline-none focus:ring-2 focus:ring-[#d89745]/50 dark:focus:ring-[#e0a070]/50 focus:border-[#d89745] dark:border-[#e0a070] dark:focus:border-[#e0a070] transition"
                     />
                   ) : clearJiraToken ? (
-                    <div className="px-3 py-2 rounded-lg border border-[#fecaca] dark:border-[#584a3b] bg-[#fff0f0] dark:bg-[#292119] text-[11px] text-[#991b1b] dark:text-[#f3eadf] font-mono flex items-center justify-between">
+                    <div className="px-3 py-2 rounded-lg border border-[#fecaca] dark:border-[#584a3b] bg-[#fff0f0] dark:bg-[#1e1914] text-[11px] text-[#991b1b] dark:text-[#f3eadf] font-mono flex items-center justify-between">
                       Pending removal (Save to apply)
                       <button onClick={() => setClearJiraToken(false)} className="underline hover:text-[#7f1d1d] dark:text-[#f3eadf] dark:hover:text-[#f3eadf] font-bold">Undo</button>
                     </div>
@@ -362,14 +362,14 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                 </p>
               </div>
               <div className="flex flex-col gap-2">
-                <label className={`flex items-start gap-2 p-2.5 rounded-lg border cursor-pointer transition-colors ${agentExecutionMode === 'safe' ? 'bg-[#f0f9f4] dark:bg-[#292119] border-[#a3e6cd] dark:border-[#584a3b] shadow-sm' : 'bg-white dark:bg-[#292119] border-[#ebdcb9] dark:border-[#584a3b] hover:bg-[#faf7f0] dark:bg-[#1e1914] dark:hover:bg-[#1e1914]'}`}>
+                <label className={`flex items-start gap-2 p-2.5 rounded-lg border cursor-pointer transition-colors ${agentExecutionMode === 'safe' ? 'bg-[#f0f9f4] dark:bg-[#1e1914] border-[#a3e6cd] dark:border-[#584a3b] shadow-sm' : 'bg-white dark:bg-[#1e1914] border-[#ebdcb9] dark:border-[#584a3b] hover:bg-[#faf7f0] dark:bg-[#1e1914] dark:hover:bg-[#1e1914]'}`}>
                   <input type="radio" name="executionMode" value="safe" checked={agentExecutionMode === 'safe'} onChange={() => setAgentExecutionMode('safe')} className="mt-1" />
                   <div className="flex flex-col">
                     <span className={`text-[12px] font-bold ${agentExecutionMode === 'safe' ? 'text-[#166534] dark:text-[#f3eadf]' : 'text-[#534135] dark:text-[#f3eadf]'}`}>Safe Mode (Recommended)</span>
                     <span className="text-[10px] text-[#8a725f] dark:text-[#f3eadf] font-mono">Restricts agents to editing files within the workspace. Blocks arbitrary system commands.</span>
                   </div>
                 </label>
-                <label className={`flex items-start gap-2 p-2.5 rounded-lg border cursor-pointer transition-colors ${agentExecutionMode === 'full' ? 'bg-[#fff0f0] dark:bg-[#292119] border-[#fecaca] dark:border-[#584a3b] shadow-sm' : 'bg-white dark:bg-[#292119] border-[#ebdcb9] dark:border-[#584a3b] hover:bg-[#faf7f0] dark:bg-[#1e1914] dark:hover:bg-[#1e1914]'}`}>
+                <label className={`flex items-start gap-2 p-2.5 rounded-lg border cursor-pointer transition-colors ${agentExecutionMode === 'full' ? 'bg-[#fff0f0] dark:bg-[#1e1914] border-[#fecaca] dark:border-[#584a3b] shadow-sm' : 'bg-white dark:bg-[#1e1914] border-[#ebdcb9] dark:border-[#584a3b] hover:bg-[#faf7f0] dark:bg-[#1e1914] dark:hover:bg-[#1e1914]'}`}>
                   <input type="radio" name="executionMode" value="full" checked={agentExecutionMode === 'full'} onChange={() => setAgentExecutionMode('full')} className="mt-1" />
                   <div className="flex flex-col">
                     <span className={`text-[12px] font-bold ${agentExecutionMode === 'full' ? 'text-[#991b1b] dark:text-[#f3eadf]' : 'text-[#534135] dark:text-[#f3eadf]'}`}>Full Mode</span>
@@ -420,7 +420,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
               
               {/* Import Messages */}
               {importMsg && (
-                <div className={`mt-2 p-2 rounded-lg text-xs font-mono flex items-start gap-2 ${importStatus === 'error' ? 'bg-[#fff0f0] dark:bg-[#292119] text-[#991b1b] dark:text-[#f3eadf] border border-[#fecaca] dark:border-[#584a3b]' : 'bg-[#f0f9f4] dark:bg-[#292119] text-[#166534] dark:text-[#f3eadf] border border-[#a3e6cd] dark:border-[#584a3b]'}`}>
+                <div className={`mt-2 p-2 rounded-lg text-xs font-mono flex items-start gap-2 ${importStatus === 'error' ? 'bg-[#fff0f0] dark:bg-[#1e1914] text-[#991b1b] dark:text-[#f3eadf] border border-[#fecaca] dark:border-[#584a3b]' : 'bg-[#f0f9f4] dark:bg-[#1e1914] text-[#166534] dark:text-[#f3eadf] border border-[#a3e6cd] dark:border-[#584a3b]'}`}>
                   {importStatus === 'error' ? <AlertCircle size={14} className="mt-0.5 shrink-0" /> : <CheckCircle2 size={14} className="mt-0.5 shrink-0" />}
                   <span>{importMsg}</span>
                 </div>
@@ -430,7 +430,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
             </div>
             
             {/* Save Button Footer */}
-            <div className="px-6 py-4 border-t border-[#ebdcb9] dark:border-[#584a3b] bg-[#fdfbf6] dark:bg-[#292119] flex items-center justify-between shrink-0">
+            <div className="px-6 py-4 border-t border-[#ebdcb9] dark:border-[#584a3b] bg-[#fdfbf6] dark:bg-[#1e1914] flex items-center justify-between shrink-0">
               <div className="flex items-center gap-1.5 text-xs font-mono">
                 {saveStatus === 'success' && (
                   <><CheckCircle2 size={14} className="text-green-500" /><span className="text-green-600">Saved successfully</span></>

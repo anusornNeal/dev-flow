@@ -120,7 +120,7 @@ export default function TemplateModal({ projectId, onClose }: TemplateModalProps
       <div className="bg-[#fffdfa] dark:bg-[#1e1914] rounded-2xl shadow-xl w-full max-w-6xl h-[85vh] flex border border-[#e5d4bb] dark:border-[#584a3b] overflow-hidden select-none">
         
         {/* Left Sidebar: Section List */}
-        <div className="w-1/3 border-r border-[#ebdcb9] dark:border-[#584a3b] bg-[#fdfbf6] dark:bg-[#292119] flex flex-col">
+        <div className="w-1/3 border-r border-[#ebdcb9] dark:border-[#584a3b] bg-[#fdfbf6] dark:bg-[#1e1914] flex flex-col">
           <div className="px-6 py-4 border-b border-[#ebdcb9] dark:border-[#584a3b] flex items-center justify-between shrink-0">
             <h2 className="text-[#534135] dark:text-[#f3eadf] font-extrabold font-sans text-lg flex items-center gap-2">
               <FileText size={20} className="text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d]" />
@@ -162,7 +162,7 @@ export default function TemplateModal({ projectId, onClose }: TemplateModalProps
                           ? 'border-[#d89745] dark:border-[#e0a070] bg-[#fff9ee] dark:bg-[#1e1914] shadow-sm'
                           : missingRequired 
                             ? 'border-red-300 dark:border-red-900 bg-red-50 dark:bg-red-900/20 opacity-80'
-                            : 'border-[#ebdcb9] dark:border-[#584a3b] bg-white dark:bg-[#292119] hover:border-[#d8c5aa] dark:border-[#584a3b] dark:hover:border-[#6b5a48] hover:shadow-xs'
+                            : 'border-[#ebdcb9] dark:border-[#584a3b] bg-white dark:bg-[#1e1914] hover:border-[#d8c5aa] dark:border-[#584a3b] dark:hover:border-[#6b5a48] hover:shadow-xs'
                       }`}
                     >
                       <div className="flex items-center justify-between">
@@ -202,8 +202,8 @@ export default function TemplateModal({ projectId, onClose }: TemplateModalProps
         </div>
 
         {/* Right Content Area */}
-        <div className="flex-1 flex flex-col bg-[#fffdfa] dark:bg-[#292119] min-w-0">
-          <div className="px-6 py-4 border-b border-[#ebdcb9] dark:border-[#584a3b] flex items-center justify-between shrink-0 bg-[#fdfbf6] dark:bg-[#292119]">
+        <div className="flex-1 flex flex-col bg-[#fffdfa] dark:bg-[#1e1914] min-w-0">
+          <div className="px-6 py-4 border-b border-[#ebdcb9] dark:border-[#584a3b] flex items-center justify-between shrink-0 bg-[#fdfbf6] dark:bg-[#1e1914]">
             {previewContent !== null ? (
                <div className="flex flex-col gap-1">
                   <h3 className="text-[#534135] dark:text-[#f3eadf] font-extrabold text-lg flex items-center gap-2">

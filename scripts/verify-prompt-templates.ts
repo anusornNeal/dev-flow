@@ -60,7 +60,7 @@ const mockContext: PromptRenderContext = {
 };
 
 const oldShapeResult = interpolate('{{task.description}} / {{project.localPath}} / {{task.checklist}}', mockContext as any);
-assert.equal(oldShapeResult, '(none) / (none) / (none)');
+assert.equal(oldShapeResult, ' /  / ');
 
 assert.equal(isPromptValuePresent(null), false);
 assert.equal(isPromptValuePresent(undefined), false);

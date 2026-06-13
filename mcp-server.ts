@@ -1,5 +1,5 @@
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { createDevFlowMcpServer } from './src/server/mcp';
+import { createDevFlowMcpServer } from './src/server/mcp.ts';
 
 const apiBaseUrl = process.env.DEVFLOW_API_BASE_URL || 'http://127.0.0.1:3000';
 

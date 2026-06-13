@@ -305,14 +305,14 @@ assert.equal(codexLaunchConfig.executable, fakeRunnerScriptPath);
 assert.deepEqual(codexLaunchConfig.parameters, [
   '-C', fixtureProjectDir,
   '-m', 'gpt-5.5',
-  '--config', 'reasoning_effort=high',
+  '--config', 'model_reasoning_effort=high',
   '-s', 'workspace-write',
   buildPromptReference(files.promptPath),
 ]);
 assert.equal(codexLaunchConfig.environment.DEVFLOW_AGENT_EXECUTION_MODE, 'safe');
 assert.equal(codexLaunchConfig.environment.DEVFLOW_API_BASE_URL, 'http://localhost:3000');
 assert.match(codexLaunchConfig.previewText, /gpt-5\.5/);
-assert.match(codexLaunchConfig.previewText, /reasoning_effort=high/);
+assert.match(codexLaunchConfig.previewText, /model_reasoning_effort=high/);
 assert.match(codexLaunchConfig.previewText, new RegExp(files.promptPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 
 const codexLaunchPreview = buildCodexLaunchConfig({
@@ -336,7 +336,7 @@ assert.equal(codexLaunchPreview.ok, true);
 assert.deepEqual(codexLaunchPreview.parameters, [
   '-C', fixtureProjectDir,
   '-m', 'gpt-5.4-mini',
-  '--config', 'reasoning_effort=low',
+  '--config', 'model_reasoning_effort=low',
   '--dangerously-bypass-approvals-and-sandbox',
   '-s', 'danger-full-access',
   buildPromptReference(files.promptPath),

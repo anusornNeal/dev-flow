@@ -6,7 +6,8 @@ import { TASK_SCHEMA_DEF, VALID_AGENTS, VALID_EFFORTS, VALID_MODELS, VALID_STATU
 import { cancelActiveRunsForTask, cancelStaleActiveRuns, createAgentRun, findActiveRunByTaskId, getActiveRunForProject, getActiveRunForTask, getLatestAgentRunForTask, listAgentRunsForTask, updateAgentRunStatus, type AgentRun } from '../repositories/agentRunRepository';
 import { loadTasks, generateDisplayId, saveTasks } from '../repositories/taskRepository';
 import { appendAgentRunLog, createAgentRunFiles, createAgentRunResultRecord, getAgentRunHistoryPaths, getAgentTriggerScriptPath, getDevFlowApiBaseUrl, resolveAgentExecutionMode, resolveFromDevFlowAppRoot, writeAgentRunLaunchMetadata, writeAgentRunOutputSummary, writeAgentRunResult } from '../services/agentRunService';
-import { extractDesignImages, getAgentTaskContext, renderTaskPrompt, resolveProjectIdFromRepo, validateAgentParams, validateTaskPayload } from '../services/taskService';
+import { extractDesignImages, findProjectByIdentifier, findTaskByIdentifier, getAgentTaskContext, renderTaskPrompt, resolveProjectIdFromRepo, validateAgentParams, validateTaskPayload } from '../services/taskService';
+import { createApiError, sendApiError } from '../services/api';
 import { validateEnum, validateString } from '../validation';
 import { isValidTransition, getValidationErrorMessage } from '../../lib/statusTransitions';
 import { buildCodexLaunchConfig, runAgentLaunchPreflight, type AgentLaunchPreflightCode } from '../services/agentLaunchConfig';
@@ -17,6 +18,105 @@ type TriggerTaskAgentResult =
   | { triggered: true; run: AgentRun }
   | { triggered: false; reason: string; code?: AgentLaunchPreflightCode | 'TASK_ALREADY_RUNNING' | 'PROJECT_ALREADY_RUNNING'; run?: AgentRun | null };
 type TriggerTaskAgentFailure = Extract<TriggerTaskAgentResult, { triggered: false }>;
+type TaskReadMode = 'minimal' | 'summary' | 'standard' | 'full' | 'agent-context' | 'debug';
+
+function normalizeFlag(value: unknown) {
+  return value === true || String(value).toLowerCase() === 'true';
+}
+
+function parseTaskReadMode(value: unknown, fallback: TaskReadMode = 'standard'): TaskReadMode {
+  const mode = String(value || fallback) as TaskReadMode;
+  return ['minimal', 'summary', 'standard', 'full', 'agent-context', 'debug'].includes(mode) ? mode : fallback;
+}
+
+function getTaskIndexByIdentifier(tasks: any[], targetId: string) {
+  return tasks.findIndex((task) => task.id === targetId || task.displayId === targetId);
+}
+
+function toTaskResponse(task: any, mode: TaskReadMode) {
+  if (mode === 'minimal') {
+    return {
+      id: task.id,
+      displayId: task.displayId,
+      title: task.title,
+      status: task.status,
+      projectId: task.projectId,
+    };
+  }
+
+  if (mode === 'summary') {
+    return {
+      id: task.id,
+      displayId: task.displayId,
+      title: task.title,
+      status: task.status,
+      priority: task.priority,
+      projectId: task.projectId,
+      parentId: task.parentId,
+      agent: task.agent,
+      model: task.model,
+      effort: task.effort,
+      updatedAt: task.updatedAt,
+      latestAgentRun: task.latestAgentRun,
+    };
+  }
+
+  if (mode === 'standard') {
+    return {
+      ...task,
+      logs: undefined,
+    };
+  }
+
+  return task;
+}
+
+function resolveTaskListProjectId(deps: ApiRouteDeps, req: express.Request) {
+  const project = findProjectByIdentifier(deps.state, {
+    projectId: typeof req.query.projectId === 'string' ? req.query.projectId : undefined,
+    projectName: typeof req.query.projectName === 'string' ? req.query.projectName : undefined,
+    repo: typeof req.query.repo === 'string' ? req.query.repo : undefined,
+    repoUrl: typeof req.query.repoUrl === 'string' ? req.query.repoUrl : undefined,
+    localPath: typeof req.query.localPath === 'string' ? req.query.localPath : undefined,
+  });
+  return project?.id || null;
+}
+
+function filterTasksForList(deps: ApiRouteDeps, req: express.Request) {
+  let tasks = [...deps.state.tasksCache];
+  const resolvedProjectId = resolveTaskListProjectId(deps, req);
+  const projectId = resolvedProjectId || (typeof req.query.projectId === 'string' ? req.query.projectId : '');
+  const parentId = typeof req.query.parentId === 'string' ? req.query.parentId : '';
+  const status = typeof req.query.status === 'string' ? req.query.status : '';
+  const query = typeof req.query.q === 'string' ? req.query.q.trim().toLowerCase() : '';
+
+  if (projectId) {
+    tasks = tasks.filter((task) => task.projectId === projectId);
+  }
+  if (parentId) {
+    const parentTask = findTaskByIdentifier(deps.state, parentId);
+    tasks = tasks.filter((task) => task.parentId === (parentTask?.id || parentId));
+  }
+  if (status) {
+    tasks = tasks.filter((task) => task.status === status);
+  }
+  if (query) {
+    tasks = tasks.filter((task) => {
+      const haystack = [
+        task.id,
+        task.displayId,
+        task.title,
+        task.description,
+        task.reasoning,
+        task.acceptanceCriteria,
+        task.verification,
+      ].filter(Boolean).join(' ').toLowerCase();
+      return haystack.includes(query);
+    });
+  }
+
+  return tasks;
+}
 
 function createTaskLogEntry(message: string, type: string = 'update') {
   return {
@@ -462,7 +562,42 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
 
   app.get('/api/tasks', (_req, res) => {
     cleanupStaleActiveRuns(deps);
-    res.json(deps.state.tasksCache);
+    const req = _req as express.Request;
+    const mode = parseTaskReadMode(req.query.mode, 'full');
+    const hasModernQuery = ['mode', 'projectId', 'projectName', 'repo', 'repoUrl', 'localPath', 'parentId', 'status', 'q', 'limit', 'offset'].some((key) => req.query[key] !== undefined);
+    const filteredTasks = filterTasksForList(deps, req);
+
+    if (!hasModernQuery) {
+      return res.json(deps.state.tasksCache);
+    }
+
+    const offset = Number.isFinite(Number(req.query.offset)) ? Math.max(0, Number(req.query.offset)) : 0;
+    const limit = Number.isFinite(Number(req.query.limit)) ? Math.max(1, Math.min(500, Number(req.query.limit))) : filteredTasks.length || 0;
+    const pagedTasks = filteredTasks.slice(offset, limit ? offset + limit : undefined);
+
+    return res.json({
+      items: pagedTasks.map((task) => toTaskResponse(task, mode)),
+      total: filteredTasks.length,
+      offset,
+      limit,
+      mode,
+    });
+  });
+
+  app.get('/api/tasks/:id', (req, res) => {
+    cleanupStaleActiveRuns(deps);
+    loadTasks(deps.state);
+    const mode = parseTaskReadMode(req.query.mode, 'standard');
+
+    if (mode === 'agent-context') {
+      const context = getAgentTaskContext(deps.state, req.params.id, false);
+      if (!context) return res.status(404).json({ error: 'Task not found' });
+      return res.json(context);
+    }
+
+    const task = findTaskByIdentifier(deps.state, req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+    return res.json(toTaskResponse(task, mode));
   });
 
   app.get('/api/tasks/:id/agent-context', (req, res) => {
@@ -499,7 +634,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
   app.get('/api/tasks/:id/agent-runs', (req, res) => {
     cleanupStaleActiveRuns(deps);
     loadTasks(deps.state);
-    const task = deps.state.tasksCache.find((entry) => entry.id === req.params.id || entry.displayId === req.params.id);
+    const task = findTaskByIdentifier(deps.state, req.params.id);
     if (!task) return res.status(404).json({ error: 'Task not found' });
     return res.json({ taskId: task.id, runs: listAgentRunsForTask(task.id) });
   });
@@ -507,7 +642,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
   app.get('/api/tasks/:id/agent-runs/:runId/history', (req, res) => {
     cleanupStaleActiveRuns(deps);
     loadTasks(deps.state);
-    const task = deps.state.tasksCache.find((entry) => entry.id === req.params.id || entry.displayId === req.params.id);
+    const task = findTaskByIdentifier(deps.state, req.params.id);
     if (!task) return res.status(404).json({ error: 'Task not found' });
     const run = listAgentRunsForTask(task.id).find((entry) => entry.id === req.params.runId);
     if (!run) return res.status(404).json({ error: 'Run not found' });
@@ -522,7 +657,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
 
   app.post('/api/tasks/:id/agent-runs/retry', (req, res) => {
     loadTasks(deps.state);
-    const task = deps.state.tasksCache.find((entry) => entry.id === req.params.id || entry.displayId === req.params.id);
+    const task = findTaskByIdentifier(deps.state, req.params.id);
     if (!task) return res.status(404).json({ error: 'Task not found' });
 
     const activeRun = getActiveRunForTask(task.id);
@@ -544,7 +679,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
 
   app.post('/api/tasks/:id/agent-runs/cancel', (req, res) => {
     loadTasks(deps.state);
-    const task = deps.state.tasksCache.find((entry) => entry.id === req.params.id || entry.displayId === req.params.id);
+    const task = findTaskByIdentifier(deps.state, req.params.id);
     if (!task) return res.status(404).json({ error: 'Task not found' });
 
     const reason = typeof req.body?.reason === 'string' && req.body.reason.trim() ? req.body.reason.trim() : 'cancelled manually';
@@ -556,7 +691,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
 
   app.post('/api/tasks/:id/agent-runs/:runId/complete', (req, res) => {
     loadTasks(deps.state);
-    const task = deps.state.tasksCache.find((entry) => entry.id === req.params.id || entry.displayId === req.params.id);
+    const task = findTaskByIdentifier(deps.state, req.params.id);
     if (!task) return res.status(404).json({ error: 'Task not found' });
 
     const run = getActiveRunForTask(task.id) || getLatestAgentRunForTask(task.id);
@@ -820,12 +955,151 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     return res.status(201).json({ success: true, createdCount: importedTasks.length, updatedCount: updatedTasks.length, tasks: [...importedTasks, ...updatedTasks] });
   });
 
+  app.post('/api/tasks/batch/move', (req, res) => {
+    try {
+      loadTasks(deps.state);
+      const moves = Array.isArray(req.body?.moves) ? req.body.moves : Array.isArray(req.body) ? req.body : null;
+      if (!moves || moves.length === 0) {
+        throw createApiError(400, 'MOVES_REQUIRED', 'moves must be a non-empty array.');
+      }
+
+      const results = moves.map((item: any) => {
+        const statusErr = validateEnum(item.status, 'status', VALID_STATUSES, true);
+        if (statusErr) {
+          return { success: false, affectedId: item.taskId, error: { code: 'INVALID_STATUS', message: statusErr, retryable: false, affectedId: item.taskId } };
+        }
+
+        const taskIndex = getTaskIndexByIdentifier(deps.state.tasksCache, String(item.taskId || ''));
+        if (taskIndex === -1) {
+          return { success: false, affectedId: item.taskId, error: { code: 'TASK_NOT_FOUND', message: 'Task not found', retryable: false, affectedId: item.taskId } };
+        }
+
+        const task = deps.state.tasksCache[taskIndex];
+        if (task.status === item.status) {
+          return { success: true, affectedId: task.id, task };
+        }
+        if (!isValidTransition(task.status, item.status)) {
+          return { success: false, affectedId: task.id, error: { code: 'INVALID_TRANSITION', message: getValidationErrorMessage(task.status, item.status), retryable: false, affectedId: task.id } };
+        }
+        if (task.status === 'in-progress' && !canOverrideTaskLock(task, item, undefined, item.isAgentRequest)) {
+          return { success: false, affectedId: task.id, error: { code: 'TASK_LOCKED', message: 'Task is locked by an agent. Use emergency flag to override.', retryable: false, affectedId: task.id } };
+        }
+
+        const updatedTask = {
+          ...task,
+          status: item.status,
+          updatedAt: new Date().toISOString(),
+          logs: [...(task.logs || []), createTaskLogEntry(`Status moved from ${task.status.toUpperCase()} to ${item.status.toUpperCase()} via Batch API`, 'move')],
+        };
+        deps.state.tasksCache[taskIndex] = updatedTask;
+        syncTaskAgentStateForStatus(updatedTask, task.status);
+        return { success: true, affectedId: updatedTask.id, task: updatedTask };
+      });
+
+      saveTasks(deps.state);
+      return res.json({
+        success: results.every((item) => item.success),
+        successCount: results.filter((item) => item.success).length,
+        errorCount: results.filter((item) => !item.success).length,
+        results,
+      });
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.post('/api/tasks/batch/checklist/toggle', (req, res) => {
+    try {
+      loadTasks(deps.state);
+      const toggles = Array.isArray(req.body?.toggles) ? req.body.toggles : Array.isArray(req.body) ? req.body : null;
+      if (!toggles || toggles.length === 0) {
+        throw createApiError(400, 'TOGGLES_REQUIRED', 'toggles must be a non-empty array.');
+      }
+
+      const results = toggles.map((item: any) => {
+        const taskIndex = getTaskIndexByIdentifier(deps.state.tasksCache, String(item.taskId || ''));
+        if (taskIndex === -1) {
+          return { success: false, affectedId: item.taskId, error: { code: 'TASK_NOT_FOUND', message: 'Task not found', retryable: false, affectedId: item.taskId } };
+        }
+
+        const task = deps.state.tasksCache[taskIndex];
+        const checklistItem = (task.checklist || []).find((entry: any) => (entry.id || entry.text) === item.checklistId);
+        if (!checklistItem) {
+          return { success: false, affectedId: task.id, error: { code: 'CHECKLIST_NOT_FOUND', message: 'Checklist item not found', retryable: false, affectedId: task.id } };
+        }
+        if (task.status === 'in-progress' && !canOverrideTaskLock(task, item, undefined, item.isAgentRequest)) {
+          return { success: false, affectedId: task.id, error: { code: 'TASK_LOCKED', message: 'Task is locked by an agent. Use emergency flag to override.', retryable: false, affectedId: task.id } };
+        }
+
+        checklistItem.completed = !checklistItem.completed;
+        task.updatedAt = new Date().toISOString();
+        task.logs = [...(task.logs || []), createTaskLogEntry(`Checklist step "${checklistItem.text}" set to ${checklistItem.completed ? 'COMPLETED' : 'INCOMPLETE'} via Batch API`)];
+        return { success: true, affectedId: task.id, task };
+      });
+
+      saveTasks(deps.state);
+      return res.json({
+        success: results.every((item) => item.success),
+        successCount: results.filter((item) => item.success).length,
+        errorCount: results.filter((item) => !item.success).length,
+        results,
+      });
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.post('/api/tasks/batch/assign', (req, res) => {
+    try {
+      loadTasks(deps.state);
+      const assignments = Array.isArray(req.body?.assignments) ? req.body.assignments : Array.isArray(req.body) ? req.body : null;
+      if (!assignments || assignments.length === 0) {
+        throw createApiError(400, 'ASSIGNMENTS_REQUIRED', 'assignments must be a non-empty array.');
+      }
+
+      const results = assignments.map((item: any) => {
+        const taskIndex = getTaskIndexByIdentifier(deps.state.tasksCache, String(item.taskId || ''));
+        if (taskIndex === -1) {
+          return { success: false, affectedId: item.taskId, error: { code: 'TASK_NOT_FOUND', message: 'Task not found', retryable: false, affectedId: item.taskId } };
+        }
+
+        const task = deps.state.tasksCache[taskIndex];
+        const agentValidationError = validateAgentParams({ ...task, ...item }, deps.state.tasksCache);
+        if (agentValidationError) {
+          return { success: false, affectedId: task.id, error: { code: 'INVALID_ASSIGNMENT', message: agentValidationError, retryable: false, affectedId: task.id } };
+        }
+        if (task.status === 'in-progress' && !canOverrideTaskLock(task, item, undefined, item.isAgentRequest)) {
+          return { success: false, affectedId: task.id, error: { code: 'TASK_LOCKED', message: 'Task is locked by an agent. Use emergency flag to override.', retryable: false, affectedId: task.id } };
+        }
+
+        const previousTask = { ...task };
+        task.agent = item.agent || undefined;
+        task.model = item.model || undefined;
+        task.effort = item.effort || undefined;
+        task.updatedAt = new Date().toISOString();
+        task.logs = [...(task.logs || []), createTaskLogEntry(`Agent configuration updated via Batch API: Agent=${item.agent || 'None'}, Model=${item.model || 'Default'}, Effort=${item.effort || 'Auto'}`)];
+        maybeTriggerTaskAgent(task, previousTask, deps, 'POST /tasks/batch/assign');
+        return { success: true, affectedId: task.id, task };
+      });
+
+      saveTasks(deps.state);
+      return res.json({
+        success: results.every((item) => item.success),
+        successCount: results.filter((item) => item.success).length,
+        errorCount: results.filter((item) => !item.success).length,
+        results,
+      });
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
   app.post('/api/tasks/:id/move', (req, res) => {
     loadTasks(deps.state);
     const statusErr = validateEnum(req.body.status, 'status', VALID_STATUSES, true);
     if (statusErr) return res.status(400).json({ error: statusErr });
 
-    const taskIndex = deps.state.tasksCache.findIndex((task) => task.id === req.params.id);
+    const taskIndex = getTaskIndexByIdentifier(deps.state.tasksCache, req.params.id);
     if (taskIndex === -1) return res.status(404).json({ error: 'Task not found' });
 
     const task = deps.state.tasksCache[taskIndex];
@@ -891,7 +1165,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     const checklistErr = validateString(req.body.checklistId, 'checklistId', true);
     if (checklistErr) return res.status(400).json({ error: checklistErr });
 
-    const taskIndex = deps.state.tasksCache.findIndex((task) => task.id === req.params.id);
+    const taskIndex = getTaskIndexByIdentifier(deps.state.tasksCache, req.params.id);
     if (taskIndex === -1) return res.status(404).json({ error: 'Task not found' });
 
     const task = deps.state.tasksCache[taskIndex];
@@ -925,7 +1199,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     const effortErr = validateEnum(req.body.effort, 'effort', VALID_EFFORTS, false);
     if (effortErr) return res.status(400).json({ error: effortErr });
 
-    const taskIndex = deps.state.tasksCache.findIndex((task) => task.id === req.params.id);
+    const taskIndex = getTaskIndexByIdentifier(deps.state.tasksCache, req.params.id);
     if (taskIndex === -1) return res.status(404).json({ error: 'Task not found' });
     const task = deps.state.tasksCache[taskIndex];
     const agentValidationError = validateAgentParams({ ...task, ...req.body }, deps.state.tasksCache);
@@ -1086,7 +1360,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
 
   app.put('/api/tasks/:id', (req, res) => {
     loadTasks(deps.state);
-    const taskIndex = deps.state.tasksCache.findIndex((task) => task.id === req.params.id);
+    const taskIndex = getTaskIndexByIdentifier(deps.state.tasksCache, req.params.id);
     if (taskIndex === -1) return res.status(404).json({ error: 'Task not found' });
 
     const currentTask = deps.state.tasksCache[taskIndex];
@@ -1135,11 +1409,11 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
 
   app.delete('/api/tasks/:id', (req, res) => {
     loadTasks(deps.state);
-    const taskIdToDelete = req.params.id;
-    const taskIndex = deps.state.tasksCache.findIndex((task) => task.id === taskIdToDelete);
+    const taskIndex = getTaskIndexByIdentifier(deps.state.tasksCache, req.params.id);
     if (taskIndex === -1) return res.status(404).json({ error: 'Task not found' });
 
     const currentTask = deps.state.tasksCache[taskIndex];
+    const taskIdToDelete = currentTask.id;
     if (currentTask.status === 'in-progress' && !canOverrideTaskLock(currentTask, req.body, req.query, req.headers['x-agent-request'])) {
       return res.status(403).json({ error: 'Task is locked by an agent. Use emergency flag to override.' });
     }

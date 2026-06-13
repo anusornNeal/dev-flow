@@ -8,6 +8,51 @@ import { resolveAgentExecutionMode } from './agentRunService';
 import { getProjectRulesContext } from './projectRulesService';
 import { renderPromptTemplate } from './promptTemplateService';
 
+function normalizeRepoLike(value: string) {
+  return value.trim().toLowerCase().replace(/\/$/, '');
+}
+
+export function findTaskByIdentifier(state: AppState, targetId: string) {
+  return state.tasksCache.find((entry) => entry.id === targetId || entry.displayId === targetId) || null;
+}
+
+export function findProjectByIdentifier(state: AppState, input: {
+  projectId?: string;
+  projectName?: string;
+  repo?: string;
+  repoUrl?: string;
+  localPath?: string;
+}) {
+  if (input.projectId) {
+    const project = state.projectsCache.find((entry) => entry.id === input.projectId);
+    if (project) return project;
+  }
+
+  if (input.projectName) {
+    const normalizedName = input.projectName.trim().toLowerCase();
+    const matches = state.projectsCache.filter((entry) => String(entry.name || '').trim().toLowerCase() === normalizedName);
+    if (matches.length === 1) return matches[0];
+  }
+
+  const repoInput = input.repo || input.repoUrl;
+  if (repoInput && typeof repoInput === 'string' && repoInput.trim()) {
+    const cleanInput = normalizeRepoLike(repoInput);
+    const project = state.projectsCache.find((entry) => {
+      const cleanRepo = normalizeRepoLike(String(entry.repoUrl || ''));
+      return cleanRepo === cleanInput || cleanRepo.includes(cleanInput) || cleanInput.includes(cleanRepo);
+    });
+    if (project) return project;
+  }
+
+  if (input.localPath) {
+    const normalizedPath = path.resolve(input.localPath);
+    const project = state.projectsCache.find((entry) => entry.localPath && path.resolve(entry.localPath) === normalizedPath);
+    if (project) return project;
+  }
+
+  return null;
+}
+
 export function validateTaskPayload(item: any, isUpdate = false): string | null {
   if (!item || typeof item !== 'object') return 'Task payload must be an object.';
 
@@ -78,31 +123,36 @@ export function extractDesignImages(item: any, currentTask?: any): string[] | un
 }
 
 export function resolveProjectIdFromRepo(state: AppState, item: any, req: any): string {
-  if (item.projectId) {
-    if (item.projectId === 'project-default') {
+  const explicitProjectId = typeof item.projectId === 'string' ? item.projectId.trim() : '';
+  if (explicitProjectId) {
+    if (explicitProjectId === 'project-default') {
       throw new Error("Creating tasks in the default project is no longer allowed. Please provide a valid 'projectId'.");
     }
-    const found = state.projectsCache.find((project) => project.id === item.projectId);
+    const found = state.projectsCache.find((project) => project.id === explicitProjectId);
     if (found) {
       return found.id;
     }
-    throw new Error(`Target project with ID '${item.projectId}' does not exist. Task creation blocked.`);
+    throw new Error(`Target project with ID '${explicitProjectId}' does not exist. Task creation blocked.`);
   }
 
-  const repoInput = item.repo || item.repoUrl || (req.body && req.body.repo) || (req.body && req.body.repoUrl) || (req.query && req.query.repo) || (req.query && req.query.repoUrl) || (req.headers && req.headers['x-repo']) || (req.headers && req.headers['x-repo-url']);
+  const project = findProjectByIdentifier(state, {
+    projectName: item.projectName || req.body?.projectName || req.query?.projectName,
+    repo: item.repo || req.body?.repo || req.query?.repo || req.headers?.['x-repo'],
+    repoUrl: item.repoUrl || req.body?.repoUrl || req.query?.repoUrl || req.headers?.['x-repo-url'],
+    localPath: item.localPath || req.body?.localPath || req.query?.localPath || req.headers?.['x-local-path'],
+  });
 
-  if (repoInput && typeof repoInput === 'string' && repoInput.trim()) {
-    const cleanInput = repoInput.trim().toLowerCase().replace(/\/$/, '');
+  if (project) {
+    return project.id;
+  }
 
-    const project = state.projectsCache.find((entry) => {
-      const cleanRepo = entry.repoUrl.trim().toLowerCase().replace(/\/$/, '');
-      return cleanRepo === cleanInput || cleanRepo.includes(cleanInput) || cleanInput.includes(cleanRepo);
-    });
+  const repoInput = item.repo || item.repoUrl || req.body?.repo || req.body?.repoUrl || req.query?.repo || req.query?.repoUrl || req.headers?.['x-repo'] || req.headers?.['x-repo-url'];
+  const projectNameInput = item.projectName || req.body?.projectName || req.query?.projectName;
+  const localPathInput = item.localPath || req.body?.localPath || req.query?.localPath || req.headers?.['x-local-path'];
 
-    if (project) {
-      return project.id;
-    }
-    throw new Error(`Target project for repository '${repoInput}' does not exist. Please create the project first.`);
+  if (repoInput || projectNameInput || localPathInput) {
+    const identifier = repoInput || projectNameInput || localPathInput;
+    throw new Error(`Target project for identifier '${identifier}' does not exist. Please create the project first.`);
   }
 
   const activeProject = state.projectsCache.find((project) => project.localPath && path.resolve(project.localPath) === path.resolve(process.cwd()));
@@ -114,7 +164,7 @@ export function resolveProjectIdFromRepo(state: AppState, item: any, req: any): 
 }
 
 export function getAgentTaskContext(state: AppState, targetId: string, includeLogs = false) {
-  const task = state.tasksCache.find((entry) => entry.id === targetId || entry.displayId === targetId);
+  const task = findTaskByIdentifier(state, targetId);
   if (!task) return null;
 
   const subtasksRaw = state.tasksCache.filter((entry) => entry.parentId === task.id);

@@ -2,13 +2,60 @@ import type express from 'express';
 import type { ApiRouteDeps } from '../types';
 import { loadTasks, saveTasks } from '../repositories/taskRepository';
 import { saveProjects } from '../repositories/projectRepository';
+import { createApiError, sendApiError } from '../services/api';
+import { findProjectByIdentifier } from '../services/taskService';
 import { validateString } from '../validation';
 import { getPromptPipelineStructure, renderPromptTemplate, PromptRenderContext } from '../services/promptTemplateService';
 import fs from 'fs';
 import path from 'path';
+
+function deleteProjectById(projectId: string, deps: ApiRouteDeps) {
+  loadTasks(deps.state);
+  if (projectId === 'project-default') {
+    throw createApiError(400, 'DEFAULT_PROJECT_PROTECTED', 'Cannot delete default project', { affectedId: projectId });
+  }
+
+  const index = deps.state.projectsCache.findIndex((project) => project.id === projectId);
+  if (index === -1) {
+    throw createApiError(404, 'PROJECT_NOT_FOUND', 'Project not found', { affectedId: projectId });
+  }
+
+  deps.state.projectsCache.splice(index, 1);
+  saveProjects(deps.state);
+
+  deps.state.tasksCache = deps.state.tasksCache.filter((task) => task.projectId !== projectId);
+  saveTasks(deps.state);
+
+  return { success: true, removedId: projectId };
+}
+
 export function registerProjectRoutes(app: express.Express, deps: ApiRouteDeps) {
-  app.get('/api/projects', (_req, res) => {
-    res.json(deps.state.projectsCache);
+  app.get('/api/projects', (req, res) => {
+    const mode = req.query.mode === 'summary' ? 'summary' : 'standard';
+    const query = typeof req.query.q === 'string' ? req.query.q.trim().toLowerCase() : '';
+    let projects = deps.state.projectsCache;
+
+    if (query) {
+      projects = projects.filter((project) => {
+        const haystack = [project.name, project.repoUrl, project.description, project.localPath, project.taskIdPrefix]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase();
+        return haystack.includes(query);
+      });
+    }
+
+    if (mode === 'summary') {
+      return res.json(projects.map((project) => ({
+        id: project.id,
+        name: project.name,
+        repoUrl: project.repoUrl,
+        localPath: project.localPath,
+        taskIdPrefix: project.taskIdPrefix,
+      })));
+    }
+
+    res.json(projects);
   });
 
   app.post('/api/projects', (req, res) => {
@@ -55,25 +102,32 @@ export function registerProjectRoutes(app: express.Express, deps: ApiRouteDeps) 
     return res.json(project);
   });
 
+  app.delete('/api/projects', (req, res) => {
+    try {
+      const project = findProjectByIdentifier(deps.state, {
+        projectId: typeof req.query.projectId === 'string' ? req.query.projectId : undefined,
+        projectName: typeof req.query.projectName === 'string' ? req.query.projectName : undefined,
+        repo: typeof req.query.repo === 'string' ? req.query.repo : undefined,
+        repoUrl: typeof req.query.repoUrl === 'string' ? req.query.repoUrl : undefined,
+        localPath: typeof req.query.localPath === 'string' ? req.query.localPath : undefined,
+      });
+
+      if (!project) {
+        throw createApiError(404, 'PROJECT_NOT_FOUND', 'Project not found');
+      }
+
+      return res.json(deleteProjectById(project.id, deps));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
   app.delete('/api/projects/:id', (req, res) => {
-    loadTasks(deps.state);
-    const projectId = req.params.id;
-    if (projectId === 'project-default') {
-      return res.status(400).json({ error: 'Cannot delete default project' });
+    try {
+      return res.json(deleteProjectById(req.params.id, deps));
+    } catch (error) {
+      return sendApiError(res, error);
     }
-
-    const index = deps.state.projectsCache.findIndex((project) => project.id === projectId);
-    if (index === -1) {
-      return res.status(404).json({ error: 'Project not found' });
-    }
-
-    deps.state.projectsCache.splice(index, 1);
-    saveProjects(deps.state);
-
-    deps.state.tasksCache = deps.state.tasksCache.filter((task) => task.projectId !== projectId);
-    saveTasks(deps.state);
-
-    return res.json({ success: true, removedId: projectId });
   });
 
   app.get('/api/projects/:id/prompt-sections', (req, res) => {

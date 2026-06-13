@@ -110,6 +110,7 @@ export default function TaskDetailsDrawer({
   const [showAllChecklist, setShowAllChecklist] = useState(false);
   // Accordion open state — empty = all collapsed
   const [openSections, setOpenSections] = useState<Set<string>>(new Set());
+  const [copiedFile, setCopiedFile] = useState<string | null>(null);
 
   const toggleSection = (key: string) => {
     setOpenSections(prev => {
@@ -121,6 +122,11 @@ export default function TaskDetailsDrawer({
 
   // Sync state with task changes
   useEffect(() => {
+    // Reset progressive disclosure and accordion states when task changes
+    setShowAllFiles(false);
+    setShowAllChecklist(false);
+    setOpenSections(new Set());
+    
     if (!isEditing) {
       setEditedTitle(task.title);
       setEditedDesc(task.description);
@@ -904,13 +910,19 @@ export default function TaskDetailsDrawer({
                         <span className="truncate pr-2 font-semibold">{f}</span>
                         <button
                           type="button"
-                          onClick={() => {
+                          onClick={(e) => {
+                            e.stopPropagation();
                             navigator.clipboard.writeText(f);
-                            alert(`Copied file: ${f}`);
+                            setCopiedFile(f);
+                            setTimeout(() => setCopiedFile(null), 2000);
                           }}
-                          className="opacity-0 group-hover/file:opacity-100 text-[#856c5a] dark:text-[#f3eadf] hover:text-[#3a2010] dark:hover:text-[#f3eadf] px-2.5 py-1 bg-[#fffbf6] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl text-[9px] transition-all cursor-pointer font-bold"
+                          className={`px-2.5 py-1 rounded-xl text-[9px] transition-all cursor-pointer font-bold border ${
+                            copiedFile === f
+                              ? 'opacity-100 bg-[#7dad71] text-white border-[#7dad71] dark:bg-[#584a3b] dark:text-[#f3eadf]'
+                              : 'opacity-0 group-hover/file:opacity-100 text-[#856c5a] dark:text-[#f3eadf] hover:text-[#3a2010] dark:hover:text-[#f3eadf] bg-[#fffbf6] dark:bg-[#292119] border-[#ebdcb9] dark:border-[#584a3b]'
+                          }`}
                         >
-                          copy
+                          {copiedFile === f ? 'copied!' : 'copy'}
                         </button>
                       </div>
                     ))}
@@ -921,6 +933,15 @@ export default function TaskDetailsDrawer({
                         className="text-[10px] font-mono text-[#a47a32] dark:text-[#d6b56d] hover:text-[#8a6020] dark:hover:text-[#e0a070] font-bold transition-colors cursor-pointer pl-1"
                       >
                         show {task.targetFiles.length - 5} more ↓
+                      </button>
+                    )}
+                    {task.targetFiles.length > 5 && showAllFiles && (
+                      <button
+                        type="button"
+                        onClick={() => setShowAllFiles(false)}
+                        className="text-[10px] font-mono text-[#a47a32] dark:text-[#d6b56d] hover:text-[#8a6020] dark:hover:text-[#e0a070] font-bold transition-colors cursor-pointer pl-1"
+                      >
+                        show less ↑
                       </button>
                     )}
                   </div>
@@ -962,6 +983,15 @@ export default function TaskDetailsDrawer({
                         className="text-[10px] font-mono text-[#a47a32] dark:text-[#d6b56d] hover:text-[#8a6020] dark:hover:text-[#e0a070] font-bold transition-colors cursor-pointer pl-1"
                       >
                         show {task.checklist.length - 10} more ↓
+                      </button>
+                    )}
+                    {task.checklist.length > 10 && showAllChecklist && (
+                      <button
+                        type="button"
+                        onClick={() => setShowAllChecklist(false)}
+                        className="text-[10px] font-mono text-[#a47a32] dark:text-[#d6b56d] hover:text-[#8a6020] dark:hover:text-[#e0a070] font-bold transition-colors cursor-pointer pl-1"
+                      >
+                        show less ↑
                       </button>
                     )}
                   </div>

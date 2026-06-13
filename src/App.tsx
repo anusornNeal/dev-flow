@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { Task, TaskStatus, Column, LogEntry, Project } from './types';
 import { isValidTransition, getValidationErrorMessage } from './lib/statusTransitions';
+import { buildTaskStatusMoveRequest } from './lib/taskStatusMove';
 import Sidebar from './components/Sidebar';
 import TaskCard from './components/TaskCard';
 import TaskDetailsDrawer from './components/TaskDetailsDrawer';
@@ -304,14 +305,19 @@ export default function App() {
     // Sync API update
     try {
       const isEmergency = sourceTask.status === 'in-progress';
-      const payload = isEmergency ? { ...updatedTask, emergency: true } : updatedTask;
-      const response = await fetch(`/api/tasks/${taskId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
+      const moveRequest = buildTaskStatusMoveRequest(taskId, status, { emergency: isEmergency });
+      const response = await fetch(moveRequest.url, moveRequest.init);
       if (!response.ok) {
         throw new Error(`Lane move failed with status ${response.status}`);
+      }
+      const persistedTask = await response.json();
+      setTasks(prev => prev.map(task =>
+        task.id === taskId
+          ? persistedTask
+          : task
+      ));
+      if (selectedTask && selectedTask.id === taskId) {
+        setSelectedTask(persistedTask);
       }
       setPersistenceError(null);
     } catch (err) {

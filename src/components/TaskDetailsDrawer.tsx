@@ -397,22 +397,19 @@ export default function TaskDetailsDrawer({
 
           {isEditing ? (
             /* ================= EDIT MODE SPECIFICATION ================= */
-            <div className="space-y-4 text-xs font-mono text-[#5c493c] dark:text-[#f3eadf]">
-              <div className="space-y-1">
-                <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold">Issue Title</label>
+            <div className="space-y-4 text-[#5c493c] dark:text-[#f3eadf]">
+              <div className="flex flex-col gap-3">
                 <input
                   type="text"
-                  className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] font-sans transition-all"
+                  className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-sm font-extrabold text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] font-sans transition-all"
+                  placeholder="Task Title"
                   value={editedTitle}
                   onChange={(e) => setEditedTitle(e.target.value)}
                 />
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1">
-                  <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold">Lane Status</label>
+                
+                <div className="flex items-center gap-2 flex-wrap">
                   <select
-                    className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all"
+                    className="bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-lg px-2 py-1 text-[10px] uppercase font-bold text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all"
                     value={editedStatus}
                     onChange={(e) => setEditedStatus(e.target.value as TaskStatus)}
                   >
@@ -422,12 +419,9 @@ export default function TaskDetailsDrawer({
                     <option value="ready-for-review">Ready for Review Lane</option>
                     <option value="done">Done Lane</option>
                   </select>
-                </div>
-
-                <div className="space-y-1">
-                  <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold">Urgency Level</label>
+                  
                   <select
-                    className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all"
+                    className="bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-lg px-2 py-1 text-[10px] uppercase font-bold text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all"
                     value={editedPriority}
                     onChange={(e) => setEditedPriority(e.target.value as TaskPriority)}
                   >
@@ -435,291 +429,340 @@ export default function TaskDetailsDrawer({
                     <option value="medium">Medium Severity</option>
                     <option value="high">High Severity</option>
                   </select>
+                  
+                  <div className="flex items-center gap-1.5 ml-auto">
+                    <GitBranch size={13} className="text-[#bf8a50] dark:text-[#d6b56d]" />
+                    <input
+                      type="text"
+                      className="bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-lg px-2 py-1 text-[10px] text-[#b87332] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all font-mono min-w-[160px]"
+                      placeholder="Branch name"
+                      value={editedBranch}
+                      onChange={(e) => setEditedBranch(e.target.value)}
+                    />
+                  </div>
                 </div>
               </div>
 
-              <div className="space-y-1">
-                <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold">Checkout Branch</label>
-                <input
-                  type="text"
-                  className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#b87332] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all"
-                  placeholder="feature/compose-ui-locks"
-                  value={editedBranch}
-                  onChange={(e) => setEditedBranch(e.target.value)}
-                />
+              <div className="flex items-center gap-2 px-3 py-2 bg-[#fdfbf7]/70 dark:bg-[#292119]/70 border border-[#ebdcb9]/50 dark:border-[#584a3b]/50 rounded-xl text-[10px] font-mono flex-wrap w-fit">
+                <select
+                  className="bg-transparent border-none text-[#5c493c] dark:text-[#f3eadf] outline-none font-bold cursor-pointer"
+                  value={editedAgent}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setEditedAgent(val);
+                    if (val) {
+                      const defaultModel = defaultModelForAgent(val);
+                      setEditedModel(defaultModel);
+                      setEditedEffort(defaultEffortForModel(val, defaultModel));
+                    } else {
+                      setEditedModel('');
+                      setEditedEffort('');
+                    }
+                  }}
+                >
+                  <option value="">Unassigned</option>
+                  <option value="Codex">Codex</option>
+                  <option value="Antigravity">Antigravity</option>
+                  <option value="Claude">Claude</option>
+                </select>
+
+                {editedAgent && <span className="text-[#c4b3a4] dark:text-[#584a3b]">·</span>}
+                <select
+                  className="bg-transparent border-none text-[#8a6e5a] dark:text-[#d6b56d] outline-none font-bold cursor-pointer disabled:opacity-50"
+                  value={editedModel}
+                  disabled={!editedAgent}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setEditedModel(val);
+                    if (editedAgent && val) {
+                      setEditedEffort(defaultEffortForModel(editedAgent, val));
+                    } else {
+                      setEditedEffort('');
+                    }
+                  }}
+                >
+                  <option value="">None / Default</option>
+                  {editedAgent && AGENTS_CONFIG[editedAgent as import('../lib/agentsConfig').AgentName]?.map(m => (
+                    <option key={m.model_name} value={m.model_name}>
+                      {m.model_name}
+                    </option>
+                  ))}
+                </select>
+
+                {editedModel && <span className="text-[#c4b3a4] dark:text-[#584a3b]">·</span>}
+                <select
+                  className="bg-transparent border-none text-[#8a6e5a] dark:text-[#d6b56d] outline-none font-bold cursor-pointer disabled:opacity-50"
+                  value={editedEffort}
+                  disabled={!editedAgent || !editedModel}
+                  onChange={(e) => setEditedEffort(e.target.value)}
+                >
+                  <option value="">No Effort</option>
+                  {editedAgent && editedModel && getModelConfig(editedAgent, editedModel)?.available_efforts.map(eff => (
+                    <option key={eff} value={eff}>
+                      ⚡ {eff.charAt(0).toUpperCase() + eff.slice(1)}
+                    </option>
+                  ))}
+                </select>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <div className="space-y-1">
-                  <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold">Assigned Agent</label>
-                  <select
-                    className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all font-bold"
-                    value={editedAgent}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setEditedAgent(val);
-                      if (val) {
-                        const defaultModel = defaultModelForAgent(val);
-                        setEditedModel(defaultModel);
-                        setEditedEffort(defaultEffortForModel(val, defaultModel));
-                      } else {
-                        setEditedModel('');
-                        setEditedEffort('');
-                      }
-                    }}
-                  >
-                    <option value="">Unassigned</option>
-                    <option value="Codex">Codex</option>
-                    <option value="Antigravity">Antigravity</option>
-                    <option value="Claude">Claude</option>
-                  </select>
-                </div>
-
-                <div className="space-y-1">
-                  <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold">AI Model Spec</label>
-                  <select
-                    className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all font-bold disabled:bg-[#f5eeda]/50 dark:disabled:bg-[#292119]/50"
-                    value={editedModel}
-                    disabled={!editedAgent}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setEditedModel(val);
-                      if (editedAgent && val) {
-                        setEditedEffort(defaultEffortForModel(editedAgent, val));
-                      } else {
-                        setEditedEffort('');
-                      }
-                    }}
-                  >
-                    <option value="">None / Default</option>
-                    {editedAgent && AGENTS_CONFIG[editedAgent as import('../lib/agentsConfig').AgentName]?.map(m => (
-                      <option key={m.model_name} value={m.model_name}>
-                        {m.model_name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="space-y-1">
-                  <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold">Effort Allocation</label>
-                  <select
-                    className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all font-bold disabled:bg-[#f5eeda]/50 dark:disabled:bg-[#292119]/50"
-                    value={editedEffort}
-                    disabled={!editedAgent || !editedModel}
-                    onChange={(e) => setEditedEffort(e.target.value)}
-                  >
-                    {editedAgent && editedModel && getModelConfig(editedAgent, editedModel)?.available_efforts.map(eff => (
-                      <option key={eff} value={eff}>
-                        {eff.charAt(0).toUpperCase() + eff.slice(1)}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-
-
-              {/* Path Editor box */}
-              <div className="space-y-1">
-                <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold flex justify-between">
-                  <span>Target Files to Modify</span>
-                  <span className="text-[9px] text-[#9c8473] dark:text-[#d6b56d] lowercase font-normal">(one relative file path per line)</span>
-                </label>
+              <div className="space-y-2.5 border-t border-[#ebdcb9] dark:border-[#584a3b] pt-5">
+                <h4 className="text-[10px] font-mono text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest flex items-center justify-between font-bold">
+                  <span className="flex items-center gap-1.5"><FileCode size={13} className="text-[#bf8a50] dark:text-[#d6b56d]" /> Target Files (ไฟล์ที่แก้ไข)</span>
+                  <span className="text-[9px] text-[#9c8473] dark:text-[#d6b56d] lowercase font-normal">(one path per line)</span>
+                </h4>
                 <textarea
-                  className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] h-24 outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all resize-y font-mono"
+                  className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] h-20 outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all resize-y font-mono shadow-2xs"
                   placeholder="app/src/main/java/com/example/MainActivity.kt"
                   value={editedFilesStr}
                   onChange={(e) => setEditedFilesStr(e.target.value)}
                 />
               </div>
 
-              {/* Action checklist lines */}
-              <div className="space-y-1">
-                <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold flex justify-between">
-                  <span>Implementation Checklist Steps</span>
-                  <span className="text-[9px] text-[#9c8473] dark:text-[#d6b56d] lowercase font-normal">(one task step per line)</span>
-                </label>
+              <div className="space-y-2.5 border-t border-[#ebdcb9] dark:border-[#584a3b] pt-5">
+                <h4 className="text-[10px] font-mono text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest flex items-center justify-between font-bold">
+                  <span className="flex items-center gap-1.5"><CheckSquare size={13} className="text-[#728f44] dark:text-[#f3eadf]" /> Mini-Tasks (สิ่งที่ต้องทำ)</span>
+                  <span className="text-[9px] text-[#9c8473] dark:text-[#d6b56d] lowercase font-normal">(one step per line)</span>
+                </h4>
                 <textarea
-                  className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] h-24 outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all resize-y font-mono"
+                  className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] h-24 outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all resize-y font-mono shadow-2xs"
                   value={editedChecklistStr}
                   onChange={(e) => setEditedChecklistStr(e.target.value)}
                 />
               </div>
 
-              {/* Design Image & Spec URL Section */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-b border-[#ebdcb9]/45 dark:border-[#584a3b]/45 py-3 font-sans">
-                <div className="space-y-1">
-                  <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] font-mono uppercase tracking-widest flex items-center gap-1 font-extrabold pl-0.5">
-                    <ImageIcon size={12} className="text-[#bf8a50] dark:text-[#d6b56d]" /> Design Image (File or URL)
-                  </label>
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <label className={`text-[10px] bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] px-2.5 py-1.5 rounded-lg text-[#5c493c] dark:text-[#f3eadf] hover:bg-[#fffcf6] dark:hover:bg-[#1e1914] cursor-pointer inline-flex items-center gap-1 font-bold ${editedDesignImages.length >= 5 ? 'opacity-50 cursor-not-allowed' : ''}`}>
-                        <span>Upload Image(s) {editedDesignImages.length > 0 && `(${editedDesignImages.length}/5)`}</span>
-                        <input
-                          type="file"
-                          accept="image/*"
-                          multiple
-                          disabled={editedDesignImages.length >= 5}
-                          className="hidden"
-                          onChange={(e) => {
-                            const files = Array.from(e.target.files || []);
-                            const availableSlots = 5 - editedDesignImages.length;
-                            const filesToProcess = files.slice(0, availableSlots);
-                            
-                            filesToProcess.forEach(file => {
-                              const reader = new FileReader();
-                              reader.onloadend = () => {
-                                if (typeof reader.result === 'string') {
-                                  setEditedDesignImages(prev => [...prev, reader.result as string]);
-                                }
-                              };
-                              reader.readAsDataURL(file);
-                            });
-                          }}
-                        />
-                      </label>
-                      {editedDesignImages.length > 0 && (
-                        <button
-                          type="button"
-                          onClick={() => setEditedDesignImages([])}
-                          className="text-[10px] text-red-500 font-bold hover:underline cursor-pointer"
-                        >
-                          Clear All
-                        </button>
-                      )}
-                    </div>
-                    {editedDesignImages.length > 0 && (
-                      <div className="flex gap-2 overflow-x-auto pb-1 mt-2">
-                        {editedDesignImages.map((img, idx) => (
-                          <div key={idx} className="relative border border-[#ebdcb9] dark:border-[#584a3b] rounded-lg overflow-hidden h-14 w-14 shrink-0 bg-white dark:bg-[#292119] group">
-                            <img src={img} alt={`Preview ${idx + 1}`} className="h-full w-full object-cover" referrerPolicy="no-referrer" />
-                            <button 
-                              type="button"
-                              onClick={() => setEditedDesignImages(prev => prev.filter((_, i) => i !== idx))}
-                              className="absolute top-0 right-0 bg-red-500 text-white dark:text-[#f3eadf] w-4 h-4 flex items-center justify-center text-[10px] opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
-                            >
-                              ✕
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="space-y-1">
-                  <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] font-mono uppercase tracking-widest flex items-center gap-1 font-extrabold pl-0.5">
-                    <LinkIcon size={12} className="text-[#3c829e] dark:text-[#f3eadf]" /> Specification link / URL
-                  </label>
-                  <input
-                    type="text"
-                    className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-2.5 py-2 text-[11px] text-[#3a2f26] dark:text-[#f3eadf] placeholder-[#c4b3a4] outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] font-sans"
-                    placeholder="e.g. Figma link or API Doc URL"
-                    value={editedSpecUrl}
-                    onChange={(e) => setEditedSpecUrl(e.target.value)}
-                  />
-                  <p className="text-[9px] text-[#8c7463] dark:text-[#f3eadf] font-mono pl-0.5 leading-relaxed">Link to external product design, spreadsheet, or spec sheet.</p>
-                </div>
-              </div>
-
-              {/* Guideline Specifications markup area */}
-              <div className="space-y-1">
-                <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold flex justify-between">
-                  <span>Detailed Specifications & Code (Markdown)</span>
-                </label>
+              <div className="space-y-2.5 border-t border-[#ebdcb9] dark:border-[#584a3b] pt-5">
+                <h4 className="text-[10px] font-mono text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest flex items-center gap-1.5 font-bold">
+                  <AlignLeft size={13} className="text-[#bf8a50] dark:text-[#d6b56d]" /> Detailed Specifications & Code (Markdown)
+                </h4>
                 <textarea
-                  className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] h-32 outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all resize-y font-mono"
+                  className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] h-32 outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all resize-y font-mono shadow-2xs"
                   placeholder="Insert architecture blueprint markdown notes..."
                   value={editedDesc}
                   onChange={(e) => setEditedDesc(e.target.value)}
                 />
               </div>
 
-              <div className="space-y-1">
-                <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold flex justify-between">
-                  <span>Reasoning & Context</span>
-                </label>
-                <textarea
-                  className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] h-16 outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all resize-y font-mono"
-                  value={editedReasoning}
-                  onChange={(e) => setEditedReasoning(e.target.value)}
-                />
-              </div>
-
-              <div className="space-y-1">
-                <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold flex justify-between">
-                  <span>Acceptance Criteria</span>
-                </label>
-                <textarea
-                  className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] h-16 outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all resize-y font-mono"
-                  value={editedAcceptance}
-                  onChange={(e) => setEditedAcceptance(e.target.value)}
-                />
-              </div>
-
-              <div className="space-y-1">
-                <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold flex justify-between">
-                  <span>Verification Steps</span>
-                </label>
-                <textarea
-                  className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] h-16 outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all resize-y font-mono"
-                  value={editedVerification}
-                  onChange={(e) => setEditedVerification(e.target.value)}
-                />
-              </div>
-
-              <div className="space-y-1">
-                <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold flex justify-between">
-                  <span>Repository Context</span>
-                </label>
-                <textarea
-                  className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] h-16 outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all resize-y font-mono"
-                  value={editedRepoContext}
-                  onChange={(e) => setEditedRepoContext(e.target.value)}
-                />
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <div className="space-y-1">
-                  <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold flex justify-between">
-                    <span>Jira Issue Key</span>
-                  </label>
-                  <input
-                    type="text"
-                    className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all font-mono"
-                    placeholder="QCA-3314"
-                    value={editedJiraKey}
-                    onChange={(e) => setEditedJiraKey(e.target.value)}
+              {/* Links & References Accordion */}
+              <div className="border border-[#ebdcb9] dark:border-[#584a3b] rounded-2xl overflow-hidden bg-[#fffdfa] dark:bg-[#292119]">
+                <button
+                  type="button"
+                  onClick={(e) => handleAccordionClick(e, 'edit-links')}
+                  className="w-full flex items-center justify-between p-3.5 hover:bg-[#f4ebd9]/30 dark:hover:bg-[#3a2f26]/30 transition-colors cursor-pointer"
+                >
+                  <div className="flex items-center gap-2">
+                    <div className="w-6 h-6 rounded-lg bg-[#bf8a50]/10 dark:bg-[#bf8a50]/20 flex items-center justify-center">
+                      <LinkIcon size={12} className="text-[#bf8a50] dark:text-[#d6b56d]" />
+                    </div>
+                    <span className="text-xs font-bold text-[#5c493c] dark:text-[#f3eadf]">Links & References</span>
+                  </div>
+                  <ChevronDown 
+                    size={14} 
+                    className={`text-[#c4b3a4] dark:text-[#8a7a6a] transition-transform duration-200 ${openSections.has('edit-links') ? 'rotate-180' : ''}`}
                   />
-                </div>
-                <div className="space-y-1">
-                  <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold flex justify-between">
-                    <span>Repository URL</span>
-                  </label>
-                  <input
-                    type="text"
-                    className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all font-mono"
-                    placeholder="https://github.com/org/repo"
-                    value={editedRepo}
-                    onChange={(e) => setEditedRepo(e.target.value)}
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold flex justify-between">
-                    <span>Source URL</span>
-                  </label>
-                  <input
-                    type="text"
-                    className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all font-mono"
-                    placeholder="https://jira.../browse/..."
-                    value={editedSourceUrl}
-                    onChange={(e) => setEditedSourceUrl(e.target.value)}
-                  />
-                </div>
+                </button>
+                
+                {openSections.has('edit-links') && (
+                  <div className="border-t border-[#ebdcb9] dark:border-[#584a3b] bg-[#fdfbf7]/50 dark:bg-[#292119]/50 p-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 font-sans">
+                      {/* Image Upload UI */}
+                      <div className="space-y-2 col-span-1 md:col-span-2">
+                        <h4 className="text-[10px] font-mono text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest flex items-center gap-1.5 font-bold">
+                          <ImageIcon size={13} className="text-[#bf8a50] dark:text-[#d6b56d]" /> Design Mockup / Layout
+                        </h4>
+                        <div className="space-y-2">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <label className={`text-[10px] bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] px-2.5 py-1.5 rounded-lg text-[#5c493c] dark:text-[#f3eadf] hover:bg-[#fffcf6] dark:hover:bg-[#1e1914] cursor-pointer inline-flex items-center gap-1 font-bold ${editedDesignImages.length >= 5 ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                              <span>Upload Image(s) {editedDesignImages.length > 0 && `(${editedDesignImages.length}/5)`}</span>
+                              <input
+                                type="file"
+                                accept="image/*"
+                                multiple
+                                disabled={editedDesignImages.length >= 5}
+                                className="hidden"
+                                onChange={(e) => {
+                                  const files = Array.from(e.target.files || []);
+                                  const availableSlots = 5 - editedDesignImages.length;
+                                  const filesToProcess = files.slice(0, availableSlots);
+                                  
+                                  filesToProcess.forEach(file => {
+                                    const reader = new FileReader();
+                                    reader.onloadend = () => {
+                                      if (typeof reader.result === 'string') {
+                                        setEditedDesignImages(prev => [...prev, reader.result as string]);
+                                      }
+                                    };
+                                    reader.readAsDataURL(file);
+                                  });
+                                }}
+                              />
+                            </label>
+                            {editedDesignImages.length > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => setEditedDesignImages([])}
+                                className="text-[10px] text-red-500 font-bold hover:underline cursor-pointer"
+                              >
+                                Clear All
+                              </button>
+                            )}
+                          </div>
+                          {editedDesignImages.length > 0 && (
+                            <div className="flex gap-2 overflow-x-auto pb-1 mt-2">
+                              {editedDesignImages.map((img, idx) => (
+                                <div key={idx} className="relative border border-[#ebdcb9] dark:border-[#584a3b] rounded-lg overflow-hidden h-14 w-14 shrink-0 bg-white dark:bg-[#292119] group">
+                                  <img src={img} alt={`Preview ${idx + 1}`} className="h-full w-full object-cover" referrerPolicy="no-referrer" />
+                                  <button 
+                                    type="button"
+                                    onClick={() => setEditedDesignImages(prev => prev.filter((_, i) => i !== idx))}
+                                    className="absolute top-0 right-0 bg-red-500 text-white dark:text-[#f3eadf] w-4 h-4 flex items-center justify-center text-[10px] opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+                                  >
+                                    ✕
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Spec URL */}
+                      <div className="space-y-2 flex flex-col justify-start">
+                        <h4 className="text-[10px] font-mono text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest flex items-center gap-1.5 font-bold">
+                          <LinkIcon size={13} className="text-[#3c829e] dark:text-[#f3eadf]" /> Specification link / URL
+                        </h4>
+                        <input
+                          type="text"
+                          className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-2.5 py-2 text-[11px] text-[#3a2f26] dark:text-[#f3eadf] placeholder-[#c4b3a4] outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] font-sans shadow-2xs"
+                          placeholder="e.g. Figma link or API Doc URL"
+                          value={editedSpecUrl}
+                          onChange={(e) => setEditedSpecUrl(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
 
-              <div className="flex gap-3 pt-3">
+              {/* QA Context Accordion */}
+              <div className="border border-[#ebdcb9] dark:border-[#584a3b] rounded-2xl overflow-hidden bg-[#fffdfa] dark:bg-[#292119]">
+                <button
+                  type="button"
+                  onClick={(e) => handleAccordionClick(e, 'edit-qa')}
+                  className="w-full flex items-center justify-between p-3.5 hover:bg-[#f4ebd9]/30 dark:hover:bg-[#3a2f26]/30 transition-colors cursor-pointer"
+                >
+                  <div className="flex items-center gap-2">
+                    <div className="w-6 h-6 rounded-lg bg-[#7dad71]/10 dark:bg-[#7dad71]/20 flex items-center justify-center">
+                      <FlaskConical size={12} className="text-[#7dad71] dark:text-[#d6b56d]" />
+                    </div>
+                    <span className="text-xs font-bold text-[#5c493c] dark:text-[#f3eadf]">QA Context</span>
+                  </div>
+                  <ChevronDown 
+                    size={14} 
+                    className={`text-[#c4b3a4] dark:text-[#8a7a6a] transition-transform duration-200 ${openSections.has('edit-qa') ? 'rotate-180' : ''}`}
+                  />
+                </button>
+                
+                {openSections.has('edit-qa') && (
+                  <div className="border-t border-[#ebdcb9] dark:border-[#584a3b] bg-[#fdfbf7]/50 dark:bg-[#292119]/50 p-4">
+                    <div className="grid grid-cols-1 gap-4 font-sans text-xs">
+                      <div className="space-y-1.5">
+                        <strong className="block text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold text-[10px]">Acceptance Criteria</strong>
+                        <textarea
+                          className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] h-20 outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all resize-y font-mono shadow-2xs"
+                          value={editedAcceptance}
+                          onChange={(e) => setEditedAcceptance(e.target.value)}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <strong className="block text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold text-[10px]">Verification Steps</strong>
+                        <textarea
+                          className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] h-20 outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all resize-y font-mono shadow-2xs"
+                          value={editedVerification}
+                          onChange={(e) => setEditedVerification(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Dev Context Accordion */}
+              <div className="border border-[#ebdcb9] dark:border-[#584a3b] rounded-2xl overflow-hidden bg-[#fffdfa] dark:bg-[#292119]">
+                <button
+                  type="button"
+                  onClick={(e) => handleAccordionClick(e, 'edit-dev')}
+                  className="w-full flex items-center justify-between p-3.5 hover:bg-[#f4ebd9]/30 dark:hover:bg-[#3a2f26]/30 transition-colors cursor-pointer"
+                >
+                  <div className="flex items-center gap-2">
+                    <div className="w-6 h-6 rounded-lg bg-[#3c829e]/10 dark:bg-[#3c829e]/20 flex items-center justify-center">
+                      <Code2 size={12} className="text-[#3c829e] dark:text-[#d6b56d]" />
+                    </div>
+                    <span className="text-xs font-bold text-[#5c493c] dark:text-[#f3eadf]">Dev Context</span>
+                  </div>
+                  <ChevronDown 
+                    size={14} 
+                    className={`text-[#c4b3a4] dark:text-[#8a7a6a] transition-transform duration-200 ${openSections.has('edit-dev') ? 'rotate-180' : ''}`}
+                  />
+                </button>
+                
+                {openSections.has('edit-dev') && (
+                  <div className="border-t border-[#ebdcb9] dark:border-[#584a3b] bg-[#fdfbf7]/50 dark:bg-[#292119]/50 p-4">
+                    <div className="flex flex-col gap-4 font-sans text-xs">
+                      <div className="space-y-1.5">
+                        <strong className="block text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold text-[10px]">Reasoning & Context</strong>
+                        <textarea
+                          className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] h-20 outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all resize-y font-mono shadow-2xs"
+                          value={editedReasoning}
+                          onChange={(e) => setEditedReasoning(e.target.value)}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <strong className="block text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold text-[10px]">Repository Context</strong>
+                        <textarea
+                          className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] h-20 outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all resize-y font-mono shadow-2xs"
+                          value={editedRepoContext}
+                          onChange={(e) => setEditedRepoContext(e.target.value)}
+                        />
+                      </div>
+                      
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div className="space-y-1">
+                          <label className="block text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold text-[9px]">Jira Issue Key</label>
+                          <input
+                            type="text"
+                            className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all font-mono shadow-2xs"
+                            placeholder="QCA-3314"
+                            value={editedJiraKey}
+                            onChange={(e) => setEditedJiraKey(e.target.value)}
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="block text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold text-[9px]">Repository URL</label>
+                          <input
+                            type="text"
+                            className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all font-mono shadow-2xs"
+                            placeholder="https://github.com/org/repo"
+                            value={editedRepo}
+                            onChange={(e) => setEditedRepo(e.target.value)}
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="block text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold text-[9px]">Source URL</label>
+                          <input
+                            type="text"
+                            className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all font-mono shadow-2xs"
+                            placeholder="https://jira.../browse/..."
+                            value={editedSourceUrl}
+                            onChange={(e) => setEditedSourceUrl(e.target.value)}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex gap-3 pt-4">
                 <button
                   type="button"
                   onClick={() => setIsEditing(false)}

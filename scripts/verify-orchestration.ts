@@ -38,6 +38,7 @@ const {
 const { buildTaskStatusMoveRequest } = await import('../src/lib/taskStatusMove.js');
 const { saveProjects } = await import('../src/server/repositories/projectRepository.js');
 const { saveTasks } = await import('../src/server/repositories/taskRepository.js');
+const { getAgentTaskContext } = await import('../src/server/services/taskService.js');
 const { isValidTransition } = await import('../src/lib/statusTransitions.js');
 const express = (await import('express')).default;
 
@@ -141,6 +142,16 @@ assert.equal(state.tasksCache[0].status, 'todo');
 
 console.log('[verify] Testing real prompt rendering and startup handoff...');
 state.projectsCache[0].localPath = repoPathWithSpaces;
+const taskContext = getAgentTaskContext(state, 'task-1');
+assert.ok(taskContext?.projectRules?.workflow);
+assert.ok(taskContext.projectRules.workflow.some((rule: string) => rule.includes('todo cards') && rule.includes('in-progress')));
+assert.ok(taskContext.projectRules.workflow.some((rule: string) => rule.includes('default to develop')));
+assert.ok(taskContext.projectRules.workflow.some((rule: string) => rule.includes('checklist')));
+assert.ok(taskContext.projectRules.workflow.some((rule: string) => rule.includes('push') && rule.includes('ready-for-review')));
+assert.ok(taskContext.projectRules.implementation.some((rule: string) => rule.includes('clean architecture')));
+assert.ok(taskContext.projectRules.implementation.some((rule: string) => rule.includes('god classes')));
+assert.ok(taskContext.projectRules.implementation.some((rule: string) => rule.includes('god files')));
+assert.ok(taskContext.projectRules.implementation.some((rule: string) => rule.includes('monolithic')));
 const triggerResult = triggerTaskAgent(state.tasksCache[0], deps, 'test');
 assert.equal(triggerResult.triggered, true);
 assert.equal(state.tasksCache[0].status, 'in-progress');

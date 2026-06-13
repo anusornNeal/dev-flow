@@ -136,6 +136,7 @@ function buildPromptRenderContext(taskContext: NonNullable<ReturnType<typeof get
     workspace: taskContext.workspace || {},
     instruction: taskContext.instruction || {},
     requirements: taskContext.requirements || {},
+    projectRules: taskContext.projectRules || {},
     repoContext: taskContext.repoContext || '',
     orchestration: taskContext.orchestration || {},
     agent: taskContext.assignment?.agent || '',

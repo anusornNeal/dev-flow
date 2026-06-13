@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { interpolate, renderPromptTemplate, type PromptRenderContext } from '../src/server/services/promptTemplateService';
+import { getProjectRulesContext } from '../src/server/services/projectRulesService';
 
 console.log('[verify] Testing prompt template interpolation with production-shaped context...');
 const fixtureLocalPath = path.join('fixtures', 'dev-flow');
@@ -36,6 +37,7 @@ const mockContext: PromptRenderContext = {
     checklist: [{ text: 'Wire renderer to real context', completed: false }],
     targetFiles: ['src/server/routes/tasks.ts', 'src/server/services/promptTemplateService.ts'],
   },
+  projectRules: getProjectRulesContext(),
   repoContext: 'Keep prompt changes scoped to the fresh-session flow.',
   orchestration: {
     role: 'parent',
@@ -81,6 +83,13 @@ assert.ok(renderResult.content.includes('https://github.com/anusornNeal/dev-flow
 assert.ok(renderResult.content.includes(fixtureLocalPath));
 assert.ok(renderResult.content.includes('Agent: Codex, Model: GPT-5.5, Effort: xhigh'));
 assert.ok(renderResult.content.includes('DVF-0081: Use production task context'));
+assert.ok(renderResult.usedSkills.includes('prompt.project-rules'));
+assert.ok(renderResult.content.includes('Move todo cards to in-progress before implementation starts.'));
+assert.ok(renderResult.content.includes('Use the card branch. If the card has no branch, default to develop.'));
+assert.ok(renderResult.content.includes('Handle every checklist item or mini task.'));
+assert.ok(renderResult.content.includes('Push the work to the active branch before moving the card to ready-for-review.'));
+assert.ok(renderResult.content.includes('Prefer clean architecture and modular design.'));
+assert.ok(renderResult.content.includes('Avoid god classes, god files, and monolithic implementation.'));
 
 console.log('[verify] Testing prompt skills resolve from stable app root...');
 const outsideCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-prompt-root-'));

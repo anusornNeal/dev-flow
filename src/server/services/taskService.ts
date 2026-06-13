@@ -5,6 +5,7 @@ import { VALID_AGENTS, VALID_EFFORTS, VALID_MODELS, VALID_PRIORITIES, VALID_STAT
 import { validateEnum, validateString } from '../validation';
 import { buildLaunchMetadataBlock, resolveAgentLaunchPlan } from './agentLaunchConfig';
 import { resolveAgentExecutionMode } from './agentRunService';
+import { getProjectRulesContext } from './projectRulesService';
 
 export function validateTaskPayload(item: any, isUpdate = false): string | null {
   if (!item || typeof item !== 'object') return 'Task payload must be an object.';
@@ -170,6 +171,7 @@ export function getAgentTaskContext(state: AppState, targetId: string, includeLo
       checklist: task.checklist,
       targetFiles: task.targetFiles,
     }),
+    projectRules: getProjectRulesContext(),
     repoContext: task.repoContext || undefined,
     orchestration: cleanObject({
       role,

@@ -3,6 +3,7 @@
     "prompt.header",
     "prompt.task-context",
     "prompt.repo-context",
+    "prompt.project-rules",
     "prompt.checklist",
     "prompt.subtasks",
     "prompt.execution-rules",

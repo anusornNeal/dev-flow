@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { getDevFlowAppRoot } from './agentRunService';
+import type { ProjectRulesContext } from './projectRulesService';
 
 export interface PromptRenderContext {
   run: { id: string };
@@ -9,6 +10,7 @@ export interface PromptRenderContext {
   workspace?: any;
   instruction?: any;
   requirements?: any;
+  projectRules?: ProjectRulesContext;
   repoContext?: any;
   orchestration?: any;
   agent: string;

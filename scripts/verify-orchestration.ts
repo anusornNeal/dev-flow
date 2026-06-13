@@ -27,6 +27,7 @@ const {
   registerTaskRoutes,
   triggerTaskAgent,
 } = await import('../src/server/routes/tasks.js');
+const { registerSettingsRoutes } = await import('../src/server/routes/settings.js');
 
 const {
   createAgentRun,
@@ -638,6 +639,55 @@ try {
   assert.match(staleReadTask.latestAgentRun.errorMessage || '', /stale active run cancelled/i);
 } finally {
   await new Promise<void>((resolve, reject) => staleReadServer.close((error) => error ? reject(error) : resolve()));
+}
+
+console.log('[verify] Testing Auto Work enable validation blocks invalid queued tasks...');
+const autoWorkValidationState: AppState = {
+  tasksCache: [
+    {
+      id: 'auto-work-invalid-task',
+      displayId: 'DVF-0118-X',
+      projectId: 'project-1',
+      status: 'todo',
+      agent: 'Codex',
+      model: 'GPT-5.5',
+      effort: 'medium',
+      title: 'Queued task with invalid config',
+      description: 'Enabling Auto Work should fail fast when queued work cannot launch.',
+      logs: [],
+    },
+  ],
+  projectsCache: [{ id: 'project-1', name: 'p1', repoUrl: 'repo', localPath: path.join(tempDir, 'missing-project-path') }],
+  countersCache: {},
+  settingsCache: { autoWork: false, ngrokUrl: '', githubToken: '', jiraToken: '', jiraBaseUrl: '', jiraEmail: '' },
+  skillsRegistry: [],
+};
+const autoWorkValidationDeps: ApiRouteDeps = {
+  state: autoWorkValidationState,
+  writeAgentLog: () => {},
+};
+const autoWorkValidationApp = express();
+autoWorkValidationApp.use(express.json());
+registerSettingsRoutes(autoWorkValidationApp, autoWorkValidationDeps);
+const autoWorkValidationServer = http.createServer(autoWorkValidationApp);
+await new Promise<void>((resolve) => autoWorkValidationServer.listen(0, resolve));
+const autoWorkValidationAddress = autoWorkValidationServer.address();
+if (!autoWorkValidationAddress || typeof autoWorkValidationAddress === 'string') throw new Error('Failed to bind Auto Work validation server.');
+const autoWorkValidationBaseUrl = `http://127.0.0.1:${autoWorkValidationAddress.port}`;
+try {
+  const autoWorkEnableResponse = await fetch(`${autoWorkValidationBaseUrl}/api/settings`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ autoWork: true }),
+  });
+  assert.equal(autoWorkEnableResponse.status, 409);
+  const autoWorkEnableBody = await autoWorkEnableResponse.json();
+  assert.equal(autoWorkEnableBody.code, 'AUTO_WORK_CONFIG_INVALID');
+  assert.match(autoWorkEnableBody.error || '', /auto work/i);
+  assert.match(autoWorkEnableBody.error || '', /DVF-0118-X/);
+  assert.equal(autoWorkValidationState.settingsCache.autoWork, false);
+} finally {
+  await new Promise<void>((resolve, reject) => autoWorkValidationServer.close((error) => error ? reject(error) : resolve()));
 }
 
 console.log('[verify-orchestration] all assertions passed');

@@ -39,13 +39,17 @@ export default function AutoWorkToggle() {
         body: JSON.stringify({ autoWork: newValue })
       });
       if (!response.ok) {
-        throw new Error(`Settings save failed with status ${response.status}`);
+        const body = await response.json().catch(() => null);
+        throw new Error(body?.error || `Settings save failed with status ${response.status}`);
       }
       if (newValue) {
         setPreflightError(null);
       }
     } catch (err) {
       console.error('Failed to save autoWork setting:', err);
+      if (newValue) {
+        setPreflightError(err instanceof Error ? err.message : 'Auto Work could not be enabled.');
+      }
       setAutoWork(!newValue); // Revert on failure
     } finally {
       setSaving(false);

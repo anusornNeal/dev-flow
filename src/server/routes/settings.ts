@@ -5,6 +5,41 @@ import fs from 'fs';
 import path from 'path';
 import db from '../../db/index';
 import Database from 'better-sqlite3';
+import { runAgentLaunchPreflight } from '../services/agentLaunchConfig';
+import { resolveAgentExecutionMode, resolveFromDevFlowAppRoot } from '../services/agentRunService';
+
+function validateAutoWorkConfiguration(deps: ApiRouteDeps) {
+  const queuedTasks = deps.state.tasksCache
+    .filter((task) => task.status === 'todo' && task.agent)
+    .sort((left, right) => new Date(left.createdAt || 0).getTime() - new Date(right.createdAt || 0).getTime());
+
+  const executionMode = resolveAgentExecutionMode(deps.state.settingsCache.agentExecutionMode || process.env.DEVFLOW_AGENT_EXECUTION_MODE);
+  for (const task of queuedTasks) {
+    const project = deps.state.projectsCache.find((entry) => entry.id === task.projectId);
+    const preflight = runAgentLaunchPreflight({
+      agent: task.agent,
+      localPath: project?.localPath,
+      model: task.model,
+      effort: task.effort,
+      executionMode,
+      appRoot: resolveFromDevFlowAppRoot(),
+    });
+
+    if (!preflight.ok) {
+      const displayId = task.displayId || task.id;
+      return {
+        ok: false,
+        error: `Auto Work cannot be enabled because ${displayId} is not launch-ready: ${preflight.message}`,
+        code: 'AUTO_WORK_CONFIG_INVALID',
+        taskId: task.id,
+        displayId,
+        preflightCode: preflight.code,
+      };
+    }
+  }
+
+  return { ok: true };
+}
 
 export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps) {
   app.get('/api/settings', (_req, res) => {
@@ -76,6 +111,12 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
     }
 
     if (typeof autoWork === 'boolean') {
+      if (autoWork) {
+        const validation = validateAutoWorkConfiguration(deps);
+        if (!validation.ok) {
+          return res.status(409).json(validation);
+        }
+      }
       deps.state.settingsCache.autoWork = autoWork;
     }
 

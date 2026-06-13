@@ -738,18 +738,6 @@ export default function TaskDetailsDrawer({
           ) : (
             /* ================= PREVIEW / VIEW MODE ================= */
             <div className="space-y-4 text-[#5c493c] dark:text-[#f3eadf]">
-              {/* Git Branch & Agent Handoff */}
-              <div className="flex items-center justify-between">
-                {task.branch ? (
-                  <h4 className="text-[10px] font-mono text-[#8a6e5a] dark:text-[#f3eadf] tracking-widest flex items-center gap-1.5 font-bold">
-                    <GitBranch size={13} className="text-[#bf8a50] dark:text-[#d6b56d]" /> <span className="uppercase">Active Branch:</span> <span className="text-[#9e6224] dark:text-[#e0a070]">{task.branch}</span>
-                  </h4>
-                ) : (
-                  <div />
-                )}
-                <CopyTemplateButton task={task} className="py-1 px-3 text-[10px] rounded-lg" />
-              </div>
-
               <div className="space-y-2">
                 <h2 className="text-sm font-extrabold text-[#3a2f26] dark:text-[#f3eadf] font-sans tracking-tight leading-snug">
                   {task.title}
@@ -776,6 +764,18 @@ export default function TaskDetailsDrawer({
                     born {new Date(task.createdAt).toLocaleDateString()}
                   </span>
                 </div>
+              </div>
+
+              {/* Git Branch & Agent Handoff */}
+              <div className="flex items-center justify-between">
+                {task.branch ? (
+                  <h4 className="text-[10px] font-mono text-[#8a6e5a] dark:text-[#f3eadf] tracking-widest flex items-center gap-1.5 font-bold">
+                    <GitBranch size={13} className="text-[#bf8a50] dark:text-[#d6b56d]" /> <span className="uppercase">Active Branch:</span> <span className="text-[#9e6224] dark:text-[#e0a070]">{task.branch}</span>
+                  </h4>
+                ) : (
+                  <div />
+                )}
+                <CopyTemplateButton task={task} className="py-1 px-3 text-[10px] rounded-lg" />
               </div>
 
 

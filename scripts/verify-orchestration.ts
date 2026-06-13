@@ -32,6 +32,7 @@ const {
   createAgentRun,
   getActiveRunForTask,
   getLatestAgentRunForTask,
+  listAgentRunsForTask,
   updateAgentRunStatus,
 } = await import('../src/server/repositories/agentRunRepository.js');
 
@@ -189,6 +190,47 @@ assert.equal(state.tasksCache[0].status, 'todo');
 assert.equal(getActiveRunForTask('task-1'), null);
 assert.equal(getLatestAgentRunForTask('task-1')?.status, 'failed');
 assert.match(state.tasksCache[0].logs.at(-1)?.message || '', /exitCode=1/);
+
+console.log('[verify] Testing duplicate trigger reuses the same active run...');
+const duplicateState: AppState = {
+  tasksCache: [
+    {
+      id: 'dup-task-1',
+      displayId: 'DVF-0111-X',
+      projectId: 'project-dup',
+      status: 'todo',
+      agent: 'Codex',
+      model: 'GPT-5.5',
+      effort: 'high',
+      title: 'Duplicate trigger reuse',
+      description: 'Repeated trigger attempts should reuse the same active run.',
+      logs: [],
+      createdAt: '2026-06-13T00:20:00.000Z',
+      updatedAt: '2026-06-13T00:20:00.000Z',
+    },
+  ],
+  projectsCache: [
+    { id: 'project-dup', name: 'dup', repoUrl: 'https://github.com/anusornNeal/dev-flow', localPath: repoPathWithSpaces },
+  ],
+  countersCache: {},
+  settingsCache: { autoWork: false, ngrokUrl: '', githubToken: '', jiraToken: '', jiraBaseUrl: '', jiraEmail: '' },
+  skillsRegistry: [],
+};
+const duplicateDeps: ApiRouteDeps = {
+  state: duplicateState,
+  writeAgentLog: () => {},
+};
+saveTasks(duplicateState);
+saveProjects(duplicateState);
+const firstDuplicateTrigger = triggerTaskAgent(duplicateState.tasksCache[0], duplicateDeps, 'dup-test');
+assert.equal(firstDuplicateTrigger.triggered, true);
+const firstDuplicateRunId = firstDuplicateTrigger.run.id;
+const secondDuplicateTrigger = triggerTaskAgent(duplicateState.tasksCache[0], duplicateDeps, 'dup-test');
+assert.equal(secondDuplicateTrigger.triggered, false);
+assert.equal(secondDuplicateTrigger.run?.id, firstDuplicateRunId);
+assert.match(secondDuplicateTrigger.reason, /already running for this task/i);
+assert.equal(listAgentRunsForTask('dup-task-1').length, 1);
+assert.equal(getActiveRunForTask('dup-task-1')?.id, firstDuplicateRunId);
 
 console.log('[verify] Testing queue continuation records visible skip reasons...');
 const queueResult = continueTaskQueueForProject('project-1', deps);

@@ -3,7 +3,7 @@ import path from 'path';
 import type express from 'express';
 import type { ApiRouteDeps } from '../types';
 import { TASK_SCHEMA_DEF, VALID_AGENTS, VALID_EFFORTS, VALID_MODELS, VALID_STATUSES } from '../constants';
-import { cancelActiveRunsForTask, cancelStaleActiveRuns, createAgentRun, getActiveRunForProject, getActiveRunForTask, getLatestAgentRunForTask, listAgentRunsForTask, updateAgentRunStatus, type AgentRun } from '../repositories/agentRunRepository';
+import { cancelActiveRunsForTask, cancelStaleActiveRuns, createAgentRun, findActiveRunByTaskId, getActiveRunForProject, getActiveRunForTask, getLatestAgentRunForTask, listAgentRunsForTask, updateAgentRunStatus, type AgentRun } from '../repositories/agentRunRepository';
 import { loadTasks, generateDisplayId, saveTasks } from '../repositories/taskRepository';
 import { appendAgentRunLog, createAgentRunFiles, getAgentTriggerScriptPath, getDevFlowApiBaseUrl, resolveAgentExecutionMode, resolveFromDevFlowAppRoot } from '../services/agentRunService';
 import { extractDesignImages, getAgentTaskContext, renderTaskPrompt, resolveProjectIdFromRepo, validateAgentParams, validateTaskPayload } from '../services/taskService';
@@ -228,8 +228,15 @@ export function triggerTaskAgent(task: any, deps: ApiRouteDeps, routeLabel: stri
   }
   const launchPlan = preflight.launchPlan;
 
-  const activeTaskRun = getActiveRunForTask(task.id);
-  if (activeTaskRun) return { triggered: false, code: 'TASK_ALREADY_RUNNING', reason: `Task already has active run ${activeTaskRun.id}.` };
+  const activeTaskRun = findActiveRunByTaskId(task.id, task.agent);
+  if (activeTaskRun) {
+    return {
+      triggered: false,
+      code: 'TASK_ALREADY_RUNNING',
+      reason: `${task.agent} is already running for this task.`,
+      run: activeTaskRun,
+    };
+  }
 
   const activeProjectRun = getActiveRunForProject(task.projectId);
   if (activeProjectRun && activeProjectRun.taskId !== task.id) {
@@ -751,13 +758,14 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
       task: updatedTask,
       autoWorkTrigger: autoWorkTrigger
         ? autoWorkTrigger.triggered
-          ? { triggered: true }
+          ? { triggered: true, run: autoWorkTrigger.run }
           : (() => {
               const blockedResult = autoWorkTrigger as TriggerTaskAgentFailure;
               return {
                 triggered: false,
                 code: blockedResult.code,
                 reason: blockedResult.reason,
+                run: blockedResult.run,
               };
             })()
         : null,

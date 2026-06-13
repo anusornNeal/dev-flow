@@ -89,6 +89,19 @@ export function getActiveRunForTask(taskId: string): AgentRun | null {
   `).get(taskId, ...ACTIVE_AGENT_RUN_STATUSES));
 }
 
+export function findActiveRunByTaskId(taskId: string, agent?: string | null): AgentRun | null {
+  if (agent) {
+    return normalizeRun(db.prepare(`
+      SELECT * FROM agent_runs
+      WHERE taskId = ? AND agent = ? AND status IN (${ACTIVE_AGENT_RUN_STATUSES.map(() => '?').join(',')})
+      ORDER BY createdAt DESC
+      LIMIT 1
+    `).get(taskId, agent, ...ACTIVE_AGENT_RUN_STATUSES));
+  }
+
+  return getActiveRunForTask(taskId);
+}
+
 export function getActiveRunForProject(projectId: string): AgentRun | null {
   return normalizeRun(db.prepare(`
     SELECT * FROM agent_runs

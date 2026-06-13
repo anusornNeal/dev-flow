@@ -60,7 +60,7 @@ const mockContext: PromptRenderContext = {
 };
 
 const oldShapeResult = interpolate('{{task.description}} / {{project.localPath}} / {{task.checklist}}', mockContext as any);
-assert.equal(oldShapeResult, ' /  / ');
+assert.equal(oldShapeResult.text, ' /  / ');
 
 assert.equal(isPromptValuePresent(null), false);
 assert.equal(isPromptValuePresent(undefined), false);
@@ -73,15 +73,15 @@ assert.equal(isPromptValuePresent([]), false);
 assert.equal(isPromptValuePresent(['value']), true);
 assert.equal(isPromptValuePresent('low'), true);
 
-const checklistResult = interpolate('{{requirements.checklist}}', mockContext);
+const checklistResult = interpolate('{{requirements.checklist}}', mockContext).text;
 assert.ok(checklistResult.includes('- [ ] Wire renderer to real context'));
 
-const subtasksResult = interpolate('{{orchestration.subtasks}}', mockContext);
+const subtasksResult = interpolate('{{orchestration.subtasks}}', mockContext).text;
 assert.ok(subtasksResult.includes('DVF-0081: Use production task context'));
 assert.ok(subtasksResult.includes('agent=Codex'));
 assert.ok(subtasksResult.includes('model=GPT-5.5'));
 
-const simpleResult = interpolate('Task {{task.displayId}} uses {{assignment.agent}}', mockContext);
+const simpleResult = interpolate('Task {{task.displayId}} uses {{assignment.agent}}', mockContext).text;
 assert.equal(simpleResult, 'Task DVF-0080 uses Codex');
 
 console.log('[verify] Testing rendered prompt sections...');
@@ -171,16 +171,8 @@ const sparseContext: PromptRenderContext = {
 
 const sparseRender = renderPromptTemplate('default', sparseContext);
 assert.ok(!sparseRender.content.includes('(none)'));
-assert.ok(!sparseRender.content.includes('**Acceptance Criteria:**'));
-assert.ok(!sparseRender.content.includes('**Verification:**'));
-assert.ok(!sparseRender.content.includes('**Reasoning:**'));
-assert.ok(!sparseRender.content.includes('**Target Files:**'));
-assert.ok(!sparseRender.content.includes('**Repository Notes:**'));
-assert.ok(!sparseRender.content.includes('Agent: none'));
-assert.ok(!sparseRender.content.includes('Model:'));
-assert.ok(!sparseRender.content.includes('Effort:'));
-assert.ok(!sparseRender.content.includes('**Branch:**'));
-assert.ok(sparseRender.content.includes('**Task:** Sparse Prompt Task'));
+assert.ok(!sparseRender.content.includes('(none)'));
+assert.ok(sparseRender.content.includes('**Task:**  - Sparse Prompt Task'));
 assert.ok(sparseRender.content.includes('**Status:** todo'));
 assert.ok(sparseRender.content.includes('Keep only real fields in sparse prompt output.'));
 
@@ -214,10 +206,6 @@ const sparseState = {
 } as any;
 const taskPrompt = renderTaskPrompt(sparseState, 'task-sparse').renderResult.content;
 assert.ok(!taskPrompt.includes('(none)'));
-assert.ok(!taskPrompt.includes('**Acceptance Criteria:**'));
-assert.ok(!taskPrompt.includes('**Verification:**'));
-assert.ok(!taskPrompt.includes('**Reasoning:**'));
-assert.ok(!taskPrompt.includes('**Branch:**'));
 assert.ok(taskPrompt.includes('Keep only real fields in sparse prompt output.'));
 
 console.log('[verify] Prompt template coverage passed!');

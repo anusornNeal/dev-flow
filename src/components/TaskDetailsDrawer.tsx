@@ -120,6 +120,17 @@ export default function TaskDetailsDrawer({
     });
   };
 
+  const handleAccordionClick = (e: React.MouseEvent<HTMLButtonElement>, key: string) => {
+    const isOpening = !openSections.has(key);
+    toggleSection(key);
+    if (isOpening) {
+      const target = e.currentTarget;
+      setTimeout(() => {
+        target.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }, 150);
+    }
+  };
+
   // Sync state with task changes
   useEffect(() => {
     // Reset progressive disclosure and accordion states when task changes
@@ -1005,7 +1016,7 @@ export default function TaskDetailsDrawer({
                 <div className="border border-[#ebdcb9] dark:border-[#584a3b] rounded-2xl overflow-hidden bg-[#fffdfa] dark:bg-[#292119]">
                   <button
                     type="button"
-                    onClick={() => toggleSection('links')}
+                    onClick={(e) => handleAccordionClick(e, 'links')}
                     className="w-full flex items-center justify-between p-3.5 hover:bg-[#f4ebd9]/30 dark:hover:bg-[#3a2f26]/30 transition-colors cursor-pointer"
                   >
                     <div className="flex items-center gap-2">
@@ -1123,7 +1134,7 @@ export default function TaskDetailsDrawer({
                 <div className="border border-[#ebdcb9] dark:border-[#584a3b] rounded-2xl overflow-hidden bg-[#fffdfa] dark:bg-[#292119]">
                   <button
                     type="button"
-                    onClick={() => toggleSection('qa')}
+                    onClick={(e) => handleAccordionClick(e, 'qa')}
                     className="w-full flex items-center justify-between p-3.5 hover:bg-[#f4ebd9]/30 dark:hover:bg-[#3a2f26]/30 transition-colors cursor-pointer"
                   >
                     <div className="flex items-center gap-2">
@@ -1164,7 +1175,7 @@ export default function TaskDetailsDrawer({
                 <div className="border border-[#ebdcb9] dark:border-[#584a3b] rounded-2xl overflow-hidden bg-[#fffdfa] dark:bg-[#292119]">
                   <button
                     type="button"
-                    onClick={() => toggleSection('dev')}
+                    onClick={(e) => handleAccordionClick(e, 'dev')}
                     className="w-full flex items-center justify-between p-3.5 hover:bg-[#f4ebd9]/30 dark:hover:bg-[#3a2f26]/30 transition-colors cursor-pointer"
                   >
                     <div className="flex items-center gap-2">
@@ -1226,7 +1237,7 @@ export default function TaskDetailsDrawer({
           <div className="border border-[#ebdcb9] dark:border-[#584a3b] rounded-2xl overflow-hidden bg-[#fffdfa] dark:bg-[#292119]">
             <button
               type="button"
-              onClick={() => toggleSection('activity')}
+              onClick={(e) => handleAccordionClick(e, 'activity')}
               className="w-full flex items-center justify-between p-3.5 hover:bg-[#f4ebd9]/30 dark:hover:bg-[#3a2f26]/30 transition-colors cursor-pointer"
             >
               <div className="flex items-center gap-2">

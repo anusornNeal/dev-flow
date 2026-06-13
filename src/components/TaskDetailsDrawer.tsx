@@ -1151,16 +1151,16 @@ export default function TaskDetailsDrawer({
                   
                   {openSections.has('qa') && (
                     <div className="border-t border-[#ebdcb9] dark:border-[#584a3b] bg-[#fdfbf7]/50 dark:bg-[#292119]/50 p-4">
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 font-mono text-[10.5px]">
+                      <div className="grid grid-cols-1 gap-5 font-mono text-[10.5px]">
                         {task.acceptanceCriteria && (
-                          <div className="bg-[#fffdfa] dark:bg-[#292119] border border-[#ebdcb9]/60 dark:border-[#584a3b]/60 p-3 rounded-xl shadow-2xs">
-                            <strong className="block text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold mb-1 text-[9px]">Acceptance Criteria</strong>
+                          <div className="space-y-1.5">
+                            <strong className="block text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold text-[9px]">Acceptance Criteria</strong>
                             <p className="text-[#5c493c] dark:text-[#f3eadf] leading-relaxed whitespace-pre-wrap">{task.acceptanceCriteria}</p>
                           </div>
                         )}
                         {task.verification && (
-                          <div className="bg-[#fffdfa] dark:bg-[#292119] border border-[#ebdcb9]/60 dark:border-[#584a3b]/60 p-3 rounded-xl shadow-2xs">
-                            <strong className="block text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold mb-1 text-[9px]">Verification Steps</strong>
+                          <div className="space-y-1.5">
+                            <strong className="block text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold text-[9px]">Verification Steps</strong>
                             <p className="text-[#5c493c] dark:text-[#f3eadf] leading-relaxed whitespace-pre-wrap">{task.verification}</p>
                           </div>
                         )}
@@ -1192,22 +1192,22 @@ export default function TaskDetailsDrawer({
                   
                   {openSections.has('dev') && (
                     <div className="border-t border-[#ebdcb9] dark:border-[#584a3b] bg-[#fdfbf7]/50 dark:bg-[#292119]/50 p-4">
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 font-mono text-[10.5px]">
+                      <div className="flex flex-col gap-5 font-mono text-[10.5px]">
                         {task.reasoning && (
-                          <div className="bg-[#fffdfa] dark:bg-[#292119] border border-[#ebdcb9]/60 dark:border-[#584a3b]/60 p-3 rounded-xl shadow-2xs md:col-span-2">
-                            <strong className="block text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold mb-1 text-[9px]">Reasoning & Context</strong>
+                          <div className="space-y-1.5">
+                            <strong className="block text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold text-[9px]">Reasoning & Context</strong>
                             <p className="text-[#5c493c] dark:text-[#f3eadf] leading-relaxed whitespace-pre-wrap">{task.reasoning}</p>
                           </div>
                         )}
                         {task.repoContext && (
-                          <div className="bg-[#fffdfa] dark:bg-[#292119] border border-[#ebdcb9]/60 dark:border-[#584a3b]/60 p-3 rounded-xl shadow-2xs md:col-span-2">
-                            <strong className="block text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold mb-1 text-[9px]">Repository Context</strong>
+                          <div className="space-y-1.5">
+                            <strong className="block text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold text-[9px]">Repository Context</strong>
                             <p className="text-[#5c493c] dark:text-[#f3eadf] leading-relaxed whitespace-pre-wrap">{task.repoContext}</p>
                           </div>
                         )}
                         {/* Inline Metadata (Jira/Repo/SourceUrl) */}
                         {(task.jiraKey || task.repo || task.sourceUrl) && (
-                          <div className="flex flex-wrap gap-3 md:col-span-2">
+                          <div className="flex flex-wrap gap-3">
                             {task.jiraKey && (
                               <div className="bg-[#e4eff3] dark:bg-[#292119] text-[#354f59] dark:text-[#f3eadf] px-2.5 py-1 rounded-lg shadow-2xs font-bold flex items-center gap-1.5">
                                 <span className="text-[9px] uppercase tracking-wider opacity-80">Jira Key:</span> {task.jiraKey}

@@ -9,7 +9,7 @@ export interface FileAgentConfig {
   executables: { type: 'env' | 'path' | 'command'; value: string }[];
   flags: {
     model: string | null;
-    effort?: string | null;
+    effort?: string | string[] | null;
     workingDir?: string | null;
     alwaysAllow?: string | null;
     interactiveArgs?: string[];
@@ -91,7 +91,7 @@ export function resolveAgentLaunchPlan(input: {
   let effortHandling: AgentLaunchPlan['effortHandling'] = { mode: 'none', detail: 'No effort selected.' };
   if (selectedEffort) {
     if (config.flags.effort) {
-      effortHandling = { mode: 'cli-flag', detail: `Passed via ${config.flags.effort}.` };
+      effortHandling = { mode: 'cli-flag', detail: `Passed via ${Array.isArray(config.flags.effort) ? config.flags.effort.join(' ') : config.flags.effort}.` };
     } else if (config.promptFallback?.effort) {
       effortHandling = { mode: 'prompt-only', detail: 'No verified CLI effort flag; effort is included in prompt metadata only.' };
     } else {

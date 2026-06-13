@@ -805,7 +805,7 @@ export default function TaskDetailsDrawer({
               </div>
 
               {/* 🌿 SUBTASKS SECTION */}
-              {!task.parentId && subTasks.length > 0 && (
+              {!task.parentId && (
                 <div className="space-y-3.5 border-t border-[#ebdcb9] dark:border-[#584a3b] pt-5 font-sans">
                   <div className="flex items-center justify-between">
                     <h4 className="text-[10px] font-mono text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest flex items-center gap-1.5 font-bold">
@@ -822,7 +822,8 @@ export default function TaskDetailsDrawer({
                     )}
                   </div>
 
-                  <div className="space-y-2.5">
+                  {subTasks.length > 0 && (
+                    <div className="space-y-2.5">
                     {/* Visual progress bar */}
                     <div className="bg-white dark:bg-[#292119] border border-[#ebdcb9]/65 dark:border-[#584a3b]/65 p-3 rounded-2xl flex items-center justify-between gap-4 shadow-3xs">
                       <div className="flex-1 bg-[#ede6dc]/60 dark:bg-[#292119]/60 rounded-full h-1.5 overflow-hidden">
@@ -904,6 +905,7 @@ export default function TaskDetailsDrawer({
                       })}
                     </div>
                   </div>
+                  )}
                 </div>
               )}
 

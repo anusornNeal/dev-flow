@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { MessageSquareTerminal, CheckCircle2, AlertCircle } from 'lucide-react';
+import { SquareTerminal, CheckCircle2, AlertCircle } from 'lucide-react';
 import type { Task } from '../types';
 
 interface CopyTemplateButtonProps {
@@ -57,7 +57,7 @@ export default function CopyTemplateButton({ task, className = '', variant = 'fu
         </>
       ) : (
         <>
-          <MessageSquareTerminal size={12} />
+          <SquareTerminal size={12} />
           {variant === 'full' && 'Prompt Template'}
         </>
       )}

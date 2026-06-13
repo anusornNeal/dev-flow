@@ -23,7 +23,11 @@ import {
   PawPrint,
   Copy,
   Image as ImageIcon,
-  Link as LinkIcon
+  Link as LinkIcon,
+  ChevronDown,
+  FlaskConical,
+  Code2,
+  ExternalLink
 } from 'lucide-react';
 import { Task, TaskPriority, TaskStatus, LogEntry, ChecklistItem } from '../types';
 import { AGENTS_CONFIG, getModelConfig, defaultModelForAgent, defaultEffortForModel } from '../lib/agentsConfig';
@@ -100,6 +104,20 @@ export default function TaskDetailsDrawer({
   const [copied, setCopied] = useState(false);
   const [idCopied, setIdCopied] = useState(false);
   const [isAddingSubtask, setIsAddingSubtask] = useState(false);
+
+  // Progressive disclosure state
+  const [showAllFiles, setShowAllFiles] = useState(false);
+  const [showAllChecklist, setShowAllChecklist] = useState(false);
+  // Accordion open state — empty = all collapsed
+  const [openSections, setOpenSections] = useState<Set<string>>(new Set());
+
+  const toggleSection = (key: string) => {
+    setOpenSections(prev => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
+  };
 
   // Sync state with task changes
   useEffect(() => {

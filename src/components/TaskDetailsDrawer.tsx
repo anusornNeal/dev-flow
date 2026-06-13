@@ -939,8 +939,8 @@ export default function TaskDetailsDrawer({
                 </h4>
                 {task.targetFiles && task.targetFiles.length > 0 ? (
                   <div className="space-y-1.5">
-                    {/* Show max 5 files, rest hidden until expanded */}
-                    {(showAllFiles ? task.targetFiles : task.targetFiles.slice(0, 5)).map((f, i) => (
+                    {/* Show max 3 files, rest hidden until expanded */}
+                    {(showAllFiles ? task.targetFiles : task.targetFiles.slice(0, 3)).map((f, i) => (
                       <div 
                         key={i} 
                         className="bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl p-2.5 flex items-center justify-between text-[11px] font-mono text-[#bd7e3e] dark:text-[#f3eadf] hover:border-[#dfa161] dark:hover:border-[#584a3b] group/file shadow-2xs"
@@ -964,16 +964,16 @@ export default function TaskDetailsDrawer({
                         </button>
                       </div>
                     ))}
-                    {task.targetFiles.length > 5 && !showAllFiles && (
+                    {task.targetFiles.length > 3 && !showAllFiles && (
                       <button
                         type="button"
                         onClick={() => setShowAllFiles(true)}
                         className="text-[10px] font-mono text-[#a47a32] dark:text-[#d6b56d] hover:text-[#8a6020] dark:hover:text-[#e0a070] font-bold transition-colors cursor-pointer pl-1"
                       >
-                        show {task.targetFiles.length - 5} more ↓
+                        show {task.targetFiles.length - 3} more ↓
                       </button>
                     )}
-                    {task.targetFiles.length > 5 && showAllFiles && (
+                    {task.targetFiles.length > 3 && showAllFiles && (
                       <button
                         type="button"
                         onClick={() => setShowAllFiles(false)}

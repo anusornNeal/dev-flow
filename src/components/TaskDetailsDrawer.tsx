@@ -1174,7 +1174,7 @@ export default function TaskDetailsDrawer({
                 {task.checklist && task.checklist.length > 0 ? (
                   <div className="flex flex-col gap-2">
                     <div className="flex flex-col">
-                      {(showAllChecklist ? task.checklist : task.checklist.slice(0, 10)).map((item) => (
+                      {(showAllChecklist ? task.checklist : task.checklist.slice(0, 5)).map((item) => (
                         <div 
                           key={item.id || item.text}
                           onClick={() => handleToggleChecklistItem(item.id || item.text)}
@@ -1194,16 +1194,16 @@ export default function TaskDetailsDrawer({
                         </div>
                       ))}
                     </div>
-                    {task.checklist.length > 10 && !showAllChecklist && (
+                    {task.checklist.length > 5 && !showAllChecklist && (
                       <button
                         type="button"
                         onClick={() => setShowAllChecklist(true)}
                         className="text-[10px] font-mono text-[#a47a32] dark:text-[#d6b56d] hover:text-[#8a6020] dark:hover:text-[#e0a070] dark:text-[#d6b56d] font-bold transition-colors cursor-pointer pl-1"
                       >
-                        show {task.checklist.length - 10} more ↓
+                        show {task.checklist.length - 5} more ↓
                       </button>
                     )}
-                    {task.checklist.length > 10 && showAllChecklist && (
+                    {task.checklist.length > 5 && showAllChecklist && (
                       <button
                         type="button"
                         onClick={() => setShowAllChecklist(false)}

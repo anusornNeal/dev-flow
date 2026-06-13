@@ -91,7 +91,7 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
         isDrag 
           ? 'border-dashed border-[#e6b47c] dark:border-[#584a3b] bg-[#faf6ef]/50 dark:bg-[#292119]/50 opacity-60' 
           : isInProgress
-            ? 'bg-[#ffffff] dark:bg-[#292119] border-2 border-[#e3a35a] dark:border-[#584a3b] shadow-md ring-[4px] ring-[#f8ebd9]/40 dark:ring-[#292119]/40'
+            ? 'bg-[#ffffff] dark:bg-[#292119] border-2 border-[#e3a35a] dark:border-[#d6a549] shadow-md ring-[4px] ring-[#f8ebd9]/40 dark:ring-[#d6a549]/20'
             : isDone
               ? 'bg-[#f7fdf7] dark:bg-[#292119] border-[#d4ece3] dark:border-[#584a3b] border-l-4 border-l-emerald-500 shadow-2xs'
               : 'bg-[#ffffff] dark:bg-[#292119] border-[#e8dfcf] dark:border-[#584a3b] hover:border-[#cfc3b0] dark:hover:border-[#584a3b] shadow-sm hover:shadow-md'

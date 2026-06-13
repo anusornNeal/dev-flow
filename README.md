@@ -19,7 +19,7 @@ Prerequisites:
 Setup:
 
 1. Install dependencies with `npm install`.
-2. Create a local env file if needed from [`.env.example`](C:\Users\tatar\Projects\dev-flow\.env.example).
+2. Create a local env file if needed from [`.env.example`](.env.example).
 3. Start the app with `npm run dev`.
 
 Standard commands:
@@ -72,7 +72,7 @@ Set `DEVFLOW_AGENT_TRIGGER_SCRIPT` to override the default trigger script path (
 - Runtime prompt/log files under `.devflow/runs/` are ignored by git and are not part of normal DB backup/export files.
 - The runner uses `DEVFLOW_API_BASE_URL` when it needs an API reference, defaulting to `http://localhost:3000`.
 - The runner defaults to safe execution mode. Set `DEVFLOW_AGENT_EXECUTION_MODE=full` only for trusted local full-access runs.
-- The previous trigger behavior is documented in [`docs/agent-trigger-legacy-behavior.md`](C:\Users\tatar\Projects\dev-flow\docs\agent-trigger-legacy-behavior.md).
+- The previous trigger behavior is documented in [`docs/agent-trigger-legacy-behavior.md`](docs/agent-trigger-legacy-behavior.md).
 
 ### Debugging Agent Launches
 
@@ -83,7 +83,7 @@ Set `DEVFLOW_AGENT_TRIGGER_SCRIPT` to override the default trigger script path (
 
 ## Skills
 
-- Project skill markdown lives under [`skills/`](C:\Users\tatar\Projects\dev-flow\skills).
+- Project skill markdown lives under [`skills/`](skills).
 - Runtime skill data should be read through the app/API and stored in SQLite, not assumed to come directly from markdown files after import.
 - Skill markdown content should be preserved exactly when imported or displayed.
 

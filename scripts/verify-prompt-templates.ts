@@ -5,6 +5,7 @@ import path from 'node:path';
 import { interpolate, renderPromptTemplate, type PromptRenderContext } from '../src/server/services/promptTemplateService';
 
 console.log('[verify] Testing prompt template interpolation with production-shaped context...');
+const fixtureLocalPath = path.join('fixtures', 'dev-flow');
 
 const mockContext: PromptRenderContext = {
   run: { id: 'run-123' },
@@ -23,7 +24,7 @@ const mockContext: PromptRenderContext = {
   },
   workspace: {
     repo: 'https://github.com/anusornNeal/dev-flow',
-    localPath: 'C:\\Users\\tatar\\Projects\\dev-flow',
+    localPath: fixtureLocalPath,
   },
   instruction: {
     description: 'Render prompts from the real agent task context.',
@@ -77,7 +78,7 @@ assert.ok(renderResult.content.includes('Render prompts from the real agent task
 assert.ok(renderResult.content.includes('Prompt contains the real task fields.'));
 assert.ok(renderResult.content.includes('Run prompt template and orchestration checks.'));
 assert.ok(renderResult.content.includes('https://github.com/anusornNeal/dev-flow'));
-assert.ok(renderResult.content.includes('C:\\Users\\tatar\\Projects\\dev-flow'));
+assert.ok(renderResult.content.includes(fixtureLocalPath));
 assert.ok(renderResult.content.includes('Agent: Codex, Model: GPT-5.5, Effort: xhigh'));
 assert.ok(renderResult.content.includes('DVF-0081: Use production task context'));
 

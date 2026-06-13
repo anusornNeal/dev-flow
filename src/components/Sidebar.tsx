@@ -215,7 +215,7 @@ export default function Sidebar({
                               type="text"
                               value={newProjectLocalPath}
                               onChange={(e) => setNewProjectLocalPath(e.target.value)}
-                              placeholder="Local absolute path (e.g. C:\Projects\app)"
+                              placeholder="Local absolute path"
                               className="w-full bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] px-2 py-1 rounded-md text-[9px] outline-none focus:border-[#d4994e] dark:focus:border-[#584a3b] font-mono"
                             />
                             <input
@@ -397,7 +397,7 @@ export default function Sidebar({
                     <span className="text-[8px] text-[#8C7565] dark:text-[#f3eadf] font-bold block mb-0.5">Local Path (Optional)</span>
                     <input
                       type="text"
-                      placeholder="C:\Projects\my-app"
+                      placeholder="Local absolute path"
                       value={newProjectLocalPath}
                       onChange={(e) => setNewProjectLocalPath(e.target.value)}
                       className="w-full bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] px-2 py-1 rounded-md text-[10px] outline-none focus:border-[#d4994e] dark:focus:border-[#584a3b] font-mono"

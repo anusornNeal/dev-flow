@@ -7,6 +7,8 @@
   "scripts": {
     "setup": "tsx scripts/setup.ts",
     "doctor": "tsx scripts/doctor.ts",
+    "typecheck": "tsc --noEmit",
+    "verify": "tsx scripts/verify.ts",
     "test": "tsx scripts/verify.ts",
     "test:agent-runs": "tsx scripts/verify-agent-runs.ts",
     "test:prompt-templates": "tsx scripts/verify-prompt-templates.ts",

@@ -59,6 +59,9 @@ const files = createAgentRunFiles({
   prompt: 'full prompt body that should stay off the command line',
   baseDir: tempDir,
 });
+const fixtureRepoPath = path.win32.join('fixtures', 'repo');
+const fixtureWorkDir = path.win32.join('fixtures', 'work dir');
+const fixtureCodexPath = path.win32.join('tools', 'codex.cmd');
 
 assert.equal(fs.readFileSync(files.promptPath, 'utf8'), 'full prompt body that should stay off the command line');
 assert.ok(files.logPath.endsWith(path.join(run.id, 'agent.log')));
@@ -175,7 +178,7 @@ const cliArgs = buildAgentCliArgs({
     },
     launchStyle: 'start',
   },
-  localPath: 'C:\\work',
+  localPath: fixtureRepoPath,
   model: 'GPT-5.5',
   effort: 'high',
   promptReference: buildPromptReference(files.promptPath),
@@ -183,7 +186,7 @@ const cliArgs = buildAgentCliArgs({
 });
 
 assert.deepEqual(cliArgs, [
-  '-C', 'C:\\work',
+  '-C', fixtureRepoPath,
   '-m', 'gpt-5.5',
   '--config', 'reasoning_effort=high',
   '-s', 'workspace-write',
@@ -271,7 +274,7 @@ const agyArgs = buildAgentCliArgs({
     },
     launchStyle: 'start',
   },
-  localPath: 'C:\\work',
+  localPath: fixtureRepoPath,
   model: 'Gemini 3.1 Pro',
   effort: 'high',
   promptReference: buildPromptReference(files.promptPath),
@@ -291,17 +294,17 @@ const launchScriptPath = createCodexLaunchScript({
   taskId: 'task-script-test',
   apiBaseUrl: 'http://localhost:3000',
   runDir: files.runDir,
-  executable: 'C:\\Tools\\codex.cmd',
-  args: ['-C', 'C:\\work dir', '-m', 'gpt-5.5', '--config', 'reasoning_effort=high', buildPromptReference(files.promptPath)],
-  cwd: 'C:\\work dir',
+  executable: fixtureCodexPath,
+  args: ['-C', fixtureWorkDir, '-m', 'gpt-5.5', '--config', 'reasoning_effort=high', buildPromptReference(files.promptPath)],
+  cwd: fixtureWorkDir,
   windowTitle: 'Codex Agent',
   logPath: files.logPath,
 });
 const launchScript = fs.readFileSync(launchScriptPath, 'utf8');
 assert.match(launchScript, /title Codex Agent/);
-assert.match(launchScript, /cd \/d "C:\\work dir"/);
-assert.match(launchScript, /call "C:\\Tools\\codex\.cmd"/);
-assert.match(launchScript, /"C:\\Tools\\codex.cmd" "-C" "C:\\work dir" "-m" "gpt-5.5" "--config" "reasoning_effort=high"/);
+assert.ok(launchScript.includes(`cd /d "${fixtureWorkDir}"`));
+assert.ok(launchScript.includes(`call "${fixtureCodexPath}"`));
+assert.ok(launchScript.includes(`"${fixtureCodexPath}" "-C" "${fixtureWorkDir}" "-m" "gpt-5.5" "--config" "reasoning_effort=high"`));
 assert.equal(launchScript.includes('"--config reasoning_effort=high"'), false);
 assert.equal(launchScript.includes('GITHUB_PERSONAL_ACCESS_TOKEN'), false);
 assert.match(launchScript, /exitCode/);

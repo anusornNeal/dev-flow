@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, Save, FileText, Edit2, Ban, ChevronRight, Copy, Eye, Lock, Trash2 } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 interface TemplateModalProps {
   projectId: string;
@@ -116,14 +118,14 @@ export default function TemplateModal({ projectId, onClose }: TemplateModalProps
   };
 
   return (
-    <div className="fixed inset-0 bg-[#3e3129]/30 dark:bg-[#f3eadf]/30 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="bg-[#fffdfa] dark:bg-[#292119] rounded-2xl shadow-xl w-full max-w-6xl h-[85vh] flex border border-[#e5d4bb] dark:border-[#584a3b] overflow-hidden select-none">
+    <div className="fixed inset-0 bg-[#3e3129]/30 dark:bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div className="bg-[#fffdfa] dark:bg-[#1e1914] rounded-2xl shadow-xl w-full max-w-6xl h-[85vh] flex border border-[#e5d4bb] dark:border-[#584a3b] overflow-hidden select-none">
         
         {/* Left Sidebar: Section List */}
-        <div className="w-1/3 border-r border-[#ebdcb9] dark:border-[#584a3b] bg-[#fdfbf6] dark:bg-[#292119] flex flex-col">
+        <div className="w-1/3 border-r border-[#ebdcb9] dark:border-[#584a3b] bg-[#fdfbf6] dark:bg-[#1e1914] flex flex-col">
           <div className="px-6 py-4 border-b border-[#ebdcb9] dark:border-[#584a3b] flex items-center justify-between shrink-0">
             <h2 className="text-[#534135] dark:text-[#f3eadf] font-extrabold font-sans text-lg flex items-center gap-2">
-              <FileText size={20} className="text-[#d89745] dark:text-[#e0a070]" />
+              <FileText size={20} className="text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d]" />
               Prompt Template
             </h2>
           </div>
@@ -132,7 +134,7 @@ export default function TemplateModal({ projectId, onClose }: TemplateModalProps
              <button
                 onClick={handlePreviewFinalPrompt}
                 disabled={loadingPreview}
-                className="w-full py-2 bg-[#d89745] dark:bg-[#e0a070] text-white dark:text-[#f3eadf] font-bold rounded-lg shadow-sm hover:bg-[#c08234] dark:hover:bg-[#d6b56d] transition-colors flex items-center justify-center gap-2 text-xs"
+                className="w-full py-2 bg-[#d89745] dark:bg-[#e0a070] text-white dark:text-[#f3eadf] font-bold rounded-lg shadow-sm hover:bg-[#c08234] dark:bg-[#e0a070] dark:hover:bg-[#d6b56d] dark:bg-[#e0a070] transition-colors flex items-center justify-center gap-2 text-xs"
               >
                 <Eye size={14} />
                 {loadingPreview ? 'Loading Preview...' : 'Preview Final Prompt'}
@@ -162,7 +164,7 @@ export default function TemplateModal({ projectId, onClose }: TemplateModalProps
                           ? 'border-[#d89745] dark:border-[#e0a070] bg-[#fff9ee] dark:bg-[#1e1914] shadow-sm'
                           : missingRequired 
                             ? 'border-red-300 dark:border-red-900 bg-red-50 dark:bg-red-900/20 opacity-80'
-                            : 'border-[#ebdcb9] dark:border-[#584a3b] bg-white dark:bg-[#292119] hover:border-[#d8c5aa] dark:hover:border-[#6b5a48] hover:shadow-xs'
+                            : 'border-[#ebdcb9] dark:border-[#584a3b] bg-white dark:bg-[#1e1914] hover:border-[#d8c5aa] dark:border-[#584a3b] dark:hover:border-[#6b5a48] hover:shadow-xs'
                       }`}
                     >
                       <div className="flex items-center justify-between">
@@ -202,8 +204,8 @@ export default function TemplateModal({ projectId, onClose }: TemplateModalProps
         </div>
 
         {/* Right Content Area */}
-        <div className="flex-1 flex flex-col bg-[#fffdfa] dark:bg-[#292119] min-w-0">
-          <div className="px-6 py-4 border-b border-[#ebdcb9] dark:border-[#584a3b] flex items-center justify-between shrink-0 bg-[#fdfbf6] dark:bg-[#292119]">
+        <div className="flex-1 flex flex-col bg-[#fffdfa] dark:bg-[#1e1914] min-w-0">
+          <div className="px-6 py-4 border-b border-[#ebdcb9] dark:border-[#584a3b] flex items-center justify-between shrink-0 bg-[#fdfbf6] dark:bg-[#1e1914]">
             {previewContent !== null ? (
                <div className="flex flex-col gap-1">
                   <h3 className="text-[#534135] dark:text-[#f3eadf] font-extrabold text-lg flex items-center gap-2">
@@ -230,7 +232,7 @@ export default function TemplateModal({ projectId, onClose }: TemplateModalProps
                           setIsEditingOverride(true);
                           setEditContent(selectedSection.masterContent || '');
                         }}
-                        className="px-3 py-1.5 text-xs font-bold bg-[#f4ebd9] dark:bg-[#1e1914] text-[#7a6455] dark:text-[#f3eadf] hover:bg-[#ebdcb9] dark:hover:bg-[#382b1d] rounded-lg transition-colors flex items-center gap-1.5 border border-[#d8c5aa] dark:border-[#584a3b]"
+                        className="px-3 py-1.5 text-xs font-bold bg-[#f4ebd9] dark:bg-[#1e1914] text-[#7a6455] dark:text-[#f3eadf] hover:bg-[#ebdcb9] dark:bg-[#584a3b] dark:hover:bg-[#382b1d] rounded-lg transition-colors flex items-center gap-1.5 border border-[#d8c5aa] dark:border-[#584a3b]"
                      >
                         <Edit2 size={12} /> Create Override
                      </button>
@@ -246,7 +248,7 @@ export default function TemplateModal({ projectId, onClose }: TemplateModalProps
                       </button>
                       <button
                         onClick={() => setEditContent(selectedSection.masterContent || '')}
-                        className="px-3 py-1.5 text-xs font-bold text-[#7a6455] dark:text-[#f3eadf] bg-[#f4ebd9] dark:bg-[#1e1914] hover:bg-[#ebdcb9] dark:hover:bg-[#382b1d] rounded-lg transition-colors flex items-center gap-1.5 border border-[#d8c5aa] dark:border-[#584a3b]"
+                        className="px-3 py-1.5 text-xs font-bold text-[#7a6455] dark:text-[#f3eadf] bg-[#f4ebd9] dark:bg-[#1e1914] hover:bg-[#ebdcb9] dark:bg-[#584a3b] dark:hover:bg-[#382b1d] rounded-lg transition-colors flex items-center gap-1.5 border border-[#d8c5aa] dark:border-[#584a3b]"
                         title="Copy from Master"
                       >
                         <Copy size={12} /> Copy Master
@@ -254,7 +256,7 @@ export default function TemplateModal({ projectId, onClose }: TemplateModalProps
                       <button
                         onClick={handleSaveOverride}
                         disabled={saving}
-                        className="px-3 py-1.5 text-xs font-bold bg-[#d89745] dark:bg-[#e0a070] text-white dark:text-[#f3eadf] hover:bg-[#c08234] dark:hover:bg-[#d6b56d] rounded-lg transition-colors flex items-center gap-1.5"
+                        className="px-3 py-1.5 text-xs font-bold bg-[#d89745] dark:bg-[#e0a070] text-white dark:text-[#f3eadf] hover:bg-[#c08234] dark:bg-[#e0a070] dark:hover:bg-[#d6b56d] dark:bg-[#e0a070] rounded-lg transition-colors flex items-center gap-1.5"
                       >
                         <Save size={12} /> {saving ? 'Saving...' : 'Save Override'}
                       </button>
@@ -268,7 +270,7 @@ export default function TemplateModal({ projectId, onClose }: TemplateModalProps
             
             <button
               onClick={onClose}
-              className="ml-4 p-1.5 hover:bg-[#ebdcb9]/40 dark:hover:bg-[#584a3b]/40 rounded-lg text-[#8C7565] dark:text-[#f3eadf] transition-colors"
+              className="ml-4 p-1.5 hover:bg-[#ebdcb9] dark:bg-[#584a3b]/40 dark:hover:bg-[#584a3b]/40 rounded-lg text-[#8C7565] dark:text-[#f3eadf] transition-colors"
             >
               <X size={20} />
             </button>
@@ -276,8 +278,12 @@ export default function TemplateModal({ projectId, onClose }: TemplateModalProps
 
           <div className="flex-1 overflow-hidden relative bg-[#fffdfa] dark:bg-[#1e1914]">
              {previewContent !== null ? (
-                <div className="absolute inset-0 p-6 overflow-y-auto font-mono text-xs text-[#534135] dark:text-[#f3eadf] whitespace-pre-wrap">
-                   {previewContent}
+                <div className="absolute inset-0 p-6 overflow-y-auto">
+                   <div className="prose prose-sm prose-orange max-w-none prose-headings:font-extrabold prose-a:text-[#d89745] dark:prose-invert dark:prose-headings:text-[#e0a070] dark:text-[#f3eadf]">
+                     <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                       {previewContent}
+                     </ReactMarkdown>
+                   </div>
                 </div>
              ) : selectedSection ? (
                isEditingOverride ? (
@@ -291,8 +297,10 @@ export default function TemplateModal({ projectId, onClose }: TemplateModalProps
                ) : (
                   <div className="absolute inset-0 p-6 overflow-y-auto">
                      {selectedSection.masterContent ? (
-                       <div className="font-mono text-sm text-[#534135] dark:text-[#f3eadf] whitespace-pre-wrap leading-relaxed opacity-80">
-                         {selectedSection.masterContent}
+                       <div className="prose prose-sm prose-orange max-w-none prose-headings:font-extrabold prose-a:text-[#d89745] dark:prose-invert dark:prose-headings:text-[#e0a070] dark:text-[#f3eadf] opacity-80">
+                         <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                           {selectedSection.masterContent}
+                         </ReactMarkdown>
                        </div>
                      ) : (
                        <div className="h-full flex items-center justify-center">

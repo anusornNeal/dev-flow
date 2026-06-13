@@ -22,7 +22,7 @@ export default function NgrokStatusPanel({ ngrokUrl, onOpenSettings }: NgrokStat
       <button 
         onClick={onOpenSettings}
         title="ngrok URL not configured. Click to set in Settings."
-        className="flex items-center gap-1.5 bg-[#fff9f1] dark:bg-[#292119] border border-[#f0c295] dark:border-[#584a3b] text-[#b0733a] dark:text-[#f3eadf] hover:bg-[#faeedd] dark:hover:bg-[#1e1914] hover:text-[#8b5a2b] dark:hover:text-[#f3eadf] px-2.5 py-1 text-[10px] font-mono rounded-lg transition-colors cursor-pointer font-bold shadow-2xs"
+        className="flex items-center gap-1.5 bg-[#fff9f1] dark:bg-[#292119] border border-[#f0c295] dark:border-[#584a3b] text-[#b0733a] dark:text-[#f3eadf] hover:bg-[#faeedd] dark:bg-[#1e1914] dark:hover:bg-[#1e1914] hover:text-[#8b5a2b] dark:text-[#d6b56d] dark:hover:text-[#f3eadf] px-2.5 py-1 text-[10px] font-mono rounded-lg transition-colors cursor-pointer font-bold shadow-2xs"
       >
         <AlertCircle size={13} />
         <span>ngrok unset</span>
@@ -47,7 +47,7 @@ export default function NgrokStatusPanel({ ngrokUrl, onOpenSettings }: NgrokStat
       
       <button
         onClick={handleCopy}
-        className="hover:bg-[#ebdcb9] dark:hover:bg-[#584a3b] hover:text-[#534135] dark:hover:text-[#f3eadf] px-1.5 py-0.5 rounded transition-colors cursor-pointer font-bold text-[#a46c24] dark:text-[#f3eadf]"
+        className="hover:bg-[#ebdcb9] dark:bg-[#584a3b] dark:hover:bg-[#584a3b] hover:text-[#534135] dark:hover:text-[#f3eadf] px-1.5 py-0.5 rounded transition-colors cursor-pointer font-bold text-[#a46c24] dark:text-[#f3eadf]"
         title="Copy URL"
       >
         {copied ? <CheckCircle2 size={13} className="text-green-500" /> : <Copy size={13} />}

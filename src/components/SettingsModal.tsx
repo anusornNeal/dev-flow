@@ -148,15 +148,15 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
   };
 
   return (
-    <div className="fixed inset-0 bg-[#3e3129]/30 dark:bg-[#f3eadf]/30 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="bg-[#fffdfa] dark:bg-[#292119] rounded-2xl shadow-xl w-full max-w-xl border border-[#e5d4bb] dark:border-[#584a3b] overflow-hidden flex flex-col max-h-[90vh]">
+    <div className="fixed inset-0 bg-[#3e3129]/30 dark:bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div className="bg-[#fffdfa] dark:bg-[#1e1914] rounded-2xl shadow-xl w-full max-w-xl border border-[#e5d4bb] dark:border-[#584a3b] overflow-hidden flex flex-col max-h-[90vh]">
         
         {/* Header */}
-        <div className="px-6 py-4 border-b border-[#ebdcb9] dark:border-[#584a3b] bg-[#fdfbf6] dark:bg-[#292119] flex items-center justify-between shrink-0">
+        <div className="px-6 py-4 border-b border-[#ebdcb9] dark:border-[#584a3b] bg-[#fdfbf6] dark:bg-[#1e1914] flex items-center justify-between shrink-0">
           <h2 className="text-[#534135] dark:text-[#f3eadf] font-extrabold font-sans text-lg">⚙️ Settings</h2>
           <button
             onClick={onClose}
-            className="text-[#8c7463] dark:text-[#f3eadf] hover:bg-[#ebdcb9]/40 dark:hover:bg-[#584a3b]/40 p-1.5 rounded-lg transition-colors"
+            className="text-[#8c7463] dark:text-[#f3eadf] hover:bg-[#ebdcb9] dark:bg-[#584a3b]/40 dark:hover:bg-[#584a3b]/40 p-1.5 rounded-lg transition-colors"
           >
             <X size={18} />
           </button>
@@ -164,7 +164,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
 
         {loading ? (
           <div className="flex items-center justify-center p-16">
-            <Loader2 size={24} className="text-[#d89745] dark:text-[#e0a070] animate-spin" />
+            <Loader2 size={24} className="text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d] animate-spin" />
           </div>
         ) : (
           <>
@@ -173,7 +173,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
             {/* ngrok URL */}
             <div className="flex flex-col gap-2">
               <label className="flex items-center gap-1.5 text-sm font-extrabold text-[#534135] dark:text-[#f3eadf]">
-                <Link size={14} className="text-[#d89745] dark:text-[#e0a070]" />
+                <Link size={14} className="text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d]" />
                 ngrok URL
               </label>
               <p className="text-[11px] text-[#8a725f] dark:text-[#f3eadf] font-mono -mt-1">
@@ -184,16 +184,16 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                 value={ngrokUrl}
                 onChange={e => setNgrokUrl(e.target.value)}
                 placeholder="https://xxxx.ngrok-free.app"
-                className="w-full px-4 py-2.5 text-sm font-mono rounded-xl border border-[#ddd0ba] dark:border-[#584a3b] bg-white dark:bg-[#292119] text-[#3e3129] dark:text-[#f3eadf] focus:outline-none focus:ring-2 focus:ring-[#d89745]/50 dark:focus:ring-[#e0a070]/50 focus:border-[#d89745] dark:focus:border-[#e0a070] transition"
+                className="w-full px-4 py-2.5 text-sm font-mono rounded-xl border border-[#ddd0ba] dark:border-[#584a3b] bg-white dark:bg-[#1e1914] text-[#3e3129] dark:text-[#f3eadf] focus:outline-none focus:ring-2 focus:ring-[#d89745]/50 dark:focus:ring-[#e0a070]/50 focus:border-[#d89745] dark:border-[#e0a070] dark:focus:border-[#e0a070] transition"
               />
             </div>
 
 
             {/* Integrations Section */}
-            <div className="flex flex-col gap-5 border border-[#e5d4bb] dark:border-[#584a3b] rounded-xl p-4 bg-[#fdfbf6] dark:bg-[#292119]">
+            <div className="flex flex-col gap-5 border border-[#e5d4bb] dark:border-[#584a3b] rounded-xl p-4 bg-[#fdfbf6] dark:bg-[#1e1914]">
               <div>
                 <h3 className="text-sm font-extrabold text-[#534135] dark:text-[#f3eadf] flex items-center gap-1.5 mb-1">
-                  <FileText size={14} className="text-[#d89745] dark:text-[#e0a070]" />
+                  <FileText size={14} className="text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d]" />
                   Integrations
                 </h3>
                 <p className="text-[11px] text-[#8a725f] dark:text-[#f3eadf] font-mono">
@@ -226,7 +226,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                             setShowGithubToken(true);
                           }
                         }}
-                        className="text-[10px] text-[#d89745] dark:text-[#e0a070] font-bold hover:underline"
+                        className="text-[10px] text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d] font-bold hover:underline"
                       >
                         {showGithubToken ? 'Cancel' : githubTokenMasked ? 'Replace' : 'Add'}
                       </button>
@@ -244,12 +244,12 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                     value={githubToken}
                     onChange={e => setGithubToken(e.target.value)}
                     placeholder="ghp_..."
-                    className="w-full px-3 py-2 text-sm font-mono rounded-lg border border-[#ddd0ba] dark:border-[#584a3b] bg-white dark:bg-[#292119] text-[#3e3129] dark:text-[#f3eadf] focus:outline-none focus:ring-2 focus:ring-[#d89745]/50 dark:focus:ring-[#e0a070]/50 focus:border-[#d89745] dark:focus:border-[#e0a070] transition"
+                    className="w-full px-3 py-2 text-sm font-mono rounded-lg border border-[#ddd0ba] dark:border-[#584a3b] bg-white dark:bg-[#1e1914] text-[#3e3129] dark:text-[#f3eadf] focus:outline-none focus:ring-2 focus:ring-[#d89745]/50 dark:focus:ring-[#e0a070]/50 focus:border-[#d89745] dark:border-[#e0a070] dark:focus:border-[#e0a070] transition"
                   />
                 ) : clearGithubToken ? (
-                  <div className="px-3 py-2 rounded-lg border border-[#fecaca] dark:border-[#584a3b] bg-[#fff0f0] dark:bg-[#292119] text-[11px] text-[#991b1b] dark:text-[#f3eadf] font-mono flex items-center justify-between">
+                  <div className="px-3 py-2 rounded-lg border border-[#fecaca] dark:border-[#584a3b] bg-[#fff0f0] dark:bg-[#1e1914] text-[11px] text-[#991b1b] dark:text-[#f3eadf] font-mono flex items-center justify-between">
                     Pending removal (Save to apply)
-                    <button onClick={() => setClearGithubToken(false)} className="underline hover:text-[#7f1d1d] dark:hover:text-[#f3eadf] font-bold">Undo</button>
+                    <button onClick={() => setClearGithubToken(false)} className="underline hover:text-[#7f1d1d] dark:text-[#f3eadf] dark:hover:text-[#f3eadf] font-bold">Undo</button>
                   </div>
                 ) : (
                   <div className="px-3 py-2 rounded-lg border border-[#e5d4bb] dark:border-[#584a3b] bg-[#faf7f0] dark:bg-[#1e1914] text-[11px] text-[#b89b82] dark:text-[#d6b56d] font-mono">
@@ -275,7 +275,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                     value={jiraBaseUrl}
                     onChange={e => setJiraBaseUrl(e.target.value)}
                     placeholder="https://your-domain.atlassian.net"
-                    className="w-full px-3 py-2 text-sm font-mono rounded-lg border border-[#ddd0ba] dark:border-[#584a3b] bg-white dark:bg-[#292119] text-[#3e3129] dark:text-[#f3eadf] focus:outline-none focus:ring-2 focus:ring-[#d89745]/50 dark:focus:ring-[#e0a070]/50 focus:border-[#d89745] dark:focus:border-[#e0a070] transition"
+                    className="w-full px-3 py-2 text-sm font-mono rounded-lg border border-[#ddd0ba] dark:border-[#584a3b] bg-white dark:bg-[#1e1914] text-[#3e3129] dark:text-[#f3eadf] focus:outline-none focus:ring-2 focus:ring-[#d89745]/50 dark:focus:ring-[#e0a070]/50 focus:border-[#d89745] dark:border-[#e0a070] dark:focus:border-[#e0a070] transition"
                   />
                 </div>
 
@@ -287,7 +287,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                     value={jiraEmail}
                     onChange={e => setJiraEmail(e.target.value)}
                     placeholder="name@company.com"
-                    className="w-full px-3 py-2 text-sm font-mono rounded-lg border border-[#ddd0ba] dark:border-[#584a3b] bg-white dark:bg-[#292119] text-[#3e3129] dark:text-[#f3eadf] focus:outline-none focus:ring-2 focus:ring-[#d89745]/50 dark:focus:ring-[#e0a070]/50 focus:border-[#d89745] dark:focus:border-[#e0a070] transition"
+                    className="w-full px-3 py-2 text-sm font-mono rounded-lg border border-[#ddd0ba] dark:border-[#584a3b] bg-white dark:bg-[#1e1914] text-[#3e3129] dark:text-[#f3eadf] focus:outline-none focus:ring-2 focus:ring-[#d89745]/50 dark:focus:ring-[#e0a070]/50 focus:border-[#d89745] dark:border-[#e0a070] dark:focus:border-[#e0a070] transition"
                   />
                 </div>
 
@@ -316,7 +316,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                               setShowJiraToken(true);
                             }
                           }}
-                          className="text-[10px] text-[#d89745] dark:text-[#e0a070] font-bold hover:underline"
+                          className="text-[10px] text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d] font-bold hover:underline"
                         >
                           {showJiraToken ? 'Cancel' : jiraTokenMasked ? 'Replace' : 'Add'}
                         </button>
@@ -331,12 +331,12 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                       value={jiraToken}
                       onChange={e => setJiraToken(e.target.value)}
                       placeholder="Jira token..."
-                      className="w-full px-3 py-2 text-sm font-mono rounded-lg border border-[#ddd0ba] dark:border-[#584a3b] bg-white dark:bg-[#292119] text-[#3e3129] dark:text-[#f3eadf] focus:outline-none focus:ring-2 focus:ring-[#d89745]/50 dark:focus:ring-[#e0a070]/50 focus:border-[#d89745] dark:focus:border-[#e0a070] transition"
+                      className="w-full px-3 py-2 text-sm font-mono rounded-lg border border-[#ddd0ba] dark:border-[#584a3b] bg-white dark:bg-[#1e1914] text-[#3e3129] dark:text-[#f3eadf] focus:outline-none focus:ring-2 focus:ring-[#d89745]/50 dark:focus:ring-[#e0a070]/50 focus:border-[#d89745] dark:border-[#e0a070] dark:focus:border-[#e0a070] transition"
                     />
                   ) : clearJiraToken ? (
-                    <div className="px-3 py-2 rounded-lg border border-[#fecaca] dark:border-[#584a3b] bg-[#fff0f0] dark:bg-[#292119] text-[11px] text-[#991b1b] dark:text-[#f3eadf] font-mono flex items-center justify-between">
+                    <div className="px-3 py-2 rounded-lg border border-[#fecaca] dark:border-[#584a3b] bg-[#fff0f0] dark:bg-[#1e1914] text-[11px] text-[#991b1b] dark:text-[#f3eadf] font-mono flex items-center justify-between">
                       Pending removal (Save to apply)
-                      <button onClick={() => setClearJiraToken(false)} className="underline hover:text-[#7f1d1d] dark:hover:text-[#f3eadf] font-bold">Undo</button>
+                      <button onClick={() => setClearJiraToken(false)} className="underline hover:text-[#7f1d1d] dark:text-[#f3eadf] dark:hover:text-[#f3eadf] font-bold">Undo</button>
                     </div>
                   ) : (
                     <div className="px-3 py-2 rounded-lg border border-[#e5d4bb] dark:border-[#584a3b] bg-[#faf7f0] dark:bg-[#1e1914] text-[11px] text-[#b89b82] dark:text-[#d6b56d] font-mono">
@@ -354,7 +354,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
             <div className="pt-4 mt-2 border-t border-[#ebdcb9] dark:border-[#584a3b] flex flex-col gap-3">
               <div className="flex flex-col gap-1">
                 <label className="flex items-center gap-1.5 text-sm font-extrabold text-[#534135] dark:text-[#f3eadf]">
-                  <Activity size={14} className="text-[#d89745] dark:text-[#e0a070]" />
+                  <Activity size={14} className="text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d]" />
                   Agent Execution Mode
                 </label>
                 <p className="text-[11px] text-[#8a725f] dark:text-[#f3eadf] font-mono leading-relaxed">
@@ -362,14 +362,14 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                 </p>
               </div>
               <div className="flex flex-col gap-2">
-                <label className={`flex items-start gap-2 p-2.5 rounded-lg border cursor-pointer transition-colors ${agentExecutionMode === 'safe' ? 'bg-[#f0f9f4] dark:bg-[#292119] border-[#a3e6cd] dark:border-[#584a3b] shadow-sm' : 'bg-white dark:bg-[#292119] border-[#ebdcb9] dark:border-[#584a3b] hover:bg-[#faf7f0] dark:hover:bg-[#1e1914]'}`}>
+                <label className={`flex items-start gap-2 p-2.5 rounded-lg border cursor-pointer transition-colors ${agentExecutionMode === 'safe' ? 'bg-[#f0f9f4] dark:bg-[#1e1914] border-[#a3e6cd] dark:border-[#584a3b] shadow-sm' : 'bg-white dark:bg-[#1e1914] border-[#ebdcb9] dark:border-[#584a3b] hover:bg-[#faf7f0] dark:bg-[#1e1914] dark:hover:bg-[#1e1914]'}`}>
                   <input type="radio" name="executionMode" value="safe" checked={agentExecutionMode === 'safe'} onChange={() => setAgentExecutionMode('safe')} className="mt-1" />
                   <div className="flex flex-col">
                     <span className={`text-[12px] font-bold ${agentExecutionMode === 'safe' ? 'text-[#166534] dark:text-[#f3eadf]' : 'text-[#534135] dark:text-[#f3eadf]'}`}>Safe Mode (Recommended)</span>
                     <span className="text-[10px] text-[#8a725f] dark:text-[#f3eadf] font-mono">Restricts agents to editing files within the workspace. Blocks arbitrary system commands.</span>
                   </div>
                 </label>
-                <label className={`flex items-start gap-2 p-2.5 rounded-lg border cursor-pointer transition-colors ${agentExecutionMode === 'full' ? 'bg-[#fff0f0] dark:bg-[#292119] border-[#fecaca] dark:border-[#584a3b] shadow-sm' : 'bg-white dark:bg-[#292119] border-[#ebdcb9] dark:border-[#584a3b] hover:bg-[#faf7f0] dark:hover:bg-[#1e1914]'}`}>
+                <label className={`flex items-start gap-2 p-2.5 rounded-lg border cursor-pointer transition-colors ${agentExecutionMode === 'full' ? 'bg-[#fff0f0] dark:bg-[#1e1914] border-[#fecaca] dark:border-[#584a3b] shadow-sm' : 'bg-white dark:bg-[#1e1914] border-[#ebdcb9] dark:border-[#584a3b] hover:bg-[#faf7f0] dark:bg-[#1e1914] dark:hover:bg-[#1e1914]'}`}>
                   <input type="radio" name="executionMode" value="full" checked={agentExecutionMode === 'full'} onChange={() => setAgentExecutionMode('full')} className="mt-1" />
                   <div className="flex flex-col">
                     <span className={`text-[12px] font-bold ${agentExecutionMode === 'full' ? 'text-[#991b1b] dark:text-[#f3eadf]' : 'text-[#534135] dark:text-[#f3eadf]'}`}>Full Mode</span>
@@ -384,7 +384,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
               <div className="flex flex-wrap items-start sm:items-center justify-between gap-4">
                 <div className="flex-1 min-w-[240px]">
                   <label className="flex items-center gap-1.5 text-sm font-extrabold text-[#534135] dark:text-[#f3eadf]">
-                    <Database size={14} className="text-[#d89745] dark:text-[#e0a070]" />
+                    <Database size={14} className="text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d]" />
                     Export Data
                   </label>
                   <p className="text-[11px] text-[#8a725f] dark:text-[#f3eadf] font-mono mt-0.5 leading-relaxed">
@@ -396,7 +396,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                     onClick={() => fileInputRef.current?.click()}
                     type="button"
                     disabled={importStatus === 'importing'}
-                    className="bg-[#faf7f0] dark:bg-[#1e1914] border border-[#e5d4bb] dark:border-[#584a3b] hover:bg-[#ebdcb9] dark:hover:bg-[#584a3b] text-[#534135] dark:text-[#f3eadf] px-3 py-1.5 rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 whitespace-nowrap disabled:opacity-50"
+                    className="bg-[#faf7f0] dark:bg-[#1e1914] border border-[#e5d4bb] dark:border-[#584a3b] hover:bg-[#ebdcb9] dark:bg-[#584a3b] dark:hover:bg-[#584a3b] text-[#534135] dark:text-[#f3eadf] px-3 py-1.5 rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 whitespace-nowrap disabled:opacity-50"
                   >
                     {importStatus === 'importing' ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />} 
                     {importStatus === 'importing' ? 'Importing...' : 'Import Backup'}
@@ -404,7 +404,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                   <button
                     onClick={() => window.location.href = '/api/export'}
                     type="button"
-                    className="bg-[#faf7f0] dark:bg-[#1e1914] border border-[#e5d4bb] dark:border-[#584a3b] hover:bg-[#ebdcb9] dark:hover:bg-[#584a3b] text-[#534135] dark:text-[#f3eadf] px-3 py-1.5 rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 whitespace-nowrap"
+                    className="bg-[#faf7f0] dark:bg-[#1e1914] border border-[#e5d4bb] dark:border-[#584a3b] hover:bg-[#ebdcb9] dark:bg-[#584a3b] dark:hover:bg-[#584a3b] text-[#534135] dark:text-[#f3eadf] px-3 py-1.5 rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 whitespace-nowrap"
                   >
                     <Download size={14} /> Export Backup
                   </button>
@@ -420,7 +420,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
               
               {/* Import Messages */}
               {importMsg && (
-                <div className={`mt-2 p-2 rounded-lg text-xs font-mono flex items-start gap-2 ${importStatus === 'error' ? 'bg-[#fff0f0] dark:bg-[#292119] text-[#991b1b] dark:text-[#f3eadf] border border-[#fecaca] dark:border-[#584a3b]' : 'bg-[#f0f9f4] dark:bg-[#292119] text-[#166534] dark:text-[#f3eadf] border border-[#a3e6cd] dark:border-[#584a3b]'}`}>
+                <div className={`mt-2 p-2 rounded-lg text-xs font-mono flex items-start gap-2 ${importStatus === 'error' ? 'bg-[#fff0f0] dark:bg-[#1e1914] text-[#991b1b] dark:text-[#f3eadf] border border-[#fecaca] dark:border-[#584a3b]' : 'bg-[#f0f9f4] dark:bg-[#1e1914] text-[#166534] dark:text-[#f3eadf] border border-[#a3e6cd] dark:border-[#584a3b]'}`}>
                   {importStatus === 'error' ? <AlertCircle size={14} className="mt-0.5 shrink-0" /> : <CheckCircle2 size={14} className="mt-0.5 shrink-0" />}
                   <span>{importMsg}</span>
                 </div>
@@ -430,7 +430,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
             </div>
             
             {/* Save Button Footer */}
-            <div className="px-6 py-4 border-t border-[#ebdcb9] dark:border-[#584a3b] bg-[#fdfbf6] dark:bg-[#292119] flex items-center justify-between shrink-0">
+            <div className="px-6 py-4 border-t border-[#ebdcb9] dark:border-[#584a3b] bg-[#fdfbf6] dark:bg-[#1e1914] flex items-center justify-between shrink-0">
               <div className="flex items-center gap-1.5 text-xs font-mono">
                 {saveStatus === 'success' && (
                   <><CheckCircle2 size={14} className="text-green-500" /><span className="text-green-600">Saved successfully</span></>
@@ -442,7 +442,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
               <button
                 onClick={handleSave}
                 disabled={saving}
-                className="bg-[#d89745] dark:bg-[#e0a070] hover:bg-[#c07c28] dark:hover:bg-[#d6b56d] text-white dark:text-[#f3eadf] px-5 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-colors shadow-sm disabled:opacity-50"
+                className="bg-[#d89745] dark:bg-[#e0a070] hover:bg-[#c07c28] dark:bg-[#e0a070] dark:hover:bg-[#d6b56d] dark:bg-[#e0a070] text-white dark:text-[#f3eadf] px-5 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-colors shadow-sm disabled:opacity-50"
               >
                 {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
                 {saving ? 'Saving...' : 'Save Settings'}

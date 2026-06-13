@@ -194,7 +194,7 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
       {/* Click outside to close */}
       <div className="fixed inset-0" onClick={onClose} />
 
-      <div className="bg-[#fcfaf5] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] w-full max-w-2xl rounded-3xl shadow-2xl relative z-10 overflow-hidden flex flex-col justify-between font-sans max-h-[85vh]">
+      <div className="bg-[#fcfaf5] dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] w-full max-w-2xl rounded-3xl shadow-2xl relative z-10 overflow-hidden flex flex-col justify-between font-sans max-h-[85vh]">
         
         {/* Header toolbar */}
         <div className="p-5 border-b border-[#ebdcb9] dark:border-[#584a3b] bg-[#ebdcb9]/40 dark:bg-[#584a3b]/40 flex items-center justify-between font-mono text-[#5c493c] dark:text-[#f3eadf]">
@@ -214,13 +214,13 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
         </div>
 
         {/* Tab Buttons bar */}
-        <div className="bg-[#f5eedf]/60 dark:bg-[#292119]/60 border-b border-[#ebdcb9] dark:border-[#584a3b] px-4 pt-2 flex items-center gap-2">
+        <div className="bg-[#f5eedf]/60 dark:bg-[#1e1914]/60 border-b border-[#ebdcb9] dark:border-[#584a3b] px-4 pt-2 flex items-center gap-2">
           <button
             onClick={() => setActiveTab('schema')}
             className={`px-4 py-2 text-xs font-extrabold font-mono border-t border-x rounded-t-xl transition-all cursor-pointer ${
               activeTab === 'schema'
-                ? 'bg-[#fcfaf5] dark:bg-[#292119] border-[#ebdcb9] dark:border-[#584a3b] text-[#784d21] dark:text-[#f3eadf] -mb-[1px]'
-                : 'bg-transparent dark:bg-transparent border-transparent dark:border-transparent text-[#9e8470] dark:text-[#d6b56d] hover:text-[#5c493c] dark:hover:text-[#f3eadf]'
+                ? 'bg-[#fcfaf5] dark:bg-[#1e1914] border-[#ebdcb9] dark:border-[#584a3b] text-[#784d21] dark:text-[#f3eadf] -mb-[1px]'
+                : 'bg-transparent dark:bg-transparent border-transparent dark:border-transparent text-[#9e8470] dark:text-[#d6b56d] hover:text-[#5c493c] dark:text-[#f3eadf] dark:hover:text-[#f3eadf]'
             }`}
           >
             📄 JSON Schema Spec
@@ -229,8 +229,8 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
             onClick={() => setActiveTab('api')}
             className={`px-4 py-2 text-xs font-extrabold font-mono border-t border-x rounded-t-xl transition-all cursor-pointer ${
               activeTab === 'api'
-                ? 'bg-[#fcfaf5] dark:bg-[#292119] border-[#ebdcb9] dark:border-[#584a3b] text-[#784d21] dark:text-[#f3eadf] -mb-[1px]'
-                : 'bg-transparent dark:bg-transparent border-transparent dark:border-transparent text-[#9e8470] dark:text-[#d6b56d] hover:text-[#5c493c] dark:hover:text-[#f3eadf]'
+                ? 'bg-[#fcfaf5] dark:bg-[#1e1914] border-[#ebdcb9] dark:border-[#584a3b] text-[#784d21] dark:text-[#f3eadf] -mb-[1px]'
+                : 'bg-transparent dark:bg-transparent border-transparent dark:border-transparent text-[#9e8470] dark:text-[#d6b56d] hover:text-[#5c493c] dark:text-[#f3eadf] dark:hover:text-[#f3eadf]'
             }`}
           >
             🌐 REST API Spec
@@ -247,18 +247,18 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
                   โครงสร้างข้อมูล JSON สำหรับนำเข้า/สำรองข้อมูล (Import Template)
                 </h3>
                 <p className="text-[11px] text-[#7a6455] dark:text-[#f3eadf] leading-relaxed font-sans">
-                  คุณสามารถแก้ไขรายการงานแบบกลุ่ม (Batch) เพื่อจัดการเอกสารล่วงหน้า บันทึกเป็นไฟล์ <code className="bg-[#f5eedf] dark:bg-[#292119] px-1.5 py-0.5 rounded border border-[#ebdcb9] dark:border-[#584a3b] font-mono text-[#aa7233] dark:text-[#f3eadf] text-[10px]">.json</code> แล้วนำเข้าผ่านปุ่ม <strong className="text-[#3c2a1a] dark:text-[#f3eadf]">Restore</strong> ด้านบนเพื่อเชื่อมโยงกับ API ทันที
+                  คุณสามารถแก้ไขรายการงานแบบกลุ่ม (Batch) เพื่อจัดการเอกสารล่วงหน้า บันทึกเป็นไฟล์ <code className="bg-[#f5eedf] dark:bg-[#1e1914] px-1.5 py-0.5 rounded border border-[#ebdcb9] dark:border-[#584a3b] font-mono text-[#aa7233] dark:text-[#f3eadf] text-[10px]">.json</code> แล้วนำเข้าผ่านปุ่ม <strong className="text-[#3c2a1a] dark:text-[#f3eadf]">Restore</strong> ด้านบนเพื่อเชื่อมโยงกับ API ทันที
                 </p>
               </div>
 
-              <div className="space-y-1.5 bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-2xl overflow-hidden shadow-2xs">
-                <div className="bg-[#f5eedf]/60 dark:bg-[#292119]/60 px-4 py-2 border-b border-[#ebdcb9] dark:border-[#584a3b] flex justify-between items-center text-[10px]">
+              <div className="space-y-1.5 bg-[#ffffff] dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] rounded-2xl overflow-hidden shadow-2xs">
+                <div className="bg-[#f5eedf]/60 dark:bg-[#1e1914]/60 px-4 py-2 border-b border-[#ebdcb9] dark:border-[#584a3b] flex justify-between items-center text-[10px]">
                   <span className="text-[#715c4d] dark:text-[#f3eadf] font-mono font-bold">template-backlog.json</span>
                   <div className="flex items-center gap-3">
                     <button
                       type="button"
                       onClick={handleDownload}
-                      className="hover:text-[#3a2010] dark:hover:text-[#f3eadf] bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] px-2.5 py-1 rounded-xl cursor-pointer text-[#715c4d] dark:text-[#f3eadf] font-semibold flex items-center gap-1 transition-all"
+                      className="hover:text-[#3a2010] dark:hover:text-[#f3eadf] bg-white dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] px-2.5 py-1 rounded-xl cursor-pointer text-[#715c4d] dark:text-[#f3eadf] font-semibold flex items-center gap-1 transition-all"
                     >
                       <Download size={11} /> Download Template
                     </button>
@@ -268,7 +268,7 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
                       className={`border px-2.5 py-1 rounded-xl cursor-pointer font-semibold flex items-center gap-1 transition-all ${
                         copied && copiedText === 'schema'
                           ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
-                          : 'bg-white dark:bg-[#292119] border-[#ebdcb9] dark:border-[#584a3b] text-[#715c4d] dark:text-[#f3eadf] hover:text-[#3a2010] dark:hover:text-[#f3eadf]'
+                          : 'bg-white dark:bg-[#1e1914] border-[#ebdcb9] dark:border-[#584a3b] text-[#715c4d] dark:text-[#f3eadf] hover:text-[#3a2010] dark:text-[#f3eadf] dark:hover:text-[#f3eadf]'
                       }`}
                     >
                       {copied && copiedText === 'schema' ? (
@@ -284,7 +284,7 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
                   </div>
                 </div>
                 
-                <pre className="p-4 bg-[#fffdfa] dark:bg-[#292119] overflow-x-auto text-[11px] leading-relaxed text-[#a46c24] dark:text-[#f3eadf] font-mono scrollbar-thin max-h-64 font-semibold">
+                <pre className="p-4 bg-[#fffdfa] dark:bg-[#1e1914] overflow-x-auto text-[11px] leading-relaxed text-[#a46c24] dark:text-[#f3eadf] font-mono scrollbar-thin max-h-64 font-semibold">
                   <code>{jsonString}</code>
                 </pre>
               </div>
@@ -293,14 +293,14 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
                 <p className="font-mono text-[9px] uppercase tracking-wider text-[#8a6e5a] dark:text-[#f3eadf] font-bold">ฟิลด์ที่สำคัญประกอบด้วย:</p>
                 <ul className="list-disc list-inside space-y-1 pl-1">
                   <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">id</strong>: คีย์หลักระบุแต่ละงาน ต้องไม่ซ้ำกัน</li>
-                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">repo</strong>: บังคับเชื่อมโยง URL ของ Repository เช่น <code className="font-mono bg-[#f5eedf] dark:bg-[#292119] px-1 text-[10px]">"https://github.com/user/repo"</code> (*Required* สำหรับการสร้างใหม่)</li>
-                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">status</strong>: สถานะบอร์ด <code className="font-mono bg-[#f5eedf] dark:bg-[#292119] px-1 text-[10px]">"backlog" | "todo" | "in-progress" | "ready-for-review" | "done"</code></li>
-                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">priority</strong>: ระดับความเร่งด่วน <code className="font-mono bg-[#f5eedf] dark:bg-[#292119] px-1 text-[10px]">"low" | "medium" | "high"</code></li>
+                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">repo</strong>: บังคับเชื่อมโยง URL ของ Repository เช่น <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">"https://github.com/user/repo"</code> (*Required* สำหรับการสร้างใหม่)</li>
+                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">status</strong>: สถานะบอร์ด <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">"backlog" | "todo" | "in-progress" | "ready-for-review" | "done"</code></li>
+                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">priority</strong>: ระดับความเร่งด่วน <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">"low" | "medium" | "high"</code></li>
                   <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">targetFiles</strong>: รายชื่อพาธไฟล์ที่ระบบเกี่ยวข้อง</li>
                   <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">checklist</strong>: โครงสร้าง Mini-Tasks ย่อยภายในแต่ละตั๋ว</li>
-                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">agent</strong>: เอเจนต์ที่รับผิดชอบ <code className="font-mono bg-[#f5eedf] dark:bg-[#292119] px-1 text-[10px]">"Codex" | "Antigravity" | "Claude"</code></li>
+                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">agent</strong>: เอเจนต์ที่รับผิดชอบ <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">"Codex" | "Antigravity" | "Claude"</code></li>
                   <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">model</strong>: ชื่อตัวแปรโมเดล AI Spec เช่น คู่ขนานตามโมเดลที่เลือก</li>
-                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">effort</strong>: ระดับพละกำลังความเพียรประมวลผล <code className="font-mono bg-[#f5eedf] dark:bg-[#292119] px-1 text-[10px]">"low" | "medium" | "high" | "xhigh"</code></li>
+                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">effort</strong>: ระดับพละกำลังความเพียรประมวลผล <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">"low" | "medium" | "high" | "xhigh"</code></li>
                   <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">reasoning</strong>: เหตุผลหรือบริบทที่มาของงาน</li>
                   <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">acceptanceCriteria</strong>: เกณฑ์การตรวจรับงาน (Acceptance Criteria)</li>
                   <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">verification</strong>: ขั้นตอนการตรวจสอบหรือทดสอบว่าเสร็จสมบูรณ์</li>
@@ -333,11 +333,11 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
                   };
 
                   return (
-                    <div key={idx} className="bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-2xl overflow-hidden shadow-3xs flex flex-col">
+                    <div key={idx} className="bg-white dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] rounded-2xl overflow-hidden shadow-3xs flex flex-col">
                       {/* Sub-header with Method & Path */}
-                      <div className="bg-[#fcfaf5] dark:bg-[#292119] border-b border-[#ebdcb9] dark:border-[#584a3b] px-4 py-2.5 flex items-center justify-between font-mono">
+                      <div className="bg-[#fcfaf5] dark:bg-[#1e1914] border-b border-[#ebdcb9] dark:border-[#584a3b] px-4 py-2.5 flex items-center justify-between font-mono">
                         <div className="flex items-center gap-2.5">
-                          <span className={`px-2 py-0.5 rounded-lg border text-[9.5px] font-black tracking-wide ${methodColors[api.method] || 'bg-gray-100 dark:bg-[#292119]'}`}>
+                          <span className={`px-2 py-0.5 rounded-lg border text-[9.5px] font-black tracking-wide ${methodColors[api.method] || 'bg-gray-100 dark:bg-[#1e1914]'}`}>
                             {api.method}
                           </span>
                           <span className="text-[11.5px] font-bold text-[#3c2a1a] dark:text-[#f3eadf]">{api.path}</span>
@@ -348,7 +348,7 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
                           className={`text-[9.5px] border px-2 py-0.5 rounded-lg font-bold cursor-pointer transition-colors ${
                             copied && copiedText === `example-${idx}`
                               ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                              : 'bg-white dark:bg-[#292119] border-[#ebdcb9] dark:border-[#584a3b] text-[#7a6455] dark:text-[#f3eadf] hover:text-[#3c2a1a] dark:hover:text-[#f3eadf]'
+                              : 'bg-white dark:bg-[#1e1914] border-[#ebdcb9] dark:border-[#584a3b] text-[#7a6455] dark:text-[#f3eadf] hover:text-[#3c2a1a] dark:hover:text-[#f3eadf]'
                           }`}
                         >
                           {copied && copiedText === `example-${idx}` ? 'Copied script!' : 'Copy Code'}
@@ -365,7 +365,7 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
                         {api.payload && (
                           <div>
                             <p className="text-[#8c7463] dark:text-[#f3eadf] font-bold text-[9px] uppercase tracking-wider mb-1">Request Body (JSON):</p>
-                            <pre className="p-2.5 bg-[#fefdfb] dark:bg-[#292119] border border-[#e5d4bb]/70 dark:border-[#584a3b]/70 rounded-xl overflow-x-auto text-[10px] text-[#aa7233] dark:text-[#f3eadf] leading-relaxed max-h-36 scrollbar-thin">
+                            <pre className="p-2.5 bg-[#fefdfb] dark:bg-[#1e1914] border border-[#e5d4bb]/70 dark:border-[#584a3b]/70 rounded-xl overflow-x-auto text-[10px] text-[#aa7233] dark:text-[#f3eadf] leading-relaxed max-h-36 scrollbar-thin">
                               <code>{api.payload}</code>
                             </pre>
                           </div>
@@ -373,12 +373,12 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
 
                         <div>
                           <p className="text-[#8c7463] dark:text-[#f3eadf] font-bold text-[9px] uppercase tracking-wider mb-0.5">Expected Response:</p>
-                          <p className="text-[#554030] dark:text-[#f3eadf] bg-[#fffcf7] dark:bg-[#292119] px-2.5 py-1 rounded-lg border border-[#f5ecd4] dark:border-[#584a3b] font-semibold">{api.response}</p>
+                          <p className="text-[#554030] dark:text-[#f3eadf] bg-[#fffcf7] dark:bg-[#1e1914] px-2.5 py-1 rounded-lg border border-[#f5ecd4] dark:border-[#584a3b] font-semibold">{api.response}</p>
                         </div>
 
                         <div>
                           <p className="text-[#8c7463] dark:text-[#f3eadf] font-bold text-[9px] uppercase tracking-wider mb-1">Code Pattern Example (Fetch JS):</p>
-                          <pre className="p-2.5 bg-[#1e293b] dark:bg-[#d6b56d] text-[#38bdf8] dark:text-[#d6b56d] rounded-xl overflow-x-auto font-mono text-[10px] leading-relaxed">
+                          <pre className="p-2.5 bg-[#1e293b] dark:bg-[#d6b56d] dark:bg-[#e0a070] text-[#38bdf8] dark:text-[#d6b56d] rounded-xl overflow-x-auto font-mono text-[10px] leading-relaxed">
                             <code>{api.example}</code>
                           </pre>
                         </div>
@@ -396,7 +396,7 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2 bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] text-[#6d5a4d] dark:text-[#f3eadf] hover:bg-[#fffcf6] dark:hover:bg-[#1e1914] rounded-xl font-bold font-mono transition-colors cursor-pointer shadow-3xs"
+            className="px-4 py-2 bg-white dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] text-[#6d5a4d] dark:text-[#f3eadf] hover:bg-[#fffcf6] dark:bg-[#1e1914] dark:hover:bg-[#1e1914] rounded-xl font-bold font-mono transition-colors cursor-pointer shadow-3xs"
           >
             ปิดหน้าเอกสาร
           </button>

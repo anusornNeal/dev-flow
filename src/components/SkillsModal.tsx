@@ -179,14 +179,14 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
 
 
   return (
-    <div className="fixed inset-0 bg-[#3e3129]/30 dark:bg-[#f3eadf]/30 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="bg-[#fffdfa] dark:bg-[#292119] rounded-2xl shadow-xl w-full max-w-6xl h-[85vh] flex border border-[#e5d4bb] dark:border-[#584a3b] overflow-hidden select-none">
+    <div className="fixed inset-0 bg-[#3e3129]/30 dark:bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div className="bg-[#fffdfa] dark:bg-[#1e1914] rounded-2xl shadow-xl w-full max-w-6xl h-[85vh] flex border border-[#e5d4bb] dark:border-[#584a3b] overflow-hidden select-none">
         
         {/* Left Sidebar: Skill List */}
-        <div className="w-1/3 border-r border-[#ebdcb9] dark:border-[#584a3b] bg-[#fdfbf6] dark:bg-[#292119] flex flex-col">
+        <div className="w-1/3 border-r border-[#ebdcb9] dark:border-[#584a3b] bg-[#fdfbf6] dark:bg-[#1e1914] flex flex-col">
           <div className="px-6 py-4 border-b border-[#ebdcb9] dark:border-[#584a3b] flex items-center justify-between shrink-0">
             <h2 className="text-[#534135] dark:text-[#f3eadf] font-extrabold font-sans text-lg flex items-center gap-2">
-              <FileText size={20} className="text-[#d89745] dark:text-[#e0a070]" />
+              <FileText size={20} className="text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d]" />
               Agent Skills
             </h2>
             <button
@@ -201,7 +201,7 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
                 setImportDescription('');
                 setImportContent('');
               }}
-              className="p-1.5 hover:bg-[#ebdcb9]/40 dark:hover:bg-[#584a3b]/40 rounded-lg text-[#d89745] dark:text-[#e0a070] transition-colors"
+              className="p-1.5 hover:bg-[#ebdcb9] dark:bg-[#584a3b]/40 dark:hover:bg-[#584a3b]/40 rounded-lg text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d] transition-colors"
               title="Import Skill"
             >
               <Plus size={18} />
@@ -215,8 +215,8 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
                 onClick={() => setActiveTab(tab.id as TabKey)}
                 className={`whitespace-nowrap px-3 py-2 text-[10px] font-bold uppercase tracking-wider border-b-2 transition-colors ${
                   activeTab === tab.id 
-                    ? 'border-[#d89745] dark:border-[#e0a070] text-[#935919] dark:text-[#e0a070]' 
-                    : 'border-transparent dark:border-transparent text-[#b89b82] dark:text-[#d6b56d] hover:text-[#935919] dark:hover:text-[#e0a070]'
+                    ? 'border-[#d89745] dark:border-[#e0a070] text-[#935919] dark:text-[#e0a070] dark:text-[#d6b56d]' 
+                    : 'border-transparent dark:border-transparent text-[#b89b82] dark:text-[#d6b56d] hover:text-[#935919] dark:hover:text-[#e0a070] dark:text-[#d6b56d]'
                 }`}
               >
                 {tab.label}
@@ -252,8 +252,8 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
                         }}
                         className={`flex items-center w-full justify-between p-3 rounded-xl border transition-all text-left ${
                           isSelected
-                            ? 'bg-[#ffecca] dark:bg-[#292119] border-[#e3a35a] dark:border-[#584a3b] shadow-sm text-[#935919] dark:text-[#e0a070]'
-                            : 'bg-white dark:bg-[#292119] border-[#e5d4bb] dark:border-[#584a3b] hover:bg-[#faf6ef] dark:hover:bg-[#584a3b]/40 text-[#534135] dark:text-[#f3eadf]'
+                            ? 'bg-[#ffecca] dark:bg-[#1e1914] border-[#e3a35a] dark:border-[#584a3b] shadow-sm text-[#935919] dark:text-[#e0a070] dark:text-[#d6b56d]'
+                            : 'bg-white dark:bg-[#1e1914] border-[#e5d4bb] dark:border-[#584a3b] hover:bg-[#faf6ef] dark:bg-[#1e1914] dark:hover:bg-[#584a3b]/40 text-[#534135] dark:text-[#f3eadf]'
                         }`}
                       >
                         <div className="flex-1 min-w-0 pr-6">
@@ -267,7 +267,7 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
                           </div>
                           <div className="text-[10px] font-mono text-[#8a725f] dark:text-[#f3eadf] mt-1 line-clamp-1">{skill.description}</div>
                         </div>
-                        {isSelected && <ChevronRight size={16} className="text-[#d89745] dark:text-[#e0a070] shrink-0" />}
+                        {isSelected && <ChevronRight size={16} className="text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d] shrink-0" />}
                       </button>
                       {skill.isCustom && (
                         <button
@@ -287,8 +287,8 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
         </div>
 
         {/* Right Area: Detail/Editor */}
-        <div className="w-2/3 flex flex-col bg-[#f5f2eb] dark:bg-[#292119]">
-          <div className="px-6 py-4 border-b border-[#ebdcb9] dark:border-[#584a3b] bg-[#fdfbf6] dark:bg-[#292119] flex items-center justify-between shrink-0 h-[69px]">
+        <div className="w-2/3 flex flex-col bg-[#f5f2eb] dark:bg-[#1e1914]">
+          <div className="px-6 py-4 border-b border-[#ebdcb9] dark:border-[#584a3b] bg-[#fdfbf6] dark:bg-[#1e1914] flex items-center justify-between shrink-0 h-[69px]">
             {isImporting ? (
               <div className="flex-1 flex items-center justify-between">
                 <div>
@@ -301,21 +301,21 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
                       setIsImporting(false);
                     }}
                     disabled={saving}
-                    className="bg-white dark:bg-[#292119] hover:bg-rose-50 dark:hover:bg-rose-900/20 border border-rose-200 dark:border-rose-900/50 text-rose-600 dark:text-rose-400 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors shadow-sm disabled:opacity-50"
+                    className="bg-white dark:bg-[#1e1914] hover:bg-rose-50 dark:hover:bg-rose-900/20 border border-rose-200 dark:border-rose-900/50 text-rose-600 dark:text-rose-400 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors shadow-sm disabled:opacity-50"
                   >
                     <Ban size={14} /> Cancel
                   </button>
                   <button
                     onClick={handleImportSave}
                     disabled={saving}
-                    className="bg-[#2a7a8a] dark:bg-[#d6b56d] hover:bg-[#1a5b67] dark:hover:bg-[#292119] text-white dark:text-[#f3eadf] px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors shadow-sm disabled:opacity-50"
+                    className="bg-[#2a7a8a] dark:bg-[#d6b56d] dark:bg-[#e0a070] hover:bg-[#1a5b67] dark:bg-[#3c829e] dark:hover:bg-[#292119] text-white dark:text-[#f3eadf] px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors shadow-sm disabled:opacity-50"
                   >
                     <Save size={14} /> {saving ? 'Saving...' : 'Import'}
                   </button>
                   <div className="w-px h-5 bg-[#ebdcb9] dark:bg-[#584a3b] mx-1"></div>
                   <button
                     onClick={onClose}
-                    className="text-[#8c7463] dark:text-[#f3eadf] hover:bg-[#ebdcb9]/40 dark:hover:bg-[#584a3b]/40 p-1.5 rounded-lg transition-colors"
+                    className="text-[#8c7463] dark:text-[#f3eadf] hover:bg-[#ebdcb9] dark:bg-[#584a3b]/40 dark:hover:bg-[#584a3b]/40 p-1.5 rounded-lg transition-colors"
                     title="Close"
                   >
                     <X size={18} />
@@ -333,13 +333,13 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
                 <div className="flex items-center gap-2">
                   {!isEditing ? (
                     skillDetail.isProtected ? (
-                      <span className="bg-[#fff7eb] dark:bg-[#292119] border border-[#f0d9b2] dark:border-[#584a3b] text-[#9a6a27] dark:text-[#f3eadf] px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-sm">
+                      <span className="bg-[#fff7eb] dark:bg-[#1e1914] border border-[#f0d9b2] dark:border-[#584a3b] text-[#9a6a27] dark:text-[#f3eadf] px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-sm">
                         <Lock size={14} /> Master skill
                       </span>
                     ) : (
                       <button
                         onClick={() => setIsEditing(true)}
-                        className="bg-white dark:bg-[#292119] hover:bg-[#ebdcb9]/40 dark:hover:bg-[#584a3b]/40 border border-[#ebdcb9] dark:border-[#584a3b] text-[#534135] dark:text-[#f3eadf] px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors shadow-sm"
+                        className="bg-white dark:bg-[#1e1914] hover:bg-[#ebdcb9] dark:bg-[#584a3b]/40 dark:hover:bg-[#584a3b]/40 border border-[#ebdcb9] dark:border-[#584a3b] text-[#534135] dark:text-[#f3eadf] px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors shadow-sm"
                       >
                         <Edit2 size={14} /> Edit Skill
                       </button>
@@ -349,14 +349,14 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
                       <button
                         onClick={handleCancelEdit}
                         disabled={saving}
-                        className="bg-white dark:bg-[#292119] hover:bg-rose-50 dark:hover:bg-rose-900/20 border border-rose-200 dark:border-rose-900/50 text-rose-600 dark:text-rose-400 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors shadow-sm disabled:opacity-50"
+                        className="bg-white dark:bg-[#1e1914] hover:bg-rose-50 dark:hover:bg-rose-900/20 border border-rose-200 dark:border-rose-900/50 text-rose-600 dark:text-rose-400 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors shadow-sm disabled:opacity-50"
                       >
                         <Ban size={14} /> Cancel
                       </button>
                       <button
                         onClick={handleSave}
                         disabled={saving}
-                        className="bg-[#2a7a8a] dark:bg-[#d6b56d] hover:bg-[#1a5b67] dark:hover:bg-[#292119] text-white dark:text-[#f3eadf] px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors shadow-sm disabled:opacity-50"
+                        className="bg-[#2a7a8a] dark:bg-[#d6b56d] dark:bg-[#e0a070] hover:bg-[#1a5b67] dark:bg-[#3c829e] dark:hover:bg-[#292119] text-white dark:text-[#f3eadf] px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors shadow-sm disabled:opacity-50"
                       >
                         <Save size={14} /> {saving ? 'Saving...' : 'Save Changes'}
                       </button>
@@ -365,7 +365,7 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
                   <div className="w-px h-5 bg-[#ebdcb9] dark:bg-[#584a3b] mx-1"></div>
                   <button
                     onClick={onClose}
-                    className="text-[#8c7463] dark:text-[#f3eadf] hover:bg-[#ebdcb9]/40 dark:hover:bg-[#584a3b]/40 p-1.5 rounded-lg transition-colors"
+                    className="text-[#8c7463] dark:text-[#f3eadf] hover:bg-[#ebdcb9] dark:bg-[#584a3b]/40 dark:hover:bg-[#584a3b]/40 p-1.5 rounded-lg transition-colors"
                     title="Close"
                   >
                     <X size={18} />
@@ -376,7 +376,7 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
               <div className="flex-1 flex justify-end">
                 <button
                   onClick={onClose}
-                  className="text-[#8c7463] dark:text-[#f3eadf] hover:bg-[#ebdcb9]/40 dark:hover:bg-[#584a3b]/40 p-1.5 rounded-lg transition-colors"
+                  className="text-[#8c7463] dark:text-[#f3eadf] hover:bg-[#ebdcb9] dark:bg-[#584a3b]/40 dark:hover:bg-[#584a3b]/40 p-1.5 rounded-lg transition-colors"
                 >
                   <X size={18} />
                 </button>
@@ -438,7 +438,7 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
                     value={importId}
                     onChange={(e) => setImportId(e.target.value)}
                     placeholder="e.g. my-new-skill"
-                    className="w-full p-2 border rounded-lg text-sm font-mono outline-none shadow-sm transition-colors bg-white dark:bg-[#292119] border-[#d89745] dark:border-[#e0a070] text-[#3e3129] dark:text-[#f3eadf] focus:ring-2 focus:ring-[#d89745]/30 dark:focus:ring-[#e0a070]/30"
+                    className="w-full p-2 border rounded-lg text-sm font-mono outline-none shadow-sm transition-colors bg-white dark:bg-[#1e1914] border-[#d89745] dark:border-[#e0a070] text-[#3e3129] dark:text-[#f3eadf] focus:ring-2 focus:ring-[#d89745]/30 dark:focus:ring-[#e0a070]/30"
                   />
                 </div>
                 <div className="flex flex-col gap-1 shrink-0">
@@ -448,7 +448,7 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
                     value={importName}
                     onChange={(e) => setImportName(e.target.value)}
                     placeholder="e.g. My New Skill"
-                    className="w-full p-2 border rounded-lg text-sm font-mono outline-none shadow-sm transition-colors bg-white dark:bg-[#292119] border-[#d89745] dark:border-[#e0a070] text-[#3e3129] dark:text-[#f3eadf] focus:ring-2 focus:ring-[#d89745]/30 dark:focus:ring-[#e0a070]/30"
+                    className="w-full p-2 border rounded-lg text-sm font-mono outline-none shadow-sm transition-colors bg-white dark:bg-[#1e1914] border-[#d89745] dark:border-[#e0a070] text-[#3e3129] dark:text-[#f3eadf] focus:ring-2 focus:ring-[#d89745]/30 dark:focus:ring-[#e0a070]/30"
                   />
                 </div>
                 <div className="flex flex-col gap-1 shrink-0">
@@ -458,13 +458,13 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
                     value={importDescription}
                     onChange={(e) => setImportDescription(e.target.value)}
                     placeholder="Brief description..."
-                    className="w-full p-2 border rounded-lg text-sm font-mono outline-none shadow-sm transition-colors bg-white dark:bg-[#292119] border-[#d89745] dark:border-[#e0a070] text-[#3e3129] dark:text-[#f3eadf] focus:ring-2 focus:ring-[#d89745]/30 dark:focus:ring-[#e0a070]/30"
+                    className="w-full p-2 border rounded-lg text-sm font-mono outline-none shadow-sm transition-colors bg-white dark:bg-[#1e1914] border-[#d89745] dark:border-[#e0a070] text-[#3e3129] dark:text-[#f3eadf] focus:ring-2 focus:ring-[#d89745]/30 dark:focus:ring-[#e0a070]/30"
                   />
                 </div>
                 <div className="flex flex-col gap-1 flex-1 min-h-[200px]">
                   <label className="text-xs font-extrabold text-[#534135] dark:text-[#f3eadf]">Content (Markdown)</label>
                   <textarea
-                    className="flex-1 w-full p-4 border rounded-xl text-sm font-mono outline-none resize-none shadow-sm transition-colors bg-white dark:bg-[#292119] border-[#d89745] dark:border-[#e0a070] text-[#3e3129] dark:text-[#f3eadf] focus:ring-2 focus:ring-[#d89745]/30 dark:focus:ring-[#e0a070]/30"
+                    className="flex-1 w-full p-4 border rounded-xl text-sm font-mono outline-none resize-none shadow-sm transition-colors bg-white dark:bg-[#1e1914] border-[#d89745] dark:border-[#e0a070] text-[#3e3129] dark:text-[#f3eadf] focus:ring-2 focus:ring-[#d89745]/30 dark:focus:ring-[#e0a070]/30"
                     value={importContent}
                     onChange={(e) => setImportContent(e.target.value)}
                     placeholder="Skill document content goes here..."
@@ -480,14 +480,14 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
               <div className="flex-1 flex flex-col relative h-full">
                 {isEditing ? (
                   <textarea
-                    className="flex-1 w-full p-6 border rounded-xl text-sm font-mono outline-none resize-none shadow-sm transition-colors bg-white dark:bg-[#292119] border-[#d89745] dark:border-[#e0a070] text-[#3e3129] dark:text-[#f3eadf] focus:ring-2 focus:ring-[#d89745]/30 dark:focus:ring-[#e0a070]/30 h-full"
+                    className="flex-1 w-full p-6 border rounded-xl text-sm font-mono outline-none resize-none shadow-sm transition-colors bg-white dark:bg-[#1e1914] border-[#d89745] dark:border-[#e0a070] text-[#3e3129] dark:text-[#f3eadf] focus:ring-2 focus:ring-[#d89745]/30 dark:focus:ring-[#e0a070]/30 h-full"
                     value={editContent}
                     onChange={(e) => setEditContent(e.target.value)}
                     placeholder="Skill document content goes here..."
                     spellCheck="false"
                   />
                 ) : (
-                  <div className="flex-1 overflow-y-auto w-full p-6 border rounded-xl bg-[#fdfbf6] dark:bg-[#292119] border-[#ebdcb9] dark:border-[#584a3b] text-[#534135]/90 dark:text-[#f3eadf]/90 cursor-default h-full">
+                  <div className="flex-1 overflow-y-auto w-full p-6 border rounded-xl bg-[#fdfbf6] dark:bg-[#1e1914] border-[#ebdcb9] dark:border-[#584a3b] text-[#534135]/90 dark:text-[#f3eadf]/90 cursor-default h-full">
                     {editContent.trim() === '' ? (
                       <div className="h-full flex flex-col items-center justify-center text-center opacity-50">
                         <FileText size={48} className="text-[#8c7463] dark:text-[#f3eadf] mb-4" />
@@ -505,7 +505,7 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
                 
                 {!isEditing && (
                   <div className="absolute inset-x-0 bottom-4 text-center pointer-events-none">
-                    <span className="bg-[#fdfbf6]/90 dark:bg-[#292119]/90 backdrop-blur-sm text-[#8c7463] dark:text-[#f3eadf] text-[10px] font-mono font-bold px-3 py-1.5 rounded-full border border-[#ebdcb9] dark:border-[#584a3b] shadow-sm">
+                    <span className="bg-[#fdfbf6]/90 dark:bg-[#1e1914]/90 backdrop-blur-sm text-[#8c7463] dark:text-[#f3eadf] text-[10px] font-mono font-bold px-3 py-1.5 rounded-full border border-[#ebdcb9] dark:border-[#584a3b] shadow-sm">
                       Read-Only Mode
                     </span>
                   </div>

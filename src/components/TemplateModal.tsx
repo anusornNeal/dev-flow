@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, Save, FileText, Edit2, Ban, ChevronRight, Copy, Eye, Lock, Trash2 } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 interface TemplateModalProps {
   projectId: string;
@@ -276,8 +278,12 @@ export default function TemplateModal({ projectId, onClose }: TemplateModalProps
 
           <div className="flex-1 overflow-hidden relative bg-[#fffdfa] dark:bg-[#1e1914]">
              {previewContent !== null ? (
-                <div className="absolute inset-0 p-6 overflow-y-auto font-mono text-xs text-[#534135] dark:text-[#f3eadf] whitespace-pre-wrap">
-                   {previewContent}
+                <div className="absolute inset-0 p-6 overflow-y-auto">
+                   <div className="prose prose-sm prose-orange max-w-none prose-headings:font-extrabold prose-a:text-[#d89745] dark:prose-invert dark:prose-headings:text-[#e0a070] dark:text-[#f3eadf]">
+                     <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                       {previewContent}
+                     </ReactMarkdown>
+                   </div>
                 </div>
              ) : selectedSection ? (
                isEditingOverride ? (
@@ -291,8 +297,10 @@ export default function TemplateModal({ projectId, onClose }: TemplateModalProps
                ) : (
                   <div className="absolute inset-0 p-6 overflow-y-auto">
                      {selectedSection.masterContent ? (
-                       <div className="font-mono text-sm text-[#534135] dark:text-[#f3eadf] whitespace-pre-wrap leading-relaxed opacity-80">
-                         {selectedSection.masterContent}
+                       <div className="prose prose-sm prose-orange max-w-none prose-headings:font-extrabold prose-a:text-[#d89745] dark:prose-invert dark:prose-headings:text-[#e0a070] dark:text-[#f3eadf] opacity-80">
+                         <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                           {selectedSection.masterContent}
+                         </ReactMarkdown>
                        </div>
                      ) : (
                        <div className="h-full flex items-center justify-center">

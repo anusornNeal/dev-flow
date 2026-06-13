@@ -9,7 +9,7 @@ import { appendAgentRunLog, createAgentRunFiles, createAgentRunResultRecord, get
 import { extractDesignImages, getAgentTaskContext, renderTaskPrompt, resolveProjectIdFromRepo, validateAgentParams, validateTaskPayload } from '../services/taskService';
 import { validateEnum, validateString } from '../validation';
 import { isValidTransition, getValidationErrorMessage } from '../../lib/statusTransitions';
-import { runAgentLaunchPreflight, type AgentLaunchPreflightCode } from '../services/agentLaunchConfig';
+import { buildCodexLaunchConfig, runAgentLaunchPreflight, type AgentLaunchPreflightCode } from '../services/agentLaunchConfig';
 
 const STALE_AGENT_RUN_MS = 30 * 60 * 1000;
 
@@ -338,10 +338,31 @@ export function triggerTaskAgent(task: any, deps: ApiRouteDeps, routeLabel: stri
       DEVFLOW_API_BASE_URL: apiBaseUrl,
     }
   };
+  const codexLaunchPreview = task.agent === 'Codex'
+    ? buildCodexLaunchConfig({
+      task: {
+        id: task.id,
+        agent: task.agent,
+        model: task.model,
+        effort: task.effort,
+      },
+      project: {
+        localPath: project?.localPath,
+      },
+      promptPath: files.promptPath,
+      runId: run.id,
+      executionMode,
+      apiBaseUrl,
+      appRoot: resolveFromDevFlowAppRoot(),
+      preview: true,
+      environment: execOpts.env,
+    })
+    : null;
 
   deps.writeAgentLog('TRIGGER', `Spawning run=${run.id} agent=${task.agent} for task=${task.id} ("${task.title}") via ${routeLabel}${project?.localPath ? ' at ' + project.localPath : ''}`);
   appendAgentRunLog(files.logPath, `Launch plan: agent=${launchPlan.agent} model=${launchPlan.devFlowModel || 'none'} resolvedModel=${launchPlan.resolvedModel || 'none'} effort=${launchPlan.selectedEffort || 'none'} effortHandling=${launchPlan.effortHandling.mode} executionMode=${executionMode}`);
   appendAgentRunLog(files.logPath, `cwd=${project?.localPath || 'none'} triggerScript=${triggerBat} promptPath=${files.promptPath}`);
+  if (codexLaunchPreview?.ok) appendAgentRunLog(files.logPath, codexLaunchPreview.previewText);
   writeAgentRunLaunchMetadata(files.runDir, {
     runId: run.id,
     taskId: task.id,
@@ -353,6 +374,12 @@ export function triggerTaskAgent(task: any, deps: ApiRouteDeps, routeLabel: stri
     logPath: files.logPath,
     triggerScript: triggerBat,
     launchPlan,
+    codexLaunchPreview: codexLaunchPreview?.ok ? {
+      executable: codexLaunchPreview.executable,
+      parameters: codexLaunchPreview.parameters,
+      cwd: codexLaunchPreview.cwd,
+      previewText: codexLaunchPreview.previewText,
+    } : null,
     writtenAt: new Date().toISOString(),
   });
   const startingSummary = `Run ${run.id} queued for ${task.agent}.`;

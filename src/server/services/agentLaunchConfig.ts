@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import type { AgentExecutionMode } from './agentRunService';
-import { getAgentRunsBaseDir, getAgentTriggerScriptPath, getDevFlowAppRoot, getInvokeAgentTriggerScriptPath } from './agentRunService';
+import { buildPromptReference, getAgentRunsBaseDir, getAgentTriggerScriptPath, getDevFlowApiBaseUrl, getDevFlowAppRoot, getInvokeAgentTriggerScriptPath } from './agentRunService';
 
 export type EffortHandlingMode = 'cli-flag' | 'prompt-only' | 'none';
 
@@ -38,6 +38,51 @@ export interface AgentLaunchPlan {
   executionMode: AgentExecutionMode;
 }
 
+export interface BuildAgentCliArgsInput {
+  config: FileAgentConfig;
+  localPath: string;
+  model: string;
+  effort: string;
+  promptReference: string;
+  executionMode: AgentExecutionMode;
+}
+
+export interface BuildCodexLaunchConfigInput {
+  task: {
+    id: string;
+    agent?: string | null;
+    model?: string | null;
+    effort?: string | null;
+  };
+  project: {
+    localPath?: string | null;
+  };
+  promptPath: string;
+  runId: string;
+  executionMode: AgentExecutionMode;
+  apiBaseUrl?: string;
+  appRoot?: string;
+  preview?: boolean;
+  environment?: Record<string, string | undefined>;
+}
+
+export interface BuiltCodexLaunchConfig {
+  ok: true;
+  executable: string;
+  parameters: string[];
+  cwd: string;
+  environment: Record<string, string>;
+  promptReference: string;
+  previewText: string;
+  launchPlan: AgentLaunchPlan;
+}
+
+export interface FailedCodexLaunchConfig {
+  ok: false;
+  error: string;
+  launchPlan?: AgentLaunchPlan;
+}
+
 export type AgentLaunchPreflightCode =
   | 'OK'
   | 'NO_AGENT'
@@ -70,6 +115,19 @@ function resolveEnvVariables(str: string): string {
   return str.replace(/%([^%]+)%/g, (_, n) => process.env[n] || '');
 }
 
+function appendFlagValue(args: string[], flag: string | string[], value: string) {
+  const flagParts = Array.isArray(flag) ? flag : [flag];
+  const valueFlag = flagParts.at(-1);
+  if (!valueFlag) return;
+
+  args.push(...flagParts.slice(0, -1));
+  if (valueFlag.endsWith('=')) {
+    args.push(`${valueFlag}${value}`);
+  } else {
+    args.push(valueFlag, value);
+  }
+}
+
 export function resolveAgentExecutable(executables: FileAgentConfig['executables']): string | null {
   for (const exec of executables) {
     if (exec.type === 'env') {
@@ -96,6 +154,50 @@ export function resolveAgentExecutable(executables: FileAgentConfig['executables
   }
 
   return null;
+}
+
+export function buildAgentCliArgs(input: BuildAgentCliArgsInput) {
+  const { config, localPath, effort, promptReference, executionMode } = input;
+  const model = input.model ? mapModelForAgent(config, input.model) : '';
+  const spawnArgs: string[] = [];
+
+  if (localPath && config.flags.workingDir) {
+    spawnArgs.push(config.flags.workingDir, localPath);
+  }
+
+  if (model) {
+    if (config.flags.model) {
+      spawnArgs.push(config.flags.model, model);
+    } else {
+      console.warn(`[runner] WARNING: ${config.name} does not support model flag natively via config.`);
+    }
+  }
+
+  if (effort) {
+    if (config.flags.effort) {
+      appendFlagValue(spawnArgs, config.flags.effort, effort);
+    } else if (config.promptFallback?.effort) {
+      console.warn(`[runner] WARNING: ${config.name} config states no effort flag. Using prompt fallback.`);
+    }
+  }
+
+  if (config.flags.interactiveArgs) {
+    spawnArgs.push(...config.flags.interactiveArgs);
+  }
+
+  const modeArgs = config.executionModes?.[executionMode]?.args;
+  if (modeArgs) {
+    spawnArgs.push(...modeArgs);
+  } else if (executionMode === 'full' && config.flags.alwaysAllow) {
+    spawnArgs.push(config.flags.alwaysAllow);
+  }
+
+  spawnArgs.push(promptReference);
+  return spawnArgs;
+}
+
+export function mapModelForAgent(config: Pick<FileAgentConfig, 'modelMap'>, model: string) {
+  return config.modelMap?.[model] || '';
 }
 
 export function loadAgentLaunchConfig(agent: string, baseDir?: string): FileAgentConfig | null {
@@ -298,6 +400,68 @@ export function runAgentLaunchPreflight(input: {
     triggerScriptPath,
     invokeTriggerScriptPath,
     runArtifactsDir,
+  };
+}
+
+export function buildCodexLaunchConfig(input: BuildCodexLaunchConfigInput): BuiltCodexLaunchConfig | FailedCodexLaunchConfig {
+  const appRoot = path.resolve(input.appRoot || getDevFlowAppRoot());
+  const localPath = input.project.localPath || '';
+  const preflight = runAgentLaunchPreflight({
+    agent: input.task.agent || 'Codex',
+    localPath,
+    model: input.task.model,
+    effort: input.task.effort,
+    executionMode: input.executionMode,
+    appRoot,
+  });
+
+  if (!preflight.ok || !preflight.launchPlan?.config || !preflight.executablePath) {
+    return {
+      ok: false,
+      error: preflight.message,
+      launchPlan: preflight.launchPlan,
+    };
+  }
+
+  const cwd = path.resolve(localPath);
+  const promptPath = path.resolve(input.promptPath);
+  const promptReference = buildPromptReference(promptPath);
+  const parameters = buildAgentCliArgs({
+    config: preflight.launchPlan.config,
+    localPath: cwd,
+    model: input.task.model || '',
+    effort: input.task.effort || '',
+    promptReference,
+    executionMode: input.executionMode,
+  });
+  const apiBaseUrl = (input.apiBaseUrl || getDevFlowApiBaseUrl()).replace(/\/$/, '');
+  const environment = Object.fromEntries(
+    Object.entries({
+      ...input.environment,
+      DEVFLOW_AGENT_EXECUTION_MODE: input.executionMode,
+      DEVFLOW_API_BASE_URL: apiBaseUrl,
+    }).filter((entry): entry is [string, string] => typeof entry[1] === 'string')
+  );
+  const previewText = [
+    `Codex launch preview: run=${input.runId}${input.preview ? ' (preview)' : ''}`,
+    `cwd=${cwd}`,
+    `executable=${preflight.executablePath}`,
+    `args=${parameters.join(' ')}`,
+    `promptPath=${promptPath}`,
+    `resolvedModel=${preflight.launchPlan.resolvedModel || 'none'}`,
+    `selectedEffort=${preflight.launchPlan.selectedEffort || 'none'}`,
+    `executionMode=${input.executionMode}`,
+  ].join('\n');
+
+  return {
+    ok: true,
+    executable: preflight.executablePath,
+    parameters,
+    cwd,
+    environment,
+    promptReference,
+    previewText,
+    launchPlan: preflight.launchPlan,
   };
 }
 

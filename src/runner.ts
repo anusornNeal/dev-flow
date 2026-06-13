@@ -3,7 +3,7 @@ import * as path from 'path';
 import { spawn } from 'child_process';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { buildPromptReference, getDevFlowAppRoot, getAgentRunsBaseDir, resolveAgentExecutionMode, type AgentExecutionMode } from './server/services/agentRunService';
-import { buildLaunchMetadataBlock, resolveAgentExecutable, resolveAgentLaunchPlan, type FileAgentConfig } from './server/services/agentLaunchConfig';
+import { buildAgentCliArgs as buildSharedAgentCliArgs, buildCodexLaunchConfig, buildLaunchMetadataBlock, mapModelForAgent as mapSharedModelForAgent, resolveAgentExecutable, resolveAgentLaunchPlan, type FileAgentConfig } from './server/services/agentLaunchConfig';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -24,6 +24,9 @@ interface RunnerPathsInput {
   promptPath: string;
   logPath: string;
 }
+
+export const buildAgentCliArgs = buildSharedAgentCliArgs;
+export const mapModelForAgent = mapSharedModelForAgent;
 
 function quoteBatArg(value: string) {
   return `"${value.replace(/"/g, '""')}"`;
@@ -64,63 +67,6 @@ export function normalizeRunnerPaths(input: RunnerPathsInput) {
     promptPath: input.promptPath ? path.resolve(input.promptPath) : '',
     logPath: input.logPath ? path.resolve(input.logPath) : '',
   };
-}
-
-function appendFlagValue(args: string[], flag: string | string[], value: string) {
-  const flagParts = Array.isArray(flag) ? flag : [flag];
-  const valueFlag = flagParts.at(-1);
-  if (!valueFlag) return;
-
-  args.push(...flagParts.slice(0, -1));
-  if (valueFlag.endsWith('=')) {
-    args.push(`${valueFlag}${value}`);
-  } else {
-    args.push(valueFlag, value);
-  }
-}
-
-export function mapModelForAgent(config: Pick<AgentConfig, 'modelMap'>, model: string) {
-  return config.modelMap?.[model] || '';
-}
-
-export function buildAgentCliArgs(input: BuildAgentCliArgsInput) {
-  const { config, localPath, effort, promptReference, executionMode } = input;
-  const model = input.model ? mapModelForAgent(config, input.model) : '';
-  const spawnArgs: string[] = [];
-
-  if (localPath && config.flags.workingDir) {
-    spawnArgs.push(config.flags.workingDir, localPath);
-  }
-
-  if (model) {
-    if (config.flags.model) {
-      spawnArgs.push(config.flags.model, model);
-    } else {
-      console.warn(`[runner] WARNING: ${config.name} does not support model flag natively via config.`);
-    }
-  }
-
-  if (effort) {
-    if (config.flags.effort) {
-      appendFlagValue(spawnArgs, config.flags.effort, effort);
-    } else if (config.promptFallback?.effort) {
-      console.warn(`[runner] WARNING: ${config.name} config states no effort flag. Using prompt fallback.`);
-    }
-  }
-
-  if (config.flags.interactiveArgs) {
-    spawnArgs.push(...config.flags.interactiveArgs);
-  }
-
-  const modeArgs = config.executionModes?.[executionMode]?.args;
-  if (modeArgs) {
-    spawnArgs.push(...modeArgs);
-  } else if (executionMode === 'full' && config.flags.alwaysAllow) {
-    spawnArgs.push(config.flags.alwaysAllow);
-  }
-
-  spawnArgs.push(promptReference);
-  return spawnArgs;
 }
 
 export function createAgentLaunchScript(input: {
@@ -258,7 +204,7 @@ function main() {
     process.exit(1);
   }
 
-  const executable = resolveAgentExecutable(config.executables);
+  let executable = resolveAgentExecutable(config.executables);
   if (!executable) {
     console.error(`[runner] Executable not found for ${config.name}. Checked:`, config.executables);
     appendRunnerLog(paths.logPath, `Executable not found for ${config.name}. Checked configured env/path/command sources.`);
@@ -272,8 +218,31 @@ function main() {
     process.exit(1);
   }
 
-  const spawnArgs = buildAgentCliArgs({ config, localPath: paths.localPath, model, effort, promptReference, executionMode });
+  let spawnArgs = buildSharedAgentCliArgs({ config, localPath: paths.localPath, model, effort, promptReference, executionMode });
   const runDir = paths.logPath ? path.dirname(paths.logPath) : runId ? path.join(getAgentRunsBaseDir(), runId) : getDevFlowAppRoot();
+  let cwd = paths.localPath || getDevFlowAppRoot();
+
+  if (config.name === 'Codex') {
+    const codexLaunchConfig = buildCodexLaunchConfig({
+      task: { id: taskId, agent: config.name, model, effort },
+      project: { localPath: paths.localPath || getDevFlowAppRoot() },
+      promptPath: paths.promptPath,
+      runId,
+      executionMode,
+      apiBaseUrl,
+      appRoot: path.join(__dirname, '..'),
+      preview: true,
+    });
+    if (codexLaunchConfig.ok === false) {
+      console.error(`[runner] ${codexLaunchConfig.error}`);
+      appendRunnerLog(paths.logPath, `Launch rejected: ${codexLaunchConfig.error}`);
+      process.exit(1);
+    }
+    executable = codexLaunchConfig.executable;
+    spawnArgs = codexLaunchConfig.parameters;
+    cwd = codexLaunchConfig.cwd;
+    appendRunnerLog(paths.logPath, codexLaunchConfig.previewText);
+  }
   
   let launchScriptPath = '';
   if (config.name === 'Codex') {
@@ -284,7 +253,7 @@ function main() {
       runDir, 
       executable, 
       args: spawnArgs, 
-      cwd: paths.localPath || getDevFlowAppRoot(), 
+      cwd,
       windowTitle: `${config.name} Agent`,
       logPath: paths.logPath 
     });
@@ -296,7 +265,7 @@ function main() {
       runDir, 
       executable, 
       args: spawnArgs, 
-      cwd: paths.localPath || getDevFlowAppRoot(), 
+      cwd,
       windowTitle: `${config.name} Agent`,
       logPath: paths.logPath 
     });
@@ -329,8 +298,6 @@ function main() {
   console.log(`[runner] Launching ${config.name} in a new window for run=${runId || 'none'} mode=${executionMode}...`);
 
   // We need to launch the agent in a new visible console window, starting in the localPath.
-  const cwd = paths.localPath || getDevFlowAppRoot();
-
   let finalCmd = '';
   let finalArgs: string[] = [];
 

@@ -121,6 +121,7 @@ assert.equal(getActiveRunForProject('project-stale'), null);
 assert.equal(getLatestAgentRunForTask('task-stale')?.status, 'cancelled');
 
 const {
+  buildCodexLaunchConfig,
   buildLaunchMetadataBlock,
   loadAgentLaunchConfig,
   runAgentLaunchPreflight,
@@ -281,6 +282,66 @@ const fakeRunnerPreflight = runAgentLaunchPreflight({
 });
 assert.equal(fakeRunnerPreflight.ok, true);
 assert.equal(fakeRunnerPreflight.executablePath, fakeRunnerScriptPath);
+
+const codexLaunchConfig = buildCodexLaunchConfig({
+  task: {
+    id: 'task-codex-launch',
+    agent: 'Codex',
+    model: 'GPT-5.5',
+    effort: 'high',
+  },
+  project: {
+    localPath: fixtureProjectDir,
+  },
+  promptPath: files.promptPath,
+  runId: 'run-codex-launch',
+  executionMode: 'safe',
+  apiBaseUrl: 'http://localhost:3000',
+  appRoot: process.cwd(),
+});
+assert.equal(codexLaunchConfig.ok, true);
+assert.equal(codexLaunchConfig.cwd, fixtureProjectDir);
+assert.equal(codexLaunchConfig.executable, fakeRunnerScriptPath);
+assert.deepEqual(codexLaunchConfig.parameters, [
+  '-C', fixtureProjectDir,
+  '-m', 'gpt-5.5',
+  '--config', 'reasoning_effort=high',
+  '-s', 'workspace-write',
+  buildPromptReference(files.promptPath),
+]);
+assert.equal(codexLaunchConfig.environment.DEVFLOW_AGENT_EXECUTION_MODE, 'safe');
+assert.equal(codexLaunchConfig.environment.DEVFLOW_API_BASE_URL, 'http://localhost:3000');
+assert.match(codexLaunchConfig.previewText, /gpt-5\.5/);
+assert.match(codexLaunchConfig.previewText, /reasoning_effort=high/);
+assert.match(codexLaunchConfig.previewText, new RegExp(files.promptPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+
+const codexLaunchPreview = buildCodexLaunchConfig({
+  task: {
+    id: 'task-codex-preview',
+    agent: 'Codex',
+    model: 'GPT-5.4 Mini',
+    effort: 'low',
+  },
+  project: {
+    localPath: fixtureProjectDir,
+  },
+  promptPath: files.promptPath,
+  runId: 'preview-run',
+  executionMode: 'full',
+  apiBaseUrl: 'http://localhost:3000',
+  appRoot: process.cwd(),
+  preview: true,
+});
+assert.equal(codexLaunchPreview.ok, true);
+assert.deepEqual(codexLaunchPreview.parameters, [
+  '-C', fixtureProjectDir,
+  '-m', 'gpt-5.4-mini',
+  '--config', 'reasoning_effort=low',
+  '--dangerously-bypass-approvals-and-sandbox',
+  '-s', 'danger-full-access',
+  buildPromptReference(files.promptPath),
+]);
+assert.match(codexLaunchPreview.previewText, /run=preview-run/);
 delete process.env.DEVFLOW_CODEX_EXE;
 
 const {

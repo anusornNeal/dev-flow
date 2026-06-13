@@ -114,6 +114,7 @@ assert.equal(getLatestAgentRunForTask('task-stale')?.status, 'cancelled');
 
 const {
   buildLaunchMetadataBlock,
+  runAgentLaunchPreflight,
   resolveAgentLaunchPlan,
 } = await import('../src/server/services/agentLaunchConfig');
 
@@ -152,6 +153,85 @@ assert.match(metadataBlock, /DevFlow model label: GPT-5\.5/);
 assert.match(metadataBlock, /Resolved CLI model id: gpt-5\.5/);
 assert.match(metadataBlock, /Selected effort: xhigh/);
 assert.match(metadataBlock, /Effort handling mode: cli-flag/);
+
+const fixtureAppRoot = path.join(tempDir, 'fixture-app');
+const fixtureProjectDir = path.join(fixtureAppRoot, 'project');
+const fixtureScriptsDir = path.join(fixtureAppRoot, 'scripts');
+const fixtureConfigDir = path.join(fixtureAppRoot, 'config', 'agents');
+const fixtureExecutablePath = path.join(fixtureAppRoot, 'tools', 'fixture-agent.cmd');
+fs.mkdirSync(fixtureProjectDir, { recursive: true });
+fs.mkdirSync(fixtureScriptsDir, { recursive: true });
+fs.mkdirSync(fixtureConfigDir, { recursive: true });
+fs.mkdirSync(path.dirname(fixtureExecutablePath), { recursive: true });
+fs.writeFileSync(path.join(fixtureScriptsDir, 'trigger-agent.bat'), '@echo off\r\n', 'utf8');
+fs.writeFileSync(path.join(fixtureScriptsDir, 'invoke-agent-trigger.ps1'), 'exit 0\r\n', 'utf8');
+fs.writeFileSync(fixtureExecutablePath, '@echo off\r\n', 'utf8');
+fs.writeFileSync(path.join(fixtureConfigDir, 'fixtureagent.json'), JSON.stringify({
+  name: 'FixtureAgent',
+  executables: [{ type: 'path', value: fixtureExecutablePath }],
+  flags: {
+    model: '--model',
+    workingDir: '--cwd',
+    effort: '--effort',
+  },
+  modelMap: {
+    'Fixture Model': 'fixture-model',
+  },
+  launchStyle: 'start',
+}, null, 2), 'utf8');
+
+const successfulPreflight = runAgentLaunchPreflight({
+  agent: 'FixtureAgent',
+  localPath: fixtureProjectDir,
+  model: 'Fixture Model',
+  effort: 'high',
+  executionMode: 'safe',
+  appRoot: fixtureAppRoot,
+});
+assert.equal(successfulPreflight.ok, true);
+assert.equal(successfulPreflight.code, 'OK');
+assert.equal(successfulPreflight.launchPlan?.resolvedModel, 'fixture-model');
+
+const missingProjectPathPreflight = runAgentLaunchPreflight({
+  agent: 'FixtureAgent',
+  localPath: path.join(fixtureAppRoot, 'missing-project'),
+  model: 'Fixture Model',
+  effort: 'high',
+  executionMode: 'safe',
+  appRoot: fixtureAppRoot,
+});
+assert.equal(missingProjectPathPreflight.ok, false);
+assert.equal(missingProjectPathPreflight.code, 'PROJECT_PATH_NOT_FOUND');
+assert.match(missingProjectPathPreflight.message, /Project localPath does not exist/);
+
+const missingTriggerScriptPath = path.join(fixtureScriptsDir, 'trigger-agent.bat');
+fs.unlinkSync(missingTriggerScriptPath);
+const missingTriggerScriptPreflight = runAgentLaunchPreflight({
+  agent: 'FixtureAgent',
+  localPath: fixtureProjectDir,
+  model: 'Fixture Model',
+  effort: 'high',
+  executionMode: 'safe',
+  appRoot: fixtureAppRoot,
+});
+assert.equal(missingTriggerScriptPreflight.ok, false);
+assert.equal(missingTriggerScriptPreflight.code, 'TRIGGER_SCRIPT_MISSING');
+assert.match(missingTriggerScriptPreflight.message, /trigger script/i);
+fs.writeFileSync(missingTriggerScriptPath, '@echo off\r\n', 'utf8');
+
+fs.unlinkSync(fixtureExecutablePath);
+const missingExecutablePreflight = runAgentLaunchPreflight({
+  agent: 'FixtureAgent',
+  localPath: fixtureProjectDir,
+  model: 'Fixture Model',
+  effort: 'high',
+  executionMode: 'safe',
+  appRoot: fixtureAppRoot,
+});
+assert.equal(missingExecutablePreflight.ok, false);
+assert.equal(missingExecutablePreflight.code, 'EXECUTABLE_NOT_FOUND');
+assert.match(missingExecutablePreflight.message, /executable/i);
+fs.writeFileSync(fixtureExecutablePath, '@echo off\r\n', 'utf8');
 
 const {
   buildAgentCliArgs,

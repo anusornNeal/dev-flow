@@ -344,7 +344,19 @@ export default function App() {
       if (selectedTask && selectedTask.id === taskId) {
         setSelectedTask(persistedTask);
       }
-      setPersistenceError(null);
+      const autoWorkTrigger = responseData.autoWorkTrigger;
+      if (autoWorkTrigger && autoWorkTrigger.triggered === false && autoWorkTrigger.reason) {
+        const warningMessage = `Auto Work blocked before launch: ${autoWorkTrigger.reason}`;
+        setPersistenceError(warningMessage);
+        window.dispatchEvent(new CustomEvent('devflow:auto-work-preflight-error', {
+          detail: {
+            code: autoWorkTrigger.code || 'UNKNOWN',
+            message: warningMessage,
+          },
+        }));
+      } else {
+        setPersistenceError(null);
+      }
     } catch (err) {
       console.error('API lane move sync failed:', err);
       setPersistenceError('Lane move was shown optimistically, but backend persistence failed. Refresh after backend recovery to confirm final state.');

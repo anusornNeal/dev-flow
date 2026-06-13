@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import type { AgentExecutionMode } from './agentRunService';
+import { getAgentRunsBaseDir, getAgentTriggerScriptPath, getDevFlowAppRoot, getInvokeAgentTriggerScriptPath } from './agentRunService';
 
 export type EffortHandlingMode = 'cli-flag' | 'prompt-only' | 'none';
 
@@ -37,8 +38,64 @@ export interface AgentLaunchPlan {
   executionMode: AgentExecutionMode;
 }
 
+export type AgentLaunchPreflightCode =
+  | 'OK'
+  | 'NO_AGENT'
+  | 'PROJECT_PATH_MISSING'
+  | 'PROJECT_PATH_NOT_FOUND'
+  | 'PROJECT_PATH_INVALID'
+  | 'LAUNCH_PLAN_INVALID'
+  | 'EXECUTABLE_NOT_FOUND'
+  | 'TRIGGER_SCRIPT_MISSING'
+  | 'INVOKE_TRIGGER_SCRIPT_MISSING'
+  | 'RUN_ARTIFACT_DIR_UNAVAILABLE';
+
+export interface AgentLaunchPreflightResult {
+  ok: boolean;
+  code: AgentLaunchPreflightCode;
+  message: string;
+  agent: string;
+  launchPlan?: AgentLaunchPlan;
+  executablePath?: string;
+  triggerScriptPath?: string;
+  invokeTriggerScriptPath?: string;
+  runArtifactsDir?: string;
+}
+
 function configPathForAgent(agent: string, baseDir = process.cwd()) {
   return path.join(baseDir, 'config', 'agents', `${agent.toLowerCase()}.json`);
+}
+
+function resolveEnvVariables(str: string): string {
+  return str.replace(/%([^%]+)%/g, (_, n) => process.env[n] || '');
+}
+
+export function resolveAgentExecutable(executables: FileAgentConfig['executables']): string | null {
+  for (const exec of executables) {
+    if (exec.type === 'env') {
+      const value = process.env[exec.value];
+      if (value && fs.existsSync(value)) return value;
+      continue;
+    }
+
+    if (exec.type === 'path') {
+      const value = resolveEnvVariables(exec.value);
+      if (value && fs.existsSync(value)) return value;
+      continue;
+    }
+
+    if (exec.type === 'command') {
+      const pathEnv = process.env.PATH || '';
+      for (const dir of pathEnv.split(path.delimiter).filter(Boolean)) {
+        for (const candidate of [exec.value, `${exec.value}.cmd`, `${exec.value}.bat`, `${exec.value}.exe`]) {
+          const resolved = path.join(dir, candidate);
+          if (fs.existsSync(resolved)) return resolved;
+        }
+      }
+    }
+  }
+
+  return null;
 }
 
 export function loadAgentLaunchConfig(agent: string, baseDir?: string): FileAgentConfig | null {
@@ -108,6 +165,139 @@ export function resolveAgentLaunchPlan(input: {
     selectedEffort,
     effortHandling,
     executionMode: input.executionMode,
+  };
+}
+
+export function runAgentLaunchPreflight(input: {
+  agent?: string | null;
+  localPath?: string | null;
+  model?: string | null;
+  effort?: string | null;
+  executionMode: AgentExecutionMode;
+  appRoot?: string;
+}): AgentLaunchPreflightResult {
+  const appRoot = path.resolve(input.appRoot || getDevFlowAppRoot());
+  const agent = input.agent || '';
+  const localPath = input.localPath || '';
+
+  if (!agent) {
+    return {
+      ok: false,
+      code: 'NO_AGENT',
+      message: 'Task has no assigned agent.',
+      agent,
+    };
+  }
+
+  if (!localPath) {
+    return {
+      ok: false,
+      code: 'PROJECT_PATH_MISSING',
+      message: 'Project localPath is missing. Task cannot be run.',
+      agent,
+    };
+  }
+
+  if (!fs.existsSync(localPath)) {
+    return {
+      ok: false,
+      code: 'PROJECT_PATH_NOT_FOUND',
+      message: `Project localPath does not exist: ${localPath}`,
+      agent,
+    };
+  }
+
+  if (!fs.statSync(localPath).isDirectory()) {
+    return {
+      ok: false,
+      code: 'PROJECT_PATH_INVALID',
+      message: `Project localPath is not a directory: ${localPath}`,
+      agent,
+    };
+  }
+
+  const launchPlan = resolveAgentLaunchPlan({
+    agent,
+    model: input.model,
+    effort: input.effort,
+    executionMode: input.executionMode,
+    baseDir: appRoot,
+  });
+
+  if (!launchPlan.ok || !launchPlan.config) {
+    return {
+      ok: false,
+      code: 'LAUNCH_PLAN_INVALID',
+      message: launchPlan.error || 'Agent launch configuration is invalid.',
+      agent,
+      launchPlan,
+    };
+  }
+
+  const executablePath = resolveAgentExecutable(launchPlan.config.executables);
+  if (!executablePath) {
+    return {
+      ok: false,
+      code: 'EXECUTABLE_NOT_FOUND',
+      message: `${launchPlan.config.name} executable was not found from the configured env/path/command sources.`,
+      agent,
+      launchPlan,
+    };
+  }
+
+  const triggerScriptPath = getAgentTriggerScriptPath(appRoot);
+  if (!fs.existsSync(triggerScriptPath)) {
+    return {
+      ok: false,
+      code: 'TRIGGER_SCRIPT_MISSING',
+      message: `Agent trigger script is missing: ${triggerScriptPath}`,
+      agent,
+      launchPlan,
+      executablePath,
+    };
+  }
+
+  const invokeTriggerScriptPath = getInvokeAgentTriggerScriptPath(appRoot);
+  if (!fs.existsSync(invokeTriggerScriptPath)) {
+    return {
+      ok: false,
+      code: 'INVOKE_TRIGGER_SCRIPT_MISSING',
+      message: `Agent trigger wrapper script is missing: ${invokeTriggerScriptPath}`,
+      agent,
+      launchPlan,
+      executablePath,
+      triggerScriptPath,
+    };
+  }
+
+  const runArtifactsDir = getAgentRunsBaseDir(appRoot);
+  try {
+    fs.mkdirSync(runArtifactsDir, { recursive: true });
+    fs.accessSync(runArtifactsDir, fs.constants.R_OK | fs.constants.W_OK);
+  } catch {
+    return {
+      ok: false,
+      code: 'RUN_ARTIFACT_DIR_UNAVAILABLE',
+      message: `Run artifact folder is not ready: ${runArtifactsDir}`,
+      agent,
+      launchPlan,
+      executablePath,
+      triggerScriptPath,
+      invokeTriggerScriptPath,
+      runArtifactsDir,
+    };
+  }
+
+  return {
+    ok: true,
+    code: 'OK',
+    message: 'Agent launch preflight passed.',
+    agent,
+    launchPlan,
+    executablePath,
+    triggerScriptPath,
+    invokeTriggerScriptPath,
+    runArtifactsDir,
   };
 }
 

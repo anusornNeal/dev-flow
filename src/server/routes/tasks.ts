@@ -9,10 +9,15 @@ import { appendAgentRunLog, createAgentRunFiles, getAgentTriggerScriptPath, getD
 import { extractDesignImages, getAgentTaskContext, resolveProjectIdFromRepo, validateAgentParams, validateTaskPayload } from '../services/taskService';
 import { validateEnum, validateString } from '../validation';
 import { isValidTransition, getValidationErrorMessage } from '../../lib/statusTransitions';
-import { resolveAgentLaunchPlan } from '../services/agentLaunchConfig';
+import { runAgentLaunchPreflight, type AgentLaunchPreflightCode } from '../services/agentLaunchConfig';
 import { renderPromptTemplate } from '../services/promptTemplateService';
 
 const STALE_AGENT_RUN_MS = 30 * 60 * 1000;
+
+type TriggerTaskAgentResult =
+  | { triggered: true; run: AgentRun }
+  | { triggered: false; reason: string; code?: AgentLaunchPreflightCode | 'TASK_ALREADY_RUNNING' | 'PROJECT_ALREADY_RUNNING'; run?: AgentRun | null };
+type TriggerTaskAgentFailure = Extract<TriggerTaskAgentResult, { triggered: false }>;
 
 function createTaskLogEntry(message: string, type: string = 'update') {
   return {
@@ -221,15 +226,16 @@ export function continueTaskQueueForProject(projectId: string, deps: ApiRouteDep
       return result;
     }
 
-    appendTaskLog(nextTask, `Queue continuation skipped: ${result.reason}`, 'update');
+    const blockedResult = result as TriggerTaskAgentFailure;
+    appendTaskLog(nextTask, `Queue continuation skipped: ${blockedResult.reason}`, 'update');
   }
 
   saveTasks(deps.state);
   return { triggered: false, reason: 'No eligible todo task could be started.' };
 }
 
-export function triggerTaskAgent(task: any, deps: ApiRouteDeps, routeLabel: string, retryOfRunId?: string | null) {
-  if (!task.agent) return { triggered: false, reason: 'Task has no assigned agent.' };
+export function triggerTaskAgent(task: any, deps: ApiRouteDeps, routeLabel: string, retryOfRunId?: string | null): TriggerTaskAgentResult {
+  if (!task.agent) return { triggered: false, code: 'NO_AGENT', reason: 'Task has no assigned agent.' };
   if (!/^[a-zA-Z0-9-]+$/.test(task.agent) || !/^[a-zA-Z0-9-]+$/.test(task.id)) {
     deps.writeAgentLog('ERROR', `Blocked trigger due to invalid chars: agent=${task.agent} taskId=${task.id}`);
     return { triggered: false, reason: 'Invalid agent or task id characters.' };
@@ -238,32 +244,29 @@ export function triggerTaskAgent(task: any, deps: ApiRouteDeps, routeLabel: stri
   cleanupStaleActiveRuns(deps);
 
   const project = deps.state.projectsCache.find((entry) => entry.id === task.projectId);
-  if (!project || !project.localPath) {
-    const reason = 'Project localPath is missing. Task cannot be run.';
-    deps.writeAgentLog('ERROR', `Blocked trigger for task=${task.id}: ${reason}`);
-    return { triggered: false, reason };
-  }
-
   const executionMode = resolveAgentExecutionMode(deps.state.settingsCache.agentExecutionMode || process.env.DEVFLOW_AGENT_EXECUTION_MODE);
-  const launchPlan = resolveAgentLaunchPlan({
+  const preflight = runAgentLaunchPreflight({
     agent: task.agent,
+    localPath: project?.localPath,
     model: task.model,
     effort: task.effort,
     executionMode,
+    appRoot: resolveFromDevFlowAppRoot(),
   });
 
-  if (!launchPlan.ok) {
-    deps.writeAgentLog('ERROR', `Blocked trigger for task=${task.id}: ${launchPlan.error}`);
-    return { triggered: false, reason: launchPlan.error || 'Agent launch configuration is invalid.' };
+  if (!preflight.ok || !preflight.launchPlan) {
+    deps.writeAgentLog('ERROR', `Blocked trigger for task=${task.id}: [${preflight.code}] ${preflight.message}`);
+    return { triggered: false, code: preflight.code, reason: preflight.message };
   }
+  const launchPlan = preflight.launchPlan;
 
   const activeTaskRun = getActiveRunForTask(task.id);
-  if (activeTaskRun) return { triggered: false, reason: `Task already has active run ${activeTaskRun.id}.` };
+  if (activeTaskRun) return { triggered: false, code: 'TASK_ALREADY_RUNNING', reason: `Task already has active run ${activeTaskRun.id}.` };
 
   const activeProjectRun = getActiveRunForProject(task.projectId);
   if (activeProjectRun && activeProjectRun.taskId !== task.id) {
     deps.writeAgentLog('INFO', `Agent already busy for project=${task.projectId}, skipping trigger for task=${task.id}`);
-    return { triggered: false, reason: `Project already has active run ${activeProjectRun.id}.` };
+    return { triggered: false, code: 'PROJECT_ALREADY_RUNNING', reason: `Project already has active run ${activeProjectRun.id}.` };
   }
 
   const run = createAgentRun({
@@ -362,20 +365,25 @@ export function triggerTaskAgent(task: any, deps: ApiRouteDeps, routeLabel: stri
   return { triggered: true, run: currentRun || run };
 }
 
-function maybeTriggerTaskAgent(task: any, previousTaskOrStatus: any, deps: ApiRouteDeps, routeLabel: string) {
+function maybeTriggerTaskAgent(task: any, previousTaskOrStatus: any, deps: ApiRouteDeps, routeLabel: string): TriggerTaskAgentResult | null {
   const previousTask = typeof previousTaskOrStatus === 'string' ? null : previousTaskOrStatus;
   const previousStatus = typeof previousTaskOrStatus === 'string' ? previousTaskOrStatus : previousTask?.status;
   const assignmentChanged = previousTask
     ? previousTask.agent !== task.agent || previousTask.model !== task.model || previousTask.effort !== task.effort
     : true;
-  if (task.status !== 'todo') return;
-  if (previousStatus === 'todo' && !assignmentChanged) return;
+  if (task.status !== 'todo') return null;
+  if (previousStatus === 'todo' && !assignmentChanged) return null;
   if (!deps.state.settingsCache.autoWork) {
     deps.writeAgentLog('INFO', `Auto Work is disabled. Task ${task.id} moved to todo but agent will not be triggered.`);
-    return;
+    return null;
   }
   const result = triggerTaskAgent(task, deps, routeLabel);
-  if (!result.triggered) deps.writeAgentLog('INFO', `Skipped agent trigger for task=${task.id}: ${result.reason}`);
+  if (!result.triggered) {
+    const blockedResult = result as TriggerTaskAgentFailure;
+    deps.writeAgentLog('INFO', `Skipped agent trigger for task=${task.id}: ${blockedResult.reason}`);
+    appendTaskLog(task, `Auto Work blocked before launch: ${blockedResult.reason}`, 'update');
+  }
+  return result;
 }
 
 export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
@@ -435,7 +443,10 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
 
     const result = triggerTaskAgent(task, deps, 'retry endpoint', latestRun.id);
     saveTasks(deps.state);
-    if (!result.triggered) return res.status(400).json({ error: result.reason, run: result.run });
+    if (!result.triggered) {
+      const blockedResult = result as TriggerTaskAgentFailure;
+      return res.status(400).json({ error: blockedResult.reason, code: blockedResult.code, run: blockedResult.run });
+    }
     return res.status(201).json({ success: true, run: result.run, task });
   });
 
@@ -760,10 +771,26 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
 
     deps.state.tasksCache[taskIndex] = updatedTask;
     syncTaskAgentStateForStatus(updatedTask, previousStatus);
-    maybeTriggerTaskAgent(updatedTask, previousStatus, deps, '/move endpoint');
+    const autoWorkTrigger = maybeTriggerTaskAgent(updatedTask, previousStatus, deps, '/move endpoint');
 
     saveTasks(deps.state);
-    return res.json({ success: true, message: `Successfully relocated task schema from ${previousStatus} to ${req.body.status}`, task: updatedTask });
+    return res.json({
+      success: true,
+      message: `Successfully relocated task schema from ${previousStatus} to ${req.body.status}`,
+      task: updatedTask,
+      autoWorkTrigger: autoWorkTrigger
+        ? autoWorkTrigger.triggered
+          ? { triggered: true }
+          : (() => {
+              const blockedResult = autoWorkTrigger as TriggerTaskAgentFailure;
+              return {
+                triggered: false,
+                code: blockedResult.code,
+                reason: blockedResult.reason,
+              };
+            })()
+        : null,
+    });
   });
 
   app.post('/api/tasks/:id/checklist/toggle', (req, res) => {

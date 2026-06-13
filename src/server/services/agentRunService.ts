@@ -34,6 +34,10 @@ export function getAgentTriggerScriptPath(baseDir = getDevFlowAppRoot()) {
   return process.env.DEVFLOW_AGENT_TRIGGER_SCRIPT || path.join(baseDir, 'scripts', 'trigger-agent.bat');
 }
 
+export function getInvokeAgentTriggerScriptPath(baseDir = getDevFlowAppRoot()) {
+  return path.join(baseDir, 'scripts', 'invoke-agent-trigger.ps1');
+}
+
 export function getAgentRunsBaseDir(baseDir = getDevFlowAppRoot()) {
   return path.join(baseDir, '.devflow', 'runs');
 }

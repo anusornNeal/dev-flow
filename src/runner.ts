@@ -1,9 +1,9 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { spawn, execSync } from 'child_process';
+import { spawn } from 'child_process';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { buildPromptReference, getDevFlowAppRoot, getAgentRunsBaseDir, resolveAgentExecutionMode, type AgentExecutionMode } from './server/services/agentRunService';
-import { buildLaunchMetadataBlock, resolveAgentLaunchPlan, type FileAgentConfig } from './server/services/agentLaunchConfig';
+import { buildLaunchMetadataBlock, resolveAgentExecutable, resolveAgentLaunchPlan, type FileAgentConfig } from './server/services/agentLaunchConfig';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -23,33 +23,6 @@ interface RunnerPathsInput {
   localPath: string;
   promptPath: string;
   logPath: string;
-}
-
-function resolveEnvVariables(str: string): string {
-  return str.replace(/%([^%]+)%/g, (_, n) => process.env[n] || '');
-}
-
-function resolveExecutable(executables: AgentConfig['executables']): string | null {
-  for (const exec of executables) {
-    if (exec.type === 'env') {
-      const val = process.env[exec.value];
-      if (val && fs.existsSync(val)) return val;
-    } else if (exec.type === 'path') {
-      const val = resolveEnvVariables(exec.value);
-      if (val && fs.existsSync(val)) return val;
-    } else if (exec.type === 'command') {
-      try {
-        const out = execSync(`where ${exec.value} 2>nul`, { encoding: 'utf8' });
-        const lines = out.trim().split('\n');
-        if (lines.length > 0 && fs.existsSync(lines[0].trim())) {
-          return lines[0].trim();
-        }
-      } catch (e) {
-        // Not found
-      }
-    }
-  }
-  return null;
 }
 
 function quoteBatArg(value: string) {
@@ -285,7 +258,7 @@ function main() {
     process.exit(1);
   }
 
-  const executable = resolveExecutable(config.executables);
+  const executable = resolveAgentExecutable(config.executables);
   if (!executable) {
     console.error(`[runner] Executable not found for ${config.name}. Checked:`, config.executables);
     appendRunnerLog(paths.logPath, `Executable not found for ${config.name}. Checked configured env/path/command sources.`);

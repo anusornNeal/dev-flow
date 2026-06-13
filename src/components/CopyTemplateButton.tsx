@@ -37,7 +37,7 @@ export default function CopyTemplateButton({ task, className = '', variant = 'fu
     <button
       onClick={handleCopy}
       title="Copy Prompt Template for manual agent handoff"
-      className={`flex items-center gap-1.5 px-2 py-1 text-[11px] font-mono font-extrabold rounded-lg border transition-colors ${
+      className={`flex items-center gap-1.5 px-2 py-1 text-[11px] font-mono font-extrabold rounded-lg border transition-colors cursor-pointer ${
         status === 'copied'
           ? 'bg-[#e6f4ea] dark:bg-[#292119] text-[#137333] dark:text-[#f3eadf] border-[#ceead6] dark:border-[#584a3b]'
           : status === 'error'

@@ -597,7 +597,7 @@ export default function TaskDetailsDrawer({
                             <button 
                               type="button"
                               onClick={() => setEditedDesignImages(prev => prev.filter((_, i) => i !== idx))}
-                              className="absolute top-0 right-0 bg-red-500 text-white dark:text-[#f3eadf] w-4 h-4 flex items-center justify-center text-[10px] opacity-0 group-hover:opacity-100 transition-opacity"
+                              className="absolute top-0 right-0 bg-red-500 text-white dark:text-[#f3eadf] w-4 h-4 flex items-center justify-center text-[10px] opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
                             >
                               ✕
                             </button>

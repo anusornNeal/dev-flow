@@ -738,7 +738,9 @@ export default function TaskDetailsDrawer({
           ) : (
             /* ================= PREVIEW / VIEW MODE ================= */
             <div className="space-y-4 text-[#5c493c] dark:text-[#f3eadf]">
-              <div className="space-y-2">
+              {/* Header Section (Title, Branch, Agent) grouped to reduce padding */}
+              <div className="flex flex-col gap-2.5">
+                <div className="space-y-2">
                 <h2 className="text-sm font-extrabold text-[#3a2f26] dark:text-[#f3eadf] font-sans tracking-tight leading-snug">
                   {task.title}
                 </h2>
@@ -800,6 +802,7 @@ export default function TaskDetailsDrawer({
                   )}
                 </div>
               )}
+              </div>
 
               {/* 🌿 SUBTASKS SECTION */}
               {!task.parentId && (

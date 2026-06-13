@@ -1088,53 +1088,103 @@ export default function TaskDetailsDrawer({
                 </div>
               )}
 
-              {/* Extra Info Fields */}
-              {(task.reasoning || task.acceptanceCriteria || task.verification || task.repoContext || task.jiraKey || task.repo || task.sourceUrl) && (
-                <div className="space-y-3 border-t border-[#ebdcb9] dark:border-[#584a3b] pt-5 font-mono text-[10.5px]">
+              {/* QA Context Accordion */}
+              {(task.acceptanceCriteria || task.verification) && (
+                <div className="border border-[#ebdcb9] dark:border-[#584a3b] rounded-2xl overflow-hidden bg-[#fffdfa] dark:bg-[#292119]">
+                  <button
+                    type="button"
+                    onClick={() => toggleSection('qa')}
+                    className="w-full flex items-center justify-between p-3.5 hover:bg-[#f4ebd9]/30 dark:hover:bg-[#3a2f26]/30 transition-colors cursor-pointer"
+                  >
+                    <div className="flex items-center gap-2">
+                      <div className="w-6 h-6 rounded-lg bg-[#7dad71]/10 dark:bg-[#7dad71]/20 flex items-center justify-center">
+                        <FlaskConical size={12} className="text-[#7dad71] dark:text-[#d6b56d]" />
+                      </div>
+                      <span className="text-xs font-bold text-[#5c493c] dark:text-[#f3eadf]">QA Context</span>
+                    </div>
+                    <ChevronDown 
+                      size={14} 
+                      className={`text-[#c4b3a4] dark:text-[#8a7a6a] transition-transform duration-200 ${openSections.has('qa') ? 'rotate-180' : ''}`}
+                    />
+                  </button>
                   
-                  {/* Inline Metadata (Jira/Repo/SourceUrl) */}
-                  {(task.jiraKey || task.repo || task.sourceUrl) && (
-                    <div className="flex flex-wrap gap-3 mb-4">
-                      {task.jiraKey && (
-                        <div className="bg-[#e4eff3] dark:bg-[#292119] text-[#354f59] dark:text-[#f3eadf] px-2.5 py-1 rounded-lg shadow-2xs font-bold flex items-center gap-1.5">
-                          <span className="text-[9px] uppercase tracking-wider opacity-80">Jira Key:</span> {task.jiraKey}
-                        </div>
-                      )}
-                      {task.repo && (
-                        <div className="bg-[#fffdfa] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] text-[#8a6e5a] dark:text-[#f3eadf] px-2.5 py-1 rounded-lg shadow-2xs font-bold flex items-center gap-1.5">
-                          <span className="text-[9px] uppercase tracking-wider">Repo:</span> {task.repo}
-                        </div>
-                      )}
-                      {task.sourceUrl && (
-                        <a href={task.sourceUrl} target="_blank" rel="noreferrer" className="bg-[#fffdfa] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] text-[#3c829e] dark:text-[#f3eadf] hover:text-[#2a7a8a] dark:hover:text-[#f3eadf] px-2.5 py-1 rounded-lg shadow-2xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer">
-                          <span className="text-[9px] uppercase tracking-wider">Source URL ↗</span>
-                        </a>
-                      )}
+                  {openSections.has('qa') && (
+                    <div className="border-t border-[#ebdcb9] dark:border-[#584a3b] bg-[#fdfbf7]/50 dark:bg-[#292119]/50 p-4">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 font-mono text-[10.5px]">
+                        {task.acceptanceCriteria && (
+                          <div className="bg-[#fffdfa] dark:bg-[#292119] border border-[#ebdcb9]/60 dark:border-[#584a3b]/60 p-3 rounded-xl shadow-2xs">
+                            <strong className="block text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold mb-1 text-[9px]">Acceptance Criteria</strong>
+                            <p className="text-[#5c493c] dark:text-[#f3eadf] leading-relaxed whitespace-pre-wrap">{task.acceptanceCriteria}</p>
+                          </div>
+                        )}
+                        {task.verification && (
+                          <div className="bg-[#fffdfa] dark:bg-[#292119] border border-[#ebdcb9]/60 dark:border-[#584a3b]/60 p-3 rounded-xl shadow-2xs">
+                            <strong className="block text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold mb-1 text-[9px]">Verification Steps</strong>
+                            <p className="text-[#5c493c] dark:text-[#f3eadf] leading-relaxed whitespace-pre-wrap">{task.verification}</p>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   )}
+                </div>
+              )}
 
-                  {task.reasoning && (
-                    <div className="bg-[#fffdfa] dark:bg-[#292119] border border-[#ebdcb9]/60 dark:border-[#584a3b]/60 p-3 rounded-xl shadow-2xs">
-                      <strong className="block text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold mb-1 text-[9px]">Reasoning & Context</strong>
-                      <p className="text-[#5c493c] dark:text-[#f3eadf] leading-relaxed whitespace-pre-wrap">{task.reasoning}</p>
+              {/* Dev Context Accordion */}
+              {(task.reasoning || task.repoContext || task.jiraKey || task.repo || task.sourceUrl) && (
+                <div className="border border-[#ebdcb9] dark:border-[#584a3b] rounded-2xl overflow-hidden bg-[#fffdfa] dark:bg-[#292119]">
+                  <button
+                    type="button"
+                    onClick={() => toggleSection('dev')}
+                    className="w-full flex items-center justify-between p-3.5 hover:bg-[#f4ebd9]/30 dark:hover:bg-[#3a2f26]/30 transition-colors cursor-pointer"
+                  >
+                    <div className="flex items-center gap-2">
+                      <div className="w-6 h-6 rounded-lg bg-[#3c829e]/10 dark:bg-[#3c829e]/20 flex items-center justify-center">
+                        <Code2 size={12} className="text-[#3c829e] dark:text-[#d6b56d]" />
+                      </div>
+                      <span className="text-xs font-bold text-[#5c493c] dark:text-[#f3eadf]">Dev Context</span>
                     </div>
-                  )}
-                  {task.acceptanceCriteria && (
-                    <div className="bg-[#fffdfa] dark:bg-[#292119] border border-[#ebdcb9]/60 dark:border-[#584a3b]/60 p-3 rounded-xl shadow-2xs">
-                      <strong className="block text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold mb-1 text-[9px]">Acceptance Criteria</strong>
-                      <p className="text-[#5c493c] dark:text-[#f3eadf] leading-relaxed whitespace-pre-wrap">{task.acceptanceCriteria}</p>
-                    </div>
-                  )}
-                  {task.verification && (
-                    <div className="bg-[#fffdfa] dark:bg-[#292119] border border-[#ebdcb9]/60 dark:border-[#584a3b]/60 p-3 rounded-xl shadow-2xs">
-                      <strong className="block text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold mb-1 text-[9px]">Verification Steps</strong>
-                      <p className="text-[#5c493c] dark:text-[#f3eadf] leading-relaxed whitespace-pre-wrap">{task.verification}</p>
-                    </div>
-                  )}
-                  {task.repoContext && (
-                    <div className="bg-[#fffdfa] dark:bg-[#292119] border border-[#ebdcb9]/60 dark:border-[#584a3b]/60 p-3 rounded-xl shadow-2xs">
-                      <strong className="block text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold mb-1 text-[9px]">Repository Context</strong>
-                      <p className="text-[#5c493c] dark:text-[#f3eadf] leading-relaxed whitespace-pre-wrap">{task.repoContext}</p>
+                    <ChevronDown 
+                      size={14} 
+                      className={`text-[#c4b3a4] dark:text-[#8a7a6a] transition-transform duration-200 ${openSections.has('dev') ? 'rotate-180' : ''}`}
+                    />
+                  </button>
+                  
+                  {openSections.has('dev') && (
+                    <div className="border-t border-[#ebdcb9] dark:border-[#584a3b] bg-[#fdfbf7]/50 dark:bg-[#292119]/50 p-4">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 font-mono text-[10.5px]">
+                        {task.reasoning && (
+                          <div className="bg-[#fffdfa] dark:bg-[#292119] border border-[#ebdcb9]/60 dark:border-[#584a3b]/60 p-3 rounded-xl shadow-2xs md:col-span-2">
+                            <strong className="block text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold mb-1 text-[9px]">Reasoning & Context</strong>
+                            <p className="text-[#5c493c] dark:text-[#f3eadf] leading-relaxed whitespace-pre-wrap">{task.reasoning}</p>
+                          </div>
+                        )}
+                        {task.repoContext && (
+                          <div className="bg-[#fffdfa] dark:bg-[#292119] border border-[#ebdcb9]/60 dark:border-[#584a3b]/60 p-3 rounded-xl shadow-2xs md:col-span-2">
+                            <strong className="block text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold mb-1 text-[9px]">Repository Context</strong>
+                            <p className="text-[#5c493c] dark:text-[#f3eadf] leading-relaxed whitespace-pre-wrap">{task.repoContext}</p>
+                          </div>
+                        )}
+                        {/* Inline Metadata (Jira/Repo/SourceUrl) */}
+                        {(task.jiraKey || task.repo || task.sourceUrl) && (
+                          <div className="flex flex-wrap gap-3 md:col-span-2">
+                            {task.jiraKey && (
+                              <div className="bg-[#e4eff3] dark:bg-[#292119] text-[#354f59] dark:text-[#f3eadf] px-2.5 py-1 rounded-lg shadow-2xs font-bold flex items-center gap-1.5">
+                                <span className="text-[9px] uppercase tracking-wider opacity-80">Jira Key:</span> {task.jiraKey}
+                              </div>
+                            )}
+                            {task.repo && (
+                              <div className="bg-[#fffdfa] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] text-[#8a6e5a] dark:text-[#f3eadf] px-2.5 py-1 rounded-lg shadow-2xs font-bold flex items-center gap-1.5">
+                                <span className="text-[9px] uppercase tracking-wider">Repo:</span> {task.repo}
+                              </div>
+                            )}
+                            {task.sourceUrl && (
+                              <a href={task.sourceUrl} target="_blank" rel="noreferrer" className="bg-[#fffdfa] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] text-[#3c829e] dark:text-[#f3eadf] hover:text-[#2a7a8a] dark:hover:text-[#f3eadf] px-2.5 py-1 rounded-lg shadow-2xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer">
+                                <span className="text-[9px] uppercase tracking-wider">Source URL ↗</span>
+                              </a>
+                            )}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   )}
                 </div>

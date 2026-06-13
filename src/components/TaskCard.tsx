@@ -101,7 +101,7 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
       {/* Warm Priority Left Indicator Slider for non-active cards */}
       {!isDone && !isInProgress && (
         <span 
-          className={`w-1 h-8 absolute left-0 top-1/2 -translate-y-1/2 rounded-r-md ${
+          className={`w-1 h-16 absolute left-0 top-1/2 -translate-y-1/2 rounded-r-md ${
             task.priority === 'high' ? 'bg-[#de6b48] dark:bg-[#df6b4f]' : 
             task.priority === 'medium' ? 'bg-[#e5a93b] dark:bg-[#d6a549]' : 
             'bg-[#7dad71] dark:bg-[#8fce7c]'
@@ -203,13 +203,7 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
           
           {/* Row 1: Files, Checklist, External Links */}
           <div className="flex flex-wrap items-center gap-1.5 w-full">
-            {/* Priority */}
-            <div className={`w-2 h-2 rounded-full shrink-0 ${
-              isDone ? 'bg-gray-300 dark:bg-[#b8ab9f]' :
-              task.priority === 'high' ? 'bg-[#e05230] dark:bg-[#df6b4f]' :
-              task.priority === 'medium' ? 'bg-[#d28b26] dark:bg-[#d6a549]' :
-              'bg-[#5b8c47] dark:bg-[#8fce7c]'
-            }`} title={`Priority: ${task.priority}`} />
+            {/* Priority dot removed */}
 
             {/* Files */}
             {filesCount > 0 && (

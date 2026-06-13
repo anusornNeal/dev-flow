@@ -20,7 +20,8 @@ import {
   Sun,
   Coffee,
   FileCode,
-  ChevronDown
+  ChevronDown,
+  FileText
 } from 'lucide-react';
 import { Task, TaskStatus, Column, LogEntry, Project } from './types';
 import { isValidTransition, getValidationErrorMessage } from './lib/statusTransitions';
@@ -34,6 +35,8 @@ import BatchImportModal from './components/BatchImportModal';
 import SkillsModal from './components/SkillsModal';
 import SettingsModal from './components/SettingsModal';
 import NgrokStatusPanel from './components/NgrokStatusPanel';
+import TemplateModal from './components/TemplateModal';
+import MarkdownRenderer from './components/MarkdownRenderer';
 import AutoWorkToggle from './components/AutoWorkToggle';
 
 // Standardized project lanes themed cleanly
@@ -58,6 +61,7 @@ export default function App() {
   const [isJsonModalOpen, setIsJsonModalOpen] = useState(false);
   const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
   const [isSkillsModalOpen, setIsSkillsModalOpen] = useState(false);
+  const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [isActionMenuOpen, setIsActionMenuOpen] = useState(false);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
@@ -585,6 +589,14 @@ export default function App() {
                 >
                   <Code size={11} /> Skills
                 </button>
+                <div className="w-px h-4 bg-[#ebdcb9] dark:bg-[#584a3b]"></div>
+                <button
+                  onClick={() => setIsTemplateModalOpen(true)}
+                  className="px-2.5 py-1.5 text-[9px] font-bold tracking-widest uppercase bg-[#f0e6d3] dark:bg-[#292119] border border-[#d8c5aa] dark:border-[#584a3b] text-[#7a6455] dark:text-[#f3eadf] rounded-lg hover:bg-[#e8dcc5] dark:hover:bg-[#1e1914] transition-colors flex items-center gap-1.5 shadow-sm"
+                  title="View and Edit Prompt Template"
+                >
+                  <FileText size={11} /> Template
+                </button>
               </div>
 
               {/* Combined Ticket Action Menu */}
@@ -814,7 +826,15 @@ export default function App() {
         />
       )}
 
-      {/* 7. Settings Modal */}
+      {/* 7. Template Modal */}
+      {isTemplateModalOpen && (
+        <TemplateModal
+          projectId={activeProjectId}
+          onClose={() => setIsTemplateModalOpen(false)}
+        />
+      )}
+
+      {/* 8. Settings Modal */}
       {isSettingsModalOpen && (
         <SettingsModal
           onClose={() => {

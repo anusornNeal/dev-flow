@@ -970,56 +970,79 @@ export default function TaskDetailsDrawer({
                 )}
               </div>
 
-              {/* 🎨 DESIGN IMAGES & SPECIFICATION REFERENCE SECTION */}
+              {/* Links & References Accordion */}
               {((task.designImages && task.designImages.length > 0) || task.designImage || task.specUrl) && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-[#ebdcb9] dark:border-[#584a3b] pt-5 font-sans">
-                  {((task.designImages && task.designImages.length > 0) || task.designImage) && (
-                    <div className="space-y-2 col-span-1 md:col-span-2">
-                      <h4 className="text-[10px] font-mono text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest flex items-center gap-1.5 font-bold">
-                        <ImageIcon size={13} className="text-[#bf8a50] dark:text-[#d6b56d]" /> Design Mockup / Layout
-                      </h4>
-                      <div className="flex gap-2 overflow-x-auto pb-2 snap-x">
-                        {(task.designImages || (task.designImage ? [task.designImage] : [])).map((img, idx) => (
-                          <div key={idx} className="border border-[#ebdcb9] dark:border-[#584a3b] rounded-2xl overflow-hidden bg-white dark:bg-[#292119] shadow-xs p-1 shrink-0 w-64 snap-center">
-                            <a href={img} onClick={(e) => handleViewImage(e, img)} title="Click to view full image in a new tab">
-                              <img 
-                                src={img} 
-                                alt={`Design Mockup ${idx + 1}`} 
-                                className="w-full h-48 object-cover rounded-xl hover:opacity-90 transition-opacity cursor-pointer" 
-                                referrerPolicy="no-referrer"
-                              />
-                            </a>
-                          </div>
-                        ))}
+                <div className="border border-[#ebdcb9] dark:border-[#584a3b] rounded-2xl overflow-hidden bg-[#fffdfa] dark:bg-[#292119]">
+                  <button
+                    type="button"
+                    onClick={() => toggleSection('links')}
+                    className="w-full flex items-center justify-between p-3.5 hover:bg-[#f4ebd9]/30 dark:hover:bg-[#3a2f26]/30 transition-colors cursor-pointer"
+                  >
+                    <div className="flex items-center gap-2">
+                      <div className="w-6 h-6 rounded-lg bg-[#bf8a50]/10 dark:bg-[#bf8a50]/20 flex items-center justify-center">
+                        <LinkIcon size={12} className="text-[#bf8a50] dark:text-[#d6b56d]" />
                       </div>
+                      <span className="text-xs font-bold text-[#5c493c] dark:text-[#f3eadf]">Links & References</span>
                     </div>
-                  )}
+                    <ChevronDown 
+                      size={14} 
+                      className={`text-[#c4b3a4] dark:text-[#8a7a6a] transition-transform duration-200 ${openSections.has('links') ? 'rotate-180' : ''}`}
+                    />
+                  </button>
+                  
+                  {openSections.has('links') && (
+                    <div className="border-t border-[#ebdcb9] dark:border-[#584a3b] bg-[#fdfbf7]/50 dark:bg-[#292119]/50 p-4">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 font-sans">
+                        {((task.designImages && task.designImages.length > 0) || task.designImage) && (
+                          <div className="space-y-2 col-span-1 md:col-span-2">
+                            <h4 className="text-[10px] font-mono text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest flex items-center gap-1.5 font-bold">
+                              <ImageIcon size={13} className="text-[#bf8a50] dark:text-[#d6b56d]" /> Design Mockup / Layout
+                            </h4>
+                            <div className="flex gap-2 overflow-x-auto pb-2 snap-x">
+                              {(task.designImages || (task.designImage ? [task.designImage] : [])).map((img, idx) => (
+                                <div key={idx} className="border border-[#ebdcb9] dark:border-[#584a3b] rounded-2xl overflow-hidden bg-white dark:bg-[#292119] shadow-xs p-1 shrink-0 w-64 snap-center">
+                                  <a href={img} onClick={(e) => handleViewImage(e, img)} title="Click to view full image in a new tab">
+                                    <img 
+                                      src={img} 
+                                      alt={`Design Mockup ${idx + 1}`} 
+                                      className="w-full h-48 object-cover rounded-xl hover:opacity-90 transition-opacity cursor-pointer" 
+                                      referrerPolicy="no-referrer"
+                                    />
+                                  </a>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
 
-                  {task.specUrl && (
-                    <div className="space-y-2 flex flex-col justify-start">
-                      <h4 className="text-[10px] font-mono text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest flex items-center gap-1.5 font-bold">
-                        <LinkIcon size={13} className="text-[#3c829e] dark:text-[#f3eadf]" /> Verification Specification Sheet
-                      </h4>
-                      <div className="bg-[#fffdfa] dark:bg-[#292119] border border-[#ebdcb9]/60 dark:border-[#584a3b]/60 hover:border-[#ebdcb9] dark:hover:border-[#584a3b] p-4 rounded-2xl shadow-2xs flex flex-col gap-2.5 h-full relative justify-center">
-                        <div className="flex items-center gap-2">
-                          <div className="p-2 bg-[#e4eff3] dark:bg-[#292119] rounded-xl text-[#3c829e] dark:text-[#f3eadf]">
-                            <LinkIcon size={16} />
+                        {task.specUrl && (
+                          <div className="space-y-2 flex flex-col justify-start">
+                            <h4 className="text-[10px] font-mono text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest flex items-center gap-1.5 font-bold">
+                              <LinkIcon size={13} className="text-[#3c829e] dark:text-[#f3eadf]" /> Verification Specification Sheet
+                            </h4>
+                            <div className="bg-[#fffdfa] dark:bg-[#292119] border border-[#ebdcb9]/60 dark:border-[#584a3b]/60 hover:border-[#ebdcb9] dark:hover:border-[#584a3b] p-4 rounded-2xl shadow-2xs flex flex-col gap-2.5 h-full relative justify-center">
+                              <div className="flex items-center gap-2">
+                                <div className="p-2 bg-[#e4eff3] dark:bg-[#292119] rounded-xl text-[#3c829e] dark:text-[#f3eadf]">
+                                  <LinkIcon size={16} />
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-[11px] font-bold text-[#354f59] dark:text-[#f3eadf] tracking-tight truncate max-w-full">
+                                    {task.specUrl}
+                                  </p>
+                                  <p className="text-[9px] text-[#6d848c] dark:text-[#f3eadf] font-mono leading-tight">Click link below to browse the specification workspace</p>
+                                </div>
+                              </div>
+                              <a 
+                                href={task.specUrl.startsWith('http') ? task.specUrl : `https://${task.specUrl}`} 
+                                target="_blank" 
+                                rel="noreferrer" 
+                                className="w-full bg-[#3c829e] dark:bg-[#e0a070] hover:bg-[#2e6d87] dark:hover:bg-[#d6b56d] text-white dark:text-[#f3eadf] text-center text-[10px] font-extrabold py-2 rounded-xl transition-all block cursor-pointer uppercase tracking-widest mt-1"
+                              >
+                                OPEN EXTERNAL SPEC SHEET ↗
+                              </a>
+                            </div>
                           </div>
-                          <div className="min-w-0 flex-1">
-                            <p className="text-[11px] font-bold text-[#354f59] dark:text-[#f3eadf] tracking-tight truncate max-w-full">
-                              {task.specUrl}
-                            </p>
-                            <p className="text-[9px] text-[#6d848c] dark:text-[#f3eadf] font-mono leading-tight">Click link below to browse the specification workspace</p>
-                          </div>
-                        </div>
-                        <a 
-                          href={task.specUrl.startsWith('http') ? task.specUrl : `https://${task.specUrl}`} 
-                          target="_blank" 
-                          rel="noreferrer" 
-                          className="w-full bg-[#3c829e] dark:bg-[#e0a070] hover:bg-[#2e6d87] dark:hover:bg-[#d6b56d] text-white dark:text-[#f3eadf] text-center text-[10px] font-extrabold py-2 rounded-xl transition-all block cursor-pointer uppercase tracking-widest mt-1"
-                        >
-                          OPEN EXTERNAL SPEC SHEET ↗
-                        </a>
+                        )}
                       </div>
                     </div>
                   )}

@@ -74,7 +74,7 @@ Do not ask for confirmation unless the task context is missing, unsafe, ambiguou
       ) : (
         <>
           <Copy size={12} />
-          {variant === 'full' && 'Starting Template'}
+          {variant === 'full' && 'Prompt Template'}
         </>
       )}
     </button>

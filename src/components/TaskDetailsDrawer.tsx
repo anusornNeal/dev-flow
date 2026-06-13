@@ -741,10 +741,13 @@ export default function TaskDetailsDrawer({
               {/* Header Section (Title, Branch, Agent) grouped to reduce padding */}
               <div className="flex flex-col gap-2.5">
                 <div className="space-y-2">
-                <h2 className="text-sm font-extrabold text-[#3a2f26] dark:text-[#f3eadf] font-sans tracking-tight leading-snug">
-                  {task.title}
-                </h2>
-                <div className="flex items-center gap-2 flex-wrap">
+                  <div className="flex items-start justify-between gap-3">
+                    <h2 className="text-sm font-extrabold text-[#3a2f26] dark:text-[#f3eadf] font-sans tracking-tight leading-snug">
+                      {task.title}
+                    </h2>
+                    <CopyTemplateButton task={task} className="py-1 px-3 text-[10px] rounded-lg shrink-0" />
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap">
                   {/* Status chip */}
                   <span className={`inline-flex items-center justify-center leading-none text-[9px] uppercase font-bold px-2 py-1 rounded-lg border ${
                     task.status === 'done' ? 'bg-[#e2f0dc] dark:bg-[#292119] text-[#4d7e35] dark:text-[#f3eadf] border-[#bddda4] dark:border-[#584a3b]' :
@@ -769,16 +772,13 @@ export default function TaskDetailsDrawer({
               </div>
 
               {/* Git Branch & Agent Handoff */}
-              <div className="flex items-center justify-between">
-                {task.branch ? (
+              {task.branch && (
+                <div className="flex items-center justify-between">
                   <h4 className="text-[10px] font-mono text-[#8a6e5a] dark:text-[#f3eadf] tracking-widest flex items-center gap-1.5 font-bold">
                     <GitBranch size={13} className="text-[#bf8a50] dark:text-[#d6b56d]" /> <span className="uppercase">Active Branch:</span> <span className="text-[#9e6224] dark:text-[#e0a070]">{task.branch}</span>
                   </h4>
-                ) : (
-                  <div />
-                )}
-                <CopyTemplateButton task={task} className="py-1 px-3 text-[10px] rounded-lg" />
-              </div>
+                </div>
+              )}
 
 
               {/* Agent Strip — compact 1-line pill */}

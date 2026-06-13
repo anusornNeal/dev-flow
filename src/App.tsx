@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Plus, 
   Terminal, 
@@ -57,6 +57,10 @@ export default function App() {
   });
   const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
   const [draggedOverColumn, setDraggedOverColumn] = useState<TaskStatus | null>(null);
+
+  // Ref to track tasks currently moving to prevent polling race conditions
+  const pendingMovesRef = useRef<Set<string>>(new Set());
+
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isJsonModalOpen, setIsJsonModalOpen] = useState(false);
   const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
@@ -134,6 +138,20 @@ export default function App() {
         const data = await res.json();
         setPersistenceError(null);
         setTasks(prev => {
+          // If there are in-flight moves, protect their optimistic state from being overwritten by stale backend data
+          if (pendingMovesRef.current.size > 0) {
+            const mergedTasks = data.map((serverTask: Task) => {
+              if (pendingMovesRef.current.has(serverTask.id)) {
+                // Keep our optimistic version
+                const optTask = prev.find(t => t.id === serverTask.id);
+                return optTask || serverTask;
+              }
+              return serverTask;
+            });
+            if (JSON.stringify(prev) === JSON.stringify(mergedTasks)) return prev;
+            return mergedTasks;
+          }
+
           if (JSON.stringify(prev) === JSON.stringify(data)) return prev;
           return data;
         });
@@ -291,6 +309,9 @@ export default function App() {
       updatedAt: new Date().toISOString()
     };
 
+    // Track the pending move
+    pendingMovesRef.current.add(taskId);
+
     // Optimistic fast update
     setTasks(prev => prev.map(task => 
       task.id === taskId 
@@ -314,7 +335,8 @@ export default function App() {
       if (!response.ok) {
         throw new Error(`Lane move failed with status ${response.status}`);
       }
-      const persistedTask = await response.json();
+      const responseData = await response.json();
+      const persistedTask = responseData.task || responseData;
       setTasks(prev => prev.map(task =>
         task.id === taskId
           ? persistedTask
@@ -327,6 +349,9 @@ export default function App() {
     } catch (err) {
       console.error('API lane move sync failed:', err);
       setPersistenceError('Lane move was shown optimistically, but backend persistence failed. Refresh after backend recovery to confirm final state.');
+    } finally {
+      // Clear pending move whether success or failure
+      pendingMovesRef.current.delete(taskId);
     }
   };
 

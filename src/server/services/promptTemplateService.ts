@@ -106,11 +106,25 @@ export function renderPromptTemplate(pipelineId: string, context: PromptRenderCo
 
   for (const rawSkillId of pipeline) {
     const skillId = rawSkillId.replace('{agent}', (context.agent || 'default').toLowerCase());
-    const skillPath = path.join(getPromptSkillsDir(), `${skillId}.md`);
-    if (fs.existsSync(skillPath)) {
-      const content = fs.readFileSync(skillPath, 'utf8');
+    const masterPath = path.join(getPromptSkillsDir(), `${skillId}.md`);
+    let content = '';
+    let usedSkillSource = skillId;
+
+    if (context.workspace?.localPath) {
+      const overridePath = path.join(context.workspace.localPath, '.devflow', 'prompt-overrides', `${skillId}.md`);
+      if (fs.existsSync(overridePath)) {
+        content = fs.readFileSync(overridePath, 'utf8');
+        usedSkillSource = `${skillId} (override)`;
+      }
+    }
+
+    if (!content && fs.existsSync(masterPath)) {
+      content = fs.readFileSync(masterPath, 'utf8');
+    }
+
+    if (content) {
       sections.push(interpolate(content, context));
-      usedSkills.push(skillId);
+      usedSkills.push(usedSkillSource);
     } else if (!rawSkillId.includes('agent-specific')) {
       throw new Error(`Required prompt skill missing: ${skillId}`);
     }
@@ -123,4 +137,42 @@ export function renderPromptTemplate(pipelineId: string, context: PromptRenderCo
     content: finalContent,
     usedSkills
   };
+}
+
+export function getPromptPipelineStructure(pipelineId: string, agent: string, localPath?: string) {
+  const pipeline = getPromptPipeline(pipelineId);
+  return pipeline.map((rawSkillId, index) => {
+    const skillId = rawSkillId.replace('{agent}', (agent || 'default').toLowerCase());
+    const masterPath = path.join(getPromptSkillsDir(), `${skillId}.md`);
+    let overridePath: string | null = null;
+    let masterContent = '';
+    let overrideContent = null;
+    
+    if (fs.existsSync(masterPath)) {
+      masterContent = fs.readFileSync(masterPath, 'utf8');
+    }
+    
+    if (localPath) {
+      overridePath = path.join(localPath, '.devflow', 'prompt-overrides', `${skillId}.md`);
+      if (fs.existsSync(overridePath)) {
+        overrideContent = fs.readFileSync(overridePath, 'utf8');
+      }
+    }
+    
+    const isRequired = !rawSkillId.includes('agent-specific');
+    
+    return {
+      id: skillId,
+      title: skillId,
+      order: index + 1,
+      required: isRequired,
+      sourcePath: masterPath,
+      sourceType: overrideContent !== null ? 'override' : 'master',
+      masterContent,
+      overrideContent: overrideContent !== null ? overrideContent : undefined,
+      effectiveContent: overrideContent !== null ? overrideContent : masterContent,
+      rawId: rawSkillId, // keeping for backward compatibility if needed internally
+      overridePath
+    };
+  });
 }

@@ -178,7 +178,7 @@ const cliArgs = buildAgentCliArgs({
       model: '-m',
       workingDir: '-C',
       alwaysAllow: '--dangerously-bypass-approvals-and-sandbox',
-      effort: ['--config', 'reasoning_effort='],
+      effort: ['--config', 'model_reasoning_effort='],
     },
     executionModes: {
       safe: { args: ['-s', 'workspace-write'] },
@@ -199,11 +199,11 @@ const cliArgs = buildAgentCliArgs({
 assert.deepEqual(cliArgs, [
   '-C', fixtureRepoPath,
   '-m', 'gpt-5.5',
-  '--config', 'reasoning_effort=high',
+  '--config', 'model_reasoning_effort=high',
   '-s', 'workspace-write',
   buildPromptReference(files.promptPath),
 ]);
-assert.equal(cliArgs.includes('--config reasoning_effort=high'), false);
+assert.equal(cliArgs.includes('--config model_reasoning_effort=high'), false);
 assert.equal(cliArgs.includes('full prompt body that should stay off the command line'), false);
 assert.equal(mapModelForAgent({ modelMap: { 'GPT-5.5': 'gpt-5.5' } }, 'GPT-5.5'), 'gpt-5.5');
 assert.equal(mapModelForAgent({ modelMap: { 'GPT-5.5': 'gpt-5.5' } }, 'Unknown'), '');
@@ -215,7 +215,7 @@ const miniLowArgs = buildAgentCliArgs({
     flags: {
       model: '-m',
       workingDir: '-C',
-      effort: ['--config', 'reasoning_effort='],
+      effort: ['--config', 'model_reasoning_effort='],
     },
     modelMap: {
       'GPT-5.4 Mini': 'gpt-5.4-mini',
@@ -231,10 +231,10 @@ const miniLowArgs = buildAgentCliArgs({
 assert.deepEqual(miniLowArgs, [
   '-C', fixtureRepoPath,
   '-m', 'gpt-5.4-mini',
-  '--config', 'reasoning_effort=low',
+  '--config', 'model_reasoning_effort=low',
   'prompt',
 ]);
-assert.equal(miniLowArgs.includes('reasoning_effort=high'), false);
+assert.equal(miniLowArgs.includes('model_reasoning_effort=high'), false);
 
 for (const effort of ['low', 'medium', 'high', 'xhigh']) {
   const effortArgs = buildAgentCliArgs({
@@ -243,7 +243,7 @@ for (const effort of ['low', 'medium', 'high', 'xhigh']) {
       executables: [],
       flags: {
         model: null,
-        effort: ['--config', 'reasoning_effort='],
+        effort: ['--config', 'model_reasoning_effort='],
       },
       launchStyle: 'start',
     },
@@ -253,9 +253,30 @@ for (const effort of ['low', 'medium', 'high', 'xhigh']) {
     promptReference: 'prompt',
     executionMode: 'safe',
   });
-  assert.deepEqual(effortArgs, ['--config', `reasoning_effort=${effort}`, 'prompt']);
-  assert.equal(effortArgs.includes(`--config reasoning_effort=${effort}`), false);
+  assert.deepEqual(effortArgs, ['--config', `model_reasoning_effort=${effort}`, 'prompt']);
+  assert.equal(effortArgs.includes(`--config model_reasoning_effort=${effort}`), false);
 }
+
+const noEffortArgs = buildAgentCliArgs({
+  config: {
+    name: 'Codex',
+    executables: [],
+    flags: {
+      model: '-m',
+      effort: ['--config', 'model_reasoning_effort='],
+    },
+    modelMap: {
+      'GPT-5.5': 'gpt-5.5',
+    },
+    launchStyle: 'start',
+  },
+  localPath: '',
+  model: 'GPT-5.5',
+  effort: '',
+  promptReference: 'prompt',
+  executionMode: 'safe',
+});
+assert.deepEqual(noEffortArgs, ['-m', 'gpt-5.5', 'prompt']);
 
 const concatenatedEffortArgs = buildAgentCliArgs({
   config: {
@@ -334,7 +355,7 @@ const launchScriptPath = createCodexLaunchScript({
   apiBaseUrl: 'http://localhost:3000',
   runDir: files.runDir,
   executable: fixtureCodexPath,
-  args: ['-C', fixtureWorkDir, '-m', 'gpt-5.5', '--config', 'reasoning_effort=high', buildPromptReference(files.promptPath)],
+  args: ['-C', fixtureWorkDir, '-m', 'gpt-5.5', '--config', 'model_reasoning_effort=high', buildPromptReference(files.promptPath)],
   cwd: fixtureWorkDir,
   windowTitle: 'Codex Agent',
   logPath: files.logPath,
@@ -343,8 +364,8 @@ const launchScript = fs.readFileSync(launchScriptPath, 'utf8');
 assert.match(launchScript, /title Codex Agent/);
 assert.ok(launchScript.includes(`cd /d "${fixtureWorkDir}"`));
 assert.ok(launchScript.includes(`call "${fixtureCodexPath}"`));
-assert.ok(launchScript.includes(`"${fixtureCodexPath}" "-C" "${fixtureWorkDir}" "-m" "gpt-5.5" "--config" "reasoning_effort=high"`));
-assert.equal(launchScript.includes('"--config reasoning_effort=high"'), false);
+assert.ok(launchScript.includes(`"${fixtureCodexPath}" "-C" "${fixtureWorkDir}" "-m" "gpt-5.5" "--config" "model_reasoning_effort=high"`));
+assert.equal(launchScript.includes('"--config model_reasoning_effort=high"'), false);
 assert.equal(launchScript.includes('GITHUB_PERSONAL_ACCESS_TOKEN'), false);
 assert.match(launchScript, /exitCode/);
 assert.match(launchScript, /errorMessage/);
@@ -358,14 +379,14 @@ const miniLowLaunchScriptPath = createCodexLaunchScript({
   apiBaseUrl: 'http://localhost:3000',
   runDir: files.runDir,
   executable: fixtureCodexPath,
-  args: ['-C', fixtureWorkDir, '-m', 'gpt-5.4-mini', '--config', 'reasoning_effort=low', 'prompt'],
+  args: ['-C', fixtureWorkDir, '-m', 'gpt-5.4-mini', '--config', 'model_reasoning_effort=low', 'prompt'],
   cwd: fixtureWorkDir,
   windowTitle: 'Codex Agent',
   logPath: files.logPath,
 });
 const miniLowLaunchScript = fs.readFileSync(miniLowLaunchScriptPath, 'utf8');
-assert.ok(miniLowLaunchScript.includes(`"${fixtureCodexPath}" "-C" "${fixtureWorkDir}" "-m" "gpt-5.4-mini" "--config" "reasoning_effort=low"`));
-assert.equal(miniLowLaunchScript.includes('reasoning_effort=high'), false);
+assert.ok(miniLowLaunchScript.includes(`"${fixtureCodexPath}" "-C" "${fixtureWorkDir}" "-m" "gpt-5.4-mini" "--config" "model_reasoning_effort=low"`));
+assert.equal(miniLowLaunchScript.includes('model_reasoning_effort=high'), false);
 
 const {
   validateAgentParams,

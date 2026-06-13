@@ -144,7 +144,17 @@ const {
   buildWindowsStartCommand,
   createAgentLaunchScript,
   mapModelForAgent,
+  normalizeRunnerPaths,
 } = await import('../src/runner');
+
+const normalizedRunnerPaths = normalizeRunnerPaths({
+  localPath: 'relative-repo',
+  promptPath: path.join('relative-runs', 'prompt.md'),
+  logPath: path.join('relative-runs', 'agent.log'),
+});
+assert.equal(normalizedRunnerPaths.localPath, path.resolve('relative-repo'));
+assert.equal(normalizedRunnerPaths.promptPath, path.resolve('relative-runs', 'prompt.md'));
+assert.equal(normalizedRunnerPaths.logPath, path.resolve('relative-runs', 'agent.log'));
 
 const cliArgs = buildAgentCliArgs({
   config: {

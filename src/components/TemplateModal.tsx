@@ -116,7 +116,7 @@ export default function TemplateModal({ projectId, onClose }: TemplateModalProps
   };
 
   return (
-    <div className="fixed inset-0 bg-[#3e3129]/30 dark:bg-[#f3eadf]/30 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div className="fixed inset-0 bg-[#3e3129]/30 dark:bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
       <div className="bg-[#fffdfa] dark:bg-[#1e1914] rounded-2xl shadow-xl w-full max-w-6xl h-[85vh] flex border border-[#e5d4bb] dark:border-[#584a3b] overflow-hidden select-none">
         
         {/* Left Sidebar: Section List */}

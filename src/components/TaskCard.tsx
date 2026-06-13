@@ -3,11 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
-import { GitBranch, Copy, Check, Trash2, FileCode, CheckSquare, Image as ImageIcon, Link as LinkIcon, Lock, AlertTriangle, Ban, CircleCheck } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { GitBranch, Copy, Check, Trash2, FileCode, CheckSquare, Image as ImageIcon, Link as LinkIcon, Lock, AlertTriangle, Ban, CircleCheck, Bot, Zap, ChevronDown } from 'lucide-react';
 import { Task } from '../types';
-import { AGENTS_CONFIG, getModelConfig, defaultModelForAgent, defaultEffortForModel } from '../lib/agentsConfig';
+import { AGENTS_CONFIG, getModelConfig, defaultModelForAgent, defaultEffortForModel, getDisplayModelName } from '../lib/agentsConfig';
 import CopyTemplateButton from './CopyTemplateButton';
+import { AgentLogo } from './AgentLogo';
 
 interface TaskCardProps {
   key?: string;
@@ -23,6 +24,25 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
   const [copied, setCopied] = useState(false);
   const [idCopied, setIdCopied] = useState(false);
   const [isDrag, setIsDrag] = useState(false);
+  const [isEditingAgent, setIsEditingAgent] = useState(false);
+  const [agentMenuOpen, setAgentMenuOpen] = useState(false);
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
+
+  const editContainerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (isEditingAgent && editContainerRef.current && !editContainerRef.current.contains(event.target as Node)) {
+        setIsEditingAgent(false);
+        setAgentMenuOpen(false);
+        setModelMenuOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [isEditingAgent]);
 
   const handleCopyBranch = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -89,197 +109,285 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
         />
       )}
 
-      {/* Header Tags & Delete button */}
-      <div>
-        <div className="flex justify-between items-center gap-2 mb-2 pl-0.5">
-          <div className="flex items-center gap-2.5">
-            {/* Sleek Priority dot */}
-            <span className={`flex items-center gap-1.5 text-[9px] uppercase font-mono tracking-wider font-extrabold px-2 py-0.5 rounded-lg border ${
-              isDone ? 'bg-[#f0f0f0] dark:bg-[#292119] text-gray-400 dark:text-[#b8ab9f] border-gray-200' :
-              task.priority === 'high' ? 'bg-[#ffdacf] dark:bg-[#292119] text-[#b43a20] dark:text-[#f3eadf] border-[#ffa995] dark:border-[#584a3b]' :
-              task.priority === 'medium' ? 'bg-[#ffecca] dark:bg-[#292119] text-[#a46c24] dark:text-[#f3eadf] border-[#f0cca3] dark:border-[#584a3b]' :
-              'bg-[#e2f0dc] dark:bg-[#292119] text-[#4d7e35] dark:text-[#f3eadf] border-[#bddda4] dark:border-[#584a3b]'
-            }`}>
-              <span className={`w-1.5 h-1.5 rounded-full ${
-                task.priority === 'high' ? 'bg-[#e05230] dark:bg-[#e0a070]' :
-                task.priority === 'medium' ? 'bg-[#d28b26] dark:bg-[#e0a070]' :
-                'bg-[#5b8c47] dark:bg-[#e0a070]'
-              }`} />
-              {task.priority}
-            </span>
-
-            {isInProgress && (
-              <span className="flex h-1.5 w-1.5 relative">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-orange-500"></span>
-              </span>
-            )}
-
-            {settledRunBadge && (
-              <span
-                className={`flex items-center gap-1 text-[8.5px] font-mono font-extrabold px-1.5 py-0.5 rounded-lg border select-none ${
-                  settledRunBadge.status === 'failed'
-                    ? 'bg-red-50 text-red-700 border-red-200'
-                    : settledRunBadge.status === 'cancelled'
-                      ? 'bg-slate-50 text-slate-600 border-slate-200'
-                      : 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                }`}
-                title={settledRunBadge.errorMessage || `Agent run ${settledRunBadge.status}`}
-              >
-                {settledRunBadge.status === 'failed' ? (
-                  <AlertTriangle size={8} className="shrink-0" />
-                ) : settledRunBadge.status === 'cancelled' ? (
-                  <Ban size={8} className="shrink-0" />
-                ) : (
-                  <CircleCheck size={8} className="shrink-0" />
-                )}
-                {settledRunBadge.status}
-              </span>
-            )}
-            
-            <button
-              type="button"
-              onClick={handleCopyId}
-              className="flex items-center gap-1.5 px-1.5 py-0.5 -ml-1 rounded hover:bg-[#ebdcb9]/30 dark:hover:bg-[#584a3b]/30 text-[9.5px] font-bold text-[#b49f8e] dark:text-[#d6b56d] hover:text-[#d89745] dark:hover:text-[#e0a070] font-mono leading-none transition-all cursor-pointer"
-              title="Copy Card ID"
+      <div className="flex flex-col h-full pl-0.5">
+        <div className="flex justify-between items-start gap-2 mb-1.5">
+          {/* Prominent Task ID & Locked Agent */}
+          <div className="flex items-center gap-2">
+            <div 
+              className="text-[15px] font-mono font-black text-[#d89745] dark:text-[#e0a070] cursor-pointer hover:bg-[#ebdcb9]/40 dark:hover:bg-[#584a3b]/40 px-1.5 -ml-1.5 py-0.5 rounded-md transition-colors flex items-center"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleCopyId(e as any);
+              }}
+              title="Copy ID"
             >
-              #{task.displayId || task.id}
-              {idCopied ? (
-                <Check size={11} className="text-emerald-500" />
-              ) : (
-                <Copy size={11} className="opacity-40 hover:opacity-100" />
-              )}
+              #{task.displayId || task.id.slice(0,4)}
+              {idCopied && <Check size={13} className="ml-1 text-emerald-500" />}
+            </div>
+            
+            {/* In Progress Key */}
+            {isInProgress && (
+              <span title="In Progress">
+                <svg 
+                  xmlns="http://www.w3.org/2000/svg" 
+                  width="13" 
+                  height="13" 
+                  viewBox="0 0 24 24" 
+                  fill="none" 
+                  stroke="currentColor" 
+                  strokeWidth="2.5" 
+                  strokeLinecap="round" 
+                  strokeLinejoin="round" 
+                  className="text-red-500/80 relative -top-[0.5px]"
+                >
+                  <rect x="5" y="10" width="14" height="11" rx="3.5" />
+                  <path d="M8 10V7c0-2.2 1.8-4 4-4s4 1.8 4 4v3" />
+                  <circle cx="12" cy="15.5" r="1.5" fill="currentColor" stroke="none" />
+                </svg>
+              </span>
+            )}
+          </div>
+
+          <div className="flex gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onDelete(task.id);
+              }}
+              type="button"
+              className="text-gray-400 dark:text-[#b8ab9f] hover:text-red-500 p-1.5 rounded-full hover:bg-[#fff0ed] dark:hover:bg-[#292119] transition-all cursor-pointer"
+              title="Remove card"
+            >
+              <Trash2 size={13} />
             </button>
           </div>
-          
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onDelete(task.id);
-            }}
-            type="button"
-            className="opacity-0 group-hover:opacity-100 text-gray-400 dark:text-[#b8ab9f] hover:text-red-500 p-1.5 rounded-full hover:bg-[#fff0ed] dark:hover:bg-[#292119] transition-all cursor-pointer duration-150"
-            title="Remove card"
-          >
-            <Trash2 size={13} />
-          </button>
         </div>
 
-        {/* Agent & Model Metadata Badge - placed right under priority */}
-        {task.agent && task.model && (
-          <div className="flex flex-wrap items-center gap-1.5 mb-2.5 px-0.5 select-none font-mono font-bold">
-            <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-[#fae8ff] dark:bg-[#292119] text-[#86198f] dark:text-[#f3eadf] border border-[#f5d0fe] dark:border-[#584a3b] text-[8px]">
-              🤖 {task.model}
+        {/* Title */}
+        <h4 className="text-[13px] font-bold text-[#45372d] dark:text-[#f3eadf] leading-snug line-clamp-3 mb-1.5">
+          {task.title}
+        </h4>
+
+        {/* Locked Agent badge */}
+        {task.activeAgent && (
+          <div className="mb-3">
+            <span className="inline-flex items-center text-[9px] font-mono font-bold text-orange-600 bg-orange-50 px-1.5 py-0.5 rounded shadow-sm border border-orange-100 dark:bg-orange-900/30 dark:border-orange-800" title={`Locked by ${task.activeAgent}`}>
+              <AgentLogo agent={task.activeAgent} size={9} className="mr-1" />
+              <span>{task.activeAgent}</span>
             </span>
-            {task.effort && (
-              <span className="px-1.5 py-0.5 rounded-md bg-[#f1f5f9] dark:bg-[#292119] text-[#475569] dark:text-[#f3eadf] border border-[#e2e8f0] dark:border-[#584a3b] text-[8px]">
-                ⚡ {task.effort.toUpperCase()} EFFORT
-              </span>
-            )}
           </div>
         )}
 
-        {/* Title text */}
-        <h3 className={`text-xs leading-relaxed mb-3.5 font-sans line-clamp-2 pl-0.5 select-text selection:bg-[#ffd9aa] dark:bg-[#292119] select-none ${
-          isDone ? 'text-gray-400 dark:text-[#b8ab9f] line-through font-normal' : 'text-[#3e3129] dark:text-[#f3eadf] font-extrabold'
-        }`}>
-          {task.title}
-        </h3>
-
         {/* Card Thumbnail Preview (if design image is attached) */}
         {((task.designImages && task.designImages.length > 0) || task.designImage) && (
-          <div className="relative mb-3 rounded-xl overflow-hidden border border-[#ebdcb9] dark:border-[#584a3b] h-14 bg-white dark:bg-[#292119]/50 pl-0.5">
+          <div className="relative mb-3 mt-1 rounded-lg overflow-hidden border border-[#ebdcb9]/50 dark:border-[#584a3b]/50 h-20 bg-white dark:bg-[#292119]/50">
             <img 
               src={(task.designImages && task.designImages[0]) || task.designImage} 
               alt="Design Preview" 
-              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200" 
+              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" 
               referrerPolicy="no-referrer"
             />
             {task.designImages && task.designImages.length > 1 && (
-              <div className="absolute top-1 right-1 bg-black/60 backdrop-blur-md text-white dark:text-[#f3eadf] text-[9px] font-bold px-1.5 py-0.5 rounded shadow-sm border border-white">
+              <div className="absolute top-1 right-1 bg-black/60 backdrop-blur-sm text-white text-[9px] font-bold px-1.5 py-0.5 rounded shadow-sm">
                 +{task.designImages.length - 1}
               </div>
             )}
           </div>
         )}
-      </div>
 
-      {/* Structured files/checklist progress details */}
-      {(filesCount > 0 || totalSteps > 0) && (
-        <div className="flex flex-wrap items-center gap-2 mb-3.5 px-0.5 text-[9.5px] font-mono text-[#7a6455] dark:text-[#f3eadf]">
-          {filesCount > 0 && (
-            <span className="flex items-center gap-1 bg-[#ede6dc]/30 dark:bg-[#292119]/30 border border-[#e8dfcf] dark:border-[#584a3b] px-2 py-0.5 rounded-lg font-bold">
-              📁 {filesCount} {filesCount === 1 ? 'file' : 'files'}
-            </span>
-          )}
-          {totalSteps > 0 && (
-            <span className={`flex items-center gap-1 border px-2 py-0.5 rounded-lg font-bold ${
-              completedSteps === totalSteps 
-                ? 'bg-emerald-50 text-emerald-700 border-emerald-200/60' 
-                : 'bg-[#fffcf4] dark:bg-[#292119] text-[#a47a32] dark:text-[#f3eadf] border-[#f0e3cc] dark:border-[#584a3b]'
-            }`}>
-              ✓ {completedSteps}/{totalSteps} steps
-            </span>
-          )}
-        </div>
-      )}
+        {/* Flex filler to push bottom metadata down */}
+        <div className="flex-1" />
 
-      {/* Design mock and Spec sheet indicators */}
-      {((task.designImages && task.designImages.length > 0) || task.designImage || task.specUrl) && (
-        <div className="flex flex-wrap items-center gap-2 mb-3 px-0.5 text-[8.5px] font-mono font-extrabold uppercase select-none">
-          {((task.designImages && task.designImages.length > 0) || task.designImage) && (
-            <span className="flex items-center gap-1 bg-[#fff2e0] dark:bg-[#292119] text-[#9a6428] dark:text-[#f3eadf] border border-[#fde5bd] dark:border-[#584a3b] px-1.5 py-0.5 rounded-lg">
-              <ImageIcon size={10} /> Design Doc {task.designImages && task.designImages.length > 1 && `(${task.designImages.length})`}
-            </span>
-          )}
-          {task.specUrl && (
-            <span className="flex items-center gap-1 bg-[#e0f1f7] dark:bg-[#292119] text-[#2c6e85] dark:text-[#f3eadf] border border-[#cbe4ee] dark:border-[#584a3b] px-1.5 py-0.5 rounded-lg">
-              <LinkIcon size={10} /> Spec Link
-            </span>
-          )}
-        </div>
-      )}
+        {/* Unified Bottom Badge Row -> 2 Row Layout */}
+        <div className="flex flex-col gap-1.5 mt-2.5 pt-2.5 border-t border-[#ebdcb9]/30 dark:border-[#584a3b]/30">
+          
+          {/* Row 1: Files, Checklist, External Links */}
+          <div className="flex flex-wrap items-center gap-1.5 w-full">
+            {/* Priority */}
+            <div className={`w-2 h-2 rounded-full shrink-0 ${
+              isDone ? 'bg-gray-300 dark:bg-[#b8ab9f]' :
+              task.priority === 'high' ? 'bg-[#e05230] dark:bg-[#e0a070]' :
+              task.priority === 'medium' ? 'bg-[#d28b26] dark:bg-[#e0a070]' :
+              'bg-[#5b8c47] dark:bg-[#e0a070]'
+            }`} title={`Priority: ${task.priority}`} />
 
-      {/* Lock badge - shown when an agent is actively working */}
-      {task.activeAgent && (
-        <div className="mb-2 mx-0.5 flex items-center gap-1 text-[10px] font-mono font-extrabold px-2 py-1.5 rounded-xl bg-orange-50 text-orange-700 border border-orange-200 select-none">
-          <Lock size={10} className="shrink-0" />
-          Locked by {task.activeAgent}
-        </div>
-      )}
+            {/* Files */}
+            {filesCount > 0 && (
+              <span className="flex items-center gap-1 text-[#8a725f] dark:text-[#f3eadf] text-[10px] font-mono font-bold mr-1.5" title={`${filesCount} files`}>
+                <FileCode size={12} className="relative -top-[0.5px]" /> 
+                <span className="leading-none mt-[1px]">{filesCount}</span>
+              </span>
+            )}
 
-      {/* Actions: Git Branch Copy Trigger and Starting Template */}
-      <div className="flex gap-1.5 mb-3 mx-0.5">
-        {task.branch && (
-          <div 
-            onClick={handleCopyBranch}
-            className={`group/branch flex-1 min-w-0 p-2 rounded-xl border flex items-center justify-between text-[10px] font-mono font-medium cursor-pointer transition-all active:scale-[0.98] ${
-              isDone 
-                ? 'bg-[#f8f5ee] dark:bg-[#292119] border-[#ebdcb9] dark:border-[#584a3b] text-gray-400 dark:text-[#b8ab9f] border-dashed hover:border-gray-400'
-                : isInProgress
-                  ? 'bg-[#fff9e6] dark:bg-[#292119] border-[#fde5bd] dark:border-[#584a3b] text-[#935919] dark:text-[#e0a070] hover:bg-[#fff5d3] dark:hover:bg-[#292119] hover:border-[#fbc58e] dark:hover:border-[#584a3b]'
-                  : 'bg-[#faf7f0] dark:bg-[#1e1914] border-[#ebdcb9] dark:border-[#584a3b] text-[#715c4d] dark:text-[#f3eadf] hover:bg-[#fff9e6] dark:hover:bg-[#292119] hover:border-[#fde5bd] dark:hover:border-[#584a3b]'
-            }`}
-            title="Click to copy Git Branch instruction"
-          >
-            <div className="flex items-center gap-1.5 truncate">
-              <GitBranch size={11} className={`${isDone ? 'text-emerald-500' : 'text-[#d89745] dark:text-[#e0a070]'} shrink-0 group-hover/branch:rotate-12 transition-transform`} />
-              <span className="truncate">{task.branch}</span>
-            </div>
-            <button
-              type="button"
-              className="text-gray-400 dark:text-[#b8ab9f] group-hover/branch:text-[#d89745] dark:text-[#e0a070] shrink-0 transition-colors ml-2"
-            >
-              {copied ? (
-                <Check size={11} className="text-emerald-500 animate-scale" />
-              ) : (
-                <Copy size={11} />
-              )}
-            </button>
+            {/* Checklist */}
+            {totalSteps > 0 && (
+              <span className={`flex items-center gap-1 text-[10px] font-mono font-bold mr-1.5 ${
+                completedSteps === totalSteps 
+                  ? 'text-emerald-600' 
+                  : 'text-[#8a725f] dark:text-[#f3eadf]'
+              }`} title="Checklist steps">
+                <CheckSquare size={12} className="relative -top-[0.5px]" /> 
+                <span className="leading-none mt-[1px]">{completedSteps}/{totalSteps}</span>
+              </span>
+            )}
+            
+            {/* External Links */}
+            {task.specUrl && (
+              <span className="flex items-center text-[#2c6e85] dark:text-[#f3eadf] ml-auto" title="Spec Document">
+                <LinkIcon size={10} />
+              </span>
+            )}
           </div>
-        )}
-        <div className={task.branch ? 'flex-none' : 'w-full'}>
-          <CopyTemplateButton task={task} className={`h-full ${task.branch ? 'px-3' : 'w-full justify-center py-1.5'}`} variant={task.branch ? 'icon' : 'full'} />
+
+          {/* Row 2: Agent, Model & Effort */}
+          {!isEditingAgent && (
+            <div className="flex items-center w-full mt-0.5">
+              <span 
+                onClick={(e) => { e.stopPropagation(); setIsEditingAgent(true); }}
+                className="flex items-center gap-1.5 px-2 py-1 rounded-md border border-[#ebdcb9]/40 bg-[#fdfbf7]/50 dark:bg-[#292119]/50 text-[#8a725f] dark:text-[#f3eadf] text-[9.5px] font-mono font-bold w-full shadow-sm overflow-hidden cursor-pointer hover:bg-[#fffbf4] dark:hover:bg-[#382f25] transition-colors"
+              >
+                {(task.agent || task.model || task.effort) ? (
+                  <>
+                    <AgentLogo agent={task.model || task.agent} size={12} className="shrink-0 relative -top-[0.5px] text-[#b49f8e] dark:text-[#b8ab9f]" />
+                    <span className="leading-none mt-[1px] truncate flex-1 text-left">
+                      {getDisplayModelName(task.agent, task.model) || task.agent || 'Agent'}
+                    </span>
+                    {task.effort && (
+                      <>
+                        <span className="text-[#ebdcb9] dark:text-[#584a3b] mx-0.5 relative -top-[0.5px] shrink-0">|</span>
+                        <Zap size={11} className="relative -top-[0.5px] shrink-0 text-[#d89745] dark:text-[#e0a070]" />
+                        <span className="leading-none mt-[1px] shrink-0">{task.effort}</span>
+                      </>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <Bot size={12} className="shrink-0 relative -top-[0.5px] text-[#b49f8e]/60 dark:text-[#b8ab9f]/60" />
+                    <span className="leading-none mt-[1px] truncate flex-1 text-left italic text-[#8a725f]/60 dark:text-[#f3eadf]/60">
+                      Unassigned
+                    </span>
+                  </>
+                )}
+              </span>
+            </div>
+          )}
+          {isEditingAgent && (
+            <div 
+              ref={editContainerRef}
+              className="flex items-center gap-1 px-1.5 py-0.5 rounded-md border border-[#ebdcb9]/40 bg-[#fdfbf7]/50 dark:bg-[#292119]/50 text-[#8a725f] dark:text-[#f3eadf] text-[9.5px] font-mono font-bold w-full shadow-sm" 
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center gap-0.5 flex-1 min-w-0">
+                {/* Custom Agent Dropdown */}
+                <div className="relative flex-1 min-w-0 flex flex-col">
+                  <div 
+                    onClick={() => { setAgentMenuOpen(!agentMenuOpen); setModelMenuOpen(false); }}
+                    className="w-full bg-transparent hover:bg-[#ebdcb9]/20 dark:hover:bg-[#584a3b]/20 rounded py-0.5 px-0.5 outline-none text-[#8a725f] dark:text-[#f3eadf] font-mono font-bold transition-all cursor-pointer flex items-center justify-between"
+                  >
+                    <div className="flex items-center gap-1 truncate">
+                      {task.agent ? <AgentLogo agent={task.agent} size={11} className="shrink-0" /> : <Bot size={11} className="shrink-0 opacity-60" />}
+                      <span className="truncate">{task.agent || 'Unassigned'}</span>
+                    </div>
+                    <ChevronDown size={10} className="shrink-0 opacity-50 ml-0.5" />
+                  </div>
+                  
+                  {agentMenuOpen && (
+                    <div className="absolute top-full left-0 mt-1 w-28 bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-lg shadow-lg z-50 py-1 flex flex-col font-mono text-[9.5px] text-[#8a725f] dark:text-[#f3eadf]">
+                      {[
+                        { id: '', name: 'Unassigned', icon: <Bot size={11} className="opacity-60" /> },
+                        { id: 'Codex', name: 'Codex' },
+                        { id: 'Antigravity', name: 'Antigravity' },
+                        { id: 'Claude', name: 'Claude' }
+                      ].map(opt => (
+                        <button
+                          key={opt.id}
+                          className={`flex items-center gap-1.5 px-2 py-1.5 hover:bg-[#ebdcb9]/20 dark:hover:bg-[#584a3b]/20 text-left transition-colors ${task.agent === opt.id ? 'bg-[#ebdcb9]/30 dark:bg-[#584a3b]/30 font-extrabold' : 'font-bold'}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const val = opt.id;
+                            if (onUpdate) {
+                              const defaultModel = val ? defaultModelForAgent(val) : '';
+                              const defaultEffort = val ? defaultEffortForModel(val, defaultModel) : '';
+                              onUpdate({
+                                ...task,
+                                agent: val || '',
+                                model: defaultModel || '',
+                                effort: defaultEffort || ''
+                              });
+                            }
+                            setAgentMenuOpen(false);
+                          }}
+                        >
+                          {opt.id ? <AgentLogo agent={opt.id} size={11} className="shrink-0" /> : opt.icon}
+                          <span className="truncate">{opt.name}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {task.agent && (
+                  <>
+                    <span className="text-[#ebdcb9] dark:text-[#584a3b] shrink-0 mx-0.5">|</span>
+                    {/* Custom Model Dropdown */}
+                    <div className="relative flex-1 min-w-0 flex flex-col">
+                      <div 
+                        onClick={() => { setModelMenuOpen(!modelMenuOpen); setAgentMenuOpen(false); }}
+                        className="w-full bg-transparent hover:bg-[#ebdcb9]/20 dark:hover:bg-[#584a3b]/20 rounded py-0.5 px-0.5 outline-none text-[#8a725f] dark:text-[#f3eadf] font-mono font-bold transition-all cursor-pointer flex items-center justify-between"
+                      >
+                        <span className="truncate">{getDisplayModelName(task.agent, task.model) || 'Default'}</span>
+                        <ChevronDown size={10} className="shrink-0 opacity-50 ml-0.5" />
+                      </div>
+                      
+                      {modelMenuOpen && (
+                        <div className="absolute top-full left-0 mt-1 w-32 bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-lg shadow-lg z-50 py-1 flex flex-col font-mono text-[9.5px] text-[#8a725f] dark:text-[#f3eadf]">
+                          <button
+                            className={`flex items-center gap-1.5 px-2 py-1.5 hover:bg-[#ebdcb9]/20 dark:hover:bg-[#584a3b]/20 text-left transition-colors ${!task.model ? 'bg-[#ebdcb9]/30 dark:bg-[#584a3b]/30 font-extrabold' : 'font-bold'}`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (onUpdate) {
+                                onUpdate({ ...task, model: undefined, effort: undefined });
+                              }
+                              setModelMenuOpen(false);
+                            }}
+                          >
+                            <Zap size={11} className="opacity-60 shrink-0 text-[#d89745] dark:text-[#e0a070]" />
+                            <span className="truncate">Default</span>
+                          </button>
+                          {AGENTS_CONFIG[task.agent as import('../lib/agentsConfig').AgentName]?.map(m => (
+                            <button
+                              key={m.model_name}
+                              className={`flex items-center gap-1.5 px-2 py-1.5 hover:bg-[#ebdcb9]/20 dark:hover:bg-[#584a3b]/20 text-left transition-colors ${task.model === m.model_name ? 'bg-[#ebdcb9]/30 dark:bg-[#584a3b]/30 font-extrabold' : 'font-bold'}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (onUpdate) {
+                                  onUpdate({
+                                    ...task,
+                                    model: m.model_name,
+                                    effort: defaultEffortForModel(task.agent!, m.model_name)
+                                  });
+                                }
+                                setModelMenuOpen(false);
+                              }}
+                            >
+                              <span className="truncate">{m.display_name || m.model_name}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+              <button
+                onClick={(e) => { e.stopPropagation(); setIsEditingAgent(false); setAgentMenuOpen(false); setModelMenuOpen(false); }}
+                className="shrink-0 ml-1 p-0.5 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 dark:hover:bg-emerald-900/30 rounded transition-colors flex items-center justify-center"
+                title="Done editing"
+              >
+                <Check size={11} strokeWidth={3} />
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -325,7 +433,7 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
                           });
                         }
                       }}
-                      className={`w-3.5 h-3.5 rounded flex items-center justify-center border transition-all cursor-pointer ${
+                      className={`w-3.5 h-3.5 rounded flex items-center justify-center border transition-all cursor-pointer shrink-0 ${
                         subDone 
                           ? 'bg-emerald-500 border-emerald-500 text-white dark:text-[#f3eadf]' 
                           : 'bg-white dark:bg-[#292119] border-[#ebdcb9] dark:border-[#584a3b] hover:border-[#d4994e] dark:hover:border-[#584a3b]'
@@ -333,13 +441,14 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
                     >
                       {subDone && <span className="text-[8px] leading-none mb-0.5">✓</span>}
                     </button>
-                    <span className={`truncate flex-1 hover:underline text-[9.5px] font-sans ${subDone ? 'line-through' : ''}`}>{sub.title}</span>
+                    <span className={`truncate flex-1 hover:underline text-[10px] font-sans ${subDone ? 'line-through' : ''}`}>{sub.title}</span>
                   </div>
                   
                   {/* Small statuses/agent info */}
-                  <div className="flex items-center gap-1 shrink-0 font-mono text-[7.5px] font-bold ml-[19px]">
+                  <div className="flex items-center gap-1 shrink-0 font-mono text-[8px] font-bold ml-[20px]">
                     {sub.model && (
-                      <span className="px-1 py-0.2 rounded border bg-[#fae8ff] dark:bg-[#292119] text-[#86198f] dark:text-[#f3eadf] border-[#f5d0fe] dark:border-[#584a3b]">
+                      <span className="flex items-center gap-0.5 px-1 py-0.5 rounded border bg-[#fae8ff] dark:bg-[#292119] text-[#86198f] dark:text-[#f3eadf] border-[#f5d0fe] dark:border-[#584a3b]">
+                        <AgentLogo agent={sub.model} size={8} className="relative -top-[0.5px]" />
                         {sub.model}
                       </span>
                     )}
@@ -359,69 +468,12 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
         </div>
       )}
 
-      {/* Agent & Model Selectors */}
-      <div className="flex flex-col gap-2 mt-2 pt-2 border-t border-[#f2ece2] dark:border-[#584a3b]" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center gap-1.5">
-          {/* Agent Selector */}
-          <div className="relative flex-1 min-w-0">
-            <select
-              value={task.agent || ''}
-              onChange={(e) => {
-                const val = e.target.value;
-                if (onUpdate) {
-                  const defaultModel = val ? defaultModelForAgent(val) : '';
-                  const defaultEffort = val ? defaultEffortForModel(val, defaultModel) : '';
-                  onUpdate({
-                    ...task,
-                    agent: val || '',
-                    model: defaultModel || '',
-                    effort: defaultEffort || ''
-                  });
-                }
-              }}
-              className="w-full bg-[#fdfbf7] dark:bg-[#292119] hover:bg-white dark:hover:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] hover:border-[#d4994e] dark:hover:border-[#584a3b] rounded-xl text-[9px] py-1 px-1.5 focus:border-[#d4994e] dark:focus:border-[#584a3b] outline-none text-[#564436] dark:text-[#f3eadf] font-sans font-bold transition-all cursor-pointer truncate"
-            >
-              <option value="">👤 Unassigned</option>
-              <option value="Codex">🤖 Codex</option>
-              <option value="Antigravity">🤖 Antigravity</option>
-              <option value="Claude">🤖 Claude</option>
-            </select>
-          </div>
 
-          {/* Model Selector - only show if agent is assigned */}
-          {task.agent && (
-            <div className="relative flex-1 min-w-0">
-              <select
-                value={task.model || ''}
-                disabled={!task.agent}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  if (onUpdate) {
-                    const defaultEffort = (task.agent && val) ? defaultEffortForModel(task.agent, val) : '';
-                    onUpdate({
-                      ...task,
-                      model: val || undefined,
-                      effort: defaultEffort || undefined
-                    });
-                  }
-                }}
-                className="w-full bg-[#fdfbf7] dark:bg-[#292119] hover:bg-white dark:hover:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] hover:border-[#d4994e] dark:hover:border-[#584a3b] rounded-xl text-[9px] py-1 px-1.5 focus:border-[#d4994e] dark:focus:border-[#584a3b] outline-none text-[#564436] dark:text-[#f3eadf] font-sans font-bold transition-all cursor-pointer truncate disabled:opacity-50"
-              >
-                <option value="">⚡ Default Model</option>
-                {AGENTS_CONFIG[task.agent as import('../lib/agentsConfig').AgentName]?.map(m => (
-                  <option key={m.model_name} value={m.model_name}>
-                    {m.model_name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-        </div>
 
         {/* Footer Metrics */}
-        <div className="flex items-center justify-between pt-0.5 select-none text-[9px] font-mono">
-          <span className="text-[#a59082] dark:text-[#d6b56d] italic">
-            {task.branch ? 'git checkouts configured' : 'no active branch'}
+        <div className="flex items-center justify-between pt-0.5 select-none text-[9px] font-mono mt-1 border-t border-[#f2ece2] dark:border-[#584a3b] pt-1.5">
+          <span className="text-[#8c7a6e] dark:text-[#d6b56d] italic truncate mr-2" title={task.branch || 'no active branch'}>
+            {task.branch ? `🌿 ${task.branch}` : 'no active branch'}
           </span>
           <div className="flex items-center gap-2 font-mono shrink-0">
             <span className="text-[#9e8b7c] dark:text-[#d6b56d] font-bold" title="Last updated">
@@ -429,7 +481,6 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
             </span>
           </div>
         </div>
-      </div>
     </div>
   );
 }

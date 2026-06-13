@@ -27,15 +27,15 @@ import { Task, TaskStatus, Column, LogEntry, Project } from './types';
 import { isValidTransition, getValidationErrorMessage } from './lib/statusTransitions';
 import { buildTaskStatusMoveRequest } from './lib/taskStatusMove';
 import Sidebar from './components/Sidebar';
-import TaskCard from './components/TaskCard';
 import TaskDetailsDrawer from './components/TaskDetailsDrawer';
 import CreateTaskModal from './components/CreateTaskModal';
 import JsonTemplateModal from './components/JsonTemplateModal';
-import BatchImportModal from './components/BatchImportModal';
 import SkillsModal from './components/SkillsModal';
 import SettingsModal from './components/SettingsModal';
-import NgrokStatusPanel from './components/NgrokStatusPanel';
 import TemplateModal from './components/TemplateModal';
+import { Header } from './components/Header';
+import { BoardLane } from './components/BoardLane';
+import BatchImportModal from './components/BatchImportModal';
 import MarkdownRenderer from './components/MarkdownRenderer';
 import AutoWorkToggle from './components/AutoWorkToggle';
 
@@ -67,7 +67,6 @@ export default function App() {
   const [isSkillsModalOpen, setIsSkillsModalOpen] = useState(false);
   const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
-  const [isActionMenuOpen, setIsActionMenuOpen] = useState(false);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [mounted, setMounted] = useState(false);
   const [ngrokUrl, setNgrokUrl] = useState('');
@@ -479,20 +478,6 @@ export default function App() {
     }
   };
 
-
-
-  // Helper column icon matching
-  const getColIcon = (iconName: string) => {
-    switch (iconName) {
-      case 'Moon': return <Moon size={15} />;
-      case 'ListTodo': return <ListTodo size={15} />;
-      case 'Terminal': return <Terminal size={15} />;
-      case 'GitMerge': return <GitMerge size={15} />;
-      case 'GitPullRequest': return <GitPullRequest size={15} />;
-      default: return <Cat size={15} />;
-    }
-  };
-
   // Filter Tasks
   const filteredTasks = tasks.filter(task => {
     // Only show tasks of the current active project
@@ -561,104 +546,18 @@ export default function App() {
         <main className="flex-1 flex flex-col h-full overflow-y-auto bg-[#faf7f0] dark:bg-[#1e1914]">
           
           {/* Top Control Navigation bar */}
-          <header className="p-5 bg-white dark:bg-[#292119] border-b border-[#e5d4bb] dark:border-[#584a3b] flex flex-col md:flex-row gap-4 justify-between items-start md:items-center">
-            <div>
-              <h1 className="text-[#3c2a1a] dark:text-[#f3eadf] font-extrabold font-sans text-base tracking-tight flex items-center gap-2">
-                <Cat className="text-[#d89745] dark:text-[#e0a070] shrink-0" size={17} />
-                Sprint Backlog Dashboard
-              </h1>
-              <p className="text-[11px] text-[#816b5a] dark:text-[#f3eadf] font-mono mt-0.5 flex items-center gap-1 font-bold">
-                <span>Pocket Sandbox Launcher</span>
-                <span className="text-[#dcd0bc] dark:text-[#d6b56d]">•</span>
-                <span className="text-[#d89745] dark:text-[#e0a070] font-extrabold">{filteredTasks.length} lazy tasks found</span>
-              </p>
-            </div>
-
-            {/* DevOps backup and Reset buttons */}
-            <div className="flex flex-wrap items-center justify-end gap-3 w-full md:w-auto">
-              
-              {/* Ngrok Status */}
-              <NgrokStatusPanel 
-                ngrokUrl={ngrokUrl} 
-                onOpenSettings={() => setIsSettingsModalOpen(true)} 
-              />
-              
-              <AutoWorkToggle />
-
-              {/* Theme Toggle */}
-              <button
-                onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
-                type="button"
-                className="bg-[#fdfbf6] dark:bg-[#292119] border border-[#e5d4bb] dark:border-[#584a3b] rounded-xl p-1.5 shadow-2xs hover:bg-[#ebdcb9] dark:hover:bg-[#584a3b]/50 transition-colors cursor-pointer text-[#a46c24] dark:text-[#d6b56d]"
-                title="Toggle Dark Mode"
-              >
-                {theme === 'light' ? <Moon size={14} /> : <Sun size={14} />}
-              </button>
-
-              {/* Backup actions */}
-              <div className="flex items-center gap-1.5 bg-[#fdfbf6] dark:bg-[#292119] border border-[#e5d4bb] dark:border-[#584a3b] rounded-xl p-1 shadow-2xs">
-                <button
-                  onClick={() => setIsJsonModalOpen(true)}
-                  type="button"
-                  className="hover:bg-[#ebdcb9] dark:hover:bg-[#584a3b] hover:text-[#534135] dark:hover:text-[#f3eadf] px-2.5 py-1 text-[10px] font-mono rounded-lg flex items-center gap-1 transition-colors cursor-pointer text-[#a46c24] dark:text-[#f3eadf] font-bold"
-                  title="View import JSON schema format"
-                >
-                  <FileCode size={11} /> Schema Spec
-                </button>
-                <div className="w-px h-4 bg-[#ebdcb9] dark:bg-[#584a3b]"></div>
-                <button
-                  onClick={() => setIsSkillsModalOpen(true)}
-                  type="button"
-                  className="hover:bg-[#ebdcb9] dark:hover:bg-[#584a3b] hover:text-[#534135] dark:hover:text-[#f3eadf] px-2.5 py-1 text-[10px] font-mono rounded-lg flex items-center gap-1 transition-colors cursor-pointer text-[#a46c24] dark:text-[#f3eadf] font-bold"
-                  title="View and Edit Agent Skills"
-                >
-                  <Code size={11} /> Skills
-                </button>
-                <div className="w-px h-4 bg-[#ebdcb9] dark:bg-[#584a3b]"></div>
-                <button
-                  onClick={() => setIsTemplateModalOpen(true)}
-                  className="px-2.5 py-1.5 text-[9px] font-bold tracking-widest uppercase bg-[#f0e6d3] dark:bg-[#292119] border border-[#d8c5aa] dark:border-[#584a3b] text-[#7a6455] dark:text-[#f3eadf] rounded-lg hover:bg-[#e8dcc5] dark:hover:bg-[#1e1914] transition-colors flex items-center gap-1.5 shadow-sm"
-                  title="View and Edit Prompt Template"
-                >
-                  <FileText size={11} /> Template
-                </button>
-              </div>
-
-              {/* Combined Ticket Action Menu */}
-              <div className="relative">
-                <button
-                  onClick={() => setIsActionMenuOpen(!isActionMenuOpen)}
-                  type="button"
-                  className="bg-gradient-to-r from-[#df9433] dark:from-[#e0a070] to-[#cc7b26] dark:to-[#e0a070] hover:from-[#cc7b26] dark:hover:from-[#e0a070] hover:to-[#b5671d] dark:hover:to-[#e0a070] text-white dark:text-[#f3eadf] px-4 py-1.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition-all shadow-md cursor-pointer ml-auto md:ml-0"
-                >
-                  <Plus size={14} /> ✨ Ticket Action <ChevronDown size={14} />
-                </button>
-                {isActionMenuOpen && (
-                  <div className="absolute top-full right-0 mt-2 bg-white dark:bg-[#292119] rounded-xl shadow-xl border border-[#ebdcb9] dark:border-[#584a3b] py-1 min-w-[200px] z-50 flex flex-col">
-                    <button
-                      onClick={() => {
-                        setIsActionMenuOpen(false);
-                        setIsCreateModalOpen(true);
-                      }}
-                      className="w-full text-left px-4 py-2.5 hover:bg-[#ebdcb9]/40 dark:hover:bg-[#584a3b]/40 text-xs font-bold text-[#df9433] dark:text-[#e0a070] flex items-center gap-2 transition-colors cursor-pointer"
-                    >
-                      <Sparkles size={14} /> Commit Ticket
-                    </button>
-                    <div className="h-px bg-[#ebdcb9]/40 dark:bg-[#584a3b]/40 w-full" />
-                    <button
-                      onClick={() => {
-                        setIsActionMenuOpen(false);
-                        setIsBatchModalOpen(true);
-                      }}
-                      className="w-full text-left px-4 py-2.5 hover:bg-[#ebdcb9]/40 dark:hover:bg-[#584a3b]/40 text-xs font-bold text-[#2a7a8a] dark:text-[#f3eadf] flex items-center gap-2 transition-colors cursor-pointer"
-                    >
-                      <Plus size={14} /> Batch Import JSON
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
-          </header>
+          <Header
+            filteredTasksCount={filteredTasks.length}
+            ngrokUrl={ngrokUrl}
+            theme={theme}
+            setTheme={setTheme}
+            setIsSettingsModalOpen={setIsSettingsModalOpen}
+            setIsJsonModalOpen={setIsJsonModalOpen}
+            setIsSkillsModalOpen={setIsSkillsModalOpen}
+            setIsTemplateModalOpen={setIsTemplateModalOpen}
+            setIsCreateModalOpen={setIsCreateModalOpen}
+            setIsBatchModalOpen={setIsBatchModalOpen}
+          />
 
           {persistenceError && (
             <div className="mx-5 mt-4 rounded-2xl border border-[#f0c48f] dark:border-[#584a3b] bg-[#fff7eb] dark:bg-[#292119] px-4 py-3 text-[11px] font-mono font-bold text-[#9a5b13] dark:text-[#f3eadf]">
@@ -674,118 +573,21 @@ export default function App() {
                 const columnTasks = filteredTasks
                   .filter(t => t.status === col.id && !t.parentId)
                   .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-                const totalStepsInLane = columnTasks.reduce((sum, t) => sum + (t.checklist?.length || 0), 0);
-                const completedStepsInLane = columnTasks.reduce((sum, t) => sum + (t.checklist?.filter(item => item.completed).length || 0), 0);
-                const isOver = draggedOverColumn === col.id;
-                const isInProgressCol = col.id === 'in-progress';
-                const isReviewCol = col.id === 'ready-for-review';
-                const isDoneCol = col.id === 'done';
- 
+                
                 return (
-                  <div
+                  <BoardLane
                     key={col.id}
-                    onDragOver={(e) => {
-                      e.preventDefault();
-                      if (draggedOverColumn !== col.id) {
-                        setDraggedOverColumn(col.id);
-                      }
-                    }}
-                    onDragLeave={() => {
-                      if (draggedOverColumn === col.id) {
-                        setDraggedOverColumn(null);
-                      }
-                    }}
-                    onDrop={(e) => handleDrop(e, col.id)}
-                    className={`w-[290px] shrink-0 flex flex-col pb-4 rounded-2xl p-2 transition-all border ${
-                      isOver 
-                        ? 'bg-[#ffeccb]/40 dark:bg-[#292119]/40 border-dashed border-[#e3a35a] dark:border-[#584a3b]' 
-                        : isInProgressCol
-                          ? 'bg-[#fffcf7] dark:bg-[#292119] border-[#ebdcb9] dark:border-[#584a3b]'
-                          : isReviewCol
-                            ? 'bg-[#f5f8ff] dark:bg-[#292119] border-[#b8cdfc] dark:border-[#584a3b]'
-                            : isDoneCol
-                              ? 'bg-[#f4faf4] dark:bg-[#292119] border-[#d1e9cc] dark:border-[#584a3b]'
-                              : 'bg-[#fffdfb]/60 dark:bg-[#292119]/60 border-[#ebdcb9]/40 dark:border-[#584a3b]/40'
-                    }`}
-                  >
-                    {/* Status header lane metadata */}
-                    <div className="flex items-center justify-between mb-3.5 px-2.5 pt-1.5 select-none">
-                      <div className="flex items-center gap-2">
-                        <span className={`shrink-0 ${
-                          isInProgressCol 
-                            ? 'text-[#d89745] dark:text-[#e0a070]' 
-                            : isReviewCol 
-                              ? 'text-[#3b5eab] dark:text-[#f3eadf]' 
-                              : isDoneCol 
-                                ? 'text-[#5fa84a] dark:text-[#f3eadf]' 
-                                : 'text-[#8a725f] dark:text-[#f3eadf]'
-                        }`}>{getColIcon(col.iconName)}</span>
-                        
-                        <h3 className={`text-[11px] font-extrabold uppercase tracking-wide font-mono ${
-                          isInProgressCol 
-                            ? 'text-[#8f5e1f] dark:text-[#f3eadf]' 
-                            : isReviewCol 
-                              ? 'text-[#2b3a61] dark:text-[#f3eadf]' 
-                              : isDoneCol 
-                                ? 'text-[#38622c] dark:text-[#f3eadf]' 
-                                : 'text-[#614e41] dark:text-[#f3eadf]'
-                        }`}>
-                          {col.label}
-                        </h3>
-                        
-                        <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full font-bold shadow-4xs ${
-                          isInProgressCol 
-                            ? 'bg-[#ffecca] dark:bg-[#292119] text-[#935919] dark:text-[#e0a070]' 
-                            : isReviewCol 
-                              ? 'bg-[#dbe4ff] dark:bg-[#292119] text-[#2b4c9e] dark:text-[#f3eadf]' 
-                              : isDoneCol 
-                                ? 'bg-[#edf7ed] dark:bg-[#292119] text-[#4d7e35] dark:text-[#f3eadf]' 
-                                : 'bg-[#f4ebd9] dark:bg-[#292119] text-[#715c4d] dark:text-[#f3eadf]'
-                        }`}>
-                          {columnTasks.length}
-                        </span>
-                      </div>
-
-                      {totalStepsInLane > 0 && (
-                        <span className="text-[9px] font-mono text-[#8a705e] dark:text-[#f3eadf] uppercase tracking-wider font-extrabold" title="Verification checklist completion ratio">
-                          {completedStepsInLane}/{totalStepsInLane} steps
-                        </span>
-                      )}
-                    </div>
-
-                    {/* Vertically scrolling task card stack with HTML5 drop border feedback */}
-                    <div 
-                      className="flex-1 flex flex-col gap-3 p-2 rounded-xl overflow-y-auto scrollbar-thin transition-all"
-                    >
-                      {columnTasks.map(task => {
-                        const subtasks = tasks.filter(t => t.parentId === task.id);
-                        return (
-                          <TaskCard
-                            key={task.id}
-                            task={task}
-                            subtasks={subtasks}
-                            onSelect={setSelectedTask}
-                            onDelete={handleDeleteTask}
-                            onDragStart={handleDragStart}
-                            onUpdate={handleUpdateTask}
-                          />
-                        );
-                      })}
-
-                      {columnTasks.length === 0 && (
-                        <div className="flex-1 flex flex-col items-center justify-start py-8 px-4 bg-transparent dark:bg-transparent select-none">
-                          <div className="w-full max-w-[210px] bg-white dark:bg-[#292119]/60 border border-[#e2d5c3]/60 dark:border-[#584a3b]/60 rounded-2xl p-3.5 text-center shadow-xs">
-                            <span className="text-[10px] text-[#df9433] dark:text-[#e0a070] font-extrabold uppercase tracking-widest flex items-center justify-center gap-1">
-                              ✨ EMPTY LANE
-                            </span>
-                            <p className="text-[9px] text-[#8c7463] dark:text-[#f3eadf] font-mono mt-1 leading-snug">
-                              No active tickets. Drop cards or Commit to start.
-                            </p>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
+                    column={col}
+                    tasks={columnTasks}
+                    allTasks={tasks}
+                    draggedOverColumn={draggedOverColumn}
+                    setDraggedOverColumn={setDraggedOverColumn}
+                    handleDrop={handleDrop}
+                    setSelectedTask={setSelectedTask}
+                    handleDeleteTask={handleDeleteTask}
+                    handleDragStart={handleDragStart}
+                    handleUpdateTask={handleUpdateTask}
+                  />
                 );
               })}
             </div>

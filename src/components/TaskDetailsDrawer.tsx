@@ -30,6 +30,7 @@ import { AGENTS_CONFIG, getModelConfig, defaultModelForAgent, defaultEffortForMo
 import MarkdownRenderer from './MarkdownRenderer';
 import CopyTemplateButton from './CopyTemplateButton';
 import CreateTaskModal from './CreateTaskModal';
+import { AgentLogo } from './AgentLogo';
 
 interface TaskDetailsDrawerProps {
   task: Task;
@@ -739,12 +740,13 @@ export default function TaskDetailsDrawer({
                     {task.agent && (
                       <div className="flex items-center gap-2">
                         <span className="text-[10px] uppercase text-[#816c5b] dark:text-[#f3eadf] font-extrabold">Agent:</span>
-                        <span className={`text-[9.5px] uppercase font-bold px-2 py-0.5 rounded-lg border ${
+                        <span className={`flex items-center text-[9.5px] uppercase font-bold px-2 py-0.5 rounded-lg border ${
                           task.agent === 'Codex' ? 'bg-[#e0eafc] dark:bg-[#292119] text-[#1a56db] dark:text-[#f3eadf] border-[#bcccf5] dark:border-[#584a3b]' :
                           task.agent === 'Antigravity' ? 'bg-[#fae8ff] dark:bg-[#292119] text-[#86198f] dark:text-[#f3eadf] border-[#f5d0fe] dark:border-[#584a3b]' :
                           'bg-[#fef3c7] dark:bg-[#292119] text-[#92400e] dark:text-[#f3eadf] border-[#fde68a] dark:border-[#584a3b]'
                         }`}>
-                          🤖 {task.agent}
+                          <AgentLogo agent={task.agent} size={11} className="mr-1" />
+                          {task.agent}
                         </span>
                       </div>
                     )}

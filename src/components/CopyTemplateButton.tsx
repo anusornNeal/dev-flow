@@ -42,7 +42,7 @@ export default function CopyTemplateButton({ task, className = '', variant = 'fu
           ? 'bg-[#e6f4ea] dark:bg-[#292119] text-[#137333] dark:text-[#f3eadf] border-[#ceead6] dark:border-[#584a3b]'
           : status === 'error'
           ? 'bg-[#fce8e6] dark:bg-[#292119] text-[#c5221f] dark:text-[#f3eadf] border-[#fad2cf] dark:border-[#584a3b]'
-          : 'bg-[#faf7f0] dark:bg-[#1e1914] text-[#8a725f] dark:text-[#f3eadf] border-[#ddd0ba] dark:border-[#584a3b] hover:bg-[#f3ead7] dark:hover:bg-[#292119] hover:text-[#534135] dark:hover:text-[#f3eadf]'
+          : 'bg-[#faf7f0] dark:bg-[#1e1914] text-[#8a725f] dark:text-[#f3eadf] border-[#ddd0ba] dark:border-[#584a3b] hover:bg-[#f3ead7] dark:hover:bg-[#292119] hover:text-[#534135] dark:text-[#f3eadf] dark:hover:text-[#f3eadf]'
       } ${className}`}
     >
       {status === 'copied' ? (

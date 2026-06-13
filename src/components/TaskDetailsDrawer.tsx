@@ -311,7 +311,7 @@ export default function TaskDetailsDrawer({
             <button 
               type="button"
               onClick={handleCopyId}
-              className="flex items-center gap-1.5 text-[10px] uppercase font-bold text-[#8a6e5a] dark:text-[#f3eadf] hover:text-[#d89745] dark:hover:text-[#e0a070] bg-[#fffbf4] dark:bg-[#292119] hover:bg-[#ebdcb9]/30 dark:hover:bg-[#584a3b]/30 px-2.5 py-1 rounded-xl border border-[#ebdcb9] dark:border-[#584a3b] transition-colors cursor-pointer"
+              className="flex items-center gap-1.5 text-[10px] uppercase font-bold text-[#8a6e5a] dark:text-[#f3eadf] hover:text-[#d89745] dark:text-[#d6b56d] dark:hover:text-[#e0a070] dark:text-[#d6b56d] bg-[#fffbf4] dark:bg-[#292119] hover:bg-[#ebdcb9] dark:bg-[#584a3b]/30 dark:hover:bg-[#584a3b]/30 px-2.5 py-1 rounded-xl border border-[#ebdcb9] dark:border-[#584a3b] transition-colors cursor-pointer"
               title="Copy Card ID"
             >
               ID: {task.displayId || task.id}
@@ -356,7 +356,7 @@ export default function TaskDetailsDrawer({
             <button
               onClick={onClose}
               type="button"
-              className="text-[#9e8b7e] dark:text-[#d6b56d] hover:text-[#5c493c] dark:hover:text-[#f3eadf] p-2 rounded-full hover:bg-white dark:hover:bg-[#292119]/60 transition-all cursor-pointer"
+              className="text-[#9e8b7e] dark:text-[#d6b56d] hover:text-[#5c493c] dark:text-[#f3eadf] dark:hover:text-[#f3eadf] p-2 rounded-full hover:bg-white dark:hover:bg-[#292119]/60 transition-all cursor-pointer"
               title="Close panel"
             >
               <X size={17} />
@@ -385,9 +385,9 @@ export default function TaskDetailsDrawer({
                 <button
                   type="button"
                   onClick={() => onSelectTask(parentTask)}
-                  className="bg-white dark:bg-[#292119] hover:bg-[#fff9ed] dark:hover:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] hover:border-[#d4994e] dark:hover:border-[#584a3b] text-[#6e5340] dark:text-[#f3eadf] font-extrabold px-3 py-1.5 rounded-xl text-[10.5px] flex items-center gap-1.5 transition-all shadow-4xs cursor-pointer hover:shadow-2xs active:scale-[0.98] shrink-0"
+                  className="bg-white dark:bg-[#292119] hover:bg-[#fff9ed] dark:hover:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] hover:border-[#d4994e] dark:border-[#e0a070] dark:hover:border-[#584a3b] text-[#6e5340] dark:text-[#f3eadf] font-extrabold px-3 py-1.5 rounded-xl text-[10.5px] flex items-center gap-1.5 transition-all shadow-4xs cursor-pointer hover:shadow-2xs active:scale-[0.98] shrink-0"
                 >
-                  <Cat size={12} className="text-[#d89745] dark:text-[#e0a070]" /> Open Parent Card
+                  <Cat size={12} className="text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d]" /> Open Parent Card
                 </button>
               )}
             </div>
@@ -399,7 +399,7 @@ export default function TaskDetailsDrawer({
               <div className="flex flex-col gap-3">
                 <input
                   type="text"
-                  className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-sm font-extrabold text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] font-sans transition-all"
+                  className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-sm font-extrabold text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:border-[#e0a070] dark:focus:border-[#584a3b] font-sans transition-all"
                   placeholder="Task Title"
                   value={editedTitle}
                   onChange={(e) => setEditedTitle(e.target.value)}
@@ -407,7 +407,7 @@ export default function TaskDetailsDrawer({
                 
                 <div className="flex items-center gap-2 flex-wrap">
                   <select
-                    className="bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-lg px-2 py-1 text-[10px] uppercase font-bold text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all"
+                    className="bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-lg px-2 py-1 text-[10px] uppercase font-bold text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:border-[#e0a070] dark:focus:border-[#584a3b] transition-all"
                     value={editedStatus}
                     onChange={(e) => setEditedStatus(e.target.value as TaskStatus)}
                   >
@@ -419,7 +419,7 @@ export default function TaskDetailsDrawer({
                   </select>
                   
                   <select
-                    className="bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-lg px-2 py-1 text-[10px] uppercase font-bold text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all"
+                    className="bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-lg px-2 py-1 text-[10px] uppercase font-bold text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:border-[#e0a070] dark:focus:border-[#584a3b] transition-all"
                     value={editedPriority}
                     onChange={(e) => setEditedPriority(e.target.value as TaskPriority)}
                   >
@@ -432,7 +432,7 @@ export default function TaskDetailsDrawer({
                     <GitBranch size={13} className="text-[#bf8a50] dark:text-[#d6b56d]" />
                     <input
                       type="text"
-                      className="bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-lg px-2 py-1 text-[10px] text-[#b87332] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all font-mono min-w-[160px]"
+                      className="bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-lg px-2 py-1 text-[10px] text-[#b87332] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:border-[#e0a070] dark:focus:border-[#584a3b] transition-all font-mono min-w-[160px]"
                       placeholder="Branch name"
                       value={editedBranch}
                       onChange={(e) => setEditedBranch(e.target.value)}
@@ -512,7 +512,7 @@ export default function TaskDetailsDrawer({
                     <div key={idx} className="flex items-center gap-2">
                       <input
                         type="text"
-                        className="flex-1 bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all font-mono shadow-2xs"
+                        className="flex-1 bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:border-[#e0a070] dark:focus:border-[#584a3b] transition-all font-mono shadow-2xs"
                         placeholder="app/src/main/java/com/example/MainActivity.kt"
                         value={file}
                         onChange={(e) => {
@@ -527,7 +527,7 @@ export default function TaskDetailsDrawer({
                           const newList = editedFilesList.filter((_, i) => i !== idx);
                           setEditedFilesList(newList);
                         }}
-                        className="p-2 text-[#c4b3a4] hover:text-red-500 transition-colors cursor-pointer"
+                        className="p-2 text-[#c4b3a4] dark:text-[#b8ab9f] hover:text-red-500 transition-colors cursor-pointer"
                       >
                         <Trash2 size={14} />
                       </button>
@@ -552,7 +552,7 @@ export default function TaskDetailsDrawer({
                     <div key={idx} className="flex items-center gap-2">
                       <input
                         type="text"
-                        className="flex-1 bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all font-mono shadow-2xs"
+                        className="flex-1 bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:border-[#e0a070] dark:focus:border-[#584a3b] transition-all font-mono shadow-2xs"
                         placeholder="Task step..."
                         value={step}
                         onChange={(e) => {
@@ -567,7 +567,7 @@ export default function TaskDetailsDrawer({
                           const newList = editedChecklistList.filter((_, i) => i !== idx);
                           setEditedChecklistList(newList);
                         }}
-                        className="p-2 text-[#c4b3a4] hover:text-red-500 transition-colors cursor-pointer"
+                        className="p-2 text-[#c4b3a4] dark:text-[#b8ab9f] hover:text-red-500 transition-colors cursor-pointer"
                       >
                         <Trash2 size={14} />
                       </button>
@@ -588,7 +588,7 @@ export default function TaskDetailsDrawer({
                   <AlignLeft size={13} className="text-[#bf8a50] dark:text-[#d6b56d]" /> Detailed Specifications & Code (Markdown)
                 </h4>
                 <textarea
-                  className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] h-32 outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all resize-y font-mono shadow-2xs"
+                  className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] h-32 outline-none focus:border-[#d7933f] dark:border-[#e0a070] dark:focus:border-[#584a3b] transition-all resize-y font-mono shadow-2xs"
                   placeholder="Insert architecture blueprint markdown notes..."
                   value={editedDesc}
                   onChange={(e) => setEditedDesc(e.target.value)}
@@ -600,7 +600,7 @@ export default function TaskDetailsDrawer({
                 <button
                   type="button"
                   onClick={(e) => handleAccordionClick(e, 'edit-links')}
-                  className="w-full flex items-center justify-between p-3.5 hover:bg-[#f4ebd9]/30 dark:hover:bg-[#3a2f26]/30 transition-colors cursor-pointer"
+                  className="w-full flex items-center justify-between p-3.5 hover:bg-[#f4ebd9] dark:bg-[#292119]/30 dark:hover:bg-[#3a2f26]/30 transition-colors cursor-pointer"
                 >
                   <div className="flex items-center gap-2">
                     <div className="w-6 h-6 rounded-lg bg-[#bf8a50]/10 dark:bg-[#bf8a50]/20 flex items-center justify-center">
@@ -624,7 +624,7 @@ export default function TaskDetailsDrawer({
                         </h4>
                         <div className="space-y-2">
                           <div className="flex items-center gap-2 flex-wrap">
-                            <label className={`text-[10px] bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] px-2.5 py-1.5 rounded-lg text-[#5c493c] dark:text-[#f3eadf] hover:bg-[#fffcf6] dark:hover:bg-[#1e1914] cursor-pointer inline-flex items-center gap-1 font-bold ${editedDesignImages.length >= 5 ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                            <label className={`text-[10px] bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] px-2.5 py-1.5 rounded-lg text-[#5c493c] dark:text-[#f3eadf] hover:bg-[#fffcf6] dark:bg-[#1e1914] dark:hover:bg-[#1e1914] cursor-pointer inline-flex items-center gap-1 font-bold ${editedDesignImages.length >= 5 ? 'opacity-50 cursor-not-allowed' : ''}`}>
                               <span>Upload Image(s) {editedDesignImages.length > 0 && `(${editedDesignImages.length}/5)`}</span>
                               <input
                                 type="file"
@@ -685,7 +685,7 @@ export default function TaskDetailsDrawer({
                         </h4>
                         <input
                           type="text"
-                          className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-2.5 py-2 text-[11px] text-[#3a2f26] dark:text-[#f3eadf] placeholder-[#c4b3a4] outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] font-sans shadow-2xs"
+                          className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-2.5 py-2 text-[11px] text-[#3a2f26] dark:text-[#f3eadf] placeholder-[#c4b3a4] outline-none focus:border-[#d7933f] dark:border-[#e0a070] dark:focus:border-[#584a3b] font-sans shadow-2xs"
                           placeholder="e.g. Figma link or API Doc URL"
                           value={editedSpecUrl}
                           onChange={(e) => setEditedSpecUrl(e.target.value)}
@@ -701,7 +701,7 @@ export default function TaskDetailsDrawer({
                 <button
                   type="button"
                   onClick={(e) => handleAccordionClick(e, 'edit-qa')}
-                  className="w-full flex items-center justify-between p-3.5 hover:bg-[#f4ebd9]/30 dark:hover:bg-[#3a2f26]/30 transition-colors cursor-pointer"
+                  className="w-full flex items-center justify-between p-3.5 hover:bg-[#f4ebd9] dark:bg-[#292119]/30 dark:hover:bg-[#3a2f26]/30 transition-colors cursor-pointer"
                 >
                   <div className="flex items-center gap-2">
                     <div className="w-6 h-6 rounded-lg bg-[#7dad71]/10 dark:bg-[#7dad71]/20 flex items-center justify-center">
@@ -721,7 +721,7 @@ export default function TaskDetailsDrawer({
                       <div className="space-y-1.5">
                         <strong className="block text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold text-[10px]">Acceptance Criteria</strong>
                         <textarea
-                          className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] h-20 outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all resize-y font-mono shadow-2xs"
+                          className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] h-20 outline-none focus:border-[#d7933f] dark:border-[#e0a070] dark:focus:border-[#584a3b] transition-all resize-y font-mono shadow-2xs"
                           value={editedAcceptance}
                           onChange={(e) => setEditedAcceptance(e.target.value)}
                         />
@@ -729,7 +729,7 @@ export default function TaskDetailsDrawer({
                       <div className="space-y-1.5">
                         <strong className="block text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold text-[10px]">Verification Steps</strong>
                         <textarea
-                          className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] h-20 outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all resize-y font-mono shadow-2xs"
+                          className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] h-20 outline-none focus:border-[#d7933f] dark:border-[#e0a070] dark:focus:border-[#584a3b] transition-all resize-y font-mono shadow-2xs"
                           value={editedVerification}
                           onChange={(e) => setEditedVerification(e.target.value)}
                         />
@@ -744,7 +744,7 @@ export default function TaskDetailsDrawer({
                 <button
                   type="button"
                   onClick={(e) => handleAccordionClick(e, 'edit-dev')}
-                  className="w-full flex items-center justify-between p-3.5 hover:bg-[#f4ebd9]/30 dark:hover:bg-[#3a2f26]/30 transition-colors cursor-pointer"
+                  className="w-full flex items-center justify-between p-3.5 hover:bg-[#f4ebd9] dark:bg-[#292119]/30 dark:hover:bg-[#3a2f26]/30 transition-colors cursor-pointer"
                 >
                   <div className="flex items-center gap-2">
                     <div className="w-6 h-6 rounded-lg bg-[#3c829e]/10 dark:bg-[#3c829e]/20 flex items-center justify-center">
@@ -764,7 +764,7 @@ export default function TaskDetailsDrawer({
                       <div className="space-y-1.5">
                         <strong className="block text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold text-[10px]">Reasoning & Context</strong>
                         <textarea
-                          className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] h-20 outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all resize-y font-mono shadow-2xs"
+                          className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] h-20 outline-none focus:border-[#d7933f] dark:border-[#e0a070] dark:focus:border-[#584a3b] transition-all resize-y font-mono shadow-2xs"
                           value={editedReasoning}
                           onChange={(e) => setEditedReasoning(e.target.value)}
                         />
@@ -772,7 +772,7 @@ export default function TaskDetailsDrawer({
                       <div className="space-y-1.5">
                         <strong className="block text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold text-[10px]">Repository Context</strong>
                         <textarea
-                          className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] h-20 outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all resize-y font-mono shadow-2xs"
+                          className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] h-20 outline-none focus:border-[#d7933f] dark:border-[#e0a070] dark:focus:border-[#584a3b] transition-all resize-y font-mono shadow-2xs"
                           value={editedRepoContext}
                           onChange={(e) => setEditedRepoContext(e.target.value)}
                         />
@@ -783,7 +783,7 @@ export default function TaskDetailsDrawer({
                           <label className="block text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold text-[9px]">Jira Issue Key</label>
                           <input
                             type="text"
-                            className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all font-mono shadow-2xs"
+                            className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:border-[#e0a070] dark:focus:border-[#584a3b] transition-all font-mono shadow-2xs"
                             placeholder="QCA-3314"
                             value={editedJiraKey}
                             onChange={(e) => setEditedJiraKey(e.target.value)}
@@ -793,7 +793,7 @@ export default function TaskDetailsDrawer({
                           <label className="block text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold text-[9px]">Repository URL</label>
                           <input
                             type="text"
-                            className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all font-mono shadow-2xs"
+                            className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:border-[#e0a070] dark:focus:border-[#584a3b] transition-all font-mono shadow-2xs"
                             placeholder="https://github.com/org/repo"
                             value={editedRepo}
                             onChange={(e) => setEditedRepo(e.target.value)}
@@ -803,7 +803,7 @@ export default function TaskDetailsDrawer({
                           <label className="block text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold text-[9px]">Source URL</label>
                           <input
                             type="text"
-                            className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all font-mono shadow-2xs"
+                            className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:border-[#e0a070] dark:focus:border-[#584a3b] transition-all font-mono shadow-2xs"
                             placeholder="https://jira.../browse/..."
                             value={editedSourceUrl}
                             onChange={(e) => setEditedSourceUrl(e.target.value)}
@@ -827,7 +827,7 @@ export default function TaskDetailsDrawer({
                   <button
                     type="button"
                     onClick={handleSave}
-                    className="flex-1 bg-[#d89745] dark:bg-[#e0a070] hover:bg-[#c08234] dark:hover:bg-[#d6b56d] text-white dark:text-[#f3eadf] font-extrabold py-2 rounded-xl text-xs transition-colors cursor-pointer shadow-sm"
+                    className="flex-1 bg-[#d89745] dark:bg-[#e0a070] hover:bg-[#c08234] dark:bg-[#e0a070] dark:hover:bg-[#d6b56d] dark:bg-[#e0a070] text-white dark:text-[#f3eadf] font-extrabold py-2 rounded-xl text-xs transition-colors cursor-pointer shadow-sm"
                   >
                     Save Modifications
                   </button>
@@ -874,7 +874,7 @@ export default function TaskDetailsDrawer({
               {task.branch && (
                 <div className="flex items-center justify-between">
                   <h4 className="text-[10px] font-mono text-[#8a6e5a] dark:text-[#f3eadf] tracking-widest flex items-center gap-1.5 font-bold">
-                    <GitBranch size={13} className="text-[#bf8a50] dark:text-[#d6b56d]" /> <span className="uppercase">Active Branch:</span> <span className="text-[#9e6224] dark:text-[#e0a070]">{task.branch}</span>
+                    <GitBranch size={13} className="text-[#bf8a50] dark:text-[#d6b56d]" /> <span className="uppercase">Active Branch:</span> <span className="text-[#9e6224] dark:text-[#e0a070] dark:text-[#d6b56d]">{task.branch}</span>
                   </h4>
                 </div>
               )}
@@ -908,13 +908,13 @@ export default function TaskDetailsDrawer({
                 <div className="space-y-3.5 border-t border-[#ebdcb9] dark:border-[#584a3b] pt-5 font-sans">
                   <div className="flex items-center justify-between">
                     <h4 className="text-[10px] font-mono text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest flex items-center gap-1.5 font-bold">
-                      <PawPrint size={13} className="text-[#d89745] dark:text-[#e0a070]" /> Subtasks Breakdown ({subTasks.filter(s => s.status === 'done').length}/{subTasks.length})
+                      <PawPrint size={13} className="text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d]" /> Subtasks Breakdown ({subTasks.filter(s => s.status === 'done').length}/{subTasks.length})
                     </h4>
                     {onCreateTask && (
                       <button
                         type="button"
                         onClick={() => setIsAddingSubtask(true)}
-                        className="bg-[#2a7a8a] dark:bg-[#d6b56d] text-white dark:text-[#f3eadf] hover:bg-[#1a5b67] dark:hover:bg-[#292119] text-[10px] font-extrabold px-3 py-1.5 rounded-xl flex items-center gap-1 transition-all cursor-pointer shadow-4xs font-sans tracking-wide active:scale-[0.98]"
+                        className="bg-[#2a7a8a] dark:bg-[#d6b56d] dark:bg-[#e0a070] text-white dark:text-[#f3eadf] hover:bg-[#1a5b67] dark:bg-[#3c829e] dark:hover:bg-[#292119] text-[10px] font-extrabold px-3 py-1.5 rounded-xl flex items-center gap-1 transition-all cursor-pointer shadow-4xs font-sans tracking-wide active:scale-[0.98]"
                       >
                         <Plus size={11} /> Create Subtask Spec
                       </button>
@@ -927,7 +927,7 @@ export default function TaskDetailsDrawer({
                     <div className="bg-white dark:bg-[#292119] border border-[#ebdcb9]/65 dark:border-[#584a3b]/65 p-3 rounded-2xl flex items-center justify-between gap-4 shadow-3xs">
                       <div className="flex-1 bg-[#ede6dc]/60 dark:bg-[#292119]/60 rounded-full h-1.5 overflow-hidden">
                         <div 
-                          className="bg-[#2a7a8a] dark:bg-[#d6b56d] h-full rounded-full transition-all duration-300"
+                          className="bg-[#2a7a8a] dark:bg-[#d6b56d] dark:bg-[#e0a070] h-full rounded-full transition-all duration-300"
                           style={{ width: `${(subTasks.filter(s => s.status === 'done').length / subTasks.length) * 100}%` }}
                         />
                       </div>
@@ -947,7 +947,7 @@ export default function TaskDetailsDrawer({
                             onClick={() => {
                               if (onSelectTask) onSelectTask(sub);
                             }}
-                            className={`p-3.5 rounded-2xl border flex flex-col justify-between h-[90px] cursor-pointer transition-all hover:bg-[#fffcf8] dark:hover:bg-[#1e1914] active:scale-[0.98] hover:shadow-sm relative ${
+                            className={`p-3.5 rounded-2xl border flex flex-col justify-between h-[90px] cursor-pointer transition-all hover:bg-[#fffcf8] dark:bg-[#292119] dark:hover:bg-[#1e1914] active:scale-[0.98] hover:shadow-sm relative ${
                               subDone 
                                 ? 'bg-[#edf7ed]/30 dark:bg-[#292119]/30 border-emerald-100/50 text-gray-400 dark:text-[#b8ab9f]' 
                                 : subInProgress
@@ -966,7 +966,7 @@ export default function TaskDetailsDrawer({
                                   const idToCopy = sub.displayId || sub.id;
                                   navigator.clipboard.writeText(idToCopy);
                                 }}
-                                className="flex items-center gap-1 text-[9px] font-mono text-gray-400 dark:text-[#b8ab9f]/80 hover:text-[#d89745] dark:hover:text-[#e0a070] font-bold cursor-pointer"
+                                className="flex items-center gap-1 text-[9px] font-mono text-gray-400 dark:text-[#b8ab9f]/80 hover:text-[#d89745] dark:text-[#d6b56d] dark:hover:text-[#e0a070] dark:text-[#d6b56d] font-bold cursor-pointer"
                                 title="Copy Card ID"
                               >
                                 ID: #{sub.displayId || sub.id}
@@ -1007,7 +1007,7 @@ export default function TaskDetailsDrawer({
                       <button
                         type="button"
                         onClick={() => setShowAllSubtasks(true)}
-                        className="text-[10px] font-mono text-[#a47a32] dark:text-[#d6b56d] hover:text-[#8a6020] dark:hover:text-[#e0a070] font-bold transition-colors cursor-pointer pl-1"
+                        className="text-[10px] font-mono text-[#a47a32] dark:text-[#d6b56d] hover:text-[#8a6020] dark:hover:text-[#e0a070] dark:text-[#d6b56d] font-bold transition-colors cursor-pointer pl-1"
                       >
                         show {subTasks.length - 4} more ↓
                       </button>
@@ -1016,7 +1016,7 @@ export default function TaskDetailsDrawer({
                       <button
                         type="button"
                         onClick={() => setShowAllSubtasks(false)}
-                        className="text-[10px] font-mono text-[#a47a32] dark:text-[#d6b56d] hover:text-[#8a6020] dark:hover:text-[#e0a070] font-bold transition-colors cursor-pointer pl-1"
+                        className="text-[10px] font-mono text-[#a47a32] dark:text-[#d6b56d] hover:text-[#8a6020] dark:hover:text-[#e0a070] dark:text-[#d6b56d] font-bold transition-colors cursor-pointer pl-1"
                       >
                         show less ↑
                       </button>
@@ -1037,7 +1037,7 @@ export default function TaskDetailsDrawer({
                     {(showAllFiles ? task.targetFiles : task.targetFiles.slice(0, 3)).map((f, i) => (
                       <div 
                         key={i} 
-                        className="bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl p-2.5 flex items-center justify-between text-[11px] font-mono text-[#bd7e3e] dark:text-[#f3eadf] hover:border-[#dfa161] dark:hover:border-[#584a3b] group/file shadow-2xs"
+                        className="bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl p-2.5 flex items-center justify-between text-[11px] font-mono text-[#bd7e3e] dark:text-[#f3eadf] hover:border-[#dfa161] dark:border-[#e0a070] dark:hover:border-[#584a3b] group/file shadow-2xs"
                       >
                         <span className="truncate pr-2 font-semibold">{f}</span>
                         <button
@@ -1050,8 +1050,8 @@ export default function TaskDetailsDrawer({
                           }}
                           className={`px-2.5 py-1 rounded-xl text-[9px] transition-all cursor-pointer font-bold border ${
                             copiedFile === f
-                              ? 'opacity-100 bg-[#7dad71] text-white border-[#7dad71] dark:bg-[#584a3b] dark:text-[#f3eadf]'
-                              : 'opacity-0 group-hover/file:opacity-100 text-[#856c5a] dark:text-[#f3eadf] hover:text-[#3a2010] dark:hover:text-[#f3eadf] bg-[#fffbf6] dark:bg-[#292119] border-[#ebdcb9] dark:border-[#584a3b]'
+                              ? 'opacity-100 bg-[#7dad71] text-white border-[#7dad71] dark:border-[#8fce7c] dark:bg-[#584a3b] dark:text-[#f3eadf]'
+                              : 'opacity-0 group-hover/file:opacity-100 text-[#856c5a] dark:text-[#f3eadf] hover:text-[#3a2010] dark:text-[#f3eadf] dark:hover:text-[#f3eadf] bg-[#fffbf6] dark:bg-[#292119] border-[#ebdcb9] dark:border-[#584a3b]'
                           }`}
                         >
                           {copiedFile === f ? 'copied!' : 'copy'}
@@ -1062,7 +1062,7 @@ export default function TaskDetailsDrawer({
                       <button
                         type="button"
                         onClick={() => setShowAllFiles(true)}
-                        className="text-[10px] font-mono text-[#a47a32] dark:text-[#d6b56d] hover:text-[#8a6020] dark:hover:text-[#e0a070] font-bold transition-colors cursor-pointer pl-1"
+                        className="text-[10px] font-mono text-[#a47a32] dark:text-[#d6b56d] hover:text-[#8a6020] dark:hover:text-[#e0a070] dark:text-[#d6b56d] font-bold transition-colors cursor-pointer pl-1"
                       >
                         show {task.targetFiles.length - 3} more ↓
                       </button>
@@ -1071,7 +1071,7 @@ export default function TaskDetailsDrawer({
                       <button
                         type="button"
                         onClick={() => setShowAllFiles(false)}
-                        className="text-[10px] font-mono text-[#a47a32] dark:text-[#d6b56d] hover:text-[#8a6020] dark:hover:text-[#e0a070] font-bold transition-colors cursor-pointer pl-1"
+                        className="text-[10px] font-mono text-[#a47a32] dark:text-[#d6b56d] hover:text-[#8a6020] dark:hover:text-[#e0a070] dark:text-[#d6b56d] font-bold transition-colors cursor-pointer pl-1"
                       >
                         show less ↑
                       </button>
@@ -1097,7 +1097,7 @@ export default function TaskDetailsDrawer({
                           className={`py-2 px-1 border-b last:border-b-0 border-[#ebdcb9]/40 dark:border-[#584a3b]/40 flex items-start gap-2.5 cursor-pointer transition-colors select-none ${
                             item.completed 
                               ? 'text-gray-400 dark:text-[#b8ab9f] line-through' 
-                              : 'text-[#4d3d32] dark:text-[#f3eadf] hover:bg-[#f4ebd9]/20 dark:hover:bg-[#3a2f26]/20'
+                              : 'text-[#4d3d32] dark:text-[#f3eadf] hover:bg-[#f4ebd9] dark:bg-[#292119]/20 dark:hover:bg-[#3a2f26]/20'
                           }`}
                         >
                           <input
@@ -1114,7 +1114,7 @@ export default function TaskDetailsDrawer({
                       <button
                         type="button"
                         onClick={() => setShowAllChecklist(true)}
-                        className="text-[10px] font-mono text-[#a47a32] dark:text-[#d6b56d] hover:text-[#8a6020] dark:hover:text-[#e0a070] font-bold transition-colors cursor-pointer pl-1"
+                        className="text-[10px] font-mono text-[#a47a32] dark:text-[#d6b56d] hover:text-[#8a6020] dark:hover:text-[#e0a070] dark:text-[#d6b56d] font-bold transition-colors cursor-pointer pl-1"
                       >
                         show {task.checklist.length - 10} more ↓
                       </button>
@@ -1123,7 +1123,7 @@ export default function TaskDetailsDrawer({
                       <button
                         type="button"
                         onClick={() => setShowAllChecklist(false)}
-                        className="text-[10px] font-mono text-[#a47a32] dark:text-[#d6b56d] hover:text-[#8a6020] dark:hover:text-[#e0a070] font-bold transition-colors cursor-pointer pl-1"
+                        className="text-[10px] font-mono text-[#a47a32] dark:text-[#d6b56d] hover:text-[#8a6020] dark:hover:text-[#e0a070] dark:text-[#d6b56d] font-bold transition-colors cursor-pointer pl-1"
                       >
                         show less ↑
                       </button>
@@ -1140,7 +1140,7 @@ export default function TaskDetailsDrawer({
                   <button
                     type="button"
                     onClick={(e) => handleAccordionClick(e, 'links')}
-                    className="w-full flex items-center justify-between p-3.5 hover:bg-[#f4ebd9]/30 dark:hover:bg-[#3a2f26]/30 transition-colors cursor-pointer"
+                    className="w-full flex items-center justify-between p-3.5 hover:bg-[#f4ebd9] dark:bg-[#292119]/30 dark:hover:bg-[#3a2f26]/30 transition-colors cursor-pointer"
                   >
                     <div className="flex items-center gap-2">
                       <div className="w-6 h-6 rounded-lg bg-[#bf8a50]/10 dark:bg-[#bf8a50]/20 flex items-center justify-center">
@@ -1184,7 +1184,7 @@ export default function TaskDetailsDrawer({
                             <h4 className="text-[10px] font-mono text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest flex items-center gap-1.5 font-bold">
                               <LinkIcon size={13} className="text-[#3c829e] dark:text-[#f3eadf]" /> Verification Specification Sheet
                             </h4>
-                            <div className="bg-[#fffdfa] dark:bg-[#292119] border border-[#ebdcb9]/60 dark:border-[#584a3b]/60 hover:border-[#ebdcb9] dark:hover:border-[#584a3b] p-4 rounded-2xl shadow-2xs flex flex-col gap-2.5 h-full relative justify-center">
+                            <div className="bg-[#fffdfa] dark:bg-[#292119] border border-[#ebdcb9]/60 dark:border-[#584a3b]/60 hover:border-[#ebdcb9] dark:border-[#584a3b] dark:hover:border-[#584a3b] p-4 rounded-2xl shadow-2xs flex flex-col gap-2.5 h-full relative justify-center">
                               <div className="flex items-center gap-2">
                                 <div className="p-2 bg-[#e4eff3] dark:bg-[#292119] rounded-xl text-[#3c829e] dark:text-[#f3eadf]">
                                   <LinkIcon size={16} />
@@ -1200,7 +1200,7 @@ export default function TaskDetailsDrawer({
                                 href={task.specUrl.startsWith('http') ? task.specUrl : `https://${task.specUrl}`} 
                                 target="_blank" 
                                 rel="noreferrer" 
-                                className="w-full bg-[#3c829e] dark:bg-[#e0a070] hover:bg-[#2e6d87] dark:hover:bg-[#d6b56d] text-white dark:text-[#f3eadf] text-center text-[10px] font-extrabold py-2 rounded-xl transition-all block cursor-pointer uppercase tracking-widest mt-1"
+                                className="w-full bg-[#3c829e] dark:bg-[#e0a070] hover:bg-[#2e6d87] dark:hover:bg-[#d6b56d] dark:bg-[#e0a070] text-white dark:text-[#f3eadf] text-center text-[10px] font-extrabold py-2 rounded-xl transition-all block cursor-pointer uppercase tracking-widest mt-1"
                               >
                                 OPEN EXTERNAL SPEC SHEET ↗
                               </a>
@@ -1221,7 +1221,7 @@ export default function TaskDetailsDrawer({
                   <h4 className="text-[10px] font-mono text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest flex items-center gap-1.5 mb-3 font-bold">
                     <AlignLeft size={13} className="text-[#bf8a50] dark:text-[#d6b56d]" /> Specifications Instruction sheet
                   </h4>
-                  <div className="bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-2xl p-4 text-[11px] font-mono text-[#5c493c] dark:text-[#f3eadf] leading-relaxed overflow-x-auto shadow-2xs prose max-w-none select-text dark:prose-invert dark:prose-headings:text-[#e0a070]">
+                  <div className="bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-2xl p-4 text-[11px] font-mono text-[#5c493c] dark:text-[#f3eadf] leading-relaxed overflow-x-auto shadow-2xs prose max-w-none select-text dark:prose-invert dark:prose-headings:text-[#e0a070] dark:text-[#d6b56d]">
                     <MarkdownRenderer content={task.description} />
                   </div>
                 </div>
@@ -1233,7 +1233,7 @@ export default function TaskDetailsDrawer({
                   <button
                     type="button"
                     onClick={(e) => handleAccordionClick(e, 'qa')}
-                    className="w-full flex items-center justify-between p-3.5 hover:bg-[#f4ebd9]/30 dark:hover:bg-[#3a2f26]/30 transition-colors cursor-pointer"
+                    className="w-full flex items-center justify-between p-3.5 hover:bg-[#f4ebd9] dark:bg-[#292119]/30 dark:hover:bg-[#3a2f26]/30 transition-colors cursor-pointer"
                   >
                     <div className="flex items-center gap-2">
                       <div className="w-6 h-6 rounded-lg bg-[#7dad71]/10 dark:bg-[#7dad71]/20 flex items-center justify-center">
@@ -1274,7 +1274,7 @@ export default function TaskDetailsDrawer({
                   <button
                     type="button"
                     onClick={(e) => handleAccordionClick(e, 'dev')}
-                    className="w-full flex items-center justify-between p-3.5 hover:bg-[#f4ebd9]/30 dark:hover:bg-[#3a2f26]/30 transition-colors cursor-pointer"
+                    className="w-full flex items-center justify-between p-3.5 hover:bg-[#f4ebd9] dark:bg-[#292119]/30 dark:hover:bg-[#3a2f26]/30 transition-colors cursor-pointer"
                   >
                     <div className="flex items-center gap-2">
                       <div className="w-6 h-6 rounded-lg bg-[#3c829e]/10 dark:bg-[#3c829e]/20 flex items-center justify-center">
@@ -1336,7 +1336,7 @@ export default function TaskDetailsDrawer({
             <button
               type="button"
               onClick={(e) => handleAccordionClick(e, 'activity')}
-              className="w-full flex items-center justify-between p-3.5 hover:bg-[#f4ebd9]/30 dark:hover:bg-[#3a2f26]/30 transition-colors cursor-pointer"
+              className="w-full flex items-center justify-between p-3.5 hover:bg-[#f4ebd9] dark:bg-[#292119]/30 dark:hover:bg-[#3a2f26]/30 transition-colors cursor-pointer"
             >
               <div className="flex items-center gap-2">
                 <div className="w-6 h-6 rounded-lg bg-[#e5a93b]/10 dark:bg-[#e5a93b]/20 flex items-center justify-center">
@@ -1364,7 +1364,7 @@ export default function TaskDetailsDrawer({
                     key={log.id} 
                     className={`p-3 rounded-xl border flex flex-col gap-1 text-[10px] font-mono leading-relaxed shadow-3xs transition-all ${
                       log.type === 'create' ? 'bg-[#edf7ed] dark:bg-[#292119] border-[#c9e7cb] dark:border-[#584a3b] text-[#427931] dark:text-[#f3eadf]' : 
-                      log.type === 'move' ? 'bg-[#fff5e5] dark:bg-[#292119] border-[#fde5bd] dark:border-[#584a3b] text-[#935919] dark:text-[#e0a070]' :
+                      log.type === 'move' ? 'bg-[#fff5e5] dark:bg-[#292119] border-[#fde5bd] dark:border-[#584a3b] text-[#935919] dark:text-[#e0a070] dark:text-[#d6b56d]' :
                       log.type === 'comment' ? 'bg-[#fffdfa] dark:bg-[#292119] border-[#ebdcb9] dark:border-[#584a3b] text-[#55453B] dark:text-[#f3eadf] font-semibold' :
                       'bg-white dark:bg-[#292119] border-[#ebdcb9] dark:border-[#584a3b] text-[#715c4d] dark:text-[#f3eadf]'
                     }`}
@@ -1385,14 +1385,14 @@ export default function TaskDetailsDrawer({
             <form onSubmit={handleAddComment} className="flex gap-2 font-mono">
               <input
                 type="text"
-                className="flex-1 bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3.5 py-2 text-xs text-[#534135] dark:text-[#f3eadf] placeholder-[#c4b3a4] outline-none focus:border-[#d4994e] dark:focus:border-[#584a3b] font-mono"
+                className="flex-1 bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3.5 py-2 text-xs text-[#534135] dark:text-[#f3eadf] placeholder-[#c4b3a4] outline-none focus:border-[#d4994e] dark:border-[#e0a070] dark:focus:border-[#584a3b] font-mono"
                 placeholder="Drop developer run comments or logs..."
                 value={newComment}
                 onChange={(e) => setNewComment(e.target.value)}
               />
               <button
                 type="submit"
-                className="bg-[#fff9ee] dark:bg-[#292119] hover:bg-[#ebdcb9] dark:hover:bg-[#584a3b] text-[#856b5a] dark:text-[#f3eadf] border border-[#ebdcb9] dark:border-[#584a3b] px-4 rounded-xl flex items-center justify-center cursor-pointer transition-colors hover:shadow-2xs"
+                className="bg-[#fff9ee] dark:bg-[#292119] hover:bg-[#ebdcb9] dark:bg-[#584a3b] dark:hover:bg-[#584a3b] text-[#856b5a] dark:text-[#f3eadf] border border-[#ebdcb9] dark:border-[#584a3b] px-4 rounded-xl flex items-center justify-center cursor-pointer transition-colors hover:shadow-2xs"
                 title="Append statement comment Log"
               >
                 <Plus size={15} />
@@ -1408,7 +1408,7 @@ export default function TaskDetailsDrawer({
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2 bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] text-[#6d5a4d] dark:text-[#f3eadf] hover:bg-[#fffcf6] dark:hover:bg-[#1e1914] rounded-xl font-bold font-mono transition-colors cursor-pointer shadow-3xs"
+            className="px-4 py-2 bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] text-[#6d5a4d] dark:text-[#f3eadf] hover:bg-[#fffcf6] dark:bg-[#1e1914] dark:hover:bg-[#1e1914] rounded-xl font-bold font-mono transition-colors cursor-pointer shadow-3xs"
           >
             Close Spec Sheets
           </button>

@@ -40,7 +40,7 @@ export default function MarkdownRenderer({ content }: MarkdownRendererProps) {
                     navigator.clipboard.writeText(code.trim());
                     alert('Code copied to clipboard! 🐾');
                   }}
-                  className="hover:text-[#3a2010] dark:hover:text-[#f3eadf] px-2.5 py-0.5 rounded-xl border border-[#ebdcb9] dark:border-[#584a3b] bg-white dark:bg-[#292119] text-[9px] transition-all font-bold"
+                  className="hover:text-[#3a2010] dark:text-[#f3eadf] dark:hover:text-[#f3eadf] px-2.5 py-0.5 rounded-xl border border-[#ebdcb9] dark:border-[#584a3b] bg-white dark:bg-[#292119] text-[9px] transition-all font-bold"
                 >
                   Copy
                 </button>
@@ -81,7 +81,7 @@ export default function MarkdownRenderer({ content }: MarkdownRendererProps) {
               if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
                 return (
                   <div key={lineIdx} className="pl-4 flex items-start gap-2 text-xs font-semibold text-[#5c493c] dark:text-[#f3eadf]">
-                    <span className="text-[#d89745] dark:text-[#e0a070] mt-1 select-none font-extrabold">🐾</span>
+                    <span className="text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d] mt-1 select-none font-extrabold">🐾</span>
                     <span>{parseInlineCode(trimmed.substring(2))}</span>
                   </div>
                 );
@@ -93,7 +93,7 @@ export default function MarkdownRenderer({ content }: MarkdownRendererProps) {
                 const text = match ? match[2] : trimmed;
                 return (
                   <div key={lineIdx} className="pl-4 flex items-start gap-2 text-xs font-semibold text-[#5c493c] dark:text-[#f3eadf]">
-                    <span className="text-[#df9433] dark:text-[#e0a070] font-mono mt-0.5 text-[10px] font-extrabold">{number}.</span>
+                    <span className="text-[#df9433] dark:text-[#e0a070] dark:text-[#d6b56d] font-mono mt-0.5 text-[10px] font-extrabold">{number}.</span>
                     <span>{parseInlineCode(text)}</span>
                   </div>
                 );

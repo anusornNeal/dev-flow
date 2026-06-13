@@ -122,7 +122,7 @@ export default function Sidebar({
             <button
               onClick={handleEnjoyCoffee}
               type="button"
-              className="relative bg-[#ffb766] dark:bg-[#e0a070] hover:bg-[#ffa23b] dark:hover:bg-[#d6b56d] p-3 rounded-full border border-[#e5a043] dark:border-[#584a3b] shadow-sm transition-all active:scale-90 group cursor-pointer animate-pulse"
+              className="relative bg-[#ffb766] dark:bg-[#e0a070] hover:bg-[#ffa23b] dark:bg-[#e0a070] dark:hover:bg-[#d6b56d] dark:bg-[#e0a070] p-3 rounded-full border border-[#e5a043] dark:border-[#584a3b] shadow-sm transition-all active:scale-90 group cursor-pointer animate-pulse"
               title="Click to take a sip of espresso!"
             >
               <Coffee size={24} className="text-[#553108] dark:text-[#f3eadf] group-hover:scale-110 transition-transform" />
@@ -165,10 +165,10 @@ export default function Sidebar({
             setEditingProjectId(null);
           }}
           type="button"
-          className="w-full text-left p-4 bg-[#fdfaf5] dark:bg-[#292119] hover:bg-[#fffdf8] dark:hover:bg-[#1e1914] rounded-xl border border-[#e5d4bb] dark:border-[#584a3b] flex items-center justify-between gap-2.5 shadow-xs cursor-pointer transition-all active:scale-[0.99]"
+          className="w-full text-left p-4 bg-[#fdfaf5] dark:bg-[#292119] hover:bg-[#fffdf8] dark:bg-[#1e1914] dark:hover:bg-[#1e1914] rounded-xl border border-[#e5d4bb] dark:border-[#584a3b] flex items-center justify-between gap-2.5 shadow-xs cursor-pointer transition-all active:scale-[0.99]"
         >
           <div className="flex items-center gap-2.5 min-w-0 flex-1">
-            <Sparkles size={15} className="text-[#d89745] dark:text-[#e0a070] shrink-0" />
+            <Sparkles size={15} className="text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d] shrink-0" />
             <div className="min-w-0 flex-1">
               <p className="text-[9px] text-[#8C7565] dark:text-[#f3eadf] font-bold tracking-wider uppercase flex items-center gap-1.5">
                 ACTIVE WORKSPACE
@@ -216,14 +216,14 @@ export default function Sidebar({
                               value={newProjectLocalPath}
                               onChange={(e) => setNewProjectLocalPath(e.target.value)}
                               placeholder="Local absolute path"
-                              className="w-full bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] px-2 py-1 rounded-md text-[9px] outline-none focus:border-[#d4994e] dark:focus:border-[#584a3b] font-mono"
+                              className="w-full bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] px-2 py-1 rounded-md text-[9px] outline-none focus:border-[#d4994e] dark:border-[#e0a070] dark:focus:border-[#584a3b] font-mono"
                             />
                             <input
                               type="text"
                               value={newProjectTaskIdPrefix}
                               onChange={(e) => setNewProjectTaskIdPrefix(e.target.value)}
                               placeholder="Task ID Prefix (e.g. DVF)"
-                              className="w-full bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] px-2 py-1 rounded-md text-[9px] outline-none focus:border-[#d4994e] dark:focus:border-[#584a3b] font-mono"
+                              className="w-full bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] px-2 py-1 rounded-md text-[9px] outline-none focus:border-[#d4994e] dark:border-[#e0a070] dark:focus:border-[#584a3b] font-mono"
                             />
                             <div className="flex gap-1">
                               <button
@@ -238,7 +238,7 @@ export default function Sidebar({
                                   });
                                   if (success) setEditingProjectId(null);
                                 }}
-                                className="flex-1 text-[9px] bg-[#d89745] dark:bg-[#e0a070] text-white dark:text-[#f3eadf] py-1 rounded font-bold hover:bg-[#c08234] dark:hover:bg-[#d6b56d]"
+                                className="flex-1 text-[9px] bg-[#d89745] dark:bg-[#e0a070] text-white dark:text-[#f3eadf] py-1 rounded font-bold hover:bg-[#c08234] dark:bg-[#e0a070] dark:hover:bg-[#d6b56d] dark:bg-[#e0a070]"
                               >Save</button>
                             </div>
                           </div>
@@ -256,7 +256,7 @@ export default function Sidebar({
                         className={`p-2 rounded-lg border flex items-center justify-between gap-2 cursor-pointer transition-all ${
                           isActive
                             ? 'bg-[#ffeecd] dark:bg-[#292119] border-[#e4be93] dark:border-[#584a3b] text-[#69441a] dark:text-[#f3eadf]'
-                            : 'bg-white dark:bg-[#292119] hover:bg-[#fff9ee] dark:hover:bg-[#1e1914] border-[#ebdcb9] dark:border-[#584a3b] text-[#55453B] dark:text-[#f3eadf]'
+                            : 'bg-white dark:bg-[#292119] hover:bg-[#fff9ee] dark:bg-[#1e1914] dark:hover:bg-[#1e1914] border-[#ebdcb9] dark:border-[#584a3b] text-[#55453B] dark:text-[#f3eadf]'
                         }`}
                       >
                         <div className="min-w-0 flex-1">
@@ -284,7 +284,7 @@ export default function Sidebar({
                               href={project.repoUrl}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="p-1 text-gray-400 dark:text-[#b8ab9f] hover:text-[#d89745] dark:hover:text-[#e0a070] transition-colors"
+                              className="p-1 text-gray-400 dark:text-[#b8ab9f] hover:text-[#d89745] dark:text-[#d6b56d] dark:hover:text-[#e0a070] dark:text-[#d6b56d] transition-colors"
                               title="Open repository link in a new tab"
                             >
                               <ExternalLink size={12} />
@@ -299,7 +299,7 @@ export default function Sidebar({
                                     setEditingProjectId(project.id);
                                   }}
                                   type="button"
-                                  className="p-1 text-gray-400 dark:text-[#b8ab9f] hover:text-[#d89745] dark:hover:text-[#e0a070] transition-colors cursor-pointer"
+                                  className="p-1 text-gray-400 dark:text-[#b8ab9f] hover:text-[#d89745] dark:text-[#d6b56d] dark:hover:text-[#e0a070] dark:text-[#d6b56d] transition-colors cursor-pointer"
                                   title="Edit project settings"
                                 >
                                   <FolderGit size={12} />
@@ -328,7 +328,7 @@ export default function Sidebar({
                 <button
                   onClick={() => setIsAddingProject(true)}
                   type="button"
-                  className="w-full mt-2 bg-[#d89745] dark:bg-[#e0a070] hover:bg-[#c08234] dark:hover:bg-[#d6b56d] text-white dark:text-[#f3eadf] py-1.5 rounded-lg text-[10px] font-extrabold flex items-center justify-center gap-1 transition-all cursor-pointer"
+                  className="w-full mt-2 bg-[#d89745] dark:bg-[#e0a070] hover:bg-[#c08234] dark:bg-[#e0a070] dark:hover:bg-[#d6b56d] dark:bg-[#e0a070] text-white dark:text-[#f3eadf] py-1.5 rounded-lg text-[10px] font-extrabold flex items-center justify-center gap-1 transition-all cursor-pointer"
                 >
                   <Plus size={11} /> Bind New Repository
                 </button>
@@ -369,7 +369,7 @@ export default function Sidebar({
                       placeholder="e.g. Android Customer App"
                       value={newProjectName}
                       onChange={(e) => setNewProjectName(e.target.value)}
-                      className="w-full bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] px-2 py-1 rounded-md text-[10px] outline-none focus:border-[#d4994e] dark:focus:border-[#584a3b] font-sans"
+                      className="w-full bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] px-2 py-1 rounded-md text-[10px] outline-none focus:border-[#d4994e] dark:border-[#e0a070] dark:focus:border-[#584a3b] font-sans"
                     />
                   </div>
                   <div>
@@ -380,7 +380,7 @@ export default function Sidebar({
                       placeholder="https://github.com/user/repo"
                       value={newProjectRepoUrl}
                       onChange={(e) => setNewProjectRepoUrl(e.target.value)}
-                      className="w-full bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] px-2 py-1 rounded-md text-[10px] outline-none focus:border-[#d4994e] dark:focus:border-[#584a3b] font-mono"
+                      className="w-full bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] px-2 py-1 rounded-md text-[10px] outline-none focus:border-[#d4994e] dark:border-[#e0a070] dark:focus:border-[#584a3b] font-mono"
                     />
                   </div>
                   <div>
@@ -390,7 +390,7 @@ export default function Sidebar({
                       placeholder="Core mobile application"
                       value={newProjectDesc}
                       onChange={(e) => setNewProjectDesc(e.target.value)}
-                      className="w-full bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] px-2 py-1 rounded-md text-[10px] outline-none focus:border-[#d4994e] dark:focus:border-[#584a3b] font-sans"
+                      className="w-full bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] px-2 py-1 rounded-md text-[10px] outline-none focus:border-[#d4994e] dark:border-[#e0a070] dark:focus:border-[#584a3b] font-sans"
                     />
                   </div>
                   <div>
@@ -400,7 +400,7 @@ export default function Sidebar({
                       placeholder="Local absolute path"
                       value={newProjectLocalPath}
                       onChange={(e) => setNewProjectLocalPath(e.target.value)}
-                      className="w-full bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] px-2 py-1 rounded-md text-[10px] outline-none focus:border-[#d4994e] dark:focus:border-[#584a3b] font-mono"
+                      className="w-full bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] px-2 py-1 rounded-md text-[10px] outline-none focus:border-[#d4994e] dark:border-[#e0a070] dark:focus:border-[#584a3b] font-mono"
                     />
                   </div>
                   <div>
@@ -410,7 +410,7 @@ export default function Sidebar({
                       placeholder="e.g. DVF"
                       value={newProjectTaskIdPrefix}
                       onChange={(e) => setNewProjectTaskIdPrefix(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6))}
-                      className="w-full bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] px-2 py-1 rounded-md text-[10px] outline-none focus:border-[#d4994e] dark:focus:border-[#584a3b] font-mono"
+                      className="w-full bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] px-2 py-1 rounded-md text-[10px] outline-none focus:border-[#d4994e] dark:border-[#e0a070] dark:focus:border-[#584a3b] font-mono"
                     />
                   </div>
                 </div>
@@ -419,13 +419,13 @@ export default function Sidebar({
                   <button
                     type="button"
                     onClick={() => setIsAddingProject(false)}
-                    className="flex-1 border border-[#ebdcb9] dark:border-[#584a3b] py-1 rounded-md hover:bg-[#fff9ef] dark:hover:bg-[#292119] text-[#7a6455] dark:text-[#f3eadf]"
+                    className="flex-1 border border-[#ebdcb9] dark:border-[#584a3b] py-1 rounded-md hover:bg-[#fff9ef] dark:bg-[#1e1914] dark:hover:bg-[#292119] text-[#7a6455] dark:text-[#f3eadf]"
                   >
                     Back
                   </button>
                   <button
                     type="submit"
-                    className="flex-1 bg-[#d89745] dark:bg-[#e0a070] hover:bg-[#c08234] dark:hover:bg-[#d6b56d] text-white dark:text-[#f3eadf] py-1 rounded-md font-extrabold"
+                    className="flex-1 bg-[#d89745] dark:bg-[#e0a070] hover:bg-[#c08234] dark:bg-[#e0a070] dark:hover:bg-[#d6b56d] dark:bg-[#e0a070] text-white dark:text-[#f3eadf] py-1 rounded-md font-extrabold"
                   >
                     Link Repo
                   </button>
@@ -439,7 +439,7 @@ export default function Sidebar({
       {/* Stats Section with beautiful orange values */}
       <div className="px-6 py-2 border-b border-[#e5d4bb] dark:border-[#584a3b]">
         <h3 className="text-[10px] font-bold text-[#8C7565] dark:text-[#f3eadf] uppercase tracking-widest mb-3.5 flex items-center gap-1.5">
-          <TrendingUp size={12} className="text-[#df9433] dark:text-[#e0a070]" /> Work Progress
+          <TrendingUp size={12} className="text-[#df9433] dark:text-[#e0a070] dark:text-[#d6b56d]" /> Work Progress
         </h3>
         
         <div className="grid grid-cols-2 gap-2 text-xs">
@@ -450,7 +450,7 @@ export default function Sidebar({
             </p>
             <div className="w-full bg-[#ebdcb9] dark:bg-[#584a3b] h-1.5 rounded-full mt-2 overflow-hidden">
               <div 
-                className="bg-[#38b000] dark:bg-[#d6b56d] h-1.5 rounded-full transition-all duration-500"
+                className="bg-[#38b000] dark:bg-[#d6b56d] dark:bg-[#e0a070] h-1.5 rounded-full transition-all duration-500"
                 style={{ width: `${totalTasks > 0 ? (completedTasks / totalTasks) * 100 : 0}%` }}
               />
             </div>
@@ -478,7 +478,7 @@ export default function Sidebar({
           </label>
           <input
             type="text"
-            className="w-full bg-[#fdfaf5] dark:bg-[#292119] border border-[#e5d4bb] dark:border-[#584a3b] rounded-xl px-3.5 py-2 text-[11px] text-[#534135] dark:text-[#f3eadf] placeholder-[#c3b19e] outline-none focus:border-[#d4994e] dark:focus:border-[#584a3b] font-mono transition-all"
+            className="w-full bg-[#fdfaf5] dark:bg-[#292119] border border-[#e5d4bb] dark:border-[#584a3b] rounded-xl px-3.5 py-2 text-[11px] text-[#534135] dark:text-[#f3eadf] placeholder-[#c3b19e] outline-none focus:border-[#d4994e] dark:border-[#e0a070] dark:focus:border-[#584a3b] font-mono transition-all"
             placeholder="Type files or keys..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
@@ -496,7 +496,7 @@ export default function Sidebar({
               className={`w-full text-left text-[11px] px-3 py-2 rounded-xl flex items-center justify-between font-mono transition-all border ${
                 selectedPriority === 'all' 
                   ? 'bg-[#ffeace] dark:bg-[#292119] border-[#e7bc8c] dark:border-[#584a3b] text-[#714a1a] dark:text-[#f3eadf] font-extrabold shadow-2xs' 
-                  : 'text-[#6e584a] dark:text-[#f3eadf] border-transparent dark:border-transparent hover:bg-[#fff9f1] dark:hover:bg-[#292119] hover:text-[#534135] dark:hover:text-[#f3eadf]'
+                  : 'text-[#6e584a] dark:text-[#f3eadf] border-transparent dark:border-transparent hover:bg-[#fff9f1] dark:hover:bg-[#292119] hover:text-[#534135] dark:text-[#f3eadf] dark:hover:text-[#f3eadf]'
               }`}
             >
               <span>★ All Tickets</span>
@@ -507,7 +507,7 @@ export default function Sidebar({
               className={`w-full text-left text-[11px] px-3 py-2 rounded-xl flex items-center justify-between font-mono transition-all border ${
                 selectedPriority === 'high' 
                   ? 'bg-[#ffdacf] dark:bg-[#292119] border-[#ffa995] dark:border-[#584a3b] text-[#b43a20] dark:text-[#f3eadf] font-extrabold shadow-2xs' 
-                  : 'text-[#6e584a] dark:text-[#f3eadf] border-transparent dark:border-transparent hover:bg-[#fff9f1] dark:hover:bg-[#292119] hover:text-[#534135] dark:hover:text-[#f3eadf]'
+                  : 'text-[#6e584a] dark:text-[#f3eadf] border-transparent dark:border-transparent hover:bg-[#fff9f1] dark:hover:bg-[#292119] hover:text-[#534135] dark:text-[#f3eadf] dark:hover:text-[#f3eadf]'
               }`}
             >
               <div className="flex items-center gap-2">
@@ -521,7 +521,7 @@ export default function Sidebar({
               className={`w-full text-left text-[11px] px-3 py-2 rounded-xl flex items-center justify-between font-mono transition-all border ${
                 selectedPriority === 'medium' 
                   ? 'bg-[#ffecca] dark:bg-[#292119] border-[#f0cca3] dark:border-[#584a3b] text-[#a46c24] dark:text-[#f3eadf] font-extrabold shadow-2xs' 
-                  : 'text-[#6e584a] dark:text-[#f3eadf] border-transparent dark:border-transparent hover:bg-[#fff9f1] dark:hover:bg-[#292119] hover:text-[#534135] dark:hover:text-[#f3eadf]'
+                  : 'text-[#6e584a] dark:text-[#f3eadf] border-transparent dark:border-transparent hover:bg-[#fff9f1] dark:hover:bg-[#292119] hover:text-[#534135] dark:text-[#f3eadf] dark:hover:text-[#f3eadf]'
               }`}
             >
               <div className="flex items-center gap-2">
@@ -535,7 +535,7 @@ export default function Sidebar({
               className={`w-full text-left text-[11px] px-3 py-2 rounded-xl flex items-center justify-between font-mono transition-all border ${
                 selectedPriority === 'low' 
                   ? 'bg-[#e2f0dc] dark:bg-[#292119] border-[#bddda4] dark:border-[#584a3b] text-[#4d7e35] dark:text-[#f3eadf] font-extrabold shadow-2xs' 
-                  : 'text-[#6e584a] dark:text-[#f3eadf] border-transparent dark:border-transparent hover:bg-[#fff9f1] dark:hover:bg-[#292119] hover:text-[#534135] dark:hover:text-[#f3eadf]'
+                  : 'text-[#6e584a] dark:text-[#f3eadf] border-transparent dark:border-transparent hover:bg-[#fff9f1] dark:hover:bg-[#292119] hover:text-[#534135] dark:text-[#f3eadf] dark:hover:text-[#f3eadf]'
               }`}
             >
               <div className="flex items-center gap-2">
@@ -555,7 +555,7 @@ export default function Sidebar({
         <button
           onClick={onOpenSettings}
           title="Open Settings"
-          className="flex items-center gap-1.5 text-[#b89b82] dark:text-[#d6b56d] hover:text-[#935919] dark:hover:text-[#e0a070] hover:bg-[#ebdcb9]/40 dark:hover:bg-[#584a3b]/40 px-2 py-1 rounded-lg transition-colors"
+          className="flex items-center gap-1.5 text-[#b89b82] dark:text-[#d6b56d] hover:text-[#935919] dark:hover:text-[#e0a070] dark:text-[#d6b56d] hover:bg-[#ebdcb9] dark:bg-[#584a3b]/40 dark:hover:bg-[#584a3b]/40 px-2 py-1 rounded-lg transition-colors"
         >
           <Settings size={13} />
           <span className="font-bold">Settings</span>

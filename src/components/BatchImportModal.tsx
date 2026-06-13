@@ -135,7 +135,7 @@ export default function BatchImportModal({ onClose, onImport }: BatchImportModal
 
             <textarea
               required
-              className="w-full bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3.5 py-2.5 h-64 outline-none focus:border-[#3c829e] dark:focus:border-[#584a3b] font-mono resize-y text-[#3a2f26] dark:text-[#f3eadf] text-[11px] leading-relaxed shadow-3xs"
+              className="w-full bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3.5 py-2.5 h-64 outline-none focus:border-[#3c829e] dark:border-[#8ba4e8] dark:focus:border-[#584a3b] font-mono resize-y text-[#3a2f26] dark:text-[#f3eadf] text-[11px] leading-relaxed shadow-3xs"
               placeholder="e.g.&#10;[&#10;  {&#10;    &quot;title&quot;: &quot;Awesome Ticket&quot;,&#10;    &quot;priority&quot;: &quot;high&quot;,&#10;    &quot;status&quot;: &quot;backlog&quot;&#10;  }&#10;]"
               value={jsonText}
               onChange={(e) => {
@@ -173,14 +173,14 @@ export default function BatchImportModal({ onClose, onImport }: BatchImportModal
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 py-2.5 rounded-xl border border-[#ebdcb9] dark:border-[#584a3b] text-[#816b5a] dark:text-[#f3eadf] bg-white dark:bg-[#292119] hover:bg-[#fffcf6] dark:hover:bg-[#1e1914] transition-all text-xs font-bold font-mono cursor-pointer"
+              className="flex-1 py-2.5 rounded-xl border border-[#ebdcb9] dark:border-[#584a3b] text-[#816b5a] dark:text-[#f3eadf] bg-white dark:bg-[#292119] hover:bg-[#fffcf6] dark:bg-[#1e1914] dark:hover:bg-[#1e1914] transition-all text-xs font-bold font-mono cursor-pointer"
             >
               Discard
             </button>
             <button
               type="submit"
               disabled={importing || !jsonText.trim()}
-              className="flex-1 bg-[#3c829e] dark:bg-[#e0a070] hover:bg-[#2d6277] dark:hover:bg-[#d6b56d] disabled:bg-gray-300 dark:disabled:bg-[#292119] disabled:cursor-not-allowed text-white dark:text-[#f3eadf] font-extrabold py-2.5 rounded-xl text-xs transition-all shadow-md cursor-pointer font-mono"
+              className="flex-1 bg-[#3c829e] dark:bg-[#e0a070] hover:bg-[#2d6277] dark:hover:bg-[#d6b56d] dark:bg-[#e0a070] disabled:bg-gray-300 dark:disabled:bg-[#292119] disabled:cursor-not-allowed text-white dark:text-[#f3eadf] font-extrabold py-2.5 rounded-xl text-xs transition-all shadow-md cursor-pointer font-mono"
             >
               {importing ? 'Importing... 🚀' : 'Commit Batch JSON ✨'}
             </button>

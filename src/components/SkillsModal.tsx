@@ -186,7 +186,7 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
         <div className="w-1/3 border-r border-[#ebdcb9] dark:border-[#584a3b] bg-[#fdfbf6] dark:bg-[#292119] flex flex-col">
           <div className="px-6 py-4 border-b border-[#ebdcb9] dark:border-[#584a3b] flex items-center justify-between shrink-0">
             <h2 className="text-[#534135] dark:text-[#f3eadf] font-extrabold font-sans text-lg flex items-center gap-2">
-              <FileText size={20} className="text-[#d89745] dark:text-[#e0a070]" />
+              <FileText size={20} className="text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d]" />
               Agent Skills
             </h2>
             <button
@@ -201,7 +201,7 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
                 setImportDescription('');
                 setImportContent('');
               }}
-              className="p-1.5 hover:bg-[#ebdcb9]/40 dark:hover:bg-[#584a3b]/40 rounded-lg text-[#d89745] dark:text-[#e0a070] transition-colors"
+              className="p-1.5 hover:bg-[#ebdcb9] dark:bg-[#584a3b]/40 dark:hover:bg-[#584a3b]/40 rounded-lg text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d] transition-colors"
               title="Import Skill"
             >
               <Plus size={18} />
@@ -215,8 +215,8 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
                 onClick={() => setActiveTab(tab.id as TabKey)}
                 className={`whitespace-nowrap px-3 py-2 text-[10px] font-bold uppercase tracking-wider border-b-2 transition-colors ${
                   activeTab === tab.id 
-                    ? 'border-[#d89745] dark:border-[#e0a070] text-[#935919] dark:text-[#e0a070]' 
-                    : 'border-transparent dark:border-transparent text-[#b89b82] dark:text-[#d6b56d] hover:text-[#935919] dark:hover:text-[#e0a070]'
+                    ? 'border-[#d89745] dark:border-[#e0a070] text-[#935919] dark:text-[#e0a070] dark:text-[#d6b56d]' 
+                    : 'border-transparent dark:border-transparent text-[#b89b82] dark:text-[#d6b56d] hover:text-[#935919] dark:hover:text-[#e0a070] dark:text-[#d6b56d]'
                 }`}
               >
                 {tab.label}
@@ -252,8 +252,8 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
                         }}
                         className={`flex items-center w-full justify-between p-3 rounded-xl border transition-all text-left ${
                           isSelected
-                            ? 'bg-[#ffecca] dark:bg-[#292119] border-[#e3a35a] dark:border-[#584a3b] shadow-sm text-[#935919] dark:text-[#e0a070]'
-                            : 'bg-white dark:bg-[#292119] border-[#e5d4bb] dark:border-[#584a3b] hover:bg-[#faf6ef] dark:hover:bg-[#584a3b]/40 text-[#534135] dark:text-[#f3eadf]'
+                            ? 'bg-[#ffecca] dark:bg-[#292119] border-[#e3a35a] dark:border-[#584a3b] shadow-sm text-[#935919] dark:text-[#e0a070] dark:text-[#d6b56d]'
+                            : 'bg-white dark:bg-[#292119] border-[#e5d4bb] dark:border-[#584a3b] hover:bg-[#faf6ef] dark:bg-[#292119] dark:hover:bg-[#584a3b]/40 text-[#534135] dark:text-[#f3eadf]'
                         }`}
                       >
                         <div className="flex-1 min-w-0 pr-6">
@@ -267,7 +267,7 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
                           </div>
                           <div className="text-[10px] font-mono text-[#8a725f] dark:text-[#f3eadf] mt-1 line-clamp-1">{skill.description}</div>
                         </div>
-                        {isSelected && <ChevronRight size={16} className="text-[#d89745] dark:text-[#e0a070] shrink-0" />}
+                        {isSelected && <ChevronRight size={16} className="text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d] shrink-0" />}
                       </button>
                       {skill.isCustom && (
                         <button
@@ -308,14 +308,14 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
                   <button
                     onClick={handleImportSave}
                     disabled={saving}
-                    className="bg-[#2a7a8a] dark:bg-[#d6b56d] hover:bg-[#1a5b67] dark:hover:bg-[#292119] text-white dark:text-[#f3eadf] px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors shadow-sm disabled:opacity-50"
+                    className="bg-[#2a7a8a] dark:bg-[#d6b56d] dark:bg-[#e0a070] hover:bg-[#1a5b67] dark:bg-[#3c829e] dark:hover:bg-[#292119] text-white dark:text-[#f3eadf] px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors shadow-sm disabled:opacity-50"
                   >
                     <Save size={14} /> {saving ? 'Saving...' : 'Import'}
                   </button>
                   <div className="w-px h-5 bg-[#ebdcb9] dark:bg-[#584a3b] mx-1"></div>
                   <button
                     onClick={onClose}
-                    className="text-[#8c7463] dark:text-[#f3eadf] hover:bg-[#ebdcb9]/40 dark:hover:bg-[#584a3b]/40 p-1.5 rounded-lg transition-colors"
+                    className="text-[#8c7463] dark:text-[#f3eadf] hover:bg-[#ebdcb9] dark:bg-[#584a3b]/40 dark:hover:bg-[#584a3b]/40 p-1.5 rounded-lg transition-colors"
                     title="Close"
                   >
                     <X size={18} />
@@ -339,7 +339,7 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
                     ) : (
                       <button
                         onClick={() => setIsEditing(true)}
-                        className="bg-white dark:bg-[#292119] hover:bg-[#ebdcb9]/40 dark:hover:bg-[#584a3b]/40 border border-[#ebdcb9] dark:border-[#584a3b] text-[#534135] dark:text-[#f3eadf] px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors shadow-sm"
+                        className="bg-white dark:bg-[#292119] hover:bg-[#ebdcb9] dark:bg-[#584a3b]/40 dark:hover:bg-[#584a3b]/40 border border-[#ebdcb9] dark:border-[#584a3b] text-[#534135] dark:text-[#f3eadf] px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors shadow-sm"
                       >
                         <Edit2 size={14} /> Edit Skill
                       </button>
@@ -356,7 +356,7 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
                       <button
                         onClick={handleSave}
                         disabled={saving}
-                        className="bg-[#2a7a8a] dark:bg-[#d6b56d] hover:bg-[#1a5b67] dark:hover:bg-[#292119] text-white dark:text-[#f3eadf] px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors shadow-sm disabled:opacity-50"
+                        className="bg-[#2a7a8a] dark:bg-[#d6b56d] dark:bg-[#e0a070] hover:bg-[#1a5b67] dark:bg-[#3c829e] dark:hover:bg-[#292119] text-white dark:text-[#f3eadf] px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors shadow-sm disabled:opacity-50"
                       >
                         <Save size={14} /> {saving ? 'Saving...' : 'Save Changes'}
                       </button>
@@ -365,7 +365,7 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
                   <div className="w-px h-5 bg-[#ebdcb9] dark:bg-[#584a3b] mx-1"></div>
                   <button
                     onClick={onClose}
-                    className="text-[#8c7463] dark:text-[#f3eadf] hover:bg-[#ebdcb9]/40 dark:hover:bg-[#584a3b]/40 p-1.5 rounded-lg transition-colors"
+                    className="text-[#8c7463] dark:text-[#f3eadf] hover:bg-[#ebdcb9] dark:bg-[#584a3b]/40 dark:hover:bg-[#584a3b]/40 p-1.5 rounded-lg transition-colors"
                     title="Close"
                   >
                     <X size={18} />
@@ -376,7 +376,7 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
               <div className="flex-1 flex justify-end">
                 <button
                   onClick={onClose}
-                  className="text-[#8c7463] dark:text-[#f3eadf] hover:bg-[#ebdcb9]/40 dark:hover:bg-[#584a3b]/40 p-1.5 rounded-lg transition-colors"
+                  className="text-[#8c7463] dark:text-[#f3eadf] hover:bg-[#ebdcb9] dark:bg-[#584a3b]/40 dark:hover:bg-[#584a3b]/40 p-1.5 rounded-lg transition-colors"
                 >
                   <X size={18} />
                 </button>

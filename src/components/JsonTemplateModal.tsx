@@ -220,7 +220,7 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
             className={`px-4 py-2 text-xs font-extrabold font-mono border-t border-x rounded-t-xl transition-all cursor-pointer ${
               activeTab === 'schema'
                 ? 'bg-[#fcfaf5] dark:bg-[#292119] border-[#ebdcb9] dark:border-[#584a3b] text-[#784d21] dark:text-[#f3eadf] -mb-[1px]'
-                : 'bg-transparent dark:bg-transparent border-transparent dark:border-transparent text-[#9e8470] dark:text-[#d6b56d] hover:text-[#5c493c] dark:hover:text-[#f3eadf]'
+                : 'bg-transparent dark:bg-transparent border-transparent dark:border-transparent text-[#9e8470] dark:text-[#d6b56d] hover:text-[#5c493c] dark:text-[#f3eadf] dark:hover:text-[#f3eadf]'
             }`}
           >
             📄 JSON Schema Spec
@@ -230,7 +230,7 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
             className={`px-4 py-2 text-xs font-extrabold font-mono border-t border-x rounded-t-xl transition-all cursor-pointer ${
               activeTab === 'api'
                 ? 'bg-[#fcfaf5] dark:bg-[#292119] border-[#ebdcb9] dark:border-[#584a3b] text-[#784d21] dark:text-[#f3eadf] -mb-[1px]'
-                : 'bg-transparent dark:bg-transparent border-transparent dark:border-transparent text-[#9e8470] dark:text-[#d6b56d] hover:text-[#5c493c] dark:hover:text-[#f3eadf]'
+                : 'bg-transparent dark:bg-transparent border-transparent dark:border-transparent text-[#9e8470] dark:text-[#d6b56d] hover:text-[#5c493c] dark:text-[#f3eadf] dark:hover:text-[#f3eadf]'
             }`}
           >
             🌐 REST API Spec
@@ -268,7 +268,7 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
                       className={`border px-2.5 py-1 rounded-xl cursor-pointer font-semibold flex items-center gap-1 transition-all ${
                         copied && copiedText === 'schema'
                           ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
-                          : 'bg-white dark:bg-[#292119] border-[#ebdcb9] dark:border-[#584a3b] text-[#715c4d] dark:text-[#f3eadf] hover:text-[#3a2010] dark:hover:text-[#f3eadf]'
+                          : 'bg-white dark:bg-[#292119] border-[#ebdcb9] dark:border-[#584a3b] text-[#715c4d] dark:text-[#f3eadf] hover:text-[#3a2010] dark:text-[#f3eadf] dark:hover:text-[#f3eadf]'
                       }`}
                     >
                       {copied && copiedText === 'schema' ? (
@@ -378,7 +378,7 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
 
                         <div>
                           <p className="text-[#8c7463] dark:text-[#f3eadf] font-bold text-[9px] uppercase tracking-wider mb-1">Code Pattern Example (Fetch JS):</p>
-                          <pre className="p-2.5 bg-[#1e293b] dark:bg-[#d6b56d] text-[#38bdf8] dark:text-[#d6b56d] rounded-xl overflow-x-auto font-mono text-[10px] leading-relaxed">
+                          <pre className="p-2.5 bg-[#1e293b] dark:bg-[#d6b56d] dark:bg-[#e0a070] text-[#38bdf8] dark:text-[#d6b56d] rounded-xl overflow-x-auto font-mono text-[10px] leading-relaxed">
                             <code>{api.example}</code>
                           </pre>
                         </div>
@@ -396,7 +396,7 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2 bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] text-[#6d5a4d] dark:text-[#f3eadf] hover:bg-[#fffcf6] dark:hover:bg-[#1e1914] rounded-xl font-bold font-mono transition-colors cursor-pointer shadow-3xs"
+            className="px-4 py-2 bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] text-[#6d5a4d] dark:text-[#f3eadf] hover:bg-[#fffcf6] dark:bg-[#1e1914] dark:hover:bg-[#1e1914] rounded-xl font-bold font-mono transition-colors cursor-pointer shadow-3xs"
           >
             ปิดหน้าเอกสาร
           </button>

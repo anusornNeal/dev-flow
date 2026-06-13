@@ -50,12 +50,12 @@ export function Header({
     <header className="p-4 md:px-6 md:py-4 bg-white/80 dark:bg-[#292119]/80 backdrop-blur-md border-b border-[#e5d4bb]/50 dark:border-[#584a3b]/50 flex flex-col md:flex-row gap-4 justify-between items-start md:items-center sticky top-0 z-10">
       <div>
         <h1 className="text-[#3c2a1a] dark:text-[#f3eadf] font-extrabold font-sans text-lg tracking-tight flex items-center gap-2">
-          <Cat className="text-[#d89745] dark:text-[#e0a070] shrink-0" size={18} />
+          <Cat className="text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d] shrink-0" size={18} />
           Sprint Backlog
         </h1>
         <p className="text-[11px] text-[#816b5a] dark:text-[#d6b56d] font-mono mt-0.5 font-medium flex items-center gap-1.5">
           <span>Pocket Sandbox</span>
-          <span className="w-1 h-1 rounded-full bg-[#dcd0bc] dark:bg-[#d6b56d]" />
+          <span className="w-1 h-1 rounded-full bg-[#dcd0bc] dark:bg-[#d6b56d] dark:bg-[#e0a070]" />
           <span className="font-bold">{filteredTasksCount} tasks</span>
         </p>
       </div>
@@ -72,7 +72,7 @@ export function Header({
         <button
           onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
           type="button"
-          className="p-1.5 text-[#a46c24] dark:text-[#d6b56d] hover:bg-[#ebdcb9]/40 dark:hover:bg-[#584a3b]/50 rounded-xl transition-colors cursor-pointer"
+          className="p-1.5 text-[#a46c24] dark:text-[#d6b56d] hover:bg-[#ebdcb9] dark:bg-[#584a3b]/40 dark:hover:bg-[#584a3b]/50 rounded-xl transition-colors cursor-pointer"
           title="Toggle Dark Mode"
         >
           {theme === 'light' ? <Moon size={16} /> : <Sun size={16} />}
@@ -83,7 +83,7 @@ export function Header({
           <button
             onClick={() => setIsMenuOpen(!isMenuOpen)}
             type="button"
-            className="p-1.5 text-[#a46c24] dark:text-[#d6b56d] hover:bg-[#ebdcb9]/40 dark:hover:bg-[#584a3b]/50 rounded-xl transition-colors cursor-pointer"
+            className="p-1.5 text-[#a46c24] dark:text-[#d6b56d] hover:bg-[#ebdcb9] dark:bg-[#584a3b]/40 dark:hover:bg-[#584a3b]/50 rounded-xl transition-colors cursor-pointer"
             title="Developer Settings & Configs"
           >
             <Blocks size={16} />
@@ -93,19 +93,19 @@ export function Header({
             <div className="absolute right-0 mt-2 bg-white dark:bg-[#292119] rounded-xl shadow-xl border border-[#ebdcb9] dark:border-[#584a3b] py-1.5 min-w-[180px] z-50 flex flex-col overflow-hidden">
               <button
                 onClick={() => { setIsJsonModalOpen(true); setIsMenuOpen(false); }}
-                className="w-full text-left px-4 py-2 hover:bg-[#ebdcb9]/30 dark:hover:bg-[#584a3b]/40 text-xs font-bold text-[#7a6455] dark:text-[#f3eadf] flex items-center gap-2 transition-colors cursor-pointer"
+                className="w-full text-left px-4 py-2 hover:bg-[#ebdcb9] dark:bg-[#584a3b]/30 dark:hover:bg-[#584a3b]/40 text-xs font-bold text-[#7a6455] dark:text-[#f3eadf] flex items-center gap-2 transition-colors cursor-pointer"
               >
                 <FileCode size={14} className="text-[#a46c24] dark:text-[#d6b56d]" /> Schema Spec
               </button>
               <button
                 onClick={() => { setIsSkillsModalOpen(true); setIsMenuOpen(false); }}
-                className="w-full text-left px-4 py-2 hover:bg-[#ebdcb9]/30 dark:hover:bg-[#584a3b]/40 text-xs font-bold text-[#7a6455] dark:text-[#f3eadf] flex items-center gap-2 transition-colors cursor-pointer"
+                className="w-full text-left px-4 py-2 hover:bg-[#ebdcb9] dark:bg-[#584a3b]/30 dark:hover:bg-[#584a3b]/40 text-xs font-bold text-[#7a6455] dark:text-[#f3eadf] flex items-center gap-2 transition-colors cursor-pointer"
               >
                 <Code size={14} className="text-[#a46c24] dark:text-[#d6b56d]" /> Agent Skills
               </button>
               <button
                 onClick={() => { setIsTemplateModalOpen(true); setIsMenuOpen(false); }}
-                className="w-full text-left px-4 py-2 hover:bg-[#ebdcb9]/30 dark:hover:bg-[#584a3b]/40 text-xs font-bold text-[#7a6455] dark:text-[#f3eadf] flex items-center gap-2 transition-colors cursor-pointer"
+                className="w-full text-left px-4 py-2 hover:bg-[#ebdcb9] dark:bg-[#584a3b]/30 dark:hover:bg-[#584a3b]/40 text-xs font-bold text-[#7a6455] dark:text-[#f3eadf] flex items-center gap-2 transition-colors cursor-pointer"
               >
                 <FileText size={14} className="text-[#a46c24] dark:text-[#d6b56d]" /> Prompt Template
               </button>
@@ -126,15 +126,15 @@ export function Header({
             <div className="absolute right-0 mt-2 bg-white dark:bg-[#292119] rounded-xl shadow-xl border border-[#ebdcb9] dark:border-[#584a3b] py-1.5 min-w-[200px] z-50 flex flex-col overflow-hidden">
               <button
                 onClick={() => { setIsCreateModalOpen(true); setIsActionMenuOpen(false); }}
-                className="w-full text-left px-4 py-2 hover:bg-[#ebdcb9]/30 dark:hover:bg-[#584a3b]/40 text-xs font-bold text-[#3c2a1a] dark:text-[#f3eadf] flex items-center gap-2 transition-colors cursor-pointer"
+                className="w-full text-left px-4 py-2 hover:bg-[#ebdcb9] dark:bg-[#584a3b]/30 dark:hover:bg-[#584a3b]/40 text-xs font-bold text-[#3c2a1a] dark:text-[#f3eadf] flex items-center gap-2 transition-colors cursor-pointer"
               >
-                <Sparkles size={14} className="text-[#d89745] dark:text-[#e0a070]" /> Single Ticket
+                <Sparkles size={14} className="text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d]" /> Single Ticket
               </button>
               <button
                 onClick={() => { setIsBatchModalOpen(true); setIsActionMenuOpen(false); }}
-                className="w-full text-left px-4 py-2 hover:bg-[#ebdcb9]/30 dark:hover:bg-[#584a3b]/40 text-xs font-bold text-[#3c2a1a] dark:text-[#f3eadf] flex items-center gap-2 transition-colors cursor-pointer"
+                className="w-full text-left px-4 py-2 hover:bg-[#ebdcb9] dark:bg-[#584a3b]/30 dark:hover:bg-[#584a3b]/40 text-xs font-bold text-[#3c2a1a] dark:text-[#f3eadf] flex items-center gap-2 transition-colors cursor-pointer"
               >
-                <FileCode size={14} className="text-[#d89745] dark:text-[#e0a070]" /> Batch Import JSON
+                <FileCode size={14} className="text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d]" /> Batch Import JSON
               </button>
             </div>
           )}

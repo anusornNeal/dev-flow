@@ -114,7 +114,7 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
           {/* Prominent Task ID & Locked Agent */}
           <div className="flex items-center gap-2">
             <div 
-              className="text-[15px] font-mono font-black text-[#d89745] dark:text-[#e0a070] cursor-pointer hover:bg-[#ebdcb9]/40 dark:hover:bg-[#584a3b]/40 px-1.5 -ml-1.5 py-0.5 rounded-md transition-colors flex items-center"
+              className="text-[15px] font-mono font-black text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d] cursor-pointer hover:bg-[#ebdcb9] dark:bg-[#584a3b]/40 dark:hover:bg-[#584a3b]/40 px-1.5 -ml-1.5 py-0.5 rounded-md transition-colors flex items-center"
               onClick={(e) => {
                 e.stopPropagation();
                 handleCopyId(e as any);
@@ -155,7 +155,7 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
                 onDelete(task.id);
               }}
               type="button"
-              className="text-gray-400 dark:text-[#b8ab9f] hover:text-red-500 p-1.5 rounded-full hover:bg-[#fff0ed] dark:hover:bg-[#292119] transition-all cursor-pointer"
+              className="text-gray-400 dark:text-[#b8ab9f] hover:text-red-500 p-1.5 rounded-full hover:bg-[#fff0ed] dark:bg-[#292119] dark:hover:bg-[#292119] transition-all cursor-pointer"
               title="Remove card"
             >
               <Trash2 size={13} />
@@ -244,7 +244,7 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
             <div className="flex items-center w-full mt-0.5">
               <span 
                 onClick={(e) => { e.stopPropagation(); setIsEditingAgent(true); }}
-                className="flex items-center gap-1.5 px-2 py-1 rounded-md border border-[#ebdcb9]/40 bg-[#fdfbf7]/50 dark:bg-[#292119]/50 text-[#8a725f] dark:text-[#f3eadf] text-[9.5px] font-mono font-bold w-full shadow-sm overflow-hidden cursor-pointer hover:bg-[#fffbf4] dark:hover:bg-[#382f25] transition-colors"
+                className="flex items-center gap-1.5 px-2 py-1 rounded-md border border-[#ebdcb9] dark:border-[#584a3b]/40 bg-[#fdfbf7]/50 dark:bg-[#292119]/50 text-[#8a725f] dark:text-[#f3eadf] text-[9.5px] font-mono font-bold w-full shadow-sm overflow-hidden cursor-pointer hover:bg-[#fffbf4] dark:bg-[#292119] dark:hover:bg-[#382f25] transition-colors"
               >
                 {(task.agent || task.model || task.effort) ? (
                   <>
@@ -255,7 +255,7 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
                     {task.effort && (
                       <>
                         <span className="text-[#ebdcb9] dark:text-[#584a3b] mx-0.5 relative -top-[0.5px] shrink-0">|</span>
-                        <Zap size={11} className="relative -top-[0.5px] shrink-0 text-[#d89745] dark:text-[#e0a070]" />
+                        <Zap size={11} className="relative -top-[0.5px] shrink-0 text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d]" />
                         <span className="leading-none mt-[1px] shrink-0">{task.effort}</span>
                       </>
                     )}
@@ -274,7 +274,7 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
           {isEditingAgent && (
             <div 
               ref={editContainerRef}
-              className="flex items-center gap-1 px-1.5 py-0.5 rounded-md border border-[#ebdcb9]/40 bg-[#fdfbf7]/50 dark:bg-[#292119]/50 text-[#8a725f] dark:text-[#f3eadf] text-[9.5px] font-mono font-bold w-full shadow-sm" 
+              className="flex items-center gap-1 px-1.5 py-0.5 rounded-md border border-[#ebdcb9] dark:border-[#584a3b]/40 bg-[#fdfbf7]/50 dark:bg-[#292119]/50 text-[#8a725f] dark:text-[#f3eadf] text-[9.5px] font-mono font-bold w-full shadow-sm" 
               onClick={(e) => e.stopPropagation()}
             >
               <div className="flex items-center gap-0.5 flex-1 min-w-0">
@@ -282,7 +282,7 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
                 <div className="relative flex-1 min-w-0 flex flex-col">
                   <div 
                     onClick={() => { setAgentMenuOpen(!agentMenuOpen); setModelMenuOpen(false); }}
-                    className="w-full bg-transparent hover:bg-[#ebdcb9]/20 dark:hover:bg-[#584a3b]/20 rounded py-0.5 px-0.5 outline-none text-[#8a725f] dark:text-[#f3eadf] font-mono font-bold transition-all cursor-pointer flex items-center justify-between"
+                    className="w-full bg-transparent hover:bg-[#ebdcb9] dark:bg-[#584a3b]/20 dark:hover:bg-[#584a3b]/20 rounded py-0.5 px-0.5 outline-none text-[#8a725f] dark:text-[#f3eadf] font-mono font-bold transition-all cursor-pointer flex items-center justify-between"
                   >
                     <div className="flex items-center gap-1 truncate">
                       {task.agent ? <AgentLogo agent={task.agent} size={11} className="shrink-0" /> : <Bot size={11} className="shrink-0 opacity-60" />}
@@ -333,7 +333,7 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
                     <div className="relative flex-1 min-w-0 flex flex-col">
                       <div 
                         onClick={() => { setModelMenuOpen(!modelMenuOpen); setAgentMenuOpen(false); }}
-                        className="w-full bg-transparent hover:bg-[#ebdcb9]/20 dark:hover:bg-[#584a3b]/20 rounded py-0.5 px-0.5 outline-none text-[#8a725f] dark:text-[#f3eadf] font-mono font-bold transition-all cursor-pointer flex items-center justify-between"
+                        className="w-full bg-transparent hover:bg-[#ebdcb9] dark:bg-[#584a3b]/20 dark:hover:bg-[#584a3b]/20 rounded py-0.5 px-0.5 outline-none text-[#8a725f] dark:text-[#f3eadf] font-mono font-bold transition-all cursor-pointer flex items-center justify-between"
                       >
                         <span className="truncate">{getDisplayModelName(task.agent, task.model) || 'Default'}</span>
                         <ChevronDown size={10} className="shrink-0 opacity-50 ml-0.5" />
@@ -351,7 +351,7 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
                               setModelMenuOpen(false);
                             }}
                           >
-                            <Zap size={11} className="opacity-60 shrink-0 text-[#d89745] dark:text-[#e0a070]" />
+                            <Zap size={11} className="opacity-60 shrink-0 text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d]" />
                             <span className="truncate">Default</span>
                           </button>
                           {AGENTS_CONFIG[task.agent as import('../lib/agentsConfig').AgentName]?.map(m => (
@@ -436,7 +436,7 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
                       className={`w-3.5 h-3.5 rounded flex items-center justify-center border transition-all cursor-pointer shrink-0 ${
                         subDone 
                           ? 'bg-emerald-500 border-emerald-500 text-white dark:text-[#f3eadf]' 
-                          : 'bg-white dark:bg-[#292119] border-[#ebdcb9] dark:border-[#584a3b] hover:border-[#d4994e] dark:hover:border-[#584a3b]'
+                          : 'bg-white dark:bg-[#292119] border-[#ebdcb9] dark:border-[#584a3b] hover:border-[#d4994e] dark:border-[#e0a070] dark:hover:border-[#584a3b]'
                       }`}
                     >
                       {subDone && <span className="text-[8px] leading-none mb-0.5">✓</span>}
@@ -447,7 +447,7 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
                   {/* Small statuses/agent info */}
                   <div className="flex items-center gap-1 shrink-0 font-mono text-[8px] font-bold ml-[20px]">
                     {sub.model && (
-                      <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-md border border-[#ebdcb9]/40 bg-[#fdfbf7]/50 dark:bg-[#292119]/50 text-[#8a725f] dark:text-[#f3eadf] shadow-sm">
+                      <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-md border border-[#ebdcb9] dark:border-[#584a3b]/40 bg-[#fdfbf7]/50 dark:bg-[#292119]/50 text-[#8a725f] dark:text-[#f3eadf] shadow-sm">
                         <AgentLogo agent={sub.model} size={8} className="relative -top-[0.5px] text-[#b49f8e] dark:text-[#b8ab9f]" />
                         <span className="leading-none mt-[1px]">{getDisplayModelName(undefined, sub.model)}</span>
                       </span>
@@ -456,7 +456,7 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
                       subDone ? 'bg-emerald-50/50 text-emerald-700 border-emerald-200/30' :
                       subInProgress ? 'bg-orange-50/50 text-orange-700 border-orange-200/30' :
                       sub.status === 'todo' ? 'bg-transparent dark:bg-[#292119] text-[#a47a32] dark:text-[#f3eadf] border-[#ebdcb9]/40 dark:border-[#584a3b]' :
-                      'bg-transparent dark:bg-[#292119] text-[#8c7a6e] dark:text-[#b8ab9f] border-[#ebdcb9]/30'
+                      'bg-transparent dark:bg-[#292119] text-[#8c7a6e] dark:text-[#b8ab9f] border-[#ebdcb9] dark:border-[#584a3b]/30'
                     }`}>
                       {sub.status === 'in-progress' ? 'active' : sub.status}
                     </span>

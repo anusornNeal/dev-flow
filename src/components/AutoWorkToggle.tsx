@@ -38,14 +38,14 @@ export default function AutoWorkToggle() {
   if (loading) {
     return (
       <div className="flex items-center gap-2 px-3 py-1.5 bg-[#fdfbf6] dark:bg-[#292119] border border-[#e5d4bb] dark:border-[#584a3b] rounded-xl h-[34px]">
-        <Loader2 size={12} className="text-[#d89745] dark:text-[#e0a070] animate-spin" />
+        <Loader2 size={12} className="text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d] animate-spin" />
       </div>
     );
   }
 
   return (
     <div 
-      className="flex items-center gap-2 px-3 py-1.5 bg-[#fdfbf6] dark:bg-[#292119] border border-[#e5d4bb] dark:border-[#584a3b] rounded-xl shadow-2xs h-[34px] cursor-pointer hover:bg-[#faf7f0] dark:hover:bg-[#1e1914] transition-colors"
+      className="flex items-center gap-2 px-3 py-1.5 bg-[#fdfbf6] dark:bg-[#292119] border border-[#e5d4bb] dark:border-[#584a3b] rounded-xl shadow-2xs h-[34px] cursor-pointer hover:bg-[#faf7f0] dark:bg-[#1e1914] dark:hover:bg-[#1e1914] transition-colors"
       onClick={toggleAutoWork}
       title="Automatically trigger agents when a task is moved to the 'Ready To Do' (todo) lane"
     >

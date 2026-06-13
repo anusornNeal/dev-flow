@@ -91,7 +91,7 @@ export function BoardLane({
       <div className="flex items-center justify-between mb-4 px-3 pt-3 select-none">
         <div className="flex items-center gap-2">
           <span className={`shrink-0 ${
-            isInProgressCol ? 'text-[#d89745] dark:text-[#e0a070]' : 
+            isInProgressCol ? 'text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d]' : 
             isReviewCol ? 'text-[#3b5eab] dark:text-[#8ba4e8]' : 
             isDoneCol ? 'text-[#5fa84a] dark:text-[#8fce7c]' : 
             'text-[#8a725f] dark:text-[#b8ab9f]'

@@ -9,7 +9,7 @@
     "model": "-m",
     "workingDir": "-C",
     "alwaysAllow": "--dangerously-bypass-approvals-and-sandbox",
-    "effort": ["--config", "reasoning_effort="]
+    "effort": ["--config", "model_reasoning_effort="]
   },
   "executionModes": {
     "safe": { "args": ["-s", "workspace-write"] },

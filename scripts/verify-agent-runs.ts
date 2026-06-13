@@ -50,6 +50,7 @@ assert.equal(listAgentRunsForTask('task-1').length, 1);
 const {
   buildPromptReference,
   createAgentRunFiles,
+  getAgentRunHistoryPaths,
   getAgentTriggerScriptPath,
   resolveAgentExecutionMode,
 } = await import('../src/server/services/agentRunService');
@@ -66,6 +67,12 @@ const fixtureCodexPath = path.win32.join('tools', 'codex.cmd');
 assert.equal(fs.readFileSync(files.promptPath, 'utf8'), 'full prompt body that should stay off the command line');
 assert.ok(files.logPath.endsWith(path.join(run.id, 'agent.log')));
 assert.equal(buildPromptReference(files.promptPath), `Read and follow the DevFlow prompt file at: ${files.promptPath}`);
+const historyPaths = getAgentRunHistoryPaths(files.runDir);
+assert.equal(historyPaths.promptPath, files.promptPath);
+assert.equal(historyPaths.logPath, files.logPath);
+assert.ok(historyPaths.launchMetadataPath.endsWith(path.join(run.id, 'launch.json')));
+assert.ok(historyPaths.outputSummaryPath.endsWith(path.join(run.id, 'summary.txt')));
+assert.ok(historyPaths.resultPath.endsWith(path.join(run.id, 'result.json')));
 assert.equal(resolveAgentExecutionMode(undefined), 'safe');
 assert.equal(resolveAgentExecutionMode('full'), 'full');
 assert.equal(resolveAgentExecutionMode('unexpected'), 'safe');

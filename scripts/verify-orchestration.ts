@@ -171,6 +171,26 @@ const promptPath = path.join(process.cwd(), '.devflow', 'runs', run1!.id, 'promp
 const prompt = fs.readFileSync(promptPath, 'utf8');
 const runPrompt = renderTaskPrompt(state, 'task-1', { runId: run1!.id });
 assert.equal(prompt, runPrompt.renderResult.content);
+const historyApp = express();
+historyApp.use(express.json());
+registerTaskRoutes(historyApp, deps);
+const historyServer = http.createServer(historyApp);
+await new Promise<void>((resolve) => historyServer.listen(0, resolve));
+const historyAddress = historyServer.address();
+if (!historyAddress || typeof historyAddress === 'string') throw new Error('Failed to bind history test server.');
+const historyBaseUrl = `http://127.0.0.1:${historyAddress.port}`;
+try {
+  const historyResponse = await fetch(`${historyBaseUrl}/api/tasks/task-1/agent-runs/${run1!.id}/history`);
+  assert.equal(historyResponse.status, 200);
+  const historyBody = await historyResponse.json();
+  assert.equal(historyBody.runId, run1!.id);
+  assert.equal(historyBody.files.promptPath, promptPath);
+  assert.ok(historyBody.files.launchMetadataPath.endsWith(path.join(run1!.id, 'launch.json')));
+  assert.ok(historyBody.files.outputSummaryPath.endsWith(path.join(run1!.id, 'summary.txt')));
+  assert.ok(historyBody.files.resultPath.endsWith(path.join(run1!.id, 'result.json')));
+} finally {
+  await new Promise<void>((resolve, reject) => historyServer.close((error) => error ? reject(error) : resolve()));
+}
 assert.ok(prompt.includes('Generate the prompt from the real production agent context.'));
 assert.ok(prompt.includes('Prompt includes description, acceptance criteria, verification, checklist, subtasks, repo, localPath, agent, model, and effort.'));
 assert.ok(prompt.includes('Run prompt template and orchestration verification scripts.'));

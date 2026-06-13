@@ -5,7 +5,7 @@ import type { ApiRouteDeps } from '../types';
 import { TASK_SCHEMA_DEF, VALID_AGENTS, VALID_EFFORTS, VALID_MODELS, VALID_STATUSES } from '../constants';
 import { cancelActiveRunsForTask, cancelStaleActiveRuns, createAgentRun, findActiveRunByTaskId, getActiveRunForProject, getActiveRunForTask, getLatestAgentRunForTask, listAgentRunsForTask, updateAgentRunStatus, type AgentRun } from '../repositories/agentRunRepository';
 import { loadTasks, generateDisplayId, saveTasks } from '../repositories/taskRepository';
-import { appendAgentRunLog, createAgentRunFiles, getAgentTriggerScriptPath, getDevFlowApiBaseUrl, resolveAgentExecutionMode, resolveFromDevFlowAppRoot } from '../services/agentRunService';
+import { appendAgentRunLog, createAgentRunFiles, getAgentRunHistoryPaths, getAgentTriggerScriptPath, getDevFlowApiBaseUrl, resolveAgentExecutionMode, resolveFromDevFlowAppRoot, writeAgentRunLaunchMetadata, writeAgentRunOutputSummary, writeAgentRunResult } from '../services/agentRunService';
 import { extractDesignImages, getAgentTaskContext, renderTaskPrompt, resolveProjectIdFromRepo, validateAgentParams, validateTaskPayload } from '../services/taskService';
 import { validateEnum, validateString } from '../validation';
 import { isValidTransition, getValidationErrorMessage } from '../../lib/statusTransitions';
@@ -133,6 +133,7 @@ function cleanupStaleActiveRuns(deps: ApiRouteDeps) {
 }
 
 function failTaskRun(task: any, deps: ApiRouteDeps, runId: string, reason: string, options?: {
+  runDir?: string | null;
   logPath?: string | null;
   taskMessage?: string;
 }) {
@@ -141,6 +142,15 @@ function failTaskRun(task: any, deps: ApiRouteDeps, runId: string, reason: strin
   task.updatedAt = new Date().toISOString();
   appendTaskLog(task, options?.taskMessage || reason, 'update');
   if (options?.logPath) appendAgentRunLog(options.logPath, reason);
+  if (options?.runDir) {
+    writeAgentRunOutputSummary(options.runDir, reason);
+    writeAgentRunResult(options.runDir, {
+      status: 'failed',
+      success: false,
+      errorMessage: reason,
+      completedAt: new Date().toISOString(),
+    });
+  }
   applyRunSummaryToTask(task, failedRun);
   saveTasks(deps.state);
   return failedRun;
@@ -155,6 +165,17 @@ export function completeAgentRunForTask(task: any, run: AgentRun, deps: ApiRoute
   if (options.success) {
     const reviewBlockError = validateParentReviewMove(task, deps, 'ready-for-review');
     updatedRun = updateAgentRunStatus(run.id, 'succeeded');
+    if (run.logPath) {
+      const runDir = path.dirname(run.logPath);
+      writeAgentRunOutputSummary(runDir, `Run ${run.id} completed successfully.`);
+      writeAgentRunResult(runDir, {
+        status: 'succeeded',
+        success: true,
+        exitCode: options.exitCode ?? 0,
+        errorMessage: null,
+        completedAt: new Date().toISOString(),
+      });
+    }
     if (reviewBlockError) {
       task.status = 'todo';
       appendTaskLog(task, `Agent run ${run.id} completed successfully, but review is still blocked. ${reviewBlockError}`, 'update');
@@ -167,6 +188,17 @@ export function completeAgentRunForTask(task: any, run: AgentRun, deps: ApiRoute
     const detail = options.errorMessage?.trim() || 'Run failed';
     const errorMessage = `${detail}${exitCodeSuffix}`;
     updatedRun = updateAgentRunStatus(run.id, 'failed', { errorMessage });
+    if (run.logPath) {
+      const runDir = path.dirname(run.logPath);
+      writeAgentRunOutputSummary(runDir, errorMessage);
+      writeAgentRunResult(runDir, {
+        status: 'failed',
+        success: false,
+        exitCode: options.exitCode ?? null,
+        errorMessage,
+        completedAt: new Date().toISOString(),
+      });
+    }
     task.status = 'todo';
     appendTaskLog(task, `Agent run ${run.id} failed: ${errorMessage}`, 'update');
   }
@@ -268,6 +300,7 @@ export function triggerTaskAgent(task: any, deps: ApiRouteDeps, routeLabel: stri
     const reason = error?.message || 'Task prompt could not be built.';
     deps.writeAgentLog('ERROR', `Agent startup preparation failed for run=${run.id} task=${task.id}: ${reason}`);
     const failedRun = failTaskRun(task, deps, run.id, reason, {
+      runDir: files?.runDir,
       taskMessage: `Agent startup failed before launch: ${reason}`,
     });
     return { triggered: false, reason, run: failedRun };
@@ -303,6 +336,26 @@ export function triggerTaskAgent(task: any, deps: ApiRouteDeps, routeLabel: stri
   deps.writeAgentLog('TRIGGER', `Spawning run=${run.id} agent=${task.agent} for task=${task.id} ("${task.title}") via ${routeLabel}${project?.localPath ? ' at ' + project.localPath : ''}`);
   appendAgentRunLog(files.logPath, `Launch plan: agent=${launchPlan.agent} model=${launchPlan.devFlowModel || 'none'} resolvedModel=${launchPlan.resolvedModel || 'none'} effort=${launchPlan.selectedEffort || 'none'} effortHandling=${launchPlan.effortHandling.mode} executionMode=${executionMode}`);
   appendAgentRunLog(files.logPath, `cwd=${project?.localPath || 'none'} triggerScript=${triggerBat} promptPath=${files.promptPath}`);
+  writeAgentRunLaunchMetadata(files.runDir, {
+    runId: run.id,
+    taskId: task.id,
+    agent: task.agent,
+    routeLabel,
+    executionMode,
+    cwd: project?.localPath || null,
+    promptPath: files.promptPath,
+    logPath: files.logPath,
+    triggerScript: triggerBat,
+    launchPlan,
+    writtenAt: new Date().toISOString(),
+  });
+  writeAgentRunOutputSummary(files.runDir, `Run ${run.id} queued for ${task.agent}.`);
+  writeAgentRunResult(files.runDir, {
+    status: 'starting',
+    success: null,
+    errorMessage: null,
+    updatedAt: new Date().toISOString(),
+  });
   execFile('powershell.exe', [
     '-NoProfile',
     '-ExecutionPolicy',
@@ -324,6 +377,7 @@ export function triggerTaskAgent(task: any, deps: ApiRouteDeps, routeLabel: stri
       const reason = error.message || 'trigger-agent.bat failed.';
       deps.writeAgentLog('ERROR', `trigger-agent.bat failed for run=${run.id} task=${task.id}: ${error.message}`);
       failTaskRun(task, deps, run.id, reason, {
+        runDir: files.runDir,
         logPath: files.logPath,
         taskMessage: `Agent startup failed before launch: ${reason}`,
       });
@@ -332,6 +386,13 @@ export function triggerTaskAgent(task: any, deps: ApiRouteDeps, routeLabel: stri
 
     const runningRun = updateAgentRunStatus(run.id, 'running');
     appendAgentRunLog(files.logPath, 'Runner completed launcher handoff successfully; run marked running.');
+    writeAgentRunOutputSummary(files.runDir, `Run ${run.id} is running.`);
+    writeAgentRunResult(files.runDir, {
+      status: 'running',
+      success: null,
+      errorMessage: null,
+      updatedAt: new Date().toISOString(),
+    });
     deps.writeAgentLog('INFO', `Runner completed launcher handoff for run=${run.id} task=${task.id}`);
     applyRunSummaryToTask(task, runningRun);
     saveTasks(deps.state);
@@ -404,6 +465,21 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     const task = deps.state.tasksCache.find((entry) => entry.id === req.params.id || entry.displayId === req.params.id);
     if (!task) return res.status(404).json({ error: 'Task not found' });
     return res.json({ taskId: task.id, runs: listAgentRunsForTask(task.id) });
+  });
+
+  app.get('/api/tasks/:id/agent-runs/:runId/history', (req, res) => {
+    loadTasks(deps.state);
+    const task = deps.state.tasksCache.find((entry) => entry.id === req.params.id || entry.displayId === req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+    const run = listAgentRunsForTask(task.id).find((entry) => entry.id === req.params.runId);
+    if (!run) return res.status(404).json({ error: 'Run not found' });
+
+    const runDir = run.logPath ? path.dirname(run.logPath) : path.join(resolveFromDevFlowAppRoot('.devflow', 'runs'), run.id);
+    return res.json({
+      taskId: task.id,
+      runId: run.id,
+      files: getAgentRunHistoryPaths(runDir),
+    });
   });
 
   app.post('/api/tasks/:id/agent-runs/retry', (req, res) => {

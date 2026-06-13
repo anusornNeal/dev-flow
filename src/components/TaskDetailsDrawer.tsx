@@ -46,6 +46,15 @@ interface TaskDetailsDrawerProps {
   onCreateTask?: (task: Omit<Task, 'id' | 'createdAt' | 'updatedAt' | 'logs'>) => Promise<void>;
 }
 
+interface RunHistoryFiles {
+  runDir: string;
+  promptPath: string;
+  logPath: string;
+  launchMetadataPath: string;
+  outputSummaryPath: string;
+  resultPath: string;
+}
+
 export default function TaskDetailsDrawer({ 
   task, 
   allTasks = [], 
@@ -103,7 +112,9 @@ export default function TaskDetailsDrawer({
   const [newComment, setNewComment] = useState('');
   const [copied, setCopied] = useState(false);
   const [idCopied, setIdCopied] = useState(false);
+  const [copiedHistoryPath, setCopiedHistoryPath] = useState<string | null>(null);
   const [isAddingSubtask, setIsAddingSubtask] = useState(false);
+  const [runHistoryFiles, setRunHistoryFiles] = useState<RunHistoryFiles | null>(null);
 
   // Progressive disclosure state
   const [showAllFiles, setShowAllFiles] = useState(false);
@@ -155,6 +166,31 @@ export default function TaskDetailsDrawer({
       setEditedEffort(task.effort || '');
     }
   }, [task, isEditing]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setRunHistoryFiles(null);
+
+    const runId = task.latestAgentRun?.id;
+    if (!runId) return;
+
+    fetch(`/api/tasks/${task.id}/agent-runs/${runId}/history`)
+      .then(async (response) => {
+        if (!response.ok) return null;
+        return response.json();
+      })
+      .then((data) => {
+        if (cancelled || !data?.files) return;
+        setRunHistoryFiles(data.files);
+      })
+      .catch(() => {
+        if (!cancelled) setRunHistoryFiles(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [task.id, task.latestAgentRun?.id]);
 
   const handleSave = () => {
     if (!editedTitle.trim()) return;
@@ -297,6 +333,12 @@ export default function TaskDetailsDrawer({
     navigator.clipboard.writeText(idToCopy);
     setIdCopied(true);
     setTimeout(() => setIdCopied(false), 2000);
+  };
+
+  const handleCopyHistoryPath = (pathValue: string) => {
+    navigator.clipboard.writeText(pathValue);
+    setCopiedHistoryPath(pathValue);
+    setTimeout(() => setCopiedHistoryPath(null), 2000);
   };
 
   return (
@@ -1257,6 +1299,38 @@ export default function TaskDetailsDrawer({
             
             {openSections.has('activity') && (
               <div className="border-t border-[#ebdcb9] dark:border-[#584a3b] bg-[#fdfbf7]/50 dark:bg-[#292119]/50 p-4 space-y-4">
+            {runHistoryFiles && (
+              <div className="space-y-2">
+                <div className="text-[10px] font-mono uppercase tracking-widest text-[#8a6e5a] dark:text-[#f3eadf] font-extrabold">
+                  Run History Files
+                </div>
+                {[
+                  ['Run Folder', runHistoryFiles.runDir],
+                  ['Prompt', runHistoryFiles.promptPath],
+                  ['Launch', runHistoryFiles.launchMetadataPath],
+                  ['Summary', runHistoryFiles.outputSummaryPath],
+                  ['Result', runHistoryFiles.resultPath],
+                  ['Log', runHistoryFiles.logPath],
+                ].map(([label, pathValue]) => (
+                  <button
+                    key={label}
+                    type="button"
+                    onClick={() => handleCopyHistoryPath(pathValue)}
+                    className="w-full text-left bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 hover:bg-[#fffcf6] dark:hover:bg-[#1e1914] transition-colors cursor-pointer"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-[9px] font-mono uppercase text-[#8a6e5a] dark:text-[#d6b56d] font-extrabold">{label}</span>
+                      <span className="text-[9px] font-mono text-emerald-600 dark:text-[#e0a070] font-bold">
+                        {copiedHistoryPath === pathValue ? 'copied' : 'copy path'}
+                      </span>
+                    </div>
+                    <div className="mt-1 text-[10px] font-mono text-[#5c493c] dark:text-[#f3eadf] break-all">
+                      {pathValue}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
             {/* Event list */}
             <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
               {[...task.logs]

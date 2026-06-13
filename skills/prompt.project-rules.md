@@ -1,2 +1,1 @@
-## {{projectRules.title}}
-{{projectRules.workflow}}
+{{sections.projectRules}}

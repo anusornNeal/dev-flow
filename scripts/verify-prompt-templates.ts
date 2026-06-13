@@ -2,8 +2,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { interpolate, renderPromptTemplate, type PromptRenderContext } from '../src/server/services/promptTemplateService';
+import { interpolate, isPromptValuePresent, renderPromptTemplate, type PromptRenderContext } from '../src/server/services/promptTemplateService';
 import { getProjectRulesContext } from '../src/server/services/projectRulesService';
+import { renderTaskPrompt } from '../src/server/services/taskService';
 
 console.log('[verify] Testing prompt template interpolation with production-shaped context...');
 const fixtureLocalPath = path.join('fixtures', 'dev-flow');
@@ -61,6 +62,17 @@ const mockContext: PromptRenderContext = {
 const oldShapeResult = interpolate('{{task.description}} / {{project.localPath}} / {{task.checklist}}', mockContext as any);
 assert.equal(oldShapeResult, '(none) / (none) / (none)');
 
+assert.equal(isPromptValuePresent(null), false);
+assert.equal(isPromptValuePresent(undefined), false);
+assert.equal(isPromptValuePresent(''), false);
+assert.equal(isPromptValuePresent('   '), false);
+assert.equal(isPromptValuePresent('none'), false);
+assert.equal(isPromptValuePresent('(none)'), false);
+assert.equal(isPromptValuePresent('undefined'), false);
+assert.equal(isPromptValuePresent([]), false);
+assert.equal(isPromptValuePresent(['value']), true);
+assert.equal(isPromptValuePresent('low'), true);
+
 const checklistResult = interpolate('{{requirements.checklist}}', mockContext);
 assert.ok(checklistResult.includes('- [ ] Wire renderer to real context'));
 
@@ -117,5 +129,95 @@ assert.ok(!missingRender.usedSkills.includes('prompt.agent-specific.non-existent
 
 assert.ok(renderResult.content.includes('Work only from this prompt'));
 assert.ok(!renderResult.content.includes("repeat this loop until no 'todo' tasks remain"));
+
+console.log('[verify] Testing sparse prompt rendering omits none-like values...');
+const sparseContext: PromptRenderContext = {
+  run: { id: 'run-sparse' },
+  task: {
+    id: 'task-sparse',
+    title: 'Sparse Prompt Task',
+    status: 'todo',
+  },
+  assignment: {
+    agent: 'none',
+    model: '',
+    effort: undefined,
+  },
+  workspace: {
+    repo: 'https://github.com/anusornNeal/dev-flow',
+    localPath: fixtureLocalPath,
+  },
+  instruction: {
+    description: 'Keep only real fields in sparse prompt output.',
+    reasoning: '(none)',
+  },
+  requirements: {
+    acceptanceCriteria: '',
+    verification: null,
+    checklist: [],
+    targetFiles: [],
+  },
+  projectRules: getProjectRulesContext(),
+  repoContext: undefined,
+  orchestration: {
+    role: 'standalone',
+    hasSubtasks: false,
+    subtasks: [],
+  },
+  agent: 'Codex',
+  model: '',
+  effort: '',
+};
+
+const sparseRender = renderPromptTemplate('default', sparseContext);
+assert.ok(!sparseRender.content.includes('(none)'));
+assert.ok(!sparseRender.content.includes('**Acceptance Criteria:**'));
+assert.ok(!sparseRender.content.includes('**Verification:**'));
+assert.ok(!sparseRender.content.includes('**Reasoning:**'));
+assert.ok(!sparseRender.content.includes('**Target Files:**'));
+assert.ok(!sparseRender.content.includes('**Repository Notes:**'));
+assert.ok(!sparseRender.content.includes('Agent: none'));
+assert.ok(!sparseRender.content.includes('Model:'));
+assert.ok(!sparseRender.content.includes('Effort:'));
+assert.ok(!sparseRender.content.includes('**Branch:**'));
+assert.ok(sparseRender.content.includes('**Task:** Sparse Prompt Task'));
+assert.ok(sparseRender.content.includes('**Status:** todo'));
+assert.ok(sparseRender.content.includes('Keep only real fields in sparse prompt output.'));
+
+console.log('[verify] Testing real task prompt shares omission logic...');
+const sparseState = {
+  tasksCache: [{
+    id: 'task-sparse',
+    displayId: 'DVF-0121',
+    projectId: 'project-1',
+    title: 'Sparse Prompt Task',
+    status: 'todo',
+    priority: '',
+    description: 'Keep only real fields in sparse prompt output.',
+    reasoning: '(none)',
+    acceptanceCriteria: '',
+    verification: '',
+    checklist: [],
+    targetFiles: [],
+    repoContext: '',
+    branch: '',
+    agent: '',
+    model: '',
+    effort: '',
+    logs: [],
+  }],
+  projectsCache: [{
+    id: 'project-1',
+    repoUrl: 'https://github.com/anusornNeal/dev-flow',
+    localPath: fixtureLocalPath,
+  }],
+} as any;
+const taskPrompt = renderTaskPrompt(sparseState, 'task-sparse').renderResult.content;
+assert.ok(!taskPrompt.includes('(none)'));
+assert.ok(!taskPrompt.includes('**Acceptance Criteria:**'));
+assert.ok(!taskPrompt.includes('**Verification:**'));
+assert.ok(!taskPrompt.includes('**Reasoning:**'));
+assert.ok(!taskPrompt.includes('**Branch:**'));
+assert.ok(taskPrompt.includes('Keep only real fields in sparse prompt output.'));
 
 console.log('[verify] Prompt template coverage passed!');

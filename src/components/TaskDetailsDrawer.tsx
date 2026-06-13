@@ -999,10 +999,10 @@ export default function TaskDetailsDrawer({
                       <div 
                         key={item.id || item.text}
                         onClick={() => handleToggleChecklistItem(item.id || item.text)}
-                        className={`p-3 rounded-xl border flex items-start gap-2.5 cursor-pointer transition-all shadow-2xs select-none ${
+                        className={`py-2 px-1 border-b last:border-b-0 border-[#ebdcb9]/40 dark:border-[#584a3b]/40 flex items-start gap-2.5 cursor-pointer transition-colors select-none ${
                           item.completed 
-                            ? 'bg-[#e2f0dc]/45 dark:bg-[#292119]/45 border-[#bddda4]/50 dark:border-[#584a3b]/50 text-gray-400 dark:text-[#b8ab9f] line-through' 
-                            : 'bg-white dark:bg-[#292119] border-[#ebdcb9] dark:border-[#584a3b] text-[#4d3d32] dark:text-[#f3eadf] hover:bg-[#fffdfb] dark:hover:bg-[#292119] hover:border-[#c5b497] dark:hover:border-[#584a3b]'
+                            ? 'text-gray-400 dark:text-[#b8ab9f] line-through' 
+                            : 'text-[#4d3d32] dark:text-[#f3eadf] hover:bg-[#f4ebd9]/20 dark:hover:bg-[#3a2f26]/20'
                         }`}
                       >
                         <input

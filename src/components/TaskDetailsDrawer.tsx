@@ -578,11 +578,14 @@ export default function TaskDetailsDrawer({
                   onChange={(val) => setEditedEffort(val)}
                   options={[
                     { value: '', label: 'No Effort' },
-                    ...(editedAgent && editedModel ? (getModelConfig(editedAgent, editedModel)?.available_efforts || []).map(eff => ({
+                    ...(editedAgent && editedModel ? (getModelConfig(editedAgent, editedModel)?.availableEfforts || []).map(eff => ({
                       value: eff,
                       label: eff.charAt(0).toUpperCase() + eff.slice(1),
                       icon: <Zap size={11} className="text-[#d89745] dark:text-[#d6b56d]" />
-                    })) : [])
+                    })) : []),
+                    ...((editedEffort && editedAgent && editedModel && !getModelConfig(editedAgent, editedModel)?.availableEfforts.includes(editedEffort as any)) 
+                      ? [{ value: editedEffort, label: `${editedEffort} (Unsupported)`, icon: <Zap size={11} className="text-red-500" /> }] 
+                      : [])
                   ]}
                 />
               </div>

@@ -4,6 +4,7 @@ import type { AppState } from '../types';
 import { VALID_AGENTS, VALID_EFFORTS, VALID_MODELS, VALID_PRIORITIES, VALID_STATUSES } from '../constants';
 import { validateEnum, validateString } from '../validation';
 import { buildLaunchMetadataBlock, resolveAgentLaunchPlan } from './agentLaunchConfig';
+import { getModelConfig } from '../../lib/agentsConfig';
 import { resolveAgentExecutionMode } from './agentRunService';
 import { getProjectRulesContext } from './projectRulesService';
 import { renderPromptTemplate } from './promptTemplateService';
@@ -94,6 +95,12 @@ export function validateAgentParams(item: any, tasks: any[]): string | null {
   }
   if (item.model && !VALID_MODELS.includes(item.model)) {
     return `Invalid model: ${item.model}. Must be one of: ${VALID_MODELS.join(', ')}`;
+  }
+  if (item.agent && item.model) {
+    const config = getModelConfig(item.agent, item.model);
+    if (config && item.effort && !config.availableEfforts.includes(item.effort)) {
+      return `Invalid effort '${item.effort}' for model '${item.model}'. Must be one of: ${config.availableEfforts.join(', ')}`;
+    }
   }
   if (item.agent && item.model) {
     const plan = resolveAgentLaunchPlan({

@@ -154,7 +154,7 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
       method: 'POST',
       path: '/api/tasks/:id/assign',
       description: 'มอบหมาย Agent ผู้รับผิดชอบ หรือกำหนด AI Spec และพละกำลังความเพียรประมวลผลเดี่ยวๆ ทันที',
-      payload: '{\n  "agent": "Codex" | "Antigravity" | "Claude" (Optional),\n  "model": "ชื่อโมเดล AI Spec (Optional)",\n  "effort": "low" | "medium" | "high" | "xhigh" (Optional)\n}',
+      payload: '{\n  "agent": "Codex" | "Antigravity" | "Claude" (Optional),\n  "model": "ชื่อโมเดล AI Spec (Optional)",\n  "effort": "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" (Optional)\n}',
       response: 'JSON Object ของ Task อัปเดตข้อมูลผู้รับมอบหมายเรียบร้อยแล้ว',
       example: 'fetch(\'/api/tasks/task-1/assign\', {\n  method: \'POST\',\n  headers: { \'Content-Type\': \'application/json\' },\n  body: JSON.stringify({\n    agent: \'Antigravity\',\n    model: \'Gemini 3.1 Pro\',\n    effort: \'medium\'\n  })\n}).then(res => res.json());'
     },
@@ -169,7 +169,7 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
       method: 'PUT',
       path: '/api/tasks/:id',
       description: 'อัปเดตข้อมูลย่อยของการ์ดงาน เช่น เปลี่ยนสถานะเลน, แก้ไข checklist, เพิ่ม logs หรือบันทึกโน้ต',
-      payload: '{\n  "status": "in-progress",\n  "priority": "high",\n  "checklist": [...],\n  "agent": "Codex" | "Antigravity" | "Claude" (Optional),\n  "model": "ชื่อโมเดล AI Spec (Optional)",\n  "effort": "low" | "medium" | "high" | "xhigh" (Optional),\n  "logs": [...]\n}',
+      payload: '{\n  "status": "in-progress",\n  "priority": "high",\n  "checklist": [...],\n  "agent": "Codex" | "Antigravity" | "Claude" (Optional),\n  "model": "ชื่อโมเดล AI Spec (Optional)",\n  "effort": "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" (Optional),\n  "logs": [...]\n}',
       response: 'JSON Object ของ Task ที่ผ่านการอัปเดตเรียบร้อย',
       example: 'fetch(\'/api/tasks/task-1\', {\n  method: \'PUT\',\n  headers: { \'Content-Type\': \'application/json\' },\n  body: JSON.stringify({ status: \'done\' })\n}).then(res => res.json());'
     },
@@ -300,7 +300,7 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
                   <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">checklist</strong>: โครงสร้าง Mini-Tasks ย่อยภายในแต่ละตั๋ว</li>
                   <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">agent</strong>: เอเจนต์ที่รับผิดชอบ <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">"Codex" | "Antigravity" | "Claude"</code></li>
                   <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">model</strong>: ชื่อตัวแปรโมเดล AI Spec เช่น คู่ขนานตามโมเดลที่เลือก</li>
-                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">effort</strong>: ระดับพละกำลังความเพียรประมวลผล <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">"low" | "medium" | "high" | "xhigh"</code></li>
+                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">effort</strong>: ระดับพละกำลังความเพียรประมวลผล <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">"none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"</code></li>
                   <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">reasoning</strong>: เหตุผลหรือบริบทที่มาของงาน</li>
                   <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">acceptanceCriteria</strong>: เกณฑ์การตรวจรับงาน (Acceptance Criteria)</li>
                   <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">verification</strong>: ขั้นตอนการตรวจสอบหรือทดสอบว่าเสร็จสมบูรณ์</li>

@@ -50,7 +50,7 @@ export interface Task {
   };
   model?: string; // Model name
   parentId?: string; // ID of the parent task if this is a subtask
-  effort?: string; // Effort level (low | medium | high | xhigh)
+  effort?: string; // Effort level (none | minimal | low | medium | high | xhigh | max)
   reasoning?: string;
   acceptanceCriteria?: string;
   verification?: string;

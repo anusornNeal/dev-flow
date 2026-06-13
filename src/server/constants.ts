@@ -1,5 +1,5 @@
 export const VALID_AGENTS = ['Codex', 'Antigravity', 'Claude'];
-export const VALID_EFFORTS = ['low', 'medium', 'high', 'xhigh'];
+export const VALID_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 export const VALID_MODELS = [
   'GPT-5.5', 'GPT-5.4', 'GPT-5.4 Mini',
   'Gemini 3.5 Flash', 'Gemini 3.1 Pro',

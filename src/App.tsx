@@ -38,6 +38,7 @@ import { BoardLane } from './components/BoardLane';
 import BatchImportModal from './components/BatchImportModal';
 import MarkdownRenderer from './components/MarkdownRenderer';
 import AutoWorkToggle from './components/AutoWorkToggle';
+import ConfirmModal from './components/ConfirmModal';
 
 // Standardized project lanes themed cleanly
 const COLUMNS: Column[] = [
@@ -57,6 +58,7 @@ export default function App() {
   });
   const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
   const [draggedOverColumn, setDraggedOverColumn] = useState<TaskStatus | null>(null);
+  const [pendingEmergencyMove, setPendingEmergencyMove] = useState<{ sourceTask: Task, status: TaskStatus } | null>(null);
 
   // Ref to track tasks currently moving to prevent polling race conditions
   const pendingMovesRef = useRef<Set<string>>(new Set());
@@ -259,38 +261,8 @@ export default function App() {
     e.dataTransfer.setData('text/plain', id);
   };
 
-  // Handle Drag Drops
-  const handleDrop = async (e: React.DragEvent, status: TaskStatus) => {
-    e.preventDefault();
-    const taskId = draggedTaskId || e.dataTransfer.getData('text/plain');
-    if (!taskId) return;
-
-    const sourceTask = tasks.find(t => t.id === taskId);
-    if (!sourceTask) return;
-
-    // Prevent duplicate logs if same lane dropped
-    if (sourceTask.status === status) {
-      setDraggedTaskId(null);
-      setDraggedOverColumn(null);
-      return;
-    }
-
-    if (!isValidTransition(sourceTask.status, status)) {
-      setPersistenceError(getValidationErrorMessage(sourceTask.status, status));
-      setDraggedTaskId(null);
-      setDraggedOverColumn(null);
-      return;
-    }
-
-    if (sourceTask.status === 'in-progress') {
-      const lockOverride = window.prompt("Task is locked. Type 'Emergency Move' to force it:");
-      if (lockOverride !== 'Emergency Move') {
-        setDraggedTaskId(null);
-        setDraggedOverColumn(null);
-        return;
-      }
-    }
-
+  const executeTaskMove = async (sourceTask: Task, status: TaskStatus) => {
+    const taskId = sourceTask.id;
     const modifiedLogs: LogEntry[] = [
       ...sourceTask.logs,
       {
@@ -364,6 +336,39 @@ export default function App() {
       // Clear pending move whether success or failure
       pendingMovesRef.current.delete(taskId);
     }
+  };
+
+  // Handle Drag Drops
+  const handleDrop = async (e: React.DragEvent, status: TaskStatus) => {
+    e.preventDefault();
+    const taskId = draggedTaskId || e.dataTransfer.getData('text/plain');
+    if (!taskId) return;
+
+    const sourceTask = tasks.find(t => t.id === taskId);
+    if (!sourceTask) return;
+
+    // Prevent duplicate logs if same lane dropped
+    if (sourceTask.status === status) {
+      setDraggedTaskId(null);
+      setDraggedOverColumn(null);
+      return;
+    }
+
+    if (!isValidTransition(sourceTask.status, status)) {
+      setPersistenceError(getValidationErrorMessage(sourceTask.status, status));
+      setDraggedTaskId(null);
+      setDraggedOverColumn(null);
+      return;
+    }
+
+    if (sourceTask.status === 'in-progress') {
+      setPendingEmergencyMove({ sourceTask, status });
+      setDraggedTaskId(null);
+      setDraggedOverColumn(null);
+      return;
+    }
+
+    await executeTaskMove(sourceTask, status);
   };
 
   const handleCreateTask = async (newTaskProps: Omit<Task, 'id' | 'createdAt' | 'updatedAt' | 'logs'>) => {
@@ -681,6 +686,20 @@ export default function App() {
             setIsSettingsModalOpen(false);
             fetchSettingsFromApi();
           }}
+        />
+      )}
+
+      {/* 9. Emergency Move Modal */}
+      {pendingEmergencyMove && (
+        <ConfirmModal
+          title="Emergency Move"
+          message="Task is currently locked in progress. Are you sure you want to force move it?"
+          onConfirm={() => {
+            executeTaskMove(pendingEmergencyMove.sourceTask, pendingEmergencyMove.status);
+            setPendingEmergencyMove(null);
+          }}
+          onCancel={() => setPendingEmergencyMove(null)}
+          confirmText="Force Move"
         />
       )}
     </div>

@@ -59,6 +59,7 @@ export default function App() {
   const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
   const [draggedOverColumn, setDraggedOverColumn] = useState<TaskStatus | null>(null);
   const [pendingEmergencyMove, setPendingEmergencyMove] = useState<{ sourceTask: Task, status: TaskStatus } | null>(null);
+  const [taskToDelete, setTaskToDelete] = useState<string | null>(null);
 
   // Ref to track tasks currently moving to prevent polling race conditions
   const pendingMovesRef = useRef<Set<string>>(new Set());
@@ -473,7 +474,7 @@ export default function App() {
     }
   };
 
-  const handleDeleteTask = async (id: string) => {
+  const executeDeleteTask = async (id: string) => {
     // Optimistic delete
     setTasks(prev => prev.filter(t => t.id !== id));
     if (selectedTask && selectedTask.id === id) {
@@ -493,6 +494,10 @@ export default function App() {
       console.error('API deletion sync failed:', err);
       setPersistenceError('Task deletion failed before the backend confirmed persistence.');
     }
+  };
+
+  const handleDeleteTask = (id: string) => {
+    setTaskToDelete(id);
   };
 
   // Filter Tasks
@@ -700,6 +705,20 @@ export default function App() {
           }}
           onCancel={() => setPendingEmergencyMove(null)}
           confirmText="Force Move"
+        />
+      )}
+
+      {/* 10. Delete Task Modal */}
+      {taskToDelete && (
+        <ConfirmModal
+          title="Delete Task"
+          message="Are you sure you want to delete this task? This action cannot be undone."
+          onConfirm={() => {
+            executeDeleteTask(taskToDelete);
+            setTaskToDelete(null);
+          }}
+          onCancel={() => setTaskToDelete(null)}
+          confirmText="Delete"
         />
       )}
     </div>

@@ -721,72 +721,54 @@ export default function TaskDetailsDrawer({
           ) : (
             /* ================= PREVIEW / VIEW MODE ================= */
             <div className="space-y-6 text-[#5c493c] dark:text-[#f3eadf]">
-              <div>
-                <div className="flex items-center gap-1.5 mb-2 text-xs font-mono">
-                  <span className={`w-1.5 h-1.5 rounded-full ${
-                    task.priority === 'high' ? 'bg-[#de6b48] dark:bg-[#e0a070]' : task.priority === 'medium' ? 'bg-[#e5a93b] dark:bg-[#e0a070]' : 'bg-[#7dad71] dark:bg-[#e0a070]'
-                  }`} />
-                  <span className="text-[10px] uppercase font-bold tracking-wider text-[#9b8575] dark:text-[#d6b56d]">
-                    {task.priority || 'low'} Severity level
-                  </span>
-                </div>
+              <div className="space-y-2">
                 <h2 className="text-sm font-extrabold text-[#3a2f26] dark:text-[#f3eadf] font-sans tracking-tight leading-snug">
                   {task.title}
                 </h2>
-              </div>
-
-              {/* Status Metadata Panel */}
-              <div className="bg-[#fffdfa] dark:bg-[#292119] p-3.5 rounded-2xl border border-[#ebdcb9] dark:border-[#584a3b] text-xs font-mono flex items-center justify-between shadow-xs">
-                <div className="flex items-center gap-2">
-                  <Database size={13} className="text-[#bf8a50] dark:text-[#d6b56d]" />
-                  <span className="text-[10px] uppercase text-[#816c5b] dark:text-[#f3eadf] font-bold">Workspace Lane:</span>
+                <div className="flex items-center gap-2 flex-wrap">
+                  {/* Status chip */}
                   <span className={`text-[9px] uppercase font-bold px-2 py-0.5 rounded-lg border ${
                     task.status === 'done' ? 'bg-[#e2f0dc] dark:bg-[#292119] text-[#4d7e35] dark:text-[#f3eadf] border-[#bddda4] dark:border-[#584a3b]' :
-                    task.status === 'in-progress' ? 'bg-[#ffecca] dark:bg-[#292119] text-[#a46c24] dark:text-[#f3eadf] border-[#f0cca3] dark:border-[#584a3b]' : 
+                    task.status === 'in-progress' ? 'bg-[#ffecca] dark:bg-[#292119] text-[#a46c24] dark:text-[#f3eadf] border-[#f0cca3] dark:border-[#584a3b]' :
                     'bg-[#f4ebd9]/60 dark:bg-[#292119]/60 text-[#715c4d] dark:text-[#f3eadf] border-[#ebdcb9] dark:border-[#584a3b]'
                   }`}>{task.status}</span>
-                </div>
-                <div className="text-[9px] text-[#9b8575] dark:text-[#d6b56d] font-bold">
-                  born {new Date(task.createdAt).toLocaleDateString()}
+                  {/* Priority chip */}
+                  <span className={`text-[9px] uppercase font-bold px-2 py-0.5 rounded-lg border flex items-center gap-1 ${
+                    task.priority === 'high' ? 'bg-red-50 dark:bg-[#292119] text-red-600 dark:text-[#f3eadf] border-red-200 dark:border-[#584a3b]' :
+                    task.priority === 'medium' ? 'bg-amber-50 dark:bg-[#292119] text-amber-700 dark:text-[#f3eadf] border-amber-200 dark:border-[#584a3b]' :
+                    'bg-emerald-50 dark:bg-[#292119] text-emerald-700 dark:text-[#f3eadf] border-emerald-200 dark:border-[#584a3b]'
+                  }`}>
+                    <span className={`w-1.5 h-1.5 rounded-full ${
+                      task.priority === 'high' ? 'bg-red-500' : task.priority === 'medium' ? 'bg-amber-500' : 'bg-emerald-500'
+                    }`} />
+                    {task.priority || 'low'}
+                  </span>
+                  <span className="text-[9px] text-[#9b8575] dark:text-[#d6b56d] font-mono">
+                    born {new Date(task.createdAt).toLocaleDateString()}
+                  </span>
                 </div>
               </div>
 
-              {/* Agent & Model Info Panel */}
+
+              {/* Agent Strip — compact 1-line pill */}
               {(task.agent || task.model) && (
-                <div className="bg-[#fcfbf9]/70 dark:bg-[#292119]/70 p-4 rounded-2xl border border-[#ebdcb9] dark:border-[#584a3b] text-xs font-mono flex flex-col gap-3 shadow-xs">
-                  <div className="flex flex-wrap gap-4 items-center justify-between">
-                    {task.agent && (
-                      <div className="flex items-center gap-2">
-                        <span className="text-[10px] uppercase text-[#816c5b] dark:text-[#f3eadf] font-extrabold">Agent:</span>
-                        <span className={`flex items-center text-[9.5px] uppercase font-bold px-2 py-0.5 rounded-lg border ${
-                          task.agent === 'Codex' ? 'bg-[#e0eafc] dark:bg-[#292119] text-[#1a56db] dark:text-[#f3eadf] border-[#bcccf5] dark:border-[#584a3b]' :
-                          task.agent === 'Antigravity' ? 'bg-[#fae8ff] dark:bg-[#292119] text-[#86198f] dark:text-[#f3eadf] border-[#f5d0fe] dark:border-[#584a3b]' :
-                          'bg-[#fef3c7] dark:bg-[#292119] text-[#92400e] dark:text-[#f3eadf] border-[#fde68a] dark:border-[#584a3b]'
-                        }`}>
-                          <AgentLogo agent={task.agent} size={11} className="mr-1" />
-                          {task.agent}
-                        </span>
-                      </div>
-                    )}
-                    {task.model && (
-                      <div className="flex items-center gap-2">
-                        <span className="text-[10px] uppercase text-[#816c5b] dark:text-[#f3eadf] font-extrabold">Model Spec:</span>
-                        <span className="bg-[#f0ece3] dark:bg-[#292119] text-[#4d3d32] dark:text-[#f3eadf] border border-[#d2c9b4] dark:border-[#584a3b] text-[9.5px] font-mono font-bold px-2 py-0.5 rounded-lg">
-                          {task.model}
-                        </span>
-                      </div>
-                    )}
-                    {task.effort && (
-                      <div className="flex items-center gap-2">
-                        <span className="text-[10px] uppercase text-[#816c5b] dark:text-[#f3eadf] font-extrabold">Effort:</span>
-                        <span className="bg-[#f8fafc] dark:bg-[#292119] text-[#475569] dark:text-[#f3eadf] border border-[#e2e8f0] dark:border-[#584a3b] text-[9.5px] font-mono font-bold px-2 py-0.5 rounded-lg uppercase">
-                          ⚡ {task.effort}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-
-
+                <div className="flex items-center gap-2 px-3 py-2 bg-[#fdfbf7]/70 dark:bg-[#292119]/70 border border-[#ebdcb9]/50 dark:border-[#584a3b]/50 rounded-xl text-[10px] font-mono w-fit">
+                  {task.agent && (
+                    <>
+                      <AgentLogo agent={task.agent} size={11} className="shrink-0" />
+                      <span className="font-bold text-[#5c493c] dark:text-[#f3eadf]">{task.agent}</span>
+                    </>
+                  )}
+                  {task.agent && task.model && <span className="text-[#c4b3a4] dark:text-[#584a3b]">·</span>}
+                  {task.model && (
+                    <span className="text-[#8a6e5a] dark:text-[#d6b56d]">{task.model}</span>
+                  )}
+                  {task.effort && (
+                    <>
+                      <span className="text-[#c4b3a4] dark:text-[#584a3b]">·</span>
+                      <span className="text-[#8a6e5a] dark:text-[#d6b56d]">⚡ {task.effort}</span>
+                    </>
+                  )}
                 </div>
               )}
 

@@ -98,8 +98,8 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
       }`}
       id={`task-card-${task.id}`}
     >
-      {/* Warm Priority Left Indicator Slider for non-active cards */}
-      {!isDone && !isInProgress && (
+      {/* Warm Priority Left Indicator Slider */}
+      {!isDone && (
         <span 
           className={`w-1 h-16 absolute left-0 top-1/2 -translate-y-1/2 rounded-r-md ${
             task.priority === 'high' ? 'bg-[#de6b48] dark:bg-[#df6b4f]' : 

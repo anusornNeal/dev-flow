@@ -488,7 +488,7 @@ export default function Sidebar({
         {/* Priority Filter */}
         <div className="space-y-2">
           <label className="text-[9px] font-bold text-[#8C7565] dark:text-[#f3eadf] uppercase tracking-widest flex items-center gap-1.5">
-            <Flame size={12} className="text-[#de6b48] dark:text-[#d6b56d]" /> Task Urgency
+            <Flame size={12} className="text-[#de6b48] dark:text-[#df6b4f]" /> Task Urgency
           </label>
           <div className="space-y-1">
             <button
@@ -506,12 +506,12 @@ export default function Sidebar({
               onClick={() => setSelectedPriority('high')}
               className={`w-full text-left text-[11px] px-3 py-2 rounded-xl flex items-center justify-between font-mono transition-all border ${
                 selectedPriority === 'high' 
-                  ? 'bg-[#ffdacf] dark:bg-[#292119] border-[#ffa995] dark:border-[#584a3b] text-[#b43a20] dark:text-[#f3eadf] font-extrabold shadow-2xs' 
+                  ? 'bg-[#ffdacf] dark:bg-[#292119] border-[#ffa995] dark:border-[#584a3b] text-[#b43a20] dark:text-[#df6b4f] font-extrabold shadow-2xs' 
                   : 'text-[#6e584a] dark:text-[#f3eadf] border-transparent dark:border-transparent hover:bg-[#fff9f1] dark:hover:bg-[#292119] hover:text-[#534135] dark:text-[#f3eadf] dark:hover:text-[#f3eadf]'
               }`}
             >
               <div className="flex items-center gap-2">
-                <span className="w-1.5 h-1.5 rounded-full bg-[#de6b48] dark:bg-[#e0a070]" />
+                <span className="w-1.5 h-1.5 rounded-full bg-[#de6b48] dark:bg-[#df6b4f]" />
                 <span>High Severity</span>
               </div>
               <span className="text-[9px] bg-[#ebd6bc]/60 dark:bg-[#292119]/60 text-[#7c624d] dark:text-[#f3eadf] px-1.5 py-0.5 rounded-full font-bold">{highPriorityCount}</span>
@@ -520,12 +520,12 @@ export default function Sidebar({
               onClick={() => setSelectedPriority('medium')}
               className={`w-full text-left text-[11px] px-3 py-2 rounded-xl flex items-center justify-between font-mono transition-all border ${
                 selectedPriority === 'medium' 
-                  ? 'bg-[#ffecca] dark:bg-[#292119] border-[#f0cca3] dark:border-[#584a3b] text-[#a46c24] dark:text-[#f3eadf] font-extrabold shadow-2xs' 
+                  ? 'bg-[#ffecca] dark:bg-[#292119] border-[#f0cca3] dark:border-[#584a3b] text-[#a46c24] dark:text-[#d6a549] font-extrabold shadow-2xs' 
                   : 'text-[#6e584a] dark:text-[#f3eadf] border-transparent dark:border-transparent hover:bg-[#fff9f1] dark:hover:bg-[#292119] hover:text-[#534135] dark:text-[#f3eadf] dark:hover:text-[#f3eadf]'
               }`}
             >
               <div className="flex items-center gap-2">
-                <span className="w-1.5 h-1.5 rounded-full bg-[#e5a93b] dark:bg-[#e0a070]" />
+                <span className="w-1.5 h-1.5 rounded-full bg-[#e5a93b] dark:bg-[#d6a549]" />
                 <span>Medium Severity</span>
               </div>
               <span className="text-[9px] bg-[#ebd6bc]/60 dark:bg-[#292119]/60 text-[#7c624d] dark:text-[#f3eadf] px-1.5 py-0.5 rounded-full font-bold">{mediumPriorityCount}</span>
@@ -534,12 +534,12 @@ export default function Sidebar({
               onClick={() => setSelectedPriority('low')}
               className={`w-full text-left text-[11px] px-3 py-2 rounded-xl flex items-center justify-between font-mono transition-all border ${
                 selectedPriority === 'low' 
-                  ? 'bg-[#e2f0dc] dark:bg-[#292119] border-[#bddda4] dark:border-[#584a3b] text-[#4d7e35] dark:text-[#f3eadf] font-extrabold shadow-2xs' 
+                  ? 'bg-[#e2f0dc] dark:bg-[#292119] border-[#bddda4] dark:border-[#584a3b] text-[#4d7e35] dark:text-[#8fce7c] font-extrabold shadow-2xs' 
                   : 'text-[#6e584a] dark:text-[#f3eadf] border-transparent dark:border-transparent hover:bg-[#fff9f1] dark:hover:bg-[#292119] hover:text-[#534135] dark:text-[#f3eadf] dark:hover:text-[#f3eadf]'
               }`}
             >
               <div className="flex items-center gap-2">
-                <span className="w-1.5 h-1.5 rounded-full bg-[#7dad71] dark:bg-[#e0a070]" />
+                <span className="w-1.5 h-1.5 rounded-full bg-[#7dad71] dark:bg-[#8fce7c]" />
                 <span>Low Severity</span>
               </div>
               <span className="text-[9px] bg-[#ebd6bc]/60 dark:bg-[#292119]/60 text-[#7c624d] dark:text-[#f3eadf] px-1.5 py-0.5 rounded-full font-bold">{lowPriorityCount}</span>

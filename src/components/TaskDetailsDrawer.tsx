@@ -855,9 +855,9 @@ export default function TaskDetailsDrawer({
                   }`}>{task.status}</span>
                   {/* Priority chip */}
                   <span className={`inline-flex items-center justify-center leading-none text-[9px] uppercase font-bold px-2 py-1 rounded-lg border gap-1.5 ${
-                    task.priority === 'high' ? 'bg-red-50 dark:bg-[#292119] text-red-600 dark:text-[#f3eadf] border-red-200 dark:border-[#584a3b]' :
-                    task.priority === 'medium' ? 'bg-amber-50 dark:bg-[#292119] text-amber-700 dark:text-[#f3eadf] border-amber-200 dark:border-[#584a3b]' :
-                    'bg-emerald-50 dark:bg-[#292119] text-emerald-700 dark:text-[#f3eadf] border-emerald-200 dark:border-[#584a3b]'
+                    task.priority === 'high' ? 'bg-red-50 dark:bg-[#3d241d] text-red-600 dark:text-[#e07b69] border-red-200 dark:border-[#8f4133]' :
+                    task.priority === 'medium' ? 'bg-amber-50 dark:bg-[#3b2b1a] text-amber-700 dark:text-[#e6b96e] border-amber-200 dark:border-[#8f6833]' :
+                    'bg-emerald-50 dark:bg-[#1f2e1a] text-emerald-700 dark:text-[#90cf7e] border-emerald-200 dark:border-[#528a3b]'
                   }`}>
                     <span className={`w-1.5 h-1.5 rounded-full ${
                       task.priority === 'high' ? 'bg-red-500' : task.priority === 'medium' ? 'bg-amber-500' : 'bg-emerald-500'

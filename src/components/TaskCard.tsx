@@ -102,9 +102,9 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
       {!isDone && !isInProgress && (
         <span 
           className={`w-1 h-8 absolute left-0 top-1/2 -translate-y-1/2 rounded-r-md ${
-            task.priority === 'high' ? 'bg-[#de6b48] dark:bg-[#e0a070]' : 
-            task.priority === 'medium' ? 'bg-[#e5a93b] dark:bg-[#e0a070]' : 
-            'bg-[#7dad71] dark:bg-[#e0a070]'
+            task.priority === 'high' ? 'bg-[#de6b48] dark:bg-[#df6b4f]' : 
+            task.priority === 'medium' ? 'bg-[#e5a93b] dark:bg-[#d6a549]' : 
+            'bg-[#7dad71] dark:bg-[#8fce7c]'
           }`}
         />
       )}
@@ -114,7 +114,7 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
           {/* Prominent Task ID & Locked Agent */}
           <div className="flex items-center gap-2">
             <div 
-              className="text-[15px] font-mono font-black text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d] cursor-pointer hover:bg-[#ebdcb9] dark:bg-[#584a3b]/40 dark:hover:bg-[#584a3b]/40 px-1.5 -ml-1.5 py-0.5 rounded-md transition-colors flex items-center"
+              className="text-[15px] font-mono font-black text-[#d89745] dark:text-[#e0a070] cursor-pointer hover:bg-[#ebdcb9] dark:hover:bg-[#584a3b]/40 px-1.5 -ml-1.5 py-0.5 rounded-md transition-colors flex items-center"
               onClick={(e) => {
                 e.stopPropagation();
                 handleCopyId(e as any);
@@ -206,9 +206,9 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
             {/* Priority */}
             <div className={`w-2 h-2 rounded-full shrink-0 ${
               isDone ? 'bg-gray-300 dark:bg-[#b8ab9f]' :
-              task.priority === 'high' ? 'bg-[#e05230] dark:bg-[#e0a070]' :
-              task.priority === 'medium' ? 'bg-[#d28b26] dark:bg-[#e0a070]' :
-              'bg-[#5b8c47] dark:bg-[#e0a070]'
+              task.priority === 'high' ? 'bg-[#e05230] dark:bg-[#df6b4f]' :
+              task.priority === 'medium' ? 'bg-[#d28b26] dark:bg-[#d6a549]' :
+              'bg-[#5b8c47] dark:bg-[#8fce7c]'
             }`} title={`Priority: ${task.priority}`} />
 
             {/* Files */}

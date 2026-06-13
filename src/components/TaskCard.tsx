@@ -75,6 +75,36 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
   const settledRunBadge = latestRun && !task.activeAgent && ['failed', 'cancelled', 'succeeded'].includes(latestRun.status)
     ? latestRun
     : null;
+  const runStatusLabel = latestRun
+    ? latestRun.status === 'queued'
+      ? 'Ready'
+      : latestRun.status === 'starting'
+        ? 'Launching'
+        : latestRun.status === 'running'
+          ? 'Running'
+          : latestRun.status === 'succeeded'
+            ? 'Ready for review'
+            : latestRun.status === 'failed'
+              ? 'Failed'
+              : /stale|timed out|timeout/i.test(latestRun.errorMessage || '')
+                ? 'Timed out'
+                : 'Stopped'
+    : task.agent
+      ? 'Not ready'
+      : null;
+  const runStatusTone = latestRun
+    ? latestRun.status === 'queued'
+      ? 'bg-[#fff5e5] text-[#935919] border-[#fde5bd] dark:bg-[#3a2f26] dark:text-[#f3eadf] dark:border-[#584a3b]'
+      : latestRun.status === 'starting'
+        ? 'bg-[#fff5e5] text-[#935919] border-[#fde5bd] dark:bg-[#3a2f26] dark:text-[#f3eadf] dark:border-[#584a3b]'
+        : latestRun.status === 'running'
+          ? 'bg-[#fff5e5] text-[#935919] border-[#fde5bd] dark:bg-[#3a2f26] dark:text-[#f3eadf] dark:border-[#584a3b]'
+          : latestRun.status === 'succeeded'
+            ? 'bg-[#edf7ed] text-[#427931] border-[#c9e7cb] dark:bg-[#292119] dark:text-[#f3eadf] dark:border-[#584a3b]'
+            : latestRun.status === 'failed'
+              ? 'bg-[#fff0ed] text-[#b4432d] border-[#f2c2b8] dark:bg-[#292119] dark:text-[#f3eadf] dark:border-[#584a3b]'
+              : 'bg-[#f2ece5] text-[#6d5a4d] border-[#d6cbbe] dark:bg-[#292119] dark:text-[#f3eadf] dark:border-[#584a3b]'
+    : 'bg-[#f2ece5] text-[#6d5a4d] border-[#d6cbbe] dark:bg-[#292119] dark:text-[#f3eadf] dark:border-[#584a3b]';
 
 
 
@@ -175,6 +205,19 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
               <AgentLogo agent={task.activeAgent} size={9} className="mr-1" />
               <span>{task.activeAgent}</span>
             </span>
+          </div>
+        )}
+
+        {runStatusLabel && (
+          <div className="mb-3 space-y-1">
+            <div className={`inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded-lg border text-[9px] font-mono font-bold ${runStatusTone}`}>
+              <span>{runStatusLabel}</span>
+            </div>
+            {settledRunBadge?.errorMessage && (
+              <div className="text-[9px] font-mono text-[#8a6e5a] dark:text-[#d6b56d] line-clamp-2">
+                {settledRunBadge.errorMessage}
+              </div>
+            )}
           </div>
         )}
 

@@ -115,6 +115,7 @@ export default function TaskDetailsDrawer({
   const [copiedHistoryPath, setCopiedHistoryPath] = useState<string | null>(null);
   const [isAddingSubtask, setIsAddingSubtask] = useState(false);
   const [runHistoryFiles, setRunHistoryFiles] = useState<RunHistoryFiles | null>(null);
+  const [isRetryingRun, setIsRetryingRun] = useState(false);
 
   // Progressive disclosure state
   const [showAllFiles, setShowAllFiles] = useState(false);
@@ -339,6 +340,46 @@ export default function TaskDetailsDrawer({
     navigator.clipboard.writeText(pathValue);
     setCopiedHistoryPath(pathValue);
     setTimeout(() => setCopiedHistoryPath(null), 2000);
+  };
+
+  const latestRun = task.latestAgentRun;
+  const runStatusLabel = latestRun
+    ? latestRun.status === 'queued'
+      ? 'Ready'
+      : latestRun.status === 'starting'
+        ? 'Launching'
+        : latestRun.status === 'running'
+          ? 'Running'
+          : latestRun.status === 'succeeded'
+            ? 'Ready for review'
+            : latestRun.status === 'failed'
+              ? 'Failed'
+              : /stale|timed out|timeout/i.test(latestRun.errorMessage || '')
+                ? 'Timed out'
+                : 'Stopped'
+    : null;
+  const canRetryLatestRun = !!latestRun && !task.activeAgent && ['failed', 'cancelled'].includes(latestRun.status);
+
+  const handleRetryLatestRun = async () => {
+    if (!latestRun || isRetryingRun) return;
+    setIsRetryingRun(true);
+    try {
+      const response = await fetch(`/api/tasks/${task.id}/agent-runs/retry`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const body = await response.json();
+      if (!response.ok) {
+        throw new Error(body?.error || `Retry failed with status ${response.status}`);
+      }
+      if (body?.task) {
+        onUpdate(body.task);
+      }
+    } catch (error) {
+      console.error('Failed to retry latest run:', error);
+    } finally {
+      setIsRetryingRun(false);
+    }
   };
 
   return (
@@ -1299,6 +1340,35 @@ export default function TaskDetailsDrawer({
             
             {openSections.has('activity') && (
               <div className="border-t border-[#ebdcb9] dark:border-[#584a3b] bg-[#fdfbf7]/50 dark:bg-[#292119]/50 p-4 space-y-4">
+            {latestRun && (
+              <div className="bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-2xl p-3 space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-[10px] font-mono uppercase tracking-widest text-[#8a6e5a] dark:text-[#f3eadf] font-extrabold">
+                      Latest Auto Work Status
+                    </div>
+                    <div className="text-[12px] font-bold text-[#5c493c] dark:text-[#f3eadf]">
+                      {runStatusLabel}
+                    </div>
+                  </div>
+                  {canRetryLatestRun && (
+                    <button
+                      type="button"
+                      onClick={handleRetryLatestRun}
+                      disabled={isRetryingRun}
+                      className="px-3 py-1.5 rounded-xl bg-[#3c829e] dark:bg-[#e0a070] text-white dark:text-[#292119] text-[10px] font-mono font-extrabold hover:bg-[#2e6d87] dark:hover:bg-[#d6b56d] transition-colors cursor-pointer disabled:opacity-60"
+                    >
+                      {isRetryingRun ? 'Retrying...' : 'Retry Run'}
+                    </button>
+                  )}
+                </div>
+                {latestRun.errorMessage && (
+                  <div className="text-[10px] font-mono text-[#8a6e5a] dark:text-[#d6b56d] break-words">
+                    {latestRun.errorMessage}
+                  </div>
+                )}
+              </div>
+            )}
             {runHistoryFiles && (
               <div className="space-y-2">
                 <div className="text-[10px] font-mono uppercase tracking-widest text-[#8a6e5a] dark:text-[#f3eadf] font-extrabold">

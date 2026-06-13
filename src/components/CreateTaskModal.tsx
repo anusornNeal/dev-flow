@@ -4,7 +4,8 @@
  */
 
 import React, { useState } from 'react';
-import { X, GitBranch, PlusSquare, FileCode, CheckSquare, Sparkles, Image as ImageIcon, Link as LinkIcon } from 'lucide-react';
+import { X, GitBranch, PlusSquare, FileCode, CheckSquare, Sparkles, Image as ImageIcon, Link as LinkIcon , Bot, Zap} from 'lucide-react';
+import { CustomSelect } from './CustomSelect';
 import { Task, TaskPriority, TaskStatus, ChecklistItem } from '../types';
 import { AGENTS_CONFIG, getModelConfig, defaultModelForAgent, defaultEffortForModel } from '../lib/agentsConfig';
 
@@ -156,17 +157,18 @@ class MyViewModel: ViewModel() {
               <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold pl-0.5">
                 Target Column Status
               </label>
-              <select
-                className="w-full bg-white dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3.5 py-2.5 text-xs text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d4994e] dark:border-[#e0a070] dark:focus:border-[#584a3b]"
+              <CustomSelect
+                className="w-full bg-white dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3.5 py-2.5 text-xs text-[#3a2f26] dark:text-[#f3eadf]"
                 value={status}
-                onChange={(e) => setStatus(e.target.value as TaskStatus)}
-              >
-                <option value="backlog">Backlog Lane</option>
-                <option value="todo">To Do Lane</option>
-                <option value="in-progress">In Progress Lane</option>
-                <option value="ready-for-review">Ready for Review Lane</option>
-                <option value="done">Done Lane</option>
-              </select>
+                onChange={(val) => setStatus(val as TaskStatus)}
+                options={[
+                  { value: 'backlog', label: 'Backlog Lane' },
+                  { value: 'todo', label: 'To Do Lane' },
+                  { value: 'in-progress', label: 'In Progress Lane' },
+                  { value: 'ready-for-review', label: 'Ready for Review Lane' },
+                  { value: 'done', label: 'Done Lane' }
+                ]}
+              />
             </div>
           </div>
 
@@ -174,15 +176,16 @@ class MyViewModel: ViewModel() {
             <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold pl-0.5">
               Severity Rating
             </label>
-            <select
-              className="w-full bg-white dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3.5 py-2.5 text-xs text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d4994e] dark:border-[#e0a070] dark:focus:border-[#584a3b]"
+            <CustomSelect
+              className="w-full bg-white dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3.5 py-2.5 text-xs text-[#3a2f26] dark:text-[#f3eadf]"
               value={priority}
-              onChange={(e) => setPriority(e.target.value as TaskPriority)}
-            >
-              <option value="low">Low Severity</option>
-              <option value="medium">Medium Severity</option>
-              <option value="high">High Severity</option>
-            </select>
+              onChange={(val) => setPriority(val as TaskPriority)}
+              options={[
+                { value: 'low', label: 'Low Severity' },
+                { value: 'medium', label: 'Medium Severity' },
+                { value: 'high', label: 'High Severity' }
+              ]}
+            />
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -190,11 +193,10 @@ class MyViewModel: ViewModel() {
               <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold pl-0.5">
                 Assigned Agent
               </label>
-              <select
-                className="w-full bg-white dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d4994e] dark:border-[#e0a070] dark:focus:border-[#584a3b] font-bold"
+              <CustomSelect
+                className="w-full bg-white dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] font-bold"
                 value={agent}
-                onChange={(e) => {
-                  const val = e.target.value;
+                onChange={(val) => {
                   setAgent(val);
                   if (val) {
                     const defaultModel = defaultModelForAgent(val);
@@ -205,24 +207,23 @@ class MyViewModel: ViewModel() {
                     setEffort('');
                   }
                 }}
-              >
-                <option value="">Unassigned</option>
-                <option value="Codex">Codex</option>
-                <option value="Antigravity">Antigravity</option>
-                <option value="Claude">Claude</option>
-              </select>
+                options={[
+                  { value: '', label: 'Unassigned', icon: <Bot size={13} className="opacity-60" /> },
+                  { value: 'Codex', label: 'Codex', icon: <Bot size={13} className="text-blue-500" /> },
+                  { value: 'Antigravity', label: 'Antigravity', icon: <Bot size={13} className="text-purple-500" /> },
+                  { value: 'Claude', label: 'Claude', icon: <Bot size={13} className="text-orange-500" /> }
+                ]}
+              />
             </div>
 
             <div className="space-y-1">
               <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold pl-0.5">
                 AI Model Spec
               </label>
-              <select
-                className="w-full bg-white dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d4994e] dark:border-[#e0a070] dark:focus:border-[#584a3b] font-bold disabled:bg-[#f5eeda] dark:bg-[#1e1914]/50 dark:disabled:bg-[#292119]/50"
+              <CustomSelect
+                className={`w-full bg-white dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] font-bold ${!agent ? 'opacity-50 pointer-events-none' : ''}`}
                 value={model}
-                disabled={!agent}
-                onChange={(e) => {
-                  const val = e.target.value;
+                onChange={(val) => {
                   setModel(val);
                   if (agent && val) {
                     setEffort(defaultEffortForModel(agent, val));
@@ -230,32 +231,33 @@ class MyViewModel: ViewModel() {
                     setEffort('');
                   }
                 }}
-              >
-                <option value="">None / Default</option>
-                {agent && AGENTS_CONFIG[agent as import('../lib/agentsConfig').AgentName]?.map(m => (
-                  <option key={m.model_name} value={m.model_name}>
-                    {m.model_name}
-                  </option>
-                ))}
-              </select>
+                options={[
+                  { value: '', label: 'None / Default' },
+                  ...(agent ? (AGENTS_CONFIG[agent as import('../lib/agentsConfig').AgentName] || []).map(m => ({
+                    value: m.model_name,
+                    label: m.model_name
+                  })) : [])
+                ]}
+              />
             </div>
 
             <div className="space-y-1">
               <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold pl-0.5">
                 Effort Allocation
               </label>
-              <select
-                className="w-full bg-white dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d4994e] dark:border-[#e0a070] dark:focus:border-[#584a3b] font-bold disabled:bg-[#f5eeda] dark:bg-[#1e1914]/50 dark:disabled:bg-[#292119]/50"
+              <CustomSelect
+                className={`w-full bg-white dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] font-bold ${(!agent || !model) ? 'opacity-50 pointer-events-none' : ''}`}
                 value={effort}
-                disabled={!agent || !model}
-                onChange={(e) => setEffort(e.target.value)}
-              >
-                {agent && model && getModelConfig(agent, model)?.available_efforts.map(eff => (
-                  <option key={eff} value={eff}>
-                    {eff.charAt(0).toUpperCase() + eff.slice(1)}
-                  </option>
-                ))}
-              </select>
+                onChange={(val) => setEffort(val)}
+                options={
+                  agent && model ? (getModelConfig(agent, model)?.available_efforts || []).map(eff => ({
+                    value: eff,
+                    label: eff.charAt(0).toUpperCase() + eff.slice(1),
+                    icon: <Zap size={13} className="text-[#d89745] dark:text-[#d6b56d]" />
+                  })) : [{ value: '', label: 'No Effort' }]
+                }
+                placeholder="No Effort"
+              />
             </div>
           </div>
 

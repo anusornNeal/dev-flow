@@ -28,7 +28,8 @@ import {
   FlaskConical,
   Code2,
   ExternalLink
-} from 'lucide-react';
+, Bot, Zap} from 'lucide-react';
+import { CustomSelect } from './CustomSelect';
 import { Task, TaskPriority, TaskStatus, LogEntry, ChecklistItem } from '../types';
 import { AGENTS_CONFIG, getModelConfig, defaultModelForAgent, defaultEffortForModel } from '../lib/agentsConfig';
 import MarkdownRenderer from './MarkdownRenderer';
@@ -406,27 +407,29 @@ export default function TaskDetailsDrawer({
                 />
                 
                 <div className="flex items-center gap-2 flex-wrap">
-                  <select
-                    className="bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-lg px-2 py-1 text-[10px] uppercase font-bold text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:border-[#e0a070] dark:focus:border-[#584a3b] transition-all"
+                  <CustomSelect
+                    className="bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-lg px-2 py-1.5 text-[10px] uppercase font-bold text-[#3a2f26] dark:text-[#f3eadf] transition-all min-w-[140px]"
                     value={editedStatus}
-                    onChange={(e) => setEditedStatus(e.target.value as TaskStatus)}
-                  >
-                    <option value="backlog">Backlog Lane</option>
-                    <option value="todo">To Do Lane</option>
-                    <option value="in-progress">In Progress Lane</option>
-                    <option value="ready-for-review">Ready for Review Lane</option>
-                    <option value="done">Done Lane</option>
-                  </select>
+                    onChange={(val) => setEditedStatus(val as TaskStatus)}
+                    options={[
+                      { value: 'backlog', label: 'Backlog Lane' },
+                      { value: 'todo', label: 'To Do Lane' },
+                      { value: 'in-progress', label: 'In Progress Lane' },
+                      { value: 'ready-for-review', label: 'Ready for Review Lane' },
+                      { value: 'done', label: 'Done Lane' }
+                    ]}
+                  />
                   
-                  <select
-                    className="bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-lg px-2 py-1 text-[10px] uppercase font-bold text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:border-[#e0a070] dark:focus:border-[#584a3b] transition-all"
+                  <CustomSelect
+                    className="bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-lg px-2 py-1.5 text-[10px] uppercase font-bold text-[#3a2f26] dark:text-[#f3eadf] transition-all min-w-[130px]"
                     value={editedPriority}
-                    onChange={(e) => setEditedPriority(e.target.value as TaskPriority)}
-                  >
-                    <option value="low">Low Severity</option>
-                    <option value="medium">Medium Severity</option>
-                    <option value="high">High Severity</option>
-                  </select>
+                    onChange={(val) => setEditedPriority(val as TaskPriority)}
+                    options={[
+                      { value: 'low', label: 'Low Severity' },
+                      { value: 'medium', label: 'Medium Severity' },
+                      { value: 'high', label: 'High Severity' }
+                    ]}
+                  />
                   
                   <div className="flex items-center gap-1.5 ml-auto">
                     <GitBranch size={13} className="text-[#bf8a50] dark:text-[#d6b56d]" />
@@ -442,11 +445,10 @@ export default function TaskDetailsDrawer({
               </div>
 
               <div className="flex items-center gap-2 px-3 py-2 bg-[#fdfbf7]/70 dark:bg-[#292119]/70 border border-[#ebdcb9]/50 dark:border-[#584a3b]/50 rounded-xl text-[10px] font-mono flex-wrap w-fit">
-                <select
-                  className="bg-transparent border-none text-[#5c493c] dark:text-[#f3eadf] outline-none font-bold cursor-pointer"
+                <CustomSelect
+                  className="bg-transparent text-[#5c493c] dark:text-[#f3eadf] font-bold min-w-[110px]"
                   value={editedAgent}
-                  onChange={(e) => {
-                    const val = e.target.value;
+                  onChange={(val) => {
                     setEditedAgent(val);
                     if (val) {
                       const defaultModel = defaultModelForAgent(val);
@@ -457,20 +459,19 @@ export default function TaskDetailsDrawer({
                       setEditedEffort('');
                     }
                   }}
-                >
-                  <option value="">Unassigned</option>
-                  <option value="Codex">Codex</option>
-                  <option value="Antigravity">Antigravity</option>
-                  <option value="Claude">Claude</option>
-                </select>
+                  options={[
+                    { value: '', label: 'Unassigned', icon: <Bot size={11} className="opacity-60" /> },
+                    { value: 'Codex', label: 'Codex', icon: <Bot size={11} className="text-blue-500" /> },
+                    { value: 'Antigravity', label: 'Antigravity', icon: <Bot size={11} className="text-purple-500" /> },
+                    { value: 'Claude', label: 'Claude', icon: <Bot size={11} className="text-orange-500" /> }
+                  ]}
+                />
 
                 {editedAgent && <span className="text-[#c4b3a4] dark:text-[#584a3b]">·</span>}
-                <select
-                  className="bg-transparent border-none text-[#8a6e5a] dark:text-[#d6b56d] outline-none font-bold cursor-pointer disabled:opacity-50"
+                <CustomSelect
+                  className={`bg-transparent text-[#8a6e5a] dark:text-[#d6b56d] font-bold min-w-[130px] ${!editedAgent ? 'opacity-50 pointer-events-none' : ''}`}
                   value={editedModel}
-                  disabled={!editedAgent}
-                  onChange={(e) => {
-                    const val = e.target.value;
+                  onChange={(val) => {
                     setEditedModel(val);
                     if (editedAgent && val) {
                       setEditedEffort(defaultEffortForModel(editedAgent, val));
@@ -478,29 +479,29 @@ export default function TaskDetailsDrawer({
                       setEditedEffort('');
                     }
                   }}
-                >
-                  <option value="">None / Default</option>
-                  {editedAgent && AGENTS_CONFIG[editedAgent as import('../lib/agentsConfig').AgentName]?.map(m => (
-                    <option key={m.model_name} value={m.model_name}>
-                      {m.model_name}
-                    </option>
-                  ))}
-                </select>
+                  options={[
+                    { value: '', label: 'None / Default' },
+                    ...(editedAgent ? (AGENTS_CONFIG[editedAgent as import('../lib/agentsConfig').AgentName] || []).map(m => ({
+                      value: m.model_name,
+                      label: m.model_name
+                    })) : [])
+                  ]}
+                />
 
                 {editedModel && <span className="text-[#c4b3a4] dark:text-[#584a3b]">·</span>}
-                <select
-                  className="bg-transparent border-none text-[#8a6e5a] dark:text-[#d6b56d] outline-none font-bold cursor-pointer disabled:opacity-50"
+                <CustomSelect
+                  className={`bg-transparent text-[#8a6e5a] dark:text-[#d6b56d] font-bold min-w-[90px] ${(!editedAgent || !editedModel) ? 'opacity-50 pointer-events-none' : ''}`}
                   value={editedEffort}
-                  disabled={!editedAgent || !editedModel}
-                  onChange={(e) => setEditedEffort(e.target.value)}
-                >
-                  <option value="">No Effort</option>
-                  {editedAgent && editedModel && getModelConfig(editedAgent, editedModel)?.available_efforts.map(eff => (
-                    <option key={eff} value={eff}>
-                      ⚡ {eff.charAt(0).toUpperCase() + eff.slice(1)}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(val) => setEditedEffort(val)}
+                  options={[
+                    { value: '', label: 'No Effort' },
+                    ...(editedAgent && editedModel ? (getModelConfig(editedAgent, editedModel)?.available_efforts || []).map(eff => ({
+                      value: eff,
+                      label: eff.charAt(0).toUpperCase() + eff.slice(1),
+                      icon: <Zap size={11} className="text-[#d89745] dark:text-[#d6b56d]" />
+                    })) : [])
+                  ]}
+                />
               </div>
 
               <div className="space-y-2.5 border-t border-[#ebdcb9] dark:border-[#584a3b] pt-5">

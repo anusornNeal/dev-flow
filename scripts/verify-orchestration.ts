@@ -39,6 +39,7 @@ const { buildTaskStatusMoveRequest } = await import('../src/lib/taskStatusMove.j
 const { saveProjects } = await import('../src/server/repositories/projectRepository.js');
 const { saveTasks } = await import('../src/server/repositories/taskRepository.js');
 const { getAgentTaskContext } = await import('../src/server/services/taskService.js');
+const { renderTaskPrompt } = await import('../src/server/services/taskService.js');
 const { isValidTransition } = await import('../src/lib/statusTransitions.js');
 const express = (await import('express')).default;
 
@@ -150,6 +151,11 @@ assert.ok(taskContext.projectRules.workflow.some((rule: string) => rule.includes
 assert.ok(taskContext.projectRules.workflow.some((rule: string) => rule.includes('checklist')));
 assert.ok(taskContext.projectRules.workflow.some((rule: string) => rule.includes('push') && rule.includes('ready-for-review')));
 assert.equal(taskContext.projectRules.implementation, undefined);
+const overrideDir = path.join(repoPathWithSpaces, '.devflow', 'prompt-overrides');
+fs.mkdirSync(overrideDir, { recursive: true });
+fs.writeFileSync(path.join(overrideDir, 'prompt.footer.md'), '\nOVERRIDE FOOTER {{run.id}}\n', 'utf8');
+const previewPrompt = renderTaskPrompt(state, 'task-1');
+assert.ok(previewPrompt.renderResult.content.includes('OVERRIDE FOOTER preview-run-id'));
 const triggerResult = triggerTaskAgent(state.tasksCache[0], deps, 'test');
 assert.equal(triggerResult.triggered, true);
 assert.equal(state.tasksCache[0].status, 'in-progress');
@@ -162,6 +168,8 @@ assert.ok(run1);
 assert.equal(run1?.status, 'running');
 const promptPath = path.join(process.cwd(), '.devflow', 'runs', run1!.id, 'prompt.md');
 const prompt = fs.readFileSync(promptPath, 'utf8');
+const runPrompt = renderTaskPrompt(state, 'task-1', { runId: run1!.id });
+assert.equal(prompt, runPrompt.renderResult.content);
 assert.ok(prompt.includes('Generate the prompt from the real production agent context.'));
 assert.ok(prompt.includes('Prompt includes description, acceptance criteria, verification, checklist, subtasks, repo, localPath, agent, model, and effort.'));
 assert.ok(prompt.includes('Run prompt template and orchestration verification scripts.'));
@@ -169,6 +177,7 @@ assert.ok(prompt.includes('- [ ] Use real agent task context'));
 assert.ok(prompt.includes('DVF-0081: Pass production context shape to prompt rendering'));
 assert.ok(prompt.includes(repoPathWithSpaces));
 assert.ok(prompt.includes('Agent: Codex, Model: GPT-5.5, Effort: xhigh'));
+assert.ok(prompt.includes(`OVERRIDE FOOTER ${run1!.id}`));
 
 console.log('[verify] Testing failed completion leaves the card retryable...');
 completeAgentRunForTask(state.tasksCache[0], run1!, deps, {

@@ -6,11 +6,10 @@ import { TASK_SCHEMA_DEF, VALID_AGENTS, VALID_EFFORTS, VALID_MODELS, VALID_STATU
 import { cancelActiveRunsForTask, cancelStaleActiveRuns, createAgentRun, getActiveRunForProject, getActiveRunForTask, getLatestAgentRunForTask, listAgentRunsForTask, updateAgentRunStatus, type AgentRun } from '../repositories/agentRunRepository';
 import { loadTasks, generateDisplayId, saveTasks } from '../repositories/taskRepository';
 import { appendAgentRunLog, createAgentRunFiles, getAgentTriggerScriptPath, getDevFlowApiBaseUrl, resolveAgentExecutionMode, resolveFromDevFlowAppRoot } from '../services/agentRunService';
-import { extractDesignImages, getAgentTaskContext, resolveProjectIdFromRepo, validateAgentParams, validateTaskPayload } from '../services/taskService';
+import { extractDesignImages, getAgentTaskContext, renderTaskPrompt, resolveProjectIdFromRepo, validateAgentParams, validateTaskPayload } from '../services/taskService';
 import { validateEnum, validateString } from '../validation';
 import { isValidTransition, getValidationErrorMessage } from '../../lib/statusTransitions';
 import { runAgentLaunchPreflight, type AgentLaunchPreflightCode } from '../services/agentLaunchConfig';
-import { renderPromptTemplate } from '../services/promptTemplateService';
 
 const STALE_AGENT_RUN_MS = 30 * 60 * 1000;
 
@@ -131,37 +130,6 @@ function cleanupStaleActiveRuns(deps: ApiRouteDeps) {
     for (const task of deps.state.tasksCache) applyRunSummaryToTask(task, getLatestAgentRunForTask(task.id));
     saveTasks(deps.state);
   }
-}
-
-function buildPromptRenderContext(taskContext: NonNullable<ReturnType<typeof getAgentTaskContext>>, runId: string) {
-  return {
-    run: { id: runId },
-    task: taskContext.task,
-    assignment: taskContext.assignment || {},
-    workspace: taskContext.workspace || {},
-    instruction: taskContext.instruction || {},
-    requirements: taskContext.requirements || {},
-    projectRules: taskContext.projectRules || {},
-    repoContext: taskContext.repoContext || '',
-    orchestration: taskContext.orchestration || {},
-    agent: taskContext.assignment?.agent || '',
-    model: taskContext.assignment?.model || '',
-    effort: taskContext.assignment?.effort || '',
-  };
-}
-
-function renderTaskPrompt(taskId: string, state: ApiRouteDeps['state'], runId: string) {
-  const context = getAgentTaskContext(state, taskId, false);
-  if (!context) {
-    throw new Error('Task agent context could not be built.');
-  }
-
-  const renderResult = renderPromptTemplate('default', buildPromptRenderContext(context, runId));
-  if (!renderResult.content.trim()) {
-    throw new Error('Task prompt could not be built.');
-  }
-
-  return { context, renderResult };
 }
 
 function failTaskRun(task: any, deps: ApiRouteDeps, runId: string, reason: string, options?: {
@@ -287,7 +255,7 @@ export function triggerTaskAgent(task: any, deps: ApiRouteDeps, routeLabel: stri
   let prompt = '';
   let files: { runDir: string; promptPath: string; logPath: string };
   try {
-    prompt = renderTaskPrompt(task.id, deps.state, run.id).renderResult.content;
+    prompt = renderTaskPrompt(deps.state, task.id, { runId: run.id }).renderResult.content;
     files = createAgentRunFiles({ runId: run.id, prompt });
   } catch (error: any) {
     const reason = error?.message || 'Task prompt could not be built.';
@@ -412,7 +380,10 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     const activeRun = getActiveRunForTask(context.task.id) || getLatestAgentRunForTask(context.task.id);
     let renderResult;
     try {
-      renderResult = renderPromptTemplate('default', buildPromptRenderContext(context, activeRun?.id || 'preview-run-id'));
+      renderResult = renderTaskPrompt(deps.state, context.task.id, {
+        runId: activeRun?.id || 'preview-run-id',
+        includeLogs,
+      }).renderResult;
     } catch (error: any) {
       return res.status(500).json({ error: error?.message || 'Prompt could not be rendered.' });
     }

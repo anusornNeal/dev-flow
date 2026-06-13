@@ -6,6 +6,7 @@ import { validateEnum, validateString } from '../validation';
 import { buildLaunchMetadataBlock, resolveAgentLaunchPlan } from './agentLaunchConfig';
 import { resolveAgentExecutionMode } from './agentRunService';
 import { getProjectRulesContext } from './projectRulesService';
+import { renderPromptTemplate } from './promptTemplateService';
 
 export function validateTaskPayload(item: any, isUpdate = false): string | null {
   if (!item || typeof item !== 'object') return 'Task payload must be an object.';
@@ -217,5 +218,39 @@ export function getAgentTaskContext(state: AppState, targetId: string, includeLo
   if (Object.keys(agentContext.assignment).length === 0) delete agentContext.assignment;
 
   return agentContext;
+}
+
+export function buildTaskPromptRenderContext(taskContext: NonNullable<ReturnType<typeof getAgentTaskContext>>, runId: string) {
+  return {
+    run: { id: runId },
+    task: taskContext.task,
+    assignment: taskContext.assignment || {},
+    workspace: taskContext.workspace || {},
+    instruction: taskContext.instruction || {},
+    requirements: taskContext.requirements || {},
+    projectRules: taskContext.projectRules || {},
+    repoContext: taskContext.repoContext || '',
+    orchestration: taskContext.orchestration || {},
+    agent: taskContext.assignment?.agent || '',
+    model: taskContext.assignment?.model || '',
+    effort: taskContext.assignment?.effort || '',
+  };
+}
+
+export function renderTaskPrompt(state: AppState, targetId: string, options?: {
+  runId?: string;
+  includeLogs?: boolean;
+}) {
+  const context = getAgentTaskContext(state, targetId, options?.includeLogs ?? false);
+  if (!context) {
+    throw new Error('Task agent context could not be built.');
+  }
+
+  const renderResult = renderPromptTemplate('default', buildTaskPromptRenderContext(context, options?.runId || 'preview-run-id'));
+  if (!renderResult.content.trim()) {
+    throw new Error('Task prompt could not be built.');
+  }
+
+  return { context, renderResult };
 }
 

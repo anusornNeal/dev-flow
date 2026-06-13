@@ -23,6 +23,25 @@ export interface AgentRunHistoryPaths {
   resultPath: string;
 }
 
+export type AgentRunResultCode =
+  | 'STARTING'
+  | 'RUNNING'
+  | 'SUCCEEDED'
+  | 'FAILED'
+  | 'CANCELLED';
+
+export interface AgentRunResultRecord {
+  runId: string;
+  status: string;
+  resultCode: AgentRunResultCode;
+  success: boolean | null;
+  summary: string;
+  exitCode: number | null;
+  errorMessage: string | null;
+  updatedAt: string;
+  completedAt: string | null;
+}
+
 export function resolveAgentExecutionMode(value: unknown): AgentExecutionMode {
   return value === 'full' ? 'full' : 'safe';
 }
@@ -95,7 +114,40 @@ export function writeAgentRunOutputSummary(runDir: string, summary: string) {
   fs.writeFileSync(historyPaths.outputSummaryPath, summary.trim() ? `${summary.trim()}\n` : '', 'utf8');
 }
 
-export function writeAgentRunResult(runDir: string, result: Record<string, unknown>) {
+export function writeAgentRunResult(runDir: string, result: AgentRunResultRecord | Record<string, unknown>) {
   const historyPaths = getAgentRunHistoryPaths(runDir);
   fs.writeFileSync(historyPaths.resultPath, `${JSON.stringify(result, null, 2)}\n`, 'utf8');
+}
+
+export function createAgentRunResultRecord(input: {
+  runId: string;
+  status: string;
+  summary: string;
+  success?: boolean | null;
+  exitCode?: number | null;
+  errorMessage?: string | null;
+  updatedAt?: string;
+  completedAt?: string | null;
+}): AgentRunResultRecord {
+  const normalizedStatus = input.status.toLowerCase();
+  const resultCodeMap: Record<string, AgentRunResultCode> = {
+    queued: 'STARTING',
+    starting: 'STARTING',
+    running: 'RUNNING',
+    succeeded: 'SUCCEEDED',
+    failed: 'FAILED',
+    cancelled: 'CANCELLED',
+  };
+
+  return {
+    runId: input.runId,
+    status: normalizedStatus,
+    resultCode: resultCodeMap[normalizedStatus] || 'FAILED',
+    success: input.success ?? null,
+    summary: input.summary,
+    exitCode: input.exitCode ?? null,
+    errorMessage: input.errorMessage ?? null,
+    updatedAt: input.updatedAt || new Date().toISOString(),
+    completedAt: input.completedAt ?? null,
+  };
 }

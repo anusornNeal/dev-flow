@@ -169,6 +169,7 @@ assert.ok(run1);
 assert.equal(run1?.status, 'running');
 const promptPath = path.join(process.cwd(), '.devflow', 'runs', run1!.id, 'prompt.md');
 const prompt = fs.readFileSync(promptPath, 'utf8');
+const resultPath = path.join(process.cwd(), '.devflow', 'runs', run1!.id, 'result.json');
 const runPrompt = renderTaskPrompt(state, 'task-1', { runId: run1!.id });
 assert.equal(prompt, runPrompt.renderResult.content);
 const historyApp = express();
@@ -191,6 +192,12 @@ try {
 } finally {
   await new Promise<void>((resolve, reject) => historyServer.close((error) => error ? reject(error) : resolve()));
 }
+const runningResult = JSON.parse(fs.readFileSync(resultPath, 'utf8'));
+assert.equal(runningResult.runId, run1!.id);
+assert.equal(runningResult.status, 'running');
+assert.equal(runningResult.success, null);
+assert.equal(runningResult.resultCode, 'RUNNING');
+assert.equal(typeof runningResult.updatedAt, 'string');
 assert.ok(prompt.includes('Generate the prompt from the real production agent context.'));
 assert.ok(prompt.includes('Prompt includes description, acceptance criteria, verification, checklist, subtasks, repo, localPath, agent, model, and effort.'));
 assert.ok(prompt.includes('Run prompt template and orchestration verification scripts.'));
@@ -210,6 +217,14 @@ assert.equal(state.tasksCache[0].status, 'todo');
 assert.equal(getActiveRunForTask('task-1'), null);
 assert.equal(getLatestAgentRunForTask('task-1')?.status, 'failed');
 assert.match(state.tasksCache[0].logs.at(-1)?.message || '', /exitCode=1/);
+const failedResult = JSON.parse(fs.readFileSync(resultPath, 'utf8'));
+assert.equal(failedResult.runId, run1!.id);
+assert.equal(failedResult.status, 'failed');
+assert.equal(failedResult.success, false);
+assert.equal(failedResult.resultCode, 'FAILED');
+assert.equal(failedResult.exitCode, 1);
+assert.match(failedResult.errorMessage || '', /code 1/);
+assert.equal(typeof failedResult.completedAt, 'string');
 
 console.log('[verify] Testing duplicate trigger reuses the same active run...');
 const duplicateState: AppState = {

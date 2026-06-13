@@ -31,6 +31,7 @@ export default function TemplateModal({ projectId, onClose }: TemplateModalProps
   const [editContent, setEditContent] = useState('');
   
   const [previewContent, setPreviewContent] = useState<string | null>(null);
+  const [previewSections, setPreviewSections] = useState<{ skillId: string; content: string; isEmpty: boolean }[] | null>(null);
   const [loadingPreview, setLoadingPreview] = useState(false);
 
   useEffect(() => {
@@ -107,8 +108,9 @@ export default function TemplateModal({ projectId, onClose }: TemplateModalProps
         body: JSON.stringify({})
       });
       const data = await res.json();
-      if (data.content) {
+      if (data.content !== undefined) {
         setPreviewContent(data.content);
+        setPreviewSections(data.sections || null);
         setSelectedSectionId(null);
       }
     } catch (err) {
@@ -278,12 +280,35 @@ export default function TemplateModal({ projectId, onClose }: TemplateModalProps
 
           <div className="flex-1 overflow-hidden relative bg-[#fffdfa] dark:bg-[#1e1914]">
              {previewContent !== null ? (
-                <div className="absolute inset-0 p-6 overflow-y-auto">
-                   <div className="prose prose-sm prose-orange max-w-none prose-headings:font-extrabold prose-a:text-[#d89745] dark:prose-invert dark:prose-headings:text-[#e0a070] dark:text-[#f3eadf]">
-                     <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                       {previewContent}
-                     </ReactMarkdown>
-                   </div>
+                <div className="absolute inset-0 p-6 overflow-y-auto space-y-4">
+                  {previewSections && previewSections.length > 0 ? (
+                    previewSections.map((sec, idx) => (
+                      <div key={idx} className="border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl overflow-hidden shadow-sm flex flex-col">
+                        <div className="bg-[#f4ebd9] dark:bg-[#292119] px-4 py-2 border-b border-[#ebdcb9] dark:border-[#584a3b] font-mono text-xs font-bold text-[#d89745] dark:text-[#e0a070]">
+                          {sec.skillId}
+                        </div>
+                        <div className="p-4 bg-[#fffdfa] dark:bg-[#1e1914]">
+                          {sec.isEmpty ? (
+                            <div className="text-center text-[#8C7565] dark:text-[#8c7463] font-mono text-xs italic py-2 opacity-60">
+                              Empty in preview
+                            </div>
+                          ) : (
+                            <div className="prose prose-sm prose-orange max-w-none prose-headings:font-extrabold prose-a:text-[#d89745] dark:prose-invert dark:prose-headings:text-[#e0a070] dark:text-[#f3eadf]">
+                              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                {sec.content}
+                              </ReactMarkdown>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="prose prose-sm prose-orange max-w-none prose-headings:font-extrabold prose-a:text-[#d89745] dark:prose-invert dark:prose-headings:text-[#e0a070] dark:text-[#f3eadf]">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        {previewContent}
+                      </ReactMarkdown>
+                    </div>
+                  )}
                 </div>
              ) : selectedSection ? (
                isEditingOverride ? (

@@ -140,8 +140,8 @@ export function registerProjectRoutes(app: express.Express, deps: ApiRouteDeps) 
     };
 
     try {
-      const renderResult = renderPromptTemplate(pipelineId, context);
-      res.json({ content: renderResult.content });
+      const renderResult = renderPromptTemplate(pipelineId, context, 'preview');
+      res.json({ content: renderResult.content, sections: renderResult.sections });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

@@ -65,9 +65,9 @@ export function getPromptPipeline(pipelineId: string = 'default'): string[] {
 }
 
 function renderValue(val: any, isChecklistOrSubtasks = false): string {
-  if (val === null || val === undefined || val === '') return '(none)';
+  if (val === null || val === undefined || val === '') return '';
   if (Array.isArray(val)) {
-    if (val.length === 0) return '(none)';
+    if (val.length === 0) return '';
     if (isChecklistOrSubtasks) {
       return val.map((item: any) => {
         if (typeof item === 'string') return `- ${item}`;
@@ -203,7 +203,7 @@ export function interpolate(template: string, context: PromptRenderContext): str
     let current: any = context;
     for (const p of path) {
       if (current === undefined || current === null) {
-        return allowEmpty ? '' : '(none)';
+        return '';
       }
       current = current[p];
     }
@@ -220,10 +220,11 @@ export function interpolate(template: string, context: PromptRenderContext): str
   });
 }
 
-export function renderPromptTemplate(pipelineId: string, context: PromptRenderContext) {
+export function renderPromptTemplate(pipelineId: string, context: PromptRenderContext, mode: 'agent' | 'preview' = 'agent') {
   const pipeline = getPromptPipeline(pipelineId);
   const usedSkills: string[] = [];
   const sections: string[] = [];
+  const previewSections: { skillId: string; content: string; isEmpty: boolean }[] = [];
   const renderContext = {
     ...context,
     sections: buildDerivedSections(context),
@@ -249,6 +250,15 @@ export function renderPromptTemplate(pipelineId: string, context: PromptRenderCo
 
     if (content) {
       const rendered = interpolate(content, renderContext).trim();
+      
+      if (mode === 'preview') {
+        previewSections.push({
+          skillId,
+          content: rendered,
+          isEmpty: rendered === '' || rendered === '(none)'
+        });
+      }
+
       if (rendered) sections.push(rendered);
       usedSkills.push(usedSkillSource);
     } else if (!rawSkillId.includes('agent-specific')) {
@@ -258,6 +268,14 @@ export function renderPromptTemplate(pipelineId: string, context: PromptRenderCo
 
   // Prepend used skills as requested
   const finalContent = `<!-- Rendered using skills: ${usedSkills.join(', ')} -->\n\n${sections.join('\n\n')}`;
+
+  if (mode === 'preview') {
+    return {
+      content: finalContent,
+      sections: previewSections,
+      usedSkills
+    };
+  }
 
   return {
     content: finalContent,

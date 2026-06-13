@@ -35,6 +35,7 @@ const {
   updateAgentRunStatus,
 } = await import('../src/server/repositories/agentRunRepository.js');
 
+const { buildTaskStatusMoveRequest } = await import('../src/lib/taskStatusMove.js');
 const { saveProjects } = await import('../src/server/repositories/projectRepository.js');
 const { saveTasks } = await import('../src/server/repositories/taskRepository.js');
 const { isValidTransition } = await import('../src/lib/statusTransitions.js');
@@ -290,6 +291,92 @@ try {
   assert.equal(allowedMove.status, 200);
 } finally {
   await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+}
+
+console.log('[verify] Testing lane move requests preserve latest assignment fields...');
+assert.deepEqual(
+  buildTaskStatusMoveRequest('task-1', 'todo'),
+  {
+    url: '/api/tasks/task-1/move',
+    init: {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'todo' }),
+    },
+  },
+);
+assert.deepEqual(
+  buildTaskStatusMoveRequest('task-1', 'backlog', { emergency: true }),
+  {
+    url: '/api/tasks/task-1/move',
+    init: {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'backlog', emergency: true }),
+    },
+  },
+);
+
+const moveState: AppState = {
+  tasksCache: [
+    {
+      id: 'move-task-1',
+      displayId: 'DVF-0104-X',
+      projectId: 'project-1',
+      status: 'backlog',
+      agent: 'Codex',
+      model: 'GPT-5.5',
+      effort: 'high',
+      title: 'Move should not restore stale effort',
+      description: 'Editing effort to low before moving lanes must survive.',
+      logs: [],
+      createdAt: '2026-06-13T00:10:00.000Z',
+      updatedAt: '2026-06-13T00:10:00.000Z',
+    },
+  ],
+  projectsCache: [{ id: 'project-1', name: 'p1', repoUrl: 'repo', localPath: repoPathWithSpaces }],
+  countersCache: {},
+  settingsCache: { autoWork: false, ngrokUrl: '', githubToken: '', jiraToken: '', jiraBaseUrl: '', jiraEmail: '' },
+  skillsRegistry: [],
+};
+const moveDeps: ApiRouteDeps = {
+  state: moveState,
+  writeAgentLog: () => {},
+};
+saveTasks(moveState);
+
+const moveApp = express();
+moveApp.use(express.json());
+registerTaskRoutes(moveApp, moveDeps);
+const moveServer = http.createServer(moveApp);
+await new Promise<void>((resolve) => moveServer.listen(0, resolve));
+const moveAddress = moveServer.address();
+if (!moveAddress || typeof moveAddress === 'string') throw new Error('Failed to bind move test server.');
+const moveBaseUrl = `http://127.0.0.1:${moveAddress.port}`;
+try {
+  const staleTaskSnapshot = { ...moveState.tasksCache[0] };
+
+  const updateResponse = await fetch(`${moveBaseUrl}/api/tasks/move-task-1`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      ...moveState.tasksCache[0],
+      model: 'GPT-5.4 Mini',
+      effort: 'low',
+    }),
+  });
+  assert.equal(updateResponse.status, 200);
+  assert.equal(moveState.tasksCache[0].effort, 'low');
+  assert.equal(moveState.tasksCache[0].model, 'GPT-5.4 Mini');
+
+  const moveRequest = buildTaskStatusMoveRequest(staleTaskSnapshot.id, 'todo');
+  const moveResponse = await fetch(`${moveBaseUrl}${moveRequest.url}`, moveRequest.init);
+  assert.equal(moveResponse.status, 200);
+  assert.equal(moveState.tasksCache[0].status, 'todo');
+  assert.equal(moveState.tasksCache[0].effort, 'low');
+  assert.equal(moveState.tasksCache[0].model, 'GPT-5.4 Mini');
+} finally {
+  await new Promise<void>((resolve, reject) => moveServer.close((error) => error ? reject(error) : resolve()));
 }
 
 console.log('[verify] Testing backlog reset clears locks and cancels active runs...');

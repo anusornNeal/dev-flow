@@ -126,6 +126,17 @@ const codexPlan = resolveAgentLaunchPlan({
 assert.equal(codexPlan.resolvedModel, 'gpt-5.5');
 assert.equal(codexPlan.effortHandling.mode, 'cli-flag');
 
+const codexMiniLowPlan = resolveAgentLaunchPlan({
+  agent: 'Codex',
+  model: 'GPT-5.4 Mini',
+  effort: 'low',
+  executionMode: 'safe',
+});
+assert.equal(codexMiniLowPlan.ok, true);
+assert.equal(codexMiniLowPlan.resolvedModel, 'gpt-5.4-mini');
+assert.equal(codexMiniLowPlan.selectedEffort, 'low');
+assert.equal(codexMiniLowPlan.effortHandling.mode, 'cli-flag');
+
 const antigravityInvalid = resolveAgentLaunchPlan({
   agent: 'Antigravity',
   model: 'GPT-5.5',
@@ -196,6 +207,34 @@ assert.equal(cliArgs.includes('--config reasoning_effort=high'), false);
 assert.equal(cliArgs.includes('full prompt body that should stay off the command line'), false);
 assert.equal(mapModelForAgent({ modelMap: { 'GPT-5.5': 'gpt-5.5' } }, 'GPT-5.5'), 'gpt-5.5');
 assert.equal(mapModelForAgent({ modelMap: { 'GPT-5.5': 'gpt-5.5' } }, 'Unknown'), '');
+
+const miniLowArgs = buildAgentCliArgs({
+  config: {
+    name: 'Codex',
+    executables: [],
+    flags: {
+      model: '-m',
+      workingDir: '-C',
+      effort: ['--config', 'reasoning_effort='],
+    },
+    modelMap: {
+      'GPT-5.4 Mini': 'gpt-5.4-mini',
+    },
+    launchStyle: 'start',
+  },
+  localPath: fixtureRepoPath,
+  model: 'GPT-5.4 Mini',
+  effort: 'low',
+  promptReference: 'prompt',
+  executionMode: 'safe',
+});
+assert.deepEqual(miniLowArgs, [
+  '-C', fixtureRepoPath,
+  '-m', 'gpt-5.4-mini',
+  '--config', 'reasoning_effort=low',
+  'prompt',
+]);
+assert.equal(miniLowArgs.includes('reasoning_effort=high'), false);
 
 for (const effort of ['low', 'medium', 'high', 'xhigh']) {
   const effortArgs = buildAgentCliArgs({
@@ -312,6 +351,21 @@ assert.match(launchScript, /errorMessage/);
 assert.match(launchScript, /Codex process exited with code/);
 assert.match(launchScript, /completionCallback success=%CALLBACK_SUCCESS% exitCode=%EXIT_CODE% errorMessage=%CALLBACK_ERROR_MESSAGE%/);
 assert.match(launchScript, /pause/);
+
+const miniLowLaunchScriptPath = createCodexLaunchScript({
+  runId: 'run-script-test-low',
+  taskId: 'task-script-test-low',
+  apiBaseUrl: 'http://localhost:3000',
+  runDir: files.runDir,
+  executable: fixtureCodexPath,
+  args: ['-C', fixtureWorkDir, '-m', 'gpt-5.4-mini', '--config', 'reasoning_effort=low', 'prompt'],
+  cwd: fixtureWorkDir,
+  windowTitle: 'Codex Agent',
+  logPath: files.logPath,
+});
+const miniLowLaunchScript = fs.readFileSync(miniLowLaunchScriptPath, 'utf8');
+assert.ok(miniLowLaunchScript.includes(`"${fixtureCodexPath}" "-C" "${fixtureWorkDir}" "-m" "gpt-5.4-mini" "--config" "reasoning_effort=low"`));
+assert.equal(miniLowLaunchScript.includes('reasoning_effort=high'), false);
 
 const {
   validateAgentParams,

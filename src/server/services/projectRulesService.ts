@@ -3,11 +3,12 @@ import path from 'path';
 import { getDevFlowAppRoot } from './agentRunService';
 
 export interface ProjectRulesContext {
+  title: string;
   workflow: string[];
-  implementation: string[];
 }
 
 const FALLBACK_PROJECT_RULES: ProjectRulesContext = {
+  title: 'DevFlow Workflow Rules',
   workflow: [
     'Move todo cards to in-progress before implementation starts.',
     'Use the card branch. If the card has no branch, default to develop.',
@@ -16,13 +17,6 @@ const FALLBACK_PROJECT_RULES: ProjectRulesContext = {
     'When implementation is complete, push the work to the active branch first.',
     'Push the work to the active branch before moving the card to ready-for-review.',
     'Do not move a card to ready-for-review before code is pushed.',
-  ],
-  implementation: [
-    'Prefer clean architecture and modular design.',
-    'Avoid god classes, god files, and monolithic implementation.',
-    'Keep modules, components, services, repositories, and helpers focused on one responsibility.',
-    'Do not dump unrelated logic into already-large files unless there is a strong reason.',
-    'Preserve existing behavior unless the card explicitly asks to change it.',
   ],
 };
 
@@ -41,8 +35,10 @@ export function getProjectRulesContext(baseDir = getDevFlowAppRoot()): ProjectRu
   try {
     const parsed = JSON.parse(fs.readFileSync(rulesPath, 'utf8'));
     return {
+      title: typeof parsed?.title === 'string' && parsed.title.trim()
+        ? parsed.title.trim()
+        : FALLBACK_PROJECT_RULES.title,
       workflow: normalizeRules(parsed?.workflow, FALLBACK_PROJECT_RULES.workflow),
-      implementation: normalizeRules(parsed?.implementation, FALLBACK_PROJECT_RULES.implementation),
     };
   } catch (error) {
     console.error('Error parsing project-rules.json', error);

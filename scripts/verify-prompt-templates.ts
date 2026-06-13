@@ -84,12 +84,20 @@ assert.ok(renderResult.content.includes(fixtureLocalPath));
 assert.ok(renderResult.content.includes('Agent: Codex, Model: GPT-5.5, Effort: xhigh'));
 assert.ok(renderResult.content.includes('DVF-0081: Use production task context'));
 assert.ok(renderResult.usedSkills.includes('prompt.project-rules'));
+assert.ok(renderResult.content.includes('## DevFlow Workflow Rules'));
 assert.ok(renderResult.content.includes('Move todo cards to in-progress before implementation starts.'));
 assert.ok(renderResult.content.includes('Use the card branch. If the card has no branch, default to develop.'));
 assert.ok(renderResult.content.includes('Handle every checklist item or mini task.'));
 assert.ok(renderResult.content.includes('Push the work to the active branch before moving the card to ready-for-review.'));
-assert.ok(renderResult.content.includes('Prefer clean architecture and modular design.'));
-assert.ok(renderResult.content.includes('Avoid god classes, god files, and monolithic implementation.'));
+assert.ok(!renderResult.content.includes('Prefer clean architecture and modular design.'));
+assert.ok(!renderResult.content.includes('Avoid god classes, god files, and monolithic implementation.'));
+
+const agentsInstructions = fs.readFileSync(path.join(process.cwd(), 'AGENTS.md'), 'utf8');
+assert.ok(agentsInstructions.includes('Prefer clean architecture.'));
+assert.ok(agentsInstructions.includes('Prefer modular design.'));
+assert.ok(agentsInstructions.includes('Avoid god classes.'));
+assert.ok(agentsInstructions.includes('Avoid god files.'));
+assert.ok(agentsInstructions.includes('Avoid monolithic implementation.'));
 
 console.log('[verify] Testing prompt skills resolve from stable app root...');
 const outsideCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-prompt-root-'));

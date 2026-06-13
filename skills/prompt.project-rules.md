@@ -1,7 +1,2 @@
-## Project Rules
-
-### Workflow
+## {{projectRules.title}}
 {{projectRules.workflow}}
-
-### Implementation
-{{projectRules.implementation}}

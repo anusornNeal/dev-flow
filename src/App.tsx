@@ -575,13 +575,14 @@ export default function App() {
                   .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
                 
                 return (
-                  <BoardLane
-                    key={col.id}
-                    column={col}
-                    tasks={columnTasks}
-                    allTasks={tasks}
-                    draggedOverColumn={draggedOverColumn}
-                    setDraggedOverColumn={setDraggedOverColumn}
+                    <BoardLane
+                      key={col.id}
+                      column={col}
+                      tasks={columnTasks}
+                      allTasks={tasks}
+                      draggedOverColumn={draggedOverColumn}
+                      draggedTaskId={draggedTaskId}
+                      setDraggedOverColumn={setDraggedOverColumn}
                     handleDrop={handleDrop}
                     setSelectedTask={setSelectedTask}
                     handleDeleteTask={handleDeleteTask}

@@ -393,7 +393,7 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
 
       {/* Subtasks compact section */}
       {subtasks && subtasks.length > 0 && (
-        <div className="mt-2.5 mb-2.5 p-2 bg-[#fdfbf8]/90 dark:bg-[#292119]/90 border border-[#ede3d2] dark:border-[#584a3b] rounded-xl flex flex-col gap-1.5" onClick={(e) => e.stopPropagation()}>
+        <div className="mt-2 p-1.5 bg-[#fdfbf8]/90 dark:bg-[#292119]/90 border border-[#ede3d2] dark:border-[#584a3b] rounded-xl flex flex-col gap-1.5" onClick={(e) => e.stopPropagation()}>
           <div className="flex justify-between items-center text-[9px] font-mono font-extrabold uppercase text-[#7a6455] dark:text-[#f3eadf] tracking-wide mb-1 select-none">
             <span className="flex items-center gap-1">🌿 Subtasks ({subtasks.filter(s => s.status === 'done').length}/{subtasks.length})</span>
             <span className="text-[#a47a32] dark:text-[#f3eadf]">{Math.round((subtasks.filter(s => s.status === 'done').length / subtasks.length) * 100)}% done</span>
@@ -411,7 +411,7 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
                     onDragStart(e, sub.id);
                   }}
                   onClick={() => onSelect(sub)}
-                  className={`group/sub flex flex-col gap-1 p-1.5 rounded-xl border text-[10px] cursor-grab active:cursor-grabbing transition-all hover:bg-white dark:hover:bg-[#1e1914] select-none ${
+                  className={`group/sub flex flex-col gap-0.5 p-1 rounded-xl border text-[10px] cursor-grab active:cursor-grabbing transition-all hover:bg-white dark:hover:bg-[#1e1914] select-none ${
                     subDone 
                       ? 'bg-emerald-50/20 border-emerald-100/50 text-gray-400 dark:text-[#b8ab9f]' 
                       : subInProgress
@@ -447,16 +447,16 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
                   {/* Small statuses/agent info */}
                   <div className="flex items-center gap-1 shrink-0 font-mono text-[8px] font-bold ml-[20px]">
                     {sub.model && (
-                      <span className="flex items-center gap-0.5 px-1 py-0.5 rounded border bg-[#fae8ff] dark:bg-[#292119] text-[#86198f] dark:text-[#f3eadf] border-[#f5d0fe] dark:border-[#584a3b]">
-                        <AgentLogo agent={sub.model} size={8} className="relative -top-[0.5px]" />
-                        {sub.model}
+                      <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-md border border-[#ebdcb9]/40 bg-[#fdfbf7]/50 dark:bg-[#292119]/50 text-[#8a725f] dark:text-[#f3eadf] shadow-sm">
+                        <AgentLogo agent={sub.model} size={8} className="relative -top-[0.5px] text-[#b49f8e] dark:text-[#b8ab9f]" />
+                        <span className="leading-none mt-[1px]">{getDisplayModelName(undefined, sub.model)}</span>
                       </span>
                     )}
-                    <span className={`px-1 py-0.2 rounded uppercase border ${
-                      subDone ? 'bg-emerald-50 text-emerald-700 border-emerald-200/40' :
-                      subInProgress ? 'bg-orange-50 text-orange-700 border-orange-200/40' :
-                      sub.status === 'todo' ? 'bg-[#fffdf4] dark:bg-[#292119] text-[#a47a32] dark:text-[#f3eadf] border-[#f0e3cc] dark:border-[#584a3b]' :
-                      'bg-gray-50 dark:bg-[#292119] text-gray-400 dark:text-[#b8ab9f] border-gray-200'
+                    <span className={`px-1 py-0.2 rounded-md uppercase border ${
+                      subDone ? 'bg-emerald-50/50 text-emerald-700 border-emerald-200/30' :
+                      subInProgress ? 'bg-orange-50/50 text-orange-700 border-orange-200/30' :
+                      sub.status === 'todo' ? 'bg-transparent dark:bg-[#292119] text-[#a47a32] dark:text-[#f3eadf] border-[#ebdcb9]/40 dark:border-[#584a3b]' :
+                      'bg-transparent dark:bg-[#292119] text-[#8c7a6e] dark:text-[#b8ab9f] border-[#ebdcb9]/30'
                     }`}>
                       {sub.status === 'in-progress' ? 'active' : sub.status}
                     </span>
@@ -471,7 +471,7 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
 
 
         {/* Footer Metrics */}
-        <div className="flex items-center justify-between pt-0.5 select-none text-[9px] font-mono mt-1 border-t border-[#f2ece2] dark:border-[#584a3b] pt-1.5">
+        <div className="flex items-center justify-between select-none text-[9px] font-mono mt-2.5 pt-2 border-t border-[#ebdcb9]/40 dark:border-[#584a3b]">
           <span className="text-[#8c7a6e] dark:text-[#d6b56d] italic truncate mr-2" title={task.branch || 'no active branch'}>
             {task.branch ? `🌿 ${task.branch}` : 'no active branch'}
           </span>

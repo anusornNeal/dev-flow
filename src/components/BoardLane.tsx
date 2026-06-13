@@ -2,6 +2,7 @@ import React from 'react';
 import type { Task, TaskStatus } from '../types';
 import TaskCard from './TaskCard';
 import { ListTodo, Code, GitMerge, FileText } from 'lucide-react';
+import { isValidTransition } from '../lib/statusTransitions';
 
 interface ColumnDef {
   id: TaskStatus;
@@ -14,6 +15,7 @@ interface BoardLaneProps {
   tasks: Task[];
   allTasks: Task[];
   draggedOverColumn: TaskStatus | null;
+  draggedTaskId: string | null;
   setDraggedOverColumn: (status: TaskStatus | null) => void;
   handleDrop: (e: React.DragEvent, status: TaskStatus) => void;
   setSelectedTask: (task: Task | null) => void;
@@ -27,6 +29,7 @@ export function BoardLane({
   tasks,
   allTasks,
   draggedOverColumn,
+  draggedTaskId,
   setDraggedOverColumn,
   handleDrop,
   setSelectedTask,
@@ -47,6 +50,12 @@ export function BoardLane({
   const totalStepsInLane = tasks.reduce((sum, t) => sum + (t.checklist?.length || 0), 0);
   const completedStepsInLane = tasks.reduce((sum, t) => sum + (t.checklist?.filter(item => item.completed).length || 0), 0);
   const isOver = draggedOverColumn === column.id;
+  const draggedTask = draggedTaskId ? allTasks.find(t => t.id === draggedTaskId) : null;
+  const isDraggingAny = draggedTaskId !== null;
+  // It's a valid drop if there's no drag, OR if there's a drag and the transition is valid
+  // (We also treat dragging a task to its current lane as valid for visual purposes)
+  const isValidDrop = !isDraggingAny || !draggedTask || column.id === draggedTask.status || isValidTransition(draggedTask.status, column.id);
+  
   const isInProgressCol = column.id === 'in-progress';
   const isReviewCol = column.id === 'ready-for-review';
   const isDoneCol = column.id === 'done';
@@ -58,6 +67,9 @@ export function BoardLane({
         if (draggedOverColumn !== column.id) {
           setDraggedOverColumn(column.id);
         }
+        if (!isValidDrop) {
+          e.dataTransfer.dropEffect = 'none';
+        }
       }}
       onDragLeave={() => {
         if (draggedOverColumn === column.id) {
@@ -66,7 +78,13 @@ export function BoardLane({
       }}
       onDrop={(e) => handleDrop(e, column.id)}
       className={`w-[300px] shrink-0 flex flex-col pb-4 p-2 transition-all border-r border-[#e5d4bb]/30 dark:border-[#584a3b]/30 ${
-        isOver ? 'bg-[#ffeccb]/20 dark:bg-[#292119]/40 border-dashed border-[#e3a35a] dark:border-[#584a3b] rounded-2xl' : ''
+        isDraggingAny && !isValidDrop ? 'opacity-40 grayscale-[0.5]' : ''
+      } ${
+        isOver 
+          ? isValidDrop 
+            ? 'bg-[#ffeccb]/20 dark:bg-[#292119]/40 border-dashed border-[#e3a35a] dark:border-[#584a3b] rounded-2xl' 
+            : 'bg-red-50/50 dark:bg-red-950/20 border-dashed border-red-400/60 dark:border-red-900/50 rounded-2xl cursor-not-allowed'
+          : ''
       }`}
     >
       {/* Status header lane metadata */}

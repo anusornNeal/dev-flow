@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Cat, Moon, Sun, FileCode, Code, FileText, Plus, Sparkles, Settings, ChevronDown } from 'lucide-react';
+import { Cat, Moon, Sun, FileCode, Code, FileText, Plus, Sparkles, Blocks, ChevronDown } from 'lucide-react';
 import NgrokStatusPanel from './NgrokStatusPanel';
 import AutoWorkToggle from './AutoWorkToggle';
 
@@ -86,7 +86,7 @@ export function Header({
             className="p-1.5 text-[#a46c24] dark:text-[#d6b56d] hover:bg-[#ebdcb9]/40 dark:hover:bg-[#584a3b]/50 rounded-xl transition-colors cursor-pointer"
             title="Developer Settings & Configs"
           >
-            <Settings size={16} />
+            <Blocks size={16} />
           </button>
           
           {isMenuOpen && (

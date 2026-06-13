@@ -1120,11 +1120,29 @@ export default function TaskDetailsDrawer({
           )}
 
           {/* Activity Logs */}
-          <div className="border-t border-[#ebdcb9] dark:border-[#584a3b] pt-6 space-y-4">
-            <h4 className="text-[10px] font-mono text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest flex items-center gap-1.5 font-bold">
-              <Activity size={13} className="text-gray-500 dark:text-[#b8ab9f]" /> Backlog Activity & Developer Logs
-            </h4>
-
+          <div className="border border-[#ebdcb9] dark:border-[#584a3b] rounded-2xl overflow-hidden bg-[#fffdfa] dark:bg-[#292119]">
+            <button
+              type="button"
+              onClick={() => toggleSection('activity')}
+              className="w-full flex items-center justify-between p-3.5 hover:bg-[#f4ebd9]/30 dark:hover:bg-[#3a2f26]/30 transition-colors cursor-pointer"
+            >
+              <div className="flex items-center gap-2">
+                <div className="w-6 h-6 rounded-lg bg-[#e5a93b]/10 dark:bg-[#e5a93b]/20 flex items-center justify-center">
+                  <Activity size={12} className="text-[#e5a93b] dark:text-[#d6b56d]" />
+                </div>
+                <span className="text-xs font-bold text-[#5c493c] dark:text-[#f3eadf]">Activity & Logs</span>
+                <span className="px-1.5 py-0.5 rounded-md bg-[#f4ebd9] dark:bg-[#3a2f26] text-[9px] font-mono font-bold text-[#8a6e5a] dark:text-[#b8ab9f]">
+                  {task.logs.length}
+                </span>
+              </div>
+              <ChevronDown 
+                size={14} 
+                className={`text-[#c4b3a4] dark:text-[#8a7a6a] transition-transform duration-200 ${openSections.has('activity') ? 'rotate-180' : ''}`}
+              />
+            </button>
+            
+            {openSections.has('activity') && (
+              <div className="border-t border-[#ebdcb9] dark:border-[#584a3b] bg-[#fdfbf7]/50 dark:bg-[#292119]/50 p-4 space-y-4">
             {/* Event list */}
             <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
               {[...task.logs]
@@ -1168,6 +1186,8 @@ export default function TaskDetailsDrawer({
                 <Plus size={15} />
               </button>
             </form>
+              </div>
+            )}
           </div>
         </div>
 

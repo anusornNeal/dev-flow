@@ -994,26 +994,28 @@ export default function TaskDetailsDrawer({
                   <CheckSquare size={13} className="text-[#728f44] dark:text-[#f3eadf]" /> Mini-Tasks (สิ่งที่ต้องทำ)
                 </h4>
                 {task.checklist && task.checklist.length > 0 ? (
-                  <div className="space-y-2">
-                    {(showAllChecklist ? task.checklist : task.checklist.slice(0, 10)).map((item) => (
-                      <div 
-                        key={item.id || item.text}
-                        onClick={() => handleToggleChecklistItem(item.id || item.text)}
-                        className={`py-2 px-1 border-b last:border-b-0 border-[#ebdcb9]/40 dark:border-[#584a3b]/40 flex items-start gap-2.5 cursor-pointer transition-colors select-none ${
-                          item.completed 
-                            ? 'text-gray-400 dark:text-[#b8ab9f] line-through' 
-                            : 'text-[#4d3d32] dark:text-[#f3eadf] hover:bg-[#f4ebd9]/20 dark:hover:bg-[#3a2f26]/20'
-                        }`}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={item.completed}
-                          onChange={() => {}} // toggled on container click
-                          className="mt-0.5 rounded border-[#ebdcb9] dark:border-[#584a3b] text-[#7dad71] dark:text-[#d6b56d] focus:ring-0 cursor-pointer pointer-events-none"
-                        />
-                        <span className="text-[11px] font-semibold select-none leading-relaxed">{item.text}</span>
-                      </div>
-                    ))}
+                  <div className="flex flex-col gap-2">
+                    <div className="flex flex-col">
+                      {(showAllChecklist ? task.checklist : task.checklist.slice(0, 10)).map((item) => (
+                        <div 
+                          key={item.id || item.text}
+                          onClick={() => handleToggleChecklistItem(item.id || item.text)}
+                          className={`py-2 px-1 border-b last:border-b-0 border-[#ebdcb9]/40 dark:border-[#584a3b]/40 flex items-start gap-2.5 cursor-pointer transition-colors select-none ${
+                            item.completed 
+                              ? 'text-gray-400 dark:text-[#b8ab9f] line-through' 
+                              : 'text-[#4d3d32] dark:text-[#f3eadf] hover:bg-[#f4ebd9]/20 dark:hover:bg-[#3a2f26]/20'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={item.completed}
+                            onChange={() => {}} // toggled on container click
+                            className="mt-0.5 rounded border-[#ebdcb9] dark:border-[#584a3b] text-[#7dad71] dark:text-[#d6b56d] focus:ring-0 cursor-pointer pointer-events-none"
+                          />
+                          <span className="text-[11px] font-semibold select-none leading-relaxed">{item.text}</span>
+                        </div>
+                      ))}
+                    </div>
                     {task.checklist.length > 10 && !showAllChecklist && (
                       <button
                         type="button"

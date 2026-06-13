@@ -66,8 +66,8 @@ export default function TaskDetailsDrawer({
   const [editedTags, setEditedTags] = useState(task.tags.join(', '));
   
   // New properties editing states
-  const [editedFilesStr, setEditedFilesStr] = useState((task.targetFiles || []).join('\n'));
-  const [editedChecklistStr, setEditedChecklistStr] = useState((task.checklist || []).map(c => c.text).join('\n'));
+  const [editedFilesList, setEditedFilesList] = useState<string[]>(task.targetFiles || []);
+  const [editedChecklistList, setEditedChecklistList] = useState<string[]>((task.checklist || []).map(c => c.text));
   const [editedDesignImages, setEditedDesignImages] = useState<string[]>(task.designImages || (task.designImage ? [task.designImage] : []));
   const [editedSpecUrl, setEditedSpecUrl] = useState(task.specUrl || '');
   
@@ -146,8 +146,8 @@ export default function TaskDetailsDrawer({
       setEditedPriority(task.priority);
       setEditedStatus(task.status);
       setEditedTags(task.tags.join(', '));
-      setEditedFilesStr((task.targetFiles || []).join('\n'));
-      setEditedChecklistStr((task.checklist || []).map(c => c.text).join('\n'));
+      setEditedFilesList(task.targetFiles || []);
+      setEditedChecklistList((task.checklist || []).map(c => c.text));
       setEditedDesignImages(task.designImages || (task.designImage ? [task.designImage] : []));
       setEditedSpecUrl(task.specUrl || '');
       setEditedAgent(task.agent || '');
@@ -161,13 +161,11 @@ export default function TaskDetailsDrawer({
 
     const tagsArray: string[] = [];
 
-    const filesArray = editedFilesStr
-      .split('\n')
+    const filesArray = editedFilesList
       .map(f => f.trim())
       .filter(f => f.length > 0);
 
-    const checklistLines = editedChecklistStr
-      .split('\n')
+    const checklistLines = editedChecklistList
       .map(line => line.trim())
       .filter(line => line.length > 0);
 
@@ -508,26 +506,81 @@ export default function TaskDetailsDrawer({
               <div className="space-y-2.5 border-t border-[#ebdcb9] dark:border-[#584a3b] pt-5">
                 <h4 className="text-[10px] font-mono text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest flex items-center justify-between font-bold">
                   <span className="flex items-center gap-1.5"><FileCode size={13} className="text-[#bf8a50] dark:text-[#d6b56d]" /> Target Files (ไฟล์ที่แก้ไข)</span>
-                  <span className="text-[9px] text-[#9c8473] dark:text-[#d6b56d] lowercase font-normal">(one path per line)</span>
                 </h4>
-                <textarea
-                  className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] h-20 outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all resize-y font-mono shadow-2xs"
-                  placeholder="app/src/main/java/com/example/MainActivity.kt"
-                  value={editedFilesStr}
-                  onChange={(e) => setEditedFilesStr(e.target.value)}
-                />
+                <div className="space-y-2">
+                  {editedFilesList.map((file, idx) => (
+                    <div key={idx} className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        className="flex-1 bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all font-mono shadow-2xs"
+                        placeholder="app/src/main/java/com/example/MainActivity.kt"
+                        value={file}
+                        onChange={(e) => {
+                          const newList = [...editedFilesList];
+                          newList[idx] = e.target.value;
+                          setEditedFilesList(newList);
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const newList = editedFilesList.filter((_, i) => i !== idx);
+                          setEditedFilesList(newList);
+                        }}
+                        className="p-2 text-[#c4b3a4] hover:text-red-500 transition-colors cursor-pointer"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => setEditedFilesList([...editedFilesList, ''])}
+                    className="flex items-center gap-1.5 text-[10px] font-bold text-[#bf8a50] dark:text-[#d6b56d] hover:text-[#d7933f] dark:hover:text-[#f3eadf] transition-colors px-2 py-1 cursor-pointer"
+                  >
+                    <Plus size={12} /> Add Target File
+                  </button>
+                </div>
               </div>
 
               <div className="space-y-2.5 border-t border-[#ebdcb9] dark:border-[#584a3b] pt-5">
                 <h4 className="text-[10px] font-mono text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest flex items-center justify-between font-bold">
                   <span className="flex items-center gap-1.5"><CheckSquare size={13} className="text-[#728f44] dark:text-[#f3eadf]" /> Mini-Tasks (สิ่งที่ต้องทำ)</span>
-                  <span className="text-[9px] text-[#9c8473] dark:text-[#d6b56d] lowercase font-normal">(one step per line)</span>
                 </h4>
-                <textarea
-                  className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] h-24 outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all resize-y font-mono shadow-2xs"
-                  value={editedChecklistStr}
-                  onChange={(e) => setEditedChecklistStr(e.target.value)}
-                />
+                <div className="space-y-2">
+                  {editedChecklistList.map((step, idx) => (
+                    <div key={idx} className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        className="flex-1 bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] outline-none focus:border-[#d7933f] dark:focus:border-[#584a3b] transition-all font-mono shadow-2xs"
+                        placeholder="Task step..."
+                        value={step}
+                        onChange={(e) => {
+                          const newList = [...editedChecklistList];
+                          newList[idx] = e.target.value;
+                          setEditedChecklistList(newList);
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const newList = editedChecklistList.filter((_, i) => i !== idx);
+                          setEditedChecklistList(newList);
+                        }}
+                        className="p-2 text-[#c4b3a4] hover:text-red-500 transition-colors cursor-pointer"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => setEditedChecklistList([...editedChecklistList, ''])}
+                    className="flex items-center gap-1.5 text-[10px] font-bold text-[#728f44] dark:text-[#a3c773] hover:text-[#5a7336] transition-colors px-2 py-1 cursor-pointer"
+                  >
+                    <Plus size={12} /> Add Mini-Task
+                  </button>
+                </div>
               </div>
 
               <div className="space-y-2.5 border-t border-[#ebdcb9] dark:border-[#584a3b] pt-5">
@@ -762,21 +815,23 @@ export default function TaskDetailsDrawer({
                 )}
               </div>
 
-              <div className="flex gap-3 pt-4">
-                <button
-                  type="button"
-                  onClick={() => setIsEditing(false)}
-                  className="flex-1 py-2 rounded-xl border border-[#ebdcb9] dark:border-[#584a3b] text-[#6e5a4d] dark:text-[#f3eadf] bg-white dark:bg-[#292119] hover:bg-[#fff9ed] dark:hover:bg-[#1e1914] transition-colors text-xs font-bold cursor-pointer"
-                >
-                  Discard Changes
-                </button>
-                <button
-                  type="button"
-                  onClick={handleSave}
-                  className="flex-1 bg-[#d89745] dark:bg-[#e0a070] hover:bg-[#c08234] dark:hover:bg-[#d6b56d] text-white dark:text-[#f3eadf] font-extrabold py-2 rounded-xl text-xs transition-colors cursor-pointer"
-                >
-                  Save Modifications
-                </button>
+              <div className="sticky bottom-0 left-0 right-0 z-20 flex gap-3 pt-4 pb-4 bg-gradient-to-t from-[#fdfbf7] via-[#fdfbf7] to-transparent dark:from-[#292119] dark:via-[#292119] border-t border-[#ebdcb9]/0 dark:border-[#584a3b]/0 mt-8">
+                <div className="flex gap-3 w-full bg-[#fdfbf7] dark:bg-[#292119] p-3 rounded-2xl shadow-[0_-4px_24px_rgba(200,180,160,0.2)] dark:shadow-[0_-4px_24px_rgba(0,0,0,0.5)] border border-[#ebdcb9] dark:border-[#584a3b]">
+                  <button
+                    type="button"
+                    onClick={() => setIsEditing(false)}
+                    className="flex-1 py-2 rounded-xl border border-[#ebdcb9] dark:border-[#584a3b] text-[#6e5a4d] dark:text-[#f3eadf] bg-white dark:bg-[#292119] hover:bg-[#fff9ed] dark:hover:bg-[#1e1914] transition-colors text-xs font-bold cursor-pointer"
+                  >
+                    Discard Changes
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSave}
+                    className="flex-1 bg-[#d89745] dark:bg-[#e0a070] hover:bg-[#c08234] dark:hover:bg-[#d6b56d] text-white dark:text-[#f3eadf] font-extrabold py-2 rounded-xl text-xs transition-colors cursor-pointer shadow-sm"
+                  >
+                    Save Modifications
+                  </button>
+                </div>
               </div>
             </div>
           ) : (

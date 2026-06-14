@@ -61,10 +61,10 @@ export default function TemplateModal({ projectId, onClose }: TemplateModalProps
   useEffect(() => {
     if (selectedSection) {
       setEditContent(selectedSection.overrideContent !== undefined ? selectedSection.overrideContent : '');
-      setIsEditingOverride(selectedSection.sourceType === 'override');
+      setIsEditingOverride(false);
       setPreviewContent(null);
     }
-  }, [selectedSectionId, selectedSection?.sourceType]);
+  }, [selectedSectionId]);
 
   const handleSaveOverride = async () => {
     if (!selectedSectionId) return;
@@ -76,6 +76,7 @@ export default function TemplateModal({ projectId, onClose }: TemplateModalProps
         body: JSON.stringify({ content: editContent })
       });
       await fetchSections();
+      setIsEditingOverride(false);
     } catch (err) {
       console.error('Failed to save override:', err);
     }
@@ -228,25 +229,36 @@ export default function TemplateModal({ projectId, onClose }: TemplateModalProps
                   </span>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
-                  {selectedSection.sourceType === 'master' && !isEditingOverride && (
+                  {!isEditingOverride && (
                      <button
                         onClick={() => {
                           setIsEditingOverride(true);
-                          setEditContent(selectedSection.masterContent || '');
+                          setEditContent(selectedSection.sourceType === 'override' ? (selectedSection.overrideContent || '') : (selectedSection.masterContent || ''));
                         }}
                         className="px-3 py-1.5 text-xs font-bold bg-[#f4ebd9] dark:bg-[#1e1914] text-[#7a6455] dark:text-[#f3eadf] hover:bg-[#ebdcb9] dark:bg-[#584a3b] dark:hover:bg-[#382b1d] rounded-lg transition-colors flex items-center gap-1.5 border border-[#d8c5aa] dark:border-[#584a3b]"
                      >
-                        <Edit2 size={12} /> Create Override
+                        <Edit2 size={12} /> {selectedSection.sourceType === 'override' ? 'Edit Override' : 'Create Override'}
                      </button>
                   )}
                   {isEditingOverride && (
                     <>
+                      {selectedSection.sourceType === 'override' && (
+                        <button
+                          onClick={handleResetToMaster}
+                          className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors border border-transparent hover:border-red-200 dark:hover:border-red-900"
+                          title="Delete Override and Reset to Master"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      )}
                       <button
-                        onClick={handleResetToMaster}
-                        className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors border border-transparent hover:border-red-200 dark:hover:border-red-900"
-                        title="Delete Override and Reset to Master"
+                        onClick={() => {
+                          setIsEditingOverride(false);
+                          setEditContent(selectedSection.overrideContent !== undefined ? selectedSection.overrideContent : '');
+                        }}
+                        className="px-3 py-1.5 text-xs font-bold text-[#7a6455] dark:text-[#f3eadf] hover:bg-[#ebdcb9] dark:hover:bg-[#382b1d] rounded-lg transition-colors"
                       >
-                        <Trash2 size={14} />
+                        Cancel
                       </button>
                       <button
                         onClick={() => setEditContent(selectedSection.masterContent || '')}
@@ -327,17 +339,17 @@ export default function TemplateModal({ projectId, onClose }: TemplateModalProps
                   />
                ) : (
                   <div className="absolute inset-0 p-6 overflow-y-auto">
-                     {selectedSection.masterContent ? (
-                       <div className="prose prose-sm prose-orange max-w-none prose-headings:font-extrabold prose-a:text-[#d89745] dark:prose-invert dark:prose-headings:text-[#e0a070] dark:text-[#f3eadf] opacity-80">
+                     {selectedSection.effectiveContent ? (
+                       <div className={`prose prose-sm prose-orange max-w-none prose-headings:font-extrabold prose-a:text-[#d89745] dark:prose-invert dark:prose-headings:text-[#e0a070] dark:text-[#f3eadf] ${selectedSection.sourceType === 'master' ? 'opacity-80' : ''}`}>
                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                           {selectedSection.masterContent}
+                           {selectedSection.effectiveContent}
                          </ReactMarkdown>
                        </div>
                      ) : (
                        <div className="h-full flex items-center justify-center">
                          <div className="text-center text-[#8C7565] dark:text-[#8c7463] font-mono text-sm flex flex-col items-center gap-2">
                            <Ban size={24} className="opacity-50" />
-                           <p>No master content available for this section.</p>
+                           <p>No content available for this section.</p>
                          </div>
                        </div>
                      )}

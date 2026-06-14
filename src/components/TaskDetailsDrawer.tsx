@@ -566,7 +566,7 @@ export default function TaskDetailsDrawer({
                     { value: '', label: 'None / Default' },
                     ...(editedAgent ? (AGENTS_CONFIG[editedAgent as import('../lib/agentsConfig').AgentName] || []).map(m => ({
                       value: m.model_name,
-                      label: m.model_name
+                      label: m.display_name || m.label || m.model_name
                     })) : [])
                   ]}
                 />
@@ -580,7 +580,7 @@ export default function TaskDetailsDrawer({
                     { value: '', label: 'No Effort' },
                     ...(editedAgent && editedModel ? (getModelConfig(editedAgent, editedModel)?.availableEfforts || []).map(eff => ({
                       value: eff,
-                      label: eff.charAt(0).toUpperCase() + eff.slice(1),
+                      label: eff === 'xhigh' ? 'Extra High' : eff.charAt(0).toUpperCase() + eff.slice(1),
                       icon: <Zap size={11} className="text-[#d89745] dark:text-[#d6b56d]" />
                     })) : []),
                     ...((editedEffort && editedAgent && editedModel && !getModelConfig(editedAgent, editedModel)?.availableEfforts.includes(editedEffort as any)) 

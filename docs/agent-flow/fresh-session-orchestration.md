@@ -27,9 +27,13 @@ This document describes the task execution flow in DevFlow, prioritizing a fresh
 
 - The runner waits for the child process window to close.
 - When closed, it reads the exit code.
-- The runner issues an HTTP POST to `/api/tasks/:id/agent-runs/:runId/complete` with `success`, `exitCode`, and `errorMessage`.
-- DevFlow updates the `agent_run` status to `succeeded` or `failed`, and failed runs keep the exit-code detail in the visible error message.
-- If successful, DevFlow marks the task as `ready-for-review`.
+- External workers should issue an HTTP POST to `/api/tasks/:id/agent-complete` with `x-agent-request=true`.
+- The official completion payload supports `runId`, `status`, `summary`, `changedFiles`, `tests`, `notes`, and `moveTo`.
+- On `success`, DevFlow closes the active run and moves the task to `ready-for-review` by default.
+- On `failed`, DevFlow marks the run failed and keeps or moves the task safely without falsely completing it.
+- On `cancelled`, DevFlow marks the run cancelled and does not auto-complete the task.
+- The legacy runner compatibility path `/api/tasks/:id/agent-runs/:runId/complete` still exists for older launchers.
+- Full callback contract details live in `docs/agent-flow/agent-completion-callback.md`.
 
 ## 4.1 Parent Review Gating
 
@@ -83,3 +87,9 @@ Task: Implement User Login
 2. Do not change model or reasoning effort inside the session. DevFlow will start a new session for the next task.
 3. Finish your work and exit cleanly.
 ```
+
+## 10. Branch Display
+
+- `ACTIVE BRANCH: <branch>` is shared TaskCard metadata rendered by the common card UI.
+- Branch visibility is not documented as a per-task markdown section requirement.
+- Task descriptions should not add a standalone “Active Branch Requirement” section just to show branch state.

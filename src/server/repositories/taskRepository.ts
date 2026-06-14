@@ -1,6 +1,6 @@
 import db from '../../db/index';
 import type { AppState } from '../types';
-import { getActiveRunForTask, getLatestAgentRunForTask } from './agentRunRepository';
+import { getActiveRunForTask, getLatestAgentRunForTask, listAgentRunsForTask } from './agentRunRepository';
 
 function loadCounters(state: AppState) {
   state.countersCache = {};
@@ -67,6 +67,7 @@ export function loadTasks(state: AppState) {
   })).map((task) => {
     const activeRun = getActiveRunForTask(task.id);
     const latestRun = getLatestAgentRunForTask(task.id);
+    const allRuns = listAgentRunsForTask(task.id);
     return {
       ...task,
       activeAgent: activeRun?.agent || undefined,
@@ -79,6 +80,11 @@ export function loadTasks(state: AppState) {
         startedAt: latestRun.startedAt,
         endedAt: latestRun.endedAt,
       } : undefined,
+      agentRuns: allRuns.map((r) => ({
+        id: r.id,
+        status: r.status,
+        logFile: r.logPath,
+      })),
     };
   });
   console.log('Loaded ' + state.tasksCache.length + ' tasks from DB');

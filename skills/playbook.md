@@ -51,17 +51,25 @@ When the user gives a Jira URL or Jira key:
 8. Read/list the created tasks if needed to verify fields were saved correctly.
 9. Reply to the user with task IDs, titles, agent/model/effort, and split rationale.
 
-## Agent Drive Workflow
+## Auto Work & Agent Execution Workflow
 
-When an agent is being explicitly driven by the user to execute a specific task card, it must strictly follow this lifecycle:
+Dev Flow supports Auto Work, where assigned agents are automatically launched when tasks are moved to the `todo` lane.
 
-1. **Read Task Content**: Read the task card details carefully, including all checklist items, acceptance criteria, and subtasks (if any).
-2. **Move to In Progress**: Before starting the actual work, update the task status and move the card to `in-progress`.
+### For Planning/Prep Agents:
+1. **Assign Configuration**: Ensure the task has a valid `agent`, `model`, and `effort` assigned.
+2. **Trigger Auto Work**: Move the task to the `todo` lane. If Auto Work is enabled, the Dev Flow server will automatically launch the agent. Do not manually move the task to `in-progress`.
+
+### For Worker Agents:
+When an agent is launched to execute a specific task card, it must strictly follow this lifecycle:
+
+1. **Read Task Content**: Read the task card details carefully from the prompt or task context, including all checklist items, acceptance criteria, and subtasks.
+2. **Start Work**: The task is automatically tracked as an active run. (You do not need to manually move it to `in-progress` on launch).
 3. **Handle Subtasks**: If the task contains subtasks, spawn subagents to help work on them concurrently.
 4. **Commit to Branch**: Perform the implementation. When finished, commit the changes to the specific branch designated by the task card (`branch` field).
-5. **Move to Ready for Review**: Once all implementation and checklist items are verified, move the task card status to `ready-for-review` and wait for human feedback.
-6. **Merge and Push**: Wait for the user's approval. If the user says "ผ่าน" (Passed) or explicitly approves, merge the branch into `develop` and push the changes.
-7. **Complete Task**: Finally, update the task card status to `done` (Completed).
+5. **Checklist Verification**: Verify all implementation against the checklist items. Mark verified items as completed using the `toggle_task_checklist` MCP tool.
+6. **Complete the Run**: Once verified, use the `complete_agent_run` MCP tool with status `success`. This will close the active run and automatically move the task to `ready-for-review` to wait for human feedback.
+7. **Merge and Push**: Wait for the user's approval. If the user says "ผ่าน" (Passed) or explicitly approves, merge the branch into `develop` and push the changes.
+8. **Complete Task**: Finally, update the task card status to `done` (Completed).
 
 Do not skip any steps. In particular, always pause at `ready-for-review` before merging.
 
@@ -296,7 +304,7 @@ Rules for mini-tasks/checklist:
 3. Mark verified items as completed using the `toggle_task_checklist` MCP tool.
 4. If an item cannot be verified or is not completed, **do not** check it off. Instead, leave it unchecked and add a short note/log to the task explaining why.
 5. Do not blindly mark all items as completed without verification.
-6. Only move the card to `ready-for-review` after this checklist verification process is done.
+6. Only close the run (using `complete_agent_run`) and move the card to `ready-for-review` after this checklist verification process is done.
 
 ## Final Response Pattern
 

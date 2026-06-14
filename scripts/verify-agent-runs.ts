@@ -704,4 +704,30 @@ try {
   assert.fail(`Prompt rendering crashed for legacy task: ${e.message}`);
 }
 
+const spaceRunDir = path.join(tempDir, 'run with spaces');
+const spaceCwd = path.join(tempDir, 'repo with spaces');
+const spacePromptPath = path.join(tempDir, 'prompt with spaces.md');
+const spaceLogPath = path.join(tempDir, 'log with spaces.log');
+const spaceExecutable = path.join(tempDir, 'agent with spaces.exe');
+
+const antigravityLaunchScriptPath = createAgentLaunchScript({
+  runId: 'run-space-test',
+  taskId: 'task-space-test',
+  apiBaseUrl: 'http://localhost:3000',
+  runDir: spaceRunDir,
+  executable: spaceExecutable,
+  args: ['--model', 'gemini-3.5-flash', '-i', buildPromptReference(spacePromptPath)],
+  cwd: spaceCwd,
+  windowTitle: 'Antigravity Agent',
+  logPath: spaceLogPath,
+});
+
+const antigravityLaunchScript = fs.readFileSync(antigravityLaunchScriptPath, 'utf8');
+assert.ok(antigravityLaunchScript.includes(`cd /d "${spaceCwd}"`));
+assert.ok(antigravityLaunchScript.includes(`"${spaceExecutable}" "--model" "gemini-3.5-flash" "-i" "${buildPromptReference(spacePromptPath)}"`));
+assert.ok(antigravityLaunchScript.includes(`>> "${spaceLogPath}"`));
+assert.equal(antigravityLaunchScript.includes('start "'), false);
+assert.equal(antigravityLaunchScript.includes('cmd.exe /c start'), false);
+assert.equal(antigravityLaunchScript.includes('cmd.exe /s /c start'), false);
+
 console.log('[verify-agent-runs] all assertions passed');

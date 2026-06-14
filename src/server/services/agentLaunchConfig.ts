@@ -65,9 +65,11 @@ export interface BuildCodexLaunchConfigInput {
   appRoot?: string;
   preview?: boolean;
   environment?: Record<string, string | undefined>;
+  logPath?: string;
+  promptReferenceOverride?: string;
 }
 
-export interface BuiltCodexLaunchConfig {
+export interface BuiltAgentLaunchConfig {
   ok: true;
   executable: string;
   parameters: string[];
@@ -78,11 +80,14 @@ export interface BuiltCodexLaunchConfig {
   launchPlan: AgentLaunchPlan;
 }
 
-export interface FailedCodexLaunchConfig {
+export interface FailedAgentLaunchConfig {
   ok: false;
   error: string;
   launchPlan?: AgentLaunchPlan;
 }
+
+export type BuiltCodexLaunchConfig = BuiltAgentLaunchConfig;
+export type FailedCodexLaunchConfig = FailedAgentLaunchConfig;
 
 export type AgentLaunchPreflightCode =
   | 'OK'
@@ -339,10 +344,13 @@ export function runAgentLaunchPreflight(input: {
 
   const executablePath = resolveAgentExecutable(launchPlan.config.executables);
   if (!executablePath) {
+    const message = launchPlan.config.name === 'Antigravity'
+      ? 'Antigravity CLI not found. Set DEVFLOW_AGY_EXE or add agy.exe to PATH.'
+      : `${launchPlan.config.name} executable was not found from the configured env/path/command sources.`;
     return {
       ok: false,
       code: 'EXECUTABLE_NOT_FOUND',
-      message: `${launchPlan.config.name} executable was not found from the configured env/path/command sources.`,
+      message,
       agent,
       launchPlan,
     };
@@ -404,11 +412,12 @@ export function runAgentLaunchPreflight(input: {
   };
 }
 
-export function buildCodexLaunchConfig(input: BuildCodexLaunchConfigInput): BuiltCodexLaunchConfig | FailedCodexLaunchConfig {
+export function buildAgentLaunchConfig(input: BuildCodexLaunchConfigInput): BuiltAgentLaunchConfig | FailedAgentLaunchConfig {
   const appRoot = path.resolve(input.appRoot || getDevFlowAppRoot());
   const localPath = input.project.localPath || '';
+  const agent = input.task.agent || 'Codex';
   const preflight = runAgentLaunchPreflight({
-    agent: input.task.agent || 'Codex',
+    agent,
     localPath,
     model: input.task.model,
     effort: input.task.effort,
@@ -426,7 +435,7 @@ export function buildCodexLaunchConfig(input: BuildCodexLaunchConfigInput): Buil
 
   const cwd = path.resolve(localPath);
   const promptPath = path.resolve(input.promptPath);
-  const promptReference = buildPromptReference(promptPath);
+  const promptReference = input.promptReferenceOverride || buildPromptReference(promptPath);
   const parameters = buildAgentCliArgs({
     config: preflight.launchPlan.config,
     localPath: cwd,
@@ -444,13 +453,15 @@ export function buildCodexLaunchConfig(input: BuildCodexLaunchConfigInput): Buil
     }).filter((entry): entry is [string, string] => typeof entry[1] === 'string')
   );
   const previewText = [
-    `Codex launch preview: run=${input.runId}${input.preview ? ' (preview)' : ''}`,
+    `${preflight.launchPlan.agent} launch preview: run=${input.runId}${input.preview ? ' (preview)' : ''}`,
     `cwd=${cwd}`,
     `executable=${preflight.executablePath}`,
     `args=${parameters.join(' ')}`,
     `promptPath=${promptPath}`,
+    `logPath=${input.logPath ? path.resolve(input.logPath) : 'none'}`,
     `resolvedModel=${preflight.launchPlan.resolvedModel || 'none'}`,
     `selectedEffort=${preflight.launchPlan.selectedEffort || 'none'}`,
+    `effortHandling=${preflight.launchPlan.effortHandling.mode}`,
     `executionMode=${input.executionMode}`,
   ].join('\n');
 
@@ -464,6 +475,10 @@ export function buildCodexLaunchConfig(input: BuildCodexLaunchConfigInput): Buil
     previewText,
     launchPlan: preflight.launchPlan,
   };
+}
+
+export function buildCodexLaunchConfig(input: BuildCodexLaunchConfigInput): BuiltCodexLaunchConfig | FailedCodexLaunchConfig {
+  return buildAgentLaunchConfig(input);
 }
 
 export function buildLaunchMetadataBlock(plan: AgentLaunchPlan) {

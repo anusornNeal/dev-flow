@@ -4,7 +4,7 @@ import { spawn } from 'child_process';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { getDevFlowAppRoot } from './lib/devFlowPaths';
 import { buildPromptReference, getAgentRunsBaseDir, resolveAgentExecutionMode, type AgentExecutionMode } from './server/services/agentRunService';
-import { buildAgentCliArgs as buildSharedAgentCliArgs, buildCodexLaunchConfig, buildLaunchMetadataBlock, mapModelForAgent as mapSharedModelForAgent, resolveAgentExecutable, resolveAgentLaunchPlan, type FileAgentConfig } from './server/services/agentLaunchConfig';
+import { buildAgentCliArgs as buildSharedAgentCliArgs, buildAgentLaunchConfig, buildLaunchMetadataBlock, mapModelForAgent as mapSharedModelForAgent, resolveAgentLaunchPlan, type FileAgentConfig } from './server/services/agentLaunchConfig';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -40,20 +40,24 @@ function buildLaunchCommandLine(executable: string, args: string[]) {
   return `${isBatchScript ? 'call ' : ''}${quotedExecutable}${quotedArgs ? ` ${quotedArgs}` : ''}`;
 }
 
-export function buildWindowsStartCommand(input: {
+export function buildLauncherDispatch(input: {
   cwd: string;
   launchScriptPath: string;
 }) {
-  return [
-    'start',
-    '""',
-    '/d',
-    quoteBatArg(input.cwd),
-    'cmd.exe',
-    '/k',
-    'call',
-    quoteBatArg(input.launchScriptPath),
-  ].join(' ');
+  return {
+    command: 'powershell.exe',
+    args: [
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-Command',
+      'Start-Process',
+      '-FilePath',
+      input.launchScriptPath,
+      '-WorkingDirectory',
+      input.cwd,
+    ],
+  };
 }
 
 function appendRunnerLog(logPath: string | null | undefined, message: string) {
@@ -205,45 +209,34 @@ function main() {
     process.exit(1);
   }
 
-  let executable = resolveAgentExecutable(config.executables);
-  if (!executable) {
-    console.error(`[runner] Executable not found for ${config.name}. Checked:`, config.executables);
-    appendRunnerLog(paths.logPath, `Executable not found for ${config.name}. Checked configured env/path/command sources.`);
-    process.exit(1);
-  }
-  console.log(`[runner] Resolved executable: ${executable}`);
-
   const promptReference = readPromptReference(taskId, paths.promptPath, apiBaseUrl);
   if (!promptReference) {
     console.error(`[runner] Invalid prompt reference for task ${taskId}`);
     process.exit(1);
   }
-
-  let spawnArgs = buildSharedAgentCliArgs({ config, localPath: paths.localPath, model, effort, promptReference, executionMode });
   const runDir = paths.logPath ? path.dirname(paths.logPath) : runId ? path.join(getAgentRunsBaseDir(), runId) : getDevFlowAppRoot();
-  let cwd = paths.localPath || getDevFlowAppRoot();
-
-  if (config.name === 'Codex') {
-    const codexLaunchConfig = buildCodexLaunchConfig({
-      task: { id: taskId, agent: config.name, model, effort },
-      project: { localPath: paths.localPath || getDevFlowAppRoot() },
-      promptPath: paths.promptPath,
-      runId,
-      executionMode,
-      apiBaseUrl,
-      appRoot: path.join(__dirname, '..'),
-      preview: true,
-    });
-    if (codexLaunchConfig.ok === false) {
-      console.error(`[runner] ${codexLaunchConfig.error}`);
-      appendRunnerLog(paths.logPath, `Launch rejected: ${codexLaunchConfig.error}`);
-      process.exit(1);
-    }
-    executable = codexLaunchConfig.executable;
-    spawnArgs = codexLaunchConfig.parameters;
-    cwd = codexLaunchConfig.cwd;
-    appendRunnerLog(paths.logPath, codexLaunchConfig.previewText);
+  const agentLaunchConfig = buildAgentLaunchConfig({
+    task: { id: taskId, agent: config.name, model, effort },
+    project: { localPath: paths.localPath || getDevFlowAppRoot() },
+    promptPath: paths.promptPath,
+    logPath: paths.logPath,
+    runId,
+    executionMode,
+    apiBaseUrl,
+    appRoot: path.join(__dirname, '..'),
+    preview: true,
+    promptReferenceOverride: promptReference,
+  });
+  if (agentLaunchConfig.ok === false) {
+    console.error(`[runner] ${agentLaunchConfig.error}`);
+    appendRunnerLog(paths.logPath, `Launch rejected: ${agentLaunchConfig.error}`);
+    process.exit(1);
   }
+  const executable = agentLaunchConfig.executable;
+  const spawnArgs = agentLaunchConfig.parameters;
+  const cwd = agentLaunchConfig.cwd;
+  console.log(`[runner] Resolved executable: ${executable}`);
+  appendRunnerLog(paths.logPath, agentLaunchConfig.previewText);
   
   let launchScriptPath = '';
   if (config.name === 'Codex') {
@@ -298,44 +291,28 @@ function main() {
 
   console.log(`[runner] Launching ${config.name} in a new window for run=${runId || 'none'} mode=${executionMode}...`);
 
-  // We need to launch the agent in a new visible console window, starting in the localPath.
-  let finalCmd = '';
-  let finalArgs: string[] = [];
-
-  if (launchScriptPath) {
-    if (config.name === 'Codex') {
-      finalCmd = 'cmd.exe';
-      finalArgs = [
-        '/s',
-        '/c',
-        `"start "" /d ${quoteBatArg(cwd)} ${quoteBatArg(launchScriptPath)}"`
-      ];
-    } else {
-      finalCmd = 'cmd.exe';
-      finalArgs = ['/d', '/s', '/c', buildWindowsStartCommand({
-        cwd,
-        launchScriptPath,
-      })];
-    }
-  } else {
+  if (!launchScriptPath) {
     console.error(`[runner] Failed to generate launch script.`);
     process.exit(1);
   }
+  const finalDispatch = buildLauncherDispatch({
+    cwd,
+    launchScriptPath,
+  });
 
   appendRunnerLog(paths.logPath, buildLaunchMetadataBlock(launchPlan).trim());
   appendRunnerLog(paths.logPath, `runId=${runId || 'none'}`);
   appendRunnerLog(paths.logPath, `executionMode=${executionMode}`);
   appendRunnerLog(paths.logPath, `cwd=${cwd}`);
   appendRunnerLog(paths.logPath, `resolvedExecutable=${executable}`);
-  appendRunnerLog(paths.logPath, `argvPreview=${[finalCmd, ...finalArgs].join(' ')}`);
+  appendRunnerLog(paths.logPath, `argvPreview=${[finalDispatch.command, ...finalDispatch.args].join(' ')}`);
   appendRunnerLog(paths.logPath, `promptPath=${paths.promptPath || 'none'}`);
   appendRunnerLog(paths.logPath, `launchScriptPath=${launchScriptPath || 'none'}`);
 
-  const child = spawn(finalCmd, finalArgs, {
+  const child = spawn(finalDispatch.command, finalDispatch.args, {
     detached: true,
     stdio: 'ignore',
     env: spawnEnv,
-    windowsVerbatimArguments: config.name === 'Codex'
   });
   
   child.unref();

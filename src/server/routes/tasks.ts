@@ -10,7 +10,7 @@ import { extractDesignImages, findProjectByIdentifier, findTaskByIdentifier, get
 import { createApiError, sendApiError } from '../services/api';
 import { validateEnum, validateString } from '../validation';
 import { isValidTransition, getValidationErrorMessage } from '../../lib/statusTransitions';
-import { buildCodexLaunchConfig, runAgentLaunchPreflight, type AgentLaunchPreflightCode } from '../services/agentLaunchConfig';
+import { buildAgentLaunchConfig, runAgentLaunchPreflight, type AgentLaunchPreflightCode } from '../services/agentLaunchConfig';
 import type { AgentCompletionPayload, AgentCompletionStatus, TaskStatus } from '../../types';
 
 const STALE_AGENT_RUN_MS = 30 * 60 * 1000;
@@ -521,31 +521,40 @@ export function triggerTaskAgent(task: any, deps: ApiRouteDeps, routeLabel: stri
       DEVFLOW_API_BASE_URL: apiBaseUrl,
     }
   };
-  const codexLaunchPreview = task.agent === 'Codex'
-    ? buildCodexLaunchConfig({
-      task: {
-        id: task.id,
-        agent: task.agent,
-        model: task.model,
-        effort: task.effort,
-      },
-      project: {
-        localPath: project?.localPath,
-      },
-      promptPath: files.promptPath,
-      runId: run.id,
-      executionMode,
-      apiBaseUrl,
-      appRoot: resolveFromDevFlowAppRoot(),
-      preview: true,
-      environment: execOpts.env,
-    })
-    : null;
+  const agentLaunchPreview = buildAgentLaunchConfig({
+    task: {
+      id: task.id,
+      agent: task.agent,
+      model: task.model,
+      effort: task.effort,
+    },
+    project: {
+      localPath: project?.localPath,
+    },
+    promptPath: files.promptPath,
+    logPath: files.logPath,
+    runId: run.id,
+    executionMode,
+    apiBaseUrl,
+    appRoot: resolveFromDevFlowAppRoot(),
+    preview: true,
+    environment: execOpts.env,
+  });
+  if (agentLaunchPreview.ok === false) {
+    const reason = agentLaunchPreview.error;
+    deps.writeAgentLog('ERROR', `Launch preview failed for run=${run.id} task=${task.id}: ${reason}`);
+    failTaskRun(task, deps, run.id, reason, {
+      runDir: files.runDir,
+      logPath: files.logPath,
+      taskMessage: `Agent startup failed before launch: ${reason}`,
+    });
+    return { triggered: false, code: 'LAUNCH_PLAN_INVALID', reason, run: currentRun || run };
+  }
 
   deps.writeAgentLog('TRIGGER', `Spawning run=${run.id} agent=${task.agent} for task=${task.id} ("${task.title}") via ${routeLabel}${project?.localPath ? ' at ' + project.localPath : ''}`);
   appendAgentRunLog(files.logPath, `Launch plan: agent=${launchPlan.agent} model=${launchPlan.devFlowModel || 'none'} resolvedModel=${launchPlan.resolvedModel || 'none'} effort=${launchPlan.selectedEffort || 'none'} effortHandling=${launchPlan.effortHandling.mode} executionMode=${executionMode}`);
   appendAgentRunLog(files.logPath, `cwd=${project?.localPath || 'none'} triggerScript=${triggerBat} promptPath=${files.promptPath}`);
-  if (codexLaunchPreview?.ok) appendAgentRunLog(files.logPath, codexLaunchPreview.previewText);
+  appendAgentRunLog(files.logPath, agentLaunchPreview.previewText);
   writeAgentRunLaunchMetadata(files.runDir, {
     runId: run.id,
     taskId: task.id,
@@ -557,12 +566,13 @@ export function triggerTaskAgent(task: any, deps: ApiRouteDeps, routeLabel: stri
     logPath: files.logPath,
     triggerScript: triggerBat,
     launchPlan,
-    codexLaunchPreview: codexLaunchPreview?.ok ? {
-      executable: codexLaunchPreview.executable,
-      parameters: codexLaunchPreview.parameters,
-      cwd: codexLaunchPreview.cwd,
-      previewText: codexLaunchPreview.previewText,
-    } : null,
+    launchPackage: {
+      executable: agentLaunchPreview.executable,
+      parameters: agentLaunchPreview.parameters,
+      cwd: agentLaunchPreview.cwd,
+      promptReference: agentLaunchPreview.promptReference,
+      previewText: agentLaunchPreview.previewText,
+    },
     writtenAt: new Date().toISOString(),
   });
   const startingSummary = `Run ${run.id} queued for ${task.agent}.`;

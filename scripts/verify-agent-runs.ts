@@ -121,6 +121,7 @@ assert.equal(getActiveRunForProject('project-stale'), null);
 assert.equal(getLatestAgentRunForTask('task-stale')?.status, 'cancelled');
 
 const {
+  buildAgentLaunchConfig,
   buildCodexLaunchConfig,
   buildLaunchMetadataBlock,
   loadAgentLaunchConfig,
@@ -315,6 +316,43 @@ assert.match(codexLaunchConfig.previewText, /gpt-5\.5/);
 assert.match(codexLaunchConfig.previewText, /model_reasoning_effort=high/);
 assert.match(codexLaunchConfig.previewText, new RegExp(files.promptPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 
+process.env.DEVFLOW_AGY_EXE = fakeRunnerScriptPath;
+const antigravityLaunchConfig = buildAgentLaunchConfig({
+  task: {
+    id: 'task-antigravity-launch',
+    agent: 'Antigravity',
+    model: 'Gemini 3.5 Flash',
+    effort: 'high',
+  },
+  project: {
+    localPath: fixtureProjectDir,
+  },
+  promptPath: files.promptPath,
+  logPath: files.logPath,
+  runId: 'run-antigravity-launch',
+  executionMode: 'safe',
+  apiBaseUrl: 'http://localhost:3000',
+  appRoot: process.cwd(),
+});
+assert.equal(antigravityLaunchConfig.ok, true);
+assert.equal(antigravityLaunchConfig.executable, fakeRunnerScriptPath);
+assert.deepEqual(antigravityLaunchConfig.parameters, [
+  '--model', 'gemini-3.5-flash',
+  '-i',
+  buildPromptReference(files.promptPath),
+]);
+assert.equal(antigravityLaunchConfig.cwd, fixtureProjectDir);
+assert.equal(antigravityLaunchConfig.environment.DEVFLOW_AGENT_EXECUTION_MODE, 'safe');
+assert.equal(antigravityLaunchConfig.environment.DEVFLOW_API_BASE_URL, 'http://localhost:3000');
+assert.match(antigravityLaunchConfig.previewText, /Antigravity launch preview: run=run-antigravity-launch/);
+assert.match(antigravityLaunchConfig.previewText, new RegExp(`executable=${fakeRunnerScriptPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+assert.match(antigravityLaunchConfig.previewText, /resolvedModel=gemini-3\.5-flash/);
+assert.match(antigravityLaunchConfig.previewText, /selectedEffort=high/);
+assert.match(antigravityLaunchConfig.previewText, /effortHandling=prompt-only/);
+assert.match(antigravityLaunchConfig.previewText, /executionMode=safe/);
+assert.match(antigravityLaunchConfig.previewText, new RegExp(`promptPath=${files.promptPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+assert.match(antigravityLaunchConfig.previewText, new RegExp(`logPath=${files.logPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+
 const codexLaunchPreview = buildCodexLaunchConfig({
   task: {
     id: 'task-codex-preview',
@@ -343,10 +381,11 @@ assert.deepEqual(codexLaunchPreview.parameters, [
 ]);
 assert.match(codexLaunchPreview.previewText, /run=preview-run/);
 delete process.env.DEVFLOW_CODEX_EXE;
+delete process.env.DEVFLOW_AGY_EXE;
 
 const {
   buildAgentCliArgs,
-  buildWindowsStartCommand,
+  buildLauncherDispatch,
   createAgentLaunchScript,
   mapModelForAgent,
   normalizeRunnerPaths,
@@ -563,6 +602,16 @@ assert.match(launchScript, /errorMessage/);
 assert.match(launchScript, /Codex process exited with code/);
 assert.match(launchScript, /completionCallback success=%CALLBACK_SUCCESS% exitCode=%EXIT_CODE% errorMessage=%CALLBACK_ERROR_MESSAGE%/);
 assert.match(launchScript, /pause/);
+
+const launcherDispatch = buildLauncherDispatch({
+  cwd: fixtureWorkDir,
+  launchScriptPath,
+});
+assert.equal(launcherDispatch.command, 'powershell.exe');
+assert.ok(launcherDispatch.args.includes('Start-Process'));
+assert.ok(launcherDispatch.args.includes(launchScriptPath));
+assert.ok(launcherDispatch.args.includes(fixtureWorkDir));
+assert.equal(launcherDispatch.args.includes('start'), false);
 
 const miniLowLaunchScriptPath = createCodexLaunchScript({
   runId: 'run-script-test-low',

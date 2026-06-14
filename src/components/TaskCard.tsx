@@ -243,15 +243,7 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
 
         {/* Unified Bottom Badge Row -> 2 Row Layout */}
         <div className="flex flex-col gap-1.5 mt-2.5 pt-2.5 border-t border-[#ebdcb9]/30 dark:border-[#584a3b]/30">
-          {task.branch && (
-            <div className="flex items-center gap-1.5 text-[9px] font-mono font-bold text-[#8c7a6e] dark:text-[#d6b56d]">
-              <GitBranch size={11} className="shrink-0" />
-              <span className="truncate" title={task.branch}>
-                ACTIVE BRANCH: {task.branch}
-              </span>
-            </div>
-          )}
-          
+
           {/* Row 1: Files, Checklist, External Links */}
           <div className="flex flex-wrap items-center gap-1.5 w-full">
             {/* Priority dot removed */}

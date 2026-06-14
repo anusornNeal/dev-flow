@@ -156,7 +156,7 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
       description: 'มอบหมาย Agent ผู้รับผิดชอบ หรือกำหนด AI Spec และพละกำลังความเพียรประมวลผลเดี่ยวๆ ทันที',
       payload: '{\n  "agent": "Codex" | "Antigravity" | "Claude" (Optional),\n  "model": "ชื่อโมเดล AI Spec (Optional)",\n  "effort": "low" | "medium" | "high" | "xhigh" ... (ตามที่โมเดลรองรับ) (Optional)\n}',
       response: 'JSON Object ของ Task อัปเดตข้อมูลผู้รับมอบหมายเรียบร้อยแล้ว',
-      example: 'fetch(\'/api/tasks/task-1/assign\', {\n  method: \'POST\',\n  headers: { \'Content-Type\': \'application/json\' },\n  body: JSON.stringify({\n    agent: \'Codex\',\n    model: \'GPT-5.4\',\n    effort: \'xhigh\'\n  })\n}).then(res => res.json());'
+      example: '// Valid examples:\n// Codex + GPT-5.4 + xhigh\n// Antigravity + Gemini 3.5 Flash + medium\n// Antigravity + Gemini 3.1 Pro + high\n\n// Invalid examples:\n// Codex + GPT-5.4 + minimal\n// Antigravity + Gemini 3.1 Pro + medium\n\nfetch(\'/api/tasks/task-1/assign\', {\n  method: \'POST\',\n  headers: { \'Content-Type\': \'application/json\' },\n  body: JSON.stringify({\n    agent: \'Codex\',\n    model: \'GPT-5.4\',\n    effort: \'xhigh\'\n  })\n}).then(res => res.json());'
     },
     {
       method: 'GET',

@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import type { AgentCompletionPayload, AgentCompletionTest } from '../../types';
 import type { AppState } from '../types';
-import { VALID_AGENTS, VALID_EFFORTS, VALID_MODELS, VALID_PRIORITIES, VALID_STATUSES } from '../constants';
+import { VALID_AGENTS, LEGACY_VALID_EFFORTS_FALLBACK, VALID_MODELS, VALID_PRIORITIES, VALID_STATUSES } from '../constants';
 import { validateEnum, validateString } from '../validation';
 import { buildLaunchMetadataBlock, resolveAgentLaunchPlan } from './agentLaunchConfig';
 import { getModelConfig } from '../../lib/agentsConfig';
@@ -90,8 +90,8 @@ export function validateAgentParams(item: any, tasks: any[]): string | null {
   if (item.agent && !VALID_AGENTS.includes(item.agent)) {
     return `Invalid agent: ${item.agent}. Must be one of: ${VALID_AGENTS.join(', ')}`;
   }
-  if (item.effort && !VALID_EFFORTS.includes(item.effort)) {
-    return `Invalid effort: ${item.effort}. Must be one of: ${VALID_EFFORTS.join(', ')}`;
+  if (item.effort && !LEGACY_VALID_EFFORTS_FALLBACK.includes(item.effort)) {
+    return `Invalid effort: ${item.effort}. Must be one of: ${LEGACY_VALID_EFFORTS_FALLBACK.join(', ')}`;
   }
   if (item.model && !VALID_MODELS.includes(item.model)) {
     return `Invalid model: ${item.model}. Must be one of: ${VALID_MODELS.join(', ')}`;

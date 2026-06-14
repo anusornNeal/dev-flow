@@ -583,16 +583,35 @@ const {
   validateAgentParams,
 } = await import('../src/server/services/taskService');
 
+// Codex combinations
+assert.equal(validateAgentParams({ agent: 'Codex', model: 'GPT-5.5', effort: 'low' }, []), null);
+assert.equal(validateAgentParams({ agent: 'Codex', model: 'GPT-5.5', effort: 'medium' }, []), null);
+assert.equal(validateAgentParams({ agent: 'Codex', model: 'GPT-5.5', effort: 'high' }, []), null);
 assert.equal(validateAgentParams({ agent: 'Codex', model: 'GPT-5.5', effort: 'xhigh' }, []), null);
-assert.match(
-  validateAgentParams({ agent: 'Antigravity', model: 'GPT-5.5', effort: 'high' }, []) || '',
-  /not supported by Antigravity/,
-);
 assert.equal(validateAgentParams({ agent: 'Codex', model: 'GPT-5.4', effort: 'xhigh' }, []), null);
+assert.equal(validateAgentParams({ agent: 'Codex', model: 'GPT-5.4 Mini', effort: 'xhigh' }, []), null);
 assert.match(validateAgentParams({ agent: 'Codex', model: 'GPT-5.4', effort: 'none' }, []) || '', /Invalid effort 'none' for model 'GPT-5.4'/);
 assert.match(validateAgentParams({ agent: 'Codex', model: 'GPT-5.4', effort: 'minimal' }, []) || '', /Invalid effort 'minimal' for model 'GPT-5.4'/);
+assert.match(validateAgentParams({ agent: 'Codex', model: 'GPT-5.4', effort: 'max' }, []) || '', /Invalid effort 'max' for model 'GPT-5.4'/);
+
+// Antigravity combinations
+assert.match(validateAgentParams({ agent: 'Antigravity', model: 'GPT-5.5', effort: 'high' }, []) || '', /not supported by Antigravity/);
+assert.equal(validateAgentParams({ agent: 'Antigravity', model: 'Gemini 3.5 Flash', effort: 'low' }, []), null);
+assert.equal(validateAgentParams({ agent: 'Antigravity', model: 'Gemini 3.5 Flash', effort: 'medium' }, []), null);
+assert.equal(validateAgentParams({ agent: 'Antigravity', model: 'Gemini 3.5 Flash', effort: 'high' }, []), null);
 assert.match(validateAgentParams({ agent: 'Antigravity', model: 'Gemini 3.5 Flash', effort: 'minimal' }, []) || '', /Invalid effort 'minimal' for model 'Gemini 3.5 Flash'/);
+
+assert.equal(validateAgentParams({ agent: 'Antigravity', model: 'Gemini 3.1 Pro', effort: 'low' }, []), null);
+assert.equal(validateAgentParams({ agent: 'Antigravity', model: 'Gemini 3.1 Pro', effort: 'high' }, []), null);
 assert.match(validateAgentParams({ agent: 'Antigravity', model: 'Gemini 3.1 Pro', effort: 'medium' }, []) || '', /Invalid effort 'medium' for model 'Gemini 3.1 Pro'/);
 assert.match(validateAgentParams({ agent: 'Antigravity', model: 'Gemini 3.1 Pro', effort: 'minimal' }, []) || '', /Invalid effort 'minimal' for model 'Gemini 3.1 Pro'/);
+assert.match(validateAgentParams({ agent: 'Antigravity', model: 'Gemini 3.1 Pro', effort: 'xhigh' }, []) || '', /Invalid effort 'xhigh' for model 'Gemini 3.1 Pro'/);
+
+// Claude combinations
+assert.equal(validateAgentParams({ agent: 'Claude', model: 'Claude 4.8 Opus', effort: 'xhigh' }, []), null);
+assert.match(validateAgentParams({ agent: 'Claude', model: 'Claude 4.8 Opus', effort: 'minimal' }, []) || '', /Invalid effort 'minimal' for model 'Claude 4.8 Opus'/);
+
+// Legacy safety test
+assert.equal(validateAgentParams({ agent: 'Codex', model: 'GPT-5.4', effort: 'legacy-unknown' }, []), "Invalid effort: legacy-unknown. Must be one of: none, minimal, low, medium, high, xhigh, max");
 
 console.log('[verify-agent-runs] all assertions passed');

@@ -1,4 +1,4 @@
-import { VALID_AGENTS, VALID_EFFORTS, VALID_MODELS, VALID_STATUSES } from '../constants';
+import { VALID_AGENTS, LEGACY_VALID_EFFORTS_FALLBACK, VALID_MODELS, VALID_STATUSES } from '../constants';
 
 type JsonSchema = Record<string, any>;
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
@@ -64,7 +64,7 @@ const taskMutationProperties = {
       required: ['id', 'text', 'completed'],
     },
   },
-  effort: { type: 'string', description: 'Reasoning effort level. Valid values strictly depend on the selected agent/model pair (e.g. Codex + GPT-5.4 supports low, medium, high, xhigh. Antigravity + Gemini 3.5 Flash supports low, medium, high. Claude 4.8 Opus supports minimal, low, medium, high).' },
+  effort: { type: 'string', description: 'Reasoning effort level. Valid values strictly depend on the selected agent/model pair (e.g. Codex + GPT-5.4 supports low, medium, high, xhigh. Antigravity + Gemini 3.5 Flash supports low, medium, high. Claude 4.8 Opus supports low, medium, high, xhigh, max).' },
   model: { type: 'string', enum: VALID_MODELS, description: 'Assigned model.' },
   agent: { type: 'string', enum: VALID_AGENTS, description: 'Assigned agent.' },
   parentId: { type: 'string', description: 'Parent task id.' },

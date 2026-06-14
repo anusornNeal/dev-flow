@@ -2,7 +2,7 @@ import { execFile } from 'child_process';
 import path from 'path';
 import type express from 'express';
 import type { ApiRouteDeps } from '../types';
-import { TASK_SCHEMA_DEF, VALID_AGENTS, VALID_EFFORTS, VALID_MODELS, VALID_STATUSES } from '../constants';
+import { TASK_SCHEMA_DEF, VALID_AGENTS, LEGACY_VALID_EFFORTS_FALLBACK, VALID_MODELS, VALID_STATUSES } from '../constants';
 import { cancelActiveRunsForTask, cancelStaleActiveRuns, createAgentRun, findActiveRunByTaskId, getActiveRunForProject, getActiveRunForTask, getLatestAgentRunForTask, listAgentRunsForTask, updateAgentRunStatus, type AgentRun } from '../repositories/agentRunRepository';
 import { loadTasks, generateDisplayId, saveTasks } from '../repositories/taskRepository';
 import { appendAgentRunLog, buildAgentCompletionSummary, createAgentRunFiles, createAgentRunResultRecord, getAgentRunHistoryPaths, getAgentTriggerScriptPath, getDevFlowApiBaseUrl, resolveAgentExecutionMode, resolveFromDevFlowAppRoot, writeAgentRunLaunchMetadata, writeAgentRunOutputSummary, writeAgentRunResult } from '../services/agentRunService';

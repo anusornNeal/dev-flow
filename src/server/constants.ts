@@ -1,5 +1,5 @@
 export const VALID_AGENTS = ['Codex', 'Antigravity', 'Claude'];
-export const VALID_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+export const LEGACY_VALID_EFFORTS_FALLBACK = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 export const VALID_MODELS = [
   'GPT-5.5', 'GPT-5.4', 'GPT-5.4 Mini',
   'Gemini 3.5 Flash', 'Gemini 3.1 Pro',
@@ -67,7 +67,7 @@ export const TASK_SCHEMA_DEF = {
     },
     effort: {
       type: 'string',
-      description: 'Reasoning effort level. Valid values strictly depend on the selected agent/model pair (e.g. Codex + GPT-5.4 supports low, medium, high, xhigh. Antigravity + Gemini 3.5 Flash supports low, medium, high. Claude 4.8 Opus supports minimal, low, medium, high). If invalid, the API will return a specific error listing the supported efforts for your model.',
+      description: 'Reasoning effort level. Valid values strictly depend on the selected agent/model pair (e.g. Codex + GPT-5.4 supports low, medium, high, xhigh. Antigravity + Gemini 3.5 Flash supports low, medium, high. Claude 4.8 Opus supports low, medium, high, xhigh, max). If invalid, the API will return a specific error listing the supported efforts for your model.',
     },
     parentId: { type: 'string', description: "ID of the parent task if this is a subtask. If provided, the agent property must match the parent's agent." },
     reasoning: { type: 'string', description: 'Reasoning or context for this task' },

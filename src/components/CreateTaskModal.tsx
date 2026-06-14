@@ -236,7 +236,7 @@ class MyViewModel: ViewModel() {
                   { value: '', label: 'None / Default' },
                   ...(agent ? (AGENTS_CONFIG[agent as import('../lib/agentsConfig').AgentName] || []).map(m => ({
                     value: m.model_name,
-                    label: m.model_name
+                    label: m.display_name || m.label || m.model_name
                   })) : [])
                 ]}
               />

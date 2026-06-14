@@ -566,7 +566,7 @@ export default function TaskDetailsDrawer({
                     { value: '', label: 'None / Default' },
                     ...(editedAgent ? (AGENTS_CONFIG[editedAgent as import('../lib/agentsConfig').AgentName] || []).map(m => ({
                       value: m.model_name,
-                      label: m.model_name
+                      label: m.display_name || m.label || m.model_name
                     })) : [])
                   ]}
                 />

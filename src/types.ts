@@ -67,6 +67,11 @@ export interface Task {
     startedAt?: string | null;
     endedAt?: string | null;
   };
+  agentRuns?: {
+    id: string;
+    status: string;
+    logFile?: string | null;
+  }[];
   model?: string; // Model name
   parentId?: string; // ID of the parent task if this is a subtask
   effort?: string; // Effort level (varies by agent and model)

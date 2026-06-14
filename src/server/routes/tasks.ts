@@ -212,6 +212,7 @@ function canOverrideTaskLock(task: any, body: any, query?: any, agentRequestValu
 function applyRunSummaryToTask(task: any, run: AgentRun | null) {
   const activeRun = run && ['queued', 'starting', 'running'].includes(run.status) ? run : getActiveRunForTask(task.id);
   const latestRun = run || getLatestAgentRunForTask(task.id);
+  const allRuns = listAgentRunsForTask(task.id);
   task.activeAgent = activeRun?.agent || undefined;
   task.latestAgentRun = latestRun ? {
     id: latestRun.id,
@@ -222,6 +223,11 @@ function applyRunSummaryToTask(task: any, run: AgentRun | null) {
     startedAt: latestRun.startedAt,
     endedAt: latestRun.endedAt,
   } : undefined;
+  task.agentRuns = allRuns.map((r) => ({
+    id: r.id,
+    status: r.status,
+    logFile: r.logPath,
+  }));
 }
 
 function requireAgentOwnedRequest(req: express.Request) {

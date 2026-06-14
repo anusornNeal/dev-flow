@@ -71,6 +71,9 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
   const totalSteps = task.checklist?.length || 0;
   const completedSteps = task.checklist?.filter(item => item.completed).length || 0;
   const filesCount = task.targetFiles?.length || 0;
+  
+  const hasEffectiveAssignment = Boolean(task.agent || task.model || task.effort);
+
   const latestRun = task.latestAgentRun;
   const settledRunBadge = latestRun && !task.activeAgent && ['failed', 'cancelled', 'succeeded'].includes(latestRun.status)
     ? latestRun
@@ -210,7 +213,7 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
             )}
 
             {/* Run Status Badge */}
-            {runStatusLabel && (
+            {hasEffectiveAssignment && runStatusLabel && (
               <div className={`inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded-lg border text-[9px] font-mono font-bold ${runStatusTone}`}>
                 <span>{runStatusLabel}</span>
               </div>
@@ -290,7 +293,7 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
                 onClick={(e) => { e.stopPropagation(); setIsEditingAgent(true); }}
                 className="flex items-center gap-1.5 px-2 py-1 rounded-md border border-[#ebdcb9] dark:border-[#584a3b]/40 bg-[#fdfbf7]/50 dark:bg-[#292119]/50 text-[#8a725f] dark:text-[#f3eadf] text-[9.5px] font-mono font-bold w-full shadow-sm overflow-hidden cursor-pointer hover:bg-[#fffbf4] dark:bg-[#292119] dark:hover:bg-[#382f25] transition-colors"
               >
-                {(task.agent || task.model || task.effort) ? (
+                {hasEffectiveAssignment ? (
                   <>
                     <AgentLogo agent={task.model || task.agent} size={12} className="shrink-0 relative -top-[0.5px] text-[#b49f8e] dark:text-[#b8ab9f]" />
                     <span className="leading-none mt-[1px] truncate flex-1 text-left">

@@ -5,12 +5,13 @@ import type { ApiRouteDeps } from '../types';
 import { TASK_SCHEMA_DEF, VALID_AGENTS, VALID_EFFORTS, VALID_MODELS, VALID_STATUSES } from '../constants';
 import { cancelActiveRunsForTask, cancelStaleActiveRuns, createAgentRun, findActiveRunByTaskId, getActiveRunForProject, getActiveRunForTask, getLatestAgentRunForTask, listAgentRunsForTask, updateAgentRunStatus, type AgentRun } from '../repositories/agentRunRepository';
 import { loadTasks, generateDisplayId, saveTasks } from '../repositories/taskRepository';
-import { appendAgentRunLog, createAgentRunFiles, createAgentRunResultRecord, getAgentRunHistoryPaths, getAgentTriggerScriptPath, getDevFlowApiBaseUrl, resolveAgentExecutionMode, resolveFromDevFlowAppRoot, writeAgentRunLaunchMetadata, writeAgentRunOutputSummary, writeAgentRunResult } from '../services/agentRunService';
-import { extractDesignImages, findProjectByIdentifier, findTaskByIdentifier, getAgentTaskContext, renderTaskPrompt, resolveProjectIdFromRepo, validateAgentParams, validateTaskPayload } from '../services/taskService';
+import { appendAgentRunLog, buildAgentCompletionSummary, createAgentRunFiles, createAgentRunResultRecord, getAgentRunHistoryPaths, getAgentTriggerScriptPath, getDevFlowApiBaseUrl, resolveAgentExecutionMode, resolveFromDevFlowAppRoot, writeAgentRunLaunchMetadata, writeAgentRunOutputSummary, writeAgentRunResult } from '../services/agentRunService';
+import { extractDesignImages, findProjectByIdentifier, findTaskByIdentifier, getAgentTaskContext, normalizeAgentCompletionPayload, renderTaskPrompt, resolveProjectIdFromRepo, validateAgentCompletionPayload, validateAgentParams, validateTaskPayload } from '../services/taskService';
 import { createApiError, sendApiError } from '../services/api';
 import { validateEnum, validateString } from '../validation';
 import { isValidTransition, getValidationErrorMessage } from '../../lib/statusTransitions';
 import { buildCodexLaunchConfig, runAgentLaunchPreflight, type AgentLaunchPreflightCode } from '../services/agentLaunchConfig';
+import type { AgentCompletionPayload, AgentCompletionStatus, TaskStatus } from '../../types';
 
 const STALE_AGENT_RUN_MS = 30 * 60 * 1000;
 
@@ -19,6 +20,7 @@ type TriggerTaskAgentResult =
   | { triggered: false; reason: string; code?: AgentLaunchPreflightCode | 'TASK_ALREADY_RUNNING' | 'PROJECT_ALREADY_RUNNING'; run?: AgentRun | null };
 type TriggerTaskAgentFailure = Extract<TriggerTaskAgentResult, { triggered: false }>;
 type TaskReadMode = 'minimal' | 'summary' | 'standard' | 'full' | 'agent-context' | 'debug';
+type AgentCompletionRouteResult = { task: any; run: AgentRun; payload: AgentCompletionPayload };
 
 function normalizeFlag(value: unknown) {
   return value === true || String(value).toLowerCase() === 'true';
@@ -220,6 +222,81 @@ function applyRunSummaryToTask(task: any, run: AgentRun | null) {
     startedAt: latestRun.startedAt,
     endedAt: latestRun.endedAt,
   } : undefined;
+}
+
+function requireAgentOwnedRequest(req: express.Request) {
+  return String(req.headers['x-agent-request']).toLowerCase() === 'true';
+}
+
+function formatAgentCompletionLogMessage(payload: AgentCompletionPayload) {
+  const statusLabel = payload.status.toUpperCase();
+  const parts = [`Agent completion callback recorded ${statusLabel}.`, payload.summary];
+  if (payload.changedFiles && payload.changedFiles.length > 0) {
+    parts.push(`Changed files: ${payload.changedFiles.join(', ')}`);
+  }
+  if (payload.tests && payload.tests.length > 0) {
+    parts.push(`Tests: ${payload.tests.map((test) => `${test.command}=${test.result}`).join('; ')}`);
+  }
+  if (payload.notes) {
+    parts.push(`Notes: ${payload.notes}`);
+  }
+  return parts.join(' ');
+}
+
+function resolveAgentCompletionTargetStatus(payload: AgentCompletionPayload): TaskStatus {
+  if (payload.status === 'success') {
+    return payload.moveTo || 'ready-for-review';
+  }
+  return payload.moveTo || 'in-progress';
+}
+
+function applyAgentCompletionCallback(task: any, run: AgentRun, deps: ApiRouteDeps, payload: AgentCompletionPayload): AgentCompletionRouteResult {
+  const summaryText = buildAgentCompletionSummary(payload);
+  const completionMessage = formatAgentCompletionLogMessage(payload);
+  const targetStatus = resolveAgentCompletionTargetStatus(payload);
+  const runDir = run.logPath ? path.dirname(run.logPath) : path.join(resolveFromDevFlowAppRoot('.devflow', 'runs'), run.id);
+
+  let updatedRun: AgentRun | null = null;
+  let nextStatus: TaskStatus = task.status;
+
+  if (payload.status === 'success') {
+    const reviewBlockError = validateParentReviewMove(task, deps, targetStatus);
+    if (reviewBlockError) {
+      throw createApiError(409, 'TASK_REVIEW_BLOCKED', reviewBlockError, { affectedId: task.id });
+    }
+    nextStatus = targetStatus;
+    updatedRun = updateAgentRunStatus(run.id, 'succeeded');
+  } else if (payload.status === 'failed') {
+    nextStatus = targetStatus;
+    updatedRun = updateAgentRunStatus(run.id, 'failed', { errorMessage: payload.summary });
+  } else {
+    nextStatus = targetStatus;
+    updatedRun = updateAgentRunStatus(run.id, 'cancelled', { errorMessage: payload.summary });
+  }
+
+  writeAgentRunOutputSummary(runDir, summaryText);
+  writeAgentRunResult(runDir, {
+    ...createAgentRunResultRecord({
+      runId: run.id,
+      status: updatedRun?.status || run.status,
+      summary: payload.summary,
+      success: payload.status === 'success' ? true : payload.status === 'failed' ? false : null,
+      errorMessage: payload.status === 'success' ? null : payload.summary,
+      completedAt: new Date().toISOString(),
+    }),
+    payload,
+  });
+  if (run.logPath) {
+    appendAgentRunLog(run.logPath, completionMessage);
+  }
+
+  task.status = nextStatus;
+  task.updatedAt = new Date().toISOString();
+  appendTaskLog(task, completionMessage, 'update');
+  applyRunSummaryToTask(task, updatedRun || getLatestAgentRunForTask(task.id));
+  saveTasks(deps.state);
+
+  return { task, run: updatedRun || run, payload };
 }
 
 function cleanupStaleActiveRuns(deps: ApiRouteDeps) {
@@ -689,6 +766,54 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     return res.json({ success: true, cancelledCount, task, runs: listAgentRunsForTask(task.id) });
   });
 
+  app.post('/api/tasks/:id/agent-complete', (req, res) => {
+    loadTasks(deps.state);
+    const task = findTaskByIdentifier(deps.state, req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+
+    if (!requireAgentOwnedRequest(req)) {
+      return res.status(403).json({ error: 'Agent completion callback requires x-agent-request=true.' });
+    }
+
+    const payloadError = validateAgentCompletionPayload(req.body);
+    if (payloadError) {
+      return res.status(400).json({ error: payloadError });
+    }
+
+    const payload = normalizeAgentCompletionPayload(req.body);
+    const activeRun = getActiveRunForTask(task.id);
+    const latestRun = getLatestAgentRunForTask(task.id);
+    const run = payload.runId
+      ? [activeRun, latestRun, ...listAgentRunsForTask(task.id)].find((entry) => entry?.id === payload.runId) || null
+      : activeRun;
+
+    if (!run) {
+      return res.status(409).json({ error: 'No matching active run was found for this task.' });
+    }
+
+    if (payload.runId && run.id !== payload.runId) {
+      return res.status(409).json({ error: 'Completion callback runId does not match the task active run.' });
+    }
+
+    if (!['queued', 'starting', 'running'].includes(run.status)) {
+      return res.status(409).json({ error: `Run ${run.id} is already settled with status ${run.status}.` });
+    }
+
+    try {
+      const result = applyAgentCompletionCallback(task, run, deps, payload);
+      if (deps.state.settingsCache.autoWork && payload.status === 'success') {
+        continueTaskQueueForProject(task.projectId, deps);
+      }
+      return res.json({
+        success: true,
+        task: result.task,
+        run: result.run,
+      });
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
   app.post('/api/tasks/:id/agent-runs/:runId/complete', (req, res) => {
     loadTasks(deps.state);
     const task = findTaskByIdentifier(deps.state, req.params.id);
@@ -699,18 +824,20 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
        return res.status(404).json({ error: 'Run not found or not associated with task.' });
     }
 
-    const success = req.body?.success !== false;
-    completeAgentRunForTask(task, run, deps, {
-      success,
-      exitCode: typeof req.body?.exitCode === 'number' ? req.body.exitCode : undefined,
-      errorMessage: req.body?.errorMessage || 'Run failed',
+    const payload = normalizeAgentCompletionPayload({
+      runId: req.params.runId,
+      status: req.body?.success === false ? 'failed' : 'success',
+      summary: req.body?.errorMessage || (req.body?.success === false ? 'Run failed' : 'Run completed successfully'),
+      changedFiles: [],
+      tests: [],
     });
+    const result = applyAgentCompletionCallback(task, run, deps, payload);
 
-    if (deps.state.settingsCache.autoWork) {
+    if (deps.state.settingsCache.autoWork && payload.status === 'success') {
       continueTaskQueueForProject(task.projectId, deps);
     }
 
-    return res.json({ success: true, task });
+    return res.json({ success: true, task: result.task, run: result.run });
   });
 
   app.post('/api/tasks', (req, res) => {

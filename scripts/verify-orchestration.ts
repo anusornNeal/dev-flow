@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import type { AppState, ApiRouteDeps } from '../src/server/types';
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-orchestration-'));
@@ -43,6 +45,7 @@ const { saveTasks } = await import('../src/server/repositories/taskRepository.js
 const { getAgentTaskContext } = await import('../src/server/services/taskService.js');
 const { renderTaskPrompt } = await import('../src/server/services/taskService.js');
 const { isValidTransition } = await import('../src/lib/statusTransitions.js');
+const { default: TaskCard } = await import('../src/components/TaskCard.js');
 const express = (await import('express')).default;
 
 async function waitFor(predicate: () => boolean, timeoutMs = 2000) {
@@ -765,5 +768,180 @@ try {
 } finally {
   await new Promise<void>((resolve, reject) => autoWorkTriggerServer.close((error) => error ? reject(error) : resolve()));
 }
+
+console.log('[verify] Testing agent completion callback API...');
+const completionState: AppState = {
+  tasksCache: [
+    {
+      id: 'completion-success',
+      displayId: 'DVF-0151-A',
+      projectId: 'project-1',
+      status: 'in-progress',
+      branch: 'test/reply-exactly-hi',
+      agent: 'Codex',
+      model: 'GPT-5.5',
+      effort: 'high',
+      title: 'Successful completion callback',
+      description: 'Success should move task to ready-for-review.',
+      logs: [],
+      createdAt: '2026-06-14T00:00:00.000Z',
+      updatedAt: '2026-06-14T00:00:00.000Z',
+    },
+    {
+      id: 'completion-failed',
+      displayId: 'DVF-0151-B',
+      projectId: 'project-1',
+      status: 'in-progress',
+      agent: 'Codex',
+      model: 'GPT-5.5',
+      effort: 'high',
+      title: 'Failed completion callback',
+      description: 'Failure should preserve safe state.',
+      logs: [],
+      createdAt: '2026-06-14T00:01:00.000Z',
+      updatedAt: '2026-06-14T00:01:00.000Z',
+    },
+    {
+      id: 'completion-cancelled',
+      displayId: 'DVF-0151-C',
+      projectId: 'project-1',
+      status: 'in-progress',
+      agent: 'Codex',
+      model: 'GPT-5.5',
+      effort: 'high',
+      title: 'Cancelled completion callback',
+      description: 'Cancellation should not auto-complete task.',
+      logs: [],
+      createdAt: '2026-06-14T00:02:00.000Z',
+      updatedAt: '2026-06-14T00:02:00.000Z',
+    },
+  ],
+  projectsCache: [{ id: 'project-1', name: 'p1', repoUrl: 'repo', localPath: repoPathWithSpaces }],
+  countersCache: {},
+  settingsCache: { autoWork: false, ngrokUrl: '', githubToken: '', jiraToken: '', jiraBaseUrl: '', jiraEmail: '' },
+  skillsRegistry: [],
+};
+const completionDeps: ApiRouteDeps = {
+  state: completionState,
+  writeAgentLog: () => {},
+};
+saveTasks(completionState);
+const successRun = createAgentRun({ taskId: 'completion-success', projectId: 'project-1', agent: 'Codex', model: 'GPT-5.5', effort: 'high' });
+updateAgentRunStatus(successRun.id, 'running', { startedAt: new Date().toISOString() });
+const failedRun = createAgentRun({ taskId: 'completion-failed', projectId: 'project-1', agent: 'Codex', model: 'GPT-5.5', effort: 'high' });
+updateAgentRunStatus(failedRun.id, 'running', { startedAt: new Date().toISOString() });
+const cancelledRun = createAgentRun({ taskId: 'completion-cancelled', projectId: 'project-1', agent: 'Codex', model: 'GPT-5.5', effort: 'high' });
+updateAgentRunStatus(cancelledRun.id, 'running', { startedAt: new Date().toISOString() });
+saveTasks(completionState);
+
+const completionApp = express();
+completionApp.use(express.json());
+registerTaskRoutes(completionApp, completionDeps);
+const completionServer = http.createServer(completionApp);
+await new Promise<void>((resolve) => completionServer.listen(0, resolve));
+const completionAddress = completionServer.address();
+if (!completionAddress || typeof completionAddress === 'string') throw new Error('Failed to bind completion server.');
+const completionBaseUrl = `http://127.0.0.1:${completionAddress.port}`;
+try {
+  const invalidPayloadResponse = await fetch(`${completionBaseUrl}/api/tasks/completion-success/agent-complete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-agent-request': 'true' },
+    body: JSON.stringify({ status: 'bogus' }),
+  });
+  assert.equal(invalidPayloadResponse.status, 400);
+
+  const successResponse = await fetch(`${completionBaseUrl}/api/tasks/completion-success/agent-complete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-agent-request': 'true' },
+    body: JSON.stringify({
+      runId: successRun.id,
+      status: 'success',
+      summary: 'Implemented callback flow',
+      changedFiles: ['src/server/routes/tasks.ts', 'src/components/TaskCard.tsx'],
+      tests: [{ command: 'npm run verify', result: 'passed', output: 'all assertions passed' }],
+      notes: 'Ready for review',
+    }),
+  });
+  assert.equal(successResponse.status, 200);
+  const successBody = await successResponse.json();
+  assert.equal(successBody.task.status, 'ready-for-review');
+  assert.equal(successBody.run.status, 'succeeded');
+  assert.match(JSON.stringify(successBody.task.logs), /Implemented callback flow/);
+
+  const failedResponse = await fetch(`${completionBaseUrl}/api/tasks/completion-failed/agent-complete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-agent-request': 'true' },
+    body: JSON.stringify({
+      runId: failedRun.id,
+      status: 'failed',
+      summary: 'Lint failure',
+      changedFiles: ['src/server/routes/tasks.ts'],
+      tests: [{ command: 'npm run verify', result: 'failed', output: 'lint error' }],
+      notes: 'Need another pass',
+    }),
+  });
+  assert.equal(failedResponse.status, 200);
+  const failedBody = await failedResponse.json();
+  assert.equal(failedBody.task.status, 'in-progress');
+  assert.equal(failedBody.run.status, 'failed');
+
+  const cancelledResponse = await fetch(`${completionBaseUrl}/api/tasks/completion-cancelled/agent-complete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-agent-request': 'true' },
+    body: JSON.stringify({
+      runId: cancelledRun.id,
+      status: 'cancelled',
+      summary: 'User cancelled run',
+      changedFiles: [],
+      tests: [],
+      notes: 'Cancelled before completion',
+    }),
+  });
+  assert.equal(cancelledResponse.status, 200);
+  const cancelledBody = await cancelledResponse.json();
+  assert.equal(cancelledBody.task.status, 'in-progress');
+  assert.equal(cancelledBody.run.status, 'cancelled');
+
+  const missingRunResponse = await fetch(`${completionBaseUrl}/api/tasks/completion-success/agent-complete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-agent-request': 'true' },
+    body: JSON.stringify({
+      runId: 'run-missing',
+      status: 'success',
+      summary: 'No-op',
+      changedFiles: [],
+      tests: [],
+    }),
+  });
+  assert.equal(missingRunResponse.status, 409);
+} finally {
+  await new Promise<void>((resolve, reject) => completionServer.close((error) => error ? reject(error) : resolve()));
+}
+
+console.log('[verify] Testing task card branch metadata rendering...');
+const branchCardMarkup = renderToStaticMarkup(
+  React.createElement(TaskCard, {
+    task: {
+      id: 'branch-card-1',
+      displayId: 'DVF-0151-D',
+      projectId: 'project-1',
+      title: 'Branch metadata card',
+      description: 'Should show active branch as shared metadata.',
+      status: 'todo',
+      branch: 'test/reply-exactly-hi',
+      priority: 'high',
+      tags: [],
+      createdAt: '2026-06-14T00:03:00.000Z',
+      updatedAt: '2026-06-14T00:03:00.000Z',
+      logs: [],
+    },
+    subtasks: [],
+    onSelect: () => {},
+    onDelete: () => {},
+    onDragStart: () => {},
+    onUpdate: () => {},
+  }),
+);
+assert.match(branchCardMarkup, /ACTIVE BRANCH:\s*test\/reply-exactly-hi/);
 
 console.log('[verify-orchestration] all assertions passed');

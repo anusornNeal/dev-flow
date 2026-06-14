@@ -526,6 +526,43 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
     }),
   },
   {
+    name: 'complete_agent_run',
+    aliases: ['agent_complete_task'],
+    description: 'Official completion callback for external agents/workers to close or report an agent run.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...taskIdentifierProperty,
+        runId: { type: 'string', description: 'Optional explicit run id. Defaults to the active run.' },
+        status: { type: 'string', enum: ['success', 'failed', 'cancelled'], description: 'Completion outcome.' },
+        summary: { type: 'string', description: 'Human-readable summary of the result.' },
+        changedFiles: { type: 'array', items: { type: 'string' }, description: 'Changed files reported by the agent.' },
+        tests: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              command: { type: 'string' },
+              result: { type: 'string', enum: ['passed', 'failed', 'not-run'] },
+              output: { type: 'string' },
+            },
+            required: ['command', 'result'],
+          },
+        },
+        notes: { type: 'string', description: 'Optional extra notes.' },
+        moveTo: { type: 'string', enum: ['backlog', 'todo', 'in-progress', 'ready-for-review'], description: 'Optional non-done target status.' },
+      },
+      required: ['taskId', 'status', 'summary'],
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: ({ taskId, ...body }) => ({
+      method: 'POST',
+      path: `/api/tasks/${encodePathSegment(String(taskId))}/agent-complete`,
+      body,
+      headers: { 'x-agent-request': 'true' },
+    }),
+  },
+  {
     name: 'list_skills',
     description: 'List DevFlow skills.',
     inputSchema: emptyObjectSchema,

@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import type { AgentCompletionPayload, AgentCompletionTest } from '../../types';
 import type { AppState } from '../types';
 import { VALID_AGENTS, VALID_EFFORTS, VALID_MODELS, VALID_PRIORITIES, VALID_STATUSES } from '../constants';
 import { validateEnum, validateString } from '../validation';
@@ -126,6 +127,72 @@ export function extractDesignImages(item: any, currentTask?: any): string[] | un
   if (item.designImage !== undefined) return item.designImage ? [item.designImage] : [];
   if (currentTask) return currentTask.designImages || (currentTask.designImage ? [currentTask.designImage] : undefined);
   return undefined;
+}
+
+function validateAgentCompletionTest(item: any, index: number): string | null {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) {
+    return `tests[${index}] must be an object.`;
+  }
+  const commandErr = validateString(item.command, `tests[${index}].command`, true);
+  if (commandErr) return commandErr;
+  const resultErr = validateEnum(item.result, `tests[${index}].result`, ['passed', 'failed', 'not-run'], true);
+  if (resultErr) return resultErr;
+  const outputErr = validateString(item.output, `tests[${index}].output`, false);
+  if (outputErr) return outputErr;
+  return null;
+}
+
+export function validateAgentCompletionPayload(payload: any): string | null {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return 'Completion payload must be an object.';
+  }
+
+  const runIdErr = validateString(payload.runId, 'runId', false);
+  if (runIdErr) return runIdErr;
+  const statusErr = validateEnum(payload.status, 'status', ['success', 'failed', 'cancelled'], true);
+  if (statusErr) return statusErr;
+  const summaryErr = validateString(payload.summary, 'summary', true);
+  if (summaryErr) return summaryErr;
+  const notesErr = validateString(payload.notes, 'notes', false);
+  if (notesErr) return notesErr;
+  const moveToErr = validateEnum(payload.moveTo, 'moveTo', ['backlog', 'todo', 'in-progress', 'ready-for-review'], false);
+  if (moveToErr) return moveToErr;
+
+  if (payload.changedFiles !== undefined) {
+    if (!Array.isArray(payload.changedFiles)) return "Field 'changedFiles' must be an array.";
+    const invalidChangedFile = payload.changedFiles.find((entry: any) => typeof entry !== 'string' || entry.trim() === '');
+    if (invalidChangedFile !== undefined) return "Field 'changedFiles' must contain only non-empty strings.";
+  }
+
+  if (payload.tests !== undefined) {
+    if (!Array.isArray(payload.tests)) return "Field 'tests' must be an array.";
+    for (let index = 0; index < payload.tests.length; index += 1) {
+      const error = validateAgentCompletionTest(payload.tests[index], index);
+      if (error) return error;
+    }
+  }
+
+  return null;
+}
+
+export function normalizeAgentCompletionPayload(payload: any): AgentCompletionPayload {
+  return {
+    runId: typeof payload.runId === 'string' && payload.runId.trim() ? payload.runId.trim() : undefined,
+    status: payload.status,
+    summary: String(payload.summary || '').trim(),
+    changedFiles: Array.isArray(payload.changedFiles)
+      ? payload.changedFiles.map((entry: string) => entry.trim()).filter(Boolean)
+      : [],
+    tests: Array.isArray(payload.tests)
+      ? payload.tests.map((entry: AgentCompletionTest) => ({
+          command: String(entry.command || '').trim(),
+          result: entry.result,
+          output: typeof entry.output === 'string' && entry.output.trim() ? entry.output.trim() : undefined,
+        }))
+      : [],
+    notes: typeof payload.notes === 'string' && payload.notes.trim() ? payload.notes.trim() : undefined,
+    moveTo: payload.moveTo || undefined,
+  };
 }
 
 export function resolveProjectIdFromRepo(state: AppState, item: any, req: any): string {

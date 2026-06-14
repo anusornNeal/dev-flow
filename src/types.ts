@@ -19,6 +19,25 @@ export interface ChecklistItem {
   completed: boolean;
 }
 
+export type AgentCompletionStatus = 'success' | 'failed' | 'cancelled';
+export type AgentCompletionTestResult = 'passed' | 'failed' | 'not-run';
+
+export interface AgentCompletionTest {
+  command: string;
+  result: AgentCompletionTestResult;
+  output?: string;
+}
+
+export interface AgentCompletionPayload {
+  runId?: string;
+  status: AgentCompletionStatus;
+  summary: string;
+  changedFiles?: string[];
+  tests?: AgentCompletionTest[];
+  notes?: string;
+  moveTo?: Exclude<TaskStatus, 'done'>;
+}
+
 export interface Task {
   id: string;
   displayId?: string; // e.g. buddy2-0001

@@ -38,12 +38,18 @@ export default function AutoWorkToggle() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ autoWork: newValue })
       });
+      const body = await response.json().catch(() => null);
       if (!response.ok) {
-        const body = await response.json().catch(() => null);
         const errorMessage = body?.error?.message || (typeof body?.error === 'string' ? body.error : null) || `Settings save failed with status ${response.status}`;
         throw new Error(errorMessage);
       }
       if (newValue) {
+        if (body?.autoWorkTrigger && !body.autoWorkTrigger.triggered && body.autoWorkTrigger.reason !== 'No eligible todo tasks found.') {
+          setPreflightError(body.autoWorkTrigger.reason);
+        } else {
+          setPreflightError(null);
+        }
+      } else {
         setPreflightError(null);
       }
     } catch (err) {
@@ -72,7 +78,8 @@ export default function AutoWorkToggle() {
         onClick={toggleAutoWork}
         title="Automatically trigger agents when a task is moved to the 'Ready To Do' (todo) lane"
       >
-        <span className="text-[10px] font-bold font-mono text-[#a46c24] dark:text-[#f3eadf] select-none">
+        <span className="text-[10px] font-bold font-mono text-[#a46c24] dark:text-[#f3eadf] select-none flex items-center gap-1">
+          {saving && <Loader2 size={10} className="animate-spin" />}
           Auto Work
         </span>
         <button

@@ -119,15 +119,31 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
         }
       }
       deps.state.settingsCache.autoWork = autoWork;
+      
+      let autoWorkTrigger: any = { triggered: false, reason: 'No eligible todo tasks found.' };
       if (autoWork) {
         const queuedTasks = deps.state.tasksCache.filter(task => task.status === 'todo' && task.agent);
         const uniqueProjectIds = Array.from(new Set(queuedTasks.map(t => t.projectId).filter(Boolean)));
+        let hasTriggered = false;
         for (const projectId of uniqueProjectIds) {
           if (projectId) {
-            continueTaskQueueForProject(projectId, deps);
+            const result = continueTaskQueueForProject(projectId, deps);
+            if (result.triggered) {
+              autoWorkTrigger = result;
+              hasTriggered = true;
+              break;
+            } else if (!hasTriggered) {
+              autoWorkTrigger = result;
+            }
           }
         }
       }
+
+      if (typeof agentExecutionMode === 'string') {
+        deps.state.settingsCache.agentExecutionMode = agentExecutionMode;
+      }
+      saveSettings(deps.state);
+      return res.json({ success: true, autoWork, autoWorkTrigger });
     }
 
     if (typeof agentExecutionMode === 'string') {

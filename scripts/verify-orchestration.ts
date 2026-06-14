@@ -690,4 +690,80 @@ try {
   await new Promise<void>((resolve, reject) => autoWorkValidationServer.close((error) => error ? reject(error) : resolve()));
 }
 
+console.log('[verify] Testing Auto Work enable triggers queued task...');
+const autoWorkTriggerState: AppState = {
+  tasksCache: [
+    {
+      id: 'auto-work-valid-task',
+      displayId: 'DVF-0119-X',
+      projectId: 'project-autowork-1',
+      status: 'todo',
+      agent: 'Codex',
+      model: 'GPT-5.5',
+      effort: 'medium',
+      title: 'Queued valid task',
+      description: 'Enabling Auto Work should trigger this.',
+      logs: [],
+    },
+    {
+      id: 'unrelated-task',
+      displayId: 'DVF-0120-X',
+      projectId: 'project-autowork-1',
+      status: 'backlog',
+      agent: 'Claude',
+      model: 'Claude 4.8 Opus',
+      effort: 'low',
+      title: 'Unrelated backlog task',
+      description: 'Should not be modified.',
+      logs: [],
+    }
+  ],
+  projectsCache: [{ id: 'project-autowork-1', name: 'p1', repoUrl: 'repo', localPath: tempDir }],
+  countersCache: {},
+  settingsCache: { autoWork: false, ngrokUrl: '', githubToken: '', jiraToken: '', jiraBaseUrl: '', jiraEmail: '' },
+  skillsRegistry: [],
+};
+const autoWorkTriggerDeps: ApiRouteDeps = {
+  state: autoWorkTriggerState,
+  writeAgentLog: (level, msg) => console.log(`[AutoWorkTrigger Log] ${level}: ${msg}`),
+};
+const autoWorkTriggerApp = express();
+autoWorkTriggerApp.use(express.json());
+registerSettingsRoutes(autoWorkTriggerApp, autoWorkTriggerDeps);
+const autoWorkTriggerServer = http.createServer(autoWorkTriggerApp);
+await new Promise<void>((resolve) => autoWorkTriggerServer.listen(0, resolve));
+const autoWorkTriggerAddress = autoWorkTriggerServer.address();
+if (!autoWorkTriggerAddress || typeof autoWorkTriggerAddress === 'string') throw new Error('Failed to bind Auto Work trigger server.');
+const autoWorkTriggerBaseUrl = `http://127.0.0.1:${autoWorkTriggerAddress.port}`;
+try {
+  const response = await fetch(`${autoWorkTriggerBaseUrl}/api/settings`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ autoWork: true }),
+  });
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.success, true);
+  assert.equal(body.autoWork, true);
+  assert.equal(body.autoWorkTrigger.triggered, true);
+  assert.equal(autoWorkTriggerState.settingsCache.autoWork, true);
+  
+  // Unrelated task should not be mutated
+  const unrelatedTask = autoWorkTriggerState.tasksCache.find(t => t.id === 'unrelated-task');
+  assert.equal(unrelatedTask?.agent, 'Claude');
+  assert.equal(unrelatedTask?.model, 'Claude 4.8 Opus');
+  
+  // Test disabling
+  const disableResponse = await fetch(`${autoWorkTriggerBaseUrl}/api/settings`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ autoWork: false }),
+  });
+  const disableBody = await disableResponse.json();
+  assert.equal(disableBody.success, true);
+  assert.equal(autoWorkTriggerState.settingsCache.autoWork, false);
+} finally {
+  await new Promise<void>((resolve, reject) => autoWorkTriggerServer.close((error) => error ? reject(error) : resolve()));
+}
+
 console.log('[verify-orchestration] all assertions passed');

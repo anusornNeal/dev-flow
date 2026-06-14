@@ -1,9 +1,10 @@
 import fs from 'fs';
 import path from 'path';
 import db from '../../db/index';
+import { getDevFlowSkillsDir } from '../../lib/devFlowPaths';
 import type { AppState } from '../types';
 
-const SKILLS_DIR = path.join(process.cwd(), 'skills');
+const SKILLS_DIR = getDevFlowSkillsDir();
 const LEGACY_REGISTRY_BACKUP_FILE = path.join(SKILLS_DIR, 'registry.json.bak');
 
 function ensureLegacySkillsColumns() {
@@ -34,7 +35,7 @@ export function loadSkillsRegistry(state: AppState) {
   state.skillsRegistry.forEach((skill) => {
     skill.isCustom = Boolean(skill.isCustom);
     skill.isProtected = Boolean(skill.isProtected);
-    skill.filePath = skill.sourcePath || skill.filePath || (!skill.isCustom ? path.join(process.cwd(), 'skills', skill.id + '.md') : undefined);
+    skill.filePath = skill.sourcePath || skill.filePath || (!skill.isCustom ? path.join(SKILLS_DIR, `${skill.id}.md`) : undefined);
   });
   state.skillsRegistry.sort((left, right) => {
     if (left.isCustom !== right.isCustom) {
@@ -98,7 +99,7 @@ export function readSkillContent(skill: any) {
     return skill.content || '';
   }
   if (!skill.filePath) {
-    skill.filePath = path.join(process.cwd(), 'skills', skill.id + '.md');
+    skill.filePath = path.join(SKILLS_DIR, `${skill.id}.md`);
   }
   return fs.existsSync(skill.filePath) ? fs.readFileSync(skill.filePath, 'utf8') : '';
 }

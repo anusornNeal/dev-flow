@@ -17,8 +17,9 @@ import { loadSkillsRegistry } from './src/server/repositories/skillsRepository';
 import { registerApiRoutes } from './src/server/routes/registerApiRoutes';
 import { createDevFlowMcpServer } from './src/server/mcp';
 import type { AppState } from './src/server/types';
+import { getDevFlowAppRoot, resolveFromDevFlowAppRoot } from './src/lib/devFlowPaths';
 
-const AGENT_LOG_FILE = path.join(process.cwd(), 'logs', 'agent-trigger.log');
+const AGENT_LOG_FILE = resolveFromDevFlowAppRoot('logs', 'agent-trigger.log');
 
 function writeAgentLog(level: 'INFO' | 'ERROR' | 'TRIGGER', message: string) {
   const entry = `[${new Date().toISOString()}] [${level}] ${message}\n`;
@@ -278,6 +279,7 @@ async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
     const isWindows = process.platform === 'win32';
     const viteConfig: any = {
+      root: getDevFlowAppRoot(),
       server: {
         middlewareMode: true,
         allowedHosts: true,
@@ -296,7 +298,7 @@ async function startServer() {
       viteConfig.plugins = [reactPlugin(), tailwindcssPlugin()];
       viteConfig.resolve = {
         alias: {
-          '@': path.resolve(process.cwd(), '.'),
+          '@': getDevFlowAppRoot(),
         },
       };
     }
@@ -304,7 +306,7 @@ async function startServer() {
     const vite = await createViteServer(viteConfig);
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
+    const distPath = resolveFromDevFlowAppRoot('dist');
     app.use(express.static(distPath));
     app.get('*', (_req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));

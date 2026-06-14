@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { spawnSync } from 'child_process';
+import { getDevFlowAppRoot } from '../../lib/devFlowPaths';
 import type { AppState } from '../types';
 import { createApiError } from './api';
 import { findProjectByIdentifier } from './taskService';
@@ -15,7 +16,7 @@ function resolveProjectRoot(state: AppState, args: Record<string, any>) {
   });
 
   if (identifierProject) {
-    return identifierProject.localPath || process.cwd();
+    return identifierProject.localPath || getDevFlowAppRoot();
   }
 
   const requestedIdentifier = args.projectId || args.projectName || args.repo || args.repoUrl || args.localPath;
@@ -28,7 +29,7 @@ function resolveProjectRoot(state: AppState, args: Record<string, any>) {
     return directLocalPath;
   }
 
-  return process.cwd();
+  return getDevFlowAppRoot();
 }
 
 function resolveSafePath(root: string, relativePath?: string) {

@@ -5,8 +5,9 @@ import fs from 'fs';
 import path from 'path';
 import db from '../../db/index';
 import Database from 'better-sqlite3';
+import { getDevFlowDataDir, getDevFlowDbPath, resolveFromDevFlowAppRoot } from '../../lib/devFlowPaths';
 import { runAgentLaunchPreflight } from '../services/agentLaunchConfig';
-import { resolveAgentExecutionMode, resolveFromDevFlowAppRoot } from '../services/agentRunService';
+import { resolveAgentExecutionMode } from '../services/agentRunService';
 import { continueTaskQueueForProject } from './tasks';
 
 function validateAutoWorkConfiguration(deps: ApiRouteDeps) {
@@ -140,7 +141,7 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
 
   app.get('/api/export', async (_req, res) => {
     try {
-      const dataDir = path.join(process.cwd(), 'data');
+      const dataDir = getDevFlowDataDir();
       if (!fs.existsSync(dataDir)) {
         fs.mkdirSync(dataDir, { recursive: true });
       }
@@ -190,7 +191,7 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
         return res.status(400).json({ error: 'Invalid file payload' });
       }
 
-      const dataDir = path.join(process.cwd(), 'data');
+      const dataDir = getDevFlowDataDir();
       if (!fs.existsSync(dataDir)) {
         fs.mkdirSync(dataDir, { recursive: true });
       }
@@ -198,7 +199,7 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
       const tempFile = path.join(dataDir, `devflow-import-temp-${timestamp}.db`);
       const safetyBackup = path.join(dataDir, `devflow-safety-${timestamp}.db`);
-      const targetDbFile = path.join(dataDir, 'devflow.db');
+      const targetDbFile = getDevFlowDbPath();
 
       // 1. Save uploaded file to temp path
       fs.writeFileSync(tempFile, req.body);

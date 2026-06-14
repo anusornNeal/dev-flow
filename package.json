@@ -11,6 +11,7 @@
     "verify": "tsx scripts/verify.ts",
     "test": "tsx scripts/verify.ts",
     "test:agent-runs": "tsx scripts/verify-agent-runs.ts",
+    "test:absolute-paths": "tsx scripts/verify-absolute-paths.ts",
     "test:prompt-templates": "tsx scripts/verify-prompt-templates.ts",
     "test:orchestration": "tsx scripts/verify-orchestration.ts",
     "dev": "tsx server.ts",

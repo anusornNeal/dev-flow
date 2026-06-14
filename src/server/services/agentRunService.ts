@@ -1,12 +1,10 @@
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
+import { getDevFlowAppRoot, resolveFromDevFlowAppRoot } from '../../lib/devFlowPaths';
+
+export { getDevFlowAppRoot, resolveFromDevFlowAppRoot } from '../../lib/devFlowPaths';
 
 export type AgentExecutionMode = 'safe' | 'full';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const DEVFLOW_APP_ROOT = path.resolve(__dirname, '..', '..', '..');
 
 interface CreateAgentRunFilesInput {
   runId: string;
@@ -48,14 +46,6 @@ export function resolveAgentExecutionMode(value: unknown): AgentExecutionMode {
 
 export function getDevFlowApiBaseUrl() {
   return (process.env.DEVFLOW_API_BASE_URL || 'http://localhost:3000').replace(/\/$/, '');
-}
-
-export function getDevFlowAppRoot() {
-  return path.resolve(process.env.DEVFLOW_APP_ROOT || DEVFLOW_APP_ROOT);
-}
-
-export function resolveFromDevFlowAppRoot(...segments: string[]) {
-  return path.join(getDevFlowAppRoot(), ...segments);
 }
 
 export function getAgentTriggerScriptPath(baseDir = getDevFlowAppRoot()) {

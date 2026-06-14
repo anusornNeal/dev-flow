@@ -40,7 +40,8 @@ export default function AutoWorkToggle() {
       });
       if (!response.ok) {
         const body = await response.json().catch(() => null);
-        throw new Error(body?.error || `Settings save failed with status ${response.status}`);
+        const errorMessage = body?.error?.message || (typeof body?.error === 'string' ? body.error : null) || `Settings save failed with status ${response.status}`;
+        throw new Error(errorMessage);
       }
       if (newValue) {
         setPreflightError(null);

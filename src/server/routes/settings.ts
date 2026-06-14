@@ -7,6 +7,7 @@ import db from '../../db/index';
 import Database from 'better-sqlite3';
 import { runAgentLaunchPreflight } from '../services/agentLaunchConfig';
 import { resolveAgentExecutionMode, resolveFromDevFlowAppRoot } from '../services/agentRunService';
+import { continueTaskQueueForProject } from './tasks';
 
 function validateAutoWorkConfiguration(deps: ApiRouteDeps) {
   const queuedTasks = deps.state.tasksCache
@@ -118,6 +119,15 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
         }
       }
       deps.state.settingsCache.autoWork = autoWork;
+      if (autoWork) {
+        const queuedTasks = deps.state.tasksCache.filter(task => task.status === 'todo' && task.agent);
+        const uniqueProjectIds = Array.from(new Set(queuedTasks.map(t => t.projectId).filter(Boolean)));
+        for (const projectId of uniqueProjectIds) {
+          if (projectId) {
+            continueTaskQueueForProject(projectId, deps);
+          }
+        }
+      }
     }
 
     if (typeof agentExecutionMode === 'string') {

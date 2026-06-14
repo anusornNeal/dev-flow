@@ -145,13 +145,16 @@ export default function TaskDetailsDrawer({
     }
   };
 
-  // Sync state with task changes
+  // Reset progressive disclosure and accordion states only when task identity changes
   useEffect(() => {
-    // Reset progressive disclosure and accordion states when task changes
     setShowAllFiles(false);
     setShowAllChecklist(false);
+    setShowAllSubtasks(false);
     setOpenSections(new Set());
-    
+  }, [task.id]);
+
+  // Sync state with task changes
+  useEffect(() => {
     if (!isEditing) {
       setEditedTitle(task.title);
       setEditedDesc(task.description);

@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { getDevFlowAppRoot, resolveFromDevFlowAppRoot } from '../../lib/devFlowPaths';
+import type { AgentCompletionPayload } from '../../types';
 
 export { getDevFlowAppRoot, resolveFromDevFlowAppRoot } from '../../lib/devFlowPaths';
 
@@ -96,16 +97,19 @@ export function buildPromptReference(promptPath: string) {
 
 export function writeAgentRunLaunchMetadata(runDir: string, metadata: Record<string, unknown>) {
   const historyPaths = getAgentRunHistoryPaths(runDir);
+  fs.mkdirSync(historyPaths.runDir, { recursive: true });
   fs.writeFileSync(historyPaths.launchMetadataPath, `${JSON.stringify(metadata, null, 2)}\n`, 'utf8');
 }
 
 export function writeAgentRunOutputSummary(runDir: string, summary: string) {
   const historyPaths = getAgentRunHistoryPaths(runDir);
+  fs.mkdirSync(historyPaths.runDir, { recursive: true });
   fs.writeFileSync(historyPaths.outputSummaryPath, summary.trim() ? `${summary.trim()}\n` : '', 'utf8');
 }
 
 export function writeAgentRunResult(runDir: string, result: AgentRunResultRecord | Record<string, unknown>) {
   const historyPaths = getAgentRunHistoryPaths(runDir);
+  fs.mkdirSync(historyPaths.runDir, { recursive: true });
   fs.writeFileSync(historyPaths.resultPath, `${JSON.stringify(result, null, 2)}\n`, 'utf8');
 }
 
@@ -140,4 +144,30 @@ export function createAgentRunResultRecord(input: {
     updatedAt: input.updatedAt || new Date().toISOString(),
     completedAt: input.completedAt ?? null,
   };
+}
+
+export function buildAgentCompletionSummary(payload: AgentCompletionPayload) {
+  const lines = [`Completion status: ${payload.status}`, `Summary: ${payload.summary}`];
+
+  if (payload.changedFiles && payload.changedFiles.length > 0) {
+    lines.push(`Changed files: ${payload.changedFiles.join(', ')}`);
+  }
+
+  if (payload.tests && payload.tests.length > 0) {
+    const renderedTests = payload.tests.map((test) => {
+      const outputSuffix = test.output ? ` (${test.output})` : '';
+      return `${test.command}: ${test.result}${outputSuffix}`;
+    });
+    lines.push(`Tests: ${renderedTests.join('; ')}`);
+  }
+
+  if (payload.notes) {
+    lines.push(`Notes: ${payload.notes}`);
+  }
+
+  if (payload.moveTo) {
+    lines.push(`Requested moveTo: ${payload.moveTo}`);
+  }
+
+  return lines.join('\n');
 }

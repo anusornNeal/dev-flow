@@ -39,6 +39,7 @@ import BatchImportModal from './components/BatchImportModal';
 import MarkdownRenderer from './components/MarkdownRenderer';
 import AutoWorkToggle from './components/AutoWorkToggle';
 import ConfirmModal from './components/ConfirmModal';
+import AgentRunLogModal from './components/AgentRunLogModal';
 
 // Standardized project lanes themed cleanly
 const COLUMNS: Column[] = [
@@ -71,6 +72,13 @@ export default function App() {
   const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const [logModal, setLogModal] = useState<{
+    taskDisplayId: string;
+    runId: string;
+    runStatus?: string;
+    agent?: string | null;
+    model?: string | null;
+  } | null>(null);
   const [mounted, setMounted] = useState(false);
   const [ngrokUrl, setNgrokUrl] = useState('');
   
@@ -610,6 +618,7 @@ export default function App() {
                     handleDeleteTask={handleDeleteTask}
                     handleDragStart={handleDragStart}
                     handleUpdateTask={handleUpdateTask}
+                    onShowLog={({ taskDisplayId, run }) => setLogModal({ taskDisplayId, runId: run.id, runStatus: run.status, agent: run.agent, model: run.model })}
                   />
                 );
               })}
@@ -643,6 +652,7 @@ export default function App() {
           onClose={() => setSelectedTask(null)}
           onUpdate={handleUpdateTask}
           onDelete={handleDeleteTask}
+          onShowLog={(run) => setLogModal({ taskDisplayId: selectedTask.displayId || selectedTask.id, runId: run.id, runStatus: run.status, agent: run.agent, model: run.model })}
         />
       )}
 
@@ -719,6 +729,18 @@ export default function App() {
           }}
           onCancel={() => setTaskToDelete(null)}
           confirmText="Delete"
+        />
+      )}
+
+      {/* 11. Agent Run Log Modal */}
+      {logModal && (
+        <AgentRunLogModal
+          taskDisplayId={logModal.taskDisplayId}
+          runId={logModal.runId}
+          runStatus={logModal.runStatus}
+          agent={logModal.agent}
+          model={logModal.model}
+          onClose={() => setLogModal(null)}
         />
       )}
     </div>

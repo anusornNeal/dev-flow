@@ -22,6 +22,7 @@ interface BoardLaneProps {
   handleDeleteTask: (id: string) => void;
   handleDragStart: (e: React.DragEvent, taskId: string) => void;
   handleUpdateTask: (updatedTask: Task) => Promise<void>;
+  onShowLog?: (args: { taskDisplayId: string; run: { id: string; status?: string; agent?: string | null; model?: string | null } }) => void;
 }
 
 export function BoardLane({
@@ -35,7 +36,8 @@ export function BoardLane({
   setSelectedTask,
   handleDeleteTask,
   handleDragStart,
-  handleUpdateTask
+  handleUpdateTask,
+  onShowLog
 }: BoardLaneProps) {
   const getColIcon = (name: string) => {
     switch (name) {
@@ -132,6 +134,7 @@ export function BoardLane({
               onDelete={handleDeleteTask}
               onDragStart={handleDragStart}
               onUpdate={handleUpdateTask}
+              onShowLog={onShowLog ? (run) => onShowLog({ taskDisplayId: task.displayId || task.id, run }) : undefined}
             />
           );
         })}

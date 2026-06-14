@@ -1,4 +1,5 @@
 import { execFile } from 'child_process';
+import fs from 'fs';
 import path from 'path';
 import type express from 'express';
 import type { ApiRouteDeps } from '../types';
@@ -746,6 +747,49 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
       runId: run.id,
       files: getAgentRunHistoryPaths(runDir),
     });
+  });
+
+  app.get('/api/tasks/:id/agent-runs/:runId/log', (req, res) => {
+    try {
+      cleanupStaleActiveRuns(deps);
+      loadTasks(deps.state);
+      const task = findTaskByIdentifier(deps.state, req.params.id);
+      if (!task) return res.status(404).json({ error: 'Task not found' });
+      const run = listAgentRunsForTask(task.id).find((entry) => entry.id === req.params.runId);
+      if (!run) return res.status(404).json({ error: 'Run not found' });
+
+      const fallbackDir = path.join(resolveFromDevFlowAppRoot('.devflow', 'runs'), run.id);
+      const runDir = run.logPath ? path.dirname(run.logPath) : fallbackDir;
+      const runsBaseDir = path.resolve(resolveFromDevFlowAppRoot('.devflow', 'runs'));
+      const resolvedRunDir = path.resolve(runDir);
+      const runsBaseWithSep = runsBaseDir.endsWith(path.sep) ? runsBaseDir : `${runsBaseDir}${path.sep}`;
+      if (resolvedRunDir !== runsBaseDir && !resolvedRunDir.startsWith(runsBaseWithSep)) {
+        return res.status(403).json({ error: 'Run directory is outside the allowed runs root.' });
+      }
+
+      const logPath = path.join(resolvedRunDir, 'agent.log');
+      if (!fs.existsSync(logPath)) {
+        return res.json({
+          taskId: task.id,
+          runId: run.id,
+          runStatus: run.status,
+          logPath,
+          content: '',
+          exists: false,
+        });
+      }
+      const content = fs.readFileSync(logPath, 'utf8');
+      return res.json({
+        taskId: task.id,
+        runId: run.id,
+        runStatus: run.status,
+        logPath,
+        content,
+        exists: true,
+      });
+    } catch (error) {
+      return sendApiError(res, error);
+    }
   });
 
   app.post('/api/tasks/:id/agent-runs/retry', (req, res) => {

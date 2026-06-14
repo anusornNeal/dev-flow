@@ -45,6 +45,7 @@ interface TaskDetailsDrawerProps {
   onUpdate: (updatedTask: Task) => void;
   onDelete: (id: string) => void;
   onCreateTask?: (task: Omit<Task, 'id' | 'createdAt' | 'updatedAt' | 'logs'>) => Promise<void>;
+  onShowLog?: (run: { id: string; status?: string; agent?: string | null; model?: string | null }) => void;
 }
 
 interface RunHistoryFiles {
@@ -63,7 +64,8 @@ export default function TaskDetailsDrawer({
   onClose, 
   onUpdate, 
   onDelete,
-  onCreateTask
+  onCreateTask,
+  onShowLog
 }: TaskDetailsDrawerProps) {
   const parentTask = task.parentId ? allTasks.find(t => t.id === task.parentId) : undefined;
   const subTasks = allTasks.filter(t => t.parentId === task.id);
@@ -1490,13 +1492,19 @@ export default function TaskDetailsDrawer({
                   <button
                     key={label}
                     type="button"
-                    onClick={() => handleCopyHistoryPath(pathValue)}
+                    onClick={() => {
+                      if (label === 'Log' && onShowLog && task.latestAgentRun) {
+                        onShowLog({ id: task.latestAgentRun.id, status: task.latestAgentRun.status, agent: task.agent, model: task.model });
+                      } else {
+                        handleCopyHistoryPath(pathValue);
+                      }
+                    }}
                     className="w-full text-left bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 hover:bg-[#fffcf6] dark:hover:bg-[#1e1914] transition-colors cursor-pointer"
                   >
                     <div className="flex items-center justify-between gap-3">
                       <span className="text-[9px] font-mono uppercase text-[#8a6e5a] dark:text-[#d6b56d] font-extrabold">{label}</span>
-                      <span className="text-[9px] font-mono text-emerald-600 dark:text-[#e0a070] font-bold">
-                        {copiedHistoryPath === pathValue ? 'copied' : 'copy path'}
+                      <span className={`text-[9px] font-mono font-bold ${label === 'Log' ? 'text-blue-500 dark:text-[#8ba4e8]' : 'text-emerald-600 dark:text-[#e0a070]'}`}>
+                        {label === 'Log' ? 'view log' : copiedHistoryPath === pathValue ? 'copied' : 'copy path'}
                       </span>
                     </div>
                     <div className="mt-1 text-[10px] font-mono text-[#5c493c] dark:text-[#f3eadf] break-all">

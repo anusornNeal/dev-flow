@@ -18,9 +18,10 @@ interface TaskCardProps {
   onDelete: (id: string) => void;
   onDragStart: (e: React.DragEvent, id: string) => void;
   onUpdate?: (updatedTask: Task) => void;
+  onShowLog?: (run: { id: string; status?: string; agent?: string | null; model?: string | null }) => void;
 }
 
-export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDragStart, onUpdate }: TaskCardProps) {
+export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDragStart, onUpdate, onShowLog }: TaskCardProps) {
   const [copied, setCopied] = useState(false);
   const [idCopied, setIdCopied] = useState(false);
   const [isDrag, setIsDrag] = useState(false);
@@ -221,16 +222,19 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
             
             {/* Log Indicator */}
             {task.agentRuns && task.agentRuns.filter(r => r.logFile).length > 0 && (
-              <a
-                href={`file:///${task.agentRuns.filter(r => r.logFile).reverse()[0].logFile?.replace(/\\/g, '/')}`}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-lg border border-gray-300 dark:border-[#4a3b2d] bg-gray-50 dark:bg-[#292119] text-gray-500 dark:text-[#a69685] hover:text-blue-500 hover:border-blue-300 text-[9px] font-mono transition-colors"
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-lg border border-gray-300 dark:border-[#4a3b2d] bg-gray-50 dark:bg-[#292119] text-gray-500 dark:text-[#a69685] hover:text-blue-500 hover:border-blue-300 text-[9px] font-mono transition-colors cursor-pointer"
                 title="View latest run log"
-                onClick={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (!onShowLog) return;
+                  const latest = task.agentRuns!.filter(r => r.logFile).slice(-1)[0];
+                  if (latest) onShowLog({ id: latest.id, status: latest.status, agent: task.agent, model: task.model });
+                }}
               >
                 Log
-              </a>
+              </button>
             )}
 
             {/* Run Error Message */}

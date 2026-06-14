@@ -1,7 +1,8 @@
 import fs from 'fs';
 import path from 'path';
+import { getDevFlowAppRoot } from '../../lib/devFlowPaths';
 import type { AgentExecutionMode } from './agentRunService';
-import { buildPromptReference, getAgentRunsBaseDir, getAgentTriggerScriptPath, getDevFlowApiBaseUrl, getDevFlowAppRoot, getInvokeAgentTriggerScriptPath } from './agentRunService';
+import { buildPromptReference, getAgentRunsBaseDir, getAgentTriggerScriptPath, getDevFlowApiBaseUrl, getInvokeAgentTriggerScriptPath } from './agentRunService';
 
 export type EffortHandlingMode = 'cli-flag' | 'prompt-only' | 'none';
 
@@ -107,7 +108,7 @@ export interface AgentLaunchPreflightResult {
   runArtifactsDir?: string;
 }
 
-function configPathForAgent(agent: string, baseDir = process.cwd()) {
+function configPathForAgent(agent: string, baseDir = getDevFlowAppRoot()) {
   return path.join(baseDir, 'config', 'agents', `${agent.toLowerCase()}.json`);
 }
 

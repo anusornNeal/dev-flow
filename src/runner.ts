@@ -2,7 +2,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { spawn } from 'child_process';
 import { fileURLToPath, pathToFileURL } from 'url';
-import { buildPromptReference, getDevFlowAppRoot, getAgentRunsBaseDir, resolveAgentExecutionMode, type AgentExecutionMode } from './server/services/agentRunService';
+import { getDevFlowAppRoot } from './lib/devFlowPaths';
+import { buildPromptReference, getAgentRunsBaseDir, resolveAgentExecutionMode, type AgentExecutionMode } from './server/services/agentRunService';
 import { buildAgentCliArgs as buildSharedAgentCliArgs, buildCodexLaunchConfig, buildLaunchMetadataBlock, mapModelForAgent as mapSharedModelForAgent, resolveAgentExecutable, resolveAgentLaunchPlan, type FileAgentConfig } from './server/services/agentLaunchConfig';
 
 const __filename = fileURLToPath(import.meta.url);

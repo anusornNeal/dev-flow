@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { getDevFlowAppRoot } from './agentRunService';
+import { getDevFlowAppRoot } from '../../lib/devFlowPaths';
 import type { ProjectRulesContext } from './projectRulesService';
 
 export interface PromptRenderContext {

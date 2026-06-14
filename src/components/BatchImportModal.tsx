@@ -5,6 +5,7 @@
 
 import React, { useState } from 'react';
 import { X, Sparkles, AlertCircle, Terminal, HelpCircle } from 'lucide-react';
+import { getAgentCatalogHelp } from '../lib/agentsConfig';
 
 interface BatchImportModalProps {
   onClose: () => void;
@@ -164,7 +165,7 @@ export default function BatchImportModal({ onClose, onImport }: BatchImportModal
             <ul className="list-disc pl-3.5 space-y-1 font-semibold">
               <li>Pasted blob must consist of a clean JSON Array containing ticket records.</li>
               <li>Required property is the ticket <strong>title</strong> string.</li>
-              <li>Optional properties: <strong>description</strong> (markdown string), <strong>status</strong> (backlog, todo, in-progress, ready-for-review, done), <strong>priority</strong> (low, medium, high), <strong>branch</strong> (text), <strong>tags</strong> (array of strings), <strong>targetFiles</strong> (array of paths), <strong>agent</strong>, <strong>model</strong>, <strong>effort</strong> (varies strictly by agent/model), and <strong>checklist</strong> (array of steps with text and completed values).</li>
+              <li>Optional properties: <strong>description</strong> (markdown string), <strong>status</strong> (backlog, todo, in-progress, ready-for-review, done), <strong>priority</strong> (low, medium, high), <strong>branch</strong> (text), <strong>tags</strong> (array of strings), <strong>targetFiles</strong> (array of paths), <strong>agent</strong>, <strong>model</strong>, <strong>effort</strong> {getAgentCatalogHelp()}, and <strong>checklist</strong> (array of steps with text and completed values).</li>
             </ul>
           </div>
 

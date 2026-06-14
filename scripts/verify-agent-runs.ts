@@ -611,7 +611,48 @@ assert.match(validateAgentParams({ agent: 'Antigravity', model: 'Gemini 3.1 Pro'
 assert.equal(validateAgentParams({ agent: 'Claude', model: 'Claude 4.8 Opus', effort: 'xhigh' }, []), null);
 assert.match(validateAgentParams({ agent: 'Claude', model: 'Claude 4.8 Opus', effort: 'minimal' }, []) || '', /Invalid effort 'minimal' for model 'Claude 4.8 Opus'/);
 
-// Legacy safety test
+// Legacy safety test: tasks loading and prompt rendering must not crash
 assert.equal(validateAgentParams({ agent: 'Codex', model: 'GPT-5.4', effort: 'legacy-unknown' }, []), "Invalid effort: legacy-unknown. Must be one of: none, minimal, low, medium, high, xhigh, max");
+
+const { renderTaskPrompt } = await import('../src/server/services/taskService');
+const mockTask = {
+  id: 'legacy-task-1',
+  displayId: 'LEGACY-1',
+  title: 'Legacy task',
+  projectId: 'proj-1',
+  status: 'todo',
+  priority: 'low',
+  agent: 'Codex',
+  model: 'GPT-5.4',
+  effort: 'legacy-unknown',
+};
+
+const mockState = {
+  projects: [{
+    id: 'proj-1',
+    name: 'Project 1',
+    localPath: tempDir,
+    repoUrl: 'foo',
+    branch: 'main',
+  }],
+  projectsCache: [{
+    id: 'proj-1',
+    name: 'Project 1',
+    localPath: tempDir,
+    repoUrl: 'foo',
+    branch: 'main',
+  }],
+  tasksCache: [mockTask],
+  tasks: [mockTask],
+  workspaceConfig: { localPath: tempDir },
+};
+
+// Must not throw when building prompt for task with unsupported effort
+try {
+  const result = renderTaskPrompt(mockState as any, 'legacy-task-1');
+  assert.ok(result.renderResult.content.includes('legacy-unknown'));
+} catch (e: any) {
+  assert.fail(`Prompt rendering crashed for legacy task: ${e.message}`);
+}
 
 console.log('[verify-agent-runs] all assertions passed');

@@ -152,3 +152,41 @@ export const defaultEffortForModel = (agentName: string, modelName: string): str
   const config = getModelConfig(agentName, modelName);
   return config ? config.defaultEffort : 'medium';
 };
+
+const ALL_EFFORTS: Effort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+
+export const getAgentCatalogHelp = (): string => {
+  return '(varies strictly by agent/model)';
+};
+
+export const getValidAgentModelEffortExamples = (): string[] => {
+  const examples: string[] = [];
+  for (const [agent, configs] of Object.entries(AGENTS_CONFIG)) {
+    if (configs.length > 0) {
+      // Pick the second model if available to get a mix of models, else first
+      const config = configs.length > 1 ? configs[1] : configs[0];
+      if (config.availableEfforts.length > 0) {
+        // Pick a high effort if possible, otherwise just pick the first
+        const effort = config.availableEfforts.includes('high') ? 'high' : 
+                       config.availableEfforts.includes('xhigh') ? 'xhigh' : 
+                       config.availableEfforts[0];
+        examples.push(`${agent} + ${config.model_name} + ${effort}`);
+      }
+    }
+  }
+  return examples.slice(0, 3);
+};
+
+export const getInvalidAgentModelEffortExamples = (): string[] => {
+  const examples: string[] = [];
+  for (const [agent, configs] of Object.entries(AGENTS_CONFIG)) {
+    if (configs.length > 0) {
+      const config = configs[0];
+      const invalid = ALL_EFFORTS.find(e => !config.availableEfforts.includes(e));
+      if (invalid) {
+        examples.push(`${agent} + ${config.model_name} + ${invalid}`);
+      }
+    }
+  }
+  return examples.slice(0, 3);
+};

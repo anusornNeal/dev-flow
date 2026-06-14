@@ -253,7 +253,7 @@ class MyViewModel: ViewModel() {
                 options={
                   agent && model ? (getModelConfig(agent, model)?.availableEfforts || []).map(eff => ({
                     value: eff,
-                    label: eff.charAt(0).toUpperCase() + eff.slice(1),
+                    label: eff === 'xhigh' ? 'Extra High' : eff.charAt(0).toUpperCase() + eff.slice(1),
                     icon: <Zap size={13} className="text-[#d89745] dark:text-[#d6b56d]" />
                   })) : [{ value: '', label: 'No Effort' }]
                 }

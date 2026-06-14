@@ -1196,8 +1196,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     if (agentErr) return res.status(400).json({ error: agentErr });
     const modelErr = validateEnum(req.body.model, 'model', VALID_MODELS, false);
     if (modelErr) return res.status(400).json({ error: modelErr });
-    const effortErr = validateEnum(req.body.effort, 'effort', VALID_EFFORTS, false);
-    if (effortErr) return res.status(400).json({ error: effortErr });
+
 
     const taskIndex = getTaskIndexByIdentifier(deps.state.tasksCache, req.params.id);
     if (taskIndex === -1) return res.status(404).json({ error: 'Task not found' });

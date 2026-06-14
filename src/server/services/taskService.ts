@@ -66,8 +66,7 @@ export function validateTaskPayload(item: any, isUpdate = false): string | null 
   const priorityErr = validateEnum(item.priority, 'priority', VALID_PRIORITIES, false);
   if (priorityErr) return priorityErr;
 
-  const effortErr = validateEnum(item.effort, 'effort', VALID_EFFORTS, false);
-  if (effortErr) return effortErr;
+
 
   const modelErr = validateEnum(item.model, 'model', VALID_MODELS, false);
   if (modelErr) return modelErr;

@@ -67,8 +67,7 @@ export const TASK_SCHEMA_DEF = {
     },
     effort: {
       type: 'string',
-      enum: VALID_EFFORTS,
-      description: 'Estimated reasoning effort required',
+      description: 'Reasoning effort level. Valid values strictly depend on the selected agent/model pair (e.g. Codex + GPT-5.4 supports low, medium, high, xhigh. Antigravity + Gemini 3.5 Flash supports low, medium, high. Claude 4.8 Opus supports minimal, low, medium, high). If invalid, the API will return a specific error listing the supported efforts for your model.',
     },
     parentId: { type: 'string', description: "ID of the parent task if this is a subtask. If provided, the agent property must match the parent's agent." },
     reasoning: { type: 'string', description: 'Reasoning or context for this task' },

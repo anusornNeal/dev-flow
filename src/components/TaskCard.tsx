@@ -198,23 +198,27 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
           {task.title}
         </h4>
 
-        {/* Locked Agent badge */}
-        {task.activeAgent && (
-          <div className="mb-3">
-            <span className="inline-flex items-center text-[9px] font-mono font-bold text-orange-600 bg-orange-50 px-1.5 py-0.5 rounded shadow-sm border border-orange-100 dark:bg-orange-900/30 dark:border-orange-800" title={`Locked by ${task.activeAgent}`}>
-              <AgentLogo agent={task.activeAgent} size={9} className="mr-1" />
-              <span>{task.activeAgent}</span>
-            </span>
-          </div>
-        )}
+        {/* Agent & Run Status Row */}
+        {(task.activeAgent || runStatusLabel) && (
+          <div className="flex flex-wrap items-center gap-1.5 mb-2">
+            {/* Locked Agent badge */}
+            {task.activeAgent && (
+              <span className="inline-flex items-center text-[9px] font-mono font-bold text-orange-600 bg-orange-50 px-1.5 py-0.5 rounded shadow-sm border border-orange-100 dark:bg-orange-900/30 dark:border-orange-800" title={`Locked by ${task.activeAgent}`}>
+                <AgentLogo agent={task.activeAgent} size={9} className="mr-1" />
+                <span>{task.activeAgent}</span>
+              </span>
+            )}
 
-        {runStatusLabel && (
-          <div className="mb-3 space-y-1">
-            <div className={`inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded-lg border text-[9px] font-mono font-bold ${runStatusTone}`}>
-              <span>{runStatusLabel}</span>
-            </div>
+            {/* Run Status Badge */}
+            {runStatusLabel && (
+              <div className={`inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded-lg border text-[9px] font-mono font-bold ${runStatusTone}`}>
+                <span>{runStatusLabel}</span>
+              </div>
+            )}
+
+            {/* Run Error Message */}
             {settledRunBadge?.errorMessage && (
-              <div className="text-[9px] font-mono text-[#8a6e5a] dark:text-[#d6b56d] line-clamp-2">
+              <div className="w-full text-[9px] font-mono text-[#8a6e5a] dark:text-[#d6b56d] line-clamp-2 mt-0.5">
                 {settledRunBadge.errorMessage}
               </div>
             )}

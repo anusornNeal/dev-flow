@@ -297,6 +297,7 @@ paths:
                   type: string
                 effort:
                   type: string
+                  description: 'Reasoning effort level. Valid values strictly depend on the selected agent/model pair (e.g. Codex + GPT-5.4 supports low, medium, high, xhigh. Antigravity + Gemini 3.5 Flash supports low, medium, high. Claude 4.8 Opus supports minimal, low, medium, high).'
       responses:
         '200':
           description: Task assigned

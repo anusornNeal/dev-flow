@@ -588,5 +588,11 @@ assert.match(
   validateAgentParams({ agent: 'Antigravity', model: 'GPT-5.5', effort: 'high' }, []) || '',
   /not supported by Antigravity/,
 );
+assert.equal(validateAgentParams({ agent: 'Codex', model: 'GPT-5.4', effort: 'xhigh' }, []), null);
+assert.match(validateAgentParams({ agent: 'Codex', model: 'GPT-5.4', effort: 'none' }, []) || '', /Invalid effort 'none' for model 'GPT-5.4'/);
+assert.match(validateAgentParams({ agent: 'Codex', model: 'GPT-5.4', effort: 'minimal' }, []) || '', /Invalid effort 'minimal' for model 'GPT-5.4'/);
+assert.match(validateAgentParams({ agent: 'Antigravity', model: 'Gemini 3.5 Flash', effort: 'minimal' }, []) || '', /Invalid effort 'minimal' for model 'Gemini 3.5 Flash'/);
+assert.match(validateAgentParams({ agent: 'Antigravity', model: 'Gemini 3.1 Pro', effort: 'medium' }, []) || '', /Invalid effort 'medium' for model 'Gemini 3.1 Pro'/);
+assert.match(validateAgentParams({ agent: 'Antigravity', model: 'Gemini 3.1 Pro', effort: 'minimal' }, []) || '', /Invalid effort 'minimal' for model 'Gemini 3.1 Pro'/);
 
 console.log('[verify-agent-runs] all assertions passed');

@@ -136,6 +136,10 @@ Invalid examples:
 
 ## Field Usage Rules
 
+### branch
+
+The `branch` field is used to track the working branch for a task. There is no `activeBranch` payload; always use `branch`.
+
 ### title
 
 Use a concise implementation title.
@@ -351,7 +355,9 @@ If Jira priority is missing, infer from user impact and write the reason in `rea
 | high | new screen, navigation, preview/share, multiple files, parallel branch |
 | xhigh | architecture/refactor/multi-module/high uncertainty |
 
-## Single Task Template
+## Sharp Examples
+
+### Example: Bug Fix Task
 
 ```json
 {
@@ -396,7 +402,7 @@ Relevant files:
 }
 ```
 
-## Parallel Parent Template
+### Example: Feature Task (Parallel Parent)
 
 Parent is the foundation, merge, and review owner.
 
@@ -455,7 +461,7 @@ This parent is the source of truth for shared contracts. Do not send agents back
 }
 ```
 
-## Parallel Child Template
+### Example: Feature Task (Parallel Child)
 
 ```json
 {
@@ -508,6 +514,46 @@ app/src/main/java/.../<feature_package>/
 Use shared contract from parent. Do not create duplicate infrastructure.",
   "jiraKey": "QCA-xxxx",
   "repo": "https://github.com/q-chang/buddy-android",
+  "sourceUrl": ""
+}
+```
+
+### Example: Documentation Task
+
+```json
+{
+  "projectId": "project-id",
+  "title": "Document standard API response format",
+  "description": "Write a guide on how to format API responses following the new standard.",
+  "status": "todo",
+  "priority": "low",
+  "branch": "docs/api-standard-response",
+  "tags": ["Docs", "API"],
+  "targetFiles": ["docs/api/response-format.md (new)"],
+  "checklist": [
+    {
+      "id": "doc-1",
+      "text": "Outline the sections: Success, Error, Pagination.",
+      "completed": false
+    },
+    {
+      "id": "doc-2",
+      "text": "Add JSON examples for each section.",
+      "completed": false
+    },
+    {
+      "id": "doc-3",
+      "text": "Review for clarity and consistency.",
+      "completed": false
+    }
+  ],
+  "effort": "low",
+  "model": "GPT-5.4 Mini",
+  "agent": "Codex",
+  "reasoning": "Simple markdown addition, Mini model is perfectly capable.",
+  "acceptanceCriteria": "- Documentation covers Success, Error, and Pagination formats.\n- Valid JSON examples are provided.",
+  "verification": "- Render markdown locally to check formatting.\n- Read through for spelling/grammar.",
+  "repoContext": "Repo: my-org/api-docs\nArea: API Guidelines\n\nAdd to existing docs directory.",
   "sourceUrl": ""
 }
 ```

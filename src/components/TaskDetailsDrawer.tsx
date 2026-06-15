@@ -1296,7 +1296,7 @@ export default function TaskDetailsDrawer({
                             </h4>
                             <div className="flex gap-2 overflow-x-auto pb-2 snap-x">
                               {(task.designImages || (task.designImage ? [task.designImage] : [])).map((img, idx) => (
-                                <div key={idx} className="border border-[#ebdcb9] dark:border-[#584a3b] rounded-2xl overflow-hidden bg-white dark:bg-[#292119] shadow-xs p-1 shrink-0 w-64 snap-center">
+                                <div key={idx} className="relative border border-[#ebdcb9] dark:border-[#584a3b] rounded-2xl overflow-hidden bg-white dark:bg-[#292119] shadow-xs p-1 shrink-0 w-64 snap-center group">
                                   <a href={img} onClick={(e) => handleViewImage(e, img)} title="Click to view full image in a new tab">
                                     <img 
                                       src={img} 
@@ -1305,6 +1305,17 @@ export default function TaskDetailsDrawer({
                                       referrerPolicy="no-referrer"
                                     />
                                   </a>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const updated = (task.designImages || (task.designImage ? [task.designImage] : [])).filter((_, i) => i !== idx);
+                                      onUpdate({ ...task, designImages: updated.length > 0 ? updated : undefined });
+                                    }}
+                                    className="absolute top-1 right-1 bg-red-500 text-white w-5 h-5 rounded-full flex items-center justify-center text-[10px] opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+                                    title="Remove image"
+                                  >
+                                    ✕
+                                  </button>
                                 </div>
                               ))}
                             </div>

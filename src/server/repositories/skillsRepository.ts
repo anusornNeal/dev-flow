@@ -95,7 +95,7 @@ export function saveSkillsRegistry(state: AppState) {
 }
 
 export function readSkillContent(skill: any) {
-  if (skill.sourceType === 'file' || (!skill.isCustom && skill.sourceType !== 'database')) {
+  if (!skill.isCustom && skill.sourceType !== 'database') {
     if (!skill.filePath) {
       skill.filePath = path.join(SKILLS_DIR, `${skill.id}.md`);
     }

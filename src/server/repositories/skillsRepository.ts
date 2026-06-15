@@ -95,6 +95,12 @@ export function saveSkillsRegistry(state: AppState) {
 }
 
 export function readSkillContent(skill: any) {
+  if (skill.sourceType === 'file' || (!skill.isCustom && skill.sourceType !== 'database')) {
+    if (!skill.filePath) {
+      skill.filePath = path.join(SKILLS_DIR, `${skill.id}.md`);
+    }
+    return fs.existsSync(skill.filePath) ? fs.readFileSync(skill.filePath, 'utf8') : '';
+  }
   if (typeof skill.content === 'string' && skill.content.length > 0) {
     return skill.content || '';
   }

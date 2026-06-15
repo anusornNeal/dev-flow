@@ -175,6 +175,10 @@ async function startServer() {
     }
   });
 
+  // POST /sse must route to the session-specific transport, NOT the latest.
+  // MCP clients identify themselves via ?sessionId= query parameter.
+  // Using a Set and picking the last element breaks under multiple concurrent
+  // clients (e.g., Tool A's message routes to Tool B's transport).
   app.post('/sse', async (req, res, next) => {
     const sessionId = typeof req.query.sessionId === 'string' ? req.query.sessionId : '';
     const transport = sessionId ? activeTransports.get(sessionId) : undefined;

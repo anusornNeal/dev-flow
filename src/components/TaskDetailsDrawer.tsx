@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   X, 
   Trash2, 
@@ -82,6 +82,37 @@ export default function TaskDetailsDrawer({
   const [editedChecklistList, setEditedChecklistList] = useState<string[]>((task.checklist || []).map(c => c.text));
   const [editedDesignImages, setEditedDesignImages] = useState<string[]>(task.designImages || (task.designImage ? [task.designImage] : []));
   const [editedSpecUrl, setEditedSpecUrl] = useState(task.specUrl || '');
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = Array.from(e.clipboardData.items);
+    const imageItem = items.find((item) => item.type.startsWith('image/'));
+    if (!imageItem) return;
+    e.preventDefault();
+    const blob = imageItem.getAsFile();
+    if (!blob) return;
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      if (typeof reader.result !== 'string') return;
+      const md = `![Screenshot](${reader.result})`;
+      const ta = textareaRef.current;
+      if (ta) {
+        const start = ta.selectionStart;
+        const end = ta.selectionEnd;
+        const before = editedDesc.slice(0, start);
+        const after = editedDesc.slice(end);
+        const newDesc = before + md + after;
+        setEditedDesc(newDesc);
+        requestAnimationFrame(() => {
+          ta.selectionStart = ta.selectionEnd = start + md.length;
+        });
+      }
+      if (editedDesignImages.length < 5) {
+        setEditedDesignImages((prev) => [...prev, reader.result as string]);
+      }
+    };
+    reader.readAsDataURL(blob);
+  };
   
   const handleViewImage = (e: React.MouseEvent, imageUrl: string) => {
     e.preventDefault();
@@ -679,10 +710,12 @@ export default function TaskDetailsDrawer({
                   <AlignLeft size={13} className="text-[#bf8a50] dark:text-[#d6b56d]" /> Detailed Specifications & Code (Markdown)
                 </h4>
                 <textarea
+                  ref={textareaRef}
                   className="w-full bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] h-32 outline-none focus:border-[#d7933f] dark:border-[#e0a070] dark:focus:border-[#584a3b] transition-all resize-y font-mono shadow-2xs"
                   placeholder="Insert architecture blueprint markdown notes..."
                   value={editedDesc}
                   onChange={(e) => setEditedDesc(e.target.value)}
+                  onPaste={handlePaste}
                 />
               </div>
 

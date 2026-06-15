@@ -1,203 +1,270 @@
-# Dev Flow Agent Playbook
+# Dev Flow Agent Playbook v4.1 Compact
 
 ## Purpose
 
-This playbook defines how ChatGPT should use Jira, GitHub/repository context, and Dev Flow to convert product or engineering requirements into high-quality, implementation-ready Dev Flow tasks.
+This playbook defines how ChatGPT should convert Jira requirements and repository context into high-quality Dev Flow cards.
 
-The output of this workflow is a Dev Flow card, or a parent/child task set, that a coding agent can execute without re-opening Jira, guessing requirements, rediscovering obvious repository context, or receiving vague instructions.
-
-This playbook is portable. It can be copied into another ChatGPT project or shared with another user so the same Jira-to-DevFlow workflow can be reused consistently.
-
----
-
-## Required Tools
-
-The workflow assumes access to these tools/connectors when available:
-
-- `Dev_Jira`: read Jira issues, subtasks, comments, attachments, priorities, statuses, and issue relationships.
-- `Dev_Github`: inspect repository structure, files, existing patterns, pull requests, issues, and code references.
-- `Dev_Flow`: create, update, list, move, assign, inspect, and render Dev Flow tasks and projects.
-
-When a tool is unavailable or returns insufficient data, ChatGPT must say so honestly and must not fill the gap with guessed requirements.
-
----
+The goal is to create cards that a coding agent can execute safely from Dev Flow alone, without needing to re-open Jira, guess requirements, or rediscover the repo context from scratch.
 
 ## Core Principle
 
 Dev Flow cards are the source of truth for the coding agent.
 
-Jira is used by ChatGPT only while preparing the card. The coding agent must not be instructed to go back to Jira, read Jira subtasks, open Jira attachments, or depend on Jira links as the main requirement source.
+ChatGPT must read Jira, read the repo, think through the implementation deeply, filter noise, and write the final engineering plan into Dev Flow fields.
 
-Do not write instructions like:
+Do not write cards that say:
 
-```md
-Read Jira QCA-1234 before coding.
-Open the Jira attachment and check what to do.
-Use the Jira comments as the source of truth.
-See sourceUrl for the requirement.
+```text
+Read Jira before coding.
+Open the Jira attachment.
+Check Jira comments for details.
+See sourceUrl for requirement.
 ```
 
-Instead, ChatGPT must read Jira, inspect relevant repository context, summarize everything needed, and write the final requirement into the Dev Flow card fields.
+Instead, extract the useful information from Jira and the repo, then write it into the card.
 
-A good Dev Flow card is not a copy of Jira.
+## Required Tools and Fallback Rules
 
-A good Dev Flow card is the result of reading Jira, reading the repo, filtering noise, extracting requirements, analyzing implementation risk, deciding task size, and writing focused execution context.
+Use the available tools in this order when applicable:
 
----
+- `Dev_Jira`: read Jira issue, description, comments, subtasks, linked issues, attachments, priority, and status.
+- `Dev_Github`: inspect the repository from GitHub when accessible.
+- `Dev_Flow`: read project schema/playbook, read local repo files, search local files, inspect existing tasks, and create/update tasks.
 
-## Operating Mode
+If `Dev_Github` cannot access the repo, fall back to `Dev_Flow` local repo tools.
 
-### Read first, write later
+If Jira cannot be read and the user did not provide enough detail, do not create an implementation-ready card. Create a blocked/prep card or ask for missing information.
 
-Before creating or updating a Dev Flow card, ChatGPT must read all required sources first.
+If the repo cannot be inspected enough to understand implementation context, do not create an implementation-ready card.
+
+Always be honest about tool failures. Never pretend Jira or repo was read when it was not.
+
+## Mandatory Deep Analysis Before Writing Cards
+
+Do not create a card immediately after reading Jira.
+
+Before writing or updating a Dev Flow card, ChatGPT must think through the task deeply:
+
+- What is the real user-facing problem?
+- What is the expected behavior?
+- What is the current behavior?
+- What is the smallest safe implementation scope?
+- What exact behavior must change from what to what?
+- Which repo files, layers, screens, strings, APIs, tests, or models are involved?
+- Which existing behavior must not change?
+- What tests or manual verification are needed?
+- Is this task small enough for one agent?
+- Is it large enough to split into parallel subtasks?
+- Are there similar Jira cards with duplicate or overlapping logic that should be merged?
+- Are there wording/copy requirements that must be copied exactly into the card?
+
+The final card must reflect this analysis.
+
+## Read Order
 
 Recommended order:
 
-1. Read the Jira issue.
+1. Read Jira issue.
 2. Read Jira comments.
-3. Read Jira subtasks or linked issues when they affect scope.
-4. Read Jira attachments when they contain screenshots, videos, logs, designs, or reproduction evidence.
-5. Read the target repository.
-6. Search the repository for relevant screens, classes, APIs, tests, strings, routes, and existing patterns.
-7. Read existing Dev Flow tasks for the same Jira key or same feature area.
-8. Read the Dev Flow schema or project rules when needed.
-9. Think deeply about implementation scope, risks, and decomposition.
-10. Create or update the Dev Flow card only after the requirement, implementation area, and task shape are understood.
+3. Read subtasks and linked issues if they affect scope.
+4. Read attachments if they contain screenshots, videos, logs, wording, designs, or reproduction evidence.
+5. Inspect the repository.
+6. Search for affected screens, strings, mappers, rules, APIs, tests, routes, and existing patterns.
+7. Read actual files, not only search snippets.
+8. Read Dev Flow schema/playbook/authoring rules when needed.
+9. Check if a Dev Flow card already exists for the Jira key.
+10. Create or update the card only after the requirement and repo context are understood.
 
-### Do not create implementation cards from guesses
+## Duplicate Jira Logic and Merge Rule
 
-If Jira cannot be read and the user did not provide enough requirement detail, do not create an implementation-ready card.
+If multiple Jira issues describe the same logic, same root cause, same file area, or can safely be fixed together, merge them into one Dev Flow card instead of creating separate duplicate cards.
 
-Either ask for the missing requirement, or create a blocked/prep card that clearly states what is missing.
+Merge when:
 
-A blocked card must not be assigned as ready implementation work.
+- The expected behavior is the same rule across multiple cases.
+- The same helper/mapper/component should be fixed once.
+- Fixing separately would duplicate work.
+- Tests should cover all Jira examples together.
+- One implementation can close or satisfy multiple Jira tickets.
 
----
+Do not merge when:
 
-## Deep Analysis Requirement
+- The issues have different owners or release timing.
+- The implementation areas conflict.
+- The testing matrix is too different.
+- Merging would make the card vague or too large.
+- The issues only look similar but have different business rules.
+- Separate parallel work would be safer.
 
-Before writing any Dev Flow card, ChatGPT must analyze the task deeply.
+When merging Jira issues:
 
-Do not create a card immediately after reading Jira. First reason through the requirement and convert raw Jira/repo information into an executable engineering plan.
+- Put the primary Jira key first in the title.
+- Include all Jira keys in `jiraKey` only if the field supports one key; otherwise use the primary key in `jiraKey` and all keys in tags/description.
+- Summarize each Jira case in the description.
+- Add acceptance criteria for every distinct behavior.
+- Add verification for every distinct example.
+- Explain in `reasoning` why the cards were merged.
 
-Before writing the final card, answer these internally:
+Example title:
 
-- What is the real user-facing problem?
-- What exact behavior is wrong?
-- What exact behavior is expected?
-- What examples from Jira prove the rule?
-- What is the smallest safe implementation scope?
-- Which app screen, flow, API, model, mapper, state, or repository layer is likely affected?
-- Which existing behavior must not change?
-- What files are likely implementation files?
-- What files are likely test files?
-- What risks exist?
-- Is the task small enough for one agent to complete safely?
-- Is the task too large, cross-layer, or risky?
-- Can the work be split into independent subtasks that can run in parallel?
-- If split, what should the parent orchestrator own and what should each child task own?
+```text
+[QCA-3393][QCA-3394] Fix start-job button date enable rules on Job Detail
+```
 
-The final Dev Flow card must reflect this analysis. It should not be a raw Jira copy or a metadata dump.
+## Mandatory Repository Reading Rules
 
----
+Repo reading is mandatory before writing an implementation-ready card.
 
-## Task Sizing and Decomposition Rules
+At minimum, ChatGPT must:
 
-### Decide whether the task is single-card or orchestrated
+- Identify the project structure.
+- Search for affected screen/feature/string/API/domain model.
+- Read likely implementation files.
+- Read likely test files.
+- Identify existing patterns and architecture style.
+- Identify target files.
+- Identify related behavior that must remain unchanged.
+- Write current code behavior and required change into the card.
 
-Every task must be sized before writing the card.
+Search snippets are not enough. Read the actual file contents for the likely target files.
 
-Use a single implementation card only when:
+If repo access fails:
 
-- The scope is narrow.
-- One agent can complete it safely.
-- The expected files are focused.
-- The behavior has clear acceptance criteria.
-- There is low integration risk.
-- Splitting would create unnecessary overhead.
+- Use local repo through Dev Flow if available.
+- If no repo source is available, create a blocked/prep card or ask the user.
+- Do not make an implementation-ready card based only on Jira.
 
-Use a parent orchestrator plus child subtasks when the task is large, multi-layer, or risky.
+## Card Detail and Delta Rule
 
-A task should be considered large when it includes any of these:
+The card must be detailed enough that the coding agent knows exactly what to do.
+
+For every behavior change, write the delta clearly:
+
+- Change from what?
+- Change to what?
+- Where does it happen?
+- Which user flow is affected?
+- What examples prove the rule?
+- What is out of scope?
+- What existing behavior must stay the same?
+
+Bad:
+
+```text
+Fix button logic.
+```
+
+Good:
+
+```text
+Change the Job Detail "เริ่มงาน" button date rule:
+- Current wrong behavior: future jobStartDate may enable the button while today/past may disable it.
+- Expected behavior: future jobStartDate disables the button; today or past jobStartDate enables it.
+- Do not change finish-job or document upload actions.
+```
+
+## Wording and Copy Rules
+
+If the task adds, removes, or changes wording, the card must include the exact wording.
+
+Do not tell the agent to look up wording in Jira, screenshots, comments, or attachments.
+
+The card must include:
+
+- Exact source text.
+- Exact target text.
+- Language.
+- Where it appears.
+- Any formatting requirements.
+- Any pluralization, punctuation, newline, or spacing requirements.
+- Whether existing string resources should be reused or new string resources should be added.
+
+If required wording is missing or unclear, do not create an implementation-ready card. Ask the user or create a blocked/prep card.
+
+Bad:
+
+```text
+Update the wording according to Jira.
+```
+
+Good:
+
+```text
+Change the empty-state title on My Jobs from:
+"ยังไม่มีงาน"
+to:
+"ยังไม่มีงานที่ได้รับมอบหมาย"
+
+Change only this title. Do not change the subtitle or button text.
+```
+
+## Task Size and Decomposition Rules
+
+Before creating a single implementation card, check whether the task is too large.
+
+A task is large when it includes:
 
 - Multiple screens or flows.
-- Multiple architectural layers such as UI, domain, repository, API, local storage, and tests.
 - Multiple independent behaviors.
-- Significant refactor plus feature/bug fix.
-- Complex UI behavior with independent state, layout, analytics, navigation, and tests.
-- Risk of merge conflicts if multiple agents edit the same file.
+- Multiple architectural layers such as UI, domain, repository, API, storage, and tests.
+- Refactor plus feature/bug fix.
+- High risk of merge conflicts.
+- Work that multiple agents could do independently.
 - Unclear sequencing or integration risk.
-- More than one agent could reasonably work on different parts in parallel.
-- The implementation naturally has foundation work plus feature slices.
 
-If a task is large, do not create one oversized implementation card.
+If the task is large, do not create one oversized implementation card.
 
-Split it into:
+Create:
 
-1. A parent orchestration/foundation task.
-2. Multiple child subtasks that can be worked on independently.
-3. A final integration/review step owned by the parent task.
-
----
+1. A parent orchestrator/foundation card.
+2. Multiple child subtasks that can run in parallel.
+3. A final integration/review plan owned by the parent.
 
 ## Parent Orchestrator Rule
 
-For large tasks, the parent task is not a normal coding task.
+For large work, the parent card is not a normal coding card.
 
-The parent task is an orchestrator/foundation task.
+The parent card must:
 
-The parent should:
+- Hold the full source-of-truth requirement.
+- Define architecture and boundaries.
+- Split work into parallel child subtasks.
+- Minimize target-file overlap between child tasks.
+- Define integration points.
+- Track child task completion.
+- Own final integration, conflict resolution, regression testing, and final summary.
+- Keep final acceptance criteria and verification.
 
-- Define the full source-of-truth requirement.
-- Define overall architecture, constraints, and boundaries.
-- Define the branch naming plan.
-- Define child subtasks.
-- Assign each child subtask a clear independent scope.
-- Minimize target file overlap between child subtasks.
-- Define integration points between subtasks.
-- Define shared contracts, models, interfaces, or behavior that child tasks must respect.
-- Track completion of child subtasks.
-- Own final integration/review after child tasks are complete.
-- Own final acceptance criteria and verification for the whole Jira issue.
-
-The parent should not tell one agent to implement everything if the work has been split.
-
-The parent may include foundation/setup work when needed, but it must still be written as an orchestrator with clear child boundaries.
-
----
+The parent should not tell one agent to implement everything after work has been split.
 
 ## Parallel Subtask Rule
 
-Child subtasks must be designed so they can run in parallel as much as possible.
+Child subtasks must be independently executable as much as possible.
 
-A good parallel subtask:
+A good child subtask:
 
-- Has a clear independent scope.
+- Has narrow scope.
 - Has focused target files.
-- Avoids editing the same files as other subtasks when possible.
+- Avoids editing the same files as sibling tasks when possible.
 - Has its own acceptance criteria.
-- Has its own verification steps.
-- Does not require another subtask to finish before it can start, unless explicitly stated.
-- Produces output that can be integrated by the parent orchestrator.
-- States any dependency on foundation work clearly.
+- Has its own verification.
+- Can be worked in parallel unless dependency is explicitly stated.
+- Produces output that can be integrated by the parent.
 
 Bad subtasks:
 
-- `Do part 1`
-- `Do part 2`
-- `Fix remaining things`
-- `Update everything`
-- Multiple subtasks that all edit the same large file without coordination.
-- Subtasks that cannot be verified independently.
-- Subtasks that are only checklist items disguised as tasks.
+```text
+Part 1
+Part 2
+Fix remaining things
+Update everything
+```
 
-If subtasks cannot run in parallel, explain the sequencing clearly in the parent card.
-
----
+Do not create subtasks that all edit the same large file without coordination unless unavoidable and clearly explained.
 
 ## Branch Naming for Orchestrated Work
 
-When a large task is split into a parent orchestrator and parallel subtasks, branch names must follow this pattern.
+For split/orchestrated work:
 
 Parent branch:
 
@@ -205,7 +272,7 @@ Parent branch:
 xxxx-foundation
 ```
 
-Child subtask branches:
+Child branches:
 
 ```text
 xxxx-foundation/xxxx
@@ -222,13 +289,12 @@ qca-3400-job-detail-foundation/repository-mapping
 
 Rules:
 
-- The parent branch must end with `-foundation`.
-- Child branches must be nested under the parent foundation branch.
-- Child branch names should describe the subtask scope.
-- Child subtasks should branch from the parent foundation branch when shared groundwork is needed.
-- The parent orchestrator is responsible for merging or reconciling child outputs.
+- Parent branch must end with `-foundation`.
+- Child branches must be nested under the parent branch.
+- Child branch suffix should describe the subtask.
+- Parent orchestrator owns merge/reconcile/final verification.
 
-For single-card non-orchestrated work, use normal branch naming:
+For normal single-card work, use a normal branch:
 
 ```text
 fix/qca-3393-start-job-button-date-rule
@@ -236,216 +302,66 @@ feature/qca-1234-new-job-filter
 chore/qca-1234-refactor-job-detail
 ```
 
----
+## Dev Flow Field Rules
 
-## Decomposition Quality Gate
+### `title`
 
-Before creating a single implementation card, ChatGPT must check:
+For Jira-originated work, title must start with Jira key.
 
-- Can this be completed safely by one agent?
-- Will one card become too large or vague?
-- Are there independent parts that can be done in parallel?
-- Would parallel subtasks reduce risk or speed up delivery?
-- Will subtasks avoid overlapping target files?
-- Is a parent orchestrator needed to coordinate integration?
-- Is there a foundation branch needed before child branches?
-- Does the parent have a clear integration plan?
-
-If the answer suggests the task is large, create a parent orchestrator task and child subtasks instead of one oversized card.
-
----
-
-## Parent and Child Card Requirements
-
-### Parent orchestrator card
-
-The parent card must include:
-
-- Full Jira/source requirement.
-- Overall architecture/context.
-- Deep analysis summary.
-- Subtask breakdown.
-- Branch naming plan.
-- Integration plan.
-- Shared constraints.
-- Known risks.
-- Final acceptance criteria.
-- Final verification plan.
-
-The parent title must still start with the Jira key when Jira-originated.
-
-Example:
+Format:
 
 ```text
-[QCA-3400] Orchestrate Job Detail foundation fixes
+[JIRA-KEY] Verb + object + context
 ```
-
-Parent branch:
-
-```text
-qca-3400-job-detail-foundation
-```
-
-### Child subtask card
-
-Each child card must include:
-
-- Jira key in title.
-- Parent task reference.
-- Narrow independent scope.
-- Focused target files.
-- Subtask-specific acceptance criteria.
-- Subtask-specific verification.
-- Branch nested under parent foundation branch.
-- Integration notes for the parent.
-
-Example:
-
-```text
-[QCA-3400] Implement sticky Job Detail tabs
-```
-
-Child branch:
-
-```text
-qca-3400-job-detail-foundation/sticky-tabs
-```
-
-Child tasks should not repeat the full parent requirement unless needed. They should reference the parent and contain only the context needed for their independent scope.
-
----
-
-## Integration Rule
-
-After child subtasks are complete, the parent orchestrator must verify integration.
-
-Integration must check:
-
-- Child outputs do not conflict.
-- Shared contracts still match.
-- All parent acceptance criteria are satisfied.
-- Tests from child tasks pass together.
-- Manual verification covers the full user flow.
-- No child task changed out-of-scope behavior.
-- Branches are merged or reconciled in the expected order.
-
-The parent should move to `ready-for-review` only after integration is complete and verified.
-
----
-
-## Jira-to-DevFlow Conversion Rules
-
-### Card must be implementation-ready
-
-A Dev Flow card must contain enough information for the coding agent to complete the task from the card alone.
-
-It should include:
-
-- What screen, flow, feature, API, or module is affected.
-- What the wrong behavior is.
-- What the expected behavior is.
-- Exact business rules.
-- Concrete examples from Jira.
-- Relevant repo context.
-- Focused target files.
-- Observable acceptance criteria.
-- Concrete verification steps.
-- Out-of-scope boundaries.
-- Known risks or implementation warnings.
-
-### Card must not be a Jira metadata dump
-
-Do not blindly copy Jira fields into the card description.
-
-Metadata that does not help implementation or verification should be omitted from the description.
-
-Examples of Jira metadata that usually does not belong in `description`:
-
-```text
-Type: Bug
-Priority: High
-Parent Jira: QCA-3188
-Label: Android
-Reporter: ...
-Assignee: ...
-Created date: ...
-Updated date: ...
-Sprint: ...
-Board: ...
-```
-
-Use metadata only when it affects implementation, reproduction, or verification.
-
----
-
-## Title Rule
-
-If a task comes from Jira, the parent/main Dev Flow task title must start with the Jira key.
 
 Good:
 
-```md
+```text
 [QCA-3393] Fix start-job button date enable rule on Job Detail
 ```
 
 Bad:
 
-```md
-Fix start-job button date enable rule on Job Detail
+```text
+Fix bug
+Job detail issue
+Android task
 ```
 
-The Jira key must also be stored in the `jiraKey` field when available.
+For merged Jira work, include multiple keys when useful:
 
-Use tags for traceability, but do not rely only on tags.
-
-For child tasks from the same Jira issue, child titles should also start with the Jira key.
-
----
-
-## Field Writing Rules
-
-### `title`
-
-The title should be short, specific, and action-oriented.
-
-Format for Jira tasks:
-
-```md
-[JIRA-KEY] Verb + object + context
-```
-
-Examples:
-
-```md
-[QCA-3363] Fix Job Detail tabs to behave like a sticky header while scrolling
-[QCA-3393] Fix start-job button date enable rule on Job Detail
-```
-
-Avoid vague titles:
-
-```md
-[QCA-3393] Fix bug
-[QCA-3393] Job detail issue
-[QCA-3393] Android task
+```text
+[QCA-3393][QCA-3394] Fix start-job date rules on Job Detail
 ```
 
 ### `description`
 
-The description should contain the core product requirement.
+Description is for product requirement, not raw Jira metadata.
 
-It should answer:
+It should include:
 
-- What is affected?
-- What is currently wrong?
-- What should happen instead?
-- What exact rules or examples must be followed?
-- What is out of scope?
+- Screen/flow/module affected.
+- Current wrong behavior.
+- Expected behavior.
+- Exact rules and examples.
+- Wording if relevant.
+- Out-of-scope boundaries.
 
-Do not put raw Jira metadata here unless it is directly relevant to the implementation or reproduction.
+Do not dump:
 
-Good description:
+```text
+Type: Bug
+Priority: High
+Reporter: ...
+Assignee: ...
+Created date: ...
+Board: ...
+Sprint: ...
+```
 
-```md
+Example:
+
+```text
 Fix the Job Detail primary action rule for accepted jobs.
 
 Screen: My Jobs > Job Detail
@@ -464,76 +380,38 @@ Concrete examples:
 - jobStartDate = 14/06/2026 -> enabled
 
 Out of scope:
-Do not change other Job Detail primary actions unless they share the same start-job date rule bug.
-```
-
-Bad description:
-
-```md
-Jira key: QCA-3393
-Type: Bug
-Priority: High
-Parent Jira: QCA-3188 Job Flow
-Label: Android
-Screen: Job Detail
-Reported device: Samsung Galaxy Z Flip 6
-OS: Android 15
-App version: 2.0.114
+Do not change other Job Detail primary actions unless they use the same incorrect start-job date rule.
 ```
 
 ### `repoContext`
 
-`repoContext` should contain technical context discovered from the repository.
+Use `repoContext` for technical findings from the repo:
 
-Use it for:
-
-- Relevant files and components.
-- Existing implementation behavior.
+- Relevant files/components.
+- Current implementation behavior.
 - Existing helper functions.
 - Existing tests.
-- Related flows that must remain unchanged.
-- Known implementation risks.
-- Architecture or pattern notes.
-- Warnings about repo-specific behavior.
-- Decomposition notes when the task is split.
+- Related flows that must stay unchanged.
+- Architecture patterns.
+- Risks and warnings.
 
-Good `repoContext`:
+Example:
 
-```md
+```text
 Repo inspection summary:
 - Job Detail primary action state is mapped through JobDetailActionMapping.
 - JobStartActionDateRule contains the date comparison helper used for start-job enablement.
-- Current helper appears intended to enable start-job when startDate is not after today.
-- Verify whether the bug still exists in another path or if the current helper is a partial fix.
 - Existing tests include JobStartActionDateRuleTest and JobDetailActionMappingTest.
 
 Implementation warning:
-Do not change non-start-job actions such as finish-job, upload document, or quotation actions unless tests prove they use the same incorrect rule.
+Do not change finish-job, upload-document, or quotation actions unless tests prove they use the same incorrect rule.
 ```
-
-Do not use `repoContext` as a place to dump Jira metadata.
-
-### `reasoning`
-
-Use `reasoning` for why the card is shaped this way.
-
-Good uses:
-
-- Why a bug is likely in a certain mapper/helper.
-- Why target files are limited.
-- Why a card is blocked.
-- Why certain related files were excluded.
-- Why scope is intentionally narrow.
-- Why the task is single-card or split into parent/child tasks.
-- Why subtasks can or cannot run in parallel.
-
-Do not use `reasoning` for long Jira metadata dumps.
 
 ### `targetFiles`
 
-`targetFiles` must be focused and minimal.
+Keep target files focused and short.
 
-Prefer short file names, not full paths, unless duplicate filenames make the short name ambiguous.
+Prefer file names only, not full paths, unless duplicate filenames make short names ambiguous.
 
 Good:
 
@@ -545,394 +423,195 @@ JobStartActionDateRuleTest.kt
 JobDetailActionMappingTest.kt
 ```
 
-Acceptable when duplicates exist:
+Use partial paths only for disambiguation:
 
 ```text
 my_jobs/my_jobs_detail/content/JobDetailLoadedContent.kt
 new_jobs/new_jobs_detail/content/JobDetailLoadedContent.kt
 ```
 
-Bad:
-
-```text
-app/src/main/java/com/qchang/buddy/compose/ui/jobs/my_jobs/my_jobs_detail/mapper/JobDetailActionMapping.kt
-app/src/main/java/com/qchang/buddy/compose/ui/jobs/my_jobs/my_jobs_detail/JobDetailViewModel.kt
-app/src/test/java/com/qchang/buddy/compose/ui/jobs/my_jobs/my_jobs_detail/mapper/JobDetailActionMappingTest.kt
-```
-
-Do not include broad or unrelated files just because they were inspected.
-
-Do not include root docs, README files, or playbooks as target files unless the task is actually about documentation or agent configuration.
-
-For orchestrated work, parent `targetFiles` may be empty or contain high-level shared files only. Child `targetFiles` must be focused on each child scope.
+Do not include README/playbook/root docs unless the task is documentation or agent-config work.
 
 ### `checklist`
 
-Checklist items should be concrete implementation steps.
+Checklist should be concrete implementation steps.
 
-Good checklist:
+Good:
 
-```md
-- Locate the existing start-job enablement rule used by Job Detail.
-- Add regression coverage for future/today/past start dates.
+```text
+- Confirm the current start-job enablement path used by Job Detail.
+- Add regression tests for future/today/past start dates.
 - Fix the date comparison so future dates disable the start button.
 - Verify existing non-start-job actions are unchanged.
 - Run targeted tests and report results.
 ```
 
-Bad checklist:
+Bad:
 
-```md
+```text
 - Read Jira.
 - Understand task.
 - Fix bug.
 - Test.
 ```
 
-Checklist items should not send the agent back to Jira.
-
-For parent orchestrator tasks, checklist should track child task creation, child completion, integration, and final verification.
-
 ### `acceptanceCriteria`
 
-Acceptance criteria must be observable and testable.
-
-Each item should describe a pass/fail behavior.
+Acceptance criteria must be observable and pass/fail.
 
 Good:
 
-```md
+```text
 - Start-job button is disabled when jobStartDate is after today.
 - Start-job button is enabled when jobStartDate is today.
 - Start-job button is enabled when jobStartDate is before today.
-- Tab selection still works when the Job Detail tab row is sticky.
 - Existing non-start-job primary actions keep their current behavior.
 ```
 
-Bad:
-
-```md
-- Fix logic.
-- Check screen.
-- Make it work.
-- Follow Jira.
-```
-
-Acceptance criteria should be written from the product/user behavior perspective.
-
-Avoid implementation-only criteria unless the implementation detail is itself required.
+Avoid implementation-only criteria such as "use LocalDate correctly". Put that in checklist/repoContext.
 
 ### `verification`
 
-Verification must tell the agent how to prove the task is complete.
+Verification must prove completion.
 
-It should include:
+Include:
 
-- Unit tests to add or update.
-- Manual scenarios to verify.
-- Build/test commands when known.
-- Device or OS checks only when relevant to reproduction.
-- Regression checks for related behavior.
-- Integration verification for parent orchestrator tasks.
+- Unit tests to add/update.
+- Manual scenarios.
+- Targeted build/test commands when known.
+- Regression checks.
+- Device/OS only when relevant.
 
-Good:
+Example:
 
-```md
-- Add or update unit tests for:
-  - tomorrow date -> disabled
-  - today date -> enabled
-  - yesterday date -> enabled
+```text
+- Add/update tests for tomorrow, today, and yesterday start dates.
 - Run the targeted Gradle test for JobStartActionDateRuleTest.
 - Run the targeted Gradle test for JobDetailActionMappingTest.
-- Manually verify Job Detail shows "เริ่มงาน" disabled for a future start date.
+- Manually verify Job Detail shows "เริ่มงาน" disabled for future start date.
 - Manually verify Job Detail shows "เริ่มงาน" enabled for today and past start dates.
 ```
 
-Device, OS, and app version should usually go in `verification` only when they matter for reproduction.
+If exact command is unknown:
 
-Example:
-
-```md
-- When possible, verify on a small/foldable device profile similar to Samsung Galaxy Z Flip 6 / Android 15.
-```
-
-When exact commands are unknown, write:
-
-```md
+```text
 Run the most targeted Gradle test command available for the affected test class, then run the smallest compile/build command needed to verify the app module still compiles.
 ```
 
-Do not invent commands if the repo was not inspected enough to confirm them.
+### `reasoning`
 
-### `tags`
+Use `reasoning` for:
 
-Tags should be short and useful for filtering.
+- Why this card is scoped this way.
+- Why cards were merged.
+- Why the work was split into subtasks.
+- Why target files are limited.
+- Why a card is blocked.
+- Why certain files/flows are excluded.
 
-For Jira tasks, include:
-
-- Jira key
-- platform or module
-- issue type if useful
-- feature/screen area
-
-Good:
-
-```text
-QCA-3393
-Android
-Bug
-Job Detail
-My Jobs
-```
-
-Avoid copying every Jira label, component, parent, and metadata field into tags.
-
-### `priority`
-
-Map Jira priority to Dev Flow priority only when useful.
-
-Suggested mapping:
-
-- Jira Highest / High -> Dev Flow `high`
-- Jira Medium -> Dev Flow `medium`
-- Jira Low / Lowest -> Dev Flow `low`
-
-Do not repeat priority in `description`.
-
-### `branch`
-
-Use a predictable branch name.
-
-Single-card Jira tasks:
-
-```text
-fix/qca-3393-start-job-button-date-rule
-feature/qca-1234-new-job-filter
-chore/qca-1234-refactor-job-detail
-```
-
-Orchestrated parent/child tasks:
-
-```text
-qca-3400-job-detail-foundation
-qca-3400-job-detail-foundation/ui-sticky-tabs
-qca-3400-job-detail-foundation/date-rule-tests
-```
-
-Branch name should be lowercase and descriptive.
+Do not use it for raw Jira metadata dumps.
 
 ### `jiraKey`
 
-Always fill `jiraKey` when the task comes from Jira.
+Always fill when the task comes from Jira.
 
-Example:
-
-```text
-QCA-3393
-```
+For merged Jira work, use the primary Jira key if only one value is supported, and include all keys in title/tags/description.
 
 ### `sourceUrl`
 
-`sourceUrl` should be empty by default.
+Keep empty by default.
 
-Do not make the coding agent depend on Jira, Jira attachments, or private external links.
+Do not make the agent depend on Jira or private links.
 
-Only use `sourceUrl` when the external URL is stable, accessible to the agent, and required for implementation.
-
-For normal Jira tasks, prefer:
-
-- `jiraKey`: filled
-- `sourceUrl`: empty
+Use only when the URL is stable, accessible, and truly required.
 
 ### `designImages`
 
-Use `designImages` only when the coding agent actually needs direct visual inputs and the image is accessible in the Dev Flow environment.
+Use only when the agent needs direct visual inputs and the images are accessible.
 
-If Jira has screenshots or videos, ChatGPT should inspect or summarize them while preparing the card.
+Otherwise summarize attachments into the card.
 
-Do not write:
-
-```md
-Open the Jira attachment and inspect the screenshot.
-```
-
-Instead write:
-
-```md
-Visual evidence from Jira shows the tab row scrolls away with content instead of staying pinned under the header.
-```
-
----
-
-## Jira Data Placement Rules
+## Jira Data Placement
 
 | Jira data | Where to put it | Rule |
 |---|---|---|
-| Jira key | `title`, `jiraKey`, `tags` | Always keep |
-| Summary | `title` and `description` | Rewrite into action-oriented task language |
-| Description | `description` | Extract only actionable requirement |
-| Issue type | Usually omit or tag | Include only if useful |
-| Priority | Dev Flow `priority` | Do not repeat in description |
-| Label | `tags` | Keep only useful labels |
-| Parent / Epic | Usually omit or `reasoning` | Include only if it affects scope or decomposition |
-| Components | `tags` or `repoContext` | Include only if technically useful |
-| Device | `verification` | Include only when relevant to reproduction |
-| OS | `verification` | Include only when relevant to reproduction |
-| App version | `verification` | Include only when relevant to reproduction |
-| Reporter | omit | Not useful for coding |
-| Assignee | omit | Not useful for coding |
-| Created/updated dates | omit | Not useful for coding |
-| Attachments | summarize into description / acceptance / verification | Do not tell agent to open Jira |
-| Comments | summarize into description / reasoning | Include only actionable details |
-| Subtasks | summarize or create child Dev Flow tasks | Do not make agent read Jira subtasks |
-| Linked issues | summarize only if scope-impacting | Avoid noisy metadata |
-
----
+| Jira key | title, `jiraKey`, tags | Always keep |
+| Summary | title/description | Rewrite as action-oriented task |
+| Description | description | Extract actionable requirement |
+| Issue type | tag or omit | Include only if useful |
+| Priority | Dev Flow priority | Do not repeat in description |
+| Labels | tags | Keep only useful labels |
+| Parent/Epic | reasoning or omit | Include only if scope-impacting |
+| Device/OS/app version | verification | Include only if relevant to reproduction |
+| Attachments | summarize into card | Do not tell agent to open Jira |
+| Comments | summarize into card | Include only actionable details |
+| Subtasks | summarize or create child tasks | Do not make agent read Jira subtasks |
+| Reporter/assignee/timestamps | omit | Not useful for coding |
 
 ## Attachment Rules
 
 When Jira has attachments:
 
-1. Inspect attachments when possible.
-2. Identify whether each attachment is:
-   - screenshot
-   - video
-   - log
-   - design
-   - document
-   - irrelevant
+1. Inspect them when possible.
+2. Classify them as screenshot, video, log, design, document, or irrelevant.
 3. Extract actionable requirements or reproduction evidence.
-4. Write the extracted meaning into the card.
-5. Do not require the coding agent to open the attachment.
+4. Put the extracted meaning into the card.
+5. Do not tell the agent to open the attachment.
 
 Good:
 
-```md
-Visual evidence:
-The screenshot shows the "รายละเอียด / ข้อมูลการทำงาน" tab row moving off-screen while the header remains visible. The expected behavior is for the tab row to pin below the header once it reaches that position.
+```text
+Visual evidence shows the tab row scrolls away with content instead of staying pinned under the header.
 ```
 
 Bad:
 
-```md
-See attached screenshot in Jira.
+```text
+See Jira attachment.
 ```
 
----
+## Comments, Subtasks, and Linked Issues
 
-## Comments and Subtasks Rules
+Read them when available.
 
-### Comments
+Include only details that affect:
 
-Read Jira comments when available.
-
-Only include comments that affect:
-
-- requirements
+- requirement
 - scope
 - reproduction
 - acceptance criteria
 - implementation constraints
-- test expectations
-- task decomposition
+- tests
 
-Do not include thank-you notes, assignment chatter, or timestamps.
+Ignore assignment chatter, timestamps, and non-actionable comments.
 
-### Subtasks
+For subtasks:
 
-If Jira has subtasks:
-
-- Read them before writing the card.
-- Decide whether they should be:
-  - merged into the parent card
-  - represented as Dev Flow child tasks
-  - ignored because they are irrelevant/noisy
-
-Do not write:
-
-```md
-Read the Jira subtasks before coding.
-```
-
-Instead, summarize the relevant subtask requirements into the card or create child Dev Flow tasks.
-
----
-
-## Repository Inspection Rules
-
-ChatGPT must inspect the repo enough to make the card actionable.
-
-Minimum repo inspection for code tasks:
-
-1. Identify project structure.
-2. Search for the affected screen, feature, strings, route, API, or domain model.
-3. Read likely implementation files.
-4. Read likely test files.
-5. Identify existing patterns.
-6. Identify likely target files.
-7. Identify risks and related flows that should not be changed.
-8. Identify whether the task is single-card or should be decomposed.
-9. Identify possible file overlap if multiple child subtasks are created.
-
-Do not include every inspected file in `targetFiles`.
-
-Use `repoContext` to summarize findings.
-
----
-
-## Dev Flow Project Rules
-
-Before creating a task:
-
-1. Confirm the correct Dev Flow project.
-2. Check whether a task for the same Jira key already exists.
-3. Update the existing task if it exists.
-4. Create a new task only when no matching task exists.
-
-Matching should check:
-
-- `jiraKey`
-- title prefix
-- tags
-- search result by Jira key
-
-Avoid duplicate cards for the same Jira issue unless intentionally creating child tasks.
-
-When creating child tasks, set `parentId` when available.
-
----
+- Merge into the parent card when small.
+- Create child Dev Flow tasks when large or parallelizable.
+- Do not make the agent read Jira subtasks.
 
 ## Status Rules
 
-Suggested status selection:
+Use:
 
-- `backlog`: requirement needs review, card is not ready, or user did not ask to start work.
-- `todo`: implementation-ready and safe for an agent to pick up.
-- `in-progress`: actively being worked by an agent or developer.
+- `backlog`: requirement needs review, user only asked to create card, or work should not auto-start.
+- `todo`: implementation-ready and user wants it ready for execution.
+- `in-progress`: actively being worked.
 - `ready-for-review`: implementation finished and needs review.
-- `done`: reviewed, verified, and accepted.
+- `done`: reviewed and accepted.
 
-If the user asks to "write a card" only, prefer `backlog` unless they explicitly want it ready for execution.
+If the user only says "write a card", prefer `backlog` unless they clearly want implementation-ready work.
 
-If the user asks to "make it implementation-ready," use `todo` only when the card is complete enough for the agent to start.
+If the user asks "make it ready for agent" or similar, use `todo` only when Jira and repo context are complete.
 
-If Jira cannot be read, do not use `todo` for implementation work.
-
-For orchestrated work:
-
-- Parent may start in `backlog` for user review or `todo` if ready to orchestrate.
-- Child tasks should be `todo` only when their independent scope is clear.
-- Parent should not be `done` until child outputs are integrated and verified.
-
----
+Blocked/prep cards must stay in `backlog`.
 
 ## Agent / Model / Effort Rules
 
-Assign agent/model/effort only when the user wants the task ready for execution or the project convention requires it.
+Assign agent/model/effort only when the user wants the card ready for execution or project convention requires it.
 
-Suggested defaults:
-
-### Android implementation
+Suggested Android default:
 
 ```text
 agent: Codex
@@ -940,52 +619,33 @@ model: GPT-5.4 Mini or GPT-5.4
 effort: medium
 ```
 
-Use higher effort when:
+Use higher effort for:
 
-- the task touches architecture
-- behavior is subtle
-- there are multiple flows
-- UI behavior requires careful Compose logic
-- regression risk is high
-- the card is a parent orchestrator/foundation task
+- subtle UI behavior
+- architecture changes
+- multi-flow tasks
+- high regression risk
+- integration/orchestration tasks
 
-### Review or planning card
+Review/planning cards may omit agent assignment.
 
-Agent assignment may be omitted unless the user explicitly asks.
+## Existing Task Rules
 
-### Parent orchestrator
+Before creating a card:
 
-Parent orchestrator cards should use a stronger model/effort when they require planning, integration, or review.
+1. Search Dev Flow tasks by Jira key.
+2. If a matching card exists, update it.
+3. Create a new card only when no matching task exists.
+4. Avoid duplicate cards unless intentionally creating child tasks.
 
-Child implementation tasks can use cheaper/faster workers when the scope is narrow and the parent provides enough context.
+When updating:
 
----
-
-## Source-of-Truth Quality Gate
-
-Before creating or updating a Dev Flow card, verify:
-
-- The card can be implemented without opening Jira.
-- The Jira key is in the title when the task came from Jira.
-- `jiraKey` is filled.
-- The task has been deeply analyzed before writing.
-- The task size has been assessed.
-- If the task is large, parent/child decomposition has been considered.
-- If split, child tasks can run in parallel as much as possible.
-- If split, branch naming follows the foundation pattern.
-- `description` contains requirements, not raw Jira metadata.
-- `repoContext` contains useful technical findings.
-- `targetFiles` are focused and short.
-- `acceptanceCriteria` are observable and testable.
-- `verification` contains concrete checks.
-- Jira attachments are summarized if relevant.
-- Jira comments and subtasks are summarized if relevant.
-- `sourceUrl` is empty unless truly required.
-- The card does not instruct the agent to read Jira.
-- The card does not contain unrelated inspected files.
-- The scope is narrow enough to avoid over-fixing.
-
----
+- Preserve useful context.
+- Remove stale/guessed info.
+- Replace guesses with confirmed Jira/repo facts.
+- Keep Jira key in title and `jiraKey`.
+- Keep target files focused.
+- Update status only if readiness changed.
 
 ## Blocked Card Rules
 
@@ -994,8 +654,8 @@ Create a blocked/prep card only when:
 - Jira cannot be accessed.
 - Critical attachments cannot be read.
 - Requirements are missing or contradictory.
-- The repo cannot be inspected enough to identify implementation context.
-- The user explicitly asks to preserve the work even though it is not ready.
+- Repo cannot be inspected.
+- The user asks to preserve work even though it is not ready.
 
 Blocked cards must:
 
@@ -1005,44 +665,33 @@ Blocked cards must:
 - Avoid pretending the requirement is known.
 - Include next steps to unblock.
 
-Blocked cards must not be written as if the agent can start coding.
+## Source-of-Truth Quality Gate
 
-Good blocked card description:
+Before creating or updating a Dev Flow card, verify:
 
-```md
-QCA-1234 cannot be converted into an implementation-ready card yet because Jira content could not be fetched and the user has not provided the requirement details.
+- Jira was read or missing Jira is clearly blocked.
+- Repo was inspected or missing repo is clearly blocked.
+- The card can be implemented without opening Jira.
+- The title starts with Jira key for Jira-originated work.
+- `jiraKey` is filled.
+- Description contains requirement, not metadata dump.
+- Required wording is included exactly.
+- Similar Jira issues were considered for merge.
+- Large work was considered for decomposition.
+- Parent/subtask branch pattern is used when split.
+- `repoContext` contains useful technical findings.
+- `targetFiles` are focused and short.
+- Checklist is concrete.
+- Acceptance criteria are pass/fail.
+- Verification has concrete tests/scenarios.
+- Attachments/comments/subtasks are summarized when relevant.
+- `sourceUrl` is empty unless truly required.
+- The card does not instruct the agent to read Jira.
+- Scope is narrow enough to avoid over-fixing.
 
-Do not start implementation from this card.
-```
+## Good Card Example
 
----
-
-## Updating Existing Cards
-
-When updating an existing card:
-
-1. Read the current card.
-2. Preserve useful existing context.
-3. Remove stale or incorrect information.
-4. Replace guessed requirements with confirmed requirements.
-5. Keep the card source-of-truth.
-6. Avoid duplicate Jira metadata.
-7. Keep target files focused.
-8. Reassess task size and decomposition.
-9. Update status only if readiness changed.
-10. Keep Jira key in title and `jiraKey`.
-
-If a card was previously blocked and Jira becomes available, rewrite it into an implementation-ready card.
-
-If a single card becomes too large after new information is found, rewrite it as a parent orchestrator and create parallel child subtasks.
-
----
-
-## Examples
-
-### Example: Good single-card Jira bug
-
-```md
+```text
 title:
 [QCA-3393] Fix start-job button date enable rule on Job Detail
 
@@ -1065,7 +714,7 @@ Concrete examples:
 - jobStartDate = 14/06/2026 -> enabled
 
 Out of scope:
-Do not change other Job Detail primary actions unless they use the same incorrect start-job rule.
+Do not change other Job Detail primary actions unless they use the same incorrect start-job date rule.
 
 targetFiles:
 - JobStartActionDateRule.kt
@@ -1081,62 +730,30 @@ acceptanceCriteria:
 - Existing non-start-job primary actions keep their current behavior.
 
 verification:
-- Add or update tests for tomorrow, today, and yesterday start dates.
+- Add/update tests for tomorrow, today, and yesterday start dates.
 - Run targeted tests for JobStartActionDateRuleTest.
 - Run targeted tests for JobDetailActionMappingTest.
 - Manually verify Job Detail start-job button state for future, today, and past start dates.
 ```
 
-### Example: Good orchestrated Jira task
+## Bad Card Example
 
-```md
+```text
 title:
-[QCA-3400] Orchestrate Job Detail foundation updates
-
-branch:
-qca-3400-job-detail-foundation
-
-description:
-Coordinate the Job Detail foundation update across UI behavior, action mapping, and regression tests.
-
-This parent task owns the full requirement, child task boundaries, branch plan, and final integration verification.
-
-Child tasks:
-1. [QCA-3400] Update Job Detail UI state contract
-   - branch: qca-3400-job-detail-foundation/ui-state-contract
-2. [QCA-3400] Implement Job Detail sticky tabs behavior
-   - branch: qca-3400-job-detail-foundation/sticky-tabs
-3. [QCA-3400] Add Job Detail regression tests
-   - branch: qca-3400-job-detail-foundation/regression-tests
-
-Integration plan:
-- Merge child branches into qca-3400-job-detail-foundation.
-- Resolve shared model/state conflicts in the parent branch.
-- Run combined tests.
-- Perform final manual verification of the full Job Detail flow.
-```
-
-### Example: Bad Jira bug card
-
-```md
-title:
-Fix start job
+Fix bug
 
 description:
 Jira key: QCA-3393
 Type: Bug
 Priority: High
-Parent Jira: QCA-3188 Job Flow
+Parent Jira: QCA-3188
 Label: Android
-Screen: งานของฉัน > Job Detail
-Reported device: Samsung Galaxy Z Flip 6
-OS: Android 15
-App version: 2.0.114
-Please read Jira and fix the issue.
+Reporter: ...
+Assignee: ...
+Please read Jira and fix it.
 
 targetFiles:
-- app/src/main/java/com/qchang/buddy/compose/ui/jobs/my_jobs/my_jobs_detail/mapper/JobDetailActionMapping.kt
-- app/src/main/java/com/qchang/buddy/compose/ui/jobs/my_jobs/my_jobs_detail/JobDetailViewModel.kt
+- app/src/main/java/...
 - README.md
 - AGENTS.md
 
@@ -1144,21 +761,8 @@ acceptanceCriteria:
 - Fix bug.
 ```
 
----
-
 ## Final Rule
 
-A good Dev Flow card is not a Jira dump.
+A good Dev Flow card is not a copy of Jira.
 
-A good Dev Flow card is a carefully analyzed, source-of-truth engineering task.
-
-For small work, create one focused implementation card.
-
-For large work, create a parent orchestrator/foundation task and parallel child subtasks with clear branch structure:
-
-```text
-parent:  xxxx-foundation
-child:   xxxx-foundation/xxxx
-```
-
-The goal is always the same: make the coding agent successful without guessing, over-editing, or depending on Jira.
+A good Dev Flow card is the result of deep analysis: read Jira, read attachments, read the repo, merge duplicate logic when appropriate, split large work when needed, extract exact wording, identify technical context, and write a focused source-of-truth task that an agent can execute safely.

@@ -4,7 +4,7 @@ Import task patches from a JSON file using `devflow.taskPatch.v1` format.
 
 ## MCP Tool
 
-`import_tasks_from_file` — accepts `fileUrl` or `localPath`, validates, and applies or dry-runs.
+`import_tasks_from_file` — accepts `fileUrl` or `patchFilePath`, validates, and applies or dry-runs.
 
 ## API Endpoint
 
@@ -44,7 +44,7 @@ Import task patches from a JSON file using `devflow.taskPatch.v1` format.
 
 ```json
 // Request
-{ "localPath": "patches/task-update.json", "mode": "dry-run" }
+{ "patchFilePath": "patches/task-update.json", "mode": "dry-run" }
 
 // Response
 {
@@ -64,7 +64,7 @@ Import task patches from a JSON file using `devflow.taskPatch.v1` format.
 
 ```json
 // Request
-{ "localPath": "patches/task-update.json", "mode": "apply" }
+{ "patchFilePath": "patches/task-update.json", "mode": "apply" }
 
 // Response
 {

@@ -1694,15 +1694,16 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
         existingIndex?: number;
         title?: string;
         error?: string;
+        resolvedProjectId?: string;
       }
 
       const planned: PlannedOp[] = [];
-      let hasError = false;
+      let hasValidationError = false;
 
       for (const item of items) {
         if (!item.operation || !['create', 'update'].includes(item.operation)) {
           planned.push({ type: 'create' as const, item, fields: {}, error: 'Missing or unsupported operation. Use "create" or "update".' });
-          hasError = true;
+          hasValidationError = true;
           continue;
         }
 
@@ -1710,7 +1711,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
         const unknown = Object.keys(fields).find((k) => !VALID_FIELDS.has(k));
         if (unknown) {
           planned.push({ type: item.operation, item, fields, error: `Unknown field: ${unknown}` });
-          hasError = true;
+          hasValidationError = true;
           continue;
         }
 
@@ -1718,31 +1719,39 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
           const taskId = item.taskId || item.id;
           if (!taskId) {
             planned.push({ type: 'update', item, fields, error: 'taskId is required for update operations.' });
-            hasError = true;
+            hasValidationError = true;
             continue;
           }
           const existingIndex = getTaskIndexByIdentifier(deps.state.tasksCache, String(taskId));
           if (existingIndex === -1) {
             planned.push({ type: 'update', item, fields, taskId, error: 'Task not found.' });
-            hasError = true;
+            hasValidationError = true;
             continue;
           }
           planned.push({ type: 'update', item, fields, taskId, existingIndex });
         } else {
           const itemProject = buildProjectInfo(item);
-          const resolvedProject = itemProject.projectName || itemProject.repo || itemProject.repoUrl || itemProject.projectId;
           const title = item.title || fields.title || '';
           if (!title.trim()) {
             planned.push({ type: 'create', item, fields, error: 'title is required for create operations.' });
-            hasError = true;
+            hasValidationError = true;
             continue;
           }
-          if (!resolvedProject) {
+          const resolvedName = itemProject.projectName || itemProject.repo || itemProject.repoUrl || itemProject.projectId;
+          if (!resolvedName) {
             planned.push({ type: 'create', item, fields, title, error: 'Project resolver (projectName, repo, repoUrl, or projectId) is required for create.' });
-            hasError = true;
+            hasValidationError = true;
             continue;
           }
-          planned.push({ type: 'create', item, fields, title: title.trim(), error: undefined });
+          let resolvedProjectId = '';
+          try {
+            resolvedProjectId = resolveProjectIdFromRepo(deps.state, itemProject, req as any);
+          } catch {
+            planned.push({ type: 'create', item, fields, title: title.trim(), error: 'Could not resolve project.' });
+            hasValidationError = true;
+            continue;
+          }
+          planned.push({ type: 'create', item, fields, title: title.trim(), error: undefined, resolvedProjectId });
         }
       }
 
@@ -1750,9 +1759,9 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
         return res.status(400).json({ error: 'No valid operations to process. Check format: version devflow.taskPatch.v1, tasks array with operation + fields.' });
       }
 
-      if (mode === 'dry-run' || hasError) {
+      if (mode === 'dry-run' || hasValidationError) {
         return res.json({
-          mode: hasError ? 'dry-run' : mode,
+          mode: hasValidationError ? 'dry-run' : mode,
           strategy,
           summary: {
             planned: planned.length,
@@ -1769,45 +1778,25 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
         });
       }
 
+      const cloned = deps.state.tasksCache.map((t) => ({ ...t, checklist: Array.isArray(t.checklist) ? [...t.checklist] : t.checklist, logs: Array.isArray(t.logs) ? [...t.logs] : t.logs, tags: Array.isArray(t.tags) ? [...t.tags] : t.tags }));
       const created: string[] = [];
       const updated: string[] = [];
-      const failed: { type: string; taskId?: string; title?: string; reason: string }[] = [];
 
       for (const op of planned) {
-        if (op.error) {
-          failed.push({ type: op.type, taskId: op.taskId, title: op.title, reason: op.error });
-          continue;
-        }
-
         if (op.type === 'update' && op.existingIndex !== undefined && op.taskId) {
-          const currentTask = deps.state.tasksCache[op.existingIndex];
+          const currentTask = cloned[op.existingIndex];
           if (strategy === 'replace') {
-            const base = {
-              id: currentTask.id, displayId: currentTask.displayId, projectId: currentTask.projectId,
-              title: currentTask.title, status: currentTask.status || 'backlog', priority: currentTask.priority || 'medium',
-              createdAt: currentTask.createdAt,
-            };
-            const merged = { ...base, ...op.fields, updatedAt: new Date().toISOString() };
-            deps.state.tasksCache[op.existingIndex] = merged;
+            cloned[op.existingIndex] = { ...currentTask, ...op.fields, updatedAt: new Date().toISOString() };
           } else {
-            const merged = { ...currentTask, ...op.fields, updatedAt: new Date().toISOString() };
-            deps.state.tasksCache[op.existingIndex] = merged;
+            Object.assign(currentTask, op.fields, { updatedAt: new Date().toISOString() });
           }
           updated.push(op.taskId);
-        } else if (op.type === 'create') {
-          const itemProject = buildProjectInfo(op.item);
-          let projectId = '';
-          try {
-            projectId = resolveProjectIdFromRepo(deps.state, itemProject, req as any);
-          } catch {
-            failed.push({ type: 'create', title: op.title, reason: 'Could not resolve project.' });
-            continue;
-          }
+        } else if (op.type === 'create' && op.resolvedProjectId) {
           const f = op.fields;
           const newTask: any = {
             id: op.item.id || `task-${Date.now()}-${Math.floor(Math.random() * 1000000)}`,
-            displayId: op.item.displayId || generateDisplayId(deps.state, projectId),
-            projectId,
+            displayId: op.item.displayId || generateDisplayId(deps.state, op.resolvedProjectId),
+            projectId: op.resolvedProjectId,
             title: op.title || 'untitled',
             description: f.description || '',
             status: f.status || 'backlog',
@@ -1832,11 +1821,12 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
             updatedAt: new Date().toISOString(),
             logs: [{ id: `log-${Date.now()}-im`, timestamp: new Date().toISOString(), message: 'Task created via import-file.', type: 'create' }],
           };
-          deps.state.tasksCache.push(newTask);
+          cloned.push(newTask);
           created.push(newTask.displayId || newTask.id);
         }
       }
 
+      deps.state.tasksCache = cloned;
       saveTasks(deps.state);
 
       return res.json({
@@ -1845,10 +1835,9 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
         summary: {
           created: created.length,
           updated: updated.length,
-          failed: failed.length,
+          failed: 0,
           createdIds: created,
           updatedIds: updated,
-          errors: failed.length > 0 ? failed : undefined,
         },
       });
     } catch (error) {

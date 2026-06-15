@@ -21,7 +21,8 @@
     "lint": "tsc --noEmit",
     "mcp": "tsx mcp-server.ts",
     "backup": "tsx scripts/backup.ts",
-    "restore": "tsx scripts/restore.ts"
+    "restore": "tsx scripts/restore.ts",
+    "smoke-multi-sse": "node scripts/smoke-multi-sse.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

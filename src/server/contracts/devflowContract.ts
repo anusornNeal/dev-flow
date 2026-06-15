@@ -342,6 +342,22 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
     buildHttpRequest: (args) => ({ method: 'POST', path: '/api/tasks/batch', body: args.tasks ?? args }),
   },
   {
+    name: 'import_tasks_from_file',
+    description: 'Import task patches from a JSON file (devflow.taskPatch.v1 format). Supports dry-run and apply modes.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        fileUrl: { type: 'string', description: 'URL to a JSON patch file. Starts with http:// or https://.' },
+        localPath: { type: 'string', description: 'Local file path inside the DevFlow project root.' },
+        mode: { type: 'string', enum: ['dry-run', 'apply'], description: 'dry-run validates and returns planned operations without writing. apply validates and writes.' },
+        maxTasks: { type: 'number', description: 'Max tasks to process (default 50).' },
+        ...projectIdentifierProperties,
+      },
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: (args) => ({ method: 'POST', path: '/api/tasks/import-file', body: args }),
+  },
+  {
     name: 'move_task_status',
     description: 'Move a task to a new lane/status.',
     inputSchema: {

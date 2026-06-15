@@ -10,6 +10,7 @@ import { appendAgentRunLog, buildAgentCompletionSummary, createAgentRunFiles, cr
 import { extractDesignImages, findProjectByIdentifier, findTaskByIdentifier, getAgentTaskContext, normalizeAgentCompletionPayload, renderTaskPrompt, resolveProjectIdFromRepo, validateAgentCompletionPayload, validateAgentParams, validateTaskPayload } from '../services/taskService';
 import { createApiError, sendApiError } from '../services/api';
 import { validateEnum, validateString } from '../validation';
+import { getDevFlowAppRoot } from '../../lib/devFlowPaths';
 import { isValidTransition, getValidationErrorMessage } from '../../lib/statusTransitions';
 import { buildAgentLaunchConfig, runAgentLaunchPreflight, type AgentLaunchPreflightCode } from '../services/agentLaunchConfig';
 import type { AgentCompletionPayload, AgentCompletionStatus, TaskStatus } from '../../types';
@@ -1599,6 +1600,202 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
 
     saveTasks(deps.state);
     return res.json(updatedTask);
+  });
+
+  app.post('/api/tasks/import-file', async (req, res) => {
+    try {
+      loadTasks(deps.state);
+
+      const mode = req.body.mode === 'apply' ? 'apply' : 'dry-run';
+      const fileUrl = typeof req.body.fileUrl === 'string' ? req.body.fileUrl.trim() : '';
+      const localPath = typeof req.body.localPath === 'string' ? req.body.localPath.trim() : '';
+      const maxTasks = Number.isFinite(Number(req.body.maxTasks)) ? Math.max(1, Math.min(50, Number(req.body.maxTasks))) : 50;
+
+      if (!fileUrl && !localPath) {
+        return res.status(400).json({ error: 'fileUrl or localPath is required.' });
+      }
+
+      let raw = '';
+      if (fileUrl) {
+        if (!fileUrl.startsWith('http://') && !fileUrl.startsWith('https://')) {
+          return res.status(400).json({ error: 'fileUrl must start with http:// or https://' });
+        }
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 15000);
+        try {
+          const fetchRes = await fetch(fileUrl, { signal: controller.signal });
+          const contentLength = Number(fetchRes.headers.get('content-length') || '0');
+          if (contentLength > 5_000_000) {
+            return res.status(400).json({ error: 'File too large. Maximum 5 MB.' });
+          }
+          raw = await fetchRes.text();
+          if (raw.length > 5_000_000) {
+            return res.status(400).json({ error: 'File too large. Maximum 5 MB.' });
+          }
+        } finally {
+          clearTimeout(timer);
+        }
+      } else {
+        const resolved = path.resolve(localPath);
+        const allowed = path.resolve(getDevFlowAppRoot());
+        if (!resolved.startsWith(allowed + path.sep) && resolved !== allowed) {
+          return res.status(400).json({ error: 'localPath must be inside the DevFlow project root.' });
+        }
+        if (!fs.existsSync(resolved)) {
+          return res.status(400).json({ error: `File not found: ${localPath}` });
+        }
+        const stat = fs.statSync(resolved);
+        if (stat.size > 5_000_000) {
+          return res.status(400).json({ error: 'File too large. Maximum 5 MB.' });
+        }
+        raw = fs.readFileSync(resolved, 'utf8');
+      }
+
+      let parsed;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        return res.status(400).json({ error: 'Invalid JSON.' });
+      }
+
+      if (parsed.version !== 'devflow.taskPatch.v1') {
+        return res.status(400).json({ error: 'Unsupported version. Expected devflow.taskPatch.v1.' });
+      }
+
+      const defaults = parsed.defaults || {};
+      const tasks = Array.isArray(parsed.tasks) ? parsed.tasks.slice(0, maxTasks) : [];
+      const VALID_FIELDS = [
+        'title', 'description', 'status', 'priority', 'branch', 'tags', 'targetFiles',
+        'checklist', 'effort', 'model', 'agent', 'parentId', 'reasoning',
+        'acceptanceCriteria', 'verification', 'repoContext', 'specUrl', 'designImages', 'jiraKey', 'sourceUrl',
+      ];
+
+      const results = { created: [], updated: [], skipped: [], failed: [] };
+      const projectDefaults = {
+        projectId: defaults.projectId || req.body.projectId || '',
+        projectName: defaults.projectName || req.body.projectName || '',
+        repo: defaults.repo || req.body.repo || '',
+        repoUrl: defaults.repoUrl || req.body.repoUrl || '',
+      };
+
+      for (const item of tasks) {
+        if (!item.operation) {
+          results.failed.push({ reason: 'Missing operation field (create or update).' });
+          continue;
+        }
+
+        const fields = item.fields || {};
+        for (const key of Object.keys(fields)) {
+          if (!VALID_FIELDS.includes(key)) {
+            results.failed.push({ operation: item.operation, taskId: item.taskId, reason: `Unknown field: ${key}` });
+          }
+        }
+        if (results.failed.length > 0) continue;
+
+        const mergedProject = {
+          projectId: (typeof item.projectId === 'string' ? item.projectId : '') || projectDefaults.projectId,
+          projectName: (typeof item.projectName === 'string' ? item.projectName : '') || projectDefaults.projectName,
+          repo: (typeof item.repo === 'string' ? item.repo : '') || projectDefaults.repo,
+          repoUrl: (typeof item.repoUrl === 'string' ? item.repoUrl : '') || projectDefaults.repoUrl,
+        };
+
+        if (item.operation === 'update') {
+          const taskId = item.taskId || item.id;
+          if (!taskId) {
+            results.failed.push({ operation: 'update', reason: 'taskId is required for update operations.' });
+            continue;
+          }
+          const existingIndex = getTaskIndexByIdentifier(deps.state.tasksCache, String(taskId));
+          if (existingIndex === -1) {
+            results.failed.push({ operation: 'update', taskId, reason: 'Task not found.' });
+            continue;
+          }
+          if (mode === 'dry-run') {
+            results.updated.push(taskId);
+            continue;
+          }
+          const currentTask = deps.state.tasksCache[existingIndex];
+          const merged = { ...currentTask, ...fields, updatedAt: new Date().toISOString() };
+          deps.state.tasksCache[existingIndex] = merged;
+          results.updated.push(taskId);
+        } else if (item.operation === 'create') {
+          const resolvedProject = mergedProject.projectName || mergedProject.repo || mergedProject.repoUrl || mergedProject.projectId;
+          if (!item.title && !fields.title) {
+            results.failed.push({ operation: 'create', reason: 'title is required for create operations.' });
+            continue;
+          }
+          if (!resolvedProject) {
+            results.failed.push({ operation: 'create', reason: 'Project resolver (projectName, repo, repoUrl, or projectId) is required for create.' });
+            continue;
+          }
+          if (mode === 'dry-run') {
+            const title = fields.title || item.title || 'untitled';
+            results.created.push(title);
+            continue;
+          }
+          let projectId = '';
+          try {
+            projectId = resolveProjectIdFromRepo(deps.state, mergedProject, req as any);
+          } catch {
+            results.failed.push({ operation: 'create', title: item.title, reason: 'Could not resolve project.' });
+            continue;
+          }
+          const newTask = {
+            id: item.id || `task-${Date.now()}-${Math.floor(Math.random() * 1000000)}`,
+            displayId: item.displayId || generateDisplayId(deps.state, projectId),
+            projectId,
+            title: (fields.title || item.title || 'untitled').trim(),
+            description: fields.description || '',
+            status: fields.status || 'backlog',
+            priority: fields.priority || 'medium',
+            branch: fields.branch || undefined,
+            tags: Array.isArray(fields.tags) ? fields.tags : [],
+            targetFiles: Array.isArray(fields.targetFiles) ? fields.targetFiles : [],
+            checklist: Array.isArray(fields.checklist) ? fields.checklist : [],
+            designImages: extractDesignImages(fields) || [],
+            effort: fields.effort || undefined,
+            model: fields.model || undefined,
+            agent: fields.agent || undefined,
+            parentId: fields.parentId || undefined,
+            reasoning: fields.reasoning || undefined,
+            acceptanceCriteria: fields.acceptanceCriteria || undefined,
+            verification: fields.verification || undefined,
+            repoContext: fields.repoContext || undefined,
+            jiraKey: fields.jiraKey || undefined,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            logs: [{ id: `log-${Date.now()}-im`, timestamp: new Date().toISOString(), message: 'Task created via import-file.', type: 'create' }],
+          };
+          deps.state.tasksCache.push(newTask);
+          results.created.push(newTask.displayId || newTask.id);
+        } else {
+          results.failed.push({ operation: item.operation || 'unknown', reason: 'Unsupported operation.' });
+        }
+      }
+
+      if (results.created.length + results.updated.length + results.failed.length === 0) {
+        return res.status(400).json({ error: 'No valid operations to process. Check format: version devflow.taskPatch.v1, tasks array with operation + fields.' });
+      }
+
+      if (mode === 'apply') {
+        saveTasks(deps.state);
+      }
+
+      return res.json({
+        mode,
+        summary: {
+          created: results.created.length,
+          updated: results.updated.length,
+          skipped: results.skipped.length,
+          failed: results.failed.length,
+          createdIds: results.created,
+          updatedIds: results.updated,
+          errors: results.failed.length > 0 ? results.failed : undefined,
+        },
+      });
+    } catch (error) {
+      return sendApiError(res, error);
+    }
   });
 
   app.delete('/api/tasks/:id', (req, res) => {

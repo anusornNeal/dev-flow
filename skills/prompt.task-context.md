@@ -15,7 +15,7 @@
 {{requirements.targetFiles}}
 
 **Design Images:**
-{{instruction.designImageCount}} image(s) attached. Call `get_task` with mode `full` on this task if you need to view the mockups before implementing UI changes.
+{{instruction.designImageCount}} image(s) attached. Call `get_task_images` on this task if you need to view the mockups before implementing UI changes.
 
 **Repository Notes:**
 {{repoContext}}

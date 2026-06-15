@@ -348,9 +348,10 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
       type: 'object',
       properties: {
         fileUrl: { type: 'string', description: 'URL to a JSON patch file. Starts with http:// or https://.' },
-        localPath: { type: 'string', description: 'Local file path inside the DevFlow project root.' },
+        patchFilePath: { type: 'string', description: 'Local patch file path inside the DevFlow project root.' },
         mode: { type: 'string', enum: ['dry-run', 'apply'], description: 'dry-run validates and returns planned operations without writing. apply validates and writes.' },
         maxTasks: { type: 'number', description: 'Max tasks to process (default 50).' },
+        strategy: { type: 'string', enum: ['patch', 'replace'], description: 'patch updates only supplied fields. replace overwrites supplied fields but preserves unrelated ones.' },
         ...projectIdentifierProperties,
       },
     },

@@ -83,5 +83,8 @@ Import task patches from a JSON file using `devflow.taskPatch.v1` format.
 ## Security
 
 - `fileUrl` must be `http://` or `https://`, 15s timeout, 5 MB max
-- `localPath` must be inside DevFlow project root, no `../` path traversal
+- `patchFilePath` must be inside DevFlow project root, no `../` path traversal
 - File content is JSON only, no code execution
+- `dry-run` validates the entire patch before any mutation
+- `apply` validates the entire patch first, then mutates atomically
+- Unknown fields return a clear per-operation error; other valid operations still process

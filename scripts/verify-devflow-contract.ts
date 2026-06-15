@@ -83,6 +83,7 @@ try {
   assert.equal(capabilitiesBody.contractVersion, catalog.contractVersion);
   assert.equal(capabilitiesBody.counts.tools, catalog.tools.length);
   assert.ok(capabilitiesBody.tools.some((tool: any) => tool.name === 'get_capabilities'));
+  assert.ok(capabilitiesBody.tools.some((tool: any) => tool.name === 'import_tasks_from_file'));
 
   console.log('[verify] Testing task summary/query modes...');
   const listResponse = await fetch(`${baseUrl}/api/tasks?mode=summary&q=contract`);
@@ -159,6 +160,7 @@ try {
   const mcpTools = getMcpToolList();
   assert.ok(mcpTools.some((tool) => tool.name === 'get_agent_context'));
   assert.ok(mcpTools.some((tool) => tool.name === 'get_agent_task_context'));
+  assert.ok(mcpTools.some((tool) => tool.name === 'import_tasks_from_file'));
   assert.ok(mcpTools.length > catalog.tools.length);
 
   const createTaskSchema = catalog.tools.find((tool) => tool.name === 'create_task')?.inputSchema;

@@ -1607,12 +1607,13 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
       loadTasks(deps.state);
 
       const mode = req.body.mode === 'apply' ? 'apply' : 'dry-run';
+      const strategy = req.body.strategy === 'replace' ? 'replace' : 'patch';
       const fileUrl = typeof req.body.fileUrl === 'string' ? req.body.fileUrl.trim() : '';
-      const localPath = typeof req.body.localPath === 'string' ? req.body.localPath.trim() : '';
+      const patchFilePath = typeof req.body.patchFilePath === 'string' ? req.body.patchFilePath.trim() : '';
       const maxTasks = Number.isFinite(Number(req.body.maxTasks)) ? Math.max(1, Math.min(50, Number(req.body.maxTasks))) : 50;
 
-      if (!fileUrl && !localPath) {
-        return res.status(400).json({ error: 'fileUrl or localPath is required.' });
+      if (!fileUrl && !patchFilePath) {
+        return res.status(400).json({ error: 'fileUrl or patchFilePath is required.' });
       }
 
       let raw = '';
@@ -1636,13 +1637,13 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
           clearTimeout(timer);
         }
       } else {
-        const resolved = path.resolve(localPath);
+        const resolved = path.resolve(patchFilePath);
         const allowed = path.resolve(getDevFlowAppRoot());
         if (!resolved.startsWith(allowed + path.sep) && resolved !== allowed) {
-          return res.status(400).json({ error: 'localPath must be inside the DevFlow project root.' });
+          return res.status(400).json({ error: 'patchFilePath must be inside the DevFlow project root.' });
         }
         if (!fs.existsSync(resolved)) {
-          return res.status(400).json({ error: `File not found: ${localPath}` });
+          return res.status(400).json({ error: `File not found: ${patchFilePath}` });
         }
         const stat = fs.statSync(resolved);
         if (stat.size > 5_000_000) {
@@ -1663,14 +1664,14 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
       }
 
       const defaults = parsed.defaults || {};
-      const tasks = Array.isArray(parsed.tasks) ? parsed.tasks.slice(0, maxTasks) : [];
-      const VALID_FIELDS = [
+      const items = Array.isArray(parsed.tasks) ? parsed.tasks.slice(0, maxTasks) : [];
+
+      const VALID_FIELDS: Set<string> = new Set([
         'title', 'description', 'status', 'priority', 'branch', 'tags', 'targetFiles',
         'checklist', 'effort', 'model', 'agent', 'parentId', 'reasoning',
         'acceptanceCriteria', 'verification', 'repoContext', 'specUrl', 'designImages', 'jiraKey', 'sourceUrl',
-      ];
+      ]);
 
-      const results = { created: [], updated: [], skipped: [], failed: [] };
       const projectDefaults = {
         projectId: defaults.projectId || req.body.projectId || '',
         projectName: defaults.projectName || req.body.projectName || '',
@@ -1678,119 +1679,176 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
         repoUrl: defaults.repoUrl || req.body.repoUrl || '',
       };
 
-      for (const item of tasks) {
-        if (!item.operation) {
-          results.failed.push({ reason: 'Missing operation field (create or update).' });
+      const buildProjectInfo = (item: any) => ({
+        projectId: (typeof item.projectId === 'string' ? item.projectId : '') || projectDefaults.projectId,
+        projectName: (typeof item.projectName === 'string' ? item.projectName : '') || projectDefaults.projectName,
+        repo: (typeof item.repo === 'string' ? item.repo : '') || projectDefaults.repo,
+        repoUrl: (typeof item.repoUrl === 'string' ? item.repoUrl : '') || projectDefaults.repoUrl,
+      });
+
+      interface PlannedOp {
+        type: 'create' | 'update';
+        item: any;
+        fields: Record<string, any>;
+        taskId?: string;
+        existingIndex?: number;
+        title?: string;
+        error?: string;
+      }
+
+      const planned: PlannedOp[] = [];
+      let hasError = false;
+
+      for (const item of items) {
+        if (!item.operation || !['create', 'update'].includes(item.operation)) {
+          planned.push({ type: 'create' as const, item, fields: {}, error: 'Missing or unsupported operation. Use "create" or "update".' });
+          hasError = true;
           continue;
         }
 
         const fields = item.fields || {};
-        for (const key of Object.keys(fields)) {
-          if (!VALID_FIELDS.includes(key)) {
-            results.failed.push({ operation: item.operation, taskId: item.taskId, reason: `Unknown field: ${key}` });
-          }
+        const unknown = Object.keys(fields).find((k) => !VALID_FIELDS.has(k));
+        if (unknown) {
+          planned.push({ type: item.operation, item, fields, error: `Unknown field: ${unknown}` });
+          hasError = true;
+          continue;
         }
-        if (results.failed.length > 0) continue;
-
-        const mergedProject = {
-          projectId: (typeof item.projectId === 'string' ? item.projectId : '') || projectDefaults.projectId,
-          projectName: (typeof item.projectName === 'string' ? item.projectName : '') || projectDefaults.projectName,
-          repo: (typeof item.repo === 'string' ? item.repo : '') || projectDefaults.repo,
-          repoUrl: (typeof item.repoUrl === 'string' ? item.repoUrl : '') || projectDefaults.repoUrl,
-        };
 
         if (item.operation === 'update') {
           const taskId = item.taskId || item.id;
           if (!taskId) {
-            results.failed.push({ operation: 'update', reason: 'taskId is required for update operations.' });
+            planned.push({ type: 'update', item, fields, error: 'taskId is required for update operations.' });
+            hasError = true;
             continue;
           }
           const existingIndex = getTaskIndexByIdentifier(deps.state.tasksCache, String(taskId));
           if (existingIndex === -1) {
-            results.failed.push({ operation: 'update', taskId, reason: 'Task not found.' });
+            planned.push({ type: 'update', item, fields, taskId, error: 'Task not found.' });
+            hasError = true;
             continue;
           }
-          if (mode === 'dry-run') {
-            results.updated.push(taskId);
-            continue;
-          }
-          const currentTask = deps.state.tasksCache[existingIndex];
-          const merged = { ...currentTask, ...fields, updatedAt: new Date().toISOString() };
-          deps.state.tasksCache[existingIndex] = merged;
-          results.updated.push(taskId);
-        } else if (item.operation === 'create') {
-          const resolvedProject = mergedProject.projectName || mergedProject.repo || mergedProject.repoUrl || mergedProject.projectId;
-          if (!item.title && !fields.title) {
-            results.failed.push({ operation: 'create', reason: 'title is required for create operations.' });
+          planned.push({ type: 'update', item, fields, taskId, existingIndex });
+        } else {
+          const itemProject = buildProjectInfo(item);
+          const resolvedProject = itemProject.projectName || itemProject.repo || itemProject.repoUrl || itemProject.projectId;
+          const title = item.title || fields.title || '';
+          if (!title.trim()) {
+            planned.push({ type: 'create', item, fields, error: 'title is required for create operations.' });
+            hasError = true;
             continue;
           }
           if (!resolvedProject) {
-            results.failed.push({ operation: 'create', reason: 'Project resolver (projectName, repo, repoUrl, or projectId) is required for create.' });
+            planned.push({ type: 'create', item, fields, title, error: 'Project resolver (projectName, repo, repoUrl, or projectId) is required for create.' });
+            hasError = true;
             continue;
           }
-          if (mode === 'dry-run') {
-            const title = fields.title || item.title || 'untitled';
-            results.created.push(title);
-            continue;
+          planned.push({ type: 'create', item, fields, title: title.trim(), error: undefined });
+        }
+      }
+
+      if (planned.length === 0) {
+        return res.status(400).json({ error: 'No valid operations to process. Check format: version devflow.taskPatch.v1, tasks array with operation + fields.' });
+      }
+
+      if (mode === 'dry-run' || hasError) {
+        return res.json({
+          mode: hasError ? 'dry-run' : mode,
+          strategy,
+          summary: {
+            planned: planned.length,
+            created: planned.filter((p) => p.type === 'create' && !p.error).length,
+            updated: planned.filter((p) => p.type === 'update' && !p.error).length,
+            failed: planned.filter((p) => p.error).length,
+            operations: planned.map((p) => ({
+              type: p.type,
+              taskId: p.taskId,
+              title: p.title,
+              error: p.error,
+            })),
+          },
+        });
+      }
+
+      const created: string[] = [];
+      const updated: string[] = [];
+      const failed: { type: string; taskId?: string; title?: string; reason: string }[] = [];
+
+      for (const op of planned) {
+        if (op.error) {
+          failed.push({ type: op.type, taskId: op.taskId, title: op.title, reason: op.error });
+          continue;
+        }
+
+        if (op.type === 'update' && op.existingIndex !== undefined && op.taskId) {
+          const currentTask = deps.state.tasksCache[op.existingIndex];
+          if (strategy === 'replace') {
+            const base = {
+              id: currentTask.id, displayId: currentTask.displayId, projectId: currentTask.projectId,
+              title: currentTask.title, status: currentTask.status || 'backlog', priority: currentTask.priority || 'medium',
+              createdAt: currentTask.createdAt,
+            };
+            const merged = { ...base, ...op.fields, updatedAt: new Date().toISOString() };
+            deps.state.tasksCache[op.existingIndex] = merged;
+          } else {
+            const merged = { ...currentTask, ...op.fields, updatedAt: new Date().toISOString() };
+            deps.state.tasksCache[op.existingIndex] = merged;
           }
+          updated.push(op.taskId);
+        } else if (op.type === 'create') {
+          const itemProject = buildProjectInfo(op.item);
           let projectId = '';
           try {
-            projectId = resolveProjectIdFromRepo(deps.state, mergedProject, req as any);
+            projectId = resolveProjectIdFromRepo(deps.state, itemProject, req as any);
           } catch {
-            results.failed.push({ operation: 'create', title: item.title, reason: 'Could not resolve project.' });
+            failed.push({ type: 'create', title: op.title, reason: 'Could not resolve project.' });
             continue;
           }
-          const newTask = {
-            id: item.id || `task-${Date.now()}-${Math.floor(Math.random() * 1000000)}`,
-            displayId: item.displayId || generateDisplayId(deps.state, projectId),
+          const f = op.fields;
+          const newTask: any = {
+            id: op.item.id || `task-${Date.now()}-${Math.floor(Math.random() * 1000000)}`,
+            displayId: op.item.displayId || generateDisplayId(deps.state, projectId),
             projectId,
-            title: (fields.title || item.title || 'untitled').trim(),
-            description: fields.description || '',
-            status: fields.status || 'backlog',
-            priority: fields.priority || 'medium',
-            branch: fields.branch || undefined,
-            tags: Array.isArray(fields.tags) ? fields.tags : [],
-            targetFiles: Array.isArray(fields.targetFiles) ? fields.targetFiles : [],
-            checklist: Array.isArray(fields.checklist) ? fields.checklist : [],
-            designImages: extractDesignImages(fields) || [],
-            effort: fields.effort || undefined,
-            model: fields.model || undefined,
-            agent: fields.agent || undefined,
-            parentId: fields.parentId || undefined,
-            reasoning: fields.reasoning || undefined,
-            acceptanceCriteria: fields.acceptanceCriteria || undefined,
-            verification: fields.verification || undefined,
-            repoContext: fields.repoContext || undefined,
-            jiraKey: fields.jiraKey || undefined,
+            title: op.title || 'untitled',
+            description: f.description || '',
+            status: f.status || 'backlog',
+            priority: f.priority || 'medium',
+            branch: f.branch || undefined,
+            tags: Array.isArray(f.tags) ? f.tags : [],
+            targetFiles: Array.isArray(f.targetFiles) ? f.targetFiles : [],
+            checklist: Array.isArray(f.checklist) ? f.checklist : [],
+            designImages: extractDesignImages(f) || [],
+            effort: f.effort || undefined,
+            model: f.model || undefined,
+            agent: f.agent || undefined,
+            parentId: f.parentId || undefined,
+            reasoning: f.reasoning || undefined,
+            acceptanceCriteria: f.acceptanceCriteria || undefined,
+            verification: f.verification || undefined,
+            repoContext: f.repoContext || undefined,
+            specUrl: f.specUrl || undefined,
+            jiraKey: f.jiraKey || undefined,
+            sourceUrl: f.sourceUrl || undefined,
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
             logs: [{ id: `log-${Date.now()}-im`, timestamp: new Date().toISOString(), message: 'Task created via import-file.', type: 'create' }],
           };
           deps.state.tasksCache.push(newTask);
-          results.created.push(newTask.displayId || newTask.id);
-        } else {
-          results.failed.push({ operation: item.operation || 'unknown', reason: 'Unsupported operation.' });
+          created.push(newTask.displayId || newTask.id);
         }
       }
 
-      if (results.created.length + results.updated.length + results.failed.length === 0) {
-        return res.status(400).json({ error: 'No valid operations to process. Check format: version devflow.taskPatch.v1, tasks array with operation + fields.' });
-      }
-
-      if (mode === 'apply') {
-        saveTasks(deps.state);
-      }
+      saveTasks(deps.state);
 
       return res.json({
         mode,
+        strategy,
         summary: {
-          created: results.created.length,
-          updated: results.updated.length,
-          skipped: results.skipped.length,
-          failed: results.failed.length,
-          createdIds: results.created,
-          updatedIds: results.updated,
-          errors: results.failed.length > 0 ? results.failed : undefined,
+          created: created.length,
+          updated: updated.length,
+          failed: failed.length,
+          createdIds: created,
+          updatedIds: updated,
+          errors: failed.length > 0 ? failed : undefined,
         },
       });
     } catch (error) {

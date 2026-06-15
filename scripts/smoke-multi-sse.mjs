@@ -14,7 +14,7 @@ async function connect(label) {
 }
 
 async function main() {
-  console.log(`Smoke test: connecting two clients to ${BASE}/sse`);
+  console.log('Smoke test: connecting two clients to DevFlow SSE');
 
   let a, b;
   try {

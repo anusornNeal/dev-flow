@@ -164,11 +164,11 @@ async function startServer() {
     const mcpServer = createDevFlowMcpServer(apiBaseUrl);
     const transport = new SSEServerTransport('/sse', res);
     activeTransports.set(transport.sessionId, transport);
-    if (debugSse) console.log(`[sse] open sid=${shortId(transport.sessionId)} active=${activeTransports.size}`);
+    if (debugSse) console.log(`[sse route=/sse] open sid=${shortId(transport.sessionId)} active=${activeTransports.size}`);
 
     res.on('close', () => {
       activeTransports.delete(transport.sessionId);
-      if (debugSse) console.log(`[sse] close sid=${shortId(transport.sessionId)} active=${activeTransports.size}`);
+      if (debugSse) console.log(`[sse route=/sse] close sid=${shortId(transport.sessionId)} active=${activeTransports.size}`);
     });
 
     try {
@@ -189,9 +189,9 @@ async function startServer() {
 
     if (debugSse) {
       if (transport) {
-        console.log(`[sse] POST hit sid=${shortId(sessionId)}`);
+        console.log(`[sse route=/sse] POST hit sid=${shortId(sessionId)}`);
       } else {
-        console.log(`[sse] POST miss sid=${shortId(sessionId) || 'none'} active=${activeTransports.size}`);
+        console.log(`[sse route=/sse] POST miss sid=${shortId(sessionId) || 'none'} active=${activeTransports.size}`);
       }
     }
 
@@ -239,7 +239,7 @@ async function startServer() {
       app.get(route, async (_req, res) => {
         const sseTransport = new SSEServerTransport(route, res);
         activeProxyTransports[serverName].set(sseTransport.sessionId, sseTransport);
-        if (debugSse) console.log(`[proxy:${serverName}] open sid=${shortId(sseTransport.sessionId)} active=${activeProxyTransports[serverName].size}`);
+        if (debugSse) console.log(`[proxy:${serverName} route=${route}] open sid=${shortId(sseTransport.sessionId)} active=${activeProxyTransports[serverName].size}`);
 
         const clientTransport = new StdioClientTransport({
           command: config.command === 'npx' && process.platform === 'win32' ? 'npx.cmd' : config.command,
@@ -250,7 +250,7 @@ async function startServer() {
         sseTransport.onclose = () => {
           activeProxyTransports[serverName].delete(sseTransport.sessionId);
           clientTransport.close().catch(() => {});
-          if (debugSse) console.log(`[proxy:${serverName}] close sid=${shortId(sseTransport.sessionId)} active=${activeProxyTransports[serverName].size}`);
+          if (debugSse) console.log(`[proxy:${serverName} route=${route}] close sid=${shortId(sseTransport.sessionId)} active=${activeProxyTransports[serverName].size}`);
         };
 
         clientTransport.onclose = () => {
@@ -275,7 +275,7 @@ async function startServer() {
           }
         } catch (err) {
           activeProxyTransports[serverName].delete(sseTransport.sessionId);
-          if (!res.headersSent) {
+          if (!res.headersSent && !res.writableEnded) {
             res.status(500).end();
           }
           console.error(`Error starting ${serverName} Proxy:`, err);
@@ -287,9 +287,9 @@ async function startServer() {
         const transport = sessionId ? activeProxyTransports[serverName].get(sessionId) : undefined;
         if (debugSse) {
           if (transport) {
-            console.log(`[proxy:${serverName}] POST hit sid=${shortId(sessionId)}`);
+            console.log(`[proxy:${serverName} route=${route}] POST hit sid=${shortId(sessionId)}`);
           } else {
-            console.log(`[proxy:${serverName}] POST miss sid=${shortId(sessionId) || 'none'} active=${activeProxyTransports[serverName].size}`);
+            console.log(`[proxy:${serverName} route=${route}] POST miss sid=${shortId(sessionId) || 'none'} active=${activeProxyTransports[serverName].size}`);
           }
         }
         if (!transport) {

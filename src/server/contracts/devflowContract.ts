@@ -564,10 +564,27 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'list_skills',
-    description: 'List DevFlow skills.',
-    inputSchema: emptyObjectSchema,
+    description: 'List DevFlow skills. Optionally filter by kind: authoring, workflow, prompt, or custom.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        kind: { type: 'string', enum: ['authoring', 'workflow', 'prompt', 'custom'], description: 'Filter skills by category.' },
+      },
+    },
     outputSchema: { type: 'array', items: { type: 'object' } },
-    buildHttpRequest: () => ({ method: 'GET', path: '/api/skills' }),
+    lightweight: true,
+    buildHttpRequest: (args) => ({
+      method: 'GET',
+      path: withQuery('/api/skills', { kind: args.kind }),
+    }),
+  },
+  {
+    name: 'get_authoring_skills',
+    description: 'Get the full content of all authoring skills (schema and playbook) that define how tasks are structured in DevFlow.',
+    inputSchema: emptyObjectSchema,
+    outputSchema: { type: 'object' },
+    lightweight: true,
+    buildHttpRequest: () => ({ method: 'GET', path: '/api/skills/authoring' }),
   },
   {
     name: 'get_skill',

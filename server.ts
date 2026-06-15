@@ -146,7 +146,7 @@ async function startServer() {
     writeAgentLog,
   });
 
-  const activeTransports = new Set<SSEServerTransport>();
+  const activeTransports = new Map<string, SSEServerTransport>();
 
   app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', '*');
@@ -159,29 +159,28 @@ async function startServer() {
   });
 
   app.get('/sse', async (_req, res) => {
-    console.log('Received SSE connection request');
     const mcpServer = createDevFlowMcpServer(apiBaseUrl);
     const transport = new SSEServerTransport('/sse', res);
-    activeTransports.add(transport);
+    activeTransports.set(transport.sessionId, transport);
 
     res.on('close', () => {
-      console.log('SSE connection closed, removing transport');
-      activeTransports.delete(transport);
+      activeTransports.delete(transport.sessionId);
     });
 
     try {
       await mcpServer.connect(transport);
     } catch (err) {
+      activeTransports.delete(transport.sessionId);
       console.error('MCP Server connect error:', err);
     }
   });
 
   app.post('/sse', async (req, res, next) => {
-    const transportsArray = Array.from(activeTransports);
-    const transport = transportsArray[transportsArray.length - 1];
+    const sessionId = typeof req.query.sessionId === 'string' ? req.query.sessionId : '';
+    const transport = sessionId ? activeTransports.get(sessionId) : undefined;
 
     if (!transport) {
-      res.status(400).send('No active SSE connection');
+      res.status(400).json({ error: 'No active SSE connection for session' });
       return;
     }
 
@@ -212,19 +211,18 @@ async function startServer() {
     },
   };
 
-  const activeProxyTransports: Record<string, Set<SSEServerTransport>> = {};
+  const activeProxyTransports: Record<string, Map<string, SSEServerTransport>> = {};
 
   Object.keys(mcpProxyServers).forEach((serverName) => {
-    activeProxyTransports[serverName] = new Set<SSEServerTransport>();
+    activeProxyTransports[serverName] = new Map<string, SSEServerTransport>();
     const config = mcpProxyServers[serverName];
     const routes = [`/proxy/${serverName}/sse`];
     if (serverName === 'github') routes.push('/github/sse');
 
     routes.forEach((route) => {
       app.get(route, async (_req, res) => {
-        console.log(`Received ${serverName} SSE connection request on ${route}`);
         const sseTransport = new SSEServerTransport(route, res);
-        activeProxyTransports[serverName].add(sseTransport);
+        activeProxyTransports[serverName].set(sseTransport.sessionId, sseTransport);
 
         const clientTransport = new StdioClientTransport({
           command: config.command === 'npx' && process.platform === 'win32' ? 'npx.cmd' : config.command,
@@ -233,8 +231,7 @@ async function startServer() {
         });
 
         sseTransport.onclose = () => {
-          console.log(`${serverName} SSE connection closed`);
-          activeProxyTransports[serverName].delete(sseTransport);
+          activeProxyTransports[serverName].delete(sseTransport.sessionId);
           clientTransport.close().catch(() => {});
         };
 
@@ -254,16 +251,17 @@ async function startServer() {
           await clientTransport.start();
           await sseTransport.start();
         } catch (err) {
+          activeProxyTransports[serverName].delete(sseTransport.sessionId);
           console.error(`Error starting ${serverName} Proxy:`, err);
           res.status(500).end();
         }
       });
 
       app.post(route, async (req, res, next) => {
-        const transportsArray = Array.from(activeProxyTransports[serverName]);
-        const transport = transportsArray[transportsArray.length - 1];
+        const sessionId = typeof req.query.sessionId === 'string' ? req.query.sessionId : '';
+        const transport = sessionId ? activeProxyTransports[serverName].get(sessionId) : undefined;
         if (!transport) {
-          res.status(400).send(`No active ${serverName} SSE connection`);
+          res.status(400).json({ error: `No active ${serverName} SSE connection for session` });
           return;
         }
         try {

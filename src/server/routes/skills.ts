@@ -58,9 +58,6 @@ export function registerSkillRoutes(app: express.Express, deps: ApiRouteDeps) {
     loadSkillsRegistry(deps.state);
     const skill = getSkillById(deps.state, req.params.id);
     if (!skill) return res.status(404).json({ error: 'Skill not found' });
-    if (skill.isProtected) {
-      return res.status(403).json({ error: 'Master skills are read-only in the app. Edit the repo markdown file instead.' });
-    }
     try {
       updateSkillContent(skill, req.body);
       skill.updatedAt = new Date().toISOString();

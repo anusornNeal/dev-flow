@@ -3,6 +3,7 @@ import type { ApiRouteDeps } from '../types';
 import { getCapabilityCatalog } from '../contracts/devflowContract';
 import { sendApiError } from '../services/api';
 import { listLocalFiles, readLocalFile, searchLocalFiles } from '../services/localFileService';
+import { getGitLog, getGitDiff, getGitShow, getGitStatus, getGitBranch } from '../services/gitService';
 
 export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) {
   app.get('/api/capabilities', (_req, res) => {
@@ -56,6 +57,46 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
   app.get('/api/local-files/search', (req, res) => {
     try {
       return res.json(searchLocalFiles(deps.state, req.query as Record<string, any>));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.get('/api/git/log', (req, res) => {
+    try {
+      return res.json(getGitLog(deps.state, req.query as Record<string, any>));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.get('/api/git/diff', (req, res) => {
+    try {
+      return res.json(getGitDiff(deps.state, req.query as Record<string, any>));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.get('/api/git/show', (req, res) => {
+    try {
+      return res.json(getGitShow(deps.state, req.query as Record<string, any>));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.get('/api/git/status', (req, res) => {
+    try {
+      return res.json(getGitStatus(deps.state, req.query as Record<string, any>));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.get('/api/git/branch', (req, res) => {
+    try {
+      return res.json(getGitBranch(deps.state, req.query as Record<string, any>));
     } catch (error) {
       return sendApiError(res, error);
     }

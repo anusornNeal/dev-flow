@@ -662,6 +662,98 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
       path: withQuery('/api/local-files/search', args),
     }),
   },
+  {
+    name: 'get_git_log',
+    description: 'List recent git commits with optional filters.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...projectIdentifierProperties,
+        limit: { type: 'number', description: 'Maximum number of commits returned (default 20, max 500).' },
+        author: { type: 'string', description: 'Filter by commit author.' },
+        since: { type: 'string', description: 'Only commits after this date (ISO 8601 or git-parseable).' },
+        until: { type: 'string', description: 'Only commits before this date (ISO 8601 or git-parseable).' },
+        grep: { type: 'string', description: 'Filter commits with message matching pattern.' },
+        path: { type: 'string', description: 'Relative file or directory path to limit log to.' },
+      },
+    },
+    outputSchema: { type: 'object' },
+    lightweight: true,
+    buildHttpRequest: (args) => ({
+      method: 'GET',
+      path: withQuery('/api/git/log', args),
+    }),
+  },
+  {
+    name: 'get_git_diff',
+    description: 'Show git diff between commits or working tree changes.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...projectIdentifierProperties,
+        commit1: { type: 'string', description: 'First commit hash for comparison.' },
+        commit2: { type: 'string', description: 'Second commit hash for comparison.' },
+        path: { type: 'string', description: 'Relative file or directory path to limit diff to.' },
+      },
+    },
+    outputSchema: { type: 'object' },
+    lightweight: true,
+    buildHttpRequest: (args) => ({
+      method: 'GET',
+      path: withQuery('/api/git/diff', args),
+    }),
+  },
+  {
+    name: 'get_git_show',
+    description: 'Show detailed information for a single commit.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...projectIdentifierProperties,
+        commit: { type: 'string', description: 'Commit hash.' },
+        path: { type: 'string', description: 'Relative file or directory path to limit output to.' },
+      },
+      required: ['commit'],
+    },
+    outputSchema: { type: 'object' },
+    lightweight: true,
+    buildHttpRequest: (args) => ({
+      method: 'GET',
+      path: withQuery('/api/git/show', args),
+    }),
+  },
+  {
+    name: 'get_git_status',
+    description: 'Show the working tree status (git status --porcelain).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...projectIdentifierProperties,
+      },
+    },
+    outputSchema: { type: 'object' },
+    lightweight: true,
+    buildHttpRequest: (args) => ({
+      method: 'GET',
+      path: withQuery('/api/git/status', args),
+    }),
+  },
+  {
+    name: 'get_git_branch',
+    description: 'List local git branches.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...projectIdentifierProperties,
+      },
+    },
+    outputSchema: { type: 'object' },
+    lightweight: true,
+    buildHttpRequest: (args) => ({
+      method: 'GET',
+      path: withQuery('/api/git/branch', args),
+    }),
+  },
 ];
 
 export function getToolDefinitionByName(name: string) {

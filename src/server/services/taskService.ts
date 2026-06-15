@@ -288,6 +288,7 @@ export function getAgentTaskContext(state: AppState, targetId: string, includeLo
     instruction: cleanObject({
       description: task.description,
       reasoning: task.reasoning,
+      designImageCount: task.designImages?.length || 0,
     }),
     requirements: cleanObject({
       acceptanceCriteria: task.acceptanceCriteria,

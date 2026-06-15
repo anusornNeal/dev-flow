@@ -3,19 +3,47 @@ import type express from 'express';
 import type { ApiRouteDeps } from '../types';
 import { loadSkillsRegistry, saveSkillsRegistry } from '../repositories/skillsRepository';
 import { getSkillById, getSkillDetail, updateSkillContent } from '../services/skillService';
+import { readSkillContent } from '../repositories/skillsRepository';
 
 export function registerSkillRoutes(app: express.Express, deps: ApiRouteDeps) {
   loadSkillsRegistry(deps.state);
 
-  app.get('/api/skills', (_req, res) => {
+  app.get('/api/skills', (req, res) => {
     loadSkillsRegistry(deps.state);
-    res.json(deps.state.skillsRegistry.map((skill) => ({
+    const kind = typeof req.query.kind === 'string' ? req.query.kind.trim().toLowerCase() : '';
+    let skills = deps.state.skillsRegistry;
+
+    if (kind === 'authoring') {
+      skills = skills.filter((s) => s.id === 'schema' || s.id === 'playbook');
+    } else if (kind === 'workflow') {
+      skills = skills.filter((s) => s.id.endsWith('-workflow'));
+    } else if (kind === 'prompt') {
+      skills = skills.filter((s) => s.id === 'agent-task-prompt-template');
+    } else if (kind === 'custom') {
+      skills = skills.filter((s) => s.isCustom);
+    }
+
+    res.json(skills.map((skill) => ({
       id: skill.id,
       name: skill.name,
       description: skill.description,
       isCustom: skill.isCustom,
       isProtected: skill.isProtected,
       kind: skill.kind,
+    })));
+  });
+
+  app.get('/api/skills/authoring', (_req, res) => {
+    loadSkillsRegistry(deps.state);
+    const authoring = deps.state.skillsRegistry.filter((s) => s.id === 'schema' || s.id === 'playbook');
+    res.json(authoring.map((skill) => ({
+      id: skill.id,
+      name: skill.name,
+      description: skill.description,
+      isCustom: skill.isCustom,
+      isProtected: skill.isProtected,
+      kind: skill.kind,
+      content: readSkillContent(skill),
     })));
   });
 
@@ -30,9 +58,6 @@ export function registerSkillRoutes(app: express.Express, deps: ApiRouteDeps) {
     loadSkillsRegistry(deps.state);
     const skill = getSkillById(deps.state, req.params.id);
     if (!skill) return res.status(404).json({ error: 'Skill not found' });
-    if (skill.isProtected) {
-      return res.status(403).json({ error: 'Master skills are read-only in the app. Edit the repo markdown file instead.' });
-    }
     try {
       updateSkillContent(skill, req.body);
       skill.updatedAt = new Date().toISOString();

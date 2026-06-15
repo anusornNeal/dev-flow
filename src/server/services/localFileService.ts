@@ -6,7 +6,7 @@ import type { AppState } from '../types';
 import { createApiError } from './api';
 import { findProjectByIdentifier } from './taskService';
 
-function resolveProjectRoot(state: AppState, args: Record<string, any>) {
+export function resolveProjectRoot(state: AppState, args: Record<string, any>) {
   const identifierProject = findProjectByIdentifier(state, {
     projectId: typeof args.projectId === 'string' ? args.projectId.trim() : undefined,
     projectName: typeof args.projectName === 'string' ? args.projectName.trim() : undefined,
@@ -32,7 +32,7 @@ function resolveProjectRoot(state: AppState, args: Record<string, any>) {
   return getDevFlowAppRoot();
 }
 
-function resolveSafePath(root: string, relativePath?: string) {
+export function resolveSafePath(root: string, relativePath?: string) {
   const candidate = path.resolve(root, relativePath || '.');
   const normalizedRoot = path.resolve(root);
   const rootWithSep = normalizedRoot.endsWith(path.sep) ? normalizedRoot : `${normalizedRoot}${path.sep}`;

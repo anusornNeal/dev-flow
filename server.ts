@@ -146,7 +146,9 @@ async function startServer() {
     writeAgentLog,
   });
 
-  const activeTransports = new Set<SSEServerTransport>();
+  const activeTransports = new Map<string, SSEServerTransport>();
+  const debugSse = process.env.DEBUG_SSE === '1';
+  const shortId = (id: string) => id.slice(0, 8);
 
   app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', '*');
@@ -159,29 +161,42 @@ async function startServer() {
   });
 
   app.get('/sse', async (_req, res) => {
-    console.log('Received SSE connection request');
     const mcpServer = createDevFlowMcpServer(apiBaseUrl);
     const transport = new SSEServerTransport('/sse', res);
-    activeTransports.add(transport);
+    activeTransports.set(transport.sessionId, transport);
+    if (debugSse) console.log(`[sse route=/sse] open sid=${shortId(transport.sessionId)} active=${activeTransports.size}`);
 
     res.on('close', () => {
-      console.log('SSE connection closed, removing transport');
-      activeTransports.delete(transport);
+      activeTransports.delete(transport.sessionId);
+      if (debugSse) console.log(`[sse route=/sse] close sid=${shortId(transport.sessionId)} active=${activeTransports.size}`);
     });
 
     try {
       await mcpServer.connect(transport);
     } catch (err) {
+      activeTransports.delete(transport.sessionId);
       console.error('MCP Server connect error:', err);
     }
   });
 
+  // POST /sse must route to the session-specific transport, NOT the latest.
+  // MCP clients identify themselves via ?sessionId= query parameter.
+  // Using a Set and picking the last element breaks under multiple concurrent
+  // clients (e.g., Tool A's message routes to Tool B's transport).
   app.post('/sse', async (req, res, next) => {
-    const transportsArray = Array.from(activeTransports);
-    const transport = transportsArray[transportsArray.length - 1];
+    const sessionId = typeof req.query.sessionId === 'string' ? req.query.sessionId : '';
+    const transport = sessionId ? activeTransports.get(sessionId) : undefined;
+
+    if (debugSse) {
+      if (transport) {
+        console.log(`[sse route=/sse] POST hit sid=${shortId(sessionId)}`);
+      } else {
+        console.log(`[sse route=/sse] POST miss sid=${shortId(sessionId) || 'none'} active=${activeTransports.size}`);
+      }
+    }
 
     if (!transport) {
-      res.status(400).send('No active SSE connection');
+      res.status(400).json({ error: 'No active SSE connection for session' });
       return;
     }
 
@@ -212,19 +227,19 @@ async function startServer() {
     },
   };
 
-  const activeProxyTransports: Record<string, Set<SSEServerTransport>> = {};
+  const activeProxyTransports: Record<string, Map<string, SSEServerTransport>> = {};
 
   Object.keys(mcpProxyServers).forEach((serverName) => {
-    activeProxyTransports[serverName] = new Set<SSEServerTransport>();
+    activeProxyTransports[serverName] = new Map<string, SSEServerTransport>();
     const config = mcpProxyServers[serverName];
     const routes = [`/proxy/${serverName}/sse`];
     if (serverName === 'github') routes.push('/github/sse');
 
     routes.forEach((route) => {
       app.get(route, async (_req, res) => {
-        console.log(`Received ${serverName} SSE connection request on ${route}`);
         const sseTransport = new SSEServerTransport(route, res);
-        activeProxyTransports[serverName].add(sseTransport);
+        activeProxyTransports[serverName].set(sseTransport.sessionId, sseTransport);
+        if (debugSse) console.log(`[proxy:${serverName} route=${route}] open sid=${shortId(sseTransport.sessionId)} active=${activeProxyTransports[serverName].size}`);
 
         const clientTransport = new StdioClientTransport({
           command: config.command === 'npx' && process.platform === 'win32' ? 'npx.cmd' : config.command,
@@ -233,9 +248,9 @@ async function startServer() {
         });
 
         sseTransport.onclose = () => {
-          console.log(`${serverName} SSE connection closed`);
-          activeProxyTransports[serverName].delete(sseTransport);
+          activeProxyTransports[serverName].delete(sseTransport.sessionId);
           clientTransport.close().catch(() => {});
+          if (debugSse) console.log(`[proxy:${serverName} route=${route}] close sid=${shortId(sseTransport.sessionId)} active=${activeProxyTransports[serverName].size}`);
         };
 
         clientTransport.onclose = () => {
@@ -252,18 +267,33 @@ async function startServer() {
 
         try {
           await clientTransport.start();
-          await sseTransport.start();
+          try {
+            await sseTransport.start();
+          } catch (err) {
+            clientTransport.close().catch(() => {});
+            throw err;
+          }
         } catch (err) {
+          activeProxyTransports[serverName].delete(sseTransport.sessionId);
+          if (!res.headersSent && !res.writableEnded) {
+            res.status(500).end();
+          }
           console.error(`Error starting ${serverName} Proxy:`, err);
-          res.status(500).end();
         }
       });
 
       app.post(route, async (req, res, next) => {
-        const transportsArray = Array.from(activeProxyTransports[serverName]);
-        const transport = transportsArray[transportsArray.length - 1];
+        const sessionId = typeof req.query.sessionId === 'string' ? req.query.sessionId : '';
+        const transport = sessionId ? activeProxyTransports[serverName].get(sessionId) : undefined;
+        if (debugSse) {
+          if (transport) {
+            console.log(`[proxy:${serverName} route=${route}] POST hit sid=${shortId(sessionId)}`);
+          } else {
+            console.log(`[proxy:${serverName} route=${route}] POST miss sid=${shortId(sessionId) || 'none'} active=${activeProxyTransports[serverName].size}`);
+          }
+        }
         if (!transport) {
-          res.status(400).send(`No active ${serverName} SSE connection`);
+          res.status(400).json({ error: `No active ${serverName} SSE connection for session` });
           return;
         }
         try {

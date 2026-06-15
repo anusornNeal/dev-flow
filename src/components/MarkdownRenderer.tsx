@@ -99,7 +99,40 @@ export default function MarkdownRenderer({ content }: MarkdownRendererProps) {
                 );
               }
 
-              // Empty lines
+              // Image: ![alt](url)
+              const imageMatch = trimmed.match(/^!\[([^\]]*)\]\(([^)]+)\)$/);
+              if (imageMatch) {
+                const alt = imageMatch[1] || 'Image';
+                const src = imageMatch[2];
+                const handleClick = (e: React.MouseEvent) => {
+                  e.preventDefault();
+                  if (src.startsWith('data:')) {
+                    const parts = src.split(',');
+                    const mime = (parts[0].split(':')[1] || '').split(';')[0] || 'image/png';
+                    const byteString = atob(parts[1]);
+                    const bytes = new Uint8Array(byteString.length);
+                    for (let i = 0; i < byteString.length; i++) {
+                      bytes[i] = byteString.charCodeAt(i);
+                    }
+                    const blob = new Blob([bytes], { type: mime });
+                    window.open(URL.createObjectURL(blob), '_blank');
+                  } else {
+                    window.open(src, '_blank');
+                  }
+                };
+                return (
+                  <div key={lineIdx} className="border border-[#ebdcb9] dark:border-[#584a3b] rounded-2xl overflow-hidden bg-white dark:bg-[#292119] shadow-xs p-1 my-2 max-w-lg">
+                    <img
+                      src={src}
+                      alt={alt}
+                      onClick={handleClick}
+                      className="w-full max-h-64 object-contain rounded-xl cursor-pointer hover:opacity-90 transition-opacity"
+                      referrerPolicy="no-referrer"
+                    />
+                  </div>
+                );
+              }
+
               if (trimmed === '') {
                 return <div key={lineIdx} className="h-1" />;
               }

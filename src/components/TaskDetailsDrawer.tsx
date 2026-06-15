@@ -22,6 +22,7 @@ import {
   Cat,
   PawPrint,
   Copy,
+  ClipboardPaste as Clipboard,
   Image as ImageIcon,
   Link as LinkIcon,
   ChevronDown,
@@ -82,21 +83,36 @@ export default function TaskDetailsDrawer({
   const [editedChecklistList, setEditedChecklistList] = useState<string[]>((task.checklist || []).map(c => c.text));
   const [editedDesignImages, setEditedDesignImages] = useState<string[]>(task.designImages || (task.designImage ? [task.designImage] : []));
   const [editedSpecUrl, setEditedSpecUrl] = useState(task.specUrl || '');
+
+  const handlePasteImage = (e: React.ClipboardEvent) => {
+    const items = Array.from(e.clipboardData.items);
+    const imageItem = items.find((item) => item.type.startsWith('image/'));
+    if (!imageItem) return;
+    e.preventDefault();
+    const blob = imageItem.getAsFile();
+    if (!blob) return;
+    if (editedDesignImages.length >= 5) return;
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      if (typeof reader.result !== 'string') return;
+      setEditedDesignImages((prev) => [...prev, reader.result as string]);
+    };
+    reader.readAsDataURL(blob);
+  };
   
   const handleViewImage = (e: React.MouseEvent, imageUrl: string) => {
     e.preventDefault();
     if (imageUrl.startsWith('data:')) {
-      const newTab = window.open();
-      if (newTab) {
-        newTab.document.write(`
-          <html>
-            <body style="margin:0;display:flex;justify-content:center;align-items:center;background:#0e0e0e;min-height:100vh;">
-              <img src="${imageUrl}" style="max-width:100%;max-height:100vh;" />
-            </body>
-          </html>
-        `);
-        newTab.document.close();
+      const parts = imageUrl.split(',');
+      const mime = (parts[0].split(':')[1] || '').split(';')[0] || 'image/png';
+      const byteString = atob(parts[1]);
+      const bytes = new Uint8Array(byteString.length);
+      for (let i = 0; i < byteString.length; i++) {
+        bytes[i] = byteString.charCodeAt(i);
       }
+      const blob = new Blob([bytes], { type: mime });
+      const blobUrl = URL.createObjectURL(blob);
+      window.open(blobUrl, '_blank');
     } else {
       window.open(imageUrl, '_blank');
     }
@@ -741,6 +757,30 @@ export default function TaskDetailsDrawer({
                                 }}
                               />
                             </label>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                navigator.clipboard.read().then((items) => {
+                                  for (const item of items) {
+                                    if (item.types.includes('image/png') || item.types.includes('image/jpeg') || item.types.includes('image/webp')) {
+                                      item.getType('image/png').then(async (blob) => {
+                                        const reader = new FileReader();
+                                        reader.onloadend = () => {
+                                          if (typeof reader.result === 'string' && editedDesignImages.length < 5) {
+                                            setEditedDesignImages((prev) => [...prev, reader.result as string]);
+                                          }
+                                        };
+                                        reader.readAsDataURL(blob);
+                                      });
+                                      break;
+                                    }
+                                  }
+                                }).catch(() => {});
+                              }}
+                              className={`text-[10px] bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] px-2.5 py-1.5 rounded-lg text-[#5c493c] dark:text-[#f3eadf] hover:bg-[#fffcf6] dark:bg-[#1e1914] dark:hover:bg-[#1e1914] cursor-pointer inline-flex items-center gap-1 font-bold ${editedDesignImages.length >= 5 ? 'opacity-50 pointer-events-none' : ''}`}
+                            >
+                              <Clipboard size={12} /> Paste from clipboard
+                            </button>
                             {editedDesignImages.length > 0 && (
                               <button
                                 type="button"
@@ -1256,7 +1296,7 @@ export default function TaskDetailsDrawer({
                             </h4>
                             <div className="flex gap-2 overflow-x-auto pb-2 snap-x">
                               {(task.designImages || (task.designImage ? [task.designImage] : [])).map((img, idx) => (
-                                <div key={idx} className="border border-[#ebdcb9] dark:border-[#584a3b] rounded-2xl overflow-hidden bg-white dark:bg-[#292119] shadow-xs p-1 shrink-0 w-64 snap-center">
+                                <div key={idx} className="relative border border-[#ebdcb9] dark:border-[#584a3b] rounded-2xl overflow-hidden bg-white dark:bg-[#292119] shadow-xs p-1 shrink-0 w-64 snap-center group">
                                   <a href={img} onClick={(e) => handleViewImage(e, img)} title="Click to view full image in a new tab">
                                     <img 
                                       src={img} 
@@ -1265,6 +1305,18 @@ export default function TaskDetailsDrawer({
                                       referrerPolicy="no-referrer"
                                     />
                                   </a>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const current = task.designImages || (task.designImage ? [task.designImage] : []);
+                                      const updated = current.filter((_, i) => i !== idx);
+                                      onUpdate({ ...task, designImages: updated.length > 0 ? updated : [], designImage: undefined });
+                                    }}
+                                    className="absolute top-1 right-1 bg-red-500 text-white w-5 h-5 rounded-full flex items-center justify-center text-[10px] opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+                                    title="Remove image"
+                                  >
+                                    ✕
+                                  </button>
                                 </div>
                               ))}
                             </div>

@@ -694,6 +694,14 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     return res.json(toTaskResponse(task, mode));
   });
 
+  app.get('/api/tasks/:id/images', (req, res) => {
+    loadTasks(deps.state);
+    const task = findTaskByIdentifier(deps.state, req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+    const images = task.designImages || [];
+    return res.json({ count: images.length, images });
+  });
+
   app.get('/api/tasks/:id/agent-context', (req, res) => {
     cleanupStaleActiveRuns(deps);
     loadTasks(deps.state);

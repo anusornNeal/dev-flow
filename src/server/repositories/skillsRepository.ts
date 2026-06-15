@@ -32,11 +32,26 @@ export function loadSkillsRegistry(state: AppState) {
   ensureLegacySkillsColumns();
 
   state.skillsRegistry = db.prepare('SELECT * FROM skills').all() as any[];
+  let needsSave = false;
+
   state.skillsRegistry.forEach((skill) => {
     skill.isCustom = Boolean(skill.isCustom);
     skill.isProtected = Boolean(skill.isProtected);
     skill.filePath = skill.sourcePath || skill.filePath || (!skill.isCustom ? path.join(SKILLS_DIR, `${skill.id}.md`) : undefined);
+
+    if (!skill.isCustom && (!skill.content || skill.content.length === 0)) {
+      const filePath = skill.filePath || path.join(SKILLS_DIR, `${skill.id}.md`);
+      if (fs.existsSync(filePath)) {
+        skill.content = fs.readFileSync(filePath, 'utf8');
+        needsSave = true;
+      }
+    }
   });
+
+  if (needsSave) {
+    saveSkillsRegistry(state);
+  }
+
   state.skillsRegistry.sort((left, right) => {
     if (left.isCustom !== right.isCustom) {
       return left.isCustom ? 1 : -1;
@@ -95,11 +110,5 @@ export function saveSkillsRegistry(state: AppState) {
 }
 
 export function readSkillContent(skill: any) {
-  if (typeof skill.content === 'string' && skill.content.length > 0) {
-    return skill.content || '';
-  }
-  if (!skill.filePath) {
-    skill.filePath = path.join(SKILLS_DIR, `${skill.id}.md`);
-  }
-  return fs.existsSync(skill.filePath) ? fs.readFileSync(skill.filePath, 'utf8') : '';
+  return skill.content || '';
 }

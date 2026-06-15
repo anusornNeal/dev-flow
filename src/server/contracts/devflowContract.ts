@@ -234,6 +234,23 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
     }),
   },
   {
+    name: 'get_task_images',
+    description: 'Get design images attached to a task without fetching the full task.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...taskIdentifierProperty,
+      },
+      required: ['taskId'],
+    },
+    outputSchema: { type: 'object' },
+    lightweight: true,
+    buildHttpRequest: (args) => ({
+      method: 'GET',
+      path: `/api/tasks/${encodePathSegment(String(args.taskId))}/images`,
+    }),
+  },
+  {
     name: 'get_agent_task_context',
     aliases: ['get_agent_context'],
     description: 'Get the token-efficient agent task context package.',

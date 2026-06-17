@@ -1,7 +1,12 @@
 import fs from 'fs';
 import path from 'path';
+import { createRequire } from 'module';
 import { getDevFlowAppRoot, getDevFlowDbPath, getDevFlowDataDir } from '../src/lib/devFlowPaths';
 import db from '../src/db/index';
+
+const require = createRequire(import.meta.url);
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const Database = require('better-sqlite3') as typeof import('better-sqlite3');
 
 interface LegacyProject {
   id: string;
@@ -80,17 +85,16 @@ function readJsonOrNull<T>(p: string): T | null {
   }
 }
 
-function backupCurrentDb(): string {
+async function backupCurrentDb(): Promise<string> {
   const dbPath = getDevFlowDbPath();
   if (!fs.existsSync(dbPath)) return '';
   const ts = new Date().toISOString().replace(/[:.]/g, '-');
   fs.mkdirSync(dataDir, { recursive: true });
   const backupPath = path.join(dataDir, `devflow-pre-migrate-${ts}.db`);
   // Use SQLite backup API for safety (consistent snapshot)
-  const Database = require('better-sqlite3');
   const sourceDb = new Database(dbPath);
   try {
-    sourceDb.backup(backupPath);
+    await sourceDb.backup(backupPath);
   } finally {
     sourceDb.close();
   }
@@ -113,6 +117,39 @@ function tableHasRows(table: string): boolean {
   return row.c > 0;
 }
 
+function validateProjects(projects: LegacyProject[] | null): string[] {
+  if (!projects) return [];
+  const errs: string[] = [];
+  for (const p of projects) {
+    if (!p || !p.id || !p.name) {
+      errs.push(`project missing id/name: ${JSON.stringify(p).slice(0, 200)}`);
+    }
+  }
+  return errs;
+}
+
+function validateTasks(tasks: LegacyTask[] | null): string[] {
+  if (!tasks) return [];
+  const errs: string[] = [];
+  for (const t of tasks) {
+    if (!t || !t.id || !t.title) {
+      errs.push(`task missing id/title: ${JSON.stringify(t).slice(0, 200)}`);
+    }
+  }
+  return errs;
+}
+
+function validateCounters(counters: LegacyCounters | null): string[] {
+  if (!counters) return [];
+  const errs: string[] = [];
+  for (const [prefix, count] of Object.entries(counters)) {
+    if (typeof count !== 'number' || !Number.isFinite(count)) {
+      errs.push(`counter ${prefix} has non-numeric count: ${JSON.stringify(count)}`);
+    }
+  }
+  return errs;
+}
+
 function importProjects(projects: LegacyProject[], summary: MigrationSummary) {
   if (projects.length === 0) return;
   const existingIds = new Set(
@@ -124,6 +161,7 @@ function importProjects(projects: LegacyProject[], summary: MigrationSummary) {
   );
   for (const p of projects) {
     if (!p.id || !p.name) {
+      // Pre-validation should have caught this; defensive only.
       summary.errors.push(`skip project missing id/name: ${JSON.stringify(p).slice(0, 200)}`);
       continue;
     }
@@ -200,7 +238,7 @@ function importCounters(counters: LegacyCounters, summary: MigrationSummary) {
   }
 }
 
-function main() {
+async function main() {
   const legacyTasks = readJsonOrNull<LegacyTask[]>(tasksJsonPath);
   const legacyProjects = readJsonOrNull<LegacyProject[]>(projectsJsonPath);
   const legacyCounters = readJsonOrNull<LegacyCounters>(countersJsonPath);
@@ -223,6 +261,22 @@ function main() {
     aborted: false,
   };
 
+  // PRE-VALIDATION: collect all validation errors before any DB write.
+  // If any validation fails, abort before opening a transaction so we never
+  // produce a partial migration.
+  const validationErrors: string[] = [
+    ...validateProjects(legacyProjects),
+    ...validateTasks(legacyTasks),
+    ...validateCounters(legacyCounters),
+  ];
+  if (validationErrors.length > 0) {
+    summary.errors = validationErrors;
+    summary.aborted = true;
+    summary.abortReason = `pre-validation failed with ${validationErrors.length} error(s); DB not touched, JSON files not renamed`;
+    console.log('[migrate] summary', JSON.stringify(summary, null, 2));
+    process.exit(1);
+  }
+
   const dbHasRows = tableHasRows('projects') || tableHasRows('tasks') || tableHasRows('counters');
   if (dbHasRows && !force && !dryRun) {
     console.log('[migrate] DB already has rows. Re-run with --force to overwrite matching IDs, or --dry-run to preview.');
@@ -232,7 +286,7 @@ function main() {
   // Always create a safety backup before any non-dry-run DB write
   if (!dryRun) {
     try {
-      const backup = backupCurrentDb();
+      const backup = await backupCurrentDb();
       if (backup) {
         summary.backupPath = backup;
         console.log(`[migrate] safety backup -> ${backup}`);
@@ -274,11 +328,11 @@ function main() {
       summary.abortReason = `migration transaction failed: ${(e as Error).message}`;
     }
 
-    // If ANY validation errors were collected (missing id/title etc), treat as failure
+    // Defensive: if any errors slipped past pre-validation, treat as failure
     if (summary.errors.length > 0) {
       migrationSucceeded = false;
       if (!summary.abortReason) {
-        summary.abortReason = `migration had ${summary.errors.length} validation error(s); rolled back`;
+        summary.abortReason = `migration had ${summary.errors.length} error(s); rolled back`;
       }
     }
   }
@@ -296,4 +350,7 @@ function main() {
   }
 }
 
-main();
+main().catch((e) => {
+  console.error('[migrate] unexpected error:', e);
+  process.exit(1);
+});

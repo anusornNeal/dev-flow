@@ -222,26 +222,27 @@ function openTempDb(dbPath: string): Database.Database {
 {
   const env = makeTempEnv('devflow-verify-migrate-dry-');
   try {
-    // Build a fake legacy app root inside our temp env
+    // The DB path verified below is EXACTLY the path passed to the spawned migrate
+    // process via DEVFLOW_DB_PATH. Same path used to pre-seed, same path measured after.
+    const verifiedDbPath = env.dbPath;
     const fakeAppRoot = path.join(env.dir, 'fake-app');
     fs.mkdirSync(fakeAppRoot, { recursive: true });
-    fs.mkdirSync(path.join(fakeAppRoot, 'data'), { recursive: true });
     // Provide a schema file so getDevFlowSchemaPath() resolves under fakeAppRoot
     fs.mkdirSync(path.join(fakeAppRoot, 'src', 'db'), { recursive: true });
     fs.copyFileSync(
       path.join(path.resolve(__dirname, '..'), 'src', 'db', 'schema.sql'),
       path.join(fakeAppRoot, 'src', 'db', 'schema.sql'),
     );
-    // Pre-seed the fake app root DB with one row to make sure dry-run doesn't touch it.
-    // The child process opens the DB at fakeAppRoot/data/devflow.db (the default), so
-    // that is what we measure against, not env.dbPath.
-    const fakeAppRootDbPath = path.join(fakeAppRoot, 'data', 'devflow.db');
-    fs.mkdirSync(path.dirname(fakeAppRootDbPath), { recursive: true });
-    const realLikeDb = openTempDb(fakeAppRootDbPath);
-    realLikeDb.prepare('INSERT INTO projects (id, name, taskIdPrefix) VALUES (?, ?, ?)').run('p-existing', 'Existing', 'EXI');
-    const projectCountBefore = (realLikeDb.prepare('SELECT COUNT(*) as c FROM projects').get() as { c: number }).c;
-    const dbSizeBefore = fs.statSync(fakeAppRootDbPath).size;
-    realLikeDb.close();
+
+    // Pre-seed verifiedDbPath with one project row. The child migrate process will
+    // open this same path (via DEVFLOW_DB_PATH) and apply schema; pre-seed must survive
+    // a dry-run unchanged.
+    const seedDb = openTempDb(verifiedDbPath);
+    seedDb.prepare('INSERT INTO projects (id, name, taskIdPrefix) VALUES (?, ?, ?)').run('p-existing', 'Existing', 'EXI');
+    const projectCountBefore = (seedDb.prepare('SELECT COUNT(*) as c FROM projects').get() as { c: number }).c;
+    const taskCountBefore = (seedDb.prepare('SELECT COUNT(*) as c FROM tasks').get() as { c: number }).c;
+    const counterCountBefore = (seedDb.prepare('SELECT COUNT(*) as c FROM counters').get() as { c: number }).c;
+    seedDb.close();
 
     // Write legacy JSON files in the fake app root
     const tasksJson = path.join(fakeAppRoot, 'tasks.json');
@@ -251,11 +252,13 @@ function openTempDb(dbPath: string): Database.Database {
     fs.writeFileSync(projectsJson, JSON.stringify([{ id: 'p-1', name: 'Legacy' }]));
     fs.writeFileSync(countersJson, JSON.stringify({ LEG: 5 }));
 
-    // Invoke the real migrate script with --dry-run and a redirected DEVFLOW_APP_ROOT
+    // Invoke the real migrate script with --dry-run, redirecting BOTH the app root
+    // (so JSON lookup resolves under fakeAppRoot) and the DB path (so the child
+    // opens verifiedDbPath - the exact path we measure after).
     const appRoot = path.resolve(__dirname, '..');
     const migrateScript = path.join(appRoot, 'scripts', 'migrate-json-to-sqlite.ts');
     const result = spawnSync('npx', ['tsx', migrateScript, '--dry-run'], {
-      env: { ...process.env, DEVFLOW_APP_ROOT: fakeAppRoot, DEVFLOW_DB_PATH: env.dbPath },
+      env: { ...process.env, DEVFLOW_APP_ROOT: fakeAppRoot, DEVFLOW_DB_PATH: verifiedDbPath },
       encoding: 'utf8',
       cwd: appRoot,
       shell: true,
@@ -264,27 +267,94 @@ function openTempDb(dbPath: string): Database.Database {
     const stdout = result.stdout || '';
     const stderr = result.stderr || '';
 
-    // Re-open DB to verify nothing was written
-    const verifyDb = new Database(fakeAppRootDbPath, { readonly: true });
+    // Re-open verifiedDbPath to verify nothing was written
+    const verifyDb = new Database(verifiedDbPath, { readonly: true });
     const projectCountAfter = (verifyDb.prepare('SELECT COUNT(*) as c FROM projects').get() as { c: number }).c;
     const taskCountAfter = (verifyDb.prepare('SELECT COUNT(*) as c FROM tasks').get() as { c: number }).c;
     const counterCountAfter = (verifyDb.prepare('SELECT COUNT(*) as c FROM counters').get() as { c: number }).c;
-    const dbSizeAfter = fs.statSync(fakeAppRootDbPath).size;
     verifyDb.close();
 
     const jsonStillPresent = fs.existsSync(tasksJson) && fs.existsSync(projectsJson) && fs.existsSync(countersJson);
-    // Row counts must be identical. File size is unreliable because opening a SQLite DB
-    // can grow the file via WAL/journal allocations even when no rows are written.
-    const dbUnchanged = projectCountAfter === projectCountBefore && taskCountAfter === 0 && counterCountAfter === 0;
+    const dbUnchanged = projectCountAfter === projectCountBefore && taskCountAfter === taskCountBefore && counterCountAfter === counterCountBefore;
     const reportedDryRun = stdout.includes('"dryRun": true');
 
     assert(
       dryRunOk && dbUnchanged && jsonStillPresent && reportedDryRun,
       'Migration dry-run is read-only and does not rename JSON',
-      `dryRunOk=${dryRunOk} dbUnchanged=${dbUnchanged}(proj ${projectCountBefore}->${projectCountAfter}, task ${0}->${taskCountAfter}, ctr ${0}->${counterCountAfter}, size ${dbSizeBefore}->${dbSizeAfter}) jsonStillPresent=${jsonStillPresent} reportedDryRun=${reportedDryRun} stderr=${stderr.slice(0, 200)}`,
+      `dryRunOk=${dryRunOk} dbUnchanged=${dbUnchanged}(proj ${projectCountBefore}->${projectCountAfter}, task ${taskCountBefore}->${taskCountAfter}, ctr ${counterCountBefore}->${counterCountAfter}) jsonStillPresent=${jsonStillPresent} reportedDryRun=${reportedDryRun} stderr=${stderr.slice(0, 200)}`,
     );
   } catch (e) {
     assert(false, 'Migration dry-run is read-only and does not rename JSON', (e as Error).message);
+  } finally {
+    env.cleanup();
+  }
+}
+
+// Scenario 7b: Migration aborts cleanly on invalid legacy data
+// One valid + one invalid task. Expect:
+//   - exit non-zero
+//   - NO valid task inserted into DB
+//   - JSON files not renamed
+{
+  const env = makeTempEnv('devflow-verify-migrate-invalid-');
+  try {
+    const verifiedDbPath = env.dbPath;
+    const fakeAppRoot = path.join(env.dir, 'fake-app');
+    fs.mkdirSync(fakeAppRoot, { recursive: true });
+    fs.mkdirSync(path.join(fakeAppRoot, 'src', 'db'), { recursive: true });
+    fs.copyFileSync(
+      path.join(path.resolve(__dirname, '..'), 'src', 'db', 'schema.sql'),
+      path.join(fakeAppRoot, 'src', 'db', 'schema.sql'),
+    );
+
+    // Initialize the DB at verifiedDbPath with schema so we can later measure row count.
+    // Do NOT pre-seed any rows; pre-existing rows would only make the assertion stricter.
+    openTempDb(verifiedDbPath).close();
+
+    const tasksJson = path.join(fakeAppRoot, 'tasks.json');
+    const projectsJson = path.join(fakeAppRoot, 'projects.json');
+    const countersJson = path.join(fakeAppRoot, 'counters.json');
+    // Mix one valid + one invalid task
+    fs.writeFileSync(
+      tasksJson,
+      JSON.stringify([
+        { id: 't-valid', title: 'Valid' },
+        { id: 't-bad' /* missing title -> invalid */ },
+      ]),
+    );
+    fs.writeFileSync(projectsJson, JSON.stringify([{ id: 'p-1', name: 'Valid' }]));
+    fs.writeFileSync(countersJson, JSON.stringify({ LEG: 1 }));
+
+    const appRoot = path.resolve(__dirname, '..');
+    const migrateScript = path.join(appRoot, 'scripts', 'migrate-json-to-sqlite.ts');
+    const result = spawnSync('npx', ['tsx', migrateScript], {
+      env: { ...process.env, DEVFLOW_APP_ROOT: fakeAppRoot, DEVFLOW_DB_PATH: verifiedDbPath },
+      encoding: 'utf8',
+      cwd: appRoot,
+      shell: true,
+    });
+    const stdout = result.stdout || '';
+    const stderr = result.stderr || '';
+
+    // Re-open verifiedDbPath and verify NO rows were inserted for any entity
+    const db = new Database(verifiedDbPath, { readonly: true });
+    const projectCount = (db.prepare('SELECT COUNT(*) as c FROM projects').get() as { c: number }).c;
+    const taskCount = (db.prepare('SELECT COUNT(*) as c FROM tasks').get() as { c: number }).c;
+    const counterCount = (db.prepare('SELECT COUNT(*) as c FROM counters').get() as { c: number }).c;
+    db.close();
+
+    const exitNonZero = result.status !== 0;
+    const noValidInserted = projectCount === 0 && taskCount === 0 && counterCount === 0;
+    const jsonNotRenamed = fs.existsSync(tasksJson) && fs.existsSync(projectsJson) && fs.existsSync(countersJson);
+    const reportedAbort = stdout.includes('"aborted": true');
+
+    assert(
+      exitNonZero && noValidInserted && jsonNotRenamed && reportedAbort,
+      'Migration aborts cleanly on invalid legacy data',
+      `exitNonZero=${exitNonZero}(status=${result.status}) noValidInserted=${noValidInserted}(proj=${projectCount} task=${taskCount} ctr=${counterCount}) jsonNotRenamed=${jsonNotRenamed} reportedAbort=${reportedAbort} stderr=${stderr.slice(0, 200)}`,
+    );
+  } catch (e) {
+    assert(false, 'Migration aborts cleanly on invalid legacy data', (e as Error).message);
   } finally {
     env.cleanup();
   }

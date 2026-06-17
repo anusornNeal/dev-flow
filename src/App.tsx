@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   Plus, 
   Terminal, 
@@ -56,30 +56,37 @@ const COLUMNS: Column[] = [
 
 export default function App() {
   // View-model-owned board + project state. These hooks handle fetch + polling + optimistic merge.
+  // We migrate the legacy `devflow_selected_project` localStorage key into the view-model's
+  // `devflow.activeProjectId` key on first mount so users with a previously-selected project
+  // do not see an empty board after the DVF-0209 refactor.
+  useEffect(() => {
+    try {
+      const legacy = localStorage.getItem('devflow_selected_project');
+      const modern = localStorage.getItem('devflow.activeProjectId');
+      if (legacy && !modern) {
+        localStorage.setItem('devflow.activeProjectId', legacy);
+      }
+    } catch {
+      // localStorage unavailable - non-fatal
+    }
+  }, []);
+
   const projectsViewModel = useProjectViewModel();
   const projects = projectsViewModel.projects as unknown as Project[];
-  const activeProjectIdState = projectsViewModel.activeProjectId;
-  const setActiveProjectIdViewModel = projectsViewModel.setActiveProjectId;
-  const [activeProjectIdLocal, setActiveProjectIdLocal] = useState<string>('');
+  const activeProjectId = projectsViewModel.activeProjectId || '';
+  // Wrap view-model setter to match Sidebar's (id: string) => void signature. Empty string clears.
+  const setActiveProjectId = useCallback((id: string) => {
+    projectsViewModel.setActiveProjectId(id || null);
+  }, [projectsViewModel]);
 
   const boardViewModel = useBoardViewModel({
-    projectId: activeProjectIdLocal || activeProjectIdState,
+    projectId: activeProjectId,
   });
   const tasks = boardViewModel.tasks as unknown as Task[];
   const setTasks = boardViewModel.setTasks as unknown as (u: (prev: Task[]) => Task[]) => void;
   const applyServerTasks = boardViewModel.applyServerTasks;
 
   const [persistenceError, setPersistenceError] = useState<string | null>(null);
-  const [activeProjectId, setActiveProjectId] = useState<string>(() => {
-    return localStorage.getItem('devflow_selected_project') || '';
-  });
-
-  // Sync the view-model's active project with the local state so the board refetches when needed.
-  useEffect(() => {
-    if (activeProjectIdState && activeProjectIdState !== activeProjectIdLocal) {
-      setActiveProjectIdLocal(activeProjectIdState);
-    }
-  }, [activeProjectIdState]);
   const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
   const [draggedOverColumn, setDraggedOverColumn] = useState<TaskStatus | null>(null);
   const [pendingEmergencyMove, setPendingEmergencyMove] = useState<{ sourceTask: Task, status: TaskStatus } | null>(null);
@@ -148,10 +155,9 @@ export default function App() {
       setPersistenceError(null);
       const list = projectsViewModel.projects;
       if (list.length > 0) {
-        setActiveProjectId(prev => {
-          const isValidId = list.some((p) => p.id === prev);
-          return isValidId ? prev : list[0].id;
-        });
+        const currentId = projectsViewModel.activeProjectId;
+        const isValidId = list.some((p) => p.id === currentId);
+        setActiveProjectId(isValidId ? currentId : list[0].id);
       }
     } catch (err) {
       console.warn('Backend projects API connection unavailable:', err);
@@ -191,12 +197,10 @@ export default function App() {
       await apiClient.fetchJson('DELETE', `/api/projects/${encodeURIComponent(id)}`);
       const remainingProjects = projectsViewModel.projects.filter(p => p.id !== id);
       await projectsViewModel.refresh();
-      setActiveProjectId(prevId => {
-        if (prevId === id) {
-          return remainingProjects.length > 0 ? remainingProjects[0].id : '';
-        }
-        return prevId;
-      });
+      const currentId = projectsViewModel.activeProjectId;
+      if (currentId === id) {
+        setActiveProjectId(remainingProjects.length > 0 ? remainingProjects[0].id : null);
+      }
       fetchTasksFromApi();
       return true;
     } catch (err) {
@@ -231,13 +235,6 @@ export default function App() {
 
     return () => clearInterval(intervalId);
   }, []);
-
-  // Keep UI-only preference in localStorage; task data remains backend-owned.
-  useEffect(() => {
-    if (mounted && activeProjectId) {
-      localStorage.setItem('devflow_selected_project', activeProjectId);
-    }
-  }, [activeProjectId, mounted]);
 
   // Handle Drag Start
   const handleDragStart = (e: React.DragEvent, id: string) => {

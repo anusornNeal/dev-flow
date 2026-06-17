@@ -14,6 +14,8 @@ import { validateEnum, validateString } from '../validation';
 import { getDevFlowAppRoot } from '../../lib/devFlowPaths';
 import { isValidTransition, getValidationErrorMessage } from '../../lib/statusTransitions';
 import { buildAgentLaunchConfig, runAgentLaunchPreflight, type AgentLaunchPreflightCode } from '../services/agentLaunchConfig';
+import { applyChecklistToggle as applyChecklistToggleUseCase, validateTaskPatch as validateTaskPatchUseCase } from '../useCases/taskUseCases';
+import { canRetryRun as canRetryRunUseCase, canCancelRun as canCancelRunUseCase, validateCompletion as validateCompletionUseCase } from '../useCases/agentRunUseCases';
 import type { AgentCompletionPayload, AgentCompletionStatus, TaskStatus } from '../../types';
 
 const STALE_AGENT_RUN_MS = 30 * 60 * 1000;
@@ -815,7 +817,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     if (activeRun) return res.status(409).json({ error: `Task already has active run ${activeRun.id}`, run: activeRun });
 
     const latestRun = getLatestAgentRunForTask(task.id);
-    if (!latestRun || latestRun.status !== 'failed') {
+    if (!latestRun || !canRetryRunUseCase(latestRun as any)) {
       return res.status(400).json({ error: 'Only a failed latest run can be retried.' });
     }
 
@@ -852,6 +854,17 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     const payloadError = validateAgentCompletionPayload(req.body);
     if (payloadError) {
       return res.status(400).json({ error: payloadError });
+    }
+
+    // Use-case level guard: the summary + status invariants live in agentRunUseCases so the
+    // route handler does not have to redeclare them. We layer the check after the field-level
+    // service validation so the response code stays 400 for both.
+    const useCaseValidation = validateCompletionUseCase({
+      status: req.body.status,
+      summary: req.body.summary,
+    });
+    if (!useCaseValidation.ok) {
+      return res.status(400).json({ error: useCaseValidation.reason });
     }
 
     const payload = normalizeAgentCompletionPayload(req.body);
@@ -1381,12 +1394,14 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
       return res.status(403).json({ error: 'Task is locked by an agent. Use emergency flag to override.' });
     }
 
-    item.completed = !item.completed;
+    // Delegate the pure flip to the use-case so the route handler stays focused on transport concerns.
+    task.checklist = applyChecklistToggleUseCase(checklist, item.id || item.text);
+    const toggled = task.checklist.find((entry: any) => (entry.id || entry.text) === req.body.checklistId);
     task.updatedAt = new Date().toISOString();
     task.logs = [...task.logs, {
       id: `log-chk-toggle-${Date.now()}`,
       timestamp: new Date().toISOString(),
-      message: `Checklist step "${item.text}" set to ${item.completed ? 'COMPLETED' : 'INCOMPLETE'} via Specific API`,
+      message: `Checklist step "${item.text}" set to ${toggled?.completed ? 'COMPLETED' : 'INCOMPLETE'} via Specific API`,
       type: 'update',
     }];
 
@@ -1577,6 +1592,15 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
 
     const validationErr = validateTaskPayload(updateBody, true);
     if (validationErr) return res.status(400).json({ error: validationErr });
+
+    // Use-case level invariant: a non-empty title is required. We layer the check after
+    // the field-level service validation so the response code stays 400 for both.
+    if (updateBody.title !== undefined) {
+      const useCaseValidation = validateTaskPatchUseCase({ title: updateBody.title });
+      if (!useCaseValidation.ok) {
+        return res.status(400).json({ error: (useCaseValidation as { ok: false; reason: string }).reason });
+      }
+    }
 
     const hasProjectInfo = !!(updateBody.projectId || updateBody.repo || updateBody.repoUrl || (req.headers && (req.headers['x-repo'] || req.headers['x-repo-url'])));
     if (hasProjectInfo) {

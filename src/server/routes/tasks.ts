@@ -8,7 +8,7 @@ import { cancelActiveRunsForTask, cancelStaleActiveRuns, createAgentRun, findAct
 import { loadTasks, generateDisplayId, saveTasks } from '../repositories/taskRepository';
 import { listAttachmentsForTask } from '../repositories/attachmentRepository';
 import { appendAgentRunLog, buildAgentCompletionSummary, createAgentRunFiles, createAgentRunResultRecord, getAgentRunHistoryPaths, getAgentTriggerScriptPath, getDevFlowApiBaseUrl, resolveAgentExecutionMode, resolveFromDevFlowAppRoot, writeAgentRunLaunchMetadata, writeAgentRunOutputSummary, writeAgentRunResult } from '../services/agentRunService';
-import { extractDesignImages, findProjectByIdentifier, findTaskByIdentifier, getAgentTaskContext, normalizeAgentCompletionPayload, renderTaskPrompt, resolveProjectIdFromRepo, validateAgentCompletionPayload, validateAgentParams, validateTaskPayload } from '../services/taskService';
+import { extractImages, findProjectByIdentifier, findTaskByIdentifier, getAgentTaskContext, normalizeAgentCompletionPayload, renderTaskPrompt, resolveProjectIdFromRepo, validateAgentCompletionPayload, validateAgentParams, validateTaskPayload } from '../services/taskService';
 import { createApiError, sendApiError } from '../services/api';
 import { validateEnum, validateString } from '../validation';
 import { getDevFlowAppRoot } from '../../lib/devFlowPaths';
@@ -985,6 +985,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
         targetFiles: Array.isArray(item.targetFiles) ? item.targetFiles : [],
         checklist: Array.isArray(item.checklist) ? item.checklist : [],
         designImages: extractDesignImages(item) || [],
+        images: extractImages(item) || [],
         specUrl: item.specUrl || undefined,
         agent: item.agent || undefined,
         model: item.model || undefined,
@@ -1076,6 +1077,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
           targetFiles: Array.isArray(item.targetFiles) ? item.targetFiles : currentTask.targetFiles,
           checklist: Array.isArray(item.checklist) ? item.checklist : currentTask.checklist,
           designImages: extractDesignImages(item, currentTask) || [],
+        images: extractImages(item, currentTask) || [],
           specUrl: item.specUrl !== undefined ? item.specUrl : currentTask.specUrl,
           agent: item.agent !== undefined ? item.agent : currentTask.agent,
           model: item.model !== undefined ? item.model : currentTask.model,
@@ -1128,6 +1130,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
         targetFiles: Array.isArray(item.targetFiles) ? item.targetFiles : [],
         checklist: Array.isArray(item.checklist) ? item.checklist : [],
         designImages: extractDesignImages(item) || [],
+        images: extractImages(item) || [],
         specUrl: item.specUrl || undefined,
         agent: item.agent || undefined,
         model: item.model || undefined,
@@ -1487,6 +1490,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
           targetFiles: Array.isArray(item.targetFiles) ? item.targetFiles : currentTask.targetFiles,
           checklist: Array.isArray(item.checklist) ? item.checklist : currentTask.checklist,
           designImages: extractDesignImages(item, currentTask) || [],
+        images: extractImages(item, currentTask) || [],
           specUrl: item.specUrl !== undefined ? item.specUrl : currentTask.specUrl,
           agent: item.agent !== undefined ? item.agent : currentTask.agent,
           model: item.model !== undefined ? item.model : currentTask.model,
@@ -1535,6 +1539,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
         targetFiles: Array.isArray(item.targetFiles) ? item.targetFiles : [],
         checklist: Array.isArray(item.checklist) ? item.checklist : [],
         designImages: extractDesignImages(item) || [],
+        images: extractImages(item) || [],
         specUrl: item.specUrl || undefined,
         agent: item.agent || undefined,
         model: item.model || undefined,
@@ -1596,6 +1601,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
       ...currentTask,
       ...updateBody,
       designImages: extractDesignImages(updateBody, currentTask) || [],
+        images: extractImages(updateBody, currentTask) || [],
       updatedAt: new Date().toISOString(),
     };
 
@@ -1674,7 +1680,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
       const VALID_FIELDS: Set<string> = new Set([
         'title', 'description', 'status', 'priority', 'branch', 'tags', 'targetFiles',
         'checklist', 'effort', 'model', 'agent', 'parentId', 'reasoning',
-        'acceptanceCriteria', 'verification', 'repoContext', 'specUrl', 'designImages', 'jiraKey', 'sourceUrl',
+        'acceptanceCriteria', 'verification', 'repoContext', 'specUrl', 'designImages', 'images', 'jiraKey', 'sourceUrl',
       ]);
 
       const projectDefaults = {
@@ -1811,6 +1817,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
             targetFiles: Array.isArray(f.targetFiles) ? f.targetFiles : [],
             checklist: Array.isArray(f.checklist) ? f.checklist : [],
             designImages: extractDesignImages(f) || [],
+        images: extractImages(f) || [],
             effort: f.effort || undefined,
             model: f.model || undefined,
             agent: f.agent || undefined,

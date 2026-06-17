@@ -35,7 +35,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   createdAt TEXT,
   updatedAt TEXT,
   logs TEXT, -- JSON string
-  designImages TEXT -- JSON string
+  designImages TEXT, -- JSON string
+  images TEXT -- JSON string
 );
 
 CREATE TABLE IF NOT EXISTS agent_runs (

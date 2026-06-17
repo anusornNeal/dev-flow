@@ -17,7 +17,8 @@ import { loadSkillsRegistry } from './src/server/repositories/skillsRepository';
 import { registerApiRoutes } from './src/server/routes/registerApiRoutes';
 import { createDevFlowMcpServer } from './src/server/mcp';
 import type { AppState } from './src/server/types';
-import { getDevFlowAppRoot, resolveFromDevFlowAppRoot } from './src/lib/devFlowPaths';
+import type { AppState } from './src/server/types';
+import { getDevFlowAppRoot, resolveFromDevFlowAppRoot, getDevFlowUploadsDir } from './src/lib/devFlowPaths';
 
 const AGENT_LOG_FILE = resolveFromDevFlowAppRoot('logs', 'agent-trigger.log');
 
@@ -141,14 +142,22 @@ async function startServer() {
   const port = 3000;
   const apiBaseUrl = `http://127.0.0.1:${port}`;
 
+  const activeTransports = new Map<string, SSEServerTransport>();
+  const debugSse = process.env.DEBUG_SSE === '1';
+  const shortId = (id: string) => id.slice(0, 8);
+
+  app.use('/api', (req, res, next) => {
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
+    next();
+  });
+
+  // Serve static images uploaded to dev-flow-data/uploads/images
+  app.use('/api/static/images', express.static(path.join(getDevFlowUploadsDir(), 'images')));
+
   registerApiRoutes(app, {
     state,
     writeAgentLog,
   });
-
-  const activeTransports = new Map<string, SSEServerTransport>();
-  const debugSse = process.env.DEBUG_SSE === '1';
-  const shortId = (id: string) => id.slice(0, 8);
 
   app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', '*');

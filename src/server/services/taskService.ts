@@ -122,10 +122,20 @@ export function validateAgentParams(item: any, tasks: any[]): string | null {
   return null;
 }
 
-export function extractDesignImages(item: any, currentTask?: any): string[] | undefined {
-  if (item.designImages !== undefined) return item.designImages;
-  if (item.designImage !== undefined) return item.designImage ? [item.designImage] : [];
-  if (currentTask) return currentTask.designImages || (currentTask.designImage ? [currentTask.designImage] : undefined);
+export function extractImages(item: any, currentTask?: any): any[] | undefined {
+  let imgs: any[] = [];
+  if (item.images !== undefined) imgs = imgs.concat(item.images);
+  
+  // Auto-convert legacy fields in payload
+  const legacy = item.designImages || (item.designImage ? [item.designImage] : undefined);
+  if (legacy && legacy.length > 0) {
+    for (const url of legacy) {
+      imgs.push({ id: 'legacy-' + Math.random().toString(36).substr(2, 9), url, filename: 'legacy-design-image' });
+    }
+  }
+  
+  if (imgs.length > 0) return imgs;
+  if (currentTask && currentTask.images !== undefined) return currentTask.images;
   return undefined;
 }
 
@@ -288,7 +298,6 @@ export function getAgentTaskContext(state: AppState, targetId: string, includeLo
     instruction: cleanObject({
       description: task.description,
       reasoning: task.reasoning,
-      designImageCount: task.designImages?.length || 0,
     }),
     requirements: cleanObject({
       acceptanceCriteria: task.acceptanceCriteria,

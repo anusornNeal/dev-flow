@@ -23,6 +23,21 @@ export interface ChecklistItem {
 export type AgentCompletionStatus = 'success' | 'failed' | 'cancelled';
 export type AgentCompletionTestResult = 'passed' | 'failed' | 'not-run';
 
+export interface AgentMessage {
+  id: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  timestamp: string;
+}
+
+export interface TaskImage {
+  id: string;
+  filename: string;
+  url: string;
+  absolutePath: string;
+  createdAt: string;
+}
+
 export interface AgentCompletionTest {
   command: string;
   result: AgentCompletionTestResult;
@@ -55,9 +70,11 @@ export interface Task {
   logs: LogEntry[];
   targetFiles?: string[];
   checklist?: ChecklistItem[];
-  designImage?: string; // DEPRECATED: use designImages
-  designImages?: string[]; // Array of up to 5 Image URLs/Base64s
-  specUrl?: string; // Specification link or text
+  repoContext?: string;
+  specUrl?: string;
+  images?: TaskImage[]; // New unlimited local image storage
+  jiraKey?: string;
+  sourceUrl?: string; // Specification link or text
   agent?: string; // Codex | Antigravity | Claude
   activeAgent?: string; // Currently working agent
   latestAgentRun?: {

@@ -63,7 +63,17 @@ export function loadTasks(state: AppState) {
     targetFiles: item.targetFiles ? JSON.parse(item.targetFiles) : undefined,
     checklist: item.checklist ? JSON.parse(item.checklist) : undefined,
     logs: item.logs ? JSON.parse(item.logs) : undefined,
-    designImages: item.designImages ? JSON.parse(item.designImages) : undefined,
+    images: (() => {
+      let imgs = item.images ? JSON.parse(item.images) : [];
+      // Auto-migrate legacy designImages if any
+      const legacy = item.designImages ? JSON.parse(item.designImages) : [];
+      if (legacy.length > 0) {
+        for (const url of legacy) {
+          imgs.push({ id: 'legacy-' + Math.random().toString(36).substr(2, 9), url, filename: 'legacy-design-image' });
+        }
+      }
+      return imgs.length > 0 ? imgs : undefined;
+    })(),
   })).map((task) => {
     const activeRun = getActiveRunForTask(task.id);
     const latestRun = getLatestAgentRunForTask(task.id);
@@ -91,7 +101,7 @@ export function loadTasks(state: AppState) {
 }
 
 export function saveTasks(state: AppState) {
-  const stmt = db.prepare('INSERT OR REPLACE INTO tasks (id, displayId, title, description, projectId, status, priority, branch, tags, targetFiles, checklist, effort, model, agent, parentId, reasoning, acceptanceCriteria, verification, repoContext, jiraKey, repo, createdAt, updatedAt, logs, designImages) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+  const stmt = db.prepare('INSERT OR REPLACE INTO tasks (id, displayId, title, description, projectId, status, priority, branch, tags, targetFiles, checklist, effort, model, agent, parentId, reasoning, acceptanceCriteria, verification, repoContext, jiraKey, repo, createdAt, updatedAt, logs, designImages, images) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
   db.transaction(() => {
     const currentIds = state.tasksCache.map((task) => task.id);
     const tasksById = new Map(state.tasksCache.map((task) => [task.id, task]));
@@ -127,7 +137,8 @@ export function saveTasks(state: AppState) {
         item.checklist ? JSON.stringify(item.checklist) : null,
         item.effort, item.model, item.agent, item.parentId, item.reasoning, item.acceptanceCriteria, item.verification, item.repoContext, item.jiraKey, item.repo, item.createdAt, item.updatedAt,
         item.logs ? JSON.stringify(item.logs) : null,
-        item.designImages ? JSON.stringify(item.designImages) : null,
+        null, // Keep NULL for legacy designImages column
+        item.images ? JSON.stringify(item.images) : null,
       );
     }
   })();

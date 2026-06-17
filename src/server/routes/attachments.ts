@@ -15,6 +15,7 @@ import {
   type AttachmentRecord,
 } from '../repositories/attachmentRepository';
 import { findTaskByIdentifier } from '../services/taskService';
+import { TaskImage } from '../../types';
 
 const ALLOWED_MIME_PREFIXES = ['image/', 'application/pdf', 'text/'];
 const ALLOWED_MIME_EXACT = new Set([
@@ -53,6 +54,56 @@ function toRelativeFromUploads(absolutePath: string): string {
 }
 
 export function registerAttachmentRoutes(app: express.Express, deps: ApiRouteDeps) {
+  // General Image Upload (not tied to taskId yet)
+  app.post(
+    '/api/images/upload',
+    (req, res, next) => {
+      upload.single('file')(req, res, (err: any) => {
+        if (err) {
+          return sendApiError(res, createApiError(400, 'UPLOAD_FAILED', err.message || 'Upload failed', { retryable: false }));
+        }
+        next();
+      });
+    },
+    (req, res) => {
+      try {
+        const file = (req as any).file as Express.Multer.File | undefined;
+        if (!file) {
+          return sendApiError(res, createApiError(400, 'NO_FILE', 'No file uploaded under field "file"', { retryable: false }));
+        }
+
+        if (!isAllowedMime(file.mimetype)) {
+          return sendApiError(
+            res,
+            createApiError(415, 'UNSUPPORTED_MEDIA_TYPE', `Mime type not allowed: ${file.mimetype}`, { retryable: false }),
+          );
+        }
+
+        const imagesDir = path.join(getDevFlowUploadsDir(), 'images');
+        fs.mkdirSync(imagesDir, { recursive: true });
+
+        const imageId = `img-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+        const safeName = sanitizeFileName(file.originalname);
+        const storedName = `${imageId}-${safeName}`;
+        const absoluteFilePath = path.join(imagesDir, storedName);
+        fs.writeFileSync(absoluteFilePath, file.buffer);
+
+        const imageRecord: TaskImage = {
+          id: imageId,
+          filename: file.originalname,
+          url: `/api/static/images/${storedName}`,
+          absolutePath: absoluteFilePath,
+          createdAt: new Date().toISOString(),
+        };
+
+        res.json(imageRecord);
+      } catch (err: any) {
+        console.error('Image upload error:', err);
+        sendApiError(res, createApiError(500, 'UPLOAD_ERROR', err.message, { retryable: true }));
+      }
+    }
+  );
+
   app.post(
     '/api/tasks/:taskId/attachments',
     (req, res, next) => {

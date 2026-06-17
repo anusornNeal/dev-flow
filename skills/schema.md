@@ -51,7 +51,15 @@ All other task fields are identical across both interfaces.
   "acceptanceCriteria": "string",
   "verification": "string",
   "repoContext": "string",
-  "designImages": ["string (URL or base64, max 5)"],
+  "images": [
+    {
+      "id": "string",
+      "filename": "string",
+      "url": "string",
+      "absolutePath": "string"
+    }
+  ],
+  "designImages": ["string (URL or base64)"],
   "specUrl": "string",
   "jiraKey": "string",
   "repo": "string",
@@ -59,7 +67,7 @@ All other task fields are identical across both interfaces.
 }
 ```
 
-> **Deprecated:** `designImage` (singular string) is kept for backward compatibility only. Always use `designImages` (array) for new cards.
+> **Deprecated:** `designImages` and `designImage` are kept for backward compatibility only. Always use `images` (array of TaskImage objects) for new cards.
 
 Always confirm the latest schema with:
 
@@ -237,19 +245,26 @@ Bad (missing `id`):
 ]
 ```
 
-### designImages
+### images
 
 Use the array form for design references:
 
 ```json
 {
-  "designImages": ["https://example.com/mockup-v2.png"]
+  "images": [
+    {
+      "id": "img-123",
+      "filename": "mockup-v2.png",
+      "url": "/api/static/images/mockup-v2.png",
+      "absolutePath": "C:/Users/.../images/mockup-v2.png"
+    }
+  ]
 }
 ```
 
 Rules:
-- Prefer `designImages` (array of up to 5 URLs or base64 strings).
-- `designImage` (singular) is **deprecated**. Do not use it in new cards.
+- Prefer `images` (array of objects) which gives you an `absolutePath` you can view with `view_file`.
+- `designImages` and `designImage` are **deprecated**. Do not use them in new cards.
 - Do not rely on Jira-authenticated images as the only source.
 
 ### repoContext

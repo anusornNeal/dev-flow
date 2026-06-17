@@ -73,7 +73,19 @@ const taskMutationProperties = {
   verification: { type: 'string', description: 'Verification steps.' },
   repoContext: { type: 'string', description: 'Repository context.' },
   specUrl: { type: 'string', description: 'Specification URL.' },
-  designImages: { type: 'array', items: { type: 'string' }, description: 'Design image URLs or data.' },
+  images: {
+    type: 'array',
+    description: 'Attached images with local file paths.',
+    items: {
+      type: 'object',
+      properties: {
+        filename: { type: 'string' },
+        absolutePath: { type: 'string', description: 'Use view_file on this path to see the image natively.' },
+        url: { type: 'string' }
+      }
+    }
+  },
+  designImages: { type: 'array', items: { type: 'string' }, description: 'Legacy design image URLs or data.' },
   jiraKey: { type: 'string', description: 'Jira issue key.' },
   sourceUrl: { type: 'string', description: 'Source URL.' },
 };

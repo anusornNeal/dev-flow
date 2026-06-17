@@ -7,7 +7,8 @@ import React, { useState } from 'react';
 import { X, GitBranch, PlusSquare, FileCode, CheckSquare, Sparkles, Image as ImageIcon, Link as LinkIcon , Bot, Zap} from 'lucide-react';
 import { CustomSelect } from './CustomSelect';
 import { AgentLogo } from './AgentLogo';
-import { Task, TaskPriority, TaskStatus, ChecklistItem, TaskCategory } from '../types';
+import { Task, TaskPriority, TaskStatus, ChecklistItem, TaskCategory, TaskImage } from '../types';
+import ImageViewer from './ImageViewer';
 import { AGENTS_CONFIG, getModelConfig, defaultModelForAgent, defaultEffortForModel } from '../lib/agentsConfig';
 
 interface CreateTaskModalProps {
@@ -26,11 +27,40 @@ export default function CreateTaskModal({ onClose, onSubmit, parentId, parentTit
   const [status, setStatus] = useState<TaskStatus>('backlog');
   const [filesInput, setFilesInput] = useState('');
   const [checklistInput, setChecklistInput] = useState('');
-  const [designImages, setDesignImages] = useState<string[]>([]);
+  const [images, setImages] = useState<TaskImage[]>([]);
   const [specUrl, setSpecUrl] = useState('');
   const [agent, setAgent] = useState('');
   const [model, setModel] = useState('');
   const [effort, setEffort] = useState('');
+  const [viewingImage, setViewingImage] = useState<TaskImage | null>(null);
+
+  const handlePaste = async (e: React.ClipboardEvent) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const item of items) {
+      if (item.type.startsWith('image/')) {
+        const file = item.getAsFile();
+        if (file) await uploadImage(file);
+      }
+    }
+  };
+
+  const uploadImage = async (file: File) => {
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await fetch('/api/images/upload', {
+        method: 'POST',
+        body: formData
+      });
+      if (res.ok) {
+        const img = await res.json();
+        setImages(prev => [...prev, img]);
+      }
+    } catch (err) {
+      console.error('Upload failed:', err);
+    }
+  };
 
   const injectTemplate = () => {
     const template = `### Objective
@@ -81,7 +111,7 @@ class MyViewModel: ViewModel() {
       tags: tagsArray,
       targetFiles: filesArray,
       checklist: parsedChecklist,
-      designImages: designImages.length > 0 ? designImages : undefined,
+      images: images.length > 0 ? images : undefined,
       specUrl: specUrl.trim() || undefined,
       agent: agent || '',
       model: model || '',
@@ -91,9 +121,11 @@ class MyViewModel: ViewModel() {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in select-text">
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in select-text" onPaste={handlePaste}>
       {/* Outer Close clicking */}
       <div className="fixed inset-0" onClick={onClose} />
+
+      <ImageViewer image={viewingImage} onClose={() => setViewingImage(null)} />
 
       {/* Modal Card */}
       <div className="bg-[#fcfaf5] dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] w-full max-w-xl rounded-3xl shadow-2xl relative z-10 overflow-hidden flex flex-col justify-between font-sans">
@@ -314,54 +346,42 @@ class MyViewModel: ViewModel() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-b border-[#ebdcb9]/45 dark:border-[#584a3b]/45 py-3 font-sans">
             <div className="space-y-1">
               <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] font-mono uppercase tracking-widest flex items-center gap-1 font-extrabold pl-0.5">
-                <ImageIcon size={12} className="text-[#bf8a50] dark:text-[#d6b56d]" /> Design Image (File or URL)
+                <ImageIcon size={12} className="text-[#bf8a50] dark:text-[#d6b56d]" /> Attached Images (Paste or Select)
               </label>
               <div className="space-y-2">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <label className={`text-[10px] bg-white dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] px-2.5 py-1.5 rounded-lg text-[#5c493c] dark:text-[#f3eadf] hover:bg-[#fffcf6] dark:bg-[#1e1914] dark:hover:bg-[#1e1914] cursor-pointer inline-flex items-center gap-1 font-bold ${designImages.length >= 5 ? 'opacity-50 cursor-not-allowed' : ''}`}>
-                    <span>Upload Image(s) {designImages.length > 0 && `(${designImages.length}/5)`}</span>
+                  <label className="text-[10px] bg-white dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] px-2.5 py-1.5 rounded-lg text-[#5c493c] dark:text-[#f3eadf] hover:bg-[#fffcf6] cursor-pointer inline-flex items-center gap-1 font-bold transition-colors">
+                    <span>Upload Image(s) {images.length > 0 && `(${images.length})`}</span>
                     <input
                       type="file"
                       accept="image/*"
                       multiple
-                      disabled={designImages.length >= 5}
                       className="hidden"
                       onChange={(e) => {
                         const files = Array.from(e.target.files || []);
-                        const availableSlots = 5 - designImages.length;
-                        const filesToProcess = files.slice(0, availableSlots);
-                        
-                        filesToProcess.forEach(file => {
-                          const reader = new FileReader();
-                          reader.onloadend = () => {
-                            if (typeof reader.result === 'string') {
-                              setDesignImages(prev => [...prev, reader.result as string]);
-                            }
-                          };
-                          reader.readAsDataURL(file);
-                        });
+                        files.forEach(file => uploadImage(file));
                       }}
                     />
                   </label>
-                  {designImages.length > 0 && (
+                  {images.length > 0 && (
                     <button
                       type="button"
-                      onClick={() => setDesignImages([])}
+                      onClick={() => setImages([])}
                       className="text-[10px] text-red-500 font-bold hover:underline cursor-pointer"
                     >
                       Clear All
                     </button>
                   )}
                 </div>
-                {designImages.length > 0 && (
+                {images.length > 0 && (
                   <div className="flex gap-2 overflow-x-auto pb-1 mt-2">
-                    {designImages.map((img, idx) => (
-                      <div key={idx} className="relative border border-[#ebdcb9] dark:border-[#584a3b] rounded-lg overflow-hidden h-14 w-14 shrink-0 bg-white dark:bg-[#1e1914] group">
-                        <img src={img} alt={`Preview ${idx + 1}`} className="h-full w-full object-cover" referrerPolicy="no-referrer" />
+                    {images.map((img) => (
+                      <div key={img.id} className="relative border border-[#ebdcb9] dark:border-[#584a3b] rounded-lg overflow-hidden h-14 w-14 shrink-0 bg-white dark:bg-[#1e1914] group cursor-pointer" onClick={() => setViewingImage(img)}>
+                        <img src={img.url} alt={img.filename} className="h-full w-full object-cover" />
                         <button 
                           type="button"
-                          onClick={() => setDesignImages(prev => prev.filter((_, i) => i !== idx))}
-                          className="absolute top-0 right-0 bg-red-500 text-white dark:text-[#f3eadf] w-4 h-4 flex items-center justify-center text-[10px] opacity-0 group-hover:opacity-100 transition-opacity"
+                          onClick={(e) => { e.stopPropagation(); setImages(prev => prev.filter((i) => i.id !== img.id)); }}
+                          className="absolute top-0 right-0 bg-red-500 text-white w-4 h-4 flex items-center justify-center text-[10px] opacity-0 group-hover:opacity-100 transition-opacity rounded-bl-md"
                         >
                           ✕
                         </button>

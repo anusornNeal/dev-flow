@@ -246,18 +246,18 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
           </div>
         )}
 
-        {/* Card Thumbnail Preview (if design image is attached) */}
-        {((task.designImages && task.designImages.length > 0) || task.designImage) && (
+        {/* Card Thumbnail Preview (if image is attached) */}
+        {task.images && task.images.length > 0 && (
           <div className="relative mb-3 mt-1 rounded-lg overflow-hidden border border-[#ebdcb9]/50 dark:border-[#584a3b]/50 h-20 bg-white dark:bg-[#292119]/50">
             <img 
-              src={(task.designImages && task.designImages[0]) || task.designImage} 
-              alt="Design Preview" 
+              src={task.images[0].url} 
+              alt="Preview" 
               className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" 
               referrerPolicy="no-referrer"
             />
-            {task.designImages && task.designImages.length > 1 && (
+            {task.images.length > 1 && (
               <div className="absolute top-1 right-1 bg-black/60 backdrop-blur-sm text-white text-[9px] font-bold px-1.5 py-0.5 rounded shadow-sm">
-                +{task.designImages.length - 1}
+                +{task.images.length - 1}
               </div>
             )}
           </div>

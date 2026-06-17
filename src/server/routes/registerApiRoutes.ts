@@ -6,6 +6,7 @@ import { registerProjectRoutes } from './projects';
 import { registerSettingsRoutes } from './settings';
 import { registerSkillRoutes } from './skills';
 import { registerTaskRoutes } from './tasks';
+import { registerAttachmentRoutes } from './attachments';
 
 export function registerApiRoutes(app: express.Express, deps: ApiRouteDeps) {
   app.use('/api', express.json({ limit: '50mb' }));
@@ -15,4 +16,5 @@ export function registerApiRoutes(app: express.Express, deps: ApiRouteDeps) {
   registerProjectRoutes(app, deps);
   registerSettingsRoutes(app, deps);
   registerTaskRoutes(app, deps);
+  registerAttachmentRoutes(app, deps);
 }

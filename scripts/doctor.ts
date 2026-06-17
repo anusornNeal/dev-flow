@@ -3,6 +3,8 @@ import os from 'os';
 import path from 'path';
 import net from 'net';
 import { spawnSync } from 'child_process';
+import { getDevFlowAppRoot, getDevFlowUploadsDir, getDevFlowDbPath } from '../src/lib/devFlowPaths';
+import db from '../src/db/index';
 
 type CheckResult = {
   label: string;
@@ -106,6 +108,64 @@ async function main() {
 
   const portResult = await checkPortAvailable(3000);
   results.push(portResult);
+
+  // Required tables check (per DVF-0173)
+  const requiredTables = ['projects', 'tasks', 'counters', 'settings', 'skills', 'agent_runs', 'attachments'];
+  try {
+    const rows = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table'")
+      .all() as Array<{ name: string }>;
+    const present = new Set(rows.map((r) => r.name));
+    const missing = requiredTables.filter((t) => !present.has(t));
+    results.push({
+      label: 'Required SQLite tables',
+      ok: missing.length === 0,
+      detail: missing.length === 0
+        ? `All ${requiredTables.length} required tables present: ${requiredTables.join(', ')}`
+        : `Missing tables: ${missing.join(', ')}`,
+    });
+  } catch (e) {
+    results.push({ label: 'Required SQLite tables', ok: false, detail: (e as Error).message });
+  }
+
+  // Uploads directory writability
+  const uploadsDir = getDevFlowUploadsDir();
+  if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+  }
+  const uploadsProbe = path.join(uploadsDir, '.doctor-write-test');
+  try {
+    fs.writeFileSync(uploadsProbe, 'doctor', 'utf8');
+    fs.unlinkSync(uploadsProbe);
+    results.push({ label: 'Uploads directory', ok: true, detail: `Writable: ${uploadsDir}` });
+  } catch (e) {
+    results.push({ label: 'Uploads directory', ok: false, detail: `Write check failed: ${(e as Error).message}` });
+  }
+
+  // WAL files check
+  const dbPathResolved = getDevFlowDbPath();
+  const walPath = `${dbPathResolved}-wal`;
+  const shmPath = `${dbPathResolved}-shm`;
+  results.push({
+    label: 'WAL files',
+    ok: true,
+    detail: `WAL=${fs.existsSync(walPath) ? 'present' : 'absent'} SHM=${fs.existsSync(shmPath) ? 'present' : 'absent'}`,
+  });
+
+  // Legacy JSON detection
+  const appRoot = getDevFlowAppRoot();
+  const legacy = ['tasks.json', 'projects.json', 'counters.json']
+    .map((n) => path.join(appRoot, n))
+    .filter((p) => fs.existsSync(p));
+  if (legacy.length > 0) {
+    results.push({
+      label: 'Legacy JSON files',
+      ok: false,
+      detail: `Found: ${legacy.map((p) => path.basename(p)).join(', ')}. Run npm run migrate:json.`,
+    });
+  } else {
+    results.push({ label: 'Legacy JSON files', ok: true, detail: 'No legacy JSON files detected.' });
+  }
 
   if (fs.existsSync(projectsBackupPath)) {
     try {

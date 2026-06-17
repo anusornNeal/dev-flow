@@ -134,7 +134,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
         q: { type: 'string', description: 'Optional project search string.' },
       },
     },
-    outputSchema: { type: 'array', items: { type: 'object' } },
+    outputSchema: { type: 'object', properties: { projects: { type: 'array', items: { type: 'object' } } } },
     lightweight: true,
     buildHttpRequest: (args) => ({
       method: 'GET',
@@ -617,7 +617,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
         kind: { type: 'string', enum: ['authoring', 'workflow', 'prompt', 'custom'], description: 'Filter skills by category.' },
       },
     },
-    outputSchema: { type: 'array', items: { type: 'object' } },
+    outputSchema: { type: 'object', properties: { skills: { type: 'array', items: { type: 'object' } } } },
     lightweight: true,
     buildHttpRequest: (args) => ({
       method: 'GET',

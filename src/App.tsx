@@ -73,14 +73,31 @@ export default function App() {
 
   const projectsViewModel = useProjectViewModel();
   const projects = projectsViewModel.projects as unknown as Project[];
-  const activeProjectId = projectsViewModel.activeProjectId || '';
+  // We need a non-empty projectId so useBoardViewModel does not short-circuit to an empty
+  // task list. If the view-model has no active project selected yet (first run, or stale
+  // localStorage), fall back to the first project in the list as soon as projects load.
+  const [bootstrapProjectId, setBootstrapProjectId] = useState<string>('');
+  useEffect(() => {
+    if (bootstrapProjectId) return;
+    if (projectsViewModel.activeProjectId) {
+      setBootstrapProjectId(projectsViewModel.activeProjectId);
+      return;
+    }
+    if (projects.length > 0) {
+      const first = projects[0];
+      projectsViewModel.setActiveProjectId(first.id);
+      setBootstrapProjectId(first.id);
+    }
+  }, [bootstrapProjectId, projectsViewModel, projects]);
+  const activeProjectId = projectsViewModel.activeProjectId || bootstrapProjectId;
   // Wrap view-model setter to match Sidebar's (id: string) => void signature. Empty string clears.
   const setActiveProjectId = useCallback((id: string) => {
     projectsViewModel.setActiveProjectId(id || null);
+    if (id) setBootstrapProjectId(id);
   }, [projectsViewModel]);
 
   const boardViewModel = useBoardViewModel({
-    projectId: activeProjectId,
+    projectId: activeProjectId || null,
   });
   const tasks = boardViewModel.tasks as unknown as Task[];
   const setTasks = boardViewModel.setTasks as unknown as (u: (prev: Task[]) => Task[]) => void;

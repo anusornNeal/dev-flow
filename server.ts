@@ -6,136 +6,16 @@
 import 'dotenv/config';
 import express from 'express';
 import path from 'path';
-import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { saveProjects as persistProjects, loadProjects as hydrateProjects } from './src/server/repositories/projectRepository';
-import { saveSettings as persistSettings, loadSettings as hydrateSettings } from './src/server/repositories/settingsRepository';
-import { generateDisplayId as generateTaskDisplayId, loadTasks as hydrateTasks, saveTasks as persistTasks } from './src/server/repositories/taskRepository';
-import { loadSkillsRegistry } from './src/server/repositories/skillsRepository';
 import { registerApiRoutes } from './src/server/routes/registerApiRoutes';
 import { createDevFlowMcpServer } from './src/server/mcp';
-import type { AppState } from './src/server/types';
+import { bootstrap, writeAgentLog } from './src/server/bootstrap';
 import { getDevFlowAppRoot, resolveFromDevFlowAppRoot, getDevFlowUploadsDir } from './src/lib/devFlowPaths';
 
-const AGENT_LOG_FILE = resolveFromDevFlowAppRoot('logs', 'agent-trigger.log');
-
-function writeAgentLog(level: 'INFO' | 'ERROR' | 'TRIGGER', message: string) {
-  const entry = `[${new Date().toISOString()}] [${level}] ${message}\n`;
-  try {
-    fs.appendFileSync(AGENT_LOG_FILE, entry, 'utf8');
-  } catch (err) {
-    console.error('[agent-log] Failed to write log:', err);
-  }
-  console.log(entry.trim());
-}
-
-let tasksCache: any[] = [];
-let projectsCache: any[] = [];
-let countersCache: Record<string, number> = {};
-let skillsRegistry: any[] = [];
-let settingsCache: {
-  ngrokUrl: string;
-  githubToken: string;
-  jiraToken: string;
-  jiraBaseUrl: string;
-  jiraEmail: string;
-  autoWork: boolean;
-  agentExecutionMode?: string;
-} = {
-  ngrokUrl: '',
-  githubToken: '',
-  jiraToken: '',
-  jiraBaseUrl: '',
-  jiraEmail: '',
-  autoWork: false,
-  agentExecutionMode: '',
-};
-
-const state: AppState = {
-  get tasksCache() {
-    return tasksCache;
-  },
-  set tasksCache(value) {
-    tasksCache = value;
-  },
-  get projectsCache() {
-    return projectsCache;
-  },
-  set projectsCache(value) {
-    projectsCache = value;
-  },
-  get countersCache() {
-    return countersCache;
-  },
-  set countersCache(value) {
-    countersCache = value;
-  },
-  get settingsCache() {
-    return settingsCache;
-  },
-  set settingsCache(value) {
-    settingsCache = value;
-  },
-  get skillsRegistry() {
-    return skillsRegistry;
-  },
-  set skillsRegistry(value) {
-    skillsRegistry = value;
-  },
-};
-
-function loadSettings() {
-  hydrateSettings(state);
-}
-
-function saveSettings() {
-  persistSettings(state);
-}
-
-function loadProjects() {
-  hydrateProjects(state);
-}
-
-function saveProjects() {
-  persistProjects(state);
-}
-
-function loadTasks() {
-  hydrateTasks(state);
-}
-
-function saveTasks() {
-  persistTasks(state);
-}
-
-function sanitizeStartupTasks() {
-  let changed = false;
-  for (const task of state.tasksCache) {
-    if (task.status === 'in-progress' && !task.activeAgent) {
-      task.status = 'todo';
-      changed = true;
-    }
-  }
-  if (changed) saveTasks();
-}
-
-function loadSkills() {
-  loadSkillsRegistry(state);
-}
-
-function generateDisplayId(projectId: string) {
-  return generateTaskDisplayId(state, projectId);
-}
-
-loadSettings();
-
 async function startServer() {
-  loadProjects();
-  loadTasks();
-  loadSkills();
-  sanitizeStartupTasks();
+  const { state } = bootstrap();
 
   const app = express();
   const port = 3000;
@@ -150,7 +30,6 @@ async function startServer() {
     next();
   });
 
-  // Serve static images uploaded to dev-flow-data/uploads/images
   app.use('/api/static/images', express.static(path.join(getDevFlowUploadsDir(), 'images')));
 
   registerApiRoutes(app, {
@@ -187,10 +66,6 @@ async function startServer() {
     }
   });
 
-  // POST /sse must route to the session-specific transport, NOT the latest.
-  // MCP clients identify themselves via ?sessionId= query parameter.
-  // Using a Set and picking the last element breaks under multiple concurrent
-  // clients (e.g., Tool A's message routes to Tool B's transport).
   app.post('/sse', async (req, res, next) => {
     const sessionId = typeof req.query.sessionId === 'string' ? req.query.sessionId : '';
     const transport = sessionId ? activeTransports.get(sessionId) : undefined;

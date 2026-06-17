@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
-import { GitBranch, Copy, Check, Trash2, FileCode, CheckSquare, Image as ImageIcon, Link as LinkIcon, Lock, AlertTriangle, Ban, CircleCheck, Bot, Zap, ChevronDown } from 'lucide-react';
+import { GitBranch, Copy, Check, Trash2, FileCode, CheckSquare, Image as ImageIcon, Link as LinkIcon, Lock, AlertTriangle, Ban, CircleCheck, Bot, Zap, ChevronDown, Flame, Coffee } from 'lucide-react';
 import { Task } from '../types';
 import { AGENTS_CONFIG, getModelConfig, defaultModelForAgent, defaultEffortForModel, getDisplayModelName } from '../lib/agentsConfig';
 import CopyTemplateButton from './CopyTemplateButton';
@@ -271,13 +271,13 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
 
           {/* Row 1: Files, Checklist, External Links */}
           <div className="flex flex-wrap items-center gap-1.5 w-full">
-            {/* Priority text */}
+            {/* Minimal Priority Indicator */}
             {task.priority !== 'medium' && (
-              <span className={`flex items-center gap-0.5 text-[9px] font-mono font-bold mr-1.5 px-1 rounded-sm border ${
-                task.priority === 'high' ? 'text-red-600 dark:text-[#df6b4f] border-red-200 dark:border-[#8f4133]' : 
-                'text-emerald-600 dark:text-[#8fce7c] border-emerald-200 dark:border-[#4a6b41]'
-              }`} title={`Priority: ${task.priority}`}>
-                {task.priority === 'high' ? '↑ High' : '↓ Low'}
+              <span className={`mr-1.5 transition-opacity ${
+                task.priority === 'high' ? 'text-[#de6b48]/80 dark:text-[#df6b4f]/80 hover:opacity-100' :
+                'text-[#8a725f]/60 dark:text-[#8a7a6a]/80 hover:opacity-100'
+              }`} title={`${task.priority === 'high' ? 'High' : 'Low'} Priority`}>
+                {task.priority === 'high' ? <Flame size={12} strokeWidth={2.5} /> : <Coffee size={12} strokeWidth={2.5} />}
               </span>
             )}
 

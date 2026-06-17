@@ -7,7 +7,7 @@ import React, { useState } from 'react';
 import { X, GitBranch, PlusSquare, FileCode, CheckSquare, Sparkles, Image as ImageIcon, Link as LinkIcon , Bot, Zap} from 'lucide-react';
 import { CustomSelect } from './CustomSelect';
 import { AgentLogo } from './AgentLogo';
-import { Task, TaskPriority, TaskStatus, ChecklistItem } from '../types';
+import { Task, TaskPriority, TaskStatus, ChecklistItem, TaskCategory } from '../types';
 import { AGENTS_CONFIG, getModelConfig, defaultModelForAgent, defaultEffortForModel } from '../lib/agentsConfig';
 
 interface CreateTaskModalProps {
@@ -22,6 +22,7 @@ export default function CreateTaskModal({ onClose, onSubmit, parentId, parentTit
   const [description, setDescription] = useState('');
   const [branch, setBranch] = useState('');
   const [priority, setPriority] = useState<TaskPriority>('medium');
+  const [category, setCategory] = useState<TaskCategory>('general');
   const [status, setStatus] = useState<TaskStatus>('backlog');
   const [filesInput, setFilesInput] = useState('');
   const [checklistInput, setChecklistInput] = useState('');
@@ -76,6 +77,7 @@ class MyViewModel: ViewModel() {
       status,
       branch: branch.trim() || undefined,
       priority,
+      category,
       tags: tagsArray,
       targetFiles: filesArray,
       checklist: parsedChecklist,
@@ -173,20 +175,38 @@ class MyViewModel: ViewModel() {
             </div>
           </div>
 
-          <div className="space-y-1">
-            <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold pl-0.5">
-              Severity Rating
-            </label>
-            <CustomSelect
-              className="w-full bg-white dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3.5 py-2.5 text-xs text-[#3a2f26] dark:text-[#f3eadf]"
-              value={priority}
-              onChange={(val) => setPriority(val as TaskPriority)}
-              options={[
-                { value: 'low', label: 'Low Severity' },
-                { value: 'medium', label: 'Medium Severity' },
-                { value: 'high', label: 'High Severity' }
-              ]}
-            />
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold pl-0.5">
+                Task Category
+              </label>
+              <CustomSelect
+                className="w-full bg-white dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3.5 py-2.5 text-xs text-[#3a2f26] dark:text-[#f3eadf]"
+                value={category}
+                onChange={(val) => setCategory(val as TaskCategory)}
+                options={[
+                  { value: 'general', label: 'General / Fullstack' },
+                  { value: 'frontend', label: 'Frontend / UI' },
+                  { value: 'backend', label: 'Backend / Infrastructure' }
+                ]}
+              />
+            </div>
+            
+            <div className="space-y-1">
+              <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold pl-0.5">
+                Severity Rating
+              </label>
+              <CustomSelect
+                className="w-full bg-white dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3.5 py-2.5 text-xs text-[#3a2f26] dark:text-[#f3eadf]"
+                value={priority}
+                onChange={(val) => setPriority(val as TaskPriority)}
+                options={[
+                  { value: 'low', label: 'Low Severity' },
+                  { value: 'medium', label: 'Medium Severity' },
+                  { value: 'high', label: 'High Severity' }
+                ]}
+              />
+            </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">

@@ -5,6 +5,7 @@
 
 export type TaskStatus = 'backlog' | 'todo' | 'in-progress' | 'ready-for-review' | 'done';
 export type TaskPriority = 'high' | 'medium' | 'low';
+export type TaskCategory = 'frontend' | 'backend' | 'general';
 
 export interface LogEntry {
   id: string;
@@ -47,6 +48,7 @@ export interface Task {
   status: TaskStatus;
   branch?: string;
   priority: TaskPriority;
+  category?: TaskCategory;
   tags: string[];
   createdAt: string;
   updatedAt: string;

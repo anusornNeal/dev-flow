@@ -132,13 +132,13 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
       }`}
       id={`task-card-${task.id}`}
     >
-      {/* Warm Priority Left Indicator Slider */}
-      {!isDone && (
+      {/* Category Left Indicator Slider */}
+      {!isDone && task.category && task.category !== 'general' && (
         <span 
           className={`w-1 h-16 absolute left-0 top-1/2 -translate-y-1/2 rounded-r-md ${
-            task.priority === 'high' ? 'bg-[#de6b48] dark:bg-[#df6b4f]' : 
-            task.priority === 'medium' ? 'bg-[#e5a93b] dark:bg-[#d6a549]' : 
-            'bg-[#7dad71] dark:bg-[#8fce7c]'
+            task.category === 'backend' ? 'bg-[#5c493c] dark:bg-[#8a7a6a]' : 
+            task.category === 'frontend' ? 'bg-[#3c829e] dark:bg-[#72a1b5]' : 
+            'bg-transparent'
           }`}
         />
       )}
@@ -271,7 +271,15 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
 
           {/* Row 1: Files, Checklist, External Links */}
           <div className="flex flex-wrap items-center gap-1.5 w-full">
-            {/* Priority dot removed */}
+            {/* Priority text */}
+            {task.priority !== 'medium' && (
+              <span className={`flex items-center gap-0.5 text-[9px] font-mono font-bold mr-1.5 px-1 rounded-sm border ${
+                task.priority === 'high' ? 'text-red-600 dark:text-[#df6b4f] border-red-200 dark:border-[#8f4133]' : 
+                'text-emerald-600 dark:text-[#8fce7c] border-emerald-200 dark:border-[#4a6b41]'
+              }`} title={`Priority: ${task.priority}`}>
+                {task.priority === 'high' ? '↑ High' : '↓ Low'}
+              </span>
+            )}
 
             {/* Files */}
             {filesCount > 0 && (

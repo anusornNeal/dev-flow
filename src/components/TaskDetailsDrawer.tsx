@@ -31,7 +31,7 @@ import {
   ExternalLink
 , Bot, Zap} from 'lucide-react';
 import { CustomSelect } from './CustomSelect';
-import { Task, TaskPriority, TaskStatus, LogEntry, ChecklistItem } from '../types';
+import { Task, TaskPriority, TaskStatus, LogEntry, ChecklistItem, TaskCategory } from '../types';
 import { AGENTS_CONFIG, getModelConfig, defaultModelForAgent, defaultEffortForModel } from '../lib/agentsConfig';
 import MarkdownRenderer from './MarkdownRenderer';
 import CopyTemplateButton from './CopyTemplateButton';
@@ -75,6 +75,7 @@ export default function TaskDetailsDrawer({
   const [editedDesc, setEditedDesc] = useState(task.description);
   const [editedBranch, setEditedBranch] = useState(task.branch || '');
   const [editedPriority, setEditedPriority] = useState<TaskPriority>(task.priority);
+  const [editedCategory, setEditedCategory] = useState<TaskCategory>(task.category || 'general');
   const [editedStatus, setEditedStatus] = useState<TaskStatus>(task.status);
   const [editedTags, setEditedTags] = useState(task.tags.join(', '));
   
@@ -179,6 +180,7 @@ export default function TaskDetailsDrawer({
       setEditedDesc(task.description);
       setEditedBranch(task.branch || '');
       setEditedPriority(task.priority);
+      setEditedCategory(task.category || 'general');
       setEditedStatus(task.status);
       setEditedTags(task.tags.join(', '));
       setEditedFilesList(task.targetFiles || []);
@@ -267,6 +269,7 @@ export default function TaskDetailsDrawer({
       description: editedDesc,
       branch: editedBranch.trim(),
       priority: editedPriority,
+      category: editedCategory,
       status: editedStatus,
       tags: tagsArray,
       targetFiles: filesArray,
@@ -533,6 +536,17 @@ export default function TaskDetailsDrawer({
                       { value: 'low', label: 'Low Severity' },
                       { value: 'medium', label: 'Medium Severity' },
                       { value: 'high', label: 'High Severity' }
+                    ]}
+                  />
+                  
+                  <CustomSelect
+                    className="bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-lg px-2 py-1.5 text-[10px] uppercase font-bold text-[#3a2f26] dark:text-[#f3eadf] transition-all min-w-[130px]"
+                    value={editedCategory}
+                    onChange={(val) => setEditedCategory(val as TaskCategory)}
+                    options={[
+                      { value: 'general', label: 'General / Fullstack' },
+                      { value: 'frontend', label: 'Frontend / UI' },
+                      { value: 'backend', label: 'Backend / Infra' }
                     ]}
                   />
                   
@@ -986,6 +1000,15 @@ export default function TaskDetailsDrawer({
                     task.status === 'in-progress' ? 'bg-[#ffecca] dark:bg-[#292119] text-[#a46c24] dark:text-[#f3eadf] border-[#f0cca3] dark:border-[#584a3b]' :
                     'bg-[#f4ebd9]/60 dark:bg-[#292119]/60 text-[#715c4d] dark:text-[#f3eadf] border-[#ebdcb9] dark:border-[#584a3b]'
                   }`}>{task.status}</span>
+                  {/* Category chip */}
+                  {task.category && task.category !== 'general' && (
+                    <span className={`inline-flex items-center justify-center leading-none text-[9px] uppercase font-bold px-2 py-1 rounded-lg border gap-1.5 ${
+                      task.category === 'backend' ? 'bg-[#f0e6e1] dark:bg-[#3d332d] text-[#6d5445] dark:text-[#d6c7be] border-[#d8cfc9] dark:border-[#584a3b]' :
+                      'bg-[#e1eff5] dark:bg-[#2d3a40] text-[#3c829e] dark:text-[#a8c9d6] border-[#c9dbe3] dark:border-[#584a3b]'
+                    }`}>
+                      {task.category}
+                    </span>
+                  )}
                   {/* Priority chip */}
                   <span className={`inline-flex items-center justify-center leading-none text-[9px] uppercase font-bold px-2 py-1 rounded-lg border gap-1.5 ${
                     task.priority === 'high' ? 'bg-red-50 dark:bg-[#3d241d] text-red-600 dark:text-[#e07b69] border-red-200 dark:border-[#8f4133]' :

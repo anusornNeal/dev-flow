@@ -39,6 +39,7 @@ import CreateTaskModal from './CreateTaskModal';
 import { AgentLogo } from './AgentLogo';
 import ImageViewer from './ImageViewer';
 import { TaskImage } from '../types';
+import { useTaskDrawerViewModel } from '../viewModels/useTaskDrawerViewModel';
 
 interface TaskDetailsDrawerProps {
   task: Task;
@@ -70,6 +71,17 @@ export default function TaskDetailsDrawer({
   onCreateTask,
   onShowLog
 }: TaskDetailsDrawerProps) {
+  // View-model for save/load/refresh/toggle (DVF-0210)
+  const drawerViewModel = useTaskDrawerViewModel();
+  // Bridge: when the parent task changes, refetch via the view-model so edit state stays in sync.
+  useEffect(() => {
+    if (drawerViewModel.task && drawerViewModel.task.id !== task.id) {
+      void drawerViewModel.open(task.id);
+    } else if (!drawerViewModel.task) {
+      void drawerViewModel.open(task.id);
+    }
+  }, [task.id]);
+
   const parentTask = task.parentId ? allTasks.find(t => t.id === task.parentId) : undefined;
   const subTasks = allTasks.filter(t => t.parentId === task.id);
   const [isEditing, setIsEditing] = useState(false);
@@ -79,8 +91,7 @@ export default function TaskDetailsDrawer({
   const [editedPriority, setEditedPriority] = useState<TaskPriority>(task.priority);
   const [editedCategory, setEditedCategory] = useState<TaskCategory>(task.category || 'general');
   const [editedStatus, setEditedStatus] = useState<TaskStatus>(task.status);
-  const [editedTags, setEditedTags] = useState(task.tags.join(', '));
-  
+
   // New properties editing states
   const [editedFilesList, setEditedFilesList] = useState<string[]>(task.targetFiles || []);
   const [editedChecklistList, setEditedChecklistList] = useState<string[]>((task.checklist || []).map(c => c.text));
@@ -178,7 +189,6 @@ export default function TaskDetailsDrawer({
       setEditedPriority(task.priority);
       setEditedCategory(task.category || 'general');
       setEditedStatus(task.status);
-      setEditedTags(task.tags.join(', '));
       setEditedFilesList(task.targetFiles || []);
       setEditedChecklistList((task.checklist || []).map(c => c.text));
       setEditedImages(task.images || []);
@@ -291,14 +301,9 @@ export default function TaskDetailsDrawer({
   };
 
   const handleToggleChecklistItem = (itemIdentifier: string) => {
-    const updatedChecklist = (task.checklist || []).map(item => {
-      const currentIdentifier = item.id || item.text;
-      if (currentIdentifier === itemIdentifier) {
-        const nextState = !item.completed;
-        return { ...item, completed: nextState };
-      }
-      return item;
-    });
+    // Delegate the pure flip to the view-model. The log message + history update is preserved
+    // here so the existing audit trail (in the drawer's local state) keeps working.
+    drawerViewModel.toggleChecklist(itemIdentifier);
 
     const toggledItemText = (task.checklist || []).find(item => (item.id || item.text) === itemIdentifier)?.text || '';
     const wasCompleted = (task.checklist || []).find(item => (item.id || item.text) === itemIdentifier)?.completed || false;
@@ -312,7 +317,13 @@ export default function TaskDetailsDrawer({
 
     const updatedTask: Task = {
       ...task,
-      checklist: updatedChecklist,
+      checklist: (task.checklist || []).map(item => {
+        const currentIdentifier = item.id || item.text;
+        if (currentIdentifier === itemIdentifier) {
+          return { ...item, completed: !item.completed };
+        }
+        return item;
+      }),
       logs: [...task.logs, newLogItem],
       updatedAt: new Date().toISOString()
     };

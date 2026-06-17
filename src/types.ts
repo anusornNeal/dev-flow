@@ -3,8 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-export type TaskStatus = 'backlog' | 'todo' | 'in-progress' | 'ready-for-review' | 'done';
-export type TaskPriority = 'high' | 'medium' | 'low';
+import { VALID_STATUSES, VALID_PRIORITIES, type TaskStatus, type TaskPriority } from './server/domain/task.js';
+
+// Re-export domain types so existing imports keep working, but the source of truth is now src/server/domain/task.ts.
+export { VALID_STATUSES, VALID_PRIORITIES } from './server/domain/task.js';
+export type { TaskStatus, TaskPriority } from './server/domain/task.js';
 export type TaskCategory = 'frontend' | 'backend' | 'general';
 
 export interface LogEntry {

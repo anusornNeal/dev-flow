@@ -17,7 +17,6 @@ import { loadSkillsRegistry } from './src/server/repositories/skillsRepository';
 import { registerApiRoutes } from './src/server/routes/registerApiRoutes';
 import { createDevFlowMcpServer } from './src/server/mcp';
 import type { AppState } from './src/server/types';
-import type { AppState } from './src/server/types';
 import { getDevFlowAppRoot, resolveFromDevFlowAppRoot, getDevFlowUploadsDir } from './src/lib/devFlowPaths';
 
 const AGENT_LOG_FILE = resolveFromDevFlowAppRoot('logs', 'agent-trigger.log');

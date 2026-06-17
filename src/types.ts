@@ -97,10 +97,7 @@ export interface Task {
   reasoning?: string;
   acceptanceCriteria?: string;
   verification?: string;
-  repoContext?: string;
-  jiraKey?: string;
   repo?: string;
-  sourceUrl?: string;
 }
 
 export interface Project {

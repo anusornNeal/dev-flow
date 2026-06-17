@@ -78,7 +78,7 @@ export function validateTaskPayload(item: any, isUpdate = false): string | null 
   if (item.tags !== undefined && !Array.isArray(item.tags)) return "Field 'tags' must be an array.";
   if (item.targetFiles !== undefined && !Array.isArray(item.targetFiles)) return "Field 'targetFiles' must be an array.";
   if (item.checklist !== undefined && !Array.isArray(item.checklist)) return "Field 'checklist' must be an array.";
-  if (item.designImages !== undefined) {
+  if (item.designImages !== undefined && item.designImages !== null) {
     if (!Array.isArray(item.designImages)) return "Field 'designImages' must be an array.";
     if (item.designImages.length > 5) return "Field 'designImages' can contain at most 5 images.";
   }
@@ -136,6 +136,24 @@ export function extractImages(item: any, currentTask?: any): any[] | undefined {
   
   if (imgs.length > 0) return imgs;
   if (currentTask && currentTask.images !== undefined) return currentTask.images;
+  return undefined;
+}
+
+export function extractDesignImages(item: any, currentTask?: any): string[] | undefined {
+  if (item.designImages !== undefined) {
+    return Array.isArray(item.designImages) ? item.designImages : undefined;
+  }
+
+  if (item.designImage !== undefined) {
+    return typeof item.designImage === 'string' && item.designImage.trim()
+      ? [item.designImage]
+      : undefined;
+  }
+
+  if (currentTask && currentTask.designImages !== undefined) {
+    return currentTask.designImages;
+  }
+
   return undefined;
 }
 

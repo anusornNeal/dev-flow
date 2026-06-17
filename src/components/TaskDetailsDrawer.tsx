@@ -1291,7 +1291,7 @@ export default function TaskDetailsDrawer({
                   </button>
                   
                   {openSections.has('links') && (
-                    <div className="border-t border-[#ebdcb9] dark:border-[#584a3b] bg-[#fdfbf7]/50 dark:bg-[#292119]/50 p-4" onPaste={(e) => handleImagePaste(e)}>
+                    <div className="border-t border-[#ebdcb9] dark:border-[#584a3b] bg-[#fdfbf7]/50 dark:bg-[#292119]/50 p-4">
                       <ImageViewer image={viewingImage} onClose={() => setViewingImage(null)} />
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 font-sans">
                         {task.images && task.images.length > 0 && (

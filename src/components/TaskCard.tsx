@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
-import { GitBranch, Copy, Check, Trash2, FileCode, CheckSquare, Image as ImageIcon, Link as LinkIcon, Lock, AlertTriangle, Ban, CircleCheck, Bot, Zap, ChevronDown } from 'lucide-react';
+import { GitBranch, Copy, Check, Trash2, FileCode, CheckSquare, Image as ImageIcon, Link as LinkIcon, Lock, AlertTriangle, Ban, CircleCheck, Bot, Zap, ChevronDown, Flame, Coffee } from 'lucide-react';
 import { Task } from '../types';
 import { AGENTS_CONFIG, getModelConfig, defaultModelForAgent, defaultEffortForModel, getDisplayModelName } from '../lib/agentsConfig';
 import CopyTemplateButton from './CopyTemplateButton';
@@ -132,13 +132,13 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
       }`}
       id={`task-card-${task.id}`}
     >
-      {/* Warm Priority Left Indicator Slider */}
-      {!isDone && (
+      {/* Category Left Indicator Slider */}
+      {!isDone && task.category && task.category !== 'general' && (
         <span 
           className={`w-1 h-16 absolute left-0 top-1/2 -translate-y-1/2 rounded-r-md ${
-            task.priority === 'high' ? 'bg-[#de6b48] dark:bg-[#df6b4f]' : 
-            task.priority === 'medium' ? 'bg-[#e5a93b] dark:bg-[#d6a549]' : 
-            'bg-[#7dad71] dark:bg-[#8fce7c]'
+            task.category === 'backend' ? 'bg-[#5c493c] dark:bg-[#8a7a6a]' : 
+            task.category === 'frontend' ? 'bg-[#3c829e] dark:bg-[#72a1b5]' : 
+            'bg-transparent'
           }`}
         />
       )}
@@ -271,7 +271,15 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
 
           {/* Row 1: Files, Checklist, External Links */}
           <div className="flex flex-wrap items-center gap-1.5 w-full">
-            {/* Priority dot removed */}
+            {/* Minimal Priority Indicator */}
+            {task.priority !== 'medium' && (
+              <span className={`mr-1.5 transition-opacity ${
+                task.priority === 'high' ? 'text-[#de6b48]/80 dark:text-[#df6b4f]/80 hover:opacity-100' :
+                'text-[#8a725f]/60 dark:text-[#8a7a6a]/80 hover:opacity-100'
+              }`} title={`${task.priority === 'high' ? 'High' : 'Low'} Priority`}>
+                {task.priority === 'high' ? <Flame size={12} strokeWidth={2.5} /> : <Coffee size={12} strokeWidth={2.5} />}
+              </span>
+            )}
 
             {/* Files */}
             {filesCount > 0 && (

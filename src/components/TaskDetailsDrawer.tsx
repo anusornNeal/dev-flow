@@ -31,7 +31,7 @@ import {
   ExternalLink
 , Bot, Zap} from 'lucide-react';
 import { CustomSelect } from './CustomSelect';
-import { Task, TaskPriority, TaskStatus, LogEntry, ChecklistItem } from '../types';
+import { Task, TaskPriority, TaskStatus, LogEntry, ChecklistItem, TaskCategory } from '../types';
 import { AGENTS_CONFIG, getModelConfig, defaultModelForAgent, defaultEffortForModel } from '../lib/agentsConfig';
 import MarkdownRenderer from './MarkdownRenderer';
 import CopyTemplateButton from './CopyTemplateButton';
@@ -75,6 +75,7 @@ export default function TaskDetailsDrawer({
   const [editedDesc, setEditedDesc] = useState(task.description);
   const [editedBranch, setEditedBranch] = useState(task.branch || '');
   const [editedPriority, setEditedPriority] = useState<TaskPriority>(task.priority);
+  const [editedCategory, setEditedCategory] = useState<TaskCategory>(task.category || 'general');
   const [editedStatus, setEditedStatus] = useState<TaskStatus>(task.status);
   const [editedTags, setEditedTags] = useState(task.tags.join(', '));
   
@@ -143,6 +144,7 @@ export default function TaskDetailsDrawer({
   // Accordion open state — empty = all collapsed
   const [openSections, setOpenSections] = useState<Set<string>>(new Set());
   const [copiedFile, setCopiedFile] = useState<string | null>(null);
+  const [activeLogTab, setActiveLogTab] = useState<'notes' | 'autowork' | 'history'>('notes');
 
   const toggleSection = (key: string) => {
     setOpenSections(prev => {
@@ -178,6 +180,7 @@ export default function TaskDetailsDrawer({
       setEditedDesc(task.description);
       setEditedBranch(task.branch || '');
       setEditedPriority(task.priority);
+      setEditedCategory(task.category || 'general');
       setEditedStatus(task.status);
       setEditedTags(task.tags.join(', '));
       setEditedFilesList(task.targetFiles || []);
@@ -266,6 +269,7 @@ export default function TaskDetailsDrawer({
       description: editedDesc,
       branch: editedBranch.trim(),
       priority: editedPriority,
+      category: editedCategory,
       status: editedStatus,
       tags: tagsArray,
       targetFiles: filesArray,
@@ -532,6 +536,17 @@ export default function TaskDetailsDrawer({
                       { value: 'low', label: 'Low Severity' },
                       { value: 'medium', label: 'Medium Severity' },
                       { value: 'high', label: 'High Severity' }
+                    ]}
+                  />
+                  
+                  <CustomSelect
+                    className="bg-[#ffffff] dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-lg px-2 py-1.5 text-[10px] uppercase font-bold text-[#3a2f26] dark:text-[#f3eadf] transition-all min-w-[130px]"
+                    value={editedCategory}
+                    onChange={(val) => setEditedCategory(val as TaskCategory)}
+                    options={[
+                      { value: 'general', label: 'General / Fullstack' },
+                      { value: 'frontend', label: 'Frontend / UI' },
+                      { value: 'backend', label: 'Backend / Infra' }
                     ]}
                   />
                   
@@ -985,6 +1000,15 @@ export default function TaskDetailsDrawer({
                     task.status === 'in-progress' ? 'bg-[#ffecca] dark:bg-[#292119] text-[#a46c24] dark:text-[#f3eadf] border-[#f0cca3] dark:border-[#584a3b]' :
                     'bg-[#f4ebd9]/60 dark:bg-[#292119]/60 text-[#715c4d] dark:text-[#f3eadf] border-[#ebdcb9] dark:border-[#584a3b]'
                   }`}>{task.status}</span>
+                  {/* Category chip */}
+                  {task.category && task.category !== 'general' && (
+                    <span className={`inline-flex items-center justify-center leading-none text-[9px] uppercase font-bold px-2 py-1 rounded-lg border gap-1.5 ${
+                      task.category === 'backend' ? 'bg-[#f0e6e1] dark:bg-[#3d332d] text-[#6d5445] dark:text-[#d6c7be] border-[#d8cfc9] dark:border-[#584a3b]' :
+                      'bg-[#e1eff5] dark:bg-[#2d3a40] text-[#3c829e] dark:text-[#a8c9d6] border-[#c9dbe3] dark:border-[#584a3b]'
+                    }`}>
+                      {task.category}
+                    </span>
+                  )}
                   {/* Priority chip */}
                   <span className={`inline-flex items-center justify-center leading-none text-[9px] uppercase font-bold px-2 py-1 rounded-lg border gap-1.5 ${
                     task.priority === 'high' ? 'bg-red-50 dark:bg-[#3d241d] text-red-600 dark:text-[#e07b69] border-red-200 dark:border-[#8f4133]' :
@@ -1498,117 +1522,214 @@ export default function TaskDetailsDrawer({
             </button>
             
             {openSections.has('activity') && (
-              <div className="border-t border-[#ebdcb9] dark:border-[#584a3b] bg-[#fdfbf7]/50 dark:bg-[#292119]/50 p-4 space-y-4">
-            {latestRun && (
-              <div className="bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-2xl p-3 space-y-2">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-[10px] font-mono uppercase tracking-widest text-[#8a6e5a] dark:text-[#f3eadf] font-extrabold">
-                      Latest Auto Work Status
-                    </div>
-                    <div className="text-[12px] font-bold text-[#5c493c] dark:text-[#f3eadf]">
-                      {runStatusLabel}
-                    </div>
-                  </div>
-                  {canRetryLatestRun && (
-                    <button
-                      type="button"
-                      onClick={handleRetryLatestRun}
-                      disabled={isRetryingRun}
-                      className="px-3 py-1.5 rounded-xl bg-[#3c829e] dark:bg-[#e0a070] text-white dark:text-[#292119] text-[10px] font-mono font-extrabold hover:bg-[#2e6d87] dark:hover:bg-[#d6b56d] transition-colors cursor-pointer disabled:opacity-60"
-                    >
-                      {isRetryingRun ? 'Retrying...' : 'Retry Run'}
-                    </button>
-                  )}
-                </div>
-                {latestRun.errorMessage && (
-                  <div className="text-[10px] font-mono text-[#8a6e5a] dark:text-[#d6b56d] break-words">
-                    {latestRun.errorMessage}
-                  </div>
-                )}
-              </div>
-            )}
-            {runHistoryFiles && (
-              <div className="space-y-2">
-                <div className="text-[10px] font-mono uppercase tracking-widest text-[#8a6e5a] dark:text-[#f3eadf] font-extrabold">
-                  Run History Files
-                </div>
-                {[
-                  ['Run Folder', runHistoryFiles.runDir],
-                  ['Prompt', runHistoryFiles.promptPath],
-                  ['Launch', runHistoryFiles.launchMetadataPath],
-                  ['Summary', runHistoryFiles.outputSummaryPath],
-                  ['Result', runHistoryFiles.resultPath],
-                  ['Log', runHistoryFiles.logPath],
-                ].map(([label, pathValue]) => (
+              <div className="border-t border-[#ebdcb9] dark:border-[#584a3b] bg-[#fdfbf7]/50 dark:bg-[#292119]/50 p-0">
+                {/* Tabs Header */}
+                <div className="flex items-center gap-4 px-4 pt-3 border-b border-[#ebdcb9]/40 dark:border-[#584a3b]/40">
                   <button
-                    key={label}
                     type="button"
-                    onClick={() => {
-                      if (label === 'Log' && onShowLog && task.latestAgentRun) {
-                        onShowLog({ id: task.latestAgentRun.id, status: task.latestAgentRun.status, agent: task.agent, model: task.model });
-                      } else {
-                        handleCopyHistoryPath(pathValue);
-                      }
-                    }}
-                    className="w-full text-left bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 hover:bg-[#fffcf6] dark:hover:bg-[#1e1914] transition-colors cursor-pointer"
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-[9px] font-mono uppercase text-[#8a6e5a] dark:text-[#d6b56d] font-extrabold">{label}</span>
-                      <span className={`text-[9px] font-mono font-bold ${label === 'Log' ? 'text-blue-500 dark:text-[#8ba4e8]' : 'text-emerald-600 dark:text-[#e0a070]'}`}>
-                        {label === 'Log' ? 'view log' : copiedHistoryPath === pathValue ? 'copied' : 'copy path'}
-                      </span>
-                    </div>
-                    <div className="mt-1 text-[10px] font-mono text-[#5c493c] dark:text-[#f3eadf] break-all">
-                      {pathValue}
-                    </div>
-                  </button>
-                ))}
-              </div>
-            )}
-            {/* Event list */}
-            <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
-              {[...task.logs]
-                .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-                .map((log) => (
-                  <div 
-                    key={log.id} 
-                    className={`p-3 rounded-xl border flex flex-col gap-1 text-[10px] font-mono leading-relaxed shadow-3xs transition-all ${
-                      log.type === 'create' ? 'bg-[#edf7ed] dark:bg-[#292119] border-[#c9e7cb] dark:border-[#584a3b] text-[#427931] dark:text-[#f3eadf]' : 
-                      log.type === 'move' ? 'bg-[#fff5e5] dark:bg-[#292119] border-[#fde5bd] dark:border-[#584a3b] text-[#935919] dark:text-[#e0a070] dark:text-[#d6b56d]' :
-                      log.type === 'comment' ? 'bg-[#fffdfa] dark:bg-[#292119] border-[#ebdcb9] dark:border-[#584a3b] text-[#55453B] dark:text-[#f3eadf] font-semibold' :
-                      'bg-white dark:bg-[#292119] border-[#ebdcb9] dark:border-[#584a3b] text-[#715c4d] dark:text-[#f3eadf]'
+                    onClick={() => setActiveLogTab('notes')}
+                    className={`pb-2 text-[10px] font-mono font-bold uppercase tracking-wider transition-colors border-b-2 cursor-pointer ${
+                      activeLogTab === 'notes' 
+                        ? 'text-[#d89745] dark:text-[#d6b56d] border-[#d89745] dark:border-[#d6b56d]' 
+                        : 'text-[#a59182] dark:text-[#8a7a6a] border-transparent hover:text-[#5c493c] dark:hover:text-[#f3eadf]'
                     }`}
                   >
-                    <div className="flex justify-between items-center text-[8px] text-[#a08b7e] dark:text-[#d6b56d] font-extrabold uppercase">
-                      <span className="flex items-center gap-1">
-                        <Clock size={10} />
-                        {log.type} entry
-                      </span>
-                      <span>{new Date(log.timestamp).toLocaleString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
-                    </div>
-                    <p className="whitespace-pre-wrap">{log.message}</p>
-                  </div>
-                ))}
-            </div>
+                    Notes ({task.logs.filter(l => l.type === 'comment').length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveLogTab('autowork')}
+                    className={`pb-2 text-[10px] font-mono font-bold uppercase tracking-wider transition-colors border-b-2 cursor-pointer ${
+                      activeLogTab === 'autowork' 
+                        ? 'text-[#d89745] dark:text-[#d6b56d] border-[#d89745] dark:border-[#d6b56d]' 
+                        : 'text-[#a59182] dark:text-[#8a7a6a] border-transparent hover:text-[#5c493c] dark:hover:text-[#f3eadf]'
+                    }`}
+                  >
+                    Auto-Work
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveLogTab('history')}
+                    className={`pb-2 text-[10px] font-mono font-bold uppercase tracking-wider transition-colors border-b-2 cursor-pointer ${
+                      activeLogTab === 'history' 
+                        ? 'text-[#d89745] dark:text-[#d6b56d] border-[#d89745] dark:border-[#d6b56d]' 
+                        : 'text-[#a59182] dark:text-[#8a7a6a] border-transparent hover:text-[#5c493c] dark:hover:text-[#f3eadf]'
+                    }`}
+                  >
+                    History ({task.logs.filter(l => l.type !== 'comment').length})
+                  </button>
+                </div>
 
-            {/* Developer Notes Addition input */}
-            <form onSubmit={handleAddComment} className="flex gap-2 font-mono">
-              <input
-                type="text"
-                className="flex-1 bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3.5 py-2 text-xs text-[#534135] dark:text-[#f3eadf] placeholder-[#c4b3a4] outline-none focus:border-[#d4994e] dark:border-[#e0a070] dark:focus:border-[#584a3b] font-mono"
-                placeholder="Drop developer run comments or logs..."
-                value={newComment}
-                onChange={(e) => setNewComment(e.target.value)}
-              />
-              <button
-                type="submit"
-                className="bg-[#fff9ee] dark:bg-[#292119] hover:bg-[#ebdcb9] dark:bg-[#584a3b] dark:hover:bg-[#584a3b] text-[#856b5a] dark:text-[#f3eadf] border border-[#ebdcb9] dark:border-[#584a3b] px-4 rounded-xl flex items-center justify-center cursor-pointer transition-colors hover:shadow-2xs"
-                title="Append statement comment Log"
-              >
-                <Plus size={15} />
-              </button>
-            </form>
+                <div className="p-4 space-y-4">
+                  {/* NOTES TAB */}
+                  {activeLogTab === 'notes' && (
+                    <>
+                      <div className="space-y-2 max-h-96 overflow-y-auto pr-1 scrollbar-thin">
+                        {[...task.logs]
+                          .filter(log => log.type === 'comment')
+                          .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+                          .map((log) => (
+                            <div 
+                              key={log.id} 
+                              className="p-3 rounded-xl border flex flex-col gap-1 text-[10px] font-mono leading-relaxed shadow-3xs transition-all bg-[#fffdfa] dark:bg-[#292119] border-[#ebdcb9] dark:border-[#584a3b] text-[#55453B] dark:text-[#f3eadf]"
+                            >
+                              <div className="flex justify-between items-center text-[8px] text-[#a08b7e] dark:text-[#d6b56d] font-extrabold uppercase mb-1">
+                                <span className="flex items-center gap-1 text-[#d89745] dark:text-[#d6b56d]">
+                                  <Clipboard size={10} />
+                                  Note
+                                </span>
+                                <span>{new Date(log.timestamp).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}</span>
+                              </div>
+                              <p className="whitespace-pre-wrap">{log.message.replace(/^💬 Note: /, '')}</p>
+                            </div>
+                          ))}
+                        {task.logs.filter(l => l.type === 'comment').length === 0 && (
+                          <div className="text-center py-4 text-[10px] font-mono text-[#a59182] dark:text-[#8a7a6a]">
+                            No notes yet. Add one below.
+                          </div>
+                        )}
+                      </div>
+                      
+                      <form onSubmit={handleAddComment} className="flex gap-2 font-mono mt-2">
+                        <input
+                          type="text"
+                          className="flex-1 bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3.5 py-2 text-xs text-[#534135] dark:text-[#f3eadf] placeholder-[#c4b3a4] outline-none focus:border-[#d4994e] dark:border-[#e0a070] dark:focus:border-[#584a3b] font-mono shadow-2xs"
+                          placeholder="Write a note or comment..."
+                          value={newComment}
+                          onChange={(e) => setNewComment(e.target.value)}
+                        />
+                        <button
+                          type="submit"
+                          className="bg-[#fff9ee] dark:bg-[#292119] hover:bg-[#ebdcb9] dark:bg-[#584a3b] dark:hover:bg-[#584a3b] text-[#856b5a] dark:text-[#f3eadf] border border-[#ebdcb9] dark:border-[#584a3b] px-4 rounded-xl flex items-center justify-center cursor-pointer transition-colors hover:shadow-2xs"
+                          title="Add Note"
+                        >
+                          <Plus size={15} />
+                        </button>
+                      </form>
+                    </>
+                  )}
+
+                  {/* AUTO-WORK TAB */}
+                  {activeLogTab === 'autowork' && (
+                    <div className="space-y-4">
+                      {latestRun ? (
+                        <div className="bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-2xl p-3 space-y-2 shadow-2xs">
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <div className="text-[10px] font-mono uppercase tracking-widest text-[#8a6e5a] dark:text-[#f3eadf] font-extrabold">
+                                Latest Auto Work Status
+                              </div>
+                              <div className="text-[12px] font-bold text-[#5c493c] dark:text-[#f3eadf]">
+                                {runStatusLabel}
+                              </div>
+                            </div>
+                            {canRetryLatestRun && (
+                              <button
+                                type="button"
+                                onClick={handleRetryLatestRun}
+                                disabled={isRetryingRun}
+                                className="px-3 py-1.5 rounded-xl bg-[#3c829e] dark:bg-[#e0a070] text-white dark:text-[#292119] text-[10px] font-mono font-extrabold hover:bg-[#2e6d87] dark:hover:bg-[#d6b56d] transition-colors cursor-pointer disabled:opacity-60"
+                              >
+                                {isRetryingRun ? 'Retrying...' : 'Retry Run'}
+                              </button>
+                            )}
+                          </div>
+                          {latestRun.errorMessage && (
+                            <div className="text-[10px] font-mono text-[#8a6e5a] dark:text-[#d6b56d] break-words">
+                              {latestRun.errorMessage}
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="text-center py-4 text-[10px] font-mono text-[#a59182] dark:text-[#8a7a6a]">
+                          No auto-work runs initiated for this task yet.
+                        </div>
+                      )}
+
+                      {runHistoryFiles && (
+                        <div className="space-y-2">
+                          <div className="text-[10px] font-mono uppercase tracking-widest text-[#8a6e5a] dark:text-[#f3eadf] font-extrabold px-1">
+                            Run History Files
+                          </div>
+                          <div className="grid grid-cols-1 gap-2">
+                            {[
+                              ['Run Folder', runHistoryFiles.runDir],
+                              ['Prompt', runHistoryFiles.promptPath],
+                              ['Launch', runHistoryFiles.launchMetadataPath],
+                              ['Summary', runHistoryFiles.outputSummaryPath],
+                              ['Result', runHistoryFiles.resultPath],
+                              ['Log', runHistoryFiles.logPath],
+                            ].map(([label, pathValue]) => (
+                              <button
+                                key={label}
+                                type="button"
+                                onClick={() => {
+                                  if (label === 'Log' && onShowLog && task.latestAgentRun) {
+                                    onShowLog({ id: task.latestAgentRun.id, status: task.latestAgentRun.status, agent: task.agent, model: task.model });
+                                  } else {
+                                    handleCopyHistoryPath(pathValue);
+                                  }
+                                }}
+                                className="w-full text-left bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 hover:bg-[#fffcf6] dark:hover:bg-[#1e1914] transition-colors cursor-pointer shadow-2xs group"
+                              >
+                                <div className="flex items-center justify-between gap-3">
+                                  <span className="text-[9px] font-mono uppercase text-[#8a6e5a] dark:text-[#d6b56d] font-extrabold">{label}</span>
+                                  <span className={`text-[9px] font-mono font-bold ${label === 'Log' ? 'text-blue-500 dark:text-[#8ba4e8]' : 'text-emerald-600 dark:text-[#e0a070] opacity-0 group-hover:opacity-100 transition-opacity'}`}>
+                                    {label === 'Log' ? 'view log' : copiedHistoryPath === pathValue ? 'copied' : 'copy path'}
+                                  </span>
+                                </div>
+                                <div className="mt-1 text-[10px] font-mono text-[#5c493c] dark:text-[#f3eadf] break-all truncate">
+                                  {pathValue}
+                                </div>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* HISTORY TAB */}
+                  {activeLogTab === 'history' && (
+                    <div className="space-y-0 relative before:absolute before:inset-0 before:left-[12px] before:h-full before:w-px before:bg-gradient-to-b before:from-transparent before:via-[#ebdcb9] dark:before:via-[#584a3b] before:to-transparent max-h-96 overflow-y-auto pr-1 scrollbar-thin">
+                      {[...task.logs]
+                        .filter(log => log.type !== 'comment')
+                        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+                        .map((log) => (
+                          <div 
+                            key={log.id} 
+                            className="relative flex items-start gap-3 py-2"
+                          >
+                            <div className={`w-2 h-2 mt-1.5 rounded-full ring-4 ring-[#fdfbf7] dark:ring-[#292119]/50 shrink-0 z-10 ml-[8px] ${
+                                log.type === 'create' ? 'bg-[#7dad71] dark:bg-[#a3c773]' :
+                                log.type === 'move' ? 'bg-[#d89745] dark:bg-[#d6b56d]' :
+                                'bg-[#8a6e5a] dark:bg-[#b8ab9f]'
+                              }`} 
+                            />
+                            
+                            <div className="flex-1 flex flex-col min-w-0 pr-2">
+                              <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 mb-0.5">
+                                <span className="text-[9px] font-mono font-bold uppercase tracking-widest text-[#5c493c] dark:text-[#f3eadf]">
+                                  {log.type}
+                                </span>
+                                <span className="text-[8px] font-mono text-[#c4b3a4] dark:text-[#8a7a6a]">
+                                  {new Date(log.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                                </span>
+                              </div>
+                              <p className="text-[10px] font-mono text-[#8a6e5a] dark:text-[#b8ab9f] leading-snug break-words">
+                                {log.message}
+                              </p>
+                            </div>
+                          </div>
+                        ))}
+                      {task.logs.filter(l => l.type !== 'comment').length === 0 && (
+                        <div className="text-center py-4 text-[10px] font-mono text-[#a59182] dark:text-[#8a7a6a]">
+                          No system history available.
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </div>

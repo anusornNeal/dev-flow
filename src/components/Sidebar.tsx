@@ -23,6 +23,7 @@ import {
   Settings
 } from 'lucide-react';
 import { Task, TaskPriority, Project } from '../types';
+import ConfirmModal from './ConfirmModal';
 
 interface SidebarProps {
   tasks: Task[];
@@ -67,6 +68,7 @@ export default function Sidebar({
   const [newProjectDesc, setNewProjectDesc] = useState('');
   const [newProjectLocalPath, setNewProjectLocalPath] = useState('');
   const [newProjectTaskIdPrefix, setNewProjectTaskIdPrefix] = useState('');
+  const [projectToDelete, setProjectToDelete] = useState<string | null>(null);
 
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -347,9 +349,7 @@ export default function Sidebar({
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
-                              if (confirm(`Are you sure you want to delete project "${project.name}" and all its tasks?`)) {
-                                onDeleteProject(project.id);
-                              }
+                              setProjectToDelete(project.id);
                             }}
                             type="button"
                             className="flex-1 flex items-center justify-center gap-1.5 p-1.5 bg-[#fff5f5] dark:bg-[#3d2323] border border-[#ffcdcd] dark:border-[#5c3535] rounded text-[#d64545] hover:bg-[#ffebeb] hover:text-[#e02424] transition-colors cursor-pointer text-[9px] font-bold"
@@ -602,6 +602,19 @@ export default function Sidebar({
           <span className="font-bold">Settings</span>
         </button>
       </div>
+      
+      {projectToDelete && (
+        <ConfirmModal
+          title="Delete Project"
+          message={`Are you sure you want to delete project "${projects.find(p => p.id === projectToDelete)?.name}" and all its tasks? This action cannot be undone.`}
+          onConfirm={async () => {
+            await onDeleteProject(projectToDelete);
+            setProjectToDelete(null);
+          }}
+          onCancel={() => setProjectToDelete(null)}
+          confirmText="Delete"
+        />
+      )}
     </aside>
   );
 }

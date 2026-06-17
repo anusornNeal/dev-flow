@@ -26,6 +26,10 @@ import {
 import { Task, TaskStatus, Column, LogEntry, Project } from './types';
 import { isValidTransition, getValidationErrorMessage } from './lib/statusTransitions';
 import { buildTaskStatusMoveRequest } from './lib/taskStatusMove';
+import { useProjectViewModel } from './viewModels/useProjectViewModel';
+import { useBoardViewModel } from './viewModels/useBoardViewModel';
+import { apiClient } from './client/apiClient';
+import { toDomainTask } from './domain/mappers/taskMapper';
 import Sidebar from './components/Sidebar';
 import TaskDetailsDrawer from './components/TaskDetailsDrawer';
 import CreateTaskModal from './components/CreateTaskModal';
@@ -51,12 +55,31 @@ const COLUMNS: Column[] = [
 ];
 
 export default function App() {
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [projects, setProjects] = useState<Project[]>([]);
+  // View-model-owned board + project state. These hooks handle fetch + polling + optimistic merge.
+  const projectsViewModel = useProjectViewModel();
+  const projects = projectsViewModel.projects as unknown as Project[];
+  const activeProjectIdState = projectsViewModel.activeProjectId;
+  const setActiveProjectIdViewModel = projectsViewModel.setActiveProjectId;
+  const [activeProjectIdLocal, setActiveProjectIdLocal] = useState<string>('');
+
+  const boardViewModel = useBoardViewModel({
+    projectId: activeProjectIdLocal || activeProjectIdState,
+  });
+  const tasks = boardViewModel.tasks as unknown as Task[];
+  const setTasks = boardViewModel.setTasks as unknown as (u: (prev: Task[]) => Task[]) => void;
+  const applyServerTasks = boardViewModel.applyServerTasks;
+
   const [persistenceError, setPersistenceError] = useState<string | null>(null);
   const [activeProjectId, setActiveProjectId] = useState<string>(() => {
     return localStorage.getItem('devflow_selected_project') || '';
   });
+
+  // Sync the view-model's active project with the local state so the board refetches when needed.
+  useEffect(() => {
+    if (activeProjectIdState && activeProjectIdState !== activeProjectIdLocal) {
+      setActiveProjectIdLocal(activeProjectIdState);
+    }
+  }, [activeProjectIdState]);
   const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
   const [draggedOverColumn, setDraggedOverColumn] = useState<TaskStatus | null>(null);
   const [pendingEmergencyMove, setPendingEmergencyMove] = useState<{ sourceTask: Task, status: TaskStatus } | null>(null);
@@ -118,21 +141,17 @@ export default function App() {
     }
   };
 
-  // 0. Load projects from REST API (GET /api/projects)
+  // 0. Load projects from REST API (delegated to projectRepository / useProjectViewModel)
   const fetchProjectsFromApi = async () => {
     try {
-      const res = await fetch('/api/projects', { cache: 'no-store' });
-      if (res.ok) {
-        const data = await res.json();
-        setProjects(data);
-        setPersistenceError(null);
-        if (data.length > 0) {
-          // Check against the current state using functional update to get the latest without dependency
-          setActiveProjectId(prev => {
-            const isValidId = data.some((p: Project) => p.id === prev);
-            return isValidId ? prev : data[0].id;
-          });
-        }
+      await projectsViewModel.refresh();
+      setPersistenceError(null);
+      const list = projectsViewModel.projects;
+      if (list.length > 0) {
+        setActiveProjectId(prev => {
+          const isValidId = list.some((p) => p.id === prev);
+          return isValidId ? prev : list[0].id;
+        });
       }
     } catch (err) {
       console.warn('Backend projects API connection unavailable:', err);
@@ -143,31 +162,10 @@ export default function App() {
   // Tasks remain API-backed; we do not silently fall back to localStorage for source-of-truth data.
   const fetchTasksFromApi = async () => {
     try {
-      const res = await fetch('/api/tasks', { cache: 'no-store' });
-      if (res.ok) {
-        const data = await res.json();
-        setPersistenceError(null);
-        setTasks(prev => {
-          // If there are in-flight moves, protect their optimistic state from being overwritten by stale backend data
-          if (pendingMovesRef.current.size > 0) {
-            const mergedTasks = data.map((serverTask: Task) => {
-              if (pendingMovesRef.current.has(serverTask.id)) {
-                // Keep our optimistic version
-                const optTask = prev.find(t => t.id === serverTask.id);
-                return optTask || serverTask;
-              }
-              return serverTask;
-            });
-            if (JSON.stringify(prev) === JSON.stringify(mergedTasks)) return prev;
-            return mergedTasks;
-          }
-
-          if (JSON.stringify(prev) === JSON.stringify(data)) return prev;
-          return data;
-        });
-      } else {
-        throw new Error('API unstable');
-      }
+      const { data } = await apiClient.fetchJson<{ tasks: any[] }>('/api/tasks', undefined);
+      const serverTasks = (data.tasks || []).map(toDomainTask) as unknown as Task[];
+      setPersistenceError(null);
+      applyServerTasks(serverTasks as any, pendingMovesRef.current);
     } catch (err) {
       console.warn('Backend API connection unavailable:', err);
       setPersistenceError('Task data could not be refreshed from the backend. Existing on-screen data was kept unchanged.');
@@ -176,18 +174,11 @@ export default function App() {
 
   const handleCreateProject = async (name: string, repoUrl: string, description?: string, localPath?: string, taskIdPrefix?: string) => {
     try {
-      const res = await fetch('/api/projects', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, repoUrl, description, localPath, taskIdPrefix })
-      });
-      if (res.ok) {
-        const newProj = await res.json();
-        setProjects(prev => [...prev, newProj]);
-        setActiveProjectId(newProj.id);
-        fetchTasksFromApi();
-        return true;
-      }
+      const { data: newProj } = await apiClient.fetchJson<any>('POST', '/api/projects', { name, repoUrl, description, localPath, taskIdPrefix });
+      await projectsViewModel.refresh();
+      setActiveProjectId(newProj.id);
+      fetchTasksFromApi();
+      return true;
     } catch (err) {
       console.error('Failed to create project:', err);
       setPersistenceError('Project creation failed before the backend confirmed persistence.');
@@ -197,26 +188,17 @@ export default function App() {
 
   const handleDeleteProject = async (id: string) => {
     try {
-      const res = await fetch(`/api/projects/${id}`, {
-        method: 'DELETE'
+      await apiClient.fetchJson('DELETE', `/api/projects/${encodeURIComponent(id)}`);
+      const remainingProjects = projectsViewModel.projects.filter(p => p.id !== id);
+      await projectsViewModel.refresh();
+      setActiveProjectId(prevId => {
+        if (prevId === id) {
+          return remainingProjects.length > 0 ? remainingProjects[0].id : '';
+        }
+        return prevId;
       });
-      if (res.ok) {
-        let remainingProjects: Project[] = [];
-        setProjects(prev => {
-          remainingProjects = prev.filter(p => p.id !== id);
-          return remainingProjects;
-        });
-        
-        setActiveProjectId(prevId => {
-          if (prevId === id) {
-            return remainingProjects.length > 0 ? remainingProjects[0].id : '';
-          }
-          return prevId;
-        });
-        
-        fetchTasksFromApi();
-        return true;
-      }
+      fetchTasksFromApi();
+      return true;
     } catch (err) {
       console.error('Failed to delete project:', err);
       setPersistenceError('Project deletion failed before the backend confirmed persistence.');
@@ -226,16 +208,9 @@ export default function App() {
 
   const handleUpdateProject = async (id: string, updates: Partial<Project>) => {
     try {
-      const res = await fetch(`/api/projects/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updates)
-      });
-      if (res.ok) {
-        const updatedProj = await res.json();
-        setProjects(prev => prev.map(p => p.id === id ? updatedProj : p));
-        return true;
-      }
+      await apiClient.fetchJson('PUT', `/api/projects/${encodeURIComponent(id)}`, updates);
+      await projectsViewModel.refresh();
+      return true;
     } catch (err) {
       console.error('Failed to update project:', err);
       setPersistenceError('Project update failed before the backend confirmed persistence.');

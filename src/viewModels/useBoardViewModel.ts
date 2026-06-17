@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { taskRepository } from '../repositories/taskRepository.js';
 import { groupTasksByLane, type Lanes } from './boardUtils.js';
+import { mergeWithPendingMoves } from './boardOptimisticMerge.js';
 import type { DomainTask } from '../domain/mappers/taskMapper.js';
 
 export interface UseBoardViewModelOptions {
@@ -15,6 +16,7 @@ export interface UseBoardViewModel {
   error: string | null;
   refresh: () => Promise<void>;
   setTasks: (updater: (prev: DomainTask[]) => DomainTask[]) => void;
+  applyServerTasks: (serverTasks: DomainTask[], pendingIds: ReadonlySet<string>) => void;
 }
 
 export function useBoardViewModel(options: UseBoardViewModelOptions): UseBoardViewModel {
@@ -61,7 +63,11 @@ export function useBoardViewModel(options: UseBoardViewModelOptions): UseBoardVi
     setTasksState((prev) => updater(prev));
   }, []);
 
+  const applyServerTasks = useCallback((serverTasks: DomainTask[], pendingIds: ReadonlySet<string>) => {
+    setTasksState((prev) => mergeWithPendingMoves(serverTasks, prev, new Set(pendingIds)));
+  }, []);
+
   const lanes = useMemo(() => groupTasksByLane(tasks), [tasks]);
 
-  return { tasks, lanes, loading, error, refresh, setTasks };
+  return { tasks, lanes, loading, error, refresh, setTasks, applyServerTasks };
 }

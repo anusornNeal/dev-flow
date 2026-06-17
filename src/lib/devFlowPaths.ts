@@ -28,3 +28,15 @@ export function getDevFlowSchemaPath() {
 export function getDevFlowSkillsDir() {
   return resolveFromDevFlowAppRoot('skills');
 }
+
+export function getDevFlowUploadsDir() {
+  return resolveFromDevFlowAppRoot('data', 'uploads');
+}
+
+export function getTaskUploadsDir(taskId: string) {
+  return path.join(getDevFlowUploadsDir(), 'tasks', taskId);
+}
+
+export function getDevFlowBackupsDir() {
+  return resolveFromDevFlowAppRoot('data', 'backups');
+}

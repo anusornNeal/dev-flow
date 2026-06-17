@@ -7,6 +7,7 @@ const commands = [
   { label: 'absolute paths', command: 'npm', args: ['run', 'test:absolute-paths'] },
   { label: 'prompt templates', command: 'npm', args: ['run', 'test:prompt-templates'] },
   { label: 'orchestration', command: 'npm', args: ['run', 'test:orchestration'] },
+  { label: 'sqlite persistence', command: 'npm', args: ['run', 'test:sqlite'] },
   { label: 'doctor', command: 'npm', args: ['run', 'doctor'] },
 ];
 

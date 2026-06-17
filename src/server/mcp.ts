@@ -30,7 +30,13 @@ function toMcpTextPayload(data: unknown) {
     return { content: [{ type: 'text', text: data }] };
   }
 
-  return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
+  // MCP 2025 spec: tools with an outputSchema must return structuredContent alongside text content.
+  // Provide a best-effort object form (capped at one level of nesting) so the SDK validator passes.
+  const structuredContent = data && typeof data === 'object' && !Array.isArray(data) ? data : null;
+  return {
+    content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
+    ...(structuredContent ? { structuredContent } : {}),
+  };
 }
 
 export function createDevFlowMcpServer(baseUrl: string) {

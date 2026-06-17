@@ -54,6 +54,10 @@ interface MigrationSummary {
   errors: string[];
   dryRun: boolean;
   forced: boolean;
+  backupPath: string | null;
+  renamed: string[];
+  aborted: boolean;
+  abortReason?: string;
 }
 
 const args = process.argv.slice(2);
@@ -80,18 +84,28 @@ function backupCurrentDb(): string {
   const dbPath = getDevFlowDbPath();
   if (!fs.existsSync(dbPath)) return '';
   const ts = new Date().toISOString().replace(/[:.]/g, '-');
+  fs.mkdirSync(dataDir, { recursive: true });
   const backupPath = path.join(dataDir, `devflow-pre-migrate-${ts}.db`);
-  fs.copyFileSync(dbPath, backupPath);
+  // Use SQLite backup API for safety (consistent snapshot)
+  const Database = require('better-sqlite3');
+  const sourceDb = new Database(dbPath);
+  try {
+    sourceDb.backup(backupPath);
+  } finally {
+    sourceDb.close();
+  }
   return backupPath;
 }
 
-function renameLegacyFile(p: string): void {
+function renameLegacyFile(p: string, summary: MigrationSummary): void {
   if (!fs.existsSync(p)) return;
   const ts = new Date().toISOString().replace(/[:.]/g, '-');
   const dir = path.dirname(p);
   const ext = path.extname(p);
   const base = path.basename(p, ext);
-  fs.renameSync(p, path.join(dir, `${base}.migrated-${ts}.bak`));
+  const newPath = path.join(dir, `${base}.migrated-${ts}.bak`);
+  fs.renameSync(p, newPath);
+  summary.renamed.push(newPath);
 }
 
 function tableHasRows(table: string): boolean {
@@ -110,7 +124,7 @@ function importProjects(projects: LegacyProject[], summary: MigrationSummary) {
   );
   for (const p of projects) {
     if (!p.id || !p.name) {
-      summary.errors.push(`skip project missing id/name: ${JSON.stringify(p)}`);
+      summary.errors.push(`skip project missing id/name: ${JSON.stringify(p).slice(0, 200)}`);
       continue;
     }
     if (existingIds.has(p.id) && !summary.forced) {
@@ -136,7 +150,7 @@ function importTasks(tasks: LegacyTask[], summary: MigrationSummary) {
   );
   for (const t of tasks) {
     if (!t.id || !t.title) {
-      summary.errors.push(`skip task missing id/title: ${JSON.stringify(t).slice(0, 120)}`);
+      summary.errors.push(`skip task missing id/title: ${JSON.stringify(t).slice(0, 200)}`);
       continue;
     }
     if (existingIds.has(t.id) && !summary.forced) {
@@ -204,16 +218,31 @@ function main() {
     errors: [],
     dryRun,
     forced: force,
+    backupPath: null,
+    renamed: [],
+    aborted: false,
   };
 
   const dbHasRows = tableHasRows('projects') || tableHasRows('tasks') || tableHasRows('counters');
   if (dbHasRows && !force && !dryRun) {
     console.log('[migrate] DB already has rows. Re-run with --force to overwrite matching IDs, or --dry-run to preview.');
+    process.exit(2);
   }
 
-  if (!dryRun && !dbHasRows) {
-    const backup = backupCurrentDb();
-    if (backup) console.log(`[migrate] backed up current DB to ${backup}`);
+  // Always create a safety backup before any non-dry-run DB write
+  if (!dryRun) {
+    try {
+      const backup = backupCurrentDb();
+      if (backup) {
+        summary.backupPath = backup;
+        console.log(`[migrate] safety backup -> ${backup}`);
+      }
+    } catch (e) {
+      summary.aborted = true;
+      summary.abortReason = `safety backup failed: ${(e as Error).message}`;
+      console.log('[migrate] summary', JSON.stringify(summary, null, 2));
+      process.exit(1);
+    }
   }
 
   const txnItems: Array<{ name: string; data: any[] | LegacyCounters | null; fn: (data: any, s: MigrationSummary) => void }> = [
@@ -222,23 +251,47 @@ function main() {
     { name: 'counters', data: legacyCounters, fn: (data, s) => importCounters(data as LegacyCounters, s) },
   ];
 
-  for (const item of txnItems) {
-    if (!item.data) continue;
-    if (!dryRun) {
-      db.transaction(() => item.fn(item.data, summary))();
-    } else {
+  let migrationSucceeded = true;
+
+  if (dryRun) {
+    // Dry-run: in-memory only, never write
+    for (const item of txnItems) {
+      if (!item.data) continue;
       item.fn(item.data, summary);
+    }
+  } else {
+    // Real run: single transaction. Roll back on any error.
+    try {
+      db.transaction(() => {
+        for (const item of txnItems) {
+          if (!item.data) continue;
+          item.fn(item.data, summary);
+        }
+      })();
+    } catch (e) {
+      migrationSucceeded = false;
+      summary.aborted = true;
+      summary.abortReason = `migration transaction failed: ${(e as Error).message}`;
+    }
+
+    // If ANY validation errors were collected (missing id/title etc), treat as failure
+    if (summary.errors.length > 0) {
+      migrationSucceeded = false;
+      if (!summary.abortReason) {
+        summary.abortReason = `migration had ${summary.errors.length} validation error(s); rolled back`;
+      }
     }
   }
 
-  if (!dryRun) {
-    renameLegacyFile(tasksJsonPath);
-    renameLegacyFile(projectsJsonPath);
-    renameLegacyFile(countersJsonPath);
+  // Only rename legacy JSON files if migration fully succeeded
+  if (migrationSucceeded && !dryRun) {
+    renameLegacyFile(tasksJsonPath, summary);
+    renameLegacyFile(projectsJsonPath, summary);
+    renameLegacyFile(countersJsonPath, summary);
   }
 
   console.log('[migrate] summary', JSON.stringify(summary, null, 2));
-  if (summary.errors.length > 0) {
+  if (!migrationSucceeded) {
     process.exit(1);
   }
 }

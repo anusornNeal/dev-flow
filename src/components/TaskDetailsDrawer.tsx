@@ -1541,7 +1541,7 @@ export default function TaskDetailsDrawer({
                   {/* NOTES TAB */}
                   {activeLogTab === 'notes' && (
                     <>
-                      <div className="space-y-2 max-h-48 overflow-y-auto pr-1 scrollbar-thin">
+                      <div className="space-y-2 max-h-96 overflow-y-auto pr-1 scrollbar-thin">
                         {[...task.logs]
                           .filter(log => log.type === 'comment')
                           .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
@@ -1668,31 +1668,32 @@ export default function TaskDetailsDrawer({
 
                   {/* HISTORY TAB */}
                   {activeLogTab === 'history' && (
-                    <div className="space-y-0 relative before:absolute before:inset-0 before:ml-[11px] before:-translate-x-px md:before:mx-auto md:before:translate-x-0 before:h-full before:w-0.5 before:bg-gradient-to-b before:from-transparent before:via-[#ebdcb9] dark:before:via-[#584a3b] before:to-transparent max-h-48 overflow-y-auto pr-1 scrollbar-thin">
+                    <div className="space-y-0 relative before:absolute before:inset-0 before:left-[12px] before:h-full before:w-px before:bg-gradient-to-b before:from-transparent before:via-[#ebdcb9] dark:before:via-[#584a3b] before:to-transparent max-h-96 overflow-y-auto pr-1 scrollbar-thin">
                       {[...task.logs]
                         .filter(log => log.type !== 'comment')
                         .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
                         .map((log) => (
                           <div 
                             key={log.id} 
-                            className="relative flex items-center justify-between md:justify-normal md:odd:flex-row-reverse group py-1.5"
+                            className="relative flex items-start gap-3 py-2"
                           >
-                            <div className="flex items-center justify-center w-6 h-6 rounded-full border-2 border-white dark:border-[#292119] bg-[#f4ebd9] dark:bg-[#3a2f26] shrink-0 md:order-1 md:group-odd:-translate-x-1/2 md:group-even:translate-x-1/2 shadow-xs z-10 mx-3 md:mx-auto">
-                              {log.type === 'create' ? <Plus size={10} className="text-[#7dad71] dark:text-[#a3c773]" /> :
-                               log.type === 'move' ? <GitBranch size={10} className="text-[#d89745] dark:text-[#d6b56d]" /> :
-                               <Edit3 size={10} className="text-[#8a6e5a] dark:text-[#b8ab9f]" />}
-                            </div>
+                            <div className={`w-2 h-2 mt-1.5 rounded-full ring-4 ring-[#fdfbf7] dark:ring-[#292119]/50 shrink-0 z-10 ml-[8px] ${
+                                log.type === 'create' ? 'bg-[#7dad71] dark:bg-[#a3c773]' :
+                                log.type === 'move' ? 'bg-[#d89745] dark:bg-[#d6b56d]' :
+                                'bg-[#8a6e5a] dark:bg-[#b8ab9f]'
+                              }`} 
+                            />
                             
-                            <div className="w-[calc(100%-3rem)] md:w-[calc(50%-1.5rem)] bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-lg p-2 shadow-2xs">
-                              <div className="flex items-center justify-between gap-1 mb-0.5">
-                                <span className="text-[8px] font-mono uppercase tracking-widest text-[#a59182] dark:text-[#8a7a6a] font-bold">
+                            <div className="flex-1 flex flex-col min-w-0 pr-2">
+                              <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 mb-0.5">
+                                <span className="text-[9px] font-mono font-bold uppercase tracking-widest text-[#5c493c] dark:text-[#f3eadf]">
                                   {log.type}
                                 </span>
-                                <span className="text-[8px] font-mono text-[#c4b3a4] dark:text-[#584a3b]">
+                                <span className="text-[8px] font-mono text-[#c4b3a4] dark:text-[#8a7a6a]">
                                   {new Date(log.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
                                 </span>
                               </div>
-                              <p className="text-[9px] font-mono text-[#5c493c] dark:text-[#f3eadf] leading-snug break-words">
+                              <p className="text-[10px] font-mono text-[#8a6e5a] dark:text-[#b8ab9f] leading-snug break-words">
                                 {log.message}
                               </p>
                             </div>

@@ -255,6 +255,9 @@ for (const section of sections) {
   assert.ok(['master', 'override'].includes(section.sourceType));
 }
 
+const defaultAgentSections = listPromptSectionsForWorkspace({ agent: 'default' });
+assert.ok(!defaultAgentSections.some((section) => section.id === 'prompt.agent-specific.default'));
+
 // Round-trip write/read/delete on a temp workspace
 const overrideWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-override-'));
 try {

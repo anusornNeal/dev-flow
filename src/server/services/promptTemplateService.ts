@@ -230,7 +230,7 @@ export function getPromptPipelineStructure(pipelineId: string, agent: string, lo
       rawId: rawSkillId, // keeping for backward compatibility if needed internally
       overridePath
     };
-  });
+  }).filter((section) => section.id !== 'prompt.agent-specific.default');
 }
 
 const PROMPT_SKILL_ID_PATTERN = /^[a-zA-Z0-9._-]+$/;

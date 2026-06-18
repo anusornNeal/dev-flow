@@ -14,7 +14,7 @@ export function registerSkillRoutes(app: express.Express, deps: ApiRouteDeps) {
     let skills = deps.state.skillsRegistry;
 
     if (kind === 'authoring') {
-      skills = skills.filter((s) => s.id === 'schema' || s.id === 'playbook');
+      skills = skills.filter((s) => s.id === 'schema' || s.id === 'playbook' || s.id === 'ready-for-review-reviewer-skill');
     } else if (kind === 'workflow') {
       skills = skills.filter((s) => s.id.endsWith('-workflow'));
     } else if (kind === 'prompt') {
@@ -35,7 +35,7 @@ export function registerSkillRoutes(app: express.Express, deps: ApiRouteDeps) {
 
   app.get('/api/skills/authoring', (_req, res) => {
     loadSkillsRegistry(deps.state);
-    const authoring = deps.state.skillsRegistry.filter((s) => s.id === 'schema' || s.id === 'playbook');
+    const authoring = deps.state.skillsRegistry.filter((s) => s.id === 'schema' || s.id === 'playbook' || s.id === 'ready-for-review-reviewer-skill');
     res.json(authoring.map((skill) => ({
       id: skill.id,
       name: skill.name,

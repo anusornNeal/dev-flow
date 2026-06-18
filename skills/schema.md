@@ -67,7 +67,7 @@ All other task fields are identical across both interfaces.
 }
 ```
 
-> **Deprecated:** `designImages` and `designImage` are kept for backward compatibility only. Always use `images` (array of TaskImage objects) for new cards.
+Use `images` for uploaded task attachments and `designImages` for design references. Do not use the legacy single-image field in new cards.
 
 Always confirm the latest schema with:
 
@@ -169,7 +169,6 @@ The `branch` field is the first-class field for tracking the working branch.
 
 Rules:
 - Always use `task.branch` for active branch metadata.
-- There is no `activeBranch` payload field. Do not create one.
 - Do not embed branch metadata into `description` (e.g. `ACTIVE BRANCH: ...`). The UI renders `task.branch` directly.
 
 ### title
@@ -247,7 +246,7 @@ Bad (missing `id`):
 
 ### images
 
-Use the array form for design references:
+Use the array form for uploaded task attachments:
 
 ```json
 {
@@ -263,9 +262,25 @@ Use the array form for design references:
 ```
 
 Rules:
-- Prefer `images` (array of objects) which gives you an `absolutePath` you can view with `view_file`.
-- `designImages` and `designImage` are **deprecated**. Do not use them in new cards.
+- Prefer `images` for uploaded task attachments that belong to the task itself.
 - Do not rely on Jira-authenticated images as the only source.
+
+### designImages
+
+Use the array form for design references:
+
+```json
+{
+  "designImages": [
+    "https://example.com/mockup-v2.png",
+    "data:image/png;base64,iVBORw0KGgoAAA..."
+  ]
+}
+```
+
+Rules:
+- Prefer `designImages` for design references in new cards.
+- Use `images` for uploaded task attachments that belong to the task itself.
 
 ### repoContext
 
@@ -533,7 +548,7 @@ Using raw API `POST /api/tasks`:
     },
     {
       "id": "schema-3",
-      "text": "Replace designImage with designImages in all examples.",
+      "text": "Ensure designImages appears in all examples.",
       "completed": false
     },
     {
@@ -551,8 +566,8 @@ Using raw API `POST /api/tasks`:
   "model": "GPT-5.4 Mini",
   "agent": "Codex",
   "reasoning": "Pure documentation rewrite with no code logic changes. Mini is sufficient.",
-  "acceptanceCriteria": "- Skill matches current DevFlow task fields.\n- All examples use designImages, not designImage.\n- All checklist examples include id, text, completed.\n- Branch is documented as task.branch.",
-  "verification": "- Compare rewritten skill against src/types.ts.\n- Search for stale fields: activeBranch, standalone designImage, checklist without id."
+  "acceptanceCriteria": "- Skill matches current DevFlow task fields.\n- All design reference examples use designImages arrays.\n- All checklist examples include id, text, completed.\n- Branch is documented as task.branch.",
+  "verification": "- Compare rewritten skill against src/types.ts.\n- Search for stale fields: branch metadata aliases, checklist without id."
 }
 ```
 

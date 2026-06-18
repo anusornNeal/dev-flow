@@ -105,7 +105,7 @@ function encodePathSegment(value: string) {
   return encodeURIComponent(value);
 }
 
-export const DEVFLOW_CONTRACT_VERSION = '2026-06-13.1';
+export const DEVFLOW_CONTRACT_VERSION = '2026-06-18.1';
 
 export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   {
@@ -665,6 +665,138 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
       method: 'PUT',
       path: `/api/skills/${encodePathSegment(String(args.id || args.skillId))}`,
       body: { content: args.content },
+    }),
+  },
+  {
+    name: 'list_prompt_skills',
+    description: 'List effective prompt pipeline sections for a project/workspace. Returns compact metadata only (no large content fields).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...projectIdentifierProperties,
+        agent: { type: 'string', description: 'Agent id used to resolve prompt.agent-specific.{agent} entries (default: "default").' },
+        pipeline: { type: 'string', description: 'Pipeline id from config/prompt-pipeline.json (default: "default").' },
+      },
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        sections: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              order: { type: 'number' },
+              required: { type: 'boolean' },
+              sourceType: { type: 'string', enum: ['master', 'override'] },
+              masterAvailable: { type: 'boolean' },
+              overrideAvailable: { type: 'boolean' },
+              effectiveEmpty: { type: 'boolean' },
+              sourcePath: { type: 'string' },
+              overridePath: { type: ['string', 'null'] },
+            },
+          },
+        },
+      },
+    },
+    buildHttpRequest: (args) => ({
+      method: 'GET',
+      path: withQuery('/api/prompt-overrides/sections', {
+        projectId: args.projectId,
+        projectName: args.projectName,
+        repo: args.repo,
+        repoUrl: args.repoUrl,
+        localPath: args.localPath,
+        agent: args.agent,
+        pipeline: args.pipeline,
+      }),
+    }),
+  },
+  {
+    name: 'get_prompt_skill',
+    description: 'Read one prompt pipeline section by id (e.g. "prompt.header"). Returns master, override, effective content, and source paths.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...projectIdentifierProperties,
+        sectionId: { type: 'string', description: 'Prompt section id, e.g. "prompt.header" or "prompt.task-context".' },
+        agent: { type: 'string', description: 'Agent id used to resolve prompt.agent-specific.{agent} entries.' },
+        pipeline: { type: 'string', description: 'Pipeline id (default: "default").' },
+      },
+      required: ['sectionId'],
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: (args) => ({
+      method: 'GET',
+      path: withQuery('/api/prompt-overrides/section', {
+        projectId: args.projectId,
+        projectName: args.projectName,
+        repo: args.repo,
+        repoUrl: args.repoUrl,
+        localPath: args.localPath,
+        sectionId: args.sectionId,
+        agent: args.agent,
+        pipeline: args.pipeline,
+      }),
+    }),
+  },
+  {
+    name: 'update_prompt_override',
+    description: 'Create or update a per-workspace prompt section override. Writes only under <localPath>/.devflow/prompt-overrides/.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...projectIdentifierProperties,
+        sectionId: { type: 'string', description: 'Prompt section id, e.g. "prompt.header".' },
+        content: { type: 'string', description: 'Override markdown content.' },
+        agent: { type: 'string' },
+        pipeline: { type: 'string' },
+      },
+      required: ['sectionId', 'content'],
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: (args) => ({
+      method: 'PUT',
+      path: withQuery('/api/prompt-overrides/section', {
+        projectId: args.projectId,
+        projectName: args.projectName,
+        repo: args.repo,
+        repoUrl: args.repoUrl,
+        localPath: args.localPath,
+        sectionId: args.sectionId,
+        agent: args.agent,
+        pipeline: args.pipeline,
+      }),
+      body: { content: args.content },
+    }),
+  },
+  {
+    name: 'delete_prompt_override',
+    description: 'Delete a per-workspace prompt section override. Falls back to master content for that section. Does not touch master skill files.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...projectIdentifierProperties,
+        sectionId: { type: 'string' },
+        agent: { type: 'string' },
+        pipeline: { type: 'string' },
+      },
+      required: ['sectionId'],
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: (args) => ({
+      method: 'DELETE',
+      path: withQuery('/api/prompt-overrides/section', {
+        projectId: args.projectId,
+        projectName: args.projectName,
+        repo: args.repo,
+        repoUrl: args.repoUrl,
+        localPath: args.localPath,
+        sectionId: args.sectionId,
+        agent: args.agent,
+        pipeline: args.pipeline,
+      }),
     }),
   },
   {

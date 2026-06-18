@@ -350,7 +350,7 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
                   </div>
                 </div>
                 
-                <pre className="p-4 bg-[#fffcf7] dark:bg-[#1e1914] overflow-x-auto text-[11px] leading-relaxed text-[#a46c24] dark:text-[#f3eadf] font-mono scrollbar-thin max-h-64 font-semibold">
+                <pre className="p-4 bg-[#fffcf7] dark:bg-[#1e1914] overflow-x-auto text-[11px] leading-relaxed text-[#a46c24] dark:text-[#f3eadf] font-mono scrollbar-thin max-h-[400px] font-semibold">
                   <code>{jsonString}</code>
                 </pre>
               </div>

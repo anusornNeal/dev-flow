@@ -119,7 +119,7 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
       }}
       onDragEnd={() => setIsDrag(false)}
       onClick={() => onSelect(task)}
-      className={`relative select-none transition-all duration-150 flex flex-col justify-between h-fit p-4 rounded-2xl cursor-grab active:cursor-grabbing group border ${
+      className={`relative select-none transition-all duration-150 flex flex-col justify-between h-fit w-full p-4 rounded-2xl cursor-grab active:cursor-grabbing group border ${
         isDrag 
           ? 'border-dashed border-[#e6b47c] dark:border-[#584a3b] bg-[#faf6ef]/50 dark:bg-[#292119]/50 opacity-60' 
           : isInProgress

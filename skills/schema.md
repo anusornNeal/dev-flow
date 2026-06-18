@@ -67,7 +67,7 @@ All other task fields are identical across both interfaces.
 }
 ```
 
-> **Deprecated:** `designImages` and `designImage` are kept for backward compatibility only. Always use `images` (array of TaskImage objects) for new cards.
+> **Note:** `images` is the attachment array for new task cards. `designImages` remains the array form for design references, and legacy `designImage` input is accepted only for backward compatibility.
 
 Always confirm the latest schema with:
 
@@ -263,8 +263,9 @@ Use the array form for design references:
 ```
 
 Rules:
-- Prefer `images` (array of objects) which gives you an `absolutePath` you can view with `view_file`.
-- `designImages` and `designImage` are **deprecated**. Do not use them in new cards.
+- Prefer `images` (array of objects) for uploaded task attachments; each item includes `absolutePath` so you can view the file natively.
+- Prefer `designImages` (array of strings) for design references in new cards.
+- `designImage` is legacy compatibility input only. Do not use it in new examples.
 - Do not rely on Jira-authenticated images as the only source.
 
 ### repoContext
@@ -533,7 +534,7 @@ Using raw API `POST /api/tasks`:
     },
     {
       "id": "schema-3",
-      "text": "Replace designImage with designImages in all examples.",
+      "text": "Keep all design reference examples on designImages arrays only.",
       "completed": false
     },
     {
@@ -551,8 +552,8 @@ Using raw API `POST /api/tasks`:
   "model": "GPT-5.4 Mini",
   "agent": "Codex",
   "reasoning": "Pure documentation rewrite with no code logic changes. Mini is sufficient.",
-  "acceptanceCriteria": "- Skill matches current DevFlow task fields.\n- All examples use designImages, not designImage.\n- All checklist examples include id, text, completed.\n- Branch is documented as task.branch.",
-  "verification": "- Compare rewritten skill against src/types.ts.\n- Search for stale fields: activeBranch, standalone designImage, checklist without id."
+  "acceptanceCriteria": "- Skill matches current DevFlow task fields.\n- All design reference examples use designImages arrays.\n- All checklist examples include id, text, completed.\n- Branch is documented as task.branch.",
+  "verification": "- Compare rewritten skill against src/types.ts.\n- Search for stale fields: activeBranch, standalone designImage, checklist without id.\n- Confirm there are no new examples that use singular designImage."
 }
 ```
 

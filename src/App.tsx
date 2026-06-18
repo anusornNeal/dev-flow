@@ -29,6 +29,7 @@ import { buildTaskStatusMoveRequest } from './lib/taskStatusMove';
 import { useProjectViewModel } from './viewModels/useProjectViewModel';
 import { useBoardViewModel } from './viewModels/useBoardViewModel';
 import { apiClient } from './client/apiClient';
+import { normalizeTaskListResponse } from './client/responseNormalizers';
 import { toDomainTask } from './domain/mappers/taskMapper';
 import Sidebar from './components/Sidebar';
 import TaskDetailsDrawer from './components/TaskDetailsDrawer';
@@ -185,8 +186,10 @@ export default function App() {
   // Tasks remain API-backed; we do not silently fall back to localStorage for source-of-truth data.
   const fetchTasksFromApi = async () => {
     try {
-      const { data } = await apiClient.fetchJson<{ tasks: any[] }>('/api/tasks', undefined);
-      const serverTasks = (data.tasks || []).map(toDomainTask) as unknown as Task[];
+      const query = activeProjectId ? `?projectId=${encodeURIComponent(activeProjectId)}` : '';
+      const { data } = await apiClient.fetchJson<unknown>('GET', `/api/tasks${query}`);
+      const rawTasks = normalizeTaskListResponse(data);
+      const serverTasks = rawTasks.map(toDomainTask) as unknown as Task[];
       setPersistenceError(null);
       applyServerTasks(serverTasks as any, pendingMovesRef.current);
     } catch (err) {
@@ -244,14 +247,12 @@ export default function App() {
     fetchSettingsFromApi();
     fetchProjectsFromApi();
     fetchTasksFromApi();
-
-    // Auto-polling every 5 seconds
-    const intervalId = setInterval(() => {
-      fetchTasksFromApi();
-    }, 5000);
-
-    return () => clearInterval(intervalId);
   }, []);
+
+  useEffect(() => {
+    if (!activeProjectId) return;
+    fetchTasksFromApi();
+  }, [activeProjectId]);
 
   // Handle Drag Start
   const handleDragStart = (e: React.DragEvent, id: string) => {

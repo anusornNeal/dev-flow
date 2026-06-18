@@ -1,4 +1,5 @@
 import { apiGet } from '../client/apiClient.js';
+import { normalizeTaskListResponse } from '../client/responseNormalizers.js';
 import { toDomainTask, type DomainTask } from '../domain/mappers/taskMapper.js';
 
 export interface TaskListOptions {
@@ -12,8 +13,8 @@ export const taskRepository = {
     if (options.projectId) params.set('projectId', options.projectId);
     if (options.status) params.set('status', options.status);
     const path = params.toString() ? `/api/tasks?${params.toString()}` : '/api/tasks';
-    const { data } = await apiGet<{ tasks: any[] }>(path);
-    return (data.tasks || []).map(toDomainTask);
+    const { data } = await apiGet<unknown>(path);
+    return normalizeTaskListResponse(data).map(toDomainTask);
   },
 
   async get(taskId: string): Promise<DomainTask> {

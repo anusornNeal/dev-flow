@@ -1444,6 +1444,14 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     return res.json(task);
   });
 
+  app.get('/api/tasks', (req, res) => {
+    loadTasks(deps.state);
+    const filtered = filterTasksForList(deps, req);
+    const mode = parseTaskReadMode(req.query.mode, 'standard');
+    const tasks = filtered.map((task) => toTaskResponse(task, mode));
+    res.json({ tasks });
+  });
+
   app.put('/api/tasks', (req, res) => {
     loadTasks(deps.state);
     let rawItems = req.body;

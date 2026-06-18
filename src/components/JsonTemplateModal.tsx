@@ -15,10 +15,10 @@ const SIDEBAR_METHOD_COLORS: Record<string, string> = {
 };
 
 const PANE_METHOD_COLORS: Record<string, string> = {
-  GET: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-  POST: 'bg-blue-50 text-blue-700 border-blue-200',
-  PUT: 'bg-amber-50 text-amber-700 border-amber-200',
-  DELETE: 'bg-rose-50 text-rose-700 border-rose-200',
+  GET: 'bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800/50',
+  POST: 'bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 border-blue-200 dark:border-blue-800/50',
+  PUT: 'bg-amber-50 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-800/50',
+  DELETE: 'bg-rose-50 dark:bg-rose-900/30 text-rose-700 dark:text-rose-400 border-rose-200 dark:border-rose-800/50',
 };
 
 const sampleJson = [
@@ -263,6 +263,7 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
           
           <div className="flex-1 overflow-y-auto scrollbar-thin p-3 space-y-1">
             <button
+              type="button"
               onClick={() => setSelectedItemId('schema')}
               className={`w-full text-left px-3 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-2 ${
                 selectedItemId === 'schema'
@@ -284,6 +285,7 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
               return (
                 <button
                   key={api.id}
+                  type="button"
                   onClick={() => setSelectedItemId(api.id)}
                   className={`w-full text-left px-3 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-2.5 ${
                     isSelected
@@ -315,14 +317,14 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
                 </p>
               </div>
 
-              <div className="space-y-1.5 bg-[#ffffff] dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] rounded-2xl overflow-hidden shadow-2xs">
-                <div className="bg-[#f5eedf]/60 dark:bg-[#1e1914]/60 px-4 py-2 border-b border-[#ebdcb9] dark:border-[#584a3b] flex justify-between items-center text-[10px]">
+              <div className="space-y-1.5 bg-[#ffffff] dark:bg-[#1e1914] border border-[#f5ecd4] dark:border-[#584a3b] rounded-2xl overflow-hidden shadow-2xs">
+                <div className="bg-[#f5eedf]/60 dark:bg-[#1e1914]/60 px-4 py-2 border-b border-[#f5ecd4] dark:border-[#584a3b] flex justify-between items-center text-[10px]">
                   <span className="text-[#715c4d] dark:text-[#f3eadf] font-mono font-bold">template-backlog.json</span>
                   <div className="flex items-center gap-3">
                     <button
                       type="button"
                       onClick={handleDownload}
-                      className="hover:text-[#3a2010] dark:hover:text-[#f3eadf] bg-white dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] px-2.5 py-1 rounded-xl cursor-pointer text-[#715c4d] dark:text-[#f3eadf] font-semibold flex items-center gap-1 transition-all"
+                      className="hover:text-[#3a2010] dark:hover:text-[#f3eadf] bg-white dark:bg-[#1e1914] border border-[#f5ecd4] dark:border-[#584a3b] px-2.5 py-1 rounded-xl cursor-pointer text-[#715c4d] dark:text-[#f3eadf] font-semibold flex items-center gap-1 transition-all"
                     >
                       <Download size={11} /> Download Template
                     </button>
@@ -331,8 +333,8 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
                       onClick={() => handleCopy(jsonString, 'schema')}
                       className={`border px-2.5 py-1 rounded-xl cursor-pointer font-semibold flex items-center gap-1 transition-all ${
                         copied && copiedText === 'schema'
-                          ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
-                          : 'bg-white dark:bg-[#1e1914] border-[#ebdcb9] dark:border-[#584a3b] text-[#715c4d] dark:text-[#f3eadf] hover:text-[#3a2010] dark:hover:text-[#f3eadf]'
+                          ? 'bg-emerald-50 dark:bg-emerald-900/30 border-emerald-200 dark:border-emerald-800/50 text-emerald-700 dark:text-emerald-400'
+                          : 'bg-white dark:bg-[#1e1914] border-[#f5ecd4] dark:border-[#584a3b] text-[#715c4d] dark:text-[#f3eadf] hover:text-[#3a2010] dark:hover:text-[#f3eadf]'
                       }`}
                     >
                       {copied && copiedText === 'schema' ? (
@@ -348,7 +350,7 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
                   </div>
                 </div>
                 
-                <pre className="p-4 bg-[#fffdfa] dark:bg-[#1e1914] overflow-x-auto text-[11px] leading-relaxed text-[#a46c24] dark:text-[#f3eadf] font-mono scrollbar-thin max-h-64 font-semibold">
+                <pre className="p-4 bg-[#fffcf7] dark:bg-[#1e1914] overflow-x-auto text-[11px] leading-relaxed text-[#a46c24] dark:text-[#f3eadf] font-mono scrollbar-thin max-h-64 font-semibold">
                   <code>{jsonString}</code>
                 </pre>
               </div>
@@ -376,7 +378,7 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
               </div>
             </div>
           ) : (
-            <div className="space-y-6">
+            <div key={selectedItemId} className="space-y-6 animate-fade-in">
               <div className="space-y-2">
                 <h3 className="text-xs font-bold text-[#3c2a1a] dark:text-[#f3eadf] flex items-center gap-2">
                   <span className="w-1.5 h-3 bg-[#ebdcb9] dark:bg-[#584a3b] rounded-full inline-block" />
@@ -390,11 +392,10 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
               <div className="space-y-4">
                 {apiSpecsWithIds
                   .filter((api) => api.id === selectedItemId)
-                  .map((api) => {
-                  return (
-                    <div key={api.id} className="bg-white dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] rounded-2xl overflow-hidden shadow-3xs flex flex-col">
+                  .map((api) => (
+                    <div key={api.id} className="bg-white dark:bg-[#1e1914] border border-[#f5ecd4] dark:border-[#584a3b] rounded-2xl overflow-hidden shadow-3xs flex flex-col">
                       {/* Sub-header with Method & Path */}
-                      <div className="bg-[#fcfaf5] dark:bg-[#1e1914] border-b border-[#ebdcb9] dark:border-[#584a3b] px-4 py-2.5 flex items-center justify-between font-mono">
+                      <div className="bg-[#fcfaf5] dark:bg-[#1e1914] border-b border-[#f5ecd4] dark:border-[#584a3b] px-4 py-2.5 flex items-center justify-between font-mono">
                         <div className="flex items-center gap-2.5">
                           <span className={`px-2 py-0.5 rounded-lg border text-[9.5px] font-black tracking-wide ${PANE_METHOD_COLORS[api.method] || 'bg-gray-100 dark:bg-[#1e1914]'}`}>
                             {api.method}
@@ -406,8 +407,8 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
                           onClick={() => handleCopy(api.example, api.id)}
                           className={`text-[9.5px] border px-2 py-0.5 rounded-lg font-bold cursor-pointer transition-colors ${
                             copied && copiedText === api.id
-                              ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                              : 'bg-white dark:bg-[#1e1914] border-[#ebdcb9] dark:border-[#584a3b] text-[#7a6455] dark:text-[#f3eadf] hover:text-[#3c2a1a] dark:hover:text-[#f3eadf]'
+                              ? 'bg-emerald-50 dark:bg-emerald-900/30 border-emerald-200 dark:border-emerald-800/50 text-emerald-800 dark:text-emerald-400'
+                              : 'bg-white dark:bg-[#1e1914] border-[#f5ecd4] dark:border-[#584a3b] text-[#7a6455] dark:text-[#f3eadf] hover:text-[#3c2a1a] dark:hover:text-[#f3eadf]'
                           }`}
                         >
                           {copied && copiedText === api.id ? 'Copied script!' : 'Copy Code'}
@@ -424,7 +425,7 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
                         {api.payload && (
                           <div>
                             <p className="text-[#8c7463] dark:text-[#f3eadf] font-bold text-[9px] uppercase tracking-wider mb-1">Request Body (JSON):</p>
-                            <pre className="p-2.5 bg-[#fefdfb] dark:bg-[#1e1914] border border-[#e5d4bb]/70 dark:border-[#584a3b]/70 rounded-xl overflow-x-auto text-[10px] text-[#aa7233] dark:text-[#f3eadf] leading-relaxed max-h-36 scrollbar-thin">
+                            <pre className="p-2.5 bg-[#fffcf7] dark:bg-[#1e1914] border border-[#f5ecd4] dark:border-[#584a3b] rounded-xl overflow-x-auto text-[10px] text-[#aa7233] dark:text-[#f3eadf] leading-relaxed max-h-36 scrollbar-thin">
                               <code>{api.payload}</code>
                             </pre>
                           </div>
@@ -443,8 +444,7 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
                         </div>
                       </div>
                     </div>
-                  );
-                })}
+                  ))}
               </div>
             </div>
           )}

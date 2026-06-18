@@ -79,7 +79,7 @@ export function BoardLane({
         }
       }}
       onDrop={(e) => handleDrop(e, column.id)}
-      className={`w-[300px] shrink-0 flex flex-col pb-4 p-2 transition-all border-r border-[#e5d4bb]/30 dark:border-[#584a3b]/30 ${
+      className={`w-[300px] shrink-0 flex flex-col px-3 pt-3 pb-4 transition-all border-r border-[#e5d4bb]/30 dark:border-[#584a3b]/30 ${
         isDraggingAny && !isValidDrop ? 'opacity-40 grayscale-[0.5]' : ''
       } ${
         isOver 
@@ -90,7 +90,7 @@ export function BoardLane({
       }`}
     >
       {/* Status header lane metadata */}
-      <div className="flex items-center justify-between mb-4 px-3 pt-3 select-none">
+      <div className="flex items-center justify-between mb-4 select-none">
         <div className="flex items-center gap-2">
           <span className={`shrink-0 ${
             isInProgressCol ? 'text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d]' : 
@@ -122,7 +122,7 @@ export function BoardLane({
         )}
       </div>
 
-      <div className="flex-1 flex flex-col gap-3 p-1 overflow-y-auto scrollbar-thin transition-all px-2">
+      <div className="flex-1 flex flex-col gap-3 overflow-y-auto scrollbar-thin transition-all">
         {tasks.map(task => {
           const subtasks = allTasks.filter(t => t.parentId === task.id);
           return (

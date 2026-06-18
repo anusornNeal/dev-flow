@@ -3,6 +3,7 @@ import type { ApiRouteDeps } from '../types';
 import { installApiRequestContext } from '../services/api';
 import { registerDevFlowRoutes } from './devflow';
 import { registerProjectRoutes } from './projects';
+import { registerPromptOverrideRoutes } from './prompts';
 import { registerSettingsRoutes } from './settings';
 import { registerSkillRoutes } from './skills';
 import { registerTaskRoutes } from './tasks';
@@ -17,4 +18,5 @@ export function registerApiRoutes(app: express.Express, deps: ApiRouteDeps) {
   registerSettingsRoutes(app, deps);
   registerTaskRoutes(app, deps);
   registerAttachmentRoutes(app, deps);
+  registerPromptOverrideRoutes(app, deps);
 }

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { interpolate, isPromptValuePresent, renderPromptTemplate, type PromptRenderContext } from '../src/server/services/promptTemplateService';
+import { interpolate, isAllowedPromptSkillId, isPromptValuePresent, listPromptSectionsForWorkspace, readPromptSectionForWorkspace, renderPromptTemplate, resolvePromptSectionId, writePromptOverrideForWorkspace, deletePromptOverrideForWorkspace, type PromptRenderContext } from '../src/server/services/promptTemplateService';
 import { getProjectRulesContext } from '../src/server/services/projectRulesService';
 import { renderTaskPrompt } from '../src/server/services/taskService';
 
@@ -209,3 +209,71 @@ assert.ok(!taskPrompt.includes('(none)'));
 assert.ok(taskPrompt.includes('Keep only real fields in sparse prompt output.'));
 
 console.log('[verify] Prompt template coverage passed!');
+
+console.log('[verify] Testing prompt override helpers (skill id validation, compactness, write/read/delete)...');
+assert.equal(resolvePromptSectionId('prompt.agent-specific.{agent}', 'Codex'), 'prompt.agent-specific.codex');
+assert.equal(resolvePromptSectionId('prompt.header', 'Codex'), 'prompt.header');
+
+// Allowed ids (in the default pipeline)
+assert.equal(isAllowedPromptSkillId('prompt.header', 'codex'), true);
+assert.equal(isAllowedPromptSkillId('prompt.task-context', 'codex'), true);
+assert.equal(isAllowedPromptSkillId('prompt.repo-context', 'codex'), true);
+assert.equal(isAllowedPromptSkillId('prompt.project-rules', 'codex'), true);
+assert.equal(isAllowedPromptSkillId('prompt.checklist', 'codex'), true);
+assert.equal(isAllowedPromptSkillId('prompt.subtasks', 'codex'), true);
+assert.equal(isAllowedPromptSkillId('prompt.execution-rules', 'codex'), true);
+assert.equal(isAllowedPromptSkillId('prompt.completion-contract', 'codex'), true);
+assert.equal(isAllowedPromptSkillId('prompt.footer', 'codex'), true);
+assert.equal(isAllowedPromptSkillId('prompt.agent-specific.codex', 'codex'), true);
+
+// Disallowed ids
+assert.equal(isAllowedPromptSkillId('../etc/passwd', 'codex'), false);
+assert.equal(isAllowedPromptSkillId('..', 'codex'), false);
+assert.equal(isAllowedPromptSkillId('a/../b', 'codex'), false);
+assert.equal(isAllowedPromptSkillId('a/b', 'codex'), false);
+assert.equal(isAllowedPromptSkillId('/etc/passwd', 'codex'), false);
+assert.equal(isAllowedPromptSkillId('prompt.unknown.thing', 'codex'), false);
+assert.equal(isAllowedPromptSkillId('', 'codex'), false);
+assert.equal(isAllowedPromptSkillId(undefined as any, 'codex'), false);
+assert.equal(isAllowedPromptSkillId(null as any, 'codex'), false);
+assert.equal(isAllowedPromptSkillId('a'.repeat(129), 'codex'), false);
+
+// Compact list omits large content fields
+const sections = listPromptSectionsForWorkspace({ agent: 'codex' });
+assert.ok(sections.length >= 9, 'pipeline should have at least 9 sections');
+for (const section of sections) {
+  assert.equal((section as any).masterContent, undefined, `section ${section.id} should not include masterContent`);
+  assert.equal((section as any).overrideContent, undefined, `section ${section.id} should not include overrideContent`);
+  assert.equal((section as any).effectiveContent, undefined, `section ${section.id} should not include effectiveContent`);
+  assert.ok(typeof section.id === 'string');
+  assert.ok(['master', 'override'].includes(section.sourceType));
+}
+
+// Round-trip write/read/delete on a temp workspace
+const overrideWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-override-'));
+try {
+  writePromptOverrideForWorkspace(overrideWorkspace, 'prompt.header', '# override\nbody', { agent: 'codex' });
+  const after = readPromptSectionForWorkspace('prompt.header', { agent: 'codex', localPath: overrideWorkspace });
+  assert.ok(after, 'section must be returned');
+  assert.equal(after!.sourceType, 'override');
+  assert.equal(after!.overrideContent, '# override\nbody');
+  assert.equal(after!.effectiveContent, '# override\nbody');
+
+  const removed = deletePromptOverrideForWorkspace(overrideWorkspace, 'prompt.header', { agent: 'codex' });
+  assert.equal(removed.success, true);
+  assert.equal(removed.removed, true);
+
+  const afterDelete = readPromptSectionForWorkspace('prompt.header', { agent: 'codex', localPath: overrideWorkspace });
+  assert.equal(afterDelete!.sourceType, 'master');
+  assert.equal(afterDelete!.overrideContent, undefined);
+
+  // Service-layer validation rejects bad ids before touching the filesystem
+  assert.throws(() => writePromptOverrideForWorkspace(overrideWorkspace, '../etc/passwd', 'x', { agent: 'codex' }));
+  assert.throws(() => writePromptOverrideForWorkspace(overrideWorkspace, 'prompt.unknown.thing', 'x', { agent: 'codex' }));
+  assert.throws(() => readPromptSectionForWorkspace('../etc/passwd', { agent: 'codex', localPath: overrideWorkspace }));
+  assert.throws(() => deletePromptOverrideForWorkspace(overrideWorkspace, 'prompt.unknown.thing', { agent: 'codex' }));
+} finally {
+  fs.rmSync(overrideWorkspace, { recursive: true, force: true });
+}
+
+console.log('[verify] Prompt override helper coverage passed!');

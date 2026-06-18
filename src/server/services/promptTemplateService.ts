@@ -1,6 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 import { getDevFlowAppRoot } from '../../lib/devFlowPaths';
+import { createApiError } from './api';
+import { findProjectByIdentifier } from './taskService';
 import type { ProjectRulesContext } from './projectRulesService';
 
 export interface PromptRenderContext {
@@ -232,4 +234,92 @@ export function getPromptPipelineStructure(pipelineId: string, agent: string, lo
       overridePath
     };
   });
+}
+
+const PROMPT_SKILL_ID_PATTERN = /^[a-zA-Z0-9._-]+$/;
+
+export function resolvePromptSectionId(rawSkillId: string, agent: string): string {
+  return rawSkillId.replace('{agent}', (agent || 'default').toLowerCase());
+}
+
+export function isAllowedPromptSkillId(skillId: unknown, agent: string, pipelineId: string = 'default'): boolean {
+  if (typeof skillId !== 'string' || skillId.length === 0 || skillId.length > 128) return false;
+  if (!PROMPT_SKILL_ID_PATTERN.test(skillId)) return false;
+  if (skillId.includes('..')) return false;
+  const resolved = getPromptPipeline(pipelineId).map((raw) => resolvePromptSectionId(raw, agent));
+  if (resolved.includes(skillId)) return true;
+  return skillId === `prompt.agent-specific.${(agent || 'default').toLowerCase()}`;
+}
+
+export function listPromptSectionsForWorkspace(opts: { pipelineId?: string; agent?: string; localPath?: string }) {
+  const pipelineId = opts.pipelineId || 'default';
+  const agent = opts.agent || 'default';
+  const sections = getPromptPipelineStructure(pipelineId, agent, opts.localPath);
+  return sections.map((s) => ({
+    id: s.id,
+    order: s.order,
+    required: s.required,
+    sourceType: s.sourceType,
+    masterAvailable: Boolean(s.masterContent),
+    overrideAvailable: Boolean(s.overrideContent),
+    effectiveEmpty: !s.effectiveContent || String(s.effectiveContent).trim().length === 0,
+    sourcePath: s.sourcePath,
+    overridePath: s.overridePath,
+  }));
+}
+
+export function readPromptSectionForWorkspace(sectionId: string, opts: { pipelineId?: string; agent?: string; localPath?: string }) {
+  const pipelineId = opts.pipelineId || 'default';
+  const agent = opts.agent || 'default';
+  if (!isAllowedPromptSkillId(sectionId, agent, pipelineId)) {
+    throw createApiError(400, 'INVALID_SECTION_ID', `Section id not in pipeline: ${sectionId}`, { affectedId: sectionId });
+  }
+  const all = getPromptPipelineStructure(pipelineId, agent, opts.localPath);
+  return all.find((s) => s.id === sectionId) || null;
+}
+
+function ensureOverridePathIsSafe(localPath: string, sectionId: string, opts: { pipelineId?: string; agent?: string }) {
+  const pipelineId = opts.pipelineId || 'default';
+  const agent = opts.agent || 'default';
+  if (!isAllowedPromptSkillId(sectionId, agent, pipelineId)) {
+    throw createApiError(400, 'INVALID_SECTION_ID', `Section id not in pipeline: ${sectionId}`, { affectedId: sectionId });
+  }
+  const overrideDir = path.join(localPath, '.devflow', 'prompt-overrides');
+  const overridePath = path.join(overrideDir, `${sectionId}.md`);
+  const resolved = path.resolve(overridePath);
+  const root = path.resolve(overrideDir);
+  if (!resolved.startsWith(root + path.sep) && resolved !== root) {
+    throw createApiError(403, 'FILE_ACCESS_DENIED', 'Path traversal detected', { affectedId: sectionId });
+  }
+  return { overrideDir, overridePath: resolved };
+}
+
+export function writePromptOverrideForWorkspace(localPath: string, sectionId: string, content: string, opts: { pipelineId?: string; agent?: string } = {}) {
+  if (typeof content !== 'string') {
+    throw createApiError(400, 'INVALID_CONTENT', 'content must be a string');
+  }
+  if (typeof localPath !== 'string' || !localPath) {
+    throw createApiError(400, 'INVALID_LOCAL_PATH', 'localPath is required');
+  }
+  const { overrideDir, overridePath } = ensureOverridePathIsSafe(localPath, sectionId, opts);
+  fs.mkdirSync(overrideDir, { recursive: true });
+  fs.writeFileSync(overridePath, content, 'utf8');
+  return { success: true, overridePath };
+}
+
+export function deletePromptOverrideForWorkspace(localPath: string, sectionId: string, opts: { pipelineId?: string; agent?: string } = {}) {
+  if (typeof localPath !== 'string' || !localPath) {
+    throw createApiError(400, 'INVALID_LOCAL_PATH', 'localPath is required');
+  }
+  const { overridePath } = ensureOverridePathIsSafe(localPath, sectionId, opts);
+  if (!fs.existsSync(overridePath)) return { success: true, removed: false, overridePath };
+  fs.unlinkSync(overridePath);
+  return { success: true, removed: true, overridePath };
+}
+
+export function resolvePromptProjectLocalPath(state: any, identifier: { projectId?: string; projectName?: string; repo?: string; repoUrl?: string; localPath?: string }): string {
+  const project = findProjectByIdentifier(state, identifier);
+  if (project?.localPath) return project.localPath;
+  if (typeof identifier.localPath === 'string' && identifier.localPath) return identifier.localPath;
+  throw createApiError(400, 'INVALID_PROJECT', 'Could not resolve a workspace: provide projectId, projectName, repo, repoUrl, or localPath');
 }

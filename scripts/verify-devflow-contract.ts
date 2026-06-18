@@ -170,6 +170,102 @@ try {
   assert.ok(createTaskSchema?.properties?.repoUrl);
   assert.ok(updateTaskSchema?.properties?.taskId);
 
+  console.log('[verify] Testing prompt override MCP tools...');
+  const newToolNames = ['list_prompt_skills', 'get_prompt_skill', 'update_prompt_override', 'delete_prompt_override'];
+  for (const toolName of newToolNames) {
+    assert.ok(
+      catalog.tools.some((tool) => tool.name === toolName),
+      `Missing tool in catalog: ${toolName}`,
+    );
+    assert.ok(
+      mcpTools.some((tool) => tool.name === toolName),
+      `Missing tool in MCP list: ${toolName}`,
+    );
+  }
+  const updateOverrideSchema = catalog.tools.find((tool) => tool.name === 'update_prompt_override')?.inputSchema as any;
+  const getSkillSchema = catalog.tools.find((tool) => tool.name === 'get_prompt_skill')?.inputSchema as any;
+  const deleteOverrideSchema = catalog.tools.find((tool) => tool.name === 'delete_prompt_override')?.inputSchema as any;
+  assert.ok(Array.isArray(updateOverrideSchema?.required) && updateOverrideSchema.required.includes('sectionId') && updateOverrideSchema.required.includes('content'));
+  assert.ok(Array.isArray(getSkillSchema?.required) && getSkillSchema.required.includes('sectionId'));
+  assert.ok(Array.isArray(deleteOverrideSchema?.required) && deleteOverrideSchema.required.includes('sectionId'));
+  assert.ok(updateOverrideSchema?.properties?.projectId);
+  assert.ok(updateOverrideSchema?.properties?.localPath);
+
+  // HTTP round-trip: write override, read it, delete it, read again.
+  const overrideContent = '# test override\n\nfor prompt.header\n';
+  const putResp = await fetch(`${baseUrl}/api/prompt-overrides/section`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectId: 'project-contract-1', sectionId: 'prompt.header', content: overrideContent }),
+  });
+  assert.equal(putResp.status, 200);
+  const putBody = await putResp.json();
+  assert.equal(putBody.success, true);
+  assert.ok(putBody.overridePath && putBody.overridePath.endsWith('prompt.header.md'));
+
+  const getAfterPut = await fetch(`${baseUrl}/api/prompt-overrides/section?projectId=project-contract-1&sectionId=prompt.header`);
+  assert.equal(getAfterPut.status, 200);
+  const getAfterPutBody = await getAfterPut.json();
+  assert.equal(getAfterPutBody.section.overrideContent, overrideContent);
+  assert.equal(getAfterPutBody.section.effectiveContent, overrideContent);
+  assert.equal(getAfterPutBody.section.sourceType, 'override');
+
+  const sectionsResp = await fetch(`${baseUrl}/api/prompt-overrides/sections?projectId=project-contract-1`);
+  assert.equal(sectionsResp.status, 200);
+  const sectionsBody = await sectionsResp.json();
+  assert.ok(Array.isArray(sectionsBody.sections));
+  assert.ok(sectionsBody.sections.length > 0);
+  const headerSection = sectionsBody.sections.find((s: any) => s.id === 'prompt.header');
+  assert.ok(headerSection, 'list must include prompt.header section');
+  assert.equal(headerSection.sourceType, 'override');
+  assert.equal(headerSection.overrideAvailable, true);
+  assert.equal(headerSection.masterAvailable, true);
+  // Compactness: list response must NOT include large content fields.
+  assert.equal(headerSection.masterContent, undefined);
+  assert.equal(headerSection.overrideContent, undefined);
+  assert.equal(headerSection.effectiveContent, undefined);
+
+  const deleteResp = await fetch(`${baseUrl}/api/prompt-overrides/section?projectId=project-contract-1&sectionId=prompt.header`, { method: 'DELETE' });
+  assert.equal(deleteResp.status, 200);
+  const deleteBody = await deleteResp.json();
+  assert.equal(deleteBody.success, true);
+  assert.equal(deleteBody.removed, true);
+
+  const getAfterDelete = await fetch(`${baseUrl}/api/prompt-overrides/section?projectId=project-contract-1&sectionId=prompt.header`);
+  assert.equal(getAfterDelete.status, 200);
+  const getAfterDeleteBody = await getAfterDelete.json();
+  assert.equal(getAfterDeleteBody.section.sourceType, 'master');
+  assert.equal(getAfterDeleteBody.section.overrideContent, undefined);
+
+  // Path-traversal / invalid id rejection
+  const traversalResp = await fetch(`${baseUrl}/api/prompt-overrides/section`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectId: 'project-contract-1', sectionId: '../etc/passwd', content: 'x' }),
+  });
+  assert.equal(traversalResp.status, 400);
+  const traversalBody = await traversalResp.json();
+  assert.equal(traversalBody.error.code, 'INVALID_SECTION_ID');
+
+  const unknownIdResp = await fetch(`${baseUrl}/api/prompt-overrides/section`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectId: 'project-contract-1', sectionId: 'prompt.unknown.thing', content: 'x' }),
+  });
+  assert.equal(unknownIdResp.status, 400);
+  const unknownIdBody = await unknownIdResp.json();
+  assert.equal(unknownIdBody.error.code, 'INVALID_SECTION_ID');
+
+  // Missing project / no localPath resolution
+  const noProjectResp = await fetch(`${baseUrl}/api/prompt-overrides/section`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sectionId: 'prompt.header', content: 'x' }),
+  });
+  assert.equal(noProjectResp.status, 400);
+  const noProjectBody = await noProjectResp.json();
+  assert.equal(noProjectBody.error.code, 'INVALID_PROJECT');
+
   console.log('[verify-devflow-contract] all assertions passed');
 } finally {
   await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));

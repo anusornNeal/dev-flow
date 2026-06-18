@@ -79,7 +79,7 @@ export function BoardLane({
         }
       }}
       onDrop={(e) => handleDrop(e, column.id)}
-      className={`w-[300px] shrink-0 flex flex-col px-3 pt-3 pb-4 transition-all border-r border-[#e5d4bb]/30 dark:border-[#584a3b]/30 ${
+      className={`w-[320px] shrink-0 flex flex-col px-5 pt-3 pb-4 transition-all border-r border-[#e5d4bb]/30 dark:border-[#584a3b]/30 ${
         isDraggingAny && !isValidDrop ? 'opacity-40 grayscale-[0.5]' : ''
       } ${
         isOver 

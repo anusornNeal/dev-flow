@@ -587,7 +587,7 @@ export default function App() {
 
           {/* Kanban Board Container scroll area */}
           <div className="flex-1 overflow-x-auto p-6 bg-[#faf7f0] dark:bg-[#1e1914]">
-            <div className="flex gap-4 w-max items-stretch min-h-[calc(100vh-210px)] pb-2">
+            <div className="flex w-max items-stretch min-h-[calc(100vh-210px)] pb-2">
               
               {COLUMNS.map(col => {
                 const columnTasks = filteredTasks

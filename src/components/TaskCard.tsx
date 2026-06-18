@@ -93,9 +93,7 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
               : /stale|timed out|timeout/i.test(latestRun.errorMessage || '')
                 ? 'Timed out'
                 : 'Stopped'
-    : task.agent
-      ? 'Not ready'
-      : null;
+    : null;
   const runStatusTone = latestRun
     ? latestRun.status === 'queued'
       ? 'bg-[#fff5e5] text-[#935919] border-[#fde5bd] dark:bg-[#3a2f26] dark:text-[#f3eadf] dark:border-[#584a3b]'

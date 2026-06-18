@@ -176,8 +176,11 @@ export function renderPromptTemplate(pipelineId: string, context: PromptRenderCo
     }
   }
 
-  // Prepend used skills as requested
-  const finalContent = `<!-- Rendered using skills: ${usedSkills.join(', ')} -->\n\n${sections.join('\n\n')}`;
+  // Compose the final prompt body from the rendered sections only.
+  // The internal usedSkills list is still returned in the API response for
+  // logs/debugging, but we no longer emit it as an HTML comment at the top of
+  // the rendered prompt.
+  const finalContent = sections.join('\n\n');
 
   if (mode === 'preview') {
     return {

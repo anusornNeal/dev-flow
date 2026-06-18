@@ -15,7 +15,7 @@ const express = (await import('express')).default;
 const { registerApiRoutes } = await import('../src/server/routes/registerApiRoutes.js');
 const { saveProjects } = await import('../src/server/repositories/projectRepository.js');
 const { saveTasks } = await import('../src/server/repositories/taskRepository.js');
-const { getCapabilityCatalog, getMcpToolList } = await import('../src/server/contracts/devflowContract.js');
+const { getCapabilityCatalog, getMcpToolList, getToolDefinitionByName } = await import('../src/server/contracts/devflowContract.js');
 
 const state = {
   tasksCache: [
@@ -190,6 +190,26 @@ try {
   assert.ok(Array.isArray(deleteOverrideSchema?.required) && deleteOverrideSchema.required.includes('sectionId'));
   assert.ok(updateOverrideSchema?.properties?.projectId);
   assert.ok(updateOverrideSchema?.properties?.localPath);
+
+  // Verify the contract-level buildHttpRequest mapping actually produces the
+  // right body shape (MCP tool path, not hand-written HTTP body).
+  const updateOverrideTool = getToolDefinitionByName('update_prompt_override');
+  assert.ok(updateOverrideTool, 'update_prompt_override must be resolvable by name');
+  const contractReq = updateOverrideTool.buildHttpRequest({
+    projectId: 'project-contract-1',
+    sectionId: 'prompt.header',
+    content: '# from contract',
+    agent: 'codex',
+    pipeline: 'default',
+  });
+  assert.equal(contractReq.method, 'PUT');
+  assert.equal(contractReq.path, '/api/prompt-overrides/section');
+  assert.ok(contractReq.body, 'PUT body must be present');
+  assert.equal((contractReq.body as Record<string, unknown>)?.sectionId, 'prompt.header');
+  assert.equal((contractReq.body as Record<string, unknown>)?.content, '# from contract');
+  assert.equal((contractReq.body as Record<string, unknown>)?.projectId, 'project-contract-1');
+  assert.equal((contractReq.body as Record<string, unknown>)?.agent, 'codex');
+  assert.equal((contractReq.body as Record<string, unknown>)?.pipeline, 'default');
 
   // HTTP round-trip: write override, read it, delete it, read again.
   const overrideContent = '# test override\n\nfor prompt.header\n';

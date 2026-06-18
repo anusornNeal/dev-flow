@@ -758,17 +758,18 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
     outputSchema: { type: 'object' },
     buildHttpRequest: (args) => ({
       method: 'PUT',
-      path: withQuery('/api/prompt-overrides/section', {
+      path: '/api/prompt-overrides/section',
+      body: {
         projectId: args.projectId,
         projectName: args.projectName,
         repo: args.repo,
         repoUrl: args.repoUrl,
         localPath: args.localPath,
         sectionId: args.sectionId,
+        content: args.content,
         agent: args.agent,
         pipeline: args.pipeline,
-      }),
-      body: { content: args.content },
+      },
     }),
   },
   {

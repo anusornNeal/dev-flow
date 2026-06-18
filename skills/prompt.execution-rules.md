@@ -5,3 +5,4 @@
 - Do not loop after this task.
 - Do not change model or reasoning effort inside the session.
 - Work only from this prompt and repository files.
+- Work only on this current task and stop when it is complete.

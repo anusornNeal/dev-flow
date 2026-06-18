@@ -57,12 +57,9 @@ export function getPromptPipeline(pipelineId: string = 'default'): string[] {
     'prompt.header',
     'prompt.task-context',
     'prompt.repo-context',
-    'prompt.checklist',
-    'prompt.subtasks',
     'prompt.execution-rules',
     'prompt.agent-specific.{agent}',
-    'prompt.completion-contract',
-    'prompt.footer'
+    'prompt.completion-contract'
   ];
 }
 

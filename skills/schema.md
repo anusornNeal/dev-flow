@@ -67,7 +67,7 @@ All other task fields are identical across both interfaces.
 }
 ```
 
-Use `images` for uploaded task attachments and `designImages` for design references. Do not use the legacy single-image field in new cards.
+> **Note:** `images` is the attachment array for new task cards. `designImages` remains the array form for design references, and legacy `designImage` input is accepted only for backward compatibility.
 
 Always confirm the latest schema with:
 
@@ -262,7 +262,9 @@ Use the array form for uploaded task attachments:
 ```
 
 Rules:
-- Prefer `images` for uploaded task attachments that belong to the task itself.
+- Prefer `images` (array of objects) for uploaded task attachments; each item includes `absolutePath` so you can view the file natively.
+- Prefer `designImages` (array of strings) for design references in new cards.
+- `designImage` is legacy compatibility input only. Do not use it in new examples.
 - Do not rely on Jira-authenticated images as the only source.
 
 ### designImages
@@ -548,7 +550,7 @@ Using raw API `POST /api/tasks`:
     },
     {
       "id": "schema-3",
-      "text": "Ensure designImages appears in all examples.",
+      "text": "Keep all design reference examples on designImages arrays only.",
       "completed": false
     },
     {
@@ -567,7 +569,7 @@ Using raw API `POST /api/tasks`:
   "agent": "Codex",
   "reasoning": "Pure documentation rewrite with no code logic changes. Mini is sufficient.",
   "acceptanceCriteria": "- Skill matches current DevFlow task fields.\n- All design reference examples use designImages arrays.\n- All checklist examples include id, text, completed.\n- Branch is documented as task.branch.",
-  "verification": "- Compare rewritten skill against src/types.ts.\n- Search for stale fields: branch metadata aliases, checklist without id."
+  "verification": "- Compare rewritten skill against src/types.ts.\n- Search for stale fields: activeBranch, standalone designImage, checklist without id.\n- Confirm there are no new examples that use singular designImage."
 }
 ```
 

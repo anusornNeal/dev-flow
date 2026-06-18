@@ -118,6 +118,14 @@ const apiSpecs = [
     example: 'fetch(\'/api/projects\', {\n  method: \'POST\',\n  headers: { \'Content-Type\': \'application/json\' },\n  body: JSON.stringify({ name: \'DevFlow\', repoUrl: \'https://github.com/my/repo\' })\n}).then(res => res.json());'
   },
   {
+    method: 'PUT',
+    path: '/api/projects/:id',
+    description: 'อัปเดตข้อมูลโปรเจกต์ เช่น เปลี่ยนชื่อ หรือ URL',
+    payload: '{\n  "name": "DevFlow V2",\n  "repoUrl": "https://github.com/my/repo2"\n}',
+    response: 'JSON Object ของ Project ที่อัปเดตเสร็จ',
+    example: 'fetch(\'/api/projects/project-123\', {\n  method: \'PUT\',\n  headers: { \'Content-Type\': \'application/json\' },\n  body: JSON.stringify({ name: \'DevFlow V2\' })\n}).then(res => res.json());'
+  },
+  {
     method: 'DELETE',
     path: '/api/projects/:id',
     description: 'ลบโปรเจกต์พร้อมตั๋วงานที่ผูกกับโปรเจกต์นั้นอย่างถาวร',
@@ -200,6 +208,43 @@ const apiSpecs = [
     description: 'ดึงโครงสร้าง JSON Schema ของข้อมูลการ์ดงาน (Task) ที่ระบุ Type ของทุกฟิลด์ และ Enum ค่อนข้างครบถ้วน',
     response: 'JSON Schema Definition Object',
     example: 'fetch(\'/api/schema/task\').then(res => res.json()).then(schema => console.log(schema));'
+  },
+  {
+    method: 'GET',
+    path: '/api/settings',
+    description: 'ดึงการตั้งค่าของแอปพลิเคชันและผู้ใช้ (เช่น AI Model, API Keys)',
+    response: 'JSON Object แสดง Settings ทั้งหมด',
+    example: 'fetch(\'/api/settings\').then(res => res.json());'
+  },
+  {
+    method: 'PUT',
+    path: '/api/settings',
+    description: 'บันทึกและอัปเดตการตั้งค่าแอปพลิเคชัน',
+    payload: '{\n  "aiModel": "Antigravity",\n  "apiKey": "sk-1234"\n}',
+    response: 'JSON Object ของ Settings ที่อัปเดตแล้ว',
+    example: 'fetch(\'/api/settings\', {\n  method: \'PUT\',\n  headers: { \'Content-Type\': \'application/json\' },\n  body: JSON.stringify({ aiModel: \'Antigravity\' })\n}).then(res => res.json());'
+  },
+  {
+    method: 'POST',
+    path: '/api/images/upload',
+    description: 'อัปโหลดรูปภาพเพื่อนำไปใช้แนบในการ์ดงาน',
+    payload: 'FormData (multipart/form-data) บรรจุไฟล์รูปภาพ',
+    response: '{ "success": true, "url": "..." }',
+    example: 'const formData = new FormData();\nformData.append("image", fileBlob);\nfetch(\'/api/images/upload\', {\n  method: \'POST\',\n  body: formData\n}).then(res => res.json());'
+  },
+  {
+    method: 'GET',
+    path: '/api/tasks/:id/prompt',
+    description: 'ดึงข้อมูล Prompt พื้นฐานหรือ System Prompt สำหรับการ์ดงานนี้เพื่อส่งให้ AI',
+    response: 'JSON Object บรรจุ String ของ Prompt',
+    example: 'fetch(\'/api/tasks/task-1/prompt\').then(res => res.json());'
+  },
+  {
+    method: 'GET',
+    path: '/api/tasks/:id/agent-runs/:runId/log',
+    description: 'ดึงข้อมูลบันทึกการทำงาน (Log) ของ Agent ที่รันผ่าน Task นี้',
+    response: 'Text String แสดง Log การทำงาน',
+    example: 'fetch(\'/api/tasks/task-1/agent-runs/run-123/log\').then(res => res.text());'
   }
 ];
 

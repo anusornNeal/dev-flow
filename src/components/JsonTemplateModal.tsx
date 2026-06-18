@@ -242,7 +242,7 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
       {/* Click outside to close */}
       <div className="fixed inset-0" onClick={onClose} />
 
-      <div className="bg-[#fcfaf5]/80 dark:bg-[#1e1914]/80 backdrop-blur-xl border border-[#ebdcb9] dark:border-[#584a3b] w-full max-w-5xl rounded-3xl shadow-2xl relative z-10 overflow-hidden flex font-sans max-h-[85vh]">
+      <div className="bg-[#fcfaf5]/80 dark:bg-[#1e1914]/80 backdrop-blur-xl border border-[#ebdcb9] dark:border-[#584a3b] w-full max-w-5xl rounded-3xl shadow-2xl relative z-10 overflow-hidden flex font-sans h-[85vh]">
         {/* Close button absolute top right */}
         <button
           type="button"
@@ -310,10 +310,10 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
               <div className="space-y-2">
                 <h3 className="text-xs font-bold text-[#3c2a1a] dark:text-[#f3eadf] flex items-center gap-2">
                   <span className="w-1.5 h-3 bg-[#ebdcb9] dark:bg-[#584a3b] rounded-full inline-block" />
-                  α╣éα╕äα╕úα╕çα╕¬α╕úα╣ëα╕▓α╕çα╕éα╣ëα╕¡α╕íα╕╣α╕Ñ JSON α╕¬α╕│α╕½α╕úα╕▒α╕Üα╕Öα╕│α╣Çα╕éα╣ëα╕▓/α╕¬α╕│α╕úα╕¡α╕çα╕éα╣ëα╕¡α╕íα╕╣α╕Ñ (Import Template)
+                  โครงสร้างข้อมูล JSON สำหรับนำเข้า/สำรองข้อมูล (Import Template)
                 </h3>
                 <p className="text-[11px] text-[#7a6455] dark:text-[#f3eadf] leading-relaxed font-sans">
-                  α╕äα╕╕α╕ôα╕¬α╕▓α╕íα╕▓α╕úα╕ûα╣üα╕üα╣ëα╣äα╕éα╕úα╕▓α╕óα╕üα╕▓α╕úα╕çα╕▓α╕Öα╣üα╕Üα╕Üα╕üα╕Ñα╕╕α╣êα╕í (Batch) α╣Çα╕₧α╕╖α╣êα╕¡α╕êα╕▒α╕öα╕üα╕▓α╕úα╣Çα╕¡α╕üα╕¬α╕▓α╕úα╕Ñα╣êα╕ºα╕çα╕½α╕Öα╣ëα╕▓ α╕Üα╕▒α╕Öα╕ùα╕╢α╕üα╣Çα╕¢α╣çα╕Öα╣äα╕ƒα╕Ñα╣î <code className="bg-[#f5eedf] dark:bg-[#1e1914] px-1.5 py-0.5 rounded border border-[#ebdcb9] dark:border-[#584a3b] font-mono text-[#aa7233] dark:text-[#f3eadf] text-[10px]">.json</code> α╣üα╕Ñα╣ëα╕ºα╕Öα╕│α╣Çα╕éα╣ëα╕▓α╕£α╣êα╕▓α╕Öα╕¢α╕╕α╣êα╕í <strong className="text-[#3c2a1a] dark:text-[#f3eadf]">Restore</strong> α╕öα╣ëα╕▓α╕Öα╕Üα╕Öα╣Çα╕₧α╕╖α╣êα╕¡α╣Çα╕èα╕╖α╣êα╕¡α╕íα╣éα╕óα╕çα╕üα╕▒α╕Ü API α╕ùα╕▒α╕Öα╕ùα╕╡
+                  คุณสามารถแก้ไขรายการงานแบบกลุ่ม (Batch) เพื่อจัดการเอกสารล่วงหน้า บันทึกเป็นไฟล์ <code className="bg-[#f5eedf] dark:bg-[#1e1914] px-1.5 py-0.5 rounded border border-[#ebdcb9] dark:border-[#584a3b] font-mono text-[#aa7233] dark:text-[#f3eadf] text-[10px]">.json</code> แล้วนำเข้าผ่านปุ่ม <strong className="text-[#3c2a1a] dark:text-[#f3eadf]">Restore</strong> ด้านบนเพื่อเชื่อมโยงกับ API ทันที
                 </p>
               </div>
 
@@ -356,24 +356,24 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
               </div>
 
               <div className="border-t border-[#ebdcb9]/60 dark:border-[#584a3b]/60 pt-4 space-y-2 font-sans text-[11px] text-[#7a6455] dark:text-[#f3eadf] leading-relaxed">
-                <p className="font-mono text-[9px] uppercase tracking-wider text-[#8a6e5a] dark:text-[#f3eadf] font-bold">α╕ƒα╕┤α╕Ñα╕öα╣îα╕ùα╕╡α╣êα╕¬α╕│α╕äα╕▒α╕ìα╕¢α╕úα╕░α╕üα╕¡α╕Üα╕öα╣ëα╕ºα╕ó:</p>
+                <p className="font-mono text-[9px] uppercase tracking-wider text-[#8a6e5a] dark:text-[#f3eadf] font-bold">ฟิลด์ที่สำคัญประกอบด้วย:</p>
                 <ul className="list-disc list-inside space-y-1 pl-1">
-                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">id</strong>: α╕äα╕╡α╕óα╣îα╕½α╕Ñα╕▒α╕üα╕úα╕░α╕Üα╕╕α╣üα╕òα╣êα╕Ñα╕░α╕çα╕▓α╕Ö α╕òα╣ëα╕¡α╕çα╣äα╕íα╣êα╕ïα╣ëα╕│α╕üα╕▒α╕Ö</li>
-                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">projectId</strong>: α╕Üα╕▒α╕çα╕äα╕▒α╕Üα╣âα╕èα╣ë UUID α╕éα╕¡α╕çα╣éα╕¢α╕úα╣Çα╕êα╕üα╕òα╣î (Raw API α╕òα╣ëα╕¡α╕çα╕üα╕▓α╕úα╕ƒα╕┤α╕Ñα╕öα╣îα╕Öα╕╡α╣ë α╕¬α╣êα╕ºα╕Öα╕¥α╕▒α╣êα╕ç MCP α╕êα╕░α╕¡α╕Öα╕╕α╕íα╕▓α╕Öα╕êα╕▓α╕ü <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">repo</code> α╕½α╕úα╕╖α╕¡ <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">projectName</code> α╣äα╕öα╣ë)</li>
-                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">status</strong>: α╕¬α╕ûα╕▓α╕Öα╕░α╕Üα╕¡α╕úα╣îα╕ö <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">"backlog" | "todo" | "in-progress" | "ready-for-review" | "done"</code></li>
-                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">priority</strong>: α╕úα╕░α╕öα╕▒α╕Üα╕äα╕ºα╕▓α╕íα╣Çα╕úα╣êα╕çα╕öα╣êα╕ºα╕Ö <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">"low" | "medium" | "high"</code></li>
-                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">targetFiles</strong>: α╕úα╕▓α╕óα╕èα╕╖α╣êα╕¡α╕₧α╕▓α╕ÿα╣äα╕ƒα╕Ñα╣îα╕ùα╕╡α╣êα╕úα╕░α╕Üα╕Üα╣Çα╕üα╕╡α╣êα╕óα╕ºα╕éα╣ëα╕¡α╕ç</li>
-                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">checklist</strong>: α╕éα╕▒α╣ëα╕Öα╕òα╕¡α╕Öα╕üα╕▓α╕úα╕ùα╕│α╕çα╕▓α╕Öα╕ùα╕╡α╣êα╕òα╣ëα╕¡α╕çα╕ùα╕│ (executable work logic α╕äα╕ºα╕úα╕¡α╕óα╕╣α╣êα╣âα╕Öα╕Öα╕╡α╣ë α╣üα╕ùα╕Öα╕ùα╕╡α╣êα╕êα╕░α╕Üα╕¡α╕üα╕üα╕ºα╣ëα╕▓α╕çα╣å α╣âα╕Ö description)</li>
-                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">agent</strong>: α╣Çα╕¡α╣Çα╕êα╕Öα╕òα╣îα╕ùα╕╡α╣êα╕úα╕▒α╕Üα╕£α╕┤α╕öα╕èα╕¡α╕Ü <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">"Codex" | "Antigravity" | "Claude"</code></li>
-                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">model</strong>: α╕èα╕╖α╣êα╕¡α╣éα╕íα╣Çα╕öα╕Ñ AI</li>
-                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">effort</strong>: α╕úα╕░α╕öα╕▒α╕Üα╕₧α╕Ñα╕░α╕üα╕│α╕Ñα╕▒α╕ç (α╕òα╣ëα╕¡α╕çα╣âα╕èα╣ëα╕äα╣êα╕▓α╕òα╕▓α╕íα╕ùα╕╡α╣ê Agent/Model α╕¡α╕Öα╕╕α╕ìα╕▓α╕òα╣Çα╕ùα╣êα╕▓α╕Öα╕▒α╣ëα╕Ö) <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">"low" | "medium" | "high" | "xhigh"</code></li>
-                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">reasoning</strong>: α╣Çα╕½α╕òα╕╕α╕£α╕Ñ/α╕Üα╕úα╕┤α╕Üα╕ùα╕ùα╕╡α╣êα╕íα╕▓α╕éα╕¡α╕çα╕çα╕▓α╕Ö α╕üα╕úα╕ôα╕╡α╕úα╕ºα╕í FE/BE α╣Çα╕¢α╣çα╕Ö <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">fullstack</code> α╕òα╣ëα╕¡α╕çα╕úα╕░α╕Üα╕╕α╣Çα╕½α╕òα╕╕α╕£α╕Ñα╕ùα╕╡α╣êα╕Öα╕╡α╣êα╣Çα╕¬α╕íα╕¡</li>
-                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">acceptanceCriteria</strong>: α╣Çα╕üα╕ôα╕æα╣îα╕üα╕▓α╕úα╕òα╕úα╕ºα╕êα╕úα╕▒α╕Üα╕çα╕▓α╕Ö (Acceptance Criteria)</li>
-                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">verification</strong>: α╕éα╕▒α╣ëα╕Öα╕òα╕¡α╕Öα╕üα╕▓α╕úα╕òα╕úα╕ºα╕êα╕¬α╕¡α╕Üα╕½α╕úα╕╖α╕¡α╕ùα╕öα╕¬α╕¡α╕Üα╕ºα╣êα╕▓α╣Çα╕¬α╕úα╣çα╕êα╕¬α╕íα╕Üα╕╣α╕úα╕ôα╣î</li>
-                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">repoContext</strong>: α╕éα╣ëα╕¡α╕äα╣ëα╕Öα╕₧α╕Üα╣Çα╕ëα╕₧α╕▓α╕░α╕çα╕▓α╕Ö, α╕¢α╕▒α╕ìα╕½α╕▓α╕½α╕úα╕╖α╕¡α╕éα╣ëα╕¡α╕êα╕│α╕üα╕▒α╕öα╕¢α╕▒α╕êα╕êα╕╕α╕Üα╕▒α╕Ö (α╕½α╣ëα╕▓α╕íα╣âα╕¬α╣ê URL, path, α╕½α╕úα╕╖α╕¡ branch α╕ïα╣ëα╕│α╕ïα╣ëα╕¡α╕Öα╕ùα╕╡α╣êα╕Öα╕╡α╣ê)</li>
-                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">jiraKey</strong>: α╕úα╕½α╕▒α╕¬α╕Üα╕▒α╣èα╕ü/α╕çα╕▓α╕Öα╕Üα╕Ö Jira (α╣Çα╕èα╣êα╕Ö QCA-3314)</li>
-                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">repo</strong>: α╕Ñα╕┤α╕çα╕üα╣îα╣äα╕¢α╕óα╕▒α╕ç Repository α╕ùα╕╡α╣êα╣Çα╕üα╕╡α╣êα╕óα╕ºα╕éα╣ëα╕¡α╕ç</li>
-                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">sourceUrl</strong>: URL α╕¡α╣ëα╕▓α╕çα╕¡α╕┤α╕çα╕òα╣ëα╕Öα╕ùα╕▓α╕çα╕éα╕¡α╕çα╕òα╕▒α╣ïα╕ºα╕çα╕▓α╕Ö</li>
+                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">id</strong>: คีย์หลักระบุแต่ละงาน ต้องไม่ซ้ำกัน</li>
+                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">projectId</strong>: บังคับใช้ UUID ของโปรเจกต์ (Raw API ต้องใช้การฟิลด์นี้ ส่วนฝั่ง MCP จะอนุมานจาก <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">repo</code> หรือ <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">projectName</code> ได้)</li>
+                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">status</strong>: สถานะบอร์ด <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">"backlog" | "todo" | "in-progress" | "ready-for-review" | "done"</code></li>
+                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">priority</strong>: ระดับความเร่งด่วน <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">"low" | "medium" | "high"</code></li>
+                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">targetFiles</strong>: รายชื่อพาธไฟล์ที่จะแก้ไขเกี่ยวข้อง</li>
+                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">checklist</strong>: ขั้นตอนการทำงานที่ต้องทำ (executable work logic ควรอธิบายในนี้ อันที่จุกจิกๆ แทน description)</li>
+                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">agent</strong>: เอเจนต์ที่รับผิดชอบ <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">"Codex" | "Antigravity" | "Claude"</code></li>
+                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">model</strong>: ชื่อโมเดล AI</li>
+                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">effort</strong>: ระดับพละกำลัง (ต้องใช้คำตามที่ Agent/Model อนุญาตเท่านั้น) <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">"low" | "medium" | "high" | "xhigh"</code></li>
+                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">reasoning</strong>: เหตุผล/บริบทที่มาของงาน กรณีรวม FE/BE เป็น <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">fullstack</code> ต้องระบุเหตุผลที่ดีเสมอ</li>
+                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">acceptanceCriteria</strong>: เกณฑ์การตรวจรับงาน (Acceptance Criteria)</li>
+                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">verification</strong>: ขั้นตอนการตรวจสอบหรือทดสอบว่าเสร็จสมบูรณ์</li>
+                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">repoContext</strong>: ข้อแนะนำโครงสร้างงาน, ปัญหาหรือจุดที่ต้องระวังเป็นพิเศษ (ห้ามใส่ URL, path, หรือ branch ซ้ำซ้อนที่นี่)</li>
+                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">jiraKey</strong>: รหัสทิกเก็ต/งานบน Jira (เช่น QCA-3314)</li>
+                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">repo</strong>: ลิงก์ไปย้ง Repository ที่เกี่ยวข้อง</li>
+                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">sourceUrl</strong>: URL อ้างอิงต้นทางของตั๋วงาน</li>
                 </ul>
               </div>
             </div>
@@ -382,10 +382,10 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
               <div className="space-y-2">
                 <h3 className="text-xs font-bold text-[#3c2a1a] dark:text-[#f3eadf] flex items-center gap-2">
                   <span className="w-1.5 h-3 bg-[#ebdcb9] dark:bg-[#584a3b] rounded-full inline-block" />
-                  α╕éα╣ëα╕¡α╕üα╕│α╕½α╕Öα╕öα╣üα╕Ñα╕░α╕úα╕▓α╕óα╕Ñα╕░α╣Çα╕¡α╕╡α╕óα╕ö Sandbox REST API (Active Specification)
+                  ข้อกำหนดและรายละเอียด Sandbox REST API (Active Specification)
                 </h3>
                 <p className="text-[11px] text-[#7a6455] dark:text-[#f3eadf] leading-relaxed font-sans">
-                  α╣üα╕¡α╕¢α╕₧α╕Ñα╕┤α╣Çα╕äα╕èα╕▒α╕Öα╕ùα╕│α╕çα╕▓α╕Öα╣üα╕Üα╕Ü Sandbox Fullstack α╕úα╣êα╕ºα╕íα╕üα╕▒α╕Ü Node.js / Express Server α╕éα╕¡α╕çα╕½α╕Ñα╕▒α╕çα╕Üα╣ëα╕▓α╕Öα╕£α╣êα╕▓α╕Öα╕₧α╕¡α╕úα╣îα╕ò 3000 α╕öα╣ëα╕▓α╕Öα╕Ñα╣êα╕▓α╕çα╕Öα╕╡α╣ëα╕äα╕╖α╕¡ API Endpoints α╕ùα╕▒α╣ëα╕çα╕½α╕íα╕öα╕ùα╕╡α╣êα╕äα╕╕α╕ôα╕¬α╕▓α╕íα╕▓α╕úα╕ûα╕¬α╣êα╕ç HTTP Requests α╣äα╕¢α╣Çα╕èα╕╖α╣êα╕¡α╕íα╕òα╣êα╕¡α╕½α╕úα╕╖α╕¡α╕₧α╕¡α╕úα╣îα╕òα╕éα╣ëα╕¡α╕íα╕╣α╕Ñα╣äα╕öα╣ë
+                  แอปพลิเคชันทำงานแบบ Sandbox Fullstack ร่วมกับ Node.js / Express Server ของหลังบ้านพอร์ต 3000 ด้านล่างนี้คือ API Endpoints ทั้งหมดที่คุณสามารถจำลองการส่ง HTTP Requests ไปเชื่อมต่อหรือจำลองพอร์ตเพื่อดูผลได้
                 </p>
               </div>
 

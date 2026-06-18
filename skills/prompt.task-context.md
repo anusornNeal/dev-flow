@@ -19,3 +19,5 @@
 
 **Repository Notes:**
 {{repoContext}}
+
+Fetch checklist details from DevFlow before reporting completion. Complete or explicitly explain every required item on the current card.

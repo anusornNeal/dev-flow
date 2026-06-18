@@ -89,20 +89,26 @@ const renderResult = renderPromptTemplate('default', mockContext);
 assert.ok(renderResult.usedSkills.includes('prompt.header'));
 assert.ok(renderResult.usedSkills.includes('prompt.task-context'));
 assert.ok(renderResult.content.includes('Render prompts from the real agent task context.'));
+assert.ok(renderResult.content.includes('Fetch checklist details from DevFlow before reporting completion.'));
 assert.ok(renderResult.content.includes('Prompt contains the real task fields.'));
 assert.ok(renderResult.content.includes('Run prompt template and orchestration checks.'));
 assert.ok(renderResult.content.includes('https://github.com/anusornNeal/dev-flow'));
 assert.ok(renderResult.content.includes(fixtureLocalPath));
 assert.ok(renderResult.content.includes('Agent: Codex, Model: GPT-5.5, Effort: xhigh'));
-assert.ok(renderResult.content.includes('DVF-0081: Use production task context'));
 assert.ok(renderResult.usedSkills.includes('prompt.project-rules'));
 assert.ok(renderResult.content.includes('## DevFlow Workflow Rules'));
 assert.ok(renderResult.content.includes('Move todo cards to in-progress before implementation starts.'));
 assert.ok(renderResult.content.includes('Use the card branch. If the card has no branch, default to develop.'));
 assert.ok(renderResult.content.includes('Handle every checklist item or mini task.'));
 assert.ok(renderResult.content.includes('Push the work to the active branch before moving the card to ready-for-review.'));
+assert.ok(renderResult.content.includes('Work only on this current task and stop when it is complete.'));
+assert.ok(!renderResult.content.includes('DVF-0081: Use production task context'));
 assert.ok(!renderResult.content.includes('Prefer clean architecture and modular design.'));
 assert.ok(!renderResult.content.includes('Avoid god classes, god files, and monolithic implementation.'));
+assert.ok(!renderResult.content.includes('## Checklist'));
+assert.ok(!renderResult.content.includes('## Subtasks'));
+assert.ok(!renderResult.content.includes('## End'));
+assert.ok(!renderResult.content.includes('Current card only'));
 
 const agentsInstructions = fs.readFileSync(path.join(process.cwd(), 'AGENTS.md'), 'utf8');
 assert.ok(agentsInstructions.includes('Prefer clean architecture.'));
@@ -219,11 +225,11 @@ assert.equal(isAllowedPromptSkillId('prompt.header', 'codex'), true);
 assert.equal(isAllowedPromptSkillId('prompt.task-context', 'codex'), true);
 assert.equal(isAllowedPromptSkillId('prompt.repo-context', 'codex'), true);
 assert.equal(isAllowedPromptSkillId('prompt.project-rules', 'codex'), true);
-assert.equal(isAllowedPromptSkillId('prompt.checklist', 'codex'), true);
-assert.equal(isAllowedPromptSkillId('prompt.subtasks', 'codex'), true);
+assert.equal(isAllowedPromptSkillId('prompt.checklist', 'codex'), false);
+assert.equal(isAllowedPromptSkillId('prompt.subtasks', 'codex'), false);
 assert.equal(isAllowedPromptSkillId('prompt.execution-rules', 'codex'), true);
 assert.equal(isAllowedPromptSkillId('prompt.completion-contract', 'codex'), true);
-assert.equal(isAllowedPromptSkillId('prompt.footer', 'codex'), true);
+assert.equal(isAllowedPromptSkillId('prompt.footer', 'codex'), false);
 assert.equal(isAllowedPromptSkillId('prompt.agent-specific.codex', 'codex'), true);
 
 // Disallowed ids
@@ -240,7 +246,7 @@ assert.equal(isAllowedPromptSkillId('a'.repeat(129), 'codex'), false);
 
 // Compact list omits large content fields
 const sections = listPromptSectionsForWorkspace({ agent: 'codex' });
-assert.ok(sections.length >= 9, 'pipeline should have at least 9 sections');
+assert.ok(sections.length >= 7, 'pipeline should have at least 7 sections');
 for (const section of sections) {
   assert.equal((section as any).masterContent, undefined, `section ${section.id} should not include masterContent`);
   assert.equal((section as any).overrideContent, undefined, `section ${section.id} should not include overrideContent`);

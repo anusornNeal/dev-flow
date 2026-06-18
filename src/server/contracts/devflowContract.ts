@@ -669,7 +669,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'list_prompt_skills',
-    description: 'List effective prompt pipeline sections for a project/workspace. Returns compact metadata only (no large content fields).',
+    description: 'List effective prompt pipeline sections for a project/workspace. Returns compact metadata only for sections in the active pipeline (no large content fields).',
     inputSchema: {
       type: 'object',
       properties: {

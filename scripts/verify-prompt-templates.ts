@@ -18,6 +18,8 @@ const mockContext: PromptRenderContext = {
     status: 'todo',
     priority: 'high',
     branch: 'fix/dvf-0080-prompt-template-fresh-session',
+    images: [{ id: 'img-1', url: '/api/static/images/example.png' }],
+    imagesApi: '**Attached Images API:** GET /api/tasks/DVF-0080/images',
   },
   assignment: {
     agent: 'Codex',
@@ -95,6 +97,7 @@ assert.ok(renderResult.content.includes('Run prompt template and orchestration c
 assert.ok(renderResult.content.includes('https://github.com/anusornNeal/dev-flow'));
 assert.ok(renderResult.content.includes(fixtureLocalPath));
 assert.ok(renderResult.content.includes('Agent: Codex, Model: GPT-5.5, Effort: xhigh'));
+assert.ok(renderResult.content.includes('**Attached Images API:** GET /api/tasks/DVF-0080/images'));
 assert.ok(renderResult.usedSkills.includes('prompt.project-rules'));
 assert.ok(renderResult.content.includes('## DevFlow Workflow Rules'));
 assert.ok(renderResult.content.includes('Move todo cards to in-progress before implementation starts.'));
@@ -181,6 +184,7 @@ assert.ok(!sparseRender.content.includes('(none)'));
 assert.ok(sparseRender.content.includes('**Task:**  - Sparse Prompt Task'));
 assert.ok(sparseRender.content.includes('**Status:** todo'));
 assert.ok(sparseRender.content.includes('Keep only real fields in sparse prompt output.'));
+assert.ok(!sparseRender.content.includes('Attached Images API'));
 
 console.log('[verify] Testing real task prompt shares omission logic...');
 const sparseState = {
@@ -202,6 +206,7 @@ const sparseState = {
     agent: '',
     model: '',
     effort: '',
+    images: [],
     logs: [],
   }],
   projectsCache: [{
@@ -213,6 +218,38 @@ const sparseState = {
 const taskPrompt = renderTaskPrompt(sparseState, 'task-sparse').renderResult.content;
 assert.ok(!taskPrompt.includes('(none)'));
 assert.ok(taskPrompt.includes('Keep only real fields in sparse prompt output.'));
+assert.ok(!taskPrompt.includes('Attached Images API'));
+
+const imageState = {
+  tasksCache: [{
+    id: 'task-image',
+    displayId: 'DVF-0122',
+    projectId: 'project-1',
+    title: 'Image Prompt Task',
+    status: 'todo',
+    priority: '',
+    description: 'Include the image endpoint only when images exist.',
+    reasoning: '',
+    acceptanceCriteria: '',
+    verification: '',
+    checklist: [],
+    targetFiles: [],
+    repoContext: '',
+    branch: '',
+    agent: '',
+    model: '',
+    effort: '',
+    images: [{ id: 'img-2', url: '/api/static/images/example-2.png' }],
+    logs: [],
+  }],
+  projectsCache: [{
+    id: 'project-1',
+    repoUrl: 'https://github.com/anusornNeal/dev-flow',
+    localPath: fixtureLocalPath,
+  }],
+} as any;
+const imageTaskPrompt = renderTaskPrompt(imageState, 'task-image').renderResult.content;
+assert.ok(imageTaskPrompt.includes('**Attached Images API:** GET /api/tasks/DVF-0122/images'));
 
 console.log('[verify] Prompt template coverage passed!');
 

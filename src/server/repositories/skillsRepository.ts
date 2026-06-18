@@ -6,6 +6,13 @@ import type { AppState } from '../types';
 
 const SKILLS_DIR = getDevFlowSkillsDir();
 const LEGACY_REGISTRY_BACKUP_FILE = path.join(SKILLS_DIR, 'registry.json.bak');
+const LEGACY_MASTER_SKILL_IDS = new Set(['schema', 'playbook', 'ready-for-review-reviewer-skill']);
+
+type LegacySkillSeed = {
+  id: string;
+  name: string;
+  description?: string;
+};
 
 function ensureLegacySkillsColumns() {
   try {
@@ -25,6 +32,47 @@ function ensureLegacySkillsColumns() {
 
 function getSkillColumns() {
   return (db.pragma('table_info(skills)') as any[]).map((column) => column.name);
+}
+
+function readLegacySkillSeeds(): LegacySkillSeed[] {
+  if (!fs.existsSync(LEGACY_REGISTRY_BACKUP_FILE)) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(fs.readFileSync(LEGACY_REGISTRY_BACKUP_FILE, 'utf8'));
+    return Array.isArray(parsed) ? parsed.filter((item) => item && typeof item.id === 'string' && typeof item.name === 'string') : [];
+  } catch (error) {
+    console.error('Failed to read legacy skill registry backup', error);
+    return [];
+  }
+}
+
+function seedMissingLegacySkills(state: AppState) {
+  const existingIds = new Set(state.skillsRegistry.map((skill) => skill.id));
+  const additions = readLegacySkillSeeds()
+    .filter((seed) => LEGACY_MASTER_SKILL_IDS.has(seed.id) && !existingIds.has(seed.id))
+    .map((seed) => {
+      const filePath = path.join(SKILLS_DIR, `${seed.id}.md`);
+      return {
+        id: seed.id,
+        name: seed.name,
+        description: seed.description || '',
+        kind: 'master',
+        isCustom: false,
+        isProtected: true,
+        sourceType: 'repo-file',
+        sourcePath: filePath,
+        filePath,
+        content: fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : '',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+    });
+
+  if (additions.length > 0) {
+    state.skillsRegistry.push(...additions);
+  }
 }
 
 
@@ -48,7 +96,13 @@ export function loadSkillsRegistry(state: AppState) {
     }
   });
 
+  seedMissingLegacySkills(state);
+
   if (needsSave) {
+    saveSkillsRegistry(state);
+  }
+
+  if (state.skillsRegistry.some((skill) => LEGACY_MASTER_SKILL_IDS.has(skill.id) && !skill.content)) {
     saveSkillsRegistry(state);
   }
 

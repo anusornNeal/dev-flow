@@ -626,7 +626,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'get_authoring_skills',
-    description: 'Get the full content of all authoring skills (schema and playbook) that define how tasks are structured in DevFlow.',
+    description: 'Get the full content of all authoring skills (schema, playbook, and ready-for-review reviewer skill) that define how tasks are structured in DevFlow.',
     inputSchema: emptyObjectSchema,
     outputSchema: { type: 'object' },
     lightweight: true,

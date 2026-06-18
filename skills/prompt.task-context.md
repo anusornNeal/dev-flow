@@ -14,8 +14,7 @@
 **Target Files:**
 {{requirements.targetFiles}}
 
-**Attached Images:**
-{{task.images}}
+{{task.imagesApi}}
 
 **Repository Notes:**
 {{repoContext}}

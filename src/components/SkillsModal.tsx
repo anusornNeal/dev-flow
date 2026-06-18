@@ -3,6 +3,8 @@ import { X, FileText, Lock } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
+const REVIEWER_SKILL_ID = 'ready-for-review-reviewer-skill';
+
 interface SkillsModalProps {
   onClose: () => void;
 }
@@ -20,21 +22,42 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
   const [selectedSkillId, setSelectedSkillId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
+  const mergeSkills = (items: SkillDetail[]) => {
+    const map = new Map<string, SkillDetail>();
+    for (const item of items) {
+      map.set(item.id, item);
+    }
+    return Array.from(map.values());
+  };
+
   useEffect(() => {
-    fetch('/api/skills/authoring')
-      .then((res) => res.json())
-      .then((data) => {
-        const nextSkills = Array.isArray(data) ? data : [];
+    const loadSkills = async () => {
+      try {
+        const [authoringResponse, reviewerResponse] = await Promise.all([
+          fetch('/api/skills/authoring'),
+          fetch(`/api/skills/${REVIEWER_SKILL_ID}`),
+        ]);
+
+        const authoringData = await authoringResponse.json();
+        const reviewerData = reviewerResponse.ok ? await reviewerResponse.json() : null;
+
+        const nextSkills = mergeSkills([
+          ...(Array.isArray(authoringData) ? authoringData : []),
+          ...(reviewerData ? [reviewerData] : []),
+        ]);
+
         setSkills(nextSkills);
         setSelectedSkillId(nextSkills[0]?.id || null);
-        setLoading(false);
-      })
-      .catch((err) => {
+      } catch (err) {
         console.error('Failed to load authoring skills:', err);
         setSkills([]);
         setSelectedSkillId(null);
+      } finally {
         setLoading(false);
-      });
+      }
+    };
+
+    void loadSkills();
   }, []);
 
   const selectedSkill = useMemo(() => {

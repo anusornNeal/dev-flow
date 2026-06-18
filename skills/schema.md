@@ -19,6 +19,8 @@ All other task fields are identical across both interfaces.
 
 ## Current Task Schema
 
+**Core Rule**: The card is the single source of truth. It must be detailed enough to complete the work without relying on Jira, spec pages, or external links. Do not dump prompt-template guidance into the card; use `checklist` for executable work logic.
+
 ### Required fields
 
 | Field | Type | Notes |
@@ -286,14 +288,13 @@ Rules:
 
 ### repoContext
 
-Use this for repo/module/path/package/context.
+Use this for task-specific findings, constraints, current behavior, or risk notes only.
 
-Include full paths here, especially for new files.
+**Rule**: Do not repeat repo URL, local path, or branch metadata here.
 
 Example:
 
 ```text
-Repo: q-chang/buddy-android
 Area: My Jobs / Installation / Job Detail / Compose
 
 Create new files under:
@@ -693,3 +694,9 @@ Rationale:
 - Parent needs stronger model for foundation and merge/review.
 - Existing layout slice can use Mini if entry points and contract are clear.
 - New pages with navigation/preview/share should not start on Mini.
+
+## Frontend / Backend Split Rule
+
+When a Jira or spec item contains both frontend and backend work, split it into separate DevFlow cards whenever the work can be separated cleanly. 
+
+**Rule**: Use `fullstack` (or merge FE/BE into one card) **only** when frontend and backend cannot be separated cleanly. If you must use a fullstack card, explain why in the `reasoning` field.

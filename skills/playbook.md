@@ -4,13 +4,7 @@
 
 This playbook defines how ChatGPT should convert Jira requirements and repository context into high-quality Dev Flow cards.
 
-The goal is to create cards that a coding agent can execute safely from Dev Flow alone, without needing to re-open Jira, guess requirements, or rediscover the repo context from scratch.
-
-## Core Principle
-
-Dev Flow cards are the source of truth for the coding agent.
-
-ChatGPT must read Jira, read the repo, think through the implementation deeply, filter noise, and write the final engineering plan into Dev Flow fields.
+The goal is to create cards that a coding agent can execute safely from Dev Flow alone, without needing to re-open Jira, guess requirements, or rediscover the repo context from scratch. The card is the single source of truth and must be detailed enough to complete without relying on Jira or spec pages.
 
 Do not write cards that say:
 
@@ -20,6 +14,8 @@ Open the Jira attachment.
 Check Jira comments for details.
 See sourceUrl for requirement.
 ```
+
+Additionally, do not duplicate generic workflow or prompt-template guidance (e.g. "You are an expert coder", "Follow standard procedures") into cards. Generic guidance belongs in prompt templates; put concrete, executable work logic into `checklist` items.
 
 Instead, extract the useful information from Jira and the repo, then write it into the card.
 
@@ -220,6 +216,9 @@ Create:
 2. Multiple child subtasks that can run in parallel.
 3. A final integration/review plan owned by the parent.
 
+**Frontend / Backend Split Rule**:
+Split frontend and backend into separate DevFlow cards whenever the work can be separated cleanly, even if the source Jira card is one item. Use a single `fullstack` card only when frontend/backend cannot be separated cleanly, and explain why in `reasoning`.
+
 ## Parent Orchestrator Rule
 
 For large work, the parent card is not a normal coding card.
@@ -395,6 +394,8 @@ Use `repoContext` for technical findings from the repo:
 - Architecture patterns.
 - Risks and warnings.
 
+**Rule**: `repoContext` is for task-specific findings, constraints, current behavior, or risk notes only. Do not repeat repo URL, local path, or branch metadata here.
+
 Example:
 
 ```text
@@ -434,7 +435,7 @@ Do not include README/playbook/root docs unless the task is documentation or age
 
 ### `checklist`
 
-Checklist should be concrete implementation steps.
+Checklist should contain concrete, executable implementation logic. Do not duplicate generic prompt-template instructions here. All work logic that must be done belongs in checklist items.
 
 Good:
 
@@ -590,6 +591,16 @@ For subtasks:
 - Merge into the parent card when small.
 - Create child Dev Flow tasks when large or parallelizable.
 - Do not make the agent read Jira subtasks.
+
+## Reviewable Card Rule
+
+When writing a card that will later move to `ready-for-review`, make the handoff easy to verify from the real implementation:
+
+- Write checklist items so each one can be verified against code, diff, tests, or a manual scenario.
+- Avoid checklist items that only repeat the task title or ask for generic "review" without a concrete artifact.
+- Include exact files, flows, or behaviors a reviewer should inspect when that matters.
+- Keep parent-task checklist items focused on integration and final behavior, not on child implementation details.
+- If a task needs visual verification, put the expected visible result into `verification` or `acceptanceCriteria`, not only in comments or informal notes.
 
 ## Status Rules
 

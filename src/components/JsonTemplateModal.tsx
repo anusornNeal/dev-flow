@@ -18,51 +18,79 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
 
   const sampleJson = [
     {
-      "id": "spec-101",
-      "projectId": "YOUR_PROJECT_ID",
-      "parentId": "optional-parent-id",
+      "id": "spec-backend-101",
+      "projectId": "YOUR_PROJECT_UUID_HERE",
       "title": "Setup Authentication API with Bearer Tokens",
-      "description": "### Objective\nSecure all backend routes with JWT keys.\n\n### Requirements\n- Verify passwords using Argon2\n- Configure access-token expires boundary in 15m",
+      "description": "Create the backend authentication endpoints.\n\nProblem: We lack secure token validation.\nExpected: All protected routes validate JWTs using Argon2 and return 401 if missing.",
       "status": "todo",
       "priority": "high",
       "tags": ["backend", "api", "security"],
-      "branch": "feature/api-auth",
+      "branch": "feature/api-auth-backend",
       "targetFiles": [
         "src/controllers/authController.ts",
         "src/middlewares/authMiddleware.ts"
       ],
       "checklist": [
         {
-          "id": "step-1",
-          "text": "Add token validation tests in Jest",
+          "id": "auth-1",
+          "text": "Add Argon2 password verification logic in authController",
           "completed": false
         },
         {
-          "id": "step-2",
-          "text": "Test custom header check against empty Authorization keys",
+          "id": "auth-2",
+          "text": "Implement JWT validation middleware with a 15m expiration boundary",
+          "completed": false
+        },
+        {
+          "id": "auth-3",
+          "text": "Add Jest token validation tests against empty Authorization keys",
           "completed": false
         }
       ],
       "agent": "Codex",
       "model": "GPT-5.4",
       "effort": "medium",
-      "reasoning": "We need to ensure API endpoints are secure from unauthorized access.",
-      "acceptanceCriteria": "All API endpoints return 401 when missing valid JWT.",
+      "reasoning": "Standard backend security implementation. Cleanly separated from frontend to allow parallel work.",
+      "acceptanceCriteria": "- All protected API endpoints return 401 when missing a valid JWT.\n- Valid tokens grant access.",
       "verification": "Run `npm run test:auth` and ensure 100% coverage on new middleware.",
-      "repoContext": "This relies on the `argon2` module implemented last week.",
+      "repoContext": "Relies on the `argon2` module implemented last week.",
       "jiraKey": "QCA-3314",
-      "repo": "https://github.com/my-org/auth-service",
-      "sourceUrl": "https://jira.my-org.com/browse/QCA-3314",
-      "createdAt": "2026-06-08T05:00:00.000Z",
-      "updatedAt": "2026-06-08T05:05:00.000Z",
-      "logs": [
+      "repo": "https://github.com/my-org/auth-service"
+    },
+    {
+      "id": "spec-frontend-102",
+      "projectId": "YOUR_PROJECT_UUID_HERE",
+      "title": "Store Authentication JWT in Frontend Session",
+      "description": "Implement frontend storage and injection of JWT tokens for API requests.",
+      "status": "backlog",
+      "priority": "high",
+      "tags": ["frontend", "auth"],
+      "branch": "feature/api-auth-frontend",
+      "targetFiles": [
+        "src/api/apiClient.ts",
+        "src/components/LoginForm.tsx"
+      ],
+      "checklist": [
         {
-          "id": "log-1",
-          "timestamp": "2026-06-08T05:00:00.000Z",
-          "message": "Initialized secure auth route specifications",
-          "type": "create"
+          "id": "fe-auth-1",
+          "text": "Store received JWT in secure cookie after successful login",
+          "completed": false
+        },
+        {
+          "id": "fe-auth-2",
+          "text": "Update apiClient.ts to inject the Authorization header into all requests",
+          "completed": false
         }
-      ]
+      ],
+      "agent": "Codex",
+      "model": "GPT-5.4 Mini",
+      "effort": "low",
+      "reasoning": "Separated from backend API work. GPT-5.4 Mini is sufficient for basic frontend API client updates.",
+      "acceptanceCriteria": "- Login saves the cookie.\n- API requests include the token.",
+      "verification": "Start frontend dev server, login, and inspect network request headers.",
+      "repoContext": "Frontend uses native fetch API wrapped in apiClient.ts.",
+      "jiraKey": "QCA-3314",
+      "repo": "https://github.com/my-org/frontend-app"
     }
   ];
 
@@ -114,26 +142,26 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
     {
       method: 'POST',
       path: '/api/tasks',
-      description: 'สร้างหรือบันทึกการ์ดงานแบบกลุ่ม/เดี่ยว (Create or Bulk Upsert) รองรับการส่งในรูป { repo: "...", tasks: [] } เพื่อให้ระบุ repo ไว้ทีเดียวที่เลเยอร์นอกสุด สะดวกขึ้นมาก',
-      payload: '{\n  "repo": "URL ของ Repository (Required: ส่วนหัวหรือข้างในก็ได)",\n  "tasks": [\n    {\n      "title": "ชื่องานใหม่",\n      "description": "คำอธิบาย Markdown"\n    }\n  ]\n}\n\nหรือส่งรูปดั้งเดิม (Task ตัวเดี่ยวๆ หรือ JSON Array แบบระบุ repo แยกชิ้น)',
-      response: 'JSON Object ของ Task เดียวที่สร้างสมบูรณ์ หรือ JSON Object แสดงสถิติจำนวน { success: true, createdCount: number, updatedCount: number, tasks: Array } เมื่อใช้รูปแบบอาร์เรย์หรือห่อหุ้ม',
-      example: 'fetch(\'/api/tasks\', {\n  method: \'POST\',\n  headers: { \'Content-Type\': \'application/json\' },\n  body: JSON.stringify({\n    repo: \'https://github.com/google/ai-studio\',\n    tasks: [\n      { title: \'Task 1 under outer repo\' },\n      { title: \'Task 2 under outer repo\' }\n    ]\n  })\n}).then(res => res.json());'
+      description: 'สร้างตั๋วงานเดี่ยว หรือนำเข้าการ์ดแบบกลุ่ม (Bulk Import) รองรับการสร้างตั๋วแยกย่อย (เช่น Frontend/Backend split) จาก Jira ใบเดียว',
+      payload: '{\n  "projectId": "UUID ของโปรเจกต์ (Required สำหรับ Raw API. หากใช้ MCP tool สามารถส่ง repo/projectName แทนได้)",\n  "tasks": [\n    {\n      "title": "Backend API",\n      "tags": ["backend"]\n    },\n    {\n      "title": "Frontend UI",\n      "tags": ["frontend"]\n    }\n  ]\n}',
+      response: 'JSON Object แสดงสถิติจำนวน { success: true, createdCount: number, updatedCount: number, tasks: Array }',
+      example: 'fetch(\'/api/tasks\', {\n  method: \'POST\',\n  headers: { \'Content-Type\': \'application/json\' },\n  body: JSON.stringify({\n    projectId: \'project-uuid-123\',\n    tasks: [\n      { title: \'BE: Add API\' },\n      { title: \'FE: Call API\' }\n    ]\n  })\n}).then(res => res.json());'
     },
     {
       method: 'POST',
       path: '/api/tasks/batch',
-      description: 'เขียนและอัปเดตบันทึกการ์ดงานพร้อมกันแบบกลุ่ม (Batch List Update/Upsert) รองรับการอัปเดตแบบผสมทั้งสร้างใหม่และแก้ของเดิม',
-      payload: '{\n  "repo": "URL สำหรับผูกกรณีใบสร้างใหม่ (Optional)",\n  "tasks": [\n    {\n      "id": "task-old (ใส่กรณีต้องการแก้ใบเดิม)",\n      "title": "ชื่องานอัปเดต"\n    }\n  ]\n}',
+      description: 'อัปเดตและสร้างบันทึกการ์ดงานพร้อมกันแบบกลุ่ม (Batch List Update/Upsert)',
+      payload: '{\n  "projectId": "UUID ของโปรเจกต์ (Required สำหรับ Raw API)",\n  "tasks": [\n    {\n      "id": "task-old (ใส่กรณีต้องการแก้ใบเดิม)",\n      "title": "ชื่องานอัปเดต"\n    }\n  ]\n}',
       response: 'JSON Object ยืนยันสถานะการอัปเดตแบบกลุ่ม { success: true, createdCount: number, updatedCount: number, tasks: Array }',
-      example: 'fetch(\'/api/tasks/batch\', {\n  method: \'POST\',\n  headers: { \'Content-Type\': \'application/json\' },\n  body: JSON.stringify({\n    repo: \'https://github.com/google/ai-studio\',\n    tasks: [\n      { title: \'Task 1 via outer POST batch\' },\n      { id: \'task-1\', status: \'done\' }\n    ]\n  })\n}).then(res => res.json());'
+      example: 'fetch(\'/api/tasks/batch\', {\n  method: \'POST\',\n  headers: { \'Content-Type\': \'application/json\' },\n  body: JSON.stringify({\n    projectId: \'project-uuid-123\',\n    tasks: [\n      { title: \'Task 1 via outer POST batch\' },\n      { id: \'task-1\', status: \'done\' }\n    ]\n  })\n}).then(res => res.json());'
     },
     {
       method: 'PUT',
       path: '/api/tasks',
       description: 'เขียนและอัปเดตบันทึกการ์ดงานพร้อมกันแบบกลุ่ม (Batch List Update/Upsert) - พฤติกรรมเหมือน /api/tasks/batch',
-      payload: '{\n  "repo": "URL สำหรับผูกกรณีใบสร้างใหม่ (Optional)",\n  "tasks": [\n    {\n      "id": "task-old (ใส่กรณีต้องการแก้ใบเดิม)",\n      "title": "ชื่องานอัปเดต"\n    }\n  ]\n}',
+      payload: '{\n  "projectId": "UUID ของโปรเจกต์ (Required สำหรับ Raw API)",\n  "tasks": [\n    {\n      "id": "task-old (ใส่กรณีต้องการแก้ใบเดิม)",\n      "title": "ชื่องานอัปเดต"\n    }\n  ]\n}',
       response: 'JSON Object ยืนยันสถานะการอัปเดตแบบกลุ่ม { success: true, createdCount: number, updatedCount: number, tasks: Array }',
-      example: 'fetch(\'/api/tasks\', {\n  method: \'PUT\',\n  headers: { \'Content-Type\': \'application/json\' },\n  body: JSON.stringify({\n    repo: \'https://github.com/google/ai-studio\',\n    tasks: [\n      { title: \'Task 1 via outer PUT\' },\n      { id: \'task-1\', status: \'done\' }\n    ]\n  })\n}).then(res => res.json());'
+      example: 'fetch(\'/api/tasks\', {\n  method: \'PUT\',\n  headers: { \'Content-Type\': \'application/json\' },\n  body: JSON.stringify({\n    projectId: \'project-uuid-123\',\n    tasks: [\n      { title: \'Task 1 via outer PUT\' },\n      { id: \'task-1\', status: \'done\' }\n    ]\n  })\n}).then(res => res.json());'
     },
     {
       method: 'POST',
@@ -294,18 +322,18 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
                 <p className="font-mono text-[9px] uppercase tracking-wider text-[#8a6e5a] dark:text-[#f3eadf] font-bold">ฟิลด์ที่สำคัญประกอบด้วย:</p>
                 <ul className="list-disc list-inside space-y-1 pl-1">
                   <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">id</strong>: คีย์หลักระบุแต่ละงาน ต้องไม่ซ้ำกัน</li>
-                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">repo</strong>: บังคับเชื่อมโยง URL ของ Repository เช่น <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">"https://github.com/user/repo"</code> (*Required* สำหรับการสร้างใหม่)</li>
+                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">projectId</strong>: บังคับใช้ UUID ของโปรเจกต์ (Raw API ต้องการฟิลด์นี้ ส่วนฝั่ง MCP จะอนุมานจาก <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">repo</code> หรือ <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">projectName</code> ได้)</li>
                   <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">status</strong>: สถานะบอร์ด <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">"backlog" | "todo" | "in-progress" | "ready-for-review" | "done"</code></li>
                   <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">priority</strong>: ระดับความเร่งด่วน <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">"low" | "medium" | "high"</code></li>
                   <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">targetFiles</strong>: รายชื่อพาธไฟล์ที่ระบบเกี่ยวข้อง</li>
-                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">checklist</strong>: โครงสร้าง Mini-Tasks ย่อยภายในแต่ละตั๋ว</li>
+                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">checklist</strong>: ขั้นตอนการทำงานที่ต้องทำ (executable work logic ควรอยู่ในนี้ แทนที่จะบอกกว้างๆ ใน description)</li>
                   <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">agent</strong>: เอเจนต์ที่รับผิดชอบ <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">"Codex" | "Antigravity" | "Claude"</code></li>
-                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">model</strong>: ชื่อตัวแปรโมเดล AI Spec เช่น คู่ขนานตามโมเดลที่เลือก</li>
-                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">effort</strong>: ระดับพละกำลังความเพียรประมวลผล ขึ้นอยู่กับ Agent/Model <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">เช่น Codex+GPT-5.4 ใช้ xhigh ได้</code></li>
-                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">reasoning</strong>: เหตุผลหรือบริบทที่มาของงาน</li>
+                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">model</strong>: ชื่อโมเดล AI</li>
+                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">effort</strong>: ระดับพละกำลัง (ต้องใช้ค่าตามที่ Agent/Model อนุญาตเท่านั้น) <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">"low" | "medium" | "high" | "xhigh"</code></li>
+                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">reasoning</strong>: เหตุผล/บริบทที่มาของงาน กรณีรวม FE/BE เป็น <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">fullstack</code> ต้องระบุเหตุผลที่นี่เสมอ</li>
                   <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">acceptanceCriteria</strong>: เกณฑ์การตรวจรับงาน (Acceptance Criteria)</li>
                   <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">verification</strong>: ขั้นตอนการตรวจสอบหรือทดสอบว่าเสร็จสมบูรณ์</li>
-                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">repoContext</strong>: บริบทเพิ่มเติมเกี่ยวกับ Repository ที่ใช้</li>
+                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">repoContext</strong>: ข้อค้นพบเฉพาะงาน, ปัญหาหรือข้อจำกัดปัจจุบัน (ห้ามใส่ URL, path, หรือ branch ซ้ำซ้อนที่นี่)</li>
                   <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">jiraKey</strong>: รหัสบั๊ก/งานบน Jira (เช่น QCA-3314)</li>
                   <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">repo</strong>: ลิงก์ไปยัง Repository ที่เกี่ยวข้อง</li>
                   <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">sourceUrl</strong>: URL อ้างอิงต้นทางของตั๋วงาน</li>

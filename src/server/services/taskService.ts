@@ -302,6 +302,9 @@ export function getAgentTaskContext(state: AppState, targetId: string, includeLo
       status: task.status,
       priority: task.priority,
       branch: task.branch,
+      imagesApi: Array.isArray(task.images) && task.images.length > 0
+        ? `**Attached Images API:** GET /api/tasks/${task.displayId || task.id}/images`
+        : undefined,
     }),
     assignment: cleanObject({
       agent: task.agent,

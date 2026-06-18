@@ -242,7 +242,7 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
       {/* Click outside to close */}
       <div className="fixed inset-0" onClick={onClose} />
 
-      <div className="bg-[#fcfaf5]/80 dark:bg-[#1e1914]/80 backdrop-blur-xl border border-[#ebdcb9] dark:border-[#584a3b] w-full max-w-5xl rounded-3xl shadow-2xl relative z-10 overflow-hidden flex font-sans h-[85vh]">
+      <div className="bg-[#fcfaf5] dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] w-full max-w-5xl rounded-3xl shadow-2xl relative z-10 overflow-hidden flex font-sans h-[85vh]">
         {/* Close button absolute top right */}
         <button
           type="button"

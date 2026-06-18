@@ -4,8 +4,22 @@
  */
 
 import React, { useState } from 'react';
-import { X, Copy, Check, Download, FileCode, Terminal, HelpCircle, Activity, Globe, ShieldAlert } from 'lucide-react';
+import { X, Copy, Check, Download, FileCode } from 'lucide-react';
 import { getAgentCatalogHelp, getValidAgentModelEffortExamples, getInvalidAgentModelEffortExamples } from '../lib/agentsConfig';
+
+const SIDEBAR_METHOD_COLORS: Record<string, string> = {
+  GET: 'text-emerald-600 dark:text-emerald-400',
+  POST: 'text-blue-600 dark:text-blue-400',
+  PUT: 'text-amber-600 dark:text-amber-400',
+  DELETE: 'text-rose-600 dark:text-rose-400',
+};
+
+const PANE_METHOD_COLORS: Record<string, string> = {
+  GET: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+  POST: 'bg-blue-50 text-blue-700 border-blue-200',
+  PUT: 'bg-amber-50 text-amber-700 border-amber-200',
+  DELETE: 'bg-rose-50 text-rose-700 border-rose-200',
+};
 
 const sampleJson = [
   {
@@ -238,7 +252,54 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
           <X size={17} />
         </button>
         
-        {/* Left Sidebar Pane will go here */}
+        {/* Left Sidebar Pane */}
+        <div className="w-64 bg-[#f5eedf]/60 dark:bg-[#1e1914]/60 backdrop-blur-md border-r border-[#ebdcb9] dark:border-[#584a3b] flex flex-col z-20 shadow-[4px_0_24px_rgba(0,0,0,0.02)] shrink-0">
+          <div className="p-5 border-b border-[#ebdcb9]/60 dark:border-[#584a3b]/60 flex items-center gap-2">
+            <FileCode size={18} className="text-[#bf8a50] dark:text-[#d6b56d]" />
+            <h2 className="text-xs font-black text-[#5c493c] dark:text-[#f3eadf] tracking-tight uppercase">
+              Documentation
+            </h2>
+          </div>
+          
+          <div className="flex-1 overflow-y-auto scrollbar-thin p-3 space-y-1">
+            <button
+              onClick={() => setSelectedItemId('schema')}
+              className={`w-full text-left px-3 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-2 ${
+                selectedItemId === 'schema'
+                  ? 'bg-white dark:bg-[#292119] text-[#784d21] dark:text-[#f3eadf] shadow-sm ring-1 ring-[#ebdcb9] dark:ring-[#584a3b]'
+                  : 'text-[#9e8470] dark:text-[#b8ab9f] hover:bg-white/50 dark:hover:bg-[#292119]/50 hover:text-[#5c493c] dark:hover:text-[#f3eadf]'
+              }`}
+            >
+              <FileCode size={14} className={selectedItemId === 'schema' ? 'text-[#bf8a50] dark:text-[#d6b56d]' : 'opacity-70'} />
+              JSON Schema Spec
+            </button>
+            
+            <div className="pt-4 pb-1 px-3">
+              <p className="text-[9px] font-black uppercase tracking-widest text-[#a48e7a] dark:text-[#8a7b6b]">REST API Endpoints</p>
+            </div>
+            
+            {apiSpecsWithIds.map((api) => {
+              const isSelected = selectedItemId === api.id;
+              
+              return (
+                <button
+                  key={api.id}
+                  onClick={() => setSelectedItemId(api.id)}
+                  className={`w-full text-left px-3 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-2.5 ${
+                    isSelected
+                      ? 'bg-white dark:bg-[#292119] shadow-sm ring-1 ring-[#ebdcb9] dark:ring-[#584a3b] text-[#5c493c] dark:text-[#f3eadf]'
+                      : 'text-[#9e8470] dark:text-[#b8ab9f] hover:bg-white/50 dark:hover:bg-[#292119]/50 hover:text-[#5c493c] dark:hover:text-[#f3eadf]'
+                  }`}
+                >
+                  <span className={`text-[9px] font-black w-10 ${SIDEBAR_METHOD_COLORS[api.method] || 'text-gray-500'}`}>
+                    {api.method}
+                  </span>
+                  <span className="truncate">{api.path}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
         
         {/* Right Content Pane */}
         <div className="flex-1 p-6 overflow-y-auto scrollbar-thin text-xs text-[#5c493c] dark:text-[#f3eadf]">
@@ -271,7 +332,7 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
                       className={`border px-2.5 py-1 rounded-xl cursor-pointer font-semibold flex items-center gap-1 transition-all ${
                         copied && copiedText === 'schema'
                           ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
-                          : 'bg-white dark:bg-[#1e1914] border-[#ebdcb9] dark:border-[#584a3b] text-[#715c4d] dark:text-[#f3eadf] hover:text-[#3a2010] dark:text-[#f3eadf] dark:hover:text-[#f3eadf]'
+                          : 'bg-white dark:bg-[#1e1914] border-[#ebdcb9] dark:border-[#584a3b] text-[#715c4d] dark:text-[#f3eadf] hover:text-[#3a2010] dark:hover:text-[#f3eadf]'
                       }`}
                     >
                       {copied && copiedText === 'schema' ? (
@@ -327,20 +388,15 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
               </div>
 
               <div className="space-y-4">
-                {apiSpecsWithIds.map((api, idx) => {
-                  const methodColors: Record<string, string> = {
-                    GET: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-                    POST: 'bg-blue-50 text-blue-700 border-blue-200',
-                    PUT: 'bg-amber-50 text-amber-700 border-amber-200',
-                    DELETE: 'bg-rose-50 text-rose-700 border-rose-200',
-                  };
-
+                {apiSpecsWithIds
+                  .filter((api) => api.id === selectedItemId)
+                  .map((api) => {
                   return (
                     <div key={api.id} className="bg-white dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] rounded-2xl overflow-hidden shadow-3xs flex flex-col">
                       {/* Sub-header with Method & Path */}
                       <div className="bg-[#fcfaf5] dark:bg-[#1e1914] border-b border-[#ebdcb9] dark:border-[#584a3b] px-4 py-2.5 flex items-center justify-between font-mono">
                         <div className="flex items-center gap-2.5">
-                          <span className={`px-2 py-0.5 rounded-lg border text-[9.5px] font-black tracking-wide ${methodColors[api.method] || 'bg-gray-100 dark:bg-[#1e1914]'}`}>
+                          <span className={`px-2 py-0.5 rounded-lg border text-[9.5px] font-black tracking-wide ${PANE_METHOD_COLORS[api.method] || 'bg-gray-100 dark:bg-[#1e1914]'}`}>
                             {api.method}
                           </span>
                           <span className="text-[11.5px] font-bold text-[#3c2a1a] dark:text-[#f3eadf]">{api.path}</span>
@@ -381,7 +437,7 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
 
                         <div>
                           <p className="text-[#8c7463] dark:text-[#f3eadf] font-bold text-[9px] uppercase tracking-wider mb-1">Code Pattern Example (Fetch JS):</p>
-                          <pre className="p-2.5 bg-[#1e293b] dark:bg-[#d6b56d] dark:bg-[#e0a070] text-[#38bdf8] dark:text-[#d6b56d] rounded-xl overflow-x-auto font-mono text-[10px] leading-relaxed">
+                          <pre className="p-2.5 bg-[#1e293b] dark:bg-[#292119] text-[#38bdf8] dark:text-[#d6b56d] rounded-xl overflow-x-auto font-mono text-[10px] leading-relaxed">
                             <code>{api.example}</code>
                           </pre>
                         </div>

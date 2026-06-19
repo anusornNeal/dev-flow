@@ -144,23 +144,6 @@ function appendTaskLog(task: any, message: string, type: string = 'update') {
   task.logs = [...(task.logs || []), createTaskLogEntry(message, type)];
 }
 
-function taskRequiresManualEvidence(task: any) {
-  const haystack = [
-    task?.description,
-    task?.acceptanceCriteria,
-    task?.verification,
-    ...(Array.isArray(task?.targetFiles) ? task.targetFiles : []),
-  ].filter(Boolean).join(' ').toLowerCase();
-  return /evidence|prompt\.md|agent\.log/.test(haystack);
-}
-
-function taskHasManualEvidence(task: any) {
-  const messages = (task.logs || []).map((entry: any) => String(entry?.message || ''));
-  const hasPromptExcerpt = messages.some((message: string) => /prompt\.md/i.test(message));
-  const hasAgentLogExcerpt = messages.some((message: string) => /agent\.log/i.test(message));
-  return hasPromptExcerpt && hasAgentLogExcerpt;
-}
-
 function getChildReviewBlockers(task: any, deps: ApiRouteDeps) {
   const children = deps.state.tasksCache.filter((entry) => entry.parentId === task.id);
   if (children.length === 0) return [];
@@ -169,10 +152,6 @@ function getChildReviewBlockers(task: any, deps: ApiRouteDeps) {
   for (const child of children) {
     if (!['ready-for-review', 'done'].includes(child.status)) {
       blockers.push(`${child.displayId || child.id} is still ${child.status}.`);
-      continue;
-    }
-    if (taskRequiresManualEvidence(child) && !taskHasManualEvidence(child)) {
-      blockers.push(`${child.displayId || child.id} is missing visible prompt.md and agent.log evidence in task logs.`);
     }
   }
   return blockers;

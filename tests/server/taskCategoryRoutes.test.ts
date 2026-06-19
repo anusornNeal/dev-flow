@@ -294,6 +294,22 @@ test('E. Explicit tags update still works and wipes old tags if provided', async
   assert.deepEqual(response.body.tags, ['figma', 'mcp']);
 });
 
+test('F. PUT /api/tasks list-update preserves tags when omitted', async () => {
+  const existingTask = state.tasksCache.find((task: any) => task.title === 'Legacy frontend task');
+  assert.ok(existingTask);
+  const oldCategory = existingTask.category;
+  const oldTags = existingTask.tags;
+
+  const response = await request('PUT', '/api/tasks', [
+    { id: existingTask.id, title: 'Updated via list PUT' }
+  ]);
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.tasks[0].category, oldCategory);
+  assert.deepEqual(response.body.tasks[0].tags, oldTags);
+  assert.equal(response.body.tasks[0].title, 'Updated via list PUT');
+});
+
 test.after(async () => {
   await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   try {

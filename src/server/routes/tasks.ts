@@ -1470,7 +1470,6 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
         continue;
       }
 
-      const classification = normalizeTaskCategoryAndTags(item, { requireCategory: true });
 
       if (existingIndex !== -1) {
         const currentTask = deps.state.tasksCache[existingIndex];
@@ -1533,6 +1532,8 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
       } catch (error: any) {
         return res.status(400).json({ error: error.message });
       }
+
+      const classification = normalizeTaskCategoryAndTags(item, { requireCategory: true });
 
       const newTask = {
         id: item.id || `task-${Date.now()}-${Math.floor(Math.random() * 1000000)}`,

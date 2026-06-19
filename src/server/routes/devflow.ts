@@ -4,6 +4,7 @@ import { getCapabilityCatalog } from '../contracts/devflowContract';
 import { sendApiError } from '../services/api';
 import { listLocalFiles, readLocalFile, searchLocalFiles, writeLocalFile } from '../services/localFileService';
 import { getGitLog, getGitDiff, getGitShow, getGitStatus, getGitBranch } from '../services/gitService';
+import { getProjectStartContext } from '../services/projectStartContextService';
 
 export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) {
   app.get('/api/capabilities', (_req, res) => {
@@ -65,6 +66,14 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
   app.get('/api/local-files/search', (req, res) => {
     try {
       return res.json(searchLocalFiles(deps.state, req.query as Record<string, any>));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.get('/api/project-start-context', (req, res) => {
+    try {
+      return res.json(getProjectStartContext(deps.state, req.query as Record<string, any>));
     } catch (error) {
       return sendApiError(res, error);
     }

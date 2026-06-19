@@ -6,13 +6,62 @@ import type { AppState } from '../types';
 
 const SKILLS_DIR = getDevFlowSkillsDir();
 const LEGACY_REGISTRY_BACKUP_FILE = path.join(SKILLS_DIR, 'registry.json.bak');
-const LEGACY_MASTER_SKILL_IDS = new Set(['00-skill-router', '01-authoring-core', '02-schema-reference', '03-reviewer-core', '04-examples']);
+const SKILL_FILE_CACHE_TTL_MS = 30_000;
+const MASTER_SKILL_SEEDS: LegacySkillSeed[] = [
+  {
+    id: '00-skill-router',
+    name: 'Skill Router',
+    description: 'Routes DevFlow task authoring work to the right lean skill.',
+  },
+  {
+    id: '01-authoring-core',
+    name: 'Authoring Core Skill',
+    description: 'Core rules for writing concise, implementation-ready DevFlow cards.',
+  },
+  {
+    id: '02-schema-reference',
+    name: 'Schema Reference',
+    description: 'Field-level reference for DevFlow task structure.',
+  },
+  {
+    id: '03-reviewer-core',
+    name: 'Reviewer Core Skill',
+    description: 'Rules for reviewing DevFlow cards before they are ready for implementation.',
+  },
+  {
+    id: '04-examples',
+    name: 'Examples',
+    description: 'Examples of well-formed DevFlow cards and task patches.',
+  },
+];
+
+const LEGACY_MASTER_SKILL_IDS = new Set(MASTER_SKILL_SEEDS.map((skill) => skill.id));
 
 type LegacySkillSeed = {
   id: string;
   name: string;
   description?: string;
 };
+
+interface SkillFileCacheEntry {
+  content: string;
+  mtimeMs: number;
+  cachedAt: number;
+}
+
+const skillFileCache = new Map<string, SkillFileCacheEntry>();
+
+function readSkillFileWithCache(filePath: string) {
+  const stat = fs.statSync(filePath);
+  const now = Date.now();
+  const cached = skillFileCache.get(filePath);
+  if (cached && stat.mtimeMs <= cached.mtimeMs && now - cached.cachedAt < SKILL_FILE_CACHE_TTL_MS) {
+    return cached.content;
+  }
+  const content = fs.readFileSync(filePath, 'utf8');
+  skillFileCache.set(filePath, { content, mtimeMs: stat.mtimeMs, cachedAt: now });
+  return content;
+}
 
 function ensureLegacySkillsColumns() {
   try {
@@ -50,21 +99,23 @@ function readLegacySkillSeeds(): LegacySkillSeed[] {
 
 function seedMissingLegacySkills(state: AppState) {
   const existingIds = new Set(state.skillsRegistry.map((skill) => skill.id));
-  const additions = readLegacySkillSeeds()
+  const legacySeedsById = new Map(readLegacySkillSeeds().map((seed) => [seed.id, seed]));
+  const additions = MASTER_SKILL_SEEDS
     .filter((seed) => LEGACY_MASTER_SKILL_IDS.has(seed.id) && !existingIds.has(seed.id))
     .map((seed) => {
+      const legacySeed = legacySeedsById.get(seed.id);
       const filePath = path.join(SKILLS_DIR, `${seed.id}.md`);
       return {
         id: seed.id,
-        name: seed.name,
-        description: seed.description || '',
+        name: legacySeed?.name || seed.name,
+        description: legacySeed?.description || seed.description || '',
         kind: 'master',
         isCustom: false,
         isProtected: true,
         sourceType: 'repo-file',
         sourcePath: filePath,
         filePath,
-        content: fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : '',
+        content: fs.existsSync(filePath) ? readSkillFileWithCache(filePath) : '',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
@@ -88,7 +139,7 @@ export function loadSkillsRegistry(state: AppState) {
     skill.filePath = skill.sourcePath || skill.filePath || (!skill.isCustom ? path.join(SKILLS_DIR, `${skill.id}.md`) : undefined);
 
     if (!skill.isCustom && skill.filePath && fs.existsSync(skill.filePath)) {
-      const fileContent = fs.readFileSync(skill.filePath, 'utf8');
+      const fileContent = readSkillFileWithCache(skill.filePath);
       if (skill.content !== fileContent) {
         skill.content = fileContent;
         needsSave = true;
@@ -96,7 +147,7 @@ export function loadSkillsRegistry(state: AppState) {
     } else if (!skill.isCustom && (!skill.content || skill.content.length === 0)) {
       const filePath = skill.filePath || path.join(SKILLS_DIR, `${skill.id}.md`);
       if (fs.existsSync(filePath)) {
-        skill.content = fs.readFileSync(filePath, 'utf8');
+        skill.content = readSkillFileWithCache(filePath);
         needsSave = true;
       }
     }
@@ -171,5 +222,9 @@ export function saveSkillsRegistry(state: AppState) {
 }
 
 export function readSkillContent(skill: any) {
-  return skill.content || '';
+  const filePath = skill?.sourcePath || skill?.filePath;
+  if (!skill?.isCustom && filePath && fs.existsSync(filePath)) {
+    return readSkillFileWithCache(filePath);
+  }
+  return skill?.content || '';
 }

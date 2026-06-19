@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Cat, Moon, Sun, FileCode, Code, FileText, Plus, Sparkles, Blocks, ChevronDown } from 'lucide-react';
 import NgrokStatusPanel from './NgrokStatusPanel';
 import AutoWorkToggle from './AutoWorkToggle';
+import ChatGptStarterPromptButton from './ChatGptStarterPromptButton';
 
 interface HeaderProps {
   filteredTasksCount: number;
@@ -109,6 +110,7 @@ export function Header({
               >
                 <FileText size={14} className="text-[#a46c24] dark:text-[#d6b56d]" /> Prompt Template
               </button>
+              <ChatGptStarterPromptButton />
             </div>
           )}
         </div>

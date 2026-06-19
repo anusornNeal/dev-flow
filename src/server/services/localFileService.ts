@@ -95,10 +95,48 @@ export function readLocalFile(state: AppState, args: Record<string, any>) {
     throw createApiError(404, 'FILE_NOT_FOUND', `File '${filePath}' was not found.`, { affectedId: filePath });
   }
 
+  const stat = fs.statSync(targetPath);
+  const mode = String(args.mode || 'content').toLowerCase();
+  const raw = fs.readFileSync(targetPath, 'utf8');
+  const lines = raw.split(/\r?\n/);
+  const totalLines = lines.length;
+  const maxBytes = Number.isFinite(Number(args.maxBytes)) ? Math.max(1, Math.min(1_000_000, Number(args.maxBytes))) : 0;
+  const startLine = Number.isFinite(Number(args.startLine)) ? Math.max(1, Number(args.startLine)) : 1;
+  const endLine = Number.isFinite(Number(args.endLine)) ? Math.max(startLine, Number(args.endLine)) : totalLines;
+  const hasLineWindow = args.startLine !== undefined || args.endLine !== undefined;
+
+  if (mode === 'metadata') {
+    return {
+      root,
+      path: path.relative(root, targetPath),
+      bytes: stat.size,
+      totalLines,
+      modifiedAt: stat.mtime.toISOString(),
+    };
+  }
+
+  let content = hasLineWindow
+    ? lines.slice(startLine - 1, Math.min(endLine, totalLines)).join('\n')
+    : raw;
+  let byteLength = Buffer.byteLength(content, 'utf8');
+  let truncatedByBytes = false;
+  if (maxBytes > 0 && byteLength > maxBytes) {
+    content = Buffer.from(content, 'utf8').subarray(0, maxBytes).toString('utf8');
+    byteLength = Buffer.byteLength(content, 'utf8');
+    truncatedByBytes = true;
+  }
+
   return {
     root,
     path: path.relative(root, targetPath),
-    content: fs.readFileSync(targetPath, 'utf8'),
+    content,
+    bytes: stat.size,
+    returnedBytes: byteLength,
+    startLine: hasLineWindow ? startLine : 1,
+    endLine: hasLineWindow ? Math.min(endLine, totalLines) : totalLines,
+    totalLines,
+    truncated: hasLineWindow || truncatedByBytes,
+    modifiedAt: stat.mtime.toISOString(),
   };
 }
 

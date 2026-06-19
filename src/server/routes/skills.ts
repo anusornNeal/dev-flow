@@ -5,6 +5,19 @@ import { loadSkillsRegistry, saveSkillsRegistry } from '../repositories/skillsRe
 import { getSkillById, getSkillDetail, updateSkillContent } from '../services/skillService';
 import { readSkillContent } from '../repositories/skillsRepository';
 
+const AUTHORING_SKILL_IDS = [
+  '00-skill-router',
+  '01-authoring-core',
+  '02-schema-reference',
+  '03-reviewer-core',
+  '04-examples',
+];
+const AUTHORING_SKILL_ID_SET = new Set(AUTHORING_SKILL_IDS);
+
+function sortAuthoringSkills(skills: any[]) {
+  return [...skills].sort((left, right) => AUTHORING_SKILL_IDS.indexOf(left.id) - AUTHORING_SKILL_IDS.indexOf(right.id));
+}
+
 export function registerSkillRoutes(app: express.Express, deps: ApiRouteDeps) {
   loadSkillsRegistry(deps.state);
 
@@ -14,7 +27,7 @@ export function registerSkillRoutes(app: express.Express, deps: ApiRouteDeps) {
     let skills = deps.state.skillsRegistry;
 
     if (kind === 'authoring') {
-      skills = skills.filter((s) => s.id === 'schema' || s.id === 'playbook' || s.id === 'ready-for-review-reviewer-skill');
+      skills = sortAuthoringSkills(skills.filter((s) => AUTHORING_SKILL_ID_SET.has(s.id)));
     } else if (kind === 'workflow') {
       skills = skills.filter((s) => s.id.endsWith('-workflow'));
     } else if (kind === 'prompt') {
@@ -35,7 +48,7 @@ export function registerSkillRoutes(app: express.Express, deps: ApiRouteDeps) {
 
   app.get('/api/skills/authoring', (_req, res) => {
     loadSkillsRegistry(deps.state);
-    const authoring = deps.state.skillsRegistry.filter((s) => s.id === '00-skill-router' || s.id === '01-authoring-core' || s.id === '02-schema-reference' || s.id === '03-reviewer-core' || s.id === '04-examples');
+    const authoring = sortAuthoringSkills(deps.state.skillsRegistry.filter((s) => AUTHORING_SKILL_ID_SET.has(s.id)));
     res.json(authoring.map((skill) => ({
       id: skill.id,
       name: skill.name,
@@ -45,6 +58,19 @@ export function registerSkillRoutes(app: express.Express, deps: ApiRouteDeps) {
       kind: skill.kind,
       content: readSkillContent(skill),
     })));
+  });
+
+  app.get('/api/skills/authoring/:id', (req, res) => {
+    loadSkillsRegistry(deps.state);
+    if (!AUTHORING_SKILL_ID_SET.has(req.params.id)) {
+      return res.status(404).json({ error: 'Authoring skill not found' });
+    }
+    const skill = deps.state.skillsRegistry.find((entry) => entry.id === req.params.id);
+    if (!skill) return res.status(404).json({ error: 'Authoring skill not found' });
+    return res.json({
+      ...skill,
+      content: readSkillContent(skill),
+    });
   });
 
   app.get('/api/skills/:id', (req, res) => {

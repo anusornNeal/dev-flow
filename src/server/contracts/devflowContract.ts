@@ -124,7 +124,7 @@ function stripToolOnlyArgs(args: Record<string, any>, keys: string[]) {
   return copy;
 }
 
-export const DEVFLOW_CONTRACT_VERSION = '2026-06-19.3';
+export const DEVFLOW_CONTRACT_VERSION = '2026-06-19.4';
 
 export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   {
@@ -196,6 +196,23 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
         repoUrl: args.repoUrl,
         localPath: args.localPath,
       }),
+    }),
+  },
+  {
+    name: 'get_project_start_context',
+    description: 'Get compact startup context for one project in a single call: project metadata, git branch/status when available, top-level files, common hint files, and recommended next tools.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...projectIdentifierProperties,
+        limit: { type: 'number', description: 'Maximum top-level file entries returned.' },
+      },
+    },
+    outputSchema: { type: 'object' },
+    lightweight: true,
+    buildHttpRequest: (args) => ({
+      method: 'GET',
+      path: withQuery('/api/project-start-context', args),
     }),
   },
   {
@@ -662,6 +679,31 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
     buildHttpRequest: () => ({ method: 'GET', path: '/api/skills/authoring' }),
   },
   {
+    name: 'get_skill_router',
+    description: 'Read only the DevFlow authoring skill router (00-skill-router). Prefer this first before loading the full authoring skill set.',
+    inputSchema: emptyObjectSchema,
+    outputSchema: { type: 'object' },
+    lightweight: true,
+    buildHttpRequest: () => ({ method: 'GET', path: '/api/skills/authoring/00-skill-router' }),
+  },
+  {
+    name: 'get_authoring_skill',
+    description: 'Read one DevFlow authoring skill by id, such as 00-skill-router, 01-authoring-core, 02-schema-reference, 03-reviewer-core, or 04-examples.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', enum: ['00-skill-router', '01-authoring-core', '02-schema-reference', '03-reviewer-core', '04-examples'] },
+        skillId: { type: 'string', enum: ['00-skill-router', '01-authoring-core', '02-schema-reference', '03-reviewer-core', '04-examples'] },
+      },
+    },
+    outputSchema: { type: 'object' },
+    lightweight: true,
+    buildHttpRequest: (args) => ({
+      method: 'GET',
+      path: `/api/skills/authoring/${encodePathSegment(String(args.id || args.skillId))}`,
+    }),
+  },
+  {
     name: 'get_skill',
     description: 'Read one skill by id.',
     inputSchema: {
@@ -856,6 +898,10 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
         ...projectIdentifierProperties,
         filePath: { type: 'string', description: 'Relative file path under the workspace root.' },
         path: { type: 'string', description: 'Alias for filePath.' },
+        mode: { type: 'string', enum: ['content', 'metadata'], description: 'Use metadata to avoid returning file content.' },
+        startLine: { type: 'number', description: '1-based first line to return.' },
+        endLine: { type: 'number', description: '1-based final line to return.' },
+        maxBytes: { type: 'number', description: 'Maximum UTF-8 bytes of content to return.' },
       },
       required: ['filePath'],
     },
@@ -865,6 +911,10 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
       path: withQuery('/api/local-files/read', {
         ...args,
         filePath: args.filePath || args.path,
+        mode: args.mode,
+        startLine: args.startLine,
+        endLine: args.endLine,
+        maxBytes: args.maxBytes,
       }),
     }),
   },

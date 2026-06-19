@@ -114,7 +114,7 @@ function encodePathSegment(value: string) {
   return encodeURIComponent(value);
 }
 
-export const DEVFLOW_CONTRACT_VERSION = '2026-06-19.1';
+export const DEVFLOW_CONTRACT_VERSION = '2026-06-19.2';
 
 export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   {
@@ -190,7 +190,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'list_tasks',
-    description: 'List tasks with optional filters and summary/full modes.',
+    description: 'List tasks with optional filters. Local-first and ChatGPT-friendly: defaults to a small minimal page; pass projectId/status/q and an explicit limit before asking for broader context.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -209,13 +209,14 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
       method: 'GET',
       path: withQuery('/api/tasks', {
         ...args,
-        mode: args.mode || 'summary',
+        mode: args.mode || 'minimal',
+        limit: args.limit || 50,
       }),
     }),
   },
   {
     name: 'search_tasks',
-    description: 'Search tasks without fetching the full board.',
+    description: 'Search local DevFlow tasks without fetching the full board. Prefer this over list_tasks when the user gives any title, id, status, keyword, or repository hint.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -239,7 +240,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'get_task',
-    description: 'Read a single task by internal id or displayId.',
+    description: 'Read a single local DevFlow task by internal id or displayId. Prefer get_agent_task_context for agent work, and use this before remote GitHub reads when the user did not explicitly ask for GitHub.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -274,7 +275,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   {
     name: 'get_agent_task_context',
     aliases: ['get_agent_context'],
-    description: 'Get the token-efficient agent task context package.',
+    description: 'Get the token-efficient local agent task context package. Prefer this first for ChatGPT/Codex work on a DevFlow card unless the user explicitly asks to inspect GitHub, Jira, or another remote source.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -811,7 +812,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'list_local_files',
-    description: 'List local files safely within a project root.',
+    description: 'List local files safely within a project root. Prefer this local tool before remote GitHub listing when the user does not specify a source.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -829,7 +830,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'read_local_file',
-    description: 'Read a local file safely within a project root.',
+    description: 'Prefer this local reader before remote GitHub reads when the user does not specify a source. Reads a file safely within a project root.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -850,7 +851,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'search_local_files',
-    description: 'Search local files without reading the full repo.',
+    description: 'Search local files without reading the full repo. Prefer this local search before remote GitHub search when the user does not specify a source.',
     inputSchema: {
       type: 'object',
       properties: {

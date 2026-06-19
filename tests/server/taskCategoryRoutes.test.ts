@@ -15,7 +15,7 @@ const { registerApiRoutes } = await import('../../src/server/routes/registerApiR
 const { saveProjects } = await import('../../src/server/repositories/projectRepository.js');
 const { loadTasks, saveTasks } = await import('../../src/server/repositories/taskRepository.js');
 
-const state = {
+const state: any = {
   tasksCache: [
     {
       id: 'task-legacy-1',

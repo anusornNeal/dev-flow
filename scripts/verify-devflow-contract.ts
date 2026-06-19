@@ -170,6 +170,19 @@ try {
   assert.ok(createTaskSchema?.properties?.repoUrl);
   assert.ok(updateTaskSchema?.properties?.taskId);
 
+  console.log('[verify] Testing ChatGPT-friendly task listing defaults...');
+  const listTasksTool = getToolDefinitionByName('list_tasks');
+  assert.ok(listTasksTool, 'list_tasks must be resolvable by name');
+  const defaultListTasksRequest = listTasksTool.buildHttpRequest({});
+  assert.equal(defaultListTasksRequest.method, 'GET');
+  assert.equal(defaultListTasksRequest.path, '/api/tasks?mode=minimal&limit=50');
+  assert.match(listTasksTool.description, /local/i);
+  assert.match(listTasksTool.description, /limit/i);
+
+  const readLocalTool = getToolDefinitionByName('read_local_file');
+  assert.ok(readLocalTool, 'read_local_file must be resolvable by name');
+  assert.match(readLocalTool.description, /Prefer this/i);
+
   console.log('[verify] Testing prompt override MCP tools...');
   const newToolNames = ['list_prompt_skills', 'get_prompt_skill', 'update_prompt_override', 'delete_prompt_override'];
   for (const toolName of newToolNames) {

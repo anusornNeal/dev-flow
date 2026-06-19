@@ -217,7 +217,7 @@ Create:
 3. A final integration/review plan owned by the parent.
 
 **Frontend / Backend Split Rule**:
-Split frontend and backend into separate DevFlow cards whenever the work can be separated cleanly, even if the source Jira card is one item. Use a single `general` card only when frontend/backend cannot be separated cleanly, and explain why in `reasoning`.
+Split frontend and backend into separate DevFlow cards whenever the work can be separated cleanly, even if the source Jira card is one item. Use a single card with `category: "general"` only when frontend/backend cannot be separated cleanly, and explain why in `reasoning`.
 
 ## Parent Orchestrator Rule
 

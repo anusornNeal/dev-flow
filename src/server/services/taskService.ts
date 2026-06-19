@@ -1,8 +1,8 @@
 import fs from 'fs';
 import path from 'path';
-import type { AgentCompletionPayload, AgentCompletionTest } from '../../types';
+import type { AgentCompletionPayload, AgentCompletionTest, TaskCategory } from '../../types';
 import type { AppState } from '../types';
-import { VALID_AGENTS, LEGACY_VALID_EFFORTS_FALLBACK, VALID_MODELS, VALID_PRIORITIES, VALID_STATUSES, VALID_TASK_TAGS } from '../constants';
+import { VALID_AGENTS, LEGACY_VALID_EFFORTS_FALLBACK, VALID_MODELS, VALID_PRIORITIES, VALID_STATUSES, VALID_TASK_CATEGORIES } from '../constants';
 import { validateEnum, validateString } from '../validation';
 import { buildLaunchMetadataBlock, resolveAgentLaunchPlan } from './agentLaunchConfig';
 import { getModelConfig } from '../../lib/agentsConfig';
@@ -12,6 +12,60 @@ import { renderPromptTemplate } from './promptTemplateService';
 
 function normalizeRepoLike(value: string) {
   return value.trim().toLowerCase().replace(/\/$/, '');
+}
+
+const TASK_CATEGORY_SET = new Set<string>(VALID_TASK_CATEGORIES);
+
+function isTaskCategory(value: unknown): value is TaskCategory {
+  return typeof value === 'string' && TASK_CATEGORY_SET.has(value);
+}
+
+function getLegacyCategoryTags(tags: string[]): TaskCategory[] {
+  return [...new Set(tags.filter(isTaskCategory))] as TaskCategory[];
+}
+
+function inferCategoryFromText(item: { title?: unknown; description?: unknown; repoContext?: unknown; reasoning?: unknown }): TaskCategory | undefined {
+  const haystack = [
+    typeof item.title === 'string' ? item.title : '',
+    typeof item.description === 'string' ? item.description : '',
+    typeof item.repoContext === 'string' ? item.repoContext : '',
+    typeof item.reasoning === 'string' ? item.reasoning : '',
+  ].join(' ').toLowerCase();
+
+  const hasFrontend = /\b(frontend|ui|ux|react|vite|css|component|modal|drawer|sidebar|card)\b/.test(haystack);
+  const hasBackend = /\b(backend|api|server|sqlite|schema|repository|route|db|database|mcp|contract)\b/.test(haystack);
+
+  if (hasFrontend === hasBackend) return undefined;
+  return hasBackend ? 'backend' : 'frontend';
+}
+
+export function normalizeTaskCategoryAndTags(
+  item: { category?: unknown; tags?: unknown; title?: unknown; description?: unknown; repoContext?: unknown; reasoning?: unknown },
+  options?: {
+    fallbackCategory?: TaskCategory;
+    requireCategory?: boolean;
+  },
+): { category: TaskCategory; tags: string[] } {
+  const rawTags = Array.isArray(item.tags)
+    ? item.tags.map((tag) => String(tag).trim()).filter(Boolean)
+    : [];
+  const legacyCategoryTags = getLegacyCategoryTags(rawTags);
+  const inferredCategory = inferCategoryFromText(item);
+  const resolvedCategory = isTaskCategory(item.category)
+    ? item.category
+    : legacyCategoryTags[0]
+      || options?.fallbackCategory
+      || inferredCategory;
+
+  if (options?.requireCategory && !resolvedCategory) {
+    throw new Error(`Field 'category' is required and must be one of: ${VALID_TASK_CATEGORIES.join(', ')}.`);
+  }
+  const category = resolvedCategory || 'general';
+
+  return {
+    category,
+    tags: [...new Set(rawTags.filter((tag) => !TASK_CATEGORY_SET.has(tag)))],
+  };
 }
 
 export function findTaskByIdentifier(state: AppState, targetId: string) {
@@ -66,8 +120,8 @@ export function validateTaskPayload(item: any, isUpdate = false): string | null 
 
   const priorityErr = validateEnum(item.priority, 'priority', VALID_PRIORITIES, false);
   if (priorityErr) return priorityErr;
-
-
+  const categoryErr = validateEnum(item.category, 'category', VALID_TASK_CATEGORIES, false);
+  if (categoryErr) return categoryErr;
 
   const modelErr = validateEnum(item.model, 'model', VALID_MODELS, false);
   if (modelErr) return modelErr;
@@ -77,10 +131,20 @@ export function validateTaskPayload(item: any, isUpdate = false): string | null 
 
   if (item.tags !== undefined && !Array.isArray(item.tags)) return "Field 'tags' must be an array.";
   if (Array.isArray(item.tags)) {
-    const invalidTag = item.tags.find((tag: unknown) => typeof tag !== 'string' || !VALID_TASK_TAGS.includes(tag));
+    const invalidTag = item.tags.find((tag: unknown) => typeof tag !== 'string' || !String(tag).trim());
     if (invalidTag !== undefined) {
-      return `Field 'tags' must contain only: ${VALID_TASK_TAGS.join(', ')}.`;
+      return "Field 'tags' must contain only non-empty strings.";
     }
+  }
+  const normalizedTags = Array.isArray(item.tags)
+    ? item.tags.map((tag: string) => tag.trim()).filter(Boolean)
+    : [];
+  const legacyCategoryTags = getLegacyCategoryTags(normalizedTags);
+  if (item.category === undefined && legacyCategoryTags.length > 1) {
+    return "Field 'tags' can contain at most one legacy category tag when 'category' is omitted.";
+  }
+  if (!isUpdate && item.category === undefined && legacyCategoryTags.length === 0) {
+    return `Field 'category' is required and must be one of: ${VALID_TASK_CATEGORIES.join(', ')}.`;
   }
   if (item.targetFiles !== undefined && !Array.isArray(item.targetFiles)) return "Field 'targetFiles' must be an array.";
   if (item.checklist !== undefined && !Array.isArray(item.checklist)) return "Field 'checklist' must be an array.";

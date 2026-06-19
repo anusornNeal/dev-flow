@@ -7,7 +7,8 @@ export const VALID_MODELS = [
 ];
 export const VALID_STATUSES = ['backlog', 'todo', 'in-progress', 'ready-for-review', 'done'];
 export const VALID_PRIORITIES = ['low', 'medium', 'high'];
-export const VALID_TASK_TAGS = ['frontend', 'backend', 'general'];
+export const VALID_TASK_CATEGORIES = ['frontend', 'backend', 'general'];
+export const VALID_TASK_TAGS = VALID_TASK_CATEGORIES;
 
 export const TASK_SCHEMA_DEF = {
   $schema: 'http://json-schema.org/draft-07/schema#',
@@ -31,10 +32,15 @@ export const TASK_SCHEMA_DEF = {
       enum: VALID_PRIORITIES,
       description: 'Priority level',
     },
+    category: {
+      type: 'string',
+      enum: VALID_TASK_CATEGORIES,
+      description: 'Primary task type classification. Required for new tasks.',
+    },
     tags: {
       type: 'array',
-      items: { type: 'string', enum: VALID_TASK_TAGS },
-      description: 'Task type tags. Allowed values: frontend, backend, general.',
+      items: { type: 'string' },
+      description: 'Optional free-form labels. Do not repeat the primary task type here.',
     },
     targetFiles: {
       type: 'array',
@@ -94,5 +100,5 @@ export const TASK_SCHEMA_DEF = {
       },
     },
   },
-  required: ['title', 'projectId'],
+  required: ['title', 'projectId', 'category'],
 };

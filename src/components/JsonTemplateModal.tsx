@@ -29,7 +29,8 @@ const sampleJson = [
     "description": "Create the backend authentication endpoints.\n\nProblem: We lack secure token validation.\nExpected: All protected routes validate JWTs using Argon2 and return 401 if missing.",
     "status": "todo",
     "priority": "high",
-    "tags": ["backend"],
+    "category": "backend",
+    "tags": ["security", "auth"],
     "branch": "feature/api-auth-backend",
     "targetFiles": [
       "src/controllers/authController.ts",
@@ -69,7 +70,8 @@ const sampleJson = [
     "description": "Implement frontend storage and injection of JWT tokens for API requests.",
     "status": "backlog",
     "priority": "high",
-    "tags": ["frontend"],
+    "category": "frontend",
+    "tags": ["auth", "session"],
     "branch": "feature/api-auth-frontend",
     "targetFiles": [
       "src/api/apiClient.ts",
@@ -159,7 +161,7 @@ const apiSpecs = [
     method: 'POST',
     path: '/api/tasks',
     description: 'สร้างตั๋วงานเดี่ยว หรือนำเข้าการ์ดแบบกลุ่ม (Bulk Import) รองรับการสร้างตั๋วแยกย่อย (เช่น Frontend/Backend split) จาก Jira ใบเดียว',
-    payload: '{\n  "projectId": "UUID ของโปรเจกต์ (Required สำหรับ Raw API. หากใช้ MCP tool สามารถส่ง repo/projectName แทนได้)",\n  "tasks": [\n    {\n      "title": "Backend API",\n      "tags": ["backend"]\n    },\n    {\n      "title": "Frontend UI",\n      "tags": ["frontend"]\n    }\n  ]\n}',
+    payload: '{\n  "projectId": "UUID ของโปรเจกต์ (Required สำหรับ Raw API. หากใช้ MCP tool สามารถส่ง repo/projectName แทนได้)",\n  "tasks": [\n    {\n      "title": "Backend API",\n      "category": "backend",\n      "tags": ["queue"]\n    },\n    {\n      "title": "Frontend UI",\n      "category": "frontend",\n      "tags": ["runner"]\n    }\n  ]\n}',
     response: 'JSON Object แสดงสถิติจำนวน { success: true, createdCount: number, updatedCount: number, tasks: Array }',
     responseExample: `{
   "success": true,
@@ -549,7 +551,8 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
                   <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">agent</strong>: เอเจนต์ที่รับผิดชอบ <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">"Codex" | "Antigravity" | "Claude"</code></li>
                   <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">model</strong>: ชื่อโมเดล AI</li>
                   <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">effort</strong>: ระดับพละกำลัง (ต้องใช้คำตามที่ Agent/Model อนุญาตเท่านั้น) <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">"low" | "medium" | "high" | "xhigh"</code></li>
-                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">tags</strong>: ประเภทของงานเท่านั้น ใช้ได้แค่ <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">frontend</code>, <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">backend</code>, หรือ <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">general</code></li>
+                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">category</strong>: ประเภทงานหลักที่ต้องมีเสมอ ใช้ได้แค่ <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">frontend</code>, <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">backend</code>, หรือ <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">general</code></li>
+                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">tags</strong>: ป้ายกำกับเสริมแบบอิสระ เช่น <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">queue</code> หรือ <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">auto-work</code> และไม่ควรใช้ซ้ำกับ category</li>
                   <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">reasoning</strong>: เหตุผล/บริบทที่มาของงาน กรณีรวม FE/BE ไว้ใบเดียวให้ใช้ <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">general</code> และอธิบายเหตุผลให้ชัด</li>
                   <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">acceptanceCriteria</strong>: เกณฑ์การตรวจรับงาน (Acceptance Criteria)</li>
                   <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">verification</strong>: ขั้นตอนการตรวจสอบหรือทดสอบว่าเสร็จสมบูรณ์</li>

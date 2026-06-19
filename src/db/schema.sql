@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   status TEXT,
   priority TEXT,
   branch TEXT,
+  category TEXT,
   tags TEXT, -- JSON string
   targetFiles TEXT, -- JSON string
   checklist TEXT, -- JSON string

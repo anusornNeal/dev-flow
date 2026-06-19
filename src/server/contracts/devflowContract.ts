@@ -1,4 +1,4 @@
-import { VALID_AGENTS, LEGACY_VALID_EFFORTS_FALLBACK, VALID_MODELS, VALID_STATUSES, VALID_TASK_TAGS } from '../constants';
+import { VALID_AGENTS, LEGACY_VALID_EFFORTS_FALLBACK, VALID_MODELS, VALID_STATUSES, VALID_TASK_CATEGORIES } from '../constants';
 
 type JsonSchema = Record<string, any>;
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
@@ -49,10 +49,15 @@ const taskMutationProperties = {
   status: { type: 'string', enum: VALID_STATUSES, description: 'Task lane/status.' },
   priority: { type: 'string', enum: ['low', 'medium', 'high'], description: 'Task priority.' },
   branch: { type: 'string', description: 'Git branch name.' },
+  category: {
+    type: 'string',
+    enum: VALID_TASK_CATEGORIES,
+    description: 'Primary task type classification. Required for new tasks.',
+  },
   tags: {
     type: 'array',
-    items: { type: 'string', enum: VALID_TASK_TAGS },
-    description: 'Task type tags. Allowed values: frontend, backend, general.',
+    items: { type: 'string' },
+    description: 'Optional free-form labels. Do not repeat the primary task type here.',
   },
   targetFiles: { type: 'array', items: { type: 'string' }, description: 'Relevant file paths.' },
   checklist: {
@@ -109,7 +114,7 @@ function encodePathSegment(value: string) {
   return encodeURIComponent(value);
 }
 
-export const DEVFLOW_CONTRACT_VERSION = '2026-06-18.1';
+export const DEVFLOW_CONTRACT_VERSION = '2026-06-19.1';
 
 export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   {
@@ -318,7 +323,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
         ...projectIdentifierProperties,
         ...taskMutationProperties,
       },
-      required: ['title'],
+      required: ['title', 'category'],
     },
     outputSchema: { type: 'object' },
     buildHttpRequest: (args) => ({ method: 'POST', path: '/api/tasks', body: args }),

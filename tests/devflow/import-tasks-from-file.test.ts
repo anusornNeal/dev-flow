@@ -99,7 +99,7 @@ try {
   assert.equal((state.tasksCache[0] as any).status, 'backlog');
 
   // 7. apply create
-  const createPatch = { version: 'devflow.taskPatch.v1', defaults: { projectName: 'Dev Flow' }, tasks: [{ operation: 'create', title: 'New import task', fields: { priority: 'high' } }] };
+  const createPatch = { version: 'devflow.taskPatch.v1', defaults: { projectName: 'Dev Flow' }, tasks: [{ operation: 'create', title: 'New import task', fields: { category: 'general', priority: 'high' } }] };
   fs.writeFileSync(fixture('create.json'), JSON.stringify(createPatch));
   const r7 = await post('/api/tasks/import-file', {
     mode: 'apply', strategy: 'patch', patchFilePath: fixture('create.json'),

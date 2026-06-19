@@ -24,7 +24,8 @@ export default function BatchImportModal({ onClose, onImport }: BatchImportModal
       "status": "backlog",
       "priority": "high",
       "branch": "feature/compose-navigation",
-      "tags": ["frontend"],
+      "category": "frontend",
+      "tags": ["android", "navigation"],
       "targetFiles": [
         "app/build.gradle.kts",
         "app/src/main/java/com/example/devflow/ui/NavGraph.kt"
@@ -39,7 +40,8 @@ export default function BatchImportModal({ onClose, onImport }: BatchImportModal
       "description": "Create unified secure wrapper for iOS dynamic Keychain queries.",
       "status": "todo",
       "priority": "medium",
-      "tags": ["backend"],
+      "category": "backend",
+      "tags": ["ios", "security"],
       "checklist": [
         { "text": "Create KeychainHelper file wrapping OS queries", "completed": false }
       ]
@@ -165,7 +167,7 @@ export default function BatchImportModal({ onClose, onImport }: BatchImportModal
             <ul className="list-disc pl-3.5 space-y-1 font-semibold">
               <li>Pasted blob must consist of a clean JSON Array containing ticket records.</li>
               <li>Required property is the ticket <strong>title</strong> string.</li>
-              <li>Optional properties: <strong>description</strong> (markdown string), <strong>status</strong> (backlog, todo, in-progress, ready-for-review, done), <strong>priority</strong> (low, medium, high), <strong>branch</strong> (text), <strong>tags</strong> (array using only <strong>frontend</strong>, <strong>backend</strong>, or <strong>general</strong>), <strong>targetFiles</strong> (array of paths), <strong>agent</strong>, <strong>model</strong>, <strong>effort</strong> {getAgentCatalogHelp()}, and <strong>checklist</strong> (array of steps with text and completed values).</li>
+              <li>Optional properties: <strong>description</strong> (markdown string), <strong>status</strong> (backlog, todo, in-progress, ready-for-review, done), <strong>priority</strong> (low, medium, high), <strong>branch</strong> (text), <strong>category</strong> (<strong>frontend</strong>, <strong>backend</strong>, or <strong>general</strong>), <strong>tags</strong> (free-form labels), <strong>targetFiles</strong> (array of paths), <strong>agent</strong>, <strong>model</strong>, <strong>effort</strong> {getAgentCatalogHelp()}, and <strong>checklist</strong> (array of steps with text and completed values).</li>
             </ul>
           </div>
 

@@ -8,7 +8,7 @@ import { cancelActiveRunsForTask, cancelStaleActiveRuns, createAgentRun, findAct
 import { loadTasks, generateDisplayId, saveTasks } from '../repositories/taskRepository';
 import { listAttachmentsForTask } from '../repositories/attachmentRepository';
 import { appendAgentRunLog, buildAgentCompletionSummary, createAgentRunFiles, createAgentRunResultRecord, getAgentRunHistoryPaths, getAgentTriggerScriptPath, getDevFlowApiBaseUrl, resolveAgentExecutionMode, resolveFromDevFlowAppRoot, writeAgentRunLaunchMetadata, writeAgentRunOutputSummary, writeAgentRunResult } from '../services/agentRunService';
-import { extractImages, extractDesignImages, findProjectByIdentifier, findTaskByIdentifier, getAgentTaskContext, normalizeAgentCompletionPayload, renderTaskPrompt, resolveProjectIdFromRepo, validateAgentCompletionPayload, validateAgentParams, validateTaskPayload } from '../services/taskService';
+import { extractImages, extractDesignImages, findProjectByIdentifier, findTaskByIdentifier, getAgentTaskContext, normalizeAgentCompletionPayload, normalizeTaskCategoryAndTags, renderTaskPrompt, resolveProjectIdFromRepo, validateAgentCompletionPayload, validateAgentParams, validateTaskPayload } from '../services/taskService';
 import { createApiError, sendApiError } from '../services/api';
 import { validateEnum, validateString } from '../validation';
 import { getDevFlowAppRoot } from '../../lib/devFlowPaths';
@@ -985,6 +985,8 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
         continue;
       }
 
+      const classification = normalizeTaskCategoryAndTags(item, { requireCategory: true });
+
       const newTask = {
         id: item._internalId || `task-${Date.now()}-${Math.floor(Math.random() * 1000000)}`,
         displayId: generateDisplayId(deps.state, resolvedProjectId),
@@ -994,7 +996,8 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
         status: item.status || 'backlog',
         branch: item.branch || undefined,
         priority: item.priority || 'medium',
-        tags: Array.isArray(item.tags) ? item.tags : [],
+        category: classification.category,
+        tags: classification.tags,
         targetFiles: Array.isArray(item.targetFiles) ? item.targetFiles : [],
         checklist: Array.isArray(item.checklist) ? item.checklist : [],
         designImages: extractDesignImages(item) || [],
@@ -1079,6 +1082,8 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
           continue;
         }
 
+        const classification = normalizeTaskCategoryAndTags(item, { fallbackCategory: currentTask.category });
+
         const updatedTask = {
           ...currentTask,
           title: item.title !== undefined ? String(item.title).trim() : currentTask.title,
@@ -1086,7 +1091,8 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
           status: item.status !== undefined ? item.status : currentTask.status,
           branch: item.branch !== undefined ? item.branch : currentTask.branch,
           priority: item.priority !== undefined ? item.priority : currentTask.priority,
-          tags: Array.isArray(item.tags) ? item.tags : currentTask.tags,
+          category: item.category !== undefined || Array.isArray(item.tags) ? classification.category : currentTask.category,
+          tags: Array.isArray(item.tags) ? classification.tags : currentTask.tags,
           targetFiles: Array.isArray(item.targetFiles) ? item.targetFiles : currentTask.targetFiles,
           checklist: Array.isArray(item.checklist) ? item.checklist : currentTask.checklist,
           designImages: extractDesignImages(item, currentTask) || [],
@@ -1130,6 +1136,8 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
         return res.status(400).json({ error: error.message });
       }
 
+      const classification = normalizeTaskCategoryAndTags(item, { requireCategory: true });
+
       const newTask = {
         id: item.id || `task-${Date.now()}-${Math.floor(Math.random() * 1000000)}`,
         displayId: item.displayId || generateDisplayId(deps.state, resolvedProjectId),
@@ -1139,7 +1147,8 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
         status: item.status || 'backlog',
         branch: item.branch || undefined,
         priority: item.priority || 'medium',
-        tags: Array.isArray(item.tags) ? item.tags : [],
+        category: classification.category,
+        tags: classification.tags,
         targetFiles: Array.isArray(item.targetFiles) ? item.targetFiles : [],
         checklist: Array.isArray(item.checklist) ? item.checklist : [],
         designImages: extractDesignImages(item) || [],
@@ -1482,6 +1491,8 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
         continue;
       }
 
+      const classification = normalizeTaskCategoryAndTags(item, { requireCategory: true });
+
       if (existingIndex !== -1) {
         const currentTask = deps.state.tasksCache[existingIndex];
         if (currentTask.status === 'in-progress' && !canOverrideTaskLock(currentTask, item, undefined, req.headers['x-agent-request'])) {
@@ -1494,6 +1505,8 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
           continue;
         }
 
+        const nextClassification = normalizeTaskCategoryAndTags(item, { fallbackCategory: currentTask.category });
+
         const updatedTask = {
           ...currentTask,
           title: item.title !== undefined ? String(item.title).trim() : currentTask.title,
@@ -1501,7 +1514,8 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
           status: item.status !== undefined ? item.status : currentTask.status,
           branch: item.branch !== undefined ? item.branch : currentTask.branch,
           priority: item.priority !== undefined ? item.priority : currentTask.priority,
-          tags: Array.isArray(item.tags) ? item.tags : currentTask.tags,
+          category: item.category !== undefined || Array.isArray(item.tags) ? nextClassification.category : currentTask.category,
+          tags: Array.isArray(item.tags) ? nextClassification.tags : currentTask.tags,
           targetFiles: Array.isArray(item.targetFiles) ? item.targetFiles : currentTask.targetFiles,
           checklist: Array.isArray(item.checklist) ? item.checklist : currentTask.checklist,
           designImages: extractDesignImages(item, currentTask) || [],
@@ -1550,7 +1564,8 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
         status: item.status || 'backlog',
         branch: item.branch || undefined,
         priority: item.priority || 'medium',
-        tags: Array.isArray(item.tags) ? item.tags : [],
+        category: classification.category,
+        tags: classification.tags,
         targetFiles: Array.isArray(item.targetFiles) ? item.targetFiles : [],
         checklist: Array.isArray(item.checklist) ? item.checklist : [],
         designImages: extractDesignImages(item) || [],
@@ -1624,6 +1639,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     const updatedTask = {
       ...currentTask,
       ...updateBody,
+      ...normalizeTaskCategoryAndTags(updateBody, { fallbackCategory: currentTask.category }),
       designImages: extractDesignImages(updateBody, currentTask) || [],
         images: extractImages(updateBody, currentTask) || [],
       updatedAt: new Date().toISOString(),
@@ -1702,7 +1718,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
       const items = Array.isArray(parsed.tasks) ? parsed.tasks.slice(0, maxTasks) : [];
 
       const VALID_FIELDS: Set<string> = new Set([
-        'title', 'description', 'status', 'priority', 'branch', 'tags', 'targetFiles',
+        'title', 'description', 'status', 'priority', 'branch', 'category', 'tags', 'targetFiles',
         'checklist', 'effort', 'model', 'agent', 'parentId', 'reasoning',
         'acceptanceCriteria', 'verification', 'repoContext', 'specUrl', 'designImages', 'images', 'jiraKey', 'sourceUrl',
       ]);
@@ -1752,6 +1768,12 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
 
         if (item.operation === 'update') {
           const taskId = item.taskId || item.id;
+          const updateValidationError = validateTaskPayload(fields, true);
+          if (updateValidationError) {
+            planned.push({ type: 'update', item, fields, taskId, error: updateValidationError });
+            hasValidationError = true;
+            continue;
+          }
           if (!taskId) {
             planned.push({ type: 'update', item, fields, error: 'taskId is required for update operations.' });
             hasValidationError = true;
@@ -1767,6 +1789,12 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
         } else {
           const itemProject = buildProjectInfo(item);
           const title = item.title || fields.title || '';
+          const createValidationError = validateTaskPayload({ ...fields, title }, false);
+          if (createValidationError) {
+            planned.push({ type: 'create', item, fields, title: title.trim(), error: createValidationError });
+            hasValidationError = true;
+            continue;
+          }
           if (!title.trim()) {
             planned.push({ type: 'create', item, fields, error: 'title is required for create operations.' });
             hasValidationError = true;
@@ -1820,14 +1848,16 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
       for (const op of planned) {
         if (op.type === 'update' && op.existingIndex !== undefined && op.taskId) {
           const currentTask = cloned[op.existingIndex];
+          const classification = normalizeTaskCategoryAndTags(op.fields, { fallbackCategory: currentTask.category });
           if (strategy === 'replace') {
-            cloned[op.existingIndex] = { ...currentTask, ...op.fields, updatedAt: new Date().toISOString() };
+            cloned[op.existingIndex] = { ...currentTask, ...op.fields, ...classification, updatedAt: new Date().toISOString() };
           } else {
-            Object.assign(currentTask, op.fields, { updatedAt: new Date().toISOString() });
+            Object.assign(currentTask, op.fields, classification, { updatedAt: new Date().toISOString() });
           }
           updated.push(op.taskId);
         } else if (op.type === 'create' && op.resolvedProjectId) {
           const f = op.fields;
+          const classification = normalizeTaskCategoryAndTags(f, { requireCategory: true });
           const newTask: any = {
             id: op.item.id || `task-${Date.now()}-${Math.floor(Math.random() * 1000000)}`,
             displayId: op.item.displayId || generateDisplayId(deps.state, op.resolvedProjectId),
@@ -1837,7 +1867,8 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
             status: f.status || 'backlog',
             priority: f.priority || 'medium',
             branch: f.branch || undefined,
-            tags: Array.isArray(f.tags) ? f.tags : [],
+            category: classification.category,
+            tags: classification.tags,
             targetFiles: Array.isArray(f.targetFiles) ? f.targetFiles : [],
             checklist: Array.isArray(f.checklist) ? f.checklist : [],
             designImages: extractDesignImages(f) || [],

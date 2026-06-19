@@ -1,6 +1,15 @@
 import db from '../../db/index';
 import type { AppState } from '../types';
 import { getActiveRunForTask, getLatestAgentRunForTask, listAgentRunsForTask } from './agentRunRepository';
+import { normalizeTaskCategoryAndTags } from '../services/taskService';
+
+function ensureTaskCategoryColumn() {
+  const tableInfo = db.pragma('table_info(tasks)') as Array<{ name: string }>;
+  const hasCategory = tableInfo.some((column) => column.name === 'category');
+  if (!hasCategory) {
+    db.prepare('ALTER TABLE tasks ADD COLUMN category TEXT').run();
+  }
+}
 
 function loadCounters(state: AppState) {
   state.countersCache = {};
@@ -55,11 +64,12 @@ export function generateDisplayId(state: AppState, projectId: string): string {
 }
 
 export function loadTasks(state: AppState) {
+  ensureTaskCategoryColumn();
   loadCounters(state);
   const rows = db.prepare('SELECT * FROM tasks').all() as any[];
   state.tasksCache = rows.map((item) => ({
     ...item,
-    tags: item.tags ? JSON.parse(item.tags) : undefined,
+    tags: item.tags ? JSON.parse(item.tags) : [],
     targetFiles: item.targetFiles ? JSON.parse(item.targetFiles) : undefined,
     checklist: item.checklist ? JSON.parse(item.checklist) : undefined,
     logs: item.logs ? JSON.parse(item.logs) : undefined,
@@ -74,6 +84,14 @@ export function loadTasks(state: AppState) {
       }
       return imgs.length > 0 ? imgs : undefined;
     })(),
+    ...normalizeTaskCategoryAndTags({
+      category: item.category,
+      tags: item.tags ? JSON.parse(item.tags) : [],
+      title: item.title,
+      description: item.description,
+      repoContext: item.repoContext,
+      reasoning: item.reasoning,
+    }),
   })).map((task) => {
     const activeRun = getActiveRunForTask(task.id);
     const latestRun = getLatestAgentRunForTask(task.id);
@@ -101,7 +119,8 @@ export function loadTasks(state: AppState) {
 }
 
 export function saveTasks(state: AppState) {
-  const stmt = db.prepare('INSERT OR REPLACE INTO tasks (id, displayId, title, description, projectId, status, priority, branch, tags, targetFiles, checklist, effort, model, agent, parentId, reasoning, acceptanceCriteria, verification, repoContext, jiraKey, repo, createdAt, updatedAt, logs, designImages, images) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+  ensureTaskCategoryColumn();
+  const stmt = db.prepare('INSERT OR REPLACE INTO tasks (id, displayId, title, description, projectId, status, priority, branch, category, tags, targetFiles, checklist, effort, model, agent, parentId, reasoning, acceptanceCriteria, verification, repoContext, jiraKey, repo, createdAt, updatedAt, logs, designImages, images) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
   db.transaction(() => {
     const currentIds = state.tasksCache.map((task) => task.id);
     const tasksById = new Map(state.tasksCache.map((task) => [task.id, task]));
@@ -130,9 +149,18 @@ export function saveTasks(state: AppState) {
       db.prepare('DELETE FROM tasks').run();
     }
     for (const item of sortedTasks) {
+      const normalized = normalizeTaskCategoryAndTags({
+        category: item.category,
+        tags: item.tags,
+        title: item.title,
+        description: item.description,
+        repoContext: item.repoContext,
+        reasoning: item.reasoning,
+      });
       stmt.run(
         item.id, item.displayId, item.title, item.description, item.projectId, item.status, item.priority, item.branch,
-        item.tags ? JSON.stringify(item.tags) : null,
+        normalized.category,
+        normalized.tags.length > 0 ? JSON.stringify(normalized.tags) : null,
         item.targetFiles ? JSON.stringify(item.targetFiles) : null,
         item.checklist ? JSON.stringify(item.checklist) : null,
         item.effort, item.model, item.agent, item.parentId, item.reasoning, item.acceptanceCriteria, item.verification, item.repoContext, item.jiraKey, item.repo, item.createdAt, item.updatedAt,

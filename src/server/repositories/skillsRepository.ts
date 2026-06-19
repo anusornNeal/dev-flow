@@ -87,7 +87,13 @@ export function loadSkillsRegistry(state: AppState) {
     skill.isProtected = Boolean(skill.isProtected);
     skill.filePath = skill.sourcePath || skill.filePath || (!skill.isCustom ? path.join(SKILLS_DIR, `${skill.id}.md`) : undefined);
 
-    if (!skill.isCustom && (!skill.content || skill.content.length === 0)) {
+    if (!skill.isCustom && skill.filePath && fs.existsSync(skill.filePath)) {
+      const fileContent = fs.readFileSync(skill.filePath, 'utf8');
+      if (skill.content !== fileContent) {
+        skill.content = fileContent;
+        needsSave = true;
+      }
+    } else if (!skill.isCustom && (!skill.content || skill.content.length === 0)) {
       const filePath = skill.filePath || path.join(SKILLS_DIR, `${skill.id}.md`);
       if (fs.existsSync(filePath)) {
         skill.content = fs.readFileSync(filePath, 'utf8');

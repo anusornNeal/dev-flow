@@ -3,6 +3,7 @@ export interface TaskPatch {
   description?: string;
   status?: string;
   priority?: string;
+  category?: string;
   checklist?: ChecklistItem[];
   branch?: string;
   tags?: string[];

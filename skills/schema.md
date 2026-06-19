@@ -36,7 +36,8 @@ All other task fields are identical across both interfaces.
   "status": "backlog | todo | in-progress | ready-for-review | done",
   "priority": "low | medium | high",
   "branch": "string",
-  "tags": ["general"],
+  "category": "general",
+  "tags": ["label"],
   "targetFiles": ["string"],
   "checklist": [
     {
@@ -77,17 +78,27 @@ Always confirm the latest schema with:
 Dev_Flow.get_schema
 ```
 
-### tags
+### category
 
 ```json
-["frontend", "backend", "general"]
+"frontend" | "backend" | "general"
 ```
 
 Rules:
-- `tags` is only for task type classification.
+- `category` is the required primary task type classification for new cards.
 - Allowed values are exactly `frontend`, `backend`, and `general`.
 - Use `frontend` for UI/client work, `backend` for server/infrastructure work, and `general` for cross-cutting or non-layer-specific work.
-- Do not put Jira keys, labels, platforms, bug types, or component names in `tags`. Put those in `title`, `description`, `jiraKey`, or `repoContext` instead.
+
+### tags
+
+```json
+["label-1", "label-2"]
+```
+
+Rules:
+- `tags` is for optional free-form labels only.
+- Do not use `frontend`, `backend`, or `general` inside `tags`. Put the primary work type in `category`.
+- Put Jira keys, platforms, feature areas, or workflow labels in `tags` only when they help discovery and are not already covered better elsewhere.
 
 ## Allowed Values
 
@@ -452,7 +463,8 @@ Using MCP `Dev_Flow.create_task`:
   "status": "backlog",
   "priority": "high",
   "branch": "fix/dvf-0003-duplicate-display-id",
-  "tags": ["backend"],
+  "category": "backend",
+  "tags": ["security"],
   "targetFiles": [
     "src/server/repositories/taskRepository.ts",
     "src/db/index.ts"
@@ -495,7 +507,8 @@ Using raw API `POST /api/tasks`:
   "status": "backlog",
   "priority": "medium",
   "branch": "feature/dvf-0095-dark-mode",
-  "tags": ["frontend"],
+  "category": "frontend",
+  "tags": ["ui"],
   "targetFiles": [
     "src/index.css",
     "src/App.tsx",
@@ -545,7 +558,8 @@ Using raw API `POST /api/tasks`:
   "status": "todo",
   "priority": "high",
   "branch": "docs/rewrite-task-json-schema-current-devflow",
-  "tags": ["general"],
+  "category": "general",
+  "tags": ["docs"],
   "targetFiles": [
     "skills/schema.md",
     "src/types.ts"
@@ -598,7 +612,8 @@ Parent (foundation, merge, and review owner):
   "status": "backlog",
   "priority": "medium",
   "branch": "feature/qca-3242-foundation",
-  "tags": ["general"],
+  "category": "general",
+  "tags": ["foundation"],
   "targetFiles": [
     "JobDetailInfoTab.kt",
     "shared/AttachmentPreviewContract.kt (new)"
@@ -643,7 +658,8 @@ Child (subtask linked to parent):
   "status": "backlog",
   "priority": "medium",
   "branch": "feature/qca-3242-foundation/site-info-page",
-  "tags": ["frontend"],
+  "category": "frontend",
+  "tags": ["site-info"],
   "targetFiles": [
     "site_info/JobSiteInfoRoute.kt (new)",
     "site_info/JobSiteInfoScreen.kt (new)"
@@ -711,4 +727,4 @@ Rationale:
 
 When a Jira or spec item contains both frontend and backend work, split it into separate DevFlow cards whenever the work can be separated cleanly. 
 
-**Rule**: Use `general` when frontend and backend cannot be separated cleanly. If you must keep one combined card, explain why in the `reasoning` field.
+**Rule**: Use `category: "general"` when frontend and backend cannot be separated cleanly. If you must keep one combined card, explain why in the `reasoning` field.

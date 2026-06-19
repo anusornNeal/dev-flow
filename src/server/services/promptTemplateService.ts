@@ -43,6 +43,10 @@ function getPromptSkillsDir() {
   return path.join(getDevFlowAppRoot(), 'skills');
 }
 
+function getPromptSkillPath(skillId: string) {
+  return path.join(getPromptSkillsDir(), `${skillId}.md`);
+}
+
 export function getPromptPipeline(pipelineId: string = 'default'): string[] {
   const configPath = getPromptPipelineConfigPath();
   if (fs.existsSync(configPath)) {
@@ -137,17 +141,8 @@ export function renderPromptTemplate(pipelineId: string, context: PromptRenderCo
 
   for (const rawSkillId of pipeline) {
     const skillId = rawSkillId.replace('{agent}', (context.agent || 'default').toLowerCase());
-    const masterPath = path.join(getPromptSkillsDir(), `${skillId}.md`);
+    const masterPath = getPromptSkillPath(skillId);
     let content = '';
-    let usedSkillSource = skillId;
-
-    if (context.workspace?.localPath) {
-      const overridePath = path.join(context.workspace.localPath, '.devflow', 'prompt-overrides', `${skillId}.md`);
-      if (fs.existsSync(overridePath)) {
-        content = fs.readFileSync(overridePath, 'utf8');
-        usedSkillSource = `${skillId} (override)`;
-      }
-    }
 
     if (!content && fs.existsSync(masterPath)) {
       content = fs.readFileSync(masterPath, 'utf8');
@@ -169,7 +164,7 @@ export function renderPromptTemplate(pipelineId: string, context: PromptRenderCo
       if (!isEffectivelyEmpty && rendered) {
         sections.push(rendered);
       }
-      usedSkills.push(usedSkillSource);
+      usedSkills.push(skillId);
     } else if (!rawSkillId.includes('agent-specific')) {
       throw new Error(`Required prompt skill missing: ${skillId}`);
     }
@@ -199,20 +194,11 @@ export function getPromptPipelineStructure(pipelineId: string, agent: string, lo
   const pipeline = getPromptPipeline(pipelineId);
   return pipeline.map((rawSkillId, index) => {
     const skillId = rawSkillId.replace('{agent}', (agent || 'default').toLowerCase());
-    const masterPath = path.join(getPromptSkillsDir(), `${skillId}.md`);
-    let overridePath: string | null = null;
+    const masterPath = getPromptSkillPath(skillId);
     let masterContent = '';
-    let overrideContent = null;
     
     if (fs.existsSync(masterPath)) {
       masterContent = fs.readFileSync(masterPath, 'utf8');
-    }
-    
-    if (localPath) {
-      overridePath = path.join(localPath, '.devflow', 'prompt-overrides', `${skillId}.md`);
-      if (fs.existsSync(overridePath)) {
-        overrideContent = fs.readFileSync(overridePath, 'utf8');
-      }
     }
     
     const isRequired = !rawSkillId.includes('agent-specific');
@@ -223,12 +209,12 @@ export function getPromptPipelineStructure(pipelineId: string, agent: string, lo
       order: index + 1,
       required: isRequired,
       sourcePath: masterPath,
-      sourceType: overrideContent !== null ? 'override' : 'master',
+      sourceType: 'master',
       masterContent,
-      overrideContent: overrideContent !== null ? overrideContent : undefined,
-      effectiveContent: overrideContent !== null ? overrideContent : masterContent,
+      overrideContent: undefined,
+      effectiveContent: masterContent,
       rawId: rawSkillId, // keeping for backward compatibility if needed internally
-      overridePath
+      overridePath: null
     };
   }).filter((section) => section.id !== 'prompt.agent-specific.default');
 }
@@ -273,6 +259,29 @@ export function readPromptSectionForWorkspace(sectionId: string, opts: { pipelin
   }
   const all = getPromptPipelineStructure(pipelineId, agent, opts.localPath);
   return all.find((s) => s.id === sectionId) || null;
+}
+
+export function readPromptSectionFromMaster(sectionId: string, opts: { pipelineId?: string; agent?: string } = {}) {
+  const pipelineId = opts.pipelineId || 'default';
+  const agent = opts.agent || 'default';
+  if (!isAllowedPromptSkillId(sectionId, agent, pipelineId)) {
+    throw createApiError(400, 'INVALID_SECTION_ID', `Section id not in pipeline: ${sectionId}`, { affectedId: sectionId });
+  }
+  return getPromptPipelineStructure(pipelineId, agent).find((section) => section.id === sectionId) || null;
+}
+
+export function writePromptSectionToMaster(sectionId: string, content: string, opts: { pipelineId?: string; agent?: string } = {}) {
+  const pipelineId = opts.pipelineId || 'default';
+  const agent = opts.agent || 'default';
+  if (!isAllowedPromptSkillId(sectionId, agent, pipelineId)) {
+    throw createApiError(400, 'INVALID_SECTION_ID', `Section id not in pipeline: ${sectionId}`, { affectedId: sectionId });
+  }
+  if (typeof content !== 'string') {
+    throw createApiError(400, 'INVALID_CONTENT', 'content must be a string');
+  }
+  const sectionPath = getPromptSkillPath(sectionId);
+  fs.writeFileSync(sectionPath, content, 'utf8');
+  return { success: true, sourcePath: sectionPath };
 }
 
 function ensureOverridePathIsSafe(localPath: string, sectionId: string, opts: { pipelineId?: string; agent?: string }) {

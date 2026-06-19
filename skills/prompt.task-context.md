@@ -1,22 +1,16 @@
-## Task Context
-**Description:**
-{{instruction.description}}
+## Task Source
 
-**Acceptance Criteria:**
-{{requirements.acceptanceCriteria}}
+Load full task details from the local DevFlow HTTP API when needed.
 
-**Verification:**
-{{requirements.verification}}
-
-**Reasoning:**
-{{instruction.reasoning}}
-
-**Target Files:**
-{{requirements.targetFiles}}
+Recommended API calls:
+- `GET /api/tasks/{{task.displayId}}/agent-context?mode=agent-context` for implementation context
+- `GET /api/tasks/{{task.displayId}}?mode=full` for full card fields/checklist
+- `GET /api/tasks/{{task.displayId}}/prompt?mode=standard` only when previewing prompt rendering
 
 {{task.imagesApi}}
 
-**Repository Notes:**
-{{repoContext}}
+Use MCP only when HTTP API access is unavailable. Do not assume missing details; fetch them.
+
+Fetch checklist details from DevFlow before reporting completion. Complete or explicitly explain every required item on the current card.
 
 Fetch checklist details from DevFlow before reporting completion. Complete or explicitly explain every required item on the current card.

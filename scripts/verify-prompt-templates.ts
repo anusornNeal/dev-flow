@@ -90,20 +90,20 @@ console.log('[verify] Testing rendered prompt sections...');
 const renderResult = renderPromptTemplate('default', mockContext);
 assert.ok(renderResult.usedSkills.includes('prompt.header'));
 assert.ok(renderResult.usedSkills.includes('prompt.task-context'));
-assert.ok(renderResult.content.includes('Render prompts from the real agent task context.'));
 assert.ok(renderResult.content.includes('Fetch checklist details from DevFlow before reporting completion.'));
-assert.ok(renderResult.content.includes('Prompt contains the real task fields.'));
-assert.ok(renderResult.content.includes('Run prompt template and orchestration checks.'));
+assert.ok(renderResult.content.includes('Load full task details from the local DevFlow HTTP API when needed.'));
+assert.ok(renderResult.content.includes('GET /api/tasks/DVF-0080/agent-context?mode=agent-context'));
+assert.ok(renderResult.content.includes('**Attached Images API:** GET /api/tasks/DVF-0080/images'));
 assert.ok(renderResult.content.includes('https://github.com/anusornNeal/dev-flow'));
 assert.ok(renderResult.content.includes(fixtureLocalPath));
-assert.ok(renderResult.content.includes('Agent: Codex, Model: GPT-5.5, Effort: xhigh'));
-assert.ok(renderResult.content.includes('**Attached Images API:** GET /api/tasks/DVF-0080/images'));
+assert.ok(renderResult.content.includes('# DevFlow Agent Task'));
 assert.ok(renderResult.usedSkills.includes('prompt.project-rules'));
-assert.ok(renderResult.content.includes('## DevFlow Workflow Rules'));
-assert.ok(renderResult.content.includes('Move todo cards to in-progress before implementation starts.'));
-assert.ok(renderResult.content.includes('Use the card branch. If the card has no branch, default to develop.'));
-assert.ok(renderResult.content.includes('Handle every checklist item or mini task.'));
-assert.ok(renderResult.content.includes('Push the work to the active branch before moving the card to ready-for-review.'));
+assert.ok(renderResult.content.includes('## DevFlow Usage'));
+assert.ok(renderResult.content.includes('Prefer local repo access for code, git, and tests.'));
+assert.ok(renderResult.content.includes('## Execution Rules'));
+assert.ok(renderResult.content.includes('Fetch DevFlow context only when needed, but do not guess task requirements.'));
+assert.ok(renderResult.content.includes('## Completion'));
+assert.ok(renderResult.content.includes('Report changed behavior/files, verification run, and remaining risk. Then stop.'));
 assert.ok(renderResult.content.includes('Work only on this current task and stop when it is complete.'));
 assert.ok(!renderResult.content.includes('DVF-0081: Use production task context'));
 assert.ok(!renderResult.content.includes('Prefer clean architecture and modular design.'));
@@ -126,17 +126,49 @@ const originalCwd = process.cwd();
 process.chdir(outsideCwd);
 try {
   const stableRootRender = renderPromptTemplate('default', mockContext);
-  assert.ok(stableRootRender.content.includes('Render prompts from the real agent task context.'));
+  assert.ok(stableRootRender.content.includes('Load full task details from the local DevFlow HTTP API when needed.'));
   assert.ok(stableRootRender.usedSkills.includes('prompt.header'));
 } finally {
   process.chdir(originalCwd);
+}
+
+console.log('[verify] Testing non-override workspaces fall back to the current master template...');
+const noOverrideRender = renderPromptTemplate('default', {
+  ...mockContext,
+  workspace: {
+    ...mockContext.workspace,
+    localPath: path.join(outsideCwd, 'some-other-project'),
+  },
+});
+assert.ok(noOverrideRender.content.includes('# DevFlow Agent Task'));
+assert.ok(noOverrideRender.content.includes('Load full task details from the local DevFlow HTTP API when needed.'));
+assert.ok(noOverrideRender.content.includes('## Completion'));
+assert.ok(!noOverrideRender.content.includes('This prompt is the sole source of truth for your DevFlow task context.'));
+
+console.log('[verify] Testing project-local overrides no longer change rendered prompts...');
+const legacyOverrideWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-legacy-override-'));
+try {
+  const legacyOverrideDir = path.join(legacyOverrideWorkspace, '.devflow', 'prompt-overrides');
+  fs.mkdirSync(legacyOverrideDir, { recursive: true });
+  fs.writeFileSync(path.join(legacyOverrideDir, 'prompt.header.md'), '# Legacy Override Header', 'utf8');
+  const legacyOverrideRender = renderPromptTemplate('default', {
+    ...mockContext,
+    workspace: {
+      ...mockContext.workspace,
+      localPath: legacyOverrideWorkspace,
+    },
+  });
+  assert.ok(legacyOverrideRender.content.includes('# DevFlow Agent Task'));
+  assert.ok(!legacyOverrideRender.content.includes('# Legacy Override Header'));
+} finally {
+  fs.rmSync(legacyOverrideWorkspace, { recursive: true, force: true });
 }
 
 const missingAgentContext = { ...mockContext, agent: 'non-existent' };
 const missingRender = renderPromptTemplate('default', missingAgentContext);
 assert.ok(!missingRender.usedSkills.includes('prompt.agent-specific.non-existent'));
 
-assert.ok(renderResult.content.includes('Work only from this prompt'));
+assert.ok(!renderResult.content.includes('Work only from this prompt'));
 assert.ok(!renderResult.content.includes("repeat this loop until no 'todo' tasks remain"));
 
 console.log('[verify] Testing sparse prompt rendering omits none-like values...');
@@ -181,9 +213,8 @@ const sparseContext: PromptRenderContext = {
 const sparseRender = renderPromptTemplate('default', sparseContext);
 assert.ok(!sparseRender.content.includes('(none)'));
 assert.ok(!sparseRender.content.includes('(none)'));
-assert.ok(sparseRender.content.includes('**Task:**  - Sparse Prompt Task'));
-assert.ok(sparseRender.content.includes('**Status:** todo'));
-assert.ok(sparseRender.content.includes('Keep only real fields in sparse prompt output.'));
+assert.ok(sparseRender.content.includes('- Task: `` - Sparse Prompt Task'));
+assert.ok(!sparseRender.content.includes('Attached Images API'));
 assert.ok(!sparseRender.content.includes('Attached Images API'));
 
 console.log('[verify] Testing real task prompt shares omission logic...');
@@ -217,7 +248,6 @@ const sparseState = {
 } as any;
 const taskPrompt = renderTaskPrompt(sparseState, 'task-sparse').renderResult.content;
 assert.ok(!taskPrompt.includes('(none)'));
-assert.ok(taskPrompt.includes('Keep only real fields in sparse prompt output.'));
 assert.ok(!taskPrompt.includes('Attached Images API'));
 
 const imageState = {
@@ -289,21 +319,21 @@ for (const section of sections) {
   assert.equal((section as any).overrideContent, undefined, `section ${section.id} should not include overrideContent`);
   assert.equal((section as any).effectiveContent, undefined, `section ${section.id} should not include effectiveContent`);
   assert.ok(typeof section.id === 'string');
-  assert.ok(['master', 'override'].includes(section.sourceType));
+  assert.equal(section.sourceType, 'master');
 }
 
 const defaultAgentSections = listPromptSectionsForWorkspace({ agent: 'default' });
 assert.ok(!defaultAgentSections.some((section) => section.id === 'prompt.agent-specific.default'));
 
-// Round-trip write/read/delete on a temp workspace
+// Legacy override files can still be created/removed, but no longer affect effective prompt content.
 const overrideWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-override-'));
 try {
   writePromptOverrideForWorkspace(overrideWorkspace, 'prompt.header', '# override\nbody', { agent: 'codex' });
   const after = readPromptSectionForWorkspace('prompt.header', { agent: 'codex', localPath: overrideWorkspace });
   assert.ok(after, 'section must be returned');
-  assert.equal(after!.sourceType, 'override');
-  assert.equal(after!.overrideContent, '# override\nbody');
-  assert.equal(after!.effectiveContent, '# override\nbody');
+  assert.equal(after!.sourceType, 'master');
+  assert.equal(after!.overrideContent, undefined);
+  assert.notEqual(after!.effectiveContent, '# override\nbody');
 
   const removed = deletePromptOverrideForWorkspace(overrideWorkspace, 'prompt.header', { agent: 'codex' });
   assert.equal(removed.success, true);

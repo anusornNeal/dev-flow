@@ -1,8 +1,5 @@
-# DevFlow Task Prompt
-**Run ID:** {{run.id}}
-**Task:** {{task.displayId}} - {{task.title}}
-**Status:** {{task.status}}
-**Priority:** {{task.priority}}
-**Configuration:** Agent: {{assignment.agent}}, Model: {{assignment.model}}, Effort: {{assignment.effort}}
+# DevFlow Agent Task
 
-This prompt is the sole source of truth for your DevFlow task context.
+- Task: `{{task.displayId}}` - {{task.title}}
+
+This is a compact launch prompt. Use DevFlow/local repo tools to load details when needed.

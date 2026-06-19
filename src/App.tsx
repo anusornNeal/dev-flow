@@ -679,7 +679,6 @@ export default function App() {
       {/* 7. Template Modal */}
       {isTemplateModalOpen && (
         <TemplateModal
-          projectId={activeProjectId}
           onClose={() => setIsTemplateModalOpen(false)}
         />
       )}

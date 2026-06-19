@@ -1,8 +1,9 @@
 ## Execution Rules
-- Do not move this task to in-progress at startup.
-- Do not call DevFlow MCP to read this task.
-- Do not select another todo task.
-- Do not loop after this task.
-- Do not change model or reasoning effort inside the session.
-- Work only from this prompt and repository files.
+
+- Work in the local repository whenever possible.
+- Fetch DevFlow context only when needed, but do not guess task requirements.
+- Keep changes small and scoped.
+- Spawn or split subtasks only when needed, and keep them inside the current card boundary.
+- Run relevant verification before completion.
+- If blocked, report the blocker clearly.
 - Work only on this current task and stop when it is complete.

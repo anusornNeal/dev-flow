@@ -450,27 +450,38 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
               <p className="text-[9px] font-black uppercase tracking-widest text-[#a48e7a] dark:text-[#8a7b6b]">REST API Endpoints</p>
             </div>
             
-            {apiSpecsWithIds.map((api) => {
-              const isSelected = selectedItemId === api.id;
-              
-              return (
-                <button
-                  key={api.id}
-                  type="button"
-                  onClick={() => setSelectedItemId(api.id)}
-                  className={`w-full text-left px-3 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-2.5 ${
-                    isSelected
-                      ? 'bg-white dark:bg-[#292119] shadow-sm ring-1 ring-[#ebdcb9] dark:ring-[#584a3b] text-[#5c493c] dark:text-[#f3eadf]'
-                      : 'text-[#9e8470] dark:text-[#b8ab9f] hover:bg-white/50 dark:hover:bg-[#292119]/50 hover:text-[#5c493c] dark:hover:text-[#f3eadf]'
-                  }`}
-                >
-                  <span className={`text-[9px] font-black w-10 ${SIDEBAR_METHOD_COLORS[api.method] || 'text-gray-500'}`}>
-                    {api.method}
-                  </span>
-                  <span className="truncate">{api.path}</span>
-                </button>
-              );
-            })}
+            
+            {apiGroups.map((group, groupIndex) => (
+              <div key={group.groupName} className="mb-5">
+                <div className="sticky top-0 z-10 bg-[#f5eedf]/95 dark:bg-[#1e1914]/95 backdrop-blur-sm px-3 py-1.5 mb-1.5">
+                  <p className="text-[10px] font-bold text-[#8c7463] dark:text-[#b8ab9f] tracking-wide">{group.groupName}</p>
+                </div>
+                <div className="space-y-1">
+                  {group.endpoints.map((spec, specIndex) => {
+                    const apiId = `api-${groupIndex}-${specIndex}`;
+                    const isSelected = selectedItemId === apiId;
+                    
+                    return (
+                      <button
+                        key={apiId}
+                        type="button"
+                        onClick={() => setSelectedItemId(apiId)}
+                        className={`w-full text-left px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-2.5 ${
+                          isSelected
+                            ? 'bg-white dark:bg-[#292119] shadow-sm ring-1 ring-[#ebdcb9] dark:ring-[#584a3b] text-[#5c493c] dark:text-[#f3eadf]'
+                            : 'text-[#9e8470] dark:text-[#b8ab9f] hover:bg-white/50 dark:hover:bg-[#292119]/50 hover:text-[#5c493c] dark:hover:text-[#f3eadf]'
+                        }`}
+                      >
+                        <span className={`text-[9px] font-black w-10 ${SIDEBAR_METHOD_COLORS[spec.method] || 'text-gray-500'}`}>
+                          {spec.method}
+                        </span>
+                        <span className="truncate">{spec.path}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
           </div>
         </div>
         

@@ -34,7 +34,7 @@ function toMcpTextPayload(data: unknown) {
   // Provide a best-effort object form (capped at one level of nesting) so the SDK validator passes.
   const structuredContent = data && typeof data === 'object' && !Array.isArray(data) ? data : null;
   return {
-    content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
+    content: [{ type: 'text', text: JSON.stringify(data) }],
     ...(structuredContent ? { structuredContent } : {}),
   };
 }

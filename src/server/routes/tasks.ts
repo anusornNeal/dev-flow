@@ -34,6 +34,7 @@ type ContinueTaskQueueResult = {
   runs?: AgentRun[];
 };
 type TaskReadMode = 'minimal' | 'summary' | 'board' | 'standard' | 'full' | 'agent-context' | 'debug';
+type MutationResponseMode = 'standard' | 'summary' | 'ack';
 type AgentCompletionRouteResult = { task: any; run: AgentRun; payload: AgentCompletionPayload };
 
 function normalizeFlag(value: unknown) {
@@ -43,6 +44,11 @@ function normalizeFlag(value: unknown) {
 function parseTaskReadMode(value: unknown, fallback: TaskReadMode = 'standard'): TaskReadMode {
   const mode = String(value || fallback) as TaskReadMode;
   return ['minimal', 'summary', 'board', 'standard', 'full', 'agent-context', 'debug'].includes(mode) ? mode : fallback;
+}
+
+function parseMutationResponseMode(value: unknown): MutationResponseMode {
+  const mode = String(value || 'standard') as MutationResponseMode;
+  return ['standard', 'summary', 'ack'].includes(mode) ? mode : 'standard';
 }
 
 function getTaskIndexByIdentifier(tasks: any[], targetId: string) {
@@ -118,6 +124,56 @@ function toTaskResponse(task: any, mode: TaskReadMode) {
     ...task,
     attachments: listAttachmentsForTask(task.id),
   };
+}
+
+function toMutationResponse(req: express.Request, task: any, standardPayload: any, extra?: Record<string, any>) {
+  const responseMode = parseMutationResponseMode(req.query.responseMode);
+  if (responseMode === 'ack') {
+    return {
+      success: true,
+      responseMode,
+      taskId: task.id,
+      displayId: task.displayId,
+      status: task.status,
+      ...(extra || {}),
+    };
+  }
+  if (responseMode === 'summary') {
+    return {
+      success: true,
+      responseMode,
+      task: toTaskResponse(task, 'summary'),
+      ...(extra || {}),
+    };
+  }
+  return standardPayload;
+}
+
+function toMutationListResponse(req: express.Request, tasks: any[], standardPayload: any, extra?: Record<string, any>) {
+  const responseMode = parseMutationResponseMode(req.query.responseMode);
+  if (responseMode === 'ack') {
+    return {
+      success: true,
+      responseMode,
+      count: tasks.length,
+      tasks: tasks.map((task) => ({
+        id: task.id,
+        displayId: task.displayId,
+        status: task.status,
+      })),
+      ...(extra || {}),
+    };
+  }
+  if (responseMode === 'summary') {
+    return {
+      success: true,
+      responseMode,
+      count: tasks.length,
+      tasks: tasks.map((task) => toTaskResponse(task, 'summary')),
+      ...(extra || {}),
+    };
+  }
+  return standardPayload;
 }
 
 function resolveTaskListProjectId(deps: ApiRouteDeps, req: express.Request) {
@@ -901,7 +957,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
       appendTaskLog(task, `Agent run cancelled: ${reason}`, 'update');
     }
     applyRunSummaryToTask(task, getLatestAgentRunForTask(task.id));
-    saveTask(deps.state.tasksCache[taskIndex]);
+    saveTask(task);
     return res.json({ success: true, cancelledCount, task, runs: listAgentRunsForTask(task.id) });
   });
 
@@ -1089,8 +1145,11 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     for (const task of createdTasks) {
       saveTask(task);
     }
-    if (isArray) return res.status(201).json({ success: true, createdCount: createdTasks.length, tasks: createdTasks });
-    return res.status(201).json(createdTasks[0]);
+    if (isArray) {
+      const standardPayload = { success: true, createdCount: createdTasks.length, tasks: createdTasks };
+      return res.status(201).json(toMutationListResponse(req, createdTasks, standardPayload, { createdCount: createdTasks.length }));
+    }
+    return res.status(201).json(toMutationResponse(req, createdTasks[0], createdTasks[0]));
   });
 
   app.post('/api/tasks/batch', (req, res) => {
@@ -1388,7 +1447,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     const task = deps.state.tasksCache[taskIndex];
     const previousStatus = task.status;
     if (previousStatus === req.body.status) {
-      return res.json({ message: 'Task is already in that lane', task });
+      return res.json(toMutationResponse(req, task, { message: 'Task is already in that lane', task }));
     }
 
     if (!isValidTransition(previousStatus, req.body.status)) {
@@ -1423,7 +1482,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     const autoWorkTrigger = maybeTriggerTaskAgent(updatedTask, previousStatus, deps, '/move endpoint');
 
     saveTask(deps.state.tasksCache[taskIndex]);
-    return res.json({
+    const standardPayload = {
       success: true,
       message: `Successfully relocated task schema from ${previousStatus} to ${req.body.status}`,
       task: updatedTask,
@@ -1440,7 +1499,10 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
               };
             })()
         : null,
-    });
+    };
+    return res.json(toMutationResponse(req, updatedTask, standardPayload, {
+      autoWorkTrigger: standardPayload.autoWorkTrigger,
+    }));
   });
 
   app.post('/api/tasks/:id/checklist/toggle', (req, res) => {
@@ -1471,7 +1533,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     }];
 
     saveTask(task);
-    return res.json(task);
+    return res.json(toMutationResponse(req, task, task));
   });
 
   app.post('/api/tasks/:id/assign', (req, res) => {
@@ -1505,7 +1567,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
 
     maybeTriggerTaskAgent(task, previousTask, deps, '/assign endpoint');
     saveTask(task);
-    return res.json(task);
+    return res.json(toMutationResponse(req, task, task));
   });
 
   app.put('/api/tasks', (req, res) => {
@@ -1704,7 +1766,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     maybeTriggerTaskAgent(updatedTask, currentTask, deps, 'PUT /tasks/:id endpoint');
 
     saveTask(updatedTask);
-    return res.json(updatedTask);
+    return res.json(toMutationResponse(req, updatedTask, updatedTask));
   });
 
   app.post('/api/tasks/import-file', async (req, res) => {

@@ -31,6 +31,10 @@ const booleanFlagSchema = {
   },
 };
 
+const mutationResponseModeProperty = {
+  responseMode: { type: 'string', enum: ['standard', 'summary', 'ack'], description: 'Mutation response density. Use summary or ack for faster ChatGPT tool calls.' },
+};
+
 const taskIdentifierProperty = {
   taskId: { type: 'string', description: 'Task internal id or displayId such as DVF-0120.' },
 };
@@ -114,7 +118,13 @@ function encodePathSegment(value: string) {
   return encodeURIComponent(value);
 }
 
-export const DEVFLOW_CONTRACT_VERSION = '2026-06-19.2';
+function stripToolOnlyArgs(args: Record<string, any>, keys: string[]) {
+  const copy = { ...args };
+  for (const key of keys) delete copy[key];
+  return copy;
+}
+
+export const DEVFLOW_CONTRACT_VERSION = '2026-06-19.3';
 
 export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   {
@@ -323,11 +333,16 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
       properties: {
         ...projectIdentifierProperties,
         ...taskMutationProperties,
+        ...mutationResponseModeProperty,
       },
       required: ['title', 'category'],
     },
     outputSchema: { type: 'object' },
-    buildHttpRequest: (args) => ({ method: 'POST', path: '/api/tasks', body: args }),
+    buildHttpRequest: (args) => ({
+      method: 'POST',
+      path: withQuery('/api/tasks', { responseMode: args.responseMode || 'summary' }),
+      body: stripToolOnlyArgs(args, ['responseMode']),
+    }),
   },
   {
     name: 'update_task',
@@ -339,13 +354,14 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
         ...taskMutationProperties,
         ...projectIdentifierProperties,
         ...booleanFlagSchema.properties,
+        ...mutationResponseModeProperty,
       },
       required: ['taskId'],
     },
     outputSchema: { type: 'object' },
-    buildHttpRequest: ({ taskId, ...body }) => ({
+    buildHttpRequest: ({ taskId, responseMode, ...body }) => ({
       method: 'PUT',
-      path: `/api/tasks/${encodePathSegment(String(taskId))}`,
+      path: withQuery(`/api/tasks/${encodePathSegment(String(taskId))}`, { responseMode: responseMode || 'summary' }),
       body,
       headers: body.isAgentRequest ? { 'x-agent-request': 'true' } : undefined,
     }),
@@ -389,13 +405,14 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
         ...taskIdentifierProperty,
         status: { type: 'string', enum: VALID_STATUSES },
         ...booleanFlagSchema.properties,
+        ...mutationResponseModeProperty,
       },
       required: ['taskId', 'status'],
     },
     outputSchema: { type: 'object' },
-    buildHttpRequest: ({ taskId, isAgentRequest, ...body }) => ({
+    buildHttpRequest: ({ taskId, isAgentRequest, responseMode, ...body }) => ({
       method: 'POST',
-      path: `/api/tasks/${encodePathSegment(String(taskId))}/move`,
+      path: withQuery(`/api/tasks/${encodePathSegment(String(taskId))}/move`, { responseMode: responseMode || 'summary' }),
       body,
       headers: isAgentRequest ? { 'x-agent-request': 'true' } : undefined,
     }),
@@ -433,13 +450,14 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
         ...taskIdentifierProperty,
         checklistId: { type: 'string', description: 'Checklist item id or text.' },
         ...booleanFlagSchema.properties,
+        ...mutationResponseModeProperty,
       },
       required: ['taskId', 'checklistId'],
     },
     outputSchema: { type: 'object' },
-    buildHttpRequest: ({ taskId, isAgentRequest, ...body }) => ({
+    buildHttpRequest: ({ taskId, isAgentRequest, responseMode, ...body }) => ({
       method: 'POST',
-      path: `/api/tasks/${encodePathSegment(String(taskId))}/checklist/toggle`,
+      path: withQuery(`/api/tasks/${encodePathSegment(String(taskId))}/checklist/toggle`, { responseMode: responseMode || 'summary' }),
       body,
       headers: isAgentRequest ? { 'x-agent-request': 'true' } : undefined,
     }),
@@ -479,13 +497,14 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
         model: { type: 'string', enum: VALID_MODELS },
         effort: { type: 'string', description: 'Reasoning effort level. Valid values strictly depend on the selected agent/model pair.' },
         ...booleanFlagSchema.properties,
+        ...mutationResponseModeProperty,
       },
       required: ['taskId'],
     },
     outputSchema: { type: 'object' },
-    buildHttpRequest: ({ taskId, isAgentRequest, ...body }) => ({
+    buildHttpRequest: ({ taskId, isAgentRequest, responseMode, ...body }) => ({
       method: 'POST',
-      path: `/api/tasks/${encodePathSegment(String(taskId))}/assign`,
+      path: withQuery(`/api/tasks/${encodePathSegment(String(taskId))}/assign`, { responseMode: responseMode || 'summary' }),
       body,
       headers: isAgentRequest ? { 'x-agent-request': 'true' } : undefined,
     }),
@@ -847,6 +866,30 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
         ...args,
         filePath: args.filePath || args.path,
       }),
+    }),
+  },
+  {
+    name: 'write_local_file',
+    description: 'Write a UTF-8 local file safely within a project root. Prefer this for small generated edits when a full-file replacement is faster than remote write flows.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...projectIdentifierProperties,
+        filePath: { type: 'string', description: 'Relative file path under the workspace root.' },
+        path: { type: 'string', description: 'Alias for filePath.' },
+        content: { type: 'string', description: 'Full UTF-8 file content, max 1 MB.' },
+        createOnly: { type: 'boolean', description: 'Fail if the file already exists.' },
+      },
+      required: ['filePath', 'content'],
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: (args) => ({
+      method: 'POST',
+      path: '/api/local-files/write',
+      body: {
+        ...args,
+        filePath: args.filePath || args.path,
+      },
     }),
   },
   {

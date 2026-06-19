@@ -102,6 +102,40 @@ export function readLocalFile(state: AppState, args: Record<string, any>) {
   };
 }
 
+export function writeLocalFile(state: AppState, args: Record<string, any>) {
+  const root = resolveProjectRoot(state, args);
+  const filePath = String(args.filePath || args.path || '').trim();
+  const content = typeof args.content === 'string' ? args.content : null;
+  if (!filePath) {
+    throw createApiError(400, 'FILE_PATH_REQUIRED', 'filePath is required.');
+  }
+  if (content === null) {
+    throw createApiError(400, 'FILE_CONTENT_REQUIRED', 'content is required.');
+  }
+  if (Buffer.byteLength(content, 'utf8') > 1_000_000) {
+    throw createApiError(400, 'FILE_TOO_LARGE', 'content must be 1 MB or smaller.');
+  }
+
+  const targetPath = resolveSafePath(root, filePath);
+  const existed = fs.existsSync(targetPath);
+  if (args.createOnly === true || String(args.createOnly).toLowerCase() === 'true') {
+    if (existed) {
+      throw createApiError(409, 'FILE_EXISTS', `File '${filePath}' already exists.`, { affectedId: filePath });
+    }
+  }
+
+  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+  fs.writeFileSync(targetPath, content, 'utf8');
+
+  return {
+    root,
+    path: path.relative(root, targetPath),
+    bytes: Buffer.byteLength(content, 'utf8'),
+    created: !existed,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
 export function searchLocalFiles(state: AppState, args: Record<string, any>) {
   const root = resolveProjectRoot(state, args);
   const query = String(args.query || '').trim();

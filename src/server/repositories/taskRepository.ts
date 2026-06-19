@@ -3,6 +3,38 @@ import type { AppState } from '../types';
 import { getActiveRunForTask, getLatestAgentRunForTask, listAgentRunsForTask } from './agentRunRepository';
 import { normalizeTaskCategoryAndTags } from '../services/taskService';
 
+const TASK_COLUMNS = [
+  'id',
+  'displayId',
+  'title',
+  'description',
+  'projectId',
+  'status',
+  'priority',
+  'branch',
+  'category',
+  'tags',
+  'targetFiles',
+  'checklist',
+  'effort',
+  'model',
+  'agent',
+  'parentId',
+  'reasoning',
+  'acceptanceCriteria',
+  'verification',
+  'repoContext',
+  'jiraKey',
+  'repo',
+  'createdAt',
+  'updatedAt',
+  'logs',
+  'designImages',
+  'images',
+] as const;
+
+const TASK_UPSERT_SQL = `INSERT OR REPLACE INTO tasks (${TASK_COLUMNS.join(', ')}) VALUES (${TASK_COLUMNS.map(() => '?').join(', ')})`;
+
 function ensureTaskCategoryColumn() {
   const tableInfo = db.pragma('table_info(tasks)') as Array<{ name: string }>;
   const hasCategory = tableInfo.some((column) => column.name === 'category');
@@ -118,9 +150,61 @@ export function loadTasks(state: AppState) {
   console.log('Loaded ' + state.tasksCache.length + ' tasks from DB');
 }
 
+function serializeTaskForRow(item: any) {
+  const normalized = normalizeTaskCategoryAndTags({
+    category: item.category,
+    tags: item.tags,
+    title: item.title,
+    description: item.description,
+    repoContext: item.repoContext,
+    reasoning: item.reasoning,
+  });
+
+  return [
+    item.id,
+    item.displayId,
+    item.title,
+    item.description,
+    item.projectId,
+    item.status,
+    item.priority,
+    item.branch,
+    normalized.category,
+    normalized.tags.length > 0 ? JSON.stringify(normalized.tags) : null,
+    item.targetFiles ? JSON.stringify(item.targetFiles) : null,
+    item.checklist ? JSON.stringify(item.checklist) : null,
+    item.effort,
+    item.model,
+    item.agent,
+    item.parentId,
+    item.reasoning,
+    item.acceptanceCriteria,
+    item.verification,
+    item.repoContext,
+    item.jiraKey,
+    item.repo,
+    item.createdAt,
+    item.updatedAt,
+    item.logs ? JSON.stringify(item.logs) : null,
+    null,
+    item.images ? JSON.stringify(item.images) : null,
+  ];
+}
+
+export function saveTask(task: any) {
+  ensureTaskCategoryColumn();
+  db.prepare(TASK_UPSERT_SQL).run(...serializeTaskForRow(task));
+}
+
+export function deleteTasksByIds(taskIds: string[]) {
+  if (taskIds.length === 0) return;
+  const placeholders = taskIds.map(() => '?').join(',');
+  db.prepare(`DELETE FROM tasks WHERE id IN (${placeholders})`).run(...taskIds);
+}
+
 export function saveTasks(state: AppState) {
   ensureTaskCategoryColumn();
-  const stmt = db.prepare('INSERT OR REPLACE INTO tasks (id, displayId, title, description, projectId, status, priority, branch, category, tags, targetFiles, checklist, effort, model, agent, parentId, reasoning, acceptanceCriteria, verification, repoContext, jiraKey, repo, createdAt, updatedAt, logs, designImages, images) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+  const stmt = db.prepare(TASK_UPSERT_SQL);
   db.transaction(() => {
     const currentIds = state.tasksCache.map((task) => task.id);
     const tasksById = new Map(state.tasksCache.map((task) => [task.id, task]));
@@ -149,25 +233,7 @@ export function saveTasks(state: AppState) {
       db.prepare('DELETE FROM tasks').run();
     }
     for (const item of sortedTasks) {
-      const normalized = normalizeTaskCategoryAndTags({
-        category: item.category,
-        tags: item.tags,
-        title: item.title,
-        description: item.description,
-        repoContext: item.repoContext,
-        reasoning: item.reasoning,
-      });
-      stmt.run(
-        item.id, item.displayId, item.title, item.description, item.projectId, item.status, item.priority, item.branch,
-        normalized.category,
-        normalized.tags.length > 0 ? JSON.stringify(normalized.tags) : null,
-        item.targetFiles ? JSON.stringify(item.targetFiles) : null,
-        item.checklist ? JSON.stringify(item.checklist) : null,
-        item.effort, item.model, item.agent, item.parentId, item.reasoning, item.acceptanceCriteria, item.verification, item.repoContext, item.jiraKey, item.repo, item.createdAt, item.updatedAt,
-        item.logs ? JSON.stringify(item.logs) : null,
-        null, // Keep NULL for legacy designImages column
-        item.images ? JSON.stringify(item.images) : null,
-      );
+      stmt.run(...serializeTaskForRow(item));
     }
   })();
 }

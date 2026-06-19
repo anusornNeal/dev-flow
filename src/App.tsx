@@ -29,8 +29,6 @@ import { buildTaskStatusMoveRequest } from './lib/taskStatusMove';
 import { useProjectViewModel } from './viewModels/useProjectViewModel';
 import { useBoardViewModel } from './viewModels/useBoardViewModel';
 import { apiClient } from './client/apiClient';
-import { normalizeTaskListResponse } from './client/responseNormalizers';
-import { toDomainTask } from './domain/mappers/taskMapper';
 import Sidebar from './components/Sidebar';
 import TaskDetailsDrawer from './components/TaskDetailsDrawer';
 import CreateTaskModal from './components/CreateTaskModal';
@@ -102,7 +100,6 @@ export default function App() {
   });
   const tasks = boardViewModel.tasks as unknown as Task[];
   const setTasks = boardViewModel.setTasks as unknown as (u: (prev: Task[]) => Task[]) => void;
-  const applyServerTasks = boardViewModel.applyServerTasks;
 
   const [persistenceError, setPersistenceError] = useState<string | null>(null);
   const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
@@ -183,27 +180,11 @@ export default function App() {
     }
   };
 
-  // Tasks remain API-backed; we do not silently fall back to localStorage for source-of-truth data.
-  const fetchTasksFromApi = async () => {
-    try {
-      const query = activeProjectId ? `?projectId=${encodeURIComponent(activeProjectId)}` : '';
-      const { data } = await apiClient.fetchJson<unknown>('GET', `/api/tasks${query}`);
-      const rawTasks = normalizeTaskListResponse(data);
-      const serverTasks = rawTasks.map(toDomainTask) as unknown as Task[];
-      setPersistenceError(null);
-      applyServerTasks(serverTasks as any, pendingMovesRef.current);
-    } catch (err) {
-      console.warn('Backend API connection unavailable:', err);
-      setPersistenceError('Task data could not be refreshed from the backend. Existing on-screen data was kept unchanged.');
-    }
-  };
-
   const handleCreateProject = async (name: string, repoUrl: string, description?: string, localPath?: string, taskIdPrefix?: string) => {
     try {
       const { data: newProj } = await apiClient.fetchJson<any>('POST', '/api/projects', { name, repoUrl, description, localPath, taskIdPrefix });
       await projectsViewModel.refresh();
       setActiveProjectId(newProj.id);
-      fetchTasksFromApi();
       return true;
     } catch (err) {
       console.error('Failed to create project:', err);
@@ -221,7 +202,6 @@ export default function App() {
       if (currentId === id) {
         setActiveProjectId(remainingProjects.length > 0 ? remainingProjects[0].id : null);
       }
-      fetchTasksFromApi();
       return true;
     } catch (err) {
       console.error('Failed to delete project:', err);
@@ -246,13 +226,7 @@ export default function App() {
     setMounted(true);
     fetchSettingsFromApi();
     fetchProjectsFromApi();
-    fetchTasksFromApi();
   }, []);
-
-  useEffect(() => {
-    if (!activeProjectId) return;
-    fetchTasksFromApi();
-  }, [activeProjectId]);
 
   // Handle Drag Start
   const handleDragStart = (e: React.DragEvent, id: string) => {
@@ -263,7 +237,7 @@ export default function App() {
   const executeTaskMove = async (sourceTask: Task, status: TaskStatus) => {
     const taskId = sourceTask.id;
     const modifiedLogs: LogEntry[] = [
-      ...sourceTask.logs,
+      ...(sourceTask.logs || []),
       {
         id: `log-move-${Date.now()}`,
         timestamp: new Date().toISOString(),
@@ -430,7 +404,7 @@ export default function App() {
         body: JSON.stringify(itemsWithProject)
       });
       if (response.ok) {
-        await fetchTasksFromApi();
+        await boardViewModel.refresh();
         setIsBatchModalOpen(false);
         setPersistenceError(null);
         return true;

@@ -5,7 +5,7 @@ import type express from 'express';
 import type { ApiRouteDeps } from '../types';
 import { TASK_SCHEMA_DEF, VALID_AGENTS, LEGACY_VALID_EFFORTS_FALLBACK, VALID_MODELS, VALID_STATUSES } from '../constants';
 import { cancelActiveRunsForTask, cancelStaleActiveRuns, createAgentRun, getActiveRunForProjectAndAgent, getActiveRunForTask, getLatestAgentRunForTask, listActiveRunSummariesForProject, listAgentRunsForTask, updateAgentRunStatus, type AgentRun } from '../repositories/agentRunRepository';
-import { loadTasks, generateDisplayId, saveTasks } from '../repositories/taskRepository';
+import { deleteTasksByIds, loadTasks, generateDisplayId, saveTask, saveTasks } from '../repositories/taskRepository';
 import { listAttachmentsForTask } from '../repositories/attachmentRepository';
 import { appendAgentRunLog, buildAgentCompletionSummary, createAgentRunFiles, createAgentRunResultRecord, getAgentRunHistoryPaths, getAgentTriggerScriptPath, getDevFlowApiBaseUrl, resolveAgentExecutionMode, resolveFromDevFlowAppRoot, writeAgentRunLaunchMetadata, writeAgentRunOutputSummary, writeAgentRunResult } from '../services/agentRunService';
 import { extractImages, extractDesignImages, findProjectByIdentifier, findTaskByIdentifier, getAgentTaskContext, normalizeAgentCompletionPayload, normalizeTaskCategoryAndTags, applyTaskCategoryAndTagsUpdate, renderTaskPrompt, resolveProjectIdFromRepo, validateAgentCompletionPayload, validateAgentParams, validateTaskPayload } from '../services/taskService';
@@ -30,7 +30,7 @@ type ContinueTaskQueueResult = {
   run?: AgentRun;
   runs?: AgentRun[];
 };
-type TaskReadMode = 'minimal' | 'summary' | 'standard' | 'full' | 'agent-context' | 'debug';
+type TaskReadMode = 'minimal' | 'summary' | 'board' | 'standard' | 'full' | 'agent-context' | 'debug';
 type AgentCompletionRouteResult = { task: any; run: AgentRun; payload: AgentCompletionPayload };
 
 function normalizeFlag(value: unknown) {
@@ -39,7 +39,7 @@ function normalizeFlag(value: unknown) {
 
 function parseTaskReadMode(value: unknown, fallback: TaskReadMode = 'standard'): TaskReadMode {
   const mode = String(value || fallback) as TaskReadMode;
-  return ['minimal', 'summary', 'standard', 'full', 'agent-context', 'debug'].includes(mode) ? mode : fallback;
+  return ['minimal', 'summary', 'board', 'standard', 'full', 'agent-context', 'debug'].includes(mode) ? mode : fallback;
 }
 
 function getTaskIndexByIdentifier(tasks: any[], targetId: string) {
@@ -71,6 +71,35 @@ function toTaskResponse(task: any, mode: TaskReadMode) {
       effort: task.effort,
       updatedAt: task.updatedAt,
       latestAgentRun: task.latestAgentRun,
+    };
+  }
+
+  if (mode === 'board') {
+    return {
+      id: task.id,
+      displayId: task.displayId,
+      title: task.title,
+      status: task.status,
+      priority: task.priority,
+      category: task.category,
+      projectId: task.projectId,
+      parentId: task.parentId,
+      branch: task.branch,
+      tags: task.tags,
+      createdAt: task.createdAt,
+      updatedAt: task.updatedAt,
+      targetFiles: task.targetFiles,
+      checklist: task.checklist,
+      images: task.images,
+      specUrl: task.specUrl,
+      agent: task.agent,
+      activeAgent: task.activeAgent,
+      latestAgentRun: task.latestAgentRun,
+      agentRuns: task.agentRuns,
+      model: task.model,
+      effort: task.effort,
+      repo: task.repo,
+      sourceUrl: task.sourceUrl,
     };
   }
 
@@ -947,7 +976,6 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
   });
 
   app.post('/api/tasks', (req, res) => {
-    loadTasks(deps.state);
     let rawItems = req.body;
     let outerRepo: string | null = null;
     if (rawItems && typeof rawItems === 'object' && !Array.isArray(rawItems)) {
@@ -1045,7 +1073,9 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
       maybeTriggerTaskAgent(newTask, undefined, deps, 'POST /tasks endpoint');
     }
 
-    saveTasks(deps.state);
+    for (const task of createdTasks) {
+      saveTask(task);
+    }
     if (isArray) return res.status(201).json({ success: true, createdCount: createdTasks.length, tasks: createdTasks });
     return res.status(201).json(createdTasks[0]);
   });
@@ -1614,7 +1644,6 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
   });
 
   app.put('/api/tasks/:id', (req, res) => {
-    loadTasks(deps.state);
     const taskIndex = getTaskIndexByIdentifier(deps.state.tasksCache, req.params.id);
     if (taskIndex === -1) return res.status(404).json({ error: 'Task not found' });
 
@@ -1652,7 +1681,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     const parentReviewError = validateParentReviewMove({ ...currentTask, ...updateBody }, deps, updateBody.status ?? currentTask.status);
     if (parentReviewError) {
       appendTaskLog(currentTask, parentReviewError, 'update');
-      saveTasks(deps.state);
+      saveTask(currentTask);
       return res.status(400).json({ error: parentReviewError });
     }
 
@@ -1669,7 +1698,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     syncTaskAgentStateForStatus(updatedTask, currentTask.status);
     maybeTriggerTaskAgent(updatedTask, currentTask, deps, 'PUT /tasks/:id endpoint');
 
-    saveTasks(deps.state);
+    saveTask(updatedTask);
     return res.json(updatedTask);
   });
 
@@ -1933,7 +1962,6 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
   });
 
   app.delete('/api/tasks/:id', (req, res) => {
-    loadTasks(deps.state);
     const taskIndex = getTaskIndexByIdentifier(deps.state.tasksCache, req.params.id);
     if (taskIndex === -1) return res.status(404).json({ error: 'Task not found' });
 
@@ -1960,7 +1988,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     const removedTasks = deps.state.tasksCache.filter((task) => idsToDelete.has(task.id));
     deps.state.tasksCache = deps.state.tasksCache.filter((task) => !idsToDelete.has(task.id));
 
-    saveTasks(deps.state);
+    deleteTasksByIds(Array.from(idsToDelete));
     return res.json({ success: true, removed: removedTasks[0], removedCount: removedTasks.length });
   });
 }

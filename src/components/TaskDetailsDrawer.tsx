@@ -63,7 +63,7 @@ interface RunHistoryFiles {
 }
 
 export default function TaskDetailsDrawer({ 
-  task, 
+  task: initialTask,
   allTasks = [], 
   onSelectTask, 
   onClose, 
@@ -76,12 +76,21 @@ export default function TaskDetailsDrawer({
   const drawerViewModel = useTaskDrawerViewModel();
   // Bridge: when the parent task changes, refetch via the view-model so edit state stays in sync.
   useEffect(() => {
-    if (drawerViewModel.task && drawerViewModel.task.id !== task.id) {
-      void drawerViewModel.open(task.id);
+    if (drawerViewModel.task && drawerViewModel.task.id !== initialTask.id) {
+      void drawerViewModel.open(initialTask.id);
     } else if (!drawerViewModel.task) {
-      void drawerViewModel.open(task.id);
+      void drawerViewModel.open(initialTask.id);
     }
-  }, [task.id]);
+  }, [initialTask.id]);
+
+  const task = {
+    description: '',
+    tags: [],
+    logs: [],
+    images: [],
+    ...initialTask,
+    ...((drawerViewModel.task as unknown as Partial<Task>) || {}),
+  } as Task;
 
   const parentTask = task.parentId ? allTasks.find(t => t.id === task.parentId) : undefined;
   const subTasks = allTasks.filter(t => t.parentId === task.id);

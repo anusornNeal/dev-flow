@@ -90,7 +90,7 @@ const lockState: AppState = {
   ],
   projectsCache: [{ id: 'project-lock', name: 'p1', repoUrl: 'repo', localPath: repoPath }],
   countersCache: {},
-  settingsCache: { autoWork: false, ngrokUrl: '', githubToken: '', jiraToken: '', jiraBaseUrl: '', jiraEmail: '', agentExecutionMode: 'safe' },
+  settingsCache: { autoWork: false, ngrokUrl: '', githubToken: '', jiraToken: '', figmaToken: '', jiraBaseUrl: '', jiraEmail: '', agentExecutionMode: 'safe' },
   skillsRegistry: [],
 };
 const lockDeps: ApiRouteDeps = { state: lockState, writeAgentLog: () => {} };
@@ -125,7 +125,7 @@ const queueState: AppState = {
   ],
   projectsCache: [{ id: 'project-queue', name: 'p1', repoUrl: 'repo', localPath: repoPath }],
   countersCache: {},
-  settingsCache: { autoWork: true, ngrokUrl: '', githubToken: '', jiraToken: '', jiraBaseUrl: '', jiraEmail: '', agentExecutionMode: 'safe' },
+  settingsCache: { autoWork: true, ngrokUrl: '', githubToken: '', jiraToken: '', figmaToken: '', jiraBaseUrl: '', jiraEmail: '', agentExecutionMode: 'safe' },
   skillsRegistry: [],
 };
 const queueDeps: ApiRouteDeps = { state: queueState, writeAgentLog: () => {} };
@@ -154,7 +154,7 @@ await withServer(() => {
       { id: 'project-cancel', name: 'p3', repoUrl: 'repo', localPath: repoPath },
     ],
     countersCache: {},
-    settingsCache: { autoWork: true, ngrokUrl: '', githubToken: '', jiraToken: '', jiraBaseUrl: '', jiraEmail: '', agentExecutionMode: 'safe' },
+    settingsCache: { autoWork: true, ngrokUrl: '', githubToken: '', jiraToken: '', figmaToken: '', jiraBaseUrl: '', jiraEmail: '', agentExecutionMode: 'safe' },
     skillsRegistry: [],
   };
   saveTasks(state);
@@ -212,7 +212,7 @@ await withServer(() => {
     ],
     projectsCache: [{ id: 'project-enable', name: 'p1', repoUrl: 'repo', localPath: repoPath }],
     countersCache: {},
-    settingsCache: { autoWork: false, ngrokUrl: '', githubToken: '', jiraToken: '', jiraBaseUrl: '', jiraEmail: '', agentExecutionMode: 'safe' },
+    settingsCache: { autoWork: false, ngrokUrl: '', githubToken: '', jiraToken: '', figmaToken: '', jiraBaseUrl: '', jiraEmail: '', agentExecutionMode: 'safe' },
     skillsRegistry: [],
   };
   const deps: ApiRouteDeps = { state, writeAgentLog: () => {} };

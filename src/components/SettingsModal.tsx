@@ -5,6 +5,7 @@ interface SettingsData {
   ngrokUrl: string;
   githubTokenMasked: boolean;
   jiraTokenMasked: boolean;
+  figmaTokenMasked: boolean;
   jiraBaseUrl: string;
   jiraEmail: string;
   agentExecutionMode: string;
@@ -23,12 +24,16 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
   const [jiraToken, setJiraToken] = useState('');
   const [jiraTokenMasked, setJiraTokenMasked] = useState(false);
   const [showJiraToken, setShowJiraToken] = useState(false);
+  const [figmaToken, setFigmaToken] = useState('');
+  const [figmaTokenMasked, setFigmaTokenMasked] = useState(false);
+  const [showFigmaToken, setShowFigmaToken] = useState(false);
   const [jiraBaseUrl, setJiraBaseUrl] = useState('');
   const [jiraEmail, setJiraEmail] = useState('');
   const [agentExecutionMode, setAgentExecutionMode] = useState('safe');
   
   const [clearGithubToken, setClearGithubToken] = useState(false);
   const [clearJiraToken, setClearJiraToken] = useState(false);
+  const [clearFigmaToken, setClearFigmaToken] = useState(false);
   
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -46,6 +51,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
         setNgrokUrl(data.ngrokUrl ?? '');
         setGithubTokenMasked(data.githubTokenMasked ?? false);
         setJiraTokenMasked(data.jiraTokenMasked ?? false);
+        setFigmaTokenMasked(data.figmaTokenMasked ?? false);
         setJiraBaseUrl(data.jiraBaseUrl ?? '');
         setJiraEmail(data.jiraEmail ?? '');
         setAgentExecutionMode(data.agentExecutionMode || 'safe');
@@ -71,6 +77,13 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
       } else if (clearJiraToken) {
         payload.jiraToken = '';
         payload.clearJiraToken = true;
+      }
+
+      if (showFigmaToken && figmaToken.trim() !== '') {
+        payload.figmaToken = figmaToken;
+      } else if (clearFigmaToken) {
+        payload.figmaToken = '';
+        payload.clearFigmaToken = true;
       }
 
       const res = await fetch('/api/settings', {
@@ -102,6 +115,16 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
       if (clearJiraToken) {
         setJiraTokenMasked(false);
         setClearJiraToken(false);
+      }
+      
+      if (showFigmaToken && figmaToken.trim() !== '') {
+        setFigmaTokenMasked(true);
+        setShowFigmaToken(false);
+        setFigmaToken('');
+      }
+      if (clearFigmaToken) {
+        setFigmaTokenMasked(false);
+        setClearFigmaToken(false);
       }
       setTimeout(() => setSaveStatus('idle'), 3000);
     } catch (e: any) {
@@ -347,6 +370,66 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                     </div>
                   )}
                 </div>
+              </div>
+
+              {/* Figma Integration Section */}
+              <div className="flex flex-col gap-1.5 pt-3 border-t border-[#ebdcb9] dark:border-[#584a3b]">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-[#685547] dark:text-[#f3eadf]">Figma Access Token</label>
+                  <div className="flex gap-2">
+                    {figmaTokenMasked && !showFigmaToken && !clearFigmaToken && (
+                      <button
+                        onClick={() => {
+                          setClearFigmaToken(true);
+                        }}
+                        className="text-[10px] text-red-500 font-bold hover:underline"
+                      >
+                        Remove
+                      </button>
+                    )}
+                    {!clearFigmaToken && (
+                      <button
+                        onClick={() => {
+                          if (showFigmaToken) {
+                            setShowFigmaToken(false);
+                            setFigmaToken('');
+                          } else {
+                            setShowFigmaToken(true);
+                          }
+                        }}
+                        className="text-[10px] text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d] font-bold hover:underline"
+                      >
+                        {showFigmaToken ? 'Cancel' : figmaTokenMasked ? 'Replace' : 'Add'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <p className="text-[11px] text-[#8a725f] dark:text-[#f3eadf] font-mono -mt-1">
+                  Securely stored token for fetching design context from Figma. Not shown in logs.
+                </p>
+                {showFigmaToken ? (
+                  <input
+                    type="password"
+                    name="figmaToken_devflow_prevent_autofill"
+                    autoComplete="new-password"
+                    value={figmaToken}
+                    onChange={e => setFigmaToken(e.target.value)}
+                    placeholder="figd_..."
+                    className="w-full px-3 py-2 text-sm font-mono rounded-lg border border-[#ddd0ba] dark:border-[#584a3b] bg-white dark:bg-[#1e1914] text-[#3e3129] dark:text-[#f3eadf] focus:outline-none focus:ring-2 focus:ring-[#d89745]/50 dark:focus:ring-[#e0a070]/50 focus:border-[#d89745] dark:border-[#e0a070] dark:focus:border-[#e0a070] transition"
+                  />
+                ) : clearFigmaToken ? (
+                  <div className="px-3 py-2 rounded-lg border border-[#fecaca] dark:border-[#584a3b] bg-[#fff0f0] dark:bg-[#1e1914] text-[11px] text-[#991b1b] dark:text-[#f3eadf] font-mono flex items-center justify-between">
+                    Pending removal (Save to apply)
+                    <button onClick={() => setClearFigmaToken(false)} className="underline hover:text-[#7f1d1d] dark:text-[#f3eadf] dark:hover:text-[#f3eadf] font-bold">Undo</button>
+                  </div>
+                ) : (
+                  <div className="px-3 py-2 rounded-lg border border-[#e5d4bb] dark:border-[#584a3b] bg-[#faf7f0] dark:bg-[#1e1914] text-[11px] text-[#b89b82] dark:text-[#d6b56d] font-mono">
+                    {figmaTokenMasked
+                      ? 'Token securely stored.'
+                      : 'No Figma token stored.'
+                    }
+                  </div>
+                )}
               </div>
             </div>
 

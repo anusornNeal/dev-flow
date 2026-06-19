@@ -960,6 +960,75 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
       path: withQuery('/api/git/branch', args),
     }),
   },
+  {
+    name: 'get_figma_file',
+    description: 'Fetch compact file metadata/context by fileKey.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        fileKey: { type: 'string' },
+      },
+      required: ['fileKey'],
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: (args) => ({
+      method: 'GET',
+      path: `/api/figma/file/${encodePathSegment(String(args.fileKey))}`,
+    }),
+  },
+  {
+    name: 'get_figma_node',
+    description: 'Fetch one or more nodes by fileKey and nodeId(s).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        fileKey: { type: 'string' },
+        nodeId: { type: 'string' },
+      },
+      required: ['fileKey', 'nodeId'],
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: (args) => ({
+      method: 'GET',
+      path: `/api/figma/file/${encodePathSegment(String(args.fileKey))}/node/${encodePathSegment(String(args.nodeId))}`,
+    }),
+  },
+  {
+    name: 'get_figma_design_spec',
+    description: 'Return normalized implementation-oriented spec for a node, including text, size, color, typography, layout, spacing, constraints, and asset/image references when available.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        fileKey: { type: 'string' },
+        nodeId: { type: 'string' },
+      },
+      required: ['fileKey', 'nodeId'],
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: (args) => ({
+      method: 'GET',
+      path: `/api/figma/file/${encodePathSegment(String(args.fileKey))}/node/${encodePathSegment(String(args.nodeId))}/spec`,
+    }),
+  },
+  {
+    name: 'attach_figma_context_to_task',
+    description: 'Optionally add a Figma source reference and summarized visual/design requirement to an existing DevFlow task.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        taskId: { type: 'string', description: 'Task internal id or displayId such as DVF-0120.' },
+        fileKey: { type: 'string' },
+        nodeId: { type: 'string' },
+      },
+      required: ['taskId', 'fileKey', 'nodeId'],
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: (args) => ({
+      method: 'POST',
+      path: `/api/tasks/${encodePathSegment(String(args.taskId))}/figma-context`,
+      body: { fileKey: args.fileKey, nodeId: args.nodeId },
+    }),
+  },
 ];
 
 export function getToolDefinitionByName(name: string) {

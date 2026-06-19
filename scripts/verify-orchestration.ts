@@ -127,7 +127,7 @@ const state: AppState = {
     { id: 'project-1', name: 'p1', repoUrl: 'https://github.com/anusornNeal/dev-flow', localPath: repoPathWithSpaces },
   ],
   countersCache: {},
-  settingsCache: { autoWork: false, ngrokUrl: '', githubToken: '', jiraToken: '', jiraBaseUrl: '', jiraEmail: '' },
+  settingsCache: { autoWork: false, ngrokUrl: '', githubToken: '', jiraToken: '', figmaToken: '', jiraBaseUrl: '', jiraEmail: '' },
   skillsRegistry: [],
 };
 
@@ -252,7 +252,7 @@ const duplicateState: AppState = {
     { id: 'project-dup', name: 'dup', repoUrl: 'https://github.com/anusornNeal/dev-flow', localPath: repoPathWithSpaces },
   ],
   countersCache: {},
-  settingsCache: { autoWork: false, ngrokUrl: '', githubToken: '', jiraToken: '', jiraBaseUrl: '', jiraEmail: '' },
+  settingsCache: { autoWork: false, ngrokUrl: '', githubToken: '', jiraToken: '', figmaToken: '', jiraBaseUrl: '', jiraEmail: '' },
   skillsRegistry: [],
 };
 const duplicateDeps: ApiRouteDeps = {
@@ -331,7 +331,7 @@ const parentState: AppState = {
   ],
   projectsCache: [{ id: 'project-1', name: 'p1', repoUrl: 'repo', localPath: repoPathWithSpaces }],
   countersCache: {},
-  settingsCache: { autoWork: false, ngrokUrl: '', githubToken: '', jiraToken: '', jiraBaseUrl: '', jiraEmail: '' },
+  settingsCache: { autoWork: false, ngrokUrl: '', githubToken: '', jiraToken: '', figmaToken: '', jiraBaseUrl: '', jiraEmail: '' },
   skillsRegistry: [],
 };
 const parentDeps: ApiRouteDeps = {
@@ -435,7 +435,7 @@ const moveState: AppState = {
   ],
   projectsCache: [{ id: 'project-1', name: 'p1', repoUrl: 'repo', localPath: repoPathWithSpaces }],
   countersCache: {},
-  settingsCache: { autoWork: false, ngrokUrl: '', githubToken: '', jiraToken: '', jiraBaseUrl: '', jiraEmail: '' },
+  settingsCache: { autoWork: false, ngrokUrl: '', githubToken: '', jiraToken: '', figmaToken: '', jiraBaseUrl: '', jiraEmail: '' },
   skillsRegistry: [],
 };
 const moveDeps: ApiRouteDeps = {
@@ -536,7 +536,7 @@ const resetState: AppState = {
   ],
   projectsCache: [{ id: 'project-1', name: 'p1', repoUrl: 'repo', localPath: repoPathWithSpaces }],
   countersCache: {},
-  settingsCache: { autoWork: true, ngrokUrl: '', githubToken: '', jiraToken: '', jiraBaseUrl: '', jiraEmail: '' },
+  settingsCache: { autoWork: true, ngrokUrl: '', githubToken: '', jiraToken: '', figmaToken: '', jiraBaseUrl: '', jiraEmail: '' },
   skillsRegistry: [],
 };
 const resetDeps: ApiRouteDeps = {
@@ -615,7 +615,7 @@ const staleReadState: AppState = {
   ],
   projectsCache: [{ id: 'project-1', name: 'p1', repoUrl: 'repo', localPath: repoPathWithSpaces }],
   countersCache: {},
-  settingsCache: { autoWork: false, ngrokUrl: '', githubToken: '', jiraToken: '', jiraBaseUrl: '', jiraEmail: '' },
+  settingsCache: { autoWork: false, ngrokUrl: '', githubToken: '', jiraToken: '', figmaToken: '', jiraBaseUrl: '', jiraEmail: '' },
   skillsRegistry: [],
 };
 const staleReadDeps: ApiRouteDeps = {
@@ -662,7 +662,7 @@ const autoWorkValidationState: AppState = {
   ],
   projectsCache: [{ id: 'project-1', name: 'p1', repoUrl: 'repo', localPath: path.join(tempDir, 'missing-project-path') }],
   countersCache: {},
-  settingsCache: { autoWork: false, ngrokUrl: '', githubToken: '', jiraToken: '', jiraBaseUrl: '', jiraEmail: '' },
+  settingsCache: { autoWork: false, ngrokUrl: '', githubToken: '', jiraToken: '', figmaToken: '', jiraBaseUrl: '', jiraEmail: '' },
   skillsRegistry: [],
 };
 const autoWorkValidationDeps: ApiRouteDeps = {
@@ -723,7 +723,7 @@ const autoWorkTriggerState: AppState = {
   ],
   projectsCache: [{ id: 'project-autowork-1', name: 'p1', repoUrl: 'repo', localPath: tempDir }],
   countersCache: {},
-  settingsCache: { autoWork: false, ngrokUrl: '', githubToken: '', jiraToken: '', jiraBaseUrl: '', jiraEmail: '' },
+  settingsCache: { autoWork: false, ngrokUrl: '', githubToken: '', jiraToken: '', figmaToken: '', jiraBaseUrl: '', jiraEmail: '' },
   skillsRegistry: [],
 };
 const autoWorkTriggerDeps: ApiRouteDeps = {
@@ -818,7 +818,7 @@ const completionState: AppState = {
   ],
   projectsCache: [{ id: 'project-1', name: 'p1', repoUrl: 'repo', localPath: repoPathWithSpaces }],
   countersCache: {},
-  settingsCache: { autoWork: false, ngrokUrl: '', githubToken: '', jiraToken: '', jiraBaseUrl: '', jiraEmail: '' },
+  settingsCache: { autoWork: false, ngrokUrl: '', githubToken: '', jiraToken: '', figmaToken: '', jiraBaseUrl: '', jiraEmail: '' },
   skillsRegistry: [],
 };
 const completionDeps: ApiRouteDeps = {

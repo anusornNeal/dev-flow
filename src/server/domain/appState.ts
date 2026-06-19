@@ -4,6 +4,7 @@ export interface SettingsCache {
   ngrokUrl: string;
   githubToken: string;
   jiraToken: string;
+  figmaToken: string;
   jiraBaseUrl: string;
   jiraEmail: string;
   autoWork: boolean;

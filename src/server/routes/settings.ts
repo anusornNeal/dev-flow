@@ -49,6 +49,7 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
       ngrokUrl: deps.state.settingsCache.ngrokUrl ?? '',
       githubTokenMasked: (deps.state.settingsCache.githubToken?.length ?? 0) > 0,
       jiraTokenMasked: (deps.state.settingsCache.jiraToken?.length ?? 0) > 0,
+      figmaTokenMasked: (deps.state.settingsCache.figmaToken?.length ?? 0) > 0,
       jiraBaseUrl: deps.state.settingsCache.jiraBaseUrl ?? '',
       jiraEmail: deps.state.settingsCache.jiraEmail ?? '',
       autoWork: deps.state.settingsCache.autoWork ?? false,
@@ -58,7 +59,7 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
 
   app.post('/api/settings', (req, res) => {
     console.log('--- POST /api/settings PAYLOAD ---', JSON.stringify(req.body));
-    const { ngrokUrl, githubToken, jiraToken, jiraBaseUrl, jiraEmail, autoWork, agentExecutionMode, clearGithubToken, clearJiraToken } = req.body;
+    const { ngrokUrl, githubToken, jiraToken, figmaToken, jiraBaseUrl, jiraEmail, autoWork, agentExecutionMode, clearGithubToken, clearJiraToken, clearFigmaToken } = req.body;
 
     // Validate types
     if (ngrokUrl !== undefined && typeof ngrokUrl !== 'string') {
@@ -69,6 +70,9 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
     }
     if (jiraToken !== undefined && typeof jiraToken !== 'string') {
       return res.status(400).json({ error: 'jiraToken must be a string' });
+    }
+    if (figmaToken !== undefined && typeof figmaToken !== 'string') {
+      return res.status(400).json({ error: 'figmaToken must be a string' });
     }
     if (jiraBaseUrl !== undefined && typeof jiraBaseUrl !== 'string') {
       return res.status(400).json({ error: 'jiraBaseUrl must be a string' });
@@ -91,6 +95,9 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
     if (clearJiraToken !== undefined && typeof clearJiraToken !== 'boolean') {
       return res.status(400).json({ error: 'clearJiraToken must be a boolean' });
     }
+    if (clearFigmaToken !== undefined && typeof clearFigmaToken !== 'boolean') {
+      return res.status(400).json({ error: 'clearFigmaToken must be a boolean' });
+    }
 
     if (typeof ngrokUrl === 'string') {
       deps.state.settingsCache.ngrokUrl = ngrokUrl.trim();
@@ -102,6 +109,10 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
 
     if (typeof jiraToken === 'string') {
       deps.state.settingsCache.jiraToken = jiraToken.trim();
+    }
+
+    if (typeof figmaToken === 'string') {
+      deps.state.settingsCache.figmaToken = figmaToken.trim();
     }
 
     if (typeof jiraBaseUrl === 'string') {
@@ -185,7 +196,7 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
       // Open the temp database to strip secrets
       const tempDb = new Database(tempFile);
       try {
-        tempDb.prepare("UPDATE settings SET value = '' WHERE key IN ('githubToken', 'jiraToken')").run();
+        tempDb.prepare("UPDATE settings SET value = '' WHERE key IN ('githubToken', 'jiraToken', 'figmaToken')").run();
       } finally {
         tempDb.close();
       }

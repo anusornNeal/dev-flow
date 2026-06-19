@@ -39,6 +39,7 @@ export interface AppStateSeed {
     ngrokUrl: string;
     githubToken: string;
     jiraToken: string;
+    figmaToken: string;
     jiraBaseUrl: string;
     jiraEmail: string;
     autoWork: boolean;
@@ -55,6 +56,7 @@ export function createAppState(): AppState {
     ngrokUrl: '',
     githubToken: '',
     jiraToken: '',
+    figmaToken: '',
     jiraBaseUrl: '',
     jiraEmail: '',
     autoWork: false,

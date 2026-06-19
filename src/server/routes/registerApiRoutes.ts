@@ -8,6 +8,7 @@ import { registerSettingsRoutes } from './settings';
 import { registerSkillRoutes } from './skills';
 import { registerTaskRoutes } from './tasks';
 import { registerAttachmentRoutes } from './attachments';
+import { registerFigmaRoutes } from './figma';
 
 export function registerApiRoutes(app: express.Express, deps: ApiRouteDeps) {
   app.use('/api', express.json({ limit: '50mb' }));
@@ -19,4 +20,5 @@ export function registerApiRoutes(app: express.Express, deps: ApiRouteDeps) {
   registerTaskRoutes(app, deps);
   registerAttachmentRoutes(app, deps);
   registerPromptOverrideRoutes(app, deps);
+  registerFigmaRoutes(app, deps);
 }

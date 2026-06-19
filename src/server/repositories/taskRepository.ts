@@ -35,6 +35,8 @@ const TASK_COLUMNS = [
 
 const TASK_UPSERT_SQL = `INSERT OR REPLACE INTO tasks (${TASK_COLUMNS.join(', ')}) VALUES (${TASK_COLUMNS.map(() => '?').join(', ')})`;
 
+let categoryColumnEnsured = false;
+
 function ensureTaskCategoryColumn() {
   const tableInfo = db.pragma('table_info(tasks)') as Array<{ name: string }>;
   const hasCategory = tableInfo.some((column) => column.name === 'category');

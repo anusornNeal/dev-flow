@@ -604,7 +604,7 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
                         {api.payload && (
                           <div>
                             <p className="text-[#8c7463] dark:text-[#f3eadf] font-bold text-[9px] uppercase tracking-wider mb-1">Request Body (JSON):</p>
-                            <pre className="p-2.5 bg-[#fffcf7] dark:bg-[#1e1914] border border-[#f5ecd4] dark:border-[#584a3b] rounded-xl overflow-x-auto text-[10px] text-[#aa7233] dark:text-[#f3eadf] leading-relaxed max-h-36 scrollbar-thin">
+                            <pre className="p-2.5 bg-[#fffcf7] dark:bg-[#1e1914] border border-[#f5ecd4] dark:border-[#584a3b] rounded-xl overflow-x-auto text-[10px] text-[#aa7233] dark:text-[#f3eadf] leading-relaxed scrollbar-thin">
                               <code>{api.payload}</code>
                             </pre>
                           </div>
@@ -615,7 +615,7 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
                           <p className="text-[#554030] dark:text-[#f3eadf] bg-[#fffcf7] dark:bg-[#1e1914] px-2.5 py-1 rounded-lg border border-[#f5ecd4] dark:border-[#584a3b] font-semibold">{api.response}</p>
                           {(api as any).responseExample && (
                             <div className="mt-1.5">
-                              <pre className="p-2.5 bg-[#fffcf7] dark:bg-[#1e1914] border border-[#f5ecd4] dark:border-[#584a3b] rounded-xl overflow-x-auto text-[10px] text-[#aa7233] dark:text-[#f3eadf] leading-relaxed max-h-36 scrollbar-thin">
+                              <pre className="p-2.5 bg-[#fffcf7] dark:bg-[#1e1914] border border-[#f5ecd4] dark:border-[#584a3b] rounded-xl overflow-x-auto text-[10px] text-[#aa7233] dark:text-[#f3eadf] leading-relaxed scrollbar-thin">
                                 <code>{(api as any).responseExample}</code>
                               </pre>
                             </div>

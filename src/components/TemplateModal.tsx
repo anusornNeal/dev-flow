@@ -15,9 +15,11 @@ interface PromptSection {
   required: boolean;
   sourcePath: string;
   sourceType: 'master' | 'override';
-  masterContent: string;
+  masterAvailable?: boolean;
+  overrideAvailable?: boolean;
+  masterContent?: string;
   overrideContent?: string;
-  effectiveContent: string;
+  effectiveContent?: string;
 }
 
 export default function TemplateModal({ onClose }: TemplateModalProps) {
@@ -59,11 +61,22 @@ export default function TemplateModal({ onClose }: TemplateModalProps) {
 
   useEffect(() => {
     if (selectedSection) {
-      setEditContent(selectedSection.overrideContent !== undefined ? selectedSection.overrideContent : '');
-      setIsEditingOverride(false);
-      setPreviewContent(null);
+      if (selectedSection.masterContent === undefined && selectedSection.effectiveContent === undefined) {
+        fetch(`/api/prompt-template/section?sectionId=${selectedSection.id}`)
+          .then(res => res.json())
+          .then(data => {
+            if (data.section) {
+              setSections(prev => prev.map(s => s.id === selectedSection.id ? { ...s, ...data.section } : s));
+            }
+          })
+          .catch(err => console.error('Failed to load section content:', err));
+      } else {
+        setEditContent(selectedSection.overrideContent !== undefined ? selectedSection.overrideContent : (selectedSection.masterContent || ''));
+        setIsEditingOverride(false);
+        setPreviewContent(null);
+      }
     }
-  }, [selectedSectionId]);
+  }, [selectedSectionId, selectedSection?.masterContent]);
 
   const handleSaveOverride = async () => {
     if (!selectedSectionId) return;
@@ -135,7 +148,7 @@ export default function TemplateModal({ onClose }: TemplateModalProps) {
               <div className="flex flex-col gap-2">
                 {sections.map((section, idx) => {
                   const isSelected = section.id === selectedSectionId;
-                  const missingRequired = section.required && !section.masterContent && !section.overrideContent;
+                  const missingRequired = section.required && !section.masterAvailable && !section.overrideAvailable;
                   
                   return (
                     <button

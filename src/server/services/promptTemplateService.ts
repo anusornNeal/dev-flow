@@ -144,6 +144,13 @@ export function renderPromptTemplate(pipelineId: string, context: PromptRenderCo
     const masterPath = getPromptSkillPath(skillId);
     let content = '';
 
+    if (context.workspace?.localPath) {
+      const overridePath = path.join(context.workspace.localPath, '.devflow', 'prompt-overrides', `${skillId}.md`);
+      if (fs.existsSync(overridePath)) {
+        content = fs.readFileSync(overridePath, 'utf8');
+      }
+    }
+
     if (!content && fs.existsSync(masterPath)) {
       content = fs.readFileSync(masterPath, 'utf8');
     }
@@ -192,13 +199,22 @@ export function renderPromptTemplate(pipelineId: string, context: PromptRenderCo
 
 export function getPromptPipelineStructure(pipelineId: string, agent: string, localPath?: string) {
   const pipeline = getPromptPipeline(pipelineId);
-  return pipeline.map((rawSkillId, index) => {
+  return pipeline.map((rawSkillId) => {
     const skillId = rawSkillId.replace('{agent}', (agent || 'default').toLowerCase());
     const masterPath = getPromptSkillPath(skillId);
+    let overridePath: string | null = null;
     let masterContent = '';
+    let overrideContent: string | undefined = undefined;
     
     if (fs.existsSync(masterPath)) {
       masterContent = fs.readFileSync(masterPath, 'utf8');
+    }
+    
+    if (localPath) {
+      overridePath = path.join(localPath, '.devflow', 'prompt-overrides', `${skillId}.md`);
+      if (fs.existsSync(overridePath)) {
+        overrideContent = fs.readFileSync(overridePath, 'utf8');
+      }
     }
     
     const isRequired = !rawSkillId.includes('agent-specific');
@@ -206,17 +222,21 @@ export function getPromptPipelineStructure(pipelineId: string, agent: string, lo
     return {
       id: skillId,
       title: skillId,
-      order: index + 1,
       required: isRequired,
       sourcePath: masterPath,
-      sourceType: 'master',
+      sourceType: overrideContent !== undefined ? 'override' : 'master' as const,
       masterContent,
-      overrideContent: undefined,
-      effectiveContent: masterContent,
+      overrideContent,
+      effectiveContent: overrideContent !== undefined ? overrideContent : masterContent,
       rawId: rawSkillId, // keeping for backward compatibility if needed internally
-      overridePath: null
+      overridePath
     };
-  }).filter((section) => section.id !== 'prompt.agent-specific.default');
+  })
+  .filter((section) => section.id !== 'prompt.agent-specific.default')
+  .map((section, index) => ({
+    ...section,
+    order: index + 1
+  }));
 }
 
 const PROMPT_SKILL_ID_PATTERN = /^[a-zA-Z0-9._-]+$/;

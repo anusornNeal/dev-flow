@@ -68,6 +68,20 @@ export function normalizeTaskCategoryAndTags(
   };
 }
 
+export function applyTaskCategoryAndTagsUpdate(
+  updatePayload: any,
+  currentTask: any
+): { category: string; tags: string[] } {
+  const shouldNormalize = updatePayload.category !== undefined || updatePayload.tags !== undefined;
+  if (shouldNormalize) {
+    return normalizeTaskCategoryAndTags(updatePayload, { fallbackCategory: currentTask.category });
+  }
+  return {
+    category: currentTask.category || 'general',
+    tags: Array.isArray(currentTask.tags) ? currentTask.tags : [],
+  };
+}
+
 export function findTaskByIdentifier(state: AppState, targetId: string) {
   return state.tasksCache.find((entry) => entry.id === targetId || entry.displayId === targetId) || null;
 }

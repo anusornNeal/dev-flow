@@ -227,7 +227,7 @@ export default function TaskDetailsDrawer({
   const handleSave = () => {
     if (!editedTitle.trim()) return;
 
-    const tagsArray: string[] = [];
+    const tagsArray: string[] = task.tags || [];
 
     const filesArray = editedFilesList
       .map(f => f.trim())

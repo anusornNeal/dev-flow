@@ -8,7 +8,7 @@ import { cancelActiveRunsForTask, cancelStaleActiveRuns, createAgentRun, findAct
 import { loadTasks, generateDisplayId, saveTasks } from '../repositories/taskRepository';
 import { listAttachmentsForTask } from '../repositories/attachmentRepository';
 import { appendAgentRunLog, buildAgentCompletionSummary, createAgentRunFiles, createAgentRunResultRecord, getAgentRunHistoryPaths, getAgentTriggerScriptPath, getDevFlowApiBaseUrl, resolveAgentExecutionMode, resolveFromDevFlowAppRoot, writeAgentRunLaunchMetadata, writeAgentRunOutputSummary, writeAgentRunResult } from '../services/agentRunService';
-import { extractImages, extractDesignImages, findProjectByIdentifier, findTaskByIdentifier, getAgentTaskContext, normalizeAgentCompletionPayload, normalizeTaskCategoryAndTags, renderTaskPrompt, resolveProjectIdFromRepo, validateAgentCompletionPayload, validateAgentParams, validateTaskPayload } from '../services/taskService';
+import { extractImages, extractDesignImages, findProjectByIdentifier, findTaskByIdentifier, getAgentTaskContext, normalizeAgentCompletionPayload, normalizeTaskCategoryAndTags, applyTaskCategoryAndTagsUpdate, renderTaskPrompt, resolveProjectIdFromRepo, validateAgentCompletionPayload, validateAgentParams, validateTaskPayload } from '../services/taskService';
 import { createApiError, sendApiError } from '../services/api';
 import { validateEnum, validateString } from '../validation';
 import { getDevFlowAppRoot } from '../../lib/devFlowPaths';
@@ -1061,7 +1061,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
           continue;
         }
 
-        const classification = normalizeTaskCategoryAndTags(item, { fallbackCategory: currentTask.category });
+        const classification = applyTaskCategoryAndTagsUpdate(item, currentTask);
 
         const updatedTask = {
           ...currentTask,
@@ -1484,7 +1484,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
           continue;
         }
 
-        const nextClassification = normalizeTaskCategoryAndTags(item, { fallbackCategory: currentTask.category });
+        const nextClassification = applyTaskCategoryAndTagsUpdate(item, currentTask);
 
         const updatedTask = {
           ...currentTask,
@@ -1618,7 +1618,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     const updatedTask = {
       ...currentTask,
       ...updateBody,
-      ...normalizeTaskCategoryAndTags(updateBody, { fallbackCategory: currentTask.category }),
+      ...applyTaskCategoryAndTagsUpdate(updateBody, currentTask),
       designImages: extractDesignImages(updateBody, currentTask) || [],
         images: extractImages(updateBody, currentTask) || [],
       updatedAt: new Date().toISOString(),
@@ -1827,7 +1827,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
       for (const op of planned) {
         if (op.type === 'update' && op.existingIndex !== undefined && op.taskId) {
           const currentTask = cloned[op.existingIndex];
-          const classification = normalizeTaskCategoryAndTags(op.fields, { fallbackCategory: currentTask.category });
+          const classification = applyTaskCategoryAndTagsUpdate(op.fields, currentTask);
           if (strategy === 'replace') {
             cloned[op.existingIndex] = { ...currentTask, ...op.fields, ...classification, updatedAt: new Date().toISOString() };
           } else {

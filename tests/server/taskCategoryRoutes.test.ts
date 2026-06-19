@@ -205,6 +205,95 @@ test('import-file accepts category and strips legacy type tags from labels', asy
   }
 });
 
+test('A & B. PUT /api/tasks/:id preserves tags when omitted from payload (including status changes)', async () => {
+  const existingTask = state.tasksCache.find((task: any) => task.title === 'Frontend task');
+  assert.ok(existingTask);
+  const oldCategory = existingTask.category;
+  const oldTags = existingTask.tags;
+
+  const response = await request('PUT', `/api/tasks/${existingTask.id}`, {
+    title: 'New frontend task title',
+    status: 'in-progress'
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.category, oldCategory);
+  assert.deepEqual(response.body.tags, oldTags);
+});
+
+test('C. POST /api/tasks/batch preserves tags when omitted', async () => {
+  const existingTask = state.tasksCache.find((task: any) => task.title === 'General task');
+  assert.ok(existingTask);
+
+  const response = await request('POST', '/api/tasks/batch', {
+    projectId: 'proj-category-1',
+    tasks: [
+      { id: existingTask.id, title: 'Updated general task' }
+    ]
+  });
+
+  assert.equal(response.status, 201);
+  assert.equal(response.body.tasks[0].category, 'general');
+  assert.deepEqual(response.body.tasks[0].tags, ['docs']);
+});
+
+test('D. import-file patch preserves tags when omitted', async () => {
+  const existingTask = state.tasksCache.find((task: any) => task.title === 'Imported backend task');
+  assert.ok(existingTask);
+
+  const fixtureDir = path.join(appRoot, '.category-test-fixtures');
+  fs.mkdirSync(fixtureDir, { recursive: true });
+  const patchPath = path.join(fixtureDir, 'category-patch.json');
+
+  fs.writeFileSync(
+    patchPath,
+    JSON.stringify({
+      version: 'devflow.taskPatch.v1',
+      defaults: { projectName: 'Dev Flow' },
+      tasks: [
+        {
+          operation: 'update',
+          taskId: existingTask.id,
+          fields: {
+            description: 'Updated backend description'
+          },
+        }
+      ],
+    }),
+  );
+
+  const response = await request('POST', '/api/tasks/import-file', {
+    mode: 'apply',
+    strategy: 'patch',
+    patchFilePath: patchPath,
+  });
+
+  try {
+    assert.equal(response.status, 200);
+    const updatedBackend = state.tasksCache.find((task: any) => task.id === existingTask.id);
+    assert.ok(updatedBackend);
+    assert.equal(updatedBackend.category, 'backend');
+    assert.deepEqual(updatedBackend.tags, ['queue', 'logs']);
+  } finally {
+    try {
+      fs.rmSync(fixtureDir, { recursive: true, force: true });
+    } catch {}
+  }
+});
+
+test('E. Explicit tags update still works and wipes old tags if provided', async () => {
+  const existingTask = state.tasksCache.find((task: any) => task.title === 'Updated general task');
+  assert.ok(existingTask);
+
+  const response = await request('PUT', `/api/tasks/${existingTask.id}`, {
+    tags: ['figma', 'mcp']
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.category, 'general');
+  assert.deepEqual(response.body.tags, ['figma', 'mcp']);
+});
+
 test.after(async () => {
   await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   try {

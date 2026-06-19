@@ -109,9 +109,14 @@ const apiSpecs = [
     response: 'JSON Array ของ Projects ทั้งหมด',
     responseExample: `[
   {
-    "id": "123",
-    "name": "Example"
-  }
+  "id": "proj-xyz789",
+  "name": "DevFlow Sandbox",
+  "repoUrl": "https://github.com/my/dev-flow-sandbox",
+  "description": "Sandbox project for testing DevFlow API",
+  "localPath": "/Users/developer/Projects/dev-flow-sandbox",
+  "taskIdPrefix": "DVF",
+  "createdAt": "2024-03-10T12:00:00.000Z"
+}
 ]`,
     example: 'fetch(\'/api/projects\').then(res => res.json());'
   },
@@ -146,7 +151,7 @@ const apiSpecs = [
     response: '{ "success": true, "removedId": "project-id" }',
     responseExample: `{
   "success": true,
-  "removedId": "project-123"
+  "removedId": "proj-xyz789"
 }`,
     example: 'fetch(\'/api/projects/project-123\', {\n  method: \'DELETE\'\n}).then(res => res.json());'
   },
@@ -235,9 +240,37 @@ const apiSpecs = [
     response: 'JSON Array ของ Tasks ทั้งหมด',
     responseExample: `[
   {
-    "id": "123",
-    "name": "Example"
-  }
+  "id": "task-abc123xyz",
+  "displayId": "DVF-0001",
+  "projectId": "proj-xyz789",
+  "title": "Setup Authentication API",
+  "description": "Implement JWT based auth for the new system",
+  "status": "in-progress",
+  "priority": "high",
+  "category": "backend",
+  "tags": ["backend", "api", "auth"],
+  "createdAt": "2024-03-10T12:00:00.000Z",
+  "updatedAt": "2024-03-10T14:30:00.000Z",
+  "logs": [
+    {
+      "id": "log-1",
+      "timestamp": "2024-03-10T12:00:00.000Z",
+      "message": "Task created",
+      "type": "create"
+    }
+  ],
+  "checklist": [
+    {
+      "id": "step-1",
+      "text": "Setup route",
+      "completed": true
+    }
+  ],
+  "images": [],
+  "agent": "Antigravity",
+  "activeAgent": "Antigravity",
+  "effort": "high"
+}
 ]`,
     example: 'fetch(\'/api/tasks\')\n  .then(res => res.json())\n  .then(data => console.log(data));'
   },
@@ -260,7 +293,11 @@ const apiSpecs = [
     response: '{ "success": true, "removed": { ... } }',
     responseExample: `{
   "success": true,
-  "removed": { "id": "task-123" }
+  "removed": {
+    "id": "task-abc123xyz",
+    "title": "Setup Authentication API",
+    "status": "in-progress"
+  }
 }`,
     example: 'fetch(\'/api/tasks/task-1\', {\n  method: \'DELETE\'\n}).then(res => res.json());'
   },
@@ -282,7 +319,15 @@ const apiSpecs = [
     response: 'JSON Object แสดง Settings ทั้งหมด',
     responseExample: `{
   "aiModel": "Antigravity",
-  "apiKey": "sk-..."
+  "apiKey": "sk-1234567890abcdef1234567890abcdef",
+  "theme": "dark",
+  "language": "th",
+  "mcpServers": [
+    {
+      "id": "github-mcp",
+      "status": "connected"
+    }
+  ]
 }`,
     example: 'fetch(\'/api/settings\').then(res => res.json());'
   },
@@ -316,7 +361,7 @@ const apiSpecs = [
     description: 'ดึงข้อมูล Prompt พื้นฐานหรือ System Prompt สำหรับการ์ดงานนี้เพื่อส่งให้ AI',
     response: 'JSON Object บรรจุ String ของ Prompt',
     responseExample: `{
-  "prompt": "You are an AI..."
+  "prompt": "You are Antigravity, a highly capable AI agent.\n\nHere is the task you need to complete:\n\nTask ID: DVF-0001\nTitle: Setup Authentication API\nDescription: Implement JWT based auth for the new system\n\nPlease generate the implementation plan."
 }`,
     example: 'fetch(\'/api/tasks/task-1/prompt\').then(res => res.json());'
   },
@@ -325,7 +370,11 @@ const apiSpecs = [
     path: '/api/tasks/:id/agent-runs/:runId/log',
     description: 'ดึงข้อมูลบันทึกการทำงาน (Log) ของ Agent ที่รันผ่าน Task นี้',
     response: 'Text String แสดง Log การทำงาน',
-    responseExample: `[INFO] Server started...\n[WARN] Missing token`,
+    responseExample: `[INFO] 2024-03-10T12:00:01.000Z Agent started processing task DVF-0001
+[DEBUG] 2024-03-10T12:00:02.500Z Fetching repository context from /Users/developer/Projects/dev-flow-sandbox
+[INFO] 2024-03-10T12:00:10.000Z Generated implementation plan
+[INFO] 2024-03-10T12:05:00.000Z Successfully applied 3 changes to codebase
+[INFO] 2024-03-10T12:05:05.000Z All verification tests passed. Task completed.`,
     example: 'fetch(\'/api/tasks/task-1/agent-runs/run-123/log\').then(res => res.text());'
   }
 ];

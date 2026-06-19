@@ -103,288 +103,650 @@ const sampleJson = [
 
 const jsonString = JSON.stringify(sampleJson, null, 2);
 
-const apiSpecs = [
+const apiGroups = [
   {
-    method: 'GET',
-    path: '/api/projects',
-    description: 'เรียกดูรายการโปรเจกต์ทั้งหมดในระบบ',
-    response: 'JSON Array ของ Projects ทั้งหมด',
-    responseExample: `[
+    groupName: 'Tasks & Batch Operations',
+    endpoints: [
+      {
+        method: 'GET',
+        path: '/api/tasks',
+        description: 'เรียกดูรายการการ์ดงาน (Tickets) ทั้งหมดในระบบ sandbox',
+        response: 'JSON Array ของ Tasks ทั้งหมด',
+        responseExample: `[
   {
-  "id": "proj-xyz789",
-  "name": "DevFlow Sandbox",
-  "repoUrl": "https://github.com/my/dev-flow-sandbox",
-  "description": "Sandbox project for testing DevFlow API",
-  "localPath": "/Users/developer/Projects/dev-flow-sandbox",
-  "taskIdPrefix": "DVF",
-  "createdAt": "2024-03-10T12:00:00.000Z"
-}
+    "id": "task-abc123xyz",
+    "displayId": "DVF-0001",
+    "projectId": "proj-xyz789",
+    "title": "Setup Authentication API",
+    "status": "in-progress"
+  }
 ]`,
-    example: 'fetch(\'/api/projects\').then(res => res.json());'
-  },
-  {
-    method: 'POST',
-    path: '/api/projects',
-    description: 'สร้างโปรเจกต์ใหม่เพื่อใช้ผูกกับการ์ดงาน',
-    payload: '{\n  "name": "ชื่อโปรเจกต์",\n  "repoUrl": "URL ของ Repository",\n  "description": "รายละเอียดเพิ่มเติม"\n}',
-    response: 'JSON Object ของ Project ที่สร้างเสร็จ',
-    responseExample: `{
-  "id": "proj-123",
-  "name": "My Project"
+        example: 'fetch(\'/api/tasks\').then(res => res.json());'
+      },
+      {
+        method: 'GET',
+        path: '/api/schema/task',
+        description: 'ดึงโครงสร้าง JSON Schema ของข้อมูลการ์ดงาน (Task)',
+        response: 'JSON Schema Definition Object',
+        responseExample: `{
+  "type": "object",
+  "properties": {}
 }`,
-    example: 'fetch(\'/api/projects\', {\n  method: \'POST\',\n  headers: { \'Content-Type\': \'application/json\' },\n  body: JSON.stringify({ name: \'DevFlow\', repoUrl: \'https://github.com/my/repo\' })\n}).then(res => res.json());'
-  },
-  {
-    method: 'PUT',
-    path: '/api/projects/:id',
-    description: 'อัปเดตข้อมูลโปรเจกต์ เช่น เปลี่ยนชื่อ หรือ URL',
-    payload: '{\n  "name": "DevFlow V2",\n  "repoUrl": "https://github.com/my/repo2"\n}',
-    response: 'JSON Object ของ Project ที่อัปเดตเสร็จ',
-    responseExample: `{
-  "id": "proj-123",
-  "name": "My Project"
+        example: 'fetch(\'/api/schema/task\').then(res => res.json());'
+      },
+      {
+        method: 'GET',
+        path: '/api/tasks/:id',
+        description: 'เรียกดูการ์ดงานชิ้นใดชิ้นหนึ่งด้วย ID',
+        response: 'JSON Object ของ Task',
+        responseExample: `{
+  "id": "task-abc123xyz",
+  "title": "Setup Authentication API",
+  "status": "in-progress"
 }`,
-    example: 'fetch(\'/api/projects/project-123\', {\n  method: \'PUT\',\n  headers: { \'Content-Type\': \'application/json\' },\n  body: JSON.stringify({ name: \'DevFlow V2\' })\n}).then(res => res.json());'
-  },
-  {
-    method: 'DELETE',
-    path: '/api/projects/:id',
-    description: 'ลบโปรเจกต์พร้อมตั๋วงานที่ผูกกับโปรเจกต์นั้นอย่างถาวร',
-    response: '{ "success": true, "removedId": "project-id" }',
-    responseExample: `{
-  "success": true,
-  "removedId": "proj-xyz789"
+        example: 'fetch(\'/api/tasks/task-1\').then(res => res.json());'
+      },
+      {
+        method: 'POST',
+        path: '/api/tasks',
+        description: 'สร้างตั๋วงานเดี่ยว หรือนำเข้าการ์ดแบบกลุ่ม (Bulk Import)',
+        payload: `{
+  "projectId": "UUID ของโปรเจกต์ (Required)",
+  "tasks": [ { "title": "Backend API" } ]
 }`,
-    example: 'fetch(\'/api/projects/project-123\', {\n  method: \'DELETE\'\n}).then(res => res.json());'
-  },
-  {
-    method: 'POST',
-    path: '/api/tasks',
-    description: 'สร้างตั๋วงานเดี่ยว หรือนำเข้าการ์ดแบบกลุ่ม (Bulk Import) รองรับการสร้างตั๋วแยกย่อย (เช่น Frontend/Backend split) จาก Jira ใบเดียว',
-    payload: '{\n  "projectId": "UUID ของโปรเจกต์ (Required สำหรับ Raw API. หากใช้ MCP tool สามารถส่ง repo/projectName แทนได้)",\n  "tasks": [\n    {\n      "title": "Backend API",\n      "category": "backend",\n      "tags": ["queue"]\n    },\n    {\n      "title": "Frontend UI",\n      "category": "frontend",\n      "tags": ["runner"]\n    }\n  ]\n}',
-    response: 'JSON Object แสดงสถิติจำนวน { success: true, createdCount: number, updatedCount: number, tasks: Array }',
-    responseExample: `{
+        response: 'JSON Object แสดงสถิติจำนวน { success, createdCount, updatedCount, tasks }',
+        responseExample: `{
   "success": true,
   "createdCount": 1,
   "updatedCount": 0,
   "tasks": []
 }`,
-    example: 'fetch(\'/api/tasks\', {\n  method: \'POST\',\n  headers: { \'Content-Type\': \'application/json\' },\n  body: JSON.stringify({\n    projectId: \'project-uuid-123\',\n    tasks: [\n      { title: \'BE: Add API\' },\n      { title: \'FE: Call API\' }\n    ]\n  })\n}).then(res => res.json());'
-  },
-  {
-    method: 'POST',
-    path: '/api/tasks/batch',
-    description: 'อัปเดตและสร้างบันทึกการ์ดงานพร้อมกันแบบกลุ่ม (Batch List Update/Upsert)',
-    payload: '{\n  "projectId": "UUID ของโปรเจกต์ (Required สำหรับ Raw API)",\n  "tasks": [\n    {\n      "id": "task-old (ใส่กรณีต้องการแก้ใบเดิม)",\n      "title": "ชื่องานอัปเดต"\n    }\n  ]\n}',
-    response: 'JSON Object ยืนยันสถานะการอัปเดตแบบกลุ่ม { success: true, createdCount: number, updatedCount: number, tasks: Array }',
-    responseExample: `{
+        example: 'fetch(\'/api/tasks\', { method: \'POST\', headers: {\'Content-Type\': \'application/json\'}, body: JSON.stringify({ projectId: \'proj-1\', tasks: [{title: \'Test\'}] }) }).then(res => res.json());'
+      },
+      {
+        method: 'PUT',
+        path: '/api/tasks',
+        description: 'เขียนและอัปเดตบันทึกการ์ดงานพร้อมกันแบบกลุ่ม (Batch Upsert)',
+        payload: `{ "projectId": "...", "tasks": [] }`,
+        response: 'JSON Object ยืนยันสถานะการอัปเดตแบบกลุ่ม',
+        responseExample: `{
   "success": true,
   "createdCount": 0,
   "updatedCount": 1,
   "tasks": []
 }`,
-    example: 'fetch(\'/api/tasks/batch\', {\n  method: \'POST\',\n  headers: { \'Content-Type\': \'application/json\' },\n  body: JSON.stringify({\n    projectId: \'project-uuid-123\',\n    tasks: [\n      { title: \'Task 1 via outer POST batch\' },\n      { id: \'task-1\', status: \'done\' }\n    ]\n  })\n}).then(res => res.json());'
+        example: 'fetch(\'/api/tasks\', { method: \'PUT\', headers: {\'Content-Type\': \'application/json\'}, body: JSON.stringify({ projectId: \'proj-1\', tasks: [] }) }).then(res => res.json());'
+      },
+      {
+        method: 'PUT',
+        path: '/api/tasks/:id',
+        description: 'อัปเดตข้อมูลย่อยของการ์ดงาน เช่น เปลี่ยนสถานะเลน, แก้ไข checklist',
+        payload: `{ "status": "in-progress", "priority": "high" }`,
+        response: 'JSON Object ของ Task ที่ผ่านการอัปเดตเรียบร้อย',
+        responseExample: `{ "id": "task-abc123xyz", "status": "in-progress" }`,
+        example: 'fetch(\'/api/tasks/task-1\', { method: \'PUT\', headers: {\'Content-Type\': \'application/json\'}, body: JSON.stringify({ status: \'in-progress\' }) }).then(res => res.json());'
+      },
+      {
+        method: 'DELETE',
+        path: '/api/tasks/:id',
+        description: 'ลบการ์ดงานชิ้นนั้นๆ อ้างอิงจาก ID อย่างถาวร',
+        response: '{ "success": true, "removed": { ... } }',
+        responseExample: `{ "success": true, "removed": { "id": "task-abc123xyz" } }`,
+        example: 'fetch(\'/api/tasks/task-1\', { method: \'DELETE\' }).then(res => res.json());'
+      },
+      {
+        method: 'POST',
+        path: '/api/tasks/batch',
+        description: 'อัปเดตและสร้างบันทึกการ์ดงานพร้อมกันแบบกลุ่ม',
+        payload: `{ "projectId": "...", "tasks": [] }`,
+        response: 'JSON Object',
+        responseExample: `{ "success": true, "updatedCount": 2 }`,
+        example: 'fetch(\'/api/tasks/batch\', { method: \'POST\', headers: {\'Content-Type\': \'application/json\'}, body: JSON.stringify({ projectId: \'proj-1\', tasks: [] }) }).then(res => res.json());'
+      },
+      {
+        method: 'POST',
+        path: '/api/tasks/batch/move',
+        description: 'ย้ายสถานะเลนการทำงานของการ์ดแบบกลุ่ม',
+        payload: `{ "taskIds": ["id1", "id2"], "status": "done" }`,
+        response: 'JSON Object',
+        responseExample: `{ "success": true }`,
+        example: 'fetch(\'/api/tasks/batch/move\', { method: \'POST\', headers: {\'Content-Type\': \'application/json\'}, body: JSON.stringify({ taskIds: [\'1\'], status: \'done\' }) }).then(res => res.json());'
+      },
+      {
+        method: 'POST',
+        path: '/api/tasks/batch/checklist/toggle',
+        description: 'สลับสถานะความสำเร็จของข้อกำหนด Checklist แบบกลุ่ม',
+        payload: `{ "taskIds": ["id1"], "checklistId": "step-1" }`,
+        response: 'JSON Object',
+        responseExample: `{ "success": true }`,
+        example: 'fetch(\'/api/tasks/batch/checklist/toggle\', { method: \'POST\', headers: {\'Content-Type\': \'application/json\'}, body: JSON.stringify({ taskIds: [\'1\'], checklistId: \'step\' }) }).then(res => res.json());'
+      },
+      {
+        method: 'POST',
+        path: '/api/tasks/batch/assign',
+        description: 'มอบหมาย Agent แบบกลุ่ม',
+        payload: `{ "taskIds": ["id1"], "agent": "Antigravity" }`,
+        response: 'JSON Object',
+        responseExample: `{ "success": true }`,
+        example: 'fetch(\'/api/tasks/batch/assign\', { method: \'POST\', headers: {\'Content-Type\': \'application/json\'}, body: JSON.stringify({ taskIds: [\'1\'], agent: \'Antigravity\' }) }).then(res => res.json());'
+      },
+      {
+        method: 'POST',
+        path: '/api/tasks/:id/move',
+        description: 'ย้ายสถานะเลนการทำงานของการ์ดชิ้นหนึ่งๆ',
+        payload: `{ "status": "done" }`,
+        response: 'JSON Object สถานะตอบกลับ',
+        responseExample: `{ "success": true, "task": { "id": "task-abc123xyz" } }`,
+        example: 'fetch(\'/api/tasks/task-1/move\', { method: \'POST\', headers: {\'Content-Type\': \'application/json\'}, body: JSON.stringify({ status: \'done\' }) }).then(res => res.json());'
+      },
+      {
+        method: 'POST',
+        path: '/api/tasks/:id/checklist/toggle',
+        description: 'สลับสถานะความสำเร็จของข้อกำหนด Checklist item',
+        payload: `{ "checklistId": "step-1-1" }`,
+        response: 'JSON Object',
+        responseExample: `{ "success": true }`,
+        example: 'fetch(\'/api/tasks/task-1/checklist/toggle\', { method: \'POST\', headers: {\'Content-Type\': \'application/json\'}, body: JSON.stringify({ checklistId: \'s-1\' }) }).then(res => res.json());'
+      },
+      {
+        method: 'POST',
+        path: '/api/tasks/:id/assign',
+        description: 'มอบหมาย Agent',
+        payload: `{ "agent": "Antigravity" }`,
+        response: 'JSON Object',
+        responseExample: `{ "success": true }`,
+        example: 'fetch(\'/api/tasks/task-1/assign\', { method: \'POST\', headers: {\'Content-Type\': \'application/json\'}, body: JSON.stringify({ agent: \'Codex\' }) }).then(res => res.json());'
+      },
+      {
+        method: 'POST',
+        path: '/api/tasks/import-file',
+        description: 'นำเข้าตั๋วงานจากไฟล์ .json หรือ .md',
+        payload: 'FormData (multipart/form-data) บรรจุไฟล์',
+        response: 'JSON Object แสดงจำนวนที่ถูก import',
+        responseExample: `{ "success": true, "createdCount": 5 }`,
+        example: 'fetch(\'/api/tasks/import-file\', { method: \'POST\', body: new FormData() }).then(res => res.json());'
+      }
+    ]
   },
   {
-    method: 'PUT',
-    path: '/api/tasks',
-    description: 'เขียนและอัปเดตบันทึกการ์ดงานพร้อมกันแบบกลุ่ม (Batch List Update/Upsert) - พฤติกรรมเหมือน /api/tasks/batch',
-    payload: '{\n  "projectId": "UUID ของโปรเจกต์ (Required สำหรับ Raw API)",\n  "tasks": [\n    {\n      "id": "task-old (ใส่กรณีต้องการแก้ใบเดิม)",\n      "title": "ชื่องานอัปเดต"\n    }\n  ]\n}',
-    response: 'JSON Object ยืนยันสถานะการอัปเดตแบบกลุ่ม { success: true, createdCount: number, updatedCount: number, tasks: Array }',
-    responseExample: `{
-  "success": true,
-  "createdCount": 0,
-  "updatedCount": 1,
-  "tasks": []
-}`,
-    example: 'fetch(\'/api/tasks\', {\n  method: \'PUT\',\n  headers: { \'Content-Type\': \'application/json\' },\n  body: JSON.stringify({\n    projectId: \'project-uuid-123\',\n    tasks: [\n      { title: \'Task 1 via outer PUT\' },\n      { id: \'task-1\', status: \'done\' }\n    ]\n  })\n}).then(res => res.json());'
+    groupName: 'Agent & Prompts',
+    endpoints: [
+      {
+        method: 'GET',
+        path: '/api/tasks/:id/prompt',
+        description: 'ดึงข้อมูล Prompt พื้นฐานหรือ System Prompt สำหรับการ์ดงานนี้เพื่อส่งให้ AI',
+        response: 'JSON Object บรรจุ String ของ Prompt',
+        responseExample: `{ "prompt": "You are Antigravity..." }`,
+        example: 'fetch(\'/api/tasks/task-1/prompt\').then(res => res.json());'
+      },
+      {
+        method: 'GET',
+        path: '/api/tasks/:id/agent-context',
+        description: 'ดึงข้อมูล Context ล่าสุดเพื่อเตรียมรัน Agent',
+        response: 'JSON Object ของ Context',
+        responseExample: `{ "repoUrl": "...", "branch": "main" }`,
+        example: 'fetch(\'/api/tasks/task-1/agent-context\').then(res => res.json());'
+      },
+      {
+        method: 'GET',
+        path: '/api/tasks/:id/agent-runs',
+        description: 'ดึงประวัติการรัน Agent ทั้งหมดของ Task',
+        response: 'JSON Array',
+        responseExample: `[{ "id": "run-1", "status": "completed" }]`,
+        example: 'fetch(\'/api/tasks/task-1/agent-runs\').then(res => res.json());'
+      },
+      {
+        method: 'GET',
+        path: '/api/tasks/:id/agent-runs/:runId/history',
+        description: 'ดึงประวัติการสนทนาและ Message History ของการรัน Agent',
+        response: 'JSON Array',
+        responseExample: `[{ "role": "user", "content": "..." }]`,
+        example: 'fetch(\'/api/tasks/task-1/agent-runs/run-1/history\').then(res => res.json());'
+      },
+      {
+        method: 'GET',
+        path: '/api/tasks/:id/agent-runs/:runId/log',
+        description: 'ดึงข้อมูลบันทึกการทำงาน (Log) ของ Agent ที่รันผ่าน Task นี้',
+        response: 'Text String แสดง Log การทำงาน',
+        responseExample: `[INFO] Agent started processing task DVF-0001
+[INFO] Generated implementation plan`,
+        example: 'fetch(\'/api/tasks/task-1/agent-runs/run-123/log\').then(res => res.text());'
+      },
+      {
+        method: 'POST',
+        path: '/api/tasks/:id/agent-runs/retry',
+        description: 'สั่ง Retry การรัน Agent ที่ล้มเหลว',
+        response: 'JSON Object',
+        responseExample: `{ "success": true }`,
+        example: 'fetch(\'/api/tasks/task-1/agent-runs/retry\', { method: \'POST\' }).then(res => res.json());'
+      },
+      {
+        method: 'POST',
+        path: '/api/tasks/:id/agent-runs/cancel',
+        description: 'สั่ง Cancel การรัน Agent ปัจจุบัน',
+        response: 'JSON Object',
+        responseExample: `{ "success": true }`,
+        example: 'fetch(\'/api/tasks/task-1/agent-runs/cancel\', { method: \'POST\' }).then(res => res.json());'
+      },
+      {
+        method: 'POST',
+        path: '/api/tasks/:id/agent-complete',
+        description: 'แจ้งสถานะ Complete จากตัว Agent โดยตรงเพื่ออัปเดต Task',
+        payload: `{ "status": "success", "summary": "Finished UI" }`,
+        response: 'JSON Object',
+        responseExample: `{ "success": true }`,
+        example: 'fetch(\'/api/tasks/task-1/agent-complete\', { method: \'POST\', headers: {\'Content-Type\': \'application/json\'}, body: JSON.stringify({ status: \'success\' }) }).then(res => res.json());'
+      },
+      {
+        method: 'POST',
+        path: '/api/tasks/:id/agent-runs/:runId/complete',
+        description: 'แจ้งสถานะ Complete ระบุตาม Run ID',
+        payload: `{ "status": "success" }`,
+        response: 'JSON Object',
+        responseExample: `{ "success": true }`,
+        example: 'fetch(\'/api/tasks/task-1/agent-runs/run-1/complete\', { method: \'POST\', headers: {\'Content-Type\': \'application/json\'}, body: JSON.stringify({ status: \'success\' }) }).then(res => res.json());'
+      },
+      {
+        method: 'GET',
+        path: '/api/prompt-template/sections',
+        description: 'ดึงหัวข้อ Prompt Template ทั้งหมด',
+        response: 'JSON Array',
+        responseExample: `[{ "id": "sys-prompt", "content": "..." }]`,
+        example: 'fetch(\'/api/prompt-template/sections\').then(res => res.json());'
+      },
+      {
+        method: 'GET',
+        path: '/api/prompt-template/section',
+        description: 'ดึงเนื้อหา Prompt Template ล่าสุดตาม Section ID',
+        response: 'JSON Object',
+        responseExample: `{ "content": "..." }`,
+        example: 'fetch(\'/api/prompt-template/section?id=sys-prompt\').then(res => res.json());'
+      },
+      {
+        method: 'PUT',
+        path: '/api/prompt-template/section',
+        description: 'อัปเดตเนื้อหา Prompt Template',
+        payload: `{ "id": "sys-prompt", "content": "New content" }`,
+        response: 'JSON Object',
+        responseExample: `{ "success": true }`,
+        example: 'fetch(\'/api/prompt-template/section\', { method: \'PUT\', headers: {\'Content-Type\': \'application/json\'}, body: JSON.stringify({ id: \'sys\', content: \'hi\' }) }).then(res => res.json());'
+      },
+      {
+        method: 'POST',
+        path: '/api/prompt-template/preview',
+        description: 'ดูตัวอย่างผลลัพธ์ของ Prompt (Preview)',
+        payload: `{ "template": "...", "variables": {} }`,
+        response: 'JSON Object',
+        responseExample: `{ "preview": "Hello World" }`,
+        example: 'fetch(\'/api/prompt-template/preview\', { method: \'POST\', headers: {\'Content-Type\': \'application/json\'}, body: JSON.stringify({ template: \'hi\' }) }).then(res => res.json());'
+      },
+      {
+        method: 'GET',
+        path: '/api/prompt-overrides/sections',
+        description: 'ดึงข้อมูล Overrides ของ Prompt',
+        response: 'JSON Array',
+        responseExample: `[]`,
+        example: 'fetch(\'/api/prompt-overrides/sections\').then(res => res.json());'
+      },
+      {
+        method: 'GET',
+        path: '/api/prompt-overrides/section',
+        description: 'ดึง override ของ section หนึ่ง',
+        response: 'JSON Object',
+        responseExample: `{}`,
+        example: 'fetch(\'/api/prompt-overrides/section?id=sys\').then(res => res.json());'
+      },
+      {
+        method: 'PUT',
+        path: '/api/prompt-overrides/section',
+        description: 'อัปเดต override ของ section หนึ่ง',
+        payload: `{ "id": "section1", "overrideContent": "..." }`,
+        response: 'JSON Object',
+        responseExample: `{ "success": true }`,
+        example: 'fetch(\'/api/prompt-overrides/section\', { method: \'PUT\', headers: {\'Content-Type\': \'application/json\'}, body: JSON.stringify({ id: \'sys\' }) }).then(res => res.json());'
+      },
+      {
+        method: 'DELETE',
+        path: '/api/prompt-overrides/section',
+        description: 'ลบ override เพื่อกลับไปใช้ค่า Default',
+        response: 'JSON Object',
+        responseExample: `{ "success": true }`,
+        example: 'fetch(\'/api/prompt-overrides/section?id=sys\', { method: \'DELETE\' }).then(res => res.json());'
+      }
+    ]
   },
   {
-    method: 'POST',
-    path: '/api/tasks/:id/move',
-    description: 'ย้ายสถานะเลนการทำงานของการ์ดชิ้นหนึ่งๆ (ไม่ต้องส่งข้อมูลชิ้นเต็มก้อน)',
-    payload: '{\n  "status": "backlog" | "todo" | "in-progress" | "ready-for-review" | "done"\n}',
-    response: 'JSON Object สถานะตอบกลับ พร้อม Object ของ Task ที่อัปเดตแล้ว',
-    responseExample: `{
-  "id": "task-123",
-  "status": "todo"
-}`,
-    example: 'fetch(\'/api/tasks/task-1/move\', {\n  method: \'POST\',\n  headers: { \'Content-Type\': \'application/json\' },\n  body: JSON.stringify({ status: \'in-progress\' })\n}).then(res => res.json());'
-  },
+    groupName: 'Projects',
+    endpoints: [
+      {
+        method: 'GET',
+        path: '/api/projects',
+        description: 'เรียกดูรายการโปรเจกต์ทั้งหมดในระบบ',
+        response: 'JSON Array ของ Projects ทั้งหมด',
+        responseExample: `[
   {
-    method: 'POST',
-    path: '/api/tasks/:id/checklist/toggle',
-    description: 'สลับสถานะความสำเร็จของข้อกำหนด Checklist item ย่อยระบุโดย ID (ไม่ต้องส่งข้อมูลชิ้นเต็มก้อน)',
-    payload: '{\n  "checklistId": "ชื่อรหัสของเช็คลิสต์ย่อยเดี่ยวๆ (Required Example: step-1-1)"\n}',
-    response: 'JSON Object ของ Task บรรจุสถานะ Checklist ใหม่',
-    responseExample: `{
-  "id": "task-123",
-  "status": "todo"
-}`,
-    example: 'fetch(\'/api/tasks/task-1/checklist/toggle\', {\n  method: \'POST\',\n  headers: { \'Content-Type\': \'application/json\' },\n  body: JSON.stringify({ checklistId: \'step-1-1\' })\n}).then(res => res.json());'
-  },
-  {
-    method: 'POST',
-    path: '/api/tasks/:id/assign',
-    description: 'มอบหมาย Agent ผู้รับผิดชอบ หรือกำหนด AI Spec และพละกำลังความเพียรประมวลผลเดี่ยวๆ ทันที',
-    payload: `{\n  "agent": "Codex" | "Antigravity" | "Claude" (Optional),\n  "model": "ชื่อโมเดล AI Spec (Optional)",\n  "effort": ${getAgentCatalogHelp()} (Optional)\n}`,
-    response: 'JSON Object ของ Task อัปเดตข้อมูลผู้รับมอบหมายเรียบร้อยแล้ว',
-    responseExample: `{
-  "id": "task-123",
-  "status": "todo"
-}`,
-    example: `// Valid examples:\n${getValidAgentModelEffortExamples().map(e => `// ${e}`).join('\n')}\n\n// Invalid examples:\n${getInvalidAgentModelEffortExamples().map(e => `// ${e}`).join('\n')}\n\nfetch('/api/tasks/task-1/assign', {\n  method: 'POST',\n  headers: { 'Content-Type': 'application/json' },\n  body: JSON.stringify({\n    agent: 'Codex',\n    model: 'GPT-5.4',\n    effort: 'xhigh'\n  })\n}).then(res => res.json());`
-  },
-  {
-    method: 'GET',
-    path: '/api/tasks',
-    description: 'เรียกดูรายการการ์ดงาน (Tickets) ทั้งหมดในระบบ sandbox',
-    response: 'JSON Array ของ Tasks ทั้งหมด',
-    responseExample: `[
-  {
-  "id": "task-abc123xyz",
-  "displayId": "DVF-0001",
-  "projectId": "proj-xyz789",
-  "title": "Setup Authentication API",
-  "description": "Implement JWT based auth for the new system",
-  "status": "in-progress",
-  "priority": "high",
-  "category": "backend",
-  "tags": ["backend", "api", "auth"],
-  "createdAt": "2024-03-10T12:00:00.000Z",
-  "updatedAt": "2024-03-10T14:30:00.000Z",
-  "logs": [
-    {
-      "id": "log-1",
-      "timestamp": "2024-03-10T12:00:00.000Z",
-      "message": "Task created",
-      "type": "create"
-    }
-  ],
-  "checklist": [
-    {
-      "id": "step-1",
-      "text": "Setup route",
-      "completed": true
-    }
-  ],
-  "images": [],
-  "agent": "Antigravity",
-  "activeAgent": "Antigravity",
-  "effort": "high"
-}
-]`,
-    example: 'fetch(\'/api/tasks\')\n  .then(res => res.json())\n  .then(data => console.log(data));'
-  },
-  {
-    method: 'PUT',
-    path: '/api/tasks/:id',
-    description: 'อัปเดตข้อมูลย่อยของการ์ดงาน เช่น เปลี่ยนสถานะเลน, แก้ไข checklist, เพิ่ม logs หรือบันทึกโน้ต',
-    payload: `{\n  "status": "in-progress",\n  "priority": "high",\n  "checklist": [...],\n  "agent": "Codex" | "Antigravity" | "Claude" (Optional),\n  "model": "ชื่อโมเดล AI Spec (Optional)",\n  "effort": ${getAgentCatalogHelp()} (Optional),\n  "logs": [...]\n}`,
-    response: 'JSON Object ของ Task ที่ผ่านการอัปเดตเรียบร้อย',
-    responseExample: `{
-  "id": "task-123",
-  "status": "todo"
-}`,
-    example: 'fetch(\'/api/tasks/task-1\', {\n  method: \'PUT\',\n  headers: { \'Content-Type\': \'application/json\' },\n  body: JSON.stringify({ status: \'done\' })\n}).then(res => res.json());'
-  },
-  {
-    method: 'DELETE',
-    path: '/api/tasks/:id',
-    description: 'ลบการ์ดงานชิ้นนั้นๆ อ้างอิงจาก ID อย่างถาวร',
-    response: '{ "success": true, "removed": { ... } }',
-    responseExample: `{
-  "success": true,
-  "removed": {
-    "id": "task-abc123xyz",
-    "title": "Setup Authentication API",
-    "status": "in-progress"
+    "id": "proj-xyz789",
+    "name": "DevFlow Sandbox",
+    "repoUrl": "https://github.com/my/dev-flow-sandbox"
   }
+]`,
+        example: 'fetch(\'/api/projects\').then(res => res.json());'
+      },
+      {
+        method: 'POST',
+        path: '/api/projects',
+        description: 'สร้างโปรเจกต์ใหม่เพื่อใช้ผูกกับการ์ดงาน',
+        payload: `{ "name": "ชื่อโปรเจกต์", "repoUrl": "URL ของ Repository" }`,
+        response: 'JSON Object ของ Project ที่สร้างเสร็จ',
+        responseExample: `{
+  "id": "proj-xyz789",
+  "name": "DevFlow Sandbox",
+  "repoUrl": "https://github.com/my/dev-flow-sandbox"
 }`,
-    example: 'fetch(\'/api/tasks/task-1\', {\n  method: \'DELETE\'\n}).then(res => res.json());'
-  },
-  {
-    method: 'GET',
-    path: '/api/schema/task',
-    description: 'ดึงโครงสร้าง JSON Schema ของข้อมูลการ์ดงาน (Task) ที่ระบุ Type ของทุกฟิลด์ และ Enum ค่อนข้างครบถ้วน',
-    response: 'JSON Schema Definition Object',
-    responseExample: `{
-  "type": "object",
-  "properties": {}
+        example: 'fetch(\'/api/projects\', { method: \'POST\', headers: {\'Content-Type\': \'application/json\'}, body: JSON.stringify({ name: \'Test\' }) }).then(res => res.json());'
+      },
+      {
+        method: 'PUT',
+        path: '/api/projects/:id',
+        description: 'อัปเดตข้อมูลโปรเจกต์ เช่น เปลี่ยนชื่อ หรือ URL',
+        payload: `{ "name": "DevFlow V2" }`,
+        response: 'JSON Object ของ Project ที่อัปเดตเสร็จ',
+        responseExample: `{
+  "id": "proj-xyz789",
+  "name": "DevFlow V2"
 }`,
-    example: 'fetch(\'/api/schema/task\').then(res => res.json()).then(schema => console.log(schema));'
-  },
-  {
-    method: 'GET',
-    path: '/api/settings',
-    description: 'ดึงการตั้งค่าของแอปพลิเคชันและผู้ใช้ (เช่น AI Model, API Keys)',
-    response: 'JSON Object แสดง Settings ทั้งหมด',
-    responseExample: `{
-  "aiModel": "Antigravity",
-  "apiKey": "sk-1234567890abcdef1234567890abcdef",
-  "theme": "dark",
-  "language": "th",
-  "mcpServers": [
-    {
-      "id": "github-mcp",
-      "status": "connected"
-    }
-  ]
-}`,
-    example: 'fetch(\'/api/settings\').then(res => res.json());'
-  },
-  {
-    method: 'PUT',
-    path: '/api/settings',
-    description: 'บันทึกและอัปเดตการตั้งค่าแอปพลิเคชัน',
-    payload: '{\n  "aiModel": "Antigravity",\n  "apiKey": "sk-1234"\n}',
-    response: 'JSON Object ของ Settings ที่อัปเดตแล้ว',
-    responseExample: `{
-  "aiModel": "Antigravity",
-  "apiKey": "sk-..."
-}`,
-    example: 'fetch(\'/api/settings\', {\n  method: \'PUT\',\n  headers: { \'Content-Type\': \'application/json\' },\n  body: JSON.stringify({ aiModel: \'Antigravity\' })\n}).then(res => res.json());'
-  },
-  {
-    method: 'POST',
-    path: '/api/images/upload',
-    description: 'อัปโหลดรูปภาพเพื่อนำไปใช้แนบในการ์ดงาน',
-    payload: 'FormData (multipart/form-data) บรรจุไฟล์รูปภาพ',
-    response: '{ "success": true, "url": "..." }',
-    responseExample: `{
+        example: 'fetch(\'/api/projects/proj-1\', { method: \'PUT\', headers: {\'Content-Type\': \'application/json\'}, body: JSON.stringify({ name: \'Test\' }) }).then(res => res.json());'
+      },
+      {
+        method: 'DELETE',
+        path: '/api/projects',
+        description: 'ลบข้อมูล Project แบบกลุ่ม',
+        response: 'JSON Object',
+        responseExample: `{ "success": true }`,
+        example: 'fetch(\'/api/projects\', { method: \'DELETE\' }).then(res => res.json());'
+      },
+      {
+        method: 'DELETE',
+        path: '/api/projects/:id',
+        description: 'ลบโปรเจกต์พร้อมตั๋วงานที่ผูกกับโปรเจกต์นั้นอย่างถาวร',
+        response: '{ "success": true, "removedId": "project-id" }',
+        responseExample: `{
   "success": true,
-  "url": "/api/static/images/img-123.png"
+  "removedId": "proj-xyz789"
 }`,
-    example: 'const formData = new FormData();\nformData.append("image", fileBlob);\nfetch(\'/api/images/upload\', {\n  method: \'POST\',\n  body: formData\n}).then(res => res.json());'
+        example: 'fetch(\'/api/projects/proj-1\', { method: \'DELETE\' }).then(res => res.json());'
+      },
+      {
+        method: 'GET',
+        path: '/api/projects/:id/prompt-sections',
+        description: 'ดึง Prompt Sections สำหรับ Project หนึ่ง',
+        response: 'JSON Array',
+        responseExample: `[]`,
+        example: 'fetch(\'/api/projects/proj-1/prompt-sections\').then(res => res.json());'
+      },
+      {
+        method: 'PUT',
+        path: '/api/projects/:id/prompt-overrides/:sectionId',
+        description: 'อัปเดต Prompt Override ของ Project เฉพาะ',
+        payload: `{ "content": "..." }`,
+        response: 'JSON Object',
+        responseExample: `{ "success": true }`,
+        example: 'fetch(\'/api/projects/proj-1/prompt-overrides/sys\', { method: \'PUT\', headers: {\'Content-Type\': \'application/json\'}, body: JSON.stringify({ content: \'hi\' }) }).then(res => res.json());'
+      },
+      {
+        method: 'DELETE',
+        path: '/api/projects/:id/prompt-overrides/:sectionId',
+        description: 'ลบ Prompt Override ของ Project เฉพาะ',
+        response: 'JSON Object',
+        responseExample: `{ "success": true }`,
+        example: 'fetch(\'/api/projects/proj-1/prompt-overrides/sys\', { method: \'DELETE\' }).then(res => res.json());'
+      },
+      {
+        method: 'POST',
+        path: '/api/projects/:id/prompt-preview',
+        description: 'Preview Prompt ภายในบริบทของ Project',
+        payload: `{ "variables": {} }`,
+        response: 'JSON Object',
+        responseExample: `{ "preview": "..." }`,
+        example: 'fetch(\'/api/projects/proj-1/prompt-preview\', { method: \'POST\', headers: {\'Content-Type\': \'application/json\'}, body: JSON.stringify({ variables: {} }) }).then(res => res.json());'
+      }
+    ]
   },
   {
-    method: 'GET',
-    path: '/api/tasks/:id/prompt',
-    description: 'ดึงข้อมูล Prompt พื้นฐานหรือ System Prompt สำหรับการ์ดงานนี้เพื่อส่งให้ AI',
-    response: 'JSON Object บรรจุ String ของ Prompt',
-    responseExample: `{
-  "prompt": "You are Antigravity, a highly capable AI agent.\n\nHere is the task you need to complete:\n\nTask ID: DVF-0001\nTitle: Setup Authentication API\nDescription: Implement JWT based auth for the new system\n\nPlease generate the implementation plan."
-}`,
-    example: 'fetch(\'/api/tasks/task-1/prompt\').then(res => res.json());'
+    groupName: 'Skills',
+    endpoints: [
+      {
+        method: 'GET',
+        path: '/api/skills',
+        description: 'ดึงรายการ Skills ทั้งหมด',
+        response: 'JSON Array',
+        responseExample: `[{ "id": "react-skill", "name": "React" }]`,
+        example: 'fetch(\'/api/skills\').then(res => res.json());'
+      },
+      {
+        method: 'GET',
+        path: '/api/skills/authoring',
+        description: 'ดึงรายการ Authoring Skills (ผู้แต่ง)',
+        response: 'JSON Array',
+        responseExample: `[]`,
+        example: 'fetch(\'/api/skills/authoring\').then(res => res.json());'
+      },
+      {
+        method: 'GET',
+        path: '/api/skills/:id',
+        description: 'ดึงรายละเอียด Skill ด้วย ID',
+        response: 'JSON Object',
+        responseExample: `{ "id": "react-skill" }`,
+        example: 'fetch(\'/api/skills/react-skill\').then(res => res.json());'
+      },
+      {
+        method: 'PUT',
+        path: '/api/skills/:id',
+        description: 'อัปเดตข้อมูล Skill',
+        payload: `{ "description": "..." }`,
+        response: 'JSON Object',
+        responseExample: `{ "success": true }`,
+        example: 'fetch(\'/api/skills/react-skill\', { method: \'PUT\', headers: {\'Content-Type\': \'application/json\'}, body: JSON.stringify({ description: \'desc\' }) }).then(res => res.json());'
+      },
+      {
+        method: 'POST',
+        path: '/api/skills/import',
+        description: 'Import Skill ใหม่เข้าระบบ',
+        payload: `{ "url": "github.com/..." }`,
+        response: 'JSON Object',
+        responseExample: `{ "success": true }`,
+        example: 'fetch(\'/api/skills/import\', { method: \'POST\', headers: {\'Content-Type\': \'application/json\'}, body: JSON.stringify({ url: \'url\' }) }).then(res => res.json());'
+      },
+      {
+        method: 'DELETE',
+        path: '/api/skills/:id',
+        description: 'ลบ Skill ออกจากระบบ',
+        response: 'JSON Object',
+        responseExample: `{ "success": true }`,
+        example: 'fetch(\'/api/skills/react-skill\', { method: \'DELETE\' }).then(res => res.json());'
+      }
+    ]
   },
   {
-    method: 'GET',
-    path: '/api/tasks/:id/agent-runs/:runId/log',
-    description: 'ดึงข้อมูลบันทึกการทำงาน (Log) ของ Agent ที่รันผ่าน Task นี้',
-    response: 'Text String แสดง Log การทำงาน',
-    responseExample: `[INFO] 2024-03-10T12:00:01.000Z Agent started processing task DVF-0001
-[DEBUG] 2024-03-10T12:00:02.500Z Fetching repository context from /Users/developer/Projects/dev-flow-sandbox
-[INFO] 2024-03-10T12:00:10.000Z Generated implementation plan
-[INFO] 2024-03-10T12:05:00.000Z Successfully applied 3 changes to codebase
-[INFO] 2024-03-10T12:05:05.000Z All verification tests passed. Task completed.`,
-    example: 'fetch(\'/api/tasks/task-1/agent-runs/run-123/log\').then(res => res.text());'
+    groupName: 'Attachments & Media',
+    endpoints: [
+      {
+        method: 'GET',
+        path: '/api/tasks/:taskId/attachments',
+        description: 'ดึงไฟล์แนบทั้งหมดของการ์ดงาน',
+        response: 'JSON Array',
+        responseExample: `[{ "id": "att-1", "filename": "doc.pdf" }]`,
+        example: 'fetch(\'/api/tasks/task-1/attachments\').then(res => res.json());'
+      },
+      {
+        method: 'GET',
+        path: '/api/attachments/:attachmentId',
+        description: 'ดึงข้อมูลหรือไฟล์แนบ 1 ไฟล์ด้วย ID',
+        response: 'File Stream หรือ JSON',
+        responseExample: `{ "id": "att-1", "url": "..." }`,
+        example: 'fetch(\'/api/attachments/att-1\').then(res => res.json());'
+      },
+      {
+        method: 'DELETE',
+        path: '/api/attachments/:attachmentId',
+        description: 'ลบไฟล์แนบตาม ID',
+        response: 'JSON Object',
+        responseExample: `{ "success": true }`,
+        example: 'fetch(\'/api/attachments/att-1\', { method: \'DELETE\' }).then(res => res.json());'
+      },
+      {
+        method: 'GET',
+        path: '/api/tasks/:id/images',
+        description: 'ดึงรูปภาพทั้งหมดที่แนบไว้กับตั๋วงาน',
+        response: 'JSON Array ของรูปภาพ',
+        responseExample: `[{ "id": "img-1", "url": "/api/static/images/img.png" }]`,
+        example: 'fetch(\'/api/tasks/task-1/images\').then(res => res.json());'
+      },
+      {
+        method: 'POST',
+        path: '/api/images/upload',
+        description: 'อัปโหลดรูปภาพเพื่อนำไปใช้แนบในการ์ดงาน',
+        payload: 'FormData (multipart/form-data) บรรจุไฟล์รูปภาพ',
+        response: '{ "success": true, "url": "..." }',
+        responseExample: `{
+  "success": true,
+  "url": "/api/static/images/img-1781830891307-1b8f1f69.png"
+}`,
+        example: "const formData = new FormData();\nformData.append('image', fileBlob);\nfetch('/api/images/upload', { method: 'POST', body: formData }).then(res => res.json());"
+      }
+    ]
+  },
+  {
+    groupName: 'Git & Local Files',
+    endpoints: [
+      {
+        method: 'GET',
+        path: '/api/capabilities',
+        description: 'ตรวจสอบความสามารถระบบ (เช่น รองรับ Git หรือ System Commands หรือไม่)',
+        response: 'JSON Object แสดง Flags',
+        responseExample: `{ "git": true, "fs": true }`,
+        example: 'fetch(\'/api/capabilities\').then(res => res.json());'
+      },
+      {
+        method: 'GET',
+        path: '/api/local-files',
+        description: 'List ไฟล์ในระบบ Local Directory ของโปรเจกต์',
+        response: 'JSON Array ของ Paths',
+        responseExample: `["src/index.ts", "package.json"]`,
+        example: 'fetch(\'/api/local-files?path=src\').then(res => res.json());'
+      },
+      {
+        method: 'GET',
+        path: '/api/local-files/read',
+        description: 'อ่านเนื้อหาไฟล์ใน Local Directory',
+        response: 'Text String',
+        responseExample: `console.log("Hello World");`,
+        example: 'fetch(\'/api/local-files/read?path=src/index.ts\').then(res => res.text());'
+      },
+      {
+        method: 'GET',
+        path: '/api/local-files/search',
+        description: 'ค้นหาเนื้อหาภายในไฟล์ต่างๆ',
+        response: 'JSON Array ของผลลัพธ์',
+        responseExample: `[{ "file": "src/index.ts", "line": 1, "content": "..." }]`,
+        example: 'fetch(\'/api/local-files/search?q=import\').then(res => res.json());'
+      },
+      {
+        method: 'GET',
+        path: '/api/git/log',
+        description: 'ดึง Git Log History',
+        response: 'JSON Array ของ Commits',
+        responseExample: `[{ "hash": "abc1234", "message": "Initial commit" }]`,
+        example: 'fetch(\'/api/git/log\').then(res => res.json());'
+      },
+      {
+        method: 'GET',
+        path: '/api/git/diff',
+        description: 'ดึง Git Diff ที่มีอยู่',
+        response: 'Text String ของ Diff Patch',
+        responseExample: `diff --git a/index.ts b/index.ts...`,
+        example: 'fetch(\'/api/git/diff\').then(res => res.text());'
+      },
+      {
+        method: 'GET',
+        path: '/api/git/show',
+        description: 'ดึงข้อมูลรายละเอียด Commit ด้วย hash (git show)',
+        response: 'Text String',
+        responseExample: `commit abc1234...`,
+        example: 'fetch(\'/api/git/show?hash=abc1234\').then(res => res.text());'
+      },
+      {
+        method: 'GET',
+        path: '/api/git/status',
+        description: 'ดึงสถานะ Git ปัจจุบัน (git status)',
+        response: 'JSON Object ของสถานะ',
+        responseExample: `{ "branch": "main", "isClean": false }`,
+        example: 'fetch(\'/api/git/status\').then(res => res.json());'
+      },
+      {
+        method: 'GET',
+        path: '/api/git/branch',
+        description: 'ดึงข้อมูลสาขา Git (Branch)',
+        response: 'JSON Array ของ Branches',
+        responseExample: `["main", "feature/auth"]`,
+        example: 'fetch(\'/api/git/branch\').then(res => res.json());'
+      }
+    ]
+  },
+  {
+    groupName: 'System Settings',
+    endpoints: [
+      {
+        method: 'GET',
+        path: '/api/settings',
+        description: 'ดึงการตั้งค่าของแอปพลิเคชันและผู้ใช้ (เช่น AI Model, API Keys)',
+        response: 'JSON Object แสดง Settings ทั้งหมด',
+        responseExample: `{
+  "aiModel": "Antigravity",
+  "apiKey": "sk-1234567890abcdef1234567890abcdef"
+}`,
+        example: 'fetch(\'/api/settings\').then(res => res.json());'
+      },
+      {
+        method: 'POST',
+        path: '/api/settings',
+        description: 'บันทึกและอัปเดตการตั้งค่าแอปพลิเคชัน',
+        payload: `{ "aiModel": "Antigravity", "apiKey": "sk-1234" }`,
+        response: 'JSON Object ของ Settings ที่อัปเดตแล้ว',
+        responseExample: `{
+  "aiModel": "Antigravity",
+  "apiKey": "sk-1234567890abcdef1234567890abcdef"
+}`,
+        example: 'fetch(\'/api/settings\', { method: \'POST\', headers: {\'Content-Type\': \'application/json\'}, body: JSON.stringify({ aiModel: \'Antigravity\' }) }).then(res => res.json());'
+      },
+      {
+        method: 'GET',
+        path: '/api/export',
+        description: 'ส่งออกข้อมูลทั้งหมดในระบบ (Export)',
+        response: 'JSON File Stream',
+        responseExample: `{ "tasks": [], "projects": [] }`,
+        example: 'window.open(\'/api/export\', \'_blank\');'
+      },
+      {
+        method: 'POST',
+        path: '/api/import',
+        description: 'นำเข้าข้อมูลที่ถูก Backup ไว้เพื่อกู้คืน (Import/Restore)',
+        payload: 'Raw JSON Buffer',
+        response: 'JSON Object ของผลลัพธ์',
+        responseExample: `{ "success": true, "message": "Restored" }`,
+        example: 'fetch(\'/api/import\', { method: \'POST\', body: jsonBuffer }).then(res => res.json());'
+      }
+    ]
   }
 ];
 
-const apiSpecsWithIds = apiSpecs.map((spec, index) => ({
-  ...spec,
-  id: `api-${index}`
-}));
+const apiSpecsWithIds = apiGroups.flatMap((group, groupIndex) => 
+  group.endpoints.map((spec, specIndex) => ({
+    ...spec,
+    groupName: group.groupName,
+    id: `api-${groupIndex}-${specIndex}`
+  }))
+);
 
 interface JsonTemplateModalProps {
   onClose: () => void;

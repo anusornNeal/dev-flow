@@ -310,6 +310,80 @@ test('F. PUT /api/tasks list-update preserves tags when omitted', async () => {
   assert.equal(response.body.tasks[0].title, 'Updated via list PUT');
 });
 
+test('G. PUT /api/tasks/:id category-only update preserves tags', async () => {
+  // Use 'Updated via list PUT' which currently has tags ['runner']
+  const existingTask = state.tasksCache.find((task: any) => task.title === 'Updated via list PUT');
+  assert.ok(existingTask);
+  const oldTags = existingTask.tags;
+
+  const response = await request('PUT', `/api/tasks/${existingTask.id}`, {
+    category: 'backend'
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.category, 'backend');
+  assert.deepEqual(response.body.tags, oldTags);
+});
+
+test('H. import-file patch category-only update preserves tags', async () => {
+  const existingTask = state.tasksCache.find((task: any) => task.title === 'Imported backend task');
+  assert.ok(existingTask);
+  const oldTags = existingTask.tags;
+
+  const fixtureDir = path.join(appRoot, '.category-test-fixtures-2');
+  fs.mkdirSync(fixtureDir, { recursive: true });
+  const patchPath = path.join(fixtureDir, 'category-patch-2.json');
+
+  fs.writeFileSync(
+    patchPath,
+    JSON.stringify({
+      version: 'devflow.taskPatch.v1',
+      defaults: { projectName: 'Dev Flow' },
+      tasks: [
+        {
+          operation: 'update',
+          taskId: existingTask.id,
+          fields: {
+            category: 'frontend'
+          },
+        }
+      ],
+    }),
+  );
+
+  const response = await request('POST', '/api/tasks/import-file', {
+    mode: 'apply',
+    strategy: 'patch',
+    patchFilePath: patchPath,
+  });
+
+  try {
+    assert.equal(response.status, 200);
+    const updatedBackend = state.tasksCache.find((task: any) => task.id === existingTask.id);
+    assert.ok(updatedBackend);
+    assert.equal(updatedBackend.category, 'frontend');
+    assert.deepEqual(updatedBackend.tags, oldTags);
+  } finally {
+    try {
+      fs.rmSync(fixtureDir, { recursive: true, force: true });
+    } catch {}
+  }
+});
+
+test('I. explicit empty tags array clears tags', async () => {
+  const existingTask = state.tasksCache.find((task: any) => task.title === 'Updated general task');
+  assert.ok(existingTask);
+  const oldCategory = existingTask.category;
+
+  const response = await request('PUT', `/api/tasks/${existingTask.id}`, {
+    tags: []
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.category, oldCategory);
+  assert.deepEqual(response.body.tags, []);
+});
+
 test.after(async () => {
   await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   try {

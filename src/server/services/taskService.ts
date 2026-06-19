@@ -72,13 +72,27 @@ export function applyTaskCategoryAndTagsUpdate(
   updatePayload: any,
   currentTask: any
 ): { category: string; tags: string[] } {
-  const shouldNormalize = updatePayload.category !== undefined || updatePayload.tags !== undefined;
-  if (shouldNormalize) {
-    return normalizeTaskCategoryAndTags(updatePayload, { fallbackCategory: currentTask.category });
+  const hasCategory = updatePayload.category !== undefined;
+  const hasTags = updatePayload.tags !== undefined;
+
+  if (!hasCategory && !hasTags) {
+    return {
+      category: currentTask.category || 'general',
+      tags: Array.isArray(currentTask.tags) ? currentTask.tags : [],
+    };
   }
+
+  const normalized = normalizeTaskCategoryAndTags(
+    {
+      ...updatePayload,
+      tags: hasTags ? updatePayload.tags : currentTask.tags,
+    },
+    { fallbackCategory: currentTask.category }
+  );
+
   return {
-    category: currentTask.category || 'general',
-    tags: Array.isArray(currentTask.tags) ? currentTask.tags : [],
+    category: normalized.category,
+    tags: normalized.tags,
   };
 }
 

@@ -7,6 +7,7 @@ export const VALID_MODELS = [
 ];
 export const VALID_STATUSES = ['backlog', 'todo', 'in-progress', 'ready-for-review', 'done'];
 export const VALID_PRIORITIES = ['low', 'medium', 'high'];
+export const VALID_TASK_TAGS = ['frontend', 'backend', 'general'];
 
 export const TASK_SCHEMA_DEF = {
   $schema: 'http://json-schema.org/draft-07/schema#',
@@ -32,8 +33,8 @@ export const TASK_SCHEMA_DEF = {
     },
     tags: {
       type: 'array',
-      items: { type: 'string' },
-      description: 'List of tags/labels',
+      items: { type: 'string', enum: VALID_TASK_TAGS },
+      description: 'Task type tags. Allowed values: frontend, backend, general.',
     },
     targetFiles: {
       type: 'array',

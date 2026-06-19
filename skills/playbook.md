@@ -95,7 +95,7 @@ Do not merge when:
 When merging Jira issues:
 
 - Put the primary Jira key first in the title.
-- Include all Jira keys in `jiraKey` only if the field supports one key; otherwise use the primary key in `jiraKey` and all keys in tags/description.
+- Include all Jira keys in `jiraKey` only if the field supports one key; otherwise use the primary key in `jiraKey` and put extra keys in title/description.
 - Summarize each Jira case in the description.
 - Add acceptance criteria for every distinct behavior.
 - Add verification for every distinct example.
@@ -217,7 +217,7 @@ Create:
 3. A final integration/review plan owned by the parent.
 
 **Frontend / Backend Split Rule**:
-Split frontend and backend into separate DevFlow cards whenever the work can be separated cleanly, even if the source Jira card is one item. Use a single `fullstack` card only when frontend/backend cannot be separated cleanly, and explain why in `reasoning`.
+Split frontend and backend into separate DevFlow cards whenever the work can be separated cleanly, even if the source Jira card is one item. Use a single `general` card only when frontend/backend cannot be separated cleanly, and explain why in `reasoning`.
 
 ## Parent Orchestrator Rule
 
@@ -516,7 +516,7 @@ Do not use it for raw Jira metadata dumps.
 
 Always fill when the task comes from Jira.
 
-For merged Jira work, use the primary Jira key if only one value is supported, and include all keys in title/tags/description.
+For merged Jira work, use the primary Jira key if only one value is supported, and include all keys in title/description.
 
 ### `sourceUrl`
 
@@ -536,12 +536,12 @@ Otherwise summarize attachments into the card.
 
 | Jira data | Where to put it | Rule |
 |---|---|---|
-| Jira key | title, `jiraKey`, tags | Always keep |
+| Jira key | title, `jiraKey` | Always keep |
 | Summary | title/description | Rewrite as action-oriented task |
 | Description | description | Extract actionable requirement |
-| Issue type | tag or omit | Include only if useful |
+| Issue type | description or omit | Include only if useful |
 | Priority | Dev Flow priority | Do not repeat in description |
-| Labels | tags | Keep only useful labels |
+| Labels | description or repoContext | Keep only useful labels |
 | Parent/Epic | reasoning or omit | Include only if scope-impacting |
 | Device/OS/app version | verification | Include only if relevant to reproduction |
 | Attachments | summarize into card | Do not tell agent to open Jira |

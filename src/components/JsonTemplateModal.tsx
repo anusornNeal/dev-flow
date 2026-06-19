@@ -29,7 +29,7 @@ const sampleJson = [
     "description": "Create the backend authentication endpoints.\n\nProblem: We lack secure token validation.\nExpected: All protected routes validate JWTs using Argon2 and return 401 if missing.",
     "status": "todo",
     "priority": "high",
-    "tags": ["backend", "api", "security"],
+    "tags": ["backend"],
     "branch": "feature/api-auth-backend",
     "targetFiles": [
       "src/controllers/authController.ts",
@@ -69,7 +69,7 @@ const sampleJson = [
     "description": "Implement frontend storage and injection of JWT tokens for API requests.",
     "status": "backlog",
     "priority": "high",
-    "tags": ["frontend", "auth"],
+    "tags": ["frontend"],
     "branch": "feature/api-auth-frontend",
     "targetFiles": [
       "src/api/apiClient.ts",
@@ -412,7 +412,8 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
                   <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">agent</strong>: เอเจนต์ที่รับผิดชอบ <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">"Codex" | "Antigravity" | "Claude"</code></li>
                   <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">model</strong>: ชื่อโมเดล AI</li>
                   <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">effort</strong>: ระดับพละกำลัง (ต้องใช้คำตามที่ Agent/Model อนุญาตเท่านั้น) <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">"low" | "medium" | "high" | "xhigh"</code></li>
-                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">reasoning</strong>: เหตุผล/บริบทที่มาของงาน กรณีรวม FE/BE เป็น <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">fullstack</code> ต้องระบุเหตุผลที่ดีเสมอ</li>
+                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">tags</strong>: ประเภทของงานเท่านั้น ใช้ได้แค่ <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">frontend</code>, <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">backend</code>, หรือ <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">general</code></li>
+                  <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">reasoning</strong>: เหตุผล/บริบทที่มาของงาน กรณีรวม FE/BE ไว้ใบเดียวให้ใช้ <code className="font-mono bg-[#f5eedf] dark:bg-[#1e1914] px-1 text-[10px]">general</code> และอธิบายเหตุผลให้ชัด</li>
                   <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">acceptanceCriteria</strong>: เกณฑ์การตรวจรับงาน (Acceptance Criteria)</li>
                   <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">verification</strong>: ขั้นตอนการตรวจสอบหรือทดสอบว่าเสร็จสมบูรณ์</li>
                   <li><strong className="font-mono text-[10.5px] text-[#3c2a1a] dark:text-[#f3eadf]">repoContext</strong>: ข้อแนะนำโครงสร้างงาน, ปัญหาหรือจุดที่ต้องระวังเป็นพิเศษ (ห้ามใส่ URL, path, หรือ branch ซ้ำซ้อนที่นี่)</li>

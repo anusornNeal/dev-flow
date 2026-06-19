@@ -1,4 +1,4 @@
-import { VALID_AGENTS, LEGACY_VALID_EFFORTS_FALLBACK, VALID_MODELS, VALID_STATUSES } from '../constants';
+import { VALID_AGENTS, LEGACY_VALID_EFFORTS_FALLBACK, VALID_MODELS, VALID_STATUSES, VALID_TASK_TAGS } from '../constants';
 
 type JsonSchema = Record<string, any>;
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
@@ -49,7 +49,11 @@ const taskMutationProperties = {
   status: { type: 'string', enum: VALID_STATUSES, description: 'Task lane/status.' },
   priority: { type: 'string', enum: ['low', 'medium', 'high'], description: 'Task priority.' },
   branch: { type: 'string', description: 'Git branch name.' },
-  tags: { type: 'array', items: { type: 'string' }, description: 'Task tags.' },
+  tags: {
+    type: 'array',
+    items: { type: 'string', enum: VALID_TASK_TAGS },
+    description: 'Task type tags. Allowed values: frontend, backend, general.',
+  },
   targetFiles: { type: 'array', items: { type: 'string' }, description: 'Relevant file paths.' },
   checklist: {
     type: 'array',

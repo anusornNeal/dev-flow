@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import type { AgentCompletionPayload, AgentCompletionTest } from '../../types';
 import type { AppState } from '../types';
-import { VALID_AGENTS, LEGACY_VALID_EFFORTS_FALLBACK, VALID_MODELS, VALID_PRIORITIES, VALID_STATUSES } from '../constants';
+import { VALID_AGENTS, LEGACY_VALID_EFFORTS_FALLBACK, VALID_MODELS, VALID_PRIORITIES, VALID_STATUSES, VALID_TASK_TAGS } from '../constants';
 import { validateEnum, validateString } from '../validation';
 import { buildLaunchMetadataBlock, resolveAgentLaunchPlan } from './agentLaunchConfig';
 import { getModelConfig } from '../../lib/agentsConfig';
@@ -76,6 +76,12 @@ export function validateTaskPayload(item: any, isUpdate = false): string | null 
   if (agentErr) return agentErr;
 
   if (item.tags !== undefined && !Array.isArray(item.tags)) return "Field 'tags' must be an array.";
+  if (Array.isArray(item.tags)) {
+    const invalidTag = item.tags.find((tag: unknown) => typeof tag !== 'string' || !VALID_TASK_TAGS.includes(tag));
+    if (invalidTag !== undefined) {
+      return `Field 'tags' must contain only: ${VALID_TASK_TAGS.join(', ')}.`;
+    }
+  }
   if (item.targetFiles !== undefined && !Array.isArray(item.targetFiles)) return "Field 'targetFiles' must be an array.";
   if (item.checklist !== undefined && !Array.isArray(item.checklist)) return "Field 'checklist' must be an array.";
   if (item.designImages !== undefined && item.designImages !== null) {

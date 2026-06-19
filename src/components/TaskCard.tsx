@@ -7,6 +7,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { GitBranch, Copy, Check, Trash2, FileCode, CheckSquare, Image as ImageIcon, Link as LinkIcon, Lock, AlertTriangle, Ban, CircleCheck, Bot, Zap, ChevronDown, Flame, Coffee } from 'lucide-react';
 import { Task } from '../types';
 import { AGENTS_CONFIG, getModelConfig, defaultModelForAgent, defaultEffortForModel, getDisplayModelName } from '../lib/agentsConfig';
+import { getAutoWorkState } from '../lib/autoWorkState';
 import CopyTemplateButton from './CopyTemplateButton';
 import { AgentLogo } from './AgentLogo';
 
@@ -76,36 +77,18 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
   const hasEffectiveAssignment = Boolean(task.agent || task.model || task.effort);
 
   const latestRun = task.latestAgentRun;
+  const autoWorkState = getAutoWorkState(task);
   const settledRunBadge = latestRun && !task.activeAgent && ['failed', 'cancelled', 'succeeded'].includes(latestRun.status)
     ? latestRun
     : null;
-  const runStatusLabel = latestRun
-    ? latestRun.status === 'queued'
-      ? 'Ready'
-      : latestRun.status === 'starting'
-        ? 'Launching'
-        : latestRun.status === 'running'
-          ? 'Running'
-          : latestRun.status === 'succeeded'
-            ? 'Ready for review'
-            : latestRun.status === 'failed'
-              ? 'Failed'
-              : /stale|timed out|timeout/i.test(latestRun.errorMessage || '')
-                ? 'Timed out'
-                : 'Stopped'
-    : null;
-  const runStatusTone = latestRun
-    ? latestRun.status === 'queued'
+  const runStatusTone = autoWorkState
+    ? ['queued-busy', 'queued', 'launching', 'running'].includes(autoWorkState.kind)
       ? 'bg-[#fff5e5] text-[#935919] border-[#fde5bd] dark:bg-[#3a2f26] dark:text-[#f3eadf] dark:border-[#584a3b]'
-      : latestRun.status === 'starting'
-        ? 'bg-[#fff5e5] text-[#935919] border-[#fde5bd] dark:bg-[#3a2f26] dark:text-[#f3eadf] dark:border-[#584a3b]'
-        : latestRun.status === 'running'
-          ? 'bg-[#fff5e5] text-[#935919] border-[#fde5bd] dark:bg-[#3a2f26] dark:text-[#f3eadf] dark:border-[#584a3b]'
-          : latestRun.status === 'succeeded'
-            ? 'bg-[#edf7ed] text-[#427931] border-[#c9e7cb] dark:bg-[#292119] dark:text-[#f3eadf] dark:border-[#584a3b]'
-            : latestRun.status === 'failed'
-              ? 'bg-[#fff0ed] text-[#b4432d] border-[#f2c2b8] dark:bg-[#292119] dark:text-[#f3eadf] dark:border-[#584a3b]'
-              : 'bg-[#f2ece5] text-[#6d5a4d] border-[#d6cbbe] dark:bg-[#292119] dark:text-[#f3eadf] dark:border-[#584a3b]'
+      : autoWorkState.kind === 'ready-for-review'
+        ? 'bg-[#edf7ed] text-[#427931] border-[#c9e7cb] dark:bg-[#292119] dark:text-[#f3eadf] dark:border-[#584a3b]'
+        : autoWorkState.kind === 'failed' || autoWorkState.kind === 'timed-out'
+          ? 'bg-[#fff0ed] text-[#b4432d] border-[#f2c2b8] dark:bg-[#292119] dark:text-[#f3eadf] dark:border-[#584a3b]'
+          : 'bg-[#f2ece5] text-[#6d5a4d] border-[#d6cbbe] dark:bg-[#292119] dark:text-[#f3eadf] dark:border-[#584a3b]'
     : 'bg-[#f2ece5] text-[#6d5a4d] border-[#d6cbbe] dark:bg-[#292119] dark:text-[#f3eadf] dark:border-[#584a3b]';
 
 
@@ -201,7 +184,7 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
         </h4>
 
         {/* Agent & Run Status Row */}
-        {(task.activeAgent || runStatusLabel) && (
+        {(task.activeAgent || autoWorkState) && (
           <div className="flex flex-wrap items-center gap-1.5 mb-2">
             {/* Locked Agent badge */}
             {task.activeAgent && (
@@ -212,9 +195,9 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
             )}
 
             {/* Run Status Badge */}
-            {hasEffectiveAssignment && runStatusLabel && (
+            {hasEffectiveAssignment && autoWorkState && (
               <div className={`inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded-lg border text-[9px] font-mono font-bold ${runStatusTone}`}>
-                <span>{runStatusLabel}</span>
+                <span>{autoWorkState.label}</span>
               </div>
             )}
             
@@ -236,9 +219,9 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
             )}
 
             {/* Run Error Message */}
-            {settledRunBadge?.errorMessage && (
+            {(autoWorkState?.message || settledRunBadge?.errorMessage) && (
               <div className="w-full text-[9px] font-mono text-[#8a6e5a] dark:text-[#d6b56d] line-clamp-2 mt-0.5">
-                {settledRunBadge.errorMessage}
+                {autoWorkState?.message || settledRunBadge?.errorMessage}
               </div>
             )}
           </div>

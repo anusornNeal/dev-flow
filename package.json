@@ -25,7 +25,8 @@
     "backup": "tsx scripts/backup.ts",
     "restore": "tsx scripts/restore.ts",
     "migrate:json": "tsx scripts/migrate-json-to-sqlite.ts",
-    "smoke-multi-sse": "node scripts/smoke-multi-sse.mjs"
+    "smoke-multi-sse": "node scripts/smoke-multi-sse.mjs",
+    "test:dvf-0224": "tsx scripts/verify-dvf-0224.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

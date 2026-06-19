@@ -5,6 +5,34 @@ import { createApiError } from './api';
 import { findProjectByIdentifier } from './taskService';
 import type { ProjectRulesContext } from './projectRulesService';
 
+const FILE_CACHE_TTL_MS = 30_000;
+
+interface FileCacheEntry {
+  data: string;
+  mtimeMs: number;
+  cachedAt: number;
+}
+
+const fileCache = new Map<string, FileCacheEntry>();
+
+function readFileWithCache(filePath: string): string | null {
+  try {
+    const stat = fs.statSync(filePath);
+    const existing = fileCache.get(filePath);
+    const now = Date.now();
+
+    if (existing && stat.mtimeMs <= existing.mtimeMs && now - existing.cachedAt < FILE_CACHE_TTL_MS) {
+      return existing.data;
+    }
+
+    const content = fs.readFileSync(filePath, 'utf8');
+    fileCache.set(filePath, { data: content, mtimeMs: stat.mtimeMs, cachedAt: now });
+    return content;
+  } catch {
+    return null;
+  }
+}
+
 export interface PromptRenderContext {
   run: { id: string };
   task: any;
@@ -49,9 +77,10 @@ function getPromptSkillPath(skillId: string) {
 
 export function getPromptPipeline(pipelineId: string = 'default'): string[] {
   const configPath = getPromptPipelineConfigPath();
-  if (fs.existsSync(configPath)) {
+  const content = readFileWithCache(configPath);
+  if (content !== null) {
     try {
-      const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      const config = JSON.parse(content);
       return config[pipelineId] || config['default'] || [];
     } catch (e) {
       console.error('Error parsing prompt-pipeline.json', e);
@@ -145,14 +174,11 @@ export function renderPromptTemplate(pipelineId: string, context: PromptRenderCo
     let content = '';
 
     if (context.workspace?.localPath) {
-      const overridePath = path.join(context.workspace.localPath, '.devflow', 'prompt-overrides', `${skillId}.md`);
-      if (fs.existsSync(overridePath)) {
-        content = fs.readFileSync(overridePath, 'utf8');
-      }
+      content = readFileWithCache(path.join(context.workspace.localPath, '.devflow', 'prompt-overrides', `${skillId}.md`)) || '';
     }
 
-    if (!content && fs.existsSync(masterPath)) {
-      content = fs.readFileSync(masterPath, 'utf8');
+    if (!content) {
+      content = readFileWithCache(masterPath) || '';
     }
 
     if (content) {
@@ -206,14 +232,13 @@ export function getPromptPipelineStructure(pipelineId: string, agent: string, lo
     let masterContent = '';
     let overrideContent: string | undefined = undefined;
     
-    if (fs.existsSync(masterPath)) {
-      masterContent = fs.readFileSync(masterPath, 'utf8');
-    }
+    masterContent = readFileWithCache(masterPath) || '';
     
     if (localPath) {
       overridePath = path.join(localPath, '.devflow', 'prompt-overrides', `${skillId}.md`);
-      if (fs.existsSync(overridePath)) {
-        overrideContent = fs.readFileSync(overridePath, 'utf8');
+      const cachedOverride = readFileWithCache(overridePath);
+      if (cachedOverride !== null) {
+        overrideContent = cachedOverride;
       }
     }
     
@@ -301,6 +326,7 @@ export function writePromptSectionToMaster(sectionId: string, content: string, o
   }
   const sectionPath = getPromptSkillPath(sectionId);
   fs.writeFileSync(sectionPath, content, 'utf8');
+  fileCache.delete(sectionPath);
   return { success: true, sourcePath: sectionPath };
 }
 
@@ -330,6 +356,7 @@ export function writePromptOverrideForWorkspace(localPath: string, sectionId: st
   const { overrideDir, overridePath } = ensureOverridePathIsSafe(localPath, sectionId, opts);
   fs.mkdirSync(overrideDir, { recursive: true });
   fs.writeFileSync(overridePath, content, 'utf8');
+  fileCache.delete(overridePath);
   return { success: true, overridePath };
 }
 
@@ -340,6 +367,7 @@ export function deletePromptOverrideForWorkspace(localPath: string, sectionId: s
   const { overridePath } = ensureOverridePathIsSafe(localPath, sectionId, opts);
   if (!fs.existsSync(overridePath)) return { success: true, removed: false, overridePath };
   fs.unlinkSync(overridePath);
+  fileCache.delete(overridePath);
   return { success: true, removed: true, overridePath };
 }
 

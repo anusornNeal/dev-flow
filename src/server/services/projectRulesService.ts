@@ -2,6 +2,16 @@ import fs from 'fs';
 import path from 'path';
 import { getDevFlowAppRoot } from '../../lib/devFlowPaths';
 
+const FILE_CACHE_TTL_MS = 30_000;
+
+interface FileCacheEntry {
+  data: ProjectRulesContext;
+  mtimeMs: number;
+  cachedAt: number;
+}
+
+let fileCache: FileCacheEntry | null = null;
+
 export interface ProjectRulesContext {
   title: string;
   workflow: string[];
@@ -30,16 +40,34 @@ function normalizeRules(value: unknown, fallback: string[]) {
 
 export function getProjectRulesContext(baseDir = getDevFlowAppRoot()): ProjectRulesContext {
   const rulesPath = path.join(baseDir, 'config', 'project-rules.json');
-  if (!fs.existsSync(rulesPath)) return FALLBACK_PROJECT_RULES;
+
+  // Try cache first
+  try {
+    const stat = fs.statSync(rulesPath);
+    const now = Date.now();
+    if (
+      fileCache &&
+      fileCache.mtimeMs === stat.mtimeMs &&
+      now - fileCache.cachedAt < FILE_CACHE_TTL_MS
+    ) {
+      return fileCache.data;
+    }
+  } catch {
+    // File doesn't exist, use fallback
+    if (fileCache) return fileCache.data;
+    return FALLBACK_PROJECT_RULES;
+  }
 
   try {
     const parsed = JSON.parse(fs.readFileSync(rulesPath, 'utf8'));
-    return {
+    const data: ProjectRulesContext = {
       title: typeof parsed?.title === 'string' && parsed.title.trim()
         ? parsed.title.trim()
         : FALLBACK_PROJECT_RULES.title,
       workflow: normalizeRules(parsed?.workflow, FALLBACK_PROJECT_RULES.workflow),
     };
+    fileCache = { data, mtimeMs: fs.statSync(rulesPath).mtimeMs, cachedAt: Date.now() };
+    return data;
   } catch (error) {
     console.error('Error parsing project-rules.json', error);
     return FALLBACK_PROJECT_RULES;

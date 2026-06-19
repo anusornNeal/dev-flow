@@ -35,7 +35,7 @@ export function registerSkillRoutes(app: express.Express, deps: ApiRouteDeps) {
 
   app.get('/api/skills/authoring', (_req, res) => {
     loadSkillsRegistry(deps.state);
-    const authoring = deps.state.skillsRegistry.filter((s) => s.id === 'schema' || s.id === 'playbook' || s.id === 'ready-for-review-reviewer-skill');
+    const authoring = deps.state.skillsRegistry.filter((s) => s.id === '00-skill-router' || s.id === '01-authoring-core' || s.id === '02-schema-reference' || s.id === '03-reviewer-core' || s.id === '04-examples');
     res.json(authoring.map((skill) => ({
       id: skill.id,
       name: skill.name,

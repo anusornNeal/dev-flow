@@ -1,6 +1,6 @@
 import db from '../../db/index';
 import type { AppState } from '../types';
-import { getActiveRunForTask, getLatestAgentRunForTask, listAgentRunsForTask } from './agentRunRepository';
+import { ACTIVE_AGENT_RUN_STATUSES, type AgentRun } from './agentRunRepository';
 import { normalizeTaskCategoryAndTags } from '../services/taskService';
 
 const TASK_COLUMNS = [
@@ -38,12 +38,15 @@ const TASK_UPSERT_SQL = `INSERT OR REPLACE INTO tasks (${TASK_COLUMNS.join(', ')
 let categoryColumnEnsured = false;
 
 function ensureTaskCategoryColumn() {
+  if (categoryColumnEnsured) return;
   const tableInfo = db.pragma('table_info(tasks)') as Array<{ name: string }>;
   const hasCategory = tableInfo.some((column) => column.name === 'category');
   if (!hasCategory) {
     db.prepare('ALTER TABLE tasks ADD COLUMN category TEXT').run();
   }
+  categoryColumnEnsured = true;
 }
+
 
 function loadCounters(state: AppState) {
   state.countersCache = {};
@@ -126,10 +129,28 @@ export function loadTasks(state: AppState) {
       repoContext: item.repoContext,
       reasoning: item.reasoning,
     }),
-  })).map((task) => {
-    const activeRun = getActiveRunForTask(task.id);
-    const latestRun = getLatestAgentRunForTask(task.id);
-    const allRuns = listAgentRunsForTask(task.id);
+  }));
+
+  // Batch-load all agent runs to avoid N+1 queries
+  const taskIds = rows.map(r => r.id);
+  const allAgentRuns = taskIds.length > 0
+    ? db.prepare('SELECT * FROM agent_runs ORDER BY createdAt DESC').all() as AgentRun[]
+    : [];
+
+  const runsByTaskId = new Map<string, AgentRun[]>();
+  for (const run of allAgentRuns) {
+    const existing = runsByTaskId.get(run.taskId);
+    if (existing) {
+      existing.push(run);
+    } else {
+      runsByTaskId.set(run.taskId, [run]);
+    }
+  }
+
+  state.tasksCache = state.tasksCache.map((task) => {
+    const taskRuns = runsByTaskId.get(task.id) || [];
+    const activeRun = taskRuns.find(r => ACTIVE_AGENT_RUN_STATUSES.includes(r.status as any)) || null;
+    const latestRun = taskRuns[0] || null;
     return {
       ...task,
       activeAgent: activeRun?.agent || undefined,
@@ -142,7 +163,7 @@ export function loadTasks(state: AppState) {
         startedAt: latestRun.startedAt,
         endedAt: latestRun.endedAt,
       } : undefined,
-      agentRuns: allRuns.map((r) => ({
+      agentRuns: taskRuns.map((r) => ({
         id: r.id,
         status: r.status,
         logFile: r.logPath,

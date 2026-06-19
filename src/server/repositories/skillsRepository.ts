@@ -6,7 +6,7 @@ import type { AppState } from '../types';
 
 const SKILLS_DIR = getDevFlowSkillsDir();
 const LEGACY_REGISTRY_BACKUP_FILE = path.join(SKILLS_DIR, 'registry.json.bak');
-const LEGACY_MASTER_SKILL_IDS = new Set(['schema', 'playbook', 'ready-for-review-reviewer-skill']);
+const LEGACY_MASTER_SKILL_IDS = new Set(['00-skill-router', '01-authoring-core', '02-schema-reference', '03-reviewer-core', '04-examples']);
 
 type LegacySkillSeed = {
   id: string;
@@ -102,9 +102,10 @@ export function loadSkillsRegistry(state: AppState) {
     }
   });
 
+  const lengthBefore = state.skillsRegistry.length;
   seedMissingLegacySkills(state);
 
-  if (needsSave) {
+  if (needsSave || state.skillsRegistry.length > lengthBefore) {
     saveSkillsRegistry(state);
   }
 

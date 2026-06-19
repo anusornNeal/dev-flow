@@ -40,6 +40,12 @@ function buildLaunchCommandLine(executable: string, args: string[]) {
   return `${isBatchScript ? 'call ' : ''}${quotedExecutable}${quotedArgs ? ` ${quotedArgs}` : ''}`;
 }
 
+function buildLoggedLaunchCommandLine(executable: string, args: string[], logPath?: string | null) {
+  const commandLine = buildLaunchCommandLine(executable, args);
+  if (!logPath) return commandLine;
+  return `${commandLine} >> ${quoteBatArg(logPath)} 2>&1`;
+}
+
 export function buildLauncherDispatch(input: {
   cwd: string;
   launchScriptPath: string;
@@ -90,7 +96,7 @@ export function createAgentLaunchScript(input: {
   const logLine = input.logPath
     ? `echo [%DATE% %TIME%] Agent process exited with code %EXIT_CODE% >> ${quoteBatArg(input.logPath)}`
     : 'echo Agent process exited with code %EXIT_CODE%';
-  const commandLine = buildLaunchCommandLine(input.executable, input.args);
+  const commandLine = buildLoggedLaunchCommandLine(input.executable, input.args, input.logPath);
   
   const callbackLogLine = input.logPath
     ? `echo [%DATE% %TIME%] completionCallback success=%CALLBACK_SUCCESS% exitCode=%EXIT_CODE% errorMessage=%CALLBACK_ERROR_MESSAGE% >> ${quoteBatArg(input.logPath)}`
@@ -102,8 +108,10 @@ export function createAgentLaunchScript(input: {
     'setlocal',
     input.windowTitle ? `title ${input.windowTitle}` : '',
     `cd /d ${quoteBatArg(input.cwd)}`,
+    input.logPath ? `echo [%DATE% %TIME%] --- agent output start --- >> ${quoteBatArg(input.logPath)}` : '',
     commandLine,
     'set EXIT_CODE=%ERRORLEVEL%',
+    input.logPath ? `echo [%DATE% %TIME%] --- agent output end (exit=%EXIT_CODE%) --- >> ${quoteBatArg(input.logPath)}` : '',
     'set CALLBACK_SUCCESS=false',
     'set "CALLBACK_ERROR_MESSAGE="',
     'if "%EXIT_CODE%"=="0" set CALLBACK_SUCCESS=true',
@@ -136,7 +144,7 @@ export function createCodexLaunchScript(input: {
   const logLine = input.logPath
     ? `echo [%DATE% %TIME%] Codex session exited with code %EXIT_CODE% >> ${quoteBatArg(input.logPath)}`
     : 'echo Codex session exited with code %EXIT_CODE%';
-  const commandLine = buildLaunchCommandLine(input.executable, input.args);
+  const commandLine = buildLoggedLaunchCommandLine(input.executable, input.args, input.logPath);
   
   const callbackLogLine = input.logPath
     ? `echo [%DATE% %TIME%] completionCallback success=%CALLBACK_SUCCESS% exitCode=%EXIT_CODE% errorMessage=%CALLBACK_ERROR_MESSAGE% >> ${quoteBatArg(input.logPath)}`
@@ -148,8 +156,10 @@ export function createCodexLaunchScript(input: {
     'setlocal',
     input.windowTitle ? `title ${input.windowTitle}` : '',
     `cd /d ${quoteBatArg(input.cwd)}`,
+    input.logPath ? `echo [%DATE% %TIME%] --- agent output start --- >> ${quoteBatArg(input.logPath)}` : '',
     commandLine,
     'set EXIT_CODE=%ERRORLEVEL%',
+    input.logPath ? `echo [%DATE% %TIME%] --- agent output end (exit=%EXIT_CODE%) --- >> ${quoteBatArg(input.logPath)}` : '',
     'set CALLBACK_SUCCESS=false',
     'set "CALLBACK_ERROR_MESSAGE="',
     'if "%EXIT_CODE%"=="0" set CALLBACK_SUCCESS=true',

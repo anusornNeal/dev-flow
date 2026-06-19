@@ -33,6 +33,7 @@ import {
 import { CustomSelect } from './CustomSelect';
 import { Task, TaskPriority, TaskStatus, LogEntry, ChecklistItem, TaskCategory } from '../types';
 import { AGENTS_CONFIG, getModelConfig, defaultModelForAgent, defaultEffortForModel } from '../lib/agentsConfig';
+import { getAutoWorkState } from '../lib/autoWorkState';
 import MarkdownRenderer from './MarkdownRenderer';
 import CopyTemplateButton from './CopyTemplateButton';
 import CreateTaskModal from './CreateTaskModal';
@@ -143,6 +144,10 @@ export default function TaskDetailsDrawer({
   const [isAddingSubtask, setIsAddingSubtask] = useState(false);
   const [runHistoryFiles, setRunHistoryFiles] = useState<RunHistoryFiles | null>(null);
   const [isRetryingRun, setIsRetryingRun] = useState(false);
+  const [latestRunLogContent, setLatestRunLogContent] = useState('');
+  const [latestRunLogExists, setLatestRunLogExists] = useState(false);
+  const [latestRunLogLoading, setLatestRunLogLoading] = useState(false);
+  const [latestRunLogError, setLatestRunLogError] = useState<string | null>(null);
 
   // Progressive disclosure state
   const [showAllFiles, setShowAllFiles] = useState(false);
@@ -217,6 +222,42 @@ export default function TaskDetailsDrawer({
       })
       .catch(() => {
         if (!cancelled) setRunHistoryFiles(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [task.id, task.latestAgentRun?.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLatestRunLogContent('');
+    setLatestRunLogExists(false);
+    setLatestRunLogError(null);
+
+    const runId = task.latestAgentRun?.id;
+    if (!runId) return;
+
+    setLatestRunLogLoading(true);
+    fetch(`/api/tasks/${task.id}/agent-runs/${runId}/log`)
+      .then(async (response) => {
+        const data = await response.json().catch(() => null);
+        if (!response.ok) {
+          throw new Error(data?.error || `Failed to load log (${response.status})`);
+        }
+        return data;
+      })
+      .then((data) => {
+        if (cancelled) return;
+        setLatestRunLogContent(typeof data?.content === 'string' ? data.content : '');
+        setLatestRunLogExists(Boolean(data?.exists));
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setLatestRunLogError(error?.message || 'Failed to load log');
+      })
+      .finally(() => {
+        if (!cancelled) setLatestRunLogLoading(false);
       });
 
     return () => {
@@ -374,22 +415,11 @@ export default function TaskDetailsDrawer({
   };
 
   const latestRun = task.latestAgentRun;
-  const runStatusLabel = latestRun
-    ? latestRun.status === 'queued'
-      ? 'Ready'
-      : latestRun.status === 'starting'
-        ? 'Launching'
-        : latestRun.status === 'running'
-          ? 'Running'
-          : latestRun.status === 'succeeded'
-            ? 'Ready for review'
-            : latestRun.status === 'failed'
-              ? 'Failed'
-              : /stale|timed out|timeout/i.test(latestRun.errorMessage || '')
-                ? 'Timed out'
-                : 'Stopped'
-    : null;
+  const autoWorkState = getAutoWorkState(task);
   const canRetryLatestRun = !!latestRun && !task.activeAgent && ['failed', 'cancelled'].includes(latestRun.status);
+  const latestRunLogTail = latestRunLogContent.trim()
+    ? latestRunLogContent.trimEnd().split(/\r?\n/).slice(-40).join('\n')
+    : '';
 
   const handleRetryLatestRun = async () => {
     if (!latestRun || isRetryingRun) return;
@@ -1598,7 +1628,7 @@ export default function TaskDetailsDrawer({
                                 Latest Auto Work Status
                               </div>
                               <div className="text-[12px] font-bold text-[#5c493c] dark:text-[#f3eadf]">
-                                {runStatusLabel}
+                                {autoWorkState?.label || latestRun.status}
                               </div>
                             </div>
                             {canRetryLatestRun && (
@@ -1617,12 +1647,48 @@ export default function TaskDetailsDrawer({
                               {latestRun.errorMessage}
                             </div>
                           )}
+                          {autoWorkState?.message && autoWorkState.message !== latestRun.errorMessage && (
+                            <div className="text-[10px] font-mono text-[#8a6e5a] dark:text-[#d6b56d] break-words">
+                              {autoWorkState.message}
+                            </div>
+                          )}
                         </div>
                       ) : (
                         <div className="text-center py-4 text-[10px] font-mono text-[#a59182] dark:text-[#8a7a6a]">
                           No auto-work runs initiated for this task yet.
                         </div>
                       )}
+
+                      <div className="bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-2xl p-3 space-y-2 shadow-2xs">
+                        <div className="text-[10px] font-mono uppercase tracking-widest text-[#8a6e5a] dark:text-[#f3eadf] font-extrabold">
+                          Final Output
+                        </div>
+                        {latestRunLogLoading && (
+                          <div className="text-[10px] font-mono text-[#8a6e5a] dark:text-[#b8ab9f]">
+                            Loading captured run log…
+                          </div>
+                        )}
+                        {!latestRunLogLoading && latestRunLogError && (
+                          <div className="text-[10px] font-mono text-[#b4432d] dark:text-[#f3eadf] break-words">
+                            {latestRunLogError}
+                          </div>
+                        )}
+                        {!latestRunLogLoading && !latestRunLogError && !latestRun && (
+                          <div className="text-[10px] font-mono text-[#8a6e5a] dark:text-[#b8ab9f]">
+                            No run log yet.
+                          </div>
+                        )}
+                        {!latestRunLogLoading && !latestRunLogError && latestRun && !latestRunLogExists && (
+                          <div className="text-[10px] font-mono text-[#8a6e5a] dark:text-[#b8ab9f]">
+                            No captured run log yet.
+                          </div>
+                        )}
+                        {!latestRunLogLoading && !latestRunLogError && latestRunLogExists && (
+                          <pre className="max-h-64 overflow-auto rounded-xl bg-[#f7f3ea] dark:bg-[#14110d] p-3 text-[10px] font-mono leading-relaxed whitespace-pre-wrap break-words text-[#45372d] dark:text-[#f3eadf]">
+                            {latestRunLogTail || '(empty log)'}
+                          </pre>
+                        )}
+                      </div>
 
                       {runHistoryFiles && (
                         <div className="space-y-2">

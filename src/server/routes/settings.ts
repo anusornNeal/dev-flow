@@ -125,18 +125,31 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
       if (autoWork) {
         const queuedTasks = deps.state.tasksCache.filter(task => task.status === 'todo' && task.agent);
         const uniqueProjectIds = Array.from(new Set(queuedTasks.map(t => t.projectId).filter(Boolean)));
-        let hasTriggered = false;
+        const startedRuns: any[] = [];
+        const reasons: string[] = [];
         for (const projectId of uniqueProjectIds) {
           if (projectId) {
             const result = continueTaskQueueForProject(projectId, deps);
             if (result.triggered) {
-              autoWorkTrigger = result;
-              hasTriggered = true;
-              break;
-            } else if (!hasTriggered) {
-              autoWorkTrigger = result;
+              if (Array.isArray(result.runs) && result.runs.length > 0) {
+                startedRuns.push(...result.runs);
+              } else if (result.run) {
+                startedRuns.push(result.run);
+              }
+            } else if (result.reason) {
+              reasons.push(result.reason);
             }
           }
+        }
+        if (startedRuns.length > 0) {
+          autoWorkTrigger = {
+            triggered: true,
+            reason: `Started ${startedRuns.length} eligible task(s) across ${uniqueProjectIds.length} project(s).`,
+            run: startedRuns[0],
+            runs: startedRuns,
+          };
+        } else if (reasons.length > 0) {
+          autoWorkTrigger = { triggered: false, reason: reasons[0] };
         }
       }
 

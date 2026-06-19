@@ -4,7 +4,7 @@ import path from 'path';
 import type express from 'express';
 import type { ApiRouteDeps } from '../types';
 import { TASK_SCHEMA_DEF, VALID_AGENTS, LEGACY_VALID_EFFORTS_FALLBACK, VALID_MODELS, VALID_STATUSES } from '../constants';
-import { cancelActiveRunsForTask, cancelStaleActiveRuns, createAgentRun, findActiveRunByTaskId, getActiveRunForProject, getActiveRunForTask, getLatestAgentRunForTask, listAgentRunsForTask, updateAgentRunStatus, type AgentRun } from '../repositories/agentRunRepository';
+import { cancelActiveRunsForTask, cancelStaleActiveRuns, createAgentRun, getActiveRunForProjectAndAgent, getActiveRunForTask, getLatestAgentRunForTask, listActiveRunSummariesForProject, listAgentRunsForTask, updateAgentRunStatus, type AgentRun } from '../repositories/agentRunRepository';
 import { loadTasks, generateDisplayId, saveTasks } from '../repositories/taskRepository';
 import { listAttachmentsForTask } from '../repositories/attachmentRepository';
 import { appendAgentRunLog, buildAgentCompletionSummary, createAgentRunFiles, createAgentRunResultRecord, getAgentRunHistoryPaths, getAgentTriggerScriptPath, getDevFlowApiBaseUrl, resolveAgentExecutionMode, resolveFromDevFlowAppRoot, writeAgentRunLaunchMetadata, writeAgentRunOutputSummary, writeAgentRunResult } from '../services/agentRunService';
@@ -22,8 +22,14 @@ const STALE_AGENT_RUN_MS = 30 * 60 * 1000;
 
 type TriggerTaskAgentResult =
   | { triggered: true; run: AgentRun }
-  | { triggered: false; reason: string; code?: AgentLaunchPreflightCode | 'TASK_ALREADY_RUNNING' | 'PROJECT_ALREADY_RUNNING'; run?: AgentRun | null };
+  | { triggered: false; reason: string; code?: AgentLaunchPreflightCode | 'TASK_ALREADY_RUNNING' | 'AGENT_ALREADY_RUNNING' | 'LAUNCH_PLAN_INVALID'; run?: AgentRun | null };
 type TriggerTaskAgentFailure = Extract<TriggerTaskAgentResult, { triggered: false }>;
+type ContinueTaskQueueResult = {
+  triggered: boolean;
+  reason: string;
+  run?: AgentRun;
+  runs?: AgentRun[];
+};
 type TaskReadMode = 'minimal' | 'summary' | 'standard' | 'full' | 'agent-context' | 'debug';
 type AgentCompletionRouteResult = { task: any; run: AgentRun; payload: AgentCompletionPayload };
 
@@ -237,11 +243,16 @@ function formatAgentCompletionLogMessage(payload: AgentCompletionPayload) {
   return parts.join(' ');
 }
 
+function buildSameAgentBusyMessage(task: any, activeRun: AgentRun) {
+  const assignedAgent = task.agent || activeRun.agent;
+  return `Auto Work queued: assigned agent ${assignedAgent} is busy with run ${activeRun.id}; task stays in TODO until that agent becomes available.`;
+}
+
 function resolveAgentCompletionTargetStatus(payload: AgentCompletionPayload): TaskStatus {
   if (payload.status === 'success') {
     return payload.moveTo || 'ready-for-review';
   }
-  return payload.moveTo || 'in-progress';
+  return payload.moveTo || 'todo';
 }
 
 function applyAgentCompletionCallback(task: any, run: AgentRun, deps: ApiRouteDeps, payload: AgentCompletionPayload): AgentCompletionRouteResult {
@@ -389,6 +400,7 @@ export function completeAgentRunForTask(task: any, run: AgentRun, deps: ApiRoute
 export function continueTaskQueueForProject(projectId: string, deps: ApiRouteDeps) {
   const eligibleTasks = deps.state.tasksCache.filter((entry) => entry.projectId === projectId && entry.status === 'todo' && entry.agent);
   eligibleTasks.sort((a, b) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime());
+  const startedRuns: AgentRun[] = [];
 
   for (const nextTask of eligibleTasks) {
     const latestRun = getLatestAgentRunForTask(nextTask.id);
@@ -399,16 +411,31 @@ export function continueTaskQueueForProject(projectId: string, deps: ApiRouteDep
 
     const result = triggerTaskAgent(nextTask, deps, 'queue continuation');
     if (result.triggered) {
-      saveTasks(deps.state);
-      return result;
+      startedRuns.push(result.run);
+      continue;
     }
 
     const blockedResult = result as TriggerTaskAgentFailure;
-    appendTaskLog(nextTask, `Queue continuation skipped: ${blockedResult.reason}`, 'update');
+    if (blockedResult.code !== 'AGENT_ALREADY_RUNNING') {
+      appendTaskLog(nextTask, `Queue continuation skipped: ${blockedResult.reason}`, 'update');
+    }
   }
 
   saveTasks(deps.state);
-  return { triggered: false, reason: 'No eligible todo task could be started.' };
+  if (startedRuns.length > 0) {
+    return {
+      triggered: true,
+      reason: `Started ${startedRuns.length} eligible task(s) for project ${projectId}.`,
+      run: startedRuns[0],
+      runs: startedRuns,
+    } satisfies ContinueTaskQueueResult;
+  }
+  const activeSummaries = listActiveRunSummariesForProject(projectId);
+  if (activeSummaries.length > 0) {
+    const agentList = activeSummaries.map((summary) => `${summary.agent}:${summary.runId}`).join(', ');
+    return { triggered: false, reason: `No eligible todo task could be started. Active agent runs: ${agentList}.` } satisfies ContinueTaskQueueResult;
+  }
+  return { triggered: false, reason: 'No eligible todo task could be started.' } satisfies ContinueTaskQueueResult;
 }
 
 export function triggerTaskAgent(task: any, deps: ApiRouteDeps, routeLabel: string, retryOfRunId?: string | null): TriggerTaskAgentResult {
@@ -437,20 +464,26 @@ export function triggerTaskAgent(task: any, deps: ApiRouteDeps, routeLabel: stri
   }
   const launchPlan = preflight.launchPlan;
 
-  const activeTaskRun = findActiveRunByTaskId(task.id, task.agent);
+  const activeTaskRun = getActiveRunForTask(task.id);
   if (activeTaskRun) {
     return {
       triggered: false,
       code: 'TASK_ALREADY_RUNNING',
-      reason: `${task.agent} is already running for this task.`,
+      reason: `${activeTaskRun.agent} is already running for this task.`,
       run: activeTaskRun,
     };
   }
 
-  const activeProjectRun = getActiveRunForProject(task.projectId);
-  if (activeProjectRun && activeProjectRun.taskId !== task.id) {
-    deps.writeAgentLog('INFO', `Agent already busy for project=${task.projectId}, skipping trigger for task=${task.id}`);
-    return { triggered: false, code: 'PROJECT_ALREADY_RUNNING', reason: `Project already has active run ${activeProjectRun.id}.` };
+  const activeAgentRun = getActiveRunForProjectAndAgent(task.projectId, task.agent);
+  if (activeAgentRun && activeAgentRun.taskId !== task.id) {
+    deps.writeAgentLog('INFO', `Assigned agent already busy for project=${task.projectId} agent=${task.agent}, queueing task=${task.id}`);
+    appendTaskLog(task, buildSameAgentBusyMessage(task, activeAgentRun), 'update');
+    return {
+      triggered: false,
+      code: 'AGENT_ALREADY_RUNNING',
+      reason: `${task.agent} already has active run ${activeAgentRun.id}.`,
+      run: activeAgentRun,
+    };
   }
 
   const run = createAgentRun({
@@ -631,7 +664,9 @@ function maybeTriggerTaskAgent(task: any, previousTaskOrStatus: any, deps: ApiRo
   if (!result.triggered) {
     const blockedResult = result as TriggerTaskAgentFailure;
     deps.writeAgentLog('INFO', `Skipped agent trigger for task=${task.id}: ${blockedResult.reason}`);
-    appendTaskLog(task, `Auto Work blocked before launch: ${blockedResult.reason}`, 'update');
+    if (blockedResult.code !== 'AGENT_ALREADY_RUNNING') {
+      appendTaskLog(task, `Auto Work blocked before launch: ${blockedResult.reason}`, 'update');
+    }
   }
   return result;
 }
@@ -816,6 +851,11 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
 
     const reason = typeof req.body?.reason === 'string' && req.body.reason.trim() ? req.body.reason.trim() : 'cancelled manually';
     const cancelledCount = cancelActiveRunsForTask(task.id, reason);
+    if (cancelledCount > 0) {
+      task.status = 'todo';
+      task.updatedAt = new Date().toISOString();
+      appendTaskLog(task, `Agent run cancelled: ${reason}`, 'update');
+    }
     applyRunSummaryToTask(task, getLatestAgentRunForTask(task.id));
     saveTasks(deps.state);
     return res.json({ success: true, cancelledCount, task, runs: listAgentRunsForTask(task.id) });

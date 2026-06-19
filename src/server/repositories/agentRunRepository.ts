@@ -24,6 +24,14 @@ export interface AgentRun {
   triggerSource?: string | null;
 }
 
+export interface ActiveProjectAgentRunSummary {
+  runId: string;
+  taskId: string;
+  agent: string;
+  status: AgentRunStatus;
+  createdAt: string;
+}
+
 type CreateAgentRunInput = Pick<AgentRun, 'taskId' | 'projectId' | 'agent'> & Partial<Pick<AgentRun, 'model' | 'effort' | 'promptPath' | 'contextRef' | 'logPath' | 'retryOfRunId' | 'triggerSource'>>;
 
 function createRunId() {
@@ -109,6 +117,33 @@ export function getActiveRunForProject(projectId: string): AgentRun | null {
     ORDER BY createdAt ASC
     LIMIT 1
   `).get(projectId, ...ACTIVE_AGENT_RUN_STATUSES));
+}
+
+export function getActiveRunForProjectAndAgent(projectId: string, agent: string): AgentRun | null {
+  return normalizeRun(db.prepare(`
+    SELECT * FROM agent_runs
+    WHERE projectId = ? AND agent = ? AND status IN (${ACTIVE_AGENT_RUN_STATUSES.map(() => '?').join(',')})
+    ORDER BY createdAt ASC
+    LIMIT 1
+  `).get(projectId, agent, ...ACTIVE_AGENT_RUN_STATUSES));
+}
+
+export function listActiveRunsForProject(projectId: string): AgentRun[] {
+  return db.prepare(`
+    SELECT * FROM agent_runs
+    WHERE projectId = ? AND status IN (${ACTIVE_AGENT_RUN_STATUSES.map(() => '?').join(',')})
+    ORDER BY createdAt ASC
+  `).all(projectId, ...ACTIVE_AGENT_RUN_STATUSES) as AgentRun[];
+}
+
+export function listActiveRunSummariesForProject(projectId: string): ActiveProjectAgentRunSummary[] {
+  return listActiveRunsForProject(projectId).map((run) => ({
+    runId: run.id,
+    taskId: run.taskId,
+    agent: run.agent,
+    status: run.status,
+    createdAt: run.createdAt,
+  }));
 }
 
 export function updateAgentRunStatus(

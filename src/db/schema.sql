@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS agent_runs (
 
 CREATE INDEX IF NOT EXISTS idx_agent_runs_task_status ON agent_runs(taskId, status);
 CREATE INDEX IF NOT EXISTS idx_agent_runs_project_status ON agent_runs(projectId, status);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_project_agent_status ON agent_runs(projectId, agent, status);
 
 CREATE TABLE IF NOT EXISTS counters (
   prefix TEXT PRIMARY KEY,

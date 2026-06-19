@@ -107,6 +107,12 @@ const apiSpecs = [
     path: '/api/projects',
     description: 'เรียกดูรายการโปรเจกต์ทั้งหมดในระบบ',
     response: 'JSON Array ของ Projects ทั้งหมด',
+    responseExample: `[
+  {
+    "id": "123",
+    "name": "Example"
+  }
+]`,
     example: 'fetch(\'/api/projects\').then(res => res.json());'
   },
   {
@@ -115,6 +121,10 @@ const apiSpecs = [
     description: 'สร้างโปรเจกต์ใหม่เพื่อใช้ผูกกับการ์ดงาน',
     payload: '{\n  "name": "ชื่อโปรเจกต์",\n  "repoUrl": "URL ของ Repository",\n  "description": "รายละเอียดเพิ่มเติม"\n}',
     response: 'JSON Object ของ Project ที่สร้างเสร็จ',
+    responseExample: `{
+  "id": "proj-123",
+  "name": "My Project"
+}`,
     example: 'fetch(\'/api/projects\', {\n  method: \'POST\',\n  headers: { \'Content-Type\': \'application/json\' },\n  body: JSON.stringify({ name: \'DevFlow\', repoUrl: \'https://github.com/my/repo\' })\n}).then(res => res.json());'
   },
   {
@@ -123,6 +133,10 @@ const apiSpecs = [
     description: 'อัปเดตข้อมูลโปรเจกต์ เช่น เปลี่ยนชื่อ หรือ URL',
     payload: '{\n  "name": "DevFlow V2",\n  "repoUrl": "https://github.com/my/repo2"\n}',
     response: 'JSON Object ของ Project ที่อัปเดตเสร็จ',
+    responseExample: `{
+  "id": "proj-123",
+  "name": "My Project"
+}`,
     example: 'fetch(\'/api/projects/project-123\', {\n  method: \'PUT\',\n  headers: { \'Content-Type\': \'application/json\' },\n  body: JSON.stringify({ name: \'DevFlow V2\' })\n}).then(res => res.json());'
   },
   {
@@ -130,6 +144,10 @@ const apiSpecs = [
     path: '/api/projects/:id',
     description: 'ลบโปรเจกต์พร้อมตั๋วงานที่ผูกกับโปรเจกต์นั้นอย่างถาวร',
     response: '{ "success": true, "removedId": "project-id" }',
+    responseExample: `{
+  "success": true,
+  "removedId": "project-123"
+}`,
     example: 'fetch(\'/api/projects/project-123\', {\n  method: \'DELETE\'\n}).then(res => res.json());'
   },
   {
@@ -138,6 +156,12 @@ const apiSpecs = [
     description: 'สร้างตั๋วงานเดี่ยว หรือนำเข้าการ์ดแบบกลุ่ม (Bulk Import) รองรับการสร้างตั๋วแยกย่อย (เช่น Frontend/Backend split) จาก Jira ใบเดียว',
     payload: '{\n  "projectId": "UUID ของโปรเจกต์ (Required สำหรับ Raw API. หากใช้ MCP tool สามารถส่ง repo/projectName แทนได้)",\n  "tasks": [\n    {\n      "title": "Backend API",\n      "tags": ["backend"]\n    },\n    {\n      "title": "Frontend UI",\n      "tags": ["frontend"]\n    }\n  ]\n}',
     response: 'JSON Object แสดงสถิติจำนวน { success: true, createdCount: number, updatedCount: number, tasks: Array }',
+    responseExample: `{
+  "success": true,
+  "createdCount": 1,
+  "updatedCount": 0,
+  "tasks": []
+}`,
     example: 'fetch(\'/api/tasks\', {\n  method: \'POST\',\n  headers: { \'Content-Type\': \'application/json\' },\n  body: JSON.stringify({\n    projectId: \'project-uuid-123\',\n    tasks: [\n      { title: \'BE: Add API\' },\n      { title: \'FE: Call API\' }\n    ]\n  })\n}).then(res => res.json());'
   },
   {
@@ -146,6 +170,12 @@ const apiSpecs = [
     description: 'อัปเดตและสร้างบันทึกการ์ดงานพร้อมกันแบบกลุ่ม (Batch List Update/Upsert)',
     payload: '{\n  "projectId": "UUID ของโปรเจกต์ (Required สำหรับ Raw API)",\n  "tasks": [\n    {\n      "id": "task-old (ใส่กรณีต้องการแก้ใบเดิม)",\n      "title": "ชื่องานอัปเดต"\n    }\n  ]\n}',
     response: 'JSON Object ยืนยันสถานะการอัปเดตแบบกลุ่ม { success: true, createdCount: number, updatedCount: number, tasks: Array }',
+    responseExample: `{
+  "success": true,
+  "createdCount": 0,
+  "updatedCount": 1,
+  "tasks": []
+}`,
     example: 'fetch(\'/api/tasks/batch\', {\n  method: \'POST\',\n  headers: { \'Content-Type\': \'application/json\' },\n  body: JSON.stringify({\n    projectId: \'project-uuid-123\',\n    tasks: [\n      { title: \'Task 1 via outer POST batch\' },\n      { id: \'task-1\', status: \'done\' }\n    ]\n  })\n}).then(res => res.json());'
   },
   {
@@ -154,6 +184,12 @@ const apiSpecs = [
     description: 'เขียนและอัปเดตบันทึกการ์ดงานพร้อมกันแบบกลุ่ม (Batch List Update/Upsert) - พฤติกรรมเหมือน /api/tasks/batch',
     payload: '{\n  "projectId": "UUID ของโปรเจกต์ (Required สำหรับ Raw API)",\n  "tasks": [\n    {\n      "id": "task-old (ใส่กรณีต้องการแก้ใบเดิม)",\n      "title": "ชื่องานอัปเดต"\n    }\n  ]\n}',
     response: 'JSON Object ยืนยันสถานะการอัปเดตแบบกลุ่ม { success: true, createdCount: number, updatedCount: number, tasks: Array }',
+    responseExample: `{
+  "success": true,
+  "createdCount": 0,
+  "updatedCount": 1,
+  "tasks": []
+}`,
     example: 'fetch(\'/api/tasks\', {\n  method: \'PUT\',\n  headers: { \'Content-Type\': \'application/json\' },\n  body: JSON.stringify({\n    projectId: \'project-uuid-123\',\n    tasks: [\n      { title: \'Task 1 via outer PUT\' },\n      { id: \'task-1\', status: \'done\' }\n    ]\n  })\n}).then(res => res.json());'
   },
   {
@@ -162,6 +198,10 @@ const apiSpecs = [
     description: 'ย้ายสถานะเลนการทำงานของการ์ดชิ้นหนึ่งๆ (ไม่ต้องส่งข้อมูลชิ้นเต็มก้อน)',
     payload: '{\n  "status": "backlog" | "todo" | "in-progress" | "ready-for-review" | "done"\n}',
     response: 'JSON Object สถานะตอบกลับ พร้อม Object ของ Task ที่อัปเดตแล้ว',
+    responseExample: `{
+  "id": "task-123",
+  "status": "todo"
+}`,
     example: 'fetch(\'/api/tasks/task-1/move\', {\n  method: \'POST\',\n  headers: { \'Content-Type\': \'application/json\' },\n  body: JSON.stringify({ status: \'in-progress\' })\n}).then(res => res.json());'
   },
   {
@@ -170,6 +210,10 @@ const apiSpecs = [
     description: 'สลับสถานะความสำเร็จของข้อกำหนด Checklist item ย่อยระบุโดย ID (ไม่ต้องส่งข้อมูลชิ้นเต็มก้อน)',
     payload: '{\n  "checklistId": "ชื่อรหัสของเช็คลิสต์ย่อยเดี่ยวๆ (Required Example: step-1-1)"\n}',
     response: 'JSON Object ของ Task บรรจุสถานะ Checklist ใหม่',
+    responseExample: `{
+  "id": "task-123",
+  "status": "todo"
+}`,
     example: 'fetch(\'/api/tasks/task-1/checklist/toggle\', {\n  method: \'POST\',\n  headers: { \'Content-Type\': \'application/json\' },\n  body: JSON.stringify({ checklistId: \'step-1-1\' })\n}).then(res => res.json());'
   },
   {
@@ -178,6 +222,10 @@ const apiSpecs = [
     description: 'มอบหมาย Agent ผู้รับผิดชอบ หรือกำหนด AI Spec และพละกำลังความเพียรประมวลผลเดี่ยวๆ ทันที',
     payload: `{\n  "agent": "Codex" | "Antigravity" | "Claude" (Optional),\n  "model": "ชื่อโมเดล AI Spec (Optional)",\n  "effort": ${getAgentCatalogHelp()} (Optional)\n}`,
     response: 'JSON Object ของ Task อัปเดตข้อมูลผู้รับมอบหมายเรียบร้อยแล้ว',
+    responseExample: `{
+  "id": "task-123",
+  "status": "todo"
+}`,
     example: `// Valid examples:\n${getValidAgentModelEffortExamples().map(e => `// ${e}`).join('\n')}\n\n// Invalid examples:\n${getInvalidAgentModelEffortExamples().map(e => `// ${e}`).join('\n')}\n\nfetch('/api/tasks/task-1/assign', {\n  method: 'POST',\n  headers: { 'Content-Type': 'application/json' },\n  body: JSON.stringify({\n    agent: 'Codex',\n    model: 'GPT-5.4',\n    effort: 'xhigh'\n  })\n}).then(res => res.json());`
   },
   {
@@ -185,6 +233,12 @@ const apiSpecs = [
     path: '/api/tasks',
     description: 'เรียกดูรายการการ์ดงาน (Tickets) ทั้งหมดในระบบ sandbox',
     response: 'JSON Array ของ Tasks ทั้งหมด',
+    responseExample: `[
+  {
+    "id": "123",
+    "name": "Example"
+  }
+]`,
     example: 'fetch(\'/api/tasks\')\n  .then(res => res.json())\n  .then(data => console.log(data));'
   },
   {
@@ -193,6 +247,10 @@ const apiSpecs = [
     description: 'อัปเดตข้อมูลย่อยของการ์ดงาน เช่น เปลี่ยนสถานะเลน, แก้ไข checklist, เพิ่ม logs หรือบันทึกโน้ต',
     payload: `{\n  "status": "in-progress",\n  "priority": "high",\n  "checklist": [...],\n  "agent": "Codex" | "Antigravity" | "Claude" (Optional),\n  "model": "ชื่อโมเดล AI Spec (Optional)",\n  "effort": ${getAgentCatalogHelp()} (Optional),\n  "logs": [...]\n}`,
     response: 'JSON Object ของ Task ที่ผ่านการอัปเดตเรียบร้อย',
+    responseExample: `{
+  "id": "task-123",
+  "status": "todo"
+}`,
     example: 'fetch(\'/api/tasks/task-1\', {\n  method: \'PUT\',\n  headers: { \'Content-Type\': \'application/json\' },\n  body: JSON.stringify({ status: \'done\' })\n}).then(res => res.json());'
   },
   {
@@ -200,6 +258,10 @@ const apiSpecs = [
     path: '/api/tasks/:id',
     description: 'ลบการ์ดงานชิ้นนั้นๆ อ้างอิงจาก ID อย่างถาวร',
     response: '{ "success": true, "removed": { ... } }',
+    responseExample: `{
+  "success": true,
+  "removed": { "id": "task-123" }
+}`,
     example: 'fetch(\'/api/tasks/task-1\', {\n  method: \'DELETE\'\n}).then(res => res.json());'
   },
   {
@@ -207,6 +269,10 @@ const apiSpecs = [
     path: '/api/schema/task',
     description: 'ดึงโครงสร้าง JSON Schema ของข้อมูลการ์ดงาน (Task) ที่ระบุ Type ของทุกฟิลด์ และ Enum ค่อนข้างครบถ้วน',
     response: 'JSON Schema Definition Object',
+    responseExample: `{
+  "type": "object",
+  "properties": {}
+}`,
     example: 'fetch(\'/api/schema/task\').then(res => res.json()).then(schema => console.log(schema));'
   },
   {
@@ -214,6 +280,10 @@ const apiSpecs = [
     path: '/api/settings',
     description: 'ดึงการตั้งค่าของแอปพลิเคชันและผู้ใช้ (เช่น AI Model, API Keys)',
     response: 'JSON Object แสดง Settings ทั้งหมด',
+    responseExample: `{
+  "aiModel": "Antigravity",
+  "apiKey": "sk-..."
+}`,
     example: 'fetch(\'/api/settings\').then(res => res.json());'
   },
   {
@@ -222,6 +292,10 @@ const apiSpecs = [
     description: 'บันทึกและอัปเดตการตั้งค่าแอปพลิเคชัน',
     payload: '{\n  "aiModel": "Antigravity",\n  "apiKey": "sk-1234"\n}',
     response: 'JSON Object ของ Settings ที่อัปเดตแล้ว',
+    responseExample: `{
+  "aiModel": "Antigravity",
+  "apiKey": "sk-..."
+}`,
     example: 'fetch(\'/api/settings\', {\n  method: \'PUT\',\n  headers: { \'Content-Type\': \'application/json\' },\n  body: JSON.stringify({ aiModel: \'Antigravity\' })\n}).then(res => res.json());'
   },
   {
@@ -230,6 +304,10 @@ const apiSpecs = [
     description: 'อัปโหลดรูปภาพเพื่อนำไปใช้แนบในการ์ดงาน',
     payload: 'FormData (multipart/form-data) บรรจุไฟล์รูปภาพ',
     response: '{ "success": true, "url": "..." }',
+    responseExample: `{
+  "success": true,
+  "url": "/api/static/images/img-123.png"
+}`,
     example: 'const formData = new FormData();\nformData.append("image", fileBlob);\nfetch(\'/api/images/upload\', {\n  method: \'POST\',\n  body: formData\n}).then(res => res.json());'
   },
   {
@@ -237,6 +315,9 @@ const apiSpecs = [
     path: '/api/tasks/:id/prompt',
     description: 'ดึงข้อมูล Prompt พื้นฐานหรือ System Prompt สำหรับการ์ดงานนี้เพื่อส่งให้ AI',
     response: 'JSON Object บรรจุ String ของ Prompt',
+    responseExample: `{
+  "prompt": "You are an AI..."
+}`,
     example: 'fetch(\'/api/tasks/task-1/prompt\').then(res => res.json());'
   },
   {
@@ -244,6 +325,7 @@ const apiSpecs = [
     path: '/api/tasks/:id/agent-runs/:runId/log',
     description: 'ดึงข้อมูลบันทึกการทำงาน (Log) ของ Agent ที่รันผ่าน Task นี้',
     response: 'Text String แสดง Log การทำงาน',
+    responseExample: `[INFO] Server started...\n[WARN] Missing token`,
     example: 'fetch(\'/api/tasks/task-1/agent-runs/run-123/log\').then(res => res.text());'
   }
 ];
@@ -288,14 +370,7 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
       <div className="fixed inset-0" onClick={onClose} />
 
       <div className="bg-[#fcfaf5] dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] w-full max-w-5xl rounded-3xl shadow-2xl relative z-10 overflow-hidden flex font-sans h-[85vh]">
-        {/* Close button absolute top right */}
-        <button
-          type="button"
-          onClick={onClose}
-          className="absolute top-4 right-4 z-50 text-gray-400 dark:text-[#b8ab9f] hover:text-red-500 p-1.5 rounded-full hover:bg-white dark:hover:bg-[#292119]/60 transition-all cursor-pointer"
-        >
-          <X size={17} />
-        </button>
+
         
         {/* Left Sidebar Pane */}
         <div className="w-64 bg-[#f5eedf]/60 dark:bg-[#1e1914]/60 backdrop-blur-md border-r border-[#ebdcb9] dark:border-[#584a3b] flex flex-col z-20 shadow-[4px_0_24px_rgba(0,0,0,0.02)] shrink-0">
@@ -349,18 +424,31 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
         </div>
         
         {/* Right Content Pane */}
-        <div className="flex-1 p-6 overflow-y-auto scrollbar-thin text-xs text-[#5c493c] dark:text-[#f3eadf]">
-          {selectedItemId === 'schema' ? (
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <h3 className="text-xs font-bold text-[#3c2a1a] dark:text-[#f3eadf] flex items-center gap-2">
-                  <span className="w-1.5 h-3 bg-[#ebdcb9] dark:bg-[#584a3b] rounded-full inline-block" />
-                  โครงสร้างข้อมูล JSON สำหรับนำเข้า/สำรองข้อมูล (Import Template)
-                </h3>
-                <p className="text-[11px] text-[#7a6455] dark:text-[#f3eadf] leading-relaxed font-sans">
-                  คุณสามารถแก้ไขรายการงานแบบกลุ่ม (Batch) เพื่อจัดการเอกสารล่วงหน้า บันทึกเป็นไฟล์ <code className="bg-[#f5eedf] dark:bg-[#1e1914] px-1.5 py-0.5 rounded border border-[#ebdcb9] dark:border-[#584a3b] font-mono text-[#aa7233] dark:text-[#f3eadf] text-[10px]">.json</code> แล้วนำเข้าผ่านปุ่ม <strong className="text-[#3c2a1a] dark:text-[#f3eadf]">Restore</strong> ด้านบนเพื่อเชื่อมโยงกับ API ทันที
-                </p>
-              </div>
+        <div className="flex-1 flex flex-col bg-[#fcfaf5] dark:bg-[#1e1914] min-w-0">
+          <div className="px-6 py-5 border-b border-[#ebdcb9]/60 dark:border-[#584a3b]/60 flex items-center justify-between shrink-0">
+            <h3 className="text-xs font-bold text-[#3c2a1a] dark:text-[#f3eadf] flex items-center gap-2">
+              <span className="w-1.5 h-3 bg-[#ebdcb9] dark:bg-[#584a3b] rounded-full inline-block" />
+              {selectedItemId === 'schema' 
+                ? 'โครงสร้างข้อมูล JSON สำหรับนำเข้า/สำรองข้อมูล (Import Template)'
+                : 'ข้อกำหนดและรายละเอียด Sandbox REST API (Active Specification)'}
+            </h3>
+            <button
+              type="button"
+              onClick={onClose}
+              className="text-gray-400 dark:text-[#b8ab9f] hover:text-red-500 p-1.5 rounded-full hover:bg-white dark:hover:bg-[#292119]/60 transition-all cursor-pointer -my-1.5 -mr-1.5"
+            >
+              <X size={17} />
+            </button>
+          </div>
+          
+          <div className="flex-1 p-6 overflow-y-auto scrollbar-thin text-xs text-[#5c493c] dark:text-[#f3eadf]">
+            {selectedItemId === 'schema' ? (
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <p className="text-[11px] text-[#7a6455] dark:text-[#f3eadf] leading-relaxed font-sans">
+                    คุณสามารถแก้ไขรายการงานแบบกลุ่ม (Batch) เพื่อจัดการเอกสารล่วงหน้า บันทึกเป็นไฟล์ <code className="bg-[#f5eedf] dark:bg-[#1e1914] px-1.5 py-0.5 rounded border border-[#ebdcb9] dark:border-[#584a3b] font-mono text-[#aa7233] dark:text-[#f3eadf] text-[10px]">.json</code> แล้วนำเข้าผ่านปุ่ม <strong className="text-[#3c2a1a] dark:text-[#f3eadf]">Restore</strong> ด้านบนเพื่อเชื่อมโยงกับ API ทันที
+                  </p>
+                </div>
 
               <div className="space-y-1.5 bg-[#ffffff] dark:bg-[#1e1914] border border-[#f5ecd4] dark:border-[#584a3b] rounded-2xl overflow-hidden shadow-2xs">
                 <div className="bg-[#f5eedf]/60 dark:bg-[#1e1914]/60 px-4 py-2 border-b border-[#f5ecd4] dark:border-[#584a3b] flex justify-between items-center text-[10px]">
@@ -426,10 +514,6 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
           ) : (
             <div key={selectedItemId} className="space-y-6 animate-fade-in">
               <div className="space-y-2">
-                <h3 className="text-xs font-bold text-[#3c2a1a] dark:text-[#f3eadf] flex items-center gap-2">
-                  <span className="w-1.5 h-3 bg-[#ebdcb9] dark:bg-[#584a3b] rounded-full inline-block" />
-                  ข้อกำหนดและรายละเอียด Sandbox REST API (Active Specification)
-                </h3>
                 <p className="text-[11px] text-[#7a6455] dark:text-[#f3eadf] leading-relaxed font-sans">
                   แอปพลิเคชันทำงานแบบ Sandbox Fullstack ร่วมกับ Node.js / Express Server ของหลังบ้านพอร์ต 3000 ด้านล่างนี้คือ API Endpoints ทั้งหมดที่คุณสามารถจำลองการส่ง HTTP Requests ไปเชื่อมต่อหรือจำลองพอร์ตเพื่อดูผลได้
                 </p>
@@ -477,9 +561,16 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
                           </div>
                         )}
 
-                        <div>
+                                                <div>
                           <p className="text-[#8c7463] dark:text-[#f3eadf] font-bold text-[9px] uppercase tracking-wider mb-0.5">Expected Response:</p>
                           <p className="text-[#554030] dark:text-[#f3eadf] bg-[#fffcf7] dark:bg-[#1e1914] px-2.5 py-1 rounded-lg border border-[#f5ecd4] dark:border-[#584a3b] font-semibold">{api.response}</p>
+                          {(api as any).responseExample && (
+                            <div className="mt-1.5">
+                              <pre className="p-2.5 bg-[#fffcf7] dark:bg-[#1e1914] border border-[#f5ecd4] dark:border-[#584a3b] rounded-xl overflow-x-auto text-[10px] text-[#aa7233] dark:text-[#f3eadf] leading-relaxed max-h-36 scrollbar-thin">
+                                <code>{(api as any).responseExample}</code>
+                              </pre>
+                            </div>
+                          )}
                         </div>
 
                         <div>
@@ -494,6 +585,7 @@ export default function JsonTemplateModal({ onClose }: JsonTemplateModalProps) {
               </div>
             </div>
           )}
+          </div>
         </div>
       </div>
     </div>

@@ -23,17 +23,16 @@ Instead, extract the useful information from Jira, attachments, comments, subtas
 
 When applicable:
 
-1. Read Jira issue.
-2. Read Jira comments.
-3. Read subtasks and linked issues if they affect scope.
-4. Read attachments if they contain screenshots, videos, logs, designs, wording, or reproduction evidence.
+1. For Jira-originated cards, use `get_jira_authoring_bundle` first when available.
+2. Read individual Jira issue/comments/subtasks/attachments only when the bundle is unavailable or missing a specific detail.
+3. Read attachments if they contain screenshots, videos, logs, designs, wording, or reproduction evidence not already summarized by the bundle.
 5. Inspect the repo.
 6. Search for affected screens, strings, APIs, mappers, models, routes, tests, and existing patterns.
 7. Read actual target files, not only search snippets.
 8. Check whether a DevFlow card already exists for the Jira key.
 9. Create or update the card only after requirement and repo context are understood.
 
-For Jira-originated cards, use `get_jira_authoring_bundle` first when available. It returns the issue, comments, attachment metadata, linked issue hints, and existing DevFlow duplicates in one packet. Use individual Jira proxy tools only when the bundle is missing a specific detail.
+`get_jira_authoring_bundle` returns the issue, comments, attachment metadata, linked issue hints, and existing DevFlow duplicates in one packet. Use individual Jira proxy tools only when the bundle is missing a specific detail.
 
 ## Bounded repo inspection
 
@@ -202,6 +201,33 @@ Use child cards for:
 - minimal overlap with sibling files.
 
 Frontend/backend should be split whenever cleanly separable. Use `category: "general"` only when separation is not clean, and explain why in `reasoning`.
+
+## Frontend/backend split rule
+
+Create separate cards when:
+
+- backend API, schema, DTO, mapper, repository, persistence, or data contract work can be changed and verified independently from UI,
+- UI can be implemented against an existing, mocked, or clearly defined contract,
+- backend behavior can be verified with API/unit/data tests without launching UI,
+- frontend and backend work touch different layers, owners, or high-conflict files,
+- parallel child work would reduce risk or keep each card focused.
+
+For Android projects:
+
+- `frontend` means Compose, XML, Fragment/Activity hosting, ViewModel UI state, navigation, UI validation, copy, visual state, and screen-level behavior.
+- `backend` means API client, DTO/model, mapper, repository, local persistence/cache, feature flags/config, and data/business rule plumbing.
+- `general` means parent orchestration, cross-layer integration that cannot be split safely, docs/config, or one tiny atomic change that must edit both sides together.
+
+Use a parent card when one Jira item spans frontend and backend. Parent owns contract, child boundaries, integration risks, and final verification. Child cards must state their boundary and must not duplicate sibling target files unless unavoidable.
+
+Keep one general card only when:
+
+- the change is a small inseparable cross-layer helper,
+- the behavior cannot be tested or shipped in frontend/backend slices,
+- sequencing requires one atomic commit,
+- splitting would create fake boundaries or more risk than clarity.
+
+If keeping one combined card, `reasoning` must say why it was not split and `repoContext` must identify both frontend and backend touch points.
 
 ## Branch rule
 

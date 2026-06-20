@@ -105,9 +105,9 @@ Default: `backlog`
 ```
 
 Use:
-- `frontend` for UI/client work,
-- `backend` for server/infrastructure work,
-- `general` for cross-cutting, docs, orchestration, or work that cannot be cleanly separated.
+- `frontend` for UI/client work. In Android projects: Compose, XML, Fragment/Activity hosting, ViewModel UI state, navigation, UI validation, copy, visual state, and screen behavior.
+- `backend` for server/infrastructure/data work. In Android projects: API client, DTO/model, mapper, repository, local persistence/cache, feature flags/config, and data/business rule plumbing.
+- `general` for cross-cutting, docs, orchestration, parent cards, or work that cannot be cleanly separated.
 
 Do not put `frontend`, `backend`, or `general` in tags.
 
@@ -353,7 +353,7 @@ If missing, infer from user impact and explain in `reasoning`.
   "reasoning": "Bounded change with clear target files.",
   "acceptanceCriteria": "- Expected behavior passes.\n- Existing related behavior is unchanged.",
   "verification": "- Run targeted test/build command.\n- Manually verify the affected flow.",
-  "repoContext": "Summarize concrete repo findings here.",
+  "repoContext": "Implementation map:\n- File: LikelyFile.kt\n  Class/function: LikelyClass / likelyFunction\n  Current behavior: describe the current code path found during targeted inspection.\n  Expected change: describe the smallest safe edit location.\n\nOut of scope:\n- Do not change unrelated flows or sibling files.",
   "jiraKey": "QCA-0000",
   "repo": "https://github.com/org/repo",
   "sourceUrl": ""

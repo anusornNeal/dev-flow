@@ -49,7 +49,7 @@ Use this file only when examples are needed. Do not load it by default.
   "reasoning": "Bounded Android behavior fix with clear target files and regression tests.",
   "acceptanceCriteria": "- Start-job button is disabled when jobStartDate is after today.\n- Start-job button is enabled when jobStartDate is today.\n- Start-job button is enabled when jobStartDate is before today.\n- Existing non-start-job primary actions keep their current behavior.",
   "verification": "- Run targeted tests for JobStartActionDateRuleTest.\n- Run targeted tests for JobDetailActionMappingTest.\n- Manually verify Job Detail start-job button state for future, today, and past start dates.",
-  "repoContext": "Repo inspection summary goes here: affected mapper/helper/viewmodel/tests and related behaviors to preserve.",
+  "repoContext": "Implementation map:\n- File: JobStartActionDateRule.kt\n  Class/function: evaluateStartJobAvailability\n  Current behavior: accepted-job start date comparison can invert future/today/past enablement.\n  Expected change: make future jobStartDate disable start-job and today/past enable it.\n- File: JobDetailActionMapping.kt\n  Class/function: mapPrimaryAction\n  Current behavior: Job Detail primary action consumes the incorrect date rule.\n  Expected change: use the corrected helper without changing non-start-job actions.\n- File: JobStartActionDateRuleTest.kt\n  Class/function: future/today/past start-date cases\n  Current behavior: missing regression coverage for the inverted rule.\n  Expected change: add explicit future, today, and past cases.\n\nOut of scope:\n- Do not change finish-job, upload-document, or quotation actions unless they share the same incorrect helper.",
   "jiraKey": "QCA-3393",
   "repo": "https://github.com/org/repo",
   "sourceUrl": ""
@@ -105,7 +105,7 @@ Use this file only when examples are needed. Do not load it by default.
   "reasoning": "Parent owns architecture, child boundaries, branch integration, and final verification.",
   "acceptanceCriteria": "- Child task boundaries are clear.\n- Shared contracts are defined.\n- Final merged flow satisfies the Jira requirement.\n- No child branch conflicts remain unresolved.",
   "verification": "- Inspect each child branch before merge.\n- Run targeted build/test commands.\n- Manually verify final full flow after merge.",
-  "repoContext": "Parent-level repo findings, shared architecture, target package, risks, and integration constraints.",
+  "repoContext": "Implementation map:\n- File: JobDetailInfoTab.kt\n  Class/function: Details tab entry points\n  Current behavior: Details tab work spans multiple detail pages and shared attachment behavior.\n  Expected change: define child boundaries and shared contracts before implementation.\n- File: shared/AttachmentPreviewContract.kt (new)\n  Class/function: AttachmentPreviewContract\n  Current behavior: attachment open/share behavior is duplicated or undefined across child pages.\n  Expected change: define the shared contract for child implementation cards.\n\nChild boundaries:\n- Frontend child cards own individual screens/routes.\n- Backend/data child cards own API/model/mapper changes if needed.\n\nOut of scope:\n- Parent does not implement all child screens directly.",
   "jiraKey": "QCA-3242",
   "repo": "https://github.com/org/repo",
   "sourceUrl": ""
@@ -157,8 +157,143 @@ Use this file only when examples are needed. Do not load it by default.
   "reasoning": "New page with navigation and attachment behavior. Must stay aligned with parent contract.",
   "acceptanceCriteria": "- Site Info detail page opens from the expected entry point.\n- Customer remark is displayed when present.\n- Attachments render correctly.\n- Shared preview/open/share behavior is reused.",
   "verification": "- Navigate from Job Detail Details tab to Site Info.\n- Verify normal, empty, and attachment cases.\n- Open/share supported attachment types.\n- Return to Job Detail without navigation issues.",
-  "repoContext": "Child-specific repo findings and parent contract dependency.",
+  "repoContext": "Implementation map:\n- File: site_info/JobSiteInfoRoute.kt (new)\n  Class/function: JobSiteInfoRoute\n  Current behavior: Site Info detail route does not exist under the parent Details tab contract.\n  Expected change: create the route using the parent-defined navigation contract.\n- File: site_info/JobSiteInfoScreen.kt (new)\n  Class/function: JobSiteInfoScreen\n  Current behavior: customer remark and attachments are not rendered on a dedicated Site Info detail page.\n  Expected change: render remark and attachments using the parent-defined preview/open/share contract.\n\nOut of scope:\n- Do not redefine the shared attachment contract in this child card.",
   "jiraKey": "QCA-3242",
+  "repo": "https://github.com/org/repo",
+  "sourceUrl": ""
+}
+```
+
+## Frontend/backend split from one Jira
+
+Use this pattern when one Jira item needs both data contract work and UI work.
+
+Parent:
+
+```json
+{
+  "projectName": "dev-flow",
+  "title": "[QCA-3500] Define contract and integration for warranty badge on Job Detail",
+  "description": "Coordinate the warranty badge feature for Job Detail. Backend/data work provides the warranty eligibility field; frontend work renders the badge on Job Detail. Keep child work split so API/model changes can be tested independently from UI rendering.",
+  "status": "backlog",
+  "priority": "medium",
+  "branch": "qca-3500-warranty-badge-foundation",
+  "category": "general",
+  "tags": ["android", "job-detail", "foundation"],
+  "targetFiles": ["JobDetailWarrantyContract.kt (new)", "JobDetailResponse.kt", "JobDetailScreen.kt"],
+  "checklist": [
+    {
+      "id": "split-1",
+      "text": "Confirm backend/data and frontend child boundaries.",
+      "completed": false
+    },
+    {
+      "id": "split-2",
+      "text": "Create backend/data and frontend child cards with minimal target-file overlap.",
+      "completed": false
+    },
+    {
+      "id": "split-3",
+      "text": "Run final integrated verification after both children are complete.",
+      "completed": false
+    }
+  ],
+  "effort": "medium",
+  "model": "GPT-5.4 Mini",
+  "agent": "Codex",
+  "reasoning": "One Jira spans data contract and UI rendering, so split into backend and frontend child cards.",
+  "acceptanceCriteria": "- Backend/data and frontend child scopes are clear.\n- Integration behavior is verified after child work is merged.",
+  "verification": "- Review child outputs.\n- Verify Job Detail shows the badge only when the backend/data contract says eligible.",
+  "repoContext": "Implementation map:\n- File: JobDetailWarrantyContract.kt (new)\n  Class/function: JobDetailWarrantyContract\n  Current behavior: no shared contract describes warranty badge eligibility for child work.\n  Expected change: define the contract between backend/data and frontend child cards.\n- File: JobDetailResponse.kt\n  Class/function: warranty eligibility field\n  Current behavior: backend/data shape may not expose eligibility.\n  Expected change: backend child owns model/mapper/API handling.\n- File: JobDetailScreen.kt\n  Class/function: Job detail header/status area\n  Current behavior: UI does not render a warranty badge.\n  Expected change: frontend child owns rendering once data is available.\n\nOut of scope:\n- Parent does not implement backend or frontend child changes directly.",
+  "jiraKey": "QCA-3500",
+  "repo": "https://github.com/org/repo",
+  "sourceUrl": ""
+}
+```
+
+Backend child:
+
+```json
+{
+  "projectName": "dev-flow",
+  "parentId": "parent-task-id",
+  "title": "Add warranty eligibility data mapping for Job Detail",
+  "description": "Add the backend/data slice for the Job Detail warranty badge. Expose warranty eligibility through the existing Job Detail data path without changing UI rendering.",
+  "status": "backlog",
+  "priority": "medium",
+  "branch": "qca-3500-warranty-badge-foundation/data-contract",
+  "category": "backend",
+  "tags": ["android", "job-detail", "data"],
+  "targetFiles": ["JobDetailResponse.kt", "JobDetailMapper.kt", "JobDetailRepository.kt", "JobDetailMapperTest.kt"],
+  "checklist": [
+    {
+      "id": "data-1",
+      "text": "Confirm the existing Job Detail response/model/mapper path.",
+      "completed": false
+    },
+    {
+      "id": "data-2",
+      "text": "Map warranty eligibility into the domain/UI model using the parent contract.",
+      "completed": false
+    },
+    {
+      "id": "data-3",
+      "text": "Add mapper tests for eligible, not eligible, and missing-field cases.",
+      "completed": false
+    }
+  ],
+  "effort": "medium",
+  "model": "GPT-5.4 Mini",
+  "agent": "Codex",
+  "reasoning": "Backend/data child can be verified with mapper/data tests without UI work.",
+  "acceptanceCriteria": "- Warranty eligibility is available to Job Detail state.\n- Missing or false eligibility does not show as eligible.\n- Existing Job Detail fields remain unchanged.",
+  "verification": "- Run targeted mapper/repository tests.\n- Confirm frontend files are not changed in this child.",
+  "repoContext": "Implementation map:\n- File: JobDetailResponse.kt\n  Class/function: warranty eligibility DTO field\n  Current behavior: response model lacks or ignores warranty eligibility.\n  Expected change: add/confirm nullable-safe field handling.\n- File: JobDetailMapper.kt\n  Class/function: mapJobDetailResponse\n  Current behavior: domain/UI model does not receive warranty eligibility.\n  Expected change: map eligibility according to the parent contract.\n\nOut of scope:\n- Do not render the badge or edit JobDetailScreen.kt in this backend child.",
+  "jiraKey": "QCA-3500",
+  "repo": "https://github.com/org/repo",
+  "sourceUrl": ""
+}
+```
+
+Frontend child:
+
+```json
+{
+  "projectName": "dev-flow",
+  "parentId": "parent-task-id",
+  "title": "Render warranty badge on Job Detail",
+  "description": "Render the warranty badge on Job Detail using the eligibility value supplied by the backend/data child. Do not change API/model/mapper behavior in this frontend child.",
+  "status": "backlog",
+  "priority": "medium",
+  "branch": "qca-3500-warranty-badge-foundation/ui-badge",
+  "category": "frontend",
+  "tags": ["android", "job-detail", "ui"],
+  "targetFiles": ["JobDetailScreen.kt", "JobDetailViewModel.kt", "JobDetailScreenTest.kt"],
+  "checklist": [
+    {
+      "id": "ui-1",
+      "text": "Confirm where Job Detail header/status metadata is rendered.",
+      "completed": false
+    },
+    {
+      "id": "ui-2",
+      "text": "Render the badge only when warranty eligibility is true.",
+      "completed": false
+    },
+    {
+      "id": "ui-3",
+      "text": "Add UI/state tests for eligible and not eligible cases.",
+      "completed": false
+    }
+  ],
+  "effort": "medium",
+  "model": "GPT-5.4 Mini",
+  "agent": "Codex",
+  "reasoning": "Frontend child can be implemented against the parent data contract and verified with UI/state tests.",
+  "acceptanceCriteria": "- Badge appears only for eligible jobs.\n- Badge is absent for false or missing eligibility.\n- Existing Job Detail layout remains stable.",
+  "verification": "- Run targeted Job Detail UI/state tests.\n- Manually verify eligible and not eligible Job Detail states.",
+  "repoContext": "Implementation map:\n- File: JobDetailScreen.kt\n  Class/function: JobDetailHeader / status metadata area\n  Current behavior: no warranty badge is rendered.\n  Expected change: render the badge when eligibility is true.\n- File: JobDetailViewModel.kt\n  Class/function: Job Detail UI state mapping\n  Current behavior: UI state may not expose badge visibility.\n  Expected change: expose badge visibility from the parent contract value.\n\nOut of scope:\n- Do not edit API response, repository, or mapper files in this frontend child.",
+  "jiraKey": "QCA-3500",
   "repo": "https://github.com/org/repo",
   "sourceUrl": ""
 }

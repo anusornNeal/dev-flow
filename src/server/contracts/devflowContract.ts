@@ -124,7 +124,7 @@ function stripToolOnlyArgs(args: Record<string, any>, keys: string[]) {
   return copy;
 }
 
-export const DEVFLOW_CONTRACT_VERSION = '2026-06-20.1';
+export const DEVFLOW_CONTRACT_VERSION = '2026-06-20.2';
 
 export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   {
@@ -188,6 +188,27 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
     buildHttpRequest: (args) => ({
       method: 'GET',
       path: withQuery('/api/repo-inspection-index', args),
+    }),
+  },
+  {
+    name: 'get_jira_authoring_bundle',
+    description: 'Fetch one compact Jira issue packet for DevFlow card authoring: issue summary/description, comments, attachment metadata, related issue keys, existing local DevFlow duplicates, and next-step hints. Prefer this before calling multiple jira_get_* proxy tools.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        jiraKey: { type: 'string', description: 'Jira issue key, e.g. QCA-3435.' },
+        issueKey: { type: 'string', description: 'Alias for jiraKey.' },
+        key: { type: 'string', description: 'Alias for jiraKey.' },
+      },
+      required: ['jiraKey'],
+    },
+    outputSchema: { type: 'object' },
+    lightweight: true,
+    buildHttpRequest: (args) => ({
+      method: 'GET',
+      path: withQuery('/api/jira/authoring-bundle', {
+        jiraKey: args.jiraKey || args.issueKey || args.key,
+      }),
     }),
   },
   {

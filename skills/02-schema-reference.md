@@ -10,6 +10,7 @@ Confirm live schema with `Dev_Flow.get_schema` when available.
 
 Use these before writing implementation-ready cards:
 
+- `get_jira_authoring_bundle`: one-call Jira packet for issue summary, description, comments, attachment metadata, related issues, and existing DevFlow duplicate cards. Use it before individual Jira proxy tools.
 - `get_repo_inspection_index`: cached repo index for likely files, classes, composables, functions, routes, mappers, helpers, and tests. Use screen names, visible strings, Jira terms, or flow names as the query before broad file search.
 - `validate_task_quality`: preflight the card before `create_task` or `update_task`. It blocks implementation-ready cards that still depend on Jira/source links, lack focused `targetFiles`, or lack an `Implementation map` in `repoContext`.
 

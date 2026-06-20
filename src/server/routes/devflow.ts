@@ -8,6 +8,7 @@ import { getProjectStartContext } from '../services/projectStartContextService';
 import { getToolCallSummary } from '../services/mcpToolMonitor';
 import { getRepoInspectionIndex } from '../services/repoInspectionIndexService';
 import { validateTaskQuality } from '../services/taskQualityService';
+import { buildJiraAuthoringBundle } from '../services/jiraAuthoringBundleService';
 
 export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) {
   app.get('/api/capabilities', (_req, res) => {
@@ -102,6 +103,14 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
   app.post('/api/task-quality/validate', (req, res) => {
     try {
       return res.json(validateTaskQuality(req.body));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.get('/api/jira/authoring-bundle', async (req, res) => {
+    try {
+      return res.json(await buildJiraAuthoringBundle(deps.state, req.query as Record<string, any>));
     } catch (error) {
       return sendApiError(res, error);
     }

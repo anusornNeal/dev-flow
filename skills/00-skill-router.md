@@ -15,6 +15,7 @@ Load:
 - `02-schema-reference.md`
 
 Use:
+- `get_jira_authoring_bundle` first for Jira-originated card authoring.
 - `get_repo_inspection_index` before broad repo search when identifying target files/functions.
 - `validate_task_quality` before `create_task` or `update_task` for any implementation-ready card.
 

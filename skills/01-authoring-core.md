@@ -33,6 +33,8 @@ When applicable:
 8. Check whether a DevFlow card already exists for the Jira key.
 9. Create or update the card only after requirement and repo context are understood.
 
+For Jira-originated cards, use `get_jira_authoring_bundle` first when available. It returns the issue, comments, attachment metadata, linked issue hints, and existing DevFlow duplicates in one packet. Use individual Jira proxy tools only when the bundle is missing a specific detail.
+
 ## Bounded repo inspection
 
 Repo inspection is required for implementation-ready cards, but it must be targeted.

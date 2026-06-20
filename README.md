@@ -8,6 +8,7 @@ DevFlow is a local task board and agent orchestration app for managing projects,
 - Legacy JSON files are only migration inputs and backups, not the runtime source of truth.
 - On first SQLite startup, DevFlow can migrate old JSON data and keep `.bak` backups.
 - The app includes an MCP server layer for task/project operations used by agents and local tooling.
+- DevFlow Gateway centralizes external connectors (e.g., Jira, GitHub) into composite tools with idempotency and resource locking, reducing LLM reasoning rounds.
 
 ## Run Locally
 

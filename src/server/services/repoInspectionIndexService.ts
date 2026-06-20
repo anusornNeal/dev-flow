@@ -28,14 +28,20 @@ export function clearRepoInspectionIndexCache() {
   cache.clear();
 }
 
-function walkFiles(root: string, startPath: string, results: string[]) {
+function walkFiles(root: string, startPath: string, results: string[], signal?: AbortSignal) {
+  if (signal?.aborted) {
+    throw new Error('Operation aborted');
+  }
   if (results.length >= MAX_FILES) return;
   for (const entry of fs.readdirSync(startPath, { withFileTypes: true })) {
+    if (signal?.aborted) {
+      throw new Error('Operation aborted');
+    }
     if (results.length >= MAX_FILES) return;
     if (entry.name.startsWith('.') && !['.github'].includes(entry.name)) continue;
     const fullPath = path.join(startPath, entry.name);
     if (entry.isDirectory()) {
-      if (!SKIP_DIRS.has(entry.name)) walkFiles(root, fullPath, results);
+      if (!SKIP_DIRS.has(entry.name)) walkFiles(root, fullPath, results, signal);
       continue;
     }
     const extension = path.extname(entry.name).toLowerCase();
@@ -68,28 +74,32 @@ function extractSymbols(content: string, extension: string) {
   return Array.from(symbols);
 }
 
-function buildIndex(root: string, relativePath?: string): RepoIndexCacheEntry {
+function buildIndex(root: string, relativePath?: string, signal?: AbortSignal): RepoIndexCacheEntry {
   const basePath = resolveSafePath(root, relativePath || '.');
   const files: string[] = [];
-  walkFiles(root, basePath, files);
+  walkFiles(root, basePath, files, signal);
 
-  const entries = files.map((relativeFile) => {
+  const entries: RepoIndexEntry[] = [];
+  for (const relativeFile of files) {
+    if (signal?.aborted) {
+      throw new Error('Operation aborted');
+    }
     const fullPath = path.join(root, relativeFile);
     const stat = fs.statSync(fullPath);
     const extension = path.extname(relativeFile).toLowerCase();
     const content = stat.size <= MAX_FILE_BYTES ? fs.readFileSync(fullPath, 'utf8') : '';
-    return {
+    entries.push({
       path: relativeFile,
       extension,
       symbols: content ? extractSymbols(content, extension) : [],
       preview: content.split(/\r?\n/).slice(0, 12).join('\n'),
-    };
-  });
+    });
+  }
 
   return { root, generatedAt: Date.now(), entries };
 }
 
-function getOrBuildIndex(state: AppState, args: Record<string, any>) {
+function getOrBuildIndex(state: AppState, args: Record<string, any>, signal?: AbortSignal) {
   const root = resolveProjectRoot(state, args);
   const relativePath = typeof args.path === 'string' && args.path.trim() ? args.path.trim() : '.';
   const cacheKey = `${path.resolve(root)}::${relativePath}`;
@@ -97,7 +107,7 @@ function getOrBuildIndex(state: AppState, args: Record<string, any>) {
   if (cached && Date.now() - cached.generatedAt < CACHE_TTL_MS) {
     return { index: cached, cached: true };
   }
-  const index = buildIndex(root, relativePath);
+  const index = buildIndex(root, relativePath, signal);
   cache.set(cacheKey, index);
   return { index, cached: false };
 }
@@ -108,8 +118,8 @@ function scoreEntry(entry: RepoIndexEntry, queryTerms: string[]) {
   return queryTerms.reduce((score, term) => score + (haystack.includes(term) ? 1 : 0), 0);
 }
 
-export function getRepoInspectionIndex(state: AppState, args: Record<string, any>) {
-  const { index, cached } = getOrBuildIndex(state, args);
+export function getRepoInspectionIndex(state: AppState, args: Record<string, any>, signal?: AbortSignal) {
+  const { index, cached } = getOrBuildIndex(state, args, signal);
   const queryTerms = String(args.q || args.query || '')
     .toLowerCase()
     .split(/[^a-z0-9_ก-๙]+/i)

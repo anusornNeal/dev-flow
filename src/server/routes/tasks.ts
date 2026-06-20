@@ -12,6 +12,8 @@ import { appendAgentRunLog, buildAgentCompletionSummary, createAgentRunFiles, cr
 import { extractImages, extractDesignImages, findProjectByIdentifier, findTaskByIdentifier, getAgentTaskContext, normalizeAgentCompletionPayload, normalizeTaskCategoryAndTags, applyTaskCategoryAndTagsUpdate, renderTaskPrompt, resolveProjectIdFromRepo, validateAgentCompletionPayload, validateAgentParams, validateTaskPayload } from '../services/taskService';
 import { validateTaskQualityForMutation } from '../services/taskQualityService';
 import { createApiError, sendApiError } from '../services/api';
+import { draftTaskFromJiraBundle } from '../services/compositeAuthoringService';
+import { acquireLock, releaseLock, ResourceBusyError, withIdempotency, getIdempotencyResult, setIdempotencyResult, createPendingIdempotency, resolvePendingIdempotency, rejectPendingIdempotency } from '../services/lockAndIdempotencyService';
 import { validateEnum, validateString } from '../validation';
 import { getDevFlowAppRoot } from '../../lib/devFlowPaths';
 import { isValidTransition, getValidationErrorMessage } from '../../lib/statusTransitions';
@@ -239,6 +241,23 @@ function appendTaskLog(task: any, message: string, type: string = 'update') {
   task.logs = [...(task.logs || []), createTaskLogEntry(message, type)];
 }
 
+function taskRequiresManualEvidence(task: any) {
+  const haystack = [
+    task?.description,
+    task?.acceptanceCriteria,
+    task?.verification,
+    ...(Array.isArray(task?.targetFiles) ? task.targetFiles : []),
+  ].filter(Boolean).join(' ').toLowerCase();
+  return /evidence|prompt\.md|agent\.log/.test(haystack);
+}
+
+function taskHasManualEvidence(task: any) {
+  const messages = (task.logs || []).map((entry: any) => String(entry?.message || ''));
+  const hasPromptExcerpt = messages.some((message: string) => /prompt\.md/i.test(message));
+  const hasAgentLogExcerpt = messages.some((message: string) => /agent\.log/i.test(message));
+  return hasPromptExcerpt && hasAgentLogExcerpt;
+}
+
 function getChildReviewBlockers(task: any, deps: ApiRouteDeps) {
   const children = deps.state.tasksCache.filter((entry) => entry.parentId === task.id);
   if (children.length === 0) return [];
@@ -247,6 +266,10 @@ function getChildReviewBlockers(task: any, deps: ApiRouteDeps) {
   for (const child of children) {
     if (!['ready-for-review', 'done'].includes(child.status)) {
       blockers.push(`${child.displayId || child.id} is still ${child.status}.`);
+      continue;
+    }
+    if (taskRequiresManualEvidence(child) && !taskHasManualEvidence(child)) {
+      blockers.push(`${child.displayId || child.id} is missing visible prompt.md and agent.log evidence in task logs.`);
     }
   }
   return blockers;
@@ -1045,118 +1068,178 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     return res.json({ success: true, task: result.task, run: result.run });
   });
 
-  app.post('/api/tasks', (req, res) => {
-    let rawItems = req.body;
-    let outerRepo: string | null = null;
-    if (rawItems && typeof rawItems === 'object' && !Array.isArray(rawItems)) {
-      if (Array.isArray(rawItems.tasks)) {
-        outerRepo = rawItems.repo || rawItems.repoUrl;
-        rawItems = rawItems.tasks.map((taskItem: any) => {
-          if (typeof taskItem === 'object' && taskItem !== null && !taskItem.repo && !taskItem.repoUrl && outerRepo) {
-            return { ...taskItem, repo: outerRepo };
+  app.post('/api/tasks/draft-from-jira', async (req, res, next) => {
+    try {
+      const payload = await withIdempotency(req.body.idempotencyKey, async () => {
+        return await draftTaskFromJiraBundle(deps.state, req.body);
+      });
+      res.json(payload);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post('/api/tasks', async (req, res, next) => {
+    const idempotencyKey = req.body?.idempotencyKey;
+    if (idempotencyKey) {
+      const cached = getIdempotencyResult(idempotencyKey);
+      if (cached !== undefined) {
+        if (cached instanceof Promise) {
+          try {
+            const resolved = await cached;
+            return res.json(resolved);
+          } catch (err: any) {
+            return next(err);
           }
-          return taskItem;
-        });
-      } else if (rawItems.parent && Array.isArray(rawItems.children)) {
-        const parentTask = { ...rawItems.parent };
-        const childrenTasks = [...rawItems.children];
-        const parentGenId = `task-${Date.now()}-${Math.floor(Math.random() * 1000000)}`;
-        parentTask._internalId = parentGenId;
-        rawItems = [parentTask, ...childrenTasks.map((child: any) => ({
-          ...child,
-          parentId: parentGenId,
-          agent: child.agent || parentTask.agent,
-        }))];
+        }
+        return res.json(cached);
       }
-    }
-
-    const isArray = Array.isArray(rawItems);
-    if (!isArray) {
-      if (rawItems && typeof rawItems === 'object') rawItems = [rawItems];
-      else return res.status(400).json({ error: 'Request body must be a JSON object or a JSON array of tasks' });
-    }
-
-    if (rawItems.length === 0) {
-      return res.status(400).json({ error: 'Tasks list is empty' });
-    }
-
-    const createdTasks: any[] = [];
-    for (const item of rawItems) {
-      const validationErr = validateTaskPayload(item, false);
-      if (validationErr) {
-        if (!isArray) return res.status(400).json({ error: validationErr });
-        continue;
-      }
-
-      let resolvedProjectId = '';
-      try {
-        resolvedProjectId = resolveProjectIdFromRepo(deps.state, item, req);
-      } catch (error: any) {
-        if (!isArray) return res.status(400).json({ error: error.message });
-        continue;
-      }
-
-      const agentValidationError = validateAgentParams(item, deps.state.tasksCache);
-      if (agentValidationError) {
-        if (!isArray) return res.status(400).json({ error: agentValidationError });
-        continue;
-      }
-
-      const classification = normalizeTaskCategoryAndTags(item, { requireCategory: true });
-
-      const newTask = {
-        id: item._internalId || `task-${Date.now()}-${Math.floor(Math.random() * 1000000)}`,
-        displayId: generateDisplayId(deps.state, resolvedProjectId),
-        projectId: resolvedProjectId,
-        title: item.title.trim(),
-        description: item.description || '',
-        status: item.status || 'backlog',
-        branch: item.branch || undefined,
-        priority: item.priority || 'medium',
-        category: classification.category,
-        tags: classification.tags,
-        targetFiles: Array.isArray(item.targetFiles) ? item.targetFiles : [],
-        checklist: Array.isArray(item.checklist) ? item.checklist : [],
-        designImages: extractDesignImages(item) || [],
-        images: extractImages(item) || [],
-        specUrl: item.specUrl || undefined,
-        agent: item.agent || undefined,
-        model: item.model || undefined,
-        parentId: item.parentId || undefined,
-        effort: item.effort || undefined,
-        reasoning: item.reasoning || undefined,
-        acceptanceCriteria: item.acceptanceCriteria || undefined,
-        verification: item.verification || undefined,
-        repoContext: item.repoContext || undefined,
-        createdAt: item.createdAt || new Date().toISOString(),
-        updatedAt: item.updatedAt || new Date().toISOString(),
-        logs: Array.isArray(item.logs) && item.logs.length > 0 ? item.logs : [{
-          id: `log-${Date.now()}-c`,
-          timestamp: new Date().toISOString(),
-          message: item.parentId ? `Subtask initialized under parent task ${item.parentId} via Workspace API.` : 'Task initialized via Workspace API.',
-          type: 'create',
-        }],
+      createPendingIdempotency(idempotencyKey);
+      const originalJson = res.json;
+      res.json = function (body) {
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          resolvePendingIdempotency(idempotencyKey, body);
+        } else {
+          rejectPendingIdempotency(idempotencyKey, new Error(`Request failed with status ${res.statusCode}`));
+        }
+        return originalJson.call(this, body);
       };
+    }
 
-      const qualityError = validateTaskQualityForMutation(newTask);
-      if (qualityError) {
-        if (!isArray) return res.status(400).json({ error: qualityError });
-        continue;
+    const lockKey = req.body?.resourceLockOverride ? null : (req.body?.projectId || req.body?.repo || 'global-create');
+    let lockToken: string | null = null;
+    if (lockKey) {
+      try {
+        lockToken = acquireLock(lockKey);
+      } catch (e: any) {
+        if (idempotencyKey) {
+          rejectPendingIdempotency(idempotencyKey, e);
+        }
+        if (e.name === 'ResourceBusyError') return res.status(409).json({ error: { code: 'RESOURCE_BUSY', message: e.message, retryable: true } });
+        return next(e);
+      }
+    }
+
+    try {
+      let rawItems = req.body;
+      let outerRepo: string | null = null;
+      if (rawItems && typeof rawItems === 'object' && !Array.isArray(rawItems)) {
+        if (Array.isArray(rawItems.tasks)) {
+          outerRepo = rawItems.repo || rawItems.repoUrl;
+          rawItems = rawItems.tasks.map((taskItem: any) => {
+            if (typeof taskItem === 'object' && taskItem !== null && !taskItem.repo && !taskItem.repoUrl && outerRepo) {
+              return { ...taskItem, repo: outerRepo };
+            }
+            return taskItem;
+          });
+        } else if (rawItems.parent && Array.isArray(rawItems.children)) {
+          const parentTask = { ...rawItems.parent };
+          const childrenTasks = [...rawItems.children];
+          const parentGenId = `task-${Date.now()}-${Math.floor(Math.random() * 1000000)}`;
+          parentTask._internalId = parentGenId;
+          rawItems = [parentTask, ...childrenTasks.map((child: any) => ({
+            ...child,
+            parentId: parentGenId,
+            agent: child.agent || parentTask.agent,
+          }))];
+        }
       }
 
-      deps.state.tasksCache.push(newTask);
-      createdTasks.push(newTask);
-      maybeTriggerTaskAgent(newTask, undefined, deps, 'POST /tasks endpoint');
-    }
+      const isArray = Array.isArray(rawItems);
+      if (!isArray) {
+        if (rawItems && typeof rawItems === 'object') rawItems = [rawItems];
+        else return res.status(400).json({ error: 'Request body must be a JSON object or a JSON array of tasks' });
+      }
 
-    for (const task of createdTasks) {
-      saveTask(task);
+      if (rawItems.length === 0) {
+        return res.status(400).json({ error: 'Tasks list is empty' });
+      }
+
+      const createdTasks: any[] = [];
+      for (const item of rawItems) {
+        const validationErr = validateTaskPayload(item, false);
+        if (validationErr) {
+          if (!isArray) return res.status(400).json({ error: validationErr });
+          continue;
+        }
+
+        let resolvedProjectId = '';
+        try {
+          resolvedProjectId = resolveProjectIdFromRepo(deps.state, item, req);
+        } catch (error: any) {
+          if (!isArray) return res.status(400).json({ error: error.message });
+          continue;
+        }
+
+        const agentValidationError = validateAgentParams(item, deps.state.tasksCache);
+        if (agentValidationError) {
+          if (!isArray) return res.status(400).json({ error: agentValidationError });
+          continue;
+        }
+
+        const classification = normalizeTaskCategoryAndTags(item, { requireCategory: true });
+
+        const newTask = {
+          id: item._internalId || `task-${Date.now()}-${Math.floor(Math.random() * 1000000)}`,
+          displayId: generateDisplayId(deps.state, resolvedProjectId),
+          projectId: resolvedProjectId,
+          title: item.title.trim(),
+          description: item.description || '',
+          status: item.status || 'backlog',
+          branch: item.branch || undefined,
+          priority: item.priority || 'medium',
+          category: classification.category,
+          tags: classification.tags,
+          targetFiles: Array.isArray(item.targetFiles) ? item.targetFiles : [],
+          checklist: Array.isArray(item.checklist) ? item.checklist : [],
+          designImages: extractDesignImages(item) || [],
+          images: extractImages(item) || [],
+          specUrl: item.specUrl || undefined,
+          agent: item.agent || undefined,
+          model: item.model || undefined,
+          parentId: item.parentId || undefined,
+          effort: item.effort || undefined,
+          reasoning: item.reasoning || undefined,
+          acceptanceCriteria: item.acceptanceCriteria || undefined,
+          verification: item.verification || undefined,
+          repoContext: item.repoContext || undefined,
+          createdAt: item.createdAt || new Date().toISOString(),
+          updatedAt: item.updatedAt || new Date().toISOString(),
+          logs: Array.isArray(item.logs) && item.logs.length > 0 ? item.logs : [{
+            id: `log-${Date.now()}-c`,
+            timestamp: new Date().toISOString(),
+            message: item.parentId ? `Subtask initialized under parent task ${item.parentId} via Workspace API.` : 'Task initialized via Workspace API.',
+            type: 'create',
+          }],
+        };
+
+        const qualityError = validateTaskQualityForMutation(newTask);
+        if (qualityError) {
+          if (!isArray) return res.status(400).json({ error: qualityError });
+          continue;
+        }
+
+        deps.state.tasksCache.push(newTask);
+        createdTasks.push(newTask);
+        maybeTriggerTaskAgent(newTask, undefined, deps, 'POST /tasks endpoint');
+      }
+
+      for (const task of createdTasks) {
+        saveTask(task);
+      }
+      if (isArray) {
+        const standardPayload = { success: true, createdCount: createdTasks.length, tasks: createdTasks };
+        return res.status(201).json(toMutationListResponse(req, createdTasks, standardPayload, { createdCount: createdTasks.length }));
+      }
+      return res.status(201).json(toMutationResponse(req, createdTasks[0], createdTasks[0]));
+    } catch (err: any) {
+      if (idempotencyKey) {
+        rejectPendingIdempotency(idempotencyKey, err);
+      }
+      return next(err);
+    } finally {
+      if (lockKey && lockToken) releaseLock(lockKey, lockToken);
     }
-    if (isArray) {
-      const standardPayload = { success: true, createdCount: createdTasks.length, tasks: createdTasks };
-      return res.status(201).json(toMutationListResponse(req, createdTasks, standardPayload, { createdCount: createdTasks.length }));
-    }
-    return res.status(201).json(toMutationResponse(req, createdTasks[0], createdTasks[0]));
   });
 
   app.post('/api/tasks/batch', (req, res) => {
@@ -1748,66 +1831,115 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     return res.status(200).json({ success: true, createdCount: importedTasks.length, updatedCount: updatedTasks.length, tasks: [...importedTasks, ...updatedTasks] });
   });
 
-  app.put('/api/tasks/:id', (req, res) => {
-    const taskIndex = getTaskIndexByIdentifier(deps.state.tasksCache, req.params.id);
-    if (taskIndex === -1) return res.status(404).json({ error: 'Task not found' });
-
-    const currentTask = deps.state.tasksCache[taskIndex];
-    let updateBody = req.body;
-
-    if (currentTask.status === 'in-progress' && !canOverrideTaskLock(currentTask, req.body, undefined, req.headers['x-agent-request'])) {
-      return res.status(403).json({ error: 'Task is locked by an agent. Use emergency flag to override.' });
-    }
-
-    const validationErr = validateTaskPayload(updateBody, true);
-    if (validationErr) return res.status(400).json({ error: validationErr });
-
-    // Use-case level invariant: a non-empty title is required. We layer the check after
-    // the field-level service validation so the response code stays 400 for both.
-    if (updateBody.title !== undefined) {
-      const useCaseValidation = validateTaskPatchUseCase({ title: updateBody.title });
-      if (!useCaseValidation.ok) {
-        return res.status(400).json({ error: (useCaseValidation as { ok: false; reason: string }).reason });
+  app.put('/api/tasks/:id', async (req, res, next) => {
+    const idempotencyKey = req.body?.idempotencyKey;
+    if (idempotencyKey) {
+      const cached = getIdempotencyResult(idempotencyKey);
+      if (cached !== undefined) {
+        if (cached instanceof Promise) {
+          try {
+            const resolved = await cached;
+            return res.json(resolved);
+          } catch (err: any) {
+            return next(err);
+          }
+        }
+        return res.json(cached);
       }
+      createPendingIdempotency(idempotencyKey);
+      const originalJson = res.json;
+      res.json = function (body) {
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          resolvePendingIdempotency(idempotencyKey, body);
+        } else {
+          rejectPendingIdempotency(idempotencyKey, new Error(`Request failed with status ${res.statusCode}`));
+        }
+        return originalJson.call(this, body);
+      };
     }
 
-    const hasProjectInfo = !!(updateBody.projectId || updateBody.repo || updateBody.repoUrl || (req.headers && (req.headers['x-repo'] || req.headers['x-repo-url'])));
-    if (hasProjectInfo) {
+    const lockKey = req.body?.resourceLockOverride ? null : req.params.id;
+    let lockToken: string | null = null;
+    if (lockKey) {
       try {
-        updateBody = { ...updateBody, projectId: resolveProjectIdFromRepo(deps.state, updateBody, req) };
-      } catch (error: any) {
-        return res.status(400).json({ error: error.message });
+        lockToken = acquireLock(lockKey);
+      } catch (e: any) {
+        if (idempotencyKey) {
+          rejectPendingIdempotency(idempotencyKey, e);
+        }
+        if (e.name === 'ResourceBusyError') return res.status(409).json({ error: { code: 'RESOURCE_BUSY', message: e.message, retryable: true } });
+        return next(e);
       }
     }
 
-    const agentValidationError = validateAgentParams({ ...currentTask, ...updateBody }, deps.state.tasksCache);
-    if (agentValidationError) return res.status(400).json({ error: agentValidationError });
+    try {
+      const taskIndex = getTaskIndexByIdentifier(deps.state.tasksCache, req.params.id);
+      if (taskIndex === -1) return res.status(404).json({ error: 'Task not found' });
 
-    const parentReviewError = validateParentReviewMove({ ...currentTask, ...updateBody }, deps, updateBody.status ?? currentTask.status);
-    if (parentReviewError) {
-      appendTaskLog(currentTask, parentReviewError, 'update');
-      saveTask(currentTask);
-      return res.status(400).json({ error: parentReviewError });
-    }
+      const currentTask = deps.state.tasksCache[taskIndex];
+      let updateBody = req.body;
 
-    const updatedTask = {
-      ...currentTask,
-      ...updateBody,
-      ...applyTaskCategoryAndTagsUpdate(updateBody, currentTask),
-      designImages: extractDesignImages(updateBody, currentTask) || [],
+      if (currentTask.status === 'in-progress' && !canOverrideTaskLock(currentTask, req.body, undefined, req.headers['x-agent-request'])) {
+        return res.status(403).json({ error: 'Task is locked by an agent. Use emergency flag to override.' });
+      }
+
+      const validationErr = validateTaskPayload(updateBody, true);
+      if (validationErr) return res.status(400).json({ error: validationErr });
+
+      // Use-case level invariant: a non-empty title is required. We layer the check after
+      // the field-level service validation so the response code stays 400 for both.
+      if (updateBody.title !== undefined) {
+        const useCaseValidation = validateTaskPatchUseCase({ title: updateBody.title });
+        if (!useCaseValidation.ok) {
+          return res.status(400).json({ error: (useCaseValidation as { ok: false; reason: string }).reason });
+        }
+      }
+
+      const hasProjectInfo = !!(updateBody.projectId || updateBody.repo || updateBody.repoUrl || (req.headers && (req.headers['x-repo'] || req.headers['x-repo-url'])));
+      if (hasProjectInfo) {
+        try {
+          updateBody = { ...updateBody, projectId: resolveProjectIdFromRepo(deps.state, updateBody, req) };
+        } catch (error: any) {
+          return res.status(400).json({ error: error.message });
+        }
+      }
+
+      const agentValidationError = validateAgentParams({ ...currentTask, ...updateBody }, deps.state.tasksCache);
+      if (agentValidationError) return res.status(400).json({ error: agentValidationError });
+
+      const parentReviewError = validateParentReviewMove({ ...currentTask, ...updateBody }, deps, updateBody.status ?? currentTask.status);
+      if (parentReviewError) {
+        appendTaskLog(currentTask, parentReviewError, 'update');
+        saveTask(currentTask);
+        return res.status(400).json({ error: parentReviewError });
+      }
+
+      const updatedTask = {
+        ...currentTask,
+        ...updateBody,
+        ...applyTaskCategoryAndTagsUpdate(updateBody, currentTask),
+        designImages: extractDesignImages(updateBody, currentTask) || [],
         images: extractImages(updateBody, currentTask) || [],
-      updatedAt: new Date().toISOString(),
-    };
+        updatedAt: new Date().toISOString(),
+      };
 
-    const qualityError = validateTaskQualityForMutation(updatedTask);
-    if (qualityError) return res.status(400).json({ error: qualityError });
+      const qualityError = validateTaskQualityForMutation(updatedTask);
+      if (qualityError) return res.status(400).json({ error: qualityError });
 
-    deps.state.tasksCache[taskIndex] = updatedTask;
-    syncTaskAgentStateForStatus(updatedTask, currentTask.status);
-    maybeTriggerTaskAgent(updatedTask, currentTask, deps, 'PUT /tasks/:id endpoint');
+      deps.state.tasksCache[taskIndex] = updatedTask;
+      syncTaskAgentStateForStatus(updatedTask, currentTask.status);
+      maybeTriggerTaskAgent(updatedTask, currentTask, deps, 'PUT /tasks/:id endpoint');
 
-    saveTask(updatedTask);
-    return res.json(toMutationResponse(req, updatedTask, updatedTask));
+      saveTask(updatedTask);
+      return res.json(toMutationResponse(req, updatedTask, updatedTask));
+    } catch (err: any) {
+      if (idempotencyKey) {
+        rejectPendingIdempotency(idempotencyKey, err);
+      }
+      return next(err);
+    } finally {
+      if (lockKey && lockToken) releaseLock(lockKey, lockToken);
+    }
   });
 
   app.post('/api/tasks/import-file', async (req, res) => {

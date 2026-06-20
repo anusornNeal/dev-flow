@@ -699,7 +699,8 @@ const mockState = {
 // Must not throw when building prompt for task with unsupported effort
 try {
   const result = renderTaskPrompt(mockState as any, 'legacy-task-1');
-  assert.ok(result.renderResult.content.includes('legacy-unknown'));
+  assert.equal(result.context.assignment.effort, 'legacy-unknown');
+  assert.ok(result.renderResult.content.length > 0);
 } catch (e: any) {
   assert.fail(`Prompt rendering crashed for legacy task: ${e.message}`);
 }

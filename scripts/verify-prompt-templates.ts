@@ -145,7 +145,7 @@ assert.ok(noOverrideRender.content.includes('Load full task details from the loc
 assert.ok(noOverrideRender.content.includes('## Completion'));
 assert.ok(!noOverrideRender.content.includes('This prompt is the sole source of truth for your DevFlow task context.'));
 
-console.log('[verify] Testing project-local overrides no longer change rendered prompts...');
+console.log('[verify] Testing project-local overrides change rendered prompts...');
 const legacyOverrideWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-legacy-override-'));
 try {
   const legacyOverrideDir = path.join(legacyOverrideWorkspace, '.devflow', 'prompt-overrides');
@@ -158,8 +158,8 @@ try {
       localPath: legacyOverrideWorkspace,
     },
   });
-  assert.ok(legacyOverrideRender.content.includes('# DevFlow Agent Task'));
-  assert.ok(!legacyOverrideRender.content.includes('# Legacy Override Header'));
+  assert.ok(legacyOverrideRender.content.includes('# Legacy Override Header'));
+  assert.ok(!legacyOverrideRender.content.includes('# DevFlow Agent Task'));
 } finally {
   fs.rmSync(legacyOverrideWorkspace, { recursive: true, force: true });
 }
@@ -331,9 +331,9 @@ try {
   writePromptOverrideForWorkspace(overrideWorkspace, 'prompt.header', '# override\nbody', { agent: 'codex' });
   const after = readPromptSectionForWorkspace('prompt.header', { agent: 'codex', localPath: overrideWorkspace });
   assert.ok(after, 'section must be returned');
-  assert.equal(after!.sourceType, 'master');
-  assert.equal(after!.overrideContent, undefined);
-  assert.notEqual(after!.effectiveContent, '# override\nbody');
+  assert.equal(after!.sourceType, 'override');
+  assert.equal(after!.overrideContent, '# override\nbody');
+  assert.equal(after!.effectiveContent, '# override\nbody');
 
   const removed = deletePromptOverrideForWorkspace(overrideWorkspace, 'prompt.header', { agent: 'codex' });
   assert.equal(removed.success, true);

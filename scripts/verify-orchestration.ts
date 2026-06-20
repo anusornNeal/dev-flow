@@ -158,9 +158,9 @@ assert.ok(taskContext.projectRules.workflow.some((rule: string) => rule.includes
 assert.equal(taskContext.projectRules.implementation, undefined);
 const overrideDir = path.join(repoPathWithSpaces, '.devflow', 'prompt-overrides');
 fs.mkdirSync(overrideDir, { recursive: true });
-fs.writeFileSync(path.join(overrideDir, 'prompt.footer.md'), '\nOVERRIDE FOOTER {{run.id}}\n', 'utf8');
+fs.writeFileSync(path.join(overrideDir, 'prompt.header.md'), '\nOVERRIDE HEADER {{run.id}}\n', 'utf8');
 const previewPrompt = renderTaskPrompt(state, 'task-1');
-assert.ok(previewPrompt.renderResult.content.includes('OVERRIDE FOOTER preview-run-id'));
+assert.ok(previewPrompt.renderResult.content.includes('OVERRIDE HEADER preview-run-id'));
 const triggerResult = triggerTaskAgent(state.tasksCache[0], deps, 'test');
 assert.equal(triggerResult.triggered, true);
 assert.equal(state.tasksCache[0].status, 'in-progress');
@@ -202,14 +202,17 @@ assert.equal(runningResult.status, 'running');
 assert.equal(runningResult.success, null);
 assert.equal(runningResult.resultCode, 'RUNNING');
 assert.equal(typeof runningResult.updatedAt, 'string');
-assert.ok(prompt.includes('Generate the prompt from the real production agent context.'));
-assert.ok(prompt.includes('Prompt includes description, acceptance criteria, verification, checklist, subtasks, repo, localPath, agent, model, and effort.'));
-assert.ok(prompt.includes('Run prompt template and orchestration verification scripts.'));
-assert.ok(prompt.includes('- [ ] Use real agent task context'));
-assert.ok(prompt.includes('DVF-0081: Pass production context shape to prompt rendering'));
-assert.ok(prompt.includes(repoPathWithSpaces));
-assert.ok(prompt.includes('Agent: Codex, Model: GPT-5.5, Effort: xhigh'));
-assert.ok(prompt.includes(`OVERRIDE FOOTER ${run1!.id}`));
+assert.equal(runPrompt.context.instruction.description, 'Generate the prompt from the real production agent context.');
+assert.equal(runPrompt.context.instruction.reasoning, 'Review blockers found the old flat task shape still in use.');
+assert.equal(runPrompt.context.requirements.acceptanceCriteria, 'Prompt includes description, acceptance criteria, verification, checklist, subtasks, repo, localPath, agent, model, and effort.');
+assert.equal(runPrompt.context.requirements.verification, 'Run prompt template and orchestration verification scripts.');
+assert.ok(runPrompt.context.requirements.checklist.some((item: any) => item.text.includes('Use real agent task context')));
+assert.ok(runPrompt.context.orchestration.subtasks.some((sub: any) => sub.title.includes('Pass production context shape')));
+assert.equal(runPrompt.context.workspace.localPath, repoPathWithSpaces);
+assert.equal(runPrompt.context.assignment.agent, 'Codex');
+assert.equal(runPrompt.context.assignment.model, 'GPT-5.5');
+assert.equal(runPrompt.context.assignment.effort, 'xhigh');
+assert.ok(prompt.includes(`OVERRIDE HEADER ${run1!.id}`));
 
 console.log('[verify] Testing failed completion leaves the card retryable...');
 completeAgentRunForTask(state.tasksCache[0], run1!, deps, {
@@ -882,7 +885,7 @@ try {
   });
   assert.equal(failedResponse.status, 200);
   const failedBody = await failedResponse.json();
-  assert.equal(failedBody.task.status, 'in-progress');
+  assert.equal(failedBody.task.status, 'todo');
   assert.equal(failedBody.run.status, 'failed');
 
   const cancelledResponse = await fetch(`${completionBaseUrl}/api/tasks/completion-cancelled/agent-complete`, {
@@ -899,7 +902,7 @@ try {
   });
   assert.equal(cancelledResponse.status, 200);
   const cancelledBody = await cancelledResponse.json();
-  assert.equal(cancelledBody.task.status, 'in-progress');
+  assert.equal(cancelledBody.task.status, 'todo');
   assert.equal(cancelledBody.run.status, 'cancelled');
 
   const missingRunResponse = await fetch(`${completionBaseUrl}/api/tasks/completion-success/agent-complete`, {

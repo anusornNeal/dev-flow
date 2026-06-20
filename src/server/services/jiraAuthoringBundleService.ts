@@ -95,7 +95,12 @@ function jiraAuthHeaders(email: string, token: string) {
   };
 }
 
-export async function buildJiraAuthoringBundle(state: AppState, args: Record<string, any>, fetchImpl: FetchLike = fetch) {
+export async function buildJiraAuthoringBundle(
+  state: AppState,
+  args: Record<string, any>,
+  signal?: AbortSignal,
+  fetchImpl: FetchLike = fetch
+) {
   const jiraKey = String(args.jiraKey || args.issueKey || args.key || '').trim().toUpperCase();
   if (!jiraKey) {
     throw createApiError(400, 'JIRA_KEY_REQUIRED', 'jiraKey is required.');
@@ -110,7 +115,7 @@ export async function buildJiraAuthoringBundle(state: AppState, args: Record<str
 
   const fields = typeof args.fields === 'string' && args.fields.trim() ? args.fields.trim() : JIRA_FIELDS;
   const url = `${baseUrl}/rest/api/3/issue/${encodeURIComponent(jiraKey)}?fields=${encodeURIComponent(fields)}`;
-  const response = await fetchImpl(url, { headers: jiraAuthHeaders(email, token) });
+  const response = await fetchImpl(url, { headers: jiraAuthHeaders(email, token), signal });
   if (!response.ok) {
     throw createApiError(response.status, 'JIRA_REQUEST_FAILED', `Jira request failed for ${jiraKey} with status ${response.status}.`, {
       affectedId: jiraKey,

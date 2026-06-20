@@ -124,7 +124,7 @@ function stripToolOnlyArgs(args: Record<string, any>, keys: string[]) {
   return copy;
 }
 
-export const DEVFLOW_CONTRACT_VERSION = '2026-06-19.4';
+export const DEVFLOW_CONTRACT_VERSION = '2026-06-20.1';
 
 export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   {
@@ -135,6 +135,60 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
     outputSchema: { type: 'object' },
     lightweight: true,
     buildHttpRequest: () => ({ method: 'GET', path: '/api/capabilities' }),
+  },
+  {
+    name: 'get_tool_call_summary',
+    description: 'Summarize recent DevFlow MCP tool calls, including top tools, duplicate bursts, latest calls, and recommendations for reducing redundant calls.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        windowMs: { type: 'number', description: 'Recent time window to summarize in milliseconds. Default is 10 minutes.' },
+      },
+    },
+    outputSchema: { type: 'object' },
+    lightweight: true,
+    buildHttpRequest: (args) => ({
+      method: 'GET',
+      path: withQuery('/api/tool-monitor/summary', { windowMs: args.windowMs }),
+    }),
+  },
+  {
+    name: 'validate_task_quality',
+    description: 'Preflight a DevFlow task/card for authoring quality before create_task or update_task. Flags implementation-ready cards that still depend on Jira, lack focused targetFiles, or lack an Implementation map.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...taskMutationProperties,
+        ...projectIdentifierProperties,
+      },
+    },
+    outputSchema: { type: 'object' },
+    lightweight: true,
+    buildHttpRequest: (args) => ({
+      method: 'POST',
+      path: '/api/task-quality/validate',
+      body: args,
+    }),
+  },
+  {
+    name: 'get_repo_inspection_index',
+    description: 'Get a cached, lightweight repository index for targeted card authoring. Returns likely files and symbols/classes/functions matching a query without reading the whole repo.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...projectIdentifierProperties,
+        q: { type: 'string', description: 'Screen, string, Jira term, class, function, or flow query.' },
+        query: { type: 'string', description: 'Alias for q.' },
+        path: { type: 'string', description: 'Optional relative subdirectory to index.' },
+        limit: { type: 'number', description: 'Maximum matched entries returned.' },
+      },
+    },
+    outputSchema: { type: 'object' },
+    lightweight: true,
+    buildHttpRequest: (args) => ({
+      method: 'GET',
+      path: withQuery('/api/repo-inspection-index', args),
+    }),
   },
   {
     name: 'get_schema',
@@ -344,7 +398,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'create_task',
-    description: 'Create a task.',
+    description: 'Create a task. For implementation-ready cards, run validate_task_quality first and include focused targetFiles plus an Implementation map in repoContext.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -363,7 +417,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'update_task',
-    description: 'Update a task by internal id or displayId.',
+    description: 'Update a task by internal id or displayId. For implementation-ready card updates, run validate_task_quality first and keep targetFiles aligned with the Implementation map.',
     inputSchema: {
       type: 'object',
       properties: {

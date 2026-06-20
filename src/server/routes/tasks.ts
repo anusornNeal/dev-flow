@@ -10,6 +10,7 @@ import { deleteTasksByIds, loadTasks, generateDisplayId, saveTask, saveTasks } f
 import { listAttachmentsForTask } from '../repositories/attachmentRepository';
 import { appendAgentRunLog, buildAgentCompletionSummary, createAgentRunFiles, createAgentRunResultRecord, getAgentRunHistoryPaths, getAgentTriggerScriptPath, getDevFlowApiBaseUrl, resolveAgentExecutionMode, resolveFromDevFlowAppRoot, writeAgentRunLaunchMetadata, writeAgentRunOutputSummary, writeAgentRunResult } from '../services/agentRunService';
 import { extractImages, extractDesignImages, findProjectByIdentifier, findTaskByIdentifier, getAgentTaskContext, normalizeAgentCompletionPayload, normalizeTaskCategoryAndTags, applyTaskCategoryAndTagsUpdate, renderTaskPrompt, resolveProjectIdFromRepo, validateAgentCompletionPayload, validateAgentParams, validateTaskPayload } from '../services/taskService';
+import { validateTaskQualityForMutation } from '../services/taskQualityService';
 import { createApiError, sendApiError } from '../services/api';
 import { validateEnum, validateString } from '../validation';
 import { getDevFlowAppRoot } from '../../lib/devFlowPaths';
@@ -1137,6 +1138,12 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
         }],
       };
 
+      const qualityError = validateTaskQualityForMutation(newTask);
+      if (qualityError) {
+        if (!isArray) return res.status(400).json({ error: qualityError });
+        continue;
+      }
+
       deps.state.tasksCache.push(newTask);
       createdTasks.push(newTask);
       maybeTriggerTaskAgent(newTask, undefined, deps, 'POST /tasks endpoint');
@@ -1235,6 +1242,12 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
           }],
         };
 
+        const qualityError = validateTaskQualityForMutation(updatedTask);
+        if (qualityError) {
+          if (!Array.isArray(req.body)) return res.status(400).json({ error: qualityError });
+          continue;
+        }
+
         const parentReviewError = validateParentReviewMove(updatedTask, deps, updatedTask.status);
         if (parentReviewError) {
           appendTaskLog(currentTask, parentReviewError, 'update');
@@ -1291,6 +1304,12 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
           type: 'create',
         }],
       };
+
+      const qualityError = validateTaskQualityForMutation(newTask);
+      if (qualityError) {
+        if (!Array.isArray(req.body)) return res.status(400).json({ error: qualityError });
+        continue;
+      }
 
       deps.state.tasksCache.push(newTask);
       importedTasks.push(newTask);
@@ -1649,6 +1668,12 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
           }],
         };
 
+        const qualityError = validateTaskQualityForMutation(updatedTask);
+        if (qualityError) {
+          if (!Array.isArray(req.body)) return res.status(400).json({ error: qualityError });
+          continue;
+        }
+
         const parentReviewError = validateParentReviewMove(updatedTask, deps, updatedTask.status);
         if (parentReviewError) {
           appendTaskLog(currentTask, parentReviewError, 'update');
@@ -1692,6 +1717,12 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
         model: item.model || undefined,
         parentId: item.parentId || undefined,
         effort: item.effort || undefined,
+        reasoning: item.reasoning || undefined,
+        acceptanceCriteria: item.acceptanceCriteria || undefined,
+        verification: item.verification || undefined,
+        repoContext: item.repoContext || undefined,
+        jiraKey: item.jiraKey || undefined,
+        sourceUrl: item.sourceUrl || undefined,
         createdAt: item.createdAt || new Date().toISOString(),
         updatedAt: item.updatedAt || new Date().toISOString(),
         logs: Array.isArray(item.logs) && item.logs.length > 0 ? item.logs : [{
@@ -1701,6 +1732,13 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
           type: 'create',
         }],
       };
+
+      const qualityError = validateTaskQualityForMutation(newTask);
+      if (qualityError) {
+        if (!Array.isArray(req.body)) return res.status(400).json({ error: qualityError });
+        continue;
+      }
+
       deps.state.tasksCache.push(newTask);
       importedTasks.push(newTask);
       maybeTriggerTaskAgent(newTask, undefined, deps, 'PUT /tasks list create');
@@ -1760,6 +1798,9 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
         images: extractImages(updateBody, currentTask) || [],
       updatedAt: new Date().toISOString(),
     };
+
+    const qualityError = validateTaskQualityForMutation(updatedTask);
+    if (qualityError) return res.status(400).json({ error: qualityError });
 
     deps.state.tasksCache[taskIndex] = updatedTask;
     syncTaskAgentStateForStatus(updatedTask, currentTask.status);

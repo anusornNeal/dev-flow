@@ -5,6 +5,9 @@ import { sendApiError } from '../services/api';
 import { listLocalFiles, readLocalFile, searchLocalFiles, writeLocalFile } from '../services/localFileService';
 import { getGitLog, getGitDiff, getGitShow, getGitStatus, getGitBranch } from '../services/gitService';
 import { getProjectStartContext } from '../services/projectStartContextService';
+import { getToolCallSummary } from '../services/mcpToolMonitor';
+import { getRepoInspectionIndex } from '../services/repoInspectionIndexService';
+import { validateTaskQuality } from '../services/taskQualityService';
 
 export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) {
   app.get('/api/capabilities', (_req, res) => {
@@ -74,6 +77,31 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
   app.get('/api/project-start-context', (req, res) => {
     try {
       return res.json(getProjectStartContext(deps.state, req.query as Record<string, any>));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.get('/api/tool-monitor/summary', (req, res) => {
+    try {
+      const windowMs = Number.isFinite(Number(req.query.windowMs)) ? Number(req.query.windowMs) : undefined;
+      return res.json(getToolCallSummary({ windowMs }));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.get('/api/repo-inspection-index', (req, res) => {
+    try {
+      return res.json(getRepoInspectionIndex(deps.state, req.query as Record<string, any>));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.post('/api/task-quality/validate', (req, res) => {
+    try {
+      return res.json(validateTaskQuality(req.body));
     } catch (error) {
       return sendApiError(res, error);
     }

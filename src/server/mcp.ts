@@ -2,6 +2,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { createCorrelationId } from './services/api';
 import { getCapabilityCatalog, getMcpToolList, getToolDefinitionByName } from './contracts/devflowContract';
+import { recordToolCall } from './services/mcpToolMonitor';
 
 async function executeHttpRequest(baseUrl: string, request: { method: string; path: string; body?: unknown; headers?: Record<string, string> }, correlationId: string) {
   const headers: Record<string, string> = {
@@ -62,6 +63,7 @@ export function createDevFlowMcpServer(baseUrl: string) {
 
     const httpRequest = tool.buildHttpRequest(args);
     const { response, parsedBody, durationMs } = await executeHttpRequest(baseUrl, httpRequest, correlationId);
+    recordToolCall({ toolName, args, status: response.status, durationMs });
     console.log(`[mcp] cid=${correlationId} tool=${toolName} status=${response.status} durationMs=${durationMs}`);
 
     if (!response.ok) {

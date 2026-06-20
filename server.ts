@@ -13,6 +13,7 @@ import { registerApiRoutes } from './src/server/routes/registerApiRoutes';
 import { createDevFlowMcpServer } from './src/server/mcp';
 import { bootstrap, writeAgentLog } from './src/server/bootstrap';
 import { getDevFlowAppRoot, resolveFromDevFlowAppRoot, getDevFlowUploadsDir } from './src/lib/devFlowPaths';
+import { recordToolCall } from './src/server/services/mcpToolMonitor';
 
 async function startServer() {
   const { state } = bootstrap();
@@ -121,6 +122,7 @@ async function startServer() {
     routes.forEach((route) => {
       app.get(route, async (_req, res) => {
         const sseTransport = new SSEServerTransport(route, res);
+        const proxyCallStarts = new Map<string, { toolName: string; args: Record<string, any>; startedAt: number }>();
         activeProxyTransports[serverName].set(sseTransport.sessionId, sseTransport);
         if (debugSse) console.log(`[proxy:${serverName} route=${route}] open sid=${shortId(sseTransport.sessionId)} active=${activeProxyTransports[serverName].size}`);
 
@@ -141,10 +143,31 @@ async function startServer() {
         };
 
         sseTransport.onmessage = (message) => {
+          const request = message as any;
+          if (request?.method === 'tools/call' && request.params?.name && request.id !== undefined) {
+            proxyCallStarts.set(String(request.id), {
+              toolName: `${serverName}:${request.params.name}`,
+              args: request.params.arguments || {},
+              startedAt: Date.now(),
+            });
+          }
           clientTransport.send(message).catch((err) => console.error(`Error sending to ${serverName} MCP:`, err));
         };
 
         clientTransport.onmessage = (message) => {
+          const response = message as any;
+          if (response?.id !== undefined) {
+            const started = proxyCallStarts.get(String(response.id));
+            if (started) {
+              proxyCallStarts.delete(String(response.id));
+              recordToolCall({
+                toolName: started.toolName,
+                args: started.args,
+                status: response.error ? 500 : 200,
+                durationMs: Date.now() - started.startedAt,
+              });
+            }
+          }
           sseTransport.send(message).catch((err) => console.error(`Error sending to ${serverName} SSE:`, err));
         };
 

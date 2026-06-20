@@ -165,10 +165,16 @@ try {
 
   const createTaskSchema = catalog.tools.find((tool) => tool.name === 'create_task')?.inputSchema;
   const updateTaskSchema = catalog.tools.find((tool) => tool.name === 'update_task')?.inputSchema;
+  const qualityTool = catalog.tools.find((tool) => tool.name === 'validate_task_quality');
+  const repoIndexTool = catalog.tools.find((tool) => tool.name === 'get_repo_inspection_index');
   assert.ok(createTaskSchema?.properties?.title);
   assert.ok(createTaskSchema?.properties?.projectId);
   assert.ok(createTaskSchema?.properties?.repoUrl);
   assert.ok(updateTaskSchema?.properties?.taskId);
+  assert.ok(qualityTool, 'validate_task_quality must be advertised in the MCP catalog');
+  assert.ok(repoIndexTool, 'get_repo_inspection_index must be advertised in the MCP catalog');
+  assert.match(String(qualityTool?.description || ''), /Implementation map/i);
+  assert.match(String(repoIndexTool?.description || ''), /cached/i);
 
   console.log('[verify] Testing ChatGPT-friendly task listing defaults...');
   const listTasksTool = getToolDefinitionByName('list_tasks');

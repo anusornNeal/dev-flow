@@ -14,6 +14,10 @@ Load:
 - `01-authoring-core.md`
 - `02-schema-reference.md`
 
+Use:
+- `get_repo_inspection_index` before broad repo search when identifying target files/functions.
+- `validate_task_quality` before `create_task` or `update_task` for any implementation-ready card.
+
 Load `04-examples.md` only if:
 - the requested output must be full JSON,
 - the agent is likely to violate schema,

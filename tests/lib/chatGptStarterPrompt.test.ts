@@ -10,5 +10,7 @@ test('buildChatGptStarterPrompt tells ChatGPT to read authoring skills before re
   assert.match(prompt, /list_projects/);
   assert.match(prompt, /list_local_files/);
   assert.match(prompt, /read_local_file/);
+  assert.match(prompt, /get_repo_inspection_index/);
+  assert.match(prompt, /validate_task_quality/);
   assert.ok(prompt.indexOf('get_authoring_skills') < prompt.indexOf('list_projects'));
 });

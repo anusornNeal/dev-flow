@@ -6,6 +6,13 @@ Reference for DevFlow task fields used by create/update tools.
 
 Confirm live schema with `Dev_Flow.get_schema` when available.
 
+## Authoring helper tools
+
+Use these before writing implementation-ready cards:
+
+- `get_repo_inspection_index`: cached repo index for likely files, classes, composables, functions, routes, mappers, helpers, and tests. Use screen names, visible strings, Jira terms, or flow names as the query before broad file search.
+- `validate_task_quality`: preflight the card before `create_task` or `update_task`. It blocks implementation-ready cards that still depend on Jira/source links, lack focused `targetFiles`, or lack an `Implementation map` in `repoContext`.
+
 ## Required fields
 
 Raw API requires:
@@ -207,6 +214,20 @@ Use partial paths only for disambiguation or new files:
 ```
 
 Full paths belong in `repoContext`.
+
+For `todo`, `in-progress`, and `ready-for-review` cards, `targetFiles` must be focused and must match the `Implementation map` in `repoContext`.
+
+### repoContext
+
+For implementation-ready cards, include an implementation map:
+
+```text
+Implementation map:
+- File: JobDetailScreen.kt
+  Class/function: JobDetailContent / DetailsTabContent
+  Current behavior: lower content can render under the Android navigation bar.
+  Expected change: apply bottom system-bar padding for Details tab content.
+```
 
 ### images
 

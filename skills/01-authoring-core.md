@@ -33,6 +33,52 @@ When applicable:
 8. Check whether a DevFlow card already exists for the Jira key.
 9. Create or update the card only after requirement and repo context are understood.
 
+## Bounded repo inspection
+
+Repo inspection is required for implementation-ready cards, but it must be targeted.
+
+Use `get_repo_inspection_index` first when available. Query with screen names, visible strings, Jira terms, route names, or flow names. Then read only the matched target files that are needed to confirm the implementation map.
+
+Do not scan or read the whole repo. Start from the Jira/user terms and search only for likely screen names, visible strings, route names, ViewModels, composables, fragments, adapters, mappers, APIs, models, and tests. Read only the smallest set of files needed to identify the implementation path.
+
+Stop repo inspection when you can name:
+
+- the affected screen or flow,
+- the likely target files,
+- the exact classes, composables, functions, methods, helpers, routes, mappers, or tests involved,
+- the current behavior found in code,
+- the smallest safe change location,
+- the related tests or verification target,
+- files/functions that are explicitly out of scope.
+
+If targeted inspection cannot identify likely files/functions, create a blocked/prep card instead of guessing.
+
+## Implementation map
+
+Every implementation-ready card that came from Jira or a bug report must include an implementation map in `repoContext`.
+
+Format:
+
+```text
+Implementation map:
+- File: JobDetailScreen.kt
+  Class/function: JobDetailContent / DetailsTabContent
+  Current behavior: lower tab content does not reserve navigation bar inset.
+  Expected change: apply or propagate bottom system-bar padding for the Details tab content.
+
+- File: JobDetailFragment.kt
+  Class/function: edge-to-edge or root inset setup
+  Current behavior: confirm whether the host consumes navigation bar insets.
+  Expected change: adjust only if the screen-level inset owner is here.
+
+Out of scope:
+- Do not change unrelated Job Detail tabs, survey submission logic, or other My Jobs screens unless the same inset owner is shared.
+```
+
+Keep the map short. Prefer 2-5 target entries. If the exact function is uncertain, say `likely` and explain what must be confirmed first.
+
+Before calling `create_task` or `update_task` for a `todo`, `in-progress`, or `ready-for-review` card, run `validate_task_quality` when available and fix any errors it reports.
+
 ## Fallback rules
 
 If Jira cannot be read and the user did not provide enough detail, do not create an implementation-ready card.
@@ -53,6 +99,7 @@ Before writing a card, answer these internally:
 - What exact behavior changes from what to what?
 - What is the smallest safe implementation scope?
 - Which screens, files, layers, APIs, models, tests, strings, or flows are involved?
+- Which exact classes, composables, functions, methods, helpers, routes, or mappers should the implementer inspect or edit?
 - What existing behavior must remain unchanged?
 - What is out of scope?
 - What tests or manual checks prove completion?
@@ -207,6 +254,7 @@ Do not dump Jira metadata such as reporter, assignee, timestamps, sprint, board,
 
 Use for technical findings:
 
+- implementation map with target files and functions/classes,
 - likely files/components,
 - current implementation behavior,
 - existing helpers,
@@ -261,6 +309,8 @@ If exact command is unknown, ask the agent to run the most targeted available te
 
 Keep focused and short. Prefer filenames only unless duplicate names need partial paths.
 
+Target files must align with the implementation map. Do not list broad directories unless the exact file is unknown after targeted inspection.
+
 Do not include README/playbook/root docs unless the task is documentation or agent-config work.
 
 ### sourceUrl
@@ -290,7 +340,7 @@ Before creating/updating a card, verify:
 - Exact required wording is included.
 - Similar Jira issues were considered for merge.
 - Large work was considered for split.
-- Repo context contains useful technical findings.
+- Repo context contains useful technical findings and an implementation map when implementation-ready.
 - Target files are focused.
 - Checklist is concrete.
 - Acceptance criteria are pass/fail.

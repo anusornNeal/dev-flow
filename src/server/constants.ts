@@ -45,7 +45,7 @@ export const TASK_SCHEMA_DEF = {
     targetFiles: {
       type: 'array',
       items: { type: 'string' },
-      description: 'Files relevant to the task',
+      description: 'Focused files relevant to the task. Required with an Implementation map for implementation-ready statuses: todo, in-progress, ready-for-review.',
     },
     checklist: {
       type: 'array',
@@ -80,7 +80,7 @@ export const TASK_SCHEMA_DEF = {
     reasoning: { type: 'string', description: 'Reasoning or context for this task' },
     acceptanceCriteria: { type: 'string', description: 'Criteria for accepting the task as done' },
     verification: { type: 'string', description: 'Steps to verify the task' },
-    repoContext: { type: 'string', description: 'Context about the repository' },
+    repoContext: { type: 'string', description: 'Context about the repository. Implementation-ready cards must include an "Implementation map:" with File, Class/function, Current behavior, and Expected change entries.' },
     jiraKey: { type: 'string', description: 'Jira Issue Key associated with this task' },
     repo: { type: 'string', description: 'Repository URL' },
     sourceUrl: { type: 'string', description: 'Original source URL of the task' },

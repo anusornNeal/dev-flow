@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "setup": "tsx scripts/setup.ts",
+    "start:all": "tsx scripts/start-all.ts",
     "doctor": "tsx scripts/doctor.ts",
     "typecheck": "tsc --noEmit",
     "verify": "tsx scripts/verify.ts",
@@ -15,6 +16,7 @@
     "test:import-tasks": "tsx tests/devflow/import-tasks-from-file.test.ts",
     "test:prompt-templates": "tsx scripts/verify-prompt-templates.ts",
     "test:orchestration": "tsx scripts/verify-orchestration.ts",
+    "test:start-all": "tsx scripts/verify-start-all.ts",
     "test:sqlite": "tsx scripts/verify-sqlite-persistence.ts",
     "test:task-row-persistence": "tsx scripts/verify-task-row-persistence.ts",
     "dev": "tsx server.ts",

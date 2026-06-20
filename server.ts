@@ -19,7 +19,8 @@ async function startServer() {
   const { state } = bootstrap();
 
   const app = express();
-  const port = 3000;
+  const configuredPort = Number(process.env.DEVFLOW_PORT || process.env.PORT || 3000);
+  const port = Number.isInteger(configuredPort) && configuredPort > 0 ? configuredPort : 3000;
   const apiBaseUrl = `http://127.0.0.1:${port}`;
 
   const activeTransports = new Map<string, SSEServerTransport>();

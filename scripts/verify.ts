@@ -4,6 +4,7 @@ const commands = [
   { label: 'lint', command: 'npm', args: ['run', 'lint'] },
   { label: 'devflow contract', command: 'npx', args: ['tsx', 'scripts/verify-devflow-contract.ts'] },
   { label: 'agent runs', command: 'npm', args: ['run', 'test:agent-runs'] },
+  { label: 'start all launcher', command: 'npm', args: ['run', 'test:start-all'] },
   { label: 'absolute paths', command: 'npm', args: ['run', 'test:absolute-paths'] },
   { label: 'prompt templates', command: 'npm', args: ['run', 'test:prompt-templates'] },
   { label: 'orchestration', command: 'npm', args: ['run', 'test:orchestration'] },

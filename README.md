@@ -25,6 +25,7 @@ Setup:
 Standard commands:
 
 - `npm run setup` creates the local `data/` directory when needed and bootstraps `.env` from `.env.example` when safe.
+- `npm run start:all` runs setup, starts the DevFlow server, starts ngrok on the DevFlow port, and opens the app in a browser.
 - `npm run doctor` checks Node/npm, env file availability, writable SQLite storage, DB initialization, port `3000`, and backed-up project local paths.
 - `npm test` runs the lightweight verification flow for this repo (`lint` + `doctor`).
 - `npm run dev` starts the DevFlow server in development mode.
@@ -33,16 +34,17 @@ Standard commands:
 - `npm run lint` runs the TypeScript no-emit verification used in this repo.
 - `npm run mcp` starts the DevFlow MCP server entrypoint.
 
-## Windows Start Flow
+## One-Click Start Flow
 
-This repo keeps its Windows-first startup flow:
+This repo keeps a Windows-first startup flow and also includes a Mac-friendly launcher:
 
-- `start-all.bat`
-- `run-project.bat`
-- `run-server.vbs`
-- `Start DevFlow.lnk`
+- Windows: double-click `Start DevFlow.bat` or `scripts/start-all.bat`.
+- Mac: double-click `Start DevFlow.command`.
+- Terminal on any OS: run `npm run start:all`.
 
-Use these when you want the existing one-click local startup behavior instead of manual npm commands.
+The one-click flow runs `npm run setup`, starts the local DevFlow server, starts ngrok every time, and opens `http://localhost:3000` in your browser. Set `DEVFLOW_NGROK_DOMAIN` in `.env` to use a static ngrok domain; otherwise it runs `ngrok http 3000`.
+
+Make sure `ngrok` is installed and available in your terminal `PATH` on each machine that uses the one-click flow.
 
 Set `DEVFLOW_AGENT_TRIGGER_SCRIPT` to override the default trigger script path (`scripts/trigger-agent.bat`).
 

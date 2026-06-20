@@ -168,16 +168,42 @@ try {
   const qualityTool = catalog.tools.find((tool) => tool.name === 'validate_task_quality');
   const repoIndexTool = catalog.tools.find((tool) => tool.name === 'get_repo_inspection_index');
   const jiraBundleTool = catalog.tools.find((tool) => tool.name === 'get_jira_authoring_bundle');
+  const jiraDraftTool = catalog.tools.find((tool) => tool.name === 'draft_task_from_jira');
   assert.ok(createTaskSchema?.properties?.title);
   assert.ok(createTaskSchema?.properties?.projectId);
   assert.ok(createTaskSchema?.properties?.repoUrl);
+  assert.ok(createTaskSchema?.properties?.idempotencyKey);
   assert.ok(updateTaskSchema?.properties?.taskId);
+  assert.ok(updateTaskSchema?.properties?.idempotencyKey);
   assert.ok(qualityTool, 'validate_task_quality must be advertised in the MCP catalog');
   assert.ok(repoIndexTool, 'get_repo_inspection_index must be advertised in the MCP catalog');
   assert.ok(jiraBundleTool, 'get_jira_authoring_bundle must be advertised in the MCP catalog');
+  assert.ok(jiraDraftTool, 'draft_task_from_jira must be advertised in the MCP catalog');
   assert.match(String(qualityTool?.description || ''), /Implementation map/i);
   assert.match(String(repoIndexTool?.description || ''), /cached/i);
   assert.match(String(jiraBundleTool?.description || ''), /Jira issue packet/i);
+  assert.match(String(jiraDraftTool?.description || ''), /DevFlow Gateway/i);
+
+  const jiraDraftRequest = getToolDefinitionByName('draft_task_from_jira')?.buildHttpRequest({
+    jiraKey: 'QCA-3435',
+    projectId: 'project-contract-1',
+    idempotencyKey: 'contract-draft-key',
+  });
+  assert.equal(jiraDraftRequest?.method, 'POST');
+  assert.equal(jiraDraftRequest?.path, '/api/tasks/draft-from-jira');
+  assert.equal((jiraDraftRequest?.body as any)?.jiraKey, 'QCA-3435');
+  assert.equal((jiraDraftRequest?.body as any)?.idempotencyKey, 'contract-draft-key');
+
+  const jiraDraftAliasRequest = getToolDefinitionByName('draft_task_from_jira')?.buildHttpRequest({
+    issueKey: 'QCA-3436',
+    projectId: 'project-contract-1',
+  });
+  assert.equal((jiraDraftAliasRequest?.body as any)?.jiraKey, 'QCA-3436');
+  assert.equal(
+    Array.isArray((jiraDraftTool?.inputSchema as any)?.anyOf),
+    true,
+    'draft_task_from_jira schema must allow jiraKey, issueKey, or key aliases for strict MCP clients',
+  );
 
   console.log('[verify] Testing ChatGPT-friendly task listing defaults...');
   const listTasksTool = getToolDefinitionByName('list_tasks');

@@ -15,6 +15,18 @@ export class ResourceBusyError extends DevFlowApiError {
   }
 }
 
+export class IdempotencyConflictError extends DevFlowApiError {
+  constructor(key: string) {
+    super(409, {
+      code: 'IDEMPOTENCY_CONFLICT',
+      message: `Idempotency key '${key}' was already used for a different request.`,
+      retryable: false,
+      affectedId: key,
+    });
+    this.name = 'IdempotencyConflictError';
+  }
+}
+
 interface LockEntry {
   token: string;
   timestamp: number;
@@ -67,6 +79,7 @@ export interface IdempotencyEntry {
   status: 'pending' | 'resolved';
   result?: any;
   timestamp: number;
+  fingerprint?: string;
 }
 
 // In-memory idempotency store
@@ -124,6 +137,10 @@ export function stopIdempotencyCleanupInterval(): void {
 startIdempotencyCleanupInterval(5 * 60 * 1000);
 
 export function createPendingIdempotency(key: string): Promise<any> {
+  return createPendingIdempotencyWithFingerprint(key);
+}
+
+export function createPendingIdempotencyWithFingerprint(key: string, fingerprint?: string): Promise<any> {
   let resolveFn!: (value: any) => void;
   let rejectFn!: (reason?: any) => void;
   const promise = new Promise<any>((resolve, reject) => {
@@ -137,7 +154,8 @@ export function createPendingIdempotency(key: string): Promise<any> {
   idempotencyCache.set(key, {
     promise,
     status: 'pending',
-    timestamp: Date.now()
+    timestamp: Date.now(),
+    fingerprint,
   });
 
   pendingControlsMap.set(key, {
@@ -149,6 +167,7 @@ export function createPendingIdempotency(key: string): Promise<any> {
 }
 
 export function resolvePendingIdempotency(key: string, result: any): void {
+  const existing = idempotencyCache.get(key);
   const controls = pendingControlsMap.get(key);
   if (controls) {
     controls.resolve(result);
@@ -158,7 +177,8 @@ export function resolvePendingIdempotency(key: string, result: any): void {
     promise: Promise.resolve(result),
     status: 'resolved',
     result,
-    timestamp: Date.now()
+    timestamp: Date.now(),
+    fingerprint: existing?.fingerprint,
   });
 }
 
@@ -176,9 +196,16 @@ export function rejectPendingIdempotency(key: string, error: any): void {
  * If yes, returns the previous result or the pending promise.
  * If no, returns undefined.
  */
-export function getIdempotencyResult(key: string): any {
+function assertFingerprintCompatible(key: string, entry: IdempotencyEntry, fingerprint?: string): void {
+  if (entry.fingerprint && fingerprint && entry.fingerprint !== fingerprint) {
+    throw new IdempotencyConflictError(key);
+  }
+}
+
+export function getIdempotencyResult(key: string, fingerprint?: string): any {
   const entry = idempotencyCache.get(key);
   if (entry) {
+    assertFingerprintCompatible(key, entry, fingerprint);
     if (entry.status === 'pending') {
       return entry.promise;
     }
@@ -187,29 +214,62 @@ export function getIdempotencyResult(key: string): any {
   return undefined;
 }
 
-export function setIdempotencyResult(key: string, result: any): void {
+export function setIdempotencyResult(key: string, result: any, fingerprint?: string): void {
   idempotencyCache.set(key, {
     promise: Promise.resolve(result),
     status: 'resolved',
     result,
-    timestamp: Date.now()
+    timestamp: Date.now(),
+    fingerprint,
   });
 }
 
-export async function withIdempotency<T>(key: string | undefined | null, operation: () => Promise<T>): Promise<T> {
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringify).join(',')}]`;
+  }
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([key]) => key !== 'idempotencyKey')
+      .sort(([a], [b]) => a.localeCompare(b));
+    return `{${entries.map(([key, child]) => `${JSON.stringify(key)}:${stableStringify(child)}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+export function buildIdempotencyFingerprint(method: string, path: string, payload: unknown): string {
+  const hash = crypto
+    .createHash('sha256')
+    .update(stableStringify(payload))
+    .digest('hex');
+  return `${method.toUpperCase()} ${path} ${hash}`;
+}
+
+export async function withIdempotency<T>(
+  key: string | undefined | null,
+  fingerprintOrOperation: string | (() => Promise<T>),
+  maybeOperation?: () => Promise<T>,
+): Promise<T> {
+  const fingerprint = typeof fingerprintOrOperation === 'string' ? fingerprintOrOperation : undefined;
+  const operation = typeof fingerprintOrOperation === 'function' ? fingerprintOrOperation : maybeOperation;
+  if (!operation) {
+    throw new Error('withIdempotency requires an operation.');
+  }
+
   if (!key) {
     return operation();
   }
 
   const entry = idempotencyCache.get(key);
   if (entry) {
+    assertFingerprintCompatible(key, entry, fingerprint);
     if (entry.status === 'pending') {
       return entry.promise;
     }
     return entry.result;
   }
 
-  const promise = createPendingIdempotency(key);
+  const promise = createPendingIdempotencyWithFingerprint(key, fingerprint);
   try {
     const result = await operation();
     resolvePendingIdempotency(key, result);
@@ -219,4 +279,3 @@ export async function withIdempotency<T>(key: string | undefined | null, operati
     throw error;
   }
 }
-

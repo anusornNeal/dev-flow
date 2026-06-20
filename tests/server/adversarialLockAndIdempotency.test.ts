@@ -123,6 +123,30 @@ test('Resource locks prevent conflicting operations and return RESOURCE_BUSY err
   assert.equal(successResponse.status, 201);
 });
 
+test('Resource locks cannot be bypassed by public request body fields', async () => {
+  const { acquireLock, releaseLock } = await import('../../src/server/services/lockAndIdempotencyService.js');
+  const token = acquireLock('proj-adversarial-1');
+
+  try {
+    const response = await fetch(`${base}/api/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        projectId: 'proj-adversarial-1',
+        title: 'Task attempting public lock bypass',
+        category: 'backend',
+        resourceLockOverride: true,
+      }),
+    });
+
+    assert.equal(response.status, 409);
+    const body = await response.json() as any;
+    assert.equal(body.error.code, 'RESOURCE_BUSY');
+  } finally {
+    releaseLock('proj-adversarial-1', token);
+  }
+});
+
 test('Duplicate API calls within the idempotency window return cached result and do not duplicate DB actions', async () => {
   const idempotencyKey = `idemp-key-${Date.now()}`;
   clearPreparedCounts();
@@ -168,6 +192,36 @@ test('Duplicate API calls within the idempotency window return cached result and
   // Verify NO duplicate database writes happened
   const insertSqlKey2 = Object.keys(preparedStatementsCounts).find(k => k.includes('INSERT OR REPLACE INTO tasks') && k.includes('[run]'));
   assert.equal(insertSqlKey2, undefined, 'No insert SQL should run on duplicate idempotent call');
+});
+
+test('Reusing an idempotency key with a different payload returns IDEMPOTENCY_CONFLICT', async () => {
+  const idempotencyKey = `idemp-key-conflict-${Date.now()}`;
+
+  const res1 = await fetch(`${base}/api/tasks`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      projectId: 'proj-adversarial-1',
+      title: 'Conflict first payload',
+      category: 'backend',
+      idempotencyKey,
+    }),
+  });
+  assert.equal(res1.status, 201);
+
+  const res2 = await fetch(`${base}/api/tasks`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      projectId: 'proj-adversarial-1',
+      title: 'Conflict second payload',
+      category: 'backend',
+      idempotencyKey,
+    }),
+  });
+  assert.equal(res2.status, 409);
+  const body = await res2.json() as any;
+  assert.equal(body.error.code, 'IDEMPOTENCY_CONFLICT');
 });
 
 test('Concurrent API calls with the same idempotency key await the same pending promise', async () => {

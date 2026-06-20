@@ -12,6 +12,7 @@ import {
   getIdempotencyResult,
   setIdempotencyResult,
   createPendingIdempotency,
+  IdempotencyConflictError,
   resolvePendingIdempotency,
   rejectPendingIdempotency,
   startIdempotencyCleanupInterval,
@@ -97,6 +98,16 @@ test('withIdempotency returns cached resolved result', async () => {
   assert.deepEqual(res1, { val: 'success-1' });
   assert.deepEqual(res2, { val: 'success-1' });
   assert.equal(callCount, 1);
+});
+
+test('withIdempotency rejects reused keys with different fingerprints', async () => {
+  const key = 'idemp-key-conflict';
+  const first = await withIdempotency(key, 'POST:/api/tasks:hash-a', async () => ({ id: 'task-1' }));
+  assert.deepEqual(first, { id: 'task-1' });
+
+  await assert.rejects(async () => {
+    await withIdempotency(key, 'POST:/api/tasks:hash-b', async () => ({ id: 'task-2' }));
+  }, IdempotencyConflictError);
 });
 
 test('withIdempotency allows retries on operation failure', async () => {

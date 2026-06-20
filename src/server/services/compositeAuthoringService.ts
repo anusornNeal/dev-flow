@@ -56,7 +56,7 @@ export async function draftTaskFromJiraBundle(state: AppState, args: Record<stri
     const draftTaskPayload = {
       title: `[${jiraBundle.jira.key}] ${jiraBundle.jira.summary}`,
       description: jiraBundle.jira.descriptionText || '',
-      category: 'feature', // Sensible default
+      category: 'general',
       priority: 'medium',
       jiraKey: jiraBundle.jira.key,
       targetFiles: repoHints?.likelyFiles || [],

@@ -13,7 +13,7 @@ import { extractImages, extractDesignImages, findProjectByIdentifier, findTaskBy
 import { validateTaskQualityForMutation } from '../services/taskQualityService';
 import { createApiError, sendApiError } from '../services/api';
 import { draftTaskFromJiraBundle } from '../services/compositeAuthoringService';
-import { acquireLock, releaseLock, ResourceBusyError, withIdempotency, getIdempotencyResult, setIdempotencyResult, createPendingIdempotency, resolvePendingIdempotency, rejectPendingIdempotency } from '../services/lockAndIdempotencyService';
+import { acquireLock, releaseLock, withIdempotency, getIdempotencyResult, createPendingIdempotencyWithFingerprint, resolvePendingIdempotency, rejectPendingIdempotency, buildIdempotencyFingerprint } from '../services/lockAndIdempotencyService';
 import { validateEnum, validateString } from '../validation';
 import { getDevFlowAppRoot } from '../../lib/devFlowPaths';
 import { isValidTransition, getValidationErrorMessage } from '../../lib/statusTransitions';
@@ -239,6 +239,13 @@ function appendTaskLog(task: any, message: string, type: string = 'update') {
   const lastLog = Array.isArray(task.logs) ? task.logs[task.logs.length - 1] : null;
   if (lastLog?.message === message && lastLog?.type === type) return;
   task.logs = [...(task.logs || []), createTaskLogEntry(message, type)];
+}
+
+function stripRequestControlFields<T extends Record<string, any>>(input: T): T {
+  const copy = { ...input };
+  delete copy.idempotencyKey;
+  delete copy.resourceLockOverride;
+  return copy;
 }
 
 function taskRequiresManualEvidence(task: any) {
@@ -1070,19 +1077,28 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
 
   app.post('/api/tasks/draft-from-jira', async (req, res, next) => {
     try {
-      const payload = await withIdempotency(req.body.idempotencyKey, async () => {
+      const fingerprint = buildIdempotencyFingerprint(req.method, req.path, req.body);
+      const payload = await withIdempotency(req.body.idempotencyKey, fingerprint, async () => {
         return await draftTaskFromJiraBundle(deps.state, req.body);
       });
       res.json(payload);
     } catch (error) {
-      next(error);
+      sendApiError(res, error);
     }
   });
 
   app.post('/api/tasks', async (req, res, next) => {
     const idempotencyKey = req.body?.idempotencyKey;
+    const idempotencyFingerprint = idempotencyKey
+      ? buildIdempotencyFingerprint(req.method, req.path, req.body)
+      : undefined;
     if (idempotencyKey) {
-      const cached = getIdempotencyResult(idempotencyKey);
+      let cached;
+      try {
+        cached = getIdempotencyResult(idempotencyKey, idempotencyFingerprint);
+      } catch (err) {
+        return sendApiError(res, err);
+      }
       if (cached !== undefined) {
         if (cached instanceof Promise) {
           try {
@@ -1094,7 +1110,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
         }
         return res.json(cached);
       }
-      createPendingIdempotency(idempotencyKey);
+      createPendingIdempotencyWithFingerprint(idempotencyKey, idempotencyFingerprint);
       const originalJson = res.json;
       res.json = function (body) {
         if (res.statusCode >= 200 && res.statusCode < 300) {
@@ -1106,7 +1122,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
       };
     }
 
-    const lockKey = req.body?.resourceLockOverride ? null : (req.body?.projectId || req.body?.repo || 'global-create');
+    const lockKey = req.body?.projectId || req.body?.repo || 'global-create';
     let lockToken: string | null = null;
     if (lockKey) {
       try {
@@ -1833,8 +1849,16 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
 
   app.put('/api/tasks/:id', async (req, res, next) => {
     const idempotencyKey = req.body?.idempotencyKey;
+    const idempotencyFingerprint = idempotencyKey
+      ? buildIdempotencyFingerprint(req.method, req.path, req.body)
+      : undefined;
     if (idempotencyKey) {
-      const cached = getIdempotencyResult(idempotencyKey);
+      let cached;
+      try {
+        cached = getIdempotencyResult(idempotencyKey, idempotencyFingerprint);
+      } catch (err) {
+        return sendApiError(res, err);
+      }
       if (cached !== undefined) {
         if (cached instanceof Promise) {
           try {
@@ -1846,7 +1870,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
         }
         return res.json(cached);
       }
-      createPendingIdempotency(idempotencyKey);
+      createPendingIdempotencyWithFingerprint(idempotencyKey, idempotencyFingerprint);
       const originalJson = res.json;
       res.json = function (body) {
         if (res.statusCode >= 200 && res.statusCode < 300) {
@@ -1858,7 +1882,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
       };
     }
 
-    const lockKey = req.body?.resourceLockOverride ? null : req.params.id;
+    const lockKey = req.params.id;
     let lockToken: string | null = null;
     if (lockKey) {
       try {
@@ -1877,7 +1901,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
       if (taskIndex === -1) return res.status(404).json({ error: 'Task not found' });
 
       const currentTask = deps.state.tasksCache[taskIndex];
-      let updateBody = req.body;
+      let updateBody = stripRequestControlFields(req.body);
 
       if (currentTask.status === 'in-progress' && !canOverrideTaskLock(currentTask, req.body, undefined, req.headers['x-agent-request'])) {
         return res.status(403).json({ error: 'Task is locked by an agent. Use emergency flag to override.' });

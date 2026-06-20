@@ -98,9 +98,11 @@ function jiraAuthHeaders(email: string, token: string) {
 export async function buildJiraAuthoringBundle(
   state: AppState,
   args: Record<string, any>,
-  signal?: AbortSignal,
-  fetchImpl: FetchLike = fetch
+  signalOrFetch?: AbortSignal | FetchLike,
+  fetchImplArg?: FetchLike
 ) {
+  const signal = typeof signalOrFetch === 'function' ? undefined : signalOrFetch;
+  const fetchImpl = typeof signalOrFetch === 'function' ? signalOrFetch : (fetchImplArg || fetch);
   const jiraKey = String(args.jiraKey || args.issueKey || args.key || '').trim().toUpperCase();
   if (!jiraKey) {
     throw createApiError(400, 'JIRA_KEY_REQUIRED', 'jiraKey is required.');

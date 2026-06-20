@@ -88,3 +88,34 @@ test('getRepoInspectionIndex checks signal.aborted and throws error', async () =
     return err instanceof Error && err.message === 'Operation aborted';
   });
 });
+
+test('draftTaskFromJiraBundle returns a create_task-compatible category', async () => {
+  const originalFetch = globalThis.fetch;
+  const state: any = {
+    settingsCache: {
+      jiraBaseUrl: 'https://example.atlassian.net',
+      jiraEmail: 'test@example.com',
+      jiraToken: 'token123'
+    },
+    tasksCache: []
+  };
+
+  globalThis.fetch = (async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      key: 'JIRA-101',
+      fields: {
+        summary: 'Gateway authoring',
+        description: 'Create a gateway authoring draft'
+      }
+    })
+  })) as any;
+
+  try {
+    const result = await draftTaskFromJiraBundle(state, { jiraKey: 'JIRA-101' });
+    assert.equal(result.draftPayload.category, 'general');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

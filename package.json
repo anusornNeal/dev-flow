@@ -13,6 +13,7 @@
     "test": "tsx scripts/verify.ts",
     "test:agent-runs": "tsx scripts/verify-agent-runs.ts",
     "test:absolute-paths": "tsx scripts/verify-absolute-paths.ts",
+    "test:gateway": "tsx tests/server/jiraAuthoringBundle.test.ts && tsx tests/server/compositeAuthoringService.test.ts && tsx tests/server/lockAndIdempotency.test.ts && tsx tests/server/adversarialLockAndIdempotency.test.ts",
     "test:import-tasks": "tsx tests/devflow/import-tasks-from-file.test.ts",
     "test:prompt-templates": "tsx scripts/verify-prompt-templates.ts",
     "test:orchestration": "tsx scripts/verify-orchestration.ts",

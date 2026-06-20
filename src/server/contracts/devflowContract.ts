@@ -35,6 +35,10 @@ const mutationResponseModeProperty = {
   responseMode: { type: 'string', enum: ['standard', 'summary', 'ack'], description: 'Mutation response density. Use summary or ack for faster ChatGPT tool calls.' },
 };
 
+const mutationControlProperties = {
+  idempotencyKey: { type: 'string', description: 'Stable client-provided key for safe retries. Reusing the key with a different request returns IDEMPOTENCY_CONFLICT.' },
+};
+
 const taskIdentifierProperty = {
   taskId: { type: 'string', description: 'Task internal id or displayId such as DVF-0120.' },
 };
@@ -209,6 +213,37 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
       path: withQuery('/api/jira/authoring-bundle', {
         jiraKey: args.jiraKey || args.issueKey || args.key,
       }),
+    }),
+  },
+  {
+    name: 'draft_task_from_jira',
+    aliases: ['draft_implementation_card_from_jira'],
+    description: 'DevFlow Gateway composite tool: fetch Jira context, gather targeted repo hints when project context is provided, and return a create_task-compatible draft payload without requiring separate Dev Jira or Dev Github connectors.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...projectIdentifierProperties,
+        jiraKey: { type: 'string', description: 'Jira issue key, e.g. QCA-3435.' },
+        issueKey: { type: 'string', description: 'Alias for jiraKey.' },
+        key: { type: 'string', description: 'Alias for jiraKey.' },
+        budgetMs: { type: 'number', description: 'Maximum composite authoring time in milliseconds. Default is 60000.' },
+        limit: { type: 'number', description: 'Maximum repo hint entries returned.' },
+        idempotencyKey: { type: 'string', description: 'Stable client-provided key for safe retries.' },
+      },
+      anyOf: [
+        { required: ['jiraKey'] },
+        { required: ['issueKey'] },
+        { required: ['key'] },
+      ],
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: (args) => ({
+      method: 'POST',
+      path: '/api/tasks/draft-from-jira',
+      body: {
+        ...args,
+        jiraKey: args.jiraKey || args.issueKey || args.key,
+      },
     }),
   },
   {
@@ -425,6 +460,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
       properties: {
         ...projectIdentifierProperties,
         ...taskMutationProperties,
+        ...mutationControlProperties,
         ...mutationResponseModeProperty,
       },
       required: ['title', 'category'],
@@ -446,6 +482,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
         ...taskMutationProperties,
         ...projectIdentifierProperties,
         ...booleanFlagSchema.properties,
+        ...mutationControlProperties,
         ...mutationResponseModeProperty,
       },
       required: ['taskId'],

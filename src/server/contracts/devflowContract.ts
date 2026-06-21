@@ -1055,6 +1055,132 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
     }),
   },
   {
+    name: 'apply_patch',
+    description: 'Apply or dry-run check a small unified diff patch safely within a resolved local project root.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...projectIdentifierProperties,
+        patch: { type: 'string', description: 'Unified diff patch text, max 200 KB by default.' },
+        dryRun: { type: 'boolean', description: 'When true, validate and check the patch without changing files.' },
+        check: { type: 'boolean', description: 'Alias for dryRun.' },
+        maxPatchBytes: { type: 'number', description: 'Optional patch size limit, capped at 1 MB.' },
+        maxSummaryBytes: { type: 'number', description: 'Optional response summary limit, capped at 100 KB.' },
+      },
+      required: ['patch'],
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        changedFiles: { type: 'array', items: { type: 'string' } },
+        dryRun: { type: 'boolean' },
+        applied: { type: 'boolean' },
+        exitCode: { type: ['number', 'null'] },
+        summary: { type: 'string' },
+        truncated: { type: 'boolean' },
+      },
+    },
+    buildHttpRequest: (args) => ({
+      method: 'POST',
+      path: '/api/local-files/apply-patch',
+      body: args,
+    }),
+  },
+  {
+    name: 'run_project_command',
+    description: 'Run an allowlisted local verification command such as typecheck, test, lint, build, or verify inside a resolved project root.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...projectIdentifierProperties,
+        command: { type: 'string', enum: ['typecheck', 'test', 'lint', 'build', 'verify'], description: 'Allowlisted verification command preset.' },
+        preset: { type: 'string', enum: ['typecheck', 'test', 'lint', 'build', 'verify'], description: 'Alias for command.' },
+        cwd: { type: 'string', description: 'Optional safe subdirectory under the project root.' },
+        timeoutMs: { type: 'number', description: 'Optional timeout in milliseconds, capped at 300000.' },
+        maxOutputBytes: { type: 'number', description: 'Optional per-stream stdout/stderr byte limit, capped at 100000.' },
+      },
+      anyOf: [
+        { required: ['command'] },
+        { required: ['preset'] },
+      ],
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        command: { type: 'string' },
+        cwd: { type: 'string' },
+        exitCode: { type: ['number', 'null'] },
+        durationMs: { type: 'number' },
+        timedOut: { type: 'boolean' },
+        signal: { type: ['string', 'null'] },
+        stdout: { type: 'string' },
+        stderr: { type: 'string' },
+        stdoutTruncated: { type: 'boolean' },
+        stderrTruncated: { type: 'boolean' },
+      },
+    },
+    buildHttpRequest: (args) => ({
+      method: 'POST',
+      path: '/api/project-commands/run',
+      body: {
+        ...args,
+        command: args.command || args.preset,
+      },
+    }),
+  },
+  {
+    name: 'parse_test_report',
+    description: 'Parse raw verification output and safe local report files into a compact normalized pass/fail summary.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...projectIdentifierProperties,
+        rawOutput: { type: 'string', description: 'Raw stdout/stderr or pasted report text to summarize.' },
+        reportPaths: { type: 'array', items: { type: 'string' }, description: 'Optional safe report file paths under the project root.' },
+        parserKind: { type: 'string', enum: ['auto', 'tsc', 'node-assertion', 'devflow-verify', 'npm-script', 'unknown'], description: 'Reserved parser hint for future expansion. Current behavior auto-detects.' },
+        maxBytes: { type: 'number', description: 'Optional combined raw/report byte limit, capped at 100000.' },
+      },
+      anyOf: [
+        { required: ['rawOutput'] },
+        { required: ['reportPaths'] },
+      ],
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        status: { type: 'string', enum: ['passed', 'failed', 'unknown'] },
+        parserKind: { type: 'string', enum: ['tsc', 'node-assertion', 'devflow-verify', 'npm-script', 'unknown'] },
+        source: {
+          type: 'object',
+          properties: {
+            usedRawOutput: { type: 'boolean' },
+            reportPaths: { type: 'array', items: { type: 'string' } },
+          },
+        },
+        totals: {
+          type: 'object',
+          properties: {
+            total: { type: ['number', 'null'] },
+            passed: { type: ['number', 'null'] },
+            failed: { type: ['number', 'null'] },
+            errors: { type: ['number', 'null'] },
+            warnings: { type: ['number', 'null'] },
+          },
+        },
+        failingFiles: { type: 'array', items: { type: 'string' } },
+        errorSnippets: { type: 'array', items: { type: 'string' } },
+        suggestedNextCommand: { type: ['string', 'null'] },
+        truncated: { type: 'boolean' },
+        consumedBytes: { type: 'number' },
+      },
+    },
+    buildHttpRequest: (args) => ({
+      method: 'POST',
+      path: '/api/test-reports/parse',
+      body: args,
+    }),
+  },
+  {
     name: 'search_local_files',
     description: 'Search local files without reading the full repo. Prefer this local search before remote GitHub search when the user does not specify a source.',
     inputSchema: {

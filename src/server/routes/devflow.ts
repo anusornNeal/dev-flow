@@ -3,6 +3,9 @@ import type { ApiRouteDeps } from '../types';
 import { getCapabilityCatalog } from '../contracts/devflowContract';
 import { sendApiError } from '../services/api';
 import { listLocalFiles, readLocalFile, searchLocalFiles, writeLocalFile } from '../services/localFileService';
+import { applyLocalPatch } from '../services/localPatchService';
+import { runProjectCommand } from '../services/projectCommandService';
+import { parseTestReport } from '../services/testReportParserService';
 import { getGitLog, getGitDiff, getGitShow, getGitStatus, getGitBranch } from '../services/gitService';
 import { getProjectStartContext } from '../services/projectStartContextService';
 import { getToolCallSummary } from '../services/mcpToolMonitor';
@@ -62,6 +65,30 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
   app.post('/api/local-files/write', (req, res) => {
     try {
       return res.json(writeLocalFile(deps.state, req.body as Record<string, any>));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.post('/api/local-files/apply-patch', (req, res) => {
+    try {
+      return res.json(applyLocalPatch(deps.state, req.body as Record<string, any>));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.post('/api/project-commands/run', (req, res) => {
+    try {
+      return res.json(runProjectCommand(deps.state, req.body as Record<string, any>));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.post('/api/test-reports/parse', (req, res) => {
+    try {
+      return res.json(parseTestReport(deps.state, req.body as Record<string, any>));
     } catch (error) {
       return sendApiError(res, error);
     }

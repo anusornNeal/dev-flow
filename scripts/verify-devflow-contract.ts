@@ -10,6 +10,34 @@ process.env.DEVFLOW_DB_PATH = path.join(tempDir, 'devflow.db');
 const scratchDir = path.join(tempDir, 'scratch');
 fs.mkdirSync(scratchDir, { recursive: true });
 fs.writeFileSync(path.join(scratchDir, 'note.txt'), 'needle line\nsecond line\n', 'utf8');
+const commandSubdir = path.join(tempDir, 'subdir');
+fs.mkdirSync(commandSubdir, { recursive: true });
+const reportsDir = path.join(tempDir, 'reports');
+fs.mkdirSync(reportsDir, { recursive: true });
+fs.writeFileSync(
+  path.join(reportsDir, 'tsc-failure.txt'),
+  [
+    'src/server/example.ts(12,5): error TS2322: Type \'number\' is not assignable to type \'string\'.',
+    'src/server/example.ts(18,9): error TS7006: Parameter \'value\' implicitly has an \'any\' type.',
+    '',
+  ].join('\n'),
+  'utf8',
+);
+fs.writeFileSync(
+  path.join(tempDir, 'package.json'),
+  JSON.stringify({
+    name: 'devflow-contract-fixture',
+    private: true,
+    scripts: {
+      typecheck: 'node -e "console.log(\'fixture-typecheck-ok\')"',
+      test: 'node -e "console.error(\'fixture-test-fail\'); process.exit(2)"',
+      verify: 'node -e "setTimeout(() => console.log(\'fixture-verify-finished\'), 250)"',
+      lint: 'node -e "process.stdout.write(\'x\'.repeat(1200))"',
+      build: 'node -e "console.log(process.env.INIT_CWD || process.cwd())"',
+    },
+  }, null, 2),
+  'utf8',
+);
 
 const express = (await import('express')).default;
 const { registerApiRoutes } = await import('../src/server/routes/registerApiRoutes.js');
@@ -147,6 +175,244 @@ try {
   assert.equal(searchFilesBody.count, 1);
   assert.equal(searchFilesBody.matches[0].line, 1);
 
+  console.log('[verify] Testing local patch tool...');
+  const dryRunPatch = [
+    '--- a/scratch/note.txt',
+    '+++ b/scratch/note.txt',
+    '@@ -1,2 +1,2 @@',
+    '-needle line',
+    '+patched needle line',
+    ' second line',
+    '',
+  ].join('\n');
+  const dryRunPatchResponse = await fetch(`${baseUrl}/api/local-files/apply-patch`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectId: 'project-contract-1', patch: dryRunPatch, dryRun: true }),
+  });
+  assert.equal(dryRunPatchResponse.status, 200);
+  const dryRunPatchBody = await dryRunPatchResponse.json();
+  assert.equal(dryRunPatchBody.applied, false);
+  assert.equal(dryRunPatchBody.dryRun, true);
+  assert.deepEqual(dryRunPatchBody.changedFiles, ['scratch/note.txt']);
+  assert.match(fs.readFileSync(path.join(scratchDir, 'note.txt'), 'utf8'), /^needle line/);
+
+  const applyPatchResponse = await fetch(`${baseUrl}/api/local-files/apply-patch`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectId: 'project-contract-1', patch: dryRunPatch, dryRun: false }),
+  });
+  assert.equal(applyPatchResponse.status, 200);
+  const applyPatchBody = await applyPatchResponse.json();
+  assert.equal(applyPatchBody.applied, true);
+  assert.equal(applyPatchBody.dryRun, false);
+  assert.deepEqual(applyPatchBody.changedFiles, ['scratch/note.txt']);
+  assert.match(applyPatchBody.summary, /scratch\/note\.txt/);
+  assert.match(fs.readFileSync(path.join(scratchDir, 'note.txt'), 'utf8'), /^patched needle line/);
+
+  const unsafePatch = [
+    '--- a/../outside.txt',
+    '+++ b/../outside.txt',
+    '@@ -0,0 +1 @@',
+    '+outside',
+    '',
+  ].join('\n');
+  const unsafePatchResponse = await fetch(`${baseUrl}/api/local-files/apply-patch`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectId: 'project-contract-1', patch: unsafePatch, dryRun: true }),
+  });
+  assert.equal(unsafePatchResponse.status, 403);
+  const unsafePatchBody = await unsafePatchResponse.json();
+  assert.equal(unsafePatchBody.error.code, 'PATCH_PATH_DENIED');
+
+  const binaryPatch = [
+    'diff --git a/scratch/image.bin b/scratch/image.bin',
+    'new file mode 100644',
+    'index 0000000..1111111',
+    'GIT binary patch',
+    'literal 0',
+    '',
+  ].join('\n');
+  const binaryPatchResponse = await fetch(`${baseUrl}/api/local-files/apply-patch`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectId: 'project-contract-1', patch: binaryPatch, dryRun: true }),
+  });
+  assert.equal(binaryPatchResponse.status, 400);
+  const binaryPatchBody = await binaryPatchResponse.json();
+  assert.equal(binaryPatchBody.error.code, 'BINARY_PATCH_UNSUPPORTED');
+
+  const invalidPatchResponse = await fetch(`${baseUrl}/api/local-files/apply-patch`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectId: 'project-contract-1', patch: 'not a unified diff', dryRun: true }),
+  });
+  assert.equal(invalidPatchResponse.status, 400);
+  const invalidPatchBody = await invalidPatchResponse.json();
+  assert.equal(invalidPatchBody.error.code, 'INVALID_PATCH');
+
+  console.log('[verify] Testing project command tool...');
+  const typecheckCommandResponse = await fetch(`${baseUrl}/api/project-commands/run`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectId: 'project-contract-1', command: 'typecheck' }),
+  });
+  assert.equal(typecheckCommandResponse.status, 200);
+  const typecheckCommandBody = await typecheckCommandResponse.json();
+  assert.equal(typecheckCommandBody.command, 'typecheck');
+  assert.equal(typecheckCommandBody.exitCode, 0);
+  assert.equal(typecheckCommandBody.timedOut, false);
+  assert.match(typecheckCommandBody.stdout, /fixture-typecheck-ok/);
+
+  const failingCommandResponse = await fetch(`${baseUrl}/api/project-commands/run`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectId: 'project-contract-1', command: 'test' }),
+  });
+  assert.equal(failingCommandResponse.status, 200);
+  const failingCommandBody = await failingCommandResponse.json();
+  assert.equal(failingCommandBody.command, 'test');
+  assert.equal(failingCommandBody.exitCode, 2);
+  assert.equal(failingCommandBody.timedOut, false);
+  assert.match(failingCommandBody.stderr, /fixture-test-fail/);
+
+  const timeoutCommandResponse = await fetch(`${baseUrl}/api/project-commands/run`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectId: 'project-contract-1', command: 'verify', timeoutMs: 50 }),
+  });
+  assert.equal(timeoutCommandResponse.status, 200);
+  const timeoutCommandBody = await timeoutCommandResponse.json();
+  assert.equal(timeoutCommandBody.command, 'verify');
+  assert.equal(timeoutCommandBody.timedOut, true);
+
+  const truncatedCommandResponse = await fetch(`${baseUrl}/api/project-commands/run`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectId: 'project-contract-1', command: 'lint', maxOutputBytes: 80 }),
+  });
+  assert.equal(truncatedCommandResponse.status, 200);
+  const truncatedCommandBody = await truncatedCommandResponse.json();
+  assert.equal(truncatedCommandBody.command, 'lint');
+  assert.equal(truncatedCommandBody.stdoutTruncated, true);
+  assert.ok(truncatedCommandBody.stdout.length <= 100);
+
+  const cwdCommandResponse = await fetch(`${baseUrl}/api/project-commands/run`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectId: 'project-contract-1', command: 'build', cwd: 'subdir' }),
+  });
+  assert.equal(cwdCommandResponse.status, 200);
+  const cwdCommandBody = await cwdCommandResponse.json();
+  assert.equal(cwdCommandBody.command, 'build');
+  assert.match(String(cwdCommandBody.stdout).replace(/\\/g, '/'), /subdir/);
+
+  const unknownCommandResponse = await fetch(`${baseUrl}/api/project-commands/run`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectId: 'project-contract-1', command: 'npm test' }),
+  });
+  assert.equal(unknownCommandResponse.status, 400);
+  const unknownCommandBody = await unknownCommandResponse.json();
+  assert.equal(unknownCommandBody.error.code, 'COMMAND_NOT_ALLOWED');
+
+  const unsafeCwdCommandResponse = await fetch(`${baseUrl}/api/project-commands/run`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectId: 'project-contract-1', command: 'typecheck', cwd: '../elsewhere' }),
+  });
+  assert.equal(unsafeCwdCommandResponse.status, 403);
+  const unsafeCwdCommandBody = await unsafeCwdCommandResponse.json();
+  assert.equal(unsafeCwdCommandBody.error.code, 'COMMAND_CWD_DENIED');
+
+  console.log('[verify] Testing test report parser tool...');
+  const passingReportResponse = await fetch(`${baseUrl}/api/test-reports/parse`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      projectId: 'project-contract-1',
+      rawOutput: '[verify] Running lint...\n[verify] Verification completed successfully.\n',
+    }),
+  });
+  assert.equal(passingReportResponse.status, 200);
+  const passingReportBody = await passingReportResponse.json();
+  assert.equal(passingReportBody.status, 'passed');
+  assert.equal(passingReportBody.parserKind, 'devflow-verify');
+  assert.equal(passingReportBody.errorSnippets.length, 0);
+  assert.equal(passingReportBody.suggestedNextCommand, null);
+
+  const tscReportResponse = await fetch(`${baseUrl}/api/test-reports/parse`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      projectId: 'project-contract-1',
+      rawOutput: 'src/server/example.ts(12,5): error TS2322: Type \'number\' is not assignable to type \'string\'.\n',
+    }),
+  });
+  assert.equal(tscReportResponse.status, 200);
+  const tscReportBody = await tscReportResponse.json();
+  assert.equal(tscReportBody.status, 'failed');
+  assert.equal(tscReportBody.parserKind, 'tsc');
+  assert.deepEqual(tscReportBody.failingFiles, ['src/server/example.ts']);
+  assert.match(tscReportBody.errorSnippets[0], /TS2322/);
+  assert.equal(tscReportBody.suggestedNextCommand, 'npm run typecheck');
+
+  const assertionReportResponse = await fetch(`${baseUrl}/api/test-reports/parse`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      projectId: 'project-contract-1',
+      rawOutput: 'AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n\n1 !== 2\n\n    at <anonymous> (C:\\\\repo\\\\scripts\\\\verify.ts:10:3)\n',
+    }),
+  });
+  assert.equal(assertionReportResponse.status, 200);
+  const assertionReportBody = await assertionReportResponse.json();
+  assert.equal(assertionReportBody.status, 'failed');
+  assert.equal(assertionReportBody.parserKind, 'node-assertion');
+  assert.match(assertionReportBody.errorSnippets[0], /ERR_ASSERTION/);
+  assert.match(assertionReportBody.failingFiles[0], /scripts\/verify\.ts|scripts\\verify\.ts/);
+
+  const fileReportResponse = await fetch(`${baseUrl}/api/test-reports/parse`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      projectId: 'project-contract-1',
+      reportPaths: ['reports/tsc-failure.txt'],
+    }),
+  });
+  assert.equal(fileReportResponse.status, 200);
+  const fileReportBody = await fileReportResponse.json();
+  assert.equal(fileReportBody.status, 'failed');
+  assert.deepEqual(fileReportBody.source.reportPaths, ['reports/tsc-failure.txt']);
+  assert.match(fileReportBody.errorSnippets[0], /TS2322/);
+
+  const oversizedReportResponse = await fetch(`${baseUrl}/api/test-reports/parse`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      projectId: 'project-contract-1',
+      rawOutput: `AssertionError [ERR_ASSERTION]: ${'x'.repeat(5000)}`,
+      maxBytes: 120,
+    }),
+  });
+  assert.equal(oversizedReportResponse.status, 200);
+  const oversizedReportBody = await oversizedReportResponse.json();
+  assert.equal(oversizedReportBody.truncated, true);
+  assert.ok(oversizedReportBody.consumedBytes <= 133);
+
+  const unsafeReportPathResponse = await fetch(`${baseUrl}/api/test-reports/parse`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      projectId: 'project-contract-1',
+      reportPaths: ['../outside.txt'],
+    }),
+  });
+  assert.equal(unsafeReportPathResponse.status, 403);
+  const unsafeReportPathBody = await unsafeReportPathResponse.json();
+  assert.equal(unsafeReportPathBody.error.code, 'REPORT_PATH_DENIED');
+
   console.log('[verify] Testing structured error normalization...');
   const missingProjectFileResponse = await fetch(`${baseUrl}/api/local-files?projectName=missing-project&path=scratch`);
   assert.equal(missingProjectFileResponse.status, 404);
@@ -161,6 +427,9 @@ try {
   assert.ok(mcpTools.some((tool) => tool.name === 'get_agent_context'));
   assert.ok(mcpTools.some((tool) => tool.name === 'get_agent_task_context'));
   assert.ok(mcpTools.some((tool) => tool.name === 'import_tasks_from_file'));
+  assert.ok(mcpTools.some((tool) => tool.name === 'apply_patch'));
+  assert.ok(mcpTools.some((tool) => tool.name === 'run_project_command'));
+  assert.ok(mcpTools.some((tool) => tool.name === 'parse_test_report'));
   assert.ok(mcpTools.length > catalog.tools.length);
 
   const createTaskSchema = catalog.tools.find((tool) => tool.name === 'create_task')?.inputSchema;
@@ -169,6 +438,9 @@ try {
   const repoIndexTool = catalog.tools.find((tool) => tool.name === 'get_repo_inspection_index');
   const jiraBundleTool = catalog.tools.find((tool) => tool.name === 'get_jira_authoring_bundle');
   const jiraDraftTool = catalog.tools.find((tool) => tool.name === 'draft_task_from_jira');
+  const applyPatchTool = catalog.tools.find((tool) => tool.name === 'apply_patch');
+  const runProjectCommandTool = catalog.tools.find((tool) => tool.name === 'run_project_command');
+  const parseTestReportTool = catalog.tools.find((tool) => tool.name === 'parse_test_report');
   assert.ok(createTaskSchema?.properties?.title);
   assert.ok(createTaskSchema?.properties?.projectId);
   assert.ok(createTaskSchema?.properties?.repoUrl);
@@ -179,10 +451,48 @@ try {
   assert.ok(repoIndexTool, 'get_repo_inspection_index must be advertised in the MCP catalog');
   assert.ok(jiraBundleTool, 'get_jira_authoring_bundle must be advertised in the MCP catalog');
   assert.ok(jiraDraftTool, 'draft_task_from_jira must be advertised in the MCP catalog');
+  assert.ok(applyPatchTool, 'apply_patch must be advertised in the MCP catalog');
+  assert.ok(runProjectCommandTool, 'run_project_command must be advertised in the MCP catalog');
+  assert.ok(parseTestReportTool, 'parse_test_report must be advertised in the MCP catalog');
   assert.match(String(qualityTool?.description || ''), /Implementation map/i);
   assert.match(String(repoIndexTool?.description || ''), /cached/i);
   assert.match(String(jiraBundleTool?.description || ''), /Jira issue packet/i);
   assert.match(String(jiraDraftTool?.description || ''), /DevFlow Gateway/i);
+  assert.match(String(applyPatchTool?.description || ''), /unified diff/i);
+  assert.match(String(runProjectCommandTool?.description || ''), /allowlisted|verification/i);
+  assert.match(String(parseTestReportTool?.description || ''), /summary|report/i);
+
+  const applyPatchRequest = getToolDefinitionByName('apply_patch')?.buildHttpRequest({
+    projectId: 'project-contract-1',
+    patch: dryRunPatch,
+    dryRun: true,
+  });
+  assert.equal(applyPatchRequest?.method, 'POST');
+  assert.equal(applyPatchRequest?.path, '/api/local-files/apply-patch');
+  assert.equal((applyPatchRequest?.body as any)?.patch, dryRunPatch);
+  assert.equal((applyPatchRequest?.body as any)?.dryRun, true);
+
+  const runProjectCommandRequest = getToolDefinitionByName('run_project_command')?.buildHttpRequest({
+    projectId: 'project-contract-1',
+    command: 'typecheck',
+    cwd: 'subdir',
+    timeoutMs: 500,
+  });
+  assert.equal(runProjectCommandRequest?.method, 'POST');
+  assert.equal(runProjectCommandRequest?.path, '/api/project-commands/run');
+  assert.equal((runProjectCommandRequest?.body as any)?.command, 'typecheck');
+  assert.equal((runProjectCommandRequest?.body as any)?.cwd, 'subdir');
+
+  const parseTestReportRequest = getToolDefinitionByName('parse_test_report')?.buildHttpRequest({
+    projectId: 'project-contract-1',
+    rawOutput: 'ok',
+    reportPaths: ['reports/tsc-failure.txt'],
+    maxBytes: 500,
+  });
+  assert.equal(parseTestReportRequest?.method, 'POST');
+  assert.equal(parseTestReportRequest?.path, '/api/test-reports/parse');
+  assert.equal((parseTestReportRequest?.body as any)?.rawOutput, 'ok');
+  assert.deepEqual((parseTestReportRequest?.body as any)?.reportPaths, ['reports/tsc-failure.txt']);
 
   const jiraDraftRequest = getToolDefinitionByName('draft_task_from_jira')?.buildHttpRequest({
     jiraKey: 'QCA-3435',

@@ -12,7 +12,8 @@ export default function NgrokStatusPanel({ ngrokUrl, onOpenSettings }: NgrokStat
   const handleCopy = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!ngrokUrl) return;
-    navigator.clipboard.writeText(ngrokUrl);
+    const sseUrl = ngrokUrl.endsWith('/') ? `${ngrokUrl}sse` : `${ngrokUrl}/sse`;
+    navigator.clipboard.writeText(sseUrl);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -40,7 +41,9 @@ export default function NgrokStatusPanel({ ngrokUrl, onOpenSettings }: NgrokStat
           <Link size={12} className="text-[#659e51] dark:text-[#f3eadf]" />
           <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse border border-[#fdfbf6] dark:border-[#292119]"></span>
         </div>
-        <span className="truncate max-w-[220px]">{ngrokUrl}</span>
+        <span className="truncate max-w-[220px]">
+          {ngrokUrl.endsWith('/') ? `${ngrokUrl}sse` : `${ngrokUrl}/sse`}
+        </span>
       </div>
       
       <div className="w-px h-3 bg-[#e5d4bb] dark:bg-[#584a3b]"></div>

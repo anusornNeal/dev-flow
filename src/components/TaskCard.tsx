@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
-import { GitBranch, Copy, Check, Trash2, FileCode, CheckSquare, Image as ImageIcon, Link as LinkIcon, Lock, AlertTriangle, Ban, CircleCheck, Bot, Zap, ChevronDown, Flame, Coffee } from 'lucide-react';
+import { GitBranch, Copy, Check, Trash2, FileCode, CheckSquare, Image as ImageIcon, Link as LinkIcon, Lock, AlertTriangle, Ban, CircleCheck, Bot, Zap, ChevronDown, Flame, Coffee, Layout, Server } from 'lucide-react';
 import { Task } from '../types';
 import { AGENTS_CONFIG, getModelConfig, defaultModelForAgent, defaultEffortForModel, getDisplayModelName } from '../lib/agentsConfig';
 import { getAutoWorkState } from '../lib/autoWorkState';
@@ -113,21 +113,11 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
       }`}
       id={`task-card-${task.id}`}
     >
-      {/* Category Left Indicator Slider */}
-      {!isDone && task.category && task.category !== 'general' && (
-        <span 
-          className={`w-1 h-16 absolute left-0 top-1/2 -translate-y-1/2 rounded-r-md ${
-            task.category === 'backend' ? 'bg-[#5c493c] dark:bg-[#8a7a6a]' : 
-            task.category === 'frontend' ? 'bg-[#3c829e] dark:bg-[#72a1b5]' : 
-            'bg-transparent'
-          }`}
-        />
-      )}
 
       <div className="flex flex-col h-full pl-0.5">
         <div className="flex justify-between items-start gap-2 mb-1.5">
           {/* Prominent Task ID & Locked Agent */}
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <div 
               className="text-[15px] font-mono font-black text-[#d89745] dark:text-[#e0a070] cursor-pointer hover:bg-[#ebdcb9] dark:hover:bg-[#584a3b]/40 px-1.5 -ml-1.5 py-0.5 rounded-md transition-colors flex items-center"
               onClick={(e) => {
@@ -140,6 +130,20 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
               {idCopied && <Check size={13} className="ml-1 text-emerald-500" />}
             </div>
             
+            {/* Category Badges */}
+            {task.category === 'frontend' && (
+              <span className="inline-flex items-center gap-1 bg-[#e0f0f5] dark:bg-[#2a4552] text-[#2b5a6e] dark:text-[#82b8cf] px-1.5 py-0.5 rounded-md text-[10px] font-bold shadow-sm border border-[#c1dce6] dark:border-[#385b6b]">
+                <Layout size={10} />
+                Frontend
+              </span>
+            )}
+            {task.category === 'backend' && (
+              <span className="inline-flex items-center gap-1 bg-[#f0e6e0] dark:bg-[#3d322c] text-[#6e5343] dark:text-[#cfb099] px-1.5 py-0.5 rounded-md text-[10px] font-bold shadow-sm border border-[#decac0] dark:border-[#524138]">
+                <Server size={10} />
+                Backend
+              </span>
+            )}
+
             {/* In Progress Key */}
             {isInProgress && (
               <span title="In Progress">

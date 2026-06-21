@@ -285,6 +285,7 @@ export function listPromptSectionsForWorkspace(opts: { pipelineId?: string; agen
   const sections = getPromptPipelineStructure(pipelineId, agent, opts.localPath);
   return sections.map((s) => ({
     id: s.id,
+    title: s.title,
     order: s.order,
     required: s.required,
     sourceType: s.sourceType,

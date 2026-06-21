@@ -319,6 +319,7 @@ for (const section of sections) {
   assert.equal((section as any).overrideContent, undefined, `section ${section.id} should not include overrideContent`);
   assert.equal((section as any).effectiveContent, undefined, `section ${section.id} should not include effectiveContent`);
   assert.ok(typeof section.id === 'string');
+  assert.equal(section.title, section.id);
   assert.equal(section.sourceType, 'master');
 }
 

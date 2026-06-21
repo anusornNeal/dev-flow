@@ -10,7 +10,7 @@ export function loadSettings(state: AppState) {
   const ngrokUrl = map.get('ngrokUrl') ?? '';
   const githubToken = map.get('githubToken') || process.env.GITHUB_PERSONAL_ACCESS_TOKEN || '';
   const jiraToken = map.get('jiraToken') || process.env.JIRA_API_TOKEN || process.env.JIRA_PERSONAL_ACCESS_TOKEN || '';
-  const figmaToken = map.get('figmaToken') || process.env.FIGMA_PERSONAL_ACCESS_TOKEN || '';
+  const figmaToken = map.get('figmaToken') || process.env.FIGMA_ACCESS_TOKEN || process.env.FIGMA_PERSONAL_ACCESS_TOKEN || '';
   const jiraBaseUrl = map.get('jiraBaseUrl') || process.env.JIRA_BASE_URL || '';
   const jiraEmail = map.get('jiraEmail') || process.env.JIRA_EMAIL || '';
   const autoWork = map.get('autoWork') === 'true';

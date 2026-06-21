@@ -401,6 +401,22 @@ try {
   assert.equal(oversizedReportBody.truncated, true);
   assert.ok(oversizedReportBody.consumedBytes <= 133);
 
+  const combinedOversizedReportResponse = await fetch(`${baseUrl}/api/test-reports/parse`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      projectId: 'project-contract-1',
+      rawOutput: `AssertionError [ERR_ASSERTION]: ${'x'.repeat(80)}`,
+      reportPaths: ['reports/tsc-failure.txt'],
+      maxBytes: 120,
+    }),
+  });
+  assert.equal(combinedOversizedReportResponse.status, 200);
+  const combinedOversizedReportBody = await combinedOversizedReportResponse.json();
+  assert.equal(combinedOversizedReportBody.truncated, true);
+  assert.ok(combinedOversizedReportBody.consumedBytes <= 133);
+  assert.deepEqual(combinedOversizedReportBody.source.reportPaths, ['reports/tsc-failure.txt']);
+
   const unsafeReportPathResponse = await fetch(`${baseUrl}/api/test-reports/parse`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

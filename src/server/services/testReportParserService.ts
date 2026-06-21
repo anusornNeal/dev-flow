@@ -65,10 +65,9 @@ function normalizeReportPath(root: string, reportPath: string) {
   }
 }
 
-function loadReportFiles(root: string, reportPaths: string[], maxBytes: number) {
+function loadReportFiles(root: string, reportPaths: string[]) {
   const loadedPaths: string[] = [];
   const chunks: string[] = [];
-  let truncated = false;
 
   for (const reportPath of reportPaths) {
     const trimmedPath = reportPath.trim();
@@ -85,15 +84,9 @@ function loadReportFiles(root: string, reportPaths: string[], maxBytes: number) 
     chunks.push(raw);
   }
 
-  const joined = chunks.join('\n');
-  const truncatedOutput = truncateOutput(joined, maxBytes);
-  truncated = truncatedOutput.truncated;
-
   return {
     reportPaths: loadedPaths,
-    content: truncatedOutput.value,
-    truncated,
-    consumedBytes: truncatedOutput.consumedBytes,
+    content: chunks.join('\n'),
   };
 }
 
@@ -215,7 +208,6 @@ export function parseTestReport(state: AppState, args: Record<string, any>): Par
   const root = resolveProjectRoot(state, args);
   const maxBytes = clampBytes(args.maxBytes);
   const rawOutput = typeof args.rawOutput === 'string' ? args.rawOutput : '';
-  const rawOutputTruncated = truncateOutput(rawOutput, maxBytes);
   const reportPathsInput = Array.isArray(args.reportPaths)
     ? args.reportPaths.filter((value): value is string => typeof value === 'string')
     : [];
@@ -224,9 +216,10 @@ export function parseTestReport(state: AppState, args: Record<string, any>): Par
     throw createApiError(400, 'REPORT_INPUT_REQUIRED', 'rawOutput or reportPaths is required.');
   }
 
-  const loadedReports = loadReportFiles(root, reportPathsInput, maxBytes);
-  const combinedOutput = [rawOutputTruncated.value, loadedReports.content].filter(Boolean).join('\n');
-  const parsed = parseRawOutput(combinedOutput);
+  const loadedReports = loadReportFiles(root, reportPathsInput);
+  const combinedSource = [rawOutput, loadedReports.content].filter(Boolean).join('\n');
+  const combinedOutput = truncateOutput(combinedSource, maxBytes);
+  const parsed = parseRawOutput(combinedOutput.value);
 
   return {
     ...parsed,
@@ -234,7 +227,7 @@ export function parseTestReport(state: AppState, args: Record<string, any>): Par
       usedRawOutput: Boolean(rawOutput),
       reportPaths: loadedReports.reportPaths,
     },
-    truncated: rawOutputTruncated.truncated || loadedReports.truncated,
-    consumedBytes: Buffer.byteLength(combinedOutput, 'utf8'),
+    truncated: combinedOutput.truncated,
+    consumedBytes: combinedOutput.consumedBytes,
   };
 }

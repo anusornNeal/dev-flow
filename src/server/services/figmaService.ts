@@ -1,15 +1,31 @@
 export class FigmaService {
+  private readonly timeoutMs = 15_000;
+
   constructor(private figmaToken: string) {}
 
   private async fetchFigmaApi(path: string) {
     if (!this.figmaToken) {
       throw new Error('Figma token is not configured. Please configure it in Settings.');
     }
-    const response = await fetch(`https://api.figma.com/v1${path}`, {
-      headers: {
-        'X-Figma-Token': this.figmaToken,
-      },
-    });
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    let response: Response;
+    try {
+      response = await fetch(`https://api.figma.com/v1${path}`, {
+        headers: {
+          'X-Figma-Token': this.figmaToken,
+        },
+        signal: controller.signal,
+      });
+    } catch (error: any) {
+      if (error?.name === 'AbortError') {
+        throw new Error('Figma API request timed out.');
+      }
+      throw new Error(`Figma API request failed: ${error?.message ?? 'Unknown error'}`);
+    } finally {
+      clearTimeout(timeout);
+    }
 
     if (!response.ok) {
       let errorMessage = `Figma API Error: ${response.status} ${response.statusText}`;
@@ -69,9 +85,15 @@ export class FigmaService {
     
     if (node.absoluteBoundingBox) {
       base.bounds = {
+        x: node.absoluteBoundingBox.x,
+        y: node.absoluteBoundingBox.y,
         width: node.absoluteBoundingBox.width,
         height: node.absoluteBoundingBox.height,
       };
+    }
+
+    if (node.constraints) {
+      base.constraints = node.constraints;
     }
 
     if (node.style) {
@@ -110,11 +132,52 @@ export class FigmaService {
       };
     }
 
+    const imageFills = Array.isArray(node.fills)
+      ? node.fills.filter((fill: any) => fill.type === 'IMAGE' && fill.visible !== false)
+      : [];
+    if (imageFills.length > 0) {
+      base.assets = imageFills.slice(0, 5).map((fill: any) => ({
+        type: 'IMAGE',
+        imageRef: fill.imageRef,
+        scaleMode: fill.scaleMode,
+      }));
+    }
+
+    if (node.componentId || node.componentSetId) {
+      base.component = {
+        componentId: node.componentId,
+        componentSetId: node.componentSetId,
+      };
+    }
+
+    if (Array.isArray(node.effects) && node.effects.length > 0) {
+      base.effects = node.effects
+        .filter((effect: any) => effect.visible !== false)
+        .slice(0, 5)
+        .map((effect: any) => ({
+          type: effect.type,
+          radius: effect.radius,
+          offset: effect.offset,
+          color: this.extractEffectColor(effect.color),
+        }));
+    }
+
     if (node.children && node.children.length > 0) {
-      base.children = node.children.map((child: any) => this.normalizeNode(child));
+      base.childCount = node.children.length;
+      base.children = node.children.slice(0, 20).map((child: any) => this.normalizeNode(child));
+      if (node.children.length > 20) {
+        base.childrenTruncated = true;
+      }
     }
 
     return base;
+  }
+
+  private extractEffectColor(color: any): string | undefined {
+    if (!color) return undefined;
+    const { r, g, b, a } = color;
+    const opacity = a !== undefined ? a : 1;
+    return `rgba(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)}, ${opacity.toFixed(2)})`;
   }
 
   private extractColor(fills: any[]): string | undefined {

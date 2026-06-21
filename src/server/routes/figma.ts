@@ -3,6 +3,10 @@ import type { ApiRouteDeps } from '../types';
 import { FigmaService } from '../services/figmaService';
 import { saveTask } from '../repositories/taskRepository';
 
+function parseNodeIds(value: string) {
+  return value.split(',').map((entry) => entry.trim()).filter(Boolean);
+}
+
 export function registerFigmaRoutes(app: express.Express, deps: ApiRouteDeps) {
   const getService = (req: express.Request, res: express.Response) => {
     const figmaToken = deps.state.settingsCache.figmaToken;
@@ -28,7 +32,7 @@ export function registerFigmaRoutes(app: express.Express, deps: ApiRouteDeps) {
     try {
       const service = getService(req, res);
       if (!service) return;
-      const data = await service.getFigmaNode(req.params.fileKey, [req.params.nodeId]);
+      const data = await service.getFigmaNode(req.params.fileKey, parseNodeIds(req.params.nodeId));
       res.json(data);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -66,10 +70,17 @@ export function registerFigmaRoutes(app: express.Express, deps: ApiRouteDeps) {
 
       task.sourceUrl = figmaUrl;
 
-      const summary = `\n\n## Figma Design Context\nSource: [Figma Node ${nodeId}](${figmaUrl})\nName: ${spec.name}\nType: ${spec.type}\n`;
-      const specString = JSON.stringify(spec, null, 2);
-      
-      const contextSection = `${summary}\n\`\`\`json\n${specString}\n\`\`\`\n`;
+      const summaryLines = [
+        '',
+        '',
+        '## Figma Design Context',
+        `Source: [Figma Node ${nodeId}](${figmaUrl})`,
+        `Name: ${spec?.name ?? 'Unknown'}`,
+        `Type: ${spec?.type ?? 'Unknown'}`,
+        spec?.bounds ? `Size: ${spec.bounds.width ?? 'unknown'} x ${spec.bounds.height ?? 'unknown'}` : '',
+        spec?.text ? `Text: ${String(spec.text).slice(0, 240)}` : '',
+      ].filter(Boolean);
+      const contextSection = `${summaryLines.join('\n')}\n`;
       
       if (!task.description) {
         task.description = contextSection;

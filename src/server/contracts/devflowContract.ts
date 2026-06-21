@@ -1314,14 +1314,16 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
       type: 'object',
       properties: {
         fileKey: { type: 'string' },
-        nodeId: { type: 'string' },
+        nodeId: { type: 'string', description: 'Single node id. For multiple nodes, prefer nodeIds.' },
+        nodeIds: { type: 'array', items: { type: 'string' }, description: 'One or more node ids.' },
       },
-      required: ['fileKey', 'nodeId'],
+      required: ['fileKey'],
+      anyOf: [{ required: ['nodeId'] }, { required: ['nodeIds'] }],
     },
     outputSchema: { type: 'object' },
     buildHttpRequest: (args) => ({
       method: 'GET',
-      path: `/api/figma/file/${encodePathSegment(String(args.fileKey))}/node/${encodePathSegment(String(args.nodeId))}`,
+      path: `/api/figma/file/${encodePathSegment(String(args.fileKey))}/node/${encodePathSegment(Array.isArray(args.nodeIds) ? args.nodeIds.join(',') : String(args.nodeId))}`,
     }),
   },
   {

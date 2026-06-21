@@ -58,7 +58,6 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
   });
 
   app.post('/api/settings', (req, res) => {
-    console.log('--- POST /api/settings PAYLOAD ---', JSON.stringify(req.body));
     const { ngrokUrl, githubToken, jiraToken, figmaToken, jiraBaseUrl, jiraEmail, autoWork, agentExecutionMode, clearGithubToken, clearJiraToken, clearFigmaToken } = req.body;
 
     // Validate types

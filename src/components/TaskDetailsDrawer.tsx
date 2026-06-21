@@ -41,6 +41,8 @@ import { AgentLogo } from './AgentLogo';
 import ImageViewer from './ImageViewer';
 import { TaskImage } from '../types';
 import { useTaskDrawerViewModel } from '../viewModels/useTaskDrawerViewModel';
+import { useDrawerDisclosure } from './taskDrawer/useDrawerDisclosure';
+import { useRunArtifacts } from './taskDrawer/useRunArtifacts';
 
 interface TaskDetailsDrawerProps {
   task: Task;
@@ -51,15 +53,6 @@ interface TaskDetailsDrawerProps {
   onDelete: (id: string) => void;
   onCreateTask?: (task: Omit<Task, 'id' | 'createdAt' | 'updatedAt' | 'logs'>) => Promise<void>;
   onShowLog?: (run: { id: string; status?: string; agent?: string | null; model?: string | null }) => void;
-}
-
-interface RunHistoryFiles {
-  runDir: string;
-  promptPath: string;
-  logPath: string;
-  launchMetadataPath: string;
-  outputSummaryPath: string;
-  resultPath: string;
 }
 
 export default function TaskDetailsDrawer({ 
@@ -151,49 +144,20 @@ export default function TaskDetailsDrawer({
   const [idCopied, setIdCopied] = useState(false);
   const [copiedHistoryPath, setCopiedHistoryPath] = useState<string | null>(null);
   const [isAddingSubtask, setIsAddingSubtask] = useState(false);
-  const [runHistoryFiles, setRunHistoryFiles] = useState<RunHistoryFiles | null>(null);
   const [isRetryingRun, setIsRetryingRun] = useState(false);
-  const [latestRunLogContent, setLatestRunLogContent] = useState('');
-  const [latestRunLogExists, setLatestRunLogExists] = useState(false);
-  const [latestRunLogLoading, setLatestRunLogLoading] = useState(false);
-  const [latestRunLogError, setLatestRunLogError] = useState<string | null>(null);
 
-  // Progressive disclosure state
-  const [showAllFiles, setShowAllFiles] = useState(false);
-  const [showAllChecklist, setShowAllChecklist] = useState(false);
-  const [showAllSubtasks, setShowAllSubtasks] = useState(false);
-  // Accordion open state — empty = all collapsed
-  const [openSections, setOpenSections] = useState<Set<string>>(new Set());
+  const {
+    showAllFiles,
+    setShowAllFiles,
+    showAllChecklist,
+    setShowAllChecklist,
+    showAllSubtasks,
+    setShowAllSubtasks,
+    openSections,
+    handleAccordionClick,
+  } = useDrawerDisclosure(task.id);
   const [copiedFile, setCopiedFile] = useState<string | null>(null);
   const [activeLogTab, setActiveLogTab] = useState<'notes' | 'autowork' | 'history'>('notes');
-
-  const toggleSection = (key: string) => {
-    setOpenSections(prev => {
-      const next = new Set(prev);
-      next.has(key) ? next.delete(key) : next.add(key);
-      return next;
-    });
-  };
-
-  const handleAccordionClick = (e: React.MouseEvent<HTMLButtonElement>, key: string) => {
-    const isOpening = !openSections.has(key);
-    toggleSection(key);
-    if (isOpening) {
-      const target = e.currentTarget;
-      setTimeout(() => {
-        target.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-      }, 150);
-    }
-  };
-
-  // Reset progressive disclosure and accordion states only when task identity changes
-  useEffect(() => {
-    setShowAllFiles(false);
-    setShowAllChecklist(false);
-    setShowAllSubtasks(false);
-    setOpenSections(new Set());
-  }, [task.id]);
-
   // Sync state with task changes
   useEffect(() => {
     if (!isEditing) {
@@ -212,67 +176,6 @@ export default function TaskDetailsDrawer({
       setEditedEffort(task.effort || '');
     }
   }, [task, isEditing]);
-
-  useEffect(() => {
-    let cancelled = false;
-    setRunHistoryFiles(null);
-
-    const runId = task.latestAgentRun?.id;
-    if (!runId) return;
-
-    fetch(`/api/tasks/${task.id}/agent-runs/${runId}/history`)
-      .then(async (response) => {
-        if (!response.ok) return null;
-        return response.json();
-      })
-      .then((data) => {
-        if (cancelled || !data?.files) return;
-        setRunHistoryFiles(data.files);
-      })
-      .catch(() => {
-        if (!cancelled) setRunHistoryFiles(null);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [task.id, task.latestAgentRun?.id]);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLatestRunLogContent('');
-    setLatestRunLogExists(false);
-    setLatestRunLogError(null);
-
-    const runId = task.latestAgentRun?.id;
-    if (!runId) return;
-
-    setLatestRunLogLoading(true);
-    fetch(`/api/tasks/${task.id}/agent-runs/${runId}/log`)
-      .then(async (response) => {
-        const data = await response.json().catch(() => null);
-        if (!response.ok) {
-          throw new Error(data?.error || `Failed to load log (${response.status})`);
-        }
-        return data;
-      })
-      .then((data) => {
-        if (cancelled) return;
-        setLatestRunLogContent(typeof data?.content === 'string' ? data.content : '');
-        setLatestRunLogExists(Boolean(data?.exists));
-      })
-      .catch((error) => {
-        if (cancelled) return;
-        setLatestRunLogError(error?.message || 'Failed to load log');
-      })
-      .finally(() => {
-        if (!cancelled) setLatestRunLogLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [task.id, task.latestAgentRun?.id]);
 
   const handleSave = () => {
     if (!editedTitle.trim()) return;
@@ -426,9 +329,13 @@ export default function TaskDetailsDrawer({
   const latestRun = task.latestAgentRun;
   const autoWorkState = getAutoWorkState(task);
   const canRetryLatestRun = !!latestRun && !task.activeAgent && ['failed', 'cancelled'].includes(latestRun.status);
-  const latestRunLogTail = latestRunLogContent.trim()
-    ? latestRunLogContent.trimEnd().split(/\r?\n/).slice(-40).join('\n')
-    : '';
+  const {
+    runHistoryFiles,
+    latestRunLogExists,
+    latestRunLogLoading,
+    latestRunLogError,
+    latestRunLogTail,
+  } = useRunArtifacts(task);
 
   const handleRetryLatestRun = async () => {
     if (!latestRun || isRetryingRun) return;
@@ -1814,3 +1721,4 @@ export default function TaskDetailsDrawer({
     </div>
   );
 }
+

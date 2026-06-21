@@ -3,27 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { 
-  Plus, 
-  Terminal, 
-  GitPullRequest, 
-  Code, 
-  ListTodo, 
-  Download, 
-  Upload, 
-  RotateCcw,
-  Sparkles,
-  GitMerge,
-  Cat,
-  Moon,
-  Sun,
-  Coffee,
-  FileCode,
-  ChevronDown,
-  FileText
-} from 'lucide-react';
-import { Task, TaskStatus, Column, LogEntry, Project } from './types';
+import React, { useState, useEffect, useRef } from 'react';
+import { Cat } from 'lucide-react';
+import { Task, TaskStatus, LogEntry, Project } from './types';
 import { isValidTransition, getValidationErrorMessage } from './lib/statusTransitions';
 import { buildTaskStatusMoveRequest } from './lib/taskStatusMove';
 import { useProjectViewModel } from './viewModels/useProjectViewModel';
@@ -39,61 +21,17 @@ import TemplateModal from './components/TemplateModal';
 import { Header } from './components/Header';
 import { BoardLane } from './components/BoardLane';
 import BatchImportModal from './components/BatchImportModal';
-import MarkdownRenderer from './components/MarkdownRenderer';
-import AutoWorkToggle from './components/AutoWorkToggle';
 import ConfirmModal from './components/ConfirmModal';
 import AgentRunLogModal from './components/AgentRunLogModal';
-
-// Standardized project lanes themed cleanly
-const COLUMNS: Column[] = [
-  { id: 'backlog', label: 'Backlog Specs 📂', iconName: 'Moon', color: 'border-[#dfd2be]/60 dark:border-[#584a3b]/60 bg-[#fffdfa] dark:bg-[#292119] text-[#816b5a] dark:text-[#f3eadf]' },
-  { id: 'todo', label: 'Ready to Do 📌', iconName: 'ListTodo', color: 'border-[#dfd2be]/60 dark:border-[#584a3b]/60 bg-[#fffdfa] dark:bg-[#292119] text-[#816b5a] dark:text-[#f3eadf]' },
-  { id: 'in-progress', label: 'In Progress ⚡', iconName: 'Terminal', color: 'border-[#f5cb93] dark:border-[#584a3b] bg-[#fffbf4] dark:bg-[#292119] text-[#935919] dark:text-[#e0a070]' },
-  { id: 'ready-for-review', label: 'Ready for Review 🔍', iconName: 'GitMerge', color: 'border-[#b8cdfc] dark:border-[#584a3b] bg-[#f5f8ff] dark:bg-[#292119] text-[#3b5eab] dark:text-[#f3eadf]' },
-  { id: 'done', label: 'Completed ✓', iconName: 'GitPullRequest', color: 'border-[#bddda4] dark:border-[#584a3b] bg-[#edf7ed] dark:bg-[#292119] text-[#4d7e35] dark:text-[#f3eadf]' }
-];
+import { BOARD_COLUMNS } from './app/boardColumns';
+import { filterBoardTasks } from './app/taskFilters';
+import { useActiveProjectBootstrap } from './app/useActiveProjectBootstrap';
+import { useAppTheme } from './app/useAppTheme';
 
 export default function App() {
-  // View-model-owned board + project state. These hooks handle fetch + polling + optimistic merge.
-  // We migrate the legacy `devflow_selected_project` localStorage key into the view-model's
-  // `devflow.activeProjectId` key on first mount so users with a previously-selected project
-  // do not see an empty board after the DVF-0209 refactor.
-  useEffect(() => {
-    try {
-      const legacy = localStorage.getItem('devflow_selected_project');
-      const modern = localStorage.getItem('devflow.activeProjectId');
-      if (legacy && !modern) {
-        localStorage.setItem('devflow.activeProjectId', legacy);
-      }
-    } catch {
-      // localStorage unavailable - non-fatal
-    }
-  }, []);
-
   const projectsViewModel = useProjectViewModel();
   const projects = projectsViewModel.projects as unknown as Project[];
-  // We need a non-empty projectId so useBoardViewModel does not short-circuit to an empty
-  // task list. If the view-model has no active project selected yet (first run, or stale
-  // localStorage), fall back to the first project in the list as soon as projects load.
-  const [bootstrapProjectId, setBootstrapProjectId] = useState<string>('');
-  useEffect(() => {
-    if (bootstrapProjectId) return;
-    if (projectsViewModel.activeProjectId) {
-      setBootstrapProjectId(projectsViewModel.activeProjectId);
-      return;
-    }
-    if (projects.length > 0) {
-      const first = projects[0];
-      projectsViewModel.setActiveProjectId(first.id);
-      setBootstrapProjectId(first.id);
-    }
-  }, [bootstrapProjectId, projectsViewModel, projects]);
-  const activeProjectId = projectsViewModel.activeProjectId || bootstrapProjectId;
-  // Wrap view-model setter to match Sidebar's (id: string) => void signature. Empty string clears.
-  const setActiveProjectId = useCallback((id: string) => {
-    projectsViewModel.setActiveProjectId(id || null);
-    if (id) setBootstrapProjectId(id);
-  }, [projectsViewModel]);
+  const { activeProjectId, setActiveProjectId } = useActiveProjectBootstrap(projects, projectsViewModel);
 
   const boardViewModel = useBoardViewModel({
     projectId: activeProjectId || null,
@@ -127,23 +65,7 @@ export default function App() {
   const [mounted, setMounted] = useState(false);
   const [ngrokUrl, setNgrokUrl] = useState('');
   
-  // Theme State
-  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
-    const saved = localStorage.getItem('devflow_theme');
-    if (saved === 'light' || saved === 'dark') return saved;
-    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) return 'dark';
-    return 'light';
-  });
-
-  // Apply Theme
-  useEffect(() => {
-    if (theme === 'dark') {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-    }
-    localStorage.setItem('devflow_theme', theme);
-  }, [theme]);
+  const { theme, setTheme } = useAppTheme();
 
   // Filter States
   const [selectedPriority, setSelectedPriority] = useState<Task['priority'] | 'all'>('all');
@@ -472,42 +394,18 @@ export default function App() {
     setTaskToDelete(id);
   };
 
-  // Filter Tasks
-  const filteredTasks = tasks.filter(task => {
-    // Only show tasks of the current active project
-    if (task.projectId !== activeProjectId) return false;
-
-    const matchesPriority = selectedPriority === 'all' || task.priority === selectedPriority;
-    const matchesTag = selectedTag === 'all' || task.tags.includes(selectedTag);
-    const query = searchQuery.trim().toLowerCase();
-    const matchesSearch = !query || 
-      task.title.toLowerCase().includes(query) || 
-      task.id.toLowerCase().includes(query) ||
-      (task.branch && task.branch.toLowerCase().includes(query));
-
-    // Support bubble-up searching: if a child task matches, show the parent task on the board
-    let subtaskMatches = false;
-    if (!task.parentId) {
-      const childTasks = tasks.filter(t => t.parentId === task.id && t.projectId === activeProjectId);
-      subtaskMatches = childTasks.some(ct => {
-        const ctMatchesPriority = selectedPriority === 'all' || ct.priority === selectedPriority;
-        const ctMatchesTag = selectedTag === 'all' || ct.tags.includes(selectedTag);
-        const ctMatchesSearch = !query || 
-          ct.title.toLowerCase().includes(query) || 
-          ct.id.toLowerCase().includes(query) ||
-          (ct.branch && ct.branch.toLowerCase().includes(query));
-        return ctMatchesPriority && ctMatchesTag && ctMatchesSearch;
-      });
-    }
-
-    return (matchesPriority && matchesTag && matchesSearch) || subtaskMatches;
+  const filteredTasks = filterBoardTasks(tasks, {
+    activeProjectId,
+    selectedPriority,
+    selectedTag,
+    searchQuery,
   });
 
   if (!mounted) {
     return (
       <div className="min-h-screen bg-[#faf6ef] dark:bg-[#292119] flex flex-col items-center justify-center text-[#8a6e5a] dark:text-[#f3eadf] font-mono text-xs gap-3">
         <Cat size={40} className="text-[#d89745] dark:text-[#e0a070] animate-bounce" />
-        <p>Waking up sleepy kittens... ฅ^•ﻌ•^ฅ</p>
+        <p>Starting DevFlow...</p>
       </div>
     );
   }
@@ -563,7 +461,7 @@ export default function App() {
           <div className="flex-1 overflow-x-auto p-6 bg-[#faf7f0] dark:bg-[#1e1914]">
             <div className="flex w-max items-stretch min-h-[calc(100vh-210px)] pb-2">
               
-              {COLUMNS.map(col => {
+              {BOARD_COLUMNS.map(col => {
                 const columnTasks = filteredTasks
                   .filter(t => t.status === col.id && !t.parentId)
                   .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
@@ -709,3 +607,4 @@ export default function App() {
     </div>
   );
 }
+

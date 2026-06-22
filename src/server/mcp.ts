@@ -4,6 +4,40 @@ import { createCorrelationId } from './services/api';
 import { getCapabilityCatalog, getMcpToolList, getToolDefinitionByName } from './contracts/devflowContract';
 import { recordToolCall } from './services/mcpToolMonitor';
 
+function buildMcpToolError(params: {
+  toolName: string;
+  method: string;
+  url: string;
+  apiBaseUrl: string;
+  code: string;
+  message: string;
+  correlationId: string;
+  retryable: boolean;
+  guidance?: string;
+  cause?: unknown;
+  status?: number;
+}) {
+  return {
+    code: params.code,
+    message: params.message,
+    details: {
+      toolName: params.toolName,
+      method: params.method,
+      attemptedUrl: params.url,
+      apiBaseUrl: params.apiBaseUrl,
+      ...(params.status !== undefined ? { status: params.status } : {}),
+      guidance:
+        params.guidance ||
+        `Please ensure the DevFlow API server is running at ${params.apiBaseUrl}. If running locally, check if 'npm run dev' or the tray app is running.`,
+      ...(params.cause instanceof Error
+        ? { cause: { name: params.cause.name, message: params.cause.message } }
+        : {}),
+    },
+    retryable: params.retryable,
+    correlationId: params.correlationId,
+  };
+}
+
 function buildMcpFetchError(params: {
   toolName: string;
   method: string;
@@ -13,24 +47,19 @@ function buildMcpFetchError(params: {
   correlationId: string;
 }) {
   const isTimeout = params.error?.name === 'AbortError';
-  const kind = isTimeout ? 'TIMEOUT' : 'FETCH_FAILED';
-  const message = isTimeout
-    ? `Request to DevFlow API timed out after 30s.`
-    : `Failed to connect to DevFlow API: ${params.error?.message || 'Unknown network error'}`;
-
-  return {
-    code: kind,
-    message,
-    details: {
-      toolName: params.toolName,
-      method: params.method,
-      attemptedUrl: params.url,
-      apiBaseUrl: params.apiBaseUrl,
-      guidance: `Please ensure the DevFlow API server is running at ${params.apiBaseUrl}. If running locally, check if 'npm run dev' or the tray app is running.`,
-    },
+  return buildMcpToolError({
+    toolName: params.toolName,
+    method: params.method,
+    url: params.url,
+    apiBaseUrl: params.apiBaseUrl,
+    code: isTimeout ? 'TIMEOUT' : 'FETCH_FAILED',
+    message: isTimeout
+      ? `Request to DevFlow API timed out after 30s.`
+      : `Failed to connect to DevFlow API: ${params.error?.message || 'Unknown network error'}`,
     retryable: true,
     correlationId: params.correlationId,
-  };
+    cause: params.error,
+  });
 }
 
 async function executeHttpRequest(
@@ -39,6 +68,7 @@ async function executeHttpRequest(
   correlationId: string,
   toolName: string
 ) {
+  const url = `${baseUrl}${request.path}`;
   const headers: Record<string, string> = {
     Accept: 'application/json',
     'x-correlation-id': correlationId,
@@ -46,21 +76,65 @@ async function executeHttpRequest(
     ...(request.headers || {}),
   };
   const startedAt = Date.now();
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 30000);
+
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000);
-    const response = await fetch(`${baseUrl}${request.path}`, {
+    const response = await fetch(url, {
       method: request.method,
       headers,
       body: request.body !== undefined ? JSON.stringify(request.body) : undefined,
-      signal: controller.signal
+      signal: controller.signal,
     });
-    clearTimeout(timeoutId);
     const durationMs = Date.now() - startedAt;
     const contentType = response.headers.get('content-type') || '';
-    const parsedBody = contentType.includes('application/json')
-      ? await response.json().catch(() => null)
-      : await response.text();
+
+    if (contentType.includes('application/json')) {
+      const rawBody = await response.text();
+      try {
+        const parsedBody = rawBody.trim().length > 0 ? JSON.parse(rawBody) : null;
+        return { response, parsedBody, durationMs };
+      } catch (error) {
+        const parsedBody = {
+          error: buildMcpToolError({
+            toolName,
+            method: request.method,
+            url,
+            apiBaseUrl: baseUrl,
+            code: 'INVALID_JSON_RESPONSE',
+            message: `DevFlow API returned invalid JSON for ${toolName}.`,
+            retryable: true,
+            correlationId,
+            cause: error,
+            status: response.status,
+            guidance: `The DevFlow API responded but returned malformed JSON. Check server logs for ${correlationId}, then retry the tool call.`,
+          }),
+        };
+        return { response: { ok: false, status: 502 } as any, parsedBody, durationMs };
+      }
+    }
+
+    const parsedBody = await response.text();
+    if (response.ok) {
+      return {
+        response: { ok: false, status: 502 } as any,
+        parsedBody: {
+          error: buildMcpToolError({
+            toolName,
+            method: request.method,
+            url,
+            apiBaseUrl: baseUrl,
+            code: 'NON_JSON_RESPONSE',
+            message: `DevFlow API returned a non-JSON response for ${toolName}.`,
+            retryable: true,
+            correlationId,
+            status: response.status,
+            guidance: `MCP tools expect JSON from the DevFlow API. Check the endpoint response and server logs for ${correlationId}.`,
+          }),
+        },
+        durationMs,
+      };
+    }
 
     return { response, parsedBody, durationMs };
   } catch (error: any) {
@@ -69,13 +143,15 @@ async function executeHttpRequest(
       error: buildMcpFetchError({
         toolName,
         method: request.method,
-        url: `${baseUrl}${request.path}`,
+        url,
         apiBaseUrl: baseUrl,
         error,
         correlationId,
       }),
     };
     return { response: { ok: false, status: 503 } as any, parsedBody, durationMs };
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
@@ -122,12 +198,20 @@ export function createDevFlowMcpServer(baseUrl: string) {
     if (!response.ok) {
       const normalizedError = parsedBody && typeof parsedBody === 'object' && 'error' in parsedBody
         ? (parsedBody as any).error
-        : {
+        : buildMcpToolError({
+            toolName,
+            method: httpRequest.method,
+            url: `${baseUrl}${httpRequest.path}`,
+            apiBaseUrl: baseUrl,
             code: 'HTTP_ERROR',
             message: typeof parsedBody === 'string' ? parsedBody : `HTTP ${response.status}`,
             retryable: response.status >= 500,
             correlationId,
-          };
+            status: response.status,
+            guidance: response.status >= 500
+              ? `DevFlow API returned a server error. Check the API logs for ${correlationId}, then retry.`
+              : `DevFlow API rejected the request. Check the tool arguments and endpoint mapping before retrying.`,
+          });
 
       return {
         isError: true,

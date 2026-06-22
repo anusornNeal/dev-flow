@@ -1,5 +1,9 @@
-import React, { useState, useEffect } from 'react';
-import { X, Link, FileText, ToggleLeft, ToggleRight, Save, Loader2, CheckCircle2, AlertCircle, Database, Download, Activity, Upload } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { AlertCircle, CheckCircle2, Loader2, Save, X } from 'lucide-react';
+import AgentExecutionModeSection from './settings/AgentExecutionModeSection';
+import BackupSettingsSection from './settings/BackupSettingsSection';
+import IntegrationsSettingsSection from './settings/IntegrationsSettingsSection';
+import NgrokSettingsSection from './settings/NgrokSettingsSection';
 
 interface SettingsData {
   ngrokUrl: string;
@@ -15,12 +19,15 @@ interface SettingsModalProps {
   onClose: () => void;
 }
 
+type SaveStatus = 'idle' | 'success' | 'error';
+type ImportStatus = 'idle' | 'importing' | 'success' | 'error';
+
 export default function SettingsModal({ onClose }: SettingsModalProps) {
   const [ngrokUrl, setNgrokUrl] = useState('');
   const [githubToken, setGithubToken] = useState('');
   const [githubTokenMasked, setGithubTokenMasked] = useState(false);
   const [showGithubToken, setShowGithubToken] = useState(false);
-  
+
   const [jiraToken, setJiraToken] = useState('');
   const [jiraTokenMasked, setJiraTokenMasked] = useState(false);
   const [showJiraToken, setShowJiraToken] = useState(false);
@@ -30,23 +37,23 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
   const [jiraBaseUrl, setJiraBaseUrl] = useState('');
   const [jiraEmail, setJiraEmail] = useState('');
   const [agentExecutionMode, setAgentExecutionMode] = useState('safe');
-  
+
   const [clearGithubToken, setClearGithubToken] = useState(false);
   const [clearJiraToken, setClearJiraToken] = useState(false);
   const [clearFigmaToken, setClearFigmaToken] = useState(false);
-  
+
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [saveStatus, setSaveStatus] = useState<'idle' | 'success' | 'error'>('idle');
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
   const [errorMsg, setErrorMsg] = useState('');
 
-  const [importStatus, setImportStatus] = useState<'idle' | 'importing' | 'success' | 'error'>('idle');
+  const [importStatus, setImportStatus] = useState<ImportStatus>('idle');
   const [importMsg, setImportMsg] = useState('');
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     fetch('/api/settings', { cache: 'no-store' })
-      .then(r => r.json())
+      .then(response => response.json())
       .then((data: SettingsData) => {
         setNgrokUrl(data.ngrokUrl ?? '');
         setGithubTokenMasked(data.githubTokenMasked ?? false);
@@ -60,9 +67,39 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
       .catch(() => setLoading(false));
   }, []);
 
+  const applySavedTokenState = ({
+    token,
+    showToken,
+    clearToken,
+    setToken,
+    setMasked,
+    setShowToken,
+    setClearToken,
+  }: {
+    token: string;
+    showToken: boolean;
+    clearToken: boolean;
+    setToken: (value: string) => void;
+    setMasked: (value: boolean) => void;
+    setShowToken: (value: boolean) => void;
+    setClearToken: (value: boolean) => void;
+  }) => {
+    if (showToken && token.trim() !== '') {
+      setMasked(true);
+      setShowToken(false);
+      setToken('');
+    }
+
+    if (clearToken) {
+      setMasked(false);
+      setClearToken(false);
+    }
+  };
+
   const handleSave = async () => {
     setSaving(true);
     setSaveStatus('idle');
+
     try {
       const payload: Record<string, unknown> = { ngrokUrl, jiraBaseUrl, jiraEmail, agentExecutionMode };
       if (showGithubToken && githubToken.trim() !== '') {
@@ -86,57 +123,56 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
         payload.clearFigmaToken = true;
       }
 
-      const res = await fetch('/api/settings', {
+      const response = await fetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
 
-      if (!res.ok) {
-        const err = await res.json();
+      if (!response.ok) {
+        const err = await response.json();
         throw new Error(err.error ?? 'Save failed');
       }
+
       setSaveStatus('success');
-      if (showGithubToken && githubToken.trim() !== '') {
-        setGithubTokenMasked(true);
-        setShowGithubToken(false);
-        setGithubToken('');
-      }
-      if (clearGithubToken) {
-        setGithubTokenMasked(false);
-        setClearGithubToken(false);
-      }
-      
-      if (showJiraToken && jiraToken.trim() !== '') {
-        setJiraTokenMasked(true);
-        setShowJiraToken(false);
-        setJiraToken('');
-      }
-      if (clearJiraToken) {
-        setJiraTokenMasked(false);
-        setClearJiraToken(false);
-      }
-      
-      if (showFigmaToken && figmaToken.trim() !== '') {
-        setFigmaTokenMasked(true);
-        setShowFigmaToken(false);
-        setFigmaToken('');
-      }
-      if (clearFigmaToken) {
-        setFigmaTokenMasked(false);
-        setClearFigmaToken(false);
-      }
+      applySavedTokenState({
+        token: githubToken,
+        showToken: showGithubToken,
+        clearToken: clearGithubToken,
+        setToken: setGithubToken,
+        setMasked: setGithubTokenMasked,
+        setShowToken: setShowGithubToken,
+        setClearToken: setClearGithubToken,
+      });
+      applySavedTokenState({
+        token: jiraToken,
+        showToken: showJiraToken,
+        clearToken: clearJiraToken,
+        setToken: setJiraToken,
+        setMasked: setJiraTokenMasked,
+        setShowToken: setShowJiraToken,
+        setClearToken: setClearJiraToken,
+      });
+      applySavedTokenState({
+        token: figmaToken,
+        showToken: showFigmaToken,
+        clearToken: clearFigmaToken,
+        setToken: setFigmaToken,
+        setMasked: setFigmaTokenMasked,
+        setShowToken: setShowFigmaToken,
+        setClearToken: setClearFigmaToken,
+      });
       setTimeout(() => setSaveStatus('idle'), 3000);
-    } catch (e: any) {
-      setErrorMsg(e.message ?? 'Failed to save');
+    } catch (error: any) {
+      setErrorMsg(error.message ?? 'Failed to save');
       setSaveStatus('error');
     } finally {
       setSaving(false);
     }
   };
 
-  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+  const handleImportFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
     if (!file) return;
 
     if (!window.confirm('Are you sure you want to restore from this backup? Your current DevFlow database will be overwritten. A safety backup will be created.')) {
@@ -148,23 +184,23 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
     setImportMsg('');
 
     try {
-      const res = await fetch('/api/import', {
+      const response = await fetch('/api/import', {
         method: 'POST',
         headers: { 'Content-Type': 'application/octet-stream' },
         body: file,
       });
 
-      const data = await res.json();
-      if (!res.ok) {
+      const data = await response.json();
+      if (!response.ok) {
         throw new Error(data.error ?? 'Import failed');
       }
 
       setImportStatus('success');
       const countsStr = data.counts ? ` (Projects: ${data.counts.projects || 0}, Tasks: ${data.counts.tasks || 0})` : '';
       setImportMsg(`Import completed${countsStr}. Please restart DevFlow.`);
-    } catch (err: any) {
+    } catch (error: any) {
       setImportStatus('error');
-      setImportMsg(err.message ?? 'Failed to import backup');
+      setImportMsg(error.message ?? 'Failed to import backup');
     } finally {
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
@@ -173,8 +209,6 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
   return (
     <div className="fixed inset-0 bg-[#3e3129]/30 dark:bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
       <div className="bg-[#fffdfa] dark:bg-[#1e1914] rounded-2xl shadow-xl w-full max-w-xl border border-[#e5d4bb] dark:border-[#584a3b] overflow-hidden flex flex-col max-h-[90vh]">
-        
-        {/* Header */}
         <div className="px-6 py-4 border-b border-[#ebdcb9] dark:border-[#584a3b] bg-[#fdfbf6] dark:bg-[#1e1914] flex items-center justify-between shrink-0">
           <h2 className="text-[#534135] dark:text-[#f3eadf] font-extrabold font-sans text-lg">⚙️ Settings</h2>
           <button
@@ -192,327 +226,52 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
         ) : (
           <>
             <div className="p-6 flex flex-col gap-6 overflow-y-auto min-h-0">
-
-            {/* ngrok URL */}
-            <div className="flex flex-col gap-2">
-              <label className="flex items-center gap-1.5 text-sm font-extrabold text-[#534135] dark:text-[#f3eadf]">
-                <Link size={14} className="text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d]" />
-                ngrok URL
-              </label>
-              <p className="text-[11px] text-[#8a725f] dark:text-[#f3eadf] font-mono -mt-1">
-                The public ngrok tunnel URL used by agents to reach this DevFlow instance remotely.
-              </p>
-              <input
-                type="url"
-                value={ngrokUrl}
-                onChange={e => setNgrokUrl(e.target.value)}
-                placeholder="https://xxxx.ngrok-free.app"
-                className="w-full px-4 py-2.5 text-sm font-mono rounded-xl border border-[#ddd0ba] dark:border-[#584a3b] bg-white dark:bg-[#1e1914] text-[#3e3129] dark:text-[#f3eadf] focus:outline-none focus:ring-2 focus:ring-[#d89745]/50 dark:focus:ring-[#e0a070]/50 focus:border-[#d89745] dark:border-[#e0a070] dark:focus:border-[#e0a070] transition"
+              <NgrokSettingsSection ngrokUrl={ngrokUrl} onNgrokUrlChange={setNgrokUrl} />
+              <IntegrationsSettingsSection
+                githubToken={{
+                  value: githubToken,
+                  masked: githubTokenMasked,
+                  show: showGithubToken,
+                  clear: clearGithubToken,
+                  onValueChange: setGithubToken,
+                  onShowChange: setShowGithubToken,
+                  onClearChange: setClearGithubToken,
+                }}
+                jiraToken={{
+                  value: jiraToken,
+                  masked: jiraTokenMasked,
+                  show: showJiraToken,
+                  clear: clearJiraToken,
+                  onValueChange: setJiraToken,
+                  onShowChange: setShowJiraToken,
+                  onClearChange: setClearJiraToken,
+                }}
+                figmaToken={{
+                  value: figmaToken,
+                  masked: figmaTokenMasked,
+                  show: showFigmaToken,
+                  clear: clearFigmaToken,
+                  onValueChange: setFigmaToken,
+                  onShowChange: setShowFigmaToken,
+                  onClearChange: setClearFigmaToken,
+                }}
+                jiraBaseUrl={jiraBaseUrl}
+                jiraEmail={jiraEmail}
+                onJiraBaseUrlChange={setJiraBaseUrl}
+                onJiraEmailChange={setJiraEmail}
+              />
+              <AgentExecutionModeSection
+                agentExecutionMode={agentExecutionMode}
+                onAgentExecutionModeChange={setAgentExecutionMode}
+              />
+              <BackupSettingsSection
+                fileInputRef={fileInputRef}
+                importStatus={importStatus}
+                importMsg={importMsg}
+                onImportFile={handleImportFile}
               />
             </div>
 
-
-            {/* Integrations Section */}
-            <div className="flex flex-col gap-5 border border-[#e5d4bb] dark:border-[#584a3b] rounded-xl p-4 bg-[#fdfbf6] dark:bg-[#1e1914]">
-              <div>
-                <h3 className="text-sm font-extrabold text-[#534135] dark:text-[#f3eadf] flex items-center gap-1.5 mb-1">
-                  <FileText size={14} className="text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d]" />
-                  Integrations
-                </h3>
-                <p className="text-[11px] text-[#8a725f] dark:text-[#f3eadf] font-mono">
-                  Configure external API credentials for GitHub and Jira.
-                </p>
-              </div>
-
-              {/* GitHub Token (masked) */}
-              <div className="flex flex-col gap-1.5 pt-2 border-t border-[#ebdcb9] dark:border-[#584a3b]">
-                <div className="flex items-center justify-between">
-                  <label className="text-xs font-bold text-[#685547] dark:text-[#f3eadf]">GitHub Access Token</label>
-                  <div className="flex gap-2">
-                    {githubTokenMasked && !showGithubToken && !clearGithubToken && (
-                      <button
-                        onClick={() => {
-                          setClearGithubToken(true);
-                        }}
-                        className="text-[10px] text-red-500 font-bold hover:underline"
-                      >
-                        Remove
-                      </button>
-                    )}
-                    {!clearGithubToken && (
-                      <button
-                        onClick={() => {
-                          if (showGithubToken) {
-                            setShowGithubToken(false);
-                            setGithubToken('');
-                          } else {
-                            setShowGithubToken(true);
-                          }
-                        }}
-                        className="text-[10px] text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d] font-bold hover:underline"
-                      >
-                        {showGithubToken ? 'Cancel' : githubTokenMasked ? 'Replace' : 'Add'}
-                      </button>
-                    )}
-                  </div>
-                </div>
-                <p className="text-[11px] text-[#8a725f] dark:text-[#f3eadf] font-mono -mt-1">
-                  Securely stored token for GitHub API integrations. Not shown in logs.
-                </p>
-                {showGithubToken ? (
-                  <input
-                    type="password"
-                    name="githubToken_devflow_prevent_autofill"
-                    autoComplete="new-password"
-                    value={githubToken}
-                    onChange={e => setGithubToken(e.target.value)}
-                    placeholder="ghp_..."
-                    className="w-full px-3 py-2 text-sm font-mono rounded-lg border border-[#ddd0ba] dark:border-[#584a3b] bg-white dark:bg-[#1e1914] text-[#3e3129] dark:text-[#f3eadf] focus:outline-none focus:ring-2 focus:ring-[#d89745]/50 dark:focus:ring-[#e0a070]/50 focus:border-[#d89745] dark:border-[#e0a070] dark:focus:border-[#e0a070] transition"
-                  />
-                ) : clearGithubToken ? (
-                  <div className="px-3 py-2 rounded-lg border border-[#fecaca] dark:border-[#584a3b] bg-[#fff0f0] dark:bg-[#1e1914] text-[11px] text-[#991b1b] dark:text-[#f3eadf] font-mono flex items-center justify-between">
-                    Pending removal (Save to apply)
-                    <button onClick={() => setClearGithubToken(false)} className="underline hover:text-[#7f1d1d] dark:text-[#f3eadf] dark:hover:text-[#f3eadf] font-bold">Undo</button>
-                  </div>
-                ) : (
-                  <div className="px-3 py-2 rounded-lg border border-[#e5d4bb] dark:border-[#584a3b] bg-[#faf7f0] dark:bg-[#1e1914] text-[11px] text-[#b89b82] dark:text-[#d6b56d] font-mono">
-                    {githubTokenMasked
-                      ? 'Token securely stored.'
-                      : 'No GitHub token stored.'
-                    }
-                  </div>
-                )}
-              </div>
-
-              {/* Jira Integration Section */}
-              <div className="flex flex-col gap-3 pt-3 border-t border-[#ebdcb9] dark:border-[#584a3b]">
-                <div className="flex flex-col gap-1">
-                  <label className="text-xs font-bold text-[#685547] dark:text-[#f3eadf]">Jira Integration</label>
-                </div>
-
-                {/* Jira Base URL */}
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] font-bold text-[#8a725f] dark:text-[#f3eadf] uppercase tracking-wider">Base URL</label>
-                  <input
-                    type="url"
-                    value={jiraBaseUrl}
-                    onChange={e => setJiraBaseUrl(e.target.value)}
-                    placeholder="https://your-domain.atlassian.net"
-                    className="w-full px-3 py-2 text-sm font-mono rounded-lg border border-[#ddd0ba] dark:border-[#584a3b] bg-white dark:bg-[#1e1914] text-[#3e3129] dark:text-[#f3eadf] focus:outline-none focus:ring-2 focus:ring-[#d89745]/50 dark:focus:ring-[#e0a070]/50 focus:border-[#d89745] dark:border-[#e0a070] dark:focus:border-[#e0a070] transition"
-                  />
-                </div>
-
-                {/* Jira Email */}
-                <div className="flex flex-col gap-1.5 mt-1">
-                  <label className="text-[10px] font-bold text-[#8a725f] dark:text-[#f3eadf] uppercase tracking-wider">Email</label>
-                  <input
-                    type="email"
-                    value={jiraEmail}
-                    onChange={e => setJiraEmail(e.target.value)}
-                    placeholder="name@company.com"
-                    className="w-full px-3 py-2 text-sm font-mono rounded-lg border border-[#ddd0ba] dark:border-[#584a3b] bg-white dark:bg-[#1e1914] text-[#3e3129] dark:text-[#f3eadf] focus:outline-none focus:ring-2 focus:ring-[#d89745]/50 dark:focus:ring-[#e0a070]/50 focus:border-[#d89745] dark:border-[#e0a070] dark:focus:border-[#e0a070] transition"
-                  />
-                </div>
-
-                {/* Jira Token (masked) */}
-                <div className="flex flex-col gap-1.5 mt-1">
-                  <div className="flex items-center justify-between">
-                    <label className="text-[10px] font-bold text-[#8a725f] dark:text-[#f3eadf] uppercase tracking-wider">Access Token</label>
-                    <div className="flex gap-2">
-                      {jiraTokenMasked && !showJiraToken && !clearJiraToken && (
-                        <button
-                          onClick={() => {
-                            setClearJiraToken(true);
-                          }}
-                          className="text-[10px] text-red-500 font-bold hover:underline"
-                        >
-                          Remove
-                        </button>
-                      )}
-                      {!clearJiraToken && (
-                        <button
-                          onClick={() => {
-                            if (showJiraToken) {
-                              setShowJiraToken(false);
-                              setJiraToken('');
-                            } else {
-                              setShowJiraToken(true);
-                            }
-                          }}
-                          className="text-[10px] text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d] font-bold hover:underline"
-                        >
-                          {showJiraToken ? 'Cancel' : jiraTokenMasked ? 'Replace' : 'Add'}
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                  {showJiraToken ? (
-                    <input
-                      type="password"
-                      name="jiraToken_devflow_prevent_autofill"
-                      autoComplete="new-password"
-                      value={jiraToken}
-                      onChange={e => setJiraToken(e.target.value)}
-                      placeholder="Jira token..."
-                      className="w-full px-3 py-2 text-sm font-mono rounded-lg border border-[#ddd0ba] dark:border-[#584a3b] bg-white dark:bg-[#1e1914] text-[#3e3129] dark:text-[#f3eadf] focus:outline-none focus:ring-2 focus:ring-[#d89745]/50 dark:focus:ring-[#e0a070]/50 focus:border-[#d89745] dark:border-[#e0a070] dark:focus:border-[#e0a070] transition"
-                    />
-                  ) : clearJiraToken ? (
-                    <div className="px-3 py-2 rounded-lg border border-[#fecaca] dark:border-[#584a3b] bg-[#fff0f0] dark:bg-[#1e1914] text-[11px] text-[#991b1b] dark:text-[#f3eadf] font-mono flex items-center justify-between">
-                      Pending removal (Save to apply)
-                      <button onClick={() => setClearJiraToken(false)} className="underline hover:text-[#7f1d1d] dark:text-[#f3eadf] dark:hover:text-[#f3eadf] font-bold">Undo</button>
-                    </div>
-                  ) : (
-                    <div className="px-3 py-2 rounded-lg border border-[#e5d4bb] dark:border-[#584a3b] bg-[#faf7f0] dark:bg-[#1e1914] text-[11px] text-[#b89b82] dark:text-[#d6b56d] font-mono">
-                      {jiraTokenMasked
-                        ? 'Token securely stored.'
-                        : 'No Jira token stored.'
-                      }
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Figma Integration Section */}
-              <div className="flex flex-col gap-1.5 pt-3 border-t border-[#ebdcb9] dark:border-[#584a3b]">
-                <div className="flex items-center justify-between">
-                  <label className="text-xs font-bold text-[#685547] dark:text-[#f3eadf]">Figma Access Token</label>
-                  <div className="flex gap-2">
-                    {figmaTokenMasked && !showFigmaToken && !clearFigmaToken && (
-                      <button
-                        onClick={() => {
-                          setClearFigmaToken(true);
-                        }}
-                        className="text-[10px] text-red-500 font-bold hover:underline"
-                      >
-                        Remove
-                      </button>
-                    )}
-                    {!clearFigmaToken && (
-                      <button
-                        onClick={() => {
-                          if (showFigmaToken) {
-                            setShowFigmaToken(false);
-                            setFigmaToken('');
-                          } else {
-                            setShowFigmaToken(true);
-                          }
-                        }}
-                        className="text-[10px] text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d] font-bold hover:underline"
-                      >
-                        {showFigmaToken ? 'Cancel' : figmaTokenMasked ? 'Replace' : 'Add'}
-                      </button>
-                    )}
-                  </div>
-                </div>
-                <p className="text-[11px] text-[#8a725f] dark:text-[#f3eadf] font-mono -mt-1">
-                  Securely stored token for fetching design context from Figma. Not shown in logs.
-                </p>
-                {showFigmaToken ? (
-                  <input
-                    type="password"
-                    name="figmaToken_devflow_prevent_autofill"
-                    autoComplete="new-password"
-                    value={figmaToken}
-                    onChange={e => setFigmaToken(e.target.value)}
-                    placeholder="figd_..."
-                    className="w-full px-3 py-2 text-sm font-mono rounded-lg border border-[#ddd0ba] dark:border-[#584a3b] bg-white dark:bg-[#1e1914] text-[#3e3129] dark:text-[#f3eadf] focus:outline-none focus:ring-2 focus:ring-[#d89745]/50 dark:focus:ring-[#e0a070]/50 focus:border-[#d89745] dark:border-[#e0a070] dark:focus:border-[#e0a070] transition"
-                  />
-                ) : clearFigmaToken ? (
-                  <div className="px-3 py-2 rounded-lg border border-[#fecaca] dark:border-[#584a3b] bg-[#fff0f0] dark:bg-[#1e1914] text-[11px] text-[#991b1b] dark:text-[#f3eadf] font-mono flex items-center justify-between">
-                    Pending removal (Save to apply)
-                    <button onClick={() => setClearFigmaToken(false)} className="underline hover:text-[#7f1d1d] dark:text-[#f3eadf] dark:hover:text-[#f3eadf] font-bold">Undo</button>
-                  </div>
-                ) : (
-                  <div className="px-3 py-2 rounded-lg border border-[#e5d4bb] dark:border-[#584a3b] bg-[#faf7f0] dark:bg-[#1e1914] text-[11px] text-[#b89b82] dark:text-[#d6b56d] font-mono">
-                    {figmaTokenMasked
-                      ? 'Token securely stored.'
-                      : 'No Figma token stored.'
-                    }
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Agent Execution Mode */}
-            <div className="pt-4 mt-2 border-t border-[#ebdcb9] dark:border-[#584a3b] flex flex-col gap-3">
-              <div className="flex flex-col gap-1">
-                <label className="flex items-center gap-1.5 text-sm font-extrabold text-[#534135] dark:text-[#f3eadf]">
-                  <Activity size={14} className="text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d]" />
-                  Agent Execution Mode
-                </label>
-                <p className="text-[11px] text-[#8a725f] dark:text-[#f3eadf] font-mono leading-relaxed">
-                  Controls the permissions granted to agents when DevFlow auto-triggers runs.
-                </p>
-              </div>
-              <div className="flex flex-col gap-2">
-                <label className={`flex items-start gap-2 p-2.5 rounded-lg border cursor-pointer transition-colors ${agentExecutionMode === 'safe' ? 'bg-[#f0f9f4] dark:bg-[#1e1914] border-[#a3e6cd] dark:border-[#584a3b] shadow-sm' : 'bg-white dark:bg-[#1e1914] border-[#ebdcb9] dark:border-[#584a3b] hover:bg-[#faf7f0] dark:bg-[#1e1914] dark:hover:bg-[#1e1914]'}`}>
-                  <input type="radio" name="executionMode" value="safe" checked={agentExecutionMode === 'safe'} onChange={() => setAgentExecutionMode('safe')} className="mt-1" />
-                  <div className="flex flex-col">
-                    <span className={`text-[12px] font-bold ${agentExecutionMode === 'safe' ? 'text-[#166534] dark:text-[#f3eadf]' : 'text-[#534135] dark:text-[#f3eadf]'}`}>Safe Mode (Recommended)</span>
-                    <span className="text-[10px] text-[#8a725f] dark:text-[#f3eadf] font-mono">Restricts agents to editing files within the workspace. Blocks arbitrary system commands.</span>
-                  </div>
-                </label>
-                <label className={`flex items-start gap-2 p-2.5 rounded-lg border cursor-pointer transition-colors ${agentExecutionMode === 'full' ? 'bg-[#fff0f0] dark:bg-[#1e1914] border-[#fecaca] dark:border-[#584a3b] shadow-sm' : 'bg-white dark:bg-[#1e1914] border-[#ebdcb9] dark:border-[#584a3b] hover:bg-[#faf7f0] dark:bg-[#1e1914] dark:hover:bg-[#1e1914]'}`}>
-                  <input type="radio" name="executionMode" value="full" checked={agentExecutionMode === 'full'} onChange={() => setAgentExecutionMode('full')} className="mt-1" />
-                  <div className="flex flex-col">
-                    <span className={`text-[12px] font-bold ${agentExecutionMode === 'full' ? 'text-[#991b1b] dark:text-[#f3eadf]' : 'text-[#534135] dark:text-[#f3eadf]'}`}>Full Mode</span>
-                    <span className="text-[10px] text-[#8a725f] dark:text-[#f3eadf] font-mono">Grants broader permissions. Agents may run arbitrary system commands depending on their config.</span>
-                  </div>
-                </label>
-              </div>
-            </div>
-
-            {/* Export Data */}
-            <div className="pt-4 mt-2 border-t border-[#ebdcb9] dark:border-[#584a3b] flex flex-col gap-2">
-              <div className="flex flex-wrap items-start sm:items-center justify-between gap-4">
-                <div className="flex-1 min-w-[240px]">
-                  <label className="flex items-center gap-1.5 text-sm font-extrabold text-[#534135] dark:text-[#f3eadf]">
-                    <Database size={14} className="text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d]" />
-                    Export Data
-                  </label>
-                  <p className="text-[11px] text-[#8a725f] dark:text-[#f3eadf] font-mono mt-0.5 leading-relaxed">
-                    Download a portable backup of your DevFlow data (projects, tasks, skills) to migrate to another machine. Secrets are excluded.
-                  </p>
-                </div>
-                <div className="flex flex-wrap items-center gap-2 sm:justify-end">
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    type="button"
-                    disabled={importStatus === 'importing'}
-                    className="bg-[#faf7f0] dark:bg-[#1e1914] border border-[#e5d4bb] dark:border-[#584a3b] hover:bg-[#ebdcb9] dark:bg-[#584a3b] dark:hover:bg-[#584a3b] text-[#534135] dark:text-[#f3eadf] px-3 py-1.5 rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 whitespace-nowrap disabled:opacity-50"
-                  >
-                    {importStatus === 'importing' ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />} 
-                    {importStatus === 'importing' ? 'Importing...' : 'Import Backup'}
-                  </button>
-                  <button
-                    onClick={() => window.location.href = '/api/export'}
-                    type="button"
-                    className="bg-[#faf7f0] dark:bg-[#1e1914] border border-[#e5d4bb] dark:border-[#584a3b] hover:bg-[#ebdcb9] dark:bg-[#584a3b] dark:hover:bg-[#584a3b] text-[#534135] dark:text-[#f3eadf] px-3 py-1.5 rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 whitespace-nowrap"
-                  >
-                    <Download size={14} /> Export Backup
-                  </button>
-                  <input
-                    type="file"
-                    accept=".db"
-                    ref={fileInputRef}
-                    onChange={handleImportFile}
-                    className="hidden"
-                  />
-                </div>
-              </div>
-              
-              {/* Import Messages */}
-              {importMsg && (
-                <div className={`mt-2 p-2 rounded-lg text-xs font-mono flex items-start gap-2 ${importStatus === 'error' ? 'bg-[#fff0f0] dark:bg-[#1e1914] text-[#991b1b] dark:text-[#f3eadf] border border-[#fecaca] dark:border-[#584a3b]' : 'bg-[#f0f9f4] dark:bg-[#1e1914] text-[#166534] dark:text-[#f3eadf] border border-[#a3e6cd] dark:border-[#584a3b]'}`}>
-                  {importStatus === 'error' ? <AlertCircle size={14} className="mt-0.5 shrink-0" /> : <CheckCircle2 size={14} className="mt-0.5 shrink-0" />}
-                  <span>{importMsg}</span>
-                </div>
-              )}
-            </div>
-
-            </div>
-            
-            {/* Save Button Footer */}
             <div className="px-6 py-4 border-t border-[#ebdcb9] dark:border-[#584a3b] bg-[#fdfbf6] dark:bg-[#1e1914] flex items-center justify-between shrink-0">
               <div className="flex items-center gap-1.5 text-xs font-mono">
                 {saveStatus === 'success' && (

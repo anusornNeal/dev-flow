@@ -1,13 +1,14 @@
 import React, { useState } from 'react';
 import { CheckCircle2, MessageSquareText, AlertCircle } from 'lucide-react';
 import { buildChatGptStarterPrompt } from '../lib/chatGptStarterPrompt';
+import { copyText } from '../lib/clipboard';
 
 export default function ChatGptStarterPromptButton() {
   const [status, setStatus] = useState<'idle' | 'copied' | 'error'>('idle');
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(buildChatGptStarterPrompt());
+      await copyText(buildChatGptStarterPrompt());
       setStatus('copied');
       setTimeout(() => setStatus('idle'), 2000);
     } catch (error) {

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { SquareTerminal, CheckCircle2, AlertCircle } from 'lucide-react';
 import type { Task } from '../types';
+import { copyText } from '../lib/clipboard';
 
 interface CopyTemplateButtonProps {
   task: Task;
@@ -23,7 +24,7 @@ export default function CopyTemplateButton({ task, className = '', variant = 'fu
       }
       const promptText = await res.text();
       
-      await navigator.clipboard.writeText(promptText);
+      await copyText(promptText);
       setStatus('copied');
       setTimeout(() => setStatus('idle'), 2000);
     } catch (err) {

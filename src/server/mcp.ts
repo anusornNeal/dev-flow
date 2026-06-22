@@ -4,7 +4,41 @@ import { createCorrelationId } from './services/api';
 import { getCapabilityCatalog, getMcpToolList, getToolDefinitionByName } from './contracts/devflowContract';
 import { recordToolCall } from './services/mcpToolMonitor';
 
-async function executeHttpRequest(baseUrl: string, request: { method: string; path: string; body?: unknown; headers?: Record<string, string> }, correlationId: string) {
+function buildMcpFetchError(params: {
+  toolName: string;
+  method: string;
+  url: string;
+  apiBaseUrl: string;
+  error: any;
+  correlationId: string;
+}) {
+  const isTimeout = params.error?.name === 'AbortError';
+  const kind = isTimeout ? 'TIMEOUT' : 'FETCH_FAILED';
+  const message = isTimeout
+    ? `Request to DevFlow API timed out after 30s.`
+    : `Failed to connect to DevFlow API: ${params.error?.message || 'Unknown network error'}`;
+
+  return {
+    code: kind,
+    message,
+    details: {
+      toolName: params.toolName,
+      method: params.method,
+      attemptedUrl: params.url,
+      apiBaseUrl: params.apiBaseUrl,
+      guidance: `Please ensure the DevFlow API server is running at ${params.apiBaseUrl}. If running locally, check if 'npm run dev' or the tray app is running.`,
+    },
+    retryable: true,
+    correlationId: params.correlationId,
+  };
+}
+
+async function executeHttpRequest(
+  baseUrl: string,
+  request: { method: string; path: string; body?: unknown; headers?: Record<string, string> },
+  correlationId: string,
+  toolName: string
+) {
   const headers: Record<string, string> = {
     Accept: 'application/json',
     'x-correlation-id': correlationId,
@@ -12,18 +46,37 @@ async function executeHttpRequest(baseUrl: string, request: { method: string; pa
     ...(request.headers || {}),
   };
   const startedAt = Date.now();
-  const response = await fetch(`${baseUrl}${request.path}`, {
-    method: request.method,
-    headers,
-    body: request.body !== undefined ? JSON.stringify(request.body) : undefined,
-  });
-  const durationMs = Date.now() - startedAt;
-  const contentType = response.headers.get('content-type') || '';
-  const parsedBody = contentType.includes('application/json')
-    ? await response.json().catch(() => null)
-    : await response.text();
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
+    const response = await fetch(`${baseUrl}${request.path}`, {
+      method: request.method,
+      headers,
+      body: request.body !== undefined ? JSON.stringify(request.body) : undefined,
+      signal: controller.signal
+    });
+    clearTimeout(timeoutId);
+    const durationMs = Date.now() - startedAt;
+    const contentType = response.headers.get('content-type') || '';
+    const parsedBody = contentType.includes('application/json')
+      ? await response.json().catch(() => null)
+      : await response.text();
 
-  return { response, parsedBody, durationMs };
+    return { response, parsedBody, durationMs };
+  } catch (error: any) {
+    const durationMs = Date.now() - startedAt;
+    const parsedBody = {
+      error: buildMcpFetchError({
+        toolName,
+        method: request.method,
+        url: `${baseUrl}${request.path}`,
+        apiBaseUrl: baseUrl,
+        error,
+        correlationId,
+      }),
+    };
+    return { response: { ok: false, status: 503 } as any, parsedBody, durationMs };
+  }
 }
 
 function toMcpTextPayload(data: unknown) {
@@ -62,7 +115,7 @@ export function createDevFlowMcpServer(baseUrl: string) {
     }
 
     const httpRequest = tool.buildHttpRequest(args);
-    const { response, parsedBody, durationMs } = await executeHttpRequest(baseUrl, httpRequest, correlationId);
+    const { response, parsedBody, durationMs } = await executeHttpRequest(baseUrl, httpRequest, correlationId, toolName);
     recordToolCall({ toolName, args, status: response.status, durationMs });
     console.log(`[mcp] cid=${correlationId} tool=${toolName} status=${response.status} durationMs=${durationMs}`);
 

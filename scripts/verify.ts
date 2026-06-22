@@ -3,7 +3,8 @@ import { spawnSync } from 'child_process';
 const commands = [
   { label: 'lint', command: 'npm', args: ['run', 'lint'] },
   { label: 'devflow contract', command: 'npx', args: ['tsx', 'scripts/verify-devflow-contract.ts'] },
-  { label: 'mcp fetch errors', command: 'npx', args: ['tsx', 'tests/server/mcpFetchErrors.test.ts'] },
+  { label: 'mcp fetch errors', command: 'npx', args: ['tsx', '--test', 'tests/server/mcpFetchErrors.test.ts'] },
+  { label: 'mcp tool job queue', command: 'npx', args: ['tsx', '--test', 'tests/server/mcpToolJobQueue.test.ts'] },
   { label: 'agent runs', command: 'npm', args: ['run', 'test:agent-runs'] },
   { label: 'figma integration', command: 'npm', args: ['run', 'test:figma'] },
   { label: 'gateway safety', command: 'npm', args: ['run', 'test:gateway'] },

@@ -190,8 +190,13 @@ export function createDevFlowMcpServer(baseUrl: string) {
       };
     }
 
-    const httpRequest = tool.buildHttpRequest(args);
-    const { response, parsedBody, durationMs } = await executeHttpRequest(baseUrl, httpRequest, correlationId, toolName);
+    let httpRequest;
+    if (tool.executionPolicy?.mode === 'job') {
+      httpRequest = { method: 'POST', path: '/api/tool-jobs', body: { toolName, args } };
+    } else {
+      httpRequest = tool.buildHttpRequest(args);
+    }
+    const { response, parsedBody, durationMs } = await executeHttpRequest(baseUrl, httpRequest as any, correlationId, toolName);
     recordToolCall({ toolName, args, status: response.status, durationMs });
     console.log(`[mcp] cid=${correlationId} tool=${toolName} status=${response.status} durationMs=${durationMs}`);
 

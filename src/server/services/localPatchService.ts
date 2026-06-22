@@ -1,4 +1,4 @@
-import { spawnSync } from 'child_process';
+import { spawnSync, spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import type { AppState } from '../types';
@@ -165,3 +165,87 @@ export function applyLocalPatch(state: AppState, args: Record<string, any>): Loc
     truncated: summary.truncated,
   };
 }
+
+export async function applyLocalPatchAsync(state: AppState, args: Record<string, any>, logger: { stdout: (data: string) => void, stderr: (data: string) => void }, setCancelFn: (fn: () => void) => void): Promise<LocalPatchResult> {
+  const root = resolveProjectRoot(state, args);
+  const patch = String(args.patch || '').trim();
+  const dryRun = normalizePatchFlag(args.dryRun ?? args.check);
+
+  if (!patch) throw createApiError(400, 'MISSING_PATCH_CONTENT', 'Patch content is required.');
+
+  const changedFiles: string[] = [];
+  const lines = patch.split('\n');
+  for (const line of lines) {
+    if (line.startsWith('+++ b/')) {
+      changedFiles.push(line.slice(6).trim());
+    }
+  }
+
+  const gitArgs = ['apply', dryRun ? '--check' : '--whitespace=nowarn'];
+  
+  return new Promise((resolve, reject) => {
+    const child = spawn('git', gitArgs, {
+      cwd: root,
+      shell: false,
+    });
+    
+    let stdoutBuffer = '';
+    let stderrBuffer = '';
+
+    setCancelFn(() => {
+      child.kill('SIGTERM');
+      reject(new Error('Job cancelled'));
+    });
+
+    child.stdout.on('data', (data) => {
+      const chunk = data.toString('utf8');
+      stdoutBuffer += chunk;
+      logger.stdout(chunk);
+    });
+
+    child.stderr.on('data', (data) => {
+      const chunk = data.toString('utf8');
+      stderrBuffer += chunk;
+      logger.stderr(chunk);
+    });
+
+    child.on('error', (err) => {
+      reject(createApiError(500, 'PATCH_EXEC_ERROR', 'Failed to execute git apply.', { details: err.message }));
+    });
+
+    child.on('close', (code) => {
+      const output = [stdoutBuffer, stderrBuffer].filter(Boolean).join('\n').trim();
+      const summarySource = [
+        `${dryRun ? 'Checked' : 'Applied'} patch for ${changedFiles.length} file(s): ${changedFiles.join(', ')}`,
+        output,
+      ].filter(Boolean).join('\n');
+      
+      const maxSummaryBytes = Number.isFinite(Number(args.maxSummaryBytes))
+        ? Math.max(1, Math.min(100_000, Number(args.maxSummaryBytes)))
+        : DEFAULT_MAX_SUMMARY_BYTES;
+      const summary = truncateOutput(summarySource, maxSummaryBytes);
+
+      if (code !== 0) {
+        reject(createApiError(400, 'PATCH_APPLY_FAILED', dryRun ? 'Patch check failed.' : 'Patch apply failed.', {
+          details: { changedFiles, dryRun, exitCode: code, output: summary.value, truncated: summary.truncated }
+        }));
+        return;
+      }
+
+      resolve({
+        changedFiles,
+        dryRun,
+        applied: !dryRun,
+        exitCode: code,
+        summary: summary.value,
+        truncated: summary.truncated,
+      });
+    });
+
+    // Write patch to stdin
+    child.stdin.write(patch, 'utf8', () => {
+      child.stdin.end();
+    });
+  });
+}
+

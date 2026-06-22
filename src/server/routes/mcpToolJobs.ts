@@ -1,0 +1,73 @@
+import type express from 'express';
+import type { ApiRouteDeps } from '../types';
+import { enqueueToolJob, getToolJobStatus, cancelToolJob } from '../services/mcpToolJobService';
+import { readJobLog, readJobResult } from '../repositories/mcpToolJobRepository';
+import { createApiError } from '../services/api';
+import { getToolDefinitionByName } from '../contracts/devflowContract';
+
+export function registerMcpToolJobRoutes(app: express.Express, deps: ApiRouteDeps) {
+  app.post('/api/tool-jobs', (req, res, next) => {
+    try {
+      const { toolName, args } = req.body;
+      if (!toolName || !args) {
+        throw createApiError(400, 'BAD_REQUEST', 'toolName and args are required.');
+      }
+      
+      const def = getToolDefinitionByName(toolName);
+      if (!def) {
+        throw createApiError(404, 'UNKNOWN_TOOL', `Unknown tool: ${toolName}`);
+      }
+      
+      const kind = def.executionPolicy?.jobKind || 'repo-command';
+      const jobInfo = enqueueToolJob(deps.state, toolName, args, kind);
+      
+      res.json(jobInfo);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get('/api/tool-jobs/:jobId', (req, res, next) => {
+    try {
+      const status = getToolJobStatus(req.params.jobId);
+      if (!status) {
+        throw createApiError(404, 'JOB_NOT_FOUND', `Job not found: ${req.params.jobId}`);
+      }
+      res.json(status);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get('/api/tool-jobs/:jobId/log', (req, res, next) => {
+    try {
+      const stream = (req.query.stream as 'stdout' | 'stderr' | 'both') || 'both';
+      const log = readJobLog(req.params.jobId, stream);
+      res.json({ jobId: req.params.jobId, log });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get('/api/tool-jobs/:jobId/result', (req, res, next) => {
+    try {
+      const status = getToolJobStatus(req.params.jobId);
+      if (!status) {
+        throw createApiError(404, 'JOB_NOT_FOUND', `Job not found: ${req.params.jobId}`);
+      }
+      const result = readJobResult(req.params.jobId);
+      res.json({ jobId: req.params.jobId, status: status.status, result });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post('/api/tool-jobs/:jobId/cancel', (req, res, next) => {
+    try {
+      const success = cancelToolJob(req.params.jobId);
+      res.json({ jobId: req.params.jobId, cancelled: success });
+    } catch (error) {
+      next(error);
+    }
+  });
+}

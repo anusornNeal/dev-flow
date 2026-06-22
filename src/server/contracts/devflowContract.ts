@@ -18,6 +18,10 @@ export interface DevFlowToolDefinition {
   inputSchema: JsonSchema;
   outputSchema?: JsonSchema;
   lightweight?: boolean;
+  executionPolicy?: {
+    mode: 'direct' | 'job';
+    jobKind?: 'repo-command' | 'repo-write' | 'repo-read' | 'skill-read';
+  };
   buildHttpRequest: (args: Record<string, any>) => DevFlowToolHttpRequest;
 }
 
@@ -1056,6 +1060,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'apply_patch',
+    executionPolicy: { mode: 'job', jobKind: 'repo-write' },
     description: 'Apply or dry-run check a small unified diff patch safely within a resolved local project root.',
     inputSchema: {
       type: 'object',
@@ -1088,6 +1093,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'run_project_command',
+    executionPolicy: { mode: 'job', jobKind: 'repo-command' },
     description: 'Run an allowlisted local verification command such as typecheck, test, lint, build, or verify inside a resolved project root.',
     inputSchema: {
       type: 'object',
@@ -1182,7 +1188,8 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'search_local_files',
-    description: 'Search local files without reading the full repo. Prefer this local search before remote GitHub search when the user does not specify a source.',
+    executionPolicy: { mode: 'job', jobKind: 'repo-read' },
+    description: 'Search for text patterns inside a local project repository using exact match or regex. Powered by ripgrep. Use this for discovery, not for listing directory contents.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1361,6 +1368,73 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
       path: `/api/tasks/${encodePathSegment(String(args.taskId))}/figma-context`,
       body: { fileKey: args.fileKey, nodeId: args.nodeId },
     }),
+  },
+  {
+    name: 'create_tool_job',
+    description: 'Manually enqueue a tool job for tools that support it.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        toolName: { type: 'string' },
+        args: { type: 'object' },
+      },
+      required: ['toolName', 'args'],
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: (args) => ({ method: 'POST', path: '/api/tool-jobs', body: args }),
+  },
+  {
+    name: 'get_tool_job_status',
+    description: 'Get the status and queue position of a tool job.',
+    inputSchema: {
+      type: 'object',
+      properties: { jobId: { type: 'string' } },
+      required: ['jobId'],
+    },
+    outputSchema: { type: 'object' },
+    lightweight: true,
+    buildHttpRequest: (args) => ({ method: 'GET', path: `/api/tool-jobs/${encodePathSegment(String(args.jobId))}` }),
+  },
+  {
+    name: 'get_tool_job_log',
+    description: 'Tail the execution log of a running or completed tool job.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        jobId: { type: 'string' },
+        stream: { type: 'string', enum: ['stdout', 'stderr', 'both'] },
+      },
+      required: ['jobId'],
+    },
+    outputSchema: { type: 'object' },
+    lightweight: true,
+    buildHttpRequest: (args) => ({
+      method: 'GET',
+      path: withQuery(`/api/tool-jobs/${encodePathSegment(String(args.jobId))}/log`, { stream: args.stream }),
+    }),
+  },
+  {
+    name: 'get_tool_job_result',
+    description: 'Get the final result and patch of a completed tool job.',
+    inputSchema: {
+      type: 'object',
+      properties: { jobId: { type: 'string' } },
+      required: ['jobId'],
+    },
+    outputSchema: { type: 'object' },
+    lightweight: true,
+    buildHttpRequest: (args) => ({ method: 'GET', path: `/api/tool-jobs/${encodePathSegment(String(args.jobId))}/result` }),
+  },
+  {
+    name: 'cancel_tool_job',
+    description: 'Cancel a queued or running tool job.',
+    inputSchema: {
+      type: 'object',
+      properties: { jobId: { type: 'string' } },
+      required: ['jobId'],
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: (args) => ({ method: 'POST', path: `/api/tool-jobs/${encodePathSegment(String(args.jobId))}/cancel` }),
   },
 ];
 

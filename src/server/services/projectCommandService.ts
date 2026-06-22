@@ -1,4 +1,4 @@
-import { spawnSync } from 'child_process';
+import { spawnSync, spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import type { AppState } from '../types';
@@ -144,3 +144,82 @@ export function runProjectCommand(state: AppState, args: Record<string, any>): R
     stderrTruncated: stderr.truncated,
   };
 }
+
+export async function runProjectCommandAsync(state: AppState, args: Record<string, any>, logger: { stdout: (data: string) => void, stderr: (data: string) => void }, setCancelFn: (fn: () => void) => void): Promise<RunProjectCommandResult> {
+  const root = resolveProjectRoot(state, args);
+  const command = resolveCommandLabel(args.command ?? args.preset);
+  const cwdPath = resolveSafeCommandCwd(root, args.cwd);
+  const resolvedCommand = resolveAllowedCommand(root, command);
+  const timeoutMs = Number.isFinite(Number(args.timeoutMs))
+    ? Math.max(1, Math.min(MAX_TIMEOUT_MS, Number(args.timeoutMs)))
+    : DEFAULT_TIMEOUT_MS;
+  const maxOutputBytes = Number.isFinite(Number(args.maxOutputBytes))
+    ? Math.max(1, Math.min(MAX_OUTPUT_BYTES, Number(args.maxOutputBytes)))
+    : DEFAULT_MAX_OUTPUT_BYTES;
+
+  const startedAt = Date.now();
+  
+  return new Promise((resolve, reject) => {
+    const child = spawn(resolvedCommand.executable, resolvedCommand.args, {
+      cwd: cwdPath,
+      shell: false,
+    });
+
+    let timedOut = false;
+    let stdoutBuffer = '';
+    let stderrBuffer = '';
+
+    const timeoutId = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGTERM');
+    }, timeoutMs);
+
+    setCancelFn(() => {
+      clearTimeout(timeoutId);
+      child.kill('SIGTERM');
+      reject(new Error('Job cancelled'));
+    });
+
+    child.stdout.on('data', (data) => {
+      const chunk = data.toString('utf8');
+      if (stdoutBuffer.length < maxOutputBytes) {
+        stdoutBuffer += chunk;
+      }
+      logger.stdout(chunk);
+    });
+
+    child.stderr.on('data', (data) => {
+      const chunk = data.toString('utf8');
+      if (stderrBuffer.length < maxOutputBytes) {
+        stderrBuffer += chunk;
+      }
+      logger.stderr(chunk);
+    });
+
+    child.on('error', (err) => {
+      clearTimeout(timeoutId);
+      reject(createApiError(500, 'COMMAND_EXEC_ERROR', `Failed to run '${command}'.`, { details: err.message }));
+    });
+
+    child.on('close', (code, signal) => {
+      clearTimeout(timeoutId);
+      const durationMs = Date.now() - startedAt;
+      const stdout = truncateOutput(stdoutBuffer, maxOutputBytes);
+      const stderr = truncateOutput(stderrBuffer, maxOutputBytes);
+
+      resolve({
+        command,
+        cwd: path.relative(root, cwdPath) || '.',
+        exitCode: code,
+        durationMs,
+        timedOut,
+        signal,
+        stdout: stdout.value,
+        stderr: stderr.value,
+        stdoutTruncated: stdout.truncated,
+        stderrTruncated: stderr.truncated,
+      });
+    });
+  });
+}
+

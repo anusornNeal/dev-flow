@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { spawnSync } from 'child_process';
+import { spawnSync, spawn } from 'child_process';
 import { getDevFlowAppRoot } from '../../lib/devFlowPaths';
 import type { AppState } from '../types';
 import { createApiError } from './api';
@@ -222,3 +222,74 @@ export function searchLocalFiles(state: AppState, args: Record<string, any>) {
     matches: [],
   };
 }
+
+export async function searchLocalFilesAsync(state: AppState, args: Record<string, any>, logger: { stdout: (data: string) => void, stderr: (data: string) => void }, setCancelFn: (fn: () => void) => void): Promise<any> {
+  const root = resolveProjectRoot(state, args);
+  const query = String(args.query || '').trim();
+  if (!query) {
+    throw createApiError(400, 'QUERY_REQUIRED', 'query is required.');
+  }
+
+  const searchPath = resolveSafePath(root, String(args.path || '.'));
+  const limit = Number.isFinite(Number(args.limit)) ? Math.max(1, Math.min(200, Number(args.limit))) : 50;
+
+  return new Promise((resolve, reject) => {
+    const child = spawn('rg', ['--json', '--line-number', '--max-count', String(limit), query, searchPath], {
+      cwd: root,
+      shell: false,
+    });
+
+    let stdoutBuffer = '';
+    
+    setCancelFn(() => {
+      child.kill('SIGTERM');
+      reject(new Error('Job cancelled'));
+    });
+
+    child.stdout.on('data', (data) => {
+      const chunk = data.toString('utf8');
+      stdoutBuffer += chunk;
+      logger.stdout(chunk);
+    });
+
+    child.stderr.on('data', (data) => {
+      logger.stderr(data.toString('utf8'));
+    });
+
+    child.on('error', (err) => {
+      reject(createApiError(500, 'SEARCH_EXEC_ERROR', 'Failed to execute rg.', { details: err.message }));
+    });
+
+    child.on('close', (code) => {
+      if (code !== 0 && code !== 1) { // rg returns 1 if no matches found
+        reject(createApiError(500, 'SEARCH_FAILED', 'rg search failed.', { details: { exitCode: code } }));
+        return;
+      }
+
+      const matches = [];
+      for (const line of stdoutBuffer.split(/\r?\n/)) {
+        if (!line.trim()) continue;
+        try {
+          const parsed = JSON.parse(line);
+          if (parsed.type !== 'match') continue;
+          matches.push({
+            path: path.relative(root, parsed.data.path.text),
+            line: parsed.data.line_number,
+            preview: parsed.data.lines.text.trim(),
+          });
+        } catch {
+          // Ignore malformed rg lines.
+        }
+      }
+
+      resolve({
+        root,
+        path: path.relative(root, searchPath) || '.',
+        query,
+        count: matches.length,
+        matches,
+      });
+    });
+  });
+}
+

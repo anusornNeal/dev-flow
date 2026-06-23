@@ -1,3 +1,4 @@
+﻿import { executeAllMigrations } from '../db/migrations/index.js';
 import fs from 'fs';
 import {
   saveProjects as persistProjects,
@@ -150,6 +151,7 @@ export interface BootstrapResult {
 }
 
 export function bootstrap(): BootstrapResult {
+  executeAllMigrations();
   const state = createAppState();
   loadSettings(state);
   loadProjects(state);

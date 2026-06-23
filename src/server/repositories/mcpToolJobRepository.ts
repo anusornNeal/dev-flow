@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { getDevFlowAppRoot } from '../../lib/devFlowPaths';
 
 export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'timed_out' | 'cancelled' | 'interrupted';
 
@@ -13,7 +14,19 @@ export interface McpToolJob {
   resourceKey: string;
 }
 
-const JOBS_DIR = path.resolve(process.cwd(), '.devflow', 'jobs');
+const JOBS_DIR = path.resolve(getDevFlowAppRoot(), '.devflow', 'jobs');
+const SECRET_KEY_PATTERN = /(token|secret|password|pass|apikey|api_key|authorization|cookie)/i;
+const MAX_LOG_READ_BYTES = 200_000;
+
+function redactValue(value: any): any {
+  if (Array.isArray(value)) return value.map(redactValue);
+  if (!value || typeof value !== 'object') return value;
+  const copy: Record<string, any> = {};
+  for (const [key, nestedValue] of Object.entries(value)) {
+    copy[key] = SECRET_KEY_PATTERN.test(key) ? '[REDACTED]' : redactValue(nestedValue);
+  }
+  return copy;
+}
 
 function getJobDir(jobId: string) {
   return path.join(JOBS_DIR, jobId);
@@ -25,22 +38,43 @@ function ensureJobsDir() {
   }
 }
 
+function readTail(filePath: string, maxBytes: number) {
+  if (!fs.existsSync(filePath)) return { text: '', truncated: false, bytes: 0, returnedBytes: 0 };
+  const stat = fs.statSync(filePath);
+  const length = Math.min(stat.size, maxBytes);
+  const fd = fs.openSync(filePath, 'r');
+  try {
+    const buffer = Buffer.alloc(length);
+    fs.readSync(fd, buffer, 0, length, Math.max(0, stat.size - length));
+    return {
+      text: buffer.toString('utf8'),
+      truncated: stat.size > length,
+      bytes: stat.size,
+      returnedBytes: length,
+    };
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 export function createJob(jobId: string, toolName: string, args: any, resourceKey: string): McpToolJob {
   ensureJobsDir();
   const jobDir = getJobDir(jobId);
   fs.mkdirSync(jobDir, { recursive: true });
+  const safeArgs = redactValue(args);
+  const now = new Date().toISOString();
   
   const job: McpToolJob = {
     jobId,
     toolName,
     status: 'queued',
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    args,
+    createdAt: now,
+    updatedAt: now,
+    args: safeArgs,
     resourceKey
   };
   
-  fs.writeFileSync(path.join(jobDir, 'input.json'), JSON.stringify({ toolName, args, resourceKey }, null, 2));
+  fs.writeFileSync(path.join(jobDir, 'input.json'), JSON.stringify({ toolName, args: safeArgs, resourceKey }, null, 2));
   fs.writeFileSync(path.join(jobDir, 'status.json'), JSON.stringify(job, null, 2));
   fs.writeFileSync(path.join(jobDir, 'stdout.log'), '');
   fs.writeFileSync(path.join(jobDir, 'stderr.log'), '');
@@ -78,22 +112,26 @@ export function writeJobResult(jobId: string, result: any) {
   const jobDir = getJobDir(jobId);
   if (!fs.existsSync(jobDir)) return;
   fs.writeFileSync(path.join(jobDir, 'result.json'), JSON.stringify(result, null, 2));
-  if (result.patch) {
+  if (result?.patch) {
     fs.writeFileSync(path.join(jobDir, 'patch.diff'), result.patch);
   }
 }
 
-export function readJobLog(jobId: string, stream: 'stdout' | 'stderr' | 'both'): string {
+export function readJobLog(jobId: string, stream: 'stdout' | 'stderr' | 'both'): { log: string; truncated: boolean; bytes: number; returnedBytes: number } {
   const jobDir = getJobDir(jobId);
-  if (!fs.existsSync(jobDir)) return '';
+  if (!fs.existsSync(jobDir)) return { log: '', truncated: false, bytes: 0, returnedBytes: 0 };
   if (stream === 'both') {
-    const out = fs.existsSync(path.join(jobDir, 'stdout.log')) ? fs.readFileSync(path.join(jobDir, 'stdout.log'), 'utf8') : '';
-    const err = fs.existsSync(path.join(jobDir, 'stderr.log')) ? fs.readFileSync(path.join(jobDir, 'stderr.log'), 'utf8') : '';
-    return out + err;
+    const out = readTail(path.join(jobDir, 'stdout.log'), Math.floor(MAX_LOG_READ_BYTES / 2));
+    const err = readTail(path.join(jobDir, 'stderr.log'), Math.floor(MAX_LOG_READ_BYTES / 2));
+    return {
+      log: `${out.text}${err.text}`,
+      truncated: out.truncated || err.truncated,
+      bytes: out.bytes + err.bytes,
+      returnedBytes: out.returnedBytes + err.returnedBytes,
+    };
   }
-  const logFile = path.join(jobDir, `${stream}.log`);
-  if (!fs.existsSync(logFile)) return '';
-  return fs.readFileSync(logFile, 'utf8');
+  const tail = readTail(path.join(jobDir, `${stream}.log`), MAX_LOG_READ_BYTES);
+  return { log: tail.text, truncated: tail.truncated, bytes: tail.bytes, returnedBytes: tail.returnedBytes };
 }
 
 export function readJobResult(jobId: string): any {
@@ -102,7 +140,12 @@ export function readJobResult(jobId: string): any {
   const resultPath = path.join(jobDir, 'result.json');
   if (!fs.existsSync(resultPath)) return null;
   try {
-    return JSON.parse(fs.readFileSync(resultPath, 'utf8'));
+    const result = JSON.parse(fs.readFileSync(resultPath, 'utf8'));
+    const patchPath = path.join(jobDir, 'patch.diff');
+    return {
+      result,
+      patch: fs.existsSync(patchPath) ? readTail(patchPath, 500_000).text : undefined,
+    };
   } catch {
     return null;
   }

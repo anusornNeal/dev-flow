@@ -17,6 +17,9 @@ export function registerMcpToolJobRoutes(app: express.Express, deps: ApiRouteDep
       if (!def) {
         throw createApiError(404, 'UNKNOWN_TOOL', `Unknown tool: ${toolName}`);
       }
+      if (def.executionPolicy?.mode !== 'job') {
+        throw createApiError(400, 'TOOL_NOT_ASYNC', `Tool '${toolName}' is not configured for async job execution.`);
+      }
       
       const kind = def.executionPolicy?.jobKind || 'repo-command';
       const jobInfo = enqueueToolJob(deps.state, toolName, args, kind);
@@ -41,9 +44,13 @@ export function registerMcpToolJobRoutes(app: express.Express, deps: ApiRouteDep
 
   app.get('/api/tool-jobs/:jobId/log', (req, res, next) => {
     try {
+      const status = getToolJobStatus(req.params.jobId);
+      if (!status) {
+        throw createApiError(404, 'JOB_NOT_FOUND', `Job not found: ${req.params.jobId}`);
+      }
       const stream = (req.query.stream as 'stdout' | 'stderr' | 'both') || 'both';
       const log = readJobLog(req.params.jobId, stream);
-      res.json({ jobId: req.params.jobId, log });
+      res.json({ jobId: req.params.jobId, status: status.status, stream, ...log });
     } catch (error) {
       next(error);
     }
@@ -56,7 +63,12 @@ export function registerMcpToolJobRoutes(app: express.Express, deps: ApiRouteDep
         throw createApiError(404, 'JOB_NOT_FOUND', `Job not found: ${req.params.jobId}`);
       }
       const result = readJobResult(req.params.jobId);
-      res.json({ jobId: req.params.jobId, status: status.status, result });
+      res.json({
+        jobId: req.params.jobId,
+        status: status.status,
+        ready: status.status === 'succeeded' || status.status === 'failed' || status.status === 'timed_out' || status.status === 'cancelled' || status.status === 'interrupted',
+        result,
+      });
     } catch (error) {
       next(error);
     }
@@ -64,8 +76,12 @@ export function registerMcpToolJobRoutes(app: express.Express, deps: ApiRouteDep
 
   app.post('/api/tool-jobs/:jobId/cancel', (req, res, next) => {
     try {
+      const status = getToolJobStatus(req.params.jobId);
+      if (!status) {
+        throw createApiError(404, 'JOB_NOT_FOUND', `Job not found: ${req.params.jobId}`);
+      }
       const success = cancelToolJob(req.params.jobId);
-      res.json({ jobId: req.params.jobId, cancelled: success });
+      res.json({ jobId: req.params.jobId, cancelled: success, previousStatus: status.status });
     } catch (error) {
       next(error);
     }

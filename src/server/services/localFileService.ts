@@ -6,6 +6,72 @@ import type { AppState } from '../types';
 import { createApiError } from './api';
 import { findProjectByIdentifier } from './taskService';
 
+const DEFAULT_IGNORED_ENTRY_NAMES = new Set([
+  '.git',
+  '.devflow',
+  'node_modules',
+  'dist',
+  'build',
+  'coverage',
+  '.next',
+  '.turbo',
+  '.vite',
+]);
+
+const DEFAULT_RIPGREP_EXCLUDES = [
+  '!**/.git/**',
+  '!**/.devflow/jobs/**',
+  '!**/node_modules/**',
+  '!**/dist/**',
+  '!**/build/**',
+  '!**/coverage/**',
+  '!**/.next/**',
+  '!**/.turbo/**',
+  '!**/.vite/**',
+  '!**/*.log',
+];
+
+function shouldUseIgnoredEntries(args: Record<string, any>) {
+  return args.includeIgnored === true || String(args.includeIgnored).toLowerCase() === 'true';
+}
+
+function shouldSkipEntry(entryName: string, args: Record<string, any>) {
+  return !shouldUseIgnoredEntries(args) && DEFAULT_IGNORED_ENTRY_NAMES.has(entryName);
+}
+
+function buildRipgrepArgs(query: string, searchPath: string, limit: number, args: Record<string, any>) {
+  const rgArgs = ['--json', '--line-number', '--hidden', '--max-count', String(limit), '--max-filesize', '2M'];
+  if (!shouldUseIgnoredEntries(args)) {
+    for (const glob of DEFAULT_RIPGREP_EXCLUDES) {
+      rgArgs.push('--glob', glob);
+    }
+  }
+  rgArgs.push(query, searchPath);
+  return rgArgs;
+}
+
+function parseRipgrepMatches(stdout: string, root: string, limit: number) {
+  const matches: Array<{ path: string; line: number; preview: string }> = [];
+  let scannedMatchCount = 0;
+  for (const line of stdout.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      const parsed = JSON.parse(line);
+      if (parsed.type !== 'match') continue;
+      scannedMatchCount += 1;
+      if (matches.length >= limit) continue;
+      matches.push({
+        path: path.relative(root, parsed.data.path.text),
+        line: parsed.data.line_number,
+        preview: parsed.data.lines.text.trim(),
+      });
+    } catch {
+      // Ignore malformed rg lines.
+    }
+  }
+  return { matches, scannedMatchCount, truncated: scannedMatchCount > matches.length };
+}
+
 export function resolveProjectRoot(state: AppState, args: Record<string, any>) {
   const identifierProject = findProjectByIdentifier(state, {
     projectId: typeof args.projectId === 'string' ? args.projectId.trim() : undefined,
@@ -55,6 +121,7 @@ export function listLocalFiles(state: AppState, args: Record<string, any>) {
     const entries = fs.readdirSync(currentPath, { withFileTypes: true });
     for (const entry of entries) {
       if (results.length >= limit) break;
+      if (shouldSkipEntry(entry.name, args)) continue;
       const fullPath = path.join(currentPath, entry.name);
       const relativePath = path.relative(root, fullPath) || '.';
       results.push({ path: relativePath, type: entry.isDirectory() ? 'directory' : 'file' });
@@ -100,7 +167,7 @@ export function readLocalFile(state: AppState, args: Record<string, any>) {
   const raw = fs.readFileSync(targetPath, 'utf8');
   const lines = raw.split(/\r?\n/);
   const totalLines = lines.length;
-  const maxBytes = Number.isFinite(Number(args.maxBytes)) ? Math.max(1, Math.min(1_000_000, Number(args.maxBytes))) : 0;
+  const maxBytes = Number.isFinite(Number(args.maxBytes)) ? Math.max(1, Math.min(1_000_000, Number(args.maxBytes))) : 200_000;
   const startLine = Number.isFinite(Number(args.startLine)) ? Math.max(1, Number(args.startLine)) : 1;
   const endLine = Number.isFinite(Number(args.endLine)) ? Math.max(startLine, Number(args.endLine)) : totalLines;
   const hasLineWindow = args.startLine !== undefined || args.endLine !== undefined;
@@ -135,7 +202,7 @@ export function readLocalFile(state: AppState, args: Record<string, any>) {
     startLine: hasLineWindow ? startLine : 1,
     endLine: hasLineWindow ? Math.min(endLine, totalLines) : totalLines,
     totalLines,
-    truncated: hasLineWindow || truncatedByBytes,
+    truncated: truncatedByBytes || (hasLineWindow && (startLine > 1 || endLine < totalLines)),
     modifiedAt: stat.mtime.toISOString(),
   };
 }
@@ -183,33 +250,22 @@ export function searchLocalFiles(state: AppState, args: Record<string, any>) {
 
   const searchPath = resolveSafePath(root, String(args.path || '.'));
   const limit = Number.isFinite(Number(args.limit)) ? Math.max(1, Math.min(200, Number(args.limit))) : 50;
-  const rg = spawnSync('rg', ['--json', '--line-number', '--max-count', String(limit), query, searchPath], {
+  const rg = spawnSync('rg', buildRipgrepArgs(query, searchPath, limit, args), {
     cwd: root,
     encoding: 'utf8',
     shell: false,
+    maxBuffer: 2_000_000,
   });
 
   if (!rg.error && rg.stdout) {
-    const matches = [];
-    for (const line of rg.stdout.split(/\r?\n/)) {
-      if (!line.trim()) continue;
-      try {
-        const parsed = JSON.parse(line);
-        if (parsed.type !== 'match') continue;
-        matches.push({
-          path: path.relative(root, parsed.data.path.text),
-          line: parsed.data.line_number,
-          preview: parsed.data.lines.text.trim(),
-        });
-      } catch {
-        // Ignore malformed rg lines.
-      }
-    }
+    const { matches, scannedMatchCount, truncated } = parseRipgrepMatches(rg.stdout, root, limit);
     return {
       root,
       path: path.relative(root, searchPath) || '.',
       query,
       count: matches.length,
+      scannedMatchCount,
+      truncated,
       matches,
     };
   }
@@ -219,6 +275,8 @@ export function searchLocalFiles(state: AppState, args: Record<string, any>) {
     path: path.relative(root, searchPath) || '.',
     query,
     count: 0,
+    scannedMatchCount: 0,
+    truncated: false,
     matches: [],
   };
 }
@@ -234,7 +292,7 @@ export async function searchLocalFilesAsync(state: AppState, args: Record<string
   const limit = Number.isFinite(Number(args.limit)) ? Math.max(1, Math.min(200, Number(args.limit))) : 50;
 
   return new Promise((resolve, reject) => {
-    const child = spawn('rg', ['--json', '--line-number', '--max-count', String(limit), query, searchPath], {
+    const child = spawn('rg', buildRipgrepArgs(query, searchPath, limit, args), {
       cwd: root,
       shell: false,
     });
@@ -266,30 +324,17 @@ export async function searchLocalFilesAsync(state: AppState, args: Record<string
         return;
       }
 
-      const matches = [];
-      for (const line of stdoutBuffer.split(/\r?\n/)) {
-        if (!line.trim()) continue;
-        try {
-          const parsed = JSON.parse(line);
-          if (parsed.type !== 'match') continue;
-          matches.push({
-            path: path.relative(root, parsed.data.path.text),
-            line: parsed.data.line_number,
-            preview: parsed.data.lines.text.trim(),
-          });
-        } catch {
-          // Ignore malformed rg lines.
-        }
-      }
+      const { matches, scannedMatchCount, truncated } = parseRipgrepMatches(stdoutBuffer, root, limit);
 
       resolve({
         root,
         path: path.relative(root, searchPath) || '.',
         query,
         count: matches.length,
+        scannedMatchCount,
+        truncated,
         matches,
       });
     });
   });
 }
-

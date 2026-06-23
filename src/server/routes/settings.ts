@@ -1,6 +1,6 @@
 import express from 'express';
 import type { ApiRouteDeps } from '../types';
-import { saveSettings, getSettings } from '../repositories/settingsRepository';
+import { saveSettings, getSettings } from '../repositories/settingsRepository.js';
 import fs from 'fs';
 import path from 'path';
 import db from '../../db/index';

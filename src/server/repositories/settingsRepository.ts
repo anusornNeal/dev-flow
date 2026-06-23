@@ -1,4 +1,4 @@
-﻿import db from '../../db/index';
+﻿import db from '../../db/index.js';
 
 const SETTING_KEYS = ['ngrokUrl', 'githubToken', 'jiraToken', 'figmaToken'] as const;
 

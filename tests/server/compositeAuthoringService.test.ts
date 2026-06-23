@@ -1,3 +1,4 @@
+import { executeAllMigrations } from '../../src/db/migrations/index.js'; executeAllMigrations(); import db from '../../src/db/index.js'; db.prepare('INSERT OR IGNORE INTO projects (id, name, localPath) VALUES (?, ?, ?)').run('proj-1', 'Proj 1', '.'); process.env.JIRA_BASE_URL='http://test'; process.env.JIRA_EMAIL='test'; process.env.JIRA_API_TOKEN='test';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { draftTaskFromJiraBundle } from '../../src/server/services/compositeAuthoringService.js';

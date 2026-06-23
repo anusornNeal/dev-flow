@@ -37,7 +37,7 @@ await withServer(() => {
     tasksCache: [],
     countersCache: {},
     
-    skillsRegistry: [],
+    
   };
   try { createProject({ id: 'project-1', name: 'p1', repoUrl: 'repo', localPath: process.cwd() }); } catch(e) {}
   const deps: ApiRouteDeps = { state, writeAgentLog: () => {} };

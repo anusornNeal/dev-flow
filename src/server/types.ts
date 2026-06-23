@@ -1,4 +1,3 @@
-
 type LogLevel = 'INFO' | 'ERROR' | 'TRIGGER';
 
 /**
@@ -11,7 +10,6 @@ type LogLevel = 'INFO' | 'ERROR' | 'TRIGGER';
 export interface AppState {
   tasksCache: any[];
   countersCache: Record<string, number>;
-  skillsRegistry: any[];
 }
 
 export interface ApiRouteDeps {

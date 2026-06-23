@@ -1,11 +1,8 @@
 import type { AppState } from '../types.js';
 
-
-
 export interface DomainAppState {
   tasksCache: unknown[];
   countersCache: Record<string, number>;
-  skillsRegistry: unknown[];
 }
 
 export function isAppStateLike(value: unknown): value is AppState {
@@ -14,7 +11,6 @@ export function isAppStateLike(value: unknown): value is AppState {
   return (
     Array.isArray(v.tasksCache) &&
     typeof v.countersCache === 'object' &&
-    v.countersCache !== null &&
-    Array.isArray(v.skillsRegistry)
+    v.countersCache !== null
   );
 }

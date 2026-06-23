@@ -1,4 +1,4 @@
-﻿import { executeAllMigrations } from '../db/migrations/index.js';
+import { executeAllMigrations } from '../db/migrations/index.js';
 import fs from 'fs';
 
 import {
@@ -6,7 +6,7 @@ import {
   loadTasks as hydrateTasks,
   saveTasks as persistTasks,
 } from './repositories/taskRepository.js';
-import { loadSkillsRegistry } from './repositories/skillsRepository.js';
+import { initSkillsRepository } from './repositories/skillsRepository.js';
 import type { AppState } from './types.js';
 import { resolveFromDevFlowAppRoot } from '../lib/devFlowPaths.js';
 
@@ -26,16 +26,13 @@ export function writeAgentLog(level: AgentLogLevel, message: string): void {
 
 export interface AppStateSeed {
   tasksCache: any[];
-  
   countersCache: Record<string, number>;
-  skillsRegistry: any[];
 }
 
 export function createAppState(): AppState {
   const tasksCache: any[] = [];
-  
   const countersCache: Record<string, number> = {};
-  const skillsRegistry: any[] = [];
+  
   return {
     get tasksCache() {
       return tasksCache;
@@ -44,7 +41,6 @@ export function createAppState(): AppState {
       tasksCache.length = 0;
       tasksCache.push(...value);
     },
-    
     get countersCache() {
       return countersCache;
     },
@@ -52,19 +48,8 @@ export function createAppState(): AppState {
       for (const k of Object.keys(countersCache)) delete countersCache[k];
       Object.assign(countersCache, value);
     },
-    get skillsRegistry() {
-      return skillsRegistry;
-    },
-    set skillsRegistry(value) {
-      skillsRegistry.length = 0;
-      skillsRegistry.push(...value);
-    },
   } as AppState;
 }
-
-
-
-
 
 export function loadTasks(state: AppState) {
   hydrateTasks(state);
@@ -72,10 +57,6 @@ export function loadTasks(state: AppState) {
 
 export function saveTasks(state: AppState) {
   persistTasks(state);
-}
-
-export function loadSkills(state: AppState) {
-  loadSkillsRegistry(state);
 }
 
 export function generateDisplayId(state: AppState, projectId: string) {
@@ -101,9 +82,9 @@ export interface BootstrapResult {
 
 export function bootstrap(): BootstrapResult {
   executeAllMigrations();
+  initSkillsRepository();
   const state = createAppState();
   loadTasks(state);
-  loadSkills(state);
   sanitizeStartupTasks(state);
   return {
     state,

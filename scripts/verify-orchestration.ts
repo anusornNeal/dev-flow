@@ -126,7 +126,7 @@ const state: AppState = {
   ],
   countersCache: {},
   
-  skillsRegistry: [],
+  
 };
 
 
@@ -252,7 +252,7 @@ const duplicateState: AppState = {
   ],
   countersCache: {},
   
-  skillsRegistry: [],
+  
 };
 try { createProject({ id: 'project-dup', name: 'dup', repoUrl: 'https://github.com/anusornNeal/dev-flow', localPath: repoPathWithSpaces }); } catch(e) {}
   const duplicateDeps: ApiRouteDeps = {
@@ -330,7 +330,7 @@ const parentState: AppState = {
   ],
   countersCache: {},
   
-  skillsRegistry: [],
+  
 };
 try { createProject({ id: 'project-1', name: 'p1', repoUrl: 'repo', localPath: repoPathWithSpaces }); } catch(e) {}
   const parentDeps: ApiRouteDeps = {
@@ -434,7 +434,7 @@ const moveState: AppState = {
   ],
   countersCache: {},
   
-  skillsRegistry: [],
+  
 };
 try { createProject({ id: 'project-1', name: 'p1', repoUrl: 'repo', localPath: repoPathWithSpaces }); } catch(e) {}
   const moveDeps: ApiRouteDeps = {
@@ -535,7 +535,7 @@ const resetState: AppState = {
   ],
   countersCache: {},
   
-  skillsRegistry: [],
+  
 };
 try { createProject({ id: 'project-1', name: 'p1', repoUrl: 'repo', localPath: repoPathWithSpaces }); } catch(e) {}
   const resetDeps: ApiRouteDeps = {
@@ -614,7 +614,7 @@ const staleReadState: AppState = {
   ],
   countersCache: {},
   
-  skillsRegistry: [],
+  
 };
 try { createProject({ id: 'project-1', name: 'p1', repoUrl: 'repo', localPath: repoPathWithSpaces }); } catch(e) {}
   const staleReadDeps: ApiRouteDeps = {
@@ -661,7 +661,7 @@ const autoWorkValidationState: AppState = {
   ],
   countersCache: {},
   
-  skillsRegistry: [],
+  
 };
 try { createProject({ id: 'project-1', name: 'p1', repoUrl: 'repo', localPath: path.join(tempDir, 'missing-project-path') }); } catch(e) {}
   const autoWorkValidationDeps: ApiRouteDeps = {
@@ -722,7 +722,7 @@ const autoWorkTriggerState: AppState = {
   ],
   countersCache: {},
   
-  skillsRegistry: [],
+  
 };
 try { createProject({ id: 'project-autowork-1', name: 'p1', repoUrl: 'repo', localPath: tempDir }); } catch(e) {}
   const autoWorkTriggerDeps: ApiRouteDeps = {
@@ -817,7 +817,7 @@ const completionState: AppState = {
   ],
   countersCache: {},
   
-  skillsRegistry: [],
+  
 };
 try { createProject({ id: 'project-1', name: 'p1', repoUrl: 'repo', localPath: repoPathWithSpaces }); } catch(e) {}
   const completionDeps: ApiRouteDeps = {

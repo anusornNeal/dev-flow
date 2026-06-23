@@ -90,7 +90,7 @@ const lockState: AppState = {
   ],
   countersCache: {},
   
-  skillsRegistry: [],
+  
 };
 try { createProject({ id: 'project-1', name: 'p1', repoUrl: 'repo', localPath: process.cwd() }); } catch(e) {}
   const lockDeps: ApiRouteDeps = { state: lockState, writeAgentLog: () => {} };
@@ -124,7 +124,7 @@ const queueState: AppState = {
   ],
   countersCache: {},
   
-  skillsRegistry: [],
+  
 };
 const queueDeps: ApiRouteDeps = { state: queueState, writeAgentLog: () => {} };
 saveTasks(queueState);
@@ -148,7 +148,7 @@ await withServer(() => {
     ],
     countersCache: {},
     
-    skillsRegistry: [],
+    
   };
   saveTasks(state);
   try { createProject({ id: 'project-1', name: 'p1', repoUrl: 'repo', localPath: process.cwd() }); } catch(e) {}
@@ -206,7 +206,7 @@ await withServer(() => {
     ],
     countersCache: {},
     
-    skillsRegistry: [],
+    
   };
   const deps: ApiRouteDeps = { state, writeAgentLog: () => {} };
   const app = express();

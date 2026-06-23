@@ -15,7 +15,7 @@ function jiraDoc(text: string) {
 }
 
 test('buildJiraAuthoringBundle returns compact Jira card authoring packet', async () => {
-  const calls: string[] = [];
+  process.env.JIRA_BASE_URL = 'http://test'; process.env.JIRA_EMAIL = 'test'; process.env.JIRA_API_TOKEN = 'test'; const calls: string[] = [];
   const fetchImpl = async (url: string) => {
     calls.push(url);
     assert.match(url, /\/rest\/api\/3\/issue\/QCA-3435/);
@@ -75,6 +75,7 @@ test('buildJiraAuthoringBundle returns compact Jira card authoring packet', asyn
 });
 
 test('buildJiraAuthoringBundle reports missing Jira configuration clearly', async () => {
+  process.env.JIRA_BASE_URL = ''; process.env.JIRA_EMAIL = ''; process.env.JIRA_API_TOKEN = '';
   await assert.rejects(
     () => buildJiraAuthoringBundle({  tasksCache: [] } as any, { jiraKey: 'QCA-1' }),
     /Jira configuration is incomplete/,

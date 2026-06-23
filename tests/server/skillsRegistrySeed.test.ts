@@ -8,16 +8,17 @@ import path from 'node:path';
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-skills-seed-'));
 process.env.DEVFLOW_DB_PATH = path.join(tempDir, 'devflow.db');
 
-const { loadSkillsRegistry } = await import('../../src/server/repositories/skillsRepository.js');
+const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
+executeAllMigrations();
+
+const { initSkillsRepository, getSkills } = await import('../../src/server/repositories/skillsRepository.js');
 const express = (await import('express')).default;
 const { registerSkillRoutes } = await import('../../src/server/routes/skills.js');
 
-test('loadSkillsRegistry seeds all repo authoring skills when the database is empty', () => {
-  const state: any = { skillsRegistry: [] };
+test('initSkillsRepository seeds all repo authoring skills when the database is empty', () => {
+  initSkillsRepository();
 
-  loadSkillsRegistry(state);
-
-  const authoringIds = state.skillsRegistry
+  const authoringIds = getSkills()
     .map((skill: any) => skill.id)
     .filter((id: string) => id.startsWith('0'));
 
@@ -29,16 +30,15 @@ test('loadSkillsRegistry seeds all repo authoring skills when the database is em
     '04-examples',
   ]);
 
-  const authoringCore = state.skillsRegistry.find((skill: any) => skill.id === '01-authoring-core');
+  const authoringCore = getSkills().find((skill: any) => skill.id === '01-authoring-core');
   assert.ok(authoringCore);
   assert.ok(authoringCore.content.includes('DevFlow Authoring Core'));
   assert.equal(authoringCore.isProtected, true);
 });
 
 test('authoring skills endpoint returns the repo skill set in file order', async () => {
-  const state: any = { skillsRegistry: [] };
   const app = express();
-  registerSkillRoutes(app, { state, writeAgentLog: () => {} } as any);
+  registerSkillRoutes(app, { state: {}, writeAgentLog: () => {} } as any);
   const server = http.createServer(app);
   await new Promise<void>((resolve) => server.listen(0, resolve));
   const addr = server.address();
@@ -59,9 +59,8 @@ test('authoring skills endpoint returns the repo skill set in file order', async
 });
 
 test('authoring skill endpoint returns one requested repo skill', async () => {
-  const state: any = { skillsRegistry: [] };
   const app = express();
-  registerSkillRoutes(app, { state, writeAgentLog: () => {} } as any);
+  registerSkillRoutes(app, { state: {}, writeAgentLog: () => {} } as any);
   const server = http.createServer(app);
   await new Promise<void>((resolve) => server.listen(0, resolve));
   const addr = server.address();

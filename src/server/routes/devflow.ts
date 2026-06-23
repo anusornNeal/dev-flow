@@ -1,3 +1,4 @@
+import { getProjects } from '../repositories/projectRepository.js';
 import type express from 'express';
 import type { ApiRouteDeps } from '../types';
 import { getCapabilityCatalog } from '../contracts/devflowContract';
@@ -30,7 +31,7 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
           agentRuns: true,
         },
         counts: {
-          projects: deps.state.projectsCache.length,
+          projects: getProjects().length,
           tasks: deps.state.tasksCache.length,
           tools: catalog.tools.length,
         },

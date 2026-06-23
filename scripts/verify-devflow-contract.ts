@@ -42,7 +42,7 @@ fs.writeFileSync(
 
 const express = (await import('express')).default;
 const { registerApiRoutes } = await import('../src/server/routes/registerApiRoutes.js');
-const { saveProjects } = await import('../src/server/repositories/projectRepository.js');
+const { createProject } = await import('../src/server/repositories/projectRepository.js');
 const { saveTasks } = await import('../src/server/repositories/taskRepository.js');
 const { getCapabilityCatalog, getMcpToolList, getToolDefinitionByName } = await import('../src/server/contracts/devflowContract.js');
 
@@ -78,7 +78,7 @@ const state = {
 };
 
 executeAllMigrations();
-saveProjects(state as any);
+((state as any).projectsCache || []).forEach(p => createProject(p));
 saveTasks(state as any);
 
 const app = express();

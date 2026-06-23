@@ -1,7 +1,7 @@
 import type express from 'express';
 import type { ApiRouteDeps } from '../types';
 import { loadTasks, saveTasks } from '../repositories/taskRepository';
-import { saveProjects } from '../repositories/projectRepository';
+import { getProjects, getProject, createProject as dbCreateProject, updateProject as dbUpdateProject, deleteProject as dbDeleteProject } from '../repositories/projectRepository.js';
 import { createApiError, sendApiError } from '../services/api';
 import { findProjectByIdentifier } from '../services/taskService';
 import { validateString } from '../validation';
@@ -21,7 +21,7 @@ function deleteProjectById(projectId: string, deps: ApiRouteDeps) {
   }
 
   deps.state.projectsCache.splice(index, 1);
-  saveProjects(deps.state);
+  
 
   deps.state.tasksCache = deps.state.tasksCache.filter((task) => task.projectId !== projectId);
   saveTasks(deps.state);
@@ -33,7 +33,7 @@ export function registerProjectRoutes(app: express.Express, deps: ApiRouteDeps) 
   app.get('/api/projects', (req, res) => {
     const mode = req.query.mode === 'summary' ? 'summary' : 'standard';
     const query = typeof req.query.q === 'string' ? req.query.q.trim().toLowerCase() : '';
-    let projects = deps.state.projectsCache;
+    let projects = getProjects();
 
     if (query) {
       projects = projects.filter((project) => {
@@ -77,20 +77,18 @@ export function registerProjectRoutes(app: express.Express, deps: ApiRouteDeps) 
       createdAt: new Date().toISOString(),
     };
 
-    deps.state.projectsCache.push(newProject);
-    saveProjects(deps.state);
+    dbCreateProject(newProject);
     return res.status(201).json(newProject);
   });
 
   app.put('/api/projects/:id', (req, res) => {
     const projectId = req.params.id;
-    const index = deps.state.projectsCache.findIndex((project) => project.id === projectId);
-    if (index === -1) {
+    const project = getProject(projectId);
+    if (!project) {
       return res.status(404).json({ error: 'Project not found' });
     }
 
     const { name, repoUrl, description, localPath, taskIdPrefix } = req.body;
-    const project = deps.state.projectsCache[index];
 
     if (name !== undefined) project.name = name.trim();
     if (repoUrl !== undefined) project.repoUrl = repoUrl.trim();
@@ -98,7 +96,7 @@ export function registerProjectRoutes(app: express.Express, deps: ApiRouteDeps) 
     if (localPath !== undefined) project.localPath = localPath.trim() || undefined;
     if (taskIdPrefix !== undefined) project.taskIdPrefix = taskIdPrefix.trim() || undefined;
 
-    saveProjects(deps.state);
+    dbUpdateProject(project);
     return res.json(project);
   });
 
@@ -132,7 +130,7 @@ export function registerProjectRoutes(app: express.Express, deps: ApiRouteDeps) 
 
   app.get('/api/projects/:id/prompt-sections', (req, res) => {
     const projectId = req.params.id;
-    const project = deps.state.projectsCache.find((p) => p.id === projectId);
+    const project = getProject(projectId);
     if (!project) return res.status(404).json({ error: 'Project not found' });
 
     const agent = req.query.agent ? String(req.query.agent) : 'default';
@@ -147,7 +145,7 @@ export function registerProjectRoutes(app: express.Express, deps: ApiRouteDeps) 
     const sectionId = req.params.sectionId;
     const { content } = req.body;
 
-    const project = deps.state.projectsCache.find((p) => p.id === projectId);
+    const project = getProject(projectId);
     if (!project) return res.status(404).json({ error: 'Project not found' });
     if (!project.localPath) return res.status(400).json({ error: 'Project has no localPath configured' });
 
@@ -164,7 +162,7 @@ export function registerProjectRoutes(app: express.Express, deps: ApiRouteDeps) 
     const projectId = req.params.id;
     const sectionId = req.params.sectionId;
 
-    const project = deps.state.projectsCache.find((p) => p.id === projectId);
+    const project = getProject(projectId);
     if (!project) return res.status(404).json({ error: 'Project not found' });
     if (!project.localPath) return res.status(400).json({ error: 'Project has no localPath configured' });
 
@@ -178,7 +176,7 @@ export function registerProjectRoutes(app: express.Express, deps: ApiRouteDeps) 
 
   app.post('/api/projects/:id/prompt-preview', (req, res) => {
     const projectId = req.params.id;
-    const project = deps.state.projectsCache.find((p) => p.id === projectId);
+    const project = getProject(projectId);
     if (!project) return res.status(404).json({ error: 'Project not found' });
 
     const pipelineId = req.body.pipeline || 'default';

@@ -16,7 +16,7 @@ const fixture = (name: string) => path.join(fixtureDir, name);
 
 const express = (await import('express')).default;
 const { registerApiRoutes } = await import('../../src/server/routes/registerApiRoutes.js');
-const { saveProjects } = await import('../../src/server/repositories/projectRepository.js');
+const { createProject } = await import('../../src/server/repositories/projectRepository.js');
 const { saveTasks } = await import('../../src/server/repositories/taskRepository.js');
 
 const state = {
@@ -36,7 +36,7 @@ const state = {
   skillsRegistry: [],
 };
 
-saveProjects(state as any);
+((state as any).projectsCache || []).forEach(p => createProject(p));
 saveTasks(state as any);
 
 const app = express();

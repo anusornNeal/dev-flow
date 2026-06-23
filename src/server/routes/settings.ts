@@ -1,3 +1,4 @@
+import { getProject } from '../repositories/projectRepository.js';
 import express from 'express';
 import type { ApiRouteDeps } from '../types';
 import { saveSettings, getSettings } from '../repositories/settingsRepository.js';
@@ -18,7 +19,7 @@ function validateAutoWorkConfiguration(deps: ApiRouteDeps) {
   const settings = getSettings();
   const executionMode = resolveAgentExecutionMode(settings.agentExecutionMode || process.env.DEVFLOW_AGENT_EXECUTION_MODE);
   for (const task of queuedTasks) {
-    const project = deps.state.projectsCache.find((entry) => entry.id === task.projectId);
+    const project = getProject(task.projectId);
     const preflight = runAgentLaunchPreflight({
       agent: task.agent,
       localPath: project?.localPath,

@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { getProject, getProjects } from '../repositories/projectRepository.js';
 import type { AgentCompletionPayload, AgentCompletionTest, TaskCategory } from '../../types';
 import type { AppState } from '../types';
 import { VALID_AGENTS, LEGACY_VALID_EFFORTS_FALLBACK, VALID_MODELS, VALID_PRIORITIES, VALID_STATUSES, VALID_TASK_CATEGORIES } from '../constants';
@@ -108,20 +109,20 @@ export function findProjectByIdentifier(state: AppState, input: {
   localPath?: string;
 }) {
   if (input.projectId) {
-    const project = state.projectsCache.find((entry) => entry.id === input.projectId);
+    const project = getProject(input.projectId);
     if (project) return project;
   }
 
   if (input.projectName) {
     const normalizedName = input.projectName.trim().toLowerCase();
-    const matches = state.projectsCache.filter((entry) => String(entry.name || '').trim().toLowerCase() === normalizedName);
+    const matches = getProjects().filter((entry) => String(entry.name || '').trim().toLowerCase() === normalizedName);
     if (matches.length === 1) return matches[0];
   }
 
   const repoInput = input.repo || input.repoUrl;
   if (repoInput && typeof repoInput === 'string' && repoInput.trim()) {
     const cleanInput = normalizeRepoLike(repoInput);
-    const project = state.projectsCache.find((entry) => {
+    const project = getProjects().find((entry) => {
       const cleanRepo = normalizeRepoLike(String(entry.repoUrl || ''));
       return cleanRepo === cleanInput || cleanRepo.includes(cleanInput) || cleanInput.includes(cleanRepo);
     });
@@ -130,7 +131,7 @@ export function findProjectByIdentifier(state: AppState, input: {
 
   if (input.localPath) {
     const normalizedPath = path.resolve(input.localPath);
-    const project = state.projectsCache.find((entry) => entry.localPath && path.resolve(entry.localPath) === normalizedPath);
+    const project = getProjects().find((entry) => entry.localPath && path.resolve(entry.localPath) === normalizedPath);
     if (project) return project;
   }
 
@@ -327,7 +328,7 @@ export function resolveProjectIdFromRepo(state: AppState, item: any, req: any): 
     if (explicitProjectId === 'project-default') {
       throw new Error("Creating tasks in the default project is no longer allowed. Please provide a valid 'projectId'.");
     }
-    const found = state.projectsCache.find((project) => project.id === explicitProjectId);
+    const found = getProject(explicitProjectId);
     if (found) {
       return found.id;
     }
@@ -354,7 +355,7 @@ export function resolveProjectIdFromRepo(state: AppState, item: any, req: any): 
     throw new Error(`Target project for identifier '${identifier}' does not exist. Please create the project first.`);
   }
 
-  const activeProject = state.projectsCache.find((project) => project.localPath && path.resolve(project.localPath) === path.resolve(process.cwd()));
+  const activeProject = getProjects().find((project) => project.localPath && path.resolve(project.localPath) === path.resolve(process.cwd()));
   if (activeProject) {
     return activeProject.id;
   }
@@ -374,7 +375,7 @@ export function getAgentTaskContext(state: AppState, targetId: string, includeLo
   if (hasSubtasks) role = 'parent';
   else if (parentRaw) role = 'subtask';
 
-  const project = state.projectsCache.find((entry) => entry.id === task.projectId);
+  const project = getProjects().find((entry) => entry.id === task.projectId);
 
   const cleanObject = (value: any) => {
     const cleaned = { ...value };

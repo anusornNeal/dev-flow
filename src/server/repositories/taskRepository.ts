@@ -1,3 +1,4 @@
+import { getProject } from './projectRepository.js';
 import db from '../../db/index';
 import type { AppState } from '../types';
 import { ACTIVE_AGENT_RUN_STATUSES, type AgentRun } from './agentRunRepository';
@@ -66,7 +67,7 @@ function saveCounters(state: AppState) {
 }
 
 export function generateDisplayId(state: AppState, projectId: string): string {
-  const project = state.projectsCache.find((entry) => entry.id === projectId);
+  const project = getProject(projectId);
 
   let prefix = 'task';
   if (project && project.taskIdPrefix) {

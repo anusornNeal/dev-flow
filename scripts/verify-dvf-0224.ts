@@ -31,7 +31,7 @@ const {
   listAgentRunsForTask,
   updateAgentRunStatus,
 } = await import('../src/server/repositories/agentRunRepository.js');
-const { saveProjects } = await import('../src/server/repositories/projectRepository.js');
+const { createProject } = await import('../src/server/repositories/projectRepository.js');
 const { saveTasks } = await import('../src/server/repositories/taskRepository.js');
 const { createAgentRunFiles } = await import('../src/server/services/agentRunService.js');
 const { createAgentLaunchScript, createCodexLaunchScript } = await import('../src/runner.js');
@@ -94,7 +94,7 @@ const lockState: AppState = {
   skillsRegistry: [],
 };
 const lockDeps: ApiRouteDeps = { state: lockState, writeAgentLog: () => {} };
-saveProjects(lockState);
+((lockState).projectsCache || []).forEach(p => createProject(p));
 saveTasks(lockState);
 
 const codexTrigger = triggerTaskAgent(lockState.tasksCache[0], lockDeps, 'verify');

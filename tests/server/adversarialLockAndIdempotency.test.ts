@@ -11,7 +11,7 @@ process.env.DEVFLOW_DB_PATH = path.join(tempDir, 'devflow.db');
 
 const express = (await import('express')).default;
 const { registerApiRoutes } = await import('../../src/server/routes/registerApiRoutes.js');
-const { saveProjects } = await import('../../src/server/repositories/projectRepository.js');
+const { createProject } = await import('../../src/server/repositories/projectRepository.js');
 const { saveTasks } = await import('../../src/server/repositories/taskRepository.js');
 const db = (await import('../../src/db/index.js')).default;
 
@@ -69,7 +69,7 @@ const state: any = {
   skillsRegistry: [],
 };
 
-saveProjects(state as any);
+((state as any).projectsCache || []).forEach(p => createProject(p));
 saveTasks(state as any);
 
 const app = express();

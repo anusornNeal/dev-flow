@@ -1,9 +1,6 @@
 ﻿import { executeAllMigrations } from '../db/migrations/index.js';
 import fs from 'fs';
-import {
-  saveProjects as persistProjects,
-  loadProjects as hydrateProjects,
-} from './repositories/projectRepository.js';
+
 import {
   generateDisplayId as generateTaskDisplayId,
   loadTasks as hydrateTasks,
@@ -29,14 +26,14 @@ export function writeAgentLog(level: AgentLogLevel, message: string): void {
 
 export interface AppStateSeed {
   tasksCache: any[];
-  projectsCache: any[];
+  
   countersCache: Record<string, number>;
   skillsRegistry: any[];
 }
 
 export function createAppState(): AppState {
   const tasksCache: any[] = [];
-  const projectsCache: any[] = [];
+  
   const countersCache: Record<string, number> = {};
   const skillsRegistry: any[] = [];
   return {
@@ -47,13 +44,7 @@ export function createAppState(): AppState {
       tasksCache.length = 0;
       tasksCache.push(...value);
     },
-    get projectsCache() {
-      return projectsCache;
-    },
-    set projectsCache(value) {
-      projectsCache.length = 0;
-      projectsCache.push(...value);
-    },
+    
     get countersCache() {
       return countersCache;
     },
@@ -71,13 +62,9 @@ export function createAppState(): AppState {
   } as AppState;
 }
 
-export function loadProjects(state: AppState) {
-  hydrateProjects(state);
-}
 
-export function saveProjects(state: AppState) {
-  persistProjects(state);
-}
+
+
 
 export function loadTasks(state: AppState) {
   hydrateTasks(state);
@@ -115,7 +102,6 @@ export interface BootstrapResult {
 export function bootstrap(): BootstrapResult {
   executeAllMigrations();
   const state = createAppState();
-  loadProjects(state);
   loadTasks(state);
   loadSkills(state);
   sanitizeStartupTasks(state);

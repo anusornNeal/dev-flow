@@ -41,7 +41,7 @@ const {
 } = await import('../src/server/repositories/agentRunRepository.js');
 
 const { buildTaskStatusMoveRequest } = await import('../src/lib/taskStatusMove.js');
-const { saveProjects } = await import('../src/server/repositories/projectRepository.js');
+const { createProject } = await import('../src/server/repositories/projectRepository.js');
 const { saveTasks } = await import('../src/server/repositories/taskRepository.js');
 const { getAgentTaskContext } = await import('../src/server/services/taskService.js');
 const { renderTaskPrompt } = await import('../src/server/services/taskService.js');
@@ -132,7 +132,7 @@ const state: AppState = {
   skillsRegistry: [],
 };
 
-saveProjects(state);
+((state).projectsCache || []).forEach(p => createProject(p));
 
 const loggedMessages: string[] = [];
 const deps: ApiRouteDeps = {
@@ -264,7 +264,7 @@ const duplicateDeps: ApiRouteDeps = {
   writeAgentLog: () => {},
 };
 saveTasks(duplicateState);
-saveProjects(duplicateState);
+((duplicateState).projectsCache || []).forEach(p => createProject(p));
 const firstDuplicateTrigger = triggerTaskAgent(duplicateState.tasksCache[0], duplicateDeps, 'dup-test');
 assert.equal(firstDuplicateTrigger.triggered, true);
 const firstDuplicateRunId = firstDuplicateTrigger.run.id;

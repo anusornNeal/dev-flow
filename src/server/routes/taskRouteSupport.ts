@@ -1,3 +1,4 @@
+import { getProject } from '../repositories/projectRepository.js';
 import { getSettings } from '../repositories/settingsRepository.js';
 import { execFile } from 'child_process';
 import fs from 'fs';
@@ -596,7 +597,7 @@ export function triggerTaskAgent(task: any, deps: ApiRouteDeps, routeLabel: stri
 
   cleanupStaleActiveRuns(deps);
 
-  const project = deps.state.projectsCache.find((entry) => entry.id === task.projectId);
+  const project = getProject(task.projectId);
   const executionMode = resolveAgentExecutionMode(getSettings().agentExecutionMode || process.env.DEVFLOW_AGENT_EXECUTION_MODE);
   const preflight = runAgentLaunchPreflight({
     agent: task.agent,

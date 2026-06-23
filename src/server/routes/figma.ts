@@ -1,3 +1,4 @@
+import { getSettings } from '../repositories/settingsRepository.js';
 import express from 'express';
 import type { ApiRouteDeps } from '../types';
 import { FigmaService } from '../services/figmaService';
@@ -9,7 +10,7 @@ function parseNodeIds(value: string) {
 
 export function registerFigmaRoutes(app: express.Express, deps: ApiRouteDeps) {
   const getService = (req: express.Request, res: express.Response) => {
-    const figmaToken = deps.state.settingsCache.figmaToken;
+    const figmaToken = getSettings().figmaToken;
     if (!figmaToken) {
       res.status(400).json({ error: 'Figma token not configured in settings.' });
       return null;

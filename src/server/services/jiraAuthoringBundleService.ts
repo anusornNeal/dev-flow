@@ -1,4 +1,5 @@
-import type { AppState } from '../types';
+import type { AppState } from '../types.js';
+import { getSettings } from '../repositories/settingsRepository.js';
 import { createApiError } from './api';
 
 const JIRA_FIELDS = [
@@ -108,9 +109,9 @@ export async function buildJiraAuthoringBundle(
     throw createApiError(400, 'JIRA_KEY_REQUIRED', 'jiraKey is required.');
   }
 
-  const baseUrl = String(state.settingsCache?.jiraBaseUrl || process.env.JIRA_BASE_URL || '').trim().replace(/\/$/, '');
-  const email = String(state.settingsCache?.jiraEmail || process.env.JIRA_EMAIL || '').trim();
-  const token = String(state.settingsCache?.jiraToken || process.env.JIRA_API_TOKEN || process.env.JIRA_PERSONAL_ACCESS_TOKEN || '').trim();
+  const baseUrl = String(getSettings()?.jiraBaseUrl || process.env.JIRA_BASE_URL || '').trim().replace(/\/$/, '');
+  const email = String(getSettings()?.jiraEmail || process.env.JIRA_EMAIL || '').trim();
+  const token = String(getSettings()?.jiraToken || process.env.JIRA_API_TOKEN || process.env.JIRA_PERSONAL_ACCESS_TOKEN || '').trim();
   if (!baseUrl || !email || !token) {
     throw createApiError(400, 'JIRA_CONFIG_MISSING', 'Jira configuration is incomplete. Set jiraBaseUrl, jiraEmail, and jiraToken in DevFlow settings.');
   }

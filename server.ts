@@ -1,3 +1,4 @@
+import { getSettings } from './src/server/repositories/settingsRepository.js';
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -98,16 +99,16 @@ async function startServer() {
       command: 'npx',
       args: ['-y', '@modelcontextprotocol/server-github'],
       getEnv: () => ({
-        GITHUB_PERSONAL_ACCESS_TOKEN: state.settingsCache.githubToken || process.env.GITHUB_PERSONAL_ACCESS_TOKEN || '',
+        GITHUB_PERSONAL_ACCESS_TOKEN: getSettings().githubToken || process.env.GITHUB_PERSONAL_ACCESS_TOKEN || '',
       }),
     },
     jira: {
       command: 'npx',
       args: ['-y', 'mcp-jira-stdio'],
       getEnv: () => ({
-        JIRA_BASE_URL: state.settingsCache.jiraBaseUrl || process.env.JIRA_BASE_URL || '',
-        JIRA_EMAIL: state.settingsCache.jiraEmail || process.env.JIRA_EMAIL || '',
-        JIRA_API_TOKEN: state.settingsCache.jiraToken || process.env.JIRA_API_TOKEN || process.env.JIRA_PERSONAL_ACCESS_TOKEN || '',
+        JIRA_BASE_URL: getSettings().jiraBaseUrl || process.env.JIRA_BASE_URL || '',
+        JIRA_EMAIL: getSettings().jiraEmail || process.env.JIRA_EMAIL || '',
+        JIRA_API_TOKEN: getSettings().jiraToken || process.env.JIRA_API_TOKEN || process.env.JIRA_PERSONAL_ACCESS_TOKEN || '',
       }),
     },
   };

@@ -1,4 +1,3 @@
-import type { SettingsCache } from './domain/appState.js';
 
 type LogLevel = 'INFO' | 'ERROR' | 'TRIGGER';
 
@@ -13,7 +12,6 @@ export interface AppState {
   tasksCache: any[];
   projectsCache: any[];
   countersCache: Record<string, number>;
-  settingsCache: SettingsCache;
   skillsRegistry: any[];
 }
 

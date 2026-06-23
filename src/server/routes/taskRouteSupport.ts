@@ -1,3 +1,4 @@
+import { getSettings } from '../repositories/settingsRepository.js';
 import { execFile } from 'child_process';
 import fs from 'fs';
 import path from 'path';
@@ -596,7 +597,7 @@ export function triggerTaskAgent(task: any, deps: ApiRouteDeps, routeLabel: stri
   cleanupStaleActiveRuns(deps);
 
   const project = deps.state.projectsCache.find((entry) => entry.id === task.projectId);
-  const executionMode = resolveAgentExecutionMode(deps.state.settingsCache.agentExecutionMode || process.env.DEVFLOW_AGENT_EXECUTION_MODE);
+  const executionMode = resolveAgentExecutionMode(getSettings().agentExecutionMode || process.env.DEVFLOW_AGENT_EXECUTION_MODE);
   const preflight = runAgentLaunchPreflight({
     agent: task.agent,
     localPath: project?.localPath,
@@ -682,10 +683,10 @@ export function triggerTaskAgent(task: any, deps: ApiRouteDeps, routeLabel: stri
     cwd: project?.localPath || undefined,
     env: {
       ...process.env,
-      GITHUB_PERSONAL_ACCESS_TOKEN: deps.state.settingsCache.githubToken || process.env.GITHUB_PERSONAL_ACCESS_TOKEN || '',
-      JIRA_BASE_URL: deps.state.settingsCache.jiraBaseUrl || process.env.JIRA_BASE_URL || '',
-      JIRA_EMAIL: deps.state.settingsCache.jiraEmail || process.env.JIRA_EMAIL || '',
-      JIRA_API_TOKEN: deps.state.settingsCache.jiraToken || process.env.JIRA_API_TOKEN || process.env.JIRA_PERSONAL_ACCESS_TOKEN || '',
+      GITHUB_PERSONAL_ACCESS_TOKEN: getSettings().githubToken || process.env.GITHUB_PERSONAL_ACCESS_TOKEN || '',
+      JIRA_BASE_URL: getSettings().jiraBaseUrl || process.env.JIRA_BASE_URL || '',
+      JIRA_EMAIL: getSettings().jiraEmail || process.env.JIRA_EMAIL || '',
+      JIRA_API_TOKEN: getSettings().jiraToken || process.env.JIRA_API_TOKEN || process.env.JIRA_PERSONAL_ACCESS_TOKEN || '',
       DEVFLOW_AGENT_EXECUTION_MODE: executionMode,
       DEVFLOW_API_BASE_URL: apiBaseUrl,
     }
@@ -804,7 +805,7 @@ export function maybeTriggerTaskAgent(task: any, previousTaskOrStatus: any, deps
     : true;
   if (task.status !== 'todo') return null;
   if (previousStatus === 'todo' && !assignmentChanged) return null;
-  if (!deps.state.settingsCache.autoWork) {
+  if (!getSettings().autoWork) {
     deps.writeAgentLog('INFO', `Auto Work is disabled. Task ${task.id} moved to todo but agent will not be triggered.`);
     return null;
   }

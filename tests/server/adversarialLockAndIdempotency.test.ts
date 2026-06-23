@@ -65,7 +65,7 @@ const state: any = {
     { id: 'proj-adversarial-1', name: 'Dev Flow', repoUrl: 'https://example.com/dev-flow', createdAt: new Date().toISOString() },
   ],
   countersCache: { DVF: 950 },
-  settingsCache: { ngrokUrl: '', githubToken: '', jiraToken: '', jiraBaseUrl: '', jiraEmail: '', autoWork: false, agentExecutionMode: 'safe' },
+  
   skillsRegistry: [],
 };
 

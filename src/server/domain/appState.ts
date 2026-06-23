@@ -1,22 +1,12 @@
 import type { AppState } from '../types.js';
 
-export interface SettingsCache {
-  ngrokUrl: string;
-  githubToken: string;
-  jiraToken: string;
-  figmaToken: string;
-  jiraBaseUrl: string;
-  jiraEmail: string;
-  autoWork: boolean;
-  agentExecutionMode?: string;
-}
+
 
 export interface DomainAppState {
   tasksCache: unknown[];
   projectsCache: unknown[];
   countersCache: Record<string, number>;
   skillsRegistry: unknown[];
-  settingsCache: SettingsCache;
 }
 
 export function isAppStateLike(value: unknown): value is AppState {
@@ -27,8 +17,6 @@ export function isAppStateLike(value: unknown): value is AppState {
     Array.isArray(v.projectsCache) &&
     typeof v.countersCache === 'object' &&
     v.countersCache !== null &&
-    Array.isArray(v.skillsRegistry) &&
-    typeof v.settingsCache === 'object' &&
-    v.settingsCache !== null
+    Array.isArray(v.skillsRegistry)
   );
 }

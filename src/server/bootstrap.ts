@@ -5,10 +5,6 @@ import {
   loadProjects as hydrateProjects,
 } from './repositories/projectRepository.js';
 import {
-  saveSettings as persistSettings,
-  loadSettings as hydrateSettings,
-} from './repositories/settingsRepository.js';
-import {
   generateDisplayId as generateTaskDisplayId,
   loadTasks as hydrateTasks,
   saveTasks as persistTasks,
@@ -36,16 +32,6 @@ export interface AppStateSeed {
   projectsCache: any[];
   countersCache: Record<string, number>;
   skillsRegistry: any[];
-  settingsCache: {
-    ngrokUrl: string;
-    githubToken: string;
-    jiraToken: string;
-    figmaToken: string;
-    jiraBaseUrl: string;
-    jiraEmail: string;
-    autoWork: boolean;
-    agentExecutionMode?: string;
-  };
 }
 
 export function createAppState(): AppState {
@@ -53,16 +39,6 @@ export function createAppState(): AppState {
   const projectsCache: any[] = [];
   const countersCache: Record<string, number> = {};
   const skillsRegistry: any[] = [];
-  const settingsCache = {
-    ngrokUrl: '',
-    githubToken: '',
-    jiraToken: '',
-    figmaToken: '',
-    jiraBaseUrl: '',
-    jiraEmail: '',
-    autoWork: false,
-    agentExecutionMode: '',
-  };
   return {
     get tasksCache() {
       return tasksCache;
@@ -85,12 +61,6 @@ export function createAppState(): AppState {
       for (const k of Object.keys(countersCache)) delete countersCache[k];
       Object.assign(countersCache, value);
     },
-    get settingsCache() {
-      return settingsCache;
-    },
-    set settingsCache(value) {
-      Object.assign(settingsCache, value);
-    },
     get skillsRegistry() {
       return skillsRegistry;
     },
@@ -99,14 +69,6 @@ export function createAppState(): AppState {
       skillsRegistry.push(...value);
     },
   } as AppState;
-}
-
-export function loadSettings(state: AppState) {
-  hydrateSettings(state);
-}
-
-export function saveSettings(state: AppState) {
-  persistSettings(state);
 }
 
 export function loadProjects(state: AppState) {
@@ -153,7 +115,6 @@ export interface BootstrapResult {
 export function bootstrap(): BootstrapResult {
   executeAllMigrations();
   const state = createAppState();
-  loadSettings(state);
   loadProjects(state);
   loadTasks(state);
   loadSkills(state);

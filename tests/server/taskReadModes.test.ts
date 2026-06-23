@@ -77,7 +77,7 @@ const state: any = {
     },
   ],
   countersCache: { DVF: 900 },
-  settingsCache: { ngrokUrl: '', githubToken: '', jiraToken: '', jiraBaseUrl: '', jiraEmail: '', autoWork: false, agentExecutionMode: 'safe' },
+  
   skillsRegistry: [],
 };
 

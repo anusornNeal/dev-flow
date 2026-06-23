@@ -1,6 +1,6 @@
 import express from 'express';
 import type { ApiRouteDeps } from '../types';
-import { saveSettings } from '../repositories/settingsRepository';
+import { saveSettings, getSettings } from '../repositories/settingsRepository';
 import fs from 'fs';
 import path from 'path';
 import db from '../../db/index';
@@ -15,7 +15,8 @@ function validateAutoWorkConfiguration(deps: ApiRouteDeps) {
     .filter((task) => task.status === 'todo' && task.agent)
     .sort((left, right) => new Date(left.createdAt || 0).getTime() - new Date(right.createdAt || 0).getTime());
 
-  const executionMode = resolveAgentExecutionMode(deps.state.settingsCache.agentExecutionMode || process.env.DEVFLOW_AGENT_EXECUTION_MODE);
+  const settings = getSettings();
+  const executionMode = resolveAgentExecutionMode(settings.agentExecutionMode || process.env.DEVFLOW_AGENT_EXECUTION_MODE);
   for (const task of queuedTasks) {
     const project = deps.state.projectsCache.find((entry) => entry.id === task.projectId);
     const preflight = runAgentLaunchPreflight({
@@ -45,19 +46,21 @@ function validateAutoWorkConfiguration(deps: ApiRouteDeps) {
 
 export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps) {
   app.get('/api/settings', (_req, res) => {
+    const settings = getSettings();
     res.json({
-      ngrokUrl: deps.state.settingsCache.ngrokUrl ?? '',
-      githubTokenMasked: (deps.state.settingsCache.githubToken?.length ?? 0) > 0,
-      jiraTokenMasked: (deps.state.settingsCache.jiraToken?.length ?? 0) > 0,
-      figmaTokenMasked: (deps.state.settingsCache.figmaToken?.length ?? 0) > 0,
-      jiraBaseUrl: deps.state.settingsCache.jiraBaseUrl ?? '',
-      jiraEmail: deps.state.settingsCache.jiraEmail ?? '',
-      autoWork: deps.state.settingsCache.autoWork ?? false,
-      agentExecutionMode: deps.state.settingsCache.agentExecutionMode ?? '',
+      ngrokUrl: settings.ngrokUrl ?? '',
+      githubTokenMasked: (settings.githubToken?.length ?? 0) > 0,
+      jiraTokenMasked: (settings.jiraToken?.length ?? 0) > 0,
+      figmaTokenMasked: (settings.figmaToken?.length ?? 0) > 0,
+      jiraBaseUrl: settings.jiraBaseUrl ?? '',
+      jiraEmail: settings.jiraEmail ?? '',
+      autoWork: settings.autoWork ?? false,
+      agentExecutionMode: settings.agentExecutionMode ?? '',
     });
   });
 
   app.post('/api/settings', (req, res) => {
+    const settings: Partial<Parameters<typeof saveSettings>[0]> = {};
     const { ngrokUrl, githubToken, jiraToken, figmaToken, jiraBaseUrl, jiraEmail, autoWork, agentExecutionMode, clearGithubToken, clearJiraToken, clearFigmaToken } = req.body;
 
     // Validate types
@@ -99,27 +102,27 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
     }
 
     if (typeof ngrokUrl === 'string') {
-      deps.state.settingsCache.ngrokUrl = ngrokUrl.trim();
+      settings.ngrokUrl = ngrokUrl.trim();
     }
 
     if (typeof githubToken === 'string') {
-      deps.state.settingsCache.githubToken = githubToken.trim();
+      settings.githubToken = githubToken.trim();
     }
 
     if (typeof jiraToken === 'string') {
-      deps.state.settingsCache.jiraToken = jiraToken.trim();
+      settings.jiraToken = jiraToken.trim();
     }
 
     if (typeof figmaToken === 'string') {
-      deps.state.settingsCache.figmaToken = figmaToken.trim();
+      settings.figmaToken = figmaToken.trim();
     }
 
     if (typeof jiraBaseUrl === 'string') {
-      deps.state.settingsCache.jiraBaseUrl = jiraBaseUrl.trim();
+      settings.jiraBaseUrl = jiraBaseUrl.trim();
     }
 
     if (typeof jiraEmail === 'string') {
-      deps.state.settingsCache.jiraEmail = jiraEmail.trim();
+      settings.jiraEmail = jiraEmail.trim();
     }
 
     if (typeof autoWork === 'boolean') {
@@ -129,7 +132,7 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
           return res.status(409).json(validation);
         }
       }
-      deps.state.settingsCache.autoWork = autoWork;
+      settings.autoWork = autoWork;
       
       let autoWorkTrigger: any = { triggered: false, reason: 'No eligible todo tasks found.' };
       if (autoWork) {
@@ -164,17 +167,17 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
       }
 
       if (typeof agentExecutionMode === 'string') {
-        deps.state.settingsCache.agentExecutionMode = agentExecutionMode;
+        settings.agentExecutionMode = agentExecutionMode;
       }
-      saveSettings(deps.state);
+      saveSettings(settings);
       return res.json({ success: true, autoWork, autoWorkTrigger });
     }
 
     if (typeof agentExecutionMode === 'string') {
-      deps.state.settingsCache.agentExecutionMode = agentExecutionMode;
+      settings.agentExecutionMode = agentExecutionMode;
     }
 
-    saveSettings(deps.state);
+    saveSettings(settings);
     return res.json({ success: true });
   });
 

@@ -1,3 +1,4 @@
+import { getSettings } from '../src/server/repositories/settingsRepository.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -127,7 +128,7 @@ const state: AppState = {
     { id: 'project-1', name: 'p1', repoUrl: 'https://github.com/anusornNeal/dev-flow', localPath: repoPathWithSpaces },
   ],
   countersCache: {},
-  settingsCache: { autoWork: false, ngrokUrl: '', githubToken: '', jiraToken: '', figmaToken: '', jiraBaseUrl: '', jiraEmail: '' },
+  
   skillsRegistry: [],
 };
 
@@ -255,7 +256,7 @@ const duplicateState: AppState = {
     { id: 'project-dup', name: 'dup', repoUrl: 'https://github.com/anusornNeal/dev-flow', localPath: repoPathWithSpaces },
   ],
   countersCache: {},
-  settingsCache: { autoWork: false, ngrokUrl: '', githubToken: '', jiraToken: '', figmaToken: '', jiraBaseUrl: '', jiraEmail: '' },
+  
   skillsRegistry: [],
 };
 const duplicateDeps: ApiRouteDeps = {
@@ -334,7 +335,7 @@ const parentState: AppState = {
   ],
   projectsCache: [{ id: 'project-1', name: 'p1', repoUrl: 'repo', localPath: repoPathWithSpaces }],
   countersCache: {},
-  settingsCache: { autoWork: false, ngrokUrl: '', githubToken: '', jiraToken: '', figmaToken: '', jiraBaseUrl: '', jiraEmail: '' },
+  
   skillsRegistry: [],
 };
 const parentDeps: ApiRouteDeps = {
@@ -438,7 +439,7 @@ const moveState: AppState = {
   ],
   projectsCache: [{ id: 'project-1', name: 'p1', repoUrl: 'repo', localPath: repoPathWithSpaces }],
   countersCache: {},
-  settingsCache: { autoWork: false, ngrokUrl: '', githubToken: '', jiraToken: '', figmaToken: '', jiraBaseUrl: '', jiraEmail: '' },
+  
   skillsRegistry: [],
 };
 const moveDeps: ApiRouteDeps = {
@@ -539,7 +540,7 @@ const resetState: AppState = {
   ],
   projectsCache: [{ id: 'project-1', name: 'p1', repoUrl: 'repo', localPath: repoPathWithSpaces }],
   countersCache: {},
-  settingsCache: { autoWork: true, ngrokUrl: '', githubToken: '', jiraToken: '', figmaToken: '', jiraBaseUrl: '', jiraEmail: '' },
+  
   skillsRegistry: [],
 };
 const resetDeps: ApiRouteDeps = {
@@ -618,7 +619,7 @@ const staleReadState: AppState = {
   ],
   projectsCache: [{ id: 'project-1', name: 'p1', repoUrl: 'repo', localPath: repoPathWithSpaces }],
   countersCache: {},
-  settingsCache: { autoWork: false, ngrokUrl: '', githubToken: '', jiraToken: '', figmaToken: '', jiraBaseUrl: '', jiraEmail: '' },
+  
   skillsRegistry: [],
 };
 const staleReadDeps: ApiRouteDeps = {
@@ -665,7 +666,7 @@ const autoWorkValidationState: AppState = {
   ],
   projectsCache: [{ id: 'project-1', name: 'p1', repoUrl: 'repo', localPath: path.join(tempDir, 'missing-project-path') }],
   countersCache: {},
-  settingsCache: { autoWork: false, ngrokUrl: '', githubToken: '', jiraToken: '', figmaToken: '', jiraBaseUrl: '', jiraEmail: '' },
+  
   skillsRegistry: [],
 };
 const autoWorkValidationDeps: ApiRouteDeps = {
@@ -691,7 +692,7 @@ try {
   assert.equal(autoWorkEnableBody.code, 'AUTO_WORK_CONFIG_INVALID');
   assert.match(autoWorkEnableBody.error || '', /auto work/i);
   assert.match(autoWorkEnableBody.error || '', /DVF-0118-X/);
-  assert.equal(autoWorkValidationState.settingsCache.autoWork, false);
+  assert.equal(getSettings().autoWork, false);
 } finally {
   await new Promise<void>((resolve, reject) => autoWorkValidationServer.close((error) => error ? reject(error) : resolve()));
 }
@@ -726,7 +727,7 @@ const autoWorkTriggerState: AppState = {
   ],
   projectsCache: [{ id: 'project-autowork-1', name: 'p1', repoUrl: 'repo', localPath: tempDir }],
   countersCache: {},
-  settingsCache: { autoWork: false, ngrokUrl: '', githubToken: '', jiraToken: '', figmaToken: '', jiraBaseUrl: '', jiraEmail: '' },
+  
   skillsRegistry: [],
 };
 const autoWorkTriggerDeps: ApiRouteDeps = {
@@ -752,7 +753,7 @@ try {
   assert.equal(body.success, true);
   assert.equal(body.autoWork, true);
   assert.equal(body.autoWorkTrigger.triggered, true);
-  assert.equal(autoWorkTriggerState.settingsCache.autoWork, true);
+  assert.equal(getSettings().autoWork, true);
   
   // Unrelated task should not be mutated
   const unrelatedTask = autoWorkTriggerState.tasksCache.find(t => t.id === 'unrelated-task');
@@ -767,7 +768,7 @@ try {
   });
   const disableBody = await disableResponse.json();
   assert.equal(disableBody.success, true);
-  assert.equal(autoWorkTriggerState.settingsCache.autoWork, false);
+  assert.equal(getSettings().autoWork, false);
 } finally {
   await new Promise<void>((resolve, reject) => autoWorkTriggerServer.close((error) => error ? reject(error) : resolve()));
 }
@@ -821,7 +822,7 @@ const completionState: AppState = {
   ],
   projectsCache: [{ id: 'project-1', name: 'p1', repoUrl: 'repo', localPath: repoPathWithSpaces }],
   countersCache: {},
-  settingsCache: { autoWork: false, ngrokUrl: '', githubToken: '', jiraToken: '', figmaToken: '', jiraBaseUrl: '', jiraEmail: '' },
+  
   skillsRegistry: [],
 };
 const completionDeps: ApiRouteDeps = {

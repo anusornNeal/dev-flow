@@ -18,7 +18,7 @@ try {
     tasksCache: [],
     projectsCache: [],
     countersCache: {},
-    settingsCache: { ngrokUrl: '', githubToken: '', jiraToken: '', jiraBaseUrl: '', jiraEmail: '', autoWork: false, agentExecutionMode: 'safe' },
+    
     skillsRegistry: [],
   };
 

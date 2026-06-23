@@ -1,9 +1,8 @@
-import db from '../../db/index';
-import type { AppState } from '../types';
+﻿import db from '../../db/index';
 
 const SETTING_KEYS = ['ngrokUrl', 'githubToken', 'jiraToken', 'figmaToken'] as const;
 
-export function loadSettings(state: AppState) {
+export function getSettings() {
   const rows = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
   const map = new Map(rows.map(r => [r.key, r.value]));
 
@@ -16,19 +15,23 @@ export function loadSettings(state: AppState) {
   const autoWork = map.get('autoWork') === 'true';
   const agentExecutionMode = map.get('agentExecutionMode') || '';
 
-  state.settingsCache = { ngrokUrl, githubToken, jiraToken, figmaToken, jiraBaseUrl, jiraEmail, autoWork, agentExecutionMode };
+  return { ngrokUrl, githubToken, jiraToken, figmaToken, jiraBaseUrl, jiraEmail, autoWork, agentExecutionMode };
 }
 
-export function saveSettings(state: AppState) {
+export function saveSettings(settings: Partial<ReturnType<typeof getSettings>>) {
+  const current = getSettings();
+  const updated = { ...current, ...settings };
+
   const stmt = db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)');
   db.transaction(() => {
-    stmt.run('ngrokUrl', state.settingsCache.ngrokUrl ?? '');
-    stmt.run('githubToken', state.settingsCache.githubToken ?? '');
-    stmt.run('jiraToken', state.settingsCache.jiraToken ?? '');
-    stmt.run('figmaToken', state.settingsCache.figmaToken ?? '');
-    stmt.run('jiraBaseUrl', state.settingsCache.jiraBaseUrl ?? '');
-    stmt.run('jiraEmail', state.settingsCache.jiraEmail ?? '');
-    stmt.run('autoWork', state.settingsCache.autoWork ? 'true' : 'false');
-    stmt.run('agentExecutionMode', state.settingsCache.agentExecutionMode ?? '');
+    stmt.run('ngrokUrl', updated.ngrokUrl ?? '');
+    stmt.run('githubToken', updated.githubToken ?? '');
+    stmt.run('jiraToken', updated.jiraToken ?? '');
+    stmt.run('figmaToken', updated.figmaToken ?? '');
+    stmt.run('jiraBaseUrl', updated.jiraBaseUrl ?? '');
+    stmt.run('jiraEmail', updated.jiraEmail ?? '');
+    stmt.run('autoWork', updated.autoWork ? 'true' : 'false');
+    stmt.run('agentExecutionMode', updated.agentExecutionMode ?? '');
   })();
+  return updated;
 }

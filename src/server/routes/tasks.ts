@@ -1,3 +1,4 @@
+import { getSettings } from '../repositories/settingsRepository.js';
 import { execFile } from 'child_process';
 import fs from 'fs';
 import path from 'path';
@@ -267,7 +268,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
 
     try {
       const result = applyAgentCompletionCallback(task, run, deps, payload);
-      if (deps.state.settingsCache.autoWork && payload.status === 'success') {
+      if (getSettings().autoWork && payload.status === 'success') {
         continueTaskQueueForProject(task.projectId, deps);
       }
       return res.json({
@@ -298,7 +299,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     });
     const result = applyAgentCompletionCallback(task, run, deps, payload);
 
-    if (deps.state.settingsCache.autoWork && payload.status === 'success') {
+    if (getSettings().autoWork && payload.status === 'success') {
       continueTaskQueueForProject(task.projectId, deps);
     }
 

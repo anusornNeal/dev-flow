@@ -9,11 +9,7 @@ test('draftTaskFromJiraBundle rejects with BUDGET_EXCEEDED when timeout is reach
   
   // Set up mock state
   const state: any = {
-    settingsCache: {
-      jiraBaseUrl: 'https://example.atlassian.net',
-      jiraEmail: 'test@example.com',
-      jiraToken: 'token123'
-    },
+    
     tasksCache: []
   };
 
@@ -92,11 +88,7 @@ test('getRepoInspectionIndex checks signal.aborted and throws error', async () =
 test('draftTaskFromJiraBundle returns a create_task-compatible category', async () => {
   const originalFetch = globalThis.fetch;
   const state: any = {
-    settingsCache: {
-      jiraBaseUrl: 'https://example.atlassian.net',
-      jiraEmail: 'test@example.com',
-      jiraToken: 'token123'
-    },
+    
     tasksCache: []
   };
 

@@ -53,11 +53,7 @@ test('buildJiraAuthoringBundle returns compact Jira card authoring packet', asyn
   };
 
   const state: any = {
-    settingsCache: {
-      jiraBaseUrl: 'https://jira.example/',
-      jiraEmail: 'bot@example.com',
-      jiraToken: 'secret',
-    },
+    
     tasksCache: [
       { id: 'task-1', displayId: 'DVF-1', title: 'Existing card', jiraKey: 'QCA-3435', status: 'backlog' },
     ],
@@ -80,7 +76,7 @@ test('buildJiraAuthoringBundle returns compact Jira card authoring packet', asyn
 
 test('buildJiraAuthoringBundle reports missing Jira configuration clearly', async () => {
   await assert.rejects(
-    () => buildJiraAuthoringBundle({ settingsCache: {}, tasksCache: [] } as any, { jiraKey: 'QCA-1' }),
+    () => buildJiraAuthoringBundle({  tasksCache: [] } as any, { jiraKey: 'QCA-1' }),
     /Jira configuration is incomplete/,
   );
 });

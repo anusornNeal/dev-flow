@@ -1,3 +1,4 @@
+import { executeAllMigrations } from '../src/db/migrations/index.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -72,18 +73,11 @@ const state = {
     },
   ],
   countersCache: {},
-  settingsCache: {
-    ngrokUrl: '',
-    githubToken: '',
-    jiraToken: '',
-    jiraBaseUrl: '',
-    jiraEmail: '',
-    autoWork: false,
-    agentExecutionMode: 'safe',
-  },
+  
   skillsRegistry: [],
 };
 
+executeAllMigrations();
 saveProjects(state as any);
 saveTasks(state as any);
 

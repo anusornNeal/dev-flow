@@ -32,7 +32,7 @@ const state = {
     { id: 'proj-import-1', name: 'Dev Flow', repoUrl: 'https://github.com/a/b', localPath: appRoot, taskIdPrefix: 'DVF', createdAt: '' },
   ],
   countersCache: { DVF: 200 },
-  settingsCache: { ngrokUrl: '', githubToken: '', jiraToken: '', jiraBaseUrl: '', jiraEmail: '', autoWork: false, agentExecutionMode: 'safe' },
+  
   skillsRegistry: [],
 };
 

@@ -33,7 +33,7 @@ const state: any = {
     { id: 'proj-lean-write-1', name: 'Dev Flow', repoUrl: 'https://example.com/dev-flow', createdAt: '2026-06-19T00:00:00.000Z' },
   ],
   countersCache: { DVF: 910 },
-  settingsCache: { ngrokUrl: '', githubToken: '', jiraToken: '', jiraBaseUrl: '', jiraEmail: '', autoWork: false, agentExecutionMode: 'safe' },
+  
   skillsRegistry: [],
 };
 

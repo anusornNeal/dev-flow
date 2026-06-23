@@ -4,6 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import http from 'node:http';
 import express from 'express';
+import { getSettings } from '../src/server/repositories/settingsRepository.js';
 import type { AppState, ApiRouteDeps } from '../src/server/types.js';
 
 const { registerSettingsRoutes } = await import('../src/server/routes/settings.js');
@@ -35,7 +36,7 @@ await withServer(() => {
     tasksCache: [],
     projectsCache: [],
     countersCache: {},
-    settingsCache: { autoWork: false, ngrokUrl: '', githubToken: '', jiraToken: '', figmaToken: '', jiraBaseUrl: '', jiraEmail: '', agentExecutionMode: 'safe' },
+    
     skillsRegistry: [],
   };
   const deps: ApiRouteDeps = { state, writeAgentLog: () => {} };
@@ -51,7 +52,7 @@ await withServer(() => {
     body: JSON.stringify({ figmaToken: 'fake-figma-token' }),
   });
   assert.equal(updateRes.status, 200);
-  assert.equal(deps.state.settingsCache.figmaToken, 'fake-figma-token');
+  assert.equal(getSettings().figmaToken, 'fake-figma-token');
 
   // Test 2: Read settings (should be masked)
   const getRes = await fetch(`${baseUrl}/api/settings`);
@@ -66,7 +67,7 @@ await withServer(() => {
     body: JSON.stringify({ clearFigmaToken: true, figmaToken: '' }),
   });
   assert.equal(clearRes.status, 200);
-  assert.equal(deps.state.settingsCache.figmaToken, '');
+  assert.equal(getSettings().figmaToken, '');
 });
 
 console.log('[Figma] verifying Figma Service Normalization...');

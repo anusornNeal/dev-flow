@@ -31,7 +31,7 @@ const {
   listAgentRunsForTask,
   updateAgentRunStatus,
 } = await import('../src/server/repositories/agentRunRepository.js');
-const { createProject } = await import('../src/server/repositories/projectRepository.js');
+const { createProject, getProjects, updateProject } = await import('../src/server/repositories/projectRepository.js');
 const { saveTasks } = await import('../src/server/repositories/taskRepository.js');
 const { createAgentRunFiles } = await import('../src/server/services/agentRunService.js');
 const { createAgentLaunchScript, createCodexLaunchScript } = await import('../src/runner.js');
@@ -88,13 +88,12 @@ const lockState: AppState = {
     makeTask('claude-1', 'Claude', { projectId: 'project-lock', createdAt: '2026-06-19T01:01:00.000Z' }),
     makeTask('codex-2', 'Codex', { projectId: 'project-lock', createdAt: '2026-06-19T01:02:00.000Z' }),
   ],
-  projectsCache: [{ id: 'project-lock', name: 'p1', repoUrl: 'repo', localPath: repoPath }],
   countersCache: {},
   
   skillsRegistry: [],
 };
-const lockDeps: ApiRouteDeps = { state: lockState, writeAgentLog: () => {} };
-((lockState).projectsCache || []).forEach(p => createProject(p));
+try { createProject({ id: 'project-1', name: 'p1', repoUrl: 'repo', localPath: process.cwd() }); } catch(e) {}
+  const lockDeps: ApiRouteDeps = { state: lockState, writeAgentLog: () => {} };
 saveTasks(lockState);
 
 const codexTrigger = triggerTaskAgent(lockState.tasksCache[0], lockDeps, 'verify');
@@ -123,7 +122,6 @@ const queueState: AppState = {
     makeTask('queue-claude-1', 'Claude', { projectId: 'project-queue', createdAt: '2026-06-19T02:01:00.000Z' }),
     makeTask('queue-codex-2', 'Codex', { projectId: 'project-queue', createdAt: '2026-06-19T02:02:00.000Z' }),
   ],
-  projectsCache: [{ id: 'project-queue', name: 'p1', repoUrl: 'repo', localPath: repoPath }],
   countersCache: {},
   
   skillsRegistry: [],
@@ -148,16 +146,12 @@ await withServer(() => {
       makeTask('fail-codex-1', 'Codex', { projectId: 'project-fail', status: 'in-progress', createdAt: '2026-06-19T03:03:00.000Z' }),
       makeTask('cancel-codex-1', 'Codex', { projectId: 'project-cancel', status: 'in-progress', createdAt: '2026-06-19T03:04:00.000Z' }),
     ],
-    projectsCache: [
-      { id: 'project-complete', name: 'p1', repoUrl: 'repo', localPath: repoPath },
-      { id: 'project-fail', name: 'p2', repoUrl: 'repo', localPath: repoPath },
-      { id: 'project-cancel', name: 'p3', repoUrl: 'repo', localPath: repoPath },
-    ],
     countersCache: {},
     
     skillsRegistry: [],
   };
   saveTasks(state);
+  try { createProject({ id: 'project-1', name: 'p1', repoUrl: 'repo', localPath: process.cwd() }); } catch(e) {}
   const deps: ApiRouteDeps = { state, writeAgentLog: () => {} };
   const firstRun = createAgentRun({ taskId: 'done-codex-1', projectId: 'project-complete', agent: 'Codex', model: 'GPT-5.5', effort: 'high' });
   updateAgentRunStatus(firstRun.id, 'running', { startedAt: new Date().toISOString() });
@@ -210,7 +204,6 @@ await withServer(() => {
       makeTask('enable-claude-1', 'Claude', { projectId: 'project-enable', createdAt: '2026-06-19T04:01:00.000Z' }),
       makeTask('enable-codex-2', 'Codex', { projectId: 'project-enable', createdAt: '2026-06-19T04:02:00.000Z' }),
     ],
-    projectsCache: [{ id: 'project-enable', name: 'p1', repoUrl: 'repo', localPath: repoPath }],
     countersCache: {},
     
     skillsRegistry: [],

@@ -15,14 +15,13 @@ function deleteProjectById(projectId: string, deps: ApiRouteDeps) {
     throw createApiError(400, 'DEFAULT_PROJECT_PROTECTED', 'Cannot delete default project', { affectedId: projectId });
   }
 
-  const index = deps.state.projectsCache.findIndex((project) => project.id === projectId);
-  if (index === -1) {
+  const project = getProject(projectId);
+  if (!project) {
     throw createApiError(404, 'PROJECT_NOT_FOUND', 'Project not found', { affectedId: projectId });
   }
 
-  deps.state.projectsCache.splice(index, 1);
+  dbDeleteProject(projectId);
   
-
   deps.state.tasksCache = deps.state.tasksCache.filter((task) => task.projectId !== projectId);
   saveTasks(deps.state);
 

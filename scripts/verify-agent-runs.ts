@@ -6,6 +6,8 @@ import path from 'node:path';
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-agent-runs-'));
 process.env.DEVFLOW_DB_PATH = path.join(tempDir, 'devflow.db');
+const { executeAllMigrations } = await import('../src/db/migrations/index.js');
+executeAllMigrations();
 
 const {
   ACTIVE_AGENT_RUN_STATUSES,

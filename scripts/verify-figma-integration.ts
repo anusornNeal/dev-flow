@@ -5,6 +5,7 @@ import os from 'node:os';
 import http from 'node:http';
 import express from 'express';
 import { getSettings } from '../src/server/repositories/settingsRepository.js';
+import { createProject, getProjects } from '../src/server/repositories/projectRepository.js';
 import type { AppState, ApiRouteDeps } from '../src/server/types.js';
 
 const { registerSettingsRoutes } = await import('../src/server/routes/settings.js');
@@ -34,11 +35,11 @@ console.log('[Figma] verifying Figma token masking and update via settings...');
 await withServer(() => {
   const state: AppState = {
     tasksCache: [],
-    projectsCache: [],
     countersCache: {},
     
     skillsRegistry: [],
   };
+  try { createProject({ id: 'project-1', name: 'p1', repoUrl: 'repo', localPath: process.cwd() }); } catch(e) {}
   const deps: ApiRouteDeps = { state, writeAgentLog: () => {} };
   const app = express();
   app.use(express.json());

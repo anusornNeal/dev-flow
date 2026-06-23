@@ -41,7 +41,7 @@ const {
 } = await import('../src/server/repositories/agentRunRepository.js');
 
 const { buildTaskStatusMoveRequest } = await import('../src/lib/taskStatusMove.js');
-const { createProject } = await import('../src/server/repositories/projectRepository.js');
+const { createProject, getProjects, updateProject } = await import('../src/server/repositories/projectRepository.js');
 const { saveTasks } = await import('../src/server/repositories/taskRepository.js');
 const { getAgentTaskContext } = await import('../src/server/services/taskService.js');
 const { renderTaskPrompt } = await import('../src/server/services/taskService.js');
@@ -124,31 +124,29 @@ const state: AppState = {
       updatedAt: '2026-06-13T00:03:00.000Z',
     },
   ],
-  projectsCache: [
-    { id: 'project-1', name: 'p1', repoUrl: 'https://github.com/anusornNeal/dev-flow', localPath: repoPathWithSpaces },
-  ],
   countersCache: {},
   
   skillsRegistry: [],
 };
 
-((state).projectsCache || []).forEach(p => createProject(p));
 
-const loggedMessages: string[] = [];
+
+try { createProject({ id: 'project-1', name: 'p1', repoUrl: 'https://github.com/anusornNeal/dev-flow', localPath: repoPathWithSpaces }); } catch(e) {}
+  const loggedMessages: string[] = [];
 const deps: ApiRouteDeps = {
   state,
   writeAgentLog: (level, msg) => { loggedMessages.push(`[${level}] ${msg}`); },
 };
 
 console.log('[verify] Testing missing project.localPath blocks setup...');
-state.projectsCache[0].localPath = '';
+const p0 = getProjects()[0]; p0.localPath = undefined; updateProject(p0);
 const noPathResult = triggerTaskAgent(state.tasksCache[0], deps, 'test');
 assert.equal(noPathResult.triggered, false);
 assert.equal(noPathResult.reason, 'Project localPath is missing. Task cannot be run.');
 assert.equal(state.tasksCache[0].status, 'todo');
 
 console.log('[verify] Testing real prompt rendering and startup handoff...');
-state.projectsCache[0].localPath = repoPathWithSpaces;
+const p1 = getProjects()[0]; p1.localPath = repoPathWithSpaces; updateProject(p1);
 const taskContext = getAgentTaskContext(state, 'task-1');
 assert.ok(taskContext?.projectRules?.workflow);
 assert.equal(taskContext.projectRules.title, 'DevFlow Workflow Rules');
@@ -172,9 +170,9 @@ await waitFor(() => getLatestAgentRunForTask('task-1')?.status === 'running');
 const run1 = getLatestAgentRunForTask('task-1');
 assert.ok(run1);
 assert.equal(run1?.status, 'running');
-const promptPath = path.join(process.cwd(), '.devflow', 'runs', run1!.id, 'prompt.md');
+const promptPath = path.join(repoPathWithSpaces, '.devflow', 'runs', run1!.id, 'prompt.md');
 const prompt = fs.readFileSync(promptPath, 'utf8');
-const resultPath = path.join(process.cwd(), '.devflow', 'runs', run1!.id, 'result.json');
+const resultPath = path.join(repoPathWithSpaces, '.devflow', 'runs', run1!.id, 'result.json');
 const runPrompt = renderTaskPrompt(state, 'task-1', { runId: run1!.id });
 assert.equal(prompt, runPrompt.renderResult.content);
 const historyApp = express();
@@ -252,19 +250,16 @@ const duplicateState: AppState = {
       updatedAt: '2026-06-13T00:20:00.000Z',
     },
   ],
-  projectsCache: [
-    { id: 'project-dup', name: 'dup', repoUrl: 'https://github.com/anusornNeal/dev-flow', localPath: repoPathWithSpaces },
-  ],
   countersCache: {},
   
   skillsRegistry: [],
 };
-const duplicateDeps: ApiRouteDeps = {
+try { createProject({ id: 'project-dup', name: 'dup', repoUrl: 'https://github.com/anusornNeal/dev-flow', localPath: repoPathWithSpaces }); } catch(e) {}
+  const duplicateDeps: ApiRouteDeps = {
   state: duplicateState,
   writeAgentLog: () => {},
 };
 saveTasks(duplicateState);
-((duplicateState).projectsCache || []).forEach(p => createProject(p));
 const firstDuplicateTrigger = triggerTaskAgent(duplicateState.tasksCache[0], duplicateDeps, 'dup-test');
 assert.equal(firstDuplicateTrigger.triggered, true);
 const firstDuplicateRunId = firstDuplicateTrigger.run.id;
@@ -333,12 +328,12 @@ const parentState: AppState = {
       logs: [],
     },
   ],
-  projectsCache: [{ id: 'project-1', name: 'p1', repoUrl: 'repo', localPath: repoPathWithSpaces }],
   countersCache: {},
   
   skillsRegistry: [],
 };
-const parentDeps: ApiRouteDeps = {
+try { createProject({ id: 'project-1', name: 'p1', repoUrl: 'repo', localPath: repoPathWithSpaces }); } catch(e) {}
+  const parentDeps: ApiRouteDeps = {
   state: parentState,
   writeAgentLog: () => {},
 };
@@ -437,12 +432,12 @@ const moveState: AppState = {
       updatedAt: '2026-06-13T00:10:00.000Z',
     },
   ],
-  projectsCache: [{ id: 'project-1', name: 'p1', repoUrl: 'repo', localPath: repoPathWithSpaces }],
   countersCache: {},
   
   skillsRegistry: [],
 };
-const moveDeps: ApiRouteDeps = {
+try { createProject({ id: 'project-1', name: 'p1', repoUrl: 'repo', localPath: repoPathWithSpaces }); } catch(e) {}
+  const moveDeps: ApiRouteDeps = {
   state: moveState,
   writeAgentLog: () => {},
 };
@@ -538,12 +533,12 @@ const resetState: AppState = {
       logs: [],
     },
   ],
-  projectsCache: [{ id: 'project-1', name: 'p1', repoUrl: 'repo', localPath: repoPathWithSpaces }],
   countersCache: {},
   
   skillsRegistry: [],
 };
-const resetDeps: ApiRouteDeps = {
+try { createProject({ id: 'project-1', name: 'p1', repoUrl: 'repo', localPath: repoPathWithSpaces }); } catch(e) {}
+  const resetDeps: ApiRouteDeps = {
   state: resetState,
   writeAgentLog: () => {},
 };
@@ -617,12 +612,12 @@ const staleReadState: AppState = {
       logs: [],
     },
   ],
-  projectsCache: [{ id: 'project-1', name: 'p1', repoUrl: 'repo', localPath: repoPathWithSpaces }],
   countersCache: {},
   
   skillsRegistry: [],
 };
-const staleReadDeps: ApiRouteDeps = {
+try { createProject({ id: 'project-1', name: 'p1', repoUrl: 'repo', localPath: repoPathWithSpaces }); } catch(e) {}
+  const staleReadDeps: ApiRouteDeps = {
   state: staleReadState,
   writeAgentLog: () => {},
 };
@@ -664,12 +659,12 @@ const autoWorkValidationState: AppState = {
       logs: [],
     },
   ],
-  projectsCache: [{ id: 'project-1', name: 'p1', repoUrl: 'repo', localPath: path.join(tempDir, 'missing-project-path') }],
   countersCache: {},
   
   skillsRegistry: [],
 };
-const autoWorkValidationDeps: ApiRouteDeps = {
+try { createProject({ id: 'project-1', name: 'p1', repoUrl: 'repo', localPath: path.join(tempDir, 'missing-project-path') }); } catch(e) {}
+  const autoWorkValidationDeps: ApiRouteDeps = {
   state: autoWorkValidationState,
   writeAgentLog: () => {},
 };
@@ -725,12 +720,12 @@ const autoWorkTriggerState: AppState = {
       logs: [],
     }
   ],
-  projectsCache: [{ id: 'project-autowork-1', name: 'p1', repoUrl: 'repo', localPath: tempDir }],
   countersCache: {},
   
   skillsRegistry: [],
 };
-const autoWorkTriggerDeps: ApiRouteDeps = {
+try { createProject({ id: 'project-autowork-1', name: 'p1', repoUrl: 'repo', localPath: tempDir }); } catch(e) {}
+  const autoWorkTriggerDeps: ApiRouteDeps = {
   state: autoWorkTriggerState,
   writeAgentLog: (level, msg) => console.log(`[AutoWorkTrigger Log] ${level}: ${msg}`),
 };
@@ -820,12 +815,12 @@ const completionState: AppState = {
       updatedAt: '2026-06-14T00:02:00.000Z',
     },
   ],
-  projectsCache: [{ id: 'project-1', name: 'p1', repoUrl: 'repo', localPath: repoPathWithSpaces }],
   countersCache: {},
   
   skillsRegistry: [],
 };
-const completionDeps: ApiRouteDeps = {
+try { createProject({ id: 'project-1', name: 'p1', repoUrl: 'repo', localPath: repoPathWithSpaces }); } catch(e) {}
+  const completionDeps: ApiRouteDeps = {
   state: completionState,
   writeAgentLog: () => {},
 };

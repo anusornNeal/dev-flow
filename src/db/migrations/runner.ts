@@ -1,12 +1,10 @@
-import db from '../index.js';
-
 export interface Migration {
   id: string;
   up: (db: any) => void;
   down?: (db: any) => void;
 }
 
-export function runMigrations(migrations: Migration[]) {
+export function runMigrations(db: any, migrations: Migration[]) {
   db.prepare(`
     CREATE TABLE IF NOT EXISTS migrations (
       id TEXT PRIMARY KEY,

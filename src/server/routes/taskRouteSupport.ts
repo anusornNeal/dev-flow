@@ -10,6 +10,7 @@ import { TASK_SCHEMA_DEF, VALID_AGENTS, LEGACY_VALID_EFFORTS_FALLBACK, VALID_MOD
 import { ACTIVE_AGENT_RUN_STATUSES, cancelActiveRunsForTask, cancelStaleActiveRuns, createAgentRun, getActiveRunForProjectAndAgent, getActiveRunForTask, getLatestAgentRunForTask, listActiveRunSummariesForProject, listAgentRunsForTask, updateAgentRunStatus, type AgentRun } from '../repositories/agentRunRepository';
 import { deleteTasksByIds, generateDisplayId, saveTask, getTasks } from '../repositories/taskRepository.js';
 import { listAttachmentsForTask } from '../repositories/attachmentRepository';
+import { AgentOrchestrationWorker } from '../services/agentOrchestrationWorker';
 import { appendAgentRunLog, buildAgentCompletionSummary, createAgentRunFiles, createAgentRunResultRecord, getAgentRunHistoryPaths, getAgentTriggerScriptPath, getDevFlowApiBaseUrl, resolveAgentExecutionMode, resolveFromDevFlowAppRoot, writeAgentRunLaunchMetadata, writeAgentRunOutputSummary, writeAgentRunResult } from '../services/agentRunService';
 import { extractImages, extractDesignImages, findProjectByIdentifier, findTaskByIdentifier, getAgentTaskContext, normalizeAgentCompletionPayload, normalizeTaskCategoryAndTags, applyTaskCategoryAndTagsUpdate, renderTaskPrompt, resolveProjectIdFromRepo, validateAgentCompletionPayload, validateAgentParams, validateTaskPayload } from '../services/taskService';
 import { validateTaskQualityForMutation } from '../services/taskQualityService';
@@ -560,7 +561,7 @@ export function continueTaskQueueForProject(projectId: string, deps: ApiRouteDep
       continue;
     }
 
-    const result = triggerTaskAgent(nextTask, deps, 'queue continuation');
+    const result = AgentOrchestrationWorker.trigger(nextTask, deps, 'queue continuation');
     if (result.triggered) {
       startedRuns.push(result.run);
       continue;
@@ -812,7 +813,7 @@ export function maybeTriggerTaskAgent(task: any, previousTaskOrStatus: any, deps
     deps.writeAgentLog('INFO', `Auto Work is disabled. Task ${task.id} moved to todo but agent will not be triggered.`);
     return null;
   }
-  const result = triggerTaskAgent(task, deps, routeLabel);
+  const result = AgentOrchestrationWorker.trigger(task, deps, routeLabel);
   if (!result.triggered) {
     const blockedResult = result as TriggerTaskAgentFailure;
     deps.writeAgentLog('INFO', `Skipped agent trigger for task=${task.id}: ${blockedResult.reason}`);

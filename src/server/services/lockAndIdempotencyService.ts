@@ -74,6 +74,18 @@ export async function withLock<T>(resourceId: string, operation: () => Promise<T
   }
 }
 
+/**
+ * Execute a synchronous operation with a lock.
+ */
+export function withSyncLock<T>(resourceId: string, operation: () => T): T {
+  const token = acquireLock(resourceId);
+  try {
+    return operation();
+  } finally {
+    releaseLock(resourceId, token);
+  }
+}
+
 export interface IdempotencyEntry {
   promise: Promise<any>;
   status: 'pending' | 'resolved';

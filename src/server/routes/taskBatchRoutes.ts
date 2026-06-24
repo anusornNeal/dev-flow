@@ -8,7 +8,8 @@ import { getValidationErrorMessage, isValidTransition } from '../../lib/statusTr
 import { applyChecklistToggle as applyChecklistToggleUseCase } from '../useCases/taskUseCases';
 import { VALID_STATUSES } from '../constants';
 import { validateEnum } from '../validation';
-import { appendTaskLog, canOverrideTaskLock, createTaskLogEntry, getTaskIndexByIdentifier, maybeTriggerTaskAgent, syncTaskAgentStateForStatus, validateParentReviewMove } from './taskRouteSupport';
+import { appendTaskLog, canOverrideTaskLock, createTaskLogEntry, getTaskIndexByIdentifier, syncTaskAgentStateForStatus, validateParentReviewMove } from './taskRouteSupport';
+import { AgentOrchestrationWorker } from '../services/agentOrchestrationWorker';
 
 export function registerTaskBatchRoutes(app: express.Express, deps: ApiRouteDeps) {  app.post('/api/tasks/batch', (req, res) => {
     let rawItems = req.body;
@@ -109,7 +110,7 @@ export function registerTaskBatchRoutes(app: express.Express, deps: ApiRouteDeps
         syncTaskAgentStateForStatus(updatedTask, currentTask.status);
         saveTask(updatedTask);
         updatedTasks.push(updatedTask);
-        maybeTriggerTaskAgent(updatedTask, currentTask, deps, 'POST /tasks/batch update');
+        AgentOrchestrationWorker.maybeTrigger(updatedTask, currentTask, deps, 'POST /tasks/batch update');
         continue;
       }
 
@@ -164,7 +165,7 @@ export function registerTaskBatchRoutes(app: express.Express, deps: ApiRouteDeps
 
       saveTask(newTask);
       importedTasks.push(newTask);
-      maybeTriggerTaskAgent(newTask, undefined, deps, 'POST /tasks/batch create');
+      AgentOrchestrationWorker.maybeTrigger(newTask, undefined, deps, 'POST /tasks/batch create');
     }
 
     
@@ -293,7 +294,7 @@ export function registerTaskBatchRoutes(app: express.Express, deps: ApiRouteDeps
         task.updatedAt = new Date().toISOString();
         task.logs = [...(task.logs || []), createTaskLogEntry(`Agent configuration updated via Batch API: Agent=${item.agent || 'None'}, Model=${item.model || 'Default'}, Effort=${item.effort || 'Auto'}`)];
         saveTask(task);
-        maybeTriggerTaskAgent(task, previousTask, deps, 'POST /tasks/batch/assign');
+        AgentOrchestrationWorker.maybeTrigger(task, previousTask, deps, 'POST /tasks/batch/assign');
         return { success: true, affectedId: task.id, task };
       });
 

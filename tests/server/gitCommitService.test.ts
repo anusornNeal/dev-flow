@@ -70,6 +70,8 @@ test('commitGitChanges stages and commits all local changes', () => {
   });
 
   assert.match(result.hash, /^[a-f0-9]{40}$/);
+  assert.equal(result.commitHash, result.hash);
+  assert.equal(result.dryRun, false);
   assert.equal(result.message, 'feat: commit all changes');
   assert.deepEqual(result.changedFiles.sort(), ['base.txt', 'new.txt']);
   assert.equal(getGitStatus(stateFor(repo), { projectId: 'project-git' }).count, 0);
@@ -91,6 +93,26 @@ test('commitGitChanges commits selected files without staging unrelated changes'
   const status = getGitStatus(stateFor(repo), { projectId: 'project-git' });
   assert.equal(status.count, 1);
   assert.equal(status.files[0].path, 'unselected.txt');
+});
+
+test('commitGitChanges dryRun previews without staging or committing', () => {
+  const repo = createRepo('dry-run');
+  fs.writeFileSync(path.join(repo, 'preview.txt'), 'preview\n');
+  const beforeHead = git(repo, ['rev-parse', 'HEAD']);
+
+  const result = commitGitChanges(stateFor(repo), {
+    projectId: 'project-git',
+    stageAll: true,
+    dryRun: true,
+    message: 'feat: preview commit',
+  });
+
+  assert.equal(result.dryRun, true);
+  assert.equal(result.hash, null);
+  assert.equal(result.commitHash, null);
+  assert.deepEqual(result.changedFiles, ['preview.txt']);
+  assert.equal(git(repo, ['rev-parse', 'HEAD']), beforeHead);
+  assert.equal(getGitStatus(stateFor(repo), { projectId: 'project-git' }).files[0].staged, false);
 });
 
 test('commitGitChanges rejects unsafe selected paths', () => {
@@ -116,8 +138,7 @@ test('devflowContract exposes commit_git_changes', async () => {
   const tool = getToolDefinitionByName('commit_git_changes');
   assert.ok(tool, 'commit_git_changes should be defined');
   assert.equal(tool.name, 'commit_git_changes');
-  
-  // Verify schema
+
   assert.ok(tool.inputSchema.properties.message, 'Schema should include message');
   assert.ok(tool.inputSchema.properties.stageAll, 'Schema should include stageAll');
   assert.ok(tool.inputSchema.properties.files, 'Schema should include files');

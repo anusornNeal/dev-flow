@@ -271,6 +271,7 @@ export function commitGitChanges(state: AppState, args: Record<string, any>) {
 
   const selectedFiles = resolveCommitFiles(root, args);
   const stageAll = args.stageAll === true || String(args.stageAll).toLowerCase() === 'true';
+  const dryRun = args.dryRun === true || String(args.dryRun).toLowerCase() === 'true';
   if (!stageAll && selectedFiles.length === 0) {
     throw createApiError(400, 'COMMIT_SELECTION_REQUIRED', 'Set stageAll=true or provide a non-empty files array.');
   }
@@ -278,6 +279,28 @@ export function commitGitChanges(state: AppState, args: Record<string, any>) {
   const beforeStatus = toStatusSummary(root);
   if (beforeStatus.count === 0) {
     throw createApiError(400, 'NO_CHANGES_TO_COMMIT', 'There are no local git changes to commit.');
+  }
+
+  if (dryRun) {
+    let previewFiles = beforeStatus.files.map((file) => normalizeGitPath(file.path));
+    if (!stageAll) {
+      ensureSelectedFilesAreChanged(root, selectedFiles);
+      ensureNoUnselectedStagedFiles(root, selectedFiles);
+      previewFiles = selectedFiles;
+    }
+
+    return {
+      root,
+      dryRun: true,
+      hash: null,
+      commitHash: null,
+      branch: getBranchName(root),
+      message,
+      changedFiles: previewFiles,
+      changedFileCount: previewFiles.length,
+      beforeStatus,
+      afterStatus: beforeStatus,
+    };
   }
 
   if (stageAll) {
@@ -301,7 +324,9 @@ export function commitGitChanges(state: AppState, args: Record<string, any>) {
 
   return {
     root,
+    dryRun: false,
     hash,
+    commitHash: hash,
     branch,
     message,
     changedFiles: stagedFiles,

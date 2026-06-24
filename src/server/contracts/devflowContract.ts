@@ -1350,6 +1350,27 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
     }),
   },
   {
+    name: 'commit_git_changes',
+    description: 'Safely create a local git commit in the resolved project repository. This tool must never push, amend, reset, checkout, rebase, or perform remote operations.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...projectIdentifierProperties,
+        message: { type: 'string', description: 'Commit message. Required.' },
+        stageAll: { type: 'boolean', description: 'Stage all working tree changes before committing.' },
+        files: { type: 'array', items: { type: 'string' }, description: 'Specific files to stage before committing.' },
+        dryRun: { type: 'boolean', description: 'Return a preview/status summary without creating the commit.' },
+      },
+      required: ['message'],
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: (args) => ({
+      method: 'POST',
+      path: '/api/git/commit',
+      body: args,
+    }),
+  },
+  {
     name: 'get_figma_file',
     description: 'Fetch compact file metadata/context by fileKey.',
     inputSchema: {

@@ -34,7 +34,37 @@ const TASK_COLUMNS = [
   'images',
 ] as const;
 
-const TASK_UPSERT_SQL = `INSERT OR REPLACE INTO tasks (${TASK_COLUMNS.join(', ')}) VALUES (${TASK_COLUMNS.map(() => '?').join(', ')})`;
+const TASK_UPSERT_SQL = `
+  INSERT INTO tasks (${TASK_COLUMNS.join(', ')})
+  VALUES (${TASK_COLUMNS.map(() => '?').join(', ')})
+  ON CONFLICT(id) DO UPDATE SET
+    displayId = excluded.displayId,
+    title = excluded.title,
+    description = excluded.description,
+    projectId = excluded.projectId,
+    status = excluded.status,
+    priority = excluded.priority,
+    branch = excluded.branch,
+    category = excluded.category,
+    tags = excluded.tags,
+    targetFiles = excluded.targetFiles,
+    checklist = excluded.checklist,
+    effort = excluded.effort,
+    model = excluded.model,
+    agent = excluded.agent,
+    parentId = excluded.parentId,
+    reasoning = excluded.reasoning,
+    acceptanceCriteria = excluded.acceptanceCriteria,
+    verification = excluded.verification,
+    repoContext = excluded.repoContext,
+    jiraKey = excluded.jiraKey,
+    repo = excluded.repo,
+    createdAt = excluded.createdAt,
+    updatedAt = excluded.updatedAt,
+    logs = excluded.logs,
+    designImages = excluded.designImages,
+    images = excluded.images
+`;
 
 let categoryColumnEnsured = false;
 
@@ -104,26 +134,33 @@ export function generateDisplayId(state: AppState, projectId: string): string {
   return newId;
 }
 
+function parseJsonArray(value: unknown): any[] {
+  if (!value || typeof value !== 'string') return [];
+  const parsed = JSON.parse(value);
+  return Array.isArray(parsed) ? parsed : [];
+}
+
 function parseTaskRow(item: any, runsByTaskId: Map<string, AgentRun[]>) {
+  const parsedTags = parseJsonArray(item.tags);
   const task = {
     ...item,
-    tags: item.tags ? JSON.parse(item.tags) : [],
+    tags: parsedTags,
     targetFiles: item.targetFiles ? JSON.parse(item.targetFiles) : undefined,
     checklist: item.checklist ? JSON.parse(item.checklist) : undefined,
     logs: item.logs ? JSON.parse(item.logs) : undefined,
     images: (() => {
-      let imgs = item.images ? JSON.parse(item.images) : [];
-      const legacy = item.designImages ? JSON.parse(item.designImages) : [];
+      const imgs = parseJsonArray(item.images);
+      const legacy = parseJsonArray(item.designImages);
       if (legacy.length > 0) {
         for (const url of legacy) {
-          imgs.pusk({ id: 'legacy-' + Math.random().toString(36).substr(2, 9), url, filename: 'legacy-design-image' });
+          imgs.push({ id: 'legacy-' + Math.random().toString(36).substr(2, 9), url, filename: 'legacy-design-image' });
         }
       }
       return imgs.length > 0 ? imgs : undefined;
     })(),
     ...normalizeTaskCategoryAndTags({
       category: item.category,
-      tags: item.tags ? JSON.parse(item.tags) : [],
+      tags: parsedTags,
       title: item.title,
       description: item.description,
       repoContext: item.repoContext,

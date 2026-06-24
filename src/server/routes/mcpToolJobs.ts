@@ -73,7 +73,7 @@ export function registerMcpToolJobRoutes(app: express.Express, deps: ApiRouteDep
       res.json({
         jobId: req.params.jobId,
         status: status.status,
-        ready: status.status === 'succeeded' || status.status === 'failed' || status.status === 'timed_out' || status.status === 'cancelled' || status.status === 'interrupted',
+        ready: status.status === 'succeeded' || status.status === 'failed' || status.status === 'timed_out' || status.status === 'cancelled',
         result,
       });
     } catch (error) {
@@ -102,4 +102,3 @@ export function registerMcpToolJobRoutes(app: express.Express, deps: ApiRouteDep
     }
   });
 }
-

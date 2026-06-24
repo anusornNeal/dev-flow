@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { getDevFlowAppRoot } from '../../lib/devFlowPaths';
 
-export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'timed_out' | 'cancelled' | 'interrupted';
+export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'timed_out' | 'cancelled';
 
 export interface McpToolJob {
   jobId: string;
@@ -153,6 +153,7 @@ export function readJobResult(jobId: string): any {
 
 const MAX_JOB_AGE_MS = 24 * 60 * 60 * 1000;
 const CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
+const TERMINAL_STATUSES: JobStatus[] = ['succeeded', 'failed', 'timed_out', 'cancelled'];
 
 export function cleanupOldJobs() {
   ensureJobsDir();
@@ -165,7 +166,7 @@ export function cleanupOldJobs() {
         const stat = fs.statSync(jobDir);
         if (stat.isDirectory() && (now - stat.mtimeMs > MAX_JOB_AGE_MS)) {
           const job = getJob(dir);
-          if (!job || ['succeeded', 'failed', 'timed_out', 'cancelled', 'interrupted'].includes(job.status)) {
+          if (!job || TERMINAL_STATUSES.includes(job.status)) {
             fs.rmSync(jobDir, { recursive: true, force: true });
             console.log(`[mcp-tool-job] Cleaned up old job ${dir}`);
           }
@@ -176,13 +177,6 @@ export function cleanupOldJobs() {
   } catch (e) {
     console.error('[mcp-tool-job] Cleanup failed:', e);
   }
-}
-
-export function startBackgroundJobCleanup() {
-  setTimeout(() => {
-    cleanupOldJobs();
-    setInterval(cleanupOldJobs, CLEANUP_INTERVAL_MS).unref();
-  }, 5000).unref();
 }
 
 export function listInterruptedJobs(): McpToolJob[] {
@@ -196,12 +190,20 @@ export function listInterruptedJobs(): McpToolJob[] {
     
     const job = getJob(dir);
     if (job && (job.status === 'queued' || job.status === 'running')) {
-      const updated = updateJobStatus(job.jobId, { status: 'interrupted' });
+      const updated = updateJobStatus(job.jobId, { status: 'failed' });
+      appendJobLog(job.jobId, 'stderr', '\n[Job Interrupted] Server restarted before this job completed.\n');
       if (updated) interrupted.push(updated);
     }
   }
   
   return interrupted;
+}
+
+export function startBackgroundJobCleanup() {
+  setTimeout(() => {
+    cleanupOldJobs();
+    setInterval(cleanupOldJobs, CLEANUP_INTERVAL_MS).unref();
+  }, 5000).unref();
 }
 
 export function listRecentJobs(limit: number = 50): McpToolJob[] {

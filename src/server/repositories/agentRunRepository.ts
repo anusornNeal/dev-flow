@@ -34,6 +34,17 @@ export interface ActiveProjectAgentRunSummary {
 
 type CreateAgentRunInput = Pick<AgentRun, 'taskId' | 'projectId' | 'agent'> & Partial<Pick<AgentRun, 'model' | 'effort' | 'promptPath' | 'contextRef' | 'logPath' | 'retryOfRunId' | 'triggerSource'>>;
 
+const TERMINAL_AGENT_RUN_STATUSES: ReadonlySet<AgentRunStatus> = new Set(['succeeded', 'failed', 'cancelled']);
+
+const ALLOWED_AGENT_RUN_TRANSITIONS: Record<AgentRunStatus, ReadonlySet<AgentRunStatus>> = {
+  queued: new Set(['queued', 'starting', 'running', 'succeeded', 'failed', 'cancelled']),
+  starting: new Set(['starting', 'running', 'succeeded', 'failed', 'cancelled']),
+  running: new Set(['running', 'succeeded', 'failed', 'cancelled']),
+  succeeded: new Set(['succeeded']),
+  failed: new Set(['failed']),
+  cancelled: new Set(['cancelled']),
+};
+
 function createRunId() {
   return `run-${Date.now()}-${Math.floor(Math.random() * 1000000)}`;
 }
@@ -41,6 +52,10 @@ function createRunId() {
 function normalizeRun(row: any): AgentRun | null {
   if (!row) return null;
   return row as AgentRun;
+}
+
+export function canTransitionAgentRunStatus(from: AgentRunStatus, to: AgentRunStatus): boolean {
+  return ALLOWED_AGENT_RUN_TRANSITIONS[from]?.has(to) ?? false;
 }
 
 export function createAgentRun(input: CreateAgentRunInput): AgentRun {
@@ -154,14 +169,19 @@ export function updateAgentRunStatus(
   const existing = getAgentRun(runId);
   if (!existing) return null;
 
-  const endedAt = ['succeeded', 'failed', 'cancelled'].includes(status)
+  if (!canTransitionAgentRunStatus(existing.status, status)) {
+    return existing;
+  }
+
+  const isTerminalStatus = TERMINAL_AGENT_RUN_STATUSES.has(status);
+  const endedAt = isTerminalStatus
     ? patch.endedAt || existing.endedAt || new Date().toISOString()
     : patch.endedAt !== undefined ? patch.endedAt : existing.endedAt;
 
   db.prepare(`
     UPDATE agent_runs
     SET status = ?, startedAt = ?, endedAt = ?, promptPath = ?, contextRef = ?, logPath = ?, errorMessage = ?
-    WHERE id = ?
+    WHERE id = ? AND status = ?
   `).run(
     status,
     patch.startedAt !== undefined ? patch.startedAt : existing.startedAt,
@@ -171,6 +191,7 @@ export function updateAgentRunStatus(
     patch.logPath !== undefined ? patch.logPath : existing.logPath,
     patch.errorMessage !== undefined ? patch.errorMessage : existing.errorMessage,
     runId,
+    existing.status,
   );
 
   return getAgentRun(runId);

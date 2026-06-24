@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import type { AppState } from '../types';
-import { createJob, updateJobStatus, appendJobLog, writeJobResult, getJob, listInterruptedJobs, listRecentJobs, startBackgroundJobCleanup, type JobStatus } from '../repositories/mcpToolJobRepository';
+import { createJob, updateJobStatus, appendJobLog, writeJobResult, getJob, readJobLog, listInterruptedJobs, listRecentJobs, startBackgroundJobCleanup } from '../repositories/mcpToolJobRepository';
 import { resolveProjectRoot } from './localFileService';
 
 // Import async runners (we will define these later in their respective files)
@@ -69,6 +69,34 @@ function decrementResource(resourceKey: string, kind: JobKind) {
   }
 }
 
+function isTimedOutResult(result: any) {
+  return result && typeof result === 'object' && result.timedOut === true;
+}
+
+function getNextAction(status: string) {
+  if (status === 'queued' || status === 'running') {
+    return 'Poll get_tool_job_status or get_tool_job_log; call cancel_tool_job to stop the job.';
+  }
+  if (status === 'succeeded') {
+    return 'Call get_tool_job_result to read the completed result.';
+  }
+  if (status === 'timed_out') {
+    return 'Read get_tool_job_log/get_tool_job_result, then retry with a higher timeout or narrower scope.';
+  }
+  if (status === 'failed') {
+    return 'Read get_tool_job_log/get_tool_job_result, fix the reported issue, then retry the tool call.';
+  }
+  if (status === 'cancelled') {
+    return 'The job was cancelled; retry the original tool call if the work is still needed.';
+  }
+  return 'Inspect job status, logs, and result.';
+}
+
+function getLastLog(jobId: string) {
+  const log = readJobLog(jobId, 'both').log;
+  return log.length > 4000 ? log.slice(-4000) : log;
+}
+
 export function getQueueMetrics() {
   const activeJobsList = Array.from(activeJobs.values()).map(a => ({
     jobId: a.entry.jobId,
@@ -89,7 +117,7 @@ export function getQueueMetrics() {
 export function initMcpToolJobs() {
   const interrupted = listInterruptedJobs();
   if (interrupted.length > 0) {
-    console.log(`[mcp-tool-job] Marked ${interrupted.length} stale jobs as interrupted on startup.`);
+    console.log(`[mcp-tool-job] Marked ${interrupted.length} stale jobs as failed on startup.`);
   }
   startBackgroundJobCleanup();
 }
@@ -100,7 +128,9 @@ export function getToolJobStatus(jobId: string) {
   const position = queue.findIndex(q => q.jobId === jobId);
   return {
     ...job,
-    queuePosition: position >= 0 ? position + 1 : 0
+    queuePosition: position >= 0 ? position + 1 : 0,
+    lastLog: getLastLog(jobId),
+    nextAction: getNextAction(job.status)
   };
 }
 
@@ -108,6 +138,7 @@ export function cancelToolJob(jobId: string) {
   const qIdx = queue.findIndex(q => q.jobId === jobId);
   if (qIdx >= 0) {
     queue.splice(qIdx, 1);
+    appendJobLog(jobId, 'stderr', '\n[Job Cancelled] Cancelled before start.\n');
     updateJobStatus(jobId, { status: 'cancelled' });
     return true;
   }
@@ -117,6 +148,7 @@ export function cancelToolJob(jobId: string) {
     if (active.cancelFn) {
       active.cancelFn();
     }
+    appendJobLog(jobId, 'stderr', '\n[Job Cancelled] Cancellation requested.\n');
     updateJobStatus(jobId, { status: 'cancelled' });
     return true;
   }
@@ -154,7 +186,12 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
   // Try to process queue
   setImmediate(processQueue);
 
-  return { jobId, status: job.status, queuePosition: queue.length };
+  return {
+    jobId,
+    status: job.status,
+    queuePosition: queue.length,
+    nextAction: 'Poll get_tool_job_status or get_tool_job_log; call cancel_tool_job to stop the job.'
+  };
 }
 
 async function processQueue() {
@@ -229,6 +266,10 @@ async function startJob(entry: QueueEntry) {
     const currentStatus = getJob(entry.jobId)?.status;
     if (currentStatus === 'cancelled' || currentStatus === 'timed_out') {
       // Don't overwrite cancelled/timed_out status
+    } else if (isTimedOutResult(result)) {
+      updateJobStatus(entry.jobId, { status: 'timed_out' });
+      writeJobResult(entry.jobId, result);
+      logger.stderr(`\n[Job Timed Out]\n`);
     } else {
       updateJobStatus(entry.jobId, { status: 'succeeded' });
       writeJobResult(entry.jobId, result);

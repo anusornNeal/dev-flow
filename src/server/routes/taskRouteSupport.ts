@@ -8,7 +8,7 @@ import type express from 'express';
 import type { ApiRouteDeps } from '../types';
 import { TASK_SCHEMA_DEF, VALID_AGENTS, LEGACY_VALID_EFFORTS_FALLBACK, VALID_MODELS, VALID_STATUSES } from '../constants';
 import { ACTIVE_AGENT_RUN_STATUSES, cancelActiveRunsForTask, cancelStaleActiveRuns, createAgentRun, getActiveRunForProjectAndAgent, getActiveRunForTask, getLatestAgentRunForTask, listActiveRunSummariesForProject, listAgentRunsForTask, updateAgentRunStatus, type AgentRun } from '../repositories/agentRunRepository';
-import { deleteTasksByIds, loadTasks, generateDisplayId, saveTask, saveTasks } from '../repositories/taskRepository';
+import { deleteTasksByIds, generateDisplayId, saveTask, getTasks } from '../repositories/taskRepository.js';
 import { listAttachmentsForTask } from '../repositories/attachmentRepository';
 import { appendAgentRunLog, buildAgentCompletionSummary, createAgentRunFiles, createAgentRunResultRecord, getAgentRunHistoryPaths, getAgentTriggerScriptPath, getDevFlowApiBaseUrl, resolveAgentExecutionMode, resolveFromDevFlowAppRoot, writeAgentRunLaunchMetadata, writeAgentRunOutputSummary, writeAgentRunResult } from '../services/agentRunService';
 import { extractImages, extractDesignImages, findProjectByIdentifier, findTaskByIdentifier, getAgentTaskContext, normalizeAgentCompletionPayload, normalizeTaskCategoryAndTags, applyTaskCategoryAndTagsUpdate, renderTaskPrompt, resolveProjectIdFromRepo, validateAgentCompletionPayload, validateAgentParams, validateTaskPayload } from '../services/taskService';
@@ -193,7 +193,7 @@ function resolveTaskListProjectId(deps: ApiRouteDeps, req: express.Request) {
 }
 
 export function filterTasksForList(deps: ApiRouteDeps, req: express.Request) {
-  let tasks = [...deps.state.tasksCache];
+  let tasks = [...getTasks()];
   const resolvedProjectId = resolveTaskListProjectId(deps, req);
   const projectId = resolvedProjectId || (typeof req.query.projectId === 'string' ? req.query.projectId : '');
   const parentId = typeof req.query.parentId === 'string' ? req.query.parentId : '';
@@ -268,7 +268,7 @@ function taskHasManualEvidence(task: any) {
 }
 
 function getChildReviewBlockers(task: any, deps: ApiRouteDeps) {
-  const children = deps.state.tasksCache.filter((entry) => entry.parentId === task.id);
+  const children = getTasks().filter((entry) => entry.parentId === task.id);
   if (children.length === 0) return [];
 
   const blockers: string[] = [];
@@ -416,51 +416,46 @@ export function applyAgentCompletionCallback(task: any, run: AgentRun, deps: Api
     appendAgentRunLog(run.logPath, completionMessage);
   }
 
-  const completeTransaction = db.transaction(() => {
-    task.status = nextStatus;
-    task.updatedAt = new Date().toISOString();
-    appendTaskLog(task, completionMessage, 'update');
-    applyRunSummaryToTask(task, updatedRun || getLatestAgentRunForTask(task.id));
-    saveTask(task);
-    return { task, run: updatedRun || run, payload };
-  });
-  return completeTransaction();
+  task.status = nextStatus;
+  task.updatedAt = new Date().toISOString();
+  appendTaskLog(task, completionMessage, 'update');
+  applyRunSummaryToTask(task, updatedRun || getLatestAgentRunForTask(task.id));
+  saveTask(task);
+
+  return { task, run: updatedRun || run, payload };
 }
 
 export function cleanupStaleActiveRuns(deps: ApiRouteDeps) {
   const cutoff = new Date(Date.now() - STALE_AGENT_RUN_MS).toISOString();
-  const cleanupTransaction = db.transaction(() => {
-    const cancelledCount = cancelStaleActiveRuns(cutoff, `Stale active run cancelled after ${STALE_AGENT_RUN_MS / 60000} minutes.`);
-    if (cancelledCount > 0) {
-      deps.writeAgentLog('INFO', `Cancelled ${cancelledCount} stale active agent run(s).`);
-      // Batch-load all agent runs to avoid N+1 loop
-      const allRuns = db.prepare('SELECT * FROM agent_runs ORDER BY createdAt DESC').all() as AgentRun[];
-      const runsByTaskId = new Map<string, AgentRun[]>();
-      for (const run of allRuns) {
-        const existing = runsByTaskId.get(run.taskId);
-        if (existing) { existing.push(run); }
-        else { runsByTaskId.set(run.taskId, [run]); }
-      }
-      for (const task of deps.state.tasksCache) {
-        const taskRuns = runsByTaskId.get(task.id) || [];
-        const activeRun = taskRuns.find(r => ACTIVE_AGENT_RUN_STATUSES.includes(r.status as any)) || null;
-        const latestRun = taskRuns[0] || null;
-        task.activeAgent = activeRun?.agent || undefined;
-        task.latestAgentRun = latestRun ? {
-          id: latestRun.id,
-          status: latestRun.status,
-          agent: latestRun.agent,
-          errorMessage: latestRun.errorMessage,
-          createdAt: latestRun.createdAt,
-          startedAt: latestRun.startedAt,
-          endedAt: latestRun.endedAt,
-        } : undefined;
-        task.agentRuns = taskRuns.map((r) => ({ id: r.id, status: r.status, logFile: r.logPath }));
-        saveTask(task);
-      }
+  const cancelledCount = cancelStaleActiveRuns(cutoff, `Stale active run cancelled after ${STALE_AGENT_RUN_MS / 60000} minutes.`);
+  if (cancelledCount > 0) {
+    deps.writeAgentLog('INFO', `Cancelled ${cancelledCount} stale active agent run(s).`);
+    // Batch-load all agent runs to avoid N+1 loop
+    const allRuns = db.prepare('SELECT * FROM agent_runs ORDER BY createdAt DESC').all() as AgentRun[];
+    const runsByTaskId = new Map<string, AgentRun[]>();
+    for (const run of allRuns) {
+      const existing = runsByTaskId.get(run.taskId);
+      if (existing) { existing.push(run); }
+      else { runsByTaskId.set(run.taskId, [run]); }
     }
-  });
-  cleanupTransaction();
+    for (const task of getTasks()) {
+      const taskRuns = runsByTaskId.get(task.id) || [];
+      const activeRun = taskRuns.find(r => ACTIVE_AGENT_RUN_STATUSES.includes(r.status as any)) || null;
+      const latestRun = taskRuns[0] || null;
+      task.activeAgent = activeRun?.agent || undefined;
+      task.latestAgentRun = latestRun ? {
+        id: latestRun.id,
+        status: latestRun.status,
+        agent: latestRun.agent,
+        errorMessage: latestRun.errorMessage,
+        createdAt: latestRun.createdAt,
+        startedAt: latestRun.startedAt,
+        endedAt: latestRun.endedAt,
+      } : undefined;
+      task.agentRuns = taskRuns.map((r) => ({ id: r.id, status: r.status, logFile: r.logPath }));
+    }
+    
+  }
 }
 
 export function runThrottledStaleCleanup(deps: ApiRouteDeps, now = Date.now()) {
@@ -490,12 +485,9 @@ function failTaskRun(task: any, deps: ApiRouteDeps, runId: string, reason: strin
       completedAt: new Date().toISOString(),
     }));
   }
-  const failTransaction = db.transaction(() => {
-    applyRunSummaryToTask(task, failedRun);
-    saveTask(task);
-    return failedRun;
-  });
-  return failTransaction();
+  applyRunSummaryToTask(task, failedRun);
+  saveTask(task);
+  return failedRun;
 }
 
 export function completeAgentRunForTask(task: any, run: AgentRun, deps: ApiRouteDeps, options: {
@@ -549,17 +541,14 @@ export function completeAgentRunForTask(task: any, run: AgentRun, deps: ApiRoute
     appendTaskLog(task, `Agent run ${run.id} failed: ${errorMessage}`, 'update');
   }
 
-  const completeRunTransaction = db.transaction(() => {
-    task.updatedAt = new Date().toISOString();
-    applyRunSummaryToTask(task, updatedRun || getLatestAgentRunForTask(task.id));
-    saveTask(task);
-    return updatedRun;
-  });
-  return completeRunTransaction();
+  task.updatedAt = new Date().toISOString();
+  applyRunSummaryToTask(task, updatedRun || getLatestAgentRunForTask(task.id));
+  saveTask(task);
+  return updatedRun;
 }
 
 export function continueTaskQueueForProject(projectId: string, deps: ApiRouteDeps) {
-  const eligibleTasks = deps.state.tasksCache.filter((entry) => entry.projectId === projectId && entry.status === 'todo' && entry.agent);
+  const eligibleTasks = getTasks().filter((entry) => entry.projectId === projectId && entry.status === 'todo' && entry.agent);
   eligibleTasks.sort((a, b) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime());
   const startedRuns: AgentRun[] = [];
 
@@ -567,6 +556,7 @@ export function continueTaskQueueForProject(projectId: string, deps: ApiRouteDep
     const latestRun = getLatestAgentRunForTask(nextTask.id);
     if (latestRun?.status === 'failed') {
       appendTaskLog(nextTask, 'Queue continuation skipped: latest agent run failed. Manual retry is required before auto-work can pick this task again.', 'update');
+      saveTask(nextTask);
       continue;
     }
 
@@ -579,16 +569,11 @@ export function continueTaskQueueForProject(projectId: string, deps: ApiRouteDep
     const blockedResult = result as TriggerTaskAgentFailure;
     if (blockedResult.code !== 'AGENT_ALREADY_RUNNING') {
       appendTaskLog(nextTask, `Queue continuation skipped: ${blockedResult.reason}`, 'update');
+      saveTask(nextTask);
     }
   }
 
-  const queueTransaction = db.transaction(() => {
-    for (const t of eligibleTasks) {
-      saveTask(t);
-    }
-  });
-  queueTransaction();
-
+  
   if (startedRuns.length > 0) {
     return {
       triggered: true,
@@ -663,13 +648,10 @@ export function triggerTaskAgent(task: any, deps: ApiRouteDeps, routeLabel: stri
     triggerSource: routeLabel,
   });
 
-  const triggerTransaction1 = db.transaction(() => {
-    task.status = 'in-progress';
-    task.updatedAt = new Date().toISOString();
-    applyRunSummaryToTask(task, run);
-    saveTask(task);
-  });
-  triggerTransaction1();
+  task.status = 'in-progress';
+  task.updatedAt = new Date().toISOString();
+  applyRunSummaryToTask(task, run);
+  saveTask(task);
 
   let prompt = '';
   let files: { runDir: string; promptPath: string; logPath: string };
@@ -692,12 +674,9 @@ export function triggerTaskAgent(task: any, deps: ApiRouteDeps, routeLabel: stri
     logPath: files.logPath,
   });
   appendAgentRunLog(files.logPath, `Queued ${task.agent} for task ${task.id} from ${routeLabel}`);
-  const triggerTransaction2 = db.transaction(() => {
-    currentRun = updateAgentRunStatus(run.id, 'starting', { startedAt: new Date().toISOString() }) || currentRun;
-    applyRunSummaryToTask(task, currentRun);
-    saveTask(task);
-  });
-  triggerTransaction2();
+  currentRun = updateAgentRunStatus(run.id, 'starting', { startedAt: new Date().toISOString() }) || currentRun;
+  applyRunSummaryToTask(task, currentRun);
+  saveTask(task);
 
   const triggerBat = getAgentTriggerScriptPath();
   const invokeTriggerScript = resolveFromDevFlowAppRoot('scripts', 'invoke-agent-trigger.ps1');
@@ -814,11 +793,8 @@ export function triggerTaskAgent(task: any, deps: ApiRouteDeps, routeLabel: stri
       summary: runningSummary,
     }));
     deps.writeAgentLog('INFO', `Runner completed launcher handoff for run=${run.id} task=${task.id}`);
-    const triggerTransaction3 = db.transaction(() => {
-      applyRunSummaryToTask(task, runningRun);
-      saveTask(task);
-    });
-    triggerTransaction3();
+    applyRunSummaryToTask(task, runningRun);
+    saveTask(task);
   });
 
   return { triggered: true, run: currentRun || run };

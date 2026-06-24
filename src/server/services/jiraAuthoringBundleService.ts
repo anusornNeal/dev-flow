@@ -75,9 +75,9 @@ function collectRelatedIssues(fields: any) {
   return Array.from(related.values());
 }
 
-function findExistingDevFlowTasks(state: AppState, jiraKey: string) {
+function findExistingDevFlowTasks(jiraKey: string) {
   const key = jiraKey.toUpperCase();
-  return (state.tasksCache || [])
+  return (getTasks() || [])
     .filter((task: any) => String(task.jiraKey || '').toUpperCase() === key || String(task.title || '').toUpperCase().includes(key))
     .map((task: any) => ({
       id: task.id,

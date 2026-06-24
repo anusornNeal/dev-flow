@@ -7,7 +7,7 @@ import type express from 'express';
 import type { ApiRouteDeps } from '../types';
 import { TASK_SCHEMA_DEF, VALID_AGENTS, LEGACY_VALID_EFFORTS_FALLBACK, VALID_MODELS, VALID_STATUSES } from '../constants';
 import { ACTIVE_AGENT_RUN_STATUSES, cancelActiveRunsForTask, cancelStaleActiveRuns, createAgentRun, getActiveRunForProjectAndAgent, getActiveRunForTask, getLatestAgentRunForTask, listActiveRunSummariesForProject, listAgentRunsForTask, updateAgentRunStatus, type AgentRun } from '../repositories/agentRunRepository';
-import { deleteTasksByIds, loadTasks, generateDisplayId, saveTask, saveTasks } from '../repositories/taskRepository';
+import { deleteTasksByIds, generateDisplayId, saveTask, getTasks } from '../repositories/taskRepository.js';
 import { listAttachmentsForTask } from '../repositories/attachmentRepository';
 import { appendAgentRunLog, buildAgentCompletionSummary, createAgentRunFiles, createAgentRunResultRecord, getAgentRunHistoryPaths, getAgentTriggerScriptPath, getDevFlowApiBaseUrl, resolveAgentExecutionMode, resolveFromDevFlowAppRoot, writeAgentRunLaunchMetadata, writeAgentRunOutputSummary, writeAgentRunResult } from '../services/agentRunService';
 import { extractImages, extractDesignImages, findProjectByIdentifier, findTaskByIdentifier, getAgentTaskContext, normalizeAgentCompletionPayload, normalizeTaskCategoryAndTags, applyTaskCategoryAndTagsUpdate, renderTaskPrompt, resolveProjectIdFromRepo, validateAgentCompletionPayload, validateAgentParams, validateTaskPayload } from '../services/taskService';
@@ -61,7 +61,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     const filteredTasks = filterTasksForList(deps, req);
 
     if (!hasModernQuery) {
-      return res.json(deps.state.tasksCache);
+      return res.json(getTasks());
     }
 
     const offset = Number.isFinite(Number(req.query.offset)) ? Math.max(0, Number(req.query.offset)) : 0;
@@ -198,12 +198,8 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
       return res.status(400).json({ error: 'Only a failed latest run can be retried.' });
     }
 
-    const retryTransaction = db.transaction(() => {
-      const txResult = triggerTaskAgent(task, deps, 'retry endpoint', latestRun.id);
-      saveTask(task);
-      return txResult;
-    });
-    const result = retryTransaction();
+    const result = triggerTaskAgent(task, deps, 'retry endpoint', latestRun.id);
+    saveTask(task);
     if (!result.triggered) {
       const blockedResult = result as TriggerTaskAgentFailure;
       return res.status(400).json({ error: blockedResult.reason, code: blockedResult.code, run: blockedResult.run });
@@ -216,18 +212,14 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     if (!task) return res.status(404).json({ error: 'Task not found' });
 
     const reason = typeof req.body?.reason === 'string' && req.body.reason.trim() ? req.body.reason.trim() : 'cancelled manually';
-    const cancelTransaction = db.transaction(() => {
-      const count = cancelActiveRunsForTask(task.id, reason);
-      if (count > 0) {
-        task.status = 'todo';
-        task.updatedAt = new Date().toISOString();
-        appendTaskLog(task, `Agent run cancelled: ${reason}`, 'update');
-      }
-      applyRunSummaryToTask(task, getLatestAgentRunForTask(task.id));
-      saveTask(task);
-      return count;
-    });
-    const cancelledCount = cancelTransaction();
+    const cancelledCount = cancelActiveRunsForTask(task.id, reason);
+    if (cancelledCount > 0) {
+      task.status = 'todo';
+      task.updatedAt = new Date().toISOString();
+      appendTaskLog(task, `Agent run cancelled: ${reason}`, 'update');
+    }
+    applyRunSummaryToTask(task, getLatestAgentRunForTask(task.id));
+    saveTask(task);
     return res.json({ success: true, cancelledCount, task, runs: listAgentRunsForTask(task.id) });
   });
 
@@ -426,7 +418,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
           continue;
         }
 
-        const agentValidationError = validateAgentParams(item, deps.state.tasksCache);
+        const agentValidationError = validateAgentParams(item, getTasks());
         if (agentValidationError) {
           if (!isArray) return res.status(400).json({ error: agentValidationError });
           continue;
@@ -474,17 +466,12 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
           continue;
         }
 
-        deps.state.tasksCache.push(newTask);
+        saveTask(newTask);
         createdTasks.push(newTask);
         maybeTriggerTaskAgent(newTask, undefined, deps, 'POST /tasks endpoint');
       }
 
-      const createTransaction = db.transaction(() => {
-        for (const task of createdTasks) {
-          saveTask(task);
-        }
-      });
-      createTransaction();
+      
       if (isArray) {
         const standardPayload = { success: true, createdCount: createdTasks.length, tasks: createdTasks };
         return res.status(201).json(toMutationListResponse(req, createdTasks, standardPayload, { createdCount: createdTasks.length }));
@@ -506,10 +493,10 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     const statusErr = validateEnum(req.body.status, 'status', VALID_STATUSES, true);
     if (statusErr) return res.status(400).json({ error: statusErr });
 
-    const taskIndex = getTaskIndexByIdentifier(deps.state.tasksCache, req.params.id);
+    const taskIndex = getTaskIndexByIdentifier(getTasks(), req.params.id);
     if (taskIndex === -1) return res.status(404).json({ error: 'Task not found' });
 
-    const task = deps.state.tasksCache[taskIndex];
+    const task = getTasks()[taskIndex];
     const previousStatus = task.status;
     if (previousStatus === req.body.status) {
       return res.json(toMutationResponse(req, task, { message: 'Task is already in that lane', task }));
@@ -542,14 +529,11 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
       }],
     };
 
-    const moveTransaction = db.transaction(() => {
-      deps.state.tasksCache[taskIndex] = updatedTask;
-      syncTaskAgentStateForStatus(updatedTask, previousStatus);
-      const trigger = maybeTriggerTaskAgent(updatedTask, previousStatus, deps, '/move endpoint');
-      saveTask(deps.state.tasksCache[taskIndex]);
-      return trigger;
-    });
-    const autoWorkTrigger = moveTransaction();
+    saveTask(updatedTask);
+    syncTaskAgentStateForStatus(updatedTask, previousStatus);
+    const autoWorkTrigger = maybeTriggerTaskAgent(updatedTask, previousStatus, deps, '/move endpoint');
+
+    saveTask(getTasks()[taskIndex]);
     const standardPayload = {
       success: true,
       message: `Successfully relocated task schema from ${previousStatus} to ${req.body.status}`,
@@ -577,10 +561,10 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     const checklistErr = validateString(req.body.checklistId, 'checklistId', true);
     if (checklistErr) return res.status(400).json({ error: checklistErr });
 
-    const taskIndex = getTaskIndexByIdentifier(deps.state.tasksCache, req.params.id);
+    const taskIndex = getTaskIndexByIdentifier(getTasks(), req.params.id);
     if (taskIndex === -1) return res.status(404).json({ error: 'Task not found' });
 
-    const task = deps.state.tasksCache[taskIndex];
+    const task = getTasks()[taskIndex];
     const checklist = task.checklist || [];
     const item = checklist.find((entry: any) => (entry.id || entry.text) === req.body.checklistId);
     if (!item) return res.status(404).json({ error: 'Checklist item not found' });
@@ -592,18 +576,15 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     // Delegate the pure flip to the use-case so the route handler stays focused on transport concerns.
     task.checklist = applyChecklistToggleUseCase(checklist, item.id || item.text);
     const toggled = task.checklist.find((entry: any) => (entry.id || entry.text) === req.body.checklistId);
-    const toggleTransaction = db.transaction(() => {
-      task.updatedAt = new Date().toISOString();
-      task.logs = [...task.logs, {
-        id: `log-chk-toggle-${Date.now()}`,
-        timestamp: new Date().toISOString(),
-        message: `Checklist step "${item.text}" set to ${toggled?.completed ? 'COMPLETED' : 'INCOMPLETE'} via Specific API`,
-        type: 'update',
-      }];
-      saveTask(task);
-    });
-    toggleTransaction();
+    task.updatedAt = new Date().toISOString();
+    task.logs = [...task.logs, {
+      id: `log-chk-toggle-${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      message: `Checklist step "${item.text}" set to ${toggled?.completed ? 'COMPLETED' : 'INCOMPLETE'} via Specific API`,
+      type: 'update',
+    }];
 
+    saveTask(task);
     return res.json(toMutationResponse(req, task, task));
   });
 
@@ -614,10 +595,10 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     if (modelErr) return res.status(400).json({ error: modelErr });
 
 
-    const taskIndex = getTaskIndexByIdentifier(deps.state.tasksCache, req.params.id);
+    const taskIndex = getTaskIndexByIdentifier(getTasks(), req.params.id);
     if (taskIndex === -1) return res.status(404).json({ error: 'Task not found' });
-    const task = deps.state.tasksCache[taskIndex];
-    const agentValidationError = validateAgentParams({ ...task, ...req.body }, deps.state.tasksCache);
+    const task = getTasks()[taskIndex];
+    const agentValidationError = validateAgentParams({ ...task, ...req.body }, getTasks());
     if (agentValidationError) return res.status(400).json({ error: agentValidationError });
 
     if (task.status === 'in-progress' && !canOverrideTaskLock(task, req.body, undefined, req.headers['x-agent-request'])) {
@@ -628,19 +609,16 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     task.agent = req.body.agent || undefined;
     task.model = req.body.model || undefined;
     task.effort = req.body.effort || undefined;
-    const assignTransaction = db.transaction(() => {
-      task.updatedAt = new Date().toISOString();
-      task.logs = [...task.logs, {
-        id: `log-assign-${Date.now()}`,
-        timestamp: new Date().toISOString(),
-        message: `Agent configuration updated: Agent=${req.body.agent || 'None'}, Model=${req.body.model || 'Default'}, Effort=${req.body.effort || 'Auto'} via Specific API`,
-        type: 'update',
-      }];
+    task.updatedAt = new Date().toISOString();
+    task.logs = [...task.logs, {
+      id: `log-assign-${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      message: `Agent configuration updated: Agent=${req.body.agent || 'None'}, Model=${req.body.model || 'Default'}, Effort=${req.body.effort || 'Auto'} via Specific API`,
+      type: 'update',
+    }];
 
-      maybeTriggerTaskAgent(task, previousTask, deps, '/assign endpoint');
-      saveTask(task);
-    });
-    assignTransaction();
+    maybeTriggerTaskAgent(task, previousTask, deps, '/assign endpoint');
+    saveTask(task);
     return res.json(toMutationResponse(req, task, task));
   });
 
@@ -667,7 +645,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     const updatedTasks: any[] = [];
 
     for (const item of rawItems) {
-      const existingIndex = item.id ? deps.state.tasksCache.findIndex((task) => task.id === item.id) : -1;
+      const existingIndex = item.id ? getTasks().findIndex((task) => task.id === item.id) : -1;
       const isUpdate = existingIndex !== -1;
       const validationErr = validateTaskPayload(item, isUpdate);
       if (validationErr) {
@@ -675,7 +653,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
         continue;
       }
 
-      const agentValidationError = validateAgentParams(item, deps.state.tasksCache);
+      const agentValidationError = validateAgentParams(item, getTasks());
       if (agentValidationError) {
         if (!Array.isArray(req.body)) return res.status(400).json({ error: agentValidationError });
         continue;
@@ -683,12 +661,12 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
 
 
       if (existingIndex !== -1) {
-        const currentTask = deps.state.tasksCache[existingIndex];
+        const currentTask = getTasks()[existingIndex];
         if (currentTask.status === 'in-progress' && !canOverrideTaskLock(currentTask, item, undefined, req.headers['x-agent-request'])) {
           continue;
         }
         const candidateTask = { ...currentTask, ...item };
-        const mergedAgentValidationError = validateAgentParams(candidateTask, deps.state.tasksCache);
+        const mergedAgentValidationError = validateAgentParams(candidateTask, getTasks());
         if (mergedAgentValidationError) {
           if (!Array.isArray(req.body)) return res.status(400).json({ error: mergedAgentValidationError });
           continue;
@@ -737,7 +715,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
         }
 
         syncTaskAgentStateForStatus(updatedTask, currentTask.status);
-        deps.state.tasksCache[existingIndex] = updatedTask;
+        saveTask(updatedTask);
         updatedTasks.push(updatedTask);
         maybeTriggerTaskAgent(updatedTask, currentTask, deps, 'PUT /tasks list update');
         continue;
@@ -794,16 +772,12 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
         continue;
       }
 
-      deps.state.tasksCache.push(newTask);
+      saveTask(newTask);
       importedTasks.push(newTask);
       maybeTriggerTaskAgent(newTask, undefined, deps, 'PUT /tasks list create');
     }
 
-    const batchTransaction = db.transaction(() => {
-      for (const t of importedTasks) saveTask(t);
-      for (const t of updatedTasks) saveTask(t);
-    });
-    batchTransaction();
+    
     return res.status(200).json({ success: true, createdCount: importedTasks.length, updatedCount: updatedTasks.length, tasks: [...importedTasks, ...updatedTasks] });
   });
 
@@ -857,10 +831,10 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     }
 
     try {
-      const taskIndex = getTaskIndexByIdentifier(deps.state.tasksCache, req.params.id);
+      const taskIndex = getTaskIndexByIdentifier(getTasks(), req.params.id);
       if (taskIndex === -1) return res.status(404).json({ error: 'Task not found' });
 
-      const currentTask = deps.state.tasksCache[taskIndex];
+      const currentTask = getTasks()[taskIndex];
       let updateBody = stripRequestControlFields(req.body);
 
       if (currentTask.status === 'in-progress' && !canOverrideTaskLock(currentTask, req.body, undefined, req.headers['x-agent-request'])) {
@@ -888,7 +862,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
         }
       }
 
-      const agentValidationError = validateAgentParams({ ...currentTask, ...updateBody }, deps.state.tasksCache);
+      const agentValidationError = validateAgentParams({ ...currentTask, ...updateBody }, getTasks());
       if (agentValidationError) return res.status(400).json({ error: agentValidationError });
 
       const parentReviewError = validateParentReviewMove({ ...currentTask, ...updateBody }, deps, updateBody.status ?? currentTask.status);
@@ -910,7 +884,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
       const qualityError = validateTaskQualityForMutation(updatedTask);
       if (qualityError) return res.status(400).json({ error: qualityError });
 
-      deps.state.tasksCache[taskIndex] = updatedTask;
+      saveTask(updatedTask);
       syncTaskAgentStateForStatus(updatedTask, currentTask.status);
       maybeTriggerTaskAgent(updatedTask, currentTask, deps, 'PUT /tasks/:id endpoint');
 
@@ -929,10 +903,10 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
   registerTaskImportFileRoute(app, deps);
 
   app.delete('/api/tasks/:id', (req, res) => {
-    const taskIndex = getTaskIndexByIdentifier(deps.state.tasksCache, req.params.id);
+    const taskIndex = getTaskIndexByIdentifier(getTasks(), req.params.id);
     if (taskIndex === -1) return res.status(404).json({ error: 'Task not found' });
 
-    const currentTask = deps.state.tasksCache[taskIndex];
+    const currentTask = getTasks()[taskIndex];
     const taskIdToDelete = currentTask.id;
     if (currentTask.status === 'in-progress' && !canOverrideTaskLock(currentTask, req.body, req.query, req.headers['x-agent-request'])) {
       return res.status(403).json({ error: 'Task is locked by an agent. Use emergency flag to override.' });
@@ -943,7 +917,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     let added = true;
     while (added) {
       added = false;
-      for (const task of deps.state.tasksCache) {
+      for (const task of getTasks()) {
         if (task.parentId && idsToDelete.has(task.parentId) && !idsToDelete.has(task.id)) {
           idsToDelete.add(task.id);
           added = true;
@@ -952,8 +926,8 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     }
 
     // Filter them out
-    const removedTasks = deps.state.tasksCache.filter((task) => idsToDelete.has(task.id));
-    deps.state.tasksCache = deps.state.tasksCache.filter((task) => !idsToDelete.has(task.id));
+    const removedTasks = getTasks().filter((task) => idsToDelete.has(task.id));
+    
 
     deleteTasksByIds(Array.from(idsToDelete));
     return res.json({ success: true, removed: removedTasks[0], removedCount: removedTasks.length });

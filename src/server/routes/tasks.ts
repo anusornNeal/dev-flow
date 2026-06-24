@@ -198,8 +198,12 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
       return res.status(400).json({ error: 'Only a failed latest run can be retried.' });
     }
 
-    const result = triggerTaskAgent(task, deps, 'retry endpoint', latestRun.id);
-    saveTask(task);
+    const retryTransaction = db.transaction(() => {
+      const txResult = triggerTaskAgent(task, deps, 'retry endpoint', latestRun.id);
+      saveTask(task);
+      return txResult;
+    });
+    const result = retryTransaction();
     if (!result.triggered) {
       const blockedResult = result as TriggerTaskAgentFailure;
       return res.status(400).json({ error: blockedResult.reason, code: blockedResult.code, run: blockedResult.run });
@@ -212,14 +216,18 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     if (!task) return res.status(404).json({ error: 'Task not found' });
 
     const reason = typeof req.body?.reason === 'string' && req.body.reason.trim() ? req.body.reason.trim() : 'cancelled manually';
-    const cancelledCount = cancelActiveRunsForTask(task.id, reason);
-    if (cancelledCount > 0) {
-      task.status = 'todo';
-      task.updatedAt = new Date().toISOString();
-      appendTaskLog(task, `Agent run cancelled: ${reason}`, 'update');
-    }
-    applyRunSummaryToTask(task, getLatestAgentRunForTask(task.id));
-    saveTask(task);
+    const cancelTransaction = db.transaction(() => {
+      const count = cancelActiveRunsForTask(task.id, reason);
+      if (count > 0) {
+        task.status = 'todo';
+        task.updatedAt = new Date().toISOString();
+        appendTaskLog(task, `Agent run cancelled: ${reason}`, 'update');
+      }
+      applyRunSummaryToTask(task, getLatestAgentRunForTask(task.id));
+      saveTask(task);
+      return count;
+    });
+    const cancelledCount = cancelTransaction();
     return res.json({ success: true, cancelledCount, task, runs: listAgentRunsForTask(task.id) });
   });
 
@@ -471,9 +479,12 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
         maybeTriggerTaskAgent(newTask, undefined, deps, 'POST /tasks endpoint');
       }
 
-      for (const task of createdTasks) {
-        saveTask(task);
-      }
+      const createTransaction = db.transaction(() => {
+        for (const task of createdTasks) {
+          saveTask(task);
+        }
+      });
+      createTransaction();
       if (isArray) {
         const standardPayload = { success: true, createdCount: createdTasks.length, tasks: createdTasks };
         return res.status(201).json(toMutationListResponse(req, createdTasks, standardPayload, { createdCount: createdTasks.length }));
@@ -531,11 +542,14 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
       }],
     };
 
-    deps.state.tasksCache[taskIndex] = updatedTask;
-    syncTaskAgentStateForStatus(updatedTask, previousStatus);
-    const autoWorkTrigger = maybeTriggerTaskAgent(updatedTask, previousStatus, deps, '/move endpoint');
-
-    saveTask(deps.state.tasksCache[taskIndex]);
+    const moveTransaction = db.transaction(() => {
+      deps.state.tasksCache[taskIndex] = updatedTask;
+      syncTaskAgentStateForStatus(updatedTask, previousStatus);
+      const trigger = maybeTriggerTaskAgent(updatedTask, previousStatus, deps, '/move endpoint');
+      saveTask(deps.state.tasksCache[taskIndex]);
+      return trigger;
+    });
+    const autoWorkTrigger = moveTransaction();
     const standardPayload = {
       success: true,
       message: `Successfully relocated task schema from ${previousStatus} to ${req.body.status}`,
@@ -578,15 +592,18 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     // Delegate the pure flip to the use-case so the route handler stays focused on transport concerns.
     task.checklist = applyChecklistToggleUseCase(checklist, item.id || item.text);
     const toggled = task.checklist.find((entry: any) => (entry.id || entry.text) === req.body.checklistId);
-    task.updatedAt = new Date().toISOString();
-    task.logs = [...task.logs, {
-      id: `log-chk-toggle-${Date.now()}`,
-      timestamp: new Date().toISOString(),
-      message: `Checklist step "${item.text}" set to ${toggled?.completed ? 'COMPLETED' : 'INCOMPLETE'} via Specific API`,
-      type: 'update',
-    }];
+    const toggleTransaction = db.transaction(() => {
+      task.updatedAt = new Date().toISOString();
+      task.logs = [...task.logs, {
+        id: `log-chk-toggle-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        message: `Checklist step "${item.text}" set to ${toggled?.completed ? 'COMPLETED' : 'INCOMPLETE'} via Specific API`,
+        type: 'update',
+      }];
+      saveTask(task);
+    });
+    toggleTransaction();
 
-    saveTask(task);
     return res.json(toMutationResponse(req, task, task));
   });
 
@@ -611,16 +628,19 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     task.agent = req.body.agent || undefined;
     task.model = req.body.model || undefined;
     task.effort = req.body.effort || undefined;
-    task.updatedAt = new Date().toISOString();
-    task.logs = [...task.logs, {
-      id: `log-assign-${Date.now()}`,
-      timestamp: new Date().toISOString(),
-      message: `Agent configuration updated: Agent=${req.body.agent || 'None'}, Model=${req.body.model || 'Default'}, Effort=${req.body.effort || 'Auto'} via Specific API`,
-      type: 'update',
-    }];
+    const assignTransaction = db.transaction(() => {
+      task.updatedAt = new Date().toISOString();
+      task.logs = [...task.logs, {
+        id: `log-assign-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        message: `Agent configuration updated: Agent=${req.body.agent || 'None'}, Model=${req.body.model || 'Default'}, Effort=${req.body.effort || 'Auto'} via Specific API`,
+        type: 'update',
+      }];
 
-    maybeTriggerTaskAgent(task, previousTask, deps, '/assign endpoint');
-    saveTask(task);
+      maybeTriggerTaskAgent(task, previousTask, deps, '/assign endpoint');
+      saveTask(task);
+    });
+    assignTransaction();
     return res.json(toMutationResponse(req, task, task));
   });
 
@@ -779,7 +799,11 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
       maybeTriggerTaskAgent(newTask, undefined, deps, 'PUT /tasks list create');
     }
 
-    saveTasks(deps.state);
+    const batchTransaction = db.transaction(() => {
+      for (const t of importedTasks) saveTask(t);
+      for (const t of updatedTasks) saveTask(t);
+    });
+    batchTransaction();
     return res.status(200).json({ success: true, createdCount: importedTasks.length, updatedCount: updatedTasks.length, tasks: [...importedTasks, ...updatedTasks] });
   });
 

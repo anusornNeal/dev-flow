@@ -3,7 +3,8 @@ import type { ApiRouteDeps } from '../types';
 import { createApiError, sendApiError } from '../services/api';
 import { applyTaskCategoryAndTagsUpdate, extractDesignImages, extractImages, normalizeTaskCategoryAndTags, resolveProjectIdFromRepo, validateAgentParams, validateTaskPayload } from '../services/taskService';
 import { validateTaskQualityForMutation } from '../services/taskQualityService';
-import { generateDisplayId, saveTasks } from '../repositories/taskRepository';
+import db from '../../db/index';
+import { generateDisplayId, saveTask } from '../repositories/taskRepository';
 import { getValidationErrorMessage, isValidTransition } from '../../lib/statusTransitions';
 import { applyChecklistToggle as applyChecklistToggleUseCase } from '../useCases/taskUseCases';
 import { VALID_STATUSES } from '../constants';
@@ -167,7 +168,11 @@ export function registerTaskBatchRoutes(app: express.Express, deps: ApiRouteDeps
       maybeTriggerTaskAgent(newTask, undefined, deps, 'POST /tasks/batch create');
     }
 
-    saveTasks(deps.state);
+    const batchTransaction = db.transaction(() => {
+      for (const t of importedTasks) saveTask(t);
+      for (const t of updatedTasks) saveTask(t);
+    });
+    batchTransaction();
     return res.status(201).json({ success: true, createdCount: importedTasks.length, updatedCount: updatedTasks.length, tasks: [...importedTasks, ...updatedTasks] });
   });
 
@@ -211,7 +216,12 @@ export function registerTaskBatchRoutes(app: express.Express, deps: ApiRouteDeps
         return { success: true, affectedId: updatedTask.id, task: updatedTask };
       });
 
-      saveTasks(deps.state);
+      const batchMoveTransaction = db.transaction((resList: any[]) => {
+        for (const r of resList) {
+          if (r.success && r.task) saveTask(r.task);
+        }
+      });
+      batchMoveTransaction(results);
       return res.json({
         success: results.every((item) => item.success),
         successCount: results.filter((item) => item.success).length,
@@ -251,7 +261,12 @@ export function registerTaskBatchRoutes(app: express.Express, deps: ApiRouteDeps
         return { success: true, affectedId: task.id, task };
       });
 
-      saveTasks(deps.state);
+      const batchToggleTransaction = db.transaction((resList: any[]) => {
+        for (const r of resList) {
+          if (r.success && r.task) saveTask(r.task);
+        }
+      });
+      batchToggleTransaction(results);
       return res.json({
         success: results.every((item) => item.success),
         successCount: results.filter((item) => item.success).length,
@@ -295,7 +310,12 @@ export function registerTaskBatchRoutes(app: express.Express, deps: ApiRouteDeps
         return { success: true, affectedId: task.id, task };
       });
 
-      saveTasks(deps.state);
+      const batchAssignTransaction = db.transaction((resList: any[]) => {
+        for (const r of resList) {
+          if (r.success && r.task) saveTask(r.task);
+        }
+      });
+      batchAssignTransaction(results);
       return res.json({
         success: results.every((item) => item.success),
         successCount: results.filter((item) => item.success).length,

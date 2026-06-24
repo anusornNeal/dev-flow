@@ -5,7 +5,8 @@ import { getDevFlowAppRoot } from '../../lib/devFlowPaths';
 import type { ApiRouteDeps } from '../types';
 import { sendApiError } from '../services/api';
 import { applyTaskCategoryAndTagsUpdate, extractDesignImages, extractImages, normalizeTaskCategoryAndTags, resolveProjectIdFromRepo, validateTaskPayload } from '../services/taskService';
-import { generateDisplayId, saveTasks } from '../repositories/taskRepository';
+import db from '../../db/index';
+import { generateDisplayId, saveTask } from '../repositories/taskRepository';
 
 function getTaskIndexByIdentifier(tasks: any[], targetId: string) {
   return tasks.findIndex((task) => task.id === targetId || task.displayId === targetId);
@@ -252,7 +253,14 @@ export function registerTaskImportFileRoute(app: express.Express, deps: ApiRoute
       }
 
       deps.state.tasksCache = cloned;
-      saveTasks(deps.state);
+      const importTransaction = db.transaction(() => {
+        for (const t of cloned) {
+          if (created.includes(t.displayId || t.id) || updated.includes(t.id)) {
+            saveTask(t);
+          }
+        }
+      });
+      importTransaction();
 
       return res.json({
         mode,

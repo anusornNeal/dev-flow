@@ -5,7 +5,7 @@ import { resolveProjectRoot, resolveSafePath } from './localFileService';
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const MAX_FILES = 2500;
-const MAX_FILE_BYTES = 600_000;
+const MAX_FILE_BYTES = 100_000;
 const INDEX_EXTENSIONS = new Set(['.kt', '.kts', '.java', '.xml', '.ts', '.tsx', '.js', '.jsx']);
 const SKIP_DIRS = new Set(['.git', 'node_modules', 'build', 'dist', '.gradle', '.idea', '.devflow', '.agents']);
 
@@ -125,7 +125,7 @@ export function getRepoInspectionIndex(state: AppState, args: Record<string, any
     .split(/[^a-z0-9_ก-๙]+/i)
     .map((term) => term.trim())
     .filter(Boolean);
-  const limit = Number.isFinite(Number(args.limit)) ? Math.max(1, Math.min(100, Number(args.limit))) : 25;
+  const limit = Number.isFinite(Number(args.limit)) ? Math.max(1, Math.min(50, Number(args.limit))) : 15;
 
   const matches = index.entries
     .map((entry) => ({ entry, score: scoreEntry(entry, queryTerms) }))

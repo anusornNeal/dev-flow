@@ -1066,7 +1066,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
       type: 'object',
       properties: {
         ...projectIdentifierProperties,
-        patch: { type: 'string', description: 'Unified diff patch text, max 200 KB by default.' },
+        patch: { type: 'string', description: 'Unified diff patch text, max 100 KB by default.' },
         dryRun: { type: 'boolean', description: 'When true, validate and check the patch without changing files.' },
         check: { type: 'boolean', description: 'Alias for dryRun.' },
         maxPatchBytes: { type: 'number', description: 'Optional patch size limit, capped at 1 MB.' },

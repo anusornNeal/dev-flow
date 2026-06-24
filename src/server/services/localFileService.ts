@@ -28,6 +28,14 @@ const DEFAULT_RIPGREP_EXCLUDES = [
   '!**/.next/**',
   '!**/.turbo/**',
   '!**/.vite/**',
+  '!**/.yarn/**',
+  '!**/.vscode/**',
+  '!**/.idea/**',
+  '!**/*.lock',
+  '!**/*-lock.json',
+  '!**/*.map',
+  '!**/*.min.js',
+  '!**/*.min.css',
   '!**/*.log',
 ];
 
@@ -40,7 +48,7 @@ function shouldSkipEntry(entryName: string, args: Record<string, any>) {
 }
 
 function buildRipgrepArgs(query: string, searchPath: string, limit: number, args: Record<string, any>) {
-  const rgArgs = ['--json', '--line-number', '--hidden', '--max-count', String(limit), '--max-filesize', '2M'];
+  const rgArgs = ['--json', '--line-number', '--hidden', '--max-count', String(limit), '--max-filesize', '200K'];
   if (!shouldUseIgnoredEntries(args)) {
     for (const glob of DEFAULT_RIPGREP_EXCLUDES) {
       rgArgs.push('--glob', glob);
@@ -112,7 +120,7 @@ export function listLocalFiles(state: AppState, args: Record<string, any>) {
   const root = resolveProjectRoot(state, args);
   const targetPath = resolveSafePath(root, String(args.path || '.'));
   const recursive = args.recursive === true || String(args.recursive).toLowerCase() === 'true';
-  const limit = Number.isFinite(Number(args.limit)) ? Math.max(1, Math.min(500, Number(args.limit))) : 200;
+  const limit = Number.isFinite(Number(args.limit)) ? Math.max(1, Math.min(200, Number(args.limit))) : 100;
   const relativeBase = path.relative(root, targetPath) || '.';
 
   const results: Array<{ path: string; type: 'file' | 'directory' }> = [];
@@ -146,6 +154,7 @@ export function listLocalFiles(state: AppState, args: Record<string, any>) {
     path: relativeBase,
     recursive,
     count: results.length,
+    truncated: results.length >= limit,
     files: results,
   };
 }
@@ -167,7 +176,7 @@ export function readLocalFile(state: AppState, args: Record<string, any>) {
   const raw = fs.readFileSync(targetPath, 'utf8');
   const lines = raw.split(/\r?\n/);
   const totalLines = lines.length;
-  const maxBytes = Number.isFinite(Number(args.maxBytes)) ? Math.max(1, Math.min(1_000_000, Number(args.maxBytes))) : 200_000;
+  const maxBytes = Number.isFinite(Number(args.maxBytes)) ? Math.max(1, Math.min(100_000, Number(args.maxBytes))) : 40_000;
   const startLine = Number.isFinite(Number(args.startLine)) ? Math.max(1, Number(args.startLine)) : 1;
   const endLine = Number.isFinite(Number(args.endLine)) ? Math.max(startLine, Number(args.endLine)) : totalLines;
   const hasLineWindow = args.startLine !== undefined || args.endLine !== undefined;
@@ -189,6 +198,7 @@ export function readLocalFile(state: AppState, args: Record<string, any>) {
   let truncatedByBytes = false;
   if (maxBytes > 0 && byteLength > maxBytes) {
     content = Buffer.from(content, 'utf8').subarray(0, maxBytes).toString('utf8');
+    content += '\n[truncated]';
     byteLength = Buffer.byteLength(content, 'utf8');
     truncatedByBytes = true;
   }
@@ -249,7 +259,7 @@ export function searchLocalFiles(state: AppState, args: Record<string, any>) {
   }
 
   const searchPath = resolveSafePath(root, String(args.path || '.'));
-  const limit = Number.isFinite(Number(args.limit)) ? Math.max(1, Math.min(200, Number(args.limit))) : 50;
+  const limit = Number.isFinite(Number(args.limit)) ? Math.max(1, Math.min(100, Number(args.limit))) : 20;
   const rg = spawnSync('rg', buildRipgrepArgs(query, searchPath, limit, args), {
     cwd: root,
     encoding: 'utf8',
@@ -289,7 +299,7 @@ export async function searchLocalFilesAsync(state: AppState, args: Record<string
   }
 
   const searchPath = resolveSafePath(root, String(args.path || '.'));
-  const limit = Number.isFinite(Number(args.limit)) ? Math.max(1, Math.min(200, Number(args.limit))) : 50;
+  const limit = Number.isFinite(Number(args.limit)) ? Math.max(1, Math.min(100, Number(args.limit))) : 20;
 
   return new Promise((resolve, reject) => {
     const child = spawn('rg', buildRipgrepArgs(query, searchPath, limit, args), {

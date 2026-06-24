@@ -5,8 +5,8 @@ import type { AppState } from '../types';
 import { createApiError } from './api';
 import { resolveProjectRoot, resolveSafePath } from './localFileService';
 
-const DEFAULT_MAX_PATCH_BYTES = 200_000;
-const DEFAULT_MAX_SUMMARY_BYTES = 12_000;
+const DEFAULT_MAX_PATCH_BYTES = 100_000;
+const DEFAULT_MAX_SUMMARY_BYTES = 5_000;
 
 export interface LocalPatchResult {
   changedFiles: string[];

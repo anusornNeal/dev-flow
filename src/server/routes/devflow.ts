@@ -12,6 +12,7 @@ import { parseTestReport } from '../services/testReportParserService';
 import { getGitLog, getGitDiff, getGitShow, getGitStatus, getGitBranch, commitGitChanges } from '../services/gitService';
 import { getProjectStartContext, getRepoContextBundle } from '../services/projectStartContextService';
 import { getDevFlowDiagnostics, getToolCallSummary } from '../services/mcpToolMonitor';
+import { getWorkflowHealth } from '../services/workflowHealthService';
 import { getRepoInspectionIndex } from '../services/repoInspectionIndexService';
 import { validateTaskQuality } from '../services/taskQualityService';
 import { buildJiraAuthoringBundle } from '../services/jiraAuthoringBundleService';
@@ -53,6 +54,14 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
     try {
       const windowMs = Number.isFinite(Number(req.query.windowMs)) ? Number(req.query.windowMs) : undefined;
       return res.json(getDevFlowDiagnostics({ windowMs }));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.get('/api/workflow-health', (req, res) => {
+    try {
+      return res.json(getWorkflowHealth(deps.state, req.query as Record<string, any>));
     } catch (error) {
       return sendApiError(res, error);
     }

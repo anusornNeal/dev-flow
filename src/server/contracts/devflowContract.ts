@@ -161,6 +161,23 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
     }),
   },
   {
+    name: 'devflow_health_check',
+    description: 'Run a compact read-only DevFlow workflow health check: git cleanliness, tool capability counts, queue diagnostics, and recommendations.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...projectIdentifierProperties,
+        windowMs: { type: 'number', description: 'Recent telemetry window in milliseconds. Default is 10 minutes.' },
+      },
+    },
+    outputSchema: { type: 'object' },
+    lightweight: true,
+    buildHttpRequest: (args) => ({
+      method: 'GET',
+      path: withQuery('/api/workflow-health', args),
+    }),
+  },
+  {
     name: 'validate_task_quality',
     description: 'Preflight a DevFlow task/card for authoring quality before create_task or update_task. Flags implementation-ready cards that still depend on Jira, lack focused targetFiles, or lack an Implementation map.',
     inputSchema: {

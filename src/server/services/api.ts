@@ -31,6 +31,7 @@ export function getCorrelationId(req: express.Request, res?: express.Response) {
 }
 
 export function createApiError(status: number, code: string, message: string, options?: {
+  [key: string]: unknown;
   details?: unknown;
   retryable?: boolean;
   affectedId?: string;

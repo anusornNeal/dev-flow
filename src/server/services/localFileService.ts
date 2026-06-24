@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { spawnSync, spawn } from 'child_process';
 import { getDevFlowAppRoot } from '../../lib/devFlowPaths';
 import type { AppState } from '../types';
@@ -66,6 +67,53 @@ type SearchCacheEntry = {
 };
 
 const searchCache = new Map<string, SearchCacheEntry>();
+
+export type FileRevision = {
+  token: string;
+  sha256: string;
+  size: number;
+  mtimeMs: number;
+  modifiedAt: string;
+};
+
+function buildFileRevision(filePath: string, stat: fs.Stats): FileRevision {
+  const content = fs.readFileSync(filePath);
+  const sha256 = crypto.createHash('sha256').update(content).digest('hex');
+  return {
+    token: `${stat.size}:${Math.trunc(stat.mtimeMs)}:${sha256.slice(0, 16)}`,
+    sha256,
+    size: stat.size,
+    mtimeMs: stat.mtimeMs,
+    modifiedAt: stat.mtime.toISOString(),
+  };
+}
+
+export function getFileRevision(filePath: string): FileRevision {
+  return buildFileRevision(filePath, fs.statSync(filePath));
+}
+
+function expectedRevisionFromArgs(args: Record<string, any>): string | null {
+  const value = args.expectedRevision ?? args.fileRevision ?? args.expectedFileRevision ?? args.expectedContentHash ?? args.expectedSha256;
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+export function assertFileRevisionMatches(filePath: string, args: Record<string, any>, displayPath: string) {
+  const expected = expectedRevisionFromArgs(args);
+  if (!expected) return;
+  if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+    throw createApiError(409, 'FILE_CHANGED_SINCE_READ', `File '${displayPath}' does not exist for expected revision '${expected}'.`, { affectedId: displayPath, expectedRevision: expected });
+  }
+  const actual = getFileRevision(filePath);
+  const matches = expected === actual.token || expected === actual.sha256;
+  if (!matches) {
+    throw createApiError(409, 'FILE_CHANGED_SINCE_READ', `File '${displayPath}' changed since it was read.`, {
+      affectedId: displayPath,
+      expectedRevision: expected,
+      actualRevision: actual.token,
+      actualSha256: actual.sha256,
+    });
+  }
+}
 
 function shouldUseIgnoredEntries(args: Record<string, any>) {
   return args.includeIgnored === true || String(args.includeIgnored).toLowerCase() === 'true';
@@ -335,6 +383,7 @@ export function readLocalFile(state: AppState, args: Record<string, any>) {
   }
 
   const stat = fs.statSync(targetPath);
+  const revision = buildFileRevision(targetPath, stat);
   const mode = String(args.mode || 'content').toLowerCase();
   const maxBytes = Number.isFinite(Number(args.maxBytes)) ? Math.max(1, Math.min(100_000, Number(args.maxBytes))) : 40_000;
   const hasLineWindow = args.startLine !== undefined || args.endLine !== undefined;
@@ -346,6 +395,8 @@ export function readLocalFile(state: AppState, args: Record<string, any>) {
       bytes: stat.size,
       totalLines: countLinesSync(targetPath),
       modifiedAt: stat.mtime.toISOString(),
+      revision: revision.token,
+      fileRevision: revision,
     };
   }
 
@@ -389,6 +440,8 @@ export function readLocalFile(state: AppState, args: Record<string, any>) {
     totalLines,
     truncated: truncatedByBytes || (hasLineWindow && (startLine > 1 || endLine < totalLines)),
     modifiedAt: stat.mtime.toISOString(),
+    revision: revision.token,
+    fileRevision: revision,
   };
 }
 
@@ -414,8 +467,11 @@ export function writeLocalFile(state: AppState, args: Record<string, any>) {
     }
   }
 
+  assertFileRevisionMatches(targetPath, args, filePath);
+
   fs.mkdirSync(path.dirname(targetPath), { recursive: true });
   fs.writeFileSync(targetPath, content, 'utf8');
+  const revision = getFileRevision(targetPath);
 
   return {
     root,
@@ -423,6 +479,8 @@ export function writeLocalFile(state: AppState, args: Record<string, any>) {
     bytes: Buffer.byteLength(content, 'utf8'),
     created: !existed,
     updatedAt: new Date().toISOString(),
+    revision: revision.token,
+    fileRevision: revision,
   };
 }
 

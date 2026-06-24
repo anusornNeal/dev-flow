@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import type { AppState } from '../types';
-import { resolveProjectRoot, resolveSafePath } from './localFileService';
+import { assertFileRevisionMatches, getFileRevision, resolveProjectRoot, resolveSafePath, type FileRevision } from './localFileService';
 
 export type SafeEditOperationType = 'replace' | 'insert_before' | 'insert_after' | 'delete_between';
 
@@ -39,6 +39,8 @@ export type SafeEditResult = {
   operations: number;
   bytesBefore: number;
   bytesAfter: number;
+  revisionBefore?: FileRevision;
+  revisionAfter?: FileRevision;
   preview?: {
     beforeExcerpt: string;
     afterExcerpt: string;
@@ -263,6 +265,7 @@ export function safeEditFile(state: AppState, args: Record<string, any>): SafeEd
   }
 
   const before = fs.readFileSync(targetPath, 'utf8');
+  const revisionBefore = getFileRevision(targetPath);
   const newlineStyle = detectNewlineStyle(before);
   const normalizedBefore = normalizeNewlines(before);
   const diagnostics: SafeEditResult['diagnostics'] = {
@@ -276,6 +279,14 @@ export function safeEditFile(state: AppState, args: Record<string, any>): SafeEd
     const actual = crypto.createHash('sha256').update(before, 'utf8').digest('hex');
     if (expected !== actual) {
       return fail({ dryRun, filePath, code: 'CONTENT_CHANGED', message: `File content hash ${actual} does not match expected hash ${expected}.`, diagnostics });
+    }
+  }
+
+  if (args.expectedRevision || args.fileRevision || args.expectedFileRevision) {
+    try {
+      assertFileRevisionMatches(targetPath, args, filePath);
+    } catch (error: any) {
+      return fail({ dryRun, filePath, code: 'CONTENT_CHANGED', message: error?.message || 'File changed since it was read.', diagnostics });
     }
   }
 
@@ -300,6 +311,7 @@ export function safeEditFile(state: AppState, args: Record<string, any>): SafeEd
         operations: i,
         bytesBefore: byteLength(before),
         bytesAfter: byteLength(restoreNewlines(after, newlineStyle)),
+        revisionBefore,
         diagnostics,
         error: { code: result.code, message: result.message, operationIndex: i },
       };
@@ -323,6 +335,8 @@ export function safeEditFile(state: AppState, args: Record<string, any>): SafeEd
     }
   }
 
+  const revisionAfter = !dryRun ? getFileRevision(targetPath) : undefined;
+
   return {
     ok: true,
     dryRun,
@@ -332,6 +346,8 @@ export function safeEditFile(state: AppState, args: Record<string, any>): SafeEd
     operations: operations.length,
     bytesBefore: byteLength(before),
     bytesAfter: byteLength(restoredAfter),
+    revisionBefore,
+    revisionAfter,
     diagnostics,
     preview: dryRun ? { beforeExcerpt: excerpt(before), afterExcerpt: excerpt(restoredAfter) } : undefined,
   };

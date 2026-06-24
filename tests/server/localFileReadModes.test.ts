@@ -44,6 +44,28 @@ test('readLocalFile can return metadata without content', () => {
   assert.equal(result.totalLines, 4);
 });
 
+
+test('readLocalFile returns revision metadata with content and metadata modes', () => {
+  const contentResult = readLocalFile(state, {
+    projectId: 'project-read-1',
+    filePath: 'sample.txt',
+  });
+
+  assert.equal(typeof contentResult.revision, 'string');
+  assert.equal(contentResult.revision, contentResult.fileRevision.token);
+  assert.equal(contentResult.fileRevision.size, Buffer.byteLength('one\ntwo\nthree\nfour', 'utf8'));
+  assert.equal(typeof contentResult.fileRevision.sha256, 'string');
+
+  const metadataResult = readLocalFile(state, {
+    projectId: 'project-read-1',
+    filePath: 'sample.txt',
+    mode: 'metadata',
+  });
+
+  assert.equal(metadataResult.revision, contentResult.revision);
+  assert.equal(metadataResult.fileRevision.sha256, contentResult.fileRevision.sha256);
+});
+
 test.after(() => {
   try {
     fs.rmSync(tempDir, { recursive: true, force: true });

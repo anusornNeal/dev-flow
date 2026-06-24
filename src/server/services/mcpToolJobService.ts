@@ -7,6 +7,7 @@ import { resolveProjectRoot } from './localFileService';
 import { runProjectCommandAsync } from './projectCommandService';
 import { applyLocalPatchAsync } from './localPatchService';
 import { searchLocalFilesAsync } from './localFileService';
+import { commitGitChanges } from './gitService';
 
 type JobKind = 'repo-command' | 'repo-write' | 'repo-read' | 'skill-read';
 type Logger = { stdout: (data: string) => void; stderr: (data: string) => void };
@@ -308,6 +309,8 @@ async function startJob(entry: QueueEntry) {
       result = await applyLocalPatchAsync(entry.state, entry.args, logger, (cancelFn) => setJobActiveContext(entry.jobId, cancelFn));
     } else if (entry.toolName === 'search_local_files') {
       result = await searchLocalFilesAsync(entry.state, entry.args, logger, (cancelFn) => setJobActiveContext(entry.jobId, cancelFn));
+    } else if (entry.toolName === 'commit_git_changes') {
+      result = commitGitChanges(entry.state, entry.args);
     } else {
       throw new Error(`No async runner implemented for tool: ${entry.toolName}`);
     }

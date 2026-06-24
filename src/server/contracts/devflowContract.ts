@@ -1351,6 +1351,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'commit_git_changes',
+    executionPolicy: { mode: 'job', jobKind: 'repo-command' },
     description: 'Safely create a local git commit in the resolved project repository. This tool must never push, amend, reset, checkout, rebase, or perform remote operations.',
     inputSchema: {
       type: 'object',

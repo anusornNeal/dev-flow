@@ -20,6 +20,10 @@ function getDb(): InstanceType<typeof Database> {
   return _db;
 }
 
+export function withDbTransaction<T>(work: () => T): T {
+  return getDb().transaction(work)();
+}
+
 // Export a Proxy so all repositories can use `db.prepare(...)` etc. directly,
 // but the underlying connection is opened lazily on first access.
 const db = new Proxy({} as InstanceType<typeof Database>, {

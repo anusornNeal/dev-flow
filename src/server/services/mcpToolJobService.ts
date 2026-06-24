@@ -9,6 +9,13 @@ import { applyLocalPatchAsync } from './localPatchService';
 import { searchLocalFilesAsync } from './localFileService';
 
 type JobKind = 'repo-command' | 'repo-write' | 'repo-read' | 'skill-read';
+type Logger = { stdout: (data: string) => void; stderr: (data: string) => void };
+type AsyncRunner = (
+  state: AppState,
+  args: any,
+  logger: Logger,
+  setCancelFn: (fn: () => void) => void,
+) => Promise<any>;
 
 const MAX_CONCURRENCY: Record<JobKind, number> = {
   'repo-command': 1,
@@ -28,6 +35,7 @@ interface QueueEntry {
 
 const queue: QueueEntry[] = [];
 const activeJobs = new Map<string, { entry: QueueEntry; cancelFn?: () => void }>();
+const testRunners = new Map<string, AsyncRunner>();
 
 interface ResourceStats {
   readers: number;
@@ -73,6 +81,11 @@ function isTimedOutResult(result: any) {
   return result && typeof result === 'object' && result.timedOut === true;
 }
 
+function summarizeError(error: any) {
+  const message = error instanceof Error ? error.message : String(error || 'Unknown error');
+  return message.length > 500 ? `${message.slice(0, 497)}...` : message;
+}
+
 function getNextAction(status: string) {
   if (status === 'queued' || status === 'running') {
     return 'Poll get_tool_job_status or get_tool_job_log; call cancel_tool_job to stop the job.';
@@ -97,6 +110,21 @@ function getLastLog(jobId: string) {
   return log.length > 4000 ? log.slice(-4000) : log;
 }
 
+function buildJobSummary(job: ReturnType<typeof getJob>) {
+  if (!job) return null;
+  return {
+    jobId: job.jobId,
+    toolName: job.toolName,
+    status: job.status,
+    resourceKey: job.resourceKey,
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt,
+    waitMs: job.waitMs,
+    durationMs: job.durationMs,
+    failureSummary: job.failureSummary
+  };
+}
+
 export function getQueueMetrics() {
   const activeJobsList = Array.from(activeJobs.values()).map(a => ({
     jobId: a.entry.jobId,
@@ -104,13 +132,32 @@ export function getQueueMetrics() {
     resourceKey: a.entry.resourceKey,
     toolName: a.entry.toolName
   }));
+  const recentJobs = listRecentJobs(50);
+  const terminalJobs = recentJobs.filter(job => ['succeeded', 'failed', 'timed_out', 'cancelled'].includes(job.status));
+  const failedJobs = terminalJobs.filter(job => job.status === 'failed' || job.status === 'timed_out');
+  const waitSamples = recentJobs.map(job => job.waitMs).filter((value): value is number => typeof value === 'number');
+  const runSamples = recentJobs.map(job => job.durationMs).filter((value): value is number => typeof value === 'number');
+  const average = (values: number[]) => values.length ? Math.round(values.reduce((sum, value) => sum + value, 0) / values.length) : 0;
   
   return {
     queueLength: queue.length,
     activeJobs: activeJobs.size,
     queue: queue.map(q => ({ jobId: q.jobId, kind: q.kind, resourceKey: q.resourceKey })),
     active: activeJobsList,
-    resources: Object.fromEntries(Array.from(activeResources.entries()))
+    resources: Object.fromEntries(Array.from(activeResources.entries())),
+    metrics: {
+      completedJobs: terminalJobs.length,
+      failedJobs: failedJobs.length,
+      averageWaitMs: average(waitSamples),
+      averageRunMs: average(runSamples),
+      failures: failedJobs.slice(0, 10).map(job => ({
+        jobId: job.jobId,
+        toolName: job.toolName,
+        status: job.status,
+        failureSummary: job.failureSummary || getLastLog(job.jobId).slice(-500)
+      }))
+    },
+    recentJobs: recentJobs.map(buildJobSummary).filter(Boolean)
   };
 }
 
@@ -139,7 +186,7 @@ export function cancelToolJob(jobId: string) {
   if (qIdx >= 0) {
     queue.splice(qIdx, 1);
     appendJobLog(jobId, 'stderr', '\n[Job Cancelled] Cancelled before start.\n');
-    updateJobStatus(jobId, { status: 'cancelled' });
+    updateJobStatus(jobId, { status: 'cancelled', failureSummary: 'Cancelled before start.' });
     return true;
   }
   
@@ -149,7 +196,7 @@ export function cancelToolJob(jobId: string) {
       active.cancelFn();
     }
     appendJobLog(jobId, 'stderr', '\n[Job Cancelled] Cancellation requested.\n');
-    updateJobStatus(jobId, { status: 'cancelled' });
+    updateJobStatus(jobId, { status: 'cancelled', failureSummary: 'Cancellation requested.' });
     return true;
   }
   
@@ -251,8 +298,11 @@ async function startJob(entry: QueueEntry) {
 
   try {
     let result: any;
+    const testRunner = testRunners.get(entry.toolName);
     
-    if (entry.toolName === 'run_project_command') {
+    if (testRunner) {
+      result = await testRunner(entry.state, entry.args, logger, (cancelFn) => setJobActiveContext(entry.jobId, cancelFn));
+    } else if (entry.toolName === 'run_project_command') {
       result = await runProjectCommandAsync(entry.state, entry.args, logger, (cancelFn) => setJobActiveContext(entry.jobId, cancelFn));
     } else if (entry.toolName === 'apply_patch') {
       result = await applyLocalPatchAsync(entry.state, entry.args, logger, (cancelFn) => setJobActiveContext(entry.jobId, cancelFn));
@@ -267,7 +317,7 @@ async function startJob(entry: QueueEntry) {
     if (currentStatus === 'cancelled' || currentStatus === 'timed_out') {
       // Don't overwrite cancelled/timed_out status
     } else if (isTimedOutResult(result)) {
-      updateJobStatus(entry.jobId, { status: 'timed_out' });
+      updateJobStatus(entry.jobId, { status: 'timed_out', failureSummary: 'Job timed out.' });
       writeJobResult(entry.jobId, result);
       logger.stderr(`\n[Job Timed Out]\n`);
     } else {
@@ -279,10 +329,10 @@ async function startJob(entry: QueueEntry) {
     if (currentStatus === 'cancelled') {
       // Ignore
     } else if (error.name === 'AbortError' || error.message.includes('ETIMEDOUT') || error.code === 'ETIMEDOUT') {
-      updateJobStatus(entry.jobId, { status: 'timed_out' });
+      updateJobStatus(entry.jobId, { status: 'timed_out', failureSummary: summarizeError(error) });
       logger.stderr(`\n[Job Timed Out]`);
     } else {
-      updateJobStatus(entry.jobId, { status: 'failed' });
+      updateJobStatus(entry.jobId, { status: 'failed', failureSummary: summarizeError(error) });
       logger.stderr(`\n[Job Failed] ${error.message}\n${error.stack || ''}`);
     }
   } finally {
@@ -295,6 +345,7 @@ async function startJob(entry: QueueEntry) {
 }
 
 export function getJobMetrics() {
+  const queueMetrics = getQueueMetrics();
   return {
     queueDepth: queue.length,
     activeJobs: Array.from(activeJobs.entries()).map(([jobId, data]) => ({
@@ -310,6 +361,15 @@ export function getJobMetrics() {
       resourceKey: q.resourceKey,
       kind: q.kind
     })),
-    recentJobs: listRecentJobs(50)
+    metrics: queueMetrics.metrics,
+    recentJobs: queueMetrics.recentJobs
   };
+}
+
+export function __setToolJobTestRunner(toolName: string, runner: AsyncRunner | null) {
+  if (runner) {
+    testRunners.set(toolName, runner);
+  } else {
+    testRunners.delete(toolName);
+  }
 }

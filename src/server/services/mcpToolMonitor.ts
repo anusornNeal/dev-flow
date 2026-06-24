@@ -1,6 +1,10 @@
+import db from '../../db/index';
+import { getJobMetrics } from './mcpToolJobService';
+
 const MAX_RECORDS = 500;
 const DEFAULT_WINDOW_MS = 10 * 60 * 1000;
 const DUPLICATE_WINDOW_MS = 60 * 1000;
+const STALE_AGENT_RUN_MS = 30 * 60 * 1000;
 
 interface ToolCallInput {
   toolName: string;
@@ -28,6 +32,25 @@ function hashText(value: string) {
     hash = ((hash << 5) + hash) ^ value.charCodeAt(index);
   }
   return (hash >>> 0).toString(16);
+}
+
+function getActiveAgentRuns(now = Date.now()) {
+  const rows = db.prepare(`
+    SELECT id, taskId, projectId, agent, model, effort, status, createdAt, startedAt, endedAt, errorMessage, triggerSource
+    FROM agent_runs
+    WHERE status IN ('queued', 'starting', 'running')
+    ORDER BY createdAt ASC
+  `).all() as any[];
+
+  return rows.map((run) => {
+    const startedOrCreated = Date.parse(run.startedAt || run.createdAt || '') || now;
+    const ageMs = Math.max(0, now - startedOrCreated);
+    return {
+      ...run,
+      ageMs,
+      stale: ageMs > STALE_AGENT_RUN_MS,
+    };
+  });
 }
 
 export function clearToolCallRecords() {
@@ -91,6 +114,9 @@ export function getToolCallSummary(options?: { now?: number; windowMs?: number }
   if (duplicateBursts.some((entry) => ['get_git_status', 'get_git_branch'].includes(entry.toolName))) {
     recommendations.push('Replace repeated get_git_status/get_git_branch calls with get_project_start_context for startup context.');
   }
+  if (duplicateBursts.some((entry) => ['search_local_files', 'get_repo_inspection_index'].includes(entry.toolName))) {
+    recommendations.push('Reuse get_repo_inspection_index results before issuing repeated repo searches.');
+  }
 
   return {
     windowMs,
@@ -108,6 +134,50 @@ export function getToolCallSummary(options?: { now?: number; windowMs?: number }
       inputHash: record.inputHash,
       timestamp: new Date(record.timestamp).toISOString(),
     })),
+    recommendations,
+  };
+}
+
+export function getDevFlowDiagnostics(options?: { now?: number; windowMs?: number }) {
+  const now = options?.now ?? Date.now();
+  const toolSummary = getToolCallSummary({ now, windowMs: options?.windowMs });
+  const jobMetrics = getJobMetrics();
+  const activeAgentRuns = getActiveAgentRuns(now);
+  const staleAgentRuns = activeAgentRuns.filter((run) => run.stale);
+  const recentFailures = db.prepare(`
+    SELECT id, taskId, projectId, agent, status, endedAt, errorMessage, triggerSource
+    FROM agent_runs
+    WHERE status IN ('failed', 'cancelled')
+    ORDER BY COALESCE(endedAt, createdAt) DESC
+    LIMIT 10
+  `).all() as any[];
+
+  const recommendations = [...toolSummary.recommendations];
+  if ((jobMetrics as any).queueDepth > 0) {
+    recommendations.push('MCP tool jobs are queued; inspect get_tool_job_status/log for the oldest queued job.');
+  }
+  if (staleAgentRuns.length > 0) {
+    recommendations.push('Some agent runs are stale; cancel or retry them before starting more work on the same task.');
+  }
+
+  return {
+    generatedAt: new Date(now).toISOString(),
+    mcp: {
+      queueDepth: (jobMetrics as any).queueDepth,
+      activeJobs: (jobMetrics as any).activeJobs,
+      queuedJobs: (jobMetrics as any).queuedJobs,
+      activeResources: (jobMetrics as any).activeResources,
+      metrics: (jobMetrics as any).metrics,
+      recentJobs: (jobMetrics as any).recentJobs,
+    },
+    agents: {
+      activeCount: activeAgentRuns.length,
+      staleCount: staleAgentRuns.length,
+      activeRuns: activeAgentRuns,
+      staleRuns: staleAgentRuns,
+      recentFailures,
+    },
+    tools: toolSummary,
     recommendations,
   };
 }

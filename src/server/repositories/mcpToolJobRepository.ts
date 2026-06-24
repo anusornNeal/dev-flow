@@ -10,6 +10,11 @@ export interface McpToolJob {
   status: JobStatus;
   createdAt: string;
   updatedAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  waitMs?: number;
+  durationMs?: number;
+  failureSummary?: string;
   args: any;
   resourceKey: string;
 }
@@ -17,6 +22,9 @@ export interface McpToolJob {
 const JOBS_DIR = path.resolve(getDevFlowAppRoot(), '.devflow', 'jobs');
 const SECRET_KEY_PATTERN = /(token|secret|password|pass|apikey|api_key|authorization|cookie)/i;
 const MAX_LOG_READ_BYTES = 200_000;
+const MAX_JOB_AGE_MS = 24 * 60 * 60 * 1000;
+const CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
+const TERMINAL_STATUSES: JobStatus[] = ['succeeded', 'failed', 'timed_out', 'cancelled'];
 
 function redactValue(value: any): any {
   if (Array.isArray(value)) return value.map(redactValue);
@@ -55,6 +63,11 @@ function readTail(filePath: string, maxBytes: number) {
   } finally {
     fs.closeSync(fd);
   }
+}
+
+function toTimestamp(value: string | undefined, fallback: string) {
+  const time = Date.parse(value || fallback);
+  return Number.isFinite(time) ? time : Date.parse(fallback);
 }
 
 export function createJob(jobId: string, toolName: string, args: any, resourceKey: string): McpToolJob {
@@ -97,7 +110,22 @@ export function getJob(jobId: string): McpToolJob | null {
 export function updateJobStatus(jobId: string, updates: Partial<McpToolJob>): McpToolJob | null {
   const job = getJob(jobId);
   if (!job) return null;
-  const updated = { ...job, ...updates, updatedAt: new Date().toISOString() };
+
+  const now = new Date();
+  const nowIso = now.toISOString();
+  const updated: McpToolJob = { ...job, ...updates, updatedAt: nowIso };
+
+  if (updates.status === 'running' && !job.startedAt) {
+    updated.startedAt = nowIso;
+    updated.waitMs = Math.max(0, now.getTime() - toTimestamp(job.createdAt, nowIso));
+  }
+
+  if (updates.status && TERMINAL_STATUSES.includes(updates.status)) {
+    updated.completedAt = nowIso;
+    const startTime = toTimestamp(updated.startedAt || job.startedAt, job.createdAt || nowIso);
+    updated.durationMs = Math.max(0, now.getTime() - startTime);
+  }
+
   fs.writeFileSync(path.join(getJobDir(jobId), 'status.json'), JSON.stringify(updated, null, 2));
   return updated;
 }
@@ -151,10 +179,6 @@ export function readJobResult(jobId: string): any {
   }
 }
 
-const MAX_JOB_AGE_MS = 24 * 60 * 60 * 1000;
-const CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
-const TERMINAL_STATUSES: JobStatus[] = ['succeeded', 'failed', 'timed_out', 'cancelled'];
-
 export function cleanupOldJobs() {
   ensureJobsDir();
   try {
@@ -190,7 +214,10 @@ export function listInterruptedJobs(): McpToolJob[] {
     
     const job = getJob(dir);
     if (job && (job.status === 'queued' || job.status === 'running')) {
-      const updated = updateJobStatus(job.jobId, { status: 'failed' });
+      const updated = updateJobStatus(job.jobId, {
+        status: 'failed',
+        failureSummary: 'Server restarted before this job completed.'
+      });
       appendJobLog(job.jobId, 'stderr', '\n[Job Interrupted] Server restarted before this job completed.\n');
       if (updated) interrupted.push(updated);
     }

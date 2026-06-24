@@ -1,5 +1,5 @@
 import { getProject } from './projectRepository.js';
-import db from '../../db/index';
+import db, { withDbTransaction } from '../../db/index';
 import type { AppState } from '../types';
 import { ACTIVE_AGENT_RUN_STATUSES, type AgentRun } from './agentRunRepository';
 import { normalizeTaskCategoryAndTags } from '../services/taskService';
@@ -59,12 +59,21 @@ const TASK_UPSERT_SQL = `
     repoContext = excluded.repoContext,
     jiraKey = excluded.jiraKey,
     repo = excluded.repo,
-    createdAt = excluded.createdAt,
+    createdAt = COALESCE(tasks.createdAt, excluded.createdAt),
     updatedAt = excluded.updatedAt,
     logs = excluded.logs,
     designImages = excluded.designImages,
     images = excluded.images
 `;
+
+export class StaleTaskUpdateError extends Error {
+  code = 'STALE_TASK_UPDATE';
+
+  constructor(taskId: string) {
+    super(`Task '${taskId}' has changed since it was read.`);
+    this.name = 'StaleTaskUpdateError';
+  }
+}
 
 let categoryColumnEnsured = false;
 
@@ -87,12 +96,12 @@ export function loadCounters(state: AppState) {
 }
 
 function saveCounters(state: AppState) {
-  const stmt = db.prepare('INSERT OR REPLACE INTO counters (prefix, count) VALUES (?, ?)');
-  db.transaction(() => {
+  const stmt = db.prepare('INSERT INTO counters (prefix, count) VALUES (?, ?) ON CONFLICT(prefix) DO UPDATE SET count = excluded.count');
+  withDbTransaction(() => {
     for (const [prefix, count] of Object.entries(state.countersCache)) {
       stmt.run(prefix, count);
     }
-  })();
+  });
 }
 
 export function generateDisplayId(state: AppState, projectId: string): string {
@@ -109,35 +118,41 @@ export function generateDisplayId(state: AppState, projectId: string): string {
 
   if (!prefix) prefix = 'task';
 
-  let maxNum = state.countersCache[prefix] || 0;
-  
-  const tasksWithPrefix = db.prepare(`SELECT displayId FROM tasks WHERE displayId LIKE ?`).all(`${prefix}-%`) as any[];
-  for (const task of tasksWithPrefix) {
-    if (task.displayId) {
-      const numPart = task.displayId.split('-').pop();
-      if (numPart && !Number.isNaN(parseInt(numPart, 10))) {
-        maxNum = Math.max(maxNum, parseInt(numPart, 10));
+  return withDbTransaction(() => {
+    let maxNum = state.countersCache[prefix] || 0;
+    
+    const tasksWithPrefix = db.prepare(`SELECT displayId FROM tasks WHERE displayId LIKE ?`).all(`${prefix}-%`) as any[];
+    for (const task of tasksWithPrefix) {
+      if (task.displayId) {
+        const numPart = task.displayId.split('-').pop();
+        if (numPart && !Number.isNaN(parseInt(numPart, 10))) {
+          maxNum = Math.max(maxNum, parseInt(numPart, 10));
+        }
       }
     }
-  }
-  
-  state.countersCache[prefix] = maxNum;
+    
+    state.countersCache[prefix] = maxNum;
 
-  let newId = '';
-  const checkStmt = db.prepare('SELECT id FROM tasks WHERE displayId = ?');
-  do {
-    state.countersCache[prefix] += 1;
-    newId = `${prefix}-${state.countersCache[prefix].toString().padStart(4, '0')}`;
-  } while (checkStmt.get(newId));
+    let newId = '';
+    const checkStmt = db.prepare('SELECT id FROM tasks WHERE displayId = ?');
+    do {
+      state.countersCache[prefix] += 1;
+      newId = `${prefix}-${state.countersCache[prefix].toString().padStart(4, '0')}`;
+    } while (checkStmt.get(newId));
 
-  saveCounters(state);
-  return newId;
+    saveCounters(state);
+    return newId;
+  });
 }
 
 function parseJsonArray(value: unknown): any[] {
   if (!value || typeof value !== 'string') return [];
-  const parsed = JSON.parse(value);
-  return Array.isArray(parsed) ? parsed : [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
 }
 
 function parseTaskRow(item: any, runsByTaskId: Map<string, AgentRun[]>) {
@@ -145,9 +160,9 @@ function parseTaskRow(item: any, runsByTaskId: Map<string, AgentRun[]>) {
   const task = {
     ...item,
     tags: parsedTags,
-    targetFiles: item.targetFiles ? JSON.parse(item.targetFiles) : undefined,
-    checklist: item.checklist ? JSON.parse(item.checklist) : undefined,
-    logs: item.logs ? JSON.parse(item.logs) : undefined,
+    targetFiles: parseJsonArray(item.targetFiles),
+    checklist: parseJsonArray(item.checklist),
+    logs: parseJsonArray(item.logs),
     images: (() => {
       const imgs = parseJsonArray(item.images);
       const legacy = parseJsonArray(item.designImages);
@@ -284,19 +299,39 @@ function serializeTaskForRow(item: any) {
 
 export function saveTask(task: any) {
   ensureTaskCategoryColumn();
-  db.prepare(TASK_UPSERT_SQL).run(...serializeTaskForRow(task));
+  withDbTransaction(() => {
+    db.prepare(TASK_UPSERT_SQL).run(...serializeTaskForRow(task));
+  });
+}
+
+export function saveTaskWithExpectedUpdatedAt(task: any, expectedUpdatedAt: string | null | undefined) {
+  ensureTaskCategoryColumn();
+  return withDbTransaction(() => {
+    const existing = db.prepare('SELECT updatedAt FROM tasks WHERE id = ?').get(task.id) as { updatedAt?: string | null } | undefined;
+    if (existing && expectedUpdatedAt !== undefined && (existing.updatedAt || null) !== (expectedUpdatedAt || null)) {
+      throw new StaleTaskUpdateError(task.id);
+    }
+    db.prepare(TASK_UPSERT_SQL).run(...serializeTaskForRow(task));
+    return getTask(task.id);
+  });
 }
 
 export function deleteTask(taskId: string) {
-  db.prepare('DELETE FROM tasks WHERE id = ?').run(taskId);
+  withDbTransaction(() => {
+    db.prepare('DELETE FROM tasks WHERE id = ?').run(taskId);
+  });
 }
 
 export function deleteTasksByIds(taskIds: string[]) {
   if (taskIds.length === 0) return;
   const placeholders = taskIds.map(() => '?').join(',');
-  db.prepare(`DELETE FROM tasks WHERE id IN (${placeholders})`).run(...taskIds);
+  withDbTransaction(() => {
+    db.prepare(`DELETE FROM tasks WHERE id IN (${placeholders})`).run(...taskIds);
+  });
 }
 
 export function deleteTasksByProjectId(projectId: string) {
-  db.prepare('DELETE FROM tasks WHERE projectId = ?').run(projectId);
+  withDbTransaction(() => {
+    db.prepare('DELETE FROM tasks WHERE projectId = ?').run(projectId);
+  });
 }

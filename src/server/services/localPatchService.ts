@@ -8,12 +8,25 @@ import { resolveProjectRoot, resolveSafePath } from './localFileService';
 const DEFAULT_MAX_PATCH_BYTES = 100_000;
 const DEFAULT_MAX_SUMMARY_BYTES = 5_000;
 
+export interface LocalPatchChangedFile {
+  path: string;
+  exists: boolean;
+  sizeBytes: number | null;
+}
+
 export interface LocalPatchResult {
   changedFiles: string[];
+  changedFileCount: number;
+  changedFileMetadata: LocalPatchChangedFile[];
   dryRun: boolean;
   applied: boolean;
   exitCode: number | null;
   summary: string;
+  diagnostics: {
+    output: string;
+    truncated: boolean;
+    maxBytes: number;
+  };
   truncated: boolean;
 }
 
@@ -68,6 +81,22 @@ function assertRealPathInsideRoot(root: string, targetPath: string, relativePath
   }
 }
 
+function resolvePatchLimits(args: Record<string, any>) {
+  const maxPatchBytes = Number.isFinite(Number(args.maxPatchBytes))
+    ? Math.max(1, Math.min(1_000_000, Number(args.maxPatchBytes)))
+    : DEFAULT_MAX_PATCH_BYTES;
+  const maxSummaryBytes = Number.isFinite(Number(args.maxSummaryBytes))
+    ? Math.max(1, Math.min(100_000, Number(args.maxSummaryBytes)))
+    : DEFAULT_MAX_SUMMARY_BYTES;
+  return { maxPatchBytes, maxSummaryBytes };
+}
+
+function assertPatchSize(patch: string, maxPatchBytes: number) {
+  if (Buffer.byteLength(patch, 'utf8') > maxPatchBytes) {
+    throw createApiError(400, 'PATCH_TOO_LARGE', `patch must be ${maxPatchBytes} bytes or smaller.`);
+  }
+}
+
 export function validatePatchPaths(root: string, patch: string) {
   if (/^GIT binary patch$/m.test(patch) || /^Binary files .+ differ$/m.test(patch)) {
     throw createApiError(400, 'BINARY_PATCH_UNSUPPORTED', 'Binary patches are not supported.');
@@ -109,6 +138,48 @@ export function validatePatchPaths(root: string, patch: string) {
   return Array.from(changedFiles).sort();
 }
 
+function buildChangedFileMetadata(root: string, changedFiles: string[]): LocalPatchChangedFile[] {
+  return changedFiles.map((relativePath) => {
+    const targetPath = resolveSafePath(root, relativePath);
+    if (!fs.existsSync(targetPath)) {
+      return { path: relativePath, exists: false, sizeBytes: null };
+    }
+    const stat = fs.statSync(targetPath);
+    return { path: relativePath, exists: true, sizeBytes: stat.isFile() ? stat.size : null };
+  });
+}
+
+function buildPatchResult(params: {
+  root: string;
+  changedFiles: string[];
+  dryRun: boolean;
+  applied: boolean;
+  exitCode: number | null;
+  output: string;
+  maxSummaryBytes: number;
+}): LocalPatchResult {
+  const summarySource = [
+    `${params.dryRun ? 'Checked' : 'Applied'} patch for ${params.changedFiles.length} file(s): ${params.changedFiles.join(', ')}`,
+    params.output,
+  ].filter(Boolean).join('\n');
+  const summary = truncateOutput(summarySource, params.maxSummaryBytes);
+  return {
+    changedFiles: params.changedFiles,
+    changedFileCount: params.changedFiles.length,
+    changedFileMetadata: buildChangedFileMetadata(params.root, params.changedFiles),
+    dryRun: params.dryRun,
+    applied: params.applied,
+    exitCode: params.exitCode,
+    summary: summary.value,
+    diagnostics: {
+      output: summary.value,
+      truncated: summary.truncated,
+      maxBytes: params.maxSummaryBytes,
+    },
+    truncated: summary.truncated,
+  };
+}
+
 export function applyLocalPatch(state: AppState, args: Record<string, any>): LocalPatchResult {
   const root = resolveProjectRoot(state, args);
   const patch = typeof args.patch === 'string' ? args.patch : '';
@@ -116,12 +187,8 @@ export function applyLocalPatch(state: AppState, args: Record<string, any>): Loc
     throw createApiError(400, 'PATCH_REQUIRED', 'patch is required.');
   }
 
-  const maxPatchBytes = Number.isFinite(Number(args.maxPatchBytes))
-    ? Math.max(1, Math.min(1_000_000, Number(args.maxPatchBytes)))
-    : DEFAULT_MAX_PATCH_BYTES;
-  if (Buffer.byteLength(patch, 'utf8') > maxPatchBytes) {
-    throw createApiError(400, 'PATCH_TOO_LARGE', `patch must be ${maxPatchBytes} bytes or smaller.`);
-  }
+  const { maxPatchBytes, maxSummaryBytes } = resolvePatchLimits(args);
+  assertPatchSize(patch, maxPatchBytes);
 
   const changedFiles = validatePatchPaths(root, patch);
   const dryRun = normalizePatchFlag(args.dryRun ?? args.check);
@@ -135,52 +202,45 @@ export function applyLocalPatch(state: AppState, args: Record<string, any>): Loc
   });
 
   const output = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
-  const summarySource = [
-    `${dryRun ? 'Checked' : 'Applied'} patch for ${changedFiles.length} file(s): ${changedFiles.join(', ')}`,
+  const patchResult = buildPatchResult({
+    root,
+    changedFiles,
+    dryRun,
+    applied: !dryRun,
+    exitCode: result.status,
     output,
-  ].filter(Boolean).join('\n');
-  const maxSummaryBytes = Number.isFinite(Number(args.maxSummaryBytes))
-    ? Math.max(1, Math.min(100_000, Number(args.maxSummaryBytes)))
-    : DEFAULT_MAX_SUMMARY_BYTES;
-  const summary = truncateOutput(summarySource, maxSummaryBytes);
+    maxSummaryBytes,
+  });
 
   if (result.error || result.status !== 0) {
     throw createApiError(400, 'PATCH_APPLY_FAILED', dryRun ? 'Patch check failed.' : 'Patch apply failed.', {
       details: {
         changedFiles,
+        changedFileCount: changedFiles.length,
+        changedFileMetadata: patchResult.changedFileMetadata,
         dryRun,
+        applied: false,
         exitCode: result.status,
-        output: summary.value,
-        truncated: summary.truncated,
+        output: patchResult.summary,
+        truncated: patchResult.truncated,
+        retryable: true,
       },
     });
   }
 
-  return {
-    changedFiles,
-    dryRun,
-    applied: !dryRun,
-    exitCode: result.status,
-    summary: summary.value,
-    truncated: summary.truncated,
-  };
+  return patchResult;
 }
 
 export async function applyLocalPatchAsync(state: AppState, args: Record<string, any>, logger: { stdout: (data: string) => void, stderr: (data: string) => void }, setCancelFn: (fn: () => void) => void): Promise<LocalPatchResult> {
   const root = resolveProjectRoot(state, args);
-  const patch = String(args.patch || '').trim();
+  const patch = typeof args.patch === 'string' ? args.patch : '';
   const dryRun = normalizePatchFlag(args.dryRun ?? args.check);
 
-  if (!patch) throw createApiError(400, 'MISSING_PATCH_CONTENT', 'Patch content is required.');
+  if (!patch.trim()) throw createApiError(400, 'MISSING_PATCH_CONTENT', 'Patch content is required.');
 
-  const changedFiles: string[] = [];
-  const lines = patch.split('\n');
-  for (const line of lines) {
-    if (line.startsWith('+++ b/')) {
-      changedFiles.push(line.slice(6).trim());
-    }
-  }
-
+  const { maxPatchBytes, maxSummaryBytes } = resolvePatchLimits(args);
+  assertPatchSize(patch, maxPatchBytes);
+  const changedFiles = validatePatchPaths(root, patch);
   const gitArgs = ['apply', dryRun ? '--check' : '--whitespace=nowarn'];
   
   return new Promise((resolve, reject) => {
@@ -215,31 +275,34 @@ export async function applyLocalPatchAsync(state: AppState, args: Record<string,
 
     child.on('close', (code) => {
       const output = [stdoutBuffer, stderrBuffer].filter(Boolean).join('\n').trim();
-      const summarySource = [
-        `${dryRun ? 'Checked' : 'Applied'} patch for ${changedFiles.length} file(s): ${changedFiles.join(', ')}`,
-        output,
-      ].filter(Boolean).join('\n');
-      
-      const maxSummaryBytes = Number.isFinite(Number(args.maxSummaryBytes))
-        ? Math.max(1, Math.min(100_000, Number(args.maxSummaryBytes)))
-        : DEFAULT_MAX_SUMMARY_BYTES;
-      const summary = truncateOutput(summarySource, maxSummaryBytes);
-
-      if (code !== 0) {
-        reject(createApiError(400, 'PATCH_APPLY_FAILED', dryRun ? 'Patch check failed.' : 'Patch apply failed.', {
-          details: { changedFiles, dryRun, exitCode: code, output: summary.value, truncated: summary.truncated }
-        }));
-        return;
-      }
-
-      resolve({
+      const patchResult = buildPatchResult({
+        root,
         changedFiles,
         dryRun,
         applied: !dryRun,
         exitCode: code,
-        summary: summary.value,
-        truncated: summary.truncated,
+        output,
+        maxSummaryBytes,
       });
+
+      if (code !== 0) {
+        reject(createApiError(400, 'PATCH_APPLY_FAILED', dryRun ? 'Patch check failed.' : 'Patch apply failed.', {
+          details: {
+            changedFiles,
+            changedFileCount: changedFiles.length,
+            changedFileMetadata: patchResult.changedFileMetadata,
+            dryRun,
+            applied: false,
+            exitCode: code,
+            output: patchResult.summary,
+            truncated: patchResult.truncated,
+            retryable: true,
+          }
+        }));
+        return;
+      }
+
+      resolve(patchResult);
     });
 
     // Write patch to stdin
@@ -248,4 +311,3 @@ export async function applyLocalPatchAsync(state: AppState, args: Record<string,
     });
   });
 }
-

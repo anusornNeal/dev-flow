@@ -1,4 +1,5 @@
-export type RunStatus = 'success' | 'failed' | 'cancelled' | 'running';
+export type AgentRunLifecycleStatus = 'queued' | 'starting' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+export type CompletionStatus = 'success' | 'succeeded' | 'failed' | 'cancelled';
 
 export interface AgentRunLike {
   id: string;
@@ -8,11 +9,22 @@ export interface AgentRunLike {
   [key: string]: unknown;
 }
 
-const KNOWN_STATUSES: ReadonlySet<string> = new Set(['success', 'failed', 'cancelled', 'running']);
+const ACTIVE_STATUSES: ReadonlySet<AgentRunLifecycleStatus> = new Set(['queued', 'starting', 'running']);
+const TERMINAL_STATUSES: ReadonlySet<AgentRunLifecycleStatus> = new Set(['succeeded', 'failed', 'cancelled']);
+const KNOWN_STATUSES: ReadonlySet<string> = new Set([...ACTIVE_STATUSES, ...TERMINAL_STATUSES, 'success']);
 
-export function normalizeRunStatus(status: string | undefined | null): RunStatus {
+export function normalizeRunStatus(status: string | undefined | null): AgentRunLifecycleStatus {
   if (!status) return 'failed';
-  return KNOWN_STATUSES.has(status) ? (status as RunStatus) : 'failed';
+  if (status === 'success') return 'succeeded';
+  return KNOWN_STATUSES.has(status) ? (status as AgentRunLifecycleStatus) : 'failed';
+}
+
+export function isActiveRun(run: AgentRunLike): boolean {
+  return ACTIVE_STATUSES.has(normalizeRunStatus(run.status));
+}
+
+export function isTerminalRun(run: AgentRunLike): boolean {
+  return TERMINAL_STATUSES.has(normalizeRunStatus(run.status));
 }
 
 export function canRetryRun(run: AgentRunLike): boolean {
@@ -20,11 +32,16 @@ export function canRetryRun(run: AgentRunLike): boolean {
 }
 
 export function canCancelRun(run: AgentRunLike): boolean {
-  return normalizeRunStatus(run.status) === 'running';
+  return isActiveRun(run);
+}
+
+export function canApplyCompletion(run: AgentRunLike, expectedRunId?: string | null): boolean {
+  if (expectedRunId && run.id !== expectedRunId) return false;
+  return isActiveRun(run);
 }
 
 export interface CompletionInput {
-  status: 'success' | 'failed' | 'cancelled';
+  status: CompletionStatus;
   summary: string;
   changedFiles?: string[];
   notes?: string;
@@ -35,11 +52,15 @@ export interface CompletionValidation {
   reason?: string;
 }
 
+export function normalizeCompletionStatus(status: CompletionStatus): 'success' | 'failed' | 'cancelled' {
+  return status === 'succeeded' ? 'success' : status;
+}
+
 export function validateCompletion(input: CompletionInput): CompletionValidation {
   if (!input.summary || input.summary.trim().length === 0) {
     return { ok: false, reason: 'Completion summary is required.' };
   }
-  if (!KNOWN_STATUSES.has(input.status)) {
+  if (!['success', 'succeeded', 'failed', 'cancelled'].includes(input.status)) {
     return { ok: false, reason: `Unknown completion status: ${input.status}` };
   }
   return { ok: true };

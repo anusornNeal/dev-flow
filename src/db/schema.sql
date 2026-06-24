@@ -40,6 +40,13 @@ CREATE TABLE IF NOT EXISTS tasks (
   images TEXT -- JSON string
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_project_display_id_unique
+  ON tasks(projectId, displayId)
+  WHERE projectId IS NOT NULL AND displayId IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_tasks_project_status ON tasks(projectId, status);
+CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parentId);
+CREATE INDEX IF NOT EXISTS idx_tasks_updated_at ON tasks(updatedAt);
+
 CREATE TABLE IF NOT EXISTS agent_runs (
   id TEXT PRIMARY KEY,
   taskId TEXT NOT NULL,
@@ -62,6 +69,8 @@ CREATE TABLE IF NOT EXISTS agent_runs (
 CREATE INDEX IF NOT EXISTS idx_agent_runs_task_status ON agent_runs(taskId, status);
 CREATE INDEX IF NOT EXISTS idx_agent_runs_project_status ON agent_runs(projectId, status);
 CREATE INDEX IF NOT EXISTS idx_agent_runs_project_agent_status ON agent_runs(projectId, agent, status);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_task_created ON agent_runs(taskId, createdAt DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_retry_of ON agent_runs(retryOfRunId);
 
 CREATE TABLE IF NOT EXISTS counters (
   prefix TEXT PRIMARY KEY,

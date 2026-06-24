@@ -1,4 +1,4 @@
-import db from '../../db/index';
+import db, { withDbTransaction } from '../../db/index';
 
 export const AGENT_RUN_STATUSES = ['queued', 'starting', 'running', 'succeeded', 'failed', 'cancelled'] as const;
 export const ACTIVE_AGENT_RUN_STATUSES = ['queued', 'starting', 'running'] as const;
@@ -59,36 +59,38 @@ export function canTransitionAgentRunStatus(from: AgentRunStatus, to: AgentRunSt
 }
 
 export function createAgentRun(input: CreateAgentRunInput): AgentRun {
-  const run: AgentRun = {
-    id: createRunId(),
-    taskId: input.taskId,
-    projectId: input.projectId,
-    agent: input.agent,
-    model: input.model || null,
-    effort: input.effort || null,
-    status: 'queued',
-    createdAt: new Date().toISOString(),
-    startedAt: null,
-    endedAt: null,
-    promptPath: input.promptPath || null,
-    contextRef: input.contextRef || null,
-    logPath: input.logPath || null,
-    errorMessage: null,
-    retryOfRunId: input.retryOfRunId || null,
-    triggerSource: input.triggerSource || null,
-  };
+  return withDbTransaction(() => {
+    const run: AgentRun = {
+      id: createRunId(),
+      taskId: input.taskId,
+      projectId: input.projectId,
+      agent: input.agent,
+      model: input.model || null,
+      effort: input.effort || null,
+      status: 'queued',
+      createdAt: new Date().toISOString(),
+      startedAt: null,
+      endedAt: null,
+      promptPath: input.promptPath || null,
+      contextRef: input.contextRef || null,
+      logPath: input.logPath || null,
+      errorMessage: null,
+      retryOfRunId: input.retryOfRunId || null,
+      triggerSource: input.triggerSource || null,
+    };
 
-  db.prepare(`
-    INSERT INTO agent_runs (
-      id, taskId, projectId, agent, model, effort, status, createdAt, startedAt, endedAt,
-      promptPath, contextRef, logPath, errorMessage, retryOfRunId, triggerSource
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    run.id, run.taskId, run.projectId, run.agent, run.model, run.effort, run.status, run.createdAt, run.startedAt, run.endedAt,
-    run.promptPath, run.contextRef, run.logPath, run.errorMessage, run.retryOfRunId, run.triggerSource,
-  );
+    db.prepare(`
+      INSERT INTO agent_runs (
+        id, taskId, projectId, agent, model, effort, status, createdAt, startedAt, endedAt,
+        promptPath, contextRef, logPath, errorMessage, retryOfRunId, triggerSource
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      run.id, run.taskId, run.projectId, run.agent, run.model, run.effort, run.status, run.createdAt, run.startedAt, run.endedAt,
+      run.promptPath, run.contextRef, run.logPath, run.errorMessage, run.retryOfRunId, run.triggerSource,
+    );
 
-  return run;
+    return run;
+  });
 }
 
 export function getAgentRun(runId: string): AgentRun | null {
@@ -166,54 +168,64 @@ export function updateAgentRunStatus(
   status: AgentRunStatus,
   patch: Partial<Pick<AgentRun, 'startedAt' | 'endedAt' | 'errorMessage' | 'promptPath' | 'contextRef' | 'logPath'>> = {},
 ): AgentRun | null {
-  const existing = getAgentRun(runId);
-  if (!existing) return null;
+  return withDbTransaction(() => {
+    const existing = getAgentRun(runId);
+    if (!existing) return null;
 
-  if (!canTransitionAgentRunStatus(existing.status, status)) {
-    return existing;
-  }
+    if (!canTransitionAgentRunStatus(existing.status, status)) {
+      return existing;
+    }
 
-  const isTerminalStatus = TERMINAL_AGENT_RUN_STATUSES.has(status);
-  const endedAt = isTerminalStatus
-    ? patch.endedAt || existing.endedAt || new Date().toISOString()
-    : patch.endedAt !== undefined ? patch.endedAt : existing.endedAt;
+    const isTerminalStatus = TERMINAL_AGENT_RUN_STATUSES.has(status);
+    const endedAt = isTerminalStatus
+      ? patch.endedAt || existing.endedAt || new Date().toISOString()
+      : patch.endedAt !== undefined ? patch.endedAt : existing.endedAt;
 
-  db.prepare(`
-    UPDATE agent_runs
-    SET status = ?, startedAt = ?, endedAt = ?, promptPath = ?, contextRef = ?, logPath = ?, errorMessage = ?
-    WHERE id = ? AND status = ?
-  `).run(
-    status,
-    patch.startedAt !== undefined ? patch.startedAt : existing.startedAt,
-    endedAt,
-    patch.promptPath !== undefined ? patch.promptPath : existing.promptPath,
-    patch.contextRef !== undefined ? patch.contextRef : existing.contextRef,
-    patch.logPath !== undefined ? patch.logPath : existing.logPath,
-    patch.errorMessage !== undefined ? patch.errorMessage : existing.errorMessage,
-    runId,
-    existing.status,
-  );
+    const result = db.prepare(`
+      UPDATE agent_runs
+      SET status = ?, startedAt = ?, endedAt = ?, promptPath = ?, contextRef = ?, logPath = ?, errorMessage = ?
+      WHERE id = ? AND status = ?
+    `).run(
+      status,
+      patch.startedAt !== undefined ? patch.startedAt : existing.startedAt,
+      endedAt,
+      patch.promptPath !== undefined ? patch.promptPath : existing.promptPath,
+      patch.contextRef !== undefined ? patch.contextRef : existing.contextRef,
+      patch.logPath !== undefined ? patch.logPath : existing.logPath,
+      patch.errorMessage !== undefined ? patch.errorMessage : existing.errorMessage,
+      runId,
+      existing.status,
+    );
 
-  return getAgentRun(runId);
+    if (result.changes === 0) {
+      return getAgentRun(runId);
+    }
+
+    return getAgentRun(runId);
+  });
 }
 
 export function cancelActiveRunsForTask(taskId: string, reason = 'cancelled manually'): number {
-  const now = new Date().toISOString();
-  const result = db.prepare(`
-    UPDATE agent_runs
-    SET status = 'cancelled', endedAt = ?, errorMessage = ?
-    WHERE taskId = ? AND status IN (${ACTIVE_AGENT_RUN_STATUSES.map(() => '?').join(',')})
-  `).run(now, reason, taskId, ...ACTIVE_AGENT_RUN_STATUSES);
-  return result.changes;
+  return withDbTransaction(() => {
+    const now = new Date().toISOString();
+    const result = db.prepare(`
+      UPDATE agent_runs
+      SET status = 'cancelled', endedAt = ?, errorMessage = ?
+      WHERE taskId = ? AND status IN (${ACTIVE_AGENT_RUN_STATUSES.map(() => '?').join(',')})
+    `).run(now, reason, taskId, ...ACTIVE_AGENT_RUN_STATUSES);
+    return result.changes;
+  });
 }
 
 export function cancelStaleActiveRuns(cutoffIso: string, reason = 'stale run cancelled'): number {
-  const now = new Date().toISOString();
-  const result = db.prepare(`
-    UPDATE agent_runs
-    SET status = 'cancelled', endedAt = ?, errorMessage = ?
-    WHERE status IN (${ACTIVE_AGENT_RUN_STATUSES.map(() => '?').join(',')})
-      AND COALESCE(startedAt, createdAt) < ?
-  `).run(now, reason, ...ACTIVE_AGENT_RUN_STATUSES, cutoffIso);
-  return result.changes;
+  return withDbTransaction(() => {
+    const now = new Date().toISOString();
+    const result = db.prepare(`
+      UPDATE agent_runs
+      SET status = 'cancelled', endedAt = ?, errorMessage = ?
+      WHERE status IN (${ACTIVE_AGENT_RUN_STATUSES.map(() => '?').join(',')})
+        AND COALESCE(startedAt, createdAt) < ?
+    `).run(now, reason, ...ACTIVE_AGENT_RUN_STATUSES, cutoffIso);
+    return result.changes;
+  });
 }

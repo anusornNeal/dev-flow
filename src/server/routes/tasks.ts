@@ -1,3 +1,4 @@
+import { AgentOrchestrationWorker } from '../services/agentOrchestrationWorker';
 import { getSettings } from '../repositories/settingsRepository.js';
 import { execFile } from 'child_process';
 import fs from 'fs';
@@ -198,7 +199,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
       return res.status(400).json({ error: 'Only a failed latest run can be retried.' });
     }
 
-    const result = triggerTaskAgent(task, deps, 'retry endpoint', latestRun.id);
+    const result = AgentOrchestrationWorker.trigger(task, deps, 'retry endpoint', latestRun.id);
     saveTask(task);
     if (!result.triggered) {
       const blockedResult = result as TriggerTaskAgentFailure;
@@ -212,7 +213,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     if (!task) return res.status(404).json({ error: 'Task not found' });
 
     const reason = typeof req.body?.reason === 'string' && req.body.reason.trim() ? req.body.reason.trim() : 'cancelled manually';
-    const cancelledCount = cancelActiveRunsForTask(task.id, reason);
+    const cancelledCount = AgentOrchestrationWorker.cancelRuns(task.id, reason);
     if (cancelledCount > 0) {
       task.status = 'todo';
       task.updatedAt = new Date().toISOString();
@@ -267,7 +268,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     }
 
     try {
-      const result = applyAgentCompletionCallback(task, run, deps, payload);
+      const result = AgentOrchestrationWorker.applyCompletionCallback(task, run, deps, payload);
       if (getSettings().autoWork && payload.status === 'success') {
         continueTaskQueueForProject(task.projectId, deps);
       }
@@ -297,7 +298,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
       changedFiles: [],
       tests: [],
     });
-    const result = applyAgentCompletionCallback(task, run, deps, payload);
+    const result = AgentOrchestrationWorker.applyCompletionCallback(task, run, deps, payload);
 
     if (getSettings().autoWork && payload.status === 'success') {
       continueTaskQueueForProject(task.projectId, deps);
@@ -468,7 +469,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
 
         saveTask(newTask);
         createdTasks.push(newTask);
-        maybeTriggerTaskAgent(newTask, undefined, deps, 'POST /tasks endpoint');
+        AgentOrchestrationWorker.maybeTrigger(newTask, undefined, deps, 'POST /tasks endpoint');
       }
 
       
@@ -531,7 +532,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
 
     saveTask(updatedTask);
     syncTaskAgentStateForStatus(updatedTask, previousStatus);
-    const autoWorkTrigger = maybeTriggerTaskAgent(updatedTask, previousStatus, deps, '/move endpoint');
+    const autoWorkTrigger = AgentOrchestrationWorker.maybeTrigger(updatedTask, previousStatus, deps, '/move endpoint');
 
     saveTask(getTasks()[taskIndex]);
     const standardPayload = {
@@ -617,7 +618,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
       type: 'update',
     }];
 
-    maybeTriggerTaskAgent(task, previousTask, deps, '/assign endpoint');
+    AgentOrchestrationWorker.maybeTrigger(task, previousTask, deps, '/assign endpoint');
     saveTask(task);
     return res.json(toMutationResponse(req, task, task));
   });
@@ -717,7 +718,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
         syncTaskAgentStateForStatus(updatedTask, currentTask.status);
         saveTask(updatedTask);
         updatedTasks.push(updatedTask);
-        maybeTriggerTaskAgent(updatedTask, currentTask, deps, 'PUT /tasks list update');
+        AgentOrchestrationWorker.maybeTrigger(updatedTask, currentTask, deps, 'PUT /tasks list update');
         continue;
       }
 
@@ -774,7 +775,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
 
       saveTask(newTask);
       importedTasks.push(newTask);
-      maybeTriggerTaskAgent(newTask, undefined, deps, 'PUT /tasks list create');
+      AgentOrchestrationWorker.maybeTrigger(newTask, undefined, deps, 'PUT /tasks list create');
     }
 
     
@@ -886,7 +887,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
 
       saveTask(updatedTask);
       syncTaskAgentStateForStatus(updatedTask, currentTask.status);
-      maybeTriggerTaskAgent(updatedTask, currentTask, deps, 'PUT /tasks/:id endpoint');
+      AgentOrchestrationWorker.maybeTrigger(updatedTask, currentTask, deps, 'PUT /tasks/:id endpoint');
 
       saveTask(updatedTask);
       return res.json(toMutationResponse(req, updatedTask, updatedTask));

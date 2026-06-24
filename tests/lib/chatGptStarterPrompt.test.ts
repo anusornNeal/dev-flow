@@ -7,11 +7,15 @@ test('buildChatGptStarterPrompt tells ChatGPT to read authoring skills before re
 
   assert.match(prompt, /get_authoring_skills/);
   assert.match(prompt, /00-skill-router/);
+  assert.match(prompt, /get_repo_context_bundle/);
+  assert.match(prompt, /get_project_start_context/);
   assert.match(prompt, /list_projects/);
   assert.match(prompt, /list_local_files/);
   assert.match(prompt, /read_local_file/);
   assert.match(prompt, /get_jira_authoring_bundle/);
   assert.match(prompt, /get_repo_inspection_index/);
   assert.match(prompt, /validate_task_quality/);
-  assert.ok(prompt.indexOf('get_authoring_skills') < prompt.indexOf('list_projects'));
+  assert.match(prompt, /move_task_to_status/);
+  assert.ok(prompt.indexOf('get_authoring_skills') < prompt.indexOf('get_repo_context_bundle'));
+  assert.ok(prompt.indexOf('get_repo_context_bundle') < prompt.indexOf('get_project_start_context'));
 });

@@ -28,6 +28,8 @@ type SafeEditErrorCode =
   | 'CONTENT_CHANGED'
   | 'WRITE_FAILED';
 
+type NewlineStyle = 'lf' | 'crlf' | 'mixed' | 'none';
+
 export type SafeEditResult = {
   ok: boolean;
   dryRun: boolean;
@@ -41,6 +43,11 @@ export type SafeEditResult = {
     beforeExcerpt: string;
     afterExcerpt: string;
   };
+  diagnostics?: {
+    newlineStyle: NewlineStyle;
+    matchedWithNormalizedNewlines: boolean;
+    hints: string[];
+  };
   error?: {
     code: SafeEditErrorCode;
     message: string;
@@ -53,6 +60,47 @@ const DEFAULT_MAX_FILE_BYTES = 1024 * 1024;
 
 function byteLength(value: string): number {
   return Buffer.byteLength(value, 'utf8');
+}
+
+function normalizeNewlines(value: string): string {
+  return value.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+}
+
+function detectNewlineStyle(value: string): NewlineStyle {
+  const crlf = (value.match(/\r\n/g) || []).length;
+  const lf = (value.match(/(?<!\r)\n/g) || []).length;
+  const cr = (value.match(/\r(?!\n)/g) || []).length;
+  if (crlf === 0 && lf === 0 && cr === 0) return 'none';
+  if (crlf > 0 && lf === 0 && cr === 0) return 'crlf';
+  if (crlf === 0 && cr === 0) return 'lf';
+  return 'mixed';
+}
+
+function preferredNewline(style: NewlineStyle): '\n' | '\r\n' {
+  return style === 'crlf' ? '\r\n' : '\n';
+}
+
+function restoreNewlines(value: string, style: NewlineStyle): string {
+  const normalized = normalizeNewlines(value);
+  const newline = preferredNewline(style);
+  return newline === '\n' ? normalized : normalized.replace(/\n/g, newline);
+}
+
+function normalizeOperation(op: SafeEditOperation): SafeEditOperation {
+  return {
+    ...op,
+    find: op.find === undefined ? undefined : normalizeNewlines(String(op.find)),
+    replaceWith: op.replaceWith === undefined ? undefined : normalizeNewlines(String(op.replaceWith)),
+    content: op.content === undefined ? undefined : normalizeNewlines(String(op.content)),
+    start: op.start === undefined ? undefined : normalizeNewlines(String(op.start)),
+    end: op.end === undefined ? undefined : normalizeNewlines(String(op.end)),
+  };
+}
+
+function operationUsedNewlineNormalization(op: SafeEditOperation): boolean {
+  return [op.find, op.replaceWith, op.content, op.start, op.end]
+    .filter((value): value is string => typeof value === 'string')
+    .some((value) => value !== normalizeNewlines(value));
 }
 
 function countOccurrences(haystack: string, needle: string): number {
@@ -69,8 +117,8 @@ function countOccurrences(haystack: string, needle: string): number {
 
 function countChangedLines(before: string, after: string): number {
   if (before === after) return 0;
-  const beforeLines = before.split(/\r?\n/);
-  const afterLines = after.split(/\r?\n/);
+  const beforeLines = normalizeNewlines(before).split('\n');
+  const afterLines = normalizeNewlines(after).split('\n');
   const total = Math.max(beforeLines.length, afterLines.length);
   let changed = 0;
   for (let i = 0; i < total; i += 1) {
@@ -85,7 +133,7 @@ function excerpt(value: string): string {
   return `${value.slice(0, max)}\n...<truncated ${value.length - max} chars>`;
 }
 
-function fail(args: { dryRun: boolean; filePath: string; code: SafeEditErrorCode; message: string; operationIndex?: number }): SafeEditResult {
+function fail(args: { dryRun: boolean; filePath: string; code: SafeEditErrorCode; message: string; operationIndex?: number; diagnostics?: SafeEditResult['diagnostics'] }): SafeEditResult {
   return {
     ok: false,
     dryRun: args.dryRun,
@@ -95,6 +143,7 @@ function fail(args: { dryRun: boolean; filePath: string; code: SafeEditErrorCode
     operations: 0,
     bytesBefore: 0,
     bytesAfter: 0,
+    diagnostics: args.diagnostics,
     error: {
       code: args.code,
       message: args.message,
@@ -214,19 +263,34 @@ export function safeEditFile(state: AppState, args: Record<string, any>): SafeEd
   }
 
   const before = fs.readFileSync(targetPath, 'utf8');
+  const newlineStyle = detectNewlineStyle(before);
+  const normalizedBefore = normalizeNewlines(before);
+  const diagnostics: SafeEditResult['diagnostics'] = {
+    newlineStyle,
+    matchedWithNormalizedNewlines: false,
+    hints: [],
+  };
 
   if (args.expectedContentHash || args.expectedSha256) {
     const expected = args.expectedContentHash || args.expectedSha256;
     const actual = crypto.createHash('sha256').update(before, 'utf8').digest('hex');
     if (expected !== actual) {
-      return fail({ dryRun, filePath, code: 'CONTENT_CHANGED', message: `File content hash ${actual} does not match expected hash ${expected}.` });
+      return fail({ dryRun, filePath, code: 'CONTENT_CHANGED', message: `File content hash ${actual} does not match expected hash ${expected}.`, diagnostics });
     }
   }
 
-  let after = before;
+  let after = normalizedBefore;
   for (let i = 0; i < operations.length; i += 1) {
-    const result = applyOperation(after, operations[i] as SafeEditOperation, i);
+    const rawOperation = operations[i] as SafeEditOperation;
+    const normalizedOperation = normalizeOperation(rawOperation);
+    if (operationUsedNewlineNormalization(rawOperation) || before !== normalizedBefore) {
+      diagnostics.matchedWithNormalizedNewlines = true;
+    }
+    const result = applyOperation(after, normalizedOperation, i);
     if (result.ok === false) {
+      if (before !== normalizedBefore || operationUsedNewlineNormalization(rawOperation)) {
+        diagnostics.hints.push('Operation matched against a newline-normalized view; verify anchor text, indentation, and CRLF/LF differences.');
+      }
       return {
         ok: false,
         dryRun,
@@ -235,21 +299,27 @@ export function safeEditFile(state: AppState, args: Record<string, any>): SafeEd
         changedLines: 0,
         operations: i,
         bytesBefore: byteLength(before),
-        bytesAfter: byteLength(after),
+        bytesAfter: byteLength(restoreNewlines(after, newlineStyle)),
+        diagnostics,
         error: { code: result.code, message: result.message, operationIndex: i },
       };
     }
     after = result.value;
   }
 
-  const changed = before !== after;
+  const restoredAfter = restoreNewlines(after, newlineStyle);
+  const changed = before !== restoredAfter;
+  if (diagnostics.matchedWithNormalizedNewlines) {
+    diagnostics.hints.push(`Anchors/content were matched using normalized newlines and output was restored as ${preferredNewline(newlineStyle) === '\r\n' ? 'CRLF' : 'LF'}.`);
+  }
+
   if (changed && !dryRun) {
     try {
       const tempPath = path.join(path.dirname(targetPath), `.${path.basename(targetPath)}.${Date.now()}.tmp`);
-      fs.writeFileSync(tempPath, after, 'utf8');
+      fs.writeFileSync(tempPath, restoredAfter, 'utf8');
       fs.renameSync(tempPath, targetPath);
     } catch (e: any) {
-      return fail({ dryRun, filePath, code: 'WRITE_FAILED', message: `Failed to write file: ${e.message}` });
+      return fail({ dryRun, filePath, code: 'WRITE_FAILED', message: `Failed to write file: ${e.message}`, diagnostics });
     }
   }
 
@@ -258,10 +328,11 @@ export function safeEditFile(state: AppState, args: Record<string, any>): SafeEd
     dryRun,
     filePath,
     changed,
-    changedLines: countChangedLines(before, after),
+    changedLines: countChangedLines(before, restoredAfter),
     operations: operations.length,
     bytesBefore: byteLength(before),
-    bytesAfter: byteLength(after),
-    preview: dryRun ? { beforeExcerpt: excerpt(before), afterExcerpt: excerpt(after) } : undefined,
+    bytesAfter: byteLength(restoredAfter),
+    diagnostics,
+    preview: dryRun ? { beforeExcerpt: excerpt(before), afterExcerpt: excerpt(restoredAfter) } : undefined,
   };
 }

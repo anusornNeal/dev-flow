@@ -131,4 +131,30 @@ test('safeEditFileService test suite', async (t) => {
     assert.equal(result.ok, false);
     assert.equal(result.error?.code, 'FILE_NOT_FOUND');
   });
+
+  await t.test('matches LF anchors against CRLF files and preserves CRLF output', () => {
+    fs.writeFileSync(testFile, 'alpha\r\nbeta\r\ngamma\r\n', 'utf8');
+    const result = safeEditFile(mockState, {
+      filePath: relativeFilePath,
+      mode: 'apply',
+      edits: [{ type: 'replace', find: 'alpha\nbeta', replaceWith: 'alpha\nBETA' }],
+    });
+
+    assert.equal(result.ok, true, result.error?.message);
+    assert.equal(result.diagnostics?.newlineStyle, 'crlf');
+    assert.equal(result.diagnostics?.matchedWithNormalizedNewlines, true);
+    assert.equal(fs.readFileSync(testFile, 'utf8'), 'alpha\r\nBETA\r\ngamma\r\n');
+  });
+
+  await t.test('normalizes inserted content to the target CRLF style', () => {
+    fs.writeFileSync(testFile, 'one\r\ntwo\r\n', 'utf8');
+    const result = safeEditFile(mockState, {
+      filePath: relativeFilePath,
+      mode: 'apply',
+      edits: [{ type: 'insert_after', find: 'one', content: '\ninserted' }],
+    });
+
+    assert.equal(result.ok, true, result.error?.message);
+    assert.equal(fs.readFileSync(testFile, 'utf8'), 'one\r\ninserted\r\ntwo\r\n');
+  });
 });

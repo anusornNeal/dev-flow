@@ -4,6 +4,7 @@ import path from 'path';
 import type { AppState } from '../types';
 import { createApiError } from './api';
 import { resolveProjectRoot, resolveSafePath } from './localFileService';
+import { invalidateRepoReadCaches } from './repoCacheInvalidationService';
 
 const MAX_DIFF_BYTES = 100_000;
 const MAX_LOG_COUNT = 500;
@@ -338,6 +339,7 @@ export function commitGitChanges(state: AppState, args: Record<string, any>) {
   const branch = getBranchName(root);
   const afterStatus = toStatusSummary(root);
 
+  const cacheInvalidation = invalidateRepoReadCaches(root, 'commitGitChanges');
   return {
     root,
     dryRun: false,
@@ -349,5 +351,6 @@ export function commitGitChanges(state: AppState, args: Record<string, any>) {
     changedFileCount: stagedFiles.length,
     beforeStatus,
     afterStatus,
+    cacheInvalidation,
   };
 }

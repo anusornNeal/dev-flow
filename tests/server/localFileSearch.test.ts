@@ -7,7 +7,7 @@ import path from 'node:path';
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-local-search-'));
 process.env.DEVFLOW_DB_PATH = path.join(tempDir, 'devflow.db');
 
-const { clearLocalFileSearchCache, searchLocalFiles, searchLocalFilesAsync } = await import('../../src/server/services/localFileService.js');
+const { clearLocalFileSearchCache, searchLocalFiles, searchLocalFilesAsync, writeLocalFile } = await import('../../src/server/services/localFileService.js');
 
 const state: any = {
   projectsCache: [
@@ -73,6 +73,35 @@ test('searchLocalFilesAsync can terminate after the requested global result limi
   assert.equal(result.matches.length, 1);
   assert.equal(result.terminatedAfterLimit, true);
   assert.equal(result.truncated, true);
+});
+
+test('writeLocalFile invalidates cached search results for the same project root', () => {
+  const first = searchLocalFiles(state, {
+    projectId: 'project-search-1',
+    query: 'fresh-cache-token',
+    limit: 5,
+  });
+  const second = searchLocalFiles(state, {
+    projectId: 'project-search-1',
+    query: 'fresh-cache-token',
+    limit: 5,
+  });
+  assert.equal(first.cache.hit, false);
+  assert.equal(second.cache.hit, true);
+
+  writeLocalFile(state, {
+    projectId: 'project-search-1',
+    filePath: 'fresh.txt',
+    content: 'fresh-cache-token',
+  });
+
+  const afterWrite = searchLocalFiles(state, {
+    projectId: 'project-search-1',
+    query: 'fresh-cache-token',
+    limit: 5,
+  });
+  assert.equal(afterWrite.cache.hit, false);
+  assert.equal(afterWrite.count, 1);
 });
 
 test.after(() => {

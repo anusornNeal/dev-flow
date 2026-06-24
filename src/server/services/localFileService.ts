@@ -6,6 +6,7 @@ import { getDevFlowAppRoot } from '../../lib/devFlowPaths';
 import type { AppState } from '../types';
 import { createApiError } from './api';
 import { findProjectByIdentifier } from './taskService';
+import { invalidateRepoReadCaches, registerRepoCacheInvalidator } from './repoCacheInvalidationService';
 
 const DEFAULT_IGNORED_ENTRY_NAMES = new Set([
   '.git',
@@ -287,9 +288,30 @@ function readLineWindowSync(filePath: string, startLine: number, endLine: number
   };
 }
 
-export function clearLocalFileSearchCache() {
-  searchCache.clear();
+export function clearLocalFileSearchCache(root?: string) {
+  if (!root) {
+    const count = searchCache.size;
+    searchCache.clear();
+    return count;
+  }
+  const normalizedRoot = path.resolve(root);
+  let count = 0;
+  for (const [key, entry] of Array.from(searchCache.entries())) {
+    try {
+      const parsed = JSON.parse(key);
+      if (path.resolve(parsed.root) === normalizedRoot || path.resolve(entry.result.root) === normalizedRoot) {
+        searchCache.delete(key);
+        count += 1;
+      }
+    } catch {
+      searchCache.delete(key);
+      count += 1;
+    }
+  }
+  return count;
 }
+
+registerRepoCacheInvalidator('local-file-search', clearLocalFileSearchCache);
 
 export function resolveProjectRoot(state: AppState, args: Record<string, any>) {
   const identifierProject = findProjectByIdentifier(state, {
@@ -472,6 +494,7 @@ export function writeLocalFile(state: AppState, args: Record<string, any>) {
   fs.mkdirSync(path.dirname(targetPath), { recursive: true });
   fs.writeFileSync(targetPath, content, 'utf8');
   const revision = getFileRevision(targetPath);
+  const cacheInvalidation = invalidateRepoReadCaches(root, 'writeLocalFile');
 
   return {
     root,

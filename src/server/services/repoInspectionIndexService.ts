@@ -3,6 +3,7 @@ import path from 'path';
 import type { AppState } from '../types';
 import { resolveProjectRoot, resolveSafePath } from './localFileService';
 import { getProjectRulesContext, type ProjectFileRules } from './projectRulesService';
+import { registerRepoCacheInvalidator } from './repoCacheInvalidationService';
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const FALLBACK_MAX_FILES = 2500;
@@ -63,9 +64,24 @@ interface EffectiveFileRules {
 
 const cache = new Map<string, RepoIndexCacheEntry>();
 
-export function clearRepoInspectionIndexCache() {
-  cache.clear();
+export function clearRepoInspectionIndexCache(root?: string) {
+  if (!root) {
+    const count = cache.size;
+    cache.clear();
+    return count;
+  }
+  const normalizedRoot = path.resolve(root);
+  let count = 0;
+  for (const [key, entry] of Array.from(cache.entries())) {
+    if (path.resolve(entry.root) === normalizedRoot || key.startsWith(`${normalizedRoot}::`)) {
+      cache.delete(key);
+      count += 1;
+    }
+  }
+  return count;
 }
+
+registerRepoCacheInvalidator('repo-inspection-index', clearRepoInspectionIndexCache);
 
 function parseBoolean(value: unknown) {
   return value === true || String(value).toLowerCase() === 'true';

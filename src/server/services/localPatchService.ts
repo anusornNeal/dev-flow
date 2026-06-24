@@ -4,6 +4,7 @@ import path from 'path';
 import type { AppState } from '../types';
 import { createApiError } from './api';
 import { resolveProjectRoot, resolveSafePath } from './localFileService';
+import { invalidateRepoReadCaches } from './repoCacheInvalidationService';
 
 const DEFAULT_MAX_PATCH_BYTES = 100_000;
 const DEFAULT_MAX_SUMMARY_BYTES = 5_000;
@@ -228,6 +229,10 @@ export function applyLocalPatch(state: AppState, args: Record<string, any>): Loc
     });
   }
 
+  if (!dryRun) {
+    invalidateRepoReadCaches(root, 'applyLocalPatch');
+  }
+
   return patchResult;
 }
 
@@ -300,6 +305,10 @@ export async function applyLocalPatchAsync(state: AppState, args: Record<string,
           }
         }));
         return;
+      }
+
+      if (!dryRun) {
+        invalidateRepoReadCaches(root, 'applyLocalPatchAsync');
       }
 
       resolve(patchResult);

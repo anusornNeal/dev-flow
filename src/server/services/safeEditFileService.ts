@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import type { AppState } from '../types';
 import { assertFileRevisionMatches, getFileRevision, resolveProjectRoot, resolveSafePath, type FileRevision } from './localFileService';
+import { invalidateRepoReadCaches } from './repoCacheInvalidationService';
 
 export type SafeEditOperationType = 'replace' | 'insert_before' | 'insert_after' | 'delete_between';
 
@@ -330,6 +331,7 @@ export function safeEditFile(state: AppState, args: Record<string, any>): SafeEd
       const tempPath = path.join(path.dirname(targetPath), `.${path.basename(targetPath)}.${Date.now()}.tmp`);
       fs.writeFileSync(tempPath, restoredAfter, 'utf8');
       fs.renameSync(tempPath, targetPath);
+      invalidateRepoReadCaches(root, 'safeEditFile');
     } catch (e: any) {
       return fail({ dryRun, filePath, code: 'WRITE_FAILED', message: `Failed to write file: ${e.message}`, diagnostics });
     }

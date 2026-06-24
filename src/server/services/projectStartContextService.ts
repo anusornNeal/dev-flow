@@ -6,8 +6,17 @@ import { createApiError } from './api';
 import { listLocalFiles, readLocalFile } from './localFileService';
 import { getGitBranch, getGitDiff, getGitStatus } from './gitService';
 import { getRepoInspectionIndex } from './repoInspectionIndexService';
+import { registerRepoCacheInvalidator } from './repoCacheInvalidationService';
 
 const HINT_FILES = ['AGENTS.md', 'README.md', 'package.json', 'tsconfig.json', 'vite.config.ts', 'gradlew.bat', 'build.gradle', 'settings.gradle'];
+
+export function clearRepoContextBundleCache(_root?: string) {
+  // getRepoContextBundle is intentionally assembled from fresh git/snippets plus the repo index cache.
+  // Register a no-op invalidator so workflow health can report bundle cache readiness consistently.
+  return 0;
+}
+
+registerRepoCacheInvalidator('repo-context-bundle', clearRepoContextBundleCache);
 
 function resolveProject(state: AppState, args: Record<string, any>) {
   const project = findProjectByIdentifier(state, {

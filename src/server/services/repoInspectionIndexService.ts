@@ -2,12 +2,13 @@ import fs from 'fs';
 import path from 'path';
 import type { AppState } from '../types';
 import { resolveProjectRoot, resolveSafePath } from './localFileService';
+import { getProjectRulesContext, type ProjectFileRules } from './projectRulesService';
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const MAX_FILES = 2500;
-const MAX_FILE_BYTES = 100_000;
+const FALLBACK_MAX_FILES = 2500;
+const FALLBACK_MAX_FILE_BYTES = 100_000;
 const INDEX_EXTENSIONS = new Set(['.kt', '.kts', '.java', '.xml', '.ts', '.tsx', '.js', '.jsx']);
-const SAFE_DEFAULT_SKIP_DIRS = [
+const FALLBACK_SKIP_DIRS = [
   '.git',
   'node_modules',
   'build',
@@ -24,7 +25,7 @@ const SAFE_DEFAULT_SKIP_DIRS = [
   'tmp',
   'temp',
 ];
-const SKIP_DIRS = new Set(SAFE_DEFAULT_SKIP_DIRS);
+const FALLBACK_INCLUDE_DIRS = ['.github'];
 
 interface RepoIndexEntry {
   path: string;
@@ -45,7 +46,19 @@ interface RepoIndexCacheEntry {
     skippedDirectories: string[];
     skippedDirectoryCount: number;
     truncated: boolean;
+    rules: {
+      source: 'project-rules';
+      ignoredDirectoryCount: number;
+      includedDotDirectories: string[];
+    };
   };
+}
+
+interface EffectiveFileRules {
+  ignoreDirectories: Set<string>;
+  includeDirectories: Set<string>;
+  maxFiles: number;
+  maxFileBytes: number;
 }
 
 const cache = new Map<string, RepoIndexCacheEntry>();
@@ -58,27 +71,56 @@ function parseBoolean(value: unknown) {
   return value === true || String(value).toLowerCase() === 'true';
 }
 
+function normalizeRulePath(value: string) {
+  return value.trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+}
+
+function loadEffectiveFileRules(): EffectiveFileRules {
+  const projectRules: ProjectFileRules | undefined = getProjectRulesContext().files;
+  const ignoreDirectories = new Set((projectRules?.ignoreDirectories?.length ? projectRules.ignoreDirectories : FALLBACK_SKIP_DIRS).map(normalizeRulePath));
+  const includeDirectories = new Set((projectRules?.includeDirectories?.length ? projectRules.includeDirectories : FALLBACK_INCLUDE_DIRS).map(normalizeRulePath));
+  for (const includeDir of includeDirectories) {
+    ignoreDirectories.delete(includeDir);
+  }
+  return {
+    ignoreDirectories,
+    includeDirectories,
+    maxFiles: projectRules?.maxFiles ?? FALLBACK_MAX_FILES,
+    maxFileBytes: projectRules?.maxFileBytes ?? FALLBACK_MAX_FILE_BYTES,
+  };
+}
+
+function shouldSkipDirectory(relativePath: string, entryName: string, rules: EffectiveFileRules) {
+  const normalizedRelativePath = normalizeRulePath(relativePath);
+  const normalizedEntryName = normalizeRulePath(entryName);
+  return rules.ignoreDirectories.has(normalizedEntryName) || rules.ignoreDirectories.has(normalizedRelativePath);
+}
+
 function walkFiles(
   root: string,
   startPath: string,
   results: string[],
-  options: { includeIgnored: boolean; skippedDirectories: Set<string> },
+  options: { includeIgnored: boolean; skippedDirectories: Set<string>; rules: EffectiveFileRules },
   signal?: AbortSignal,
 ) {
   if (signal?.aborted) {
     throw new Error('Operation aborted');
   }
-  if (results.length >= MAX_FILES) return;
+  if (results.length >= options.rules.maxFiles) return;
   for (const entry of fs.readdirSync(startPath, { withFileTypes: true })) {
     if (signal?.aborted) {
       throw new Error('Operation aborted');
     }
-    if (results.length >= MAX_FILES) return;
-    if (entry.name.startsWith('.') && !['.github'].includes(entry.name) && !options.includeIgnored) continue;
+    if (results.length >= options.rules.maxFiles) return;
     const fullPath = path.join(startPath, entry.name);
+    const relativeEntryPath = path.relative(root, fullPath).replace(/\\/g, '/') || entry.name;
+    if (entry.name.startsWith('.') && !options.rules.includeDirectories.has(entry.name) && !options.includeIgnored) {
+      options.skippedDirectories.add(relativeEntryPath);
+      continue;
+    }
     if (entry.isDirectory()) {
-      if (!options.includeIgnored && SKIP_DIRS.has(entry.name)) {
-        options.skippedDirectories.add(path.relative(root, fullPath) || entry.name);
+      if (!options.includeIgnored && shouldSkipDirectory(relativeEntryPath, entry.name, options.rules)) {
+        options.skippedDirectories.add(relativeEntryPath);
         continue;
       }
       walkFiles(root, fullPath, results, options, signal);
@@ -118,7 +160,8 @@ function buildIndex(root: string, relativePath: string, includeIgnored: boolean,
   const basePath = resolveSafePath(root, relativePath || '.');
   const files: string[] = [];
   const skippedDirectories = new Set<string>();
-  walkFiles(root, basePath, files, { includeIgnored, skippedDirectories }, signal);
+  const rules = loadEffectiveFileRules();
+  walkFiles(root, basePath, files, { includeIgnored, skippedDirectories, rules }, signal);
 
   const entries: RepoIndexEntry[] = [];
   for (const relativeFile of files) {
@@ -128,7 +171,7 @@ function buildIndex(root: string, relativePath: string, includeIgnored: boolean,
     const fullPath = path.join(root, relativeFile);
     const stat = fs.statSync(fullPath);
     const extension = path.extname(relativeFile).toLowerCase();
-    const content = stat.size <= MAX_FILE_BYTES ? fs.readFileSync(fullPath, 'utf8') : '';
+    const content = stat.size <= rules.maxFileBytes ? fs.readFileSync(fullPath, 'utf8') : '';
     entries.push({
       path: relativeFile,
       extension,
@@ -143,12 +186,17 @@ function buildIndex(root: string, relativePath: string, includeIgnored: boolean,
     generatedAt: Date.now(),
     entries,
     metadata: {
-      maxFiles: MAX_FILES,
-      maxFileBytes: MAX_FILE_BYTES,
+      maxFiles: rules.maxFiles,
+      maxFileBytes: rules.maxFileBytes,
       includeIgnored,
       skippedDirectories: Array.from(skippedDirectories).sort().slice(0, 50),
       skippedDirectoryCount: skippedDirectories.size,
-      truncated: files.length >= MAX_FILES,
+      truncated: files.length >= rules.maxFiles,
+      rules: {
+        source: 'project-rules',
+        ignoredDirectoryCount: rules.ignoreDirectories.size,
+        includedDotDirectories: Array.from(rules.includeDirectories).sort(),
+      },
     },
   };
 }

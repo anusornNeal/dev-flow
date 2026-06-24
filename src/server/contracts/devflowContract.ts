@@ -189,6 +189,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
         query: { type: 'string', description: 'Alias for q.' },
         path: { type: 'string', description: 'Optional relative subdirectory to index.' },
         limit: { type: 'number', description: 'Maximum matched entries returned.' },
+        includeIgnored: { type: 'boolean', description: 'Opt in to indexing normally skipped dot, heavy, and generated folders. Defaults to false; safe project file rules stay merged with built-in defaults.' },
       },
     },
     outputSchema: { type: 'object' },

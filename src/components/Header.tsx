@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Cat, Moon, Sun, FileCode, Code, FileText, Plus, Sparkles, Blocks, ChevronDown } from 'lucide-react';
+import { Activity, Cat, Moon, Sun, FileCode, Code, FileText, Plus, Sparkles, Blocks, ChevronDown } from 'lucide-react';
 import NgrokStatusPanel from './NgrokStatusPanel';
 import AutoWorkToggle from './AutoWorkToggle';
 import ChatGptStarterPromptButton from './ChatGptStarterPromptButton';
@@ -13,6 +13,7 @@ interface HeaderProps {
   setIsJsonModalOpen: (open: boolean) => void;
   setIsSkillsModalOpen: (open: boolean) => void;
   setIsTemplateModalOpen: (open: boolean) => void;
+  setIsObservabilityModalOpen: (open: boolean) => void;
   setIsCreateModalOpen: (open: boolean) => void;
   setIsBatchModalOpen: (open: boolean) => void;
 }
@@ -145,3 +146,4 @@ export function Header({
     </header>
   );
 }
+

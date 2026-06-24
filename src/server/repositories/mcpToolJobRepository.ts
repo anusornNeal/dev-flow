@@ -169,3 +169,21 @@ export function listInterruptedJobs(): McpToolJob[] {
   
   return interrupted;
 }
+
+export function listRecentJobs(limit: number = 50): McpToolJob[] {
+  ensureJobsDir();
+  const dirs = fs.readdirSync(JOBS_DIR);
+  const jobs: McpToolJob[] = [];
+  
+  for (const dir of dirs) {
+    const jobDir = path.join(JOBS_DIR, dir);
+    if (!fs.statSync(jobDir).isDirectory()) continue;
+    
+    const job = getJob(dir);
+    if (job) {
+      jobs.push(job);
+    }
+  }
+  
+  return jobs.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()).slice(0, limit);
+}

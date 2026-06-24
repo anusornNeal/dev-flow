@@ -18,6 +18,7 @@ import JsonTemplateModal from './components/JsonTemplateModal';
 import SkillsModal from './components/SkillsModal';
 import SettingsModal from './components/SettingsModal';
 import TemplateModal from './components/TemplateModal';
+import ObservabilityModal from './components/ObservabilityModal';
 import { Header } from './components/Header';
 import { BoardLane } from './components/BoardLane';
 import BatchImportModal from './components/BatchImportModal';
@@ -53,6 +54,7 @@ export default function App() {
   const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
   const [isSkillsModalOpen, setIsSkillsModalOpen] = useState(false);
   const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
+  const [isObservabilityModalOpen, setIsObservabilityModalOpen] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [logModal, setLogModal] = useState<{
@@ -447,6 +449,7 @@ export default function App() {
             setIsJsonModalOpen={setIsJsonModalOpen}
             setIsSkillsModalOpen={setIsSkillsModalOpen}
             setIsTemplateModalOpen={setIsTemplateModalOpen}
+            setIsObservabilityModalOpen={setIsObservabilityModalOpen}
             setIsCreateModalOpen={setIsCreateModalOpen}
             setIsBatchModalOpen={setIsBatchModalOpen}
           />
@@ -556,6 +559,9 @@ export default function App() {
       )}
 
       {/* 8. Settings Modal */}
+      {isObservabilityModalOpen && (
+        <ObservabilityModal onClose={() => setIsObservabilityModalOpen(false)} />
+      )}
       {isSettingsModalOpen && (
         <SettingsModal
           onClose={() => {
@@ -607,4 +613,5 @@ export default function App() {
     </div>
   );
 }
+
 

@@ -1,6 +1,6 @@
 import type express from 'express';
 import type { ApiRouteDeps } from '../types';
-import { enqueueToolJob, getToolJobStatus, cancelToolJob } from '../services/mcpToolJobService';
+import { enqueueToolJob, getToolJobStatus, cancelToolJob, getJobMetrics } from '../services/mcpToolJobService';
 import { readJobLog, readJobResult } from '../repositories/mcpToolJobRepository';
 import { createApiError } from '../services/api';
 import { getToolDefinitionByName } from '../contracts/devflowContract';
@@ -86,4 +86,13 @@ export function registerMcpToolJobRoutes(app: express.Express, deps: ApiRouteDep
       next(error);
     }
   });
+
+  app.get('/api/tool-jobs-metrics', (req, res, next) => {
+    try {
+      res.json(getJobMetrics());
+    } catch (error) {
+      next(error);
+    }
+  });
 }
+

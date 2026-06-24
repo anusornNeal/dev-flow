@@ -7,7 +7,24 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
 const MAX_FILES = 2500;
 const MAX_FILE_BYTES = 100_000;
 const INDEX_EXTENSIONS = new Set(['.kt', '.kts', '.java', '.xml', '.ts', '.tsx', '.js', '.jsx']);
-const SKIP_DIRS = new Set(['.git', 'node_modules', 'build', 'dist', '.gradle', '.idea', '.devflow', '.agents']);
+const SAFE_DEFAULT_SKIP_DIRS = [
+  '.git',
+  'node_modules',
+  'build',
+  'dist',
+  '.gradle',
+  '.idea',
+  '.devflow',
+  '.agents',
+  'coverage',
+  '.next',
+  '.turbo',
+  '.cache',
+  'out',
+  'tmp',
+  'temp',
+];
+const SKIP_DIRS = new Set(SAFE_DEFAULT_SKIP_DIRS);
 
 interface RepoIndexEntry {
   path: string;
@@ -18,8 +35,17 @@ interface RepoIndexEntry {
 
 interface RepoIndexCacheEntry {
   root: string;
+  relativePath: string;
   generatedAt: number;
   entries: RepoIndexEntry[];
+  metadata: {
+    maxFiles: number;
+    maxFileBytes: number;
+    includeIgnored: boolean;
+    skippedDirectories: string[];
+    skippedDirectoryCount: number;
+    truncated: boolean;
+  };
 }
 
 const cache = new Map<string, RepoIndexCacheEntry>();
@@ -28,7 +54,17 @@ export function clearRepoInspectionIndexCache() {
   cache.clear();
 }
 
-function walkFiles(root: string, startPath: string, results: string[], signal?: AbortSignal) {
+function parseBoolean(value: unknown) {
+  return value === true || String(value).toLowerCase() === 'true';
+}
+
+function walkFiles(
+  root: string,
+  startPath: string,
+  results: string[],
+  options: { includeIgnored: boolean; skippedDirectories: Set<string> },
+  signal?: AbortSignal,
+) {
   if (signal?.aborted) {
     throw new Error('Operation aborted');
   }
@@ -38,10 +74,14 @@ function walkFiles(root: string, startPath: string, results: string[], signal?: 
       throw new Error('Operation aborted');
     }
     if (results.length >= MAX_FILES) return;
-    if (entry.name.startsWith('.') && !['.github'].includes(entry.name)) continue;
+    if (entry.name.startsWith('.') && !['.github'].includes(entry.name) && !options.includeIgnored) continue;
     const fullPath = path.join(startPath, entry.name);
     if (entry.isDirectory()) {
-      if (!SKIP_DIRS.has(entry.name)) walkFiles(root, fullPath, results, signal);
+      if (!options.includeIgnored && SKIP_DIRS.has(entry.name)) {
+        options.skippedDirectories.add(path.relative(root, fullPath) || entry.name);
+        continue;
+      }
+      walkFiles(root, fullPath, results, options, signal);
       continue;
     }
     const extension = path.extname(entry.name).toLowerCase();
@@ -74,10 +114,11 @@ function extractSymbols(content: string, extension: string) {
   return Array.from(symbols);
 }
 
-function buildIndex(root: string, relativePath?: string, signal?: AbortSignal): RepoIndexCacheEntry {
+function buildIndex(root: string, relativePath: string, includeIgnored: boolean, signal?: AbortSignal): RepoIndexCacheEntry {
   const basePath = resolveSafePath(root, relativePath || '.');
   const files: string[] = [];
-  walkFiles(root, basePath, files, signal);
+  const skippedDirectories = new Set<string>();
+  walkFiles(root, basePath, files, { includeIgnored, skippedDirectories }, signal);
 
   const entries: RepoIndexEntry[] = [];
   for (const relativeFile of files) {
@@ -96,18 +137,32 @@ function buildIndex(root: string, relativePath?: string, signal?: AbortSignal): 
     });
   }
 
-  return { root, generatedAt: Date.now(), entries };
+  return {
+    root,
+    relativePath,
+    generatedAt: Date.now(),
+    entries,
+    metadata: {
+      maxFiles: MAX_FILES,
+      maxFileBytes: MAX_FILE_BYTES,
+      includeIgnored,
+      skippedDirectories: Array.from(skippedDirectories).sort().slice(0, 50),
+      skippedDirectoryCount: skippedDirectories.size,
+      truncated: files.length >= MAX_FILES,
+    },
+  };
 }
 
 function getOrBuildIndex(state: AppState, args: Record<string, any>, signal?: AbortSignal) {
   const root = resolveProjectRoot(state, args);
   const relativePath = typeof args.path === 'string' && args.path.trim() ? args.path.trim() : '.';
-  const cacheKey = `${path.resolve(root)}::${relativePath}`;
+  const includeIgnored = parseBoolean(args.includeIgnored);
+  const cacheKey = `${path.resolve(root)}::${relativePath}::includeIgnored=${includeIgnored}`;
   const cached = cache.get(cacheKey);
   if (cached && Date.now() - cached.generatedAt < CACHE_TTL_MS) {
     return { index: cached, cached: true };
   }
-  const index = buildIndex(root, relativePath, signal);
+  const index = buildIndex(root, relativePath, includeIgnored, signal);
   cache.set(cacheKey, index);
   return { index, cached: false };
 }
@@ -141,9 +196,17 @@ export function getRepoInspectionIndex(state: AppState, args: Record<string, any
 
   return {
     root: index.root,
+    path: index.relativePath,
     cached,
+    cache: {
+      hit: cached,
+      generatedAt: new Date(index.generatedAt).toISOString(),
+      ttlMs: CACHE_TTL_MS,
+      ageMs: Math.max(0, Date.now() - index.generatedAt),
+    },
     generatedAt: new Date(index.generatedAt).toISOString(),
     fileCount: index.entries.length,
+    metadata: index.metadata,
     query: queryTerms.join(' '),
     matches,
   };

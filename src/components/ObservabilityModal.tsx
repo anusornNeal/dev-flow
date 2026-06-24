@@ -1,207 +1,110 @@
-import React, { useEffect, useState } from 'react';
-import { X, RefreshCw, Activity, AlertCircle, Clock } from 'lucide-react';
+import type { ReactNode } from 'react';
+import { useEffect, useState } from 'react';
 
 interface ObservabilityModalProps {
   onClose: () => void;
 }
 
+type Diagnostics = {
+  generatedAt?: string;
+  mcp?: {
+    queueDepth?: number;
+    activeJobs?: Array<{ jobId: string; toolName: string; resourceKey?: string }>;
+    queuedJobs?: Array<{ jobId: string; toolName: string; resourceKey?: string }>;
+    recentJobs?: Array<{ id?: string; toolName?: string; status?: string; failureSummary?: string | null }>;
+  };
+  agents?: {
+    activeCount?: number;
+    staleCount?: number;
+    activeRuns?: Array<{ id?: string; taskId?: string; agent?: string; status?: string; stale?: boolean }>;
+    recentFailures?: Array<{ id?: string; taskId?: string; agent?: string; status?: string; errorMessage?: string }>;
+  };
+  tools?: {
+    duplicateBursts?: Array<{ toolName?: string; count?: number; inputHash?: string }>;
+    recommendations?: string[];
+  };
+  recommendations?: string[];
+};
+
+function short(value?: string) {
+  if (!value) return '-';
+  return value.length > 12 ? `${value.slice(0, 8)}…` : value;
+}
+
 export default function ObservabilityModal({ onClose }: ObservabilityModalProps) {
-  const [metrics, setMetrics] = useState<any>(null);
-  const [monitorSummary, setMonitorSummary] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
+  const [data, setData] = useState<Diagnostics | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchStats = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const [metricsRes, summaryRes] = await Promise.all([
-        fetch('/api/tool-jobs-metrics').then(res => res.json()),
-        fetch('/api/tool-monitor/summary').then(res => res.json())
-      ]);
-      setMetrics(metricsRes);
-      setMonitorSummary(summaryRes);
-    } catch (err: any) {
-      setError(err.message || 'Failed to load observability data');
-    } finally {
-      setLoading(false);
-    }
-  };
-
   useEffect(() => {
-    fetchStats();
-    const interval = setInterval(fetchStats, 5000);
-    return () => clearInterval(interval);
+    let cancelled = false;
+    async function load() {
+      try {
+        const response = await fetch('/api/diagnostics');
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const packet = await response.json();
+        if (!cancelled) setData(packet);
+      } catch (err) {
+        if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load diagnostics');
+      }
+    }
+    void load();
+    const timer = window.setInterval(load, 10000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
   }, []);
 
+  const failedJobs = (data?.mcp?.recentJobs || []).filter((job) => ['failed', 'timed_out', 'cancelled'].includes(job.status || '')).slice(0, 6);
+  const recommendations = Array.from(new Set([...(data?.recommendations || []), ...(data?.tools?.recommendations || [])])).slice(0, 6);
+
   return (
-    <div className="fixed inset-0 bg-[#3c2a1a]/60 dark:bg-[#110e0c]/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-      <div className="bg-white dark:bg-[#1e1914] rounded-2xl w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl border border-[#ebdcb9] dark:border-[#584a3b] overflow-hidden">
-        
-        {/* Header */}
-        <div className="flex justify-between items-center p-4 border-b border-[#ebdcb9] dark:border-[#584a3b] bg-[#faf7f0] dark:bg-[#292119]">
-          <h2 className="text-sm font-bold text-[#3c2a1a] dark:text-[#f3eadf] flex items-center gap-2">
-            <Activity className="text-[#a46c24] dark:text-[#d6b56d]" size={16} />
-            MCP & Agent Observability
-          </h2>
-          <div className="flex items-center gap-2">
-            <button 
-              onClick={fetchStats}
-              className="p-1.5 text-[#a46c24] dark:text-[#d6b56d] hover:bg-[#ebdcb9] dark:hover:bg-[#584a3b]/50 rounded-xl transition-colors"
-            >
-              <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-            </button>
-            <button
-              onClick={onClose}
-              className="p-1.5 text-[#a46c24] dark:text-[#d6b56d] hover:bg-[#ebdcb9] dark:hover:bg-[#584a3b]/50 rounded-xl transition-colors"
-            >
-              <X size={16} />
-            </button>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="max-h-[90vh] w-full max-w-4xl overflow-hidden rounded-2xl bg-white shadow-2xl">
+        <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
+          <div>
+            <h2 className="text-lg font-semibold text-slate-900">MCP and agent health</h2>
+            <p className="text-sm text-slate-500">{data?.generatedAt ? `Updated ${new Date(data.generatedAt).toLocaleString()}` : 'Diagnostics'}</p>
           </div>
+          <button className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm hover:bg-slate-50" onClick={onClose}>Close</button>
         </div>
-
-        {/* Body */}
-        <div className="flex-1 overflow-y-auto p-6 flex flex-col gap-6 text-[#3c2a1a] dark:text-[#f3eadf] text-xs font-mono">
-          {error && (
-            <div className="p-3 bg-red-50 text-red-600 rounded-xl border border-red-200">
-              {error}
-            </div>
-          )}
-
-          {metrics && (
+        <div className="max-h-[calc(90vh-76px)] space-y-4 overflow-y-auto p-6">
+          {error && <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}
+          {!data && !error && <div className="rounded-xl border p-3 text-sm text-slate-500">Loading diagnostics…</div>}
+          {data && (
             <>
-              {/* Job Metrics */}
-              <div>
-                <h3 className="font-bold mb-3 flex items-center gap-2 uppercase tracking-wider text-[10px] text-[#816b5a]">
-                  <Activity size={12} /> Job Metrics & Locks
-                </h3>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div className="p-4 rounded-xl border border-[#ebdcb9] dark:border-[#584a3b] bg-[#fffcf5] dark:bg-[#292119]">
-                    <div className="text-[10px] uppercase text-[#816b5a] mb-1">Queue Depth</div>
-                    <div className="text-xl font-bold">{metrics.queueDepth}</div>
-                  </div>
-                  <div className="p-4 rounded-xl border border-[#ebdcb9] dark:border-[#584a3b] bg-[#fffcf5] dark:bg-[#292119]">
-                    <div className="text-[10px] uppercase text-[#816b5a] mb-1">Active Jobs</div>
-                    <div className="text-xl font-bold">{metrics.activeJobs.length}</div>
-                  </div>
-                  <div className="p-4 rounded-xl border border-[#ebdcb9] dark:border-[#584a3b] bg-[#fffcf5] dark:bg-[#292119]">
-                    <div className="text-[10px] uppercase text-[#816b5a] mb-1">Active Locks</div>
-                    <div className="text-xl font-bold">{Object.keys(metrics.activeResources).length}</div>
-                  </div>
-                </div>
+              <div className="grid gap-3 md:grid-cols-4">
+                <Metric label="Queue depth" value={data.mcp?.queueDepth || 0} />
+                <Metric label="Active jobs" value={data.mcp?.activeJobs?.length || 0} />
+                <Metric label="Active agents" value={data.agents?.activeCount || 0} />
+                <Metric label="Stale agents" value={data.agents?.staleCount || 0} />
               </div>
-
-              {/* Active Jobs & Locks */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="p-4 rounded-xl border border-[#ebdcb9] dark:border-[#584a3b] bg-[#fffcf5] dark:bg-[#292119]">
-                  <h4 className="font-bold text-[10px] uppercase text-[#816b5a] mb-2">Active Jobs</h4>
-                  {metrics.activeJobs.length === 0 ? (
-                    <div className="opacity-50">No active jobs</div>
-                  ) : (
-                    <div className="space-y-2">
-                      {metrics.activeJobs.map((j: any) => (
-                        <div key={j.jobId} className="p-2 bg-black/5 dark:bg-white/5 rounded flex flex-col gap-1">
-                          <div className="font-bold">{j.toolName}</div>
-                          <div className="opacity-70 text-[10px]">{j.jobId} - {j.resourceKey}</div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                <div className="p-4 rounded-xl border border-[#ebdcb9] dark:border-[#584a3b] bg-[#fffcf5] dark:bg-[#292119]">
-                  <h4 className="font-bold text-[10px] uppercase text-[#816b5a] mb-2">Active Locks</h4>
-                  {Object.keys(metrics.activeResources).length === 0 ? (
-                    <div className="opacity-50">No active locks</div>
-                  ) : (
-                    <div className="space-y-2">
-                      {Object.entries(metrics.activeResources).map(([key, val]) => (
-                        <div key={key} className="p-2 bg-black/5 dark:bg-white/5 rounded flex justify-between">
-                          <span className="truncate pr-2">{key}</span>
-                          <span className="font-bold">{val as any}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Recent Failures / Jobs */}
-              <div className="p-4 rounded-xl border border-[#ebdcb9] dark:border-[#584a3b] bg-[#fffcf5] dark:bg-[#292119]">
-                <h4 className="font-bold text-[10px] uppercase text-[#816b5a] mb-2">Recent MCP Jobs</h4>
-                {metrics.recentJobs?.length === 0 ? (
-                  <div className="opacity-50">No recent jobs</div>
-                ) : (
-                  <div className="space-y-2 max-h-[150px] overflow-y-auto">
-                    {metrics.recentJobs?.slice(0, 10).map((j: any) => (
-                      <div key={j.jobId} className="p-2 bg-black/5 dark:bg-white/5 rounded flex justify-between items-center">
-                        <div>
-                          <div className="font-bold">{j.toolName}</div>
-                          <div className="opacity-70 text-[10px]">{new Date(j.createdAt).toLocaleTimeString()}</div>
-                        </div>
-                        <span className="px-2 py-1 rounded text-[10px] font-bold">
-                          {j.status}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
+              <Panel title="Active MCP jobs">{(data.mcp?.activeJobs || []).slice(0, 6).map((job) => <Row key={job.jobId} main={job.toolName} sub={`${short(job.jobId)} · ${job.resourceKey || 'no resource'}`} />)}{(data.mcp?.activeJobs || []).length === 0 && <Empty text="No active jobs" />}</Panel>
+              <Panel title="Queued MCP jobs">{(data.mcp?.queuedJobs || []).slice(0, 6).map((job) => <Row key={job.jobId} main={job.toolName} sub={`${short(job.jobId)} · ${job.resourceKey || 'no resource'}`} />)}{(data.mcp?.queuedJobs || []).length === 0 && <Empty text="No queued jobs" />}</Panel>
+              <Panel title="Recent MCP failures">{failedJobs.map((job) => <Row key={job.id || `${job.toolName}-${job.status}`} main={`${job.toolName || 'tool'} · ${job.status || 'unknown'}`} sub={job.failureSummary || 'No failure summary'} />)}{failedJobs.length === 0 && <Empty text="No recent MCP failures" />}</Panel>
+              <Panel title="Active agent runs">{(data.agents?.activeRuns || []).slice(0, 6).map((run) => <Row key={run.id || run.taskId} main={`${run.agent || 'Agent'} · ${run.taskId || 'unknown task'}`} sub={`${run.status || 'unknown'}${run.stale ? ' · stale' : ''}`} />)}{(data.agents?.activeRuns || []).length === 0 && <Empty text="No active agent runs" />}</Panel>
+              <Panel title="Duplicate tool bursts">{(data.tools?.duplicateBursts || []).slice(0, 6).map((burst, index) => <Row key={`${burst.toolName}-${burst.inputHash}-${index}`} main={`${burst.toolName || 'tool'} × ${burst.count || 0}`} sub={`input ${short(burst.inputHash)}`} />)}{(data.tools?.duplicateBursts || []).length === 0 && <Empty text="No duplicate bursts" />}</Panel>
+              {recommendations.length > 0 && <Panel title="Recommendations">{recommendations.map((item) => <div key={item} className="rounded-lg bg-blue-50 p-3 text-sm text-blue-900">{item}</div>)}</Panel>}
             </>
           )}
-
-          {monitorSummary && (
-            <>
-              {/* Agent Monitor */}
-              <div>
-                <h3 className="font-bold mb-3 flex items-center gap-2 uppercase tracking-wider text-[10px] text-[#816b5a] mt-2">
-                  <Activity size={12} /> Agent Run Metrics
-                </h3>
-                
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="p-4 rounded-xl border border-[#ebdcb9] dark:border-[#584a3b] bg-[#fffcf5] dark:bg-[#292119]">
-                    <h4 className="font-bold text-[10px] uppercase text-[#816b5a] mb-2 text-red-600 flex items-center gap-1">
-                      <AlertCircle size={10} /> Duplicate / Burst Calls
-                    </h4>
-                    {monitorSummary.duplicateBursts?.length === 0 ? (
-                      <div className="opacity-50 text-[#3c2a1a] dark:text-[#f3eadf]">No duplicate bursts detected.</div>
-                    ) : (
-                      <div className="space-y-2 max-h-[150px] overflow-y-auto">
-                        {monitorSummary.duplicateBursts?.map((d: any, idx: number) => (
-                          <div key={idx} className="p-2 bg-black/5 dark:bg-white/5 rounded">
-                            <div className="font-bold">{d.toolName} <span className="text-red-500">x{d.count}</span></div>
-                            <div className="opacity-70 text-[10px]">Hash: {d.inputHash}</div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="p-4 rounded-xl border border-[#ebdcb9] dark:border-[#584a3b] bg-[#fffcf5] dark:bg-[#292119]">
-                    <h4 className="font-bold text-[10px] uppercase text-[#816b5a] mb-2 flex items-center gap-1">
-                      <Clock size={10} /> Top Tools
-                    </h4>
-                    {monitorSummary.topTools?.length === 0 ? (
-                      <div className="opacity-50">No tools used recently.</div>
-                    ) : (
-                      <div className="space-y-2 max-h-[150px] overflow-y-auto">
-                        {monitorSummary.topTools?.slice(0, 5).map((t: any, idx: number) => (
-                          <div key={idx} className="p-2 bg-black/5 dark:bg-white/5 rounded flex justify-between">
-                            <div className="font-bold">{t.toolName}</div>
-                            <div className="opacity-70">{t.count} calls ({t.avgDurationMs}ms avg)</div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-              </div>
-            </>
-          )}
-
         </div>
       </div>
     </div>
   );
+}
+
+function Metric({ label, value }: { label: string; value: number }) {
+  return <div className="rounded-xl border border-slate-200 p-4"><div className="text-xs uppercase text-slate-500">{label}</div><div className="mt-2 text-3xl font-semibold text-slate-900">{value}</div></div>;
+}
+
+function Panel({ title, children }: { title: string; children: React.ReactNode }) {
+  return <section className="space-y-2 rounded-xl border border-slate-200 p-4"><h3 className="font-semibold text-slate-900">{title}</h3>{children}</section>;
+}
+
+function Row({ main, sub }: { main: string; sub: string }) {
+  return <div className="rounded-lg bg-slate-50 p-3 text-sm"><div className="font-medium text-slate-900">{main}</div><div className="text-xs text-slate-500">{sub}</div></div>;
+}
+
+function Empty({ text }: { text: string }) {
+  return <p className="text-sm text-slate-500">{text}</p>;
 }

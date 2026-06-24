@@ -1,4 +1,5 @@
 import { getProject } from '../repositories/projectRepository.js';
+import { getTasks } from '../repositories/taskRepository.js';
 import express from 'express';
 import type { ApiRouteDeps } from '../types';
 import { saveSettings, getSettings } from '../repositories/settingsRepository.js';
@@ -12,7 +13,7 @@ import { resolveAgentExecutionMode } from '../services/agentRunService';
 import { continueTaskQueueForProject } from './tasks';
 
 function validateAutoWorkConfiguration(deps: ApiRouteDeps) {
-  const queuedTasks = deps.state.tasksCache
+  const queuedTasks = getTasks()
     .filter((task) => task.status === 'todo' && task.agent)
     .sort((left, right) => new Date(left.createdAt || 0).getTime() - new Date(right.createdAt || 0).getTime());
 
@@ -137,7 +138,7 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
       
       let autoWorkTrigger: any = { triggered: false, reason: 'No eligible todo tasks found.' };
       if (autoWork) {
-        const queuedTasks = deps.state.tasksCache.filter(task => task.status === 'todo' && task.agent);
+        const queuedTasks = getTasks().filter(task => task.status === 'todo' && task.agent);
         const uniqueProjectIds = Array.from(new Set(queuedTasks.map(t => t.projectId).filter(Boolean)));
         const startedRuns: any[] = [];
         const reasons: string[] = [];

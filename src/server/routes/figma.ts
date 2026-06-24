@@ -2,7 +2,7 @@ import { getSettings } from '../repositories/settingsRepository.js';
 import express from 'express';
 import type { ApiRouteDeps } from '../types';
 import { FigmaService } from '../services/figmaService';
-import { saveTask } from '../repositories/taskRepository';
+import { saveTask, getTasks } from '../repositories/taskRepository.js';
 
 function parseNodeIds(value: string) {
   return value.split(',').map((entry) => entry.trim()).filter(Boolean);
@@ -61,7 +61,7 @@ export function registerFigmaRoutes(app: express.Express, deps: ApiRouteDeps) {
         return res.status(400).json({ error: 'fileKey and nodeId are required' });
       }
 
-      const task = deps.state.tasksCache.find((t) => t.id === req.params.taskId || t.displayId === req.params.taskId);
+      const task = getTasks().find((t) => t.id === req.params.taskId || t.displayId === req.params.taskId);
       if (!task) {
         return res.status(404).json({ error: 'Task not found' });
       }

@@ -1,3 +1,6 @@
+const { saveTask } = await import('../src/server/repositories/taskRepository.js');
+const { executeAllMigrations } = await import('../src/db/migrations/index.js');
+executeAllMigrations();
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -246,7 +249,7 @@ const sparseState = {
     localPath: fixtureLocalPath,
   }],
 } as any;
-const taskPrompt = renderTaskPrompt(sparseState, 'task-sparse').renderResult.content;
+sparseState.tasksCache.forEach(t => saveTask(t)); const taskPrompt = renderTaskPrompt(sparseState, 'task-sparse').renderResult.content;
 assert.ok(!taskPrompt.includes('(none)'));
 assert.ok(!taskPrompt.includes('Attached Images API'));
 
@@ -278,6 +281,7 @@ const imageState = {
     localPath: fixtureLocalPath,
   }],
 } as any;
+imageState.tasksCache.forEach(t => saveTask(t));
 const imageTaskPrompt = renderTaskPrompt(imageState, 'task-image').renderResult.content;
 assert.ok(imageTaskPrompt.includes('**Attached Images API:** GET /api/tasks/DVF-0122/images'));
 

@@ -1,6 +1,6 @@
 import type express from 'express';
 import type { ApiRouteDeps } from '../types';
-import { loadTasks, saveTasks } from '../repositories/taskRepository';
+import { getTasksByProjectId, deleteTasksByIds } from '../repositories/taskRepository.js';
 import { getProjects, getProject, createProject as dbCreateProject, updateProject as dbUpdateProject, deleteProject as dbDeleteProject } from '../repositories/projectRepository.js';
 import { createApiError, sendApiError } from '../services/api';
 import { findProjectByIdentifier } from '../services/taskService';
@@ -10,7 +10,7 @@ import fs from 'fs';
 import path from 'path';
 
 function deleteProjectById(projectId: string, deps: ApiRouteDeps) {
-  loadTasks(deps.state);
+  
   if (projectId === 'project-default') {
     throw createApiError(400, 'DEFAULT_PROJECT_PROTECTED', 'Cannot delete default project', { affectedId: projectId });
   }
@@ -23,7 +23,7 @@ function deleteProjectById(projectId: string, deps: ApiRouteDeps) {
   dbDeleteProject(projectId);
   
   deps.state.tasksCache = deps.state.tasksCache.filter((task) => task.projectId !== projectId);
-  saveTasks(deps.state);
+  
 
   return { success: true, removedId: projectId };
 }

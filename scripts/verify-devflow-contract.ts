@@ -43,7 +43,7 @@ fs.writeFileSync(
 const express = (await import('express')).default;
 const { registerApiRoutes } = await import('../src/server/routes/registerApiRoutes.js');
 const { createProject } = await import('../src/server/repositories/projectRepository.js');
-const { saveTasks } = await import('../src/server/repositories/taskRepository.js');
+const { getTasks, saveTask } = await import('../src/server/repositories/taskRepository.js');
 const { getCapabilityCatalog, getMcpToolList, getToolDefinitionByName } = await import('../src/server/contracts/devflowContract.js');
 
 const state = {
@@ -79,7 +79,8 @@ const state = {
 
 executeAllMigrations();
 ((state as any).projectsCache || []).forEach(p => createProject(p));
-saveTasks(state as any);
+((state as any).tasksCache || []).forEach(t => saveTask(t));
+
 
 const app = express();
 registerApiRoutes(app, {
@@ -130,7 +131,7 @@ try {
   assert.equal(moveResponse.status, 200);
   const moveBody = await moveResponse.json();
   assert.equal(moveBody.successCount, 1);
-  assert.equal(state.tasksCache[0].status, 'todo');
+  assert.equal(getTasks().find(t => t.id === String.fromCharCode(68,86,70,45,48,49,50,48) || t.displayId === String.fromCharCode(68,86,70,45,48,49,50,48)).status, 'todo');
 
   const assignResponse = await fetch(`${baseUrl}/api/tasks/batch/assign`, {
     method: 'POST',
@@ -140,7 +141,7 @@ try {
   assert.equal(assignResponse.status, 200);
   const assignBody = await assignResponse.json();
   assert.equal(assignBody.successCount, 1);
-  assert.equal((state.tasksCache[0] as any).agent, 'Codex');
+  assert.equal((getTasks().find(t => t.id === String.fromCharCode(68,86,70,45,48,49,50,48) || t.displayId === String.fromCharCode(68,86,70,45,48,49,50,48)) as any).agent, 'Codex');
 
   const toggleResponse = await fetch(`${baseUrl}/api/tasks/batch/checklist/toggle`, {
     method: 'POST',
@@ -150,7 +151,7 @@ try {
   assert.equal(toggleResponse.status, 200);
   const toggleBody = await toggleResponse.json();
   assert.equal(toggleBody.successCount, 1);
-  assert.equal(state.tasksCache[0].checklist[0].completed, true);
+  assert.equal(getTasks().find(t => t.id === String.fromCharCode(68,86,70,45,48,49,50,48) || t.displayId === String.fromCharCode(68,86,70,45,48,49,50,48)).checklist[0].completed, true);
 
   console.log('[verify] Testing local file tools...');
   const listFilesResponse = await fetch(`${baseUrl}/api/local-files?projectId=project-contract-1&path=scratch`);

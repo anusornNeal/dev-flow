@@ -700,6 +700,8 @@ const mockState = {
 
 // Must not throw when building prompt for task with unsupported effort
 try {
+  const { saveTask } = await import('../src/server/repositories/taskRepository.js');
+  saveTask(mockTask);
   const result = renderTaskPrompt(mockState as any, 'legacy-task-1');
   assert.equal(result.context.assignment.effort, 'legacy-unknown');
   assert.ok(result.renderResult.content.length > 0);

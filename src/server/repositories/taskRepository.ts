@@ -48,8 +48,7 @@ function ensureTaskCategoryColumn() {
   categoryColumnEnsured = true;
 }
 
-
-function loadCounters(state: AppState) {
+export function loadCounters(state: AppState) {
   state.countersCache = {};
   const rows = db.prepare('SELECT prefix, count FROM counters').all() as Array<{ prefix: string; count: number }>;
   for (const row of rows) {
@@ -81,31 +80,32 @@ export function generateDisplayId(state: AppState, projectId: string): string {
   if (!prefix) prefix = 'task';
 
   let maxNum = state.countersCache[prefix] || 0;
-  for (const task of state.tasksCache) {
-    if (task.displayId && task.displayId.startsWith(prefix + '-')) {
+  
+  const tasksWithPrefix = db.prepare(`SELECT displayId FROM tasks WHERE displayId LIKE ?`).all(`${prefix}-%`) as any[];
+  for (const task of tasksWithPrefix) {
+    if (task.displayId) {
       const numPart = task.displayId.split('-').pop();
       if (numPart && !Number.isNaN(parseInt(numPart, 10))) {
         maxNum = Math.max(maxNum, parseInt(numPart, 10));
       }
     }
   }
+  
   state.countersCache[prefix] = maxNum;
 
   let newId = '';
+  const checkStmt = db.prepare('SELECT id FROM tasks WHERE displayId = ?');
   do {
     state.countersCache[prefix] += 1;
     newId = `${prefix}-${state.countersCache[prefix].toString().padStart(4, '0')}`;
-  } while (state.tasksCache.some((task) => task.displayId === newId));
+  } while (checkStmt.get(newId));
 
   saveCounters(state);
   return newId;
 }
 
-export function loadTasks(state: AppState) {
-  ensureTaskCategoryColumn();
-  loadCounters(state);
-  const rows = db.prepare('SELECT * FROM tasks').all() as any[];
-  state.tasksCache = rows.map((item) => ({
+function parseTaskRow(item: any, runsByTaskId: Map<string, AgentRun[]>) {
+  const task = {
     ...item,
     tags: item.tags ? JSON.parse(item.tags) : [],
     targetFiles: item.targetFiles ? JSON.parse(item.targetFiles) : undefined,
@@ -113,11 +113,10 @@ export function loadTasks(state: AppState) {
     logs: item.logs ? JSON.parse(item.logs) : undefined,
     images: (() => {
       let imgs = item.images ? JSON.parse(item.images) : [];
-      // Auto-migrate legacy designImages if any
       const legacy = item.designImages ? JSON.parse(item.designImages) : [];
       if (legacy.length > 0) {
         for (const url of legacy) {
-          imgs.push({ id: 'legacy-' + Math.random().toString(36).substr(2, 9), url, filename: 'legacy-design-image' });
+          imgs.pusk({ id: 'legacy-' + Math.random().toString(36).substr(2, 9), url, filename: 'legacy-design-image' });
         }
       }
       return imgs.length > 0 ? imgs : undefined;
@@ -130,13 +129,39 @@ export function loadTasks(state: AppState) {
       repoContext: item.repoContext,
       reasoning: item.reasoning,
     }),
-  }));
+  };
 
-  // Batch-load all agent runs to avoid N+1 queries
-  const taskIds = rows.map(r => r.id);
-  const allAgentRuns = taskIds.length > 0
-    ? db.prepare('SELECT * FROM agent_runs ORDER BY createdAt DESC').all() as AgentRun[]
-    : [];
+  const taskRuns = runsByTaskId.get(task.id) || [];
+  const activeRun = taskRuns.find(r => ACTIVE_AGENT_RUN_STATUSES.includes(r.status as any)) || null;
+  const latestRun = taskRuns[0] || null;
+  return {
+    ...task,
+    activeAgent: activeRun?.agent || undefined,
+    latestAgentRun: latestRun ? {
+      id: latestRun.id,
+      status: latestRun.status,
+      agent: latestRun.agent,
+      errorMessage: latestRun.errorMessage,
+      createdAt: latestRun.createdAt,
+      startedAt: latestRun.startedAt,
+      endedAt: latestRun.endedAt,
+    } : undefined,
+    agentRuns: taskRuns.map((r: AgentRun) => ({
+      id: r.id,
+      status: r.status,
+      logFile: r.logPath,
+    })),
+  };
+}
+
+function getAllAgentRunsByTaskId(taskIds?: string[]): Map<string, AgentRun[]> {
+  let allAgentRuns: AgentRun[] = [];
+  if (taskIds && taskIds.length > 0) {
+    const placeholders = taskIds.map(() => '?').join(',');
+    allAgentRuns = db.prepare(`SELECT * FROM agent_runs WHERE taskId IN (${placeholders}) ORDER BY createdAt DESC`).all(...taskIds) as AgentRun[];
+  } else if (!taskIds) {
+    allAgentRuns = db.prepare('SELECT * FROM agent_runs ORDER BY createdAt DESC').all() as AgentRun[];
+  }
 
   const runsByTaskId = new Map<string, AgentRun[]>();
   for (const run of allAgentRuns) {
@@ -147,31 +172,36 @@ export function loadTasks(state: AppState) {
       runsByTaskId.set(run.taskId, [run]);
     }
   }
+  return runsByTaskId;
+}
 
-  state.tasksCache = state.tasksCache.map((task) => {
-    const taskRuns = runsByTaskId.get(task.id) || [];
-    const activeRun = taskRuns.find(r => ACTIVE_AGENT_RUN_STATUSES.includes(r.status as any)) || null;
-    const latestRun = taskRuns[0] || null;
-    return {
-      ...task,
-      activeAgent: activeRun?.agent || undefined,
-      latestAgentRun: latestRun ? {
-        id: latestRun.id,
-        status: latestRun.status,
-        agent: latestRun.agent,
-        errorMessage: latestRun.errorMessage,
-        createdAt: latestRun.createdAt,
-        startedAt: latestRun.startedAt,
-        endedAt: latestRun.endedAt,
-      } : undefined,
-      agentRuns: taskRuns.map((r) => ({
-        id: r.id,
-        status: r.status,
-        logFile: r.logPath,
-      })),
-    };
-  });
-  console.log('Loaded ' + state.tasksCache.length + ' tasks from DB');
+export function getTasks(): any[] {
+  ensureTaskCategoryColumn();
+  const rows = db.prepare('SELECT * FROM tasks').all() as any[];
+  const runsByTaskId = getAllAgentRunsByTaskId(rows.map(r => r.id));
+  return rows.map(row => parseTaskRow(row, runsByTaskId));
+}
+
+export function getTask(id: string): any | undefined {
+  ensureTaskCategoryColumn();
+  const row = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as any;
+  if (!row) return undefined;
+  const runsByTaskId = getAllAgentRunsByTaskId([id]);
+  return parseTaskRow(row, runsByTaskId);
+}
+
+export function getTasksByProjectId(projectId: string): any[] {
+  ensureTaskCategoryColumn();
+  const rows = db.prepare('SELECT * FROM tasks WHERE projectId = ?').all(projectId) as any[];
+  const runsByTaskId = getAllAgentRunsByTaskId(rows.map(r => r.id));
+  return rows.map(row => parseTaskRow(row, runsByTaskId));
+}
+
+export function getPendingTasks(): any[] {
+  ensureTaskCategoryColumn();
+  const rows = db.prepare("SELECT * FROM tasks WHERE status = 'todo' AND agent IS NOT NULL AND agent != ''").all() as any[];
+  const runsByTaskId = getAllAgentRunsByTaskId(rows.map(r => r.id));
+  return rows.map(row => parseTaskRow(row, runsByTaskId));
 }
 
 function serializeTaskForRow(item: any) {
@@ -194,7 +224,7 @@ function serializeTaskForRow(item: any) {
     item.priority,
     item.branch,
     normalized.category,
-    normalized.tags.length > 0 ? JSON.stringify(normalized.tags) : null,
+    normalized.tags && normalized.tags.length > 0 ? JSON.stringify(normalized.tags) : null,
     item.targetFiles ? JSON.stringify(item.targetFiles) : null,
     item.checklist ? JSON.stringify(item.checklist) : null,
     item.effort,
@@ -220,44 +250,12 @@ export function saveTask(task: any) {
   db.prepare(TASK_UPSERT_SQL).run(...serializeTaskForRow(task));
 }
 
+export function deleteTask(taskId: string) {
+  db.prepare('DELETE FROM tasks WHERE id = ?').run(taskId);
+}
+
 export function deleteTasksByIds(taskIds: string[]) {
   if (taskIds.length === 0) return;
   const placeholders = taskIds.map(() => '?').join(',');
   db.prepare(`DELETE FROM tasks WHERE id IN (${placeholders})`).run(...taskIds);
-}
-
-export function saveTasks(state: AppState) {
-  ensureTaskCategoryColumn();
-  const stmt = db.prepare(TASK_UPSERT_SQL);
-  db.transaction(() => {
-    const currentIds = state.tasksCache.map((task) => task.id);
-    const tasksById = new Map(state.tasksCache.map((task) => [task.id, task]));
-    const sortedTasks: any[] = [];
-    const visited = new Set<string>();
-
-    const visit = (taskId: string) => {
-      if (visited.has(taskId)) return;
-      visited.add(taskId);
-      const task = tasksById.get(taskId);
-      if (!task) return;
-      if (task.parentId && tasksById.has(task.parentId)) {
-        visit(task.parentId);
-      }
-      sortedTasks.push(task);
-    };
-
-    for (const task of state.tasksCache) {
-      visit(task.id);
-    }
-
-    if (currentIds.length > 0) {
-      const placeholders = currentIds.map(() => '?').join(',');
-      db.prepare(`DELETE FROM tasks WHERE id NOT IN (${placeholders})`).run(...currentIds);
-    } else {
-      db.prepare('DELETE FROM tasks').run();
-    }
-    for (const item of sortedTasks) {
-      stmt.run(...serializeTaskForRow(item));
-    }
-  })();
 }

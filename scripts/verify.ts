@@ -1,4 +1,10 @@
 import { spawnSync } from 'child_process';
+import os from 'os';
+import path from 'path';
+import fs from 'fs';
+const tempDbDir = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-test-'));
+process.env.DEVFLOW_DB_PATH = path.join(tempDbDir, 'devflow.db');
+
 
 const commands = [
   { label: 'lint', command: 'npm', args: ['run', 'lint'] },

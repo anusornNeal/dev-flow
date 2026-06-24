@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { getProject, getProjects } from '../repositories/projectRepository.js';
+import { getTasks } from '../repositories/taskRepository.js';
 import type { AgentCompletionPayload, AgentCompletionTest, TaskCategory } from '../../types';
 import type { AppState } from '../types';
 import { VALID_AGENTS, LEGACY_VALID_EFFORTS_FALLBACK, VALID_MODELS, VALID_PRIORITIES, VALID_STATUSES, VALID_TASK_CATEGORIES } from '../constants';
@@ -98,7 +99,7 @@ export function applyTaskCategoryAndTagsUpdate(
 }
 
 export function findTaskByIdentifier(state: AppState, targetId: string) {
-  return state.tasksCache.find((entry) => entry.id === targetId || entry.displayId === targetId) || null;
+  return getTasks().find((entry) => entry.id === targetId || entry.displayId === targetId) || null;
 }
 
 export function findProjectByIdentifier(state: AppState, input: {
@@ -367,8 +368,8 @@ export function getAgentTaskContext(state: AppState, targetId: string, includeLo
   const task = findTaskByIdentifier(state, targetId);
   if (!task) return null;
 
-  const subtasksRaw = state.tasksCache.filter((entry) => entry.parentId === task.id);
-  const parentRaw = task.parentId ? state.tasksCache.find((entry) => entry.id === task.parentId) : null;
+  const subtasksRaw = getTasks().filter((entry) => entry.parentId === task.id);
+  const parentRaw = task.parentId ? getTasks().find((entry) => entry.id === task.parentId) : null;
 
   const hasSubtasks = subtasksRaw.length > 0;
   let role = 'standalone';

@@ -8,11 +8,7 @@ process.env.DEVFLOW_DB_PATH = path.join(tempDir, 'devflow.db');
 
 try {
   const db = (await import('../src/db/index.js')).default;
-  const {
-    deleteTasksByIds,
-    loadTasks,
-    saveTask,
-  } = await import('../src/server/repositories/taskRepository.js');
+  const { deleteTasksByIds, saveTask, getTasks } = await import('../src/server/repositories/taskRepository.js');
 
   const state = {
     tasksCache: [],
@@ -83,9 +79,9 @@ try {
   rows = db.prepare('SELECT id FROM tasks ORDER BY id').all() as any[];
   assert.deepEqual(rows.map((row) => row.id), ['t-keep']);
 
-  loadTasks(state as any);
-  assert.equal(state.tasksCache.length, 1);
-  assert.equal(state.tasksCache[0].id, 't-keep');
+  
+  assert.equal(getTasks().length, 1);
+  assert.equal(getTasks()[0].id, 't-keep');
 
   console.log('[verify-task-row-persistence] all assertions passed');
 } finally {

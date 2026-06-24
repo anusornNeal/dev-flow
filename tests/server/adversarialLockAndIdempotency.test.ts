@@ -12,7 +12,7 @@ process.env.DEVFLOW_DB_PATH = path.join(tempDir, 'devflow.db');
 const express = (await import('express')).default;
 const { registerApiRoutes } = await import('../../src/server/routes/registerApiRoutes.js');
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
-const { saveTasks } = await import('../../src/server/repositories/taskRepository.js');
+const { } = await import('../../src/server/repositories/taskRepository.js');
 const db = (await import('../../src/db/index.js')).default;
 
 // Spy on database prepare to count database actions
@@ -69,8 +69,10 @@ const state: any = {
   skillsRegistry: [],
 };
 
+const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
+executeAllMigrations();
 ((state as any).projectsCache || []).forEach(p => createProject(p));
-saveTasks(state as any);
+
 
 const app = express();
 app.use(express.json());

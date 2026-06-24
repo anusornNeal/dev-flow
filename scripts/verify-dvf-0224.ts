@@ -32,7 +32,7 @@ const {
   updateAgentRunStatus,
 } = await import('../src/server/repositories/agentRunRepository.js');
 const { createProject, getProjects, updateProject } = await import('../src/server/repositories/projectRepository.js');
-const { saveTasks } = await import('../src/server/repositories/taskRepository.js');
+const { getTasks, saveTask } = await import('../src/server/repositories/taskRepository.js');
 const { createAgentRunFiles } = await import('../src/server/services/agentRunService.js');
 const { createAgentLaunchScript, createCodexLaunchScript } = await import('../src/runner.js');
 const { getAutoWorkState } = await import('../src/lib/autoWorkState.js');
@@ -94,19 +94,19 @@ const lockState: AppState = {
 };
 try { createProject({ id: 'project-1', name: 'p1', repoUrl: 'repo', localPath: process.cwd() }); } catch(e) {}
   const lockDeps: ApiRouteDeps = { state: lockState, writeAgentLog: () => {} };
-saveTasks(lockState);
 
-const codexTrigger = triggerTaskAgent(lockState.tasksCache[0], lockDeps, 'verify');
-const claudeTrigger = triggerTaskAgent(lockState.tasksCache[1], lockDeps, 'verify');
-const blockedCodexTrigger = triggerTaskAgent(lockState.tasksCache[2], lockDeps, 'verify');
+
+const codexTrigger = triggerTaskAgent(getTasks()[0], lockDeps, 'verify');
+const claudeTrigger = triggerTaskAgent(getTasks()[1], lockDeps, 'verify');
+const blockedCodexTrigger = triggerTaskAgent(getTasks()[2], lockDeps, 'verify');
 
 assert.equal(codexTrigger.triggered, true);
 assert.equal(claudeTrigger.triggered, true);
 assert.equal(blockedCodexTrigger.triggered, false);
 assert.equal(blockedCodexTrigger.code, 'AGENT_ALREADY_RUNNING');
-assert.equal(lockState.tasksCache[2].status, 'todo');
+assert.equal(getTasks()[2].status, 'todo');
 assert.equal(listAgentRunsForTask('codex-2').length, 0);
-assert.match(lockState.tasksCache[2].logs.at(-1)?.message || '', /assigned agent Codex is busy/i);
+assert.match(getTasks()[2].logs.at(-1)?.message || '', /assigned agent Codex is busy/i);
 
 await waitFor(() => getLatestAgentRunForTask('codex-1')?.status === 'running');
 await waitFor(() => getLatestAgentRunForTask('claude-1')?.status === 'running');
@@ -127,14 +127,14 @@ const queueState: AppState = {
   
 };
 const queueDeps: ApiRouteDeps = { state: queueState, writeAgentLog: () => {} };
-saveTasks(queueState);
+
 const queueResult = continueTaskQueueForProject('project-queue', queueDeps);
 assert.equal(queueResult.triggered, true);
 assert.equal(queueResult.runs?.length, 2);
-assert.equal(queueState.tasksCache[0].status, 'in-progress');
-assert.equal(queueState.tasksCache[1].status, 'in-progress');
-assert.equal(queueState.tasksCache[2].status, 'todo');
-assert.match(queueState.tasksCache[2].logs.at(-1)?.message || '', /task stays in TODO/i);
+assert.equal(getTasks()[0].status, 'in-progress');
+assert.equal(getTasks()[1].status, 'in-progress');
+assert.equal(getTasks()[2].status, 'todo');
+assert.match(getTasks()[2].logs.at(-1)?.message || '', /task stays in TODO/i);
 
 console.log('[DVF-0224] verifying success continuation, failure, and cancellation routes...');
 await withServer(() => {
@@ -150,12 +150,12 @@ await withServer(() => {
     
     
   };
-  saveTasks(state);
+  
   try { createProject({ id: 'project-1', name: 'p1', repoUrl: 'repo', localPath: process.cwd() }); } catch(e) {}
   const deps: ApiRouteDeps = { state, writeAgentLog: () => {} };
   const firstRun = createAgentRun({ taskId: 'done-codex-1', projectId: 'project-complete', agent: 'Codex', model: 'GPT-5.5', effort: 'high' });
   updateAgentRunStatus(firstRun.id, 'running', { startedAt: new Date().toISOString() });
-  state.tasksCache[0].status = 'in-progress';
+  getTasks()[0].status = 'in-progress';
 
   const failRun = createAgentRun({ taskId: 'fail-codex-1', projectId: 'project-fail', agent: 'Codex', model: 'GPT-5.5', effort: 'high' });
   updateAgentRunStatus(failRun.id, 'running', { startedAt: new Date().toISOString() });
@@ -174,9 +174,9 @@ await withServer(() => {
     body: JSON.stringify({ runId: getLatestAgentRunForTask('done-codex-1')?.id, status: 'success', summary: 'done' }),
   });
   assert.equal(successResponse.status, 200);
-  await waitFor(() => deps.state.tasksCache.find((task) => task.id === 'done-codex-2')?.status === 'in-progress');
-  assert.equal(deps.state.tasksCache.find((task) => task.id === 'done-codex-1')?.status, 'ready-for-review');
-  assert.equal(deps.state.tasksCache.find((task) => task.id === 'done-codex-2')?.status, 'in-progress');
+  await waitFor(() => getTasks().find((task) => task.id === 'done-codex-2')?.status === 'in-progress');
+  assert.equal(getTasks().find((task) => task.id === 'done-codex-1')?.status, 'ready-for-review');
+  assert.equal(getTasks().find((task) => task.id === 'done-codex-2')?.status, 'in-progress');
 
   const failedResponse = await fetch(`${baseUrl}/api/tasks/fail-codex-1/agent-complete`, {
     method: 'POST',
@@ -184,7 +184,7 @@ await withServer(() => {
     body: JSON.stringify({ runId: getLatestAgentRunForTask('fail-codex-1')?.id, status: 'failed', summary: 'compile failed' }),
   });
   assert.equal(failedResponse.status, 200);
-  assert.equal(deps.state.tasksCache.find((task) => task.id === 'fail-codex-1')?.status, 'todo');
+  assert.equal(getTasks().find((task) => task.id === 'fail-codex-1')?.status, 'todo');
 
   const cancelResponse = await fetch(`${baseUrl}/api/tasks/cancel-codex-1/agent-runs/cancel`, {
     method: 'POST',
@@ -192,7 +192,7 @@ await withServer(() => {
     body: JSON.stringify({ reason: 'user cancelled' }),
   });
   assert.equal(cancelResponse.status, 200);
-  assert.equal(deps.state.tasksCache.find((task) => task.id === 'cancel-codex-1')?.status, 'todo');
+  assert.equal(getTasks().find((task) => task.id === 'cancel-codex-1')?.status, 'todo');
   assert.equal(getLatestAgentRunForTask('cancel-codex-1')?.status, 'cancelled');
 });
 
@@ -223,9 +223,9 @@ await withServer(() => {
   const body = await response.json();
   assert.equal(body.autoWorkTrigger.triggered, true);
   assert.equal(body.autoWorkTrigger.runs.length, 2);
-  assert.equal(deps.state.tasksCache.find((task) => task.id === 'enable-codex-1')?.status, 'in-progress');
-  assert.equal(deps.state.tasksCache.find((task) => task.id === 'enable-claude-1')?.status, 'in-progress');
-  assert.equal(deps.state.tasksCache.find((task) => task.id === 'enable-codex-2')?.status, 'todo');
+  assert.equal(getTasks().find((task) => task.id === 'enable-codex-1')?.status, 'in-progress');
+  assert.equal(getTasks().find((task) => task.id === 'enable-claude-1')?.status, 'in-progress');
+  assert.equal(getTasks().find((task) => task.id === 'enable-codex-2')?.status, 'todo');
 });
 
 console.log('[DVF-0224] verifying final stdout/stderr capture is wired into launch scripts...');

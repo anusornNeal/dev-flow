@@ -5,7 +5,7 @@ import { getDevFlowAppRoot } from '../../lib/devFlowPaths';
 import type { ApiRouteDeps } from '../types';
 import { sendApiError } from '../services/api';
 import { applyTaskCategoryAndTagsUpdate, extractDesignImages, extractImages, normalizeTaskCategoryAndTags, resolveProjectIdFromRepo, validateTaskPayload } from '../services/taskService';
-import { generateDisplayId, saveTasks } from '../repositories/taskRepository';
+import { generateDisplayId, saveTask, getTasks } from '../repositories/taskRepository.js';
 
 function getTaskIndexByIdentifier(tasks: any[], targetId: string) {
   return tasks.findIndex((task) => task.id === targetId || task.displayId === targetId);
@@ -137,7 +137,7 @@ export function registerTaskImportFileRoute(app: express.Express, deps: ApiRoute
             hasValidationError = true;
             continue;
           }
-          const existingIndex = getTaskIndexByIdentifier(deps.state.tasksCache, String(taskId));
+          const existingIndex = getTaskIndexByIdentifier(getTasks(), String(taskId));
           if (existingIndex === -1) {
             planned.push({ type: 'update', item, fields, taskId, error: 'Task not found.' });
             hasValidationError = true;
@@ -199,7 +199,7 @@ export function registerTaskImportFileRoute(app: express.Express, deps: ApiRoute
         });
       }
 
-      const cloned = deps.state.tasksCache.map((t) => ({ ...t, checklist: Array.isArray(t.checklist) ? [...t.checklist] : t.checklist, logs: Array.isArray(t.logs) ? [...t.logs] : t.logs, tags: Array.isArray(t.tags) ? [...t.tags] : t.tags }));
+      const cloned = getTasks().map((t) => ({ ...t, checklist: Array.isArray(t.checklist) ? [...t.checklist] : t.checklist, logs: Array.isArray(t.logs) ? [...t.logs] : t.logs, tags: Array.isArray(t.tags) ? [...t.tags] : t.tags }));
       const created: string[] = [];
       const updated: string[] = [];
 
@@ -251,8 +251,8 @@ export function registerTaskImportFileRoute(app: express.Express, deps: ApiRoute
         }
       }
 
-      deps.state.tasksCache = cloned;
-      saveTasks(deps.state);
+      for (const task of cloned) saveTask(task);
+      
 
       return res.json({
         mode,

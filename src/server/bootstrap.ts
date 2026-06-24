@@ -3,8 +3,8 @@ import fs from 'fs';
 
 import {
   generateDisplayId as generateTaskDisplayId,
-  loadTasks as hydrateTasks,
-  saveTasks as persistTasks,
+  getTasks,
+  saveTask
 } from './repositories/taskRepository.js';
 import { initSkillsRepository } from './repositories/skillsRepository.js';
 import type { AppState } from './types.js';
@@ -25,22 +25,13 @@ export function writeAgentLog(level: AgentLogLevel, message: string): void {
 }
 
 export interface AppStateSeed {
-  tasksCache: any[];
   countersCache: Record<string, number>;
 }
 
 export function createAppState(): AppState {
-  const tasksCache: any[] = [];
   const countersCache: Record<string, number> = {};
   
   return {
-    get tasksCache() {
-      return tasksCache;
-    },
-    set tasksCache(value) {
-      tasksCache.length = 0;
-      tasksCache.push(...value);
-    },
     get countersCache() {
       return countersCache;
     },
@@ -51,27 +42,18 @@ export function createAppState(): AppState {
   } as AppState;
 }
 
-export function loadTasks(state: AppState) {
-  hydrateTasks(state);
-}
-
-export function saveTasks(state: AppState) {
-  persistTasks(state);
-}
-
 export function generateDisplayId(state: AppState, projectId: string) {
   return generateTaskDisplayId(state, projectId);
 }
 
 export function sanitizeStartupTasks(state: AppState): void {
-  let changed = false;
-  for (const task of state.tasksCache) {
+  const tasks = getTasks();
+  for (const task of tasks) {
     if (task.status === 'in-progress' && !task.activeAgent) {
       task.status = 'todo';
-      changed = true;
+      saveTask(task);
     }
   }
-  if (changed) saveTasks(state);
 }
 
 export interface BootstrapResult {
@@ -84,7 +66,6 @@ export function bootstrap(): BootstrapResult {
   executeAllMigrations();
   initSkillsRepository();
   const state = createAppState();
-  loadTasks(state);
   sanitizeStartupTasks(state);
   return {
     state,

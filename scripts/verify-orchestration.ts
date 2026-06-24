@@ -1,4 +1,3 @@
-import { getSettings } from '../src/server/repositories/settingsRepository.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -10,6 +9,8 @@ import type { AppState, ApiRouteDeps } from '../src/server/types';
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-orchestration-'));
 process.env.DEVFLOW_DB_PATH = path.join(tempDir, 'devflow.db');
+const { executeAllMigrations } = await import('../src/db/migrations/index.js');
+executeAllMigrations();
 
 const repoPathWithSpaces = path.join(tempDir, 'repo with spaces');
 fs.mkdirSync(repoPathWithSpaces, { recursive: true });
@@ -42,7 +43,10 @@ const {
 
 const { buildTaskStatusMoveRequest } = await import('../src/lib/taskStatusMove.js');
 const { createProject, getProjects, updateProject } = await import('../src/server/repositories/projectRepository.js');
-const { saveTasks } = await import('../src/server/repositories/taskRepository.js');
+const { saveTask: _saveTask, getTasks, deleteTasksByIds } = await import('../src/server/repositories/taskRepository.js');
+const { getSettings } = await import('../src/server/repositories/settingsRepository.js');
+function saveTasks(s: any) { (s?.tasksCache ?? []).forEach((t: any) => _saveTask(t)); }
+function saveAndReload(s: any) { saveTasks(s); s.tasksCache = getTasks(); }
 const { getAgentTaskContext } = await import('../src/server/services/taskService.js');
 const { renderTaskPrompt } = await import('../src/server/services/taskService.js');
 const { isValidTransition } = await import('../src/lib/statusTransitions.js');
@@ -132,7 +136,8 @@ const state: AppState = {
 
 
 try { createProject({ id: 'project-1', name: 'p1', repoUrl: 'https://github.com/anusornNeal/dev-flow', localPath: repoPathWithSpaces }); } catch(e) {}
-  const loggedMessages: string[] = [];
+saveTasks(state);
+const loggedMessages: string[] = [];
 const deps: ApiRouteDeps = {
   state,
   writeAgentLog: (level, msg) => { loggedMessages.push(`[${level}] ${msg}`); },
@@ -170,9 +175,9 @@ await waitFor(() => getLatestAgentRunForTask('task-1')?.status === 'running');
 const run1 = getLatestAgentRunForTask('task-1');
 assert.ok(run1);
 assert.equal(run1?.status, 'running');
-const promptPath = path.join(repoPathWithSpaces, '.devflow', 'runs', run1!.id, 'prompt.md');
+const promptPath = run1!.promptPath!;
 const prompt = fs.readFileSync(promptPath, 'utf8');
-const resultPath = path.join(repoPathWithSpaces, '.devflow', 'runs', run1!.id, 'result.json');
+const resultPath = promptPath.replace('prompt.md', 'result.json');
 const runPrompt = renderTaskPrompt(state, 'task-1', { runId: run1!.id });
 assert.equal(prompt, runPrompt.renderResult.content);
 const historyApp = express();
@@ -276,6 +281,10 @@ assert.equal(queueResult.triggered, true);
 
 await new Promise((resolve) => setTimeout(resolve, 250));
 await waitFor(() => getLatestAgentRunForTask('task-3')?.status === 'running');
+
+// Reload from DB since continueTaskQueueForProject mutates tasks via saveTask()
+state.tasksCache = getTasks().filter(t => ['task-1','task-1-sub','task-2','task-3'].includes(t.id))
+  .sort((a, b) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime());
 
 assert.equal(state.tasksCache[1].status, 'backlog');
 assert.equal(state.tasksCache[2].status, 'todo');
@@ -464,12 +473,16 @@ try {
     }),
   });
   assert.equal(updateResponse.status, 200);
+  // Reload from DB — route mutates DB, not in-memory state
+  moveState.tasksCache = getTasks().filter(t => t.id === 'move-task-1');
   assert.equal(moveState.tasksCache[0].effort, 'low');
   assert.equal(moveState.tasksCache[0].model, 'GPT-5.4 Mini');
 
   const moveRequest = buildTaskStatusMoveRequest(staleTaskSnapshot.id, 'todo');
   const moveResponse = await fetch(`${moveBaseUrl}${moveRequest.url}`, moveRequest.init);
   assert.equal(moveResponse.status, 200);
+  // Reload again after move
+  moveState.tasksCache = getTasks().filter(t => t.id === 'move-task-1');
   assert.equal(moveState.tasksCache[0].status, 'todo');
   assert.equal(moveState.tasksCache[0].effort, 'low');
   assert.equal(moveState.tasksCache[0].model, 'GPT-5.4 Mini');
@@ -584,6 +597,9 @@ try {
   await new Promise<void>((resolve, reject) => resetServer.close((error) => error ? reject(error) : resolve()));
 }
 
+// Reload from DB — HTTP routes mutate DB, not the in-memory state reference
+resetState.tasksCache = getTasks().filter(t => ['reset-todo', 'reset-progress', 'reset-review', 'queue-sibling'].includes(t.id));
+
 for (const taskId of ['reset-todo', 'reset-progress', 'reset-review']) {
   const task = resetState.tasksCache.find((entry) => entry.id === taskId);
   assert.ok(task);
@@ -663,11 +679,14 @@ const autoWorkValidationState: AppState = {
   
   
 };
-try { createProject({ id: 'project-1', name: 'p1', repoUrl: 'repo', localPath: path.join(tempDir, 'missing-project-path') }); } catch(e) {}
-  const autoWorkValidationDeps: ApiRouteDeps = {
+// Use a fresh project-id to isolate from earlier test tasks
+autoWorkValidationState.tasksCache[0].projectId = 'project-autowork-invalid';
+try { createProject({ id: 'project-autowork-invalid', name: 'p-invalid', repoUrl: 'repo', localPath: path.join(tempDir, 'missing-project-path') }); } catch(e) {}
+const autoWorkValidationDeps: ApiRouteDeps = {
   state: autoWorkValidationState,
   writeAgentLog: () => {},
 };
+saveTasks(autoWorkValidationState);
 const autoWorkValidationApp = express();
 autoWorkValidationApp.use(express.json());
 registerSettingsRoutes(autoWorkValidationApp, autoWorkValidationDeps);
@@ -725,7 +744,13 @@ const autoWorkTriggerState: AppState = {
   
 };
 try { createProject({ id: 'project-autowork-1', name: 'p1', repoUrl: 'repo', localPath: tempDir }); } catch(e) {}
-  const autoWorkTriggerDeps: ApiRouteDeps = {
+// Clean up any stale todo tasks from earlier test sections to prevent cross-test preflight failures
+{
+  const staleIds = getTasks().filter(t => t.status === 'todo' && t.projectId !== 'project-autowork-1').map((t: any) => t.id);
+  if (staleIds.length > 0) deleteTasksByIds(staleIds);
+}
+saveTasks(autoWorkTriggerState);
+const autoWorkTriggerDeps: ApiRouteDeps = {
   state: autoWorkTriggerState,
   writeAgentLog: (level, msg) => console.log(`[AutoWorkTrigger Log] ${level}: ${msg}`),
 };
@@ -750,8 +775,9 @@ try {
   assert.equal(body.autoWorkTrigger.triggered, true);
   assert.equal(getSettings().autoWork, true);
   
-  // Unrelated task should not be mutated
-  const unrelatedTask = autoWorkTriggerState.tasksCache.find(t => t.id === 'unrelated-task');
+  // Reload from DB to check unrelated task was not mutated
+  const freshTasks = getTasks().filter(t => t.projectId === 'project-autowork-1');
+  const unrelatedTask = freshTasks.find(t => t.id === 'unrelated-task');
   assert.equal(unrelatedTask?.agent, 'Claude');
   assert.equal(unrelatedTask?.model, 'Claude 4.8 Opus');
   

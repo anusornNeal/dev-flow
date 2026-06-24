@@ -14,6 +14,9 @@ const { FigmaService } = await import('../src/server/services/figmaService.js');
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-figma-'));
 process.env.DEVFLOW_DB_PATH = path.join(tempDir, 'devflow.db');
 
+const { executeAllMigrations } = await import('../src/db/migrations/index.js');
+executeAllMigrations();
+
 async function withServer(
   appFactory: () => { app: express.Express; deps: ApiRouteDeps },
   run: (baseUrl: string, deps: ApiRouteDeps) => Promise<void>,

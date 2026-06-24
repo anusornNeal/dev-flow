@@ -17,7 +17,7 @@ const fixture = (name: string) => path.join(fixtureDir, name);
 const express = (await import('express')).default;
 const { registerApiRoutes } = await import('../../src/server/routes/registerApiRoutes.js');
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
-const { saveTasks } = await import('../../src/server/repositories/taskRepository.js');
+const { saveTask, getTasks } = await import('../../src/server/repositories/taskRepository.js');
 
 const state = {
   tasksCache: [
@@ -37,7 +37,7 @@ const state = {
 };
 
 ((state as any).projectsCache || []).forEach(p => createProject(p));
-saveTasks(state as any);
+
 
 const app = express();
 registerApiRoutes(app, { state: state as any, writeAgentLog: () => {} });
@@ -88,15 +88,15 @@ try {
   });
   assert.equal(r5.status, 200);
   assert.equal(r5.body.summary.updated, 1);
-  assert.equal(state.tasksCache[0].description, 'old desc', 'dry-run must not mutate');
+  assert.equal(getTasks()[0].description, 'old desc', 'dry-run must not mutate');
 
   // 6. apply
   const r6 = await post('/api/tasks/import-file', {
     mode: 'apply', strategy: 'patch', patchFilePath: fixture('patch.json'),
   });
   assert.equal(r6.status, 200);
-  assert.equal((state.tasksCache[0] as any).description, 'new desc from import');
-  assert.equal((state.tasksCache[0] as any).status, 'backlog');
+  assert.equal((getTasks()[0] as any).description, 'new desc from import');
+  assert.equal((getTasks()[0] as any).status, 'backlog');
 
   // 7. apply create
   const createPatch = { version: 'devflow.taskPatch.v1', defaults: { projectName: 'Dev Flow' }, tasks: [{ operation: 'create', title: 'New import task', fields: { category: 'general', priority: 'high' } }] };
@@ -106,7 +106,7 @@ try {
   });
   assert.equal(r7.status, 200);
   assert.equal(r7.body.summary.created, 1);
-  assert.ok(state.tasksCache.some((t: any) => t.title === 'New import task'), 'new task must exist');
+  assert.ok(getTasks().some((t: any) => t.title === 'New import task'), 'new task must exist');
 
   // 8. unknown field
   const unknownPatch = { version: 'devflow.taskPatch.v1', tasks: [{ taskId: 'DVF-0200', operation: 'update', fields: { fakeField: 'bad' } }] };
@@ -130,13 +130,13 @@ try {
     { taskId: 'DVF-9999', operation: 'update', fields: { description: 'bad' } },
   ]};
   fs.writeFileSync(fixture('mixed.json'), JSON.stringify(mixedPatch));
-  const descBeforeMixed = (state.tasksCache[0] as any).description;
+  const descBeforeMixed = (getTasks()[0] as any).description;
   const r10 = await post('/api/tasks/import-file', {
     mode: 'apply', strategy: 'patch', patchFilePath: fixture('mixed.json'),
   });
   assert.equal(r10.status, 200);
   assert.equal(r10.body.mode, 'dry-run');
-  assert.equal((state.tasksCache[0] as any).description, descBeforeMixed, 'invalid prevents all mutations');
+  assert.equal((getTasks()[0] as any).description, descBeforeMixed, 'invalid prevents all mutations');
 
   console.log('[import-tasks-from-file] all tests passed');
 } finally {

@@ -13,7 +13,7 @@ process.env.DEVFLOW_DB_PATH = path.join(tempDir, 'devflow.db');
 const express = (await import('express')).default;
 const { registerApiRoutes } = await import('../../src/server/routes/registerApiRoutes.js');
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
-const { loadTasks, saveTasks } = await import('../../src/server/repositories/taskRepository.js');
+const { getTasks, saveTask } = await import('../../src/server/repositories/taskRepository.js');
 
 const state: any = {
   tasksCache: [
@@ -50,8 +50,8 @@ const state: any = {
 };
 
 ((state as any).projectsCache || []).forEach(p => createProject(p));
-saveTasks(state as any);
-loadTasks(state as any);
+
+
 
 const app = express();
 registerApiRoutes(app, { state: state as any, writeAgentLog: () => {} });
@@ -73,8 +73,8 @@ async function request(method: string, route: string, body?: unknown) {
   return { status: response.status, body: parsed };
 }
 
-test('loadTasks backfills legacy type tags into category and preserves free-form labels', () => {
-  const legacyTask = state.tasksCache.find((task: any) => task.id === 'task-legacy-1') as any;
+test('backfills legacy type tags into category and preserves free-form labels', () => {
+  const legacyTask = getTasks().find((task: any) => task.id === 'task-legacy-1') as any;
   assert.ok(legacyTask);
   assert.equal(legacyTask.category, 'backend');
   assert.deepEqual(legacyTask.tags, ['queue']);
@@ -103,8 +103,8 @@ test('POST /api/tasks persists explicit category separately from tags', async ()
   assert.equal(response.body.category, 'frontend');
   assert.deepEqual(response.body.tags, ['queue', 'auto-work']);
 
-  loadTasks(state as any);
-  const createdTask = state.tasksCache.find((task: any) => task.id === response.body.id) as any;
+  
+  const createdTask = getTasks().find((task: any) => task.id === response.body.id) as any;
   assert.ok(createdTask);
   assert.equal(createdTask.category, 'frontend');
   assert.deepEqual(createdTask.tags, ['queue', 'auto-work']);
@@ -136,7 +136,7 @@ test('POST /api/tasks supports one legacy category tag for compatibility', async
 });
 
 test('PUT /api/tasks/:id updates category while keeping free-form tags', async () => {
-  const existingTask = state.tasksCache.find((task: any) => task.title === 'Frontend task');
+  const existingTask = getTasks().find((task: any) => task.title === 'Frontend task');
   assert.ok(existingTask);
 
   const response = await request('PUT', `/api/tasks/${existingTask.id}`, {
@@ -187,14 +187,14 @@ test('import-file accepts category and strips legacy type tags from labels', asy
 
   try {
     assert.equal(response.status, 200);
-    loadTasks(state as any);
+    
 
-    const importedBackend = state.tasksCache.find((task: any) => task.title === 'Imported backend task') as any;
+    const importedBackend = getTasks().find((task: any) => task.title === 'Imported backend task') as any;
     assert.ok(importedBackend);
     assert.equal(importedBackend.category, 'backend');
     assert.deepEqual(importedBackend.tags, ['queue', 'logs']);
 
-    const importedLegacy = state.tasksCache.find((task: any) => task.title === 'Imported legacy frontend task') as any;
+    const importedLegacy = getTasks().find((task: any) => task.title === 'Imported legacy frontend task') as any;
     assert.ok(importedLegacy);
     assert.equal(importedLegacy.category, 'frontend');
     assert.deepEqual(importedLegacy.tags, ['auto-work']);
@@ -206,7 +206,7 @@ test('import-file accepts category and strips legacy type tags from labels', asy
 });
 
 test('A & B. PUT /api/tasks/:id preserves tags when omitted from payload (including status changes)', async () => {
-  const existingTask = state.tasksCache.find((task: any) => task.title === 'Frontend task');
+  const existingTask = getTasks().find((task: any) => task.title === 'Frontend task');
   assert.ok(existingTask);
   const oldCategory = existingTask.category;
   const oldTags = existingTask.tags;
@@ -222,7 +222,7 @@ test('A & B. PUT /api/tasks/:id preserves tags when omitted from payload (includ
 });
 
 test('C. POST /api/tasks/batch preserves tags when omitted', async () => {
-  const existingTask = state.tasksCache.find((task: any) => task.title === 'General task');
+  const existingTask = getTasks().find((task: any) => task.title === 'General task');
   assert.ok(existingTask);
 
   const response = await request('POST', '/api/tasks/batch', {
@@ -238,7 +238,7 @@ test('C. POST /api/tasks/batch preserves tags when omitted', async () => {
 });
 
 test('D. import-file patch preserves tags when omitted', async () => {
-  const existingTask = state.tasksCache.find((task: any) => task.title === 'Imported backend task');
+  const existingTask = getTasks().find((task: any) => task.title === 'Imported backend task');
   assert.ok(existingTask);
 
   const fixtureDir = path.join(appRoot, '.category-test-fixtures');
@@ -270,7 +270,7 @@ test('D. import-file patch preserves tags when omitted', async () => {
 
   try {
     assert.equal(response.status, 200);
-    const updatedBackend = state.tasksCache.find((task: any) => task.id === existingTask.id);
+    const updatedBackend = getTasks().find((task: any) => task.id === existingTask.id);
     assert.ok(updatedBackend);
     assert.equal(updatedBackend.category, 'backend');
     assert.deepEqual(updatedBackend.tags, ['queue', 'logs']);
@@ -282,7 +282,7 @@ test('D. import-file patch preserves tags when omitted', async () => {
 });
 
 test('E. Explicit tags update still works and wipes old tags if provided', async () => {
-  const existingTask = state.tasksCache.find((task: any) => task.title === 'Updated general task');
+  const existingTask = getTasks().find((task: any) => task.title === 'Updated general task');
   assert.ok(existingTask);
 
   const response = await request('PUT', `/api/tasks/${existingTask.id}`, {
@@ -295,7 +295,7 @@ test('E. Explicit tags update still works and wipes old tags if provided', async
 });
 
 test('F. PUT /api/tasks list-update preserves tags when omitted', async () => {
-  const existingTask = state.tasksCache.find((task: any) => task.title === 'Legacy frontend task');
+  const existingTask = getTasks().find((task: any) => task.title === 'Legacy frontend task');
   assert.ok(existingTask);
   const oldCategory = existingTask.category;
   const oldTags = existingTask.tags;
@@ -312,7 +312,7 @@ test('F. PUT /api/tasks list-update preserves tags when omitted', async () => {
 
 test('G. PUT /api/tasks/:id category-only update preserves tags', async () => {
   // Use 'Updated via list PUT' which currently has tags ['runner']
-  const existingTask = state.tasksCache.find((task: any) => task.title === 'Updated via list PUT');
+  const existingTask = getTasks().find((task: any) => task.title === 'Updated via list PUT');
   assert.ok(existingTask);
   const oldTags = existingTask.tags;
 
@@ -326,7 +326,7 @@ test('G. PUT /api/tasks/:id category-only update preserves tags', async () => {
 });
 
 test('H. import-file patch category-only update preserves tags', async () => {
-  const existingTask = state.tasksCache.find((task: any) => task.title === 'Imported backend task');
+  const existingTask = getTasks().find((task: any) => task.title === 'Imported backend task');
   assert.ok(existingTask);
   const oldTags = existingTask.tags;
 
@@ -359,7 +359,7 @@ test('H. import-file patch category-only update preserves tags', async () => {
 
   try {
     assert.equal(response.status, 200);
-    const updatedBackend = state.tasksCache.find((task: any) => task.id === existingTask.id);
+    const updatedBackend = getTasks().find((task: any) => task.id === existingTask.id);
     assert.ok(updatedBackend);
     assert.equal(updatedBackend.category, 'frontend');
     assert.deepEqual(updatedBackend.tags, oldTags);
@@ -371,7 +371,7 @@ test('H. import-file patch category-only update preserves tags', async () => {
 });
 
 test('I. explicit empty tags array clears tags', async () => {
-  const existingTask = state.tasksCache.find((task: any) => task.title === 'Updated general task');
+  const existingTask = getTasks().find((task: any) => task.title === 'Updated general task');
   assert.ok(existingTask);
   const oldCategory = existingTask.category;
 

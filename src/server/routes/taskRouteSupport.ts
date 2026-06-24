@@ -8,7 +8,7 @@ import type express from 'express';
 import type { ApiRouteDeps } from '../types';
 import { TASK_SCHEMA_DEF, VALID_AGENTS, LEGACY_VALID_EFFORTS_FALLBACK, VALID_MODELS, VALID_STATUSES } from '../constants';
 import { ACTIVE_AGENT_RUN_STATUSES, cancelActiveRunsForTask, cancelStaleActiveRuns, createAgentRun, getActiveRunForProjectAndAgent, getActiveRunForTask, getLatestAgentRunForTask, listActiveRunSummariesForProject, listAgentRunsForTask, updateAgentRunStatus, type AgentRun } from '../repositories/agentRunRepository';
-import { deleteTasksByIds, loadTasks, generateDisplayId, saveTask, saveTasks } from '../repositories/taskRepository';
+import { deleteTasksByIds, generateDisplayId, saveTask, getTasks } from '../repositories/taskRepository.js';
 import { listAttachmentsForTask } from '../repositories/attachmentRepository';
 import { appendAgentRunLog, buildAgentCompletionSummary, createAgentRunFiles, createAgentRunResultRecord, getAgentRunHistoryPaths, getAgentTriggerScriptPath, getDevFlowApiBaseUrl, resolveAgentExecutionMode, resolveFromDevFlowAppRoot, writeAgentRunLaunchMetadata, writeAgentRunOutputSummary, writeAgentRunResult } from '../services/agentRunService';
 import { extractImages, extractDesignImages, findProjectByIdentifier, findTaskByIdentifier, getAgentTaskContext, normalizeAgentCompletionPayload, normalizeTaskCategoryAndTags, applyTaskCategoryAndTagsUpdate, renderTaskPrompt, resolveProjectIdFromRepo, validateAgentCompletionPayload, validateAgentParams, validateTaskPayload } from '../services/taskService';
@@ -193,7 +193,7 @@ function resolveTaskListProjectId(deps: ApiRouteDeps, req: express.Request) {
 }
 
 export function filterTasksForList(deps: ApiRouteDeps, req: express.Request) {
-  let tasks = [...deps.state.tasksCache];
+  let tasks = [...getTasks()];
   const resolvedProjectId = resolveTaskListProjectId(deps, req);
   const projectId = resolvedProjectId || (typeof req.query.projectId === 'string' ? req.query.projectId : '');
   const parentId = typeof req.query.parentId === 'string' ? req.query.parentId : '';
@@ -268,7 +268,7 @@ function taskHasManualEvidence(task: any) {
 }
 
 function getChildReviewBlockers(task: any, deps: ApiRouteDeps) {
-  const children = deps.state.tasksCache.filter((entry) => entry.parentId === task.id);
+  const children = getTasks().filter((entry) => entry.parentId === task.id);
   if (children.length === 0) return [];
 
   const blockers: string[] = [];
@@ -438,7 +438,7 @@ export function cleanupStaleActiveRuns(deps: ApiRouteDeps) {
       if (existing) { existing.push(run); }
       else { runsByTaskId.set(run.taskId, [run]); }
     }
-    for (const task of deps.state.tasksCache) {
+    for (const task of getTasks()) {
       const taskRuns = runsByTaskId.get(task.id) || [];
       const activeRun = taskRuns.find(r => ACTIVE_AGENT_RUN_STATUSES.includes(r.status as any)) || null;
       const latestRun = taskRuns[0] || null;
@@ -454,7 +454,7 @@ export function cleanupStaleActiveRuns(deps: ApiRouteDeps) {
       } : undefined;
       task.agentRuns = taskRuns.map((r) => ({ id: r.id, status: r.status, logFile: r.logPath }));
     }
-    saveTasks(deps.state);
+    
   }
 }
 
@@ -548,7 +548,7 @@ export function completeAgentRunForTask(task: any, run: AgentRun, deps: ApiRoute
 }
 
 export function continueTaskQueueForProject(projectId: string, deps: ApiRouteDeps) {
-  const eligibleTasks = deps.state.tasksCache.filter((entry) => entry.projectId === projectId && entry.status === 'todo' && entry.agent);
+  const eligibleTasks = getTasks().filter((entry) => entry.projectId === projectId && entry.status === 'todo' && entry.agent);
   eligibleTasks.sort((a, b) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime());
   const startedRuns: AgentRun[] = [];
 
@@ -556,6 +556,7 @@ export function continueTaskQueueForProject(projectId: string, deps: ApiRouteDep
     const latestRun = getLatestAgentRunForTask(nextTask.id);
     if (latestRun?.status === 'failed') {
       appendTaskLog(nextTask, 'Queue continuation skipped: latest agent run failed. Manual retry is required before auto-work can pick this task again.', 'update');
+      saveTask(nextTask);
       continue;
     }
 
@@ -568,10 +569,11 @@ export function continueTaskQueueForProject(projectId: string, deps: ApiRouteDep
     const blockedResult = result as TriggerTaskAgentFailure;
     if (blockedResult.code !== 'AGENT_ALREADY_RUNNING') {
       appendTaskLog(nextTask, `Queue continuation skipped: ${blockedResult.reason}`, 'update');
+      saveTask(nextTask);
     }
   }
 
-  saveTasks(deps.state);
+  
   if (startedRuns.length > 0) {
     return {
       triggered: true,

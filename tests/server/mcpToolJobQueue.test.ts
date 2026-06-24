@@ -1,3 +1,5 @@
+import { executeAllMigrations } from '../../src/db/migrations/index.js';
+executeAllMigrations();
 import { test } from 'node:test';
 import assert from 'node:assert';
 import fs from 'fs';

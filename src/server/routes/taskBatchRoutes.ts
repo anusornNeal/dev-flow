@@ -3,7 +3,7 @@ import type { ApiRouteDeps } from '../types';
 import { createApiError, sendApiError } from '../services/api';
 import { applyTaskCategoryAndTagsUpdate, extractDesignImages, extractImages, normalizeTaskCategoryAndTags, resolveProjectIdFromRepo, validateAgentParams, validateTaskPayload } from '../services/taskService';
 import { validateTaskQualityForMutation } from '../services/taskQualityService';
-import { generateDisplayId, saveTasks } from '../repositories/taskRepository';
+import { generateDisplayId, saveTask, getTasks } from '../repositories/taskRepository.js';
 import { getValidationErrorMessage, isValidTransition } from '../../lib/statusTransitions';
 import { applyChecklistToggle as applyChecklistToggleUseCase } from '../useCases/taskUseCases';
 import { VALID_STATUSES } from '../constants';
@@ -33,7 +33,7 @@ export function registerTaskBatchRoutes(app: express.Express, deps: ApiRouteDeps
     const updatedTasks: any[] = [];
 
     for (const item of rawItems) {
-      const existingIndex = item.id ? deps.state.tasksCache.findIndex((task) => task.id === item.id) : -1;
+      const existingIndex = item.id ? getTasks().findIndex((task) => task.id === item.id) : -1;
       const isUpdate = existingIndex !== -1;
 
       const validationErr = validateTaskPayload(item, isUpdate);
@@ -42,19 +42,19 @@ export function registerTaskBatchRoutes(app: express.Express, deps: ApiRouteDeps
         continue;
       }
 
-      const agentValidationError = validateAgentParams(item, deps.state.tasksCache);
+      const agentValidationError = validateAgentParams(item, getTasks());
       if (agentValidationError) {
         if (!Array.isArray(req.body)) return res.status(400).json({ error: agentValidationError });
         continue;
       }
 
       if (existingIndex !== -1) {
-        const currentTask = deps.state.tasksCache[existingIndex];
+        const currentTask = getTasks()[existingIndex];
         if (currentTask.status === 'in-progress' && !canOverrideTaskLock(currentTask, item, undefined, req.headers['x-agent-request'])) {
           continue;
         }
         const candidateTask = { ...currentTask, ...item };
-        const mergedAgentValidationError = validateAgentParams(candidateTask, deps.state.tasksCache);
+        const mergedAgentValidationError = validateAgentParams(candidateTask, getTasks());
         if (mergedAgentValidationError) {
           if (!Array.isArray(req.body)) return res.status(400).json({ error: mergedAgentValidationError });
           continue;
@@ -107,7 +107,7 @@ export function registerTaskBatchRoutes(app: express.Express, deps: ApiRouteDeps
         }
 
         syncTaskAgentStateForStatus(updatedTask, currentTask.status);
-        deps.state.tasksCache[existingIndex] = updatedTask;
+        saveTask(updatedTask);
         updatedTasks.push(updatedTask);
         maybeTriggerTaskAgent(updatedTask, currentTask, deps, 'POST /tasks/batch update');
         continue;
@@ -162,12 +162,12 @@ export function registerTaskBatchRoutes(app: express.Express, deps: ApiRouteDeps
         continue;
       }
 
-      deps.state.tasksCache.push(newTask);
+      saveTask(newTask);
       importedTasks.push(newTask);
       maybeTriggerTaskAgent(newTask, undefined, deps, 'POST /tasks/batch create');
     }
 
-    saveTasks(deps.state);
+    
     return res.status(201).json({ success: true, createdCount: importedTasks.length, updatedCount: updatedTasks.length, tasks: [...importedTasks, ...updatedTasks] });
   });
 
@@ -184,12 +184,12 @@ export function registerTaskBatchRoutes(app: express.Express, deps: ApiRouteDeps
           return { success: false, affectedId: item.taskId, error: { code: 'INVALID_STATUS', message: statusErr, retryable: false, affectedId: item.taskId } };
         }
 
-        const taskIndex = getTaskIndexByIdentifier(deps.state.tasksCache, String(item.taskId || ''));
+        const taskIndex = getTaskIndexByIdentifier(getTasks(), String(item.taskId || ''));
         if (taskIndex === -1) {
           return { success: false, affectedId: item.taskId, error: { code: 'TASK_NOT_FOUND', message: 'Task not found', retryable: false, affectedId: item.taskId } };
         }
 
-        const task = deps.state.tasksCache[taskIndex];
+        const task = getTasks()[taskIndex];
         if (task.status === item.status) {
           return { success: true, affectedId: task.id, task };
         }
@@ -206,12 +206,12 @@ export function registerTaskBatchRoutes(app: express.Express, deps: ApiRouteDeps
           updatedAt: new Date().toISOString(),
           logs: [...(task.logs || []), createTaskLogEntry(`Status moved from ${task.status.toUpperCase()} to ${item.status.toUpperCase()} via Batch API`, 'move')],
         };
-        deps.state.tasksCache[taskIndex] = updatedTask;
+        saveTask(updatedTask);
         syncTaskAgentStateForStatus(updatedTask, task.status);
         return { success: true, affectedId: updatedTask.id, task: updatedTask };
       });
 
-      saveTasks(deps.state);
+      
       return res.json({
         success: results.every((item) => item.success),
         successCount: results.filter((item) => item.success).length,
@@ -231,12 +231,12 @@ export function registerTaskBatchRoutes(app: express.Express, deps: ApiRouteDeps
       }
 
       const results = toggles.map((item: any) => {
-        const taskIndex = getTaskIndexByIdentifier(deps.state.tasksCache, String(item.taskId || ''));
+        const taskIndex = getTaskIndexByIdentifier(getTasks(), String(item.taskId || ''));
         if (taskIndex === -1) {
           return { success: false, affectedId: item.taskId, error: { code: 'TASK_NOT_FOUND', message: 'Task not found', retryable: false, affectedId: item.taskId } };
         }
 
-        const task = deps.state.tasksCache[taskIndex];
+        const task = getTasks()[taskIndex];
         const checklistItem = (task.checklist || []).find((entry: any) => (entry.id || entry.text) === item.checklistId);
         if (!checklistItem) {
           return { success: false, affectedId: task.id, error: { code: 'CHECKLIST_NOT_FOUND', message: 'Checklist item not found', retryable: false, affectedId: task.id } };
@@ -248,10 +248,11 @@ export function registerTaskBatchRoutes(app: express.Express, deps: ApiRouteDeps
         checklistItem.completed = !checklistItem.completed;
         task.updatedAt = new Date().toISOString();
         task.logs = [...(task.logs || []), createTaskLogEntry(`Checklist step "${checklistItem.text}" set to ${checklistItem.completed ? 'COMPLETED' : 'INCOMPLETE'} via Batch API`)];
+        saveTask(task);
         return { success: true, affectedId: task.id, task };
       });
 
-      saveTasks(deps.state);
+      
       return res.json({
         success: results.every((item) => item.success),
         successCount: results.filter((item) => item.success).length,
@@ -271,13 +272,13 @@ export function registerTaskBatchRoutes(app: express.Express, deps: ApiRouteDeps
       }
 
       const results = assignments.map((item: any) => {
-        const taskIndex = getTaskIndexByIdentifier(deps.state.tasksCache, String(item.taskId || ''));
+        const taskIndex = getTaskIndexByIdentifier(getTasks(), String(item.taskId || ''));
         if (taskIndex === -1) {
           return { success: false, affectedId: item.taskId, error: { code: 'TASK_NOT_FOUND', message: 'Task not found', retryable: false, affectedId: item.taskId } };
         }
 
-        const task = deps.state.tasksCache[taskIndex];
-        const agentValidationError = validateAgentParams({ ...task, ...item }, deps.state.tasksCache);
+        const task = getTasks()[taskIndex];
+        const agentValidationError = validateAgentParams({ ...task, ...item }, getTasks());
         if (agentValidationError) {
           return { success: false, affectedId: task.id, error: { code: 'INVALID_ASSIGNMENT', message: agentValidationError, retryable: false, affectedId: task.id } };
         }
@@ -291,11 +292,12 @@ export function registerTaskBatchRoutes(app: express.Express, deps: ApiRouteDeps
         task.effort = item.effort || undefined;
         task.updatedAt = new Date().toISOString();
         task.logs = [...(task.logs || []), createTaskLogEntry(`Agent configuration updated via Batch API: Agent=${item.agent || 'None'}, Model=${item.model || 'Default'}, Effort=${item.effort || 'Auto'}`)];
+        saveTask(task);
         maybeTriggerTaskAgent(task, previousTask, deps, 'POST /tasks/batch/assign');
         return { success: true, affectedId: task.id, task };
       });
 
-      saveTasks(deps.state);
+      
       return res.json({
         success: results.every((item) => item.success),
         successCount: results.filter((item) => item.success).length,

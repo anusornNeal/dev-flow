@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import type { AppState } from '../types';
-import { createJob, updateJobStatus, appendJobLog, writeJobResult, getJob, listInterruptedJobs, type JobStatus } from '../repositories/mcpToolJobRepository';
+import { createJob, updateJobStatus, appendJobLog, writeJobResult, getJob, listInterruptedJobs, startBackgroundJobCleanup, type JobStatus } from '../repositories/mcpToolJobRepository';
 import { resolveProjectRoot } from './localFileService';
 
 // Import async runners (we will define these later in their respective files)
@@ -28,23 +28,62 @@ interface QueueEntry {
 
 const queue: QueueEntry[] = [];
 const activeJobs = new Map<string, { entry: QueueEntry; cancelFn?: () => void }>();
-const activeResources = new Map<string, number>();
 
-function getResourceCount(resourceKey: string): number {
-  return activeResources.get(resourceKey) || 0;
+interface ResourceStats {
+  readers: number;
+  writers: number;
+  kindCount: Record<string, number>;
 }
 
-function incrementResource(resourceKey: string) {
-  activeResources.set(resourceKey, getResourceCount(resourceKey) + 1);
-}
+const activeResources = new Map<string, ResourceStats>();
 
-function decrementResource(resourceKey: string) {
-  const count = getResourceCount(resourceKey);
-  if (count <= 1) {
-    activeResources.delete(resourceKey);
-  } else {
-    activeResources.set(resourceKey, count - 1);
+function getResourceStats(resourceKey: string): ResourceStats {
+  let stats = activeResources.get(resourceKey);
+  if (!stats) {
+    stats = { readers: 0, writers: 0, kindCount: {} };
+    activeResources.set(resourceKey, stats);
   }
+  return stats;
+}
+
+function incrementResource(resourceKey: string, kind: JobKind) {
+  const stats = getResourceStats(resourceKey);
+  if (kind === 'repo-command' || kind === 'repo-write') {
+    stats.writers++;
+  } else {
+    stats.readers++;
+  }
+  stats.kindCount[kind] = (stats.kindCount[kind] || 0) + 1;
+}
+
+function decrementResource(resourceKey: string, kind: JobKind) {
+  const stats = getResourceStats(resourceKey);
+  if (kind === 'repo-command' || kind === 'repo-write') {
+    stats.writers--;
+  } else {
+    stats.readers--;
+  }
+  stats.kindCount[kind] = (stats.kindCount[kind] || 0) - 1;
+  if (stats.readers <= 0 && stats.writers <= 0) {
+    activeResources.delete(resourceKey);
+  }
+}
+
+export function getQueueMetrics() {
+  const activeJobsList = Array.from(activeJobs.values()).map(a => ({
+    jobId: a.entry.jobId,
+    kind: a.entry.kind,
+    resourceKey: a.entry.resourceKey,
+    toolName: a.entry.toolName
+  }));
+  
+  return {
+    queueLength: queue.length,
+    activeJobs: activeJobs.size,
+    queue: queue.map(q => ({ jobId: q.jobId, kind: q.kind, resourceKey: q.resourceKey })),
+    active: activeJobsList,
+    resources: Object.fromEntries(Array.from(activeResources.entries()))
+  };
 }
 
 export function initMcpToolJobs() {
@@ -52,6 +91,7 @@ export function initMcpToolJobs() {
   if (interrupted.length > 0) {
     console.log(`[mcp-tool-job] Marked ${interrupted.length} stale jobs as interrupted on startup.`);
   }
+  startBackgroundJobCleanup();
 }
 
 export function getToolJobStatus(jobId: string) {
@@ -89,9 +129,9 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
   if (kind !== 'skill-read') {
     try {
       const root = resolveProjectRoot(state, args);
-      resourceKey = `repo:${root}:${kind}`;
+      resourceKey = `repo:${root}`;
     } catch {
-      resourceKey = `repo:unknown:${kind}`;
+      resourceKey = `repo:unknown`;
     }
   } else {
     resourceKey = 'skill-cache';
@@ -118,16 +158,39 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
 }
 
 async function processQueue() {
+  const blockedResources = new Set<string>();
+
   for (let i = 0; i < queue.length; i++) {
     const entry = queue[i];
-    const currentCount = getResourceCount(entry.resourceKey);
-    const limit = MAX_CONCURRENCY[entry.kind] || 1;
+    const { resourceKey, kind } = entry;
     
-    if (currentCount < limit) {
+    if (blockedResources.has(resourceKey)) {
+      continue;
+    }
+    
+    const stats = getResourceStats(resourceKey);
+    const limit = MAX_CONCURRENCY[kind] || 1;
+    const currentKindCount = stats.kindCount[kind] || 0;
+    
+    let canStart = false;
+    const isWriter = kind === 'repo-command' || kind === 'repo-write';
+    
+    if (isWriter) {
+      if (stats.readers === 0 && stats.writers === 0) {
+        canStart = true;
+      }
+    } else {
+      if (stats.writers === 0 && currentKindCount < limit) {
+        canStart = true;
+      }
+    }
+    
+    if (canStart) {
       queue.splice(i, 1);
-      i--; // adjust index since we removed an item
-      
+      i--;
       startJob(entry);
+    } else {
+      blockedResources.add(resourceKey);
     }
   }
 }
@@ -140,7 +203,7 @@ function setJobActiveContext(jobId: string, cancelFn: () => void) {
 }
 
 async function startJob(entry: QueueEntry) {
-  incrementResource(entry.resourceKey);
+  incrementResource(entry.resourceKey, entry.kind);
   activeJobs.set(entry.jobId, { entry });
   updateJobStatus(entry.jobId, { status: 'running' });
 
@@ -182,7 +245,7 @@ async function startJob(entry: QueueEntry) {
       logger.stderr(`\n[Job Failed] ${error.message}\n${error.stack || ''}`);
     }
   } finally {
-    decrementResource(entry.resourceKey);
+    decrementResource(entry.resourceKey, entry.kind);
     activeJobs.delete(entry.jobId);
     
     // Process queue to see if anything else can start

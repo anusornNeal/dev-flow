@@ -151,6 +151,40 @@ export function readJobResult(jobId: string): any {
   }
 }
 
+const MAX_JOB_AGE_MS = 24 * 60 * 60 * 1000;
+const CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
+
+export function cleanupOldJobs() {
+  ensureJobsDir();
+  try {
+    const dirs = fs.readdirSync(JOBS_DIR);
+    const now = Date.now();
+    for (const dir of dirs) {
+      const jobDir = path.join(JOBS_DIR, dir);
+      try {
+        const stat = fs.statSync(jobDir);
+        if (stat.isDirectory() && (now - stat.mtimeMs > MAX_JOB_AGE_MS)) {
+          const job = getJob(dir);
+          if (!job || ['succeeded', 'failed', 'timed_out', 'cancelled', 'interrupted'].includes(job.status)) {
+            fs.rmSync(jobDir, { recursive: true, force: true });
+            console.log(`[mcp-tool-job] Cleaned up old job ${dir}`);
+          }
+        }
+      } catch (e) {
+      }
+    }
+  } catch (e) {
+    console.error('[mcp-tool-job] Cleanup failed:', e);
+  }
+}
+
+export function startBackgroundJobCleanup() {
+  setTimeout(() => {
+    cleanupOldJobs();
+    setInterval(cleanupOldJobs, CLEANUP_INTERVAL_MS).unref();
+  }, 5000).unref();
+}
+
 export function listInterruptedJobs(): McpToolJob[] {
   ensureJobsDir();
   const dirs = fs.readdirSync(JOBS_DIR);

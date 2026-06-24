@@ -16,6 +16,18 @@ export type SafeEditOperation = {
   occurrence?: number;
 };
 
+type SafeEditErrorCode =
+  | 'INVALID_ARGS'
+  | 'FILE_NOT_FOUND'
+  | 'FILE_TOO_LARGE'
+  | 'PAYLOAD_TOO_LARGE'
+  | 'NO_MATCH'
+  | 'AMBIGUOUS_MATCH'
+  | 'INVALID_OPERATION'
+  | 'UNSAFE_PATH'
+  | 'CONTENT_CHANGED'
+  | 'WRITE_FAILED';
+
 export type SafeEditResult = {
   ok: boolean;
   dryRun: boolean;
@@ -30,7 +42,7 @@ export type SafeEditResult = {
     afterExcerpt: string;
   };
   error?: {
-    code: 'INVALID_ARGS' | 'PAYLOAD_TOO_LARGE' | 'NO_MATCH' | 'AMBIGUOUS_MATCH' | 'INVALID_OPERATION' | 'UNSAFE_PATH' | 'CONTENT_CHANGED' | 'WRITE_FAILED';
+    code: SafeEditErrorCode;
     message: string;
     operationIndex?: number;
   };
@@ -73,7 +85,7 @@ function excerpt(value: string): string {
   return `${value.slice(0, max)}\n...<truncated ${value.length - max} chars>`;
 }
 
-function fail(args: { dryRun: boolean; filePath: string; code: SafeEditResult['error']['code']; message: string; operationIndex?: number }): SafeEditResult {
+function fail(args: { dryRun: boolean; filePath: string; code: SafeEditErrorCode; message: string; operationIndex?: number }): SafeEditResult {
   return {
     ok: false,
     dryRun: args.dryRun,
@@ -91,7 +103,12 @@ function fail(args: { dryRun: boolean; filePath: string; code: SafeEditResult['e
   };
 }
 
-function requireSingleMatch(current: string, marker: string | undefined, operationIndex: number, occurrence?: number): { ok: true; index: number } | { ok: false; code: 'NO_MATCH' | 'AMBIGUOUS_MATCH'; message: string } {
+function requireSingleMatch(
+  current: string,
+  marker: string | undefined,
+  operationIndex: number,
+  occurrence?: number,
+): { ok: true; index: number } | { ok: false; code: 'NO_MATCH' | 'AMBIGUOUS_MATCH'; message: string } {
   if (!marker) {
     return { ok: false, code: 'NO_MATCH', message: 'Anchor text is required.' };
   }
@@ -115,37 +132,37 @@ function requireSingleMatch(current: string, marker: string | undefined, operati
   return { ok: true, index: current.indexOf(marker) };
 }
 
-function applyOperation(current: string, op: SafeEditOperation, index: number): { ok: true; value: string } | { ok: false; code: SafeEditResult['error']['code']; message: string } {
+function applyOperation(current: string, op: SafeEditOperation, index: number): { ok: true; value: string } | { ok: false; code: SafeEditErrorCode; message: string } {
   if (!op || typeof op !== 'object') {
     return { ok: false, code: 'INVALID_OPERATION', message: `Operation ${index} must be an object.` };
   }
 
   if (op.type === 'replace') {
     const match = requireSingleMatch(current, op.find, index, op.occurrence);
-    if (!match.ok) return { ok: false, code: match.code, message: match.message };
+    if (match.ok === false) return { ok: false, code: match.code, message: match.message };
     return { ok: true, value: `${current.slice(0, match.index)}${op.replaceWith ?? ''}${current.slice(match.index + String(op.find).length)}` };
   }
 
   if (op.type === 'insert_before') {
     const match = requireSingleMatch(current, op.find, index, op.occurrence);
-    if (!match.ok) return { ok: false, code: match.code, message: match.message };
+    if (match.ok === false) return { ok: false, code: match.code, message: match.message };
     return { ok: true, value: `${current.slice(0, match.index)}${op.content ?? ''}${current.slice(match.index)}` };
   }
 
   if (op.type === 'insert_after') {
     const match = requireSingleMatch(current, op.find, index, op.occurrence);
-    if (!match.ok) return { ok: false, code: match.code, message: match.message };
+    if (match.ok === false) return { ok: false, code: match.code, message: match.message };
     const insertAt = match.index + String(op.find).length;
     return { ok: true, value: `${current.slice(0, insertAt)}${op.content ?? ''}${current.slice(insertAt)}` };
   }
 
   if (op.type === 'delete_between') {
     const start = requireSingleMatch(current, op.start, index, op.occurrence);
-    if (!start.ok) return { ok: false, code: start.code, message: start.message };
+    if (start.ok === false) return { ok: false, code: start.code, message: start.message };
     const afterStart = start.index + String(op.start).length;
     const rest = current.slice(afterStart);
     const end = requireSingleMatch(rest, op.end, index);
-    if (!end.ok) return { ok: false, code: end.code, message: end.message };
+    if (end.ok === false) return { ok: false, code: end.code, message: end.message };
     const deleteEnd = afterStart + end.index;
     return { ok: true, value: `${current.slice(0, afterStart)}${current.slice(deleteEnd)}` };
   }
@@ -179,12 +196,21 @@ export function safeEditFile(state: AppState, args: Record<string, any>): SafeEd
     return fail({ dryRun, filePath, code: 'UNSAFE_PATH', message: error?.message || 'Unsafe path.' });
   }
 
-  const stat = fs.statSync(targetPath);
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(targetPath);
+  } catch (error: any) {
+    if (error?.code === 'ENOENT') {
+      return fail({ dryRun, filePath, code: 'FILE_NOT_FOUND', message: `File not found: ${filePath}` });
+    }
+    return fail({ dryRun, filePath, code: 'INVALID_ARGS', message: error?.message || 'Unable to stat target file.' });
+  }
+
   if (!stat.isFile()) {
     return fail({ dryRun, filePath, code: 'INVALID_ARGS', message: 'Target path must be a file.' });
   }
   if (stat.size > Number(args.maxFileBytes || DEFAULT_MAX_FILE_BYTES)) {
-    return fail({ dryRun, filePath, code: 'PAYLOAD_TOO_LARGE', message: `Target file is ${stat.size} bytes; use smaller anchors or raise maxFileBytes intentionally.` });
+    return fail({ dryRun, filePath, code: 'FILE_TOO_LARGE', message: `Target file is ${stat.size} bytes; limit is ${Number(args.maxFileBytes || DEFAULT_MAX_FILE_BYTES)}.` });
   }
 
   const before = fs.readFileSync(targetPath, 'utf8');
@@ -200,7 +226,7 @@ export function safeEditFile(state: AppState, args: Record<string, any>): SafeEd
   let after = before;
   for (let i = 0; i < operations.length; i += 1) {
     const result = applyOperation(after, operations[i] as SafeEditOperation, i);
-    if (!result.ok) {
+    if (result.ok === false) {
       return {
         ok: false,
         dryRun,
@@ -210,7 +236,7 @@ export function safeEditFile(state: AppState, args: Record<string, any>): SafeEd
         operations: i,
         bytesBefore: byteLength(before),
         bytesAfter: byteLength(after),
-        error: { code: result.code as any, message: (result as any).message, operationIndex: i },
+        error: { code: result.code, message: result.message, operationIndex: i },
       };
     }
     after = result.value;

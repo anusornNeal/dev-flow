@@ -87,4 +87,48 @@ test('safeEditFileService test suite', async (t) => {
     assert.equal(result.ok, false);
     assert.equal(result.error?.code, 'CONTENT_CHANGED');
   });
+
+  await t.test('rejects oversized edit payloads before writing', () => {
+    const before = fs.readFileSync(testFile, 'utf8');
+    const result = safeEditFile(mockState, {
+      filePath: relativeFilePath,
+      mode: 'apply',
+      maxPayloadBytes: 1,
+      edits: [{ type: 'replace', find: 'line3', replaceWith: 'lineThree' }],
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.error?.code, 'PAYLOAD_TOO_LARGE');
+    assert.equal(fs.readFileSync(testFile, 'utf8'), before);
+  });
+
+  await t.test('rejects files larger than maxFileBytes', () => {
+    const result = safeEditFile(mockState, {
+      filePath: relativeFilePath,
+      mode: 'apply',
+      maxFileBytes: 1,
+      edits: [{ type: 'replace', find: 'line3', replaceWith: 'lineThree' }],
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.error?.code, 'FILE_TOO_LARGE');
+  });
+
+  await t.test('rejects unsafe paths outside the project root', () => {
+    const result = safeEditFile(mockState, {
+      filePath: '../outside.txt',
+      mode: 'apply',
+      edits: [{ type: 'replace', find: 'x', replaceWith: 'y' }],
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.error?.code, 'UNSAFE_PATH');
+  });
+
+  await t.test('returns FILE_NOT_FOUND for missing files', () => {
+    const result = safeEditFile(mockState, {
+      filePath: 'tests/server/.tmp_safe_edit/missing.txt',
+      mode: 'apply',
+      edits: [{ type: 'replace', find: 'x', replaceWith: 'y' }],
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.error?.code, 'FILE_NOT_FOUND');
+  });
 });

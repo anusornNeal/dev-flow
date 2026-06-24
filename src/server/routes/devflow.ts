@@ -6,6 +6,7 @@ import { getCapabilityCatalog } from '../contracts/devflowContract';
 import { sendApiError } from '../services/api';
 import { listLocalFiles, readLocalFile, searchLocalFiles, writeLocalFile } from '../services/localFileService';
 import { applyLocalPatch } from '../services/localPatchService';
+import { safeEditFile } from '../services/safeEditFileService';
 import { runProjectCommand } from '../services/projectCommandService';
 import { parseTestReport } from '../services/testReportParserService';
 import { getGitLog, getGitDiff, getGitShow, getGitStatus, getGitBranch } from '../services/gitService';
@@ -84,6 +85,14 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
   app.post('/api/local-files/apply-patch', (req, res) => {
     try {
       return res.json(applyLocalPatch(deps.state, req.body as Record<string, any>));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.post('/api/local-files/safe-edit', (req, res) => {
+    try {
+      return res.json(safeEditFile(deps.state, req.body as Record<string, any>));
     } catch (error) {
       return sendApiError(res, error);
     }

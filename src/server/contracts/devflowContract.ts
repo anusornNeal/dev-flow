@@ -1092,6 +1092,56 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
     }),
   },
   {
+    name: 'safe_edit_local_file',
+    description: 'Safely edit a small section of a large local file without sending the entire file content. Best for route, contract, and service files where patch payloads fail.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...projectIdentifierProperties,
+        filePath: { type: 'string', description: 'Relative file path under the workspace root.' },
+        path: { type: 'string', description: 'Alias for filePath.' },
+        mode: { type: 'string', enum: ['dry-run', 'apply'], description: 'dry-run validates and previews. apply writes the change atomically.' },
+        edits: {
+          type: 'array',
+          description: 'List of focused edit operations.',
+          items: {
+            type: 'object',
+            properties: {
+              type: { type: 'string', enum: ['replace', 'insert_before', 'insert_after', 'delete_between'] },
+              find: { type: 'string', description: 'Anchor text to find (for replace, insert_before, insert_after).' },
+              replaceWith: { type: 'string', description: 'New text for replace operations.' },
+              content: { type: 'string', description: 'Text to insert for insert operations.' },
+              start: { type: 'string', description: 'Start anchor text for delete_between.' },
+              end: { type: 'string', description: 'End anchor text for delete_between.' },
+              occurrence: { type: 'number', description: 'Optional 1-based index if the anchor appears multiple times. Otherwise ambiguous matches fail.' },
+            },
+            required: ['type'],
+          },
+        },
+        operations: { type: 'array', description: 'Alias for edits.' },
+        maxPayloadBytes: { type: 'number', description: 'Max allowed edits payload in bytes.' },
+        maxFileBytes: { type: 'number', description: 'Max allowed target file size in bytes.' },
+        expectedContentHash: { type: 'string', description: 'Optional SHA-256 hash of the target file to prevent overwriting unexpected changes.' },
+        expectedSha256: { type: 'string', description: 'Alias for expectedContentHash.' },
+      },
+      required: ['filePath'],
+      anyOf: [
+        { required: ['edits'] },
+        { required: ['operations'] },
+      ],
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: (args) => ({
+      method: 'POST',
+      path: '/api/local-files/safe-edit',
+      body: {
+        ...args,
+        filePath: args.filePath || args.path,
+        edits: args.edits || args.operations,
+      },
+    }),
+  },
+  {
     name: 'run_project_command',
     executionPolicy: { mode: 'job', jobKind: 'repo-command' },
     description: 'Run an allowlisted local verification command such as typecheck, test, lint, build, or verify inside a resolved project root.',

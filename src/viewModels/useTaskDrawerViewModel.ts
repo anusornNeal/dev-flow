@@ -62,6 +62,11 @@ export function useTaskDrawerViewModel(): UseTaskDrawerViewModel {
       if (!prev) return prev;
       return { ...prev, checklist: toggleChecklistItem(prev.checklist, id) };
     });
+    setTask((prev) => {
+      if (!prev) return prev;
+      const checklist = Array.isArray(prev.checklist) ? prev.checklist : [];
+      return { ...prev, checklist: toggleChecklistItem(checklist, id) };
+    });
   }, []);
 
   const discard = useCallback(() => {

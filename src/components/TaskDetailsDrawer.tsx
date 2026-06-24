@@ -83,8 +83,8 @@ export default function TaskDetailsDrawer({
     tags: [],
     logs: [],
     images: [],
-    ...initialTask,
     ...((drawerViewModel.task as unknown as Partial<Task>) || {}),
+    ...initialTask,
   } as Task;
 
   const parentTask = task.parentId ? allTasks.find(t => t.id === task.parentId) : undefined;

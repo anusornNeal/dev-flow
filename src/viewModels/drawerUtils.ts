@@ -94,7 +94,7 @@ export function toggleChecklistItem(
   items: ChecklistItem[],
   id: string,
 ): ChecklistItem[] {
-  const idx = items.findIndex((i) => i.id === id);
+  const idx = items.findIndex((i) => (i.id || i.text) === id);
   if (idx === -1) return items;
   const next = items.slice();
   next[idx] = { ...next[idx], completed: !next[idx].completed };

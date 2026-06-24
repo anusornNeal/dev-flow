@@ -12,8 +12,11 @@ const MAX_TIMEOUT_MS = 300_000;
 const MAX_OUTPUT_BYTES = 100_000;
 
 type AllowedCommand = typeof ALLOWED_COMMANDS[number];
+type CommandStatus = 'succeeded' | 'failed' | 'timed_out';
 
 export interface RunProjectCommandResult {
+  ok: boolean;
+  status: CommandStatus;
   command: AllowedCommand;
   cwd: string;
   exitCode: number | null;
@@ -24,17 +27,78 @@ export interface RunProjectCommandResult {
   stderr: string;
   stdoutTruncated: boolean;
   stderrTruncated: boolean;
+  stdoutBytes: number;
+  stderrBytes: number;
+  stdoutEmpty: boolean;
+  stderrEmpty: boolean;
+  outputSummary: {
+    hasStdout: boolean;
+    hasStderr: boolean;
+    stdoutBytes: number;
+    stderrBytes: number;
+    stdoutTruncated: boolean;
+    stderrTruncated: boolean;
+  };
 }
 
 function truncateOutput(value: string, maxBytes: number) {
   const bytes = Buffer.byteLength(value, 'utf8');
   if (bytes <= maxBytes) {
-    return { value, truncated: false };
+    return { value, bytes, truncated: false };
   }
 
   return {
     value: `${Buffer.from(value, 'utf8').subarray(0, maxBytes).toString('utf8')}\n[truncated]`,
+    bytes,
     truncated: true,
+  };
+}
+
+function buildCommandResult(input: {
+  command: AllowedCommand;
+  root: string;
+  cwdPath: string;
+  exitCode: number | null;
+  durationMs: number;
+  timedOut: boolean;
+  signal: NodeJS.Signals | null;
+  stdoutRaw: string;
+  stderrRaw: string;
+  maxOutputBytes: number;
+}): RunProjectCommandResult {
+  const stdout = truncateOutput(input.stdoutRaw || '', input.maxOutputBytes);
+  const stderr = truncateOutput(input.stderrRaw || '', input.maxOutputBytes);
+  const status: CommandStatus = input.timedOut
+    ? 'timed_out'
+    : input.exitCode === 0
+      ? 'succeeded'
+      : 'failed';
+
+  return {
+    ok: status === 'succeeded',
+    status,
+    command: input.command,
+    cwd: path.relative(input.root, input.cwdPath) || '.',
+    exitCode: input.exitCode,
+    durationMs: input.durationMs,
+    timedOut: input.timedOut,
+    signal: input.signal,
+    stdout: stdout.value,
+    stderr: stderr.value,
+    stdoutTruncated: stdout.truncated,
+    stderrTruncated: stderr.truncated,
+    stdoutBytes: stdout.bytes,
+    stderrBytes: stderr.bytes,
+    stdoutEmpty: stdout.bytes === 0,
+    stderrEmpty: stderr.bytes === 0,
+    outputSummary: {
+      hasStdout: stdout.bytes > 0,
+      hasStderr: stderr.bytes > 0,
+      stdoutBytes: stdout.bytes,
+      stderrBytes: stderr.bytes,
+      stdoutTruncated: stdout.truncated,
+      stderrTruncated: stderr.truncated,
+    },
   };
 }
 
@@ -121,8 +185,6 @@ export function runProjectCommand(state: AppState, args: Record<string, any>): R
     maxBuffer: Math.max(maxOutputBytes * 4, 1_000_000),
   });
   const durationMs = Date.now() - startedAt;
-  const stdout = truncateOutput(result.stdout || '', maxOutputBytes);
-  const stderr = truncateOutput(result.stderr || '', maxOutputBytes);
   const timedOut = Boolean(result.error && 'code' in result.error && result.error.code === 'ETIMEDOUT');
 
   if (result.error && !timedOut) {
@@ -131,18 +193,18 @@ export function runProjectCommand(state: AppState, args: Record<string, any>): R
     });
   }
 
-  return {
+  return buildCommandResult({
     command,
-    cwd: path.relative(root, cwdPath) || '.',
+    root,
+    cwdPath,
     exitCode: result.status,
     durationMs,
     timedOut,
     signal: result.signal,
-    stdout: stdout.value,
-    stderr: stderr.value,
-    stdoutTruncated: stdout.truncated,
-    stderrTruncated: stderr.truncated,
-  };
+    stdoutRaw: result.stdout || '',
+    stderrRaw: result.stderr || '',
+    maxOutputBytes,
+  });
 }
 
 export async function runProjectCommandAsync(state: AppState, args: Record<string, any>, logger: { stdout: (data: string) => void, stderr: (data: string) => void }, setCancelFn: (fn: () => void) => void): Promise<RunProjectCommandResult> {
@@ -182,17 +244,13 @@ export async function runProjectCommandAsync(state: AppState, args: Record<strin
 
     child.stdout.on('data', (data) => {
       const chunk = data.toString('utf8');
-      if (stdoutBuffer.length < maxOutputBytes) {
-        stdoutBuffer += chunk;
-      }
+      stdoutBuffer += chunk;
       logger.stdout(chunk);
     });
 
     child.stderr.on('data', (data) => {
       const chunk = data.toString('utf8');
-      if (stderrBuffer.length < maxOutputBytes) {
-        stderrBuffer += chunk;
-      }
+      stderrBuffer += chunk;
       logger.stderr(chunk);
     });
 
@@ -204,21 +262,19 @@ export async function runProjectCommandAsync(state: AppState, args: Record<strin
     child.on('close', (code, signal) => {
       clearTimeout(timeoutId);
       const durationMs = Date.now() - startedAt;
-      const stdout = truncateOutput(stdoutBuffer, maxOutputBytes);
-      const stderr = truncateOutput(stderrBuffer, maxOutputBytes);
 
-      resolve({
+      resolve(buildCommandResult({
         command,
-        cwd: path.relative(root, cwdPath) || '.',
+        root,
+        cwdPath,
         exitCode: code,
         durationMs,
         timedOut,
         signal,
-        stdout: stdout.value,
-        stderr: stderr.value,
-        stdoutTruncated: stdout.truncated,
-        stderrTruncated: stderr.truncated,
-      });
+        stdoutRaw: stdoutBuffer,
+        stderrRaw: stderrBuffer,
+        maxOutputBytes,
+      }));
     });
   });
 }

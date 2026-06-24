@@ -39,7 +39,7 @@ function normalizeGitPath(filePath: string) {
 }
 
 function parsePorcelainStatus(output: string) {
-  const lines = output.trim().split(/\r?\n/).filter(Boolean);
+  const lines = output.split(/\r?\n/).filter(Boolean);
   return lines.map((line) => ({
     path: line.slice(3),
     normalizedPath: normalizeGitPath(line.slice(3)),

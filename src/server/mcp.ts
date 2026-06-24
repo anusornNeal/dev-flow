@@ -191,12 +191,36 @@ export function createDevFlowMcpServer(baseUrl: string) {
     }
 
     let httpRequest;
+    let isAsyncJob = false;
     if (tool.executionPolicy?.mode === 'job') {
+      isAsyncJob = true;
       httpRequest = { method: 'POST', path: '/api/tool-jobs', body: { toolName, args } };
     } else {
       httpRequest = tool.buildHttpRequest(args);
     }
-    const { response, parsedBody, durationMs } = await executeHttpRequest(baseUrl, httpRequest as any, correlationId, toolName);
+    let { response, parsedBody, durationMs } = await executeHttpRequest(baseUrl, httpRequest as any, correlationId, toolName);
+
+    if (isAsyncJob && response.ok && parsedBody && typeof parsedBody === 'object' && 'jobId' in parsedBody) {
+      const jobId = (parsedBody as any).jobId;
+      const startPoll = Date.now();
+      const maxPollMs = 20000; // wait up to 20s
+
+      while (Date.now() - startPoll < maxPollMs) {
+        const statusRes = await executeHttpRequest(baseUrl, { method: 'GET', path: `/api/tool-jobs/${jobId}` }, correlationId, toolName);
+        if (statusRes.response.ok && statusRes.parsedBody && typeof statusRes.parsedBody === 'object') {
+          const status = (statusRes.parsedBody as any).status;
+          if (status === 'succeeded' || status === 'failed' || status === 'timed_out' || status === 'cancelled' || status === 'interrupted') {
+            const resultRes = await executeHttpRequest(baseUrl, { method: 'GET', path: `/api/tool-jobs/${jobId}/result` }, correlationId, toolName);
+            if (resultRes.response.ok && resultRes.parsedBody && typeof resultRes.parsedBody === 'object' && 'result' in resultRes.parsedBody) {
+              parsedBody = (resultRes.parsedBody as any).result;
+              durationMs = Date.now() - (startPoll - durationMs);
+            }
+            break;
+          }
+        }
+        await new Promise(r => setTimeout(r, 1000));
+      }
+    }
     recordToolCall({ toolName, args, status: response.status, durationMs });
     console.log(`[mcp] cid=${correlationId} tool=${toolName} status=${response.status} durationMs=${durationMs}`);
 

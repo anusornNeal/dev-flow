@@ -1447,18 +1447,40 @@ export function getToolDefinitionByName(name: string) {
 export function getMcpToolList() {
   const tools = [];
   for (const tool of devFlowToolDefinitions) {
+    let outputSchema = tool.outputSchema;
+    let description = tool.description;
+
+    if (tool.executionPolicy?.mode === 'job') {
+      description = `${description}\n\nNote: This tool may run asynchronously. If it takes longer than 20 seconds, it will return a \`jobId\` instead of the final result. If it returns a \`jobId\`, you must use \`get_tool_job_status\`, \`get_tool_job_log\`, and \`get_tool_job_result\` to retrieve the outcome.`;
+      if (outputSchema) {
+        outputSchema = {
+          anyOf: [
+            outputSchema,
+            {
+              type: 'object',
+              properties: {
+                jobId: { type: 'string' },
+                status: { type: 'string' },
+              },
+              required: ['jobId'],
+            },
+          ],
+        };
+      }
+    }
+
     tools.push({
       name: tool.name,
-      description: tool.description,
+      description,
       inputSchema: tool.inputSchema,
-      outputSchema: tool.outputSchema,
+      outputSchema,
     });
     for (const alias of tool.aliases || []) {
       tools.push({
         name: alias,
-        description: `${tool.description} Alias for ${tool.name}.`,
+        description: `${description} Alias for ${tool.name}.`,
         inputSchema: tool.inputSchema,
-        outputSchema: tool.outputSchema,
+        outputSchema,
       });
     }
   }
@@ -1468,13 +1490,37 @@ export function getMcpToolList() {
 export function getCapabilityCatalog() {
   return {
     contractVersion: DEVFLOW_CONTRACT_VERSION,
-    tools: devFlowToolDefinitions.map((tool) => ({
-      name: tool.name,
-      aliases: tool.aliases || [],
-      description: tool.description,
-      lightweight: tool.lightweight === true,
-      inputSchema: tool.inputSchema,
-      outputSchema: tool.outputSchema,
-    })),
+    tools: devFlowToolDefinitions.map((tool) => {
+      let outputSchema = tool.outputSchema;
+      let description = tool.description;
+
+      if (tool.executionPolicy?.mode === 'job') {
+        description = `${description}\n\nNote: This tool may run asynchronously. If it takes longer than 20 seconds, it will return a \`jobId\` instead of the final result. If it returns a \`jobId\`, you must use \`get_tool_job_status\`, \`get_tool_job_log\`, and \`get_tool_job_result\` to retrieve the outcome.`;
+        if (outputSchema) {
+          outputSchema = {
+            anyOf: [
+              outputSchema,
+              {
+                type: 'object',
+                properties: {
+                  jobId: { type: 'string' },
+                  status: { type: 'string' },
+                },
+                required: ['jobId'],
+              },
+            ],
+          };
+        }
+      }
+
+      return {
+        name: tool.name,
+        aliases: tool.aliases || [],
+        description,
+        lightweight: tool.lightweight === true,
+        inputSchema: tool.inputSchema,
+        outputSchema,
+      };
+    }),
   };
 }

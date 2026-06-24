@@ -1,7 +1,8 @@
 import { withSyncLock } from './lockAndIdempotencyService';
 import { triggerTaskAgent, completeAgentRunForTask, applyAgentCompletionCallback, maybeTriggerTaskAgent } from '../routes/taskRouteSupport';
 import { cancelActiveRunsForTask } from '../repositories/agentRunRepository';
-import type { ApiRouteDeps, AgentCompletionPayload } from '../../types';
+import type { ApiRouteDeps } from '../types';
+import type { AgentCompletionPayload } from '../../types';
 
 export class AgentOrchestrationWorker {
   static trigger(task: any, deps: ApiRouteDeps, routeLabel: string, retryOfRunId?: string | null) {
@@ -29,7 +30,7 @@ export class AgentOrchestrationWorker {
   }
 
   static cancelRuns(taskId: string, reason: string) {
-    return withSyncLock(`agent-orchestration-${task.id}`, () => {
+    return withSyncLock(`agent-orchestration-${taskId}`, () => {
       return cancelActiveRunsForTask(taskId, reason);
     });
   }

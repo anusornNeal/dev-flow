@@ -175,7 +175,8 @@ Use available DevFlow tools where appropriate:
 - `Dev_Flow.read_local_file` to read actual changed files and related files.
 - `Dev_Flow.toggle_task_checklist` or batch toggle tools to mark verified checklist items.
 - `Dev_Flow.update_task` to write review notes if needed.
-- `Dev_Flow.move_task_status` or batch move tools to move the card to `done` or `in-progress`.
+- `Dev_Flow.move_task_to_status` to move a card to `done` or `in-progress` through the allowed transition path automatically.
+- `Dev_Flow.move_task_status` or batch move tools only when an explicit one-step move or bulk move is needed.
 
 ## Anti-Patterns
 

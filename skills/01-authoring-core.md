@@ -26,9 +26,9 @@ When applicable:
 1. For Jira-originated cards, use `get_jira_authoring_bundle` first when available.
 2. Read individual Jira issue/comments/subtasks/attachments only when the bundle is unavailable or missing a specific detail.
 3. Read attachments if they contain screenshots, videos, logs, designs, wording, or reproduction evidence not already summarized by the bundle.
-5. Inspect the repo.
-6. Search for affected screens, strings, APIs, mappers, models, routes, tests, and existing patterns.
-7. Read actual target files, not only search snippets.
+5. Inspect the repo with `get_repo_context_bundle` first when the project is known.
+6. Search for affected screens, strings, APIs, mappers, models, routes, tests, and existing patterns only when the bundle is unavailable or insufficient.
+7. Read actual target files, not only search snippets or bundle snippets.
 8. Check whether a DevFlow card already exists for the Jira key.
 9. Create or update the card only after requirement and repo context are understood.
 
@@ -38,7 +38,9 @@ When applicable:
 
 Repo inspection is required for implementation-ready cards, but it must be targeted.
 
-Use `get_repo_inspection_index` first when available. Query with screen names, visible strings, Jira terms, route names, or flow names. Then read only the matched target files that are needed to confirm the implementation map.
+Use `get_repo_context_bundle` first when a project is known. It should provide the starting git status, repo index matches, focused snippets, and optional diff context in one packet. Query with screen names, visible strings, Jira terms, route names, or flow names.
+
+Fall back to `get_repo_inspection_index`, `search_local_files`, and `read_local_file` only when the bundle is unavailable or does not identify enough target files/functions. Then read only the matched target files that are needed to confirm the implementation map.
 
 Do not scan or read the whole repo. Start from the Jira/user terms and search only for likely screen names, visible strings, route names, ViewModels, composables, fragments, adapters, mappers, APIs, models, and tests. Read only the smallest set of files needed to identify the implementation path.
 

@@ -16,7 +16,8 @@ Load:
 
 Use:
 - `get_jira_authoring_bundle` first for Jira-originated card authoring.
-- `get_repo_inspection_index` before broad repo search when identifying target files/functions.
+- `get_repo_context_bundle` first when a project is known; use it as the compact entry point for git status, repo index, snippets, and diff context.
+- `get_repo_inspection_index`, `read_local_file`, or search tools only when the repo context bundle is unavailable or insufficient.
 - `validate_task_quality` before `create_task` or `update_task` for any implementation-ready card.
 
 Load `04-examples.md` only if:

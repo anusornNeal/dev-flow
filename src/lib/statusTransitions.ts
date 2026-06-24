@@ -14,6 +14,29 @@ export function isValidTransition(fromStatus: TaskStatus, toStatus: TaskStatus):
   return allowed ? allowed.includes(toStatus) : false;
 }
 
+export function getTransitionPath(fromStatus: TaskStatus, toStatus: TaskStatus): TaskStatus[] | null {
+  if (fromStatus === toStatus) return [fromStatus];
+
+  const queue: TaskStatus[][] = [[fromStatus]];
+  const visited = new Set<TaskStatus>([fromStatus]);
+
+  while (queue.length > 0) {
+    const path = queue.shift()!;
+    const current = path[path.length - 1];
+    const nextStatuses = VALID_TRANSITIONS[current] || [];
+
+    for (const next of nextStatuses) {
+      if (visited.has(next)) continue;
+      const nextPath = [...path, next];
+      if (next === toStatus) return nextPath;
+      visited.add(next);
+      queue.push(nextPath);
+    }
+  }
+
+  return null;
+}
+
 export function getValidationErrorMessage(fromStatus: TaskStatus, toStatus: TaskStatus): string {
   const allowed = VALID_TRANSITIONS[fromStatus] || [];
   return `Invalid status transition from '${fromStatus}' to '${toStatus}'. Allowed next statuses: ${allowed.join(', ')}`;

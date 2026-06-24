@@ -552,6 +552,27 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
     }),
   },
   {
+    name: 'move_task_to_status',
+    description: 'Move a task to a target status by following the allowed transition path automatically.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...taskIdentifierProperty,
+        status: { type: 'string', enum: VALID_STATUSES },
+        ...booleanFlagSchema.properties,
+        ...mutationResponseModeProperty,
+      },
+      required: ['taskId', 'status'],
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: ({ taskId, isAgentRequest, responseMode, ...body }) => ({
+      method: 'POST',
+      path: withQuery(`/api/tasks/${encodePathSegment(String(taskId))}/move-to`, { responseMode: responseMode || 'summary' }),
+      body,
+      headers: isAgentRequest ? { 'x-agent-request': 'true' } : undefined,
+    }),
+  },
+  {
     name: 'batch_move_task_status',
     description: 'Move multiple tasks in one round trip.',
     inputSchema: {

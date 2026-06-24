@@ -17,7 +17,7 @@ import { createApiError, sendApiError } from '../services/api';
 import { draftTaskFromJiraBundle } from '../services/compositeAuthoringService';
 import { acquireLock, releaseLock, withIdempotency, getIdempotencyResult, createPendingIdempotencyWithFingerprint, resolvePendingIdempotency, rejectPendingIdempotency, buildIdempotencyFingerprint } from '../services/lockAndIdempotencyService';
 import { validateEnum, validateString } from '../validation';
-import { isValidTransition, getValidationErrorMessage } from '../../lib/statusTransitions';
+import { isValidTransition, getValidationErrorMessage, getTransitionPath } from '../../lib/statusTransitions';
 import { buildAgentLaunchConfig, runAgentLaunchPreflight, type AgentLaunchPreflightCode } from '../services/agentLaunchConfig';
 import { applyChecklistToggle as applyChecklistToggleUseCase, validateTaskPatch as validateTaskPatchUseCase } from '../useCases/taskUseCases';
 import { canRetryRun as canRetryRunUseCase, canCancelRun as canCancelRunUseCase, validateCompletion as validateCompletionUseCase } from '../useCases/agentRunUseCases';
@@ -555,6 +555,85 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     };
     return res.json(toMutationResponse(req, updatedTask, standardPayload, {
       autoWorkTrigger: standardPayload.autoWorkTrigger,
+    }));
+  });
+
+  app.post('/api/tasks/:id/move-to', (req, res) => {
+    const statusErr = validateEnum(req.body.status, 'status', VALID_STATUSES, true);
+    if (statusErr) return res.status(400).json({ error: statusErr });
+
+    const taskIndex = getTaskIndexByIdentifier(getTasks(), req.params.id);
+    if (taskIndex === -1) return res.status(404).json({ error: 'Task not found' });
+
+    const task = getTasks()[taskIndex];
+    const fromStatus = task.status;
+    const targetStatus = req.body.status as TaskStatus;
+    const path = getTransitionPath(fromStatus, targetStatus);
+    if (!path) {
+      return res.status(400).json({ error: getValidationErrorMessage(fromStatus, targetStatus) });
+    }
+
+    if (path.length === 1) {
+      return res.json(toMutationResponse(req, task, { message: 'Task is already in that lane', task, path }));
+    }
+
+    if (fromStatus === 'in-progress' && !canOverrideTaskLock(task, req.body, undefined, req.headers['x-agent-request'])) {
+      return res.status(403).json({ error: 'Task is locked by an agent. Use emergency flag to override.' });
+    }
+
+    const movedStatuses: Array<{ from: TaskStatus; to: TaskStatus }> = [];
+    for (let i = 1; i < path.length; i += 1) {
+      const previousStatus = task.status;
+      const nextStatus = path[i];
+      if (!isValidTransition(previousStatus, nextStatus)) {
+        return res.status(400).json({ error: getValidationErrorMessage(previousStatus, nextStatus), path });
+      }
+      const parentReviewError = validateParentReviewMove(task, deps, nextStatus);
+      if (parentReviewError) {
+        appendTaskLog(task, parentReviewError, 'update');
+        saveTask(task);
+        return res.status(400).json({ error: parentReviewError, path });
+      }
+
+      task.status = nextStatus;
+      task.updatedAt = new Date().toISOString();
+      task.logs = [...task.logs, {
+        id: `log-ext-move-path-${Date.now()}-${i}`,
+        timestamp: new Date().toISOString(),
+        message: `Status moved from ${previousStatus.toUpperCase()} to ${nextStatus.toUpperCase()} via transition helper`,
+        type: 'move',
+      }];
+      saveTask(task);
+      syncTaskAgentStateForStatus(task, previousStatus);
+      movedStatuses.push({ from: previousStatus, to: nextStatus });
+    }
+
+    const autoWorkTrigger = AgentOrchestrationWorker.maybeTrigger(task, fromStatus, deps, '/move-to endpoint');
+    saveTask(task);
+    const standardPayload = {
+      success: true,
+      message: `Successfully moved task from ${fromStatus} to ${targetStatus}`,
+      task,
+      path,
+      movedStatuses,
+      autoWorkTrigger: autoWorkTrigger
+        ? autoWorkTrigger.triggered
+          ? { triggered: true, run: autoWorkTrigger.run }
+          : (() => {
+              const blockedResult = autoWorkTrigger as TriggerTaskAgentFailure;
+              return {
+                triggered: false,
+                code: blockedResult.code,
+                reason: blockedResult.reason,
+                run: blockedResult.run,
+              };
+            })()
+        : null,
+    };
+    return res.json(toMutationResponse(req, task, standardPayload, {
+      autoWorkTrigger: standardPayload.autoWorkTrigger,
+      path,
+      movedStatuses,
     }));
   });
 

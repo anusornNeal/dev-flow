@@ -331,6 +331,33 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
     }),
   },
   {
+    name: 'get_repo_context_bundle',
+    description: 'Get compact repo context in one call: project metadata, git status, repo index matches, focused file snippets, and optional diff.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...projectIdentifierProperties,
+        q: { type: 'string', description: 'Search query for repo index matches.' },
+        query: { type: 'string', description: 'Alias for q.' },
+        path: { type: 'string', description: 'Optional relative directory to index.' },
+        limit: { type: 'number', description: 'Maximum repo index matches returned.' },
+        snippetLimit: { type: 'number', description: 'Maximum snippets returned from top matches.' },
+        snippetLines: { type: 'number', description: 'Maximum leading lines per snippet.' },
+        maxSnippetBytes: { type: 'number', description: 'Maximum bytes per snippet.' },
+        includeDiff: { type: 'boolean', description: 'Include current git diff summary and capped diff content.' },
+        diffPath: { type: 'string', description: 'Optional path to limit diff.' },
+        maxDiffBytes: { type: 'number', description: 'Maximum diff bytes returned.' },
+        includeIgnored: { type: 'boolean', description: 'Allow index to include ignored/generated folders.' },
+      },
+    },
+    outputSchema: { type: 'object' },
+    lightweight: true,
+    buildHttpRequest: (args) => ({
+      method: 'GET',
+      path: withQuery('/api/repo-context-bundle', args),
+    }),
+  },
+  {
     name: 'list_tasks',
     description: 'List tasks with optional filters. Local-first and ChatGPT-friendly: defaults to a small minimal page; pass projectId/status/q and an explicit limit before asking for broader context.',
     inputSchema: {

@@ -3,8 +3,9 @@ import path from 'path';
 import type { AppState } from '../types';
 import { findProjectByIdentifier } from './taskService';
 import { createApiError } from './api';
-import { listLocalFiles } from './localFileService';
-import { getGitBranch, getGitStatus } from './gitService';
+import { listLocalFiles, readLocalFile } from './localFileService';
+import { getGitBranch, getGitDiff, getGitStatus } from './gitService';
+import { getRepoInspectionIndex } from './repoInspectionIndexService';
 
 const HINT_FILES = ['AGENTS.md', 'README.md', 'package.json', 'tsconfig.json', 'vite.config.ts', 'gradlew.bat', 'build.gradle', 'settings.gradle'];
 
@@ -20,6 +21,12 @@ function resolveProject(state: AppState, args: Record<string, any>) {
     throw createApiError(404, 'PROJECT_NOT_FOUND', 'Project could not be resolved for start context.');
   }
   return project;
+}
+
+function parsePositiveInt(value: unknown, fallback: number, max: number) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(1, Math.min(max, Math.floor(parsed)));
 }
 
 export function getProjectStartContext(state: AppState, args: Record<string, any>) {
@@ -70,6 +77,95 @@ export function getProjectStartContext(state: AppState, args: Record<string, any
       'search_local_files',
       'list_tasks',
       'get_agent_task_context',
+    ],
+  };
+}
+
+export function getRepoContextBundle(state: AppState, args: Record<string, any>) {
+  const project = resolveProject(state, args);
+  const query = typeof args.q === 'string' ? args.q : typeof args.query === 'string' ? args.query : '';
+  const indexLimit = parsePositiveInt(args.limit, 8, 20);
+  const snippetLimit = parsePositiveInt(args.snippetLimit, Math.min(indexLimit, 5), 10);
+  const snippetLines = parsePositiveInt(args.snippetLines, 80, 160);
+  const maxSnippetBytes = parsePositiveInt(args.maxSnippetBytes, 12000, 50000);
+
+  const start = getProjectStartContext(state, { ...args, projectId: project.id, limit: args.topLevelLimit || 40 });
+  const index = getRepoInspectionIndex(state, {
+    projectId: project.id,
+    q: query,
+    path: args.path,
+    limit: indexLimit,
+    includeIgnored: args.includeIgnored,
+  });
+
+  const snippets = (index.matches || []).slice(0, snippetLimit).map((match: any) => {
+    try {
+      const snippet = readLocalFile(state, {
+        projectId: project.id,
+        filePath: match.path,
+        startLine: 1,
+        endLine: snippetLines,
+        maxBytes: maxSnippetBytes,
+      });
+      return {
+        path: match.path,
+        score: match.score,
+        symbols: match.symbols,
+        startLine: snippet.startLine,
+        endLine: snippet.endLine,
+        totalLines: snippet.totalLines,
+        truncated: snippet.truncated,
+        content: snippet.content,
+      };
+    } catch (error: any) {
+      return {
+        path: match.path,
+        score: match.score,
+        error: error?.message || 'Could not read snippet.',
+      };
+    }
+  });
+
+  let diff: any = undefined;
+  if (args.includeDiff === true || args.includeDiff === 'true') {
+    try {
+      const rawDiff = getGitDiff(state, {
+        projectId: project.id,
+        path: typeof args.diffPath === 'string' ? args.diffPath : undefined,
+      });
+      const maxDiffBytes = parsePositiveInt(args.maxDiffBytes, 20000, 100000);
+      const content = typeof rawDiff.diff === 'string' ? rawDiff.diff : '';
+      diff = {
+        ...rawDiff,
+        diff: content.length > maxDiffBytes ? content.slice(0, maxDiffBytes) : content,
+        truncated: content.length > maxDiffBytes,
+        returnedBytes: Math.min(content.length, maxDiffBytes),
+        totalBytes: content.length,
+      };
+    } catch (error: any) {
+      diff = { available: false, reason: error?.message || 'Git diff unavailable.' };
+    }
+  }
+
+  return {
+    project: start.project,
+    query,
+    git: start.git,
+    hints: start.hints,
+    index: {
+      cache: index.cache,
+      generatedAt: index.generatedAt,
+      metadata: index.metadata,
+      count: index.matches?.length || 0,
+      matches: (index.matches || []).slice(0, indexLimit),
+    },
+    snippets,
+    diff,
+    recommendedNextTools: [
+      'read_local_file',
+      'get_git_diff',
+      'search_local_files',
+      'run_project_command',
     ],
   };
 }

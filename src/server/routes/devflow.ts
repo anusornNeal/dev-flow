@@ -10,7 +10,7 @@ import { safeEditFile } from '../services/safeEditFileService';
 import { runProjectCommand } from '../services/projectCommandService';
 import { parseTestReport } from '../services/testReportParserService';
 import { getGitLog, getGitDiff, getGitShow, getGitStatus, getGitBranch, commitGitChanges } from '../services/gitService';
-import { getProjectStartContext } from '../services/projectStartContextService';
+import { getProjectStartContext, getRepoContextBundle } from '../services/projectStartContextService';
 import { getDevFlowDiagnostics, getToolCallSummary } from '../services/mcpToolMonitor';
 import { getRepoInspectionIndex } from '../services/repoInspectionIndexService';
 import { validateTaskQuality } from '../services/taskQualityService';
@@ -125,6 +125,14 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
   app.get('/api/project-start-context', (req, res) => {
     try {
       return res.json(getProjectStartContext(deps.state, req.query as Record<string, any>));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.get('/api/repo-context-bundle', (req, res) => {
+    try {
+      return res.json(getRepoContextBundle(deps.state, req.query as Record<string, any>));
     } catch (error) {
       return sendApiError(res, error);
     }

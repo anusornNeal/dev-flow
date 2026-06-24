@@ -278,6 +278,22 @@ export function commitGitChanges(state: AppState, args: Record<string, any>) {
 
   const beforeStatus = toStatusSummary(root);
   if (beforeStatus.count === 0) {
+    if (dryRun) {
+      return {
+        root,
+        ok: false,
+        code: 'NO_CHANGES_TO_COMMIT',
+        message: 'There are no local git changes to commit.',
+        dryRun: true,
+        hash: null,
+        commitHash: null,
+        branch: getBranchName(root),
+        changedFiles: [],
+        changedFileCount: 0,
+        beforeStatus,
+        afterStatus: beforeStatus,
+      };
+    }
     throw createApiError(400, 'NO_CHANGES_TO_COMMIT', 'There are no local git changes to commit.');
   }
 

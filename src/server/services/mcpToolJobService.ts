@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import type { AppState } from '../types';
-import { createJob, updateJobStatus, appendJobLog, writeJobResult, getJob, listInterruptedJobs, type JobStatus } from '../repositories/mcpToolJobRepository';
+import { createJob, updateJobStatus, appendJobLog, writeJobResult, getJob, listInterruptedJobs, listRecentJobs, type JobStatus } from '../repositories/mcpToolJobRepository';
 import { resolveProjectRoot } from './localFileService';
 
 // Import async runners (we will define these later in their respective files)
@@ -188,4 +188,24 @@ async function startJob(entry: QueueEntry) {
     // Process queue to see if anything else can start
     setImmediate(processQueue);
   }
+}
+
+export function getJobMetrics() {
+  return {
+    queueDepth: queue.length,
+    activeJobs: Array.from(activeJobs.entries()).map(([jobId, data]) => ({
+      jobId,
+      toolName: data.entry.toolName,
+      resourceKey: data.entry.resourceKey,
+      kind: data.entry.kind
+    })),
+    activeResources: Object.fromEntries(activeResources.entries()),
+    queuedJobs: queue.map(q => ({
+      jobId: q.jobId,
+      toolName: q.toolName,
+      resourceKey: q.resourceKey,
+      kind: q.kind
+    })),
+    recentJobs: listRecentJobs(50)
+  };
 }

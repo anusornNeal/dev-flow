@@ -10,3 +10,14 @@ test('devflowContract exposes safe_edit_local_file', () => {
   assert.equal(req.method, 'POST');
   assert.equal(req.path, '/api/local-files/safe-edit');
 });
+
+test('devflowContract exposes edit_local_files_batch', () => {
+  const tool = getToolDefinitionByName('edit_local_files_batch');
+  assert.ok(tool, 'edit_local_files_batch should be defined');
+  assert.equal(tool.name, 'edit_local_files_batch');
+  assert.equal(tool.executionPolicy?.mode, 'job');
+  assert.equal(tool.executionPolicy?.jobKind, 'repo-write');
+  const req = tool.buildHttpRequest({ mode: 'dry-run', files: [] });
+  assert.equal(req.method, 'POST');
+  assert.equal(req.path, '/api/local-files/edit-batch');
+});

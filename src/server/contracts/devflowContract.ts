@@ -132,7 +132,7 @@ function stripToolOnlyArgs(args: Record<string, any>, keys: string[]) {
   return copy;
 }
 
-export const DEVFLOW_CONTRACT_VERSION = '2026-06-24.1';
+export const DEVFLOW_CONTRACT_VERSION = '2026-06-24.2';
 
 export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   {
@@ -1205,6 +1205,45 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
         filePath: args.filePath || args.path,
         edits: args.edits || args.operations,
       },
+    }),
+  },
+  {
+    name: 'edit_local_files_batch',
+    executionPolicy: { mode: 'job', jobKind: 'repo-write' },
+    description: 'Preview or apply focused edits across multiple local files as one guarded batch. All files are dry-run checked first; apply mode rolls back previously changed files if any later edit fails.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...projectIdentifierProperties,
+        mode: { type: 'string', enum: ['dry-run', 'apply'], description: 'dry-run validates and previews. apply writes all edits after preflight succeeds.' },
+        files: {
+          type: 'array',
+          description: 'File edit entries. Duplicate file paths are rejected.',
+          items: {
+            type: 'object',
+            properties: {
+              filePath: { type: 'string', description: 'Relative file path under the workspace root.' },
+              path: { type: 'string', description: 'Alias for filePath.' },
+              edits: { type: 'array', description: 'Focused edit operations for this file.' },
+              operations: { type: 'array', description: 'Alias for edits.' },
+              expectedRevision: { type: 'object', description: 'Optional file revision token from read_local_file.' },
+              fileRevision: { type: 'object', description: 'Alias for expectedRevision.' },
+              expectedContentHash: { type: 'string', description: 'Optional SHA-256 hash guard.' },
+              expectedSha256: { type: 'string', description: 'Alias for expectedContentHash.' },
+            },
+            required: ['filePath'],
+          },
+        },
+        maxPayloadBytes: { type: 'number', description: 'Max allowed edit payload in bytes per file.' },
+        maxFileBytes: { type: 'number', description: 'Max allowed target file size in bytes per file.' },
+      },
+      required: ['files'],
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: (args) => ({
+      method: 'POST',
+      path: '/api/local-files/edit-batch',
+      body: args,
     }),
   },
   {

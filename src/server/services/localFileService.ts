@@ -39,6 +39,34 @@ const DEFAULT_RIPGREP_EXCLUDES = [
   '!**/*.log',
 ];
 
+const READ_CHUNK_BYTES = 64 * 1024;
+const SEARCH_CACHE_TTL_MS = 30_000;
+const SEARCH_CACHE_MAX_ENTRIES = 100;
+
+type SearchResult = {
+  root: string;
+  path: string;
+  query: string;
+  count: number;
+  scannedMatchCount: number;
+  truncated: boolean;
+  matches: Array<{ path: string; line: number; preview: string }>;
+  terminatedAfterLimit?: boolean;
+  cache?: {
+    hit: boolean;
+    generatedAt: string;
+    ageMs: number;
+    ttlMs: number;
+  };
+};
+
+type SearchCacheEntry = {
+  createdAt: number;
+  result: SearchResult;
+};
+
+const searchCache = new Map<string, SearchCacheEntry>();
+
 function shouldUseIgnoredEntries(args: Record<string, any>) {
   return args.includeIgnored === true || String(args.includeIgnored).toLowerCase() === 'true';
 }
@@ -58,26 +86,161 @@ function buildRipgrepArgs(query: string, searchPath: string, limit: number, args
   return rgArgs;
 }
 
+function makeSearchCacheKey(root: string, searchPath: string, query: string, limit: number, args: Record<string, any>) {
+  return JSON.stringify({
+    root: path.resolve(root),
+    path: path.relative(root, searchPath) || '.',
+    query,
+    limit,
+    includeIgnored: shouldUseIgnoredEntries(args),
+  });
+}
+
+function cloneSearchResult(result: SearchResult): SearchResult {
+  return {
+    ...result,
+    matches: result.matches.map((match) => ({ ...match })),
+    cache: result.cache ? { ...result.cache } : undefined,
+  };
+}
+
+function getCachedSearchResult(cacheKey: string): SearchResult | null {
+  const entry = searchCache.get(cacheKey);
+  if (!entry) return null;
+  const ageMs = Date.now() - entry.createdAt;
+  if (ageMs > SEARCH_CACHE_TTL_MS) {
+    searchCache.delete(cacheKey);
+    return null;
+  }
+  const cached = cloneSearchResult(entry.result);
+  cached.cache = {
+    hit: true,
+    generatedAt: new Date(entry.createdAt).toISOString(),
+    ageMs,
+    ttlMs: SEARCH_CACHE_TTL_MS,
+  };
+  return cached;
+}
+
+function rememberSearchResult(cacheKey: string, result: SearchResult): SearchResult {
+  const createdAt = Date.now();
+  if (searchCache.size >= SEARCH_CACHE_MAX_ENTRIES) {
+    const oldestKey = searchCache.keys().next().value;
+    if (oldestKey) searchCache.delete(oldestKey);
+  }
+  const stored = cloneSearchResult(result);
+  stored.cache = undefined;
+  searchCache.set(cacheKey, { createdAt, result: stored });
+  return {
+    ...cloneSearchResult(result),
+    cache: {
+      hit: false,
+      generatedAt: new Date(createdAt).toISOString(),
+      ageMs: 0,
+      ttlMs: SEARCH_CACHE_TTL_MS,
+    },
+  };
+}
+
+function parseRipgrepMatchLine(line: string, root: string) {
+  if (!line.trim()) return null;
+  try {
+    const parsed = JSON.parse(line);
+    if (parsed.type !== 'match') return null;
+    return {
+      path: path.relative(root, parsed.data.path.text),
+      line: parsed.data.line_number,
+      preview: parsed.data.lines.text.trim(),
+    };
+  } catch {
+    return null;
+  }
+}
+
 function parseRipgrepMatches(stdout: string, root: string, limit: number) {
   const matches: Array<{ path: string; line: number; preview: string }> = [];
   let scannedMatchCount = 0;
   for (const line of stdout.split(/\r?\n/)) {
-    if (!line.trim()) continue;
-    try {
-      const parsed = JSON.parse(line);
-      if (parsed.type !== 'match') continue;
-      scannedMatchCount += 1;
-      if (matches.length >= limit) continue;
-      matches.push({
-        path: path.relative(root, parsed.data.path.text),
-        line: parsed.data.line_number,
-        preview: parsed.data.lines.text.trim(),
-      });
-    } catch {
-      // Ignore malformed rg lines.
-    }
+    const match = parseRipgrepMatchLine(line, root);
+    if (!match) continue;
+    scannedMatchCount += 1;
+    if (matches.length >= limit) continue;
+    matches.push(match);
   }
   return { matches, scannedMatchCount, truncated: scannedMatchCount > matches.length };
+}
+
+function countLinesSync(filePath: string) {
+  const fd = fs.openSync(filePath, 'r');
+  const buffer = Buffer.allocUnsafe(READ_CHUNK_BYTES);
+  let totalLines = 1;
+  try {
+    while (true) {
+      const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, null);
+      if (bytesRead === 0) break;
+      for (let i = 0; i < bytesRead; i += 1) {
+        if (buffer[i] === 10) totalLines += 1;
+      }
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+  return totalLines;
+}
+
+function readLineWindowSync(filePath: string, startLine: number, endLine: number, maxBytes: number) {
+  const fd = fs.openSync(filePath, 'r');
+  const buffer = Buffer.allocUnsafe(READ_CHUNK_BYTES);
+  const selectedLines: string[] = [];
+  let pending = '';
+  let currentLine = 1;
+  let collectionStoppedByBytes = false;
+  const collectLine = (line: string) => {
+    if (currentLine >= startLine && currentLine <= endLine && !collectionStoppedByBytes) {
+      selectedLines.push(line.endsWith('\r') ? line.slice(0, -1) : line);
+      if (Buffer.byteLength(selectedLines.join('\n'), 'utf8') > maxBytes + READ_CHUNK_BYTES) {
+        collectionStoppedByBytes = true;
+      }
+    }
+    currentLine += 1;
+  };
+
+  try {
+    while (true) {
+      const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, null);
+      if (bytesRead === 0) break;
+      pending += buffer.subarray(0, bytesRead).toString('utf8');
+      const parts = pending.split('\n');
+      pending = parts.pop() ?? '';
+      for (const part of parts) {
+        collectLine(part);
+      }
+    }
+    collectLine(pending);
+  } finally {
+    fs.closeSync(fd);
+  }
+
+  let content = selectedLines.join('\n');
+  let byteLength = Buffer.byteLength(content, 'utf8');
+  let truncatedByBytes = collectionStoppedByBytes;
+  if (maxBytes > 0 && byteLength > maxBytes) {
+    content = Buffer.from(content, 'utf8').subarray(0, maxBytes).toString('utf8');
+    content += '\n[truncated]';
+    byteLength = Buffer.byteLength(content, 'utf8');
+    truncatedByBytes = true;
+  }
+
+  return {
+    content,
+    totalLines: Math.max(1, currentLine - 1),
+    byteLength,
+    truncatedByBytes,
+  };
+}
+
+export function clearLocalFileSearchCache() {
+  searchCache.clear();
 }
 
 export function resolveProjectRoot(state: AppState, args: Record<string, any>) {
@@ -173,12 +336,7 @@ export function readLocalFile(state: AppState, args: Record<string, any>) {
 
   const stat = fs.statSync(targetPath);
   const mode = String(args.mode || 'content').toLowerCase();
-  const raw = fs.readFileSync(targetPath, 'utf8');
-  const lines = raw.split(/\r?\n/);
-  const totalLines = lines.length;
   const maxBytes = Number.isFinite(Number(args.maxBytes)) ? Math.max(1, Math.min(100_000, Number(args.maxBytes))) : 40_000;
-  const startLine = Number.isFinite(Number(args.startLine)) ? Math.max(1, Number(args.startLine)) : 1;
-  const endLine = Number.isFinite(Number(args.endLine)) ? Math.max(startLine, Number(args.endLine)) : totalLines;
   const hasLineWindow = args.startLine !== undefined || args.endLine !== undefined;
 
   if (mode === 'metadata') {
@@ -186,22 +344,39 @@ export function readLocalFile(state: AppState, args: Record<string, any>) {
       root,
       path: path.relative(root, targetPath),
       bytes: stat.size,
-      totalLines,
+      totalLines: countLinesSync(targetPath),
       modifiedAt: stat.mtime.toISOString(),
     };
   }
 
-  let content = hasLineWindow
-    ? lines.slice(startLine - 1, Math.min(endLine, totalLines)).join('\n')
-    : raw;
-  let byteLength = Buffer.byteLength(content, 'utf8');
+  let content: string;
+  let totalLines: number;
+  let byteLength: number;
   let truncatedByBytes = false;
-  if (maxBytes > 0 && byteLength > maxBytes) {
-    content = Buffer.from(content, 'utf8').subarray(0, maxBytes).toString('utf8');
-    content += '\n[truncated]';
+  const startLine = Number.isFinite(Number(args.startLine)) ? Math.max(1, Number(args.startLine)) : 1;
+
+  if (hasLineWindow) {
+    const provisionalEndLine = Number.isFinite(Number(args.endLine)) ? Math.max(startLine, Number(args.endLine)) : Number.MAX_SAFE_INTEGER;
+    const window = readLineWindowSync(targetPath, startLine, provisionalEndLine, maxBytes);
+    content = window.content;
+    totalLines = window.totalLines;
+    byteLength = window.byteLength;
+    truncatedByBytes = window.truncatedByBytes;
+  } else {
+    const raw = fs.readFileSync(targetPath, 'utf8');
+    totalLines = raw.split(/\r?\n/).length;
+    content = raw;
     byteLength = Buffer.byteLength(content, 'utf8');
-    truncatedByBytes = true;
+    if (maxBytes > 0 && byteLength > maxBytes) {
+      content = Buffer.from(content, 'utf8').subarray(0, maxBytes).toString('utf8');
+      content += '\n[truncated]';
+      byteLength = Buffer.byteLength(content, 'utf8');
+      truncatedByBytes = true;
+    }
   }
+
+  const endLine = Number.isFinite(Number(args.endLine)) ? Math.max(startLine, Number(args.endLine)) : totalLines;
+  const returnedEndLine = hasLineWindow ? Math.min(endLine, totalLines) : totalLines;
 
   return {
     root,
@@ -210,7 +385,7 @@ export function readLocalFile(state: AppState, args: Record<string, any>) {
     bytes: stat.size,
     returnedBytes: byteLength,
     startLine: hasLineWindow ? startLine : 1,
-    endLine: hasLineWindow ? Math.min(endLine, totalLines) : totalLines,
+    endLine: returnedEndLine,
     totalLines,
     truncated: truncatedByBytes || (hasLineWindow && (startLine > 1 || endLine < totalLines)),
     modifiedAt: stat.mtime.toISOString(),
@@ -260,6 +435,10 @@ export function searchLocalFiles(state: AppState, args: Record<string, any>) {
 
   const searchPath = resolveSafePath(root, String(args.path || '.'));
   const limit = Number.isFinite(Number(args.limit)) ? Math.max(1, Math.min(100, Number(args.limit))) : 20;
+  const cacheKey = makeSearchCacheKey(root, searchPath, query, limit, args);
+  const cached = getCachedSearchResult(cacheKey);
+  if (cached) return cached;
+
   const rg = spawnSync('rg', buildRipgrepArgs(query, searchPath, limit, args), {
     cwd: root,
     encoding: 'utf8',
@@ -269,7 +448,7 @@ export function searchLocalFiles(state: AppState, args: Record<string, any>) {
 
   if (!rg.error && rg.stdout) {
     const { matches, scannedMatchCount, truncated } = parseRipgrepMatches(rg.stdout, root, limit);
-    return {
+    return rememberSearchResult(cacheKey, {
       root,
       path: path.relative(root, searchPath) || '.',
       query,
@@ -277,10 +456,10 @@ export function searchLocalFiles(state: AppState, args: Record<string, any>) {
       scannedMatchCount,
       truncated,
       matches,
-    };
+    });
   }
 
-  return {
+  return rememberSearchResult(cacheKey, {
     root,
     path: path.relative(root, searchPath) || '.',
     query,
@@ -288,7 +467,7 @@ export function searchLocalFiles(state: AppState, args: Record<string, any>) {
     scannedMatchCount: 0,
     truncated: false,
     matches: [],
-  };
+  });
 }
 
 export async function searchLocalFilesAsync(state: AppState, args: Record<string, any>, logger: { stdout: (data: string) => void, stderr: (data: string) => void }, setCancelFn: (fn: () => void) => void): Promise<any> {
@@ -300,6 +479,9 @@ export async function searchLocalFilesAsync(state: AppState, args: Record<string
 
   const searchPath = resolveSafePath(root, String(args.path || '.'));
   const limit = Number.isFinite(Number(args.limit)) ? Math.max(1, Math.min(100, Number(args.limit))) : 20;
+  const cacheKey = makeSearchCacheKey(root, searchPath, query, limit, args);
+  const cached = getCachedSearchResult(cacheKey);
+  if (cached) return cached;
 
   return new Promise((resolve, reject) => {
     const child = spawn('rg', buildRipgrepArgs(query, searchPath, limit, args), {
@@ -307,17 +489,58 @@ export async function searchLocalFilesAsync(state: AppState, args: Record<string
       shell: false,
     });
 
-    let stdoutBuffer = '';
-    
+    const matches: Array<{ path: string; line: number; preview: string }> = [];
+    let scannedMatchCount = 0;
+    let lineBuffer = '';
+    let resolved = false;
+    let terminatedAfterLimit = false;
+
+    const finish = () => {
+      if (resolved) return;
+      resolved = true;
+      const result = rememberSearchResult(cacheKey, {
+        root,
+        path: path.relative(root, searchPath) || '.',
+        query,
+        count: matches.length,
+        scannedMatchCount,
+        truncated: terminatedAfterLimit || scannedMatchCount > matches.length,
+        terminatedAfterLimit,
+        matches,
+      });
+      resolve(result);
+    };
+
+    const processLine = (line: string) => {
+      const match = parseRipgrepMatchLine(line, root);
+      if (!match) return;
+      scannedMatchCount += 1;
+      if (matches.length < limit) {
+        matches.push(match);
+      }
+      if (matches.length >= limit && !terminatedAfterLimit) {
+        terminatedAfterLimit = true;
+        child.kill('SIGTERM');
+      }
+    };
+
     setCancelFn(() => {
+      if (resolved) return;
+      resolved = true;
       child.kill('SIGTERM');
       reject(new Error('Job cancelled'));
     });
 
     child.stdout.on('data', (data) => {
       const chunk = data.toString('utf8');
-      stdoutBuffer += chunk;
+      lineBuffer += chunk;
       logger.stdout(chunk);
+      const lines = lineBuffer.split(/\r?\n/);
+      lineBuffer = lines.pop() ?? '';
+      for (const line of lines) {
+        processLine(line);
+        if (terminatedAfterLimit) break;
+      }
     });
 
     child.stderr.on('data', (data) => {
@@ -325,26 +548,22 @@ export async function searchLocalFilesAsync(state: AppState, args: Record<string
     });
 
     child.on('error', (err) => {
+      if (resolved) return;
+      resolved = true;
       reject(createApiError(500, 'SEARCH_EXEC_ERROR', 'Failed to execute rg.', { details: err.message }));
     });
 
     child.on('close', (code) => {
-      if (code !== 0 && code !== 1) { // rg returns 1 if no matches found
+      if (!terminatedAfterLimit && lineBuffer.trim()) {
+        processLine(lineBuffer);
+      }
+      if (resolved) return;
+      if (code !== 0 && code !== 1 && !terminatedAfterLimit) { // rg returns 1 if no matches found
+        resolved = true;
         reject(createApiError(500, 'SEARCH_FAILED', 'rg search failed.', { details: { exitCode: code } }));
         return;
       }
-
-      const { matches, scannedMatchCount, truncated } = parseRipgrepMatches(stdoutBuffer, root, limit);
-
-      resolve({
-        root,
-        path: path.relative(root, searchPath) || '.',
-        query,
-        count: matches.length,
-        scannedMatchCount,
-        truncated,
-        matches,
-      });
+      finish();
     });
   });
 }

@@ -139,7 +139,7 @@ export default function ObservabilityModal({ onClose }: ObservabilityModalProps)
                           <div className="font-bold">{j.toolName}</div>
                           <div className="opacity-70 text-[10px]">{new Date(j.createdAt).toLocaleTimeString()}</div>
                         </div>
-                        <span className={px-2 py-1 rounded text-[10px] font-bold }>
+                        <span className="px-2 py-1 rounded text-[10px] font-bold">
                           {j.status}
                         </span>
                       </div>

@@ -46,7 +46,7 @@ function clearPreparedCounts() {
 }
 
 const state: any = {
-  tasksCache: [
+  _testTasks: [
     {
       id: 'task-adversarial-1',
       displayId: 'DVF-0950',

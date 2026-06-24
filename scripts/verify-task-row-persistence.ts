@@ -11,7 +11,7 @@ try {
   const { deleteTasksByIds, saveTask, getTasks } = await import('../src/server/repositories/taskRepository.js');
 
   const state = {
-    tasksCache: [],
+    _testTasks: [],
     projectsCache: [],
     countersCache: {},
     

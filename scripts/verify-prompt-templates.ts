@@ -222,7 +222,7 @@ assert.ok(!sparseRender.content.includes('Attached Images API'));
 
 console.log('[verify] Testing real task prompt shares omission logic...');
 const sparseState = {
-  tasksCache: [{
+  _testTasks: [{
     id: 'task-sparse',
     displayId: 'DVF-0121',
     projectId: 'project-1',
@@ -249,12 +249,12 @@ const sparseState = {
     localPath: fixtureLocalPath,
   }],
 } as any;
-sparseState.tasksCache.forEach(t => saveTask(t)); const taskPrompt = renderTaskPrompt(sparseState, 'task-sparse').renderResult.content;
+sparseState._testTasks.forEach(t => saveTask(t)); const taskPrompt = renderTaskPrompt(sparseState, 'task-sparse').renderResult.content;
 assert.ok(!taskPrompt.includes('(none)'));
 assert.ok(!taskPrompt.includes('Attached Images API'));
 
 const imageState = {
-  tasksCache: [{
+  _testTasks: [{
     id: 'task-image',
     displayId: 'DVF-0122',
     projectId: 'project-1',
@@ -281,7 +281,7 @@ const imageState = {
     localPath: fixtureLocalPath,
   }],
 } as any;
-imageState.tasksCache.forEach(t => saveTask(t));
+imageState._testTasks.forEach(t => saveTask(t));
 const imageTaskPrompt = renderTaskPrompt(imageState, 'task-image').renderResult.content;
 assert.ok(imageTaskPrompt.includes('**Attached Images API:** GET /api/tasks/DVF-0122/images'));
 

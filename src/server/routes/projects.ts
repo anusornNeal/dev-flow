@@ -1,6 +1,6 @@
 import type express from 'express';
 import type { ApiRouteDeps } from '../types';
-import { getTasksByProjectId, deleteTasksByIds } from '../repositories/taskRepository.js';
+import { getTasksByProjectId, deleteTasksByIds, deleteTasksByProjectId } from '../repositories/taskRepository.js';
 import { getProjects, getProject, createProject as dbCreateProject, updateProject as dbUpdateProject, deleteProject as dbDeleteProject } from '../repositories/projectRepository.js';
 import { createApiError, sendApiError } from '../services/api';
 import { findProjectByIdentifier } from '../services/taskService';
@@ -21,9 +21,7 @@ function deleteProjectById(projectId: string, deps: ApiRouteDeps) {
   }
 
   dbDeleteProject(projectId);
-  
-  deps.state.tasksCache = deps.state.tasksCache.filter((task) => task.projectId !== projectId);
-  
+  deleteTasksByProjectId(projectId);
 
   return { success: true, removedId: projectId };
 }

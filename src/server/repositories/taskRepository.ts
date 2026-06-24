@@ -259,3 +259,7 @@ export function deleteTasksByIds(taskIds: string[]) {
   const placeholders = taskIds.map(() => '?').join(',');
   db.prepare(`DELETE FROM tasks WHERE id IN (${placeholders})`).run(...taskIds);
 }
+
+export function deleteTasksByProjectId(projectId: string) {
+  db.prepare('DELETE FROM tasks WHERE projectId = ?').run(projectId);
+}

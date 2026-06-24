@@ -20,7 +20,7 @@ const { createProject } = await import('../../src/server/repositories/projectRep
 const { saveTask, getTasks } = await import('../../src/server/repositories/taskRepository.js');
 
 const state = {
-  tasksCache: [
+  _testTasks: [
     {
       id: 'task-import-1', displayId: 'DVF-0200', title: 'Test task for import', description: 'old desc',
       projectId: 'proj-import-1', status: 'backlog', priority: 'medium', branch: 'old-branch',

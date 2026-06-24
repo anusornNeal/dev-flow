@@ -8,7 +8,7 @@ type LogLevel = 'INFO' | 'ERROR' | 'TRIGGER';
  * shapes during the incremental migration).
  */
 export interface AppState {
-  tasksCache: any[];
+  _testTasks?: any[]; // legacy test data, do not use in production
   countersCache: Record<string, number>;
 }
 

@@ -2,6 +2,7 @@ import { executeAllMigrations } from '../../src/db/migrations/index.js';
 executeAllMigrations();
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import db from '../../src/db/index.js';
 import { buildJiraAuthoringBundle } from '../../src/server/services/jiraAuthoringBundleService.js';
 
 function jiraDoc(text: string) {
@@ -54,14 +55,13 @@ test('buildJiraAuthoringBundle returns compact Jira card authoring packet', asyn
     } as any;
   };
 
-  const state: any = {
-    
-    tasksCache: [
-      { id: 'task-1', displayId: 'DVF-1', title: 'Existing card', jiraKey: 'QCA-3435', status: 'backlog' },
-    ],
-  };
+  db.prepare('DELETE FROM tasks').run();
+  db.prepare(`
+    INSERT INTO tasks (id, displayId, title, jiraKey, status, createdAt, updatedAt)
+    VALUES ('task-1', 'DVF-1', 'Existing card', 'QCA-3435', 'backlog', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+  `).run();
 
-  const bundle = await buildJiraAuthoringBundle(state, { jiraKey: 'QCA-3435' }, fetchImpl as any);
+  const bundle = await buildJiraAuthoringBundle({ jiraKey: 'QCA-3435' }, fetchImpl as any);
 
   assert.equal(calls.length, 1);
   assert.equal(bundle.jira.key, 'QCA-3435');
@@ -79,7 +79,7 @@ test('buildJiraAuthoringBundle returns compact Jira card authoring packet', asyn
 test('buildJiraAuthoringBundle reports missing Jira configuration clearly', async () => {
   process.env.JIRA_BASE_URL = ''; process.env.JIRA_EMAIL = ''; process.env.JIRA_API_TOKEN = '';
   await assert.rejects(
-    () => buildJiraAuthoringBundle({  tasksCache: [] } as any, { jiraKey: 'QCA-1' }),
+    () => buildJiraAuthoringBundle({ jiraKey: 'QCA-1' }),
     /Jira configuration is incomplete/,
   );
 });

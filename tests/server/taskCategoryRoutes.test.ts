@@ -16,7 +16,7 @@ const { createProject } = await import('../../src/server/repositories/projectRep
 const { getTasks, saveTask } = await import('../../src/server/repositories/taskRepository.js');
 
 const state: any = {
-  tasksCache: [
+  _testTasks: [
     {
       id: 'task-legacy-1',
       displayId: 'DVF-0300',

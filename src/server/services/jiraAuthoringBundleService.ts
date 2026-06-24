@@ -1,5 +1,6 @@
 import type { AppState } from '../types.js';
 import { getSettings } from '../repositories/settingsRepository.js';
+import { getTasks } from '../repositories/taskRepository.js';
 import { createApiError } from './api';
 
 const JIRA_FIELDS = [
@@ -97,7 +98,6 @@ function jiraAuthHeaders(email: string, token: string) {
 }
 
 export async function buildJiraAuthoringBundle(
-  state: AppState,
   args: Record<string, any>,
   signalOrFetch?: AbortSignal | FetchLike,
   fetchImplArg?: FetchLike
@@ -150,7 +150,7 @@ export async function buildJiraAuthoringBundle(
     comments,
     attachments,
     relatedIssues: collectRelatedIssues(issueFields),
-    existingDevFlowTasks: findExistingDevFlowTasks(state, jiraKey),
+    existingDevFlowTasks: findExistingDevFlowTasks(jiraKey),
     authoringHints: [
       'Summarize Jira details into the DevFlow card; do not tell the implementer to reopen Jira.',
       'Use get_repo_inspection_index with the Jira summary, screen name, and visible strings before broad repo search.',

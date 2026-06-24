@@ -83,7 +83,7 @@ async function withServer(
 
 console.log('[DVF-0224] verifying repository helpers and per-agent locking...');
 const lockState: AppState = {
-  tasksCache: [
+  _testTasks: [
     makeTask('codex-1', 'Codex', { projectId: 'project-lock', createdAt: '2026-06-19T01:00:00.000Z' }),
     makeTask('claude-1', 'Claude', { projectId: 'project-lock', createdAt: '2026-06-19T01:01:00.000Z' }),
     makeTask('codex-2', 'Codex', { projectId: 'project-lock', createdAt: '2026-06-19T01:02:00.000Z' }),
@@ -117,7 +117,7 @@ assert.equal(listActiveRunSummariesForProject('project-lock').length, 2);
 
 console.log('[DVF-0224] verifying queue continuation drains all available agents...');
 const queueState: AppState = {
-  tasksCache: [
+  _testTasks: [
     makeTask('queue-codex-1', 'Codex', { projectId: 'project-queue', createdAt: '2026-06-19T02:00:00.000Z' }),
     makeTask('queue-claude-1', 'Claude', { projectId: 'project-queue', createdAt: '2026-06-19T02:01:00.000Z' }),
     makeTask('queue-codex-2', 'Codex', { projectId: 'project-queue', createdAt: '2026-06-19T02:02:00.000Z' }),
@@ -139,7 +139,7 @@ assert.match(getTasks()[2].logs.at(-1)?.message || '', /task stays in TODO/i);
 console.log('[DVF-0224] verifying success continuation, failure, and cancellation routes...');
 await withServer(() => {
   const state: AppState = {
-    tasksCache: [
+    _testTasks: [
       makeTask('done-codex-1', 'Codex', { projectId: 'project-complete', createdAt: '2026-06-19T03:00:00.000Z' }),
       makeTask('done-codex-2', 'Codex', { projectId: 'project-complete', createdAt: '2026-06-19T03:01:00.000Z' }),
       makeTask('done-claude-1', 'Claude', { projectId: 'project-complete', createdAt: '2026-06-19T03:02:00.000Z' }),
@@ -199,7 +199,7 @@ await withServer(() => {
 console.log('[DVF-0224] verifying Auto Work enable drains multiple agents...');
 await withServer(() => {
   const state: AppState = {
-    tasksCache: [
+    _testTasks: [
       makeTask('enable-codex-1', 'Codex', { projectId: 'project-enable', createdAt: '2026-06-19T04:00:00.000Z' }),
       makeTask('enable-claude-1', 'Claude', { projectId: 'project-enable', createdAt: '2026-06-19T04:01:00.000Z' }),
       makeTask('enable-codex-2', 'Codex', { projectId: 'project-enable', createdAt: '2026-06-19T04:02:00.000Z' }),

@@ -45,8 +45,8 @@ const { buildTaskStatusMoveRequest } = await import('../src/lib/taskStatusMove.j
 const { createProject, getProjects, updateProject } = await import('../src/server/repositories/projectRepository.js');
 const { saveTask: _saveTask, getTasks, deleteTasksByIds } = await import('../src/server/repositories/taskRepository.js');
 const { getSettings } = await import('../src/server/repositories/settingsRepository.js');
-function saveTasks(s: any) { (s?.tasksCache ?? []).forEach((t: any) => _saveTask(t)); }
-function saveAndReload(s: any) { saveTasks(s); s.tasksCache = getTasks(); }
+function saveTasks(s: any) { (s?._testTasks ?? []).forEach((t: any) => _saveTask(t)); }
+function saveAndReload(s: any) { saveTasks(s); s._testTasks = getTasks(); }
 const { getAgentTaskContext } = await import('../src/server/services/taskService.js');
 const { renderTaskPrompt } = await import('../src/server/services/taskService.js');
 const { isValidTransition } = await import('../src/lib/statusTransitions.js');
@@ -62,7 +62,7 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2000) {
 }
 
 const state: AppState = {
-  tasksCache: [
+  _testTasks: [
     {
       id: 'task-1',
       displayId: 'DVF-0080',
@@ -145,10 +145,10 @@ const deps: ApiRouteDeps = {
 
 console.log('[verify] Testing missing project.localPath blocks setup...');
 const p0 = getProjects()[0]; p0.localPath = undefined; updateProject(p0);
-const noPathResult = triggerTaskAgent(state.tasksCache[0], deps, 'test');
+const noPathResult = triggerTaskAgent(state._testTasks[0], deps, 'test');
 assert.equal(noPathResult.triggered, false);
 assert.equal(noPathResult.reason, 'Project localPath is missing. Task cannot be run.');
-assert.equal(state.tasksCache[0].status, 'todo');
+assert.equal(state._testTasks[0].status, 'todo');
 
 console.log('[verify] Testing real prompt rendering and startup handoff...');
 const p1 = getProjects()[0]; p1.localPath = repoPathWithSpaces; updateProject(p1);
@@ -165,9 +165,9 @@ fs.mkdirSync(overrideDir, { recursive: true });
 fs.writeFileSync(path.join(overrideDir, 'prompt.header.md'), '\nOVERRIDE HEADER {{run.id}}\n', 'utf8');
 const previewPrompt = renderTaskPrompt(state, 'task-1');
 assert.ok(previewPrompt.renderResult.content.includes('OVERRIDE HEADER preview-run-id'));
-const triggerResult = triggerTaskAgent(state.tasksCache[0], deps, 'test');
+const triggerResult = triggerTaskAgent(state._testTasks[0], deps, 'test');
 assert.equal(triggerResult.triggered, true);
-assert.equal(state.tasksCache[0].status, 'in-progress');
+assert.equal(state._testTasks[0].status, 'in-progress');
 
 await new Promise((resolve) => setTimeout(resolve, 250));
 await waitFor(() => getLatestAgentRunForTask('task-1')?.status === 'running');
@@ -219,15 +219,15 @@ assert.equal(runPrompt.context.assignment.effort, 'xhigh');
 assert.ok(prompt.includes(`OVERRIDE HEADER ${run1!.id}`));
 
 console.log('[verify] Testing failed completion leaves the card retryable...');
-completeAgentRunForTask(state.tasksCache[0], run1!, deps, {
+completeAgentRunForTask(state._testTasks[0], run1!, deps, {
   success: false,
   exitCode: 1,
   errorMessage: 'Agent process exited with code 1',
 });
-assert.equal(state.tasksCache[0].status, 'todo');
+assert.equal(state._testTasks[0].status, 'todo');
 assert.equal(getActiveRunForTask('task-1'), null);
 assert.equal(getLatestAgentRunForTask('task-1')?.status, 'failed');
-assert.match(state.tasksCache[0].logs.at(-1)?.message || '', /exitCode=1/);
+assert.match(state._testTasks[0].logs.at(-1)?.message || '', /exitCode=1/);
 const failedResult = JSON.parse(fs.readFileSync(resultPath, 'utf8'));
 assert.equal(failedResult.runId, run1!.id);
 assert.equal(failedResult.status, 'failed');
@@ -239,7 +239,7 @@ assert.equal(typeof failedResult.completedAt, 'string');
 
 console.log('[verify] Testing duplicate trigger reuses the same active run...');
 const duplicateState: AppState = {
-  tasksCache: [
+  _testTasks: [
     {
       id: 'dup-task-1',
       displayId: 'DVF-0111-X',
@@ -265,10 +265,10 @@ try { createProject({ id: 'project-dup', name: 'dup', repoUrl: 'https://github.c
   writeAgentLog: () => {},
 };
 saveTasks(duplicateState);
-const firstDuplicateTrigger = triggerTaskAgent(duplicateState.tasksCache[0], duplicateDeps, 'dup-test');
+const firstDuplicateTrigger = triggerTaskAgent(duplicateState._testTasks[0], duplicateDeps, 'dup-test');
 assert.equal(firstDuplicateTrigger.triggered, true);
 const firstDuplicateRunId = firstDuplicateTrigger.run.id;
-const secondDuplicateTrigger = triggerTaskAgent(duplicateState.tasksCache[0], duplicateDeps, 'dup-test');
+const secondDuplicateTrigger = triggerTaskAgent(duplicateState._testTasks[0], duplicateDeps, 'dup-test');
 assert.equal(secondDuplicateTrigger.triggered, false);
 assert.equal(secondDuplicateTrigger.run?.id, firstDuplicateRunId);
 assert.match(secondDuplicateTrigger.reason, /already running for this task/i);
@@ -283,19 +283,19 @@ await new Promise((resolve) => setTimeout(resolve, 250));
 await waitFor(() => getLatestAgentRunForTask('task-3')?.status === 'running');
 
 // Reload from DB since continueTaskQueueForProject mutates tasks via saveTask()
-state.tasksCache = getTasks().filter(t => ['task-1','task-1-sub','task-2','task-3'].includes(t.id))
+state._testTasks = getTasks().filter(t => ['task-1','task-1-sub','task-2','task-3'].includes(t.id))
   .sort((a, b) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime());
 
-assert.equal(state.tasksCache[1].status, 'backlog');
-assert.equal(state.tasksCache[2].status, 'todo');
-assert.equal(state.tasksCache[3].status, 'in-progress');
-assert.match(state.tasksCache[0].logs.at(-1)?.message || '', /Manual retry is required/);
-assert.match(state.tasksCache[2].logs.at(-1)?.message || '', /Invalid agent or task id characters/);
+assert.equal(state._testTasks[1].status, 'backlog');
+assert.equal(state._testTasks[2].status, 'todo');
+assert.equal(state._testTasks[3].status, 'in-progress');
+assert.match(state._testTasks[0].logs.at(-1)?.message || '', /Manual retry is required/);
+assert.match(state._testTasks[2].logs.at(-1)?.message || '', /Invalid agent or task id characters/);
 assert.equal(getLatestAgentRunForTask('task-3')?.status, 'running');
 
 console.log('[verify] Testing parent review gating and evidence requirements...');
 const parentState: AppState = {
-  tasksCache: [
+  _testTasks: [
     {
       id: 'parent-1',
       displayId: 'DVF-0089',
@@ -365,7 +365,7 @@ try {
   const blockedByStatusBody = await blockedByStatus.json();
   assert.match(blockedByStatusBody.error || '', /DVF-0090 is still backlog/);
 
-  parentState.tasksCache[1].status = 'ready-for-review';
+  parentState._testTasks[1].status = 'ready-for-review';
   saveTasks(parentState);
   const blockedByEvidence = await fetch(`${baseUrl}/api/tasks/parent-1/move`, {
     method: 'POST',
@@ -376,13 +376,13 @@ try {
   const blockedByEvidenceBody = await blockedByEvidence.json();
   assert.match(blockedByEvidenceBody.error || '', /DVF-0093 is missing visible prompt\.md and agent\.log evidence/i);
 
-  parentState.tasksCache[2].logs.push({
+  parentState._testTasks[2].logs.push({
     id: 'evidence-1',
     timestamp: '2026-06-13T00:04:00.000Z',
     message: 'prompt.md excerpt: Task context and repo path verified.',
     type: 'update',
   });
-  parentState.tasksCache[2].logs.push({
+  parentState._testTasks[2].logs.push({
     id: 'evidence-2',
     timestamp: '2026-06-13T00:05:00.000Z',
     message: 'agent.log lines: completion callback posted success and fresh-session details.',
@@ -425,7 +425,7 @@ assert.deepEqual(
 );
 
 const moveState: AppState = {
-  tasksCache: [
+  _testTasks: [
     {
       id: 'move-task-1',
       displayId: 'DVF-0104-X',
@@ -461,31 +461,31 @@ const moveAddress = moveServer.address();
 if (!moveAddress || typeof moveAddress === 'string') throw new Error('Failed to bind move test server.');
 const moveBaseUrl = `http://127.0.0.1:${moveAddress.port}`;
 try {
-  const staleTaskSnapshot = { ...moveState.tasksCache[0] };
+  const staleTaskSnapshot = { ...moveState._testTasks[0] };
 
   const updateResponse = await fetch(`${moveBaseUrl}/api/tasks/move-task-1`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      ...moveState.tasksCache[0],
+      ...moveState._testTasks[0],
       model: 'GPT-5.4 Mini',
       effort: 'low',
     }),
   });
   assert.equal(updateResponse.status, 200);
   // Reload from DB — route mutates DB, not in-memory state
-  moveState.tasksCache = getTasks().filter(t => t.id === 'move-task-1');
-  assert.equal(moveState.tasksCache[0].effort, 'low');
-  assert.equal(moveState.tasksCache[0].model, 'GPT-5.4 Mini');
+  moveState._testTasks = getTasks().filter(t => t.id === 'move-task-1');
+  assert.equal(moveState._testTasks[0].effort, 'low');
+  assert.equal(moveState._testTasks[0].model, 'GPT-5.4 Mini');
 
   const moveRequest = buildTaskStatusMoveRequest(staleTaskSnapshot.id, 'todo');
   const moveResponse = await fetch(`${moveBaseUrl}${moveRequest.url}`, moveRequest.init);
   assert.equal(moveResponse.status, 200);
   // Reload again after move
-  moveState.tasksCache = getTasks().filter(t => t.id === 'move-task-1');
-  assert.equal(moveState.tasksCache[0].status, 'todo');
-  assert.equal(moveState.tasksCache[0].effort, 'low');
-  assert.equal(moveState.tasksCache[0].model, 'GPT-5.4 Mini');
+  moveState._testTasks = getTasks().filter(t => t.id === 'move-task-1');
+  assert.equal(moveState._testTasks[0].status, 'todo');
+  assert.equal(moveState._testTasks[0].effort, 'low');
+  assert.equal(moveState._testTasks[0].model, 'GPT-5.4 Mini');
 } finally {
   await new Promise<void>((resolve, reject) => moveServer.close((error) => error ? reject(error) : resolve()));
 }
@@ -496,7 +496,7 @@ assert.equal(isValidTransition('in-progress', 'backlog'), true);
 assert.equal(isValidTransition('ready-for-review', 'backlog'), true);
 
 const resetState: AppState = {
-  tasksCache: [
+  _testTasks: [
     {
       id: 'reset-todo',
       displayId: 'DVF-0099-A',
@@ -576,21 +576,21 @@ try {
   const todoBacklog = await fetch(`${resetBaseUrl}/api/tasks/reset-todo`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...resetState.tasksCache[0], status: 'backlog' }),
+    body: JSON.stringify({ ...resetState._testTasks[0], status: 'backlog' }),
   });
   assert.equal(todoBacklog.status, 200);
 
   const progressBacklog = await fetch(`${resetBaseUrl}/api/tasks/reset-progress`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...resetState.tasksCache[1], status: 'backlog', emergency: true }),
+    body: JSON.stringify({ ...resetState._testTasks[1], status: 'backlog', emergency: true }),
   });
   assert.equal(progressBacklog.status, 200);
 
   const reviewBacklog = await fetch(`${resetBaseUrl}/api/tasks/reset-review`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...resetState.tasksCache[2], status: 'backlog' }),
+    body: JSON.stringify({ ...resetState._testTasks[2], status: 'backlog' }),
   });
   assert.equal(reviewBacklog.status, 200);
 } finally {
@@ -598,10 +598,10 @@ try {
 }
 
 // Reload from DB — HTTP routes mutate DB, not the in-memory state reference
-resetState.tasksCache = getTasks().filter(t => ['reset-todo', 'reset-progress', 'reset-review', 'queue-sibling'].includes(t.id));
+resetState._testTasks = getTasks().filter(t => ['reset-todo', 'reset-progress', 'reset-review', 'queue-sibling'].includes(t.id));
 
 for (const taskId of ['reset-todo', 'reset-progress', 'reset-review']) {
-  const task = resetState.tasksCache.find((entry) => entry.id === taskId);
+  const task = resetState._testTasks.find((entry) => entry.id === taskId);
   assert.ok(task);
   assert.equal(task?.status, 'backlog');
   assert.equal(task?.activeAgent, undefined);
@@ -614,7 +614,7 @@ assert.equal(getLatestAgentRunForTask('queue-sibling'), null);
 
 console.log('[verify] Testing stale runs reconcile during normal reads...');
 const staleReadState: AppState = {
-  tasksCache: [
+  _testTasks: [
     {
       id: 'stale-read-task',
       displayId: 'DVF-0112-X',
@@ -661,7 +661,7 @@ try {
 
 console.log('[verify] Testing Auto Work enable validation blocks invalid queued tasks...');
 const autoWorkValidationState: AppState = {
-  tasksCache: [
+  _testTasks: [
     {
       id: 'auto-work-invalid-task',
       displayId: 'DVF-0118-X',
@@ -680,7 +680,7 @@ const autoWorkValidationState: AppState = {
   
 };
 // Use a fresh project-id to isolate from earlier test tasks
-autoWorkValidationState.tasksCache[0].projectId = 'project-autowork-invalid';
+autoWorkValidationState._testTasks[0].projectId = 'project-autowork-invalid';
 try { createProject({ id: 'project-autowork-invalid', name: 'p-invalid', repoUrl: 'repo', localPath: path.join(tempDir, 'missing-project-path') }); } catch(e) {}
 const autoWorkValidationDeps: ApiRouteDeps = {
   state: autoWorkValidationState,
@@ -713,7 +713,7 @@ try {
 
 console.log('[verify] Testing Auto Work enable triggers queued task...');
 const autoWorkTriggerState: AppState = {
-  tasksCache: [
+  _testTasks: [
     {
       id: 'auto-work-valid-task',
       displayId: 'DVF-0119-X',
@@ -796,7 +796,7 @@ try {
 
 console.log('[verify] Testing agent completion callback API...');
 const completionState: AppState = {
-  tasksCache: [
+  _testTasks: [
     {
       id: 'completion-success',
       displayId: 'DVF-0151-A',

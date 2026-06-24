@@ -32,7 +32,7 @@ export async function draftTaskFromJiraBundle(state: AppState, args: Record<stri
 
   return executeWithBudget(budgetMs, async (signal) => {
     // 1. Fetch Jira Context
-    const jiraBundle = await buildJiraAuthoringBundle(state, args, signal);
+    const jiraBundle = await buildJiraAuthoringBundle(args, signal);
 
     // 2. Fetch Repo Inspection Index (if project context is provided)
     let repoHints = null;

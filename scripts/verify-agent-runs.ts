@@ -693,7 +693,7 @@ const mockState = {
     repoUrl: 'foo',
     branch: 'main',
   }],
-  tasksCache: [mockTask],
+  _testTasks: [mockTask],
   tasks: [mockTask],
   workspaceConfig: { localPath: tempDir },
 };

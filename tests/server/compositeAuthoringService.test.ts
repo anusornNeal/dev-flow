@@ -11,7 +11,7 @@ test('draftTaskFromJiraBundle rejects with BUDGET_EXCEEDED when timeout is reach
   // Set up mock state
   const state: any = {
     
-    tasksCache: []
+    _testTasks: []
   };
 
   let signalReceived: AbortSignal | undefined;
@@ -90,7 +90,7 @@ test('draftTaskFromJiraBundle returns a create_task-compatible category', async 
   const originalFetch = globalThis.fetch;
   const state: any = {
     
-    tasksCache: []
+    _testTasks: []
   };
 
   globalThis.fetch = (async () => ({

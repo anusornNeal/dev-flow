@@ -139,7 +139,7 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
 
   app.get('/api/jira/authoring-bundle', async (req, res) => {
     try {
-      return res.json(await buildJiraAuthoringBundle(deps.state, req.query as Record<string, any>));
+      return res.json(await buildJiraAuthoringBundle(req.query as Record<string, any>));
     } catch (error) {
       return sendApiError(res, error);
     }

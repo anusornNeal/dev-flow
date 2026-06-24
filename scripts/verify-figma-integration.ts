@@ -37,7 +37,7 @@ async function withServer(
 console.log('[Figma] verifying Figma token masking and update via settings...');
 await withServer(() => {
   const state: AppState = {
-    tasksCache: [],
+    _testTasks: [],
     countersCache: {},
     
     

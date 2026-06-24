@@ -47,7 +47,7 @@ const { getTasks, saveTask } = await import('../src/server/repositories/taskRepo
 const { getCapabilityCatalog, getMcpToolList, getToolDefinitionByName } = await import('../src/server/contracts/devflowContract.js');
 
 const state = {
-  tasksCache: [
+  _testTasks: [
     {
       id: 'task-contract-1',
       displayId: 'DVF-0120',
@@ -79,7 +79,7 @@ const state = {
 
 executeAllMigrations();
 ((state as any).projectsCache || []).forEach(p => createProject(p));
-((state as any).tasksCache || []).forEach(t => saveTask(t));
+((state as any)._testTasks || []).forEach(t => saveTask(t));
 
 
 const app = express();

@@ -19,7 +19,24 @@ export interface McpToolJob {
   resourceKey: string;
 }
 
-const JOBS_DIR = path.resolve(getDevFlowAppRoot(), '.devflow', 'jobs');
+function resolveJobsDir() {
+  const explicitJobsDir = process.env.DEVFLOW_JOBS_DIR;
+  if (explicitJobsDir && explicitJobsDir.trim()) {
+    return path.resolve(explicitJobsDir);
+  }
+
+  // Verification and test subprocesses set DEVFLOW_DB_PATH to an isolated temp DB.
+  // Keep their MCP job lifecycle files isolated too, otherwise route tests that call
+  // initMcpToolJobs() can mark real ChatGPT/MCP jobs as interrupted mid-command.
+  const explicitDbPath = process.env.DEVFLOW_DB_PATH;
+  if (explicitDbPath && explicitDbPath.trim()) {
+    return path.join(path.dirname(path.resolve(explicitDbPath)), 'jobs');
+  }
+
+  return path.resolve(getDevFlowAppRoot(), '.devflow', 'jobs');
+}
+
+const JOBS_DIR = resolveJobsDir();
 const SECRET_KEY_PATTERN = /(token|secret|password|pass|apikey|api_key|authorization|cookie)/i;
 const MAX_LOG_READ_BYTES = 200_000;
 const MAX_JOB_AGE_MS = 24 * 60 * 60 * 1000;
@@ -124,6 +141,9 @@ export function updateJobStatus(jobId: string, updates: Partial<McpToolJob>): Mc
     updated.completedAt = nowIso;
     const startTime = toTimestamp(updated.startedAt || job.startedAt, job.createdAt || nowIso);
     updated.durationMs = Math.max(0, now.getTime() - startTime);
+    if (updates.status === 'succeeded') {
+      delete updated.failureSummary;
+    }
   }
 
   fs.writeFileSync(path.join(getJobDir(jobId), 'status.json'), JSON.stringify(updated, null, 2));

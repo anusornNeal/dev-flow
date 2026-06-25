@@ -4,7 +4,7 @@ import type express from 'express';
 import type { ApiRouteDeps } from '../types';
 import { getCapabilityCatalog } from '../contracts/devflowContract';
 import { sendApiError } from '../services/api';
-import { listLocalFiles, readLocalFile, searchLocalFiles, writeLocalFile } from '../services/localFileService';
+import { listLocalFiles, readFileSnippetsBatch, readLocalFile, searchLocalFiles, writeLocalFile } from '../services/localFileService';
 import { applyLocalPatch } from '../services/localPatchService';
 import { safeEditFile } from '../services/safeEditFileService';
 import { editFilesBatch } from '../services/fileEditBatchService';
@@ -79,6 +79,14 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
   app.get('/api/local-files/read', (req, res) => {
     try {
       return res.json(readLocalFile(deps.state, req.query as Record<string, any>));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.post('/api/local-files/read-batch', (req, res) => {
+    try {
+      return res.json(readFileSnippetsBatch(deps.state, req.body as Record<string, any>));
     } catch (error) {
       return sendApiError(res, error);
     }

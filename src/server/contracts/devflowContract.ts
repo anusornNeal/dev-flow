@@ -1101,6 +1101,43 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
     }),
   },
   {
+    name: 'read_file_snippets_batch',
+    description: 'Read multiple small local file snippets safely within a project root in one round trip. Prefer this when several focused snippets are needed.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...projectIdentifierProperties,
+        files: {
+          type: 'array',
+          description: 'File snippet requests. Each entry uses read_local_file semantics.',
+          items: {
+            type: 'object',
+            properties: {
+              filePath: { type: 'string', description: 'Relative file path under the workspace root.' },
+              path: { type: 'string', description: 'Alias for filePath.' },
+              mode: { type: 'string', enum: ['content', 'metadata'], description: 'Use metadata to avoid returning file content.' },
+              startLine: { type: 'number', description: '1-based first line to return.' },
+              endLine: { type: 'number', description: '1-based final line to return.' },
+              maxBytes: { type: 'number', description: 'Maximum UTF-8 bytes of content to return for this file.' },
+            },
+            anyOf: [
+              { required: ['filePath'] },
+              { required: ['path'] },
+            ],
+          },
+        },
+        maxFiles: { type: 'number', description: 'Maximum file entries to process, capped at 25.' },
+      },
+      required: ['files'],
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: (args) => ({
+      method: 'POST',
+      path: '/api/local-files/read-batch',
+      body: args,
+    }),
+  },
+  {
     name: 'write_local_file',
     description: 'Write a UTF-8 local file safely within a project root. Prefer this for small generated edits when a full-file replacement is faster than remote write flows.',
     inputSchema: {

@@ -21,3 +21,12 @@ test('devflowContract exposes edit_local_files_batch', () => {
   assert.equal(req.method, 'POST');
   assert.equal(req.path, '/api/local-files/edit-batch');
 });
+
+test('devflowContract exposes read_file_snippets_batch', () => {
+  const tool = getToolDefinitionByName('read_file_snippets_batch');
+  assert.ok(tool, 'read_file_snippets_batch should be defined');
+  assert.equal(tool.name, 'read_file_snippets_batch');
+  const req = tool.buildHttpRequest({ files: [{ filePath: 'foo.ts', startLine: 1, endLine: 5 }] });
+  assert.equal(req.method, 'POST');
+  assert.equal(req.path, '/api/local-files/read-batch');
+});

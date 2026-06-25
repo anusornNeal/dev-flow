@@ -467,6 +467,51 @@ export function readLocalFile(state: AppState, args: Record<string, any>) {
   };
 }
 
+export function readFileSnippetsBatch(state: AppState, args: Record<string, any>) {
+  const requestedFiles = Array.isArray(args.files) ? args.files : null;
+  if (!requestedFiles || requestedFiles.length === 0) {
+    throw createApiError(400, 'FILES_REQUIRED', 'files must be a non-empty array.');
+  }
+
+  const maxFiles = Number.isFinite(Number(args.maxFiles)) ? Math.max(1, Math.min(25, Number(args.maxFiles))) : 25;
+  const selectedFiles = requestedFiles.slice(0, maxFiles);
+  const baseArgs = {
+    projectId: args.projectId,
+    projectName: args.projectName,
+    repo: args.repo,
+    repoUrl: args.repoUrl,
+    localPath: args.localPath,
+  };
+
+  const results = selectedFiles.map((entry, index) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw createApiError(400, 'FILE_ENTRY_INVALID', `files[${index}] must be an object.`, { affectedId: `files[${index}]` });
+    }
+
+    const filePath = String(entry.filePath || entry.path || '').trim();
+    if (!filePath) {
+      throw createApiError(400, 'FILE_PATH_REQUIRED', `files[${index}].filePath is required.`, { affectedId: `files[${index}]` });
+    }
+
+    return readLocalFile(state, {
+      ...baseArgs,
+      filePath,
+      mode: entry.mode,
+      startLine: entry.startLine,
+      endLine: entry.endLine,
+      maxBytes: entry.maxBytes,
+    });
+  });
+
+  return {
+    root: results[0]?.root || resolveProjectRoot(state, args),
+    count: results.length,
+    requestedCount: requestedFiles.length,
+    truncated: requestedFiles.length > results.length || results.some((result) => result.truncated === true),
+    files: results,
+  };
+}
+
 export function writeLocalFile(state: AppState, args: Record<string, any>) {
   const root = resolveProjectRoot(state, args);
   const filePath = String(args.filePath || args.path || '').trim();

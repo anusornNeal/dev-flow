@@ -7,7 +7,7 @@ import path from 'node:path';
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-local-read-'));
 process.env.DEVFLOW_DB_PATH = path.join(tempDir, 'devflow.db');
 
-const { readLocalFile } = await import('../../src/server/services/localFileService.js');
+const { readFileSnippetsBatch, readLocalFile } = await import('../../src/server/services/localFileService.js');
 
 const state: any = {
   projectsCache: [
@@ -16,6 +16,7 @@ const state: any = {
 };
 
 fs.writeFileSync(path.join(tempDir, 'sample.txt'), ['one', 'two', 'three', 'four'].join('\n'), 'utf8');
+fs.writeFileSync(path.join(tempDir, 'other.txt'), ['alpha', 'beta', 'gamma'].join('\n'), 'utf8');
 
 test('readLocalFile can return a line window instead of the full file', () => {
   const result = readLocalFile(state, {
@@ -64,6 +65,39 @@ test('readLocalFile returns revision metadata with content and metadata modes', 
 
   assert.equal(metadataResult.revision, contentResult.revision);
   assert.equal(metadataResult.fileRevision.sha256, contentResult.fileRevision.sha256);
+});
+
+test('readFileSnippetsBatch returns multiple snippets with revision metadata', () => {
+  const result = readFileSnippetsBatch(state, {
+    projectId: 'project-read-1',
+    files: [
+      { filePath: 'sample.txt', startLine: 2, endLine: 3 },
+      { path: 'other.txt', startLine: 1, endLine: 2 },
+    ],
+  });
+
+  assert.equal(result.count, 2);
+  assert.equal(result.requestedCount, 2);
+  assert.equal(result.truncated, true);
+  assert.equal(result.files[0].content, 'two\nthree');
+  assert.equal(result.files[1].content, 'alpha\nbeta');
+  assert.equal(result.files[0].revision, result.files[0].fileRevision.token);
+  assert.equal(result.files[1].revision, result.files[1].fileRevision.token);
+});
+
+test('readFileSnippetsBatch supports metadata entries', () => {
+  const result = readFileSnippetsBatch(state, {
+    projectId: 'project-read-1',
+    files: [
+      { filePath: 'sample.txt', mode: 'metadata' },
+    ],
+  });
+
+  assert.equal(result.count, 1);
+  assert.equal(result.truncated, false);
+  assert.equal(result.files[0].content, undefined);
+  assert.equal(result.files[0].totalLines, 4);
+  assert.equal(typeof result.files[0].fileRevision.sha256, 'string');
 });
 
 test.after(() => {

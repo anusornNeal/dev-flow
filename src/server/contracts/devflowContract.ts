@@ -639,6 +639,26 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
     }),
   },
   {
+    name: 'complete_task_review',
+    description: 'Complete a reviewed task by moving it to done through the existing transition helper. Use after verification and self-review.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...taskIdentifierProperty,
+        ...booleanFlagSchema.properties,
+        ...mutationResponseModeProperty,
+      },
+      required: ['taskId'],
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: ({ taskId, isAgentRequest, responseMode, ...body }) => ({
+      method: 'POST',
+      path: withQuery(`/api/tasks/${encodePathSegment(String(taskId))}/move-to`, { responseMode: responseMode || 'summary' }),
+      body: { ...body, status: 'done' },
+      headers: isAgentRequest ? { 'x-agent-request': 'true' } : undefined,
+    }),
+  },
+  {
     name: 'batch_move_task_status',
     description: 'Move multiple tasks in one round trip.',
     inputSchema: {

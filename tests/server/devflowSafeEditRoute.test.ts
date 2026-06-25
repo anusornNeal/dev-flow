@@ -38,3 +38,13 @@ test('devflowContract exposes repo_read_snapshot', () => {
   assert.equal(req.method, 'GET');
   assert.ok(req.path.startsWith('/api/repo-read-snapshot'));
 });
+
+test('devflowContract exposes complete_task_review', () => {
+  const tool = getToolDefinitionByName('complete_task_review');
+  assert.ok(tool);
+  const req = tool.buildHttpRequest({ taskId: 'DVF-1', isAgentRequest: true, responseMode: 'summary' });
+  assert.equal(req.method, 'POST');
+  assert.ok(req.path.startsWith('/api/tasks/DVF-1/move-to'));
+  assert.deepEqual(req.body, { status: 'done' });
+  assert.equal(req.headers?.['x-agent-request'], 'true');
+});

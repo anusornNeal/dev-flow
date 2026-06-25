@@ -1,0 +1,347 @@
+import React, { useState, useEffect } from 'react';
+import { X, Save, FileText, Edit2, Ban, ChevronRight, Eye, Lock } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+
+interface TemplateModalProps {
+  onClose: () => void;
+}
+
+interface PromptSection {
+  id: string;
+  rawId?: string;
+  title: string;
+  order: number;
+  required: boolean;
+  sourcePath: string;
+  sourceType: 'master' | 'override';
+  masterAvailable?: boolean;
+  overrideAvailable?: boolean;
+  masterContent?: string;
+  overrideContent?: string;
+  effectiveContent?: string;
+}
+
+export default function TemplateModal({ onClose }: TemplateModalProps) {
+  const [sections, setSections] = useState<PromptSection[]>([]);
+  const [selectedSectionId, setSelectedSectionId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  
+  const [isEditingOverride, setIsEditingOverride] = useState(false);
+  const [editContent, setEditContent] = useState('');
+  
+  const [previewContent, setPreviewContent] = useState<string | null>(null);
+  const [previewSections, setPreviewSections] = useState<{ skillId: string; content: string; isEmpty: boolean }[] | null>(null);
+  const [loadingPreview, setLoadingPreview] = useState(false);
+
+  useEffect(() => {
+    fetchSections();
+  }, []);
+
+  const fetchSections = async () => {
+    try {
+      setLoading(true);
+      const res = await fetch('/api/prompt-template/sections');
+      const data = await res.json();
+      if (data.sections) {
+        setSections(data.sections);
+        if (data.sections.length > 0 && !selectedSectionId) {
+          setSelectedSectionId(data.sections[0].id);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load prompt sections:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const selectedSection = sections.find(s => s.id === selectedSectionId) || null;
+
+  useEffect(() => {
+    if (selectedSection) {
+      if (selectedSection.masterContent === undefined && selectedSection.effectiveContent === undefined) {
+        fetch(`/api/prompt-template/section?sectionId=${selectedSection.id}`)
+          .then(res => res.json())
+          .then(data => {
+            if (data.section) {
+              setSections(prev => prev.map(s => s.id === selectedSection.id ? { ...s, ...data.section } : s));
+            }
+          })
+          .catch(err => console.error('Failed to load section content:', err));
+      } else {
+        setEditContent(selectedSection.overrideContent !== undefined ? selectedSection.overrideContent : (selectedSection.masterContent || ''));
+        setIsEditingOverride(false);
+        setPreviewContent(null);
+      }
+    }
+  }, [selectedSectionId, selectedSection?.masterContent]);
+
+  const handleSaveOverride = async () => {
+    if (!selectedSectionId) return;
+      setSaving(true);
+    try {
+      await fetch('/api/prompt-template/section', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sectionId: selectedSectionId, content: editContent })
+      });
+      await fetchSections();
+      setIsEditingOverride(false);
+    } catch (err) {
+      console.error('Failed to save override:', err);
+    }
+    setSaving(false);
+  };
+
+  const handlePreviewFinalPrompt = async () => {
+    setLoadingPreview(true);
+    try {
+      const res = await fetch('/api/prompt-template/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+      });
+      const data = await res.json();
+      if (data.content !== undefined) {
+        setPreviewContent(data.content);
+        setPreviewSections(data.sections || null);
+        setSelectedSectionId(null);
+      }
+    } catch (err) {
+      console.error('Failed to load preview:', err);
+    }
+    setLoadingPreview(false);
+  };
+
+  return (
+    <div className="fixed inset-0 bg-[#3e3129]/30 dark:bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div className="bg-[#fffdfa] dark:bg-[#1e1914] rounded-2xl shadow-xl w-full max-w-6xl h-[85vh] flex border border-[#e5d4bb] dark:border-[#584a3b] overflow-hidden select-none">
+        
+        {/* Left Sidebar: Section List */}
+        <div className="w-1/3 border-r border-[#ebdcb9] dark:border-[#584a3b] bg-[#fdfbf6] dark:bg-[#1e1914] flex flex-col">
+          <div className="px-6 py-4 border-b border-[#ebdcb9] dark:border-[#584a3b] flex items-center justify-between shrink-0">
+            <h2 className="text-[#534135] dark:text-[#f3eadf] font-extrabold font-sans text-lg flex items-center gap-2">
+              <FileText size={20} className="text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d]" />
+              Global Prompt Template
+            </h2>
+          </div>
+          
+          <div className="p-4 border-b border-[#ebdcb9] dark:border-[#584a3b] shrink-0 bg-[#f4ebd9] dark:bg-[#1e1914]">
+             <button
+                onClick={handlePreviewFinalPrompt}
+                disabled={loadingPreview}
+                className="w-full py-2 bg-[#d89745] dark:bg-[#e0a070] text-white dark:text-[#f3eadf] font-bold rounded-lg shadow-sm hover:bg-[#c08234] dark:bg-[#e0a070] dark:hover:bg-[#d6b56d] dark:bg-[#e0a070] transition-colors flex items-center justify-center gap-2 text-xs"
+              >
+                <Eye size={14} />
+                {loadingPreview ? 'Loading Preview...' : 'Preview Final Prompt'}
+              </button>
+          </div>
+
+          <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-2">
+            {loading ? (
+              <div className="text-sm font-mono text-[#8c7463] dark:text-[#f3eadf] p-2">Loading template...</div>
+            ) : sections.length === 0 ? (
+              <div className="text-sm font-mono text-[#8c7463] dark:text-[#f3eadf] p-2">No sections found.</div>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {sections.map((section, idx) => {
+                  const isSelected = section.id === selectedSectionId;
+                  const missingRequired = section.required && !section.masterAvailable && !section.overrideAvailable;
+                  
+                  return (
+                    <button
+                      key={section.id}
+                      onClick={() => {
+                        setSelectedSectionId(section.id);
+                        setPreviewContent(null);
+                      }}
+                      className={`text-left p-3 rounded-xl border transition-all flex flex-col gap-1 ${
+                        isSelected
+                          ? 'border-[#d89745] dark:border-[#e0a070] bg-[#fff9ee] dark:bg-[#1e1914] shadow-sm'
+                          : missingRequired 
+                            ? 'border-red-300 dark:border-red-900 bg-red-50 dark:bg-red-900/20 opacity-80'
+                            : 'border-[#ebdcb9] dark:border-[#584a3b] bg-white dark:bg-[#1e1914] hover:border-[#d8c5aa] dark:border-[#584a3b] dark:hover:border-[#6b5a48] hover:shadow-xs'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-bold text-[#534135] dark:text-[#f3eadf] font-mono flex items-center gap-1.5">
+                           <span className="text-[9px] text-[#b89b82] dark:text-[#8c7463]">{String(section.order).padStart(2, '0')}.</span>
+                           {section.title}
+                        </span>
+                        <ChevronRight size={14} className={isSelected ? "text-[#d89745] dark:text-[#e0a070]" : "text-[#c2ae9a] dark:text-[#6b5a48] opacity-0 group-hover:opacity-100"} />
+                      </div>
+                      <div className="flex items-center gap-2 text-[9px] uppercase tracking-widest font-bold">
+                        {section.sourceType === 'override' ? (
+                          <span className="text-[#8c7463] dark:text-[#8c7463] bg-[#f4ebd9] dark:bg-[#1e1914] px-1.5 py-0.5 rounded flex items-center gap-1">
+                            <Lock size={8} /> Master
+                          </span>
+                        ) : (
+                          <span className="text-[#8c7463] dark:text-[#8c7463] bg-[#f4ebd9] dark:bg-[#1e1914] px-1.5 py-0.5 rounded flex items-center gap-1">
+                            <Lock size={8} /> Master
+                          </span>
+                        )}
+                        {section.required ? (
+                          <span className="text-[#b89b82] dark:text-[#8c7463]">Required</span>
+                        ) : (
+                          <span className="text-[#b89b82] dark:text-[#8c7463]">Optional</span>
+                        )}
+                        {missingRequired && (
+                           <span className="text-red-500 flex items-center gap-1">
+                             <Ban size={8} /> Missing
+                           </span>
+                        )}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Right Content Area */}
+        <div className="flex-1 flex flex-col bg-[#fffdfa] dark:bg-[#1e1914] min-w-0">
+          <div className="px-6 py-4 border-b border-[#ebdcb9] dark:border-[#584a3b] flex items-center justify-between shrink-0 bg-[#fdfbf6] dark:bg-[#1e1914]">
+            {previewContent !== null ? (
+               <div className="flex flex-col gap-1">
+                  <h3 className="text-[#534135] dark:text-[#f3eadf] font-extrabold text-lg flex items-center gap-2">
+                    Final Prompt Preview
+                  </h3>
+                  <span className="text-xs font-mono text-[#8C7565] dark:text-[#8c7463]">
+                     Rendered sequence of all sections
+                  </span>
+               </div>
+            ) : selectedSection ? (
+              <>
+                <div className="flex flex-col gap-1 min-w-0 flex-1">
+                  <h3 className="text-[#534135] dark:text-[#f3eadf] font-extrabold text-lg flex items-center gap-2 truncate">
+                    {selectedSection.title}
+                  </h3>
+                  <span className="text-xs font-mono text-[#8C7565] dark:text-[#8c7463] truncate" title={selectedSection.sourcePath}>
+                    {selectedSection.sourcePath}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  {!isEditingOverride && (
+                     <button
+                        onClick={() => {
+                          setIsEditingOverride(true);
+                          setEditContent(selectedSection.sourceType === 'override' ? (selectedSection.overrideContent || '') : (selectedSection.masterContent || ''));
+                        }}
+                        className="px-3 py-1.5 text-xs font-bold bg-[#f4ebd9] dark:bg-[#1e1914] text-[#7a6455] dark:text-[#f3eadf] hover:bg-[#ebdcb9] dark:bg-[#584a3b] dark:hover:bg-[#382b1d] rounded-lg transition-colors flex items-center gap-1.5 border border-[#d8c5aa] dark:border-[#584a3b]"
+                     >
+                        <Edit2 size={12} /> Edit Master
+                     </button>
+                  )}
+                  {isEditingOverride && (
+                    <>
+                      <button
+                        onClick={() => {
+                          setIsEditingOverride(false);
+                          setEditContent(selectedSection.masterContent || '');
+                        }}
+                        className="px-3 py-1.5 text-xs font-bold text-[#7a6455] dark:text-[#f3eadf] hover:bg-[#ebdcb9] dark:hover:bg-[#382b1d] rounded-lg transition-colors"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={handleSaveOverride}
+                        disabled={saving}
+                        className="px-3 py-1.5 text-xs font-bold bg-[#d89745] dark:bg-[#e0a070] text-white dark:text-[#f3eadf] hover:bg-[#c08234] dark:bg-[#e0a070] dark:hover:bg-[#d6b56d] dark:bg-[#e0a070] rounded-lg transition-colors flex items-center gap-1.5"
+                      >
+                        <Save size={12} /> {saving ? 'Saving...' : 'Save Master'}
+                      </button>
+                    </>
+                  )}
+                </div>
+              </>
+            ) : (
+              <div className="h-[28px]" />
+            )}
+            
+            <button
+              onClick={onClose}
+              className="ml-4 p-1.5 hover:bg-[#ebdcb9] dark:bg-[#584a3b]/40 dark:hover:bg-[#584a3b]/40 rounded-lg text-[#8C7565] dark:text-[#f3eadf] transition-colors"
+            >
+              <X size={20} />
+            </button>
+          </div>
+
+          <div className="flex-1 overflow-hidden relative bg-[#fffdfa] dark:bg-[#1e1914]">
+             {previewContent !== null ? (
+                <div className="absolute inset-0 p-6 overflow-y-auto space-y-4">
+                  {previewSections && previewSections.length > 0 ? (
+                    previewSections.map((sec, idx) => {
+                      const sectionMeta = sections.find(s => s.id === sec.skillId);
+                      const orderStr = sectionMeta ? String(sectionMeta.order).padStart(2, '0') : String(idx + 1).padStart(2, '0');
+                      
+                      return (
+                        <div key={idx} className="flex flex-col gap-2">
+                          <div className="font-mono text-sm font-bold text-[#534135] dark:text-[#f3eadf] flex items-center gap-2">
+                            <span className="text-[#d89745] dark:text-[#e0a070]">{orderStr}</span>
+                            {sec.skillId}
+                          </div>
+                          <div className="border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl overflow-hidden shadow-sm bg-[#fffdfa] dark:bg-[#1e1914] min-h-[60px] p-4">
+                            {sec.isEmpty ? (
+                              <div className="text-center text-[#8C7565] dark:text-[#8c7463] font-mono text-xs italic py-4 opacity-60">
+                                Empty in preview
+                              </div>
+                            ) : (
+                              <div className="prose prose-sm prose-orange max-w-none prose-headings:font-extrabold prose-a:text-[#d89745] dark:prose-invert dark:prose-headings:text-[#e0a070] dark:text-[#f3eadf]">
+                                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                  {sec.content}
+                                </ReactMarkdown>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div className="prose prose-sm prose-orange max-w-none prose-headings:font-extrabold prose-a:text-[#d89745] dark:prose-invert dark:prose-headings:text-[#e0a070] dark:text-[#f3eadf]">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        {previewContent}
+                      </ReactMarkdown>
+                    </div>
+                  )}
+                </div>
+             ) : selectedSection ? (
+               isEditingOverride ? (
+                  <textarea
+                    value={editContent}
+                    onChange={(e) => setEditContent(e.target.value)}
+                    className="absolute inset-0 w-full h-full p-6 bg-transparent border-none outline-none font-mono text-sm text-[#534135] dark:text-[#f3eadf] resize-none focus:ring-0 leading-relaxed"
+                    spellCheck={false}
+                    placeholder="Edit the global prompt template section..."
+                  />
+               ) : (
+                  <div className="absolute inset-0 p-6 overflow-y-auto">
+                     {selectedSection.effectiveContent ? (
+                       <div className={`prose prose-sm prose-orange max-w-none prose-headings:font-extrabold prose-a:text-[#d89745] dark:prose-invert dark:prose-headings:text-[#e0a070] dark:text-[#f3eadf] ${selectedSection.sourceType === 'master' ? 'opacity-80' : ''}`}>
+                         <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                           {selectedSection.effectiveContent}
+                         </ReactMarkdown>
+                       </div>
+                     ) : (
+                       <div className="h-full flex items-center justify-center">
+                         <div className="text-center text-[#8C7565] dark:text-[#8c7463] font-mono text-sm flex flex-col items-center gap-2">
+                           <Ban size={24} className="opacity-50" />
+                           <p>No content available for this section.</p>
+                         </div>
+                       </div>
+                     )}
+                  </div>
+               )
+             ) : (
+               <div className="h-full flex items-center justify-center text-[#8C7565] dark:text-[#8c7463] font-mono text-sm">
+                 Select a section to view or edit
+               </div>
+             )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

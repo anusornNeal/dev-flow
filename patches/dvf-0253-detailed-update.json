@@ -1,0 +1,38 @@
+{
+  "version": "devflow.taskPatch.v1",
+  "tasks": [
+    {
+      "taskId": "DVF-0253",
+      "operation": "update",
+      "fields": {
+        "title": "Add focused local file change tool",
+        "status": "todo",
+        "priority": "high",
+        "category": "backend",
+        "tags": ["mcp", "local-files", "payload", "tooling", "developer-experience"],
+        "targetFiles": [
+          "src/server/services/safeEditFileService.ts",
+          "src/server/routes/devflow.ts",
+          "src/server/contracts/devflowContract.ts",
+          "tests/server/safeEditFileService.test.ts",
+          "tests/server/devflowSafeEditRoute.test.ts",
+          "docs/devflow/local-file-editing.md"
+        ],
+        "description": "## Problem\n\nChatGPT and DevFlow agents currently rely on full-file writes or unified patches for many local file edits. This is fragile when a file is large, when only a small block needs to change, or when the patch payload is large enough to be blocked before DevFlow can return a useful error. The current behavior can look like a silent failure: the caller may receive null, a generic safety block, or an unclear result without knowing whether the patch failed to match, the payload was too large, the file was too large, or the request was rejected before reaching the repository.\n\nThis card adds a smaller, structured local file change path that lets callers submit focused edit operations against exact anchors instead of sending an entire replacement file. The goal is to make edits to large central files such as route, contract, and service files safer and easier to verify.\n\n## Current state\n\nA first service file has already been started at `src/server/services/safeEditFileService.ts`. It is not enough by itself. The service must be wired into DevFlow API and MCP tool contract before it is useful from ChatGPT or agent workers.\n\n## Out of scope\n\nDo not replace `write_local_file` or `apply_patch`. Keep those tools intact. This card adds a focused edit option for cases where full-file overwrite or broad patch payloads are too risky.",
+        "repoContext": "## Implementation map\n\n### 1. Core service\nFile: `src/server/services/safeEditFileService.ts`\n\nImplement or finish a service that accepts a project root plus a compact edit request. The service should resolve the target path safely inside the project root, read the current file, apply one or more focused operations in memory, and either return a preview or write the result.\n\nSupported operations:\n- replace: replace one exact text block with new content.\n- insert_before: insert content before an exact anchor.\n- insert_after: insert content after an exact anchor.\n- delete_between: delete content between exact start and end anchors.\n\nThe service must reject ambiguous matches unless the request explicitly includes a unique occurrence selector. It must not write outside the project root. Apply mode should write atomically by writing a temporary file and renaming it over the original file.\n\n### 2. API route\nFile: `src/server/routes/devflow.ts`\n\nAdd a small route that calls the service. Suggested endpoint: `POST /api/local-files/safe-edit` or another clearly named local file edit endpoint. The route should use the same project resolution approach as existing local file tools and should return compact JSON only.\n\n### 3. MCP contract\nFile: `src/server/contracts/devflowContract.ts`\n\nExpose a tool that maps to the new route. The schema should describe the fields precisely enough that ChatGPT can construct small edit operations without full-file content. Keep schema descriptions compact to avoid increasing the tool surface too much.\n\nSuggested tool fields:\n- projectId/projectName/repo/repoUrl/localPath, matching existing project resolution fields.\n- filePath or path.\n- mode: dry-run or apply.\n- edits array.\n- maxPayloadBytes.\n- maxFileBytes.\n- expectedSha256 or expectedContentHash if practical, to prevent editing a changed file by accident.\n\n### 4. Structured result\nReturn a result shape that is useful but compact:\n- ok boolean.\n- mode.\n- filePath.\n- changed boolean.\n- editCount.\n- changedLineEstimate or changedBytes.\n- diffPreview, capped.\n- diagnostics array.\n\nErrors should be structured, for example:\n- PATH_OUTSIDE_ROOT.\n- FILE_NOT_FOUND.\n- FILE_TOO_LARGE.\n- PAYLOAD_TOO_LARGE.\n- NO_MATCH.\n- AMBIGUOUS_MATCH.\n- CONTENT_CHANGED.\n- WRITE_FAILED.\n\n### 5. Tests\nAdd service tests first, then route or contract tests. Keep test fixtures small and temporary. Do not depend on the real DevFlow repository files for test assertions.",
+        "acceptanceCriteria": "- A caller can edit a small section of a large file without sending the entire file content.\n- Dry-run mode never writes to disk and returns a compact preview of the planned change.\n- Apply mode writes the changed file atomically and returns a compact success result.\n- The implementation rejects paths outside the project root.\n- The implementation rejects missing anchors with a clear NO_MATCH error.\n- The implementation rejects duplicate anchors with a clear AMBIGUOUS_MATCH error unless a unique occurrence selector is supported and used.\n- Large request payloads return PAYLOAD_TOO_LARGE with actual and maximum byte counts.\n- Large target files return FILE_TOO_LARGE with actual and maximum byte counts.\n- The API route is wired and callable through the DevFlow server.\n- The MCP contract exposes the tool with a compact schema.\n- Existing tools `write_local_file` and `apply_patch` continue to work unchanged.\n- `npm run typecheck` passes.\n- Targeted tests for the new service pass.",
+        "verification": "1. Run `npm run typecheck`.\n2. Run targeted tests for the new service and route.\n3. Smoke test dry-run against a temporary file and confirm the file content is unchanged.\n4. Smoke test apply against a temporary file and confirm only the requested block changes.\n5. Smoke test NO_MATCH, AMBIGUOUS_MATCH, and path-outside-root cases.\n6. Confirm the MCP tool list includes the new focused edit tool and that the schema stays compact.",
+        "checklist": [
+          { "id": "step-1", "text": "Finish core focused edit service with path safety, small edit operations, dry-run, apply, and compact result shape", "completed": false },
+          { "id": "step-2", "text": "Add structured errors for no match, ambiguous match, file too large, payload too large, changed content, and write failure", "completed": false },
+          { "id": "step-3", "text": "Wire service into DevFlow API route using existing project resolution patterns", "completed": false },
+          { "id": "step-4", "text": "Expose MCP contract/tool schema with compact arguments and result mapping", "completed": false },
+          { "id": "step-5", "text": "Add service tests for dry-run, apply, no match, duplicate match, file size cap, payload cap, and path safety", "completed": false },
+          { "id": "step-6", "text": "Add route or contract integration tests for the API/MCP path", "completed": false },
+          { "id": "step-7", "text": "Document when to use focused edits versus write_local_file versus apply_patch", "completed": false },
+          { "id": "step-8", "text": "Run typecheck and targeted tests, then move card to ready-for-review", "completed": false }
+        ]
+      }
+    }
+  ]
+}

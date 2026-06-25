@@ -1,0 +1,12 @@
+{
+  "title": "DevFlow Workflow Rules",
+  "workflow": [
+    "Move todo cards to in-progress before implementation starts.",
+    "Use the card branch. If the card has no branch, default to develop.",
+    "Handle every checklist item or mini task.",
+    "Do not silently skip checklist items. If an item is not applicable, report the reason.",
+    "When implementation is complete, push the work to the active branch first.",
+    "Push the work to the active branch before moving the card to ready-for-review.",
+    "Do not move a card to ready-for-review before code is pushed."
+  ]
+}

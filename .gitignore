@@ -12,3 +12,20 @@ tasks.json
 projects.json
 counters.json
 mcp-servers.json
+
+.agents/
+.commandcode/
+.devflow/
+ORIGINAL_REQUEST.md
+
+/data/*.db
+/data/*.db-shm
+/data/*.db-wal
+/data/uploads/
+/data/backups/
+/data/*.log
+
+*.bak
+
+# MCP config
+mcp-servers.json

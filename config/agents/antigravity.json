@@ -1,0 +1,25 @@
+{
+  "name": "Antigravity",
+  "executables": [
+    { "type": "env", "value": "DEVFLOW_AGY_EXE" },
+    { "type": "path", "value": "%LOCALAPPDATA%\\agy\\bin\\agy.exe" },
+    { "type": "command", "value": "agy" }
+  ],
+  "flags": {
+    "model": "--model",
+    "effort": null,
+    "interactiveArgs": ["-i"]
+  },
+  "executionModes": {
+    "safe": { "args": [] },
+    "full": { "args": ["--dangerously-skip-permissions"] }
+  },
+  "modelMap": {
+    "Gemini 3.5 Flash": "gemini-3.5-flash",
+    "Gemini 3.1 Pro": "gemini-3.1-pro"
+  },
+  "promptFallback": {
+    "effort": "use reasoning effort '{EFFORT}'"
+  },
+  "launchStyle": "start"
+}

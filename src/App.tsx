@@ -3,172 +3,154 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
-import { 
-  Plus, 
-  Terminal, 
-  GitPullRequest, 
-  Code, 
-  ListTodo, 
-  Download, 
-  Upload, 
-  RotateCcw,
-  Sparkles,
-  GitMerge,
-  Cat,
-  Moon,
-  Coffee,
-  FileCode
-} from 'lucide-react';
-import { Task, TaskStatus, Column, LogEntry, Project } from './types';
-import { INITIAL_TASKS } from './data/initialTasks';
+import React, { useState, useEffect, useRef } from 'react';
+import { Cat } from 'lucide-react';
+import { Task, TaskStatus, LogEntry, Project } from './types';
+import { isValidTransition, getValidationErrorMessage } from './lib/statusTransitions';
+import { buildTaskStatusMoveRequest } from './lib/taskStatusMove';
+import { useProjectViewModel } from './viewModels/useProjectViewModel';
+import { useBoardViewModel } from './viewModels/useBoardViewModel';
+import { apiClient } from './client/apiClient';
 import Sidebar from './components/Sidebar';
-import TaskCard from './components/TaskCard';
 import TaskDetailsDrawer from './components/TaskDetailsDrawer';
 import CreateTaskModal from './components/CreateTaskModal';
 import JsonTemplateModal from './components/JsonTemplateModal';
+import SkillsModal from './components/SkillsModal';
+import SettingsModal from './components/SettingsModal';
+import TemplateModal from './components/TemplateModal';
+import ObservabilityModal from './components/ObservabilityModal';
+import { Header } from './components/Header';
+import { BoardLane } from './components/BoardLane';
 import BatchImportModal from './components/BatchImportModal';
-
-// Standardized project lanes themed cleanly
-const COLUMNS: Column[] = [
-  { id: 'backlog', label: 'Backlog Specs 📂', iconName: 'Moon', color: 'border-[#dfd2be]/60 bg-[#fffdfa] text-[#816b5a]' },
-  { id: 'todo', label: 'Ready to Do 📌', iconName: 'ListTodo', color: 'border-[#dfd2be]/60 bg-[#fffdfa] text-[#816b5a]' },
-  { id: 'in-progress', label: 'In Progress ⚡', iconName: 'Terminal', color: 'border-[#f5cb93] bg-[#fffbf4] text-[#935919]' },
-  { id: 'ready-for-review', label: 'Ready for Review 🔍', iconName: 'GitMerge', color: 'border-[#b8cdfc] bg-[#f5f8ff] text-[#3b5eab]' },
-  { id: 'done', label: 'Completed ✓', iconName: 'GitPullRequest', color: 'border-[#bddda4] bg-[#edf7ed] text-[#4d7e35]' }
-];
+import ConfirmModal from './components/ConfirmModal';
+import AgentRunLogModal from './components/AgentRunLogModal';
+import { BOARD_COLUMNS } from './app/boardColumns';
+import { filterBoardTasks } from './app/taskFilters';
+import { useActiveProjectBootstrap } from './app/useActiveProjectBootstrap';
+import { useAppTheme } from './app/useAppTheme';
 
 export default function App() {
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [activeProjectId, setActiveProjectId] = useState<string>('project-default');
+  const projectsViewModel = useProjectViewModel();
+  const projects = projectsViewModel.projects as unknown as Project[];
+  const { activeProjectId, setActiveProjectId } = useActiveProjectBootstrap(projects, projectsViewModel);
+
+  const boardViewModel = useBoardViewModel({
+    projectId: activeProjectId || null,
+  });
+  const tasks = boardViewModel.tasks as unknown as Task[];
+  const setTasks = boardViewModel.setTasks as unknown as (u: (prev: Task[]) => Task[]) => void;
+
+  const [persistenceError, setPersistenceError] = useState<string | null>(null);
   const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
   const [draggedOverColumn, setDraggedOverColumn] = useState<TaskStatus | null>(null);
+  const [pendingEmergencyMove, setPendingEmergencyMove] = useState<{ sourceTask: Task, status: TaskStatus } | null>(null);
+  const [taskToDelete, setTaskToDelete] = useState<string | null>(null);
+
+  // Ref to track tasks currently moving to prevent polling race conditions
+  const pendingMovesRef = useRef<Set<string>>(new Set());
+
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isJsonModalOpen, setIsJsonModalOpen] = useState(false);
   const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
+  const [isSkillsModalOpen, setIsSkillsModalOpen] = useState(false);
+  const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
+  const [isObservabilityModalOpen, setIsObservabilityModalOpen] = useState(false);
+  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const [logModal, setLogModal] = useState<{
+    taskDisplayId: string;
+    runId: string;
+    runStatus?: string;
+    agent?: string | null;
+    model?: string | null;
+  } | null>(null);
   const [mounted, setMounted] = useState(false);
+  const [ngrokUrl, setNgrokUrl] = useState('');
+  
+  const { theme, setTheme } = useAppTheme();
 
   // Filter States
   const [selectedPriority, setSelectedPriority] = useState<Task['priority'] | 'all'>('all');
   const [selectedTag, setSelectedTag] = useState<string | 'all'>('all');
   const [searchQuery, setSearchQuery] = useState('');
 
-  // 0. Load projects from REST API (GET /api/projects)
+  // 0. Load settings from REST API (GET /api/settings)
+  const fetchSettingsFromApi = async () => {
+    try {
+      const res = await fetch('/api/settings', { cache: 'no-store' });
+      if (res.ok) {
+        const data = await res.json();
+        setNgrokUrl(data.ngrokUrl ?? '');
+      }
+    } catch (err) {
+      console.warn('Failed to fetch settings:', err);
+    }
+  };
+
+  // 0. Load projects from REST API (delegated to projectRepository / useProjectViewModel)
   const fetchProjectsFromApi = async () => {
     try {
-      const res = await fetch('/api/projects', { cache: 'no-store' });
-      if (res.ok) {
-        const data = await res.json();
-        setProjects(data);
-        if (data.length > 0) {
-          const isValidId = data.some((p: Project) => p.id === activeProjectId);
-          if (!isValidId) {
-            setActiveProjectId(data[0].id);
-          }
-        }
+      await projectsViewModel.refresh();
+      setPersistenceError(null);
+      const list = projectsViewModel.projects;
+      if (list.length > 0) {
+        const currentId = projectsViewModel.activeProjectId;
+        const isValidId = list.some((p) => p.id === currentId);
+        setActiveProjectId(isValidId ? currentId : list[0].id);
       }
     } catch (err) {
-      console.warn('Backend projects API connection unavailable, using fallback:', err);
-      setProjects([
-        {
-          id: 'project-default',
-          name: 'Developer Sandbox Repo',
-          repoUrl: 'https://github.com/google/ai-studio',
-          description: 'Default sandbox developer workspace',
-          createdAt: new Date().toISOString()
-        }
-      ]);
+      console.warn('Backend projects API connection unavailable:', err);
+      setPersistenceError('Project data is unavailable because the backend could not be reached. No local fallback was used.');
     }
   };
 
-  // 1. Load tasks from REST API (GET /api/tasks) + Sync fallback to LocalStorage
-  const fetchTasksFromApi = async () => {
+  const handleCreateProject = async (name: string, repoUrl: string, description?: string, localPath?: string, taskIdPrefix?: string) => {
     try {
-      const res = await fetch('/api/tasks', { cache: 'no-store' });
-      if (res.ok) {
-        const data = await res.json();
-        setTasks(prev => {
-          if (JSON.stringify(prev) === JSON.stringify(data)) return prev;
-          return data;
-        });
-      } else {
-        throw new Error('API unstable');
-      }
-    } catch (err) {
-      console.warn('Backend API connection unavailable, falling back to client-cache storage:', err);
-      const saved = localStorage.getItem('devflow_workspace');
-      if (saved) {
-        try {
-          setTasks(JSON.parse(saved));
-        } catch (_) {
-          setTasks(INITIAL_TASKS);
-        }
-      } else {
-        setTasks(INITIAL_TASKS);
-      }
-    }
-  };
-
-  const handleCreateProject = async (name: string, repoUrl: string, description?: string) => {
-    try {
-      const res = await fetch('/api/projects', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, repoUrl, description })
-      });
-      if (res.ok) {
-        const newProj = await res.json();
-        setProjects(prev => [...prev, newProj]);
-        setActiveProjectId(newProj.id);
-        fetchTasksFromApi();
-        return true;
-      }
+      const { data: newProj } = await apiClient.fetchJson<any>('POST', '/api/projects', { name, repoUrl, description, localPath, taskIdPrefix });
+      await projectsViewModel.refresh();
+      setActiveProjectId(newProj.id);
+      return true;
     } catch (err) {
       console.error('Failed to create project:', err);
+      setPersistenceError('Project creation failed before the backend confirmed persistence.');
     }
     return false;
   };
 
   const handleDeleteProject = async (id: string) => {
     try {
-      const res = await fetch(`/api/projects/${id}`, {
-        method: 'DELETE'
-      });
-      if (res.ok) {
-        setProjects(prev => prev.filter(p => p.id !== id));
-        if (activeProjectId === id) {
-          setActiveProjectId('project-default');
-        }
-        fetchTasksFromApi();
-        return true;
+      await apiClient.fetchJson('DELETE', `/api/projects/${encodeURIComponent(id)}`);
+      const remainingProjects = projectsViewModel.projects.filter(p => p.id !== id);
+      await projectsViewModel.refresh();
+      const currentId = projectsViewModel.activeProjectId;
+      if (currentId === id) {
+        setActiveProjectId(remainingProjects.length > 0 ? remainingProjects[0].id : null);
       }
+      return true;
     } catch (err) {
       console.error('Failed to delete project:', err);
+      setPersistenceError('Project deletion failed before the backend confirmed persistence.');
+    }
+    return false;
+  };
+
+  const handleUpdateProject = async (id: string, updates: Partial<Project>) => {
+    try {
+      await apiClient.fetchJson('PUT', `/api/projects/${encodeURIComponent(id)}`, updates);
+      await projectsViewModel.refresh();
+      return true;
+    } catch (err) {
+      console.error('Failed to update project:', err);
+      setPersistenceError('Project update failed before the backend confirmed persistence.');
     }
     return false;
   };
 
   useEffect(() => {
     setMounted(true);
+    fetchSettingsFromApi();
     fetchProjectsFromApi();
-    fetchTasksFromApi();
-
-    // Auto-polling every 5 seconds
-    const intervalId = setInterval(() => {
-      fetchTasksFromApi();
-    }, 5000);
-
-    return () => clearInterval(intervalId);
   }, []);
-
-  // 2. Save progress to localStorage as secondary backup
-  useEffect(() => {
-    if (mounted && tasks.length > 0) {
-      localStorage.setItem('devflow_workspace', JSON.stringify(tasks));
-    }
-  }, [tasks, mounted]);
 
   // Handle Drag Start
   const handleDragStart = (e: React.DragEvent, id: string) => {
@@ -176,24 +158,10 @@ export default function App() {
     e.dataTransfer.setData('text/plain', id);
   };
 
-  // Handle Drag Drops
-  const handleDrop = async (e: React.DragEvent, status: TaskStatus) => {
-    e.preventDefault();
-    const taskId = draggedTaskId || e.dataTransfer.getData('text/plain');
-    if (!taskId) return;
-
-    const sourceTask = tasks.find(t => t.id === taskId);
-    if (!sourceTask) return;
-
-    // Prevent duplicate logs if same lane dropped
-    if (sourceTask.status === status) {
-      setDraggedTaskId(null);
-      setDraggedOverColumn(null);
-      return;
-    }
-
+  const executeTaskMove = async (sourceTask: Task, status: TaskStatus) => {
+    const taskId = sourceTask.id;
     const modifiedLogs: LogEntry[] = [
-      ...sourceTask.logs,
+      ...(sourceTask.logs || []),
       {
         id: `log-move-${Date.now()}`,
         timestamp: new Date().toISOString(),
@@ -208,6 +176,9 @@ export default function App() {
       logs: modifiedLogs,
       updatedAt: new Date().toISOString()
     };
+
+    // Track the pending move
+    pendingMovesRef.current.add(taskId);
 
     // Optimistic fast update
     setTasks(prev => prev.map(task => 
@@ -226,14 +197,75 @@ export default function App() {
 
     // Sync API update
     try {
-      await fetch(`/api/tasks/${taskId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updatedTask)
-      });
+      const isEmergency = sourceTask.status === 'in-progress';
+      const moveRequest = buildTaskStatusMoveRequest(taskId, status, { emergency: isEmergency });
+      const response = await fetch(moveRequest.url, moveRequest.init);
+      if (!response.ok) {
+        throw new Error(`Lane move failed with status ${response.status}`);
+      }
+      const responseData = await response.json();
+      const persistedTask = responseData.task || responseData;
+      setTasks(prev => prev.map(task =>
+        task.id === taskId
+          ? persistedTask
+          : task
+      ));
+      if (selectedTask && selectedTask.id === taskId) {
+        setSelectedTask(persistedTask);
+      }
+      const autoWorkTrigger = responseData.autoWorkTrigger;
+      if (autoWorkTrigger && autoWorkTrigger.triggered === false && autoWorkTrigger.reason) {
+        const warningMessage = `Auto Work blocked before launch: ${autoWorkTrigger.reason}`;
+        setPersistenceError(warningMessage);
+        window.dispatchEvent(new CustomEvent('devflow:auto-work-preflight-error', {
+          detail: {
+            code: autoWorkTrigger.code || 'UNKNOWN',
+            message: warningMessage,
+          },
+        }));
+      } else {
+        setPersistenceError(null);
+      }
     } catch (err) {
       console.error('API lane move sync failed:', err);
+      setPersistenceError('Lane move was shown optimistically, but backend persistence failed. Refresh after backend recovery to confirm final state.');
+    } finally {
+      // Clear pending move whether success or failure
+      pendingMovesRef.current.delete(taskId);
     }
+  };
+
+  // Handle Drag Drops
+  const handleDrop = async (e: React.DragEvent, status: TaskStatus) => {
+    e.preventDefault();
+    const taskId = draggedTaskId || e.dataTransfer.getData('text/plain');
+    if (!taskId) return;
+
+    const sourceTask = tasks.find(t => t.id === taskId);
+    if (!sourceTask) return;
+
+    // Prevent duplicate logs if same lane dropped
+    if (sourceTask.status === status) {
+      setDraggedTaskId(null);
+      setDraggedOverColumn(null);
+      return;
+    }
+
+    if (!isValidTransition(sourceTask.status, status)) {
+      setPersistenceError(getValidationErrorMessage(sourceTask.status, status));
+      setDraggedTaskId(null);
+      setDraggedOverColumn(null);
+      return;
+    }
+
+    if (sourceTask.status === 'in-progress') {
+      setPendingEmergencyMove({ sourceTask, status });
+      setDraggedTaskId(null);
+      setDraggedOverColumn(null);
+      return;
+    }
+
+    await executeTaskMove(sourceTask, status);
   };
 
   const handleCreateTask = async (newTaskProps: Omit<Task, 'id' | 'createdAt' | 'updatedAt' | 'logs'>) => {
@@ -255,32 +287,14 @@ export default function App() {
         const createdTask = await response.json();
         setTasks(prev => [createdTask, ...prev]);
         setIsCreateModalOpen(false);
+        setPersistenceError(null);
         return;
       }
+      throw new Error(`Task creation failed with status ${response.status}`);
     } catch (err) {
-      console.error('API creation failed, using backup local creation:', err);
+      console.error('API creation failed:', err);
+      setPersistenceError('Task creation failed before the backend confirmed persistence. No local fallback task was created.');
     }
-
-    // Client-side offline fallback
-    const freshNewId = `id-${Date.now()}`;
-    const timestamp = new Date().toISOString();
-    const newTask: Task = {
-      ...taskWithProject,
-      id: freshNewId,
-      createdAt: timestamp,
-      updatedAt: timestamp,
-      logs: [
-        {
-          id: `log-creation-${Date.now()}`,
-          timestamp,
-          message: `Ticket initialized in offline workspace storage. Priority level: ${newTaskProps.priority.toUpperCase()}`,
-          type: 'create'
-        }
-      ]
-    };
-
-    setTasks(prev => [newTask, ...prev]);
-    setIsCreateModalOpen(false);
   };
 
   const handleBatchImport = async (parsedJson: any): Promise<boolean> => {
@@ -314,44 +328,17 @@ export default function App() {
         body: JSON.stringify(itemsWithProject)
       });
       if (response.ok) {
-        await fetchTasksFromApi();
+        await boardViewModel.refresh();
         setIsBatchModalOpen(false);
+        setPersistenceError(null);
         return true;
       }
+      throw new Error(`Batch import failed with status ${response.status}`);
     } catch (err) {
-      console.error('API batch creation failed, attempting offline simulation:', err);
+      console.error('API batch creation failed:', err);
+      setPersistenceError('Batch import failed before the backend confirmed persistence. No offline import fallback was applied.');
     }
-
-    // Offline / client-only fallback simulation
-    const timestamp = new Date().toISOString();
-    const newTasks: Task[] = itemsWithProject.map((item: any, idx: number) => ({
-      id: item.id || `id-${Date.now()}-${idx}-${Math.floor(Math.random() * 100000)}`,
-      projectId: item.projectId,
-      title: item.title,
-      description: item.description || '',
-      status: item.status || 'backlog',
-      branch: item.branch || undefined,
-      priority: item.priority || 'medium',
-      tags: Array.isArray(item.tags) ? item.tags : [],
-      targetFiles: Array.isArray(item.targetFiles) ? item.targetFiles : [],
-      checklist: Array.isArray(item.checklist) ? item.checklist : [],
-      designImage: item.designImage || undefined,
-      specUrl: item.specUrl || undefined,
-      createdAt: timestamp,
-      updatedAt: timestamp,
-      logs: [
-        {
-          id: `log-batch-${Date.now()}-${idx}`,
-          timestamp,
-          message: 'Task imported in Offline Batch mode.',
-          type: 'create'
-        }
-      ]
-    }));
-
-    setTasks(prev => [...newTasks, ...prev]);
-    setIsBatchModalOpen(false);
-    return true;
+    return false;
   };
 
   const handleUpdateTask = async (updatedTask: Task) => {
@@ -365,7 +352,7 @@ export default function App() {
 
     // Sync update to API
     try {
-      await fetch(`/api/tasks/${updatedTask.id}`, {
+      const response = await fetch(`/api/tasks/${updatedTask.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -373,12 +360,17 @@ export default function App() {
           repo: taskProj ? taskProj.repoUrl : undefined
         })
       });
+      if (!response.ok) {
+        throw new Error(`Task update failed with status ${response.status}`);
+      }
+      setPersistenceError(null);
     } catch (err) {
       console.error('API modification update failed:', err);
+      setPersistenceError('Task update failed before the backend confirmed persistence.');
     }
   };
 
-  const handleDeleteTask = async (id: string) => {
+  const executeDeleteTask = async (id: string) => {
     // Optimistic delete
     setTasks(prev => prev.filter(t => t.id !== id));
     if (selectedTask && selectedTask.id === id) {
@@ -387,70 +379,41 @@ export default function App() {
 
     // Sync deletion to API
     try {
-      await fetch(`/api/tasks/${id}`, {
+      const response = await fetch(`/api/tasks/${id}`, {
         method: 'DELETE'
       });
+      if (!response.ok) {
+        throw new Error(`Task deletion failed with status ${response.status}`);
+      }
+      setPersistenceError(null);
     } catch (err) {
       console.error('API deletion sync failed:', err);
+      setPersistenceError('Task deletion failed before the backend confirmed persistence.');
     }
   };
 
-
-
-  // Helper column icon matching
-  const getColIcon = (iconName: string) => {
-    switch (iconName) {
-      case 'Moon': return <Moon size={15} />;
-      case 'ListTodo': return <ListTodo size={15} />;
-      case 'Terminal': return <Terminal size={15} />;
-      case 'GitMerge': return <GitMerge size={15} />;
-      case 'GitPullRequest': return <GitPullRequest size={15} />;
-      default: return <Cat size={15} />;
-    }
+  const handleDeleteTask = (id: string) => {
+    setTaskToDelete(id);
   };
 
-  // Filter Tasks
-  const filteredTasks = tasks.filter(task => {
-    // Only show tasks of the current active project
-    if (task.projectId !== activeProjectId) return false;
-
-    const matchesPriority = selectedPriority === 'all' || task.priority === selectedPriority;
-    const matchesTag = selectedTag === 'all' || task.tags.includes(selectedTag);
-    const query = searchQuery.trim().toLowerCase();
-    const matchesSearch = !query || 
-      task.title.toLowerCase().includes(query) || 
-      task.id.toLowerCase().includes(query) ||
-      (task.branch && task.branch.toLowerCase().includes(query));
-
-    // Support bubble-up searching: if a child task matches, show the parent task on the board
-    let subtaskMatches = false;
-    if (!task.parentId) {
-      const childTasks = tasks.filter(t => t.parentId === task.id && t.projectId === activeProjectId);
-      subtaskMatches = childTasks.some(ct => {
-        const ctMatchesPriority = selectedPriority === 'all' || ct.priority === selectedPriority;
-        const ctMatchesTag = selectedTag === 'all' || ct.tags.includes(selectedTag);
-        const ctMatchesSearch = !query || 
-          ct.title.toLowerCase().includes(query) || 
-          ct.id.toLowerCase().includes(query) ||
-          (ct.branch && ct.branch.toLowerCase().includes(query));
-        return ctMatchesPriority && ctMatchesTag && ctMatchesSearch;
-      });
-    }
-
-    return (matchesPriority && matchesTag && matchesSearch) || subtaskMatches;
+  const filteredTasks = filterBoardTasks(tasks, {
+    activeProjectId,
+    selectedPriority,
+    selectedTag,
+    searchQuery,
   });
 
   if (!mounted) {
     return (
-      <div className="min-h-screen bg-[#faf6ef] flex flex-col items-center justify-center text-[#8a6e5a] font-mono text-xs gap-3">
-        <Cat size={40} className="text-[#d89745] animate-bounce" />
-        <p>Waking up sleepy kittens... ฅ^•ﻌ•^ฅ</p>
+      <div className="min-h-screen bg-[#faf6ef] dark:bg-[#292119] flex flex-col items-center justify-center text-[#8a6e5a] dark:text-[#f3eadf] font-mono text-xs gap-3">
+        <Cat size={40} className="text-[#d89745] dark:text-[#e0a070] animate-bounce" />
+        <p>Starting DevFlow...</p>
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col h-screen bg-[#fcfaf4] text-[#3e3129] font-sans antialiased overflow-hidden select-none">
+    <div className="flex flex-col h-screen bg-[#fcfaf4] dark:bg-[#1e1914] text-[#3e3129] dark:text-[#f3eadf] font-sans antialiased overflow-hidden select-none">
       
       {/* Mid View container with Sidebar + Board */}
       <div className="flex flex-1 overflow-hidden flex-col lg:flex-row">
@@ -463,186 +426,65 @@ export default function App() {
           setActiveProjectId={setActiveProjectId}
           onCreateProject={handleCreateProject}
           onDeleteProject={handleDeleteProject}
+          onUpdateProject={handleUpdateProject}
           selectedPriority={selectedPriority}
           setSelectedPriority={setSelectedPriority}
           selectedTag={selectedTag}
           setSelectedTag={setSelectedTag}
           searchQuery={searchQuery}
           setSearchQuery={setSearchQuery}
+          onOpenSettings={() => setIsSettingsModalOpen(true)}
         />
 
         {/* 2. Main KanBan Board viewport area */}
-        <main className="flex-1 flex flex-col h-full overflow-y-auto bg-[#faf7f0]">
+        <main className="flex-1 flex flex-col h-full overflow-y-auto bg-[#faf7f0] dark:bg-[#1e1914]">
           
           {/* Top Control Navigation bar */}
-          <header className="p-5 bg-white border-b border-[#e5d4bb] flex flex-col md:flex-row gap-4 justify-between items-start md:items-center">
-            <div>
-              <h1 className="text-[#3c2a1a] font-extrabold font-sans text-base tracking-tight flex items-center gap-2">
-                <Cat className="text-[#d89745] shrink-0" size={17} />
-                Sprint Backlog Dashboard
-              </h1>
-              <p className="text-[11px] text-[#816b5a] font-mono mt-0.5 flex items-center gap-1 font-bold">
-                <span>Pocket Sandbox Launcher</span>
-                <span className="text-[#dcd0bc]">•</span>
-                <span className="text-[#d89745] font-extrabold">{filteredTasks.length} lazy tasks found</span>
-              </p>
+          <Header
+            filteredTasksCount={filteredTasks.length}
+            ngrokUrl={ngrokUrl}
+            theme={theme}
+            setTheme={setTheme}
+            setIsSettingsModalOpen={setIsSettingsModalOpen}
+            setIsJsonModalOpen={setIsJsonModalOpen}
+            setIsSkillsModalOpen={setIsSkillsModalOpen}
+            setIsTemplateModalOpen={setIsTemplateModalOpen}
+            setIsObservabilityModalOpen={setIsObservabilityModalOpen}
+            setIsCreateModalOpen={setIsCreateModalOpen}
+            setIsBatchModalOpen={setIsBatchModalOpen}
+          />
+
+          {persistenceError && (
+            <div className="mx-5 mt-4 rounded-2xl border border-[#f0c48f] dark:border-[#584a3b] bg-[#fff7eb] dark:bg-[#292119] px-4 py-3 text-[11px] font-mono font-bold text-[#9a5b13] dark:text-[#f3eadf]">
+              Persistence warning: {persistenceError}
             </div>
-
-            {/* DevOps backup and Reset buttons */}
-            <div className="flex flex-wrap items-center gap-2.5 w-full md:w-auto">
-              
-              {/* Backup actions */}
-              <div className="flex items-center gap-1.5 bg-[#fdfbf6] border border-[#e5d4bb] rounded-xl p-1 shadow-2xs">
-                <button
-                  onClick={() => setIsJsonModalOpen(true)}
-                  type="button"
-                  className="hover:bg-[#ebdcb9] hover:text-[#534135] px-2.5 py-1 text-[10px] font-mono rounded-lg flex items-center gap-1 transition-colors cursor-pointer text-[#a46c24] font-bold"
-                  title="View import JSON schema format"
-                >
-                  <FileCode size={11} /> Schema Spec
-                </button>
-              </div>
-
-              {/* Launch Batch Import Modal */}
-              <button
-                onClick={() => setIsBatchModalOpen(true)}
-                type="button"
-                className="bg-[#2a7a8a] hover:bg-[#1a5b67] text-white px-3.5 py-1.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition-all shadow-md cursor-pointer ml-auto md:ml-0"
-              >
-                <Plus size={14} /> Batch Import JSON
-              </button>
-
-              {/* Launch Modal to Trigger task creation */}
-              <button
-                onClick={() => setIsCreateModalOpen(true)}
-                type="button"
-                className="bg-gradient-to-r from-[#df9433] to-[#cc7b26] hover:from-[#cc7b26] hover:to-[#b5671d] text-white px-4 py-1.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition-all shadow-md cursor-pointer ml-auto md:ml-0"
-              >
-                <Plus size={14} /> ✨ Commit Ticket ✨
-              </button>
-            </div>
-          </header>
+          )}
 
           {/* Kanban Board Container scroll area */}
-          <div className="flex-1 overflow-x-auto p-6 bg-[#faf7f0]">
-            <div className="flex gap-4 w-max items-stretch min-h-[calc(100vh-210px)] pb-2">
+          <div className="flex-1 overflow-x-auto p-6 bg-[#faf7f0] dark:bg-[#1e1914]">
+            <div className="flex w-max items-stretch min-h-[calc(100vh-210px)] pb-2">
               
-              {COLUMNS.map(col => {
+              {BOARD_COLUMNS.map(col => {
                 const columnTasks = filteredTasks
                   .filter(t => t.status === col.id && !t.parentId)
                   .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-                const totalStepsInLane = columnTasks.reduce((sum, t) => sum + (t.checklist?.length || 0), 0);
-                const completedStepsInLane = columnTasks.reduce((sum, t) => sum + (t.checklist?.filter(item => item.completed).length || 0), 0);
-                const isOver = draggedOverColumn === col.id;
-                const isInProgressCol = col.id === 'in-progress';
-                const isReviewCol = col.id === 'ready-for-review';
-                const isDoneCol = col.id === 'done';
- 
+                
                 return (
-                  <div
-                    key={col.id}
-                    onDragOver={(e) => {
-                      e.preventDefault();
-                      if (draggedOverColumn !== col.id) {
-                        setDraggedOverColumn(col.id);
-                      }
-                    }}
-                    onDragLeave={() => {
-                      if (draggedOverColumn === col.id) {
-                        setDraggedOverColumn(null);
-                      }
-                    }}
-                    onDrop={(e) => handleDrop(e, col.id)}
-                    className={`w-[290px] shrink-0 flex flex-col pb-4 rounded-2xl p-2 transition-all border ${
-                      isOver 
-                        ? 'bg-[#ffeccb]/40 border-dashed border-[#e3a35a]' 
-                        : isInProgressCol
-                          ? 'bg-[#fffcf7] border-[#ebdcb9]'
-                          : isReviewCol
-                            ? 'bg-[#f5f8ff] border-[#b8cdfc]'
-                            : isDoneCol
-                              ? 'bg-[#f4faf4] border-[#d1e9cc]'
-                              : 'bg-[#fffdfb]/60 border-[#ebdcb9]/40'
-                    }`}
-                  >
-                    {/* Status header lane metadata */}
-                    <div className="flex items-center justify-between mb-3.5 px-2.5 pt-1.5 select-none">
-                      <div className="flex items-center gap-2">
-                        <span className={`shrink-0 ${
-                          isInProgressCol 
-                            ? 'text-[#d89745]' 
-                            : isReviewCol 
-                              ? 'text-[#3b5eab]' 
-                              : isDoneCol 
-                                ? 'text-[#5fa84a]' 
-                                : 'text-[#8a725f]'
-                        }`}>{getColIcon(col.iconName)}</span>
-                        
-                        <h3 className={`text-[11px] font-extrabold uppercase tracking-wide font-mono ${
-                          isInProgressCol 
-                            ? 'text-[#8f5e1f]' 
-                            : isReviewCol 
-                              ? 'text-[#2b3a61]' 
-                              : isDoneCol 
-                                ? 'text-[#38622c]' 
-                                : 'text-[#614e41]'
-                        }`}>
-                          {col.label}
-                        </h3>
-                        
-                        <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full font-bold shadow-4xs ${
-                          isInProgressCol 
-                            ? 'bg-[#ffecca] text-[#935919]' 
-                            : isReviewCol 
-                              ? 'bg-[#dbe4ff] text-[#2b4c9e]' 
-                              : isDoneCol 
-                                ? 'bg-[#edf7ed] text-[#4d7e35]' 
-                                : 'bg-[#f4ebd9] text-[#715c4d]'
-                        }`}>
-                          {columnTasks.length}
-                        </span>
-                      </div>
-
-                      {totalStepsInLane > 0 && (
-                        <span className="text-[9px] font-mono text-[#8a705e] uppercase tracking-wider font-extrabold" title="Verification checklist completion ratio">
-                          {completedStepsInLane}/{totalStepsInLane} steps
-                        </span>
-                      )}
-                    </div>
-
-                    {/* Vertically scrolling task card stack with HTML5 drop border feedback */}
-                    <div 
-                      className="flex-1 flex flex-col gap-3 p-2 rounded-xl overflow-y-auto scrollbar-thin transition-all"
-                    >
-                      {columnTasks.map(task => {
-                        const subtasks = tasks.filter(t => t.parentId === task.id);
-                        return (
-                          <TaskCard
-                            key={task.id}
-                            task={task}
-                            subtasks={subtasks}
-                            onSelect={setSelectedTask}
-                            onDelete={handleDeleteTask}
-                            onDragStart={handleDragStart}
-                            onUpdate={handleUpdateTask}
-                          />
-                        );
-                      })}
-
-                      {columnTasks.length === 0 && (
-                        <div className="flex-1 flex flex-col items-center justify-start py-8 px-4 bg-transparent select-none">
-                          <div className="w-full max-w-[210px] bg-white/60 border border-[#e2d5c3]/60 rounded-2xl p-3.5 text-center shadow-xs">
-                            <span className="text-[10px] text-[#df9433] font-extrabold uppercase tracking-widest flex items-center justify-center gap-1">
-                              ✨ EMPTY LANE
-                            </span>
-                            <p className="text-[9px] text-[#8c7463] font-mono mt-1 leading-snug">
-                              No active tickets. Drop cards or Commit to start.
-                            </p>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
+                    <BoardLane
+                      key={col.id}
+                      column={col}
+                      tasks={columnTasks}
+                      allTasks={tasks}
+                      draggedOverColumn={draggedOverColumn}
+                      draggedTaskId={draggedTaskId}
+                      setDraggedOverColumn={setDraggedOverColumn}
+                    handleDrop={handleDrop}
+                    setSelectedTask={setSelectedTask}
+                    handleDeleteTask={handleDeleteTask}
+                    handleDragStart={handleDragStart}
+                    handleUpdateTask={handleUpdateTask}
+                    onShowLog={({ taskDisplayId, run }) => setLogModal({ taskDisplayId, runId: run.id, runStatus: run.status, agent: run.agent, model: run.model })}
+                  />
                 );
               })}
             </div>
@@ -651,16 +493,16 @@ export default function App() {
       </div>
 
       {/* Footer Status Bar */}
-      <footer className="h-6.5 bg-[#ebdcb9]/40 border-t border-[#ebdcb9] px-4 flex items-center justify-between shrink-0 select-none text-[10px] font-mono text-[#8c7463] font-bold">
+      <footer className="h-6.5 bg-[#ebdcb9]/40 dark:bg-[#584a3b]/40 border-t border-[#ebdcb9] dark:border-[#584a3b] px-4 flex items-center justify-between shrink-0 select-none text-[10px] font-mono text-[#8c7463] dark:text-[#f3eadf] font-bold">
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-1.5">
             <span className="w-1.5 h-1.5 rounded-full bg-orange-500 animate-pulse"></span>
             <span>Cozy Engine Active</span>
           </div>
-          <span className="text-[#ecd0bc]">•</span>
+          <span className="text-[#ecd0bc] dark:text-[#d6b56d]">•</span>
           <span>Workspace Latency: 2ms</span>
         </div>
-        <div className="text-[#8c7463]">
+        <div className="text-[#8c7463] dark:text-[#f3eadf]">
           Styled cozy & warm
         </div>
       </footer>
@@ -675,6 +517,7 @@ export default function App() {
           onClose={() => setSelectedTask(null)}
           onUpdate={handleUpdateTask}
           onDelete={handleDeleteTask}
+          onShowLog={(run) => setLogModal({ taskDisplayId: selectedTask.displayId || selectedTask.id, runId: run.id, runStatus: run.status, agent: run.agent, model: run.model })}
         />
       )}
 
@@ -700,6 +543,75 @@ export default function App() {
           onClose={() => setIsJsonModalOpen(false)}
         />
       )}
+
+      {/* 6. Skills Modal */}
+      {isSkillsModalOpen && (
+        <SkillsModal
+          onClose={() => setIsSkillsModalOpen(false)}
+        />
+      )}
+
+      {/* 7. Template Modal */}
+      {isTemplateModalOpen && (
+        <TemplateModal
+          onClose={() => setIsTemplateModalOpen(false)}
+        />
+      )}
+
+      {/* 8. Settings Modal */}
+      {isObservabilityModalOpen && (
+        <ObservabilityModal onClose={() => setIsObservabilityModalOpen(false)} />
+      )}
+      {isSettingsModalOpen && (
+        <SettingsModal
+          onClose={() => {
+            setIsSettingsModalOpen(false);
+            fetchSettingsFromApi();
+          }}
+        />
+      )}
+
+      {/* 9. Emergency Move Modal */}
+      {pendingEmergencyMove && (
+        <ConfirmModal
+          title="Emergency Move"
+          message="Task is currently locked in progress. Are you sure you want to force move it?"
+          onConfirm={() => {
+            executeTaskMove(pendingEmergencyMove.sourceTask, pendingEmergencyMove.status);
+            setPendingEmergencyMove(null);
+          }}
+          onCancel={() => setPendingEmergencyMove(null)}
+          confirmText="Force Move"
+        />
+      )}
+
+      {/* 10. Delete Task Modal */}
+      {taskToDelete && (
+        <ConfirmModal
+          title="Delete Task"
+          message="Are you sure you want to delete this task? This action cannot be undone."
+          onConfirm={() => {
+            executeDeleteTask(taskToDelete);
+            setTaskToDelete(null);
+          }}
+          onCancel={() => setTaskToDelete(null)}
+          confirmText="Delete"
+        />
+      )}
+
+      {/* 11. Agent Run Log Modal */}
+      {logModal && (
+        <AgentRunLogModal
+          taskDisplayId={logModal.taskDisplayId}
+          runId={logModal.runId}
+          runStatus={logModal.runStatus}
+          agent={logModal.agent}
+          model={logModal.model}
+          onClose={() => setLogModal(null)}
+        />
+      )}
     </div>
   );
 }
+
+

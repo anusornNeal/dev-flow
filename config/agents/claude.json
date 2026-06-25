@@ -1,0 +1,22 @@
+{
+  "name": "Claude",
+  "executables": [
+    { "type": "path", "value": "%APPDATA%\\npm\\claude.cmd" },
+    { "type": "command", "value": "claude" }
+  ],
+  "flags": {
+    "model": null,
+    "interactiveArgs": ["-p"]
+  },
+  "executionModes": {
+    "safe": { "args": [] },
+    "full": { "args": [] }
+  },
+  "modelMap": {
+    "Claude 4.8 Opus": "claude-4.8-opus",
+    "Claude 4.7 Opus": "claude-4.7-opus",
+    "Claude 4.6 Opus": "claude-4.6-opus",
+    "Claude 4.6 Sonnet": "claude-4.6-sonnet"
+  },
+  "launchStyle": "cmd_k"
+}

@@ -1,73 +1,140 @@
-export interface ModelConfig {
-  model_name: string;
-  reasoning_support: boolean;
-  available_efforts: string[];
-  default_effort: string;
-}
-
 export type AgentName = 'Codex' | 'Antigravity' | 'Claude';
+export type Provider = 'openai' | 'google' | 'anthropic';
+export type Effort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
+export interface ModelConfig {
+  label: string;
+  modelId: string;
+  provider: Provider;
+  effortParam: 'reasoning.effort' | 'thinkingLevel' | 'output_config.effort';
+  availableEfforts: Effort[];
+  defaultEffort: Effort;
+  recommendedCodingEffort?: Effort;
+  // Aliases for backwards compatibility during migration
+  model_name: string; 
+  display_name?: string;
+  reasoning_support: boolean;
+}
 
 export const AGENTS_CONFIG: Record<AgentName, ModelConfig[]> = {
   Codex: [
     {
+      label: "GPT-5.5",
+      modelId: "gpt-5.5",
+      provider: "openai",
+      effortParam: "reasoning.effort",
+      availableEfforts: ["low", "medium", "high", "xhigh"],
+      defaultEffort: "medium",
       model_name: "GPT-5.5",
+      display_name: "GPT-5.5",
       reasoning_support: true,
-      available_efforts: ["low", "medium", "high"],
-      default_effort: "medium"
     },
     {
+      label: "GPT-5.4",
+      modelId: "gpt-5.4",
+      provider: "openai",
+      effortParam: "reasoning.effort",
+      availableEfforts: ["low", "medium", "high", "xhigh"],
+      defaultEffort: "medium",
       model_name: "GPT-5.4",
+      display_name: "GPT-5.4",
       reasoning_support: true,
-      available_efforts: ["low", "medium", "high"],
-      default_effort: "medium"
     },
     {
+      label: "GPT-5.4 Mini",
+      modelId: "gpt-5.4-mini",
+      provider: "openai",
+      effortParam: "reasoning.effort",
+      availableEfforts: ["low", "medium", "high", "xhigh"],
+      defaultEffort: "low",
       model_name: "GPT-5.4 Mini",
+      display_name: "GPT-5.4 Mini",
       reasoning_support: true,
-      available_efforts: ["low", "medium"],
-      default_effort: "low"
     }
   ],
   Antigravity: [
     {
+      label: "Gemini 3.5 Flash",
+      modelId: "gemini-3.5-flash",
+      provider: "google",
+      effortParam: "thinkingLevel",
+      availableEfforts: ["low", "medium", "high"],
+      defaultEffort: "medium",
       model_name: "Gemini 3.5 Flash",
+      display_name: "3.5 flash",
       reasoning_support: true,
-      available_efforts: ["low", "medium"],
-      default_effort: "low"
     },
     {
+      label: "Gemini 3.1 Pro",
+      modelId: "gemini-3.1-pro",
+      provider: "google",
+      effortParam: "thinkingLevel",
+      availableEfforts: ["low", "high"],
+      defaultEffort: "high",
       model_name: "Gemini 3.1 Pro",
+      display_name: "3.1 pro",
       reasoning_support: true,
-      available_efforts: ["low", "medium", "high"],
-      default_effort: "medium"
     }
   ],
   Claude: [
     {
-      model_name: "Claude 4.8 Opus",
-      reasoning_support: true,
-      available_efforts: ["medium", "high", "xhigh"],
-      default_effort: "high"
-    },
-    {
-      model_name: "Claude 4.7 Opus",
-      reasoning_support: true,
-      available_efforts: ["low", "medium", "high"],
-      default_effort: "medium"
-    },
-    {
+      label: "Claude 4.6 Opus",
+      modelId: "claude-opus-4-6",
+      provider: "anthropic",
+      effortParam: "output_config.effort",
+      availableEfforts: ["low", "medium", "high", "max"],
+      defaultEffort: "high",
       model_name: "Claude 4.6 Opus",
+      display_name: "Opus 4.6",
       reasoning_support: true,
-      available_efforts: ["low", "medium"],
-      default_effort: "medium"
     },
     {
-      model_name: "Claude 4.6 Sonnet",
+      label: "Claude 4.7 Opus",
+      modelId: "claude-opus-4-7",
+      provider: "anthropic",
+      effortParam: "output_config.effort",
+      availableEfforts: ["low", "medium", "high", "xhigh", "max"],
+      defaultEffort: "high",
+      recommendedCodingEffort: "xhigh",
+      model_name: "Claude 4.7 Opus",
+      display_name: "Opus 4.7",
       reasoning_support: true,
-      available_efforts: ["low", "medium"],
-      default_effort: "low"
+    },
+    {
+      label: "Claude 4.8 Opus",
+      modelId: "claude-opus-4-8",
+      provider: "anthropic",
+      effortParam: "output_config.effort",
+      availableEfforts: ["low", "medium", "high", "xhigh", "max"],
+      defaultEffort: "high",
+      recommendedCodingEffort: "xhigh",
+      model_name: "Claude 4.8 Opus",
+      display_name: "Opus 4.8",
+      reasoning_support: true,
+    },
+    {
+      label: "Claude 4.6 Sonnet",
+      modelId: "claude-sonnet-4-6",
+      provider: "anthropic",
+      effortParam: "output_config.effort",
+      availableEfforts: ["low", "medium", "high", "max"],
+      defaultEffort: "high",
+      model_name: "Claude 4.6 Sonnet",
+      display_name: "Sonnet 4.6",
+      reasoning_support: true,
     }
   ]
+};
+
+export const getDisplayModelName = (agentName: string | undefined, modelName: string | undefined): string => {
+  if (!modelName) return '';
+  if (!agentName) return modelName;
+  
+  const configs = AGENTS_CONFIG[agentName as AgentName];
+  if (!configs) return modelName;
+  
+  const config = configs.find(m => m.model_name === modelName);
+  return config?.display_name || config?.label || modelName;
 };
 
 export const getModelConfig = (agentName: string, modelName: string): ModelConfig | undefined => {
@@ -83,5 +150,43 @@ export const defaultModelForAgent = (agentName: string): string => {
 
 export const defaultEffortForModel = (agentName: string, modelName: string): string => {
   const config = getModelConfig(agentName, modelName);
-  return config ? config.default_effort : 'medium';
+  return config ? config.defaultEffort : 'medium';
+};
+
+const ALL_EFFORTS: Effort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+
+export const getAgentCatalogHelp = (): string => {
+  return '(varies strictly by agent/model)';
+};
+
+export const getValidAgentModelEffortExamples = (): string[] => {
+  const examples: string[] = [];
+  for (const [agent, configs] of Object.entries(AGENTS_CONFIG)) {
+    if (configs.length > 0) {
+      // Pick the second model if available to get a mix of models, else first
+      const config = configs.length > 1 ? configs[1] : configs[0];
+      if (config.availableEfforts.length > 0) {
+        // Pick a high effort if possible, otherwise just pick the first
+        const effort = config.availableEfforts.includes('high') ? 'high' : 
+                       config.availableEfforts.includes('xhigh') ? 'xhigh' : 
+                       config.availableEfforts[0];
+        examples.push(`${agent} + ${config.model_name} + ${effort}`);
+      }
+    }
+  }
+  return examples.slice(0, 3);
+};
+
+export const getInvalidAgentModelEffortExamples = (): string[] => {
+  const examples: string[] = [];
+  for (const [agent, configs] of Object.entries(AGENTS_CONFIG)) {
+    if (configs.length > 0) {
+      const config = configs[0];
+      const invalid = ALL_EFFORTS.find(e => !config.availableEfforts.includes(e));
+      if (invalid) {
+        examples.push(`${agent} + ${config.model_name} + ${invalid}`);
+      }
+    }
+  }
+  return examples.slice(0, 3);
 };

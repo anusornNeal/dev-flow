@@ -1,0 +1,27 @@
+{
+  "name": "Codex",
+  "executables": [
+    { "type": "env", "value": "DEVFLOW_CODEX_EXE" },
+    { "type": "path", "value": "%APPDATA%\\npm\\codex.cmd" },
+    { "type": "command", "value": "codex" }
+  ],
+  "flags": {
+    "model": "-m",
+    "workingDir": "-C",
+    "alwaysAllow": "--dangerously-bypass-approvals-and-sandbox",
+    "effort": ["--config", "model_reasoning_effort="]
+  },
+  "executionModes": {
+    "safe": { "args": ["-s", "workspace-write"] },
+    "full": { "args": ["--dangerously-bypass-approvals-and-sandbox", "-s", "danger-full-access"] }
+  },
+  "modelMap": {
+    "GPT-5.5": "gpt-5.5",
+    "GPT-5.4": "gpt-5.4",
+    "GPT-5.4 Mini": "gpt-5.4-mini"
+  },
+  "promptFallback": {
+    "effort": "use reasoning effort '{EFFORT}'"
+  },
+  "launchStyle": "start"
+}

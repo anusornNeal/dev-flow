@@ -1,0 +1,303 @@
+openapi: 3.1.0
+info:
+  title: DevFlow API
+  description: API for managing developer tasks and projects
+  version: 1.0.0
+servers:
+  - url: https://YOUR_NGROK_DOMAIN_HERE.ngrok-free.app
+    description: Ngrok Local Server
+paths:
+  /api/schema/task:
+    get:
+      summary: Get the JSON schema for a task
+      operationId: getTaskSchema
+      responses:
+        '200':
+          description: A JSON Schema describing the Task object
+  /api/skills:
+    get:
+      summary: Get all skills metadata
+      operationId: getSkills
+      responses:
+        '200':
+          description: A list of skills
+  /api/skills/{id}:
+    get:
+      summary: Get a skill by ID including its content
+      operationId: getSkillById
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The skill including its content
+        '404':
+          description: Skill not found
+    put:
+      summary: Update a skill content
+      operationId: updateSkill
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                content:
+                  type: string
+      responses:
+        '200':
+          description: Skill updated
+        '404':
+          description: Skill not found
+  /api/projects:
+    get:
+      summary: Get all projects
+      operationId: getProjects
+      responses:
+        '200':
+          description: A list of projects
+    post:
+      summary: Create a new project
+      operationId: createProject
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                repoUrl:
+                  type: string
+                description:
+                  type: string
+                localPath:
+                  type: string
+                taskIdPrefix:
+                  type: string
+      responses:
+        '201':
+          description: Project created
+  /api/projects/{id}:
+    delete:
+      summary: Delete a project
+      operationId: deleteProject
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Project deleted
+    put:
+      summary: Update a project
+      operationId: updateProject
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                repoUrl:
+                  type: string
+                description:
+                  type: string
+                localPath:
+                  type: string
+                taskIdPrefix:
+                  type: string
+      responses:
+        '200':
+          description: Project updated
+  /api/tasks:
+    get:
+      summary: Get all tasks
+      operationId: getTasks
+      responses:
+        '200':
+          description: A list of tasks
+    post:
+      summary: Create one or multiple tasks
+      operationId: createTask
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '201':
+          description: Task(s) created
+    put:
+      summary: Update or upsert multiple tasks in batch
+      operationId: updateTasksBatch
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Tasks updated
+  /api/tasks/batch:
+    post:
+      summary: Batch create or update multiple tasks
+      operationId: batchTasks
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '201':
+          description: Tasks processed
+  /api/tasks/{id}:
+    put:
+      summary: Update a task
+      operationId: updateTask
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Task updated
+    delete:
+      summary: Delete a task
+      operationId: deleteTask
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Task deleted
+  /api/tasks/{id}/agent-context:
+    get:
+      summary: Get clean agent-ready task context package
+      operationId: getAgentTaskContext
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: includeLogs
+          in: query
+          required: false
+          schema:
+            type: boolean
+        - name: mode
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Agent task context
+  /api/tasks/{id}/move:
+    post:
+      summary: Move a task to a different status
+      operationId: moveTaskStatus
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: string
+                  enum: [backlog, todo, in-progress, ready-for-review, done]
+      responses:
+        '200':
+          description: Task status updated
+  /api/tasks/{id}/checklist/toggle:
+    post:
+      summary: Toggle a checklist item status
+      operationId: toggleTaskChecklist
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                checklistId:
+                  type: string
+      responses:
+        '200':
+          description: Checklist toggled
+  /api/tasks/{id}/assign:
+    post:
+      summary: Assign agent, model, and effort to a task
+      operationId: assignTask
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                agent:
+                  type: string
+                model:
+                  type: string
+                effort:
+                  type: string
+                  description: 'Reasoning effort level. Valid values strictly depend on the selected agent/model pair (e.g. Codex + GPT-5.4 supports low, medium, high, xhigh. Antigravity + Gemini 3.5 Flash supports low, medium, high. Claude 4.8 Opus supports low, medium, high, xhigh, max).'
+      responses:
+        '200':
+          description: Task assigned

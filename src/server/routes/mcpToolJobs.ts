@@ -69,12 +69,23 @@ export function registerMcpToolJobRoutes(app: express.Express, deps: ApiRouteDep
       if (!status) {
         throw createApiError(404, 'JOB_NOT_FOUND', `Job not found: ${req.params.jobId}`);
       }
+      const terminal = status.status === 'succeeded' || status.status === 'failed' || status.status === 'timed_out' || status.status === 'cancelled';
       const result = readJobResult(req.params.jobId);
+      const safeResult = result || {
+        result: {
+          ok: false,
+          status: terminal ? status.status : 'pending',
+          code: terminal ? 'JOB_RESULT_UNAVAILABLE' : 'JOB_RESULT_PENDING',
+          message: terminal ? 'The job finished before a result payload was readable.' : 'The job has not produced a result payload yet.',
+          jobId: req.params.jobId,
+          failureSummary: status.failureSummary || null,
+        },
+      };
       res.json({
         jobId: req.params.jobId,
         status: status.status,
-        ready: status.status === 'succeeded' || status.status === 'failed' || status.status === 'timed_out' || status.status === 'cancelled',
-        result,
+        ready: terminal,
+        result: safeResult,
       });
     } catch (error) {
       next(error);

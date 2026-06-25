@@ -216,9 +216,20 @@ export function createDevFlowMcpServer(baseUrl: string) {
               // readJobResult returns an envelope shaped like { result, patch }. MCP callers expect
               // the actual tool payload, not the persistence envelope; otherwise completed async
               // tools can surface as wrapper objects or null-ish text in ChatGPT.
-              parsedBody = jobResult && typeof jobResult === 'object' && 'result' in jobResult
-                ? (jobResult as any).result
-                : jobResult;
+              if (jobResult === null || jobResult === undefined) {
+                parsedBody = {
+                  jobId,
+                  status,
+                  ready: false,
+                  result: null,
+                  code: 'JOB_RESULT_NOT_READY',
+                  message: `Job ${jobId} reached ${status} but no result payload was available yet. Retry get_tool_job_result.`,
+                };
+              } else {
+                parsedBody = jobResult && typeof jobResult === 'object' && 'result' in jobResult
+                  ? (jobResult as any).result
+                  : jobResult;
+              }
               durationMs = Date.now() - (startPoll - durationMs);
             }
             break;

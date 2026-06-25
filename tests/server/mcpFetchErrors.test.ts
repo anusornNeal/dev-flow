@@ -285,3 +285,54 @@ test('mcp server unwraps async job result envelope for run_project_command', asy
     'http://127.0.0.1:3000/api/tool-jobs/job-command-1/result',
   ]);
 });
+
+test('mcp server does not surface null text when async job result is temporarily missing', async (t) => {
+  const originalFetch = global.fetch;
+
+  t.after(() => {
+    global.fetch = originalFetch;
+  });
+
+  global.fetch = async (url: RequestInfo | URL) => {
+    const urlText = String(url);
+
+    let body: unknown;
+    if (urlText.endsWith('/api/tool-jobs')) {
+      body = { jobId: 'job-missing-result-1', status: 'queued' };
+    } else if (urlText.endsWith('/api/tool-jobs/job-missing-result-1')) {
+      body = { jobId: 'job-missing-result-1', status: 'succeeded' };
+    } else if (urlText.endsWith('/api/tool-jobs/job-missing-result-1/result')) {
+      body = {
+        jobId: 'job-missing-result-1',
+        status: 'succeeded',
+        ready: true,
+        result: null,
+      };
+    } else {
+      body = { error: 'unexpected request' };
+    }
+
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => 'application/json' },
+      text: async () => JSON.stringify(body),
+    } as unknown as Response;
+  };
+
+  const server = createDevFlowMcpServer('http://127.0.0.1:3000');
+  const handler = (server as any)._requestHandlers.get('tools/call');
+
+  const response = await handler({
+    method: 'tools/call',
+    params: {
+      name: 'run_project_command',
+      arguments: { projectId: 'proj-1', command: 'test' },
+    },
+  });
+
+  assert.equal(response.isError, undefined);
+  assert.notEqual(response.content[0].text, 'null');
+  assert.equal(response.structuredContent.code, 'JOB_RESULT_NOT_READY');
+  assert.equal(JSON.parse(response.content[0].text).result, null);
+});

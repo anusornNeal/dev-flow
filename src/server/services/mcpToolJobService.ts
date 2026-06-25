@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import type { AppState } from '../types';
 import { createJob, updateJobStatus, appendJobLog, writeJobResult, getJob, readJobLog, listInterruptedJobs, listRecentJobs, startBackgroundJobCleanup } from '../repositories/mcpToolJobRepository';
+import { normalizeUnknownError } from './api';
 import { resolveProjectRoot } from './localFileService';
 
 // Import async runners (we will define these later in their respective files)
@@ -323,22 +324,44 @@ async function startJob(entry: QueueEntry) {
     if (currentStatus === 'cancelled' || currentStatus === 'timed_out') {
       // Don't overwrite cancelled/timed_out status
     } else if (isTimedOutResult(result)) {
-      updateJobStatus(entry.jobId, { status: 'timed_out', failureSummary: 'Job timed out.' });
       writeJobResult(entry.jobId, result);
+      updateJobStatus(entry.jobId, { status: 'timed_out', failureSummary: 'Job timed out.' });
       logger.stderr(`\n[Job Timed Out]\n`);
     } else {
-      updateJobStatus(entry.jobId, { status: 'succeeded' });
       writeJobResult(entry.jobId, result);
+      updateJobStatus(entry.jobId, { status: 'succeeded' });
     }
   } catch (error: any) {
     const currentStatus = getJob(entry.jobId)?.status;
+    const normalizedError = normalizeUnknownError(error).error;
+    const failureSummary = summarizeError(error);
     if (currentStatus === 'cancelled') {
-      // Ignore
+      writeJobResult(entry.jobId, {
+        ok: false,
+        status: 'cancelled',
+        code: 'JOB_CANCELLED',
+        message: 'Job was cancelled before completion.',
+        error: normalizedError,
+      });
     } else if (error.name === 'AbortError' || error.message.includes('ETIMEDOUT') || error.code === 'ETIMEDOUT') {
-      updateJobStatus(entry.jobId, { status: 'timed_out', failureSummary: summarizeError(error) });
+      writeJobResult(entry.jobId, {
+        ok: false,
+        status: 'timed_out',
+        code: normalizedError.code || 'JOB_TIMED_OUT',
+        message: normalizedError.message || failureSummary,
+        error: normalizedError,
+      });
+      updateJobStatus(entry.jobId, { status: 'timed_out', failureSummary });
       logger.stderr(`\n[Job Timed Out]`);
     } else {
-      updateJobStatus(entry.jobId, { status: 'failed', failureSummary: summarizeError(error) });
+      writeJobResult(entry.jobId, {
+        ok: false,
+        status: 'failed',
+        code: normalizedError.code || 'JOB_FAILED',
+        message: normalizedError.message || failureSummary,
+        error: normalizedError,
+      });
+      updateJobStatus(entry.jobId, { status: 'failed', failureSummary });
       logger.stderr(`\n[Job Failed] ${error.message}\n${error.stack || ''}`);
     }
   } finally {

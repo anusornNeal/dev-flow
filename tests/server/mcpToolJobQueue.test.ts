@@ -105,6 +105,26 @@ test('mcpToolJobService - job execution and result', async () => {
   assert.ok(result.result.count >= 0);
 });
 
+test('mcpToolJobService - completed job has persisted result', async () => {
+  const root = makeTempRepo('completed-result');
+  const state = makeState(root);
+  const toolName = `test_completed_result_${randomUUID()}`;
+  const payload = { ok: true, label: 'done' };
+
+  __setToolJobTestRunner(toolName, async () => payload);
+
+  try {
+    const jobInfo = enqueueToolJob(state, toolName, { localPath: root, label: 'done' }, 'repo-command');
+    await waitForStatus(jobInfo.jobId, 'succeeded');
+
+    const result = readJobResult(jobInfo.jobId);
+    assert.ok(result, 'completed jobs should have a result payload');
+    assert.deepStrictEqual(result.result, payload);
+  } finally {
+    __setToolJobTestRunner(toolName, null);
+  }
+});
+
 test('mcpToolJobService - log tailing', async () => {
   const jobInfo = enqueueToolJob(MOCK_STATE, 'search_local_files', { query: 'mcpToolJobService' }, 'repo-read');
   

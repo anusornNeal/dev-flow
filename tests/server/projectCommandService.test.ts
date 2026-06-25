@@ -94,6 +94,21 @@ test('runProjectCommand returns timed_out status when the process exceeds timeou
   assert.equal(result.timedOut, true);
 });
 
+test('runProjectCommand returns structured output for test command', () => {
+  const root = createProject('test-command', {
+    test: 'node scripts/test.mjs',
+  });
+  fs.writeFileSync(path.join(root, 'scripts', 'test.mjs'), "process.stdout.write('test ok\\n');\n");
+
+  const result = runProjectCommand(stateFor(root), { projectId: 'project-command', command: 'test' });
+
+  assert.equal(result.command, 'test');
+  assert.equal(result.ok, true);
+  assert.equal(result.status, 'succeeded');
+  assert.equal(result.outputSummary.hasStdout, true);
+  assert.match(result.stdout, /test ok/);
+});
+
 test('runProjectCommand validation failures remain structured ApiErrors', () => {
   const root = createProject('validation', {
     typecheck: 'node scripts/pass.mjs',

@@ -201,3 +201,87 @@ test('mcp server preserves successful JSON response shape', async (t) => {
   assert.deepEqual(response.structuredContent, body);
   assert.equal(JSON.parse(response.content[0].text).id, '00-skill-router');
 });
+
+test('mcp server unwraps async job result envelope for run_project_command', async (t) => {
+  const originalFetch = global.fetch;
+  const requests: string[] = [];
+
+  t.after(() => {
+    global.fetch = originalFetch;
+  });
+
+  const commandResult = {
+    ok: true,
+    status: 'succeeded',
+    command: 'test',
+    cwd: '.',
+    exitCode: 0,
+    durationMs: 12,
+    timedOut: false,
+    signal: null,
+    stdout: 'test ok\n',
+    stderr: '',
+    stdoutTruncated: false,
+    stderrTruncated: false,
+    stdoutBytes: 8,
+    stderrBytes: 0,
+    stdoutEmpty: false,
+    stderrEmpty: true,
+    outputSummary: {
+      hasStdout: true,
+      hasStderr: false,
+      stdoutBytes: 8,
+      stderrBytes: 0,
+      stdoutTruncated: false,
+      stderrTruncated: false,
+    },
+  };
+
+  global.fetch = async (url: RequestInfo | URL) => {
+    const urlText = String(url);
+    requests.push(urlText);
+
+    let body: unknown;
+    if (urlText.endsWith('/api/tool-jobs')) {
+      body = { jobId: 'job-command-1', status: 'queued' };
+    } else if (urlText.endsWith('/api/tool-jobs/job-command-1')) {
+      body = { jobId: 'job-command-1', status: 'succeeded' };
+    } else if (urlText.endsWith('/api/tool-jobs/job-command-1/result')) {
+      body = {
+        jobId: 'job-command-1',
+        status: 'succeeded',
+        ready: true,
+        result: { result: commandResult },
+      };
+    } else {
+      body = { error: 'unexpected request' };
+    }
+
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => 'application/json' },
+      text: async () => JSON.stringify(body),
+    } as unknown as Response;
+  };
+
+  const server = createDevFlowMcpServer('http://127.0.0.1:3000');
+  const handler = (server as any)._requestHandlers.get('tools/call');
+
+  const response = await handler({
+    method: 'tools/call',
+    params: {
+      name: 'run_project_command',
+      arguments: { projectId: 'proj-1', command: 'test' },
+    },
+  });
+
+  assert.equal(response.isError, undefined);
+  assert.deepEqual(response.structuredContent, commandResult);
+  assert.equal(JSON.parse(response.content[0].text).status, 'succeeded');
+  assert.deepEqual(requests, [
+    'http://127.0.0.1:3000/api/tool-jobs',
+    'http://127.0.0.1:3000/api/tool-jobs/job-command-1',
+    'http://127.0.0.1:3000/api/tool-jobs/job-command-1/result',
+  ]);
+});

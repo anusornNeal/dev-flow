@@ -212,7 +212,13 @@ export function createDevFlowMcpServer(baseUrl: string) {
           if (status === 'succeeded' || status === 'failed' || status === 'timed_out' || status === 'cancelled' || status === 'interrupted') {
             const resultRes = await executeHttpRequest(baseUrl, { method: 'GET', path: `/api/tool-jobs/${jobId}/result` }, correlationId, toolName);
             if (resultRes.response.ok && resultRes.parsedBody && typeof resultRes.parsedBody === 'object' && 'result' in resultRes.parsedBody) {
-              parsedBody = (resultRes.parsedBody as any).result;
+              const jobResult = (resultRes.parsedBody as any).result;
+              // readJobResult returns an envelope shaped like { result, patch }. MCP callers expect
+              // the actual tool payload, not the persistence envelope; otherwise completed async
+              // tools can surface as wrapper objects or null-ish text in ChatGPT.
+              parsedBody = jobResult && typeof jobResult === 'object' && 'result' in jobResult
+                ? (jobResult as any).result
+                : jobResult;
               durationMs = Date.now() - (startPoll - durationMs);
             }
             break;

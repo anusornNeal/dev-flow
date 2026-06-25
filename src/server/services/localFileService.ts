@@ -326,14 +326,14 @@ export function resolveProjectRoot(state: AppState, args: Record<string, any>) {
     return identifierProject.localPath || getDevFlowAppRoot();
   }
 
-  const requestedIdentifier = args.projectId || args.projectName || args.repo || args.repoUrl || args.localPath;
-  if (requestedIdentifier) {
-    throw createApiError(404, 'PROJECT_NOT_FOUND', `Project '${requestedIdentifier}' was not found.`, { affectedId: String(requestedIdentifier) });
-  }
-
   const directLocalPath = typeof args.localPath === 'string' ? args.localPath.trim() : '';
   if (directLocalPath) {
     return directLocalPath;
+  }
+
+  const requestedIdentifier = args.projectId || args.projectName || args.repo || args.repoUrl;
+  if (requestedIdentifier) {
+    throw createApiError(404, 'PROJECT_NOT_FOUND', `Project '${requestedIdentifier}' was not found.`, { affectedId: String(requestedIdentifier) });
   }
 
   return getDevFlowAppRoot();

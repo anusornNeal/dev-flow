@@ -237,3 +237,57 @@ test('mcpToolJobService - write jobs for different repos do not block each other
     __setToolJobTestRunner(toolName, null);
   }
 });
+
+test('mcpToolJobService - stress read/write/command queue ordering on one repo', async () => {
+  const root = makeTempRepo('stress-same-repo');
+  const state = makeState(root);
+  const toolName = `test_stress_${randomUUID()}`;
+  const starts: string[] = [];
+  const blockers = {
+    read1: deferred(),
+    read2: deferred(),
+    write: deferred(),
+    command: deferred(),
+  };
+  installControlledRunner(toolName, starts, blockers);
+
+  try {
+    const read1 = enqueueToolJob(state, toolName, { localPath: root, label: 'read1' }, 'repo-read');
+    const read2 = enqueueToolJob(state, toolName, { localPath: root, label: 'read2' }, 'repo-read');
+    const write = enqueueToolJob(state, toolName, { localPath: root, label: 'write' }, 'repo-write');
+    const command = enqueueToolJob(state, toolName, { localPath: root, label: 'command' }, 'repo-command');
+
+    await waitUntil(() => starts.includes('read1') && starts.includes('read2'), 'Expected both read jobs to start');
+    await new Promise(resolve => setTimeout(resolve, 75));
+    assert.deepStrictEqual(starts, ['read1', 'read2']);
+    assert.strictEqual(getToolJobStatus(read1.jobId)?.status, 'running');
+    assert.strictEqual(getToolJobStatus(read2.jobId)?.status, 'running');
+    assert.strictEqual(getToolJobStatus(write.jobId)?.status, 'queued');
+    assert.strictEqual(getToolJobStatus(command.jobId)?.status, 'queued');
+
+    blockers.read1.resolve();
+    blockers.read2.resolve();
+    await waitForStatus(read1.jobId, 'succeeded');
+    await waitForStatus(read2.jobId, 'succeeded');
+    await waitUntil(() => starts.includes('write'), 'Expected write job to start after both reads finished');
+    await new Promise(resolve => setTimeout(resolve, 75));
+    assert.deepStrictEqual(starts, ['read1', 'read2', 'write']);
+    assert.strictEqual(getToolJobStatus(write.jobId)?.status, 'running');
+    assert.strictEqual(getToolJobStatus(command.jobId)?.status, 'queued');
+
+    blockers.write.resolve();
+    await waitForStatus(write.jobId, 'succeeded');
+    await waitUntil(() => starts.includes('command'), 'Expected command job to start after write finished');
+    assert.deepStrictEqual(starts, ['read1', 'read2', 'write', 'command']);
+    assert.strictEqual(getToolJobStatus(command.jobId)?.status, 'running');
+
+    blockers.command.resolve();
+    await waitForStatus(command.jobId, 'succeeded');
+  } finally {
+    blockers.read1.resolve();
+    blockers.read2.resolve();
+    blockers.write.resolve();
+    blockers.command.resolve();
+    __setToolJobTestRunner(toolName, null);
+  }
+});

@@ -7,7 +7,10 @@ import path from 'node:path';
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-command-result-'));
 process.env.DEVFLOW_DB_PATH = path.join(tempRoot, 'devflow.db');
 
+const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
+executeAllMigrations();
 const { runProjectCommand } = await import('../../src/server/services/projectCommandService.js');
+const { createProject: upsertProject } = await import('../../src/server/repositories/projectRepository.js');
 
 function createProject(name: string, scripts: Record<string, string>) {
   const root = path.join(tempRoot, name);
@@ -17,6 +20,12 @@ function createProject(name: string, scripts: Record<string, string>) {
 }
 
 function stateFor(root: string): any {
+  upsertProject({
+    id: 'project-command',
+    name: 'Command Fixture',
+    repoUrl: 'https://example.com/command',
+    localPath: root,
+  });
   return {
     projectsCache: [
       { id: 'project-command', name: 'Command Fixture', repoUrl: 'https://example.com/command', localPath: root },
@@ -117,6 +126,6 @@ test('runProjectCommand validation failures remain structured ApiErrors', () => 
 
   assert.throws(
     () => runProjectCommand(stateFor(root), { projectId: 'project-command', command: 'unsafe' }),
-    /COMMAND_NOT_ALLOWED/,
+    (error: any) => error?.payload?.code === 'COMMAND_NOT_ALLOWED',
   );
 });

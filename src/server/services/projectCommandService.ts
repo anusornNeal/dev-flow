@@ -159,8 +159,8 @@ function resolveAllowedCommand(root: string, command: AllowedCommand) {
     command,
     executable: process.platform === 'win32' ? process.execPath : 'npm',
     args: process.platform === 'win32'
-      ? [path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js'), 'run', command]
-      : ['run', command],
+      ? [path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js'), 'run', '--silent', command]
+      : ['run', '--silent', command],
   };
 }
 

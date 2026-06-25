@@ -9,6 +9,7 @@ const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-health-'));
 process.env.DEVFLOW_DB_PATH = path.join(tempRoot, 'devflow.db');
 
 const { getWorkflowHealth } = await import('../../src/server/services/workflowHealthService.js');
+const { createJob, updateJobStatus } = await import('../../src/server/repositories/mcpToolJobRepository.js');
 
 function git(root: string, args: string[]) {
   const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', shell: false });
@@ -53,4 +54,23 @@ test('getWorkflowHealth warns for a dirty repo', () => {
   assert.equal(result.status, 'warning');
   assert.equal(result.git.clean, false);
   assert.match(result.recommendations.join('\n'), /Working tree/);
+});
+
+
+test('getWorkflowHealth groups failed tool jobs by tool name', () => {
+  const repo = createRepo('failed-tool-jobs');
+  createJob('job-health-failed-1', 'run_project_command', { command: 'verify' }, `repo:${repo}`);
+  updateJobStatus('job-health-failed-1', {
+    status: 'failed',
+    failureSummary: 'verify failed: lint error',
+  });
+
+  const result = getWorkflowHealth(stateFor(repo), { projectId: 'project-health' });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.status, 'warning');
+  assert.equal(result.diagnostics.failedJobs > 0, true);
+  assert.equal(result.diagnostics.failedJobGroups[0].toolName, 'run_project_command');
+  assert.equal(result.diagnostics.failedJobGroups[0].count >= 1, true);
+  assert.match(result.recommendations.join('\n'), /run_project_command/);
 });

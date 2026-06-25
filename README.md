@@ -1,106 +1,177 @@
 # DevFlow
 
-DevFlow is a local task board and agent orchestration app for managing projects, cards, and AI-assisted execution from a Windows-first desktop workflow.
+DevFlow is a local-first development task board and AI-agent orchestration app. It helps you organize projects and tasks, attach repository context, launch coding agents, track agent runs, verify changes locally, and keep the whole workflow on your machine.
 
-## Current Architecture
+The project is Windows-first, but the Node/Vite app can also run on macOS for normal local development.
 
-- Runtime persistence uses SQLite at `data/devflow.db`.
-- Legacy JSON files are only migration inputs and backups, not the runtime source of truth.
-- On first SQLite startup, DevFlow can migrate old JSON data and keep `.bak` backups.
-- The app includes an MCP server layer for task/project operations used by agents and local tooling.
-- DevFlow Gateway centralizes external connectors (e.g., Jira, GitHub) into composite tools with idempotency and resource locking, reducing LLM reasoning rounds.
+## What DevFlow Can Do
 
-## Run Locally
+- **Project and task board**: manage projects, cards, priorities, statuses, checklists, target files, branches, and review flow.
+- **AI agent orchestration**: prepare agent-ready prompts and launch configured agents such as Codex, Antigravity, or Claude from a DevFlow card.
+- **Agent run tracking**: store queued/running/succeeded/failed/cancelled run history in SQLite and keep prompt/log artifacts under `.devflow/runs/`.
+- **Local repository tools**: inspect git status/diff, read local files, apply guarded edits, run verification commands, and create local commits without pushing.
+- **MCP server**: expose DevFlow tools to ChatGPT/agents so they can work with projects, tasks, files, git, and verification through one controlled interface.
+- **Connector helpers**: centralize external context such as Jira/GitHub configuration into reusable tools when credentials are configured.
+- **Skills and prompts**: store reusable authoring/review guidance and prompt templates in SQLite while keeping built-in skill markdown in `skills/`.
+- **Backup and restore**: export, backup, restore, and migrate local DevFlow data without requiring an external database server.
 
-Prerequisites:
+## Tech Stack
+
+- TypeScript
+- React + Vite frontend
+- Express/Node server
+- SQLite via `better-sqlite3`
+- Model Context Protocol (MCP) server layer
+- Local Windows launcher scripts for one-click startup
+
+## Prerequisites
+
+Required:
 
 - Node.js
 - npm
+- Git
 
-Setup:
+Optional, depending on your workflow:
 
-1. Install dependencies with `npm install`.
-2. Create a local env file if needed from [`.env.example`](.env.example).
-3. Start the app with `npm run dev`.
+- `ngrok` for public tunnel startup through `npm run start:all`
+- Codex, Antigravity, Claude, or other agent CLIs if you want DevFlow to launch agents
+- Jira/GitHub credentials if you want connector-backed context tools
 
-Standard commands:
+## Setup
 
-- `npm run setup` creates the local `data/` directory when needed and bootstraps `.env` from `.env.example` when safe.
-- `npm run start:all` runs setup, starts the DevFlow server, starts ngrok on the DevFlow port, and opens the app in a browser.
-- `npm run doctor` checks Node/npm, env file availability, writable SQLite storage, DB initialization, port `3000`, and backed-up project local paths.
-- `npm test` runs the lightweight verification flow for this repo (`lint` + `doctor`).
-- `npm run dev` starts the DevFlow server in development mode.
-- `npm run build` builds the frontend bundle and the Node server output into `dist/`.
-- `npm run start` runs the built server from `dist/server.cjs`.
-- `npm run lint` runs the TypeScript no-emit verification used in this repo.
-- `npm run mcp` starts the DevFlow MCP server entrypoint.
+1. Clone the repo.
 
-## One-Click Start Flow
+   ```bash
+   git clone https://github.com/anusornNeal/dev-flow.git
+   cd dev-flow
+   ```
 
-This repo keeps a Windows-first startup flow and also includes a Mac-friendly launcher:
+2. Install dependencies.
+
+   ```bash
+   npm install
+   ```
+
+3. Create local environment config.
+
+   ```bash
+   cp .env.example .env
+   ```
+
+   On Windows PowerShell:
+
+   ```powershell
+   Copy-Item .env.example .env
+   ```
+
+4. Bootstrap local folders and default config.
+
+   ```bash
+   npm run setup
+   ```
+
+5. Start DevFlow locally.
+
+   ```bash
+   npm run dev
+   ```
+
+6. Open the app.
+
+   ```text
+   http://localhost:3000
+   ```
+
+## One-Click Startup
+
+DevFlow includes launchers for the normal local workflow:
 
 - Windows: double-click `Start DevFlow.bat` or `scripts/start-all.bat`.
-- Mac: double-click `Start DevFlow.command`.
-- Terminal on any OS: run `npm run start:all`.
+- macOS: double-click `Start DevFlow.command`.
+- Any OS with a terminal: run `npm run start:all`.
 
-The one-click flow runs `npm run setup`, starts the local DevFlow server, starts ngrok every time, and opens `http://localhost:3000` in your browser. Set `DEVFLOW_NGROK_DOMAIN` in `.env` to use a static ngrok domain; otherwise it runs `ngrok http 3000`.
+`npm run start:all` runs setup, starts the DevFlow server, starts ngrok, and opens the browser. If `DEVFLOW_NGROK_DOMAIN` is set in `.env`, DevFlow uses that static ngrok domain; otherwise it runs `ngrok http 3000`.
 
-Make sure `ngrok` is installed and available in your terminal `PATH` on each machine that uses the one-click flow.
+## Common Commands
 
-Set `DEVFLOW_AGENT_TRIGGER_SCRIPT` to override the default trigger script path (`scripts/trigger-agent.bat`).
+| Command | Purpose |
+| --- | --- |
+| `npm run setup` | Create local `data/`, `uploads/`, and backup folders and bootstrap `.env` when safe. |
+| `npm run dev` | Start the development server. |
+| `npm run start:all` | Run setup, start the server, start ngrok, and open the app. |
+| `npm run doctor` | Check Node/npm, env files, SQLite storage, DB initialization, port availability, and project paths. |
+| `npm run typecheck` | Run TypeScript no-emit verification. |
+| `npm run lint` | Alias for TypeScript no-emit verification. |
+| `npm run verify` | Run the repository verification harness. |
+| `npm test` | Alias for `npm run verify`. |
+| `npm run build` | Build the frontend and server into `dist/`. |
+| `npm run start` | Run the built server from `dist/server.js`. |
+| `npm run mcp` | Start the DevFlow MCP server entrypoint. |
+| `npm run backup` | Create a timestamped local backup. |
+| `npm run restore <path>` | Restore from a backup DB or backup bundle. |
+| `npm run migrate:json` | Migrate legacy JSON task/project data into SQLite. |
 
-## Persistence Notes
+Targeted verification scripts are also available, including `test:gateway`, `test:orchestration`, `test:prompt-templates`, `test:start-all`, `test:sqlite`, `test:import-tasks`, `test:figma`, `test:task-row-persistence`, and `test:dvf-0224`.
 
-- SQLite is the active source of truth for tasks, projects, skills, and settings.
-- Agent execution is tracked in SQLite through `agent_runs`; `task.activeAgent` is derived from active run state for UI compatibility.
-- Do not treat `tasks.json` or `projects.json` as active runtime storage.
-- Existing `.bak` files are backups created during migration/recovery flows.
+## Environment Configuration
+
+`.env.example` documents the common local settings:
+
+- `APP_URL`: external app URL when hosted or tunneled.
+- `DEVFLOW_PORT`: local app port, defaulting to `3000` in normal usage.
+- `DEVFLOW_NGROK_DOMAIN`: optional static ngrok domain for one-click startup.
+- `DEVFLOW_OPEN_BROWSER`: whether `start:all` opens the browser automatically.
+- `DEVFLOW_OPEN_BROWSER_DELAY_MS`: browser open delay for startup.
+- `GITHUB_PERSONAL_ACCESS_TOKEN`: optional GitHub connector token fallback.
+- `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN`: optional Jira connector credential fallback.
+
+UI settings can override agent connector credentials where supported.
+
+## Data and Persistence
+
+- SQLite is the runtime source of truth for tasks, projects, skills, settings, and agent runs.
+- The default local DB lives under `data/devflow.db`.
+- Legacy JSON files are migration inputs/backups only, not active runtime storage.
 - No external database server is required.
+- Runtime agent artifacts under `.devflow/runs/` are ignored by git.
 
-## Agent Run Lifecycle
+## Agent Workflow
 
-- Moving an assigned task into `todo`, creating an eligible `todo` task, or assigning agent/model/effort to an already eligible `todo` task can trigger Auto Work when enabled.
-- DevFlow validates the selected agent/model through `config/agents/<agent>.json` before it creates a run. Invalid combinations fail before a misleading active run is created.
-- DevFlow creates an `agent_runs` row, writes the compiled prompt to `.devflow/runs/<runId>/prompt.md`, then launches `scripts/trigger-agent.bat` with a short prompt-file reference.
-- Prompt files start with launch metadata: selected agent, DevFlow model label, resolved CLI model id, selected effort, effort handling mode, and execution mode.
-- Reasoning effort is passed only through an explicit configured CLI flag. Agents without a verified effort flag use prompt metadata as the fallback; no effort text is appended as a positional CLI argument.
-- Codex runs generate `.devflow/runs/<runId>/launch.bat` and start that script in a visible Windows terminal. The script changes into the task project's local path and keeps the terminal open after the Codex process exits.
-- Active run statuses are `queued`, `starting`, and `running`; settled statuses are `succeeded`, `failed`, and `cancelled`.
-- Trigger failures mark the run `failed` and clear the active task lock so the task can be retried.
-- Runs older than 30 minutes in an active state are treated as stale and cancelled before new trigger busy checks.
-- Moving a task to `ready-for-review` or `done` settles its active run as `succeeded`.
-- Use `POST /api/tasks/:id/agent-runs/retry` to retry the latest failed run.
-- Use `POST /api/tasks/:id/agent-runs/cancel` to clear an active or stuck run.
-- Use `GET /api/tasks/:id/agent-runs` to inspect run history.
-- Runtime prompt/log files under `.devflow/runs/` are ignored by git and are not part of normal DB backup/export files.
-- The runner uses `DEVFLOW_API_BASE_URL` when it needs an API reference, defaulting to `http://localhost:3000`.
-- The runner defaults to safe execution mode. Set `DEVFLOW_AGENT_EXECUTION_MODE=full` only for trusted local full-access runs.
-- The previous trigger behavior is documented in [`docs/agent-trigger-legacy-behavior.md`](docs/agent-trigger-legacy-behavior.md).
+A typical agent run looks like this:
 
-### Debugging Agent Launches
+1. Create or update a DevFlow card with clear scope, target files, acceptance criteria, and verification.
+2. Assign an agent/model/effort supported by `config/agents/<agent>.json`.
+3. Move the card into an executable status when Auto Work is enabled.
+4. DevFlow creates an `agent_runs` record and writes `.devflow/runs/<runId>/prompt.md`.
+5. DevFlow launches the configured trigger script, defaulting to `scripts/trigger-agent.bat` unless `DEVFLOW_AGENT_TRIGGER_SCRIPT` is set.
+6. The agent works from the prompt and local repo context.
+7. DevFlow tracks run status and keeps logs/prompts for inspection.
 
-- Inspect `.devflow/runs/<runId>/agent.log` for cwd, executable source, argv preview, prompt path, launch script path, model mapping, effort handling, execution mode, and errors.
-- For Codex, inspect `.devflow/runs/<runId>/launch.bat` to confirm the working directory and resolved executable/arguments.
-- If launch fails before terminal handoff, the run should be `failed` with an error message. If a detached process is stuck, cancel it with `POST /api/tasks/:id/agent-runs/cancel`.
-- Run artifacts intentionally avoid writing GitHub/Jira token values or secret environment values.
+For repository work through MCP, the recommended safe loop is:
 
-## Skills
+1. Inspect repo context with `get_repo_context_bundle`.
+2. Read exact files before editing.
+3. Dry-run edits before apply.
+4. Inspect git diff.
+5. Run targeted verification with `run_project_command`.
+6. Dry-run `commit_git_changes`, then commit only intended files.
+7. Move the task with `move_task_to_status` when closing or reopening cards.
 
-- Project skill markdown lives under [`skills/`](skills).
-- Runtime skill data should be read through the app/API and stored in SQLite, not assumed to come directly from markdown files after import.
-- Skill markdown content should be preserved exactly when imported or displayed.
+DevFlow's git tools are intentionally local-only. They do not push, rebase, reset, amend, or checkout branches.
 
-## Backup and Restore
+## Backup, Restore, and Migration
 
-- **Initial Seed**: On fresh SQLite DB creation, only built-in master skills are seeded. No custom skills or sample data are initialized.
-- **Backup**: Run `npm run backup` to create a timestamped backup of the current DB in `data/`.
-- **Restore**: Run `npm run restore <path-to-backup-db>`. It requires explicit confirmation and creates a safety backup of your current DB before restoring.
+- Run `npm run backup` to create a timestamped backup under `data/`.
+- Run `npm run restore <path-to-backup>` to restore a `.db` file or backup bundle. Restore asks for confirmation and creates a safety backup first.
+- Use the Settings screen export/import flow when moving data between machines.
+- Run `npm run migrate:json` only when importing old JSON-based DevFlow data into SQLite.
 
-## Migrating to Another Machine
+## Moving to Another Machine
 
-To move your DevFlow local setup to another computer:
-1. Open **Settings** in DevFlow on your old machine.
-2. Click **Export Backup** in the Data Management section to download a portable `.db` file (secrets like GitHub/Jira tokens are safely excluded).
-3. Copy the downloaded `.db` file to your new machine.
-4. Clone the repository on the new machine, run `npm install`, and start DevFlow.
-5. Either replace `data/devflow.db` with the exported file manually, or run `npm run restore <path-to-exported-db>` to load your data.
+1. Open **Settings** in DevFlow on the old machine.
+2. Click **Export Backup** in the Data Management section.
+3. Copy the exported backup to the new machine.
+4. Clone this repo on the new machine and run `npm install`.
+5. Restore through the Settings UI or run `npm run restore <path-to-exported-backup>`.
+6. Start DevFlow with `npm run dev` or `npm run start:all`.

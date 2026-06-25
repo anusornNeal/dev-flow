@@ -12,6 +12,12 @@ test('buildChatGptStarterPrompt tells ChatGPT to read authoring skills before re
   assert.match(prompt, /list_projects/);
   assert.match(prompt, /list_local_files/);
   assert.match(prompt, /read_local_file/);
+  assert.match(prompt, /read_file_snippets_batch/);
+  assert.match(prompt, /edit_local_files_batch/);
+  assert.match(prompt, /safe_edit_local_file/);
+  assert.match(prompt, /write_local_file/);
+  assert.match(prompt, /apply_patch/);
+  assert.match(prompt, /commit_git_changes/);
   assert.match(prompt, /get_jira_authoring_bundle/);
   assert.match(prompt, /get_repo_inspection_index/);
   assert.match(prompt, /validate_task_quality/);

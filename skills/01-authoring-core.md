@@ -56,6 +56,33 @@ Stop repo inspection when you can name:
 
 If targeted inspection cannot identify likely files/functions, create a blocked/prep card instead of guessing.
 
+## Local file read/write workflow
+
+Repository edits are a guarded workflow, not a free-form rewrite.
+
+Before reading files:
+- Use `get_repo_context_bundle` first when a project is known. Include diff context when current changes may matter.
+- Use targeted queries based on task ids, screen names, visible strings, route names, classes, functions, or failing tests.
+- Use `read_file_snippets_batch` for several focused ranges, or `read_local_file` for one exact file/range.
+- Prefer local reads before remote GitHub/Jira reads unless the user explicitly asks for remote data.
+
+Before writing files:
+- Confirm the working tree is clean or understand the existing diff.
+- Read the exact target file content or range first; use the returned file revision/hash as a guard when the write tool supports it.
+- Choose the lowest-risk write tool:
+  - `edit_local_files_batch` for one or more anchored edits; always dry-run first, then apply the same validated intent.
+  - `safe_edit_local_file` for a small anchored edit in a large route, contract, service, or generated-looking file.
+  - `apply_patch` for compact unified diffs when context is stable; run dry-run/check first.
+  - `write_local_file` only for new files, generated files, or small full-file replacements where the complete content is known.
+- Do not use full-file writes for large source files when an anchored edit is possible.
+- Do not retry the same failed write payload unchanged. Read the error, adjust the anchor/context/tool, then try a new payload.
+
+After writing files:
+- Inspect `get_git_diff` or targeted file snippets before claiming the edit is correct.
+- Run the most targeted available verification first; run the broader `test`/`verify` preset when the change touches shared workflow, skill, schema, queue, or repository tooling.
+- Commit one small scope at a time. Use `commit_git_changes` dry-run before the real commit, stage only the intended files, and never push.
+- If a tool returns a `jobId`, poll status/log/result until the final result is known before continuing.
+
 ## Implementation map
 
 Every implementation-ready card that came from Jira or a bug report must include an implementation map in `repoContext`.

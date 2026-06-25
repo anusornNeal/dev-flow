@@ -21,6 +21,15 @@ test('authoring skills require Jira bundle first and frontend/backend split deci
   assert.match(authoringCore, /Keep one general card only when/);
 });
 
+test('authoring skills define guarded local file read and write workflow', () => {
+  assert.match(authoringCore, /Local file read\/write workflow/);
+  assert.match(authoringCore, /read_file_snippets_batch/);
+  assert.match(authoringCore, /edit_local_files_batch/);
+  assert.match(authoringCore, /Do not retry the same failed write payload unchanged/);
+  assert.match(schemaReference, /write_local_file/);
+  assert.match(schemaReference, /commit_git_changes/);
+});
+
 test('schema template and examples include implementation maps', () => {
   assert.match(schemaReference, /Implementation map:\\n- File:/);
   assert.doesNotMatch(schemaReference, /"repoContext": "Summarize concrete repo findings here\."/);

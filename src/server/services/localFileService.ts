@@ -339,8 +339,24 @@ export function resolveProjectRoot(state: AppState, args: Record<string, any>) {
   return getDevFlowAppRoot();
 }
 
+function normalizeToolRelativePath(value?: string) {
+  return String(value || '.')
+    .trim()
+    .replace(/\\/g, '/');
+}
+
+function toToolRelativePath(root: string, targetPath: string) {
+  const relativePath = path.relative(root, targetPath) || '.';
+  return relativePath.replace(/\\/g, '/');
+}
+
 export function resolveSafePath(root: string, relativePath?: string) {
-  const candidate = path.resolve(root, relativePath || '.');
+  const normalizedRelativePath = normalizeToolRelativePath(relativePath || '.');
+  if (/^[A-Za-z]:\//.test(normalizedRelativePath) || normalizedRelativePath.startsWith('//')) {
+    throw createApiError(403, 'FILE_ACCESS_DENIED', 'Requested path is outside the allowed project root.');
+  }
+
+  const candidate = path.resolve(root, normalizedRelativePath || '.');
   const normalizedRoot = path.resolve(root);
   const rootWithSep = normalizedRoot.endsWith(path.sep) ? normalizedRoot : `${normalizedRoot}${path.sep}`;
   if (candidate !== normalizedRoot && !candidate.startsWith(rootWithSep)) {
@@ -354,7 +370,7 @@ export function listLocalFiles(state: AppState, args: Record<string, any>) {
   const targetPath = resolveSafePath(root, String(args.path || '.'));
   const recursive = args.recursive === true || String(args.recursive).toLowerCase() === 'true';
   const limit = Number.isFinite(Number(args.limit)) ? Math.max(1, Math.min(200, Number(args.limit))) : 100;
-  const relativeBase = path.relative(root, targetPath) || '.';
+  const relativeBase = toToolRelativePath(root, targetPath);
 
   const results: Array<{ path: string; type: 'file' | 'directory' }> = [];
   const visit = (currentPath: string) => {
@@ -364,7 +380,7 @@ export function listLocalFiles(state: AppState, args: Record<string, any>) {
       if (results.length >= limit) break;
       if (shouldSkipEntry(entry.name, args)) continue;
       const fullPath = path.join(currentPath, entry.name);
-      const relativePath = path.relative(root, fullPath) || '.';
+      const relativePath = toToolRelativePath(root, fullPath);
       results.push({ path: relativePath, type: entry.isDirectory() ? 'directory' : 'file' });
       if (recursive && entry.isDirectory()) {
         visit(fullPath);
@@ -379,7 +395,7 @@ export function listLocalFiles(state: AppState, args: Record<string, any>) {
   if (fs.statSync(targetPath).isDirectory()) {
     visit(targetPath);
   } else {
-    results.push({ path: path.relative(root, targetPath), type: 'file' });
+    results.push({ path: toToolRelativePath(root, targetPath), type: 'file' });
   }
 
   return {
@@ -413,7 +429,7 @@ export function readLocalFile(state: AppState, args: Record<string, any>) {
   if (mode === 'metadata') {
     return {
       root,
-      path: path.relative(root, targetPath),
+      path: toToolRelativePath(root, targetPath),
       bytes: stat.size,
       totalLines: countLinesSync(targetPath),
       modifiedAt: stat.mtime.toISOString(),
@@ -453,7 +469,7 @@ export function readLocalFile(state: AppState, args: Record<string, any>) {
 
   return {
     root,
-    path: path.relative(root, targetPath),
+    path: toToolRelativePath(root, targetPath),
     content,
     bytes: stat.size,
     returnedBytes: byteLength,
@@ -543,7 +559,7 @@ export function writeLocalFile(state: AppState, args: Record<string, any>) {
 
   return {
     root,
-    path: path.relative(root, targetPath),
+    path: toToolRelativePath(root, targetPath),
     bytes: Buffer.byteLength(content, 'utf8'),
     created: !existed,
     updatedAt: new Date().toISOString(),

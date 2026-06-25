@@ -39,6 +39,11 @@ function normalizeGitPath(filePath: string) {
   return filePath.replace(/\\/g, '/');
 }
 
+function getRelativeGitPath(root: string, filePath: string) {
+  const resolvedPath = resolveSafePath(root, filePath);
+  return normalizeGitPath(path.relative(root, resolvedPath));
+}
+
 function parsePorcelainStatus(output: string) {
   const lines = output.split(/\r?\n/).filter(Boolean);
   return lines.map((line) => ({
@@ -123,7 +128,7 @@ function toStatusSummary(root: string) {
   return {
     count: files.length,
     stagedCount: files.filter((file) => file.staged).length,
-    files: files.map((file) => ({ path: file.path, staged: file.staged, status: file.status })),
+    files: files.map((file) => ({ path: file.normalizedPath, staged: file.staged, status: file.status })),
   };
 }
 
@@ -149,9 +154,7 @@ export function getGitLog(state: AppState, args: Record<string, any>) {
 
   const filePath = typeof args.path === 'string' ? args.path.trim() : '';
   if (filePath) {
-    const resolvedPath = resolveSafePath(root, filePath);
-    const relativePath = path.relative(root, resolvedPath);
-    gitArgs.push('--', relativePath);
+    gitArgs.push('--', getRelativeGitPath(root, filePath));
   }
 
   const output = runGit(gitArgs, root);
@@ -178,9 +181,7 @@ export function getGitDiff(state: AppState, args: Record<string, any>) {
 
   const filePath = typeof args.path === 'string' ? args.path.trim() : '';
   if (filePath) {
-    const resolvedPath = resolveSafePath(root, filePath);
-    const relativePath = path.relative(root, resolvedPath);
-    gitArgs.push('--', relativePath);
+    gitArgs.push('--', getRelativeGitPath(root, filePath));
   }
 
   const output = runGit(gitArgs, root);
@@ -203,9 +204,7 @@ export function getGitShow(state: AppState, args: Record<string, any>) {
 
   const filePath = typeof args.path === 'string' ? args.path.trim() : '';
   if (filePath) {
-    const resolvedPath = resolveSafePath(root, filePath);
-    const relativePath = path.relative(root, resolvedPath);
-    gitArgs.push('--', relativePath);
+    gitArgs.push('--', getRelativeGitPath(root, filePath));
   }
 
   const output = runGit(gitArgs, root);
@@ -233,7 +232,7 @@ export function getGitStatus(state: AppState, args: Record<string, any>) {
   return {
     root,
     count: files.length,
-    files: files.map((file) => ({ path: file.path, staged: file.staged, status: file.status })),
+    files: files.map((file) => ({ path: file.normalizedPath, staged: file.staged, status: file.status })),
   };
 }
 

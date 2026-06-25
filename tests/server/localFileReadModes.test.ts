@@ -17,6 +17,8 @@ const state: any = {
 
 fs.writeFileSync(path.join(tempDir, 'sample.txt'), ['one', 'two', 'three', 'four'].join('\n'), 'utf8');
 fs.writeFileSync(path.join(tempDir, 'other.txt'), ['alpha', 'beta', 'gamma'].join('\n'), 'utf8');
+fs.mkdirSync(path.join(tempDir, 'nested', 'folder'), { recursive: true });
+fs.writeFileSync(path.join(tempDir, 'nested', 'folder', 'slash.txt'), 'slash path', 'utf8');
 
 test('readLocalFile can return a line window instead of the full file', () => {
   const result = readLocalFile(state, {
@@ -43,6 +45,16 @@ test('readLocalFile can return metadata without content', () => {
   assert.equal(result.content, undefined);
   assert.equal(result.bytes, Buffer.byteLength('one\ntwo\nthree\nfour', 'utf8'));
   assert.equal(result.totalLines, 4);
+});
+
+test('readLocalFile accepts Windows-style separators and returns slash-normalized paths', () => {
+  const result = readLocalFile(state, {
+    projectId: 'project-read-1',
+    filePath: 'nested\\\\folder\\\\slash.txt',
+  });
+
+  assert.equal(result.path, 'nested/folder/slash.txt');
+  assert.equal(result.content, 'slash path');
 });
 
 

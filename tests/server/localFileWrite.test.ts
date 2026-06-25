@@ -22,9 +22,27 @@ test('writeLocalFile writes content inside the resolved project root', () => {
     content: 'written by tool\n',
   });
 
-  assert.equal(result.path, path.join('notes', 'result.txt'));
+  assert.equal(result.path, 'notes/result.txt');
   assert.equal(result.bytes, Buffer.byteLength('written by tool\n', 'utf8'));
   assert.equal(fs.readFileSync(path.join(tempDir, 'notes', 'result.txt'), 'utf8'), 'written by tool\n');
+});
+
+test('writeLocalFile accepts Windows-style separators and returns portable slash paths', () => {
+  const result = writeLocalFile(state, {
+    projectId: 'project-write-1',
+    filePath: 'windows\\\\style\\\\result.txt',
+    content: 'portable path\n',
+  });
+
+  assert.equal(result.path, 'windows/style/result.txt');
+  assert.equal(fs.readFileSync(path.join(tempDir, 'windows', 'style', 'result.txt'), 'utf8'), 'portable path\n');
+
+  const readResult = readLocalFile(state, {
+    projectId: 'project-write-1',
+    filePath: 'windows\\\\style\\\\result.txt',
+  });
+  assert.equal(readResult.path, 'windows/style/result.txt');
+  assert.equal(readResult.content, 'portable path\n');
 });
 
 

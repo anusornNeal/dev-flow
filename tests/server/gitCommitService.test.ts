@@ -95,6 +95,26 @@ test('commitGitChanges commits selected files without staging unrelated changes'
   assert.equal(status.files[0].path, 'unselected.txt');
 });
 
+test('git tools accept Windows-style selected file paths and return slash-normalized paths', () => {
+  const repo = createRepo('windows-style-selected-files');
+  fs.mkdirSync(path.join(repo, 'nested', 'dir'), { recursive: true });
+  fs.writeFileSync(path.join(repo, 'nested', 'dir', 'selected.txt'), 'selected\n');
+  fs.writeFileSync(path.join(repo, 'nested', 'dir', 'unselected.txt'), 'unselected\n');
+
+  const status = getGitStatus(stateFor(repo), { projectId: 'project-git' });
+  assert.ok(status.files.some((file: any) => file.path === 'nested/dir/selected.txt'));
+
+  const result = commitGitChanges(stateFor(repo), {
+    projectId: 'project-git',
+    files: ['nested\\\\dir\\\\selected.txt'],
+    message: 'feat: commit windows-style selected path',
+  });
+
+  assert.deepEqual(result.changedFiles, ['nested/dir/selected.txt']);
+  const afterStatus = getGitStatus(stateFor(repo), { projectId: 'project-git' });
+  assert.deepEqual(afterStatus.files.map((file: any) => file.path), ['nested/dir/unselected.txt']);
+});
+
 test('commitGitChanges dryRun previews without staging or committing', () => {
   const repo = createRepo('dry-run');
   fs.writeFileSync(path.join(repo, 'preview.txt'), 'preview\n');

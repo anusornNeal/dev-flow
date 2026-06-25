@@ -90,6 +90,100 @@ export function getProjectStartContext(state: AppState, args: Record<string, any
   };
 }
 
+function formatSymbolSummary(symbols: unknown, maxSymbols = 8) {
+  if (!Array.isArray(symbols) || symbols.length === 0) return '';
+  return symbols.slice(0, maxSymbols).join(', ');
+}
+
+export function getRepoReadSnapshot(state: AppState, args: Record<string, any>) {
+  const project = resolveProject(state, args);
+  const query = typeof args.q === 'string' ? args.q : typeof args.query === 'string' ? args.query : '';
+  const indexLimit = parsePositiveInt(args.limit, 10, 30);
+  const start = getProjectStartContext(state, { ...args, projectId: project.id, limit: args.topLevelLimit || 30 });
+  const index = getRepoInspectionIndex(state, {
+    projectId: project.id,
+    q: query,
+    path: args.path,
+    limit: indexLimit,
+    includeIgnored: args.includeIgnored,
+  });
+
+  const likelyFiles = (index.matches || []).slice(0, indexLimit).map((match: any) => {
+    let metadata: any = undefined;
+    try {
+      const fileMetadata = readLocalFile(state, {
+        projectId: project.id,
+        filePath: match.path,
+        mode: 'metadata',
+      });
+      metadata = {
+        bytes: fileMetadata.bytes,
+        totalLines: fileMetadata.totalLines,
+        modifiedAt: fileMetadata.modifiedAt,
+        revision: fileMetadata.revision,
+      };
+    } catch (error: any) {
+      metadata = { error: error?.message || 'Metadata unavailable.' };
+    }
+
+    return {
+      path: match.path,
+      extension: match.extension,
+      score: match.score,
+      symbols: match.symbols,
+      metadata,
+    };
+  });
+
+  const changedFiles = Array.isArray(start.git?.files) ? start.git.files : [];
+  const branch = start.git?.branch || 'unknown';
+  const gitLine = start.git?.available
+    ? `Git: branch ${branch}, ${start.git.changedFiles || 0} changed file(s).`
+    : `Git: unavailable${start.git?.reason ? ` (${start.git.reason})` : ''}.`;
+  const likelyLines = likelyFiles.length
+    ? likelyFiles.slice(0, 8).map((file: any, index) => {
+      const symbols = formatSymbolSummary(file.symbols);
+      return `${index + 1}. ${file.path}${symbols ? ` [${symbols}]` : ''}`;
+    })
+    : ['No likely files matched the query.'];
+  const summary = [
+    `Project: ${start.project.name} (${start.project.id})`,
+    gitLine,
+    `Query: ${query || '(none)'}`,
+    `Likely files: ${likelyFiles.length}`,
+    ...likelyLines,
+    changedFiles.length ? `Changed files: ${changedFiles.map((file: any) => file.path).join(', ')}` : 'Changed files: none',
+    `Next: use read_file_snippets_batch for focused file ranges or get_repo_context_bundle when snippet content/diff is needed.`,
+  ].join('\n');
+
+  return {
+    project: start.project,
+    query,
+    path: typeof args.path === 'string' ? args.path : '.',
+    git: {
+      available: start.git?.available === true,
+      branch: start.git?.branch,
+      changedFiles: start.git?.changedFiles || 0,
+      files: changedFiles,
+    },
+    hints: start.hints,
+    index: {
+      cache: index.cache,
+      generatedAt: index.generatedAt,
+      metadata: index.metadata,
+      count: index.matches?.length || 0,
+    },
+    likelyFiles,
+    summary,
+    recommendedNextTools: [
+      'read_file_snippets_batch',
+      'get_repo_context_bundle',
+      'search_local_files',
+      'run_project_command',
+    ],
+  };
+}
+
 export function getRepoContextBundle(state: AppState, args: Record<string, any>) {
   const project = resolveProject(state, args);
   const query = typeof args.q === 'string' ? args.q : typeof args.query === 'string' ? args.query : '';

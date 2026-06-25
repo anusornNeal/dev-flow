@@ -375,6 +375,28 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
     }),
   },
   {
+    name: 'repo_read_snapshot',
+    description: 'Get a compact server-side repo summary without file contents: git status, likely files, metadata, and recommended follow-up reads.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...projectIdentifierProperties,
+        q: { type: 'string', description: 'Search query for repo index matches.' },
+        query: { type: 'string', description: 'Alias for q.' },
+        path: { type: 'string', description: 'Optional relative directory to index.' },
+        limit: { type: 'number', description: 'Maximum likely files returned.' },
+        topLevelLimit: { type: 'number', description: 'Maximum top-level file entries considered in start context.' },
+        includeIgnored: { type: 'boolean', description: 'Allow index to include ignored/generated folders.' },
+      },
+    },
+    outputSchema: { type: 'object' },
+    lightweight: true,
+    buildHttpRequest: (args) => ({
+      method: 'GET',
+      path: withQuery('/api/repo-read-snapshot', args),
+    }),
+  },
+  {
     name: 'list_tasks',
     description: 'List tasks with optional filters. Local-first and ChatGPT-friendly: defaults to a small minimal page; pass projectId/status/q and an explicit limit before asking for broader context.',
     inputSchema: {

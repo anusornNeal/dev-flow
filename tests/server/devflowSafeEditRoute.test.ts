@@ -30,3 +30,11 @@ test('devflowContract exposes read_file_snippets_batch', () => {
   assert.equal(req.method, 'POST');
   assert.equal(req.path, '/api/local-files/read-batch');
 });
+
+test('devflowContract exposes repo_read_snapshot', () => {
+  const tool = getToolDefinitionByName('repo_read_snapshot');
+  assert.ok(tool);
+  const req = tool.buildHttpRequest({ projectId: 'project-1' });
+  assert.equal(req.method, 'GET');
+  assert.ok(req.path.startsWith('/api/repo-read-snapshot'));
+});

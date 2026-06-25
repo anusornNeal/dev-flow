@@ -7,11 +7,12 @@ import path from 'node:path';
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-start-context-'));
 process.env.DEVFLOW_DB_PATH = path.join(tempDir, 'devflow.db');
 
-const { getProjectStartContext } = await import('../../src/server/services/projectStartContextService.js');
+const { getProjectStartContext, getRepoReadSnapshot } = await import('../../src/server/services/projectStartContextService.js');
 
 fs.writeFileSync(path.join(tempDir, 'package.json'), '{"name":"fixture"}\n', 'utf8');
 fs.writeFileSync(path.join(tempDir, 'README.md'), '# Fixture\n', 'utf8');
 fs.mkdirSync(path.join(tempDir, 'src'));
+fs.writeFileSync(path.join(tempDir, 'src', 'snapshotService.ts'), "export function snapshotExample() { return 'snapshot'; }\n", 'utf8');
 
 const state: any = {
   projectsCache: [
@@ -28,6 +29,17 @@ test('getProjectStartContext returns compact project and top-level file context'
   assert.deepEqual(result.hints.present.sort(), ['README.md', 'package.json']);
   assert.ok(result.recommendedNextTools.includes('read_local_file'));
   assert.ok(result.git.available === false || typeof result.git.branch === 'string');
+});
+
+test('getRepoReadSnapshot returns compact metadata without file contents', () => {
+  const result = getRepoReadSnapshot(state, { projectId: 'project-start-1', q: 'snapshot', limit: 5 });
+
+  assert.equal(result.project.id, 'project-start-1');
+  assert.ok(result.summary.includes('read_file_snippets_batch'));
+  assert.ok(result.recommendedNextTools.includes('read_file_snippets_batch'));
+  assert.ok(result.likelyFiles.length >= 1);
+  assert.equal('content' in result.likelyFiles[0], false);
+  assert.equal(typeof result.likelyFiles[0].metadata.revision, 'string');
 });
 
 test.after(() => {

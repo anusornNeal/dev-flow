@@ -11,7 +11,7 @@ import { editFilesBatch } from '../services/fileEditBatchService';
 import { runProjectCommand } from '../services/projectCommandService';
 import { parseTestReport } from '../services/testReportParserService';
 import { getGitLog, getGitDiff, getGitShow, getGitStatus, getGitBranch, commitGitChanges } from '../services/gitService';
-import { getProjectStartContext, getRepoContextBundle } from '../services/projectStartContextService';
+import { getProjectStartContext, getRepoContextBundle, getRepoReadSnapshot } from '../services/projectStartContextService';
 import { getDevFlowDiagnostics, getToolCallSummary } from '../services/mcpToolMonitor';
 import { getWorkflowHealth } from '../services/workflowHealthService';
 import { getRepoInspectionIndex } from '../services/repoInspectionIndexService';
@@ -159,6 +159,14 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
   app.get('/api/repo-context-bundle', (req, res) => {
     try {
       return res.json(getRepoContextBundle(deps.state, req.query as Record<string, any>));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.get('/api/repo-read-snapshot', (req, res) => {
+    try {
+      return res.json(getRepoReadSnapshot(deps.state, req.query as Record<string, any>));
     } catch (error) {
       return sendApiError(res, error);
     }

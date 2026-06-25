@@ -103,6 +103,8 @@ Use only one project identifier when possible.
 
 Default: `backlog`
 
+Authoring default: set newly created parent, child, subtask, draft, and implementation-ready cards to `backlog` unless the user explicitly asks to queue/start/move the work to execution. Do not infer `todo` from implementation readiness alone.
+
 ### priority
 
 ```json

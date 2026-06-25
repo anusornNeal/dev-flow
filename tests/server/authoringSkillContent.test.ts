@@ -21,6 +21,15 @@ test('authoring skills require Jira bundle first and frontend/backend split deci
   assert.match(authoringCore, /Keep one general card only when/);
 });
 
+test('authoring skills default to backlog and prefer parent child decomposition', () => {
+  assert.match(authoringCore, /Subtask-first decomposition rule/);
+  assert.match(authoringCore, /Do not hide real subtask work inside a long checklist/);
+  assert.match(authoringCore, /keep every parent and child in `backlog` by default/);
+  assert.match(authoringCore, /Default card status is `backlog`/);
+  assert.match(authoringCore, /Do not set `todo` merely because the card is well specified/);
+  assert.match(schemaReference, /Do not infer `todo` from implementation readiness alone/);
+});
+
 test('authoring skills define guarded local file read and write workflow', () => {
   assert.match(authoringCore, /Local file read\/write workflow/);
   assert.match(authoringCore, /read_file_snippets_batch/);

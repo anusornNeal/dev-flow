@@ -204,6 +204,31 @@ When merging:
 - include acceptance criteria for every distinct behavior,
 - explain the merge in `reasoning`.
 
+## Subtask-first decomposition rule
+
+Default to splitting work into parent/child cards when the request contains more than one independently verifiable implementation slice. Do not hide real subtask work inside a long checklist.
+
+Before creating one combined card, explicitly check whether separate child cards would be safer. Split when any child can have its own target files, acceptance criteria, verification, branch, owner, or implementation order.
+
+Strong split triggers:
+- frontend plus backend/data/API work,
+- multiple screens, tabs, routes, or flows,
+- shared foundation plus feature slices,
+- refactor or migration plus behavior change,
+- tests or tooling work that can be verified independently,
+- high-conflict files where parallel work would be risky,
+- unclear sequencing where a foundation card should define contracts first.
+
+When splitting:
+- create a parent orchestration card for requirement, architecture, child boundaries, integration, and final verification,
+- create child cards for each narrow implementation slice,
+- keep every parent and child in `backlog` by default unless the user explicitly asks to queue/start implementation,
+- give each child focused `targetFiles`, its own acceptance criteria, its own verification, and clear out-of-scope boundaries,
+- avoid duplicated sibling target files unless unavoidable; explain unavoidable overlap in `reasoning`,
+- parent checklist should manage child creation/integration/review; child checklist should contain implementation steps only for that slice.
+
+If tool limits or missing context prevent creating all children immediately, create the parent in `backlog` with a planned child breakdown in `repoContext` and checklist, or return the proposed parent/child set for review. Do not collapse a multi-slice plan into one oversized implementation card just because it is faster.
+
 ## Split rule
 
 Split into parent/child cards when work includes:
@@ -376,13 +401,16 @@ Keep empty by default. Use only when stable, accessible, and truly required.
 
 ## Status rule
 
-- `backlog`: requirement needs review, blocked/prep, or user only asked to create a card.
-- `todo`: implementation-ready and user clearly wants it ready for execution.
+Default card status is `backlog`.
+
+Use:
+- `backlog`: default for every newly authored card, draft, parent card, child/subtask card, blocked/prep card, or request phrased as “write/create/update a card”.
+- `todo`: only when the user explicitly says the card should be ready for execution, queued, started, assigned for implementation, or moved out of backlog. The card must also pass implementation-ready quality gates.
 - `in-progress`: actively being worked.
 - `ready-for-review`: implementation finished and needs review.
 - `done`: reviewed and accepted.
 
-If the user only says “write a card”, prefer `backlog` unless they clearly want execution-ready work.
+Do not set `todo` merely because the card is well specified. A card can be implementation-ready and still belong in `backlog` until the user asks to execute it.
 
 ## Quality gate
 

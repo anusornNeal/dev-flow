@@ -517,7 +517,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
     outputSchema: { type: 'object', properties: { content: { type: 'string' } } },
     buildHttpRequest: (args) => ({
       method: 'GET',
-      path: withQuery(`/api/tasks/${encodePathSegment(String(args.taskId))}/prompt`, {
+      path: withQuery(`/api/tasks/${encodePathSegment(String(args.taskId))}/prompt-json`, {
         includeLogs: args.includeLogs,
         mode: args.mode,
       }),

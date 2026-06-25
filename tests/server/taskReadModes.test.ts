@@ -118,6 +118,14 @@ test('GET /api/tasks?mode=board returns board fields without full detail blobs',
   assert.equal(item.acceptanceCriteria, undefined);
 });
 
+test('GET prompt-json returns JSON content', async () => {
+  const response = await fetch(base + '/api/tasks/DVF-0900/prompt-json');
+  assert.equal(response.status, 200);
+  const body = await response.json() as { content: string; taskId: string };
+  assert.equal(body.taskId, 'task-board-1');
+  assert.ok(body.content.includes('# DevFlow Agent Task'));
+});
+
 test.after(async () => {
   await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   try {

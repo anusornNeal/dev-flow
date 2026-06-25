@@ -48,3 +48,11 @@ test('devflowContract exposes complete_task_review', () => {
   assert.deepEqual(req.body, { status: 'done' });
   assert.equal(req.headers?.['x-agent-request'], 'true');
 });
+
+test('devflowContract maps get_task_prompt to JSON route', () => {
+  const tool = getToolDefinitionByName('get_task_prompt');
+  assert.ok(tool);
+  const req = tool.buildHttpRequest({ taskId: 'DVF-1' });
+  assert.equal(req.method, 'GET');
+  assert.ok(req.path.startsWith('/api/tasks/DVF-1/prompt-json'));
+});

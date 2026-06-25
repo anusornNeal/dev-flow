@@ -14,6 +14,8 @@ import {
 } from '../services/promptTemplateService';
 import { getDevFlowAppRoot } from '../../lib/devFlowPaths';
 import { getProjectRulesContext } from '../services/projectRulesService';
+import { getActiveRunForTask, getLatestAgentRunForTask } from '../repositories/agentRunRepository';
+import { getAgentTaskContext, renderTaskPrompt } from '../services/taskService';
 
 type ProjectIdentifier = {
   projectId?: string;
@@ -39,6 +41,27 @@ function readStringField(value: unknown): string | undefined {
 }
 
 export function registerPromptOverrideRoutes(app: express.Express, deps: ApiRouteDeps) {
+  app.get('/api/tasks/:id/prompt-json', (req, res) => {
+    try {
+      const includeLogs = req.query.includeLogs === 'true' || req.query.mode === 'full' || req.query.mode === 'debug';
+      const context = getAgentTaskContext(deps.state, req.params.id, includeLogs);
+      if (!context) return res.status(404).json({ error: 'Task not found' });
+
+      const activeRun = getActiveRunForTask(context.task.id) || getLatestAgentRunForTask(context.task.id);
+      const runId = activeRun?.id || 'preview-run-id';
+      const renderResult = renderTaskPrompt(deps.state, context.task.id, { runId, includeLogs }).renderResult;
+      return res.json({
+        content: renderResult.content,
+        taskId: context.task.id,
+        displayId: context.task.displayId,
+        runId,
+        usedSkills: renderResult.usedSkills || [],
+      });
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
   app.get('/api/prompt-template/sections', (req, res) => {
     try {
       const agent = readStringField(req.query.agent) || 'default';

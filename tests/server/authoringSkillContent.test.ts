@@ -30,6 +30,13 @@ test('authoring skills default to backlog and prefer parent child decomposition'
   assert.match(schemaReference, /Do not infer `todo` from implementation readiness alone/);
 });
 
+test('examples show bad oversized card versus backlog parent child split', () => {
+  assert.match(examples, /Bad vs good split example/);
+  assert.match(examples, /one oversized implementation card hides independent work/);
+  assert.match(examples, /The checklist is doing the job that child cards should do/);
+  assert.match(examples, /Good: create a backlog parent plus focused backlog children/);
+});
+
 test('authoring skills define guarded local file read and write workflow', () => {
   assert.match(authoringCore, /Local file read\/write workflow/);
   assert.match(authoringCore, /read_file_snippets_batch/);

@@ -2,6 +2,55 @@
 
 Use this file only when examples are needed. Do not load it by default.
 
+## Bad vs good split example
+
+Bad: one oversized implementation card hides independent work in a long checklist.
+
+```text
+Title: Add warranty badge on Job Detail
+Status: todo
+Checklist:
+- Add API field.
+- Update DTO.
+- Update mapper.
+- Update repository.
+- Update ViewModel.
+- Render badge in UI.
+- Add mapper tests.
+- Add UI tests.
+- Verify end to end.
+```
+
+Why bad:
+- It mixes backend/data, frontend/UI, and verification slices.
+- It starts in `todo` without explicit execution intent.
+- The checklist is doing the job that child cards should do.
+- Parallel agents would conflict or over-edit shared files.
+
+Good: create a backlog parent plus focused backlog children.
+
+```text
+Parent card:
+- Status: backlog
+- Category: general
+- Owns requirement, child boundaries, shared contract, integration, and final verification.
+
+Backend/data child:
+- Status: backlog
+- Category: backend
+- Owns API/DTO/model/mapper/repository changes and mapper tests.
+
+Frontend/UI child:
+- Status: backlog
+- Category: frontend
+- Owns ViewModel/UI state, screen rendering, navigation/copy, and UI tests.
+
+Verification child, only when large enough:
+- Status: backlog
+- Category: general
+- Owns regression matrix, final integrated command, and manual scenarios.
+```
+
 ## Bug fix card
 
 ```json

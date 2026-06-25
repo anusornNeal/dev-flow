@@ -45,6 +45,12 @@ function clearPreparedCounts() {
   preparedStatementsCounts = {};
 }
 
+function findTaskUpsertRunKey(): string | undefined {
+  return Object.keys(preparedStatementsCounts).find(
+    (key) => key.includes('INSERT INTO tasks') && key.includes('[run]'),
+  );
+}
+
 const state: any = {
   _testTasks: [
     {
@@ -170,7 +176,7 @@ test('Duplicate API calls within the idempotency window return cached result and
   const body1 = await res1.json() as any;
 
   // Let's see if the database write happened
-  const insertSqlKey = Object.keys(preparedStatementsCounts).find(k => k.includes('INSERT OR REPLACE INTO tasks') && k.includes('[run]'));
+  const insertSqlKey = findTaskUpsertRunKey();
   assert.ok(insertSqlKey, 'Insert SQL should be executed');
   const initialWrites = preparedStatementsCounts[insertSqlKey];
   assert.equal(initialWrites, 1);
@@ -192,7 +198,7 @@ test('Duplicate API calls within the idempotency window return cached result and
   assert.equal(body1.title, body2.title);
 
   // Verify NO duplicate database writes happened
-  const insertSqlKey2 = Object.keys(preparedStatementsCounts).find(k => k.includes('INSERT OR REPLACE INTO tasks') && k.includes('[run]'));
+  const insertSqlKey2 = findTaskUpsertRunKey();
   assert.equal(insertSqlKey2, undefined, 'No insert SQL should run on duplicate idempotent call');
 });
 
@@ -261,7 +267,7 @@ test('Concurrent API calls with the same idempotency key await the same pending 
   assert.equal(body1.id, body2.id);
 
   // Verify database write happened exactly once
-  const insertSqlKey = Object.keys(preparedStatementsCounts).find(k => k.includes('INSERT OR REPLACE INTO tasks') && k.includes('[run]'));
+  const insertSqlKey = findTaskUpsertRunKey();
   assert.ok(insertSqlKey);
   assert.equal(preparedStatementsCounts[insertSqlKey], 1);
 });

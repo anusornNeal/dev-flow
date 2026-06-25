@@ -34,58 +34,52 @@ Required:
 
 Optional, depending on your workflow:
 
-- `ngrok` for public tunnel startup through `npm run start:all`
-- Codex, Antigravity, Claude, or other agent CLIs if you want DevFlow to launch agents
-- Jira/GitHub credentials if you want connector-backed context tools
+- `ngrok` only if you want a public tunnel or the one-click `start:all` flow.
+- Codex, Antigravity, Claude, or other agent CLIs only if you want DevFlow to launch agents.
+- Jira/GitHub credentials only if you want connector-backed context tools.
 
-## Setup
+## Local Setup
 
-1. Clone the repo.
+For an already cloned repo, the normal local setup is only:
 
-   ```bash
-   git clone https://github.com/anusornNeal/dev-flow.git
-   cd dev-flow
-   ```
+```bash
+npm install
+npm run setup
+npm run dev
+```
 
-2. Install dependencies.
+Then open:
 
-   ```bash
-   npm install
-   ```
+```text
+http://localhost:3000
+```
 
-3. Create local environment config.
+`npm run setup` creates the local data/uploads/backups folders, initializes the SQLite schema, and copies `.env.example` to `.env` if `.env` does not already exist.
 
-   ```bash
-   cp .env.example .env
-   ```
+For a brand-new machine, clone the repo first:
 
-   On Windows PowerShell:
+```bash
+git clone https://github.com/anusornNeal/dev-flow.git
+cd dev-flow
+```
 
-   ```powershell
-   Copy-Item .env.example .env
-   ```
+Manual `.env` copy is only needed if you want to edit config before running setup:
 
-4. Bootstrap local folders and default config.
+```bash
+cp .env.example .env
+```
 
-   ```bash
-   npm run setup
-   ```
+On Windows PowerShell:
 
-5. Start DevFlow locally.
+```powershell
+Copy-Item .env.example .env
+```
 
-   ```bash
-   npm run dev
-   ```
+## Optional Setup: ngrok and One-Click Startup
 
-6. Open the app.
+You do **not** need ngrok for normal local use. `npm run dev` is enough for `http://localhost:3000`.
 
-   ```text
-   http://localhost:3000
-   ```
-
-## One-Click Startup
-
-DevFlow includes launchers for the normal local workflow:
+Use ngrok only when you want a public URL, external callbacks, or the full one-click startup flow:
 
 - Windows: double-click `Start DevFlow.bat` or `scripts/start-all.bat`.
 - macOS: double-click `Start DevFlow.command`.
@@ -93,13 +87,43 @@ DevFlow includes launchers for the normal local workflow:
 
 `npm run start:all` runs setup, starts the DevFlow server, starts ngrok, and opens the browser. If `DEVFLOW_NGROK_DOMAIN` is set in `.env`, DevFlow uses that static ngrok domain; otherwise it runs `ngrok http 3000`.
 
+Optional ngrok/browser settings:
+
+```env
+DEVFLOW_PORT=3000
+DEVFLOW_NGROK_DOMAIN="your-static-domain.ngrok-free.dev"
+DEVFLOW_OPEN_BROWSER=true
+DEVFLOW_OPEN_BROWSER_DELAY_MS=4000
+```
+
+## Optional Setup: Agent CLIs and Tokens
+
+You can use DevFlow as a local board without any tokens.
+
+Configure these only when you need agent launching or connector-backed context:
+
+```env
+GITHUB_PERSONAL_ACCESS_TOKEN=""
+JIRA_BASE_URL=""
+JIRA_EMAIL=""
+JIRA_API_TOKEN=""
+DEVFLOW_AGENT_TRIGGER_SCRIPT="scripts/trigger-agent.bat"
+DEVFLOW_AGENT_EXECUTION_MODE="safe"
+```
+
+Notes:
+
+- GitHub/Jira tokens are for connector-backed context tools, not basic local task board usage.
+- Agent CLI setup is separate from DevFlow setup. Install and authenticate Codex, Antigravity, Claude, or another CLI before asking DevFlow to launch it.
+- UI settings can override connector credentials where supported.
+
 ## Common Commands
 
 | Command | Purpose |
 | --- | --- |
 | `npm run setup` | Create local `data/`, `uploads/`, and backup folders and bootstrap `.env` when safe. |
 | `npm run dev` | Start the development server. |
-| `npm run start:all` | Run setup, start the server, start ngrok, and open the app. |
+| `npm run start:all` | Optional ngrok flow: run setup, start the server, start ngrok, and open the app. |
 | `npm run doctor` | Check Node/npm, env files, SQLite storage, DB initialization, port availability, and project paths. |
 | `npm run typecheck` | Run TypeScript no-emit verification. |
 | `npm run lint` | Alias for TypeScript no-emit verification. |
@@ -116,17 +140,14 @@ Targeted verification scripts are also available, including `test:gateway`, `tes
 
 ## Environment Configuration
 
-`.env.example` documents the common local settings:
+Most users can run local DevFlow without editing `.env`. Edit `.env` only for public URL, browser startup behavior, connector credentials, or agent launcher overrides.
 
 - `APP_URL`: external app URL when hosted or tunneled.
 - `DEVFLOW_PORT`: local app port, defaulting to `3000` in normal usage.
-- `DEVFLOW_NGROK_DOMAIN`: optional static ngrok domain for one-click startup.
-- `DEVFLOW_OPEN_BROWSER`: whether `start:all` opens the browser automatically.
-- `DEVFLOW_OPEN_BROWSER_DELAY_MS`: browser open delay for startup.
+- `DEVFLOW_NGROK_DOMAIN`, `DEVFLOW_OPEN_BROWSER`, `DEVFLOW_OPEN_BROWSER_DELAY_MS`: optional ngrok/startup behavior.
 - `GITHUB_PERSONAL_ACCESS_TOKEN`: optional GitHub connector token fallback.
 - `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN`: optional Jira connector credential fallback.
-
-UI settings can override agent connector credentials where supported.
+- `DEVFLOW_AGENT_TRIGGER_SCRIPT`, `DEVFLOW_AGENT_EXECUTION_MODE`: optional agent launcher behavior.
 
 ## Data and Persistence
 

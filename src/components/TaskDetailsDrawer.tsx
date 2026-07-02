@@ -577,7 +577,7 @@ export default function TaskDetailsDrawer({
                 />
               </div>
 
-              <BugThreadsSection taskId={task.displayId || task.id} bugs={task.bugs} onTaskUpdated={onUpdate} />
+              <BugThreadsSection task={task} bugs={task.bugs} onTaskUpdated={onUpdate} />
 
               {/* Links & References Accordion */}
               <div className="border border-[#ebdcb9] dark:border-[#584a3b] rounded-2xl overflow-hidden bg-[#fffdfa] dark:bg-[#292119]">

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { AlertTriangle, Bug, ChevronDown, Copy, History } from 'lucide-react';
 import type { BugThread } from '../../types';
 import { copyText } from '../../lib/clipboard';
+import { BUG_FIX_PROMPT_VARIANTS, buildBugFixPrompt, type BugFixPromptVariant } from '../../lib/bugFixPromptTemplates';
 
 const UNRESOLVED = new Set(['open', 'fixing', 'fixed', 'reopened']);
 
@@ -23,16 +24,23 @@ function latestPrompt(bug: BugThread) {
 }
 
 interface BugThreadsSectionProps {
-  taskId: string;
+  task: {
+    id: string;
+    displayId?: string;
+    title: string;
+    status: any;
+    branch?: string;
+  };
   bugs?: BugThread[];
   onTaskUpdated?: (task: any) => void;
 }
 
-export default function BugThreadsSection({ taskId, bugs = [], onTaskUpdated }: BugThreadsSectionProps) {
+export default function BugThreadsSection({ task, bugs = [], onTaskUpdated }: BugThreadsSectionProps) {
   const orderedBugs = orderBugs(bugs);
   const latestUnresolved = orderedBugs.find(isUnresolved);
   const [copiedBugId, setCopiedBugId] = useState<string | null>(null);
   const [updatingBugId, setUpdatingBugId] = useState<string | null>(null);
+  const [variantByBugId, setVariantByBugId] = useState<Record<string, BugFixPromptVariant>>({});
 
   if (orderedBugs.length === 0) {
     return (
@@ -46,7 +54,12 @@ export default function BugThreadsSection({ taskId, bugs = [], onTaskUpdated }: 
   }
 
   const copyPrompt = async (bug: BugThread) => {
-    await copyText(latestPrompt(bug));
+    const prompt = buildBugFixPrompt(
+      task,
+      bug,
+      variantByBugId[bug.id] || 'standard',
+    );
+    await copyText(prompt || latestPrompt(bug));
     setCopiedBugId(bug.id);
     window.setTimeout(() => setCopiedBugId(null), 1800);
   };
@@ -54,7 +67,7 @@ export default function BugThreadsSection({ taskId, bugs = [], onTaskUpdated }: 
   const updateStatus = async (bug: BugThread, status: BugThread['status']) => {
     setUpdatingBugId(bug.id);
     try {
-      const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/bugs/${encodeURIComponent(bug.id)}/status`, {
+      const response = await fetch(`/api/tasks/${encodeURIComponent(task.displayId || task.id)}/bugs/${encodeURIComponent(bug.id)}/status`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status }),
@@ -139,6 +152,16 @@ export default function BugThreadsSection({ taskId, bugs = [], onTaskUpdated }: 
                     <History size={12} /> {bug.versions.length} version{bug.versions.length === 1 ? '' : 's'}
                   </div>
                   <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                    <select
+                      value={variantByBugId[bug.id] || 'standard'}
+                      onChange={(event) => setVariantByBugId((prev) => ({ ...prev, [bug.id]: event.target.value as BugFixPromptVariant }))}
+                      className="px-2 py-1 rounded-lg border border-[#ebdcb9] dark:border-[#584a3b] bg-[#faf7f0] dark:bg-[#1e1914] text-[10px] font-mono font-bold text-[#8a6e5a] dark:text-[#f3eadf]"
+                      title="Fix prompt variant"
+                    >
+                      {BUG_FIX_PROMPT_VARIANTS.map((variant) => (
+                        <option key={variant.id} value={variant.id}>{variant.label}</option>
+                      ))}
+                    </select>
                     {bug.status !== 'fixed' && isUnresolved(bug) && (
                       <button
                         type="button"

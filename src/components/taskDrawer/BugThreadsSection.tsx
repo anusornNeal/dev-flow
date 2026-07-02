@@ -41,13 +41,21 @@ export default function BugThreadsSection({ task, bugs = [], onTaskUpdated }: Bu
   const [copiedBugId, setCopiedBugId] = useState<string | null>(null);
   const [updatingBugId, setUpdatingBugId] = useState<string | null>(null);
   const [variantByBugId, setVariantByBugId] = useState<Record<string, BugFixPromptVariant>>({});
+  const [isAddingBug, setIsAddingBug] = useState(false);
+  const [newBug, setNewBug] = useState({ title: '', actual: '', expected: '', evidence: '', relatedAreas: '' });
+  const [versionDraftByBugId, setVersionDraftByBugId] = useState<Record<string, { prompt: string; summary: string; changedFiles: string }>>({});
 
   if (orderedBugs.length === 0) {
     return (
       <div className="space-y-2 border-t border-[#ebdcb9] dark:border-[#584a3b] pt-5">
-        <h4 className="text-[10px] font-mono text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest flex items-center gap-1.5 font-bold">
-          <Bug size={13} className="text-[#b4533a] dark:text-[#e0a070]" /> Bugs to Fix
-        </h4>
+        <SectionHeader isAddingBug={isAddingBug} setIsAddingBug={setIsAddingBug} openCount={0} />
+        {isAddingBug && (
+          <AddBugForm
+            newBug={newBug}
+            setNewBug={setNewBug}
+            onSubmit={submitNewBug}
+          />
+        )}
         <p className="text-[10px] text-[#a59182] dark:text-[#d6b56d] italic font-mono pl-1 font-bold">No embedded bug threads.</p>
       </div>
     );
@@ -81,16 +89,49 @@ export default function BugThreadsSection({ task, bugs = [], onTaskUpdated }: Bu
     }
   };
 
+  async function submitNewBug() {
+    if (!newBug.title.trim()) return;
+    const response = await fetch(`/api/tasks/${encodeURIComponent(task.displayId || task.id)}/bugs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: newBug.title.trim(),
+        source: 'manual',
+        severity: 'medium',
+        actual: newBug.actual.trim() || undefined,
+        expected: newBug.expected.trim() || undefined,
+        evidence: newBug.evidence.trim() || undefined,
+        relatedAreas: newBug.relatedAreas.split(',').map((item) => item.trim()).filter(Boolean),
+        prompt: newBug.title.trim(),
+      }),
+    });
+    const body = await response.json();
+    if (response.ok && body?.task && onTaskUpdated) onTaskUpdated(body.task);
+    setNewBug({ title: '', actual: '', expected: '', evidence: '', relatedAreas: '' });
+    setIsAddingBug(false);
+  }
+
+  async function submitVersion(bug: BugThread) {
+    const draft = versionDraftByBugId[bug.id];
+    if (!draft?.prompt.trim()) return;
+    const response = await fetch(`/api/tasks/${encodeURIComponent(task.displayId || task.id)}/bugs/${encodeURIComponent(bug.id)}/versions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prompt: draft.prompt.trim(),
+        summary: draft.summary.trim() || undefined,
+        changedFiles: draft.changedFiles.split(',').map((item) => item.trim()).filter(Boolean),
+      }),
+    });
+    const body = await response.json();
+    if (response.ok && body?.task && onTaskUpdated) onTaskUpdated(body.task);
+    setVersionDraftByBugId((prev) => ({ ...prev, [bug.id]: { prompt: '', summary: '', changedFiles: '' } }));
+  }
+
   return (
     <div className="space-y-3 border-t border-[#ebdcb9] dark:border-[#584a3b] pt-5">
-      <div className="flex items-center justify-between gap-3">
-        <h4 className="text-[10px] font-mono text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest flex items-center gap-1.5 font-bold">
-          <Bug size={13} className="text-[#b4533a] dark:text-[#e0a070]" /> Bugs to Fix
-        </h4>
-        <span className="text-[10px] font-mono font-bold text-[#8a6e5a] dark:text-[#d6b56d]">
-          {orderedBugs.filter(isUnresolved).length} open
-        </span>
-      </div>
+      <SectionHeader isAddingBug={isAddingBug} setIsAddingBug={setIsAddingBug} openCount={orderedBugs.filter(isUnresolved).length} />
+      {isAddingBug && <AddBugForm newBug={newBug} setNewBug={setNewBug} onSubmit={submitNewBug} />}
 
       <div className="space-y-2">
         {orderedBugs.map((bug) => {
@@ -201,11 +242,85 @@ export default function BugThreadsSection({ task, bugs = [], onTaskUpdated }: Bu
                     </button>
                   </div>
                 </div>
+                <div className="rounded-xl border border-[#ebdcb9] dark:border-[#584a3b] bg-[#fdfbf7] dark:bg-[#1e1914] p-2 space-y-2">
+                  <p className="text-[9.5px] font-mono text-[#8a6e5a] dark:text-[#d6b56d]">
+                    Same behavior failed again: add a version. Different behavior: create a new bug thread.
+                  </p>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                    <input
+                      value={versionDraftByBugId[bug.id]?.prompt || ''}
+                      onChange={(event) => setVersionDraftByBugId((prev) => ({ ...prev, [bug.id]: { ...(prev[bug.id] || { summary: '', changedFiles: '' }), prompt: event.target.value } }))}
+                      placeholder="Version prompt"
+                      className="md:col-span-3 px-2 py-1 rounded-lg border border-[#ebdcb9] dark:border-[#584a3b] bg-white dark:bg-[#292119] text-[10px]"
+                    />
+                    <input
+                      value={versionDraftByBugId[bug.id]?.summary || ''}
+                      onChange={(event) => setVersionDraftByBugId((prev) => ({ ...prev, [bug.id]: { ...(prev[bug.id] || { prompt: '', changedFiles: '' }), summary: event.target.value } }))}
+                      placeholder="Summary"
+                      className="md:col-span-2 px-2 py-1 rounded-lg border border-[#ebdcb9] dark:border-[#584a3b] bg-white dark:bg-[#292119] text-[10px]"
+                    />
+                    <input
+                      value={versionDraftByBugId[bug.id]?.changedFiles || ''}
+                      onChange={(event) => setVersionDraftByBugId((prev) => ({ ...prev, [bug.id]: { ...(prev[bug.id] || { prompt: '', summary: '' }), changedFiles: event.target.value } }))}
+                      placeholder="Files"
+                      className="px-2 py-1 rounded-lg border border-[#ebdcb9] dark:border-[#584a3b] bg-white dark:bg-[#292119] text-[10px]"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => submitVersion(bug)}
+                    disabled={!versionDraftByBugId[bug.id]?.prompt?.trim()}
+                    className="px-2 py-1 rounded-lg border border-[#ebdcb9] dark:border-[#584a3b] bg-[#faf7f0] dark:bg-[#292119] text-[10px] font-mono font-bold disabled:opacity-60"
+                  >
+                    Add Version
+                  </button>
+                </div>
               </div>
             </details>
           );
         })}
       </div>
+    </div>
+  );
+}
+
+function SectionHeader({ isAddingBug, setIsAddingBug, openCount }: { isAddingBug: boolean; setIsAddingBug: (value: boolean) => void; openCount: number }) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <h4 className="text-[10px] font-mono text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest flex items-center gap-1.5 font-bold">
+        <Bug size={13} className="text-[#b4533a] dark:text-[#e0a070]" /> Bugs to Fix
+      </h4>
+      <div className="flex items-center gap-2">
+        <span className="text-[10px] font-mono font-bold text-[#8a6e5a] dark:text-[#d6b56d]">{openCount} open</span>
+        <button
+          type="button"
+          onClick={() => setIsAddingBug(!isAddingBug)}
+          className="px-2 py-1 rounded-lg border border-[#ebdcb9] dark:border-[#584a3b] bg-[#faf7f0] dark:bg-[#1e1914] text-[10px] font-mono font-bold text-[#8a6e5a] dark:text-[#f3eadf]"
+        >
+          + Add Bug
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function AddBugForm({ newBug, setNewBug, onSubmit }: {
+  newBug: { title: string; actual: string; expected: string; evidence: string; relatedAreas: string };
+  setNewBug: React.Dispatch<React.SetStateAction<{ title: string; actual: string; expected: string; evidence: string; relatedAreas: string }>>;
+  onSubmit: () => void;
+}) {
+  return (
+    <div className="rounded-2xl border border-[#ebdcb9] dark:border-[#584a3b] bg-[#fffdfa] dark:bg-[#292119] p-3 space-y-2">
+      <input value={newBug.title} onChange={(event) => setNewBug((prev) => ({ ...prev, title: event.target.value }))} placeholder="Bug title" className="w-full px-2 py-1 rounded-lg border border-[#ebdcb9] dark:border-[#584a3b] bg-white dark:bg-[#1e1914] text-[10px]" />
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+        <input value={newBug.actual} onChange={(event) => setNewBug((prev) => ({ ...prev, actual: event.target.value }))} placeholder="Actual" className="px-2 py-1 rounded-lg border border-[#ebdcb9] dark:border-[#584a3b] bg-white dark:bg-[#1e1914] text-[10px]" />
+        <input value={newBug.expected} onChange={(event) => setNewBug((prev) => ({ ...prev, expected: event.target.value }))} placeholder="Expected" className="px-2 py-1 rounded-lg border border-[#ebdcb9] dark:border-[#584a3b] bg-white dark:bg-[#1e1914] text-[10px]" />
+        <input value={newBug.evidence} onChange={(event) => setNewBug((prev) => ({ ...prev, evidence: event.target.value }))} placeholder="Evidence / notes" className="px-2 py-1 rounded-lg border border-[#ebdcb9] dark:border-[#584a3b] bg-white dark:bg-[#1e1914] text-[10px]" />
+        <input value={newBug.relatedAreas} onChange={(event) => setNewBug((prev) => ({ ...prev, relatedAreas: event.target.value }))} placeholder="Related files / areas" className="px-2 py-1 rounded-lg border border-[#ebdcb9] dark:border-[#584a3b] bg-white dark:bg-[#1e1914] text-[10px]" />
+      </div>
+      <button type="button" onClick={onSubmit} disabled={!newBug.title.trim()} className="px-2 py-1 rounded-lg border border-[#ebdcb9] dark:border-[#584a3b] bg-[#faf7f0] dark:bg-[#1e1914] text-[10px] font-mono font-bold disabled:opacity-60">
+        Create Bug
+      </button>
     </div>
   );
 }

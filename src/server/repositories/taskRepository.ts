@@ -79,6 +79,61 @@ export class StaleTaskUpdateError extends Error {
 
 let categoryColumnEnsured = false;
 let bugsColumnEnsured = false;
+const DISPLAY_ID_COUNTER_MAX = 999999;
+
+function isSafeDisplayIdCounter(value: number) {
+  return Number.isInteger(value) && value >= 0 && value <= DISPLAY_ID_COUNTER_MAX;
+}
+
+export function parseDisplayIdCounter(displayId: string | null | undefined, prefix: string): number | null {
+  if (!displayId || !displayId.startsWith(`${prefix}-`)) return null;
+  const suffix = displayId.slice(prefix.length + 1);
+  if (!/^\d{1,6}$/.test(suffix)) return null;
+  const value = Number.parseInt(suffix, 10);
+  return isSafeDisplayIdCounter(value) ? value : null;
+}
+
+function getSafeCachedCounter(state: AppState, prefix: string): number {
+  const cached = state.countersCache[prefix];
+  return isSafeDisplayIdCounter(cached) ? cached : 0;
+}
+
+export function findHighestDisplayIdCounter(prefix: string, database = db): number {
+  let maxNum = 0;
+  const tasksWithPrefix = database.prepare('SELECT displayId FROM tasks WHERE displayId LIKE ?').all(`${prefix}-%`) as Array<{ displayId?: string | null }>;
+  for (const task of tasksWithPrefix) {
+    const parsed = parseDisplayIdCounter(task.displayId, prefix);
+    if (parsed !== null) {
+      maxNum = Math.max(maxNum, parsed);
+    }
+  }
+  return maxNum;
+}
+
+export function repairDisplayIdsForPrefix(prefix: string, database = db): number {
+  let nextCounter = findHighestDisplayIdCounter(prefix, database);
+  const pollutedTasks = database.prepare(`
+    SELECT id, displayId
+    FROM tasks
+    WHERE displayId LIKE ?
+    ORDER BY datetime(COALESCE(createdAt, updatedAt)) ASC, id ASC
+  `).all(`${prefix}-%`) as Array<{ id: string; displayId?: string | null }>;
+
+  const updateTaskDisplayId = database.prepare('UPDATE tasks SET displayId = ?, updatedAt = ? WHERE id = ?');
+  for (const task of pollutedTasks) {
+    if (parseDisplayIdCounter(task.displayId, prefix) !== null) continue;
+    nextCounter += 1;
+    updateTaskDisplayId.run(`${prefix}-${nextCounter.toString().padStart(4, '0')}`, new Date().toISOString(), task.id);
+  }
+
+  database.prepare(`
+    INSERT INTO counters (prefix, count)
+    VALUES (?, ?)
+    ON CONFLICT(prefix) DO UPDATE SET count = excluded.count
+  `).run(prefix, nextCounter);
+
+  return nextCounter;
+}
 
 function ensureTaskCategoryColumn() {
   if (categoryColumnEnsured) return;
@@ -137,18 +192,7 @@ export function generateDisplayId(state: AppState, projectId: string): string {
   if (!prefix) prefix = 'task';
 
   return withDbTransaction(() => {
-    let maxNum = state.countersCache[prefix] || 0;
-    
-    const tasksWithPrefix = db.prepare(`SELECT displayId FROM tasks WHERE displayId LIKE ?`).all(`${prefix}-%`) as any[];
-    for (const task of tasksWithPrefix) {
-      if (task.displayId) {
-        const numPart = task.displayId.split('-').pop();
-        if (numPart && !Number.isNaN(parseInt(numPart, 10))) {
-          maxNum = Math.max(maxNum, parseInt(numPart, 10));
-        }
-      }
-    }
-    
+    let maxNum = Math.max(getSafeCachedCounter(state, prefix), findHighestDisplayIdCounter(prefix));
     state.countersCache[prefix] = maxNum;
 
     let newId = '';

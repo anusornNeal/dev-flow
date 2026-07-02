@@ -10,7 +10,9 @@ process.env.DEVFLOW_APP_ROOT = tempRoot;
 const {
   getProjectAtlasForApi,
   getProjectAtlasStatus,
+  getTaskFocusedAtlasContext,
   saveLatestAtlas,
+  shouldIncludeAtlasForTask,
 } = await import('../../src/server/services/projectAtlasService.js');
 
 const project: any = {
@@ -79,4 +81,22 @@ test('getProjectAtlasStatus includes freshness and counts', () => {
   assert.equal(status.cacheStatus, 'ok');
   assert.equal(status.generatedAt, '2026-07-02T00:00:00.000Z');
   assert.equal(status.nodeCount, 12);
+});
+
+test('shouldIncludeAtlasForTask is selective and preserves focused targetFiles', () => {
+  assert.equal(shouldIncludeAtlasForTask({ title: 'Small fix', targetFiles: ['src/one.ts'] }).include, false);
+  assert.equal(shouldIncludeAtlasForTask({ title: 'Architecture cleanup', targetFiles: ['src/one.ts'] }).include, true);
+  assert.equal(shouldIncludeAtlasForTask({ title: 'Unknown implementation', targetFiles: [] }).reason, 'missing-target-files');
+});
+
+test('getTaskFocusedAtlasContext renders read order and guardrails', () => {
+  const context = getTaskFocusedAtlasContext(project, {
+    title: 'Update src/3.ts behavior',
+    targetFiles: [],
+  });
+
+  assert.equal(context?.included, true);
+  assert.match(context?.markdown ?? '', /Recommended Read Order/);
+  assert.match(context?.markdown ?? '', /targetFiles.*authoritative/i);
+  assert.ok((context?.recommendedReadOrder ?? []).some((entry: string) => entry.includes('src/3.ts')));
 });

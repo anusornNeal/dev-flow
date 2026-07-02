@@ -17,6 +17,7 @@ export function buildChatGptStarterPrompt() {
     '7. For card authoring fallback searches, call get_repo_inspection_index with screen/string/Jira terms before broad file search.',
     '8. Use read_local_file with startLine/endLine/maxBytes before remote GitHub/Jira reads unless the user explicitly asks for remote data.',
     '9. Prefer get_agent_task_context for a specific card, and list_tasks/search_tasks for finding cards.',
+    '10. Use get_project_atlas with chatgpt-context, agent-context, or task-focused mode for architecture, onboarding, unclear targetFiles, or cross-module questions; keep compact mode as the default.',
     '',
     'When changing local repository files:',
     '1. Read the relevant authoring skill guidance for local file read/write workflow before editing.',

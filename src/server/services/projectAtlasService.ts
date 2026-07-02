@@ -21,6 +21,15 @@ export interface ProjectAtlasApiInput {
   taskId?: string;
 }
 
+export interface AtlasTaskLike {
+  title?: string;
+  description?: string;
+  repoContext?: string;
+  reasoning?: string;
+  targetFiles?: string[];
+  tags?: string[];
+}
+
 const DEFAULT_ATLAS_OUTPUT_LIMIT = 80;
 const MAX_ATLAS_OUTPUT_LIMIT = 1000;
 
@@ -152,6 +161,74 @@ export function getProjectAtlasStatus(projectId: string) {
     lastError: cached.error ?? freshness.lastError,
     warnings: [],
   };
+}
+
+export function shouldIncludeAtlasForTask(task: AtlasTaskLike, input: { explicit?: boolean } = {}) {
+  if (input.explicit) return { include: true, reason: 'explicit-request' };
+  const targetFiles = Array.isArray(task.targetFiles) ? task.targetFiles.filter(Boolean) : [];
+  if (targetFiles.length === 0) return { include: true, reason: 'missing-target-files' };
+  if (targetFiles.length >= 5) return { include: true, reason: 'cross-module-target-files' };
+
+  const haystack = [
+    task.title,
+    task.description,
+    task.repoContext,
+    task.reasoning,
+    ...(Array.isArray(task.tags) ? task.tags : []),
+  ].filter(Boolean).join(' ').toLowerCase();
+  if (/\b(project atlas|architecture|project structure|onboarding|cross-module|module boundary|read order)\b/.test(haystack)) {
+    return { include: true, reason: 'architecture-or-cross-module-language' };
+  }
+  return { include: false, reason: 'focused-task' };
+}
+
+export function getTaskFocusedAtlasContext(project: Project, task: AtlasTaskLike, input: { explicit?: boolean; limit?: number } = {}) {
+  const decision = shouldIncludeAtlasForTask(task, input);
+  if (!decision.include) return undefined;
+
+  const query = buildTaskAtlasFocusQuery(task);
+  const atlas = getProjectAtlasForApi(project, {
+    mode: 'task-focused',
+    query,
+    limit: input.limit ?? 40,
+  }) as any;
+  const readOrder = Array.isArray(atlas.nodes)
+    ? atlas.nodes.map((node: any) => node.path || node.label).filter(Boolean).slice(0, 12)
+    : [];
+
+  return {
+    included: true,
+    reason: decision.reason,
+    mode: 'task-focused',
+    stale: atlas.stale,
+    generatedAt: atlas.generatedAt,
+    matchedNodeIds: atlas.matchedNodeIds,
+    recommendedReadOrder: readOrder,
+    markdown: [
+      '## Project Atlas Task Context',
+      '',
+      `Reason: ${decision.reason}`,
+      `Freshness: ${atlas.freshness?.status ?? 'unknown'}${atlas.generatedAt ? ` (${atlas.generatedAt})` : ''}`,
+      '',
+      '### Recommended Read Order',
+      ...(readOrder.length ? readOrder.map((entry: string) => `- ${entry}`) : ['- No focused Atlas nodes matched; use repo context bundle before broad reads.']),
+      '',
+      '### Boundaries and Guardrails',
+      '- Treat verified Atlas facts as navigation hints, not permission to edit unrelated modules.',
+      '- Keep explicit targetFiles and implementation maps authoritative over inferred Atlas suggestions.',
+      '- Read related tests before changing behavior when Atlas surfaces test links.',
+      atlas.selectedContext ? ['', '### Selected Node Context', '```text', atlas.selectedContext, '```'] : undefined,
+    ].flat().filter(Boolean).join('\n'),
+  };
+}
+
+function buildTaskAtlasFocusQuery(task: AtlasTaskLike) {
+  const targetFiles = Array.isArray(task.targetFiles) ? task.targetFiles.filter(Boolean) : [];
+  if (targetFiles.length > 0) return targetFiles.join(' ').slice(0, 800);
+  const text = [task.title, task.description, task.repoContext].filter(Boolean).join(' ');
+  const pathLike = text.match(/[A-Za-z0-9_.-]+(?:\/|\\)[A-Za-z0-9_./\\-]+/g);
+  if (pathLike?.length) return pathLike.slice(0, 8).join(' ');
+  return text.slice(0, 800);
 }
 
 function normalizeAtlasLimit(value: unknown, fallback: number) {

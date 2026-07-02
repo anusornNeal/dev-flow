@@ -29,6 +29,8 @@ const commands = [
   { label: 'project atlas api', command: 'npx', args: ['tsx', '--test', 'tests/server/projectAtlasApiService.test.ts'] },
   { label: 'project atlas domains', command: 'npx', args: ['tsx', '--test', 'tests/server/projectAtlasDomainService.test.ts'] },
   { label: 'project atlas exports', command: 'npx', args: ['tsx', '--test', 'tests/server/projectAtlasExport.test.ts'] },
+  { label: 'project atlas impact', command: 'npx', args: ['tsx', '--test', 'tests/server/projectAtlasImpactService.test.ts'] },
+  { label: 'project atlas prompt templates', command: 'npx', args: ['tsx', '--test', 'tests/lib/projectAtlasPromptTemplates.test.ts'] },
   { label: 'project atlas scanner', command: 'npx', args: ['tsx', '--test', 'tests/server/projectAtlasScannerService.test.ts'] },
   { label: 'project atlas view model', command: 'npx', args: ['tsx', '--test', 'tests/server/projectAtlasViewModel.test.ts'] },
   { label: 'project command service', command: 'npx', args: ['tsx', '--test', 'tests/server/projectCommandService.test.ts'] },

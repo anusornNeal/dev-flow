@@ -20,7 +20,8 @@ import {
   Trash2,
   Plus,
   ExternalLink,
-  Settings
+  Settings,
+  Waypoints
 } from 'lucide-react';
 import { Task, TaskPriority, Project } from '../types';
 import ConfirmModal from './ConfirmModal';
@@ -40,6 +41,8 @@ interface SidebarProps {
   searchQuery: string;
   setSearchQuery: (query: string) => void;
   onOpenSettings: () => void;
+  activePage?: 'board' | 'atlas';
+  onSetActivePage?: (page: 'board' | 'atlas') => void;
 }
 
 export default function Sidebar({
@@ -56,7 +59,9 @@ export default function Sidebar({
   setSelectedTag,
   searchQuery,
   setSearchQuery,
-  onOpenSettings
+  onOpenSettings,
+  activePage = 'board',
+  onSetActivePage,
 }: SidebarProps) {
   const [hearts, setHearts] = useState<{ id: number; x: number; y: number }[]>([]);
   const [cozySpeak, setCozySpeak] = useState('☕ Fuel configured! Time to inspect some specifications.');
@@ -141,7 +146,7 @@ export default function Sidebar({
   };
 
   return (
-    <aside className="w-full lg:w-72 bg-[#f4ebd9] dark:bg-[#292119] border-b lg:border-b-0 lg:border-r border-[#e5d4bb] dark:border-[#584a3b] flex flex-col h-full shrink-0 select-none">
+    <aside className="w-full lg:w-72 bg-[#f4ebd9] dark:bg-[#292119] border-b lg:border-b-0 lg:border-r border-[#e5d4bb] dark:border-[#584a3b] flex flex-col h-auto lg:h-full shrink-0 select-none">
       
       {/* Cozy Warm Mascot Header */}
       <div className="p-6 border-b border-[#e5d4bb] dark:border-[#584a3b] bg-[#ede0c9] dark:bg-[#292119]">
@@ -479,6 +484,32 @@ export default function Sidebar({
 
       {/* Stats Section with beautiful orange values */}
       <div className="px-6 py-2 border-b border-[#e5d4bb] dark:border-[#584a3b]">
+        <div className="mb-4 grid grid-cols-1 gap-2">
+          <button
+            type="button"
+            onClick={() => onSetActivePage?.('board')}
+            className={`flex items-center justify-between rounded-xl border px-3 py-2 text-left text-[11px] font-extrabold transition-colors ${
+              activePage === 'board'
+                ? 'bg-[#ffeace] border-[#e7bc8c] text-[#714a1a] dark:bg-[#3a2f26] dark:border-[#584a3b] dark:text-[#f3eadf]'
+                : 'bg-[#fffbf6] border-[#e5d4bb] text-[#6e584a] hover:bg-[#fff9f1] dark:bg-[#1e1914] dark:border-[#584a3b] dark:text-[#f3eadf]'
+            }`}
+          >
+            <span className="flex items-center gap-2"><FolderGit size={14} /> Sprint Board</span>
+            <span className="font-mono text-[9px]">{totalTasks}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => onSetActivePage?.('atlas')}
+            className={`flex items-center justify-between rounded-xl border px-3 py-2 text-left text-[11px] font-extrabold transition-colors ${
+              activePage === 'atlas'
+                ? 'bg-[#ffeace] border-[#e7bc8c] text-[#714a1a] dark:bg-[#3a2f26] dark:border-[#584a3b] dark:text-[#f3eadf]'
+                : 'bg-[#fffbf6] border-[#e5d4bb] text-[#6e584a] hover:bg-[#fff9f1] dark:bg-[#1e1914] dark:border-[#584a3b] dark:text-[#f3eadf]'
+            }`}
+          >
+            <span className="flex items-center gap-2"><Waypoints size={14} /> Project Atlas</span>
+            <span className="font-mono text-[9px]">Graph</span>
+          </button>
+        </div>
         <h3 className="text-[10px] font-bold text-[#8C7565] dark:text-[#f3eadf] uppercase tracking-widest mb-3.5 flex items-center gap-1.5">
           <TrendingUp size={12} className="text-[#df9433] dark:text-[#e0a070] dark:text-[#d6b56d]" /> Work Progress
         </h3>

@@ -6,6 +6,7 @@ import ChatGptStarterPromptButton from './ChatGptStarterPromptButton';
 
 interface HeaderProps {
   filteredTasksCount: number;
+  activePage?: 'board' | 'atlas';
   ngrokUrl: string | null;
   theme: string;
   setTheme: (theme: "light" | "dark") => void;
@@ -20,6 +21,7 @@ interface HeaderProps {
 
 export function Header({
   filteredTasksCount,
+  activePage = 'board',
   ngrokUrl,
   theme,
   setTheme,
@@ -53,12 +55,12 @@ export function Header({
       <div>
         <h1 className="text-[#3c2a1a] dark:text-[#f3eadf] font-extrabold font-sans text-lg tracking-tight flex items-center gap-2">
           <Cat className="text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d] shrink-0" size={18} />
-          Sprint Backlog
+          {activePage === 'atlas' ? 'Project Atlas' : 'Sprint Backlog'}
         </h1>
         <p className="text-[11px] text-[#816b5a] dark:text-[#d6b56d] font-mono mt-0.5 font-medium flex items-center gap-1.5">
           <span>Pocket Sandbox</span>
           <span className="w-1 h-1 rounded-full bg-[#dcd0bc] dark:bg-[#d6b56d] dark:bg-[#e0a070]" />
-          <span className="font-bold">{filteredTasksCount} tasks</span>
+          <span className="font-bold">{activePage === 'atlas' ? 'knowledge graph' : `${filteredTasksCount} tasks`}</span>
         </p>
       </div>
 

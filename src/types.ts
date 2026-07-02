@@ -304,6 +304,14 @@ export interface AtlasDomainGraphSummary {
   relatedEdges: AtlasEdge[];
 }
 
+export interface ProjectAtlasUiResponse {
+  atlas: ProjectAtlas;
+  domainSummary: AtlasDomainGraphSummary;
+  status: 'empty' | 'ready' | 'error';
+  stale: boolean;
+  message?: string;
+}
+
 export interface Column {
   id: TaskStatus;
   label: string;

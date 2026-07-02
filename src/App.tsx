@@ -20,6 +20,7 @@ import SettingsModal from './components/SettingsModal';
 import TemplateModal from './components/TemplateModal';
 import ObservabilityModal from './components/ObservabilityModal';
 import { Header } from './components/Header';
+import { ProjectAtlasPage } from './components/ProjectAtlasPage';
 import { BoardLane } from './components/BoardLane';
 import BatchImportModal from './components/BatchImportModal';
 import ConfirmModal from './components/ConfirmModal';
@@ -66,8 +67,40 @@ export default function App() {
   } | null>(null);
   const [mounted, setMounted] = useState(false);
   const [ngrokUrl, setNgrokUrl] = useState('');
+  const [activePage, setActivePage] = useState<'board' | 'atlas'>(() =>
+    window.location.hash === '#atlas' ? 'atlas' : 'board'
+  );
   
   const { theme, setTheme } = useAppTheme();
+
+  useEffect(() => {
+    const syncPageFromHash = () => {
+      setActivePage(window.location.hash === '#atlas' ? 'atlas' : 'board');
+    };
+    window.addEventListener('hashchange', syncPageFromHash);
+    return () => window.removeEventListener('hashchange', syncPageFromHash);
+  }, []);
+
+  useEffect(() => {
+    const linkedProjectId = new URLSearchParams(window.location.search).get('projectId');
+    if (
+      activePage === 'atlas' &&
+      linkedProjectId &&
+      linkedProjectId !== activeProjectId &&
+      projects.some((project) => project.id === linkedProjectId)
+    ) {
+      setActiveProjectId(linkedProjectId);
+    }
+  }, [activePage, activeProjectId, projects, setActiveProjectId]);
+
+  const handleSetActivePage = (page: 'board' | 'atlas') => {
+    setActivePage(page);
+    if (page === 'atlas') {
+      window.location.hash = 'atlas';
+    } else if (window.location.hash === '#atlas') {
+      window.history.pushState('', document.title, window.location.pathname + window.location.search);
+    }
+  };
 
   // Filter States
   const [selectedPriority, setSelectedPriority] = useState<Task['priority'] | 'all'>('all');
@@ -416,7 +449,7 @@ export default function App() {
     <div className="flex flex-col h-screen bg-[#fcfaf4] dark:bg-[#1e1914] text-[#3e3129] dark:text-[#f3eadf] font-sans antialiased overflow-hidden select-none">
       
       {/* Mid View container with Sidebar + Board */}
-      <div className="flex flex-1 overflow-hidden flex-col lg:flex-row">
+      <div className="flex flex-1 overflow-y-auto lg:overflow-hidden flex-col lg:flex-row">
         
         {/* 1. Left Filters & Stats Sidemenu Section */}
         <Sidebar 
@@ -434,6 +467,8 @@ export default function App() {
           searchQuery={searchQuery}
           setSearchQuery={setSearchQuery}
           onOpenSettings={() => setIsSettingsModalOpen(true)}
+          activePage={activePage}
+          onSetActivePage={handleSetActivePage}
         />
 
         {/* 2. Main KanBan Board viewport area */}
@@ -442,6 +477,7 @@ export default function App() {
           {/* Top Control Navigation bar */}
           <Header
             filteredTasksCount={filteredTasks.length}
+            activePage={activePage}
             ngrokUrl={ngrokUrl}
             theme={theme}
             setTheme={setTheme}
@@ -460,35 +496,39 @@ export default function App() {
             </div>
           )}
 
-          {/* Kanban Board Container scroll area */}
-          <div className="flex-1 overflow-x-auto p-6 bg-[#faf7f0] dark:bg-[#1e1914]">
-            <div className="flex w-max items-stretch min-h-[calc(100vh-210px)] pb-2">
-              
-              {BOARD_COLUMNS.map(col => {
-                const columnTasks = filteredTasks
-                  .filter(t => t.status === col.id && !t.parentId)
-                  .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-                
-                return (
-                    <BoardLane
-                      key={col.id}
-                      column={col}
-                      tasks={columnTasks}
-                      allTasks={tasks}
-                      draggedOverColumn={draggedOverColumn}
-                      draggedTaskId={draggedTaskId}
-                      setDraggedOverColumn={setDraggedOverColumn}
-                    handleDrop={handleDrop}
-                    setSelectedTask={setSelectedTask}
-                    handleDeleteTask={handleDeleteTask}
-                    handleDragStart={handleDragStart}
-                    handleUpdateTask={handleUpdateTask}
-                    onShowLog={({ taskDisplayId, run }) => setLogModal({ taskDisplayId, runId: run.id, runStatus: run.status, agent: run.agent, model: run.model })}
-                  />
-                );
-              })}
+          {activePage === 'atlas' ? (
+            <div className="flex-1 min-h-0 overflow-hidden">
+              <ProjectAtlasPage projectId={activeProjectId || null} />
             </div>
-          </div>
+          ) : (
+            <div className="flex-1 overflow-x-auto p-6 bg-[#faf7f0] dark:bg-[#1e1914]">
+              <div className="flex w-max items-stretch min-h-[calc(100vh-210px)] pb-2">
+                {BOARD_COLUMNS.map(col => {
+                  const columnTasks = filteredTasks
+                    .filter(t => t.status === col.id && !t.parentId)
+                    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+                  
+                  return (
+                      <BoardLane
+                        key={col.id}
+                        column={col}
+                        tasks={columnTasks}
+                        allTasks={tasks}
+                        draggedOverColumn={draggedOverColumn}
+                        draggedTaskId={draggedTaskId}
+                        setDraggedOverColumn={setDraggedOverColumn}
+                      handleDrop={handleDrop}
+                      setSelectedTask={setSelectedTask}
+                      handleDeleteTask={handleDeleteTask}
+                      handleDragStart={handleDragStart}
+                      handleUpdateTask={handleUpdateTask}
+                      onShowLog={({ taskDisplayId, run }) => setLogModal({ taskDisplayId, runId: run.id, runStatus: run.status, agent: run.agent, model: run.model })}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </main>
       </div>
 

@@ -1,0 +1,129 @@
+import { useEffect, useMemo, useState } from 'react';
+import { Download, RefreshCw, Search, Waypoints } from 'lucide-react';
+import type { AtlasNode, ProjectAtlasUiResponse } from '../types.js';
+import { AtlasGraph } from './projectAtlas/AtlasGraph.js';
+import { AtlasLayerPanel } from './projectAtlas/AtlasLayerPanel.js';
+import { buildAtlasGraphViewModel, DEFAULT_ATLAS_LAYERS, toggleAtlasLayer, type AtlasLayerKey, type AtlasLayers } from './projectAtlas/atlasViewModel.js';
+
+interface ProjectAtlasPageProps {
+  projectId: string | null;
+}
+
+export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
+  const [data, setData] = useState<ProjectAtlasUiResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [layers, setLayers] = useState<AtlasLayers>(DEFAULT_ATLAS_LAYERS);
+  const [collapsedDomains, setCollapsedDomains] = useState(true);
+  const [selectedNode, setSelectedNode] = useState<AtlasNode | null>(null);
+
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    fetch(`/api/projects/${encodeURIComponent(projectId)}/atlas?mode=ui`, { cache: 'no-store' })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`Atlas load failed with status ${response.status}`);
+        return response.json();
+      })
+      .then((next) => {
+        if (!cancelled) setData(next);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
+
+  const view = useMemo(() => data?.atlas
+    ? buildAtlasGraphViewModel(data.atlas, { layers, collapsedDomains })
+    : null, [data, layers, collapsedDomains]);
+
+  const handleToggleLayer = (key: AtlasLayerKey) => setLayers((current) => toggleAtlasLayer(current, key));
+
+  return (
+    <section className="flex h-full min-h-0 flex-col bg-[#faf7f0] dark:bg-[#1e1914]">
+      <div className="border-b border-[#e5d4bb] dark:border-[#584a3b] bg-white/80 dark:bg-[#292119]/80 px-5 py-4">
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+          <div>
+            <h1 className="flex items-center gap-2 text-lg font-extrabold text-[#3c2a1a] dark:text-[#f3eadf]">
+              <Waypoints size={19} className="text-[#a46c24] dark:text-[#d6b56d]" />
+              Project Atlas
+            </h1>
+            <p className="mt-0.5 text-[11px] font-mono font-bold text-[#816b5a] dark:text-[#d6b56d]">
+              {data?.status === 'ready' ? `${data.atlas.nodes.length} nodes` : 'Graph-first project map'}
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="flex h-9 min-w-[220px] items-center gap-2 rounded-xl border border-[#e5d4bb] dark:border-[#584a3b] bg-[#fffdfa] dark:bg-[#1e1914] px-3 text-[11px] font-mono text-[#8a6e5a] dark:text-[#f3eadf]">
+              <Search size={14} />
+              <input className="min-w-0 flex-1 bg-transparent outline-none" placeholder="Search Atlas..." disabled />
+            </label>
+            <button className="h-9 rounded-xl border border-[#e5d4bb] dark:border-[#584a3b] bg-[#fffdfa] dark:bg-[#1e1914] px-3 text-[11px] font-extrabold text-[#6d5a4d] dark:text-[#f3eadf] disabled:opacity-60" type="button" disabled>
+              <RefreshCw size={14} className="mr-1 inline" /> Manual Rescan
+            </button>
+            <button className="h-9 rounded-xl border border-[#e5d4bb] dark:border-[#584a3b] bg-[#fffdfa] dark:bg-[#1e1914] px-3 text-[11px] font-extrabold text-[#6d5a4d] dark:text-[#f3eadf] disabled:opacity-60" type="button" disabled>
+              <Download size={14} className="mr-1 inline" /> Export
+            </button>
+            <span className="h-9 rounded-xl border border-[#e5d4bb] dark:border-[#584a3b] bg-[#fff7eb] dark:bg-[#3a2f26] px-3 py-2 text-[10px] font-mono font-black uppercase text-[#9a5b13] dark:text-[#f3eadf]">
+              {data?.stale ? 'Stale' : data?.atlas?.freshness?.status ?? 'Unknown'}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+        {view && (
+          <AtlasLayerPanel
+            layers={layers}
+            collapsedDomains={collapsedDomains}
+            domains={view.domains}
+            onToggleLayer={handleToggleLayer}
+            onToggleCollapsedDomains={() => setCollapsedDomains((current) => !current)}
+          />
+        )}
+
+        <main className="min-w-0 flex-1">
+          {loading && <AtlasCenteredMessage title="Loading Atlas" body="Reading the latest graph snapshot." />}
+          {error && <AtlasCenteredMessage title="Atlas unavailable" body={error} />}
+          {!loading && !error && (!data || data.status === 'empty' || !view || view.nodes.length === 0) && (
+            <AtlasCenteredMessage title="No Atlas generated yet" body="Run Manual Rescan when the scanner workflow is ready for this project." />
+          )}
+          {!loading && !error && data?.status === 'ready' && view && view.nodes.length > 0 && (
+            <AtlasGraph nodes={view.nodes} edges={view.edges} selectedNodeId={selectedNode?.id ?? null} onSelectNode={setSelectedNode} />
+          )}
+        </main>
+
+        <aside className="w-full lg:w-80 shrink-0 border-t lg:border-t-0 lg:border-l border-[#e5d4bb] dark:border-[#584a3b] bg-[#f4ebd9] dark:bg-[#292119] p-4">
+          <p className="text-[10px] font-black uppercase tracking-widest text-[#8a6e5a] dark:text-[#d6b56d]">Node Inspector</p>
+          {selectedNode ? (
+            <div className="mt-3 rounded-xl border border-[#e5d4bb] dark:border-[#584a3b] bg-[#fffdfa] dark:bg-[#1e1914] p-4">
+              <h2 className="text-sm font-extrabold text-[#3c2a1a] dark:text-[#f3eadf]">{selectedNode.label}</h2>
+              <p className="mt-1 text-[10px] font-mono text-[#8a6e5a] dark:text-[#d6b56d]">{selectedNode.kind}</p>
+              {selectedNode.path && <p className="mt-3 break-all text-[11px] font-mono text-[#5c493c] dark:text-[#f3eadf]">{selectedNode.path}</p>}
+            </div>
+          ) : (
+            <p className="mt-3 text-[11px] font-mono leading-relaxed text-[#6d5a4d] dark:text-[#f3eadf]">Select a graph node to inspect its summary and relationships.</p>
+          )}
+        </aside>
+      </div>
+    </section>
+  );
+}
+
+function AtlasCenteredMessage({ title, body }: { title: string; body: string }) {
+  return (
+    <div className="flex h-full min-h-[420px] items-center justify-center p-8">
+      <div className="max-w-sm rounded-xl border border-[#e5d4bb] dark:border-[#584a3b] bg-[#fffdfa] dark:bg-[#292119] p-5 text-center">
+        <h2 className="text-sm font-extrabold text-[#3c2a1a] dark:text-[#f3eadf]">{title}</h2>
+        <p className="mt-2 text-[11px] font-mono leading-relaxed text-[#6d5a4d] dark:text-[#d6b56d]">{body}</p>
+      </div>
+    </div>
+  );
+}

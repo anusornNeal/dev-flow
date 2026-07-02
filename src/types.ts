@@ -153,6 +153,116 @@ export interface Project {
   createdAt: string;
 }
 
+export type AtlasFactSource = 'verified' | 'inferred' | 'user-edited';
+export type AtlasScanMode = 'automatic' | 'manual' | 'task-focused';
+export type AtlasFreshnessStatus = 'not-generated' | 'fresh' | 'stale' | 'error';
+export type AtlasNodeKind =
+  | 'project'
+  | 'folder'
+  | 'file'
+  | 'symbol'
+  | 'route'
+  | 'component'
+  | 'test'
+  | 'database'
+  | 'script'
+  | 'config'
+  | 'domain';
+export type AtlasEdgeKind =
+  | 'contains'
+  | 'imports'
+  | 'exports'
+  | 'calls'
+  | 'tests'
+  | 'routes'
+  | 'reads'
+  | 'writes'
+  | 'depends-on'
+  | 'related';
+
+export interface AtlasVerifiedFact {
+  source: 'verified';
+  description: string;
+  evidence?: string;
+}
+
+export interface AtlasInferredFact {
+  source: 'inferred';
+  summary: string;
+  confidence?: number;
+}
+
+export interface AtlasUserEditedFact {
+  source: 'user-edited';
+  notes: string;
+  updatedAt?: string;
+}
+
+export type AtlasFact = AtlasVerifiedFact | AtlasInferredFact | AtlasUserEditedFact;
+
+export interface AtlasNode {
+  id: string;
+  label: string;
+  kind: AtlasNodeKind;
+  path?: string;
+  verified?: AtlasVerifiedFact;
+  inferred?: AtlasInferredFact;
+  userEdited?: AtlasUserEditedFact;
+  metadata?: Record<string, unknown>;
+}
+
+export interface AtlasEdge {
+  id: string;
+  source: string;
+  target: string;
+  kind: AtlasEdgeKind;
+  fact: AtlasFact;
+  metadata?: Record<string, unknown>;
+}
+
+export interface AtlasDomain {
+  id: string;
+  name: string;
+  nodeIds: string[];
+  origin: AtlasFactSource;
+  summary?: string;
+}
+
+export interface AtlasFlow {
+  id: string;
+  name: string;
+  nodeIds: string[];
+  origin: AtlasFactSource;
+  summary?: string;
+}
+
+export interface AtlasSummary {
+  verified?: AtlasVerifiedFact;
+  inferred?: AtlasInferredFact;
+  userEdited?: AtlasUserEditedFact;
+}
+
+export interface AtlasFreshness {
+  generatedAt?: string;
+  lastDailyOpenCheckedAt?: string;
+  scanMode?: AtlasScanMode;
+  repoFingerprint?: string;
+  status: AtlasFreshnessStatus;
+  staleReason?: string;
+  lastError?: string;
+}
+
+export interface ProjectAtlas {
+  schemaVersion: 1;
+  projectId: string;
+  nodes: AtlasNode[];
+  edges: AtlasEdge[];
+  domains: AtlasDomain[];
+  flows: AtlasFlow[];
+  summary: AtlasSummary;
+  freshness: AtlasFreshness;
+}
+
 export interface Column {
   id: TaskStatus;
   label: string;

@@ -40,3 +40,16 @@ export function getTaskUploadsDir(taskId: string) {
 export function getDevFlowBackupsDir() {
   return resolveFromDevFlowAppRoot('data', 'backups');
 }
+
+export function getDevFlowCacheDir() {
+  return resolveFromDevFlowAppRoot('.devflow', 'cache');
+}
+
+export function getProjectAtlasCacheDir() {
+  return path.join(getDevFlowCacheDir(), 'project-atlas');
+}
+
+export function getProjectAtlasCachePath(projectId: string) {
+  const safeProjectId = projectId.replace(/[^a-zA-Z0-9._-]/g, '_');
+  return path.join(getProjectAtlasCacheDir(), `${safeProjectId}.json`);
+}

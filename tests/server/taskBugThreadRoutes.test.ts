@@ -83,6 +83,39 @@ test('task bug thread routes create embedded bugs, append versions, update statu
   assert.equal(fullTask.bugs[0].versions.length, 2);
 });
 
+test('moving done with unfinished checklist creates an embedded warning bug', async () => {
+  const createTaskResponse = await postJson('/api/tasks', {
+    projectId: project.id,
+    title: 'Task with unfinished mini task',
+    category: 'backend',
+    description: 'Close warning fixture',
+    checklist: [
+      { id: 'done', text: 'Finished item', completed: true },
+      { id: 'todo', text: 'Still needs follow-up', completed: false },
+    ],
+  });
+  assert.equal(createTaskResponse.status, 201);
+  const createdTask = await createTaskResponse.json() as any;
+  const taskId = createdTask.displayId || createdTask.task?.displayId;
+
+  await postJson(`/api/tasks/${taskId}/move-to`, { status: 'in-progress' });
+  const doneResponse = await postJson(`/api/tasks/${taskId}/move-to?responseMode=summary`, {
+    status: 'done',
+    emergency: true,
+  });
+
+  assert.equal(doneResponse.status, 200);
+  const doneBody = await doneResponse.json() as any;
+  assert.equal(doneBody.task.status, 'done');
+  assert.equal(doneBody.task.unresolvedBugCount, 1);
+
+  const fullResponse = await fetch(`${base}/api/tasks/${taskId}?mode=full`);
+  const fullTask = await fullResponse.json() as any;
+  assert.equal(fullTask.bugs.length, 1);
+  assert.equal(fullTask.bugs[0].source, 'auto-close-warning');
+  assert.match(fullTask.bugs[0].actual, /Still needs follow-up/);
+});
+
 test.after(async () => {
   await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   try {

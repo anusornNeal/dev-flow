@@ -193,6 +193,41 @@ export function getBugSummary(task: TaskLike) {
   };
 }
 
+export function getUnfinishedChecklistItems(task: { checklist?: ChecklistItem[] }) {
+  return Array.isArray(task.checklist)
+    ? task.checklist.filter((item) => !item.completed)
+    : [];
+}
+
+export function ensureCloseWarningBug<T extends TaskLike & { checklist?: ChecklistItem[] }>(task: T): T & { bugs: BugThreadLike[] } {
+  const unfinishedItems = getUnfinishedChecklistItems(task);
+  if (unfinishedItems.length === 0) {
+    return { ...task, bugs: cloneBugs(task) };
+  }
+
+  const actual = `Task was closed with unfinished mini tasks: ${unfinishedItems.map((item) => item.text).join('; ')}`;
+  const existingWarning = cloneBugs(task).find((bug) => bug.source === 'auto-close-warning' && isBugUnresolved(bug));
+  if (existingWarning) {
+    return appendBugVersion(task, existingWarning.id, {
+      prompt: `Fix the unfinished mini tasks before treating this task as complete.\n\nUnfinished items:\n${unfinishedItems.map((item) => `- ${item.text}`).join('\n')}`,
+      summary: actual,
+      createdBy: 'DevFlow',
+    });
+  }
+
+  return createBugThread(task, {
+    title: 'Task closed with unfinished mini tasks',
+    source: 'auto-close-warning',
+    severity: 'high',
+    actual,
+    expected: 'All mini tasks should be completed or explicitly converted into follow-up bug versions before closure.',
+    evidence: unfinishedItems.map((item) => item.text).join('\n'),
+    prompt: `Resolve the unfinished mini tasks for this task.\n\nUnfinished items:\n${unfinishedItems.map((item) => `- ${item.text}`).join('\n')}`,
+    summary: actual,
+    createdBy: 'DevFlow',
+  });
+}
+
 export type ValidationResult = { ok: true } | { ok: false; reason: string };
 
 export function validateTaskPatch(patch: TaskPatch): ValidationResult {

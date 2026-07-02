@@ -22,6 +22,7 @@ import { buildAgentLaunchConfig, runAgentLaunchPreflight, type AgentLaunchPrefli
 import {
   appendBugVersion,
   createBugThread,
+  ensureCloseWarningBug,
   updateBugStatus,
   applyChecklistToggle as applyChecklistToggleUseCase,
   validateTaskPatch as validateTaskPatchUseCase,
@@ -596,7 +597,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
       return res.status(403).json({ error: 'Task is locked by an agent. Use emergency flag to override.' });
     }
 
-    const updatedTask = {
+    let updatedTask = {
       ...task,
       status: req.body.status,
       updatedAt: new Date().toISOString(),
@@ -607,6 +608,12 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
         type: 'move',
       }],
     };
+    if (updatedTask.status === 'done') {
+      updatedTask = ensureCloseWarningBug(updatedTask);
+      if (updatedTask.bugs.some((bug: any) => bug.source === 'auto-close-warning')) {
+        appendTaskLog(updatedTask, 'Done warning: unresolved bug thread created for unfinished mini tasks.', 'update');
+      }
+    }
 
     saveTask(updatedTask);
     syncTaskAgentStateForStatus(updatedTask, previousStatus);
@@ -687,6 +694,14 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     }
 
     const autoWorkTrigger = AgentOrchestrationWorker.maybeTrigger(task, fromStatus, deps, '/move-to endpoint');
+    if (task.status === 'done') {
+      const updatedTask = ensureCloseWarningBug(task);
+      task.bugs = updatedTask.bugs;
+      task.updatedAt = updatedTask.updatedAt;
+      if (task.bugs.some((bug: any) => bug.source === 'auto-close-warning')) {
+        appendTaskLog(task, 'Done warning: unresolved bug thread created for unfinished mini tasks.', 'update');
+      }
+    }
     saveTask(task);
     const standardPayload = {
       success: true,

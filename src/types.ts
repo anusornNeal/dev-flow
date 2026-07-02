@@ -226,6 +226,7 @@ export interface AtlasDomain {
   nodeIds: string[];
   origin: AtlasFactSource;
   summary?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface AtlasFlow {
@@ -276,6 +277,31 @@ export interface AtlasScanStats {
 export interface ProjectAtlasScanResult {
   atlas: ProjectAtlas;
   scanStats: AtlasScanStats;
+}
+
+export interface AtlasDomainOverride {
+  id: string;
+  name: string;
+  nodeIds: string[];
+}
+
+export interface AtlasDomainOverrideMap {
+  projectId: string;
+  domains: AtlasDomainOverride[];
+  updatedAt?: string;
+}
+
+export interface AtlasDomainSummary {
+  id: string;
+  name: string;
+  origin: AtlasFactSource;
+  nodeCount: number;
+  fileCount: number;
+}
+
+export interface AtlasDomainGraphSummary {
+  domains: AtlasDomainSummary[];
+  relatedEdges: AtlasEdge[];
 }
 
 export interface Column {

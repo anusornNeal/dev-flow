@@ -10,6 +10,7 @@ process.env.DEVFLOW_APP_ROOT = tempDir;
 const {
   buildEmptyProjectAtlas,
   isAtlasStale,
+  markAtlasDailyOpenChecked,
   readAtlasCache,
   shouldRefreshAtlasForDailyOpen,
   writeAtlasCache,
@@ -119,6 +120,22 @@ test('daily-open refresh is eligible at most once per local day', () => {
   assert.equal(shouldRefreshAtlasForDailyOpen(freshness, { now: '2026-07-02T12:00:00.000Z' }), false);
   assert.equal(shouldRefreshAtlasForDailyOpen(freshness, { now: '2026-07-03T00:00:00.000Z' }), true);
   assert.equal(shouldRefreshAtlasForDailyOpen({ ...freshness, status: 'fresh' }, { now: '2026-07-03T00:00:00.000Z' }), false);
+});
+
+test('markAtlasDailyOpenChecked persists throttle timestamp on last good atlas', () => {
+  const atlas = buildEmptyProjectAtlas({
+    projectId: 'project-daily-open',
+    generatedAt: '2026-07-01T00:00:00.000Z',
+  });
+  atlas.freshness.status = 'stale';
+  writeAtlasCache({ atlas });
+
+  const result = markAtlasDailyOpenChecked('project-daily-open', '2026-07-02T03:00:00.000Z');
+  const cached = readAtlasCache({ projectId: 'project-daily-open' });
+
+  assert.equal(result.atlas.freshness.lastDailyOpenCheckedAt, '2026-07-02T03:00:00.000Z');
+  assert.equal(cached.atlas.freshness.lastDailyOpenCheckedAt, '2026-07-02T03:00:00.000Z');
+  assert.equal(cached.atlas.freshness.status, 'stale');
 });
 
 test.after(() => {

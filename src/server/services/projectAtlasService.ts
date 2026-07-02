@@ -8,6 +8,7 @@ import { buildAtlasDiffImpact, buildTaskFocusedAtlasImpact } from './projectAtla
 import {
   isAtlasStale,
   readAtlasCache,
+  markAtlasDailyOpenChecked,
   shouldRefreshAtlasForDailyOpen,
   writeAtlasCache,
 } from './projectAtlasCacheService.js';
@@ -65,6 +66,24 @@ export function getAtlasRefreshStatus(
       stale ? { ...freshness, status: freshness.status === 'fresh' ? 'stale' : freshness.status } : freshness,
       { now: input.now },
     ),
+  };
+}
+
+export function maybeRefreshAtlasOnProjectOpen(project: Project, input: { now?: string } = {}) {
+  const cached = readLatestAtlas(project.id);
+  const freshness = cached.atlas.freshness;
+  const stale = isAtlasStale(freshness, input);
+  const dailyFreshness = stale ? { ...freshness, status: freshness.status === 'fresh' ? 'stale' as const : freshness.status } : freshness;
+  const shouldRefresh = shouldRefreshAtlasForDailyOpen(dailyFreshness, { now: input.now });
+  const marked = shouldRefresh ? markAtlasDailyOpenChecked(project.id, input.now ?? new Date().toISOString()) : null;
+
+  return {
+    projectId: project.id,
+    cacheStatus: cached.status,
+    stale,
+    shouldRefresh,
+    reason: shouldRefresh ? (cached.status === 'missing' ? 'not-generated' : 'daily-open-stale') : 'not-needed',
+    freshness: marked?.atlas.freshness ?? freshness,
   };
 }
 
@@ -174,6 +193,43 @@ export function rescanProjectAtlas(project: Project) {
     scanStats: result.scanStats,
     status: getProjectAtlasStatus(project.id),
   };
+}
+
+export function rescanProjectAtlasSafely(project: Project, input: { now?: string; manualRescan?: boolean } = {}) {
+  try {
+    const result = rescanProjectAtlas(project);
+    const atlas = {
+      ...result.atlas,
+      freshness: {
+        ...result.atlas.freshness,
+        generatedAt: input.now ?? result.atlas.freshness.generatedAt ?? new Date().toISOString(),
+        scanMode: input.manualRescan === false ? 'automatic' as const : 'manual' as const,
+        status: 'fresh' as const,
+        lastError: undefined,
+      },
+    };
+    saveLatestAtlas(atlas);
+    return { ok: true, ...result, atlas, status: getProjectAtlasStatus(project.id) };
+  } catch (error) {
+    const cached = readLatestAtlas(project.id);
+    const atlas = {
+      ...cached.atlas,
+      freshness: {
+        ...cached.atlas.freshness,
+        status: 'error' as const,
+        lastError: error instanceof Error ? error.message : String(error),
+        lastDailyOpenCheckedAt: input.now ?? cached.atlas.freshness.lastDailyOpenCheckedAt,
+      },
+    };
+    saveLatestAtlas(atlas);
+    return {
+      ok: false,
+      projectId: project.id,
+      atlas,
+      status: getProjectAtlasStatus(project.id),
+      error: atlas.freshness.lastError,
+    };
+  }
 }
 
 export function getProjectAtlasStatus(projectId: string) {

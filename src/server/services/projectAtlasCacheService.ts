@@ -80,6 +80,19 @@ export function writeAtlasCache(input: WriteAtlasCacheInput) {
   return { path: cachePath };
 }
 
+export function markAtlasDailyOpenChecked(projectId: string, now = new Date().toISOString()) {
+  const cached = readAtlasCache({ projectId });
+  const atlas = {
+    ...cached.atlas,
+    freshness: {
+      ...cached.atlas.freshness,
+      lastDailyOpenCheckedAt: now,
+    },
+  };
+  writeAtlasCache({ atlas });
+  return { status: cached.status, atlas };
+}
+
 export function isAtlasStale(freshness: AtlasFreshness, input: AtlasFreshnessCheckInput = {}) {
   if (input.manualRescan) return true;
   if (freshness.status === 'not-generated' || freshness.status === 'error' || freshness.status === 'stale') return true;

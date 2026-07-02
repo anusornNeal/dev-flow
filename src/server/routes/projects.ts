@@ -7,8 +7,8 @@ import { findProjectByIdentifier } from '../services/taskService';
 import { validateString } from '../validation';
 import { getPromptPipelineStructure, renderPromptTemplate, PromptRenderContext } from '../services/promptTemplateService';
 import { readAtlasCache } from '../services/projectAtlasCacheService';
+import { maybeRefreshAtlasOnProjectOpen } from '../services/projectAtlasService';
 import { summarizeDomainGraph, suggestAtlasDomains } from '../services/projectAtlasDomainService';
-import { scanProjectForAtlas } from '../services/projectAtlasScannerService';
 import fs from 'fs';
 import path from 'path';
 
@@ -146,11 +146,10 @@ export function registerProjectRoutes(app: express.Express, deps: ApiRouteDeps) 
       const project = getProject(projectId);
       if (!project) return res.status(404).json({ error: 'Project not found' });
 
+      const refreshStatus = maybeRefreshAtlasOnProjectOpen(project);
       const cached = readAtlasCache({ projectId });
       let atlas = cached.atlas;
-      if (cached.status === 'missing' && project.localPath) {
-        atlas = suggestAtlasDomains(scanProjectForAtlas({ projectId, root: project.localPath }).atlas);
-      } else if (cached.status === 'ok') {
+      if (cached.status === 'ok') {
         atlas = suggestAtlasDomains(cached.atlas);
       }
 
@@ -159,8 +158,9 @@ export function registerProjectRoutes(app: express.Express, deps: ApiRouteDeps) 
         atlas,
         domainSummary: summarizeDomainGraph(atlas),
         status: hasGraph ? 'ready' : cached.status === 'invalid' ? 'error' : 'empty',
-        stale: atlas.freshness.status === 'stale',
-        message: cached.error,
+        stale: refreshStatus.stale,
+        refreshStatus,
+        message: cached.error || atlas.freshness.lastError,
       });
     } catch (error) {
       return sendApiError(res, error);

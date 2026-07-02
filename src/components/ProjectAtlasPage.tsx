@@ -6,6 +6,7 @@ import { AtlasExportMenu } from './projectAtlas/AtlasExportMenu.js';
 import { AtlasPromptMenu } from './projectAtlas/AtlasPromptMenu.js';
 import { AtlasLayerPanel } from './projectAtlas/AtlasLayerPanel.js';
 import { AtlasNodeInspector } from './projectAtlas/AtlasNodeInspector.js';
+import { AtlasRefreshStatus } from './projectAtlas/AtlasRefreshStatus.js';
 import { AtlasSearchBar } from './projectAtlas/AtlasSearchBar.js';
 import { buildAtlasGraphViewModel, buildNodeContext, DEFAULT_ATLAS_LAYERS, searchAtlas, toggleAtlasLayer, type AtlasLayerKey, type AtlasLayers } from '../lib/projectAtlasViewModel.js';
 
@@ -23,6 +24,7 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
   const [expandedNodeIds, setExpandedNodeIds] = useState<string[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [copiedContext, setCopiedContext] = useState(false);
+  const [scanState, setScanState] = useState<'idle' | 'queued' | 'running' | 'succeeded' | 'failed'>('idle');
 
   useEffect(() => {
     if (!projectId) return;
@@ -66,6 +68,22 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
     setCopiedContext(true);
     window.setTimeout(() => setCopiedContext(false), 1600);
   };
+  const handleManualRescan = async () => {
+    if (!projectId) return;
+    setScanState('queued');
+    try {
+      const response = await fetch('/api/project-atlas/rescan', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ projectId }),
+      });
+      if (!response.ok) throw new Error(`Atlas rescan failed with status ${response.status}`);
+      const result = await response.json();
+      setScanState(result.jobId ? 'queued' : 'succeeded');
+    } catch {
+      setScanState('failed');
+    }
+  };
 
   return (
     <section className="flex h-full min-h-0 flex-col bg-[#faf7f0] dark:bg-[#1e1914]">
@@ -82,14 +100,12 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <AtlasSearchBar query={searchQuery} resultCount={searchResult.matchedNodeIds.length} onQueryChange={setSearchQuery} />
-            <button className="h-9 rounded-xl border border-[#e5d4bb] dark:border-[#584a3b] bg-[#fffdfa] dark:bg-[#1e1914] px-3 text-[11px] font-extrabold text-[#6d5a4d] dark:text-[#f3eadf] disabled:opacity-60" type="button" disabled>
+            <button className="h-9 rounded-xl border border-[#e5d4bb] dark:border-[#584a3b] bg-[#fffdfa] dark:bg-[#1e1914] px-3 text-[11px] font-extrabold text-[#6d5a4d] dark:text-[#f3eadf] disabled:opacity-60" type="button" disabled={!projectId || scanState === 'queued' || scanState === 'running'} onClick={handleManualRescan}>
               <RefreshCw size={14} className="mr-1 inline" /> Manual Rescan
             </button>
             <AtlasPromptMenu atlas={data?.atlas ?? null} selectedNode={selectedNode} />
             <AtlasExportMenu atlas={data?.atlas ?? null} view={view} selectedNode={selectedNode} />
-            <span className="h-9 rounded-xl border border-[#e5d4bb] dark:border-[#584a3b] bg-[#fff7eb] dark:bg-[#3a2f26] px-3 py-2 text-[10px] font-mono font-black uppercase text-[#9a5b13] dark:text-[#f3eadf]">
-              {data?.stale ? 'Stale' : data?.atlas?.freshness?.status ?? 'Unknown'}
-            </span>
+            <AtlasRefreshStatus stale={data?.stale} status={data?.refreshStatus} scanState={scanState} message={data?.message} />
           </div>
         </div>
       </div>

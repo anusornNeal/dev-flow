@@ -11,6 +11,8 @@ const {
   getProjectAtlasForApi,
   getProjectAtlasStatus,
   getTaskFocusedAtlasContext,
+  maybeRefreshAtlasOnProjectOpen,
+  rescanProjectAtlasSafely,
   saveLatestAtlas,
   shouldIncludeAtlasForTask,
 } = await import('../../src/server/services/projectAtlasService.js');
@@ -134,4 +136,31 @@ test('getTaskFocusedAtlasContext renders read order and guardrails', () => {
   assert.match(context?.markdown ?? '', /Recommended Read Order/);
   assert.match(context?.markdown ?? '', /targetFiles.*authoritative/i);
   assert.ok((context?.recommendedReadOrder ?? []).some((entry: string) => entry.includes('src/3.ts')));
+});
+
+test('maybeRefreshAtlasOnProjectOpen marks daily-open check without blocking on scan', () => {
+  saveLatestAtlas({
+    ...atlas,
+    freshness: {
+      status: 'stale',
+      generatedAt: '2026-07-01T00:00:00.000Z',
+    },
+  });
+
+  const first = maybeRefreshAtlasOnProjectOpen(project, { now: '2026-07-02T01:00:00.000Z' });
+  const second = maybeRefreshAtlasOnProjectOpen(project, { now: '2026-07-02T02:00:00.000Z' });
+
+  assert.equal(first.shouldRefresh, true);
+  assert.equal(second.shouldRefresh, false);
+});
+
+test('rescanProjectAtlasSafely preserves last good atlas when scan fails', () => {
+  saveLatestAtlas(atlas);
+
+  const result = rescanProjectAtlasSafely({ ...project, localPath: '' }, { now: '2026-07-02T02:00:00.000Z' });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.atlas.nodes.length, atlas.nodes.length);
+  assert.equal(result.atlas.freshness.status, 'error');
+  assert.match(result.atlas.freshness.lastError ?? '', /localPath/i);
 });

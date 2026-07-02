@@ -18,7 +18,8 @@ import { getRepoInspectionIndex } from '../services/repoInspectionIndexService';
 import { validateTaskQuality } from '../services/taskQualityService';
 import { buildJiraAuthoringBundle } from '../services/jiraAuthoringBundleService';
 import { findProjectByIdentifier } from '../services/taskService';
-import { getProjectAtlasForApi, getProjectAtlasStatus, rescanProjectAtlas } from '../services/projectAtlasService';
+import { getProjectAtlasForApi, getProjectAtlasStatus, rescanProjectAtlasSafely } from '../services/projectAtlasService';
+import { enqueueToolJob } from '../services/mcpToolJobService';
 
 export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) {
   app.get('/api/capabilities', (_req, res) => {
@@ -215,7 +216,10 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
     try {
       const project = findProjectByIdentifier(deps.state, req.body as Record<string, any>);
       if (!project) return res.status(404).json({ error: 'Project not found' });
-      return res.json(rescanProjectAtlas(project));
+      if (req.body?.sync === true) {
+        return res.json(rescanProjectAtlasSafely(project, { manualRescan: true }));
+      }
+      return res.json(enqueueToolJob(deps.state, 'rescan_project_atlas', { ...req.body, projectId: project.id }, 'repo-command'));
     } catch (error) {
       return sendApiError(res, error);
     }

@@ -309,6 +309,11 @@ export interface ProjectAtlasUiResponse {
   domainSummary: AtlasDomainGraphSummary;
   status: 'empty' | 'ready' | 'error';
   stale: boolean;
+  refreshStatus?: {
+    shouldRefresh?: boolean;
+    reason?: string;
+    freshness?: AtlasFreshness;
+  };
   message?: string;
 }
 

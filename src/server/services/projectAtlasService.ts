@@ -3,6 +3,8 @@ import type { Project } from '../../types.js';
 import { renderAtlasMarkdown } from '../../lib/projectAtlasExport.js';
 import { buildProjectAtlasPrompt, PROJECT_ATLAS_PROMPT_VARIANTS, type ProjectAtlasPromptVariantId } from '../../lib/projectAtlasPromptTemplates.js';
 import { searchAtlas, buildNodeContext } from '../../lib/projectAtlasViewModel.js';
+import { getChangedGitFilesForRoot } from './gitService.js';
+import { buildAtlasDiffImpact, buildTaskFocusedAtlasImpact } from './projectAtlasImpactService.js';
 import {
   isAtlasStale,
   readAtlasCache,
@@ -12,7 +14,7 @@ import {
 import { suggestAtlasDomains } from './projectAtlasDomainService.js';
 import { scanProjectForAtlas } from './projectAtlasScannerService.js';
 
-export type ProjectAtlasApiMode = 'compact' | 'standard' | 'full' | 'chatgpt-context' | 'agent-context' | 'task-focused';
+export type ProjectAtlasApiMode = 'compact' | 'standard' | 'full' | 'chatgpt-context' | 'agent-context' | 'task-focused' | 'diff-impact';
 
 export interface ProjectAtlasApiInput {
   mode?: ProjectAtlasApiMode;
@@ -25,6 +27,7 @@ export interface ProjectAtlasApiInput {
   promptVariant?: ProjectAtlasPromptVariantId;
   selectedNodeId?: string;
   diffSummary?: string;
+  changedFiles?: string[];
 }
 
 export interface AtlasTaskLike {
@@ -96,6 +99,13 @@ export function getProjectAtlasForApi(project: Project, input: ProjectAtlasApiIn
     const query = input.query || input.focusPath || input.taskId || '';
     const matches = searchAtlas(atlas, query).matchedNodeIds.slice(0, limit);
     const selectedNodeId = matches.find((id) => atlas.nodes.some((node) => node.id === id));
+    const taskImpact = buildTaskFocusedAtlasImpact(atlas, {
+      title: input.taskTitle || input.taskId,
+      targetFiles: input.targetFiles?.length ? input.targetFiles : matches
+        .map((id) => atlas.nodes.find((node) => node.id === id)?.path)
+        .filter(Boolean) as string[],
+      repoContext: input.query,
+    });
     return withAtlasPromptTemplate({
       ...base,
       query,
@@ -103,7 +113,21 @@ export function getProjectAtlasForApi(project: Project, input: ProjectAtlasApiIn
       selectedContext: selectedNodeId ? buildNodeContext(atlas, selectedNodeId) : '',
       nodes: atlas.nodes.filter((node) => matches.includes(node.id)).slice(0, limit),
       edges: atlas.edges.filter((edge) => matches.includes(edge.source) || matches.includes(edge.target)).slice(0, limit),
+      impact: taskImpact,
     }, atlas, { ...input, selectedNodeId: input.selectedNodeId ?? selectedNodeId });
+  }
+
+  if (mode === 'diff-impact') {
+    const changedFiles = input.changedFiles?.length
+      ? input.changedFiles
+      : project.localPath
+        ? getChangedGitFilesForRoot(project.localPath).map((file) => file.path)
+        : [];
+    return withAtlasPromptTemplate({
+      ...base,
+      format: 'impact',
+      impact: buildAtlasDiffImpact(atlas, { changedFiles }),
+    }, atlas, input);
   }
 
   const compact = {
@@ -201,6 +225,12 @@ export function getTaskFocusedAtlasContext(project: Project, task: AtlasTaskLike
   const readOrder = Array.isArray(atlas.nodes)
     ? atlas.nodes.map((node: any) => node.path || node.label).filter(Boolean).slice(0, 12)
     : [];
+  const cachedAtlas = readLatestAtlas(project.id);
+  const fullAtlas = cachedAtlas.status === 'ok' ? suggestAtlasDomains(cachedAtlas.atlas) : cachedAtlas.atlas;
+  const impact = buildTaskFocusedAtlasImpact(fullAtlas, task);
+  const recommendedReadOrder = impact.readOrder.length
+    ? impact.readOrder.map((item) => item.path || item.label)
+    : readOrder;
 
   return {
     included: true,
@@ -209,7 +239,13 @@ export function getTaskFocusedAtlasContext(project: Project, task: AtlasTaskLike
     stale: atlas.stale,
     generatedAt: atlas.generatedAt,
     matchedNodeIds: atlas.matchedNodeIds,
-    recommendedReadOrder: readOrder,
+    recommendedReadOrder,
+    impact: {
+      compactSummary: impact.compactSummary,
+      warnings: impact.warnings,
+      relatedTests: impact.relatedTests.map((node) => node.path || node.label),
+      mermaid: impact.mermaid,
+    },
     markdown: [
       '## Project Atlas Task Context',
       '',
@@ -217,7 +253,9 @@ export function getTaskFocusedAtlasContext(project: Project, task: AtlasTaskLike
       `Freshness: ${atlas.freshness?.status ?? 'unknown'}${atlas.generatedAt ? ` (${atlas.generatedAt})` : ''}`,
       '',
       '### Recommended Read Order',
-      ...(readOrder.length ? readOrder.map((entry: string) => `- ${entry}`) : ['- No focused Atlas nodes matched; use repo context bundle before broad reads.']),
+      ...(recommendedReadOrder.length ? recommendedReadOrder.map((entry: string) => `- ${entry}`) : ['- No focused Atlas nodes matched; use repo context bundle before broad reads.']),
+      impact.warnings.length ? ['', '### Atlas Impact Warnings', ...impact.warnings.map((warning) => `- ${warning.message}`)] : undefined,
+      impact.relatedTests.length ? ['', '### Related Tests', ...impact.relatedTests.map((node) => `- ${node.path || node.label}`)] : undefined,
       '',
       '### Boundaries and Guardrails',
       '- Treat verified Atlas facts as navigation hints, not permission to edit unrelated modules.',

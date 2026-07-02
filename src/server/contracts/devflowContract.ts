@@ -398,12 +398,12 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'get_project_atlas',
-    description: 'Get capped Project Atlas knowledge graph context for a project. Modes include compact, standard, full, chatgpt-context, agent-context, and task-focused. Pass promptVariant to receive a copy-ready Atlas prompt.',
+    description: 'Get capped Project Atlas knowledge graph context for a project. Modes include compact, standard, full, chatgpt-context, agent-context, task-focused, and diff-impact. Pass promptVariant to receive a copy-ready Atlas prompt.',
     inputSchema: {
       type: 'object',
       properties: {
         ...projectIdentifierProperties,
-        mode: { type: 'string', enum: ['compact', 'standard', 'full', 'chatgpt-context', 'agent-context', 'task-focused'], description: 'Atlas response mode. Defaults to compact.' },
+        mode: { type: 'string', enum: ['compact', 'standard', 'full', 'chatgpt-context', 'agent-context', 'task-focused', 'diff-impact'], description: 'Atlas response mode. Defaults to compact.' },
         limit: { type: 'number', description: 'Maximum nodes/edges returned. Defaults are capped; max 1000.' },
         query: { type: 'string', description: 'Search query for task-focused mode.' },
         focusPath: { type: 'string', description: 'Path focus for task-focused mode.' },
@@ -412,6 +412,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
         targetFiles: { type: 'array', items: { type: 'string' }, description: 'Explicit target files to include in task-focused prompt templates.' },
         selectedNodeId: { type: 'string', description: 'Atlas node id for module/node prompt templates.' },
         diffSummary: { type: 'string', description: 'Current diff summary for analyze-diff-impact prompt templates.' },
+        changedFiles: { type: 'array', items: { type: 'string' }, description: 'Changed files for diff-impact mode. If omitted, current git status is used when localPath is available.' },
         promptVariant: {
           type: 'string',
           enum: ['explain-project', 'onboard-repo', 'find-affected-files', 'plan-implementation', 'build-read-order', 'explain-module', 'analyze-diff-impact'],

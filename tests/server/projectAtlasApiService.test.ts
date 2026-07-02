@@ -99,6 +99,25 @@ test('getProjectAtlasForApi can include copy-ready prompt templates', () => {
   assert.match(response.promptTemplate.prompt, /Do not edit unrelated modules/i);
 });
 
+test('getProjectAtlasForApi exposes diff-impact output and task-focused impact warnings', () => {
+  const diffImpact = getProjectAtlasForApi(project, {
+    mode: 'diff-impact',
+    changedFiles: ['src/3.ts'],
+  } as any) as any;
+  const taskFocused = getProjectAtlasForApi(project, {
+    mode: 'task-focused',
+    query: 'src/3.ts',
+    taskTitle: 'Unknown target files',
+    targetFiles: [],
+  } as any) as any;
+
+  assert.equal(diffImpact.format, 'impact');
+  assert.ok(diffImpact.impact.directNodes.some((node: any) => node.path === 'src/3.ts'));
+  assert.match(diffImpact.impact.markdown, /Verified direct impact/);
+  assert.match(diffImpact.impact.mermaid, /graph TD/);
+  assert.ok(Array.isArray(taskFocused.impact.warnings));
+});
+
 test('shouldIncludeAtlasForTask is selective and preserves focused targetFiles', () => {
   assert.equal(shouldIncludeAtlasForTask({ title: 'Small fix', targetFiles: ['src/one.ts'] }).include, false);
   assert.equal(shouldIncludeAtlasForTask({ title: 'Architecture cleanup', targetFiles: ['src/one.ts'] }).include, true);

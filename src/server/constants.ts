@@ -7,6 +7,9 @@ export const VALID_MODELS = [
 ];
 export const VALID_STATUSES = ['backlog', 'todo', 'in-progress', 'ready-for-review', 'done'];
 export const VALID_PRIORITIES = ['low', 'medium', 'high'];
+export const VALID_BUG_STATUSES = ['open', 'fixing', 'fixed', 'verified', 'reopened', 'archived'];
+export const VALID_BUG_SOURCES = ['agent', 'review', 'user', 'auto-close-warning', 'manual'];
+export const VALID_BUG_SEVERITIES = ['low', 'medium', 'high', 'critical'];
 export const VALID_TASK_CATEGORIES = ['frontend', 'backend', 'general'];
 export const VALID_TASK_TAGS = VALID_TASK_CATEGORIES;
 
@@ -59,6 +62,44 @@ export const TASK_SCHEMA_DEF = {
         required: ['id', 'text', 'completed'],
       },
       description: 'Sub-tasks or checklist items',
+    },
+    bugs: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          taskId: { type: 'string' },
+          title: { type: 'string' },
+          status: { type: 'string', enum: VALID_BUG_STATUSES },
+          source: { type: 'string', enum: VALID_BUG_SOURCES },
+          severity: { type: 'string', enum: VALID_BUG_SEVERITIES },
+          actual: { type: 'string' },
+          expected: { type: 'string' },
+          evidence: { type: 'string' },
+          relatedAreas: { type: 'array', items: { type: 'string' } },
+          versions: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                version: { type: 'number' },
+                status: { type: 'string', enum: VALID_BUG_STATUSES },
+                prompt: { type: 'string' },
+                summary: { type: 'string' },
+                changedFiles: { type: 'array', items: { type: 'string' } },
+                createdAt: { type: 'string', format: 'date-time' },
+                createdBy: { type: 'string' },
+              },
+              required: ['version', 'status', 'prompt', 'createdAt'],
+            },
+          },
+          createdAt: { type: 'string', format: 'date-time' },
+          updatedAt: { type: 'string', format: 'date-time' },
+        },
+        required: ['id', 'taskId', 'title', 'status', 'source', 'severity', 'versions', 'createdAt', 'updatedAt'],
+      },
+      description: 'Embedded bug/fix threads that remain inside this task instead of becoming top-level tasks.',
     },
     designImages: { type: 'array', items: { type: 'string' }, maxItems: 5, description: 'Array of up to 5 URLs or base64 strings to design mockups or images' },
     specUrl: { type: 'string', description: 'URL to a specification document' },

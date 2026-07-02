@@ -32,6 +32,7 @@ const TASK_COLUMNS = [
   'logs',
   'designImages',
   'images',
+  'bugs',
 ] as const;
 
 const TASK_UPSERT_SQL = `
@@ -63,7 +64,8 @@ const TASK_UPSERT_SQL = `
     updatedAt = excluded.updatedAt,
     logs = excluded.logs,
     designImages = excluded.designImages,
-    images = excluded.images
+    images = excluded.images,
+    bugs = excluded.bugs
 `;
 
 export class StaleTaskUpdateError extends Error {
@@ -76,6 +78,7 @@ export class StaleTaskUpdateError extends Error {
 }
 
 let categoryColumnEnsured = false;
+let bugsColumnEnsured = false;
 
 function ensureTaskCategoryColumn() {
   if (categoryColumnEnsured) return;
@@ -85,6 +88,21 @@ function ensureTaskCategoryColumn() {
     db.prepare('ALTER TABLE tasks ADD COLUMN category TEXT').run();
   }
   categoryColumnEnsured = true;
+}
+
+function ensureTaskBugsColumn() {
+  if (bugsColumnEnsured) return;
+  const tableInfo = db.pragma('table_info(tasks)') as Array<{ name: string }>;
+  const hasBugs = tableInfo.some((column) => column.name === 'bugs');
+  if (!hasBugs) {
+    db.prepare('ALTER TABLE tasks ADD COLUMN bugs TEXT').run();
+  }
+  bugsColumnEnsured = true;
+}
+
+function ensureTaskColumns() {
+  ensureTaskCategoryColumn();
+  ensureTaskBugsColumn();
 }
 
 export function loadCounters(state: AppState) {
@@ -163,6 +181,7 @@ function parseTaskRow(item: any, runsByTaskId: Map<string, AgentRun[]>) {
     targetFiles: parseJsonArray(item.targetFiles),
     checklist: parseJsonArray(item.checklist),
     logs: parseJsonArray(item.logs),
+    bugs: parseJsonArray(item.bugs),
     images: (() => {
       const imgs = parseJsonArray(item.images);
       const legacy = parseJsonArray(item.designImages);
@@ -228,14 +247,14 @@ function getAllAgentRunsByTaskId(taskIds?: string[]): Map<string, AgentRun[]> {
 }
 
 export function getTasks(): any[] {
-  ensureTaskCategoryColumn();
+  ensureTaskColumns();
   const rows = db.prepare('SELECT * FROM tasks').all() as any[];
   const runsByTaskId = getAllAgentRunsByTaskId(rows.map(r => r.id));
   return rows.map(row => parseTaskRow(row, runsByTaskId));
 }
 
 export function getTask(id: string): any | undefined {
-  ensureTaskCategoryColumn();
+  ensureTaskColumns();
   const row = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as any;
   if (!row) return undefined;
   const runsByTaskId = getAllAgentRunsByTaskId([id]);
@@ -243,14 +262,14 @@ export function getTask(id: string): any | undefined {
 }
 
 export function getTasksByProjectId(projectId: string): any[] {
-  ensureTaskCategoryColumn();
+  ensureTaskColumns();
   const rows = db.prepare('SELECT * FROM tasks WHERE projectId = ?').all(projectId) as any[];
   const runsByTaskId = getAllAgentRunsByTaskId(rows.map(r => r.id));
   return rows.map(row => parseTaskRow(row, runsByTaskId));
 }
 
 export function getPendingTasks(): any[] {
-  ensureTaskCategoryColumn();
+  ensureTaskColumns();
   const rows = db.prepare("SELECT * FROM tasks WHERE status = 'todo' AND agent IS NOT NULL AND agent != ''").all() as any[];
   const runsByTaskId = getAllAgentRunsByTaskId(rows.map(r => r.id));
   return rows.map(row => parseTaskRow(row, runsByTaskId));
@@ -294,18 +313,19 @@ function serializeTaskForRow(item: any) {
     item.logs ? JSON.stringify(item.logs) : null,
     null,
     item.images ? JSON.stringify(item.images) : null,
+    item.bugs ? JSON.stringify(item.bugs) : null,
   ];
 }
 
 export function saveTask(task: any) {
-  ensureTaskCategoryColumn();
+  ensureTaskColumns();
   withDbTransaction(() => {
     db.prepare(TASK_UPSERT_SQL).run(...serializeTaskForRow(task));
   });
 }
 
 export function saveTaskWithExpectedUpdatedAt(task: any, expectedUpdatedAt: string | null | undefined) {
-  ensureTaskCategoryColumn();
+  ensureTaskColumns();
   return withDbTransaction(() => {
     const existing = db.prepare('SELECT updatedAt FROM tasks WHERE id = ?').get(task.id) as { updatedAt?: string | null } | undefined;
     if (existing && expectedUpdatedAt !== undefined && (existing.updatedAt || null) !== (expectedUpdatedAt || null)) {

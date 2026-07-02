@@ -45,6 +45,7 @@ import { useRunArtifacts } from './taskDrawer/useRunArtifacts';
 import { useTaskDrawerEditState } from './taskDrawer/useTaskDrawerEditState';
 import { TaskDrawerActivityPanel } from './taskDrawer/TaskDrawerActivityPanel';
 import SubtasksSection from './taskDrawer/SubtasksSection';
+import BugThreadsSection from './taskDrawer/BugThreadsSection';
 
 interface TaskDetailsDrawerProps {
   task: Task;
@@ -575,6 +576,8 @@ export default function TaskDetailsDrawer({
                   onChange={(e) => setEditedDesc(e.target.value)}
                 />
               </div>
+
+              <BugThreadsSection taskId={task.displayId || task.id} bugs={task.bugs} onTaskUpdated={onUpdate} />
 
               {/* Links & References Accordion */}
               <div className="border border-[#ebdcb9] dark:border-[#584a3b] rounded-2xl overflow-hidden bg-[#fffdfa] dark:bg-[#292119]">

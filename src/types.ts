@@ -263,6 +263,21 @@ export interface ProjectAtlas {
   freshness: AtlasFreshness;
 }
 
+export interface AtlasScanStats {
+  scannedFileCount: number;
+  skippedDirectories: string[];
+  skippedDirectoryCount: number;
+  durationMs: number;
+  truncated: boolean;
+  warnings: string[];
+  errors: string[];
+}
+
+export interface ProjectAtlasScanResult {
+  atlas: ProjectAtlas;
+  scanStats: AtlasScanStats;
+}
+
 export interface Column {
   id: TaskStatus;
   label: string;

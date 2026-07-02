@@ -5,11 +5,16 @@ interface AtlasGraphProps {
   nodes: AtlasNode[];
   edges: AtlasEdge[];
   selectedNodeId: string | null;
+  highlightedNodeIds?: string[];
+  expandedNodeIds?: string[];
   onSelectNode: (node: AtlasNode) => void;
+  onToggleExpandNode?: (node: AtlasNode) => void;
 }
 
-export function AtlasGraph({ nodes, edges, selectedNodeId, onSelectNode }: AtlasGraphProps) {
+export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = [], expandedNodeIds = [], onSelectNode, onToggleExpandNode }: AtlasGraphProps) {
   const positions = layoutNodes(nodes);
+  const highlightedIds = new Set(highlightedNodeIds);
+  const expandedIds = new Set(expandedNodeIds);
   return (
     <div className="h-full min-h-[420px] overflow-auto bg-[#fdfaf5] dark:bg-[#17130f]">
       <svg className="min-w-[900px] min-h-[620px] w-full h-full" viewBox="0 0 960 640" role="img" aria-label="Project Atlas graph">
@@ -35,14 +40,20 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, onSelectNode }: Atlas
         {nodes.map((node) => {
           const position = positions.get(node.id) ?? { x: 80, y: 80 };
           const isSelected = selectedNodeId === node.id;
+          const isHighlighted = highlightedIds.has(node.id);
+          const isExpanded = expandedIds.has(node.id);
           return (
             <g
               key={node.id}
               transform={`translate(${position.x}, ${position.y})`}
-              onClick={() => onSelectNode(node)}
+              onClick={() => {
+                onSelectNode(node);
+                if (node.kind === 'domain' || node.kind === 'folder') onToggleExpandNode?.(node);
+              }}
               className="cursor-pointer"
             >
-              <circle r={node.kind === 'domain' ? 34 : 25} fill={isSelected ? '#3c2a1a' : '#fffdfa'} stroke={isSelected ? '#e0a070' : '#d8c5aa'} strokeWidth={isSelected ? 3 : 1.5} />
+              {isHighlighted && <circle r={node.kind === 'domain' ? 42 : 32} fill="none" stroke="#d89745" strokeWidth="3" strokeDasharray="5 4" />}
+              <circle r={node.kind === 'domain' ? 34 : 25} fill={isSelected ? '#3c2a1a' : '#fffdfa'} stroke={isExpanded ? '#38b000' : isSelected ? '#e0a070' : '#d8c5aa'} strokeWidth={isSelected || isExpanded ? 3 : 1.5} />
               <foreignObject x="-12" y="-13" width="24" height="24" className="pointer-events-none">
                 <div className="flex items-center justify-center text-[#a46c24]">
                   <NodeIcon node={node} />

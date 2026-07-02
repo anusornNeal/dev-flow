@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Download, RefreshCw, Search, Waypoints } from 'lucide-react';
+import { Download, RefreshCw, Waypoints } from 'lucide-react';
 import type { AtlasNode, ProjectAtlasUiResponse } from '../types.js';
 import { AtlasGraph } from './projectAtlas/AtlasGraph.js';
 import { AtlasLayerPanel } from './projectAtlas/AtlasLayerPanel.js';
-import { buildAtlasGraphViewModel, DEFAULT_ATLAS_LAYERS, toggleAtlasLayer, type AtlasLayerKey, type AtlasLayers } from './projectAtlas/atlasViewModel.js';
+import { AtlasNodeInspector } from './projectAtlas/AtlasNodeInspector.js';
+import { AtlasSearchBar } from './projectAtlas/AtlasSearchBar.js';
+import { buildAtlasGraphViewModel, buildNodeContext, DEFAULT_ATLAS_LAYERS, searchAtlas, toggleAtlasLayer, type AtlasLayerKey, type AtlasLayers } from '../lib/projectAtlasViewModel.js';
 
 interface ProjectAtlasPageProps {
   projectId: string | null;
@@ -16,6 +18,9 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
   const [layers, setLayers] = useState<AtlasLayers>(DEFAULT_ATLAS_LAYERS);
   const [collapsedDomains, setCollapsedDomains] = useState(true);
   const [selectedNode, setSelectedNode] = useState<AtlasNode | null>(null);
+  const [expandedNodeIds, setExpandedNodeIds] = useState<string[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [copiedContext, setCopiedContext] = useState(false);
 
   useEffect(() => {
     if (!projectId) return;
@@ -41,11 +46,24 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
     };
   }, [projectId]);
 
+  const searchResult = useMemo(() => data?.atlas ? searchAtlas(data.atlas, searchQuery) : { query: searchQuery, matchedNodeIds: [] }, [data, searchQuery]);
   const view = useMemo(() => data?.atlas
-    ? buildAtlasGraphViewModel(data.atlas, { layers, collapsedDomains })
-    : null, [data, layers, collapsedDomains]);
+    ? buildAtlasGraphViewModel(data.atlas, { layers, collapsedDomains, matchedNodeIds: searchResult.matchedNodeIds, expandedNodeIds })
+    : null, [data, layers, collapsedDomains, searchResult.matchedNodeIds, expandedNodeIds]);
 
   const handleToggleLayer = (key: AtlasLayerKey) => setLayers((current) => toggleAtlasLayer(current, key));
+  const handleToggleExpandNode = (node: AtlasNode) => {
+    setExpandedNodeIds((current) => current.includes(node.id)
+      ? current.filter((id) => id !== node.id)
+      : [...current, node.id]);
+  };
+  const handleCopyContext = async () => {
+    if (!data?.atlas || !selectedNode) return;
+    const context = buildNodeContext(data.atlas, selectedNode.id);
+    await navigator.clipboard?.writeText(context);
+    setCopiedContext(true);
+    window.setTimeout(() => setCopiedContext(false), 1600);
+  };
 
   return (
     <section className="flex h-full min-h-0 flex-col bg-[#faf7f0] dark:bg-[#1e1914]">
@@ -61,10 +79,7 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <label className="flex h-9 min-w-[220px] items-center gap-2 rounded-xl border border-[#e5d4bb] dark:border-[#584a3b] bg-[#fffdfa] dark:bg-[#1e1914] px-3 text-[11px] font-mono text-[#8a6e5a] dark:text-[#f3eadf]">
-              <Search size={14} />
-              <input className="min-w-0 flex-1 bg-transparent outline-none" placeholder="Search Atlas..." disabled />
-            </label>
+            <AtlasSearchBar query={searchQuery} resultCount={searchResult.matchedNodeIds.length} onQueryChange={setSearchQuery} />
             <button className="h-9 rounded-xl border border-[#e5d4bb] dark:border-[#584a3b] bg-[#fffdfa] dark:bg-[#1e1914] px-3 text-[11px] font-extrabold text-[#6d5a4d] dark:text-[#f3eadf] disabled:opacity-60" type="button" disabled>
               <RefreshCw size={14} className="mr-1 inline" /> Manual Rescan
             </button>
@@ -83,6 +98,7 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
           <AtlasLayerPanel
             layers={layers}
             collapsedDomains={collapsedDomains}
+            expandedNodeIds={expandedNodeIds}
             domains={view.domains}
             onToggleLayer={handleToggleLayer}
             onToggleCollapsedDomains={() => setCollapsedDomains((current) => !current)}
@@ -96,22 +112,19 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
             <AtlasCenteredMessage title="No Atlas generated yet" body="Run Manual Rescan when the scanner workflow is ready for this project." />
           )}
           {!loading && !error && data?.status === 'ready' && view && view.nodes.length > 0 && (
-            <AtlasGraph nodes={view.nodes} edges={view.edges} selectedNodeId={selectedNode?.id ?? null} onSelectNode={setSelectedNode} />
+            <AtlasGraph
+              nodes={view.nodes}
+              edges={view.edges}
+              selectedNodeId={selectedNode?.id ?? null}
+              highlightedNodeIds={searchResult.matchedNodeIds}
+              expandedNodeIds={expandedNodeIds}
+              onSelectNode={setSelectedNode}
+              onToggleExpandNode={handleToggleExpandNode}
+            />
           )}
         </main>
 
-        <aside className="w-full lg:w-80 shrink-0 border-t lg:border-t-0 lg:border-l border-[#e5d4bb] dark:border-[#584a3b] bg-[#f4ebd9] dark:bg-[#292119] p-4">
-          <p className="text-[10px] font-black uppercase tracking-widest text-[#8a6e5a] dark:text-[#d6b56d]">Node Inspector</p>
-          {selectedNode ? (
-            <div className="mt-3 rounded-xl border border-[#e5d4bb] dark:border-[#584a3b] bg-[#fffdfa] dark:bg-[#1e1914] p-4">
-              <h2 className="text-sm font-extrabold text-[#3c2a1a] dark:text-[#f3eadf]">{selectedNode.label}</h2>
-              <p className="mt-1 text-[10px] font-mono text-[#8a6e5a] dark:text-[#d6b56d]">{selectedNode.kind}</p>
-              {selectedNode.path && <p className="mt-3 break-all text-[11px] font-mono text-[#5c493c] dark:text-[#f3eadf]">{selectedNode.path}</p>}
-            </div>
-          ) : (
-            <p className="mt-3 text-[11px] font-mono leading-relaxed text-[#6d5a4d] dark:text-[#f3eadf]">Select a graph node to inspect its summary and relationships.</p>
-          )}
-        </aside>
+        <AtlasNodeInspector atlas={data?.atlas ?? null} node={selectedNode} copied={copiedContext} onCopyContext={handleCopyContext} />
       </div>
     </section>
   );

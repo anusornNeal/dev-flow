@@ -40,9 +40,17 @@ Repo inspection is required for implementation-ready cards, but it must be targe
 
 Use `get_repo_context_bundle` first when a project is known. It should provide the starting git status, repo index matches, focused snippets, and optional diff context in one packet. Query with screen names, visible strings, Jira terms, route names, or flow names.
 
+Use `get_project_atlas` as a companion, not a replacement, when the card is architecture/project-structure/onboarding related, targetFiles remain empty or uncertain after the bundle, the task crosses modules/domains, or the user asks for impact, affected files, module boundaries, or read order.
+
 Fall back to `get_repo_inspection_index`, `search_local_files`, and `read_local_file` only when the bundle is unavailable or does not identify enough target files/functions. Then read only the matched target files that are needed to confirm the implementation map.
 
 Do not scan or read the whole repo. Start from the Jira/user terms and search only for likely screen names, visible strings, route names, ViewModels, composables, fragments, adapters, mappers, APIs, models, and tests. Read only the smallest set of files needed to identify the implementation path.
+
+Atlas guardrails:
+- Do not use Atlas to skip reading exact target files before editing or authoring an implementation map.
+- Treat verified Atlas facts as stronger than inferred summaries, and label inferred guidance as inferred in `reasoning` or review notes when it matters.
+- If Atlas suggests files that conflict with explicit card `targetFiles`, do not override them silently; mention the conflict and inspect the exact files before changing scope.
+- Keep lean repo-context workflow for simple single-file cards.
 
 Stop repo inspection when you can name:
 

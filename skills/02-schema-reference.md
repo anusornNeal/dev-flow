@@ -12,6 +12,7 @@ Use these before writing implementation-ready cards:
 
 - `get_jira_authoring_bundle`: one-call Jira packet for issue summary, description, comments, attachment metadata, related issues, and existing DevFlow duplicate cards. Use it before individual Jira proxy tools.
 - `get_repo_context_bundle`: one-call repo packet for project metadata, git status, repo index matches, focused file snippets, and optional diff context. Prefer this first when a project is known.
+- `get_project_atlas`: compact project knowledge graph for architecture, onboarding, unclear targetFiles, cross-module impact, module boundaries, and read order. Use modes `compact`, `standard`, `agent-context`, `chatgpt-context`, or `task-focused`; keep it companion-only after `get_repo_context_bundle`, and never let inferred Atlas summaries silently override explicit targetFiles.
 - `get_repo_inspection_index`: cached repo index for likely files, classes, composables, functions, routes, mappers, helpers, and tests. Use it as a targeted fallback when the repo context bundle is unavailable or insufficient.
 - `read_file_snippets_batch`: read several focused local file ranges in one round trip after the bundle/index identifies likely files.
 - `read_local_file`: read one exact local file or line range before editing; preserve returned file revision/hash when a write tool can guard against stale edits.

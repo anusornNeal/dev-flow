@@ -83,6 +83,22 @@ test('getProjectAtlasStatus includes freshness and counts', () => {
   assert.equal(status.nodeCount, 12);
 });
 
+test('getProjectAtlasForApi can include copy-ready prompt templates', () => {
+  const response = getProjectAtlasForApi(project, {
+    mode: 'task-focused',
+    query: 'src/3.ts',
+    promptVariant: 'plan-implementation',
+    taskId: 'DVF-0296',
+    taskTitle: 'Project Atlas prompt templates',
+    targetFiles: ['src/3.ts'],
+  } as any) as any;
+
+  assert.equal(response.promptTemplate.variantId, 'plan-implementation');
+  assert.match(response.promptTemplate.prompt, /Project Atlas prompt templates/);
+  assert.match(response.promptTemplate.prompt, /verified/i);
+  assert.match(response.promptTemplate.prompt, /Do not edit unrelated modules/i);
+});
+
 test('shouldIncludeAtlasForTask is selective and preserves focused targetFiles', () => {
   assert.equal(shouldIncludeAtlasForTask({ title: 'Small fix', targetFiles: ['src/one.ts'] }).include, false);
   assert.equal(shouldIncludeAtlasForTask({ title: 'Architecture cleanup', targetFiles: ['src/one.ts'] }).include, true);

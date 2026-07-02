@@ -3,6 +3,7 @@ import { RefreshCw, Waypoints } from 'lucide-react';
 import type { AtlasNode, ProjectAtlasUiResponse } from '../types.js';
 import { AtlasGraph } from './projectAtlas/AtlasGraph.js';
 import { AtlasExportMenu } from './projectAtlas/AtlasExportMenu.js';
+import { AtlasPromptMenu } from './projectAtlas/AtlasPromptMenu.js';
 import { AtlasLayerPanel } from './projectAtlas/AtlasLayerPanel.js';
 import { AtlasNodeInspector } from './projectAtlas/AtlasNodeInspector.js';
 import { AtlasSearchBar } from './projectAtlas/AtlasSearchBar.js';
@@ -84,6 +85,7 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
             <button className="h-9 rounded-xl border border-[#e5d4bb] dark:border-[#584a3b] bg-[#fffdfa] dark:bg-[#1e1914] px-3 text-[11px] font-extrabold text-[#6d5a4d] dark:text-[#f3eadf] disabled:opacity-60" type="button" disabled>
               <RefreshCw size={14} className="mr-1 inline" /> Manual Rescan
             </button>
+            <AtlasPromptMenu atlas={data?.atlas ?? null} selectedNode={selectedNode} />
             <AtlasExportMenu atlas={data?.atlas ?? null} view={view} selectedNode={selectedNode} />
             <span className="h-9 rounded-xl border border-[#e5d4bb] dark:border-[#584a3b] bg-[#fff7eb] dark:bg-[#3a2f26] px-3 py-2 text-[10px] font-mono font-black uppercase text-[#9a5b13] dark:text-[#f3eadf]">
               {data?.stale ? 'Stale' : data?.atlas?.freshness?.status ?? 'Unknown'}

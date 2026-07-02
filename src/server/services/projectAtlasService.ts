@@ -1,6 +1,7 @@
 import type { AtlasFreshness, ProjectAtlas } from '../../types.js';
 import type { Project } from '../../types.js';
 import { renderAtlasMarkdown } from '../../lib/projectAtlasExport.js';
+import { buildProjectAtlasPrompt, PROJECT_ATLAS_PROMPT_VARIANTS, type ProjectAtlasPromptVariantId } from '../../lib/projectAtlasPromptTemplates.js';
 import { searchAtlas, buildNodeContext } from '../../lib/projectAtlasViewModel.js';
 import {
   isAtlasStale,
@@ -19,6 +20,11 @@ export interface ProjectAtlasApiInput {
   query?: string;
   focusPath?: string;
   taskId?: string;
+  taskTitle?: string;
+  targetFiles?: string[];
+  promptVariant?: ProjectAtlasPromptVariantId;
+  selectedNodeId?: string;
+  diffSummary?: string;
 }
 
 export interface AtlasTaskLike {
@@ -76,28 +82,28 @@ export function getProjectAtlasForApi(project: Project, input: ProjectAtlasApiIn
   };
 
   if (mode === 'chatgpt-context' || mode === 'agent-context') {
-    return {
+    return withAtlasPromptTemplate({
       ...base,
       format: 'markdown',
       markdown: renderAtlasMarkdown(atlas),
       guidance: mode === 'agent-context'
         ? 'Use domains and key nodes to choose focused files before broader repo reads.'
         : 'Use this compact Atlas overview as project map context.',
-    };
+    }, atlas, input);
   }
 
   if (mode === 'task-focused') {
     const query = input.query || input.focusPath || input.taskId || '';
     const matches = searchAtlas(atlas, query).matchedNodeIds.slice(0, limit);
     const selectedNodeId = matches.find((id) => atlas.nodes.some((node) => node.id === id));
-    return {
+    return withAtlasPromptTemplate({
       ...base,
       query,
       matchedNodeIds: matches,
       selectedContext: selectedNodeId ? buildNodeContext(atlas, selectedNodeId) : '',
       nodes: atlas.nodes.filter((node) => matches.includes(node.id)).slice(0, limit),
       edges: atlas.edges.filter((edge) => matches.includes(edge.source) || matches.includes(edge.target)).slice(0, limit),
-    };
+    }, atlas, { ...input, selectedNodeId: input.selectedNodeId ?? selectedNodeId });
   }
 
   const compact = {
@@ -121,14 +127,14 @@ export function getProjectAtlasForApi(project: Project, input: ProjectAtlasApiIn
       .map((node) => ({ id: node.id, label: node.label, kind: node.kind, path: node.path })),
   };
 
-  if (mode === 'compact') return compact;
+  if (mode === 'compact') return withAtlasPromptTemplate(compact, atlas, input);
 
-  return {
+  return withAtlasPromptTemplate({
     ...compact,
     nodes: [...atlas.nodes].sort((left, right) => left.id.localeCompare(right.id)).slice(0, limit),
     edges: [...atlas.edges].sort((left, right) => left.id.localeCompare(right.id)).slice(0, limit),
     truncated: atlas.nodes.length > limit || atlas.edges.length > limit,
-  };
+  }, atlas, input);
 }
 
 export function rescanProjectAtlas(project: Project) {
@@ -229,6 +235,34 @@ function buildTaskAtlasFocusQuery(task: AtlasTaskLike) {
   const pathLike = text.match(/[A-Za-z0-9_.-]+(?:\/|\\)[A-Za-z0-9_./\\-]+/g);
   if (pathLike?.length) return pathLike.slice(0, 8).join(' ');
   return text.slice(0, 800);
+}
+
+function withAtlasPromptTemplate<T extends Record<string, unknown>>(response: T, atlas: any, input: ProjectAtlasApiInput): T {
+  if (!input.promptVariant) {
+    return {
+      ...response,
+      promptTemplates: PROJECT_ATLAS_PROMPT_VARIANTS,
+    };
+  }
+
+  return {
+    ...response,
+    promptTemplates: PROJECT_ATLAS_PROMPT_VARIANTS,
+    promptTemplate: {
+      variantId: input.promptVariant,
+      prompt: buildProjectAtlasPrompt(input.promptVariant, atlas, {
+        selectedNodeId: input.selectedNodeId,
+        diffSummary: input.diffSummary,
+        task: input.taskId || input.taskTitle || input.targetFiles?.length
+          ? {
+              id: input.taskId,
+              title: input.taskTitle,
+              targetFiles: input.targetFiles,
+            }
+          : undefined,
+      }),
+    },
+  };
 }
 
 function normalizeAtlasLimit(value: unknown, fallback: number) {

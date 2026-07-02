@@ -397,6 +397,56 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
     }),
   },
   {
+    name: 'get_project_atlas',
+    description: 'Get capped Project Atlas knowledge graph context for a project. Modes include compact, standard, full, chatgpt-context, agent-context, and task-focused.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...projectIdentifierProperties,
+        mode: { type: 'string', enum: ['compact', 'standard', 'full', 'chatgpt-context', 'agent-context', 'task-focused'], description: 'Atlas response mode. Defaults to compact.' },
+        limit: { type: 'number', description: 'Maximum nodes/edges returned. Defaults are capped; max 1000.' },
+        query: { type: 'string', description: 'Search query for task-focused mode.' },
+        focusPath: { type: 'string', description: 'Path focus for task-focused mode.' },
+        taskId: { type: 'string', description: 'Task id/key for task-focused mode.' },
+      },
+    },
+    outputSchema: { type: 'object' },
+    lightweight: true,
+    buildHttpRequest: (args) => ({
+      method: 'GET',
+      path: withQuery('/api/project-atlas', args),
+    }),
+  },
+  {
+    name: 'get_project_atlas_status',
+    description: 'Read Project Atlas freshness and cache status, including stale/generatedAt counts and last error metadata.',
+    inputSchema: {
+      type: 'object',
+      properties: projectIdentifierProperties,
+    },
+    outputSchema: { type: 'object' },
+    lightweight: true,
+    buildHttpRequest: (args) => ({
+      method: 'GET',
+      path: withQuery('/api/project-atlas/status', args),
+    }),
+  },
+  {
+    name: 'rescan_project_atlas',
+    description: 'Manually rebuild Project Atlas for a project using the deterministic scanner and update the latest cache.',
+    inputSchema: {
+      type: 'object',
+      properties: projectIdentifierProperties,
+    },
+    outputSchema: { type: 'object' },
+    executionPolicy: { mode: 'job', jobKind: 'repo-command' },
+    buildHttpRequest: (args) => ({
+      method: 'POST',
+      path: '/api/project-atlas/rescan',
+      body: args,
+    }),
+  },
+  {
     name: 'list_tasks',
     description: 'List tasks with optional filters. Local-first and ChatGPT-friendly: defaults to a small minimal page; pass projectId/status/q and an explicit limit before asking for broader context.',
     inputSchema: {

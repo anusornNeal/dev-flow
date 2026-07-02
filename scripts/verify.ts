@@ -26,6 +26,7 @@ const commands = [
   { label: 'lint', command: 'npm', args: ['run', 'lint'] },
   { label: 'devflow contract', command: 'npx', args: ['tsx', 'scripts/verify-devflow-contract.ts'] },
   { label: 'project atlas cache', command: 'npx', args: ['tsx', '--test', 'tests/server/projectAtlasCacheService.test.ts'] },
+  { label: 'project atlas api', command: 'npx', args: ['tsx', '--test', 'tests/server/projectAtlasApiService.test.ts'] },
   { label: 'project atlas domains', command: 'npx', args: ['tsx', '--test', 'tests/server/projectAtlasDomainService.test.ts'] },
   { label: 'project atlas exports', command: 'npx', args: ['tsx', '--test', 'tests/server/projectAtlasExport.test.ts'] },
   { label: 'project atlas scanner', command: 'npx', args: ['tsx', '--test', 'tests/server/projectAtlasScannerService.test.ts'] },

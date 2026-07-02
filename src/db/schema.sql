@@ -37,7 +37,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   updatedAt TEXT,
   logs TEXT, -- JSON string
   designImages TEXT, -- JSON string
-  images TEXT -- JSON string
+  images TEXT, -- JSON string
+  bugs TEXT -- JSON string
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_project_display_id_unique

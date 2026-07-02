@@ -1,4 +1,5 @@
 const { saveTask } = await import('../src/server/repositories/taskRepository.js');
+const { createProject } = await import('../src/server/repositories/projectRepository.js');
 const { executeAllMigrations } = await import('../src/db/migrations/index.js');
 executeAllMigrations();
 import assert from 'node:assert/strict';
@@ -8,6 +9,7 @@ import path from 'node:path';
 import { interpolate, isAllowedPromptSkillId, isPromptValuePresent, listPromptSectionsForWorkspace, readPromptSectionForWorkspace, renderPromptTemplate, resolvePromptSectionId, writePromptOverrideForWorkspace, deletePromptOverrideForWorkspace, type PromptRenderContext } from '../src/server/services/promptTemplateService';
 import { getProjectRulesContext } from '../src/server/services/projectRulesService';
 import { renderTaskPrompt } from '../src/server/services/taskService';
+import { BUG_FIX_PROMPT_VARIANTS, buildBugFixPrompt } from '../src/lib/bugFixPromptTemplates';
 
 console.log('[verify] Testing prompt template interpolation with production-shaped context...');
 const fixtureLocalPath = path.join('fixtures', 'dev-flow');
@@ -221,10 +223,20 @@ assert.ok(!sparseRender.content.includes('Attached Images API'));
 assert.ok(!sparseRender.content.includes('Attached Images API'));
 
 console.log('[verify] Testing real task prompt shares omission logic...');
+const promptFixtureSuffix = Date.now();
+const sparseDisplayId = `DVF-SPARSE-${promptFixtureSuffix}`;
+const imageDisplayId = `DVF-IMAGE-${promptFixtureSuffix}`;
+createProject({
+  id: 'project-1',
+  name: 'Prompt fixture project',
+  repoUrl: 'https://github.com/anusornNeal/dev-flow',
+  localPath: fixtureLocalPath,
+  createdAt: new Date().toISOString(),
+});
 const sparseState = {
   _testTasks: [{
     id: 'task-sparse',
-    displayId: 'DVF-0121',
+    displayId: sparseDisplayId,
     projectId: 'project-1',
     title: 'Sparse Prompt Task',
     status: 'todo',
@@ -256,7 +268,7 @@ assert.ok(!taskPrompt.includes('Attached Images API'));
 const imageState = {
   _testTasks: [{
     id: 'task-image',
-    displayId: 'DVF-0122',
+    displayId: imageDisplayId,
     projectId: 'project-1',
     title: 'Image Prompt Task',
     status: 'todo',
@@ -283,7 +295,7 @@ const imageState = {
 } as any;
 imageState._testTasks.forEach(t => saveTask(t));
 const imageTaskPrompt = renderTaskPrompt(imageState, 'task-image').renderResult.content;
-assert.ok(imageTaskPrompt.includes('**Attached Images API:** GET /api/tasks/DVF-0122/images'));
+assert.ok(imageTaskPrompt.includes(`**Attached Images API:** GET /api/tasks/${imageDisplayId}/images`));
 
 console.log('[verify] Prompt template coverage passed!');
 
@@ -358,3 +370,45 @@ try {
 }
 
 console.log('[verify] Prompt override helper coverage passed!');
+
+console.log('[verify] Testing bug fix prompt variants...');
+const bugPromptTask = {
+  id: 'task-bug-prompt',
+  displayId: 'DVF-0279',
+  title: 'Bug prompt fixture',
+  status: 'done' as const,
+  branch: 'feature/in-task-bug-threads',
+};
+const bugPromptBug = {
+  id: 'bug-1',
+  taskId: 'task-bug-prompt',
+  title: 'Close warning missing',
+  status: 'open' as const,
+  source: 'review' as const,
+  severity: 'high' as const,
+  actual: 'Task closes silently.',
+  expected: 'Task shows an unresolved bug warning.',
+  evidence: 'Reviewer feedback',
+  relatedAreas: ['src/server/routes/tasks.ts'],
+  versions: [{
+    version: 1,
+    status: 'open' as const,
+    prompt: 'Fix close warning.',
+    summary: 'Initial failed attempt.',
+    changedFiles: ['src/server/routes/tasks.ts'],
+    createdAt: '2026-07-02T00:00:00.000Z',
+    createdBy: 'Codex',
+  }],
+  createdAt: '2026-07-02T00:00:00.000Z',
+  updatedAt: '2026-07-02T00:00:00.000Z',
+};
+for (const variant of BUG_FIX_PROMPT_VARIANTS) {
+  const prompt = buildBugFixPrompt(bugPromptTask, bugPromptBug, variant.id);
+  assert.ok(prompt.includes('DVF-0279'));
+  assert.ok(prompt.includes('Close warning missing'));
+  assert.ok(prompt.includes('Do not create a top-level task'));
+  assert.ok(prompt.includes('src/server/routes/tasks.ts'));
+}
+assert.ok(buildBugFixPrompt(bugPromptTask, bugPromptBug, 'test-first').includes('TDD'));
+assert.ok(buildBugFixPrompt(bugPromptTask, bugPromptBug, 'review-reply').includes('reviewer/user'));
+console.log('[verify] Bug fix prompt variant coverage passed!');

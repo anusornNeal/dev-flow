@@ -3,11 +3,22 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { VALID_STATUSES, VALID_PRIORITIES, type TaskStatus, type TaskPriority } from './server/domain/task.js';
+import {
+  VALID_BUG_SEVERITIES,
+  VALID_BUG_SOURCES,
+  VALID_BUG_STATUSES,
+  VALID_STATUSES,
+  VALID_PRIORITIES,
+  type BugSeverity,
+  type BugSource,
+  type BugStatus,
+  type TaskStatus,
+  type TaskPriority,
+} from './server/domain/task.js';
 
 // Re-export domain types so existing imports keep working, but the source of truth is now src/server/domain/task.ts.
-export { VALID_STATUSES, VALID_PRIORITIES } from './server/domain/task.js';
-export type { TaskStatus, TaskPriority } from './server/domain/task.js';
+export { VALID_BUG_SEVERITIES, VALID_BUG_SOURCES, VALID_BUG_STATUSES, VALID_STATUSES, VALID_PRIORITIES } from './server/domain/task.js';
+export type { BugSeverity, BugSource, BugStatus, TaskStatus, TaskPriority } from './server/domain/task.js';
 export type TaskCategory = 'frontend' | 'backend' | 'general';
 
 export interface LogEntry {
@@ -57,6 +68,32 @@ export interface AgentCompletionPayload {
   moveTo?: Exclude<TaskStatus, 'done'>;
 }
 
+export interface BugVersion {
+  version: number;
+  status: BugStatus;
+  prompt: string;
+  summary?: string;
+  changedFiles?: string[];
+  createdAt: string;
+  createdBy?: string;
+}
+
+export interface BugThread {
+  id: string;
+  taskId: string;
+  title: string;
+  status: BugStatus;
+  source: BugSource;
+  severity: BugSeverity;
+  actual?: string;
+  expected?: string;
+  evidence?: string;
+  relatedAreas?: string[];
+  versions: BugVersion[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Task {
   id: string;
   displayId?: string; // e.g. buddy2-0001
@@ -73,6 +110,9 @@ export interface Task {
   logs: LogEntry[];
   targetFiles?: string[];
   checklist?: ChecklistItem[];
+  bugs?: BugThread[];
+  unresolvedBugCount?: number;
+  latestUnresolvedBug?: Pick<BugThread, 'id' | 'title' | 'status' | 'severity' | 'updatedAt'> | null;
   repoContext?: string;
   specUrl?: string;
   images?: TaskImage[]; // New unlimited local image storage

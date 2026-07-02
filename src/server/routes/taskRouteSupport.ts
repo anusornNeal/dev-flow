@@ -20,7 +20,7 @@ import { acquireLock, releaseLock, withIdempotency, getIdempotencyResult, create
 import { validateEnum, validateString } from '../validation';
 import { isValidTransition, getValidationErrorMessage } from '../../lib/statusTransitions';
 import { buildAgentLaunchConfig, runAgentLaunchPreflight, type AgentLaunchPreflightCode } from '../services/agentLaunchConfig';
-import { applyChecklistToggle as applyChecklistToggleUseCase, validateTaskPatch as validateTaskPatchUseCase } from '../useCases/taskUseCases';
+import { applyChecklistToggle as applyChecklistToggleUseCase, getBugSummary, validateTaskPatch as validateTaskPatchUseCase } from '../useCases/taskUseCases';
 import { canRetryRun as canRetryRunUseCase, canCancelRun as canCancelRunUseCase, validateCompletion as validateCompletionUseCase } from '../useCases/agentRunUseCases';
 import type { AgentCompletionPayload, AgentCompletionStatus, TaskStatus } from '../../types';
 import { registerTaskImportFileRoute } from './taskImportFileRoute';
@@ -61,6 +61,20 @@ export function getTaskIndexByIdentifier(tasks: any[], targetId: string) {
   return tasks.findIndex((task) => task.id === targetId || task.displayId === targetId);
 }
 
+function bugSummaryFields(task: any) {
+  const summary = getBugSummary(task);
+  return {
+    unresolvedBugCount: summary.unresolvedBugCount,
+    latestUnresolvedBug: summary.latestUnresolvedBug ? {
+      id: summary.latestUnresolvedBug.id,
+      title: summary.latestUnresolvedBug.title,
+      status: summary.latestUnresolvedBug.status,
+      severity: summary.latestUnresolvedBug.severity,
+      updatedAt: summary.latestUnresolvedBug.updatedAt,
+    } : null,
+  };
+}
+
 export function toTaskResponse(task: any, mode: TaskReadMode) {
   if (mode === 'minimal') {
     return {
@@ -86,6 +100,7 @@ export function toTaskResponse(task: any, mode: TaskReadMode) {
       effort: task.effort,
       updatedAt: task.updatedAt,
       latestAgentRun: task.latestAgentRun,
+      ...bugSummaryFields(task),
     };
   }
 
@@ -115,6 +130,7 @@ export function toTaskResponse(task: any, mode: TaskReadMode) {
       effort: task.effort,
       repo: task.repo,
       sourceUrl: task.sourceUrl,
+      ...bugSummaryFields(task),
     };
   }
 

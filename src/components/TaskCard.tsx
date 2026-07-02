@@ -73,6 +73,7 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
   const totalSteps = task.checklist?.length || 0;
   const completedSteps = task.checklist?.filter(item => item.completed).length || 0;
   const filesCount = task.targetFiles?.length || 0;
+  const unresolvedBugCount = task.unresolvedBugCount ?? (task.bugs || []).filter((bug) => ['open', 'fixing', 'fixed', 'reopened'].includes(bug.status)).length;
   
   const hasEffectiveAssignment = Boolean(task.agent || task.model || task.effort);
 
@@ -283,6 +284,19 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
               }`} title="Checklist steps">
                 <CheckSquare size={12} className="relative -top-[0.5px]" /> 
                 <span className="leading-none mt-[1px]">{completedSteps}/{totalSteps}</span>
+              </span>
+            )}
+
+            {unresolvedBugCount > 0 && (
+              <span
+                className={`flex items-center gap-1 text-[10px] font-mono font-bold mr-1.5 ${
+                  isDone ? 'text-[#b4432d] dark:text-[#e0a070]' : 'text-[#9b4e3d] dark:text-[#e0a070]'
+                }`}
+                title={isDone ? `Done with ${unresolvedBugCount} unresolved bug${unresolvedBugCount === 1 ? '' : 's'}` : `${unresolvedBugCount} unresolved bug${unresolvedBugCount === 1 ? '' : 's'}`}
+                aria-label={isDone ? `Done with ${unresolvedBugCount} unresolved bugs` : `${unresolvedBugCount} unresolved bugs`}
+              >
+                <AlertTriangle size={12} className="relative -top-[0.5px]" />
+                <span className="leading-none mt-[1px]">{unresolvedBugCount}</span>
               </span>
             )}
 

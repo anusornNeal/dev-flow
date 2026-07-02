@@ -11,6 +11,7 @@ import { getModelConfig } from '../../lib/agentsConfig';
 import { resolveAgentExecutionMode } from './agentRunService';
 import { getProjectRulesContext } from './projectRulesService';
 import { renderPromptTemplate } from './promptTemplateService';
+import { buildTaskBugSummaryJson, renderTaskBugSummaryMarkdown } from '../../lib/bugThreadExport';
 
 function normalizeRepoLike(value: string) {
   return value.trim().toLowerCase().replace(/\/$/, '');
@@ -426,6 +427,12 @@ export function getAgentTaskContext(state: AppState, targetId: string, includeLo
       checklist: task.checklist,
       targetFiles: task.targetFiles,
     }),
+    bugSummary: Array.isArray(task.bugs) && task.bugs.length > 0
+      ? cleanObject({
+          json: buildTaskBugSummaryJson(task),
+          markdown: renderTaskBugSummaryMarkdown(task),
+        })
+      : undefined,
     projectRules: getProjectRulesContext(),
     repoContext: task.repoContext || undefined,
     orchestration: cleanObject({

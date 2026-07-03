@@ -130,16 +130,16 @@ export default function Sidebar({
   if (activePage === 'atlas' && isAtlasSidebarCollapsed) {
     const activeProject = projects.find(p => p.id === activeProjectId);
     return (
-      <aside className="hidden h-full w-16 shrink-0 select-none flex-col border-r border-[#584a3b] bg-[#241c15] px-2 py-3 lg:flex">
+      <aside className="hidden h-full w-16 shrink-0 select-none flex-col border-r border-[#e5d4bb] bg-[#fffdfa] px-2 py-3 lg:flex">
         <button
           type="button"
           onClick={onToggleAtlasSidebar}
           title="Expand sidebar"
-          className="mb-3 flex h-10 w-10 items-center justify-center rounded-xl border border-[#6d5642] bg-[#34281d] text-[#f0b84d] hover:bg-[#403024]"
+          className="mb-3 flex h-10 w-10 cursor-pointer items-center justify-center rounded-xl border border-[#d8c5aa] bg-[#fff7ec] text-[#a46c24] hover:bg-[#ffeace]"
         >
           <ChevronRight size={18} />
         </button>
-        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#e0a070] text-[#2b1b0f]" title="CozyFlow">
+        <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-[#e5a043] bg-[#ffb766] text-[#553108]" title="CozyFlow">
           <Coffee size={20} />
         </div>
         <div className="mt-4 flex flex-col gap-2">
@@ -147,7 +147,7 @@ export default function Sidebar({
             type="button"
             onClick={() => onSetActivePage?.('atlas')}
             title="Project Atlas"
-            className="flex h-10 w-10 items-center justify-center rounded-xl border border-[#f0b84d] bg-[#3a2f26] text-[#f3eadf]"
+            className="flex h-10 w-10 cursor-pointer items-center justify-center rounded-xl border border-[#d89745] bg-[#ffeace] text-[#714a1a]"
           >
             <Waypoints size={18} />
           </button>
@@ -155,17 +155,17 @@ export default function Sidebar({
             type="button"
             onClick={() => onSetActivePage?.('board')}
             title="Sprint Board"
-            className="flex h-10 w-10 items-center justify-center rounded-xl border border-[#6d5642] bg-[#2b2119] text-[#d6b56d] hover:bg-[#3a2f26]"
+            className="flex h-10 w-10 cursor-pointer items-center justify-center rounded-xl border border-[#e5d4bb] bg-[#fff7ec] text-[#a46c24] hover:bg-[#ffeace]"
           >
             <FolderGit size={18} />
           </button>
         </div>
-        <div className="mt-4 h-px bg-[#584a3b]" />
+        <div className="mt-4 h-px bg-[#e5d4bb]" />
         <div className="mt-4 flex min-h-0 flex-1 flex-col items-center gap-2">
-          <div className="[writing-mode:vertical-rl] max-h-56 rotate-180 truncate text-[10px] font-black uppercase tracking-widest text-[#d6b56d]" title={activeProject?.name}>
+          <div className="[writing-mode:vertical-rl] max-h-56 rotate-180 truncate text-[10px] font-black uppercase tracking-widest text-[#9a5b13]" title={activeProject?.name}>
             {activeProject?.taskIdPrefix || activeProject?.name || 'Atlas'}
           </div>
-          <span className="rounded-full border border-[#6d5642] px-1.5 py-1 text-[9px] font-black text-[#f0b84d]" title="Task count">
+          <span className="rounded-full border border-[#e0c7a8] bg-[#fff7eb] px-1.5 py-1 text-[9px] font-black text-[#9a5b13]" title="Task count">
             {totalTasks}
           </span>
         </div>
@@ -173,7 +173,7 @@ export default function Sidebar({
           type="button"
           onClick={onOpenSettings}
           title="Settings"
-          className="mt-auto flex h-10 w-10 items-center justify-center rounded-xl border border-[#6d5642] bg-[#2b2119] text-[#d6b56d] hover:bg-[#3a2f26]"
+          className="mt-auto flex h-10 w-10 cursor-pointer items-center justify-center rounded-xl border border-[#e5d4bb] bg-[#fff7ec] text-[#a46c24] hover:bg-[#ffeace]"
         >
           <Settings size={17} />
         </button>

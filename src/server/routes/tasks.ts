@@ -8,7 +8,7 @@ import type express from 'express';
 import type { ApiRouteDeps } from '../types';
 import { TASK_SCHEMA_DEF, VALID_AGENTS, LEGACY_VALID_EFFORTS_FALLBACK, VALID_MODELS, VALID_STATUSES } from '../constants';
 import { ACTIVE_AGENT_RUN_STATUSES, cancelActiveRunsForTask, cancelStaleActiveRuns, createAgentRun, getActiveRunForProjectAndAgent, getActiveRunForTask, getLatestAgentRunForTask, listActiveRunSummariesForProject, listAgentRunsForTask, updateAgentRunStatus, type AgentRun } from '../repositories/agentRunRepository';
-import { deleteTasksByIds, generateDisplayId, saveTask, getTasks } from '../repositories/taskRepository.js';
+import { deleteTasksByIds, generateDisplayId, resolveDisplayIdForNewTask, saveTask, getTasks } from '../repositories/taskRepository.js';
 import { listAttachmentsForTask } from '../repositories/attachmentRepository';
 import { appendAgentRunLog, buildAgentCompletionSummary, createAgentRunFiles, createAgentRunResultRecord, getAgentRunHistoryPaths, getAgentTriggerScriptPath, getDevFlowApiBaseUrl, resolveAgentExecutionMode, resolveFromDevFlowAppRoot, writeAgentRunLaunchMetadata, writeAgentRunOutputSummary, writeAgentRunResult } from '../services/agentRunService';
 import { extractImages, extractDesignImages, findProjectByIdentifier, findTaskByIdentifier, getAgentTaskContext, normalizeAgentCompletionPayload, normalizeTaskCategoryAndTags, applyTaskCategoryAndTagsUpdate, renderTaskPrompt, resolveProjectIdFromRepo, validateAgentCompletionPayload, validateAgentParams, validateTaskPayload } from '../services/taskService';
@@ -905,7 +905,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
 
       const newTask = {
         id: item.id || `task-${Date.now()}-${Math.floor(Math.random() * 1000000)}`,
-        displayId: item.displayId || generateDisplayId(deps.state, resolvedProjectId),
+        displayId: resolveDisplayIdForNewTask(deps.state, resolvedProjectId, item.displayId),
         projectId: resolvedProjectId,
         title: item.title.trim(),
         description: item.description || '',

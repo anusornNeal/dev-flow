@@ -5,7 +5,7 @@ import { getDevFlowAppRoot } from '../../lib/devFlowPaths';
 import type { ApiRouteDeps } from '../types';
 import { sendApiError } from '../services/api';
 import { applyTaskCategoryAndTagsUpdate, extractDesignImages, extractImages, normalizeTaskCategoryAndTags, resolveProjectIdFromRepo, validateTaskPayload } from '../services/taskService';
-import { generateDisplayId, saveTask, getTasks } from '../repositories/taskRepository.js';
+import { resolveDisplayIdForNewTask, saveTask, getTasks } from '../repositories/taskRepository.js';
 
 function getTaskIndexByIdentifier(tasks: any[], targetId: string) {
   return tasks.findIndex((task) => task.id === targetId || task.displayId === targetId);
@@ -218,7 +218,7 @@ export function registerTaskImportFileRoute(app: express.Express, deps: ApiRoute
           const classification = normalizeTaskCategoryAndTags(f, { requireCategory: true });
           const newTask: any = {
             id: op.item.id || `task-${Date.now()}-${Math.floor(Math.random() * 1000000)}`,
-            displayId: op.item.displayId || generateDisplayId(deps.state, op.resolvedProjectId),
+            displayId: resolveDisplayIdForNewTask(deps.state, op.resolvedProjectId, op.item.displayId),
             projectId: op.resolvedProjectId,
             title: op.title || 'untitled',
             description: f.description || '',

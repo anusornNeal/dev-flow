@@ -100,9 +100,9 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
             if (!showEdge) return null;
             const dimmed = canDim && !directlyRelated;
             const path = edgePath(source, target);
-            const showLabel = Boolean(focusSelection && directlyRelated && viewport.zoom > (denseGraph ? 1.05 : 0.82) && edge.sourceEdgeIds.length <= 3);
-            const edgeOpacity = dimmed ? 0.06 : focusSelection ? 0.9 : 0.14;
-            const edgeWidth = dimmed ? 0.8 : focusSelection && directlyRelated ? 2.6 : 1;
+            const showLabel = Boolean(!denseGraph && focusSelection && directlyRelated && viewport.zoom > 0.82 && edge.sourceEdgeIds.length <= 3);
+            const edgeOpacity = dimmed ? 0.04 : focusSelection ? 0.62 : 0.1;
+            const edgeWidth = dimmed ? 0.6 : focusSelection && directlyRelated ? 1.8 : 0.9;
             return (
               <g key={edge.id} opacity={edgeOpacity} pointerEvents="none">
                 <path d={path} fill="none" stroke={edge.kind === 'related' ? '#b7741e' : '#9b8271'} strokeWidth={edgeWidth} strokeDasharray={edge.kind === 'related' ? '8 7' : undefined} markerEnd={focusSelection && directlyRelated ? 'url(#atlas-arrow)' : undefined} />

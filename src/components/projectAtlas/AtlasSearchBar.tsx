@@ -8,19 +8,19 @@ interface AtlasSearchBarProps {
 
 export function AtlasSearchBar({ query, resultCount, onQueryChange }: AtlasSearchBarProps) {
   return (
-    <label className="flex h-9 min-w-[220px] items-center gap-2 rounded-xl border border-[#e5d4bb] dark:border-[#584a3b] bg-[#fffdfa] dark:bg-[#1e1914] px-3 text-[11px] font-mono text-[#8a6e5a] dark:text-[#f3eadf]">
-      <Search size={14} />
+    <label className="flex h-9 min-w-[240px] items-center gap-2 rounded-lg border border-[#2a3542] bg-[#0c1117] px-3 text-[11px] font-mono text-[#9da8b5]">
+      <Search size={14} className="text-[#f0b84d]" />
       <input
-        className="min-w-0 flex-1 bg-transparent outline-none"
+        className="min-w-0 flex-1 bg-transparent text-[#f8ead3] outline-none placeholder:text-[#687484]"
         placeholder="Search Atlas..."
         value={query}
         onChange={(event) => onQueryChange(event.target.value)}
       />
       {query && (
-        <span className="font-bold text-[#a46c24] dark:text-[#d6b56d]">{resultCount}</span>
+        <span className="font-bold text-[#f0b84d]">{resultCount}</span>
       )}
       {query && (
-        <button type="button" onClick={() => onQueryChange('')} className="text-[#8a6e5a] dark:text-[#f3eadf]" aria-label="Clear Atlas search">
+        <button type="button" onClick={() => onQueryChange('')} className="text-[#9da8b5] hover:text-[#f8ead3]" aria-label="Clear Atlas search">
           <X size={14} />
         </button>
       )}

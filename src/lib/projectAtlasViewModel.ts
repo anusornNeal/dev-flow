@@ -25,6 +25,63 @@ export interface AtlasGraphViewModel {
   layers: AtlasLayers;
 }
 
+export type AtlasDomainFilter = 'CODE' | 'CONFIG' | 'DOCS' | 'INFRA' | 'DATA' | 'DOMAIN';
+
+export interface AtlasDomainFile {
+  id: string;
+  name: string;
+  path: string;
+  type: string;
+  kind: AtlasNode['kind'];
+}
+
+export interface AtlasDomainMapNode {
+  id: string;
+  title: string;
+  description: string;
+  status: string;
+  category: AtlasDomainFilter;
+  tags: string[];
+  metrics: {
+    files: number;
+    nodes: number;
+    dependencies: number;
+    types: number;
+  };
+  files: AtlasDomainFile[];
+  fileTypeCounts: Record<string, number>;
+  technologies: string[];
+  sourceNodeIds: string[];
+  searchText: string;
+}
+
+export interface AtlasDomainMapEdge {
+  id: string;
+  source: string;
+  target: string;
+  kind: AtlasEdgeKind;
+  label: string;
+  sourceEdgeIds: string[];
+}
+
+export interface AtlasDomainMapViewModel {
+  nodes: AtlasDomainMapNode[];
+  edges: AtlasDomainMapEdge[];
+  matchedNodeIds: string[];
+  activeFilters: AtlasDomainFilter[];
+  hasQuery: boolean;
+}
+
+export interface BuildDomainMapViewModelOptions {
+  query?: string;
+  activeFilters?: AtlasDomainFilter[];
+}
+
+export interface AtlasDomainInspectorViewModel extends AtlasDomainMapNode {
+  name: string;
+  health: string;
+}
+
 export interface BuildAtlasGraphViewModelOptions {
   collapsedDomains?: boolean;
   layers?: AtlasLayers;
@@ -152,6 +209,84 @@ export function searchAtlas(atlas: Pick<ProjectAtlas, 'nodes' | 'domains'>, quer
   };
 }
 
+export function buildDomainMapViewModel(
+  atlas: Pick<ProjectAtlas, 'nodes' | 'edges' | 'domains'>,
+  options: BuildDomainMapViewModelOptions = {},
+): AtlasDomainMapViewModel {
+  const query = options.query?.trim().toLowerCase() ?? '';
+  const activeFilters = options.activeFilters ?? [];
+  const nodesById = new Map(atlas.nodes.map((node) => [node.id, node]));
+  const domainByNodeId = new Map<string, string>();
+  for (const domain of atlas.domains) {
+    for (const nodeId of domain.nodeIds) domainByNodeId.set(nodeId, domain.id);
+  }
+
+  const dependencyCounts = new Map<string, number>();
+  const edgeGroups = new Map<string, AtlasDomainMapEdge>();
+  for (const edge of atlas.edges) {
+    const sourceDomain = domainByNodeId.get(edge.source) ?? (edge.source.startsWith('domain:') ? edge.source : undefined);
+    const targetDomain = domainByNodeId.get(edge.target) ?? (edge.target.startsWith('domain:') ? edge.target : undefined);
+    if (!sourceDomain || !targetDomain || sourceDomain === targetDomain) continue;
+
+    dependencyCounts.set(sourceDomain, (dependencyCounts.get(sourceDomain) ?? 0) + 1);
+    dependencyCounts.set(targetDomain, (dependencyCounts.get(targetDomain) ?? 0) + 1);
+    const id = `${edge.kind}:${sourceDomain}->${targetDomain}`;
+    const existing = edgeGroups.get(id);
+    if (existing) {
+      existing.sourceEdgeIds.push(edge.id);
+    } else {
+      edgeGroups.set(id, {
+        id,
+        source: sourceDomain,
+        target: targetDomain,
+        kind: edge.kind,
+        label: readableEdgeLabel(edge.kind),
+        sourceEdgeIds: [edge.id],
+      });
+    }
+  }
+
+  const domainNodes = atlas.domains
+    .map((domain) => {
+      const sourceNodes = domain.nodeIds.map((nodeId) => nodesById.get(nodeId)).filter((node): node is AtlasNode => Boolean(node));
+      return buildDomainMapNode(domain.id, domain.name, domain.origin, domain.summary, sourceNodes, dependencyCounts.get(domain.id) ?? 0);
+    })
+    .filter((node) => {
+      const matchesFilter = activeFilters.length === 0 || activeFilters.includes(node.category);
+      const matchesQuery = !query || domainSearchText(node).includes(query);
+      return matchesFilter && matchesQuery;
+    })
+    .sort((left, right) => left.title.localeCompare(right.title));
+
+  const visibleIds = new Set(domainNodes.map((node) => node.id));
+  const edges = Array.from(edgeGroups.values())
+    .filter((edge) => visibleIds.has(edge.source) && visibleIds.has(edge.target))
+    .sort((left, right) => left.id.localeCompare(right.id));
+
+  return {
+    nodes: domainNodes,
+    edges,
+    matchedNodeIds: query ? domainNodes.map((node) => node.id).sort() : [],
+    activeFilters,
+    hasQuery: Boolean(query),
+  };
+}
+
+export function buildDomainInspector(
+  atlas: Pick<ProjectAtlas, 'nodes' | 'edges' | 'domains'>,
+  domainId: string | null,
+): AtlasDomainInspectorViewModel | null {
+  if (!domainId) return null;
+  const view = buildDomainMapViewModel(atlas);
+  const node = view.nodes.find((candidate) => candidate.id === domainId);
+  if (!node) return null;
+  return {
+    ...node,
+    name: node.title,
+    health: deriveHealth(node),
+  };
+}
+
 export function buildNodeRelationships(
   atlas: Pick<ProjectAtlas, 'nodes' | 'edges'>,
   nodeId: string,
@@ -219,6 +354,109 @@ function searchableTextForNode(node: AtlasNode, domainNamesById: Map<string, str
     domainId ? domainNamesById.get(domainId) : undefined,
     ...metadataValues.map(String),
   ].filter(Boolean).join(' ').toLowerCase();
+}
+
+function buildDomainMapNode(
+  id: string,
+  name: string,
+  origin: string,
+  summary: string | undefined,
+  sourceNodes: AtlasNode[],
+  dependencyCount: number,
+): AtlasDomainMapNode {
+  const files = sourceNodes
+    .filter((node) => Boolean(node.path))
+    .map((node) => ({
+      id: node.id,
+      name: node.label,
+      path: node.path ?? node.label,
+      type: fileExtension(node.path ?? node.label),
+      kind: node.kind,
+    }))
+    .sort((left, right) => left.path.localeCompare(right.path));
+  const fileTypeCounts = files.reduce<Record<string, number>>((counts, file) => {
+    counts[file.type] = (counts[file.type] ?? 0) + 1;
+    return counts;
+  }, {});
+  const kinds = Array.from(new Set(sourceNodes.map((node) => node.kind))).sort();
+  const technologies = collectTechnologies(sourceNodes);
+  const category = deriveDomainCategory(id, name, sourceNodes);
+
+  return {
+    id,
+    title: name,
+    description: summary ?? summarizeDomain(name, sourceNodes),
+    status: origin,
+    category,
+    tags: Array.from(new Set([category, ...kinds.slice(0, 3)])).slice(0, 5),
+    metrics: {
+      files: files.length,
+      nodes: sourceNodes.length,
+      dependencies: dependencyCount,
+      types: kinds.length,
+    },
+    files,
+    fileTypeCounts,
+    technologies,
+    sourceNodeIds: sourceNodes.map((node) => node.id).sort(),
+    searchText: sourceNodes.map((node) => searchableTextForNode(node, new Map())).join(' '),
+  };
+}
+
+function domainSearchText(node: AtlasDomainMapNode) {
+  return [
+    node.id,
+    node.title,
+    node.description,
+    node.status,
+    node.category,
+    ...node.tags,
+    ...node.technologies,
+    ...node.files.flatMap((file) => [file.name, file.path, file.type]),
+    node.searchText,
+  ].join(' ').toLowerCase();
+}
+
+function fileExtension(path: string) {
+  const match = /\.([a-z0-9]+)$/i.exec(path);
+  return match?.[1]?.toLowerCase() ?? 'unknown';
+}
+
+function collectTechnologies(nodes: AtlasNode[]) {
+  const values = nodes.flatMap((node) => [
+    node.metadata?.language,
+    node.metadata?.framework,
+    node.metadata?.runtime,
+    node.metadata?.platform,
+  ]);
+  return Array.from(new Set(values.filter((value): value is string => typeof value === 'string' && value.trim().length > 0).map((value) => value.trim()))).sort();
+}
+
+function deriveDomainCategory(id: string, name: string, nodes: AtlasNode[]): AtlasDomainFilter {
+  const normalizedId = id.replace(/^domain:/, '');
+  const text = [normalizedId, name, ...nodes.flatMap((node) => [node.kind, node.path, node.label])].join(' ').toLowerCase();
+  if (/\b(test|spec|__tests__)\b/.test(text)) return 'DOCS';
+  if (/\b(doc|docs|md|readme)\b/.test(text)) return 'DOCS';
+  if (/\b(config|json|yaml|yml|env|vite|tsconfig)\b/.test(text)) return 'CONFIG';
+  if (/\b(db|database|sqlite|migration|schema|data)\b/.test(text)) return 'DATA';
+  if (/\b(infra|server|route|api|script|deploy)\b/.test(text)) return 'INFRA';
+  if (/\b(domain|usecase|service|repository)\b/.test(text)) return 'DOMAIN';
+  return 'CODE';
+}
+
+function summarizeDomain(name: string, nodes: AtlasNode[]) {
+  const summary = nodes.map((node) => node.userEdited?.notes ?? node.verified?.description ?? node.inferred?.summary).find(Boolean);
+  return summary ?? `${name} domain with ${nodes.length} related Atlas item${nodes.length === 1 ? '' : 's'}.`;
+}
+
+function readableEdgeLabel(kind: AtlasEdgeKind) {
+  if (kind === 'depends-on') return 'depends on';
+  return kind;
+}
+
+function deriveHealth(node: AtlasDomainMapNode) {
+  if (node.metrics.files === 0 && node.metrics.nodes === 0) return 'empty';
+  return 'unknown';
 }
 
 function isNodeVisible(node: AtlasNode, layers: AtlasLayers, collapsedDomains: boolean) {

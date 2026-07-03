@@ -1,28 +1,42 @@
 import { useEffect, useMemo, useState } from 'react';
-import { RefreshCw, Waypoints } from 'lucide-react';
+import { Activity, BarChart3, Boxes, GitBranch, Layers3, RefreshCw, Search, Settings, ShieldCheck, Waypoints } from 'lucide-react';
 import type { AtlasNode, ProjectAtlasUiResponse } from '../types.js';
 import { AtlasGraph } from './projectAtlas/AtlasGraph.js';
 import { AtlasExportMenu } from './projectAtlas/AtlasExportMenu.js';
 import { AtlasPromptMenu } from './projectAtlas/AtlasPromptMenu.js';
-import { AtlasLayerPanel } from './projectAtlas/AtlasLayerPanel.js';
 import { AtlasNodeInspector } from './projectAtlas/AtlasNodeInspector.js';
 import { AtlasRefreshStatus } from './projectAtlas/AtlasRefreshStatus.js';
 import { AtlasSearchBar } from './projectAtlas/AtlasSearchBar.js';
-import { buildAtlasGraphViewModel, buildNodeContext, DEFAULT_ATLAS_LAYERS, searchAtlas, toggleAtlasLayer, type AtlasLayerKey, type AtlasLayers } from '../lib/projectAtlasViewModel.js';
+import {
+  buildAtlasGraphViewModel,
+  buildDomainInspector,
+  buildDomainMapViewModel,
+  buildNodeContext,
+  DEFAULT_ATLAS_LAYERS,
+  type AtlasDomainFilter,
+} from '../lib/projectAtlasViewModel.js';
 
 interface ProjectAtlasPageProps {
   projectId: string | null;
 }
 
+const FILTERS: AtlasDomainFilter[] = ['CODE', 'CONFIG', 'DOCS', 'INFRA', 'DATA', 'DOMAIN'];
+const NAV_ITEMS = [
+  { label: 'Domain Map', icon: Layers3, active: true },
+  { label: 'Catalog', icon: Boxes },
+  { label: 'Dependencies', icon: GitBranch },
+  { label: 'Quality', icon: ShieldCheck },
+  { label: 'Reports', icon: BarChart3 },
+  { label: 'Settings', icon: Settings },
+];
+
 export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
   const [data, setData] = useState<ProjectAtlasUiResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [layers, setLayers] = useState<AtlasLayers>(DEFAULT_ATLAS_LAYERS);
-  const [collapsedDomains, setCollapsedDomains] = useState(true);
-  const [selectedNode, setSelectedNode] = useState<AtlasNode | null>(null);
-  const [expandedNodeIds, setExpandedNodeIds] = useState<string[]>([]);
+  const [selectedDomainId, setSelectedDomainId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [activeFilters, setActiveFilters] = useState<AtlasDomainFilter[]>([]);
   const [copiedContext, setCopiedContext] = useState(false);
   const [scanState, setScanState] = useState<'idle' | 'queued' | 'running' | 'succeeded' | 'failed'>('idle');
 
@@ -50,24 +64,55 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
     };
   }, [projectId]);
 
-  const searchResult = useMemo(() => data?.atlas ? searchAtlas(data.atlas, searchQuery) : { query: searchQuery, matchedNodeIds: [] }, [data, searchQuery]);
-  const view = useMemo(() => data?.atlas
-    ? buildAtlasGraphViewModel(data.atlas, { layers, collapsedDomains, matchedNodeIds: searchResult.matchedNodeIds, expandedNodeIds })
-    : null, [data, layers, collapsedDomains, searchResult.matchedNodeIds, expandedNodeIds]);
+  const exportView = useMemo(() => data?.atlas ? buildAtlasGraphViewModel(data.atlas, { layers: DEFAULT_ATLAS_LAYERS }) : null, [data]);
+  const domainView = useMemo(() => data?.atlas
+    ? buildDomainMapViewModel(data.atlas, { query: searchQuery, activeFilters })
+    : null, [data, searchQuery, activeFilters]);
+  const inspector = useMemo(() => data?.atlas ? buildDomainInspector(data.atlas, selectedDomainId) : null, [data, selectedDomainId]);
+  const selectedAtlasNode = useMemo(() => {
+    if (!data?.atlas || !selectedDomainId) return null;
+    const existing = data.atlas.nodes.find((node) => node.id === selectedDomainId);
+    if (existing) return existing;
+    const domain = data.atlas.domains.find((candidate) => candidate.id === selectedDomainId);
+    if (!domain) return null;
+    return {
+      id: domain.id,
+      label: domain.name,
+      kind: 'domain',
+      inferred: domain.summary ? { source: 'inferred', summary: domain.summary } : undefined,
+      metadata: { origin: domain.origin },
+    } satisfies AtlasNode;
+  }, [data, selectedDomainId]);
 
-  const handleToggleLayer = (key: AtlasLayerKey) => setLayers((current) => toggleAtlasLayer(current, key));
-  const handleToggleExpandNode = (node: AtlasNode) => {
-    setExpandedNodeIds((current) => current.includes(node.id)
-      ? current.filter((id) => id !== node.id)
-      : [...current, node.id]);
+  useEffect(() => {
+    if (!domainView || !selectedDomainId) return;
+    if (!domainView.nodes.some((node) => node.id === selectedDomainId)) {
+      setSelectedDomainId(domainView.nodes[0]?.id ?? null);
+    }
+  }, [domainView, selectedDomainId]);
+
+  const handleToggleFilter = (filter: AtlasDomainFilter) => {
+    setActiveFilters((current) => current.includes(filter) ? current.filter((item) => item !== filter) : [...current, filter]);
   };
+
   const handleCopyContext = async () => {
-    if (!data?.atlas || !selectedNode) return;
-    const context = buildNodeContext(data.atlas, selectedNode.id);
-    await navigator.clipboard?.writeText(context);
+    if (!data?.atlas || !selectedDomainId) return;
+    const nodeContext = buildNodeContext(data.atlas, selectedDomainId);
+    const domainContext = inspector
+      ? [
+          `Domain: ${inspector.name}`,
+          `Status: ${inspector.status}`,
+          `Summary: ${inspector.description}`,
+          `Metrics: ${inspector.metrics.files} files, ${inspector.metrics.nodes} nodes, ${inspector.metrics.dependencies} dependencies`,
+          inspector.technologies.length ? `Technologies: ${inspector.technologies.join(', ')}` : undefined,
+          inspector.files.length ? `Files:\n${inspector.files.map((file) => `- ${file.path}`).join('\n')}` : undefined,
+        ].filter(Boolean).join('\n')
+      : '';
+    await navigator.clipboard?.writeText(nodeContext || domainContext);
     setCopiedContext(true);
     window.setTimeout(() => setCopiedContext(false), 1600);
   };
+
   const handleManualRescan = async () => {
     if (!projectId) return;
     setScanState('queued');
@@ -85,63 +130,95 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
     }
   };
 
+  const hasNoResults = !loading && !error && data?.status === 'ready' && domainView && domainView.nodes.length === 0;
+  const resultCount = domainView?.matchedNodeIds.length ?? 0;
+
   return (
-    <section className="flex h-full min-h-0 flex-col bg-[#faf7f0] dark:bg-[#1e1914]">
-      <div className="border-b border-[#e5d4bb] dark:border-[#584a3b] bg-white/80 dark:bg-[#292119]/80 px-5 py-4">
-        <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-          <div>
-            <h1 className="flex items-center gap-2 text-lg font-extrabold text-[#3c2a1a] dark:text-[#f3eadf]">
-              <Waypoints size={19} className="text-[#a46c24] dark:text-[#d6b56d]" />
-              Project Atlas
-            </h1>
-            <p className="mt-0.5 text-[11px] font-mono font-bold text-[#816b5a] dark:text-[#d6b56d]">
-              {data?.status === 'ready' ? `${data.atlas.nodes.length} nodes` : 'Graph-first project map'}
-            </p>
+    <section className="flex h-full min-h-0 flex-col bg-[#0c0f13] text-[#eef3f8]">
+      <header className="border-b border-[#26303b] bg-[#10161d]/95 px-5 py-3">
+        <div className="flex flex-col gap-3 2xl:flex-row 2xl:items-center 2xl:justify-between">
+          <div className="flex min-w-0 items-center gap-4">
+            <div>
+              <h1 className="flex items-center gap-2 text-lg font-black text-[#f8ead3]">
+                <Waypoints size={20} className="text-[#f0b84d]" />
+                Project Atlas
+              </h1>
+              <p className="mt-0.5 text-[11px] font-mono font-bold text-[#9da8b5]">
+                {data?.status === 'ready' ? `${data.atlas.domains.length} domains · ${data.atlas.edges.length} relationships` : 'Domain-first project intelligence'}
+              </p>
+            </div>
+            <nav className="hidden items-center rounded-lg border border-[#283442] bg-[#0c1117] p-1 md:flex">
+              {['Overview', 'Domain', 'Structural', 'Diff'].map((tab) => (
+                <button key={tab} type="button" className={`rounded-md px-3 py-1.5 text-[11px] font-black ${tab === 'Domain' ? 'bg-[#f0b84d] text-[#17130f]' : 'text-[#9da8b5] hover:text-[#f8ead3]'}`}>
+                  {tab}
+                </button>
+              ))}
+            </nav>
           </div>
+
           <div className="flex flex-wrap items-center gap-2">
-            <AtlasSearchBar query={searchQuery} resultCount={searchResult.matchedNodeIds.length} onQueryChange={setSearchQuery} />
-            <button className="h-9 rounded-xl border border-[#e5d4bb] dark:border-[#584a3b] bg-[#fffdfa] dark:bg-[#1e1914] px-3 text-[11px] font-extrabold text-[#6d5a4d] dark:text-[#f3eadf] disabled:opacity-60" type="button" disabled={!projectId || scanState === 'queued' || scanState === 'running'} onClick={handleManualRescan}>
-              <RefreshCw size={14} className="mr-1 inline" /> Manual Rescan
+            <AtlasSearchBar query={searchQuery} resultCount={resultCount} onQueryChange={setSearchQuery} />
+            <div className="flex flex-wrap gap-1.5">
+              {FILTERS.map((filter) => (
+                <button
+                  key={filter}
+                  type="button"
+                  onClick={() => handleToggleFilter(filter)}
+                  className={`h-8 rounded-lg border px-2.5 text-[10px] font-black ${activeFilters.includes(filter) ? 'border-[#f0b84d] bg-[#332719] text-[#f7d28a]' : 'border-[#2a3542] bg-[#111820] text-[#9da8b5] hover:text-[#f8ead3]'}`}
+                >
+                  {filter}
+                </button>
+              ))}
+            </div>
+            <button className="h-9 rounded-lg border border-[#2a3542] bg-[#111820] px-3 text-[11px] font-extrabold text-[#d7dee8] disabled:opacity-60" type="button" disabled={!projectId || scanState === 'queued' || scanState === 'running'} onClick={handleManualRescan}>
+              <RefreshCw size={14} className="mr-1 inline" /> Rescan
             </button>
-            <AtlasPromptMenu atlas={data?.atlas ?? null} selectedNode={selectedNode} />
-            <AtlasExportMenu atlas={data?.atlas ?? null} view={view} selectedNode={selectedNode} />
+            <AtlasPromptMenu atlas={data?.atlas ?? null} selectedNode={selectedAtlasNode} />
+            <AtlasExportMenu atlas={data?.atlas ?? null} view={exportView} selectedNode={selectedAtlasNode} />
             <AtlasRefreshStatus stale={data?.stale} status={data?.refreshStatus} scanState={scanState} message={data?.message} />
           </div>
         </div>
-      </div>
+      </header>
 
-      <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
-        {view && (
-          <AtlasLayerPanel
-            layers={layers}
-            collapsedDomains={collapsedDomains}
-            expandedNodeIds={expandedNodeIds}
-            domains={view.domains}
-            onToggleLayer={handleToggleLayer}
-            onToggleCollapsedDomains={() => setCollapsedDomains((current) => !current)}
-          />
-        )}
+      <div className="flex min-h-0 flex-1">
+        <aside className="hidden w-56 shrink-0 border-r border-[#26303b] bg-[#10161d] p-3 lg:block">
+          <div className="mb-3 flex items-center gap-2 rounded-lg border border-[#273342] bg-[#0c1117] px-3 py-2 text-[11px] font-bold text-[#9da8b5]">
+            <Search size={14} className="text-[#f0b84d]" />
+            Atlas workspace
+          </div>
+          <div className="space-y-1">
+            {NAV_ITEMS.map((item) => (
+              <button key={item.label} type="button" className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-[12px] font-extrabold ${item.active ? 'bg-[#1d2631] text-[#f8ead3]' : 'text-[#7f8b99] hover:bg-[#141c25] hover:text-[#d7dee8]'}`}>
+                <item.icon size={15} className={item.active ? 'text-[#f0b84d]' : 'text-[#6d7886]'} />
+                {item.label}
+              </button>
+            ))}
+          </div>
+          <div className="mt-5 rounded-lg border border-[#26303b] bg-[#0c1117] p-3">
+            <p className="text-[10px] font-black uppercase text-[#f0b84d]">Density</p>
+            <p className="mt-2 text-[11px] leading-relaxed text-[#9da8b5]">Layered spacing keeps domain cards readable while fit view shows the full map.</p>
+          </div>
+        </aside>
 
         <main className="min-w-0 flex-1">
           {loading && <AtlasCenteredMessage title="Loading Atlas" body="Reading the latest graph snapshot." />}
           {error && <AtlasCenteredMessage title="Atlas unavailable" body={error} />}
-          {!loading && !error && (!data || data.status === 'empty' || !view || view.nodes.length === 0) && (
+          {!loading && !error && (!data || data.status === 'empty' || !domainView) && (
             <AtlasCenteredMessage title="No Atlas generated yet" body="Run Manual Rescan when the scanner workflow is ready for this project." />
           )}
-          {!loading && !error && data?.status === 'ready' && view && view.nodes.length > 0 && (
+          {hasNoResults && <AtlasCenteredMessage title="No matching domains" body="Clear search or filters to return to the full domain map." />}
+          {!loading && !error && data?.status === 'ready' && domainView && domainView.nodes.length > 0 && (
             <AtlasGraph
-              nodes={view.nodes}
-              edges={view.edges}
-              selectedNodeId={selectedNode?.id ?? null}
-              highlightedNodeIds={searchResult.matchedNodeIds}
-              expandedNodeIds={expandedNodeIds}
-              onSelectNode={setSelectedNode}
-              onToggleExpandNode={handleToggleExpandNode}
+              nodes={domainView.nodes}
+              edges={domainView.edges}
+              selectedNodeId={selectedDomainId}
+              highlightedNodeIds={domainView.matchedNodeIds}
+              onSelectNode={(node) => setSelectedDomainId(node.id)}
             />
           )}
         </main>
 
-        <AtlasNodeInspector atlas={data?.atlas ?? null} node={selectedNode} copied={copiedContext} onCopyContext={handleCopyContext} />
+        <AtlasNodeInspector inspector={inspector} copied={copiedContext} onCopyContext={handleCopyContext} />
       </div>
     </section>
   );
@@ -149,10 +226,11 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
 
 function AtlasCenteredMessage({ title, body }: { title: string; body: string }) {
   return (
-    <div className="flex h-full min-h-[420px] items-center justify-center p-8">
-      <div className="max-w-sm rounded-xl border border-[#e5d4bb] dark:border-[#584a3b] bg-[#fffdfa] dark:bg-[#292119] p-5 text-center">
-        <h2 className="text-sm font-extrabold text-[#3c2a1a] dark:text-[#f3eadf]">{title}</h2>
-        <p className="mt-2 text-[11px] font-mono leading-relaxed text-[#6d5a4d] dark:text-[#d6b56d]">{body}</p>
+    <div className="flex h-full min-h-[520px] items-center justify-center bg-[#0c0f13] p-8">
+      <div className="max-w-sm rounded-lg border border-[#26303b] bg-[#111820] p-5 text-center shadow-2xl">
+        <Activity size={24} className="mx-auto text-[#f0b84d]" />
+        <h2 className="mt-3 text-sm font-extrabold text-[#f8ead3]">{title}</h2>
+        <p className="mt-2 text-[11px] font-mono leading-relaxed text-[#9da8b5]">{body}</p>
       </div>
     </div>
   );

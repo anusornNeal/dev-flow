@@ -70,6 +70,7 @@ export default function App() {
   const [activePage, setActivePage] = useState<'board' | 'atlas'>(() =>
     window.location.hash === '#atlas' ? 'atlas' : 'board'
   );
+  const [isAtlasSidebarCollapsed, setIsAtlasSidebarCollapsed] = useState(true);
   
   const { theme, setTheme } = useAppTheme();
 
@@ -469,26 +470,30 @@ export default function App() {
           onOpenSettings={() => setIsSettingsModalOpen(true)}
           activePage={activePage}
           onSetActivePage={handleSetActivePage}
+          isAtlasSidebarCollapsed={isAtlasSidebarCollapsed}
+          onToggleAtlasSidebar={() => setIsAtlasSidebarCollapsed((current) => !current)}
         />
 
         {/* 2. Main KanBan Board viewport area */}
-        <main className="flex-1 flex flex-col h-full overflow-y-auto bg-[#faf7f0] dark:bg-[#1e1914]">
+        <main className={`flex-1 flex flex-col h-full overflow-y-auto ${activePage === 'atlas' ? 'bg-[#18120d]' : 'bg-[#faf7f0] dark:bg-[#1e1914]'}`}>
           
           {/* Top Control Navigation bar */}
-          <Header
-            filteredTasksCount={filteredTasks.length}
-            activePage={activePage}
-            ngrokUrl={ngrokUrl}
-            theme={theme}
-            setTheme={setTheme}
-            setIsSettingsModalOpen={setIsSettingsModalOpen}
-            setIsJsonModalOpen={setIsJsonModalOpen}
-            setIsSkillsModalOpen={setIsSkillsModalOpen}
-            setIsTemplateModalOpen={setIsTemplateModalOpen}
-            setIsObservabilityModalOpen={setIsObservabilityModalOpen}
-            setIsCreateModalOpen={setIsCreateModalOpen}
-            setIsBatchModalOpen={setIsBatchModalOpen}
-          />
+          {activePage !== 'atlas' && (
+            <Header
+              filteredTasksCount={filteredTasks.length}
+              activePage={activePage}
+              ngrokUrl={ngrokUrl}
+              theme={theme}
+              setTheme={setTheme}
+              setIsSettingsModalOpen={setIsSettingsModalOpen}
+              setIsJsonModalOpen={setIsJsonModalOpen}
+              setIsSkillsModalOpen={setIsSkillsModalOpen}
+              setIsTemplateModalOpen={setIsTemplateModalOpen}
+              setIsObservabilityModalOpen={setIsObservabilityModalOpen}
+              setIsCreateModalOpen={setIsCreateModalOpen}
+              setIsBatchModalOpen={setIsBatchModalOpen}
+            />
+          )}
 
           {persistenceError && (
             <div className="mx-5 mt-4 rounded-2xl border border-[#f0c48f] dark:border-[#584a3b] bg-[#fff7eb] dark:bg-[#292119] px-4 py-3 text-[11px] font-mono font-bold text-[#9a5b13] dark:text-[#f3eadf]">
@@ -533,7 +538,7 @@ export default function App() {
       </div>
 
       {/* Footer Status Bar */}
-      <footer className="h-6.5 bg-[#ebdcb9]/40 dark:bg-[#584a3b]/40 border-t border-[#ebdcb9] dark:border-[#584a3b] px-4 flex items-center justify-between shrink-0 select-none text-[10px] font-mono text-[#8c7463] dark:text-[#f3eadf] font-bold">
+      {activePage !== 'atlas' && <footer className="h-6.5 bg-[#ebdcb9]/40 dark:bg-[#584a3b]/40 border-t border-[#ebdcb9] dark:border-[#584a3b] px-4 flex items-center justify-between shrink-0 select-none text-[10px] font-mono text-[#8c7463] dark:text-[#f3eadf] font-bold">
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-1.5">
             <span className="w-1.5 h-1.5 rounded-full bg-orange-500 animate-pulse"></span>
@@ -545,7 +550,7 @@ export default function App() {
         <div className="text-[#8c7463] dark:text-[#f3eadf]">
           Styled cozy & warm
         </div>
-      </footer>
+      </footer>}
 
       {/* 3. Detail Drawer (shown on clicking a card) */}
       {selectedTask && (

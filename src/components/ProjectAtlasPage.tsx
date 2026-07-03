@@ -134,22 +134,22 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
   const resultCount = domainView?.matchedNodeIds.length ?? 0;
 
   return (
-    <section className="flex h-full min-h-0 flex-col bg-[#0c0f13] text-[#eef3f8]">
-      <header className="border-b border-[#26303b] bg-[#10161d]/95 px-5 py-3">
+    <section className="flex h-full min-h-0 flex-col bg-[#18120d] text-[#f3eadf]">
+      <header className="border-b border-[#584a3b] bg-[#241c15]/95 px-4 py-2.5">
         <div className="flex flex-col gap-3 2xl:flex-row 2xl:items-center 2xl:justify-between">
           <div className="flex min-w-0 items-center gap-4">
             <div>
               <h1 className="flex items-center gap-2 text-lg font-black text-[#f8ead3]">
-                <Waypoints size={20} className="text-[#f0b84d]" />
+                <Waypoints size={20} className="text-[#e0a070]" />
                 Project Atlas
               </h1>
-              <p className="mt-0.5 text-[11px] font-mono font-bold text-[#9da8b5]">
+              <p className="mt-0.5 text-[11px] font-mono font-bold text-[#d6b56d]">
                 {data?.status === 'ready' ? `${data.atlas.domains.length} domains · ${data.atlas.edges.length} relationships` : 'Domain-first project intelligence'}
               </p>
             </div>
-            <nav className="hidden items-center rounded-lg border border-[#283442] bg-[#0c1117] p-1 md:flex">
+            <nav className="hidden items-center rounded-lg border border-[#584a3b] bg-[#1e1914] p-1 md:flex">
               {['Overview', 'Domain', 'Structural', 'Diff'].map((tab) => (
-                <button key={tab} type="button" className={`rounded-md px-3 py-1.5 text-[11px] font-black ${tab === 'Domain' ? 'bg-[#f0b84d] text-[#17130f]' : 'text-[#9da8b5] hover:text-[#f8ead3]'}`}>
+                <button key={tab} type="button" className={`rounded-md px-3 py-1.5 text-[11px] font-black ${tab === 'Domain' ? 'bg-[#e0a070] text-[#292119]' : 'text-[#d8c5aa] hover:text-[#f8ead3]'}`}>
                   {tab}
                 </button>
               ))}
@@ -164,13 +164,13 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
                   key={filter}
                   type="button"
                   onClick={() => handleToggleFilter(filter)}
-                  className={`h-8 rounded-lg border px-2.5 text-[10px] font-black ${activeFilters.includes(filter) ? 'border-[#f0b84d] bg-[#332719] text-[#f7d28a]' : 'border-[#2a3542] bg-[#111820] text-[#9da8b5] hover:text-[#f8ead3]'}`}
+                  className={`h-8 rounded-lg border px-2.5 text-[10px] font-black ${activeFilters.includes(filter) ? 'border-[#e0a070] bg-[#3a2f26] text-[#f7d28a]' : 'border-[#584a3b] bg-[#1e1914] text-[#d8c5aa] hover:text-[#f8ead3]'}`}
                 >
                   {filter}
                 </button>
               ))}
             </div>
-            <button className="h-9 rounded-lg border border-[#2a3542] bg-[#111820] px-3 text-[11px] font-extrabold text-[#d7dee8] disabled:opacity-60" type="button" disabled={!projectId || scanState === 'queued' || scanState === 'running'} onClick={handleManualRescan}>
+            <button className="h-9 rounded-lg border border-[#584a3b] bg-[#1e1914] px-3 text-[11px] font-extrabold text-[#f3eadf] disabled:opacity-60" type="button" disabled={!projectId || scanState === 'queued' || scanState === 'running'} onClick={handleManualRescan}>
               <RefreshCw size={14} className="mr-1 inline" /> Rescan
             </button>
             <AtlasPromptMenu atlas={data?.atlas ?? null} selectedNode={selectedAtlasNode} />
@@ -181,22 +181,17 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
       </header>
 
       <div className="flex min-h-0 flex-1">
-        <aside className="hidden w-56 shrink-0 border-r border-[#26303b] bg-[#10161d] p-3 lg:block">
-          <div className="mb-3 flex items-center gap-2 rounded-lg border border-[#273342] bg-[#0c1117] px-3 py-2 text-[11px] font-bold text-[#9da8b5]">
-            <Search size={14} className="text-[#f0b84d]" />
-            Atlas workspace
+        <aside className="hidden w-14 shrink-0 border-r border-[#584a3b] bg-[#241c15] p-2 lg:block">
+          <div className="mb-3 flex h-9 items-center justify-center rounded-lg border border-[#584a3b] bg-[#1e1914] text-[#d6b56d]" title="Atlas workspace">
+            <Search size={14} className="text-[#e0a070]" />
           </div>
           <div className="space-y-1">
             {NAV_ITEMS.map((item) => (
-              <button key={item.label} type="button" className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-[12px] font-extrabold ${item.active ? 'bg-[#1d2631] text-[#f8ead3]' : 'text-[#7f8b99] hover:bg-[#141c25] hover:text-[#d7dee8]'}`}>
-                <item.icon size={15} className={item.active ? 'text-[#f0b84d]' : 'text-[#6d7886]'} />
-                {item.label}
+              <button key={item.label} type="button" title={item.label} className={`flex h-9 w-10 items-center justify-center rounded-lg text-[12px] font-extrabold ${item.active ? 'bg-[#3a2f26] text-[#f8ead3]' : 'text-[#b89b82] hover:bg-[#2b2119] hover:text-[#f3eadf]'}`}>
+                <item.icon size={15} className={item.active ? 'text-[#e0a070]' : 'text-[#8c7463]'} />
+                <span className="sr-only">{item.label}</span>
               </button>
             ))}
-          </div>
-          <div className="mt-5 rounded-lg border border-[#26303b] bg-[#0c1117] p-3">
-            <p className="text-[10px] font-black uppercase text-[#f0b84d]">Density</p>
-            <p className="mt-2 text-[11px] leading-relaxed text-[#9da8b5]">Layered spacing keeps domain cards readable while fit view shows the full map.</p>
           </div>
         </aside>
 

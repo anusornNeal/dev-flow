@@ -54,8 +54,8 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
   };
 
   return (
-    <div ref={shellRef} className="relative h-full min-h-[560px] overflow-hidden bg-[#0c0f13]">
-      <div className="pointer-events-none absolute inset-0 opacity-70 [background-image:radial-gradient(circle_at_1px_1px,rgba(245,180,83,0.18)_1px,transparent_0)] [background-size:22px_22px]" />
+    <div ref={shellRef} className="relative h-full min-h-[620px] overflow-hidden bg-[#18120d]">
+      <div className="pointer-events-none absolute inset-0 opacity-80 [background-image:radial-gradient(circle_at_1px_1px,rgba(224,160,112,0.20)_1px,transparent_0)] [background-size:22px_22px]" />
       <svg
         className="relative h-full w-full cursor-grab active:cursor-grabbing"
         role="img"
@@ -99,9 +99,9 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
             const path = edgePath(source, target);
             return (
               <g key={edge.id} opacity={dimmed ? 0.15 : 0.82}>
-                <path d={path} fill="none" stroke={edge.kind === 'related' ? '#d9a441' : '#718096'} strokeWidth={edge.kind === 'related' ? 2.3 : 1.6} strokeDasharray={edge.kind === 'related' ? '8 7' : undefined} markerEnd="url(#atlas-arrow)" />
+                <path d={path} fill="none" stroke={edge.kind === 'related' ? '#d6b56d' : '#8c7463'} strokeWidth={edge.kind === 'related' ? 2.3 : 1.6} strokeDasharray={edge.kind === 'related' ? '8 7' : undefined} markerEnd="url(#atlas-arrow)" />
                 {viewport.zoom > 0.72 && (
-                  <text x={(source.x + target.x) / 2 + NODE_WIDTH / 2} y={(source.y + target.y) / 2 + NODE_HEIGHT / 2 - 8} className="fill-[#f2c66d] text-[10px] font-bold">
+                  <text x={(source.x + target.x) / 2 + NODE_WIDTH / 2} y={(source.y + target.y) / 2 + NODE_HEIGHT / 2 - 8} className="fill-[#f3d59a] text-[10px] font-bold">
                     {edge.label}
                   </text>
                 )}
@@ -124,26 +124,26 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
                   onClick={() => onSelectNode(node)}
                   onMouseEnter={() => setHoveredNodeId(node.id)}
                   onMouseLeave={() => setHoveredNodeId(null)}
-                  className={`h-full w-full rounded-lg border bg-[#151a20]/95 p-3 text-left shadow-2xl transition ${
+                  className={`h-full w-full rounded-lg border bg-[#241c15]/95 p-3 text-left shadow-2xl transition ${
                     selected
                       ? 'border-[#f0b84d] shadow-[#d9a44155]'
                       : highlighted || hovered
                         ? 'border-[#b98a3d] shadow-[#d9a44133]'
-                        : 'border-[#2a3440]'
+                        : 'border-[#584a3b]'
                   }`}
                 >
                   <div className="flex items-start gap-3">
-                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-[#3b4654] bg-[#202833] text-[#f0b84d]">
+                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-[#6d5642] bg-[#34281d] text-[#f0b84d]">
                       <DomainIcon category={node.category} />
                     </span>
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-sm font-black text-[#f7ead6]">{node.title}</span>
-                      <span className="mt-1 block h-8 overflow-hidden text-[10px] leading-4 text-[#9da8b5]">{node.description}</span>
+                      <span className="mt-1 block h-8 overflow-hidden text-[10px] leading-4 text-[#d8c5aa]">{node.description}</span>
                     </span>
                   </div>
                   <div className="mt-3 flex flex-wrap gap-1.5">
                     {node.tags.slice(0, viewport.zoom > 0.65 ? 4 : 2).map((tag) => (
-                      <span key={tag} className="rounded border border-[#384456] bg-[#10151c] px-1.5 py-0.5 text-[9px] font-black uppercase text-[#d9a441]">
+                      <span key={tag} className="rounded border border-[#6d5642] bg-[#1b140f] px-1.5 py-0.5 text-[9px] font-black uppercase text-[#d6b56d]">
                         {tag}
                       </span>
                     ))}
@@ -161,25 +161,14 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
         </g>
       </svg>
 
-      <div className="absolute right-4 top-4 flex overflow-hidden rounded-lg border border-[#303a46] bg-[#121820]/95 shadow-xl">
+      <div className="absolute right-4 top-4 flex overflow-hidden rounded-lg border border-[#6d5642] bg-[#241c15]/95 shadow-xl">
         <GraphButton label="Zoom in" onClick={() => updateZoom(viewport.zoom + 0.12)}><Plus size={15} /></GraphButton>
         <GraphButton label="Zoom out" onClick={() => updateZoom(viewport.zoom - 0.12)}><Minus size={15} /></GraphButton>
         <GraphButton label="Fit view" onClick={() => setViewport(fitViewport(shellRef.current, bounds))}><Focus size={15} /></GraphButton>
         <GraphButton label="Reset view" onClick={() => setViewport({ x: 60, y: 50, zoom: 0.88 })}><RotateCcw size={15} /></GraphButton>
       </div>
 
-      <div className="absolute bottom-4 right-4 h-28 w-44 rounded-lg border border-[#303a46] bg-[#111820]/90 p-2 shadow-xl">
-        <div className="relative h-full w-full overflow-hidden rounded bg-[#0a0e13]">
-          {nodes.map((node) => {
-            const position = positions.get(node.id) ?? { x: 0, y: 0 };
-            const left = ((position.x - bounds.x) / Math.max(bounds.width, 1)) * 100;
-            const top = ((position.y - bounds.y) / Math.max(bounds.height, 1)) * 100;
-            return <span key={node.id} className={`absolute h-2 w-3 rounded-sm ${node.id === selectedNodeId ? 'bg-[#f0b84d]' : 'bg-[#516070]'}`} style={{ left: `${left}%`, top: `${top}%` }} />;
-          })}
-        </div>
-      </div>
-
-      <div className="absolute bottom-4 left-4 rounded-lg border border-[#303a46] bg-[#121820]/95 px-3 py-2 text-[10px] font-bold text-[#d7dee8] shadow-xl">
+      <div className="absolute bottom-4 left-4 rounded-lg border border-[#6d5642] bg-[#241c15]/95 px-3 py-2 text-[10px] font-bold text-[#f3eadf] shadow-xl">
         {nodes.length} domains · {edges.length} dependencies · {Math.round(viewport.zoom * 100)}%
       </div>
     </div>
@@ -188,16 +177,16 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
 
 function Metric({ label, value }: { label: string; value: number }) {
   return (
-    <span className="rounded-md border border-[#283342] bg-[#10151c] px-1 py-1">
+    <span className="rounded-md border border-[#584a3b] bg-[#1b140f] px-1 py-1">
       <span className="block text-[11px] font-black text-[#f7ead6]">{value}</span>
-      <span className="block text-[8px] font-bold uppercase text-[#748194]">{label}</span>
+      <span className="block text-[8px] font-bold uppercase text-[#b89b82]">{label}</span>
     </span>
   );
 }
 
 function GraphButton({ label, onClick, children }: { label: string; onClick: () => void; children: React.ReactNode }) {
   return (
-    <button type="button" aria-label={label} title={label} onClick={onClick} className="flex h-9 w-9 items-center justify-center border-r border-[#303a46] text-[#f0b84d] last:border-r-0 hover:bg-[#202833]">
+    <button type="button" aria-label={label} title={label} onClick={onClick} className="flex h-9 w-9 items-center justify-center border-r border-[#6d5642] text-[#f0b84d] last:border-r-0 hover:bg-[#3a2f26]">
       {children}
     </button>
   );

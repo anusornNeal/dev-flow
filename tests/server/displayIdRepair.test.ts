@@ -13,7 +13,7 @@ const { initMigration } = await import('../../src/db/migrations/001-init.js');
 const { persistenceHardeningMigration } = await import('../../src/db/migrations/002-persistence-hardening.js');
 const { taskBugThreadsMigration } = await import('../../src/db/migrations/003-task-bug-threads.js');
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
-const { generateDisplayId } = await import('../../src/server/repositories/taskRepository.js');
+const { generateDisplayId, resolveDisplayIdForNewTask } = await import('../../src/server/repositories/taskRepository.js');
 
 function resetDatabase() {
   db.prepare(`DELETE FROM migrations WHERE id = '004-display-id-counter-repair'`).run();
@@ -87,6 +87,16 @@ test('generateDisplayId ignores polluted cached counters and malformed DVF suffi
 
   assert.equal(nextId, 'DVF-0284');
   assert.equal(state.countersCache.DVF, 284);
+});
+
+test('new task display id resolution regenerates polluted supplied DVF ids', () => {
+  insertTask('task-300', 'DVF-0300', '2026-07-02T00:00:00.000Z');
+
+  const state = { countersCache: { DVF: 300 } } as any;
+  const nextId = resolveDisplayIdForNewTask(state, 'project-dvf', 'DVF-1782968049898');
+
+  assert.equal(nextId, 'DVF-0301');
+  assert.equal(state.countersCache.DVF, 301);
 });
 
 test.after(() => {

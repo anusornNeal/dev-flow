@@ -3,7 +3,7 @@ import type { ApiRouteDeps } from '../types';
 import { createApiError, sendApiError } from '../services/api';
 import { applyTaskCategoryAndTagsUpdate, extractDesignImages, extractImages, normalizeTaskCategoryAndTags, resolveProjectIdFromRepo, validateAgentParams, validateTaskPayload } from '../services/taskService';
 import { validateTaskQualityForMutation } from '../services/taskQualityService';
-import { generateDisplayId, saveTask, getTasks } from '../repositories/taskRepository.js';
+import { resolveDisplayIdForNewTask, saveTask, getTasks } from '../repositories/taskRepository.js';
 import { getValidationErrorMessage, isValidTransition } from '../../lib/statusTransitions';
 import { applyChecklistToggle as applyChecklistToggleUseCase } from '../useCases/taskUseCases';
 import { VALID_STATUSES } from '../constants';
@@ -125,7 +125,7 @@ export function registerTaskBatchRoutes(app: express.Express, deps: ApiRouteDeps
 
       const newTask = {
         id: item.id || `task-${Date.now()}-${Math.floor(Math.random() * 1000000)}`,
-        displayId: item.displayId || generateDisplayId(deps.state, resolvedProjectId),
+        displayId: resolveDisplayIdForNewTask(deps.state, resolvedProjectId, item.displayId),
         projectId: resolvedProjectId,
         title: item.title.trim(),
         description: item.description || '',

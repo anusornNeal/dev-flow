@@ -93,6 +93,21 @@ export function parseDisplayIdCounter(displayId: string | null | undefined, pref
   return isSafeDisplayIdCounter(value) ? value : null;
 }
 
+function getDisplayIdPrefix(projectId: string): string {
+  const project = getProject(projectId);
+
+  let prefix = 'task';
+  if (project && project.taskIdPrefix) {
+    prefix = project.taskIdPrefix;
+  } else if (project && project.name) {
+    prefix = project.name.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+  } else if (projectId) {
+    prefix = projectId.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+  }
+
+  return prefix || 'task';
+}
+
 function getSafeCachedCounter(state: AppState, prefix: string): number {
   const cached = state.countersCache[prefix];
   return isSafeDisplayIdCounter(cached) ? cached : 0;
@@ -178,18 +193,7 @@ function saveCounters(state: AppState) {
 }
 
 export function generateDisplayId(state: AppState, projectId: string): string {
-  const project = getProject(projectId);
-
-  let prefix = 'task';
-  if (project && project.taskIdPrefix) {
-    prefix = project.taskIdPrefix;
-  } else if (project && project.name) {
-    prefix = project.name.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
-  } else if (projectId) {
-    prefix = projectId.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
-  }
-
-  if (!prefix) prefix = 'task';
+  const prefix = getDisplayIdPrefix(projectId);
 
   return withDbTransaction(() => {
     let maxNum = Math.max(getSafeCachedCounter(state, prefix), findHighestDisplayIdCounter(prefix));
@@ -205,6 +209,18 @@ export function generateDisplayId(state: AppState, projectId: string): string {
     saveCounters(state);
     return newId;
   });
+}
+
+export function resolveDisplayIdForNewTask(state: AppState, projectId: string, suppliedDisplayId: unknown): string {
+  const displayId = typeof suppliedDisplayId === 'string' ? suppliedDisplayId.trim() : '';
+  if (!displayId) return generateDisplayId(state, projectId);
+
+  const prefix = getDisplayIdPrefix(projectId);
+  if (displayId.startsWith(`${prefix}-`) && parseDisplayIdCounter(displayId, prefix) === null) {
+    return generateDisplayId(state, projectId);
+  }
+
+  return displayId;
 }
 
 function parseJsonArray(value: unknown): any[] {

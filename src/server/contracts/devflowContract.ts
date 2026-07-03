@@ -397,6 +397,66 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
     }),
   },
   {
+    name: 'get_project_atlas',
+    description: 'Get capped Project Atlas knowledge graph context for a project. Modes include compact, standard, full, chatgpt-context, agent-context, task-focused, and diff-impact. Pass promptVariant to receive a copy-ready Atlas prompt.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...projectIdentifierProperties,
+        mode: { type: 'string', enum: ['compact', 'standard', 'full', 'chatgpt-context', 'agent-context', 'task-focused', 'diff-impact'], description: 'Atlas response mode. Defaults to compact.' },
+        limit: { type: 'number', description: 'Maximum nodes/edges returned. Defaults are capped; max 1000.' },
+        query: { type: 'string', description: 'Search query for task-focused mode.' },
+        focusPath: { type: 'string', description: 'Path focus for task-focused mode.' },
+        taskId: { type: 'string', description: 'Task id/key for task-focused mode.' },
+        taskTitle: { type: 'string', description: 'Task title to include in task-focused prompt templates.' },
+        targetFiles: { type: 'array', items: { type: 'string' }, description: 'Explicit target files to include in task-focused prompt templates.' },
+        selectedNodeId: { type: 'string', description: 'Atlas node id for module/node prompt templates.' },
+        diffSummary: { type: 'string', description: 'Current diff summary for analyze-diff-impact prompt templates.' },
+        changedFiles: { type: 'array', items: { type: 'string' }, description: 'Changed files for diff-impact mode. If omitted, current git status is used when localPath is available.' },
+        promptVariant: {
+          type: 'string',
+          enum: ['explain-project', 'onboard-repo', 'find-affected-files', 'plan-implementation', 'build-read-order', 'explain-module', 'analyze-diff-impact'],
+          description: 'Optional copy-ready prompt template to include in the response.',
+        },
+      },
+    },
+    outputSchema: { type: 'object' },
+    lightweight: true,
+    buildHttpRequest: (args) => ({
+      method: 'GET',
+      path: withQuery('/api/project-atlas', args),
+    }),
+  },
+  {
+    name: 'get_project_atlas_status',
+    description: 'Read Project Atlas freshness and cache status, including stale/generatedAt counts and last error metadata.',
+    inputSchema: {
+      type: 'object',
+      properties: projectIdentifierProperties,
+    },
+    outputSchema: { type: 'object' },
+    lightweight: true,
+    buildHttpRequest: (args) => ({
+      method: 'GET',
+      path: withQuery('/api/project-atlas/status', args),
+    }),
+  },
+  {
+    name: 'rescan_project_atlas',
+    description: 'Manually rebuild Project Atlas for a project using the deterministic scanner and update the latest cache.',
+    inputSchema: {
+      type: 'object',
+      properties: projectIdentifierProperties,
+    },
+    outputSchema: { type: 'object' },
+    executionPolicy: { mode: 'job', jobKind: 'repo-command' },
+    buildHttpRequest: (args) => ({
+      method: 'POST',
+      path: '/api/project-atlas/rescan',
+      body: args,
+    }),
+  },
+  {
     name: 'list_tasks',
     description: 'List tasks with optional filters. Local-first and ChatGPT-friendly: defaults to a small minimal page; pass projectId/status/q and an explicit limit before asking for broader context.',
     inputSchema: {

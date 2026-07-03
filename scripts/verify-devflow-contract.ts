@@ -107,6 +107,20 @@ try {
   assert.equal(capabilitiesBody.counts.tools, catalog.tools.length);
   assert.ok(capabilitiesBody.tools.some((tool: any) => tool.name === 'get_capabilities'));
   assert.ok(capabilitiesBody.tools.some((tool: any) => tool.name === 'import_tasks_from_file'));
+  assert.ok(capabilitiesBody.tools.some((tool: any) => tool.name === 'get_project_atlas'));
+
+  console.log('[verify] Testing Project Atlas API routes...');
+  const atlasStatusResponse = await fetch(`${baseUrl}/api/project-atlas/status?projectId=project-contract-1`);
+  assert.equal(atlasStatusResponse.status, 200);
+  const atlasStatusBody = await atlasStatusResponse.json();
+  assert.equal(atlasStatusBody.projectId, 'project-contract-1');
+  assert.equal(typeof atlasStatusBody.stale, 'boolean');
+
+  const atlasCompactResponse = await fetch(`${baseUrl}/api/project-atlas?projectId=project-contract-1&mode=compact&limit=5`);
+  assert.equal(atlasCompactResponse.status, 200);
+  const atlasCompactBody = await atlasCompactResponse.json();
+  assert.equal(atlasCompactBody.mode, 'compact');
+  assert.equal(atlasCompactBody.projectId, 'project-contract-1');
 
   console.log('[verify] Testing task summary/query modes...');
   const listResponse = await fetch(`${baseUrl}/api/tasks?mode=summary&q=contract`);
@@ -452,6 +466,9 @@ try {
   const applyPatchTool = catalog.tools.find((tool) => tool.name === 'apply_patch');
   const runProjectCommandTool = catalog.tools.find((tool) => tool.name === 'run_project_command');
   const parseTestReportTool = catalog.tools.find((tool) => tool.name === 'parse_test_report');
+  const getAtlasTool = catalog.tools.find((tool) => tool.name === 'get_project_atlas');
+  const atlasStatusTool = catalog.tools.find((tool) => tool.name === 'get_project_atlas_status');
+  const atlasRescanTool = catalog.tools.find((tool) => tool.name === 'rescan_project_atlas');
   assert.ok(createTaskSchema?.properties?.title);
   assert.ok(createTaskSchema?.properties?.projectId);
   assert.ok(createTaskSchema?.properties?.repoUrl);
@@ -465,6 +482,9 @@ try {
   assert.ok(applyPatchTool, 'apply_patch must be advertised in the MCP catalog');
   assert.ok(runProjectCommandTool, 'run_project_command must be advertised in the MCP catalog');
   assert.ok(parseTestReportTool, 'parse_test_report must be advertised in the MCP catalog');
+  assert.ok(getAtlasTool, 'get_project_atlas must be advertised in the MCP catalog');
+  assert.ok(atlasStatusTool, 'get_project_atlas_status must be advertised in the MCP catalog');
+  assert.ok(atlasRescanTool, 'rescan_project_atlas must be advertised in the MCP catalog');
   assert.match(String(qualityTool?.description || ''), /Implementation map/i);
   assert.match(String(repoIndexTool?.description || ''), /cached/i);
   assert.match(String(jiraBundleTool?.description || ''), /Jira issue packet/i);
@@ -472,6 +492,16 @@ try {
   assert.match(String(applyPatchTool?.description || ''), /unified diff/i);
   assert.match(String(runProjectCommandTool?.description || ''), /allowlisted|verification/i);
   assert.match(String(parseTestReportTool?.description || ''), /summary|report/i);
+  assert.match(String(getAtlasTool?.description || ''), /Project Atlas/i);
+
+  const atlasRequest = getToolDefinitionByName('get_project_atlas')?.buildHttpRequest({
+    projectId: 'project-contract-1',
+    mode: 'chatgpt-context',
+    limit: 20,
+  });
+  assert.equal(atlasRequest?.method, 'GET');
+  assert.match(atlasRequest?.path || '', /\/api\/project-atlas/);
+  assert.match(atlasRequest?.path || '', /mode=chatgpt-context/);
 
   const applyPatchRequest = getToolDefinitionByName('apply_patch')?.buildHttpRequest({
     projectId: 'project-contract-1',

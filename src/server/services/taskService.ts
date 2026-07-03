@@ -11,6 +11,7 @@ import { getModelConfig } from '../../lib/agentsConfig';
 import { resolveAgentExecutionMode } from './agentRunService';
 import { getProjectRulesContext } from './projectRulesService';
 import { renderPromptTemplate } from './promptTemplateService';
+import { getTaskFocusedAtlasContext } from './projectAtlasService';
 import { buildTaskBugSummaryJson, renderTaskBugSummaryMarkdown } from '../../lib/bugThreadExport';
 
 function normalizeRepoLike(value: string) {
@@ -474,6 +475,18 @@ export function getAgentTaskContext(state: AppState, targetId: string, includeLo
     agentContext.logs = task.logs;
   }
 
+  if (project) {
+    const projectAtlas = getTaskFocusedAtlasContext(project, task, {
+      explicit: /\b(project atlas|attach atlas)\b/i.test([
+        task.title,
+        task.description,
+        task.repoContext,
+        task.reasoning,
+      ].filter(Boolean).join(' ')),
+    });
+    if (projectAtlas) agentContext.projectAtlas = projectAtlas;
+  }
+
   if (!agentContext.repoContext) delete agentContext.repoContext;
   if (Object.keys(agentContext.requirements).length === 0) delete agentContext.requirements;
   if (Object.keys(agentContext.assignment).length === 0) delete agentContext.assignment;
@@ -490,6 +503,7 @@ export function buildTaskPromptRenderContext(taskContext: NonNullable<ReturnType
     instruction: taskContext.instruction || {},
     requirements: taskContext.requirements || {},
     projectRules: taskContext.projectRules || {},
+    projectAtlas: taskContext.projectAtlas || {},
     repoContext: taskContext.repoContext || '',
     orchestration: taskContext.orchestration || {},
     agent: taskContext.assignment?.agent || '',

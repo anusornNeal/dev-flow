@@ -26,6 +26,8 @@ Before deciding pass/fail, read:
 6. Related existing code if needed to judge correctness.
 7. Checklist, acceptance criteria, verification, repoContext, and targetFiles.
 
+Use `get_project_atlas` as a review companion when the card has empty or vague targetFiles, unclear implementation-map or module boundaries, cross-module impact, architecture/project-structure claims, or missing read-order context. Treat verified Atlas facts separately from inferred summaries, and do not use Atlas to approve without inspecting the actual branch and target files.
+
 Do not rely only on title, description, checklist text, or agent summary.
 
 ## Branch review rule
@@ -113,6 +115,7 @@ Move back to `in-progress` if any are true:
 - acceptance criteria are not fully satisfied,
 - branch or commit cannot be inspected,
 - implementation changes unrelated scope,
+- Atlas or branch inspection shows likely affected modules/tests were omitted from the card or implementation,
 - parent/subtask integration is incomplete,
 - tests or verification fail,
 - required files were not changed,

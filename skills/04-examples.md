@@ -213,6 +213,14 @@ Verification child, only when large enough:
 }
 ```
 
+## Atlas-assisted card
+
+Use this only for architecture, onboarding, unclear targetFiles, or cross-module impact. Keep `get_repo_context_bundle` first, then use `get_project_atlas` for module boundaries and read order, and still read exact target files before editing.
+
+```text
+Reasoning: Repo context found the prompt service and task service paths. Project Atlas task-focused mode added an inferred read order across prompt templates, task context, and MCP contract files. Keep explicit targetFiles authoritative; inspect any Atlas-suggested extras before adding scope.
+```
+
 ## Frontend/backend split from one Jira
 
 Use this pattern when one Jira item needs both data contract work and UI work.

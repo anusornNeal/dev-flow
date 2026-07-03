@@ -5,6 +5,8 @@ import path from 'node:path';
 
 const authoringCore = fs.readFileSync(path.resolve('skills/01-authoring-core.md'), 'utf8');
 const schemaReference = fs.readFileSync(path.resolve('skills/02-schema-reference.md'), 'utf8');
+const skillRouter = fs.readFileSync(path.resolve('skills/00-skill-router.md'), 'utf8');
+const reviewerCore = fs.readFileSync(path.resolve('skills/03-reviewer-core.md'), 'utf8');
 const examples = fs.readFileSync(path.resolve('skills/04-examples.md'), 'utf8');
 
 test('authoring core requires targeted repo inspection and implementation maps', () => {
@@ -51,4 +53,16 @@ test('schema template and examples include implementation maps', () => {
   assert.doesNotMatch(schemaReference, /"repoContext": "Summarize concrete repo findings here\."/);
   assert.match(examples, /Implementation map:/);
   assert.doesNotMatch(examples, /Repo inspection summary goes here/);
+});
+
+test('authoring skills describe Atlas as selective companion context', () => {
+  assert.match(skillRouter, /get_project_atlas/);
+  assert.match(skillRouter, /Do not require Project Atlas for simple single-file/);
+  assert.match(authoringCore, /Use `get_project_atlas` as a companion, not a replacement/);
+  assert.match(authoringCore, /verified Atlas facts/);
+  assert.match(authoringCore, /do not override them silently/);
+  assert.match(schemaReference, /modes `compact`, `standard`, `agent-context`, `chatgpt-context`, or `task-focused`/);
+  assert.match(reviewerCore, /vague targetFiles/);
+  assert.match(reviewerCore, /module boundaries/);
+  assert.match(examples, /Atlas-assisted card/);
 });

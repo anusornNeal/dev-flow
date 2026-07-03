@@ -17,6 +17,9 @@ import { getWorkflowHealth } from '../services/workflowHealthService';
 import { getRepoInspectionIndex } from '../services/repoInspectionIndexService';
 import { validateTaskQuality } from '../services/taskQualityService';
 import { buildJiraAuthoringBundle } from '../services/jiraAuthoringBundleService';
+import { findProjectByIdentifier } from '../services/taskService';
+import { getProjectAtlasForApi, getProjectAtlasStatus, rescanProjectAtlasSafely } from '../services/projectAtlasService';
+import { enqueueToolJob } from '../services/mcpToolJobService';
 
 export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) {
   app.get('/api/capabilities', (_req, res) => {
@@ -184,6 +187,39 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
   app.get('/api/repo-inspection-index', (req, res) => {
     try {
       return res.json(getRepoInspectionIndex(deps.state, req.query as Record<string, any>));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.get('/api/project-atlas', (req, res) => {
+    try {
+      const project = findProjectByIdentifier(deps.state, req.query as Record<string, any>);
+      if (!project) return res.status(404).json({ error: 'Project not found' });
+      return res.json(getProjectAtlasForApi(project, req.query as Record<string, any>));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.get('/api/project-atlas/status', (req, res) => {
+    try {
+      const project = findProjectByIdentifier(deps.state, req.query as Record<string, any>);
+      if (!project) return res.status(404).json({ error: 'Project not found' });
+      return res.json(getProjectAtlasStatus(project.id));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.post('/api/project-atlas/rescan', (req, res) => {
+    try {
+      const project = findProjectByIdentifier(deps.state, req.body as Record<string, any>);
+      if (!project) return res.status(404).json({ error: 'Project not found' });
+      if (req.body?.sync === true) {
+        return res.json(rescanProjectAtlasSafely(project, { manualRescan: true }));
+      }
+      return res.json(enqueueToolJob(deps.state, 'rescan_project_atlas', { ...req.body, projectId: project.id }, 'repo-command'));
     } catch (error) {
       return sendApiError(res, error);
     }

@@ -20,6 +20,8 @@ test('buildChatGptStarterPrompt tells ChatGPT to read authoring skills before re
   assert.match(prompt, /commit_git_changes/);
   assert.match(prompt, /get_jira_authoring_bundle/);
   assert.match(prompt, /get_repo_inspection_index/);
+  assert.match(prompt, /get_project_atlas/);
+  assert.match(prompt, /architecture, onboarding, unclear targetFiles, or cross-module questions/);
   assert.match(prompt, /validate_task_quality/);
   assert.match(prompt, /move_task_to_status/);
   assert.ok(prompt.indexOf('get_authoring_skills') < prompt.indexOf('get_repo_context_bundle'));

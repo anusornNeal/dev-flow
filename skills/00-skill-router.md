@@ -17,8 +17,11 @@ Load:
 Use:
 - `get_jira_authoring_bundle` first for Jira-originated card authoring.
 - `get_repo_context_bundle` first when a project is known; use it as the compact entry point for git status, repo index, snippets, and diff context.
+- `get_project_atlas` only as a companion after the repo context bundle when the card is about architecture, project structure, onboarding, module boundaries, cross-module impact, read order, or when target files remain uncertain.
 - `get_repo_inspection_index`, `read_local_file`, or search tools only when the repo context bundle is unavailable or insufficient.
 - `validate_task_quality` before `create_task` or `update_task` for any implementation-ready card.
+
+Do not require Project Atlas for simple single-file or clearly targeted cards.
 
 ## When doing repository or local file edits
 
@@ -28,6 +31,7 @@ Load:
 
 Use:
 - `get_repo_context_bundle` first when a project is known.
+- `get_project_atlas` after the bundle only for architecture/project-map, onboarding, unclear targetFiles, cross-module, impact, module-boundary, or read-order questions.
 - `read_local_file` or `read_file_snippets_batch` before writing any existing file.
 - `edit_local_files_batch` or `safe_edit_local_file` for anchored edits, with dry-run before apply.
 - `write_local_file` only for new files or small full-file replacements where the complete content is known.
@@ -47,6 +51,8 @@ Load `04-examples.md` only if:
 Load:
 - `03-reviewer-core.md`
 - `02-schema-reference.md`
+
+Use `get_project_atlas` during review only when targetFiles, implementation maps, module boundaries, impact, or read order are vague or cross-module.
 
 Do not load authoring examples unless the review requires rewriting the card.
 

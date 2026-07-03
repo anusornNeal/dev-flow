@@ -126,20 +126,20 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
   const resultCount = domainView?.matchedNodeIds.length ?? 0;
 
   return (
-    <section className="flex h-full min-h-0 flex-col bg-[#fbf4ea] text-[#3f342b]">
-      <header className="border-b border-[#e5d4bb] bg-[#fffdfa]/95 px-4 py-2.5">
+    <section className="flex h-full min-h-0 flex-col bg-[#fbf4ea] text-[#3f342b] dark:bg-[#18120d] dark:text-[#f3eadf]">
+      <header className="border-b border-[#e5d4bb] bg-[#fffdfa]/95 px-4 py-2.5 dark:border-[#584a3b] dark:bg-[#241c15]/95">
         <div className="flex flex-col gap-3 2xl:flex-row 2xl:items-center 2xl:justify-between">
           <div className="flex min-w-0 items-center gap-4">
             <div>
-              <h1 className="flex items-center gap-2 text-lg font-black text-[#3f342b]">
-                <Waypoints size={20} className="text-[#c9872c]" />
+              <h1 className="flex items-center gap-2 text-lg font-black text-[#3f342b] dark:text-[#f8ead3]">
+                <Waypoints size={20} className="text-[#c9872c] dark:text-[#e0a070]" />
                 Project Atlas
               </h1>
-              <p className="mt-0.5 text-[11px] font-mono font-bold text-[#9a6a21]">
+              <p className="mt-0.5 text-[11px] font-mono font-bold text-[#9a6a21] dark:text-[#d6b56d]">
                 {data?.status === 'ready' ? `${data.atlas.domains.length} domains · ${data.atlas.edges.length} relationships` : 'Domain-first project intelligence'}
               </p>
             </div>
-            <span className="hidden rounded-lg border border-[#e5d4bb] bg-[#fff7eb] px-3 py-1.5 text-[11px] font-black text-[#9a5b13] md:inline-flex">
+            <span className="hidden rounded-lg border border-[#e5d4bb] bg-[#fff7eb] px-3 py-1.5 text-[11px] font-black text-[#9a5b13] dark:border-[#584a3b] dark:bg-[#1e1914] dark:text-[#f7d28a] md:inline-flex">
               Domain map
             </span>
           </div>
@@ -152,13 +152,13 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
                   key={filter}
                   type="button"
                   onClick={() => handleToggleFilter(filter)}
-                  className={`h-8 cursor-pointer rounded-lg border px-2.5 text-[10px] font-black transition ${activeFilters.includes(filter) ? 'border-[#c9872c] bg-[#fff1d7] text-[#8a4d0d]' : 'border-[#e5d4bb] bg-[#fffdfa] text-[#7b6554] hover:border-[#c9872c] hover:text-[#3f342b]'}`}
+                  className={`h-8 cursor-pointer rounded-lg border px-2.5 text-[10px] font-black transition ${activeFilters.includes(filter) ? 'border-[#c9872c] bg-[#fff1d7] text-[#8a4d0d] dark:border-[#e0a070] dark:bg-[#3a2f26] dark:text-[#f7d28a]' : 'border-[#e5d4bb] bg-[#fffdfa] text-[#7b6554] hover:border-[#c9872c] hover:text-[#3f342b] dark:border-[#584a3b] dark:bg-[#1e1914] dark:text-[#d8c5aa] dark:hover:text-[#f8ead3]'}`}
                 >
                   {filter}
                 </button>
               ))}
             </div>
-            <button className="h-9 cursor-pointer rounded-lg border border-[#e5d4bb] bg-[#fffdfa] px-3 text-[11px] font-extrabold text-[#5c493c] transition hover:border-[#c9872c] hover:bg-[#fff7eb] disabled:cursor-not-allowed disabled:opacity-60" type="button" disabled={!projectId || scanState === 'queued' || scanState === 'running'} onClick={handleManualRescan}>
+            <button className="h-9 cursor-pointer rounded-lg border border-[#e5d4bb] bg-[#fffdfa] px-3 text-[11px] font-extrabold text-[#5c493c] transition hover:border-[#c9872c] hover:bg-[#fff7eb] disabled:cursor-not-allowed disabled:opacity-60 dark:border-[#584a3b] dark:bg-[#1e1914] dark:text-[#f3eadf] dark:hover:bg-[#3a2f26]" type="button" disabled={!projectId || scanState === 'queued' || scanState === 'running'} onClick={handleManualRescan}>
               <RefreshCw size={14} className="mr-1 inline" /> Rescan
             </button>
             <AtlasPromptMenu atlas={data?.atlas ?? null} selectedNode={selectedAtlasNode} />
@@ -195,11 +195,11 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
 
 function AtlasCenteredMessage({ title, body }: { title: string; body: string }) {
   return (
-    <div className="flex h-full min-h-[520px] items-center justify-center bg-[#fbf4ea] p-8">
-      <div className="max-w-sm rounded-lg border border-[#e5d4bb] bg-[#fffdfa] p-5 text-center shadow-xl">
-        <Activity size={24} className="mx-auto text-[#c9872c]" />
-        <h2 className="mt-3 text-sm font-extrabold text-[#3f342b]">{title}</h2>
-        <p className="mt-2 text-[11px] font-mono leading-relaxed text-[#7b6554]">{body}</p>
+    <div className="flex h-full min-h-[520px] items-center justify-center bg-[#fbf4ea] p-8 dark:bg-[#18120d]">
+      <div className="max-w-sm rounded-lg border border-[#e5d4bb] bg-[#fffdfa] p-5 text-center shadow-xl dark:border-[#584a3b] dark:bg-[#241c15]">
+        <Activity size={24} className="mx-auto text-[#c9872c] dark:text-[#f0b84d]" />
+        <h2 className="mt-3 text-sm font-extrabold text-[#3f342b] dark:text-[#f8ead3]">{title}</h2>
+        <p className="mt-2 text-[11px] font-mono leading-relaxed text-[#7b6554] dark:text-[#d8c5aa]">{body}</p>
       </div>
     </div>
   );

@@ -30,7 +30,7 @@ export function AtlasExportMenu({ atlas, view, selectedNode }: AtlasExportMenuPr
   return (
     <div className="relative">
       <button
-        className="h-9 cursor-pointer rounded-xl border border-[#e5d4bb] bg-[#fffdfa] px-3 text-[11px] font-extrabold text-[#6d5a4d] transition hover:border-[#c9872c] hover:bg-[#fff7eb] disabled:cursor-not-allowed disabled:opacity-60"
+        className="h-9 cursor-pointer rounded-xl border border-[#e5d4bb] bg-[#fffdfa] px-3 text-[11px] font-extrabold text-[#6d5a4d] transition hover:border-[#c9872c] hover:bg-[#fff7eb] disabled:cursor-not-allowed disabled:opacity-60 dark:border-[#584a3b] dark:bg-[#1e1914] dark:text-[#f3eadf] dark:hover:bg-[#3a2f26]"
         type="button"
         disabled={disabled}
         onClick={() => setOpen((current) => !current)}
@@ -38,7 +38,7 @@ export function AtlasExportMenu({ atlas, view, selectedNode }: AtlasExportMenuPr
         <Download size={14} className="mr-1 inline" /> Export
       </button>
       {open && atlas && view && (
-        <div className="absolute right-0 z-20 mt-2 w-56 rounded-lg border border-[#d8c5aa] bg-[#fffdfa] p-2 shadow-xl">
+        <div className="absolute right-0 z-20 mt-2 w-56 rounded-lg border border-[#d8c5aa] bg-[#fffdfa] p-2 shadow-xl dark:border-[#584a3b] dark:bg-[#1e1914]">
           <ExportAction label="Full JSON" onClick={() => exportText('json', 'application/json', exportAtlasJson(atlas))} />
           <ExportAction label="Markdown Overview" onClick={() => exportText('md', 'text/markdown', renderAtlasMarkdown(atlas, { selectedNodeId: selectedNode?.id }))} />
           <ExportAction label="Mermaid Diagram" onClick={() => exportText('mmd', 'text/plain', renderAtlasMermaid(atlas))} />
@@ -55,7 +55,7 @@ function ExportAction({ label, onClick }: { label: string; onClick: () => void }
     <button
       type="button"
       onClick={onClick}
-      className="w-full cursor-pointer rounded-md px-3 py-2 text-left text-[11px] font-bold text-[#5c493c] hover:bg-[#fff1d7]"
+      className="w-full cursor-pointer rounded-md px-3 py-2 text-left text-[11px] font-bold text-[#5c493c] hover:bg-[#fff1d7] dark:text-[#f3eadf] dark:hover:bg-[#3a2f26]"
     >
       {label}
     </button>

@@ -55,8 +55,8 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
   };
 
   return (
-    <div ref={shellRef} className="relative h-full min-h-[620px] overflow-hidden bg-[#f7eddf]">
-      <div className="pointer-events-none absolute inset-0 opacity-70 [background-image:radial-gradient(circle_at_1px_1px,rgba(154,91,19,0.18)_1px,transparent_0)] [background-size:22px_22px]" />
+    <div ref={shellRef} className="relative h-full min-h-[620px] overflow-hidden bg-[#f7eddf] dark:bg-[#18120d]">
+      <div className="pointer-events-none absolute inset-0 opacity-70 [background-image:radial-gradient(circle_at_1px_1px,rgba(154,91,19,0.18)_1px,transparent_0)] [background-size:22px_22px] dark:[background-image:radial-gradient(circle_at_1px_1px,rgba(224,160,112,0.20)_1px,transparent_0)]" />
       <svg
         className="relative h-full w-full cursor-grab active:cursor-grabbing"
         role="img"
@@ -128,7 +128,7 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
                   onClick={() => onSelectNode(node)}
                   onMouseEnter={() => setHoveredNodeId(node.id)}
                   onMouseLeave={() => setHoveredNodeId(null)}
-                  className={`h-full w-full cursor-pointer rounded-lg border bg-[#fffdfa]/95 p-3 text-left shadow-xl transition ${
+                  className={`h-full w-full cursor-pointer rounded-lg border bg-[#fffdfa]/95 p-3 text-left shadow-xl transition dark:bg-[#241c15]/95 ${
                     selected
                       ? 'border-[#c9872c] shadow-[#d9a44133]'
                       : highlighted || hovered
@@ -137,17 +137,17 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
                   }`}
                 >
                   <div className="flex items-start gap-3">
-                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-[#e0c7a8] bg-[#fff1d7] text-[#b7741e]">
+                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-[#e0c7a8] bg-[#fff1d7] text-[#b7741e] dark:border-[#6d5642] dark:bg-[#34281d] dark:text-[#f0b84d]">
                       <DomainIcon category={node.category} />
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-black text-[#3f342b]">{node.title}</span>
-                      <span className="mt-1 block h-8 overflow-hidden text-[10px] leading-4 text-[#7b6554]">{node.description}</span>
+                      <span className="block truncate text-sm font-black text-[#3f342b] dark:text-[#f7ead6]">{node.title}</span>
+                      <span className="mt-1 block h-8 overflow-hidden text-[10px] leading-4 text-[#7b6554] dark:text-[#d8c5aa]">{node.description}</span>
                     </span>
                   </div>
                   <div className="mt-3 flex flex-wrap gap-1.5">
                     {node.tags.slice(0, viewport.zoom > 0.65 ? 4 : 2).map((tag) => (
-                      <span key={tag} className="rounded border border-[#e0c7a8] bg-[#fff7eb] px-1.5 py-0.5 text-[9px] font-black uppercase text-[#9a5b13]">
+                      <span key={tag} className="rounded border border-[#e0c7a8] bg-[#fff7eb] px-1.5 py-0.5 text-[9px] font-black uppercase text-[#9a5b13] dark:border-[#6d5642] dark:bg-[#1b140f] dark:text-[#d6b56d]">
                         {tag}
                       </span>
                     ))}
@@ -165,14 +165,14 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
         </g>
       </svg>
 
-      <div className="absolute right-4 top-4 flex overflow-hidden rounded-lg border border-[#e0c7a8] bg-[#fffdfa]/95 shadow-xl">
+      <div className="absolute right-4 top-4 flex overflow-hidden rounded-lg border border-[#e0c7a8] bg-[#fffdfa]/95 shadow-xl dark:border-[#6d5642] dark:bg-[#241c15]/95">
         <GraphButton label="Zoom in" onClick={() => updateZoom(viewport.zoom + 0.12)}><Plus size={15} /></GraphButton>
         <GraphButton label="Zoom out" onClick={() => updateZoom(viewport.zoom - 0.12)}><Minus size={15} /></GraphButton>
         <GraphButton label="Fit view" onClick={() => setViewport(fitViewport(shellRef.current, bounds))}><Focus size={15} /></GraphButton>
         <GraphButton label="Reset view" onClick={() => setViewport({ x: 60, y: 50, zoom: 0.88 })}><RotateCcw size={15} /></GraphButton>
       </div>
 
-      <div className="absolute bottom-4 left-4 rounded-lg border border-[#e0c7a8] bg-[#fffdfa]/95 px-3 py-2 text-[10px] font-bold text-[#5c493c] shadow-xl">
+      <div className="absolute bottom-4 left-4 rounded-lg border border-[#e0c7a8] bg-[#fffdfa]/95 px-3 py-2 text-[10px] font-bold text-[#5c493c] shadow-xl dark:border-[#6d5642] dark:bg-[#241c15]/95 dark:text-[#f3eadf]">
         {nodes.length} domains · {edges.length} dependencies · {Math.round(viewport.zoom * 100)}%
       </div>
     </div>
@@ -181,16 +181,16 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
 
 function Metric({ label, value }: { label: string; value: number }) {
   return (
-    <span className="rounded-md border border-[#e5d4bb] bg-[#fff7eb] px-1 py-1">
-      <span className="block text-[11px] font-black text-[#3f342b]">{value}</span>
-      <span className="block text-[8px] font-bold uppercase text-[#8a6d55]">{label}</span>
+    <span className="rounded-md border border-[#e5d4bb] bg-[#fff7eb] px-1 py-1 dark:border-[#584a3b] dark:bg-[#1b140f]">
+      <span className="block text-[11px] font-black text-[#3f342b] dark:text-[#f7ead6]">{value}</span>
+      <span className="block text-[8px] font-bold uppercase text-[#8a6d55] dark:text-[#b89b82]">{label}</span>
     </span>
   );
 }
 
 function GraphButton({ label, onClick, children }: { label: string; onClick: () => void; children: React.ReactNode }) {
   return (
-    <button type="button" aria-label={label} title={label} onClick={onClick} className="flex h-9 w-9 cursor-pointer items-center justify-center border-r border-[#e0c7a8] text-[#b7741e] last:border-r-0 hover:bg-[#fff1d7]">
+    <button type="button" aria-label={label} title={label} onClick={onClick} className="flex h-9 w-9 cursor-pointer items-center justify-center border-r border-[#e0c7a8] text-[#b7741e] last:border-r-0 hover:bg-[#fff1d7] dark:border-[#6d5642] dark:text-[#f0b84d] dark:hover:bg-[#3a2f26]">
       {children}
     </button>
   );

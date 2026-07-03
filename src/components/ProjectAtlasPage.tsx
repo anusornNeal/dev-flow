@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Activity, BarChart3, Boxes, GitBranch, Layers3, RefreshCw, Search, Settings, ShieldCheck, Waypoints } from 'lucide-react';
+import { Activity, RefreshCw, Waypoints } from 'lucide-react';
 import type { AtlasNode, ProjectAtlasUiResponse } from '../types.js';
 import { AtlasGraph } from './projectAtlas/AtlasGraph.js';
 import { AtlasExportMenu } from './projectAtlas/AtlasExportMenu.js';
@@ -21,20 +21,6 @@ interface ProjectAtlasPageProps {
 }
 
 const FILTERS: AtlasDomainFilter[] = ['CODE', 'CONFIG', 'DOCS', 'INFRA', 'DATA', 'DOMAIN'];
-const ATLAS_TABS = [
-  { label: 'Domain', active: true },
-  { label: 'Overview', disabled: true },
-  { label: 'Structural', disabled: true },
-  { label: 'Diff', disabled: true },
-];
-const NAV_ITEMS = [
-  { label: 'Domain Map', icon: Layers3, active: true },
-  { label: 'Catalog', icon: Boxes, disabled: true },
-  { label: 'Dependencies', icon: GitBranch, disabled: true },
-  { label: 'Quality', icon: ShieldCheck, disabled: true },
-  { label: 'Reports', icon: BarChart3, disabled: true },
-  { label: 'Settings', icon: Settings, disabled: true },
-];
 
 export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
   const [data, setData] = useState<ProjectAtlasUiResponse | null>(null);
@@ -140,36 +126,22 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
   const resultCount = domainView?.matchedNodeIds.length ?? 0;
 
   return (
-    <section className="flex h-full min-h-0 flex-col bg-[#18120d] text-[#f3eadf]">
-      <header className="border-b border-[#584a3b] bg-[#241c15]/95 px-4 py-2.5">
+    <section className="flex h-full min-h-0 flex-col bg-[#fbf4ea] text-[#3f342b]">
+      <header className="border-b border-[#e5d4bb] bg-[#fffdfa]/95 px-4 py-2.5">
         <div className="flex flex-col gap-3 2xl:flex-row 2xl:items-center 2xl:justify-between">
           <div className="flex min-w-0 items-center gap-4">
             <div>
-              <h1 className="flex items-center gap-2 text-lg font-black text-[#f8ead3]">
-                <Waypoints size={20} className="text-[#e0a070]" />
+              <h1 className="flex items-center gap-2 text-lg font-black text-[#3f342b]">
+                <Waypoints size={20} className="text-[#c9872c]" />
                 Project Atlas
               </h1>
-              <p className="mt-0.5 text-[11px] font-mono font-bold text-[#d6b56d]">
+              <p className="mt-0.5 text-[11px] font-mono font-bold text-[#9a6a21]">
                 {data?.status === 'ready' ? `${data.atlas.domains.length} domains · ${data.atlas.edges.length} relationships` : 'Domain-first project intelligence'}
               </p>
             </div>
-            <nav className="hidden items-center rounded-lg border border-[#584a3b] bg-[#1e1914] p-1 md:flex">
-              {ATLAS_TABS.map((tab) => (
-                <button
-                  key={tab.label}
-                  type="button"
-                  disabled={tab.disabled}
-                  title={tab.disabled ? `${tab.label} mode is not available yet` : tab.label}
-                  className={`rounded-md px-3 py-1.5 text-[11px] font-black ${
-                    tab.active
-                      ? 'bg-[#e0a070] text-[#292119]'
-                      : 'cursor-not-allowed text-[#9f866d] opacity-60'
-                  }`}
-                >
-                  {tab.label}
-                </button>
-              ))}
-            </nav>
+            <span className="hidden rounded-lg border border-[#e5d4bb] bg-[#fff7eb] px-3 py-1.5 text-[11px] font-black text-[#9a5b13] md:inline-flex">
+              Domain map
+            </span>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
@@ -180,13 +152,13 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
                   key={filter}
                   type="button"
                   onClick={() => handleToggleFilter(filter)}
-                  className={`h-8 rounded-lg border px-2.5 text-[10px] font-black ${activeFilters.includes(filter) ? 'border-[#e0a070] bg-[#3a2f26] text-[#f7d28a]' : 'border-[#584a3b] bg-[#1e1914] text-[#d8c5aa] hover:text-[#f8ead3]'}`}
+                  className={`h-8 cursor-pointer rounded-lg border px-2.5 text-[10px] font-black transition ${activeFilters.includes(filter) ? 'border-[#c9872c] bg-[#fff1d7] text-[#8a4d0d]' : 'border-[#e5d4bb] bg-[#fffdfa] text-[#7b6554] hover:border-[#c9872c] hover:text-[#3f342b]'}`}
                 >
                   {filter}
                 </button>
               ))}
             </div>
-            <button className="h-9 rounded-lg border border-[#584a3b] bg-[#1e1914] px-3 text-[11px] font-extrabold text-[#f3eadf] disabled:opacity-60" type="button" disabled={!projectId || scanState === 'queued' || scanState === 'running'} onClick={handleManualRescan}>
+            <button className="h-9 cursor-pointer rounded-lg border border-[#e5d4bb] bg-[#fffdfa] px-3 text-[11px] font-extrabold text-[#5c493c] transition hover:border-[#c9872c] hover:bg-[#fff7eb] disabled:cursor-not-allowed disabled:opacity-60" type="button" disabled={!projectId || scanState === 'queued' || scanState === 'running'} onClick={handleManualRescan}>
               <RefreshCw size={14} className="mr-1 inline" /> Rescan
             </button>
             <AtlasPromptMenu atlas={data?.atlas ?? null} selectedNode={selectedAtlasNode} />
@@ -197,30 +169,6 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
       </header>
 
       <div className="flex min-h-0 flex-1">
-        <aside className="hidden w-14 shrink-0 border-r border-[#584a3b] bg-[#241c15] p-2 lg:block">
-          <div className="mb-3 flex h-9 items-center justify-center rounded-lg border border-[#584a3b] bg-[#1e1914] text-[#d6b56d]" title="Atlas workspace">
-            <Search size={14} className="text-[#e0a070]" />
-          </div>
-          <div className="space-y-1">
-            {NAV_ITEMS.map((item) => (
-              <button
-                key={item.label}
-                type="button"
-                disabled={item.disabled}
-                title={item.disabled ? `${item.label} is not available yet` : item.label}
-                className={`flex h-9 w-10 items-center justify-center rounded-lg text-[12px] font-extrabold ${
-                  item.active
-                    ? 'bg-[#3a2f26] text-[#f8ead3]'
-                    : 'cursor-not-allowed text-[#8c7463] opacity-55'
-                }`}
-              >
-                <item.icon size={15} className={item.active ? 'text-[#e0a070]' : 'text-[#8c7463]'} />
-                <span className="sr-only">{item.label}</span>
-              </button>
-            ))}
-          </div>
-        </aside>
-
         <main className="min-w-0 flex-1">
           {loading && <AtlasCenteredMessage title="Loading Atlas" body="Reading the latest graph snapshot." />}
           {error && <AtlasCenteredMessage title="Atlas unavailable" body={error} />}
@@ -247,11 +195,11 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
 
 function AtlasCenteredMessage({ title, body }: { title: string; body: string }) {
   return (
-    <div className="flex h-full min-h-[520px] items-center justify-center bg-[#18120d] p-8">
-      <div className="max-w-sm rounded-lg border border-[#584a3b] bg-[#241c15] p-5 text-center shadow-2xl">
-        <Activity size={24} className="mx-auto text-[#f0b84d]" />
-        <h2 className="mt-3 text-sm font-extrabold text-[#f8ead3]">{title}</h2>
-        <p className="mt-2 text-[11px] font-mono leading-relaxed text-[#d8c5aa]">{body}</p>
+    <div className="flex h-full min-h-[520px] items-center justify-center bg-[#fbf4ea] p-8">
+      <div className="max-w-sm rounded-lg border border-[#e5d4bb] bg-[#fffdfa] p-5 text-center shadow-xl">
+        <Activity size={24} className="mx-auto text-[#c9872c]" />
+        <h2 className="mt-3 text-sm font-extrabold text-[#3f342b]">{title}</h2>
+        <p className="mt-2 text-[11px] font-mono leading-relaxed text-[#7b6554]">{body}</p>
       </div>
     </div>
   );

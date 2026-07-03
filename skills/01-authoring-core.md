@@ -19,6 +19,14 @@ See sourceUrl for requirement.
 
 Instead, extract the useful information from Jira, attachments, comments, subtasks, and repo inspection, then write that information into the card.
 
+## Embedded bug thread rule
+
+When the user says “เปิดบัค”, “open a bug”, reports defects on an existing task, or gives review feedback for a card that already exists, use `open_task_bug` to create an embedded bug thread under that task.
+
+Do not use `create_task` for those defects unless the user explicitly asks for a separate new card. The bug thread must include the observed wrong behavior, expected behavior, evidence, related areas, and a copy-ready fix prompt when available.
+
+If the reviewed task was `ready-for-review`, move it back to or keep it in `in-progress` until the embedded bug thread is fixed and verified.
+
 ## Required read order
 
 When applicable:

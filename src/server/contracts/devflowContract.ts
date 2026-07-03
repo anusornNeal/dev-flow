@@ -1,4 +1,12 @@
-import { VALID_AGENTS, LEGACY_VALID_EFFORTS_FALLBACK, VALID_MODELS, VALID_STATUSES, VALID_TASK_CATEGORIES } from '../constants';
+import {
+  VALID_AGENTS,
+  LEGACY_VALID_EFFORTS_FALLBACK,
+  VALID_BUG_SEVERITIES,
+  VALID_BUG_SOURCES,
+  VALID_MODELS,
+  VALID_STATUSES,
+  VALID_TASK_CATEGORIES,
+} from '../constants';
 
 type JsonSchema = Record<string, any>;
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
@@ -109,6 +117,19 @@ const taskMutationProperties = {
   designImages: { type: 'array', items: { type: 'string' }, description: 'Legacy design image URLs or data.' },
   jiraKey: { type: 'string', description: 'Jira issue key.' },
   sourceUrl: { type: 'string', description: 'Source URL.' },
+};
+
+const bugThreadMutationProperties = {
+  title: { type: 'string', description: 'Bug or defect title to open under the existing task.' },
+  source: { type: 'string', enum: VALID_BUG_SOURCES, description: 'Where the bug report came from.' },
+  severity: { type: 'string', enum: VALID_BUG_SEVERITIES, description: 'Bug severity.' },
+  actual: { type: 'string', description: 'Observed wrong behavior.' },
+  expected: { type: 'string', description: 'Expected behavior.' },
+  evidence: { type: 'string', description: 'Screenshot, review note, log excerpt, or other evidence summary.' },
+  relatedAreas: { type: 'array', items: { type: 'string' }, description: 'Files, components, screens, or areas related to this bug.' },
+  prompt: { type: 'string', description: 'Copy-ready fix prompt for the next bug-fix attempt. Defaults to the title when omitted.' },
+  summary: { type: 'string', description: 'Optional version summary for the first bug thread entry.' },
+  createdBy: { type: 'string', description: 'Who created the bug thread.' },
 };
 
 function withQuery(path: string, query?: Record<string, string | number | boolean | undefined | null>) {
@@ -581,6 +602,28 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
         includeLogs: args.includeLogs,
         mode: args.mode,
       }),
+    }),
+  },
+  {
+    name: 'open_task_bug',
+    aliases: ['create_bug_thread', 'add_task_bug'],
+    description: 'Open an embedded bug thread under an existing task. Use this for review/user defect feedback on existing work instead of creating a new top-level task.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...taskIdentifierProperty,
+        ...bugThreadMutationProperties,
+        ...booleanFlagSchema.properties,
+        ...mutationResponseModeProperty,
+      },
+      required: ['taskId', 'title'],
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: ({ taskId, responseMode, isAgentRequest, ...body }) => ({
+      method: 'POST',
+      path: withQuery(`/api/tasks/${encodePathSegment(String(taskId))}/bugs`, { responseMode: responseMode || 'summary' }),
+      body,
+      headers: isAgentRequest ? { 'x-agent-request': 'true' } : undefined,
     }),
   },
   {

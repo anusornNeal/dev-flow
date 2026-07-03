@@ -30,8 +30,9 @@ export function buildChatGptStarterPrompt() {
     '',
     'When writing back to DevFlow:',
     '1. Run validate_task_quality before create_task/update_task when a card is todo, in-progress, ready-for-review, or otherwise implementation-ready.',
-    '2. Use create_task, update_task, complete_task_review, move_task_to_status, move_task_status, or batch tools with responseMode summary or ack.',
-    '3. Keep cards concise, implementation-ready, and aligned with the loaded authoring skills.',
-    '4. Do not assume missing repo details. Inspect local files or ask a focused question.',
+    '2. Use open_task_bug for defect feedback on an existing task; do not create a new card unless the user explicitly asks for a separate task.',
+    '3. Use create_task, update_task, complete_task_review, move_task_to_status, move_task_status, or batch tools with responseMode summary or ack.',
+    '4. Keep cards concise, implementation-ready, and aligned with the loaded authoring skills.',
+    '5. Do not assume missing repo details. Inspect local files or ask a focused question.',
   ].join('\n');
 }

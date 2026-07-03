@@ -129,6 +129,8 @@ Fail transition:
 ready-for-review -> in-progress
 ```
 
+When review finds bugs, regressions, or unclear behavior needing code changes, create an embedded bug thread with `open_task_bug` under the reviewed task before or while moving it back to `in-progress`. Do not create a separate top-level task for review defects unless the user explicitly asks for one.
+
 ## Review note
 
 Every review decision needs a useful note.

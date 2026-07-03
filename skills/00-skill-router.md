@@ -23,6 +23,14 @@ Use:
 
 Do not require Project Atlas for simple single-file or clearly targeted cards.
 
+## When opening a bug on an existing task
+
+Load:
+- `01-authoring-core.md`
+- `02-schema-reference.md`
+
+Use `open_task_bug` first when the user says “เปิดบัค”, “open a bug”, reports defects on an existing task, or fails a ready-for-review card. Do not use `create_task` unless the user explicitly asks for a separate new card.
+
 ## When doing repository or local file edits
 
 Load:

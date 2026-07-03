@@ -66,3 +66,12 @@ test('authoring skills describe Atlas as selective companion context', () => {
   assert.match(reviewerCore, /module boundaries/);
   assert.match(examples, /Atlas-assisted card/);
 });
+
+test('authoring skills route existing task defects to embedded bug threads', () => {
+  assert.match(skillRouter, /open_task_bug/);
+  assert.match(authoringCore, /Embedded bug thread rule/);
+  assert.match(authoringCore, /Do not use `create_task`/);
+  assert.match(schemaReference, /open_task_bug/);
+  assert.match(reviewerCore, /open_task_bug/);
+  assert.match(examples, /Embedded task bug thread/);
+});

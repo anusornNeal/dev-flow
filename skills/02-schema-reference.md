@@ -23,6 +23,7 @@ Use these before writing implementation-ready cards:
 - `run_project_command`: run allowlisted verification presets such as `typecheck`, `test`, `lint`, `build`, or `verify` after local edits.
 - `commit_git_changes`: commit one small verified scope. Use dry-run first and stage only intended files. Never push.
 - `validate_task_quality`: preflight the card before `create_task` or `update_task`. It blocks implementation-ready cards that still depend on Jira/source links, lack focused `targetFiles`, or lack an `Implementation map` in `repoContext`.
+- `open_task_bug`: create an embedded bug thread under an existing task for defect feedback, review failures, or user reports like “เปิดบัค”. Use this instead of `create_task` when the work belongs to an existing card.
 - `devflow_health_check`: read-only workflow readiness check for git cleanliness, tool capability counts, queue diagnostics, and recommendations.
 - `move_task_to_status`: move a card to a target lane by following allowed transition paths automatically. Prefer it over repeated manual `move_task_status` calls when closing or reopening a card.
 
@@ -50,6 +51,29 @@ MCP tools may resolve project by one of:
 ```
 
 Use only one project identifier when possible.
+
+## Embedded task bug tool shape
+
+Use `open_task_bug` for defects on an existing task:
+
+```json
+{
+  "taskId": "DVF-0120",
+  "title": "Bug title",
+  "source": "user | review | agent | manual",
+  "severity": "low | medium | high | critical",
+  "actual": "Observed wrong behavior",
+  "expected": "Expected behavior",
+  "evidence": "Screenshot/log/review note summary",
+  "relatedAreas": ["file or component name"],
+  "prompt": "Copy-ready fix prompt",
+  "summary": "Optional first bug version summary",
+  "createdBy": "ChatGPT",
+  "responseMode": "summary"
+}
+```
+
+Do not create a top-level task for these defects unless explicitly requested.
 
 ## Core task shape
 

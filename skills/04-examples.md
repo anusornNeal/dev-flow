@@ -51,6 +51,28 @@ Verification child, only when large enough:
 - Owns regression matrix, final integrated command, and manual scenarios.
 ```
 
+## Embedded task bug thread
+
+Use this when the user reports a defect on an existing DevFlow card:
+
+```json
+{
+  "taskId": "DVF-0301",
+  "title": "Project Atlas controls look clickable but do not work",
+  "source": "user",
+  "severity": "high",
+  "actual": "Several visible Atlas controls appear clickable but do not perform an action or explain that they are unavailable.",
+  "expected": "Every visible Atlas control works, is disabled with explanation, or is hidden until implemented.",
+  "evidence": "User annotated screenshots and review note.",
+  "relatedAreas": ["ProjectAtlasPage", "Sidebar", "AtlasGraph"],
+  "prompt": "Audit every visible Atlas control. Wire implemented actions; otherwise render disabled with tooltip copy or hide the unavailable control. Do not create a new task for this defect.",
+  "createdBy": "ChatGPT",
+  "responseMode": "summary"
+}
+```
+
+Call `open_task_bug` with this shape. Do not call `create_task` unless the user explicitly asks for a separate card.
+
 ## Bug fix card
 
 ```json

@@ -95,15 +95,17 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
             const source = positions.get(edge.source);
             const target = positions.get(edge.target);
             if (!source || !target) return null;
-            const isRelated = !focusSelection || edge.source === focusSelection || edge.target === focusSelection || relatedIds.has(edge.source) || relatedIds.has(edge.target);
-            const dimmed = canDim && !isRelated;
+            const directlyRelated = Boolean(focusSelection && (edge.source === focusSelection || edge.target === focusSelection));
+            const showEdge = focusSelection ? directlyRelated || !denseGraph : !denseGraph;
+            if (!showEdge) return null;
+            const dimmed = canDim && !directlyRelated;
             const path = edgePath(source, target);
-            const showLabel = Boolean(focusSelection && isRelated && viewport.zoom > (denseGraph ? 1.05 : 0.82) && edge.sourceEdgeIds.length <= 3);
-            const edgeOpacity = dimmed ? 0.08 : focusSelection ? 0.88 : 0.32;
-            const edgeWidth = dimmed ? 1 : focusSelection && isRelated ? 2.4 : 1.2;
+            const showLabel = Boolean(focusSelection && directlyRelated && viewport.zoom > (denseGraph ? 1.05 : 0.82) && edge.sourceEdgeIds.length <= 3);
+            const edgeOpacity = dimmed ? 0.06 : focusSelection ? 0.9 : 0.14;
+            const edgeWidth = dimmed ? 0.8 : focusSelection && directlyRelated ? 2.6 : 1;
             return (
               <g key={edge.id} opacity={edgeOpacity} pointerEvents="none">
-                <path d={path} fill="none" stroke={edge.kind === 'related' ? '#b7741e' : '#9b8271'} strokeWidth={edgeWidth} strokeDasharray={edge.kind === 'related' ? '8 7' : undefined} markerEnd={focusSelection && isRelated ? 'url(#atlas-arrow)' : undefined} />
+                <path d={path} fill="none" stroke={edge.kind === 'related' ? '#b7741e' : '#9b8271'} strokeWidth={edgeWidth} strokeDasharray={edge.kind === 'related' ? '8 7' : undefined} markerEnd={focusSelection && directlyRelated ? 'url(#atlas-arrow)' : undefined} />
                 {showLabel && (
                   <text x={(source.x + target.x) / 2 + NODE_WIDTH / 2} y={(source.y + target.y) / 2 + NODE_HEIGHT / 2 - 10} className="fill-[#8a4d0d] text-[10px] font-bold">
                     {edge.label}
@@ -173,7 +175,7 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
       </div>
 
       <div className="absolute bottom-4 left-4 rounded-lg border border-[#e0c7a8] bg-[#fffdfa]/95 px-3 py-2 text-[10px] font-bold text-[#5c493c] shadow-xl dark:border-[#6d5642] dark:bg-[#241c15]/95 dark:text-[#f3eadf]">
-        {nodes.length} domains · {edges.length} dependencies · {Math.round(viewport.zoom * 100)}%
+        {nodes.length} domains · {edges.length} dependencies · {focusSelection ? 'focused dependencies' : denseGraph ? 'select a domain to show dependencies' : `${Math.round(viewport.zoom * 100)}%`}
       </div>
     </div>
   );

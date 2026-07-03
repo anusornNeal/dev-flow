@@ -31,6 +31,7 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
   const highlightedIds = useMemo(() => new Set(highlightedNodeIds), [highlightedNodeIds]);
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const [viewport, setViewport] = useState<Viewport>({ x: 60, y: 50, zoom: 0.88 });
+  const denseGraph = nodes.length > 6 || edges.length > 8 || edges.some((edge) => edge.sourceEdgeIds.length > 3);
 
   useEffect(() => {
     setViewport(fitViewport(shellRef.current, bounds));
@@ -97,11 +98,14 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
             const isRelated = !focusSelection || edge.source === focusSelection || edge.target === focusSelection || relatedIds.has(edge.source) || relatedIds.has(edge.target);
             const dimmed = canDim && !isRelated;
             const path = edgePath(source, target);
+            const showLabel = Boolean(focusSelection && isRelated && viewport.zoom > (denseGraph ? 1.05 : 0.82) && edge.sourceEdgeIds.length <= 3);
+            const edgeOpacity = dimmed ? 0.08 : focusSelection ? 0.88 : 0.32;
+            const edgeWidth = dimmed ? 1 : focusSelection && isRelated ? 2.4 : 1.2;
             return (
-              <g key={edge.id} opacity={dimmed ? 0.15 : 0.82}>
-                <path d={path} fill="none" stroke={edge.kind === 'related' ? '#d6b56d' : '#8c7463'} strokeWidth={edge.kind === 'related' ? 2.3 : 1.6} strokeDasharray={edge.kind === 'related' ? '8 7' : undefined} markerEnd="url(#atlas-arrow)" />
-                {viewport.zoom > 0.72 && (
-                  <text x={(source.x + target.x) / 2 + NODE_WIDTH / 2} y={(source.y + target.y) / 2 + NODE_HEIGHT / 2 - 8} className="fill-[#f3d59a] text-[10px] font-bold">
+              <g key={edge.id} opacity={edgeOpacity} pointerEvents="none">
+                <path d={path} fill="none" stroke={edge.kind === 'related' ? '#d6b56d' : '#8c7463'} strokeWidth={edgeWidth} strokeDasharray={edge.kind === 'related' ? '8 7' : undefined} markerEnd={focusSelection && isRelated ? 'url(#atlas-arrow)' : undefined} />
+                {showLabel && (
+                  <text x={(source.x + target.x) / 2 + NODE_WIDTH / 2} y={(source.y + target.y) / 2 + NODE_HEIGHT / 2 - 10} className="fill-[#f3d59a] text-[10px] font-bold">
                     {edge.label}
                   </text>
                 )}
@@ -216,12 +220,16 @@ function layoutDomainNodes(nodes: AtlasDomainMapNode[]) {
 }
 
 function edgePath(source: { x: number; y: number }, target: { x: number; y: number }) {
-  const x1 = source.x + NODE_WIDTH;
+  const sourceCenterX = source.x + NODE_WIDTH / 2;
+  const targetCenterX = target.x + NODE_WIDTH / 2;
+  const leftToRight = sourceCenterX <= targetCenterX;
+  const x1 = source.x + (leftToRight ? NODE_WIDTH : 0);
   const y1 = source.y + NODE_HEIGHT / 2;
-  const x2 = target.x;
+  const x2 = target.x + (leftToRight ? 0 : NODE_WIDTH);
   const y2 = target.y + NODE_HEIGHT / 2;
+  const direction = leftToRight ? 1 : -1;
   const curve = Math.max(80, Math.abs(x2 - x1) * 0.35);
-  return `M ${x1} ${y1} C ${x1 + curve} ${y1}, ${x2 - curve} ${y2}, ${x2} ${y2}`;
+  return `M ${x1} ${y1} C ${x1 + curve * direction} ${y1}, ${x2 - curve * direction} ${y2}, ${x2} ${y2}`;
 }
 
 function getRelatedNodeIds(edges: AtlasDomainMapEdge[], selectedNodeId: string | null) {

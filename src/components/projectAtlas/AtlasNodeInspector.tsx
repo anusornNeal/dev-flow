@@ -51,10 +51,10 @@ function InfoTab({ inspector, copied, onCopyContext }: { inspector: AtlasDomainI
           </div>
           <span className="rounded-md border border-[#6d5642] bg-[#2b2119] px-2 py-1 text-[9px] font-black uppercase text-[#d8c5aa]">{inspector.health}</span>
         </div>
-        <p className="mt-3 text-[12px] leading-relaxed text-[#c8d1dc]">{inspector.description}</p>
+        <p className="mt-3 text-[12px] leading-relaxed text-[#d8c5aa]">{inspector.description}</p>
         <div className="mt-3 flex flex-wrap gap-1.5">
           {inspector.tags.map((tag) => (
-            <span key={tag} className="rounded border border-[#384456] bg-[#2b2119] px-2 py-1 text-[9px] font-black uppercase text-[#e0a070]">{tag}</span>
+            <span key={tag} className="rounded border border-[#6d5642] bg-[#2b2119] px-2 py-1 text-[9px] font-black uppercase text-[#e0a070]">{tag}</span>
           ))}
         </div>
       </section>
@@ -70,7 +70,7 @@ function InfoTab({ inspector, copied, onCopyContext }: { inspector: AtlasDomainI
         <p className="text-[10px] font-black uppercase tracking-widest text-[#e0a070]">File Types</p>
         <div className="mt-3 space-y-2">
           {Object.entries(inspector.fileTypeCounts).length > 0 ? Object.entries(inspector.fileTypeCounts).map(([type, count]) => (
-            <div key={type} className="flex items-center justify-between rounded-md bg-[#2b2119] px-3 py-2 text-[11px] font-bold text-[#d7dee8]">
+            <div key={type} className="flex items-center justify-between rounded-md bg-[#2b2119] px-3 py-2 text-[11px] font-bold text-[#f3eadf]">
               <span>.{type}</span>
               <span className="text-[#e0a070]">{count}</span>
             </div>
@@ -80,10 +80,10 @@ function InfoTab({ inspector, copied, onCopyContext }: { inspector: AtlasDomainI
 
       <section className="rounded-lg border border-[#584a3b] bg-[#1e1914] p-4">
         <p className="text-[10px] font-black uppercase tracking-widest text-[#e0a070]">Technologies</p>
-        <p className="mt-2 text-[11px] leading-relaxed text-[#c8d1dc]">{inspector.technologies.length ? inspector.technologies.join(', ') : 'Unknown'}</p>
+        <p className="mt-2 text-[11px] leading-relaxed text-[#d8c5aa]">{inspector.technologies.length ? inspector.technologies.join(', ') : 'Unknown'}</p>
       </section>
 
-      <button type="button" onClick={onCopyContext} className="flex w-full items-center justify-center gap-2 rounded-lg border border-[#3b4654] bg-[#2b2119] px-3 py-2 text-[11px] font-extrabold text-[#f8ead3] hover:border-[#e0a070]">
+      <button type="button" onClick={onCopyContext} className="flex w-full items-center justify-center gap-2 rounded-lg border border-[#6d5642] bg-[#2b2119] px-3 py-2 text-[11px] font-extrabold text-[#f8ead3] hover:border-[#e0a070]">
         <Clipboard size={14} /> {copied ? 'Copied Context' : 'Copy Context'}
       </button>
     </div>

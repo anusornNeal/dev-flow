@@ -21,13 +21,19 @@ interface ProjectAtlasPageProps {
 }
 
 const FILTERS: AtlasDomainFilter[] = ['CODE', 'CONFIG', 'DOCS', 'INFRA', 'DATA', 'DOMAIN'];
+const ATLAS_TABS = [
+  { label: 'Domain', active: true },
+  { label: 'Overview', disabled: true },
+  { label: 'Structural', disabled: true },
+  { label: 'Diff', disabled: true },
+];
 const NAV_ITEMS = [
   { label: 'Domain Map', icon: Layers3, active: true },
-  { label: 'Catalog', icon: Boxes },
-  { label: 'Dependencies', icon: GitBranch },
-  { label: 'Quality', icon: ShieldCheck },
-  { label: 'Reports', icon: BarChart3 },
-  { label: 'Settings', icon: Settings },
+  { label: 'Catalog', icon: Boxes, disabled: true },
+  { label: 'Dependencies', icon: GitBranch, disabled: true },
+  { label: 'Quality', icon: ShieldCheck, disabled: true },
+  { label: 'Reports', icon: BarChart3, disabled: true },
+  { label: 'Settings', icon: Settings, disabled: true },
 ];
 
 export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
@@ -148,9 +154,19 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
               </p>
             </div>
             <nav className="hidden items-center rounded-lg border border-[#584a3b] bg-[#1e1914] p-1 md:flex">
-              {['Overview', 'Domain', 'Structural', 'Diff'].map((tab) => (
-                <button key={tab} type="button" className={`rounded-md px-3 py-1.5 text-[11px] font-black ${tab === 'Domain' ? 'bg-[#e0a070] text-[#292119]' : 'text-[#d8c5aa] hover:text-[#f8ead3]'}`}>
-                  {tab}
+              {ATLAS_TABS.map((tab) => (
+                <button
+                  key={tab.label}
+                  type="button"
+                  disabled={tab.disabled}
+                  title={tab.disabled ? `${tab.label} mode is not available yet` : tab.label}
+                  className={`rounded-md px-3 py-1.5 text-[11px] font-black ${
+                    tab.active
+                      ? 'bg-[#e0a070] text-[#292119]'
+                      : 'cursor-not-allowed text-[#9f866d] opacity-60'
+                  }`}
+                >
+                  {tab.label}
                 </button>
               ))}
             </nav>
@@ -187,7 +203,17 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
           </div>
           <div className="space-y-1">
             {NAV_ITEMS.map((item) => (
-              <button key={item.label} type="button" title={item.label} className={`flex h-9 w-10 items-center justify-center rounded-lg text-[12px] font-extrabold ${item.active ? 'bg-[#3a2f26] text-[#f8ead3]' : 'text-[#b89b82] hover:bg-[#2b2119] hover:text-[#f3eadf]'}`}>
+              <button
+                key={item.label}
+                type="button"
+                disabled={item.disabled}
+                title={item.disabled ? `${item.label} is not available yet` : item.label}
+                className={`flex h-9 w-10 items-center justify-center rounded-lg text-[12px] font-extrabold ${
+                  item.active
+                    ? 'bg-[#3a2f26] text-[#f8ead3]'
+                    : 'cursor-not-allowed text-[#8c7463] opacity-55'
+                }`}
+              >
                 <item.icon size={15} className={item.active ? 'text-[#e0a070]' : 'text-[#8c7463]'} />
                 <span className="sr-only">{item.label}</span>
               </button>
@@ -221,11 +247,11 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
 
 function AtlasCenteredMessage({ title, body }: { title: string; body: string }) {
   return (
-    <div className="flex h-full min-h-[520px] items-center justify-center bg-[#0c0f13] p-8">
-      <div className="max-w-sm rounded-lg border border-[#26303b] bg-[#111820] p-5 text-center shadow-2xl">
+    <div className="flex h-full min-h-[520px] items-center justify-center bg-[#18120d] p-8">
+      <div className="max-w-sm rounded-lg border border-[#584a3b] bg-[#241c15] p-5 text-center shadow-2xl">
         <Activity size={24} className="mx-auto text-[#f0b84d]" />
         <h2 className="mt-3 text-sm font-extrabold text-[#f8ead3]">{title}</h2>
-        <p className="mt-2 text-[11px] font-mono leading-relaxed text-[#9da8b5]">{body}</p>
+        <p className="mt-2 text-[11px] font-mono leading-relaxed text-[#d8c5aa]">{body}</p>
       </div>
     </div>
   );

@@ -50,7 +50,7 @@ const atlas: any = {
   summary: {
     verified: { source: 'verified', description: 'Verified API atlas' },
   },
-  freshness: { status: 'fresh', generatedAt: '2026-07-02T00:00:00.000Z' },
+  freshness: { status: 'fresh', generatedAt: new Date().toISOString() },
 };
 
 saveLatestAtlas(atlas);
@@ -81,7 +81,7 @@ test('getProjectAtlasStatus includes freshness and counts', () => {
   const status = getProjectAtlasStatus(project.id);
 
   assert.equal(status.cacheStatus, 'ok');
-  assert.equal(status.generatedAt, '2026-07-02T00:00:00.000Z');
+  assert.equal(status.generatedAt, atlas.freshness.generatedAt);
   assert.equal(status.nodeCount, 12);
 });
 

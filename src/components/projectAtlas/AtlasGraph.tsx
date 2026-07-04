@@ -17,10 +17,71 @@ interface Viewport {
   zoom: number;
 }
 
+type EdgeVisualVariant = 'direct' | 'soft' | 'reference' | 'test';
+
+interface EdgeVisualStyle {
+  variant: EdgeVisualVariant;
+  label: string;
+  description: string;
+  stroke: string;
+  dashArray?: string;
+  strokeLinecap?: 'butt' | 'round' | 'square';
+  baseWidth: number;
+  focusWidth: number;
+}
+
 const NODE_WIDTH = 260;
 const NODE_HEIGHT = 154;
 const MIN_ZOOM = 0.42;
 const MAX_ZOOM = 1.7;
+
+const EDGE_VISUAL_STYLES: Record<EdgeVisualVariant, EdgeVisualStyle> = {
+  direct: {
+    variant: 'direct',
+    label: 'Direct dependency',
+    description: 'imports, calls, routes, reads, writes',
+    stroke: '#8f5d2a',
+    baseWidth: 1.25,
+    focusWidth: 2.35,
+  },
+  soft: {
+    variant: 'soft',
+    label: 'Inferred / related',
+    description: 'soft relationship from heuristics',
+    stroke: '#b7741e',
+    dashArray: '12 8',
+    strokeLinecap: 'butt',
+    baseWidth: 1.35,
+    focusWidth: 2.2,
+  },
+  reference: {
+    variant: 'reference',
+    label: 'Reference / grouping',
+    description: 'docs, config, data, ownership',
+    stroke: '#c9872c',
+    dashArray: '1 8',
+    strokeLinecap: 'round',
+    baseWidth: 1.7,
+    focusWidth: 2.25,
+  },
+  test: {
+    variant: 'test',
+    label: 'Test coverage',
+    description: 'test relationship',
+    stroke: '#7f6a4f',
+    dashArray: '7 4 2 4',
+    strokeLinecap: 'butt',
+    baseWidth: 1.45,
+    focusWidth: 2.15,
+  },
+};
+
+const EDGE_LEGEND_ITEMS: EdgeVisualStyle[] = [
+  EDGE_VISUAL_STYLES.direct,
+  EDGE_VISUAL_STYLES.soft,
+  EDGE_VISUAL_STYLES.reference,
+  EDGE_VISUAL_STYLES.test,
+];
 
 export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = [], onSelectNode }: AtlasGraphProps) {
   const shellRef = useRef<HTMLDivElement | null>(null);
@@ -86,9 +147,11 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
         }}
       >
         <defs>
-          <marker id="atlas-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#b7741e" />
-          </marker>
+          {EDGE_LEGEND_ITEMS.map((style) => (
+            <marker key={style.variant} id={`atlas-arrow-${style.variant}`} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill={style.stroke} />
+            </marker>
+          ))}
         </defs>
         <g transform={`translate(${viewport.x} ${viewport.y}) scale(${viewport.zoom})`}>
           {edges.map((edge) => {
@@ -99,15 +162,24 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
             const showEdge = focusSelection ? directlyRelated || !denseGraph : !denseGraph;
             if (!showEdge) return null;
             const dimmed = canDim && !directlyRelated;
+            const visualStyle = edgeVisualStyle(edge);
             const path = edgePath(source, target);
             const showLabel = Boolean(!denseGraph && focusSelection && directlyRelated && viewport.zoom > 0.82 && edge.sourceEdgeIds.length <= 3);
-            const edgeOpacity = dimmed ? 0.04 : focusSelection ? 0.62 : 0.1;
-            const edgeWidth = dimmed ? 0.6 : focusSelection && directlyRelated ? 1.8 : 0.9;
+            const edgeOpacity = dimmed ? 0.04 : focusSelection ? 0.72 : 0.18;
+            const edgeWidth = dimmed ? 0.6 : focusSelection && directlyRelated ? visualStyle.focusWidth : visualStyle.baseWidth;
             return (
               <g key={edge.id} opacity={edgeOpacity} pointerEvents="none">
-                <path d={path} fill="none" stroke={edge.kind === 'related' ? '#b7741e' : '#9b8271'} strokeWidth={edgeWidth} strokeDasharray={edge.kind === 'related' ? '8 7' : undefined} markerEnd={focusSelection && directlyRelated ? 'url(#atlas-arrow)' : undefined} />
+                <path
+                  d={path}
+                  fill="none"
+                  stroke={visualStyle.stroke}
+                  strokeWidth={edgeWidth}
+                  strokeDasharray={visualStyle.dashArray}
+                  strokeLinecap={visualStyle.strokeLinecap}
+                  markerEnd={focusSelection && directlyRelated ? `url(#atlas-arrow-${visualStyle.variant})` : undefined}
+                />
                 {showLabel && (
-                  <text x={(source.x + target.x) / 2 + NODE_WIDTH / 2} y={(source.y + target.y) / 2 + NODE_HEIGHT / 2 - 10} className="fill-[#8a4d0d] text-[10px] font-bold">
+                  <text x={(source.x + target.x) / 2 + NODE_WIDTH / 2} y={(source.y + target.y) / 2 + NODE_HEIGHT / 2 - 10} className="fill-[#8a4d0d] text-[10px] font-bold dark:fill-[#f7d28a]">
                     {edge.label}
                   </text>
                 )}
@@ -177,7 +249,54 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
       <div className="absolute bottom-4 left-4 rounded-lg border border-[#e0c7a8] bg-[#fffdfa]/95 px-3 py-2 text-[10px] font-bold text-[#5c493c] shadow-xl dark:border-[#6d5642] dark:bg-[#241c15]/95 dark:text-[#f3eadf]">
         {nodes.length} domains · {edges.length} dependencies · {focusSelection ? 'focused dependencies' : denseGraph ? 'select a domain to show dependencies' : `${Math.round(viewport.zoom * 100)}%`}
       </div>
+
+      <EdgeLegend />
     </div>
+  );
+}
+
+function EdgeLegend() {
+  return (
+    <div className="absolute bottom-4 right-4 w-72 rounded-lg border border-[#e0c7a8] bg-[#fffdfa]/95 p-3 text-[#5c493c] shadow-xl backdrop-blur dark:border-[#6d5642] dark:bg-[#241c15]/95 dark:text-[#f3eadf]">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-[10px] font-black uppercase tracking-widest text-[#9a5b13] dark:text-[#d6b56d]">Dependency Legend</p>
+        <span className="text-[9px] font-black uppercase text-[#8a6d55] dark:text-[#b89b82]">arrow = target</span>
+      </div>
+      <div className="mt-2 space-y-1.5">
+        {EDGE_LEGEND_ITEMS.map((style) => (
+          <div key={style.variant} className="grid grid-cols-[82px_1fr] items-center gap-2">
+            <LegendLine style={style} />
+            <div className="min-w-0">
+              <p className="truncate text-[10px] font-black text-[#3f342b] dark:text-[#f8ead3]">{style.label}</p>
+              <p className="truncate text-[9px] font-bold text-[#7b6554] dark:text-[#b89b82]">{style.description}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function LegendLine({ style }: { style: EdgeVisualStyle }) {
+  return (
+    <svg width="82" height="18" viewBox="0 0 82 18" aria-hidden="true">
+      <defs>
+        <marker id={`legend-arrow-${style.variant}`} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill={style.stroke} />
+        </marker>
+      </defs>
+      <line
+        x1="5"
+        y1="9"
+        x2="72"
+        y2="9"
+        stroke={style.stroke}
+        strokeWidth={Math.max(2, style.baseWidth)}
+        strokeDasharray={style.dashArray}
+        strokeLinecap={style.strokeLinecap}
+        markerEnd={`url(#legend-arrow-${style.variant})`}
+      />
+    </svg>
   );
 }
 
@@ -205,6 +324,13 @@ function DomainIcon({ category }: { category: AtlasDomainFilter }) {
   if (category === 'DATA') return <Database size={18} />;
   if (category === 'DOMAIN') return <Box size={18} />;
   return <Code2 size={18} />;
+}
+
+function edgeVisualStyle(edge: AtlasDomainMapEdge): EdgeVisualStyle {
+  if (edge.kind === 'related') return EDGE_VISUAL_STYLES.soft;
+  if (edge.kind === 'tests') return EDGE_VISUAL_STYLES.test;
+  if (edge.kind === 'contains' || edge.kind === 'exports') return EDGE_VISUAL_STYLES.reference;
+  return EDGE_VISUAL_STYLES.direct;
 }
 
 function layoutDomainNodes(nodes: AtlasDomainMapNode[]) {

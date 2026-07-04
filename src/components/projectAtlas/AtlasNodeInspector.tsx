@@ -63,6 +63,16 @@ function InfoTab({ inspector, copied, onCopyContext, onOpenDetail }: { inspector
             <span key={tag} className="rounded-full border border-[#d8c3a6] bg-[#fffaf2] px-2.5 py-1 text-[10px] font-black uppercase text-[#9a5b13] dark:border-[rgba(245,169,89,0.14)] dark:bg-[#292119] dark:text-[#f5a959]">{tag}</span>
           ))}
         </div>
+        <div className="mt-4 grid gap-2">
+          {onOpenDetail ? (
+            <button type="button" onClick={onOpenDetail} className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-lg border border-[#b7741e] bg-[#fff1d7] px-3 py-2.5 text-[11px] font-extrabold text-[#8a4d0d] shadow-sm hover:bg-[#ffe6bd] dark:border-[rgba(245,169,89,0.36)] dark:bg-[rgba(245,169,89,0.16)] dark:text-[#f5a959] dark:hover:bg-[rgba(245,169,89,0.22)]">
+              <FileCode2 size={14} /> Open detail view
+            </button>
+          ) : null}
+          <button type="button" onClick={onCopyContext} className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-lg border border-[#d8c3a6] bg-[#fffaf2] px-3 py-2 text-[11px] font-extrabold text-[#5c493c] hover:border-[#b7741e] hover:bg-[#fff1d7] dark:border-[rgba(212,165,116,0.18)] dark:bg-[rgba(212,165,116,0.10)] dark:text-[#d4a574] dark:hover:bg-[rgba(212,165,116,0.16)]">
+            <Clipboard size={14} /> {copied ? 'Copied Context' : 'Copy Context'}
+          </button>
+        </div>
       </section>
 
       <section className="rounded-lg border border-[#d8c3a6] bg-[#fff8ec] p-4 dark:border-[rgba(212,165,116,0.14)] dark:bg-[#1a1a1a]">
@@ -98,14 +108,6 @@ function InfoTab({ inspector, copied, onCopyContext, onOpenDetail }: { inspector
         <p className="mt-3 text-[11px] leading-relaxed text-[#7b6554] dark:text-[#a39787]">{inspector.technologies.length ? inspector.technologies.join(', ') : 'Technologies unknown.'}</p>
       </section>
 
-      {onOpenDetail ? (
-        <button type="button" onClick={onOpenDetail} className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-lg border border-[#b7741e] bg-[#fff1d7] px-3 py-2 text-[11px] font-extrabold text-[#8a4d0d] hover:bg-[#ffe6bd] dark:border-[rgba(245,169,89,0.36)] dark:bg-[rgba(245,169,89,0.16)] dark:text-[#f5a959] dark:hover:bg-[rgba(245,169,89,0.22)]">
-          <FileCode2 size={14} /> Open detail view
-        </button>
-      ) : null}
-      <button type="button" onClick={onCopyContext} className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-lg border border-[#d8c3a6] bg-[#fffaf2] px-3 py-2 text-[11px] font-extrabold text-[#5c493c] hover:border-[#b7741e] hover:bg-[#fff1d7] dark:border-[rgba(212,165,116,0.18)] dark:bg-[rgba(212,165,116,0.10)] dark:text-[#d4a574] dark:hover:bg-[rgba(212,165,116,0.16)]">
-        <Clipboard size={14} /> {copied ? 'Copied Context' : 'Copy Context'}
-      </button>
     </div>
   );
 }

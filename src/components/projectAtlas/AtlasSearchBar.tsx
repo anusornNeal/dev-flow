@@ -8,10 +8,10 @@ interface AtlasSearchBarProps {
 
 export function AtlasSearchBar({ query, resultCount, onQueryChange }: AtlasSearchBarProps) {
   return (
-    <label className="flex h-10 w-full items-center gap-2.5 rounded-xl border border-[#d8c3a6] bg-[#fffaf2] px-3.5 text-[12px] font-medium text-[#685547] shadow-[inset_0_0_14px_rgba(90,62,26,0.05)] dark:border-[rgba(148,163,184,0.18)] dark:bg-[#0f1724] dark:text-[#cbd5e1] dark:shadow-[inset_0_0_14px_rgba(0,0,0,0.32)]">
+    <label className="flex h-10 w-full items-center gap-2.5 rounded-xl border border-[#d8c3a6] bg-[#fffaf2] px-3.5 text-[12px] font-medium text-[#685547] shadow-[inset_0_0_14px_rgba(90,62,26,0.05)] dark:border-[#584a3b]/60 dark:bg-[#1e1914] dark:text-[#d8c5aa] dark:shadow-[inset_0_0_14px_rgba(0,0,0,0.32)]">
       <Search size={15} className="text-[#b7741e] dark:text-[#f5a959]" />
       <input
-        className="min-w-0 flex-1 bg-transparent text-[13px] font-semibold text-[#241f1a] outline-none placeholder:text-[#a98e78] dark:text-[#f8fafc] dark:placeholder:text-[#64748b]"
+        className="min-w-0 flex-1 bg-transparent text-[13px] font-semibold text-[#241f1a] outline-none placeholder:text-[#a98e78] dark:text-[#f3eadf] dark:placeholder:text-[#8a6d55]"
         placeholder="Search domains by name, summary, file path, or tags..."
         value={query}
         onChange={(event) => onQueryChange(event.target.value)}

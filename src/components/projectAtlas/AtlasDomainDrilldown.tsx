@@ -84,17 +84,17 @@ export function AtlasDomainDrilldown({ inspector, onBack }: AtlasDomainDrilldown
   };
 
   return (
-    <div ref={shellRef} className="relative h-full min-h-[680px] overflow-hidden bg-[#f6efe6] text-[#241f1a] dark:bg-[#050914] dark:text-[#f8fafc]">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_28%_12%,rgba(245,169,89,0.16),transparent_34%),radial-gradient(circle_at_70%_44%,rgba(59,130,246,0.08),transparent_38%)]" />
-      <div className="pointer-events-none absolute inset-0 opacity-25 [background-image:linear-gradient(rgba(154,91,19,0.07)_1px,transparent_1px),linear-gradient(90deg,rgba(154,91,19,0.07)_1px,transparent_1px)] [background-size:34px_34px] dark:opacity-20 dark:[background-image:linear-gradient(rgba(148,163,184,0.12)_1px,transparent_1px),linear-gradient(90deg,rgba(148,163,184,0.12)_1px,transparent_1px)]" />
+    <div ref={shellRef} className="relative h-full min-h-[680px] overflow-hidden bg-[#f6efe6] text-[#241f1a] dark:bg-[#17130f] dark:text-[#f8fafc]">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_28%_12%,rgba(245,169,89,0.16),transparent_34%),radial-gradient(circle_at_70%_44%,rgba(214,181,109,0.08),transparent_38%)]" />
+      <div className="pointer-events-none absolute inset-0 opacity-25 [background-image:linear-gradient(rgba(154,91,19,0.07)_1px,transparent_1px),linear-gradient(90deg,rgba(154,91,19,0.07)_1px,transparent_1px)] [background-size:34px_34px] dark:opacity-20 dark:[background-image:linear-gradient(rgba(88,74,59,0.34)_1px,transparent_1px),linear-gradient(90deg,rgba(88,74,59,0.34)_1px,transparent_1px)]" />
 
       <button
         type="button"
         onClick={onBack}
-        className="absolute left-4 top-4 z-20 inline-flex cursor-pointer items-center gap-2 rounded-full border border-[#d8c3a6] bg-[#fffaf2]/94 px-4 py-2 text-[12px] font-black text-[#241f1a] shadow-sm backdrop-blur hover:bg-[#fff1d7] dark:border-[rgba(148,163,184,0.18)] dark:bg-[#0f1724]/94 dark:text-[#f8fafc] dark:hover:bg-[rgba(245,169,89,0.12)]"
+        className="absolute left-4 top-4 z-20 inline-flex cursor-pointer items-center gap-2 rounded-full border border-[#d8c3a6] bg-[#fffaf2]/94 px-4 py-2 text-[12px] font-black text-[#241f1a] shadow-sm backdrop-blur hover:bg-[#fff1d7] dark:border-[#584a3b]/60 dark:bg-[#292119]/94 dark:text-[#f3eadf] dark:hover:bg-[rgba(245,169,89,0.12)]"
       >
         <ArrowLeft size={14} />
-        Project <span className="text-[#8a6d55] dark:text-[#94a3b8]">›</span> <span className="uppercase text-[#9a5b13] dark:text-[#f5a959]">{inspector.name}</span>
+        Project <span className="text-[#8a6d55] dark:text-[#b89b82]">›</span> <span className="uppercase text-[#9a5b13] dark:text-[#f5a959]">{inspector.name}</span>
         <span className="ml-1 text-[10px] font-bold text-[#8a6d55] dark:text-[#94a3b8]">click to go back</span>
       </button>
 
@@ -125,15 +125,15 @@ export function AtlasDomainDrilldown({ inspector, onBack }: AtlasDomainDrilldown
         <g transform={`translate(${viewport.x} ${viewport.y}) scale(${viewport.zoom})`}>
           {graph.edges.map((edge) => (
             <g key={edge.id}>
-              <path d={edge.path} fill="none" stroke="#f6efe6" strokeWidth={edge.highlight ? 5 : 4} strokeLinecap="round" opacity={0.48} className="dark:stroke-[#050914]" />
+              <path d={edge.path} fill="none" stroke="#f6efe6" strokeWidth={edge.highlight ? 5 : 4} strokeLinecap="round" opacity={0.48} className="dark:stroke-[#17130f]" />
               <path d={edge.path} fill="none" stroke={edge.highlight ? '#b7741e' : '#8f5d2a'} strokeWidth={edge.highlight ? 1.35 : 1.05} strokeLinecap="round" opacity={edge.highlight ? 0.68 : 0.42} />
-              <text x={edge.labelX} y={edge.labelY} textAnchor="middle" className="fill-[#8a6d55] text-[9px] font-black dark:fill-[#94a3b8]">{edge.label}</text>
+              <text x={edge.labelX} y={edge.labelY} textAnchor="middle" className="fill-[#8a6d55] text-[9px] font-black dark:fill-[#b89b82]">{edge.label}</text>
             </g>
           ))}
 
           {graph.clusters.map((cluster) => (
             <g key={cluster.id}>
-              <rect x={cluster.x} y={cluster.y} width={cluster.width} height={cluster.height} rx={18} className="fill-[#fffaf2]/58 stroke-[#d8c3a6] dark:fill-[#0f1724]/56 dark:stroke-[rgba(245,169,89,0.18)]" />
+              <rect x={cluster.x} y={cluster.y} width={cluster.width} height={cluster.height} rx={18} className="fill-[#fffaf2]/58 stroke-[#d8c3a6] dark:fill-[#1e1914]/70 dark:stroke-[#584a3b]" />
               <ClusterHeader cluster={cluster} onToggle={() => handleToggleCluster(cluster.id)} />
               {cluster.filePositions.map(({ file, x, y }) => <FileNode key={file.id} file={file} x={x} y={y} />)}
             </g>
@@ -143,7 +143,7 @@ export function AtlasDomainDrilldown({ inspector, onBack }: AtlasDomainDrilldown
         </g>
       </svg>
 
-      <div className="absolute right-4 top-4 z-20 flex overflow-hidden rounded-xl border border-[#d8c3a6] bg-[#fffaf2]/95 shadow-xl backdrop-blur dark:border-[rgba(148,163,184,0.18)] dark:bg-[#0f1724]/92">
+      <div className="absolute right-4 top-4 z-20 flex overflow-hidden rounded-xl border border-[#d8c3a6] bg-[#fffaf2]/95 shadow-xl backdrop-blur dark:border-[#584a3b]/60 dark:bg-[#292119]/92">
         <CanvasButton label="Zoom in" onClick={() => updateZoom(viewport.zoom + 0.12)}><Plus size={15} /></CanvasButton>
         <CanvasButton label="Zoom out" onClick={() => updateZoom(viewport.zoom - 0.12)}><Minus size={15} /></CanvasButton>
         <CanvasButton label="Fit view" onClick={() => setViewport(fitViewport(shellRef.current, graph.bounds))}><Focus size={15} /></CanvasButton>
@@ -174,7 +174,7 @@ function ClusterHeader({ cluster, onToggle }: { cluster: ClusterLayout; onToggle
 function DomainNode({ inspector, x, y }: { inspector: AtlasDomainInspectorViewModel; x: number; y: number }) {
   return (
     <foreignObject x={x} y={y} width={ROOT_WIDTH} height={ROOT_HEIGHT}>
-      <div data-drill-node className="h-full rounded-xl border border-[#d8c3a6] bg-[#fffaf2]/96 p-3.5 shadow-[0_20px_52px_rgba(90,62,26,0.18)] dark:border-[rgba(245,169,89,0.22)] dark:bg-[#0f1724]/96 dark:shadow-[0_20px_56px_rgba(0,0,0,0.42)]">
+      <div data-drill-node className="h-full rounded-xl border border-[#d8c3a6] bg-[#fffaf2]/96 p-3.5 shadow-[0_20px_52px_rgba(90,62,26,0.18)] dark:border-[rgba(245,169,89,0.22)] dark:bg-[#1e1914]/96 dark:shadow-[0_20px_56px_rgba(0,0,0,0.42)]">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <p className="text-[10px] font-black uppercase tracking-widest text-[#9a5b13] dark:text-[#f5a959]">Domain Detail</p>

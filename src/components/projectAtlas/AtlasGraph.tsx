@@ -125,9 +125,9 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
   };
 
   return (
-    <div ref={shellRef} className="relative h-full min-h-[680px] overflow-hidden bg-[#f6efe6] dark:bg-[#050914]">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_30%_16%,rgba(245,169,89,0.18),transparent_32%),linear-gradient(135deg,rgba(255,255,255,0.44),transparent_42%)] opacity-90 dark:bg-[radial-gradient(circle_at_28%_18%,rgba(245,169,89,0.16),transparent_34%),radial-gradient(circle_at_74%_48%,rgba(59,130,246,0.10),transparent_38%)]" />
-      <div className="pointer-events-none absolute inset-0 opacity-35 [background-image:linear-gradient(rgba(154,91,19,0.07)_1px,transparent_1px),linear-gradient(90deg,rgba(154,91,19,0.07)_1px,transparent_1px)] [background-size:34px_34px] dark:opacity-25 dark:[background-image:linear-gradient(rgba(148,163,184,0.12)_1px,transparent_1px),linear-gradient(90deg,rgba(148,163,184,0.12)_1px,transparent_1px)]" />
+    <div ref={shellRef} className="relative h-full min-h-[680px] overflow-hidden bg-[#f6efe6] dark:bg-[#17130f]">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_30%_16%,rgba(245,169,89,0.18),transparent_32%),linear-gradient(135deg,rgba(255,255,255,0.44),transparent_42%)] opacity-90 dark:bg-[radial-gradient(circle_at_28%_18%,rgba(224,160,112,0.14),transparent_34%),radial-gradient(circle_at_74%_48%,rgba(214,181,109,0.08),transparent_38%)]" />
+      <div className="pointer-events-none absolute inset-0 opacity-35 [background-image:linear-gradient(rgba(154,91,19,0.07)_1px,transparent_1px),linear-gradient(90deg,rgba(154,91,19,0.07)_1px,transparent_1px)] [background-size:34px_34px] dark:opacity-25 dark:[background-image:linear-gradient(rgba(88,74,59,0.34)_1px,transparent_1px),linear-gradient(90deg,rgba(88,74,59,0.34)_1px,transparent_1px)]" />
       <svg
         className="relative h-full w-full cursor-grab active:cursor-grabbing"
         role="img"
@@ -159,10 +159,10 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
         <g transform={`translate(${viewport.x} ${viewport.y}) scale(${viewport.zoom})`}>
           {groups.map((group) => (
             <g key={group.id} pointerEvents="none">
-              <rect x={group.x} y={group.y} width={group.width} height={group.height} rx={22} className="fill-[#fffaf2]/60 stroke-[#ead9c2] dark:fill-[#0f1724]/55 dark:stroke-[rgba(148,163,184,0.18)]" />
+              <rect x={group.x} y={group.y} width={group.width} height={group.height} rx={22} className="fill-[#fffaf2]/60 stroke-[#ead9c2] dark:fill-[#1e1914]/70 dark:stroke-[#584a3b]" />
               <line x1={group.x} y1={group.y + 18} x2={group.x} y2={group.y + group.height - 18} stroke={categoryColor(group.category)} strokeWidth={4} strokeLinecap="round" />
               <text x={group.x + 24} y={group.y + 30} className="fill-[#9a5b13] text-[13px] font-black uppercase tracking-widest dark:fill-[#f5a959]">{group.label}</text>
-              <text x={group.x + group.width - 24} y={group.y + 30} textAnchor="end" className="fill-[#8a6d55] text-[11px] font-bold dark:fill-[#94a3b8]">{group.count} domains</text>
+              <text x={group.x + group.width - 24} y={group.y + 30} textAnchor="end" className="fill-[#8a6d55] text-[11px] font-bold dark:fill-[#b89b82]">{group.count} domains</text>
             </g>
           ))}
 
@@ -180,7 +180,7 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
                 <path
                   d={path}
                   fill="none"
-                  className="stroke-[#f6efe6] dark:stroke-[#050914]"
+                  className="stroke-[#f6efe6] dark:stroke-[#17130f]"
                   strokeWidth={edgeWidth + 3}
                   strokeLinecap="round"
                   opacity={0.55}
@@ -213,25 +213,25 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
                   onClick={() => onSelectNode(node)}
                   onMouseEnter={() => setHoveredNodeId(node.id)}
                   onMouseLeave={() => setHoveredNodeId(null)}
-                  className={`relative h-full w-full cursor-pointer overflow-hidden rounded-xl border bg-[#fffaf2]/95 p-3 pl-4 text-left shadow-[0_14px_34px_rgba(90,62,26,0.14)] outline-none transition duration-150 hover:-translate-y-0.5 focus-visible:ring-2 focus-visible:ring-[#b7741e] dark:bg-[#0f1724]/96 dark:shadow-[0_14px_38px_rgba(0,0,0,0.44)] ${
+                  className={`relative h-full w-full cursor-pointer overflow-hidden rounded-xl border bg-[#fffaf2]/95 p-3 pl-4 text-left shadow-[0_14px_34px_rgba(90,62,26,0.14)] outline-none transition duration-150 hover:-translate-y-0.5 focus-visible:ring-2 focus-visible:ring-[#b7741e] dark:bg-[#1e1914]/96 dark:shadow-[0_14px_38px_rgba(0,0,0,0.44)] ${
                     selected
                       ? 'border-[#b7741e] shadow-[#d9a44140] dark:border-[#f5a959] dark:shadow-[0_0_30px_rgba(245,169,89,0.24)]'
                       : highlighted || hovered
                         ? 'border-[#b7741e] shadow-[#d9a4412e] dark:border-[rgba(245,169,89,0.50)]'
-                        : 'border-[#d8c3a6] dark:border-[rgba(148,163,184,0.20)]'
+                        : 'border-[#d8c3a6] dark:border-[#584a3b]/60'
                   }`}
                 >
                   <span className="absolute bottom-0 left-0 top-0 w-1.5 rounded-l-xl" style={{ backgroundColor: categoryColor(node.category) }} />
                   <div className="flex items-start gap-3">
-                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-[#d8c3a6] bg-[#fff1d7] text-[#b7741e] dark:border-[rgba(245,169,89,0.18)] dark:bg-[#111827] dark:text-[#f5a959]">
+                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-[#d8c3a6] bg-[#fff1d7] text-[#b7741e] dark:border-[rgba(245,169,89,0.18)] dark:bg-[#292119] dark:text-[#f5a959]">
                       <DomainIcon category={node.category} />
                     </span>
                     <span className="min-w-0 flex-1">
                       <span className="flex items-center justify-between gap-2">
-                        <span className="truncate text-[15px] font-black leading-5 text-[#241f1a] dark:text-[#f8fafc]">{node.title}</span>
-                        <span className="shrink-0 rounded-md border border-[#ead9c2] bg-[#fff8ec] px-1.5 py-0.5 font-mono text-[9px] font-black uppercase text-[#9a6a21] dark:border-[rgba(245,169,89,0.18)] dark:bg-[#0b1220] dark:text-[#f5a959]">{node.status}</span>
+                        <span className="truncate text-[15px] font-black leading-5 text-[#241f1a] dark:text-[#f3eadf]">{node.title}</span>
+                        <span className="shrink-0 rounded-md border border-[#ead9c2] bg-[#fff8ec] px-1.5 py-0.5 font-mono text-[9px] font-black uppercase text-[#9a6a21] dark:border-[rgba(245,169,89,0.18)] dark:bg-[#292119] dark:text-[#f5a959]">{node.status}</span>
                       </span>
-                      <span className="mt-1.5 block h-9 overflow-hidden text-[11px] font-medium leading-[17px] text-[#685547] dark:text-[#cbd5e1]">{node.description}</span>
+                      <span className="mt-1.5 block h-9 overflow-hidden text-[11px] font-medium leading-[17px] text-[#685547] dark:text-[#d8c5aa]">{node.description}</span>
                     </span>
                   </div>
                   <div className="mt-2.5 flex min-h-[22px] flex-wrap gap-1.5">
@@ -264,14 +264,14 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
         </g>
       </svg>
 
-      <div className="absolute right-4 top-4 flex overflow-hidden rounded-xl border border-[#d8c3a6] bg-[#fffaf2]/95 shadow-xl backdrop-blur dark:border-[rgba(148,163,184,0.18)] dark:bg-[#0f1724]/92">
+      <div className="absolute right-4 top-4 flex overflow-hidden rounded-xl border border-[#d8c3a6] bg-[#fffaf2]/95 shadow-xl backdrop-blur dark:border-[rgba(148,163,184,0.18)] dark:bg-[#292119]/92">
         <GraphButton label="Zoom in" onClick={() => updateZoom(viewport.zoom + 0.12)}><Plus size={15} /></GraphButton>
         <GraphButton label="Zoom out" onClick={() => updateZoom(viewport.zoom - 0.12)}><Minus size={15} /></GraphButton>
         <GraphButton label="Fit view" onClick={() => setViewport(fitViewport(shellRef.current, bounds))}><Focus size={15} /></GraphButton>
         <GraphButton label="Reset view" onClick={() => setViewport({ x: 60, y: 50, zoom: 0.88 })}><RotateCcw size={15} /></GraphButton>
       </div>
 
-      <div className="absolute bottom-4 left-4 rounded-xl border border-[#d8c3a6] bg-[#fffaf2]/95 px-4 py-2.5 text-[11px] font-bold text-[#4f4035] shadow-xl backdrop-blur dark:border-[rgba(148,163,184,0.18)] dark:bg-[#0f1724]/92 dark:text-[#cbd5e1]">
+      <div className="absolute bottom-4 left-4 rounded-xl border border-[#d8c3a6] bg-[#fffaf2]/95 px-4 py-2.5 text-[11px] font-bold text-[#4f4035] shadow-xl backdrop-blur dark:border-[rgba(148,163,184,0.18)] dark:bg-[#292119]/92 dark:text-[#d8c5aa]">
         {nodes.length} domains / {edges.length} relationships / {focusSelection ? `showing ${focusedEdges.length} focused links` : 'select a domain to show links'}
       </div>
 
@@ -307,7 +307,7 @@ function DomainDrilldownCard({
     <foreignObject x={position.x} y={position.y} width={DETAIL_WIDTH} height={DETAIL_HEIGHT}>
       <div
         data-domain-detail
-        className="h-full overflow-hidden rounded-2xl border border-[#d8c3a6] bg-[#fffaf2]/98 p-4 text-left text-[#241f1a] shadow-[0_24px_60px_rgba(90,62,26,0.24)] backdrop-blur dark:border-[rgba(245,169,89,0.22)] dark:bg-[#0f1724]/98 dark:text-[#f8fafc]"
+        className="h-full overflow-hidden rounded-2xl border border-[#d8c3a6] bg-[#fffaf2]/98 p-4 text-left text-[#241f1a] shadow-[0_24px_60px_rgba(90,62,26,0.24)] backdrop-blur dark:border-[rgba(245,169,89,0.22)] dark:bg-[#1e1914]/98 dark:text-[#f3eadf]"
         onPointerDown={(event) => event.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-3">
@@ -369,7 +369,7 @@ function RelationshipFocusNote({
   nodesById: Map<string, AtlasDomainMapNode>;
 }) {
   return (
-    <div className="absolute bottom-4 right-4 w-[360px] rounded-2xl border border-[#d8c3a6] bg-[#fffaf2]/95 p-4 text-[#4f4035] shadow-xl backdrop-blur dark:border-[rgba(148,163,184,0.18)] dark:bg-[#0f1724]/94 dark:text-[#f8fafc]">
+    <div className="absolute bottom-4 right-4 w-[360px] rounded-2xl border border-[#d8c3a6] bg-[#fffaf2]/95 p-4 text-[#4f4035] shadow-xl backdrop-blur dark:border-[rgba(148,163,184,0.18)] dark:bg-[#292119]/94 dark:text-[#f3eadf]">
       <p className="text-[11px] font-black uppercase tracking-widest text-[#9a5b13] dark:text-[#f5a959]">Focus Relationships</p>
       {!focusSelection ? (
         <p className="mt-2 text-[12px] font-semibold leading-relaxed text-[#685547] dark:text-[#cbd5e1]">Select a domain to reveal direct dependencies. The overview stays mostly line-free so the map remains readable.</p>

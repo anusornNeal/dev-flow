@@ -405,7 +405,7 @@ function buildDomainMapNode(
     description: summary ?? summarizeDomain(name, sourceNodes),
     status: origin,
     category,
-    tags: Array.from(new Set([category, ...kinds.slice(0, 3)])).slice(0, 5),
+    tags: Array.from(new Set([category, ...Object.keys(fileTypeCounts).slice(0, 3), ...kinds.slice(0, 2)])).slice(0, 5),
     metrics: {
       files: files.length,
       nodes: sourceNodes.length,

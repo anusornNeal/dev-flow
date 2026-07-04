@@ -144,6 +144,7 @@ function buildScannedFile(filePath: string, extension: string, size: number, con
     metadata: {
       packageName,
       androidResourceType,
+      language: inferLanguage(filePath, extension),
       routeCount: routes.length,
       routes,
       component: extension === '.tsx' && isReactComponent(content, symbols),
@@ -226,6 +227,10 @@ function extractPackageName(content: string) {
 function extractAndroidResourceType(filePath: string) {
   const match = filePath.match(/(^|\/)res\/([^/]+)\//i);
   return match?.[2] ?? undefined;
+}
+
+function inferLanguage(_filePath: string, extension: string) {
+  return extension ? extension.slice(1).toUpperCase() : undefined;
 }
 
 function isReactComponent(content: string, symbols: string[]) {

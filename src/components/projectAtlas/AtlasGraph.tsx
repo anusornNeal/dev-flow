@@ -86,6 +86,7 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
   const shellRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{ x: number; y: number; viewport: Viewport } | null>(null);
   const positions = useMemo(() => layoutDomainNodes(nodes), [nodes]);
+  const groups = useMemo(() => layoutDomainGroups(nodes), [nodes]);
   const nodesById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
   const bounds = useMemo(() => getGraphBounds(positions), [positions]);
   const relatedIds = useMemo(() => getRelatedNodeIds(edges, selectedNodeId), [edges, selectedNodeId]);
@@ -149,6 +150,15 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
         }}
       >
         <g transform={`translate(${viewport.x} ${viewport.y}) scale(${viewport.zoom})`}>
+          {groups.map((group) => (
+            <g key={group.id} pointerEvents="none">
+              <rect x={group.x} y={group.y} width={group.width} height={group.height} rx={22} className="fill-[#fffaf2]/60 stroke-[#ead9c2] dark:fill-[#0f1724]/55 dark:stroke-[rgba(148,163,184,0.18)]" />
+              <line x1={group.x} y1={group.y + 18} x2={group.x} y2={group.y + group.height - 18} stroke={categoryColor(group.category)} strokeWidth={4} strokeLinecap="round" />
+              <text x={group.x + 24} y={group.y + 30} className="fill-[#9a5b13] text-[13px] font-black uppercase tracking-widest dark:fill-[#f5a959]">{group.label}</text>
+              <text x={group.x + group.width - 24} y={group.y + 30} textAnchor="end" className="fill-[#8a6d55] text-[11px] font-bold dark:fill-[#94a3b8]">{group.count} domains</text>
+            </g>
+          ))}
+
           {focusedEdges.map((edge) => {
             const source = positions.get(edge.source);
             const target = positions.get(edge.target);
@@ -397,16 +407,51 @@ export function selectReadableAtlasEdges(
 
 function layoutDomainNodes(nodes: AtlasDomainMapNode[]) {
   const positions = new Map<string, { x: number; y: number }>();
-  const columns = nodes.length > 9 ? 4 : nodes.length > 4 ? 3 : 2;
-  nodes.forEach((node, index) => {
-    const column = index % columns;
-    const row = Math.floor(index / columns);
-    positions.set(node.id, {
-      x: 76 + column * 350 + (row % 2) * 34,
-      y: 76 + row * 246,
+  let y = 62;
+  for (const group of groupDomainNodes(nodes)) {
+    const columns = Math.max(1, Math.min(4, group.nodes.length));
+    const rows = Math.ceil(group.nodes.length / columns);
+    group.nodes.forEach((node, index) => {
+      positions.set(node.id, {
+        x: 88 + (index % columns) * (NODE_WIDTH + 42),
+        y: y + 48 + Math.floor(index / columns) * (NODE_HEIGHT + 42),
+      });
     });
-  });
+    y += 48 + rows * NODE_HEIGHT + Math.max(0, rows - 1) * 42 + 42;
+  }
   return positions;
+}
+
+function layoutDomainGroups(nodes: AtlasDomainMapNode[]) {
+  let y = 62;
+  return groupDomainNodes(nodes).map((group) => {
+    const columns = Math.max(1, Math.min(4, group.nodes.length));
+    const rows = Math.ceil(group.nodes.length / columns);
+    const width = 48 + columns * NODE_WIDTH + Math.max(0, columns - 1) * 42;
+    const height = 48 + rows * NODE_HEIGHT + Math.max(0, rows - 1) * 42 + 24;
+    const region = { id: group.category, label: categoryGroupLabel(group.category), category: group.category, count: group.nodes.length, x: 64, y, width, height };
+    y += 48 + rows * NODE_HEIGHT + Math.max(0, rows - 1) * 42 + 42;
+    return region;
+  });
+}
+
+function groupDomainNodes(nodes: AtlasDomainMapNode[]) {
+  const order: AtlasDomainFilter[] = ['DOCS', 'INFRA', 'DATA', 'CONFIG', 'DOMAIN', 'CODE'];
+  return order
+    .map((category) => ({
+      category,
+      nodes: nodes.filter((node) => node.category === category).sort((left, right) => left.title.localeCompare(right.title)),
+    }))
+    .filter((group) => group.nodes.length > 0);
+}
+
+function categoryGroupLabel(category: AtlasDomainFilter) {
+  if (category === 'DOCS') return 'Docs / Knowledge';
+  if (category === 'INFRA') return 'Infra / Tools';
+  if (category === 'DATA') return 'Data / UI';
+  if (category === 'CONFIG') return 'Config';
+  if (category === 'DOMAIN') return 'Domain Logic';
+  return 'Code';
 }
 
 function stableHash(value: string) {

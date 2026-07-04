@@ -35,10 +35,10 @@ interface EdgeVisualStyle {
   focusWidth: number;
 }
 
-const NODE_WIDTH = 260;
-const NODE_HEIGHT = 154;
-const MIN_ZOOM = 0.42;
-const MAX_ZOOM = 1.7;
+const NODE_WIDTH = 304;
+const NODE_HEIGHT = 188;
+const MIN_ZOOM = 0.36;
+const MAX_ZOOM = 1.8;
 const MAX_VISIBLE_FOCUSED_EDGES = 6;
 
 const EDGE_VISUAL_STYLES: Record<EdgeVisualVariant, EdgeVisualStyle> = {
@@ -98,7 +98,7 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
   }, [bounds.width, bounds.height]);
 
   const focusSelection = selectedNodeId ?? hoveredNodeId;
-  const canDim = Boolean(focusSelection);
+  const canDim = Boolean(selectedNodeId);
   const readableEdges = useMemo(() => selectReadableAtlasEdges(edges, focusSelection, MAX_VISIBLE_FOCUSED_EDGES), [edges, focusSelection]);
   const focusedEdges = readableEdges.visibleEdges;
 
@@ -117,9 +117,9 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
   };
 
   return (
-    <div ref={shellRef} className="relative h-full min-h-[620px] overflow-hidden bg-[#f8efe2] dark:bg-[#0a0a0a]">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_38%_25%,rgba(212,165,116,0.16),transparent_34%)] opacity-80 dark:bg-[radial-gradient(circle_at_38%_25%,rgba(212,165,116,0.10),transparent_36%)]" />
-      <div className="pointer-events-none absolute inset-0 opacity-70 [background-image:radial-gradient(circle_at_1px_1px,rgba(154,91,19,0.16)_1px,transparent_0)] [background-size:18px_18px] dark:opacity-50 dark:[background-image:radial-gradient(circle_at_1px_1px,rgba(212,165,116,0.18)_1px,transparent_0)]" />
+    <div ref={shellRef} className="relative h-full min-h-[680px] overflow-hidden bg-[#f6efe6] dark:bg-[#050914]">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_30%_16%,rgba(245,169,89,0.18),transparent_32%),linear-gradient(135deg,rgba(255,255,255,0.44),transparent_42%)] opacity-90 dark:bg-[radial-gradient(circle_at_28%_18%,rgba(245,169,89,0.16),transparent_34%),radial-gradient(circle_at_74%_48%,rgba(59,130,246,0.10),transparent_38%)]" />
+      <div className="pointer-events-none absolute inset-0 opacity-60 [background-image:linear-gradient(rgba(154,91,19,0.07)_1px,transparent_1px),linear-gradient(90deg,rgba(154,91,19,0.07)_1px,transparent_1px)] [background-size:34px_34px] dark:opacity-35 dark:[background-image:linear-gradient(rgba(148,163,184,0.12)_1px,transparent_1px),linear-gradient(90deg,rgba(148,163,184,0.12)_1px,transparent_1px)]" />
       <svg
         className="relative h-full w-full cursor-grab active:cursor-grabbing"
         role="img"
@@ -163,7 +163,7 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
                 <path
                   d={path}
                   fill="none"
-                  className="stroke-[#f8efe2] dark:stroke-[#0a0a0a]"
+                  className="stroke-[#f6efe6] dark:stroke-[#050914]"
                   strokeWidth={edgeWidth + 6}
                   strokeLinecap="round"
                 />
@@ -187,42 +187,42 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
             const dimmed = canDim && !related;
             const highlighted = highlightedIds.has(node.id);
             return (
-              <foreignObject key={node.id} x={position.x} y={position.y} width={NODE_WIDTH} height={NODE_HEIGHT} opacity={dimmed ? 0.1 : 1}>
+              <foreignObject key={node.id} x={position.x} y={position.y} width={NODE_WIDTH} height={NODE_HEIGHT} opacity={dimmed ? 0.28 : 1}>
                 <button
                   type="button"
                   data-domain-card
                   onClick={() => onSelectNode(node)}
                   onMouseEnter={() => setHoveredNodeId(node.id)}
                   onMouseLeave={() => setHoveredNodeId(null)}
-                  className={`relative h-full w-full cursor-pointer overflow-hidden rounded-lg border bg-[#fffaf2] p-3 pl-4 text-left shadow-[0_10px_26px_rgba(90,62,26,0.12)] transition dark:bg-[#1a1a1a]/95 dark:shadow-[0_10px_28px_rgba(0,0,0,0.38)] ${
+                  className={`relative h-full w-full cursor-pointer overflow-hidden rounded-2xl border bg-[#fffaf2]/95 p-4 pl-5 text-left shadow-[0_18px_44px_rgba(90,62,26,0.16)] outline-none transition duration-150 hover:-translate-y-0.5 focus-visible:ring-2 focus-visible:ring-[#b7741e] dark:bg-[#0f1724]/96 dark:shadow-[0_18px_48px_rgba(0,0,0,0.48)] ${
                     selected
-                      ? 'border-[#b7741e] shadow-[#d9a44133] dark:border-[#d4a574] dark:shadow-[0_0_22px_rgba(212,165,116,0.18)]'
+                      ? 'border-[#b7741e] shadow-[#d9a44140] dark:border-[#f5a959] dark:shadow-[0_0_30px_rgba(245,169,89,0.24)]'
                       : highlighted || hovered
-                        ? 'border-[#b7741e] shadow-[#d9a44122] dark:border-[rgba(212,165,116,0.42)]'
-                        : 'border-[#d8c3a6] dark:border-[rgba(212,165,116,0.14)]'
+                        ? 'border-[#b7741e] shadow-[#d9a4412e] dark:border-[rgba(245,169,89,0.50)]'
+                        : 'border-[#d8c3a6] dark:border-[rgba(148,163,184,0.20)]'
                   }`}
                 >
-                  <span className="absolute bottom-0 left-0 top-0 w-1 rounded-l-lg" style={{ backgroundColor: categoryColor(node.category) }} />
-                  <div className="flex items-start gap-3">
-                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-[#d8c3a6] bg-[#fff1d7] text-[#b7741e] dark:border-[rgba(212,165,116,0.16)] dark:bg-[#111111] dark:text-[#d4a574]">
+                  <span className="absolute bottom-0 left-0 top-0 w-1.5 rounded-l-2xl" style={{ backgroundColor: categoryColor(node.category) }} />
+                  <div className="flex items-start gap-3.5">
+                    <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[#d8c3a6] bg-[#fff1d7] text-[#b7741e] dark:border-[rgba(245,169,89,0.18)] dark:bg-[#111827] dark:text-[#f5a959]">
                       <DomainIcon category={node.category} />
                     </span>
                     <span className="min-w-0 flex-1">
                       <span className="flex items-center justify-between gap-2">
-                        <span className="truncate font-serif text-[15px] font-black text-[#2f2923] dark:text-[#f5f0eb]">{node.title}</span>
-                        <span className="shrink-0 font-mono text-[9px] font-black text-[#9a6a21] dark:text-[#d4a574]">{node.status}</span>
+                        <span className="truncate text-[17px] font-black leading-6 text-[#241f1a] dark:text-[#f8fafc]">{node.title}</span>
+                        <span className="shrink-0 rounded-md border border-[#ead9c2] bg-[#fff8ec] px-1.5 py-0.5 font-mono text-[10px] font-black uppercase text-[#9a6a21] dark:border-[rgba(245,169,89,0.18)] dark:bg-[#0b1220] dark:text-[#f5a959]">{node.status}</span>
                       </span>
-                      <span className="mt-1 block h-8 overflow-hidden text-[10px] leading-4 text-[#7b6554] dark:text-[#a39787]">{node.description}</span>
+                      <span className="mt-2 block h-12 overflow-hidden text-[12px] font-medium leading-5 text-[#685547] dark:text-[#cbd5e1]">{node.description}</span>
                     </span>
                   </div>
-                  <div className="mt-3 flex flex-wrap gap-1.5">
+                  <div className="mt-3.5 flex min-h-[26px] flex-wrap gap-1.5">
                     {node.tags.slice(0, viewport.zoom > 0.65 ? 4 : 2).map((tag) => (
-                      <span key={tag} className="rounded border border-[#d8c3a6] bg-[#fff8ec] px-1.5 py-0.5 text-[9px] font-black uppercase text-[#9a5b13] dark:border-[rgba(212,165,116,0.14)] dark:bg-[#111111] dark:text-[#d4a574]">
+                      <span key={tag} className="rounded-md border border-[#d8c3a6] bg-[#fff8ec] px-2 py-1 text-[10px] font-black uppercase text-[#9a5b13] dark:border-[rgba(245,169,89,0.14)] dark:bg-[#0b1220] dark:text-[#f5a959]">
                         {tag}
                       </span>
                     ))}
                   </div>
-                  <div className="mt-3 grid grid-cols-4 gap-1.5 text-center">
+                  <div className="mt-3.5 grid grid-cols-4 gap-2 text-center">
                     <Metric label="Files" value={node.metrics.files} />
                     <Metric label="Nodes" value={node.metrics.nodes} />
                     <Metric label="Deps" value={node.metrics.dependencies} />
@@ -235,15 +235,15 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
         </g>
       </svg>
 
-      <div className="absolute right-4 top-4 flex overflow-hidden rounded-lg border border-[#d8c3a6] bg-[#fffaf2]/95 shadow-xl backdrop-blur dark:border-[rgba(212,165,116,0.18)] dark:bg-[#141414]/90">
+      <div className="absolute right-4 top-4 flex overflow-hidden rounded-xl border border-[#d8c3a6] bg-[#fffaf2]/95 shadow-xl backdrop-blur dark:border-[rgba(148,163,184,0.18)] dark:bg-[#0f1724]/92">
         <GraphButton label="Zoom in" onClick={() => updateZoom(viewport.zoom + 0.12)}><Plus size={15} /></GraphButton>
         <GraphButton label="Zoom out" onClick={() => updateZoom(viewport.zoom - 0.12)}><Minus size={15} /></GraphButton>
         <GraphButton label="Fit view" onClick={() => setViewport(fitViewport(shellRef.current, bounds))}><Focus size={15} /></GraphButton>
         <GraphButton label="Reset view" onClick={() => setViewport({ x: 60, y: 50, zoom: 0.88 })}><RotateCcw size={15} /></GraphButton>
       </div>
 
-      <div className="absolute bottom-4 left-4 rounded-lg border border-[#d8c3a6] bg-[#fffaf2]/95 px-3 py-2 text-[10px] font-bold text-[#5c493c] shadow-xl backdrop-blur dark:border-[rgba(212,165,116,0.18)] dark:bg-[#141414]/90 dark:text-[#a39787]">
-        {nodes.length} domains / {edges.length} relationships / {focusSelection ? `showing ${focusedEdges.length} focused relationships` : 'focus-only edges'}
+      <div className="absolute bottom-4 left-4 rounded-xl border border-[#d8c3a6] bg-[#fffaf2]/95 px-4 py-2.5 text-[11px] font-bold text-[#4f4035] shadow-xl backdrop-blur dark:border-[rgba(148,163,184,0.18)] dark:bg-[#0f1724]/92 dark:text-[#cbd5e1]">
+        {nodes.length} domains / {edges.length} relationships / {focusSelection ? `showing ${focusedEdges.length} focused links` : 'select a domain to show links'}
       </div>
 
       <RelationshipFocusNote
@@ -268,23 +268,23 @@ function RelationshipFocusNote({
   nodesById: Map<string, AtlasDomainMapNode>;
 }) {
   return (
-    <div className="absolute bottom-4 right-4 w-72 rounded-lg border border-[#d8c3a6] bg-[#fffaf2]/95 p-3 text-[#5c493c] shadow-xl backdrop-blur dark:border-[rgba(212,165,116,0.18)] dark:bg-[#141414]/92 dark:text-[#f5f0eb]">
-      <p className="text-[10px] font-black uppercase tracking-widest text-[#9a5b13] dark:text-[#d4a574]">Focus Relationships</p>
+    <div className="absolute bottom-4 right-4 w-[360px] rounded-2xl border border-[#d8c3a6] bg-[#fffaf2]/95 p-4 text-[#4f4035] shadow-xl backdrop-blur dark:border-[rgba(148,163,184,0.18)] dark:bg-[#0f1724]/94 dark:text-[#f8fafc]">
+      <p className="text-[11px] font-black uppercase tracking-widest text-[#9a5b13] dark:text-[#f5a959]">Focus Relationships</p>
       {!focusSelection ? (
-        <p className="mt-2 text-[10px] font-bold leading-relaxed text-[#7b6554] dark:text-[#a39787]">Focus a domain to reveal direct relationships. Overview stays line-free for readability.</p>
+        <p className="mt-2 text-[12px] font-semibold leading-relaxed text-[#685547] dark:text-[#cbd5e1]">Select a domain to reveal direct dependencies. The overview stays mostly line-free so the map remains readable.</p>
       ) : (
-        <div className="mt-2 space-y-1.5">
+        <div className="mt-3 space-y-2">
           {relationshipGroups.slice(0, 5).map((group) => {
             const source = nodesById.get(group.source)?.title ?? group.source;
             const target = nodesById.get(group.target)?.title ?? group.target;
               return (
-                <div key={group.id} className="text-[9px] font-bold text-[#6d5a4d] dark:text-[#d8c5aa]">
-                  <p className="truncate"><span className="text-[#3f342b] dark:text-[#f8ead3]">{source}</span> -&gt; {target}</p>
-                  <p className="truncate text-[#8a6d55] dark:text-[#a39787]">{group.label} / {group.rawRelationshipCount} raw relationships</p>
+                <div key={group.id} className="rounded-lg border border-[#ead9c2] bg-[#fff8ec] px-3 py-2 text-[11px] font-bold text-[#5c493c] dark:border-[rgba(148,163,184,0.12)] dark:bg-[#0b1220] dark:text-[#dbeafe]">
+                  <p className="truncate"><span className="text-[#241f1a] dark:text-[#f8fafc]">{source}</span> -&gt; {target}</p>
+                  <p className="mt-0.5 truncate text-[10px] text-[#8a6d55] dark:text-[#94a3b8]">{group.label} / {group.rawRelationshipCount} raw relationships</p>
                 </div>
               );
             })}
-          {hiddenFocusedEdgeCount > 0 && <p className="text-[9px] font-bold text-[#8a6d55] dark:text-[#b89b82]">+{hiddenFocusedEdgeCount} hidden to keep the map readable</p>}
+          {hiddenFocusedEdgeCount > 0 && <p className="text-[10px] font-bold text-[#8a6d55] dark:text-[#94a3b8]">+{hiddenFocusedEdgeCount} hidden to keep the map readable</p>}
         </div>
       )}
     </div>
@@ -293,16 +293,16 @@ function RelationshipFocusNote({
 
 function Metric({ label, value }: { label: string; value: number }) {
   return (
-    <span className="rounded-md border border-[#d8c3a6] bg-[#fff8ec] px-1 py-1 dark:border-[rgba(212,165,116,0.12)] dark:bg-[#111111]">
-      <span className="block text-[11px] font-black text-[#2f2923] dark:text-[#f5f0eb]">{value}</span>
-      <span className="block text-[8px] font-bold uppercase text-[#8a6d55] dark:text-[#6b5f53]">{label}</span>
+    <span className="rounded-lg border border-[#d8c3a6] bg-[#fff8ec] px-1.5 py-1.5 dark:border-[rgba(148,163,184,0.12)] dark:bg-[#0b1220]">
+      <span className="block text-[13px] font-black text-[#241f1a] dark:text-[#f8fafc]">{value}</span>
+      <span className="block text-[9px] font-bold uppercase text-[#8a6d55] dark:text-[#94a3b8]">{label}</span>
     </span>
   );
 }
 
 function GraphButton({ label, onClick, children }: { label: string; onClick: () => void; children: React.ReactNode }) {
   return (
-    <button type="button" aria-label={label} title={label} onClick={onClick} className="flex h-9 w-9 cursor-pointer items-center justify-center border-r border-[#d8c3a6] text-[#b7741e] last:border-r-0 hover:bg-[#fff1d7] dark:border-[rgba(212,165,116,0.14)] dark:text-[#d4a574] dark:hover:bg-[rgba(212,165,116,0.12)]">
+    <button type="button" aria-label={label} title={label} onClick={onClick} className="flex h-10 w-10 cursor-pointer items-center justify-center border-r border-[#d8c3a6] text-[#b7741e] last:border-r-0 hover:bg-[#fff1d7] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#b7741e] dark:border-[rgba(148,163,184,0.14)] dark:text-[#f5a959] dark:hover:bg-[rgba(245,169,89,0.12)]">
       {children}
     </button>
   );
@@ -397,13 +397,13 @@ export function selectReadableAtlasEdges(
 
 function layoutDomainNodes(nodes: AtlasDomainMapNode[]) {
   const positions = new Map<string, { x: number; y: number }>();
-  const columns = nodes.length > 8 ? 4 : nodes.length > 4 ? 3 : 2;
+  const columns = nodes.length > 9 ? 3 : nodes.length > 4 ? 3 : 2;
   nodes.forEach((node, index) => {
     const column = index % columns;
     const row = Math.floor(index / columns);
     positions.set(node.id, {
-      x: 70 + column * 360 + (row % 2) * 36,
-      y: 70 + row * 240,
+      x: 80 + column * 390 + (row % 2) * 44,
+      y: 80 + row * 276,
     });
   });
   return positions;
@@ -440,7 +440,7 @@ function getGraphBounds(positions: Map<string, { x: number; y: number }>) {
 function fitViewport(element: HTMLDivElement | null, bounds: { x: number; y: number; width: number; height: number }): Viewport {
   const width = element?.clientWidth ?? 960;
   const height = element?.clientHeight ?? 620;
-  const zoom = clamp(Math.min((width - 160) / Math.max(bounds.width, 1), (height - 140) / Math.max(bounds.height, 1)), MIN_ZOOM, 1.05);
+  const zoom = clamp(Math.min((width - 180) / Math.max(bounds.width, 1), (height - 170) / Math.max(bounds.height, 1)), MIN_ZOOM, 1.05);
   return {
     zoom,
     x: (width - bounds.width * zoom) / 2 - bounds.x * zoom,

@@ -15,10 +15,10 @@ export function AtlasNodeInspector({ inspector, copied, onCopyContext }: AtlasNo
   const [tab, setTab] = useState<InspectorTab>('info');
 
   return (
-    <aside className="w-full shrink-0 border-t border-[#d8c3a6] bg-[#fffaf2] dark:border-[rgba(212,165,116,0.12)] dark:bg-gradient-to-r dark:from-[#141414]/95 dark:to-[#111111] lg:w-[380px] lg:border-l lg:border-t-0">
+    <aside className="w-full shrink-0 border-t border-[#d8c3a6] bg-[#fffaf2] dark:border-[rgba(148,163,184,0.14)] dark:bg-gradient-to-r dark:from-[#0f1724]/98 dark:to-[#0b1220] lg:w-[420px] lg:border-l lg:border-t-0">
       <div className="border-b border-[#ead9c2] p-4 dark:border-[rgba(212,165,116,0.10)]">
-        <p className="text-[10px] font-black uppercase tracking-widest text-[#9a5b13] dark:text-[#d4a574]">Inspector</p>
-        <div className="mt-3 flex rounded-lg border border-[#d8c3a6] bg-[#f2e3cf] p-1 dark:border-[rgba(212,165,116,0.14)] dark:bg-[#1a1a1a]">
+        <p className="text-[11px] font-black uppercase tracking-widest text-[#9a5b13] dark:text-[#f5a959]">Inspector</p>
+        <div className="mt-3 flex rounded-xl border border-[#d8c3a6] bg-[#f2e3cf] p-1 dark:border-[rgba(148,163,184,0.14)] dark:bg-[#111827]">
           <TabButton active={tab === 'info'} icon={<Info size={14} />} label="Info" onClick={() => setTab('info')} />
           <TabButton active={tab === 'files'} icon={<FileCode2 size={14} />} label="Files" onClick={() => setTab('files')} />
         </div>
@@ -31,8 +31,8 @@ export function AtlasNodeInspector({ inspector, copied, onCopyContext }: AtlasNo
       ) : (
         <div className="p-4">
           <div className="rounded-lg border border-[#d8c3a6] bg-[#fff8ec] p-4 dark:border-[rgba(212,165,116,0.14)] dark:bg-[#1a1a1a]">
-            <p className="font-serif text-lg font-black text-[#2f2923] dark:text-[#f5f0eb]">Select a domain</p>
-            <p className="mt-2 text-[11px] leading-relaxed text-[#7b6554] dark:text-[#a39787]">Pick a card on the map to inspect the reading path, dependencies, and related files.</p>
+            <p className="text-xl font-black text-[#241f1a] dark:text-[#f8fafc]">Select a domain</p>
+            <p className="mt-2 text-[12px] leading-relaxed text-[#685547] dark:text-[#cbd5e1]">Pick a card on the map to inspect the reading path, dependencies, and related files.</p>
           </div>
         </div>
       )}
@@ -46,22 +46,22 @@ function InfoTab({ inspector, copied, onCopyContext }: { inspector: AtlasDomainI
       <section className="rounded-lg border border-[#d8c3a6] bg-[#fff8ec] p-4 dark:border-[rgba(212,165,116,0.14)] dark:bg-[#1a1a1a]">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <p className="text-[10px] font-black uppercase tracking-widest text-[#9a5b13] dark:text-[#d4a574]">What this is</p>
-            <h2 className="mt-2 break-words font-serif text-2xl font-black text-[#2f2923] dark:text-[#f5f0eb]">{inspector.name}</h2>
-            <p className="mt-1 text-[10px] font-black uppercase text-[#9a5b13] dark:text-[#d4a574]">{inspector.category} / {inspector.status}</p>
+            <p className="text-[11px] font-black uppercase tracking-widest text-[#9a5b13] dark:text-[#f5a959]">What this is</p>
+            <h2 className="mt-2 break-words text-2xl font-black leading-tight text-[#241f1a] dark:text-[#f8fafc]">{inspector.name}</h2>
+            <p className="mt-2 text-[11px] font-black uppercase text-[#9a5b13] dark:text-[#f5a959]">{inspector.category} / {inspector.status}</p>
           </div>
-          <span className="rounded-md border border-[#d8c3a6] bg-[#fffaf2] px-2 py-1 text-[9px] font-black uppercase text-[#7b6554] dark:border-[rgba(212,165,116,0.18)] dark:bg-[#111111] dark:text-[#a39787]">{inspector.health}</span>
+          <span className="rounded-lg border border-[#d8c3a6] bg-[#fffaf2] px-2.5 py-1.5 text-[10px] font-black uppercase text-[#685547] dark:border-[rgba(148,163,184,0.18)] dark:bg-[#0b1220] dark:text-[#cbd5e1]">{inspector.health}</span>
         </div>
-        <p className="mt-3 text-[13px] leading-relaxed text-[#5c493c] dark:text-[#cfc2b6]">{inspector.plainSummary}</p>
+        <p className="mt-3 text-[14px] font-medium leading-6 text-[#4f4035] dark:text-[#dbeafe]">{inspector.plainSummary}</p>
         <div className="mt-3 flex flex-wrap gap-1.5">
           {inspector.tags.map((tag) => (
-            <span key={tag} className="rounded-full border border-[#d8c3a6] bg-[#fffaf2] px-2 py-1 text-[9px] font-black uppercase text-[#9a5b13] dark:border-[rgba(212,165,116,0.14)] dark:bg-[#111111] dark:text-[#d4a574]">{tag}</span>
+            <span key={tag} className="rounded-full border border-[#d8c3a6] bg-[#fffaf2] px-2.5 py-1 text-[10px] font-black uppercase text-[#9a5b13] dark:border-[rgba(245,169,89,0.14)] dark:bg-[#0b1220] dark:text-[#f5a959]">{tag}</span>
           ))}
         </div>
       </section>
 
       <section className="rounded-lg border border-[#d8c3a6] bg-[#fff8ec] p-4 dark:border-[rgba(212,165,116,0.14)] dark:bg-[#1a1a1a]">
-        <p className="text-[10px] font-black uppercase tracking-widest text-[#9a5b13] dark:text-[#d4a574]">Start here</p>
+        <p className="text-[11px] font-black uppercase tracking-widest text-[#9a5b13] dark:text-[#f5a959]">Start here</p>
         <div className="mt-3 space-y-2">
           {inspector.startHereFiles.length > 0 ? inspector.startHereFiles.map((file, index) => (
             <FileRow key={file.id} file={file} prefix={String(index + 1)} />
@@ -75,7 +75,7 @@ function InfoTab({ inspector, copied, onCopyContext }: { inspector: AtlasDomainI
       </section>
 
       <section className="rounded-lg border border-[#d8c3a6] bg-[#fff8ec] p-4 dark:border-[rgba(212,165,116,0.14)] dark:bg-[#1a1a1a]">
-        <p className="text-[10px] font-black uppercase tracking-widest text-[#9a5b13] dark:text-[#d4a574]">Technical details</p>
+        <p className="text-[11px] font-black uppercase tracking-widest text-[#9a5b13] dark:text-[#f5a959]">Technical details</p>
         <div className="mt-3 grid grid-cols-2 gap-2">
           <Metric label="Files" value={inspector.metrics.files} />
           <Metric label="Nodes" value={inspector.metrics.nodes} />
@@ -122,7 +122,7 @@ function RelationshipSection({ title, relationships, emptyText }: { title: strin
         {relationships.length > 0 ? relationships.map((relationship) => (
           <div key={relationship.id} className="rounded-md border border-[#d8c3a6] bg-[#fffaf2] px-3 py-2 dark:border-[rgba(212,165,116,0.14)] dark:bg-[#111111]">
             <div className="flex items-center justify-between gap-2">
-              <span className="truncate text-[11px] font-black text-[#2f2923] dark:text-[#f5f0eb]">{relationship.name}</span>
+              <span className="truncate text-[12px] font-black text-[#241f1a] dark:text-[#f8fafc]">{relationship.name}</span>
               <span className="rounded border border-[#d8c3a6] px-1.5 py-0.5 text-[8px] font-black uppercase text-[#9a5b13] dark:border-[rgba(212,165,116,0.14)] dark:text-[#d4a574]">{relationship.category}</span>
             </div>
             <p className="mt-1 truncate text-[9px] font-bold text-[#7b6554] dark:text-[#a39787]">{relationship.edgeKinds.join(', ')}</p>
@@ -140,8 +140,8 @@ function FileRow({ file, prefix }: { file: AtlasDomainInspectorViewModel['files'
         {prefix ?? <FileCode2 size={15} />}
       </span>
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-[12px] font-black text-[#2f2923] dark:text-[#f5f0eb]">{file.name}</span>
-        <span className="mt-1 block break-all text-[10px] font-mono leading-4 text-[#7b6554] dark:text-[#a39787]">{file.path}</span>
+        <span className="block truncate text-[13px] font-black text-[#241f1a] dark:text-[#f8fafc]">{file.name}</span>
+        <span className="mt-1 block break-all text-[11px] font-mono leading-5 text-[#685547] dark:text-[#cbd5e1]">{file.path}</span>
         <span className="mt-2 inline-flex items-center gap-1 rounded border border-[#d8c3a6] bg-[#fff8ec] px-1.5 py-0.5 text-[9px] font-black uppercase text-[#9a5b13] dark:border-[rgba(212,165,116,0.14)] dark:bg-[#1a1a1a] dark:text-[#d4a574]">
           <Link2 size={10} /> {file.type}
         </span>
@@ -151,14 +151,14 @@ function FileRow({ file, prefix }: { file: AtlasDomainInspectorViewModel['files'
 }
 
 function EmptyInspectorText({ children }: { children: React.ReactNode }) {
-  return <p className="rounded-md border border-dashed border-[#d8c3a6] bg-[#fffaf2] px-3 py-2 text-[11px] leading-relaxed text-[#7b6554] dark:border-[rgba(212,165,116,0.14)] dark:bg-[#111111] dark:text-[#a39787]">{children}</p>;
+  return <p className="rounded-md border border-dashed border-[#d8c3a6] bg-[#fffaf2] px-3 py-2 text-[12px] leading-relaxed text-[#685547] dark:border-[rgba(148,163,184,0.14)] dark:bg-[#0b1220] dark:text-[#cbd5e1]">{children}</p>;
 }
 
 function Metric({ label, value }: { label: string; value: number }) {
   return (
     <div className="rounded-lg border border-[#d8c3a6] bg-[#fffaf2] p-3 dark:border-[rgba(212,165,116,0.14)] dark:bg-[#111111]">
-      <p className="font-serif text-2xl font-black text-[#b7741e] dark:text-[#d4a574]">{value}</p>
-      <p className="mt-1 text-[9px] font-black uppercase tracking-wider text-[#7b6554] dark:text-[#6b5f53]">{label}</p>
+      <p className="text-2xl font-black text-[#b7741e] dark:text-[#f5a959]">{value}</p>
+      <p className="mt-1 text-[10px] font-black uppercase tracking-wider text-[#685547] dark:text-[#94a3b8]">{label}</p>
     </div>
   );
 }

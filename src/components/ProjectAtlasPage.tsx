@@ -126,29 +126,27 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
   const resultCount = domainView?.matchedNodeIds.length ?? 0;
 
   return (
-    <section className="flex h-full min-h-0 flex-col bg-[#f8efe2] text-[#2f2923] dark:bg-[#0a0a0a] dark:text-[#f5f0eb]">
-      <header className="shrink-0 border-b border-[#d8c3a6] bg-[#fffaf2]/95 shadow-sm dark:border-[rgba(212,165,116,0.12)] dark:bg-[#111111]/95">
-        <div className="flex min-h-[56px] flex-col gap-3 px-4 py-3 xl:flex-row xl:items-center">
+    <section className="flex h-full min-h-0 flex-col bg-[#f6efe6] text-[#241f1a] dark:bg-[#050914] dark:text-[#f8fafc]">
+      <header className="shrink-0 border-b border-[#d8c3a6] bg-[#fffaf2]/96 shadow-[0_10px_32px_rgba(90,62,26,0.10)] backdrop-blur dark:border-[rgba(148,163,184,0.14)] dark:bg-[#0b1220]/96 dark:shadow-[0_14px_40px_rgba(0,0,0,0.42)]">
+        <div className="flex min-h-[72px] flex-col gap-4 px-5 py-4 xl:flex-row xl:items-center">
           <div className="flex min-w-0 shrink-0 items-center gap-4">
             <div>
-              <h1 className="flex items-center gap-2 font-serif text-2xl font-black tracking-wide text-[#2f2923] dark:text-[#f5f0eb]">
-                <Waypoints size={20} className="text-[#b7741e] dark:text-[#d4a574]" />
+              <h1 className="flex items-center gap-2 text-2xl font-black tracking-tight text-[#241f1a] dark:text-[#f8fafc]">
+                <Waypoints size={22} className="text-[#b7741e] dark:text-[#f5a959]" />
                 Project Atlas
               </h1>
-              <p className="mt-0.5 text-[10px] font-mono font-bold uppercase tracking-widest text-[#9a6a21] dark:text-[#a39787]">
-                {data?.status === 'ready' ? `${data.atlas.domains.length} domains / ${data.atlas.edges.length} relationships` : 'Domain-first project intelligence'}
+              <p className="mt-1 text-[12px] font-semibold text-[#685547] dark:text-[#cbd5e1]">
+                {data?.status === 'ready' ? `${data.atlas.domains.length} domains / ${data.atlas.edges.length} relationships · domain-first overview` : 'Domain-first project intelligence'}
               </p>
             </div>
-            <div className="hidden items-center rounded-lg bg-[#efe2cf] p-0.5 dark:bg-[#1a1a1a] md:flex">
-              <span className="rounded-md bg-[#fff8ec] px-3 py-1 text-[11px] font-black text-[#9a5b13] shadow-sm dark:bg-[rgba(212,165,116,0.16)] dark:text-[#d4a574]">Overview</span>
-              <span className="px-3 py-1 text-[11px] font-bold text-[#8a6d55] dark:text-[#6b5f53]">Learn</span>
-              <span className="px-3 py-1 text-[11px] font-bold text-[#8a6d55] dark:text-[#6b5f53]">Deep Dive</span>
+            <div className="hidden max-w-[360px] rounded-xl border border-[#d8c3a6] bg-[#fff8ec] px-3 py-2 text-[11px] font-bold leading-relaxed text-[#685547] dark:border-[rgba(148,163,184,0.16)] dark:bg-[#111827] dark:text-[#cbd5e1] md:block">
+              Select a domain card to inspect files, dependencies, and copy AI-ready context.
             </div>
           </div>
 
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 xl:justify-end">
-            <span className="hidden rounded-lg border border-[#d8c3a6] bg-[#fff8ec] px-3 py-1.5 text-[10px] font-black uppercase tracking-wider text-[#9a5b13] dark:border-[rgba(212,165,116,0.18)] dark:bg-[rgba(212,165,116,0.16)] dark:text-[#d4a574] md:inline-flex">
-              Layers ON
+            <span className="hidden rounded-xl border border-[#d8c3a6] bg-[#fff8ec] px-3 py-2 text-[11px] font-black uppercase tracking-wider text-[#9a5b13] dark:border-[rgba(245,169,89,0.18)] dark:bg-[rgba(245,169,89,0.12)] dark:text-[#f5a959] md:inline-flex">
+              Readable Map
             </span>
             <div className="flex min-w-0 flex-wrap gap-1.5">
               {FILTERS.map((filter) => (
@@ -156,13 +154,13 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
                   key={filter}
                   type="button"
                   onClick={() => handleToggleFilter(filter)}
-                  className={`h-8 cursor-pointer rounded-lg border px-2.5 text-[10px] font-black uppercase tracking-wider transition ${activeFilters.includes(filter) ? 'border-[#b7741e] bg-[#fff1d7] text-[#8a4d0d] dark:border-[rgba(212,165,116,0.45)] dark:bg-[rgba(212,165,116,0.18)] dark:text-[#d4a574]' : 'border-[#d8c3a6] bg-[#fffaf2] text-[#7b6554] hover:border-[#b7741e] hover:text-[#2f2923] dark:border-[rgba(212,165,116,0.16)] dark:bg-[#1a1a1a] dark:text-[#a39787] dark:hover:text-[#f5f0eb]'}`}
+                  className={`h-9 cursor-pointer rounded-xl border px-3 text-[11px] font-black uppercase tracking-wider transition ${activeFilters.includes(filter) ? 'border-[#b7741e] bg-[#fff1d7] text-[#8a4d0d] dark:border-[rgba(245,169,89,0.45)] dark:bg-[rgba(245,169,89,0.18)] dark:text-[#f5a959]' : 'border-[#d8c3a6] bg-[#fffaf2] text-[#685547] hover:border-[#b7741e] hover:text-[#241f1a] dark:border-[rgba(148,163,184,0.16)] dark:bg-[#111827] dark:text-[#cbd5e1] dark:hover:text-[#f8fafc]'}`}
                 >
                   {filter}
                 </button>
               ))}
             </div>
-            <button className="h-9 cursor-pointer rounded-lg border border-[#d8c3a6] bg-[#fffaf2] px-3 text-[11px] font-extrabold text-[#5c493c] transition hover:border-[#b7741e] hover:bg-[#fff1d7] disabled:cursor-not-allowed disabled:opacity-60 dark:border-[rgba(212,165,116,0.16)] dark:bg-[#1a1a1a] dark:text-[#f5f0eb] dark:hover:bg-[rgba(212,165,116,0.12)]" type="button" disabled={!projectId || scanState === 'queued' || scanState === 'running'} onClick={handleManualRescan}>
+            <button className="h-10 cursor-pointer rounded-xl border border-[#d8c3a6] bg-[#fffaf2] px-3 text-[12px] font-extrabold text-[#4f4035] transition hover:border-[#b7741e] hover:bg-[#fff1d7] disabled:cursor-not-allowed disabled:opacity-60 dark:border-[rgba(148,163,184,0.16)] dark:bg-[#111827] dark:text-[#f8fafc] dark:hover:bg-[rgba(245,169,89,0.12)]" type="button" disabled={!projectId || scanState === 'queued' || scanState === 'running'} onClick={handleManualRescan}>
               <RefreshCw size={14} className="mr-1 inline" /> Rescan
             </button>
             <AtlasPromptMenu atlas={data?.atlas ?? null} selectedNode={selectedAtlasNode} />
@@ -170,7 +168,7 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
             <AtlasRefreshStatus stale={data?.stale} status={data?.refreshStatus} scanState={scanState} message={data?.message} />
           </div>
         </div>
-        <div className="border-t border-[#ead9c2] bg-[#fff6e8]/85 px-4 py-2 dark:border-[rgba(212,165,116,0.08)] dark:bg-[#0d0d0d]">
+        <div className="border-t border-[#ead9c2] bg-[#fff6e8]/88 px-5 py-3 dark:border-[rgba(148,163,184,0.10)] dark:bg-[#07111f]">
           <AtlasSearchBar query={searchQuery} resultCount={resultCount} onQueryChange={setSearchQuery} />
         </div>
       </header>
@@ -202,11 +200,11 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
 
 function AtlasCenteredMessage({ title, body }: { title: string; body: string }) {
   return (
-    <div className="flex h-full min-h-[520px] items-center justify-center bg-[#f8efe2] p-8 dark:bg-[#0a0a0a]">
-      <div className="max-w-sm rounded-lg border border-[#d8c3a6] bg-[#fffaf2] p-5 text-center shadow-xl dark:border-[rgba(212,165,116,0.16)] dark:bg-[#141414]">
+    <div className="flex h-full min-h-[560px] items-center justify-center bg-[#f6efe6] p-8 dark:bg-[#050914]">
+      <div className="max-w-sm rounded-2xl border border-[#d8c3a6] bg-[#fffaf2] p-6 text-center shadow-xl dark:border-[rgba(148,163,184,0.16)] dark:bg-[#0f1724]">
         <Activity size={24} className="mx-auto text-[#b7741e] dark:text-[#d4a574]" />
-        <h2 className="mt-3 text-sm font-extrabold text-[#2f2923] dark:text-[#f5f0eb]">{title}</h2>
-        <p className="mt-2 text-[11px] font-mono leading-relaxed text-[#7b6554] dark:text-[#a39787]">{body}</p>
+        <h2 className="mt-3 text-base font-extrabold text-[#241f1a] dark:text-[#f8fafc]">{title}</h2>
+        <p className="mt-2 text-[12px] font-medium leading-relaxed text-[#685547] dark:text-[#cbd5e1]">{body}</p>
       </div>
     </div>
   );

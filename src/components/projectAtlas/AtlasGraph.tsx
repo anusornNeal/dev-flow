@@ -17,6 +17,16 @@ interface Viewport {
   zoom: number;
 }
 
+interface Point {
+  x: number;
+  y: number;
+}
+
+interface EdgeRoute {
+  path: string;
+  label: Point;
+}
+
 type EdgeVisualVariant = 'direct' | 'soft' | 'reference' | 'test';
 
 interface EdgeVisualStyle {
@@ -34,6 +44,12 @@ const NODE_WIDTH = 260;
 const NODE_HEIGHT = 154;
 const MIN_ZOOM = 0.42;
 const MAX_ZOOM = 1.7;
+const GRID_ORIGIN_X = 70;
+const GRID_ORIGIN_Y = 70;
+const GRID_COLUMN_GAP = 360;
+const GRID_ROW_GAP = 240;
+const EDGE_PORT_GAP = 32;
+const EDGE_ROUTE_RADIUS = 20;
 
 const EDGE_VISUAL_STYLES: Record<EdgeVisualVariant, EdgeVisualStyle> = {
   direct: {
@@ -89,6 +105,7 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
   const positions = useMemo(() => layoutDomainNodes(nodes), [nodes]);
   const bounds = useMemo(() => getGraphBounds(positions), [positions]);
   const relatedIds = useMemo(() => getRelatedNodeIds(edges, selectedNodeId), [edges, selectedNodeId]);
+  const edgePorts = useMemo(() => buildEdgePorts(edges), [edges]);
   const highlightedIds = useMemo(() => new Set(highlightedNodeIds), [highlightedNodeIds]);
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const [viewport, setViewport] = useState<Viewport>({ x: 60, y: 50, zoom: 0.88 });
@@ -163,14 +180,14 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
             if (!showEdge) return null;
             const dimmed = canDim && !directlyRelated;
             const visualStyle = edgeVisualStyle(edge);
-            const path = edgePath(source, target);
+            const route = edgeRoute(edge, source, target, edgePorts);
             const showLabel = Boolean(!denseGraph && focusSelection && directlyRelated && viewport.zoom > 0.82 && edge.sourceEdgeIds.length <= 3);
             const edgeOpacity = dimmed ? 0.04 : focusSelection ? 0.72 : 0.18;
             const edgeWidth = dimmed ? 0.6 : focusSelection && directlyRelated ? visualStyle.focusWidth : visualStyle.baseWidth;
             return (
               <g key={edge.id} opacity={edgeOpacity} pointerEvents="none">
                 <path
-                  d={path}
+                  d={route.path}
                   fill="none"
                   stroke={visualStyle.stroke}
                   strokeWidth={edgeWidth}
@@ -179,7 +196,7 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
                   markerEnd={focusSelection && directlyRelated ? `url(#atlas-arrow-${visualStyle.variant})` : undefined}
                 />
                 {showLabel && (
-                  <text x={(source.x + target.x) / 2 + NODE_WIDTH / 2} y={(source.y + target.y) / 2 + NODE_HEIGHT / 2 - 10} className="fill-[#8a4d0d] text-[10px] font-bold dark:fill-[#f7d28a]">
+                  <text x={route.label.x} y={route.label.y - 10} className="fill-[#8a4d0d] text-[10px] font-bold dark:fill-[#f7d28a]">
                     {edge.label}
                   </text>
                 )}
@@ -202,7 +219,7 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
                   onClick={() => onSelectNode(node)}
                   onMouseEnter={() => setHoveredNodeId(node.id)}
                   onMouseLeave={() => setHoveredNodeId(null)}
-                  className={`h-full w-full cursor-pointer rounded-lg border bg-[#fffdfa]/95 p-3 text-left shadow-xl transition dark:bg-[#241c15]/95 ${
+                  className={`h-full w-full cursor-pointer rounded-lg border bg-[#fffdfa] p-3 text-left shadow-xl transition dark:bg-[#241c15] ${
                     selected
                       ? 'border-[#c9872c] shadow-[#d9a44133]'
                       : highlighted || hovered
@@ -347,17 +364,123 @@ function layoutDomainNodes(nodes: AtlasDomainMapNode[]) {
   return positions;
 }
 
-function edgePath(source: { x: number; y: number }, target: { x: number; y: number }) {
-  const sourceCenterX = source.x + NODE_WIDTH / 2;
-  const targetCenterX = target.x + NODE_WIDTH / 2;
-  const leftToRight = sourceCenterX <= targetCenterX;
-  const x1 = source.x + (leftToRight ? NODE_WIDTH : 0);
-  const y1 = source.y + NODE_HEIGHT / 2;
-  const x2 = target.x + (leftToRight ? 0 : NODE_WIDTH);
-  const y2 = target.y + NODE_HEIGHT / 2;
-  const direction = leftToRight ? 1 : -1;
-  const curve = Math.max(80, Math.abs(x2 - x1) * 0.35);
-  return `M ${x1} ${y1} C ${x1 + curve * direction} ${y1}, ${x2 - curve * direction} ${y2}, ${x2} ${y2}`;
+function buildEdgePorts(edges: AtlasDomainMapEdge[]) {
+  const connected = new Map<string, string[]>();
+  for (const edge of edges) {
+    connected.set(edge.source, [...(connected.get(edge.source) ?? []), edge.id]);
+    connected.set(edge.target, [...(connected.get(edge.target) ?? []), edge.id]);
+  }
+
+  const offsets = new Map<string, number>();
+  for (const [nodeId, edgeIds] of connected) {
+    const sorted = [...new Set(edgeIds)].sort();
+    const count = sorted.length;
+    const step = count > 1 ? Math.min(15, (NODE_HEIGHT - 72) / Math.max(1, count - 1)) : 0;
+    sorted.forEach((edgeId, index) => {
+      offsets.set(`${nodeId}:${edgeId}`, (index - (count - 1) / 2) * step);
+    });
+  }
+  return offsets;
+}
+
+function edgeRoute(
+  edge: AtlasDomainMapEdge,
+  source: { x: number; y: number },
+  target: { x: number; y: number },
+  edgePorts: Map<string, number>,
+): EdgeRoute {
+  const sourceCenter = { x: source.x + NODE_WIDTH / 2, y: source.y + NODE_HEIGHT / 2 };
+  const targetCenter = { x: target.x + NODE_WIDTH / 2, y: target.y + NODE_HEIGHT / 2 };
+  const sourceToRight = targetCenter.x >= sourceCenter.x;
+  const sourceSide = sourceToRight ? 'right' : 'left';
+  const targetSide = sourceToRight ? 'left' : 'right';
+  const sourceDirection = sourceSide === 'right' ? 1 : -1;
+  const targetDirection = targetSide === 'right' ? 1 : -1;
+  const sourceOffset = edgePorts.get(`${edge.source}:${edge.id}`) ?? 0;
+  const targetOffset = edgePorts.get(`${edge.target}:${edge.id}`) ?? 0;
+  const start: Point = {
+    x: source.x + (sourceSide === 'right' ? NODE_WIDTH : 0),
+    y: source.y + NODE_HEIGHT / 2 + sourceOffset,
+  };
+  const end: Point = {
+    x: target.x + (targetSide === 'right' ? NODE_WIDTH : 0),
+    y: target.y + NODE_HEIGHT / 2 + targetOffset,
+  };
+  const sourceExit: Point = { x: start.x + sourceDirection * EDGE_PORT_GAP, y: start.y };
+  const targetEntry: Point = { x: end.x + targetDirection * EDGE_PORT_GAP, y: end.y };
+  const sourceGrid = gridPosition(source);
+  const targetGrid = gridPosition(target);
+  const adjacentSameRow = sourceGrid.row === targetGrid.row && Math.abs(sourceGrid.column - targetGrid.column) === 1;
+  const laneOffset = stableLaneOffset(edge.id);
+
+  if (adjacentSameRow) {
+    const midX = (sourceExit.x + targetEntry.x) / 2 + laneOffset * 0.4;
+    const points = [start, sourceExit, { x: midX, y: sourceExit.y }, { x: midX, y: targetEntry.y }, targetEntry, end];
+    return { path: roundedPath(points), label: { x: midX, y: (sourceExit.y + targetEntry.y) / 2 } };
+  }
+
+  const busY = edgeBusLaneY(source, target, edge.id);
+  const points = [start, sourceExit, { x: sourceExit.x, y: busY }, { x: targetEntry.x, y: busY }, targetEntry, end];
+  return { path: roundedPath(points), label: { x: (sourceExit.x + targetEntry.x) / 2, y: busY } };
+}
+
+function gridPosition(position: { x: number; y: number }) {
+  return {
+    column: Math.round((position.x - GRID_ORIGIN_X) / GRID_COLUMN_GAP),
+    row: Math.round((position.y - GRID_ORIGIN_Y) / GRID_ROW_GAP),
+  };
+}
+
+function edgeBusLaneY(source: { x: number; y: number }, target: { x: number; y: number }, edgeId: string) {
+  const sourceRow = gridPosition(source).row;
+  const targetRow = gridPosition(target).row;
+  const laneOffset = stableLaneOffset(edgeId);
+  if (sourceRow === targetRow) {
+    const routeAbove = sourceRow > 0 && stableHash(edgeId) % 2 === 0;
+    return routeAbove ? source.y - 46 - laneOffset : source.y + NODE_HEIGHT + 46 + laneOffset;
+  }
+  return target.y > source.y ? source.y + NODE_HEIGHT + 44 + laneOffset : source.y - 44 - laneOffset;
+}
+
+function roundedPath(points: Point[]) {
+  if (points.length === 0) return '';
+  if (points.length === 1) return `M ${points[0].x} ${points[0].y}`;
+  const [start, ...rest] = points;
+  let path = `M ${start.x} ${start.y}`;
+  for (let index = 0; index < rest.length; index += 1) {
+    const current = rest[index];
+    const next = rest[index + 1];
+    const previous = points[index];
+    if (!next) {
+      path += ` L ${current.x} ${current.y}`;
+      continue;
+    }
+    const before = moveToward(current, previous, EDGE_ROUTE_RADIUS);
+    const after = moveToward(current, next, EDGE_ROUTE_RADIUS);
+    path += ` L ${before.x} ${before.y} Q ${current.x} ${current.y} ${after.x} ${after.y}`;
+  }
+  return path;
+}
+
+function moveToward(point: Point, target: Point, distance: number): Point {
+  const dx = target.x - point.x;
+  const dy = target.y - point.y;
+  const length = Math.hypot(dx, dy);
+  if (length === 0) return point;
+  const amount = Math.min(distance, length / 2) / length;
+  return { x: point.x + dx * amount, y: point.y + dy * amount };
+}
+
+function stableLaneOffset(value: string) {
+  return ((stableHash(value) % 5) - 2) * 7;
+}
+
+function stableHash(value: string) {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+  return hash;
 }
 
 function getRelatedNodeIds(edges: AtlasDomainMapEdge[], selectedNodeId: string | null) {

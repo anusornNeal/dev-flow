@@ -478,6 +478,138 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
     }),
   },
   {
+    name: 'apply_project_atlas_agent_update',
+    description: 'Submit a bounded ChatGPT/agent Project Atlas overlay patch. The patch is validated against the current deterministic Atlas cache and repo evidence before any cache write.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...projectIdentifierProperties,
+        base: {
+          type: 'object',
+          properties: {
+            generatedAt: { type: 'string' },
+            repoFingerprint: { type: 'string' },
+            nodeCount: { type: 'number' },
+            edgeCount: { type: 'number' },
+          },
+          required: ['nodeCount', 'edgeCount'],
+          additionalProperties: false,
+        },
+        provenance: {
+          type: 'object',
+          properties: {
+            provider: { type: 'string', enum: ['ChatGPT', 'Codex', 'Agent', 'Other'] },
+            model: { type: 'string' },
+            prompt: { type: 'string' },
+            runId: { type: 'string' },
+          },
+          required: ['provider'],
+          additionalProperties: false,
+        },
+        domains: {
+          type: 'array',
+          maxItems: 100,
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              name: { type: 'string' },
+              nodeIds: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 100 },
+              summary: { type: 'string' },
+              evidence: { type: 'array', items: { $ref: '#/$defs/atlasAgentEvidence' }, minItems: 1, maxItems: 20 },
+            },
+            required: ['id', 'name', 'nodeIds', 'evidence'],
+            additionalProperties: false,
+          },
+        },
+        summaries: {
+          type: 'array',
+          maxItems: 100,
+          items: {
+            type: 'object',
+            properties: {
+              nodeId: { type: 'string' },
+              summary: { type: 'string' },
+              evidence: { type: 'array', items: { $ref: '#/$defs/atlasAgentEvidence' }, minItems: 1, maxItems: 20 },
+            },
+            required: ['nodeId', 'summary', 'evidence'],
+            additionalProperties: false,
+          },
+        },
+        inferredRelationships: {
+          type: 'array',
+          maxItems: 100,
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              source: { type: 'string' },
+              target: { type: 'string' },
+              kind: { type: 'string', enum: ['calls', 'depends-on', 'related', 'reads', 'writes'] },
+              summary: { type: 'string' },
+              evidence: { type: 'array', items: { $ref: '#/$defs/atlasAgentEvidence' }, minItems: 1, maxItems: 20 },
+            },
+            required: ['id', 'source', 'target', 'kind', 'summary', 'evidence'],
+            additionalProperties: false,
+          },
+        },
+        readOrder: {
+          type: 'array',
+          maxItems: 100,
+          items: {
+            type: 'object',
+            properties: {
+              nodeId: { type: 'string' },
+              path: { type: 'string' },
+              reason: { type: 'string' },
+              evidence: { type: 'array', items: { $ref: '#/$defs/atlasAgentEvidence' }, minItems: 1, maxItems: 20 },
+            },
+            required: ['nodeId', 'reason', 'evidence'],
+            additionalProperties: false,
+          },
+        },
+        warnings: {
+          type: 'array',
+          maxItems: 100,
+          items: {
+            type: 'object',
+            properties: {
+              message: { type: 'string' },
+              severity: { type: 'string', enum: ['info', 'warning', 'error'] },
+              evidence: { type: 'array', items: { $ref: '#/$defs/atlasAgentEvidence' }, minItems: 1, maxItems: 20 },
+            },
+            required: ['message', 'severity', 'evidence'],
+            additionalProperties: false,
+          },
+        },
+        sync: { type: 'boolean', description: 'HTTP-only escape hatch for tests/manual calls. MCP callers should omit this and use the queued job result.' },
+      },
+      required: ['base', 'provenance'],
+      additionalProperties: false,
+      $defs: {
+        atlasAgentEvidence: {
+          type: 'object',
+          properties: {
+            path: { type: 'string', description: 'Relative existing repo file path.' },
+            nodeId: { type: 'string', description: 'Existing Atlas node id.' },
+            excerpt: { type: 'string' },
+            startLine: { type: 'number' },
+            endLine: { type: 'number' },
+          },
+          required: ['path', 'nodeId'],
+          additionalProperties: false,
+        },
+      },
+    },
+    outputSchema: { type: 'object' },
+    executionPolicy: { mode: 'job', jobKind: 'repo-write' },
+    buildHttpRequest: (args) => ({
+      method: 'POST',
+      path: '/api/project-atlas/agent-update',
+      body: args,
+    }),
+  },
+  {
     name: 'list_tasks',
     description: 'List tasks with optional filters. Local-first and ChatGPT-friendly: defaults to a small minimal page; pass projectId/status/q and an explicit limit before asking for broader context.',
     inputSchema: {

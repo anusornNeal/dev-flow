@@ -11,7 +11,7 @@ import { searchLocalFilesAsync } from './localFileService';
 import { commitGitChanges } from './gitService';
 import { editFilesBatch } from './fileEditBatchService';
 import { getProjects } from '../repositories/projectRepository';
-import { rescanProjectAtlasSafely } from './projectAtlasService';
+import { applyProjectAtlasAgentUpdate, rescanProjectAtlasSafely } from './projectAtlasService';
 
 type JobKind = 'repo-command' | 'repo-write' | 'repo-read' | 'skill-read';
 type Logger = { stdout: (data: string) => void; stderr: (data: string) => void };
@@ -322,6 +322,11 @@ async function startJob(entry: QueueEntry) {
       if (!project) throw new Error('Project not found for Project Atlas rescan.');
       logger.stdout(`[Project Atlas] Rescanning ${project.name || project.id}\n`);
       result = rescanProjectAtlasSafely(project, { manualRescan: true });
+    } else if (entry.toolName === 'apply_project_atlas_agent_update') {
+      const project = findProjectForAtlasRescan(entry.args);
+      if (!project) throw new Error('Project not found for Project Atlas agent update.');
+      logger.stdout(`[Project Atlas] Applying agent overlay for ${project.name || project.id}\n`);
+      result = applyProjectAtlasAgentUpdate(project, entry.args);
     } else {
       throw new Error(`No async runner implemented for tool: ${entry.toolName}`);
     }

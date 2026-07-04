@@ -253,6 +253,98 @@ export interface AtlasFreshness {
   lastError?: string;
 }
 
+export type AtlasAgentOverlaySeverity = 'info' | 'warning' | 'error';
+
+export interface AtlasAgentEvidence {
+  path: string;
+  nodeId: string;
+  excerpt?: string;
+  startLine?: number;
+  endLine?: number;
+}
+
+export interface AtlasAgentUpdateBase {
+  generatedAt?: string;
+  repoFingerprint?: string;
+  nodeCount: number;
+  edgeCount: number;
+}
+
+export interface AtlasAgentUpdateProvenance {
+  provider: string;
+  model?: string;
+  prompt?: string;
+  runId?: string;
+}
+
+export interface AtlasAgentDomainPatch {
+  id: string;
+  name: string;
+  nodeIds: string[];
+  summary?: string;
+  evidence: AtlasAgentEvidence[];
+}
+
+export interface AtlasAgentSummaryPatch {
+  nodeId: string;
+  summary: string;
+  evidence: AtlasAgentEvidence[];
+}
+
+export interface AtlasAgentRelationshipPatch {
+  id: string;
+  source: string;
+  target: string;
+  kind: Extract<AtlasEdgeKind, 'calls' | 'depends-on' | 'related' | 'reads' | 'writes'>;
+  summary: string;
+  evidence: AtlasAgentEvidence[];
+}
+
+export interface AtlasAgentReadOrderPatch {
+  nodeId: string;
+  path?: string;
+  reason: string;
+  evidence: AtlasAgentEvidence[];
+}
+
+export interface AtlasAgentWarningPatch {
+  message: string;
+  severity: AtlasAgentOverlaySeverity;
+  evidence: AtlasAgentEvidence[];
+}
+
+export interface ProjectAtlasAgentUpdatePatch {
+  projectId: string;
+  base: AtlasAgentUpdateBase;
+  provenance: AtlasAgentUpdateProvenance;
+  domains?: AtlasAgentDomainPatch[];
+  summaries?: AtlasAgentSummaryPatch[];
+  inferredRelationships?: AtlasAgentRelationshipPatch[];
+  readOrder?: AtlasAgentReadOrderPatch[];
+  warnings?: AtlasAgentWarningPatch[];
+}
+
+export interface AtlasAgentOverlayDiagnostic {
+  code: string;
+  message: string;
+  severity: AtlasAgentOverlaySeverity;
+  path?: string;
+  nodeId?: string;
+}
+
+export interface ProjectAtlasAgentOverlay {
+  status: 'applied';
+  updatedAt: string;
+  base: AtlasAgentUpdateBase;
+  provenance: AtlasAgentUpdateProvenance;
+  diagnostics: AtlasAgentOverlayDiagnostic[];
+  domains: (AtlasAgentDomainPatch & { origin: 'inferred' })[];
+  summaries: AtlasAgentSummaryPatch[];
+  inferredRelationships: AtlasAgentRelationshipPatch[];
+  readOrder: AtlasAgentReadOrderPatch[];
+  warnings: AtlasAgentWarningPatch[];
+}
+
 export interface ProjectAtlas {
   schemaVersion: 1;
   projectId: string;
@@ -262,6 +354,7 @@ export interface ProjectAtlas {
   flows: AtlasFlow[];
   summary: AtlasSummary;
   freshness: AtlasFreshness;
+  agentOverlay?: ProjectAtlasAgentOverlay;
 }
 
 export interface AtlasScanStats {

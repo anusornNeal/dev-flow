@@ -18,7 +18,7 @@ import { getRepoInspectionIndex } from '../services/repoInspectionIndexService';
 import { validateTaskQuality } from '../services/taskQualityService';
 import { buildJiraAuthoringBundle } from '../services/jiraAuthoringBundleService';
 import { findProjectByIdentifier } from '../services/taskService';
-import { getProjectAtlasForApi, getProjectAtlasStatus, rescanProjectAtlasSafely } from '../services/projectAtlasService';
+import { applyProjectAtlasAgentUpdate, getProjectAtlasForApi, getProjectAtlasStatus, rescanProjectAtlasSafely } from '../services/projectAtlasService';
 import { enqueueToolJob } from '../services/mcpToolJobService';
 
 export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) {
@@ -220,6 +220,21 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
         return res.json(rescanProjectAtlasSafely(project, { manualRescan: true }));
       }
       return res.json(enqueueToolJob(deps.state, 'rescan_project_atlas', { ...req.body, projectId: project.id }, 'repo-command'));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.post('/api/project-atlas/agent-update', (req, res) => {
+    try {
+      const project = findProjectByIdentifier(deps.state, req.body as Record<string, any>);
+      if (!project) return res.status(404).json({ error: 'Project not found' });
+      if (req.body?.sync === true) {
+        const { sync, ...patch } = req.body as Record<string, any>;
+        const result = applyProjectAtlasAgentUpdate(project, patch);
+        return res.status(result.ok ? 200 : 400).json(result);
+      }
+      return res.json(enqueueToolJob(deps.state, 'apply_project_atlas_agent_update', { ...req.body, projectId: project.id }, 'repo-write'));
     } catch (error) {
       return sendApiError(res, error);
     }

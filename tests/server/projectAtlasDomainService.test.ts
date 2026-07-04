@@ -19,6 +19,18 @@ const atlas: any = {
     { id: 'file:src/db/migrations/001_init.ts', label: '001_init.ts', kind: 'database', path: 'src/db/migrations/001_init.ts', metadata: {} },
     { id: 'file:src/components/TaskList.tsx', label: 'TaskList.tsx', kind: 'component', path: 'src/components/TaskList.tsx', metadata: {} },
     { id: 'file:tests/server/taskService.test.ts', label: 'taskService.test.ts', kind: 'test', path: 'tests/server/taskService.test.ts', metadata: {} },
+    { id: 'file:settings.gradle.kts', label: 'settings.gradle.kts', kind: 'config', path: 'settings.gradle.kts', metadata: { config: true } },
+    { id: 'file:app/build.gradle.kts', label: 'build.gradle.kts', kind: 'config', path: 'app/build.gradle.kts', metadata: { config: true } },
+    { id: 'file:app/src/main/AndroidManifest.xml', label: 'AndroidManifest.xml', kind: 'config', path: 'app/src/main/AndroidManifest.xml', metadata: { androidManifest: true } },
+    { id: 'file:app/src/main/java/com/qchang/buddy/Application.kt', label: 'Application.kt', kind: 'file', path: 'app/src/main/java/com/qchang/buddy/Application.kt', metadata: {} },
+    { id: 'file:app/src/main/java/com/qchang/buddy/di/ViewModelModules.kt', label: 'ViewModelModules.kt', kind: 'file', path: 'app/src/main/java/com/qchang/buddy/di/ViewModelModules.kt', metadata: {} },
+    { id: 'file:app/src/main/java/com/qchang/buddy/compose/base/ComposeFragment.kt', label: 'ComposeFragment.kt', kind: 'file', path: 'app/src/main/java/com/qchang/buddy/compose/base/ComposeFragment.kt', metadata: {} },
+    { id: 'file:app/src/main/java/com/qchang/buddy/data/remote/ApiKeyService.kt', label: 'ApiKeyService.kt', kind: 'file', path: 'app/src/main/java/com/qchang/buddy/data/remote/ApiKeyService.kt', metadata: {} },
+    { id: 'file:app/src/main/java/com/qchang/buddy/data/repository/jobs/JobsRepository.kt', label: 'JobsRepository.kt', kind: 'file', path: 'app/src/main/java/com/qchang/buddy/data/repository/jobs/JobsRepository.kt', metadata: {} },
+    { id: 'file:app/src/main/res/navigation/nav_main.xml', label: 'nav_main.xml', kind: 'config', path: 'app/src/main/res/navigation/nav_main.xml', metadata: { androidNavigation: true } },
+    { id: 'file:app/src/main/res/layout/activity_main.xml', label: 'activity_main.xml', kind: 'file', path: 'app/src/main/res/layout/activity_main.xml', metadata: { androidLayout: true } },
+    { id: 'file:app/src/main/res/values/strings.xml', label: 'strings.xml', kind: 'config', path: 'app/src/main/res/values/strings.xml', metadata: { androidValues: true } },
+    { id: 'file:stubby/mock.yaml', label: 'mock.yaml', kind: 'config', path: 'stubby/mock.yaml', metadata: { stubby: true } },
   ],
   edges: [
     {
@@ -55,9 +67,26 @@ test('suggestAtlasDomains groups files by deterministic path heuristics', () => 
   assert.ok(domainNames.has('Database/Persistence'));
   assert.ok(domainNames.has('UI Components'));
   assert.ok(domainNames.has('Tests'));
+  assert.ok(domainNames.has('Build / Modules / Flavors'));
+  assert.ok(domainNames.has('App Entry / Bootstrap / Platform'));
+  assert.ok(domainNames.has('Dependency Injection / App Services'));
+  assert.ok(domainNames.has('Presentation Base / Compose Framework'));
+  assert.ok(domainNames.has('Data / Network / Repositories / Models'));
+  assert.ok(domainNames.has('Navigation / Screen Flow'));
+  assert.ok(domainNames.has('Resources / Design System / Legacy XML UI'));
+  assert.ok(domainNames.has('Local Libraries / Native / Stubby / Automation'));
 
   assert.equal(nodeById.get('file:src/server/routes/tasks.ts').metadata.domainId, 'domain:task-management');
   assert.equal(nodeById.get('file:src/server/routes/tasks.ts').metadata.domainOrigin, 'inferred');
+  assert.equal(nodeById.get('file:settings.gradle.kts').metadata.domainId, 'domain:android-build-modules');
+  assert.equal(nodeById.get('file:app/src/main/java/com/qchang/buddy/Application.kt').metadata.domainId, 'domain:android-bootstrap-platform');
+  assert.equal(nodeById.get('file:app/src/main/java/com/qchang/buddy/di/ViewModelModules.kt').metadata.domainId, 'domain:android-dependency-injection');
+  assert.equal(nodeById.get('file:app/src/main/java/com/qchang/buddy/compose/base/ComposeFragment.kt').metadata.domainId, 'domain:android-compose-framework');
+  assert.equal(nodeById.get('file:app/src/main/java/com/qchang/buddy/data/remote/ApiKeyService.kt').metadata.domainId, 'domain:android-data-network');
+  assert.equal(nodeById.get('file:app/src/main/java/com/qchang/buddy/data/repository/jobs/JobsRepository.kt').metadata.domainId, 'domain:android-jobs');
+  assert.equal(nodeById.get('file:app/src/main/res/navigation/nav_main.xml').metadata.domainId, 'domain:android-navigation');
+  assert.equal(nodeById.get('file:app/src/main/res/layout/activity_main.xml').metadata.domainId, 'domain:android-resources-ui');
+  assert.equal(nodeById.get('file:stubby/mock.yaml').metadata.domainId, 'domain:local-libraries-native-stubby-automation');
 });
 
 test('applyDomainOverrides persists user edits without mutating verified scanner facts', () => {

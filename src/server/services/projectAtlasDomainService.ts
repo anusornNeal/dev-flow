@@ -14,6 +14,21 @@ interface DomainRule {
 }
 
 const DOMAIN_RULES: DomainRule[] = [
+  { id: 'domain:android-build-modules', name: 'Build / Modules / Flavors', test: (node) => isAndroidBuildNode(node) },
+  { id: 'domain:android-bootstrap-platform', name: 'App Entry / Bootstrap / Platform', test: (node) => isAndroidBootstrapNode(node) },
+  { id: 'domain:android-dependency-injection', name: 'Dependency Injection / App Services', test: (node) => isAndroidDiNode(node) },
+  { id: 'domain:android-navigation', name: 'Navigation / Screen Flow', test: (node) => Boolean(node.metadata?.androidNavigation) || /(^|\/)res\/navigation\//i.test(node.path ?? node.label) },
+  { id: 'domain:android-compose-framework', name: 'Presentation Base / Compose Framework', test: (node) => /(^|\/)compose\/(base|components)\//i.test(node.path ?? node.label) },
+  { id: 'domain:android-data-network', name: 'Data / Network / Repositories / Models', test: (node) => (node.path ?? node.label).includes('/data/remote/') || (node.path ?? node.label).includes('/common/utils/gson/') },
+  { id: 'domain:android-auth', name: 'Auth / Login / OTP / PIN / Password', test: (node) => /(^|\/)(compose\/ui\/login|compose\/ui\/otp|ui\/pin|ui\/verify_otp|ui\/forgot_pin|data\/repository\/(api_key|login|otp|pin)|data\/model\/(api_key|login|otp|pin|reset_password))\//i.test(node.path ?? node.label) },
+  { id: 'domain:android-onboarding', name: 'Onboarding / Registration / Worker Profile', test: (node) => /(^|\/)(compose\/ui\/onboarding_menu|ui\/app_onboard_worker|ui\/onboard_worker|ui\/onboarding|data\/repository\/onboard_worker|data\/repository\/ocr|data\/model\/(onboard_worker|personal_info|worker_area|work_type|worker_address_info|worker_profile_image|bank_account|uploaddocument|term_and_cond|ocr))\//i.test(node.path ?? node.label) },
+  { id: 'domain:android-jobs', name: 'Jobs / Work Orders / Contractor Flow', test: (node) => /(^|\/)(compose\/ui\/jobs|ui\/jobs|ui\/new_jobs|ui\/search_jobs|data\/repository\/jobs|data\/model\/(job|new_jobs|additional_quotation|sku_product|services|unit|work_instruction))\//i.test(node.path ?? node.label) },
+  { id: 'domain:android-calendar', name: 'Calendar / Availability / Scheduling', test: (node) => /(^|\/)(ui\/my_calendar|compose\/ui\/calendar_picker|data\/repository\/calendar|data\/model\/my_calendar|library\/calendar)\//i.test(node.path ?? node.label) },
+  { id: 'domain:android-payments-income', name: 'Payments / Income / Financial Documents', test: (node) => /(^|\/)(compose\/ui\/income|ui\/payment_detail|data\/repository\/(income|payment)|data\/model\/(income|payment|payment_detail))\//i.test(node.path ?? node.label) },
+  { id: 'domain:android-profile-settings', name: 'Profile / Settings / Notifications / Privacy', test: (node) => /(^|\/)(ui\/(profile|profile_edit_info|settings|setting_notification|notification|privacy_and_policy|privacy_setting|vaccine|grade_detail|grading|profile_subteam|contact_us|change_language|training_course|re_new_reference_code)|compose\/ui\/subteam|data\/repository\/(user|notification|vaccine|worker_grade|locale|biometric|sub_team|contact_us|training_course|remote_config)|data\/model\/(user|notification|vaccine|my_grade|grade_detail|sub_team_profile|languages|worker|contact_us|training_course))\//i.test(node.path ?? node.label) },
+  { id: 'domain:android-persistence', name: 'Persistence / Preferences / Local State', test: (node) => /(^|\/)(common\/utils\/(AppPreferences|SessionManager|RealmDatabase|InternalFileManager)|data\/repository\/(biometric|locale))|(^|\/)di\/(PrefsModules|DatabaseModules)\.kt$/i.test(node.path ?? node.label) },
+  { id: 'domain:android-resources-ui', name: 'Resources / Design System / Legacy XML UI', test: (node) => isAndroidResourceNode(node) },
+  { id: 'domain:local-libraries-native-stubby-automation', name: 'Local Libraries / Native / Stubby / Automation', test: (node) => /(^|\/)(library|nativelib|stubby|fastlane|localize_tools|scripts|docs)\//i.test(node.path ?? node.label) || Boolean(node.metadata?.stubby) },
   { id: 'domain:tests', name: 'Tests', test: (node) => node.kind === 'test' || /(^|\/)(tests?|__tests__)\//i.test(node.path ?? node.label) },
   { id: 'domain:ui-components', name: 'UI Components', test: (node) => node.kind === 'component' || /(^|\/)(components|viewModels|App\.tsx)/i.test(node.path ?? node.label) },
   { id: 'domain:task-management', name: 'Task Management', test: (node) => /(^|\/)(tasks?|taskService|taskRepository)/i.test(node.path ?? node.label) },
@@ -105,6 +120,32 @@ export function summarizeDomainGraph(atlas: ProjectAtlas): AtlasDomainGraphSumma
 
 function resolveDomainForNode(node: AtlasNode) {
   return DOMAIN_RULES.find((rule) => rule.test(node)) ?? FALLBACK_DOMAIN;
+}
+
+function isAndroidBuildNode(node: AtlasNode) {
+  const target = node.path ?? node.label;
+  return Boolean(node.metadata?.gradleConfig) ||
+    /(^|\/)(settings|build)\.gradle(\.kts)?$/i.test(target) ||
+    /(^|\/)(config|env|gradle)\.properties$/i.test(target) ||
+    /(^|\/)google-services\.json$/i.test(target) ||
+    /(^|\/)gradle\/libs\.versions\.toml$/i.test(target);
+}
+
+function isAndroidBootstrapNode(node: AtlasNode) {
+  const target = node.path ?? node.label;
+  return Boolean(node.metadata?.androidManifest) ||
+    /(^|\/)Application\.kt$/i.test(target) ||
+    /(^|\/)(ui\/splash_screen|ui\/main_screen|common\/deep_link|common\/utils\/notification|common\/exception)\//i.test(target);
+}
+
+function isAndroidDiNode(node: AtlasNode) {
+  return /(^|\/)app\/src\/main\/java\/com\/qchang\/buddy\/di\/[^/]+\.kt$/i.test(node.path ?? node.label);
+}
+
+function isAndroidResourceNode(node: AtlasNode) {
+  const target = node.path ?? node.label;
+  return Boolean(node.metadata?.androidLayout || node.metadata?.androidValues) ||
+    /(^|\/)app\/src\/main\/(res|assets)\//i.test(target);
 }
 
 function isDomainAssignable(node: AtlasNode) {

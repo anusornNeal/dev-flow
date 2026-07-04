@@ -35,8 +35,8 @@ interface ClusterLayout extends FileCluster {
   filePositions: Array<{ file: AtlasDomainFile; x: number; y: number }>;
 }
 
-const ROOT_WIDTH = 380;
-const ROOT_HEIGHT = 154;
+const ROOT_WIDTH = 340;
+const ROOT_HEIGHT = 168;
 const CLUSTER_WIDTH = 560;
 const CLUSTER_HEADER_HEIGHT = 48;
 const FILE_WIDTH = 238;
@@ -174,16 +174,16 @@ function ClusterHeader({ cluster, onToggle }: { cluster: ClusterLayout; onToggle
 function DomainNode({ inspector, x, y }: { inspector: AtlasDomainInspectorViewModel; x: number; y: number }) {
   return (
     <foreignObject x={x} y={y} width={ROOT_WIDTH} height={ROOT_HEIGHT}>
-      <div data-drill-node className="h-full rounded-2xl border border-[#d8c3a6] bg-[#fffaf2]/96 p-4 shadow-[0_20px_52px_rgba(90,62,26,0.18)] dark:border-[rgba(245,169,89,0.22)] dark:bg-[#0f1724]/96 dark:shadow-[0_20px_56px_rgba(0,0,0,0.42)]">
+      <div data-drill-node className="h-full rounded-xl border border-[#d8c3a6] bg-[#fffaf2]/96 p-3.5 shadow-[0_20px_52px_rgba(90,62,26,0.18)] dark:border-[rgba(245,169,89,0.22)] dark:bg-[#0f1724]/96 dark:shadow-[0_20px_56px_rgba(0,0,0,0.42)]">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <p className="text-[10px] font-black uppercase tracking-widest text-[#9a5b13] dark:text-[#f5a959]">Domain Detail</p>
-            <h2 className="mt-1 truncate text-[20px] font-black leading-tight text-[#241f1a] dark:text-[#f8fafc]">{inspector.name}</h2>
-            <p className="mt-1.5 line-clamp-2 text-[11px] font-semibold leading-5 text-[#685547] dark:text-[#cbd5e1]">{inspector.plainSummary}</p>
+            <h2 className="mt-1 truncate text-[17px] font-black leading-tight text-[#241f1a] dark:text-[#f8fafc]">{inspector.name}</h2>
+            <p className="mt-1 line-clamp-2 text-[10px] font-semibold leading-5 text-[#685547] dark:text-[#cbd5e1]">{inspector.plainSummary}</p>
           </div>
           <span className="shrink-0 rounded-lg border border-[#ead9c2] bg-[#fff8ec] px-2 py-1 text-[9px] font-black uppercase text-[#8a4d0d] dark:border-[rgba(245,169,89,0.18)] dark:bg-[#0b1220] dark:text-[#f5a959]">{inspector.status}</span>
         </div>
-        <div className="mt-3 grid grid-cols-4 gap-1.5 text-center">
+        <div className="mt-2.5 grid grid-cols-4 gap-1 text-center">
           <Metric label="Files" value={inspector.metrics.files} />
           <Metric label="Nodes" value={inspector.metrics.nodes} />
           <Metric label="Deps" value={inspector.metrics.dependencies} />
@@ -212,9 +212,9 @@ function FileNode({ file, x, y }: { file: AtlasDomainFile; x: number; y: number 
 
 function Metric({ label, value }: { label: string; value: number }) {
   return (
-    <span className="rounded-md border border-[#ead9c2] bg-[#fff8ec] px-1 py-1 dark:border-[rgba(148,163,184,0.14)] dark:bg-[#0b1220]">
-      <span className="block text-[12px] font-black leading-4 text-[#241f1a] dark:text-[#f8fafc]">{value}</span>
-      <span className="block text-[8px] font-bold uppercase leading-3 text-[#8a6d55] dark:text-[#94a3b8]">{label}</span>
+    <span className="rounded-md border border-[#ead9c2] bg-[#fff8ec] px-1 py-0.5 dark:border-[rgba(148,163,184,0.14)] dark:bg-[#0b1220]">
+      <span className="block text-[11px] font-black leading-4 text-[#241f1a] dark:text-[#f8fafc]">{value}</span>
+      <span className="block text-[7px] font-bold uppercase leading-3 text-[#8a6d55] dark:text-[#94a3b8]">{label}</span>
     </span>
   );
 }
@@ -229,7 +229,7 @@ function CanvasButton({ label, onClick, children }: { label: string; onClick: ()
 
 function buildDrilldownGraph(inspector: AtlasDomainInspectorViewModel, expandedClusterIds: Set<string>) {
   const clusters = buildFileClusters(inspector.files);
-  const root = { x: 560, y: 86 };
+  const root = { x: 580, y: 82 };
   const columnX = [120, 120 + CLUSTER_WIDTH + CLUSTER_GAP_X];
   const columnY = [330, 330];
   const layouts: ClusterLayout[] = clusters.map((cluster) => {

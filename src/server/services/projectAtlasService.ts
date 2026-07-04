@@ -52,6 +52,11 @@ export function saveLatestAtlas(atlas: ProjectAtlas) {
   return writeAtlasCache({ atlas });
 }
 
+export function getManagedProjectAtlas(atlas: ProjectAtlas) {
+  const baseline = suggestAtlasDomains(atlas);
+  return applyAgentOverlayToAtlas(baseline);
+}
+
 export function getAtlasFreshness(projectId: string) {
   return readLatestAtlas(projectId).atlas.freshness;
 }
@@ -92,7 +97,7 @@ export function getProjectAtlasForApi(project: Project, input: ProjectAtlasApiIn
   const mode = input.mode ?? 'compact';
   const limit = normalizeAtlasLimit(input.limit, mode === 'full' ? 500 : DEFAULT_ATLAS_OUTPUT_LIMIT);
   const cached = readLatestAtlas(project.id);
-  const atlas = cached.status === 'ok' ? suggestAtlasDomains(cached.atlas) : cached.atlas;
+  const atlas = cached.status === 'ok' ? getManagedProjectAtlas(cached.atlas) : cached.atlas;
   const status = getProjectAtlasStatus(project.id);
   const base = {
     mode,
@@ -254,7 +259,7 @@ export function getProjectAtlasStatus(projectId: string) {
     lastError: cached.error ?? freshness.lastError,
     warnings: [],
     overlay: {
-      state: overlay ? 'deterministic-plus-agent-overlay' : 'deterministic-only',
+      state: overlay ? 'chatgpt-managed' : 'deterministic-only',
       updatedAt: overlay?.updatedAt,
       base: overlay?.base ?? {
         generatedAt: freshness.generatedAt,
@@ -280,6 +285,17 @@ export function getProjectAtlasStatus(projectId: string) {
           },
     },
   };
+}
+
+function applyAgentOverlayToAtlas(atlas: ProjectAtlas): ProjectAtlas {
+  const overlay = atlas.agentOverlay;
+  if (!overlay || getOverlayDiagnostics(atlas).length > 0) return atlas;
+  const summaryByNodeId = new Map(overlay.summaries.map((item) => [item.nodeId, item.summary]));
+  const nodes = atlas.nodes.map((node) => {
+    const summary = summaryByNodeId.get(node.id);
+    return summary ? { ...node, inferred: { source: 'inferred' as const, summary } } : node;
+  });
+  return { ...atlas, nodes, domains: overlay.domains.length ? overlay.domains : atlas.domains };
 }
 
 function getOverlayDiagnostics(atlas: ProjectAtlas) {
@@ -334,7 +350,7 @@ export function getTaskFocusedAtlasContext(project: Project, task: AtlasTaskLike
     ? atlas.nodes.map((node: any) => node.path || node.label).filter(Boolean).slice(0, 12)
     : [];
   const cachedAtlas = readLatestAtlas(project.id);
-  const fullAtlas = cachedAtlas.status === 'ok' ? suggestAtlasDomains(cachedAtlas.atlas) : cachedAtlas.atlas;
+  const fullAtlas = cachedAtlas.status === 'ok' ? getManagedProjectAtlas(cachedAtlas.atlas) : cachedAtlas.atlas;
   const impact = buildTaskFocusedAtlasImpact(fullAtlas, task);
   const recommendedReadOrder = impact.readOrder.length
     ? impact.readOrder.map((item) => item.path || item.label)

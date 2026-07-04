@@ -7,8 +7,8 @@ import { findProjectByIdentifier } from '../services/taskService';
 import { validateString } from '../validation';
 import { getPromptPipelineStructure, renderPromptTemplate, PromptRenderContext } from '../services/promptTemplateService';
 import { readAtlasCache } from '../services/projectAtlasCacheService';
-import { maybeRefreshAtlasOnProjectOpen } from '../services/projectAtlasService';
-import { summarizeDomainGraph, suggestAtlasDomains } from '../services/projectAtlasDomainService';
+import { getManagedProjectAtlas, maybeRefreshAtlasOnProjectOpen } from '../services/projectAtlasService';
+import { summarizeDomainGraph } from '../services/projectAtlasDomainService';
 import fs from 'fs';
 import path from 'path';
 
@@ -150,7 +150,7 @@ export function registerProjectRoutes(app: express.Express, deps: ApiRouteDeps) 
       const cached = readAtlasCache({ projectId });
       let atlas = cached.atlas;
       if (cached.status === 'ok') {
-        atlas = suggestAtlasDomains(cached.atlas);
+        atlas = getManagedProjectAtlas(cached.atlas);
       }
 
       const hasGraph = atlas.nodes.length > 0;

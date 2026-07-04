@@ -146,7 +146,7 @@ test('applyProjectAtlasAgentUpdate stores a provenance overlay without changing 
   assert.equal(cached.agentOverlay?.summaries[0].nodeId, 'file:src/server/routes/devflow.ts');
 
   const status = getProjectAtlasStatus(project.id);
-  assert.equal(status.overlay.state, 'deterministic-plus-agent-overlay');
+  assert.equal(status.overlay.state, 'chatgpt-managed');
   assert.equal(status.overlay.updatedAt, '2026-07-04T09:00:00.000Z');
   assert.equal(status.overlay.base.generatedAt, '2026-07-04T08:00:00.000Z');
   assert.equal(status.overlay.diagnostics.length, 0);
@@ -163,7 +163,7 @@ test('getProjectAtlasStatus reports stale overlay diagnostics when baseline meta
 
   const status = getProjectAtlasStatus(project.id);
 
-  assert.equal(status.overlay.state, 'deterministic-plus-agent-overlay');
+  assert.equal(status.overlay.state, 'chatgpt-managed');
   assert.match(status.overlay.diagnostics[0].message, /stale|base/i);
 });
 

@@ -128,7 +128,7 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
   return (
     <section className="flex h-full min-h-0 flex-col bg-[#f6efe6] text-[#241f1a] dark:bg-[#050914] dark:text-[#f8fafc]">
       <header className="shrink-0 border-b border-[#d8c3a6] bg-[#fffaf2]/96 shadow-[0_10px_32px_rgba(90,62,26,0.10)] backdrop-blur dark:border-[rgba(148,163,184,0.14)] dark:bg-[#0b1220]/96 dark:shadow-[0_14px_40px_rgba(0,0,0,0.42)]">
-        <div className="flex min-h-[72px] flex-col gap-4 px-5 py-4 xl:flex-row xl:items-center">
+        <div className="flex min-h-[58px] flex-col gap-4 px-4 py-4 xl:flex-row xl:items-center">
           <div className="flex min-w-0 shrink-0 items-center gap-4">
             <div>
               <h1 className="flex items-center gap-2 text-2xl font-black tracking-tight text-[#241f1a] dark:text-[#f8fafc]">

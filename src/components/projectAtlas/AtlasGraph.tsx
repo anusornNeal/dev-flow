@@ -39,7 +39,7 @@ const NODE_WIDTH = 260;
 const NODE_HEIGHT = 154;
 const MIN_ZOOM = 0.42;
 const MAX_ZOOM = 1.7;
-const MAX_VISIBLE_FOCUSED_EDGES = 12;
+const MAX_VISIBLE_FOCUSED_EDGES = 6;
 
 const EDGE_VISUAL_STYLES: Record<EdgeVisualVariant, EdgeVisualStyle> = {
   direct: {

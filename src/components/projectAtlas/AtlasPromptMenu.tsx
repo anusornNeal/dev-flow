@@ -25,7 +25,7 @@ export function AtlasPromptMenu({ atlas, selectedNode }: AtlasPromptMenuProps) {
   return (
     <div className="relative">
       <button
-        className="h-9 cursor-pointer rounded-xl border border-[#e5d4bb] bg-[#fffdfa] px-3 text-[11px] font-extrabold text-[#6d5a4d] transition hover:border-[#c9872c] hover:bg-[#fff7eb] disabled:cursor-not-allowed disabled:opacity-60 dark:border-[#584a3b] dark:bg-[#1e1914] dark:text-[#f3eadf] dark:hover:bg-[#3a2f26]"
+        className="h-8 cursor-pointer rounded-lg border border-[#e5d4bb] bg-[#fffdfa] px-2.5 text-[11px] font-extrabold text-[#6d5a4d] transition hover:border-[#c9872c] hover:bg-[#fff7eb] disabled:cursor-not-allowed disabled:opacity-60 dark:border-[#584a3b] dark:bg-[#1e1914] dark:text-[#f3eadf] dark:hover:bg-[#3a2f26]"
         type="button"
         disabled={disabled}
         onClick={() => setOpen((current) => !current)}

@@ -128,24 +128,24 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
   return (
     <section className="flex h-full min-h-0 flex-col bg-[#f6efe6] text-[#241f1a] dark:bg-[#050914] dark:text-[#f8fafc]">
       <header className="shrink-0 border-b border-[#d8c3a6] bg-[#fffaf2]/96 shadow-[0_10px_32px_rgba(90,62,26,0.10)] backdrop-blur dark:border-[rgba(148,163,184,0.14)] dark:bg-[#0b1220]/96 dark:shadow-[0_14px_40px_rgba(0,0,0,0.42)]">
-        <div className="flex min-h-[58px] flex-col gap-4 px-4 py-4 xl:flex-row xl:items-center">
-          <div className="flex min-w-0 shrink-0 items-center gap-4">
+        <div className="flex min-h-[58px] flex-col gap-3 px-4 py-2.5 xl:flex-row xl:items-center">
+          <div className="flex min-w-0 shrink-0 items-center gap-3">
             <div>
-              <h1 className="flex items-center gap-2 text-2xl font-black tracking-tight text-[#241f1a] dark:text-[#f8fafc]">
-                <Waypoints size={22} className="text-[#b7741e] dark:text-[#f5a959]" />
+              <h1 className="flex items-center gap-2 text-xl font-black tracking-tight text-[#241f1a] dark:text-[#f8fafc]">
+                <Waypoints size={18} className="text-[#b7741e] dark:text-[#f5a959]" />
                 Project Atlas
               </h1>
-              <p className="mt-1 text-[12px] font-semibold text-[#685547] dark:text-[#cbd5e1]">
+              <p className="mt-0.5 text-[10px] font-semibold text-[#685547] dark:text-[#cbd5e1]">
                 {data?.status === 'ready' ? `${data.atlas.domains.length} domains / ${data.atlas.edges.length} relationships · domain-first overview` : 'Domain-first project intelligence'}
               </p>
             </div>
-            <div className="hidden max-w-[360px] rounded-xl border border-[#d8c3a6] bg-[#fff8ec] px-3 py-2 text-[11px] font-bold leading-relaxed text-[#685547] dark:border-[rgba(148,163,184,0.16)] dark:bg-[#111827] dark:text-[#cbd5e1] md:block">
+            <div className="hidden max-w-[280px] rounded-lg border border-[#d8c3a6] bg-[#fff8ec] px-2.5 py-1.5 text-[10px] font-bold leading-relaxed text-[#685547] dark:border-[rgba(148,163,184,0.16)] dark:bg-[#111827] dark:text-[#cbd5e1] md:block">
               Select a domain card to inspect files, dependencies, and copy AI-ready context.
             </div>
           </div>
 
-          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 xl:justify-end">
-            <span className="hidden rounded-xl border border-[#d8c3a6] bg-[#fff8ec] px-3 py-2 text-[11px] font-black uppercase tracking-wider text-[#9a5b13] dark:border-[rgba(245,169,89,0.18)] dark:bg-[rgba(245,169,89,0.12)] dark:text-[#f5a959] md:inline-flex">
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5 xl:justify-end">
+            <span className="hidden h-8 items-center rounded-lg border border-[#d8c3a6] bg-[#fff8ec] px-2.5 text-[10px] font-black uppercase tracking-wider text-[#9a5b13] dark:border-[rgba(245,169,89,0.18)] dark:bg-[rgba(245,169,89,0.12)] dark:text-[#f5a959] md:inline-flex">
               Readable Map
             </span>
             <div className="flex min-w-0 flex-wrap gap-1.5">
@@ -154,21 +154,21 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
                   key={filter}
                   type="button"
                   onClick={() => handleToggleFilter(filter)}
-                  className={`h-9 cursor-pointer rounded-xl border px-3 text-[11px] font-black uppercase tracking-wider transition ${activeFilters.includes(filter) ? 'border-[#b7741e] bg-[#fff1d7] text-[#8a4d0d] dark:border-[rgba(245,169,89,0.45)] dark:bg-[rgba(245,169,89,0.18)] dark:text-[#f5a959]' : 'border-[#d8c3a6] bg-[#fffaf2] text-[#685547] hover:border-[#b7741e] hover:text-[#241f1a] dark:border-[rgba(148,163,184,0.16)] dark:bg-[#111827] dark:text-[#cbd5e1] dark:hover:text-[#f8fafc]'}`}
+                  className={`h-8 cursor-pointer rounded-lg border px-2.5 text-[10px] font-black uppercase tracking-wider transition ${activeFilters.includes(filter) ? 'border-[#b7741e] bg-[#fff1d7] text-[#8a4d0d] dark:border-[rgba(245,169,89,0.45)] dark:bg-[rgba(245,169,89,0.18)] dark:text-[#f5a959]' : 'border-[#d8c3a6] bg-[#fffaf2] text-[#685547] hover:border-[#b7741e] hover:text-[#241f1a] dark:border-[rgba(148,163,184,0.16)] dark:bg-[#111827] dark:text-[#cbd5e1] dark:hover:text-[#f8fafc]'}`}
                 >
                   {filter}
                 </button>
               ))}
             </div>
-            <button className="h-10 cursor-pointer rounded-xl border border-[#d8c3a6] bg-[#fffaf2] px-3 text-[12px] font-extrabold text-[#4f4035] transition hover:border-[#b7741e] hover:bg-[#fff1d7] disabled:cursor-not-allowed disabled:opacity-60 dark:border-[rgba(148,163,184,0.16)] dark:bg-[#111827] dark:text-[#f8fafc] dark:hover:bg-[rgba(245,169,89,0.12)]" type="button" disabled={!projectId || scanState === 'queued' || scanState === 'running'} onClick={handleManualRescan}>
-              <RefreshCw size={14} className="mr-1 inline" /> Rescan
+            <button className="h-8 cursor-pointer rounded-lg border border-[#d8c3a6] bg-[#fffaf2] px-2.5 text-[11px] font-extrabold text-[#4f4035] transition hover:border-[#b7741e] hover:bg-[#fff1d7] disabled:cursor-not-allowed disabled:opacity-60 dark:border-[rgba(148,163,184,0.16)] dark:bg-[#111827] dark:text-[#f8fafc] dark:hover:bg-[rgba(245,169,89,0.12)]" type="button" disabled={!projectId || scanState === 'queued' || scanState === 'running'} onClick={handleManualRescan}>
+              <RefreshCw size={13} className="mr-1 inline" /> Rescan
             </button>
             <AtlasPromptMenu atlas={data?.atlas ?? null} selectedNode={selectedAtlasNode} />
             <AtlasExportMenu atlas={data?.atlas ?? null} view={exportView} selectedNode={selectedAtlasNode} />
             <AtlasRefreshStatus stale={data?.stale} status={data?.refreshStatus} scanState={scanState} message={data?.message} />
           </div>
         </div>
-        <div className="border-t border-[#ead9c2] bg-[#fff6e8]/88 px-5 py-3 dark:border-[rgba(148,163,184,0.10)] dark:bg-[#07111f]">
+        <div className="border-t border-[#ead9c2] bg-[#fff6e8]/88 px-4 py-2 dark:border-[rgba(148,163,184,0.10)] dark:bg-[#07111f]">
           <AtlasSearchBar query={searchQuery} resultCount={resultCount} onQueryChange={setSearchQuery} />
         </div>
       </header>

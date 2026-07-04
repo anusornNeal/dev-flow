@@ -15,9 +15,9 @@ export function AtlasNodeInspector({ inspector, copied, onCopyContext }: AtlasNo
   const [tab, setTab] = useState<InspectorTab>('info');
 
   return (
-    <aside className="w-full shrink-0 border-t border-[#d8c3a6] bg-[#fffaf2] dark:border-[rgba(148,163,184,0.14)] dark:bg-gradient-to-r dark:from-[#0f1724]/98 dark:to-[#0b1220] lg:w-[420px] lg:border-l lg:border-t-0">
+    <aside className="w-full shrink-0 border-t border-[#d8c3a6] bg-[#fffaf2] dark:border-[rgba(148,163,184,0.14)] dark:bg-gradient-to-r dark:from-[#0f1724]/98 dark:to-[#0b1220] lg:w-[372px] lg:border-l lg:border-t-0">
       <div className="border-b border-[#ead9c2] p-4 dark:border-[rgba(212,165,116,0.10)]">
-        <p className="text-[11px] font-black uppercase tracking-widest text-[#9a5b13] dark:text-[#f5a959]">Inspector</p>
+        <p className="text-[10px] font-black uppercase tracking-widest text-[#9a5b13] dark:text-[#f5a959]">Inspector</p>
         <div className="mt-3 flex rounded-xl border border-[#d8c3a6] bg-[#f2e3cf] p-1 dark:border-[rgba(148,163,184,0.14)] dark:bg-[#111827]">
           <TabButton active={tab === 'info'} icon={<Info size={14} />} label="Info" onClick={() => setTab('info')} />
           <TabButton active={tab === 'files'} icon={<FileCode2 size={14} />} label="Files" onClick={() => setTab('files')} />

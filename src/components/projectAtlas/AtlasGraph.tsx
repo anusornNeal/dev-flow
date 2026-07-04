@@ -9,7 +9,6 @@ interface AtlasGraphProps {
   selectedNodeId: string | null;
   highlightedNodeIds?: string[];
   onSelectNode: (node: AtlasDomainMapNode) => void;
-  onClearSelection?: () => void;
 }
 
 interface Viewport {
@@ -86,7 +85,7 @@ const EDGE_VISUAL_STYLES: Record<EdgeVisualVariant, EdgeVisualStyle> = {
   },
 };
 
-export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = [], onSelectNode, onClearSelection }: AtlasGraphProps) {
+export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = [], onSelectNode }: AtlasGraphProps) {
   const shellRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{ x: number; y: number; viewport: Viewport } | null>(null);
   const positions = useMemo(() => layoutDomainNodes(nodes), [nodes]);
@@ -106,10 +105,6 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
   const canDim = Boolean(selectedNodeId);
   const readableEdges = useMemo(() => selectReadableAtlasEdges(edges, focusSelection, MAX_VISIBLE_FOCUSED_EDGES), [edges, focusSelection]);
   const focusedEdges = readableEdges.visibleEdges;
-  const selectedNode = selectedNodeId ? nodesById.get(selectedNodeId) ?? null : null;
-  const selectedPosition = selectedNodeId ? positions.get(selectedNodeId) ?? null : null;
-  const detailPosition = selectedPosition ? getDrilldownPosition(selectedPosition, bounds) : null;
-
   const updateZoom = (nextZoom: number, anchor?: { x: number; y: number }) => {
     setViewport((current) => {
       const zoom = clamp(nextZoom, MIN_ZOOM, MAX_ZOOM);
@@ -252,15 +247,6 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
             );
           })}
 
-          {selectedNode && detailPosition ? (
-            <DomainDrilldownCard
-              node={selectedNode}
-              position={detailPosition}
-              relationships={readableEdges.relationshipGroups}
-              nodesById={nodesById}
-              onClose={onClearSelection}
-            />
-          ) : null}
         </g>
       </svg>
 

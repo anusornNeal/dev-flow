@@ -28,6 +28,7 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedDomainId, setSelectedDomainId] = useState<string | null>(null);
+  const [drilldownDomainId, setDrilldownDomainId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeFilters, setActiveFilters] = useState<AtlasDomainFilter[]>([]);
   const [copiedContext, setCopiedContext] = useState(false);
@@ -62,6 +63,7 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
     ? buildDomainMapViewModel(data.atlas, { query: searchQuery, activeFilters })
     : null, [data, searchQuery, activeFilters]);
   const inspector = useMemo(() => data?.atlas ? buildDomainInspector(data.atlas, selectedDomainId) : null, [data, selectedDomainId]);
+  const drilldownInspector = useMemo(() => data?.atlas ? buildDomainInspector(data.atlas, drilldownDomainId) : null, [data, drilldownDomainId]);
   const selectedAtlasNode = useMemo(() => {
     if (!data?.atlas || !selectedDomainId) return null;
     const existing = data.atlas.nodes.find((node) => node.id === selectedDomainId);
@@ -86,6 +88,10 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
 
   const handleToggleFilter = (filter: AtlasDomainFilter) => {
     setActiveFilters((current) => current.includes(filter) ? current.filter((item) => item !== filter) : [...current, filter]);
+  };
+
+  const handleSelectDomain = (domainId: string) => {
+    setSelectedDomainId((current) => current === domainId ? null : domainId);
   };
 
   const handleCopyContext = async () => {
@@ -125,7 +131,7 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
 
   const hasNoResults = !loading && !error && data?.status === 'ready' && domainView && domainView.nodes.length === 0;
   const resultCount = domainView?.matchedNodeIds.length ?? 0;
-  const isDrilldownMode = Boolean(selectedDomainId && inspector);
+  const isDrilldownMode = Boolean(drilldownDomainId && drilldownInspector);
 
   return (
     <section className="flex h-full min-h-0 flex-col bg-[#f6efe6] text-[#241f1a] dark:bg-[#17130f] dark:text-[#f3eadf]">
@@ -183,21 +189,21 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
             <AtlasCenteredMessage title="No Atlas generated yet" body="Run Manual Rescan when the scanner workflow is ready for this project." />
           )}
           {hasNoResults && <AtlasCenteredMessage title="No matching domains" body="Clear search or filters to return to the full domain map." />}
-          {!loading && !error && data?.status === 'ready' && isDrilldownMode && inspector && (
-            <AtlasDomainDrilldown inspector={inspector} onBack={() => setSelectedDomainId(null)} />
+          {!loading && !error && data?.status === 'ready' && isDrilldownMode && drilldownInspector && (
+            <AtlasDomainDrilldown inspector={drilldownInspector} onBack={() => setDrilldownDomainId(null)} />
           )}
           {!loading && !error && data?.status === 'ready' && !isDrilldownMode && domainView && domainView.nodes.length > 0 && (
             <AtlasGraph
               nodes={domainView.nodes}
               edges={domainView.edges}
-              selectedNodeId={null}
+              selectedNodeId={selectedDomainId}
               highlightedNodeIds={domainView.matchedNodeIds}
-              onSelectNode={(node) => setSelectedDomainId(node.id)}
+              onSelectNode={(node) => handleSelectDomain(node.id)}
             />
           )}
         </main>
 
-        {!isDrilldownMode ? <AtlasNodeInspector inspector={inspector} copied={copiedContext} onCopyContext={handleCopyContext} /> : null}
+        {!isDrilldownMode ? <AtlasNodeInspector inspector={inspector} copied={copiedContext} onCopyContext={handleCopyContext} onOpenDetail={selectedDomainId ? () => setDrilldownDomainId(selectedDomainId) : undefined} /> : null}
       </div>
     </section>
   );

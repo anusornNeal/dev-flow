@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Activity, RefreshCw, Waypoints } from 'lucide-react';
 import type { AtlasNode, ProjectAtlasUiResponse } from '../types.js';
 import { AtlasGraph } from './projectAtlas/AtlasGraph.js';
+import { AtlasDomainDrilldown } from './projectAtlas/AtlasDomainDrilldown.js';
 import { AtlasExportMenu } from './projectAtlas/AtlasExportMenu.js';
 import { AtlasPromptMenu } from './projectAtlas/AtlasPromptMenu.js';
 import { AtlasNodeInspector } from './projectAtlas/AtlasNodeInspector.js';
@@ -27,6 +28,7 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedDomainId, setSelectedDomainId] = useState<string | null>(null);
+  const [drilldownDomainId, setDrilldownDomainId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeFilters, setActiveFilters] = useState<AtlasDomainFilter[]>([]);
   const [copiedContext, setCopiedContext] = useState(false);
@@ -61,6 +63,7 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
     ? buildDomainMapViewModel(data.atlas, { query: searchQuery, activeFilters })
     : null, [data, searchQuery, activeFilters]);
   const inspector = useMemo(() => data?.atlas ? buildDomainInspector(data.atlas, selectedDomainId) : null, [data, selectedDomainId]);
+  const drilldownInspector = useMemo(() => data?.atlas ? buildDomainInspector(data.atlas, drilldownDomainId) : null, [data, drilldownDomainId]);
   const selectedAtlasNode = useMemo(() => {
     if (!data?.atlas || !selectedDomainId) return null;
     const existing = data.atlas.nodes.find((node) => node.id === selectedDomainId);
@@ -87,6 +90,10 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
     setActiveFilters((current) => current.includes(filter) ? current.filter((item) => item !== filter) : [...current, filter]);
   };
 
+  const handleSelectDomain = (domainId: string) => {
+    setSelectedDomainId((current) => current === domainId ? null : domainId);
+  };
+
   const handleCopyContext = async () => {
     if (!data?.atlas || !selectedDomainId) return;
     const nodeContext = buildNodeContext(data.atlas, selectedDomainId);
@@ -94,7 +101,7 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
       ? [
           `Domain: ${inspector.name}`,
           `Status: ${inspector.status}`,
-          `Summary: ${inspector.description}`,
+          `Summary: ${inspector.plainSummary}`,
           `Metrics: ${inspector.metrics.files} files, ${inspector.metrics.nodes} nodes, ${inspector.metrics.dependencies} dependencies`,
           inspector.technologies.length ? `Technologies: ${inspector.technologies.join(', ')}` : undefined,
           inspector.files.length ? `Files:\n${inspector.files.map((file) => `- ${file.path}`).join('\n')}` : undefined,
@@ -124,47 +131,53 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
 
   const hasNoResults = !loading && !error && data?.status === 'ready' && domainView && domainView.nodes.length === 0;
   const resultCount = domainView?.matchedNodeIds.length ?? 0;
+  const isDrilldownMode = Boolean(drilldownDomainId && drilldownInspector);
 
   return (
-    <section className="flex h-full min-h-0 flex-col bg-[#fbf4ea] text-[#3f342b] dark:bg-[#18120d] dark:text-[#f3eadf]">
-      <header className="border-b border-[#e5d4bb] bg-[#fffdfa]/95 px-4 py-2.5 dark:border-[#584a3b] dark:bg-[#241c15]/95">
-        <div className="flex flex-col gap-3 2xl:flex-row 2xl:items-center 2xl:justify-between">
-          <div className="flex min-w-0 items-center gap-4">
+    <section className="flex h-full min-h-0 flex-col bg-[#f6efe6] text-[#241f1a] dark:bg-[#17130f] dark:text-[#f3eadf]">
+      <header className="relative z-[120] shrink-0 border-b border-[#d8c3a6] bg-[#fffaf2]/96 shadow-[0_10px_32px_rgba(90,62,26,0.10)] backdrop-blur dark:border-[#584a3b]/50 dark:bg-[#292119]/96 dark:shadow-[0_14px_40px_rgba(0,0,0,0.42)]">
+        <div className="flex min-h-[58px] flex-col gap-3 px-4 py-2.5 xl:flex-row xl:items-center">
+          <div className="flex min-w-0 shrink-0 items-center gap-3">
             <div>
-              <h1 className="flex items-center gap-2 text-lg font-black text-[#3f342b] dark:text-[#f8ead3]">
-                <Waypoints size={20} className="text-[#c9872c] dark:text-[#e0a070]" />
+              <h1 className="flex items-center gap-2 text-xl font-black tracking-tight text-[#241f1a] dark:text-[#f3eadf]">
+                <Waypoints size={18} className="text-[#b7741e] dark:text-[#f5a959]" />
                 Project Atlas
               </h1>
-              <p className="mt-0.5 text-[11px] font-mono font-bold text-[#9a6a21] dark:text-[#d6b56d]">
-                {data?.status === 'ready' ? `${data.atlas.domains.length} domains · ${data.atlas.edges.length} relationships` : 'Domain-first project intelligence'}
+              <p className="mt-0.5 text-[10px] font-semibold text-[#685547] dark:text-[#d8c5aa]">
+                {data?.status === 'ready' ? `${data.atlas.domains.length} domains / ${data.atlas.edges.length} relationships · domain-first overview` : 'Domain-first project intelligence'}
               </p>
             </div>
-            <span className="hidden rounded-lg border border-[#e5d4bb] bg-[#fff7eb] px-3 py-1.5 text-[11px] font-black text-[#9a5b13] dark:border-[#584a3b] dark:bg-[#1e1914] dark:text-[#f7d28a] md:inline-flex">
-              Domain map
-            </span>
+            <div className="hidden max-w-[280px] rounded-lg border border-[#d8c3a6] bg-[#fff8ec] px-2.5 py-1.5 text-[10px] font-bold leading-relaxed text-[#685547] dark:border-[#584a3b]/60 dark:bg-[#292119] dark:text-[#d8c5aa] md:block">
+              Select a domain card to inspect files, dependencies, and copy AI-ready context.
+            </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <AtlasSearchBar query={searchQuery} resultCount={resultCount} onQueryChange={setSearchQuery} />
-            <div className="flex flex-wrap gap-1.5">
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5 xl:justify-end">
+            <span className="hidden h-8 items-center rounded-lg border border-[#d8c3a6] bg-[#fff8ec] px-2.5 text-[10px] font-black uppercase tracking-wider text-[#9a5b13] dark:border-[rgba(245,169,89,0.18)] dark:bg-[rgba(245,169,89,0.12)] dark:text-[#f5a959] md:inline-flex">
+              Readable Map
+            </span>
+            <div className="flex min-w-0 flex-wrap gap-1.5">
               {FILTERS.map((filter) => (
                 <button
                   key={filter}
                   type="button"
                   onClick={() => handleToggleFilter(filter)}
-                  className={`h-8 cursor-pointer rounded-lg border px-2.5 text-[10px] font-black transition ${activeFilters.includes(filter) ? 'border-[#c9872c] bg-[#fff1d7] text-[#8a4d0d] dark:border-[#e0a070] dark:bg-[#3a2f26] dark:text-[#f7d28a]' : 'border-[#e5d4bb] bg-[#fffdfa] text-[#7b6554] hover:border-[#c9872c] hover:text-[#3f342b] dark:border-[#584a3b] dark:bg-[#1e1914] dark:text-[#d8c5aa] dark:hover:text-[#f8ead3]'}`}
+                  className={`h-8 cursor-pointer rounded-lg border px-2.5 text-[10px] font-black uppercase tracking-wider transition ${activeFilters.includes(filter) ? 'border-[#b7741e] bg-[#fff1d7] text-[#8a4d0d] dark:border-[rgba(245,169,89,0.45)] dark:bg-[rgba(245,169,89,0.18)] dark:text-[#f5a959]' : 'border-[#d8c3a6] bg-[#fffaf2] text-[#685547] hover:border-[#b7741e] hover:text-[#241f1a] dark:border-[#584a3b]/60 dark:bg-[#292119] dark:text-[#d8c5aa] dark:hover:text-[#f8fafc]'}`}
                 >
                   {filter}
                 </button>
               ))}
             </div>
-            <button className="h-9 cursor-pointer rounded-lg border border-[#e5d4bb] bg-[#fffdfa] px-3 text-[11px] font-extrabold text-[#5c493c] transition hover:border-[#c9872c] hover:bg-[#fff7eb] disabled:cursor-not-allowed disabled:opacity-60 dark:border-[#584a3b] dark:bg-[#1e1914] dark:text-[#f3eadf] dark:hover:bg-[#3a2f26]" type="button" disabled={!projectId || scanState === 'queued' || scanState === 'running'} onClick={handleManualRescan}>
-              <RefreshCw size={14} className="mr-1 inline" /> Rescan
+            <button className="h-8 cursor-pointer rounded-lg border border-[#d8c3a6] bg-[#fffaf2] px-2.5 text-[11px] font-extrabold text-[#4f4035] transition hover:border-[#b7741e] hover:bg-[#fff1d7] disabled:cursor-not-allowed disabled:opacity-60 dark:border-[#584a3b]/60 dark:bg-[#292119] dark:text-[#f3eadf] dark:hover:bg-[rgba(245,169,89,0.12)]" type="button" disabled={!projectId || scanState === 'queued' || scanState === 'running'} onClick={handleManualRescan}>
+              <RefreshCw size={13} className="mr-1 inline" /> Rescan
             </button>
             <AtlasPromptMenu atlas={data?.atlas ?? null} selectedNode={selectedAtlasNode} />
             <AtlasExportMenu atlas={data?.atlas ?? null} view={exportView} selectedNode={selectedAtlasNode} />
             <AtlasRefreshStatus stale={data?.stale} status={data?.refreshStatus} scanState={scanState} message={data?.message} />
           </div>
+        </div>
+        <div className="border-t border-[#ead9c2] bg-[#fff6e8]/88 px-4 py-2 dark:border-[#584a3b]/40 dark:bg-[#1e1914]">
+          <AtlasSearchBar query={searchQuery} resultCount={resultCount} onQueryChange={setSearchQuery} />
         </div>
       </header>
 
@@ -176,18 +189,21 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
             <AtlasCenteredMessage title="No Atlas generated yet" body="Run Manual Rescan when the scanner workflow is ready for this project." />
           )}
           {hasNoResults && <AtlasCenteredMessage title="No matching domains" body="Clear search or filters to return to the full domain map." />}
-          {!loading && !error && data?.status === 'ready' && domainView && domainView.nodes.length > 0 && (
+          {!loading && !error && data?.status === 'ready' && isDrilldownMode && drilldownInspector && (
+            <AtlasDomainDrilldown inspector={drilldownInspector} onBack={() => setDrilldownDomainId(null)} />
+          )}
+          {!loading && !error && data?.status === 'ready' && !isDrilldownMode && domainView && domainView.nodes.length > 0 && (
             <AtlasGraph
               nodes={domainView.nodes}
               edges={domainView.edges}
               selectedNodeId={selectedDomainId}
               highlightedNodeIds={domainView.matchedNodeIds}
-              onSelectNode={(node) => setSelectedDomainId(node.id)}
+              onSelectNode={(node) => handleSelectDomain(node.id)}
             />
           )}
         </main>
 
-        <AtlasNodeInspector inspector={inspector} copied={copiedContext} onCopyContext={handleCopyContext} />
+        {!isDrilldownMode ? <AtlasNodeInspector inspector={inspector} copied={copiedContext} onCopyContext={handleCopyContext} onOpenDetail={selectedDomainId ? () => setDrilldownDomainId(selectedDomainId) : undefined} /> : null}
       </div>
     </section>
   );
@@ -195,11 +211,11 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
 
 function AtlasCenteredMessage({ title, body }: { title: string; body: string }) {
   return (
-    <div className="flex h-full min-h-[520px] items-center justify-center bg-[#fbf4ea] p-8 dark:bg-[#18120d]">
-      <div className="max-w-sm rounded-lg border border-[#e5d4bb] bg-[#fffdfa] p-5 text-center shadow-xl dark:border-[#584a3b] dark:bg-[#241c15]">
-        <Activity size={24} className="mx-auto text-[#c9872c] dark:text-[#f0b84d]" />
-        <h2 className="mt-3 text-sm font-extrabold text-[#3f342b] dark:text-[#f8ead3]">{title}</h2>
-        <p className="mt-2 text-[11px] font-mono leading-relaxed text-[#7b6554] dark:text-[#d8c5aa]">{body}</p>
+    <div className="flex h-full min-h-[560px] items-center justify-center bg-[#f6efe6] p-8 dark:bg-[#17130f]">
+      <div className="max-w-sm rounded-2xl border border-[#d8c3a6] bg-[#fffaf2] p-6 text-center shadow-xl dark:border-[#584a3b]/60 dark:bg-[#1e1914]">
+        <Activity size={24} className="mx-auto text-[#b7741e] dark:text-[#d4a574]" />
+        <h2 className="mt-3 text-base font-extrabold text-[#241f1a] dark:text-[#f8fafc]">{title}</h2>
+        <p className="mt-2 text-[12px] font-medium leading-relaxed text-[#685547] dark:text-[#d8c5aa]">{body}</p>
       </div>
     </div>
   );

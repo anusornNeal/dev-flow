@@ -124,3 +124,40 @@ test('buildDomainInspector derives info and files for a selected domain', () => 
   assert.equal(inspector?.files.length, 2);
   assert.equal(inspector?.health, 'unknown');
 });
+
+test('buildDomainInspector ranks start-here files before supporting files', () => {
+  const inspector = buildDomainInspector(atlas, 'domain:ui-components');
+
+  assert.deepEqual(inspector?.startHereFiles.map((file: any) => file.path), [
+    'src/components/App.tsx',
+    'src/components/App.css',
+  ]);
+  assert.equal(inspector?.plainSummary, 'React screens and shared UI composition.');
+});
+
+test('buildDomainInspector separates domains this domain depends on from domains that use it', () => {
+  const uiInspector = buildDomainInspector(atlas, 'domain:ui-components');
+  const testsInspector = buildDomainInspector(atlas, 'domain:tests');
+
+  assert.deepEqual(uiInspector?.incomingDomains.map((domain: any) => domain.name), ['Tests']);
+  assert.deepEqual(uiInspector?.outgoingDomains.map((domain: any) => domain.name), []);
+  assert.deepEqual(testsInspector?.incomingDomains.map((domain: any) => domain.name), []);
+  assert.deepEqual(testsInspector?.outgoingDomains.map((domain: any) => domain.name), ['UI Components']);
+});
+
+test('buildDomainInspector handles empty domains with readable defaults', () => {
+  const emptyAtlas = {
+    ...atlas,
+    domains: [
+      ...atlas.domains,
+      { id: 'domain:empty', name: 'Empty Area', nodeIds: [], origin: 'manual', summary: undefined },
+    ],
+  };
+
+  const inspector = buildDomainInspector(emptyAtlas, 'domain:empty');
+
+  assert.equal(inspector?.plainSummary, 'Empty Area domain with 0 related Atlas items.');
+  assert.deepEqual(inspector?.startHereFiles, []);
+  assert.deepEqual(inspector?.incomingDomains, []);
+  assert.deepEqual(inspector?.outgoingDomains, []);
+});

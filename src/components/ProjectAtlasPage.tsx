@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Activity, RefreshCw, Waypoints } from 'lucide-react';
 import type { AtlasNode, ProjectAtlasUiResponse } from '../types.js';
 import { AtlasGraph } from './projectAtlas/AtlasGraph.js';
+import { AtlasDomainDrilldown } from './projectAtlas/AtlasDomainDrilldown.js';
 import { AtlasExportMenu } from './projectAtlas/AtlasExportMenu.js';
 import { AtlasPromptMenu } from './projectAtlas/AtlasPromptMenu.js';
 import { AtlasNodeInspector } from './projectAtlas/AtlasNodeInspector.js';
@@ -124,6 +125,7 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
 
   const hasNoResults = !loading && !error && data?.status === 'ready' && domainView && domainView.nodes.length === 0;
   const resultCount = domainView?.matchedNodeIds.length ?? 0;
+  const isDrilldownMode = Boolean(selectedDomainId && inspector);
 
   return (
     <section className="flex h-full min-h-0 flex-col bg-[#f6efe6] text-[#241f1a] dark:bg-[#050914] dark:text-[#f8fafc]">
@@ -181,19 +183,21 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
             <AtlasCenteredMessage title="No Atlas generated yet" body="Run Manual Rescan when the scanner workflow is ready for this project." />
           )}
           {hasNoResults && <AtlasCenteredMessage title="No matching domains" body="Clear search or filters to return to the full domain map." />}
-          {!loading && !error && data?.status === 'ready' && domainView && domainView.nodes.length > 0 && (
+          {!loading && !error && data?.status === 'ready' && isDrilldownMode && inspector && (
+            <AtlasDomainDrilldown inspector={inspector} onBack={() => setSelectedDomainId(null)} />
+          )}
+          {!loading && !error && data?.status === 'ready' && !isDrilldownMode && domainView && domainView.nodes.length > 0 && (
             <AtlasGraph
               nodes={domainView.nodes}
               edges={domainView.edges}
-              selectedNodeId={selectedDomainId}
+              selectedNodeId={null}
               highlightedNodeIds={domainView.matchedNodeIds}
               onSelectNode={(node) => setSelectedDomainId(node.id)}
-              onClearSelection={() => setSelectedDomainId(null)}
             />
           )}
         </main>
 
-        <AtlasNodeInspector inspector={inspector} copied={copiedContext} onCopyContext={handleCopyContext} />
+        {!isDrilldownMode ? <AtlasNodeInspector inspector={inspector} copied={copiedContext} onCopyContext={handleCopyContext} /> : null}
       </div>
     </section>
   );

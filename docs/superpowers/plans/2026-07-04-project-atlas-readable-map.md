@@ -71,7 +71,7 @@ test('buildDomainInspector handles empty domains with readable defaults', () => 
 Run:
 
 ```bash
-tsx tests/server/projectAtlasViewModel.test.ts
+npx tsx tests/server/projectAtlasViewModel.test.ts
 ```
 
 Expected: FAIL because `startHereFiles`, `plainSummary`, `incomingDomains`, and `outgoingDomains` do not exist yet.
@@ -220,7 +220,7 @@ function startHereScore(file: AtlasDomainFile) {
 Run:
 
 ```bash
-tsx tests/server/projectAtlasViewModel.test.ts
+npx tsx tests/server/projectAtlasViewModel.test.ts
 ```
 
 Expected: PASS.
@@ -478,7 +478,7 @@ git commit -m "ui: clarify atlas focus mode"
 Run:
 
 ```bash
-tsx tests/server/projectAtlasViewModel.test.ts
+npx tsx tests/server/projectAtlasViewModel.test.ts
 ```
 
 Expected: PASS.

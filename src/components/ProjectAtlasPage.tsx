@@ -188,6 +188,7 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
               selectedNodeId={selectedDomainId}
               highlightedNodeIds={domainView.matchedNodeIds}
               onSelectNode={(node) => setSelectedDomainId(node.id)}
+              onClearSelection={() => setSelectedDomainId(null)}
             />
           )}
         </main>

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type React from 'react';
-import { Box, Code2, Database, FileText, Focus, Minus, Network, Plus, RotateCcw, Server } from 'lucide-react';
+import { Box, Code2, Database, FileText, Focus, Minus, Network, Plus, RotateCcw, Server, X } from 'lucide-react';
 import type { AtlasDomainFilter, AtlasDomainMapEdge, AtlasDomainMapNode } from '../../lib/projectAtlasViewModel.js';
 
 interface AtlasGraphProps {
@@ -9,6 +9,7 @@ interface AtlasGraphProps {
   selectedNodeId: string | null;
   highlightedNodeIds?: string[];
   onSelectNode: (node: AtlasDomainMapNode) => void;
+  onClearSelection?: () => void;
 }
 
 interface Viewport {
@@ -40,6 +41,9 @@ const NODE_HEIGHT = 170;
 const MIN_ZOOM = 0.38;
 const MAX_ZOOM = 1.72;
 const MAX_VISIBLE_FOCUSED_EDGES = 4;
+const DETAIL_WIDTH = 360;
+const DETAIL_HEIGHT = 292;
+const DETAIL_GAP = 26;
 
 const EDGE_VISUAL_STYLES: Record<EdgeVisualVariant, EdgeVisualStyle> = {
   direct: {
@@ -82,7 +86,7 @@ const EDGE_VISUAL_STYLES: Record<EdgeVisualVariant, EdgeVisualStyle> = {
   },
 };
 
-export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = [], onSelectNode }: AtlasGraphProps) {
+export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = [], onSelectNode, onClearSelection }: AtlasGraphProps) {
   const shellRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{ x: number; y: number; viewport: Viewport } | null>(null);
   const positions = useMemo(() => layoutDomainNodes(nodes), [nodes]);
@@ -102,6 +106,9 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
   const canDim = Boolean(selectedNodeId);
   const readableEdges = useMemo(() => selectReadableAtlasEdges(edges, focusSelection, MAX_VISIBLE_FOCUSED_EDGES), [edges, focusSelection]);
   const focusedEdges = readableEdges.visibleEdges;
+  const selectedNode = selectedNodeId ? nodesById.get(selectedNodeId) ?? null : null;
+  const selectedPosition = selectedNodeId ? positions.get(selectedNodeId) ?? null : null;
+  const detailPosition = selectedPosition ? getDrilldownPosition(selectedPosition, bounds) : null;
 
   const updateZoom = (nextZoom: number, anchor?: { x: number; y: number }) => {
     setViewport((current) => {
@@ -244,6 +251,16 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
               </foreignObject>
             );
           })}
+
+          {selectedNode && detailPosition ? (
+            <DomainDrilldownCard
+              node={selectedNode}
+              position={detailPosition}
+              relationships={readableEdges.relationshipGroups}
+              nodesById={nodesById}
+              onClose={onClearSelection}
+            />
+          ) : null}
         </g>
       </svg>
 
@@ -258,13 +275,85 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
         {nodes.length} domains / {edges.length} relationships / {focusSelection ? `showing ${focusedEdges.length} focused links` : 'select a domain to show links'}
       </div>
 
-      <RelationshipFocusNote
-        relationshipGroups={readableEdges.relationshipGroups}
-        focusSelection={focusSelection}
-        hiddenFocusedEdgeCount={readableEdges.hiddenFocusedEdgeCount}
-        nodesById={nodesById}
-      />
+      {!selectedNode ? (
+        <RelationshipFocusNote
+          relationshipGroups={readableEdges.relationshipGroups}
+          focusSelection={focusSelection}
+          hiddenFocusedEdgeCount={readableEdges.hiddenFocusedEdgeCount}
+          nodesById={nodesById}
+        />
+      ) : null}
     </div>
+  );
+}
+
+function DomainDrilldownCard({
+  node,
+  position,
+  relationships,
+  nodesById,
+  onClose,
+}: {
+  node: AtlasDomainMapNode;
+  position: Point;
+  relationships: Array<{ id: string; source: string; target: string; kind: string; label: string; rawRelationshipCount: number }>;
+  nodesById: Map<string, AtlasDomainMapNode>;
+  onClose?: () => void;
+}) {
+  const visibleFiles = node.files.slice(0, 4);
+  const visibleRelationships = relationships.slice(0, 3);
+
+  return (
+    <foreignObject x={position.x} y={position.y} width={DETAIL_WIDTH} height={DETAIL_HEIGHT}>
+      <div
+        data-domain-detail
+        className="h-full overflow-hidden rounded-2xl border border-[#d8c3a6] bg-[#fffaf2]/98 p-4 text-left text-[#241f1a] shadow-[0_24px_60px_rgba(90,62,26,0.24)] backdrop-blur dark:border-[rgba(245,169,89,0.22)] dark:bg-[#0f1724]/98 dark:text-[#f8fafc]"
+        onPointerDown={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[10px] font-black uppercase tracking-widest text-[#9a5b13] dark:text-[#f5a959]">Inside this domain</p>
+            <h3 className="mt-1 truncate text-[18px] font-black leading-6">{node.title}</h3>
+            <p className="mt-1 line-clamp-2 text-[11px] font-semibold leading-5 text-[#685547] dark:text-[#cbd5e1]">{node.description}</p>
+          </div>
+          {onClose ? (
+            <button type="button" aria-label="Close domain details" onClick={onClose} className="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-[#ead9c2] bg-[#fff8ec] text-[#8a4d0d] hover:bg-[#fff1d7] dark:border-[rgba(148,163,184,0.16)] dark:bg-[#0b1220] dark:text-[#f5a959]">
+              <X size={13} />
+            </button>
+          ) : null}
+        </div>
+
+        <div className="mt-3 grid grid-cols-4 gap-1.5 text-center">
+          <Metric label="Files" value={node.metrics.files} />
+          <Metric label="Nodes" value={node.metrics.nodes} />
+          <Metric label="Deps" value={node.metrics.dependencies} />
+          <Metric label="Types" value={node.metrics.types} />
+        </div>
+
+        <div className="mt-3 grid grid-cols-2 gap-3">
+          <div>
+            <p className="text-[10px] font-black uppercase tracking-widest text-[#9a5b13] dark:text-[#f5a959]">Start files</p>
+            <div className="mt-1.5 space-y-1.5">
+              {visibleFiles.length ? visibleFiles.map((file) => (
+                <p key={file.id} className="truncate rounded-md border border-[#ead9c2] bg-[#fff8ec] px-2 py-1 text-[10px] font-bold text-[#5c493c] dark:border-[rgba(148,163,184,0.12)] dark:bg-[#0b1220] dark:text-[#dbeafe]" title={file.path}>{file.path}</p>
+              )) : <p className="text-[10px] font-semibold text-[#8a6d55] dark:text-[#94a3b8]">No files mapped yet.</p>}
+            </div>
+          </div>
+          <div>
+            <p className="text-[10px] font-black uppercase tracking-widest text-[#9a5b13] dark:text-[#f5a959]">Relationships</p>
+            <div className="mt-1.5 space-y-1.5">
+              {visibleRelationships.length ? visibleRelationships.map((group) => {
+                const source = nodesById.get(group.source)?.title ?? group.source;
+                const target = nodesById.get(group.target)?.title ?? group.target;
+                return <p key={group.id} className="truncate rounded-md border border-[#ead9c2] bg-[#fff8ec] px-2 py-1 text-[10px] font-bold text-[#5c493c] dark:border-[rgba(148,163,184,0.12)] dark:bg-[#0b1220] dark:text-[#dbeafe]" title={`${source} -> ${target}`}>{source} {'→'} {target}</p>;
+              }) : <p className="text-[10px] font-semibold text-[#8a6d55] dark:text-[#94a3b8]">No direct focus links.</p>}
+            </div>
+          </div>
+        </div>
+
+        {node.technologies.length ? <p className="mt-3 truncate text-[10px] font-bold text-[#7b6554] dark:text-[#94a3b8]">Tech: {node.technologies.slice(0, 5).join(', ')}</p> : null}
+      </div>
+    </foreignObject>
   );
 }
 
@@ -454,6 +543,12 @@ function categoryGroupLabel(category: AtlasDomainFilter) {
   if (category === 'CONFIG') return 'Config';
   if (category === 'DOMAIN') return 'Domain Logic';
   return 'Code';
+}
+
+function getDrilldownPosition(position: Point, bounds: { x: number; y: number; width: number; height: number }): Point {
+  const rightX = position.x + NODE_WIDTH + DETAIL_GAP;
+  const leftX = position.x - DETAIL_WIDTH - DETAIL_GAP;
+  return { x: rightX + DETAIL_WIDTH <= bounds.x + bounds.width + 24 ? rightX : Math.max(bounds.x, leftX), y: Math.max(bounds.y, position.y - 10) };
 }
 
 function stableHash(value: string) {

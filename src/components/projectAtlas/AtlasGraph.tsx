@@ -39,7 +39,7 @@ const NODE_WIDTH = 284;
 const NODE_HEIGHT = 170;
 const MIN_ZOOM = 0.38;
 const MAX_ZOOM = 1.72;
-const MAX_VISIBLE_FOCUSED_EDGES = 6;
+const MAX_VISIBLE_FOCUSED_EDGES = 4;
 
 const EDGE_VISUAL_STYLES: Record<EdgeVisualVariant, EdgeVisualStyle> = {
   direct: {
@@ -47,8 +47,8 @@ const EDGE_VISUAL_STYLES: Record<EdgeVisualVariant, EdgeVisualStyle> = {
     label: 'Direct dependency',
     description: 'imports, calls, routes, reads, writes',
     stroke: '#8f5d2a',
-    baseWidth: 1.25,
-    focusWidth: 2.35,
+    baseWidth: 1,
+    focusWidth: 1.65,
   },
   soft: {
     variant: 'soft',
@@ -57,8 +57,8 @@ const EDGE_VISUAL_STYLES: Record<EdgeVisualVariant, EdgeVisualStyle> = {
     stroke: '#b7741e',
     dashArray: '12 8',
     strokeLinecap: 'butt',
-    baseWidth: 1.35,
-    focusWidth: 2.2,
+    baseWidth: 1,
+    focusWidth: 1.55,
   },
   reference: {
     variant: 'reference',
@@ -67,8 +67,8 @@ const EDGE_VISUAL_STYLES: Record<EdgeVisualVariant, EdgeVisualStyle> = {
     stroke: '#c9872c',
     dashArray: '1 8',
     strokeLinecap: 'round',
-    baseWidth: 1.7,
-    focusWidth: 2.25,
+    baseWidth: 1.1,
+    focusWidth: 1.55,
   },
   test: {
     variant: 'test',
@@ -77,8 +77,8 @@ const EDGE_VISUAL_STYLES: Record<EdgeVisualVariant, EdgeVisualStyle> = {
     stroke: '#7f6a4f',
     dashArray: '7 4 2 4',
     strokeLinecap: 'butt',
-    baseWidth: 1.45,
-    focusWidth: 2.15,
+    baseWidth: 1,
+    focusWidth: 1.5,
   },
 };
 
@@ -120,7 +120,7 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
   return (
     <div ref={shellRef} className="relative h-full min-h-[680px] overflow-hidden bg-[#f6efe6] dark:bg-[#050914]">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_30%_16%,rgba(245,169,89,0.18),transparent_32%),linear-gradient(135deg,rgba(255,255,255,0.44),transparent_42%)] opacity-90 dark:bg-[radial-gradient(circle_at_28%_18%,rgba(245,169,89,0.16),transparent_34%),radial-gradient(circle_at_74%_48%,rgba(59,130,246,0.10),transparent_38%)]" />
-      <div className="pointer-events-none absolute inset-0 opacity-60 [background-image:linear-gradient(rgba(154,91,19,0.07)_1px,transparent_1px),linear-gradient(90deg,rgba(154,91,19,0.07)_1px,transparent_1px)] [background-size:34px_34px] dark:opacity-35 dark:[background-image:linear-gradient(rgba(148,163,184,0.12)_1px,transparent_1px),linear-gradient(90deg,rgba(148,163,184,0.12)_1px,transparent_1px)]" />
+      <div className="pointer-events-none absolute inset-0 opacity-35 [background-image:linear-gradient(rgba(154,91,19,0.07)_1px,transparent_1px),linear-gradient(90deg,rgba(154,91,19,0.07)_1px,transparent_1px)] [background-size:34px_34px] dark:opacity-25 dark:[background-image:linear-gradient(rgba(148,163,184,0.12)_1px,transparent_1px),linear-gradient(90deg,rgba(148,163,184,0.12)_1px,transparent_1px)]" />
       <svg
         className="relative h-full w-full cursor-grab active:cursor-grabbing"
         role="img"
@@ -166,7 +166,7 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
             const directlyRelated = Boolean(focusSelection && (edge.source === focusSelection || edge.target === focusSelection));
             const visualStyle = edgeVisualStyle(edge);
             const path = simpleFocusedEdgePath(edge, source, target);
-            const edgeOpacity = focusSelection && directlyRelated ? 0.82 : 0;
+            const edgeOpacity = focusSelection && directlyRelated ? 0.52 : 0;
             const edgeWidth = focusSelection && directlyRelated ? visualStyle.focusWidth : visualStyle.baseWidth;
             return (
               <g key={edge.id} opacity={edgeOpacity} pointerEvents="none">
@@ -174,8 +174,9 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
                   d={path}
                   fill="none"
                   className="stroke-[#f6efe6] dark:stroke-[#050914]"
-                  strokeWidth={edgeWidth + 6}
+                  strokeWidth={edgeWidth + 3}
                   strokeLinecap="round"
+                  opacity={0.55}
                 />
                 <path
                   d={path}
@@ -183,7 +184,8 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
                   stroke={visualStyle.stroke}
                   strokeWidth={edgeWidth}
                   strokeDasharray={visualStyle.dashArray}
-                  strokeLinecap="round"
+                  strokeLinecap={visualStyle.strokeLinecap ?? 'round'}
+                  opacity={0.78}
                 />
               </g>
             );

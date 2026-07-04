@@ -137,8 +137,9 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
   };
 
   return (
-    <div ref={shellRef} className="relative h-full min-h-[620px] overflow-hidden bg-[#f7eddf] dark:bg-[#18120d]">
-      <div className="pointer-events-none absolute inset-0 opacity-70 [background-image:radial-gradient(circle_at_1px_1px,rgba(154,91,19,0.18)_1px,transparent_0)] [background-size:22px_22px] dark:[background-image:radial-gradient(circle_at_1px_1px,rgba(224,160,112,0.20)_1px,transparent_0)]" />
+    <div ref={shellRef} className="relative h-full min-h-[620px] overflow-hidden bg-[#f8efe2] dark:bg-[#0a0a0a]">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_38%_25%,rgba(212,165,116,0.16),transparent_34%)] opacity-80 dark:bg-[radial-gradient(circle_at_38%_25%,rgba(212,165,116,0.10),transparent_36%)]" />
+      <div className="pointer-events-none absolute inset-0 opacity-70 [background-image:radial-gradient(circle_at_1px_1px,rgba(154,91,19,0.16)_1px,transparent_0)] [background-size:18px_18px] dark:opacity-50 dark:[background-image:radial-gradient(circle_at_1px_1px,rgba(212,165,116,0.18)_1px,transparent_0)]" />
       <svg
         className="relative h-full w-full cursor-grab active:cursor-grabbing"
         role="img"
@@ -191,7 +192,7 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
                 <path
                   d={route.path}
                   fill="none"
-                  className="stroke-[#f7eddf] dark:stroke-[#18120d]"
+                  className="stroke-[#f8efe2] dark:stroke-[#0a0a0a]"
                   strokeWidth={edgeWidth + 7}
                   strokeDasharray={visualStyle.dashArray}
                   strokeLinecap={visualStyle.strokeLinecap}
@@ -229,26 +230,30 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
                   onClick={() => onSelectNode(node)}
                   onMouseEnter={() => setHoveredNodeId(node.id)}
                   onMouseLeave={() => setHoveredNodeId(null)}
-                  className={`h-full w-full cursor-pointer rounded-lg border bg-[#fffdfa] p-3 text-left shadow-xl transition dark:bg-[#241c15] ${
+                  className={`relative h-full w-full cursor-pointer overflow-hidden rounded-lg border bg-[#fffaf2] p-3 pl-4 text-left shadow-[0_10px_26px_rgba(90,62,26,0.12)] transition dark:bg-[#1a1a1a]/95 dark:shadow-[0_10px_28px_rgba(0,0,0,0.38)] ${
                     selected
-                      ? 'border-[#c9872c] shadow-[#d9a44133]'
+                      ? 'border-[#b7741e] shadow-[#d9a44133] dark:border-[#d4a574] dark:shadow-[0_0_22px_rgba(212,165,116,0.18)]'
                       : highlighted || hovered
-                        ? 'border-[#c9872c] shadow-[#d9a44122]'
-                        : 'border-[#e5d4bb]'
+                        ? 'border-[#b7741e] shadow-[#d9a44122] dark:border-[rgba(212,165,116,0.42)]'
+                        : 'border-[#d8c3a6] dark:border-[rgba(212,165,116,0.14)]'
                   }`}
                 >
+                  <span className="absolute bottom-0 left-0 top-0 w-1 rounded-l-lg" style={{ backgroundColor: categoryColor(node.category) }} />
                   <div className="flex items-start gap-3">
-                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-[#e0c7a8] bg-[#fff1d7] text-[#b7741e] dark:border-[#6d5642] dark:bg-[#34281d] dark:text-[#f0b84d]">
+                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-[#d8c3a6] bg-[#fff1d7] text-[#b7741e] dark:border-[rgba(212,165,116,0.16)] dark:bg-[#111111] dark:text-[#d4a574]">
                       <DomainIcon category={node.category} />
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-black text-[#3f342b] dark:text-[#f7ead6]">{node.title}</span>
-                      <span className="mt-1 block h-8 overflow-hidden text-[10px] leading-4 text-[#7b6554] dark:text-[#d8c5aa]">{node.description}</span>
+                      <span className="flex items-center justify-between gap-2">
+                        <span className="truncate font-serif text-[15px] font-black text-[#2f2923] dark:text-[#f5f0eb]">{node.title}</span>
+                        <span className="shrink-0 font-mono text-[9px] font-black text-[#9a6a21] dark:text-[#d4a574]">{node.status}</span>
+                      </span>
+                      <span className="mt-1 block h-8 overflow-hidden text-[10px] leading-4 text-[#7b6554] dark:text-[#a39787]">{node.description}</span>
                     </span>
                   </div>
                   <div className="mt-3 flex flex-wrap gap-1.5">
                     {node.tags.slice(0, viewport.zoom > 0.65 ? 4 : 2).map((tag) => (
-                      <span key={tag} className="rounded border border-[#e0c7a8] bg-[#fff7eb] px-1.5 py-0.5 text-[9px] font-black uppercase text-[#9a5b13] dark:border-[#6d5642] dark:bg-[#1b140f] dark:text-[#d6b56d]">
+                      <span key={tag} className="rounded border border-[#d8c3a6] bg-[#fff8ec] px-1.5 py-0.5 text-[9px] font-black uppercase text-[#9a5b13] dark:border-[rgba(212,165,116,0.14)] dark:bg-[#111111] dark:text-[#d4a574]">
                         {tag}
                       </span>
                     ))}
@@ -266,14 +271,14 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
         </g>
       </svg>
 
-      <div className="absolute right-4 top-4 flex overflow-hidden rounded-lg border border-[#e0c7a8] bg-[#fffdfa]/95 shadow-xl dark:border-[#6d5642] dark:bg-[#241c15]/95">
+      <div className="absolute right-4 top-4 flex overflow-hidden rounded-lg border border-[#d8c3a6] bg-[#fffaf2]/95 shadow-xl backdrop-blur dark:border-[rgba(212,165,116,0.18)] dark:bg-[#141414]/90">
         <GraphButton label="Zoom in" onClick={() => updateZoom(viewport.zoom + 0.12)}><Plus size={15} /></GraphButton>
         <GraphButton label="Zoom out" onClick={() => updateZoom(viewport.zoom - 0.12)}><Minus size={15} /></GraphButton>
         <GraphButton label="Fit view" onClick={() => setViewport(fitViewport(shellRef.current, bounds))}><Focus size={15} /></GraphButton>
         <GraphButton label="Reset view" onClick={() => setViewport({ x: 60, y: 50, zoom: 0.88 })}><RotateCcw size={15} /></GraphButton>
       </div>
 
-      <div className="absolute bottom-4 left-4 rounded-lg border border-[#e0c7a8] bg-[#fffdfa]/95 px-3 py-2 text-[10px] font-bold text-[#5c493c] shadow-xl dark:border-[#6d5642] dark:bg-[#241c15]/95 dark:text-[#f3eadf]">
+      <div className="absolute bottom-4 left-4 rounded-lg border border-[#d8c3a6] bg-[#fffaf2]/95 px-3 py-2 text-[10px] font-bold text-[#5c493c] shadow-xl backdrop-blur dark:border-[rgba(212,165,116,0.18)] dark:bg-[#141414]/90 dark:text-[#a39787]">
         {nodes.length} domains / {edges.length} dependencies / {focusSelection ? `showing ${focusedEdges.length} focused paths` : 'select a domain to show paths'}
       </div>
 
@@ -284,25 +289,25 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
 
 function EdgeLegend({ focusedEdges, focusSelection, hiddenFocusedEdgeCount, nodesById }: { focusedEdges: AtlasDomainMapEdge[]; focusSelection: string | null; hiddenFocusedEdgeCount: number; nodesById: Map<string, AtlasDomainMapNode> }) {
   return (
-    <div className="absolute bottom-4 right-4 w-72 rounded-lg border border-[#e0c7a8] bg-[#fffdfa]/95 p-3 text-[#5c493c] shadow-xl backdrop-blur dark:border-[#6d5642] dark:bg-[#241c15]/95 dark:text-[#f3eadf]">
+    <div className="absolute bottom-4 right-4 w-72 rounded-lg border border-[#d8c3a6] bg-[#fffaf2]/95 p-3 text-[#5c493c] shadow-xl backdrop-blur dark:border-[rgba(212,165,116,0.18)] dark:bg-[#141414]/92 dark:text-[#f5f0eb]">
       <div className="flex items-center justify-between gap-2">
-        <p className="text-[10px] font-black uppercase tracking-widest text-[#9a5b13] dark:text-[#d6b56d]">Dependency Legend</p>
-        <span className="text-[9px] font-black uppercase text-[#8a6d55] dark:text-[#b89b82]">arrow = target</span>
+        <p className="text-[10px] font-black uppercase tracking-widest text-[#9a5b13] dark:text-[#d4a574]">Dependency Legend</p>
+        <span className="text-[9px] font-black uppercase text-[#8a6d55] dark:text-[#6b5f53]">arrow = target</span>
       </div>
       <div className="mt-2 space-y-1.5">
         {EDGE_LEGEND_ITEMS.map((style) => (
           <div key={style.variant} className="grid grid-cols-[82px_1fr] items-center gap-2">
             <LegendLine style={style} />
             <div className="min-w-0">
-              <p className="truncate text-[10px] font-black text-[#3f342b] dark:text-[#f8ead3]">{style.label}</p>
-              <p className="truncate text-[9px] font-bold text-[#7b6554] dark:text-[#b89b82]">{style.description}</p>
+              <p className="truncate text-[10px] font-black text-[#2f2923] dark:text-[#f5f0eb]">{style.label}</p>
+              <p className="truncate text-[9px] font-bold text-[#7b6554] dark:text-[#a39787]">{style.description}</p>
             </div>
           </div>
         ))}
       </div>
       {focusSelection && focusedEdges.length > 0 && (
-        <div className="mt-3 border-t border-[#e5d4bb] pt-2 dark:border-[#584a3b]">
-          <p className="text-[9px] font-black uppercase tracking-widest text-[#9a5b13] dark:text-[#d6b56d]">Reading path</p>
+        <div className="mt-3 border-t border-[#ead9c2] pt-2 dark:border-[rgba(212,165,116,0.12)]">
+          <p className="text-[9px] font-black uppercase tracking-widest text-[#9a5b13] dark:text-[#d4a574]">Reading path</p>
           <div className="mt-1.5 space-y-1">
             {focusedEdges.slice(0, 5).map((edge) => {
               const style = edgeVisualStyle(edge);
@@ -310,8 +315,8 @@ function EdgeLegend({ focusedEdges, focusSelection, hiddenFocusedEdgeCount, node
               const target = nodesById.get(edge.target)?.title ?? edge.target;
               return (
                 <div key={edge.id} className="grid grid-cols-[10px_1fr] gap-1.5 text-[9px] font-bold text-[#6d5a4d] dark:text-[#d8c5aa]">
-                  <span style={{ color: style.stroke }}>→</span>
-                  <span className="truncate"><span className="text-[#3f342b] dark:text-[#f8ead3]">{source}</span> → {target}</span>
+                  <span style={{ color: style.stroke }}>-&gt;</span>
+                  <span className="truncate"><span className="text-[#3f342b] dark:text-[#f8ead3]">{source}</span> -&gt; {target}</span>
                 </div>
               );
             })}
@@ -349,19 +354,28 @@ function LegendLine({ style }: { style: EdgeVisualStyle }) {
 
 function Metric({ label, value }: { label: string; value: number }) {
   return (
-    <span className="rounded-md border border-[#e5d4bb] bg-[#fff7eb] px-1 py-1 dark:border-[#584a3b] dark:bg-[#1b140f]">
-      <span className="block text-[11px] font-black text-[#3f342b] dark:text-[#f7ead6]">{value}</span>
-      <span className="block text-[8px] font-bold uppercase text-[#8a6d55] dark:text-[#b89b82]">{label}</span>
+    <span className="rounded-md border border-[#d8c3a6] bg-[#fff8ec] px-1 py-1 dark:border-[rgba(212,165,116,0.12)] dark:bg-[#111111]">
+      <span className="block text-[11px] font-black text-[#2f2923] dark:text-[#f5f0eb]">{value}</span>
+      <span className="block text-[8px] font-bold uppercase text-[#8a6d55] dark:text-[#6b5f53]">{label}</span>
     </span>
   );
 }
 
 function GraphButton({ label, onClick, children }: { label: string; onClick: () => void; children: React.ReactNode }) {
   return (
-    <button type="button" aria-label={label} title={label} onClick={onClick} className="flex h-9 w-9 cursor-pointer items-center justify-center border-r border-[#e0c7a8] text-[#b7741e] last:border-r-0 hover:bg-[#fff1d7] dark:border-[#6d5642] dark:text-[#f0b84d] dark:hover:bg-[#3a2f26]">
+    <button type="button" aria-label={label} title={label} onClick={onClick} className="flex h-9 w-9 cursor-pointer items-center justify-center border-r border-[#d8c3a6] text-[#b7741e] last:border-r-0 hover:bg-[#fff1d7] dark:border-[rgba(212,165,116,0.14)] dark:text-[#d4a574] dark:hover:bg-[rgba(212,165,116,0.12)]">
       {children}
     </button>
   );
+}
+
+function categoryColor(category: AtlasDomainFilter) {
+  if (category === 'CONFIG') return '#5eead4';
+  if (category === 'DOCS') return '#7dd3fc';
+  if (category === 'INFRA') return '#a78bfa';
+  if (category === 'DATA') return '#6ee7b7';
+  if (category === 'DOMAIN') return '#b07a8a';
+  return '#4a7c9b';
 }
 
 function DomainIcon({ category }: { category: AtlasDomainFilter }) {

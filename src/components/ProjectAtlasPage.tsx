@@ -94,7 +94,7 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
       ? [
           `Domain: ${inspector.name}`,
           `Status: ${inspector.status}`,
-          `Summary: ${inspector.description}`,
+          `Summary: ${inspector.plainSummary}`,
           `Metrics: ${inspector.metrics.files} files, ${inspector.metrics.nodes} nodes, ${inspector.metrics.dependencies} dependencies`,
           inspector.technologies.length ? `Technologies: ${inspector.technologies.join(', ')}` : undefined,
           inspector.files.length ? `Files:\n${inspector.files.map((file) => `- ${file.path}`).join('\n')}` : undefined,
@@ -126,45 +126,52 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
   const resultCount = domainView?.matchedNodeIds.length ?? 0;
 
   return (
-    <section className="flex h-full min-h-0 flex-col bg-[#fbf4ea] text-[#3f342b] dark:bg-[#18120d] dark:text-[#f3eadf]">
-      <header className="border-b border-[#e5d4bb] bg-[#fffdfa]/95 px-4 py-2.5 dark:border-[#584a3b] dark:bg-[#241c15]/95">
-        <div className="flex flex-col gap-3 2xl:flex-row 2xl:items-center 2xl:justify-between">
-          <div className="flex min-w-0 items-center gap-4">
+    <section className="flex h-full min-h-0 flex-col bg-[#f8efe2] text-[#2f2923] dark:bg-[#0a0a0a] dark:text-[#f5f0eb]">
+      <header className="shrink-0 border-b border-[#d8c3a6] bg-[#fffaf2]/95 shadow-sm dark:border-[rgba(212,165,116,0.12)] dark:bg-[#111111]/95">
+        <div className="flex min-h-[56px] flex-col gap-3 px-4 py-3 xl:flex-row xl:items-center">
+          <div className="flex min-w-0 shrink-0 items-center gap-4">
             <div>
-              <h1 className="flex items-center gap-2 text-lg font-black text-[#3f342b] dark:text-[#f8ead3]">
-                <Waypoints size={20} className="text-[#c9872c] dark:text-[#e0a070]" />
+              <h1 className="flex items-center gap-2 font-serif text-2xl font-black tracking-wide text-[#2f2923] dark:text-[#f5f0eb]">
+                <Waypoints size={20} className="text-[#b7741e] dark:text-[#d4a574]" />
                 Project Atlas
               </h1>
-              <p className="mt-0.5 text-[11px] font-mono font-bold text-[#9a6a21] dark:text-[#d6b56d]">
-                {data?.status === 'ready' ? `${data.atlas.domains.length} domains · ${data.atlas.edges.length} relationships` : 'Domain-first project intelligence'}
+              <p className="mt-0.5 text-[10px] font-mono font-bold uppercase tracking-widest text-[#9a6a21] dark:text-[#a39787]">
+                {data?.status === 'ready' ? `${data.atlas.domains.length} domains / ${data.atlas.edges.length} relationships` : 'Domain-first project intelligence'}
               </p>
             </div>
-            <span className="hidden rounded-lg border border-[#e5d4bb] bg-[#fff7eb] px-3 py-1.5 text-[11px] font-black text-[#9a5b13] dark:border-[#584a3b] dark:bg-[#1e1914] dark:text-[#f7d28a] md:inline-flex">
-              Domain map
-            </span>
+            <div className="hidden items-center rounded-lg bg-[#efe2cf] p-0.5 dark:bg-[#1a1a1a] md:flex">
+              <span className="rounded-md bg-[#fff8ec] px-3 py-1 text-[11px] font-black text-[#9a5b13] shadow-sm dark:bg-[rgba(212,165,116,0.16)] dark:text-[#d4a574]">Overview</span>
+              <span className="px-3 py-1 text-[11px] font-bold text-[#8a6d55] dark:text-[#6b5f53]">Learn</span>
+              <span className="px-3 py-1 text-[11px] font-bold text-[#8a6d55] dark:text-[#6b5f53]">Deep Dive</span>
+            </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <AtlasSearchBar query={searchQuery} resultCount={resultCount} onQueryChange={setSearchQuery} />
-            <div className="flex flex-wrap gap-1.5">
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 xl:justify-end">
+            <span className="hidden rounded-lg border border-[#d8c3a6] bg-[#fff8ec] px-3 py-1.5 text-[10px] font-black uppercase tracking-wider text-[#9a5b13] dark:border-[rgba(212,165,116,0.18)] dark:bg-[rgba(212,165,116,0.16)] dark:text-[#d4a574] md:inline-flex">
+              Layers ON
+            </span>
+            <div className="flex min-w-0 flex-wrap gap-1.5">
               {FILTERS.map((filter) => (
                 <button
                   key={filter}
                   type="button"
                   onClick={() => handleToggleFilter(filter)}
-                  className={`h-8 cursor-pointer rounded-lg border px-2.5 text-[10px] font-black transition ${activeFilters.includes(filter) ? 'border-[#c9872c] bg-[#fff1d7] text-[#8a4d0d] dark:border-[#e0a070] dark:bg-[#3a2f26] dark:text-[#f7d28a]' : 'border-[#e5d4bb] bg-[#fffdfa] text-[#7b6554] hover:border-[#c9872c] hover:text-[#3f342b] dark:border-[#584a3b] dark:bg-[#1e1914] dark:text-[#d8c5aa] dark:hover:text-[#f8ead3]'}`}
+                  className={`h-8 cursor-pointer rounded-lg border px-2.5 text-[10px] font-black uppercase tracking-wider transition ${activeFilters.includes(filter) ? 'border-[#b7741e] bg-[#fff1d7] text-[#8a4d0d] dark:border-[rgba(212,165,116,0.45)] dark:bg-[rgba(212,165,116,0.18)] dark:text-[#d4a574]' : 'border-[#d8c3a6] bg-[#fffaf2] text-[#7b6554] hover:border-[#b7741e] hover:text-[#2f2923] dark:border-[rgba(212,165,116,0.16)] dark:bg-[#1a1a1a] dark:text-[#a39787] dark:hover:text-[#f5f0eb]'}`}
                 >
                   {filter}
                 </button>
               ))}
             </div>
-            <button className="h-9 cursor-pointer rounded-lg border border-[#e5d4bb] bg-[#fffdfa] px-3 text-[11px] font-extrabold text-[#5c493c] transition hover:border-[#c9872c] hover:bg-[#fff7eb] disabled:cursor-not-allowed disabled:opacity-60 dark:border-[#584a3b] dark:bg-[#1e1914] dark:text-[#f3eadf] dark:hover:bg-[#3a2f26]" type="button" disabled={!projectId || scanState === 'queued' || scanState === 'running'} onClick={handleManualRescan}>
+            <button className="h-9 cursor-pointer rounded-lg border border-[#d8c3a6] bg-[#fffaf2] px-3 text-[11px] font-extrabold text-[#5c493c] transition hover:border-[#b7741e] hover:bg-[#fff1d7] disabled:cursor-not-allowed disabled:opacity-60 dark:border-[rgba(212,165,116,0.16)] dark:bg-[#1a1a1a] dark:text-[#f5f0eb] dark:hover:bg-[rgba(212,165,116,0.12)]" type="button" disabled={!projectId || scanState === 'queued' || scanState === 'running'} onClick={handleManualRescan}>
               <RefreshCw size={14} className="mr-1 inline" /> Rescan
             </button>
             <AtlasPromptMenu atlas={data?.atlas ?? null} selectedNode={selectedAtlasNode} />
             <AtlasExportMenu atlas={data?.atlas ?? null} view={exportView} selectedNode={selectedAtlasNode} />
             <AtlasRefreshStatus stale={data?.stale} status={data?.refreshStatus} scanState={scanState} message={data?.message} />
           </div>
+        </div>
+        <div className="border-t border-[#ead9c2] bg-[#fff6e8]/85 px-4 py-2 dark:border-[rgba(212,165,116,0.08)] dark:bg-[#0d0d0d]">
+          <AtlasSearchBar query={searchQuery} resultCount={resultCount} onQueryChange={setSearchQuery} />
         </div>
       </header>
 
@@ -195,11 +202,11 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
 
 function AtlasCenteredMessage({ title, body }: { title: string; body: string }) {
   return (
-    <div className="flex h-full min-h-[520px] items-center justify-center bg-[#fbf4ea] p-8 dark:bg-[#18120d]">
-      <div className="max-w-sm rounded-lg border border-[#e5d4bb] bg-[#fffdfa] p-5 text-center shadow-xl dark:border-[#584a3b] dark:bg-[#241c15]">
-        <Activity size={24} className="mx-auto text-[#c9872c] dark:text-[#f0b84d]" />
-        <h2 className="mt-3 text-sm font-extrabold text-[#3f342b] dark:text-[#f8ead3]">{title}</h2>
-        <p className="mt-2 text-[11px] font-mono leading-relaxed text-[#7b6554] dark:text-[#d8c5aa]">{body}</p>
+    <div className="flex h-full min-h-[520px] items-center justify-center bg-[#f8efe2] p-8 dark:bg-[#0a0a0a]">
+      <div className="max-w-sm rounded-lg border border-[#d8c3a6] bg-[#fffaf2] p-5 text-center shadow-xl dark:border-[rgba(212,165,116,0.16)] dark:bg-[#141414]">
+        <Activity size={24} className="mx-auto text-[#b7741e] dark:text-[#d4a574]" />
+        <h2 className="mt-3 text-sm font-extrabold text-[#2f2923] dark:text-[#f5f0eb]">{title}</h2>
+        <p className="mt-2 text-[11px] font-mono leading-relaxed text-[#7b6554] dark:text-[#a39787]">{body}</p>
       </div>
     </div>
   );

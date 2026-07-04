@@ -135,7 +135,7 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
 
   return (
     <section className="flex h-full min-h-0 flex-col bg-[#f6efe6] text-[#241f1a] dark:bg-[#17130f] dark:text-[#f3eadf]">
-      <header className="shrink-0 border-b border-[#d8c3a6] bg-[#fffaf2]/96 shadow-[0_10px_32px_rgba(90,62,26,0.10)] backdrop-blur dark:border-[#584a3b]/50 dark:bg-[#292119]/96 dark:shadow-[0_14px_40px_rgba(0,0,0,0.42)]">
+      <header className="relative z-[120] shrink-0 border-b border-[#d8c3a6] bg-[#fffaf2]/96 shadow-[0_10px_32px_rgba(90,62,26,0.10)] backdrop-blur dark:border-[#584a3b]/50 dark:bg-[#292119]/96 dark:shadow-[0_14px_40px_rgba(0,0,0,0.42)]">
         <div className="flex min-h-[58px] flex-col gap-3 px-4 py-2.5 xl:flex-row xl:items-center">
           <div className="flex min-w-0 shrink-0 items-center gap-3">
             <div>

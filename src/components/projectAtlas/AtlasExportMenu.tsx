@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { Download } from 'lucide-react';
 import type { AtlasNode, ProjectAtlas } from '../../types.js';
 import type { AtlasGraphViewModel } from '../../lib/projectAtlasViewModel.js';
 import { exportAtlasJson, renderAtlasMarkdown, renderAtlasMermaid, renderAtlasSvg } from '../../lib/projectAtlasExport.js';
+import { useDismissOnOutsidePointer } from './useDismissOnOutsidePointer.js';
 
 interface AtlasExportMenuProps {
   atlas: ProjectAtlas | null;
@@ -11,8 +12,12 @@ interface AtlasExportMenuProps {
 }
 
 export function AtlasExportMenu({ atlas, view, selectedNode }: AtlasExportMenuProps) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const [open, setOpen] = useState(false);
   const disabled = !atlas || !view;
+  const closeMenu = useCallback(() => setOpen(false), []);
+
+  useDismissOnOutsidePointer(containerRef, open, closeMenu);
 
   const exportText = (extension: string, mimeType: string, content: string) => {
     downloadBlob(`project-atlas.${extension}`, new Blob([content], { type: mimeType }));
@@ -28,7 +33,7 @@ export function AtlasExportMenu({ atlas, view, selectedNode }: AtlasExportMenuPr
   };
 
   return (
-    <div className="relative">
+    <div ref={containerRef} className="relative">
       <button
         className="h-8 cursor-pointer rounded-lg border border-[#e5d4bb] bg-[#fffdfa] px-2.5 text-[11px] font-extrabold text-[#6d5a4d] transition hover:border-[#c9872c] hover:bg-[#fff7eb] disabled:cursor-not-allowed disabled:opacity-60 dark:border-[#584a3b] dark:bg-[#1e1914] dark:text-[#f3eadf] dark:hover:bg-[#3a2f26]"
         type="button"

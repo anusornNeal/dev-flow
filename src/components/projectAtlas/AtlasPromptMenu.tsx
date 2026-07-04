@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { ClipboardList } from 'lucide-react';
 import type { AtlasNode, ProjectAtlas } from '../../types.js';
 import { buildProjectAtlasPrompt, PROJECT_ATLAS_PROMPT_VARIANTS, type ProjectAtlasPromptVariantId } from '../../lib/projectAtlasPromptTemplates.js';
+import { useDismissOnOutsidePointer } from './useDismissOnOutsidePointer.js';
 
 interface AtlasPromptMenuProps {
   atlas: ProjectAtlas | null;
@@ -9,9 +10,13 @@ interface AtlasPromptMenuProps {
 }
 
 export function AtlasPromptMenu({ atlas, selectedNode }: AtlasPromptMenuProps) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const [open, setOpen] = useState(false);
   const [copiedVariant, setCopiedVariant] = useState<ProjectAtlasPromptVariantId | null>(null);
   const disabled = !atlas;
+  const closeMenu = useCallback(() => setOpen(false), []);
+
+  useDismissOnOutsidePointer(containerRef, open, closeMenu);
 
   const copyPrompt = async (variantId: ProjectAtlasPromptVariantId) => {
     if (!atlas) return;
@@ -23,7 +28,7 @@ export function AtlasPromptMenu({ atlas, selectedNode }: AtlasPromptMenuProps) {
   };
 
   return (
-    <div className="relative">
+    <div ref={containerRef} className="relative">
       <button
         className="h-8 cursor-pointer rounded-lg border border-[#e5d4bb] bg-[#fffdfa] px-2.5 text-[11px] font-extrabold text-[#6d5a4d] transition hover:border-[#c9872c] hover:bg-[#fff7eb] disabled:cursor-not-allowed disabled:opacity-60 dark:border-[#584a3b] dark:bg-[#1e1914] dark:text-[#f3eadf] dark:hover:bg-[#3a2f26]"
         type="button"

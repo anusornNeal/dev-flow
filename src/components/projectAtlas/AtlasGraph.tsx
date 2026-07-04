@@ -184,7 +184,7 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
             const visualStyle = edgeVisualStyle(edge);
             const route = edgeRoute(edge, source, target, edgePorts);
             const showLabel = Boolean(!denseGraph && focusSelection && directlyRelated && viewport.zoom > 0.82 && edge.sourceEdgeIds.length <= 3);
-            const edgeOpacity = dimmed ? 0.04 : focusSelection ? 0.72 : 0.18;
+            const edgeOpacity = dimmed ? 0.03 : focusSelection && directlyRelated ? 0.9 : 0.14;
             const edgeWidth = dimmed ? 0.6 : focusSelection && directlyRelated ? visualStyle.focusWidth : visualStyle.baseWidth;
             return (
               <g key={edge.id} opacity={edgeOpacity} pointerEvents="none">
@@ -222,7 +222,7 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
             const dimmed = canDim && !related;
             const highlighted = highlightedIds.has(node.id);
             return (
-              <foreignObject key={node.id} x={position.x} y={position.y} width={NODE_WIDTH} height={NODE_HEIGHT} opacity={dimmed ? 0.18 : 1}>
+              <foreignObject key={node.id} x={position.x} y={position.y} width={NODE_WIDTH} height={NODE_HEIGHT} opacity={dimmed ? 0.1 : 1}>
                 <button
                   type="button"
                   data-domain-card
@@ -274,7 +274,7 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
       </div>
 
       <div className="absolute bottom-4 left-4 rounded-lg border border-[#e0c7a8] bg-[#fffdfa]/95 px-3 py-2 text-[10px] font-bold text-[#5c493c] shadow-xl dark:border-[#6d5642] dark:bg-[#241c15]/95 dark:text-[#f3eadf]">
-        {nodes.length} domains · {edges.length} dependencies · {focusSelection ? 'focused dependencies' : denseGraph ? 'select a domain to show dependencies' : `${Math.round(viewport.zoom * 100)}%`}
+        {nodes.length} domains / {edges.length} dependencies / {focusSelection ? 'reading selected domain' : denseGraph ? 'select a domain to read its dependencies' : `${Math.round(viewport.zoom * 100)}%`}
       </div>
 
       <EdgeLegend focusedEdges={focusedEdges} focusSelection={focusSelection} nodesById={nodesById} />
@@ -302,7 +302,7 @@ function EdgeLegend({ focusedEdges, focusSelection, nodesById }: { focusedEdges:
       </div>
       {focusSelection && focusedEdges.length > 0 && (
         <div className="mt-3 border-t border-[#e5d4bb] pt-2 dark:border-[#584a3b]">
-          <p className="text-[9px] font-black uppercase tracking-widest text-[#9a5b13] dark:text-[#d6b56d]">Focused edges</p>
+          <p className="text-[9px] font-black uppercase tracking-widest text-[#9a5b13] dark:text-[#d6b56d]">Reading path</p>
           <div className="mt-1.5 space-y-1">
             {focusedEdges.slice(0, 5).map((edge) => {
               const style = edgeVisualStyle(edge);
@@ -315,7 +315,7 @@ function EdgeLegend({ focusedEdges, focusSelection, nodesById }: { focusedEdges:
                 </div>
               );
             })}
-            {focusedEdges.length > 5 && <p className="text-[9px] font-bold text-[#8a6d55] dark:text-[#b89b82]">+{focusedEdges.length - 5} more focused dependencies</p>}
+            {focusedEdges.length > 5 && <p className="text-[9px] font-bold text-[#8a6d55] dark:text-[#b89b82]">+{focusedEdges.length - 5} more focused relationships</p>}
           </div>
         </div>
       )}

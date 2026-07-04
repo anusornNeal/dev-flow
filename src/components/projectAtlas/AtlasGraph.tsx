@@ -50,6 +50,7 @@ const GRID_COLUMN_GAP = 360;
 const GRID_ROW_GAP = 240;
 const EDGE_PORT_GAP = 32;
 const EDGE_ROUTE_RADIUS = 20;
+const MAX_VISIBLE_FOCUSED_EDGES = 12;
 
 const EDGE_VISUAL_STYLES: Record<EdgeVisualVariant, EdgeVisualStyle> = {
   direct: {
@@ -118,7 +119,8 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
   const focusSelection = selectedNodeId ?? hoveredNodeId;
   const canDim = Boolean(focusSelection);
   const edgePorts = useMemo(() => buildEdgePorts(edges, focusSelection, positions), [edges, focusSelection, positions]);
-  const focusedEdges = useMemo(() => focusSelection ? edges.filter((edge) => edge.source === focusSelection || edge.target === focusSelection) : [], [edges, focusSelection]);
+  const readableEdges = useMemo(() => selectReadableAtlasEdges(edges, focusSelection, MAX_VISIBLE_FOCUSED_EDGES), [edges, focusSelection]);
+  const focusedEdges = readableEdges.visibleEdges;
 
   const updateZoom = (nextZoom: number, anchor?: { x: number; y: number }) => {
     setViewport((current) => {
@@ -173,13 +175,11 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
           ))}
         </defs>
         <g transform={`translate(${viewport.x} ${viewport.y}) scale(${viewport.zoom})`}>
-          {edges.map((edge) => {
+          {focusedEdges.map((edge) => {
             const source = positions.get(edge.source);
             const target = positions.get(edge.target);
             if (!source || !target) return null;
             const directlyRelated = Boolean(focusSelection && (edge.source === focusSelection || edge.target === focusSelection));
-            const showEdge = focusSelection ? directlyRelated || !denseGraph : !denseGraph;
-            if (!showEdge) return null;
             const dimmed = canDim && !directlyRelated;
             const visualStyle = edgeVisualStyle(edge);
             const route = edgeRoute(edge, source, target, edgePorts);
@@ -274,15 +274,15 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
       </div>
 
       <div className="absolute bottom-4 left-4 rounded-lg border border-[#e0c7a8] bg-[#fffdfa]/95 px-3 py-2 text-[10px] font-bold text-[#5c493c] shadow-xl dark:border-[#6d5642] dark:bg-[#241c15]/95 dark:text-[#f3eadf]">
-        {nodes.length} domains / {edges.length} dependencies / {focusSelection ? 'reading selected domain' : denseGraph ? 'select a domain to read its dependencies' : `${Math.round(viewport.zoom * 100)}%`}
+        {nodes.length} domains / {edges.length} dependencies / {focusSelection ? `showing ${focusedEdges.length} focused paths` : 'select a domain to show paths'}
       </div>
 
-      <EdgeLegend focusedEdges={focusedEdges} focusSelection={focusSelection} nodesById={nodesById} />
+      <EdgeLegend focusedEdges={focusedEdges} focusSelection={focusSelection} hiddenFocusedEdgeCount={readableEdges.hiddenFocusedEdgeCount} nodesById={nodesById} />
     </div>
   );
 }
 
-function EdgeLegend({ focusedEdges, focusSelection, nodesById }: { focusedEdges: AtlasDomainMapEdge[]; focusSelection: string | null; nodesById: Map<string, AtlasDomainMapNode> }) {
+function EdgeLegend({ focusedEdges, focusSelection, hiddenFocusedEdgeCount, nodesById }: { focusedEdges: AtlasDomainMapEdge[]; focusSelection: string | null; hiddenFocusedEdgeCount: number; nodesById: Map<string, AtlasDomainMapNode> }) {
   return (
     <div className="absolute bottom-4 right-4 w-72 rounded-lg border border-[#e0c7a8] bg-[#fffdfa]/95 p-3 text-[#5c493c] shadow-xl backdrop-blur dark:border-[#6d5642] dark:bg-[#241c15]/95 dark:text-[#f3eadf]">
       <div className="flex items-center justify-between gap-2">
@@ -315,7 +315,8 @@ function EdgeLegend({ focusedEdges, focusSelection, nodesById }: { focusedEdges:
                 </div>
               );
             })}
-            {focusedEdges.length > 5 && <p className="text-[9px] font-bold text-[#8a6d55] dark:text-[#b89b82]">+{focusedEdges.length - 5} more focused relationships</p>}
+            {focusedEdges.length > 5 && <p className="text-[9px] font-bold text-[#8a6d55] dark:text-[#b89b82]">+{focusedEdges.length - 5} more listed below the fold</p>}
+            {hiddenFocusedEdgeCount > 0 && <p className="text-[9px] font-bold text-[#8a6d55] dark:text-[#b89b82]">+{hiddenFocusedEdgeCount} hidden to keep the map readable</p>}
           </div>
         </div>
       )}
@@ -377,6 +378,31 @@ function edgeVisualStyle(edge: AtlasDomainMapEdge): EdgeVisualStyle {
   if (edge.kind === 'tests') return EDGE_VISUAL_STYLES.test;
   if (edge.kind === 'contains' || edge.kind === 'exports') return EDGE_VISUAL_STYLES.reference;
   return EDGE_VISUAL_STYLES.direct;
+}
+
+export function selectReadableAtlasEdges(
+  edges: AtlasDomainMapEdge[],
+  focusSelection: string | null,
+  maxVisibleFocusedEdges = MAX_VISIBLE_FOCUSED_EDGES,
+) {
+  if (!focusSelection) {
+    return {
+      visibleEdges: [] as AtlasDomainMapEdge[],
+      focusedEdgeCount: 0,
+      hiddenFocusedEdgeCount: 0,
+    };
+  }
+
+  const focused = edges
+    .filter((edge) => edge.source === focusSelection || edge.target === focusSelection)
+    .sort((left, right) => left.id.localeCompare(right.id));
+  const visibleEdges = focused.slice(0, Math.max(0, maxVisibleFocusedEdges));
+
+  return {
+    visibleEdges,
+    focusedEdgeCount: focused.length,
+    hiddenFocusedEdgeCount: Math.max(0, focused.length - visibleEdges.length),
+  };
 }
 
 function layoutDomainNodes(nodes: AtlasDomainMapNode[]) {

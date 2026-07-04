@@ -39,6 +39,28 @@ test('devflowContract exposes repo_read_snapshot', () => {
   assert.ok(req.path.startsWith('/api/repo-read-snapshot'));
 });
 
+test('devflowContract exposes apply_project_atlas_agent_update as a serialized write job', () => {
+  const tool = getToolDefinitionByName('apply_project_atlas_agent_update');
+  assert.ok(tool);
+  assert.equal(tool.executionPolicy?.mode, 'job');
+  assert.equal(tool.executionPolicy?.jobKind, 'repo-write');
+
+  const req = tool.buildHttpRequest({
+    projectId: 'project-1',
+    base: { generatedAt: '2026-07-04T08:00:00.000Z', nodeCount: 1, edgeCount: 0 },
+    domains: [],
+  });
+
+  assert.equal(req.method, 'POST');
+  assert.equal(req.path, '/api/project-atlas/agent-update');
+  assert.deepEqual(req.body, {
+    projectId: 'project-1',
+    base: { generatedAt: '2026-07-04T08:00:00.000Z', nodeCount: 1, edgeCount: 0 },
+    domains: [],
+  });
+  assert.ok(getMcpToolList().some((entry) => entry.name === 'apply_project_atlas_agent_update'));
+});
+
 test('devflowContract exposes complete_task_review', () => {
   const tool = getToolDefinitionByName('complete_task_review');
   assert.ok(tool);

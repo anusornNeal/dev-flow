@@ -12,6 +12,7 @@ import {
   shouldRefreshAtlasForDailyOpen,
   writeAtlasCache,
 } from './projectAtlasCacheService.js';
+import { applyProjectAtlasAgentUpdatePatch, type ApplyProjectAtlasAgentUpdateOptions } from './projectAtlasAgentUpdateService.js';
 import { suggestAtlasDomains } from './projectAtlasDomainService.js';
 import { scanProjectForAtlas } from './projectAtlasScannerService.js';
 
@@ -232,9 +233,15 @@ export function rescanProjectAtlasSafely(project: Project, input: { now?: string
   }
 }
 
+export function applyProjectAtlasAgentUpdate(project: Project, patch: unknown, options: ApplyProjectAtlasAgentUpdateOptions = {}) {
+  return applyProjectAtlasAgentUpdatePatch(project, patch, options);
+}
+
 export function getProjectAtlasStatus(projectId: string) {
   const cached = readLatestAtlas(projectId);
   const freshness = cached.atlas.freshness;
+  const overlay = cached.atlas.agentOverlay;
+  const overlayDiagnostics = overlay ? getOverlayDiagnostics(cached.atlas) : [];
   return {
     projectId,
     cacheStatus: cached.status,
@@ -246,7 +253,52 @@ export function getProjectAtlasStatus(projectId: string) {
     domainCount: cached.atlas.domains.length,
     lastError: cached.error ?? freshness.lastError,
     warnings: [],
+    overlay: {
+      state: overlay ? 'deterministic-plus-agent-overlay' : 'deterministic-only',
+      updatedAt: overlay?.updatedAt,
+      base: overlay?.base ?? {
+        generatedAt: freshness.generatedAt,
+        repoFingerprint: freshness.repoFingerprint,
+        nodeCount: cached.atlas.nodes.length,
+        edgeCount: cached.atlas.edges.length,
+      },
+      diagnostics: [...(overlay?.diagnostics ?? []), ...overlayDiagnostics],
+      counts: overlay
+        ? {
+            domains: overlay.domains.length,
+            summaries: overlay.summaries.length,
+            inferredRelationships: overlay.inferredRelationships.length,
+            readOrder: overlay.readOrder.length,
+            warnings: overlay.warnings.length,
+          }
+        : {
+            domains: 0,
+            summaries: 0,
+            inferredRelationships: 0,
+            readOrder: 0,
+            warnings: 0,
+          },
+    },
   };
+}
+
+function getOverlayDiagnostics(atlas: ProjectAtlas) {
+  const overlay = atlas.agentOverlay;
+  if (!overlay) return [];
+  const diagnostics = [];
+  if (
+    overlay.base.generatedAt !== atlas.freshness.generatedAt ||
+    (overlay.base.repoFingerprint ?? '') !== (atlas.freshness.repoFingerprint ?? '') ||
+    overlay.base.nodeCount !== atlas.nodes.length ||
+    overlay.base.edgeCount !== atlas.edges.length
+  ) {
+    diagnostics.push({
+      code: 'STALE_OVERLAY_BASE',
+      message: 'Agent overlay base metadata no longer matches the current deterministic Atlas cache.',
+      severity: 'warning' as const,
+    });
+  }
+  return diagnostics;
 }
 
 export function shouldIncludeAtlasForTask(task: AtlasTaskLike, input: { explicit?: boolean } = {}) {

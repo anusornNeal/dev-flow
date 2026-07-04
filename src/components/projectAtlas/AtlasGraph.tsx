@@ -404,6 +404,14 @@ export function selectReadableAtlasEdges(
       visibleEdges: [] as AtlasDomainMapEdge[],
       focusedEdgeCount: 0,
       hiddenFocusedEdgeCount: 0,
+      relationshipGroups: [] as Array<{
+        id: string;
+        source: string;
+        target: string;
+        kind: AtlasDomainMapEdge['kind'];
+        label: string;
+        rawRelationshipCount: number;
+      }>,
     };
   }
 
@@ -416,6 +424,14 @@ export function selectReadableAtlasEdges(
     visibleEdges,
     focusedEdgeCount: focused.length,
     hiddenFocusedEdgeCount: Math.max(0, focused.length - visibleEdges.length),
+    relationshipGroups: visibleEdges.map((edge) => ({
+      id: edge.id,
+      source: edge.source,
+      target: edge.target,
+      kind: edge.kind,
+      label: edge.label,
+      rawRelationshipCount: edge.sourceEdgeIds.length,
+    })),
   };
 }
 

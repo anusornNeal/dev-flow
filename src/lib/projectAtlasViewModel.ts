@@ -77,9 +77,20 @@ export interface BuildDomainMapViewModelOptions {
   activeFilters?: AtlasDomainFilter[];
 }
 
+export interface AtlasDomainRelationship {
+  id: string;
+  name: string;
+  category: AtlasDomainFilter;
+  edgeKinds: AtlasEdgeKind[];
+}
+
 export interface AtlasDomainInspectorViewModel extends AtlasDomainMapNode {
   name: string;
   health: string;
+  plainSummary: string;
+  startHereFiles: AtlasDomainFile[];
+  incomingDomains: AtlasDomainRelationship[];
+  outgoingDomains: AtlasDomainRelationship[];
 }
 
 export interface BuildAtlasGraphViewModelOptions {
@@ -280,10 +291,16 @@ export function buildDomainInspector(
   const view = buildDomainMapViewModel(atlas);
   const node = view.nodes.find((candidate) => candidate.id === domainId);
   if (!node) return null;
+  const relationships = buildDomainRelationshipSummary(view.nodes, view.edges, domainId);
+
   return {
     ...node,
     name: node.title,
     health: deriveHealth(node),
+    plainSummary: node.description,
+    startHereFiles: rankStartHereFiles(node.files).slice(0, 5),
+    incomingDomains: relationships.incoming,
+    outgoingDomains: relationships.outgoing,
   };
 }
 
@@ -452,6 +469,81 @@ function summarizeDomain(name: string, nodes: AtlasNode[]) {
 function readableEdgeLabel(kind: AtlasEdgeKind) {
   if (kind === 'depends-on') return 'depends on';
   return kind;
+}
+
+function buildDomainRelationshipSummary(
+  nodes: AtlasDomainMapNode[],
+  edges: AtlasDomainMapEdge[],
+  domainId: string,
+) {
+  const nodesById = new Map(nodes.map((node) => [node.id, node]));
+  const incoming = new Map<string, AtlasDomainRelationship>();
+  const outgoing = new Map<string, AtlasDomainRelationship>();
+
+  for (const edge of edges) {
+    if (edge.target === domainId) {
+      addDomainRelationship(incoming, nodesById.get(edge.source), edge.kind);
+    }
+    if (edge.source === domainId) {
+      addDomainRelationship(outgoing, nodesById.get(edge.target), edge.kind);
+    }
+  }
+
+  return {
+    incoming: sortDomainRelationships(Array.from(incoming.values())),
+    outgoing: sortDomainRelationships(Array.from(outgoing.values())),
+  };
+}
+
+function addDomainRelationship(
+  relationships: Map<string, AtlasDomainRelationship>,
+  node: AtlasDomainMapNode | undefined,
+  kind: AtlasEdgeKind,
+) {
+  if (!node) return;
+  const existing = relationships.get(node.id);
+  if (existing) {
+    existing.edgeKinds = Array.from(new Set([...existing.edgeKinds, kind])).sort();
+    return;
+  }
+  relationships.set(node.id, {
+    id: node.id,
+    name: node.title,
+    category: node.category,
+    edgeKinds: [kind],
+  });
+}
+
+function sortDomainRelationships(relationships: AtlasDomainRelationship[]) {
+  return relationships.sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function rankStartHereFiles(files: AtlasDomainFile[]) {
+  return [...files].sort((left, right) => {
+    const scoreDelta = startHereScore(right) - startHereScore(left);
+    if (scoreDelta !== 0) return scoreDelta;
+    return left.path.localeCompare(right.path);
+  });
+}
+
+function startHereScore(file: AtlasDomainFile) {
+  const path = file.path.toLowerCase();
+  const name = file.name.toLowerCase();
+  let score = 0;
+
+  if (/(^|\/)readme\.md$/.test(path)) score += 100;
+  if (/\b(docs?|guide|overview|architecture)\b/.test(path)) score += 80;
+  if (/\b(app|index|main)\.(tsx?|jsx?)$/.test(name)) score += 70;
+  if (/\b(page|screen|view|component)\b/.test(path)) score += 60;
+  if (/\b(viewmodel|usecase|service|repository)\b/.test(path)) score += 55;
+  if (/\b(route|api|controller)\b/.test(path)) score += 45;
+  if (/\b(schema|migration|config|settings)\b/.test(path)) score += 35;
+  if (file.kind === 'component') score += 20;
+  if (file.kind === 'route') score += 18;
+  if (file.kind === 'database') score += 15;
+  if (file.kind === 'test') score -= 20;
+
+  return score;
 }
 
 function deriveHealth(node: AtlasDomainMapNode) {

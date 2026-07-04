@@ -29,10 +29,14 @@ export function AtlasNodeInspector({ inspector, copied, onCopyContext }: AtlasNo
           {tab === 'info' ? <InfoTab inspector={inspector} copied={copied} onCopyContext={onCopyContext} /> : <FilesTab inspector={inspector} />}
         </div>
       ) : (
-        <div className="p-4">
+        <div className="space-y-3 p-4">
           <div className="rounded-lg border border-[#d8c3a6] bg-[#fff8ec] p-4 dark:border-[rgba(212,165,116,0.14)] dark:bg-[#1a1a1a]">
             <p className="text-xl font-black text-[#241f1a] dark:text-[#f3eadf]">Select a domain</p>
             <p className="mt-2 text-[12px] leading-relaxed text-[#685547] dark:text-[#d8c5aa]">Pick a card on the map to inspect the reading path, dependencies, and related files.</p>
+          </div>
+          <div className="rounded-lg border border-[#d8c3a6] bg-[#fff8ec] p-4 dark:border-[rgba(212,165,116,0.14)] dark:bg-[#1a1a1a]">
+            <p className="text-[11px] font-black uppercase tracking-widest text-[#9a5b13] dark:text-[#f5a959]">Focus Relationships</p>
+            <p className="mt-2 text-[12px] font-semibold leading-relaxed text-[#685547] dark:text-[#d8c5aa]">Select a domain to reveal direct dependencies. The overview stays mostly line-free so the map remains readable.</p>
           </div>
         </div>
       )}

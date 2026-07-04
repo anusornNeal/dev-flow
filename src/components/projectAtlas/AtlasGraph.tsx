@@ -275,14 +275,6 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
         {nodes.length} domains / {edges.length} relationships / {focusSelection ? `showing ${focusedEdges.length} focused links` : 'select a domain to show links'}
       </div>
 
-      {!selectedNode ? (
-        <RelationshipFocusNote
-          relationshipGroups={readableEdges.relationshipGroups}
-          focusSelection={focusSelection}
-          hiddenFocusedEdgeCount={readableEdges.hiddenFocusedEdgeCount}
-          nodesById={nodesById}
-        />
-      ) : null}
     </div>
   );
 }
@@ -357,40 +349,6 @@ function DomainDrilldownCard({
   );
 }
 
-function RelationshipFocusNote({
-  relationshipGroups,
-  focusSelection,
-  hiddenFocusedEdgeCount,
-  nodesById,
-}: {
-  relationshipGroups: Array<{ id: string; source: string; target: string; kind: string; label: string; rawRelationshipCount: number }>;
-  focusSelection: string | null;
-  hiddenFocusedEdgeCount: number;
-  nodesById: Map<string, AtlasDomainMapNode>;
-}) {
-  return (
-    <div className="absolute bottom-4 right-4 w-[360px] rounded-2xl border border-[#d8c3a6] bg-[#fffaf2]/95 p-4 text-[#4f4035] shadow-xl backdrop-blur dark:border-[rgba(148,163,184,0.18)] dark:bg-[#292119]/94 dark:text-[#f3eadf]">
-      <p className="text-[11px] font-black uppercase tracking-widest text-[#9a5b13] dark:text-[#f5a959]">Focus Relationships</p>
-      {!focusSelection ? (
-        <p className="mt-2 text-[12px] font-semibold leading-relaxed text-[#685547] dark:text-[#cbd5e1]">Select a domain to reveal direct dependencies. The overview stays mostly line-free so the map remains readable.</p>
-      ) : (
-        <div className="mt-3 space-y-2">
-          {relationshipGroups.slice(0, 5).map((group) => {
-            const source = nodesById.get(group.source)?.title ?? group.source;
-            const target = nodesById.get(group.target)?.title ?? group.target;
-              return (
-                <div key={group.id} className="rounded-lg border border-[#ead9c2] bg-[#fff8ec] px-3 py-2 text-[11px] font-bold text-[#5c493c] dark:border-[rgba(148,163,184,0.12)] dark:bg-[#0b1220] dark:text-[#dbeafe]">
-                  <p className="truncate"><span className="text-[#241f1a] dark:text-[#f8fafc]">{source}</span> -&gt; {target}</p>
-                  <p className="mt-0.5 truncate text-[10px] text-[#8a6d55] dark:text-[#94a3b8]">{group.label} / {group.rawRelationshipCount} raw relationships</p>
-                </div>
-              );
-            })}
-          {hiddenFocusedEdgeCount > 0 && <p className="text-[10px] font-bold text-[#8a6d55] dark:text-[#94a3b8]">+{hiddenFocusedEdgeCount} hidden to keep the map readable</p>}
-        </div>
-      )}
-    </div>
-  );
-}
 
 function Metric({ label, value }: { label: string; value: number }) {
   return (

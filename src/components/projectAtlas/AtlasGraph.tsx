@@ -103,9 +103,9 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
   const shellRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{ x: number; y: number; viewport: Viewport } | null>(null);
   const positions = useMemo(() => layoutDomainNodes(nodes), [nodes]);
+  const nodesById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
   const bounds = useMemo(() => getGraphBounds(positions), [positions]);
   const relatedIds = useMemo(() => getRelatedNodeIds(edges, selectedNodeId), [edges, selectedNodeId]);
-  const edgePorts = useMemo(() => buildEdgePorts(edges), [edges]);
   const highlightedIds = useMemo(() => new Set(highlightedNodeIds), [highlightedNodeIds]);
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const [viewport, setViewport] = useState<Viewport>({ x: 60, y: 50, zoom: 0.88 });
@@ -117,6 +117,8 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
 
   const focusSelection = selectedNodeId ?? hoveredNodeId;
   const canDim = Boolean(focusSelection);
+  const edgePorts = useMemo(() => buildEdgePorts(edges, focusSelection, positions), [edges, focusSelection, positions]);
+  const focusedEdges = useMemo(() => focusSelection ? edges.filter((edge) => edge.source === focusSelection || edge.target === focusSelection) : [], [edges, focusSelection]);
 
   const updateZoom = (nextZoom: number, anchor?: { x: number; y: number }) => {
     setViewport((current) => {
@@ -189,6 +191,14 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
                 <path
                   d={route.path}
                   fill="none"
+                  className="stroke-[#f7eddf] dark:stroke-[#18120d]"
+                  strokeWidth={edgeWidth + 7}
+                  strokeDasharray={visualStyle.dashArray}
+                  strokeLinecap={visualStyle.strokeLinecap}
+                />
+                <path
+                  d={route.path}
+                  fill="none"
                   stroke={visualStyle.stroke}
                   strokeWidth={edgeWidth}
                   strokeDasharray={visualStyle.dashArray}
@@ -212,7 +222,7 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
             const dimmed = canDim && !related;
             const highlighted = highlightedIds.has(node.id);
             return (
-              <foreignObject key={node.id} x={position.x} y={position.y} width={NODE_WIDTH} height={NODE_HEIGHT} opacity={dimmed ? 0.34 : 1}>
+              <foreignObject key={node.id} x={position.x} y={position.y} width={NODE_WIDTH} height={NODE_HEIGHT} opacity={dimmed ? 0.18 : 1}>
                 <button
                   type="button"
                   data-domain-card
@@ -267,12 +277,12 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
         {nodes.length} domains · {edges.length} dependencies · {focusSelection ? 'focused dependencies' : denseGraph ? 'select a domain to show dependencies' : `${Math.round(viewport.zoom * 100)}%`}
       </div>
 
-      <EdgeLegend />
+      <EdgeLegend focusedEdges={focusedEdges} focusSelection={focusSelection} nodesById={nodesById} />
     </div>
   );
 }
 
-function EdgeLegend() {
+function EdgeLegend({ focusedEdges, focusSelection, nodesById }: { focusedEdges: AtlasDomainMapEdge[]; focusSelection: string | null; nodesById: Map<string, AtlasDomainMapNode> }) {
   return (
     <div className="absolute bottom-4 right-4 w-72 rounded-lg border border-[#e0c7a8] bg-[#fffdfa]/95 p-3 text-[#5c493c] shadow-xl backdrop-blur dark:border-[#6d5642] dark:bg-[#241c15]/95 dark:text-[#f3eadf]">
       <div className="flex items-center justify-between gap-2">
@@ -290,6 +300,25 @@ function EdgeLegend() {
           </div>
         ))}
       </div>
+      {focusSelection && focusedEdges.length > 0 && (
+        <div className="mt-3 border-t border-[#e5d4bb] pt-2 dark:border-[#584a3b]">
+          <p className="text-[9px] font-black uppercase tracking-widest text-[#9a5b13] dark:text-[#d6b56d]">Focused edges</p>
+          <div className="mt-1.5 space-y-1">
+            {focusedEdges.slice(0, 5).map((edge) => {
+              const style = edgeVisualStyle(edge);
+              const source = nodesById.get(edge.source)?.title ?? edge.source;
+              const target = nodesById.get(edge.target)?.title ?? edge.target;
+              return (
+                <div key={edge.id} className="grid grid-cols-[10px_1fr] gap-1.5 text-[9px] font-bold text-[#6d5a4d] dark:text-[#d8c5aa]">
+                  <span style={{ color: style.stroke }}>→</span>
+                  <span className="truncate"><span className="text-[#3f342b] dark:text-[#f8ead3]">{source}</span> → {target}</span>
+                </div>
+              );
+            })}
+            {focusedEdges.length > 5 && <p className="text-[9px] font-bold text-[#8a6d55] dark:text-[#b89b82]">+{focusedEdges.length - 5} more focused dependencies</p>}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -364,20 +393,21 @@ function layoutDomainNodes(nodes: AtlasDomainMapNode[]) {
   return positions;
 }
 
-function buildEdgePorts(edges: AtlasDomainMapEdge[]) {
-  const connected = new Map<string, string[]>();
-  for (const edge of edges) {
-    connected.set(edge.source, [...(connected.get(edge.source) ?? []), edge.id]);
-    connected.set(edge.target, [...(connected.get(edge.target) ?? []), edge.id]);
+function buildEdgePorts(edges: AtlasDomainMapEdge[], focusSelection: string | null, positions: Map<string, { x: number; y: number }>) {
+  const relevantEdges = focusSelection ? edges.filter((edge) => edge.source === focusSelection || edge.target === focusSelection) : edges;
+  const connected = new Map<string, AtlasDomainMapEdge[]>();
+  for (const edge of relevantEdges) {
+    connected.set(edge.source, [...(connected.get(edge.source) ?? []), edge]);
+    connected.set(edge.target, [...(connected.get(edge.target) ?? []), edge]);
   }
 
   const offsets = new Map<string, number>();
-  for (const [nodeId, edgeIds] of connected) {
-    const sorted = [...new Set(edgeIds)].sort();
+  for (const [nodeId, nodeEdges] of connected) {
+    const sorted = [...new Map(nodeEdges.map((edge) => [edge.id, edge])).values()].sort((a, b) => a.id.localeCompare(b.id));
     const count = sorted.length;
-    const step = count > 1 ? Math.min(15, (NODE_HEIGHT - 72) / Math.max(1, count - 1)) : 0;
-    sorted.forEach((edgeId, index) => {
-      offsets.set(`${nodeId}:${edgeId}`, (index - (count - 1) / 2) * step);
+    const step = count > 1 ? Math.min(18, (NODE_HEIGHT - 56) / Math.max(1, count - 1)) : 0;
+    sorted.forEach((edge, index) => {
+      offsets.set(`${nodeId}:${edge.id}`, (index - (count - 1) / 2) * step);
     });
   }
   return offsets;

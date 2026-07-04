@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ArrowLeft, FileCode2, Focus, Minus, Plus, RotateCcw } from 'lucide-react';
 import type { AtlasDomainFile, AtlasDomainInspectorViewModel } from '../../lib/projectAtlasViewModel.js';
 
@@ -29,24 +29,36 @@ interface ClusterLayout extends FileCluster {
   y: number;
   width: number;
   height: number;
+  visibleFiles: AtlasDomainFile[];
+  hiddenCount: number;
+  expanded: boolean;
   filePositions: Array<{ file: AtlasDomainFile; x: number; y: number }>;
 }
 
 const ROOT_WIDTH = 380;
 const ROOT_HEIGHT = 154;
 const CLUSTER_WIDTH = 560;
+const CLUSTER_HEADER_HEIGHT = 48;
 const FILE_WIDTH = 238;
 const FILE_HEIGHT = 66;
 const FILE_GAP_X = 28;
 const FILE_GAP_Y = 22;
+const CLUSTER_GAP_X = 92;
+const CLUSTER_GAP_Y = 54;
+const MAX_COLLAPSED_FILES = 8;
 const MIN_ZOOM = 0.35;
 const MAX_ZOOM = 1.65;
 
 export function AtlasDomainDrilldown({ inspector, onBack }: AtlasDomainDrilldownProps) {
   const shellRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{ x: number; y: number; viewport: Viewport } | null>(null);
-  const graph = useMemo(() => buildDrilldownGraph(inspector), [inspector]);
+  const [expandedClusterIds, setExpandedClusterIds] = useState<Set<string>>(() => new Set());
+  const graph = useMemo(() => buildDrilldownGraph(inspector, expandedClusterIds), [inspector, expandedClusterIds]);
   const [viewport, setViewport] = useState<Viewport>({ x: 80, y: 70, zoom: 0.74 });
+
+  useEffect(() => {
+    setExpandedClusterIds(new Set());
+  }, [inspector.id]);
 
   useEffect(() => {
     setViewport(fitViewport(shellRef.current, graph.bounds));
@@ -59,6 +71,15 @@ export function AtlasDomainDrilldown({ inspector, onBack }: AtlasDomainDrilldown
       const graphX = (anchor.x - current.x) / current.zoom;
       const graphY = (anchor.y - current.y) / current.zoom;
       return { zoom, x: anchor.x - graphX * zoom, y: anchor.y - graphY * zoom };
+    });
+  };
+
+  const handleToggleCluster = (clusterId: string) => {
+    setExpandedClusterIds((current) => {
+      const next = new Set(current);
+      if (next.has(clusterId)) next.delete(clusterId);
+      else next.add(clusterId);
+      return next;
     });
   };
 
@@ -113,8 +134,7 @@ export function AtlasDomainDrilldown({ inspector, onBack }: AtlasDomainDrilldown
           {graph.clusters.map((cluster) => (
             <g key={cluster.id}>
               <rect x={cluster.x} y={cluster.y} width={cluster.width} height={cluster.height} rx={18} className="fill-[#fffaf2]/58 stroke-[#d8c3a6] dark:fill-[#0f1724]/56 dark:stroke-[rgba(245,169,89,0.18)]" />
-              <text x={cluster.x + 18} y={cluster.y + 30} className="fill-[#9a5b13] text-[12px] font-black uppercase tracking-widest dark:fill-[#f5a959]">{cluster.label}</text>
-              <text x={cluster.x + cluster.width - 18} y={cluster.y + 30} textAnchor="end" className="fill-[#8a6d55] text-[10px] font-bold dark:fill-[#94a3b8]">{cluster.files.length} files</text>
+              <ClusterHeader cluster={cluster} onToggle={() => handleToggleCluster(cluster.id)} />
               {cluster.filePositions.map(({ file, x, y }) => <FileNode key={file.id} file={file} x={x} y={y} />)}
             </g>
           ))}
@@ -130,6 +150,24 @@ export function AtlasDomainDrilldown({ inspector, onBack }: AtlasDomainDrilldown
         <CanvasButton label="Reset view" onClick={() => setViewport({ x: 80, y: 70, zoom: 0.74 })}><RotateCcw size={15} /></CanvasButton>
       </div>
     </div>
+  );
+}
+
+function ClusterHeader({ cluster, onToggle }: { cluster: ClusterLayout; onToggle: () => void }) {
+  return (
+    <foreignObject x={cluster.x} y={cluster.y} width={cluster.width} height={CLUSTER_HEADER_HEIGHT}>
+      <div data-drill-node className="flex h-full items-center justify-between gap-3 px-4 text-left">
+        <div className="min-w-0">
+          <p className="truncate text-[11px] font-black uppercase tracking-widest text-[#9a5b13] dark:text-[#f5a959]">{cluster.label}</p>
+          <p className="mt-0.5 text-[9px] font-bold text-[#8a6d55] dark:text-[#94a3b8]">showing {cluster.visibleFiles.length} of {cluster.files.length} files</p>
+        </div>
+        {cluster.hiddenCount > 0 || cluster.expanded ? (
+          <button type="button" onClick={onToggle} className="shrink-0 cursor-pointer rounded-md border border-[#ead9c2] bg-[#fff8ec] px-2 py-1 text-[9px] font-black uppercase text-[#8a4d0d] hover:bg-[#fff1d7] dark:border-[rgba(148,163,184,0.14)] dark:bg-[#0b1220] dark:text-[#f5a959] dark:hover:bg-[rgba(245,169,89,0.12)]">
+            {cluster.expanded ? 'Collapse' : `View all +${cluster.hiddenCount}`}
+          </button>
+        ) : null}
+      </div>
+    </foreignObject>
   );
 }
 
@@ -181,7 +219,7 @@ function Metric({ label, value }: { label: string; value: number }) {
   );
 }
 
-function CanvasButton({ label, onClick, children }: { label: string; onClick: () => void; children: React.ReactNode }) {
+function CanvasButton({ label, onClick, children }: { label: string; onClick: () => void; children: ReactNode }) {
   return (
     <button type="button" aria-label={label} title={label} onClick={onClick} className="flex h-10 w-10 cursor-pointer items-center justify-center border-r border-[#d8c3a6] text-[#b7741e] last:border-r-0 hover:bg-[#fff1d7] dark:border-[rgba(148,163,184,0.14)] dark:text-[#f5a959] dark:hover:bg-[rgba(245,169,89,0.12)]">
       {children}
@@ -189,28 +227,32 @@ function CanvasButton({ label, onClick, children }: { label: string; onClick: ()
   );
 }
 
-function buildDrilldownGraph(inspector: AtlasDomainInspectorViewModel) {
+function buildDrilldownGraph(inspector: AtlasDomainInspectorViewModel, expandedClusterIds: Set<string>) {
   const clusters = buildFileClusters(inspector.files);
   const root = { x: 560, y: 86 };
-  const layouts: ClusterLayout[] = clusters.map((cluster, index) => {
-    const column = index % 2;
-    const row = Math.floor(index / 2);
-    const x = 160 + column * 660;
-    const y = 330 + row * 380;
-    const columns = 2;
-    const rows = Math.ceil(Math.min(cluster.files.length, 10) / columns);
-    const height = 62 + rows * FILE_HEIGHT + Math.max(0, rows - 1) * FILE_GAP_Y + 26;
-    const filePositions = cluster.files.slice(0, 10).map((file, fileIndex) => ({
+  const columnX = [120, 120 + CLUSTER_WIDTH + CLUSTER_GAP_X];
+  const columnY = [330, 330];
+  const layouts: ClusterLayout[] = clusters.map((cluster) => {
+    const expanded = expandedClusterIds.has(cluster.id);
+    const visibleFiles = expanded ? cluster.files : cluster.files.slice(0, MAX_COLLAPSED_FILES);
+    const hiddenCount = Math.max(0, cluster.files.length - visibleFiles.length);
+    const rows = Math.max(1, Math.ceil(visibleFiles.length / 2));
+    const height = CLUSTER_HEADER_HEIGHT + rows * FILE_HEIGHT + Math.max(0, rows - 1) * FILE_GAP_Y + 28;
+    const column = columnY[0] <= columnY[1] ? 0 : 1;
+    const x = columnX[column];
+    const y = columnY[column];
+    columnY[column] += height + CLUSTER_GAP_Y;
+    const filePositions = visibleFiles.map((file, fileIndex) => ({
       file,
-      x: x + 24 + (fileIndex % columns) * (FILE_WIDTH + FILE_GAP_X),
-      y: y + 54 + Math.floor(fileIndex / columns) * (FILE_HEIGHT + FILE_GAP_Y),
+      x: x + 24 + (fileIndex % 2) * (FILE_WIDTH + FILE_GAP_X),
+      y: y + CLUSTER_HEADER_HEIGHT + Math.floor(fileIndex / 2) * (FILE_HEIGHT + FILE_GAP_Y),
     }));
-    return { ...cluster, x, y, width: CLUSTER_WIDTH, height, filePositions };
+    return { ...cluster, x, y, width: CLUSTER_WIDTH, height, visibleFiles, hiddenCount, expanded, filePositions };
   });
 
   const startIds = new Set(inspector.startHereFiles.map((file) => file.id));
   const edges = layouts.flatMap((cluster) => {
-    const clusterCenter = { x: cluster.x + cluster.width / 2, y: cluster.y + 18 };
+    const clusterCenter = { x: cluster.x + cluster.width / 2, y: cluster.y + 16 };
     const rootEdge = makeEdge(`root-${cluster.id}`, { x: root.x + ROOT_WIDTH / 2, y: root.y + ROOT_HEIGHT }, clusterCenter, 'contains', false);
     const fileEdges = cluster.filePositions.map(({ file, x, y }) => makeEdge(
       `${cluster.id}-${file.id}`,
@@ -224,7 +266,7 @@ function buildDrilldownGraph(inspector: AtlasDomainInspectorViewModel) {
 
   const maxX = Math.max(root.x + ROOT_WIDTH, ...layouts.map((layout) => layout.x + layout.width));
   const maxY = Math.max(root.y + ROOT_HEIGHT, ...layouts.map((layout) => layout.y + layout.height));
-  return { root, clusters: layouts, edges, bounds: { x: 120, y: 60, width: maxX - 120 + 140, height: maxY - 60 + 120 } };
+  return { root, clusters: layouts, edges, bounds: { x: 80, y: 60, width: maxX - 80 + 120, height: maxY - 60 + 120 } };
 }
 
 function makeEdge(id: string, source: Point, target: Point, label: string, highlight: boolean) {

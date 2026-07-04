@@ -22,11 +22,6 @@ interface Point {
   y: number;
 }
 
-interface EdgeRoute {
-  path: string;
-  label: Point;
-}
-
 type EdgeVisualVariant = 'direct' | 'soft' | 'reference' | 'test';
 
 interface EdgeVisualStyle {
@@ -44,12 +39,6 @@ const NODE_WIDTH = 260;
 const NODE_HEIGHT = 154;
 const MIN_ZOOM = 0.42;
 const MAX_ZOOM = 1.7;
-const GRID_ORIGIN_X = 70;
-const GRID_ORIGIN_Y = 70;
-const GRID_COLUMN_GAP = 360;
-const GRID_ROW_GAP = 240;
-const EDGE_PORT_GAP = 32;
-const EDGE_ROUTE_RADIUS = 20;
 const MAX_VISIBLE_FOCUSED_EDGES = 12;
 
 const EDGE_VISUAL_STYLES: Record<EdgeVisualVariant, EdgeVisualStyle> = {
@@ -93,13 +82,6 @@ const EDGE_VISUAL_STYLES: Record<EdgeVisualVariant, EdgeVisualStyle> = {
   },
 };
 
-const EDGE_LEGEND_ITEMS: EdgeVisualStyle[] = [
-  EDGE_VISUAL_STYLES.direct,
-  EDGE_VISUAL_STYLES.soft,
-  EDGE_VISUAL_STYLES.reference,
-  EDGE_VISUAL_STYLES.test,
-];
-
 export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = [], onSelectNode }: AtlasGraphProps) {
   const shellRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{ x: number; y: number; viewport: Viewport } | null>(null);
@@ -110,7 +92,6 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
   const highlightedIds = useMemo(() => new Set(highlightedNodeIds), [highlightedNodeIds]);
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const [viewport, setViewport] = useState<Viewport>({ x: 60, y: 50, zoom: 0.88 });
-  const denseGraph = nodes.length > 6 || edges.length > 8 || edges.some((edge) => edge.sourceEdgeIds.length > 3);
 
   useEffect(() => {
     setViewport(fitViewport(shellRef.current, bounds));
@@ -118,7 +99,6 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
 
   const focusSelection = selectedNodeId ?? hoveredNodeId;
   const canDim = Boolean(focusSelection);
-  const edgePorts = useMemo(() => buildEdgePorts(edges, focusSelection, positions), [edges, focusSelection, positions]);
   const readableEdges = useMemo(() => selectReadableAtlasEdges(edges, focusSelection, MAX_VISIBLE_FOCUSED_EDGES), [edges, focusSelection]);
   const focusedEdges = readableEdges.visibleEdges;
 
@@ -168,49 +148,33 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
           dragRef.current = null;
         }}
       >
-        <defs>
-          {EDGE_LEGEND_ITEMS.map((style) => (
-            <marker key={style.variant} id={`atlas-arrow-${style.variant}`} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-              <path d="M 0 0 L 10 5 L 0 10 z" fill={style.stroke} />
-            </marker>
-          ))}
-        </defs>
         <g transform={`translate(${viewport.x} ${viewport.y}) scale(${viewport.zoom})`}>
           {focusedEdges.map((edge) => {
             const source = positions.get(edge.source);
             const target = positions.get(edge.target);
             if (!source || !target) return null;
             const directlyRelated = Boolean(focusSelection && (edge.source === focusSelection || edge.target === focusSelection));
-            const dimmed = canDim && !directlyRelated;
             const visualStyle = edgeVisualStyle(edge);
-            const route = edgeRoute(edge, source, target, edgePorts);
-            const showLabel = Boolean(!denseGraph && focusSelection && directlyRelated && viewport.zoom > 0.82 && edge.sourceEdgeIds.length <= 3);
-            const edgeOpacity = dimmed ? 0.03 : focusSelection && directlyRelated ? 0.9 : 0.14;
-            const edgeWidth = dimmed ? 0.6 : focusSelection && directlyRelated ? visualStyle.focusWidth : visualStyle.baseWidth;
+            const path = simpleFocusedEdgePath(edge, source, target);
+            const edgeOpacity = focusSelection && directlyRelated ? 0.82 : 0;
+            const edgeWidth = focusSelection && directlyRelated ? visualStyle.focusWidth : visualStyle.baseWidth;
             return (
               <g key={edge.id} opacity={edgeOpacity} pointerEvents="none">
                 <path
-                  d={route.path}
+                  d={path}
                   fill="none"
                   className="stroke-[#f8efe2] dark:stroke-[#0a0a0a]"
-                  strokeWidth={edgeWidth + 7}
-                  strokeDasharray={visualStyle.dashArray}
-                  strokeLinecap={visualStyle.strokeLinecap}
+                  strokeWidth={edgeWidth + 6}
+                  strokeLinecap="round"
                 />
                 <path
-                  d={route.path}
+                  d={path}
                   fill="none"
                   stroke={visualStyle.stroke}
                   strokeWidth={edgeWidth}
                   strokeDasharray={visualStyle.dashArray}
-                  strokeLinecap={visualStyle.strokeLinecap}
-                  markerEnd={focusSelection && directlyRelated ? `url(#atlas-arrow-${visualStyle.variant})` : undefined}
+                  strokeLinecap="round"
                 />
-                {showLabel && (
-                  <text x={route.label.x} y={route.label.y - 10} className="fill-[#8a4d0d] text-[10px] font-bold dark:fill-[#f7d28a]">
-                    {edge.label}
-                  </text>
-                )}
               </g>
             );
           })}
@@ -279,76 +243,51 @@ export function AtlasGraph({ nodes, edges, selectedNodeId, highlightedNodeIds = 
       </div>
 
       <div className="absolute bottom-4 left-4 rounded-lg border border-[#d8c3a6] bg-[#fffaf2]/95 px-3 py-2 text-[10px] font-bold text-[#5c493c] shadow-xl backdrop-blur dark:border-[rgba(212,165,116,0.18)] dark:bg-[#141414]/90 dark:text-[#a39787]">
-        {nodes.length} domains / {edges.length} dependencies / {focusSelection ? `showing ${focusedEdges.length} focused paths` : 'select a domain to show paths'}
+        {nodes.length} domains / {edges.length} relationships / {focusSelection ? `showing ${focusedEdges.length} focused relationships` : 'focus-only edges'}
       </div>
 
-      <EdgeLegend focusedEdges={focusedEdges} focusSelection={focusSelection} hiddenFocusedEdgeCount={readableEdges.hiddenFocusedEdgeCount} nodesById={nodesById} />
+      <RelationshipFocusNote
+        relationshipGroups={readableEdges.relationshipGroups}
+        focusSelection={focusSelection}
+        hiddenFocusedEdgeCount={readableEdges.hiddenFocusedEdgeCount}
+        nodesById={nodesById}
+      />
     </div>
   );
 }
 
-function EdgeLegend({ focusedEdges, focusSelection, hiddenFocusedEdgeCount, nodesById }: { focusedEdges: AtlasDomainMapEdge[]; focusSelection: string | null; hiddenFocusedEdgeCount: number; nodesById: Map<string, AtlasDomainMapNode> }) {
+function RelationshipFocusNote({
+  relationshipGroups,
+  focusSelection,
+  hiddenFocusedEdgeCount,
+  nodesById,
+}: {
+  relationshipGroups: Array<{ id: string; source: string; target: string; kind: string; label: string; rawRelationshipCount: number }>;
+  focusSelection: string | null;
+  hiddenFocusedEdgeCount: number;
+  nodesById: Map<string, AtlasDomainMapNode>;
+}) {
   return (
     <div className="absolute bottom-4 right-4 w-72 rounded-lg border border-[#d8c3a6] bg-[#fffaf2]/95 p-3 text-[#5c493c] shadow-xl backdrop-blur dark:border-[rgba(212,165,116,0.18)] dark:bg-[#141414]/92 dark:text-[#f5f0eb]">
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-[10px] font-black uppercase tracking-widest text-[#9a5b13] dark:text-[#d4a574]">Dependency Legend</p>
-        <span className="text-[9px] font-black uppercase text-[#8a6d55] dark:text-[#6b5f53]">arrow = target</span>
-      </div>
-      <div className="mt-2 space-y-1.5">
-        {EDGE_LEGEND_ITEMS.map((style) => (
-          <div key={style.variant} className="grid grid-cols-[82px_1fr] items-center gap-2">
-            <LegendLine style={style} />
-            <div className="min-w-0">
-              <p className="truncate text-[10px] font-black text-[#2f2923] dark:text-[#f5f0eb]">{style.label}</p>
-              <p className="truncate text-[9px] font-bold text-[#7b6554] dark:text-[#a39787]">{style.description}</p>
-            </div>
-          </div>
-        ))}
-      </div>
-      {focusSelection && focusedEdges.length > 0 && (
-        <div className="mt-3 border-t border-[#ead9c2] pt-2 dark:border-[rgba(212,165,116,0.12)]">
-          <p className="text-[9px] font-black uppercase tracking-widest text-[#9a5b13] dark:text-[#d4a574]">Reading path</p>
-          <div className="mt-1.5 space-y-1">
-            {focusedEdges.slice(0, 5).map((edge) => {
-              const style = edgeVisualStyle(edge);
-              const source = nodesById.get(edge.source)?.title ?? edge.source;
-              const target = nodesById.get(edge.target)?.title ?? edge.target;
+      <p className="text-[10px] font-black uppercase tracking-widest text-[#9a5b13] dark:text-[#d4a574]">Focus Relationships</p>
+      {!focusSelection ? (
+        <p className="mt-2 text-[10px] font-bold leading-relaxed text-[#7b6554] dark:text-[#a39787]">Focus a domain to reveal direct relationships. Overview stays line-free for readability.</p>
+      ) : (
+        <div className="mt-2 space-y-1.5">
+          {relationshipGroups.slice(0, 5).map((group) => {
+            const source = nodesById.get(group.source)?.title ?? group.source;
+            const target = nodesById.get(group.target)?.title ?? group.target;
               return (
-                <div key={edge.id} className="grid grid-cols-[10px_1fr] gap-1.5 text-[9px] font-bold text-[#6d5a4d] dark:text-[#d8c5aa]">
-                  <span style={{ color: style.stroke }}>-&gt;</span>
-                  <span className="truncate"><span className="text-[#3f342b] dark:text-[#f8ead3]">{source}</span> -&gt; {target}</span>
+                <div key={group.id} className="text-[9px] font-bold text-[#6d5a4d] dark:text-[#d8c5aa]">
+                  <p className="truncate"><span className="text-[#3f342b] dark:text-[#f8ead3]">{source}</span> -&gt; {target}</p>
+                  <p className="truncate text-[#8a6d55] dark:text-[#a39787]">{group.label} / {group.rawRelationshipCount} raw relationships</p>
                 </div>
               );
             })}
-            {focusedEdges.length > 5 && <p className="text-[9px] font-bold text-[#8a6d55] dark:text-[#b89b82]">+{focusedEdges.length - 5} more listed below the fold</p>}
-            {hiddenFocusedEdgeCount > 0 && <p className="text-[9px] font-bold text-[#8a6d55] dark:text-[#b89b82]">+{hiddenFocusedEdgeCount} hidden to keep the map readable</p>}
-          </div>
+          {hiddenFocusedEdgeCount > 0 && <p className="text-[9px] font-bold text-[#8a6d55] dark:text-[#b89b82]">+{hiddenFocusedEdgeCount} hidden to keep the map readable</p>}
         </div>
       )}
     </div>
-  );
-}
-
-function LegendLine({ style }: { style: EdgeVisualStyle }) {
-  return (
-    <svg width="82" height="18" viewBox="0 0 82 18" aria-hidden="true">
-      <defs>
-        <marker id={`legend-arrow-${style.variant}`} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-          <path d="M 0 0 L 10 5 L 0 10 z" fill={style.stroke} />
-        </marker>
-      </defs>
-      <line
-        x1="5"
-        y1="9"
-        x2="72"
-        y2="9"
-        stroke={style.stroke}
-        strokeWidth={Math.max(2, style.baseWidth)}
-        strokeDasharray={style.dashArray}
-        strokeLinecap={style.strokeLinecap}
-        markerEnd={`url(#legend-arrow-${style.variant})`}
-      />
-    </svg>
   );
 }
 
@@ -392,6 +331,27 @@ function edgeVisualStyle(edge: AtlasDomainMapEdge): EdgeVisualStyle {
   if (edge.kind === 'tests') return EDGE_VISUAL_STYLES.test;
   if (edge.kind === 'contains' || edge.kind === 'exports') return EDGE_VISUAL_STYLES.reference;
   return EDGE_VISUAL_STYLES.direct;
+}
+
+function simpleFocusedEdgePath(edge: AtlasDomainMapEdge, source: Point, target: Point) {
+  const sourceCenter = { x: source.x + NODE_WIDTH / 2, y: source.y + NODE_HEIGHT / 2 };
+  const targetCenter = { x: target.x + NODE_WIDTH / 2, y: target.y + NODE_HEIGHT / 2 };
+  const sourceToRight = targetCenter.x >= sourceCenter.x;
+  const start = {
+    x: source.x + (sourceToRight ? NODE_WIDTH : 0),
+    y: sourceCenter.y,
+  };
+  const end = {
+    x: target.x + (sourceToRight ? 0 : NODE_WIDTH),
+    y: targetCenter.y,
+  };
+  const distance = Math.max(80, Math.abs(end.x - start.x));
+  const bend = ((stableHash(edge.id) % 5) - 2) * 10;
+  const control = {
+    x: start.x + (sourceToRight ? distance : -distance) * 0.5,
+    y: (start.y + end.y) / 2 + bend,
+  };
+  return `M ${start.x} ${start.y} Q ${control.x} ${control.y} ${end.x} ${end.y}`;
 }
 
 export function selectReadableAtlasEdges(
@@ -447,118 +407,6 @@ function layoutDomainNodes(nodes: AtlasDomainMapNode[]) {
     });
   });
   return positions;
-}
-
-function buildEdgePorts(edges: AtlasDomainMapEdge[], focusSelection: string | null, positions: Map<string, { x: number; y: number }>) {
-  const relevantEdges = focusSelection ? edges.filter((edge) => edge.source === focusSelection || edge.target === focusSelection) : edges;
-  const connected = new Map<string, AtlasDomainMapEdge[]>();
-  for (const edge of relevantEdges) {
-    connected.set(edge.source, [...(connected.get(edge.source) ?? []), edge]);
-    connected.set(edge.target, [...(connected.get(edge.target) ?? []), edge]);
-  }
-
-  const offsets = new Map<string, number>();
-  for (const [nodeId, nodeEdges] of connected) {
-    const sorted = [...new Map(nodeEdges.map((edge) => [edge.id, edge])).values()].sort((a, b) => a.id.localeCompare(b.id));
-    const count = sorted.length;
-    const step = count > 1 ? Math.min(18, (NODE_HEIGHT - 56) / Math.max(1, count - 1)) : 0;
-    sorted.forEach((edge, index) => {
-      offsets.set(`${nodeId}:${edge.id}`, (index - (count - 1) / 2) * step);
-    });
-  }
-  return offsets;
-}
-
-function edgeRoute(
-  edge: AtlasDomainMapEdge,
-  source: { x: number; y: number },
-  target: { x: number; y: number },
-  edgePorts: Map<string, number>,
-): EdgeRoute {
-  const sourceCenter = { x: source.x + NODE_WIDTH / 2, y: source.y + NODE_HEIGHT / 2 };
-  const targetCenter = { x: target.x + NODE_WIDTH / 2, y: target.y + NODE_HEIGHT / 2 };
-  const sourceToRight = targetCenter.x >= sourceCenter.x;
-  const sourceSide = sourceToRight ? 'right' : 'left';
-  const targetSide = sourceToRight ? 'left' : 'right';
-  const sourceDirection = sourceSide === 'right' ? 1 : -1;
-  const targetDirection = targetSide === 'right' ? 1 : -1;
-  const sourceOffset = edgePorts.get(`${edge.source}:${edge.id}`) ?? 0;
-  const targetOffset = edgePorts.get(`${edge.target}:${edge.id}`) ?? 0;
-  const start: Point = {
-    x: source.x + (sourceSide === 'right' ? NODE_WIDTH : 0),
-    y: source.y + NODE_HEIGHT / 2 + sourceOffset,
-  };
-  const end: Point = {
-    x: target.x + (targetSide === 'right' ? NODE_WIDTH : 0),
-    y: target.y + NODE_HEIGHT / 2 + targetOffset,
-  };
-  const sourceExit: Point = { x: start.x + sourceDirection * EDGE_PORT_GAP, y: start.y };
-  const targetEntry: Point = { x: end.x + targetDirection * EDGE_PORT_GAP, y: end.y };
-  const sourceGrid = gridPosition(source);
-  const targetGrid = gridPosition(target);
-  const adjacentSameRow = sourceGrid.row === targetGrid.row && Math.abs(sourceGrid.column - targetGrid.column) === 1;
-  const laneOffset = stableLaneOffset(edge.id);
-
-  if (adjacentSameRow) {
-    const midX = (sourceExit.x + targetEntry.x) / 2 + laneOffset * 0.4;
-    const points = [start, sourceExit, { x: midX, y: sourceExit.y }, { x: midX, y: targetEntry.y }, targetEntry, end];
-    return { path: roundedPath(points), label: { x: midX, y: (sourceExit.y + targetEntry.y) / 2 } };
-  }
-
-  const busY = edgeBusLaneY(source, target, edge.id);
-  const points = [start, sourceExit, { x: sourceExit.x, y: busY }, { x: targetEntry.x, y: busY }, targetEntry, end];
-  return { path: roundedPath(points), label: { x: (sourceExit.x + targetEntry.x) / 2, y: busY } };
-}
-
-function gridPosition(position: { x: number; y: number }) {
-  return {
-    column: Math.round((position.x - GRID_ORIGIN_X) / GRID_COLUMN_GAP),
-    row: Math.round((position.y - GRID_ORIGIN_Y) / GRID_ROW_GAP),
-  };
-}
-
-function edgeBusLaneY(source: { x: number; y: number }, target: { x: number; y: number }, edgeId: string) {
-  const sourceRow = gridPosition(source).row;
-  const targetRow = gridPosition(target).row;
-  const laneOffset = stableLaneOffset(edgeId);
-  if (sourceRow === targetRow) {
-    const routeAbove = sourceRow > 0 && stableHash(edgeId) % 2 === 0;
-    return routeAbove ? source.y - 46 - laneOffset : source.y + NODE_HEIGHT + 46 + laneOffset;
-  }
-  return target.y > source.y ? source.y + NODE_HEIGHT + 44 + laneOffset : source.y - 44 - laneOffset;
-}
-
-function roundedPath(points: Point[]) {
-  if (points.length === 0) return '';
-  if (points.length === 1) return `M ${points[0].x} ${points[0].y}`;
-  const [start, ...rest] = points;
-  let path = `M ${start.x} ${start.y}`;
-  for (let index = 0; index < rest.length; index += 1) {
-    const current = rest[index];
-    const next = rest[index + 1];
-    const previous = points[index];
-    if (!next) {
-      path += ` L ${current.x} ${current.y}`;
-      continue;
-    }
-    const before = moveToward(current, previous, EDGE_ROUTE_RADIUS);
-    const after = moveToward(current, next, EDGE_ROUTE_RADIUS);
-    path += ` L ${before.x} ${before.y} Q ${current.x} ${current.y} ${after.x} ${after.y}`;
-  }
-  return path;
-}
-
-function moveToward(point: Point, target: Point, distance: number): Point {
-  const dx = target.x - point.x;
-  const dy = target.y - point.y;
-  const length = Math.hypot(dx, dy);
-  if (length === 0) return point;
-  const amount = Math.min(distance, length / 2) / length;
-  return { x: point.x + dx * amount, y: point.y + dy * amount };
-}
-
-function stableLaneOffset(value: string) {
-  return ((stableHash(value) % 5) - 2) * 7;
 }
 
 function stableHash(value: string) {

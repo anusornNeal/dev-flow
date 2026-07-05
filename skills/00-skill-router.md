@@ -23,6 +23,26 @@ Use:
 
 Do not require Project Atlas for simple single-file or clearly targeted cards.
 
+## When scanning or authoring Project Atlas
+
+Load:
+- `01-authoring-core.md`
+
+Use the `ChatGPT-authored Project Atlas scan` workflow in Authoring Core when the user asks to:
+- scan/build/update Project Atlas,
+- make Atlas more detailed or more accurate,
+- create a domain map or flow map,
+- have ChatGPT read the repo and group it itself,
+- replace local/heuristic scan output with ChatGPT-authored Atlas.
+
+Use:
+- `get_repo_context_bundle` first when the project is known.
+- staged local reads/lists for repo identity, directory inventory, runtime entrypoints, feature anchors, repository/model coverage, and test surfaces.
+- `apply_project_atlas_agent_update` to save the final ChatGPT-authored Atlas.
+- `get_project_atlas_status` to verify cache status, freshness, node count, edge count, and domain count.
+
+Do not load schema/examples unless writing or updating a DevFlow card. Do not create every-file graph nodes unless the user explicitly asks for an every-file inventory layer.
+
 ## When opening a bug on an existing task
 
 Load:

@@ -468,7 +468,7 @@ try {
   const parseTestReportTool = catalog.tools.find((tool) => tool.name === 'parse_test_report');
   const getAtlasTool = catalog.tools.find((tool) => tool.name === 'get_project_atlas');
   const atlasStatusTool = catalog.tools.find((tool) => tool.name === 'get_project_atlas_status');
-  const atlasRescanTool = catalog.tools.find((tool) => tool.name === 'rescan_project_atlas');
+  const atlasAuthorUpdateTool = catalog.tools.find((tool) => tool.name === 'apply_project_atlas_agent_update');
   assert.ok(createTaskSchema?.properties?.title);
   assert.ok(createTaskSchema?.properties?.projectId);
   assert.ok(createTaskSchema?.properties?.repoUrl);
@@ -484,7 +484,7 @@ try {
   assert.ok(parseTestReportTool, 'parse_test_report must be advertised in the MCP catalog');
   assert.ok(getAtlasTool, 'get_project_atlas must be advertised in the MCP catalog');
   assert.ok(atlasStatusTool, 'get_project_atlas_status must be advertised in the MCP catalog');
-  assert.ok(atlasRescanTool, 'rescan_project_atlas must be advertised in the MCP catalog');
+  assert.ok(atlasAuthorUpdateTool, 'apply_project_atlas_agent_update must be advertised in the MCP catalog');
   assert.match(String(qualityTool?.description || ''), /Implementation map/i);
   assert.match(String(repoIndexTool?.description || ''), /cached/i);
   assert.match(String(jiraBundleTool?.description || ''), /Jira issue packet/i);

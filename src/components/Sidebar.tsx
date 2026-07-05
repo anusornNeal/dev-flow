@@ -49,6 +49,10 @@ interface SidebarProps {
   onToggleAtlasSidebar?: () => void;
 }
 
+export function formatProjectRepoLabel(repoUrl?: string | null) {
+  return repoUrl?.replace(/^https?:\/\/(www\.)?/, '') || 'No repository URL';
+}
+
 export default function Sidebar({
   tasks,
   projects,
@@ -278,7 +282,7 @@ export default function Sidebar({
               </p>
               {projects.find(p => p.id === activeProjectId)?.repoUrl && (
                 <p className="text-[9px] text-[#8c7463] dark:text-[#d6b56d] font-sans truncate max-w-full opacity-90 mt-0.5" title={projects.find(p => p.id === activeProjectId)?.repoUrl}>
-                  {projects.find(p => p.id === activeProjectId)?.repoUrl.replace(/^https?:\/\/(www\.)?github\.com\//, '')}
+                  {formatProjectRepoLabel(projects.find(p => p.id === activeProjectId)?.repoUrl).replace(/^github\.com\//, '')}
                 </p>
               )}
               {(projects.find(p => p.id === activeProjectId)?.localPath || projects.find(p => p.id === activeProjectId)?.taskIdPrefix) && (
@@ -373,8 +377,8 @@ export default function Sidebar({
                             <p className="font-extrabold text-[12px] truncate flex items-center gap-1.5 text-[#534135] dark:text-[#f3eadf]">
                               {isActive && <Sparkles size={12} className="text-[#d89745] dark:text-[#e0a070]" />} {project.name}
                             </p>
-                            <p className="text-[10px] text-[#917d71] dark:text-[#d6b56d] font-mono truncate mt-0.5" title={project.repoUrl}>
-                              {project.repoUrl.replace(/^https?:\/\/(www\.)?/, '')}
+                            <p className="text-[10px] text-[#917d71] dark:text-[#d6b56d] font-mono truncate mt-0.5" title={project.repoUrl || undefined}>
+                              {formatProjectRepoLabel(project.repoUrl)}
                             </p>
                           </div>
                         </div>

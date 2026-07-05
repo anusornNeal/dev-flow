@@ -463,38 +463,12 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
     }),
   },
   {
-    name: 'rescan_project_atlas',
-    description: 'Manually rebuild Project Atlas for a project using the deterministic scanner and update the latest cache.',
-    inputSchema: {
-      type: 'object',
-      properties: projectIdentifierProperties,
-    },
-    outputSchema: { type: 'object' },
-    executionPolicy: { mode: 'job', jobKind: 'repo-command' },
-    buildHttpRequest: (args) => ({
-      method: 'POST',
-      path: '/api/project-atlas/rescan',
-      body: args,
-    }),
-  },
-  {
     name: 'apply_project_atlas_agent_update',
-    description: 'Submit a bounded ChatGPT/agent Project Atlas overlay patch. The patch is validated against the current deterministic Atlas cache and repo evidence before any cache write.',
+    description: 'Save a full ChatGPT-authored Project Atlas. ChatGPT owns domains, edges, summaries, read order, warnings, provenance, repo coverage, skipped-area reasons, grouping rationale, and evidence paths.',
     inputSchema: {
       type: 'object',
       properties: {
         ...projectIdentifierProperties,
-        base: {
-          type: 'object',
-          properties: {
-            generatedAt: { type: 'string' },
-            repoFingerprint: { type: 'string' },
-            nodeCount: { type: 'number' },
-            edgeCount: { type: 'number' },
-          },
-          required: ['nodeCount', 'edgeCount'],
-          additionalProperties: false,
-        },
         provenance: {
           type: 'object',
           properties: {
@@ -506,53 +480,70 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
           required: ['provider'],
           additionalProperties: false,
         },
+        generatedAt: { type: 'string' },
+        repoFingerprint: { type: 'string' },
+        coverage: {
+          type: 'object',
+          properties: {
+            notes: { type: 'array', items: { type: 'string' } },
+            skippedAreas: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  path: { type: 'string' },
+                  reason: { type: 'string' },
+                },
+                required: ['path', 'reason'],
+                additionalProperties: false,
+              },
+            },
+          },
+          required: ['notes', 'skippedAreas'],
+          additionalProperties: false,
+        },
+        groupingRationale: {
+          type: 'object',
+          properties: {
+            summary: { type: 'string' },
+            domainRationales: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  domainId: { type: 'string' },
+                  rationale: { type: 'string' },
+                  evidence: { type: 'array', items: { $ref: '#/$defs/atlasEvidence' } },
+                },
+                required: ['domainId', 'rationale'],
+                additionalProperties: false,
+              },
+            },
+          },
+          required: ['summary'],
+          additionalProperties: false,
+        },
+        nodes: { type: 'array', maxItems: 1000, items: { type: 'object' } },
+        edges: { type: 'array', maxItems: 1000, items: { type: 'object' } },
         domains: {
           type: 'array',
-          maxItems: 100,
+          maxItems: 1000,
           items: {
             type: 'object',
             properties: {
               id: { type: 'string' },
               name: { type: 'string' },
-              nodeIds: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 100 },
+              nodeIds: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 1000 },
+              origin: { type: 'string', enum: ['verified', 'inferred', 'user-edited'] },
               summary: { type: 'string' },
-              evidence: { type: 'array', items: { $ref: '#/$defs/atlasAgentEvidence' }, minItems: 1, maxItems: 20 },
+              metadata: { type: 'object' },
             },
-            required: ['id', 'name', 'nodeIds', 'evidence'],
+            required: ['id', 'name', 'nodeIds', 'origin'],
             additionalProperties: false,
           },
         },
-        summaries: {
-          type: 'array',
-          maxItems: 100,
-          items: {
-            type: 'object',
-            properties: {
-              nodeId: { type: 'string' },
-              summary: { type: 'string' },
-              evidence: { type: 'array', items: { $ref: '#/$defs/atlasAgentEvidence' }, minItems: 1, maxItems: 20 },
-            },
-            required: ['nodeId', 'summary', 'evidence'],
-            additionalProperties: false,
-          },
-        },
-        inferredRelationships: {
-          type: 'array',
-          maxItems: 100,
-          items: {
-            type: 'object',
-            properties: {
-              id: { type: 'string' },
-              source: { type: 'string' },
-              target: { type: 'string' },
-              kind: { type: 'string', enum: ['calls', 'depends-on', 'related', 'reads', 'writes'] },
-              summary: { type: 'string' },
-              evidence: { type: 'array', items: { $ref: '#/$defs/atlasAgentEvidence' }, minItems: 1, maxItems: 20 },
-            },
-            required: ['id', 'source', 'target', 'kind', 'summary', 'evidence'],
-            additionalProperties: false,
-          },
-        },
+        flows: { type: 'array', maxItems: 1000, items: { type: 'object' } },
+        summary: { type: 'object' },
         readOrder: {
           type: 'array',
           maxItems: 100,
@@ -562,9 +553,9 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
               nodeId: { type: 'string' },
               path: { type: 'string' },
               reason: { type: 'string' },
-              evidence: { type: 'array', items: { $ref: '#/$defs/atlasAgentEvidence' }, minItems: 1, maxItems: 20 },
+              evidence: { type: 'array', items: { $ref: '#/$defs/atlasEvidence' } },
             },
-            required: ['nodeId', 'reason', 'evidence'],
+            required: ['nodeId', 'reason'],
             additionalProperties: false,
           },
         },
@@ -576,27 +567,28 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
             properties: {
               message: { type: 'string' },
               severity: { type: 'string', enum: ['info', 'warning', 'error'] },
-              evidence: { type: 'array', items: { $ref: '#/$defs/atlasAgentEvidence' }, minItems: 1, maxItems: 20 },
+              evidence: { type: 'array', items: { $ref: '#/$defs/atlasEvidence' } },
             },
-            required: ['message', 'severity', 'evidence'],
+            required: ['message', 'severity'],
             additionalProperties: false,
           },
         },
+        evidence: { type: 'array', items: { $ref: '#/$defs/atlasEvidence' } },
         sync: { type: 'boolean', description: 'HTTP-only escape hatch for tests/manual calls. MCP callers should omit this and use the queued job result.' },
       },
-      required: ['base', 'provenance'],
+      required: ['provenance', 'coverage', 'groupingRationale', 'nodes', 'edges', 'domains'],
       additionalProperties: false,
       $defs: {
-        atlasAgentEvidence: {
+        atlasEvidence: {
           type: 'object',
           properties: {
             path: { type: 'string', description: 'Relative existing repo file path.' },
-            nodeId: { type: 'string', description: 'Existing Atlas node id.' },
+            nodeId: { type: 'string', description: 'Authored Atlas node id.' },
             excerpt: { type: 'string' },
             startLine: { type: 'number' },
             endLine: { type: 'number' },
           },
-          required: ['path', 'nodeId'],
+          required: ['path'],
           additionalProperties: false,
         },
       },

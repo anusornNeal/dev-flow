@@ -1,14 +1,16 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type {
-  AtlasAgentEvidence,
   AtlasAgentOverlayDiagnostic,
+  AtlasDomain,
+  AtlasEdge,
+  AtlasEvidencePath,
+  AtlasNode,
   Project,
   ProjectAtlas,
-  ProjectAtlasAgentOverlay,
   ProjectAtlasAgentUpdatePatch,
 } from '../../types.js';
-import { readAtlasCache, writeAtlasCache } from './projectAtlasCacheService.js';
+import { writeAtlasCache } from './projectAtlasCacheService.js';
 
 export interface ApplyProjectAtlasAgentUpdateOptions {
   now?: string;
@@ -18,168 +20,184 @@ export interface ApplyProjectAtlasAgentUpdateOptions {
 export interface ProjectAtlasAgentUpdateResult {
   ok: boolean;
   projectId: string;
-  overlay?: ProjectAtlasAgentOverlay;
+  atlas?: ProjectAtlas;
   diagnostics: AtlasAgentOverlayDiagnostic[];
 }
 
 const DEFAULT_MAX_PATCH_BYTES = 64 * 1024;
-const MAX_COLLECTION_ITEMS = 100;
+const MAX_COLLECTION_ITEMS = 1000;
 
 export function applyProjectAtlasAgentUpdatePatch(
   project: Project,
   patch: unknown,
   options: ApplyProjectAtlasAgentUpdateOptions = {},
 ): ProjectAtlasAgentUpdateResult {
-  const cached = readAtlasCache({ projectId: project.id });
-  const atlas = cached.atlas;
-  const diagnostics = validateAgentPatch(project, atlas, patch, options);
+  const diagnostics = validateAuthoredAtlas(project, patch, options);
   if (diagnostics.length > 0) {
     return { ok: false, projectId: project.id, diagnostics };
   }
 
-  const typedPatch = patch as ProjectAtlasAgentUpdatePatch;
-  const overlay: ProjectAtlasAgentOverlay = {
-    status: 'applied',
-    updatedAt: options.now ?? new Date().toISOString(),
-    base: typedPatch.base,
-    provenance: typedPatch.provenance,
-    diagnostics: [],
-    domains: (typedPatch.domains ?? []).map((domain) => ({ ...domain, origin: 'inferred' as const })),
-    summaries: typedPatch.summaries ?? [],
-    inferredRelationships: typedPatch.inferredRelationships ?? [],
-    readOrder: typedPatch.readOrder ?? [],
-    warnings: typedPatch.warnings ?? [],
+  const authored = patch as ProjectAtlasAgentUpdatePatch;
+  const atlas: ProjectAtlas = {
+    schemaVersion: 1,
+    projectId: project.id,
+    nodes: authored.nodes,
+    edges: authored.edges,
+    domains: authored.domains,
+    flows: authored.flows ?? [],
+    summary: authored.summary ?? {},
+    freshness: {
+      generatedAt: authored.generatedAt ?? options.now ?? new Date().toISOString(),
+      repoFingerprint: authored.repoFingerprint,
+      scanMode: 'task-focused',
+      status: 'fresh',
+    },
+    authoring: {
+      updatedAt: options.now ?? new Date().toISOString(),
+      provenance: authored.provenance,
+      coverage: authored.coverage,
+      groupingRationale: authored.groupingRationale,
+      evidence: authored.evidence ?? [],
+      readOrder: authored.readOrder ?? [],
+      warnings: authored.warnings ?? [],
+    },
   };
 
-  writeAtlasCache({ atlas: { ...atlas, agentOverlay: overlay } });
-  return { ok: true, projectId: project.id, overlay, diagnostics: [] };
+  writeAtlasCache({ atlas });
+  return { ok: true, projectId: project.id, atlas, diagnostics: [] };
 }
 
-function validateAgentPatch(
+function validateAuthoredAtlas(
   project: Project,
-  atlas: ProjectAtlas,
   patch: unknown,
   options: ApplyProjectAtlasAgentUpdateOptions,
 ) {
-  const diagnostics: AtlasAgentOverlayDiagnostic[] = [];
   const maxBytes = options.maxPayloadBytes ?? DEFAULT_MAX_PATCH_BYTES;
   const payloadBytes = Buffer.byteLength(JSON.stringify(patch ?? null), 'utf8');
   if (payloadBytes > maxBytes) {
-    return [diagnostic('PATCH_TOO_LARGE', `Project Atlas agent update patch size ${payloadBytes} exceeds ${maxBytes} bytes.`)];
+    return [diagnostic('PATCH_TOO_LARGE', `Project Atlas authored payload size ${payloadBytes} exceeds ${maxBytes} bytes.`)];
   }
-
   if (!patch || typeof patch !== 'object') {
-    return [diagnostic('INVALID_PATCH', 'Project Atlas agent update patch must be an object.')];
+    return [diagnostic('INVALID_PATCH', 'Project Atlas authored payload must be an object.')];
   }
 
   const candidate = patch as Partial<ProjectAtlasAgentUpdatePatch>;
-  if (candidate.projectId !== project.id || candidate.projectId !== atlas.projectId) {
-    diagnostics.push(diagnostic('PROJECT_MISMATCH', 'Patch projectId must match the project and Atlas cache projectId.'));
+  const diagnostics: AtlasAgentOverlayDiagnostic[] = [];
+  if (candidate.projectId !== project.id) {
+    diagnostics.push(diagnostic('PROJECT_MISMATCH', 'Authored Atlas projectId must match the project.'));
   }
   if (!project.localPath) {
     diagnostics.push(diagnostic('PROJECT_LOCAL_PATH_MISSING', 'Project localPath is required to validate Atlas evidence paths.'));
   }
-  validateBase(atlas, candidate, diagnostics);
-  validateProvenance(candidate, diagnostics);
+  if (!candidate.provenance?.provider) {
+    diagnostics.push(diagnostic('PROVENANCE_REQUIRED', 'Authored Atlas provenance.provider is required.'));
+  }
+  if (!candidate.coverage || !Array.isArray(candidate.coverage.notes) || !Array.isArray(candidate.coverage.skippedAreas)) {
+    diagnostics.push(diagnostic('COVERAGE_REQUIRED', 'Authored Atlas coverage notes and skippedAreas are required.'));
+  }
+  if (!candidate.groupingRationale?.summary) {
+    diagnostics.push(diagnostic('GROUPING_RATIONALE_REQUIRED', 'Authored Atlas groupingRationale.summary is required.'));
+  }
 
-  const nodes = new Set(atlas.nodes.map((node) => node.id));
-  const nodePathById = new Map(atlas.nodes.map((node) => [node.id, node.path]));
-  const deterministicEdgeIds = new Set(atlas.edges.map((edge) => edge.id));
+  const nodes = validateNodes(candidate.nodes, diagnostics);
+  validateEdges(candidate.edges, nodes, diagnostics);
+  validateDomains(candidate.domains, nodes, diagnostics);
+  validateReadOrder(candidate.readOrder, nodes, diagnostics);
+
   const root = project.localPath ?? '';
-
-  validateCollection('domains', candidate.domains, diagnostics, (item, index) => {
-    if (!item.id || !item.name) diagnostics.push(diagnostic('INVALID_DOMAIN', `Domain at index ${index} requires id and name.`));
-    validateNodeIds(item.nodeIds, nodes, diagnostics, `domains[${index}].nodeIds`);
-    validateEvidenceBlocks(item.evidence, root, nodes, nodePathById, diagnostics, `domains[${index}]`);
-  });
-
-  validateCollection('summaries', candidate.summaries, diagnostics, (item, index) => {
-    validateNodeId(item.nodeId, nodes, diagnostics, `summaries[${index}].nodeId`);
-    if (!item.summary) diagnostics.push(diagnostic('INVALID_SUMMARY', `Summary at index ${index} requires summary text.`));
-    validateEvidenceBlocks(item.evidence, root, nodes, nodePathById, diagnostics, `summaries[${index}]`);
-  });
-
-  validateCollection('inferredRelationships', candidate.inferredRelationships, diagnostics, (item, index) => {
-    if (!item.id || deterministicEdgeIds.has(item.id)) {
-      diagnostics.push(diagnostic('INVALID_RELATIONSHIP', `Inferred relationship at index ${index} requires a unique non-deterministic id.`));
+  validateEvidenceBlocks(candidate.evidence, root, nodes, diagnostics, 'evidence', { required: false });
+  candidate.groupingRationale?.domainRationales?.forEach((rationale, index) => {
+    if (!rationale.domainId || !rationale.rationale) {
+      diagnostics.push(diagnostic('INVALID_GROUPING_RATIONALE', `Grouping rationale at index ${index} requires domainId and rationale.`));
     }
-    validateNodeId(item.source, nodes, diagnostics, `inferredRelationships[${index}].source`);
-    validateNodeId(item.target, nodes, diagnostics, `inferredRelationships[${index}].target`);
-    if (!item.summary) diagnostics.push(diagnostic('INVALID_RELATIONSHIP', `Inferred relationship at index ${index} requires summary text.`));
-    validateEvidenceBlocks(item.evidence, root, nodes, nodePathById, diagnostics, `inferredRelationships[${index}]`);
+    validateEvidenceBlocks(rationale.evidence, root, nodes, diagnostics, `groupingRationale.domainRationales[${index}].evidence`, { required: false });
   });
-
-  validateCollection('readOrder', candidate.readOrder, diagnostics, (item, index) => {
-    validateNodeId(item.nodeId, nodes, diagnostics, `readOrder[${index}].nodeId`);
-    if (item.path && nodePathById.get(item.nodeId) !== item.path) {
-      diagnostics.push(diagnostic('READ_ORDER_PATH_MISMATCH', `Read order path '${item.path}' does not match node '${item.nodeId}'.`, item.path, item.nodeId));
-    }
-    if (!item.reason) diagnostics.push(diagnostic('INVALID_READ_ORDER', `Read order item at index ${index} requires a reason.`));
-    validateEvidenceBlocks(item.evidence, root, nodes, nodePathById, diagnostics, `readOrder[${index}]`);
+  candidate.readOrder?.forEach((item, index) => {
+    validateEvidenceBlocks(item.evidence, root, nodes, diagnostics, `readOrder[${index}].evidence`, { required: false });
   });
-
-  validateCollection('warnings', candidate.warnings, diagnostics, (item, index) => {
-    if (!item.message) diagnostics.push(diagnostic('INVALID_WARNING', `Warning at index ${index} requires a message.`));
-    if (!['info', 'warning', 'error'].includes(String(item.severity))) {
-      diagnostics.push(diagnostic('INVALID_WARNING', `Warning at index ${index} has invalid severity.`));
+  candidate.warnings?.forEach((item, index) => {
+    if (!item.message || !['info', 'warning', 'error'].includes(String(item.severity))) {
+      diagnostics.push(diagnostic('INVALID_WARNING', `Warning at index ${index} requires message and valid severity.`));
     }
-    validateEvidenceBlocks(item.evidence, root, nodes, nodePathById, diagnostics, `warnings[${index}]`);
+    validateEvidenceBlocks(item.evidence, root, nodes, diagnostics, `warnings[${index}].evidence`, { required: false });
+  });
+  candidate.domains?.forEach((domain, index) => {
+    const evidence = Array.isArray(domain.metadata?.evidence) ? domain.metadata.evidence as AtlasEvidencePath[] : undefined;
+    validateEvidenceBlocks(evidence, root, nodes, diagnostics, `domains[${index}].metadata.evidence`, { required: false });
   });
 
   return diagnostics;
 }
 
-function validateBase(atlas: ProjectAtlas, patch: Partial<ProjectAtlasAgentUpdatePatch>, diagnostics: AtlasAgentOverlayDiagnostic[]) {
-  if (!patch.base || typeof patch.base !== 'object') {
-    diagnostics.push(diagnostic('BASE_REQUIRED', 'Patch base Atlas metadata is required.'));
-    return;
+function validateNodes(nodes: AtlasNode[] | undefined, diagnostics: AtlasAgentOverlayDiagnostic[]) {
+  const ids = new Set<string>();
+  if (!Array.isArray(nodes)) {
+    diagnostics.push(diagnostic('NODES_REQUIRED', 'Authored Atlas nodes must be an array.'));
+    return ids;
   }
-  if (patch.base.generatedAt !== atlas.freshness.generatedAt) {
-    diagnostics.push(diagnostic('STALE_BASE', 'Patch base generatedAt does not match the current Atlas cache.'));
+  if (nodes.length > MAX_COLLECTION_ITEMS) {
+    diagnostics.push(diagnostic('COLLECTION_TOO_LARGE', `Authored Atlas nodes cannot contain more than ${MAX_COLLECTION_ITEMS} items.`));
   }
-  if ((patch.base.repoFingerprint ?? '') !== (atlas.freshness.repoFingerprint ?? '')) {
-    diagnostics.push(diagnostic('STALE_BASE', 'Patch base repoFingerprint does not match the current Atlas cache.'));
-  }
-  if (patch.base.nodeCount !== atlas.nodes.length || patch.base.edgeCount !== atlas.edges.length) {
-    diagnostics.push(diagnostic('STALE_BASE', 'Patch base nodeCount/edgeCount does not match the current Atlas cache.'));
-  }
+  nodes.forEach((node, index) => {
+    if (!node.id || !node.label || !node.kind) {
+      diagnostics.push(diagnostic('INVALID_NODE', `Node at index ${index} requires id, label, and kind.`));
+      return;
+    }
+    if (ids.has(node.id)) {
+      diagnostics.push(diagnostic('DUPLICATE_NODE', `Duplicate Atlas node id '${node.id}'.`, node.path, node.id));
+    }
+    ids.add(node.id);
+  });
+  return ids;
 }
 
-function validateProvenance(patch: Partial<ProjectAtlasAgentUpdatePatch>, diagnostics: AtlasAgentOverlayDiagnostic[]) {
-  if (!patch.provenance?.provider) {
-    diagnostics.push(diagnostic('PROVENANCE_REQUIRED', 'Patch provenance.provider is required.'));
-  }
-}
-
-function validateCollection<T>(
-  name: string,
-  value: T[] | undefined,
-  diagnostics: AtlasAgentOverlayDiagnostic[],
-  validateItem: (item: T, index: number) => void,
-) {
-  if (value === undefined) return;
-  if (!Array.isArray(value)) {
-    diagnostics.push(diagnostic('INVALID_COLLECTION', `Patch ${name} must be an array.`));
+function validateEdges(edges: AtlasEdge[] | undefined, nodes: Set<string>, diagnostics: AtlasAgentOverlayDiagnostic[]) {
+  const ids = new Set<string>();
+  if (!Array.isArray(edges)) {
+    diagnostics.push(diagnostic('EDGES_REQUIRED', 'Authored Atlas edges must be an array.'));
     return;
   }
-  if (value.length > MAX_COLLECTION_ITEMS) {
-    diagnostics.push(diagnostic('COLLECTION_TOO_LARGE', `Patch ${name} cannot contain more than ${MAX_COLLECTION_ITEMS} items.`));
-    return;
-  }
-  value.forEach(validateItem);
+  edges.forEach((edge, index) => {
+    if (!edge.id || !edge.source || !edge.target || !edge.kind || !edge.fact) {
+      diagnostics.push(diagnostic('INVALID_EDGE', `Edge at index ${index} requires id, endpoints, kind, and fact.`));
+    }
+    if (ids.has(edge.id)) diagnostics.push(diagnostic('DUPLICATE_EDGE', `Duplicate Atlas edge id '${edge.id}'.`));
+    ids.add(edge.id);
+    validateNodeId(edge.source, nodes, diagnostics, `edges[${index}].source`);
+    validateNodeId(edge.target, nodes, diagnostics, `edges[${index}].target`);
+  });
 }
 
-function validateNodeIds(
-  nodeIds: string[] | undefined,
+function validateDomains(domains: AtlasDomain[] | undefined, nodes: Set<string>, diagnostics: AtlasAgentOverlayDiagnostic[]) {
+  if (!Array.isArray(domains)) {
+    diagnostics.push(diagnostic('DOMAINS_REQUIRED', 'Authored Atlas domains must be an array.'));
+    return;
+  }
+  domains.forEach((domain, index) => {
+    if (!domain.id || !domain.name) {
+      diagnostics.push(diagnostic('INVALID_DOMAIN', `Domain at index ${index} requires id and name.`));
+    }
+    if (!Array.isArray(domain.nodeIds) || domain.nodeIds.length === 0) {
+      diagnostics.push(diagnostic('NODE_IDS_REQUIRED', `domains[${index}].nodeIds must include at least one Atlas node id.`));
+    }
+    domain.nodeIds?.forEach((nodeId) => validateNodeId(nodeId, nodes, diagnostics, `domains[${index}].nodeIds`));
+  });
+}
+
+function validateReadOrder(
+  readOrder: ProjectAtlasAgentUpdatePatch['readOrder'],
   nodes: Set<string>,
   diagnostics: AtlasAgentOverlayDiagnostic[],
-  label: string,
 ) {
-  if (!Array.isArray(nodeIds) || nodeIds.length === 0) {
-    diagnostics.push(diagnostic('NODE_IDS_REQUIRED', `${label} must include at least one Atlas node id.`));
+  if (readOrder === undefined) return;
+  if (!Array.isArray(readOrder)) {
+    diagnostics.push(diagnostic('INVALID_READ_ORDER', 'Authored Atlas readOrder must be an array.'));
     return;
   }
-  for (const nodeId of nodeIds) validateNodeId(nodeId, nodes, diagnostics, label);
+  readOrder.forEach((item, index) => {
+    validateNodeId(item.nodeId, nodes, diagnostics, `readOrder[${index}].nodeId`);
+    if (!item.reason) diagnostics.push(diagnostic('INVALID_READ_ORDER', `Read order item at index ${index} requires a reason.`));
+  });
 }
 
 function validateNodeId(
@@ -194,41 +212,37 @@ function validateNodeId(
 }
 
 function validateEvidenceBlocks(
-  evidence: AtlasAgentEvidence[] | undefined,
+  evidence: AtlasEvidencePath[] | undefined,
   root: string,
   nodes: Set<string>,
-  nodePathById: Map<string, string | undefined>,
   diagnostics: AtlasAgentOverlayDiagnostic[],
   label: string,
+  input: { required: boolean },
 ) {
   if (!Array.isArray(evidence) || evidence.length === 0) {
-    diagnostics.push(diagnostic('EVIDENCE_REQUIRED', `${label} requires at least one evidence block.`));
+    if (input.required) diagnostics.push(diagnostic('EVIDENCE_REQUIRED', `${label} requires at least one evidence block.`));
     return;
   }
   for (const block of evidence) {
-    validateNodeId(block.nodeId, nodes, diagnostics, `${label}.evidence.nodeId`);
+    if (block.nodeId) validateNodeId(block.nodeId, nodes, diagnostics, `${label}.nodeId`);
     if (!block.path || path.isAbsolute(block.path) || block.path.split(/[\\/]/).includes('..')) {
-      diagnostics.push(diagnostic('INVALID_EVIDENCE_PATH', `${label} evidence path must be a relative repo path.`, block.path, block.nodeId));
+      diagnostics.push(diagnostic('INVALID_EVIDENCE_PATH', `${label} path must be a relative repo path.`, block.path, block.nodeId));
       continue;
-    }
-    const expectedPath = nodePathById.get(block.nodeId);
-    if (expectedPath && expectedPath !== block.path) {
-      diagnostics.push(diagnostic('EVIDENCE_NODE_PATH_MISMATCH', `${label} evidence path does not match the referenced node.`, block.path, block.nodeId));
     }
     const absolutePath = path.resolve(root, block.path);
     const absoluteRoot = path.resolve(root);
     if (!absolutePath.startsWith(absoluteRoot + path.sep) && absolutePath !== absoluteRoot) {
-      diagnostics.push(diagnostic('INVALID_EVIDENCE_PATH', `${label} evidence path escapes the project root.`, block.path, block.nodeId));
+      diagnostics.push(diagnostic('INVALID_EVIDENCE_PATH', `${label} path escapes the project root.`, block.path, block.nodeId));
       continue;
     }
     if (!fs.existsSync(absolutePath) || !fs.statSync(absolutePath).isFile()) {
-      diagnostics.push(diagnostic('MISSING_EVIDENCE_PATH', `${label} evidence path does not exist in the repo: ${block.path}`, block.path, block.nodeId));
+      diagnostics.push(diagnostic('MISSING_EVIDENCE_PATH', `${label} path does not exist in the repo: ${block.path}`, block.path, block.nodeId));
     }
     if (block.startLine !== undefined && (!Number.isInteger(block.startLine) || block.startLine < 1)) {
-      diagnostics.push(diagnostic('INVALID_SOURCE_SPAN', `${label} evidence startLine must be a positive integer.`, block.path, block.nodeId));
+      diagnostics.push(diagnostic('INVALID_SOURCE_SPAN', `${label} startLine must be a positive integer.`, block.path, block.nodeId));
     }
     if (block.endLine !== undefined && (!Number.isInteger(block.endLine) || block.endLine < (block.startLine ?? 1))) {
-      diagnostics.push(diagnostic('INVALID_SOURCE_SPAN', `${label} evidence endLine must be greater than or equal to startLine.`, block.path, block.nodeId));
+      diagnostics.push(diagnostic('INVALID_SOURCE_SPAN', `${label} endLine must be greater than or equal to startLine.`, block.path, block.nodeId));
     }
   }
 }

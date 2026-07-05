@@ -7,7 +7,7 @@ import path from 'node:path';
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'project-atlas-agent-update-'));
 process.env.DEVFLOW_APP_ROOT = tempRoot;
 
-const { saveLatestAtlas, getProjectAtlasStatus, applyProjectAtlasAgentUpdate } = await import('../../src/server/services/projectAtlasService.js');
+const { getProjectAtlasStatus, applyProjectAtlasAgentUpdate } = await import('../../src/server/services/projectAtlasService.js');
 const { readAtlasCache } = await import('../../src/server/services/projectAtlasCacheService.js');
 
 const project: any = {
@@ -22,12 +22,34 @@ function writeFixture(relativePath: string, content = 'export const value = true
   fs.writeFileSync(fullPath, content, 'utf8');
 }
 
-function seedAtlas() {
+function writeAuthoringFixture() {
   writeFixture('src/server/routes/devflow.ts');
   writeFixture('src/server/services/projectAtlasService.ts');
-  saveLatestAtlas({
-    schemaVersion: 1,
+}
+
+function validAuthoredAtlas() {
+  return {
     projectId: project.id,
+    generatedAt: '2026-07-04T09:00:00.000Z',
+    provenance: {
+      provider: 'ChatGPT',
+      model: 'GPT-5.5',
+      prompt: 'Atlas semantic review',
+    },
+    coverage: {
+      notes: ['Read HTTP routes before Atlas services.'],
+      skippedAreas: [{ path: 'node_modules', reason: 'Dependency directory excluded from repo authoring.' }],
+    },
+    groupingRationale: {
+      summary: 'Grouped by user-facing Atlas responsibility after staged repo reads.',
+      domainRationales: [
+        {
+          domainId: 'domain:atlas',
+          rationale: 'Atlas service and route collaborate on read/write behavior.',
+          evidence: [{ path: 'src/server/services/projectAtlasService.ts', nodeId: 'file:src/server/services/projectAtlasService.ts' }],
+        },
+      ],
+    },
     nodes: [
       {
         id: 'file:src/server/routes/devflow.ts',
@@ -46,132 +68,63 @@ function seedAtlas() {
     ],
     edges: [
       {
-        id: 'imports:route->service',
-        source: 'file:src/server/routes/devflow.ts',
-        target: 'file:src/server/services/projectAtlasService.ts',
-        kind: 'imports',
-        fact: { source: 'verified', description: 'route imports service' },
-      },
-    ],
-    domains: [],
-    flows: [],
-    summary: { verified: { source: 'verified', description: 'deterministic baseline' } },
-    freshness: {
-      generatedAt: '2026-07-04T08:00:00.000Z',
-      repoFingerprint: 'base-fingerprint',
-      scanMode: 'manual',
-      status: 'fresh',
-    },
-  });
-}
-
-function validPatch() {
-  return {
-    projectId: project.id,
-    base: {
-      generatedAt: '2026-07-04T08:00:00.000Z',
-      repoFingerprint: 'base-fingerprint',
-      nodeCount: 2,
-      edgeCount: 1,
-    },
-    provenance: {
-      provider: 'ChatGPT',
-      model: 'GPT-5.5',
-      prompt: 'Atlas semantic review',
-    },
-    domains: [
-      {
-        id: 'agent-domain:atlas',
-        name: 'Project Atlas',
-        nodeIds: ['file:src/server/services/projectAtlasService.ts'],
-        summary: 'Owns Atlas read/status/update behavior.',
-        evidence: [
-          {
-            path: 'src/server/services/projectAtlasService.ts',
-            nodeId: 'file:src/server/services/projectAtlasService.ts',
-            excerpt: 'export function getProjectAtlasStatus',
-          },
-        ],
-      },
-    ],
-    summaries: [
-      {
-        nodeId: 'file:src/server/routes/devflow.ts',
-        summary: 'Exposes DevFlow HTTP endpoints for Atlas operations.',
-        evidence: [{ path: 'src/server/routes/devflow.ts', nodeId: 'file:src/server/routes/devflow.ts' }],
-      },
-    ],
-    inferredRelationships: [
-      {
-        id: 'agent-edge:route-applies-overlay',
+        id: 'authored-edge:route-service',
         source: 'file:src/server/routes/devflow.ts',
         target: 'file:src/server/services/projectAtlasService.ts',
         kind: 'related',
-        summary: 'Route delegates Atlas overlay writes to the service.',
-        evidence: [{ path: 'src/server/routes/devflow.ts', nodeId: 'file:src/server/routes/devflow.ts' }],
+        fact: { source: 'inferred', summary: 'Route delegates authored Atlas saves to the service.' },
       },
     ],
+    domains: [
+      {
+        id: 'domain:atlas',
+        name: 'Project Atlas',
+        nodeIds: ['file:src/server/routes/devflow.ts', 'file:src/server/services/projectAtlasService.ts'],
+        origin: 'inferred',
+        summary: 'Owns Atlas authored save/read behavior.',
+        metadata: {
+          rationale: 'ChatGPT grouped route and service as one Atlas authoring surface.',
+          evidence: [{ path: 'src/server/routes/devflow.ts', nodeId: 'file:src/server/routes/devflow.ts' }],
+        },
+      },
+    ],
+    flows: [],
+    summary: { inferred: { source: 'inferred', summary: 'ChatGPT-authored Atlas.' } },
     readOrder: [
-      {
-        nodeId: 'file:src/server/routes/devflow.ts',
-        path: 'src/server/routes/devflow.ts',
-        reason: 'Start at the HTTP surface.',
-        evidence: [{ path: 'src/server/routes/devflow.ts', nodeId: 'file:src/server/routes/devflow.ts' }],
-      },
+      { nodeId: 'file:src/server/routes/devflow.ts', path: 'src/server/routes/devflow.ts', reason: 'Start at the HTTP surface.' },
     ],
-    warnings: [
-      {
-        message: 'Overlay is agent-inferred and must not replace scanner facts.',
-        severity: 'info',
-        evidence: [{ path: 'src/server/services/projectAtlasService.ts', nodeId: 'file:src/server/services/projectAtlasService.ts' }],
-      },
-    ],
+    warnings: [{ message: 'Some generated files were skipped.', severity: 'info' }],
+    evidence: [{ path: 'src/server/services/projectAtlasService.ts', nodeId: 'file:src/server/services/projectAtlasService.ts' }],
   };
 }
 
-test('applyProjectAtlasAgentUpdate stores a provenance overlay without changing deterministic facts', () => {
-  seedAtlas();
+test('applyProjectAtlasAgentUpdate saves a full ChatGPT-authored Atlas without a local baseline', () => {
+  writeAuthoringFixture();
 
-  const result = applyProjectAtlasAgentUpdate(project, validPatch(), { now: '2026-07-04T09:00:00.000Z' });
+  const result = applyProjectAtlasAgentUpdate(project, validAuthoredAtlas(), { now: '2026-07-04T09:00:00.000Z' });
   const cached = readAtlasCache({ projectId: project.id }).atlas;
 
   assert.equal(result.ok, true);
+  assert.equal(result.atlas?.authoring?.provenance.provider, 'ChatGPT');
+  assert.equal(result.atlas?.authoring?.coverage.skippedAreas[0].reason, 'Dependency directory excluded from repo authoring.');
   assert.equal(cached.nodes.length, 2);
   assert.equal(cached.edges.length, 1);
-  assert.equal(cached.summary.verified?.description, 'deterministic baseline');
-  assert.equal(cached.agentOverlay?.status, 'applied');
-  assert.equal(cached.agentOverlay?.updatedAt, '2026-07-04T09:00:00.000Z');
-  assert.equal(cached.agentOverlay?.base.generatedAt, '2026-07-04T08:00:00.000Z');
-  assert.equal(cached.agentOverlay?.domains[0].origin, 'inferred');
-  assert.equal(cached.agentOverlay?.summaries[0].nodeId, 'file:src/server/routes/devflow.ts');
+  assert.equal(cached.domains[0].id, 'domain:atlas');
+  assert.equal(cached.authoring?.groupingRationale.summary, 'Grouped by user-facing Atlas responsibility after staged repo reads.');
+  assert.equal(cached.authoring?.readOrder[0].nodeId, 'file:src/server/routes/devflow.ts');
 
   const status = getProjectAtlasStatus(project.id);
-  assert.equal(status.overlay.state, 'chatgpt-managed');
-  assert.equal(status.overlay.updatedAt, '2026-07-04T09:00:00.000Z');
-  assert.equal(status.overlay.base.generatedAt, '2026-07-04T08:00:00.000Z');
-  assert.equal(status.overlay.diagnostics.length, 0);
+  assert.equal(status.authoring.state, 'chatgpt-authored');
+  assert.equal(status.authoring.provenance?.provider, 'ChatGPT');
+  assert.equal(status.authoring.coverage?.skippedAreas.length, 1);
 });
 
-test('getProjectAtlasStatus reports stale overlay diagnostics when baseline metadata changes', () => {
-  seedAtlas();
-  applyProjectAtlasAgentUpdate(project, validPatch(), { now: '2026-07-04T09:00:00.000Z' });
-  const cached = readAtlasCache({ projectId: project.id }).atlas;
-  saveLatestAtlas({
-    ...cached,
-    nodes: cached.nodes.slice(0, 1),
-  });
-
-  const status = getProjectAtlasStatus(project.id);
-
-  assert.equal(status.overlay.state, 'chatgpt-managed');
-  assert.match(status.overlay.diagnostics[0].message, /stale|base/i);
-});
-
-test('applyProjectAtlasAgentUpdate rejects an invalid evidence path and leaves cache unchanged', () => {
-  seedAtlas();
+test('applyProjectAtlasAgentUpdate rejects invalid authored evidence and leaves cache unchanged', () => {
+  writeAuthoringFixture();
+  applyProjectAtlasAgentUpdate(project, validAuthoredAtlas(), { now: '2026-07-04T09:00:00.000Z' });
   const before = readAtlasCache({ projectId: project.id }).atlas;
-  const patch = validPatch();
-  patch.domains[0].evidence[0].path = 'src/server/services/missing.ts';
+  const patch = validAuthoredAtlas();
+  patch.evidence[0].path = 'src/server/services/missing.ts';
 
   const result = applyProjectAtlasAgentUpdate(project, patch, { now: '2026-07-04T09:00:00.000Z' });
   const after = readAtlasCache({ projectId: project.id }).atlas;
@@ -181,17 +134,17 @@ test('applyProjectAtlasAgentUpdate rejects an invalid evidence path and leaves c
   assert.deepEqual(after, before);
 });
 
-test('applyProjectAtlasAgentUpdate rejects stale base metadata and oversized patches', () => {
-  seedAtlas();
-  const stale = validPatch();
-  stale.base.generatedAt = '2026-07-03T08:00:00.000Z';
+test('applyProjectAtlasAgentUpdate rejects edge/domain references outside authored nodes and oversized payloads', () => {
+  writeAuthoringFixture();
+  const invalid = validAuthoredAtlas();
+  invalid.edges[0].target = 'file:missing.ts';
 
-  const staleResult = applyProjectAtlasAgentUpdate(project, stale);
-  assert.equal(staleResult.ok, false);
-  assert.match(staleResult.diagnostics[0].message, /stale|base/i);
+  const invalidResult = applyProjectAtlasAgentUpdate(project, invalid);
+  assert.equal(invalidResult.ok, false);
+  assert.match(invalidResult.diagnostics[0].message, /unknown Atlas node/i);
 
-  const oversized = validPatch();
-  oversized.summaries[0].summary = 'x'.repeat(70_000);
+  const oversized = validAuthoredAtlas();
+  oversized.summary.inferred.summary = 'x'.repeat(70_000);
   const oversizedResult = applyProjectAtlasAgentUpdate(project, oversized);
   assert.equal(oversizedResult.ok, false);
   assert.match(oversizedResult.diagnostics[0].message, /size/i);

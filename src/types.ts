@@ -254,21 +254,17 @@ export interface AtlasFreshness {
 }
 
 export type AtlasAgentOverlaySeverity = 'info' | 'warning' | 'error';
+export type AtlasAuthoringSeverity = AtlasAgentOverlaySeverity;
 
-export interface AtlasAgentEvidence {
+export interface AtlasEvidencePath {
   path: string;
-  nodeId: string;
+  nodeId?: string;
   excerpt?: string;
   startLine?: number;
   endLine?: number;
 }
 
-export interface AtlasAgentUpdateBase {
-  generatedAt?: string;
-  repoFingerprint?: string;
-  nodeCount: number;
-  edgeCount: number;
-}
+export type AtlasAgentEvidence = AtlasEvidencePath & { nodeId: string };
 
 export interface AtlasAgentUpdateProvenance {
   provider: string;
@@ -277,51 +273,55 @@ export interface AtlasAgentUpdateProvenance {
   runId?: string;
 }
 
-export interface AtlasAgentDomainPatch {
-  id: string;
-  name: string;
-  nodeIds: string[];
-  summary?: string;
-  evidence: AtlasAgentEvidence[];
+export interface AtlasRepoCoverageSkippedArea {
+  path: string;
+  reason: string;
 }
 
-export interface AtlasAgentSummaryPatch {
-  nodeId: string;
+export interface AtlasRepoCoverageNotes {
+  notes: string[];
+  skippedAreas: AtlasRepoCoverageSkippedArea[];
+}
+
+export interface AtlasDomainGroupingRationale {
+  domainId: string;
+  rationale: string;
+  evidence?: AtlasEvidencePath[];
+}
+
+export interface AtlasGroupingRationale {
   summary: string;
-  evidence: AtlasAgentEvidence[];
+  domainRationales?: AtlasDomainGroupingRationale[];
 }
 
-export interface AtlasAgentRelationshipPatch {
-  id: string;
-  source: string;
-  target: string;
-  kind: Extract<AtlasEdgeKind, 'calls' | 'depends-on' | 'related' | 'reads' | 'writes'>;
-  summary: string;
-  evidence: AtlasAgentEvidence[];
-}
-
-export interface AtlasAgentReadOrderPatch {
+export interface AtlasAuthoredReadOrderItem {
   nodeId: string;
   path?: string;
   reason: string;
-  evidence: AtlasAgentEvidence[];
+  evidence?: AtlasEvidencePath[];
 }
 
-export interface AtlasAgentWarningPatch {
+export interface AtlasAuthoredWarning {
   message: string;
-  severity: AtlasAgentOverlaySeverity;
-  evidence: AtlasAgentEvidence[];
+  severity: AtlasAuthoringSeverity;
+  evidence?: AtlasEvidencePath[];
 }
 
 export interface ProjectAtlasAgentUpdatePatch {
   projectId: string;
-  base: AtlasAgentUpdateBase;
   provenance: AtlasAgentUpdateProvenance;
-  domains?: AtlasAgentDomainPatch[];
-  summaries?: AtlasAgentSummaryPatch[];
-  inferredRelationships?: AtlasAgentRelationshipPatch[];
-  readOrder?: AtlasAgentReadOrderPatch[];
-  warnings?: AtlasAgentWarningPatch[];
+  generatedAt?: string;
+  repoFingerprint?: string;
+  coverage: AtlasRepoCoverageNotes;
+  groupingRationale: AtlasGroupingRationale;
+  nodes: AtlasNode[];
+  edges: AtlasEdge[];
+  domains: AtlasDomain[];
+  flows?: AtlasFlow[];
+  summary?: AtlasSummary;
+  readOrder?: AtlasAuthoredReadOrderItem[];
+  warnings?: AtlasAuthoredWarning[];
+  evidence?: AtlasEvidencePath[];
 }
 
 export interface AtlasAgentOverlayDiagnostic {
@@ -332,17 +332,14 @@ export interface AtlasAgentOverlayDiagnostic {
   nodeId?: string;
 }
 
-export interface ProjectAtlasAgentOverlay {
-  status: 'applied';
+export interface ProjectAtlasAuthoringMetadata {
   updatedAt: string;
-  base: AtlasAgentUpdateBase;
   provenance: AtlasAgentUpdateProvenance;
-  diagnostics: AtlasAgentOverlayDiagnostic[];
-  domains: (AtlasAgentDomainPatch & { origin: 'inferred' })[];
-  summaries: AtlasAgentSummaryPatch[];
-  inferredRelationships: AtlasAgentRelationshipPatch[];
-  readOrder: AtlasAgentReadOrderPatch[];
-  warnings: AtlasAgentWarningPatch[];
+  coverage: AtlasRepoCoverageNotes;
+  groupingRationale: AtlasGroupingRationale;
+  evidence: AtlasEvidencePath[];
+  readOrder: AtlasAuthoredReadOrderItem[];
+  warnings: AtlasAuthoredWarning[];
 }
 
 export interface ProjectAtlas {
@@ -354,7 +351,7 @@ export interface ProjectAtlas {
   flows: AtlasFlow[];
   summary: AtlasSummary;
   freshness: AtlasFreshness;
-  agentOverlay?: ProjectAtlasAgentOverlay;
+  authoring?: ProjectAtlasAuthoringMetadata;
 }
 
 export interface AtlasScanStats {

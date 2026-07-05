@@ -47,7 +47,11 @@ test('devflowContract exposes apply_project_atlas_agent_update as a serialized w
 
   const req = tool.buildHttpRequest({
     projectId: 'project-1',
-    base: { generatedAt: '2026-07-04T08:00:00.000Z', nodeCount: 1, edgeCount: 0 },
+    provenance: { provider: 'ChatGPT' },
+    coverage: { notes: ['Read source files.'], skippedAreas: [] },
+    groupingRationale: { summary: 'Grouped by ChatGPT after staged repo reads.' },
+    nodes: [],
+    edges: [],
     domains: [],
   });
 
@@ -55,10 +59,16 @@ test('devflowContract exposes apply_project_atlas_agent_update as a serialized w
   assert.equal(req.path, '/api/project-atlas/agent-update');
   assert.deepEqual(req.body, {
     projectId: 'project-1',
-    base: { generatedAt: '2026-07-04T08:00:00.000Z', nodeCount: 1, edgeCount: 0 },
+    provenance: { provider: 'ChatGPT' },
+    coverage: { notes: ['Read source files.'], skippedAreas: [] },
+    groupingRationale: { summary: 'Grouped by ChatGPT after staged repo reads.' },
+    nodes: [],
+    edges: [],
     domains: [],
   });
   assert.ok(getMcpToolList().some((entry) => entry.name === 'apply_project_atlas_agent_update'));
+  assert.equal(getToolDefinitionByName('rescan_project_atlas'), undefined);
+  assert.equal(getMcpToolList().some((entry) => entry.name === 'rescan_project_atlas'), false);
 });
 
 test('devflowContract exposes complete_task_review', () => {

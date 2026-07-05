@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Activity, RefreshCw, Waypoints } from 'lucide-react';
+import { Activity, Waypoints } from 'lucide-react';
 import type { AtlasNode, ProjectAtlasUiResponse } from '../types.js';
 import { AtlasGraph } from './projectAtlas/AtlasGraph.js';
 import { AtlasDomainDrilldown } from './projectAtlas/AtlasDomainDrilldown.js';
@@ -32,7 +32,6 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeFilters, setActiveFilters] = useState<AtlasDomainFilter[]>([]);
   const [copiedContext, setCopiedContext] = useState(false);
-  const [scanState, setScanState] = useState<'idle' | 'queued' | 'running' | 'succeeded' | 'failed'>('idle');
 
   useEffect(() => {
     if (!projectId) return;
@@ -112,23 +111,6 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
     window.setTimeout(() => setCopiedContext(false), 1600);
   };
 
-  const handleManualRescan = async () => {
-    if (!projectId) return;
-    setScanState('queued');
-    try {
-      const response = await fetch('/api/project-atlas/rescan', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ projectId }),
-      });
-      if (!response.ok) throw new Error(`Atlas rescan failed with status ${response.status}`);
-      const result = await response.json();
-      setScanState(result.jobId ? 'queued' : 'succeeded');
-    } catch {
-      setScanState('failed');
-    }
-  };
-
   const hasNoResults = !loading && !error && data?.status === 'ready' && domainView && domainView.nodes.length === 0;
   const resultCount = domainView?.matchedNodeIds.length ?? 0;
   const isDrilldownMode = Boolean(drilldownDomainId && drilldownInspector);
@@ -168,12 +150,9 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
                 </button>
               ))}
             </div>
-            <button className="h-8 cursor-pointer rounded-lg border border-[#d8c3a6] bg-[#fffaf2] px-2.5 text-[11px] font-extrabold text-[#4f4035] transition hover:border-[#b7741e] hover:bg-[#fff1d7] disabled:cursor-not-allowed disabled:opacity-60 dark:border-[#584a3b]/60 dark:bg-[#292119] dark:text-[#f3eadf] dark:hover:bg-[rgba(245,169,89,0.12)]" type="button" disabled={!projectId || scanState === 'queued' || scanState === 'running'} onClick={handleManualRescan}>
-              <RefreshCw size={13} className="mr-1 inline" /> Rescan
-            </button>
             <AtlasPromptMenu atlas={data?.atlas ?? null} selectedNode={selectedAtlasNode} />
             <AtlasExportMenu atlas={data?.atlas ?? null} view={exportView} selectedNode={selectedAtlasNode} />
-            <AtlasRefreshStatus stale={data?.stale} status={data?.refreshStatus} scanState={scanState} message={data?.message} />
+            <AtlasRefreshStatus stale={data?.stale} status={data?.refreshStatus} message={data?.message} />
           </div>
         </div>
         <div className="border-t border-[#ead9c2] bg-[#fff6e8]/88 px-4 py-2 dark:border-[#584a3b]/40 dark:bg-[#1e1914]">
@@ -186,7 +165,7 @@ export function ProjectAtlasPage({ projectId }: ProjectAtlasPageProps) {
           {loading && <AtlasCenteredMessage title="Loading Atlas" body="Reading the latest graph snapshot." />}
           {error && <AtlasCenteredMessage title="Atlas unavailable" body={error} />}
           {!loading && !error && (!data || data.status === 'empty' || !domainView) && (
-            <AtlasCenteredMessage title="No Atlas generated yet" body="Run Manual Rescan when the scanner workflow is ready for this project." />
+            <AtlasCenteredMessage title="No authored Atlas yet" body="Ask ChatGPT to build or update Project Atlas for this project." />
           )}
           {hasNoResults && <AtlasCenteredMessage title="No matching domains" body="Clear search or filters to return to the full domain map." />}
           {!loading && !error && data?.status === 'ready' && isDrilldownMode && drilldownInspector && (

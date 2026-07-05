@@ -125,7 +125,7 @@ function normalizeProjectAtlas(value: Partial<ProjectAtlas>, fallbackProjectId: 
     flows: Array.isArray(value.flows) ? value.flows : [],
     summary: value.summary ?? {},
     freshness: value.freshness ?? { status: 'not-generated' },
-    agentOverlay: value.agentOverlay,
+    authoring: value.authoring,
   };
 }
 

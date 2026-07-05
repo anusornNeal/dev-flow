@@ -48,9 +48,18 @@ const atlas: any = {
   ],
   flows: [],
   summary: {
-    verified: { source: 'verified', description: 'Verified API atlas' },
+    inferred: { source: 'inferred', summary: 'ChatGPT-authored API atlas' },
   },
-  freshness: { status: 'fresh', generatedAt: new Date().toISOString() },
+  freshness: { status: 'fresh', generatedAt: new Date().toISOString(), scanMode: 'task-focused' },
+  authoring: {
+    updatedAt: new Date().toISOString(),
+    provenance: { provider: 'ChatGPT', model: 'GPT-5.5' },
+    coverage: { notes: ['Authored from staged repo reads.'], skippedAreas: [{ path: 'dist', reason: 'Generated output.' }] },
+    groupingRationale: { summary: 'ChatGPT grouped related project areas.' },
+    evidence: [{ path: 'src/0.ts', nodeId: 'file:src/0.ts' }],
+    readOrder: [{ nodeId: 'file:src/3.ts', path: 'src/3.ts', reason: 'Relevant to the request.' }],
+    warnings: [{ message: 'Generated output skipped.', severity: 'info' }],
+  },
 };
 
 saveLatestAtlas(atlas);
@@ -72,7 +81,7 @@ test('getProjectAtlasForApi returns markdown context and task-focused search', (
   const focused = getProjectAtlasForApi(project, { mode: 'task-focused', query: 'src/3.ts', limit: 4 }) as any;
 
   assert.equal(chatgpt.format, 'markdown');
-  assert.match(chatgpt.markdown, /Verified API atlas/);
+  assert.match(chatgpt.markdown, /ChatGPT-authored API atlas/);
   assert.ok(focused.matchedNodeIds.includes('file:src/3.ts'));
   assert.match(focused.selectedContext, /src\/3.ts/);
 });
@@ -83,6 +92,8 @@ test('getProjectAtlasStatus includes freshness and counts', () => {
   assert.equal(status.cacheStatus, 'ok');
   assert.equal(status.generatedAt, atlas.freshness.generatedAt);
   assert.equal(status.nodeCount, 12);
+  assert.equal(status.authoring.state, 'chatgpt-authored');
+  assert.equal(status.authoring.provenance.provider, 'ChatGPT');
 });
 
 test('getProjectAtlasForApi can include copy-ready prompt templates', () => {
@@ -138,7 +149,7 @@ test('getTaskFocusedAtlasContext renders read order and guardrails', () => {
   assert.ok((context?.recommendedReadOrder ?? []).some((entry: string) => entry.includes('src/3.ts')));
 });
 
-test('maybeRefreshAtlasOnProjectOpen marks daily-open check without blocking on scan', () => {
+test('maybeRefreshAtlasOnProjectOpen reports authored cache status without scheduling local generation', () => {
   saveLatestAtlas({
     ...atlas,
     freshness: {
@@ -150,7 +161,8 @@ test('maybeRefreshAtlasOnProjectOpen marks daily-open check without blocking on 
   const first = maybeRefreshAtlasOnProjectOpen(project, { now: '2026-07-02T01:00:00.000Z' });
   const second = maybeRefreshAtlasOnProjectOpen(project, { now: '2026-07-02T02:00:00.000Z' });
 
-  assert.equal(first.shouldRefresh, true);
+  assert.equal(first.shouldRefresh, false);
+  assert.equal(first.reason, 'ask-chatgpt-update');
   assert.equal(second.shouldRefresh, false);
 });
 

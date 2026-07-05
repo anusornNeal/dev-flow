@@ -8,12 +8,9 @@ import { buildAtlasDiffImpact, buildTaskFocusedAtlasImpact } from './projectAtla
 import {
   isAtlasStale,
   readAtlasCache,
-  markAtlasDailyOpenChecked,
-  shouldRefreshAtlasForDailyOpen,
   writeAtlasCache,
 } from './projectAtlasCacheService.js';
 import { applyProjectAtlasAgentUpdatePatch, type ApplyProjectAtlasAgentUpdateOptions } from './projectAtlasAgentUpdateService.js';
-import { suggestAtlasDomains } from './projectAtlasDomainService.js';
 import { scanProjectForAtlas } from './projectAtlasScannerService.js';
 
 export type ProjectAtlasApiMode = 'compact' | 'standard' | 'full' | 'chatgpt-context' | 'agent-context' | 'task-focused' | 'diff-impact';
@@ -53,8 +50,7 @@ export function saveLatestAtlas(atlas: ProjectAtlas) {
 }
 
 export function getManagedProjectAtlas(atlas: ProjectAtlas) {
-  const baseline = suggestAtlasDomains(atlas);
-  return applyAgentOverlayToAtlas(baseline);
+  return atlas;
 }
 
 export function getAtlasFreshness(projectId: string) {
@@ -68,10 +64,7 @@ export function getAtlasRefreshStatus(
   const stale = isAtlasStale(freshness, input);
   return {
     stale,
-    dailyOpenRefreshEligible: shouldRefreshAtlasForDailyOpen(
-      stale ? { ...freshness, status: freshness.status === 'fresh' ? 'stale' : freshness.status } : freshness,
-      { now: input.now },
-    ),
+    dailyOpenRefreshEligible: false,
   };
 }
 
@@ -79,17 +72,14 @@ export function maybeRefreshAtlasOnProjectOpen(project: Project, input: { now?: 
   const cached = readLatestAtlas(project.id);
   const freshness = cached.atlas.freshness;
   const stale = isAtlasStale(freshness, input);
-  const dailyFreshness = stale ? { ...freshness, status: freshness.status === 'fresh' ? 'stale' as const : freshness.status } : freshness;
-  const shouldRefresh = shouldRefreshAtlasForDailyOpen(dailyFreshness, { now: input.now });
-  const marked = shouldRefresh ? markAtlasDailyOpenChecked(project.id, input.now ?? new Date().toISOString()) : null;
 
   return {
     projectId: project.id,
     cacheStatus: cached.status,
     stale,
-    shouldRefresh,
-    reason: shouldRefresh ? (cached.status === 'missing' ? 'not-generated' : 'daily-open-stale') : 'not-needed',
-    freshness: marked?.atlas.freshness ?? freshness,
+    shouldRefresh: false,
+    reason: stale ? 'ask-chatgpt-update' : 'not-needed',
+    freshness,
   };
 }
 
@@ -191,7 +181,7 @@ export function rescanProjectAtlas(project: Project) {
     throw new Error('Project has no localPath configured for Atlas scan');
   }
   const result = scanProjectForAtlas({ projectId: project.id, root: project.localPath });
-  const atlas = suggestAtlasDomains(result.atlas);
+  const atlas = result.atlas;
   saveLatestAtlas(atlas);
   return {
     projectId: project.id,
@@ -245,8 +235,7 @@ export function applyProjectAtlasAgentUpdate(project: Project, patch: unknown, o
 export function getProjectAtlasStatus(projectId: string) {
   const cached = readLatestAtlas(projectId);
   const freshness = cached.atlas.freshness;
-  const overlay = cached.atlas.agentOverlay;
-  const overlayDiagnostics = overlay ? getOverlayDiagnostics(cached.atlas) : [];
+  const authoring = cached.atlas.authoring;
   return {
     projectId,
     cacheStatus: cached.status,
@@ -257,64 +246,18 @@ export function getProjectAtlasStatus(projectId: string) {
     edgeCount: cached.atlas.edges.length,
     domainCount: cached.atlas.domains.length,
     lastError: cached.error ?? freshness.lastError,
-    warnings: [],
-    overlay: {
-      state: overlay ? 'chatgpt-managed' : 'deterministic-only',
-      updatedAt: overlay?.updatedAt,
-      base: overlay?.base ?? {
-        generatedAt: freshness.generatedAt,
-        repoFingerprint: freshness.repoFingerprint,
-        nodeCount: cached.atlas.nodes.length,
-        edgeCount: cached.atlas.edges.length,
-      },
-      diagnostics: [...(overlay?.diagnostics ?? []), ...overlayDiagnostics],
-      counts: overlay
-        ? {
-            domains: overlay.domains.length,
-            summaries: overlay.summaries.length,
-            inferredRelationships: overlay.inferredRelationships.length,
-            readOrder: overlay.readOrder.length,
-            warnings: overlay.warnings.length,
-          }
-        : {
-            domains: 0,
-            summaries: 0,
-            inferredRelationships: 0,
-            readOrder: 0,
-            warnings: 0,
-          },
+    warnings: authoring?.warnings ?? [],
+    authoring: {
+      state: authoring ? 'chatgpt-authored' : 'missing-authored-atlas',
+      updatedAt: authoring?.updatedAt,
+      provenance: authoring?.provenance,
+      coverage: authoring?.coverage,
+      groupingRationale: authoring?.groupingRationale,
+      evidenceCount: authoring?.evidence.length ?? 0,
+      readOrderCount: authoring?.readOrder.length ?? 0,
+      warningCount: authoring?.warnings.length ?? 0,
     },
   };
-}
-
-function applyAgentOverlayToAtlas(atlas: ProjectAtlas): ProjectAtlas {
-  const overlay = atlas.agentOverlay;
-  if (!overlay || getOverlayDiagnostics(atlas).length > 0) return atlas;
-  const summaryByNodeId = new Map(overlay.summaries.map((item) => [item.nodeId, item.summary]));
-  const nodes = atlas.nodes.map((node) => {
-    const summary = summaryByNodeId.get(node.id);
-    return summary ? { ...node, inferred: { source: 'inferred' as const, summary } } : node;
-  });
-  return { ...atlas, nodes, domains: overlay.domains.length ? overlay.domains : atlas.domains };
-}
-
-function getOverlayDiagnostics(atlas: ProjectAtlas) {
-  const overlay = atlas.agentOverlay;
-  if (!overlay) return [];
-  const diagnostics = [];
-  if (
-    overlay.base.generatedAt !== atlas.freshness.generatedAt ||
-    (overlay.base.repoFingerprint ?? '') !== (atlas.freshness.repoFingerprint ?? '') ||
-    overlay.base.nodeCount !== atlas.nodes.length ||
-    overlay.base.edgeCount !== atlas.edges.length
-  ) {
-    diagnostics.push({
-      code: 'STALE_OVERLAY_BASE',
-      message: 'Agent overlay base metadata no longer matches the current deterministic Atlas cache.',
-      severity: 'warning' as const,
-    });
-  }
-  return diagnostics;
 }
 
 export function shouldIncludeAtlasForTask(task: AtlasTaskLike, input: { explicit?: boolean } = {}) {

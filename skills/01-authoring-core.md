@@ -48,6 +48,7 @@ Grouping rules:
 - Prefer domains based on product/runtime flow: Runtime/Navigation, Auth, Onboarding, Jobs, Calendar, Income/Payment, Sub-team/Profile/Settings, Data/API/DI, Data Model Coverage, Shared UI/Common, Build/Tests/Ops.
 - Use sub-flow or feature-folder nodes for meaningful areas: login, OTP, password, PIN, personal info, OCR, documents, bank, work area/type, new jobs, my jobs, job detail, media upload, quotation, contractor selection, calendar settings, income search/detail, notification, remote config, profile/privacy.
 - Use anchor-file nodes for important route files, ViewModels, repositories, repository implementations, API services, DI modules, session/token state, and high-risk helpers.
+- Exclude generated/cache/backup/local-secret paths from key nodes, such as `data/backups/`, `dist/`, `node_modules/`, `.git/`, `.devflow/`, `.gradle/`, `.idea/`, and local env/keystore files, unless the user explicitly asks for those areas.
 - If the user wants every file covered, create a separate File Coverage Layer instead of making every file a graph node.
 
 Detail levels:
@@ -116,7 +117,7 @@ Repo inspection is required for implementation-ready cards, but it must be targe
 
 Use `get_repo_context_bundle` first when a project is known. It should provide the starting git status, repo index matches, focused snippets, and optional diff context in one packet. Query with screen names, visible strings, Jira terms, route names, or flow names.
 
-Use `get_project_atlas` as a companion, not a replacement, when the card is architecture/project-structure/onboarding related, targetFiles remain empty or uncertain after the bundle, the task crosses modules/domains, or the user asks for impact, affected files, module boundaries, or read order.
+Use `get_project_atlas` as a companion, not a replacement, when the card is architecture/project-structure/onboarding related, targetFiles remain empty or uncertain after the bundle, the task crosses modules/domains, or the user asks for impact, affected files, module boundaries, or read order. Prefer `task-focused` or `diff-impact` when the task/diff is known; use compact/standard only for broad orientation.
 
 Fall back to `get_repo_inspection_index`, `search_local_files`, and `read_local_file` only when the bundle is unavailable or does not identify enough target files/functions. Then read only the matched target files that are needed to confirm the implementation map.
 
@@ -125,6 +126,8 @@ Do not scan or read the whole repo. Start from the Jira/user terms and search on
 Atlas guardrails:
 - Do not use Atlas to skip reading exact target files before editing or authoring an implementation map.
 - Treat verified Atlas facts as stronger than inferred summaries, and label inferred guidance as inferred in `reasoning` or review notes when it matters.
+- If Atlas is stale, freshness metadata conflicts, or key nodes are noisy/generated, say so and use Atlas only for routing/read-order hints.
+- Ignore backup/generated/cache nodes when choosing implementation targets unless the task explicitly touches those areas.
 - If Atlas suggests files that conflict with explicit card `targetFiles`, do not override them silently; mention the conflict and inspect the exact files before changing scope.
 - Keep lean repo-context workflow for simple single-file cards.
 

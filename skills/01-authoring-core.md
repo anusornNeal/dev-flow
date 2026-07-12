@@ -19,6 +19,83 @@ See sourceUrl for requirement.
 
 Instead, extract the useful information from Jira, attachments, comments, subtasks, and repo inspection, then write that information into the card.
 
+## ChatGPT-authored Project Atlas scan
+
+Use this workflow when the user asks to scan/build/update Project Atlas, asks for a domain map, asks ChatGPT to read a repo and group it, or asks to make Atlas more detailed/accurate.
+
+Atlas source of truth:
+- ChatGPT owns the final domains, sub-flows, nodes, edges, summaries, read order, warnings, coverage notes, skipped-area reasons, grouping rationale, and evidence paths.
+- Do not use local scanner output, generated graph files, or heuristic grouping as the final source of truth.
+- Do not edit source repo files to create Atlas unless the user explicitly asks for repo file changes.
+- Save the final authored Atlas through `apply_project_atlas_agent_update`, then confirm with `get_project_atlas_status`.
+
+Preflight:
+- Check tool/project readiness and git status before authoring.
+- If the working tree is not clean, tell the user what exists and leave unrelated changes untouched.
+- Use `get_repo_context_bundle` first when the project is known.
+- Read/list local files in stages; do not claim full-file coverage unless a file inventory layer was actually built.
+
+Staged read order:
+1. Project identity: README, AGENTS/AI docs, package/build config, settings, architecture or agent-knowledge docs.
+2. Directory inventory: source root, UI folders, data/repository, data/model, navigation/routes, DI/config, tests.
+3. Runtime entrypoints: manifest/routes, application bootstrap, main host/shell, navigation graphs, DI bootstrap.
+4. Feature anchors: ViewModels/controllers/screens, repositories, API services, key models, and nearest tests.
+5. Platform coverage: API service, token/session, preferences, local DB/cache, result/network wrappers, shared UI/base utilities.
+6. Test coverage: unit/integration/feature/repository/model/mapper test surfaces.
+
+Grouping rules:
+- Build a domain-first map, not a raw file tree graph.
+- Prefer domains based on product/runtime flow: Runtime/Navigation, Auth, Onboarding, Jobs, Calendar, Income/Payment, Sub-team/Profile/Settings, Data/API/DI, Data Model Coverage, Shared UI/Common, Build/Tests/Ops.
+- Use sub-flow or feature-folder nodes for meaningful areas: login, OTP, password, PIN, personal info, OCR, documents, bank, work area/type, new jobs, my jobs, job detail, media upload, quotation, contractor selection, calendar settings, income search/detail, notification, remote config, profile/privacy.
+- Use anchor-file nodes for important route files, ViewModels, repositories, repository implementations, API services, DI modules, session/token state, and high-risk helpers.
+- Exclude generated/cache/backup/local-secret paths from key nodes, such as `data/backups/`, `dist/`, `node_modules/`, `.git/`, `.devflow/`, `.gradle/`, `.idea/`, and local env/keystore files, unless the user explicitly asks for those areas.
+- If the user wants every file covered, create a separate File Coverage Layer instead of making every file a graph node.
+
+Detail levels:
+- Overview Atlas: about 50-80 nodes; large domains and entrypoints only.
+- Detailed Domain Atlas: about 100-160 nodes; sub-flow, repo, model, and test coverage for main features.
+- 10/10 Domain Atlas: about 150-250 nodes; major feature folders, repository families, model clusters, test surfaces, high-risk warnings, and actionable read order.
+- Every-file inventory: separate metadata/table layer, not the main graph.
+
+Edges:
+- Use edge kinds that help an agent read flow: `routes`, `calls`, `depends-on`, `contains`, `exports`, `reads`, `writes`, `tests`, `related`.
+- Every edge should have a short verified fact or reason.
+- Connect UI -> ViewModel/controller -> repository -> API/local storage -> model/test where the repo evidence supports it.
+
+Coverage and evidence:
+- Coverage notes must say which docs, directories, route graphs, DI files, repos, models, tests, and anchors were inspected.
+- Skipped areas must include generated/cache/IDE/local-secret paths when skipped, such as `.gradle/`, `.idea/`, `local.properties`, `keystore.properties`, `env.properties`, generated output, and pre-existing untracked folders.
+- Evidence paths must exist in the repo. Do not use nonexistent paths or broad directory evidence when the tool requires file paths.
+- Validate that every domain/flow/edge node id exists before saving.
+
+Warnings to include when relevant:
+- Atlas is domain-first, not every-file raw scan.
+- Central API/service files are high-risk.
+- Large domains such as Jobs or Onboarding are high-risk.
+- Mode-sensitive managers must be read before changing flows.
+- Hybrid UI stacks, such as Compose plus legacy Fragment/XML, must keep changes in the target layer unless migration is requested.
+- Tests may be sparse; prefer focused tests plus compile/broader verification.
+
+Final response after saving:
+- Report fresh/cache status, node count, edge count, domain count, and authoring state.
+- State whether source repo files were changed.
+- Summarize major domains covered.
+- Be explicit that the Atlas is domain-first and not every-file inventory unless a file coverage layer was built.
+
+Quality bar:
+- 7/10: large domains and primary flows are clear, but coverage is thin.
+- 8.5/10: useful sub-flow map with main repositories/tests, but some model/repo/profile/platform coverage remains grouped.
+- 9.5/10: readable, broad domain/sub-flow/repo/model/test coverage with warnings and read order.
+- 10/10: domain-first, readable, broad coverage across major feature folders, repository families, model clusters, test surfaces, risk warnings, skipped-area notes, and actionable read order without reverting to a noisy every-file graph.
+
+## Embedded bug thread rule
+
+When the user says “เปิดบัค”, “open a bug”, reports defects on an existing task, or gives review feedback for a card that already exists, use `open_task_bug` to create an embedded bug thread under that task.
+
+Do not use `create_task` for those defects unless the user explicitly asks for a separate new card. The bug thread must include the observed wrong behavior, expected behavior, evidence, related areas, and a copy-ready fix prompt when available.
+
+If the reviewed task was `ready-for-review`, move it back to or keep it in `in-progress` until the embedded bug thread is fixed and verified.
+
 ## Required read order
 
 When applicable:
@@ -40,9 +117,19 @@ Repo inspection is required for implementation-ready cards, but it must be targe
 
 Use `get_repo_context_bundle` first when a project is known. It should provide the starting git status, repo index matches, focused snippets, and optional diff context in one packet. Query with screen names, visible strings, Jira terms, route names, or flow names.
 
+Use `get_project_atlas` as a companion, not a replacement, when the card is architecture/project-structure/onboarding related, targetFiles remain empty or uncertain after the bundle, the task crosses modules/domains, or the user asks for impact, affected files, module boundaries, or read order. Prefer `task-focused` or `diff-impact` when the task/diff is known; use compact/standard only for broad orientation.
+
 Fall back to `get_repo_inspection_index`, `search_local_files`, and `read_local_file` only when the bundle is unavailable or does not identify enough target files/functions. Then read only the matched target files that are needed to confirm the implementation map.
 
 Do not scan or read the whole repo. Start from the Jira/user terms and search only for likely screen names, visible strings, route names, ViewModels, composables, fragments, adapters, mappers, APIs, models, and tests. Read only the smallest set of files needed to identify the implementation path.
+
+Atlas guardrails:
+- Do not use Atlas to skip reading exact target files before editing or authoring an implementation map.
+- Treat verified Atlas facts as stronger than inferred summaries, and label inferred guidance as inferred in `reasoning` or review notes when it matters.
+- If Atlas is stale, freshness metadata conflicts, or key nodes are noisy/generated, say so and use Atlas only for routing/read-order hints.
+- Ignore backup/generated/cache nodes when choosing implementation targets unless the task explicitly touches those areas.
+- If Atlas suggests files that conflict with explicit card `targetFiles`, do not override them silently; mention the conflict and inspect the exact files before changing scope.
+- Keep lean repo-context workflow for simple single-file cards.
 
 Stop repo inspection when you can name:
 

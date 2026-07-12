@@ -58,6 +58,11 @@ function getStatusFiles(root: string) {
   return parsePorcelainStatus(runGit(['status', '--porcelain'], root));
 }
 
+export function getChangedGitFilesForRoot(root: string) {
+  ensureGitRepo(root);
+  return getStatusFiles(root).map((file) => ({ path: file.normalizedPath, staged: file.staged, status: file.status }));
+}
+
 function getBranchName(root: string) {
   return runGit(['branch', '--show-current'], root).trim() || 'HEAD';
 }
@@ -226,13 +231,11 @@ export function getGitShow(state: AppState, args: Record<string, any>) {
 
 export function getGitStatus(state: AppState, args: Record<string, any>) {
   const root = resolveProjectRoot(state, args);
-  ensureGitRepo(root);
-
-  const files = getStatusFiles(root);
+  const files = getChangedGitFilesForRoot(root);
   return {
     root,
     count: files.length,
-    files: files.map((file) => ({ path: file.normalizedPath, staged: file.staged, status: file.status })),
+    files,
   };
 }
 

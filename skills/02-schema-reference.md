@@ -12,6 +12,7 @@ Use these before writing implementation-ready cards:
 
 - `get_jira_authoring_bundle`: one-call Jira packet for issue summary, description, comments, attachment metadata, related issues, and existing DevFlow duplicate cards. Use it before individual Jira proxy tools.
 - `get_repo_context_bundle`: one-call repo packet for project metadata, git status, repo index matches, focused file snippets, and optional diff context. Prefer this first when a project is known.
+- `get_project_atlas`: compact project knowledge graph for architecture, onboarding, unclear targetFiles, cross-module impact, module boundaries, and read order. Use modes `compact`, `standard`, `agent-context`, `chatgpt-context`, `task-focused`, or `diff-impact`; keep it companion-only after `get_repo_context_bundle`, and never let stale/noisy/inferred Atlas summaries silently override explicit targetFiles or exact local reads.
 - `get_repo_inspection_index`: cached repo index for likely files, classes, composables, functions, routes, mappers, helpers, and tests. Use it as a targeted fallback when the repo context bundle is unavailable or insufficient.
 - `read_file_snippets_batch`: read several focused local file ranges in one round trip after the bundle/index identifies likely files.
 - `read_local_file`: read one exact local file or line range before editing; preserve returned file revision/hash when a write tool can guard against stale edits.
@@ -22,6 +23,7 @@ Use these before writing implementation-ready cards:
 - `run_project_command`: run allowlisted verification presets such as `typecheck`, `test`, `lint`, `build`, or `verify` after local edits.
 - `commit_git_changes`: commit one small verified scope. Use dry-run first and stage only intended files. Never push.
 - `validate_task_quality`: preflight the card before `create_task` or `update_task`. It blocks implementation-ready cards that still depend on Jira/source links, lack focused `targetFiles`, or lack an `Implementation map` in `repoContext`.
+- `open_task_bug`: create an embedded bug thread under an existing task for defect feedback, review failures, or user reports like “เปิดบัค”. Use this instead of `create_task` when the work belongs to an existing card.
 - `devflow_health_check`: read-only workflow readiness check for git cleanliness, tool capability counts, queue diagnostics, and recommendations.
 - `move_task_to_status`: move a card to a target lane by following allowed transition paths automatically. Prefer it over repeated manual `move_task_status` calls when closing or reopening a card.
 
@@ -49,6 +51,29 @@ MCP tools may resolve project by one of:
 ```
 
 Use only one project identifier when possible.
+
+## Embedded task bug tool shape
+
+Use `open_task_bug` for defects on an existing task:
+
+```json
+{
+  "taskId": "DVF-0120",
+  "title": "Bug title",
+  "source": "user | review | agent | manual",
+  "severity": "low | medium | high | critical",
+  "actual": "Observed wrong behavior",
+  "expected": "Expected behavior",
+  "evidence": "Screenshot/log/review note summary",
+  "relatedAreas": ["file or component name"],
+  "prompt": "Copy-ready fix prompt",
+  "summary": "Optional first bug version summary",
+  "createdBy": "ChatGPT",
+  "responseMode": "summary"
+}
+```
+
+Do not create a top-level task for these defects unless explicitly requested.
 
 ## Core task shape
 

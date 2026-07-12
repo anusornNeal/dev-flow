@@ -10,6 +10,8 @@ import { applyLocalPatchAsync } from './localPatchService';
 import { searchLocalFilesAsync } from './localFileService';
 import { commitGitChanges } from './gitService';
 import { editFilesBatch } from './fileEditBatchService';
+import { getProjects } from '../repositories/projectRepository';
+import { applyProjectAtlasAgentUpdate } from './projectAtlasService';
 
 type JobKind = 'repo-command' | 'repo-write' | 'repo-read' | 'skill-read';
 type Logger = { stdout: (data: string) => void; stderr: (data: string) => void };
@@ -315,6 +317,11 @@ async function startJob(entry: QueueEntry) {
       result = commitGitChanges(entry.state, entry.args);
     } else if (entry.toolName === 'edit_local_files_batch') {
       result = editFilesBatch(entry.state, entry.args);
+    } else if (entry.toolName === 'apply_project_atlas_agent_update') {
+      const project = findProjectForAtlasRescan(entry.args);
+      if (!project) throw new Error('Project not found for Project Atlas agent update.');
+      logger.stdout(`[Project Atlas] Saving ChatGPT-authored Atlas for ${project.name || project.id}\n`);
+      result = applyProjectAtlasAgentUpdate(project, entry.args);
     } else {
       throw new Error(`No async runner implemented for tool: ${entry.toolName}`);
     }
@@ -401,4 +408,23 @@ export function __setToolJobTestRunner(toolName: string, runner: AsyncRunner | n
   } else {
     testRunners.delete(toolName);
   }
+}
+
+function findProjectForAtlasRescan(args: any) {
+  const projects = getProjects();
+  if (args?.projectId) {
+    const byId = projects.find((project) => project.id === args.projectId);
+    if (byId) return byId;
+  }
+  if (args?.projectName) {
+    const normalizedName = String(args.projectName).trim().toLowerCase();
+    const byName = projects.find((project) => project.name.trim().toLowerCase() === normalizedName);
+    if (byName) return byName;
+  }
+  if (args?.localPath) {
+    const normalizedPath = String(args.localPath).trim().toLowerCase();
+    const byPath = projects.find((project) => String(project.localPath || '').trim().toLowerCase() === normalizedPath);
+    if (byPath) return byPath;
+  }
+  return null;
 }

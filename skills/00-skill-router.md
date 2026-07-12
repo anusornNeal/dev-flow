@@ -17,8 +17,40 @@ Load:
 Use:
 - `get_jira_authoring_bundle` first for Jira-originated card authoring.
 - `get_repo_context_bundle` first when a project is known; use it as the compact entry point for git status, repo index, snippets, and diff context.
+- `get_project_atlas` only as a companion after the repo context bundle when the card is about architecture, project structure, onboarding, module boundaries, cross-module impact, read order, or when target files remain uncertain.
+- If Atlas is stale, noisy, or mostly inferred, use it only for routing/read-order hints and verify exact files with local reads before authoring scope.
 - `get_repo_inspection_index`, `read_local_file`, or search tools only when the repo context bundle is unavailable or insufficient.
 - `validate_task_quality` before `create_task` or `update_task` for any implementation-ready card.
+
+Do not require Project Atlas for simple single-file or clearly targeted cards.
+
+## When scanning or authoring Project Atlas
+
+Load:
+- `01-authoring-core.md`
+
+Use the `ChatGPT-authored Project Atlas scan` workflow in Authoring Core when the user asks to:
+- scan/build/update Project Atlas,
+- make Atlas more detailed or more accurate,
+- create a domain map or flow map,
+- have ChatGPT read the repo and group it itself,
+- replace local/heuristic scan output with ChatGPT-authored Atlas.
+
+Use:
+- `get_repo_context_bundle` first when the project is known.
+- staged local reads/lists for repo identity, directory inventory, runtime entrypoints, feature anchors, repository/model coverage, and test surfaces.
+- `apply_project_atlas_agent_update` to save the final ChatGPT-authored Atlas.
+- `get_project_atlas_status` to verify cache status, freshness, node count, edge count, and domain count.
+
+Do not load schema/examples unless writing or updating a DevFlow card. Do not create every-file graph nodes unless the user explicitly asks for an every-file inventory layer.
+
+## When opening a bug on an existing task
+
+Load:
+- `01-authoring-core.md`
+- `02-schema-reference.md`
+
+Use `open_task_bug` first when the user says “เปิดบัค”, “open a bug”, reports defects on an existing task, or fails a ready-for-review card. Do not use `create_task` unless the user explicitly asks for a separate new card.
 
 ## When doing repository or local file edits
 
@@ -28,6 +60,8 @@ Load:
 
 Use:
 - `get_repo_context_bundle` first when a project is known.
+- `get_project_atlas` after the bundle only for architecture/project-map, onboarding, unclear targetFiles, cross-module, impact, module-boundary, or read-order questions.
+- Treat Atlas as navigation context, not code truth; do not let inferred Atlas entries override explicit target files or actual local file reads.
 - `read_local_file` or `read_file_snippets_batch` before writing any existing file.
 - `edit_local_files_batch` or `safe_edit_local_file` for anchored edits, with dry-run before apply.
 - `write_local_file` only for new files or small full-file replacements where the complete content is known.
@@ -47,6 +81,8 @@ Load `04-examples.md` only if:
 Load:
 - `03-reviewer-core.md`
 - `02-schema-reference.md`
+
+Use `get_project_atlas` during review only when targetFiles, implementation maps, module boundaries, impact, or read order are vague or cross-module.
 
 Do not load authoring examples unless the review requires rewriting the card.
 

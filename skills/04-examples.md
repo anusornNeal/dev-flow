@@ -51,6 +51,28 @@ Verification child, only when large enough:
 - Owns regression matrix, final integrated command, and manual scenarios.
 ```
 
+## Embedded task bug thread
+
+Use this when the user reports a defect on an existing DevFlow card:
+
+```json
+{
+  "taskId": "DVF-0301",
+  "title": "Project Atlas controls look clickable but do not work",
+  "source": "user",
+  "severity": "high",
+  "actual": "Several visible Atlas controls appear clickable but do not perform an action or explain that they are unavailable.",
+  "expected": "Every visible Atlas control works, is disabled with explanation, or is hidden until implemented.",
+  "evidence": "User annotated screenshots and review note.",
+  "relatedAreas": ["ProjectAtlasPage", "Sidebar", "AtlasGraph"],
+  "prompt": "Audit every visible Atlas control. Wire implemented actions; otherwise render disabled with tooltip copy or hide the unavailable control. Do not create a new task for this defect.",
+  "createdBy": "ChatGPT",
+  "responseMode": "summary"
+}
+```
+
+Call `open_task_bug` with this shape. Do not call `create_task` unless the user explicitly asks for a separate card.
+
 ## Bug fix card
 
 ```json
@@ -211,6 +233,14 @@ Verification child, only when large enough:
   "repo": "https://github.com/org/repo",
   "sourceUrl": ""
 }
+```
+
+## Atlas-assisted card
+
+Use this only for architecture, onboarding, unclear targetFiles, or cross-module impact. Keep `get_repo_context_bundle` first, then use `get_project_atlas` for module boundaries and read order, and still read exact target files before editing.
+
+```text
+Reasoning: Repo context found the prompt service and task service paths. Project Atlas task-focused mode added an inferred read order across prompt templates, task context, and MCP contract files. Keep explicit targetFiles authoritative; inspect any Atlas-suggested extras before adding scope.
 ```
 
 ## Frontend/backend split from one Jira

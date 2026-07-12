@@ -59,3 +59,44 @@ test('server taskRepository.saveTask updates without deleting dependent attachme
     deleteTask(taskId);
   }
 });
+
+test('server taskRepository persists embedded bug threads without requiring existing tasks to define them', () => {
+  const taskWithBugsId = `task-bugs-${randomUUID()}`;
+  const taskWithoutBugsId = `task-no-bugs-${randomUUID()}`;
+  const bugThread = {
+    id: `bug-${randomUUID()}`,
+    taskId: taskWithBugsId,
+    title: 'Completion warning still missing',
+    status: 'open',
+    source: 'review',
+    severity: 'high',
+    actual: 'Task closes silently with incomplete checklist items.',
+    expected: 'Task keeps an embedded unresolved bug warning.',
+    evidence: 'Reviewer noted unfinished mini tasks.',
+    relatedAreas: ['src/server/routes/tasks.ts'],
+    versions: [
+      {
+        version: 1,
+        status: 'open',
+        prompt: 'Fix the unfinished checklist warning.',
+        summary: 'Initial follow-up bug.',
+        changedFiles: [],
+        createdAt: new Date().toISOString(),
+        createdBy: 'Codex',
+      },
+    ],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+
+  try {
+    saveTask({ ...makeTask(taskWithBugsId, 'with bugs'), bugs: [bugThread] });
+    saveTask(makeTask(taskWithoutBugsId, 'without bugs'));
+
+    assert.deepEqual(getTask(taskWithBugsId)?.bugs, [bugThread]);
+    assert.deepEqual(getTask(taskWithoutBugsId)?.bugs, []);
+  } finally {
+    deleteTask(taskWithBugsId);
+    deleteTask(taskWithoutBugsId);
+  }
+});

@@ -1,4 +1,13 @@
-import { VALID_AGENTS, LEGACY_VALID_EFFORTS_FALLBACK, VALID_MODELS, VALID_STATUSES, VALID_TASK_CATEGORIES } from '../constants';
+import {
+  VALID_AGENTS,
+  LEGACY_VALID_EFFORTS_FALLBACK,
+  VALID_BUG_SEVERITIES,
+  VALID_BUG_SOURCES,
+  VALID_BUG_STATUSES,
+  VALID_MODELS,
+  VALID_STATUSES,
+  VALID_TASK_CATEGORIES,
+} from '../constants';
 
 type JsonSchema = Record<string, any>;
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
@@ -109,6 +118,19 @@ const taskMutationProperties = {
   designImages: { type: 'array', items: { type: 'string' }, description: 'Legacy design image URLs or data.' },
   jiraKey: { type: 'string', description: 'Jira issue key.' },
   sourceUrl: { type: 'string', description: 'Source URL.' },
+};
+
+const bugThreadMutationProperties = {
+  title: { type: 'string', description: 'Bug or defect title to open under the existing task.' },
+  source: { type: 'string', enum: VALID_BUG_SOURCES, description: 'Where the bug report came from.' },
+  severity: { type: 'string', enum: VALID_BUG_SEVERITIES, description: 'Bug severity.' },
+  actual: { type: 'string', description: 'Observed wrong behavior.' },
+  expected: { type: 'string', description: 'Expected behavior.' },
+  evidence: { type: 'string', description: 'Screenshot, review note, log excerpt, or other evidence summary.' },
+  relatedAreas: { type: 'array', items: { type: 'string' }, description: 'Files, components, screens, or areas related to this bug.' },
+  prompt: { type: 'string', description: 'Copy-ready fix prompt for the next bug-fix attempt. Defaults to the title when omitted.' },
+  summary: { type: 'string', description: 'Optional version summary for the first bug thread entry.' },
+  createdBy: { type: 'string', description: 'Who created the bug thread.' },
 };
 
 function withQuery(path: string, query?: Record<string, string | number | boolean | undefined | null>) {
@@ -397,6 +419,190 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
     }),
   },
   {
+    name: 'get_project_atlas',
+    description: 'Get capped Project Atlas knowledge graph context for a project. Modes include compact, standard, full, chatgpt-context, agent-context, task-focused, and diff-impact. Pass promptVariant to receive a copy-ready Atlas prompt.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...projectIdentifierProperties,
+        mode: { type: 'string', enum: ['compact', 'standard', 'full', 'chatgpt-context', 'agent-context', 'task-focused', 'diff-impact'], description: 'Atlas response mode. Defaults to compact.' },
+        limit: { type: 'number', description: 'Maximum nodes/edges returned. Defaults are capped; max 1000.' },
+        query: { type: 'string', description: 'Search query for task-focused mode.' },
+        focusPath: { type: 'string', description: 'Path focus for task-focused mode.' },
+        taskId: { type: 'string', description: 'Task id/key for task-focused mode.' },
+        taskTitle: { type: 'string', description: 'Task title to include in task-focused prompt templates.' },
+        targetFiles: { type: 'array', items: { type: 'string' }, description: 'Explicit target files to include in task-focused prompt templates.' },
+        selectedNodeId: { type: 'string', description: 'Atlas node id for module/node prompt templates.' },
+        diffSummary: { type: 'string', description: 'Current diff summary for analyze-diff-impact prompt templates.' },
+        changedFiles: { type: 'array', items: { type: 'string' }, description: 'Changed files for diff-impact mode. If omitted, current git status is used when localPath is available.' },
+        promptVariant: {
+          type: 'string',
+          enum: ['explain-project', 'onboard-repo', 'find-affected-files', 'plan-implementation', 'build-read-order', 'explain-module', 'analyze-diff-impact'],
+          description: 'Optional copy-ready prompt template to include in the response.',
+        },
+      },
+    },
+    outputSchema: { type: 'object' },
+    lightweight: true,
+    buildHttpRequest: (args) => ({
+      method: 'GET',
+      path: withQuery('/api/project-atlas', args),
+    }),
+  },
+  {
+    name: 'get_project_atlas_status',
+    description: 'Read Project Atlas freshness and cache status, including stale/generatedAt counts and last error metadata.',
+    inputSchema: {
+      type: 'object',
+      properties: projectIdentifierProperties,
+    },
+    outputSchema: { type: 'object' },
+    lightweight: true,
+    buildHttpRequest: (args) => ({
+      method: 'GET',
+      path: withQuery('/api/project-atlas/status', args),
+    }),
+  },
+  {
+    name: 'apply_project_atlas_agent_update',
+    description: 'Save a full ChatGPT-authored Project Atlas. ChatGPT owns domains, edges, summaries, read order, warnings, provenance, repo coverage, skipped-area reasons, grouping rationale, and evidence paths.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...projectIdentifierProperties,
+        provenance: {
+          type: 'object',
+          properties: {
+            provider: { type: 'string', enum: ['ChatGPT', 'Codex', 'Agent', 'Other'] },
+            model: { type: 'string' },
+            prompt: { type: 'string' },
+            runId: { type: 'string' },
+          },
+          required: ['provider'],
+          additionalProperties: false,
+        },
+        generatedAt: { type: 'string' },
+        repoFingerprint: { type: 'string' },
+        coverage: {
+          type: 'object',
+          properties: {
+            notes: { type: 'array', items: { type: 'string' } },
+            skippedAreas: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  path: { type: 'string' },
+                  reason: { type: 'string' },
+                },
+                required: ['path', 'reason'],
+                additionalProperties: false,
+              },
+            },
+          },
+          required: ['notes', 'skippedAreas'],
+          additionalProperties: false,
+        },
+        groupingRationale: {
+          type: 'object',
+          properties: {
+            summary: { type: 'string' },
+            domainRationales: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  domainId: { type: 'string' },
+                  rationale: { type: 'string' },
+                  evidence: { type: 'array', items: { $ref: '#/$defs/atlasEvidence' } },
+                },
+                required: ['domainId', 'rationale'],
+                additionalProperties: false,
+              },
+            },
+          },
+          required: ['summary'],
+          additionalProperties: false,
+        },
+        nodes: { type: 'array', maxItems: 1000, items: { type: 'object' } },
+        edges: { type: 'array', maxItems: 1000, items: { type: 'object' } },
+        domains: {
+          type: 'array',
+          maxItems: 1000,
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              name: { type: 'string' },
+              nodeIds: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 1000 },
+              origin: { type: 'string', enum: ['verified', 'inferred', 'user-edited'] },
+              summary: { type: 'string' },
+              metadata: { type: 'object' },
+            },
+            required: ['id', 'name', 'nodeIds', 'origin'],
+            additionalProperties: false,
+          },
+        },
+        flows: { type: 'array', maxItems: 1000, items: { type: 'object' } },
+        summary: { type: 'object' },
+        readOrder: {
+          type: 'array',
+          maxItems: 100,
+          items: {
+            type: 'object',
+            properties: {
+              nodeId: { type: 'string' },
+              path: { type: 'string' },
+              reason: { type: 'string' },
+              evidence: { type: 'array', items: { $ref: '#/$defs/atlasEvidence' } },
+            },
+            required: ['nodeId', 'reason'],
+            additionalProperties: false,
+          },
+        },
+        warnings: {
+          type: 'array',
+          maxItems: 100,
+          items: {
+            type: 'object',
+            properties: {
+              message: { type: 'string' },
+              severity: { type: 'string', enum: ['info', 'warning', 'error'] },
+              evidence: { type: 'array', items: { $ref: '#/$defs/atlasEvidence' } },
+            },
+            required: ['message', 'severity'],
+            additionalProperties: false,
+          },
+        },
+        evidence: { type: 'array', items: { $ref: '#/$defs/atlasEvidence' } },
+        sync: { type: 'boolean', description: 'HTTP-only escape hatch for tests/manual calls. MCP callers should omit this and use the queued job result.' },
+      },
+      required: ['provenance', 'coverage', 'groupingRationale', 'nodes', 'edges', 'domains'],
+      additionalProperties: false,
+      $defs: {
+        atlasEvidence: {
+          type: 'object',
+          properties: {
+            path: { type: 'string', description: 'Relative existing repo file path.' },
+            nodeId: { type: 'string', description: 'Authored Atlas node id.' },
+            excerpt: { type: 'string' },
+            startLine: { type: 'number' },
+            endLine: { type: 'number' },
+          },
+          required: ['path'],
+          additionalProperties: false,
+        },
+      },
+    },
+    outputSchema: { type: 'object' },
+    executionPolicy: { mode: 'job', jobKind: 'repo-write' },
+    buildHttpRequest: (args) => ({
+      method: 'POST',
+      path: '/api/project-atlas/agent-update',
+      body: args,
+    }),
+  },
+  {
     name: 'list_tasks',
     description: 'List tasks with optional filters. Local-first and ChatGPT-friendly: defaults to a small minimal page; pass projectId/status/q and an explicit limit before asking for broader context.',
     inputSchema: {
@@ -521,6 +727,50 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
         includeLogs: args.includeLogs,
         mode: args.mode,
       }),
+    }),
+  },
+  {
+    name: 'open_task_bug',
+    aliases: ['create_bug_thread', 'add_task_bug'],
+    description: 'Open an embedded bug thread under an existing task. Use this for review/user defect feedback on existing work instead of creating a new top-level task.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...taskIdentifierProperty,
+        ...bugThreadMutationProperties,
+        ...booleanFlagSchema.properties,
+        ...mutationResponseModeProperty,
+      },
+      required: ['taskId', 'title'],
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: ({ taskId, responseMode, isAgentRequest, ...body }) => ({
+      method: 'POST',
+      path: withQuery(`/api/tasks/${encodePathSegment(String(taskId))}/bugs`, { responseMode: responseMode || 'summary' }),
+      body,
+      headers: isAgentRequest ? { 'x-agent-request': 'true' } : undefined,
+    }),
+  },
+  {
+    name: 'update_task_bug_status',
+    description: 'Update the status of an embedded bug thread after a fix or verification result.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...taskIdentifierProperty,
+        bugId: { type: 'string', description: 'Embedded bug thread id.' },
+        status: { type: 'string', enum: VALID_BUG_STATUSES, description: 'New bug thread status.' },
+        ...booleanFlagSchema.properties,
+        ...mutationResponseModeProperty,
+      },
+      required: ['taskId', 'bugId', 'status'],
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: ({ taskId, bugId, status, responseMode, isAgentRequest, emergency }) => ({
+      method: 'POST',
+      path: withQuery(`/api/tasks/${encodePathSegment(String(taskId))}/bugs/${encodePathSegment(String(bugId))}/status`, { responseMode: responseMode || 'summary' }),
+      body: emergency === undefined ? { status } : { status, emergency },
+      headers: isAgentRequest ? { 'x-agent-request': 'true' } : undefined,
     }),
   },
   {

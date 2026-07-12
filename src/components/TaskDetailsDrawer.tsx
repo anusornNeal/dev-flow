@@ -45,6 +45,7 @@ import { useRunArtifacts } from './taskDrawer/useRunArtifacts';
 import { useTaskDrawerEditState } from './taskDrawer/useTaskDrawerEditState';
 import { TaskDrawerActivityPanel } from './taskDrawer/TaskDrawerActivityPanel';
 import SubtasksSection from './taskDrawer/SubtasksSection';
+import BugThreadsSection from './taskDrawer/BugThreadsSection';
 
 interface TaskDetailsDrawerProps {
   task: Task;
@@ -1213,6 +1214,8 @@ export default function TaskDetailsDrawer({
               )}
             </div>
           )}
+
+          <BugThreadsSection task={task} bugs={task.bugs} onTaskUpdated={onUpdate} />
 
           <TaskDrawerActivityPanel
             task={task}

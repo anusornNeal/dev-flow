@@ -20,6 +20,7 @@ import SettingsModal from './components/SettingsModal';
 import TemplateModal from './components/TemplateModal';
 import ObservabilityModal from './components/ObservabilityModal';
 import { Header } from './components/Header';
+import { ProjectAtlasPage } from './components/ProjectAtlasPage';
 import { BoardLane } from './components/BoardLane';
 import BatchImportModal from './components/BatchImportModal';
 import ConfirmModal from './components/ConfirmModal';
@@ -66,8 +67,41 @@ export default function App() {
   } | null>(null);
   const [mounted, setMounted] = useState(false);
   const [ngrokUrl, setNgrokUrl] = useState('');
+  const [activePage, setActivePage] = useState<'board' | 'atlas'>(() =>
+    window.location.hash === '#atlas' ? 'atlas' : 'board'
+  );
+  const [isAtlasSidebarCollapsed, setIsAtlasSidebarCollapsed] = useState(true);
   
   const { theme, setTheme } = useAppTheme();
+
+  useEffect(() => {
+    const syncPageFromHash = () => {
+      setActivePage(window.location.hash === '#atlas' ? 'atlas' : 'board');
+    };
+    window.addEventListener('hashchange', syncPageFromHash);
+    return () => window.removeEventListener('hashchange', syncPageFromHash);
+  }, []);
+
+  useEffect(() => {
+    const linkedProjectId = new URLSearchParams(window.location.search).get('projectId');
+    if (
+      activePage === 'atlas' &&
+      linkedProjectId &&
+      linkedProjectId !== activeProjectId &&
+      projects.some((project) => project.id === linkedProjectId)
+    ) {
+      setActiveProjectId(linkedProjectId);
+    }
+  }, [activePage, activeProjectId, projects, setActiveProjectId]);
+
+  const handleSetActivePage = (page: 'board' | 'atlas') => {
+    setActivePage(page);
+    if (page === 'atlas') {
+      window.location.hash = 'atlas';
+    } else if (window.location.hash === '#atlas') {
+      window.history.pushState('', document.title, window.location.pathname + window.location.search);
+    }
+  };
 
   // Filter States
   const [selectedPriority, setSelectedPriority] = useState<Task['priority'] | 'all'>('all');
@@ -416,7 +450,7 @@ export default function App() {
     <div className="flex flex-col h-screen bg-[#fcfaf4] dark:bg-[#1e1914] text-[#3e3129] dark:text-[#f3eadf] font-sans antialiased overflow-hidden select-none">
       
       {/* Mid View container with Sidebar + Board */}
-      <div className="flex flex-1 overflow-hidden flex-col lg:flex-row">
+      <div className="flex flex-1 overflow-y-auto lg:overflow-hidden flex-col lg:flex-row">
         
         {/* 1. Left Filters & Stats Sidemenu Section */}
         <Sidebar 
@@ -434,25 +468,32 @@ export default function App() {
           searchQuery={searchQuery}
           setSearchQuery={setSearchQuery}
           onOpenSettings={() => setIsSettingsModalOpen(true)}
+          activePage={activePage}
+          onSetActivePage={handleSetActivePage}
+          isAtlasSidebarCollapsed={isAtlasSidebarCollapsed}
+          onToggleAtlasSidebar={() => setIsAtlasSidebarCollapsed((current) => !current)}
         />
 
         {/* 2. Main KanBan Board viewport area */}
-        <main className="flex-1 flex flex-col h-full overflow-y-auto bg-[#faf7f0] dark:bg-[#1e1914]">
+        <main className={`flex-1 flex flex-col h-full overflow-y-auto ${activePage === 'atlas' ? 'bg-[#18120d]' : 'bg-[#faf7f0] dark:bg-[#1e1914]'}`}>
           
           {/* Top Control Navigation bar */}
-          <Header
-            filteredTasksCount={filteredTasks.length}
-            ngrokUrl={ngrokUrl}
-            theme={theme}
-            setTheme={setTheme}
-            setIsSettingsModalOpen={setIsSettingsModalOpen}
-            setIsJsonModalOpen={setIsJsonModalOpen}
-            setIsSkillsModalOpen={setIsSkillsModalOpen}
-            setIsTemplateModalOpen={setIsTemplateModalOpen}
-            setIsObservabilityModalOpen={setIsObservabilityModalOpen}
-            setIsCreateModalOpen={setIsCreateModalOpen}
-            setIsBatchModalOpen={setIsBatchModalOpen}
-          />
+          {activePage !== 'atlas' && (
+            <Header
+              filteredTasksCount={filteredTasks.length}
+              activePage={activePage}
+              ngrokUrl={ngrokUrl}
+              theme={theme}
+              setTheme={setTheme}
+              setIsSettingsModalOpen={setIsSettingsModalOpen}
+              setIsJsonModalOpen={setIsJsonModalOpen}
+              setIsSkillsModalOpen={setIsSkillsModalOpen}
+              setIsTemplateModalOpen={setIsTemplateModalOpen}
+              setIsObservabilityModalOpen={setIsObservabilityModalOpen}
+              setIsCreateModalOpen={setIsCreateModalOpen}
+              setIsBatchModalOpen={setIsBatchModalOpen}
+            />
+          )}
 
           {persistenceError && (
             <div className="mx-5 mt-4 rounded-2xl border border-[#f0c48f] dark:border-[#584a3b] bg-[#fff7eb] dark:bg-[#292119] px-4 py-3 text-[11px] font-mono font-bold text-[#9a5b13] dark:text-[#f3eadf]">
@@ -460,40 +501,44 @@ export default function App() {
             </div>
           )}
 
-          {/* Kanban Board Container scroll area */}
-          <div className="flex-1 overflow-x-auto p-6 bg-[#faf7f0] dark:bg-[#1e1914]">
-            <div className="flex w-max items-stretch min-h-[calc(100vh-210px)] pb-2">
-              
-              {BOARD_COLUMNS.map(col => {
-                const columnTasks = filteredTasks
-                  .filter(t => t.status === col.id && !t.parentId)
-                  .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-                
-                return (
-                    <BoardLane
-                      key={col.id}
-                      column={col}
-                      tasks={columnTasks}
-                      allTasks={tasks}
-                      draggedOverColumn={draggedOverColumn}
-                      draggedTaskId={draggedTaskId}
-                      setDraggedOverColumn={setDraggedOverColumn}
-                    handleDrop={handleDrop}
-                    setSelectedTask={setSelectedTask}
-                    handleDeleteTask={handleDeleteTask}
-                    handleDragStart={handleDragStart}
-                    handleUpdateTask={handleUpdateTask}
-                    onShowLog={({ taskDisplayId, run }) => setLogModal({ taskDisplayId, runId: run.id, runStatus: run.status, agent: run.agent, model: run.model })}
-                  />
-                );
-              })}
+          {activePage === 'atlas' ? (
+            <div className="flex-1 min-h-0 overflow-hidden">
+              <ProjectAtlasPage projectId={activeProjectId || null} />
             </div>
-          </div>
+          ) : (
+            <div className="flex-1 overflow-x-auto p-6 bg-[#faf7f0] dark:bg-[#1e1914]">
+              <div className="flex w-max items-stretch min-h-[calc(100vh-210px)] pb-2">
+                {BOARD_COLUMNS.map(col => {
+                  const columnTasks = filteredTasks
+                    .filter(t => t.status === col.id && !t.parentId)
+                    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+                  
+                  return (
+                      <BoardLane
+                        key={col.id}
+                        column={col}
+                        tasks={columnTasks}
+                        allTasks={tasks}
+                        draggedOverColumn={draggedOverColumn}
+                        draggedTaskId={draggedTaskId}
+                        setDraggedOverColumn={setDraggedOverColumn}
+                      handleDrop={handleDrop}
+                      setSelectedTask={setSelectedTask}
+                      handleDeleteTask={handleDeleteTask}
+                      handleDragStart={handleDragStart}
+                      handleUpdateTask={handleUpdateTask}
+                      onShowLog={({ taskDisplayId, run }) => setLogModal({ taskDisplayId, runId: run.id, runStatus: run.status, agent: run.agent, model: run.model })}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </main>
       </div>
 
       {/* Footer Status Bar */}
-      <footer className="h-6.5 bg-[#ebdcb9]/40 dark:bg-[#584a3b]/40 border-t border-[#ebdcb9] dark:border-[#584a3b] px-4 flex items-center justify-between shrink-0 select-none text-[10px] font-mono text-[#8c7463] dark:text-[#f3eadf] font-bold">
+      {activePage !== 'atlas' && <footer className="h-6.5 bg-[#ebdcb9]/40 dark:bg-[#584a3b]/40 border-t border-[#ebdcb9] dark:border-[#584a3b] px-4 flex items-center justify-between shrink-0 select-none text-[10px] font-mono text-[#8c7463] dark:text-[#f3eadf] font-bold">
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-1.5">
             <span className="w-1.5 h-1.5 rounded-full bg-orange-500 animate-pulse"></span>
@@ -505,7 +550,7 @@ export default function App() {
         <div className="text-[#8c7463] dark:text-[#f3eadf]">
           Styled cozy & warm
         </div>
-      </footer>
+      </footer>}
 
       {/* 3. Detail Drawer (shown on clicking a card) */}
       {selectedTask && (

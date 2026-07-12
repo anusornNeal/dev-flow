@@ -32,6 +32,7 @@ const TASK_COLUMNS = [
   'logs',
   'designImages',
   'images',
+  'bugs',
 ] as const;
 
 const TASK_UPSERT_SQL = `
@@ -63,7 +64,8 @@ const TASK_UPSERT_SQL = `
     updatedAt = excluded.updatedAt,
     logs = excluded.logs,
     designImages = excluded.designImages,
-    images = excluded.images
+    images = excluded.images,
+    bugs = excluded.bugs
 `;
 
 export class StaleTaskUpdateError extends Error {
@@ -76,6 +78,77 @@ export class StaleTaskUpdateError extends Error {
 }
 
 let categoryColumnEnsured = false;
+let bugsColumnEnsured = false;
+const DISPLAY_ID_COUNTER_MAX = 999999;
+
+function isSafeDisplayIdCounter(value: number) {
+  return Number.isInteger(value) && value >= 0 && value <= DISPLAY_ID_COUNTER_MAX;
+}
+
+export function parseDisplayIdCounter(displayId: string | null | undefined, prefix: string): number | null {
+  if (!displayId || !displayId.startsWith(`${prefix}-`)) return null;
+  const suffix = displayId.slice(prefix.length + 1);
+  if (!/^\d{1,6}$/.test(suffix)) return null;
+  const value = Number.parseInt(suffix, 10);
+  return isSafeDisplayIdCounter(value) ? value : null;
+}
+
+function getDisplayIdPrefix(projectId: string): string {
+  const project = getProject(projectId);
+
+  let prefix = 'task';
+  if (project && project.taskIdPrefix) {
+    prefix = project.taskIdPrefix;
+  } else if (project && project.name) {
+    prefix = project.name.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+  } else if (projectId) {
+    prefix = projectId.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+  }
+
+  return prefix || 'task';
+}
+
+function getSafeCachedCounter(state: AppState, prefix: string): number {
+  const cached = state.countersCache[prefix];
+  return isSafeDisplayIdCounter(cached) ? cached : 0;
+}
+
+export function findHighestDisplayIdCounter(prefix: string, database = db): number {
+  let maxNum = 0;
+  const tasksWithPrefix = database.prepare('SELECT displayId FROM tasks WHERE displayId LIKE ?').all(`${prefix}-%`) as Array<{ displayId?: string | null }>;
+  for (const task of tasksWithPrefix) {
+    const parsed = parseDisplayIdCounter(task.displayId, prefix);
+    if (parsed !== null) {
+      maxNum = Math.max(maxNum, parsed);
+    }
+  }
+  return maxNum;
+}
+
+export function repairDisplayIdsForPrefix(prefix: string, database = db): number {
+  let nextCounter = findHighestDisplayIdCounter(prefix, database);
+  const pollutedTasks = database.prepare(`
+    SELECT id, displayId
+    FROM tasks
+    WHERE displayId LIKE ?
+    ORDER BY datetime(COALESCE(createdAt, updatedAt)) ASC, id ASC
+  `).all(`${prefix}-%`) as Array<{ id: string; displayId?: string | null }>;
+
+  const updateTaskDisplayId = database.prepare('UPDATE tasks SET displayId = ?, updatedAt = ? WHERE id = ?');
+  for (const task of pollutedTasks) {
+    if (parseDisplayIdCounter(task.displayId, prefix) !== null) continue;
+    nextCounter += 1;
+    updateTaskDisplayId.run(`${prefix}-${nextCounter.toString().padStart(4, '0')}`, new Date().toISOString(), task.id);
+  }
+
+  database.prepare(`
+    INSERT INTO counters (prefix, count)
+    VALUES (?, ?)
+    ON CONFLICT(prefix) DO UPDATE SET count = excluded.count
+  `).run(prefix, nextCounter);
+
+  return nextCounter;
+}
 
 function ensureTaskCategoryColumn() {
   if (categoryColumnEnsured) return;
@@ -85,6 +158,21 @@ function ensureTaskCategoryColumn() {
     db.prepare('ALTER TABLE tasks ADD COLUMN category TEXT').run();
   }
   categoryColumnEnsured = true;
+}
+
+function ensureTaskBugsColumn() {
+  if (bugsColumnEnsured) return;
+  const tableInfo = db.pragma('table_info(tasks)') as Array<{ name: string }>;
+  const hasBugs = tableInfo.some((column) => column.name === 'bugs');
+  if (!hasBugs) {
+    db.prepare('ALTER TABLE tasks ADD COLUMN bugs TEXT').run();
+  }
+  bugsColumnEnsured = true;
+}
+
+function ensureTaskColumns() {
+  ensureTaskCategoryColumn();
+  ensureTaskBugsColumn();
 }
 
 export function loadCounters(state: AppState) {
@@ -105,32 +193,10 @@ function saveCounters(state: AppState) {
 }
 
 export function generateDisplayId(state: AppState, projectId: string): string {
-  const project = getProject(projectId);
-
-  let prefix = 'task';
-  if (project && project.taskIdPrefix) {
-    prefix = project.taskIdPrefix;
-  } else if (project && project.name) {
-    prefix = project.name.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
-  } else if (projectId) {
-    prefix = projectId.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
-  }
-
-  if (!prefix) prefix = 'task';
+  const prefix = getDisplayIdPrefix(projectId);
 
   return withDbTransaction(() => {
-    let maxNum = state.countersCache[prefix] || 0;
-    
-    const tasksWithPrefix = db.prepare(`SELECT displayId FROM tasks WHERE displayId LIKE ?`).all(`${prefix}-%`) as any[];
-    for (const task of tasksWithPrefix) {
-      if (task.displayId) {
-        const numPart = task.displayId.split('-').pop();
-        if (numPart && !Number.isNaN(parseInt(numPart, 10))) {
-          maxNum = Math.max(maxNum, parseInt(numPart, 10));
-        }
-      }
-    }
-    
+    let maxNum = Math.max(getSafeCachedCounter(state, prefix), findHighestDisplayIdCounter(prefix));
     state.countersCache[prefix] = maxNum;
 
     let newId = '';
@@ -143,6 +209,18 @@ export function generateDisplayId(state: AppState, projectId: string): string {
     saveCounters(state);
     return newId;
   });
+}
+
+export function resolveDisplayIdForNewTask(state: AppState, projectId: string, suppliedDisplayId: unknown): string {
+  const displayId = typeof suppliedDisplayId === 'string' ? suppliedDisplayId.trim() : '';
+  if (!displayId) return generateDisplayId(state, projectId);
+
+  const prefix = getDisplayIdPrefix(projectId);
+  if (displayId.startsWith(`${prefix}-`) && parseDisplayIdCounter(displayId, prefix) === null) {
+    return generateDisplayId(state, projectId);
+  }
+
+  return displayId;
 }
 
 function parseJsonArray(value: unknown): any[] {
@@ -163,6 +241,7 @@ function parseTaskRow(item: any, runsByTaskId: Map<string, AgentRun[]>) {
     targetFiles: parseJsonArray(item.targetFiles),
     checklist: parseJsonArray(item.checklist),
     logs: parseJsonArray(item.logs),
+    bugs: parseJsonArray(item.bugs),
     images: (() => {
       const imgs = parseJsonArray(item.images);
       const legacy = parseJsonArray(item.designImages);
@@ -228,14 +307,14 @@ function getAllAgentRunsByTaskId(taskIds?: string[]): Map<string, AgentRun[]> {
 }
 
 export function getTasks(): any[] {
-  ensureTaskCategoryColumn();
+  ensureTaskColumns();
   const rows = db.prepare('SELECT * FROM tasks').all() as any[];
   const runsByTaskId = getAllAgentRunsByTaskId(rows.map(r => r.id));
   return rows.map(row => parseTaskRow(row, runsByTaskId));
 }
 
 export function getTask(id: string): any | undefined {
-  ensureTaskCategoryColumn();
+  ensureTaskColumns();
   const row = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as any;
   if (!row) return undefined;
   const runsByTaskId = getAllAgentRunsByTaskId([id]);
@@ -243,14 +322,14 @@ export function getTask(id: string): any | undefined {
 }
 
 export function getTasksByProjectId(projectId: string): any[] {
-  ensureTaskCategoryColumn();
+  ensureTaskColumns();
   const rows = db.prepare('SELECT * FROM tasks WHERE projectId = ?').all(projectId) as any[];
   const runsByTaskId = getAllAgentRunsByTaskId(rows.map(r => r.id));
   return rows.map(row => parseTaskRow(row, runsByTaskId));
 }
 
 export function getPendingTasks(): any[] {
-  ensureTaskCategoryColumn();
+  ensureTaskColumns();
   const rows = db.prepare("SELECT * FROM tasks WHERE status = 'todo' AND agent IS NOT NULL AND agent != ''").all() as any[];
   const runsByTaskId = getAllAgentRunsByTaskId(rows.map(r => r.id));
   return rows.map(row => parseTaskRow(row, runsByTaskId));
@@ -294,18 +373,19 @@ function serializeTaskForRow(item: any) {
     item.logs ? JSON.stringify(item.logs) : null,
     null,
     item.images ? JSON.stringify(item.images) : null,
+    item.bugs ? JSON.stringify(item.bugs) : null,
   ];
 }
 
 export function saveTask(task: any) {
-  ensureTaskCategoryColumn();
+  ensureTaskColumns();
   withDbTransaction(() => {
     db.prepare(TASK_UPSERT_SQL).run(...serializeTaskForRow(task));
   });
 }
 
 export function saveTaskWithExpectedUpdatedAt(task: any, expectedUpdatedAt: string | null | undefined) {
-  ensureTaskCategoryColumn();
+  ensureTaskColumns();
   return withDbTransaction(() => {
     const existing = db.prepare('SELECT updatedAt FROM tasks WHERE id = ?').get(task.id) as { updatedAt?: string | null } | undefined;
     if (existing && expectedUpdatedAt !== undefined && (existing.updatedAt || null) !== (expectedUpdatedAt || null)) {

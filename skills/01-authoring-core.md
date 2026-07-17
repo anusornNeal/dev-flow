@@ -19,6 +19,75 @@ See sourceUrl for requirement.
 
 Instead, extract the useful information from Jira, attachments, comments, subtasks, and repo inspection, then write that information into the card.
 
+## Clarification gate for non-trivial cards
+
+Before creating or substantially rewriting a non-trivial implementation card, run a short user-clarification pass similar to a focused `grill-me` interview.
+
+Read the available Jira, comments, attachments, Figma evidence, existing DevFlow cards, and targeted repo context first. Ask only about decisions that cannot be safely resolved from those sources.
+
+Use the clarification gate when any are true:
+
+- the request affects multiple screens, flows, layers, modules, repositories, or teams,
+- parent/child decomposition is likely,
+- architecture, navigation, API contracts, state ownership, migration, shared components, sequencing, rollout, or cross-module behavior is involved,
+- there are multiple plausible product or implementation directions,
+- business rules, edge cases, acceptance criteria, preserved behavior, verification, or out-of-scope boundaries remain materially ambiguous,
+- writing the card immediately would require assumptions that could change implementation scope or behavior.
+
+Skip the clarification gate only when all required facts are already explicit, especially for:
+
+- a small embedded bug with clear actual behavior, expected behavior, evidence, and affected area,
+- a tiny one-file copy/config change that follows an established project pattern,
+- a narrowly scoped task whose Jira, repo evidence, acceptance criteria, and verification are already complete,
+- an explicit user instruction to proceed without questions when remaining uncertainty is minor and can be represented safely.
+
+Clarification sequence:
+
+1. Inspect Jira/design/repo/task evidence first.
+2. Identify only unresolved decisions that materially affect the card.
+3. Ask one short, concrete question at a time.
+4. Continue only until goal, boundaries, important rules, preserved behavior, acceptance, and verification are clear enough for an implementation-ready card.
+5. Briefly summarize the resolved decisions, then create or update the card.
+
+Question rules:
+
+- Each question must resolve one material product, scope, acceptance, or verification decision.
+- Prefer concrete answer choices when the real options are known; otherwise ask for a rule, example, or expected outcome.
+- Do not ask broad questions such as “What should the focus be?”, “Anything else?”, or “How do you want it?”
+- Do not repeat facts already present in Jira, repo evidence, prior answers, or the conversation.
+- Do not ask the user to choose low-level implementation details that established project patterns already answer.
+- Stop asking once the card can be written without material assumptions.
+
+Do not create an implementation-ready large card first and ask for clarification afterward. If required decisions remain unresolved, create only a blocked/prep card that records those decisions.
+
+## Figma evidence rule for frontend cards
+
+Any card classified as `frontend`, including frontend child cards split from a parent, must follow and inspect every relevant Figma link supplied by Jira, comments, attachments, the parent card, or the user before the card is considered implementation-ready.
+
+Do not merely copy a Figma URL into `sourceUrl`, `specUrl`, description, reasoning, or repoContext.
+
+Required Figma workflow:
+
+1. Parse the Figma URL to identify the `fileKey` and relevant `nodeId` or node ids.
+2. Call `get_figma_file` to confirm file access and basic metadata.
+3. Call `get_figma_node` for the exact frame/component nodes relevant to that frontend slice. For large files or heavy frames, fetch one node at a time.
+4. Call `get_figma_design_spec` when normalized layout, spacing, typography, color, constraints, text, or asset references are needed.
+5. Pull available frame previews, image references, asset references, or design evidence returned by the Figma tools.
+6. Use `attach_figma_context_to_task` after card creation or update so the exact `fileKey` and `nodeId` are linked to the frontend card.
+7. Summarize the inspected design directly in the card: frame name, states, layout hierarchy, spacing, typography, colors, copy, assets, interactions, responsive behavior, and visual differences relevant to that child card.
+8. Include manual visual verification against the same Figma node in `verification` and observable visual outcomes in `acceptanceCriteria`.
+
+When a parent is split into frontend/backend children:
+
+- attach Figma context to every frontend child that owns a distinct screen, component, state, or responsive layout,
+- do not attach all Figma nodes only to the parent and leave frontend children without their own visual evidence,
+- each frontend child must include only the nodes and images relevant to its own scope,
+- backend/data-only children do not need Figma context unless the design defines data-dependent UI rules that affect their contract.
+
+If a Figma link or required node cannot be opened, do not silently mark the frontend card implementation-ready. Report whether the failure is file access, node access, or design-spec extraction, then ask for a corrected link/node or create a blocked/prep card.
+
+A Jira screenshot may supplement Figma evidence but does not replace following an available Figma link unless the user explicitly confirms the screenshot is the final source of truth.
+
 ## ChatGPT-authored Project Atlas scan
 
 Use this workflow when the user asks to scan/build/update Project Atlas, asks for a domain map, asks ChatGPT to read a repo and group it, or asks to make Atlas more detailed/accurate.
@@ -90,9 +159,19 @@ Quality bar:
 
 ## Embedded bug thread rule
 
-When the user says “เปิดบัค”, “open a bug”, reports defects on an existing task, or gives review feedback for a card that already exists, use `open_task_bug` to create an embedded bug thread under that task.
+When the user says “เปิดบัค”, “open a bug”, reports defects on an existing task, or gives review feedback for a card that already exists, use `open_task_bug` under that task.
 
-Do not use `create_task` for those defects unless the user explicitly asks for a separate new card. The bug thread must include the observed wrong behavior, expected behavior, evidence, related areas, and a copy-ready fix prompt when available.
+Before opening another bug, inspect existing bug threads:
+
+- update or reopen the existing thread when the root cause is the same,
+- archive a bug when its assumptions are invalid,
+- archive or clearly supersede obsolete guidance when corrected guidance replaces it,
+- keep only one current implementation-guidance bug open for the same defect set,
+- do not leave contradictory open bugs and expect the implementer to infer which one wins.
+
+Do not use `create_task` unless the user explicitly asks for a separate new card. The current bug guidance must include observed wrong behavior, expected behavior, evidence, related areas, preserved behavior, out-of-scope boundaries, and a copy-ready fix prompt when available.
+
+Small, well-evidenced embedded bugs normally skip the clarification gate. Ask only when actual behavior, expected behavior, impact, reproduction, or intended product behavior is materially unclear.
 
 If the reviewed task was `ready-for-review`, move it back to or keep it in `in-progress` until the embedded bug thread is fixed and verified.
 
@@ -103,11 +182,13 @@ When applicable:
 1. For Jira-originated cards, use `get_jira_authoring_bundle` first when available.
 2. Read individual Jira issue/comments/subtasks/attachments only when the bundle is unavailable or missing a specific detail.
 3. Read attachments if they contain screenshots, videos, logs, designs, wording, or reproduction evidence not already summarized by the bundle.
+4. For every `frontend` card with a Figma link, resolve the file/node, fetch the exact nodes and design evidence, pull available frame/image/asset references, and attach the Figma context to that frontend card.
 5. Inspect the repo with `get_repo_context_bundle` first when the project is known.
 6. Search for affected screens, strings, APIs, mappers, models, routes, tests, and existing patterns only when the bundle is unavailable or insufficient.
 7. Read actual target files, not only search snippets or bundle snippets.
 8. Check whether a DevFlow card already exists for the Jira key.
-9. Create or update the card only after requirement and repo context are understood.
+9. Apply the clarification gate when the card is non-trivial and material decisions remain unresolved.
+10. Create or update the card only after requirement, design evidence, and repo context are understood.
 
 `get_jira_authoring_bundle` returns the issue, comments, attachment metadata, linked issue hints, and existing DevFlow duplicates in one packet. Use individual Jira proxy tools only when the bundle is missing a specific detail.
 
@@ -194,6 +275,8 @@ Out of scope:
 
 Keep the map short. Prefer 2-5 target entries. If the exact function is uncertain, say `likely` and explain what must be confirmed first.
 
+For frontend cards, the implementation map must also identify the relevant Figma frame/component node for each visual slice and summarize the design behavior implemented by the mapped files.
+
 Before calling `create_task` or `update_task` for a `todo`, `in-progress`, or `ready-for-review` card, run `validate_task_quality` when available and fix any errors it reports.
 
 ## Fallback rules
@@ -201,6 +284,8 @@ Before calling `create_task` or `update_task` for a `todo`, `in-progress`, or `r
 If Jira cannot be read and the user did not provide enough detail, do not create an implementation-ready card.
 
 If repo cannot be inspected enough to understand implementation context, do not create an implementation-ready card.
+
+If a frontend card references Figma but the relevant file/node/image evidence cannot be fetched, do not treat it as implementation-ready. Create a blocked/prep card or request a corrected Figma link/node unless the user explicitly designates another final visual source of truth.
 
 Create a blocked/prep card only when the user wants the work preserved but implementation details are missing.
 
@@ -222,6 +307,8 @@ Before writing a card, answer these internally:
 - What tests or manual checks prove completion?
 - Is the task too large for one card?
 - Are there related Jira issues with the same root cause or implementation?
+- Does the clarification gate apply, and if so, which unresolved user decisions remain?
+- If this is a frontend card, which exact Figma file/node/images/design states were inspected and attached?
 
 ## Delta rule
 
@@ -295,6 +382,8 @@ When merging:
 
 Default to splitting work into parent/child cards when the request contains more than one independently verifiable implementation slice. Do not hide real subtask work inside a long checklist.
 
+Apply the clarification gate before finalizing parent/child boundaries when ownership, sequence, contract, or integration responsibilities are not already explicit.
+
 Before creating one combined card, explicitly check whether separate child cards would be safer. Split when any child can have its own target files, acceptance criteria, verification, branch, owner, or implementation order.
 
 Strong split triggers:
@@ -313,6 +402,7 @@ When splitting:
 - give each child focused `targetFiles`, its own acceptance criteria, its own verification, and clear out-of-scope boundaries,
 - avoid duplicated sibling target files unless unavoidable; explain unavoidable overlap in `reasoning`,
 - parent checklist should manage child creation/integration/review; child checklist should contain implementation steps only for that slice.
+- follow and attach the relevant Figma node/image/design context to each frontend child before considering that child implementation-ready.
 
 If tool limits or missing context prevent creating all children immediately, create the parent in `backlog` with a planned child breakdown in `repoContext` and checklist, or return the proposed parent/child set for review. Do not collapse a multi-slice plan into one oversized implementation card just because it is faster.
 
@@ -360,6 +450,15 @@ For Android projects:
 - `general` means parent orchestration, cross-layer integration that cannot be split safely, docs/config, or one tiny atomic change that must edit both sides together.
 
 Use a parent card when one Jira item spans frontend and backend. Parent owns contract, child boundaries, integration risks, and final verification. Child cards must state their boundary and must not duplicate sibling target files unless unavoidable.
+
+For every frontend child created from the split:
+
+- follow all relevant Figma links from Jira, parent context, comments, or attachments,
+- fetch the exact frame/component nodes owned by that child,
+- pull available frame previews, image references, assets, and normalized design specs,
+- attach the Figma context to the child card itself,
+- write the exact visual states and interactions into its description, repoContext, acceptanceCriteria, and verification,
+- do not rely on the parent card as the only holder of Figma evidence.
 
 Keep one general card only when:
 
@@ -417,6 +516,8 @@ Use for product requirement:
 - exact wording if relevant,
 - scope and out-of-scope.
 
+For frontend cards, also include the exact Figma frame/component names, node ids, relevant design states, and image/asset evidence that were inspected.
+
 Do not dump Jira metadata such as reporter, assignee, timestamps, sprint, board, or raw priority.
 
 ### repoContext
@@ -431,6 +532,7 @@ Use for technical findings:
 - architecture patterns,
 - related behavior to preserve,
 - risks and warnings.
+- for frontend cards, exact Figma fileKey/nodeId mapping and summarized layout/visual behavior for each target component.
 
 Do not repeat repo URL, local path, or branch metadata.
 
@@ -456,11 +558,15 @@ Bad:
 - Test.
 ```
 
+For frontend cards with Figma evidence, include checklist steps to inspect the exact nodes, implement each required state, and verify the result visually against those nodes.
+
 ### acceptanceCriteria
 
 Must be observable pass/fail outcomes.
 
 Avoid implementation-only criteria. Put implementation details in checklist or repoContext.
+
+Frontend criteria must include observable visual/state outcomes derived from the inspected Figma nodes, not vague phrases such as “match design.”
 
 ### verification
 
@@ -471,6 +577,8 @@ Must prove completion with:
 - manual scenarios,
 - regression checks,
 - device/OS/app version only when relevant.
+
+For frontend cards, verification must name the exact Figma node/frame used for visual comparison and cover each required UI state, interaction, screen size, or responsive behavior relevant to the card.
 
 If exact command is unknown, ask the agent to run the most targeted available test/build command for affected files/classes.
 
@@ -485,6 +593,8 @@ Do not include README/playbook/root docs unless the task is documentation or age
 ### sourceUrl
 
 Keep empty by default. Use only when stable, accessible, and truly required.
+
+A Figma URL alone is not sufficient design context for a frontend card; the link must be followed and its relevant node/image/design evidence summarized and attached to the card.
 
 ## Status rule
 
@@ -505,7 +615,10 @@ Before creating/updating a card, verify:
 
 - Jira was read or missing Jira is clearly blocked.
 - Repo was inspected or missing repo is clearly blocked.
-- The card can be implemented without opening Jira.
+- The clarification gate was applied when the card was non-trivial and material decisions were unresolved.
+- Every frontend card with a Figma link followed the link, fetched the exact relevant nodes, pulled available image/asset/design evidence, attached Figma context to that frontend card, and included node-specific visual acceptance and verification.
+- Frontend child cards do not rely only on parent-level Figma attachments or summaries.
+- The card can be implemented without opening Jira or Figma.
 - Title starts with Jira key for Jira-originated work.
 - `jiraKey` is filled when applicable.
 - Description contains requirement, not metadata dump.

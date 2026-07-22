@@ -131,6 +131,23 @@ const {
   resolveAgentLaunchPlan,
 } = await import('../src/server/services/agentLaunchConfig');
 
+for (const [model, resolvedModel] of [
+  ['GPT-5.6 Sol', 'gpt-5.6-sol'],
+  ['GPT-5.6 Terra', 'gpt-5.6-terra'],
+  ['GPT-5.6 Luna', 'gpt-5.6-luna'],
+] as const) {
+  const plan = resolveAgentLaunchPlan({
+    agent: 'Codex',
+    model,
+    effort: 'max',
+    executionMode: 'safe',
+  });
+  assert.equal(plan.ok, true);
+  assert.equal(plan.resolvedModel, resolvedModel);
+  assert.equal(plan.selectedEffort, 'max');
+  assert.equal(plan.effortHandling.mode, 'cli-flag');
+}
+
 const codexPlan = resolveAgentLaunchPlan({
   agent: 'Codex',
   model: 'GPT-5.5',
@@ -635,6 +652,12 @@ const {
 } = await import('../src/server/services/taskService');
 
 // Codex combinations
+for (const model of ['GPT-5.6 Sol', 'GPT-5.6 Terra', 'GPT-5.6 Luna']) {
+  for (const effort of ['low', 'medium', 'high', 'xhigh', 'max']) {
+    assert.equal(validateAgentParams({ agent: 'Codex', model, effort }, []), null);
+  }
+  assert.ok((validateAgentParams({ agent: 'Codex', model, effort: 'minimal' }, []) || '').includes(`Invalid effort 'minimal' for model '${model}'`));
+}
 assert.equal(validateAgentParams({ agent: 'Codex', model: 'GPT-5.5', effort: 'low' }, []), null);
 assert.equal(validateAgentParams({ agent: 'Codex', model: 'GPT-5.5', effort: 'medium' }, []), null);
 assert.equal(validateAgentParams({ agent: 'Codex', model: 'GPT-5.5', effort: 'high' }, []), null);

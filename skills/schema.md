@@ -128,6 +128,9 @@ Use exact casing.
 
 ```json
 [
+  "GPT-5.6 Sol",
+  "GPT-5.6 Terra",
+  "GPT-5.6 Luna",
   "GPT-5.5",
   "GPT-5.4",
   "GPT-5.4 Mini",
@@ -148,6 +151,9 @@ Effort values are **not universal**. They depend strictly on the selected agent/
 
 | Agent | Model | Available efforts |
 |---|---|---|
+| Codex | GPT-5.6 Sol | low, medium, high, xhigh, max |
+| Codex | GPT-5.6 Terra | low, medium, high, xhigh, max |
+| Codex | GPT-5.6 Luna | low, medium, high, xhigh, max |
 | Codex | GPT-5.5 | low, medium, high, xhigh |
 | Codex | GPT-5.4 | low, medium, high, xhigh |
 | Codex | GPT-5.4 Mini | low, medium, high, xhigh |
@@ -166,7 +172,7 @@ Do not use old values like `small`, `large`, or `M`.
 
 | Agent | Valid models |
 |---|---|
-| Codex | GPT-5.4 Mini, GPT-5.4, GPT-5.5 |
+| Codex | GPT-5.4 Mini, GPT-5.4, GPT-5.5, GPT-5.6 Luna, GPT-5.6 Terra, GPT-5.6 Sol |
 | Antigravity | Gemini 3.5 Flash, Gemini 3.1 Pro |
 | Claude | Claude 4.6 Sonnet, Claude 4.6 Opus, Claude 4.7 Opus, Claude 4.8 Opus |
 

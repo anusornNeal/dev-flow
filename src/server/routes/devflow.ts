@@ -2,16 +2,17 @@ import { getProjects } from '../repositories/projectRepository.js';
 import { getTasks } from '../repositories/taskRepository.js';
 import type express from 'express';
 import type { ApiRouteDeps } from '../types';
-import { getCapabilityCatalog } from '../contracts/devflowContract';
+import { getCapabilityCatalog, getToolSchema } from '../contracts/devflowContract';
 import { sendApiError } from '../services/api';
 import { listLocalFiles, readFileSnippetsBatch, readLocalFile, searchLocalFiles, writeLocalFile } from '../services/localFileService';
 import { applyLocalPatch } from '../services/localPatchService';
 import { deleteLocalPath, moveLocalPath } from '../services/localPathMutationService';
+import { createPullRequest } from '../services/githubPullRequestService';
 import { safeEditFile } from '../services/safeEditFileService';
 import { editFilesBatch } from '../services/fileEditBatchService';
 import { runProjectCommand } from '../services/projectCommandService';
 import { parseTestReport } from '../services/testReportParserService';
-import { getGitLog, getGitDiff, getGitShow, getGitStatus, getGitBranch, commitGitChanges, ensureGitBranch, pushGitBranch, getGitSyncStatus } from '../services/gitService';
+import { getGitLog, getGitDiff, getGitShow, getGitStatus, getGitBranch, commitGitChanges, ensureGitBranch, pushGitBranch, getGitSyncStatus, getChangeSummary } from '../services/gitService';
 import { getProjectStartContext, getRepoContextBundle, getRepoReadSnapshot } from '../services/projectStartContextService';
 import { getDevFlowDiagnostics, getToolCallSummary } from '../services/mcpToolMonitor';
 import { getWorkflowHealth } from '../services/workflowHealthService';
@@ -43,6 +44,8 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
           tasks: getTasks().length,
           tools: catalog.tools.length,
         },
+        matrix: catalog.matrix,
+        workflow: catalog.workflow,
         tools: catalog.tools.map((tool) => ({
           name: tool.name,
           aliases: tool.aliases,
@@ -50,6 +53,14 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
           lightweight: tool.lightweight,
         })),
       });
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.get('/api/capabilities/tools/:toolName', (req, res) => {
+    try {
+      return res.json(getToolSchema(req.params.toolName));
     } catch (error) {
       return sendApiError(res, error);
     }
@@ -292,6 +303,14 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
     }
   });
 
+  app.get('/api/git/change-summary', (req, res) => {
+    try {
+      return res.json(getChangeSummary(deps.state, req.query as Record<string, any>));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
   app.get('/api/git/branch', (req, res) => {
     try {
       return res.json(getGitBranch(deps.state, req.query as Record<string, any>));
@@ -319,6 +338,14 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
   app.get('/api/git/sync-status', (req, res) => {
     try {
       return res.json(getGitSyncStatus(deps.state, req.query as Record<string, any>));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.post('/api/github/pull-requests', async (req, res) => {
+    try {
+      return res.json(await createPullRequest(deps.state, req.body as Record<string, any>));
     } catch (error) {
       return sendApiError(res, error);
     }

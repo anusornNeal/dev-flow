@@ -375,6 +375,134 @@ export function getGitShow(state: AppState, args: Record<string, any>) {
   };
 }
 
+type ChangeSummaryFile = {
+  path: string;
+  from?: string;
+  status: 'added' | 'modified' | 'deleted' | 'renamed' | 'untracked' | 'conflicted';
+  staged: boolean;
+  linesAdded: number;
+  linesDeleted: number;
+};
+
+function parsePorcelainStatusZ(output: string): ChangeSummaryFile[] {
+  const tokens = output.split('\0');
+  const files: ChangeSummaryFile[] = [];
+  for (let index = 0; index < tokens.length;) {
+    const record = tokens[index++];
+    if (!record) continue;
+    const code = record.slice(0, 2);
+    const filePath = normalizeGitPath(record.slice(3));
+    if (!filePath) continue;
+    const staged = code[0] !== ' ' && code[0] !== '?';
+    const isRename = /[RC]/.test(code);
+    const originalPath = isRename && index < tokens.length
+      ? normalizeGitPath(tokens[index++] || '')
+      : undefined;
+    let status: ChangeSummaryFile['status'];
+    if (code === '??') status = 'untracked';
+    else if (/U|AA|DD/.test(code)) status = 'conflicted';
+    else if (isRename) status = 'renamed';
+    else if (code.includes('D')) status = 'deleted';
+    else if (code.includes('A')) status = 'added';
+    else status = 'modified';
+    files.push({
+      path: filePath,
+      ...(originalPath ? { from: originalPath } : {}),
+      status,
+      staged,
+      linesAdded: 0,
+      linesDeleted: 0,
+    });
+  }
+  return files;
+}
+
+function parseNumstat(output: string) {
+  const stats = new Map<string, { added: number; deleted: number }>();
+  for (const line of output.split(/\r?\n/).filter(Boolean)) {
+    const [addedRaw, deletedRaw, ...pathParts] = line.split('\t');
+    const filePath = normalizeGitPath(pathParts.join('\t'));
+    if (!filePath) continue;
+    const added = addedRaw === '-' ? 0 : Number(addedRaw || 0);
+    const deleted = deletedRaw === '-' ? 0 : Number(deletedRaw || 0);
+    const current = stats.get(filePath) || { added: 0, deleted: 0 };
+    current.added += Number.isFinite(added) ? added : 0;
+    current.deleted += Number.isFinite(deleted) ? deleted : 0;
+    stats.set(filePath, current);
+  }
+  return stats;
+}
+
+function mergeNumstat(target: Map<string, { added: number; deleted: number }>, source: Map<string, { added: number; deleted: number }>) {
+  for (const [filePath, value] of source.entries()) {
+    const current = target.get(filePath) || { added: 0, deleted: 0 };
+    target.set(filePath, { added: current.added + value.added, deleted: current.deleted + value.deleted });
+  }
+}
+
+function countUntrackedLines(root: string, relativePath: string) {
+  const absolutePath = resolveSafePath(root, relativePath);
+  const stat = fs.lstatSync(absolutePath);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1_000_000) return 0;
+  const buffer = fs.readFileSync(absolutePath);
+  if (buffer.includes(0)) return 0;
+  const content = buffer.toString('utf8');
+  if (!content) return 0;
+  const newlines = (content.match(/\n/g) || []).length;
+  return newlines + (content.endsWith('\n') ? 0 : 1);
+}
+
+function getTopDirectory(filePath: string) {
+  const normalized = normalizeGitPath(filePath);
+  const separator = normalized.indexOf('/');
+  return separator === -1 ? '(root)' : normalized.slice(0, separator);
+}
+
+export function getChangeSummary(state: AppState, args: Record<string, any>) {
+  const root = resolveProjectRoot(state, args);
+  ensureGitRepo(root);
+
+  const porcelain = runGit(['status', '--porcelain=v1', '-z', '--untracked-files=all'], root);
+  const files = parsePorcelainStatusZ(porcelain);
+  const lineStats = parseNumstat(runGit(['diff', '--numstat'], root));
+  mergeNumstat(lineStats, parseNumstat(runGit(['diff', '--cached', '--numstat'], root)));
+
+  for (const file of files) {
+    const direct = lineStats.get(file.path);
+    const renameFallback = file.from ? lineStats.get(file.from) : undefined;
+    const stats = direct || renameFallback;
+    if (stats) {
+      file.linesAdded = stats.added;
+      file.linesDeleted = stats.deleted;
+    } else if (file.status === 'untracked') {
+      file.linesAdded = countUntrackedLines(root, file.path);
+    }
+  }
+
+  files.sort((left, right) => left.path.localeCompare(right.path));
+  const topDirectories: Record<string, number> = {};
+  for (const file of files) {
+    const directory = getTopDirectory(file.path);
+    topDirectories[directory] = (topDirectories[directory] || 0) + 1;
+  }
+
+  return {
+    root,
+    statusEntries: files.length,
+    expandedFileCount: files.length,
+    added: files.filter((file) => file.status === 'added').length,
+    modified: files.filter((file) => file.status === 'modified').length,
+    deleted: files.filter((file) => file.status === 'deleted').length,
+    renamed: files.filter((file) => file.status === 'renamed').length,
+    untracked: files.filter((file) => file.status === 'untracked').length,
+    conflicted: files.filter((file) => file.status === 'conflicted').length,
+    linesAdded: files.reduce((total, file) => total + file.linesAdded, 0),
+    linesDeleted: files.reduce((total, file) => total + file.linesDeleted, 0),
+    topDirectories,
+    files,
+  };
+}
+
 export function getGitStatus(state: AppState, args: Record<string, any>) {
   const root = resolveProjectRoot(state, args);
   const files = getChangedGitFilesForRoot(root);

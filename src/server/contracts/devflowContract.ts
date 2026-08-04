@@ -8,6 +8,7 @@ import {
   VALID_STATUSES,
   VALID_TASK_CATEGORIES,
 } from '../constants';
+import { createApiError } from '../services/api';
 
 type JsonSchema = Record<string, any>;
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
@@ -154,7 +155,7 @@ function stripToolOnlyArgs(args: Record<string, any>, keys: string[]) {
   return copy;
 }
 
-export const DEVFLOW_CONTRACT_VERSION = '2026-06-24.2';
+export const DEVFLOW_CONTRACT_VERSION = '2026-08-04.1';
 
 export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   {
@@ -165,6 +166,23 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
     outputSchema: { type: 'object' },
     lightweight: true,
     buildHttpRequest: () => ({ method: 'GET', path: '/api/capabilities' }),
+  },
+  {
+    name: 'get_tool_schema',
+    description: 'Return one exact DevFlow tool schema without serializing unrelated tool definitions.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        toolName: { type: 'string', description: 'Exact DevFlow tool name or alias.' },
+      },
+      required: ['toolName'],
+    },
+    outputSchema: { type: 'object' },
+    lightweight: true,
+    buildHttpRequest: (args) => ({
+      method: 'GET',
+      path: `/api/capabilities/tools/${encodePathSegment(String(args.toolName))}`,
+    }),
   },
   {
     name: 'get_tool_call_summary',
@@ -1928,6 +1946,22 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
     }),
   },
   {
+    name: 'get_change_summary',
+    description: 'Summarize expanded tracked and untracked changes with status buckets, line totals, rename details, and top-directory counts.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...projectIdentifierProperties,
+      },
+    },
+    outputSchema: { type: 'object' },
+    lightweight: true,
+    buildHttpRequest: (args) => ({
+      method: 'GET',
+      path: withQuery('/api/git/change-summary', args),
+    }),
+  },
+  {
     name: 'get_git_branch',
     description: 'List local git branches.',
     inputSchema: {
@@ -2003,6 +2037,32 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
     buildHttpRequest: (args) => ({
       method: 'GET',
       path: withQuery('/api/git/sync-status', args),
+    }),
+  },
+  {
+    name: 'create_pull_request',
+    description: 'Preview or create a GitHub pull request from a clean published branch. Can build the body from task requirements, verification evidence, commits, and change summary. Never merges automatically.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...projectIdentifierProperties,
+        taskId: { type: 'string', description: 'Optional DevFlow task id/displayId used for title/body evidence.' },
+        remote: { type: 'string', description: 'Git remote name. Defaults to origin.' },
+        head: { type: 'string', description: 'Head branch. Defaults to the active published branch.' },
+        base: { type: 'string', description: 'Base branch. Required.' },
+        title: { type: 'string', description: 'Pull-request title. Defaults to task title.' },
+        body: { type: 'string', description: 'Explicit pull-request body.' },
+        bodyFromTask: { type: 'boolean', description: 'Build the body from task and Git evidence when no explicit body is supplied.' },
+        draft: { type: 'boolean', description: 'Create a draft pull request. Defaults to true.' },
+        dryRun: { type: 'boolean', description: 'Validate and preview without calling GitHub.' },
+      },
+      required: ['base'],
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: (args) => ({
+      method: 'POST',
+      path: '/api/github/pull-requests',
+      body: args,
     }),
   },
   {
@@ -2173,6 +2233,25 @@ export function getToolDefinitionByName(name: string) {
   return devFlowToolDefinitions.find((tool) => tool.aliases?.includes(name));
 }
 
+export function getToolSchema(name: string) {
+  const tool = getToolDefinitionByName(name);
+  if (!tool) {
+    throw createApiError(404, 'TOOL_NOT_FOUND', `DevFlow tool '${name}' was not found.`, {
+      affectedId: name,
+      details: { nextAction: 'Call get_capabilities to inspect available tool names.' },
+    });
+  }
+  return {
+    name: tool.name,
+    aliases: tool.aliases || [],
+    description: tool.description,
+    lightweight: tool.lightweight === true,
+    executionPolicy: tool.executionPolicy,
+    inputSchema: tool.inputSchema,
+    outputSchema: tool.outputSchema,
+  };
+}
+
 export function getMcpToolList() {
   const tools = [];
   for (const tool of devFlowToolDefinitions) {
@@ -2217,8 +2296,65 @@ export function getMcpToolList() {
 }
 
 export function getCapabilityCatalog() {
+  const toolNames = new Set(devFlowToolDefinitions.map((tool) => tool.name));
+  const hasTool = (name: string) => toolNames.has(name);
+  const matrix = {
+    git: {
+      readBranch: hasTool('get_git_branch'),
+      ensureBranch: hasTool('ensure_git_branch'),
+      commit: hasTool('commit_git_changes'),
+      push: hasTool('push_git_branch'),
+      syncStatus: hasTool('get_git_sync_status'),
+      changeSummary: hasTool('get_change_summary'),
+    },
+    files: {
+      read: hasTool('read_local_file'),
+      write: hasTool('write_local_file'),
+      edit: hasTool('edit_local_files_batch'),
+      delete: hasTool('delete_local_path'),
+      move: hasTool('move_local_path'),
+      structuredPatch: hasTool('apply_patch'),
+    },
+    commands: {
+      verificationRunner: hasTool('run_project_command'),
+      builtInPresets: hasTool('run_project_command'),
+      repositoryPresets: hasTool('run_project_command'),
+    },
+    tasks: {
+      syncGit: hasTool('sync_task_with_git'),
+      reviewGate: hasTool('submit_task_for_review'),
+      branchWarnings: hasTool('get_agent_task_context'),
+      verificationEvidence: hasTool('sync_task_with_git'),
+    },
+    collaboration: {
+      createPullRequest: hasTool('create_pull_request'),
+    },
+    discovery: {
+      exactToolSchema: hasTool('get_tool_schema'),
+      capabilityCatalog: hasTool('get_capabilities'),
+    },
+  };
+  const steps = {
+    readContext: hasTool('get_repo_context_bundle'),
+    ensureBranch: matrix.git.ensureBranch,
+    guardedEdit: matrix.files.edit,
+    verify: matrix.commands.verificationRunner,
+    commit: matrix.git.commit,
+    push: matrix.git.push,
+    syncStatus: matrix.git.syncStatus,
+    syncTask: matrix.tasks.syncGit,
+    submitReview: matrix.tasks.reviewGate,
+    createPullRequest: matrix.collaboration.createPullRequest,
+  };
+  const missingSteps = Object.entries(steps).filter(([, available]) => !available).map(([name]) => name);
   return {
     contractVersion: DEVFLOW_CONTRACT_VERSION,
+    matrix,
+    workflow: {
+      ready: missingSteps.length === 0,
+      steps,
+      missingSteps,
+    },
     tools: devFlowToolDefinitions.map((tool) => {
       let outputSchema = tool.outputSchema;
       let description = tool.description;

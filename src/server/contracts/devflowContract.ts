@@ -1783,6 +1783,68 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
     }),
   },
   {
+    name: 'ensure_git_branch',
+    executionPolicy: { mode: 'job', jobKind: 'repo-command' },
+    description: 'Safely create and/or switch to a local git branch with working-tree guards and dry-run preview.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...projectIdentifierProperties,
+        branch: { type: 'string', description: 'Target local branch name.' },
+        baseBranch: { type: 'string', description: 'Base branch or revision. Defaults to the active branch.' },
+        createIfMissing: { type: 'boolean', description: 'Create the target branch when it does not exist. Defaults to true.' },
+        switch: { type: 'boolean', description: 'Switch to the target branch. Defaults to true.' },
+        dryRun: { type: 'boolean', description: 'Preview branch creation/switching without changing the repository.' },
+      },
+      required: ['branch'],
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: (args) => ({
+      method: 'POST',
+      path: '/api/git/branch/ensure',
+      body: args,
+    }),
+  },
+  {
+    name: 'push_git_branch',
+    executionPolicy: { mode: 'job', jobKind: 'repo-command' },
+    description: 'Preview or publish the active local branch to a validated git remote without history rewriting.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...projectIdentifierProperties,
+        remote: { type: 'string', description: 'Remote name. Defaults to origin.' },
+        branch: { type: 'string', description: 'Branch to publish. Defaults to the active branch and must match it.' },
+        setUpstream: { type: 'boolean', description: 'Configure the remote tracking branch when publishing.' },
+        dryRun: { type: 'boolean', description: 'Preview commits and remote target without publishing.' },
+      },
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: (args) => ({
+      method: 'POST',
+      path: '/api/git/push',
+      body: args,
+    }),
+  },
+  {
+    name: 'get_git_sync_status',
+    description: 'Compare the active local branch with its remote branch, including heads, tracking state, ahead/behind, divergence, publication state, and working-tree cleanliness.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...projectIdentifierProperties,
+        remote: { type: 'string', description: 'Remote name. Defaults to origin.' },
+        fetch: { type: 'boolean', description: 'Fetch the remote before calculating synchronization state.' },
+      },
+    },
+    outputSchema: { type: 'object' },
+    lightweight: true,
+    buildHttpRequest: (args) => ({
+      method: 'GET',
+      path: withQuery('/api/git/sync-status', args),
+    }),
+  },
+  {
     name: 'commit_git_changes',
     executionPolicy: { mode: 'job', jobKind: 'repo-command' },
     description: 'Safely create a local git commit in the resolved project repository. This tool must never push, amend, reset, checkout, rebase, or perform remote operations.',

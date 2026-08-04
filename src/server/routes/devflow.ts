@@ -10,7 +10,7 @@ import { safeEditFile } from '../services/safeEditFileService';
 import { editFilesBatch } from '../services/fileEditBatchService';
 import { runProjectCommand } from '../services/projectCommandService';
 import { parseTestReport } from '../services/testReportParserService';
-import { getGitLog, getGitDiff, getGitShow, getGitStatus, getGitBranch, commitGitChanges } from '../services/gitService';
+import { getGitLog, getGitDiff, getGitShow, getGitStatus, getGitBranch, commitGitChanges, ensureGitBranch, pushGitBranch, getGitSyncStatus } from '../services/gitService';
 import { getProjectStartContext, getRepoContextBundle, getRepoReadSnapshot } from '../services/projectStartContextService';
 import { getDevFlowDiagnostics, getToolCallSummary } from '../services/mcpToolMonitor';
 import { getWorkflowHealth } from '../services/workflowHealthService';
@@ -278,6 +278,30 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
   app.get('/api/git/branch', (req, res) => {
     try {
       return res.json(getGitBranch(deps.state, req.query as Record<string, any>));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.post('/api/git/branch/ensure', (req, res) => {
+    try {
+      return res.json(ensureGitBranch(deps.state, req.body as Record<string, any>));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.post('/api/git/push', (req, res) => {
+    try {
+      return res.json(pushGitBranch(deps.state, req.body as Record<string, any>));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.get('/api/git/sync-status', (req, res) => {
+    try {
+      return res.json(getGitSyncStatus(deps.state, req.query as Record<string, any>));
     } catch (error) {
       return sendApiError(res, error);
     }

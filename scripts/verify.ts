@@ -37,6 +37,7 @@ const commands = [
   { label: 'project atlas graph edge visibility', command: 'npx', args: ['tsx', '--test', 'tests/components/projectAtlas/atlasGraphEdgeVisibility.test.ts'] },
   { label: 'task detail bug visibility', command: 'npx', args: ['tsx', '--test', 'tests/components/taskDetailsDrawerBugThreads.test.tsx'] },
   { label: 'project command service', command: 'npx', args: ['tsx', '--test', 'tests/server/projectCommandService.test.ts'] },
+  { label: 'git workflow service', command: 'npx', args: ['tsx', '--test', 'tests/server/gitWorkflowService.test.ts'] },
   { label: 'mcp fetch errors', command: 'npx', args: ['tsx', '--test', 'tests/server/mcpFetchErrors.test.ts'] },
   { label: 'mcp tool job queue', command: 'npx', args: ['tsx', '--test', 'tests/server/mcpToolJobQueue.test.ts'] },
   { label: 'agent runs', command: 'npm', args: ['run', 'test:agent-runs'] },

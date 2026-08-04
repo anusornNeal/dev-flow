@@ -466,6 +466,9 @@ try {
   const jiraDraftTool = catalog.tools.find((tool) => tool.name === 'draft_task_from_jira');
   const applyPatchTool = catalog.tools.find((tool) => tool.name === 'apply_patch');
   const runProjectCommandTool = catalog.tools.find((tool) => tool.name === 'run_project_command');
+  const ensureGitBranchTool = catalog.tools.find((tool) => tool.name === 'ensure_git_branch');
+  const pushGitBranchTool = catalog.tools.find((tool) => tool.name === 'push_git_branch');
+  const gitSyncStatusTool = catalog.tools.find((tool) => tool.name === 'get_git_sync_status');
   const parseTestReportTool = catalog.tools.find((tool) => tool.name === 'parse_test_report');
   const getAtlasTool = catalog.tools.find((tool) => tool.name === 'get_project_atlas');
   const atlasStatusTool = catalog.tools.find((tool) => tool.name === 'get_project_atlas_status');
@@ -483,6 +486,9 @@ try {
   assert.ok(jiraDraftTool, 'draft_task_from_jira must be advertised in the MCP catalog');
   assert.ok(applyPatchTool, 'apply_patch must be advertised in the MCP catalog');
   assert.ok(runProjectCommandTool, 'run_project_command must be advertised in the MCP catalog');
+  assert.ok(ensureGitBranchTool, 'ensure_git_branch must be advertised in the MCP catalog');
+  assert.ok(pushGitBranchTool, 'push_git_branch must be advertised in the MCP catalog');
+  assert.ok(gitSyncStatusTool, 'get_git_sync_status must be advertised in the MCP catalog');
   assert.ok(parseTestReportTool, 'parse_test_report must be advertised in the MCP catalog');
   assert.ok(getAtlasTool, 'get_project_atlas must be advertised in the MCP catalog');
   assert.ok(atlasStatusTool, 'get_project_atlas_status must be advertised in the MCP catalog');
@@ -535,6 +541,34 @@ try {
   assert.equal(runProjectCommandRequest?.path, '/api/project-commands/run');
   assert.equal((runProjectCommandRequest?.body as any)?.command, 'typecheck');
   assert.equal((runProjectCommandRequest?.body as any)?.cwd, 'subdir');
+
+  const ensureBranchRequest = getToolDefinitionByName('ensure_git_branch')?.buildHttpRequest({
+    projectId: 'project-contract-1',
+    branch: 'feature/contract',
+    dryRun: true,
+  });
+  assert.equal(ensureBranchRequest?.method, 'POST');
+  assert.equal(ensureBranchRequest?.path, '/api/git/branch/ensure');
+  assert.equal((ensureBranchRequest?.body as any)?.branch, 'feature/contract');
+
+  const pushBranchRequest = getToolDefinitionByName('push_git_branch')?.buildHttpRequest({
+    projectId: 'project-contract-1',
+    remote: 'origin',
+    branch: 'develop',
+    dryRun: true,
+  });
+  assert.equal(pushBranchRequest?.method, 'POST');
+  assert.equal(pushBranchRequest?.path, '/api/git/push');
+  assert.equal((pushBranchRequest?.body as any)?.dryRun, true);
+
+  const syncStatusRequest = getToolDefinitionByName('get_git_sync_status')?.buildHttpRequest({
+    projectId: 'project-contract-1',
+    remote: 'origin',
+    fetch: true,
+  });
+  assert.equal(syncStatusRequest?.method, 'GET');
+  assert.match(syncStatusRequest?.path || '', /\/api\/git\/sync-status/);
+  assert.match(syncStatusRequest?.path || '', /fetch=true/);
 
   const parseTestReportRequest = getToolDefinitionByName('parse_test_report')?.buildHttpRequest({
     projectId: 'project-contract-1',

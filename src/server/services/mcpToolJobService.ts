@@ -8,7 +8,7 @@ import { resolveProjectRoot } from './localFileService';
 import { runProjectCommandAsync } from './projectCommandService';
 import { applyLocalPatchAsync } from './localPatchService';
 import { searchLocalFilesAsync } from './localFileService';
-import { commitGitChanges } from './gitService';
+import { commitGitChanges, ensureGitBranch, pushGitBranch } from './gitService';
 import { editFilesBatch } from './fileEditBatchService';
 import { getProjects } from '../repositories/projectRepository';
 import { applyProjectAtlasAgentUpdate } from './projectAtlasService';
@@ -313,6 +313,10 @@ async function startJob(entry: QueueEntry) {
       result = await applyLocalPatchAsync(entry.state, entry.args, logger, (cancelFn) => setJobActiveContext(entry.jobId, cancelFn));
     } else if (entry.toolName === 'search_local_files') {
       result = await searchLocalFilesAsync(entry.state, entry.args, logger, (cancelFn) => setJobActiveContext(entry.jobId, cancelFn));
+    } else if (entry.toolName === 'ensure_git_branch') {
+      result = ensureGitBranch(entry.state, entry.args);
+    } else if (entry.toolName === 'push_git_branch') {
+      result = pushGitBranch(entry.state, entry.args);
     } else if (entry.toolName === 'commit_git_changes') {
       result = commitGitChanges(entry.state, entry.args);
     } else if (entry.toolName === 'edit_local_files_batch') {

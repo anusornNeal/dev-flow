@@ -36,6 +36,30 @@ export interface ChecklistItem {
 
 export type AgentCompletionStatus = 'success' | 'failed' | 'cancelled';
 export type AgentCompletionTestResult = 'passed' | 'failed' | 'not-run';
+export type VerificationEvidenceStatus = 'passed' | 'failed' | 'not-run';
+
+export interface VerificationEvidenceCheck {
+  name: string;
+  command: string;
+  status: VerificationEvidenceStatus;
+  summary?: string;
+  output?: string;
+  recordedAt?: string;
+}
+
+export interface TaskGitEvidence {
+  branch: string;
+  commit: string;
+  remote: string;
+  trackingBranch?: string | null;
+  remoteHead?: string | null;
+  ahead: number | null;
+  behind: number | null;
+  diverged: boolean;
+  pushed: boolean;
+  workingTreeClean: boolean;
+  recordedAt: string;
+}
 
 export interface AgentMessage {
   id: string;
@@ -140,6 +164,8 @@ export interface Task {
   reasoning?: string;
   acceptanceCriteria?: string;
   verification?: string;
+  gitEvidence?: TaskGitEvidence;
+  verificationEvidence?: VerificationEvidenceCheck[];
   repo?: string;
 }
 

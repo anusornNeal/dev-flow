@@ -471,6 +471,8 @@ try {
   const ensureGitBranchTool = catalog.tools.find((tool) => tool.name === 'ensure_git_branch');
   const pushGitBranchTool = catalog.tools.find((tool) => tool.name === 'push_git_branch');
   const gitSyncStatusTool = catalog.tools.find((tool) => tool.name === 'get_git_sync_status');
+  const syncTaskWithGitTool = catalog.tools.find((tool) => tool.name === 'sync_task_with_git');
+  const submitTaskForReviewTool = catalog.tools.find((tool) => tool.name === 'submit_task_for_review');
   const parseTestReportTool = catalog.tools.find((tool) => tool.name === 'parse_test_report');
   const getAtlasTool = catalog.tools.find((tool) => tool.name === 'get_project_atlas');
   const atlasStatusTool = catalog.tools.find((tool) => tool.name === 'get_project_atlas_status');
@@ -493,6 +495,8 @@ try {
   assert.ok(ensureGitBranchTool, 'ensure_git_branch must be advertised in the MCP catalog');
   assert.ok(pushGitBranchTool, 'push_git_branch must be advertised in the MCP catalog');
   assert.ok(gitSyncStatusTool, 'get_git_sync_status must be advertised in the MCP catalog');
+  assert.ok(syncTaskWithGitTool, 'sync_task_with_git must be advertised in the MCP catalog');
+  assert.ok(submitTaskForReviewTool, 'submit_task_for_review must be advertised in the MCP catalog');
   assert.ok(parseTestReportTool, 'parse_test_report must be advertised in the MCP catalog');
   assert.ok(getAtlasTool, 'get_project_atlas must be advertised in the MCP catalog');
   assert.ok(atlasStatusTool, 'get_project_atlas_status must be advertised in the MCP catalog');
@@ -598,6 +602,28 @@ try {
   assert.equal(syncStatusRequest?.method, 'GET');
   assert.match(syncStatusRequest?.path || '', /\/api\/git\/sync-status/);
   assert.match(syncStatusRequest?.path || '', /fetch=true/);
+
+  const syncTaskRequest = getToolDefinitionByName('sync_task_with_git')?.buildHttpRequest({
+    taskId: 'DVF-0314',
+    remote: 'origin',
+    fetch: true,
+    checks: [{ name: 'tests', command: 'npm test', status: 'passed' }],
+    responseMode: 'summary',
+  });
+  assert.equal(syncTaskRequest?.method, 'POST');
+  assert.equal(syncTaskRequest?.path, '/api/tasks/DVF-0314/sync-git?responseMode=summary');
+  assert.equal((syncTaskRequest?.body as any)?.remote, 'origin');
+  assert.equal((syncTaskRequest?.body as any)?.checks?.[0]?.status, 'passed');
+
+  const submitReviewRequest = getToolDefinitionByName('submit_task_for_review')?.buildHttpRequest({
+    taskId: 'DVF-0314',
+    checks: [{ name: 'tests', command: 'npm test', status: 'passed' }],
+    requirePushedHead: true,
+    responseMode: 'summary',
+  });
+  assert.equal(submitReviewRequest?.method, 'POST');
+  assert.equal(submitReviewRequest?.path, '/api/tasks/DVF-0314/submit-review?responseMode=summary');
+  assert.equal((submitReviewRequest?.body as any)?.requirePushedHead, true);
 
   const parseTestReportRequest = getToolDefinitionByName('parse_test_report')?.buildHttpRequest({
     projectId: 'project-contract-1',

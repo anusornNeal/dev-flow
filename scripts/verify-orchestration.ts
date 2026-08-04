@@ -388,6 +388,27 @@ try {
     message: 'agent.log lines: completion callback posted success and fresh-session details.',
     type: 'update',
   });
+  parentState._testTasks[0].branch = 'develop';
+  parentState._testTasks[0].gitEvidence = {
+    branch: 'develop',
+    commit: 'review-ready-commit',
+    remote: 'origin',
+    trackingBranch: 'origin/develop',
+    remoteHead: 'review-ready-commit',
+    ahead: 0,
+    behind: 0,
+    diverged: false,
+    pushed: true,
+    workingTreeClean: true,
+    recordedAt: '2026-06-13T00:06:00.000Z',
+  };
+  parentState._testTasks[0].verificationEvidence = [{
+    name: 'orchestration',
+    command: 'npm run verify:orchestration',
+    status: 'passed',
+    summary: 'Parent and child review evidence verified.',
+    recordedAt: '2026-06-13T00:06:00.000Z',
+  }];
   saveTasks(parentState);
 
   const allowedMove = await fetch(`${baseUrl}/api/tasks/parent-1/move`, {
@@ -808,6 +829,26 @@ const completionState: AppState = {
       effort: 'high',
       title: 'Successful completion callback',
       description: 'Success should move task to ready-for-review.',
+      gitEvidence: {
+        branch: 'test/reply-exactly-hi',
+        commit: 'completion-success-commit',
+        remote: 'origin',
+        trackingBranch: 'origin/test/reply-exactly-hi',
+        remoteHead: 'completion-success-commit',
+        ahead: 0,
+        behind: 0,
+        diverged: false,
+        pushed: true,
+        workingTreeClean: true,
+        recordedAt: '2026-06-14T00:00:30.000Z',
+      },
+      verificationEvidence: [{
+        name: 'verify',
+        command: 'npm run verify',
+        status: 'passed',
+        summary: 'Pre-submit verification passed.',
+        recordedAt: '2026-06-14T00:00:30.000Z',
+      }],
       logs: [],
       createdAt: '2026-06-14T00:00:00.000Z',
       updatedAt: '2026-06-14T00:00:00.000Z',

@@ -847,6 +847,85 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
     buildHttpRequest: (args) => ({ method: 'POST', path: '/api/tasks/import-file', body: args }),
   },
   {
+    name: 'sync_task_with_git',
+    description: 'Collect live branch/commit/remote synchronization evidence for a task and attach structured verification results to the task record.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...taskIdentifierProperty,
+        remote: { type: 'string', description: 'Git remote name. Defaults to origin.' },
+        fetch: { type: 'boolean', description: 'Fetch the remote before collecting synchronization evidence. Defaults to true.' },
+        checks: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              name: { type: 'string' },
+              command: { type: 'string' },
+              status: { type: 'string', enum: ['passed', 'failed', 'not-run'] },
+              summary: { type: 'string' },
+              output: { type: 'string' },
+              recordedAt: { type: 'string' },
+            },
+            required: ['command', 'status'],
+          },
+        },
+        ...booleanFlagSchema.properties,
+        ...mutationResponseModeProperty,
+      },
+      required: ['taskId'],
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: ({ taskId, isAgentRequest, responseMode, ...body }) => ({
+      method: 'POST',
+      path: withQuery(`/api/tasks/${encodePathSegment(String(taskId))}/sync-git`, { responseMode: responseMode || 'summary' }),
+      body,
+      headers: isAgentRequest ? { 'x-agent-request': 'true' } : undefined,
+    }),
+  },
+  {
+    name: 'submit_task_for_review',
+    description: 'Submit a task for review only after configured checklist, verification, branch, clean-tree, and published-head gates pass. Returns structured blocker reasons without changing status when blocked.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...taskIdentifierProperty,
+        remote: { type: 'string', description: 'Git remote name. Defaults to origin.' },
+        fetch: { type: 'boolean', description: 'Fetch the remote before evaluating review readiness. Defaults to true.' },
+        checks: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              name: { type: 'string' },
+              command: { type: 'string' },
+              status: { type: 'string', enum: ['passed', 'failed', 'not-run'] },
+              summary: { type: 'string' },
+              output: { type: 'string' },
+              recordedAt: { type: 'string' },
+            },
+            required: ['command', 'status'],
+          },
+        },
+        requireCleanTree: { type: 'boolean' },
+        requirePushedHead: { type: 'boolean' },
+        requireBranchMatch: { type: 'boolean' },
+        requireChecklistComplete: { type: 'boolean' },
+        requireVerificationEvidence: { type: 'boolean' },
+        ...booleanFlagSchema.properties,
+        ...mutationResponseModeProperty,
+      },
+      required: ['taskId'],
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: ({ taskId, isAgentRequest, responseMode, ...body }) => ({
+      method: 'POST',
+      path: withQuery(`/api/tasks/${encodePathSegment(String(taskId))}/submit-review`, { responseMode: responseMode || 'summary' }),
+      body,
+      headers: isAgentRequest ? { 'x-agent-request': 'true' } : undefined,
+    }),
+  },
+  {
     name: 'move_task_status',
     description: 'Move a task to a new lane/status.',
     inputSchema: {

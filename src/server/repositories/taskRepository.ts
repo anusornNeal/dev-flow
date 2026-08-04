@@ -33,6 +33,8 @@ const TASK_COLUMNS = [
   'designImages',
   'images',
   'bugs',
+  'gitEvidence',
+  'verificationEvidence',
 ] as const;
 
 const TASK_UPSERT_SQL = `
@@ -65,7 +67,9 @@ const TASK_UPSERT_SQL = `
     logs = excluded.logs,
     designImages = excluded.designImages,
     images = excluded.images,
-    bugs = excluded.bugs
+    bugs = excluded.bugs,
+    gitEvidence = excluded.gitEvidence,
+    verificationEvidence = excluded.verificationEvidence
 `;
 
 export class StaleTaskUpdateError extends Error {
@@ -79,6 +83,7 @@ export class StaleTaskUpdateError extends Error {
 
 let categoryColumnEnsured = false;
 let bugsColumnEnsured = false;
+let workflowEvidenceColumnsEnsured = false;
 const DISPLAY_ID_COUNTER_MAX = 999999;
 
 function isSafeDisplayIdCounter(value: number) {
@@ -170,9 +175,23 @@ function ensureTaskBugsColumn() {
   bugsColumnEnsured = true;
 }
 
+function ensureTaskWorkflowEvidenceColumns() {
+  if (workflowEvidenceColumnsEnsured) return;
+  const tableInfo = db.pragma('table_info(tasks)') as Array<{ name: string }>;
+  const columns = new Set(tableInfo.map((column) => column.name));
+  if (!columns.has('gitEvidence')) {
+    db.prepare('ALTER TABLE tasks ADD COLUMN gitEvidence TEXT').run();
+  }
+  if (!columns.has('verificationEvidence')) {
+    db.prepare('ALTER TABLE tasks ADD COLUMN verificationEvidence TEXT').run();
+  }
+  workflowEvidenceColumnsEnsured = true;
+}
+
 function ensureTaskColumns() {
   ensureTaskCategoryColumn();
   ensureTaskBugsColumn();
+  ensureTaskWorkflowEvidenceColumns();
 }
 
 export function loadCounters(state: AppState) {
@@ -233,6 +252,16 @@ function parseJsonArray(value: unknown): any[] {
   }
 }
 
+function parseJsonObject(value: unknown): Record<string, any> | undefined {
+  if (!value || typeof value !== 'string') return undefined;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function parseTaskRow(item: any, runsByTaskId: Map<string, AgentRun[]>) {
   const parsedTags = parseJsonArray(item.tags);
   const task = {
@@ -242,6 +271,8 @@ function parseTaskRow(item: any, runsByTaskId: Map<string, AgentRun[]>) {
     checklist: parseJsonArray(item.checklist),
     logs: parseJsonArray(item.logs),
     bugs: parseJsonArray(item.bugs),
+    gitEvidence: parseJsonObject(item.gitEvidence),
+    verificationEvidence: parseJsonArray(item.verificationEvidence),
     images: (() => {
       const imgs = parseJsonArray(item.images);
       const legacy = parseJsonArray(item.designImages);
@@ -374,6 +405,8 @@ function serializeTaskForRow(item: any) {
     null,
     item.images ? JSON.stringify(item.images) : null,
     item.bugs ? JSON.stringify(item.bugs) : null,
+    item.gitEvidence ? JSON.stringify(item.gitEvidence) : null,
+    Array.isArray(item.verificationEvidence) ? JSON.stringify(item.verificationEvidence) : null,
   ];
 }
 

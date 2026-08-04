@@ -24,6 +24,7 @@ import { applyChecklistToggle as applyChecklistToggleUseCase, getBugSummary, val
 import { canRetryRun as canRetryRunUseCase, canCancelRun as canCancelRunUseCase, validateCompletion as validateCompletionUseCase } from '../useCases/agentRunUseCases';
 import type { AgentCompletionPayload, AgentCompletionStatus, TaskStatus } from '../../types';
 import { registerTaskImportFileRoute } from './taskImportFileRoute';
+import { buildTaskGitWarnings, validateRecordedReviewSubmission } from '../services/taskGitWorkflowService';
 
 const STALE_AGENT_RUN_MS = 30 * 60 * 1000;
 let lastCleanupCheck = 0;
@@ -134,17 +135,20 @@ export function toTaskResponse(task: any, mode: TaskReadMode) {
     };
   }
 
+  const workflowWarnings = buildTaskGitWarnings(task);
   if (mode === 'standard') {
     return {
       ...task,
       attachments: listAttachmentsForTask(task.id),
       logs: undefined,
+      workflowWarnings,
     };
   }
 
   return {
     ...task,
     attachments: listAttachmentsForTask(task.id),
+    workflowWarnings,
   };
 }
 
@@ -303,9 +307,12 @@ function getChildReviewBlockers(task: any, deps: ApiRouteDeps) {
 
 export function validateParentReviewMove(task: any, deps: ApiRouteDeps, nextStatus: string) {
   if (!['ready-for-review', 'done'].includes(nextStatus)) return null;
-  const blockers = getChildReviewBlockers(task, deps);
+  const childBlockers = getChildReviewBlockers(task, deps);
+  const evidenceValidation = validateRecordedReviewSubmission(task);
+  const evidenceBlockers = evidenceValidation.blockers.map((blocker) => `${blocker.code}: ${blocker.message}`);
+  const blockers = [...childBlockers, ...evidenceBlockers];
   if (blockers.length === 0) return null;
-  return `Parent task ${task.displayId || task.id} cannot move to ${nextStatus} yet: ${blockers.join(' ')}`;
+  return `Task ${task.displayId || task.id} cannot move to ${nextStatus} yet: ${blockers.join(' ')}`;
 }
 
 function clearActiveAgentIfSettled(task: any) {

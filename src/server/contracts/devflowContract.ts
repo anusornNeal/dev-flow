@@ -1578,13 +1578,13 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   {
     name: 'run_project_command',
     executionPolicy: { mode: 'job', jobKind: 'repo-command' },
-    description: 'Run an allowlisted local verification command such as typecheck, test, lint, build, or verify inside a resolved project root.',
+    description: 'Run a built-in or repository-defined verification preset inside a resolved project root. Custom presets are loaded from .devflow/commands.yaml or .devflow/commands.json and never use a shell string.',
     inputSchema: {
       type: 'object',
       properties: {
         ...projectIdentifierProperties,
-        command: { type: 'string', enum: ['typecheck', 'test', 'lint', 'build', 'verify'], description: 'Allowlisted verification command preset.' },
-        preset: { type: 'string', enum: ['typecheck', 'test', 'lint', 'build', 'verify'], description: 'Alias for command.' },
+        command: { type: 'string', minLength: 1, maxLength: 64, pattern: '^[A-Za-z0-9][A-Za-z0-9:_-]*$', description: 'Built-in or repository-defined verification preset name.' },
+        preset: { type: 'string', minLength: 1, maxLength: 64, pattern: '^[A-Za-z0-9][A-Za-z0-9:_-]*$', description: 'Alias for command.' },
         cwd: { type: 'string', description: 'Optional safe subdirectory under the project root.' },
         timeoutMs: { type: 'number', description: 'Optional timeout in milliseconds, capped at 300000.' },
         maxOutputBytes: { type: 'number', description: 'Optional per-stream stdout/stderr byte limit, capped at 100000.' },

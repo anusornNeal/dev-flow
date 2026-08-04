@@ -4,6 +4,7 @@ import path from 'path';
 import type { AppState } from '../types';
 import { createApiError } from './api';
 import { resolveProjectRoot, resolveSafePath } from './localFileService';
+import { loadProjectCommandPreset } from './projectCommandConfigService';
 
 const ALLOWED_COMMANDS = ['typecheck', 'test', 'lint', 'build', 'verify'] as const;
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -13,11 +14,21 @@ const MAX_OUTPUT_BYTES = 100_000;
 
 type AllowedCommand = typeof ALLOWED_COMMANDS[number];
 type CommandStatus = 'succeeded' | 'failed' | 'timed_out';
+type ResolvedCommand = {
+  command: string;
+  executable: string;
+  args: string[];
+  cwd?: string;
+  timeoutMs?: number;
+  maxOutputBytes?: number;
+  source: 'package-json' | 'repository-config';
+  configPath?: string;
+};
 
 export interface RunProjectCommandResult {
   ok: boolean;
   status: CommandStatus;
-  command: AllowedCommand;
+  command: string;
   cwd: string;
   exitCode: number | null;
   durationMs: number;
@@ -55,7 +66,7 @@ function truncateOutput(value: string, maxBytes: number) {
 }
 
 function buildCommandResult(input: {
-  command: AllowedCommand;
+  command: string;
   root: string;
   cwdPath: string;
   exitCode: number | null;
@@ -102,16 +113,16 @@ function buildCommandResult(input: {
   };
 }
 
-function resolveCommandLabel(value: unknown): AllowedCommand {
+function resolveCommandLabel(value: unknown): string {
   const normalized = typeof value === 'string' ? value.trim() : '';
-  if ((ALLOWED_COMMANDS as readonly string[]).includes(normalized)) {
-    return normalized as AllowedCommand;
+  if (normalized && normalized.length <= 64 && /^[A-Za-z0-9][A-Za-z0-9:_-]*$/.test(normalized)) {
+    return normalized;
   }
 
   throw createApiError(
     400,
     'COMMAND_NOT_ALLOWED',
-    `Command '${normalized || String(value || '')}' is not in the verification allowlist.`,
+    `Command '${normalized || String(value || '')}' is not a valid verification preset name. Use a built-in package script or define it in .devflow/commands.yaml.`,
     { affectedId: normalized || undefined },
   );
 }
@@ -132,7 +143,7 @@ function resolveSafeCommandCwd(root: string, cwdValue: unknown) {
 function readPackageScripts(root: string) {
   const packageJsonPath = path.join(root, 'package.json');
   if (!fs.existsSync(packageJsonPath)) {
-    throw createApiError(400, 'PACKAGE_JSON_NOT_FOUND', 'package.json was not found in the selected project root.');
+    return { exists: false, scripts: {} as Record<string, string> };
   }
 
   let parsed: any;
@@ -144,37 +155,66 @@ function readPackageScripts(root: string) {
     });
   }
 
-  return parsed?.scripts && typeof parsed.scripts === 'object' ? parsed.scripts as Record<string, string> : {};
+  return {
+    exists: true,
+    scripts: parsed?.scripts && typeof parsed.scripts === 'object'
+      ? parsed.scripts as Record<string, string>
+      : {},
+  };
 }
 
-function resolveAllowedCommand(root: string, command: AllowedCommand) {
-  const scripts = readPackageScripts(root);
-  if (!scripts[command]) {
-    throw createApiError(400, 'COMMAND_NOT_CONFIGURED', `Allowed command '${command}' is not configured in package.json scripts.`, {
+function resolveAllowedCommand(root: string, command: string): ResolvedCommand {
+  const packageConfig = readPackageScripts(root);
+  const isBuiltIn = (ALLOWED_COMMANDS as readonly string[]).includes(command);
+  if (isBuiltIn && packageConfig.scripts[command]) {
+    return {
+      command,
+      executable: process.platform === 'win32' ? process.execPath : 'npm',
+      args: process.platform === 'win32'
+        ? [path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js'), 'run', '--silent', command]
+        : ['run', '--silent', command],
+      source: 'package-json',
+    };
+  }
+
+  const configured = loadProjectCommandPreset(root, command);
+  if (configured) {
+    return {
+      command,
+      executable: configured.executable,
+      args: configured.args,
+      cwd: configured.cwd,
+      timeoutMs: configured.timeoutMs,
+      maxOutputBytes: configured.maxOutputBytes,
+      source: 'repository-config',
+      configPath: configured.configPath,
+    };
+  }
+
+  if (!isBuiltIn) {
+    throw createApiError(400, 'COMMAND_NOT_ALLOWED', `Command '${command}' is not a built-in verification preset and is not defined in .devflow/commands.yaml or .devflow/commands.json.`, {
       affectedId: command,
+      details: { nextAction: `Define commands.${command} with executable and args in .devflow/commands.yaml.` },
     });
   }
 
-  return {
-    command,
-    executable: process.platform === 'win32' ? process.execPath : 'npm',
-    args: process.platform === 'win32'
-      ? [path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js'), 'run', '--silent', command]
-      : ['run', '--silent', command],
-  };
+  throw createApiError(400, 'COMMAND_NOT_CONFIGURED', `Verification command '${command}' is not configured. Add a package.json script or a repository command preset.`, {
+    affectedId: command,
+    details: { packageJsonFound: packageConfig.exists, nextAction: `Configure '${command}' in package.json scripts or .devflow/commands.yaml.` },
+  });
 }
 
 export function runProjectCommand(state: AppState, args: Record<string, any>): RunProjectCommandResult {
   const root = resolveProjectRoot(state, args);
   const command = resolveCommandLabel(args.command ?? args.preset);
-  const cwdPath = resolveSafeCommandCwd(root, args.cwd);
   const resolvedCommand = resolveAllowedCommand(root, command);
+  const cwdPath = resolveSafeCommandCwd(root, args.cwd ?? resolvedCommand.cwd);
   const timeoutMs = Number.isFinite(Number(args.timeoutMs))
     ? Math.max(1, Math.min(MAX_TIMEOUT_MS, Number(args.timeoutMs)))
-    : DEFAULT_TIMEOUT_MS;
+    : resolvedCommand.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const maxOutputBytes = Number.isFinite(Number(args.maxOutputBytes))
     ? Math.max(1, Math.min(MAX_OUTPUT_BYTES, Number(args.maxOutputBytes)))
-    : DEFAULT_MAX_OUTPUT_BYTES;
+    : resolvedCommand.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
 
   const startedAt = Date.now();
   const result = spawnSync(resolvedCommand.executable, resolvedCommand.args, {
@@ -210,14 +250,14 @@ export function runProjectCommand(state: AppState, args: Record<string, any>): R
 export async function runProjectCommandAsync(state: AppState, args: Record<string, any>, logger: { stdout: (data: string) => void, stderr: (data: string) => void }, setCancelFn: (fn: () => void) => void): Promise<RunProjectCommandResult> {
   const root = resolveProjectRoot(state, args);
   const command = resolveCommandLabel(args.command ?? args.preset);
-  const cwdPath = resolveSafeCommandCwd(root, args.cwd);
   const resolvedCommand = resolveAllowedCommand(root, command);
+  const cwdPath = resolveSafeCommandCwd(root, args.cwd ?? resolvedCommand.cwd);
   const timeoutMs = Number.isFinite(Number(args.timeoutMs))
     ? Math.max(1, Math.min(MAX_TIMEOUT_MS, Number(args.timeoutMs)))
-    : DEFAULT_TIMEOUT_MS;
+    : resolvedCommand.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const maxOutputBytes = Number.isFinite(Number(args.maxOutputBytes))
     ? Math.max(1, Math.min(MAX_OUTPUT_BYTES, Number(args.maxOutputBytes)))
-    : DEFAULT_MAX_OUTPUT_BYTES;
+    : resolvedCommand.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
 
   const startedAt = Date.now();
   

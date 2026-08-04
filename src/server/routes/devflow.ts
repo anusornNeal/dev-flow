@@ -6,6 +6,7 @@ import { getCapabilityCatalog } from '../contracts/devflowContract';
 import { sendApiError } from '../services/api';
 import { listLocalFiles, readFileSnippetsBatch, readLocalFile, searchLocalFiles, writeLocalFile } from '../services/localFileService';
 import { applyLocalPatch } from '../services/localPatchService';
+import { deleteLocalPath, moveLocalPath } from '../services/localPathMutationService';
 import { safeEditFile } from '../services/safeEditFileService';
 import { editFilesBatch } from '../services/fileEditBatchService';
 import { runProjectCommand } from '../services/projectCommandService';
@@ -106,6 +107,22 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
   app.post('/api/local-files/apply-patch', (req, res) => {
     try {
       return res.json(applyLocalPatch(deps.state, req.body as Record<string, any>));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.post('/api/local-files/delete', (req, res) => {
+    try {
+      return res.json(deleteLocalPath(deps.state, req.body as Record<string, any>));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.post('/api/local-files/move', (req, res) => {
+    try {
+      return res.json(moveLocalPath(deps.state, req.body as Record<string, any>));
     } catch (error) {
       return sendApiError(res, error);
     }

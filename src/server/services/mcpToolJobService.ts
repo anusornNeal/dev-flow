@@ -10,6 +10,7 @@ import { applyLocalPatchAsync } from './localPatchService';
 import { searchLocalFilesAsync } from './localFileService';
 import { commitGitChanges, ensureGitBranch, pushGitBranch } from './gitService';
 import { editFilesBatch } from './fileEditBatchService';
+import { deleteLocalPath, moveLocalPath } from './localPathMutationService';
 import { getProjects } from '../repositories/projectRepository';
 import { applyProjectAtlasAgentUpdate } from './projectAtlasService';
 
@@ -321,6 +322,10 @@ async function startJob(entry: QueueEntry) {
       result = commitGitChanges(entry.state, entry.args);
     } else if (entry.toolName === 'edit_local_files_batch') {
       result = editFilesBatch(entry.state, entry.args);
+    } else if (entry.toolName === 'delete_local_path') {
+      result = deleteLocalPath(entry.state, entry.args);
+    } else if (entry.toolName === 'move_local_path') {
+      result = moveLocalPath(entry.state, entry.args);
     } else if (entry.toolName === 'apply_project_atlas_agent_update') {
       const project = findProjectForAtlasRescan(entry.args);
       if (!project) throw new Error('Project not found for Project Atlas agent update.');

@@ -465,6 +465,8 @@ try {
   const jiraBundleTool = catalog.tools.find((tool) => tool.name === 'get_jira_authoring_bundle');
   const jiraDraftTool = catalog.tools.find((tool) => tool.name === 'draft_task_from_jira');
   const applyPatchTool = catalog.tools.find((tool) => tool.name === 'apply_patch');
+  const deleteLocalPathTool = catalog.tools.find((tool) => tool.name === 'delete_local_path');
+  const moveLocalPathTool = catalog.tools.find((tool) => tool.name === 'move_local_path');
   const runProjectCommandTool = catalog.tools.find((tool) => tool.name === 'run_project_command');
   const ensureGitBranchTool = catalog.tools.find((tool) => tool.name === 'ensure_git_branch');
   const pushGitBranchTool = catalog.tools.find((tool) => tool.name === 'push_git_branch');
@@ -485,6 +487,8 @@ try {
   assert.ok(jiraBundleTool, 'get_jira_authoring_bundle must be advertised in the MCP catalog');
   assert.ok(jiraDraftTool, 'draft_task_from_jira must be advertised in the MCP catalog');
   assert.ok(applyPatchTool, 'apply_patch must be advertised in the MCP catalog');
+  assert.ok(deleteLocalPathTool, 'delete_local_path must be advertised in the MCP catalog');
+  assert.ok(moveLocalPathTool, 'move_local_path must be advertised in the MCP catalog');
   assert.ok(runProjectCommandTool, 'run_project_command must be advertised in the MCP catalog');
   assert.ok(ensureGitBranchTool, 'ensure_git_branch must be advertised in the MCP catalog');
   assert.ok(pushGitBranchTool, 'push_git_branch must be advertised in the MCP catalog');
@@ -530,6 +534,31 @@ try {
   assert.equal(applyPatchRequest?.path, '/api/local-files/apply-patch');
   assert.equal((applyPatchRequest?.body as any)?.patch, dryRunPatch);
   assert.equal((applyPatchRequest?.body as any)?.dryRun, true);
+
+  const structuredPatchRequest = getToolDefinitionByName('apply_patch')?.buildHttpRequest({
+    projectId: 'project-contract-1',
+    operations: [{ type: 'delete', path: 'old.txt' }],
+    dryRun: true,
+  });
+  assert.deepEqual((structuredPatchRequest?.body as any)?.operations, [{ type: 'delete', path: 'old.txt' }]);
+
+  const deletePathRequest = getToolDefinitionByName('delete_local_path')?.buildHttpRequest({
+    projectId: 'project-contract-1',
+    paths: ['old.txt'],
+    dryRun: true,
+  });
+  assert.equal(deletePathRequest?.method, 'POST');
+  assert.equal(deletePathRequest?.path, '/api/local-files/delete');
+  assert.deepEqual((deletePathRequest?.body as any)?.paths, ['old.txt']);
+
+  const movePathRequest = getToolDefinitionByName('move_local_path')?.buildHttpRequest({
+    projectId: 'project-contract-1',
+    moves: [{ from: 'old.txt', to: 'new.txt' }],
+    dryRun: true,
+  });
+  assert.equal(movePathRequest?.method, 'POST');
+  assert.equal(movePathRequest?.path, '/api/local-files/move');
+  assert.deepEqual((movePathRequest?.body as any)?.moves, [{ from: 'old.txt', to: 'new.txt' }]);
 
   const runProjectCommandRequest = getToolDefinitionByName('run_project_command')?.buildHttpRequest({
     projectId: 'project-contract-1',

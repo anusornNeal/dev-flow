@@ -5,6 +5,7 @@ import type { AppState } from '../types';
 import { createApiError } from './api';
 import { resolveProjectRoot, resolveSafePath } from './localFileService';
 import { invalidateRepoReadCaches } from './repoCacheInvalidationService';
+import { applyPathMutations, type PathMutationResult } from './localPathMutationService';
 
 const DEFAULT_MAX_PATCH_BYTES = 100_000;
 const DEFAULT_MAX_SUMMARY_BYTES = 5_000;
@@ -181,7 +182,10 @@ function buildPatchResult(params: {
   };
 }
 
-export function applyLocalPatch(state: AppState, args: Record<string, any>): LocalPatchResult {
+export function applyLocalPatch(state: AppState, args: Record<string, any>): LocalPatchResult | PathMutationResult {
+  if (Array.isArray(args.operations)) {
+    return applyPathMutations(state, args);
+  }
   const root = resolveProjectRoot(state, args);
   const patch = typeof args.patch === 'string' ? args.patch : '';
   if (!patch.trim()) {
@@ -236,7 +240,10 @@ export function applyLocalPatch(state: AppState, args: Record<string, any>): Loc
   return patchResult;
 }
 
-export async function applyLocalPatchAsync(state: AppState, args: Record<string, any>, logger: { stdout: (data: string) => void, stderr: (data: string) => void }, setCancelFn: (fn: () => void) => void): Promise<LocalPatchResult> {
+export async function applyLocalPatchAsync(state: AppState, args: Record<string, any>, logger: { stdout: (data: string) => void, stderr: (data: string) => void }, setCancelFn: (fn: () => void) => void): Promise<LocalPatchResult | PathMutationResult> {
+  if (Array.isArray(args.operations)) {
+    return applyPathMutations(state, args);
+  }
   const root = resolveProjectRoot(state, args);
   const patch = typeof args.patch === 'string' ? args.patch : '';
   const dryRun = normalizePatchFlag(args.dryRun ?? args.check);

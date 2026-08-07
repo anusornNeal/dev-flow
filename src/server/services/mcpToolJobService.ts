@@ -1,8 +1,9 @@
 import { randomUUID } from 'crypto';
 import type { AppState } from '../types';
 import { createJob, updateJobStatus, appendJobLog, writeJobResult, getJob, readJobLog, listInterruptedJobs, listRecentJobs, startBackgroundJobCleanup } from '../repositories/mcpToolJobRepository';
-import { normalizeUnknownError } from './api';
+import { createApiError, normalizeUnknownError } from './api';
 import { resolveProjectRoot } from './localFileService';
+import { isDevFlowRestartPending, readDevFlowRestartState } from '../../lib/devFlowRestart';
 
 // Import async runners (we will define these later in their respective files)
 import { runProjectCommandAsync } from './projectCommandService';
@@ -210,6 +211,18 @@ export function cancelToolJob(jobId: string) {
 }
 
 export function enqueueToolJob(state: AppState, toolName: string, args: any, kind: JobKind) {
+  const restartState = readDevFlowRestartState();
+  if (isDevFlowRestartPending(restartState)) {
+    throw createApiError(409, 'RESTART_IN_PROGRESS', 'New MCP tool jobs are blocked while DevFlow restart is pending.', {
+      retryable: true,
+      details: {
+        ticket: restartState?.ticket,
+        status: restartState?.status,
+        nextAction: 'Reconnect after restart and retry the original tool call.',
+      },
+    });
+  }
+
   let resourceKey = 'global';
   if (kind !== 'skill-read') {
     try {

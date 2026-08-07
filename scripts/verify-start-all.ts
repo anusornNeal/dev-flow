@@ -4,6 +4,7 @@ const {
   buildNgrokArgs,
   buildStartAllPlan,
   resolveStartAllOptions,
+  shouldRestartServerProcess,
 } = await import('./start-all');
 
 assert.deepEqual(buildNgrokArgs({ port: 3000, domain: 'example.ngrok-free.dev' }), [
@@ -37,5 +38,45 @@ assert.deepEqual(plan.processes[0].args, ['run', 'dev']);
 assert.deepEqual(plan.processes[1].args, ['http', '--domain=team-devflow.ngrok-free.dev', '3456']);
 assert.equal(plan.appUrl, 'http://localhost:3456');
 assert.equal(plan.openBrowserDelayMs, 250);
+
+const serverProcess = plan.processes[0] as any;
+assert.equal(serverProcess.env?.DEVFLOW_RESTART_SUPERVISOR, 'start-all');
+assert.ok(serverProcess.env?.DEVFLOW_RESTART_SUPERVISOR_TOKEN);
+
+assert.equal(typeof shouldRestartServerProcess, 'function');
+const acceptedRestart = {
+  ticket: 'restart-test',
+  status: 'accepted',
+  supervisor: 'start-all',
+  supervisorToken: 'supervisor-token',
+};
+assert.equal(shouldRestartServerProcess({
+  label: 'server',
+  exitCode: 75,
+  supervisorToken: 'supervisor-token',
+  shuttingDown: false,
+  restartState: acceptedRestart,
+}), true);
+assert.equal(shouldRestartServerProcess({
+  label: 'server',
+  exitCode: 75,
+  supervisorToken: 'wrong-token',
+  shuttingDown: false,
+  restartState: acceptedRestart,
+}), false);
+assert.equal(shouldRestartServerProcess({
+  label: 'server',
+  exitCode: 1,
+  supervisorToken: 'supervisor-token',
+  shuttingDown: false,
+  restartState: acceptedRestart,
+}), false);
+assert.equal(shouldRestartServerProcess({
+  label: 'server',
+  exitCode: 75,
+  supervisorToken: 'supervisor-token',
+  shuttingDown: true,
+  restartState: acceptedRestart,
+}), false);
 
 console.log('[verify-start-all] all assertions passed');

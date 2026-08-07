@@ -3,7 +3,7 @@ import { getTasks } from '../repositories/taskRepository.js';
 import type express from 'express';
 import type { ApiRouteDeps } from '../types';
 import { getCapabilityCatalog, getToolSchema } from '../contracts/devflowContract';
-import { sendApiError } from '../services/api';
+import { createApiError, sendApiError } from '../services/api';
 import { listLocalFiles, readFileSnippetsBatch, readLocalFile, searchLocalFiles, writeLocalFile } from '../services/localFileService';
 import { applyLocalPatch } from '../services/localPatchService';
 import { deleteLocalPath, moveLocalPath } from '../services/localPathMutationService';
@@ -22,6 +22,7 @@ import { buildJiraAuthoringBundle } from '../services/jiraAuthoringBundleService
 import { findProjectByIdentifier } from '../services/taskService';
 import { applyProjectAtlasAgentUpdate, getProjectAtlasForApi, getProjectAtlasStatus } from '../services/projectAtlasService';
 import { enqueueToolJob } from '../services/mcpToolJobService';
+import { getDevFlowRestartStatus, requestDevFlowRestart } from '../services/restartService';
 
 export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) {
   app.get('/api/capabilities', (_req, res) => {
@@ -78,6 +79,31 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
   app.get('/api/workflow-health', (req, res) => {
     try {
       return res.json(getWorkflowHealth(deps.state, req.query as Record<string, any>));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.post('/api/restart', (req, res) => {
+    try {
+      if (!deps.restartProcess) {
+        throw createApiError(409, 'RESTART_UNSUPPORTED', 'This DevFlow host cannot schedule a safe process restart.');
+      }
+      const result = requestDevFlowRestart(req.body as Record<string, any>);
+      if (!result.duplicate) {
+        res.once('finish', () => {
+          deps.restartProcess?.(result.exitCode, result.shutdownDelayMs);
+        });
+      }
+      return res.json(result);
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.get('/api/restart/status', (req, res) => {
+    try {
+      return res.json(getDevFlowRestartStatus(req.query as Record<string, any>));
     } catch (error) {
       return sendApiError(res, error);
     }

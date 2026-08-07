@@ -155,7 +155,7 @@ function stripToolOnlyArgs(args: Record<string, any>, keys: string[]) {
   return copy;
 }
 
-export const DEVFLOW_CONTRACT_VERSION = '2026-08-04.1';
+export const DEVFLOW_CONTRACT_VERSION = '2026-08-07.1';
 
 export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   {
@@ -215,6 +215,38 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
     buildHttpRequest: (args) => ({
       method: 'GET',
       path: withQuery('/api/workflow-health', args),
+    }),
+  },
+  {
+    name: 'restart_devflow',
+    description: 'Request a guarded restart of the DevFlow API runtime. Safe restart is available only when DevFlow is hosted by the start-all supervisor; active MCP tool jobs block restart.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        reason: { type: 'string', maxLength: 200, description: 'Optional short reason recorded with the restart ticket.' },
+      },
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: (args) => ({
+      method: 'POST',
+      path: '/api/restart',
+      body: args,
+    }),
+  },
+  {
+    name: 'get_devflow_restart_status',
+    description: 'Read the latest DevFlow restart ticket state after reconnecting, or query a specific restart ticket.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ticket: { type: 'string', description: 'Optional restart ticket returned by restart_devflow.' },
+      },
+    },
+    outputSchema: { type: 'object' },
+    lightweight: true,
+    buildHttpRequest: (args) => ({
+      method: 'GET',
+      path: withQuery('/api/restart/status', { ticket: args.ticket }),
     }),
   },
   {
@@ -2328,6 +2360,10 @@ export function getCapabilityCatalog() {
     },
     collaboration: {
       createPullRequest: hasTool('create_pull_request'),
+    },
+    runtime: {
+      restart: hasTool('restart_devflow'),
+      restartStatus: hasTool('get_devflow_restart_status'),
     },
     discovery: {
       exactToolSchema: hasTool('get_tool_schema'),

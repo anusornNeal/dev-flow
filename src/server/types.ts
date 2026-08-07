@@ -15,4 +15,5 @@ export interface AppState {
 export interface ApiRouteDeps {
   state: AppState;
   writeAgentLog: (level: LogLevel, message: string) => void;
+  restartProcess?: (exitCode: number, delayMs?: number) => void;
 }

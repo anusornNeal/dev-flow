@@ -24,6 +24,9 @@ function emitFailureOutput(label: string, stdout: string, stderr: string) {
 
 const commands = [
   { label: 'lint', command: 'npm', args: ['run', 'lint'] },
+  { label: 'devflow restart route', command: 'npx', args: ['tsx', '--test', 'tests/server/devflowRestartRoute.test.ts'] },
+  { label: 'devflow restart contract', command: 'npx', args: ['tsx', '--test', 'tests/server/devflowRestartContract.test.ts'] },
+  { label: 'devflow restart state', command: 'npx', args: ['tsx', '--test', 'tests/server/devflowRestartState.test.ts'] },
   { label: 'devflow contract', command: 'npx', args: ['tsx', 'scripts/verify-devflow-contract.ts'] },
   { label: 'project atlas cache', command: 'npx', args: ['tsx', '--test', 'tests/server/projectAtlasCacheService.test.ts'] },
   { label: 'project atlas agent update', command: 'npx', args: ['tsx', '--test', 'tests/server/projectAtlasAgentUpdateService.test.ts'] },

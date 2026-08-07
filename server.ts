@@ -14,6 +14,7 @@ import { registerApiRoutes } from './src/server/routes/registerApiRoutes';
 import { createDevFlowMcpServer } from './src/server/mcp';
 import { bootstrap, writeAgentLog } from './src/server/bootstrap';
 import { getDevFlowAppRoot, resolveFromDevFlowAppRoot, getDevFlowUploadsDir } from './src/lib/devFlowPaths';
+import { markDevFlowRestartHealthy } from './src/lib/devFlowRestart';
 import { recordToolCall } from './src/server/services/mcpToolMonitor';
 
 async function startServer() {
@@ -38,6 +39,10 @@ async function startServer() {
   registerApiRoutes(app, {
     state,
     writeAgentLog,
+    restartProcess: (exitCode, delayMs = 0) => {
+      const timer = setTimeout(() => process.exit(exitCode), Math.max(0, delayMs));
+      timer.unref();
+    },
   });
 
   app.use((req, res, next) => {
@@ -252,6 +257,7 @@ async function startServer() {
   }
 
   app.listen(port, '0.0.0.0', () => {
+    markDevFlowRestartHealthy();
     console.log(`Express developer server active on http://0.0.0.0:${port}`);
   });
 }

@@ -58,6 +58,17 @@ export type SafeEditResult = {
   };
 };
 
+export type PreparedSafeEditFile =
+  | { ok: false; result: SafeEditResult }
+  | {
+      ok: true;
+      result: SafeEditResult;
+      root: string;
+      targetPath: string;
+      before: string;
+      after: string;
+    };
+
 const DEFAULT_MAX_PAYLOAD_BYTES = 64 * 1024;
 const DEFAULT_MAX_FILE_BYTES = 1024 * 1024;
 
@@ -222,22 +233,21 @@ function applyOperation(current: string, op: SafeEditOperation, index: number): 
   return { ok: false, code: 'INVALID_OPERATION', message: `Unsupported operation type for operation ${index}.` };
 }
 
-export function safeEditFile(state: AppState, args: Record<string, any>): SafeEditResult {
-  const dryRun = args.mode !== 'apply';
+export function prepareSafeEditFile(state: AppState, args: Record<string, any>): PreparedSafeEditFile {
   const filePath = String(args.filePath || args.path || '');
   if (!filePath) {
-    return fail({ dryRun, filePath, code: 'INVALID_ARGS', message: 'filePath is required.' });
+    return { ok: false, result: fail({ dryRun: true, filePath, code: 'INVALID_ARGS', message: 'filePath is required.' }) };
   }
 
   const operations = Array.isArray(args.edits) ? args.edits : Array.isArray(args.operations) ? args.operations : [];
   if (operations.length === 0) {
-    return fail({ dryRun, filePath, code: 'INVALID_ARGS', message: 'At least one edit operation is required.' });
+    return { ok: false, result: fail({ dryRun: true, filePath, code: 'INVALID_ARGS', message: 'At least one edit operation is required.' }) };
   }
 
   const maxPayloadBytes = Math.min(Number(args.maxPayloadBytes || DEFAULT_MAX_PAYLOAD_BYTES), 1024 * 1024);
   const payloadBytes = byteLength(JSON.stringify(operations));
   if (payloadBytes > maxPayloadBytes) {
-    return fail({ dryRun, filePath, code: 'PAYLOAD_TOO_LARGE', message: `Edit payload is ${payloadBytes} bytes; limit is ${maxPayloadBytes}.` });
+    return { ok: false, result: fail({ dryRun: true, filePath, code: 'PAYLOAD_TOO_LARGE', message: `Edit payload is ${payloadBytes} bytes; limit is ${maxPayloadBytes}.` }) };
   }
 
   const root = resolveProjectRoot(state, args);
@@ -245,7 +255,7 @@ export function safeEditFile(state: AppState, args: Record<string, any>): SafeEd
   try {
     targetPath = resolveSafePath(root, filePath);
   } catch (error: any) {
-    return fail({ dryRun, filePath, code: 'UNSAFE_PATH', message: error?.message || 'Unsafe path.' });
+    return { ok: false, result: fail({ dryRun: true, filePath, code: 'UNSAFE_PATH', message: error?.message || 'Unsafe path.' }) };
   }
 
   let stat: fs.Stats;
@@ -253,16 +263,16 @@ export function safeEditFile(state: AppState, args: Record<string, any>): SafeEd
     stat = fs.statSync(targetPath);
   } catch (error: any) {
     if (error?.code === 'ENOENT') {
-      return fail({ dryRun, filePath, code: 'FILE_NOT_FOUND', message: `File not found: ${filePath}` });
+      return { ok: false, result: fail({ dryRun: true, filePath, code: 'FILE_NOT_FOUND', message: `File not found: ${filePath}` }) };
     }
-    return fail({ dryRun, filePath, code: 'INVALID_ARGS', message: error?.message || 'Unable to stat target file.' });
+    return { ok: false, result: fail({ dryRun: true, filePath, code: 'INVALID_ARGS', message: error?.message || 'Unable to stat target file.' }) };
   }
 
   if (!stat.isFile()) {
-    return fail({ dryRun, filePath, code: 'INVALID_ARGS', message: 'Target path must be a file.' });
+    return { ok: false, result: fail({ dryRun: true, filePath, code: 'INVALID_ARGS', message: 'Target path must be a file.' }) };
   }
   if (stat.size > Number(args.maxFileBytes || DEFAULT_MAX_FILE_BYTES)) {
-    return fail({ dryRun, filePath, code: 'FILE_TOO_LARGE', message: `Target file is ${stat.size} bytes; limit is ${Number(args.maxFileBytes || DEFAULT_MAX_FILE_BYTES)}.` });
+    return { ok: false, result: fail({ dryRun: true, filePath, code: 'FILE_TOO_LARGE', message: `Target file is ${stat.size} bytes; limit is ${Number(args.maxFileBytes || DEFAULT_MAX_FILE_BYTES)}.` }) };
   }
 
   const before = fs.readFileSync(targetPath, 'utf8');
@@ -279,7 +289,7 @@ export function safeEditFile(state: AppState, args: Record<string, any>): SafeEd
     const expected = args.expectedContentHash || args.expectedSha256;
     const actual = crypto.createHash('sha256').update(before, 'utf8').digest('hex');
     if (expected !== actual) {
-      return fail({ dryRun, filePath, code: 'CONTENT_CHANGED', message: `File content hash ${actual} does not match expected hash ${expected}.`, diagnostics });
+      return { ok: false, result: fail({ dryRun: true, filePath, code: 'CONTENT_CHANGED', message: `File content hash ${actual} does not match expected hash ${expected}.`, diagnostics }) };
     }
   }
 
@@ -287,7 +297,7 @@ export function safeEditFile(state: AppState, args: Record<string, any>): SafeEd
     try {
       assertFileRevisionMatches(targetPath, args, filePath);
     } catch (error: any) {
-      return fail({ dryRun, filePath, code: 'CONTENT_CHANGED', message: error?.message || 'File changed since it was read.', diagnostics });
+      return { ok: false, result: fail({ dryRun: true, filePath, code: 'CONTENT_CHANGED', message: error?.message || 'File changed since it was read.', diagnostics }) };
     }
   }
 
@@ -298,26 +308,29 @@ export function safeEditFile(state: AppState, args: Record<string, any>): SafeEd
     if (operationUsedNewlineNormalization(rawOperation) || before !== normalizedBefore) {
       diagnostics.matchedWithNormalizedNewlines = true;
     }
-    const result = applyOperation(after, normalizedOperation, i);
-    if (result.ok === false) {
+    const operationResult = applyOperation(after, normalizedOperation, i);
+    if (operationResult.ok === false) {
       if (before !== normalizedBefore || operationUsedNewlineNormalization(rawOperation)) {
         diagnostics.hints.push('Operation matched against a newline-normalized view; verify anchor text, indentation, and CRLF/LF differences.');
       }
       return {
         ok: false,
-        dryRun,
-        filePath,
-        changed: false,
-        changedLines: 0,
-        operations: i,
-        bytesBefore: byteLength(before),
-        bytesAfter: byteLength(restoreNewlines(after, newlineStyle)),
-        revisionBefore,
-        diagnostics,
-        error: { code: result.code, message: result.message, operationIndex: i },
+        result: {
+          ok: false,
+          dryRun: true,
+          filePath,
+          changed: false,
+          changedLines: 0,
+          operations: i,
+          bytesBefore: byteLength(before),
+          bytesAfter: byteLength(restoreNewlines(after, newlineStyle)),
+          revisionBefore,
+          diagnostics,
+          error: { code: operationResult.code, message: operationResult.message, operationIndex: i },
+        },
       };
     }
-    after = result.value;
+    after = operationResult.value;
   }
 
   const restoredAfter = restoreNewlines(after, newlineStyle);
@@ -326,22 +339,9 @@ export function safeEditFile(state: AppState, args: Record<string, any>): SafeEd
     diagnostics.hints.push(`Anchors/content were matched using normalized newlines and output was restored as ${preferredNewline(newlineStyle) === '\r\n' ? 'CRLF' : 'LF'}.`);
   }
 
-  if (changed && !dryRun) {
-    try {
-      const tempPath = path.join(path.dirname(targetPath), `.${path.basename(targetPath)}.${Date.now()}.tmp`);
-      fs.writeFileSync(tempPath, restoredAfter, 'utf8');
-      fs.renameSync(tempPath, targetPath);
-      invalidateRepoReadCaches(root, 'safeEditFile');
-    } catch (e: any) {
-      return fail({ dryRun, filePath, code: 'WRITE_FAILED', message: `Failed to write file: ${e.message}`, diagnostics });
-    }
-  }
-
-  const revisionAfter = !dryRun ? getFileRevision(targetPath) : undefined;
-
-  return {
+  const result: SafeEditResult = {
     ok: true,
-    dryRun,
+    dryRun: true,
     filePath,
     changed,
     changedLines: countChangedLines(before, restoredAfter),
@@ -349,8 +349,63 @@ export function safeEditFile(state: AppState, args: Record<string, any>): SafeEd
     bytesBefore: byteLength(before),
     bytesAfter: byteLength(restoredAfter),
     revisionBefore,
-    revisionAfter,
     diagnostics,
-    preview: dryRun ? { beforeExcerpt: excerpt(before), afterExcerpt: excerpt(restoredAfter) } : undefined,
+    preview: { beforeExcerpt: excerpt(before), afterExcerpt: excerpt(restoredAfter) },
   };
+
+  return { ok: true, result, root, targetPath, before, after: restoredAfter };
+}
+
+export function applyPreparedSafeEditFile(prepared: PreparedSafeEditFile): SafeEditResult {
+  if (!prepared.ok) return { ...prepared.result, dryRun: false, preview: undefined };
+
+  const { result, root, targetPath, after } = prepared;
+  const revisionBefore = result.revisionBefore;
+  if (!revisionBefore) {
+    return fail({ dryRun: false, filePath: result.filePath, code: 'CONTENT_CHANGED', message: 'Prepared edit is missing its source revision.', diagnostics: result.diagnostics });
+  }
+
+  let currentRevision: FileRevision;
+  try {
+    currentRevision = getFileRevision(targetPath);
+  } catch (error: any) {
+    return fail({ dryRun: false, filePath: result.filePath, code: 'CONTENT_CHANGED', message: error?.message || 'File changed since edit preparation.', diagnostics: result.diagnostics });
+  }
+
+  if (currentRevision.sha256 !== revisionBefore.sha256) {
+    return {
+      ...result,
+      ok: false,
+      dryRun: false,
+      changed: false,
+      preview: undefined,
+      revisionAfter: currentRevision,
+      error: { code: 'CONTENT_CHANGED', message: `File '${result.filePath}' changed after edit preparation.` },
+    };
+  }
+
+  if (!result.changed) {
+    return { ...result, dryRun: false, preview: undefined, revisionAfter: currentRevision };
+  }
+
+  try {
+    const tempPath = path.join(path.dirname(targetPath), `.${path.basename(targetPath)}.${Date.now()}.tmp`);
+    fs.writeFileSync(tempPath, after, 'utf8');
+    fs.renameSync(tempPath, targetPath);
+    invalidateRepoReadCaches(root, 'safeEditFile', { paths: [result.filePath] });
+  } catch (error: any) {
+    return fail({ dryRun: false, filePath: result.filePath, code: 'WRITE_FAILED', message: `Failed to write file: ${error.message}`, diagnostics: result.diagnostics });
+  }
+
+  return {
+    ...result,
+    dryRun: false,
+    preview: undefined,
+    revisionAfter: getFileRevision(targetPath),
+  };
+}
+
+export function safeEditFile(state: AppState, args: Record<string, any>): SafeEditResult {
+  const prepared = prepareSafeEditFile(state, args);
+  return args.mode === 'apply' ? applyPreparedSafeEditFile(prepared) : prepared.result;
 }

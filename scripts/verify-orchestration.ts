@@ -24,6 +24,9 @@ fs.writeFileSync(triggerScriptPath, [
   '',
 ].join('\r\n'), 'utf8');
 process.env.DEVFLOW_AGENT_TRIGGER_SCRIPT = triggerScriptPath;
+// The orchestration contract tests the DevFlow handoff, not whether Codex is installed on this machine.
+// Point preflight at a deterministic existing executable so the fixture stays hermetic.
+process.env.DEVFLOW_CODEX_EXE = process.execPath;
 
 const {
   completeAgentRunForTask,
@@ -166,7 +169,7 @@ fs.writeFileSync(path.join(overrideDir, 'prompt.header.md'), '\nOVERRIDE HEADER 
 const previewPrompt = renderTaskPrompt(state, 'task-1');
 assert.ok(previewPrompt.renderResult.content.includes('OVERRIDE HEADER preview-run-id'));
 const triggerResult = triggerTaskAgent(state._testTasks[0], deps, 'test');
-assert.equal(triggerResult.triggered, true);
+assert.equal(triggerResult.triggered, true, `triggerTaskAgent failed: ${JSON.stringify(triggerResult)} logs=${JSON.stringify(loggedMessages.slice(-3))}`);
 assert.equal(state._testTasks[0].status, 'in-progress');
 
 await new Promise((resolve) => setTimeout(resolve, 250));

@@ -294,6 +294,51 @@ test('mcp server unwraps async job result envelope for run_project_command', asy
   ]);
 });
 
+test('mcp server returns compact server-guided pending completion without status polling', async (t) => {
+  const originalFetch = global.fetch;
+  const requests: string[] = [];
+  t.after(() => { global.fetch = originalFetch; });
+
+  global.fetch = async (url: RequestInfo | URL) => {
+    const urlText = String(url);
+    requests.push(urlText);
+    const body = urlText.endsWith('/api/tool-jobs')
+      ? { jobId: 'job-long-1', status: 'queued' }
+      : {
+          jobId: 'job-long-1',
+          status: 'running',
+          ready: false,
+          result: null,
+          code: 'JOB_STILL_RUNNING',
+          nextPollAfterMs: 2000,
+          recommendedWaitMs: 30000,
+          nextAction: 'Call get_tool_job_result with waitMs=30000.',
+        };
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => 'application/json' },
+      text: async () => JSON.stringify(body),
+    } as unknown as Response;
+  };
+
+  const server = createDevFlowMcpServer('http://127.0.0.1:3000');
+  const handler = (server as any)._requestHandlers.get('tools/call');
+  const response = await handler({
+    method: 'tools/call',
+    params: { name: 'run_project_command', arguments: { projectId: 'proj-1', command: 'test' } },
+  });
+  const packet = response.structuredContent;
+  assert.deepEqual(requests, [
+    'http://127.0.0.1:3000/api/tool-jobs',
+    'http://127.0.0.1:3000/api/tool-jobs/job-long-1/result?waitMs=20000',
+  ]);
+  assert.equal(packet.code, 'JOB_STILL_RUNNING');
+  assert.equal(packet.nextPollAfterMs, 2000);
+  assert.equal(packet.recommendedWaitMs, 30000);
+  assert.equal(Buffer.byteLength(JSON.stringify(packet), 'utf8') < 600, true);
+});
+
 test('mcp server does not surface null text when async job result is temporarily missing', async (t) => {
   const originalFetch = global.fetch;
 

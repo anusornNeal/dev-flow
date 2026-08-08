@@ -114,6 +114,15 @@ test('devflowContract exposes apply_project_atlas_agent_update as a serialized w
   assert.equal(getMcpToolList().some((entry) => entry.name === 'rescan_project_atlas'), false);
 });
 
+test('get_tool_job_result is the normal long-poll completion path', () => {
+  const result = getToolDefinitionByName('get_tool_job_result');
+  const status = getToolDefinitionByName('get_tool_job_status');
+  assert.ok(result?.inputSchema?.properties?.waitMs);
+  assert.equal(result?.buildHttpRequest({ jobId: 'job-1', waitMs: 30000 }).path, '/api/tool-jobs/job-1/result?waitMs=30000');
+  assert.match(result?.description || '', /normal completion|long-poll/i);
+  assert.match(status?.description || '', /diagnostic/i);
+});
+
 test('devflowContract exposes complete_task_review', () => {
   const tool = getToolDefinitionByName('complete_task_review');
   assert.ok(tool);

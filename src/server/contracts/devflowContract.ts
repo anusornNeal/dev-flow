@@ -155,7 +155,7 @@ function stripToolOnlyArgs(args: Record<string, any>, keys: string[]) {
   return copy;
 }
 
-export const DEVFLOW_CONTRACT_VERSION = '2026-08-08.5';
+export const DEVFLOW_CONTRACT_VERSION = '2026-08-08.6';
 
 export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   {
@@ -2363,7 +2363,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'get_tool_job_status',
-    description: 'Get the status and queue position of a tool job.',
+    description: 'Diagnostic/manual status inspection for a tool job. Normal completion callers should long-poll with get_tool_job_result instead of status polling.',
     inputSchema: {
       type: 'object',
       properties: { jobId: { type: 'string' } },
@@ -2393,15 +2393,21 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'get_tool_job_result',
-    description: 'Get the final result and patch of a completed tool job.',
+    description: 'Normal completion path for async jobs. Long-poll for terminal completion and return the final normalized result directly; use status/log only for diagnostics.',
     inputSchema: {
       type: 'object',
-      properties: { jobId: { type: 'string' } },
+      properties: {
+        jobId: { type: 'string' },
+        waitMs: { type: 'number', description: 'Bounded long-poll wait in milliseconds, capped at 30000.' },
+      },
       required: ['jobId'],
     },
     outputSchema: { type: 'object' },
     lightweight: true,
-    buildHttpRequest: (args) => ({ method: 'GET', path: `/api/tool-jobs/${encodePathSegment(String(args.jobId))}/result` }),
+    buildHttpRequest: (args) => ({
+      method: 'GET',
+      path: withQuery(`/api/tool-jobs/${encodePathSegment(String(args.jobId))}/result`, { waitMs: args.waitMs }),
+    }),
   },
   {
     name: 'cancel_tool_job',

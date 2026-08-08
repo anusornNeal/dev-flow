@@ -174,6 +174,36 @@ export function waitForToolJob(jobId: string, waitMs = 20_000) {
   });
 }
 
+export function getToolJobWaitGuidance(status: ReturnType<typeof getToolJobStatus>) {
+  if (!status) {
+    return {
+      ready: false,
+      nextPollAfterMs: 0,
+      recommendedWaitMs: 0,
+      nextAction: 'The job no longer exists. Do not keep polling this job id.',
+    };
+  }
+  if (isTerminalStatus(status.status)) {
+    return {
+      ready: true,
+      nextPollAfterMs: 0,
+      recommendedWaitMs: 0,
+      nextAction: `Read the terminal result for ${status.jobId} with get_tool_job_result.`,
+    };
+  }
+
+  const queuePosition = Math.max(0, Number(status.queuePosition || 0));
+  const nextPollAfterMs = status.status === 'queued'
+    ? Math.min(10_000, 3_000 + Math.max(0, queuePosition - 1) * 1_000)
+    : 2_000;
+  return {
+    ready: false,
+    nextPollAfterMs,
+    recommendedWaitMs: 30_000,
+    nextAction: `Call get_tool_job_result for ${status.jobId} with waitMs=30000. Use get_tool_job_status/get_tool_job_log only for diagnostics.`,
+  };
+}
+
 interface ResourceStats {
   accessCount: Record<ResourceAccessMode, number>;
   costCount: Record<JobCostClass, number>;

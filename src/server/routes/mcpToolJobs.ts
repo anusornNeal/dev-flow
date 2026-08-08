@@ -1,6 +1,6 @@
 import type express from 'express';
 import type { ApiRouteDeps } from '../types';
-import { enqueueToolJob, getToolJobStatus, cancelToolJob, getJobMetrics, getQueueMetrics, waitForToolJob } from '../services/mcpToolJobService';
+import { enqueueToolJob, getToolJobStatus, cancelToolJob, getJobMetrics, getQueueMetrics, waitForToolJob, getToolJobWaitGuidance } from '../services/mcpToolJobService';
 import { readJobLog, readJobResult } from '../repositories/mcpToolJobRepository';
 import { createApiError } from '../services/api';
 import { getToolDefinitionByName } from '../contracts/devflowContract';
@@ -70,23 +70,40 @@ export function registerMcpToolJobRoutes(app: express.Express, deps: ApiRouteDep
       if (!status) {
         throw createApiError(404, 'JOB_NOT_FOUND', `Job not found: ${req.params.jobId}`);
       }
-      const terminal = status.status === 'succeeded' || status.status === 'failed' || status.status === 'timed_out' || status.status === 'cancelled';
+      const guidance = getToolJobWaitGuidance(status);
+      if (!guidance.ready) {
+        return res.json({
+          jobId: req.params.jobId,
+          status: status.status,
+          ready: false,
+          result: null,
+          code: 'JOB_STILL_RUNNING',
+          message: `Job ${req.params.jobId} is still ${status.status} after the bounded wait.`,
+          nextPollAfterMs: guidance.nextPollAfterMs,
+          recommendedWaitMs: guidance.recommendedWaitMs,
+          nextAction: guidance.nextAction,
+        });
+      }
+
       const result = readJobResult(req.params.jobId);
       const safeResult = result || {
         result: {
           ok: false,
-          status: terminal ? status.status : 'pending',
-          code: terminal ? 'JOB_RESULT_UNAVAILABLE' : 'JOB_RESULT_PENDING',
-          message: terminal ? 'The job finished before a result payload was readable.' : 'The job has not produced a result payload yet.',
+          status: status.status,
+          code: 'JOB_RESULT_UNAVAILABLE',
+          message: 'The job finished before a result payload was readable.',
           jobId: req.params.jobId,
           failureSummary: status.failureSummary || null,
         },
       };
-      res.json({
+      return res.json({
         jobId: req.params.jobId,
         status: status.status,
-        ready: terminal,
+        ready: true,
         result: safeResult,
+        nextPollAfterMs: 0,
+        recommendedWaitMs: 0,
+        nextAction: guidance.nextAction,
       });
     } catch (error) {
       next(error);

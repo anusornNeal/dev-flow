@@ -275,10 +275,13 @@ export function createDevFlowMcpServer(baseUrl: string) {
             status,
             ready,
             result: null,
-            code: ready ? 'JOB_RESULT_NOT_READY' : 'JOB_STILL_RUNNING',
-            message: ready
+            code: resultPacket.code || (ready ? 'JOB_RESULT_NOT_READY' : 'JOB_STILL_RUNNING'),
+            message: resultPacket.message || (ready
               ? `Job ${jobId} reached ${status} but no result payload was available yet.`
-              : `Job ${jobId} is still ${status} after the bounded MCP wait.`,
+              : `Job ${jobId} is still ${status} after the bounded MCP wait.`),
+            ...(resultPacket.nextPollAfterMs !== undefined ? { nextPollAfterMs: resultPacket.nextPollAfterMs } : {}),
+            ...(resultPacket.recommendedWaitMs !== undefined ? { recommendedWaitMs: resultPacket.recommendedWaitMs } : {}),
+            ...(resultPacket.nextAction ? { nextAction: resultPacket.nextAction } : {}),
           };
         }
         durationMs += Date.now() - waitStartedAt;

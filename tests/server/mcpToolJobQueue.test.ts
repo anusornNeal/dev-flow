@@ -13,9 +13,11 @@ import {
   cancelToolJob,
   waitForToolJob,
   getQueueMetrics,
+  getToolJobWaitGuidance,
 } from '../../src/server/services/mcpToolJobService';
 import { readJobLog, readJobResult } from '../../src/server/repositories/mcpToolJobRepository';
 import { createProject } from '../../src/server/repositories/projectRepository.js';
+import { registerMcpToolJobRoutes } from '../../src/server/routes/mcpToolJobs.js';
 
 try { createProject({ id: 'proj_1', name: 'dev-flow', localPath: process.cwd() }); } catch(e) {}
 const MOCK_STATE: any = {
@@ -256,6 +258,74 @@ test('mcpToolJobService - write jobs for different repos do not block each other
   } finally {
     blockers.write1.resolve();
     blockers.write2.resolve();
+    __setToolJobTestRunner(toolName, null);
+  }
+});
+
+test('mcpToolJobService - pending jobs expose bounded completion guidance', async () => {
+  const root = makeTempRepo('wait-guidance');
+  const state = makeState(root);
+  const toolName = `test_guidance_${randomUUID()}`;
+  const blocker = deferred();
+  __setToolJobTestRunner(toolName, async () => {
+    await blocker.promise;
+    return { ok: true };
+  });
+
+  try {
+    const job = enqueueToolJob(state, toolName, { localPath: root }, 'repo-read');
+    await waitUntil(() => getToolJobStatus(job.jobId)?.status === 'running', 'Expected guidance job to run');
+    const timedWait = await waitForToolJob(job.jobId, 10);
+    const guidance = getToolJobWaitGuidance(timedWait);
+    assert.equal(timedWait?.status, 'running');
+    assert.equal(guidance.ready, false);
+    assert.equal(guidance.nextPollAfterMs >= 500, true);
+    assert.equal(guidance.recommendedWaitMs, 30_000);
+    assert.match(guidance.nextAction, /get_tool_job_result/i);
+  } finally {
+    blocker.resolve();
+    __setToolJobTestRunner(toolName, null);
+  }
+});
+
+test('mcp tool result route returns compact pending guidance without job metadata or logs', async () => {
+  const root = makeTempRepo('result-route-guidance');
+  const state = makeState(root);
+  const toolName = `test_route_guidance_${randomUUID()}`;
+  const blocker = deferred();
+  __setToolJobTestRunner(toolName, async () => {
+    await blocker.promise;
+    return { ok: true };
+  });
+
+  try {
+    const job = enqueueToolJob(state, toolName, { localPath: root, secretPayload: 'do-not-repeat' }, 'repo-read');
+    await waitUntil(() => getToolJobStatus(job.jobId)?.status === 'running', 'Expected route guidance job to run');
+    const handlers = new Map<string, Function>();
+    const app = {
+      get: (route: string, handler: Function) => handlers.set(`GET ${route}`, handler),
+      post: (route: string, handler: Function) => handlers.set(`POST ${route}`, handler),
+    } as any;
+    registerMcpToolJobRoutes(app, { state, writeAgentLog: () => {} } as any);
+    const handler = handlers.get('GET /api/tool-jobs/:jobId/result');
+    assert.ok(handler);
+    let packet: any;
+    await handler!(
+      { params: { jobId: job.jobId }, query: { waitMs: '10' } },
+      { json: (value: any) => { packet = value; return value; } },
+      (error: unknown) => { if (error) throw error; },
+    );
+
+    assert.equal(packet.ready, false);
+    assert.equal(packet.result, null);
+    assert.equal(packet.code, 'JOB_STILL_RUNNING');
+    assert.equal(packet.recommendedWaitMs, 30_000);
+    assert.match(packet.nextAction, /get_tool_job_result/i);
+    assert.equal('args' in packet, false);
+    assert.equal('lastLog' in packet, false);
+    assert.equal(Buffer.byteLength(JSON.stringify(packet), 'utf8') < 600, true);
+  } finally {
+    blocker.resolve();
     __setToolJobTestRunner(toolName, null);
   }
 });

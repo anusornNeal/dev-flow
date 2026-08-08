@@ -48,6 +48,23 @@ test('tool monitor summarizes repeated tool calls and duplicate bursts', () => {
   ]);
 });
 
+test('tool monitor groups response bytes by mode and tracks truncation', () => {
+  clearToolCallRecords();
+  const now = Date.now();
+  recordToolCall({ toolName: 'get_git_show', args: { responseMode: 'compact' }, status: 200, durationMs: 5, responseBytes: 4000, responseMode: 'compact', responseTruncated: true, timestamp: now });
+  recordToolCall({ toolName: 'get_git_show', args: { responseMode: 'standard' }, status: 200, durationMs: 6, responseBytes: 42000, responseMode: 'standard', responseTruncated: false, timestamp: now + 1 });
+
+  const summary = getToolCallSummary({ now: now + 10, windowMs: 1000 });
+  const gitShow = summary.topTools.find((entry) => entry.toolName === 'get_git_show');
+  assert.deepEqual(gitShow?.responseModes, { compact: 1, standard: 1 });
+  assert.equal(gitShow?.truncatedCount, 1);
+  assert.equal(gitShow?.maxResponseBytes, 42000);
+  assert.equal(gitShow?.p50ResponseBytes, 4000);
+  assert.equal(gitShow?.p95ResponseBytes, 42000);
+  assert.equal(summary.latestCalls[0].responseMode, 'standard');
+  assert.equal(summary.latestCalls[1].responseTruncated, true);
+});
+
 test('diagnostics expose local search backend fallback counters', () => {
   const diagnostics = getDevFlowDiagnostics();
   assert.ok(diagnostics.search);

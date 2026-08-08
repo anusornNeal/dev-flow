@@ -36,6 +36,18 @@ test('devflowContract exposes read_file_snippets_batch', () => {
   assert.ok(tool.inputSchema?.properties?.files?.items?.properties?.includeFileRef);
 });
 
+test('high-volume read tools default MCP requests to compact response mode', () => {
+  const read = getToolDefinitionByName('read_local_file');
+  const show = getToolDefinitionByName('get_git_show');
+  const prepare = getToolDefinitionByName('prepare_compact_edit');
+  const batchRead = getToolDefinitionByName('read_file_snippets_batch');
+  assert.equal(read?.buildHttpRequest({ filePath: 'foo.ts' }).path.includes('responseMode=compact'), true);
+  assert.equal(show?.buildHttpRequest({ commit: 'HEAD' }).path.includes('responseMode=compact'), true);
+  assert.equal((batchRead?.buildHttpRequest({ files: [{ filePath: 'foo.ts' }] }).body as any).responseMode, 'compact');
+  assert.equal((prepare?.buildHttpRequest({ v: 1, f: [['ref', [['R', 'a', 'b']]]] }).body as any).responseMode, 'compact');
+  assert.ok(show?.inputSchema?.properties?.responseMode);
+});
+
 test('devflowContract exposes repo_read_snapshot', () => {
   const tool = getToolDefinitionByName('repo_read_snapshot');
   assert.ok(tool);

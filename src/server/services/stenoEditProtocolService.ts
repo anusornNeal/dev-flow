@@ -180,6 +180,10 @@ export function decodeStenoEditRequest(
 }
 
 export type PrepareCompactEditResult = PreparedEditPlanResult & {
+  responseMode?: 'compact' | 'standard' | 'debug';
+  previewOmitted?: boolean;
+  previewBytes?: number;
+  returnedPreviewBytes?: number;
   compact?: StenoDiagnostics & {
     incomingBytes: number;
     expandedEditBytes: number;
@@ -201,8 +205,30 @@ export function prepareCompactEdit(state: AppState, args: Record<string, any>): 
     maxFileBytes: args.maxFileBytes,
     files: decoded.files,
   });
+  const responseMode = args.responseMode === 'compact' || args.responseMode === 'debug' ? args.responseMode : 'standard';
+  const previewBytes = Buffer.byteLength(JSON.stringify(result.files), 'utf8');
+  const files = responseMode === 'compact'
+    ? result.files.map((file: any) => ({
+      ok: file.ok,
+      dryRun: file.dryRun,
+      filePath: file.filePath,
+      changed: file.changed,
+      changedLines: file.changedLines,
+      operations: file.operations,
+      bytesBefore: file.bytesBefore,
+      bytesAfter: file.bytesAfter,
+      revisionBefore: file.revisionBefore,
+      error: file.error,
+    }))
+    : result.files;
+  const returnedPreviewBytes = Buffer.byteLength(JSON.stringify(files), 'utf8');
   return {
     ...result,
+    files,
+    responseMode,
+    previewOmitted: responseMode === 'compact',
+    previewBytes,
+    returnedPreviewBytes,
     compact: {
       ...decoded.diagnostics,
       incomingBytes,

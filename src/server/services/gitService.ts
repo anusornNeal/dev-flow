@@ -433,26 +433,34 @@ export function getGitShow(state: AppState, args: Record<string, any>) {
   }
 
   const gitArgs = ['show', '--format=%H%x00%aI%x00%an%x00%s', commit];
-
   const filePath = typeof args.path === 'string' ? args.path.trim() : '';
-  if (filePath) {
-    gitArgs.push('--', getRelativeGitPath(root, filePath));
-  }
+  if (filePath) gitArgs.push('--', getRelativeGitPath(root, filePath));
 
   const output = runGit(gitArgs, root);
-  const nullIndex = output.indexOf('\x00');
-  if (nullIndex === -1) {
-    return { root, commit: commit, diff: output };
-  }
-
-  const headerLine = output.slice(0, output.indexOf('\n'));
+  const responseMode = args.responseMode === 'compact' || args.responseMode === 'debug' ? args.responseMode : 'standard';
+  const requestedMaxBytes = Number.isFinite(Number(args.maxDiffBytes))
+    ? Math.max(1, Math.min(MAX_DIFF_BYTES, Number(args.maxDiffBytes)))
+    : MAX_DIFF_BYTES;
+  const maxBytes = responseMode === 'compact' ? Math.min(4_000, requestedMaxBytes) : requestedMaxBytes;
+  const firstLineEnd = output.indexOf('\n');
+  const headerLine = firstLineEnd >= 0 ? output.slice(0, firstLineEnd) : output;
   const [hash, date, author, ...messageParts] = headerLine.split('\x00');
-  const diff = output.slice(output.indexOf('\n') + 1);
-  const truncated = diff.length > MAX_DIFF_BYTES ? diff.slice(0, MAX_DIFF_BYTES) + '\n... (truncated)' : diff;
+  const rawDiff = firstLineEnd >= 0 ? output.slice(firstLineEnd + 1) : '';
+  const diffBytes = Buffer.byteLength(rawDiff, 'utf8');
+  const isTruncated = diffBytes > maxBytes;
+  const diff = isTruncated
+    ? `${Buffer.from(rawDiff, 'utf8').subarray(0, maxBytes).toString('utf8')}\n... (truncated)`
+    : rawDiff;
+  const returnedBytes = Buffer.byteLength(diff, 'utf8');
 
   return {
     root,
-    commit: { hash, date, author, message: messageParts.join(' '), diff: truncated },
+    responseMode,
+    truncated: isTruncated,
+    diffBytes,
+    returnedBytes,
+    omittedBytes: Math.max(0, diffBytes - Math.min(diffBytes, maxBytes)),
+    commit: { hash: hash || commit, date: date || '', author: author || '', message: messageParts.join(' '), diff },
   };
 }
 

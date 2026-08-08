@@ -11,7 +11,7 @@ const { executeAllMigrations } = await import('../../src/db/migrations/index.js'
 executeAllMigrations();
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
 createProject({ id: 'project-diff', name: 'Diff', repoUrl: 'https://example.com/diff', localPath: tempDir });
-const { getGitDiff } = await import('../../src/server/services/gitService.js');
+const { getGitDiff, getGitShow } = await import('../../src/server/services/gitService.js');
 
 function git(args: string[]) {
   const result = spawnSync('git', args, { cwd: tempDir, encoding: 'utf8', shell: false });
@@ -25,7 +25,10 @@ test.before(() => {
   fs.writeFileSync(path.join(tempDir, 'large.txt'), 'base\n', 'utf8');
   git(['add', '.']);
   git(['commit', '-m', 'initial']);
-  fs.writeFileSync(path.join(tempDir, 'large.txt'), `${'x'.repeat(6000)}\n`, 'utf8');
+  fs.writeFileSync(path.join(tempDir, 'large.txt'), `${'x'.repeat(12000)}\n`, 'utf8');
+  git(['add', 'large.txt']);
+  git(['commit', '-m', 'large change']);
+  fs.writeFileSync(path.join(tempDir, 'large.txt'), `${'y'.repeat(12000)}\n`, 'utf8');
 });
 
 test('getGitDiff compact mode caps returned diff and reports original bytes', () => {
@@ -36,6 +39,22 @@ test('getGitDiff compact mode caps returned diff and reports original bytes', ()
   assert.equal(result.truncated, true);
   assert.equal(result.diffBytes > result.returnedBytes, true);
   assert.equal(result.returnedBytes < 5000, true);
+});
+
+test('getGitShow compact mode preserves commit metadata while capping patch bytes', () => {
+  const state: any = { projectsCache: [{ id: 'project-diff', name: 'Diff', repoUrl: 'https://example.com/diff', localPath: tempDir }] };
+  const compact = getGitShow(state, { projectId: 'project-diff', commit: 'HEAD', responseMode: 'compact' });
+  const standard = getGitShow(state, { projectId: 'project-diff', commit: 'HEAD', responseMode: 'standard' });
+
+  assert.equal(compact.responseMode, 'compact');
+  assert.equal(compact.truncated, true);
+  assert.equal(typeof compact.commit.hash, 'string');
+  assert.equal(compact.commit.message, 'large change');
+  assert.equal(compact.diffBytes > compact.returnedBytes, true);
+  assert.equal(compact.returnedBytes < 5000, true);
+  assert.equal(standard.responseMode, 'standard');
+  assert.equal(standard.returnedBytes > compact.returnedBytes, true);
+  assert.equal(compact.returnedBytes / standard.returnedBytes < 0.6, true);
 });
 
 test.after(() => {

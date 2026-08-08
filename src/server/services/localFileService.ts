@@ -118,6 +118,8 @@ export type LocalFileReadResult = {
   fileRefCreatedAt?: string;
   fileRefExpiresAt?: string;
   fileRefReused?: boolean;
+  responseMode?: 'compact' | 'standard' | 'debug';
+  omittedBytes?: number;
 };
 
 function buildFileRevision(filePath: string, stat: fs.Stats): FileRevision {
@@ -772,7 +774,10 @@ export function readLocalFile(state: AppState, args: Record<string, any>): Local
   const stat = fs.statSync(targetPath);
   const revision = buildFileRevision(targetPath, stat);
   const mode = String(args.mode || 'content').toLowerCase();
-  const maxBytes = Number.isFinite(Number(args.maxBytes)) ? Math.max(1, Math.min(100_000, Number(args.maxBytes))) : 40_000;
+  const responseMode = args.responseMode === 'compact' || args.responseMode === 'debug' ? args.responseMode : 'standard';
+  const defaultMaxBytes = responseMode === 'compact' ? 4_000 : responseMode === 'debug' ? 100_000 : 40_000;
+  const requestedMaxBytes = Number.isFinite(Number(args.maxBytes)) ? Math.max(1, Math.min(100_000, Number(args.maxBytes))) : defaultMaxBytes;
+  const maxBytes = responseMode === 'compact' ? Math.min(4_000, requestedMaxBytes) : requestedMaxBytes;
   const hasLineWindow = args.startLine !== undefined || args.endLine !== undefined;
 
   if (mode === 'metadata') {
@@ -784,6 +789,8 @@ export function readLocalFile(state: AppState, args: Record<string, any>): Local
       modifiedAt: stat.mtime.toISOString(),
       revision: revision.token,
       fileRevision: revision,
+      responseMode,
+      omittedBytes: stat.size,
       ...includeFileRefMetadata(state, args, root, targetPath, revision),
     };
   }
@@ -830,6 +837,8 @@ export function readLocalFile(state: AppState, args: Record<string, any>): Local
     modifiedAt: stat.mtime.toISOString(),
     revision: revision.token,
     fileRevision: revision,
+    responseMode,
+    omittedBytes: truncatedByBytes && !hasLineWindow ? Math.max(0, stat.size - maxBytes) : 0,
     ...includeFileRefMetadata(state, args, root, targetPath, revision),
   };
 }
@@ -897,6 +906,7 @@ export function readFileSnippetsBatch(state: AppState, args: Record<string, any>
         startLine: entry.startLine,
         endLine: entry.endLine,
         maxBytes: readMaxBytes,
+        responseMode: entry.responseMode ?? args.responseMode,
         includeFileRef: entry.includeFileRef ?? args.includeFileRef,
       });
       const returnedBytes = Number(result.returnedBytes || 0);

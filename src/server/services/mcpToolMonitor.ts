@@ -17,6 +17,8 @@ interface ToolCallInput {
   cacheHit?: boolean;
   phase?: string;
   processSpawns?: number;
+  responseMode?: string;
+  responseTruncated?: boolean;
   timestamp?: number;
 }
 
@@ -29,6 +31,8 @@ interface ToolCallRecord {
   cacheHit?: boolean;
   phase?: string;
   processSpawns?: number;
+  responseMode?: string;
+  responseTruncated?: boolean;
   timestamp: number;
   inputHash: string;
 }
@@ -83,6 +87,8 @@ export function recordToolCall(input: ToolCallInput) {
     cacheHit: input.cacheHit,
     phase: input.phase,
     processSpawns: input.processSpawns,
+    responseMode: input.responseMode,
+    responseTruncated: input.responseTruncated,
     timestamp: input.timestamp ?? Date.now(),
     inputHash: hashText(stableStringify(input.args || {})),
   });
@@ -112,6 +118,10 @@ export function getToolCallSummary(options?: { now?: number; windowMs?: number }
     totalDurationMs: number;
     durationSamples: number[];
     responseBytes: number;
+    responseByteSamples: number[];
+    maxResponseBytes: number;
+    responseModes: Record<string, number>;
+    truncatedCount: number;
     totalInputBytes: number;
     avgInputBytes: number;
     maxInputBytes: number;
@@ -130,6 +140,10 @@ export function getToolCallSummary(options?: { now?: number; windowMs?: number }
       totalDurationMs: 0,
       durationSamples: [],
       responseBytes: 0,
+      responseByteSamples: [],
+      maxResponseBytes: 0,
+      responseModes: {},
+      truncatedCount: 0,
       totalInputBytes: 0,
       avgInputBytes: 0,
       maxInputBytes: 0,
@@ -141,7 +155,12 @@ export function getToolCallSummary(options?: { now?: number; windowMs?: number }
     tool.errorCount += record.status >= 400 ? 1 : 0;
     tool.totalDurationMs += record.durationMs;
     tool.durationSamples.push(record.durationMs);
-    tool.responseBytes += Number(record.responseBytes || 0);
+    const responseBytes = Number(record.responseBytes || 0);
+    tool.responseBytes += responseBytes;
+    tool.responseByteSamples.push(responseBytes);
+    tool.maxResponseBytes = Math.max(tool.maxResponseBytes, responseBytes);
+    if (record.responseMode) tool.responseModes[record.responseMode] = (tool.responseModes[record.responseMode] || 0) + 1;
+    tool.truncatedCount += record.responseTruncated === true ? 1 : 0;
     tool.totalInputBytes += record.inputBytes;
     tool.avgInputBytes = Math.round(tool.totalInputBytes / tool.count);
     tool.maxInputBytes = Math.max(tool.maxInputBytes, record.inputBytes);
@@ -184,10 +203,12 @@ export function getToolCallSummary(options?: { now?: number; windowMs?: number }
     totalCalls: recent.length,
     topTools: Array.from(byTool.values())
       .sort((left, right) => right.count - left.count)
-      .map(({ totalDurationMs, durationSamples, ...entry }) => ({
+      .map(({ totalDurationMs, durationSamples, responseByteSamples, ...entry }) => ({
         ...entry,
         p50DurationMs: percentile(durationSamples, 50),
         p95DurationMs: percentile(durationSamples, 95),
+        p50ResponseBytes: percentile(responseByteSamples, 50),
+        p95ResponseBytes: percentile(responseByteSamples, 95),
       }))
       .slice(0, 10),
     duplicateBursts,
@@ -200,6 +221,8 @@ export function getToolCallSummary(options?: { now?: number; windowMs?: number }
       cacheHit: record.cacheHit === true,
       phase: record.phase,
       processSpawns: Number(record.processSpawns || 0),
+      responseMode: record.responseMode,
+      responseTruncated: record.responseTruncated === true,
       inputHash: record.inputHash,
       timestamp: new Date(record.timestamp).toISOString(),
     })),

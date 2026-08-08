@@ -155,7 +155,7 @@ function stripToolOnlyArgs(args: Record<string, any>, keys: string[]) {
   return copy;
 }
 
-export const DEVFLOW_CONTRACT_VERSION = '2026-08-08.3';
+export const DEVFLOW_CONTRACT_VERSION = '2026-08-08.4';
 
 export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   {
@@ -1505,6 +1505,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
         startLine: { type: 'number', description: '1-based first line to return.' },
         endLine: { type: 'number', description: '1-based final line to return.' },
         maxBytes: { type: 'number', description: 'Maximum UTF-8 bytes of content to return.' },
+        responseMode: { type: 'string', enum: ['compact', 'standard', 'debug'], description: 'Agent default is compact (4 KB content cap); standard/debug preserve larger explicit reads.' },
         includeFileRef: { type: 'boolean', description: 'Opt in to an opaque short-lived fileRef bound to this exact project, canonical file path, and content revision for prepare_compact_edit.' },
       },
       required: ['filePath'],
@@ -1519,6 +1520,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
         startLine: args.startLine,
         endLine: args.endLine,
         maxBytes: args.maxBytes,
+        responseMode: args.responseMode || 'compact',
       }),
     }),
   },
@@ -1541,6 +1543,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
               startLine: { type: 'number', description: '1-based first line to return.' },
               endLine: { type: 'number', description: '1-based final line to return.' },
               maxBytes: { type: 'number', description: 'Maximum UTF-8 bytes of content to return for this file.' },
+              responseMode: { type: 'string', enum: ['compact', 'standard', 'debug'], description: 'Override batch response mode for this entry.' },
               includeFileRef: { type: 'boolean', description: 'Override batch includeFileRef for this entry.' },
             },
             anyOf: [
@@ -1551,6 +1554,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
         },
         maxFiles: { type: 'number', description: 'Maximum file entries to process, capped at 25.' },
         includeFileRef: { type: 'boolean', description: 'Issue revision-bound Steno fileRefs for successful entries in this batch.' },
+        responseMode: { type: 'string', enum: ['compact', 'standard', 'debug'], description: 'Agent default is compact for every entry unless overridden per file.' },
         allowPartial: { type: 'boolean', description: 'Return per-file errors while preserving successful reads instead of failing the whole batch.' },
         maxTotalBytes: { type: 'number', description: 'Aggregate returned content-byte budget for the batch, capped at 500000.' },
       },
@@ -1560,7 +1564,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
     buildHttpRequest: (args) => ({
       method: 'POST',
       path: '/api/local-files/read-batch',
-      body: args,
+      body: { ...args, responseMode: args.responseMode || 'compact' },
     }),
   },
   {
@@ -1842,11 +1846,12 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
         ttlMs: { type: 'number', description: 'Optional prepared-plan TTL; bounded by DevFlow (default 180s, max 300s).' },
         maxPayloadBytes: { type: 'number', description: 'Maximum expanded safe-edit payload bytes per file.' },
         maxFileBytes: { type: 'number', description: 'Maximum target file size per file.' },
+        responseMode: { type: 'string', enum: ['compact', 'standard', 'debug'], description: 'Agent default is compact and omits expanded before/after previews while retaining plan/file safety metadata.' },
       },
       required: ['v', 'f'],
     },
     outputSchema: { type: 'object' },
-    buildHttpRequest: (args) => ({ method: 'POST', path: '/api/local-files/compact-edit/prepare', body: args }),
+    buildHttpRequest: (args) => ({ method: 'POST', path: '/api/local-files/compact-edit/prepare', body: { ...args, responseMode: args.responseMode || 'compact' } }),
   },
   {
     name: 'apply_prepared_edit',
@@ -2096,6 +2101,8 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
         ...projectIdentifierProperties,
         commit: { type: 'string', description: 'Commit hash.' },
         path: { type: 'string', description: 'Relative file or directory path to limit output to.' },
+        responseMode: { type: 'string', enum: ['compact', 'standard', 'debug'], description: 'Agent default is compact and caps returned patch content to 4 KB.' },
+        maxDiffBytes: { type: 'number', description: 'Maximum patch bytes before mode cap, bounded by DevFlow.' },
       },
       required: ['commit'],
     },
@@ -2103,7 +2110,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
     lightweight: true,
     buildHttpRequest: (args) => ({
       method: 'GET',
-      path: withQuery('/api/git/show', args),
+      path: withQuery('/api/git/show', { ...args, responseMode: args.responseMode || 'compact' }),
     }),
   },
   {

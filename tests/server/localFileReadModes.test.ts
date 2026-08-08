@@ -24,6 +24,7 @@ fs.writeFileSync(path.join(tempDir, 'sample.txt'), ['one', 'two', 'three', 'four
 fs.writeFileSync(path.join(tempDir, 'other.txt'), ['alpha', 'beta', 'gamma'].join('\n'), 'utf8');
 fs.mkdirSync(path.join(tempDir, 'nested', 'folder'), { recursive: true });
 fs.writeFileSync(path.join(tempDir, 'nested', 'folder', 'slash.txt'), 'slash path', 'utf8');
+fs.writeFileSync(path.join(tempDir, 'large-read.txt'), 'z'.repeat(12_000), 'utf8');
 for (let index = 0; index < 8; index += 1) {
   fs.writeFileSync(path.join(tempDir, `batch-${index}.txt`), `batch-${index}-`.repeat(20), 'utf8');
 }
@@ -183,6 +184,39 @@ test('readFileSnippetsBatch enforces aggregate byte budget across 8 edit targets
   assert.equal(result.truncated, true);
   assert.equal(result.files.some((entry: any) => entry.error?.code === 'BATCH_BYTE_LIMIT'), true);
   console.log(`[read-bootstrap] files=8 separateCalls=8 batchCalls=1 bytes=${result.totalReturnedBytes}/${result.maxTotalBytes}`);
+});
+
+test('readFileSnippetsBatch compact response mode caps large target content', () => {
+  const result = readFileSnippetsBatch(state, {
+    projectId: 'project-read-1',
+    responseMode: 'compact',
+    files: [{ filePath: 'large-read.txt' }],
+  });
+  assert.equal(result.files[0].responseMode, 'compact');
+  assert.equal(result.files[0].truncated, true);
+  assert.equal(result.files[0].returnedBytes < 5_000, true);
+});
+
+test('readLocalFile compact response mode caps content while retaining revision metadata', () => {
+  const compact = readLocalFile(state, {
+    projectId: 'project-read-1',
+    filePath: 'large-read.txt',
+    responseMode: 'compact',
+  });
+  const standard = readLocalFile(state, {
+    projectId: 'project-read-1',
+    filePath: 'large-read.txt',
+    responseMode: 'standard',
+  });
+
+  assert.equal(compact.responseMode, 'compact');
+  assert.equal(compact.truncated, true);
+  assert.equal(compact.returnedBytes! < 5_000, true);
+  assert.equal(compact.omittedBytes! > 0, true);
+  assert.equal(compact.revision, compact.fileRevision.token);
+  assert.equal(standard.responseMode, 'standard');
+  assert.equal(standard.returnedBytes! > compact.returnedBytes!, true);
+  assert.equal(compact.returnedBytes! / standard.returnedBytes! < 0.6, true);
 });
 
 test('readLocalFile can opt in to a revision-bound opaque fileRef', () => {

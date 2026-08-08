@@ -294,6 +294,12 @@ export function createDevFlowMcpServer(baseUrl: string) {
       inputBytes,
       cacheHit: parsedBody && typeof parsedBody === 'object' && (parsedBody as any).cache?.hit === true,
       processSpawns: parsedBody && typeof parsedBody === 'object' ? Number((parsedBody as any).processSpawns || 0) : 0,
+      responseMode: parsedBody && typeof parsedBody === 'object'
+        ? String((parsedBody as any).responseMode || args.responseMode || '') || undefined
+        : String(args.responseMode || '') || undefined,
+      responseTruncated: parsedBody && typeof parsedBody === 'object'
+        ? ((parsedBody as any).truncated === true || (parsedBody as any).previewOmitted === true)
+        : false,
     });
     console.log(`[mcp] cid=${correlationId} tool=${toolName} status=${response.status} durationMs=${durationMs}`);
 

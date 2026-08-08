@@ -57,15 +57,18 @@ test('contract exposes self-describing compact prepare and plan-id-only apply to
   assert.match(prepare.description, /R.*IB.*IA.*DB/s);
   assert.match(prepare.description, /string table|`s`/i);
   assert.ok(read?.inputSchema?.properties?.includeFileRef);
+  assert.ok(read?.inputSchema?.properties?.responseMode);
+  assert.ok(prepare.inputSchema?.properties?.responseMode);
 
   const prepareRequest = prepare.buildHttpRequest({ projectId: project.id, v: 1, f: [['ref', [['R', 'a', 'b']]]] });
+  assert.equal((prepareRequest.body as any).responseMode, 'compact');
   assert.equal(prepareRequest.method, 'POST');
   assert.equal(prepareRequest.path, '/api/local-files/compact-edit/prepare');
 
   const applyRequest = apply.buildHttpRequest({ editPlanId: 'edit-plan-example' });
   assert.deepEqual(applyRequest.body, { editPlanId: 'edit-plan-example' });
   assert.equal(Object.keys(apply.inputSchema.properties).sort().join(','), 'editPlanId');
-  assert.match(getCapabilityCatalog().contractVersion, /^2026-08-08\.3$/);
+  assert.match(getCapabilityCatalog().contractVersion, /^2026-08-08\.4$/);
 });
 
 test('REST compact flow reads a fileRef, prepares without writes, applies by id only, then rejects replay', async () => {
@@ -113,6 +116,30 @@ test('REST compact flow reads a fileRef, prepares without writes, applies by id 
   assert.equal(replayResponse.status, 200);
   const replay = await json(replayResponse);
   assert.equal(replay.code, 'EDIT_PLAN_CONSUMED');
+});
+
+test('compact Steno prepare omits expanded previews but retains safe apply metadata', async () => {
+  const readResponse = await fetch(`${baseUrl}/api/local-files/read?projectId=${project.id}&filePath=sample.txt&includeFileRef=true`);
+  const readBody = await json(readResponse);
+  const response = await fetch(`${baseUrl}/api/local-files/compact-edit/prepare`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      projectId: project.id,
+      responseMode: 'compact',
+      v: 1,
+      f: [[readBody.fileRef, [['R', 'const timeout = 30000', 'const timeout = 45000', 1]]]],
+    }),
+  });
+  assert.equal(response.status, 200);
+  const prepared = await json(response);
+  assert.equal(prepared.responseMode, 'compact');
+  assert.equal(prepared.previewOmitted, true);
+  assert.match(prepared.editPlanId, /^edit-plan-/);
+  assert.equal(prepared.files.length, 1);
+  assert.equal(prepared.files[0].filePath, 'sample.txt');
+  assert.equal(prepared.files[0].preview, undefined);
+  assert.equal(prepared.previewBytes > prepared.returnedPreviewBytes, true);
 });
 
 test.after(async () => {

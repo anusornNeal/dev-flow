@@ -2491,7 +2491,7 @@ export function getMcpToolList(profile: DevFlowToolProfile = 'full') {
     let description = tool.description;
 
     if (tool.executionPolicy?.mode === 'job') {
-      description = `${description}\n\nNote: This tool may run asynchronously. If it takes longer than 20 seconds, it will return a \`jobId\` instead of the final result. If it returns a \`jobId\`, you must use \`get_tool_job_status\`, \`get_tool_job_log\`, and \`get_tool_job_result\` to retrieve the outcome.`;
+      description = `${description}\n\nNote: This tool may run asynchronously. If it takes longer than 20 seconds, it may return a \`jobId\` instead of the final result. Use \`get_tool_job_result(jobId, waitMs=30000)\` as the normal completion path; use \`get_tool_job_status\` or \`get_tool_job_log\` only when diagnostic detail is needed.`;
       if (outputSchema) {
         outputSchema = {
           anyOf: [
@@ -2616,7 +2616,7 @@ export function getCapabilityCatalog() {
       let description = tool.description;
 
       if (tool.executionPolicy?.mode === 'job') {
-        description = `${description}\n\nNote: This tool may run asynchronously. If it takes longer than 20 seconds, it will return a \`jobId\` instead of the final result. If it returns a \`jobId\`, you must use \`get_tool_job_status\`, \`get_tool_job_log\`, and \`get_tool_job_result\` to retrieve the outcome.`;
+        description = `${description}\n\nNote: This tool may run asynchronously. If it takes longer than 20 seconds, it may return a \`jobId\` instead of the final result. Use \`get_tool_job_result(jobId, waitMs=30000)\` as the normal completion path; use \`get_tool_job_status\` or \`get_tool_job_log\` only when diagnostic detail is needed.`;
         if (outputSchema) {
           outputSchema = {
             anyOf: [

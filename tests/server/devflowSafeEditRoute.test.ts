@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getMcpToolList, getToolDefinitionByName } from '../../src/server/contracts/devflowContract.js';
+import { getCapabilityCatalog, getMcpToolList, getToolDefinitionByName } from '../../src/server/contracts/devflowContract.js';
 
 test('devflowContract exposes safe_edit_local_file', () => {
   const tool = getToolDefinitionByName('safe_edit_local_file');
@@ -121,6 +121,14 @@ test('get_tool_job_result is the normal long-poll completion path', () => {
   assert.equal(result?.buildHttpRequest({ jobId: 'job-1', waitMs: 30000 }).path, '/api/tool-jobs/job-1/result?waitMs=30000');
   assert.match(result?.description || '', /normal completion|long-poll/i);
   assert.match(status?.description || '', /diagnostic/i);
+});
+
+test('capability catalog async guidance uses result long-poll as the normal completion path', () => {
+  const catalogTool = getCapabilityCatalog().tools.find((tool) => tool.name === 'run_project_command');
+  assert.ok(catalogTool);
+  assert.match(catalogTool.description, /get_tool_job_result.*waitMs=30000/i);
+  assert.match(catalogTool.description, /diagnostic/i);
+  assert.doesNotMatch(catalogTool.description, /must use.*get_tool_job_status.*get_tool_job_log.*get_tool_job_result/i);
 });
 
 test('devflowContract exposes complete_task_review', () => {

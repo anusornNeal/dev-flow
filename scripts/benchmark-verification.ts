@@ -235,7 +235,8 @@ try {
     generatedAt: new Date().toISOString(),
     baseline: {
       recentRunProjectCommandP50Ms: 11_987,
-      recentRunProjectCommandP95Ms: 20_130,      preChangeObservedReadQueueWaitMs: 45_722,
+      recentRunProjectCommandP95Ms: 20_130,
+      preChangeObservedReadQueueWaitMs: 45_722,
       preChangeColdTypecheckMs: 7_336,
       preChangeColdLintMs: 7_391,
       preChangeIncompleteFullVerifyMs: 70_471,

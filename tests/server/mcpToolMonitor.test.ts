@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   clearToolCallRecords,
+  getDevFlowDiagnostics,
   getToolCallSummary,
   recordToolCall,
 } from '../../src/server/services/mcpToolMonitor.js';
@@ -45,4 +46,11 @@ test('tool monitor summarizes repeated tool calls and duplicate bursts', () => {
   assert.deepEqual(summary.recommendations, [
     'Replace repeated get_git_status/get_git_branch calls with get_project_start_context for startup context.',
   ]);
+});
+
+test('diagnostics expose local search backend fallback counters', () => {
+  const diagnostics = getDevFlowDiagnostics();
+  assert.ok(diagnostics.search);
+  assert.equal(typeof diagnostics.search.fallbackCount, 'number');
+  assert.equal(typeof diagnostics.search.infrastructureFailureCount, 'number');
 });

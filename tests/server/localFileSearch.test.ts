@@ -11,7 +11,7 @@ const { executeAllMigrations } = await import('../../src/db/migrations/index.js'
 executeAllMigrations();
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
 createProject({ id: 'project-search-1', name: 'Search Fixture', repoUrl: 'https://example.com/search', localPath: tempDir });
-const { clearLocalFileSearchCache, getLocalSearchRuntimeStatus, searchLocalFiles, searchLocalFilesAsync, writeLocalFile } = await import('../../src/server/services/localFileService.js');
+const { clearLocalFileSearchCache, clearLocalSearchRuntimeState, getLocalSearchRuntimeStatus, searchLocalFiles, searchLocalFilesAsync, writeLocalFile } = await import('../../src/server/services/localFileService.js');
 
 const state: any = {
   projectsCache: [
@@ -24,6 +24,7 @@ fs.writeFileSync(path.join(tempDir, 'b.txt'), ['needle four', 'needle five', 'ot
 
 test.beforeEach(() => {
   clearLocalFileSearchCache();
+  clearLocalSearchRuntimeState();
 });
 
 test('getLocalSearchRuntimeStatus resolves a DevFlow-bundled ripgrep before PATH', () => {
@@ -118,6 +119,56 @@ test('searchLocalFilesAsync falls back when no ripgrep source is available', asy
     else process.env.ProgramFiles = previousProgramFiles;
   }
 });
+test('searchLocalFiles rejects invalid regex before changing search backend semantics', () => {
+  assert.throws(
+    () => searchLocalFiles(state, { projectId: 'project-search-1', query: '(', limit: 2 }),
+    (error: any) => error?.status === 400 && error?.payload?.code === 'SEARCH_QUERY_INVALID',
+  );
+});
+
+test('searchLocalFiles falls back on ripgrep runtime failure and opens a short circuit', () => {
+  const previousRgPath = process.env.DEVFLOW_RG_PATH;
+  process.env.DEVFLOW_RG_PATH = process.execPath;
+  try {
+    const first = searchLocalFiles(state, { projectId: 'project-search-1', query: 'needle', limit: 2 });
+    assert.equal(first.backend, 'fallback');
+    assert.equal(first.fallbackReason, 'ripgrep-runtime-failure');
+    const afterFailure = getLocalSearchRuntimeStatus();
+    assert.equal(afterFailure.circuitOpen, true);
+    assert.equal(afterFailure.infrastructureFailureCount, 1);
+
+    const second = searchLocalFiles(state, { projectId: 'project-search-1', query: 'other', limit: 2 });
+    assert.equal(second.backend, 'fallback');
+    assert.equal(second.fallbackReason, 'circuit-open');
+    const afterCircuit = getLocalSearchRuntimeStatus();
+    assert.equal(afterCircuit.infrastructureFailureCount, 1);
+    assert.equal(afterCircuit.circuitBypassCount >= 1, true);
+  } finally {
+    if (previousRgPath === undefined) delete process.env.DEVFLOW_RG_PATH;
+    else process.env.DEVFLOW_RG_PATH = previousRgPath;
+    clearLocalSearchRuntimeState();
+  }
+});
+
+test('searchLocalFilesAsync falls back in the same call on ripgrep runtime failure', async () => {
+  const previousRgPath = process.env.DEVFLOW_RG_PATH;
+  process.env.DEVFLOW_RG_PATH = process.execPath;
+  try {
+    const result = await searchLocalFilesAsync(
+      state,
+      { projectId: 'project-search-1', query: 'needle', limit: 2 },
+      { stdout: () => {}, stderr: () => {} },
+      () => {},
+    );
+    assert.equal(result.backend, 'fallback');
+    assert.equal(result.fallbackReason, 'ripgrep-runtime-failure');
+  } finally {
+    if (previousRgPath === undefined) delete process.env.DEVFLOW_RG_PATH;
+    else process.env.DEVFLOW_RG_PATH = previousRgPath;
+    clearLocalSearchRuntimeState();
+  }
+});
+
 test('searchLocalFiles returns cache metadata on repeated identical searches', () => {
   const first = searchLocalFiles(state, {
     projectId: 'project-search-1',
@@ -216,10 +267,6 @@ test('writeLocalFile preserves revision for identical existing content', () => {
   assert.equal(second.created, false);
   assert.equal(second.changed, false);
   assert.equal(second.revision, first.revision);
-});
-
-test.after(() => {
-  fs.rmSync(tempDir, { recursive: true, force: true });
 });
 
 // SQLite keeps a process-level connection open on Windows; OS temp cleanup owns tempDir.

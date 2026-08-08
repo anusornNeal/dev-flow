@@ -1,5 +1,6 @@
 import db from '../../db/index';
 import { getJobMetrics } from './mcpToolJobService';
+import { getLocalSearchRuntimeStatus } from './localFileService';
 
 const MAX_RECORDS = 500;
 const DEFAULT_WINDOW_MS = 10 * 60 * 1000;
@@ -230,6 +231,7 @@ export function getDevFlowDiagnostics(options?: { now?: number; windowMs?: numbe
 
   return {
     generatedAt: new Date(now).toISOString(),
+    search: getLocalSearchRuntimeStatus(),
     mcp: {
       queueDepth: (jobMetrics as any).queueDepth,
       activeJobs: (jobMetrics as any).activeJobs,

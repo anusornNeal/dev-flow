@@ -47,8 +47,10 @@ const SEARCH_CACHE_TTL_MS = 30_000;
 const SEARCH_CACHE_MAX_ENTRIES = 100;
 const FALLBACK_SEARCH_MAX_FILES = 5_000;
 const FALLBACK_SEARCH_MAX_FILE_BYTES = 200 * 1024;
+const RIPGREP_FAILURE_COOLDOWN_MS = 5_000;
 
 type SearchBackend = 'ripgrep' | 'fallback';
+type SearchFallbackReason = 'ripgrep-unavailable' | 'ripgrep-exec-error' | 'ripgrep-runtime-failure' | 'circuit-open';
 
 type RipgrepResolution = {
   key: string;
@@ -57,6 +59,14 @@ type RipgrepResolution = {
 };
 
 let ripgrepResolutionCache: RipgrepResolution | null = null;
+let ripgrepFailureCircuit: { path: string; reason: string; openUntil: number } | null = null;
+const localSearchRuntimeMetrics = {
+  fallbackCount: 0,
+  infrastructureFailureCount: 0,
+  circuitBypassCount: 0,
+  lastFallbackReason: null as SearchFallbackReason | null,
+};
+
 type SearchResult = {
   root: string;
   path: string;
@@ -67,6 +77,7 @@ type SearchResult = {
   matches: Array<{ path: string; line: number; preview: string }>;
   terminatedAfterLimit?: boolean;
   backend?: SearchBackend;
+  fallbackReason?: SearchFallbackReason;
   cache?: {
     hit: boolean;
     generatedAt: string;
@@ -297,13 +308,69 @@ function resolveRipgrepExecutable() {
   return executable;
 }
 
+export function clearLocalSearchRuntimeState() {
+  ripgrepResolutionCache = null;
+  ripgrepFailureCircuit = null;
+  localSearchRuntimeMetrics.fallbackCount = 0;
+  localSearchRuntimeMetrics.infrastructureFailureCount = 0;
+  localSearchRuntimeMetrics.circuitBypassCount = 0;
+  localSearchRuntimeMetrics.lastFallbackReason = null;
+}
+
+function getActiveRipgrepCircuit(ripgrepPath: string | null, now = Date.now()) {
+  if (!ripgrepPath || !ripgrepFailureCircuit || ripgrepFailureCircuit.path !== ripgrepPath) return null;
+  if (ripgrepFailureCircuit.openUntil <= now) {
+    ripgrepFailureCircuit = null;
+    return null;
+  }
+  return ripgrepFailureCircuit;
+}
+
+function recordSearchFallback(reason: SearchFallbackReason) {
+  localSearchRuntimeMetrics.fallbackCount += 1;
+  localSearchRuntimeMetrics.lastFallbackReason = reason;
+  if (reason === 'circuit-open') localSearchRuntimeMetrics.circuitBypassCount += 1;
+}
+
+function recordRipgrepInfrastructureFailure(ripgrepPath: string, reason: string) {
+  localSearchRuntimeMetrics.infrastructureFailureCount += 1;
+  ripgrepFailureCircuit = {
+    path: ripgrepPath,
+    reason,
+    openUntil: Date.now() + RIPGREP_FAILURE_COOLDOWN_MS,
+  };
+}
+
+function markRipgrepSuccess(ripgrepPath: string) {
+  if (ripgrepFailureCircuit?.path === ripgrepPath) ripgrepFailureCircuit = null;
+}
+
+function isRipgrepQueryFailure(stderr: string) {
+  return /regex parse error|error parsing regex|invalid regex|unclosed group|unrecognized escape|repetition operator|look-around|backreferences? (?:are|is) not supported/i.test(stderr);
+}
+
 export function getLocalSearchRuntimeStatus() {
-  const ripgrepPath = resolveRipgrepExecutable();
+  const resolvedRipgrepPath = resolveRipgrepExecutable();
+  const circuit = getActiveRipgrepCircuit(resolvedRipgrepPath);
+  const ripgrepPath = circuit ? null : resolvedRipgrepPath;
+  const fallbackReason: SearchFallbackReason | null = circuit
+    ? 'circuit-open'
+    : resolvedRipgrepPath
+      ? null
+      : 'ripgrep-unavailable';
   return {
     backend: (ripgrepPath ? 'ripgrep' : 'fallback') as SearchBackend,
     ripgrepPath,
+    ripgrepCandidatePath: circuit ? resolvedRipgrepPath : null,
     ripgrepSource: ripgrepResolutionCache?.source || null,
     fallbackAvailable: true,
+    fallbackReason,
+    circuitOpen: Boolean(circuit),
+    circuitOpenUntil: circuit ? new Date(circuit.openUntil).toISOString() : null,
+    fallbackCount: localSearchRuntimeMetrics.fallbackCount,
+    infrastructureFailureCount: localSearchRuntimeMetrics.infrastructureFailureCount,
+    circuitBypassCount: localSearchRuntimeMetrics.circuitBypassCount,
+    lastFallbackReason: localSearchRuntimeMetrics.lastFallbackReason,
   };
 }
 
@@ -882,6 +949,22 @@ export function searchLocalFiles(state: AppState, args: Record<string, any>) {
   const cached = getCachedSearchResult(cacheKey);
   if (cached) return cached;
 
+  const fallbackSearch = (reason: SearchFallbackReason) => {
+    recordSearchFallback(reason);
+    const fallback = searchLocalFilesFallback(root, searchPath, query, limit, args);
+    return rememberSearchResult(cacheKey, {
+      root,
+      path: path.relative(root, searchPath) || '.',
+      query,
+      count: fallback.matches.length,
+      scannedMatchCount: fallback.scannedMatchCount,
+      truncated: fallback.truncated,
+      backend: 'fallback',
+      fallbackReason: reason,
+      matches: fallback.matches,
+    });
+  };
+
   if (runtime.ripgrepPath) {
     const rg = spawnSync(runtime.ripgrepPath, buildRipgrepArgs(query, searchPath, limit, args), {
       cwd: root,
@@ -891,12 +974,19 @@ export function searchLocalFiles(state: AppState, args: Record<string, any>) {
     });
 
     if (rg.error) {
-      throw createApiError(500, 'SEARCH_EXEC_ERROR', 'Failed to execute ripgrep.', { details: rg.error.message });
+      recordRipgrepInfrastructureFailure(runtime.ripgrepPath, rg.error.message);
+      return fallbackSearch('ripgrep-exec-error');
     }
     if (rg.status !== 0 && rg.status !== 1) {
-      throw createApiError(500, 'SEARCH_FAILED', 'ripgrep search failed.', { details: { exitCode: rg.status, stderr: rg.stderr?.trim() } });
+      const stderr = rg.stderr?.trim() || '';
+      if (isRipgrepQueryFailure(stderr)) {
+        throw createApiError(400, 'SEARCH_QUERY_INVALID', 'Search query is not valid for ripgrep.', { details: { exitCode: rg.status, stderr } });
+      }
+      recordRipgrepInfrastructureFailure(runtime.ripgrepPath, stderr || `exit ${rg.status}`);
+      return fallbackSearch('ripgrep-runtime-failure');
     }
 
+    markRipgrepSuccess(runtime.ripgrepPath);
     const { matches, scannedMatchCount, truncated } = parseRipgrepMatches(rg.stdout || '', root, limit);
     return rememberSearchResult(cacheKey, {
       root,
@@ -910,17 +1000,7 @@ export function searchLocalFiles(state: AppState, args: Record<string, any>) {
     });
   }
 
-  const fallback = searchLocalFilesFallback(root, searchPath, query, limit, args);
-  return rememberSearchResult(cacheKey, {
-    root,
-    path: path.relative(root, searchPath) || '.',
-    query,
-    count: fallback.matches.length,
-    scannedMatchCount: fallback.scannedMatchCount,
-    truncated: fallback.truncated,
-    backend: 'fallback',
-    matches: fallback.matches,
-  });
+  return fallbackSearch((runtime.fallbackReason || 'ripgrep-unavailable') as SearchFallbackReason);
 }
 
 export async function searchLocalFilesAsync(state: AppState, args: Record<string, any>, logger: { stdout: (data: string) => void, stderr: (data: string) => void }, setCancelFn: (fn: () => void) => void): Promise<any> {
@@ -937,7 +1017,8 @@ export async function searchLocalFilesAsync(state: AppState, args: Record<string
   const cached = getCachedSearchResult(cacheKey);
   if (cached) return cached;
 
-  if (!runtime.ripgrepPath) {
+  const fallbackSearch = (reason: SearchFallbackReason) => {
+    recordSearchFallback(reason);
     const fallback = searchLocalFilesFallback(root, searchPath, query, limit, args);
     return rememberSearchResult(cacheKey, {
       root,
@@ -948,8 +1029,13 @@ export async function searchLocalFilesAsync(state: AppState, args: Record<string
       truncated: fallback.truncated,
       terminatedAfterLimit: fallback.truncated && fallback.matches.length >= limit,
       backend: 'fallback',
+      fallbackReason: reason,
       matches: fallback.matches,
     });
+  };
+
+  if (!runtime.ripgrepPath) {
+    return fallbackSearch((runtime.fallbackReason || 'ripgrep-unavailable') as SearchFallbackReason);
   }
 
   return new Promise((resolve, reject) => {
@@ -961,6 +1047,7 @@ export async function searchLocalFilesAsync(state: AppState, args: Record<string
     const matches: Array<{ path: string; line: number; preview: string }> = [];
     let scannedMatchCount = 0;
     let lineBuffer = '';
+    let stderrBuffer = '';
     let resolved = false;
     let terminatedAfterLimit = false;
 
@@ -1014,13 +1101,16 @@ export async function searchLocalFilesAsync(state: AppState, args: Record<string
     });
 
     child.stderr.on('data', (data) => {
-      logger.stderr(data.toString('utf8'));
+      const chunk = data.toString('utf8');
+      stderrBuffer += chunk;
+      logger.stderr(chunk);
     });
 
     child.on('error', (err) => {
       if (resolved) return;
+      recordRipgrepInfrastructureFailure(runtime.ripgrepPath!, err.message);
       resolved = true;
-      reject(createApiError(500, 'SEARCH_EXEC_ERROR', 'Failed to execute ripgrep.', { details: err.message }));
+      resolve(fallbackSearch('ripgrep-exec-error'));
     });
 
     child.on('close', (code) => {
@@ -1029,10 +1119,18 @@ export async function searchLocalFilesAsync(state: AppState, args: Record<string
       }
       if (resolved) return;
       if (code !== 0 && code !== 1 && !terminatedAfterLimit) {
+        const stderr = stderrBuffer.trim();
+        if (isRipgrepQueryFailure(stderr)) {
+          resolved = true;
+          reject(createApiError(400, 'SEARCH_QUERY_INVALID', 'Search query is not valid for ripgrep.', { details: { exitCode: code, stderr } }));
+          return;
+        }
+        recordRipgrepInfrastructureFailure(runtime.ripgrepPath!, stderr || `exit ${code}`);
         resolved = true;
-        reject(createApiError(500, 'SEARCH_FAILED', 'ripgrep search failed.', { details: { exitCode: code } }));
+        resolve(fallbackSearch('ripgrep-runtime-failure'));
         return;
       }
+      if (runtime.ripgrepPath) markRipgrepSuccess(runtime.ripgrepPath);
       finish();
     });
   });

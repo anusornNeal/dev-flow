@@ -10,7 +10,7 @@ import { applyAndVerifyAsync } from './applyAndVerifyService';
 import { prepareCompactEdit } from './stenoEditProtocolService';
 
 // Import async runners (we will define these later in their respective files)
-import { runProjectCommandAsync } from './projectCommandService';
+import { getProjectCommandExecutionIdentity, runProjectCommandAsync } from './projectCommandService';
 import { applyLocalPatchAsync } from './localPatchService';
 import { searchLocalFilesAsync } from './localFileService';
 import { commitGitChanges, ensureGitBranch, pushGitBranch } from './gitService';
@@ -76,8 +76,19 @@ function notifyJobWaiters(jobId: string) {
 function singleFlightKeyFor(state: AppState, toolName: string, args: any, kind: JobKind, resourceKey: string) {
   const enabled = kind === 'repo-read'
     ? args?.singleFlight !== false
-    : kind === 'repo-command' && args?.singleFlight === true;
+    : kind === 'repo-command' && toolName === 'run_project_command' && args?.singleFlight !== false;
   if (!enabled || !resourceKey.startsWith('repo:') || resourceKey === 'repo:unknown') return null;
+
+  if (kind === 'repo-command' && toolName === 'run_project_command') {
+    try {
+      const executionIdentity = getProjectCommandExecutionIdentity(state, args);
+      if (!executionIdentity) return null;
+      return createHash('sha256').update(stableStringify({ resourceKey, toolName, kind, executionKey: executionIdentity.key })).digest('hex');
+    } catch {
+      return null;
+    }
+  }
+
   let root: string;
   try {
     root = resolveProjectRoot(state, args);

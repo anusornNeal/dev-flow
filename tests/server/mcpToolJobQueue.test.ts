@@ -315,6 +315,36 @@ test('mcpToolJobService - identical safe in-flight reads use leader/follower sin
   }
 });
 
+test('mcpToolJobService - equivalent repo-command verification uses single-flight by default', async () => {
+  const root = process.cwd();
+  const state = makeState(root);
+  const blocker = deferred();
+  let starts = 0;
+  __setToolJobTestRunner('run_project_command', async () => {
+    starts += 1;
+    await blocker.promise;
+    return { ok: true, shared: 'verification' };
+  });
+
+  try {
+    const args = { localPath: root, command: 'typecheck' };
+    const first = enqueueToolJob(state, 'run_project_command', args, 'repo-command');
+    const second = enqueueToolJob(state, 'run_project_command', args, 'repo-command');
+    assert.notStrictEqual(first.jobId, second.jobId);
+    assert.strictEqual(second.sharedWith, first.jobId);
+
+    await waitUntil(() => starts === 1, 'Expected one repo-command leader execution');
+    blocker.resolve();
+    await waitForStatus(first.jobId, 'succeeded');
+    await waitForStatus(second.jobId, 'succeeded');
+    assert.strictEqual(starts, 1);
+    assert.deepStrictEqual(readJobResult(second.jobId)?.result, { ok: true, shared: 'verification' });
+  } finally {
+    blocker.resolve();
+    __setToolJobTestRunner('run_project_command', null);
+  }
+});
+
 test('mcpToolJobService - stress read/write/command queue ordering on one repo', async () => {
   const root = makeTempRepo('stress-same-repo');
   const state = makeState(root);

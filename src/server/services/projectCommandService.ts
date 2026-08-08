@@ -338,49 +338,90 @@ function resolveOutputBudget(args: Record<string, any>, resolvedCommand: Resolve
   };
 }
 
-function commandCacheContext(
+export type ProjectCommandExecutionIdentity = {
+  key: string;
+  repoRevision: string;
+  semanticKey: string;
+  command: string;
+};
+
+function buildProjectCommandExecutionIdentity(
   root: string,
   resolvedCommand: ResolvedCommand,
   cwdPath: string,
   timeoutMs: number,
   maxOutputBytes: number,
-  args: Record<string, any>,
-) {
-  const enabled = args.cacheResult === true || String(args.cacheResult).toLowerCase() === 'true';
-  if (!enabled) return null;
+  responseMode: 'compact' | 'standard' | 'debug',
+): ProjectCommandExecutionIdentity | null {
   let revision;
   try {
     revision = getRepoRevisionForRoot(root);
   } catch {
     return null;
   }
+  const semanticKey = semanticKeyForResolvedCommand(root, resolvedCommand, cwdPath);
   const identity = {
     repoRevision: revision.token,
-    command: resolvedCommand.command,
-    executable: resolvedCommand.executable,
-    args: resolvedCommand.args,
+    semanticKey,
     cwd: path.relative(root, cwdPath) || '.',
     timeoutMs,
     maxOutputBytes,
+    responseMode,
     source: resolvedCommand.source,
     configPath: resolvedCommand.configPath,
     platform: process.platform,
+    arch: process.arch,
     node: process.version,
     env: {
       CI: process.env.CI || '',
       NODE_ENV: process.env.NODE_ENV || '',
+      NODE_OPTIONS: process.env.NODE_OPTIONS || '',
     },
   };
   const key = crypto.createHash('sha256').update(JSON.stringify(identity)).digest('hex');
-  return { key, repoRevision: revision.token };
+  return { key, repoRevision: revision.token, semanticKey, command: resolvedCommand.command };
 }
 
-function cachedCommandResult(cacheContext: ReturnType<typeof commandCacheContext>, resolutionMs = 0, responseMode: 'compact' | 'standard' | 'debug' = 'standard') {
+export function getProjectCommandExecutionIdentity(state: AppState, args: Record<string, any>): ProjectCommandExecutionIdentity | null {
+  const root = resolveProjectRoot(state, args);
+  const command = resolveCommandLabel(args.command ?? args.preset);
+  const resolvedCommand = resolveAllowedCommand(root, command);
+  const cwdPath = resolveSafeCommandCwd(root, args.cwd ?? resolvedCommand.cwd);
+  const timeoutMs = Number.isFinite(Number(args.timeoutMs))
+    ? Math.max(1, Math.min(MAX_TIMEOUT_MS, Number(args.timeoutMs)))
+    : resolvedCommand.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const { responseMode, maxOutputBytes } = resolveOutputBudget(args, resolvedCommand);
+  return buildProjectCommandExecutionIdentity(root, resolvedCommand, cwdPath, timeoutMs, maxOutputBytes, responseMode);
+}
+
+function commandCacheContext(
+  root: string,
+  resolvedCommand: ResolvedCommand,
+  cwdPath: string,
+  timeoutMs: number,
+  maxOutputBytes: number,
+  responseMode: 'compact' | 'standard' | 'debug',
+  args: Record<string, any>,
+) {
+  const explicitCache = args.cacheResult === true || String(args.cacheResult).toLowerCase() === 'true';
+  const explicitlyDisabled = args.cacheResult === false || String(args.cacheResult).toLowerCase() === 'false';
+  const automaticStaticCache = resolvedCommand.command === 'typecheck' || resolvedCommand.command === 'lint';
+  if (explicitlyDisabled || (!explicitCache && !automaticStaticCache)) return null;
+  return buildProjectCommandExecutionIdentity(root, resolvedCommand, cwdPath, timeoutMs, maxOutputBytes, responseMode);
+}
+
+function cachedCommandResult(
+  cacheContext: ReturnType<typeof commandCacheContext>,
+  command: string,
+  resolutionMs = 0,
+  responseMode: 'compact' | 'standard' | 'debug' = 'standard',
+) {
   if (!cacheContext) return null;
   const cached = getCachedCommandResult<RunProjectCommandResult>(cacheContext.key);
   if (!cached) return null;
   return {
     ...cached.value,
+    command,
     durationMs: 0,
     responseMode,
     processSpawns: 0,
@@ -428,8 +469,8 @@ export function runProjectCommand(state: AppState, args: Record<string, any>): R
   const { responseMode, maxOutputBytes } = resolveOutputBudget(args, resolvedCommand);
   const resolutionMs = Date.now() - resolutionStartedAt;
 
-  const cacheContext = commandCacheContext(root, resolvedCommand, cwdPath, timeoutMs, maxOutputBytes, args);
-  const cached = cachedCommandResult(cacheContext, resolutionMs, responseMode);
+  const cacheContext = commandCacheContext(root, resolvedCommand, cwdPath, timeoutMs, maxOutputBytes, responseMode, args);
+  const cached = args.forceFresh === true ? null : cachedCommandResult(cacheContext, command, resolutionMs, responseMode);
   if (cached) return cached;
 
   const startedAt = Date.now();
@@ -478,8 +519,8 @@ export async function runProjectCommandAsync(state: AppState, args: Record<strin
   const { responseMode, maxOutputBytes } = resolveOutputBudget(args, resolvedCommand);
   const resolutionMs = Date.now() - resolutionStartedAt;
 
-  const cacheContext = commandCacheContext(root, resolvedCommand, cwdPath, timeoutMs, maxOutputBytes, args);
-  const cached = cachedCommandResult(cacheContext, resolutionMs, responseMode);
+  const cacheContext = commandCacheContext(root, resolvedCommand, cwdPath, timeoutMs, maxOutputBytes, responseMode, args);
+  const cached = args.forceFresh === true ? null : cachedCommandResult(cacheContext, command, resolutionMs, responseMode);
   if (cached) return cached;
 
   const startedAt = Date.now();

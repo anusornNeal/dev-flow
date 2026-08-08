@@ -30,6 +30,24 @@ type ResolvedCommand = {
   maxOutputBytes?: number;
   source: 'package-json' | 'repository-config';
   configPath?: string;
+  script?: string;
+  category?: string;
+};
+
+export type ProjectCommandScope = 'targeted' | 'broad' | 'full';
+export type ProjectCommandCost = 'low' | 'medium' | 'high';
+
+export type ProjectCommandDescriptor = {
+  command: string;
+  semanticKey: string;
+  scope: ProjectCommandScope;
+  cost: ProjectCommandCost;
+  resourceKey: string;
+  executable: string;
+  args: string[];
+  cwd: string;
+  source: ResolvedCommand['source'];
+  configPath?: string;
 };
 
 export interface RunProjectCommandResult {
@@ -209,6 +227,7 @@ function resolveAllowedCommand(root: string, command: string): ResolvedCommand {
         ? [path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js'), 'run', '--silent', command]
         : ['run', '--silent', command],
       source: 'package-json',
+      script: packageConfig.scripts[command],
     };
   }
 
@@ -223,6 +242,7 @@ function resolveAllowedCommand(root: string, command: string): ResolvedCommand {
       maxOutputBytes: configured.maxOutputBytes,
       source: 'repository-config',
       configPath: configured.configPath,
+      category: configured.category,
     };
   }
 
@@ -237,6 +257,70 @@ function resolveAllowedCommand(root: string, command: string): ResolvedCommand {
     affectedId: command,
     details: { packageJsonFound: packageConfig.exists, nextAction: `Configure '${command}' in package.json scripts or .devflow/commands.yaml.` },
   });
+}
+
+function normalizeScript(value: string | undefined) {
+  return String(value || '').trim().replace(/\s+/g, ' ');
+}
+
+function semanticKeyForResolvedCommand(root: string, resolvedCommand: ResolvedCommand, cwdPath: string) {
+  const identity = resolvedCommand.source === 'package-json'
+    ? {
+        source: resolvedCommand.source,
+        script: normalizeScript(resolvedCommand.script),
+        cwd: path.relative(root, cwdPath) || '.',
+      }
+    : {
+        source: resolvedCommand.source,
+        executable: resolvedCommand.executable,
+        args: resolvedCommand.args,
+        cwd: path.relative(root, cwdPath) || '.',
+        configPath: resolvedCommand.configPath,
+      };
+  return crypto.createHash('sha256').update(JSON.stringify(identity)).digest('hex');
+}
+
+function scopeForResolvedCommand(root: string, command: string, resolvedCommand: ResolvedCommand): ProjectCommandScope {
+  if (command === 'verify') return 'full';
+  if (resolvedCommand.source === 'package-json') {
+    const scripts = readPackageScripts(root).scripts;
+    const currentScript = normalizeScript(resolvedCommand.script || scripts[command]);
+    const verifyScript = normalizeScript(scripts.verify);
+    if (verifyScript && currentScript === verifyScript) return 'full';
+    return 'broad';
+  }
+  return resolvedCommand.category === 'test' ? 'targeted' : 'broad';
+}
+
+export function describeProjectCommand(state: AppState, args: Record<string, any>): ProjectCommandDescriptor {
+  const root = resolveProjectRoot(state, args);
+  const command = resolveCommandLabel(args.command ?? args.preset);
+  const resolvedCommand = resolveAllowedCommand(root, command);
+  const cwdPath = resolveSafeCommandCwd(root, args.cwd ?? resolvedCommand.cwd);
+  const semanticKey = semanticKeyForResolvedCommand(root, resolvedCommand, cwdPath);
+  const scope = scopeForResolvedCommand(root, command, resolvedCommand);
+  const normalizedScript = normalizeScript(resolvedCommand.script);
+  const cost: ProjectCommandCost = scope === 'full' ? 'high' : scope === 'targeted' ? 'low' : command === 'build' ? 'high' : 'medium';
+  const resourceKey = scope === 'full'
+    ? 'repo'
+    : normalizedScript.includes('tsc')
+      ? 'typescript'
+      : scope === 'targeted'
+        ? `command:${semanticKey.slice(0, 16)}`
+        : 'repo';
+
+  return {
+    command,
+    semanticKey,
+    scope,
+    cost,
+    resourceKey,
+    executable: resolvedCommand.executable,
+    args: [...resolvedCommand.args],
+    cwd: path.relative(root, cwdPath) || '.',
+    source: resolvedCommand.source,
+    ...(resolvedCommand.configPath ? { configPath: resolvedCommand.configPath } : {}),
+  };
 }
 
 function resolveResponseMode(value: unknown): 'compact' | 'standard' | 'debug' {

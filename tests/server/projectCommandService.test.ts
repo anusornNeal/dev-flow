@@ -10,7 +10,7 @@ process.env.DEVFLOW_DB_PATH = path.join(tempRoot, 'devflow.db');
 
 const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
 executeAllMigrations();
-const { runProjectCommand } = await import('../../src/server/services/projectCommandService.js');
+const { runProjectCommand, describeProjectCommand } = await import('../../src/server/services/projectCommandService.js');
 const { clearWorkspaceMetadataCache, getWorkspaceMetadataCacheStats } = await import('../../src/server/services/workspaceMetadataCacheService.js');
 const { createProject: upsertProject } = await import('../../src/server/repositories/projectRepository.js');
 
@@ -327,4 +327,22 @@ test('runProjectCommand applies configured timeout and output caps', () => {
   const outputResult = runProjectCommand(stateFor(outputRoot), { projectId: 'project-command', command: 'noisy' });
   assert.equal(outputResult.stdoutTruncated, true);
   assert.equal(outputResult.stdoutBytes, 10);
+});
+
+test('describeProjectCommand gives equivalent package scripts one semantic key and recognizes FULL aliases', () => {
+  const root = createProject('descriptor-semantics', {
+    typecheck: 'tsc --noEmit',
+    lint: 'tsc --noEmit',
+    verify: 'tsx scripts/verify.ts',
+    test: 'tsx scripts/verify.ts',
+  });
+  const state = stateFor(root);
+
+  const typecheck = describeProjectCommand(state, { projectId: 'project-command', command: 'typecheck' });
+  const lint = describeProjectCommand(state, { projectId: 'project-command', command: 'lint' });
+  const testCommand = describeProjectCommand(state, { projectId: 'project-command', command: 'test' });
+
+  assert.equal(typecheck.semanticKey, lint.semanticKey);
+  assert.equal(typecheck.scope, 'broad');
+  assert.equal(testCommand.scope, 'full');
 });

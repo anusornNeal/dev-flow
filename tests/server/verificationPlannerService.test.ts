@@ -48,3 +48,33 @@ test('independent parallel groups are opt-in only', () => {
   });
   assert.equal(parallel.steps.filter((step: any) => step.parallelGroup === 'isolated').length, 2);
 });
+
+test('FAST planner deduplicates equivalent command semantics and excludes FULL verification aliases', () => {
+  const plan = planVerification({
+    changedFiles: ['src/components/Toolbar.tsx'],
+    resolvedCommands: [
+      { command: 'typecheck', semanticKey: 'same-tsc', scope: 'broad', cost: 'medium', resourceKey: 'typescript' },
+      { command: 'lint', semanticKey: 'same-tsc', scope: 'broad', cost: 'medium', resourceKey: 'typescript' },
+      { command: 'test', semanticKey: 'full-verify', scope: 'full', cost: 'high', resourceKey: 'repo' },
+    ],
+  });
+
+  assert.equal(plan.lane, 'fast');
+  assert.deepEqual(plan.commands, ['typecheck']);
+  assert.equal(plan.steps.some((step: any) => step.command === 'test'), false);
+});
+
+test('explicit FULL lane selects one FULL descriptor and marks broad verification required', () => {
+  const plan = planVerification({
+    changedFiles: ['src/server/service.ts'],
+    requestedLane: 'full',
+    resolvedCommands: [
+      { command: 'typecheck', semanticKey: 'tsc', scope: 'broad', cost: 'medium', resourceKey: 'typescript' },
+      { command: 'verify', semanticKey: 'full-verify', scope: 'full', cost: 'high', resourceKey: 'repo' },
+    ],
+  });
+
+  assert.equal(plan.lane, 'full');
+  assert.deepEqual(plan.commands, ['verify']);
+  assert.equal(plan.requiresBroadVerify, true);
+});

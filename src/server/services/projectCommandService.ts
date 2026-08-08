@@ -30,6 +30,26 @@ type ResolvedCommand = {
   maxOutputBytes?: number;
   source: 'package-json' | 'repository-config';
   configPath?: string;
+  script?: string;
+  category?: string;
+};
+
+export type ProjectCommandScope = 'targeted' | 'broad' | 'full';
+export type ProjectCommandCost = 'low' | 'medium' | 'high';
+export type ProjectCommandAccess = 'verify' | 'write';
+
+export type ProjectCommandDescriptor = {
+  command: string;
+  semanticKey: string;
+  scope: ProjectCommandScope;
+  cost: ProjectCommandCost;
+  access: ProjectCommandAccess;
+  resourceKey: string;
+  executable: string;
+  args: string[];
+  cwd: string;
+  source: ResolvedCommand['source'];
+  configPath?: string;
 };
 
 export interface RunProjectCommandResult {
@@ -209,6 +229,7 @@ function resolveAllowedCommand(root: string, command: string): ResolvedCommand {
         ? [path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js'), 'run', '--silent', command]
         : ['run', '--silent', command],
       source: 'package-json',
+      script: packageConfig.scripts[command],
     };
   }
 
@@ -223,6 +244,7 @@ function resolveAllowedCommand(root: string, command: string): ResolvedCommand {
       maxOutputBytes: configured.maxOutputBytes,
       source: 'repository-config',
       configPath: configured.configPath,
+      category: configured.category,
     };
   }
 
@@ -237,6 +259,79 @@ function resolveAllowedCommand(root: string, command: string): ResolvedCommand {
     affectedId: command,
     details: { packageJsonFound: packageConfig.exists, nextAction: `Configure '${command}' in package.json scripts or .devflow/commands.yaml.` },
   });
+}
+
+function normalizeScript(value: string | undefined) {
+  return String(value || '').trim().replace(/\s+/g, ' ');
+}
+
+function semanticKeyForResolvedCommand(root: string, resolvedCommand: ResolvedCommand, cwdPath: string) {
+  const identity = resolvedCommand.source === 'package-json'
+    ? {
+        source: resolvedCommand.source,
+        script: normalizeScript(resolvedCommand.script),
+        cwd: path.relative(root, cwdPath) || '.',
+      }
+    : {
+        source: resolvedCommand.source,
+        executable: resolvedCommand.executable,
+        args: resolvedCommand.args,
+        cwd: path.relative(root, cwdPath) || '.',
+        configPath: resolvedCommand.configPath,
+      };
+  return crypto.createHash('sha256').update(JSON.stringify(identity)).digest('hex');
+}
+
+function scopeForResolvedCommand(root: string, command: string, resolvedCommand: ResolvedCommand): ProjectCommandScope {
+  if (command === 'verify') return 'full';
+  if (resolvedCommand.source === 'package-json') {
+    const scripts = readPackageScripts(root).scripts;
+    const currentScript = normalizeScript(resolvedCommand.script || scripts[command]);
+    const verifyScript = normalizeScript(scripts.verify);
+    if (verifyScript && currentScript === verifyScript) return 'full';
+    return 'broad';
+  }
+  return resolvedCommand.category === 'test' ? 'targeted' : 'broad';
+}
+
+function accessForResolvedCommand(resolvedCommand: ResolvedCommand): ProjectCommandAccess {
+  if (resolvedCommand.source === 'package-json') {
+    return resolvedCommand.command === 'build' ? 'write' : 'verify';
+  }
+  return resolvedCommand.category === 'test' ? 'verify' : 'write';
+}
+
+export function describeProjectCommand(state: AppState, args: Record<string, any>): ProjectCommandDescriptor {
+  const root = resolveProjectRoot(state, args);
+  const command = resolveCommandLabel(args.command ?? args.preset);
+  const resolvedCommand = resolveAllowedCommand(root, command);
+  const cwdPath = resolveSafeCommandCwd(root, args.cwd ?? resolvedCommand.cwd);
+  const semanticKey = semanticKeyForResolvedCommand(root, resolvedCommand, cwdPath);
+  const scope = scopeForResolvedCommand(root, command, resolvedCommand);
+  const normalizedScript = normalizeScript(resolvedCommand.script);
+  const cost: ProjectCommandCost = scope === 'full' ? 'high' : scope === 'targeted' ? 'low' : command === 'build' ? 'high' : 'medium';
+  const access = accessForResolvedCommand(resolvedCommand);
+  const resourceKey = scope === 'full'
+    ? 'repo'
+    : normalizedScript.includes('tsc')
+      ? 'typescript'
+      : scope === 'targeted'
+        ? `command:${semanticKey.slice(0, 16)}`
+        : 'repo';
+
+  return {
+    command,
+    semanticKey,
+    scope,
+    cost,
+    access,
+    resourceKey,
+    executable: resolvedCommand.executable,
+    args: [...resolvedCommand.args],
+    cwd: path.relative(root, cwdPath) || '.',
+    source: resolvedCommand.source,
+    ...(resolvedCommand.configPath ? { configPath: resolvedCommand.configPath } : {}),
+  };
 }
 
 function resolveResponseMode(value: unknown): 'compact' | 'standard' | 'debug' {
@@ -254,49 +349,90 @@ function resolveOutputBudget(args: Record<string, any>, resolvedCommand: Resolve
   };
 }
 
-function commandCacheContext(
+export type ProjectCommandExecutionIdentity = {
+  key: string;
+  repoRevision: string;
+  semanticKey: string;
+  command: string;
+};
+
+function buildProjectCommandExecutionIdentity(
   root: string,
   resolvedCommand: ResolvedCommand,
   cwdPath: string,
   timeoutMs: number,
   maxOutputBytes: number,
-  args: Record<string, any>,
-) {
-  const enabled = args.cacheResult === true || String(args.cacheResult).toLowerCase() === 'true';
-  if (!enabled) return null;
+  responseMode: 'compact' | 'standard' | 'debug',
+): ProjectCommandExecutionIdentity | null {
   let revision;
   try {
     revision = getRepoRevisionForRoot(root);
   } catch {
     return null;
   }
+  const semanticKey = semanticKeyForResolvedCommand(root, resolvedCommand, cwdPath);
   const identity = {
     repoRevision: revision.token,
-    command: resolvedCommand.command,
-    executable: resolvedCommand.executable,
-    args: resolvedCommand.args,
+    semanticKey,
     cwd: path.relative(root, cwdPath) || '.',
     timeoutMs,
     maxOutputBytes,
+    responseMode,
     source: resolvedCommand.source,
     configPath: resolvedCommand.configPath,
     platform: process.platform,
+    arch: process.arch,
     node: process.version,
     env: {
       CI: process.env.CI || '',
       NODE_ENV: process.env.NODE_ENV || '',
+      NODE_OPTIONS: process.env.NODE_OPTIONS || '',
     },
   };
   const key = crypto.createHash('sha256').update(JSON.stringify(identity)).digest('hex');
-  return { key, repoRevision: revision.token };
+  return { key, repoRevision: revision.token, semanticKey, command: resolvedCommand.command };
 }
 
-function cachedCommandResult(cacheContext: ReturnType<typeof commandCacheContext>, resolutionMs = 0, responseMode: 'compact' | 'standard' | 'debug' = 'standard') {
+export function getProjectCommandExecutionIdentity(state: AppState, args: Record<string, any>): ProjectCommandExecutionIdentity | null {
+  const root = resolveProjectRoot(state, args);
+  const command = resolveCommandLabel(args.command ?? args.preset);
+  const resolvedCommand = resolveAllowedCommand(root, command);
+  const cwdPath = resolveSafeCommandCwd(root, args.cwd ?? resolvedCommand.cwd);
+  const timeoutMs = Number.isFinite(Number(args.timeoutMs))
+    ? Math.max(1, Math.min(MAX_TIMEOUT_MS, Number(args.timeoutMs)))
+    : resolvedCommand.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const { responseMode, maxOutputBytes } = resolveOutputBudget(args, resolvedCommand);
+  return buildProjectCommandExecutionIdentity(root, resolvedCommand, cwdPath, timeoutMs, maxOutputBytes, responseMode);
+}
+
+function commandCacheContext(
+  root: string,
+  resolvedCommand: ResolvedCommand,
+  cwdPath: string,
+  timeoutMs: number,
+  maxOutputBytes: number,
+  responseMode: 'compact' | 'standard' | 'debug',
+  args: Record<string, any>,
+) {
+  const explicitCache = args.cacheResult === true || String(args.cacheResult).toLowerCase() === 'true';
+  const explicitlyDisabled = args.cacheResult === false || String(args.cacheResult).toLowerCase() === 'false';
+  const automaticStaticCache = resolvedCommand.command === 'typecheck' || resolvedCommand.command === 'lint';
+  if (explicitlyDisabled || (!explicitCache && !automaticStaticCache)) return null;
+  return buildProjectCommandExecutionIdentity(root, resolvedCommand, cwdPath, timeoutMs, maxOutputBytes, responseMode);
+}
+
+function cachedCommandResult(
+  cacheContext: ReturnType<typeof commandCacheContext>,
+  command: string,
+  resolutionMs = 0,
+  responseMode: 'compact' | 'standard' | 'debug' = 'standard',
+) {
   if (!cacheContext) return null;
   const cached = getCachedCommandResult<RunProjectCommandResult>(cacheContext.key);
   if (!cached) return null;
   return {
     ...cached.value,
+    command,
     durationMs: 0,
     responseMode,
     processSpawns: 0,
@@ -344,8 +480,8 @@ export function runProjectCommand(state: AppState, args: Record<string, any>): R
   const { responseMode, maxOutputBytes } = resolveOutputBudget(args, resolvedCommand);
   const resolutionMs = Date.now() - resolutionStartedAt;
 
-  const cacheContext = commandCacheContext(root, resolvedCommand, cwdPath, timeoutMs, maxOutputBytes, args);
-  const cached = cachedCommandResult(cacheContext, resolutionMs, responseMode);
+  const cacheContext = commandCacheContext(root, resolvedCommand, cwdPath, timeoutMs, maxOutputBytes, responseMode, args);
+  const cached = args.forceFresh === true ? null : cachedCommandResult(cacheContext, command, resolutionMs, responseMode);
   if (cached) return cached;
 
   const startedAt = Date.now();
@@ -394,8 +530,8 @@ export async function runProjectCommandAsync(state: AppState, args: Record<strin
   const { responseMode, maxOutputBytes } = resolveOutputBudget(args, resolvedCommand);
   const resolutionMs = Date.now() - resolutionStartedAt;
 
-  const cacheContext = commandCacheContext(root, resolvedCommand, cwdPath, timeoutMs, maxOutputBytes, args);
-  const cached = cachedCommandResult(cacheContext, resolutionMs, responseMode);
+  const cacheContext = commandCacheContext(root, resolvedCommand, cwdPath, timeoutMs, maxOutputBytes, responseMode, args);
+  const cached = args.forceFresh === true ? null : cachedCommandResult(cacheContext, command, resolutionMs, responseMode);
   if (cached) return cached;
 
   const startedAt = Date.now();

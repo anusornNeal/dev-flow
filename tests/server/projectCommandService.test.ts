@@ -10,7 +10,7 @@ process.env.DEVFLOW_DB_PATH = path.join(tempRoot, 'devflow.db');
 
 const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
 executeAllMigrations();
-const { runProjectCommand } = await import('../../src/server/services/projectCommandService.js');
+const { runProjectCommand, describeProjectCommand } = await import('../../src/server/services/projectCommandService.js');
 const { clearWorkspaceMetadataCache, getWorkspaceMetadataCacheStats } = await import('../../src/server/services/workspaceMetadataCacheService.js');
 const { createProject: upsertProject } = await import('../../src/server/repositories/projectRepository.js');
 
@@ -327,4 +327,158 @@ test('runProjectCommand applies configured timeout and output caps', () => {
   const outputResult = runProjectCommand(stateFor(outputRoot), { projectId: 'project-command', command: 'noisy' });
   assert.equal(outputResult.stdoutTruncated, true);
   assert.equal(outputResult.stdoutBytes, 10);
+});
+
+test('describeProjectCommand gives equivalent package scripts one semantic key and recognizes FULL aliases', () => {
+  const root = createProject('descriptor-semantics', {
+    typecheck: 'tsc --noEmit',
+    lint: 'tsc --noEmit',
+    verify: 'tsx scripts/verify.ts',
+    test: 'tsx scripts/verify.ts',
+  });
+  const state = stateFor(root);
+
+  const typecheck = describeProjectCommand(state, { projectId: 'project-command', command: 'typecheck' });
+  const lint = describeProjectCommand(state, { projectId: 'project-command', command: 'lint' });
+  const testCommand = describeProjectCommand(state, { projectId: 'project-command', command: 'test' });
+
+  assert.equal(typecheck.semanticKey, lint.semanticKey);
+  assert.equal(typecheck.scope, 'broad');
+  assert.equal(testCommand.scope, 'full');
+});
+
+test('describeProjectCommand classifies verification access conservatively', () => {
+  const packageRoot = createProject('descriptor-access-package', {
+    typecheck: 'tsc --noEmit',
+    build: 'vite build',
+  });
+  const packageState = stateFor(packageRoot);
+
+  assert.equal(describeProjectCommand(packageState, { projectId: 'project-command', command: 'typecheck' }).access, 'verify');
+  assert.equal(describeProjectCommand(packageState, { projectId: 'project-command', command: 'build' }).access, 'write');
+
+  const configRoot = createConfigProject('descriptor-access-config', [
+    'commands:',
+    '  focused-test:',
+    '    executable: node',
+    '    args:',
+    '      - scripts/pass.mjs',
+    '    category: test',
+    '  mutate:',
+    '    executable: node',
+    '    args:',
+    '      - scripts/pass.mjs',
+    '    category: build',
+    '',
+  ].join('\n'));
+  fs.writeFileSync(path.join(configRoot, 'scripts', 'pass.mjs'), 'process.exit(0);\n');
+  const configState = stateFor(configRoot);
+
+  assert.equal(describeProjectCommand(configState, { projectId: 'project-command', command: 'focused-test' }).access, 'verify');
+  assert.equal(describeProjectCommand(configState, { projectId: 'project-command', command: 'mutate' }).access, 'write');
+});
+
+test('runProjectCommand automatically reuses deterministic static verification and forceFresh bypasses evidence', () => {
+  const root = createProject('auto-static-cache', {
+    typecheck: 'node scripts/static.mjs',
+  });
+  const counterPath = path.join(tempRoot, 'auto-static-cache-counter.txt');
+  fs.writeFileSync(path.join(root, 'source.txt'), 'one\n', 'utf8');
+  fs.writeFileSync(path.join(root, 'scripts', 'static.mjs'), [
+    "import fs from 'node:fs';",
+    `const counterPath = ${JSON.stringify(counterPath)};`,
+    "const next = fs.existsSync(counterPath) ? Number(fs.readFileSync(counterPath, 'utf8')) + 1 : 1;",
+    "fs.writeFileSync(counterPath, String(next), 'utf8');",
+  ].join('\n'), 'utf8');
+  const git = (args: string[]) => {
+    const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', shell: false });
+    assert.equal(result.status, 0, result.stderr || result.stdout || `git ${args.join(' ')} failed`);
+  };
+  git(['init']);
+  git(['config', 'user.name', 'DevFlow Test']);
+  git(['config', 'user.email', 'devflow@example.com']);
+  git(['add', '.']);
+  git(['commit', '-m', 'initial']);
+
+  const first = runProjectCommand(stateFor(root), { projectId: 'project-command', command: 'typecheck' });
+  const second = runProjectCommand(stateFor(root), { projectId: 'project-command', command: 'typecheck' });
+  const fresh = runProjectCommand(stateFor(root), { projectId: 'project-command', command: 'typecheck', forceFresh: true });
+
+  assert.equal(first.cache?.hit, false);
+  assert.equal(second.cache?.hit, true);
+  assert.equal(second.processSpawns, 0);
+  assert.equal(fresh.cache?.hit, false);
+  assert.equal(fresh.processSpawns, 1);
+  assert.equal(fs.readFileSync(counterPath, 'utf8'), '2');
+});
+
+test('equivalent static package aliases reuse one semantic verification result', () => {
+  const root = createProject('semantic-cache-alias', {
+    typecheck: 'node scripts/shared.mjs',
+    lint: 'node scripts/shared.mjs',
+  });
+  const counterPath = path.join(tempRoot, 'semantic-cache-alias-counter.txt');
+  fs.writeFileSync(path.join(root, 'source.txt'), 'one\n', 'utf8');
+  fs.writeFileSync(path.join(root, 'scripts', 'shared.mjs'), [
+    "import fs from 'node:fs';",
+    `const counterPath = ${JSON.stringify(counterPath)};`,
+    "const next = fs.existsSync(counterPath) ? Number(fs.readFileSync(counterPath, 'utf8')) + 1 : 1;",
+    "fs.writeFileSync(counterPath, String(next), 'utf8');",
+  ].join('\n'), 'utf8');
+  const git = (args: string[]) => {
+    const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', shell: false });
+    assert.equal(result.status, 0, result.stderr || result.stdout || `git ${args.join(' ')} failed`);
+  };
+  git(['init']);
+  git(['config', 'user.name', 'DevFlow Test']);
+  git(['config', 'user.email', 'devflow@example.com']);
+  git(['add', '.']);
+  git(['commit', '-m', 'initial']);
+
+  const first = runProjectCommand(stateFor(root), { projectId: 'project-command', command: 'typecheck' });
+  const second = runProjectCommand(stateFor(root), { projectId: 'project-command', command: 'lint' });
+
+  assert.equal(first.cache?.hit, false);
+  assert.equal(second.cache?.hit, true);
+  assert.equal(second.processSpawns, 0);
+  assert.equal(fs.readFileSync(counterPath, 'utf8'), '1');
+});
+
+test('automatic static verification cache invalidates when NODE_OPTIONS changes', () => {
+  const root = createProject('cache-node-options', {
+    typecheck: 'node scripts/static.mjs',
+  });
+  const counterPath = path.join(tempRoot, 'cache-node-options-counter.txt');
+  fs.writeFileSync(path.join(root, 'source.txt'), 'one\n', 'utf8');
+  fs.writeFileSync(path.join(root, 'scripts', 'static.mjs'), [
+    "import fs from 'node:fs';",
+    `const counterPath = ${JSON.stringify(counterPath)};`,
+    "const next = fs.existsSync(counterPath) ? Number(fs.readFileSync(counterPath, 'utf8')) + 1 : 1;",
+    "fs.writeFileSync(counterPath, String(next), 'utf8');",
+  ].join('\n'), 'utf8');
+  const git = (args: string[]) => {
+    const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', shell: false });
+    assert.equal(result.status, 0, result.stderr || result.stdout || `git ${args.join(' ')} failed`);
+  };
+  git(['init']);
+  git(['config', 'user.name', 'DevFlow Test']);
+  git(['config', 'user.email', 'devflow@example.com']);
+  git(['add', '.']);
+  git(['commit', '-m', 'initial']);
+
+  const previousNodeOptions = process.env.NODE_OPTIONS;
+  try {
+    delete process.env.NODE_OPTIONS;
+    const first = runProjectCommand(stateFor(root), { projectId: 'project-command', command: 'typecheck' });
+    process.env.NODE_OPTIONS = '--no-warnings';
+    const second = runProjectCommand(stateFor(root), { projectId: 'project-command', command: 'typecheck' });
+
+    assert.equal(first.cache?.hit, false);
+    assert.equal(second.cache?.hit, false);
+    assert.equal(second.processSpawns, 1);
+    assert.equal(fs.readFileSync(counterPath, 'utf8'), '2');
+  } finally {
+    if (previousNodeOptions === undefined) delete process.env.NODE_OPTIONS;
+    else process.env.NODE_OPTIONS = previousNodeOptions;
+  }
 });

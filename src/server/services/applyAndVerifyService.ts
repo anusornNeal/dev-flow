@@ -2,7 +2,7 @@ import type { AppState } from '../types';
 import { editFilesBatch } from './fileEditBatchService';
 import { applyPreparedEditPlan } from './preparedEditService';
 import { getGitDiff } from './gitService';
-import { runProjectCommand, runProjectCommandAsync, type RunProjectCommandResult } from './projectCommandService';
+import { describeProjectCommand, runProjectCommand, runProjectCommandAsync, type RunProjectCommandResult } from './projectCommandService';
 import { planVerification } from './verificationPlannerService';
 
 function changedPaths(edit: any) {
@@ -10,6 +10,34 @@ function changedPaths(edit: any) {
     .filter((file: any) => file?.changed === true)
     .map((file: any) => String(file.filePath || ''))
     .filter(Boolean);
+}
+
+function buildVerificationPlan(state: AppState, args: Record<string, any>, files: string[]) {
+  const requestedCommands = Array.isArray(args.requestedCommands) ? args.requestedCommands : [];
+  const resolvedCommands = requestedCommands.map((command: string) => describeProjectCommand(state, {
+    projectId: args.projectId,
+    projectName: args.projectName,
+    repo: args.repo,
+    repoUrl: args.repoUrl,
+    localPath: args.localPath,
+    command,
+  }));
+  return planVerification({
+    changedFiles: files.length > 0 ? files : (Array.isArray(args.changedFiles) ? args.changedFiles : []),
+    requestedLane: args.lane,
+    requestedCommands,
+    resolvedCommands,
+    resourceIsolatedCommands: Array.isArray(args.resourceIsolatedCommands) ? args.resourceIsolatedCommands : [],
+  });
+}
+
+function summarizeVerificationPerformance(startedAt: number, verification: RunProjectCommandResult[]) {
+  return {
+    wallMs: Date.now() - startedAt,
+    summedExecutionMs: verification.reduce((sum, entry) => sum + Number(entry.performance?.executionMs ?? entry.durationMs ?? 0), 0),
+    processSpawns: verification.reduce((sum, entry) => sum + Number(entry.processSpawns || 0), 0),
+    cacheHits: verification.filter((entry) => entry.cache?.hit === true).length,
+  };
 }
 
 export function applyAndVerify(state: AppState, args: Record<string, any>) {
@@ -28,12 +56,7 @@ export function applyAndVerify(state: AppState, args: Record<string, any>) {
   }
 
   const files = changedPaths(edit);
-  const plan = planVerification({
-    changedFiles: files.length > 0 ? files : (Array.isArray(args.changedFiles) ? args.changedFiles : []),
-    requestedLane: args.lane,
-    requestedCommands: Array.isArray(args.requestedCommands) ? args.requestedCommands : [],
-    resourceIsolatedCommands: Array.isArray(args.resourceIsolatedCommands) ? args.resourceIsolatedCommands : [],
-  });
+  const plan = buildVerificationPlan(state, args, files);
 
   const noChanges = edit.changed !== true;
   if (noChanges && args.forceVerification !== true) {
@@ -80,6 +103,7 @@ export function applyAndVerify(state: AppState, args: Record<string, any>) {
       localPath: args.localPath,
       command: step.command,
       cacheResult: args.cacheVerificationResults !== false,
+      forceFresh: args.forceFresh === true,
       maxOutputBytes: args.maxOutputBytes,
       timeoutMs: args.timeoutMs,
     });
@@ -119,6 +143,7 @@ export async function applyAndVerifyAsync(
   args: Record<string, any>,
   logger: VerificationLogger = silentVerificationLogger,
   setCancelFn: (fn: () => void) => void = () => {},
+  transitionAccess: (accessMode: 'verify') => void = () => {},
 ) {
   const edit = typeof args.editPlanId === 'string' && args.editPlanId.trim()
     ? applyPreparedEditPlan({ editPlanId: args.editPlanId })
@@ -129,12 +154,7 @@ export async function applyAndVerifyAsync(
   }
 
   const files = changedPaths(edit);
-  const plan = planVerification({
-    changedFiles: files.length > 0 ? files : (Array.isArray(args.changedFiles) ? args.changedFiles : []),
-    requestedLane: args.lane,
-    requestedCommands: Array.isArray(args.requestedCommands) ? args.requestedCommands : [],
-    resourceIsolatedCommands: Array.isArray(args.resourceIsolatedCommands) ? args.resourceIsolatedCommands : [],
-  });
+  const plan = buildVerificationPlan(state, args, files);
   const noChanges = edit.changed !== true;
   if (noChanges && args.forceVerification !== true) {
     return {
@@ -173,7 +193,12 @@ export async function applyAndVerifyAsync(
     };
   }
 
+  if (plan.steps.length > 0) {
+    transitionAccess('verify');
+  }
+
   const verification: RunProjectCommandResult[] = [];
+  const verificationStartedAt = Date.now();
   const activeCancels = new Set<() => void>();
   setCancelFn(() => {
     for (const cancel of activeCancels) cancel();
@@ -190,6 +215,7 @@ export async function applyAndVerifyAsync(
         localPath: args.localPath,
         command: step.command,
         cacheResult: args.cacheVerificationResults !== false,
+        forceFresh: args.forceFresh === true,
         maxOutputBytes: args.maxOutputBytes,
         timeoutMs: args.timeoutMs,
         responseMode: args.responseMode ?? 'compact',
@@ -202,42 +228,57 @@ export async function applyAndVerifyAsync(
     }
   };
 
-  const isolated = plan.steps.filter((step) => step.parallelGroup === 'isolated');
-  const serial = plan.steps.filter((step) => step.parallelGroup !== 'isolated');
-  const parallelVerification = isolated.length > 1;
+  let parallelVerification = false;
+  const stageIds = Array.from(new Set(plan.steps.map((step) => Number.isFinite(step.stage) ? Number(step.stage) : 0))).sort((a, b) => a - b);
 
-  if (isolated.length > 0) {
-    const results = parallelVerification
-      ? await Promise.all(isolated.map(runStep))
-      : [await runStep(isolated[0])];
-    verification.push(...results);
-    const failed = results.find((result) => !result.ok);
-    if (failed) {
-      return {
-        ok: false,
-        status: failed.timedOut ? 'verification_timed_out' as const : 'verification_failed' as const,
-        edit,
-        plan,
-        diff,
-        verification,
-        parallelVerification,
-      };
+  for (const stageId of stageIds) {
+    const stageSteps = plan.steps.filter((step) => (Number.isFinite(step.stage) ? Number(step.stage) : 0) === stageId);
+    const inferredResourceKeys = stageSteps
+      .filter((step) => step.parallelGroup !== 'isolated')
+      .map((step) => step.resourceKey)
+      .filter((value): value is string => Boolean(value));
+    const resourceSafe = stageSteps.every((step) => step.parallelGroup === 'isolated' || Boolean(step.resourceKey && step.resourceKey !== 'repo'));
+    const inferredResourcesDistinct = new Set(inferredResourceKeys).size === inferredResourceKeys.length;
+    const canParallelizeStage = stageSteps.length > 1 && resourceSafe && inferredResourcesDistinct;
+
+    if (canParallelizeStage) {
+      parallelVerification = true;
+      for (let offset = 0; offset < stageSteps.length; offset += 4) {
+        const batch = stageSteps.slice(offset, offset + 4);
+        const results = await Promise.all(batch.map(runStep));
+        verification.push(...results);
+        const failed = results.find((result) => !result.ok);
+        if (failed) {
+          return {
+            ok: false,
+            status: failed.timedOut ? 'verification_timed_out' as const : 'verification_failed' as const,
+            edit,
+            plan,
+            diff,
+            verification,
+            parallelVerification,
+            verificationPerformance: summarizeVerificationPerformance(verificationStartedAt, verification),
+          };
+        }
+      }
+      continue;
     }
-  }
 
-  for (const step of serial) {
-    const result = await runStep(step);
-    verification.push(result);
-    if (!result.ok) {
-      return {
-        ok: false,
-        status: result.timedOut ? 'verification_timed_out' as const : 'verification_failed' as const,
-        edit,
-        plan,
-        diff,
-        verification,
-        parallelVerification,
-      };
+    for (const step of stageSteps) {
+      const result = await runStep(step);
+      verification.push(result);
+      if (!result.ok) {
+        return {
+          ok: false,
+          status: result.timedOut ? 'verification_timed_out' as const : 'verification_failed' as const,
+          edit,
+          plan,
+          diff,
+          verification,
+          parallelVerification,
+          verificationPerformance: summarizeVerificationPerformance(verificationStartedAt, verification),
+        };
+      }
     }
   }
 
@@ -250,5 +291,6 @@ export async function applyAndVerifyAsync(
     diff,
     verification,
     parallelVerification,
+    verificationPerformance: summarizeVerificationPerformance(verificationStartedAt, verification),
   };
 }

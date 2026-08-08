@@ -11,5 +11,5 @@ test('capability catalog exposes guarded runtime restart tools', () => {
   assert.ok(statusTool, 'get_devflow_restart_status should be exposed');
   assert.equal(catalog.matrix.runtime?.restart, true);
   assert.equal(catalog.matrix.runtime?.restartStatus, true);
-  assert.equal(catalog.contractVersion, '2026-08-07.1');
+  assert.equal(catalog.contractVersion, '2026-08-08.2');
 });

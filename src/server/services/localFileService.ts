@@ -6,6 +6,7 @@ import { getDevFlowAppRoot } from '../../lib/devFlowPaths';
 import type { AppState } from '../types';
 import { createApiError } from './api';
 import { findProjectByIdentifier } from './taskService';
+import { issueFileRef } from './fileReferenceService';
 import { invalidateRepoReadCaches, registerRepoCacheInvalidator } from './repoCacheInvalidationService';
 
 const DEFAULT_IGNORED_ENTRY_NAMES = new Set([
@@ -52,10 +53,10 @@ type SearchBackend = 'ripgrep' | 'fallback';
 type RipgrepResolution = {
   key: string;
   executable: string | null;
+  source: 'explicit' | 'devflow-bundled' | 'editor-bundled' | 'path' | null;
 };
 
 let ripgrepResolutionCache: RipgrepResolution | null = null;
-
 type SearchResult = {
   root: string;
   path: string;
@@ -87,6 +88,24 @@ export type FileRevision = {
   size: number;
   mtimeMs: number;
   modifiedAt: string;
+};
+
+export type LocalFileReadResult = {
+  root: string;
+  path: string;
+  content?: string;
+  bytes: number;
+  returnedBytes?: number;
+  startLine?: number;
+  endLine?: number;
+  totalLines: number;
+  truncated?: boolean;
+  modifiedAt: string;
+  revision: string;
+  fileRevision: FileRevision;
+  fileRef?: string;
+  fileRefCreatedAt?: string;
+  fileRefExpiresAt?: string;
 };
 
 function buildFileRevision(filePath: string, stat: fs.Stats): FileRevision {
@@ -174,16 +193,90 @@ function isExecutableFile(candidate: string) {
   }
 }
 
+function ripgrepBinaryName() {
+  return process.platform === 'win32' ? 'rg.exe' : 'rg';
+}
+
+function ripgrepPlatformTarget() {
+  return `${process.platform}-${process.arch}`;
+}
+
+function ripgrepPackageCandidates(appRoot: string) {
+  const binary = ripgrepBinaryName();
+  const target = ripgrepPlatformTarget();
+  return [
+    path.join(appRoot, 'node_modules', '@vscode', 'ripgrep', 'bin', target, binary),
+    path.join(appRoot, 'node_modules', '@vscode', 'ripgrep', 'bin', binary),
+    path.join(appRoot, 'node_modules', '@vscode', 'ripgrep-universal', 'bin', target, binary),
+    path.join(appRoot, 'node_modules.asar.unpacked', '@vscode', 'ripgrep', 'bin', target, binary),
+    path.join(appRoot, 'node_modules.asar.unpacked', '@vscode', 'ripgrep-universal', 'bin', target, binary),
+  ];
+}
+
+function editorBundledRipgrepCandidates() {
+  if (process.platform !== 'win32') return [];
+  const installRoots = [
+    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Programs', 'Microsoft VS Code') : '',
+    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Programs', 'Microsoft VS Code Insiders') : '',
+    process.env.ProgramFiles ? path.join(process.env.ProgramFiles, 'Microsoft VS Code') : '',
+  ].filter(Boolean);
+  const candidates: string[] = [];
+  for (const installRoot of installRoots) {
+    const appRoots = [path.join(installRoot, 'resources', 'app')];
+    try {
+      for (const entry of fs.readdirSync(installRoot, { withFileTypes: true })) {
+        if (entry.isDirectory()) appRoots.push(path.join(installRoot, entry.name, 'resources', 'app'));
+      }
+    } catch {
+      // Optional editor discovery must never make local search fail.
+    }
+    for (const appRoot of appRoots) candidates.push(...ripgrepPackageCandidates(appRoot));
+  }
+  return candidates;
+}
+
 function resolveRipgrepExecutable() {
   const explicit = String(process.env.DEVFLOW_RG_PATH || '').trim();
   const pathValue = String(process.env.PATH || '');
-  const key = `${process.platform}|${explicit}|${pathValue}|${String(process.env.PATHEXT || '')}`;
+  const appRoot = getDevFlowAppRoot();
+  const key = [
+    process.platform,
+    process.arch,
+    appRoot,
+    explicit,
+    pathValue,
+    String(process.env.PATHEXT || ''),
+    String(process.env.LOCALAPPDATA || ''),
+    String(process.env.ProgramFiles || ''),
+  ].join('|');
   if (ripgrepResolutionCache?.key === key) return ripgrepResolutionCache.executable;
 
   let executable: string | null = null;
+  let source: RipgrepResolution['source'] = null;
   if (explicit) {
     const candidate = path.resolve(explicit);
-    if (isExecutableFile(candidate)) executable = candidate;
+    if (isExecutableFile(candidate)) {
+      executable = candidate;
+      source = 'explicit';
+    }
+  }
+
+  if (!executable) {
+    for (const candidate of ripgrepPackageCandidates(appRoot)) {
+      if (!isExecutableFile(candidate)) continue;
+      executable = candidate;
+      source = 'devflow-bundled';
+      break;
+    }
+  }
+
+  if (!executable) {
+    for (const candidate of editorBundledRipgrepCandidates()) {
+      if (!isExecutableFile(candidate)) continue;
+      executable = candidate;
+      source = 'editor-bundled';
+      break;
+    }
   }
 
   if (!executable && pathValue) {
@@ -192,6 +285,7 @@ function resolveRipgrepExecutable() {
       for (const candidate of pathExecutableCandidates(normalizedDirectory)) {
         if (isExecutableFile(candidate)) {
           executable = candidate;
+          source = 'path';
           break;
         }
       }
@@ -199,7 +293,7 @@ function resolveRipgrepExecutable() {
     }
   }
 
-  ripgrepResolutionCache = { key, executable };
+  ripgrepResolutionCache = { key, executable, source };
   return executable;
 }
 
@@ -208,6 +302,7 @@ export function getLocalSearchRuntimeStatus() {
   return {
     backend: (ripgrepPath ? 'ripgrep' : 'fallback') as SearchBackend,
     ripgrepPath,
+    ripgrepSource: ripgrepResolutionCache?.source || null,
     fallbackAvailable: true,
   };
 }
@@ -286,7 +381,6 @@ function searchLocalFilesFallback(root: string, searchPath: string, query: strin
   if (scannedFiles >= FALLBACK_SEARCH_MAX_FILES && stack.length > 0) truncated = true;
   return { matches, scannedMatchCount, truncated, scannedFiles };
 }
-
 function buildRipgrepArgs(query: string, searchPath: string, limit: number, args: Record<string, any>) {
   const rgArgs = ['--json', '--line-number', '--hidden', '--max-count', String(limit), '--max-filesize', '200K'];
   if (!shouldUseIgnoredEntries(args)) {
@@ -571,7 +665,29 @@ export function listLocalFiles(state: AppState, args: Record<string, any>) {
   };
 }
 
-export function readLocalFile(state: AppState, args: Record<string, any>) {
+type OptionalFileRefMetadata = {
+  fileRef?: string;
+  fileRefCreatedAt?: string;
+  fileRefExpiresAt?: string;
+};
+
+function includeFileRefMetadata(state: AppState, args: Record<string, any>, root: string, targetPath: string, revision: FileRevision): OptionalFileRefMetadata {
+  const requested = args.includeFileRef === true || String(args.includeFileRef).toLowerCase() === 'true';
+  if (!requested) return {};
+  const issued = issueFileRef(state, args, {
+    root,
+    targetPath,
+    filePath: toToolRelativePath(root, targetPath),
+    revision,
+  });
+  return {
+    fileRef: issued.fileRef,
+    fileRefCreatedAt: issued.createdAt,
+    fileRefExpiresAt: issued.expiresAt,
+  };
+}
+
+export function readLocalFile(state: AppState, args: Record<string, any>): LocalFileReadResult {
   const root = resolveProjectRoot(state, args);
   const filePath = String(args.filePath || args.path || '').trim();
   if (!filePath) {
@@ -598,6 +714,7 @@ export function readLocalFile(state: AppState, args: Record<string, any>) {
       modifiedAt: stat.mtime.toISOString(),
       revision: revision.token,
       fileRevision: revision,
+      ...includeFileRefMetadata(state, args, root, targetPath, revision),
     };
   }
 
@@ -643,6 +760,7 @@ export function readLocalFile(state: AppState, args: Record<string, any>) {
     modifiedAt: stat.mtime.toISOString(),
     revision: revision.token,
     fileRevision: revision,
+    ...includeFileRefMetadata(state, args, root, targetPath, revision),
   };
 }
 
@@ -679,6 +797,7 @@ export function readFileSnippetsBatch(state: AppState, args: Record<string, any>
       startLine: entry.startLine,
       endLine: entry.endLine,
       maxBytes: entry.maxBytes,
+      includeFileRef: entry.includeFileRef ?? args.includeFileRef,
     });
   });
 

@@ -209,6 +209,68 @@ export function getChangedGitFilesForRoot(root: string) {
   return getStatusFiles(root).map((file) => ({ path: file.normalizedPath, staged: file.staged, status: file.status }));
 }
 
+export function getGitWorkspaceStatusForRoot(root: string) {
+  ensureGitRepo(root);
+  const output = runGit(['status', '--porcelain=v1', '--branch'], root);
+  const lines = output.split(/\r?\n/).filter(Boolean);
+  const branchLine = lines[0]?.startsWith('## ') ? lines.shift()!.slice(3).trim() : '';
+  const branch = (branchLine.split('...')[0] || branchLine.split(' ')[0] || 'HEAD').trim() || 'HEAD';
+  const files = parsePorcelainStatus(lines.join('\n')).map((file) => ({
+    path: file.normalizedPath,
+    staged: file.staged,
+    status: file.status,
+  }));
+  return { root, branch, files };
+}
+
+export function getGitWorkspaceSnapshotForRoot(root: string) {
+  ensureGitRepo(root);
+  const output = runGit(['status', '--porcelain=v2', '--branch'], root);
+  let branch = 'HEAD';
+  let head = 'unborn';
+  const files: Array<{ path: string; staged: boolean; status: string }> = [];
+
+  for (const line of output.split(/\r?\n/)) {
+    if (!line) continue;
+    if (line.startsWith('# branch.oid ')) {
+      const value = line.slice('# branch.oid '.length).trim();
+      head = value === '(initial)' ? 'unborn' : value;
+      continue;
+    }
+    if (line.startsWith('# branch.head ')) {
+      const value = line.slice('# branch.head '.length).trim();
+      branch = value === '(detached)' ? 'HEAD' : value || 'HEAD';
+      continue;
+    }
+    if (line.startsWith('? ')) {
+      files.push({ path: normalizeGitPath(line.slice(2).trim()), staged: false, status: '??' });
+      continue;
+    }
+    if (line.startsWith('! ')) continue;
+    if (line.startsWith('1 ') || line.startsWith('u ')) {
+      const parts = line.split(' ');
+      const xy = parts[1] || '..';
+      const filePath = parts.slice(line.startsWith('1 ') ? 8 : 10).join(' ');
+      const x = xy[0] === '.' ? ' ' : xy[0];
+      const y = xy[1] === '.' ? ' ' : xy[1];
+      files.push({ path: normalizeGitPath(filePath), staged: x !== ' ', status: `${x}${y}` });
+      continue;
+    }
+    if (line.startsWith('2 ')) {
+      const tabIndex = line.indexOf('\t');
+      const primary = tabIndex >= 0 ? line.slice(0, tabIndex) : line;
+      const parts = primary.split(' ');
+      const xy = parts[1] || '..';
+      const filePath = parts.slice(9).join(' ');
+      const x = xy[0] === '.' ? ' ' : xy[0];
+      const y = xy[1] === '.' ? ' ' : xy[1];
+      files.push({ path: normalizeGitPath(filePath), staged: x !== ' ', status: `${x}${y}` });
+    }
+  }
+
+  return { root, branch, head, files };
+}
+
 function getBranchName(root: string) {
   return runGit(['branch', '--show-current'], root).trim() || 'HEAD';
 }
@@ -336,10 +398,29 @@ export function getGitDiff(state: AppState, args: Record<string, any>) {
   }
 
   const output = runGit(gitArgs, root);
-  const truncated = output.length > MAX_DIFF_BYTES ? output.slice(0, MAX_DIFF_BYTES) + '\n... (truncated)' : output;
+  const responseMode = args.responseMode === 'compact' || args.responseMode === 'debug' ? args.responseMode : 'standard';
+  const requestedMaxBytes = Number.isFinite(Number(args.maxDiffBytes))
+    ? Math.max(1, Math.min(MAX_DIFF_BYTES, Number(args.maxDiffBytes)))
+    : MAX_DIFF_BYTES;
+  const maxBytes = responseMode === 'compact' ? Math.min(4_000, requestedMaxBytes) : requestedMaxBytes;
+  const outputBytes = Buffer.byteLength(output, 'utf8');
+  let diff = output;
+  let truncated = false;
+  if (outputBytes > maxBytes) {
+    diff = Buffer.from(output, 'utf8').subarray(0, maxBytes).toString('utf8') + '\n... (truncated)';
+    truncated = true;
+  }
   const fileChangeLines = output.split(/\r?\n/).filter((l) => l.startsWith('diff --git'));
 
-  return { root, diff: truncated, filesChanged: fileChangeLines.length };
+  return {
+    root,
+    diff,
+    filesChanged: fileChangeLines.length,
+    responseMode,
+    truncated,
+    diffBytes: outputBytes,
+    returnedBytes: Buffer.byteLength(diff, 'utf8'),
+  };
 }
 
 export function getGitShow(state: AppState, args: Record<string, any>) {

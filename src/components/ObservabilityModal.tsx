@@ -21,6 +21,7 @@ type Diagnostics = {
   };
   tools?: {
     duplicateBursts?: Array<{ toolName?: string; count?: number; inputHash?: string }>;
+    topTools?: Array<{ toolName?: string; count?: number; p50DurationMs?: number; p95DurationMs?: number; cacheHitCount?: number; responseBytes?: number; processSpawns?: number }>;
     recommendations?: string[];
   };
   recommendations?: string[];
@@ -84,6 +85,7 @@ export default function ObservabilityModal({ onClose }: ObservabilityModalProps)
               <Panel title="Recent MCP failures">{failedJobs.map((job) => <Row key={job.id || `${job.toolName}-${job.status}`} main={`${job.toolName || 'tool'} · ${job.status || 'unknown'}`} sub={job.failureSummary || 'No failure summary'} />)}{failedJobs.length === 0 && <Empty text="No recent MCP failures" />}</Panel>
               <Panel title="Active agent runs">{(data.agents?.activeRuns || []).slice(0, 6).map((run) => <Row key={run.id || run.taskId} main={`${run.agent || 'Agent'} · ${run.taskId || 'unknown task'}`} sub={`${run.status || 'unknown'}${run.stale ? ' · stale' : ''}`} />)}{(data.agents?.activeRuns || []).length === 0 && <Empty text="No active agent runs" />}</Panel>
               <Panel title="Duplicate tool bursts">{(data.tools?.duplicateBursts || []).slice(0, 6).map((burst, index) => <Row key={`${burst.toolName}-${burst.inputHash}-${index}`} main={`${burst.toolName || 'tool'} × ${burst.count || 0}`} sub={`input ${short(burst.inputHash)}`} />)}{(data.tools?.duplicateBursts || []).length === 0 && <Empty text="No duplicate bursts" />}</Panel>
+              <Panel title="Performance p50 / p95">{(data.tools?.topTools || []).slice(0, 8).map((tool) => <Row key={tool.toolName || 'tool'} main={`${tool.toolName || 'tool'} · ${tool.p50DurationMs || 0} / ${tool.p95DurationMs || 0} ms`} sub={`${tool.count || 0} calls · ${tool.cacheHitCount || 0} cache hits · ${tool.processSpawns || 0} process spawns · ${tool.responseBytes || 0} bytes`} />)}{(data.tools?.topTools || []).length === 0 && <Empty text="No performance samples" />}</Panel>
               {recommendations.length > 0 && <Panel title="Recommendations">{recommendations.map((item) => <div key={item} className="rounded-lg bg-blue-50 p-3 text-sm text-blue-900">{item}</div>)}</Panel>}
             </>
           )}

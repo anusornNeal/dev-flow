@@ -11,10 +11,24 @@ interface ToolCallInput {
   args: Record<string, any>;
   status: number;
   durationMs: number;
+  responseBytes?: number;
+  inputBytes?: number;
+  cacheHit?: boolean;
+  phase?: string;
+  processSpawns?: number;
   timestamp?: number;
 }
 
-interface ToolCallRecord extends Required<ToolCallInput> {
+interface ToolCallRecord {
+  toolName: string;
+  status: number;
+  durationMs: number;
+  responseBytes?: number;
+  inputBytes: number;
+  cacheHit?: boolean;
+  phase?: string;
+  processSpawns?: number;
+  timestamp: number;
   inputHash: string;
 }
 
@@ -58,8 +72,16 @@ export function clearToolCallRecords() {
 }
 
 export function recordToolCall(input: ToolCallInput) {
+  const serializedArgs = JSON.stringify(input.args || {});
   records.push({
-    ...input,
+    toolName: input.toolName,
+    status: input.status,
+    durationMs: input.durationMs,
+    responseBytes: input.responseBytes,
+    inputBytes: input.inputBytes ?? Buffer.byteLength(serializedArgs, 'utf8'),
+    cacheHit: input.cacheHit,
+    phase: input.phase,
+    processSpawns: input.processSpawns,
     timestamp: input.timestamp ?? Date.now(),
     inputHash: hashText(stableStringify(input.args || {})),
   });
@@ -68,13 +90,34 @@ export function recordToolCall(input: ToolCallInput) {
   }
 }
 
+function percentile(values: number[], percentileValue: number) {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((left, right) => left - right);
+  const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil((percentileValue / 100) * sorted.length) - 1));
+  return sorted[index];
+}
+
 export function getToolCallSummary(options?: { now?: number; windowMs?: number }) {
   const now = options?.now ?? Date.now();
   const windowMs = options?.windowMs ?? DEFAULT_WINDOW_MS;
   const windowStart = now - windowMs;
   const recent = records.filter((record) => record.timestamp >= windowStart);
 
-  const byTool = new Map<string, { toolName: string; count: number; errorCount: number; avgDurationMs: number; totalDurationMs: number }>();
+  const byTool = new Map<string, {
+    toolName: string;
+    count: number;
+    errorCount: number;
+    avgDurationMs: number;
+    totalDurationMs: number;
+    durationSamples: number[];
+    responseBytes: number;
+    totalInputBytes: number;
+    avgInputBytes: number;
+    maxInputBytes: number;
+    cacheHitCount: number;
+    processSpawns: number;
+    phases: Record<string, number>;
+  }>();
   const byToolAndInput = new Map<string, { toolName: string; inputHash: string; count: number; firstSeenAt: number; lastSeenAt: number }>();
 
   for (const record of recent) {
@@ -84,10 +127,26 @@ export function getToolCallSummary(options?: { now?: number; windowMs?: number }
       errorCount: 0,
       avgDurationMs: 0,
       totalDurationMs: 0,
+      durationSamples: [],
+      responseBytes: 0,
+      totalInputBytes: 0,
+      avgInputBytes: 0,
+      maxInputBytes: 0,
+      cacheHitCount: 0,
+      processSpawns: 0,
+      phases: {},
     };
     tool.count += 1;
     tool.errorCount += record.status >= 400 ? 1 : 0;
     tool.totalDurationMs += record.durationMs;
+    tool.durationSamples.push(record.durationMs);
+    tool.responseBytes += Number(record.responseBytes || 0);
+    tool.totalInputBytes += record.inputBytes;
+    tool.avgInputBytes = Math.round(tool.totalInputBytes / tool.count);
+    tool.maxInputBytes = Math.max(tool.maxInputBytes, record.inputBytes);
+    tool.cacheHitCount += record.cacheHit === true ? 1 : 0;
+    tool.processSpawns += Number(record.processSpawns || 0);
+    if (record.phase) tool.phases[record.phase] = (tool.phases[record.phase] || 0) + 1;
     tool.avgDurationMs = Math.round(tool.totalDurationMs / tool.count);
     byTool.set(record.toolName, tool);
 
@@ -124,13 +183,22 @@ export function getToolCallSummary(options?: { now?: number; windowMs?: number }
     totalCalls: recent.length,
     topTools: Array.from(byTool.values())
       .sort((left, right) => right.count - left.count)
-      .map(({ totalDurationMs, ...entry }) => entry)
+      .map(({ totalDurationMs, durationSamples, ...entry }) => ({
+        ...entry,
+        p50DurationMs: percentile(durationSamples, 50),
+        p95DurationMs: percentile(durationSamples, 95),
+      }))
       .slice(0, 10),
     duplicateBursts,
     latestCalls: recent.slice(-20).reverse().map((record) => ({
       toolName: record.toolName,
       status: record.status,
       durationMs: record.durationMs,
+      responseBytes: Number(record.responseBytes || 0),
+      inputBytes: record.inputBytes,
+      cacheHit: record.cacheHit === true,
+      phase: record.phase,
+      processSpawns: Number(record.processSpawns || 0),
       inputHash: record.inputHash,
       timestamp: new Date(record.timestamp).toISOString(),
     })),

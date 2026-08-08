@@ -11,6 +11,7 @@ import {
   enqueueToolJob,
   getToolJobStatus,
   cancelToolJob,
+  waitForToolJob,
 } from '../../src/server/services/mcpToolJobService';
 import { readJobLog, readJobResult } from '../../src/server/repositories/mcpToolJobRepository';
 import { createProject } from '../../src/server/repositories/projectRepository.js';
@@ -254,6 +255,62 @@ test('mcpToolJobService - write jobs for different repos do not block each other
   } finally {
     blockers.write1.resolve();
     blockers.write2.resolve();
+    __setToolJobTestRunner(toolName, null);
+  }
+});
+
+test('mcpToolJobService - waitForToolJob resolves when terminal state changes without caller polling', async () => {
+  const root = process.cwd();
+  const state = makeState(root);
+  const toolName = `test_wait_${randomUUID()}`;
+  const blocker = deferred();
+  let starts = 0;
+  __setToolJobTestRunner(toolName, async () => {
+    starts += 1;
+    await blocker.promise;
+    return { ok: true, waited: true };
+  });
+
+  try {
+    const job = enqueueToolJob(state, toolName, { localPath: root, label: 'wait' }, 'repo-read');
+    const waiting = waitForToolJob(job.jobId, 1500);
+    await waitUntil(() => starts === 1, 'Expected wait test runner to start');
+    blocker.resolve();
+    const status = await waiting;
+    assert.strictEqual(status?.status, 'succeeded');
+  } finally {
+    blocker.resolve();
+    __setToolJobTestRunner(toolName, null);
+  }
+});
+
+test('mcpToolJobService - identical safe in-flight reads use leader/follower single-flight', async () => {
+  const root = process.cwd();
+  const state = makeState(root);
+  const toolName = `test_singleflight_${randomUUID()}`;
+  const blocker = deferred();
+  let starts = 0;
+  __setToolJobTestRunner(toolName, async () => {
+    starts += 1;
+    await blocker.promise;
+    return { ok: true, shared: 'result' };
+  });
+
+  try {
+    const args = { localPath: root, query: 'same-query', singleFlight: true };
+    const first = enqueueToolJob(state, toolName, args, 'repo-read');
+    const second = enqueueToolJob(state, toolName, args, 'repo-read');
+    assert.notStrictEqual(first.jobId, second.jobId);
+    assert.strictEqual(second.sharedWith, first.jobId);
+
+    await waitUntil(() => starts === 1, 'Expected only the single-flight leader to execute');
+    blocker.resolve();
+    await waitForStatus(first.jobId, 'succeeded');
+    await waitForStatus(second.jobId, 'succeeded');
+    assert.strictEqual(starts, 1);
+    assert.deepStrictEqual(readJobResult(second.jobId)?.result, { ok: true, shared: 'result' });
+  } finally {
+    blocker.resolve();
     __setToolJobTestRunner(toolName, null);
   }
 });

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-command-result-'));
 process.env.DEVFLOW_DB_PATH = path.join(tempRoot, 'devflow.db');
@@ -10,6 +11,7 @@ process.env.DEVFLOW_DB_PATH = path.join(tempRoot, 'devflow.db');
 const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
 executeAllMigrations();
 const { runProjectCommand } = await import('../../src/server/services/projectCommandService.js');
+const { clearWorkspaceMetadataCache, getWorkspaceMetadataCacheStats } = await import('../../src/server/services/workspaceMetadataCacheService.js');
 const { createProject: upsertProject } = await import('../../src/server/repositories/projectRepository.js');
 
 function createProject(name: string, scripts: Record<string, string>) {
@@ -57,6 +59,22 @@ test('runProjectCommand returns normalized success output', () => {
   assert.equal(result.stderrEmpty, true);
   assert.equal(result.outputSummary.hasStdout, true);
   assert.match(result.stdout, /ok/);
+});
+
+test('runProjectCommand reuses cached package metadata between unchanged calls', () => {
+  clearWorkspaceMetadataCache();
+  const root = createProject('metadata-cache', {
+    typecheck: 'node scripts/pass.mjs',
+  });
+  fs.writeFileSync(path.join(root, 'scripts', 'pass.mjs'), 'process.exit(0);\n');
+
+  runProjectCommand(stateFor(root), { projectId: 'project-command', command: 'typecheck' });
+  const afterFirst = getWorkspaceMetadataCacheStats();
+  runProjectCommand(stateFor(root), { projectId: 'project-command', command: 'typecheck' });
+  const afterSecond = getWorkspaceMetadataCacheStats();
+
+  assert.equal(afterFirst.misses >= 1, true);
+  assert.equal(afterSecond.hits > afterFirst.hits, true);
 });
 
 test('runProjectCommand returns normalized failed output', () => {
@@ -124,6 +142,64 @@ test('runProjectCommand returns structured output for test command', () => {
   assert.equal(result.status, 'succeeded');
   assert.equal(result.outputSummary.hasStdout, true);
   assert.match(result.stdout, /test ok/);
+});
+
+test('runProjectCommand compact mode caps payload and exposes process/startup metrics', () => {
+  const root = createProject('compact-output', {
+    test: 'node scripts/output.mjs',
+  });
+  fs.writeFileSync(path.join(root, 'scripts', 'output.mjs'), "process.stdout.write('x'.repeat(5000));\n");
+
+  const result = runProjectCommand(stateFor(root), {
+    projectId: 'project-command',
+    command: 'test',
+    responseMode: 'compact',
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.responseMode, 'compact');
+  assert.equal(result.stdoutTruncated, true);
+  assert.equal(Buffer.byteLength(result.stdout, 'utf8') < 3000, true);
+  assert.equal(result.processSpawns, 1);
+  assert.equal(typeof result.performance?.resolutionMs, 'number');
+  assert.equal(typeof result.performance?.executionMs, 'number');
+});
+
+test('runProjectCommand reuses an explicitly cached successful result only for the same repo revision', () => {
+  const root = createProject('cached-result', {
+    test: 'node scripts/cached.mjs',
+  });
+  const counterPath = path.join(tempRoot, 'cached-result-counter.txt');
+  fs.writeFileSync(path.join(root, 'source.txt'), 'one\n', 'utf8');
+  fs.writeFileSync(path.join(root, 'scripts', 'cached.mjs'), [
+    "import fs from 'node:fs';",
+    `const counterPath = ${JSON.stringify(counterPath)};`,
+    "const next = fs.existsSync(counterPath) ? Number(fs.readFileSync(counterPath, 'utf8')) + 1 : 1;",
+    "fs.writeFileSync(counterPath, String(next), 'utf8');",
+    "process.stdout.write(`run:${next}\\n`);",
+  ].join('\n'), 'utf8');
+  const git = (args: string[]) => {
+    const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', shell: false });
+    assert.equal(result.status, 0, result.stderr || result.stdout || `git ${args.join(' ')} failed`);
+  };
+  git(['init']);
+  git(['config', 'user.name', 'DevFlow Test']);
+  git(['config', 'user.email', 'devflow@example.com']);
+  git(['add', '.']);
+  git(['commit', '-m', 'initial']);
+
+  const first = runProjectCommand(stateFor(root), { projectId: 'project-command', command: 'test', cacheResult: true });
+  const second = runProjectCommand(stateFor(root), { projectId: 'project-command', command: 'test', cacheResult: true });
+
+  assert.equal(first.cache?.hit, false);
+  assert.equal(second.cache?.hit, true);
+  assert.equal(fs.readFileSync(counterPath, 'utf8'), '1');
+  assert.equal(second.stdout, first.stdout);
+
+  fs.writeFileSync(path.join(root, 'source.txt'), 'two\n', 'utf8');
+  const third = runProjectCommand(stateFor(root), { projectId: 'project-command', command: 'test', cacheResult: true });
+  assert.equal(third.cache?.hit, false);
+  assert.equal(fs.readFileSync(counterPath, 'utf8'), '2');
 });
 
 test('runProjectCommand validation failures remain structured ApiErrors', () => {

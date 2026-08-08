@@ -3,12 +3,14 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-repo-index-'));
 process.env.DEVFLOW_DB_PATH = path.join(tempDir, 'devflow.db');
 
 const { getRepoInspectionIndex, clearRepoInspectionIndexCache } = await import('../../src/server/services/repoInspectionIndexService.js');
 const { mergeProjectFileRules } = await import('../../src/server/services/projectRulesService.js');
+const { invalidateRepoReadCaches } = await import('../../src/server/services/repoCacheInvalidationService.js');
 
 const state: any = {
   projectsCache: [
@@ -26,6 +28,17 @@ fs.writeFileSync(path.join(tempDir, 'app', 'src', 'JobDetailScreen.kt'), [
 fs.writeFileSync(path.join(tempDir, 'app', 'src', 'Other.kt'), 'fun OtherThing() {}', 'utf8');
 fs.mkdirSync(path.join(tempDir, 'node_modules', 'generated'), { recursive: true });
 fs.writeFileSync(path.join(tempDir, 'node_modules', 'generated', 'Generated.ts'), 'export const GeneratedSymbol = 1;', 'utf8');
+
+function git(args: string[]) {
+  const result = spawnSync('git', args, { cwd: tempDir, encoding: 'utf8', shell: false });
+  assert.equal(result.status, 0, result.stderr || result.stdout || `git ${args.join(' ')} failed`);
+}
+
+git(['init']);
+git(['config', 'user.name', 'DevFlow Test']);
+git(['config', 'user.email', 'devflow@example.com']);
+git(['add', '.']);
+git(['commit', '-m', 'initial']);
 
 test('getRepoInspectionIndex returns focused file and symbol matches from cacheable repo index', () => {
   clearRepoInspectionIndexCache();
@@ -45,6 +58,26 @@ test('getRepoInspectionIndex returns focused file and symbol matches from cachea
   assert.ok(first.matches.some((entry: any) => entry.path.endsWith('JobDetailScreen.kt')));
   assert.ok(first.matches.some((entry: any) => entry.symbols.includes('JobDetailContent')));
   assert.ok(first.matches.some((entry: any) => entry.symbols.includes('DetailsTabContent')));
+});
+
+test('getRepoInspectionIndex incrementally refreshes a changed working-tree file inside the cache TTL', () => {
+  clearRepoInspectionIndexCache();
+  const first = getRepoInspectionIndex(state, {
+    projectId: 'project-index-1',
+    q: 'OtherThing',
+  });
+  assert.ok(first.matches.some((entry: any) => entry.symbols.includes('OtherThing')));
+
+  fs.writeFileSync(path.join(tempDir, 'app', 'src', 'Other.kt'), 'fun UpdatedThing() {}', 'utf8');
+  invalidateRepoReadCaches(tempDir, 'test-write', { paths: ['app/src/Other.kt'] });
+  const second = getRepoInspectionIndex(state, {
+    projectId: 'project-index-1',
+    q: 'UpdatedThing',
+  });
+
+  assert.equal(second.cache.refresh, 'incremental');
+  assert.equal(second.cache.changedEntries, 1);
+  assert.ok(second.matches.some((entry: any) => entry.symbols.includes('UpdatedThing')));
 });
 
 test('getRepoInspectionIndex skips heavy folders by default and can opt in with includeIgnored', () => {

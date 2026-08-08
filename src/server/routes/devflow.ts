@@ -23,6 +23,11 @@ import { findProjectByIdentifier } from '../services/taskService';
 import { applyProjectAtlasAgentUpdate, getProjectAtlasForApi, getProjectAtlasStatus } from '../services/projectAtlasService';
 import { enqueueToolJob } from '../services/mcpToolJobService';
 import { getDevFlowRestartStatus, requestDevFlowRestart } from '../services/restartService';
+import { applyPreparedEditPlan, prepareEditPlan } from '../services/preparedEditService';
+import { prepareCompactEdit } from '../services/stenoEditProtocolService';
+import { applyAndVerifyAsync } from '../services/applyAndVerifyService';
+import { getRepoContextWithHandle } from '../services/contextHandleService';
+import { getRepoSemanticIndex } from '../services/repoInspectionIndexService';
 
 export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) {
   app.get('/api/capabilities', (_req, res) => {
@@ -181,6 +186,46 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
     }
   });
 
+  app.post('/api/local-files/edit-plans/prepare', (req, res) => {
+    try {
+      return res.json(prepareEditPlan(deps.state, req.body as Record<string, any>));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.post('/api/local-files/edit-plans/apply', (req, res) => {
+    try {
+      return res.json(applyPreparedEditPlan(req.body as Record<string, any>));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.post('/api/local-files/compact-edit/prepare', (req, res) => {
+    try {
+      return res.json(prepareCompactEdit(deps.state, req.body as Record<string, any>));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.post('/api/local-files/compact-edit/apply', (req, res) => {
+    try {
+      return res.json(applyPreparedEditPlan({ editPlanId: req.body?.editPlanId }));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.post('/api/workflows/apply-and-verify', async (req, res) => {
+    try {
+      return res.json(await applyAndVerifyAsync(deps.state, req.body as Record<string, any>));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
   app.post('/api/project-commands/run', (req, res) => {
     try {
       return res.json(runProjectCommand(deps.state, req.body as Record<string, any>));
@@ -221,6 +266,14 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
     }
   });
 
+  app.get('/api/repo-context/delta', (req, res) => {
+    try {
+      return res.json(getRepoContextWithHandle(deps.state, req.query as Record<string, any>));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
   app.get('/api/repo-read-snapshot', (req, res) => {
     try {
       return res.json(getRepoReadSnapshot(deps.state, req.query as Record<string, any>));
@@ -241,6 +294,14 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
   app.get('/api/repo-inspection-index', (req, res) => {
     try {
       return res.json(getRepoInspectionIndex(deps.state, req.query as Record<string, any>));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.get('/api/repo-inspection/semantic', (req, res) => {
+    try {
+      return res.json(getRepoSemanticIndex(deps.state, req.query as Record<string, any>));
     } catch (error) {
       return sendApiError(res, error);
     }

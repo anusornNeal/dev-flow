@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-git-commit-'));
 process.env.DEVFLOW_DB_PATH = path.join(tempRoot, 'devflow.db');
 
-const { commitGitChanges, getGitStatus, getGitLog } = await import('../../src/server/services/gitService.js');
+const { commitGitChanges, getGitStatus, getGitLog, getGitWorkspaceSnapshotForRoot } = await import('../../src/server/services/gitService.js');
 
 function git(root: string, args: string[]) {
   const result = spawnSync('git', args, {
@@ -147,6 +147,18 @@ test('commitGitChanges rejects unsafe selected paths', () => {
     }),
     /FILE_ACCESS_DENIED/,
   );
+});
+
+test('getGitWorkspaceSnapshotForRoot returns HEAD, branch and working-tree files from one porcelain snapshot', () => {
+  const repo = createRepo('workspace-snapshot');
+  fs.writeFileSync(path.join(repo, 'base.txt'), 'updated\n');
+  fs.writeFileSync(path.join(repo, 'new.txt'), 'new\n');
+
+  const snapshot = getGitWorkspaceSnapshotForRoot(repo);
+  assert.match(snapshot.head, /^[a-f0-9]{40}$/);
+  assert.ok(snapshot.branch.length > 0);
+  assert.ok(snapshot.files.some((file: any) => file.path === 'base.txt'));
+  assert.ok(snapshot.files.some((file: any) => file.path === 'new.txt'));
 });
 
 test.after(() => {

@@ -1,16 +1,23 @@
 import { spawnSync, spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'node:crypto';
 import type { AppState } from '../types';
 import { createApiError } from './api';
 import { resolveProjectRoot, resolveSafePath } from './localFileService';
 import { loadProjectCommandPreset } from './projectCommandConfigService';
+import { getRepoRevisionForRoot } from './repoRevisionService';
+import { getCachedCommandResult, rememberCommandResult } from './commandResultCacheService';
+import { readWorkspaceMetadataFile } from './workspaceMetadataCacheService';
 
 const ALLOWED_COMMANDS = ['typecheck', 'test', 'lint', 'build', 'verify'] as const;
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 12_000;
+const COMPACT_MAX_OUTPUT_BYTES = 2_000;
 const MAX_TIMEOUT_MS = 300_000;
 const MAX_OUTPUT_BYTES = 100_000;
+const MAX_PACKAGE_JSON_BYTES = 10 * 1024 * 1024;
+const packageScriptsParseCache = new Map<string, { size: number; mtimeMs: number; scripts: Record<string, string> }>();
 
 type AllowedCommand = typeof ALLOWED_COMMANDS[number];
 type CommandStatus = 'succeeded' | 'failed' | 'timed_out';
@@ -27,6 +34,12 @@ type ResolvedCommand = {
 
 export interface RunProjectCommandResult {
   ok: boolean;
+  responseMode?: 'compact' | 'standard' | 'debug';
+  processSpawns?: number;
+  performance?: {
+    resolutionMs: number;
+    executionMs: number;
+  };
   status: CommandStatus;
   command: string;
   cwd: string;
@@ -49,6 +62,13 @@ export interface RunProjectCommandResult {
     stderrBytes: number;
     stdoutTruncated: boolean;
     stderrTruncated: boolean;
+  };
+  cache?: {
+    hit: boolean;
+    key: string;
+    repoRevision: string;
+    cachedAt?: string;
+    originalDurationMs?: number;
   };
 }
 
@@ -76,6 +96,8 @@ function buildCommandResult(input: {
   stdoutRaw: string;
   stderrRaw: string;
   maxOutputBytes: number;
+  responseMode?: 'compact' | 'standard' | 'debug';
+  resolutionMs?: number;
 }): RunProjectCommandResult {
   const stdout = truncateOutput(input.stdoutRaw || '', input.maxOutputBytes);
   const stderr = truncateOutput(input.stderrRaw || '', input.maxOutputBytes);
@@ -87,6 +109,12 @@ function buildCommandResult(input: {
 
   return {
     ok: status === 'succeeded',
+    responseMode: input.responseMode ?? 'standard',
+    processSpawns: 1,
+    performance: {
+      resolutionMs: input.resolutionMs ?? 0,
+      executionMs: input.durationMs,
+    },
     status,
     command: input.command,
     cwd: path.relative(input.root, input.cwdPath) || '.',
@@ -142,25 +170,32 @@ function resolveSafeCommandCwd(root: string, cwdValue: unknown) {
 
 function readPackageScripts(root: string) {
   const packageJsonPath = path.join(root, 'package.json');
-  if (!fs.existsSync(packageJsonPath)) {
+  const metadata = readWorkspaceMetadataFile(packageJsonPath, MAX_PACKAGE_JSON_BYTES);
+  if (!metadata) {
+    packageScriptsParseCache.delete(path.resolve(packageJsonPath));
     return { exists: false, scripts: {} as Record<string, string> };
+  }
+
+  const cacheKey = path.resolve(packageJsonPath);
+  const cached = packageScriptsParseCache.get(cacheKey);
+  if (cached && cached.size === metadata.size && cached.mtimeMs === metadata.mtimeMs) {
+    return { exists: true, scripts: cached.scripts };
   }
 
   let parsed: any;
   try {
-    parsed = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+    parsed = JSON.parse(metadata.content);
   } catch (error) {
     throw createApiError(400, 'INVALID_PACKAGE_JSON', 'package.json could not be parsed.', {
       details: error instanceof Error ? error.message : String(error),
     });
   }
 
-  return {
-    exists: true,
-    scripts: parsed?.scripts && typeof parsed.scripts === 'object'
-      ? parsed.scripts as Record<string, string>
-      : {},
-  };
+  const scripts = parsed?.scripts && typeof parsed.scripts === 'object'
+    ? parsed.scripts as Record<string, string>
+    : {};
+  packageScriptsParseCache.set(cacheKey, { size: metadata.size, mtimeMs: metadata.mtimeMs, scripts });
+  return { exists: true, scripts };
 }
 
 function resolveAllowedCommand(root: string, command: string): ResolvedCommand {
@@ -204,7 +239,101 @@ function resolveAllowedCommand(root: string, command: string): ResolvedCommand {
   });
 }
 
+function resolveResponseMode(value: unknown): 'compact' | 'standard' | 'debug' {
+  return value === 'compact' || value === 'debug' ? value : 'standard';
+}
+
+function resolveOutputBudget(args: Record<string, any>, resolvedCommand: ResolvedCommand) {
+  const responseMode = resolveResponseMode(args.responseMode);
+  const requested = Number.isFinite(Number(args.maxOutputBytes))
+    ? Math.max(1, Math.min(MAX_OUTPUT_BYTES, Number(args.maxOutputBytes)))
+    : resolvedCommand.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
+  return {
+    responseMode,
+    maxOutputBytes: responseMode === 'compact' ? Math.min(COMPACT_MAX_OUTPUT_BYTES, requested) : requested,
+  };
+}
+
+function commandCacheContext(
+  root: string,
+  resolvedCommand: ResolvedCommand,
+  cwdPath: string,
+  timeoutMs: number,
+  maxOutputBytes: number,
+  args: Record<string, any>,
+) {
+  const enabled = args.cacheResult === true || String(args.cacheResult).toLowerCase() === 'true';
+  if (!enabled) return null;
+  let revision;
+  try {
+    revision = getRepoRevisionForRoot(root);
+  } catch {
+    return null;
+  }
+  const identity = {
+    repoRevision: revision.token,
+    command: resolvedCommand.command,
+    executable: resolvedCommand.executable,
+    args: resolvedCommand.args,
+    cwd: path.relative(root, cwdPath) || '.',
+    timeoutMs,
+    maxOutputBytes,
+    source: resolvedCommand.source,
+    configPath: resolvedCommand.configPath,
+    platform: process.platform,
+    node: process.version,
+    env: {
+      CI: process.env.CI || '',
+      NODE_ENV: process.env.NODE_ENV || '',
+    },
+  };
+  const key = crypto.createHash('sha256').update(JSON.stringify(identity)).digest('hex');
+  return { key, repoRevision: revision.token };
+}
+
+function cachedCommandResult(cacheContext: ReturnType<typeof commandCacheContext>, resolutionMs = 0, responseMode: 'compact' | 'standard' | 'debug' = 'standard') {
+  if (!cacheContext) return null;
+  const cached = getCachedCommandResult<RunProjectCommandResult>(cacheContext.key);
+  if (!cached) return null;
+  return {
+    ...cached.value,
+    durationMs: 0,
+    responseMode,
+    processSpawns: 0,
+    performance: {
+      resolutionMs,
+      executionMs: 0,
+    },
+    cache: {
+      hit: true,
+      key: cacheContext.key,
+      repoRevision: cacheContext.repoRevision,
+      cachedAt: new Date(cached.createdAt).toISOString(),
+      originalDurationMs: cached.value.durationMs,
+    },
+  } satisfies RunProjectCommandResult;
+}
+
+function rememberSuccessfulCommandResult(
+  cacheContext: ReturnType<typeof commandCacheContext>,
+  result: RunProjectCommandResult,
+  args: Record<string, any>,
+) {
+  if (!cacheContext) return result;
+  if (result.ok) rememberCommandResult(cacheContext.key, result, args.cacheTtlMs);
+  return {
+    ...result,
+    cache: {
+      hit: false,
+      key: cacheContext.key,
+      repoRevision: cacheContext.repoRevision,
+      originalDurationMs: result.durationMs,
+    },
+  } satisfies RunProjectCommandResult;
+}
+
 export function runProjectCommand(state: AppState, args: Record<string, any>): RunProjectCommandResult {
+  const resolutionStartedAt = Date.now();
   const root = resolveProjectRoot(state, args);
   const command = resolveCommandLabel(args.command ?? args.preset);
   const resolvedCommand = resolveAllowedCommand(root, command);
@@ -212,9 +341,12 @@ export function runProjectCommand(state: AppState, args: Record<string, any>): R
   const timeoutMs = Number.isFinite(Number(args.timeoutMs))
     ? Math.max(1, Math.min(MAX_TIMEOUT_MS, Number(args.timeoutMs)))
     : resolvedCommand.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const maxOutputBytes = Number.isFinite(Number(args.maxOutputBytes))
-    ? Math.max(1, Math.min(MAX_OUTPUT_BYTES, Number(args.maxOutputBytes)))
-    : resolvedCommand.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
+  const { responseMode, maxOutputBytes } = resolveOutputBudget(args, resolvedCommand);
+  const resolutionMs = Date.now() - resolutionStartedAt;
+
+  const cacheContext = commandCacheContext(root, resolvedCommand, cwdPath, timeoutMs, maxOutputBytes, args);
+  const cached = cachedCommandResult(cacheContext, resolutionMs, responseMode);
+  if (cached) return cached;
 
   const startedAt = Date.now();
   const result = spawnSync(resolvedCommand.executable, resolvedCommand.args, {
@@ -233,7 +365,7 @@ export function runProjectCommand(state: AppState, args: Record<string, any>): R
     });
   }
 
-  return buildCommandResult({
+  const commandResult = buildCommandResult({
     command,
     root,
     cwdPath,
@@ -244,10 +376,14 @@ export function runProjectCommand(state: AppState, args: Record<string, any>): R
     stdoutRaw: result.stdout || '',
     stderrRaw: result.stderr || '',
     maxOutputBytes,
+    responseMode,
+    resolutionMs,
   });
+  return rememberSuccessfulCommandResult(cacheContext, commandResult, args);
 }
 
 export async function runProjectCommandAsync(state: AppState, args: Record<string, any>, logger: { stdout: (data: string) => void, stderr: (data: string) => void }, setCancelFn: (fn: () => void) => void): Promise<RunProjectCommandResult> {
+  const resolutionStartedAt = Date.now();
   const root = resolveProjectRoot(state, args);
   const command = resolveCommandLabel(args.command ?? args.preset);
   const resolvedCommand = resolveAllowedCommand(root, command);
@@ -255,9 +391,12 @@ export async function runProjectCommandAsync(state: AppState, args: Record<strin
   const timeoutMs = Number.isFinite(Number(args.timeoutMs))
     ? Math.max(1, Math.min(MAX_TIMEOUT_MS, Number(args.timeoutMs)))
     : resolvedCommand.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const maxOutputBytes = Number.isFinite(Number(args.maxOutputBytes))
-    ? Math.max(1, Math.min(MAX_OUTPUT_BYTES, Number(args.maxOutputBytes)))
-    : resolvedCommand.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
+  const { responseMode, maxOutputBytes } = resolveOutputBudget(args, resolvedCommand);
+  const resolutionMs = Date.now() - resolutionStartedAt;
+
+  const cacheContext = commandCacheContext(root, resolvedCommand, cwdPath, timeoutMs, maxOutputBytes, args);
+  const cached = cachedCommandResult(cacheContext, resolutionMs, responseMode);
+  if (cached) return cached;
 
   const startedAt = Date.now();
   
@@ -303,7 +442,7 @@ export async function runProjectCommandAsync(state: AppState, args: Record<strin
       clearTimeout(timeoutId);
       const durationMs = Date.now() - startedAt;
 
-      resolve(buildCommandResult({
+      const commandResult = buildCommandResult({
         command,
         root,
         cwdPath,
@@ -314,7 +453,10 @@ export async function runProjectCommandAsync(state: AppState, args: Record<strin
         stdoutRaw: stdoutBuffer,
         stderrRaw: stderrBuffer,
         maxOutputBytes,
-      }));
+        responseMode,
+        resolutionMs,
+      });
+      resolve(rememberSuccessfulCommandResult(cacheContext, commandResult, args));
     });
   });
 }

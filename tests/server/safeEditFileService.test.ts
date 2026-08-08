@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { safeEditFile } from '../../src/server/services/safeEditFileService.js';
+import { applyPreparedSafeEditFile, prepareSafeEditFile, safeEditFile } from '../../src/server/services/safeEditFileService.js';
 
 const tempDir = path.join(process.cwd(), 'tests', 'server', '.tmp_safe_edit');
 const testFile = path.join(tempDir, 'test.txt');
@@ -130,6 +130,34 @@ test('safeEditFileService test suite', async (t) => {
     });
     assert.equal(result.ok, false);
     assert.equal(result.error?.code, 'FILE_NOT_FOUND');
+  });
+
+  await t.test('applies a prepared edit without recomputing the edit intent', () => {
+    const prepared = prepareSafeEditFile(mockState, {
+      filePath: relativeFilePath,
+      edits: [{ type: 'replace', find: 'line3', replaceWith: 'lineThree' }],
+    });
+
+    assert.equal(prepared.result.ok, true, prepared.result.error?.message);
+    assert.equal(fs.readFileSync(testFile, 'utf8'), 'line1\nline2\nline3\nline4\nline5\n');
+
+    const applied = applyPreparedSafeEditFile(prepared);
+    assert.equal(applied.ok, true, applied.error?.message);
+    assert.equal(applied.dryRun, false);
+    assert.equal(fs.readFileSync(testFile, 'utf8'), 'line1\nline2\nlineThree\nline4\nline5\n');
+  });
+
+  await t.test('rejects a prepared edit when the file changes after prepare', () => {
+    const prepared = prepareSafeEditFile(mockState, {
+      filePath: relativeFilePath,
+      edits: [{ type: 'replace', find: 'line3', replaceWith: 'lineThree' }],
+    });
+    fs.writeFileSync(testFile, 'newer content\n', 'utf8');
+
+    const applied = applyPreparedSafeEditFile(prepared);
+    assert.equal(applied.ok, false);
+    assert.equal(applied.error?.code, 'CONTENT_CHANGED');
+    assert.equal(fs.readFileSync(testFile, 'utf8'), 'newer content\n');
   });
 
   await t.test('matches LF anchors against CRLF files and preserves CRLF output', () => {

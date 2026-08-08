@@ -7,7 +7,11 @@ import path from 'node:path';
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-local-search-'));
 process.env.DEVFLOW_DB_PATH = path.join(tempDir, 'devflow.db');
 
-const { clearLocalFileSearchCache, searchLocalFiles, searchLocalFilesAsync, writeLocalFile } = await import('../../src/server/services/localFileService.js');
+const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
+executeAllMigrations();
+const { createProject } = await import('../../src/server/repositories/projectRepository.js');
+createProject({ id: 'project-search-1', name: 'Search Fixture', repoUrl: 'https://example.com/search', localPath: tempDir });
+const { clearLocalFileSearchCache, getLocalSearchRuntimeStatus, searchLocalFiles, searchLocalFilesAsync, writeLocalFile } = await import('../../src/server/services/localFileService.js');
 
 const state: any = {
   projectsCache: [
@@ -22,9 +26,40 @@ test.beforeEach(() => {
   clearLocalFileSearchCache();
 });
 
-test('searchLocalFiles falls back when ripgrep is unavailable on PATH', () => {
+test('getLocalSearchRuntimeStatus resolves a DevFlow-bundled ripgrep before PATH', () => {
+  const appRoot = path.join(tempDir, 'app-root');
+  const target = `${process.platform}-${process.arch}`;
+  const binary = process.platform === 'win32' ? 'rg.exe' : 'rg';
+  const bundledPath = path.join(appRoot, 'node_modules', '@vscode', 'ripgrep', 'bin', target, binary);
+  fs.mkdirSync(path.dirname(bundledPath), { recursive: true });
+  fs.writeFileSync(bundledPath, process.platform === 'win32' ? '' : '#!/bin/sh\nexit 0\n', 'utf8');
+  if (process.platform !== 'win32') fs.chmodSync(bundledPath, 0o755);
+
+  const previousAppRoot = process.env.DEVFLOW_APP_ROOT;
   const previousPath = process.env.PATH;
+  process.env.DEVFLOW_APP_ROOT = appRoot;
   process.env.PATH = '';
+  try {
+    const status = getLocalSearchRuntimeStatus();
+    assert.equal(status.backend, 'ripgrep');
+    assert.equal(path.resolve(status.ripgrepPath!), path.resolve(bundledPath));
+    assert.equal(status.ripgrepSource, 'devflow-bundled');
+  } finally {
+    if (previousAppRoot === undefined) delete process.env.DEVFLOW_APP_ROOT;
+    else process.env.DEVFLOW_APP_ROOT = previousAppRoot;
+    process.env.PATH = previousPath;
+  }
+});
+
+test('searchLocalFiles falls back when no ripgrep source is available', () => {
+  const previousPath = process.env.PATH;
+  const previousAppRoot = process.env.DEVFLOW_APP_ROOT;
+  const previousLocalAppData = process.env.LOCALAPPDATA;
+  const previousProgramFiles = process.env.ProgramFiles;
+  process.env.PATH = '';
+  process.env.DEVFLOW_APP_ROOT = path.join(tempDir, 'missing-app-root');
+  process.env.LOCALAPPDATA = path.join(tempDir, 'missing-local-app-data');
+  process.env.ProgramFiles = path.join(tempDir, 'missing-program-files');
   try {
     const result = searchLocalFiles(state, {
       projectId: 'project-search-1',
@@ -37,12 +72,24 @@ test('searchLocalFiles falls back when ripgrep is unavailable on PATH', () => {
     assert.equal(result.backend, 'fallback');
   } finally {
     process.env.PATH = previousPath;
+    if (previousAppRoot === undefined) delete process.env.DEVFLOW_APP_ROOT;
+    else process.env.DEVFLOW_APP_ROOT = previousAppRoot;
+    if (previousLocalAppData === undefined) delete process.env.LOCALAPPDATA;
+    else process.env.LOCALAPPDATA = previousLocalAppData;
+    if (previousProgramFiles === undefined) delete process.env.ProgramFiles;
+    else process.env.ProgramFiles = previousProgramFiles;
   }
 });
 
-test('searchLocalFilesAsync falls back when ripgrep is unavailable on PATH', async () => {
+test('searchLocalFilesAsync falls back when no ripgrep source is available', async () => {
   const previousPath = process.env.PATH;
+  const previousAppRoot = process.env.DEVFLOW_APP_ROOT;
+  const previousLocalAppData = process.env.LOCALAPPDATA;
+  const previousProgramFiles = process.env.ProgramFiles;
   process.env.PATH = '';
+  process.env.DEVFLOW_APP_ROOT = path.join(tempDir, 'missing-app-root');
+  process.env.LOCALAPPDATA = path.join(tempDir, 'missing-local-app-data');
+  process.env.ProgramFiles = path.join(tempDir, 'missing-program-files');
   try {
     const result = await searchLocalFilesAsync(
       state,
@@ -63,9 +110,14 @@ test('searchLocalFilesAsync falls back when ripgrep is unavailable on PATH', asy
     assert.equal(result.backend, 'fallback');
   } finally {
     process.env.PATH = previousPath;
+    if (previousAppRoot === undefined) delete process.env.DEVFLOW_APP_ROOT;
+    else process.env.DEVFLOW_APP_ROOT = previousAppRoot;
+    if (previousLocalAppData === undefined) delete process.env.LOCALAPPDATA;
+    else process.env.LOCALAPPDATA = previousLocalAppData;
+    if (previousProgramFiles === undefined) delete process.env.ProgramFiles;
+    else process.env.ProgramFiles = previousProgramFiles;
   }
 });
-
 test('searchLocalFiles returns cache metadata on repeated identical searches', () => {
   const first = searchLocalFiles(state, {
     projectId: 'project-search-1',
@@ -169,3 +221,5 @@ test('writeLocalFile preserves revision for identical existing content', () => {
 test.after(() => {
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
+
+// SQLite keeps a process-level connection open on Windows; OS temp cleanup owns tempDir.

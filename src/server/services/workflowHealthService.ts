@@ -2,6 +2,8 @@ import type { AppState } from '../types';
 import { getCapabilityCatalog } from '../contracts/devflowContract';
 import { getGitStatus } from './gitService';
 import { getDevFlowDiagnostics } from './mcpToolMonitor';
+import { getLocalSearchRuntimeStatus } from './localFileService';
+import { evaluatePerformanceSlo } from './performanceSloService';
 
 type Probe<T> = { ok: true; value: T } | { ok: false; error: { message: string; code?: string; status?: number } };
 
@@ -51,6 +53,8 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
   const catalog = getCapabilityCatalog();
   const diagnostics = getDevFlowDiagnostics({ windowMs });
   const gitProbe = probe(() => getGitStatus(state, args));
+  const search = getLocalSearchRuntimeStatus();
+  const performance = evaluatePerformanceSlo(Array.isArray(diagnostics?.tools?.topTools) ? diagnostics.tools.topTools : []);
 
   const git = gitProbe.ok === true ? {
     ok: true,
@@ -81,6 +85,10 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
   }
   if (staleAgentRuns > 0) recommendations.push('There are stale agent runs; cancel or retry them before starting more agent-owned work.');
   if (duplicateBursts > 0) recommendations.push('Duplicate tool bursts detected; prefer get_repo_context_bundle before repeated reads/searches.');
+  if (performance.regressions.length > 0) {
+    const slow = performance.regressions.slice(0, 3).map((entry) => `${entry.toolName} p95=${entry.p95DurationMs}ms>${entry.budgetMs}ms`).join(', ');
+    recommendations.push(`Performance SLO regression detected: ${slow}.`);
+  }
 
   const keyToolsPresent = {
     get_repo_context_bundle: catalog.tools.some((tool: any) => tool.name === 'get_repo_context_bundle'),
@@ -102,10 +110,11 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
       toolCount: catalog.tools.length,
       lightweightToolCount: catalog.tools.filter((tool: any) => tool.lightweight).length,
       asyncToolCount: catalog.tools.filter((tool: any) => tool.executionPolicy?.mode === 'job').length,
+      search,
       keyToolsPresent,
     },
     git,
-    diagnostics: { queueDepth, failedJobs, failedJobGroups, failedJobSummaries, staleAgentRuns, duplicateBursts },
+    diagnostics: { queueDepth, failedJobs, failedJobGroups, failedJobSummaries, staleAgentRuns, duplicateBursts, performance },
     recommendations,
   };
 }

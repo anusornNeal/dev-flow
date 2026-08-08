@@ -58,6 +58,7 @@ test('editFilesBatch applies multiple files after preflight succeeds', () => {
 
   assert.equal(result.ok, true);
   assert.equal(result.dryRun, false);
+  assert.equal(result.preflightReused, true);
   assert.equal(readFixture('apply-a.txt'), 'alpha uno');
   assert.equal(readFixture('apply-b.txt'), 'beta dos');
 });

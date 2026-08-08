@@ -1,6 +1,6 @@
 import type express from 'express';
 import type { ApiRouteDeps } from '../types';
-import { enqueueToolJob, getToolJobStatus, cancelToolJob, getJobMetrics, getQueueMetrics } from '../services/mcpToolJobService';
+import { enqueueToolJob, getToolJobStatus, cancelToolJob, getJobMetrics, getQueueMetrics, waitForToolJob } from '../services/mcpToolJobService';
 import { readJobLog, readJobResult } from '../repositories/mcpToolJobRepository';
 import { createApiError } from '../services/api';
 import { getToolDefinitionByName } from '../contracts/devflowContract';
@@ -63,9 +63,10 @@ export function registerMcpToolJobRoutes(app: express.Express, deps: ApiRouteDep
     }
   });
 
-  app.get('/api/tool-jobs/:jobId/result', (req, res, next) => {
+  app.get('/api/tool-jobs/:jobId/result', async (req, res, next) => {
     try {
-      const status = getToolJobStatus(req.params.jobId);
+      const waitMs = Number.isFinite(Number(req.query.waitMs)) ? Math.max(0, Math.min(30_000, Number(req.query.waitMs))) : 0;
+      const status = waitMs > 0 ? await waitForToolJob(req.params.jobId, waitMs) : getToolJobStatus(req.params.jobId);
       if (!status) {
         throw createApiError(404, 'JOB_NOT_FOUND', `Job not found: ${req.params.jobId}`);
       }

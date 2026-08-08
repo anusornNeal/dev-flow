@@ -18,6 +18,14 @@ const LEGACY_MASTER_SKILL_IDS = new Set(MASTER_SKILL_SEEDS.map((skill) => skill.
 
 const skillFileCache = new Map<string, { content: string; mtimeMs: number; cachedAt: number }>();
 
+function masterSkillSourcePath(id: string) {
+  return path.posix.join('skills', `${id}.md`);
+}
+
+function masterSkillFilePath(id: string) {
+  return path.join(SKILLS_DIR, `${id}.md`);
+}
+
 function readSkillFileWithCache(filePath: string) {
   const stat = fs.statSync(filePath);
   const now = Date.now();
@@ -68,7 +76,7 @@ export function initSkillsRepository() {
     .filter((seed) => LEGACY_MASTER_SKILL_IDS.has(seed.id) && !existingIds.has(seed.id))
     .map((seed) => {
       const legacySeed = legacySeedsById.get(seed.id);
-      const filePath = path.join(SKILLS_DIR, `${seed.id}.md`);
+      const filePath = masterSkillFilePath(seed.id);
       return {
         id: seed.id,
         name: legacySeed?.name || seed.name,
@@ -77,7 +85,7 @@ export function initSkillsRepository() {
         isCustom: false,
         isProtected: true,
         sourceType: 'repo-file',
-        sourcePath: filePath,
+        sourcePath: masterSkillSourcePath(seed.id),
         filePath,
         content: fs.existsSync(filePath) ? readSkillFileWithCache(filePath) : '',
         createdAt: new Date().toISOString(),
@@ -93,7 +101,16 @@ export function initSkillsRepository() {
   currentSkills.forEach((skill) => {
     skill.isCustom = Boolean(skill.isCustom);
     skill.isProtected = Boolean(skill.isProtected);
-    skill.filePath = skill.sourcePath || skill.filePath || (!skill.isCustom ? path.join(SKILLS_DIR, `${skill.id}.md`) : undefined);
+    if (!skill.isCustom) {
+      const expectedSourcePath = masterSkillSourcePath(skill.id);
+      if (skill.sourcePath !== expectedSourcePath) {
+        skill.sourcePath = expectedSourcePath;
+        needsSave = true;
+      }
+      skill.filePath = masterSkillFilePath(skill.id);
+    } else {
+      skill.filePath = skill.sourcePath || skill.filePath;
+    }
 
     if (!skill.isCustom && skill.filePath && fs.existsSync(skill.filePath)) {
       const fileContent = readSkillFileWithCache(skill.filePath);
@@ -196,7 +213,9 @@ export function deleteSkill(id: string): void {
 }
 
 export function readSkillContent(skill: any) {
-  const filePath = skill?.sourcePath || skill?.filePath;
-  if (!skill?.isCustom && filePath && fs.existsSync(filePath)) return readSkillFileWithCache(filePath);
+  if (!skill?.isCustom && skill?.id) {
+    const filePath = masterSkillFilePath(String(skill.id));
+    if (fs.existsSync(filePath)) return readSkillFileWithCache(filePath);
+  }
   return skill?.content || '';
 }

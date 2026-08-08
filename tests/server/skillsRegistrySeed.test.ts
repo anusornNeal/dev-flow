@@ -12,6 +12,7 @@ const { executeAllMigrations } = await import('../../src/db/migrations/index.js'
 executeAllMigrations();
 
 const { initSkillsRepository, getSkills } = await import('../../src/server/repositories/skillsRepository.js');
+const db = (await import('../../src/db/index.js')).default;
 const express = (await import('express')).default;
 const { registerSkillRoutes } = await import('../../src/server/routes/skills.js');
 
@@ -34,6 +35,19 @@ test('initSkillsRepository seeds all repo authoring skills when the database is 
   assert.ok(authoringCore);
   assert.ok(authoringCore.content.includes('DevFlow Authoring Core'));
   assert.equal(authoringCore.isProtected, true);
+});
+
+test('master skills replace stale machine-specific source paths with repo-relative paths', () => {
+  const stalePath = path.join(tempDir, 'old-machine', 'skills', '00-skill-router.md');
+  db.prepare('UPDATE skills SET sourcePath = ? WHERE id = ?').run(stalePath, '00-skill-router');
+
+  initSkillsRepository();
+
+  const router = getSkills().find((skill: any) => skill.id === '00-skill-router');
+  assert.ok(router);
+  assert.equal(router.sourcePath, 'skills/00-skill-router.md');
+  assert.equal(path.isAbsolute(router.sourcePath), false);
+  assert.match(router.content, /DevFlow Skill Router/);
 });
 
 test('authoring skills endpoint returns the repo skill set in file order', async () => {

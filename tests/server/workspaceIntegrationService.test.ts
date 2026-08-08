@@ -75,6 +75,32 @@ test('dirty base blocks integration before mutation', () => {
   assert.equal(git(root, ['rev-parse', 'HEAD']).stdout, before);
 });
 
+test('rewritten base history blocks stale workspace integration before merge mutation', () => {
+  const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-integration-rewritten-'));
+  process.env.DEVFLOW_RUNTIME_DIR = runtimeRoot;
+  resetSessionWorkspaceRuntimeForTests();
+  const root = repoFixture();
+  const workspace = createOrReuseSessionWorkspace(project(root), 'chat-rewritten');
+  commitFile(workspace.root, 'workspace.txt', 'one\n', 'workspace one');
+
+  const originalBranch = workspace.baseBranch;
+  git(root, ['checkout', '--orphan', 'rewritten-base']);
+  for (const entry of fs.readdirSync(root)) {
+    if (entry === '.git') continue;
+    fs.rmSync(path.join(root, entry), { recursive: true, force: true });
+  }
+  fs.writeFileSync(path.join(root, 'rewritten.txt'), 'new root\n');
+  git(root, ['add', '.']);
+  git(root, ['commit', '-m', 'rewritten root']);
+  git(root, ['branch', '-D', originalBranch]);
+  git(root, ['branch', '-m', originalBranch]);
+  const before = git(root, ['rev-parse', 'HEAD']).stdout;
+
+  assert.throws(() => integrateWorkspaceCommits(workspace.workspaceId), /no longer descends|rewritten/i);
+  assert.equal(git(root, ['rev-parse', 'HEAD']).stdout, before);
+  assert.equal(git(root, ['status', '--porcelain']).stdout, '');
+});
+
 test('same-line conflict returns INTEGRATION_CONFLICT and abort restores clean base', () => {
   const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-integration-conflict-'));
   process.env.DEVFLOW_RUNTIME_DIR = runtimeRoot;

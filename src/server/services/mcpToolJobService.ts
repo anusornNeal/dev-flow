@@ -29,6 +29,7 @@ type AsyncRunner = (
   args: any,
   logger: Logger,
   setCancelFn: (fn: () => void) => void,
+  transitionAccess: (accessMode: ResourceAccessMode) => void,
 ) => Promise<any>;
 
 type SchedulerBlocker = {
@@ -534,6 +535,27 @@ function setJobActiveContext(jobId: string, cancelFn: () => void) {
   }
 }
 
+function transitionJobAccess(jobId: string, nextAccessMode: ResourceAccessMode) {
+  const active = activeJobs.get(jobId);
+  if (!active) throw new Error(`Cannot transition scheduler access for inactive job ${jobId}.`);
+
+  const entry = active.entry;
+  if (entry.accessMode === nextAccessMode) return;
+  if (entry.accessMode !== 'write' || nextAccessMode !== 'verify') {
+    throw new Error(`Unsafe scheduler access transition ${entry.accessMode} -> ${nextAccessMode} for ${jobId}.`);
+  }
+
+  const stats = getResourceStats(entry.resourceKey);
+  stats.accessCount.write = Math.max(0, stats.accessCount.write - 1);
+  stats.costCount.write = Math.max(0, stats.costCount.write - 1);
+  entry.accessMode = 'verify';
+  entry.costClass = 'verify';
+  stats.accessCount.verify += 1;
+  stats.costCount.verify += 1;
+  appendJobLog(jobId, 'stdout', '[Scheduler] Access downgraded write -> verify.\n');
+  setImmediate(processQueue);
+}
+
 async function startJob(entry: QueueEntry) {
   incrementResource(entry);
   activeJobs.set(entry.jobId, { entry });
@@ -549,7 +571,13 @@ async function startJob(entry: QueueEntry) {
     const testRunner = testRunners.get(entry.toolName);
     
     if (testRunner) {
-      result = await testRunner(entry.state, entry.args, logger, (cancelFn) => setJobActiveContext(entry.jobId, cancelFn));
+      result = await testRunner(
+        entry.state,
+        entry.args,
+        logger,
+        (cancelFn) => setJobActiveContext(entry.jobId, cancelFn),
+        (accessMode) => transitionJobAccess(entry.jobId, accessMode),
+      );
     } else if (entry.toolName === 'run_project_command') {
       result = await runProjectCommandAsync(entry.state, entry.args, logger, (cancelFn) => setJobActiveContext(entry.jobId, cancelFn));
     } else if (entry.toolName === 'apply_patch') {
@@ -573,7 +601,13 @@ async function startJob(entry: QueueEntry) {
     } else if (entry.toolName === 'apply_prepared_edit') {
       result = applyPreparedEditPlan({ editPlanId: entry.args?.editPlanId });
     } else if (entry.toolName === 'apply_and_verify') {
-      result = await applyAndVerifyAsync(entry.state, entry.args, logger, (cancelFn) => setJobActiveContext(entry.jobId, cancelFn));
+      result = await applyAndVerifyAsync(
+        entry.state,
+        entry.args,
+        logger,
+        (cancelFn) => setJobActiveContext(entry.jobId, cancelFn),
+        (accessMode) => transitionJobAccess(entry.jobId, accessMode),
+      );
     } else if (entry.toolName === 'delete_local_path') {
       result = deleteLocalPath(entry.state, entry.args);
     } else if (entry.toolName === 'move_local_path') {

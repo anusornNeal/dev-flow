@@ -113,6 +113,41 @@ test('applyAndVerifyAsync runs resource-safe targeted verification commands conc
   assert.equal(result.verificationPerformance?.processSpawns, 2);
 });
 
+test('applyAndVerifyAsync requests verify access after mutation and before verification starts', async () => {
+  const root = fixture('phase-transition');
+  const verificationMarker = path.join(tempRoot, 'phase-transition-marker.txt');
+  fs.writeFileSync(path.join(root, 'scripts', 'test.mjs'), [
+    "import fs from 'node:fs';",
+    `fs.writeFileSync(${JSON.stringify(verificationMarker)}, 'verification-started', 'utf8');`,
+    "process.stdout.write('verified\\n');",
+  ].join('\n'), 'utf8');
+  git(root, ['add', '.']);
+  git(root, ['commit', '-m', 'phase transition fixture']);
+
+  const transitions: string[] = [];
+  const result = await applyAndVerifyAsync(
+    stateFor(root),
+    {
+      projectId: 'project-apply-verify',
+      files: [{ filePath: 'src/value.ts', edits: [{ type: 'replace', find: 'value = 1', replaceWith: 'value = 5' }] }],
+      requestedCommands: ['test'],
+      cacheVerificationResults: false,
+      forceFresh: true,
+    },
+    { stdout: () => {}, stderr: () => {} },
+    () => {},
+    (accessMode: string) => {
+      assert.match(fs.readFileSync(path.join(root, 'src', 'value.ts'), 'utf8'), /value = 5/);
+      assert.equal(fs.existsSync(verificationMarker), false, 'verification must not start before scheduler downgrade');
+      transitions.push(accessMode);
+    },
+  );
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(transitions, ['verify']);
+  assert.equal(fs.existsSync(verificationMarker), true);
+});
+
 test('applyAndVerifyAsync fails cheap prerequisite before launching a later isolated expensive stage', async () => {
   const root = fixture('stage-fail-fast');
   const expensiveCounter = path.join(tempRoot, 'expensive-stage-counter.txt');

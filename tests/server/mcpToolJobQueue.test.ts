@@ -530,6 +530,67 @@ test('mcpToolJobService - saturated search pool does not head-of-line block a li
   }
 });
 
+test('mcpToolJobService - write job atomically downgrades to verify and unblocks reads but not writers', async () => {
+  const root = makeTempRepo('write-verify-downgrade');
+  const state = makeState(root);
+  const toolName = `test_downgrade_${randomUUID()}`;
+  const starts: string[] = [];
+  const downgradeGate = deferred();
+  const primaryDone = deferred();
+  const readDone = deferred();
+  const writerDone = deferred();
+
+  __setToolJobTestRunner(toolName, async (_state, args, _logger, _setCancelFn, transitionAccess: any) => {
+    starts.push(args.label);
+    if (args.label === 'primary') {
+      await downgradeGate.promise;
+      transitionAccess('verify');
+      starts.push('downgraded');
+      await primaryDone.promise;
+    } else if (args.label === 'read') {
+      await readDone.promise;
+    } else if (args.label === 'writer') {
+      await writerDone.promise;
+    }
+    return { ok: true, label: args.label };
+  });
+
+  try {
+    const primary = enqueueToolJob(state, toolName, { localPath: root, label: 'primary' }, 'repo-command');
+    await waitUntil(() => starts.includes('primary'), 'Expected primary write phase to start');
+    assert.strictEqual(getToolJobStatus(primary.jobId)?.accessMode, 'write');
+
+    const read = enqueueToolJob(state, toolName, { localPath: root, label: 'read', singleFlight: false }, 'repo-read');
+    const writer = enqueueToolJob(state, toolName, { localPath: root, label: 'writer' }, 'repo-write');
+    await new Promise(resolve => setTimeout(resolve, 75));
+    assert.strictEqual(getToolJobStatus(read.jobId)?.status, 'queued');
+    assert.strictEqual(getToolJobStatus(writer.jobId)?.status, 'queued');
+
+    downgradeGate.resolve();
+    await waitUntil(() => starts.includes('downgraded') && starts.includes('read'), 'Expected downgrade to let the earlier read start');
+    assert.strictEqual(getToolJobStatus(primary.jobId)?.accessMode, 'verify');
+    assert.strictEqual(getToolJobStatus(read.jobId)?.status, 'running');
+    assert.strictEqual(getToolJobStatus(writer.jobId)?.status, 'queued');
+
+    primaryDone.resolve();
+    await waitForStatus(primary.jobId, 'succeeded');
+    await new Promise(resolve => setTimeout(resolve, 50));
+    assert.strictEqual(getToolJobStatus(writer.jobId)?.status, 'queued', 'writer must still wait for the active read');
+
+    readDone.resolve();
+    await waitForStatus(read.jobId, 'succeeded');
+    await waitUntil(() => starts.includes('writer'), 'Expected writer to start only after verify/read activity finishes');
+    writerDone.resolve();
+    await waitForStatus(writer.jobId, 'succeeded');
+  } finally {
+    downgradeGate.resolve();
+    primaryDone.resolve();
+    readDone.resolve();
+    writerDone.resolve();
+    __setToolJobTestRunner(toolName, null);
+  }
+});
+
 test('mcpToolJobService - stress read/write/command queue ordering on one repo', async () => {
   const root = makeTempRepo('stress-same-repo');
   const state = makeState(root);

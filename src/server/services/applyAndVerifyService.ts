@@ -143,6 +143,7 @@ export async function applyAndVerifyAsync(
   args: Record<string, any>,
   logger: VerificationLogger = silentVerificationLogger,
   setCancelFn: (fn: () => void) => void = () => {},
+  transitionAccess: (accessMode: 'verify') => void = () => {},
 ) {
   const edit = typeof args.editPlanId === 'string' && args.editPlanId.trim()
     ? applyPreparedEditPlan({ editPlanId: args.editPlanId })
@@ -190,6 +191,10 @@ export async function applyAndVerifyAsync(
       parallelVerification: false,
       error: error instanceof Error ? error.message : String(error),
     };
+  }
+
+  if (plan.steps.length > 0) {
+    transitionAccess('verify');
   }
 
   const verification: RunProjectCommandResult[] = [];

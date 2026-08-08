@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-const { getMcpToolList, getToolProfileSummary } = await import('../../src/server/contracts/devflowContract.js');
+const { getCapabilityCatalog, getMcpToolList, getToolProfileSummary, resolveDevFlowToolProfile } = await import('../../src/server/contracts/devflowContract.js');
 
 test('coding MCP profile is materially smaller than full while preserving core coding workflow tools', () => {
   const full = getMcpToolList('full');
@@ -23,6 +23,12 @@ test('coding MCP profile is materially smaller than full while preserving core c
     'run_project_command',
     'get_git_diff',
     'commit_git_changes',
+    'push_git_branch',
+    'get_git_sync_status',
+    'sync_task_with_git',
+    'submit_task_for_review',
+    'complete_task_review',
+    'get_tool_job_result',
     'devflow_health_check',
   ]) {
     assert.equal(names.has(required), true, `coding profile should include ${required}`);
@@ -33,4 +39,28 @@ test('tool profile summary reports serialized schema bytes', () => {
   const summary = getToolProfileSummary();
   assert.ok(summary.full.toolCount > summary.coding.toolCount);
   assert.ok(summary.full.schemaBytes > summary.coding.schemaBytes);
+});
+
+test('MCP profile resolution defaults to coding and preserves explicit profiles', () => {
+  assert.equal(resolveDevFlowToolProfile(undefined).profile, 'coding');
+  assert.equal(resolveDevFlowToolProfile('').profile, 'coding');
+  assert.equal(resolveDevFlowToolProfile('full').profile, 'full');
+  assert.equal(resolveDevFlowToolProfile('review').profile, 'review');
+  const unknown = resolveDevFlowToolProfile('unknown-profile');
+  assert.equal(unknown.profile, 'coding');
+  assert.equal(unknown.fallback, true);
+});
+
+test('capability catalog exposes active MCP profile and schema bytes', () => {
+  const previous = process.env.DEVFLOW_MCP_TOOL_PROFILE;
+  delete process.env.DEVFLOW_MCP_TOOL_PROFILE;
+  try {
+    const catalog = getCapabilityCatalog();
+    assert.equal(catalog.mcpProfile.active, 'coding');
+    assert.equal(catalog.mcpProfile.toolCount, getMcpToolList('coding').length);
+    assert.ok(catalog.mcpProfile.schemaBytes > 0);
+  } finally {
+    if (previous === undefined) delete process.env.DEVFLOW_MCP_TOOL_PROFILE;
+    else process.env.DEVFLOW_MCP_TOOL_PROFILE = previous;
+  }
 });

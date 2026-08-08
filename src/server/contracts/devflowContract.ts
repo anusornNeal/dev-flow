@@ -2427,18 +2427,32 @@ export function getToolSchema(name: string) {
 
 export type DevFlowToolProfile = 'full' | 'coding' | 'authoring' | 'review' | 'atlas' | 'diagnostics';
 
+export const DEVFLOW_TOOL_PROFILES: DevFlowToolProfile[] = ['full', 'coding', 'authoring', 'review', 'atlas', 'diagnostics'];
+
+export function resolveDevFlowToolProfile(value = process.env.DEVFLOW_MCP_TOOL_PROFILE) {
+  const configured = typeof value === 'string' ? value.trim() : '';
+  if (!configured) return { profile: 'coding' as DevFlowToolProfile, configured: null, fallback: false };
+  const normalized = configured.toLowerCase();
+  if (DEVFLOW_TOOL_PROFILES.includes(normalized as DevFlowToolProfile)) {
+    return { profile: normalized as DevFlowToolProfile, configured, fallback: false };
+  }
+  return { profile: 'coding' as DevFlowToolProfile, configured, fallback: true };
+}
+
 const CODING_PROFILE_TOOLS = new Set([
+  'get_capabilities', 'get_tool_schema', 'list_projects', 'list_tasks', 'search_tasks',
   'get_project_start_context', 'repo_read_snapshot', 'get_repo_context_bundle', 'get_repo_context_delta',
   'get_repo_inspection_index', 'get_repo_semantic_index', 'list_local_files', 'read_local_file', 'read_file_snippets_batch',
   'search_local_files', 'write_local_file', 'safe_edit_local_file', 'edit_local_files_batch', 'prepare_edit_plan',
   'apply_prepared_edit_plan', 'prepare_compact_edit', 'apply_prepared_edit', 'apply_and_verify', 'delete_local_path', 'move_local_path', 'apply_patch', 'run_project_command',
   'parse_test_report', 'get_git_status', 'get_git_diff', 'get_git_log', 'get_git_show', 'get_git_branch', 'get_git_sync_status',
   'get_change_summary', 'ensure_git_branch', 'commit_git_changes', 'push_git_branch', 'get_agent_task_context', 'get_agent_context',
-  'get_task', 'move_task_to_status', 'complete_task_review', 'get_tool_job_status', 'get_tool_job_log', 'get_tool_job_result',
+  'get_task', 'update_task', 'toggle_task_checklist', 'batch_toggle_task_checklist', 'sync_task_with_git', 'submit_task_for_review',
+  'move_task_to_status', 'complete_task_review', 'get_tool_job_status', 'get_tool_job_log', 'get_tool_job_result',
   'cancel_tool_job', 'devflow_health_check', 'get_tool_call_summary', 'get_devflow_diagnostics',
 ]);
 
-function toolAllowedInProfile(name: string, profile: DevFlowToolProfile) {
+export function isToolAllowedInProfile(name: string, profile: DevFlowToolProfile) {
   if (profile === 'full') return true;
   if (profile === 'coding') return CODING_PROFILE_TOOLS.has(name);
   if (profile === 'atlas') return name.includes('atlas') || ['get_repo_context_bundle', 'read_local_file', 'read_file_snippets_batch', 'search_local_files'].includes(name);
@@ -2450,7 +2464,7 @@ function toolAllowedInProfile(name: string, profile: DevFlowToolProfile) {
 export function getMcpToolList(profile: DevFlowToolProfile = 'full') {
   const tools = [];
   for (const tool of devFlowToolDefinitions) {
-    if (!toolAllowedInProfile(tool.name, profile)) continue;
+    if (!isToolAllowedInProfile(tool.name, profile)) continue;
     let outputSchema = tool.outputSchema;
     let description = tool.description;
 
@@ -2492,8 +2506,7 @@ export function getMcpToolList(profile: DevFlowToolProfile = 'full') {
 }
 
 export function getToolProfileSummary() {
-  const profiles: DevFlowToolProfile[] = ['full', 'coding', 'authoring', 'review', 'atlas', 'diagnostics'];
-  return Object.fromEntries(profiles.map((profile) => {
+  return Object.fromEntries(DEVFLOW_TOOL_PROFILES.map((profile) => {
     const tools = getMcpToolList(profile);
     return [profile, {
       toolCount: tools.length,
@@ -2504,6 +2517,8 @@ export function getToolProfileSummary() {
 
 export function getCapabilityCatalog() {
   const toolNames = new Set(devFlowToolDefinitions.map((tool) => tool.name));
+  const profileResolution = resolveDevFlowToolProfile();
+  const activeProfileSummary = getToolProfileSummary()[profileResolution.profile];
   const hasTool = (name: string) => toolNames.has(name);
   const matrix = {
     git: {
@@ -2560,6 +2575,14 @@ export function getCapabilityCatalog() {
   const missingSteps = Object.entries(steps).filter(([, available]) => !available).map(([name]) => name);
   return {
     contractVersion: DEVFLOW_CONTRACT_VERSION,
+    mcpProfile: {
+      active: profileResolution.profile,
+      configured: profileResolution.configured,
+      fallback: profileResolution.fallback,
+      toolCount: activeProfileSummary.toolCount,
+      schemaBytes: activeProfileSummary.schemaBytes,
+      availableProfiles: DEVFLOW_TOOL_PROFILES,
+    },
     matrix,
     workflow: {
       ready: missingSteps.length === 0,

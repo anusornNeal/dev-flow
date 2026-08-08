@@ -109,6 +109,7 @@ JIRA_EMAIL=""
 JIRA_API_TOKEN=""
 DEVFLOW_AGENT_TRIGGER_SCRIPT="scripts/trigger-agent.bat"
 DEVFLOW_AGENT_EXECUTION_MODE="safe"
+DEVFLOW_MCP_TOOL_PROFILE="coding"
 ```
 
 Notes:
@@ -116,6 +117,7 @@ Notes:
 - GitHub/Jira tokens are for connector-backed context tools, not basic local task board usage.
 - Agent CLI setup is separate from DevFlow setup. Install and authenticate Codex, Antigravity, Claude, or another CLI before asking DevFlow to launch it.
 - UI settings can override connector credentials where supported.
+- MCP sessions default to the lean `coding` tool profile when `DEVFLOW_MCP_TOOL_PROFILE` is unset. Set it explicitly to `full`, `authoring`, `review`, `atlas`, or `diagnostics` when that broader/specialized surface is needed; unknown values safely fall back to `coding` and are exposed in capability diagnostics.
 
 ## Common Commands
 
@@ -148,6 +150,7 @@ Most users can run local DevFlow without editing `.env`. Edit `.env` only for pu
 - `GITHUB_PERSONAL_ACCESS_TOKEN`: optional GitHub connector token fallback.
 - `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN`: optional Jira connector credential fallback.
 - `DEVFLOW_AGENT_TRIGGER_SCRIPT`, `DEVFLOW_AGENT_EXECUTION_MODE`: optional agent launcher behavior.
+- `DEVFLOW_MCP_TOOL_PROFILE`: optional MCP surface override. Default is `coding`; `full`, `authoring`, `review`, `atlas`, and `diagnostics` remain available explicitly.
 
 ## Data and Persistence
 

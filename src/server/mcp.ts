@@ -1,7 +1,7 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { createCorrelationId } from './services/api';
-import { getCapabilityCatalog, getMcpToolList, getToolDefinitionByName, type DevFlowToolProfile } from './contracts/devflowContract';
+import { getCapabilityCatalog, getMcpToolList, getToolDefinitionByName, isToolAllowedInProfile, resolveDevFlowToolProfile } from './contracts/devflowContract';
 import { recordToolCall } from './services/mcpToolMonitor';
 
 function buildMcpToolError(params: {
@@ -170,18 +170,14 @@ function toMcpTextPayload(data: unknown) {
 }
 
 export function createDevFlowMcpServer(baseUrl: string) {
+  const profileResolution = resolveDevFlowToolProfile();
+  const activeProfile = profileResolution.profile;
   const server = new Server(
     { name: 'dev-flow-mcp', version: getCapabilityCatalog().contractVersion },
     { capabilities: { tools: {} } },
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => {
-    const configuredProfile = String(process.env.DEVFLOW_MCP_TOOL_PROFILE || 'full');
-    const profile: DevFlowToolProfile = ['coding', 'authoring', 'review', 'atlas', 'diagnostics'].includes(configuredProfile)
-      ? configuredProfile as DevFlowToolProfile
-      : 'full';
-    return { tools: getMcpToolList(profile) as any };
-  });
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: getMcpToolList(activeProfile) as any }));
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const toolName = request.params.name;
@@ -194,6 +190,24 @@ export function createDevFlowMcpServer(baseUrl: string) {
       return {
         isError: true,
         content: [{ type: 'text', text: JSON.stringify({ code: 'UNKNOWN_TOOL', message: `Unknown tool: ${toolName}`, retryable: false, correlationId }) }],
+      };
+    }
+
+    if (!isToolAllowedInProfile(tool.name, activeProfile)) {
+      return {
+        isError: true,
+        content: [{ type: 'text', text: JSON.stringify({
+          code: 'TOOL_PROFILE_MISMATCH',
+          message: `Tool ${toolName} is not available in the active '${activeProfile}' MCP profile.`,
+          retryable: false,
+          correlationId,
+          details: {
+            activeProfile,
+            configuredProfile: profileResolution.configured,
+            fallback: profileResolution.fallback,
+            guidance: 'Select DEVFLOW_MCP_TOOL_PROFILE=full or a specialized profile that contains this tool, then restart/refresh the MCP session.',
+          },
+        }) }],
       };
     }
 

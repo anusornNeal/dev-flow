@@ -7,11 +7,13 @@ import path from 'node:path';
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-read-modes-'));
 process.env.DEVFLOW_DB_PATH = path.join(tempDir, 'devflow.db');
+const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
+executeAllMigrations();
 
 const express = (await import('express')).default;
 const { registerApiRoutes } = await import('../../src/server/routes/registerApiRoutes.js');
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
-const {  } = await import('../../src/server/repositories/taskRepository.js');
+const { saveTask } = await import('../../src/server/repositories/taskRepository.js');
 
 const state: any = {
   _testTasks: [
@@ -82,6 +84,7 @@ const state: any = {
 };
 
 ((state as any).projectsCache || []).forEach(p => createProject(p));
+((state as any)._testTasks || []).forEach((task: any) => saveTask(task));
 
 
 

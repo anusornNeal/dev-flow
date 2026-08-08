@@ -8,7 +8,7 @@ import type express from 'express';
 import type { ApiRouteDeps } from '../types';
 import { TASK_SCHEMA_DEF, VALID_AGENTS, LEGACY_VALID_EFFORTS_FALLBACK, VALID_MODELS, VALID_STATUSES } from '../constants';
 import { ACTIVE_AGENT_RUN_STATUSES, cancelActiveRunsForTask, cancelStaleActiveRuns, createAgentRun, getActiveRunForProjectAndAgent, getActiveRunForTask, getLatestAgentRunForTask, listActiveRunSummariesForProject, listAgentRunsForTask, updateAgentRunStatus, type AgentRun } from '../repositories/agentRunRepository';
-import { deleteTasksByIds, generateDisplayId, resolveDisplayIdForNewTask, saveTask, getTasks } from '../repositories/taskRepository.js';
+import { archiveInactiveDoneTasks, deleteTasksByIds, generateDisplayId, queryTaskBoardPage, resolveDisplayIdForNewTask, restoreArchivedTask, saveTask, getTasks } from '../repositories/taskRepository.js';
 import { listAttachmentsForTask } from '../repositories/attachmentRepository';
 import { appendAgentRunLog, buildAgentCompletionSummary, createAgentRunFiles, createAgentRunResultRecord, getAgentRunHistoryPaths, getAgentTriggerScriptPath, getDevFlowApiBaseUrl, resolveAgentExecutionMode, resolveFromDevFlowAppRoot, writeAgentRunLaunchMetadata, writeAgentRunOutputSummary, writeAgentRunResult } from '../services/agentRunService';
 import { extractImages, extractDesignImages, findProjectByIdentifier, findTaskByIdentifier, getAgentTaskContext, normalizeAgentCompletionPayload, normalizeTaskCategoryAndTags, applyTaskCategoryAndTagsUpdate, renderTaskPrompt, resolveProjectIdFromRepo, validateAgentCompletionPayload, validateAgentParams, validateTaskPayload } from '../services/taskService';
@@ -46,6 +46,7 @@ import {
   maybeTriggerTaskAgent,
   parseTaskReadMode,
   requireAgentOwnedRequest,
+  resolveTaskBoardListQuery,
   runThrottledStaleCleanup,
   stripRequestControlFields,
   syncTaskAgentStateForStatus,
@@ -66,9 +67,27 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     runThrottledStaleCleanup(deps);
     const req = _req as express.Request;
     const mode = parseTaskReadMode(req.query.mode, 'full');
-    const hasModernQuery = ['mode', 'projectId', 'projectName', 'repo', 'repoUrl', 'localPath', 'parentId', 'status', 'q', 'limit', 'offset'].some((key) => req.query[key] !== undefined);
-    const filteredTasks = filterTasksForList(deps, req);
+    const hasModernQuery = ['mode', 'projectId', 'projectName', 'repo', 'repoUrl', 'localPath', 'parentId', 'status', 'q', 'limit', 'offset', 'archived'].some((key) => req.query[key] !== undefined);
 
+    const boardArchive = mode === 'board' && req.query.archived !== 'true'
+      ? archiveInactiveDoneTasks()
+      : { archivedCount: 0, skipped: true };
+    if (mode === 'board' && typeof req.query.status === 'string') {
+      const query = resolveTaskBoardListQuery(deps, req);
+      const page = queryTaskBoardPage(query);
+      return res.json({
+        ...page,
+        items: page.items.map((task) => toTaskResponse(task, mode)),
+        mode,
+        archive: boardArchive,
+      });
+    }
+
+    let filteredTasks = filterTasksForList(deps, req);
+    if (mode === 'board') {
+      const showArchived = req.query.archived === 'true';
+      filteredTasks = filteredTasks.filter((task) => showArchived ? Boolean(task.archivedAt) : !task.archivedAt);
+    }
     if (!hasModernQuery) {
       return res.json(getTasks());
     }
@@ -99,6 +118,13 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     const task = findTaskByIdentifier(deps.state, req.params.id);
     if (!task) return res.status(404).json({ error: 'Task not found' });
     return res.json(toTaskResponse(task, mode));
+  });
+
+  app.post('/api/tasks/:id/restore', (req, res) => {
+    const task = findTaskByIdentifier(deps.state, req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+    const restored = restoreArchivedTask(task.id);
+    return res.json({ success: true, task: toTaskResponse(restored, 'standard') });
   });
 
   app.get('/api/tasks/:id/images', (req, res) => {

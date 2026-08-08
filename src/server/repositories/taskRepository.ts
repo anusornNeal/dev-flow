@@ -35,6 +35,7 @@ const TASK_COLUMNS = [
   'bugs',
   'gitEvidence',
   'verificationEvidence',
+  'archivedAt',
 ] as const;
 
 const TASK_UPSERT_SQL = `
@@ -69,7 +70,8 @@ const TASK_UPSERT_SQL = `
     images = excluded.images,
     bugs = excluded.bugs,
     gitEvidence = excluded.gitEvidence,
-    verificationEvidence = excluded.verificationEvidence
+    verificationEvidence = excluded.verificationEvidence,
+    archivedAt = COALESCE(excluded.archivedAt, tasks.archivedAt)
 `;
 
 export class StaleTaskUpdateError extends Error {
@@ -84,6 +86,7 @@ export class StaleTaskUpdateError extends Error {
 let categoryColumnEnsured = false;
 let bugsColumnEnsured = false;
 let workflowEvidenceColumnsEnsured = false;
+let archiveColumnEnsured = false;
 const DISPLAY_ID_COUNTER_MAX = 999999;
 
 function isSafeDisplayIdCounter(value: number) {
@@ -188,10 +191,27 @@ function ensureTaskWorkflowEvidenceColumns() {
   workflowEvidenceColumnsEnsured = true;
 }
 
+function ensureTaskArchiveColumn() {
+  if (archiveColumnEnsured) return;
+  const tableInfo = db.pragma('table_info(tasks)') as Array<{ name: string }>;
+  const columns = new Set(tableInfo.map((column) => column.name));
+  if (!columns.has('archivedAt')) {
+    db.prepare('ALTER TABLE tasks ADD COLUMN archivedAt TEXT').run();
+  }
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_tasks_board_page
+      ON tasks(projectId, status, archivedAt, parentId, createdAt DESC, id DESC);
+    CREATE INDEX IF NOT EXISTS idx_tasks_archive_age
+      ON tasks(status, archivedAt, updatedAt);
+  `);
+  archiveColumnEnsured = true;
+}
+
 function ensureTaskColumns() {
   ensureTaskCategoryColumn();
   ensureTaskBugsColumn();
   ensureTaskWorkflowEvidenceColumns();
+  ensureTaskArchiveColumn();
 }
 
 export function loadCounters(state: AppState) {
@@ -359,6 +379,99 @@ export function getTasksByProjectId(projectId: string): any[] {
   return rows.map(row => parseTaskRow(row, runsByTaskId));
 }
 
+export type TaskBoardPageOptions = {
+  projectId?: string;
+  status?: string;
+  parentId?: string;
+  query?: string;
+  archived?: boolean;
+  limit?: number;
+  offset?: number;
+};
+
+export function queryTaskBoardPage(options: TaskBoardPageOptions) {
+  ensureTaskColumns();
+  const limit = Number.isFinite(Number(options.limit)) ? Math.max(1, Math.min(100, Number(options.limit))) : 25;
+  const offset = Number.isFinite(Number(options.offset)) ? Math.max(0, Math.floor(Number(options.offset))) : 0;
+  const archived = options.archived === true;
+  const where: string[] = [archived ? 'archivedAt IS NOT NULL' : 'archivedAt IS NULL'];
+  const params: any[] = [];
+
+  if (options.projectId) {
+    where.push('projectId = ?');
+    params.push(options.projectId);
+  }
+  if (options.status) {
+    where.push('status = ?');
+    params.push(options.status);
+  }
+  if (options.parentId) {
+    where.push('parentId = ?');
+    params.push(options.parentId);
+  } else {
+    where.push("(parentId IS NULL OR parentId = '')");
+  }
+  const query = String(options.query || '').trim().toLowerCase();
+  if (query) {
+    const like = `%${query}%`;
+    where.push(`LOWER(COALESCE(id, '') || ' ' || COALESCE(displayId, '') || ' ' || COALESCE(title, '') || ' ' || COALESCE(description, '') || ' ' || COALESCE(reasoning, '') || ' ' || COALESCE(acceptanceCriteria, '') || ' ' || COALESCE(verification, '')) LIKE ?`);
+    params.push(like);
+  }
+
+  const whereSql = `WHERE ${where.join(' AND ')}`;
+  const totalRow = db.prepare(`SELECT COUNT(*) AS total FROM tasks ${whereSql}`).get(...params) as { total: number };
+  const rows = db.prepare(`
+    SELECT * FROM tasks
+    ${whereSql}
+    ORDER BY createdAt DESC, id DESC
+    LIMIT ? OFFSET ?
+  `).all(...params, limit, offset) as any[];
+  const runsByTaskId = getAllAgentRunsByTaskId(rows.map((row) => row.id));
+  const items = rows.map((row) => parseTaskRow(row, runsByTaskId));
+  const total = Number(totalRow?.total || 0);
+  return {
+    items,
+    total,
+    limit,
+    offset,
+    hasMore: offset + items.length < total,
+    archived,
+    hydratedTaskCount: rows.length,
+  };
+}
+
+export function archiveInactiveDoneTasks(options: { now?: string; cutoff?: string } = {}) {
+  ensureTaskColumns();
+  const now = options.now || new Date().toISOString();
+  const cutoff = options.cutoff || new Date(Date.parse(now) - 90 * 24 * 60 * 60 * 1000).toISOString();
+  const result = db.prepare(`
+    UPDATE tasks
+    SET archivedAt = ?
+    WHERE status = 'done'
+      AND archivedAt IS NULL
+      AND updatedAt <= ?
+      AND NOT EXISTS (
+        SELECT 1 FROM agent_runs
+        WHERE agent_runs.taskId = tasks.id
+          AND (
+            agent_runs.status IN ('queued', 'starting', 'running')
+            OR datetime(COALESCE(agent_runs.endedAt, agent_runs.startedAt, agent_runs.createdAt)) > datetime(?)
+          )
+      )
+  `).run(now, cutoff, cutoff);
+  return { archivedCount: result.changes, now, cutoff };
+}
+
+export function restoreArchivedTask(taskId: string, now = new Date().toISOString()) {
+  ensureTaskColumns();
+  db.prepare(`
+    UPDATE tasks
+    SET archivedAt = NULL, updatedAt = ?
+    WHERE id = ? AND archivedAt IS NOT NULL
+  `).run(now, taskId);
+  return getTask(taskId);
+}
+
 export function getPendingTasks(): any[] {
   ensureTaskColumns();
   const rows = db.prepare("SELECT * FROM tasks WHERE status = 'todo' AND agent IS NOT NULL AND agent != ''").all() as any[];
@@ -407,6 +520,7 @@ function serializeTaskForRow(item: any) {
     item.bugs ? JSON.stringify(item.bugs) : null,
     item.gitEvidence ? JSON.stringify(item.gitEvidence) : null,
     Array.isArray(item.verificationEvidence) ? JSON.stringify(item.verificationEvidence) : null,
+    item.archivedAt ?? null,
   ];
 }
 

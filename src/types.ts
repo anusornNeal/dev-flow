@@ -136,6 +136,7 @@ export interface Task {
   tags: string[];
   createdAt: string;
   updatedAt: string;
+  archivedAt?: string | null;
   logs: LogEntry[];
   targetFiles?: string[];
   checklist?: ChecklistItem[];

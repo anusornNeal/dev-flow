@@ -100,6 +100,7 @@ export function toTaskResponse(task: any, mode: TaskReadMode) {
       model: task.model,
       effort: task.effort,
       updatedAt: task.updatedAt,
+      archivedAt: task.archivedAt ?? null,
       latestAgentRun: task.latestAgentRun,
       ...bugSummaryFields(task),
     };
@@ -119,6 +120,7 @@ export function toTaskResponse(task: any, mode: TaskReadMode) {
       tags: task.tags,
       createdAt: task.createdAt,
       updatedAt: task.updatedAt,
+      archivedAt: task.archivedAt ?? null,
       targetFiles: task.targetFiles,
       checklist: task.checklist,
       images: task.images,
@@ -211,6 +213,22 @@ function resolveTaskListProjectId(deps: ApiRouteDeps, req: express.Request) {
     localPath: typeof req.query.localPath === 'string' ? req.query.localPath : undefined,
   });
   return project?.id || null;
+}
+
+export function resolveTaskBoardListQuery(deps: ApiRouteDeps, req: express.Request) {
+  const resolvedProjectId = resolveTaskListProjectId(deps, req);
+  const projectId = resolvedProjectId || (typeof req.query.projectId === 'string' ? req.query.projectId : '');
+  const requestedParentId = typeof req.query.parentId === 'string' ? req.query.parentId : '';
+  const parentTask = requestedParentId ? findTaskByIdentifier(deps.state, requestedParentId) : null;
+  return {
+    projectId: projectId || undefined,
+    parentId: requestedParentId ? (parentTask?.id || requestedParentId) : undefined,
+    status: typeof req.query.status === 'string' ? req.query.status : undefined,
+    query: typeof req.query.q === 'string' ? req.query.q.trim() : undefined,
+    archived: normalizeFlag(req.query.archived),
+    limit: Number.isFinite(Number(req.query.limit)) ? Math.max(1, Math.min(100, Number(req.query.limit))) : 25,
+    offset: Number.isFinite(Number(req.query.offset)) ? Math.max(0, Math.floor(Number(req.query.offset))) : 0,
+  };
 }
 
 export function filterTasksForList(deps: ApiRouteDeps, req: express.Request) {

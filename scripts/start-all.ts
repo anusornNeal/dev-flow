@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import fs from 'node:fs';
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
@@ -29,7 +30,10 @@ type ManagedProcess = {
   env?: Record<string, string>;
 };
 
+type StartAllMode = 'all' | 'server-only';
+
 type StartAllPlan = {
+  mode: StartAllMode;
   appUrl: string;
   openBrowser: boolean;
   openBrowserDelayMs: number;
@@ -53,6 +57,21 @@ function parseBoolean(value: string | undefined, fallback: boolean) {
 function executableFor(command: string) {
   return process.platform === 'win32' ? `${command}.cmd` : command;
 }
+export function buildNpmInvocation(args: string[], env: NodeJS.ProcessEnv = process.env) {
+  const npmExecPath = String(env.npm_execpath || '').trim();
+  if (npmExecPath) {
+    return { command: process.execPath, args: [npmExecPath, ...args] };
+  }
+
+  if (process.platform === 'win32') {
+    const installedNpmCli = path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
+    if (fs.existsSync(installedNpmCli)) {
+      return { command: process.execPath, args: [installedNpmCli, ...args] };
+    }
+  }
+
+  return { command: executableFor('npm'), args };
+}
 
 export function buildNgrokArgs({ port, domain }: { port: number; domain: string }) {
   const args = ['http'];
@@ -72,23 +91,31 @@ export function resolveStartAllOptions(env: NodeJS.ProcessEnv = process.env): St
   };
 }
 
-export function buildStartAllPlan(options: StartAllOptions, supervisorToken = randomUUID()): StartAllPlan {
+export function buildStartAllPlan(
+  options: StartAllOptions,
+  supervisorToken: string = randomUUID(),
+  mode: StartAllMode = 'all',
+): StartAllPlan {
+  const serverInvocation = buildNpmInvocation(['run', 'dev:server']);
+  const server: ManagedProcess = {
+    label: 'server',
+    command: serverInvocation.command,
+    args: serverInvocation.args,
+    env: {
+      [DEVFLOW_RESTART_SUPERVISOR_ENV]: DEVFLOW_RESTART_SUPERVISOR_START_ALL,
+      [DEVFLOW_RESTART_SUPERVISOR_TOKEN_ENV]: supervisorToken,
+    },
+  };
+  const processes = mode === 'all'
+    ? [server, { label: 'ngrok', command: executableFor('ngrok'), args: buildNgrokArgs({ port: options.port, domain: options.ngrokDomain }) }]
+    : [server];
+
   return {
+    mode,
     appUrl: `http://localhost:${options.port}`,
-    openBrowser: options.openBrowser,
+    openBrowser: mode === 'all' ? options.openBrowser : false,
     openBrowserDelayMs: options.openBrowserDelayMs,
-    processes: [
-      {
-        label: 'server',
-        command: executableFor('npm'),
-        args: ['run', 'dev'],
-        env: {
-          [DEVFLOW_RESTART_SUPERVISOR_ENV]: DEVFLOW_RESTART_SUPERVISOR_START_ALL,
-          [DEVFLOW_RESTART_SUPERVISOR_TOKEN_ENV]: supervisorToken,
-        },
-      },
-      { label: 'ngrok', command: executableFor('ngrok'), args: buildNgrokArgs({ port: options.port, domain: options.ngrokDomain }) },
-    ],
+    processes,
   };
 }
 
@@ -108,7 +135,8 @@ function openUrl(url: string) {
 
 function runSetup() {
   console.log('[start-all] Running setup...');
-  const result = spawnSync(executableFor('npm'), ['run', 'setup'], {
+  const npmSetup = buildNpmInvocation(['run', 'setup']);
+  const result = spawnSync(npmSetup.command, npmSetup.args, {
     stdio: 'inherit',
     env: process.env,
   });
@@ -167,10 +195,10 @@ function startProcess(processConfig: ManagedProcess, callbacks: ProcessCallbacks
   return child;
 }
 
-export function startAll() {
-  runSetup();
+export function startAll(mode: StartAllMode = 'all') {
+  if (mode === 'all') runSetup();
 
-  const plan = buildStartAllPlan(resolveStartAllOptions());
+  const plan = buildStartAllPlan(resolveStartAllOptions(), randomUUID(), mode);
   const children = new Map<string, ChildProcessWithoutNullStreams>();
   let shuttingDown = false;
 
@@ -268,5 +296,6 @@ const entryPath = process.argv[1] ? path.resolve(process.argv[1]) : '';
 const currentPath = fileURLToPath(import.meta.url);
 
 if (entryPath === currentPath) {
-  startAll();
+  const mode: StartAllMode = process.argv.slice(2).includes('--server-only') ? 'server-only' : 'all';
+  startAll(mode);
 }

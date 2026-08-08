@@ -73,6 +73,8 @@ test('restart route rejects hosts without the start-all supervisor', async () =>
 
     assert.equal(response.status, 409);
     assert.equal(body.error?.code, 'RESTART_UNSUPPORTED');
+    assert.match(body.error?.message || '', /npm run dev/);
+    assert.match(body.error?.message || '', /dev:server/);
     assert.deepEqual(exits, []);
   });
 });

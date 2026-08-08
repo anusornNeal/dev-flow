@@ -71,7 +71,7 @@ export function requestDevFlowRestart(
     throw createApiError(
       409,
       'RESTART_UNSUPPORTED',
-      'Safe DevFlow restart requires the start-all supervisor. Start DevFlow with npm run start:all, then retry.',
+      'Safe DevFlow restart requires the DevFlow supervisor. Start DevFlow with npm run dev (or npm run start:all when ngrok is needed); raw npm run dev:server is intentionally not restartable.',
       {
         details: {
           requiredSupervisor: DEVFLOW_RESTART_SUPERVISOR_START_ALL,

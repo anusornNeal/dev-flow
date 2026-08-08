@@ -22,6 +22,50 @@ test.beforeEach(() => {
   clearLocalFileSearchCache();
 });
 
+test('searchLocalFiles falls back when ripgrep is unavailable on PATH', () => {
+  const previousPath = process.env.PATH;
+  process.env.PATH = '';
+  try {
+    const result = searchLocalFiles(state, {
+      projectId: 'project-search-1',
+      query: 'needle',
+      limit: 3,
+    });
+
+    assert.equal(result.count, 3);
+    assert.equal(result.matches.length, 3);
+    assert.equal(result.backend, 'fallback');
+  } finally {
+    process.env.PATH = previousPath;
+  }
+});
+
+test('searchLocalFilesAsync falls back when ripgrep is unavailable on PATH', async () => {
+  const previousPath = process.env.PATH;
+  process.env.PATH = '';
+  try {
+    const result = await searchLocalFilesAsync(
+      state,
+      {
+        projectId: 'project-search-1',
+        query: 'needle',
+        limit: 2,
+      },
+      {
+        stdout: () => {},
+        stderr: () => {},
+      },
+      () => {},
+    );
+
+    assert.equal(result.count, 2);
+    assert.equal(result.matches.length, 2);
+    assert.equal(result.backend, 'fallback');
+  } finally {
+    process.env.PATH = previousPath;
+  }
+});
+
 test('searchLocalFiles returns cache metadata on repeated identical searches', () => {
   const first = searchLocalFiles(state, {
     projectId: 'project-search-1',
@@ -102,6 +146,24 @@ test('writeLocalFile invalidates cached search results for the same project root
   });
   assert.equal(afterWrite.cache.hit, false);
   assert.equal(afterWrite.count, 1);
+});
+
+test('writeLocalFile preserves revision for identical existing content', () => {
+  const first = writeLocalFile(state, {
+    projectId: 'project-search-1',
+    filePath: 'no-op.txt',
+    content: 'same-content',
+  });
+  const second = writeLocalFile(state, {
+    projectId: 'project-search-1',
+    filePath: 'no-op.txt',
+    content: 'same-content',
+  });
+
+  assert.equal(first.created, true);
+  assert.equal(second.created, false);
+  assert.equal(second.changed, false);
+  assert.equal(second.revision, first.revision);
 });
 
 test.after(() => {

@@ -44,6 +44,17 @@ const DEFAULT_RIPGREP_EXCLUDES = [
 const READ_CHUNK_BYTES = 64 * 1024;
 const SEARCH_CACHE_TTL_MS = 30_000;
 const SEARCH_CACHE_MAX_ENTRIES = 100;
+const FALLBACK_SEARCH_MAX_FILES = 5_000;
+const FALLBACK_SEARCH_MAX_FILE_BYTES = 200 * 1024;
+
+type SearchBackend = 'ripgrep' | 'fallback';
+
+type RipgrepResolution = {
+  key: string;
+  executable: string | null;
+};
+
+let ripgrepResolutionCache: RipgrepResolution | null = null;
 
 type SearchResult = {
   root: string;
@@ -54,6 +65,7 @@ type SearchResult = {
   truncated: boolean;
   matches: Array<{ path: string; line: number; preview: string }>;
   terminatedAfterLimit?: boolean;
+  backend?: SearchBackend;
   cache?: {
     hit: boolean;
     generatedAt: string;
@@ -122,6 +134,157 @@ function shouldUseIgnoredEntries(args: Record<string, any>) {
 
 function shouldSkipEntry(entryName: string, args: Record<string, any>) {
   return !shouldUseIgnoredEntries(args) && DEFAULT_IGNORED_ENTRY_NAMES.has(entryName);
+}
+
+function shouldSkipFallbackDirectory(entryName: string, args: Record<string, any>) {
+  if (shouldUseIgnoredEntries(args)) return false;
+  return shouldSkipEntry(entryName, args) || ['.yarn', '.vscode', '.idea'].includes(entryName);
+}
+
+function shouldSkipFallbackFile(filePath: string, args: Record<string, any>) {
+  if (shouldUseIgnoredEntries(args)) return false;
+  const name = path.basename(filePath).toLowerCase();
+  return name.endsWith('.lock')
+    || name.endsWith('-lock.json')
+    || name.endsWith('.map')
+    || name.endsWith('.min.js')
+    || name.endsWith('.min.css')
+    || name.endsWith('.log');
+}
+
+function pathExecutableCandidates(directory: string) {
+  const base = path.join(directory, 'rg');
+  if (process.platform !== 'win32') return [base];
+  const pathExt = String(process.env.PATHEXT || '.COM;.EXE;.BAT;.CMD')
+    .split(';')
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
+  const preferred = ['.exe', ...pathExt.filter((entry) => entry !== '.exe')];
+  return preferred.map((extension) => `${base}${extension}`);
+}
+
+function isExecutableFile(candidate: string) {
+  try {
+    const stat = fs.statSync(candidate);
+    if (!stat.isFile()) return false;
+    fs.accessSync(candidate, process.platform === 'win32' ? fs.constants.F_OK : fs.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function resolveRipgrepExecutable() {
+  const explicit = String(process.env.DEVFLOW_RG_PATH || '').trim();
+  const pathValue = String(process.env.PATH || '');
+  const key = `${process.platform}|${explicit}|${pathValue}|${String(process.env.PATHEXT || '')}`;
+  if (ripgrepResolutionCache?.key === key) return ripgrepResolutionCache.executable;
+
+  let executable: string | null = null;
+  if (explicit) {
+    const candidate = path.resolve(explicit);
+    if (isExecutableFile(candidate)) executable = candidate;
+  }
+
+  if (!executable && pathValue) {
+    for (const directory of pathValue.split(path.delimiter).map((entry) => entry.trim()).filter(Boolean)) {
+      const normalizedDirectory = directory.replace(/^"|"$/g, '');
+      for (const candidate of pathExecutableCandidates(normalizedDirectory)) {
+        if (isExecutableFile(candidate)) {
+          executable = candidate;
+          break;
+        }
+      }
+      if (executable) break;
+    }
+  }
+
+  ripgrepResolutionCache = { key, executable };
+  return executable;
+}
+
+export function getLocalSearchRuntimeStatus() {
+  const ripgrepPath = resolveRipgrepExecutable();
+  return {
+    backend: (ripgrepPath ? 'ripgrep' : 'fallback') as SearchBackend,
+    ripgrepPath,
+    fallbackAvailable: true,
+  };
+}
+
+function compileFallbackSearchRegex(query: string) {
+  try {
+    return new RegExp(query);
+  } catch (error) {
+    throw createApiError(400, 'SEARCH_QUERY_INVALID', 'Search query is not a valid regular expression.', {
+      details: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+function searchLocalFilesFallback(root: string, searchPath: string, query: string, limit: number, args: Record<string, any>) {
+  const matcher = compileFallbackSearchRegex(query);
+  const matches: Array<{ path: string; line: number; preview: string }> = [];
+  let scannedMatchCount = 0;
+  let scannedFiles = 0;
+  let truncated = false;
+  const stack = [searchPath];
+
+  while (stack.length > 0 && scannedFiles < FALLBACK_SEARCH_MAX_FILES && !truncated) {
+    const currentPath = stack.pop()!;
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(currentPath);
+    } catch {
+      continue;
+    }
+
+    if (stat.isDirectory()) {
+      let entries: fs.Dirent[];
+      try {
+        entries = fs.readdirSync(currentPath, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (let index = entries.length - 1; index >= 0; index -= 1) {
+        const entry = entries[index];
+        if (entry.isSymbolicLink()) continue;
+        if (entry.isDirectory() && shouldSkipFallbackDirectory(entry.name, args)) continue;
+        stack.push(path.join(currentPath, entry.name));
+      }
+      continue;
+    }
+
+    if (!stat.isFile() || stat.size > FALLBACK_SEARCH_MAX_FILE_BYTES || shouldSkipFallbackFile(currentPath, args)) continue;
+    scannedFiles += 1;
+
+    let content: string;
+    try {
+      content = fs.readFileSync(currentPath, 'utf8');
+    } catch {
+      continue;
+    }
+
+    const lines = content.split(/\r?\n/);
+    for (let index = 0; index < lines.length; index += 1) {
+      matcher.lastIndex = 0;
+      if (!matcher.test(lines[index])) continue;
+      scannedMatchCount += 1;
+      if (matches.length < limit) {
+        matches.push({
+          path: path.relative(root, currentPath),
+          line: index + 1,
+          preview: lines[index].trim(),
+        });
+        continue;
+      }
+      truncated = true;
+      break;
+    }
+  }
+
+  if (scannedFiles >= FALLBACK_SEARCH_MAX_FILES && stack.length > 0) truncated = true;
+  return { matches, scannedMatchCount, truncated, scannedFiles };
 }
 
 function buildRipgrepArgs(query: string, searchPath: string, limit: number, args: Record<string, any>) {
@@ -552,16 +715,34 @@ export function writeLocalFile(state: AppState, args: Record<string, any>) {
 
   assertFileRevisionMatches(targetPath, args, filePath);
 
+  if (existed) {
+    const existingContent = fs.readFileSync(targetPath, 'utf8');
+    if (existingContent === content) {
+      const revision = getFileRevision(targetPath);
+      return {
+        root,
+        path: toToolRelativePath(root, targetPath),
+        bytes: Buffer.byteLength(content, 'utf8'),
+        created: false,
+        changed: false,
+        updatedAt: revision.modifiedAt,
+        revision: revision.token,
+        fileRevision: revision,
+      };
+    }
+  }
+
   fs.mkdirSync(path.dirname(targetPath), { recursive: true });
   fs.writeFileSync(targetPath, content, 'utf8');
   const revision = getFileRevision(targetPath);
-  const cacheInvalidation = invalidateRepoReadCaches(root, 'writeLocalFile');
+  const cacheInvalidation = invalidateRepoReadCaches(root, 'writeLocalFile', { paths: [filePath] });
 
   return {
     root,
     path: toToolRelativePath(root, targetPath),
     bytes: Buffer.byteLength(content, 'utf8'),
     created: !existed,
+    changed: true,
     updatedAt: new Date().toISOString(),
     revision: revision.token,
     fileRevision: revision,
@@ -577,19 +758,27 @@ export function searchLocalFiles(state: AppState, args: Record<string, any>) {
 
   const searchPath = resolveSafePath(root, String(args.path || '.'));
   const limit = Number.isFinite(Number(args.limit)) ? Math.max(1, Math.min(100, Number(args.limit))) : 20;
-  const cacheKey = makeSearchCacheKey(root, searchPath, query, limit, args);
+  const runtime = getLocalSearchRuntimeStatus();
+  const cacheKey = `${makeSearchCacheKey(root, searchPath, query, limit, args)}|${runtime.backend}|${runtime.ripgrepPath || ''}`;
   const cached = getCachedSearchResult(cacheKey);
   if (cached) return cached;
 
-  const rg = spawnSync('rg', buildRipgrepArgs(query, searchPath, limit, args), {
-    cwd: root,
-    encoding: 'utf8',
-    shell: false,
-    maxBuffer: 2_000_000,
-  });
+  if (runtime.ripgrepPath) {
+    const rg = spawnSync(runtime.ripgrepPath, buildRipgrepArgs(query, searchPath, limit, args), {
+      cwd: root,
+      encoding: 'utf8',
+      shell: false,
+      maxBuffer: 2_000_000,
+    });
 
-  if (!rg.error && rg.stdout) {
-    const { matches, scannedMatchCount, truncated } = parseRipgrepMatches(rg.stdout, root, limit);
+    if (rg.error) {
+      throw createApiError(500, 'SEARCH_EXEC_ERROR', 'Failed to execute ripgrep.', { details: rg.error.message });
+    }
+    if (rg.status !== 0 && rg.status !== 1) {
+      throw createApiError(500, 'SEARCH_FAILED', 'ripgrep search failed.', { details: { exitCode: rg.status, stderr: rg.stderr?.trim() } });
+    }
+
+    const { matches, scannedMatchCount, truncated } = parseRipgrepMatches(rg.stdout || '', root, limit);
     return rememberSearchResult(cacheKey, {
       root,
       path: path.relative(root, searchPath) || '.',
@@ -597,18 +786,21 @@ export function searchLocalFiles(state: AppState, args: Record<string, any>) {
       count: matches.length,
       scannedMatchCount,
       truncated,
+      backend: 'ripgrep',
       matches,
     });
   }
 
+  const fallback = searchLocalFilesFallback(root, searchPath, query, limit, args);
   return rememberSearchResult(cacheKey, {
     root,
     path: path.relative(root, searchPath) || '.',
     query,
-    count: 0,
-    scannedMatchCount: 0,
-    truncated: false,
-    matches: [],
+    count: fallback.matches.length,
+    scannedMatchCount: fallback.scannedMatchCount,
+    truncated: fallback.truncated,
+    backend: 'fallback',
+    matches: fallback.matches,
   });
 }
 
@@ -621,12 +813,28 @@ export async function searchLocalFilesAsync(state: AppState, args: Record<string
 
   const searchPath = resolveSafePath(root, String(args.path || '.'));
   const limit = Number.isFinite(Number(args.limit)) ? Math.max(1, Math.min(100, Number(args.limit))) : 20;
-  const cacheKey = makeSearchCacheKey(root, searchPath, query, limit, args);
+  const runtime = getLocalSearchRuntimeStatus();
+  const cacheKey = `${makeSearchCacheKey(root, searchPath, query, limit, args)}|${runtime.backend}|${runtime.ripgrepPath || ''}`;
   const cached = getCachedSearchResult(cacheKey);
   if (cached) return cached;
 
+  if (!runtime.ripgrepPath) {
+    const fallback = searchLocalFilesFallback(root, searchPath, query, limit, args);
+    return rememberSearchResult(cacheKey, {
+      root,
+      path: path.relative(root, searchPath) || '.',
+      query,
+      count: fallback.matches.length,
+      scannedMatchCount: fallback.scannedMatchCount,
+      truncated: fallback.truncated,
+      terminatedAfterLimit: fallback.truncated && fallback.matches.length >= limit,
+      backend: 'fallback',
+      matches: fallback.matches,
+    });
+  }
+
   return new Promise((resolve, reject) => {
-    const child = spawn('rg', buildRipgrepArgs(query, searchPath, limit, args), {
+    const child = spawn(runtime.ripgrepPath!, buildRipgrepArgs(query, searchPath, limit, args), {
       cwd: root,
       shell: false,
     });
@@ -648,6 +856,7 @@ export async function searchLocalFilesAsync(state: AppState, args: Record<string
         scannedMatchCount,
         truncated: terminatedAfterLimit || scannedMatchCount > matches.length,
         terminatedAfterLimit,
+        backend: 'ripgrep',
         matches,
       });
       resolve(result);
@@ -692,7 +901,7 @@ export async function searchLocalFilesAsync(state: AppState, args: Record<string
     child.on('error', (err) => {
       if (resolved) return;
       resolved = true;
-      reject(createApiError(500, 'SEARCH_EXEC_ERROR', 'Failed to execute rg.', { details: err.message }));
+      reject(createApiError(500, 'SEARCH_EXEC_ERROR', 'Failed to execute ripgrep.', { details: err.message }));
     });
 
     child.on('close', (code) => {
@@ -700,9 +909,9 @@ export async function searchLocalFilesAsync(state: AppState, args: Record<string
         processLine(lineBuffer);
       }
       if (resolved) return;
-      if (code !== 0 && code !== 1 && !terminatedAfterLimit) { // rg returns 1 if no matches found
+      if (code !== 0 && code !== 1 && !terminatedAfterLimit) {
         resolved = true;
-        reject(createApiError(500, 'SEARCH_FAILED', 'rg search failed.', { details: { exitCode: code } }));
+        reject(createApiError(500, 'SEARCH_FAILED', 'ripgrep search failed.', { details: { exitCode: code } }));
         return;
       }
       finish();

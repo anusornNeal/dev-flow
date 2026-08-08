@@ -453,9 +453,9 @@ export function archiveInactiveDoneTasks(options: { now?: string; cutoff?: strin
   const result = db.prepare(`
     UPDATE tasks
     SET archivedAt = ?
-    WHERE status = 'done'
+    WHERE status IN ('backlog', 'todo', 'done')
       AND archivedAt IS NULL
-      AND updatedAt <= ?
+      AND updatedAt < ?
       AND NOT EXISTS (
         SELECT 1 FROM agent_runs
         WHERE agent_runs.taskId = tasks.id

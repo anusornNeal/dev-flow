@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Cat } from 'lucide-react';
 import { Task, TaskStatus, LogEntry, Project } from './types';
 import { isValidTransition, getValidationErrorMessage } from './lib/statusTransitions';
@@ -47,8 +47,6 @@ export default function App() {
   const [pendingEmergencyMove, setPendingEmergencyMove] = useState<{ sourceTask: Task, status: TaskStatus } | null>(null);
   const [taskToDelete, setTaskToDelete] = useState<string | null>(null);
 
-  // Ref to track tasks currently moving to prevent polling race conditions
-  const pendingMovesRef = useRef<Set<string>>(new Set());
 
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isJsonModalOpen, setIsJsonModalOpen] = useState(false);
@@ -211,8 +209,8 @@ export default function App() {
       updatedAt: new Date().toISOString()
     };
 
-    // Track the pending move
-    pendingMovesRef.current.add(taskId);
+    // Track the pending move inside the Board view model so polling preserves the optimistic lane.
+    boardViewModel.setTaskPending(taskId, true);
 
     // Optimistic fast update
     setTasks(prev => prev.map(task => 
@@ -264,8 +262,8 @@ export default function App() {
       console.error('API lane move sync failed:', err);
       setPersistenceError('Lane move was shown optimistically, but backend persistence failed. Refresh after backend recovery to confirm final state.');
     } finally {
-      // Clear pending move whether success or failure
-      pendingMovesRef.current.delete(taskId);
+      // Clear pending move whether success or failure.
+      boardViewModel.setTaskPending(taskId, false);
     }
   };
 
@@ -519,6 +517,11 @@ export default function App() {
                         column={col}
                         tasks={columnTasks}
                         allTasks={tasks}
+                        totalCount={boardViewModel.lanePages[col.id].total}
+                        loadedCount={boardViewModel.lanePages[col.id].loaded}
+                        hasMore={boardViewModel.lanePages[col.id].hasMore}
+                        loadingMore={boardViewModel.lanePages[col.id].loading}
+                        onLoadMore={() => boardViewModel.loadMore(col.id)}
                         draggedOverColumn={draggedOverColumn}
                         draggedTaskId={draggedTaskId}
                         setDraggedOverColumn={setDraggedOverColumn}

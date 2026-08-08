@@ -105,19 +105,23 @@ test('board page query uses the board paging index for lane reads', () => {
   assert.match(plan.map((row) => row.detail).join('\n'), /idx_tasks_board_page/i);
 });
 
-test('auto archive affects only inactive done tasks and restore prevents immediate re-archive', () => {
+test('auto archive covers inactive backlog, todo, and done while restore prevents immediate re-archive', () => {
+  saveTask(makeTask(302, 'backlog', '2020-01-01T00:00:00.000Z'));
+  saveTask(makeTask(303, 'todo', '2020-01-01T00:00:00.000Z'));
   const result = archiveInactiveDoneTasks({
     now: '2026-08-08T00:00:00.000Z',
     cutoff: '2026-05-10T00:00:00.000Z',
   });
-  assert.equal(result.archivedCount, 31);
+  assert.equal(result.archivedCount, 32);
+  assert.equal(typeof getTask('task-board-backlog-0302')?.archivedAt, 'string');
+  assert.equal(typeof getTask('task-board-todo-0303')?.archivedAt, 'string');
 
   const activeDone = queryTaskBoardPage({ projectId: project.id, status: 'done', limit: 25, offset: 0 });
-  assert.equal(activeDone.total, 13);
+  assert.equal(activeDone.total, 14);
   const archived = queryTaskBoardPage({ projectId: project.id, status: 'done', archived: true, limit: 50, offset: 0 });
-  assert.equal(archived.total, 31);
+  assert.equal(archived.total, 30);
   assert.equal(archived.items.every((task: any) => typeof task.archivedAt === 'string'), true);
-  assert.equal(getTask('task-board-done-0300')?.archivedAt !== null, true, 'exact 90-day boundary should archive');
+  assert.equal(getTask('task-board-done-0300')?.archivedAt, null, 'exact 90-day boundary should remain active');
   assert.equal(getTask('task-board-done-0301')?.archivedAt, null, 'recent agent activity should prevent archive');
 
   const restored = restoreArchivedTask(archived.items[0].id, '2026-08-08T01:00:00.000Z');

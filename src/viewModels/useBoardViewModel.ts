@@ -4,7 +4,8 @@ import { groupTasksByLane, LANES, type Lane, type Lanes } from './boardUtils.js'
 import { mergeWithPendingMoves } from './boardOptimisticMerge.js';
 import type { DomainTask } from '../domain/mappers/taskMapper.js';
 
-const PAGE_SIZE = 25;
+export const BOARD_PAGE_SIZE = 25;
+const PAGE_SIZE = BOARD_PAGE_SIZE;
 
 export interface UseBoardViewModelOptions {
   projectId: string | null;
@@ -32,6 +33,36 @@ function mergeUniqueTasks(tasks: DomainTask[]) {
   const byId = new Map<string, DomainTask>();
   for (const task of tasks) byId.set(task.id, task);
   return Array.from(byId.values());
+}
+export function getBoardLaneRefreshLimit(loaded: number) {
+  return Math.max(BOARD_PAGE_SIZE, Number.isFinite(loaded) ? loaded : 0);
+}
+
+export function mergeBoardTaskPage(
+  previous: DomainTask[],
+  incoming: DomainTask[],
+  pendingIds: ReadonlySet<string>,
+) {
+  return mergeWithPendingMoves(mergeUniqueTasks([...previous, ...incoming]), previous, new Set(pendingIds));
+}
+
+export function updateBoardLanePageState(
+  previous: BoardLanePages,
+  lane: Lane,
+  page: { total: number; itemCount: number; hasMore: boolean; mode: 'refresh' | 'append' },
+): BoardLanePages {
+  const loaded = page.mode === 'append'
+    ? previous[lane].loaded + page.itemCount
+    : page.itemCount;
+  return {
+    ...previous,
+    [lane]: {
+      total: page.total,
+      loaded,
+      hasMore: page.hasMore,
+      loading: false,
+    },
+  };
 }
 
 export interface UseBoardViewModel {
@@ -67,7 +98,7 @@ export function useBoardViewModel(options: UseBoardViewModelOptions): UseBoardVi
     setError(null);
     try {
       const pages = await Promise.all(LANES.map(async (lane) => {
-        const limit = loadedLimitsRef.current[lane] || PAGE_SIZE;
+        const limit = getBoardLaneRefreshLimit(loadedLimitsRef.current[lane]);
         const page = await taskRepository.listPage({ projectId, status: lane, limit, offset: 0 });
         return { lane, page };
       }));
@@ -76,15 +107,15 @@ export function useBoardViewModel(options: UseBoardViewModelOptions): UseBoardVi
       const serverTasks = mergeUniqueTasks(pages.flatMap(({ page }) => [...page.items, ...page.relatedItems]));
       setTasksState((prev) => mergeWithPendingMoves(serverTasks, prev, pendingIdsRef.current));
       setLanePages((prev) => {
-        const next = { ...prev };
+        let next = { ...prev };
         for (const { lane, page } of pages) {
-          loadedLimitsRef.current[lane] = Math.max(PAGE_SIZE, page.items.length);
-          next[lane] = {
+          loadedLimitsRef.current[lane] = getBoardLaneRefreshLimit(page.items.length);
+          next = updateBoardLanePageState(next, lane, {
             total: page.total,
-            loaded: page.items.length,
+            itemCount: page.items.length,
             hasMore: page.hasMore,
-            loading: false,
-          };
+            mode: 'refresh',
+          });
         }
         return next;
       });
@@ -104,17 +135,14 @@ export function useBoardViewModel(options: UseBoardViewModelOptions): UseBoardVi
       const page = await taskRepository.listPage({ projectId, status: lane, limit: PAGE_SIZE, offset: currentOffset });
       if (!mountedRef.current) return;
       const incoming = [...page.items, ...page.relatedItems];
-      setTasksState((prev) => mergeWithPendingMoves(mergeUniqueTasks([...prev, ...incoming]), prev, pendingIdsRef.current));
+      setTasksState((prev) => mergeBoardTaskPage(prev, incoming, pendingIdsRef.current));
       const loaded = currentOffset + page.items.length;
-      loadedLimitsRef.current[lane] = Math.max(PAGE_SIZE, loaded);
-      setLanePages((prev) => ({
-        ...prev,
-        [lane]: {
-          total: page.total,
-          loaded,
-          hasMore: page.hasMore,
-          loading: false,
-        },
+      loadedLimitsRef.current[lane] = getBoardLaneRefreshLimit(loaded);
+      setLanePages((prev) => updateBoardLanePageState(prev, lane, {
+        total: page.total,
+        itemCount: page.items.length,
+        hasMore: page.hasMore,
+        mode: 'append',
       }));
     } catch (err) {
       if (mountedRef.current) {

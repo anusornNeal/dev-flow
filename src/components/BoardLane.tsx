@@ -14,6 +14,11 @@ interface BoardLaneProps {
   column: ColumnDef;
   tasks: Task[];
   allTasks: Task[];
+  totalCount?: number;
+  loadedCount?: number;
+  hasMore?: boolean;
+  loadingMore?: boolean;
+  onLoadMore?: () => void;
   draggedOverColumn: TaskStatus | null;
   draggedTaskId: string | null;
   setDraggedOverColumn: (status: TaskStatus | null) => void;
@@ -29,6 +34,11 @@ export function BoardLane({
   column,
   tasks,
   allTasks,
+  totalCount = tasks.length,
+  loadedCount = tasks.length,
+  hasMore = false,
+  loadingMore = false,
+  onLoadMore,
   draggedOverColumn,
   draggedTaskId,
   setDraggedOverColumn,
@@ -111,7 +121,7 @@ export function BoardLane({
           </h3>
           
           <span className="text-[10px] font-mono px-2 py-0.5 rounded-md font-bold text-[#8f7d6e] dark:text-[#887a6c] bg-[#f5ebd6] dark:bg-[#292119]">
-            {tasks.length}
+            {hasMore ? `${loadedCount} of ${totalCount}` : totalCount}
           </span>
         </div>
 
@@ -138,6 +148,17 @@ export function BoardLane({
             />
           );
         })}
+
+        {hasMore && onLoadMore && (
+          <button
+            type="button"
+            onClick={onLoadMore}
+            disabled={loadingMore}
+            className="mt-1 w-full rounded-lg border border-[#dfccb1] dark:border-[#4d4033] bg-white/70 dark:bg-[#241d17] px-3 py-2 text-[10px] font-mono font-bold text-[#7b624f] dark:text-[#c9b7a6] hover:bg-[#fff8ea] dark:hover:bg-[#2c241d] disabled:cursor-wait disabled:opacity-60"
+          >
+            {loadingMore ? 'Loading…' : `Load more · ${loadedCount} of ${totalCount}`}
+          </button>
+        )}
 
         {tasks.length === 0 && (
           <div className="flex flex-col items-center justify-center h-24 text-[#bcaea3] dark:text-[#6a5e54] border-2 border-dashed border-[#eaddc6] dark:border-[#382f25] rounded-xl bg-white/40 dark:bg-black/10 mt-2">

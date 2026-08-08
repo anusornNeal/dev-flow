@@ -28,6 +28,8 @@ import { prepareCompactEdit } from '../services/stenoEditProtocolService';
 import { applyAndVerifyAsync } from '../services/applyAndVerifyService';
 import { getRepoContextWithHandle } from '../services/contextHandleService';
 import { getRepoSemanticIndex } from '../services/repoInspectionIndexService';
+import { cleanupSessionWorkspace, createOrReuseSessionWorkspace } from '../services/sessionWorkspaceService';
+import { abortWorkspaceIntegration, integrateWorkspaceCommits, retryWorkspaceIntegration } from '../services/workspaceIntegrationService';
 
 export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) {
   app.get('/api/capabilities', (_req, res) => {
@@ -109,6 +111,50 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
   app.get('/api/restart/status', (req, res) => {
     try {
       return res.json(getDevFlowRestartStatus(req.query as Record<string, any>));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.post('/api/workspaces/prepare', (req, res) => {
+    try {
+      const project = findProjectByIdentifier(deps.state, req.body || {});
+      if (!project) throw createApiError(404, 'PROJECT_NOT_FOUND', 'Project could not be resolved for workspace preparation.');
+      return res.json(createOrReuseSessionWorkspace(project, req.body?.sessionId));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.post('/api/workspaces/integrate', (req, res) => {
+    try {
+      const result = integrateWorkspaceCommits(req.body?.workspaceId);
+      return res.status(result.status === 'conflict' ? 409 : 200).json(result);
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.post('/api/workspaces/integration/abort', (req, res) => {
+    try {
+      return res.json(abortWorkspaceIntegration(req.body?.workspaceId));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.post('/api/workspaces/integration/retry', (req, res) => {
+    try {
+      const result = retryWorkspaceIntegration(req.body?.workspaceId);
+      return res.status(result.status === 'conflict' ? 409 : 200).json(result);
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.post('/api/workspaces/cleanup', (req, res) => {
+    try {
+      return res.json(cleanupSessionWorkspace(req.body?.workspaceId));
     } catch (error) {
       return sendApiError(res, error);
     }

@@ -13,6 +13,7 @@ import {
 } from './devflowContractCore';
 import { taskToolDefinitions } from './devflowTaskTools';
 import { gitToolDefinitions } from './devflowGitTools';
+import { workspaceToolDefinitions } from './devflowWorkspaceTools';
 export type { DevFlowToolDefinition, DevFlowToolHttpRequest } from './devflowContractCore';
 export const DEVFLOW_CONTRACT_VERSION = '2026-08-08.7';
 
@@ -512,6 +513,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
     }),
   },
   ...taskToolDefinitions,
+  ...workspaceToolDefinitions,
   {
     name: 'list_skills',
     description: 'List DevFlow skills. Optionally filter by kind: authoring, workflow, prompt, or custom.',

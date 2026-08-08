@@ -35,6 +35,7 @@ export const VERIFICATION_STEPS: VerificationStep[] = [
   { label: 'mcp scheduler policy', command: 'npx', args: ['tsx', '--test', 'tests/server/mcpToolJobScheduler.test.ts'], stage: 2, parallelSafe: true },
   { label: 'project resolution', command: 'npx', args: ['tsx', '--test', 'tests/server/projectResolution.test.ts'], stage: 2, parallelSafe: true },
   { label: 'session workspace service', command: 'npx', args: ['tsx', '--test', 'tests/server/sessionWorkspaceService.test.ts'], stage: 2, parallelSafe: false },
+  { label: 'workspace integration service', command: 'npx', args: ['tsx', '--test', 'tests/server/workspaceIntegrationService.test.ts'], stage: 2, parallelSafe: false },
   { label: 'agent runs', command: 'npm', args: ['run', 'test:agent-runs'], stage: 3, parallelSafe: false },
   { label: 'figma integration', command: 'npm', args: ['run', 'test:figma'], stage: 3, parallelSafe: false },
   { label: 'gateway safety', command: 'npm', args: ['run', 'test:gateway'], stage: 3, parallelSafe: false },

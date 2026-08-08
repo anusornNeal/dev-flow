@@ -14,7 +14,12 @@ executeAllMigrations();
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
 
 const { getWorkflowHealth } = await import('../../src/server/services/workflowHealthService.js');
-const { createJob, updateJobStatus } = await import('../../src/server/repositories/mcpToolJobRepository.js');
+const {
+  createJob,
+  updateJobStatus,
+  clearRecentJobCache,
+  getRecentJobCacheStats,
+} = await import('../../src/server/repositories/mcpToolJobRepository.js');
 
 function git(root: string, args: string[]) {
   const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', shell: false });
@@ -88,6 +93,19 @@ test('getWorkflowHealth warns for a dirty repo', () => {
 });
 
 
+test('getWorkflowHealth exposes phase timings without caching project git state', () => {
+  const repo = createRepo('phase-freshness');
+  const clean = getWorkflowHealth(stateFor(repo), { projectId: 'project-health' });
+  assert.equal(typeof clean.performance.totalMs, 'number');
+  assert.equal(typeof clean.performance.phases.diagnosticsMs, 'number');
+  assert.equal(typeof clean.performance.phases.gitMs, 'number');
+
+  fs.writeFileSync(path.join(repo, 'fresh-dirty.txt'), 'dirty now\n');
+  const dirty = getWorkflowHealth(stateFor(repo), { projectId: 'project-health' });
+  assert.equal(dirty.git.clean, false);
+  assert.match(dirty.recommendations.join('\n'), /Working tree/);
+});
+
 test('getWorkflowHealth groups failed tool jobs by tool name', () => {
   const repo = createRepo('failed-tool-jobs');
   createJob('job-health-failed-1', 'run_project_command', { command: 'verify' }, `repo:${repo}`);
@@ -104,4 +122,42 @@ test('getWorkflowHealth groups failed tool jobs by tool name', () => {
   assert.equal(result.diagnostics.failedJobGroups[0].toolName, 'run_project_command');
   assert.equal(result.diagnostics.failedJobGroups[0].count >= 1, true);
   assert.match(result.recommendations.join('\n'), /run_project_command/);
+});
+
+test('workflow health reuses the recent-job index while reflecting incremental job status changes', () => {
+  const repo = createRepo('recent-job-index');
+  clearRecentJobCache();
+  for (let index = 0; index < 120; index += 1) {
+    const jobId = `job-health-cache-${index}`;
+    createJob(jobId, 'read_local_file', { index }, `repo:${repo}`);
+    updateJobStatus(jobId, { status: 'succeeded' });
+  }
+
+  const cold = getWorkflowHealth(stateFor(repo), { projectId: 'project-health' });
+  assert.equal(cold.ok, true);
+  assert.equal(getRecentJobCacheStats().diskScanCount, 1);
+  for (let index = 0; index < 20; index += 1) getWorkflowHealth(stateFor(repo), { projectId: 'project-health' });
+  assert.equal(getRecentJobCacheStats().diskScanCount, 1);
+
+  createJob('job-health-cache-failed', 'run_project_command', { command: 'test' }, `repo:${repo}`);
+  updateJobStatus('job-health-cache-failed', { status: 'failed', failureSummary: 'synthetic failure' });
+  const refreshed = getWorkflowHealth(stateFor(repo), { projectId: 'project-health' });
+  assert.equal(refreshed.diagnostics.failedJobGroups.some((group: any) => group.toolName === 'run_project_command'), true);
+  assert.equal(getRecentJobCacheStats().diskScanCount, 1);
+});
+
+test('workflow health warm p95 remains below the 750ms SLO with a populated job history', () => {
+  const repo = createRepo('warm-benchmark');
+  getWorkflowHealth(stateFor(repo), { projectId: 'project-health' });
+  const samples: number[] = [];
+  for (let index = 0; index < 24; index += 1) {
+    const startedAt = performance.now();
+    getWorkflowHealth(stateFor(repo), { projectId: 'project-health' });
+    samples.push(performance.now() - startedAt);
+  }
+  samples.sort((left, right) => left - right);
+  const p50 = samples[Math.ceil(samples.length * 0.5) - 1];
+  const p95 = samples[Math.ceil(samples.length * 0.95) - 1];
+  console.log(`[health-benchmark] warm samples=${samples.length} p50=${p50.toFixed(1)}ms p95=${p95.toFixed(1)}ms scanCount=${getRecentJobCacheStats().diskScanCount}`);
+  assert.equal(p95 <= 750, true, `expected warm p95 <= 750ms, got ${p95.toFixed(1)}ms`);
 });

@@ -42,6 +42,41 @@ const MAX_LOG_READ_BYTES = 200_000;
 const MAX_JOB_AGE_MS = 24 * 60 * 60 * 1000;
 const CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
 const TERMINAL_STATUSES: JobStatus[] = ['succeeded', 'failed', 'timed_out', 'cancelled'];
+let recentJobsCache: McpToolJob[] | null = null;
+let recentJobsDiskScanCount = 0;
+
+function sortRecentJobs(jobs: McpToolJob[]) {
+  return jobs.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+}
+
+function upsertRecentJobCache(job: McpToolJob) {
+  if (!recentJobsCache) return;
+  const index = recentJobsCache.findIndex((entry) => entry.jobId === job.jobId);
+  if (index >= 0) recentJobsCache.splice(index, 1);
+  recentJobsCache.push(job);
+  sortRecentJobs(recentJobsCache);
+}
+
+function removeRecentJobCache(jobId: string) {
+  if (!recentJobsCache) return;
+  const index = recentJobsCache.findIndex((entry) => entry.jobId === jobId);
+  if (index >= 0) recentJobsCache.splice(index, 1);
+}
+
+export function clearRecentJobCache() {
+  const count = recentJobsCache?.length || 0;
+  recentJobsCache = null;
+  recentJobsDiskScanCount = 0;
+  return count;
+}
+
+export function getRecentJobCacheStats() {
+  return {
+    hydrated: recentJobsCache !== null,
+    entries: recentJobsCache?.length || 0,
+    diskScanCount: recentJobsDiskScanCount,
+  };
+}
 
 function redactValue(value: any): any {
   if (Array.isArray(value)) return value.map(redactValue);
@@ -108,7 +143,7 @@ export function createJob(jobId: string, toolName: string, args: any, resourceKe
   fs.writeFileSync(path.join(jobDir, 'status.json'), JSON.stringify(job, null, 2));
   fs.writeFileSync(path.join(jobDir, 'stdout.log'), '');
   fs.writeFileSync(path.join(jobDir, 'stderr.log'), '');
-  
+  upsertRecentJobCache(job);
   return job;
 }
 
@@ -147,6 +182,7 @@ export function updateJobStatus(jobId: string, updates: Partial<McpToolJob>): Mc
   }
 
   fs.writeFileSync(path.join(getJobDir(jobId), 'status.json'), JSON.stringify(updated, null, 2));
+  upsertRecentJobCache(updated);
   return updated;
 }
 
@@ -213,6 +249,7 @@ export function cleanupOldJobs() {
           if (!job || TERMINAL_STATUSES.includes(job.status)) {
             fs.rmSync(jobDir, { recursive: true, force: true });
             console.log(`[mcp-tool-job] Cleaned up old job ${dir}`);
+            removeRecentJobCache(dir);
           }
         }
       } catch (e) {
@@ -255,18 +292,22 @@ export function startBackgroundJobCleanup() {
 
 export function listRecentJobs(limit: number = 50): McpToolJob[] {
   ensureJobsDir();
-  const dirs = fs.readdirSync(JOBS_DIR);
-  const jobs: McpToolJob[] = [];
-  
-  for (const dir of dirs) {
-    const jobDir = path.join(JOBS_DIR, dir);
-    if (!fs.statSync(jobDir).isDirectory()) continue;
-    
-    const job = getJob(dir);
-    if (job) {
-      jobs.push(job);
+  if (!recentJobsCache) {
+    recentJobsDiskScanCount += 1;
+    const jobs: McpToolJob[] = [];
+    for (const dir of fs.readdirSync(JOBS_DIR)) {
+      const jobDir = path.join(JOBS_DIR, dir);
+      let isDirectory = false;
+      try {
+        isDirectory = fs.statSync(jobDir).isDirectory();
+      } catch {
+        continue;
+      }
+      if (!isDirectory) continue;
+      const job = getJob(dir);
+      if (job) jobs.push(job);
     }
+    recentJobsCache = sortRecentJobs(jobs);
   }
-  
-  return jobs.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()).slice(0, limit);
+  return recentJobsCache.slice(0, Math.max(0, limit));
 }

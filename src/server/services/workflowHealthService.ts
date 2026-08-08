@@ -4,6 +4,7 @@ import { getGitStatus } from './gitService';
 import { getDevFlowDiagnostics } from './mcpToolMonitor';
 import { getLocalSearchRuntimeStatus } from './localFileService';
 import { evaluatePerformanceSlo } from './performanceSloService';
+import { performance as nodePerformance } from 'node:perf_hooks';
 
 type Probe<T> = { ok: true; value: T } | { ok: false; error: { message: string; code?: string; status?: number } };
 
@@ -49,12 +50,24 @@ function summarizeFailedJobGroups(failures: any[]) {
 
 export function getWorkflowHealth(state: AppState, args: Record<string, any> = {}) {
   const recommendations: string[] = [];
+  const startedAt = nodePerformance.now();
+  let phaseStartedAt = startedAt;
+  const phaseMs = () => {
+    const elapsed = nodePerformance.now() - phaseStartedAt;
+    phaseStartedAt = nodePerformance.now();
+    return Math.round(elapsed * 100) / 100;
+  };
   const windowMs = numberArg(args.windowMs, 10 * 60 * 1000);
   const catalog = getCapabilityCatalog();
+  const catalogMs = phaseMs();
   const diagnostics = getDevFlowDiagnostics({ windowMs });
+  const diagnosticsMs = phaseMs();
   const gitProbe = probe(() => getGitStatus(state, args));
+  const gitMs = phaseMs();
   const search = getLocalSearchRuntimeStatus();
-  const performance = evaluatePerformanceSlo(Array.isArray(diagnostics?.tools?.topTools) ? diagnostics.tools.topTools : []);
+  const searchMs = phaseMs();
+  const sloPerformance = evaluatePerformanceSlo(Array.isArray(diagnostics?.tools?.topTools) ? diagnostics.tools.topTools : []);
+  const sloMs = phaseMs();
 
   const git = gitProbe.ok === true ? {
     ok: true,
@@ -85,8 +98,8 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
   }
   if (staleAgentRuns > 0) recommendations.push('There are stale agent runs; cancel or retry them before starting more agent-owned work.');
   if (duplicateBursts > 0) recommendations.push('Duplicate tool bursts detected; prefer get_repo_context_bundle before repeated reads/searches.');
-  if (performance.regressions.length > 0) {
-    const slow = performance.regressions.slice(0, 3).map((entry) => `${entry.toolName} p95=${entry.p95DurationMs}ms>${entry.budgetMs}ms`).join(', ');
+  if (sloPerformance.regressions.length > 0) {
+    const slow = sloPerformance.regressions.slice(0, 3).map((entry) => `${entry.toolName} p95=${entry.p95DurationMs}ms>${entry.budgetMs}ms`).join(', ');
     recommendations.push(`Performance SLO regression detected: ${slow}.`);
   }
 
@@ -114,7 +127,11 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
       keyToolsPresent,
     },
     git,
-    diagnostics: { queueDepth, failedJobs, failedJobGroups, failedJobSummaries, staleAgentRuns, duplicateBursts, performance },
+    diagnostics: { queueDepth, failedJobs, failedJobGroups, failedJobSummaries, staleAgentRuns, duplicateBursts, performance: sloPerformance },
+    performance: {
+      totalMs: Math.round((nodePerformance.now() - startedAt) * 100) / 100,
+      phases: { catalogMs, diagnosticsMs, gitMs, searchMs, sloMs },
+    },
     recommendations,
   };
 }

@@ -486,7 +486,7 @@ async function startJob(entry: QueueEntry) {
     } else if (entry.toolName === 'apply_prepared_edit_plan') {
       result = applyPreparedEditPlan(entry.args);
     } else if (entry.toolName === 'apply_and_verify') {
-      result = await applyAndVerifyAsync(entry.state, entry.args, logger, setCancelFn);
+      result = await applyAndVerifyAsync(entry.state, entry.args, logger, (cancelFn) => setJobActiveContext(entry.jobId, cancelFn));
     } else if (entry.toolName === 'delete_local_path') {
       result = deleteLocalPath(entry.state, entry.args);
     } else if (entry.toolName === 'move_local_path') {

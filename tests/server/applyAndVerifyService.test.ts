@@ -69,18 +69,25 @@ test('applyAndVerify short-circuits verification for a proven no-op unless force
   assert.deepEqual(result.verification, []);
 });
 
-test('applyAndVerifyAsync runs explicitly resource-isolated verification commands concurrently', async () => {
+test('applyAndVerifyAsync runs resource-safe targeted verification commands concurrently without caller isolation hints', async () => {
   const root = fixture('parallel');
-  fs.writeFileSync(path.join(root, 'scripts', 'typecheck.mjs'), "await new Promise((resolve) => setTimeout(resolve, 800)); process.stdout.write('typecheck ok\\n');\n", 'utf8');
-  fs.writeFileSync(path.join(root, 'scripts', 'lint.mjs'), "await new Promise((resolve) => setTimeout(resolve, 800)); process.stdout.write('lint ok\\n');\n", 'utf8');
-  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({
-    type: 'module',
-    scripts: {
-      test: 'node scripts/test.mjs',
-      typecheck: 'node scripts/typecheck.mjs',
-      lint: 'node scripts/lint.mjs',
-    },
-  }, null, 2), 'utf8');
+  fs.mkdirSync(path.join(root, '.devflow'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'scripts', 'target-a.mjs'), "await new Promise((resolve) => setTimeout(resolve, 800)); process.stdout.write('target a ok\\n');\n", 'utf8');
+  fs.writeFileSync(path.join(root, 'scripts', 'target-b.mjs'), "await new Promise((resolve) => setTimeout(resolve, 800)); process.stdout.write('target b ok\\n');\n", 'utf8');
+  fs.writeFileSync(path.join(root, '.devflow', 'commands.yaml'), [
+    'commands:',
+    '  target-a:',
+    '    executable: node',
+    '    args:',
+    '      - scripts/target-a.mjs',
+    '    category: test',
+    '  target-b:',
+    '    executable: node',
+    '    args:',
+    '      - scripts/target-b.mjs',
+    '    category: test',
+    '',
+  ].join('\n'), 'utf8');
   git(root, ['add', '.']);
   git(root, ['commit', '-m', 'parallel fixtures']);
 
@@ -88,8 +95,7 @@ test('applyAndVerifyAsync runs explicitly resource-isolated verification command
   const result = await applyAndVerifyAsync(stateFor(root), {
     projectId: 'project-apply-verify',
     files: [{ filePath: 'src/value.ts', edits: [{ type: 'replace', find: 'value = 1', replaceWith: 'value = 3' }] }],
-    requestedCommands: ['typecheck', 'lint'],
-    resourceIsolatedCommands: ['typecheck', 'lint'],
+    requestedCommands: ['target-a', 'target-b'],
   });
   const elapsedMs = Date.now() - startedAt;
 
@@ -103,6 +109,41 @@ test('applyAndVerifyAsync runs explicitly resource-isolated verification command
     true,
     `expected concurrent wall time ${elapsedMs}ms to be materially below summed verification time ${summedVerificationMs}ms`,
   );
+  assert.equal(typeof result.verificationPerformance?.wallMs, 'number');
+  assert.equal(result.verificationPerformance?.processSpawns, 2);
+});
+
+test('applyAndVerifyAsync fails cheap prerequisite before launching a later isolated expensive stage', async () => {
+  const root = fixture('stage-fail-fast');
+  const expensiveCounter = path.join(tempRoot, 'expensive-stage-counter.txt');
+  fs.writeFileSync(path.join(root, 'scripts', 'typecheck.mjs'), "process.stderr.write('typecheck failed\\n'); process.exit(2);\n", 'utf8');
+  fs.writeFileSync(path.join(root, 'scripts', 'build.mjs'), [
+    "import fs from 'node:fs';",
+    `fs.writeFileSync(${JSON.stringify(expensiveCounter)}, 'started', 'utf8');`,
+  ].join('\n'), 'utf8');
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({
+    type: 'module',
+    scripts: {
+      test: 'node scripts/test.mjs',
+      typecheck: 'node scripts/typecheck.mjs',
+      build: 'node scripts/build.mjs',
+    },
+  }, null, 2), 'utf8');
+  git(root, ['add', '.']);
+  git(root, ['commit', '-m', 'staged fail-fast fixtures']);
+
+  const result = await applyAndVerifyAsync(stateFor(root), {
+    projectId: 'project-apply-verify',
+    files: [{ filePath: 'src/value.ts', edits: [{ type: 'replace', find: 'value = 1', replaceWith: 'value = 4' }] }],
+    lane: 'safe',
+    requestedCommands: ['typecheck', 'build'],
+    resourceIsolatedCommands: ['build'],
+    forceFresh: true,
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.verification[0]?.command, 'typecheck');
+  assert.equal(fs.existsSync(expensiveCounter), false, 'later expensive stage must not launch after prerequisite failure');
 });
 
 test.after(() => fs.rmSync(tempRoot, { recursive: true, force: true }));

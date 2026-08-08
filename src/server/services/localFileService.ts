@@ -52,6 +52,7 @@ type SearchBackend = 'ripgrep' | 'fallback';
 type RipgrepResolution = {
   key: string;
   executable: string | null;
+  source: 'explicit' | 'devflow-bundled' | 'editor-bundled' | 'path' | null;
 };
 
 let ripgrepResolutionCache: RipgrepResolution | null = null;
@@ -174,16 +175,90 @@ function isExecutableFile(candidate: string) {
   }
 }
 
+function ripgrepBinaryName() {
+  return process.platform === 'win32' ? 'rg.exe' : 'rg';
+}
+
+function ripgrepPlatformTarget() {
+  return `${process.platform}-${process.arch}`;
+}
+
+function ripgrepPackageCandidates(appRoot: string) {
+  const binary = ripgrepBinaryName();
+  const target = ripgrepPlatformTarget();
+  return [
+    path.join(appRoot, 'node_modules', '@vscode', 'ripgrep', 'bin', target, binary),
+    path.join(appRoot, 'node_modules', '@vscode', 'ripgrep', 'bin', binary),
+    path.join(appRoot, 'node_modules', '@vscode', 'ripgrep-universal', 'bin', target, binary),
+    path.join(appRoot, 'node_modules.asar.unpacked', '@vscode', 'ripgrep', 'bin', target, binary),
+    path.join(appRoot, 'node_modules.asar.unpacked', '@vscode', 'ripgrep-universal', 'bin', target, binary),
+  ];
+}
+
+function editorBundledRipgrepCandidates() {
+  if (process.platform !== 'win32') return [];
+  const installRoots = [
+    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Programs', 'Microsoft VS Code') : '',
+    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Programs', 'Microsoft VS Code Insiders') : '',
+    process.env.ProgramFiles ? path.join(process.env.ProgramFiles, 'Microsoft VS Code') : '',
+  ].filter(Boolean);
+  const candidates: string[] = [];
+  for (const installRoot of installRoots) {
+    const appRoots = [path.join(installRoot, 'resources', 'app')];
+    try {
+      for (const entry of fs.readdirSync(installRoot, { withFileTypes: true })) {
+        if (entry.isDirectory()) appRoots.push(path.join(installRoot, entry.name, 'resources', 'app'));
+      }
+    } catch {
+      // Optional editor discovery must never make local search fail.
+    }
+    for (const appRoot of appRoots) candidates.push(...ripgrepPackageCandidates(appRoot));
+  }
+  return candidates;
+}
+
 function resolveRipgrepExecutable() {
   const explicit = String(process.env.DEVFLOW_RG_PATH || '').trim();
   const pathValue = String(process.env.PATH || '');
-  const key = `${process.platform}|${explicit}|${pathValue}|${String(process.env.PATHEXT || '')}`;
+  const appRoot = getDevFlowAppRoot();
+  const key = [
+    process.platform,
+    process.arch,
+    appRoot,
+    explicit,
+    pathValue,
+    String(process.env.PATHEXT || ''),
+    String(process.env.LOCALAPPDATA || ''),
+    String(process.env.ProgramFiles || ''),
+  ].join('|');
   if (ripgrepResolutionCache?.key === key) return ripgrepResolutionCache.executable;
 
   let executable: string | null = null;
+  let source: RipgrepResolution['source'] = null;
   if (explicit) {
     const candidate = path.resolve(explicit);
-    if (isExecutableFile(candidate)) executable = candidate;
+    if (isExecutableFile(candidate)) {
+      executable = candidate;
+      source = 'explicit';
+    }
+  }
+
+  if (!executable) {
+    for (const candidate of ripgrepPackageCandidates(appRoot)) {
+      if (!isExecutableFile(candidate)) continue;
+      executable = candidate;
+      source = 'devflow-bundled';
+      break;
+    }
+  }
+
+  if (!executable) {
+    for (const candidate of editorBundledRipgrepCandidates()) {
+      if (!isExecutableFile(candidate)) continue;
+      executable = candidate;
+      source = 'editor-bundled';
+      break;
+    }
   }
 
   if (!executable && pathValue) {
@@ -192,6 +267,7 @@ function resolveRipgrepExecutable() {
       for (const candidate of pathExecutableCandidates(normalizedDirectory)) {
         if (isExecutableFile(candidate)) {
           executable = candidate;
+          source = 'path';
           break;
         }
       }
@@ -199,7 +275,7 @@ function resolveRipgrepExecutable() {
     }
   }
 
-  ripgrepResolutionCache = { key, executable };
+  ripgrepResolutionCache = { key, executable, source };
   return executable;
 }
 
@@ -208,6 +284,7 @@ export function getLocalSearchRuntimeStatus() {
   return {
     backend: (ripgrepPath ? 'ripgrep' : 'fallback') as SearchBackend,
     ripgrepPath,
+    ripgrepSource: ripgrepResolutionCache?.source || null,
     fallbackAvailable: true,
   };
 }

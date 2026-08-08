@@ -46,7 +46,7 @@ assert.ok(serverProcess.env?.DEVFLOW_RESTART_SUPERVISOR_TOKEN);
 assert.equal(typeof shouldRestartServerProcess, 'function');
 const acceptedRestart = {
   ticket: 'restart-test',
-  status: 'accepted',
+  status: 'accepted' as const,
   supervisor: 'start-all',
   supervisorToken: 'supervisor-token',
 };

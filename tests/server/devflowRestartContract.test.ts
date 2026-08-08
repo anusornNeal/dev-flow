@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getCapabilityCatalog } from '../../src/server/contracts/devflowContract.js';
+import { DEVFLOW_CONTRACT_VERSION, getCapabilityCatalog } from '../../src/server/contracts/devflowContract.js';
 
 test('capability catalog exposes guarded runtime restart tools', () => {
   const catalog = getCapabilityCatalog() as any;
@@ -11,5 +11,5 @@ test('capability catalog exposes guarded runtime restart tools', () => {
   assert.ok(statusTool, 'get_devflow_restart_status should be exposed');
   assert.equal(catalog.matrix.runtime?.restart, true);
   assert.equal(catalog.matrix.runtime?.restartStatus, true);
-  assert.equal(catalog.contractVersion, '2026-08-08.2');
+  assert.equal(catalog.contractVersion, DEVFLOW_CONTRACT_VERSION);
 });

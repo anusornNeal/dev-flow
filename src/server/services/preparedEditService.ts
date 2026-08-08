@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import type { AppState } from '../types';
 import { getFileRevision } from './localFileService';
+import { invalidateRepoReadCaches } from './repoCacheInvalidationService';
 import {
   applyPreparedSafeEditFile,
   prepareSafeEditFile,
@@ -9,15 +10,15 @@ import {
   type SafeEditResult,
 } from './safeEditFileService';
 
-const DEFAULT_PLAN_TTL_MS = 60_000;
-const MAX_PLAN_TTL_MS = 5 * 60_000;
+const DEFAULT_PLAN_TTL_MS = 180_000;
+const MAX_PLAN_TTL_MS = 300_000;
 const MAX_PLANS = 128;
 
 type StoredEditPlan = {
   editPlanId: string;
   createdAtMs: number;
   expiresAtMs: number;
-  consumed: boolean;
+  status: 'prepared' | 'applying' | 'consumed';
   prepared: PreparedSafeEditFile[];
 };
 
@@ -29,11 +30,28 @@ export type PreparedEditPlanResult = {
   expiresAt?: string;
   consumed?: boolean;
   files: SafeEditResult[];
-  code?: 'INVALID_ARGS' | 'EDIT_PLAN_NOT_FOUND' | 'EDIT_PLAN_EXPIRED' | 'EDIT_PLAN_CONSUMED' | 'EDIT_PLAN_STALE' | 'EDIT_PLAN_APPLY_FAILED';
+  code?: string;
   message?: string;
+  rollback?: {
+    attempted: string[];
+    restored: string[];
+    conflicts: string[];
+    failures: Array<{ filePath: string; message: string }>;
+  };
 };
 
 const plans = new Map<string, StoredEditPlan>();
+
+type PreparedEditTestHooks = {
+  beforeApplyFile?: (context: { index: number; editPlanId: string; prepared: PreparedSafeEditFile }) => void;
+  rollbackWrite?: (targetPath: string, content: string) => void;
+};
+
+let testHooks: PreparedEditTestHooks | null = null;
+
+export function __setPreparedEditTestHooks(hooks: PreparedEditTestHooks | null) {
+  testHooks = hooks;
+}
 
 function filePathOf(fileArgs: Record<string, any>) {
   return String(fileArgs?.filePath || fileArgs?.path || '').trim();
@@ -98,7 +116,7 @@ export function prepareEditPlan(state: AppState, args: Record<string, any>): Pre
       ok: false,
       changed: false,
       files: results,
-      code: 'INVALID_ARGS',
+      code: failed.error?.code || 'INVALID_ARGS',
       message: failed.error?.message || 'Edit plan preflight failed.',
     };
   }
@@ -111,7 +129,7 @@ export function prepareEditPlan(state: AppState, args: Record<string, any>): Pre
     editPlanId,
     createdAtMs: now,
     expiresAtMs: now + ttlMs,
-    consumed: false,
+    status: 'prepared',
     prepared,
   };
   plans.set(editPlanId, stored);
@@ -127,6 +145,41 @@ export function prepareEditPlan(state: AppState, args: Record<string, any>): Pre
   };
 }
 
+function rollbackWrittenFiles(written: Extract<PreparedSafeEditFile, { ok: true }>[]) {
+  const rollback = {
+    attempted: [] as string[],
+    restored: [] as string[],
+    conflicts: [] as string[],
+    failures: [] as Array<{ filePath: string; message: string }>,
+  };
+
+  for (const prior of [...written].reverse()) {
+    const filePath = prior.result.filePath;
+    rollback.attempted.push(filePath);
+    try {
+      const current = fs.readFileSync(prior.targetPath, 'utf8');
+      if (current !== prior.after) {
+        rollback.conflicts.push(filePath);
+        continue;
+      }
+      if (testHooks?.rollbackWrite) {
+        testHooks.rollbackWrite(prior.targetPath, prior.before);
+      } else {
+        fs.writeFileSync(prior.targetPath, prior.before, 'utf8');
+      }
+      invalidateRepoReadCaches(prior.root, 'preparedEditRollback', { paths: [filePath] });
+      rollback.restored.push(filePath);
+    } catch (error) {
+      rollback.failures.push({
+        filePath,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  return rollback;
+}
+
 export function applyPreparedEditPlan(args: { editPlanId?: string }): PreparedEditPlanResult {
   const editPlanId = String(args.editPlanId || '').trim();
   if (!editPlanId) {
@@ -135,40 +188,80 @@ export function applyPreparedEditPlan(args: { editPlanId?: string }): PreparedEd
 
   const plan = plans.get(editPlanId);
   if (!plan) {
-    return { ok: false, changed: false, files: [], code: 'EDIT_PLAN_NOT_FOUND', message: `Prepared edit plan '${editPlanId}' was not found.` };
+    return {
+      ok: false,
+      changed: false,
+      files: [],
+      code: 'EDIT_PLAN_NOT_FOUND',
+      message: `Prepared edit plan '${editPlanId}' was not found. Re-prepare the edit instead of retrying the same plan id.`,
+    };
   }
   if (Date.now() >= plan.expiresAtMs) {
     plans.delete(editPlanId);
-    return { ok: false, changed: false, files: plan.prepared.map((entry) => entry.result), code: 'EDIT_PLAN_EXPIRED', message: `Prepared edit plan '${editPlanId}' expired.` };
+    return {
+      ok: false,
+      changed: false,
+      files: plan.prepared.map((entry) => entry.result),
+      code: 'EDIT_PLAN_EXPIRED',
+      message: `Prepared edit plan '${editPlanId}' expired. Re-read/re-prepare the edit instead of retrying this plan id.`,
+    };
   }
-  if (plan.consumed) {
-    return { ok: false, changed: false, files: plan.prepared.map((entry) => entry.result), code: 'EDIT_PLAN_CONSUMED', message: `Prepared edit plan '${editPlanId}' has already been applied.` };
+  if (plan.status !== 'prepared') {
+    return {
+      ok: false,
+      changed: false,
+      consumed: true,
+      files: plan.prepared.map((entry) => entry.result),
+      code: 'EDIT_PLAN_CONSUMED',
+      message: `Prepared edit plan '${editPlanId}' has already been consumed.`,
+    };
   }
 
+  plan.status = 'applying';
+  const sourceFiles = plan.prepared.map((entry) => entry.result);
   for (const prepared of plan.prepared) {
     if (!prepared.ok || !prepared.result.revisionBefore) continue;
     let current;
     try {
       current = getFileRevision(prepared.targetPath);
     } catch {
-      return { ok: false, changed: false, files: plan.prepared.map((entry) => entry.result), code: 'EDIT_PLAN_STALE', message: `File '${prepared.result.filePath}' changed or disappeared after plan preparation.` };
+      plan.status = 'consumed';
+      return {
+        ok: false,
+        changed: false,
+        editPlanId,
+        consumed: true,
+        files: sourceFiles,
+        code: 'EDIT_PLAN_STALE',
+        message: `File '${prepared.result.filePath}' changed or disappeared after plan preparation. Re-read and prepare again.`,
+      };
     }
     if (current.sha256 !== prepared.result.revisionBefore.sha256) {
-      return { ok: false, changed: false, files: plan.prepared.map((entry) => entry.result), code: 'EDIT_PLAN_STALE', message: `File '${prepared.result.filePath}' changed after plan preparation.` };
+      plan.status = 'consumed';
+      return {
+        ok: false,
+        changed: false,
+        editPlanId,
+        consumed: true,
+        files: sourceFiles,
+        code: 'EDIT_PLAN_STALE',
+        message: `File '${prepared.result.filePath}' changed after plan preparation. Re-read and prepare again.`,
+      };
     }
   }
 
-  plan.consumed = true;
   const applied: SafeEditResult[] = [];
   const written: Extract<PreparedSafeEditFile, { ok: true }>[] = [];
 
-  for (const prepared of plan.prepared) {
-    const result = applyPreparedSafeEditFile(prepared);
-    applied.push(result);
-    if (!result.ok) {
-      for (const prior of written) {
-        fs.writeFileSync(prior.targetPath, prior.before, 'utf8');
-      }
+  for (let index = 0; index < plan.prepared.length; index += 1) {
+    const prepared = plan.prepared[index];
+    let result: SafeEditResult;
+    try {
+      testHooks?.beforeApplyFile?.({ index, editPlanId, prepared });
+      result = applyPreparedSafeEditFile(prepared);
+    } catch (error) {
+      const rollback = rollbackWrittenFiles(written);
+      plan.status = 'consumed';
       return {
         ok: false,
         changed: false,
@@ -176,12 +269,30 @@ export function applyPreparedEditPlan(args: { editPlanId?: string }): PreparedEd
         consumed: true,
         files: applied,
         code: 'EDIT_PLAN_APPLY_FAILED',
-        message: result.error?.message || 'Prepared edit plan failed during apply and prior writes were restored.',
+        message: error instanceof Error ? error.message : String(error),
+        rollback,
+      };
+    }
+
+    applied.push(result);
+    if (!result.ok) {
+      const rollback = rollbackWrittenFiles(written);
+      plan.status = 'consumed';
+      return {
+        ok: false,
+        changed: false,
+        editPlanId,
+        consumed: true,
+        files: applied,
+        code: 'EDIT_PLAN_APPLY_FAILED',
+        message: result.error?.message || 'Prepared edit plan failed during apply.',
+        rollback,
       };
     }
     if (prepared.ok && result.changed) written.push(prepared);
   }
 
+  plan.status = 'consumed';
   return {
     ok: true,
     changed: applied.some((result) => result.changed),

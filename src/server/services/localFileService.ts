@@ -6,6 +6,7 @@ import { getDevFlowAppRoot } from '../../lib/devFlowPaths';
 import type { AppState } from '../types';
 import { createApiError } from './api';
 import { findProjectByIdentifier } from './taskService';
+import { issueFileRef } from './fileReferenceService';
 import { invalidateRepoReadCaches, registerRepoCacheInvalidator } from './repoCacheInvalidationService';
 
 const DEFAULT_IGNORED_ENTRY_NAMES = new Set([
@@ -88,6 +89,24 @@ export type FileRevision = {
   size: number;
   mtimeMs: number;
   modifiedAt: string;
+};
+
+export type LocalFileReadResult = {
+  root: string;
+  path: string;
+  content?: string;
+  bytes: number;
+  returnedBytes?: number;
+  startLine?: number;
+  endLine?: number;
+  totalLines: number;
+  truncated?: boolean;
+  modifiedAt: string;
+  revision: string;
+  fileRevision: FileRevision;
+  fileRef?: string;
+  fileRefCreatedAt?: string;
+  fileRefExpiresAt?: string;
 };
 
 function buildFileRevision(filePath: string, stat: fs.Stats): FileRevision {
@@ -648,7 +667,29 @@ export function listLocalFiles(state: AppState, args: Record<string, any>) {
   };
 }
 
-export function readLocalFile(state: AppState, args: Record<string, any>) {
+type OptionalFileRefMetadata = {
+  fileRef?: string;
+  fileRefCreatedAt?: string;
+  fileRefExpiresAt?: string;
+};
+
+function includeFileRefMetadata(state: AppState, args: Record<string, any>, root: string, targetPath: string, revision: FileRevision): OptionalFileRefMetadata {
+  const requested = args.includeFileRef === true || String(args.includeFileRef).toLowerCase() === 'true';
+  if (!requested) return {};
+  const issued = issueFileRef(state, args, {
+    root,
+    targetPath,
+    filePath: toToolRelativePath(root, targetPath),
+    revision,
+  });
+  return {
+    fileRef: issued.fileRef,
+    fileRefCreatedAt: issued.createdAt,
+    fileRefExpiresAt: issued.expiresAt,
+  };
+}
+
+export function readLocalFile(state: AppState, args: Record<string, any>): LocalFileReadResult {
   const root = resolveProjectRoot(state, args);
   const filePath = String(args.filePath || args.path || '').trim();
   if (!filePath) {
@@ -675,6 +716,7 @@ export function readLocalFile(state: AppState, args: Record<string, any>) {
       modifiedAt: stat.mtime.toISOString(),
       revision: revision.token,
       fileRevision: revision,
+      ...includeFileRefMetadata(state, args, root, targetPath, revision),
     };
   }
 
@@ -720,6 +762,7 @@ export function readLocalFile(state: AppState, args: Record<string, any>) {
     modifiedAt: stat.mtime.toISOString(),
     revision: revision.token,
     fileRevision: revision,
+    ...includeFileRefMetadata(state, args, root, targetPath, revision),
   };
 }
 
@@ -756,6 +799,7 @@ export function readFileSnippetsBatch(state: AppState, args: Record<string, any>
       startLine: entry.startLine,
       endLine: entry.endLine,
       maxBytes: entry.maxBytes,
+      includeFileRef: entry.includeFileRef ?? args.includeFileRef,
     });
   });
 

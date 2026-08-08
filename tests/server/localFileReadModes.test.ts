@@ -6,14 +6,19 @@ import path from 'node:path';
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-local-read-'));
 process.env.DEVFLOW_DB_PATH = path.join(tempDir, 'devflow.db');
+const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
+executeAllMigrations();
+const { createProject } = await import('../../src/server/repositories/projectRepository.js');
 
 const { readFileSnippetsBatch, readLocalFile } = await import('../../src/server/services/localFileService.js');
+const { clearFileReferences, resolveFileRef } = await import('../../src/server/services/fileReferenceService.js');
 
 const state: any = {
   projectsCache: [
     { id: 'project-read-1', name: 'Read Fixture', repoUrl: 'https://example.com/read', localPath: tempDir },
   ],
 };
+createProject(state.projectsCache[0]);
 
 fs.writeFileSync(path.join(tempDir, 'sample.txt'), ['one', 'two', 'three', 'four'].join('\n'), 'utf8');
 fs.writeFileSync(path.join(tempDir, 'other.txt'), ['alpha', 'beta', 'gamma'].join('\n'), 'utf8');
@@ -110,6 +115,27 @@ test('readFileSnippetsBatch supports metadata entries', () => {
   assert.equal(result.files[0].content, undefined);
   assert.equal(result.files[0].totalLines, 4);
   assert.equal(typeof result.files[0].fileRevision.sha256, 'string');
+});
+
+test('readLocalFile can opt in to a revision-bound opaque fileRef', () => {
+  clearFileReferences();
+  const withoutRef = readLocalFile(state, {
+    projectId: 'project-read-1',
+    filePath: 'sample.txt',
+  });
+  assert.equal(withoutRef.fileRef, undefined);
+
+  const withRef = readLocalFile(state, {
+    projectId: 'project-read-1',
+    filePath: 'sample.txt',
+    includeFileRef: true,
+  });
+
+  assert.match(withRef.fileRef, /^file-ref-/);
+  assert.equal(typeof withRef.fileRefExpiresAt, 'string');
+  const resolved = resolveFileRef(state, { projectId: 'project-read-1' }, withRef.fileRef);
+  assert.equal(resolved.filePath, 'sample.txt');
+  assert.equal(resolved.revision.sha256, withRef.fileRevision.sha256);
 });
 
 test.after(() => {

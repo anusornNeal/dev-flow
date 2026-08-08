@@ -118,6 +118,23 @@ test('prepared plan default TTL is agent-friendly and bounded', () => {
   assert.equal(lifetimeMs <= 300_000, true);
 });
 
+test('prepared plan reports expiry once and then becomes not found after pruning', async () => {
+  write('expired-plan.txt', 'alpha one');
+  const prepared = prepareEditPlan(state, {
+    projectId: 'project-prepared-edit',
+    ttlMs: 1_000,
+    files: [{ filePath: 'expired-plan.txt', edits: [{ type: 'replace', find: 'one', replaceWith: 'uno' }] }],
+  });
+  assert.equal(prepared.ok, true);
+
+  await new Promise((resolve) => setTimeout(resolve, 1_050));
+  const expired = applyPreparedEditPlan({ editPlanId: prepared.editPlanId! });
+  const pruned = applyPreparedEditPlan({ editPlanId: prepared.editPlanId! });
+  assert.equal(expired.code, 'EDIT_PLAN_EXPIRED');
+  assert.equal(pruned.code, 'EDIT_PLAN_NOT_FOUND');
+  assert.equal(read('expired-plan.txt'), 'alpha one');
+});
+
 test('failed stale apply consumes the plan instead of silently allowing replay', () => {
   write('stale-consumed.txt', 'alpha one');
   const prepared = prepareEditPlan(state, {

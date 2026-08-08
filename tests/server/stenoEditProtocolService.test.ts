@@ -9,7 +9,7 @@ const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-steno-protocol-')
 process.env.DEVFLOW_DB_PATH = path.join(tempDir, 'devflow.db');
 
 const { clearFileReferences, issueFileRef } = await import('../../src/server/services/fileReferenceService.js');
-const { decodeStenoEditRequest } = await import('../../src/server/services/stenoEditProtocolService.js');
+const { decodeStenoEditRequest, prepareCompactEdit } = await import('../../src/server/services/stenoEditProtocolService.js');
 
 const state: any = {
   projectsCache: [
@@ -29,7 +29,7 @@ function revision(targetPath: string) {
   };
 }
 
-function refFor(name: string, content = 'anchor\nend\n') {
+function refFor(name: string, content = 'anchor\nend\n', nowMs = 1_000) {
   const targetPath = path.join(tempDir, name);
   fs.writeFileSync(targetPath, content, 'utf8');
   return issueFileRef(state, { projectId: 'project-steno' }, {
@@ -37,7 +37,7 @@ function refFor(name: string, content = 'anchor\nend\n') {
     targetPath,
     filePath: name,
     revision: revision(targetPath),
-    nowMs: 1_000,
+    nowMs,
   }).fileRef;
 }
 
@@ -109,6 +109,20 @@ test('rejects negative, out-of-range and non-string dictionary references', () =
       (error: unknown) => errorCode(error) === 'EDIT_DICT_REF_INVALID',
     );
   }
+});
+
+test('request-local string reuse cannot bypass expanded safe-edit payload limits', () => {
+  const fileRef = refFor('expanded-limit.txt', 'anchor\n', Date.now());
+  const prepared = prepareCompactEdit(state, {
+    projectId: 'project-steno',
+    v: 1,
+    s: ['anchor', 'x'.repeat(80)],
+    f: [[fileRef, Array.from({ length: 8 }, () => ['R', 0, 1, 1])]],
+    maxPayloadBytes: 250,
+  });
+
+  assert.equal(prepared.ok, false);
+  assert.equal(prepared.code, 'PAYLOAD_TOO_LARGE');
 });
 
 test('rejects malformed compact tuples and invalid occurrence values', () => {

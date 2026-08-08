@@ -91,6 +91,23 @@ test('fileRef rejects cross-project reuse and stale content', () => {
   );
 });
 
+test('fileRef becomes stale when its target file disappears after read', () => {
+  const targetPath = write(tempDir, 'missing-after-read.txt', 'one');
+  const issued = issueFileRef(state, { projectId: 'project-ref-a' }, {
+    root: tempDir,
+    targetPath,
+    filePath: 'missing-after-read.txt',
+    revision: revision(targetPath),
+    nowMs: 1_000,
+  });
+  fs.unlinkSync(targetPath);
+
+  assert.throws(
+    () => resolveFileRef(state, { projectId: 'project-ref-a' }, issued.fileRef, { nowMs: 2_000 }),
+    (error: unknown) => errorCode(error) === 'EDIT_REF_STALE',
+  );
+});
+
 test('fileRef expiry is actionable and pruned refs may become not found', () => {
   const targetPath = write(tempDir, 'expiring.txt', 'one');
   const issued = issueFileRef(state, { projectId: 'project-ref-a' }, {

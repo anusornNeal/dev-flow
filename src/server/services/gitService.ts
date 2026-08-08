@@ -4,112 +4,26 @@ import path from 'path';
 import type { AppState } from '../types';
 import { createApiError } from './api';
 import { resolveProjectRoot, resolveSafePath } from './localFileService';
-import { invalidateRepoReadCaches, registerRepoCacheInvalidator } from './repoCacheInvalidationService';
+import { invalidateRepoReadCaches } from './repoCacheInvalidationService';
+import { recordGitRemoteEvidence } from './gitRemoteEvidenceService';
+import {
+  normalizeRepoIdentity,
+  observeRemoteBranch,
+  readAheadBehind,
+  readPushCommits,
+  readRemoteUrl,
+  readTrackingBranch,
+  resolveRemoteName,
+  validateRemoteMatchesProject,
+} from './gitRemoteService';
+import { getChangedGitFilesForRoot, getGitWorkspaceSnapshotForRoot, getGitWorkspaceStatusForRoot } from './gitLocalService';
+export { clearGitRemoteEvidenceCache, getGitRemoteEvidenceMetrics } from './gitRemoteEvidenceService';
+export { getChangedGitFilesForRoot, getGitWorkspaceSnapshotForRoot, getGitWorkspaceStatusForRoot } from './gitLocalService';
 import { getProject } from '../repositories/projectRepository';
 
 const MAX_DIFF_BYTES = 100_000;
 const MAX_LOG_COUNT = 500;
 const MAX_COMMIT_MESSAGE_BYTES = 4_000;
-const REMOTE_EVIDENCE_TTL_MS = Math.max(1_000, Math.min(60_000, Number(process.env.DEVFLOW_GIT_REMOTE_EVIDENCE_TTL_MS) || 15_000));
-const MAX_REMOTE_EVIDENCE_ENTRIES = 128;
-
-type GitRemoteEvidence = {
-  key: string;
-  rootKey: string;
-  remote: string;
-  remoteIdentity: string;
-  branch: string;
-  localHead: string;
-  remoteHead: string | null;
-  observedAtMs: number;
-  expiresAtMs: number;
-};
-
-const gitRemoteEvidence = new Map<string, GitRemoteEvidence>();
-const gitRemoteEvidenceMetrics = {
-  fetchCount: 0,
-  fetchDurationMs: 0,
-  reusedCount: 0,
-};
-
-function canonicalRootKey(root: string) {
-  const resolved = path.resolve(root);
-  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
-}
-
-function remoteEvidenceKey(root: string, remote: string, remoteUrl: string, branch: string, localHead: string) {
-  return [canonicalRootKey(root), remote, normalizeRepoIdentity(remoteUrl), branch, localHead].join('|');
-}
-
-function pruneGitRemoteEvidence(nowMs: number) {
-  for (const [key, evidence] of gitRemoteEvidence) {
-    if (evidence.expiresAtMs <= nowMs) gitRemoteEvidence.delete(key);
-  }
-  while (gitRemoteEvidence.size > MAX_REMOTE_EVIDENCE_ENTRIES) {
-    const oldest = gitRemoteEvidence.keys().next().value;
-    if (!oldest) break;
-    gitRemoteEvidence.delete(oldest);
-  }
-}
-
-export function clearGitRemoteEvidenceCache(root?: string) {
-  if (!root) {
-    const count = gitRemoteEvidence.size;
-    gitRemoteEvidence.clear();
-    gitRemoteEvidenceMetrics.fetchCount = 0;
-    gitRemoteEvidenceMetrics.fetchDurationMs = 0;
-    gitRemoteEvidenceMetrics.reusedCount = 0;
-    return count;
-  }
-  const rootKey = canonicalRootKey(root);
-  let count = 0;
-  for (const [key, evidence] of gitRemoteEvidence) {
-    if (evidence.rootKey !== rootKey) continue;
-    gitRemoteEvidence.delete(key);
-    count += 1;
-  }
-  return count;
-}
-
-registerRepoCacheInvalidator('git-remote-evidence', (root) => clearGitRemoteEvidenceCache(root));
-
-export function getGitRemoteEvidenceMetrics(nowMs = Date.now()) {
-  pruneGitRemoteEvidence(nowMs);
-  return {
-    entries: gitRemoteEvidence.size,
-    maxEntries: MAX_REMOTE_EVIDENCE_ENTRIES,
-    ttlMs: REMOTE_EVIDENCE_TTL_MS,
-    ...gitRemoteEvidenceMetrics,
-  };
-}
-
-function recordGitRemoteEvidence(root: string, remote: string, remoteUrl: string, branch: string, localHead: string, remoteHead: string | null, nowMs: number) {
-  const rootKey = canonicalRootKey(root);
-  const remoteIdentity = normalizeRepoIdentity(remoteUrl);
-  for (const [key, evidence] of gitRemoteEvidence) {
-    if (evidence.rootKey === rootKey && evidence.remote === remote && evidence.branch === branch) gitRemoteEvidence.delete(key);
-  }
-  const key = remoteEvidenceKey(root, remote, remoteUrl, branch, localHead);
-  const evidence: GitRemoteEvidence = {
-    key,
-    rootKey,
-    remote,
-    remoteIdentity,
-    branch,
-    localHead,
-    remoteHead,
-    observedAtMs: nowMs,
-    expiresAtMs: nowMs + REMOTE_EVIDENCE_TTL_MS,
-  };
-  gitRemoteEvidence.set(key, evidence);
-  pruneGitRemoteEvidence(nowMs);
-  return evidence;
-}
-
-function readReusableGitRemoteEvidence(root: string, remote: string, remoteUrl: string, branch: string, localHead: string, nowMs: number) {
-  pruneGitRemoteEvidence(nowMs);
-  return gitRemoteEvidence.get(remoteEvidenceKey(root, remote, remoteUrl, branch, localHead));
-}
 
 function ensureGitRepo(root: string) {
   const gitDir = path.join(root, '.git');
@@ -179,156 +93,6 @@ function commitExists(root: string, revision: string) {
   return gitSucceeded(['rev-parse', '--verify', '--quiet', `${revision}^{commit}`], root);
 }
 
-function resolveRemoteName(value: unknown) {
-  const remote = typeof value === 'string' && value.trim() ? value.trim() : 'origin';
-  if (!/^[A-Za-z0-9._-]+$/.test(remote)) {
-    throw createApiError(400, 'INVALID_GIT_REMOTE', `Remote '${remote}' contains unsupported characters.`, { affectedId: remote });
-  }
-  return remote;
-}
-
-function readRemoteUrl(root: string, remote: string) {
-  const result = runGitResult(['remote', 'get-url', remote], root);
-  if (result.error || result.status !== 0) {
-    throw createApiError(400, 'GIT_REMOTE_NOT_FOUND', `Git remote '${remote}' is not configured.`, {
-      affectedId: remote,
-      details: result.stderr?.trim() || undefined,
-    });
-  }
-  const remoteUrl = (result.stdout || '').trim();
-  if (!remoteUrl || /[\r\n]/.test(remoteUrl)) {
-    throw createApiError(400, 'INVALID_GIT_REMOTE_URL', `Git remote '${remote}' has an invalid URL.`, { affectedId: remote });
-  }
-  const supported = path.isAbsolute(remoteUrl)
-    || /^file:\/\//i.test(remoteUrl)
-    || /^(https?|ssh|git):\/\//i.test(remoteUrl)
-    || /^[^@\s]+@[^:\s]+:.+/.test(remoteUrl);
-  if (!supported) {
-    throw createApiError(400, 'INVALID_GIT_REMOTE_URL', `Git remote '${remote}' uses an unsupported URL format.`, {
-      affectedId: remote,
-      details: { remoteUrl },
-    });
-  }
-  return remoteUrl;
-}
-
-function normalizeRepoIdentity(value: string) {
-  let normalized = value.trim().replace(/\\/g, '/').replace(/\/$/, '').replace(/\.git$/i, '');
-  const scpMatch = normalized.match(/^[^@\s]+@([^:\s]+):(.+)$/);
-  if (scpMatch) normalized = `${scpMatch[1]}/${scpMatch[2]}`;
-  normalized = normalized.replace(/^[a-z]+:\/\//i, '').replace(/^www\./i, '');
-  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
-}
-
-function validateRemoteMatchesProject(args: Record<string, any>, remoteUrl: string) {
-  const project = typeof args.projectId === 'string' && args.projectId.trim()
-    ? getProject(args.projectId.trim())
-    : undefined;
-  const expectedUrl = typeof args.repoUrl === 'string' && args.repoUrl.trim()
-    ? args.repoUrl.trim()
-    : project?.repoUrl;
-  if (!expectedUrl) return;
-  if (normalizeRepoIdentity(String(expectedUrl)) !== normalizeRepoIdentity(remoteUrl)) {
-    throw createApiError(409, 'GIT_REMOTE_REPO_MISMATCH', `Remote URL does not match the selected project's repository.`, {
-      details: { expectedUrl, remoteUrl },
-    });
-  }
-}
-
-function fetchRemote(root: string, remote: string) {
-  const startedAt = Date.now();
-  gitRemoteEvidenceMetrics.fetchCount += 1;
-  const result = runGitResult(['fetch', '--prune', remote], root, 60_000);
-  const durationMs = Date.now() - startedAt;
-  gitRemoteEvidenceMetrics.fetchDurationMs += durationMs;
-  if (result.error || result.status !== 0) {
-    throw createApiError(502, 'GIT_FETCH_FAILED', `Failed to fetch git remote '${remote}'.`, {
-      affectedId: remote,
-      details: result.stderr?.trim() || result.error?.message,
-    });
-  }
-  return durationMs;
-}
-
-function readFetchedRemoteHead(root: string, remote: string, branch: string) {
-  const result = runGitResult(['rev-parse', '--verify', '--quiet', `refs/remotes/${remote}/${branch}`], root);
-  if (result.error) {
-    throw createApiError(500, 'GIT_EXEC_ERROR', `Failed to read fetched remote ref '${remote}/${branch}'.`, {
-      affectedId: `${remote}/${branch}`,
-      details: result.error.message,
-    });
-  }
-  return result.status === 0 ? (result.stdout || '').trim() || null : null;
-}
-
-function observeRemoteBranch(root: string, remote: string, remoteUrl: string, branch: string, localHead: string, args: Record<string, any>) {
-  const nowMs = Number.isFinite(Number(args.nowMs)) ? Number(args.nowMs) : Date.now();
-  const forceFresh = flag(args.forceFresh);
-  const reusable = forceFresh ? undefined : readReusableGitRemoteEvidence(root, remote, remoteUrl, branch, localHead, nowMs);
-  if (reusable) {
-    gitRemoteEvidenceMetrics.reusedCount += 1;
-    return {
-      remoteHead: reusable.remoteHead,
-      remoteFetchPerformed: false,
-      remoteEvidenceReused: true,
-      remoteFetchDurationMs: 0,
-      remoteEvidenceObservedAt: new Date(reusable.observedAtMs).toISOString(),
-      remoteEvidenceAgeMs: Math.max(0, nowMs - reusable.observedAtMs),
-    };
-  }
-
-  const shouldFetch = flag(args.fetch) || forceFresh;
-  const remoteFetchDurationMs = shouldFetch ? fetchRemote(root, remote) : 0;
-  const remoteHead = shouldFetch
-    ? readFetchedRemoteHead(root, remote, branch)
-    : readRemoteHead(root, remote, branch);
-  const evidence = recordGitRemoteEvidence(root, remote, remoteUrl, branch, localHead, remoteHead, nowMs);
-  return {
-    remoteHead,
-    remoteFetchPerformed: shouldFetch,
-    remoteEvidenceReused: false,
-    remoteFetchDurationMs,
-    remoteEvidenceObservedAt: new Date(evidence.observedAtMs).toISOString(),
-    remoteEvidenceAgeMs: 0,
-  };
-}
-
-function readRemoteHead(root: string, remote: string, branch: string) {
-  const result = runGitResult(['ls-remote', '--heads', remote, `refs/heads/${branch}`], root, 60_000);
-  if (result.error || result.status !== 0) {
-    throw createApiError(502, 'GIT_REMOTE_READ_FAILED', `Failed to read '${remote}/${branch}'.`, {
-      affectedId: `${remote}/${branch}`,
-      details: result.stderr?.trim() || result.error?.message,
-    });
-  }
-  const line = (result.stdout || '').trim().split(/\r?\n/).find(Boolean);
-  return line ? line.split(/\s+/)[0] : null;
-}
-
-function readTrackingBranch(root: string) {
-  const result = runGitResult(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'], root);
-  return result.status === 0 ? (result.stdout || '').trim() || null : null;
-}
-
-function readAheadBehind(root: string, localHead: string, remoteHead: string | null) {
-  if (!remoteHead) return { ahead: 0, behind: 0, diverged: false };
-  if (!commitExists(root, remoteHead)) return { ahead: null, behind: null, diverged: false };
-  const output = runGit(['rev-list', '--left-right', '--count', `${localHead}...${remoteHead}`], root).trim();
-  const [aheadRaw, behindRaw] = output.split(/\s+/);
-  const ahead = Number(aheadRaw || 0);
-  const behind = Number(behindRaw || 0);
-  return { ahead, behind, diverged: ahead > 0 && behind > 0 };
-}
-
-function readPushCommits(root: string, localHead: string, remoteHead: string | null) {
-  const range = remoteHead ? `${remoteHead}..${localHead}` : localHead;
-  const output = runGit(['log', '-50', '--format=%H%x00%s', range], root).trim();
-  return output.split(/\r?\n/).filter(Boolean).map((line) => {
-    const [hash, ...messageParts] = line.split('\x00');
-    return { hash, message: messageParts.join(' ') };
-  });
-}
-
 function normalizeGitPath(filePath: string) {
   return filePath.replace(/\\/g, '/');
 }
@@ -350,73 +114,6 @@ function parsePorcelainStatus(output: string) {
 
 function getStatusFiles(root: string) {
   return parsePorcelainStatus(runGit(['status', '--porcelain', '--untracked-files=all'], root));
-}
-
-export function getChangedGitFilesForRoot(root: string) {
-  ensureGitRepo(root);
-  return getStatusFiles(root).map((file) => ({ path: file.normalizedPath, staged: file.staged, status: file.status }));
-}
-
-export function getGitWorkspaceStatusForRoot(root: string) {
-  ensureGitRepo(root);
-  const output = runGit(['status', '--porcelain=v1', '--branch'], root);
-  const lines = output.split(/\r?\n/).filter(Boolean);
-  const branchLine = lines[0]?.startsWith('## ') ? lines.shift()!.slice(3).trim() : '';
-  const branch = (branchLine.split('...')[0] || branchLine.split(' ')[0] || 'HEAD').trim() || 'HEAD';
-  const files = parsePorcelainStatus(lines.join('\n')).map((file) => ({
-    path: file.normalizedPath,
-    staged: file.staged,
-    status: file.status,
-  }));
-  return { root, branch, files };
-}
-
-export function getGitWorkspaceSnapshotForRoot(root: string) {
-  ensureGitRepo(root);
-  const output = runGit(['status', '--porcelain=v2', '--branch'], root);
-  let branch = 'HEAD';
-  let head = 'unborn';
-  const files: Array<{ path: string; staged: boolean; status: string }> = [];
-
-  for (const line of output.split(/\r?\n/)) {
-    if (!line) continue;
-    if (line.startsWith('# branch.oid ')) {
-      const value = line.slice('# branch.oid '.length).trim();
-      head = value === '(initial)' ? 'unborn' : value;
-      continue;
-    }
-    if (line.startsWith('# branch.head ')) {
-      const value = line.slice('# branch.head '.length).trim();
-      branch = value === '(detached)' ? 'HEAD' : value || 'HEAD';
-      continue;
-    }
-    if (line.startsWith('? ')) {
-      files.push({ path: normalizeGitPath(line.slice(2).trim()), staged: false, status: '??' });
-      continue;
-    }
-    if (line.startsWith('! ')) continue;
-    if (line.startsWith('1 ') || line.startsWith('u ')) {
-      const parts = line.split(' ');
-      const xy = parts[1] || '..';
-      const filePath = parts.slice(line.startsWith('1 ') ? 8 : 10).join(' ');
-      const x = xy[0] === '.' ? ' ' : xy[0];
-      const y = xy[1] === '.' ? ' ' : xy[1];
-      files.push({ path: normalizeGitPath(filePath), staged: x !== ' ', status: `${x}${y}` });
-      continue;
-    }
-    if (line.startsWith('2 ')) {
-      const tabIndex = line.indexOf('\t');
-      const primary = tabIndex >= 0 ? line.slice(0, tabIndex) : line;
-      const parts = primary.split(' ');
-      const xy = parts[1] || '..';
-      const filePath = parts.slice(9).join(' ');
-      const x = xy[0] === '.' ? ' ' : xy[0];
-      const y = xy[1] === '.' ? ' ' : xy[1];
-      files.push({ path: normalizeGitPath(filePath), staged: x !== ' ', status: `${x}${y}` });
-    }
-  }
-
-  return { root, branch, head, files };
 }
 
 function getBranchName(root: string) {
@@ -1084,7 +781,7 @@ export function pushGitBranch(state: AppState, args: Record<string, any>) {
   const remoteHeadAfter = localHead;
   const cacheInvalidation = invalidateRepoReadCaches(root, 'pushGitBranch');
   const nowMs = Number.isFinite(Number(args.nowMs)) ? Number(args.nowMs) : Date.now();
-  const finalEvidence = recordGitRemoteEvidence(root, remote, remoteUrl, branch, localHead, remoteHeadAfter, nowMs);
+  const finalEvidence = recordGitRemoteEvidence(root, remote, normalizeRepoIdentity(remoteUrl), branch, localHead, remoteHeadAfter, nowMs);
   return {
     root,
     dryRun: false,

@@ -1,6 +1,13 @@
 import fs from 'fs';
 import path from 'path';
-import { getProject, getProjects } from '../repositories/projectRepository.js';
+import {
+  getProject,
+  getProjects,
+  normalizeProjectLocalPathIdentity,
+  normalizeProjectNameAlias,
+  normalizeProjectRepoIdentity,
+  projectsShareCanonicalRepository,
+} from '../repositories/projectRepository.js';
 import { getTasks } from '../repositories/taskRepository.js';
 import type { AgentCompletionPayload, AgentCompletionTest, TaskCategory } from '../../types';
 import type { AppState } from '../types';
@@ -13,10 +20,7 @@ import { getProjectRulesContext } from './projectRulesService';
 import { renderPromptTemplate } from './promptTemplateService';
 import { getTaskFocusedAtlasContext } from './projectAtlasService';
 import { buildTaskBugSummaryJson, renderTaskBugSummaryMarkdown } from '../../lib/bugThreadExport';
-
-function normalizeRepoLike(value: string) {
-  return value.trim().toLowerCase().replace(/\/$/, '');
-}
+import { createApiError } from './api';
 
 const TASK_CATEGORY_SET = new Set<string>(VALID_TASK_CATEGORIES);
 
@@ -104,6 +108,48 @@ export function findTaskByIdentifier(state: AppState, targetId: string) {
   return getTasks().find((entry) => entry.id === targetId || entry.displayId === targetId) || null;
 }
 
+function chooseCanonicalProject(matches: any[], identifier: string) {
+  if (matches.length === 0) return null;
+  if (matches.length === 1) return matches[0];
+
+  const groups: any[][] = [];
+  for (const candidate of matches) {
+    const matchingGroupIndexes = groups
+      .map((group, index) => group.some((entry) => projectsShareCanonicalRepository(entry, candidate)) ? index : -1)
+      .filter((index) => index >= 0);
+    if (matchingGroupIndexes.length === 0) {
+      groups.push([candidate]);
+      continue;
+    }
+    const primary = groups[matchingGroupIndexes[0]];
+    primary.push(candidate);
+    for (let index = matchingGroupIndexes.length - 1; index >= 1; index -= 1) {
+      primary.push(...groups[matchingGroupIndexes[index]]);
+      groups.splice(matchingGroupIndexes[index], 1);
+    }
+  }
+
+  if (groups.length > 1) {
+    throw createApiError(409, 'PROJECT_AMBIGUOUS', `More than one project matches '${identifier}'. Use projectId.`, {
+      affectedId: identifier,
+      retryable: false,
+      details: {
+        candidates: matches.map((project) => ({
+          id: project.id,
+          name: project.name,
+          repoUrl: project.repoUrl || null,
+          localPath: project.localPath || null,
+        })),
+      },
+    });
+  }
+
+  return [...matches].sort((left, right) => {
+    const createdCompare = String(left.createdAt || '').localeCompare(String(right.createdAt || ''));
+    return createdCompare || String(left.id || '').localeCompare(String(right.id || ''));
+  })[0];
+}
+
 export function findProjectByIdentifier(state: AppState, input: {
   projectId?: string;
   projectName?: string;
@@ -111,31 +157,29 @@ export function findProjectByIdentifier(state: AppState, input: {
   repoUrl?: string;
   localPath?: string;
 }) {
-  if (input.projectId) {
-    const project = getProject(input.projectId);
-    if (project) return project;
+  const projectId = typeof input.projectId === 'string' ? input.projectId.trim() : '';
+  if (projectId) return getProject(projectId) || null;
+
+  const projects = getProjects();
+  const localPathInput = typeof input.localPath === 'string' ? input.localPath.trim() : '';
+  if (localPathInput) {
+    const normalizedPath = normalizeProjectLocalPathIdentity(localPathInput);
+    const matches = projects.filter((entry) => normalizeProjectLocalPathIdentity(entry.localPath) === normalizedPath);
+    return chooseCanonicalProject(matches, localPathInput);
   }
 
-  if (input.projectName) {
-    const normalizedName = input.projectName.trim().toLowerCase();
-    const matches = getProjects().filter((entry) => String(entry.name || '').trim().toLowerCase() === normalizedName);
-    if (matches.length === 1) return matches[0];
+  const repoInput = typeof (input.repo || input.repoUrl) === 'string' ? String(input.repo || input.repoUrl).trim() : '';
+  if (repoInput) {
+    const normalizedRepo = normalizeProjectRepoIdentity(repoInput);
+    const matches = projects.filter((entry) => normalizeProjectRepoIdentity(entry.repoUrl) === normalizedRepo);
+    return chooseCanonicalProject(matches, repoInput);
   }
 
-  const repoInput = input.repo || input.repoUrl;
-  if (repoInput && typeof repoInput === 'string' && repoInput.trim()) {
-    const cleanInput = normalizeRepoLike(repoInput);
-    const project = getProjects().find((entry) => {
-      const cleanRepo = normalizeRepoLike(String(entry.repoUrl || ''));
-      return cleanRepo === cleanInput || cleanRepo.includes(cleanInput) || cleanInput.includes(cleanRepo);
-    });
-    if (project) return project;
-  }
-
-  if (input.localPath) {
-    const normalizedPath = path.resolve(input.localPath);
-    const project = getProjects().find((entry) => entry.localPath && path.resolve(entry.localPath) === normalizedPath);
-    if (project) return project;
+  const projectName = typeof input.projectName === 'string' ? input.projectName.trim() : '';
+  if (projectName) {
+    const normalizedName = normalizeProjectNameAlias(projectName);
+    const matches = projects.filter((entry) => normalizeProjectNameAlias(entry.name) === normalizedName);
+    return chooseCanonicalProject(matches, projectName);
   }
 
   return null;

@@ -1,3 +1,4 @@
+import path from 'node:path';
 import db, { withDbTransaction } from '../../db/index.js';
 
 export function getProjects(): any[] {
@@ -6,6 +7,53 @@ export function getProjects(): any[] {
 
 export function getProject(id: string): any | undefined {
   return db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as any | undefined;
+}
+
+export function normalizeProjectNameAlias(value: unknown) {
+  return String(value || '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+}
+
+export function normalizeProjectRepoIdentity(value: unknown) {
+  let normalized = String(value || '').trim().replace(/\\/g, '/');
+  if (!normalized) return '';
+
+  const scpMatch = normalized.match(/^[^@\s]+@([^:\s]+):(.+)$/);
+  if (scpMatch) {
+    normalized = `${scpMatch[1]}/${scpMatch[2]}`;
+  } else {
+    try {
+      const parsed = new URL(normalized);
+      normalized = `${parsed.hostname}${parsed.pathname}`;
+    } catch {
+      normalized = normalized.replace(/^[a-z]+:\/\//i, '');
+    }
+  }
+
+  normalized = normalized.replace(/^\/+|\/+$/g, '').replace(/\.git$/i, '');
+  return normalized.toLowerCase();
+}
+
+export function normalizeProjectLocalPathIdentity(value: unknown) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const looksWindows = /^[a-zA-Z]:[\\/]/.test(raw) || raw.includes('\\');
+  const resolved = looksWindows ? path.win32.resolve(raw) : path.resolve(raw);
+  const normalized = resolved.replace(/\\/g, '/').replace(/\/+$/g, '');
+  return looksWindows || process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+}
+
+export function projectsShareCanonicalRepository(left: any, right: any) {
+  const leftRepo = normalizeProjectRepoIdentity(left?.repoUrl);
+  const rightRepo = normalizeProjectRepoIdentity(right?.repoUrl);
+  if (leftRepo && rightRepo && leftRepo === rightRepo) return true;
+  const leftPath = normalizeProjectLocalPathIdentity(left?.localPath);
+  const rightPath = normalizeProjectLocalPathIdentity(right?.localPath);
+  return Boolean(leftPath && rightPath && leftPath === rightPath);
+}
+
+export function findProjectIdentityConflicts(project: any) {
+  if (!project || !project.id) return [];
+  return getProjects().filter((entry) => entry.id !== project.id && projectsShareCanonicalRepository(entry, project));
 }
 
 export function createProject(project: any): void {

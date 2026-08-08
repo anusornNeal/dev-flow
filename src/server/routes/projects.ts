@@ -1,7 +1,7 @@
 import type express from 'express';
 import type { ApiRouteDeps } from '../types';
 import { getTasksByProjectId, deleteTasksByIds, deleteTasksByProjectId } from '../repositories/taskRepository.js';
-import { getProjects, getProject, createProject as dbCreateProject, updateProject as dbUpdateProject, deleteProject as dbDeleteProject } from '../repositories/projectRepository.js';
+import { getProjects, getProject, createProject as dbCreateProject, updateProject as dbUpdateProject, deleteProject as dbDeleteProject, findProjectIdentityConflicts } from '../repositories/projectRepository.js';
 import { createApiError, sendApiError } from '../services/api';
 import { findProjectByIdentifier } from '../services/taskService';
 import { validateString } from '../validation';
@@ -27,6 +27,19 @@ function deleteProjectById(projectId: string, deps: ApiRouteDeps) {
   deleteTasksByProjectId(projectId);
 
   return { success: true, removedId: projectId };
+}
+
+function rejectProjectIdentityConflict(res: express.Response, project: any) {
+  const conflicts = findProjectIdentityConflicts(project);
+  if (conflicts.length === 0) return false;
+  sendApiError(res, createApiError(409, 'PROJECT_IDENTITY_CONFLICT', 'Another project already points at the same canonical repository or local path.', {
+    affectedId: project.id,
+    retryable: false,
+    details: {
+      candidates: conflicts.map((entry) => ({ id: entry.id, name: entry.name, repoUrl: entry.repoUrl || null, localPath: entry.localPath || null })),
+    },
+  }));
+  return true;
 }
 
 export function registerProjectRoutes(app: express.Express, deps: ApiRouteDeps) {
@@ -77,6 +90,8 @@ export function registerProjectRoutes(app: express.Express, deps: ApiRouteDeps) 
       createdAt: new Date().toISOString(),
     };
 
+    if (rejectProjectIdentityConflict(res, newProject)) return;
+
     dbCreateProject(newProject);
     return res.status(201).json(newProject);
   });
@@ -95,6 +110,8 @@ export function registerProjectRoutes(app: express.Express, deps: ApiRouteDeps) 
     if (description !== undefined) project.description = description.trim();
     if (localPath !== undefined) project.localPath = localPath.trim() || undefined;
     if (taskIdPrefix !== undefined) project.taskIdPrefix = taskIdPrefix.trim() || undefined;
+
+    if (rejectProjectIdentityConflict(res, project)) return;
 
     dbUpdateProject(project);
     return res.json(project);

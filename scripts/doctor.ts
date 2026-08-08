@@ -5,12 +5,7 @@ import net from 'net';
 import { spawnSync } from 'child_process';
 import { getDevFlowAppRoot, getDevFlowUploadsDir, getDevFlowDbPath } from '../src/lib/devFlowPaths';
 import db from '../src/db/index';
-
-type CheckResult = {
-  label: string;
-  ok: boolean;
-  detail: string;
-};
+import { doctorHasFailure, doctorResultPrefix, type DoctorCheckResult as CheckResult } from './doctorPolicy.js';
 
 const rootDir = process.cwd();
 const envPath = path.join(rootDir, '.env');
@@ -161,6 +156,7 @@ async function main() {
     results.push({
       label: 'Legacy JSON files',
       ok: false,
+      severity: 'warning',
       detail: `Found: ${legacy.map((p) => path.basename(p)).join(', ')}. Run npm run migrate:json.`,
     });
   } else {
@@ -197,14 +193,11 @@ async function main() {
     });
   }
 
-  let hasFailure = false;
   for (const result of results) {
-    const prefix = result.ok ? 'OK' : 'WARN';
-    if (!result.ok) hasFailure = true;
-    console.log(`[doctor] ${prefix} ${result.label}: ${result.detail}`);
+    console.log(`[doctor] ${doctorResultPrefix(result)} ${result.label}: ${result.detail}`);
   }
 
-  if (hasFailure) {
+  if (doctorHasFailure(results)) {
     process.exitCode = 1;
   }
 }

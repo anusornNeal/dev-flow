@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { createApiError } from './api';
 import { resolveSafePath } from './localFileService';
+import { readWorkspaceMetadataFile } from './workspaceMetadataCacheService';
 
 const MAX_CONFIG_BYTES = 100_000;
 const MAX_PRESET_NAME_LENGTH = 64;
@@ -12,6 +13,7 @@ const MAX_TIMEOUT_MS = 300_000;
 const MAX_OUTPUT_BYTES = 100_000;
 const ALLOWED_CATEGORIES = new Set(['verification', 'validate', 'test', 'lint', 'build']);
 const ALLOWED_KEYS = new Set(['executable', 'args', 'cwd', 'timeoutMs', 'maxOutputBytes', 'category']);
+const parsedConfigCache = new Map<string, { size: number; mtimeMs: number; parsed: any; configPath: string }>();
 
 export interface ProjectCommandPreset {
   name: string;
@@ -146,10 +148,21 @@ function readConfig(root: string) {
     throw createApiError(400, 'COMMAND_CONFIG_TOO_LARGE', `Command config must be ${MAX_CONFIG_BYTES} bytes or less.`);
   }
 
-  const content = fs.readFileSync(configPath, 'utf8');
+  const metadata = readWorkspaceMetadataFile(configPath, MAX_CONFIG_BYTES);
+  if (!metadata) {
+    throw createApiError(400, 'INVALID_COMMAND_CONFIG', `Command config '${path.relative(root, configPath)}' disappeared before it could be read.`);
+  }
+  const cacheKey = path.resolve(configPath);
+  const cached = parsedConfigCache.get(cacheKey);
+  if (cached && cached.size === metadata.size && cached.mtimeMs === metadata.mtimeMs) {
+    return { parsed: cached.parsed, configPath: cached.configPath };
+  }
+
   try {
-    const parsed = yamlExists ? parseStrictCommandYaml(content) : JSON.parse(content);
-    return { parsed, configPath: path.relative(root, configPath).replace(/\\/g, '/') };
+    const parsed = yamlExists ? parseStrictCommandYaml(metadata.content) : JSON.parse(metadata.content);
+    const relativeConfigPath = path.relative(root, configPath).replace(/\\/g, '/');
+    parsedConfigCache.set(cacheKey, { size: metadata.size, mtimeMs: metadata.mtimeMs, parsed, configPath: relativeConfigPath });
+    return { parsed, configPath: relativeConfigPath };
   } catch (error) {
     if (error && typeof error === 'object' && 'payload' in error) throw error;
     throw createApiError(400, 'INVALID_COMMAND_CONFIG', `Could not parse '${path.relative(root, configPath)}'.`, {

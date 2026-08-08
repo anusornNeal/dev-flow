@@ -1,7 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Activity, Cat, Moon, Sun, FileCode, Code, FileText, Plus, Sparkles, Blocks, ChevronDown } from 'lucide-react';
 import NgrokStatusPanel from './NgrokStatusPanel';
-import AutoWorkToggle from './AutoWorkToggle';
 import ChatGptStarterPromptButton from './ChatGptStarterPromptButton';
 
 interface HeaderProps {
@@ -69,9 +68,6 @@ export function Header({
           ngrokUrl={ngrokUrl} 
           onOpenSettings={() => setIsSettingsModalOpen(true)} 
         />
-        
-        <AutoWorkToggle />
-
         {/* Theme Toggle */}
         <button
           onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}

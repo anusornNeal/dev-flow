@@ -24,6 +24,7 @@ import { ProjectAtlasPage } from './components/ProjectAtlasPage';
 import { BoardLane } from './components/BoardLane';
 import BatchImportModal from './components/BatchImportModal';
 import ConfirmModal from './components/ConfirmModal';
+import TaskMoveBlockerDialog, { type TaskMoveDecision } from './components/TaskMoveBlockerDialog';
 import AgentRunLogModal from './components/AgentRunLogModal';
 import { BOARD_COLUMNS } from './app/boardColumns';
 import { filterBoardTasks } from './app/taskFilters';
@@ -44,10 +45,10 @@ export default function App() {
   const [persistenceError, setPersistenceError] = useState<string | null>(null);
   const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
   const [draggedOverColumn, setDraggedOverColumn] = useState<TaskStatus | null>(null);
-  const [pendingManualOverride, setPendingManualOverride] = useState<{
+  const [pendingMoveDecision, setPendingMoveDecision] = useState<{
     sourceTask: Task;
     status: TaskStatus;
-    blockers: Array<{ code: string; message: string }>;
+    decision: TaskMoveDecision;
   } | null>(null);
   const [taskToDelete, setTaskToDelete] = useState<string | null>(null);
 
@@ -239,10 +240,14 @@ export default function App() {
       if (!response.ok) {
         setTasks(prev => prev.map(task => task.id === taskId ? sourceTask : task));
         if (selectedTask && selectedTask.id === taskId) setSelectedTask(sourceTask);
-        if (response.status === 409 && responseData.confirmationRequired) {
-          const blockers = Array.isArray(responseData.blockers) ? responseData.blockers : [];
-          setPendingManualOverride({ sourceTask, status, blockers });
-          setPersistenceError(`Move needs confirmation: ${blockers.map((blocker: any) => blocker.code).join(', ')}`);
+        const blockers = Array.isArray(responseData.blockers) ? responseData.blockers : [];
+        if (blockers.length > 0) {
+          setPendingMoveDecision({
+            sourceTask,
+            status,
+            decision: { ...responseData, blockers },
+          });
+          setPersistenceError(null);
           return;
         }
         setPersistenceError(responseData.message || responseData.error || `Lane move failed with status ${response.status}`);
@@ -257,19 +262,7 @@ export default function App() {
       if (selectedTask && selectedTask.id === taskId) {
         setSelectedTask(persistedTask);
       }
-      const autoWorkTrigger = responseData.autoWorkTrigger;
-      if (autoWorkTrigger && autoWorkTrigger.triggered === false && autoWorkTrigger.reason) {
-        const warningMessage = `Auto Work blocked before launch: ${autoWorkTrigger.reason}`;
-        setPersistenceError(warningMessage);
-        window.dispatchEvent(new CustomEvent('devflow:auto-work-preflight-error', {
-          detail: {
-            code: autoWorkTrigger.code || 'UNKNOWN',
-            message: warningMessage,
-          },
-        }));
-      } else {
-        setPersistenceError(null);
-      }
+      setPersistenceError(null);
     } catch (err) {
       console.error('API lane move sync failed:', err);
       setTasks(prev => prev.map(task => task.id === taskId ? sourceTask : task));
@@ -626,17 +619,17 @@ export default function App() {
         />
       )}
 
-      {/* 9. Manual workflow override confirmation */}
-      {pendingManualOverride && (
-        <ConfirmModal
-          title="Move with workflow override?"
-          message={`This move is allowed manually, but these workflow checks are incomplete: ${pendingManualOverride.blockers.map((blocker) => `${blocker.code}: ${blocker.message}`).join(' ')}`}
-          onConfirm={() => {
-            executeTaskMove(pendingManualOverride.sourceTask, pendingManualOverride.status, true);
-            setPendingManualOverride(null);
+      {/* 9. Actionable task move blocker dialog */}
+      {pendingMoveDecision && (
+        <TaskMoveBlockerDialog
+          decision={pendingMoveDecision.decision}
+          sourceLabel={pendingMoveDecision.sourceTask.status.replaceAll('-', ' ')}
+          targetLabel={pendingMoveDecision.status.replaceAll('-', ' ')}
+          onMoveAnyway={() => {
+            executeTaskMove(pendingMoveDecision.sourceTask, pendingMoveDecision.status, true);
+            setPendingMoveDecision(null);
           }}
-          onCancel={() => setPendingManualOverride(null)}
-          confirmText="Move Anyway"
+          onCancel={() => setPendingMoveDecision(null)}
         />
       )}
 

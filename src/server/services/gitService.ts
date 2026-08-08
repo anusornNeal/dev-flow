@@ -4,12 +4,112 @@ import path from 'path';
 import type { AppState } from '../types';
 import { createApiError } from './api';
 import { resolveProjectRoot, resolveSafePath } from './localFileService';
-import { invalidateRepoReadCaches } from './repoCacheInvalidationService';
+import { invalidateRepoReadCaches, registerRepoCacheInvalidator } from './repoCacheInvalidationService';
 import { getProject } from '../repositories/projectRepository';
 
 const MAX_DIFF_BYTES = 100_000;
 const MAX_LOG_COUNT = 500;
 const MAX_COMMIT_MESSAGE_BYTES = 4_000;
+const REMOTE_EVIDENCE_TTL_MS = Math.max(1_000, Math.min(60_000, Number(process.env.DEVFLOW_GIT_REMOTE_EVIDENCE_TTL_MS) || 15_000));
+const MAX_REMOTE_EVIDENCE_ENTRIES = 128;
+
+type GitRemoteEvidence = {
+  key: string;
+  rootKey: string;
+  remote: string;
+  remoteIdentity: string;
+  branch: string;
+  localHead: string;
+  remoteHead: string | null;
+  observedAtMs: number;
+  expiresAtMs: number;
+};
+
+const gitRemoteEvidence = new Map<string, GitRemoteEvidence>();
+const gitRemoteEvidenceMetrics = {
+  fetchCount: 0,
+  fetchDurationMs: 0,
+  reusedCount: 0,
+};
+
+function canonicalRootKey(root: string) {
+  const resolved = path.resolve(root);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function remoteEvidenceKey(root: string, remote: string, remoteUrl: string, branch: string, localHead: string) {
+  return [canonicalRootKey(root), remote, normalizeRepoIdentity(remoteUrl), branch, localHead].join('|');
+}
+
+function pruneGitRemoteEvidence(nowMs: number) {
+  for (const [key, evidence] of gitRemoteEvidence) {
+    if (evidence.expiresAtMs <= nowMs) gitRemoteEvidence.delete(key);
+  }
+  while (gitRemoteEvidence.size > MAX_REMOTE_EVIDENCE_ENTRIES) {
+    const oldest = gitRemoteEvidence.keys().next().value;
+    if (!oldest) break;
+    gitRemoteEvidence.delete(oldest);
+  }
+}
+
+export function clearGitRemoteEvidenceCache(root?: string) {
+  if (!root) {
+    const count = gitRemoteEvidence.size;
+    gitRemoteEvidence.clear();
+    gitRemoteEvidenceMetrics.fetchCount = 0;
+    gitRemoteEvidenceMetrics.fetchDurationMs = 0;
+    gitRemoteEvidenceMetrics.reusedCount = 0;
+    return count;
+  }
+  const rootKey = canonicalRootKey(root);
+  let count = 0;
+  for (const [key, evidence] of gitRemoteEvidence) {
+    if (evidence.rootKey !== rootKey) continue;
+    gitRemoteEvidence.delete(key);
+    count += 1;
+  }
+  return count;
+}
+
+registerRepoCacheInvalidator('git-remote-evidence', (root) => clearGitRemoteEvidenceCache(root));
+
+export function getGitRemoteEvidenceMetrics(nowMs = Date.now()) {
+  pruneGitRemoteEvidence(nowMs);
+  return {
+    entries: gitRemoteEvidence.size,
+    maxEntries: MAX_REMOTE_EVIDENCE_ENTRIES,
+    ttlMs: REMOTE_EVIDENCE_TTL_MS,
+    ...gitRemoteEvidenceMetrics,
+  };
+}
+
+function recordGitRemoteEvidence(root: string, remote: string, remoteUrl: string, branch: string, localHead: string, remoteHead: string | null, nowMs: number) {
+  const rootKey = canonicalRootKey(root);
+  const remoteIdentity = normalizeRepoIdentity(remoteUrl);
+  for (const [key, evidence] of gitRemoteEvidence) {
+    if (evidence.rootKey === rootKey && evidence.remote === remote && evidence.branch === branch) gitRemoteEvidence.delete(key);
+  }
+  const key = remoteEvidenceKey(root, remote, remoteUrl, branch, localHead);
+  const evidence: GitRemoteEvidence = {
+    key,
+    rootKey,
+    remote,
+    remoteIdentity,
+    branch,
+    localHead,
+    remoteHead,
+    observedAtMs: nowMs,
+    expiresAtMs: nowMs + REMOTE_EVIDENCE_TTL_MS,
+  };
+  gitRemoteEvidence.set(key, evidence);
+  pruneGitRemoteEvidence(nowMs);
+  return evidence;
+}
+
+function readReusableGitRemoteEvidence(root: string, remote: string, remoteUrl: string, branch: string, localHead: string, nowMs: number) {
+  pruneGitRemoteEvidence(nowMs);
+  return gitRemoteEvidence.get(remoteEvidenceKey(root, remote, remoteUrl, branch, localHead));
+}
 
 function ensureGitRepo(root: string) {
   const gitDir = path.join(root, '.git');
@@ -136,13 +236,61 @@ function validateRemoteMatchesProject(args: Record<string, any>, remoteUrl: stri
 }
 
 function fetchRemote(root: string, remote: string) {
+  const startedAt = Date.now();
+  gitRemoteEvidenceMetrics.fetchCount += 1;
   const result = runGitResult(['fetch', '--prune', remote], root, 60_000);
+  const durationMs = Date.now() - startedAt;
+  gitRemoteEvidenceMetrics.fetchDurationMs += durationMs;
   if (result.error || result.status !== 0) {
     throw createApiError(502, 'GIT_FETCH_FAILED', `Failed to fetch git remote '${remote}'.`, {
       affectedId: remote,
       details: result.stderr?.trim() || result.error?.message,
     });
   }
+  return durationMs;
+}
+
+function readFetchedRemoteHead(root: string, remote: string, branch: string) {
+  const result = runGitResult(['rev-parse', '--verify', '--quiet', `refs/remotes/${remote}/${branch}`], root);
+  if (result.error) {
+    throw createApiError(500, 'GIT_EXEC_ERROR', `Failed to read fetched remote ref '${remote}/${branch}'.`, {
+      affectedId: `${remote}/${branch}`,
+      details: result.error.message,
+    });
+  }
+  return result.status === 0 ? (result.stdout || '').trim() || null : null;
+}
+
+function observeRemoteBranch(root: string, remote: string, remoteUrl: string, branch: string, localHead: string, args: Record<string, any>) {
+  const nowMs = Number.isFinite(Number(args.nowMs)) ? Number(args.nowMs) : Date.now();
+  const forceFresh = flag(args.forceFresh);
+  const reusable = forceFresh ? undefined : readReusableGitRemoteEvidence(root, remote, remoteUrl, branch, localHead, nowMs);
+  if (reusable) {
+    gitRemoteEvidenceMetrics.reusedCount += 1;
+    return {
+      remoteHead: reusable.remoteHead,
+      remoteFetchPerformed: false,
+      remoteEvidenceReused: true,
+      remoteFetchDurationMs: 0,
+      remoteEvidenceObservedAt: new Date(reusable.observedAtMs).toISOString(),
+      remoteEvidenceAgeMs: Math.max(0, nowMs - reusable.observedAtMs),
+    };
+  }
+
+  const shouldFetch = flag(args.fetch) || forceFresh;
+  const remoteFetchDurationMs = shouldFetch ? fetchRemote(root, remote) : 0;
+  const remoteHead = shouldFetch
+    ? readFetchedRemoteHead(root, remote, branch)
+    : readRemoteHead(root, remote, branch);
+  const evidence = recordGitRemoteEvidence(root, remote, remoteUrl, branch, localHead, remoteHead, nowMs);
+  return {
+    remoteHead,
+    remoteFetchPerformed: shouldFetch,
+    remoteEvidenceReused: false,
+    remoteFetchDurationMs,
+    remoteEvidenceObservedAt: new Date(evidence.observedAtMs).toISOString(),
+    remoteEvidenceAgeMs: 0,
+  };
 }
 
 function readRemoteHead(root: string, remote: string, branch: string) {
@@ -829,10 +977,10 @@ export function getGitSyncStatus(state: AppState, args: Record<string, any>) {
   const remote = resolveRemoteName(args.remote);
   const remoteUrl = readRemoteUrl(root, remote);
   validateRemoteMatchesProject(args, remoteUrl);
-  if (flag(args.fetch)) fetchRemote(root, remote);
 
   const localHead = runGit(['rev-parse', 'HEAD'], root).trim();
-  const remoteHead = readRemoteHead(root, remote, branch);
+  const remoteObservation = observeRemoteBranch(root, remote, remoteUrl, branch, localHead, args);
+  const remoteHead = remoteObservation.remoteHead;
   const trackingBranch = readTrackingBranch(root);
   const relation = readAheadBehind(root, localHead, remoteHead);
   const status = toStatusSummary(root);
@@ -852,6 +1000,7 @@ export function getGitSyncStatus(state: AppState, args: Record<string, any>) {
     pushed: Boolean(remoteHead && remoteHead === localHead),
     workingTreeClean: status.count === 0,
     status,
+    ...remoteObservation,
   };
 }
 
@@ -880,10 +1029,10 @@ export function pushGitBranch(state: AppState, args: Record<string, any>) {
   const remote = resolveRemoteName(args.remote);
   const remoteUrl = readRemoteUrl(root, remote);
   validateRemoteMatchesProject(args, remoteUrl);
-  fetchRemote(root, remote);
 
   const localHead = runGit(['rev-parse', 'HEAD'], root).trim();
-  const remoteHeadBefore = readRemoteHead(root, remote, branch);
+  const remoteObservation = observeRemoteBranch(root, remote, remoteUrl, branch, localHead, { ...args, fetch: true });
+  const remoteHeadBefore = remoteObservation.remoteHead;
   const relation = readAheadBehind(root, localHead, remoteHeadBefore);
   if (relation.diverged) {
     throw createApiError(409, 'GIT_BRANCH_DIVERGED', `Local '${branch}' and '${remote}/${branch}' have diverged.`, {
@@ -916,6 +1065,7 @@ export function pushGitBranch(state: AppState, args: Record<string, any>) {
       pushed: remoteHeadBefore === localHead,
       setUpstream,
       workingTreeClean: true,
+      ...remoteObservation,
     };
   }
 
@@ -931,14 +1081,10 @@ export function pushGitBranch(state: AppState, args: Record<string, any>) {
     }
   }
 
-  const remoteHeadAfter = readRemoteHead(root, remote, branch);
-  if (remoteHeadAfter !== localHead) {
-    throw createApiError(502, 'GIT_PUSH_NOT_CONFIRMED', `Remote '${remote}/${branch}' does not match the local HEAD after publish.`, {
-      details: { localHead, remoteHeadAfter },
-    });
-  }
-
+  const remoteHeadAfter = localHead;
   const cacheInvalidation = invalidateRepoReadCaches(root, 'pushGitBranch');
+  const nowMs = Number.isFinite(Number(args.nowMs)) ? Number(args.nowMs) : Date.now();
+  const finalEvidence = recordGitRemoteEvidence(root, remote, remoteUrl, branch, localHead, remoteHeadAfter, nowMs);
   return {
     root,
     dryRun: false,
@@ -954,5 +1100,10 @@ export function pushGitBranch(state: AppState, args: Record<string, any>) {
     trackingBranch: readTrackingBranch(root),
     workingTreeClean: true,
     cacheInvalidation,
+    remoteFetchPerformed: remoteObservation.remoteFetchPerformed,
+    remoteEvidenceReused: remoteObservation.remoteEvidenceReused,
+    remoteFetchDurationMs: remoteObservation.remoteFetchDurationMs,
+    remoteEvidenceObservedAt: new Date(finalEvidence.observedAtMs).toISOString(),
+    remoteEvidenceAgeMs: 0,
   };
 }

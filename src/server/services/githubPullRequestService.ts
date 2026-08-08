@@ -191,7 +191,12 @@ export async function createPullRequest(
   const project = resolveProject(args, deps);
   const repository = parseGithubRepository(requiredText(project.repoUrl, 'PROJECT_REPOSITORY_REQUIRED', 'The selected project has no repository URL.'));
   const remote = typeof args.remote === 'string' && args.remote.trim() ? args.remote.trim() : 'origin';
-  const sync = deps.getSyncStatus(state, { projectId: project.id, remote, fetch: true });
+  const sync = deps.getSyncStatus(state, {
+    projectId: project.id,
+    remote,
+    fetch: true,
+    forceFresh: booleanFlag(args.forceFresh, false),
+  });
   validatePublishedHead(sync);
 
   const head = typeof args.head === 'string' && args.head.trim() ? args.head.trim() : sync.branch;

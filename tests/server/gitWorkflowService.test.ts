@@ -15,6 +15,8 @@ const {
   ensureGitBranch,
   pushGitBranch,
   getGitSyncStatus,
+  clearGitRemoteEvidenceCache,
+  getGitRemoteEvidenceMetrics,
 } = await import('../../src/server/services/gitService.js');
 
 function git(root: string, args: string[]) {
@@ -140,6 +142,56 @@ test('pushGitBranch previews commits, publishes, and getGitSyncStatus confirms p
   assert.equal(status.pushed, true);
   assert.equal(status.workingTreeClean, true);
   assert.equal(status.trackingBranch, 'origin/develop');
+});
+
+test('fresh push evidence is reused by adjacent sync checks and forceFresh bypasses reuse', () => {
+  clearGitRemoteEvidenceCache();
+  const root = createRepository('remote-evidence-reuse');
+  const remote = createBareRemote('remote-evidence-reuse-origin');
+  git(root, ['remote', 'add', 'origin', remote]);
+  const localHead = commitFile(root, 'reuse.txt', 'reuse\n', 'reuse commit');
+
+  const pushed = pushGitBranch(state, {
+    localPath: root,
+    remote: 'origin',
+    branch: 'develop',
+    setUpstream: true,
+    nowMs: 1_000,
+  });
+  assert.equal(pushed.remoteFetchPerformed, true);
+  assert.equal(pushed.remoteEvidenceReused, false);
+  assert.equal(pushed.remoteHeadAfter, localHead);
+  assert.equal(getGitRemoteEvidenceMetrics(1_000).fetchCount, 1);
+
+  const reused = getGitSyncStatus(state, { localPath: root, remote: 'origin', fetch: true, nowMs: 2_000 });
+  assert.equal(reused.remoteEvidenceReused, true);
+  assert.equal(reused.remoteFetchPerformed, false);
+  assert.equal(reused.remoteHead, localHead);
+  assert.equal(getGitRemoteEvidenceMetrics(2_000).fetchCount, 1);
+
+  const fresh = getGitSyncStatus(state, { localPath: root, remote: 'origin', fetch: true, forceFresh: true, nowMs: 3_000 });
+  assert.equal(fresh.remoteEvidenceReused, false);
+  assert.equal(fresh.remoteFetchPerformed, true);
+  assert.equal(getGitRemoteEvidenceMetrics(3_000).fetchCount, 2);
+});
+
+test('remote evidence expires and local HEAD changes invalidate reuse fingerprints', () => {
+  clearGitRemoteEvidenceCache();
+  const root = createRepository('remote-evidence-expiry');
+  const remote = createBareRemote('remote-evidence-expiry-origin');
+  git(root, ['remote', 'add', 'origin', remote]);
+  pushGitBranch(state, { localPath: root, remote: 'origin', branch: 'develop', setUpstream: true, nowMs: 1_000 });
+  const ttlMs = getGitRemoteEvidenceMetrics(1_000).ttlMs;
+
+  const expired = getGitSyncStatus(state, { localPath: root, remote: 'origin', fetch: true, nowMs: 1_000 + ttlMs + 1 });
+  assert.equal(expired.remoteFetchPerformed, true);
+  const afterExpiryFetches = getGitRemoteEvidenceMetrics(1_000 + ttlMs + 1).fetchCount;
+
+  commitFile(root, 'head-change.txt', 'head change\n', 'head change');
+  const headChanged = getGitSyncStatus(state, { localPath: root, remote: 'origin', fetch: true, nowMs: 1_000 + ttlMs + 2 });
+  assert.equal(headChanged.remoteEvidenceReused, false);
+  assert.equal(headChanged.remoteFetchPerformed, true);
+  assert.equal(getGitRemoteEvidenceMetrics(1_000 + ttlMs + 2).fetchCount, afterExpiryFetches + 1);
 });
 
 test('pushGitBranch blocks when local and remote histories diverge', () => {

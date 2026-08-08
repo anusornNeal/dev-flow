@@ -134,6 +134,31 @@ function createPullRequestDeps(overrides: Record<string, any> = {}) {
   };
 }
 
+test('createPullRequest reuses remote evidence by default and allows forceFresh', async () => {
+  const syncArgs: any[] = [];
+  const fixture = createPullRequestDeps({
+    getSyncStatus: (_state: any, args: any) => {
+      syncArgs.push(args);
+      return {
+        branch: 'feature/widgets',
+        trackingBranch: 'origin/feature/widgets',
+        localHead: 'abc123',
+        remoteHead: 'abc123',
+        ahead: 0,
+        behind: 0,
+        diverged: false,
+        pushed: true,
+        workingTreeClean: true,
+      };
+    },
+  });
+
+  await createPullRequest({} as any, { projectId: 'project-pr', taskId: 'DVF-0999', base: 'main', dryRun: true }, fixture.deps as any);
+  await createPullRequest({} as any, { projectId: 'project-pr', taskId: 'DVF-0999', base: 'main', dryRun: true, forceFresh: true }, fixture.deps as any);
+  assert.equal(syncArgs[0].forceFresh, false);
+  assert.equal(syncArgs[1].forceFresh, true);
+});
+
 test('createPullRequest dry-run builds a task-derived preview without a remote mutation', async () => {
   const fixture = createPullRequestDeps();
 
@@ -181,7 +206,7 @@ test('createPullRequest creates a GitHub PR with external credentials and never 
 test('createPullRequest blocks missing credentials and unpublished branches with actionable errors', async () => {
   const noToken = createPullRequestDeps({ getSettings: () => ({}) });
   await assert.rejects(
-    () => createPullRequest({} as any, { projectId: 'project-pr', base: 'main' }, noToken.deps as any),
+    () => createPullRequest({} as any, { projectId: 'project-pr', taskId: 'DVF-0999', base: 'main' }, noToken.deps as any),
     (error: any) => error?.payload?.code === 'GITHUB_TOKEN_MISSING' && /settings|environment/i.test(error?.payload?.message || ''),
   );
 
@@ -199,7 +224,7 @@ test('createPullRequest blocks missing credentials and unpublished branches with
     }),
   });
   await assert.rejects(
-    () => createPullRequest({} as any, { projectId: 'project-pr', base: 'main', dryRun: true }, unpublished.deps as any),
+    () => createPullRequest({} as any, { projectId: 'project-pr', taskId: 'DVF-0999', base: 'main', dryRun: true }, unpublished.deps as any),
     (error: any) => error?.payload?.code === 'PULL_REQUEST_HEAD_NOT_PUBLISHED',
   );
 });

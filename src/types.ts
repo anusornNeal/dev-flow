@@ -58,6 +58,11 @@ export interface TaskGitEvidence {
   diverged: boolean;
   pushed: boolean;
   workingTreeClean: boolean;
+  remoteFetchPerformed?: boolean;
+  remoteEvidenceReused?: boolean;
+  remoteFetchDurationMs?: number;
+  remoteEvidenceObservedAt?: string;
+  remoteEvidenceAgeMs?: number;
   recordedAt: string;
 }
 

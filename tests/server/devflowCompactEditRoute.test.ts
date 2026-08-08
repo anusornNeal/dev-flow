@@ -68,7 +68,7 @@ test('contract exposes self-describing compact prepare and plan-id-only apply to
   const applyRequest = apply.buildHttpRequest({ editPlanId: 'edit-plan-example' });
   assert.deepEqual(applyRequest.body, { editPlanId: 'edit-plan-example' });
   assert.equal(Object.keys(apply.inputSchema.properties).sort().join(','), 'editPlanId');
-  assert.match(getCapabilityCatalog().contractVersion, /^2026-08-08\.4$/);
+  assert.match(getCapabilityCatalog().contractVersion, /^2026-08-08\.5$/);
 });
 
 test('REST compact flow reads a fileRef, prepares without writes, applies by id only, then rejects replay', async () => {

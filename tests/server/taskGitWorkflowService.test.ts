@@ -17,6 +17,7 @@ const {
   evaluateReviewSubmission,
   syncTaskWithGit,
 } = await import('../../src/server/services/taskGitWorkflowService.js');
+const { pushGitBranch, clearGitRemoteEvidenceCache, getGitRemoteEvidenceMetrics } = await import('../../src/server/services/gitService.js');
 
 function git(root: string, args: string[]) {
   const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', shell: false });
@@ -160,6 +161,28 @@ test('evaluateReviewSubmission passes with clean published head, completed check
   assert.deepEqual(result.blockers, []);
   assert.equal(result.gitEvidence.pushed, true);
   assert.equal(result.verificationEvidence.length, 1);
+});
+
+test('push -> sync -> review reuses one fresh remote observation across the workflow', () => {
+  const fixture = setup('reuse-sequence');
+  const task = createTask(fixture.projectId);
+  saveTask(task);
+  fs.writeFileSync(path.join(fixture.root, 'reuse-sequence.txt'), 'sequence\n');
+  git(fixture.root, ['add', 'reuse-sequence.txt']);
+  git(fixture.root, ['commit', '-m', 'reuse sequence']);
+  clearGitRemoteEvidenceCache();
+
+  pushGitBranch(fixture.state, { projectId: fixture.projectId, remote: 'origin', branch: 'develop', nowMs: 1_000 });
+  const synced = syncTaskWithGit(fixture.state, task, { remote: 'origin', fetch: true, nowMs: 2_000, checks: passedChecks });
+  const reviewed = evaluateReviewSubmission(fixture.state, task, { remote: 'origin', fetch: true, nowMs: 3_000, checks: passedChecks });
+  const metrics = getGitRemoteEvidenceMetrics(3_000);
+
+  assert.equal(synced.gitEvidence.remoteEvidenceReused, true);
+  assert.equal(reviewed.gitEvidence?.remoteEvidenceReused, true);
+  assert.equal(metrics.fetchCount, 1);
+  assert.equal(metrics.reusedCount >= 2, true);
+  assert.equal(reviewed.blocked, false);
+  console.log(`[git-evidence] push->sync->review fetches=${metrics.fetchCount} reused=${metrics.reusedCount} fetchMs=${metrics.fetchDurationMs}`);
 });
 
 test('task repository persists optional Git and verification evidence', () => {

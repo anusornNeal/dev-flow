@@ -155,7 +155,7 @@ function stripToolOnlyArgs(args: Record<string, any>, keys: string[]) {
   return copy;
 }
 
-export const DEVFLOW_CONTRACT_VERSION = '2026-08-08.4';
+export const DEVFLOW_CONTRACT_VERSION = '2026-08-08.5';
 
 export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   {
@@ -905,6 +905,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
         ...taskIdentifierProperty,
         remote: { type: 'string', description: 'Git remote name. Defaults to origin.' },
         fetch: { type: 'boolean', description: 'Fetch the remote before collecting synchronization evidence. Defaults to true.' },
+        forceFresh: { type: 'boolean', description: 'Bypass reusable fresh remote evidence and force a new remote fetch.' },
         checks: {
           type: 'array',
           items: {
@@ -942,6 +943,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
         ...taskIdentifierProperty,
         remote: { type: 'string', description: 'Git remote name. Defaults to origin.' },
         fetch: { type: 'boolean', description: 'Fetch the remote before evaluating review readiness. Defaults to true.' },
+        forceFresh: { type: 'boolean', description: 'Bypass reusable fresh remote evidence and force a new remote fetch.' },
         checks: {
           type: 'array',
           items: {
@@ -2196,6 +2198,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
         branch: { type: 'string', description: 'Branch to publish. Defaults to the active branch and must match it.' },
         setUpstream: { type: 'boolean', description: 'Configure the remote tracking branch when publishing.' },
         dryRun: { type: 'boolean', description: 'Preview commits and remote target without publishing.' },
+        forceFresh: { type: 'boolean', description: 'Bypass reusable fresh remote evidence before push safety checks.' },
       },
     },
     outputSchema: { type: 'object' },
@@ -2214,6 +2217,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
         ...projectIdentifierProperties,
         remote: { type: 'string', description: 'Remote name. Defaults to origin.' },
         fetch: { type: 'boolean', description: 'Fetch the remote before calculating synchronization state.' },
+        forceFresh: { type: 'boolean', description: 'Bypass reusable fresh remote evidence and force a new remote fetch.' },
       },
     },
     outputSchema: { type: 'object' },
@@ -2239,6 +2243,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
         bodyFromTask: { type: 'boolean', description: 'Build the body from task and Git evidence when no explicit body is supplied.' },
         draft: { type: 'boolean', description: 'Create a draft pull request. Defaults to true.' },
         dryRun: { type: 'boolean', description: 'Validate and preview without calling GitHub.' },
+        forceFresh: { type: 'boolean', description: 'Force a fresh remote fetch before validating published-head safety.' },
       },
       required: ['base'],
     },

@@ -76,6 +76,8 @@ function collectGitEvidence(state: AppState, task: any, args: Record<string, any
     projectId: task.projectId,
     remote,
     fetch: flag(args.fetch, true),
+    forceFresh: flag(args.forceFresh, false),
+    nowMs: args.nowMs,
   });
   return {
     branch: sync.branch,
@@ -88,6 +90,11 @@ function collectGitEvidence(state: AppState, task: any, args: Record<string, any
     diverged: sync.diverged,
     pushed: sync.pushed,
     workingTreeClean: sync.workingTreeClean,
+    remoteFetchPerformed: sync.remoteFetchPerformed,
+    remoteEvidenceReused: sync.remoteEvidenceReused,
+    remoteFetchDurationMs: sync.remoteFetchDurationMs,
+    remoteEvidenceObservedAt: sync.remoteEvidenceObservedAt,
+    remoteEvidenceAgeMs: sync.remoteEvidenceAgeMs,
     recordedAt: new Date().toISOString(),
   };
 }

@@ -347,6 +347,37 @@ test('describeProjectCommand gives equivalent package scripts one semantic key a
   assert.equal(testCommand.scope, 'full');
 });
 
+test('describeProjectCommand classifies verification access conservatively', () => {
+  const packageRoot = createProject('descriptor-access-package', {
+    typecheck: 'tsc --noEmit',
+    build: 'vite build',
+  });
+  const packageState = stateFor(packageRoot);
+
+  assert.equal(describeProjectCommand(packageState, { projectId: 'project-command', command: 'typecheck' }).access, 'verify');
+  assert.equal(describeProjectCommand(packageState, { projectId: 'project-command', command: 'build' }).access, 'verify');
+
+  const configRoot = createConfigProject('descriptor-access-config', [
+    'commands:',
+    '  focused-test:',
+    '    executable: node',
+    '    args:',
+    '      - scripts/pass.mjs',
+    '    category: test',
+    '  mutate:',
+    '    executable: node',
+    '    args:',
+    '      - scripts/pass.mjs',
+    '    category: build',
+    '',
+  ].join('\n'));
+  fs.writeFileSync(path.join(configRoot, 'scripts', 'pass.mjs'), 'process.exit(0);\n');
+  const configState = stateFor(configRoot);
+
+  assert.equal(describeProjectCommand(configState, { projectId: 'project-command', command: 'focused-test' }).access, 'verify');
+  assert.equal(describeProjectCommand(configState, { projectId: 'project-command', command: 'mutate' }).access, 'write');
+});
+
 test('runProjectCommand automatically reuses deterministic static verification and forceFresh bypasses evidence', () => {
   const root = createProject('auto-static-cache', {
     typecheck: 'node scripts/static.mjs',

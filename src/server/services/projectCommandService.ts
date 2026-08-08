@@ -36,12 +36,14 @@ type ResolvedCommand = {
 
 export type ProjectCommandScope = 'targeted' | 'broad' | 'full';
 export type ProjectCommandCost = 'low' | 'medium' | 'high';
+export type ProjectCommandAccess = 'verify' | 'write';
 
 export type ProjectCommandDescriptor = {
   command: string;
   semanticKey: string;
   scope: ProjectCommandScope;
   cost: ProjectCommandCost;
+  access: ProjectCommandAccess;
   resourceKey: string;
   executable: string;
   args: string[];
@@ -292,6 +294,11 @@ function scopeForResolvedCommand(root: string, command: string, resolvedCommand:
   return resolvedCommand.category === 'test' ? 'targeted' : 'broad';
 }
 
+function accessForResolvedCommand(resolvedCommand: ResolvedCommand): ProjectCommandAccess {
+  if (resolvedCommand.source === 'package-json') return 'verify';
+  return resolvedCommand.category === 'test' ? 'verify' : 'write';
+}
+
 export function describeProjectCommand(state: AppState, args: Record<string, any>): ProjectCommandDescriptor {
   const root = resolveProjectRoot(state, args);
   const command = resolveCommandLabel(args.command ?? args.preset);
@@ -301,6 +308,7 @@ export function describeProjectCommand(state: AppState, args: Record<string, any
   const scope = scopeForResolvedCommand(root, command, resolvedCommand);
   const normalizedScript = normalizeScript(resolvedCommand.script);
   const cost: ProjectCommandCost = scope === 'full' ? 'high' : scope === 'targeted' ? 'low' : command === 'build' ? 'high' : 'medium';
+  const access = accessForResolvedCommand(resolvedCommand);
   const resourceKey = scope === 'full'
     ? 'repo'
     : normalizedScript.includes('tsc')
@@ -314,6 +322,7 @@ export function describeProjectCommand(state: AppState, args: Record<string, any
     semanticKey,
     scope,
     cost,
+    access,
     resourceKey,
     executable: resolvedCommand.executable,
     args: [...resolvedCommand.args],

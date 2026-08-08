@@ -117,6 +117,7 @@ export type LocalFileReadResult = {
   fileRef?: string;
   fileRefCreatedAt?: string;
   fileRefExpiresAt?: string;
+  fileRefReused?: boolean;
 };
 
 function buildFileRevision(filePath: string, stat: fs.Stats): FileRevision {
@@ -736,6 +737,7 @@ type OptionalFileRefMetadata = {
   fileRef?: string;
   fileRefCreatedAt?: string;
   fileRefExpiresAt?: string;
+  fileRefReused?: boolean;
 };
 
 function includeFileRefMetadata(state: AppState, args: Record<string, any>, root: string, targetPath: string, revision: FileRevision): OptionalFileRefMetadata {
@@ -751,6 +753,7 @@ function includeFileRefMetadata(state: AppState, args: Record<string, any>, root
     fileRef: issued.fileRef,
     fileRefCreatedAt: issued.createdAt,
     fileRefExpiresAt: issued.expiresAt,
+    fileRefReused: issued.reused,
   };
 }
 

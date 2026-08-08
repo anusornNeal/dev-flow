@@ -108,7 +108,7 @@ test('fileRef becomes stale when its target file disappears after read', () => {
   );
 });
 
-test('fileRef expiry is actionable and pruned refs may become not found', () => {
+test('fileRef expiry remains classified with machine-readable recovery after retirement', () => {
   const targetPath = write(tempDir, 'expiring.txt', 'one');
   const issued = issueFileRef(state, { projectId: 'project-ref-a' }, {
     root: tempDir,
@@ -130,14 +130,27 @@ test('fileRef expiry is actionable and pruned refs may become not found', () => 
 
   assert.throws(
     () => resolveFileRef(state, { projectId: 'project-ref-a' }, issued.fileRef, { nowMs: 7_000 }),
-    (error: unknown) => errorCode(error) === 'EDIT_REF_NOT_FOUND',
+    (error: unknown) => {
+      assert.equal(errorCode(error), 'EDIT_REF_EXPIRED');
+      assert.equal((error as any)?.payload?.details?.recovery?.action, 're-read');
+      assert.equal((error as any)?.payload?.details?.recovery?.retrySamePayload, false);
+      return true;
+    },
   );
 });
 
-test('fileRef registry remains bounded', () => {
+test('fileRef reuses the same live revision and avoids capacity churn', () => {
   const targetPath = write(tempDir, 'bounded.txt', 'one');
-  for (let index = 0; index < 300; index += 1) {
-    issueFileRef(state, { projectId: 'project-ref-a' }, {
+  const first = issueFileRef(state, { projectId: 'project-ref-a' }, {
+    root: tempDir,
+    targetPath,
+    filePath: 'bounded.txt',
+    revision: revision(targetPath),
+    nowMs: 1_000,
+  });
+  let latest = first;
+  for (let index = 1; index < 300; index += 1) {
+    latest = issueFileRef(state, { projectId: 'project-ref-a' }, {
       root: tempDir,
       targetPath,
       filePath: 'bounded.txt',
@@ -145,7 +158,43 @@ test('fileRef registry remains bounded', () => {
       nowMs: 1_000 + index,
     });
   }
-  assert.equal(getFileReferenceStats().entries <= getFileReferenceStats().maxEntries, true);
+  const stats = getFileReferenceStats();
+  assert.equal(latest.fileRef, first.fileRef);
+  assert.equal(latest.reused, true);
+  assert.equal(stats.entries, 1);
+  assert.equal(stats.reusedCount, 299);
+  assert.equal(stats.evictedCount, 0);
+  console.log(`[file-ref] 300 identical reads -> ${stats.entries} live ref, ${stats.reusedCount} reuse hits`);
+});
+
+test('capacity eviction remains distinguishable from an unknown reference', () => {
+  const issuedRefs: string[] = [];
+  const maxEntries = getFileReferenceStats().maxEntries;
+  for (let index = 0; index <= maxEntries; index += 1) {
+    const name = `evict-${index}.txt`;
+    const targetPath = write(tempDir, name, `value-${index}`);
+    issuedRefs.push(issueFileRef(state, { projectId: 'project-ref-a' }, {
+      root: tempDir,
+      targetPath,
+      filePath: name,
+      revision: revision(targetPath),
+      nowMs: 10_000 + index,
+    }).fileRef);
+  }
+
+  assert.throws(
+    () => resolveFileRef(state, { projectId: 'project-ref-a' }, issuedRefs[0], { nowMs: 20_000 }),
+    (error: unknown) => {
+      assert.equal(errorCode(error), 'EDIT_REF_EVICTED');
+      assert.equal((error as any)?.payload?.details?.recovery?.action, 're-read');
+      return true;
+    },
+  );
+  assert.throws(
+    () => resolveFileRef(state, { projectId: 'project-ref-a' }, 'file-ref-never-issued', { nowMs: 20_000 }),
+    (error: unknown) => errorCode(error) === 'EDIT_REF_NOT_FOUND',
+  );
+  assert.equal(getFileReferenceStats().evictedCount >= 1, true);
 });
 
 test('fileRef rejects symlink targets that escape the canonical project root when symlinks are available', (t) => {

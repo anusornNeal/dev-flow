@@ -70,6 +70,8 @@ test('applyPreparedEditPlan rejects stale files before any write', () => {
 
   assert.equal(applied.ok, false);
   assert.equal(applied.code, 'EDIT_PLAN_STALE');
+  assert.equal(applied.recovery?.action, 're-read');
+  assert.equal(applied.recovery?.retrySamePayload, false);
   assert.equal(read('first.txt'), 'first one');
   assert.equal(read('second.txt'), 'newer content');
 });
@@ -90,6 +92,8 @@ test('prepared edit plans are single-use', () => {
   assert.equal(first.ok, true);
   assert.equal(second.ok, false);
   assert.equal(second.code, 'EDIT_PLAN_CONSUMED');
+  assert.equal(second.recovery?.action, 'inspect-result');
+  assert.equal(second.recovery?.retrySamePayload, false);
 });
 
 test('prepareEditPlan preserves the underlying safe-edit error code', () => {
@@ -132,6 +136,9 @@ test('prepared plan reports expiry once and then becomes not found after pruning
   const pruned = applyPreparedEditPlan({ editPlanId: prepared.editPlanId! });
   assert.equal(expired.code, 'EDIT_PLAN_EXPIRED');
   assert.equal(pruned.code, 'EDIT_PLAN_NOT_FOUND');
+  assert.equal(expired.recovery?.action, 're-prepare');
+  assert.equal(expired.recovery?.retrySamePayload, false);
+  assert.equal(pruned.recovery?.action, 're-prepare');
   assert.equal(read('expired-plan.txt'), 'alpha one');
 });
 

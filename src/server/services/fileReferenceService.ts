@@ -9,6 +9,8 @@ const DEFAULT_REF_TTL_MS = 10 * 60_000;
 const MIN_REF_TTL_MS = 1_000;
 const MAX_REF_TTL_MS = 15 * 60_000;
 const MAX_REFS = 256;
+const MAX_RETIRED_REFS = 256;
+const RETIRED_REF_TTL_MS = MAX_REF_TTL_MS;
 
 export type FileReferenceRevision = {
   token: string;
@@ -29,12 +31,22 @@ type StoredFileReference = {
   expiresAtMs: number;
 };
 
+type RetiredFileReference = {
+  fileRef: string;
+  projectIdentity: string;
+  filePath: string;
+  reason: 'expired' | 'evicted';
+  retiredAtMs: number;
+  forgetAtMs: number;
+};
+
 export type IssuedFileReference = {
   fileRef: string;
   createdAt: string;
   expiresAt: string;
   createdAtMs: number;
   expiresAtMs: number;
+  reused: boolean;
 };
 
 export type ResolvedFileReference = {
@@ -60,6 +72,13 @@ type IssueFileReferenceInput = {
 type ResolveOptions = { nowMs?: number };
 
 const references = new Map<string, StoredFileReference>();
+const retiredReferences = new Map<string, RetiredFileReference>();
+const lifecycleMetrics = {
+  issuedCount: 0,
+  reusedCount: 0,
+  expiredCount: 0,
+  evictedCount: 0,
+};
 
 function realPath(existingPath: string) {
   const native = (fs.realpathSync as typeof fs.realpathSync & { native?: typeof fs.realpathSync }).native;
@@ -140,28 +159,76 @@ function resolveRequestedIdentity(state: AppState, args: Record<string, any>, fa
   };
 }
 
+function recoveryDetails(action: 're-read' | 'select-project-and-re-read', guidance: string) {
+  return {
+    guidance,
+    recovery: {
+      action,
+      nextTool: 'read_local_file',
+      includeFileRef: true,
+      retrySamePayload: false,
+    },
+  };
+}
+
 function staleError(filePath: string, reason: string) {
   return createApiError(409, 'EDIT_REF_STALE', `File reference for '${filePath}' is stale: ${reason}`, {
     retryable: false,
     affectedId: filePath,
-    details: { guidance: 'Re-read the file with includeFileRef=true and prepare a new compact edit. Do not retry the same fileRef.' },
+    details: recoveryDetails('re-read', 'Re-read the file with includeFileRef=true and prepare a new compact edit. Do not retry the same fileRef.'),
   });
 }
 
-function pruneForCapacity(nowMs: number) {
-  for (const [id, entry] of references) {
-    if (entry.expiresAtMs <= nowMs) references.delete(id);
+function pruneRetired(nowMs: number) {
+  for (const [id, entry] of retiredReferences) {
+    if (entry.forgetAtMs <= nowMs) retiredReferences.delete(id);
   }
-  while (references.size >= MAX_REFS) {
-    const oldest = references.keys().next().value;
+  while (retiredReferences.size > MAX_RETIRED_REFS) {
+    const oldest = retiredReferences.keys().next().value;
     if (!oldest) break;
-    references.delete(oldest);
+    retiredReferences.delete(oldest);
+  }
+}
+
+function retireReference(entry: StoredFileReference, reason: 'expired' | 'evicted', nowMs: number) {
+  references.delete(entry.fileRef);
+  retiredReferences.set(entry.fileRef, {
+    fileRef: entry.fileRef,
+    projectIdentity: entry.projectIdentity,
+    filePath: entry.filePath,
+    reason,
+    retiredAtMs: nowMs,
+    forgetAtMs: nowMs + RETIRED_REF_TTL_MS,
+  });
+  if (reason === 'expired') lifecycleMetrics.expiredCount += 1;
+  else lifecycleMetrics.evictedCount += 1;
+  pruneRetired(nowMs);
+}
+
+function pruneExpiredReferences(nowMs: number) {
+  for (const entry of Array.from(references.values())) {
+    if (entry.expiresAtMs <= nowMs) retireReference(entry, 'expired', nowMs);
+  }
+  pruneRetired(nowMs);
+}
+
+function pruneForCapacity(nowMs: number) {
+  pruneExpiredReferences(nowMs);
+  while (references.size >= MAX_REFS) {
+    const oldest = references.values().next().value as StoredFileReference | undefined;
+    if (!oldest) break;
+    retireReference(oldest, 'evicted', nowMs);
   }
 }
 
 export function clearFileReferences() {
-  const count = references.size;
+  const count = references.size + retiredReferences.size;
   references.clear();
+  retiredReferences.clear();
+  lifecycleMetrics.issuedCount = 0;
+  lifecycleMetrics.reusedCount = 0;
+  lifecycleMetrics.expiredCount = 0;
+  lifecycleMetrics.evictedCount = 0;
   return count;
 }
 
@@ -169,8 +236,14 @@ export function getFileReferenceStats() {
   return {
     entries: references.size,
     maxEntries: MAX_REFS,
+    retiredEntries: retiredReferences.size,
+    maxRetiredEntries: MAX_RETIRED_REFS,
     defaultTtlMs: DEFAULT_REF_TTL_MS,
     maxTtlMs: MAX_REF_TTL_MS,
+    issuedCount: lifecycleMetrics.issuedCount,
+    reusedCount: lifecycleMetrics.reusedCount,
+    expiredCount: lifecycleMetrics.expiredCount,
+    evictedCount: lifecycleMetrics.evictedCount,
   };
 }
 
@@ -193,8 +266,30 @@ export function issueFileRef(state: AppState, args: Record<string, any>, input: 
     throw staleError(input.filePath, 'content changed while issuing the reference.');
   }
 
-  pruneForCapacity(nowMs);
+  pruneExpiredReferences(nowMs);
   const ttlMs = clampTtl(input.ttlMs);
+  const reusable = Array.from(references.values()).find((entry) =>
+    entry.projectIdentity === identity.projectIdentity
+    && pathKey(entry.canonicalRoot) === pathKey(canonicalRoot)
+    && pathKey(entry.canonicalTargetPath) === pathKey(canonicalTargetPath)
+    && entry.revision.sha256 === currentRevision.sha256
+  );
+  if (reusable) {
+    reusable.expiresAtMs = Math.max(reusable.expiresAtMs, nowMs + ttlMs);
+    references.delete(reusable.fileRef);
+    references.set(reusable.fileRef, reusable);
+    lifecycleMetrics.reusedCount += 1;
+    return {
+      fileRef: reusable.fileRef,
+      createdAt: new Date(reusable.createdAtMs).toISOString(),
+      expiresAt: new Date(reusable.expiresAtMs).toISOString(),
+      createdAtMs: reusable.createdAtMs,
+      expiresAtMs: reusable.expiresAtMs,
+      reused: true,
+    };
+  }
+
+  pruneForCapacity(nowMs);
   const fileRef = `file-ref-${randomUUID()}`;
   const entry: StoredFileReference = {
     fileRef,
@@ -207,6 +302,7 @@ export function issueFileRef(state: AppState, args: Record<string, any>, input: 
     expiresAtMs: nowMs + ttlMs,
   };
   references.set(fileRef, entry);
+  lifecycleMetrics.issuedCount += 1;
 
   return {
     fileRef,
@@ -214,6 +310,7 @@ export function issueFileRef(state: AppState, args: Record<string, any>, input: 
     expiresAt: new Date(entry.expiresAtMs).toISOString(),
     createdAtMs: entry.createdAtMs,
     expiresAtMs: entry.expiresAtMs,
+    reused: false,
   };
 }
 
@@ -231,21 +328,39 @@ export function resolveFileRef(
     });
   }
 
-  const entry = references.get(normalizedRef);
-  if (!entry) {
-    throw createApiError(404, 'EDIT_REF_NOT_FOUND', `File reference '${normalizedRef}' was not found.`, {
-      retryable: false,
-      details: { guidance: 'The reference may have expired, been pruned, or disappeared after restart. Re-read the file and prepare again.' },
-    });
+  const nowMs = options.nowMs ?? Date.now();
+  pruneRetired(nowMs);
+  let entry = references.get(normalizedRef);
+  if (entry && nowMs >= entry.expiresAtMs) {
+    retireReference(entry, 'expired', nowMs);
+    entry = undefined;
   }
 
-  const nowMs = options.nowMs ?? Date.now();
-  if (nowMs >= entry.expiresAtMs) {
-    references.delete(normalizedRef);
-    throw createApiError(410, 'EDIT_REF_EXPIRED', `File reference '${normalizedRef}' expired. Re-read the file and prepare again.`, {
+  if (!entry) {
+    const retired = retiredReferences.get(normalizedRef);
+    if (retired) {
+      const identity = resolveRequestedIdentity(state, args);
+      if (identity.projectIdentity !== retired.projectIdentity) {
+        throw createApiError(409, 'EDIT_REF_PROJECT_MISMATCH', `File reference '${normalizedRef}' belongs to a different project.`, {
+          retryable: false,
+          affectedId: retired.filePath,
+          details: recoveryDetails('select-project-and-re-read', 'Select the intended project and re-read the file before preparing the edit.'),
+        });
+      }
+      const code = retired.reason === 'expired' ? 'EDIT_REF_EXPIRED' : 'EDIT_REF_EVICTED';
+      throw createApiError(410, code, `File reference '${normalizedRef}' was ${retired.reason}. Re-read the file and prepare again.`, {
+        retryable: false,
+        affectedId: retired.filePath,
+        details: {
+          ...recoveryDetails('re-read', 'Re-read the file with includeFileRef=true and prepare a new compact edit. Do not retry the same fileRef.'),
+          retiredReason: retired.reason,
+          retiredAt: new Date(retired.retiredAtMs).toISOString(),
+        },
+      });
+    }
+    throw createApiError(404, 'EDIT_REF_NOT_FOUND', `File reference '${normalizedRef}' was not found.`, {
       retryable: false,
-      affectedId: entry.filePath,
-      details: { guidance: 'Re-read the file with includeFileRef=true and prepare a new compact edit. Do not retry the same fileRef.' },
+      details: recoveryDetails('re-read', 'The reference is unknown or was lost after restart. Re-read the file and prepare again.'),
     });
   }
 
@@ -254,7 +369,7 @@ export function resolveFileRef(
     throw createApiError(409, 'EDIT_REF_PROJECT_MISMATCH', `File reference '${normalizedRef}' belongs to a different project.`, {
       retryable: false,
       affectedId: entry.filePath,
-      details: { guidance: 'Re-read the file from the intended project before preparing the edit.' },
+      details: recoveryDetails('select-project-and-re-read', 'Re-read the file from the intended project before preparing the edit.'),
     });
   }
 

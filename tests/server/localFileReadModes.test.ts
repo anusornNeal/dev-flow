@@ -133,6 +133,14 @@ test('readLocalFile can opt in to a revision-bound opaque fileRef', () => {
 
   assert.match(withRef.fileRef, /^file-ref-/);
   assert.equal(typeof withRef.fileRefExpiresAt, 'string');
+  assert.equal(withRef.fileRefReused, false);
+  const repeated = readLocalFile(state, {
+    projectId: 'project-read-1',
+    filePath: 'sample.txt',
+    includeFileRef: true,
+  });
+  assert.equal(repeated.fileRef, withRef.fileRef);
+  assert.equal(repeated.fileRefReused, true);
   const resolved = resolveFileRef(state, { projectId: 'project-read-1' }, withRef.fileRef);
   assert.equal(resolved.filePath, 'sample.txt');
   assert.equal(resolved.revision.sha256, withRef.fileRevision.sha256);

@@ -12,6 +12,7 @@ import {
   getToolJobStatus,
   cancelToolJob,
   waitForToolJob,
+  getQueueMetrics,
 } from '../../src/server/services/mcpToolJobService';
 import { readJobLog, readJobResult } from '../../src/server/repositories/mcpToolJobRepository';
 import { createProject } from '../../src/server/repositories/projectRepository.js';
@@ -342,6 +343,190 @@ test('mcpToolJobService - equivalent repo-command verification uses single-fligh
   } finally {
     blocker.resolve();
     __setToolJobTestRunner('run_project_command', null);
+  }
+});
+
+test('mcpToolJobService - safe verification runs concurrently with same-repo reads', async () => {
+  const root = makeTempRepo('verify-read');
+  const state = makeState(root);
+  const readTool = `test_verify_read_${randomUUID()}`;
+  const starts: string[] = [];
+  const verifyBlocker = deferred();
+  const readBlocker = deferred();
+
+  __setToolJobTestRunner('run_project_command', async () => {
+    starts.push('verify');
+    await verifyBlocker.promise;
+    return { ok: true, label: 'verify' };
+  });
+  __setToolJobTestRunner(readTool, async () => {
+    starts.push('read');
+    await readBlocker.promise;
+    return { ok: true, label: 'read' };
+  });
+
+  try {
+    const verify = enqueueToolJob(state, 'run_project_command', { localPath: root, command: 'typecheck', forceFresh: true }, 'repo-command');
+    await waitUntil(() => starts.includes('verify'), 'Expected verification to start');
+    const read = enqueueToolJob(state, readTool, { localPath: root, label: 'read', singleFlight: false }, 'repo-read');
+
+    await waitUntil(() => starts.includes('read'), 'Expected same-repo read to start while verification is running');
+    assert.strictEqual(getToolJobStatus(verify.jobId)?.status, 'running');
+    assert.strictEqual(getToolJobStatus(verify.jobId)?.accessMode, 'verify');
+    assert.strictEqual(getToolJobStatus(read.jobId)?.status, 'running');
+
+    readBlocker.resolve();
+    verifyBlocker.resolve();
+    await waitForStatus(read.jobId, 'succeeded');
+    await waitForStatus(verify.jobId, 'succeeded');
+  } finally {
+    readBlocker.resolve();
+    verifyBlocker.resolve();
+    __setToolJobTestRunner(readTool, null);
+    __setToolJobTestRunner('run_project_command', null);
+  }
+});
+
+test('mcpToolJobService - verification pool allows two jobs and queues the third', async () => {
+  const root = makeTempRepo('verify-pool');
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ scripts: {
+    typecheck: 'node -e "0"',
+    lint: 'node -e "1"',
+    test: 'node -e "2"',
+  } }));
+  const state = makeState(root);
+  const starts: string[] = [];
+  const blockers = { typecheck: deferred(), lint: deferred(), test: deferred() };
+
+  __setToolJobTestRunner('run_project_command', async (_state, args) => {
+    const command = args.command as keyof typeof blockers;
+    starts.push(command);
+    await blockers[command].promise;
+    return { ok: true, command };
+  });
+
+  try {
+    const first = enqueueToolJob(state, 'run_project_command', { localPath: root, command: 'typecheck', forceFresh: true }, 'repo-command');
+    const second = enqueueToolJob(state, 'run_project_command', { localPath: root, command: 'lint', forceFresh: true }, 'repo-command');
+    const third = enqueueToolJob(state, 'run_project_command', { localPath: root, command: 'test', forceFresh: true }, 'repo-command');
+
+    await waitUntil(() => starts.includes('typecheck') && starts.includes('lint'), 'Expected two verification jobs to start');
+    await new Promise(resolve => setTimeout(resolve, 75));
+    assert.strictEqual(starts.includes('test'), false);
+    assert.strictEqual(getToolJobStatus(third.jobId)?.status, 'queued');
+    assert.strictEqual(getToolJobStatus(third.jobId)?.costClass, 'verify');
+
+    blockers.typecheck.resolve();
+    await waitForStatus(first.jobId, 'succeeded');
+    await waitUntil(() => starts.includes('test'), 'Expected third verification to start after one slot frees');
+
+    blockers.lint.resolve();
+    blockers.test.resolve();
+    await waitForStatus(second.jobId, 'succeeded');
+    await waitForStatus(third.jobId, 'succeeded');
+  } finally {
+    blockers.typecheck.resolve();
+    blockers.lint.resolve();
+    blockers.test.resolve();
+    __setToolJobTestRunner('run_project_command', null);
+  }
+});
+
+test('mcpToolJobService - queued writer is a barrier for newer reads and reports blocker metadata', async () => {
+  const root = makeTempRepo('writer-barrier');
+  const state = makeState(root);
+  const toolName = `test_writer_barrier_${randomUUID()}`;
+  const starts: string[] = [];
+  const blockers = { read1: deferred(), write: deferred(), read2: deferred() };
+  installControlledRunner(toolName, starts, blockers);
+
+  try {
+    const read1 = enqueueToolJob(state, toolName, { localPath: root, label: 'read1', singleFlight: false }, 'repo-read');
+    await waitUntil(() => starts.includes('read1'), 'Expected first read to start');
+    const write = enqueueToolJob(state, toolName, { localPath: root, label: 'write' }, 'repo-write');
+    const read2 = enqueueToolJob(state, toolName, { localPath: root, label: 'read2', singleFlight: false }, 'repo-read');
+
+    await new Promise(resolve => setTimeout(resolve, 75));
+    assert.deepStrictEqual(starts, ['read1']);
+    const queuedRead = getToolJobStatus(read2.jobId);
+    assert.strictEqual(queuedRead?.status, 'queued');
+    assert.strictEqual(queuedRead?.accessMode, 'read');
+    assert.strictEqual(queuedRead?.costClass, 'light-read');
+    assert.strictEqual(queuedRead?.blockedByJobId, write.jobId);
+    assert.strictEqual(queuedRead?.blockedByAccessMode, 'write');
+    assert.strictEqual(queuedRead?.blockReason, 'writer_barrier');
+    assert.equal(typeof queuedRead?.queueAgeMs, 'number');
+
+    const metrics = getQueueMetrics();
+    const queuedMetric = metrics.queue.find((entry: any) => entry.jobId === read2.jobId);
+    assert.strictEqual(queuedMetric?.blockedByJobId, write.jobId);
+
+    blockers.read1.resolve();
+    await waitForStatus(read1.jobId, 'succeeded');
+    await waitUntil(() => starts.includes('write'), 'Expected writer to start after earlier read finishes');
+    await new Promise(resolve => setTimeout(resolve, 50));
+    assert.strictEqual(starts.includes('read2'), false);
+
+    blockers.write.resolve();
+    await waitForStatus(write.jobId, 'succeeded');
+    await waitUntil(() => starts.includes('read2'), 'Expected newer read to start after writer completes');
+    blockers.read2.resolve();
+    await waitForStatus(read2.jobId, 'succeeded');
+  } finally {
+    blockers.read1.resolve();
+    blockers.write.resolve();
+    blockers.read2.resolve();
+    __setToolJobTestRunner(toolName, null);
+  }
+});
+
+test('mcpToolJobService - saturated search pool does not head-of-line block a light read', async () => {
+  const root = makeTempRepo('cost-pools');
+  const state = makeState(root);
+  const lightTool = `test_light_read_${randomUUID()}`;
+  const starts: string[] = [];
+  const searchBlockers: Record<string, Deferred> = {
+    search1: deferred(), search2: deferred(), search3: deferred(), search4: deferred(), search5: deferred(),
+  };
+  const lightBlocker = deferred();
+
+  __setToolJobTestRunner('search_local_files', async (_state, args) => {
+    starts.push(args.label);
+    await searchBlockers[args.label].promise;
+    return { ok: true, label: args.label };
+  });
+  __setToolJobTestRunner(lightTool, async () => {
+    starts.push('light');
+    await lightBlocker.promise;
+    return { ok: true, label: 'light' };
+  });
+
+  try {
+    const activeSearches = ['search1', 'search2', 'search3', 'search4'].map((label) =>
+      enqueueToolJob(state, 'search_local_files', { localPath: root, query: label, label, singleFlight: false }, 'repo-read'));
+    await waitUntil(() => ['search1', 'search2', 'search3', 'search4'].every(label => starts.includes(label)), 'Expected four search jobs to fill the search pool');
+
+    const blockedSearch = enqueueToolJob(state, 'search_local_files', { localPath: root, query: 'search5', label: 'search5', singleFlight: false }, 'repo-read');
+    const light = enqueueToolJob(state, lightTool, { localPath: root, label: 'light', singleFlight: false }, 'repo-read');
+
+    await waitUntil(() => starts.includes('light'), 'Expected light read to bypass a saturated search cost pool');
+    assert.strictEqual(getToolJobStatus(blockedSearch.jobId)?.status, 'queued');
+    assert.strictEqual(getToolJobStatus(blockedSearch.jobId)?.blockReason, 'cost_pool_saturated');
+    assert.strictEqual(getToolJobStatus(light.jobId)?.status, 'running');
+
+    lightBlocker.resolve();
+    searchBlockers.search1.resolve();
+    await waitForStatus(light.jobId, 'succeeded');
+    await waitUntil(() => starts.includes('search5'), 'Expected fifth search to start after a search slot frees');
+
+    for (const blocker of Object.values(searchBlockers)) blocker.resolve();
+    await Promise.all(activeSearches.map(job => waitForStatus(job.jobId, 'succeeded')));
+    await waitForStatus(blockedSearch.jobId, 'succeeded');
+  } finally {
+    lightBlocker.resolve();
+    for (const blocker of Object.values(searchBlockers)) blocker.resolve();
+    __setToolJobTestRunner('search_local_files', null);
+    __setToolJobTestRunner(lightTool, null);
   }
 });
 

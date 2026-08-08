@@ -2,6 +2,7 @@ import { spawnSync, spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'node:crypto';
+import { resolvePackageManagerInvocation } from '../../lib/platformRuntime';
 import type { AppState } from '../types';
 import { createApiError } from './api';
 import { resolveProjectRoot, resolveSafePath } from './localFileService';
@@ -222,12 +223,11 @@ function resolveAllowedCommand(root: string, command: string): ResolvedCommand {
   const packageConfig = readPackageScripts(root);
   const isBuiltIn = (ALLOWED_COMMANDS as readonly string[]).includes(command);
   if (isBuiltIn && packageConfig.scripts[command]) {
+    const invocation = resolvePackageManagerInvocation('npm', ['run', '--silent', command]);
     return {
       command,
-      executable: process.platform === 'win32' ? process.execPath : 'npm',
-      args: process.platform === 'win32'
-        ? [path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js'), 'run', '--silent', command]
-        : ['run', '--silent', command],
+      executable: invocation.executable,
+      args: invocation.args,
       source: 'package-json',
       script: packageConfig.scripts[command],
     };

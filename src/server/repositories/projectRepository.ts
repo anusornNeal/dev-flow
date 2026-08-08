@@ -1,4 +1,4 @@
-import path from 'node:path';
+import { normalizeLocalPathIdentity } from '../../lib/platformRuntime.js';
 import db, { withDbTransaction } from '../../db/index.js';
 
 export function getProjects(): any[] {
@@ -34,12 +34,7 @@ export function normalizeProjectRepoIdentity(value: unknown) {
 }
 
 export function normalizeProjectLocalPathIdentity(value: unknown) {
-  const raw = String(value || '').trim();
-  if (!raw) return '';
-  const looksWindows = /^[a-zA-Z]:[\\/]/.test(raw) || raw.includes('\\');
-  const resolved = looksWindows ? path.win32.resolve(raw) : path.resolve(raw);
-  const normalized = resolved.replace(/\\/g, '/').replace(/\/+$/g, '');
-  return looksWindows || process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+  return normalizeLocalPathIdentity(value);
 }
 
 export function projectsShareCanonicalRepository(left: any, right: any) {

@@ -45,6 +45,18 @@ export function getDevFlowCacheDir() {
   return resolveFromDevFlowAppRoot('.devflow', 'cache');
 }
 
+export function getDevFlowRuntimeDir() {
+  return path.resolve(process.env.DEVFLOW_RUNTIME_DIR || resolveFromDevFlowAppRoot('.devflow'));
+}
+
+export function getDevFlowWorkspacesDir() {
+  return path.join(getDevFlowRuntimeDir(), 'workspaces');
+}
+
+export function getDevFlowSessionsDir() {
+  return path.join(getDevFlowRuntimeDir(), 'sessions');
+}
+
 export function getProjectAtlasCacheDir() {
   return path.join(getDevFlowCacheDir(), 'project-atlas');
 }

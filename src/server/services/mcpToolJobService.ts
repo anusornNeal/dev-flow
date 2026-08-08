@@ -5,24 +5,22 @@ import { createApiError, normalizeUnknownError } from './api';
 import { resolveProjectRoot } from './localFileService';
 import { isDevFlowRestartPending, readDevFlowRestartState } from '../../lib/devFlowRestart';
 import { getRepoRevisionForRoot } from './repoRevisionService';
-import { applyPreparedEditPlan, prepareEditPlan } from './preparedEditService';
-import { applyAndVerifyAsync } from './applyAndVerifyService';
-import { prepareCompactEdit } from './stenoEditProtocolService';
+import { getProjectCommandExecutionIdentity } from './projectCommandService';
+import {
+  buildQueueEntryDiagnostics,
+  decrementScheduledResource,
+  getActiveResourceSnapshot,
+  getBlockerForQueueEntry,
+  getSchedulerProfile,
+  incrementScheduledResource,
+  transitionScheduledResource,
+  type JobKind,
+  type JobCostClass,
+  type ResourceAccessMode,
+  type SchedulerQueueEntry,
+} from './mcpToolJobScheduler';
+import { runBuiltinToolJob } from './mcpToolJobRunnerRegistry';
 
-// Import async runners (we will define these later in their respective files)
-import { describeProjectCommand, getProjectCommandExecutionIdentity, runProjectCommandAsync } from './projectCommandService';
-import { applyLocalPatchAsync } from './localPatchService';
-import { searchLocalFilesAsync } from './localFileService';
-import { commitGitChanges, ensureGitBranch, pushGitBranch } from './gitService';
-import { editFilesBatch } from './fileEditBatchService';
-import { deleteLocalPath, moveLocalPath } from './localPathMutationService';
-import { getProjects } from '../repositories/projectRepository';
-import { applyProjectAtlasAgentUpdate } from './projectAtlasService';
-
-type JobKind = 'repo-command' | 'repo-write' | 'repo-read' | 'skill-read';
-type ResourceAccessMode = 'read' | 'verify' | 'write';
-type JobCostClass = 'light-read' | 'search' | 'verify' | 'write';
-type BlockReason = 'active_write' | 'active_resource' | 'cost_pool_saturated' | 'writer_barrier';
 type Logger = { stdout: (data: string) => void; stderr: (data: string) => void };
 type AsyncRunner = (
   state: AppState,
@@ -32,29 +30,8 @@ type AsyncRunner = (
   transitionAccess: (accessMode: ResourceAccessMode) => void,
 ) => Promise<any>;
 
-type SchedulerBlocker = {
-  blockedByJobId?: string;
-  blockedByAccessMode?: ResourceAccessMode;
-  blockReason: BlockReason;
-};
-
-const MAX_CONCURRENCY: Record<JobCostClass, number> = {
-  'light-read': 8,
-  'search': 4,
-  'verify': 2,
-  'write': 1,
-};
-
-interface QueueEntry {
-  jobId: string;
-  resourceKey: string;
-  kind: JobKind;
+interface QueueEntry extends SchedulerQueueEntry {
   state: AppState;
-  toolName: string;
-  args: any;
-  accessMode: ResourceAccessMode;
-  costClass: JobCostClass;
-  enqueuedAt: number;
   singleFlightKey?: string;
 }
 
@@ -204,111 +181,8 @@ export function getToolJobWaitGuidance(status: ReturnType<typeof getToolJobStatu
   };
 }
 
-interface ResourceStats {
-  accessCount: Record<ResourceAccessMode, number>;
-  costCount: Record<JobCostClass, number>;
-}
-
-const activeResources = new Map<string, ResourceStats>();
-
-function getResourceStats(resourceKey: string): ResourceStats {
-  let stats = activeResources.get(resourceKey);
-  if (!stats) {
-    stats = {
-      accessCount: { read: 0, verify: 0, write: 0 },
-      costCount: { 'light-read': 0, search: 0, verify: 0, write: 0 },
-    };
-    activeResources.set(resourceKey, stats);
-  }
-  return stats;
-}
-
-function incrementResource(entry: QueueEntry) {
-  const stats = getResourceStats(entry.resourceKey);
-  stats.accessCount[entry.accessMode] += 1;
-  stats.costCount[entry.costClass] += 1;
-}
-
-function decrementResource(entry: QueueEntry) {
-  const stats = getResourceStats(entry.resourceKey);
-  stats.accessCount[entry.accessMode] = Math.max(0, stats.accessCount[entry.accessMode] - 1);
-  stats.costCount[entry.costClass] = Math.max(0, stats.costCount[entry.costClass] - 1);
-  const activeCount = stats.accessCount.read + stats.accessCount.verify + stats.accessCount.write;
-  if (activeCount === 0) activeResources.delete(entry.resourceKey);
-}
-
-function schedulerProfileFor(state: AppState, toolName: string, args: any, kind: JobKind): { accessMode: ResourceAccessMode; costClass: JobCostClass } {
-  if (kind === 'repo-write') return { accessMode: 'write', costClass: 'write' };
-  if (kind === 'skill-read') return { accessMode: 'read', costClass: 'light-read' };
-  if (kind === 'repo-read') {
-    return { accessMode: 'read', costClass: toolName === 'search_local_files' ? 'search' : 'light-read' };
-  }
-  if (toolName === 'run_project_command') {
-    try {
-      const descriptor = describeProjectCommand(state, args);
-      if (descriptor.access === 'verify') return { accessMode: 'verify', costClass: 'verify' };
-    } catch {
-      // Invalid/unresolved commands remain conservatively exclusive until the runner reports the real error.
-    }
-  }
-  return { accessMode: 'write', costClass: 'write' };
-}
-
-function findActiveEntry(resourceKey: string, predicate: (entry: QueueEntry) => boolean) {
-  for (const active of activeJobs.values()) {
-    if (active.entry.resourceKey === resourceKey && predicate(active.entry)) return active.entry;
-  }
-  return undefined;
-}
-
-function getBlockerForQueueEntry(entry: QueueEntry, queueIndex: number): SchedulerBlocker | null {
-  if (entry.accessMode !== 'write') {
-    for (let index = 0; index < queueIndex; index += 1) {
-      const earlier = queue[index];
-      if (earlier.resourceKey === entry.resourceKey && earlier.accessMode === 'write') {
-        return { blockedByJobId: earlier.jobId, blockedByAccessMode: 'write', blockReason: 'writer_barrier' };
-      }
-    }
-  }
-
-  if (entry.accessMode === 'write') {
-    const active = findActiveEntry(entry.resourceKey, () => true);
-    if (active) {
-      return { blockedByJobId: active.jobId, blockedByAccessMode: active.accessMode, blockReason: 'active_resource' };
-    }
-    return null;
-  }
-
-  const activeWrite = findActiveEntry(entry.resourceKey, (active) => active.accessMode === 'write');
-  if (activeWrite) {
-    return { blockedByJobId: activeWrite.jobId, blockedByAccessMode: 'write', blockReason: 'active_write' };
-  }
-
-  const stats = activeResources.get(entry.resourceKey);
-  const costCount = stats?.costCount[entry.costClass] || 0;
-  if (costCount >= MAX_CONCURRENCY[entry.costClass]) {
-    const activeSameCost = findActiveEntry(entry.resourceKey, (active) => active.costClass === entry.costClass);
-    return {
-      blockedByJobId: activeSameCost?.jobId,
-      blockedByAccessMode: activeSameCost?.accessMode,
-      blockReason: 'cost_pool_saturated',
-    };
-  }
-  return null;
-}
-
-function queueEntryDiagnostics(entry: QueueEntry, queueIndex: number) {
-  const blocker = getBlockerForQueueEntry(entry, queueIndex);
-  return {
-    jobId: entry.jobId,
-    toolName: entry.toolName,
-    kind: entry.kind,
-    resourceKey: entry.resourceKey,
-    accessMode: entry.accessMode,
-    costClass: entry.costClass,
-    queueAgeMs: Math.max(0, Date.now() - entry.enqueuedAt),
-    ...(blocker || {}),
-  };
+function activeSchedulerEntries(): SchedulerQueueEntry[] {
+  return Array.from(activeJobs.values(), ({ entry }) => entry);
 }
 
 function isTimedOutResult(result: any) {
@@ -378,9 +252,9 @@ export function getQueueMetrics() {
   return {
     queueLength: queue.length,
     activeJobs: activeJobs.size,
-    queue: queue.map((entry, index) => queueEntryDiagnostics(entry, index)),
+    queue: queue.map((entry, index) => buildQueueEntryDiagnostics(entry, index, queue, activeSchedulerEntries())),
     active: activeJobsList,
-    resources: Object.fromEntries(Array.from(activeResources.entries())),
+    resources: getActiveResourceSnapshot(),
     metrics: {
       completedJobs: terminalJobs.length,
       failedJobs: failedJobs.length,
@@ -414,7 +288,7 @@ export function getToolJobStatus(jobId: string) {
   const entry = position >= 0
     ? queue[position]
     : activeJobs.get(jobId)?.entry || (leaderJobId ? activeJobs.get(leaderJobId)?.entry : undefined);
-  const blocker = position >= 0 && entry ? getBlockerForQueueEntry(entry, position) : null;
+  const blocker = position >= 0 && entry ? getBlockerForQueueEntry(entry, position, queue, activeSchedulerEntries()) : null;
   return {
     ...job,
     queuePosition: position >= 0 ? position + 1 : 0,
@@ -489,7 +363,7 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
     resourceKey = 'skill-cache';
   }
 
-  const schedulerProfile = schedulerProfileFor(state, toolName, args, kind);
+  const schedulerProfile = getSchedulerProfile(state, toolName, args, kind);
   const singleFlightKey = singleFlightKeyFor(state, toolName, args, kind, resourceKey);
   if (singleFlightKey) {
     const leaderJobId = singleFlightLeaders.get(singleFlightKey);
@@ -550,7 +424,7 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
 async function processQueue() {
   for (let index = 0; index < queue.length; index += 1) {
     const entry = queue[index];
-    if (getBlockerForQueueEntry(entry, index)) continue;
+    if (getBlockerForQueueEntry(entry, index, queue, activeSchedulerEntries())) continue;
 
     queue.splice(index, 1);
     index -= 1;
@@ -570,24 +444,14 @@ function transitionJobAccess(jobId: string, nextAccessMode: ResourceAccessMode) 
   if (!active) throw new Error(`Cannot transition scheduler access for inactive job ${jobId}.`);
 
   const entry = active.entry;
-  if (entry.accessMode === nextAccessMode) return;
-  if (entry.accessMode !== 'write' || nextAccessMode !== 'verify') {
-    throw new Error(`Unsafe scheduler access transition ${entry.accessMode} -> ${nextAccessMode} for ${jobId}.`);
-  }
-
-  const stats = getResourceStats(entry.resourceKey);
-  stats.accessCount.write = Math.max(0, stats.accessCount.write - 1);
-  stats.costCount.write = Math.max(0, stats.costCount.write - 1);
-  entry.accessMode = 'verify';
-  entry.costClass = 'verify';
-  stats.accessCount.verify += 1;
-  stats.costCount.verify += 1;
+  const changed = transitionScheduledResource(entry, nextAccessMode);
+  if (!changed) return;
   appendJobLog(jobId, 'stdout', '[Scheduler] Access downgraded write -> verify.\n');
   setImmediate(processQueue);
 }
 
 async function startJob(entry: QueueEntry) {
-  incrementResource(entry);
+  incrementScheduledResource(entry);
   activeJobs.set(entry.jobId, { entry });
   updateJobStatus(entry.jobId, { status: 'running' });
 
@@ -608,47 +472,15 @@ async function startJob(entry: QueueEntry) {
         (cancelFn) => setJobActiveContext(entry.jobId, cancelFn),
         (accessMode) => transitionJobAccess(entry.jobId, accessMode),
       );
-    } else if (entry.toolName === 'run_project_command') {
-      result = await runProjectCommandAsync(entry.state, entry.args, logger, (cancelFn) => setJobActiveContext(entry.jobId, cancelFn));
-    } else if (entry.toolName === 'apply_patch') {
-      result = await applyLocalPatchAsync(entry.state, entry.args, logger, (cancelFn) => setJobActiveContext(entry.jobId, cancelFn));
-    } else if (entry.toolName === 'search_local_files') {
-      result = await searchLocalFilesAsync(entry.state, entry.args, logger, (cancelFn) => setJobActiveContext(entry.jobId, cancelFn));
-    } else if (entry.toolName === 'ensure_git_branch') {
-      result = ensureGitBranch(entry.state, entry.args);
-    } else if (entry.toolName === 'push_git_branch') {
-      result = pushGitBranch(entry.state, entry.args);
-    } else if (entry.toolName === 'commit_git_changes') {
-      result = commitGitChanges(entry.state, entry.args);
-    } else if (entry.toolName === 'edit_local_files_batch') {
-      result = editFilesBatch(entry.state, entry.args);
-    } else if (entry.toolName === 'prepare_edit_plan') {
-      result = prepareEditPlan(entry.state, entry.args);
-    } else if (entry.toolName === 'apply_prepared_edit_plan') {
-      result = applyPreparedEditPlan(entry.args);
-    } else if (entry.toolName === 'prepare_compact_edit') {
-      result = prepareCompactEdit(entry.state, entry.args);
-    } else if (entry.toolName === 'apply_prepared_edit') {
-      result = applyPreparedEditPlan({ editPlanId: entry.args?.editPlanId });
-    } else if (entry.toolName === 'apply_and_verify') {
-      result = await applyAndVerifyAsync(
-        entry.state,
-        entry.args,
-        logger,
-        (cancelFn) => setJobActiveContext(entry.jobId, cancelFn),
-        (accessMode) => transitionJobAccess(entry.jobId, accessMode),
-      );
-    } else if (entry.toolName === 'delete_local_path') {
-      result = deleteLocalPath(entry.state, entry.args);
-    } else if (entry.toolName === 'move_local_path') {
-      result = moveLocalPath(entry.state, entry.args);
-    } else if (entry.toolName === 'apply_project_atlas_agent_update') {
-      const project = findProjectForAtlasRescan(entry.args);
-      if (!project) throw new Error('Project not found for Project Atlas agent update.');
-      logger.stdout(`[Project Atlas] Saving ChatGPT-authored Atlas for ${project.name || project.id}\n`);
-      result = applyProjectAtlasAgentUpdate(project, entry.args);
     } else {
-      throw new Error(`No async runner implemented for tool: ${entry.toolName}`);
+      result = await runBuiltinToolJob(
+        { toolName: entry.toolName, state: entry.state, args: entry.args },
+        {
+          logger,
+          setCancelFn: (cancelFn) => setJobActiveContext(entry.jobId, cancelFn),
+          transitionAccess: (accessMode) => transitionJobAccess(entry.jobId, accessMode),
+        },
+      );
     }
 
     // Check if cancelled during execution
@@ -697,7 +529,7 @@ async function startJob(entry: QueueEntry) {
       logger.stderr(`\n[Job Failed] ${error.message}\n${error.stack || ''}`);
     }
   } finally {
-    decrementResource(entry);
+    decrementScheduledResource(entry);
     activeJobs.delete(entry.jobId);
     finalizeSingleFlight(entry);
     
@@ -718,8 +550,8 @@ export function getJobMetrics() {
       accessMode: data.entry.accessMode,
       costClass: data.entry.costClass,
     })),
-    activeResources: Object.fromEntries(activeResources.entries()),
-    queuedJobs: queue.map((entry, index) => queueEntryDiagnostics(entry, index)),
+    activeResources: getActiveResourceSnapshot(),
+    queuedJobs: queue.map((entry, index) => buildQueueEntryDiagnostics(entry, index, queue, activeSchedulerEntries())),
     metrics: queueMetrics.metrics,
     recentJobs: queueMetrics.recentJobs
   };
@@ -731,23 +563,4 @@ export function __setToolJobTestRunner(toolName: string, runner: AsyncRunner | n
   } else {
     testRunners.delete(toolName);
   }
-}
-
-function findProjectForAtlasRescan(args: any) {
-  const projects = getProjects();
-  if (args?.projectId) {
-    const byId = projects.find((project) => project.id === args.projectId);
-    if (byId) return byId;
-  }
-  if (args?.projectName) {
-    const normalizedName = String(args.projectName).trim().toLowerCase();
-    const byName = projects.find((project) => project.name.trim().toLowerCase() === normalizedName);
-    if (byName) return byName;
-  }
-  if (args?.localPath) {
-    const normalizedPath = String(args.localPath).trim().toLowerCase();
-    const byPath = projects.find((project) => String(project.localPath || '').trim().toLowerCase() === normalizedPath);
-    if (byPath) return byPath;
-  }
-  return null;
 }

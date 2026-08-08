@@ -1,0 +1,24 @@
+name: Cross-platform core
+
+on:
+  pull_request:
+  push:
+    branches: [develop]
+
+jobs:
+  core:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run test:absolute-paths
+      - run: npx tsx --test tests/lib/platformRuntime.test.ts tests/scripts/crossPlatformPolicy.test.ts

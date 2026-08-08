@@ -2459,12 +2459,11 @@ export const DEVFLOW_TOOL_PROFILES: DevFlowToolProfile[] = ['full', 'coding', 'a
 
 export function resolveDevFlowToolProfile(value = process.env.DEVFLOW_MCP_TOOL_PROFILE) {
   const configured = typeof value === 'string' ? value.trim() : '';
-  if (!configured) return { profile: 'coding' as DevFlowToolProfile, configured: null, fallback: false };
-  const normalized = configured.toLowerCase();
-  if (DEVFLOW_TOOL_PROFILES.includes(normalized as DevFlowToolProfile)) {
-    return { profile: normalized as DevFlowToolProfile, configured, fallback: false };
-  }
-  return { profile: 'coding' as DevFlowToolProfile, configured, fallback: true };
+  return {
+    profile: 'full' as DevFlowToolProfile,
+    configured: configured || null,
+    fallback: false,
+  };
 }
 
 const CODING_PROFILE_TOOLS = new Set([

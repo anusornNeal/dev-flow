@@ -14,6 +14,7 @@ export const VERIFICATION_STEPS: VerificationStep[] = [
   { label: 'devflow restart contract', command: 'npx', args: ['tsx', '--test', 'tests/server/devflowRestartContract.test.ts'], stage: 1, parallelSafe: false },
   { label: 'devflow restart state', command: 'npx', args: ['tsx', '--test', 'tests/server/devflowRestartState.test.ts'], stage: 1, parallelSafe: false },
   { label: 'devflow contract', command: 'npx', args: ['tsx', 'scripts/verify-devflow-contract.ts'], stage: 1, parallelSafe: false },
+  { label: 'devflow tool profiles', command: 'npx', args: ['tsx', '--test', 'tests/server/devflowToolProfile.test.ts'], stage: 1, parallelSafe: false },
   { label: 'project atlas cache', command: 'npx', args: ['tsx', '--test', 'tests/server/projectAtlasCacheService.test.ts'], stage: 2, parallelSafe: true },
   { label: 'project atlas agent update', command: 'npx', args: ['tsx', '--test', 'tests/server/projectAtlasAgentUpdateService.test.ts'], stage: 2, parallelSafe: true },
   { label: 'project atlas api', command: 'npx', args: ['tsx', '--test', 'tests/server/projectAtlasApiService.test.ts'], stage: 2, parallelSafe: true },

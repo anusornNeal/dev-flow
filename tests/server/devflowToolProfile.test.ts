@@ -1,7 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 
 const { getCapabilityCatalog, getMcpToolList, getToolProfileSummary, resolveDevFlowToolProfile } = await import('../../src/server/contracts/devflowContract.js');
+
+test('stdio MCP entrypoint loads dotenv before creating the server', () => {
+  const entrypoint = fs.readFileSync(new URL('../../mcp-server.ts', import.meta.url), 'utf8');
+  assert.match(entrypoint, /import ['\"]dotenv\/config['\"];?/);
+  assert.ok(entrypoint.indexOf('dotenv/config') < entrypoint.indexOf('createDevFlowMcpServer'));
+});
 
 test('coding MCP profile is materially smaller than full while preserving core coding workflow tools', () => {
   const full = getMcpToolList('full');
@@ -41,14 +48,12 @@ test('tool profile summary reports serialized schema bytes', () => {
   assert.ok(summary.full.schemaBytes > summary.coding.schemaBytes);
 });
 
-test('MCP profile resolution defaults to coding and preserves explicit profiles', () => {
-  assert.equal(resolveDevFlowToolProfile(undefined).profile, 'coding');
-  assert.equal(resolveDevFlowToolProfile('').profile, 'coding');
-  assert.equal(resolveDevFlowToolProfile('full').profile, 'full');
-  assert.equal(resolveDevFlowToolProfile('review').profile, 'review');
-  const unknown = resolveDevFlowToolProfile('unknown-profile');
-  assert.equal(unknown.profile, 'coding');
-  assert.equal(unknown.fallback, true);
+test('MCP profile resolution is temporarily forced to full', () => {
+  for (const configured of [undefined, '', 'full', 'coding', 'review', 'unknown-profile']) {
+    const resolved = resolveDevFlowToolProfile(configured);
+    assert.equal(resolved.profile, 'full');
+    assert.equal(resolved.fallback, false);
+  }
 });
 
 test('capability catalog exposes active MCP profile and schema bytes', () => {
@@ -56,8 +61,8 @@ test('capability catalog exposes active MCP profile and schema bytes', () => {
   delete process.env.DEVFLOW_MCP_TOOL_PROFILE;
   try {
     const catalog = getCapabilityCatalog();
-    assert.equal(catalog.mcpProfile.active, 'coding');
-    assert.equal(catalog.mcpProfile.toolCount, getMcpToolList('coding').length);
+    assert.equal(catalog.mcpProfile.active, 'full');
+    assert.equal(catalog.mcpProfile.toolCount, getMcpToolList('full').length);
     assert.ok(catalog.mcpProfile.schemaBytes > 0);
   } finally {
     if (previous === undefined) delete process.env.DEVFLOW_MCP_TOOL_PROFILE;

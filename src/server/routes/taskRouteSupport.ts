@@ -306,31 +306,55 @@ function taskHasManualEvidence(task: any) {
   return hasPromptExcerpt && hasAgentLogExcerpt;
 }
 
-function getChildReviewBlockers(task: any, deps: ApiRouteDeps) {
-  const children = getTasks().filter((entry) => entry.parentId === task.id);
-  if (children.length === 0) return [];
+export interface TaskMoveWorkflowBlocker {
+  code: string;
+  message: string;
+  bypassable: true;
+  details?: unknown;
+}
 
-  const blockers: string[] = [];
+export function getTaskMoveWorkflowBlockers(task: any, deps: ApiRouteDeps, nextStatus: string): TaskMoveWorkflowBlocker[] {
+  if (!['ready-for-review', 'done'].includes(nextStatus)) return [];
+  const evidenceValidation = validateRecordedReviewSubmission(task);
+  const blockers: TaskMoveWorkflowBlocker[] = evidenceValidation.blockers.map((blocker) => ({
+    ...blocker,
+    bypassable: true,
+  }));
+
+  const children = getTasks().filter((entry) => entry.parentId === task.id);
   for (const child of children) {
     if (!['ready-for-review', 'done'].includes(child.status)) {
-      blockers.push(`${child.displayId || child.id} is still ${child.status}.`);
+      blockers.push({
+        code: 'CHILD_TASK_BLOCKING',
+        message: `${child.displayId || child.id} is still ${child.status}.`,
+        bypassable: true,
+        details: { childId: child.id, displayId: child.displayId || null, status: child.status },
+      });
       continue;
     }
     if (taskRequiresManualEvidence(child) && !taskHasManualEvidence(child)) {
-      blockers.push(`${child.displayId || child.id} is missing visible prompt.md and agent.log evidence in task logs.`);
+      blockers.push({
+        code: 'CHILD_EVIDENCE_MISSING',
+        message: `${child.displayId || child.id} is missing visible prompt.md and agent.log evidence in task logs.`,
+        bypassable: true,
+        details: { childId: child.id, displayId: child.displayId || null },
+      });
     }
   }
-  return blockers;
+
+  const seen = new Set<string>();
+  return blockers.filter((blocker) => {
+    const key = `${blocker.code}:${blocker.message}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 export function validateParentReviewMove(task: any, deps: ApiRouteDeps, nextStatus: string) {
-  if (!['ready-for-review', 'done'].includes(nextStatus)) return null;
-  const childBlockers = getChildReviewBlockers(task, deps);
-  const evidenceValidation = validateRecordedReviewSubmission(task);
-  const evidenceBlockers = evidenceValidation.blockers.map((blocker) => `${blocker.code}: ${blocker.message}`);
-  const blockers = [...childBlockers, ...evidenceBlockers];
+  const blockers = getTaskMoveWorkflowBlockers(task, deps, nextStatus);
   if (blockers.length === 0) return null;
-  return `Task ${task.displayId || task.id} cannot move to ${nextStatus} yet: ${blockers.join(' ')}`;
+  return `Task ${task.displayId || task.id} cannot move to ${nextStatus} yet: ${blockers.map((blocker) => `${blocker.code}: ${blocker.message}`).join(' ')}`;
 }
 
 function clearActiveAgentIfSettled(task: any) {

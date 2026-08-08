@@ -25,6 +25,7 @@ import {
   ensureCloseWarningBug,
   updateBugStatus,
   applyChecklistToggle as applyChecklistToggleUseCase,
+  evaluateMove,
   validateTaskPatch as validateTaskPatchUseCase,
 } from '../useCases/taskUseCases';
 import { canRetryRun as canRetryRunUseCase, canCancelRun as canCancelRunUseCase, validateCompletion as validateCompletionUseCase } from '../useCases/agentRunUseCases';
@@ -43,6 +44,7 @@ import {
   createTaskLogEntry,
   filterTasksForList,
   getTaskIndexByIdentifier,
+  getTaskMoveWorkflowBlockers,
   maybeTriggerTaskAgent,
   parseTaskReadMode,
   requireAgentOwnedRequest,
@@ -692,15 +694,50 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
       return res.status(400).json({ error: getValidationErrorMessage(previousStatus, req.body.status) });
     }
 
-    const parentReviewError = validateParentReviewMove(task, deps, req.body.status);
-    if (parentReviewError) {
-      appendTaskLog(task, parentReviewError, 'update');
-      saveTask(task);
-      return res.status(400).json({ error: parentReviewError });
+    const targetStatus = req.body.status as TaskStatus;
+    const activeRun = getActiveRunForTask(task.id);
+    const hardBlockers = activeRun && !canOverrideTaskLock(task, req.body, undefined, req.headers['x-agent-request'])
+      ? [{
+          code: 'ACTIVE_AGENT_LOCK',
+          message: `Task is actively owned by ${activeRun.agent || 'an agent'} (${activeRun.status}). Cancel/complete the run before moving it manually.`,
+          bypassable: false,
+          details: { runId: activeRun.id, status: activeRun.status, agent: activeRun.agent },
+        }]
+      : [];
+    const softBlockers = getTaskMoveWorkflowBlockers(task, deps, targetStatus);
+    const moveDecision = evaluateMove({
+      intent: req.body.intent,
+      manualOverride: req.body.manualOverride === true,
+      softBlockers,
+      hardBlockers,
+    });
+    if (!moveDecision.allowed) {
+      const confirmationRequired = moveDecision.outcome === 'confirmation-required';
+      const code = confirmationRequired
+        ? 'MOVE_CONFIRMATION_REQUIRED'
+        : moveDecision.outcome === 'hard-blocked'
+          ? 'MOVE_HARD_BLOCKED'
+          : 'MOVE_WORKFLOW_BLOCKED';
+      return res.status(confirmationRequired ? 409 : moveDecision.outcome === 'hard-blocked' ? 403 : 400).json({
+        success: false,
+        code,
+        error: moveDecision.blockers.map((blocker) => blocker.message).join(' '),
+        message: confirmationRequired
+          ? 'This manual move is blocked only by workflow-quality checks. Confirm manual override to continue.'
+          : moveDecision.blockers.map((blocker) => `${blocker.code}: ${blocker.message}`).join(' '),
+        confirmationRequired,
+        sourceStatus: previousStatus,
+        targetStatus,
+        blockers: moveDecision.blockers,
+        retry: confirmationRequired ? { intent: 'manual', manualOverride: true } : undefined,
+      });
     }
-
-    if (previousStatus === 'in-progress' && !canOverrideTaskLock(task, req.body, undefined, req.headers['x-agent-request'])) {
-      return res.status(403).json({ error: 'Task is locked by an agent. Use emergency flag to override.' });
+    if (moveDecision.bypassedBlockers.length > 0) {
+      appendTaskLog(
+        task,
+        `Manual override move ${previousStatus} -> ${targetStatus}; bypassed soft blockers: ${moveDecision.bypassedBlockers.map((blocker) => `${blocker.code}: ${blocker.message}`).join(' | ')}`,
+        'move',
+      );
     }
 
     let updatedTask = {
@@ -723,29 +760,18 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
 
     saveTask(updatedTask);
     syncTaskAgentStateForStatus(updatedTask, previousStatus);
-    const autoWorkTrigger = AgentOrchestrationWorker.maybeTrigger(updatedTask, previousStatus, deps, '/move endpoint');
 
     saveTask(getTasks()[taskIndex]);
     const standardPayload = {
       success: true,
       message: `Successfully relocated task schema from ${previousStatus} to ${req.body.status}`,
       task: updatedTask,
-      autoWorkTrigger: autoWorkTrigger
-        ? autoWorkTrigger.triggered
-          ? { triggered: true, run: autoWorkTrigger.run }
-          : (() => {
-              const blockedResult = autoWorkTrigger as TriggerTaskAgentFailure;
-              return {
-                triggered: false,
-                code: blockedResult.code,
-                reason: blockedResult.reason,
-                run: blockedResult.run,
-              };
-            })()
-        : null,
+      autoWorkTrigger: null,
+      bypassedBlockers: moveDecision.bypassedBlockers,
     };
     return res.json(toMutationResponse(req, updatedTask, standardPayload, {
       autoWorkTrigger: standardPayload.autoWorkTrigger,
+      bypassedBlockers: standardPayload.bypassedBlockers,
     }));
   });
 
@@ -768,8 +794,50 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
       return res.json(toMutationResponse(req, task, { message: 'Task is already in that lane', task, path }));
     }
 
-    if (fromStatus === 'in-progress' && !canOverrideTaskLock(task, req.body, undefined, req.headers['x-agent-request'])) {
-      return res.status(403).json({ error: 'Task is locked by an agent. Use emergency flag to override.' });
+    const activeRun = getActiveRunForTask(task.id);
+    const hardBlockers = activeRun && !canOverrideTaskLock(task, req.body, undefined, req.headers['x-agent-request'])
+      ? [{
+          code: 'ACTIVE_AGENT_LOCK',
+          message: `Task is actively owned by ${activeRun.agent || 'an agent'} (${activeRun.status}). Cancel/complete the run before moving it manually.`,
+          bypassable: false,
+          details: { runId: activeRun.id, status: activeRun.status, agent: activeRun.agent },
+        }]
+      : [];
+    const softBlockers = getTaskMoveWorkflowBlockers(task, deps, targetStatus);
+    const moveDecision = evaluateMove({
+      intent: req.body.intent,
+      manualOverride: req.body.manualOverride === true,
+      softBlockers,
+      hardBlockers,
+    });
+    if (!moveDecision.allowed) {
+      const confirmationRequired = moveDecision.outcome === 'confirmation-required';
+      const code = confirmationRequired
+        ? 'MOVE_CONFIRMATION_REQUIRED'
+        : moveDecision.outcome === 'hard-blocked'
+          ? 'MOVE_HARD_BLOCKED'
+          : 'MOVE_WORKFLOW_BLOCKED';
+      return res.status(confirmationRequired ? 409 : moveDecision.outcome === 'hard-blocked' ? 403 : 400).json({
+        success: false,
+        code,
+        error: moveDecision.blockers.map((blocker) => blocker.message).join(' '),
+        message: confirmationRequired
+          ? 'This manual move is blocked only by workflow-quality checks. Confirm manual override to continue.'
+          : moveDecision.blockers.map((blocker) => `${blocker.code}: ${blocker.message}`).join(' '),
+        confirmationRequired,
+        sourceStatus: fromStatus,
+        targetStatus,
+        path,
+        blockers: moveDecision.blockers,
+        retry: confirmationRequired ? { intent: 'manual', manualOverride: true } : undefined,
+      });
+    }
+    if (moveDecision.bypassedBlockers.length > 0) {
+      appendTaskLog(
+        task,
+        `Manual override move ${fromStatus} -> ${targetStatus}; bypassed soft blockers: ${moveDecision.bypassedBlockers.map((blocker) => `${blocker.code}: ${blocker.message}`).join(' | ')}`,
+        'move',
+      );
     }
 
     const movedStatuses: Array<{ from: TaskStatus; to: TaskStatus }> = [];
@@ -779,13 +847,6 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
       if (!isValidTransition(previousStatus, nextStatus)) {
         return res.status(400).json({ error: getValidationErrorMessage(previousStatus, nextStatus), path });
       }
-      const parentReviewError = validateParentReviewMove(task, deps, nextStatus);
-      if (parentReviewError) {
-        appendTaskLog(task, parentReviewError, 'update');
-        saveTask(task);
-        return res.status(400).json({ error: parentReviewError, path });
-      }
-
       task.status = nextStatus;
       task.updatedAt = new Date().toISOString();
       task.logs = [...task.logs, {
@@ -799,7 +860,6 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
       movedStatuses.push({ from: previousStatus, to: nextStatus });
     }
 
-    const autoWorkTrigger = AgentOrchestrationWorker.maybeTrigger(task, fromStatus, deps, '/move-to endpoint');
     if (task.status === 'done') {
       const updatedTask = ensureCloseWarningBug(task);
       task.bugs = updatedTask.bugs;
@@ -815,22 +875,12 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
       task,
       path,
       movedStatuses,
-      autoWorkTrigger: autoWorkTrigger
-        ? autoWorkTrigger.triggered
-          ? { triggered: true, run: autoWorkTrigger.run }
-          : (() => {
-              const blockedResult = autoWorkTrigger as TriggerTaskAgentFailure;
-              return {
-                triggered: false,
-                code: blockedResult.code,
-                reason: blockedResult.reason,
-                run: blockedResult.run,
-              };
-            })()
-        : null,
+      autoWorkTrigger: null,
+      bypassedBlockers: moveDecision.bypassedBlockers,
     };
     return res.json(toMutationResponse(req, task, standardPayload, {
       autoWorkTrigger: standardPayload.autoWorkTrigger,
+      bypassedBlockers: standardPayload.bypassedBlockers,
       path,
       movedStatuses,
     }));

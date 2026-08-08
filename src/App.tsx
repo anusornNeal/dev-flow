@@ -44,7 +44,11 @@ export default function App() {
   const [persistenceError, setPersistenceError] = useState<string | null>(null);
   const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
   const [draggedOverColumn, setDraggedOverColumn] = useState<TaskStatus | null>(null);
-  const [pendingEmergencyMove, setPendingEmergencyMove] = useState<{ sourceTask: Task, status: TaskStatus } | null>(null);
+  const [pendingManualOverride, setPendingManualOverride] = useState<{
+    sourceTask: Task;
+    status: TaskStatus;
+    blockers: Array<{ code: string; message: string }>;
+  } | null>(null);
   const [taskToDelete, setTaskToDelete] = useState<string | null>(null);
 
 
@@ -190,7 +194,7 @@ export default function App() {
     e.dataTransfer.setData('text/plain', id);
   };
 
-  const executeTaskMove = async (sourceTask: Task, status: TaskStatus) => {
+  const executeTaskMove = async (sourceTask: Task, status: TaskStatus, manualOverride = false) => {
     const taskId = sourceTask.id;
     const modifiedLogs: LogEntry[] = [
       ...(sourceTask.logs || []),
@@ -229,13 +233,21 @@ export default function App() {
 
     // Sync API update
     try {
-      const isEmergency = sourceTask.status === 'in-progress';
-      const moveRequest = buildTaskStatusMoveRequest(taskId, status, { emergency: isEmergency });
+      const moveRequest = buildTaskStatusMoveRequest(taskId, status, { intent: 'manual', manualOverride });
       const response = await fetch(moveRequest.url, moveRequest.init);
+      const responseData = await response.json().catch(() => ({}));
       if (!response.ok) {
-        throw new Error(`Lane move failed with status ${response.status}`);
+        setTasks(prev => prev.map(task => task.id === taskId ? sourceTask : task));
+        if (selectedTask && selectedTask.id === taskId) setSelectedTask(sourceTask);
+        if (response.status === 409 && responseData.confirmationRequired) {
+          const blockers = Array.isArray(responseData.blockers) ? responseData.blockers : [];
+          setPendingManualOverride({ sourceTask, status, blockers });
+          setPersistenceError(`Move needs confirmation: ${blockers.map((blocker: any) => blocker.code).join(', ')}`);
+          return;
+        }
+        setPersistenceError(responseData.message || responseData.error || `Lane move failed with status ${response.status}`);
+        return;
       }
-      const responseData = await response.json();
       const persistedTask = responseData.task || responseData;
       setTasks(prev => prev.map(task =>
         task.id === taskId
@@ -260,7 +272,9 @@ export default function App() {
       }
     } catch (err) {
       console.error('API lane move sync failed:', err);
-      setPersistenceError('Lane move was shown optimistically, but backend persistence failed. Refresh after backend recovery to confirm final state.');
+      setTasks(prev => prev.map(task => task.id === taskId ? sourceTask : task));
+      if (selectedTask && selectedTask.id === taskId) setSelectedTask(sourceTask);
+      setPersistenceError('Lane move could not reach the backend. The card was restored to its previous lane.');
     } finally {
       // Clear pending move whether success or failure.
       boardViewModel.setTaskPending(taskId, false);
@@ -285,13 +299,6 @@ export default function App() {
 
     if (!isValidTransition(sourceTask.status, status)) {
       setPersistenceError(getValidationErrorMessage(sourceTask.status, status));
-      setDraggedTaskId(null);
-      setDraggedOverColumn(null);
-      return;
-    }
-
-    if (sourceTask.status === 'in-progress') {
-      setPendingEmergencyMove({ sourceTask, status });
       setDraggedTaskId(null);
       setDraggedOverColumn(null);
       return;
@@ -619,17 +626,17 @@ export default function App() {
         />
       )}
 
-      {/* 9. Emergency Move Modal */}
-      {pendingEmergencyMove && (
+      {/* 9. Manual workflow override confirmation */}
+      {pendingManualOverride && (
         <ConfirmModal
-          title="Emergency Move"
-          message="Task is currently locked in progress. Are you sure you want to force move it?"
+          title="Move with workflow override?"
+          message={`This move is allowed manually, but these workflow checks are incomplete: ${pendingManualOverride.blockers.map((blocker) => `${blocker.code}: ${blocker.message}`).join(' ')}`}
           onConfirm={() => {
-            executeTaskMove(pendingEmergencyMove.sourceTask, pendingEmergencyMove.status);
-            setPendingEmergencyMove(null);
+            executeTaskMove(pendingManualOverride.sourceTask, pendingManualOverride.status, true);
+            setPendingManualOverride(null);
           }}
-          onCancel={() => setPendingEmergencyMove(null)}
-          confirmText="Force Move"
+          onCancel={() => setPendingManualOverride(null)}
+          confirmText="Move Anyway"
         />
       )}
 

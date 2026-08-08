@@ -2,6 +2,8 @@ import type { TaskStatus } from '../types';
 
 interface BuildTaskStatusMoveRequestOptions {
   emergency?: boolean;
+  intent?: 'strict' | 'manual';
+  manualOverride?: boolean;
 }
 
 export function buildTaskStatusMoveRequest(
@@ -9,10 +11,10 @@ export function buildTaskStatusMoveRequest(
   status: TaskStatus,
   options: BuildTaskStatusMoveRequestOptions = {},
 ) {
-  const payload: { status: TaskStatus; emergency?: boolean } = { status };
-  if (options.emergency) {
-    payload.emergency = true;
-  }
+  const payload: { status: TaskStatus; emergency?: boolean; intent?: 'strict' | 'manual'; manualOverride?: boolean } = { status };
+  if (options.emergency) payload.emergency = true;
+  if (options.intent === 'manual' || options.manualOverride) payload.intent = 'manual';
+  if (options.manualOverride) payload.manualOverride = true;
 
   return {
     url: `/api/tasks/${taskId}/move`,

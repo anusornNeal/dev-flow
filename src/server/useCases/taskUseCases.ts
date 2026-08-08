@@ -251,14 +251,49 @@ export function applyChecklistToggle(items: ChecklistItem[], id: string): Checkl
   return next;
 }
 
-export interface MoveDecision {
-  allowed: boolean;
-  reason?: string;
+export type MoveIntent = 'strict' | 'manual';
+
+export interface MoveBlocker {
+  code: string;
+  message: string;
+  bypassable: boolean;
+  details?: unknown;
 }
 
-export function evaluateMove(target: TaskLike, targetStatus: string): MoveDecision {
-  if (targetStatus === 'ready-for-review' && target.status === 'in-progress' && !target) {
-    return { allowed: false, reason: 'Cannot move to ready-for-review without an active agent run.' };
+export interface MoveEvaluationInput {
+  intent?: MoveIntent;
+  manualOverride?: boolean;
+  softBlockers?: MoveBlocker[];
+  hardBlockers?: MoveBlocker[];
+}
+
+export interface MoveDecision {
+  allowed: boolean;
+  outcome: 'allowed' | 'confirmation-required' | 'blocked' | 'hard-blocked';
+  blockers: MoveBlocker[];
+  bypassedBlockers: MoveBlocker[];
+}
+
+export function evaluateMove(target: TaskLike, targetStatus: string): { allowed: true };
+export function evaluateMove(input: MoveEvaluationInput): MoveDecision;
+export function evaluateMove(input: MoveEvaluationInput | TaskLike, targetStatus?: string): MoveDecision | { allowed: true } {
+  if (typeof targetStatus === 'string') return { allowed: true };
+  const decisionInput = input as MoveEvaluationInput;
+  const intent: MoveIntent = decisionInput.intent === 'manual' ? 'manual' : 'strict';
+  const softBlockers = Array.isArray(decisionInput.softBlockers) ? decisionInput.softBlockers : [];
+  const hardBlockers = Array.isArray(decisionInput.hardBlockers) ? decisionInput.hardBlockers : [];
+
+  if (hardBlockers.length > 0) {
+    return { allowed: false, outcome: 'hard-blocked', blockers: hardBlockers, bypassedBlockers: [] };
   }
-  return { allowed: true };
+  if (softBlockers.length === 0) {
+    return { allowed: true, outcome: 'allowed', blockers: [], bypassedBlockers: [] };
+  }
+  if (intent !== 'manual') {
+    return { allowed: false, outcome: 'blocked', blockers: softBlockers, bypassedBlockers: [] };
+  }
+  if (!decisionInput.manualOverride) {
+    return { allowed: false, outcome: 'confirmation-required', blockers: softBlockers, bypassedBlockers: [] };
+  }
+  return { allowed: true, outcome: 'allowed', blockers: [], bypassedBlockers: softBlockers };
 }

@@ -49,6 +49,10 @@ const mutationResponseModeProperty = {
   responseMode: { type: 'string', enum: ['standard', 'summary', 'ack'], description: 'Mutation response density. Use summary or ack for faster ChatGPT tool calls.' },
 };
 
+const manualMoveOverrideProperties = {
+  manualOverride: { type: 'boolean', description: 'Explicitly confirm bypassing soft workflow gates for a human/manual status move. Hard safety blockers remain enforced.' },
+};
+
 const mutationControlProperties = {
   idempotencyKey: { type: 'string', description: 'Stable client-provided key for safe retries. Reusing the key with a different request returns IDEMPOTENCY_CONFLICT.' },
 };
@@ -155,7 +159,7 @@ function stripToolOnlyArgs(args: Record<string, any>, keys: string[]) {
   return copy;
 }
 
-export const DEVFLOW_CONTRACT_VERSION = '2026-08-08.6';
+export const DEVFLOW_CONTRACT_VERSION = '2026-08-08.7';
 
 export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   {
@@ -979,13 +983,14 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'move_task_status',
-    description: 'Move a task to a new lane/status.',
+    description: 'Move a task to a new lane/status. Strict by default; use manualOverride only after a confirmation-required response for soft workflow gates.',
     inputSchema: {
       type: 'object',
       properties: {
         ...taskIdentifierProperty,
         status: { type: 'string', enum: VALID_STATUSES },
         ...booleanFlagSchema.properties,
+        ...manualMoveOverrideProperties,
         ...mutationResponseModeProperty,
       },
       required: ['taskId', 'status'],
@@ -994,19 +999,20 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
     buildHttpRequest: ({ taskId, isAgentRequest, responseMode, ...body }) => ({
       method: 'POST',
       path: withQuery(`/api/tasks/${encodePathSegment(String(taskId))}/move`, { responseMode: responseMode || 'summary' }),
-      body,
+      body: body.manualOverride ? { ...body, intent: 'manual' } : body,
       headers: isAgentRequest ? { 'x-agent-request': 'true' } : undefined,
     }),
   },
   {
     name: 'move_task_to_status',
-    description: 'Move a task to a target status by following the allowed transition path automatically.',
+    description: 'Move a task to a target status by following the allowed transition path automatically. Strict by default; explicit manualOverride may bypass only soft workflow gates.',
     inputSchema: {
       type: 'object',
       properties: {
         ...taskIdentifierProperty,
         status: { type: 'string', enum: VALID_STATUSES },
         ...booleanFlagSchema.properties,
+        ...manualMoveOverrideProperties,
         ...mutationResponseModeProperty,
       },
       required: ['taskId', 'status'],
@@ -1015,7 +1021,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
     buildHttpRequest: ({ taskId, isAgentRequest, responseMode, ...body }) => ({
       method: 'POST',
       path: withQuery(`/api/tasks/${encodePathSegment(String(taskId))}/move-to`, { responseMode: responseMode || 'summary' }),
-      body,
+      body: body.manualOverride ? { ...body, intent: 'manual' } : body,
       headers: isAgentRequest ? { 'x-agent-request': 'true' } : undefined,
     }),
   },

@@ -155,7 +155,7 @@ function stripToolOnlyArgs(args: Record<string, any>, keys: string[]) {
   return copy;
 }
 
-export const DEVFLOW_CONTRACT_VERSION = '2026-08-08.1';
+export const DEVFLOW_CONTRACT_VERSION = '2026-08-08.2';
 
 export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   {
@@ -1505,6 +1505,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
         startLine: { type: 'number', description: '1-based first line to return.' },
         endLine: { type: 'number', description: '1-based final line to return.' },
         maxBytes: { type: 'number', description: 'Maximum UTF-8 bytes of content to return.' },
+        includeFileRef: { type: 'boolean', description: 'Opt in to an opaque short-lived fileRef bound to this exact project, canonical file path, and content revision for prepare_compact_edit.' },
       },
       required: ['filePath'],
     },
@@ -1818,6 +1819,44 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
     },
     outputSchema: { type: 'object' },
     buildHttpRequest: (args) => ({ method: 'POST', path: '/api/local-files/edit-plans/apply', body: args }),
+  },
+  {
+    name: 'prepare_compact_edit',
+    executionPolicy: { mode: 'job', jobKind: 'repo-read' },
+    description: 'Prepare Steno Edit v1 without writing. First read targets with read_local_file(includeFileRef=true), then send v=1, optional request-local string table `s`, and `f` file tuples. Operations are compact tuples: R=["R", find, replacement, occurrence?], IB=["IB", find, text, occurrence?], IA=["IA", find, text, occurrence?], DB=["DB", start, end, occurrence?]. String positions accept a literal string or a non-negative index into `s`. Returns a short-lived editPlanId; use apply_prepared_edit with only that id. Fall back to safe_edit_local_file/edit_local_files_batch when compact preparation is not suitable.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...projectIdentifierProperties,
+        v: { type: 'number', enum: [1], description: 'Steno Edit protocol version. v1 is currently supported.' },
+        s: { type: 'array', items: { type: 'string' }, description: 'Optional request-local UTF-8 string table. Entries are literals only; recursive references are not supported.' },
+        f: {
+          type: 'array', minItems: 1, maxItems: 100,
+          description: 'File tuples shaped as [fileRef, operations]. fileRef must come from read_local_file(includeFileRef=true).',
+          items: { type: 'array', minItems: 2, maxItems: 2 },
+        },
+        ttlMs: { type: 'number', description: 'Optional prepared-plan TTL; bounded by DevFlow (default 180s, max 300s).' },
+        maxPayloadBytes: { type: 'number', description: 'Maximum expanded safe-edit payload bytes per file.' },
+        maxFileBytes: { type: 'number', description: 'Maximum target file size per file.' },
+      },
+      required: ['v', 'f'],
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: (args) => ({ method: 'POST', path: '/api/local-files/compact-edit/prepare', body: args }),
+  },
+  {
+    name: 'apply_prepared_edit',
+    executionPolicy: { mode: 'job', jobKind: 'repo-write' },
+    description: 'Apply a Steno Edit prepared plan by editPlanId only. Plans are single-use; stale, expired, failed, or already-consumed plans must be re-read and re-prepared rather than replayed.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        editPlanId: { type: 'string', description: 'Opaque short-lived plan id returned by prepare_compact_edit.' },
+      },
+      required: ['editPlanId'],
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: (args) => ({ method: 'POST', path: '/api/local-files/compact-edit/apply', body: { editPlanId: args.editPlanId } }),
   },
   {
     name: 'apply_and_verify',
@@ -2392,7 +2431,7 @@ const CODING_PROFILE_TOOLS = new Set([
   'get_project_start_context', 'repo_read_snapshot', 'get_repo_context_bundle', 'get_repo_context_delta',
   'get_repo_inspection_index', 'get_repo_semantic_index', 'list_local_files', 'read_local_file', 'read_file_snippets_batch',
   'search_local_files', 'write_local_file', 'safe_edit_local_file', 'edit_local_files_batch', 'prepare_edit_plan',
-  'apply_prepared_edit_plan', 'apply_and_verify', 'delete_local_path', 'move_local_path', 'apply_patch', 'run_project_command',
+  'apply_prepared_edit_plan', 'prepare_compact_edit', 'apply_prepared_edit', 'apply_and_verify', 'delete_local_path', 'move_local_path', 'apply_patch', 'run_project_command',
   'parse_test_report', 'get_git_status', 'get_git_diff', 'get_git_log', 'get_git_show', 'get_git_branch', 'get_git_sync_status',
   'get_change_summary', 'ensure_git_branch', 'commit_git_changes', 'push_git_branch', 'get_agent_task_context', 'get_agent_context',
   'get_task', 'move_task_to_status', 'complete_task_review', 'get_tool_job_status', 'get_tool_job_log', 'get_tool_job_result',

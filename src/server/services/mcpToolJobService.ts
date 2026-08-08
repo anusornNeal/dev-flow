@@ -7,6 +7,7 @@ import { isDevFlowRestartPending, readDevFlowRestartState } from '../../lib/devF
 import { getRepoRevisionForRoot } from './repoRevisionService';
 import { applyPreparedEditPlan, prepareEditPlan } from './preparedEditService';
 import { applyAndVerifyAsync } from './applyAndVerifyService';
+import { prepareCompactEdit } from './stenoEditProtocolService';
 
 // Import async runners (we will define these later in their respective files)
 import { runProjectCommandAsync } from './projectCommandService';
@@ -485,6 +486,10 @@ async function startJob(entry: QueueEntry) {
       result = prepareEditPlan(entry.state, entry.args);
     } else if (entry.toolName === 'apply_prepared_edit_plan') {
       result = applyPreparedEditPlan(entry.args);
+    } else if (entry.toolName === 'prepare_compact_edit') {
+      result = prepareCompactEdit(entry.state, entry.args);
+    } else if (entry.toolName === 'apply_prepared_edit') {
+      result = applyPreparedEditPlan({ editPlanId: entry.args?.editPlanId });
     } else if (entry.toolName === 'apply_and_verify') {
       result = await applyAndVerifyAsync(entry.state, entry.args, logger, (cancelFn) => setJobActiveContext(entry.jobId, cancelFn));
     } else if (entry.toolName === 'delete_local_path') {

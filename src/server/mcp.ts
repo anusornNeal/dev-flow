@@ -186,6 +186,7 @@ export function createDevFlowMcpServer(baseUrl: string) {
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const toolName = request.params.name;
     const args = (request.params.arguments || {}) as Record<string, any>;
+    const inputBytes = Buffer.byteLength(JSON.stringify(args), 'utf8');
     const tool = getToolDefinitionByName(toolName);
     const correlationId = createCorrelationId('mcp');
 
@@ -276,6 +277,7 @@ export function createDevFlowMcpServer(baseUrl: string) {
       status: response.status,
       durationMs,
       responseBytes,
+      inputBytes,
       cacheHit: parsedBody && typeof parsedBody === 'object' && (parsedBody as any).cache?.hit === true,
       processSpawns: parsedBody && typeof parsedBody === 'object' ? Number((parsedBody as any).processSpawns || 0) : 0,
     });

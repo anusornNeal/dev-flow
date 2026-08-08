@@ -12,13 +12,22 @@ interface ToolCallInput {
   status: number;
   durationMs: number;
   responseBytes?: number;
+  inputBytes?: number;
   cacheHit?: boolean;
   phase?: string;
   processSpawns?: number;
   timestamp?: number;
 }
 
-interface ToolCallRecord extends ToolCallInput {
+interface ToolCallRecord {
+  toolName: string;
+  status: number;
+  durationMs: number;
+  responseBytes?: number;
+  inputBytes: number;
+  cacheHit?: boolean;
+  phase?: string;
+  processSpawns?: number;
   timestamp: number;
   inputHash: string;
 }
@@ -63,8 +72,16 @@ export function clearToolCallRecords() {
 }
 
 export function recordToolCall(input: ToolCallInput) {
+  const serializedArgs = JSON.stringify(input.args || {});
   records.push({
-    ...input,
+    toolName: input.toolName,
+    status: input.status,
+    durationMs: input.durationMs,
+    responseBytes: input.responseBytes,
+    inputBytes: input.inputBytes ?? Buffer.byteLength(serializedArgs, 'utf8'),
+    cacheHit: input.cacheHit,
+    phase: input.phase,
+    processSpawns: input.processSpawns,
     timestamp: input.timestamp ?? Date.now(),
     inputHash: hashText(stableStringify(input.args || {})),
   });
@@ -94,6 +111,9 @@ export function getToolCallSummary(options?: { now?: number; windowMs?: number }
     totalDurationMs: number;
     durationSamples: number[];
     responseBytes: number;
+    totalInputBytes: number;
+    avgInputBytes: number;
+    maxInputBytes: number;
     cacheHitCount: number;
     processSpawns: number;
     phases: Record<string, number>;
@@ -109,6 +129,9 @@ export function getToolCallSummary(options?: { now?: number; windowMs?: number }
       totalDurationMs: 0,
       durationSamples: [],
       responseBytes: 0,
+      totalInputBytes: 0,
+      avgInputBytes: 0,
+      maxInputBytes: 0,
       cacheHitCount: 0,
       processSpawns: 0,
       phases: {},
@@ -118,6 +141,9 @@ export function getToolCallSummary(options?: { now?: number; windowMs?: number }
     tool.totalDurationMs += record.durationMs;
     tool.durationSamples.push(record.durationMs);
     tool.responseBytes += Number(record.responseBytes || 0);
+    tool.totalInputBytes += record.inputBytes;
+    tool.avgInputBytes = Math.round(tool.totalInputBytes / tool.count);
+    tool.maxInputBytes = Math.max(tool.maxInputBytes, record.inputBytes);
     tool.cacheHitCount += record.cacheHit === true ? 1 : 0;
     tool.processSpawns += Number(record.processSpawns || 0);
     if (record.phase) tool.phases[record.phase] = (tool.phases[record.phase] || 0) + 1;
@@ -169,6 +195,7 @@ export function getToolCallSummary(options?: { now?: number; windowMs?: number }
       status: record.status,
       durationMs: record.durationMs,
       responseBytes: Number(record.responseBytes || 0),
+      inputBytes: record.inputBytes,
       cacheHit: record.cacheHit === true,
       phase: record.phase,
       processSpawns: Number(record.processSpawns || 0),

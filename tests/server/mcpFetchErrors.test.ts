@@ -4,6 +4,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createDevFlowMcpServer } from '../../src/server/mcp.js';
 
+const previousToolProfile = process.env.DEVFLOW_MCP_TOOL_PROFILE;
+test.before(() => {
+  process.env.DEVFLOW_MCP_TOOL_PROFILE = 'full';
+});
+test.after(() => {
+  if (previousToolProfile === undefined) delete process.env.DEVFLOW_MCP_TOOL_PROFILE;
+  else process.env.DEVFLOW_MCP_TOOL_PROFILE = previousToolProfile;
+});
+
 test('mcp server handles ECONNREFUSED fetch errors without crashing', async (t) => {
   const originalFetch = global.fetch;
 

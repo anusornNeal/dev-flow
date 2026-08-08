@@ -45,6 +45,19 @@ test('getWorkflowHealth returns ok for a clean repo', () => {
   assert.equal(result.capabilities.keyToolsPresent.get_repo_context_bundle, true);
 });
 
+test('getWorkflowHealth reports fallback search backend when ripgrep is unavailable', () => {
+  const repo = createRepo('search-backend');
+  const previousPath = process.env.PATH;
+  process.env.PATH = '';
+  try {
+    const result = getWorkflowHealth(stateFor(repo), { projectId: 'project-health' });
+    assert.equal(result.capabilities.search.backend, 'fallback');
+    assert.equal(result.capabilities.search.fallbackAvailable, true);
+  } finally {
+    process.env.PATH = previousPath;
+  }
+});
+
 test('getWorkflowHealth warns for a dirty repo', () => {
   const repo = createRepo('dirty');
   fs.writeFileSync(path.join(repo, 'dirty.txt'), 'dirty\n');

@@ -15,12 +15,14 @@ Use these before writing implementation-ready cards:
 - `get_project_atlas`: compact project knowledge graph for architecture, onboarding, unclear targetFiles, cross-module impact, module boundaries, and read order. Use modes `compact`, `standard`, `agent-context`, `chatgpt-context`, `task-focused`, or `diff-impact`; keep it companion-only after `get_repo_context_bundle`, and never let stale/noisy/inferred Atlas summaries silently override explicit targetFiles or exact local reads.
 - `get_repo_inspection_index`: cached repo index for likely files, classes, composables, functions, routes, mappers, helpers, and tests. Use it as a targeted fallback when the repo context bundle is unavailable or insufficient.
 - `read_file_snippets_batch`: read several focused local file ranges in one round trip after the bundle/index identifies likely files.
-- `read_local_file`: read one exact local file or line range before editing; preserve returned file revision/hash when a write tool can guard against stale edits.
-- `edit_local_files_batch`: guarded multi-file anchored edit tool. Dry-run first, then apply after the preview matches intent.
+- `read_local_file`: read one exact local file or line range before editing; request `includeFileRef=true` when preparing a Steno edit.
+- `prepare_compact_edit` + `apply_prepared_edit`: preferred compact edit flow for supported anchored changes. Preparation is the no-write preview; apply only the returned plan id and re-read/re-prepare stale plans.
+- `apply_and_verify`: composite fast path for supported prepared/structured edits when mutation, diff capture, and risk-aware verification can safely run together.
+- `edit_local_files_batch`: guarded multi-file anchored fallback. Dry-run first, then apply after the preview matches intent.
 - `safe_edit_local_file`: focused local edit tool for small anchored changes in large files. Prefer it over full-file writes for route, contract, and service files.
 - `apply_patch`: compact unified-diff tool for stable, small patches. Use dry-run/check before apply.
 - `write_local_file`: create new files or perform small full-file replacements only when complete content is known. Avoid it for large source files when anchored edits are possible.
-- `run_project_command`: run allowlisted verification presets such as `typecheck`, `test`, `lint`, `build`, or `verify` after local edits.
+- `run_project_command`: run allowlisted verification presets after local edits. Prefer the smallest risk-matched FAST/SAFE evidence; use FULL for required final integration/review gates and `forceFresh` when fresh evidence is required.
 - `commit_git_changes`: commit one small verified scope. Use dry-run first and stage only intended files. Never push.
 - `validate_task_quality`: preflight the card before `create_task` or `update_task`. It blocks implementation-ready cards that still depend on Jira/source links, lack focused `targetFiles`, or lack an `Implementation map` in `repoContext`.
 - `open_task_bug`: create an embedded bug thread under an existing task for defect feedback, review failures, or user reports like “เปิดบัค”. Use this instead of `create_task` when the work belongs to an existing card.

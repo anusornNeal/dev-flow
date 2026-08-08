@@ -52,6 +52,8 @@ Use `get_project_atlas` only as a review companion when target files, implementa
 
 For large Figma files, read one node at a time. Separate file-access, node-access, and design-spec failures instead of treating all failures as a connection or permission problem.
 
+For verification evidence, targeted FAST/SAFE checks and valid cached evidence may support iteration, but they do not replace a required final FULL gate. When fresh proof is required for review, run it with `forceFresh` (directly or through the supported smart verification flow) before approval.
+
 ## Branch and implementation review
 
 For local branch review:
@@ -213,7 +215,7 @@ ready-for-review -> in-progress
 When review finds a defect, inspect existing embedded bug threads first:
 
 - update or reopen the existing thread when the root cause is the same,
-- open a new embedded bug only for a distinct root cause,
+- use `open_task_bug` only for a distinct root cause that needs a new embedded bug thread,
 - archive invalid or obsolete threads,
 - do not create a separate top-level task unless explicitly requested.
 

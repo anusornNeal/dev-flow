@@ -7,6 +7,7 @@ const authoringCore = fs.readFileSync(path.resolve('skills/01-authoring-core.md'
 const schemaReference = fs.readFileSync(path.resolve('skills/02-schema-reference.md'), 'utf8');
 const skillRouter = fs.readFileSync(path.resolve('skills/00-skill-router.md'), 'utf8');
 const reviewerCore = fs.readFileSync(path.resolve('skills/03-reviewer-core.md'), 'utf8');
+const executionRules = fs.readFileSync(path.resolve('skills/prompt.execution-rules.md'), 'utf8');
 const examples = fs.readFileSync(path.resolve('skills/04-examples.md'), 'utf8');
 
 test('authoring core requires targeted repo inspection and implementation maps', () => {
@@ -61,10 +62,24 @@ test('authoring skills describe Atlas as selective companion context', () => {
   assert.match(authoringCore, /Use `get_project_atlas` as a companion, not a replacement/);
   assert.match(authoringCore, /verified Atlas facts/);
   assert.match(authoringCore, /do not override them silently/);
-  assert.match(schemaReference, /modes `compact`, `standard`, `agent-context`, `chatgpt-context`, or `task-focused`/);
-  assert.match(reviewerCore, /vague targetFiles/);
+  assert.match(schemaReference, /modes `compact`, `standard`, `agent-context`, `chatgpt-context`, `task-focused`, or `diff-impact`/);
+  assert.match(reviewerCore, /target files, implementation maps, module boundaries/);
   assert.match(reviewerCore, /module boundaries/);
   assert.match(examples, /Atlas-assisted card/);
+});
+
+test('DevFlow execution guidance prefers Steno and smart verification lanes', () => {
+  assert.match(skillRouter, /prepare_compact_edit/);
+  assert.match(skillRouter, /apply_prepared_edit/);
+  assert.match(skillRouter, /apply_and_verify/);
+  assert.match(skillRouter, /repo-relative paths/);
+  assert.match(skillRouter, /absolute local repo paths/);
+  assert.match(authoringCore, /smart verification/i);
+  assert.match(executionRules, /apply_and_verify/);
+  assert.match(executionRules, /FAST/);
+  assert.match(executionRules, /SAFE/);
+  assert.match(executionRules, /FULL/);
+  assert.match(executionRules, /forceFresh/);
 });
 
 test('authoring skills route existing task defects to embedded bug threads', () => {

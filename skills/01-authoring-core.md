@@ -247,6 +247,15 @@ Before writing files:
 - Do not retry the same failed write payload unchanged. Read the error, adjust the anchor/context/tool, then try a new payload.
 - Steno Edit is transport shorthand, not a source-language dictionary. Do not invent global, repository-specific, or language-specific token dictionaries; fall back to `safe_edit_local_file`, `edit_local_files_batch`, or `apply_patch` when compact preparation is not the clearest safe path.
 
+### Smart verification workflow
+
+Use risk-matched verification instead of rerunning the whole repository after every edit:
+- **FAST**: smallest targeted non-FULL evidence during tight edit loops. Semantic duplicates such as equivalent compiler scripts should count once.
+- **SAFE**: broader focused checks when shared helpers, contracts, persistence, workflow, or multiple files are affected.
+- **FULL**: repository-wide/final integration gate when the card or review requires it. Do not weaken or remove coverage to make FULL faster.
+- Prefer `apply_and_verify` when the edit shape is supported and it can safely combine apply + diff + verification.
+- Cached/single-flight evidence is acceptable for iterative deterministic checks, but use `forceFresh` when the final review gate requires fresh proof.
+
 After writing files:
 - Inspect `get_git_diff` or targeted file snippets before claiming the edit is correct.
 - Run the most targeted available verification first; run the broader `test`/`verify` preset when the change touches shared workflow, skill, schema, queue, or repository tooling.

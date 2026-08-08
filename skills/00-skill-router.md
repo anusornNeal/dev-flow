@@ -10,6 +10,8 @@ Do not load all skills by default. Load only the minimal set required by the tas
 
 Master authoring skills are the source of truth. Do not depend on deprecated custom workflow skills when an equivalent master rule exists.
 
+Do not hardcode developer-specific absolute local repo paths in master skills or portable repository metadata. Persist repo-relative paths and resolve the current project/runtime root at execution time.
+
 ## When writing or updating a DevFlow card
 
 Load:
@@ -71,9 +73,10 @@ Load:
 Use:
 - `get_repo_context_bundle` first when a project is known.
 - `get_project_atlas` only for architecture/project-map, onboarding, unclear target files, cross-module impact, module boundaries, or read order.
-- Exact local file reads before writing existing files.
-- Anchored edits with dry-run before apply.
-- `run_project_command` after edits.
+- Read existing edit targets with `read_local_file(includeFileRef=true)` when available.
+- Prefer Steno Edit: `prepare_compact_edit` is the no-write preview and `apply_prepared_edit` applies only the returned plan id. Re-read and re-prepare stale, expired, or consumed plans.
+- Use `apply_and_verify` when its supported prepared/structured edit path can safely combine mutation, diff capture, and risk-aware verification.
+- Otherwise run the smallest targeted `run_project_command`; use `forceFresh` when final evidence must not be reused.
 - `commit_git_changes` dry-run before the real commit.
 
 Do not retry the same failed payload unchanged. Inspect the error and change the payload, tool, identifier, or target context first.

@@ -1,0 +1,270 @@
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { getDevFlowWorkspacesDir } from '../../lib/devFlowPaths';
+import { createApiError } from './api';
+
+export type SessionWorkspaceState = 'ready' | 'active' | 'integration-required';
+
+export type SessionWorkspace = {
+  workspaceId: string;
+  sessionIdHash: string;
+  projectId: string;
+  projectRoot: string;
+  root: string;
+  branch: string;
+  baseBranch: string;
+  baseRevision: string;
+  state: SessionWorkspaceState;
+  createdAt: string;
+  lastUsedAt: string;
+  expiresAt: string;
+};
+
+const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;
+const activeWorkspaceRefs = new Map<string, number>();
+const memoryRegistry = new Map<string, SessionWorkspace>();
+
+function safeSegment(value: string) {
+  const normalized = value.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48);
+  return normalized || 'workspace';
+}
+
+function workspaceIdFor(projectId: string, sessionId: string) {
+  const digest = crypto.createHash('sha256').update(`${projectId}\u0000${sessionId}`).digest('hex');
+  return `ws_${digest.slice(0, 16)}`;
+}
+
+function sessionHash(sessionId: string) {
+  return crypto.createHash('sha256').update(sessionId).digest('hex').slice(0, 16);
+}
+
+function workspaceRegistryDir() {
+  return path.join(getDevFlowWorkspacesDir(), 'registry');
+}
+
+function workspaceRootsDir() {
+  return path.join(getDevFlowWorkspacesDir(), 'roots');
+}
+
+function metadataPath(workspaceId: string) {
+  return path.join(workspaceRegistryDir(), `${safeSegment(workspaceId)}.json`);
+}
+
+function managedRootFor(projectId: string, workspaceId: string) {
+  return path.join(workspaceRootsDir(), safeSegment(projectId), safeSegment(workspaceId));
+}
+
+function runGit(root: string, args: string[], allowFailure = false) {
+  const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', shell: false, timeout: 30_000 });
+  if (!allowFailure && (result.error || result.status !== 0)) {
+    throw createApiError(500, 'WORKSPACE_GIT_FAILED', `Git workspace command failed: ${result.stderr?.trim() || result.error?.message || args.join(' ')}`, {
+      details: { args, status: result.status },
+    });
+  }
+  return result;
+}
+
+function ensureRepository(root: string) {
+  const result = runGit(root, ['rev-parse', '--show-toplevel'], true);
+  if (result.error || result.status !== 0) {
+    throw createApiError(400, 'WORKSPACE_REPO_INVALID', `Project root '${root}' is not a Git repository.`);
+  }
+  return path.resolve((result.stdout || '').trim());
+}
+
+function branchExists(root: string, branch: string) {
+  const result = runGit(root, ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`], true);
+  return result.status === 0;
+}
+
+function currentBranch(root: string) {
+  return (runGit(root, ['branch', '--show-current']).stdout || '').trim() || 'HEAD';
+}
+
+function currentHead(root: string) {
+  return (runGit(root, ['rev-parse', 'HEAD']).stdout || '').trim();
+}
+
+function canonicalContainment(candidate: string) {
+  const rootsBase = path.resolve(workspaceRootsDir());
+  fs.mkdirSync(rootsBase, { recursive: true });
+  const resolved = path.resolve(candidate);
+  const baseWithSep = rootsBase.endsWith(path.sep) ? rootsBase : `${rootsBase}${path.sep}`;
+  if (resolved === rootsBase || !resolved.startsWith(baseWithSep)) {
+    throw createApiError(403, 'WORKSPACE_PATH_ESCAPE', 'Resolved workspace path is outside the DevFlow-managed workspace area.');
+  }
+  if (fs.existsSync(resolved)) {
+    const realBase = fs.realpathSync.native(rootsBase);
+    const realCandidate = fs.realpathSync.native(resolved);
+    const realBaseWithSep = realBase.endsWith(path.sep) ? realBase : `${realBase}${path.sep}`;
+    if (realCandidate === realBase || !realCandidate.startsWith(realBaseWithSep)) {
+      throw createApiError(403, 'WORKSPACE_PATH_ESCAPE', 'Workspace real path escapes the DevFlow-managed workspace area.');
+    }
+  }
+  return resolved;
+}
+
+function writeMetadata(workspace: SessionWorkspace) {
+  fs.mkdirSync(workspaceRegistryDir(), { recursive: true });
+  const target = metadataPath(workspace.workspaceId);
+  const temp = `${target}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(temp, `${JSON.stringify(workspace, null, 2)}\n`, 'utf8');
+  fs.renameSync(temp, target);
+  memoryRegistry.set(workspace.workspaceId, workspace);
+}
+
+function readMetadata(workspaceId: string) {
+  const cached = memoryRegistry.get(workspaceId);
+  if (cached) return cached;
+  const target = metadataPath(workspaceId);
+  if (!fs.existsSync(target)) return null;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(target, 'utf8')) as SessionWorkspace;
+    if (parsed.workspaceId !== workspaceId) return null;
+    memoryRegistry.set(workspaceId, parsed);
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function touch(workspace: SessionWorkspace) {
+  const now = Date.now();
+  const next: SessionWorkspace = {
+    ...workspace,
+    lastUsedAt: new Date(now).toISOString(),
+    expiresAt: new Date(now + DEFAULT_TTL_MS).toISOString(),
+  };
+  writeMetadata(next);
+  return next;
+}
+
+function validateReusableWorkspace(workspace: SessionWorkspace, projectRoot: string) {
+  if (path.resolve(workspace.projectRoot) !== path.resolve(projectRoot)) return false;
+  const root = canonicalContainment(workspace.root);
+  if (!fs.existsSync(root)) return false;
+  const topLevel = runGit(root, ['rev-parse', '--show-toplevel'], true);
+  if (topLevel.status !== 0) return false;
+  if (path.resolve((topLevel.stdout || '').trim()) !== path.resolve(root)) return false;
+  return currentBranch(root) === workspace.branch;
+}
+
+export function createOrReuseSessionWorkspace(project: { id: string; localPath?: string | null }, sessionId: string) {
+  const cleanSessionId = String(sessionId || '').trim();
+  if (!cleanSessionId) throw createApiError(400, 'SESSION_ID_REQUIRED', 'sessionId is required to create an isolated workspace.');
+  if (!project?.id) throw createApiError(400, 'PROJECT_ID_REQUIRED', 'project.id is required to create an isolated workspace.');
+  const projectRoot = ensureRepository(path.resolve(String(project.localPath || '')));
+  const workspaceId = workspaceIdFor(project.id, cleanSessionId);
+  const existing = readMetadata(workspaceId);
+  if (existing && validateReusableWorkspace(existing, projectRoot)) return touch(existing);
+
+  const root = canonicalContainment(managedRootFor(project.id, workspaceId));
+  const baseBranch = currentBranch(projectRoot);
+  const baseRevision = currentHead(projectRoot);
+  const branch = `devflow/ws/${safeSegment(project.id)}/${sessionHash(cleanSessionId)}`;
+
+  fs.mkdirSync(path.dirname(root), { recursive: true });
+  runGit(projectRoot, ['worktree', 'prune'], true);
+  if (fs.existsSync(root)) {
+    const entries = fs.readdirSync(root);
+    if (entries.length > 0) {
+      throw createApiError(409, 'WORKSPACE_ROOT_OCCUPIED', 'Managed workspace root already exists and is not a reusable Git worktree.', { affectedId: workspaceId });
+    }
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+
+  if (branchExists(projectRoot, branch)) {
+    const add = runGit(projectRoot, ['worktree', 'add', root, branch], true);
+    if (add.status !== 0) {
+      throw createApiError(409, 'WORKSPACE_BRANCH_IN_USE', `Workspace branch '${branch}' already exists or is checked out elsewhere.`, {
+        affectedId: workspaceId,
+        details: add.stderr?.trim(),
+      });
+    }
+  } else {
+    runGit(projectRoot, ['worktree', 'add', '-b', branch, root, baseRevision]);
+  }
+
+  canonicalContainment(root);
+  const now = Date.now();
+  const workspace: SessionWorkspace = {
+    workspaceId,
+    sessionIdHash: sessionHash(cleanSessionId),
+    projectId: project.id,
+    projectRoot,
+    root,
+    branch,
+    baseBranch,
+    baseRevision,
+    state: 'ready',
+    createdAt: new Date(now).toISOString(),
+    lastUsedAt: new Date(now).toISOString(),
+    expiresAt: new Date(now + DEFAULT_TTL_MS).toISOString(),
+  };
+  writeMetadata(workspace);
+  return workspace;
+}
+
+export function resolveSessionWorkspace(workspaceId: string) {
+  const workspace = readMetadata(String(workspaceId || '').trim());
+  if (!workspace) return null;
+  if (!validateReusableWorkspace(workspace, workspace.projectRoot)) return null;
+  return touch(workspace);
+}
+
+export function acquireSessionWorkspace(workspaceId: string) {
+  const workspace = resolveSessionWorkspace(workspaceId);
+  if (!workspace) throw createApiError(404, 'WORKSPACE_NOT_FOUND', `Workspace '${workspaceId}' was not found.`, { affectedId: workspaceId });
+  activeWorkspaceRefs.set(workspaceId, (activeWorkspaceRefs.get(workspaceId) || 0) + 1);
+  if (workspace.state !== 'active') writeMetadata({ ...workspace, state: 'active' });
+  return workspace;
+}
+
+export function releaseSessionWorkspace(workspaceId: string) {
+  const next = Math.max(0, (activeWorkspaceRefs.get(workspaceId) || 0) - 1);
+  if (next === 0) activeWorkspaceRefs.delete(workspaceId);
+  else activeWorkspaceRefs.set(workspaceId, next);
+  const workspace = readMetadata(workspaceId);
+  if (workspace && next === 0 && workspace.state === 'active') writeMetadata({ ...workspace, state: 'ready' });
+}
+
+export function cleanupSessionWorkspace(workspaceId: string, options: { force?: boolean } = {}) {
+  const workspace = readMetadata(String(workspaceId || '').trim());
+  if (!workspace) return { removed: false, reason: 'not-found' };
+  if (!options.force && (activeWorkspaceRefs.get(workspaceId) || 0) > 0) {
+    throw createApiError(409, 'WORKSPACE_ACTIVE', 'Workspace is active and cannot be removed by normal cleanup.', { affectedId: workspaceId });
+  }
+  const root = canonicalContainment(workspace.root);
+  if (fs.existsSync(root) && !options.force) {
+    const dirty = (runGit(root, ['status', '--porcelain', '--untracked-files=all']).stdout || '').trim();
+    if (dirty) throw createApiError(409, 'WORKSPACE_DIRTY', 'Workspace is dirty and cannot be removed by normal cleanup.', { affectedId: workspaceId, details: dirty });
+    if (workspace.state === 'integration-required') {
+      throw createApiError(409, 'WORKSPACE_INTEGRATION_REQUIRED', 'Workspace still requires integration before cleanup.', { affectedId: workspaceId });
+    }
+  }
+  if (fs.existsSync(root)) {
+    const result = runGit(workspace.projectRoot, ['worktree', 'remove', ...(options.force ? ['--force'] : []), root], true);
+    if (result.status !== 0) {
+      throw createApiError(409, 'WORKSPACE_REMOVE_FAILED', 'Git refused to remove the workspace.', { affectedId: workspaceId, details: result.stderr?.trim() });
+    }
+  }
+  fs.rmSync(metadataPath(workspaceId), { force: true });
+  memoryRegistry.delete(workspaceId);
+  activeWorkspaceRefs.delete(workspaceId);
+  return { removed: true, workspaceId, branch: workspace.branch };
+}
+
+export function markSessionWorkspaceIntegrationRequired(workspaceId: string, required = true) {
+  const workspace = readMetadata(workspaceId);
+  if (!workspace) throw createApiError(404, 'WORKSPACE_NOT_FOUND', `Workspace '${workspaceId}' was not found.`, { affectedId: workspaceId });
+  const next = { ...workspace, state: required ? 'integration-required' as const : 'ready' as const };
+  writeMetadata(next);
+  return next;
+}
+
+export function resetSessionWorkspaceRuntimeForTests() {
+  memoryRegistry.clear();
+  activeWorkspaceRefs.clear();
+}

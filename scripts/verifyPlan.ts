@@ -33,6 +33,7 @@ export const VERIFICATION_STEPS: VerificationStep[] = [
   { label: 'mcp fetch errors', command: 'npx', args: ['tsx', '--test', 'tests/server/mcpFetchErrors.test.ts'], stage: 2, parallelSafe: true },
   { label: 'mcp tool job queue', command: 'npx', args: ['tsx', '--test', 'tests/server/mcpToolJobQueue.test.ts'], stage: 2, parallelSafe: true },
   { label: 'project resolution', command: 'npx', args: ['tsx', '--test', 'tests/server/projectResolution.test.ts'], stage: 2, parallelSafe: true },
+  { label: 'session workspace service', command: 'npx', args: ['tsx', '--test', 'tests/server/sessionWorkspaceService.test.ts'], stage: 2, parallelSafe: false },
   { label: 'agent runs', command: 'npm', args: ['run', 'test:agent-runs'], stage: 3, parallelSafe: false },
   { label: 'figma integration', command: 'npm', args: ['run', 'test:figma'], stage: 3, parallelSafe: false },
   { label: 'gateway safety', command: 'npm', args: ['run', 'test:gateway'], stage: 3, parallelSafe: false },

@@ -64,6 +64,8 @@ export const projectIdentifierProperties = {
   repo: { type: 'string', description: 'Repository URL or shorthand.' },
   repoUrl: { type: 'string', description: 'Repository URL.' },
   localPath: { type: 'string', description: 'Absolute local project path.' },
+  sessionId: { type: 'string', description: 'Opaque caller session id. When supplied with a project, DevFlow creates or reuses an isolated managed workspace internally.' },
+  workspaceId: { type: 'string', description: 'Opaque DevFlow workspace id for an isolated session. Callers must not derive or persist its filesystem path.' },
 };
 
 export const taskMutationProperties = {

@@ -8,6 +8,7 @@ import { findProjectByIdentifier } from './taskService';
 import { issueFileRef } from './fileReferenceService';
 import { invalidateRepoReadCaches } from './repoCacheInvalidationService';
 import { searchResolvedLocalFiles, searchResolvedLocalFilesAsync } from './localSearchService';
+import { createOrReuseSessionWorkspace, resolveSessionWorkspace } from './sessionWorkspaceService';
 export { clearLocalFileSearchCache, clearLocalSearchRuntimeState, getLocalSearchRuntimeStatus } from './localSearchService';
 
 const DEFAULT_IGNORED_ENTRY_NAMES = new Set([
@@ -177,6 +178,16 @@ export function resolveProjectRoot(state: AppState, args: Record<string, any>) {
   });
 
   if (identifierProject) {
+    const workspaceId = typeof args.workspaceId === 'string' ? args.workspaceId.trim() : '';
+    if (workspaceId) {
+      const workspace = resolveSessionWorkspace(workspaceId);
+      if (!workspace || workspace.projectId !== identifierProject.id) {
+        throw createApiError(404, 'WORKSPACE_NOT_FOUND', `Workspace '${workspaceId}' was not found for project '${identifierProject.id}'.`, { affectedId: workspaceId });
+      }
+      return workspace.root;
+    }
+    const sessionId = typeof args.sessionId === 'string' ? args.sessionId.trim() : '';
+    if (sessionId) return createOrReuseSessionWorkspace(identifierProject, sessionId).root;
     return identifierProject.localPath || getDevFlowAppRoot();
   }
 

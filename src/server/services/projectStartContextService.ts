@@ -3,7 +3,7 @@ import path from 'path';
 import type { AppState } from '../types';
 import { findProjectByIdentifier } from './taskService';
 import { createApiError } from './api';
-import { listLocalFiles, readLocalFile } from './localFileService';
+import { listLocalFiles, readLocalFile, resolveProjectRoot } from './localFileService';
 import { getGitDiff } from './gitService';
 import { getRepoInspectionIndex } from './repoInspectionIndexService';
 import { registerRepoCacheInvalidator } from './repoCacheInvalidationService';
@@ -42,10 +42,10 @@ function parsePositiveInt(value: unknown, fallback: number, max: number) {
 
 export function getProjectStartContext(state: AppState, args: Record<string, any>) {
   const project = resolveProject(state, args);
-  const root = project.localPath || '';
+  const root = project.localPath ? resolveProjectRoot(state, { ...args, projectId: project.id }) : '';
   const changeWatcher = root ? ensureRepoChangeWatcher(root) : { active: false, degraded: false };
   const topLevel = root
-    ? listLocalFiles(state, { projectId: project.id, path: '.', recursive: false, limit: args.limit || 80 })
+    ? listLocalFiles(state, { ...args, projectId: project.id, path: '.', recursive: false, limit: args.limit || 80 })
     : { count: 0, files: [] };
 
   let git: any = { available: false };
@@ -78,6 +78,8 @@ export function getProjectStartContext(state: AppState, args: Record<string, any
       repoUrl: project.repoUrl,
       localPath: project.localPath,
       taskIdPrefix: project.taskIdPrefix,
+      workspaceId: typeof args.workspaceId === 'string' ? args.workspaceId : undefined,
+      isolatedSession: Boolean(args.sessionId || args.workspaceId),
     },
     git,
     repoRevision,
@@ -108,6 +110,7 @@ export function getRepoReadSnapshot(state: AppState, args: Record<string, any>) 
   const indexLimit = parsePositiveInt(args.limit, 10, 30);
   const start = getProjectStartContext(state, { ...args, projectId: project.id, limit: args.topLevelLimit || 30 });
   const index = getRepoInspectionIndex(state, {
+    ...args,
     projectId: project.id,
     q: query,
     path: args.path,
@@ -119,6 +122,7 @@ export function getRepoReadSnapshot(state: AppState, args: Record<string, any>) 
     let metadata: any = undefined;
     try {
       const fileMetadata = readLocalFile(state, {
+        ...args,
         projectId: project.id,
         filePath: match.path,
         mode: 'metadata',
@@ -202,6 +206,7 @@ export function getRepoContextBundle(state: AppState, args: Record<string, any>)
 
   const start = getProjectStartContext(state, { ...args, projectId: project.id, limit: args.topLevelLimit || 40 });
   const index = getRepoInspectionIndex(state, {
+    ...args,
     projectId: project.id,
     q: query,
     path: args.path,
@@ -212,6 +217,7 @@ export function getRepoContextBundle(state: AppState, args: Record<string, any>)
   const snippets = (index.matches || []).slice(0, snippetLimit).map((match: any) => {
     try {
       const snippet = readLocalFile(state, {
+        ...args,
         projectId: project.id,
         filePath: match.path,
         startLine: 1,
@@ -243,6 +249,7 @@ export function getRepoContextBundle(state: AppState, args: Record<string, any>)
   if (args.includeDiff === true || args.includeDiff === 'true') {
     try {
       const rawDiff = getGitDiff(state, {
+        ...args,
         projectId: project.id,
         path: typeof args.diffPath === 'string' ? args.diffPath : undefined,
       });

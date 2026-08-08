@@ -6,7 +6,11 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-git-commit-'));
-process.env.DEVFLOW_DB_PATH = path.join(tempRoot, 'devflow.db');
+process.env.DEVFLOW_DB_PATH = path.join(os.tmpdir(), `devflow-git-commit-db-${path.basename(tempRoot)}.sqlite`);
+
+const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
+executeAllMigrations();
+const { createProject } = await import('../../src/server/repositories/projectRepository.js');
 
 const { commitGitChanges, getGitStatus, getGitLog, getGitWorkspaceSnapshotForRoot } = await import('../../src/server/services/gitService.js');
 
@@ -31,6 +35,7 @@ function createRepo(name: string) {
   fs.writeFileSync(path.join(repo, 'base.txt'), 'base\n');
   git(repo, ['add', 'base.txt']);
   git(repo, ['commit', '-m', 'initial']);
+  createProject({ id: 'project-git', name: 'Git Fixture', repoUrl: 'https://example.com/git', localPath: repo });
   return repo;
 }
 
@@ -46,7 +51,7 @@ test('commitGitChanges rejects missing commit messages', () => {
   const repo = createRepo('missing-message');
   assert.throws(
     () => commitGitChanges(stateFor(repo), { projectId: 'project-git', stageAll: true, message: '   ' }),
-    /COMMIT_MESSAGE_REQUIRED/,
+    (error: any) => error?.payload?.code === 'COMMIT_MESSAGE_REQUIRED',
   );
 });
 
@@ -54,7 +59,7 @@ test('commitGitChanges rejects an empty working tree', () => {
   const repo = createRepo('empty-tree');
   assert.throws(
     () => commitGitChanges(stateFor(repo), { projectId: 'project-git', stageAll: true, message: 'chore: no changes' }),
-    /NO_CHANGES_TO_COMMIT/,
+    (error: any) => error?.payload?.code === 'NO_CHANGES_TO_COMMIT',
   );
 });
 
@@ -102,7 +107,7 @@ test('git tools accept Windows-style selected file paths and return slash-normal
   fs.writeFileSync(path.join(repo, 'nested', 'dir', 'unselected.txt'), 'unselected\n');
 
   const status = getGitStatus(stateFor(repo), { projectId: 'project-git' });
-  assert.ok(status.files.some((file: any) => file.path === 'nested/dir/selected.txt'));
+  assert.ok(status.files.some((file: any) => file.path.replace(/\\/g, '/') === 'nested/dir/selected.txt'));
 
   const result = commitGitChanges(stateFor(repo), {
     projectId: 'project-git',
@@ -145,7 +150,7 @@ test('commitGitChanges rejects unsafe selected paths', () => {
       files: ['../escape.txt'],
       message: 'feat: unsafe path',
     }),
-    /FILE_ACCESS_DENIED/,
+    (error: any) => error?.payload?.code === 'FILE_ACCESS_DENIED',
   );
 });
 

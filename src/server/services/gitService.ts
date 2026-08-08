@@ -201,7 +201,7 @@ function parsePorcelainStatus(output: string) {
 }
 
 function getStatusFiles(root: string) {
-  return parsePorcelainStatus(runGit(['status', '--porcelain'], root));
+  return parsePorcelainStatus(runGit(['status', '--porcelain', '--untracked-files=all'], root));
 }
 
 export function getChangedGitFilesForRoot(root: string) {

@@ -155,7 +155,7 @@ function stripToolOnlyArgs(args: Record<string, any>, keys: string[]) {
   return copy;
 }
 
-export const DEVFLOW_CONTRACT_VERSION = '2026-08-07.1';
+export const DEVFLOW_CONTRACT_VERSION = '2026-08-08.1';
 
 export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   {

@@ -31,7 +31,7 @@ try {
   const { createProject } = await import('../src/server/repositories/projectRepository.js');
   const { runProjectCommand } = await import('../src/server/services/projectCommandService.js');
   const { applyAndVerifyAsync } = await import('../src/server/services/applyAndVerifyService.js');
-  const { enqueueToolJob, getQueueMetrics, waitForToolJob } = await import('../src/server/services/mcpToolJobService.js');
+  const { enqueueToolJob, getQueueMetrics, getToolJobStatus, waitForToolJob } = await import('../src/server/services/mcpToolJobService.js');
   const { readJobResult } = await import('../src/server/repositories/mcpToolJobRepository.js');
 
   const state: any = {
@@ -92,6 +92,74 @@ try {
     singleFlightHits: afterSingleFlight - beforeSingleFlight,
     underlyingProcessSpawns: Number(firstJobResult?.processSpawns ?? 0),
   };
+
+  const multiChatRoot = path.join(tempRoot, 'multi-chat-repo');
+  fs.mkdirSync(path.join(multiChatRoot, 'src'), { recursive: true });
+  fs.mkdirSync(path.join(multiChatRoot, 'scripts'), { recursive: true });
+  fs.writeFileSync(path.join(multiChatRoot, 'src', 'a.ts'), 'export const needleAlpha = 1;\n', 'utf8');
+  fs.writeFileSync(path.join(multiChatRoot, 'src', 'b.ts'), 'export const needleBeta = 2;\n', 'utf8');
+  fs.writeFileSync(path.join(multiChatRoot, 'src', 'c.ts'), 'export const needleGamma = 3;\n', 'utf8');
+  fs.writeFileSync(path.join(multiChatRoot, 'scripts', 'slow-verify.mjs'), "await new Promise((resolve) => setTimeout(resolve, 2000));\n", 'utf8');
+  fs.writeFileSync(path.join(multiChatRoot, 'package.json'), JSON.stringify({
+    type: 'module',
+    scripts: { typecheck: 'node scripts/slow-verify.mjs' },
+  }, null, 2), 'utf8');
+  git(multiChatRoot, ['init']);
+  git(multiChatRoot, ['config', 'user.name', 'DevFlow Benchmark']);
+  git(multiChatRoot, ['config', 'user.email', 'devflow-benchmark@example.com']);
+  git(multiChatRoot, ['add', '.']);
+  git(multiChatRoot, ['commit', '-m', 'initial']);
+  createProject({ id: 'benchmark-multi-chat', name: 'Multi Chat Benchmark', repoUrl: 'https://example.com/multi-chat', localPath: multiChatRoot });
+  const multiChatState: any = {
+    projectsCache: [{ id: 'benchmark-multi-chat', name: 'Multi Chat Benchmark', repoUrl: 'https://example.com/multi-chat', localPath: multiChatRoot }],
+  };
+
+  const multiChatStartedAt = now();
+  const verifyJob = enqueueToolJob(multiChatState, 'run_project_command', {
+    projectId: 'benchmark-multi-chat',
+    command: 'typecheck',
+    responseMode: 'compact',
+    forceFresh: true,
+  }, 'repo-command');
+  const verifyRunningDeadline = now() + 3000;
+  while (getToolJobStatus(verifyJob.jobId)?.status === 'queued' && now() < verifyRunningDeadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  if (getToolJobStatus(verifyJob.jobId)?.status !== 'running') {
+    throw new Error('Multi-chat benchmark verification did not enter running state.');
+  }
+
+  const readStartedAt = now();
+  const readJobs = [
+    ['needleAlpha', 'alpha'],
+    ['needleBeta', 'beta'],
+    ['needleGamma', 'gamma'],
+  ].map(([query, label]) => enqueueToolJob(multiChatState, 'search_local_files', {
+    projectId: 'benchmark-multi-chat',
+    path: 'src',
+    query,
+    label,
+    singleFlight: false,
+  }, 'repo-read'));
+  await Promise.all(readJobs.map((job) => waitForToolJob(job.jobId, 30_000)));
+  const readWallMs = now() - readStartedAt;
+  const verifyStatusAfterReads = getToolJobStatus(verifyJob.jobId)?.status;
+  const readStatuses = readJobs.map((job) => getToolJobStatus(job.jobId));
+  await waitForToolJob(verifyJob.jobId, 30_000);
+  const verifyStatus = getToolJobStatus(verifyJob.jobId);
+  const multiChat = {
+    ok: verifyStatus?.status === 'succeeded' && readStatuses.every((status) => status?.status === 'succeeded'),
+    wallMs: now() - multiChatStartedAt,
+    verifyRunMs: Number(verifyStatus?.durationMs || 0),
+    verifyWaitMs: Number(verifyStatus?.waitMs || 0),
+    readWallMs,
+    readWaitMs: readStatuses.map((status) => Number(status?.waitMs || 0)),
+    maxReadWaitMs: Math.max(...readStatuses.map((status) => Number(status?.waitMs || 0))),
+    readsFinishedBeforeVerify: verifyStatusAfterReads === 'running',
+  };
+  if (!multiChat.ok || !multiChat.readsFinishedBeforeVerify) {
+    throw new Error(`Multi-chat benchmark failed: ${JSON.stringify(multiChat)}`);
+  }
 
   const targetedRoot = path.join(tempRoot, 'targeted-repo');
   fs.mkdirSync(path.join(targetedRoot, 'src'), { recursive: true });
@@ -167,7 +235,7 @@ try {
     generatedAt: new Date().toISOString(),
     baseline: {
       recentRunProjectCommandP50Ms: 11_987,
-      recentRunProjectCommandP95Ms: 20_130,
+      recentRunProjectCommandP95Ms: 20_130,      preChangeObservedReadQueueWaitMs: 45_722,
       preChangeColdTypecheckMs: 7_336,
       preChangeColdLintMs: 7_391,
       preChangeIncompleteFullVerifyMs: 70_471,
@@ -177,6 +245,7 @@ try {
       warmTypecheck,
       semanticAlias,
       concurrentTypecheck,
+      multiChat,
       targeted,
       full,
     },

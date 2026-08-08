@@ -246,7 +246,7 @@ test('mcp server unwraps async job result envelope for run_project_command', asy
       body = { jobId: 'job-command-1', status: 'queued' };
     } else if (urlText.endsWith('/api/tool-jobs/job-command-1')) {
       body = { jobId: 'job-command-1', status: 'succeeded' };
-    } else if (urlText.endsWith('/api/tool-jobs/job-command-1/result')) {
+    } else if (urlText.includes('/api/tool-jobs/job-command-1/result')) {
       body = {
         jobId: 'job-command-1',
         status: 'succeeded',
@@ -281,8 +281,7 @@ test('mcp server unwraps async job result envelope for run_project_command', asy
   assert.equal(JSON.parse(response.content[0].text).status, 'succeeded');
   assert.deepEqual(requests, [
     'http://127.0.0.1:3000/api/tool-jobs',
-    'http://127.0.0.1:3000/api/tool-jobs/job-command-1',
-    'http://127.0.0.1:3000/api/tool-jobs/job-command-1/result',
+    'http://127.0.0.1:3000/api/tool-jobs/job-command-1/result?waitMs=20000',
   ]);
 });
 
@@ -301,7 +300,7 @@ test('mcp server does not surface null text when async job result is temporarily
       body = { jobId: 'job-missing-result-1', status: 'queued' };
     } else if (urlText.endsWith('/api/tool-jobs/job-missing-result-1')) {
       body = { jobId: 'job-missing-result-1', status: 'succeeded' };
-    } else if (urlText.endsWith('/api/tool-jobs/job-missing-result-1/result')) {
+    } else if (urlText.includes('/api/tool-jobs/job-missing-result-1/result')) {
       body = {
         jobId: 'job-missing-result-1',
         status: 'succeeded',

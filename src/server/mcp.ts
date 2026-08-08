@@ -216,9 +216,40 @@ export function createDevFlowMcpServer(baseUrl: string) {
         toolName,
       );
       if (resultRes.response.ok && resultRes.parsedBody && typeof resultRes.parsedBody === 'object') {
-        const status = (resultRes.parsedBody as any).status;
-        const ready = (resultRes.parsedBody as any).ready === true;
-        const jobResult = (resultRes.parsedBody as any).result;
+        let resultPacket = resultRes.parsedBody as any;
+        const hasWaitShape = 'ready' in resultPacket || 'status' in resultPacket || 'result' in resultPacket;
+
+        if (!hasWaitShape) {
+          const statusRes = await executeHttpRequest(
+            baseUrl,
+            { method: 'GET', path: `/api/tool-jobs/${jobId}` },
+            correlationId,
+            toolName,
+          );
+          if (statusRes.response.ok && statusRes.parsedBody && typeof statusRes.parsedBody === 'object') {
+            const legacyStatus = (statusRes.parsedBody as any).status;
+            const terminal = ['succeeded', 'failed', 'timed_out', 'cancelled', 'interrupted'].includes(legacyStatus);
+            if (terminal) {
+              const legacyResultRes = await executeHttpRequest(
+                baseUrl,
+                { method: 'GET', path: `/api/tool-jobs/${jobId}/result` },
+                correlationId,
+                toolName,
+              );
+              if (legacyResultRes.response.ok && legacyResultRes.parsedBody && typeof legacyResultRes.parsedBody === 'object') {
+                resultPacket = legacyResultRes.parsedBody as any;
+              }
+            } else {
+              resultPacket = { jobId, status: legacyStatus, ready: false, result: null };
+            }
+          }
+        }
+
+        const status = resultPacket.status;
+        const ready = 'ready' in resultPacket
+          ? resultPacket.ready === true
+          : ['succeeded', 'failed', 'timed_out', 'cancelled', 'interrupted'].includes(status);
+        const jobResult = resultPacket.result;
         if (ready && jobResult !== null && jobResult !== undefined) {
           parsedBody = jobResult && typeof jobResult === 'object' && 'result' in jobResult
             ? (jobResult as any).result
@@ -228,6 +259,7 @@ export function createDevFlowMcpServer(baseUrl: string) {
             jobId,
             status,
             ready,
+            result: null,
             code: ready ? 'JOB_RESULT_NOT_READY' : 'JOB_STILL_RUNNING',
             message: ready
               ? `Job ${jobId} reached ${status} but no result payload was available yet.`

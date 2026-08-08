@@ -2555,6 +2555,7 @@ export function getCapabilityCatalog() {
         aliases: tool.aliases || [],
         description,
         lightweight: tool.lightweight === true,
+        executionPolicy: tool.executionPolicy,
         inputSchema: tool.inputSchema,
         outputSchema,
       };

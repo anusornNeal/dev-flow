@@ -17,9 +17,11 @@ import {
   ChevronLeft,
   ChevronRight,
   Settings,
-  Waypoints
+  Waypoints,
+  Search
 } from 'lucide-react';
 import { Task, TaskPriority, Project } from '../types';
+import { SIDEBAR_RAIL_WIDTH, resolveSidebarResize } from './layout/appShellLayout';
 
 interface SidebarProps {
   tasks: Task[];
@@ -34,8 +36,10 @@ interface SidebarProps {
   onOpenSettings: () => void;
   activePage?: 'board' | 'atlas';
   onSetActivePage?: (page: 'board' | 'atlas') => void;
-  isAtlasSidebarCollapsed?: boolean;
-  onToggleAtlasSidebar?: () => void;
+  isCollapsed?: boolean;
+  width?: number;
+  onToggleCollapsed?: () => void;
+  onWidthChange?: (width: number) => void;
 }
 
 export { formatProjectRepoLabel } from './ProjectSwitcher';
@@ -53,8 +57,10 @@ export default function Sidebar({
   onOpenSettings,
   activePage = 'board',
   onSetActivePage,
-  isAtlasSidebarCollapsed = false,
-  onToggleAtlasSidebar,
+  isCollapsed = false,
+  width = 288,
+  onToggleCollapsed,
+  onWidthChange,
 }: SidebarProps) {
   const [hearts, setHearts] = useState<{ id: number; x: number; y: number }[]>([]);
   const [cozySpeak, setCozySpeak] = useState('☕ Fuel configured! Time to inspect some specifications.');
@@ -78,14 +84,18 @@ export default function Sidebar({
   const mediumPriorityCount = mainTasks.filter(t => t.priority === 'medium').length;
   const lowPriorityCount = mainTasks.filter(t => t.priority === 'low').length;
 
-  if (activePage === 'atlas' && isAtlasSidebarCollapsed) {
+  if (isCollapsed) {
     const activeProject = projects.find(p => p.id === activeProjectId);
     return (
-      <aside className="hidden h-full w-16 shrink-0 select-none flex-col border-r border-[#e5d4bb] bg-[#fffdfa] px-2 py-3 dark:border-[#584a3b] dark:bg-[#292119] lg:flex">
+      <aside
+        className="hidden h-full shrink-0 select-none flex-col border-r border-[#e5d4bb] bg-[#fffdfa] px-2 py-3 dark:border-[#584a3b] dark:bg-[#292119] lg:flex"
+        style={{ width: `${SIDEBAR_RAIL_WIDTH}px` }}
+      >
         <button
           type="button"
-          onClick={onToggleAtlasSidebar}
+          onClick={onToggleCollapsed}
           title="Expand sidebar"
+          aria-label="Expand sidebar"
           className="mb-3 flex h-10 w-10 cursor-pointer items-center justify-center rounded-xl border border-[#d8c5aa] bg-[#fff7ec] text-[#a46c24] hover:bg-[#ffeace] dark:border-[#584a3b] dark:bg-[#1e1914] dark:text-[#d6b56d] dark:hover:bg-[#3a2f26]"
         >
           <ChevronRight size={18} />
@@ -98,7 +108,8 @@ export default function Sidebar({
             type="button"
             onClick={() => onSetActivePage?.('atlas')}
             title="Project Atlas"
-            className="flex h-10 w-10 cursor-pointer items-center justify-center rounded-xl border border-[#d89745] bg-[#ffeace] text-[#714a1a] dark:border-[#f0b84d] dark:bg-[#3a2f26] dark:text-[#f3eadf]"
+            aria-label="Project Atlas"
+            className={`flex h-10 w-10 cursor-pointer items-center justify-center rounded-xl border ${activePage === 'atlas' ? 'border-[#d89745] bg-[#ffeace] text-[#714a1a] dark:border-[#f0b84d] dark:bg-[#3a2f26] dark:text-[#f3eadf]' : 'border-[#e5d4bb] bg-[#fff7ec] text-[#a46c24] hover:bg-[#ffeace] dark:border-[#6d5642] dark:bg-[#2b2119] dark:text-[#d6b56d]'}`}
           >
             <Waypoints size={18} />
           </button>
@@ -106,9 +117,19 @@ export default function Sidebar({
             type="button"
             onClick={() => onSetActivePage?.('board')}
             title="Sprint Board"
-            className="flex h-10 w-10 cursor-pointer items-center justify-center rounded-xl border border-[#e5d4bb] bg-[#fff7ec] text-[#a46c24] hover:bg-[#ffeace] dark:border-[#6d5642] dark:bg-[#2b2119] dark:text-[#d6b56d] dark:hover:bg-[#3a2f26]"
+            aria-label="Sprint Board"
+            className={`flex h-10 w-10 cursor-pointer items-center justify-center rounded-xl border ${activePage === 'board' ? 'border-[#d89745] bg-[#ffeace] text-[#714a1a] dark:border-[#f0b84d] dark:bg-[#3a2f26] dark:text-[#f3eadf]' : 'border-[#e5d4bb] bg-[#fff7ec] text-[#a46c24] hover:bg-[#ffeace] dark:border-[#6d5642] dark:bg-[#2b2119] dark:text-[#d6b56d]'}`}
           >
             <FolderGit size={18} />
+          </button>
+          <button
+            type="button"
+            onClick={onToggleCollapsed}
+            title="Search and filters"
+            aria-label="Search and filters"
+            className="flex h-10 w-10 cursor-pointer items-center justify-center rounded-xl border border-[#e5d4bb] bg-[#fff7ec] text-[#a46c24] hover:bg-[#ffeace] dark:border-[#6d5642] dark:bg-[#2b2119] dark:text-[#d6b56d] dark:hover:bg-[#3a2f26]"
+          >
+            <Search size={17} />
           </button>
         </div>
         <div className="mt-4 h-px bg-[#e5d4bb] dark:bg-[#584a3b]" />
@@ -124,6 +145,7 @@ export default function Sidebar({
           type="button"
           onClick={onOpenSettings}
           title="Settings"
+          aria-label="Settings"
           className="mt-auto flex h-10 w-10 cursor-pointer items-center justify-center rounded-xl border border-[#e5d4bb] bg-[#fff7ec] text-[#a46c24] hover:bg-[#ffeace] dark:border-[#6d5642] dark:bg-[#2b2119] dark:text-[#d6b56d] dark:hover:bg-[#3a2f26]"
         >
           <Settings size={17} />
@@ -156,8 +178,26 @@ export default function Sidebar({
     }, 1000);
   };
 
+  const handleResizePointerDown = (event: React.PointerEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = width;
+    const handleMove = (moveEvent: PointerEvent) => {
+      onWidthChange?.(resolveSidebarResize(startWidth, moveEvent.clientX - startX));
+    };
+    const handleUp = () => {
+      window.removeEventListener('pointermove', handleMove);
+      window.removeEventListener('pointerup', handleUp);
+    };
+    window.addEventListener('pointermove', handleMove);
+    window.addEventListener('pointerup', handleUp);
+  };
+
   return (
-    <aside className="w-full bg-[#f4ebd9] lg:w-72 dark:bg-[#292119] border-b lg:border-b-0 lg:border-r border-[#e5d4bb] dark:border-[#584a3b] flex flex-col h-auto lg:h-full shrink-0 select-none">
+    <aside
+      className="relative w-full bg-[#f4ebd9] lg:w-auto dark:bg-[#292119] border-b lg:border-b-0 lg:border-r border-[#e5d4bb] dark:border-[#584a3b] flex flex-col h-auto lg:h-full shrink-0 select-none"
+      style={{ width: `${width}px` }}
+    >
       
       {/* Cozy Warm Mascot Header */}
       <div className="p-6 border-b border-[#e5d4bb] dark:border-[#584a3b] bg-[#ede0c9] dark:bg-[#292119]">
@@ -189,16 +229,15 @@ export default function Sidebar({
                 Minimalist Spec Space
               </span>
             </div>
-            {activePage === 'atlas' && (
-              <button
-                type="button"
-                onClick={onToggleAtlasSidebar}
-                title="Collapse sidebar"
-                className="ml-auto flex h-8 w-8 items-center justify-center rounded-lg border border-[#d8c5aa] bg-[#fff7ec] text-[#a46c24] hover:bg-[#ffeace] dark:border-[#584a3b] dark:bg-[#1e1914] dark:text-[#d6b56d]"
-              >
-                <ChevronLeft size={16} />
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={onToggleCollapsed}
+              title="Collapse sidebar"
+              aria-label="Collapse sidebar"
+              className="ml-auto flex h-8 w-8 items-center justify-center rounded-lg border border-[#d8c5aa] bg-[#fff7ec] text-[#a46c24] hover:bg-[#ffeace] dark:border-[#584a3b] dark:bg-[#1e1914] dark:text-[#d6b56d]"
+            >
+              <ChevronLeft size={16} />
+            </button>
           </div>
 
           {/* Dialog Bubble */}
@@ -361,6 +400,19 @@ export default function Sidebar({
         </button>
       </div>
       
+      <button
+        type="button"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize sidebar"
+        title="Drag to resize sidebar"
+        onPointerDown={handleResizePointerDown}
+        onKeyDown={(event) => {
+          if (event.key === 'ArrowLeft') onWidthChange?.(resolveSidebarResize(width, -16));
+          if (event.key === 'ArrowRight') onWidthChange?.(resolveSidebarResize(width, 16));
+        }}
+        className="absolute right-[-4px] top-0 hidden h-full w-2 cursor-col-resize bg-transparent outline-none after:absolute after:left-1/2 after:top-0 after:h-full after:w-px after:-translate-x-1/2 after:bg-transparent hover:after:bg-[#d89745] focus-visible:after:bg-[#d89745] lg:block"
+      />
     </aside>
   );
 }

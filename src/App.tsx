@@ -31,6 +31,12 @@ import { BOARD_COLUMNS } from './app/boardColumns';
 import { filterBoardTasks } from './app/taskFilters';
 import { useActiveProjectBootstrap } from './app/useActiveProjectBootstrap';
 import { useAppTheme } from './app/useAppTheme';
+import {
+  SIDEBAR_LAYOUT_STORAGE_KEY,
+  clampSidebarWidth,
+  resolveInitialSidebarLayout,
+  serializeSidebarLayoutPreference,
+} from './components/layout/appShellLayout';
 
 export default function App() {
   const projectsViewModel = useProjectViewModel();
@@ -74,9 +80,27 @@ export default function App() {
   const [activePage, setActivePage] = useState<'board' | 'atlas'>(() =>
     window.location.hash === '#atlas' ? 'atlas' : 'board'
   );
-  const [isAtlasSidebarCollapsed, setIsAtlasSidebarCollapsed] = useState(true);
+  const [sidebarLayout, setSidebarLayout] = useState(() =>
+    resolveInitialSidebarLayout(window.localStorage, window.innerWidth)
+  );
   
   const { theme, setTheme } = useAppTheme();
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SIDEBAR_LAYOUT_STORAGE_KEY, serializeSidebarLayoutPreference(sidebarLayout));
+    } catch {
+      // Layout preferences are best-effort only.
+    }
+  }, [sidebarLayout]);
+
+  const toggleSidebarCollapsed = () => {
+    setSidebarLayout((current) => ({ ...current, collapsed: !current.collapsed }));
+  };
+
+  const updateSidebarWidth = (width: number) => {
+    setSidebarLayout((current) => ({ ...current, width: clampSidebarWidth(width) }));
+  };
+
 
   useEffect(() => {
     const syncPageFromHash = () => {
@@ -465,12 +489,14 @@ export default function App() {
           onOpenSettings={() => setIsSettingsModalOpen(true)}
           activePage={activePage}
           onSetActivePage={handleSetActivePage}
-          isAtlasSidebarCollapsed={isAtlasSidebarCollapsed}
-          onToggleAtlasSidebar={() => setIsAtlasSidebarCollapsed((current) => !current)}
+          isCollapsed={sidebarLayout.collapsed}
+          width={sidebarLayout.width}
+          onToggleCollapsed={toggleSidebarCollapsed}
+          onWidthChange={updateSidebarWidth}
         />
 
         {/* 2. Main KanBan Board viewport area */}
-        <main className={`flex-1 flex flex-col h-full overflow-y-auto ${activePage === 'atlas' ? 'bg-[#18120d]' : 'bg-[#faf7f0] dark:bg-[#1e1914]'}`}>
+        <main className={`min-w-0 flex-1 flex flex-col h-full overflow-y-auto ${activePage === 'atlas' ? 'bg-[#18120d]' : 'bg-[#faf7f0] dark:bg-[#1e1914]'}`}>
           
           {/* Top Control Navigation bar */}
           <Header

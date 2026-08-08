@@ -48,12 +48,13 @@ function makeTask(): Task {
   };
 }
 
-test('Task Detail renders embedded bug threads in the default view mode', () => {
+test('Task Detail renders embedded bug threads in the normal Bugs tab', () => {
   const task = makeTask();
   const html = renderToStaticMarkup(
     <TaskDetailsDrawer
       task={task}
       allTasks={[task]}
+      initialTab="bugs"
       onClose={() => {}}
       onUpdate={() => {}}
       onDelete={() => {}}

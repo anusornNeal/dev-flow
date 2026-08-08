@@ -45,6 +45,13 @@ export function useTaskDrawerEditState({ task, onUpdate }: UseTaskDrawerEditStat
       setEditedAgent(task.agent || '');
       setEditedModel(task.model || '');
       setEditedEffort(task.effort || '');
+      setEditedReasoning(task.reasoning || '');
+      setEditedAcceptance(task.acceptanceCriteria || '');
+      setEditedVerification(task.verification || '');
+      setEditedRepoContext(task.repoContext || '');
+      setEditedJiraKey(task.jiraKey || '');
+      setEditedRepo(task.repo || '');
+      setEditedSourceUrl(task.sourceUrl || '');
     }
   }, [task, isEditing]);
 

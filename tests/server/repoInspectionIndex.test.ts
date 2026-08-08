@@ -6,7 +6,12 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-repo-index-'));
-process.env.DEVFLOW_DB_PATH = path.join(tempDir, 'devflow.db');
+process.env.DEVFLOW_DB_PATH = path.join(os.tmpdir(), `devflow-repo-index-db-${path.basename(tempDir)}.sqlite`);
+
+const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
+executeAllMigrations();
+const { createProject } = await import('../../src/server/repositories/projectRepository.js');
+createProject({ id: 'project-index-1', name: 'Index Fixture', repoUrl: 'https://example.com/index', localPath: tempDir });
 
 const { getRepoInspectionIndex, clearRepoInspectionIndexCache } = await import('../../src/server/services/repoInspectionIndexService.js');
 const { mergeProjectFileRules } = await import('../../src/server/services/projectRulesService.js');
@@ -97,7 +102,7 @@ test('getRepoInspectionIndex skips heavy folders by default and can opt in with 
   assert.ok(safeDefault.metadata.skippedDirectories.some((entry: string) => entry.includes('node_modules')));
   assert.equal(safeDefault.matches.some((entry: any) => entry.path.includes('node_modules')), false);
   assert.equal(withIgnored.metadata.includeIgnored, true);
-  assert.ok(withIgnored.matches.some((entry: any) => entry.path.includes('node_modules/generated/Generated.ts')));
+  assert.ok(withIgnored.matches.some((entry: any) => entry.path.replace(/\\/g, '/').includes('node_modules/generated/Generated.ts')));
   assert.equal(typeof withIgnored.cache.generatedAt, 'string');
 });
 

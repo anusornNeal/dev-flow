@@ -5,7 +5,12 @@ import os from 'node:os';
 import path from 'node:path';
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-file-edit-batch-'));
-process.env.DEVFLOW_DB_PATH = path.join(tempDir, 'devflow.db');
+process.env.DEVFLOW_DB_PATH = path.join(os.tmpdir(), `devflow-file-edit-batch-db-${path.basename(tempDir)}.sqlite`);
+
+const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
+executeAllMigrations();
+const { createProject } = await import('../../src/server/repositories/projectRepository.js');
+createProject({ id: 'project-file-edit-batch-1', name: 'File Edit Batch Fixture', repoUrl: 'https://example.com/file-edit-batch', localPath: tempDir });
 
 const { editFilesBatch } = await import('../../src/server/services/fileEditBatchService.js');
 
@@ -99,5 +104,5 @@ test('editFilesBatch stops before writing when any preflight edit fails', () => 
 });
 
 test.after(() => {
-  fs.rmSync(tempDir, { recursive: true, force: true });
+  // SQLite remains open for the process on Windows; OS temp cleanup owns tempDir.
 });

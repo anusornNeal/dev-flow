@@ -6,9 +6,14 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-context-handle-'));
-process.env.DEVFLOW_DB_PATH = path.join(tempDir, 'devflow.db');
+process.env.DEVFLOW_DB_PATH = path.join(os.tmpdir(), `devflow-context-handle-db-${path.basename(tempDir)}.sqlite`);
 fs.mkdirSync(path.join(tempDir, 'src'), { recursive: true });
 fs.writeFileSync(path.join(tempDir, 'src', 'Example.ts'), 'export function Example() { return 1; }\n', 'utf8');
+
+const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
+executeAllMigrations();
+const { createProject } = await import('../../src/server/repositories/projectRepository.js');
+createProject({ id: 'project-context-handle', name: 'Context Handle', repoUrl: 'https://example.com/context', localPath: tempDir });
 
 function git(args: string[]) {
   const result = spawnSync('git', args, { cwd: tempDir, encoding: 'utf8', shell: false });
@@ -27,6 +32,7 @@ const state: any = {
 };
 
 const { clearContextHandles, getRepoContextWithHandle } = await import('../../src/server/services/contextHandleService.js');
+const { stopAllRepoChangeWatchers } = await import('../../src/server/services/workspaceChangeWatcherService.js');
 
 test.beforeEach(() => clearContextHandles());
 
@@ -60,6 +66,7 @@ test('context handle returns only changed snippet revisions after a file edit', 
 });
 
 test.after(() => {
+  stopAllRepoChangeWatchers();
   clearContextHandles();
-  fs.rmSync(tempDir, { recursive: true, force: true });
+  // better-sqlite3 holds a process-level handle on Windows; OS temp cleanup owns tempDir.
 });

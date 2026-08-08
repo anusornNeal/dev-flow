@@ -6,7 +6,11 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-apply-verify-'));
-process.env.DEVFLOW_DB_PATH = path.join(tempRoot, 'devflow.db');
+process.env.DEVFLOW_DB_PATH = path.join(os.tmpdir(), `devflow-apply-verify-db-${path.basename(tempRoot)}.sqlite`);
+
+const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
+executeAllMigrations();
+const { createProject } = await import('../../src/server/repositories/projectRepository.js');
 
 const { applyAndVerify, applyAndVerifyAsync } = await import('../../src/server/services/applyAndVerifyService.js');
 
@@ -27,6 +31,7 @@ function fixture(name: string) {
   git(root, ['config', 'user.email', 'devflow@example.com']);
   git(root, ['add', '.']);
   git(root, ['commit', '-m', 'initial']);
+  createProject({ id: 'project-apply-verify', name: 'Apply Verify', repoUrl: 'https://example.com/apply-verify', localPath: root });
   return root;
 }
 
@@ -92,7 +97,12 @@ test('applyAndVerifyAsync runs explicitly resource-isolated verification command
   assert.equal(result.parallelVerification, true);
   assert.equal(result.verification.length, 2);
   assert.equal(result.verification.every((entry: any) => entry.status === 'succeeded'), true);
-  assert.equal(elapsedMs < 1500, true, `expected concurrent verification under 1500ms, got ${elapsedMs}ms`);
+  const summedVerificationMs = result.verification.reduce((sum: number, entry: any) => sum + Number(entry.durationMs || 0), 0);
+  assert.equal(
+    elapsedMs < summedVerificationMs * 0.8,
+    true,
+    `expected concurrent wall time ${elapsedMs}ms to be materially below summed verification time ${summedVerificationMs}ms`,
+  );
 });
 
 test.after(() => fs.rmSync(tempRoot, { recursive: true, force: true }));

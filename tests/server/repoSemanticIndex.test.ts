@@ -6,7 +6,12 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-semantic-index-'));
-process.env.DEVFLOW_DB_PATH = path.join(tempDir, 'devflow.db');
+process.env.DEVFLOW_DB_PATH = path.join(os.tmpdir(), `devflow-semantic-index-db-${path.basename(tempDir)}.sqlite`);
+
+const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
+executeAllMigrations();
+const { createProject } = await import('../../src/server/repositories/projectRepository.js');
+createProject({ id: 'project-semantic', name: 'Semantic', repoUrl: 'https://example.com/semantic', localPath: tempDir });
 fs.mkdirSync(path.join(tempDir, 'src'), { recursive: true });
 fs.writeFileSync(path.join(tempDir, 'src', 'Service.ts'), 'export class Service { run() { return 1; } }\n', 'utf8');
 fs.writeFileSync(path.join(tempDir, 'src', 'Consumer.ts'), "import { Service } from './Service';\nexport function consume(service: Service) { return service.run(); }\n", 'utf8');
@@ -29,14 +34,15 @@ test('semantic index finds definitions, references, imports and related tests fr
   clearRepoInspectionIndexCache();
   const result = getRepoSemanticIndex(state, { projectId: 'project-semantic', symbol: 'Service' });
 
-  assert.deepEqual(result.definitions.map((entry: any) => entry.path), ['src/Service.ts']);
-  assert.ok(result.references.some((entry: any) => entry.path === 'src/Consumer.ts'));
-  assert.ok(result.references.some((entry: any) => entry.path === 'src/Service.test.ts'));
-  assert.ok(result.relatedTests.some((entry: any) => entry.path === 'src/Service.test.ts'));
+  const normalizePath = (value: string) => value.replace(/\\/g, '/');
+  assert.deepEqual(result.definitions.map((entry: any) => normalizePath(entry.path)), ['src/Service.ts']);
+  assert.ok(result.references.some((entry: any) => normalizePath(entry.path) === 'src/Consumer.ts'));
+  assert.ok(result.references.some((entry: any) => normalizePath(entry.path) === 'src/Service.test.ts'));
+  assert.ok(result.relatedTests.some((entry: any) => normalizePath(entry.path) === 'src/Service.test.ts'));
   assert.ok(result.references.some((entry: any) => entry.imports.includes('./Service')));
 });
 
 test.after(() => {
   clearRepoInspectionIndexCache();
-  fs.rmSync(tempDir, { recursive: true, force: true });
+  // SQLite remains open for the process on Windows; OS temp cleanup owns tempDir.
 });

@@ -6,7 +6,11 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-git-diff-'));
-process.env.DEVFLOW_DB_PATH = path.join(tempDir, 'devflow.db');
+process.env.DEVFLOW_DB_PATH = path.join(os.tmpdir(), `devflow-git-diff-db-${path.basename(tempDir)}.sqlite`);
+const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
+executeAllMigrations();
+const { createProject } = await import('../../src/server/repositories/projectRepository.js');
+createProject({ id: 'project-diff', name: 'Diff', repoUrl: 'https://example.com/diff', localPath: tempDir });
 const { getGitDiff } = await import('../../src/server/services/gitService.js');
 
 function git(args: string[]) {
@@ -34,4 +38,6 @@ test('getGitDiff compact mode caps returned diff and reports original bytes', ()
   assert.equal(result.returnedBytes < 5000, true);
 });
 
-test.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
+test.after(() => {
+  // SQLite remains open for the process on Windows; OS temp cleanup owns tempDir.
+});

@@ -6,7 +6,12 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-health-'));
-process.env.DEVFLOW_DB_PATH = path.join(tempRoot, 'devflow.db');
+process.env.DEVFLOW_DB_PATH = path.join(os.tmpdir(), `devflow-health-db-${path.basename(tempRoot)}.sqlite`);
+process.env.DEVFLOW_JOBS_DIR = path.join(os.tmpdir(), `devflow-health-jobs-${path.basename(tempRoot)}`);
+
+const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
+executeAllMigrations();
+const { createProject } = await import('../../src/server/repositories/projectRepository.js');
 
 const { getWorkflowHealth } = await import('../../src/server/services/workflowHealthService.js');
 const { createJob, updateJobStatus } = await import('../../src/server/repositories/mcpToolJobRepository.js');
@@ -26,6 +31,7 @@ function createRepo(name: string) {
   fs.writeFileSync(path.join(repo, 'base.txt'), 'base\n');
   git(repo, ['add', 'base.txt']);
   git(repo, ['commit', '-m', 'initial']);
+  createProject({ id: 'project-health', name: 'Health Fixture', repoUrl: 'https://example.com/health', localPath: repo });
   return repo;
 }
 
@@ -48,14 +54,25 @@ test('getWorkflowHealth returns ok for a clean repo', () => {
 
 test('getWorkflowHealth reports fallback search backend when ripgrep is unavailable', () => {
   const repo = createRepo('search-backend');
-  const previousPath = process.env.PATH;
+  const previous = {
+    path: process.env.PATH,
+    appRoot: process.env.DEVFLOW_APP_ROOT,
+    localAppData: process.env.LOCALAPPDATA,
+    programFiles: process.env.ProgramFiles,
+  };
   process.env.PATH = '';
+  process.env.DEVFLOW_APP_ROOT = path.join(repo, 'missing-app-root');
+  process.env.LOCALAPPDATA = path.join(repo, 'missing-local-app-data');
+  process.env.ProgramFiles = path.join(repo, 'missing-program-files');
   try {
     const result = getWorkflowHealth(stateFor(repo), { projectId: 'project-health' });
     assert.equal(result.capabilities.search.backend, 'fallback');
     assert.equal(result.capabilities.search.fallbackAvailable, true);
   } finally {
-    process.env.PATH = previousPath;
+    process.env.PATH = previous.path;
+    if (previous.appRoot === undefined) delete process.env.DEVFLOW_APP_ROOT; else process.env.DEVFLOW_APP_ROOT = previous.appRoot;
+    if (previous.localAppData === undefined) delete process.env.LOCALAPPDATA; else process.env.LOCALAPPDATA = previous.localAppData;
+    if (previous.programFiles === undefined) delete process.env.ProgramFiles; else process.env.ProgramFiles = previous.programFiles;
   }
 });
 

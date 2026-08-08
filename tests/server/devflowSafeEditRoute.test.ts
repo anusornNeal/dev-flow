@@ -39,6 +39,32 @@ test('devflowContract exposes repo_read_snapshot', () => {
   assert.ok(req.path.startsWith('/api/repo-read-snapshot'));
 });
 
+test('devflowContract exposes prepared edit and composite performance tools', () => {
+  const prepare = getToolDefinitionByName('prepare_edit_plan');
+  const apply = getToolDefinitionByName('apply_prepared_edit_plan');
+  const composite = getToolDefinitionByName('apply_and_verify');
+  const delta = getToolDefinitionByName('get_repo_context_delta');
+  const semantic = getToolDefinitionByName('get_repo_semantic_index');
+
+  assert.ok(prepare);
+  assert.equal(prepare.executionPolicy?.jobKind, 'repo-read');
+  assert.equal(prepare.buildHttpRequest({ projectId: 'project-1', files: [] }).path, '/api/local-files/edit-plans/prepare');
+
+  assert.ok(apply);
+  assert.equal(apply.executionPolicy?.jobKind, 'repo-write');
+  assert.equal(apply.buildHttpRequest({ projectId: 'project-1', editPlanId: 'plan-1' }).path, '/api/local-files/edit-plans/apply');
+
+  assert.ok(composite);
+  assert.equal(composite.executionPolicy?.jobKind, 'repo-command');
+  assert.equal(composite.buildHttpRequest({ projectId: 'project-1', editPlanId: 'plan-1' }).path, '/api/workflows/apply-and-verify');
+
+  assert.ok(delta);
+  assert.ok(delta.buildHttpRequest({ projectId: 'project-1', contextHandle: 'ctx-1' }).path.startsWith('/api/repo-context/delta'));
+
+  assert.ok(semantic);
+  assert.ok(semantic.buildHttpRequest({ projectId: 'project-1', symbol: 'Service' }).path.startsWith('/api/repo-inspection/semantic'));
+});
+
 test('devflowContract exposes apply_project_atlas_agent_update as a serialized write job', () => {
   const tool = getToolDefinitionByName('apply_project_atlas_agent_update');
   assert.ok(tool);

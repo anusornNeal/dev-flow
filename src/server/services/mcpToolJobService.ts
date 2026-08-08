@@ -1,9 +1,12 @@
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import type { AppState } from '../types';
-import { createJob, updateJobStatus, appendJobLog, writeJobResult, getJob, readJobLog, listInterruptedJobs, listRecentJobs, startBackgroundJobCleanup } from '../repositories/mcpToolJobRepository';
+import { createJob, updateJobStatus, appendJobLog, writeJobResult, getJob, readJobLog, readJobResult, listInterruptedJobs, listRecentJobs, startBackgroundJobCleanup } from '../repositories/mcpToolJobRepository';
 import { createApiError, normalizeUnknownError } from './api';
 import { resolveProjectRoot } from './localFileService';
 import { isDevFlowRestartPending, readDevFlowRestartState } from '../../lib/devFlowRestart';
+import { getRepoRevisionForRoot } from './repoRevisionService';
+import { applyPreparedEditPlan, prepareEditPlan } from './preparedEditService';
+import { applyAndVerifyAsync } from './applyAndVerifyService';
 
 // Import async runners (we will define these later in their respective files)
 import { runProjectCommandAsync } from './projectCommandService';
@@ -38,11 +41,113 @@ interface QueueEntry {
   state: AppState;
   toolName: string;
   args: any;
+  singleFlightKey?: string;
 }
 
 const queue: QueueEntry[] = [];
 const activeJobs = new Map<string, { entry: QueueEntry; cancelFn?: () => void }>();
 const testRunners = new Map<string, AsyncRunner>();
+const jobWaiters = new Map<string, Set<(status: ReturnType<typeof getToolJobStatus>) => void>>();
+const singleFlightLeaders = new Map<string, string>();
+const singleFlightFollowers = new Map<string, Set<string>>();
+const followerToLeader = new Map<string, string>();
+let singleFlightHits = 0;
+
+function stableStringify(value: any): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`;
+}
+
+function isTerminalStatus(status?: string) {
+  return status === 'succeeded' || status === 'failed' || status === 'timed_out' || status === 'cancelled';
+}
+
+function notifyJobWaiters(jobId: string) {
+  const status = getToolJobStatus(jobId);
+  if (!status || !isTerminalStatus(status.status)) return;
+  const waiters = jobWaiters.get(jobId);
+  if (!waiters) return;
+  jobWaiters.delete(jobId);
+  for (const resolve of waiters) resolve(status);
+}
+
+function singleFlightKeyFor(state: AppState, toolName: string, args: any, kind: JobKind, resourceKey: string) {
+  const enabled = kind === 'repo-read'
+    ? args?.singleFlight !== false
+    : kind === 'repo-command' && args?.singleFlight === true;
+  if (!enabled || !resourceKey.startsWith('repo:') || resourceKey === 'repo:unknown') return null;
+  let root: string;
+  try {
+    root = resolveProjectRoot(state, args);
+  } catch {
+    return null;
+  }
+  let repoRevision: string;
+  try {
+    repoRevision = getRepoRevisionForRoot(root).token;
+  } catch {
+    return null;
+  }
+  const normalizedArgs = { ...args };
+  delete normalizedArgs.singleFlight;
+  const raw = stableStringify({ resourceKey, repoRevision, toolName, kind, args: normalizedArgs });
+  return createHash('sha256').update(raw).digest('hex');
+}
+
+function finalizeSingleFlight(entry: QueueEntry) {
+  notifyJobWaiters(entry.jobId);
+  const key = entry.singleFlightKey;
+  if (!key || singleFlightLeaders.get(key) !== entry.jobId) return;
+  singleFlightLeaders.delete(key);
+  const followers = singleFlightFollowers.get(entry.jobId);
+  singleFlightFollowers.delete(entry.jobId);
+  if (!followers?.size) return;
+
+  const leaderStatus = getJob(entry.jobId);
+  const leaderResult = readJobResult(entry.jobId)?.result;
+  for (const followerJobId of followers) {
+    followerToLeader.delete(followerJobId);
+    const followerStatus = getJob(followerJobId);
+    if (!followerStatus || followerStatus.status === 'cancelled') {
+      notifyJobWaiters(followerJobId);
+      continue;
+    }
+    if (leaderResult !== null && leaderResult !== undefined) writeJobResult(followerJobId, leaderResult);
+    updateJobStatus(followerJobId, {
+      status: (leaderStatus?.status && isTerminalStatus(leaderStatus.status) ? leaderStatus.status : 'failed') as any,
+      failureSummary: leaderStatus?.failureSummary,
+    });
+    appendJobLog(followerJobId, 'stdout', `\n[Single Flight] Shared result from ${entry.jobId}.\n`);
+    notifyJobWaiters(followerJobId);
+  }
+}
+
+export function waitForToolJob(jobId: string, waitMs = 20_000) {
+  const current = getToolJobStatus(jobId);
+  if (!current || isTerminalStatus(current.status)) return Promise.resolve(current);
+  const boundedWaitMs = Math.max(0, Math.min(30_000, Number(waitMs) || 0));
+  if (boundedWaitMs === 0) return Promise.resolve(current);
+
+  return new Promise<ReturnType<typeof getToolJobStatus>>((resolve) => {
+    let settled = false;
+    let timer: NodeJS.Timeout;
+    const finish = (status: ReturnType<typeof getToolJobStatus>) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      const waiters = jobWaiters.get(jobId);
+      waiters?.delete(finish);
+      if (waiters?.size === 0) jobWaiters.delete(jobId);
+      resolve(status);
+    };
+    const waiters = jobWaiters.get(jobId) || new Set();
+    waiters.add(finish);
+    jobWaiters.set(jobId, waiters);
+    timer = setTimeout(() => finish(getToolJobStatus(jobId)), boundedWaitMs);
+    timer.unref?.();
+  });
+}
 
 interface ResourceStats {
   readers: number;
@@ -157,6 +262,7 @@ export function getQueueMetrics() {
       failedJobs: failedJobs.length,
       averageWaitMs: average(waitSamples),
       averageRunMs: average(runSamples),
+      singleFlightHits,
       failures: failedJobs.slice(0, 10).map(job => ({
         jobId: job.jobId,
         toolName: job.toolName,
@@ -189,11 +295,23 @@ export function getToolJobStatus(jobId: string) {
 }
 
 export function cancelToolJob(jobId: string) {
+  const leaderJobId = followerToLeader.get(jobId);
+  if (leaderJobId) {
+    followerToLeader.delete(jobId);
+    singleFlightFollowers.get(leaderJobId)?.delete(jobId);
+    appendJobLog(jobId, 'stderr', '\n[Job Cancelled] Cancelled single-flight follower without cancelling shared execution.\n');
+    updateJobStatus(jobId, { status: 'cancelled', failureSummary: 'Cancelled single-flight follower.' });
+    notifyJobWaiters(jobId);
+    return true;
+  }
+
   const qIdx = queue.findIndex(q => q.jobId === jobId);
   if (qIdx >= 0) {
-    queue.splice(qIdx, 1);
+    const [cancelledEntry] = queue.splice(qIdx, 1);
     appendJobLog(jobId, 'stderr', '\n[Job Cancelled] Cancelled before start.\n');
     updateJobStatus(jobId, { status: 'cancelled', failureSummary: 'Cancelled before start.' });
+    finalizeSingleFlight(cancelledEntry);
+    notifyJobWaiters(jobId);
     return true;
   }
   
@@ -204,6 +322,7 @@ export function cancelToolJob(jobId: string) {
     }
     appendJobLog(jobId, 'stderr', '\n[Job Cancelled] Cancellation requested.\n');
     updateJobStatus(jobId, { status: 'cancelled', failureSummary: 'Cancellation requested.' });
+    notifyJobWaiters(jobId);
     return true;
   }
   
@@ -235,6 +354,30 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
     resourceKey = 'skill-cache';
   }
 
+  const singleFlightKey = singleFlightKeyFor(state, toolName, args, kind, resourceKey);
+  if (singleFlightKey) {
+    const leaderJobId = singleFlightLeaders.get(singleFlightKey);
+    const leaderStatus = leaderJobId ? getJob(leaderJobId) : null;
+    if (leaderJobId && leaderStatus && !isTerminalStatus(leaderStatus.status)) {
+      const followerJobId = `job-${Date.now()}-${randomUUID().slice(0, 8)}`;
+      createJob(followerJobId, toolName, args, resourceKey);
+      updateJobStatus(followerJobId, { status: 'running' });
+      appendJobLog(followerJobId, 'stdout', `[Single Flight] Following ${leaderJobId}.\n`);
+      const followers = singleFlightFollowers.get(leaderJobId) || new Set<string>();
+      followers.add(followerJobId);
+      singleFlightFollowers.set(leaderJobId, followers);
+      followerToLeader.set(followerJobId, leaderJobId);
+      singleFlightHits += 1;
+      return {
+        jobId: followerJobId,
+        status: 'running' as const,
+        queuePosition: 0,
+        sharedWith: leaderJobId,
+        nextAction: 'Wait for the shared leader result; cancelling this follower does not cancel the leader.',
+      };
+    }
+  }
+
   const jobId = `job-${Date.now()}-${randomUUID().slice(0, 8)}`;
   const job = createJob(jobId, toolName, args, resourceKey);
 
@@ -244,8 +387,10 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
     kind,
     state,
     toolName,
-    args
+    args,
+    singleFlightKey: singleFlightKey || undefined,
   };
+  if (singleFlightKey) singleFlightLeaders.set(singleFlightKey, jobId);
 
   queue.push(entry);
   
@@ -256,7 +401,8 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
     jobId,
     status: job.status,
     queuePosition: queue.length,
-    nextAction: 'Poll get_tool_job_status or get_tool_job_log; call cancel_tool_job to stop the job.'
+    sharedWith: undefined as string | undefined,
+    nextAction: 'Wait for job completion or inspect get_tool_job_status/get_tool_job_log; call cancel_tool_job to stop the job.'
   };
 }
 
@@ -335,6 +481,12 @@ async function startJob(entry: QueueEntry) {
       result = commitGitChanges(entry.state, entry.args);
     } else if (entry.toolName === 'edit_local_files_batch') {
       result = editFilesBatch(entry.state, entry.args);
+    } else if (entry.toolName === 'prepare_edit_plan') {
+      result = prepareEditPlan(entry.state, entry.args);
+    } else if (entry.toolName === 'apply_prepared_edit_plan') {
+      result = applyPreparedEditPlan(entry.args);
+    } else if (entry.toolName === 'apply_and_verify') {
+      result = await applyAndVerifyAsync(entry.state, entry.args, logger, setCancelFn);
     } else if (entry.toolName === 'delete_local_path') {
       result = deleteLocalPath(entry.state, entry.args);
     } else if (entry.toolName === 'move_local_path') {
@@ -396,6 +548,7 @@ async function startJob(entry: QueueEntry) {
   } finally {
     decrementResource(entry.resourceKey, entry.kind);
     activeJobs.delete(entry.jobId);
+    finalizeSingleFlight(entry);
     
     // Process queue to see if anything else can start
     setImmediate(processQueue);

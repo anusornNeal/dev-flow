@@ -1,7 +1,7 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { createCorrelationId } from './services/api';
-import { getCapabilityCatalog, getMcpToolList, getToolDefinitionByName } from './contracts/devflowContract';
+import { getCapabilityCatalog, getMcpToolList, getToolDefinitionByName, type DevFlowToolProfile } from './contracts/devflowContract';
 import { recordToolCall } from './services/mcpToolMonitor';
 
 function buildMcpToolError(params: {
@@ -175,7 +175,13 @@ export function createDevFlowMcpServer(baseUrl: string) {
     { capabilities: { tools: {} } },
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: getMcpToolList() as any }));
+  server.setRequestHandler(ListToolsRequestSchema, async () => {
+    const configuredProfile = String(process.env.DEVFLOW_MCP_TOOL_PROFILE || 'full');
+    const profile: DevFlowToolProfile = ['coding', 'authoring', 'review', 'atlas', 'diagnostics'].includes(configuredProfile)
+      ? configuredProfile as DevFlowToolProfile
+      : 'full';
+    return { tools: getMcpToolList(profile) as any };
+  });
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const toolName = request.params.name;
@@ -202,43 +208,45 @@ export function createDevFlowMcpServer(baseUrl: string) {
 
     if (isAsyncJob && response.ok && parsedBody && typeof parsedBody === 'object' && 'jobId' in parsedBody) {
       const jobId = (parsedBody as any).jobId;
-      const startPoll = Date.now();
-      const maxPollMs = 20000; // wait up to 20s
-
-      while (Date.now() - startPoll < maxPollMs) {
-        const statusRes = await executeHttpRequest(baseUrl, { method: 'GET', path: `/api/tool-jobs/${jobId}` }, correlationId, toolName);
-        if (statusRes.response.ok && statusRes.parsedBody && typeof statusRes.parsedBody === 'object') {
-          const status = (statusRes.parsedBody as any).status;
-          if (status === 'succeeded' || status === 'failed' || status === 'timed_out' || status === 'cancelled' || status === 'interrupted') {
-            const resultRes = await executeHttpRequest(baseUrl, { method: 'GET', path: `/api/tool-jobs/${jobId}/result` }, correlationId, toolName);
-            if (resultRes.response.ok && resultRes.parsedBody && typeof resultRes.parsedBody === 'object' && 'result' in resultRes.parsedBody) {
-              const jobResult = (resultRes.parsedBody as any).result;
-              // readJobResult returns an envelope shaped like { result, patch }. MCP callers expect
-              // the actual tool payload, not the persistence envelope; otherwise completed async
-              // tools can surface as wrapper objects or null-ish text in ChatGPT.
-              if (jobResult === null || jobResult === undefined) {
-                parsedBody = {
-                  jobId,
-                  status,
-                  ready: false,
-                  result: null,
-                  code: 'JOB_RESULT_NOT_READY',
-                  message: `Job ${jobId} reached ${status} but no result payload was available yet. Retry get_tool_job_result.`,
-                };
-              } else {
-                parsedBody = jobResult && typeof jobResult === 'object' && 'result' in jobResult
-                  ? (jobResult as any).result
-                  : jobResult;
-              }
-              durationMs = Date.now() - (startPoll - durationMs);
-            }
-            break;
-          }
+      const waitStartedAt = Date.now();
+      const resultRes = await executeHttpRequest(
+        baseUrl,
+        { method: 'GET', path: `/api/tool-jobs/${jobId}/result?waitMs=20000` },
+        correlationId,
+        toolName,
+      );
+      if (resultRes.response.ok && resultRes.parsedBody && typeof resultRes.parsedBody === 'object') {
+        const status = (resultRes.parsedBody as any).status;
+        const ready = (resultRes.parsedBody as any).ready === true;
+        const jobResult = (resultRes.parsedBody as any).result;
+        if (ready && jobResult !== null && jobResult !== undefined) {
+          parsedBody = jobResult && typeof jobResult === 'object' && 'result' in jobResult
+            ? (jobResult as any).result
+            : jobResult;
+        } else {
+          parsedBody = {
+            jobId,
+            status,
+            ready,
+            code: ready ? 'JOB_RESULT_NOT_READY' : 'JOB_STILL_RUNNING',
+            message: ready
+              ? `Job ${jobId} reached ${status} but no result payload was available yet.`
+              : `Job ${jobId} is still ${status} after the bounded MCP wait.`,
+          };
         }
-        await new Promise(r => setTimeout(r, 1000));
+        durationMs += Date.now() - waitStartedAt;
       }
     }
-    recordToolCall({ toolName, args, status: response.status, durationMs });
+    const responseBytes = Buffer.byteLength(typeof parsedBody === 'string' ? parsedBody : JSON.stringify(parsedBody ?? null), 'utf8');
+    recordToolCall({
+      toolName,
+      args,
+      status: response.status,
+      durationMs,
+      responseBytes,
+      cacheHit: parsedBody && typeof parsedBody === 'object' && (parsedBody as any).cache?.hit === true,
+      processSpawns: parsedBody && typeof parsedBody === 'object' ? Number((parsedBody as any).processSpawns || 0) : 0,
+    });
     console.log(`[mcp] cid=${correlationId} tool=${toolName} status=${response.status} durationMs=${durationMs}`);
 
     if (!response.ok) {

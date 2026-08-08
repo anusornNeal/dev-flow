@@ -1766,8 +1766,8 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
               path: { type: 'string', description: 'Alias for filePath.' },
               edits: { type: 'array', description: 'Focused edit operations for this file.' },
               operations: { type: 'array', description: 'Alias for edits.' },
-              expectedRevision: { type: 'object', description: 'Optional file revision token from read_local_file.' },
-              fileRevision: { type: 'object', description: 'Alias for expectedRevision.' },
+              expectedRevision: { type: 'string', description: 'Optional file revision token from read_local_file.' },
+              fileRevision: { type: 'string', description: 'Alias for expectedRevision.' },
               expectedContentHash: { type: 'string', description: 'Optional SHA-256 hash guard.' },
               expectedSha256: { type: 'string', description: 'Alias for expectedContentHash.' },
             },
@@ -1787,6 +1787,104 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
     }),
   },
   {
+    name: 'prepare_edit_plan',
+    executionPolicy: { mode: 'job', jobKind: 'repo-read' },
+    description: 'Prepare and validate a structured multi-file edit once, returning a short-lived editPlanId bound to current file revisions. Prefer this when a preview will be applied unchanged.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...projectIdentifierProperties,
+        files: { type: 'array', minItems: 1, items: { type: 'object' }, description: 'Same structured file entries accepted by edit_local_files_batch.' },
+        ttlMs: { type: 'number', description: 'Optional prepared-plan lifetime in milliseconds, bounded by DevFlow.' },
+        maxPayloadBytes: { type: 'number' },
+        maxFileBytes: { type: 'number' },
+      },
+      required: ['files'],
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: (args) => ({ method: 'POST', path: '/api/local-files/edit-plans/prepare', body: args }),
+  },
+  {
+    name: 'apply_prepared_edit_plan',
+    executionPolicy: { mode: 'job', jobKind: 'repo-write' },
+    description: 'Apply a previously prepared editPlanId without resending or recomputing its edit payload. Fails before mutation when any prepared target revision is stale.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...projectIdentifierProperties,
+        editPlanId: { type: 'string', description: 'Short-lived id returned by prepare_edit_plan.' },
+      },
+      required: ['editPlanId'],
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: (args) => ({ method: 'POST', path: '/api/local-files/edit-plans/apply', body: args }),
+  },
+  {
+    name: 'apply_and_verify',
+    executionPolicy: { mode: 'job', jobKind: 'repo-command' },
+    description: 'Composite fast path: apply a prepared plan or structured batch, capture the diff, run a risk-aware verification plan, and return one normalized result.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...projectIdentifierProperties,
+        editPlanId: { type: 'string' },
+        files: { type: 'array', items: { type: 'object' } },
+        lane: { type: 'string', enum: ['fast', 'safe'] },
+        requestedCommands: { type: 'array', items: { type: 'string' }, description: 'Verification preset names available to run_project_command.' },
+        resourceIsolatedCommands: { type: 'array', items: { type: 'string' }, description: 'Commands explicitly proven safe to parallelize by future schedulers.' },
+        forceVerification: { type: 'boolean' },
+        cacheVerificationResults: { type: 'boolean' },
+        timeoutMs: { type: 'number' },
+        maxOutputBytes: { type: 'number' },
+      },
+      anyOf: [{ required: ['editPlanId'] }, { required: ['files'] }],
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: (args) => ({ method: 'POST', path: '/api/workflows/apply-and-verify', body: args }),
+  },
+  {
+    name: 'get_repo_context_delta',
+    description: 'Reuse a repo context handle. Returns NOT_MODIFIED when the relevant repo revision is unchanged, otherwise only changed snippets/removals and compact metadata.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...projectIdentifierProperties,
+        contextHandle: { type: 'string' },
+        q: { type: 'string' },
+        query: { type: 'string' },
+        path: { type: 'string' },
+        limit: { type: 'number' },
+        snippetLimit: { type: 'number' },
+        snippetLines: { type: 'number' },
+        maxSnippetBytes: { type: 'number' },
+        includeDiff: { type: 'boolean' },
+        diffPath: { type: 'string' },
+        maxDiffBytes: { type: 'number' },
+        includeIgnored: { type: 'boolean' },
+      },
+    },
+    outputSchema: { type: 'object' },
+    lightweight: true,
+    buildHttpRequest: (args) => ({ method: 'GET', path: withQuery('/api/repo-context/delta', args) }),
+  },
+  {
+    name: 'get_repo_semantic_index',
+    description: 'Query the existing incremental repo index for exact symbol definitions, lexical references/imports, and likely related tests without repeated text-search/read rounds.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...projectIdentifierProperties,
+        symbol: { type: 'string' },
+        path: { type: 'string' },
+        includeIgnored: { type: 'boolean' },
+      },
+      required: ['symbol'],
+    },
+    outputSchema: { type: 'object' },
+    lightweight: true,
+    buildHttpRequest: (args) => ({ method: 'GET', path: withQuery('/api/repo-inspection/semantic', args) }),
+  },
+  {
     name: 'run_project_command',
     executionPolicy: { mode: 'job', jobKind: 'repo-command' },
     description: 'Run a built-in or repository-defined verification preset inside a resolved project root. Custom presets are loaded from .devflow/commands.yaml or .devflow/commands.json and never use a shell string.',
@@ -1799,6 +1897,10 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
         cwd: { type: 'string', description: 'Optional safe subdirectory under the project root.' },
         timeoutMs: { type: 'number', description: 'Optional timeout in milliseconds, capped at 300000.' },
         maxOutputBytes: { type: 'number', description: 'Optional per-stream stdout/stderr byte limit, capped at 100000.' },
+        cacheResult: { type: 'boolean', description: 'Opt in to revision-safe reuse of a prior successful result for the exact same command/environment.' },
+        cacheTtlMs: { type: 'number', description: 'Optional bounded TTL for cacheResult entries.' },
+        singleFlight: { type: 'boolean', description: 'Allow identical in-flight command requests at the same repo revision to share one execution.' },
+        responseMode: { type: 'string', enum: ['compact', 'standard', 'debug'], description: 'Response density. compact uses a smaller output budget while preserving status/summary metadata.' },
       },
       anyOf: [
         { required: ['command'] },
@@ -1884,7 +1986,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   {
     name: 'search_local_files',
     executionPolicy: { mode: 'job', jobKind: 'repo-read' },
-    description: 'Search for text patterns inside a local project repository using exact match or regex. Powered by ripgrep. Use this for discovery, not for listing directory contents.',
+    description: 'Search for text patterns inside a local project repository using exact match or regex. Uses cached ripgrep resolution when available and a bounded safe fallback when ripgrep is unavailable.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -2284,9 +2386,32 @@ export function getToolSchema(name: string) {
   };
 }
 
-export function getMcpToolList() {
+export type DevFlowToolProfile = 'full' | 'coding' | 'authoring' | 'review' | 'atlas' | 'diagnostics';
+
+const CODING_PROFILE_TOOLS = new Set([
+  'get_project_start_context', 'repo_read_snapshot', 'get_repo_context_bundle', 'get_repo_context_delta',
+  'get_repo_inspection_index', 'get_repo_semantic_index', 'list_local_files', 'read_local_file', 'read_file_snippets_batch',
+  'search_local_files', 'write_local_file', 'safe_edit_local_file', 'edit_local_files_batch', 'prepare_edit_plan',
+  'apply_prepared_edit_plan', 'apply_and_verify', 'delete_local_path', 'move_local_path', 'apply_patch', 'run_project_command',
+  'parse_test_report', 'get_git_status', 'get_git_diff', 'get_git_log', 'get_git_show', 'get_git_branch', 'get_git_sync_status',
+  'get_change_summary', 'ensure_git_branch', 'commit_git_changes', 'push_git_branch', 'get_agent_task_context', 'get_agent_context',
+  'get_task', 'move_task_to_status', 'complete_task_review', 'get_tool_job_status', 'get_tool_job_log', 'get_tool_job_result',
+  'cancel_tool_job', 'devflow_health_check', 'get_tool_call_summary', 'get_devflow_diagnostics',
+]);
+
+function toolAllowedInProfile(name: string, profile: DevFlowToolProfile) {
+  if (profile === 'full') return true;
+  if (profile === 'coding') return CODING_PROFILE_TOOLS.has(name);
+  if (profile === 'atlas') return name.includes('atlas') || ['get_repo_context_bundle', 'read_local_file', 'read_file_snippets_batch', 'search_local_files'].includes(name);
+  if (profile === 'diagnostics') return /health|diagnostic|job|tool_call|restart/.test(name);
+  if (profile === 'review') return /task|review|bug|git|diff|test_report|health/.test(name);
+  return /task|jira|figma|repo_context|repo_inspection|read_local|search_local|authoring|skill/.test(name);
+}
+
+export function getMcpToolList(profile: DevFlowToolProfile = 'full') {
   const tools = [];
   for (const tool of devFlowToolDefinitions) {
+    if (!toolAllowedInProfile(tool.name, profile)) continue;
     let outputSchema = tool.outputSchema;
     let description = tool.description;
 
@@ -2325,6 +2450,17 @@ export function getMcpToolList() {
     }
   }
   return tools;
+}
+
+export function getToolProfileSummary() {
+  const profiles: DevFlowToolProfile[] = ['full', 'coding', 'authoring', 'review', 'atlas', 'diagnostics'];
+  return Object.fromEntries(profiles.map((profile) => {
+    const tools = getMcpToolList(profile);
+    return [profile, {
+      toolCount: tools.length,
+      schemaBytes: Buffer.byteLength(JSON.stringify(tools), 'utf8'),
+    }];
+  })) as Record<DevFlowToolProfile, { toolCount: number; schemaBytes: number }>;
 }
 
 export function getCapabilityCatalog() {

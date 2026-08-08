@@ -355,7 +355,7 @@ test('describeProjectCommand classifies verification access conservatively', () 
   const packageState = stateFor(packageRoot);
 
   assert.equal(describeProjectCommand(packageState, { projectId: 'project-command', command: 'typecheck' }).access, 'verify');
-  assert.equal(describeProjectCommand(packageState, { projectId: 'project-command', command: 'build' }).access, 'verify');
+  assert.equal(describeProjectCommand(packageState, { projectId: 'project-command', command: 'build' }).access, 'write');
 
   const configRoot = createConfigProject('descriptor-access-config', [
     'commands:',

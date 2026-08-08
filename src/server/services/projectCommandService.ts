@@ -295,7 +295,9 @@ function scopeForResolvedCommand(root: string, command: string, resolvedCommand:
 }
 
 function accessForResolvedCommand(resolvedCommand: ResolvedCommand): ProjectCommandAccess {
-  if (resolvedCommand.source === 'package-json') return 'verify';
+  if (resolvedCommand.source === 'package-json') {
+    return resolvedCommand.command === 'build' ? 'write' : 'verify';
+  }
   return resolvedCommand.category === 'test' ? 'verify' : 'write';
 }
 

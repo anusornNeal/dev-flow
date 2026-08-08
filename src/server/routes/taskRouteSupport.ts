@@ -226,7 +226,7 @@ export function resolveTaskBoardListQuery(deps: ApiRouteDeps, req: express.Reque
     status: typeof req.query.status === 'string' ? req.query.status : undefined,
     query: typeof req.query.q === 'string' ? req.query.q.trim() : undefined,
     archived: normalizeFlag(req.query.archived),
-    limit: Number.isFinite(Number(req.query.limit)) ? Math.max(1, Math.min(100, Number(req.query.limit))) : 25,
+    limit: Number.isFinite(Number(req.query.limit)) ? Math.max(1, Math.min(500, Number(req.query.limit))) : 25,
     offset: Number.isFinite(Number(req.query.offset)) ? Math.max(0, Math.floor(Number(req.query.offset))) : 0,
   };
 }

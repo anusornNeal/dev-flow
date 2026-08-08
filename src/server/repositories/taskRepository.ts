@@ -391,7 +391,7 @@ export type TaskBoardPageOptions = {
 
 export function queryTaskBoardPage(options: TaskBoardPageOptions) {
   ensureTaskColumns();
-  const limit = Number.isFinite(Number(options.limit)) ? Math.max(1, Math.min(100, Number(options.limit))) : 25;
+  const limit = Number.isFinite(Number(options.limit)) ? Math.max(1, Math.min(500, Number(options.limit))) : 25;
   const offset = Number.isFinite(Number(options.offset)) ? Math.max(0, Math.floor(Number(options.offset))) : 0;
   const archived = options.archived === true;
   const where: string[] = [archived ? 'archivedAt IS NOT NULL' : 'archivedAt IS NULL'];
@@ -428,9 +428,15 @@ export function queryTaskBoardPage(options: TaskBoardPageOptions) {
   `).all(...params, limit, offset) as any[];
   const runsByTaskId = getAllAgentRunsByTaskId(rows.map((row) => row.id));
   const items = rows.map((row) => parseTaskRow(row, runsByTaskId));
+  const parentIds = rows.map((row) => row.id);
+  const childRows = parentIds.length > 0
+    ? db.prepare(`SELECT * FROM tasks WHERE archivedAt IS NULL AND parentId IN (${parentIds.map(() => '?').join(', ')}) ORDER BY createdAt ASC`).all(...parentIds) as any[]
+    : [];
+  const relatedItems = childRows.map((row) => parseTaskRow(row, new Map()));
   const total = Number(totalRow?.total || 0);
   return {
     items,
+    relatedItems,
     total,
     limit,
     offset,

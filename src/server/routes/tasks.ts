@@ -78,6 +78,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
       return res.json({
         ...page,
         items: page.items.map((task) => toTaskResponse(task, mode)),
+        relatedItems: page.relatedItems.map((task) => toTaskResponse(task, mode)),
         mode,
         archive: boardArchive,
       });

@@ -58,6 +58,30 @@ test('taskRepository.list forwards projectId and status query params', async () 
   assert.match(capturedUrl, /status=in-progress/);
 });
 
+test('taskRepository.listPage returns lane paging metadata and related child tasks', async () => {
+  let capturedUrl = '';
+  (globalThis as any).fetch = async (url: string) => {
+    capturedUrl = url;
+    return new Response(JSON.stringify({
+      items: [{ id: 'parent-1', title: 'Parent', status: 'todo' }],
+      relatedItems: [{ id: 'child-1', title: 'Child', status: 'todo', parentId: 'parent-1' }],
+      total: 60,
+      limit: 25,
+      offset: 25,
+      hasMore: true,
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+
+  const page = await taskRepository.listPage({ projectId: 'p-1', status: 'todo', limit: 25, offset: 25 });
+  assert.match(capturedUrl, /status=todo/);
+  assert.match(capturedUrl, /limit=25/);
+  assert.match(capturedUrl, /offset=25/);
+  assert.equal(page.items[0].id, 'parent-1');
+  assert.equal(page.relatedItems[0].id, 'child-1');
+  assert.equal(page.total, 60);
+  assert.equal(page.hasMore, true);
+});
+
 test('taskRepository.get returns a single DomainTask', async () => {
   mockFetchOnce({ status: 200, body: { id: 't-3', displayId: 'DVF-0003', title: 'c' } });
   const result = await taskRepository.get('t-3');

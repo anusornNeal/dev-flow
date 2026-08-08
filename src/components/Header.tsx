@@ -5,6 +5,7 @@ import ChatGptStarterPromptButton from './ChatGptStarterPromptButton';
 
 interface HeaderProps {
   filteredTasksCount: number;
+  projectSwitcher?: React.ReactNode;
   activePage?: 'board' | 'atlas';
   ngrokUrl: string | null;
   theme: string;
@@ -20,6 +21,7 @@ interface HeaderProps {
 
 export function Header({
   filteredTasksCount,
+  projectSwitcher,
   activePage = 'board',
   ngrokUrl,
   theme,
@@ -51,16 +53,19 @@ export function Header({
 
   return (
     <header className="p-4 md:px-6 md:py-4 bg-white/80 dark:bg-[#292119]/80 backdrop-blur-md border-b border-[#e5d4bb]/50 dark:border-[#584a3b]/50 flex flex-col md:flex-row gap-4 justify-between items-start md:items-center sticky top-0 z-10">
-      <div>
-        <h1 className="text-[#3c2a1a] dark:text-[#f3eadf] font-extrabold font-sans text-lg tracking-tight flex items-center gap-2">
-          <Cat className="text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d] shrink-0" size={18} />
-          {activePage === 'atlas' ? 'Project Atlas' : 'Sprint Backlog'}
-        </h1>
-        <p className="text-[11px] text-[#816b5a] dark:text-[#d6b56d] font-mono mt-0.5 font-medium flex items-center gap-1.5">
-          <span>Pocket Sandbox</span>
-          <span className="w-1 h-1 rounded-full bg-[#dcd0bc] dark:bg-[#d6b56d] dark:bg-[#e0a070]" />
-          <span className="font-bold">{activePage === 'atlas' ? 'knowledge graph' : `${filteredTasksCount} tasks`}</span>
-        </p>
+      <div className="flex min-w-0 flex-col gap-3 xl:flex-row xl:items-center">
+        <div className="shrink-0">
+          <h1 className="text-[#3c2a1a] dark:text-[#f3eadf] font-extrabold font-sans text-lg tracking-tight flex items-center gap-2">
+            <Cat className="text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d] shrink-0" size={18} />
+            {activePage === 'atlas' ? 'Project Atlas' : 'Sprint Backlog'}
+          </h1>
+          <p className="text-[11px] text-[#816b5a] dark:text-[#d6b56d] font-mono mt-0.5 font-medium flex items-center gap-1.5">
+            <span>Pocket Sandbox</span>
+            <span className="w-1 h-1 rounded-full bg-[#dcd0bc] dark:bg-[#d6b56d] dark:bg-[#e0a070]" />
+            <span className="font-bold">{activePage === 'atlas' ? 'knowledge graph' : `${filteredTasksCount} tasks`}</span>
+          </p>
+        </div>
+        {projectSwitcher}
       </div>
 
       <div className="flex flex-wrap items-center justify-end gap-2.5 w-full md:w-auto">

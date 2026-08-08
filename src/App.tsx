@@ -20,6 +20,7 @@ import SettingsModal from './components/SettingsModal';
 import TemplateModal from './components/TemplateModal';
 import ObservabilityModal from './components/ObservabilityModal';
 import { Header } from './components/Header';
+import ProjectSwitcher from './components/ProjectSwitcher';
 import { ProjectAtlasPage } from './components/ProjectAtlasPage';
 import { BoardLane } from './components/BoardLane';
 import BatchImportModal from './components/BatchImportModal';
@@ -455,10 +456,6 @@ export default function App() {
           tasks={tasks.filter(t => t.projectId === activeProjectId)}
           projects={projects}
           activeProjectId={activeProjectId}
-          setActiveProjectId={setActiveProjectId}
-          onCreateProject={handleCreateProject}
-          onDeleteProject={handleDeleteProject}
-          onUpdateProject={handleUpdateProject}
           selectedPriority={selectedPriority}
           setSelectedPriority={setSelectedPriority}
           selectedTag={selectedTag}
@@ -476,22 +473,30 @@ export default function App() {
         <main className={`flex-1 flex flex-col h-full overflow-y-auto ${activePage === 'atlas' ? 'bg-[#18120d]' : 'bg-[#faf7f0] dark:bg-[#1e1914]'}`}>
           
           {/* Top Control Navigation bar */}
-          {activePage !== 'atlas' && (
-            <Header
-              filteredTasksCount={filteredTasks.length}
-              activePage={activePage}
-              ngrokUrl={ngrokUrl}
-              theme={theme}
-              setTheme={setTheme}
-              setIsSettingsModalOpen={setIsSettingsModalOpen}
-              setIsJsonModalOpen={setIsJsonModalOpen}
-              setIsSkillsModalOpen={setIsSkillsModalOpen}
-              setIsTemplateModalOpen={setIsTemplateModalOpen}
-              setIsObservabilityModalOpen={setIsObservabilityModalOpen}
-              setIsCreateModalOpen={setIsCreateModalOpen}
-              setIsBatchModalOpen={setIsBatchModalOpen}
-            />
-          )}
+          <Header
+            filteredTasksCount={filteredTasks.length}
+            activePage={activePage}
+            projectSwitcher={(
+              <ProjectSwitcher
+                projects={projects}
+                activeProjectId={activeProjectId}
+                setActiveProjectId={setActiveProjectId}
+                onCreateProject={handleCreateProject}
+                onDeleteProject={handleDeleteProject}
+                onUpdateProject={handleUpdateProject}
+              />
+            )}
+            ngrokUrl={ngrokUrl}
+            theme={theme}
+            setTheme={setTheme}
+            setIsSettingsModalOpen={setIsSettingsModalOpen}
+            setIsJsonModalOpen={setIsJsonModalOpen}
+            setIsSkillsModalOpen={setIsSkillsModalOpen}
+            setIsTemplateModalOpen={setIsTemplateModalOpen}
+            setIsObservabilityModalOpen={setIsObservabilityModalOpen}
+            setIsCreateModalOpen={setIsCreateModalOpen}
+            setIsBatchModalOpen={setIsBatchModalOpen}
+          />
 
           {persistenceError && (
             <div className="mx-5 mt-4 rounded-2xl border border-[#f0c48f] dark:border-[#584a3b] bg-[#fff7eb] dark:bg-[#292119] px-4 py-3 text-[11px] font-mono font-bold text-[#9a5b13] dark:text-[#f3eadf]">

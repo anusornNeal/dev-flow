@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState } from 'react';
 import { 
   Heart, 
   Filter, 
@@ -11,31 +11,20 @@ import {
   FolderGit, 
   TrendingUp, 
   Flame, 
-  Sparkles,
   Coffee,
   Smile,
   CheckCircle2,
-  ChevronDown,
-  ChevronUp,
   ChevronLeft,
   ChevronRight,
-  Trash2,
-  Plus,
-  ExternalLink,
   Settings,
   Waypoints
 } from 'lucide-react';
 import { Task, TaskPriority, Project } from '../types';
-import ConfirmModal from './ConfirmModal';
 
 interface SidebarProps {
   tasks: Task[];
   projects: Project[];
   activeProjectId: string;
-  setActiveProjectId: (id: string) => void;
-  onCreateProject: (name: string, repoUrl: string, description?: string, localPath?: string, taskIdPrefix?: string) => Promise<boolean>;
-  onDeleteProject: (id: string) => Promise<boolean>;
-  onUpdateProject: (id: string, updates: Partial<Project>) => Promise<boolean>;
   selectedPriority: TaskPriority | 'all';
   setSelectedPriority: (priority: TaskPriority | 'all') => void;
   selectedTag: string | 'all';
@@ -49,18 +38,12 @@ interface SidebarProps {
   onToggleAtlasSidebar?: () => void;
 }
 
-export function formatProjectRepoLabel(repoUrl?: string | null) {
-  return repoUrl?.replace(/^https?:\/\/(www\.)?/, '') || 'No repository URL';
-}
+export { formatProjectRepoLabel } from './ProjectSwitcher';
 
 export default function Sidebar({
   tasks,
   projects,
   activeProjectId,
-  setActiveProjectId,
-  onCreateProject,
-  onDeleteProject,
-  onUpdateProject,
   selectedPriority,
   setSelectedPriority,
   selectedTag,
@@ -75,42 +58,6 @@ export default function Sidebar({
 }: SidebarProps) {
   const [hearts, setHearts] = useState<{ id: number; x: number; y: number }[]>([]);
   const [cozySpeak, setCozySpeak] = useState('☕ Fuel configured! Time to inspect some specifications.');
-  const [isProjectDropdownOpen, setIsProjectDropdownOpen] = useState(false);
-  const [isAddingProject, setIsAddingProject] = useState(false);
-  const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
-  const [newProjectName, setNewProjectName] = useState('');
-  const [newProjectRepoUrl, setNewProjectRepoUrl] = useState('');
-  const [newProjectDesc, setNewProjectDesc] = useState('');
-  const [newProjectLocalPath, setNewProjectLocalPath] = useState('');
-  const [newProjectTaskIdPrefix, setNewProjectTaskIdPrefix] = useState('');
-  const [projectToDelete, setProjectToDelete] = useState<string | null>(null);
-
-  const dropdownRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    function handleClickOutside(event: MouseEvent) {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setIsProjectDropdownOpen(false);
-      }
-    }
-    
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape') {
-        setIsProjectDropdownOpen(false);
-      }
-    }
-
-    if (isProjectDropdownOpen) {
-      document.addEventListener('mousedown', handleClickOutside);
-      document.addEventListener('keydown', handleKeyDown);
-    }
-    
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [isProjectDropdownOpen]);
-  
   // Compute Stats
   const mainTasks = tasks.filter(t => !t.parentId);
   const totalTasks = mainTasks.length;
@@ -260,300 +207,6 @@ export default function Sidebar({
             <p className="relative z-10">{cozySpeak}</p>
           </div>
         </div>
-      </div>
-
-      {/* Current Board Indicator / Interactive Project Selector */}
-      <div className="relative mx-4 my-3">
-        {/* Toggleable Panel Card */}
-        <button
-          onClick={() => {
-            setIsProjectDropdownOpen(!isProjectDropdownOpen);
-            setIsAddingProject(false); // Reset add mode when toggling
-            setEditingProjectId(null);
-          }}
-          type="button"
-          className="w-full text-left p-4 bg-[#fdfaf5] dark:bg-[#292119] hover:bg-[#fffdf8] dark:bg-[#1e1914] dark:hover:bg-[#1e1914] rounded-xl border border-[#e5d4bb] dark:border-[#584a3b] flex items-center justify-between gap-2.5 shadow-xs cursor-pointer transition-all active:scale-[0.99]"
-        >
-          <div className="flex items-center gap-2.5 min-w-0 flex-1">
-            <Sparkles size={15} className="text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d] shrink-0" />
-            <div className="min-w-0 flex-1">
-              <p className="text-[13px] font-extrabold text-[#534135] dark:text-[#f3eadf] truncate" title={projects.find(p => p.id === activeProjectId)?.name}>
-                {projects.find(p => p.id === activeProjectId)?.name || 'Developer Sandbox Repo'}
-              </p>
-              {projects.find(p => p.id === activeProjectId)?.repoUrl && (
-                <p className="text-[9px] text-[#8c7463] dark:text-[#d6b56d] font-sans truncate max-w-full opacity-90 mt-0.5" title={projects.find(p => p.id === activeProjectId)?.repoUrl}>
-                  {formatProjectRepoLabel(projects.find(p => p.id === activeProjectId)?.repoUrl).replace(/^github\.com\//, '')}
-                </p>
-              )}
-              {(projects.find(p => p.id === activeProjectId)?.localPath || projects.find(p => p.id === activeProjectId)?.taskIdPrefix) && (
-                <div className="flex items-center gap-2 mt-1 text-[8px] text-[#9b8271] dark:text-[#d6b56d] font-mono opacity-80">
-                  {projects.find(p => p.id === activeProjectId)?.localPath && (
-                    <span className="truncate max-w-[140px]" title={projects.find(p => p.id === activeProjectId)?.localPath}>
-                      📂 {projects.find(p => p.id === activeProjectId)?.localPath}
-                    </span>
-                  )}
-                  {projects.find(p => p.id === activeProjectId)?.taskIdPrefix && (
-                    <span className="shrink-0 bg-[#ebdcb9]/40 dark:bg-[#584a3b]/40 px-1 rounded">
-                      🏷️ {projects.find(p => p.id === activeProjectId)?.taskIdPrefix}
-                    </span>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-          {isProjectDropdownOpen ? (
-            <ChevronUp size={14} className="text-[#8c7463] dark:text-[#f3eadf]" />
-          ) : (
-            <ChevronDown size={14} className="text-[#8c7463] dark:text-[#f3eadf]" />
-          )}
-        </button>
-
-        {isProjectDropdownOpen && (
-          <div ref={dropdownRef} className="absolute top-[calc(100%+8px)] left-0 w-80 z-50 bg-[#fffefd] dark:bg-[#292119] border border-[#d8c5aa] dark:border-[#584a3b] rounded-xl shadow-xl p-4 space-y-3 text-xs font-sans">
-            {!isAddingProject ? (
-              <>
-                <p className="text-[10px] text-[#8C7565] dark:text-[#f3eadf] font-bold uppercase tracking-widest border-b border-[#f1e6d4] dark:border-[#584a3b] pb-2 mb-2">
-                  Active Workspace & Repositories
-                </p>
-                <div className="space-y-2.5 max-h-72 overflow-y-auto scrollbar-thin pr-1">
-                  {projects.map((project) => {
-                    const isActive = project.id === activeProjectId;
-                    const isEditing = editingProjectId === project.id;
-                    
-                    if (isEditing) {
-                      return (
-                        <div key={project.id} className="p-3 rounded-lg border border-[#d89745] dark:border-[#e0a070] bg-[#fff9ee] dark:bg-[#292119] mb-1" onClick={(e) => e.stopPropagation()}>
-                          <div className="space-y-2">
-                            <input
-                              type="text"
-                              value={newProjectLocalPath}
-                              onChange={(e) => setNewProjectLocalPath(e.target.value)}
-                              placeholder="Local absolute path"
-                              className="w-full bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] px-2.5 py-1.5 rounded-md text-[10px] outline-none focus:border-[#d4994e] dark:border-[#e0a070] dark:focus:border-[#584a3b] font-mono"
-                            />
-                            <input
-                              type="text"
-                              value={newProjectTaskIdPrefix}
-                              onChange={(e) => setNewProjectTaskIdPrefix(e.target.value)}
-                              placeholder="Task ID Prefix (e.g. DVF)"
-                              className="w-full bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] px-2.5 py-1.5 rounded-md text-[10px] outline-none focus:border-[#d4994e] dark:border-[#e0a070] dark:focus:border-[#584a3b] font-mono"
-                            />
-                            <div className="flex gap-2 mt-1">
-                              <button
-                                onClick={() => setEditingProjectId(null)}
-                                className="flex-1 text-[10px] font-bold border border-[#ebdcb9] dark:border-[#584a3b] py-1.5 rounded hover:bg-white dark:hover:bg-[#292119] text-[#7a6455] dark:text-[#f3eadf] transition-colors"
-                              >Cancel</button>
-                              <button
-                                onClick={async () => {
-                                  const success = await onUpdateProject(project.id, { 
-                                    localPath: newProjectLocalPath,
-                                    taskIdPrefix: newProjectTaskIdPrefix || undefined
-                                  });
-                                  if (success) setEditingProjectId(null);
-                                }}
-                                className="flex-1 text-[10px] bg-[#d89745] dark:bg-[#e0a070] text-white dark:text-[#f3eadf] py-1.5 rounded font-bold hover:bg-[#c08234] dark:bg-[#e0a070] dark:hover:bg-[#d6b56d] dark:bg-[#e0a070] transition-colors"
-                              >Save</button>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    }
-
-                    return (
-                      <div
-                        key={project.id}
-                        onClick={() => {
-                          setActiveProjectId(project.id);
-                          setIsProjectDropdownOpen(false);
-                        }}
-                        className={`p-3 rounded-lg border flex flex-col gap-2 cursor-pointer transition-all ${
-                          isActive
-                            ? 'bg-[#ffeecd] dark:bg-[#292119] border-[#e4be93] dark:border-[#584a3b] text-[#69441a] dark:text-[#f3eadf] shadow-sm'
-                            : 'bg-white dark:bg-[#292119] hover:bg-[#fff9ee] dark:bg-[#1e1914] dark:hover:bg-[#1e1914] border-[#ebdcb9] dark:border-[#584a3b] text-[#55453B] dark:text-[#f3eadf]'
-                        }`}
-                      >
-                        <div className="flex justify-between items-start gap-2">
-                          <div className="min-w-0 flex-1">
-                            <p className="font-extrabold text-[12px] truncate flex items-center gap-1.5 text-[#534135] dark:text-[#f3eadf]">
-                              {isActive && <Sparkles size={12} className="text-[#d89745] dark:text-[#e0a070]" />} {project.name}
-                            </p>
-                            <p className="text-[10px] text-[#917d71] dark:text-[#d6b56d] font-mono truncate mt-0.5" title={project.repoUrl || undefined}>
-                              {formatProjectRepoLabel(project.repoUrl)}
-                            </p>
-                          </div>
-                        </div>
-                        
-                        {(project.localPath || project.taskIdPrefix) && (
-                          <div className="flex flex-wrap gap-2 text-[9px] text-[#b39e90] dark:text-[#d6b56d] font-mono bg-[#fcfaf4] dark:bg-[#1e1914] p-1.5 rounded border border-[#ebdcb9]/50 dark:border-[#584a3b]/50">
-                            {project.localPath && (
-                              <p className="truncate flex-1 min-w-[100px]" title={project.localPath}>
-                                📂 {project.localPath}
-                              </p>
-                            )}
-                            {project.taskIdPrefix && (
-                              <p className="shrink-0 bg-[#ebdcb9]/30 dark:bg-[#584a3b]/30 px-1 rounded text-[#8c7463] dark:text-[#f3eadf]">
-                                🏷️ {project.taskIdPrefix}
-                              </p>
-                            )}
-                          </div>
-                        )}
-                        
-                        {/* Action Buttons Row */}
-                        <div className="flex items-center gap-2 mt-1 pt-2 border-t border-[#ebdcb9]/50 dark:border-[#584a3b]/50" onClick={(e) => e.stopPropagation()}>
-                          <a
-                            href={project.repoUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="flex-1 flex items-center justify-center gap-1.5 p-1.5 bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded text-[#7a6455] dark:text-[#f3eadf] hover:bg-[#fff9ef] hover:text-[#d89745] transition-colors text-[9px] font-bold"
-                            title="Open repository in new tab"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <ExternalLink size={10} /> Open
-                          </a>
-                          
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setNewProjectLocalPath(project.localPath || '');
-                              setNewProjectTaskIdPrefix(project.taskIdPrefix || '');
-                              setEditingProjectId(project.id);
-                            }}
-                            type="button"
-                            className="flex-1 flex items-center justify-center gap-1.5 p-1.5 bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded text-[#7a6455] dark:text-[#f3eadf] hover:bg-[#fff9ef] hover:text-[#d89745] transition-colors cursor-pointer text-[9px] font-bold"
-                            title="Edit project settings"
-                          >
-                            <Settings size={10} /> Settings
-                          </button>
-                          
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setProjectToDelete(project.id);
-                            }}
-                            type="button"
-                            className="flex-1 flex items-center justify-center gap-1.5 p-1.5 bg-[#fff5f5] dark:bg-[#3d2323] border border-[#ffcdcd] dark:border-[#5c3535] rounded text-[#d64545] hover:bg-[#ffebeb] hover:text-[#e02424] transition-colors cursor-pointer text-[9px] font-bold"
-                            title="Delete project"
-                          >
-                            <Trash2 size={10} /> Delete
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-
-                <button
-                  onClick={() => setIsAddingProject(true)}
-                  type="button"
-                  className="w-full mt-3 bg-[#d89745] dark:bg-[#e0a070] hover:bg-[#c08234] dark:bg-[#e0a070] dark:hover:bg-[#d6b56d] dark:bg-[#e0a070] text-white dark:text-[#f3eadf] py-2.5 rounded-lg text-[11px] font-extrabold flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-sm"
-                >
-                  <Plus size={14} /> Bind New Repository
-                </button>
-              </>
-            ) : (
-              <form
-                onSubmit={async (e) => {
-                  e.preventDefault();
-                  if (!newProjectName.trim() || !newProjectRepoUrl.trim()) return;
-                  const success = await onCreateProject(
-                    newProjectName.trim(),
-                    newProjectRepoUrl.trim(),
-                    newProjectDesc.trim(),
-                    newProjectLocalPath.trim(),
-                    newProjectTaskIdPrefix.trim() || undefined
-                  );
-                  if (success) {
-                    setNewProjectName('');
-                    setNewProjectRepoUrl('');
-                    setNewProjectDesc('');
-                    setNewProjectLocalPath('');
-                    setNewProjectTaskIdPrefix('');
-                    setIsAddingProject(false);
-                  }
-                }}
-                className="space-y-3 mt-1"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <p className="text-[10px] text-[#8C7565] dark:text-[#f3eadf] font-bold uppercase tracking-widest border-b border-[#f1e6d4] dark:border-[#584a3b] pb-2">
-                  <Plus size={12} className="inline mr-1" /> Bind New Repository
-                </p>
-                <div className="space-y-2.5 text-[11px]">
-                  <div>
-                    <span className="text-[9px] text-[#8C7565] dark:text-[#f3eadf] font-bold block mb-1">Project Name</span>
-                    <input
-                      type="text"
-                      required
-                      placeholder="e.g. Android Customer App"
-                      value={newProjectName}
-                      onChange={(e) => setNewProjectName(e.target.value)}
-                      className="w-full bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] px-3 py-1.5 rounded-md text-[11px] outline-none focus:border-[#d4994e] dark:border-[#e0a070] dark:focus:border-[#584a3b] font-sans"
-                    />
-                  </div>
-                  <div>
-                    <span className="text-[9px] text-[#8C7565] dark:text-[#f3eadf] font-bold block mb-1">Git Repo URL (HTTPS)</span>
-                    <input
-                      type="url"
-                      required
-                      placeholder="https://github.com/user/repo"
-                      value={newProjectRepoUrl}
-                      onChange={(e) => setNewProjectRepoUrl(e.target.value)}
-                      className="w-full bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] px-3 py-1.5 rounded-md text-[11px] outline-none focus:border-[#d4994e] dark:border-[#e0a070] dark:focus:border-[#584a3b] font-mono"
-                    />
-                  </div>
-                  <div>
-                    <span className="text-[9px] text-[#8C7565] dark:text-[#f3eadf] font-bold block mb-1">Description (Optional)</span>
-                    <input
-                      type="text"
-                      placeholder="Core mobile application"
-                      value={newProjectDesc}
-                      onChange={(e) => setNewProjectDesc(e.target.value)}
-                      className="w-full bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] px-3 py-1.5 rounded-md text-[11px] outline-none focus:border-[#d4994e] dark:border-[#e0a070] dark:focus:border-[#584a3b] font-sans"
-                    />
-                  </div>
-                  <div>
-                    <span className="text-[9px] text-[#8C7565] dark:text-[#f3eadf] font-bold block mb-1">Local Path (Optional)</span>
-                    <input
-                      type="text"
-                      placeholder="Local absolute path"
-                      value={newProjectLocalPath}
-                      onChange={(e) => setNewProjectLocalPath(e.target.value)}
-                      className="w-full bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] px-3 py-1.5 rounded-md text-[11px] outline-none focus:border-[#d4994e] dark:border-[#e0a070] dark:focus:border-[#584a3b] font-mono"
-                    />
-                  </div>
-                  <div>
-                    <span className="text-[9px] text-[#8C7565] dark:text-[#f3eadf] font-bold block mb-1">Task ID Prefix (Optional)</span>
-                    <input
-                      type="text"
-                      placeholder="e.g. DVF"
-                      value={newProjectTaskIdPrefix}
-                      onChange={(e) => setNewProjectTaskIdPrefix(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6))}
-                      className="w-full bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] px-3 py-1.5 rounded-md text-[11px] outline-none focus:border-[#d4994e] dark:border-[#e0a070] dark:focus:border-[#584a3b] font-mono"
-                    />
-                  </div>
-                </div>
-
-                <div className="flex gap-2 pt-2 text-[11px]">
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setIsAddingProject(false);
-                    }}
-                    className="flex-1 font-bold border border-[#ebdcb9] dark:border-[#584a3b] py-2 rounded-md hover:bg-[#fff9ef] dark:bg-[#1e1914] dark:hover:bg-[#292119] text-[#7a6455] dark:text-[#f3eadf] transition-colors"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    className="flex-1 bg-[#d89745] dark:bg-[#e0a070] hover:bg-[#c08234] dark:bg-[#e0a070] dark:hover:bg-[#d6b56d] dark:bg-[#e0a070] text-white dark:text-[#f3eadf] py-2 rounded-md font-extrabold transition-colors shadow-sm"
-                  >
-                    Link Repo
-                  </button>
-                </div>
-              </form>
-            )}
-          </div>
-        )}
       </div>
 
       {/* Stats Section with beautiful orange values */}
@@ -708,18 +361,6 @@ export default function Sidebar({
         </button>
       </div>
       
-      {projectToDelete && (
-        <ConfirmModal
-          title="Delete Project"
-          message={`Are you sure you want to delete project "${projects.find(p => p.id === projectToDelete)?.name}" and all its tasks? This action cannot be undone.`}
-          onConfirm={async () => {
-            await onDeleteProject(projectToDelete);
-            setProjectToDelete(null);
-          }}
-          onCancel={() => setProjectToDelete(null)}
-          confirmText="Delete"
-        />
-      )}
     </aside>
   );
 }

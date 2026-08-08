@@ -1,11 +1,20 @@
-import { spawnSync } from 'child_process';
+import { spawn } from 'child_process';
+import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import fs from 'fs';
-const tempDbDir = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-test-'));
-process.env.DEVFLOW_DB_PATH = path.join(tempDbDir, 'devflow.db');
+import { FULL_VERIFY_PARALLELISM, VERIFICATION_STEPS, type VerificationStep } from './verifyPlan.js';
 
 const MAX_STEP_OUTPUT_BYTES = 20_000;
+const MAX_CAPTURE_BYTES = 10 * 1024 * 1024;
+
+type VerificationStepResult = {
+  step: VerificationStep;
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+  error?: Error;
+  durationMs: number;
+};
 
 function outputBytes(value: string) {
   return Buffer.byteLength(value, 'utf8');
@@ -17,71 +26,130 @@ function capOutput(value: string) {
   return `${Buffer.from(value, 'utf8').subarray(0, MAX_STEP_OUTPUT_BYTES).toString('utf8')}\n[truncated]`;
 }
 
+function appendCaptured(current: string, chunk: Buffer) {
+  const currentBytes = outputBytes(current);
+  if (currentBytes >= MAX_CAPTURE_BYTES) return current;
+  const remaining = MAX_CAPTURE_BYTES - currentBytes;
+  return current + chunk.subarray(0, remaining).toString('utf8');
+}
+
 function emitFailureOutput(label: string, stdout: string, stderr: string) {
   if (stdout.trim()) console.error(`[verify] ${label} stdout:\n${capOutput(stdout)}`);
   if (stderr.trim()) console.error(`[verify] ${label} stderr:\n${capOutput(stderr)}`);
 }
 
-const commands = [
-  { label: 'lint', command: 'npm', args: ['run', 'lint'] },
-  { label: 'devflow restart route', command: 'npx', args: ['tsx', '--test', 'tests/server/devflowRestartRoute.test.ts'] },
-  { label: 'devflow restart contract', command: 'npx', args: ['tsx', '--test', 'tests/server/devflowRestartContract.test.ts'] },
-  { label: 'devflow restart state', command: 'npx', args: ['tsx', '--test', 'tests/server/devflowRestartState.test.ts'] },
-  { label: 'devflow contract', command: 'npx', args: ['tsx', 'scripts/verify-devflow-contract.ts'] },
-  { label: 'project atlas cache', command: 'npx', args: ['tsx', '--test', 'tests/server/projectAtlasCacheService.test.ts'] },
-  { label: 'project atlas agent update', command: 'npx', args: ['tsx', '--test', 'tests/server/projectAtlasAgentUpdateService.test.ts'] },
-  { label: 'project atlas api', command: 'npx', args: ['tsx', '--test', 'tests/server/projectAtlasApiService.test.ts'] },
-  { label: 'project atlas domains', command: 'npx', args: ['tsx', '--test', 'tests/server/projectAtlasDomainService.test.ts'] },
-  { label: 'project atlas exports', command: 'npx', args: ['tsx', '--test', 'tests/server/projectAtlasExport.test.ts'] },
-  { label: 'project atlas impact', command: 'npx', args: ['tsx', '--test', 'tests/server/projectAtlasImpactService.test.ts'] },
-  { label: 'project atlas prompt templates', command: 'npx', args: ['tsx', '--test', 'tests/lib/projectAtlasPromptTemplates.test.ts'] },
-  { label: 'project atlas scanner', command: 'npx', args: ['tsx', '--test', 'tests/server/projectAtlasScannerService.test.ts'] },
-  { label: 'project atlas view model', command: 'npx', args: ['tsx', '--test', 'tests/server/projectAtlasViewModel.test.ts'] },
-  { label: 'project atlas graph edge visibility', command: 'npx', args: ['tsx', '--test', 'tests/components/projectAtlas/atlasGraphEdgeVisibility.test.ts'] },
-  { label: 'task detail bug visibility', command: 'npx', args: ['tsx', '--test', 'tests/components/taskDetailsDrawerBugThreads.test.tsx'] },
-  { label: 'project command service', command: 'npx', args: ['tsx', '--test', 'tests/server/projectCommandService.test.ts'] },
-  { label: 'git workflow service', command: 'npx', args: ['tsx', '--test', 'tests/server/gitWorkflowService.test.ts'] },
-  { label: 'local path mutation service', command: 'npx', args: ['tsx', '--test', 'tests/server/localPathMutationService.test.ts'] },
-  { label: 'task git workflow service', command: 'npx', args: ['tsx', '--test', 'tests/server/taskGitWorkflowService.test.ts'] },
-  { label: 'mcp fetch errors', command: 'npx', args: ['tsx', '--test', 'tests/server/mcpFetchErrors.test.ts'] },
-  { label: 'mcp tool job queue', command: 'npx', args: ['tsx', '--test', 'tests/server/mcpToolJobQueue.test.ts'] },
-  { label: 'agent runs', command: 'npm', args: ['run', 'test:agent-runs'] },
-  { label: 'figma integration', command: 'npm', args: ['run', 'test:figma'] },
-  { label: 'gateway safety', command: 'npm', args: ['run', 'test:gateway'] },
-  { label: 'start all launcher', command: 'npm', args: ['run', 'test:start-all'] },
-  { label: 'absolute paths', command: 'npm', args: ['run', 'test:absolute-paths'] },
-  { label: 'prompt templates', command: 'npm', args: ['run', 'test:prompt-templates'] },
-  { label: 'orchestration', command: 'npm', args: ['run', 'test:orchestration'] },
-  { label: 'sqlite persistence', command: 'npm', args: ['run', 'test:sqlite'] },
-  { label: 'doctor', command: 'npm', args: ['run', 'doctor'] },
-];
+function stepDatabasePath(tempDbDir: string, step: VerificationStep, index: number) {
+  if (!step.parallelSafe) return path.join(tempDbDir, 'devflow.db');
+  const safeLabel = step.label.replace(/[^A-Za-z0-9_-]+/g, '-');
+  return path.join(tempDbDir, `${String(index).padStart(2, '0')}-${safeLabel}.sqlite`);
+}
 
-for (const step of commands) {
+function runStep(step: VerificationStep, tempDbDir: string, index: number): Promise<VerificationStepResult> {
   console.log(`[verify] Running ${step.label}...`);
   const executable = process.platform === 'win32' ? 'cmd.exe' : step.command;
   const finalArgs = process.platform === 'win32' ? ['/c', step.command, ...step.args] : step.args;
-  const result = spawnSync(executable, finalArgs, {
-    encoding: 'utf8',
-    maxBuffer: 10 * 1024 * 1024,
-    shell: false,
-    stdio: 'pipe',
+  const startedAt = Date.now();
+
+  return new Promise((resolve) => {
+    const child = spawn(executable, finalArgs, {
+      shell: false,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        DEVFLOW_DB_PATH: stepDatabasePath(tempDbDir, step, index),
+      },
+    });
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+
+    const finish = (result: Omit<VerificationStepResult, 'step' | 'durationMs'>) => {
+      if (settled) return;
+      settled = true;
+      resolve({ step, durationMs: Date.now() - startedAt, ...result });
+    };
+
+    child.stdout?.on('data', (chunk) => {
+      stdout = appendCaptured(stdout, Buffer.from(chunk));
+    });
+    child.stderr?.on('data', (chunk) => {
+      stderr = appendCaptured(stderr, Buffer.from(chunk));
+    });
+    child.on('error', (error) => finish({ exitCode: null, stdout, stderr, error }));
+    child.on('close', (code) => finish({ exitCode: code, stdout, stderr }));
   });
-  const stdout = result.stdout || '';
-  const stderr = result.stderr || '';
-
-  if (result.error) {
-    console.error(`[verify] ${step.label} could not run: ${result.error.message}`);
-    emitFailureOutput(step.label, stdout, stderr);
-    process.exit(1);
-  }
-
-  if (result.status !== 0) {
-    console.error(`[verify] ${step.label} failed with exit ${result.status ?? 'unknown'}.`);
-    emitFailureOutput(step.label, stdout, stderr);
-    process.exit(result.status ?? 1);
-  }
-
-  console.log(`[verify] ${step.label} passed (${outputBytes(stdout)} stdout bytes, ${outputBytes(stderr)} stderr bytes).`);
 }
 
-console.log('[verify] Verification completed successfully.');
+function reportResult(result: VerificationStepResult) {
+  if (result.error) {
+    console.error(`[verify] ${result.step.label} could not run: ${result.error.message}`);
+    emitFailureOutput(result.step.label, result.stdout, result.stderr);
+    return false;
+  }
+  if (result.exitCode !== 0) {
+    console.error(`[verify] ${result.step.label} failed with exit ${result.exitCode ?? 'unknown'}.`);
+    emitFailureOutput(result.step.label, result.stdout, result.stderr);
+    return false;
+  }
+  console.log(`[verify] ${result.step.label} passed in ${result.durationMs}ms (${outputBytes(result.stdout)} stdout bytes, ${outputBytes(result.stderr)} stderr bytes).`);
+  return true;
+}
+
+async function runSerialStage(steps: VerificationStep[], tempDbDir: string) {
+  for (const step of steps) {
+    const index = VERIFICATION_STEPS.indexOf(step);
+    const result = await runStep(step, tempDbDir, index);
+    if (!reportResult(result)) return result;
+  }
+  return null;
+}
+
+async function runParallelStage(steps: VerificationStep[], tempDbDir: string) {
+  let nextIndex = 0;
+  let failed: VerificationStepResult | null = null;
+  const workerCount = Math.min(FULL_VERIFY_PARALLELISM, steps.length);
+
+  const worker = async () => {
+    while (!failed) {
+      const localIndex = nextIndex;
+      nextIndex += 1;
+      if (localIndex >= steps.length) return;
+      const step = steps[localIndex];
+      const result = await runStep(step, tempDbDir, VERIFICATION_STEPS.indexOf(step));
+      if (!reportResult(result)) {
+        failed = result;
+        return;
+      }
+    }
+  };
+
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return failed;
+}
+
+export async function runFullVerification() {
+  const tempDbDir = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-test-'));
+  const previousDbPath = process.env.DEVFLOW_DB_PATH;
+  process.env.DEVFLOW_DB_PATH = path.join(tempDbDir, 'devflow.db');
+
+  try {
+    const stages = Array.from(new Set(VERIFICATION_STEPS.map((step) => step.stage))).sort((a, b) => a - b);
+    for (const stage of stages) {
+      const steps = VERIFICATION_STEPS.filter((step) => step.stage === stage);
+      const allParallelSafe = steps.length > 1 && steps.every((step) => step.parallelSafe);
+      const failed = allParallelSafe
+        ? await runParallelStage(steps, tempDbDir)
+        : await runSerialStage(steps, tempDbDir);
+      if (failed) return failed.exitCode ?? 1;
+    }
+    console.log('[verify] Verification completed successfully.');
+    return 0;
+  } finally {
+    if (previousDbPath === undefined) delete process.env.DEVFLOW_DB_PATH;
+    else process.env.DEVFLOW_DB_PATH = previousDbPath;
+    fs.rmSync(tempDbDir, { recursive: true, force: true });
+  }
+}
+
+const exitCode = await runFullVerification();
+if (exitCode !== 0) process.exitCode = exitCode;

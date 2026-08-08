@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'crypto';
 import type { AppState } from '../types';
 import { createJob, updateJobStatus, appendJobLog, writeJobResult, getJob, readJobLog, readJobResult, listInterruptedJobs, listRecentJobs, startBackgroundJobCleanup } from '../repositories/mcpToolJobRepository';
 import { createApiError, normalizeUnknownError } from './api';
-import { resolveProjectRoot } from './localFileService';
+import { resolveProjectResourceIdentity, resolveProjectRoot } from './localFileService';
 import { isDevFlowRestartPending, readDevFlowRestartState } from '../../lib/devFlowRestart';
 import { getRepoRevisionForRoot } from './repoRevisionService';
 import { getProjectCommandExecutionIdentity } from './projectCommandService';
@@ -12,6 +12,9 @@ import {
   getActiveResourceSnapshot,
   getBlockerForQueueEntry,
   getSchedulerProfile,
+  getSchedulerPriority,
+  getSchedulerCapacitySnapshot,
+  selectNextRunnableQueueIndex,
   incrementScheduledResource,
   transitionScheduledResource,
   type JobKind,
@@ -67,7 +70,7 @@ function singleFlightKeyFor(state: AppState, toolName: string, args: any, kind: 
   const enabled = kind === 'repo-read'
     ? args?.singleFlight !== false
     : kind === 'repo-command' && toolName === 'run_project_command' && args?.singleFlight !== false;
-  if (!enabled || !resourceKey.startsWith('repo:') || resourceKey === 'repo:unknown') return null;
+  if (!enabled || (!resourceKey.startsWith('repo:') && !resourceKey.startsWith('workspace:')) || resourceKey === 'repo:unknown') return null;
 
   if (kind === 'repo-command' && toolName === 'run_project_command') {
     try {
@@ -255,6 +258,7 @@ export function getQueueMetrics() {
     queue: queue.map((entry, index) => buildQueueEntryDiagnostics(entry, index, queue, activeSchedulerEntries())),
     active: activeJobsList,
     resources: getActiveResourceSnapshot(),
+    capacity: getSchedulerCapacitySnapshot(),
     metrics: {
       completedJobs: terminalJobs.length,
       failedJobs: failedJobs.length,
@@ -354,8 +358,7 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
   let resourceKey = 'global';
   if (kind !== 'skill-read') {
     try {
-      const root = resolveProjectRoot(state, args);
-      resourceKey = `repo:${root}`;
+      resourceKey = resolveProjectResourceIdentity(state, args);
     } catch {
       resourceKey = `repo:unknown`;
     }
@@ -403,6 +406,7 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
     accessMode: schedulerProfile.accessMode,
     costClass: schedulerProfile.costClass,
     enqueuedAt: Date.now(),
+    schedulerPriority: getSchedulerPriority(toolName, args, schedulerProfile.accessMode),
     singleFlightKey: singleFlightKey || undefined,
   };
   if (singleFlightKey) singleFlightLeaders.set(singleFlightKey, jobId);
@@ -422,12 +426,10 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
 }
 
 async function processQueue() {
-  for (let index = 0; index < queue.length; index += 1) {
-    const entry = queue[index];
-    if (getBlockerForQueueEntry(entry, index, queue, activeSchedulerEntries())) continue;
-
-    queue.splice(index, 1);
-    index -= 1;
+  while (queue.length > 0) {
+    const index = selectNextRunnableQueueIndex(queue, activeSchedulerEntries());
+    if (index < 0) break;
+    const [entry] = queue.splice(index, 1);
     startJob(entry);
   }
 }

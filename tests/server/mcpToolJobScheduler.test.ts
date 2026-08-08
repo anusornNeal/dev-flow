@@ -6,6 +6,8 @@ import {
   resetSchedulerResourceStateForTests,
   incrementScheduledResource,
   decrementScheduledResource,
+  selectNextRunnableQueueIndex,
+  setGlobalVerifyCapacityForTests,
   type SchedulerQueueEntry,
 } from '../../src/server/services/mcpToolJobScheduler.js';
 
@@ -38,6 +40,33 @@ test('writer barrier blocks later read for the same resource but not another res
   const queue = [writer, sameRepoRead, otherRepoRead];
   assert.equal(getBlockerForQueueEntry(sameRepoRead, 1, queue, []).blockReason, 'writer_barrier');
   assert.equal(getBlockerForQueueEntry(otherRepoRead, 2, queue, []), null);
+});
+
+test('global verify capacity blocks a third workspace separately from correctness locks', () => {
+  resetSchedulerResourceStateForTests();
+  setGlobalVerifyCapacityForTests(2);
+  const activeA = entry({ jobId: 'verify-a', resourceKey: 'workspace:a', accessMode: 'verify', costClass: 'verify', kind: 'repo-command', toolName: 'run_project_command' });
+  const activeB = entry({ jobId: 'verify-b', resourceKey: 'workspace:b', accessMode: 'verify', costClass: 'verify', kind: 'repo-command', toolName: 'run_project_command' });
+  incrementScheduledResource(activeA);
+  incrementScheduledResource(activeB);
+  const queued = entry({ jobId: 'verify-c', resourceKey: 'workspace:c', accessMode: 'verify', costClass: 'verify', kind: 'repo-command', toolName: 'run_project_command' });
+  const blocker = getBlockerForQueueEntry(queued, 0, [queued], [activeA, activeB]);
+  assert.equal(blocker?.blockReason, 'capacity_saturated');
+  assert.equal(blocker?.waitType, 'capacity');
+  decrementScheduledResource(activeA);
+  assert.equal(getBlockerForQueueEntry(queued, 0, [queued], [activeB]), null);
+  decrementScheduledResource(activeB);
+});
+
+test('targeted verification can start ahead of queued full verification while aging prevents permanent starvation', () => {
+  resetSchedulerResourceStateForTests();
+  setGlobalVerifyCapacityForTests(1);
+  const now = 100_000;
+  const full = entry({ jobId: 'full', resourceKey: 'workspace:a', accessMode: 'verify', costClass: 'verify', kind: 'repo-command', toolName: 'run_project_command', args: { command: 'test' }, schedulerPriority: 2, enqueuedAt: now - 1_000 });
+  const targeted = entry({ jobId: 'targeted', resourceKey: 'workspace:b', accessMode: 'verify', costClass: 'verify', kind: 'repo-command', toolName: 'run_project_command', args: { command: 'lint' }, schedulerPriority: 1, enqueuedAt: now });
+  assert.equal(selectNextRunnableQueueIndex([full, targeted], [], now), 1);
+  full.enqueuedAt = now - 70_000;
+  assert.equal(selectNextRunnableQueueIndex([full, targeted], [], now), 0);
 });
 
 test('resource accounting blocks saturated same-cost work and releases after decrement', () => {

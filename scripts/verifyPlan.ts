@@ -32,6 +32,7 @@ export const VERIFICATION_STEPS: VerificationStep[] = [
   { label: 'task git workflow service', command: 'npx', args: ['tsx', '--test', 'tests/server/taskGitWorkflowService.test.ts'], stage: 2, parallelSafe: true },
   { label: 'mcp fetch errors', command: 'npx', args: ['tsx', '--test', 'tests/server/mcpFetchErrors.test.ts'], stage: 2, parallelSafe: true },
   { label: 'mcp tool job queue', command: 'npx', args: ['tsx', '--test', 'tests/server/mcpToolJobQueue.test.ts'], stage: 2, parallelSafe: true },
+  { label: 'mcp scheduler policy', command: 'npx', args: ['tsx', '--test', 'tests/server/mcpToolJobScheduler.test.ts'], stage: 2, parallelSafe: true },
   { label: 'project resolution', command: 'npx', args: ['tsx', '--test', 'tests/server/projectResolution.test.ts'], stage: 2, parallelSafe: true },
   { label: 'session workspace service', command: 'npx', args: ['tsx', '--test', 'tests/server/sessionWorkspaceService.test.ts'], stage: 2, parallelSafe: false },
   { label: 'agent runs', command: 'npm', args: ['run', 'test:agent-runs'], stage: 3, parallelSafe: false },

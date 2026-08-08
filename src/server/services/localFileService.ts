@@ -168,6 +168,29 @@ function readLineWindowSync(filePath: string, startLine: number, endLine: number
   };
 }
 
+export function resolveProjectResourceIdentity(state: AppState, args: Record<string, any>) {
+  const identifierProject = findProjectByIdentifier(state, {
+    projectId: typeof args.projectId === 'string' ? args.projectId.trim() : undefined,
+    projectName: typeof args.projectName === 'string' ? args.projectName.trim() : undefined,
+    repo: typeof args.repo === 'string' ? args.repo.trim() : undefined,
+    repoUrl: typeof args.repoUrl === 'string' ? args.repoUrl.trim() : undefined,
+    localPath: typeof args.localPath === 'string' ? args.localPath.trim() : undefined,
+  });
+  if (identifierProject) {
+    const workspaceId = typeof args.workspaceId === 'string' ? args.workspaceId.trim() : '';
+    if (workspaceId) {
+      const workspace = resolveSessionWorkspace(workspaceId);
+      if (!workspace || workspace.projectId !== identifierProject.id) {
+        throw createApiError(404, 'WORKSPACE_NOT_FOUND', `Workspace '${workspaceId}' was not found for project '${identifierProject.id}'.`, { affectedId: workspaceId });
+      }
+      return `workspace:${workspace.workspaceId}`;
+    }
+    const sessionId = typeof args.sessionId === 'string' ? args.sessionId.trim() : '';
+    if (sessionId) return `workspace:${createOrReuseSessionWorkspace(identifierProject, sessionId).workspaceId}`;
+  }
+  return `repo:${resolveProjectRoot(state, args)}`;
+}
+
 export function resolveProjectRoot(state: AppState, args: Record<string, any>) {
   const identifierProject = findProjectByIdentifier(state, {
     projectId: typeof args.projectId === 'string' ? args.projectId.trim() : undefined,

@@ -4,9 +4,11 @@ import type { AppState } from '../types';
 import { findProjectByIdentifier } from './taskService';
 import { createApiError } from './api';
 import { listLocalFiles, readLocalFile } from './localFileService';
-import { getGitBranch, getGitDiff, getGitStatus } from './gitService';
+import { getGitDiff } from './gitService';
 import { getRepoInspectionIndex } from './repoInspectionIndexService';
 import { registerRepoCacheInvalidator } from './repoCacheInvalidationService';
+import { getRepoRevisionForRoot } from './repoRevisionService';
+import { ensureRepoChangeWatcher } from './workspaceChangeWatcherService';
 
 const HINT_FILES = ['AGENTS.md', 'README.md', 'package.json', 'tsconfig.json', 'vite.config.ts', 'gradlew.bat', 'build.gradle', 'settings.gradle'];
 
@@ -41,21 +43,24 @@ function parsePositiveInt(value: unknown, fallback: number, max: number) {
 export function getProjectStartContext(state: AppState, args: Record<string, any>) {
   const project = resolveProject(state, args);
   const root = project.localPath || '';
+  const changeWatcher = root ? ensureRepoChangeWatcher(root) : { active: false, degraded: false };
   const topLevel = root
     ? listLocalFiles(state, { projectId: project.id, path: '.', recursive: false, limit: args.limit || 80 })
     : { count: 0, files: [] };
 
   let git: any = { available: false };
+  let repoRevision: string | undefined;
   if (root) {
     try {
-      const branch = getGitBranch(state, { projectId: project.id });
-      const status = getGitStatus(state, { projectId: project.id });
+      const revision = getRepoRevisionForRoot(root);
+      repoRevision = revision.token;
       git = {
         available: true,
-        branch: branch.current,
-        branchCount: branch.branches.length,
-        changedFiles: status.count,
-        files: status.files.slice(0, 25),
+        branch: revision.branch,
+        changedFiles: revision.changedFiles.length,
+        files: revision.changedFiles.slice(0, 25).map((entry) => ({ path: entry.path, staged: entry.staged, status: entry.status })),
+        repoRevision: revision.token,
+        head: revision.head,
       };
     } catch (error: any) {
       git = { available: false, reason: error?.message || 'Git context unavailable.' };
@@ -75,6 +80,8 @@ export function getProjectStartContext(state: AppState, args: Record<string, any
       taskIdPrefix: project.taskIdPrefix,
     },
     git,
+    repoRevision,
+    changeWatcher,
     files: topLevel,
     hints: {
       present: presentHints,
@@ -159,6 +166,7 @@ export function getRepoReadSnapshot(state: AppState, args: Record<string, any>) 
   return {
     project: start.project,
     query,
+    repoRevision: start.repoRevision,
     path: typeof args.path === 'string' ? args.path : '.',
     git: {
       available: start.git?.available === true,
@@ -218,6 +226,8 @@ export function getRepoContextBundle(state: AppState, args: Record<string, any>)
         endLine: snippet.endLine,
         totalLines: snippet.totalLines,
         truncated: snippet.truncated,
+        revision: snippet.revision,
+        fileRevision: snippet.fileRevision,
         content: snippet.content,
       };
     } catch (error: any) {
@@ -253,6 +263,7 @@ export function getRepoContextBundle(state: AppState, args: Record<string, any>)
   return {
     project: start.project,
     query,
+    repoRevision: start.repoRevision,
     git: start.git,
     hints: start.hints,
     index: {

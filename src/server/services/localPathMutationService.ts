@@ -362,7 +362,7 @@ export function applyPathMutations(
     backupCleanupWarning = error instanceof Error ? error.message : String(error);
   }
 
-  const cacheInvalidation = invalidateRepoReadCaches(root, 'applyPathMutations');
+  const cacheInvalidation = invalidateRepoReadCaches(root, 'applyPathMutations', { paths: result.affectedPaths });
   return {
     ...result,
     cacheInvalidation,

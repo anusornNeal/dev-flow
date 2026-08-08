@@ -234,7 +234,7 @@ export function applyLocalPatch(state: AppState, args: Record<string, any>): Loc
   }
 
   if (!dryRun) {
-    invalidateRepoReadCaches(root, 'applyLocalPatch');
+    invalidateRepoReadCaches(root, 'applyLocalPatch', { paths: changedFiles });
   }
 
   return patchResult;
@@ -315,7 +315,7 @@ export async function applyLocalPatchAsync(state: AppState, args: Record<string,
       }
 
       if (!dryRun) {
-        invalidateRepoReadCaches(root, 'applyLocalPatchAsync');
+        invalidateRepoReadCaches(root, 'applyLocalPatchAsync', { paths: changedFiles });
       }
 
       resolve(patchResult);

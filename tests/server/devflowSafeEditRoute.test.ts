@@ -29,6 +29,11 @@ test('devflowContract exposes read_file_snippets_batch', () => {
   const req = tool.buildHttpRequest({ files: [{ filePath: 'foo.ts', startLine: 1, endLine: 5 }] });
   assert.equal(req.method, 'POST');
   assert.equal(req.path, '/api/local-files/read-batch');
+  assert.match(tool.description, /Steno|edit target/i);
+  assert.ok(tool.inputSchema?.properties?.includeFileRef);
+  assert.ok(tool.inputSchema?.properties?.allowPartial);
+  assert.ok(tool.inputSchema?.properties?.maxTotalBytes);
+  assert.ok(tool.inputSchema?.properties?.files?.items?.properties?.includeFileRef);
 });
 
 test('devflowContract exposes repo_read_snapshot', () => {

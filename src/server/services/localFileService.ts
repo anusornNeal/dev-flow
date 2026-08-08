@@ -841,7 +841,10 @@ export function readFileSnippetsBatch(state: AppState, args: Record<string, any>
   }
 
   const maxFiles = Number.isFinite(Number(args.maxFiles)) ? Math.max(1, Math.min(25, Number(args.maxFiles))) : 25;
+  const maxTotalBytes = Number.isFinite(Number(args.maxTotalBytes)) ? Math.max(1, Math.min(500_000, Number(args.maxTotalBytes))) : 100_000;
+  const allowPartial = args.allowPartial === true || String(args.allowPartial).toLowerCase() === 'true';
   const selectedFiles = requestedFiles.slice(0, maxFiles);
+  const root = resolveProjectRoot(state, args);
   const baseArgs = {
     projectId: args.projectId,
     projectName: args.projectName,
@@ -849,33 +852,84 @@ export function readFileSnippetsBatch(state: AppState, args: Record<string, any>
     repoUrl: args.repoUrl,
     localPath: args.localPath,
   };
+  const results: any[] = [];
+  let totalReturnedBytes = 0;
 
-  const results = selectedFiles.map((entry, index) => {
-    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
-      throw createApiError(400, 'FILE_ENTRY_INVALID', `files[${index}] must be an object.`, { affectedId: `files[${index}]` });
+  const errorResult = (filePath: string, error: unknown) => {
+    const payload = (error as any)?.payload;
+    return {
+      ok: false,
+      path: filePath,
+      error: {
+        code: payload?.code || 'READ_FAILED',
+        message: payload?.message || (error instanceof Error ? error.message : String(error)),
+        retryable: payload?.retryable ?? false,
+        status: Number((error as any)?.status || 500),
+      },
+    };
+  };
+
+  for (let index = 0; index < selectedFiles.length; index += 1) {
+    const entry = selectedFiles[index];
+    const requestedPath = entry && typeof entry === 'object' && !Array.isArray(entry)
+      ? String(entry.filePath || entry.path || '').trim()
+      : `files[${index}]`;
+    try {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+        throw createApiError(400, 'FILE_ENTRY_INVALID', `files[${index}] must be an object.`, { affectedId: `files[${index}]` });
+      }
+      if (!requestedPath) {
+        throw createApiError(400, 'FILE_PATH_REQUIRED', `files[${index}].filePath is required.`, { affectedId: `files[${index}]` });
+      }
+
+      const remainingBytes = maxTotalBytes - totalReturnedBytes;
+      if (remainingBytes <= 0) {
+        results.push(errorResult(requestedPath, createApiError(413, 'BATCH_BYTE_LIMIT', `Batch response byte budget (${maxTotalBytes}) is exhausted.`, { affectedId: requestedPath })));
+        continue;
+      }
+
+      const requestedMaxBytes = Number.isFinite(Number(entry.maxBytes)) ? Math.max(1, Math.min(100_000, Number(entry.maxBytes))) : 40_000;
+      const readMaxBytes = Math.min(requestedMaxBytes, remainingBytes);
+      const result = readLocalFile(state, {
+        ...baseArgs,
+        filePath: requestedPath,
+        mode: entry.mode,
+        startLine: entry.startLine,
+        endLine: entry.endLine,
+        maxBytes: readMaxBytes,
+        includeFileRef: entry.includeFileRef ?? args.includeFileRef,
+      });
+      const returnedBytes = Number(result.returnedBytes || 0);
+      if (readMaxBytes < requestedMaxBytes && result.truncated === true) {
+        results.push(errorResult(requestedPath, createApiError(413, 'BATCH_BYTE_LIMIT', `File '${requestedPath}' exceeds the remaining batch response byte budget.`, { affectedId: requestedPath })));
+        continue;
+      }
+      if (returnedBytes > remainingBytes) {
+        results.push(errorResult(requestedPath, createApiError(413, 'BATCH_BYTE_LIMIT', `File '${requestedPath}' exceeds the remaining batch response byte budget.`, { affectedId: requestedPath })));
+        continue;
+      }
+
+      totalReturnedBytes += returnedBytes;
+      results.push(result);
+    } catch (error) {
+      if (!allowPartial) throw error;
+      results.push(errorResult(requestedPath || `files[${index}]`, error));
     }
+  }
 
-    const filePath = String(entry.filePath || entry.path || '').trim();
-    if (!filePath) {
-      throw createApiError(400, 'FILE_PATH_REQUIRED', `files[${index}].filePath is required.`, { affectedId: `files[${index}]` });
-    }
-
-    return readLocalFile(state, {
-      ...baseArgs,
-      filePath,
-      mode: entry.mode,
-      startLine: entry.startLine,
-      endLine: entry.endLine,
-      maxBytes: entry.maxBytes,
-      includeFileRef: entry.includeFileRef ?? args.includeFileRef,
-    });
-  });
-
+  const successCount = results.filter((entry) => entry?.ok !== false).length;
+  const errorCount = results.length - successCount;
   return {
-    root: results[0]?.root || resolveProjectRoot(state, args),
+    root,
     count: results.length,
     requestedCount: requestedFiles.length,
-    truncated: requestedFiles.length > results.length || results.some((result) => result.truncated === true),
+    successCount,
+    errorCount,
+    partial: successCount > 0 && errorCount > 0,
+    totalReturnedBytes,
+    maxTotalBytes,
+    truncated: requestedFiles.length > selectedFiles.length
+      || results.some((result) => result?.truncated === true || result?.error?.code === 'BATCH_BYTE_LIMIT'),
     files: results,
   };
 }

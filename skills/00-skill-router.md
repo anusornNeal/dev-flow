@@ -73,7 +73,7 @@ Load:
 Use:
 - `get_repo_context_bundle` first when a project is known.
 - `get_project_atlas` only for architecture/project-map, onboarding, unclear target files, cross-module impact, module boundaries, or read order.
-- Read existing edit targets with `read_local_file(includeFileRef=true)` when available.
+- For multi-file edits, read exact targets with `read_file_snippets_batch(includeFileRef=true)` so snippets, revisions, and Steno-ready refs arrive in one bounded call; use `read_local_file(includeFileRef=true)` for genuinely single-file work.
 - Prefer Steno Edit: `prepare_compact_edit` is the no-write preview and `apply_prepared_edit` applies only the returned plan id. Re-read and re-prepare stale, expired, or consumed plans.
 - Use `apply_and_verify` when its supported prepared/structured edit path can safely combine mutation, diff capture, and risk-aware verification.
 - Otherwise run the smallest targeted `run_project_command`; use `forceFresh` when final evidence must not be reused.

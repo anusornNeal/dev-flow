@@ -155,7 +155,7 @@ function stripToolOnlyArgs(args: Record<string, any>, keys: string[]) {
   return copy;
 }
 
-export const DEVFLOW_CONTRACT_VERSION = '2026-08-08.2';
+export const DEVFLOW_CONTRACT_VERSION = '2026-08-08.3';
 
 export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   {
@@ -1524,7 +1524,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'read_file_snippets_batch',
-    description: 'Read multiple small local file snippets safely within a project root in one round trip. Prefer this when several focused snippets are needed.',
+    description: 'Read multiple bounded local file snippets in one round trip. For multi-file Steno edit targets, set includeFileRef=true to return revision-bound refs for every successful file instead of calling read_local_file once per file.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1541,6 +1541,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
               startLine: { type: 'number', description: '1-based first line to return.' },
               endLine: { type: 'number', description: '1-based final line to return.' },
               maxBytes: { type: 'number', description: 'Maximum UTF-8 bytes of content to return for this file.' },
+              includeFileRef: { type: 'boolean', description: 'Override batch includeFileRef for this entry.' },
             },
             anyOf: [
               { required: ['filePath'] },
@@ -1549,6 +1550,9 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
           },
         },
         maxFiles: { type: 'number', description: 'Maximum file entries to process, capped at 25.' },
+        includeFileRef: { type: 'boolean', description: 'Issue revision-bound Steno fileRefs for successful entries in this batch.' },
+        allowPartial: { type: 'boolean', description: 'Return per-file errors while preserving successful reads instead of failing the whole batch.' },
+        maxTotalBytes: { type: 'number', description: 'Aggregate returned content-byte budget for the batch, capped at 500000.' },
       },
       required: ['files'],
     },

@@ -49,6 +49,13 @@ test('authoring skills define guarded local file read and write workflow', () =>
   assert.match(schemaReference, /commit_git_changes/);
 });
 
+test('execution guidance batches multi-file Steno bootstrap reads', () => {
+  assert.match(skillRouter, /read_file_snippets_batch\(includeFileRef=true\)/);
+  assert.match(schemaReference, /read_file_snippets_batch\(includeFileRef=true\)/);
+  assert.match(executionRules, /read_file_snippets_batch\(includeFileRef=true\)/);
+  assert.match(executionRules, /single-file/i);
+});
+
 test('schema template and examples include implementation maps', () => {
   assert.match(schemaReference, /Implementation map:\\n- File:/);
   assert.doesNotMatch(schemaReference, /"repoContext": "Summarize concrete repo findings here\."/);

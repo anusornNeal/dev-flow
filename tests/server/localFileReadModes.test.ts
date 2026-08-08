@@ -24,6 +24,9 @@ fs.writeFileSync(path.join(tempDir, 'sample.txt'), ['one', 'two', 'three', 'four
 fs.writeFileSync(path.join(tempDir, 'other.txt'), ['alpha', 'beta', 'gamma'].join('\n'), 'utf8');
 fs.mkdirSync(path.join(tempDir, 'nested', 'folder'), { recursive: true });
 fs.writeFileSync(path.join(tempDir, 'nested', 'folder', 'slash.txt'), 'slash path', 'utf8');
+for (let index = 0; index < 8; index += 1) {
+  fs.writeFileSync(path.join(tempDir, `batch-${index}.txt`), `batch-${index}-`.repeat(20), 'utf8');
+}
 
 test('readLocalFile can return a line window instead of the full file', () => {
   const result = readLocalFile(state, {
@@ -115,6 +118,71 @@ test('readFileSnippetsBatch supports metadata entries', () => {
   assert.equal(result.files[0].content, undefined);
   assert.equal(result.files[0].totalLines, 4);
   assert.equal(typeof result.files[0].fileRevision.sha256, 'string');
+});
+
+test('readFileSnippetsBatch bootstraps multiple Steno-ready refs in one bounded call', () => {
+  clearFileReferences();
+  const result = readFileSnippetsBatch(state, {
+    projectId: 'project-read-1',
+    includeFileRef: true,
+    maxTotalBytes: 2_000,
+    files: [
+      { filePath: 'sample.txt' },
+      { filePath: 'other.txt' },
+      { filePath: 'nested/folder/slash.txt' },
+    ],
+  });
+
+  assert.equal(result.count, 3);
+  assert.equal(result.successCount, 3);
+  assert.equal(result.errorCount, 0);
+  assert.equal(result.partial, false);
+  assert.equal(result.files.every((entry: any) => /^file-ref-/.test(entry.fileRef)), true);
+  assert.equal(result.files.every((entry: any) => entry.revision === entry.fileRevision.token), true);
+  assert.equal(result.totalReturnedBytes > 0, true);
+  console.log(`[read-bootstrap] files=3 separateCalls=3 batchCalls=1 bytes=${result.totalReturnedBytes}`);
+});
+
+test('readFileSnippetsBatch can report partial per-file failures without dropping valid refs', () => {
+  clearFileReferences();
+  const result = readFileSnippetsBatch(state, {
+    projectId: 'project-read-1',
+    includeFileRef: true,
+    allowPartial: true,
+    files: [
+      { filePath: 'sample.txt' },
+      { filePath: 'missing.txt' },
+      { filePath: 'other.txt' },
+    ],
+  });
+
+  assert.equal(result.count, 3);
+  assert.equal(result.successCount, 2);
+  assert.equal(result.errorCount, 1);
+  assert.equal(result.partial, true);
+  assert.match(result.files[0].fileRef, /^file-ref-/);
+  assert.equal(result.files[1].ok, false);
+  assert.equal(result.files[1].path, 'missing.txt');
+  assert.equal(result.files[1].error.code, 'FILE_NOT_FOUND');
+  assert.match(result.files[2].fileRef, /^file-ref-/);
+});
+
+test('readFileSnippetsBatch enforces aggregate byte budget across 8 edit targets', () => {
+  clearFileReferences();
+  const result = readFileSnippetsBatch(state, {
+    projectId: 'project-read-1',
+    includeFileRef: true,
+    allowPartial: true,
+    maxTotalBytes: 256,
+    files: Array.from({ length: 8 }, (_, index) => ({ filePath: `batch-${index}.txt` })),
+  });
+
+  assert.equal(result.requestedCount, 8);
+  assert.equal(result.count, 8);
+  assert.equal(result.totalReturnedBytes <= result.maxTotalBytes, true);
+  assert.equal(result.truncated, true);
+  assert.equal(result.files.some((entry: any) => entry.error?.code === 'BATCH_BYTE_LIMIT'), true);
+  console.log(`[read-bootstrap] files=8 separateCalls=8 batchCalls=1 bytes=${result.totalReturnedBytes}/${result.maxTotalBytes}`);
 });
 
 test('readLocalFile can opt in to a revision-bound opaque fileRef', () => {

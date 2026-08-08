@@ -14,8 +14,8 @@ Use these before writing implementation-ready cards:
 - `get_repo_context_bundle`: one-call repo packet for project metadata, git status, repo index matches, focused file snippets, and optional diff context. Prefer this first when a project is known.
 - `get_project_atlas`: compact project knowledge graph for architecture, onboarding, unclear targetFiles, cross-module impact, module boundaries, and read order. Use modes `compact`, `standard`, `agent-context`, `chatgpt-context`, `task-focused`, or `diff-impact`; keep it companion-only after `get_repo_context_bundle`, and never let stale/noisy/inferred Atlas summaries silently override explicit targetFiles or exact local reads.
 - `get_repo_inspection_index`: cached repo index for likely files, classes, composables, functions, routes, mappers, helpers, and tests. Use it as a targeted fallback when the repo context bundle is unavailable or insufficient.
-- `read_file_snippets_batch`: read several focused local file ranges in one round trip after the bundle/index identifies likely files.
-- `read_local_file`: read one exact local file or line range before editing; request `includeFileRef=true` when preparing a Steno edit.
+- `read_file_snippets_batch(includeFileRef=true)`: preferred multi-file Steno bootstrap after the bundle/index identifies exact targets; returns bounded snippets plus revision-bound refs in one round trip, with optional aggregate byte limits and partial per-file errors.
+- `read_local_file`: read one exact local file or line range before editing; request `includeFileRef=true` for genuinely single-file Steno work.
 - `prepare_compact_edit` + `apply_prepared_edit`: preferred compact edit flow for supported anchored changes. Preparation is the no-write preview; apply only the returned plan id and re-read/re-prepare stale plans.
 - `apply_and_verify`: composite fast path for supported prepared/structured edits when mutation, diff capture, and risk-aware verification can safely run together.
 - `edit_local_files_batch`: guarded multi-file anchored fallback. Dry-run first, then apply after the preview matches intent.

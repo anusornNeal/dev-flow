@@ -37,7 +37,8 @@ test('lean core keeps semantic implementation-ready rules', () => {
 test('source-specific evidence is loaded on demand', () => {
   assert.match(evidenceSkill, /get_jira_authoring_bundle/);
   assert.match(evidenceSkill, /Figma evidence/);
-  assert.match(evidenceSkill, /get_figma_design_spec/);
+  assert.match(evidenceSkill, /get_figma_authoring_context/);
+  assert.match(evidenceSkill, /attach_figma_context_to_task/);
   assert.match(evidenceSkill, /Project Atlas/);
   assert.match(evidenceSkill, /get_project_atlas/);
   assert.match(skillRouter, /05-authoring-evidence/);

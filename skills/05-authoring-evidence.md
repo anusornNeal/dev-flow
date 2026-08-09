@@ -14,11 +14,12 @@ Treat Jira as requirement/source evidence, not implementation truth. Inspect the
 For a frontend card with a Figma source, preserve exact file/node provenance and node-specific implementation evidence.
 
 Use the smallest sequence that proves the design:
-- file metadata only when needed to establish source identity;
-- exact node/design spec for the relevant node;
+- start with `get_figma_authoring_context` for the exact relevant node set (max 8) so file metadata, normalized specs, source refs, and compact summary arrive together;
+- use `attach_figma_context_to_task` only when the owning card should persist the exact refs automatically after creation;
+- fall back to the lower-level file/node/design-spec tools only for diagnostics or evidence that the composite intentionally omits;
 - avoid fetching unrelated frames or whole design trees.
 
-Use `get_figma_design_spec` for normalized layout, typography, spacing, colors, constraints, and referenced assets. Summarize implementation-relevant evidence in `repoContext`; attach the source reference when the card needs persistent provenance.
+The composite context is the normal source for layout, typography, spacing, colors, constraints, assets, exact node URLs, and bounded implementation summary. Put the implementation-relevant evidence in the owning frontend card and keep node-specific verification explicit.
 
 Figma evidence rule: do not convert visual guesses into exact dimensions/copy when the source can provide them, and do not make Figma mandatory for frontend work that has no Figma source.
 

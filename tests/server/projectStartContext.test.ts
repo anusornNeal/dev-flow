@@ -12,7 +12,14 @@ const { executeAllMigrations } = await import('../../src/db/migrations/index.js'
 executeAllMigrations();
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
 createProject({ id: 'project-start-1', name: 'Start Fixture', repoUrl: 'https://example.com/start', localPath: tempDir });
-const { getProjectStartContext, getRepoContextBundle, getRepoReadSnapshot } = await import('../../src/server/services/projectStartContextService.js');
+const {
+  clearRepoContextBundlePerformanceRecords,
+  getProjectStartContext,
+  getRepoContextBundle,
+  getRepoContextBundlePerformanceSummary,
+  getRepoReadSnapshot,
+} = await import('../../src/server/services/projectStartContextService.js');
+const { clearRepoInspectionIndexCache } = await import('../../src/server/services/repoInspectionIndexService.js');
 const { stopAllRepoChangeWatchers } = await import('../../src/server/services/workspaceChangeWatcherService.js');
 
 fs.writeFileSync(path.join(tempDir, 'package.json'), '{"name":"fixture"}\n', 'utf8');
@@ -124,6 +131,49 @@ test('getRepoContextBundle exposes repo and snippet revisions', () => {
   const second = getRepoContextBundle(state, { projectId: 'project-start-1', q: 'snapshot', limit: 5, snippetLimit: 2 });
   assert.notEqual(second.repoRevision, first.repoRevision);
   assert.notEqual(second.snippets[0].freshnessIdentity, first.snippets[0].freshnessIdentity);
+});
+
+test('getRepoContextBundle separates cold/warm phase timings and keeps representative warm p95 within SLO', () => {
+  clearRepoContextBundlePerformanceRecords();
+  clearRepoInspectionIndexCache(tempDir);
+  const args = {
+    projectId: 'project-start-1',
+    q: 'shared context implementation callers tests',
+    contextIntent: 'verification-debugging',
+    targetFiles: ['src/snapshotService.ts', 'src/sharedContext0.ts', 'src/sharedContext1.ts'],
+    snippetLimit: 6,
+    snippetLines: 40,
+    maxContextBytes: 24_000,
+  };
+
+  const cold = getRepoContextBundle(state, args);
+  assert.equal(cold.performance.cacheState, 'cold');
+  assert.equal(typeof cold.performance.totalMs, 'number');
+  assert.equal(typeof cold.performance.phases.startContextMs, 'number');
+  assert.equal(typeof cold.performance.phases.repoIndexMs, 'number');
+  assert.equal(typeof cold.performance.phases.snippetReadMs, 'number');
+  assert.equal(typeof cold.performance.phases.snippetReadCount, 'number');
+  assert.equal(typeof cold.performance.phases.diffMs, 'number');
+  assert.equal(typeof cold.performance.phases.responseAssemblyMs, 'number');
+  assert.equal(typeof cold.performance.dominantPhase, 'string');
+
+  const warmDurations: number[] = [];
+  for (let index = 0; index < 5; index += 1) {
+    const warm = getRepoContextBundle(state, args);
+    assert.equal(warm.performance.cacheState, 'warm');
+    warmDurations.push(warm.performance.totalMs);
+  }
+  const sortedWarm = [...warmDurations].sort((left, right) => left - right);
+  const warmP95 = sortedWarm[Math.ceil(sortedWarm.length * 0.95) - 1];
+  assert.equal(warmP95 <= 750, true, `representative warm bundle p95 should stay <=750ms, got ${warmP95}ms`);
+
+  const summary = getRepoContextBundlePerformanceSummary({ windowMs: 60_000 });
+  assert.equal(summary.cold.count >= 1, true);
+  assert.equal(summary.warm.count >= 5, true);
+  assert.equal(typeof summary.warm.p95TotalMs, 'number');
+  assert.equal(typeof summary.warm.dominantPhase, 'string');
+  assert.equal(typeof summary.warm.phases.snippetRead.p95Ms, 'number');
+  assert.doesNotMatch(JSON.stringify(summary), /snapshotExample|sharedContext0|\.ts/);
 });
 
 test.after(() => {

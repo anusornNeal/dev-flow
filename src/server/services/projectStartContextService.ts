@@ -1,9 +1,10 @@
 import fs from 'fs';
 import path from 'path';
+import { performance as nodePerformance } from 'node:perf_hooks';
 import type { AppState } from '../types';
 import { findProjectByIdentifier } from './taskService';
 import { createApiError } from './api';
-import { listLocalFiles, readLocalFile, resolveProjectRoot, searchLocalFiles } from './localFileService';
+import { listLocalFiles, readLocalFile, readResolvedLocalFile, resolveProjectRoot, searchLocalFiles } from './localFileService';
 import { getGitDiff } from './gitService';
 import { getRepoInspectionIndex } from './repoInspectionIndexService';
 import { registerRepoCacheInvalidator } from './repoCacheInvalidationService';
@@ -21,6 +22,131 @@ export function clearRepoContextBundleCache(_root?: string) {
 }
 
 registerRepoCacheInvalidator('repo-context-bundle', clearRepoContextBundleCache);
+
+const MAX_REPO_CONTEXT_BUNDLE_PERFORMANCE_RECORDS = 500;
+const DEFAULT_REPO_CONTEXT_BUNDLE_PERFORMANCE_WINDOW_MS = 10 * 60 * 1000;
+
+type RepoContextBundleCacheState = 'cold' | 'warm';
+type RepoContextBundlePhaseTimings = {
+  startContextMs: number;
+  repoIndexMs: number;
+  snippetReadMs: number;
+  snippetReadCount: number;
+  diffMs: number;
+  responseAssemblyMs: number;
+};
+type RepoContextBundlePerformanceRecord = {
+  cacheState: RepoContextBundleCacheState;
+  totalMs: number;
+  phases: RepoContextBundlePhaseTimings;
+  timestamp: number;
+};
+
+const repoContextBundlePerformanceRecords: RepoContextBundlePerformanceRecord[] = [];
+
+function roundDuration(value: number) {
+  return Math.round(Math.max(0, value) * 100) / 100;
+}
+
+function performancePercentile(values: number[], percentileValue: number) {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((left, right) => left - right);
+  const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil((percentileValue / 100) * sorted.length) - 1));
+  return sorted[index];
+}
+
+function dominantRepoContextPhase(phases: RepoContextBundlePhaseTimings) {
+  const candidates = [
+    ['startContext', phases.startContextMs],
+    ['repoIndex', phases.repoIndexMs],
+    ['snippetRead', phases.snippetReadMs],
+    ['diff', phases.diffMs],
+    ['responseAssembly', phases.responseAssemblyMs],
+  ] as const;
+  return [...candidates].sort((left, right) => right[1] - left[1])[0][0];
+}
+
+export function clearRepoContextBundlePerformanceRecords() {
+  repoContextBundlePerformanceRecords.length = 0;
+}
+
+export function recordRepoContextBundlePerformance(input: {
+  cacheState: RepoContextBundleCacheState;
+  totalMs: number;
+  phases: RepoContextBundlePhaseTimings;
+  timestamp?: number;
+}) {
+  const numeric = (value: unknown) => roundDuration(Number.isFinite(Number(value)) ? Number(value) : 0);
+  const record: RepoContextBundlePerformanceRecord = {
+    cacheState: input.cacheState === 'warm' ? 'warm' : 'cold',
+    totalMs: numeric(input.totalMs),
+    phases: {
+      startContextMs: numeric(input.phases?.startContextMs),
+      repoIndexMs: numeric(input.phases?.repoIndexMs),
+      snippetReadMs: numeric(input.phases?.snippetReadMs),
+      snippetReadCount: Math.max(0, Math.floor(Number(input.phases?.snippetReadCount) || 0)),
+      diffMs: numeric(input.phases?.diffMs),
+      responseAssemblyMs: numeric(input.phases?.responseAssemblyMs),
+    },
+    timestamp: Number.isFinite(Number(input.timestamp)) ? Number(input.timestamp) : Date.now(),
+  };
+  repoContextBundlePerformanceRecords.push(record);
+  if (repoContextBundlePerformanceRecords.length > MAX_REPO_CONTEXT_BUNDLE_PERFORMANCE_RECORDS) {
+    repoContextBundlePerformanceRecords.splice(0, repoContextBundlePerformanceRecords.length - MAX_REPO_CONTEXT_BUNDLE_PERFORMANCE_RECORDS);
+  }
+  return record;
+}
+
+function summarizeRepoContextBundlePerformance(records: RepoContextBundlePerformanceRecord[], cacheState: RepoContextBundleCacheState) {
+  const phase = (key: keyof Omit<RepoContextBundlePhaseTimings, 'snippetReadCount'>) => {
+    const values = records.map((record) => record.phases[key]);
+    return {
+      p50Ms: performancePercentile(values, 50),
+      p95Ms: performancePercentile(values, 95),
+    };
+  };
+  const phases = {
+    startContext: phase('startContextMs'),
+    repoIndex: phase('repoIndexMs'),
+    snippetRead: {
+      ...phase('snippetReadMs'),
+      count: records.reduce((sum, record) => sum + record.phases.snippetReadCount, 0),
+    },
+    diff: phase('diffMs'),
+    responseAssembly: phase('responseAssemblyMs'),
+  };
+  const phaseCandidates = [
+    ['startContext', phases.startContext.p95Ms],
+    ['repoIndex', phases.repoIndex.p95Ms],
+    ['snippetRead', phases.snippetRead.p95Ms],
+    ['diff', phases.diff.p95Ms],
+    ['responseAssembly', phases.responseAssembly.p95Ms],
+  ] as const;
+  const dominant = [...phaseCandidates].sort((left, right) => right[1] - left[1])[0];
+  const totals = records.map((record) => record.totalMs);
+  return {
+    cacheState,
+    count: records.length,
+    p50TotalMs: performancePercentile(totals, 50),
+    p95TotalMs: performancePercentile(totals, 95),
+    dominantPhase: dominant[0],
+    dominantPhaseP95Ms: dominant[1],
+    phases,
+  };
+}
+
+export function getRepoContextBundlePerformanceSummary(options: { now?: number; windowMs?: number } = {}) {
+  const now = Number.isFinite(Number(options.now)) ? Number(options.now) : Date.now();
+  const windowMs = Number.isFinite(Number(options.windowMs))
+    ? Math.max(1, Number(options.windowMs))
+    : DEFAULT_REPO_CONTEXT_BUNDLE_PERFORMANCE_WINDOW_MS;
+  const recent = repoContextBundlePerformanceRecords.filter((record) => record.timestamp >= now - windowMs && record.timestamp <= now);
+  return {
+    windowMs,
+    cold: summarizeRepoContextBundlePerformance(recent.filter((record) => record.cacheState === 'cold'), 'cold'),
+    warm: summarizeRepoContextBundlePerformance(recent.filter((record) => record.cacheState === 'warm'), 'warm'),
+  };
+}
 
 function resolveProject(state: AppState, args: Record<string, any>) {
   const project = findProjectByIdentifier(state, {
@@ -366,6 +492,7 @@ export function getRepoReadSnapshot(state: AppState, args: Record<string, any>) 
 }
 
 export function getRepoContextBundle(state: AppState, args: Record<string, any>) {
+  const bundleStartedAt = nodePerformance.now();
   const project = resolveProject(state, args);
   const query = typeof args.q === 'string' ? args.q : typeof args.query === 'string' ? args.query : '';
   const targetFiles = Array.isArray(args.targetFiles)
@@ -384,7 +511,9 @@ export function getRepoContextBundle(state: AppState, args: Record<string, any>)
         ? 'full-file'
         : undefined;
 
+  const startContextStartedAt = nodePerformance.now();
   const start = getProjectStartContext(state, { ...args, projectId: project.id, limit: args.topLevelLimit || 40 });
+  const startContextMs = roundDuration(nodePerformance.now() - startContextStartedAt);
   const changedFiles = Array.isArray(start.git?.files) ? start.git.files : [];
   const initialPlan = planContextBudget({
     query,
@@ -396,6 +525,7 @@ export function getRepoContextBundle(state: AppState, args: Record<string, any>)
   });
   const indexLimit = parsePositiveInt(args.limit, initialPlan.budgets.indexLimit, 30);
 
+  const repoIndexStartedAt = nodePerformance.now();
   const index = getRepoInspectionIndex(state, {
     ...args,
     projectId: project.id,
@@ -407,6 +537,7 @@ export function getRepoContextBundle(state: AppState, args: Record<string, any>)
     targetFiles,
     changedFiles,
   });
+  const repoIndexMs = roundDuration(nodePerformance.now() - repoIndexStartedAt);
   const indexedCandidates = Array.isArray(index.matches) ? index.matches : [];
   const indexedPaths = new Set(indexedCandidates.map((entry: any) => String(entry.path || '').replace(/\\/g, '/').toLowerCase()));
   const explicitTargetCandidates = targetFiles
@@ -431,20 +562,23 @@ export function getRepoContextBundle(state: AppState, args: Record<string, any>)
 
   let remainingSnippetBytes = snippetByteBudget;
   let returnedSnippetBytes = 0;
+  let snippetReadCount = 0;
   const snippets: any[] = [];
+  const snippetReadStartedAt = nodePerformance.now();
   if (contextPlan.disclosureLevel !== 'project-summary') {
     for (const match of selectedEvidence) {
       if (remainingSnippetBytes <= 0) break;
       const perReadBudget = Math.max(1, Math.min(maxSnippetBytes, remainingSnippetBytes));
+      snippetReadCount += 1;
       try {
-        const snippet = readLocalFile(state, {
+        const snippet = readResolvedLocalFile(state, {
           ...args,
           projectId: project.id,
           filePath: match.path,
           startLine: 1,
           endLine: snippetLines,
           maxBytes: perReadBudget,
-        });
+        }, index.root);
         const contentBytes = Buffer.byteLength(String(snippet.content || ''), 'utf8');
         returnedSnippetBytes += contentBytes;
         remainingSnippetBytes = Math.max(0, remainingSnippetBytes - contentBytes);
@@ -482,8 +616,12 @@ export function getRepoContextBundle(state: AppState, args: Record<string, any>)
     }
   }
 
+  const snippetReadMs = roundDuration(nodePerformance.now() - snippetReadStartedAt);
+  const diffRequested = args.includeDiff === true || args.includeDiff === 'true';
+  const diffStartedAt = nodePerformance.now();
+
   let diff: any = undefined;
-  if (args.includeDiff === true || args.includeDiff === 'true') {
+  if (diffRequested) {
     try {
       const rawDiff = getGitDiff(state, {
         ...args,
@@ -503,6 +641,8 @@ export function getRepoContextBundle(state: AppState, args: Record<string, any>)
       diff = { available: false, reason: error?.message || 'Git diff unavailable.' };
     }
   }
+  const diffMs = diffRequested ? roundDuration(nodePerformance.now() - diffStartedAt) : 0;
+  const responseAssemblyStartedAt = nodePerformance.now();
 
   const effectiveContextPlan = {
     ...contextPlan,
@@ -521,7 +661,7 @@ export function getRepoContextBundle(state: AppState, args: Record<string, any>)
     budgetExhausted: remainingSnippetBytes <= 0,
   };
 
-  return {
+  const response = {
     project: start.project,
     query,
     repoRevision: start.repoRevision,
@@ -545,4 +685,21 @@ export function getRepoContextBundle(state: AppState, args: Record<string, any>)
       'run_project_command',
     ],
   };
+  const responseAssemblyMs = roundDuration(nodePerformance.now() - responseAssemblyStartedAt);
+  const phases: RepoContextBundlePhaseTimings = {
+    startContextMs,
+    repoIndexMs,
+    snippetReadMs,
+    snippetReadCount,
+    diffMs,
+    responseAssemblyMs,
+  };
+  const performance = {
+    cacheState: index.cache?.hit === true ? 'warm' as const : 'cold' as const,
+    totalMs: roundDuration(nodePerformance.now() - bundleStartedAt),
+    phases,
+    dominantPhase: dominantRepoContextPhase(phases),
+  };
+  recordRepoContextBundlePerformance(performance);
+  return { ...response, performance };
 }

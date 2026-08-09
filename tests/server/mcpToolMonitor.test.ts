@@ -61,6 +61,45 @@ test('tool monitor summarizes repeated tool calls and duplicate bursts', () => {
   ]);
 });
 
+test('tool monitor attaches aggregate repo-context dominant phase without payload data', async () => {
+  const {
+    clearRepoContextBundlePerformanceRecords,
+    recordRepoContextBundlePerformance,
+  } = await import('../../src/server/services/projectStartContextService.js');
+  clearToolCallRecords();
+  clearRepoContextBundlePerformanceRecords();
+  const now = Date.now();
+  for (let index = 0; index < 3; index += 1) {
+    recordToolCall({
+      toolName: 'get_repo_context_bundle',
+      args: { projectId: 'project-monitor' },
+      status: 200,
+      durationMs: 900 + index,
+      timestamp: now + index,
+    });
+    recordRepoContextBundlePerformance({
+      cacheState: 'warm',
+      totalMs: 900 + index,
+      phases: {
+        startContextMs: 10,
+        repoIndexMs: 700 + index,
+        snippetReadMs: 100,
+        snippetReadCount: 3,
+        diffMs: 0,
+        responseAssemblyMs: 90,
+      },
+      timestamp: now + index,
+    });
+  }
+
+  const summary = getToolCallSummary({ now: now + 10, windowMs: 1000 });
+  const context = summary.topTools.find((entry) => entry.toolName === 'get_repo_context_bundle');
+  assert.equal(context?.dominantPhase, 'repoIndex');
+  assert.equal(context?.dominantPhaseP95Ms, 702);
+  assert.equal(context?.bundleCacheState, 'warm');
+  assert.doesNotMatch(JSON.stringify(context), /project-monitor|\.ts|content/);
+});
+
 test('tool monitor groups response bytes by mode and tracks truncation', () => {
   clearToolCallRecords();
   const now = Date.now();

@@ -17,7 +17,7 @@ import { workspaceToolDefinitions } from './devflowWorkspaceTools';
 import { buildMcpTransportInputSchema } from './mcpSchemaTransport';
 import { resolveRuntimeMcpToolProfileValue } from './mcpToolProfileConfig';
 export type { DevFlowToolDefinition, DevFlowToolHttpRequest } from './devflowContractCore';
-export const DEVFLOW_CONTRACT_VERSION = '2026-08-09.2';
+export const DEVFLOW_CONTRACT_VERSION = '2026-08-09.3';
 
 export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   {
@@ -1169,6 +1169,16 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
         snippetLimit: { type: 'number' },
         snippetLines: { type: 'number' },
         maxSnippetBytes: { type: 'number' },
+        intent: { type: 'string', enum: ['authoring', 'small-bug', 'verification', 'cross-module', 'architecture'] },
+        complexity: { type: 'string' },
+        targetFiles: { type: 'array', items: { type: 'string' } },
+        deep: { type: 'boolean' },
+        disclosureLevel: { type: 'string', enum: ['project-summary', 'symbols', 'snippets', 'related', 'full-file'] },
+        contextSufficient: { type: 'boolean', description: 'Set false when the current context is insufficient and provide concrete missing evidence fields.' },
+        missingFiles: { type: 'array', items: { type: 'string' }, description: 'Specific relative files still required.' },
+        missingSymbols: { type: 'array', items: { type: 'string' }, description: 'Specific symbols still required; returned evidence is centered around matching lines.' },
+        missingTests: { type: 'array', items: { type: 'string' }, description: 'Specific relative tests still required.' },
+        missingRelationships: { type: 'array', items: { type: 'string' }, description: 'Specific dependency/caller/relationship queries still required.' },
         includeDiff: { type: 'boolean' },
         diffPath: { type: 'string' },
         maxDiffBytes: { type: 'number' },

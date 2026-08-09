@@ -3,7 +3,7 @@ import path from 'path';
 import type { AppState } from '../types';
 import { findProjectByIdentifier } from './taskService';
 import { createApiError } from './api';
-import { listLocalFiles, readLocalFile, resolveProjectRoot } from './localFileService';
+import { listLocalFiles, readLocalFile, resolveProjectRoot, searchLocalFiles } from './localFileService';
 import { getGitDiff } from './gitService';
 import { getRepoInspectionIndex } from './repoInspectionIndexService';
 import { registerRepoCacheInvalidator } from './repoCacheInvalidationService';
@@ -39,6 +39,154 @@ function parsePositiveInt(value: unknown, fallback: number, max: number) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(1, Math.min(max, Math.floor(parsed)));
+}
+
+function parseBoundedList(value: unknown, max = 8) {
+  const raw = Array.isArray(value) ? value : typeof value === 'string' ? value.split(',') : [];
+  return [...new Set(raw.map((entry) => String(entry || '').trim()).filter(Boolean))].slice(0, max);
+}
+
+function normalizeToolPath(value: unknown) {
+  return String(value || '').trim().replace(/\\/g, '/').replace(/^\.\//, '');
+}
+
+function escapeRegex(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+export function normalizeMissingContextRequest(args: Record<string, any>) {
+  const requested = args.contextSufficient === false || String(args.contextSufficient || '').toLowerCase() === 'false';
+  let remaining = 24;
+  const take = (value: unknown, transform?: (entry: string) => string) => {
+    const entries = parseBoundedList(value, Math.min(8, remaining));
+    remaining -= entries.length;
+    return transform ? entries.map(transform).filter(Boolean) : entries;
+  };
+  const files = take(args.missingFiles, normalizeToolPath);
+  const symbols = take(args.missingSymbols);
+  const tests = take(args.missingTests, normalizeToolPath);
+  const relationships = take(args.missingRelationships);
+  const total = files.length + symbols.length + tests.length + relationships.length;
+  return {
+    requested,
+    files,
+    symbols,
+    tests,
+    relationships,
+    total,
+    specific: requested && total > 0,
+  };
+}
+
+export function getMissingContextDelta(state: AppState, args: Record<string, any>) {
+  const request = normalizeMissingContextRequest(args);
+  if (!request.requested) return { request, status: 'not-requested' as const, snippets: [], relationships: [], returnedBytes: 0, estimatedTokens: 0 };
+  if (!request.specific) {
+    return {
+      request,
+      status: 'specific-evidence-required' as const,
+      snippets: [],
+      relationships: [],
+      returnedBytes: 0,
+      estimatedTokens: 0,
+    };
+  }
+
+  const project = resolveProject(state, args);
+  const snippets: any[] = [];
+  const relationshipMatches: any[] = [];
+  const seen = new Set<string>();
+  const addSnippet = (kind: 'file' | 'test' | 'symbol', label: string, filePath: string, startLine: number, endLine: number) => {
+    if (snippets.length >= 8) return;
+    const normalizedPath = normalizeToolPath(filePath);
+    const rangeKey = `${kind}:${label}:${normalizedPath}:${startLine}:${endLine}`;
+    if (seen.has(rangeKey)) return;
+    const snippet = readLocalFile(state, {
+      ...args,
+      projectId: project.id,
+      filePath: normalizedPath,
+      startLine,
+      endLine,
+      maxBytes: 8_000,
+    });
+    seen.add(rangeKey);
+    snippets.push({
+      kind,
+      label,
+      path: normalizedPath,
+      startLine: snippet.startLine,
+      endLine: snippet.endLine,
+      totalLines: snippet.totalLines,
+      content: snippet.content,
+      truncated: snippet.truncated,
+      returnedBytes: Buffer.byteLength(String(snippet.content || ''), 'utf8'),
+      revision: snippet.revision,
+      fileRevision: snippet.fileRevision,
+      evidenceKey: `${kind}:${label}:${normalizedPath}:${snippet.startLine}:${snippet.endLine}`,
+      evidenceReasons: [`missing-${kind}`],
+    });
+  };
+
+  for (const filePath of request.files) addSnippet('file', filePath, filePath, 1, 100);
+  for (const filePath of request.tests) addSnippet('test', filePath, filePath, 1, 100);
+
+  for (const symbol of request.symbols) {
+    if (snippets.length >= 8) break;
+    const search = searchLocalFiles(state, {
+      ...args,
+      projectId: project.id,
+      query: escapeRegex(symbol),
+      q: escapeRegex(symbol),
+      path: args.path || '.',
+      limit: 3,
+    });
+    const match = (search.matches || []).find((entry: any) => !/(?:^|[\\/])(?:tests?|__tests__)(?:[\\/]|$)|(?:\.test\.|\.spec\.)/i.test(String(entry.path || '')))
+      || (search.matches || [])[0];
+    if (match?.path && Number.isFinite(Number(match.line))) {
+      const line = Math.max(1, Number(match.line));
+      addSnippet('symbol', symbol, match.path, Math.max(1, line - 20), line + 40);
+    }
+  }
+
+  for (const relationship of request.relationships) {
+    if (relationshipMatches.length >= 8) break;
+    const index = getRepoInspectionIndex(state, {
+      ...args,
+      projectId: project.id,
+      q: relationship,
+      limit: 4,
+    });
+    for (const match of index.matches || []) {
+      if (relationshipMatches.length >= 8) break;
+      relationshipMatches.push({
+        relationship,
+        path: match.path,
+        score: match.score,
+        symbols: match.symbols,
+        imports: match.imports,
+        evidenceKey: `relationship:${relationship}:${normalizeToolPath(match.path)}`,
+        evidenceReasons: ['missing-relationship'],
+      });
+    }
+  }
+
+  const returnedBytes = snippets.reduce((total, snippet) => total + Number(snippet.returnedBytes || 0), 0)
+    + Buffer.byteLength(JSON.stringify(relationshipMatches), 'utf8');
+  return {
+    request,
+    status: snippets.length > 0 || relationshipMatches.length > 0 ? 'resolved' as const : 'unresolved' as const,
+    snippets,
+    relationships: relationshipMatches,
+    returnedBytes,
+    estimatedTokens: Math.ceil(returnedBytes / 4),
+    budget: {
+      maxRequestItems: 24,
+      maxItemsPerCategory: 8,
+      maxSnippets: 8,
+      maxSnippetBytes: 8_000,
+      relationshipLimit: 8,
+    },
+  };
 }
 
 export function getProjectStartContext(state: AppState, args: Record<string, any>) {

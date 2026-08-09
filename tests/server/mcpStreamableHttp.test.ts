@@ -6,10 +6,13 @@ import http from 'node:http';
 import express from 'express';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import * as mcpModule from '../../src/server/mcp.js';
+import * as streamableHttpModule from '../../src/server/mcpStreamableHttp.js';
 
 
-async function withMcpServer(run: (baseUrl: string) => Promise<void>) {
+async function withMcpServer(
+  run: (baseUrl: string) => Promise<void>,
+  hooks?: { onTiming?: (event: { phase: string; durationMs: number; outcome: string }) => void },
+) {
   const app = express();
   const runtimeInstanceId = randomUUID();
   let apiBaseUrl = '';
@@ -19,7 +22,7 @@ async function withMcpServer(run: (baseUrl: string) => Promise<void>) {
   });
   app.use('/mcp', express.json({ limit: '1mb' }));
   app.post('/mcp', (req, res, next) => {
-    return (mcpModule as any).createStatelessMcpHttpHandler(apiBaseUrl, 'full')(req, res, next);
+    return streamableHttpModule.createStatelessMcpHttpHandler(apiBaseUrl, 'full', hooks)(req, res, next);
   });
 
   const server = http.createServer(app);
@@ -49,12 +52,16 @@ async function callCapabilities(client: Client) {
   return JSON.parse(text) as { runtimeInstanceId: string; marker: string };
 }
 
-test('mcp module exposes a stateless Streamable HTTP request handler factory', () => {
-  assert.equal(
-    typeof (mcpModule as any).createStatelessMcpHttpHandler,
-    'function',
-    'createStatelessMcpHttpHandler should be exported for /mcp routing',
-  );
+test('Streamable HTTP lifecycle plumbing lives in a focused transport module', () => {
+  const mcpSource = fs.readFileSync(new URL('../../src/server/mcp.ts', import.meta.url), 'utf8');
+  const adapterUrl = new URL('../../src/server/mcpStreamableHttp.ts', import.meta.url);
+  assert.equal(fs.existsSync(adapterUrl), true, 'focused Streamable HTTP adapter module should exist');
+  const adapterSource = fs.readFileSync(adapterUrl, 'utf8');
+  const serverSource = fs.readFileSync(new URL('../../server.ts', import.meta.url), 'utf8');
+
+  assert.doesNotMatch(mcpSource, /StreamableHTTPServerTransport/);
+  assert.match(adapterSource, /StreamableHTTPServerTransport/);
+  assert.match(serverSource, /from ['"]\.\/src\/server\/mcpStreamableHttp['"]/);
 });
 
 test('production server mounts the Streamable HTTP handler at /mcp while retaining /sse', () => {
@@ -91,6 +98,40 @@ test('stateless Streamable HTTP handler accepts MCP initialize', async () => {
     assert.equal(body.result?.serverInfo?.name, 'dev-flow-mcp');
     assert.equal(response.headers.get('mcp-session-id'), null, 'stateless mode must not issue a session id');
   });
+});
+
+test('optional lifecycle timing hook observes connect, handle, and close without changing initialize behavior', async () => {
+  const events: Array<{ phase: string; durationMs: number; outcome: string }> = [];
+
+  await withMcpServer(async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/mcp`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 7,
+        method: 'initialize',
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'devflow-lifecycle-hook-test', version: '1.0.0' },
+        },
+      }),
+    });
+
+    const body = await response.json() as any;
+    assert.equal(response.status, 200, JSON.stringify(body));
+    assert.equal(body.result?.serverInfo?.name, 'dev-flow-mcp');
+  }, {
+    onTiming: (event) => events.push(event),
+  });
+
+  assert.deepEqual(events.map((event) => event.phase), ['connect', 'handle', 'close']);
+  assert.ok(events.every((event) => event.durationMs >= 0));
+  assert.ok(events.every((event) => event.outcome === 'success'));
 });
 
 test('official Streamable HTTP client can connect, list tools, and call get_capabilities without a server session', async () => {

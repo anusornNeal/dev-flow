@@ -1,5 +1,4 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { createCorrelationId } from './services/api';
 import { getCapabilityCatalog, getMcpToolList, getToolDefinitionByName, isToolAllowedInProfile, resolveDevFlowToolProfile } from './contracts/devflowContract';
@@ -188,42 +187,6 @@ function toMcpTextPayload(data: unknown) {
   return {
     content: [{ type: 'text', text: JSON.stringify(data) }],
     ...(structuredContent ? { structuredContent } : {}),
-  };
-}
-
-export function createStatelessMcpHttpHandler(apiBaseUrl: string, profileOverride?: string) {
-  return async (req: any, res: any, next?: (error?: unknown) => void) => {
-    if (req.method !== 'POST') {
-      res.setHeader('Allow', 'POST');
-      return res.status(405).json({
-        jsonrpc: '2.0',
-        error: { code: -32000, message: 'Method Not Allowed: stateless DevFlow MCP accepts POST requests only.' },
-        id: null,
-      });
-    }
-
-    const mcpServer = createDevFlowMcpServer(apiBaseUrl, profileOverride);
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: undefined,
-      enableJsonResponse: true,
-    });
-
-    try {
-      await mcpServer.connect(transport);
-      await transport.handleRequest(req, res, req.body);
-    } catch (error) {
-      console.error('MCP Streamable HTTP request error:', error);
-      if (!res.headersSent) {
-        return res.status(500).json({
-          jsonrpc: '2.0',
-          error: { code: -32603, message: 'Internal Streamable HTTP transport error.' },
-          id: null,
-        });
-      }
-      next?.(error);
-    } finally {
-      await transport.close().catch(() => {});
-    }
   };
 }
 

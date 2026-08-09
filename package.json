@@ -17,7 +17,7 @@
     "test:settings-security": "tsx --test tests/server/settingsSecurity.test.ts",
     "test:backup-integrity": "tsx --test tests/server/backupIntegrity.test.ts",
     "test:context-budget": "tsx --test tests/server/contextBudgetPlanner.test.ts && tsx --test tests/server/projectStartContext.test.ts && tsx --test tests/server/repoInspectionIndex.test.ts",
-    "test:execution-session": "tsx --test tests/server/executionSessionService.test.ts && tsx --test tests/server/contextHandleService.test.ts && tsx --test tests/server/executionSessionHandoff.test.ts",
+    "test:execution-session": "tsx --test tests/server/executionSessionService.test.ts && tsx --test tests/server/contextHandleService.test.ts && tsx --test tests/server/executionSessionHandoff.test.ts && tsx --test tests/server/executionSessionContractRoute.test.ts",
     "test:import-tasks": "tsx tests/devflow/import-tasks-from-file.test.ts",
     "test:prompt-templates": "tsx scripts/verify-prompt-templates.ts",
     "test:orchestration": "tsx scripts/verify-orchestration.ts",

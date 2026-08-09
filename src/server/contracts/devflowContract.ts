@@ -14,10 +14,11 @@ import {
 import { taskToolDefinitions } from './devflowTaskTools';
 import { gitToolDefinitions } from './devflowGitTools';
 import { workspaceToolDefinitions } from './devflowWorkspaceTools';
+import { executionToolDefinitions } from './devflowExecutionTools';
 import { buildMcpTransportInputSchema } from './mcpSchemaTransport';
 import { resolveRuntimeMcpToolProfileValue } from './mcpToolProfileConfig';
 export type { DevFlowToolDefinition, DevFlowToolHttpRequest } from './devflowContractCore';
-export const DEVFLOW_CONTRACT_VERSION = '2026-08-09.3';
+export const DEVFLOW_CONTRACT_VERSION = '2026-08-09.4';
 
 export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   {
@@ -521,6 +522,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   },
   ...taskToolDefinitions,
   ...workspaceToolDefinitions,
+  ...executionToolDefinitions,
   {
     name: 'list_skills',
     description: 'List DevFlow skills. Optionally filter by kind: authoring, workflow, prompt, or custom.',
@@ -1534,7 +1536,7 @@ const CODING_PROFILE_TOOLS = new Set([
   'run_project_command',
   'get_git_status', 'get_git_diff', 'get_git_log', 'get_git_show', 'get_git_branch', 'get_git_sync_status', 'get_change_summary',
   'ensure_git_branch', 'commit_git_changes', 'push_git_branch', 'create_pull_request',
-  'prepare_session_workspace', 'integrate_workspace', 'get_tool_job_result',
+  'prepare_session_workspace', 'integrate_workspace', 'resume_execution', 'handoff_execution', 'get_tool_job_result',
 ]);
 
 export function isToolAllowedInProfile(name: string, profile: DevFlowToolProfile) {
@@ -1542,7 +1544,7 @@ export function isToolAllowedInProfile(name: string, profile: DevFlowToolProfile
   if (profile === 'coding') return CODING_PROFILE_TOOLS.has(name);
   if (profile === 'atlas') return name.includes('atlas') || ['get_repo_context_bundle', 'read_local_file', 'read_file_snippets_batch', 'search_local_files'].includes(name);
   if (profile === 'diagnostics') return /health|diagnostic|job|tool_call|restart/.test(name);
-  if (profile === 'review') return /task|review|bug|git|diff|test_report|health/.test(name);
+  if (profile === 'review') return /task|review|bug|git|diff|test_report|health|execution/.test(name);
   return /task|jira|figma|repo_context|repo_inspection|read_local|search_local|authoring|skill/.test(name);
 }
 

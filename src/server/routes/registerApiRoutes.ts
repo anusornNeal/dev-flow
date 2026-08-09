@@ -11,6 +11,7 @@ import { registerAttachmentRoutes } from './attachments';
 import { registerFigmaRoutes } from './figma';
 import { registerMcpToolJobRoutes } from './mcpToolJobs';
 import { registerEventRoutes } from './events';
+import { registerExecutionSessionRoutes } from './executionSessions';
 import { initMcpToolJobs } from '../services/mcpToolJobService';
 import { createPrivilegedApiAccessMiddleware } from '../services/apiAccessPolicyService';
 
@@ -20,6 +21,7 @@ export function registerApiRoutes(app: express.Express, deps: ApiRouteDeps) {
   app.use('/api', createPrivilegedApiAccessMiddleware());
   registerEventRoutes(app);
   registerDevFlowRoutes(app, deps);
+  registerExecutionSessionRoutes(app, deps);
   registerSkillRoutes(app, deps);
   registerProjectRoutes(app, deps);
   registerSettingsRoutes(app, deps);

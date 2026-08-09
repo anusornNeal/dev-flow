@@ -72,11 +72,7 @@ All other task fields are identical across both interfaces.
 
 > **Note:** `images` is the attachment array for new task cards. `designImages` remains the array form for design references, and legacy `designImage` input is accepted only for backward compatibility.
 
-Always confirm the latest schema with:
-
-```text
-Dev_Flow.get_schema
-```
+For existing cards, confirm current data with `get_task`; for mutation inputs, inspect the exact advertised schema with `get_tool_schema` for `create_task` or `update_task`. Server-side mutation validation remains authoritative.
 
 ### category
 

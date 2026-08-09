@@ -49,6 +49,11 @@ function optionsHash(args: Record<string, any>) {
     diffPath: args.diffPath,
     maxDiffBytes: args.maxDiffBytes,
     includeIgnored: args.includeIgnored === true,
+    contextIntent: args.contextIntent ?? args.intent,
+    complexity: args.complexity,
+    targetFiles: Array.isArray(args.targetFiles) ? [...args.targetFiles].map(String).sort() : args.targetFiles,
+    disclosureLevel: args.disclosureLevel ?? args.contextDepth ?? (args.fullFile === true ? 'full-file' : undefined),
+    maxContextBytes: args.maxContextBytes ?? args.maxSnippetTotalBytes,
   };
   return crypto.createHash('sha256').update(JSON.stringify(relevant)).digest('hex');
 }

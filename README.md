@@ -101,9 +101,15 @@ DEVFLOW_NGROK_RESTART_MAX_MS=30000
 DEVFLOW_NGROK_STABLE_RESET_MS=60000
 ```
 
+### Trusted remote API boundary
+
+Local loopback requests keep the existing one-click workflow. When `/api` is reached through a forwarded or non-loopback client, read-only requests remain available but privileged mutation methods are denied by default. To opt in to trusted remote mutations, set `DEVFLOW_TRUSTED_REMOTE_TOKEN` and send the same value as `Authorization: Bearer <token>` (or `X-DevFlow-Remote-Token`). This policy applies to `/api`; MCP transport endpoints keep their own transport policy.
+
 ## Optional Setup: Agent CLIs and Tokens
 
 You can use DevFlow as a local board without any tokens.
+
+Integration secrets entered through Settings are stored outside SQLite through the credential-vault abstraction. Windows uses current-user DPAPI-backed encrypted storage; environment variables override persisted credentials and remain the fallback on platforms where secure persistence is unavailable. Legacy plaintext token rows are migrated and cleared only after secure storage succeeds.
 
 Configure these only when you need agent launching or connector-backed context:
 
@@ -180,6 +186,10 @@ A typical agent run looks like this:
 For repository work through MCP, the recommended safe loop is:
 
 1. Inspect repo context with `get_repo_context_bundle`.
+   - DevFlow now infers an intent profile (`authoring`, `small-bug-fix`, `cross-module-change`, `verification-debugging`, or `architecture-analysis`) and returns ranked Must/Should/Optional evidence with reasons.
+   - Automatic disclosure stays bounded from symbols/snippets up through callers/tests. `full-file` is an explicit override only.
+   - Use `targetFiles` to force known files into Must evidence, `contextIntent` to override inference, `disclosureLevel` for deliberate escalation, and `maxContextBytes` to cap aggregate snippet bytes.
+   - Evidence carries repo/file revision identities so later reads can detect staleness instead of silently reusing old context.
 2. Read exact files before editing.
 3. Dry-run edits before apply.
 4. Inspect git diff.
@@ -187,14 +197,27 @@ For repository work through MCP, the recommended safe loop is:
 6. Dry-run `commit_git_changes`, then commit only intended files.
 7. Move the task with `move_task_to_status` when closing or reopening cards.
 
+### Durable execution sessions
+
+DevFlow persists logical execution sessions in SQLite so coding state can survive fresh tool calls and runtime restarts. `executionSessionId` is the durable identity; project/task ids and an opaque `workspaceId` may be associated with it, but a machine-specific repository path is never persisted as session identity.
+
+Session evidence records carry repository and file revision identities. On resume, DevFlow rechecks file evidence against the current repository copy: unchanged evidence stays reusable while only changed or missing file evidence is marked stale. A ContextHandle remains a short-lived cache primitive that a session may reference; it is not the durable session model, and its cache key includes context intent, targets, disclosure level, and byte budget.
+
+Lifecycle is explicit: active sessions can record context, changed files, verification evidence, and revision-bound evidence; completed, cancelled, or expired sessions are terminal and cannot mutate as active work. Run `npm run test:execution-session` for the focused persistence/revision lifecycle suite.
+
+Cross-agent handoff snapshots stay compact: they persist completed/pending work, decisions, dependencies, risks, verification state, and revision-bound evidence references without copying prior source bodies. Resume revalidates the current repository and reports exactly which changed/stale targets require a fresh read; changing ChatGPT/Codex/review provider labels never changes the logical execution-session id.
+
 DevFlow's git tools are intentionally local-only. They do not push, rebase, reset, amend, or checkout branches.
 
 ## Backup, Restore, and Migration
 
-- Run `npm run backup` to create a timestamped backup under `data/`.
-- Run `npm run restore <path-to-backup>` to restore a `.db` file or backup bundle. Restore asks for confirmation and creates a safety backup first.
-- Use the Settings screen export/import flow when moving data between machines.
-- Run `npm run migrate:json` only when importing old JSON-based DevFlow data into SQLite.
+- Settings can create **verified recovery snapshots**. Each retained snapshot has a SHA-256 checksum, creation/source metadata, migration/schema version, SQLite `integrity_check` result, core record counts, and a local manifest under the DevFlow backups directory.
+- Snapshot retention is bounded (`DEVFLOW_BACKUP_RETENTION`, default 7, minimum 2, maximum 50) and keeps the newest verified recovery points. Exporting through Settings creates the same verified, secret-sanitized snapshot before download.
+- **Run restore drill** copies the newest verified snapshot into an isolated temporary directory, checks checksum/integrity/schema compatibility, applies only known pending DevFlow migrations to that temporary copy, validates core tables/records, then deletes the drill copy. It never replaces or opens the active DB path as the drill target.
+- Import validates SQLite integrity and migration compatibility before the active DB is touched, and reports reason codes such as `BACKUP_CHECKSUM_MISMATCH`, `BACKUP_SQLITE_CORRUPT`, `BACKUP_SCHEMA_INCOMPATIBLE`, and `BACKUP_REQUIRED_TABLES_MISSING` instead of one generic validation failure.
+- Current compatibility policy accepts databases whose applied migration IDs are all known to this DevFlow build; missing known migrations are upgradeable during a drill/restart, while unknown/future migration IDs are rejected.
+- Portable snapshots clear persisted GitHub/Jira/Figma token rows. The credential vault remains separate and raw integration secrets are not copied into recovery snapshots.
+- `npm run backup` / `npm run restore <path-to-backup>` remain available for the existing CLI flow. Run `npm run test:backup-integrity` for focused recovery-system verification, and `npm run migrate:json` only when importing old JSON-based DevFlow data into SQLite.
 
 ## Moving to Another Machine
 

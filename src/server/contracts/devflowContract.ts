@@ -17,7 +17,7 @@ import { workspaceToolDefinitions } from './devflowWorkspaceTools';
 import { buildMcpTransportInputSchema } from './mcpSchemaTransport';
 import { resolveRuntimeMcpToolProfileValue } from './mcpToolProfileConfig';
 export type { DevFlowToolDefinition, DevFlowToolHttpRequest } from './devflowContractCore';
-export const DEVFLOW_CONTRACT_VERSION = '2026-08-09.1';
+export const DEVFLOW_CONTRACT_VERSION = '2026-08-09.2';
 
 export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   {
@@ -299,6 +299,11 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
         diffPath: { type: 'string', description: 'Optional path to limit diff.' },
         maxDiffBytes: { type: 'number', description: 'Maximum diff bytes returned.' },
         includeIgnored: { type: 'boolean', description: 'Allow index to include ignored/generated folders.' },
+        contextIntent: { type: 'string', enum: ['authoring', 'small-bug-fix', 'cross-module-change', 'verification-debugging', 'architecture-analysis'], description: 'Optional intent override for deterministic context budgeting.' },
+        complexity: { type: 'string', description: 'Optional complexity hint used when selecting the context profile.' },
+        targetFiles: { type: 'array', items: { type: 'string' }, description: 'Explicit target files that rank as Must evidence.' },
+        disclosureLevel: { type: 'string', enum: ['project-summary', 'symbols', 'snippets', 'callers-tests', 'full-file'], description: 'Optional progressive disclosure override; full-file is never selected automatically.' },
+        maxContextBytes: { type: 'number', description: 'Maximum aggregate snippet-content byte budget for this bundle.' },
       },
     },
     outputSchema: { type: 'object' },

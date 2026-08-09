@@ -52,6 +52,28 @@ test('context handle returns NOT_MODIFIED without returning full snippets again'
   assert.equal(second.bundle, undefined);
 });
 
+test('context handle does not reuse cached context across intent, target, or budget changes', () => {
+  const first = getRepoContextWithHandle(state, {
+    projectId: 'project-context-handle',
+    q: 'Example',
+    contextIntent: 'small-bug-fix',
+    targetFiles: ['src/Example.ts'],
+    maxContextBytes: 18_000,
+  });
+  assert.equal(first.status, 'full');
+
+  const changedProfile = getRepoContextWithHandle(state, {
+    projectId: 'project-context-handle',
+    q: 'Example',
+    contextIntent: 'architecture-analysis',
+    targetFiles: ['src/Example.ts'],
+    maxContextBytes: 64_000,
+    contextHandle: first.contextHandle,
+  });
+  assert.equal(changedProfile.status, 'full');
+  assert.notEqual(changedProfile.contextHandle, first.contextHandle);
+});
+
 test('context handle returns only changed snippet revisions after a file edit', () => {
   const first = getRepoContextWithHandle(state, {
     projectId: 'project-context-handle', q: 'Example', limit: 5, snippetLimit: 2,

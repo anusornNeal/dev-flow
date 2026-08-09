@@ -5,11 +5,12 @@ import { resolveProjectRoot, resolveSafePath } from './localFileService';
 import { getProjectRulesContext, type ProjectFileRules } from './projectRulesService';
 import { getRepoCacheLineage, recordRepoCacheAccess, registerRepoCacheInvalidator, type RepoCacheInvalidationContext } from './repoCacheInvalidationService';
 import { getRepoRevisionForRoot, type RepoRevision } from './repoRevisionService';
+import { rankContextEvidence } from './contextBudgetPlannerService';
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const FALLBACK_MAX_FILES = 2500;
 const FALLBACK_MAX_FILE_BYTES = 100_000;
-const INDEX_EXTENSIONS = new Set(['.kt', '.kts', '.java', '.xml', '.ts', '.tsx', '.js', '.jsx']);
+const INDEX_EXTENSIONS = new Set(['.kt', '.kts', '.java', '.xml', '.ts', '.tsx', '.js', '.jsx', '.json', '.md', '.yaml', '.yml', '.sql']);
 const FALLBACK_SKIP_DIRS = [
   '.git',
   'node_modules',
@@ -399,7 +400,7 @@ export function getRepoInspectionIndex(state: AppState, args: Record<string, any
     .filter(Boolean);
   const limit = Number.isFinite(Number(args.limit)) ? Math.max(1, Math.min(50, Number(args.limit))) : 15;
 
-  const matches = index.entries
+  const rawMatches = index.entries
     .map((entry) => ({ entry, score: scoreEntry(entry, queryTerms) }))
     .filter(({ score }) => score > 0)
     .sort((left, right) => right.score - left.score || left.entry.path.localeCompare(right.entry.path))
@@ -411,6 +412,13 @@ export function getRepoInspectionIndex(state: AppState, args: Record<string, any
       imports: entry.imports,
       score,
     }));
+  const matches = rankContextEvidence(rawMatches, {
+    query: String(args.q || args.query || ''),
+    intent: args.contextIntent || args.intent,
+    targetFiles: Array.isArray(args.targetFiles) ? args.targetFiles : [],
+    changedFiles: Array.isArray(args.changedFiles) ? args.changedFiles : index.repoRevision?.changedFiles,
+    snippetLimit: limit,
+  });
 
   return {
     root: index.root,

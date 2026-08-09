@@ -4,6 +4,7 @@ import { createHash } from 'crypto';
 import db from '../../db/index.js';
 import { getDevFlowAppRoot } from '../../lib/devFlowPaths';
 import { publishServerEvent } from '../services/serverEventService.js';
+import { redactCredentialText } from '../services/credentialVaultService.js';
 
 export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'timed_out' | 'cancelled';
 export type JobRecoveryClassification = 'resumable' | 'retryable' | 'interrupted' | 'terminal';
@@ -98,6 +99,7 @@ export function getRecentJobCacheStats() {
 }
 
 function redactValue(value: any): any {
+  if (typeof value === 'string') return redactCredentialText(value);
   if (Array.isArray(value)) return value.map(redactValue);
   if (!value || typeof value !== 'object') return value;
   const copy: Record<string, any> = {};
@@ -378,7 +380,8 @@ export function transitionJobStatus(
 export function updateJobStatus(jobId: string, updates: Partial<McpToolJob>): McpToolJob | null {
   const current = getJob(jobId);
   if (!current) return null;
-  return transitionJobStatus(jobId, [current.status], updates);
+  const safeUpdates = redactValue(updates) as Partial<McpToolJob>;
+  return transitionJobStatus(jobId, [current.status], safeUpdates);
 }
 
 export function claimJob(jobId: string, workerId: string, leaseMs: number, nowMs = Date.now()): McpToolJob | null {
@@ -518,7 +521,7 @@ export function appendJobLog(jobId: string, stream: 'stdout' | 'stderr', data: s
   if (!job) return;
   fs.mkdirSync(job.artifactDir, { recursive: true });
   const filePath = path.join(job.artifactDir, `${stream}.log`);
-  fs.appendFileSync(filePath, data);
+  fs.appendFileSync(filePath, redactCredentialText(data));
   const bytes = fs.statSync(filePath).size;
   db.prepare(`UPDATE mcp_tool_jobs SET ${stream === 'stdout' ? 'stdout_bytes' : 'stderr_bytes'} = ? WHERE job_id = ?`).run(bytes, jobId);
   if (recentJobsCache) {
@@ -531,14 +534,15 @@ export function writeJobResult(jobId: string, result: any) {
   const job = getJob(jobId);
   if (!job) return;
   fs.mkdirSync(job.artifactDir, { recursive: true });
+  const safeResult = redactValue(result);
   const resultPath = path.join(job.artifactDir, 'result.json');
-  fs.writeFileSync(resultPath, JSON.stringify(result, null, 2));
+  fs.writeFileSync(resultPath, JSON.stringify(safeResult, null, 2));
   const resultMeta = fileMetadata(resultPath);
 
   let patchMeta = { bytes: 0, sha256: undefined as string | undefined };
-  if (result?.patch) {
+  if (safeResult?.patch) {
     const patchPath = path.join(job.artifactDir, 'patch.diff');
-    fs.writeFileSync(patchPath, result.patch);
+    fs.writeFileSync(patchPath, safeResult.patch);
     patchMeta = fileMetadata(patchPath);
   }
 

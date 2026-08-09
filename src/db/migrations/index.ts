@@ -7,17 +7,21 @@ import { taskWorkflowEvidenceMigration } from './005-task-workflow-evidence.js';
 import { taskBoardArchiveMigration } from './006-task-board-archive.js';
 import { taskDisplayIdIndexMigration } from './007-task-display-id-index.js';
 import { mcpToolJobsMigration } from './008-mcp-tool-jobs.js';
+import { executionSessionsMigration } from './010-execution-sessions.js';
 import db from '../index.js';
 
+export const DEVFLOW_MIGRATIONS = [
+  initMigration,
+  persistenceHardeningMigration,
+  taskBugThreadsMigration,
+  displayIdCounterRepairMigration,
+  taskWorkflowEvidenceMigration,
+  taskBoardArchiveMigration,
+  taskDisplayIdIndexMigration,
+  mcpToolJobsMigration,
+  executionSessionsMigration,
+] as const;
+
 export function executeAllMigrations() {
-  runMigrations(db, [
-    initMigration,
-    persistenceHardeningMigration,
-    taskBugThreadsMigration,
-    displayIdCounterRepairMigration,
-    taskWorkflowEvidenceMigration,
-    taskBoardArchiveMigration,
-    taskDisplayIdIndexMigration,
-    mcpToolJobsMigration,
-  ]);
+  runMigrations(db, [...DEVFLOW_MIGRATIONS]);
 }

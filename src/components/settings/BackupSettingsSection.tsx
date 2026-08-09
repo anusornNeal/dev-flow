@@ -8,12 +8,54 @@ interface BackupSettingsSectionProps {
   onImportFile: (event: React.ChangeEvent<HTMLInputElement>) => void;
 }
 
+interface RecoverySummary {
+  lastVerifiedGoodBackup?: { id: string; createdAt: string; schemaVersion: string | null };
+  lastRestoreDrill?: { checkedAt: string; ok: boolean; code?: string; reason?: string; migrated: boolean };
+  failureReason?: { code: string; reason: string; recordedAt: string } | null;
+}
+
 export default function BackupSettingsSection({
   fileInputRef,
   importStatus,
   importMsg,
   onImportFile,
 }: BackupSettingsSectionProps) {
+  const [recovery, setRecovery] = React.useState<RecoverySummary>({});
+  const [recoveryAction, setRecoveryAction] = React.useState<'snapshot' | 'drill' | null>(null);
+  const [recoveryMessage, setRecoveryMessage] = React.useState('');
+
+  const refreshRecovery = React.useCallback(() => {
+    fetch('/api/recovery/status', { cache: 'no-store' })
+      .then((response) => response.json())
+      .then((data: RecoverySummary) => setRecovery(data))
+      .catch(() => undefined);
+  }, []);
+
+  React.useEffect(() => {
+    refreshRecovery();
+  }, [refreshRecovery]);
+
+  const runRecoveryAction = async (action: 'snapshot' | 'drill') => {
+    setRecoveryAction(action);
+    setRecoveryMessage('');
+    try {
+      const endpoint = action === 'snapshot' ? '/api/recovery/snapshot' : '/api/recovery/restore-drill';
+      const response = await fetch(endpoint, { method: 'POST' });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.drill?.reason || data?.reason || data?.error || 'Recovery verification failed');
+      if (data.recovery) setRecovery(data.recovery);
+      else refreshRecovery();
+      setRecoveryMessage(action === 'snapshot' ? 'Verified recovery snapshot created.' : 'Restore drill passed in an isolated temporary database.');
+    } catch (error: any) {
+      setRecoveryMessage(error?.message || 'Recovery verification failed');
+      refreshRecovery();
+    } finally {
+      setRecoveryAction(null);
+    }
+  };
+
+  const formatRecoveryTime = (value?: string) => value ? new Date(value).toLocaleString() : 'Not yet';
+
   return (
     <div className="pt-4 mt-2 border-t border-[#ebdcb9] dark:border-[#584a3b] flex flex-col gap-2">
       <div className="flex flex-wrap items-start sm:items-center justify-between gap-4">
@@ -51,6 +93,46 @@ export default function BackupSettingsSection({
             className="hidden"
           />
         </div>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 rounded-xl border border-[#eadbc4] dark:border-[#584a3b] bg-[#faf7f0] dark:bg-[#1e1914] p-3">
+        <div className="min-w-0">
+          <div className="text-[11px] font-bold text-[#534135] dark:text-[#f3eadf]">Last verified backup</div>
+          <div className="text-[10px] font-mono text-[#8a725f] dark:text-[#cdbcae] truncate">
+            {formatRecoveryTime(recovery.lastVerifiedGoodBackup?.createdAt)}
+            {recovery.lastVerifiedGoodBackup?.schemaVersion ? ` · ${recovery.lastVerifiedGoodBackup.schemaVersion}` : ''}
+          </div>
+        </div>
+        <div className="min-w-0">
+          <div className="text-[11px] font-bold text-[#534135] dark:text-[#f3eadf]">Last restore drill</div>
+          <div className="text-[10px] font-mono text-[#8a725f] dark:text-[#cdbcae] truncate">
+            {formatRecoveryTime(recovery.lastRestoreDrill?.checkedAt)}
+            {recovery.lastRestoreDrill ? ` · ${recovery.lastRestoreDrill.ok ? 'Passed' : recovery.lastRestoreDrill.code || 'Failed'}` : ''}
+          </div>
+        </div>
+        <div className="sm:col-span-2 flex flex-wrap gap-2 pt-1">
+          <button
+            type="button"
+            disabled={recoveryAction !== null}
+            onClick={() => runRecoveryAction('snapshot')}
+            className="bg-[#fffdfa] dark:bg-[#262019] border border-[#e5d4bb] dark:border-[#584a3b] px-2.5 py-1.5 rounded-lg text-[11px] font-bold disabled:opacity-50"
+          >
+            {recoveryAction === 'snapshot' ? 'Verifying…' : 'Create verified snapshot'}
+          </button>
+          <button
+            type="button"
+            disabled={recoveryAction !== null || !recovery.lastVerifiedGoodBackup}
+            onClick={() => runRecoveryAction('drill')}
+            className="bg-[#fffdfa] dark:bg-[#262019] border border-[#e5d4bb] dark:border-[#584a3b] px-2.5 py-1.5 rounded-lg text-[11px] font-bold disabled:opacity-50"
+          >
+            {recoveryAction === 'drill' ? 'Running drill…' : 'Run restore drill'}
+          </button>
+        </div>
+        {(recovery.failureReason || recoveryMessage) && (
+          <div className={`sm:col-span-2 text-[10px] font-mono ${recovery.failureReason ? 'text-[#991b1b] dark:text-[#fca5a5]' : 'text-[#166534] dark:text-[#a7f3d0]'}`}>
+            {recovery.failureReason ? `${recovery.failureReason.code}: ${recovery.failureReason.reason}` : recoveryMessage}
+          </div>
+        )}
       </div>
 
       {importMsg && (

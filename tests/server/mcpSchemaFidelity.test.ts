@@ -129,23 +129,30 @@ test('schema fidelity assertion reports the exact divergent property path', () =
   );
 });
 
-test('MCP tools/list exposes the same transport-safe schemas including aliases', async () => {
-  const server = createDevFlowMcpServer('http://127.0.0.1:3000');
-  const handler = (server as any)._requestHandlers.get('tools/list');
-  assert.ok(handler, 'MCP tools/list handler should be registered');
+test('full MCP tools/list exposes the same transport-safe schemas including aliases', async () => {
+  const previousProfile = process.env.DEVFLOW_MCP_TOOL_PROFILE;
+  process.env.DEVFLOW_MCP_TOOL_PROFILE = 'full';
+  try {
+    const server = createDevFlowMcpServer('http://127.0.0.1:3000');
+    const handler = (server as any)._requestHandlers.get('tools/list');
+    assert.ok(handler, 'MCP tools/list handler should be registered');
 
-  const response = await handler({ method: 'tools/list', params: {} });
-  const listedTools = response.tools as any[];
-  const directTools = getMcpToolList('full') as any[];
-  for (const name of ['read_file_snippets_batch', 'apply_and_verify', 'get_agent_task_context', 'get_agent_context']) {
-    const listed = listedTools.find((tool) => tool.name === name);
-    const direct = directTools.find((tool) => tool.name === name);
-    assert.ok(listed, `Schema mismatch at tools/list.${name}: tool missing from MCP registration`);
-    assert.ok(direct, `Schema mismatch at direct.${name}: tool missing from canonical exposure list`);
-    assert.deepEqual(listed.inputSchema, direct.inputSchema, `Schema mismatch at tools/list.${name}.inputSchema`);
+    const response = await handler({ method: 'tools/list', params: {} });
+    const listedTools = response.tools as any[];
+    const directTools = getMcpToolList('full') as any[];
+    for (const name of ['read_file_snippets_batch', 'apply_and_verify', 'get_agent_task_context', 'get_agent_context']) {
+      const listed = listedTools.find((tool) => tool.name === name);
+      const direct = directTools.find((tool) => tool.name === name);
+      assert.ok(listed, `Schema mismatch at tools/list.${name}: tool missing from MCP registration`);
+      assert.ok(direct, `Schema mismatch at direct.${name}: tool missing from canonical exposure list`);
+      assert.deepEqual(listed.inputSchema, direct.inputSchema, `Schema mismatch at tools/list.${name}.inputSchema`);
+    }
+
+    const canonicalAgentTool = listedTools.find((tool) => tool.name === 'get_agent_task_context');
+    const aliasAgentTool = listedTools.find((tool) => tool.name === 'get_agent_context');
+    assert.deepEqual(aliasAgentTool.inputSchema, canonicalAgentTool.inputSchema, 'Schema mismatch at tools/list.get_agent_context.inputSchema: alias diverges from canonical tool');
+  } finally {
+    if (previousProfile === undefined) delete process.env.DEVFLOW_MCP_TOOL_PROFILE;
+    else process.env.DEVFLOW_MCP_TOOL_PROFILE = previousProfile;
   }
-
-  const canonicalAgentTool = listedTools.find((tool) => tool.name === 'get_agent_task_context');
-  const aliasAgentTool = listedTools.find((tool) => tool.name === 'get_agent_context');
-  assert.deepEqual(aliasAgentTool.inputSchema, canonicalAgentTool.inputSchema, 'Schema mismatch at tools/list.get_agent_context.inputSchema: alias diverges from canonical tool');
 });

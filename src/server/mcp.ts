@@ -170,7 +170,7 @@ function toMcpTextPayload(data: unknown) {
   };
 }
 
-export function createStatelessMcpHttpHandler(apiBaseUrl: string) {
+export function createStatelessMcpHttpHandler(apiBaseUrl: string, profileOverride?: string) {
   return async (req: any, res: any, next?: (error?: unknown) => void) => {
     if (req.method !== 'POST') {
       res.setHeader('Allow', 'POST');
@@ -181,7 +181,7 @@ export function createStatelessMcpHttpHandler(apiBaseUrl: string) {
       });
     }
 
-    const mcpServer = createDevFlowMcpServer(apiBaseUrl);
+    const mcpServer = createDevFlowMcpServer(apiBaseUrl, profileOverride);
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,
@@ -206,8 +206,8 @@ export function createStatelessMcpHttpHandler(apiBaseUrl: string) {
   };
 }
 
-export function createDevFlowMcpServer(baseUrl: string) {
-  const profileResolution = resolveDevFlowToolProfile();
+export function createDevFlowMcpServer(baseUrl: string, profileOverride?: string) {
+  const profileResolution = resolveDevFlowToolProfile(profileOverride);
   const activeProfile = profileResolution.profile;
   const server = new Server(
     { name: 'dev-flow-mcp', version: getCapabilityCatalog().contractVersion },

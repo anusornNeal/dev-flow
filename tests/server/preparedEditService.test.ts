@@ -72,6 +72,9 @@ test('applyPreparedEditPlan rejects stale files before any write', () => {
   assert.equal(applied.code, 'EDIT_PLAN_STALE');
   assert.equal(applied.recovery?.action, 're-read');
   assert.equal(applied.recovery?.retrySamePayload, false);
+  assert.equal(applied.recovery?.category, 'refresh-repreview');
+  assert.equal(applied.recovery?.strategy, 'refresh-source-repreview');
+  assert.equal(applied.recovery?.autoApply, false);
   assert.equal(read('first.txt'), 'first one');
   assert.equal(read('second.txt'), 'newer content');
 });
@@ -94,6 +97,9 @@ test('prepared edit plans are single-use', () => {
   assert.equal(second.code, 'EDIT_PLAN_CONSUMED');
   assert.equal(second.recovery?.action, 'inspect-result');
   assert.equal(second.recovery?.retrySamePayload, false);
+  assert.equal(second.recovery?.category, 'decision-required');
+  assert.equal(second.recovery?.strategy, 'inspect-result');
+  assert.equal(second.recovery?.autoApply, false);
 });
 
 test('prepareEditPlan preserves the underlying safe-edit error code', () => {
@@ -138,7 +144,10 @@ test('prepared plan reports expiry once and then becomes not found after pruning
   assert.equal(pruned.code, 'EDIT_PLAN_NOT_FOUND');
   assert.equal(expired.recovery?.action, 're-prepare');
   assert.equal(expired.recovery?.retrySamePayload, false);
+  assert.equal(expired.recovery?.category, 'refresh-repreview');
+  assert.equal(expired.recovery?.requiresFreshPreview, true);
   assert.equal(pruned.recovery?.action, 're-prepare');
+  assert.equal(pruned.recovery?.category, 'refresh-repreview');
   assert.equal(read('expired-plan.txt'), 'alpha one');
 });
 

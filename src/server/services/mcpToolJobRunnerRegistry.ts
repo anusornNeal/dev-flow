@@ -11,6 +11,7 @@ import { applyProjectAtlasAgentUpdate } from './projectAtlasService';
 import { runProjectCommandAsync } from './projectCommandService';
 import { prepareCompactEdit } from './stenoEditProtocolService';
 import type { ResourceAccessMode } from './mcpToolJobScheduler';
+import { executeRecoveryAwareTool } from './devFlowRecoveryRuntime.js';
 
 type Logger = { stdout: (data: string) => void; stderr: (data: string) => void };
 
@@ -69,16 +70,26 @@ export async function runBuiltinToolJob(input: BuiltinToolJobInput, context: Bui
     return await applyLocalPatchAsync(state, args, logger, setCancelFn);
   }
   if (toolName === 'search_local_files') {
-    return await searchLocalFilesAsync(state, args, logger, setCancelFn);
+    return await executeRecoveryAwareTool(
+      state,
+      toolName,
+      args,
+      (payload) => searchLocalFilesAsync(state, payload, logger, setCancelFn),
+    );
   }
   if (toolName === 'ensure_git_branch') return ensureGitBranch(state, args);
   if (toolName === 'push_git_branch') return pushGitBranch(state, args);
   if (toolName === 'commit_git_changes') return commitGitChanges(state, args);
   if (toolName === 'edit_local_files_batch') return editFilesBatch(state, args);
   if (toolName === 'prepare_edit_plan') return prepareEditPlan(state, args);
-  if (toolName === 'apply_prepared_edit_plan') return applyPreparedEditPlan(args);
+  if (toolName === 'apply_prepared_edit_plan') {
+    return await executeRecoveryAwareTool(state, toolName, args, (payload) => applyPreparedEditPlan(payload));
+  }
   if (toolName === 'prepare_compact_edit') return prepareCompactEdit(state, args);
-  if (toolName === 'apply_prepared_edit') return applyPreparedEditPlan({ editPlanId: args?.editPlanId });
+  if (toolName === 'apply_prepared_edit') {
+    const payload = { editPlanId: args?.editPlanId };
+    return await executeRecoveryAwareTool(state, toolName, payload, (nextPayload) => applyPreparedEditPlan(nextPayload));
+  }
   if (toolName === 'apply_and_verify') {
     return await applyAndVerifyAsync(state, args, logger, setCancelFn, transitionAccess);
   }

@@ -24,6 +24,7 @@ import {
   type SchedulerQueueEntry,
 } from './mcpToolJobScheduler';
 import { getBuiltinToolJobRecoveryPolicy, runBuiltinToolJob } from './mcpToolJobRunnerRegistry';
+import { recoveryPolicyForJobStatus, type ToolRecoveryPolicy } from './toolRecoveryPolicy.js';
 
 type Logger = { stdout: (data: string) => void; stderr: (data: string) => void };
 type AsyncRunner = (
@@ -237,6 +238,15 @@ export function waitForToolJob(jobId: string, waitMs = 20_000) {
   });
 }
 
+export async function waitForToolJobResultForRecovery(payload: Record<string, any>, _error: unknown, options: { waitMs: number }) {
+  const jobId = String(payload?.jobId || '').trim();
+  if (!jobId) return { ready: false };
+  const status = await waitForToolJob(jobId, options.waitMs);
+  if (!status || !isTerminalStatus(status.status)) return { ready: false };
+  const persisted = readJobResult(jobId) as any;
+  return { ready: true, value: persisted?.result ?? status };
+}
+
 export function getToolJobWaitGuidance(status: ReturnType<typeof getToolJobStatus>) {
   if (!status) {
     return {
@@ -280,23 +290,33 @@ function summarizeError(error: any) {
   return message.length > 500 ? `${message.slice(0, 497)}...` : message;
 }
 
-function getNextAction(status: string) {
+function getNextAction(status: string, recovery: ToolRecoveryPolicy | null) {
   if (status === 'queued' || status === 'running') {
-    return 'Poll get_tool_job_status or get_tool_job_log; call cancel_tool_job to stop the job.';
+    return recovery?.guidance || 'Wait for the existing job result; do not create a duplicate job.';
   }
   if (status === 'succeeded') {
     return 'Call get_tool_job_result to read the completed result.';
   }
-  if (status === 'timed_out') {
-    return 'Read get_tool_job_log/get_tool_job_result, then retry with a higher timeout or narrower scope.';
-  }
-  if (status === 'failed') {
-    return 'Read get_tool_job_log/get_tool_job_result, fix the reported issue, then retry the tool call.';
+  if (status === 'timed_out' || status === 'failed') {
+    return recovery
+      ? `Read get_tool_job_result for the terminal error. Recovery policy: ${recovery.guidance}`
+      : 'Read get_tool_job_log/get_tool_job_result and change strategy explicitly; do not replay the same failed payload unchanged.';
   }
   if (status === 'cancelled') {
-    return 'The job was cancelled; retry the original tool call if the work is still needed.';
+    return 'The job was cancelled; inspect why before deciding whether a changed tool call is still needed.';
   }
   return 'Inspect job status, logs, and result.';
+}
+
+function getTerminalJobErrorCode(jobId: string) {
+  try {
+    const persisted = readJobResult(jobId) as any;
+    const result = persisted?.result;
+    const code = result?.code || result?.error?.code;
+    return typeof code === 'string' && code.trim() ? code.trim() : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function getLastLog(jobId: string) {
@@ -437,6 +457,8 @@ export function getToolJobStatus(jobId: string) {
     ? queue[position]
     : activeJobs.get(jobId)?.entry || (leaderJobId ? activeJobs.get(leaderJobId)?.entry : undefined);
   const blocker = position >= 0 && entry ? getBlockerForQueueEntry(entry, position, queue, activeSchedulerEntries()) : null;
+  const errorCode = job.status === 'failed' || job.status === 'timed_out' ? getTerminalJobErrorCode(jobId) : undefined;
+  const recovery = recoveryPolicyForJobStatus(job.status, errorCode);
   return {
     ...job,
     queuePosition: position >= 0 ? position + 1 : 0,
@@ -447,7 +469,8 @@ export function getToolJobStatus(jobId: string) {
     } : {}),
     ...(blocker || {}),
     lastLog: getLastLog(jobId),
-    nextAction: getNextAction(job.status)
+    ...(recovery ? { recovery } : {}),
+    nextAction: getNextAction(job.status, recovery)
   };
 }
 

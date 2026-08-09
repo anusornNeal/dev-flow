@@ -18,6 +18,7 @@ import {
 import { readJobLog, readJobResult } from '../../src/server/repositories/mcpToolJobRepository';
 import { createProject } from '../../src/server/repositories/projectRepository.js';
 import { registerMcpToolJobRoutes } from '../../src/server/routes/mcpToolJobs.js';
+import { createApiError } from '../../src/server/services/api.js';
 
 try { createProject({ id: 'proj_1', name: 'dev-flow', localPath: process.cwd() }); } catch(e) {}
 const MOCK_STATE: any = {
@@ -711,6 +712,52 @@ test('mcpToolJobService - stress read/write/command queue ordering on one repo',
     blockers.read2.resolve();
     blockers.write.resolve();
     blockers.command.resolve();
+    __setToolJobTestRunner(toolName, null);
+  }
+});
+
+test('mcpToolJobService - pending jobs expose wait-result recovery instead of duplicate retry guidance', async () => {
+  const root = makeTempRepo('recovery-pending');
+  const state = makeState(root);
+  const toolName = `test_recovery_pending_${randomUUID()}`;
+  const gate = deferred();
+  __setToolJobTestRunner(toolName, async () => {
+    await gate.promise;
+    return { ok: true };
+  });
+
+  try {
+    const job = enqueueToolJob(state, toolName, { localPath: root }, 'repo-read');
+    await waitUntil(() => getToolJobStatus(job.jobId)?.status === 'running', 'Expected recovery job to start');
+    const status: any = getToolJobStatus(job.jobId);
+    assert.strictEqual(status.recovery?.category, 'automatic');
+    assert.strictEqual(status.recovery?.strategy, 'wait-result');
+    assert.strictEqual(status.recovery?.retrySamePayload, false);
+    assert.match(status.nextAction, /Wait for the running job result/i);
+    gate.resolve();
+    await waitForStatus(job.jobId, 'succeeded');
+  } finally {
+    gate.resolve();
+    __setToolJobTestRunner(toolName, null);
+  }
+});
+
+test('mcpToolJobService - failed jobs expose decision-required recovery from persisted error code', async () => {
+  const root = makeTempRepo('recovery-failed');
+  const state = makeState(root);
+  const toolName = `test_recovery_failed_${randomUUID()}`;
+  __setToolJobTestRunner(toolName, async () => {
+    throw createApiError(409, 'AMBIGUOUS_MATCH', 'multiple anchors');
+  });
+
+  try {
+    const job = enqueueToolJob(state, toolName, { localPath: root }, 'repo-write');
+    const status: any = await waitForStatus(job.jobId, 'failed');
+    assert.strictEqual(status.recovery?.category, 'decision-required');
+    assert.strictEqual(status.recovery?.strategy, 'request-decision');
+    assert.strictEqual(status.recovery?.autoApply, false);
+    assert.match(status.nextAction, /require an explicit target decision/i);
+  } finally {
     __setToolJobTestRunner(toolName, null);
   }
 });

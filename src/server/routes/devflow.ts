@@ -27,6 +27,7 @@ import { applyPreparedEditPlan, prepareEditPlan } from '../services/preparedEdit
 import { prepareCompactEdit } from '../services/stenoEditProtocolService';
 import { applyAndVerifyAsync } from '../services/applyAndVerifyService';
 import { getRepoContextWithHandle } from '../services/contextHandleService';
+import { executeRecoveryAwareTool } from '../services/devFlowRecoveryRuntime.js';
 import { getRepoSemanticIndex } from '../services/repoInspectionIndexService';
 import { cleanupSessionWorkspace, createOrReuseSessionWorkspace } from '../services/sessionWorkspaceService';
 import { abortWorkspaceIntegration, integrateWorkspaceCommits, retryWorkspaceIntegration } from '../services/workspaceIntegrationService';
@@ -195,9 +196,16 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
     }
   });
 
-  app.post('/api/local-files/read-batch', (req, res) => {
+  app.post('/api/local-files/read-batch', async (req, res) => {
     try {
-      return res.json(readFileSnippetsBatch(deps.state, req.body as Record<string, any>));
+      const args = req.body as Record<string, any>;
+      const result = await executeRecoveryAwareTool(
+        deps.state,
+        'read_file_snippets_batch',
+        args,
+        (payload) => readFileSnippetsBatch(deps.state, payload),
+      );
+      return res.json(result);
     } catch (error) {
       return sendApiError(res, error);
     }
@@ -259,9 +267,16 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
     }
   });
 
-  app.post('/api/local-files/edit-plans/apply', (req, res) => {
+  app.post('/api/local-files/edit-plans/apply', async (req, res) => {
     try {
-      return res.json(applyPreparedEditPlan(req.body as Record<string, any>));
+      const args = req.body as Record<string, any>;
+      const result = await executeRecoveryAwareTool(
+        deps.state,
+        'apply_prepared_edit_plan',
+        args,
+        (payload) => applyPreparedEditPlan(payload),
+      );
+      return res.json(result);
     } catch (error) {
       return sendApiError(res, error);
     }
@@ -275,9 +290,16 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
     }
   });
 
-  app.post('/api/local-files/compact-edit/apply', (req, res) => {
+  app.post('/api/local-files/compact-edit/apply', async (req, res) => {
     try {
-      return res.json(applyPreparedEditPlan({ editPlanId: req.body?.editPlanId }));
+      const args = { editPlanId: req.body?.editPlanId };
+      const result = await executeRecoveryAwareTool(
+        deps.state,
+        'apply_prepared_edit',
+        args,
+        (payload) => applyPreparedEditPlan(payload),
+      );
+      return res.json(result);
     } catch (error) {
       return sendApiError(res, error);
     }

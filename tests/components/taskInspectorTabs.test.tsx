@@ -72,15 +72,16 @@ function makeTask(): Task {
 
 const noop = () => {};
 
-function renderDrawer(initialTab: 'overview' | 'work' | 'bugs' | 'activity') {
+function renderDrawer(initialTab: 'overview' | 'work' | 'subtasks' | 'bugs' | 'activity', extraTasks: Task[] = []) {
   const task = makeTask();
   return renderToStaticMarkup(React.createElement(TaskDetailsDrawer as any, {
     task,
-    allTasks: [task],
+    allTasks: [task, ...extraTasks],
     initialTab,
     onClose: noop,
     onUpdate: noop,
     onDelete: noop,
+    onSelectTask: noop,
   }));
 }
 
@@ -108,6 +109,26 @@ test('Work groups checklist, target files, execution assignment, and verificatio
   assert.match(html, /GPT-5\.6 Sol/);
   assert.match(html, /Run focused inspector tests and production build/);
   assert.match(html, /TypeScript passed/);
+});
+
+test('Subtasks has dedicated content while Work stays focused on implementation details', () => {
+  const child: Task = {
+    ...makeTask(),
+    id: 'task-inspector-child',
+    displayId: 'DVF-CHILD',
+    title: 'Dedicated subtask fixture',
+    parentId: 'task-inspector-1',
+    status: 'done',
+  };
+  const subtasksHtml = renderDrawer('subtasks', [child]);
+  assert.match(subtasksHtml, /Subtasks Breakdown \(1\/1\)/);
+  assert.match(subtasksHtml, /Dedicated subtask fixture/);
+  assert.match(subtasksHtml, /100% complete/);
+  assert.match(subtasksHtml, /ID: #DVF-CHILD/);
+
+  const workHtml = renderDrawer('work', [child]);
+  assert.doesNotMatch(workHtml, /Subtasks Breakdown/);
+  assert.doesNotMatch(workHtml, /Dedicated subtask fixture/);
 });
 
 test('Bugs keeps embedded bug details visible in normal read mode', () => {

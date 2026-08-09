@@ -16,6 +16,7 @@ import TaskOverviewTab from './taskDrawer/TaskOverviewTab';
 import TaskWorkTab from './taskDrawer/TaskWorkTab';
 import TaskInspectorActivityTab from './taskDrawer/TaskInspectorActivityTab';
 import BugThreadsSection from './taskDrawer/BugThreadsSection';
+import SubtasksSection from './taskDrawer/SubtasksSection';
 
 interface TaskDetailsDrawerProps {
   task: Task;
@@ -166,7 +167,6 @@ export default function TaskDetailsDrawer({
   const workTab = (
     <TaskWorkTab
       task={task}
-      subTasks={subTasks}
       isEditing={edit.isEditing}
       editedBranch={edit.editedBranch}
       setEditedBranch={edit.setEditedBranch}
@@ -183,12 +183,21 @@ export default function TaskDetailsDrawer({
       editedVerification={edit.editedVerification}
       setEditedVerification={edit.setEditedVerification}
       onToggleChecklistItem={handleToggleChecklistItem}
-      showAllSubtasks={disclosure.showAllSubtasks}
-      onShowAllSubtasksChange={disclosure.setShowAllSubtasks}
-      canCreateSubtask={Boolean(onCreateTask) && !task.parentId}
-      onCreateSubtask={() => setIsAddingSubtask(true)}
-      onSelectTask={onSelectTask}
     />
+  );
+
+  const subtasksTab = (
+    <div className="mx-auto max-w-6xl">
+      <SubtasksSection
+        task={task}
+        subTasks={subTasks}
+        showAllSubtasks={disclosure.showAllSubtasks}
+        canCreateSubtask={Boolean(onCreateTask) && !task.parentId}
+        onCreateSubtask={() => setIsAddingSubtask(true)}
+        onSelectTask={onSelectTask}
+        onShowAllSubtasksChange={disclosure.setShowAllSubtasks}
+      />
+    </div>
   );
 
   const activityTab = (
@@ -215,9 +224,11 @@ export default function TaskDetailsDrawer({
     ? overviewTab
     : activeTab === 'work'
       ? workTab
-      : activeTab === 'bugs'
-        ? <div className="mx-auto max-w-6xl"><BugThreadsSection task={task} bugs={task.bugs} onTaskUpdated={onUpdate} /></div>
-        : activityTab;
+      : activeTab === 'subtasks'
+        ? subtasksTab
+        : activeTab === 'bugs'
+          ? <div className="mx-auto max-w-6xl"><BugThreadsSection task={task} bugs={task.bugs} onTaskUpdated={onUpdate} /></div>
+          : activityTab;
 
   return (
     <div onPaste={edit.handlePasteImage}>

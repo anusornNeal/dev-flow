@@ -117,6 +117,33 @@ test('buildWorkDecomposition exposes parallel-safe independent frontend and back
   assert.equal(result.edges.some((edge) => edge.kind === 'conflict-serialization'), false);
 });
 
+test('buildWorkDecomposition recomputes runnable and blocked classifications when prerequisite evidence changes', () => {
+  const base = {
+    title: 'Introduce account status contract and backend consumer',
+    description: 'Define the shared contract and update the backend consumer with focused verification.',
+  };
+  const withoutContractEvidence = buildWorkDecomposition({
+    ...base,
+    repoEvidence: evidence([
+      { path: 'src/server/services/accountStatusService.ts', symbols: ['getAccountStatus'], score: 8 },
+      { path: 'tests/server/accountStatusService.test.ts', score: 6 },
+    ]),
+  });
+  const withContractEvidence = buildWorkDecomposition({
+    ...base,
+    repoEvidence: evidence([
+      { path: 'src/server/contracts/accountStatusContract.ts', symbols: ['AccountStatus'], score: 9 },
+      { path: 'src/server/services/accountStatusService.ts', symbols: ['getAccountStatus'], score: 8 },
+      { path: 'tests/server/accountStatusService.test.ts', score: 6 },
+    ]),
+  });
+
+  assert.deepEqual(withoutContractEvidence.runnableNow, ['backend']);
+  assert.equal(withoutContractEvidence.blocked.some((entry) => entry.nodeId === 'backend'), false);
+  assert.deepEqual(withContractEvidence.runnableNow, ['contract']);
+  assert.ok(withContractEvidence.blocked.some((entry) => entry.nodeId === 'backend' && /contract/i.test(entry.reason)));
+});
+
 test('buildWorkDecomposition emits valid graph references and deterministic output', () => {
   const input = {
     title: 'Update shared settings persistence',

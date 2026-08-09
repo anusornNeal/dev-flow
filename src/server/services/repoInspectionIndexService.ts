@@ -434,6 +434,7 @@ export function getRepoInspectionIndex(state: AppState, args: Record<string, any
       lineageToken,
     },
     generatedAt: new Date(index.generatedAt).toISOString(),
+    repoRevision: index.repoRevision?.token,
     fileCount: index.entries.length,
     metadata: index.metadata,
     query: queryTerms.join(' '),

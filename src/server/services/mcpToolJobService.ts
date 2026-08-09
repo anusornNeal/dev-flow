@@ -33,9 +33,30 @@ type AsyncRunner = (
   transitionAccess: (accessMode: ResourceAccessMode) => void,
 ) => Promise<any>;
 
+type QueueWaitType = 'workspace_lock' | 'capacity';
+
+type QueueWaitTelemetry = {
+  lastObservedAt: number;
+  currentWaitType?: QueueWaitType;
+  lastBlockReason?: string;
+  workspaceLockWaitMs: number;
+  capacityWaitMs: number;
+  blockerReasons: Record<string, number>;
+  finalized?: boolean;
+};
+
+type FinalizedQueueWaitTelemetry = {
+  jobId: string;
+  resourceScope: 'workspace' | 'shared-repo' | 'other';
+  workspaceLockWaitMs: number;
+  capacityWaitMs: number;
+  blockerReasons: Record<string, number>;
+};
+
 interface QueueEntry extends SchedulerQueueEntry {
   state: AppState;
   singleFlightKey?: string;
+  waitTelemetry: QueueWaitTelemetry;
 }
 
 const queue: QueueEntry[] = [];
@@ -46,6 +67,64 @@ const singleFlightLeaders = new Map<string, string>();
 const singleFlightFollowers = new Map<string, Set<string>>();
 const followerToLeader = new Map<string, string>();
 let singleFlightHits = 0;
+const MAX_RECENT_QUEUE_WAITS = 200;
+const recentQueueWaitTelemetry: FinalizedQueueWaitTelemetry[] = [];
+
+function resourceScopeFor(resourceKey: string): FinalizedQueueWaitTelemetry['resourceScope'] {
+  if (resourceKey.startsWith('workspace:')) return 'workspace';
+  if (resourceKey.startsWith('repo:')) return 'shared-repo';
+  return 'other';
+}
+
+function advanceQueueWaitTelemetry(entry: QueueEntry, blocker: { waitType?: string; blockReason?: string } | null, now = Date.now()) {
+  const telemetry = entry.waitTelemetry;
+  const elapsed = Math.max(0, now - telemetry.lastObservedAt);
+  if (telemetry.currentWaitType === 'workspace_lock') telemetry.workspaceLockWaitMs += elapsed;
+  if (telemetry.currentWaitType === 'capacity') telemetry.capacityWaitMs += elapsed;
+  telemetry.lastObservedAt = now;
+  const nextWaitType: QueueWaitType | undefined = blocker?.waitType === 'workspace_lock' || blocker?.waitType === 'capacity' ? blocker.waitType : undefined;
+  if (blocker?.blockReason && blocker.blockReason !== telemetry.lastBlockReason) {
+    telemetry.blockerReasons[blocker.blockReason] = (telemetry.blockerReasons[blocker.blockReason] || 0) + 1;
+  }
+  telemetry.currentWaitType = nextWaitType;
+  telemetry.lastBlockReason = blocker?.blockReason;
+}
+
+function finalizedQueueWaitRecord(entry: QueueEntry, now = Date.now()): FinalizedQueueWaitTelemetry {
+  const telemetry = entry.waitTelemetry;
+  let workspaceLockWaitMs = telemetry.workspaceLockWaitMs;
+  let capacityWaitMs = telemetry.capacityWaitMs;
+  const elapsed = Math.max(0, now - telemetry.lastObservedAt);
+  if (telemetry.currentWaitType === 'workspace_lock') workspaceLockWaitMs += elapsed;
+  if (telemetry.currentWaitType === 'capacity') capacityWaitMs += elapsed;
+  return { jobId: entry.jobId, resourceScope: resourceScopeFor(entry.resourceKey), workspaceLockWaitMs, capacityWaitMs, blockerReasons: { ...telemetry.blockerReasons } };
+}
+
+function finalizeQueueWaitTelemetry(entry: QueueEntry, now = Date.now()) {
+  if (entry.waitTelemetry.finalized) return;
+  advanceQueueWaitTelemetry(entry, null, now);
+  entry.waitTelemetry.finalized = true;
+  recentQueueWaitTelemetry.push(finalizedQueueWaitRecord(entry, now));
+  if (recentQueueWaitTelemetry.length > MAX_RECENT_QUEUE_WAITS) recentQueueWaitTelemetry.splice(0, recentQueueWaitTelemetry.length - MAX_RECENT_QUEUE_WAITS);
+}
+
+function percentile(values: number[], percentileValue: number) {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((left, right) => left - right);
+  const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil((percentileValue / 100) * sorted.length) - 1));
+  return sorted[index];
+}
+
+function summarizeQueueWaitTelemetry() {
+  const now = Date.now();
+  const records = [...recentQueueWaitTelemetry, ...queue.map((entry) => finalizedQueueWaitRecord(entry, now))];
+  const workspaceSamples = records.map((record) => record.workspaceLockWaitMs).filter((value) => value > 0);
+  const capacitySamples = records.map((record) => record.capacityWaitMs).filter((value) => value > 0);
+  const blockerReasons: Record<string, number> = {};
+  for (const record of records) for (const [reason, count] of Object.entries(record.blockerReasons)) blockerReasons[reason] = (blockerReasons[reason] || 0) + count;
+  const summary = (samples: number[]) => ({ count: samples.length, totalMs: samples.reduce((sum, value) => sum + value, 0), p50Ms: percentile(samples, 50), p95Ms: percentile(samples, 95) });
+  return { workspaceLockWait: summary(workspaceSamples), capacityWait: summary(capacitySamples), blockerReasons };
+}
 
 function stableStringify(value: any): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
@@ -265,6 +344,7 @@ export function getQueueMetrics() {
       averageWaitMs: average(waitSamples),
       averageRunMs: average(runSamples),
       singleFlightHits,
+      waitTelemetry: summarizeQueueWaitTelemetry(),
       failures: failedJobs.slice(0, 10).map(job => ({
         jobId: job.jobId,
         toolName: job.toolName,
@@ -321,6 +401,7 @@ export function cancelToolJob(jobId: string) {
   const qIdx = queue.findIndex(q => q.jobId === jobId);
   if (qIdx >= 0) {
     const [cancelledEntry] = queue.splice(qIdx, 1);
+    finalizeQueueWaitTelemetry(cancelledEntry);
     appendJobLog(jobId, 'stderr', '\n[Job Cancelled] Cancelled before start.\n');
     updateJobStatus(jobId, { status: 'cancelled', failureSummary: 'Cancelled before start.' });
     finalizeSingleFlight(cancelledEntry);
@@ -408,6 +489,7 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
     enqueuedAt: Date.now(),
     schedulerPriority: getSchedulerPriority(toolName, args, schedulerProfile.accessMode),
     singleFlightKey: singleFlightKey || undefined,
+    waitTelemetry: { lastObservedAt: Date.now(), workspaceLockWaitMs: 0, capacityWaitMs: 0, blockerReasons: {} },
   };
   if (singleFlightKey) singleFlightLeaders.set(singleFlightKey, jobId);
 
@@ -427,9 +509,13 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
 
 async function processQueue() {
   while (queue.length > 0) {
-    const index = selectNextRunnableQueueIndex(queue, activeSchedulerEntries());
+    const activeEntries = activeSchedulerEntries();
+    const observedAt = Date.now();
+    queue.forEach((entry, index) => advanceQueueWaitTelemetry(entry, getBlockerForQueueEntry(entry, index, queue, activeEntries), observedAt));
+    const index = selectNextRunnableQueueIndex(queue, activeEntries);
     if (index < 0) break;
     const [entry] = queue.splice(index, 1);
+    finalizeQueueWaitTelemetry(entry, observedAt);
     startJob(entry);
   }
 }
@@ -555,8 +641,13 @@ export function getJobMetrics() {
     activeResources: getActiveResourceSnapshot(),
     queuedJobs: queue.map((entry, index) => buildQueueEntryDiagnostics(entry, index, queue, activeSchedulerEntries())),
     metrics: queueMetrics.metrics,
+    capacity: queueMetrics.capacity,
     recentJobs: queueMetrics.recentJobs
   };
+}
+
+export function __resetQueueWaitTelemetryForTests() {
+  recentQueueWaitTelemetry.length = 0;
 }
 
 export function __setToolJobTestRunner(toolName: string, runner: AsyncRunner | null) {

@@ -84,12 +84,20 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
   if (git.ok && !git.clean) recommendations.push('Working tree has local changes; review or commit them before starting unrelated work.');
 
   const queueDepth = Number(diagnostics?.mcp?.queueDepth || 0);
+  const isolation = diagnostics?.isolation || {
+    waits: { workspaceLockWait: { count: 0, p50Ms: 0, p95Ms: 0 }, capacityWait: { count: 0, p50Ms: 0, p95Ms: 0 }, blockerReasons: {} },
+    capacity: { active: 0, limit: 0, saturated: false },
+    workspaces: { known: 0, active: 0, integrationRequired: 0 },
+    integrations: { conflicts: 0, pendingConflicts: 0 },
+    activeResources: { workspaces: 0, sharedRepos: 0, other: 0 },
+  };
   const failedJobs = Number(diagnostics?.mcp?.metrics?.failedJobs || 0);
   const failedJobSummaries = Array.isArray(diagnostics?.mcp?.metrics?.failures) ? diagnostics.mcp.metrics.failures.slice(0, 10) : [];
   const failedJobGroups = summarizeFailedJobGroups(failedJobSummaries);
   const staleAgentRuns = Number(diagnostics?.agents?.staleCount || 0);
   const duplicateBursts = Array.isArray(diagnostics?.tools?.duplicateBursts) ? diagnostics.tools.duplicateBursts.length : 0;
   if (queueDepth > 0) recommendations.push('MCP tool jobs are queued; inspect job status/log before starting conflicting repo work.');
+  if (isolation.capacity?.saturated) recommendations.push('Verification capacity is saturated; queued verify work is capacity-limited rather than blocked by a workspace correctness lock.');
   if (failedJobs > 0) {
     const groupedTools = failedJobGroups.map((group) => `${group.toolName}=${group.count}`).join(', ');
     recommendations.push(groupedTools
@@ -127,7 +135,7 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
       keyToolsPresent,
     },
     git,
-    diagnostics: { queueDepth, failedJobs, failedJobGroups, failedJobSummaries, staleAgentRuns, duplicateBursts, performance: sloPerformance },
+    diagnostics: { queueDepth, failedJobs, failedJobGroups, failedJobSummaries, staleAgentRuns, duplicateBursts, performance: sloPerformance, isolation },
     performance: {
       totalMs: Math.round((nodePerformance.now() - startedAt) * 100) / 100,
       phases: { catalogMs, diagnosticsMs, gitMs, searchMs, sloMs },

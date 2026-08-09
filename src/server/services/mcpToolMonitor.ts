@@ -1,6 +1,8 @@
 import db from '../../db/index';
 import { getJobMetrics } from './mcpToolJobService';
 import { getLocalSearchRuntimeStatus } from './localFileService';
+import { getSessionWorkspaceMetrics } from './sessionWorkspaceService';
+import { getWorkspaceIntegrationMetrics } from './workspaceIntegrationService';
 
 const MAX_RECORDS = 500;
 const DEFAULT_WINDOW_MS = 10 * 60 * 1000;
@@ -230,10 +232,48 @@ export function getToolCallSummary(options?: { now?: number; windowMs?: number }
   };
 }
 
+
+export function buildIsolationDiagnostics(jobMetrics: any, workspaceMetrics: any, integrationMetrics: any) {
+  const waitTelemetry = jobMetrics?.metrics?.waitTelemetry || {};
+  const active = Array.isArray(jobMetrics?.activeJobs) ? jobMetrics.activeJobs : [];
+  const activeResources = { workspaces: 0, sharedRepos: 0, other: 0 };
+  const seen = new Set<string>();
+  for (const entry of active) {
+    const key = String(entry?.resourceKey || '');
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    if (key.startsWith('workspace:')) activeResources.workspaces += 1;
+    else if (key.startsWith('repo:')) activeResources.sharedRepos += 1;
+    else activeResources.other += 1;
+  }
+  const verifyCapacity = jobMetrics?.capacity?.verify || {};
+  const verifyLimit = Number(verifyCapacity.limit ?? verifyCapacity.capacity ?? 0);
+  const verifyActive = Number(verifyCapacity.active || 0);
+  return {
+    waits: {
+      workspaceLockWait: waitTelemetry.workspaceLockWait || { count: 0, totalMs: 0, p50Ms: 0, p95Ms: 0 },
+      capacityWait: waitTelemetry.capacityWait || { count: 0, totalMs: 0, p50Ms: 0, p95Ms: 0 },
+      blockerReasons: waitTelemetry.blockerReasons || {},
+    },
+    capacity: { active: verifyActive, limit: verifyLimit, saturated: verifyCapacity.saturated === true || (verifyLimit > 0 && verifyActive >= verifyLimit) },
+    workspaces: {
+      known: Number(workspaceMetrics?.knownWorkspaces || 0), active: Number(workspaceMetrics?.activeWorkspaces || 0),
+      integrationRequired: Number(workspaceMetrics?.integrationRequired || 0), created: Number(workspaceMetrics?.created || 0),
+      reused: Number(workspaceMetrics?.reused || 0), cleaned: Number(workspaceMetrics?.cleaned || 0), cleanupBlocked: Number(workspaceMetrics?.cleanupBlocked || 0),
+    },
+    integrations: {
+      attempts: Number(integrationMetrics?.attempts || 0), successes: Number(integrationMetrics?.successes || 0), conflicts: Number(integrationMetrics?.conflicts || 0),
+      aborts: Number(integrationMetrics?.aborts || 0), retries: Number(integrationMetrics?.retries || 0), pendingConflicts: Number(integrationMetrics?.pendingConflicts || 0),
+    },
+    activeResources,
+  };
+}
+
 export function getDevFlowDiagnostics(options?: { now?: number; windowMs?: number }) {
   const now = options?.now ?? Date.now();
   const toolSummary = getToolCallSummary({ now, windowMs: options?.windowMs });
   const jobMetrics = getJobMetrics();
+  const isolation = buildIsolationDiagnostics(jobMetrics, getSessionWorkspaceMetrics(), getWorkspaceIntegrationMetrics());
   const activeAgentRuns = getActiveAgentRuns(now);
   const staleAgentRuns = activeAgentRuns.filter((run) => run.stale);
   const recentFailures = db.prepare(`
@@ -255,11 +295,13 @@ export function getDevFlowDiagnostics(options?: { now?: number; windowMs?: numbe
   return {
     generatedAt: new Date(now).toISOString(),
     search: getLocalSearchRuntimeStatus(),
+    isolation,
     mcp: {
       queueDepth: (jobMetrics as any).queueDepth,
       activeJobs: (jobMetrics as any).activeJobs,
       queuedJobs: (jobMetrics as any).queuedJobs,
       activeResources: (jobMetrics as any).activeResources,
+      capacity: (jobMetrics as any).capacity,
       metrics: (jobMetrics as any).metrics,
       recentJobs: (jobMetrics as any).recentJobs,
     },

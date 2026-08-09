@@ -4,6 +4,7 @@ import {
   clearToolCallRecords,
   getDevFlowDiagnostics,
   getToolCallSummary,
+  buildIsolationDiagnostics,
   recordToolCall,
 } from '../../src/server/services/mcpToolMonitor.js';
 
@@ -70,4 +71,38 @@ test('diagnostics expose local search backend fallback counters', () => {
   assert.ok(diagnostics.search);
   assert.equal(typeof diagnostics.search.fallbackCount, 'number');
   assert.equal(typeof diagnostics.search.infrastructureFailureCount, 'number');
+});
+
+
+test('isolation diagnostics separate correctness and capacity waits without leaking resource paths', () => {
+  const isolation = buildIsolationDiagnostics(
+    {
+      queueDepth: 2,
+      activeJobs: [
+        { resourceKey: 'workspace:ws_alpha', accessMode: 'write', costClass: 'write' },
+        { resourceKey: 'repo:C:\\Users\\private\\secret-repo', accessMode: 'verify', costClass: 'verify' },
+      ],
+      queuedJobs: [
+        { resourceKey: 'workspace:ws_beta', waitType: 'capacity', blockReason: 'capacity_saturated' },
+      ],
+      metrics: {
+        waitTelemetry: {
+          workspaceLockWait: { count: 3, totalMs: 42, p50Ms: 12, p95Ms: 20 },
+          capacityWait: { count: 2, totalMs: 70, p50Ms: 30, p95Ms: 40 },
+          blockerReasons: { writer_barrier: 2, capacity_saturated: 2 },
+        },
+      },
+      capacity: { verify: { active: 2, limit: 2, saturated: true } },
+    } as any,
+    { knownWorkspaces: 4, activeWorkspaces: 2, integrationRequired: 1, created: 5, reused: 3, cleaned: 1, cleanupBlocked: 2 } as any,
+    { attempts: 4, successes: 2, conflicts: 1, aborts: 1, retries: 1, pendingConflicts: 1 } as any,
+  );
+
+  assert.equal(isolation.waits.workspaceLockWait.p95Ms, 20);
+  assert.equal(isolation.waits.capacityWait.p95Ms, 40);
+  assert.equal(isolation.capacity.saturated, true);
+  assert.equal(isolation.workspaces.known, 4);
+  assert.equal(isolation.integrations.conflicts, 1);
+  assert.deepEqual(isolation.activeResources, { workspaces: 1, sharedRepos: 1, other: 0 });
+  assert.doesNotMatch(JSON.stringify(isolation), /private|secret-repo|C:\\\\Users/);
 });

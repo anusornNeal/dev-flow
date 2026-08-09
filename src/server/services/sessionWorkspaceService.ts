@@ -25,6 +25,12 @@ export type SessionWorkspace = {
 const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;
 const activeWorkspaceRefs = new Map<string, number>();
 const memoryRegistry = new Map<string, SessionWorkspace>();
+const workspaceLifecycleCounters = {
+  created: 0,
+  reused: 0,
+  cleaned: 0,
+  cleanupBlocked: 0,
+};
 
 function safeSegment(value: string) {
   const normalized = value.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48);
@@ -158,7 +164,10 @@ export function createOrReuseSessionWorkspace(project: { id: string; localPath?:
   const projectRoot = ensureRepository(path.resolve(String(project.localPath || '')));
   const workspaceId = workspaceIdFor(project.id, cleanSessionId);
   const existing = readMetadata(workspaceId);
-  if (existing && validateReusableWorkspace(existing, projectRoot)) return touch(existing);
+  if (existing && validateReusableWorkspace(existing, projectRoot)) {
+    workspaceLifecycleCounters.reused += 1;
+    return touch(existing);
+  }
 
   const root = canonicalContainment(managedRootFor(project.id, workspaceId));
   const baseBranch = currentBranch(projectRoot);
@@ -204,6 +213,7 @@ export function createOrReuseSessionWorkspace(project: { id: string; localPath?:
     expiresAt: new Date(now + DEFAULT_TTL_MS).toISOString(),
   };
   writeMetadata(workspace);
+  workspaceLifecycleCounters.created += 1;
   return workspace;
 }
 
@@ -234,25 +244,32 @@ export function cleanupSessionWorkspace(workspaceId: string, options: { force?: 
   const workspace = readMetadata(String(workspaceId || '').trim());
   if (!workspace) return { removed: false, reason: 'not-found' };
   if (!options.force && (activeWorkspaceRefs.get(workspaceId) || 0) > 0) {
+    workspaceLifecycleCounters.cleanupBlocked += 1;
     throw createApiError(409, 'WORKSPACE_ACTIVE', 'Workspace is active and cannot be removed by normal cleanup.', { affectedId: workspaceId });
   }
   const root = canonicalContainment(workspace.root);
   if (fs.existsSync(root) && !options.force) {
     const dirty = (runGit(root, ['status', '--porcelain', '--untracked-files=all']).stdout || '').trim();
-    if (dirty) throw createApiError(409, 'WORKSPACE_DIRTY', 'Workspace is dirty and cannot be removed by normal cleanup.', { affectedId: workspaceId, details: dirty });
+    if (dirty) {
+      workspaceLifecycleCounters.cleanupBlocked += 1;
+      throw createApiError(409, 'WORKSPACE_DIRTY', 'Workspace is dirty and cannot be removed by normal cleanup.', { affectedId: workspaceId, details: dirty });
+    }
     if (workspace.state === 'integration-required') {
+      workspaceLifecycleCounters.cleanupBlocked += 1;
       throw createApiError(409, 'WORKSPACE_INTEGRATION_REQUIRED', 'Workspace still requires integration before cleanup.', { affectedId: workspaceId });
     }
   }
   if (fs.existsSync(root)) {
     const result = runGit(workspace.projectRoot, ['worktree', 'remove', ...(options.force ? ['--force'] : []), root], true);
     if (result.status !== 0) {
+      workspaceLifecycleCounters.cleanupBlocked += 1;
       throw createApiError(409, 'WORKSPACE_REMOVE_FAILED', 'Git refused to remove the workspace.', { affectedId: workspaceId, details: result.stderr?.trim() });
     }
   }
   fs.rmSync(metadataPath(workspaceId), { force: true });
   memoryRegistry.delete(workspaceId);
   activeWorkspaceRefs.delete(workspaceId);
+  workspaceLifecycleCounters.cleaned += 1;
   return { removed: true, workspaceId, branch: workspace.branch };
 }
 
@@ -264,7 +281,34 @@ export function markSessionWorkspaceIntegrationRequired(workspaceId: string, req
   return next;
 }
 
+export function getSessionWorkspaceMetrics() {
+  const states = new Map<string, SessionWorkspaceState>();
+  const registryDir = workspaceRegistryDir();
+  if (fs.existsSync(registryDir)) {
+    for (const entry of fs.readdirSync(registryDir, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+      try {
+        const parsed = JSON.parse(fs.readFileSync(path.join(registryDir, entry.name), 'utf8')) as SessionWorkspace;
+        if (parsed?.workspaceId && parsed?.state) states.set(parsed.workspaceId, parsed.state);
+      } catch {
+        // Ignore corrupt/stale registry entries in aggregate diagnostics.
+      }
+    }
+  }
+  for (const [workspaceId, workspace] of memoryRegistry) states.set(workspaceId, workspace.state);
+  return {
+    knownWorkspaces: states.size,
+    activeWorkspaces: activeWorkspaceRefs.size,
+    integrationRequired: Array.from(states.values()).filter((state) => state === 'integration-required').length,
+    ...workspaceLifecycleCounters,
+  };
+}
+
 export function resetSessionWorkspaceRuntimeForTests() {
   memoryRegistry.clear();
   activeWorkspaceRefs.clear();
+  workspaceLifecycleCounters.created = 0;
+  workspaceLifecycleCounters.reused = 0;
+  workspaceLifecycleCounters.cleaned = 0;
+  workspaceLifecycleCounters.cleanupBlocked = 0;
 }

@@ -39,6 +39,8 @@ export type WorkspaceIntegrationSuccess = {
   alreadyIntegrated?: boolean;
 };
 
+const integrationMetrics = { attempts: 0, successes: 0, conflicts: 0, aborts: 0, retries: 0 };
+
 type PersistedIntegrationState = {
   workspaceId: string;
   status: 'conflict';
@@ -188,6 +190,7 @@ function validateIntegrationPreconditions(workspace: SessionWorkspace) {
 }
 
 export function integrateWorkspaceCommits(workspaceId: string): WorkspaceIntegrationSuccess | WorkspaceIntegrationConflict {
+  integrationMetrics.attempts += 1;
   const workspace = resolveWorkspaceForIntegration(workspaceId);
   const { baseHead: baseHeadBefore, sourceHead } = validateIntegrationPreconditions(workspace);
   const commits = sourceCommits(workspace.projectRoot, workspace.baseRevision, sourceHead);
@@ -196,6 +199,7 @@ export function integrateWorkspaceCommits(workspaceId: string): WorkspaceIntegra
   if (commits.length === 0 || isAncestor(workspace.projectRoot, sourceHead, baseHeadBefore)) {
     clearIntegrationState(workspace.workspaceId);
     markSessionWorkspaceIntegrationRequired(workspace.workspaceId, false);
+    integrationMetrics.successes += 1;
     return {
       status: 'succeeded',
       workspaceId: workspace.workspaceId,
@@ -238,6 +242,7 @@ export function integrateWorkspaceCommits(workspaceId: string): WorkspaceIntegra
       recordedAt: new Date().toISOString(),
     };
     writeIntegrationState(state);
+    integrationMetrics.conflicts += 1;
     return {
       status: 'conflict',
       code: 'INTEGRATION_CONFLICT',
@@ -257,6 +262,7 @@ export function integrateWorkspaceCommits(workspaceId: string): WorkspaceIntegra
   const baseHeadAfter = head(workspace.projectRoot);
   clearIntegrationState(workspace.workspaceId);
   markSessionWorkspaceIntegrationRequired(workspace.workspaceId, false);
+  integrationMetrics.successes += 1;
   return {
     status: 'succeeded',
     workspaceId: workspace.workspaceId,
@@ -286,10 +292,12 @@ export function abortWorkspaceIntegration(workspaceId: string) {
   }
   clearIntegrationState(workspace.workspaceId);
   markSessionWorkspaceIntegrationRequired(workspace.workspaceId, true);
+  integrationMetrics.aborts += 1;
   return { status: 'aborted' as const, workspaceId: workspace.workspaceId, baseHead: currentHead, sourceHead: state.sourceHead };
 }
 
 export function retryWorkspaceIntegration(workspaceId: string): WorkspaceIntegrationSuccess | WorkspaceIntegrationConflict {
+  integrationMetrics.retries += 1;
   const workspace = resolveWorkspaceForIntegration(workspaceId);
   const state = readIntegrationState(workspace.workspaceId);
   if (!state) return integrateWorkspaceCommits(workspace.workspaceId);
@@ -299,6 +307,7 @@ export function retryWorkspaceIntegration(workspaceId: string): WorkspaceIntegra
     if (conflicts.length > 0) {
       const nextState = { ...state, conflictedPaths: conflicts, recordedAt: new Date().toISOString() };
       writeIntegrationState(nextState);
+      integrationMetrics.conflicts += 1;
       return { ...nextState, status: 'conflict', code: 'INTEGRATION_CONFLICT' };
     }
     const commit = runGit(workspace.projectRoot, ['commit', '--no-edit'], { allowFailure: true });
@@ -322,6 +331,7 @@ export function retryWorkspaceIntegration(workspaceId: string): WorkspaceIntegra
   }
   clearIntegrationState(workspace.workspaceId);
   markSessionWorkspaceIntegrationRequired(workspace.workspaceId, false);
+  integrationMetrics.successes += 1;
   return {
     status: 'succeeded',
     workspaceId: workspace.workspaceId,
@@ -335,6 +345,14 @@ export function retryWorkspaceIntegration(workspaceId: string): WorkspaceIntegra
     sourceCommits: state.sourceCommits,
     changedFiles: state.changedFiles,
   };
+}
+
+export function getWorkspaceIntegrationMetrics() {
+  const pendingDir = integrationStateDir();
+  const pendingConflicts = fs.existsSync(pendingDir)
+    ? fs.readdirSync(pendingDir, { withFileTypes: true }).filter((entry) => entry.isFile() && entry.name.endsWith('.json')).length
+    : 0;
+  return { ...integrationMetrics, pendingConflicts };
 }
 
 export function getWorkspaceIntegrationState(workspaceId: string) {

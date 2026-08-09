@@ -55,6 +55,10 @@ test('getWorkflowHealth returns ok for a clean repo', () => {
   assert.equal(result.git.clean, true);
   assert.equal(result.capabilities.keyToolsPresent.get_repo_context_bundle, true);
   assert.equal(result.capabilities.asyncToolCount > 0, true);
+  assert.equal(typeof result.diagnostics.isolation.waits.workspaceLockWait.p95Ms, 'number');
+  assert.equal(typeof result.diagnostics.isolation.waits.capacityWait.p95Ms, 'number');
+  assert.equal(typeof result.diagnostics.isolation.workspaces.known, 'number');
+  assert.equal(typeof result.diagnostics.isolation.integrations.conflicts, 'number');
 });
 
 test('getWorkflowHealth reports fallback search backend when ripgrep is unavailable', () => {

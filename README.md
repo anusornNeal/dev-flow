@@ -181,6 +181,10 @@ A typical agent run looks like this:
 For repository work through MCP, the recommended safe loop is:
 
 1. Inspect repo context with `get_repo_context_bundle`.
+   - DevFlow now infers an intent profile (`authoring`, `small-bug-fix`, `cross-module-change`, `verification-debugging`, or `architecture-analysis`) and returns ranked Must/Should/Optional evidence with reasons.
+   - Automatic disclosure stays bounded from symbols/snippets up through callers/tests. `full-file` is an explicit override only.
+   - Use `targetFiles` to force known files into Must evidence, `contextIntent` to override inference, `disclosureLevel` for deliberate escalation, and `maxContextBytes` to cap aggregate snippet bytes.
+   - Evidence carries repo/file revision identities so later reads can detect staleness instead of silently reusing old context.
 2. Read exact files before editing.
 3. Dry-run edits before apply.
 4. Inspect git diff.

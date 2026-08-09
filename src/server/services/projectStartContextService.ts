@@ -7,7 +7,8 @@ import { listLocalFiles, readLocalFile, resolveProjectRoot } from './localFileSe
 import { getGitDiff } from './gitService';
 import { getRepoInspectionIndex } from './repoInspectionIndexService';
 import { registerRepoCacheInvalidator } from './repoCacheInvalidationService';
-import { getRepoRevisionForRoot } from './repoRevisionService';
+import { buildRepoEvidenceIdentity, getRepoRevisionForRoot } from './repoRevisionService';
+import { planContextBudget } from './contextBudgetPlannerService';
 import { ensureRepoChangeWatcher } from './workspaceChangeWatcherService';
 
 const HINT_FILES = ['AGENTS.md', 'README.md', 'package.json', 'tsconfig.json', 'vite.config.ts', 'gradlew.bat', 'build.gradle', 'settings.gradle'];
@@ -199,12 +200,31 @@ export function getRepoReadSnapshot(state: AppState, args: Record<string, any>) 
 export function getRepoContextBundle(state: AppState, args: Record<string, any>) {
   const project = resolveProject(state, args);
   const query = typeof args.q === 'string' ? args.q : typeof args.query === 'string' ? args.query : '';
-  const indexLimit = parsePositiveInt(args.limit, 8, 20);
-  const snippetLimit = parsePositiveInt(args.snippetLimit, Math.min(indexLimit, 5), 10);
-  const snippetLines = parsePositiveInt(args.snippetLines, 80, 160);
-  const maxSnippetBytes = parsePositiveInt(args.maxSnippetBytes, 12000, 50000);
+  const targetFiles = Array.isArray(args.targetFiles)
+    ? args.targetFiles.map(String).map((value) => value.trim()).filter(Boolean)
+    : typeof args.targetFiles === 'string'
+      ? args.targetFiles.split(',').map((value: string) => value.trim()).filter(Boolean)
+      : [];
+  const requestedDisclosureLevel = typeof args.disclosureLevel === 'string'
+    ? args.disclosureLevel
+    : typeof args.contextDepth === 'string'
+      ? args.contextDepth
+      : args.fullFile === true
+        ? 'full-file'
+        : undefined;
 
   const start = getProjectStartContext(state, { ...args, projectId: project.id, limit: args.topLevelLimit || 40 });
+  const changedFiles = Array.isArray(start.git?.files) ? start.git.files : [];
+  const initialPlan = planContextBudget({
+    query,
+    intent: args.contextIntent || args.intent,
+    complexity: args.complexity,
+    targetFiles,
+    changedFiles,
+    requestedDisclosureLevel,
+  });
+  const indexLimit = parsePositiveInt(args.limit, initialPlan.budgets.indexLimit, 30);
+
   const index = getRepoInspectionIndex(state, {
     ...args,
     projectId: project.id,
@@ -212,38 +232,84 @@ export function getRepoContextBundle(state: AppState, args: Record<string, any>)
     path: args.path,
     limit: indexLimit,
     includeIgnored: args.includeIgnored,
+    contextIntent: initialPlan.intent,
+    targetFiles,
+    changedFiles,
   });
+  const indexedCandidates = Array.isArray(index.matches) ? index.matches : [];
+  const indexedPaths = new Set(indexedCandidates.map((entry: any) => String(entry.path || '').replace(/\\/g, '/').toLowerCase()));
+  const explicitTargetCandidates = targetFiles
+    .filter((filePath) => !indexedPaths.has(filePath.replace(/\\/g, '/').toLowerCase()))
+    .map((filePath) => ({ path: filePath, extension: path.extname(filePath).toLowerCase(), symbols: [], imports: [], score: 0 }));
+  const contextPlan = planContextBudget({
+    query,
+    intent: initialPlan.intent,
+    complexity: args.complexity,
+    candidates: [...indexedCandidates, ...explicitTargetCandidates],
+    targetFiles,
+    changedFiles,
+    requestedDisclosureLevel,
+  });
+  const snippetLimit = parsePositiveInt(args.snippetLimit, Math.min(indexLimit, contextPlan.budgets.snippetLimit), 20);
+  const snippetLines = parsePositiveInt(args.snippetLines, contextPlan.budgets.snippetLines, contextPlan.disclosureLevel === 'full-file' ? 1000 : 240);
+  const maxSnippetBytes = parsePositiveInt(args.maxSnippetBytes, contextPlan.budgets.perSnippetBytes, 100000);
+  const snippetByteBudget = parsePositiveInt(args.maxContextBytes ?? args.maxSnippetTotalBytes, contextPlan.budgets.snippetBytes, 500000);
+  const selectedEvidence = contextPlan.evidence
+    .filter((entry) => entry.rank !== 'optional' || contextPlan.intent === 'architecture-analysis' || contextPlan.disclosureLevel === 'full-file')
+    .slice(0, snippetLimit);
 
-  const snippets = (index.matches || []).slice(0, snippetLimit).map((match: any) => {
-    try {
-      const snippet = readLocalFile(state, {
-        ...args,
-        projectId: project.id,
-        filePath: match.path,
-        startLine: 1,
-        endLine: snippetLines,
-        maxBytes: maxSnippetBytes,
-      });
-      return {
-        path: match.path,
-        score: match.score,
-        symbols: match.symbols,
-        startLine: snippet.startLine,
-        endLine: snippet.endLine,
-        totalLines: snippet.totalLines,
-        truncated: snippet.truncated,
-        revision: snippet.revision,
-        fileRevision: snippet.fileRevision,
-        content: snippet.content,
-      };
-    } catch (error: any) {
-      return {
-        path: match.path,
-        score: match.score,
-        error: error?.message || 'Could not read snippet.',
-      };
+  let remainingSnippetBytes = snippetByteBudget;
+  let returnedSnippetBytes = 0;
+  const snippets: any[] = [];
+  if (contextPlan.disclosureLevel !== 'project-summary') {
+    for (const match of selectedEvidence) {
+      if (remainingSnippetBytes <= 0) break;
+      const perReadBudget = Math.max(1, Math.min(maxSnippetBytes, remainingSnippetBytes));
+      try {
+        const snippet = readLocalFile(state, {
+          ...args,
+          projectId: project.id,
+          filePath: match.path,
+          startLine: 1,
+          endLine: snippetLines,
+          maxBytes: perReadBudget,
+        });
+        const contentBytes = Buffer.byteLength(String(snippet.content || ''), 'utf8');
+        returnedSnippetBytes += contentBytes;
+        remainingSnippetBytes = Math.max(0, remainingSnippetBytes - contentBytes);
+        snippets.push({
+          path: match.path,
+          score: match.score,
+          symbols: match.symbols,
+          rank: match.rank,
+          reasons: match.reasons,
+          isTest: match.isTest,
+          startLine: snippet.startLine,
+          endLine: snippet.endLine,
+          totalLines: snippet.totalLines,
+          truncated: snippet.truncated,
+          revision: snippet.revision,
+          fileRevision: snippet.fileRevision,
+          freshnessIdentity: buildRepoEvidenceIdentity({
+            repoRevision: start.repoRevision,
+            filePath: match.path,
+            fileRevision: snippet.revision || snippet.fileRevision?.token,
+          }),
+          returnedBytes: contentBytes,
+          content: snippet.content,
+        });
+      } catch (error: any) {
+        snippets.push({
+          path: match.path,
+          score: match.score,
+          rank: match.rank,
+          reasons: match.reasons,
+          isTest: match.isTest,
+          error: error?.message || 'Could not read snippet.',
+        });
+      }
     }
-  });
+  }
 
   let diff: any = undefined;
   if (args.includeDiff === true || args.includeDiff === 'true') {
@@ -267,18 +333,36 @@ export function getRepoContextBundle(state: AppState, args: Record<string, any>)
     }
   }
 
+  const effectiveContextPlan = {
+    ...contextPlan,
+    budgets: {
+      ...contextPlan.budgets,
+      indexLimit,
+      snippetLimit,
+      snippetLines,
+      perSnippetBytes: maxSnippetBytes,
+      snippetBytes: snippetByteBudget,
+      maxContextBytes: parsePositiveInt(args.maxContextBytes, contextPlan.budgets.maxContextBytes, 500000),
+    },
+    selectedEvidenceCount: snippets.length,
+    returnedSnippetBytes,
+    remainingSnippetBytes,
+    budgetExhausted: remainingSnippetBytes <= 0,
+  };
+
   return {
     project: start.project,
     query,
     repoRevision: start.repoRevision,
     git: start.git,
     hints: start.hints,
+    contextPlan: effectiveContextPlan,
     index: {
       cache: index.cache,
       generatedAt: index.generatedAt,
       metadata: index.metadata,
       count: index.matches?.length || 0,
-      matches: (index.matches || []).slice(0, indexLimit),
+      matches: contextPlan.evidence.slice(0, indexLimit),
     },
     snippets,
     diff,

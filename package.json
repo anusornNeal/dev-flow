@@ -16,6 +16,7 @@
     "test:gateway": "tsx tests/server/jiraAuthoringBundle.test.ts && tsx tests/server/compositeAuthoringService.test.ts && tsx tests/server/lockAndIdempotency.test.ts && tsx tests/server/adversarialLockAndIdempotency.test.ts",
     "test:settings-security": "tsx --test tests/server/settingsSecurity.test.ts",
     "test:backup-integrity": "tsx --test tests/server/backupIntegrity.test.ts",
+    "test:context-budget": "tsx --test tests/server/contextBudgetPlanner.test.ts && tsx --test tests/server/projectStartContext.test.ts && tsx --test tests/server/repoInspectionIndex.test.ts",
     "test:import-tasks": "tsx tests/devflow/import-tasks-from-file.test.ts",
     "test:prompt-templates": "tsx scripts/verify-prompt-templates.ts",
     "test:orchestration": "tsx scripts/verify-orchestration.ts",

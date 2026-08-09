@@ -40,6 +40,21 @@ function fingerprintChangedFile(root: string, statusPath: string) {
   return `${stat.size}:${sha256}`;
 }
 
+export function buildRepoEvidenceIdentity(input: {
+  repoRevision?: string | null;
+  filePath: string;
+  fileRevision?: string | null;
+}) {
+  const normalizedPath = input.filePath.replace(/\\/g, '/').replace(/^\.\//, '');
+  const digest = crypto.createHash('sha256');
+  digest.update(String(input.repoRevision || 'unknown-repo'));
+  digest.update('\0');
+  digest.update(normalizedPath);
+  digest.update('\0');
+  digest.update(String(input.fileRevision || 'unknown-file'));
+  return `${normalizedPath}:${digest.digest('hex').slice(0, 20)}`;
+}
+
 export function getRepoRevisionForRoot(root: string): RepoRevision {
   const normalizedRoot = path.resolve(root);
   const workspace = getGitWorkspaceSnapshotForRoot(normalizedRoot);

@@ -11,7 +11,7 @@ import { createServer as createViteServer } from 'vite';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { registerApiRoutes } from './src/server/routes/registerApiRoutes';
-import { createDevFlowMcpServer } from './src/server/mcp';
+import { createDevFlowMcpServer, createStatelessMcpHttpHandler } from './src/server/mcp';
 import { bootstrap, writeAgentLog } from './src/server/bootstrap';
 import { getDevFlowAppRoot, resolveFromDevFlowAppRoot, getDevFlowUploadsDir } from './src/lib/devFlowPaths';
 import { markDevFlowRestartHealthy } from './src/lib/devFlowRestart';
@@ -54,6 +54,9 @@ async function startServer() {
     }
     next();
   });
+
+  app.use('/mcp', express.json({ limit: '1mb' }));
+  app.post('/mcp', createStatelessMcpHttpHandler(apiBaseUrl));
 
   app.get('/sse', async (_req, res) => {
     const mcpServer = createDevFlowMcpServer(apiBaseUrl);

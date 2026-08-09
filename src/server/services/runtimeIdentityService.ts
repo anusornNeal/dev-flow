@@ -37,9 +37,7 @@ const runtimeIdentity: Omit<RuntimeIdentity, 'transport'> = {
 };
 
 function resolveTransports(): DevFlowMcpTransport[] {
-  return process.env.DEVFLOW_STREAMABLE_HTTP_ENABLED === '1'
-    ? ['streamable-http', 'legacy-sse']
-    : ['legacy-sse'];
+  return ['streamable-http', 'legacy-sse'];
 }
 
 export function getRuntimeIdentity(): RuntimeIdentity {

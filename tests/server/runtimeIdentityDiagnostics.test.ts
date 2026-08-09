@@ -46,19 +46,12 @@ test('runtime identity is stable for one process and exposed in compact diagnost
   assert.equal(first.runtime.runtimeStartedAt, second.runtime.runtimeStartedAt);
   assert.equal(first.runtime.contractVersion, DEVFLOW_CONTRACT_VERSION);
   assert.ok(Array.isArray(first.runtime.transport));
-  assert.ok(first.runtime.transport.includes('legacy-sse'));
+  assert.deepEqual(first.runtime.transport, ['streamable-http', 'legacy-sse']);
 });
 
-test('runtime transport metadata reports both migration transports when streamable HTTP is enabled', () => {
-  const previous = process.env.DEVFLOW_STREAMABLE_HTTP_ENABLED;
-  process.env.DEVFLOW_STREAMABLE_HTTP_ENABLED = '1';
-  try {
-    const diagnostics = getDevFlowDiagnostics({ supervisorState: null } as any) as any;
-    assert.deepEqual(diagnostics.runtime.transport, ['streamable-http', 'legacy-sse']);
-  } finally {
-    if (previous === undefined) delete process.env.DEVFLOW_STREAMABLE_HTTP_ENABLED;
-    else process.env.DEVFLOW_STREAMABLE_HTTP_ENABLED = previous;
-  }
+test('runtime transport metadata reports both migration transports after the /mcp cutover', () => {
+  const diagnostics = getDevFlowDiagnostics({ supervisorState: null } as any) as any;
+  assert.deepEqual(diagnostics.runtime.transport, ['streamable-http', 'legacy-sse']);
 });
 
 test('a fresh process receives a different runtime instance id', () => {
@@ -132,8 +125,9 @@ test('capabilities and diagnostics routes expose runtime identity and accept cli
     assert.equal(capabilities.contractVersion, DEVFLOW_CONTRACT_VERSION);
     assert.match(capabilities.runtimeInstanceId, /^[0-9a-f-]{20,}$/i);
     assert.equal(typeof capabilities.runtimeStartedAt, 'string');
-    assert.ok(Array.isArray(capabilities.transport));
-    assert.ok(capabilities.transport.includes('legacy-sse'));
+    assert.deepEqual(capabilities.transport, ['streamable-http', 'legacy-sse']);
+    assert.equal(capabilities.modules.mcpStreamableHttp, true);
+    assert.equal(capabilities.modules.mcpSse, true);
 
     const diagnosticsResponse = await fetch(`${baseUrl}/api/diagnostics?previousContractVersion=${encodeURIComponent(capabilities.contractVersion)}&previousRuntimeInstanceId=${encodeURIComponent(capabilities.runtimeInstanceId)}&clientToolsVisible=false`);
     const diagnostics = await diagnosticsResponse.json() as any;

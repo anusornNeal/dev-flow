@@ -47,6 +47,7 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
         schemaVersion: catalog.contractVersion,
         modules: {
           api: true,
+          mcpStreamableHttp: true,
           mcpSse: true,
           mcpStdio: true,
           localFiles: true,

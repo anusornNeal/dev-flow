@@ -8,6 +8,7 @@ import { getPerformanceBaseline, persistPerformanceSnapshots } from '../reposito
 import { getRepoRevisionForRoot } from './repoRevisionService.js';
 import { getJobMetrics } from './mcpToolJobService';
 import { getLocalSearchRuntimeStatus } from './localFileService';
+import { getRepoContextBundlePerformanceSummary } from './projectStartContextService';
 import { getSessionWorkspaceMetrics } from './sessionWorkspaceService';
 import { getWorkspaceIntegrationMetrics } from './workspaceIntegrationService';
 import { getMcpTransportSummary } from './mcpTransportMonitor';
@@ -207,6 +208,7 @@ export function getToolCallSummary(options?: { now?: number; windowMs?: number }
   const windowMs = options?.windowMs ?? DEFAULT_WINDOW_MS;
   const windowStart = now - windowMs;
   const recent = records.filter((record) => record.timestamp >= windowStart);
+  const bundlePerformance = getRepoContextBundlePerformanceSummary({ now, windowMs });
 
   const byTool = new Map<string, {
     toolName: string;
@@ -301,13 +303,23 @@ export function getToolCallSummary(options?: { now?: number; windowMs?: number }
     totalCalls: recent.length,
     topTools: Array.from(byTool.values())
       .sort((left, right) => right.count - left.count)
-      .map(({ totalDurationMs, durationSamples, responseByteSamples, ...entry }) => ({
-        ...entry,
-        p50DurationMs: percentile(durationSamples, 50),
-        p95DurationMs: percentile(durationSamples, 95),
-        p50ResponseBytes: percentile(responseByteSamples, 50),
-        p95ResponseBytes: percentile(responseByteSamples, 95),
-      }))
+      .map(({ totalDurationMs, durationSamples, responseByteSamples, ...entry }) => {
+        const bundleEvidence = entry.toolName === 'get_repo_context_bundle'
+          ? (bundlePerformance.warm.count > 0 ? bundlePerformance.warm : bundlePerformance.cold)
+          : null;
+        return {
+          ...entry,
+          p50DurationMs: percentile(durationSamples, 50),
+          p95DurationMs: percentile(durationSamples, 95),
+          p50ResponseBytes: percentile(responseByteSamples, 50),
+          p95ResponseBytes: percentile(responseByteSamples, 95),
+          ...(bundleEvidence && bundleEvidence.count > 0 ? {
+            dominantPhase: bundleEvidence.dominantPhase,
+            dominantPhaseP95Ms: bundleEvidence.dominantPhaseP95Ms,
+            bundleCacheState: bundleEvidence.cacheState,
+          } : {}),
+        };
+      })
       .slice(0, 10),
     duplicateBursts,
     latestCalls: recent.slice(-20).reverse().map((record) => ({

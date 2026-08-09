@@ -320,8 +320,7 @@ function includeFileRefMetadata(state: AppState, args: Record<string, any>, root
   };
 }
 
-export function readLocalFile(state: AppState, args: Record<string, any>): LocalFileReadResult {
-  const root = resolveProjectRoot(state, args);
+export function readResolvedLocalFile(state: AppState, args: Record<string, any>, root: string): LocalFileReadResult {
   const filePath = String(args.filePath || args.path || '').trim();
   if (!filePath) {
     throw createApiError(400, 'FILE_PATH_REQUIRED', 'filePath is required.');
@@ -402,6 +401,10 @@ export function readLocalFile(state: AppState, args: Record<string, any>): Local
     omittedBytes: truncatedByBytes && !hasLineWindow ? Math.max(0, stat.size - maxBytes) : 0,
     ...includeFileRefMetadata(state, args, root, targetPath, revision),
   };
+}
+
+export function readLocalFile(state: AppState, args: Record<string, any>): LocalFileReadResult {
+  return readResolvedLocalFile(state, args, resolveProjectRoot(state, args));
 }
 
 export function splitFileSnippetBatchArgsForRecovery(args: Record<string, any>) {
@@ -506,7 +509,7 @@ export function readFileSnippetsBatch(state: AppState, args: Record<string, any>
 
       const requestedMaxBytes = Number.isFinite(Number(entry.maxBytes)) ? Math.max(1, Math.min(100_000, Number(entry.maxBytes))) : 40_000;
       const readMaxBytes = Math.min(requestedMaxBytes, remainingBytes);
-      const result = readLocalFile(state, {
+      const result = readResolvedLocalFile(state, {
         ...baseArgs,
         filePath: requestedPath,
         mode: entry.mode,
@@ -515,7 +518,7 @@ export function readFileSnippetsBatch(state: AppState, args: Record<string, any>
         maxBytes: readMaxBytes,
         responseMode: entry.responseMode ?? args.responseMode,
         includeFileRef: entry.includeFileRef ?? args.includeFileRef,
-      });
+      }, root);
       const returnedBytes = Number(result.returnedBytes || 0);
       if (readMaxBytes < requestedMaxBytes && result.truncated === true) {
         results.push(errorResult(requestedPath, createApiError(413, 'BATCH_BYTE_LIMIT', `File '${requestedPath}' exceeds the remaining batch response byte budget.`, { affectedId: requestedPath })));

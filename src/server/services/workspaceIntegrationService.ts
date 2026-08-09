@@ -217,14 +217,17 @@ export function integrateWorkspaceCommits(workspaceId: string): WorkspaceIntegra
   }
 
   markSessionWorkspaceIntegrationRequired(workspace.workspaceId, true);
-  const merge = runGit(workspace.projectRoot, ['merge', '--no-ff', '--no-edit', sourceHead], { allowFailure: true, timeoutMs: 60_000 });
-  if (merge.status !== 0) {
-    const conflicts = conflictedPaths(workspace.projectRoot);
+
+  // Probe the exact merge in the isolated source worktree first. A real conflict is
+  // intentionally left there for resolution while the shared base remains untouched.
+  const probe = runGit(workspace.root, ['merge', '--no-commit', '--no-ff', baseHeadBefore], { allowFailure: true, timeoutMs: 60_000 });
+  if (probe.status !== 0) {
+    const conflicts = conflictedPaths(workspace.root);
     if (conflicts.length === 0) {
-      if (mergeInProgress(workspace.projectRoot)) runGit(workspace.projectRoot, ['merge', '--abort'], { allowFailure: true });
-      throw createApiError(409, 'WORKSPACE_INTEGRATION_FAILED', 'Local workspace integration failed without a merge conflict.', {
+      if (mergeInProgress(workspace.root)) runGit(workspace.root, ['merge', '--abort'], { allowFailure: true });
+      throw createApiError(409, 'WORKSPACE_INTEGRATION_FAILED', 'Local workspace integration preflight failed without a merge conflict.', {
         affectedId: workspace.workspaceId,
-        details: { stderr: merge.stderr, sourceHead, baseHeadBefore },
+        details: { stderr: probe.stderr, sourceHead, baseHeadBefore },
       });
     }
     const state: PersistedIntegrationState = {
@@ -259,6 +262,40 @@ export function integrateWorkspaceCommits(workspaceId: string): WorkspaceIntegra
     };
   }
 
+  if (mergeInProgress(workspace.root)) runGit(workspace.root, ['merge', '--abort']);
+  if (!clean(workspace.root) || head(workspace.root) !== sourceHead) {
+    throw createApiError(409, 'WORKSPACE_SOURCE_PROBE_RESTORE_FAILED', 'Conflict preflight did not restore the isolated source workspace cleanly.', {
+      affectedId: workspace.workspaceId,
+      details: { expectedHead: sourceHead, currentHead: head(workspace.root) },
+    });
+  }
+
+  const currentBaseHead = head(workspace.projectRoot);
+  if (mergeInProgress(workspace.projectRoot) || !clean(workspace.projectRoot) || branch(workspace.projectRoot) !== workspace.baseBranch || currentBaseHead !== baseHeadBefore) {
+    throw createApiError(409, 'WORKSPACE_BASE_CHANGED_DURING_INTEGRATION', 'Shared base changed after conflict preflight. Retry from the latest clean base.', {
+      affectedId: workspace.workspaceId,
+      details: { expectedHead: baseHeadBefore, currentHead: currentBaseHead },
+    });
+  }
+
+  const merge = runGit(workspace.projectRoot, ['merge', '--no-ff', '--no-edit', sourceHead], { allowFailure: true, timeoutMs: 60_000 });
+  if (merge.status !== 0) {
+    const conflicts = conflictedPaths(workspace.projectRoot);
+    if (mergeInProgress(workspace.projectRoot)) runGit(workspace.projectRoot, ['merge', '--abort'], { allowFailure: true });
+    const restoredHead = head(workspace.projectRoot);
+    const restoredClean = clean(workspace.projectRoot);
+    if (restoredHead !== baseHeadBefore || !restoredClean) {
+      throw createApiError(500, 'WORKSPACE_BASE_RECOVERY_FAILED', 'Failed integration could not restore the shared base to its recorded clean state.', {
+        affectedId: workspace.workspaceId,
+        details: { expectedHead: baseHeadBefore, currentHead: restoredHead, conflictedPaths: conflicts },
+      });
+    }
+    throw createApiError(409, 'WORKSPACE_INTEGRATION_FAILED', 'Local workspace integration failed after conflict-safe preflight; the shared base was restored.', {
+      affectedId: workspace.workspaceId,
+      details: { stderr: merge.stderr, sourceHead, baseHeadBefore, conflictedPaths: conflicts },
+    });
+  }
+
   const baseHeadAfter = head(workspace.projectRoot);
   clearIntegrationState(workspace.workspaceId);
   markSessionWorkspaceIntegrationRequired(workspace.workspaceId, false);
@@ -282,18 +319,21 @@ export function abortWorkspaceIntegration(workspaceId: string) {
   const workspace = resolveWorkspaceForIntegration(workspaceId);
   const state = readIntegrationState(workspace.workspaceId);
   if (!state) throw createApiError(409, 'WORKSPACE_INTEGRATION_NOT_PENDING', 'No recoverable workspace integration is pending.', { affectedId: workspace.workspaceId });
-  if (mergeInProgress(workspace.projectRoot)) runGit(workspace.projectRoot, ['merge', '--abort']);
-  const currentHead = head(workspace.projectRoot);
-  if (currentHead !== state.baseHeadBefore || !clean(workspace.projectRoot)) {
-    throw createApiError(409, 'WORKSPACE_ABORT_INCOMPLETE', 'Integration abort did not restore the recorded clean base state.', {
+
+  if (mergeInProgress(workspace.root)) runGit(workspace.root, ['merge', '--abort']);
+  const currentSourceHead = head(workspace.root);
+  if (currentSourceHead !== state.sourceHead || !clean(workspace.root)) {
+    throw createApiError(409, 'WORKSPACE_ABORT_INCOMPLETE', 'Integration abort did not restore the isolated source workspace to its recorded clean state.', {
       affectedId: workspace.workspaceId,
-      details: { expectedHead: state.baseHeadBefore, currentHead },
+      details: { expectedHead: state.sourceHead, currentHead: currentSourceHead },
     });
   }
+
+  const currentBaseHead = head(workspace.projectRoot);
   clearIntegrationState(workspace.workspaceId);
   markSessionWorkspaceIntegrationRequired(workspace.workspaceId, true);
   integrationMetrics.aborts += 1;
-  return { status: 'aborted' as const, workspaceId: workspace.workspaceId, baseHead: currentHead, sourceHead: state.sourceHead };
+  return { status: 'aborted' as const, workspaceId: workspace.workspaceId, baseHead: currentBaseHead, sourceHead: state.sourceHead };
 }
 
 export function retryWorkspaceIntegration(workspaceId: string): WorkspaceIntegrationSuccess | WorkspaceIntegrationConflict {
@@ -302,33 +342,58 @@ export function retryWorkspaceIntegration(workspaceId: string): WorkspaceIntegra
   const state = readIntegrationState(workspace.workspaceId);
   if (!state) return integrateWorkspaceCommits(workspace.workspaceId);
 
-  if (mergeInProgress(workspace.projectRoot)) {
-    const conflicts = conflictedPaths(workspace.projectRoot);
+  if (mergeInProgress(workspace.projectRoot) || !clean(workspace.projectRoot)) {
+    throw createApiError(409, 'WORKSPACE_BASE_DIRTY', 'Shared base must be clean before retrying an isolated conflict resolution.', { affectedId: workspace.workspaceId });
+  }
+  const currentBaseHead = head(workspace.projectRoot);
+  if (currentBaseHead !== state.baseHeadBefore) {
+    throw createApiError(409, 'WORKSPACE_BASE_CHANGED_DURING_RESOLUTION', 'Shared base changed while this conflict was being resolved. Abort and retry from the latest base.', {
+      affectedId: workspace.workspaceId,
+      details: { expectedHead: state.baseHeadBefore, currentHead: currentBaseHead },
+    });
+  }
+
+  if (mergeInProgress(workspace.root)) {
+    const conflicts = conflictedPaths(workspace.root);
     if (conflicts.length > 0) {
       const nextState = { ...state, conflictedPaths: conflicts, recordedAt: new Date().toISOString() };
       writeIntegrationState(nextState);
       integrationMetrics.conflicts += 1;
       return { ...nextState, status: 'conflict', code: 'INTEGRATION_CONFLICT' };
     }
-    const commit = runGit(workspace.projectRoot, ['commit', '--no-edit'], { allowFailure: true });
+    const commit = runGit(workspace.root, ['commit', '--no-edit'], { allowFailure: true });
     if (commit.status !== 0) {
-      throw createApiError(409, 'WORKSPACE_RESOLUTION_COMMIT_FAILED', 'Resolved integration could not be finalized. Ensure all conflict resolutions are staged.', {
+      throw createApiError(409, 'WORKSPACE_RESOLUTION_COMMIT_FAILED', 'Resolved integration could not be finalized in the isolated workspace. Ensure all conflict resolutions are staged.', {
         affectedId: workspace.workspaceId,
         details: { stderr: commit.stderr },
       });
     }
   }
 
-  const baseHeadAfter = head(workspace.projectRoot);
-  if (!isAncestor(workspace.projectRoot, state.sourceHead, baseHeadAfter)) {
-    throw createApiError(409, 'WORKSPACE_RETRY_STATE_INVALID', 'Base history does not contain the source workspace after retry. Abort and restart integration deliberately.', {
+  const resolutionHead = head(workspace.root);
+  if (resolutionHead === state.sourceHead || !clean(workspace.root) || !isAncestor(workspace.root, state.sourceHead, resolutionHead) || !isAncestor(workspace.root, state.baseHeadBefore, resolutionHead)) {
+    throw createApiError(409, 'WORKSPACE_RETRY_STATE_INVALID', 'Isolated resolution does not contain both the recorded source and base revisions.', {
       affectedId: workspace.workspaceId,
-      details: { sourceHead: state.sourceHead, baseHeadAfter },
+      details: { sourceHead: state.sourceHead, baseHeadBefore: state.baseHeadBefore, resolutionHead },
     });
   }
-  if (!clean(workspace.projectRoot)) {
-    throw createApiError(409, 'WORKSPACE_BASE_DIRTY', 'Base workspace remains dirty after integration retry.', { affectedId: workspace.workspaceId });
+
+  const finalBaseHead = head(workspace.projectRoot);
+  if (finalBaseHead !== state.baseHeadBefore || !clean(workspace.projectRoot)) {
+    throw createApiError(409, 'WORKSPACE_BASE_CHANGED_DURING_RESOLUTION', 'Shared base changed before the resolved integration could be applied.', {
+      affectedId: workspace.workspaceId,
+      details: { expectedHead: state.baseHeadBefore, currentHead: finalBaseHead },
+    });
   }
+  const fastForward = runGit(workspace.projectRoot, ['merge', '--ff-only', resolutionHead], { allowFailure: true, timeoutMs: 60_000 });
+  if (fastForward.status !== 0) {
+    throw createApiError(409, 'WORKSPACE_RESOLUTION_APPLY_FAILED', 'Resolved isolated integration could not be applied to the shared base without mutation.', {
+      affectedId: workspace.workspaceId,
+      details: { stderr: fastForward.stderr, resolutionHead, baseHeadBefore: state.baseHeadBefore },
+    });
+  }
+
+  const baseHeadAfter = head(workspace.projectRoot);
   clearIntegrationState(workspace.workspaceId);
   markSessionWorkspaceIntegrationRequired(workspace.workspaceId, false);
   integrationMetrics.successes += 1;

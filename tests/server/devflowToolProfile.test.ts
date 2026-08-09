@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-const { devFlowToolDefinitions, getCapabilityCatalog, getMcpToolList, getToolProfileSummary, resolveDevFlowToolProfile } = await import('../../src/server/contracts/devflowContract.js');
+const { devFlowToolDefinitions, getCapabilityCatalog, getMcpToolList, getMcpToolSurfaceIdentity, getToolProfileSummary, resolveDevFlowToolProfile } = await import('../../src/server/contracts/devflowContract.js');
 const { buildMcpToolSurfaceInventory, summarizeMcpToolSurfaceInventory } = await import('../../src/server/contracts/mcpToolSurfaceClassification.js');
 
 test('stdio MCP entrypoint loads dotenv before creating the server', () => {
@@ -95,6 +95,18 @@ test('tool profile summary reports serialized schema bytes', () => {
   const summary = getToolProfileSummary();
   assert.ok(summary.full.toolCount > summary.coding.toolCount);
   assert.ok(summary.full.schemaBytes > summary.coding.schemaBytes);
+});
+
+test('MCP tool-surface identity is deterministic and changes when an advertised tool is removed', () => {
+  assert.equal(typeof getMcpToolSurfaceIdentity, 'function');
+  const full = getMcpToolList('full');
+  const first = getMcpToolSurfaceIdentity(full);
+  const second = getMcpToolSurfaceIdentity(full);
+  const withoutLastTool = getMcpToolSurfaceIdentity(full.slice(0, -1));
+
+  assert.match(first, /^[0-9a-f]{64}$/);
+  assert.equal(second, first);
+  assert.notEqual(withoutLastTool, first);
 });
 
 test('MCP inventory can retain backend compatibility while full advertises only consolidated canonical intents', () => {

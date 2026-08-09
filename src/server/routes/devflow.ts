@@ -41,6 +41,7 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
       return res.json({
         name: 'dev-flow',
         contractVersion: catalog.contractVersion,
+        toolSurfaceIdentity: catalog.mcpProfile.toolSurfaceIdentity,
         runtimeInstanceId: runtime.runtimeInstanceId,
         runtimeStartedAt: runtime.runtimeStartedAt,
         transport: runtime.transport,
@@ -86,15 +87,17 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
       const windowMs = Number.isFinite(Number(req.query.windowMs)) ? Number(req.query.windowMs) : undefined;
       const previousContractVersion = typeof req.query.previousContractVersion === 'string' ? req.query.previousContractVersion : undefined;
       const previousRuntimeInstanceId = typeof req.query.previousRuntimeInstanceId === 'string' ? req.query.previousRuntimeInstanceId : undefined;
+      const previousToolSurfaceIdentity = typeof req.query.previousToolSurfaceIdentity === 'string' ? req.query.previousToolSurfaceIdentity : undefined;
       const clientToolsVisible = req.query.clientToolsVisible === 'true'
         ? true
         : req.query.clientToolsVisible === 'false'
           ? false
           : undefined;
-      const clientState = previousContractVersion || previousRuntimeInstanceId || clientToolsVisible !== undefined
+      const clientState = previousContractVersion || previousRuntimeInstanceId || previousToolSurfaceIdentity || clientToolsVisible !== undefined
         ? {
             contractVersion: previousContractVersion,
             runtimeInstanceId: previousRuntimeInstanceId,
+            toolSurfaceIdentity: previousToolSurfaceIdentity,
             toolsVisible: clientToolsVisible,
           }
         : undefined;

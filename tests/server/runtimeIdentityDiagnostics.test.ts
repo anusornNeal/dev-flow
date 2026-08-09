@@ -54,6 +54,35 @@ test('runtime transport metadata reports both migration transports after the /mc
   assert.deepEqual(diagnostics.runtime.transport, ['streamable-http', 'legacy-sse']);
 });
 
+test('runtime diagnostics expose tool-surface identity and distinguish schema drift from a pure restart', () => {
+  const current = getDevFlowDiagnostics({ supervisorState: null } as any) as any;
+  assert.equal(typeof current.runtime.toolSurfaceIdentity, 'string');
+  assert.match(current.runtime.toolSurfaceIdentity, /^[0-9a-f]{64}$/);
+
+  const restarted = getDevFlowDiagnostics({
+    supervisorState: null,
+    clientState: {
+      contractVersion: current.runtime.contractVersion,
+      runtimeInstanceId: 'previous-runtime',
+      toolSurfaceIdentity: current.runtime.toolSurfaceIdentity,
+      toolsVisible: true,
+    },
+  } as any) as any;
+  assert.equal(restarted.runtimeDiagnosis.code, 'runtime-restarted');
+
+  const schemaChanged = getDevFlowDiagnostics({
+    supervisorState: null,
+    clientState: {
+      contractVersion: current.runtime.contractVersion,
+      runtimeInstanceId: 'previous-runtime',
+      toolSurfaceIdentity: '0'.repeat(64),
+      toolsVisible: true,
+    },
+  } as any) as any;
+  assert.equal(schemaChanged.runtimeDiagnosis.code, 'tool-surface-changed');
+  assert.match(schemaChanged.runtimeDiagnosis.nextAction, /refresh|reconnect|registry/i);
+});
+
 test('a fresh process receives a different runtime instance id', () => {
   const parent = getDevFlowDiagnostics({ supervisorState: null } as any) as any;
   const childRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-runtime-identity-child-'));
@@ -123,6 +152,7 @@ test('capabilities and diagnostics routes expose runtime identity and accept cli
     const capabilities = await capabilitiesResponse.json() as any;
     assert.equal(capabilitiesResponse.status, 200);
     assert.equal(capabilities.contractVersion, DEVFLOW_CONTRACT_VERSION);
+    assert.match(capabilities.toolSurfaceIdentity, /^[0-9a-f]{64}$/);
     assert.match(capabilities.runtimeInstanceId, /^[0-9a-f-]{20,}$/i);
     assert.equal(typeof capabilities.runtimeStartedAt, 'string');
     assert.deepEqual(capabilities.transport, ['streamable-http', 'legacy-sse']);
@@ -134,5 +164,10 @@ test('capabilities and diagnostics routes expose runtime identity and accept cli
     assert.equal(diagnosticsResponse.status, 200);
     assert.equal(diagnostics.runtime.runtimeInstanceId, capabilities.runtimeInstanceId);
     assert.equal(diagnostics.runtimeDiagnosis.code, 'client-registry-desync');
+
+    const driftResponse = await fetch(`${baseUrl}/api/diagnostics?previousContractVersion=${encodeURIComponent(capabilities.contractVersion)}&previousRuntimeInstanceId=previous-runtime&previousToolSurfaceIdentity=${'0'.repeat(64)}`);
+    const drift = await driftResponse.json() as any;
+    assert.equal(driftResponse.status, 200);
+    assert.equal(drift.runtimeDiagnosis.code, 'tool-surface-changed');
   });
 });

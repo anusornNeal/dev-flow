@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { createApiError } from '../services/api';
 import {
   booleanFlagSchema,
@@ -1712,6 +1713,28 @@ export function getMcpToolList(profile: DevFlowToolProfile = 'full') {
   return immutableTools;
 }
 
+function stableToolSurfaceJson(value: unknown): string {
+  if (value === null) return 'null';
+  if (value === undefined) return '"__undefined__"';
+  if (Array.isArray(value)) return `[${value.map(stableToolSurfaceJson).join(',')}]`;
+  if (typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableToolSurfaceJson(record[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+export function getMcpToolSurfaceIdentity(tools: readonly any[]) {
+  const surface = tools
+    .map((tool) => ({
+      name: String(tool?.name || ''),
+      inputSchema: tool?.inputSchema ?? null,
+      outputSchema: tool?.outputSchema ?? null,
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+  return createHash('sha256').update(stableToolSurfaceJson(surface), 'utf8').digest('hex');
+}
+
 export function getToolProfileSummary() {
   if (toolProfileSummaryCache) return toolProfileSummaryCache;
   toolProfileSummaryCache = deepFreezeJsonValue(Object.fromEntries(DEVFLOW_TOOL_PROFILES.map((profile) => {
@@ -1732,6 +1755,7 @@ export function getCapabilityCatalog() {
 
   const toolNames = new Set(devFlowToolDefinitions.map((tool) => tool.name));
   const activeProfileSummary = getToolProfileSummary()[profileResolution.profile];
+  const activeToolSurfaceIdentity = getMcpToolSurfaceIdentity(getMcpToolList(profileResolution.profile));
   const hasTool = (name: string) => toolNames.has(name);
   const matrix = {
     git: {
@@ -1794,6 +1818,7 @@ export function getCapabilityCatalog() {
       fallback: profileResolution.fallback,
       toolCount: activeProfileSummary.toolCount,
       schemaBytes: activeProfileSummary.schemaBytes,
+      toolSurfaceIdentity: activeToolSurfaceIdentity,
       availableProfiles: [...DEVFLOW_TOOL_PROFILES],
     },
     matrix,

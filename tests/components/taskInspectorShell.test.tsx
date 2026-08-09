@@ -57,21 +57,23 @@ test('shell renders a wide desktop inspector and narrow-window full-screen CSS c
   assert.doesNotMatch(html, /justify-end/);
 });
 
-test('shell exposes exactly four primary tabs with accessible selection state', () => {
-  const html = renderShell({ activeTab: 'work' });
+test('shell exposes five primary tabs with Subtasks between Work and Bugs', () => {
+  const html = renderShell({ activeTab: 'subtasks' });
   const tabRoles = html.match(/role="tab"/g) || [];
-  assert.equal(tabRoles.length, 4);
-  for (const label of ['Overview', 'Work', 'Bugs', 'Activity']) assert.match(html, new RegExp(`>${label}<`));
-  assert.match(html, /aria-selected="true"[^>]*>Work</);
+  assert.equal(tabRoles.length, 5);
+  for (const label of ['Overview', 'Work', 'Subtasks', 'Bugs', 'Activity']) assert.match(html, new RegExp(`>${label}<`));
+  assert.match(html, /aria-selected="true"[^>]*>Subtasks</);
   assert.doesNotMatch(html, />Auto Work</);
 });
 
 test('tab keyboard navigation resolves Arrow, Home, and End keys', () => {
   assert.equal(resolveTaskInspectorTabKey('overview', 'ArrowRight'), 'work');
   assert.equal(resolveTaskInspectorTabKey('overview', 'ArrowLeft'), 'activity');
+  assert.equal(resolveTaskInspectorTabKey('work', 'ArrowRight'), 'subtasks');
+  assert.equal(resolveTaskInspectorTabKey('subtasks', 'ArrowRight'), 'bugs');
   assert.equal(resolveTaskInspectorTabKey('bugs', 'Home'), 'overview');
   assert.equal(resolveTaskInspectorTabKey('work', 'End'), 'activity');
-  assert.equal(resolveTaskInspectorTabKey('work', 'Enter'), null);
+  assert.equal(resolveTaskInspectorTabKey('subtasks', 'Enter'), null);
 });
 
 test('header and tab bar remain sticky while panel content scrolls', () => {

@@ -2,11 +2,9 @@ import React from 'react';
 import { Check, CheckSquare, Copy, FileCode, GitBranch, PlayCircle, ShieldCheck } from 'lucide-react';
 import type { Task } from '../../types';
 import { AGENTS_CONFIG, defaultEffortForModel, defaultModelForAgent, getModelConfig, type AgentName } from '../../lib/agentsConfig';
-import SubtasksSection from './SubtasksSection';
 
 interface TaskWorkTabProps {
   task: Task;
-  subTasks: Task[];
   isEditing: boolean;
   editedBranch: string;
   setEditedBranch: (value: string) => void;
@@ -23,11 +21,6 @@ interface TaskWorkTabProps {
   editedVerification: string;
   setEditedVerification: (value: string) => void;
   onToggleChecklistItem: (itemIdentifier: string) => void;
-  showAllSubtasks: boolean;
-  onShowAllSubtasksChange: (value: boolean) => void;
-  canCreateSubtask: boolean;
-  onCreateSubtask: () => void;
-  onSelectTask?: (task: Task) => void;
 }
 
 const inputClass = 'w-full rounded-xl border border-[#e3d2bb] bg-white px-3.5 py-2.5 text-[13px] text-[#44352c] outline-none focus:border-[#d89745] dark:border-[#584a3b] dark:bg-[#292119] dark:text-[#f1e7de]';
@@ -132,17 +125,6 @@ export default function TaskWorkTab(props: TaskWorkTabProps) {
             )}
           </WorkSection>
 
-          <WorkSection title="Subtasks">
-            <SubtasksSection
-              task={task}
-              subTasks={props.subTasks}
-              showAllSubtasks={props.showAllSubtasks}
-              canCreateSubtask={props.canCreateSubtask}
-              onCreateSubtask={props.onCreateSubtask}
-              onSelectTask={props.onSelectTask}
-              onShowAllSubtasksChange={props.onShowAllSubtasksChange}
-            />
-          </WorkSection>
         </div>
 
         <div className="space-y-5">

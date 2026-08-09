@@ -72,15 +72,25 @@ function makeTask(): Task {
 
 const noop = () => {};
 
-function renderDrawer(initialTab: 'overview' | 'work' | 'bugs' | 'activity') {
+function renderDrawer(initialTab: 'overview' | 'work' | 'subtasks' | 'bugs' | 'activity') {
   const task = makeTask();
+  const childTasks: Task[] = Array.from({ length: 5 }, (_, index) => ({
+    ...makeTask(),
+    id: `child-${index + 1}`,
+    displayId: `DVF-CHILD-${index + 1}`,
+    title: `Child task ${index + 1}`,
+    parentId: task.id,
+    status: index === 0 ? 'done' : 'backlog',
+  }));
   return renderToStaticMarkup(React.createElement(TaskDetailsDrawer as any, {
     task,
-    allTasks: [task],
+    allTasks: [task, ...childTasks],
     initialTab,
     onClose: noop,
     onUpdate: noop,
     onDelete: noop,
+    onSelectTask: noop,
+    onCreateTask: async () => {},
   }));
 }
 
@@ -108,6 +118,23 @@ test('Work groups checklist, target files, execution assignment, and verificatio
   assert.match(html, /GPT-5\.6 Sol/);
   assert.match(html, /Run focused inspector tests and production build/);
   assert.match(html, /TypeScript passed/);
+});
+
+test('Subtasks tab owns subtask progress, list, show-more, and create affordance', () => {
+  const html = renderDrawer('subtasks');
+  assert.match(html, /Subtasks Breakdown \(1\/5\)/);
+  assert.match(html, /Child task 1/);
+  assert.match(html, /Child task 4/);
+  assert.doesNotMatch(html, /Child task 5/);
+  assert.match(html, /show 1 more/);
+  assert.match(html, /Create Subtask Spec/);
+  assert.doesNotMatch(html, /1 of 2 complete/);
+});
+
+test('Work no longer renders the Subtasks section', () => {
+  const html = renderDrawer('work');
+  assert.doesNotMatch(html, /Subtasks Breakdown/);
+  assert.doesNotMatch(html, /Create Subtask Spec/);
 });
 
 test('Bugs keeps embedded bug details visible in normal read mode', () => {

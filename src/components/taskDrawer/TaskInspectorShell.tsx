@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Edit3, Maximize2, Minimize2, Trash2, X } from 'lucide-react';
 import type { Task } from '../../types';
 
-export type TaskInspectorTab = 'overview' | 'work' | 'bugs' | 'activity';
+export type TaskInspectorTab = 'overview' | 'work' | 'subtasks' | 'bugs' | 'activity';
 
 export const TASK_INSPECTOR_MIN_WIDTH_VW = 45;
 export const TASK_INSPECTOR_DEFAULT_WIDTH_VW = 65;
@@ -21,6 +21,7 @@ export function resolveTaskInspectorResize(startWidthVw: number, deltaPx: number
 const TABS: Array<{ id: TaskInspectorTab; label: string }> = [
   { id: 'overview', label: 'Overview' },
   { id: 'work', label: 'Work' },
+  { id: 'subtasks', label: 'Subtasks' },
   { id: 'bugs', label: 'Bugs' },
   { id: 'activity', label: 'Activity' },
 ];

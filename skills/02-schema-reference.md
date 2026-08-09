@@ -1,12 +1,11 @@
 # DevFlow Schema Semantic Reference
 
 ## Purpose
-Use this only when the live task/tool schema does not answer a semantic placement question. The live task schema (`get_schema`) and exact MCP tool schema (`get_tool_schema`) are authoritative for field types, enums, required fields, aliases, and nested JSON shapes. Do not duplicate those lists here.
+Use this only when the live tool schema does not answer a semantic placement question. `get_tool_schema` is authoritative for field types, enums, required fields, aliases, and nested JSON shapes; use the `create_task` or `update_task` schema when reasoning about task fields. Do not duplicate those lists here.
 
 ## Authoring helper tools
-- `get_schema`: authoritative task field shape.
-- `get_tool_schema`: authoritative input/output shape for one MCP tool.
-- `get_capabilities`: current exposed capability/catalog information.
+- `get_tool_schema`: authoritative input/output shape for one MCP tool; use it for `create_task` or `update_task` when task-field details matter.
+- `devflow_health_check`: current runtime/tool-surface diagnostics when exposure or connectivity is in doubt.
 
 If this file conflicts with a live schema, follow the live schema and fix this guidance.
 
@@ -14,15 +13,14 @@ If this file conflicts with a live schema, follow the live schema and fix this g
 ### `description`
 State the requested behavior and scope delta. Keep implementation archaeology out unless it changes product behavior.
 - `get_jira_authoring_bundle`: bounded Jira evidence packet; use before individual Jira proxy reads.
-- `get_repo_context_bundle`: preferred first repo packet; use `get_project_atlas` for cross-module/read-order hints and `get_repo_inspection_index` only as a targeted fallback.
+- `get_repo_context_bundle`: preferred first repo packet; use `get_project_atlas` for cross-module/read-order hints and `search_local_files` only as a targeted fallback when exact repository evidence is still missing.
 - `read_file_snippets_batch(includeFileRef=true)` / `read_local_file(includeFileRef=true)`: bounded Steno bootstrap for multi-file / single-file work.
 - `prepare_compact_edit` + `apply_prepared_edit`: default for LLM-authored existing-file changes when revision-bound anchored edits fit; preview first and re-read/re-prepare stale plans.
-- `safe_edit_local_file`: simpler tiny anchored single-file edit. `edit_local_files_batch`: guarded structured fallback.
-- `apply_patch`: exception for an existing/trusted native Git unified diff or documented fallback. `*** Begin Patch` / `*** Update File` is invalid input.
+- `edit_local_files_batch`: guarded structured fallback for anchored edits when Steno is unsuitable; translate a trusted native Git unified diff into revision-guarded operations. Do not paste `*** Begin Patch` pseudo-patch syntax into MCP edit tools.
 - `write_local_file`: new files or small known full-file replacements only.
 - `apply_and_verify` / `run_project_command`: risk-matched verification; use fresh final evidence when required.
 - `commit_git_changes`: commit only the intended verified scope; never push by default.
-- `validate_task_quality`: optional preflight for server-enforced authoring quality. `open_task_bug`: keep defects inside an existing task instead of creating a new card.
+- `create_task` / `update_task`: authoritative server-side authoring validation. `open_task_bug`: keep defects inside an existing task instead of creating a new card.
 - `devflow_health_check`: compact readiness diagnostics. `move_task_to_status`: follow allowed status paths.
 
 ### `repoContext`
@@ -54,7 +52,7 @@ Use Jira/Figma/source identifiers as provenance; summarize the implementation-re
 Default newly authored cards to `backlog` unless the user/workflow explicitly queues or starts the work. Do not infer `todo` from implementation readiness alone.
 
 ## Mutation semantics
-Create/update mutations enforce the authoritative server-side quality gate. A separate `validate_task_quality` call is optional diagnostic/preflight behavior, not a required duplicate payload round trip.
+Create/update mutations enforce the authoritative server-side quality gate; do not add a duplicate validation round trip unless a currently advertised diagnostic explicitly requires it.
 
 ## Execution references
 When implementation follows immediately, load `07-authoring-execution`. It covers `read_file_snippets_batch(includeFileRef=true)`, guarded edits, `write_local_file`, verification, and `commit_git_changes` without duplicating their schemas here.

@@ -30,7 +30,7 @@ Load `07-authoring-execution` only when the current action includes local code/f
 Load `03-reviewer-core` for review, review feedback, corrected review assumptions, and embedded bug guidance. Use `open_task_bug` for a distinct defect on an existing task; do not create a new top-level task unless the user explicitly requests one.
 
 ## Schema-only questions
-Prefer the live task/tool schema (`get_schema` / `get_tool_schema`). Load `02-schema-reference` only for semantic placement that schemas cannot express, such as what belongs in `repoContext` versus `description`.
+Prefer exact MCP schemas via `get_tool_schema`, especially the `create_task` and `update_task` schemas for task fields. Load `02-schema-reference` only for semantic placement that schemas cannot express, such as what belongs in `repoContext` versus `description`.
 
 ## Examples
 Load `04-examples` only when a concrete sample, complex task patch, or parent/child example is useful.
@@ -67,8 +67,7 @@ Use:
 - `get_project_atlas` only for architecture/project-map, onboarding, unclear target files, cross-module impact, module boundaries, or read order.
 - For multi-file edits, read exact targets with `read_file_snippets_batch(includeFileRef=true)` so snippets, revisions, and Steno-ready refs arrive in one bounded call; use `read_local_file(includeFileRef=true)` for genuinely single-file work.
 - For LLM-authored existing-file changes, prefer Steno Edit by default: `prepare_compact_edit` is the no-write preview and `apply_prepared_edit` applies only the returned plan id. Re-read and re-prepare stale, expired, or consumed plans.
-- `safe_edit_local_file` remains the simpler option for a tiny anchored single-file edit when Steno adds no safety or clarity.
-- Treat `apply_patch` as an exception: use it for an already-existing or trusted native Git unified diff, a trusted generated diff, or a documented fallback when Steno/structured editing is unsuitable. `*** Begin Patch` / `*** Update File` pseudo-patch syntax is not valid `apply_patch` input.
+- Use `edit_local_files_batch` as the guarded structured fallback when Steno is unsuitable, including when a trusted native Git unified diff must be translated into revision-guarded anchored operations.
 - Use `apply_and_verify` when its supported prepared/structured edit path can safely combine mutation, diff capture, and risk-aware verification.
 - Otherwise run the smallest targeted `run_project_command`; use `forceFresh` when final evidence must not be reused.
 - `commit_git_changes` dry-run before the real commit.

@@ -4,8 +4,56 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-const { devFlowToolDefinitions, getCapabilityCatalog, getMcpToolList, getToolProfileSummary, resolveDevFlowToolProfile } = await import('../../src/server/contracts/devflowContract.js');
+const { devFlowToolDefinitions, getCapabilityCatalog, getMcpConsolidationReplacement, getMcpToolList, getToolProfileSummary, resolveDevFlowToolProfile } = await import('../../src/server/contracts/devflowContract.js');
 const { buildMcpToolSurfaceInventory, summarizeMcpToolSurfaceInventory } = await import('../../src/server/contracts/mcpToolSurfaceClassification.js');
+
+const PROTECTED_MASTER_SKILLS = [
+  '00-skill-router.md',
+  '01-authoring-core.md',
+  '02-schema-reference.md',
+  '07-authoring-execution.md',
+  'prompt.execution-rules.md',
+  'ready-for-review-reviewer-skill.md',
+];
+
+const UI_OR_INTERNAL_ONLY_TOOL_REFERENCES = new Set([
+  'update_skill',
+  'update_prompt_override',
+  'delete_prompt_override',
+  'cancel_tool_job',
+]);
+
+function findActionableHiddenToolReferences(content: string, advertisedNames: Set<string>) {
+  const knownNames = new Set<string>();
+  for (const tool of devFlowToolDefinitions) {
+    knownNames.add(tool.name);
+    for (const alias of tool.aliases || []) knownNames.add(alias);
+  }
+
+  const references: string[] = [];
+  for (const name of knownNames) {
+    if (advertisedNames.has(name) || UI_OR_INTERNAL_ONLY_TOOL_REFERENCES.has(name)) continue;
+    const inlineName = '`' + name + '`';
+    const inlineCall = '`' + name + '(';
+    const namespaced = 'Dev_Flow.' + name;
+    if (content.includes(inlineName) || content.includes(inlineCall) || content.includes(namespaced)) references.push(name);
+  }
+  return references.sort();
+}
+
+test('protected DevFlow skills only recommend tools advertised by the full MCP surface', () => {
+  const advertisedNames = new Set(getMcpToolList('full').map((tool: any) => tool.name));
+  const staleReferences: string[] = [];
+
+  for (const skillName of PROTECTED_MASTER_SKILLS) {
+    const content = fs.readFileSync(new URL('../../skills/' + skillName, import.meta.url), 'utf8');
+    for (const name of findActionableHiddenToolReferences(content, advertisedNames)) {
+      staleReferences.push(skillName + ': ' + name + ' -> ' + (getMcpConsolidationReplacement(name) || 'no canonical MCP replacement'));
+    }
+  }
+
+  assert.deepEqual(staleReferences, [], 'master skills must not recommend hidden/removed MCP tools');
+});
 
 test('stdio MCP entrypoint loads dotenv before creating the server', () => {
   const entrypoint = fs.readFileSync(new URL('../../mcp-server.ts', import.meta.url), 'utf8');

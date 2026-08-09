@@ -166,17 +166,15 @@ When a checklist item is verified:
 
 Use available DevFlow tools where appropriate:
 
-- `Dev_Flow.list_tasks` to find `ready-for-review` cards.
-- `Dev_Flow.get_task` to read full card details.
-- `Dev_Flow.list_tasks` with `parentId` to read child/subtask cards.
-- `Dev_Flow.get_git_branch` to inspect available local branches.
-- `Dev_Flow.get_git_log` to inspect commits.
-- `Dev_Flow.get_git_diff` to inspect changes.
-- `Dev_Flow.read_local_file` to read actual changed files and related files.
-- `Dev_Flow.toggle_task_checklist` or batch toggle tools to mark verified checklist items.
-- `Dev_Flow.update_task` to write review notes if needed.
-- `Dev_Flow.move_task_to_status` to move a card to `done` or `in-progress` through the allowed transition path automatically.
-- `Dev_Flow.move_task_status` or batch move tools only when an explicit one-step move or bulk move is needed.
+- `search_tasks` to find `ready-for-review` cards and locate related parent/child tasks by known display ID, title, status, or repository context.
+- `get_task(mode=agent-context)` for compact implementation/review context; use `get_task(mode=full)` when checklist, logs, bugs, or full task metadata are required.
+- `get_git_branch` to inspect available local branches.
+- `get_git_log` to inspect commits.
+- `get_git_diff` to inspect changes.
+- `read_local_file` to read actual changed files and related files.
+- `toggle_task_checklist` to mark only individually verified checklist items.
+- `update_task` to write review notes if needed.
+- `move_task_to_status` to move a card to `done` or `in-progress` through the allowed transition path automatically.
 
 ## Anti-Patterns
 

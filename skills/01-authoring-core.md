@@ -21,7 +21,7 @@ Do not scan or read the whole repo by default. Prefer:
 Stop reading once the card can name focused target files, current behavior, expected change, acceptance criteria, and verification without guessing.
 
 Use `get_project_atlas` as a companion, not a replacement, when the card is architecture/project-structure/onboarding related, targetFiles remain empty or uncertain after the bundle, the task crosses modules/domains, or the user asks for impact, affected files, module boundaries, or read order. Prefer `task-focused` or `diff-impact` when the task/diff is known; use compact/standard only for broad orientation.
-Fall back to `get_repo_inspection_index`, `search_local_files`, and `read_local_file` only when the bundle is unavailable or does not identify enough target files/functions. Then read only the matched target files that are needed to confirm the implementation map.
+Fall back to `search_local_files` and `read_local_file` only when the bundle is unavailable or does not identify enough target files/functions. Then read only the matched target files that are needed to confirm the implementation map.
 
 Do not scan or read the whole repo. Start from the Jira/user terms and search only for likely screen names, visible strings, route names, ViewModels, composables, fragments, adapters, mappers, APIs, models, and tests. Read only the smallest set of files needed to identify the implementation path.
 
@@ -47,8 +47,8 @@ If targeted inspection cannot identify likely files/functions, create a blocked/
 
 ## Repository edit policy
 - For LLM-authored existing-file changes, prefer Steno Edit or a structured anchored edit; do not synthesize native unified diffs when a guarded structured edit is suitable.
-- `safe_edit_local_file` remains a simpler option for a tiny anchored single-file edit.
-- `apply_patch` is an exception for an already-existing or trusted native Git unified diff or a documented fallback. `*** Begin Patch` / `*** Update File` is not valid native Git diff input.
+- Use `edit_local_files_batch` as the guarded structured fallback for a tiny anchored single-file edit.
+- For an already-existing or trusted native Git unified diff, translate the diff into revision-guarded safe operations rather than invoking a removed patch helper.
 - Preserve preview/revision guards, re-read and re-prepare stale source, and never retry the same failed write payload unchanged.
 
 ## Implementation map

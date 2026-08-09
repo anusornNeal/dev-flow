@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_project_display_id_unique
   ON tasks(projectId, displayId)
   WHERE projectId IS NOT NULL AND displayId IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_tasks_display_id ON tasks(displayId);
 CREATE INDEX IF NOT EXISTS idx_tasks_project_status ON tasks(projectId, status);
 CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parentId);
 CREATE INDEX IF NOT EXISTS idx_tasks_updated_at ON tasks(updatedAt);

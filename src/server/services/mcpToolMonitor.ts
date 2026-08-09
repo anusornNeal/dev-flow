@@ -1,4 +1,7 @@
 import db from '../../db/index';
+import { DEVFLOW_CONTRACT_VERSION } from '../contracts/devflowContract.js';
+import { getPerformanceBaseline, persistPerformanceSnapshots } from '../repositories/performanceTelemetryRepository.js';
+import { getRepoRevisionForRoot } from './repoRevisionService.js';
 import { getJobMetrics } from './mcpToolJobService';
 import { getLocalSearchRuntimeStatus } from './localFileService';
 import { getSessionWorkspaceMetrics } from './sessionWorkspaceService';
@@ -8,6 +11,10 @@ const MAX_RECORDS = 500;
 const DEFAULT_WINDOW_MS = 10 * 60 * 1000;
 const DUPLICATE_WINDOW_MS = 60 * 1000;
 const STALE_AGENT_RUN_MS = 30 * 60 * 1000;
+const PERFORMANCE_FLUSH_INTERVAL_MS = 60 * 1000;
+const PERFORMANCE_MIN_SAMPLES = 5;
+const PERFORMANCE_REGRESSION_THRESHOLD = 0.15;
+const MAX_PENDING_DURATION_SAMPLES = 500;
 
 interface ToolCallInput {
   toolName: string;
@@ -37,9 +44,28 @@ interface ToolCallRecord {
   responseTruncated?: boolean;
   timestamp: number;
   inputHash: string;
+  projectScope: string;
 }
 
+type PendingPerformanceBucket = {
+  toolName: string;
+  projectScope: string;
+  windowStart: number;
+  windowEnd: number;
+  count: number;
+  errorCount: number;
+  durationSamples: number[];
+  inputBytes: number;
+  responseBytes: number;
+  truncatedCount: number;
+  cacheHitCount: number;
+  processSpawns: number;
+};
+
 const records: ToolCallRecord[] = [];
+const pendingPerformance = new Map<string, PendingPerformanceBucket>();
+let lastPerformanceFlushAt = 0;
+let cachedAppRevision: string | null = null;
 
 function stableStringify(value: any): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
@@ -53,6 +79,60 @@ function hashText(value: string) {
     hash = ((hash << 5) + hash) ^ value.charCodeAt(index);
   }
   return (hash >>> 0).toString(16);
+}
+
+function getProjectScope(args: Record<string, any>) {
+  const projectId = String(args?.projectId || '').trim();
+  if (projectId) return `project:${projectId.slice(0, 200)}`;
+  const repo = String(args?.repo || args?.repoUrl || '').trim();
+  if (repo) return `repo:${hashText(repo.toLowerCase())}`;
+  const projectName = String(args?.projectName || '').trim();
+  if (projectName) return `project-name:${hashText(projectName.toLowerCase())}`;
+  return '';
+}
+
+function getAppRevision() {
+  if (cachedAppRevision) return cachedAppRevision;
+  const configured = String(process.env.DEVFLOW_APP_REVISION || process.env.GIT_COMMIT || '').trim();
+  if (configured) {
+    cachedAppRevision = configured.slice(0, 200);
+    return cachedAppRevision;
+  }
+  try {
+    cachedAppRevision = getRepoRevisionForRoot(process.cwd()).head || 'unknown';
+  } catch {
+    cachedAppRevision = 'unknown';
+  }
+  return cachedAppRevision;
+}
+
+function updatePendingPerformance(record: ToolCallRecord) {
+  const key = `${record.toolName}\u0000${record.projectScope}`;
+  const bucket = pendingPerformance.get(key) || {
+    toolName: record.toolName,
+    projectScope: record.projectScope,
+    windowStart: record.timestamp,
+    windowEnd: record.timestamp,
+    count: 0,
+    errorCount: 0,
+    durationSamples: [],
+    inputBytes: 0,
+    responseBytes: 0,
+    truncatedCount: 0,
+    cacheHitCount: 0,
+    processSpawns: 0,
+  };
+  bucket.windowStart = Math.min(bucket.windowStart, record.timestamp);
+  bucket.windowEnd = Math.max(bucket.windowEnd, record.timestamp);
+  bucket.count += 1;
+  bucket.errorCount += record.status >= 400 ? 1 : 0;
+  if (bucket.durationSamples.length < MAX_PENDING_DURATION_SAMPLES) bucket.durationSamples.push(record.durationMs);
+  bucket.inputBytes += record.inputBytes;
+  bucket.responseBytes += Number(record.responseBytes || 0);
+  bucket.truncatedCount += record.responseTruncated === true ? 1 : 0;
+  bucket.cacheHitCount += record.cacheHit === true ? 1 : 0;
+  bucket.processSpawns += Number(record.processSpawns || 0);
+  pendingPerformance.set(key, bucket);
 }
 
 function getActiveAgentRuns(now = Date.now()) {
@@ -76,11 +156,13 @@ function getActiveAgentRuns(now = Date.now()) {
 
 export function clearToolCallRecords() {
   records.length = 0;
+  pendingPerformance.clear();
+  lastPerformanceFlushAt = 0;
 }
 
 export function recordToolCall(input: ToolCallInput) {
   const serializedArgs = JSON.stringify(input.args || {});
-  records.push({
+  const record: ToolCallRecord = {
     toolName: input.toolName,
     status: input.status,
     durationMs: input.durationMs,
@@ -93,7 +175,10 @@ export function recordToolCall(input: ToolCallInput) {
     responseTruncated: input.responseTruncated,
     timestamp: input.timestamp ?? Date.now(),
     inputHash: hashText(stableStringify(input.args || {})),
-  });
+    projectScope: getProjectScope(input.args || {}),
+  };
+  records.push(record);
+  updatePendingPerformance(record);
   if (records.length > MAX_RECORDS) {
     records.splice(0, records.length - MAX_RECORDS);
   }
@@ -233,6 +318,178 @@ export function getToolCallSummary(options?: { now?: number; windowMs?: number }
 }
 
 
+export function flushPerformanceTelemetry(options: {
+  now?: number;
+  force?: boolean;
+  minIntervalMs?: number;
+  retentionMs?: number;
+  maxRows?: number;
+} = {}) {
+  const now = options.now ?? Date.now();
+  const minIntervalMs = Math.max(1, Number(options.minIntervalMs || PERFORMANCE_FLUSH_INTERVAL_MS));
+  if (pendingPerformance.size === 0) {
+    return { inserted: 0, deletedByAge: 0, deletedByCap: 0, retainedRows: 0, flushedBuckets: 0, skipped: false };
+  }
+  if (!options.force && lastPerformanceFlushAt > 0 && now - lastPerformanceFlushAt < minIntervalMs) {
+    return { inserted: 0, deletedByAge: 0, deletedByCap: 0, retainedRows: 0, flushedBuckets: 0, skipped: true, reason: 'interval' };
+  }
+
+  const snapshots = Array.from(pendingPerformance.values()).map((bucket) => ({
+    windowStart: bucket.windowStart,
+    windowEnd: bucket.windowEnd,
+    toolName: bucket.toolName,
+    projectScope: bucket.projectScope,
+    contractRevision: DEVFLOW_CONTRACT_VERSION,
+    appRevision: getAppRevision(),
+    count: bucket.count,
+    errorCount: bucket.errorCount,
+    p50DurationMs: percentile(bucket.durationSamples, 50),
+    p95DurationMs: percentile(bucket.durationSamples, 95),
+    inputBytes: bucket.inputBytes,
+    responseBytes: bucket.responseBytes,
+    truncatedCount: bucket.truncatedCount,
+    cacheHitCount: bucket.cacheHitCount,
+    processSpawns: bucket.processSpawns,
+  }));
+
+  const result = persistPerformanceSnapshots(snapshots, {
+    now,
+    retentionMs: options.retentionMs,
+    maxRows: options.maxRows,
+  });
+  pendingPerformance.clear();
+  lastPerformanceFlushAt = now;
+  return { ...result, flushedBuckets: snapshots.length, skipped: false };
+}
+
+export function getPerformanceHistoryComparison(options: {
+  now?: number;
+  windowMs?: number;
+  minSamples?: number;
+  regressionThreshold?: number;
+  maxTools?: number;
+} = {}) {
+  const now = options.now ?? Date.now();
+  const windowMs = Math.max(1, Number(options.windowMs || DEFAULT_WINDOW_MS));
+  const windowStart = now - windowMs;
+  const minSamples = Math.max(1, Math.floor(Number(options.minSamples || PERFORMANCE_MIN_SAMPLES)));
+  const regressionThreshold = Math.max(0, Number(options.regressionThreshold ?? PERFORMANCE_REGRESSION_THRESHOLD));
+  const maxTools = Math.max(1, Math.min(25, Math.floor(Number(options.maxTools || 10))));
+  const groups = new Map<string, {
+    toolName: string;
+    projectScope: string;
+    count: number;
+    errorCount: number;
+    durationSamples: number[];
+    inputBytes: number;
+    responseBytes: number;
+    truncatedCount: number;
+    cacheHitCount: number;
+    processSpawns: number;
+  }>();
+
+  for (const record of records) {
+    if (record.timestamp < windowStart) continue;
+    const key = `${record.toolName}\u0000${record.projectScope}`;
+    const group = groups.get(key) || {
+      toolName: record.toolName,
+      projectScope: record.projectScope,
+      count: 0,
+      errorCount: 0,
+      durationSamples: [],
+      inputBytes: 0,
+      responseBytes: 0,
+      truncatedCount: 0,
+      cacheHitCount: 0,
+      processSpawns: 0,
+    };
+    group.count += 1;
+    group.errorCount += record.status >= 400 ? 1 : 0;
+    group.durationSamples.push(record.durationMs);
+    group.inputBytes += record.inputBytes;
+    group.responseBytes += Number(record.responseBytes || 0);
+    group.truncatedCount += record.responseTruncated === true ? 1 : 0;
+    group.cacheHitCount += record.cacheHit === true ? 1 : 0;
+    group.processSpawns += Number(record.processSpawns || 0);
+    groups.set(key, group);
+  }
+
+  const comparisons = Array.from(groups.values())
+    .sort((left, right) => right.count - left.count || left.toolName.localeCompare(right.toolName))
+    .slice(0, maxTools)
+    .map((group) => {
+      const current = {
+        sampleCount: group.count,
+        p50DurationMs: percentile(group.durationSamples, 50),
+        p95DurationMs: percentile(group.durationSamples, 95),
+        errorCount: group.errorCount,
+        inputBytes: group.inputBytes,
+        responseBytes: group.responseBytes,
+        truncatedCount: group.truncatedCount,
+        truncationRate: group.count > 0 ? Math.round((group.truncatedCount / group.count) * 10_000) / 10_000 : 0,
+        cacheHitCount: group.cacheHitCount,
+        processSpawns: group.processSpawns,
+      };
+      if (group.count < minSamples) {
+        return {
+          toolName: group.toolName,
+          projectScope: group.projectScope,
+          status: 'insufficient-samples' as const,
+          reason: 'current',
+          current,
+          baseline: { status: 'insufficient-samples' as const, sampleCount: 0, minSamples },
+          deltaPercent: null,
+        };
+      }
+
+      const baseline = getPerformanceBaseline({
+        toolName: group.toolName,
+        projectScope: group.projectScope,
+        beforeWindowEnd: windowStart,
+        minSamples,
+        maxSnapshots: 50,
+      });
+      if (baseline.status !== 'ready') {
+        return {
+          toolName: group.toolName,
+          projectScope: group.projectScope,
+          status: 'insufficient-samples' as const,
+          reason: 'baseline',
+          current,
+          baseline,
+          deltaPercent: null,
+        };
+      }
+
+      const baselineP95 = Number(baseline.p95DurationMs || 0);
+      const ratio = baselineP95 > 0 ? (current.p95DurationMs - baselineP95) / baselineP95 : 0;
+      const status = ratio > regressionThreshold
+        ? 'regression'
+        : ratio < -regressionThreshold
+          ? 'improvement'
+          : 'stable';
+      return {
+        toolName: group.toolName,
+        projectScope: group.projectScope,
+        status,
+        current,
+        baseline,
+        deltaPercent: Math.round(ratio * 10_000) / 100,
+      };
+    });
+
+  return {
+    windowMs,
+    minSamples,
+    regressionThreshold,
+    comparisons,
+    regressions: comparisons.filter((entry) => entry.status === 'regression'),
+    improvements: comparisons.filter((entry) => entry.status === 'improvement'),
+    stable: comparisons.filter((entry) => entry.status === 'stable'),
+    insufficientSamples: comparisons.filter((entry) => entry.status === 'insufficient-samples'),
+  };
+}
+
 export function buildIsolationDiagnostics(jobMetrics: any, workspaceMetrics: any, integrationMetrics: any) {
   const waitTelemetry = jobMetrics?.metrics?.waitTelemetry || {};
   const active = Array.isArray(jobMetrics?.activeJobs) ? jobMetrics.activeJobs : [];
@@ -271,7 +528,9 @@ export function buildIsolationDiagnostics(jobMetrics: any, workspaceMetrics: any
 
 export function getDevFlowDiagnostics(options?: { now?: number; windowMs?: number }) {
   const now = options?.now ?? Date.now();
+  const telemetryPersistence = flushPerformanceTelemetry({ now });
   const toolSummary = getToolCallSummary({ now, windowMs: options?.windowMs });
+  const performanceHistory = getPerformanceHistoryComparison({ now, windowMs: options?.windowMs });
   const jobMetrics = getJobMetrics();
   const isolation = buildIsolationDiagnostics(jobMetrics, getSessionWorkspaceMetrics(), getWorkspaceIntegrationMetrics());
   const activeAgentRuns = getActiveAgentRuns(now);
@@ -313,6 +572,8 @@ export function getDevFlowDiagnostics(options?: { now?: number; windowMs?: numbe
       recentFailures,
     },
     tools: toolSummary,
+    telemetryPersistence,
+    performanceHistory,
     recommendations,
   };
 }

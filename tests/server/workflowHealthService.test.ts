@@ -14,6 +14,8 @@ executeAllMigrations();
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
 
 const { getWorkflowHealth } = await import('../../src/server/services/workflowHealthService.js');
+const { clearToolCallRecords, recordToolCall, flushPerformanceTelemetry } = await import('../../src/server/services/mcpToolMonitor.js');
+const { default: db } = await import('../../src/db/index.js');
 const {
   createJob,
   updateJobStatus,
@@ -164,4 +166,47 @@ test('workflow health warm p95 remains below the 750ms SLO with a populated job 
   const p95 = samples[Math.ceil(samples.length * 0.95) - 1];
   console.log(`[health-benchmark] warm samples=${samples.length} p50=${p50.toFixed(1)}ms p95=${p95.toFixed(1)}ms scanCount=${getRecentJobCacheStats().diskScanCount}`);
   assert.equal(p95 <= 750, true, `expected warm p95 <= 750ms, got ${p95.toFixed(1)}ms`);
+});
+
+test('workflow health reports historical regressions separately from insufficient samples', () => {
+  const repo = createRepo('historical-regression');
+  db.prepare('DELETE FROM performance_telemetry_snapshots').run();
+  clearToolCallRecords();
+  const now = Date.now();
+  for (let index = 0; index < 5; index += 1) {
+    recordToolCall({
+      toolName: 'search_local_files',
+      args: { projectId: 'project-health' },
+      status: 200,
+      durationMs: 100,
+      timestamp: now - 5_000 + index,
+    });
+  }
+  flushPerformanceTelemetry({ now: now - 4_900, force: true });
+
+  clearToolCallRecords();
+  for (let index = 0; index < 5; index += 1) {
+    recordToolCall({
+      toolName: 'search_local_files',
+      args: { projectId: 'project-health' },
+      status: 200,
+      durationMs: 130,
+      timestamp: now - 100 + index,
+    });
+  }
+  recordToolCall({
+    toolName: 'read_local_file',
+    args: { projectId: 'project-health' },
+    status: 200,
+    durationMs: 10,
+    timestamp: now - 50,
+  });
+
+  const result = getWorkflowHealth(stateFor(repo), { projectId: 'project-health', windowMs: 1_000 });
+  const history = (result.diagnostics.performance as any).history;
+  assert.equal(history.regressions.length, 1);
+  assert.equal(history.regressions[0].toolName, 'search_local_files');
+  assert.equal(history.regressions[0].deltaPercent, 30);
+  assert.equal(history.insufficientSamples.some((entry: any) => entry.toolName === 'read_local_file'), true);
+  assert.match(result.recommendations.join('\n'), /Historical performance regression/);
 });

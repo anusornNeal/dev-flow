@@ -1,12 +1,24 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-mcp-monitor-'));
+process.env.DEVFLOW_DB_PATH = path.join(tempRoot, 'devflow.sqlite');
+process.env.DEVFLOW_APP_REVISION = 'app-test';
+const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
+executeAllMigrations();
+const { default: db } = await import('../../src/db/index.js');
+const {
   clearToolCallRecords,
   getDevFlowDiagnostics,
   getToolCallSummary,
   buildIsolationDiagnostics,
   recordToolCall,
-} from '../../src/server/services/mcpToolMonitor.js';
+  flushPerformanceTelemetry,
+  getPerformanceHistoryComparison,
+} = await import('../../src/server/services/mcpToolMonitor.js');
 
 test('tool monitor summarizes repeated tool calls and duplicate bursts', () => {
   clearToolCallRecords();
@@ -105,4 +117,111 @@ test('isolation diagnostics separate correctness and capacity waits without leak
   assert.equal(isolation.integrations.conflicts, 1);
   assert.deepEqual(isolation.activeResources, { workspaces: 1, sharedRepos: 1, other: 0 });
   assert.doesNotMatch(JSON.stringify(isolation), /private|secret-repo|C:\\\\Users/);
+});
+
+test('monitor flush persists aggregate telemetry without raw args or machine paths', () => {
+  assert.equal(typeof flushPerformanceTelemetry, 'function');
+  clearToolCallRecords();
+  db.prepare('DELETE FROM performance_telemetry_snapshots').run();
+  const now = 10_000;
+  const secretPath = 'C:\\Users\\private\\repo';
+  for (const [index, durationMs] of [10, 20, 30, 40, 50].entries()) {
+    recordToolCall({
+      toolName: 'read_local_file',
+      args: { projectId: 'project-history', localPath: secretPath, secret: 'do-not-store' },
+      status: index === 4 ? 500 : 200,
+      durationMs,
+      responseBytes: 100 + index,
+      cacheHit: index < 2,
+      processSpawns: index === 0 ? 1 : 0,
+      responseTruncated: index === 4,
+      timestamp: now + index,
+    });
+  }
+
+  const flushed = flushPerformanceTelemetry({ now: now + 100, force: true });
+  assert.equal(flushed.inserted, 1);
+  const row = db.prepare('SELECT * FROM performance_telemetry_snapshots WHERE toolName = ?').get('read_local_file') as any;
+  assert.equal(row.projectScope, 'project:project-history');
+  assert.equal(row.appRevision, 'app-test');
+  assert.equal(row.count, 5);
+  assert.equal(row.errorCount, 1);
+  assert.equal(row.p50DurationMs, 30);
+  assert.equal(row.p95DurationMs, 50);
+  assert.equal(row.cacheHitCount, 2);
+  assert.equal(row.processSpawns, 1);
+  assert.equal(row.truncatedCount, 1);
+  assert.equal(row.truncationRate, 0.2);
+  assert.doesNotMatch(JSON.stringify(row), /do-not-store|private|localPath|inputHash/);
+  assert.equal(flushPerformanceTelemetry({ now: now + 200, force: true }).inserted, 0);
+});
+
+test('history comparison distinguishes regression from insufficient samples', () => {
+  assert.equal(typeof getPerformanceHistoryComparison, 'function');
+  clearToolCallRecords();
+  db.prepare('DELETE FROM performance_telemetry_snapshots').run();
+  const baselineStart = 20_000;
+  for (let index = 0; index < 5; index += 1) {
+    recordToolCall({ toolName: 'search_local_files', args: { projectId: 'project-history' }, status: 200, durationMs: 100, timestamp: baselineStart + index });
+    recordToolCall({ toolName: 'get_git_status', args: { projectId: 'project-history' }, status: 200, durationMs: 100, timestamp: baselineStart + 10 + index });
+  }
+  flushPerformanceTelemetry({ now: baselineStart + 100, force: true });
+
+  clearToolCallRecords();
+  const currentStart = 40_000;
+  for (let index = 0; index < 5; index += 1) {
+    recordToolCall({ toolName: 'search_local_files', args: { projectId: 'project-history' }, status: 200, durationMs: 130, timestamp: currentStart + index });
+    recordToolCall({ toolName: 'get_git_status', args: { projectId: 'project-history' }, status: 200, durationMs: 70, timestamp: currentStart + 10 + index });
+  }
+  recordToolCall({ toolName: 'read_local_file', args: { projectId: 'project-history' }, status: 200, durationMs: 5, timestamp: currentStart + 20 });
+
+  const comparison = getPerformanceHistoryComparison({ now: currentStart + 100, windowMs: 1_000, minSamples: 5, regressionThreshold: 0.15 });
+  const search = comparison.comparisons.find((entry: any) => entry.toolName === 'search_local_files');
+  const read = comparison.comparisons.find((entry: any) => entry.toolName === 'read_local_file');
+  const gitStatus = comparison.comparisons.find((entry: any) => entry.toolName === 'get_git_status');
+  assert.equal(search?.status, 'regression');
+  assert.equal(search?.current.p95DurationMs, 130);
+  assert.equal(search?.baseline.p95DurationMs, 100);
+  assert.equal(search?.deltaPercent, 30);
+  assert.equal(search?.current.truncationRate, 0);
+  assert.equal(search?.baseline.truncationRate, 0);
+  assert.equal(gitStatus?.status, 'improvement');
+  assert.equal(gitStatus?.deltaPercent, -30);
+  assert.equal(read?.status, 'insufficient-samples');
+  assert.equal(comparison.regressions.length, 1);
+  assert.equal(comparison.improvements.length, 1);
+  assert.equal(comparison.insufficientSamples.length, 1);
+});
+
+test('diagnostics opportunistically flush aggregate telemetry and expose history summary', () => {
+  clearToolCallRecords();
+  db.prepare('DELETE FROM performance_telemetry_snapshots').run();
+  const now = 60_000;
+  for (let index = 0; index < 5; index += 1) {
+    recordToolCall({
+      toolName: 'get_repo_context_bundle',
+      args: { projectId: 'project-diagnostics' },
+      status: 200,
+      durationMs: 25,
+      timestamp: now + index,
+    });
+  }
+  assert.equal((db.prepare('SELECT COUNT(*) AS count FROM performance_telemetry_snapshots').get() as any).count, 0);
+
+  const diagnostics = getDevFlowDiagnostics({ now: now + 100, windowMs: 1_000 }) as any;
+  assert.equal(diagnostics.telemetryPersistence.inserted, 1);
+  assert.equal(diagnostics.performanceHistory.comparisons[0].toolName, 'get_repo_context_bundle');
+  assert.equal(diagnostics.performanceHistory.comparisons[0].status, 'insufficient-samples');
+  assert.equal((db.prepare('SELECT COUNT(*) AS count FROM performance_telemetry_snapshots').get() as any).count, 1);
+
+  recordToolCall({
+    toolName: 'get_repo_context_bundle',
+    args: { projectId: 'project-diagnostics' },
+    status: 200,
+    durationMs: 30,
+    timestamp: now + 30_000,
+  });
+  const early = getDevFlowDiagnostics({ now: now + 30_100, windowMs: 60_000 }) as any;
+  assert.equal(early.telemetryPersistence.skipped, true);
+  assert.equal((db.prepare('SELECT COUNT(*) AS count FROM performance_telemetry_snapshots').get() as any).count, 1);
 });

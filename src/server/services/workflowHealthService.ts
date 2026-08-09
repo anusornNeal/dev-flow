@@ -67,6 +67,16 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
   const search = getLocalSearchRuntimeStatus();
   const searchMs = phaseMs();
   const sloPerformance = evaluatePerformanceSlo(Array.isArray(diagnostics?.tools?.topTools) ? diagnostics.tools.topTools : []);
+  const historicalPerformance = diagnostics?.performanceHistory || {
+    windowMs,
+    minSamples: 5,
+    regressionThreshold: 0.15,
+    comparisons: [],
+    regressions: [],
+    improvements: [],
+    stable: [],
+    insufficientSamples: [],
+  };
   const sloMs = phaseMs();
 
   const git = gitProbe.ok === true ? {
@@ -110,6 +120,13 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
     const slow = sloPerformance.regressions.slice(0, 3).map((entry) => `${entry.toolName} p95=${entry.p95DurationMs}ms>${entry.budgetMs}ms`).join(', ');
     recommendations.push(`Performance SLO regression detected: ${slow}.`);
   }
+  if (historicalPerformance.regressions.length > 0) {
+    const slow = historicalPerformance.regressions
+      .slice(0, 3)
+      .map((entry: any) => `${entry.toolName} p95 ${entry.baseline?.p95DurationMs}ms→${entry.current?.p95DurationMs}ms (${entry.deltaPercent}%)`)
+      .join(', ');
+    recommendations.push(`Historical performance regression detected: ${slow}.`);
+  }
 
   const keyToolsPresent = {
     get_repo_context_bundle: catalog.tools.some((tool: any) => tool.name === 'get_repo_context_bundle'),
@@ -135,7 +152,17 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
       keyToolsPresent,
     },
     git,
-    diagnostics: { queueDepth, failedJobs, failedJobGroups, failedJobSummaries, staleAgentRuns, duplicateBursts, performance: sloPerformance, isolation },
+    diagnostics: {
+      queueDepth,
+      failedJobs,
+      failedJobGroups,
+      failedJobSummaries,
+      staleAgentRuns,
+      duplicateBursts,
+      performance: { ...sloPerformance, history: historicalPerformance },
+      telemetryPersistence: diagnostics?.telemetryPersistence,
+      isolation,
+    },
     performance: {
       totalMs: Math.round((nodePerformance.now() - startedAt) * 100) / 100,
       phases: { catalogMs, diagnosticsMs, gitMs, searchMs, sloMs },

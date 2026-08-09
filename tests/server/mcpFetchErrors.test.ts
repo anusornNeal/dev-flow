@@ -13,6 +13,22 @@ test.after(() => {
   else process.env.DEVFLOW_MCP_TOOL_PROFILE = previousToolProfile;
 });
 
+test('lean MCP profile deterministically rejects hidden compatibility tools before network access', async () => {
+  process.env.DEVFLOW_MCP_TOOL_PROFILE = 'coding';
+  try {
+    const server = createDevFlowMcpServer('http://127.0.0.1:3000');
+    const handler = (server as any)._requestHandlers.get('tools/call');
+    const response = await handler({ method: 'tools/call', params: { name: 'get_figma_file', arguments: { fileKey: 'file-key' } } });
+    assert.equal(response.isError, true);
+    const payload = JSON.parse(response.content[0].text);
+    assert.equal(payload.code, 'TOOL_PROFILE_MISMATCH');
+    assert.equal(payload.details.activeProfile, 'coding');
+    assert.match(payload.details.guidance, /DEVFLOW_MCP_TOOL_PROFILE=full/);
+  } finally {
+    process.env.DEVFLOW_MCP_TOOL_PROFILE = 'full';
+  }
+});
+
 test('mcp server handles ECONNREFUSED fetch errors without crashing', async (t) => {
   const originalFetch = global.fetch;
 

@@ -16,7 +16,7 @@ import { gitToolDefinitions } from './devflowGitTools';
 import { workspaceToolDefinitions } from './devflowWorkspaceTools';
 import { buildMcpTransportInputSchema } from './mcpSchemaTransport';
 export type { DevFlowToolDefinition, DevFlowToolHttpRequest } from './devflowContractCore';
-export const DEVFLOW_CONTRACT_VERSION = '2026-08-08.7';
+export const DEVFLOW_CONTRACT_VERSION = '2026-08-09.1';
 
 export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   {
@@ -1509,24 +1509,25 @@ export const DEVFLOW_TOOL_PROFILES: DevFlowToolProfile[] = ['full', 'coding', 'a
 
 export function resolveDevFlowToolProfile(value = process.env.DEVFLOW_MCP_TOOL_PROFILE) {
   const configured = typeof value === 'string' ? value.trim() : '';
-  return {
-    profile: 'full' as DevFlowToolProfile,
-    configured: configured || null,
-    fallback: false,
-  };
+  if (!configured) return { profile: 'coding' as DevFlowToolProfile, configured: null, fallback: false };
+  if (DEVFLOW_TOOL_PROFILES.includes(configured as DevFlowToolProfile)) {
+    return { profile: configured as DevFlowToolProfile, configured, fallback: false };
+  }
+  return { profile: 'coding' as DevFlowToolProfile, configured, fallback: true };
 }
 
 const CODING_PROFILE_TOOLS = new Set([
-  'get_capabilities', 'get_tool_schema', 'list_projects', 'list_tasks', 'search_tasks',
-  'get_project_start_context', 'repo_read_snapshot', 'get_repo_context_bundle', 'get_repo_context_delta',
-  'get_repo_inspection_index', 'get_repo_semantic_index', 'list_local_files', 'read_local_file', 'read_file_snippets_batch',
-  'search_local_files', 'write_local_file', 'safe_edit_local_file', 'edit_local_files_batch', 'prepare_edit_plan',
-  'apply_prepared_edit_plan', 'prepare_compact_edit', 'apply_prepared_edit', 'apply_and_verify', 'delete_local_path', 'move_local_path', 'apply_patch', 'run_project_command',
-  'parse_test_report', 'get_git_status', 'get_git_diff', 'get_git_log', 'get_git_show', 'get_git_branch', 'get_git_sync_status',
-  'get_change_summary', 'ensure_git_branch', 'commit_git_changes', 'push_git_branch', 'get_agent_task_context', 'get_agent_context',
-  'get_task', 'update_task', 'toggle_task_checklist', 'batch_toggle_task_checklist', 'sync_task_with_git', 'submit_task_for_review',
-  'move_task_to_status', 'complete_task_review', 'get_tool_job_status', 'get_tool_job_log', 'get_tool_job_result',
-  'cancel_tool_job', 'devflow_health_check', 'get_tool_call_summary', 'get_devflow_diagnostics',
+  'get_tool_schema', 'devflow_health_check', 'list_projects',
+  'search_tasks', 'create_task', 'get_task', 'update_task', 'move_task_to_status', 'toggle_task_checklist', 'assign_agent', 'open_task_bug',
+  'sync_task_with_git', 'submit_task_for_review', 'complete_task_review', 'get_agent_task_context',
+  'get_skill_router', 'get_authoring_skill', 'get_jira_authoring_bundle',
+  'get_figma_authoring_context', 'attach_figma_context_to_task', 'get_project_atlas',
+  'get_repo_context_bundle', 'list_local_files', 'read_local_file', 'read_file_snippets_batch', 'search_local_files',
+  'write_local_file', 'edit_local_files_batch', 'prepare_compact_edit', 'apply_prepared_edit', 'apply_and_verify', 'delete_local_path', 'move_local_path',
+  'run_project_command',
+  'get_git_status', 'get_git_diff', 'get_git_log', 'get_git_show', 'get_git_branch', 'get_git_sync_status', 'get_change_summary',
+  'ensure_git_branch', 'commit_git_changes', 'push_git_branch', 'create_pull_request',
+  'prepare_session_workspace', 'integrate_workspace', 'get_tool_job_result',
 ]);
 
 export function isToolAllowedInProfile(name: string, profile: DevFlowToolProfile) {
@@ -1571,13 +1572,15 @@ export function getMcpToolList(profile: DevFlowToolProfile = 'full') {
       inputSchema,
       outputSchema,
     });
-    for (const alias of tool.aliases || []) {
-      tools.push({
-        name: alias,
-        description: `${description} Alias for ${tool.name}.`,
-        inputSchema,
-        outputSchema,
-      });
+    if (profile === 'full') {
+      for (const alias of tool.aliases || []) {
+        tools.push({
+          name: alias,
+          description: `${description} Alias for ${tool.name}.`,
+          inputSchema,
+          outputSchema,
+        });
+      }
     }
   }
   return tools;

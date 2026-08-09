@@ -200,6 +200,8 @@ export function prepareCompactEdit(state: AppState, args: Record<string, any>): 
     repo: args.repo,
     repoUrl: args.repoUrl,
     localPath: args.localPath,
+    sessionId: args.sessionId,
+    workspaceId: args.workspaceId,
     ttlMs: args.ttlMs,
     maxPayloadBytes: args.maxPayloadBytes,
     maxFileBytes: args.maxFileBytes,

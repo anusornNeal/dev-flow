@@ -117,11 +117,23 @@ test('same-line conflict returns INTEGRATION_CONFLICT and abort restores clean b
   assert.deepEqual(conflict.conflictedPaths, ['shared.txt']);
   assert.equal(conflict.baseHeadBefore, baseHeadBefore);
   assert.equal(conflict.sourceHead, git(workspace.root, ['rev-parse', 'HEAD']).stdout);
-  assert.notEqual(git(root, ['rev-parse', '-q', '--verify', 'MERGE_HEAD'], true).status, 1);
+  assert.equal(git(root, ['rev-parse', 'HEAD']).stdout, baseHeadBefore);
+  assert.equal(git(root, ['status', '--porcelain']).stdout, '');
+  assert.equal(git(root, ['rev-parse', '-q', '--verify', 'MERGE_HEAD'], true).status, 1);
+  assert.equal(git(workspace.root, ['rev-parse', '-q', '--verify', 'MERGE_HEAD'], true).status, 0);
+
+  const unrelated = createOrReuseSessionWorkspace(project(root), 'chat-unrelated');
+  commitFile(unrelated.root, 'unrelated.txt', 'unrelated\n', 'unrelated change');
+  const unrelatedResult = integrateWorkspaceCommits(unrelated.workspaceId);
+  assert.equal(unrelatedResult.status, 'succeeded');
+  assert.equal(fs.readFileSync(path.join(root, 'unrelated.txt'), 'utf8').replace(/\r\n/g, '\n'), 'unrelated\n');
+  assert.equal(git(root, ['status', '--porcelain']).stdout, '');
+  const baseHeadAfterUnrelated = git(root, ['rev-parse', 'HEAD']).stdout;
+  assert.notEqual(baseHeadAfterUnrelated, baseHeadBefore);
 
   const aborted = abortWorkspaceIntegration(workspace.workspaceId);
   assert.equal(aborted.status, 'aborted');
-  assert.equal(git(root, ['rev-parse', 'HEAD']).stdout, baseHeadBefore);
+  assert.equal(git(root, ['rev-parse', 'HEAD']).stdout, baseHeadAfterUnrelated);
   assert.equal(git(root, ['status', '--porcelain']).stdout, '');
   assert.equal(fs.existsSync(workspace.root), true);
 });
@@ -137,11 +149,13 @@ test('retry completes a deliberately resolved conflict without losing source com
   const conflict = integrateWorkspaceCommits(workspace.workspaceId);
   assert.equal(conflict.status, 'conflict');
 
-  fs.writeFileSync(path.join(root, 'shared.txt'), 'resolved\n');
-  git(root, ['add', 'shared.txt']);
+  fs.writeFileSync(path.join(workspace.root, 'shared.txt'), 'resolved\n');
+  git(workspace.root, ['add', 'shared.txt']);
   const retried = retryWorkspaceIntegration(workspace.workspaceId);
   assert.equal(retried.status, 'succeeded');
-  assert.equal(fs.readFileSync(path.join(root, 'shared.txt'), 'utf8'), 'resolved\n');
+  assert.equal(fs.readFileSync(path.join(root, 'shared.txt'), 'utf8').replace(/\r\n/g, '\n'), 'resolved\n');
   assert.equal(git(root, ['status', '--porcelain']).stdout, '');
+  assert.equal(git(workspace.root, ['status', '--porcelain']).stdout, '');
+  assert.equal(git(workspace.root, ['rev-parse', '-q', '--verify', 'MERGE_HEAD'], true).status, 1);
   assert.equal(git(root, ['cat-file', '-e', `${conflict.sourceHead}^{commit}`]).status, 0);
 });

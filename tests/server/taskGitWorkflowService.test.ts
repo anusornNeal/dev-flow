@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-task-git-workflow-'));
 process.env.DEVFLOW_DB_PATH = path.join(tempRoot, 'devflow.db');
+process.env.DEVFLOW_APP_ROOT = tempRoot;
 
 const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
 executeAllMigrations();
@@ -18,6 +19,7 @@ const {
   syncTaskWithGit,
 } = await import('../../src/server/services/taskGitWorkflowService.js');
 const { pushGitBranch, clearGitRemoteEvidenceCache, getGitRemoteEvidenceMetrics } = await import('../../src/server/services/gitService.js');
+const { createOrReuseSessionWorkspace } = await import('../../src/server/services/sessionWorkspaceService.js');
 
 function git(root: string, args: string[]) {
   const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', shell: false });
@@ -97,6 +99,59 @@ test('syncTaskWithGit records published head and normalized verification evidenc
   assert.equal(result.gitEvidence.workingTreeClean, true);
   assert.equal(result.verificationEvidence[0].status, 'passed');
   assert.ok(result.verificationEvidence[0].recordedAt);
+});
+
+test('workspace-bound Git evidence stays on the implementation worktree when develop advances concurrently', () => {
+  const fixture = setup('workspace-evidence');
+  const workspace = createOrReuseSessionWorkspace({ id: fixture.projectId, localPath: fixture.root }, 'task-workspace-evidence');
+  const task = createTask(fixture.projectId, { branch: workspace.branch });
+
+  fs.writeFileSync(path.join(workspace.root, 'workspace.txt'), 'task implementation\n');
+  git(workspace.root, ['add', 'workspace.txt']);
+  git(workspace.root, ['commit', '-m', 'task implementation']);
+  const implementationHead = git(workspace.root, ['rev-parse', 'HEAD']);
+
+  fs.writeFileSync(path.join(fixture.root, 'unrelated.txt'), 'other chat integration\n');
+  git(fixture.root, ['add', 'unrelated.txt']);
+  git(fixture.root, ['commit', '-m', 'unrelated develop work']);
+  const unrelatedDevelopHead = git(fixture.root, ['rev-parse', 'HEAD']);
+  assert.notEqual(implementationHead, unrelatedDevelopHead);
+
+  const result = syncTaskWithGit(fixture.state, task, {
+    workspaceId: workspace.workspaceId,
+    remote: 'origin',
+    fetch: false,
+    checks: passedChecks,
+  });
+
+  assert.equal(result.gitEvidence.branch, workspace.branch);
+  assert.equal(result.gitEvidence.commit, implementationHead);
+  assert.notEqual(result.gitEvidence.commit, unrelatedDevelopHead);
+  assert.equal(result.gitEvidence.workspaceId, workspace.workspaceId);
+  assert.equal(result.gitEvidence.evidenceSource, 'managed-workspace');
+});
+
+test('syncTaskWithGit rejects project-root evidence when the task expects an isolated workspace branch', () => {
+  const fixture = setup('workspace-mismatch');
+  const workspace = createOrReuseSessionWorkspace({ id: fixture.projectId, localPath: fixture.root }, 'task-workspace-mismatch');
+  const task = createTask(fixture.projectId, { branch: workspace.branch });
+
+  assert.throws(
+    () => syncTaskWithGit(fixture.state, task, { remote: 'origin', fetch: false, checks: passedChecks }),
+    (error: any) => error?.payload?.code === 'TASK_GIT_EVIDENCE_BRANCH_MISMATCH',
+  );
+});
+
+test('workspace-bound Git evidence rejects a workspace owned by another project', () => {
+  const source = setup('workspace-owner-source');
+  const other = setup('workspace-owner-other');
+  const workspace = createOrReuseSessionWorkspace({ id: source.projectId, localPath: source.root }, 'workspace-owner');
+  const task = createTask(other.projectId, { branch: workspace.branch });
+
+  assert.throws(
+    () => syncTaskWithGit(other.state, task, { workspaceId: workspace.workspaceId, remote: 'origin', fetch: false, checks: passedChecks }),
+    (error: any) => error?.payload?.code === 'WORKSPACE_NOT_FOUND',
+  );
 });
 
 test('evaluateReviewSubmission returns every material blocker without changing task status', () => {

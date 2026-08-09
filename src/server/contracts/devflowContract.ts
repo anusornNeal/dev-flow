@@ -1613,57 +1613,124 @@ export function isToolAllowedInProfile(name: string, profile: DevFlowToolProfile
   return /task|jira|figma|repo_context|repo_inspection|read_local|search_local|authoring|skill/.test(name);
 }
 
+const ASYNC_JOB_TOOL_GUIDANCE = '\n\nNote: This tool may run asynchronously and return a durable `jobId` before completion. When that happens, call `get_tool_job_result(jobId, waitMs=30000)` immediately and continue bounded polling in the same assistant turn until the job is terminal whenever the DevFlow tool surface remains available. Do not ask the user for another message merely to continue an already-started job. If the tool surface disappears, preserve and report the `jobId` so a refreshed connection can resume it.';
+
+function deepFreezeJsonValue<T>(value: T): T {
+  if (Array.isArray(value)) {
+    for (const entry of value) deepFreezeJsonValue(entry);
+    return Object.freeze(value) as T;
+  }
+  if (!value || typeof value !== 'object') return value;
+  for (const entry of Object.values(value as Record<string, unknown>)) deepFreezeJsonValue(entry);
+  return Object.freeze(value) as T;
+}
+
+function cloneAndFreezeJsonValue<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return Object.freeze(value.map((entry) => cloneAndFreezeJsonValue(entry))) as T;
+  }
+  if (!value || typeof value !== 'object') return value;
+  return Object.freeze(Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, entry]) => [key, cloneAndFreezeJsonValue(entry)]),
+  )) as T;
+}
+
+const mcpToolPresentationCache = new WeakMap<DevFlowToolDefinition, Readonly<{ description: string; outputSchema: any }>>();
+const mcpToolListCache = new Map<DevFlowToolProfile, readonly any[]>();
+let toolProfileSummaryCache: Readonly<Record<DevFlowToolProfile, { toolCount: number; schemaBytes: number }>> | undefined;
+let capabilityToolCatalogCache: readonly any[] | undefined;
+const capabilityCatalogCache = new Map<string, any>();
+
+function getMcpToolPresentation(tool: DevFlowToolDefinition) {
+  const cached = mcpToolPresentationCache.get(tool);
+  if (cached) return cached;
+
+  let description = tool.description;
+  let outputSchema = cloneAndFreezeJsonValue(tool.outputSchema);
+  if (tool.executionPolicy?.mode === 'job') {
+    description = `${description}${ASYNC_JOB_TOOL_GUIDANCE}`;
+    if (outputSchema) {
+      outputSchema = deepFreezeJsonValue({
+        type: 'object',
+        anyOf: [
+          outputSchema,
+          {
+            type: 'object',
+            properties: {
+              jobId: { type: 'string' },
+              status: { type: 'string' },
+            },
+            required: ['jobId'],
+          },
+        ],
+      });
+    }
+  }
+
+  const presentation = Object.freeze({ description, outputSchema });
+  mcpToolPresentationCache.set(tool, presentation);
+  return presentation;
+}
+
+function getCapabilityToolCatalog() {
+  if (capabilityToolCatalogCache) return capabilityToolCatalogCache;
+  capabilityToolCatalogCache = Object.freeze(devFlowToolDefinitions.map((tool) => {
+    const presentation = getMcpToolPresentation(tool);
+    return deepFreezeJsonValue({
+      name: tool.name,
+      aliases: [...(tool.aliases || [])],
+      description: presentation.description,
+      lightweight: tool.lightweight === true,
+      executionPolicy: cloneAndFreezeJsonValue(tool.executionPolicy),
+      inputSchema: cloneAndFreezeJsonValue(tool.inputSchema),
+      outputSchema: presentation.outputSchema,
+    });
+  }));
+  return capabilityToolCatalogCache;
+}
+
 export function getMcpToolList(profile: DevFlowToolProfile = 'full') {
+  const cached = mcpToolListCache.get(profile);
+  if (cached) return cached;
+
   const tools = [];
   for (const tool of devFlowToolDefinitions) {
     if (!isToolAllowedInProfile(tool.name, profile)) continue;
     const inputSchema = buildMcpTransportInputSchema(tool.inputSchema);
-    let outputSchema = tool.outputSchema;
-    let description = tool.description;
+    const presentation = getMcpToolPresentation(tool);
 
-    if (tool.executionPolicy?.mode === 'job') {
-      description = `${description}\n\nNote: This tool may run asynchronously and return a durable \`jobId\` before completion. When that happens, call \`get_tool_job_result(jobId, waitMs=30000)\` immediately and continue bounded polling in the same assistant turn until the job is terminal whenever the DevFlow tool surface remains available. Do not ask the user for another message merely to continue an already-started job. If the tool surface disappears, preserve and report the \`jobId\` so a refreshed connection can resume it.`;
-      if (outputSchema) {
-        outputSchema = {
-          type: 'object',
-          anyOf: [
-            outputSchema,
-            {
-              type: 'object',
-              properties: {
-                jobId: { type: 'string' },
-                status: { type: 'string' },
-              },
-              required: ['jobId'],
-            },
-          ],
-        };
-      }
-    }
-
-    tools.push({
+    tools.push(deepFreezeJsonValue({
       name: tool.name,
-      description,
+      description: presentation.description,
       inputSchema,
-      outputSchema,
-    });
+      outputSchema: presentation.outputSchema,
+    }));
   }
-  return tools;
+
+  const immutableTools = Object.freeze(tools);
+  mcpToolListCache.set(profile, immutableTools);
+  return immutableTools;
 }
 
 export function getToolProfileSummary() {
-  return Object.fromEntries(DEVFLOW_TOOL_PROFILES.map((profile) => {
+  if (toolProfileSummaryCache) return toolProfileSummaryCache;
+  toolProfileSummaryCache = deepFreezeJsonValue(Object.fromEntries(DEVFLOW_TOOL_PROFILES.map((profile) => {
     const tools = getMcpToolList(profile);
     return [profile, {
       toolCount: tools.length,
       schemaBytes: Buffer.byteLength(JSON.stringify(tools), 'utf8'),
     }];
-  })) as Record<DevFlowToolProfile, { toolCount: number; schemaBytes: number }>;
+  })) as Record<DevFlowToolProfile, { toolCount: number; schemaBytes: number }>);
+  return toolProfileSummaryCache;
 }
 
 export function getCapabilityCatalog() {
-  const toolNames = new Set(devFlowToolDefinitions.map((tool) => tool.name));
   const profileResolution = resolveDevFlowToolProfile();
+  const cacheKey = `${profileResolution.profile}|${profileResolution.configured ?? ''}|${profileResolution.fallback ? '1' : '0'}`;
+  const cached = capabilityCatalogCache.get(cacheKey);
+  if (cached) return cached;
+
+  const toolNames = new Set(devFlowToolDefinitions.map((tool) => tool.name));
   const activeProfileSummary = getToolProfileSummary()[profileResolution.profile];
   const hasTool = (name: string) => toolNames.has(name);
   const matrix = {
@@ -1719,7 +1786,7 @@ export function getCapabilityCatalog() {
     createPullRequest: matrix.collaboration.createPullRequest,
   };
   const missingSteps = Object.entries(steps).filter(([, available]) => !available).map(([name]) => name);
-  return {
+  const catalog = deepFreezeJsonValue({
     contractVersion: DEVFLOW_CONTRACT_VERSION,
     mcpProfile: {
       active: profileResolution.profile,
@@ -1727,7 +1794,7 @@ export function getCapabilityCatalog() {
       fallback: profileResolution.fallback,
       toolCount: activeProfileSummary.toolCount,
       schemaBytes: activeProfileSummary.schemaBytes,
-      availableProfiles: DEVFLOW_TOOL_PROFILES,
+      availableProfiles: [...DEVFLOW_TOOL_PROFILES],
     },
     matrix,
     workflow: {
@@ -1735,39 +1802,8 @@ export function getCapabilityCatalog() {
       steps,
       missingSteps,
     },
-    tools: devFlowToolDefinitions.map((tool) => {
-      let outputSchema = tool.outputSchema;
-      let description = tool.description;
-
-      if (tool.executionPolicy?.mode === 'job') {
-        description = `${description}\n\nNote: This tool may run asynchronously and return a durable \`jobId\` before completion. When that happens, call \`get_tool_job_result(jobId, waitMs=30000)\` immediately and continue bounded polling in the same assistant turn until the job is terminal whenever the DevFlow tool surface remains available. Do not ask the user for another message merely to continue an already-started job. If the tool surface disappears, preserve and report the \`jobId\` so a refreshed connection can resume it.`;
-        if (outputSchema) {
-          outputSchema = {
-            type: 'object',
-            anyOf: [
-              outputSchema,
-              {
-                type: 'object',
-                properties: {
-                  jobId: { type: 'string' },
-                  status: { type: 'string' },
-                },
-                required: ['jobId'],
-              },
-            ],
-          };
-        }
-      }
-
-      return {
-        name: tool.name,
-        aliases: tool.aliases || [],
-        description,
-        lightweight: tool.lightweight === true,
-        executionPolicy: tool.executionPolicy,
-        inputSchema: tool.inputSchema,
-        outputSchema,
-      };
-    }),
-  };
+    tools: getCapabilityToolCatalog(),
+  });
+  capabilityCatalogCache.set(cacheKey, catalog);
+  return catalog;
 }

@@ -147,27 +147,53 @@ function getStagedFiles(root: string) {
     .filter(Boolean);
 }
 
-function getGitPath(root: string, gitPath: string) {
-  return runGit(['rev-parse', '--git-path', gitPath], root).trim();
+const GIT_OPERATION_MARKERS = [
+  { kind: 'merge', paths: ['MERGE_HEAD'] },
+  { kind: 'rebase', paths: ['REBASE_HEAD', 'rebase-apply', 'rebase-merge'] },
+  { kind: 'cherry-pick', paths: ['CHERRY_PICK_HEAD'] },
+  { kind: 'revert', paths: ['REVERT_HEAD'] },
+  { kind: 'bisect', paths: ['BISECT_LOG'] },
+  { kind: 'sequencer', paths: ['sequencer'] },
+] as const;
+
+const UNMERGED_STATUS_CODES = new Set(['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU']);
+
+function getGitOperationState(root: string, files: Array<{ path: string; status: string }> = getChangedGitFilesForRoot(root)) {
+  const markers = GIT_OPERATION_MARKERS.flatMap((operation) => operation.paths.map((marker) => ({ kind: operation.kind, marker })));
+  const resolvedPaths = runGit(['rev-parse', ...markers.flatMap((entry) => ['--git-path', entry.marker])], root)
+    .split(/\r?\n/)
+    .filter(Boolean);
+  let active: { kind: string; marker: string } | null = null;
+  for (let index = 0; index < markers.length; index += 1) {
+    const resolvedPath = resolvedPaths[index];
+    if (!resolvedPath || !fs.existsSync(path.resolve(root, resolvedPath))) continue;
+    active = markers[index];
+    break;
+  }
+
+  const unmergedPaths = files
+    .filter((file) => UNMERGED_STATUS_CODES.has(String(file.status || '').trim()))
+    .map((file) => normalizeGitPath(file.path))
+    .sort();
+  const blocked = Boolean(active || unmergedPaths.length > 0);
+  return {
+    blocked,
+    code: blocked ? 'GIT_OPERATION_IN_PROGRESS' : null,
+    kind: active?.kind || (unmergedPaths.length > 0 ? 'unmerged' : null),
+    marker: active?.marker || null,
+    unmergedPathCount: unmergedPaths.length,
+    unmergedPaths,
+  };
 }
 
 function ensureNoInProgressOperation(root: string) {
-  const guardedPaths = [
-    'MERGE_HEAD',
-    'REBASE_HEAD',
-    'CHERRY_PICK_HEAD',
-    'BISECT_LOG',
-    'sequencer',
-    'rebase-apply',
-    'rebase-merge',
-  ];
-
-  for (const gitPath of guardedPaths) {
-    const resolved = path.resolve(root, getGitPath(root, gitPath));
-    if (fs.existsSync(resolved)) {
-      throw createApiError(409, 'GIT_OPERATION_IN_PROGRESS', `Cannot commit while git operation '${gitPath}' is in progress. Resolve it in a terminal first.`, { affectedId: gitPath });
-    }
-  }
+  const operation = getGitOperationState(root);
+  if (!operation.blocked) return;
+  const affectedId = operation.marker || operation.kind || 'unmerged';
+  throw createApiError(409, 'GIT_OPERATION_IN_PROGRESS', `Cannot commit while git operation '${affectedId}' is in progress. Resolve or abort it first.`, {
+    affectedId,
+    details: { kind: operation.kind, unmergedPathCount: operation.unmergedPathCount, unmergedPaths: operation.unmergedPaths },
+  });
 }
 
 function resolveCommitFiles(root: string, args: Record<string, any>) {
@@ -463,6 +489,7 @@ export function getGitStatus(state: AppState, args: Record<string, any>) {
     root,
     count: files.length,
     files,
+    operation: getGitOperationState(root, files),
   };
 }
 

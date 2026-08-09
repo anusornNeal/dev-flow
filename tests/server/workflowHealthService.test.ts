@@ -100,6 +100,64 @@ test('getWorkflowHealth warns for a dirty repo', () => {
   assert.match(result.recommendations.join('\n'), /Working tree/);
 });
 
+test('getWorkflowHealth blocks a real unresolved merge and recovers after abort', () => {
+  const repo = createRepo('merge-conflict');
+  const baseBranch = git(repo, ['branch', '--show-current']);
+
+  git(repo, ['checkout', '-b', 'conflicting-side']);
+  fs.writeFileSync(path.join(repo, 'base.txt'), 'side\n');
+  git(repo, ['add', 'base.txt']);
+  git(repo, ['commit', '-m', 'side change']);
+
+  git(repo, ['checkout', baseBranch]);
+  fs.writeFileSync(path.join(repo, 'base.txt'), 'base branch\n');
+  git(repo, ['add', 'base.txt']);
+  git(repo, ['commit', '-m', 'base change']);
+
+  const merge = spawnSync('git', ['merge', 'conflicting-side'], { cwd: repo, encoding: 'utf8', shell: false });
+  assert.notEqual(merge.status, 0, 'fixture must create a real merge conflict');
+
+  const blocked = getWorkflowHealth(stateFor(repo), { projectId: 'project-health' });
+  assert.equal(blocked.ok, false);
+  assert.equal(blocked.status, 'error');
+  assert.equal(blocked.git.operation.blocked, true);
+  assert.equal(blocked.git.operation.code, 'GIT_OPERATION_IN_PROGRESS');
+  assert.equal(blocked.git.operation.kind, 'merge');
+  assert.equal(blocked.git.operation.unmergedPathCount, 1);
+  assert.deepEqual(blocked.git.operation.unmergedPaths, ['base.txt']);
+  assert.match(blocked.recommendations.join('\n'), /do not start unrelated write\/integration work/i);
+
+  git(repo, ['merge', '--abort']);
+  const recovered = getWorkflowHealth(stateFor(repo), { projectId: 'project-health' });
+  assert.equal(recovered.ok, true);
+  assert.equal(recovered.status, 'ok');
+  assert.equal(recovered.git.operation.blocked, false);
+  assert.equal(recovered.git.operation.unmergedPathCount, 0);
+});
+
+test('getWorkflowHealth detects rebase, cherry-pick, and revert operation markers', () => {
+  const cases = [
+    { kind: 'rebase', marker: 'rebase-merge', directory: true },
+    { kind: 'cherry-pick', marker: 'CHERRY_PICK_HEAD', directory: false },
+    { kind: 'revert', marker: 'REVERT_HEAD', directory: false },
+  ];
+
+  for (const fixture of cases) {
+    const repo = createRepo(`operation-${fixture.kind}`);
+    const markerPath = path.resolve(repo, git(repo, ['rev-parse', '--git-path', fixture.marker]));
+    if (fixture.directory) fs.mkdirSync(markerPath, { recursive: true });
+    else fs.writeFileSync(markerPath, `${git(repo, ['rev-parse', 'HEAD'])}\n`);
+
+    const blocked = getWorkflowHealth(stateFor(repo), { projectId: 'project-health' });
+    assert.equal(blocked.status, 'error', fixture.kind);
+    assert.equal(blocked.git.operation.blocked, true, fixture.kind);
+    assert.equal(blocked.git.operation.kind, fixture.kind, fixture.kind);
+    assert.equal(blocked.git.operation.unmergedPathCount, 0, fixture.kind);
+
+    fs.rmSync(markerPath, { recursive: true, force: true });
+  }
+});
+
 
 test('getWorkflowHealth exposes phase timings without caching project git state', () => {
   const repo = createRepo('phase-freshness');

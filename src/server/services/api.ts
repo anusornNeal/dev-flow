@@ -1,4 +1,5 @@
 import type express from 'express';
+import { getToolRecoveryPolicy, type ToolRecoveryPolicy } from './toolRecoveryPolicy.js';
 
 export interface DevFlowErrorPayload {
   code: string;
@@ -7,6 +8,7 @@ export interface DevFlowErrorPayload {
   retryable: boolean;
   affectedId?: string;
   correlationId?: string;
+  recovery?: ToolRecoveryPolicy;
 }
 
 export class DevFlowApiError extends Error {
@@ -42,6 +44,7 @@ export function createApiError(status: number, code: string, message: string, op
     details: options?.details,
     retryable: options?.retryable ?? false,
     affectedId: options?.affectedId,
+    recovery: getToolRecoveryPolicy(code),
   });
 }
 

@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { AppState } from '../types';
 import { getFileRevision } from './localFileService';
 import { invalidateRepoReadCaches } from './repoCacheInvalidationService';
+import { getToolRecoveryPolicy, type ToolRecoveryCategory, type ToolRecoveryStrategy } from './toolRecoveryPolicy.js';
 import {
   applyPreparedSafeEditFile,
   prepareSafeEditFile,
@@ -36,6 +37,11 @@ export type PreparedEditPlanResult = {
     action: 're-read' | 're-prepare' | 'inspect-result';
     retrySamePayload: false;
     guidance: string;
+    category: ToolRecoveryCategory;
+    strategy: ToolRecoveryStrategy;
+    autoApply: boolean;
+    requiresFreshSource: boolean;
+    requiresFreshPreview: boolean;
   };
   rollback?: {
     attempted: string[];
@@ -185,8 +191,18 @@ function rollbackWrittenFiles(written: Extract<PreparedSafeEditFile, { ok: true 
   return rollback;
 }
 
-function planRecovery(action: 're-read' | 're-prepare' | 'inspect-result', guidance: string) {
-  return { action, retrySamePayload: false as const, guidance };
+function planRecovery(code: string, action: 're-read' | 're-prepare' | 'inspect-result', guidance: string) {
+  const policy = getToolRecoveryPolicy(code);
+  return {
+    action,
+    retrySamePayload: false as const,
+    guidance,
+    category: policy.category,
+    strategy: policy.strategy,
+    autoApply: policy.autoApply,
+    requiresFreshSource: policy.requiresFreshSource,
+    requiresFreshPreview: policy.requiresFreshPreview,
+  };
 }
 
 export function applyPreparedEditPlan(args: { editPlanId?: string }): PreparedEditPlanResult {
@@ -203,7 +219,7 @@ export function applyPreparedEditPlan(args: { editPlanId?: string }): PreparedEd
       files: [],
       code: 'EDIT_PLAN_NOT_FOUND',
       message: `Prepared edit plan '${editPlanId}' was not found. Re-prepare the edit instead of retrying the same plan id.`,
-      recovery: planRecovery('re-prepare', 'Prepare a new edit plan. Do not retry the same plan id.'),
+      recovery: planRecovery('EDIT_PLAN_NOT_FOUND', 're-prepare', 'Prepare a new edit plan. Do not retry the same plan id.'),
     };
   }
   if (Date.now() >= plan.expiresAtMs) {
@@ -214,7 +230,7 @@ export function applyPreparedEditPlan(args: { editPlanId?: string }): PreparedEd
       files: plan.prepared.map((entry) => entry.result),
       code: 'EDIT_PLAN_EXPIRED',
       message: `Prepared edit plan '${editPlanId}' expired. Re-read/re-prepare the edit instead of retrying this plan id.`,
-      recovery: planRecovery('re-prepare', 'Prepare a new edit plan; if its source fileRef has also expired, re-read that file first.'),
+      recovery: planRecovery('EDIT_PLAN_EXPIRED', 're-prepare', 'Prepare a new edit plan; if its source fileRef has also expired, re-read that file first.'),
     };
   }
   if (plan.status !== 'prepared') {
@@ -225,7 +241,7 @@ export function applyPreparedEditPlan(args: { editPlanId?: string }): PreparedEd
       files: plan.prepared.map((entry) => entry.result),
       code: 'EDIT_PLAN_CONSUMED',
       message: `Prepared edit plan '${editPlanId}' has already been consumed.`,
-      recovery: planRecovery('inspect-result', 'Do not replay or automatically re-prepare a consumed plan. Inspect the prior apply result or current diff before deciding the next edit.'),
+      recovery: planRecovery('EDIT_PLAN_CONSUMED', 'inspect-result', 'Do not replay or automatically re-prepare a consumed plan. Inspect the prior apply result or current diff before deciding the next edit.'),
     };
   }
 
@@ -246,7 +262,7 @@ export function applyPreparedEditPlan(args: { editPlanId?: string }): PreparedEd
         files: sourceFiles,
         code: 'EDIT_PLAN_STALE',
         message: `File '${prepared.result.filePath}' changed or disappeared after plan preparation. Re-read and prepare again.`,
-        recovery: planRecovery('re-read', 'Re-read the changed file and prepare a new plan. The stale plan is consumed.'),
+        recovery: planRecovery('EDIT_PLAN_STALE', 're-read', 'Re-read the changed file and prepare a new plan. The stale plan is consumed.'),
       };
     }
     if (current.sha256 !== prepared.result.revisionBefore.sha256) {
@@ -259,7 +275,7 @@ export function applyPreparedEditPlan(args: { editPlanId?: string }): PreparedEd
         files: sourceFiles,
         code: 'EDIT_PLAN_STALE',
         message: `File '${prepared.result.filePath}' changed after plan preparation. Re-read and prepare again.`,
-        recovery: planRecovery('re-read', 'Re-read the changed file and prepare a new plan. The stale plan is consumed.'),
+        recovery: planRecovery('EDIT_PLAN_STALE', 're-read', 'Re-read the changed file and prepare a new plan. The stale plan is consumed.'),
       };
     }
   }

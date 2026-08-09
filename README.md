@@ -192,6 +192,14 @@ For repository work through MCP, the recommended safe loop is:
 6. Dry-run `commit_git_changes`, then commit only intended files.
 7. Move the task with `move_task_to_status` when closing or reopening cards.
 
+### Durable execution sessions
+
+DevFlow persists logical execution sessions in SQLite so coding state can survive fresh tool calls and runtime restarts. `executionSessionId` is the durable identity; project/task ids and an opaque `workspaceId` may be associated with it, but a machine-specific repository path is never persisted as session identity.
+
+Session evidence records carry repository and file revision identities. On resume, DevFlow rechecks file evidence against the current repository copy: unchanged evidence stays reusable while only changed or missing file evidence is marked stale. A ContextHandle remains a short-lived cache primitive that a session may reference; it is not the durable session model, and its cache key includes context intent, targets, disclosure level, and byte budget.
+
+Lifecycle is explicit: active sessions can record context, changed files, verification evidence, and revision-bound evidence; completed, cancelled, or expired sessions are terminal and cannot mutate as active work. Run `npm run test:execution-session` for the focused persistence/revision lifecycle suite.
+
 DevFlow's git tools are intentionally local-only. They do not push, rebase, reset, amend, or checkout branches.
 
 ## Backup, Restore, and Migration

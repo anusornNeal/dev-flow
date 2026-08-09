@@ -17,13 +17,13 @@ import { workspaceToolDefinitions } from './devflowWorkspaceTools';
 import { buildMcpTransportInputSchema } from './mcpSchemaTransport';
 import { resolveRuntimeMcpToolProfileValue } from './mcpToolProfileConfig';
 export type { DevFlowToolDefinition, DevFlowToolHttpRequest } from './devflowContractCore';
-export const DEVFLOW_CONTRACT_VERSION = '2026-08-09.2';
+export const DEVFLOW_CONTRACT_VERSION = '2026-08-09.3';
 
 export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   {
     name: 'get_capabilities',
     aliases: [],
-    description: 'Get the compact DevFlow capability catalog, schema version, enabled modules, and MCP tool surface in one call.',
+    description: 'Get the compact DevFlow capability catalog, contract/runtime identity, enabled modules, transport metadata, and MCP tool surface in one call.',
     inputSchema: emptyObjectSchema,
     outputSchema: { type: 'object' },
     lightweight: true,

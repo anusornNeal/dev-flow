@@ -8,6 +8,12 @@ import { getJobMetrics } from './mcpToolJobService';
 import { getLocalSearchRuntimeStatus } from './localFileService';
 import { getSessionWorkspaceMetrics } from './sessionWorkspaceService';
 import { getWorkspaceIntegrationMetrics } from './workspaceIntegrationService';
+import { DEVFLOW_CONTRACT_VERSION } from '../contracts/devflowContract';
+import {
+  classifyRuntimeIdentity,
+  getRuntimeIdentity,
+  type RuntimeClientState,
+} from './runtimeIdentityService';
 
 const MAX_RECORDS = 500;
 const DEFAULT_WINDOW_MS = 10 * 60 * 1000;
@@ -274,12 +280,19 @@ export function buildIsolationDiagnostics(jobMetrics: any, workspaceMetrics: any
   };
 }
 
-export function getDevFlowDiagnostics(options?: { now?: number; windowMs?: number; supervisorState?: DevFlowSupervisorState | null }) {
+export function getDevFlowDiagnostics(options?: {
+  now?: number;
+  windowMs?: number;
+  supervisorState?: DevFlowSupervisorState | null;
+  clientState?: RuntimeClientState;
+}) {
   const now = options?.now ?? Date.now();
   const supervisorState = options && Object.prototype.hasOwnProperty.call(options, 'supervisorState')
     ? options.supervisorState ?? null
     : readDevFlowSupervisorState();
   const runtimeSupervisor = buildDevFlowSupervisorDiagnostics(supervisorState);
+  const runtime = { ...getRuntimeIdentity(), contractVersion: DEVFLOW_CONTRACT_VERSION };
+  const runtimeDiagnosis = classifyRuntimeIdentity(runtime, options?.clientState);
   const toolSummary = getToolCallSummary({ now, windowMs: options?.windowMs });
   const jobMetrics = getJobMetrics();
   const isolation = buildIsolationDiagnostics(jobMetrics, getSessionWorkspaceMetrics(), getWorkspaceIntegrationMetrics());
@@ -303,6 +316,8 @@ export function getDevFlowDiagnostics(options?: { now?: number; windowMs?: numbe
 
   return {
     generatedAt: new Date(now).toISOString(),
+    runtime,
+    ...(runtimeDiagnosis ? { runtimeDiagnosis } : {}),
     search: getLocalSearchRuntimeStatus(),
     runtimeSupervisor,
     isolation,

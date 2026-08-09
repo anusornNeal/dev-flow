@@ -14,6 +14,7 @@ const PROTECTED_MASTER_SKILLS = [
   '07-authoring-execution.md',
   'prompt.execution-rules.md',
   'ready-for-review-reviewer-skill.md',
+  'schema.md',
 ];
 
 const UI_OR_INTERNAL_ONLY_TOOL_REFERENCES = new Set([

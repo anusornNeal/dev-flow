@@ -404,6 +404,50 @@ export function readLocalFile(state: AppState, args: Record<string, any>): Local
   };
 }
 
+export function splitFileSnippetBatchArgsForRecovery(args: Record<string, any>) {
+  const files = Array.isArray(args.files) ? args.files : [];
+  if (files.length < 2) return [];
+  const maxTotalBytes = Number.isFinite(Number(args.maxTotalBytes)) ? Math.max(1, Math.min(500_000, Number(args.maxTotalBytes))) : 100_000;
+  const groups: any[][] = [];
+  let current: any[] = [];
+  let currentBytes = 0;
+  for (const file of files) {
+    const estimate = Number.isFinite(Number(file?.maxBytes)) ? Math.max(1, Math.min(100_000, Number(file.maxBytes))) : 40_000;
+    if (current.length > 0 && currentBytes + estimate > maxTotalBytes) {
+      groups.push(current);
+      current = [];
+      currentBytes = 0;
+    }
+    current.push(file);
+    currentBytes += estimate;
+  }
+  if (current.length > 0) groups.push(current);
+  if (groups.length < 2) {
+    const midpoint = Math.ceil(files.length / 2);
+    groups.splice(0, groups.length, files.slice(0, midpoint), files.slice(midpoint));
+  }
+  return groups.filter((group) => group.length > 0).map((group) => ({ ...args, files: group }));
+}
+
+export function combineFileSnippetBatchRecoveryResults(results: any[]) {
+  const batches = Array.isArray(results) ? results : [];
+  const files = batches.flatMap((result) => Array.isArray(result?.files) ? result.files : []);
+  const successCount = files.filter((entry) => entry?.ok !== false).length;
+  const errorCount = files.length - successCount;
+  return {
+    root: batches.find((result) => result?.root)?.root,
+    count: files.length,
+    requestedCount: batches.reduce((sum, result) => sum + Number(result?.requestedCount || 0), 0),
+    successCount,
+    errorCount,
+    partial: successCount > 0 && errorCount > 0,
+    totalReturnedBytes: batches.reduce((sum, result) => sum + Number(result?.totalReturnedBytes || 0), 0),
+    maxTotalBytes: batches.reduce((max, result) => Math.max(max, Number(result?.maxTotalBytes || 0)), 0),
+    truncated: batches.some((result) => result?.truncated === true),
+    files,
+  };
+}
+
 export function readFileSnippetsBatch(state: AppState, args: Record<string, any>) {
   const requestedFiles = Array.isArray(args.files) ? args.files : null;
   if (!requestedFiles || requestedFiles.length === 0) {

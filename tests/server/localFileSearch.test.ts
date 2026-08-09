@@ -187,6 +187,40 @@ test('searchLocalFiles returns cache metadata on repeated identical searches', (
   assert.deepEqual(second.matches, first.matches);
 });
 
+test('recovery-forced fallback bypasses an existing search cache in sync and async modes', async () => {
+  const cached = searchLocalFiles(state, {
+    projectId: 'project-search-1',
+    query: 'needle',
+    limit: 2,
+  });
+  assert.equal(cached.count, 2);
+
+  const forced = searchLocalFiles(state, {
+    projectId: 'project-search-1',
+    query: 'needle',
+    limit: 2,
+    forceFallbackSearch: true,
+  });
+  assert.equal(forced.backend, 'fallback');
+  assert.equal(forced.fallbackReason, 'recovery-forced');
+  assert.equal(forced.cache.hit, false);
+
+  const asyncForced = await searchLocalFilesAsync(
+    state,
+    {
+      projectId: 'project-search-1',
+      query: 'needle',
+      limit: 2,
+      forceFallbackSearch: true,
+    },
+    { stdout: () => {}, stderr: () => {} },
+    () => {},
+  );
+  assert.equal(asyncForced.backend, 'fallback');
+  assert.equal(asyncForced.fallbackReason, 'recovery-forced');
+  assert.equal(asyncForced.cache.hit, false);
+});
+
 test('searchLocalFiles respects the returned global limit and reports truncation', () => {
   const result = searchLocalFiles(state, {
     projectId: 'project-search-1',

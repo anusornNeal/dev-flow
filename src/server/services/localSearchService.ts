@@ -20,7 +20,7 @@ const FALLBACK_SEARCH_MAX_FILE_BYTES = 200 * 1024;
 const RIPGREP_FAILURE_COOLDOWN_MS = 5_000;
 
 type SearchBackend = 'ripgrep' | 'fallback';
-export type SearchFallbackReason = 'ripgrep-unavailable' | 'ripgrep-exec-error' | 'ripgrep-runtime-failure' | 'circuit-open';
+export type SearchFallbackReason = 'ripgrep-unavailable' | 'ripgrep-exec-error' | 'ripgrep-runtime-failure' | 'circuit-open' | 'recovery-forced';
 
 type RipgrepResolution = {
   key: string;
@@ -365,6 +365,7 @@ function fallbackResult(root: string, searchPath: string, query: string, limit: 
 
 export function searchResolvedLocalFiles(root: string, searchPath: string, args: Record<string, any>) {
   const { query, limit, runtime, cacheKey } = prepareSearch(root, searchPath, args);
+  if (args.forceFallbackSearch === true) return fallbackResult(root, searchPath, query, limit, args, cacheKey, 'recovery-forced');
   const cached = getCachedSearchResult(cacheKey);
   if (cached) return cached;
   if (!runtime.ripgrepPath) return fallbackResult(root, searchPath, query, limit, args, cacheKey, (runtime.fallbackReason || 'ripgrep-unavailable') as SearchFallbackReason);
@@ -393,6 +394,7 @@ export async function searchResolvedLocalFilesAsync(
   setCancelFn: (fn: () => void) => void,
 ): Promise<SearchResult> {
   const { query, limit, runtime, cacheKey } = prepareSearch(root, searchPath, args);
+  if (args.forceFallbackSearch === true) return fallbackResult(root, searchPath, query, limit, args, cacheKey, 'recovery-forced');
   const cached = getCachedSearchResult(cacheKey);
   if (cached) return cached;
   if (!runtime.ripgrepPath) return fallbackResult(root, searchPath, query, limit, args, cacheKey, (runtime.fallbackReason || 'ripgrep-unavailable') as SearchFallbackReason);

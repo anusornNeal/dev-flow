@@ -77,6 +77,13 @@ export function clearContextHandles() {
   return count;
 }
 
+export function refreshContextHandlePayloadForRecovery(state: AppState, args: Record<string, any>) {
+  const refreshArgs = { ...args };
+  delete refreshArgs.contextHandle;
+  const refreshed = getRepoContextWithHandle(state, refreshArgs);
+  return { ...args, contextHandle: refreshed.contextHandle };
+}
+
 export function getRepoContextWithHandle(state: AppState, args: Record<string, any>) {
   const root = path.resolve(resolveProjectRoot(state, args));
   const hash = optionsHash(args);

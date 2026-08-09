@@ -234,6 +234,15 @@ export function waitForToolJob(jobId: string, waitMs = 20_000) {
   });
 }
 
+export async function waitForToolJobResultForRecovery(payload: Record<string, any>, _error: unknown, options: { waitMs: number }) {
+  const jobId = String(payload?.jobId || '').trim();
+  if (!jobId) return { ready: false };
+  const status = await waitForToolJob(jobId, options.waitMs);
+  if (!status || !isTerminalStatus(status.status)) return { ready: false };
+  const persisted = readJobResult(jobId) as any;
+  return { ready: true, value: persisted?.result ?? status };
+}
+
 export function getToolJobWaitGuidance(status: ReturnType<typeof getToolJobStatus>) {
   if (!status) {
     return {

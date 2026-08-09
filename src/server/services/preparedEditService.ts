@@ -21,6 +21,7 @@ type StoredEditPlan = {
   expiresAtMs: number;
   status: 'prepared' | 'applying' | 'consumed';
   prepared: PreparedSafeEditFile[];
+  sourceArgs: Record<string, any>;
 };
 
 export type PreparedEditPlanResult = {
@@ -76,6 +77,26 @@ function normalizeFileArgs(args: Record<string, any>, fileArgs: Record<string, a
     filePath: filePathOf(fileArgs),
     edits: fileArgs.edits || fileArgs.operations,
   };
+}
+
+function recoverySourceArgs(args: Record<string, any>) {
+  const copy: Record<string, any> = { ...args };
+  delete copy.editPlanId;
+  delete copy.mode;
+  copy.files = (Array.isArray(args.files) ? args.files : []).map((fileArgs: Record<string, any>) => {
+    const file = { ...fileArgs };
+    delete file.expectedRevision;
+    delete file.fileRevision;
+    delete file.expectedContentHash;
+    delete file.expectedSha256;
+    return file;
+  });
+  return copy;
+}
+
+export function getPreparedEditRecoveryArgs(editPlanId: string) {
+  const plan = plans.get(String(editPlanId || '').trim());
+  return plan ? recoverySourceArgs(plan.sourceArgs) : null;
 }
 
 function clampTtl(value: unknown) {
@@ -142,6 +163,7 @@ export function prepareEditPlan(state: AppState, args: Record<string, any>): Pre
     expiresAtMs: now + ttlMs,
     status: 'prepared',
     prepared,
+    sourceArgs: recoverySourceArgs(args),
   };
   plans.set(editPlanId, stored);
 
@@ -153,6 +175,22 @@ export function prepareEditPlan(state: AppState, args: Record<string, any>): Pre
     expiresAt: new Date(stored.expiresAtMs).toISOString(),
     consumed: false,
     files: results,
+  };
+}
+
+export function refreshPreparedEditPreviewForRecovery(state: AppState, args: Record<string, any>) {
+  const storedArgs = args?.editPlanId ? getPreparedEditRecoveryArgs(String(args.editPlanId)) : null;
+  const source = storedArgs || (args?.recoveryPrepareArgs && typeof args.recoveryPrepareArgs === 'object' ? args.recoveryPrepareArgs : args);
+  const prepareArgs = recoverySourceArgs(source);
+  const preview = prepareEditPlan(state, prepareArgs);
+  if (!preview.ok) {
+    const error = Object.assign(new Error(preview.message || 'Could not prepare a fresh edit preview.'), { code: preview.code || 'EDIT_PREVIEW_FAILED' });
+    throw error;
+  }
+  return {
+    editPlanId: preview.editPlanId,
+    preview,
+    materiallyChanged: preview.changed === true,
   };
 }
 

@@ -15,6 +15,8 @@ const { getTasks } = await import('../../src/server/repositories/taskRepository.
 const express = (await import('express')).default;
 const { registerTaskSetAuthoringRoute } = await import('../../src/server/routes/taskSetAuthoringRoute.js');
 const { getToolDefinitionByName } = await import('../../src/server/contracts/devflowContract.js');
+const { buildWorkDecomposition } = await import('../../src/server/services/workDecompositionService.js');
+const { buildDecompositionCardPlan } = await import('../../src/server/services/workDecompositionCardService.js');
 
 const projectId = 'project-task-set-authoring';
 createProject({ id: projectId, name: 'Task Set Authoring', repoUrl: 'https://example.invalid/task-set', localPath: tempDir, taskIdPrefix: 'TSA' });
@@ -126,6 +128,51 @@ test('task-set authoring rejects child linkage conflicts before mutation', async
     assert.equal(body.error.details.failures[0].code, 'TASK_SET_CHILD_PARENT_CONFLICT');
   });
   assert.equal(getTasks().length, before);
+});
+
+test('decomposition card plan can be explicitly created through atomic task-set authoring with preserved linkage', async () => {
+  const before = getTasks().length;
+  const decomposition = buildWorkDecomposition({
+    title: 'Add task audit contract and backend support',
+    description: 'Define an audit contract, implement backend support, and run focused regression coverage.',
+    repoEvidence: {
+      repoRevision: 'rev-task-set-integration',
+      matches: [
+        { path: 'src/server/contracts/taskAuditContract.ts', symbols: ['TaskAuditEntry'], score: 9 },
+        { path: 'src/server/services/taskAuditService.ts', symbols: ['getTaskAudit'], score: 8 },
+        { path: 'tests/server/taskAuditService.test.ts', score: 6 },
+      ],
+    },
+  });
+  const plan = buildDecompositionCardPlan({
+    projectId,
+    parentTitle: 'Task audit delivery',
+    decomposition,
+    createRequested: true,
+  });
+  assert.equal(plan.evaluation.ok, true);
+  assert.ok(plan.creationPayload);
+
+  await withServer(async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/tasks/task-set?responseMode=standard`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(plan.creationPayload),
+    });
+    const body = await response.json() as any;
+    assert.equal(response.status, 201);
+    assert.equal(body.success, true);
+    assert.equal(body.children.length, plan.children.length);
+    assert.equal(body.children.every((child: any) => child.parentId === body.parent.id), true);
+    assert.equal(body.parent.verification, plan.parent.verification);
+    assert.equal(body.children.some((child: any) => child.repoContext.includes('Prerequisites: contract')), true);
+  });
+
+  const created = getTasks().slice(before);
+  assert.equal(created.length, 1 + plan.children.length);
+  const createdParent = created.find((task: any) => !task.parentId);
+  assert.ok(createdParent);
+  assert.equal(created.filter((task: any) => task.parentId === createdParent.id).length, plan.children.length);
 });
 
 test.after(() => {

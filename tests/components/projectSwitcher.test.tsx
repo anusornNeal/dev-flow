@@ -9,6 +9,9 @@ import ProjectSwitcher, {
   formatProjectRepoLabel,
   resolveProjectSwitcherKeyAction,
 } from '../../src/components/ProjectSwitcher.js';
+import * as ProjectSwitcherModule from '../../src/components/ProjectSwitcher.js';
+
+const projectSwitcherHelpers = ProjectSwitcherModule as any;
 
 const projects = [
   {
@@ -37,11 +40,56 @@ const projects = [
 const noop = () => {};
 const asyncTrue = async () => true;
 
-test('project search matches name, repository, and local path while active project stays first', () => {
-  assert.deepEqual(filterProjectOptions(projects, '', 'devflow').map((project) => project.id), ['devflow', 'atlas', 'sumora']);
-  assert.deepEqual(filterProjectOptions(projects, 'atlas mobile', 'devflow').map((project) => project.id), ['atlas']);
-  assert.deepEqual(filterProjectOptions(projects, 'anusornNeal', 'devflow').map((project) => project.id), ['devflow']);
-  assert.deepEqual(filterProjectOptions(projects, 'sumora-desktop', 'devflow').map((project) => project.id), ['sumora']);
+test('project search preserves explicit project order instead of moving the active project first', () => {
+  assert.equal(typeof projectSwitcherHelpers.orderProjects, 'function');
+  const ordered = projectSwitcherHelpers.orderProjects(projects, ['sumora', 'atlas', 'devflow']);
+  assert.deepEqual(filterProjectOptions(ordered, '').map((project) => project.id), ['sumora', 'atlas', 'devflow']);
+  assert.deepEqual(filterProjectOptions(ordered, 'github.com/example').map((project) => project.id), ['sumora', 'atlas']);
+  assert.deepEqual(filterProjectOptions(ordered, 'anusornNeal').map((project) => project.id), ['devflow']);
+  assert.deepEqual(filterProjectOptions(ordered, 'sumora-desktop').map((project) => project.id), ['sumora']);
+});
+
+test('stored order reconciliation ignores deleted ids, de-duplicates entries, and appends new projects deterministically', () => {
+  assert.equal(typeof projectSwitcherHelpers.reconcileProjectOrder, 'function');
+  assert.deepEqual(
+    projectSwitcherHelpers.reconcileProjectOrder(projects, ['sumora', 'deleted-project', 'sumora', 'atlas']),
+    ['sumora', 'atlas', 'devflow'],
+  );
+  const withNewProject = [...projects, { id: 'new-project', name: 'New Project' } as any];
+  assert.deepEqual(
+    projectSwitcherHelpers.reconcileProjectOrder(withNewProject, ['sumora', 'atlas', 'devflow']),
+    ['sumora', 'atlas', 'devflow', 'new-project'],
+  );
+});
+
+test('reorder helper moves one project at a time and respects list boundaries', () => {
+  assert.equal(typeof projectSwitcherHelpers.moveProjectOrder, 'function');
+  assert.deepEqual(projectSwitcherHelpers.moveProjectOrder(['atlas', 'devflow', 'sumora'], 'sumora', -1), ['atlas', 'sumora', 'devflow']);
+  assert.deepEqual(projectSwitcherHelpers.moveProjectOrder(['atlas', 'devflow', 'sumora'], 'atlas', -1), ['atlas', 'devflow', 'sumora']);
+  assert.deepEqual(projectSwitcherHelpers.moveProjectOrder(['atlas', 'devflow', 'sumora'], 'sumora', 1), ['atlas', 'devflow', 'sumora']);
+});
+
+test('project order persistence uses a versioned storage key and tolerates invalid stored data', () => {
+  assert.match(projectSwitcherHelpers.PROJECT_SWITCHER_ORDER_STORAGE_KEY || '', /v1/);
+  assert.equal(typeof projectSwitcherHelpers.readProjectOrder, 'function');
+  assert.equal(typeof projectSwitcherHelpers.writeProjectOrder, 'function');
+  const values = new Map<string, string>();
+  const storage = {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value); },
+  };
+  projectSwitcherHelpers.writeProjectOrder(storage, ['sumora', 'atlas', 'devflow']);
+  assert.equal(values.get(projectSwitcherHelpers.PROJECT_SWITCHER_ORDER_STORAGE_KEY), '["sumora","atlas","devflow"]');
+  assert.deepEqual(projectSwitcherHelpers.readProjectOrder(storage), ['sumora', 'atlas', 'devflow']);
+  values.set(projectSwitcherHelpers.PROJECT_SWITCHER_ORDER_STORAGE_KEY, '{invalid');
+  assert.deepEqual(projectSwitcherHelpers.readProjectOrder(storage), []);
+});
+
+test('initial empty project loads do not erase stored order before project data arrives', () => {
+  const source = fs.readFileSync('src/components/ProjectSwitcher.tsx', 'utf8');
+  assert.match(source, /useState<string\[\]>\(\(\) => typeof window === 'undefined' \? \[\] : readProjectOrder\(window\.localStorage\)\)/);
+  assert.match(source, /projectsLoadedRef/);
+  assert.match(source, /if \(projects\.length > 0\) projectsLoadedRef\.current = true/);
 });
 
 test('keyboard navigation resolves Escape, Up/Down, and Enter deterministically', () => {
@@ -71,6 +119,13 @@ test('full project values are preserved for labels and tooltips', () => {
   const source = fs.readFileSync('src/components/ProjectSwitcher.tsx', 'utf8');
   assert.match(source, /title=\{project\.repoUrl/);
   assert.match(source, /title=\{project\.localPath/);
+});
+
+test('project rows expose accessible move up and move down controls', () => {
+  const source = fs.readFileSync('src/components/ProjectSwitcher.tsx', 'utf8');
+  assert.match(source, /Move \$\{project\.name\} up/);
+  assert.match(source, /Move \$\{project\.name\} down/);
+  assert.match(source, /moveProjectOrder/);
 });
 
 test('Sidebar no longer owns the primary interactive project selector', () => {

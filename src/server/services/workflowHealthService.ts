@@ -5,6 +5,9 @@ import { getDevFlowDiagnostics } from './mcpToolMonitor';
 import { getLocalSearchRuntimeStatus } from './localFileService';
 import { evaluatePerformanceSlo } from './performanceSloService';
 import { performance as nodePerformance } from 'node:perf_hooks';
+import { publishServerEvent } from './serverEventService.js';
+
+const lastHealthEventSignatures = new Map<string, string>();
 
 type Probe<T> = { ok: true; value: T } | { ok: false; error: { message: string; code?: string; status?: number } };
 
@@ -122,6 +125,21 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
   const hasErrors = !git.ok || catalog.tools.length === 0;
   const hasWarnings = recommendations.length > 0;
   const status = hasErrors ? 'error' : hasWarnings ? 'warning' : 'ok';
+  const healthEventProjectId = typeof args.projectId === 'string' ? args.projectId : undefined;
+  const healthEventKey = healthEventProjectId || 'global';
+  const healthEventSignature = status === 'ok'
+    ? ''
+    : [status, failedJobs, staleAgentRuns, Number(durableJobs.staleRunning || 0), sloPerformance.regressions.length].join(':');
+  const priorHealthEventSignature = lastHealthEventSignatures.get(healthEventKey) || '';
+  if (healthEventSignature && healthEventSignature !== priorHealthEventSignature) {
+    publishServerEvent('health.regression', {
+      projectId: healthEventProjectId,
+      status,
+      reason: `failedJobs=${failedJobs};staleAgents=${staleAgentRuns};staleJobs=${Number(durableJobs.staleRunning || 0)};slo=${sloPerformance.regressions.length}`,
+    });
+  }
+  if (healthEventSignature) lastHealthEventSignatures.set(healthEventKey, healthEventSignature);
+  else lastHealthEventSignatures.delete(healthEventKey);
 
   return {
     ok: status !== 'error',

@@ -1,4 +1,5 @@
 ﻿import db from '../../db/index.js';
+import { publishServerEvent } from '../services/serverEventService.js';
 
 const SETTING_KEYS = ['ngrokUrl', 'githubToken', 'jiraToken', 'figmaToken'] as const;
 
@@ -33,5 +34,6 @@ export function saveSettings(settings: Partial<ReturnType<typeof getSettings>>) 
     stmt.run('autoWork', updated.autoWork ? 'true' : 'false');
     stmt.run('agentExecutionMode', updated.agentExecutionMode ?? '');
   })();
+  publishServerEvent('settings.changed', { reason: 'saved' });
   return updated;
 }

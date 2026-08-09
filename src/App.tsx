@@ -11,6 +11,7 @@ import { buildTaskStatusMoveRequest } from './lib/taskStatusMove';
 import { useProjectViewModel } from './viewModels/useProjectViewModel';
 import { useBoardViewModel } from './viewModels/useBoardViewModel';
 import { apiClient } from './client/apiClient';
+import { subscribeServerEvents } from './lib/serverEvents';
 import Sidebar from './components/Sidebar';
 import TaskDetailsDrawer from './components/TaskDetailsDrawer';
 import CreateTaskModal from './components/CreateTaskModal';
@@ -45,6 +46,7 @@ export default function App() {
 
   const boardViewModel = useBoardViewModel({
     projectId: activeProjectId || null,
+    pollIntervalMs: 60_000,
   });
   const tasks = boardViewModel.tasks as unknown as Task[];
   const setTasks = boardViewModel.setTasks as unknown as (u: (prev: Task[]) => Task[]) => void;
@@ -77,6 +79,7 @@ export default function App() {
   } | null>(null);
   const [mounted, setMounted] = useState(false);
   const [ngrokUrl, setNgrokUrl] = useState('');
+  const [atlasEventRevision, setAtlasEventRevision] = useState(0);
   const [activePage, setActivePage] = useState<'board' | 'atlas'>(() =>
     window.location.hash === '#atlas' ? 'atlas' : 'board'
   );
@@ -207,6 +210,34 @@ export default function App() {
     }
     return false;
   };
+
+  useEffect(() => {
+    const unsubscribe = subscribeServerEvents((event) => {
+      const affectsActiveProject = !event.projectId || event.projectId === activeProjectId;
+      if (event.type === 'stream.reset') {
+        void boardViewModel.refresh();
+        void projectsViewModel.refresh();
+        void fetchSettingsFromApi();
+        setAtlasEventRevision((value) => value + 1);
+        return;
+      }
+      if (event.type === 'task.changed' && affectsActiveProject) void boardViewModel.refresh();
+      if (event.type === 'project.changed') void projectsViewModel.refresh();
+      if (event.type === 'settings.changed') void fetchSettingsFromApi();
+      if ((event.type === 'atlas.changed' || event.type === 'cache.invalidated') && affectsActiveProject) {
+        setAtlasEventRevision((value) => value + 1);
+      }
+    });
+    const fallbackTimer = window.setInterval(() => {
+      void projectsViewModel.refresh();
+      void fetchSettingsFromApi();
+      setAtlasEventRevision((value) => value + 1);
+    }, 60_000);
+    return () => {
+      unsubscribe();
+      window.clearInterval(fallbackTimer);
+    };
+  }, [activeProjectId, boardViewModel.refresh, projectsViewModel.refresh]);
 
   useEffect(() => {
     setMounted(true);
@@ -532,7 +563,7 @@ export default function App() {
 
           {activePage === 'atlas' ? (
             <div className="flex-1 min-h-0 overflow-hidden">
-              <ProjectAtlasPage projectId={activeProjectId || null} />
+              <ProjectAtlasPage key={`${activeProjectId || 'none'}:${atlasEventRevision}`} projectId={activeProjectId || null} />
             </div>
           ) : (
             <div className="flex-1 overflow-x-auto p-6 bg-[#faf7f0] dark:bg-[#1e1914]">

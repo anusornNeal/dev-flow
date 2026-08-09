@@ -14,6 +14,7 @@ executeAllMigrations();
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
 
 const { getWorkflowHealth } = await import('../../src/server/services/workflowHealthService.js');
+const serverEvents = await import('../../src/server/services/serverEventService.js');
 const {
   createJob,
   updateJobStatus,
@@ -140,6 +141,32 @@ test('workflow health exposes durable stale job state even when no in-memory run
   assert.equal(result.diagnostics.durableJobs.staleRunning >= 1, true);
   assert.equal(result.diagnostics.durableJobs.running >= 1, true);
   assert.match(result.recommendations.join('\n'), /stale MCP tool job lease/i);
+});
+
+test('workflow health publishes one regression event for a changed warning signature without refetch loops', () => {
+  const repo = createRepo('health-event-dedup');
+  const jobId = `job-health-event-${Date.now()}`;
+  createJob(jobId, 'search_local_files', { query: 'event-dedup' }, `repo:${repo}`);
+  assert.ok(claimJob(jobId, 'dead-worker-health-event', 1_000, Date.now() - 10_000));
+
+  const observed: any[] = [];
+  const subscription = serverEvents.subscribeServerEvents((event: any) => {
+    if (event.type === 'health.regression') observed.push(event);
+  });
+  try {
+    const before = observed.length;
+    const first = getWorkflowHealth(stateFor(repo), { projectId: 'project-health' });
+    const afterFirst = observed.length;
+    const second = getWorkflowHealth(stateFor(repo), { projectId: 'project-health' });
+
+    assert.equal(first.status, 'warning');
+    assert.equal(second.status, 'warning');
+    assert.equal(afterFirst, before + 1);
+    assert.equal(observed.length, afterFirst, 'identical health refetch must not emit another regression event');
+    assert.equal(observed[afterFirst - 1].status, 'warning');
+  } finally {
+    subscription.unsubscribe();
+  }
 });
 
 test('workflow health reuses the recent-job index while reflecting incremental job status changes', () => {

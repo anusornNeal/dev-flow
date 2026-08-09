@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { useEffect, useState } from 'react';
+import { startReactiveServerRefresh } from '../lib/serverEvents';
 
 interface ObservabilityModalProps {
   onClose: () => void;
@@ -48,11 +49,14 @@ export default function ObservabilityModal({ onClose }: ObservabilityModalProps)
         if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load diagnostics');
       }
     }
-    void load();
-    const timer = window.setInterval(load, 10000);
+    const stopRefresh = startReactiveServerRefresh({
+      refresh: load,
+      eventTypes: ['job.changed', 'health.regression', 'cache.invalidated', 'task.changed', 'stream.reset'],
+      fallbackMs: 60_000,
+    });
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
+      stopRefresh();
     };
   }, []);
 

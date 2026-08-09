@@ -13,6 +13,7 @@ executeAllMigrations();
 const { runProjectCommand, describeProjectCommand } = await import('../../src/server/services/projectCommandService.js');
 const { clearWorkspaceMetadataCache, getWorkspaceMetadataCacheStats } = await import('../../src/server/services/workspaceMetadataCacheService.js');
 const { createProject: upsertProject } = await import('../../src/server/repositories/projectRepository.js');
+const { invalidateRepoCacheDependencies } = await import('../../src/server/services/repoCacheInvalidationService.js');
 
 function createProject(name: string, scripts: Record<string, string>) {
   const root = path.join(tempRoot, name);
@@ -204,6 +205,51 @@ test('runProjectCommand reuses an explicitly cached successful result only for t
   const third = runProjectCommand(stateFor(root), { projectId: 'project-command', command: 'test', cacheResult: true });
   assert.equal(third.cache?.hit, false);
   assert.equal(fs.readFileSync(counterPath, 'utf8'), '2');
+});
+
+test('verification cache lineage invalidates only the affected repository when project rules change', () => {
+  const createCachedRepo = (name: string) => {
+    const root = createProject(name, { test: 'node scripts/cached.mjs' });
+    const counterPath = path.join(tempRoot, `${name}-counter.txt`);
+    fs.writeFileSync(path.join(root, 'source.txt'), 'same\n', 'utf8');
+    fs.writeFileSync(path.join(root, 'scripts', 'cached.mjs'), [
+      "import fs from 'node:fs';",
+      `const counterPath = ${JSON.stringify(counterPath)};`,
+      "const next = fs.existsSync(counterPath) ? Number(fs.readFileSync(counterPath, 'utf8')) + 1 : 1;",
+      "fs.writeFileSync(counterPath, String(next), 'utf8');",
+      "process.stdout.write(`run:${next}\\n`);",
+    ].join('\n'), 'utf8');
+    const git = (args: string[]) => {
+      const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', shell: false });
+      assert.equal(result.status, 0, result.stderr || result.stdout || `git ${args.join(' ')} failed`);
+    };
+    git(['init']);
+    git(['config', 'user.name', 'DevFlow Test']);
+    git(['config', 'user.email', 'devflow@example.com']);
+    git(['add', '.']);
+    git(['commit', '-m', 'initial']);
+    return { root, counterPath };
+  };
+
+  const firstRepo = createCachedRepo('lineage-a');
+  const secondRepo = createCachedRepo('lineage-b');
+  const run = (root: string) => runProjectCommand(stateFor(root), { projectId: 'project-command', command: 'test', cacheResult: true });
+
+  assert.equal(run(firstRepo.root).cache?.hit, false);
+  assert.equal(run(firstRepo.root).cache?.hit, true);
+  assert.equal(run(secondRepo.root).cache?.hit, false);
+  assert.equal(run(secondRepo.root).cache?.hit, true);
+
+  invalidateRepoCacheDependencies({
+    root: firstRepo.root,
+    reason: 'project-rules-updated',
+    dependencies: ['project-rules'],
+  });
+
+  assert.equal(run(firstRepo.root).cache?.hit, false);
+  assert.equal(run(secondRepo.root).cache?.hit, true);
+  assert.equal(fs.readFileSync(firstRepo.counterPath, 'utf8'), '2');
+  assert.equal(fs.readFileSync(secondRepo.counterPath, 'utf8'), '1');
 });
 
 test('runProjectCommand validation failures remain structured ApiErrors', () => {

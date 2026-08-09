@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import db from '../../db/index.js';
 import { getDevFlowSkillsDir } from '../../lib/devFlowPaths.js';
+import { invalidateRepoCacheDependencies, recordRepoCacheAccess, registerRepoCacheInvalidator } from '../services/repoCacheInvalidationService.js';
 
 const SKILLS_DIR = getDevFlowSkillsDir();
 const LEGACY_REGISTRY_BACKUP_FILE = path.join(SKILLS_DIR, 'registry.json.bak');
@@ -21,6 +22,14 @@ const LEGACY_MASTER_SKILL_IDS = new Set(MASTER_SKILL_SEEDS.map((skill) => skill.
 
 const skillFileCache = new Map<string, { content: string; mtimeMs: number; cachedAt: number }>();
 
+export function clearSkillFileCache() {
+  const count = skillFileCache.size;
+  skillFileCache.clear();
+  return count;
+}
+
+registerRepoCacheInvalidator('skills', () => clearSkillFileCache(), { dependencies: ['skills'] });
+
 function masterSkillSourcePath(id: string) {
   return path.posix.join('skills', `${id}.md`);
 }
@@ -34,8 +43,10 @@ function readSkillFileWithCache(filePath: string) {
   const now = Date.now();
   const cached = skillFileCache.get(filePath);
   if (cached && stat.mtimeMs <= cached.mtimeMs && now - cached.cachedAt < SKILL_FILE_CACHE_TTL_MS) {
+    recordRepoCacheAccess('skills', true);
     return cached.content;
   }
+  recordRepoCacheAccess('skills', false);
   const content = fs.readFileSync(filePath, 'utf8');
   skillFileCache.set(filePath, { content, mtimeMs: stat.mtimeMs, cachedAt: now });
   return content;
@@ -197,6 +208,7 @@ export function createSkill(skill: any): void {
   } else {
     db.prepare('INSERT INTO skills (id, name, description, isCustom, content) VALUES (?, ?, ?, ?, ?)').run(skill.id, skill.name, skill.description, skill.isCustom ? 1 : 0, skill.content || null);
   }
+  invalidateRepoCacheDependencies({ reason: 'createSkill', dependencies: ['skills'] });
 }
 
 export function updateSkill(id: string, updates: any): void {
@@ -209,10 +221,12 @@ export function updateSkill(id: string, updates: any): void {
   } else {
     db.prepare('UPDATE skills SET name = ?, description = ?, isCustom = ?, content = ? WHERE id = ?').run(merged.name, merged.description, merged.isCustom ? 1 : 0, merged.content, id);
   }
+  invalidateRepoCacheDependencies({ reason: 'updateSkill', dependencies: ['skills'] });
 }
 
 export function deleteSkill(id: string): void {
   db.prepare('DELETE FROM skills WHERE id = ?').run(id);
+  invalidateRepoCacheDependencies({ reason: 'deleteSkill', dependencies: ['skills'] });
 }
 
 export function readSkillContent(skill: any) {

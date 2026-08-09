@@ -3,7 +3,7 @@ import path from 'path';
 import type { AppState } from '../types';
 import { resolveProjectRoot, resolveSafePath } from './localFileService';
 import { getProjectRulesContext, type ProjectFileRules } from './projectRulesService';
-import { registerRepoCacheInvalidator, type RepoCacheInvalidationContext } from './repoCacheInvalidationService';
+import { getRepoCacheLineage, recordRepoCacheAccess, registerRepoCacheInvalidator, type RepoCacheInvalidationContext } from './repoCacheInvalidationService';
 import { getRepoRevisionForRoot, type RepoRevision } from './repoRevisionService';
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -86,9 +86,11 @@ export function clearRepoInspectionIndexCache(root?: string) {
 }
 
 registerRepoCacheInvalidator('repo-inspection-index', (root?: string, context?: RepoCacheInvalidationContext) => {
-  if (root && context?.paths?.length && context.uncertain !== true) return 0;
+  const dependencies = new Set(context?.dependencies || []);
+  const requiresFullRebuild = dependencies.has('project-rules') || dependencies.has('repo-revision');
+  if (root && context?.paths?.length && context.uncertain !== true && !requiresFullRebuild) return 0;
   return clearRepoInspectionIndexCache(root);
-});
+}, { dependencies: ['repo-content', 'repo-revision', 'project-rules'] });
 
 function parseBoolean(value: unknown) {
   return value === true || String(value).toLowerCase() === 'true';
@@ -358,9 +360,11 @@ function scoreEntry(entry: RepoIndexEntry, queryTerms: string[]) {
 
 export function getRepoSemanticIndex(state: AppState, args: Record<string, any>, signal?: AbortSignal) {
   const { index, cached, refresh, changedEntries } = getOrBuildIndex(state, args, signal);
+  recordRepoCacheAccess('repo-inspection-index', cached, index.root);
+  const lineageToken = getRepoCacheLineage(index.root, ['repo-content', 'repo-revision', 'project-rules']).token;
   const symbol = String(args.symbol || args.q || args.query || '').trim();
   if (!symbol) {
-    return { root: index.root, symbol, definitions: [], references: [], relatedTests: [], cache: { hit: cached, refresh, changedEntries } };
+    return { root: index.root, symbol, definitions: [], references: [], relatedTests: [], cache: { hit: cached, refresh, changedEntries, lineageToken } };
   }
 
   const definitions = index.entries
@@ -380,12 +384,14 @@ export function getRepoSemanticIndex(state: AppState, args: Record<string, any>,
     definitions,
     references,
     relatedTests,
-    cache: { hit: cached, refresh, changedEntries, generatedAt: new Date(index.generatedAt).toISOString() },
+    cache: { hit: cached, refresh, changedEntries, generatedAt: new Date(index.generatedAt).toISOString(), lineageToken },
   };
 }
 
 export function getRepoInspectionIndex(state: AppState, args: Record<string, any>, signal?: AbortSignal) {
   const { index, cached, refresh, changedEntries } = getOrBuildIndex(state, args, signal);
+  recordRepoCacheAccess('repo-inspection-index', cached, index.root);
+  const lineageToken = getRepoCacheLineage(index.root, ['repo-content', 'repo-revision', 'project-rules']).token;
   const queryTerms = String(args.q || args.query || '')
     .toLowerCase()
     .split(/[^a-z0-9_ก-๙]+/i)
@@ -417,6 +423,7 @@ export function getRepoInspectionIndex(state: AppState, args: Record<string, any
       ageMs: Math.max(0, Date.now() - index.generatedAt),
       refresh,
       changedEntries,
+      lineageToken,
     },
     generatedAt: new Date(index.generatedAt).toISOString(),
     fileCount: index.entries.length,

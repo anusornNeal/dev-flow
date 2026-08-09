@@ -32,6 +32,7 @@ const state: any = {
 };
 
 const { clearContextHandles, getRepoContextWithHandle } = await import('../../src/server/services/contextHandleService.js');
+const { invalidateRepoCacheDependencies } = await import('../../src/server/services/repoCacheInvalidationService.js');
 const { stopAllRepoChangeWatchers } = await import('../../src/server/services/workspaceChangeWatcherService.js');
 
 test.beforeEach(() => clearContextHandles());
@@ -63,6 +64,24 @@ test('context handle returns only changed snippet revisions after a file edit', 
   assert.equal(second.status, 'delta');
   assert.equal(second.changedSnippets.length, 1);
   assert.equal(second.changedSnippets[0].path.replace(/\\/g, '/'), 'src/Example.ts');
+});
+
+test('context handle refuses NOT_MODIFIED after coordinator invalidates a dependency without a Git revision change', () => {
+  const first = getRepoContextWithHandle(state, {
+    projectId: 'project-context-handle', q: 'Example', limit: 5, snippetLimit: 2,
+  });
+  invalidateRepoCacheDependencies({
+    root: tempDir,
+    reason: 'synthetic-source-invalidation',
+    dependencies: ['repo-content'],
+    paths: ['src/Example.ts'],
+  });
+
+  const second = getRepoContextWithHandle(state, {
+    projectId: 'project-context-handle', q: 'Example', limit: 5, snippetLimit: 2, contextHandle: first.contextHandle,
+  });
+
+  assert.equal(second.status, 'delta');
 });
 
 test.after(() => {

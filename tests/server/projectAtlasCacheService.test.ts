@@ -11,11 +11,13 @@ const {
   buildEmptyProjectAtlas,
   isAtlasStale,
   markAtlasDailyOpenChecked,
+  markProjectAtlasSourceDrift,
   readAtlasCache,
   shouldRefreshAtlasForDailyOpen,
   writeAtlasCache,
 } = await import('../../src/server/services/projectAtlasCacheService.js');
 const { getProjectAtlasCachePath } = await import('../../src/lib/devFlowPaths.js');
+const { getRepoCacheLineage } = await import('../../src/server/services/repoCacheInvalidationService.js');
 
 test('readAtlasCache returns a safe empty state when no snapshot exists', () => {
   const result = readAtlasCache({ projectId: 'project-empty' });
@@ -92,6 +94,44 @@ test('writeAtlasCache preserves graph, metadata, and freshness fields', () => {
   assert.deepEqual(result.atlas.summary, atlas.summary);
   assert.equal(result.atlas.freshness.repoFingerprint, 'abc123');
   assert.equal(result.atlas.freshness.scanMode, 'manual');
+});
+
+test('Atlas cache lineage distinguishes source refresh, source drift, and authored graph updates', () => {
+  const projectId = 'project-lineage';
+  const scope = `atlas:${projectId}`;
+  const dependencies = ['atlas-source', 'atlas-authored'] as const;
+  const before = getRepoCacheLineage(undefined, [...dependencies], scope);
+
+  const sourceAtlas = buildEmptyProjectAtlas({ projectId, generatedAt: '2026-07-01T10:00:00.000Z' });
+  writeAtlasCache({ atlas: sourceAtlas });
+  const afterSource = getRepoCacheLineage(undefined, [...dependencies], scope);
+  assert.ok(afterSource.generations['atlas-source'] > before.generations['atlas-source']);
+  assert.equal(afterSource.generations['atlas-authored'], before.generations['atlas-authored']);
+
+  markProjectAtlasSourceDrift(projectId, 'source-file-write');
+  const afterDrift = getRepoCacheLineage(undefined, [...dependencies], scope);
+  assert.ok(afterDrift.generations['atlas-source'] > afterSource.generations['atlas-source']);
+  assert.equal(afterDrift.generations['atlas-authored'], afterSource.generations['atlas-authored']);
+
+  const authoredAtlas = buildEmptyProjectAtlas({ projectId, generatedAt: '2026-07-01T11:00:00.000Z' });
+  (authoredAtlas as any).authoring = {
+    updatedAt: '2026-07-01T11:00:00.000Z',
+    provenance: { provider: 'ChatGPT' },
+    coverage: { notes: [], skippedAreas: [] },
+    groupingRationale: { summary: 'authored' },
+  };
+  writeAtlasCache({ atlas: authoredAtlas });
+  const afterAuthored = getRepoCacheLineage(undefined, [...dependencies], scope);
+  assert.equal(afterAuthored.generations['atlas-source'], afterDrift.generations['atlas-source']);
+  assert.ok(afterAuthored.generations['atlas-authored'] > afterDrift.generations['atlas-authored']);
+
+  markAtlasDailyOpenChecked(projectId, '2026-07-01T12:00:00.000Z');
+  const afterMetadata = getRepoCacheLineage(undefined, [...dependencies], scope);
+  assert.deepEqual(afterMetadata.generations, afterAuthored.generations);
+
+  const cached = readAtlasCache({ projectId });
+  assert.equal(cached.cache?.hit, true);
+  assert.equal(cached.cache?.lineageToken, afterMetadata.token);
 });
 
 test('freshness detects stale snapshots and manual rescan override', () => {

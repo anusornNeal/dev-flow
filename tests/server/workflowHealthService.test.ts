@@ -19,6 +19,7 @@ const {
   updateJobStatus,
   clearRecentJobCache,
   getRecentJobCacheStats,
+  claimJob,
 } = await import('../../src/server/repositories/mcpToolJobRepository.js');
 
 function git(root: string, args: string[]) {
@@ -126,6 +127,19 @@ test('getWorkflowHealth groups failed tool jobs by tool name', () => {
   assert.equal(result.diagnostics.failedJobGroups[0].toolName, 'run_project_command');
   assert.equal(result.diagnostics.failedJobGroups[0].count >= 1, true);
   assert.match(result.recommendations.join('\n'), /run_project_command/);
+});
+
+test('workflow health exposes durable stale job state even when no in-memory runner owns it', () => {
+  const repo = createRepo('durable-job-health');
+  const jobId = 'job-health-stale-durable';
+  createJob(jobId, 'search_local_files', { query: 'stale' }, `repo:${repo}`);
+  assert.ok(claimJob(jobId, 'dead-worker', 1_000, Date.now() - 10_000));
+
+  const result = getWorkflowHealth(stateFor(repo), { projectId: 'project-health' });
+
+  assert.equal(result.diagnostics.durableJobs.staleRunning >= 1, true);
+  assert.equal(result.diagnostics.durableJobs.running >= 1, true);
+  assert.match(result.recommendations.join('\n'), /stale MCP tool job lease/i);
 });
 
 test('workflow health reuses the recent-job index while reflecting incremental job status changes', () => {

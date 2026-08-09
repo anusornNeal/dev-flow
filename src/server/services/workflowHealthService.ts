@@ -94,9 +94,11 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
   const failedJobs = Number(diagnostics?.mcp?.metrics?.failedJobs || 0);
   const failedJobSummaries = Array.isArray(diagnostics?.mcp?.metrics?.failures) ? diagnostics.mcp.metrics.failures.slice(0, 10) : [];
   const failedJobGroups = summarizeFailedJobGroups(failedJobSummaries);
+  const durableJobs = diagnostics?.mcp?.metrics?.durable || { queued: 0, running: 0, failed: 0, recovered: 0, staleRunning: 0, oldestLeaseAgeMs: 0 };
   const staleAgentRuns = Number(diagnostics?.agents?.staleCount || 0);
   const duplicateBursts = Array.isArray(diagnostics?.tools?.duplicateBursts) ? diagnostics.tools.duplicateBursts.length : 0;
   if (queueDepth > 0) recommendations.push('MCP tool jobs are queued; inspect job status/log before starting conflicting repo work.');
+  if (Number(durableJobs.staleRunning || 0) > 0) recommendations.push('A stale MCP tool job lease was detected in durable state; inspect recovery classification before retrying the job.');
   if (isolation.capacity?.saturated) recommendations.push('Verification capacity is saturated; queued verify work is capacity-limited rather than blocked by a workspace correctness lock.');
   if (failedJobs > 0) {
     const groupedTools = failedJobGroups.map((group) => `${group.toolName}=${group.count}`).join(', ');
@@ -135,7 +137,7 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
       keyToolsPresent,
     },
     git,
-    diagnostics: { queueDepth, failedJobs, failedJobGroups, failedJobSummaries, staleAgentRuns, duplicateBursts, performance: sloPerformance, isolation },
+    diagnostics: { queueDepth, failedJobs, failedJobGroups, failedJobSummaries, durableJobs, staleAgentRuns, duplicateBursts, performance: sloPerformance, isolation },
     performance: {
       totalMs: Math.round((nodePerformance.now() - startedAt) * 100) / 100,
       phases: { catalogMs, diagnosticsMs, gitMs, searchMs, sloMs },

@@ -1,8 +1,11 @@
 import fs from 'fs';
 import path from 'path';
+import { createHash } from 'crypto';
+import db from '../../db/index.js';
 import { getDevFlowAppRoot } from '../../lib/devFlowPaths';
 
 export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'timed_out' | 'cancelled';
+export type JobRecoveryClassification = 'resumable' | 'retryable' | 'interrupted' | 'terminal';
 
 export interface McpToolJob {
   jobId: string;
@@ -17,6 +20,24 @@ export interface McpToolJob {
   failureSummary?: string;
   args: any;
   resourceKey: string;
+  leaseOwner?: string;
+  leaseExpiresAt?: string;
+  heartbeatAt?: string;
+  cancelRequestedAt?: string;
+  cancelReason?: string;
+  recoveryClassification?: JobRecoveryClassification;
+  artifactDir: string;
+  stdoutBytes?: number;
+  stderrBytes?: number;
+  resultBytes?: number;
+  resultSha256?: string;
+  patchBytes?: number;
+  patchSha256?: string;
+}
+
+export interface JobTransitionOptions {
+  workerId?: string;
+  nowMs?: number;
 }
 
 function resolveJobsDir() {
@@ -25,9 +46,6 @@ function resolveJobsDir() {
     return path.resolve(explicitJobsDir);
   }
 
-  // Verification and test subprocesses set DEVFLOW_DB_PATH to an isolated temp DB.
-  // Keep their MCP job lifecycle files isolated too, otherwise route tests that call
-  // initMcpToolJobs() can mark real ChatGPT/MCP jobs as interrupted mid-command.
   const explicitDbPath = process.env.DEVFLOW_DB_PATH;
   if (explicitDbPath && explicitDbPath.trim()) {
     return path.join(path.dirname(path.resolve(explicitDbPath)), 'jobs');
@@ -46,7 +64,7 @@ let recentJobsCache: McpToolJob[] | null = null;
 let recentJobsDiskScanCount = 0;
 
 function sortRecentJobs(jobs: McpToolJob[]) {
-  return jobs.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+  return jobs.sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
 }
 
 function upsertRecentJobCache(job: McpToolJob) {
@@ -88,14 +106,12 @@ function redactValue(value: any): any {
   return copy;
 }
 
-function getJobDir(jobId: string) {
-  return path.join(JOBS_DIR, jobId);
+function ensureJobsDir() {
+  if (!fs.existsSync(JOBS_DIR)) fs.mkdirSync(JOBS_DIR, { recursive: true });
 }
 
-function ensureJobsDir() {
-  if (!fs.existsSync(JOBS_DIR)) {
-    fs.mkdirSync(JOBS_DIR, { recursive: true });
-  }
+function getArtifactDir(jobId: string) {
+  return path.join(JOBS_DIR, jobId);
 }
 
 function readTail(filePath: string, maxBytes: number) {
@@ -117,18 +133,176 @@ function readTail(filePath: string, maxBytes: number) {
   }
 }
 
+function fileMetadata(filePath: string) {
+  if (!fs.existsSync(filePath)) return { bytes: 0, sha256: undefined as string | undefined };
+  const buffer = fs.readFileSync(filePath);
+  return {
+    bytes: buffer.length,
+    sha256: createHash('sha256').update(buffer).digest('hex'),
+  };
+}
+
+function parseArgs(value: unknown) {
+  try {
+    return JSON.parse(String(value || '{}'));
+  } catch {
+    return {};
+  }
+}
+
+function rowToJob(row: any): McpToolJob {
+  return {
+    jobId: row.job_id,
+    toolName: row.tool_name,
+    status: row.status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    startedAt: row.started_at || undefined,
+    completedAt: row.completed_at || undefined,
+    waitMs: row.wait_ms ?? undefined,
+    durationMs: row.duration_ms ?? undefined,
+    failureSummary: row.failure_summary || undefined,
+    args: parseArgs(row.args_json),
+    resourceKey: row.resource_key,
+    leaseOwner: row.lease_owner || undefined,
+    leaseExpiresAt: row.lease_expires_at || undefined,
+    heartbeatAt: row.heartbeat_at || undefined,
+    cancelRequestedAt: row.cancel_requested_at || undefined,
+    cancelReason: row.cancel_reason || undefined,
+    recoveryClassification: row.recovery_classification || undefined,
+    artifactDir: row.artifact_dir || getArtifactDir(row.job_id),
+    stdoutBytes: Number(row.stdout_bytes || 0),
+    stderrBytes: Number(row.stderr_bytes || 0),
+    resultBytes: Number(row.result_bytes || 0),
+    resultSha256: row.result_sha256 || undefined,
+    patchBytes: Number(row.patch_bytes || 0),
+    patchSha256: row.patch_sha256 || undefined,
+  };
+}
+
+function getDbJob(jobId: string): McpToolJob | null {
+  const row = db.prepare('SELECT * FROM mcp_tool_jobs WHERE job_id = ?').get(jobId) as any;
+  return row ? rowToJob(row) : null;
+}
+
+function writeCompatibilityStatus(job: McpToolJob) {
+  try {
+    fs.mkdirSync(job.artifactDir, { recursive: true });
+    fs.writeFileSync(path.join(job.artifactDir, 'status.json'), JSON.stringify(job, null, 2));
+  } catch {
+    // SQLite is authoritative; compatibility artifacts must not break lifecycle persistence.
+  }
+}
+
+function importLegacyJob(jobId: string): McpToolJob | null {
+  const artifactDir = getArtifactDir(jobId);
+  const statusPath = path.join(artifactDir, 'status.json');
+  if (!fs.existsSync(statusPath)) return null;
+  try {
+    const raw = JSON.parse(fs.readFileSync(statusPath, 'utf8')) as Partial<McpToolJob>;
+    if (!raw.jobId || !raw.toolName || !raw.status || !raw.createdAt || !raw.updatedAt) return null;
+    const safeArgs = redactValue(raw.args || {});
+    db.prepare(`
+      INSERT OR IGNORE INTO mcp_tool_jobs (
+        job_id, tool_name, status, created_at, updated_at, started_at, completed_at,
+        wait_ms, duration_ms, failure_summary, args_json, resource_key, artifact_dir
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      raw.jobId,
+      raw.toolName,
+      raw.status,
+      raw.createdAt,
+      raw.updatedAt,
+      raw.startedAt || null,
+      raw.completedAt || null,
+      raw.waitMs ?? null,
+      raw.durationMs ?? null,
+      raw.failureSummary || null,
+      JSON.stringify(safeArgs),
+      raw.resourceKey || 'global',
+      artifactDir,
+    );
+    return getDbJob(jobId);
+  } catch {
+    return null;
+  }
+}
+
 function toTimestamp(value: string | undefined, fallback: string) {
   const time = Date.parse(value || fallback);
   return Number.isFinite(time) ? time : Date.parse(fallback);
 }
 
+function buildUpdatedJob(job: McpToolJob, updates: Partial<McpToolJob>, nowMs: number) {
+  const nowIso = new Date(nowMs).toISOString();
+  const updated: McpToolJob = { ...job, ...updates, updatedAt: nowIso };
+
+  if (updates.status === 'running' && !job.startedAt) {
+    updated.startedAt = nowIso;
+    updated.waitMs = Math.max(0, nowMs - toTimestamp(job.createdAt, nowIso));
+  }
+
+  if (updates.status && TERMINAL_STATUSES.includes(updates.status)) {
+    updated.completedAt = nowIso;
+    const startTime = toTimestamp(updated.startedAt || job.startedAt, job.createdAt || nowIso);
+    updated.durationMs = Math.max(0, nowMs - startTime);
+    updated.leaseOwner = undefined;
+    updated.leaseExpiresAt = undefined;
+    updated.heartbeatAt = undefined;
+    updated.recoveryClassification = updates.recoveryClassification || job.recoveryClassification || 'terminal';
+    if (updates.status === 'succeeded') updated.failureSummary = undefined;
+  }
+
+  return updated;
+}
+
+function persistLifecycle(job: McpToolJob, expectedStatus: JobStatus, workerId?: string) {
+  const result = db.prepare(`
+    UPDATE mcp_tool_jobs SET
+      tool_name = ?, status = ?, created_at = ?, updated_at = ?, started_at = ?, completed_at = ?,
+      wait_ms = ?, duration_ms = ?, failure_summary = ?, args_json = ?, resource_key = ?,
+      lease_owner = ?, lease_expires_at = ?, heartbeat_at = ?, cancel_requested_at = ?, cancel_reason = ?,
+      recovery_classification = ?, artifact_dir = ?, stdout_bytes = ?, stderr_bytes = ?, result_bytes = ?,
+      result_sha256 = ?, patch_bytes = ?, patch_sha256 = ?
+    WHERE job_id = ? AND status = ?${workerId ? ' AND lease_owner = ?' : ''}
+  `).run(
+    job.toolName,
+    job.status,
+    job.createdAt,
+    job.updatedAt,
+    job.startedAt || null,
+    job.completedAt || null,
+    job.waitMs ?? null,
+    job.durationMs ?? null,
+    job.failureSummary || null,
+    JSON.stringify(redactValue(job.args || {})),
+    job.resourceKey,
+    job.leaseOwner || null,
+    job.leaseExpiresAt || null,
+    job.heartbeatAt || null,
+    job.cancelRequestedAt || null,
+    job.cancelReason || null,
+    job.recoveryClassification || null,
+    job.artifactDir,
+    job.stdoutBytes || 0,
+    job.stderrBytes || 0,
+    job.resultBytes || 0,
+    job.resultSha256 || null,
+    job.patchBytes || 0,
+    job.patchSha256 || null,
+    job.jobId,
+    expectedStatus,
+    ...(workerId ? [workerId] : []),
+  );
+  return Number(result.changes || 0) === 1;
+}
+
 export function createJob(jobId: string, toolName: string, args: any, resourceKey: string): McpToolJob {
   ensureJobsDir();
-  const jobDir = getJobDir(jobId);
-  fs.mkdirSync(jobDir, { recursive: true });
+  const artifactDir = getArtifactDir(jobId);
+  fs.mkdirSync(artifactDir, { recursive: true });
   const safeArgs = redactValue(args);
   const now = new Date().toISOString();
-  
   const job: McpToolJob = {
     jobId,
     toolName,
@@ -136,77 +310,232 @@ export function createJob(jobId: string, toolName: string, args: any, resourceKe
     createdAt: now,
     updatedAt: now,
     args: safeArgs,
-    resourceKey
+    resourceKey,
+    artifactDir,
+    stdoutBytes: 0,
+    stderrBytes: 0,
+    resultBytes: 0,
+    patchBytes: 0,
   };
-  
-  fs.writeFileSync(path.join(jobDir, 'input.json'), JSON.stringify({ toolName, args: safeArgs, resourceKey }, null, 2));
-  fs.writeFileSync(path.join(jobDir, 'status.json'), JSON.stringify(job, null, 2));
-  fs.writeFileSync(path.join(jobDir, 'stdout.log'), '');
-  fs.writeFileSync(path.join(jobDir, 'stderr.log'), '');
+
+  db.prepare(`
+    INSERT INTO mcp_tool_jobs (
+      job_id, tool_name, status, created_at, updated_at, args_json, resource_key, artifact_dir
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(jobId, toolName, job.status, now, now, JSON.stringify(safeArgs), resourceKey, artifactDir);
+
+  fs.writeFileSync(path.join(artifactDir, 'input.json'), JSON.stringify({ toolName, args: safeArgs, resourceKey }, null, 2));
+  fs.writeFileSync(path.join(artifactDir, 'stdout.log'), '');
+  fs.writeFileSync(path.join(artifactDir, 'stderr.log'), '');
+  writeCompatibilityStatus(job);
   upsertRecentJobCache(job);
   return job;
 }
 
 export function getJob(jobId: string): McpToolJob | null {
-  const jobDir = getJobDir(jobId);
-  if (!fs.existsSync(jobDir)) return null;
-  try {
-    const statusPath = path.join(jobDir, 'status.json');
-    if (!fs.existsSync(statusPath)) return null;
-    return JSON.parse(fs.readFileSync(statusPath, 'utf8'));
-  } catch {
-    return null;
-  }
+  return getDbJob(jobId) || importLegacyJob(jobId);
+}
+
+export function transitionJobStatus(
+  jobId: string,
+  expectedStatuses: JobStatus[],
+  updates: Partial<McpToolJob>,
+  options: JobTransitionOptions = {},
+): McpToolJob | null {
+  if (expectedStatuses.length === 0) return null;
+  return db.transaction(() => {
+    const current = getJob(jobId);
+    if (!current || !expectedStatuses.includes(current.status)) return null;
+    if (TERMINAL_STATUSES.includes(current.status) && updates.status) return null;
+    if (options.workerId && current.leaseOwner !== options.workerId) return null;
+
+    const updated = buildUpdatedJob(current, updates, options.nowMs ?? Date.now());
+    if (!persistLifecycle(updated, current.status, options.workerId)) return null;
+    const stored = getDbJob(jobId);
+    if (!stored) return null;
+    writeCompatibilityStatus(stored);
+    upsertRecentJobCache(stored);
+    return stored;
+  })();
 }
 
 export function updateJobStatus(jobId: string, updates: Partial<McpToolJob>): McpToolJob | null {
-  const job = getJob(jobId);
-  if (!job) return null;
+  const current = getJob(jobId);
+  if (!current) return null;
+  return transitionJobStatus(jobId, [current.status], updates);
+}
 
-  const now = new Date();
-  const nowIso = now.toISOString();
-  const updated: McpToolJob = { ...job, ...updates, updatedAt: nowIso };
+export function claimJob(jobId: string, workerId: string, leaseMs: number, nowMs = Date.now()): McpToolJob | null {
+  const boundedLeaseMs = Math.max(1_000, Math.min(5 * 60_000, Math.floor(leaseMs || 0)));
+  const nowIso = new Date(nowMs).toISOString();
+  const leaseExpiresAt = new Date(nowMs + boundedLeaseMs).toISOString();
 
-  if (updates.status === 'running' && !job.startedAt) {
-    updated.startedAt = nowIso;
-    updated.waitMs = Math.max(0, now.getTime() - toTimestamp(job.createdAt, nowIso));
-  }
+  return db.transaction(() => {
+    const current = getJob(jobId);
+    if (!current || current.cancelRequestedAt || TERMINAL_STATUSES.includes(current.status)) return null;
+    const canClaimQueued = current.status === 'queued';
+    const canClaimExpired = current.status === 'running' && (!current.leaseExpiresAt || Date.parse(current.leaseExpiresAt) <= nowMs);
+    if (!canClaimQueued && !canClaimExpired) return null;
 
-  if (updates.status && TERMINAL_STATUSES.includes(updates.status)) {
-    updated.completedAt = nowIso;
-    const startTime = toTimestamp(updated.startedAt || job.startedAt, job.createdAt || nowIso);
-    updated.durationMs = Math.max(0, now.getTime() - startTime);
-    if (updates.status === 'succeeded') {
-      delete updated.failureSummary;
+    const startedAt = current.startedAt || nowIso;
+    const waitMs = current.waitMs ?? Math.max(0, nowMs - toTimestamp(current.createdAt, nowIso));
+    const result = db.prepare(`
+      UPDATE mcp_tool_jobs SET
+        status = 'running', updated_at = ?, started_at = ?, wait_ms = ?,
+        lease_owner = ?, lease_expires_at = ?, heartbeat_at = ?
+      WHERE job_id = ?
+        AND cancel_requested_at IS NULL
+        AND (
+          status = 'queued'
+          OR (status = 'running' AND (lease_expires_at IS NULL OR lease_expires_at <= ?))
+        )
+    `).run(nowIso, startedAt, waitMs, workerId, leaseExpiresAt, nowIso, jobId, nowIso);
+    if (Number(result.changes || 0) !== 1) return null;
+
+    const claimed = getDbJob(jobId);
+    if (claimed) {
+      writeCompatibilityStatus(claimed);
+      upsertRecentJobCache(claimed);
     }
-  }
+    return claimed;
+  })();
+}
 
-  fs.writeFileSync(path.join(getJobDir(jobId), 'status.json'), JSON.stringify(updated, null, 2));
-  upsertRecentJobCache(updated);
+export function heartbeatJob(jobId: string, workerId: string, leaseMs: number, nowMs = Date.now()): McpToolJob | null {
+  const boundedLeaseMs = Math.max(1_000, Math.min(5 * 60_000, Math.floor(leaseMs || 0)));
+  const nowIso = new Date(nowMs).toISOString();
+  const leaseExpiresAt = new Date(nowMs + boundedLeaseMs).toISOString();
+  const result = db.prepare(`
+    UPDATE mcp_tool_jobs SET updated_at = ?, heartbeat_at = ?, lease_expires_at = ?
+    WHERE job_id = ? AND status = 'running' AND lease_owner = ? AND cancel_requested_at IS NULL
+  `).run(nowIso, nowIso, leaseExpiresAt, jobId, workerId);
+  if (Number(result.changes || 0) !== 1) return null;
+  const updated = getDbJob(jobId);
+  if (updated) {
+    writeCompatibilityStatus(updated);
+    upsertRecentJobCache(updated);
+  }
   return updated;
 }
 
+export function requestJobCancellation(jobId: string, reason = 'Cancellation requested.', nowMs = Date.now()): McpToolJob | null {
+  const nowIso = new Date(nowMs).toISOString();
+  return db.transaction(() => {
+    const current = getJob(jobId);
+    if (!current || TERMINAL_STATUSES.includes(current.status)) return null;
+    const startTime = toTimestamp(current.startedAt, current.createdAt || nowIso);
+    const result = db.prepare(`
+      UPDATE mcp_tool_jobs SET
+        status = 'cancelled', updated_at = ?, completed_at = ?, duration_ms = ?,
+        failure_summary = ?, cancel_requested_at = ?, cancel_reason = ?, recovery_classification = COALESCE(recovery_classification, 'terminal'),
+        lease_owner = NULL, lease_expires_at = NULL, heartbeat_at = NULL
+      WHERE job_id = ? AND status IN ('queued', 'running')
+    `).run(nowIso, nowIso, Math.max(0, nowMs - startTime), reason, nowIso, reason, jobId);
+    if (Number(result.changes || 0) !== 1) return null;
+    const cancelled = getDbJob(jobId);
+    if (cancelled) {
+      writeCompatibilityStatus(cancelled);
+      upsertRecentJobCache(cancelled);
+    }
+    return cancelled;
+  })();
+}
+
+export function setJobRecoveryClassification(jobId: string, classification: JobRecoveryClassification, nowMs = Date.now()) {
+  const nowIso = new Date(nowMs).toISOString();
+  const result = db.prepare(`
+    UPDATE mcp_tool_jobs SET recovery_classification = ?, updated_at = ? WHERE job_id = ?
+  `).run(classification, nowIso, jobId);
+  if (Number(result.changes || 0) !== 1) return null;
+  const updated = getDbJob(jobId);
+  if (updated) upsertRecentJobCache(updated);
+  return updated;
+}
+
+export function requeueJobForRecovery(jobId: string, nowMs = Date.now()): McpToolJob | null {
+  const nowIso = new Date(nowMs).toISOString();
+  return db.transaction(() => {
+    const current = getJob(jobId);
+    if (!current || current.status !== 'running' || current.cancelRequestedAt) return null;
+    if (current.leaseExpiresAt && Date.parse(current.leaseExpiresAt) > nowMs) return null;
+    const result = db.prepare(`
+      UPDATE mcp_tool_jobs SET
+        status = 'queued', updated_at = ?, started_at = NULL, wait_ms = NULL,
+        lease_owner = NULL, lease_expires_at = NULL, heartbeat_at = NULL,
+        recovery_classification = 'retryable',
+        failure_summary = 'Server restarted while this retry-safe job was running.'
+      WHERE job_id = ? AND status = 'running' AND cancel_requested_at IS NULL
+        AND (lease_expires_at IS NULL OR lease_expires_at <= ?)
+    `).run(nowIso, jobId, nowIso);
+    if (Number(result.changes || 0) !== 1) return null;
+    const updated = getDbJob(jobId);
+    if (updated) {
+      writeCompatibilityStatus(updated);
+      upsertRecentJobCache(updated);
+    }
+    return updated;
+  })();
+}
+
+export function listRecoverableJobs(nowMs = Date.now()): McpToolJob[] {
+  const nowIso = new Date(nowMs).toISOString();
+  const rows = db.prepare(`
+    SELECT * FROM mcp_tool_jobs
+    WHERE cancel_requested_at IS NULL
+      AND (
+        status = 'queued'
+        OR (status = 'running' AND (lease_expires_at IS NULL OR lease_expires_at <= ?))
+      )
+    ORDER BY created_at ASC
+  `).all(nowIso) as any[];
+  return rows.map(rowToJob);
+}
+
 export function appendJobLog(jobId: string, stream: 'stdout' | 'stderr', data: string) {
-  const jobDir = getJobDir(jobId);
-  if (!fs.existsSync(jobDir)) return;
-  fs.appendFileSync(path.join(jobDir, `${stream}.log`), data);
+  const job = getJob(jobId);
+  if (!job) return;
+  fs.mkdirSync(job.artifactDir, { recursive: true });
+  const filePath = path.join(job.artifactDir, `${stream}.log`);
+  fs.appendFileSync(filePath, data);
+  const bytes = fs.statSync(filePath).size;
+  db.prepare(`UPDATE mcp_tool_jobs SET ${stream === 'stdout' ? 'stdout_bytes' : 'stderr_bytes'} = ? WHERE job_id = ?`).run(bytes, jobId);
+  if (recentJobsCache) {
+    const updated = getDbJob(jobId);
+    if (updated) upsertRecentJobCache(updated);
+  }
 }
 
 export function writeJobResult(jobId: string, result: any) {
-  const jobDir = getJobDir(jobId);
-  if (!fs.existsSync(jobDir)) return;
-  fs.writeFileSync(path.join(jobDir, 'result.json'), JSON.stringify(result, null, 2));
+  const job = getJob(jobId);
+  if (!job) return;
+  fs.mkdirSync(job.artifactDir, { recursive: true });
+  const resultPath = path.join(job.artifactDir, 'result.json');
+  fs.writeFileSync(resultPath, JSON.stringify(result, null, 2));
+  const resultMeta = fileMetadata(resultPath);
+
+  let patchMeta = { bytes: 0, sha256: undefined as string | undefined };
   if (result?.patch) {
-    fs.writeFileSync(path.join(jobDir, 'patch.diff'), result.patch);
+    const patchPath = path.join(job.artifactDir, 'patch.diff');
+    fs.writeFileSync(patchPath, result.patch);
+    patchMeta = fileMetadata(patchPath);
+  }
+
+  db.prepare(`
+    UPDATE mcp_tool_jobs SET result_bytes = ?, result_sha256 = ?, patch_bytes = ?, patch_sha256 = ?
+    WHERE job_id = ?
+  `).run(resultMeta.bytes, resultMeta.sha256 || null, patchMeta.bytes, patchMeta.sha256 || null, jobId);
+  if (recentJobsCache) {
+    const updated = getDbJob(jobId);
+    if (updated) upsertRecentJobCache(updated);
   }
 }
 
 export function readJobLog(jobId: string, stream: 'stdout' | 'stderr' | 'both'): { log: string; truncated: boolean; bytes: number; returnedBytes: number } {
-  const jobDir = getJobDir(jobId);
-  if (!fs.existsSync(jobDir)) return { log: '', truncated: false, bytes: 0, returnedBytes: 0 };
+  const job = getJob(jobId);
+  if (!job) return { log: '', truncated: false, bytes: 0, returnedBytes: 0 };
   if (stream === 'both') {
-    const out = readTail(path.join(jobDir, 'stdout.log'), Math.floor(MAX_LOG_READ_BYTES / 2));
-    const err = readTail(path.join(jobDir, 'stderr.log'), Math.floor(MAX_LOG_READ_BYTES / 2));
+    const out = readTail(path.join(job.artifactDir, 'stdout.log'), Math.floor(MAX_LOG_READ_BYTES / 2));
+    const err = readTail(path.join(job.artifactDir, 'stderr.log'), Math.floor(MAX_LOG_READ_BYTES / 2));
     return {
       log: `${out.text}${err.text}`,
       truncated: out.truncated || err.truncated,
@@ -214,18 +543,18 @@ export function readJobLog(jobId: string, stream: 'stdout' | 'stderr' | 'both'):
       returnedBytes: out.returnedBytes + err.returnedBytes,
     };
   }
-  const tail = readTail(path.join(jobDir, `${stream}.log`), MAX_LOG_READ_BYTES);
+  const tail = readTail(path.join(job.artifactDir, `${stream}.log`), MAX_LOG_READ_BYTES);
   return { log: tail.text, truncated: tail.truncated, bytes: tail.bytes, returnedBytes: tail.returnedBytes };
 }
 
 export function readJobResult(jobId: string): any {
-  const jobDir = getJobDir(jobId);
-  if (!fs.existsSync(jobDir)) return null;
-  const resultPath = path.join(jobDir, 'result.json');
+  const job = getJob(jobId);
+  if (!job) return null;
+  const resultPath = path.join(job.artifactDir, 'result.json');
   if (!fs.existsSync(resultPath)) return null;
   try {
     const result = JSON.parse(fs.readFileSync(resultPath, 'utf8'));
-    const patchPath = path.join(jobDir, 'patch.diff');
+    const patchPath = path.join(job.artifactDir, 'patch.diff');
     return {
       result,
       patch: fs.existsSync(patchPath) ? readTail(patchPath, 500_000).text : undefined,
@@ -235,55 +564,75 @@ export function readJobResult(jobId: string): any {
   }
 }
 
+export function getDurableJobMetrics(nowMs = Date.now()) {
+  const nowIso = new Date(nowMs).toISOString();
+  const counts = db.prepare(`
+    SELECT
+      SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END) AS queued,
+      SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS running,
+      SUM(CASE WHEN status IN ('failed', 'timed_out') THEN 1 ELSE 0 END) AS failed,
+      SUM(CASE WHEN recovery_classification IN ('resumable', 'retryable', 'interrupted') THEN 1 ELSE 0 END) AS recovered,
+      SUM(CASE WHEN status = 'running' AND (lease_expires_at IS NULL OR lease_expires_at <= ?) THEN 1 ELSE 0 END) AS stale_running
+    FROM mcp_tool_jobs
+  `).get(nowIso) as any;
+  const oldestLease = db.prepare(`
+    SELECT MIN(heartbeat_at) AS oldest_heartbeat FROM mcp_tool_jobs WHERE status = 'running' AND heartbeat_at IS NOT NULL
+  `).get() as any;
+  const oldestHeartbeatMs = oldestLease?.oldest_heartbeat ? Date.parse(oldestLease.oldest_heartbeat) : NaN;
+  return {
+    queued: Number(counts?.queued || 0),
+    running: Number(counts?.running || 0),
+    failed: Number(counts?.failed || 0),
+    recovered: Number(counts?.recovered || 0),
+    staleRunning: Number(counts?.stale_running || 0),
+    oldestLeaseAgeMs: Number.isFinite(oldestHeartbeatMs) ? Math.max(0, nowMs - oldestHeartbeatMs) : 0,
+  };
+}
+
 export function cleanupOldJobs() {
   ensureJobsDir();
   try {
-    const dirs = fs.readdirSync(JOBS_DIR);
-    const now = Date.now();
-    for (const dir of dirs) {
-      const jobDir = path.join(JOBS_DIR, dir);
+    const cutoffIso = new Date(Date.now() - MAX_JOB_AGE_MS).toISOString();
+    const rows = db.prepare(`
+      SELECT job_id, artifact_dir FROM mcp_tool_jobs
+      WHERE status IN ('succeeded', 'failed', 'timed_out', 'cancelled') AND updated_at < ?
+    `).all(cutoffIso) as any[];
+    const removeRow = db.prepare('DELETE FROM mcp_tool_jobs WHERE job_id = ?');
+    for (const row of rows) {
       try {
-        const stat = fs.statSync(jobDir);
-        if (stat.isDirectory() && (now - stat.mtimeMs > MAX_JOB_AGE_MS)) {
-          const job = getJob(dir);
-          if (!job || TERMINAL_STATUSES.includes(job.status)) {
-            fs.rmSync(jobDir, { recursive: true, force: true });
-            console.log(`[mcp-tool-job] Cleaned up old job ${dir}`);
-            removeRecentJobCache(dir);
-          }
-        }
-      } catch (e) {
+        fs.rmSync(row.artifact_dir || getArtifactDir(row.job_id), { recursive: true, force: true });
+      } catch {
+        // Artifact cleanup is best effort; lifecycle deletion remains deterministic.
       }
+      removeRow.run(row.job_id);
+      removeRecentJobCache(row.job_id);
     }
-  } catch (e) {
-    console.error('[mcp-tool-job] Cleanup failed:', e);
+  } catch (error) {
+    console.error('[mcp-tool-job] Cleanup failed:', error);
   }
 }
 
 export function listInterruptedJobs(): McpToolJob[] {
-  ensureJobsDir();
-  const dirs = fs.readdirSync(JOBS_DIR);
   const interrupted: McpToolJob[] = [];
-  
-  for (const dir of dirs) {
-    const jobDir = path.join(JOBS_DIR, dir);
-    if (!fs.statSync(jobDir).isDirectory()) continue;
-    
-    const job = getJob(dir);
-    if (job && (job.status === 'queued' || job.status === 'running')) {
-      const updated = updateJobStatus(job.jobId, {
-        status: 'failed',
-        failureSummary: 'Server restarted before this job completed.'
-      });
+  for (const job of listRecoverableJobs()) {
+    const updated = transitionJobStatus(job.jobId, [job.status], {
+      status: 'failed',
+      failureSummary: 'Server restarted before this job completed.',
+      recoveryClassification: 'interrupted',
+    });
+    if (updated) {
       appendJobLog(job.jobId, 'stderr', '\n[Job Interrupted] Server restarted before this job completed.\n');
-      if (updated) interrupted.push(updated);
+      interrupted.push(updated);
     }
   }
-  
   return interrupted;
 }
 
+let backgroundJobCleanupStarted = false;
+
 export function startBackgroundJobCleanup() {
+  if (backgroundJobCleanupStarted) return;
+  backgroundJobCleanupStarted = true;
   setTimeout(() => {
     cleanupOldJobs();
     setInterval(cleanupOldJobs, CLEANUP_INTERVAL_MS).unref();
@@ -294,20 +643,8 @@ export function listRecentJobs(limit: number = 50): McpToolJob[] {
   ensureJobsDir();
   if (!recentJobsCache) {
     recentJobsDiskScanCount += 1;
-    const jobs: McpToolJob[] = [];
-    for (const dir of fs.readdirSync(JOBS_DIR)) {
-      const jobDir = path.join(JOBS_DIR, dir);
-      let isDirectory = false;
-      try {
-        isDirectory = fs.statSync(jobDir).isDirectory();
-      } catch {
-        continue;
-      }
-      if (!isDirectory) continue;
-      const job = getJob(dir);
-      if (job) jobs.push(job);
-    }
-    recentJobsCache = sortRecentJobs(jobs);
+    const rows = db.prepare('SELECT * FROM mcp_tool_jobs ORDER BY updated_at DESC').all() as any[];
+    recentJobsCache = sortRecentJobs(rows.map(rowToJob));
   }
   return recentJobsCache.slice(0, Math.max(0, limit));
 }

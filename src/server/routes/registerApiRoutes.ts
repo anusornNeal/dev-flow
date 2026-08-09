@@ -25,5 +25,5 @@ export function registerApiRoutes(app: express.Express, deps: ApiRouteDeps) {
   registerFigmaRoutes(app, deps);
   registerMcpToolJobRoutes(app, deps);
 
-  initMcpToolJobs();
+  initMcpToolJobs(deps.state);
 }

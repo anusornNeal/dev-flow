@@ -162,7 +162,11 @@ test('runProjectCommand compact mode caps payload and exposes process/startup me
   assert.equal(Buffer.byteLength(result.stdout, 'utf8') < 3000, true);
   assert.equal(result.processSpawns, 1);
   assert.equal(typeof result.performance?.resolutionMs, 'number');
+  assert.equal(typeof result.performance?.cacheLookupMs, 'number');
   assert.equal(typeof result.performance?.executionMs, 'number');
+  assert.equal(typeof result.performance?.resultNormalizationMs, 'number');
+  assert.equal(typeof result.performance?.totalMs, 'number');
+  assert.equal((result.performance?.totalMs || 0) >= (result.performance?.executionMs || 0), true);
 });
 
 test('runProjectCommand reuses an explicitly cached successful result only for the same repo revision', () => {

@@ -59,7 +59,11 @@ export interface RunProjectCommandResult {
   processSpawns?: number;
   performance?: {
     resolutionMs: number;
+    cacheLookupMs?: number;
     executionMs: number;
+    processStartupMs?: number;
+    resultNormalizationMs?: number;
+    totalMs?: number;
   };
   status: CommandStatus;
   command: string;
@@ -158,6 +162,29 @@ function buildCommandResult(input: {
       stderrBytes: stderr.bytes,
       stdoutTruncated: stdout.truncated,
       stderrTruncated: stderr.truncated,
+    },
+  };
+}
+
+function withPerformancePhases(
+  result: RunProjectCommandResult,
+  metrics: {
+    resolutionMs: number;
+    cacheLookupMs: number;
+    resultNormalizationMs: number;
+    totalMs: number;
+    processStartupMs?: number;
+  },
+): RunProjectCommandResult {
+  return {
+    ...result,
+    performance: {
+      resolutionMs: metrics.resolutionMs,
+      cacheLookupMs: metrics.cacheLookupMs,
+      executionMs: result.durationMs,
+      ...(metrics.processStartupMs === undefined ? {} : { processStartupMs: metrics.processStartupMs }),
+      resultNormalizationMs: metrics.resultNormalizationMs,
+      totalMs: metrics.totalMs,
     },
   };
 }
@@ -469,7 +496,8 @@ function rememberSuccessfulCommandResult(
 }
 
 export function runProjectCommand(state: AppState, args: Record<string, any>): RunProjectCommandResult {
-  const resolutionStartedAt = Date.now();
+  const totalStartedAt = Date.now();
+  const resolutionStartedAt = totalStartedAt;
   const root = resolveProjectRoot(state, args);
   const command = resolveCommandLabel(args.command ?? args.preset);
   const resolvedCommand = resolveAllowedCommand(root, command);
@@ -480,9 +508,18 @@ export function runProjectCommand(state: AppState, args: Record<string, any>): R
   const { responseMode, maxOutputBytes } = resolveOutputBudget(args, resolvedCommand);
   const resolutionMs = Date.now() - resolutionStartedAt;
 
+  const cacheLookupStartedAt = Date.now();
   const cacheContext = commandCacheContext(root, resolvedCommand, cwdPath, timeoutMs, maxOutputBytes, responseMode, args);
   const cached = args.forceFresh === true ? null : cachedCommandResult(cacheContext, command, resolutionMs, responseMode);
-  if (cached) return cached;
+  const cacheLookupMs = Date.now() - cacheLookupStartedAt;
+  if (cached) {
+    return withPerformancePhases(cached, {
+      resolutionMs,
+      cacheLookupMs,
+      resultNormalizationMs: 0,
+      totalMs: Date.now() - totalStartedAt,
+    });
+  }
 
   const startedAt = Date.now();
   const result = spawnSync(resolvedCommand.executable, resolvedCommand.args, {
@@ -501,6 +538,7 @@ export function runProjectCommand(state: AppState, args: Record<string, any>): R
     });
   }
 
+  const resultNormalizationStartedAt = Date.now();
   const commandResult = buildCommandResult({
     command,
     root,
@@ -515,11 +553,19 @@ export function runProjectCommand(state: AppState, args: Record<string, any>): R
     responseMode,
     resolutionMs,
   });
-  return rememberSuccessfulCommandResult(cacheContext, commandResult, args);
+  const resultNormalizationMs = Date.now() - resultNormalizationStartedAt;
+  const finalizedResult = withPerformancePhases(commandResult, {
+    resolutionMs,
+    cacheLookupMs,
+    resultNormalizationMs,
+    totalMs: Date.now() - totalStartedAt,
+  });
+  return rememberSuccessfulCommandResult(cacheContext, finalizedResult, args);
 }
 
 export async function runProjectCommandAsync(state: AppState, args: Record<string, any>, logger: { stdout: (data: string) => void, stderr: (data: string) => void }, setCancelFn: (fn: () => void) => void): Promise<RunProjectCommandResult> {
-  const resolutionStartedAt = Date.now();
+  const totalStartedAt = Date.now();
+  const resolutionStartedAt = totalStartedAt;
   const root = resolveProjectRoot(state, args);
   const command = resolveCommandLabel(args.command ?? args.preset);
   const resolvedCommand = resolveAllowedCommand(root, command);
@@ -530,16 +576,31 @@ export async function runProjectCommandAsync(state: AppState, args: Record<strin
   const { responseMode, maxOutputBytes } = resolveOutputBudget(args, resolvedCommand);
   const resolutionMs = Date.now() - resolutionStartedAt;
 
+  const cacheLookupStartedAt = Date.now();
   const cacheContext = commandCacheContext(root, resolvedCommand, cwdPath, timeoutMs, maxOutputBytes, responseMode, args);
   const cached = args.forceFresh === true ? null : cachedCommandResult(cacheContext, command, resolutionMs, responseMode);
-  if (cached) return cached;
+  const cacheLookupMs = Date.now() - cacheLookupStartedAt;
+  if (cached) {
+    return withPerformancePhases(cached, {
+      resolutionMs,
+      cacheLookupMs,
+      resultNormalizationMs: 0,
+      totalMs: Date.now() - totalStartedAt,
+    });
+  }
 
   const startedAt = Date.now();
   
   return new Promise((resolve, reject) => {
+    const spawnStartedAt = Date.now();
     const child = spawn(resolvedCommand.executable, resolvedCommand.args, {
       cwd: cwdPath,
       shell: false,
+    });
+
+    let processStartupMs: number | undefined;
+    child.once('spawn', () => {
+      processStartupMs = Date.now() - spawnStartedAt;
     });
 
     let timedOut = false;
@@ -578,6 +639,7 @@ export async function runProjectCommandAsync(state: AppState, args: Record<strin
       clearTimeout(timeoutId);
       const durationMs = Date.now() - startedAt;
 
+      const resultNormalizationStartedAt = Date.now();
       const commandResult = buildCommandResult({
         command,
         root,
@@ -592,7 +654,15 @@ export async function runProjectCommandAsync(state: AppState, args: Record<strin
         responseMode,
         resolutionMs,
       });
-      resolve(rememberSuccessfulCommandResult(cacheContext, commandResult, args));
+      const resultNormalizationMs = Date.now() - resultNormalizationStartedAt;
+      const finalizedResult = withPerformancePhases(commandResult, {
+        resolutionMs,
+        cacheLookupMs,
+        processStartupMs,
+        resultNormalizationMs,
+        totalMs: Date.now() - totalStartedAt,
+      });
+      resolve(rememberSuccessfulCommandResult(cacheContext, finalizedResult, args));
     });
   });
 }

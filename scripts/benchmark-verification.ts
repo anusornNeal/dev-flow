@@ -9,11 +9,16 @@ process.env.DEVFLOW_DB_PATH = path.join(tempRoot, 'benchmark.sqlite');
 let closeDatabase: (() => void) | null = null;
 
 const now = () => Date.now();
-const compactCommandMetrics = (result: any, wallMs: number) => ({
+const compactCommandMetrics = (result: any, wallMs: number, queueWaitMs = 0) => ({
   ok: result?.ok === true,
   wallMs,
+  queueWaitMs,
   executionMs: Number(result?.performance?.executionMs ?? result?.durationMs ?? 0),
   resolutionMs: Number(result?.performance?.resolutionMs ?? 0),
+  cacheLookupMs: Number(result?.performance?.cacheLookupMs ?? 0),
+  processStartupMs: result?.performance?.processStartupMs == null ? null : Number(result.performance.processStartupMs),
+  resultNormalizationMs: Number(result?.performance?.resultNormalizationMs ?? 0),
+  totalMs: Number(result?.performance?.totalMs ?? wallMs),
   processSpawns: Number(result?.processSpawns ?? 0),
   cacheHit: result?.cache?.hit === true,
 });
@@ -64,6 +69,24 @@ try {
   });
   const semanticAlias = compactCommandMetrics(semanticAliasResult, now() - startedAt);
 
+  startedAt = now();
+  const coldSafeResult = runProjectCommand(state, {
+    projectId: 'benchmark-devflow',
+    command: 'test-project-command',
+    responseMode: 'compact',
+    forceFresh: true,
+  });
+  const coldSafe = compactCommandMetrics(coldSafeResult, now() - startedAt);
+
+  startedAt = now();
+  const warmSafeResult = runProjectCommand(state, {
+    projectId: 'benchmark-devflow',
+    command: 'test-project-command',
+    responseMode: 'compact',
+    forceFresh: true,
+  });
+  const warmSafe = compactCommandMetrics(warmSafeResult, now() - startedAt);
+
   const beforeSingleFlight = getQueueMetrics().metrics.singleFlightHits;
   startedAt = now();
   const firstJob = enqueueToolJob(state, 'run_project_command', {
@@ -84,10 +107,10 @@ try {
   ]);
   const concurrentWallMs = now() - startedAt;
   const firstJobResult = readJobResult(firstJob.jobId)?.result as any;
+  const firstJobStatus = getToolJobStatus(firstJob.jobId);
   const afterSingleFlight = getQueueMetrics().metrics.singleFlightHits;
   const concurrentTypecheck = {
-    ok: firstJobResult?.ok === true,
-    wallMs: concurrentWallMs,
+    ...compactCommandMetrics(firstJobResult, concurrentWallMs, Number(firstJobStatus?.waitMs || 0)),
     sharedWith: secondJob.sharedWith || null,
     singleFlightHits: afterSingleFlight - beforeSingleFlight,
     underlyingProcessSpawns: Number(firstJobResult?.processSpawns ?? 0),
@@ -212,23 +235,25 @@ try {
   let full: any = null;
   if (process.argv.includes('--full')) {
     startedAt = now();
-    const executable = process.platform === 'win32' ? 'cmd.exe' : 'npm';
-    const args = process.platform === 'win32' ? ['/c', 'npm', 'run', 'verify'] : ['run', 'verify'];
-    const result = spawnSync(executable, args, {
-      cwd: root,
-      encoding: 'utf8',
-      shell: false,
-      timeout: 300_000,
-      maxBuffer: 20 * 1024 * 1024,
+    const coldFullResult = runProjectCommand(state, {
+      projectId: 'benchmark-devflow',
+      command: 'verify',
+      responseMode: 'compact',
+      forceFresh: true,
+      timeoutMs: 300_000,
     });
-    full = {
-      ok: result.status === 0,
-      wallMs: now() - startedAt,
-      exitCode: result.status,
-      stdoutBytes: Buffer.byteLength(result.stdout || '', 'utf8'),
-      stderrBytes: Buffer.byteLength(result.stderr || '', 'utf8'),
-      tail: `${result.stdout || ''}\n${result.stderr || ''}`.slice(-4000),
-    };
+    const coldFull = compactCommandMetrics(coldFullResult, now() - startedAt);
+
+    startedAt = now();
+    const warmFullResult = runProjectCommand(state, {
+      projectId: 'benchmark-devflow',
+      command: 'verify',
+      responseMode: 'compact',
+      forceFresh: true,
+      timeoutMs: 300_000,
+    });
+    const warmFull = compactCommandMetrics(warmFullResult, now() - startedAt);
+    full = { cold: coldFull, warm: warmFull };
   }
 
   const report = {
@@ -242,8 +267,11 @@ try {
       preChangeIncompleteFullVerifyMs: 70_471,
     },
     after: {
-      coldTypecheck,
-      warmTypecheck,
+      lanes: {
+        fast: { command: 'typecheck', cold: coldTypecheck, warm: warmTypecheck },
+        safe: { command: 'test-project-command', cold: coldSafe, warm: warmSafe },
+        full: { command: 'verify', runs: full, enabled: process.argv.includes('--full') },
+      },
       semanticAlias,
       concurrentTypecheck,
       multiChat,

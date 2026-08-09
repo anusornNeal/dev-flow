@@ -15,6 +15,7 @@ import { taskToolDefinitions } from './devflowTaskTools';
 import { gitToolDefinitions } from './devflowGitTools';
 import { workspaceToolDefinitions } from './devflowWorkspaceTools';
 import { buildMcpTransportInputSchema } from './mcpSchemaTransport';
+import { resolveRuntimeMcpToolProfileValue } from './mcpToolProfileConfig';
 export type { DevFlowToolDefinition, DevFlowToolHttpRequest } from './devflowContractCore';
 export const DEVFLOW_CONTRACT_VERSION = '2026-08-09.1';
 
@@ -1507,8 +1508,9 @@ export type DevFlowToolProfile = 'full' | 'coding' | 'authoring' | 'review' | 'a
 
 export const DEVFLOW_TOOL_PROFILES: DevFlowToolProfile[] = ['full', 'coding', 'authoring', 'review', 'atlas', 'diagnostics'];
 
-export function resolveDevFlowToolProfile(value = process.env.DEVFLOW_MCP_TOOL_PROFILE) {
-  const configured = typeof value === 'string' ? value.trim() : '';
+export function resolveDevFlowToolProfile(value?: string) {
+  const resolvedValue = resolveRuntimeMcpToolProfileValue(value);
+  const configured = typeof resolvedValue === 'string' ? resolvedValue.trim() : '';
   if (!configured) return { profile: 'coding' as DevFlowToolProfile, configured: null, fallback: false };
   if (DEVFLOW_TOOL_PROFILES.includes(configured as DevFlowToolProfile)) {
     return { profile: configured as DevFlowToolProfile, configured, fallback: false };

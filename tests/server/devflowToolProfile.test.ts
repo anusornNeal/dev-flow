@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 const { devFlowToolDefinitions, getCapabilityCatalog, getMcpToolList, getToolProfileSummary, resolveDevFlowToolProfile } = await import('../../src/server/contracts/devflowContract.js');
 const { buildMcpToolSurfaceInventory, summarizeMcpToolSurfaceInventory } = await import('../../src/server/contracts/mcpToolSurfaceClassification.js');
@@ -64,7 +66,6 @@ test('MCP profile resolution defaults to lean coding and preserves explicit vali
   const previous = process.env.DEVFLOW_MCP_TOOL_PROFILE;
   delete process.env.DEVFLOW_MCP_TOOL_PROFILE;
   try {
-    assert.deepEqual(resolveDevFlowToolProfile(), { profile: 'coding', configured: null, fallback: false });
     assert.deepEqual(resolveDevFlowToolProfile(''), { profile: 'coding', configured: null, fallback: false });
     for (const configured of ['full', 'coding', 'authoring', 'review', 'atlas', 'diagnostics'] as const) {
       const resolved = resolveDevFlowToolProfile(configured);
@@ -77,6 +78,28 @@ test('MCP profile resolution defaults to lean coding and preserves explicit vali
   } finally {
     if (previous === undefined) delete process.env.DEVFLOW_MCP_TOOL_PROFILE;
     else process.env.DEVFLOW_MCP_TOOL_PROFILE = previous;
+  }
+});
+
+test('guarded start-all restart refreshes MCP profile from the current env file', () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-profile-refresh-'));
+  fs.writeFileSync(path.join(tempRoot, '.env'), 'DEVFLOW_MCP_TOOL_PROFILE="coding"\n', 'utf8');
+  const previousRoot = process.env.DEVFLOW_APP_ROOT;
+  const previousSupervisor = process.env.DEVFLOW_RESTART_SUPERVISOR;
+  const previousProfile = process.env.DEVFLOW_MCP_TOOL_PROFILE;
+  process.env.DEVFLOW_APP_ROOT = tempRoot;
+  process.env.DEVFLOW_RESTART_SUPERVISOR = 'start-all';
+  process.env.DEVFLOW_MCP_TOOL_PROFILE = 'full';
+  try {
+    const resolved = resolveDevFlowToolProfile();
+    assert.equal(resolved.profile, 'coding');
+    assert.equal(resolved.configured, 'coding');
+    assert.equal(resolved.fallback, false);
+  } finally {
+    if (previousRoot === undefined) delete process.env.DEVFLOW_APP_ROOT; else process.env.DEVFLOW_APP_ROOT = previousRoot;
+    if (previousSupervisor === undefined) delete process.env.DEVFLOW_RESTART_SUPERVISOR; else process.env.DEVFLOW_RESTART_SUPERVISOR = previousSupervisor;
+    if (previousProfile === undefined) delete process.env.DEVFLOW_MCP_TOOL_PROFILE; else process.env.DEVFLOW_MCP_TOOL_PROFILE = previousProfile;
+    fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 });
 

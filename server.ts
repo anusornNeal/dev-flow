@@ -12,7 +12,7 @@ import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { registerApiRoutes } from './src/server/routes/registerApiRoutes';
 import { createDevFlowMcpServer } from './src/server/mcp';
-import { createStatelessMcpHttpHandler } from './src/server/mcpStreamableHttp';
+import { createReusableMcpHttpHandler } from './src/server/mcpStreamableHttp';
 import { bootstrap, writeAgentLog } from './src/server/bootstrap';
 import { getDevFlowAppRoot, resolveFromDevFlowAppRoot, getDevFlowUploadsDir } from './src/lib/devFlowPaths';
 import { markDevFlowRestartHealthy } from './src/lib/devFlowRestart';
@@ -49,7 +49,7 @@ async function startServer() {
   app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', '*');
     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, ngrok-skip-browser-warning, x-correlation-id');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, ngrok-skip-browser-warning, x-correlation-id, mcp-session-id, mcp-protocol-version');
     if (req.method === 'OPTIONS') {
       return res.sendStatus(200);
     }
@@ -57,7 +57,7 @@ async function startServer() {
   });
 
   app.use('/mcp', express.json({ limit: '1mb' }));
-  app.post('/mcp', createStatelessMcpHttpHandler(apiBaseUrl));
+  app.post('/mcp', createReusableMcpHttpHandler(apiBaseUrl));
 
   app.get('/sse', async (_req, res) => {
     const mcpServer = createDevFlowMcpServer(apiBaseUrl);

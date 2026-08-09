@@ -1,26 +1,86 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, ChevronDown, FolderGit, Pencil, Plus, Search, Trash2, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, Check, ChevronDown, FolderGit, Pencil, Plus, Search, Trash2, X } from 'lucide-react';
 import type { Project } from '../types';
 import ConfirmModal from './ConfirmModal';
 
 export const PROJECT_SWITCHER_POPOVER_CLASS = 'absolute left-0 top-[calc(100%+8px)] z-50 w-[400px] max-w-[calc(100vw-2rem)]';
 
+export const PROJECT_SWITCHER_ORDER_STORAGE_KEY = 'devflow.project-switcher.order.v1';
+
+interface ProjectOrderStorage {
+  getItem: (key: string) => string | null;
+  setItem: (key: string, value: string) => void;
+}
+
+export function readProjectOrder(storage?: ProjectOrderStorage | null): string[] {
+  if (!storage) return [];
+  try {
+    const raw = storage.getItem(PROJECT_SWITCHER_ORDER_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+export function writeProjectOrder(storage: ProjectOrderStorage | null | undefined, order: string[]) {
+  if (!storage) return;
+  try {
+    storage.setItem(PROJECT_SWITCHER_ORDER_STORAGE_KEY, JSON.stringify(order));
+  } catch {
+    // Presentation preference persistence must never block project switching.
+  }
+}
+
+export function reconcileProjectOrder(projects: Project[], storedOrder: string[]): string[] {
+  const validIds = new Set(projects.map((project) => project.id));
+  const seen = new Set<string>();
+  const reconciled: string[] = [];
+  for (const id of storedOrder) {
+    if (!validIds.has(id) || seen.has(id)) continue;
+    seen.add(id);
+    reconciled.push(id);
+  }
+  for (const project of projects) {
+    if (seen.has(project.id)) continue;
+    seen.add(project.id);
+    reconciled.push(project.id);
+  }
+  return reconciled;
+}
+
+export function orderProjects(projects: Project[], order: string[]): Project[] {
+  const byId = new Map(projects.map((project) => [project.id, project]));
+  return reconcileProjectOrder(projects, order)
+    .map((id) => byId.get(id))
+    .filter((project): project is Project => Boolean(project));
+}
+
+export function moveProjectOrder(order: string[], projectId: string, direction: -1 | 1): string[] {
+  const currentIndex = order.indexOf(projectId);
+  if (currentIndex < 0) return [...order];
+  const nextIndex = currentIndex + direction;
+  if (nextIndex < 0 || nextIndex >= order.length) return [...order];
+  const next = [...order];
+  [next[currentIndex], next[nextIndex]] = [next[nextIndex], next[currentIndex]];
+  return next;
+}
+
 export function formatProjectRepoLabel(repoUrl?: string | null) {
   return repoUrl?.replace(/^https?:\/\/(www\.)?/, '') || 'No repository URL';
 }
 
-export function filterProjectOptions(projects: Project[], query: string, activeProjectId: string) {
+export function filterProjectOptions(projects: Project[], query: string) {
   const normalized = query.trim().toLowerCase();
-  return [...projects]
-    .sort((a, b) => Number(b.id === activeProjectId) - Number(a.id === activeProjectId))
-    .filter((project) => {
-      if (!normalized) return true;
-      const haystack = [project.name, project.repoUrl, project.localPath, project.taskIdPrefix]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase();
-      return normalized.split(/\s+/).every((token) => haystack.includes(token));
-    });
+  return projects.filter((project) => {
+    if (!normalized) return true;
+    const haystack = [project.name, project.repoUrl, project.localPath, project.taskIdPrefix]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+    return normalized.split(/\s+/).every((token) => haystack.includes(token));
+  });
 }
 
 export type ProjectSwitcherKeyAction =
@@ -77,15 +137,28 @@ export default function ProjectSwitcher({
   const [editLocalPath, setEditLocalPath] = useState('');
   const [editTaskIdPrefix, setEditTaskIdPrefix] = useState('');
   const [projectToDelete, setProjectToDelete] = useState<string | null>(null);
+  const [projectOrder, setProjectOrder] = useState<string[]>(() => typeof window === 'undefined' ? [] : readProjectOrder(window.localStorage));
+  const projectsLoadedRef = useRef(projects.length > 0);
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
   const activeProject = projects.find((project) => project.id === activeProjectId) || projects[0];
-  const filteredProjects = useMemo(
-    () => filterProjectOptions(projects, query, activeProjectId),
-    [projects, query, activeProjectId],
-  );
+  const orderedProjects = useMemo(() => orderProjects(projects, projectOrder), [projects, projectOrder]);
+  const filteredProjects = useMemo(() => filterProjectOptions(orderedProjects, query), [orderedProjects, query]);
+
+  useEffect(() => {
+    if (projects.length > 0) projectsLoadedRef.current = true;
+    if (!projectsLoadedRef.current) return;
+    setProjectOrder((current) => {
+      const next = reconcileProjectOrder(projects, current);
+      return next.length === current.length && next.every((id, index) => id === current[index]) ? current : next;
+    });
+  }, [projects]);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') writeProjectOrder(window.localStorage, projectOrder);
+  }, [projectOrder]);
 
   useEffect(() => {
     if (!open) return;
@@ -111,6 +184,15 @@ export default function ProjectSwitcher({
   const selectProject = (project: Project) => {
     setActiveProjectId(project.id);
     close();
+  };
+
+  const moveProject = (projectId: string, direction: -1 | 1) => {
+    const currentOrder = reconcileProjectOrder(projects, projectOrder);
+    const nextOrder = moveProjectOrder(currentOrder, projectId, direction);
+    setProjectOrder(nextOrder);
+    const nextVisibleProjects = filterProjectOptions(orderProjects(projects, nextOrder), query);
+    const nextVisibleIndex = nextVisibleProjects.findIndex((project) => project.id === projectId);
+    if (nextVisibleIndex >= 0) setHighlightedIndex(nextVisibleIndex);
   };
 
   const handleSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
@@ -219,6 +301,7 @@ export default function ProjectSwitcher({
               ) : filteredProjects.map((project, index) => {
                 const active = project.id === activeProjectId;
                 const highlighted = index === highlightedIndex;
+                const orderIndex = orderedProjects.findIndex((item) => item.id === project.id);
                 return (
                   <div
                     key={project.id}
@@ -250,6 +333,26 @@ export default function ProjectSwitcher({
                       </span>
                     </button>
                     <div className="flex shrink-0 items-center gap-0.5 pr-1">
+                      <button
+                        type="button"
+                        aria-label={`Move ${project.name} up`}
+                        title={`Move ${project.name} up`}
+                        disabled={orderIndex <= 0}
+                        onClick={() => moveProject(project.id, -1)}
+                        className="rounded-lg p-1.5 text-[#8a7565] hover:bg-white hover:text-[#a46c24] disabled:cursor-not-allowed disabled:opacity-30 dark:text-[#b8ab9f] dark:hover:bg-[#3a2f26]"
+                      >
+                        <ArrowUp size={12} />
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`Move ${project.name} down`}
+                        title={`Move ${project.name} down`}
+                        disabled={orderIndex < 0 || orderIndex >= orderedProjects.length - 1}
+                        onClick={() => moveProject(project.id, 1)}
+                        className="rounded-lg p-1.5 text-[#8a7565] hover:bg-white hover:text-[#a46c24] disabled:cursor-not-allowed disabled:opacity-30 dark:text-[#b8ab9f] dark:hover:bg-[#3a2f26]"
+                      >
+                        <ArrowDown size={12} />
+                      </button>
                       <button type="button" onClick={() => startEditing(project)} title={`Edit ${project.name}`} className="rounded-lg p-1.5 text-[#8a7565] hover:bg-white hover:text-[#a46c24] dark:text-[#b8ab9f] dark:hover:bg-[#3a2f26]">
                         <Pencil size={12} />
                       </button>

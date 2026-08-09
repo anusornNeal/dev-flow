@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Edit3, Maximize2, Minimize2, Trash2, X } from 'lucide-react';
+import { ArrowLeft, Edit3, Maximize2, Minimize2, Trash2, X } from 'lucide-react';
 import type { Task } from '../../types';
 
 export type TaskInspectorTab = 'overview' | 'work' | 'subtasks' | 'bugs' | 'activity';
@@ -36,6 +36,29 @@ export function resolveTaskInspectorTabKey(activeTab: TaskInspectorTab, key: str
   return null;
 }
 
+interface TaskInspectorParentControlProps {
+  parentTask: Task;
+  onSelectParent: (task: Task) => void;
+}
+
+export function TaskInspectorParentControl({ parentTask, onSelectParent }: TaskInspectorParentControlProps) {
+  const parentId = parentTask.displayId || parentTask.id;
+  return (
+    <button
+      type="button"
+      aria-label={`Open parent task ${parentId}`}
+      title={`Back to ${parentId} · ${parentTask.title}`}
+      onClick={() => onSelectParent(parentTask)}
+      className="mb-2 flex max-w-full items-center gap-1.5 rounded-lg border border-[#d9c5aa] bg-white/80 px-2.5 py-1.5 text-left text-[11px] font-extrabold text-[#7c5d42] hover:bg-white dark:border-[#584a3b] dark:bg-[#211a15] dark:text-[#eadfd5]"
+    >
+      <ArrowLeft size={13} className="shrink-0" />
+      <span className="shrink-0">Back to {parentId}</span>
+      <span aria-hidden="true" className="shrink-0 text-[#b39a82]">·</span>
+      <span className="truncate font-bold text-[#594638] dark:text-[#d8c8ba]">{parentTask.title}</span>
+    </button>
+  );
+}
+
 interface TaskInspectorShellProps {
   task: Task;
   activeTab: TaskInspectorTab;
@@ -44,6 +67,8 @@ interface TaskInspectorShellProps {
   onDelete: () => void;
   isEditing: boolean;
   onToggleEdit: () => void;
+  parentTask?: Task;
+  onSelectParent?: (task: Task) => void;
   onSave?: () => void;
   onDiscard?: () => void;
   children: React.ReactNode;
@@ -57,6 +82,8 @@ export default function TaskInspectorShell({
   onDelete,
   isEditing,
   onToggleEdit,
+  parentTask,
+  onSelectParent,
   onSave,
   onDiscard,
   children,
@@ -109,6 +136,9 @@ export default function TaskInspectorShell({
       >
         <header className="sticky top-0 z-30 flex shrink-0 items-start justify-between gap-4 border-b border-[#e5d4bb] bg-[#f6ecdc]/95 px-5 py-4 backdrop-blur dark:border-[#584a3b] dark:bg-[#292119]/95">
           <div className="min-w-0 flex-1">
+            {parentTask && onSelectParent && (
+              <TaskInspectorParentControl parentTask={parentTask} onSelectParent={onSelectParent} />
+            )}
             <div className="flex flex-wrap items-center gap-2 text-xs">
               <span className="rounded-lg border border-[#dfccb1] bg-white px-2.5 py-1 font-mono text-[11px] font-black text-[#7a5d45] dark:border-[#584a3b] dark:bg-[#211a15] dark:text-[#e9d9c8]">{task.displayId || task.id}</span>
               <span className="rounded-lg bg-[#ffe9c8] px-2.5 py-1 text-[11px] font-extrabold uppercase text-[#965d19] dark:bg-[#3a2f26] dark:text-[#e0a070]">{task.status}</span>

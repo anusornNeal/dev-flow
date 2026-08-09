@@ -72,16 +72,29 @@ function makeTask(): Task {
 
 const noop = () => {};
 
-function renderDrawer(initialTab: 'overview' | 'work' | 'subtasks' | 'bugs' | 'activity', extraTasks: Task[] = []) {
+function defaultChildTasks(task: Task): Task[] {
+  return Array.from({ length: 5 }, (_, index) => ({
+    ...makeTask(),
+    id: `child-${index + 1}`,
+    displayId: `DVF-CHILD-${index + 1}`,
+    title: `Child task ${index + 1}`,
+    parentId: task.id,
+    status: index === 0 ? 'done' : 'backlog',
+  }));
+}
+
+function renderDrawer(initialTab: 'overview' | 'work' | 'subtasks' | 'bugs' | 'activity', extraTasks?: Task[]) {
   const task = makeTask();
+  const relatedTasks = extraTasks ?? defaultChildTasks(task);
   return renderToStaticMarkup(React.createElement(TaskDetailsDrawer as any, {
     task,
-    allTasks: [task, ...extraTasks],
+    allTasks: [task, ...relatedTasks],
     initialTab,
     onClose: noop,
     onUpdate: noop,
     onDelete: noop,
     onSelectTask: noop,
+    onCreateTask: async () => {},
   }));
 }
 
@@ -131,6 +144,23 @@ test('Subtasks has dedicated content while Work stays focused on implementation 
   assert.doesNotMatch(workHtml, /Dedicated subtask fixture/);
 });
 
+test('Subtasks tab owns subtask progress, list, show-more, and create affordance', () => {
+  const html = renderDrawer('subtasks');
+  assert.match(html, /Subtasks Breakdown \(1\/5\)/);
+  assert.match(html, /Child task 1/);
+  assert.match(html, /Child task 4/);
+  assert.doesNotMatch(html, /Child task 5/);
+  assert.match(html, /show 1 more/);
+  assert.match(html, /Create Subtask Spec/);
+  assert.doesNotMatch(html, /1 of 2 complete/);
+});
+
+test('Work no longer renders the Subtasks section', () => {
+  const html = renderDrawer('work');
+  assert.doesNotMatch(html, /Subtasks Breakdown/);
+  assert.doesNotMatch(html, /Create Subtask Spec/);
+});
+
 test('Bugs keeps embedded bug details visible in normal read mode', () => {
   const html = renderDrawer('bugs');
   assert.match(html, /Bugs to Fix/);
@@ -145,6 +175,43 @@ test('Activity contains notes, agent execution, and task history without visible
   assert.match(html, /run-1/);
   assert.match(html, /Moved to in-progress/);
   assert.doesNotMatch(html, /Auto[- ]Work/i);
+});
+
+test('child task renders parent navigation in the inspector header without the old content banner', () => {
+  const parent = makeTask();
+  const child: Task = {
+    ...makeTask(),
+    id: 'child-parent-nav',
+    displayId: 'DVF-CHILD-NAV',
+    title: 'Child navigation fixture',
+    parentId: parent.id,
+  };
+  const html = renderToStaticMarkup(React.createElement(TaskDetailsDrawer as any, {
+    task: child,
+    allTasks: [parent, child],
+    onClose: noop,
+    onUpdate: noop,
+    onDelete: noop,
+    onSelectTask: noop,
+  }));
+
+  assert.match(html, /aria-label="Open parent task DVF-INSPECT"/);
+  assert.match(html, /Inspector information architecture fixture/);
+  assert.doesNotMatch(html, />Parent task</);
+  assert.doesNotMatch(html, />Open parent</);
+});
+
+test('root tasks and children with unavailable parent data omit parent navigation', () => {
+  const rootHtml = renderToStaticMarkup(React.createElement(TaskDetailsDrawer as any, {
+    task: makeTask(), allTasks: [makeTask()], onClose: noop, onUpdate: noop, onDelete: noop, onSelectTask: noop,
+  }));
+  assert.doesNotMatch(rootHtml, /Open parent task/);
+
+  const orphan: Task = { ...makeTask(), id: 'orphan', parentId: 'missing-parent' };
+  const orphanHtml = renderToStaticMarkup(React.createElement(TaskDetailsDrawer as any, {
+    task: orphan, allTasks: [orphan], onClose: noop, onUpdate: noop, onDelete: noop, onSelectTask: noop,
+  }));
+  assert.doesNotMatch(orphanHtml, /Open parent task/);
 });
 
 test('TaskDetailsDrawer is materially decomposed instead of remaining a 1,200-line monolith', () => {

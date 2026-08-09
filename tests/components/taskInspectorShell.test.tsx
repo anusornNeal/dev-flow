@@ -73,7 +73,7 @@ test('tab keyboard navigation resolves Arrow, Home, and End keys', () => {
   assert.equal(resolveTaskInspectorTabKey('overview', 'ArrowLeft'), 'activity');
   assert.equal(resolveTaskInspectorTabKey('bugs', 'Home'), 'overview');
   assert.equal(resolveTaskInspectorTabKey('work', 'End'), 'activity');
-  assert.equal(resolveTaskInspectorTabKey('work', 'Enter'), null);
+  assert.equal(resolveTaskInspectorTabKey('subtasks', 'Enter'), null);
 });
 
 test('header and tab bar remain sticky while panel content scrolls', () => {
@@ -81,4 +81,29 @@ test('header and tab bar remain sticky while panel content scrolls', () => {
   const stickyCount = (html.match(/sticky/g) || []).length;
   assert.ok(stickyCount >= 2);
   assert.match(html, /overflow-y-auto/);
+});
+
+test('shell renders compact parent navigation only when parent data and callback are available', () => {
+  const parentTask = { ...task, id: 'parent-1', displayId: 'DVF-PARENT', title: 'Parent fixture' };
+  const childHtml = renderShell({ parentTask, onSelectParent: noop });
+  assert.match(childHtml, /aria-label="Open parent task DVF-PARENT"/);
+  assert.match(childHtml, /DVF-PARENT/);
+  assert.match(childHtml, /Parent fixture/);
+
+  assert.doesNotMatch(renderShell(), /Open parent task/);
+  assert.doesNotMatch(renderShell({ parentTask }), /Open parent task/);
+});
+
+test('parent control invokes the existing selection callback with the resolved parent', async () => {
+  const moduleExports: any = await import('../../src/components/taskDrawer/TaskInspectorShell.js');
+  assert.equal(typeof moduleExports.TaskInspectorParentControl, 'function');
+
+  const parentTask = { ...task, id: 'parent-1', displayId: 'DVF-PARENT', title: 'Parent fixture' };
+  let selected: any = null;
+  const element = moduleExports.TaskInspectorParentControl({
+    parentTask,
+    onSelectParent: (selectedTask: any) => { selected = selectedTask; },
+  });
+  element.props.onClick();
+  assert.equal(selected, parentTask);
 });

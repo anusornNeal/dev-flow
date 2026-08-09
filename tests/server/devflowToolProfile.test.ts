@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
-const { getCapabilityCatalog, getMcpToolList, getToolProfileSummary, resolveDevFlowToolProfile } = await import('../../src/server/contracts/devflowContract.js');
+const { devFlowToolDefinitions, getCapabilityCatalog, getMcpToolList, getToolProfileSummary, resolveDevFlowToolProfile } = await import('../../src/server/contracts/devflowContract.js');
+const { buildMcpToolSurfaceInventory, summarizeMcpToolSurfaceInventory } = await import('../../src/server/contracts/mcpToolSurfaceClassification.js');
 
 test('stdio MCP entrypoint loads dotenv before creating the server', () => {
   const entrypoint = fs.readFileSync(new URL('../../mcp-server.ts', import.meta.url), 'utf8');
@@ -46,6 +47,19 @@ test('tool profile summary reports serialized schema bytes', () => {
   const summary = getToolProfileSummary();
   assert.ok(summary.full.toolCount > summary.coding.toolCount);
   assert.ok(summary.full.schemaBytes > summary.coding.schemaBytes);
+});
+
+test('MCP surface inventory classifies every exposed canonical tool and alias', () => {
+  const inventory = buildMcpToolSurfaceInventory(devFlowToolDefinitions);
+  const full = getMcpToolList('full');
+  const summary = summarizeMcpToolSurfaceInventory(inventory);
+
+  assert.equal(inventory.length, full.length);
+  assert.equal(new Set(inventory.map((item: any) => item.name)).size, full.length);
+  assert.equal(inventory.every((item: any) => item.classification && item.disposition && item.risk && item.intent), true);
+  assert.equal(inventory.filter((item: any) => item.classification === 'alias-duplicate').every((item: any) => item.target), true);
+  assert.equal(summary.total, full.length);
+  assert.equal(summary.byDisposition.keep + summary.byDisposition.combine + summary.byDisposition['hide-default'] + summary.byDisposition.deprecate, full.length);
 });
 
 test('MCP profile resolution is temporarily forced to full', () => {

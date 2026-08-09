@@ -11,15 +11,18 @@ export interface RuntimeIdentity {
 export interface RuntimeClientState {
   contractVersion?: string;
   runtimeInstanceId?: string;
+  toolSurfaceIdentity?: string;
   toolsVisible?: boolean;
 }
 
 export interface RuntimeIdentityWithContract extends RuntimeIdentity {
   contractVersion: string;
+  toolSurfaceIdentity: string;
 }
 
 export type RuntimeDiagnosisCode =
   | 'runtime-restarted'
+  | 'tool-surface-changed'
   | 'deployment-changed'
   | 'client-registry-desync'
   | 'contract-changed'
@@ -55,8 +58,20 @@ export function classifyRuntimeIdentity(
 
   const previousContract = String(clientState.contractVersion || '').trim();
   const previousRuntime = String(clientState.runtimeInstanceId || '').trim();
+  const previousToolSurface = String(clientState.toolSurfaceIdentity || '').trim();
   const contractChanged = Boolean(previousContract && previousContract !== current.contractVersion);
   const runtimeChanged = Boolean(previousRuntime && previousRuntime !== current.runtimeInstanceId);
+  const toolSurfaceChanged = Boolean(previousToolSurface && previousToolSurface !== current.toolSurfaceIdentity);
+
+  if (toolSurfaceChanged) {
+    return {
+      code: 'tool-surface-changed',
+      detail: runtimeChanged
+        ? 'The DevFlow runtime restarted and its advertised MCP tool/schema surface changed since the client registry was loaded.'
+        : 'The client MCP tool/schema surface fingerprint does not match the current DevFlow runtime.',
+      nextAction: 'Reconnect DevFlow and refresh the ChatGPT plugin/tool registry before issuing more MCP calls; open a fresh chat if the stale registry remains cached.',
+    };
+  }
 
   if (runtimeChanged && contractChanged) {
     return {

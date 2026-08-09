@@ -10,7 +10,7 @@ import { getJobMetrics } from './mcpToolJobService';
 import { getLocalSearchRuntimeStatus } from './localFileService';
 import { getSessionWorkspaceMetrics } from './sessionWorkspaceService';
 import { getWorkspaceIntegrationMetrics } from './workspaceIntegrationService';
-import { DEVFLOW_CONTRACT_VERSION } from '../contracts/devflowContract';
+import { DEVFLOW_CONTRACT_VERSION, getCapabilityCatalog } from '../contracts/devflowContract';
 import {
   classifyRuntimeIdentity,
   getRuntimeIdentity,
@@ -547,7 +547,12 @@ export function getDevFlowDiagnostics(options?: {
     ? options.supervisorState ?? null
     : readDevFlowSupervisorState();
   const runtimeSupervisor = buildDevFlowSupervisorDiagnostics(supervisorState);
-  const runtime = { ...getRuntimeIdentity(), contractVersion: DEVFLOW_CONTRACT_VERSION };
+  const capabilityCatalog = getCapabilityCatalog();
+  const runtime = {
+    ...getRuntimeIdentity(),
+    contractVersion: DEVFLOW_CONTRACT_VERSION,
+    toolSurfaceIdentity: capabilityCatalog.mcpProfile.toolSurfaceIdentity,
+  };
   const runtimeDiagnosis = classifyRuntimeIdentity(runtime, options?.clientState);
   const telemetryPersistence = flushPerformanceTelemetry({ now });
   const toolSummary = getToolCallSummary({ now, windowMs: options?.windowMs });

@@ -18,7 +18,7 @@ import { executionToolDefinitions } from './devflowExecutionTools';
 import { buildMcpTransportInputSchema } from './mcpSchemaTransport';
 import { resolveRuntimeMcpToolProfileValue } from './mcpToolProfileConfig';
 export type { DevFlowToolDefinition, DevFlowToolHttpRequest } from './devflowContractCore';
-export const DEVFLOW_CONTRACT_VERSION = '2026-08-09.4';
+export const DEVFLOW_CONTRACT_VERSION = '2026-08-09.5';
 
 export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   {
@@ -1574,6 +1574,7 @@ export function getMcpToolList(profile: DevFlowToolProfile = 'full') {
       description = `${description}\n\nNote: This tool may run asynchronously. If it takes longer than 20 seconds, it may return a \`jobId\` instead of the final result. Use \`get_tool_job_result(jobId, waitMs=30000)\` as the normal completion path; use \`get_tool_job_status\` or \`get_tool_job_log\` only when diagnostic detail is needed.`;
       if (outputSchema) {
         outputSchema = {
+          type: 'object',
           anyOf: [
             outputSchema,
             {
@@ -1701,6 +1702,7 @@ export function getCapabilityCatalog() {
         description = `${description}\n\nNote: This tool may run asynchronously. If it takes longer than 20 seconds, it may return a \`jobId\` instead of the final result. Use \`get_tool_job_result(jobId, waitMs=30000)\` as the normal completion path; use \`get_tool_job_status\` or \`get_tool_job_log\` only when diagnostic detail is needed.`;
         if (outputSchema) {
           outputSchema = {
+            type: 'object',
             anyOf: [
               outputSchema,
               {

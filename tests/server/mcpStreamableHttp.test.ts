@@ -8,14 +8,6 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import * as mcpModule from '../../src/server/mcp.js';
 
-const previousToolProfile = process.env.DEVFLOW_MCP_TOOL_PROFILE;
-test.before(() => {
-  process.env.DEVFLOW_MCP_TOOL_PROFILE = 'full';
-});
-test.after(() => {
-  if (previousToolProfile === undefined) delete process.env.DEVFLOW_MCP_TOOL_PROFILE;
-  else process.env.DEVFLOW_MCP_TOOL_PROFILE = previousToolProfile;
-});
 
 async function withMcpServer(run: (baseUrl: string) => Promise<void>) {
   const app = express();
@@ -27,7 +19,7 @@ async function withMcpServer(run: (baseUrl: string) => Promise<void>) {
   });
   app.use('/mcp', express.json({ limit: '1mb' }));
   app.post('/mcp', (req, res, next) => {
-    return (mcpModule as any).createStatelessMcpHttpHandler(apiBaseUrl)(req, res, next);
+    return (mcpModule as any).createStatelessMcpHttpHandler(apiBaseUrl, 'full')(req, res, next);
   });
 
   const server = http.createServer(app);

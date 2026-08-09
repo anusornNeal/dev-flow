@@ -581,6 +581,15 @@ export function saveTask(task: any) {
   });
 }
 
+export function saveTasksAtomic(tasks: any[]) {
+  if (tasks.length === 0) return;
+  ensureTaskColumns();
+  withDbTransaction(() => {
+    const statement = db.prepare(TASK_UPSERT_SQL);
+    for (const task of tasks) statement.run(...serializeTaskForRow(task));
+  });
+}
+
 export function saveTaskWithExpectedUpdatedAt(task: any, expectedUpdatedAt: string | null | undefined) {
   ensureTaskColumns();
   return withDbTransaction(() => {

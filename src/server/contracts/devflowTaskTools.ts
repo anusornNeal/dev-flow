@@ -93,19 +93,38 @@ export const taskToolDefinitions: DevFlowToolDefinition[] = [
     buildHttpRequest: ({ taskId, bugId, status, responseMode, isAgentRequest, emergency }) => ({ method: 'POST', path: withQuery(`/api/tasks/${encodePathSegment(String(taskId))}/bugs/${encodePathSegment(String(bugId))}/status`, { responseMode: responseMode || 'summary' }), body: emergency === undefined ? { status } : { status, emergency }, headers: isAgentRequest ? { 'x-agent-request': 'true' } : undefined }),
   },
   {
-    name: 'create_task', description: 'Create a task. For implementation-ready cards, run validate_task_quality first and include focused targetFiles plus an Implementation map in repoContext.',
-    inputSchema: { type: 'object', properties: { ...projectIdentifierProperties, ...taskMutationProperties, ...mutationControlProperties, ...mutationResponseModeProperty }, required: ['title', 'category'] },
+    name: 'create_task',
+    description: 'Create one task or an atomic parent/children task set. Server-side mutation validation is authoritative; validate_task_quality remains available as optional preflight diagnostics.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...projectIdentifierProperties,
+        ...taskMutationProperties,
+        parent: { type: 'object', properties: { ...projectIdentifierProperties, ...taskMutationProperties }, required: ['title', 'category'], description: 'Parent card for atomic task-set authoring.' },
+        children: { type: 'array', minItems: 1, maxItems: 25, items: { type: 'object', properties: { ...projectIdentifierProperties, ...taskMutationProperties }, required: ['title', 'category'] }, description: 'Child cards created atomically under parent.' },
+        ...mutationControlProperties,
+        ...mutationResponseModeProperty,
+      },
+      anyOf: [{ required: ['title', 'category'] }, { required: ['parent', 'children'] }],
+    },
     outputSchema: { type: 'object' },
-    buildHttpRequest: (args) => ({ method: 'POST', path: withQuery('/api/tasks', { responseMode: args.responseMode || 'summary' }), body: stripToolOnlyArgs(args, ['responseMode']) }),
+    buildHttpRequest: (args) => {
+      const taskSet = args.parent && Array.isArray(args.children);
+      return {
+        method: 'POST',
+        path: withQuery(taskSet ? '/api/tasks/task-set' : '/api/tasks', { responseMode: args.responseMode || 'summary' }),
+        body: stripToolOnlyArgs(args, ['responseMode']),
+      };
+    },
   },
   {
-    name: 'update_task', description: 'Update a task by internal id or displayId. For implementation-ready card updates, run validate_task_quality first and keep targetFiles aligned with the Implementation map.',
+    name: 'update_task', description: 'Update a task by internal id or displayId. Server-side mutation validation is authoritative; keep targetFiles aligned with the Implementation map and use validate_task_quality only when preview diagnostics are useful.',
     inputSchema: { type: 'object', properties: { ...taskIdentifierProperty, ...taskMutationProperties, ...projectIdentifierProperties, ...booleanFlagSchema.properties, ...mutationControlProperties, ...mutationResponseModeProperty }, required: ['taskId'] },
     outputSchema: { type: 'object' },
     buildHttpRequest: ({ taskId, responseMode, ...body }) => ({ method: 'PUT', path: withQuery(`/api/tasks/${encodePathSegment(String(taskId))}`, { responseMode: responseMode || 'summary' }), body, headers: body.isAgentRequest ? { 'x-agent-request': 'true' } : undefined }),
   },
   {
-    name: 'batch_upsert_tasks', description: 'Create or update multiple tasks in one round trip.',
+    name: 'batch_upsert_tasks', description: 'Create or update multiple independent tasks in one round trip. For an atomic parent/children authoring set, prefer create_task with parent and children.',
     inputSchema: { type: 'object', properties: { tasks: { type: 'array', items: { type: 'object' } } }, required: ['tasks'] }, outputSchema: { type: 'object' },
     buildHttpRequest: (args) => ({ method: 'POST', path: '/api/tasks/batch', body: args.tasks ?? args }),
   },

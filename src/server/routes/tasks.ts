@@ -31,6 +31,7 @@ import {
 import { canRetryRun as canRetryRunUseCase, canCancelRun as canCancelRunUseCase, validateCompletion as validateCompletionUseCase } from '../useCases/agentRunUseCases';
 import type { AgentCompletionPayload, AgentCompletionStatus, BugStatus, TaskStatus } from '../../types';
 import { registerTaskBatchRoutes } from './taskBatchRoutes';
+import { registerTaskSetAuthoringRoute } from './taskSetAuthoringRoute';
 import { registerTaskImportFileRoute } from './taskImportFileRoute';
 import { registerTaskBugRoutes } from './taskBugRoutes';
 import { registerTaskReviewRoutes } from './taskReviewRoutes';
@@ -66,6 +67,7 @@ import {
 } from './taskRouteSupport';
 export { completeAgentRunForTask, continueTaskQueueForProject, triggerTaskAgent } from './taskRouteSupport';
 export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
+  registerTaskSetAuthoringRoute(app, deps);
   registerTaskReadRoutes(app, deps);  registerTaskBugRoutes(app, deps);  registerTaskReviewRoutes(app, deps);  registerLegacyTaskAgentRoutes(app, deps);
   app.post('/api/tasks/draft-from-jira', async (req, res, next) => {
     try {

@@ -1311,6 +1311,26 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   },
   ...gitToolDefinitions,
   {
+    name: 'get_figma_authoring_context',
+    description: 'Fetch compact implementation-ready Figma evidence for an exact bounded node set in one call, including file metadata, normalized specs, exact source refs, and summary markdown.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        fileKey: { type: 'string' },
+        nodeId: { type: 'string', description: 'Single exact node id.' },
+        nodeIds: { type: 'array', minItems: 1, maxItems: 8, items: { type: 'string' }, description: 'Exact node ids to include, max 8.' },
+      },
+      required: ['fileKey'],
+      anyOf: [{ required: ['nodeId'] }, { required: ['nodeIds'] }],
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: (args) => ({
+      method: 'POST',
+      path: '/api/figma/authoring-context',
+      body: { fileKey: args.fileKey, nodeIds: Array.isArray(args.nodeIds) ? args.nodeIds : [args.nodeId] },
+    }),
+  },
+  {
     name: 'get_figma_file',
     description: 'Fetch compact file metadata/context by fileKey.',
     inputSchema: {
@@ -1364,21 +1384,23 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'attach_figma_context_to_task',
-    description: 'Optionally add a Figma source reference and summarized visual/design requirement to an existing DevFlow task.',
+    description: 'Attach bounded Figma evidence and exact source references for one or more nodes to an existing DevFlow task. Single nodeId remains backward compatible.',
     inputSchema: {
       type: 'object',
       properties: {
         taskId: { type: 'string', description: 'Task internal id or displayId such as DVF-0120.' },
         fileKey: { type: 'string' },
-        nodeId: { type: 'string' },
+        nodeId: { type: 'string', description: 'Single exact node id.' },
+        nodeIds: { type: 'array', minItems: 1, maxItems: 8, items: { type: 'string' }, description: 'Exact node ids to attach, max 8.' },
       },
-      required: ['taskId', 'fileKey', 'nodeId'],
+      required: ['taskId', 'fileKey'],
+      anyOf: [{ required: ['nodeId'] }, { required: ['nodeIds'] }],
     },
     outputSchema: { type: 'object' },
     buildHttpRequest: (args) => ({
       method: 'POST',
       path: `/api/tasks/${encodePathSegment(String(args.taskId))}/figma-context`,
-      body: { fileKey: args.fileKey, nodeId: args.nodeId },
+      body: { fileKey: args.fileKey, ...(Array.isArray(args.nodeIds) ? { nodeIds: args.nodeIds } : { nodeId: args.nodeId }) },
     }),
   },
   {

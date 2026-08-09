@@ -2,10 +2,16 @@ import { getSettings } from '../repositories/settingsRepository.js';
 import express from 'express';
 import type { ApiRouteDeps } from '../types';
 import { FigmaService } from '../services/figmaService';
+import { applyFigmaAuthoringContextToTask, buildFigmaAuthoringContext, MAX_FIGMA_AUTHORING_NODES } from '../services/figmaAuthoringContextService';
 import { saveTask, getTasks } from '../repositories/taskRepository.js';
 
 function parseNodeIds(value: string) {
   return value.split(',').map((entry) => entry.trim()).filter(Boolean);
+}
+
+function requestedNodeIds(body: any): string[] {
+  const values: unknown[] = Array.isArray(body?.nodeIds) ? body.nodeIds : body?.nodeId ? [body.nodeId] : [];
+  return [...new Set(values.map((entry) => String(entry || '').trim()).filter(Boolean))];
 }
 
 export function registerFigmaRoutes(app: express.Express, deps: ApiRouteDeps) {
@@ -51,14 +57,33 @@ export function registerFigmaRoutes(app: express.Express, deps: ApiRouteDeps) {
     }
   });
 
+  app.post('/api/figma/authoring-context', async (req, res) => {
+    try {
+      const service = getService(req, res);
+      if (!service) return;
+      const fileKey = String(req.body?.fileKey || '').trim();
+      const nodeIds = requestedNodeIds(req.body);
+      if (!fileKey || nodeIds.length === 0) return res.status(400).json({ error: 'fileKey and at least one nodeId are required' });
+      if (nodeIds.length > MAX_FIGMA_AUTHORING_NODES) return res.status(400).json({ error: `At most ${MAX_FIGMA_AUTHORING_NODES} nodeIds are supported` });
+      const context = await buildFigmaAuthoringContext(service, fileKey, nodeIds);
+      return res.json(context);
+    } catch (e: any) {
+      return res.status(500).json({ error: e.message });
+    }
+  });
+
   app.post('/api/tasks/:taskId/figma-context', async (req, res) => {
     try {
       const service = getService(req, res);
       if (!service) return;
 
-      const { fileKey, nodeId } = req.body;
-      if (!fileKey || !nodeId) {
-        return res.status(400).json({ error: 'fileKey and nodeId are required' });
+      const fileKey = String(req.body?.fileKey || '').trim();
+      const nodeIds = requestedNodeIds(req.body);
+      if (!fileKey || nodeIds.length === 0) {
+        return res.status(400).json({ error: 'fileKey and at least one nodeId are required' });
+      }
+      if (nodeIds.length > MAX_FIGMA_AUTHORING_NODES) {
+        return res.status(400).json({ error: `At most ${MAX_FIGMA_AUTHORING_NODES} nodeIds are supported` });
       }
 
       const task = getTasks().find((t) => t.id === req.params.taskId || t.displayId === req.params.taskId);
@@ -66,31 +91,10 @@ export function registerFigmaRoutes(app: express.Express, deps: ApiRouteDeps) {
         return res.status(404).json({ error: 'Task not found' });
       }
 
-      const spec = await service.getFigmaDesignSpec(fileKey, nodeId);
-      const figmaUrl = `https://www.figma.com/file/${fileKey}?node-id=${nodeId}`;
-
-      task.sourceUrl = figmaUrl;
-
-      const summaryLines = [
-        '',
-        '',
-        '## Figma Design Context',
-        `Source: [Figma Node ${nodeId}](${figmaUrl})`,
-        `Name: ${spec?.name ?? 'Unknown'}`,
-        `Type: ${spec?.type ?? 'Unknown'}`,
-        spec?.bounds ? `Size: ${spec.bounds.width ?? 'unknown'} x ${spec.bounds.height ?? 'unknown'}` : '',
-        spec?.text ? `Text: ${String(spec.text).slice(0, 240)}` : '',
-      ].filter(Boolean);
-      const contextSection = `${summaryLines.join('\n')}\n`;
-      
-      if (!task.description) {
-        task.description = contextSection;
-      } else if (!task.description.includes(figmaUrl)) {
-        task.description += contextSection;
-      }
-
+      const context = await buildFigmaAuthoringContext(service, fileKey, nodeIds);
+      applyFigmaAuthoringContextToTask(task, context);
       saveTask(task);
-      res.json({ success: true, task });
+      res.json({ success: true, task, figma: context });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }

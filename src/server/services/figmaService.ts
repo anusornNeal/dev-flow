@@ -62,12 +62,19 @@ export class FigmaService {
   }
 
   async getFigmaDesignSpec(fileKey: string, nodeId: string) {
-    const data = await this.getFigmaNode(fileKey, [nodeId]);
-    const nodeData = data.nodes[nodeId]?.document;
-    if (!nodeData) {
-      throw new Error(`Node ${nodeId} not found in file ${fileKey}`);
-    }
-    return this.normalizeNode(nodeData);
+    const [spec] = await this.getFigmaDesignSpecs(fileKey, [nodeId]);
+    return spec;
+  }
+
+  async getFigmaDesignSpecs(fileKey: string, nodeIds: string[]) {
+    const ids = [...new Set(nodeIds.map((nodeId) => String(nodeId || '').trim()).filter(Boolean))];
+    if (ids.length === 0) return [];
+    const data = await this.getFigmaNode(fileKey, ids);
+    return ids.map((nodeId) => {
+      const nodeData = data.nodes?.[nodeId]?.document;
+      if (!nodeData) throw new Error(`Node ${nodeId} not found in file ${fileKey}`);
+      return this.normalizeNode(nodeData);
+    });
   }
 
   private normalizeNode(node: any): any {

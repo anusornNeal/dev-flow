@@ -52,7 +52,7 @@ export function Header({
   }, []);
 
   return (
-    <header className="p-4 md:px-6 md:py-4 bg-white/80 dark:bg-[#292119]/80 backdrop-blur-md border-b border-[#e5d4bb]/50 dark:border-[#584a3b]/50 flex flex-col md:flex-row gap-4 justify-between items-start md:items-center sticky top-0 z-10">
+    <header className="p-4 md:px-6 md:py-4 bg-white/80 dark:bg-[#292119]/80 backdrop-blur-md border-b border-[#e5d4bb]/50 dark:border-[#584a3b]/50 flex flex-col md:flex-row gap-4 justify-between items-start md:items-center sticky top-0 z-[50]">
       <div className="flex min-w-0 flex-col gap-3 xl:flex-row xl:items-center">
         <div className="shrink-0">
           <h1 className="text-[#3c2a1a] dark:text-[#f3eadf] font-extrabold font-sans text-lg tracking-tight flex items-center gap-2">

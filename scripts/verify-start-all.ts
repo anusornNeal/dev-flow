@@ -10,8 +10,10 @@ const {
   buildNgrokArgs,
   buildNpmInvocation,
   buildStartAllPlan,
+  computeManagedProcessRestartDelayMs,
   resolveStartAllOptions,
   shouldRestartServerProcess,
+  shouldRestartManagedProcess,
 } = await import('./start-all');
 
 assert.deepEqual(buildNgrokArgs({ port: 3000, domain: 'example.ngrok-free.dev' }), [
@@ -35,6 +37,9 @@ assert.deepEqual(resolveStartAllOptions({
   ngrokDomain: 'team-devflow.ngrok-free.dev',
   openBrowser: true,
   openBrowserDelayMs: 250,
+  ngrokRestartBaseMs: 1000,
+  ngrokRestartMaxMs: 30000,
+  ngrokStableResetMs: 60000,
 });
 
 const options = {
@@ -42,6 +47,9 @@ const options = {
   ngrokDomain: 'team-devflow.ngrok-free.dev',
   openBrowser: true,
   openBrowserDelayMs: 250,
+  ngrokRestartBaseMs: 1000,
+  ngrokRestartMaxMs: 30000,
+  ngrokStableResetMs: 60000,
 };
 const plan = buildStartAllPlan(options, 'all-token', 'all');
 
@@ -103,5 +111,26 @@ assert.equal(shouldRestartServerProcess({
   shuttingDown: true,
   restartState: acceptedRestart,
 }), false);
+
+assert.equal(shouldRestartManagedProcess({ label: 'ngrok', mode: 'all', shuttingDown: false }), true);
+assert.equal(shouldRestartManagedProcess({ label: 'ngrok', mode: 'all', shuttingDown: true }), false);
+assert.equal(shouldRestartManagedProcess({ label: 'ngrok', mode: 'server-only', shuttingDown: false }), false);
+assert.equal(shouldRestartManagedProcess({ label: 'server', mode: 'all', shuttingDown: false }), false);
+
+assert.equal(computeManagedProcessRestartDelayMs(1, { baseMs: 1000, maxMs: 30000 }), 1000);
+assert.equal(computeManagedProcessRestartDelayMs(2, { baseMs: 1000, maxMs: 30000 }), 2000);
+assert.equal(computeManagedProcessRestartDelayMs(4, { baseMs: 1000, maxMs: 30000 }), 8000);
+assert.equal(computeManagedProcessRestartDelayMs(20, { baseMs: 1000, maxMs: 30000 }), 30000);
+
+const boundedOptions = resolveStartAllOptions({
+  DEVFLOW_NGROK_RESTART_BASE_MS: '5000',
+  DEVFLOW_NGROK_RESTART_MAX_MS: '1000',
+  DEVFLOW_NGROK_STABLE_RESET_MS: '90000',
+  DEVFLOW_OPEN_BROWSER: 'false',
+});
+assert.equal(boundedOptions.ngrokRestartBaseMs, 5000);
+assert.equal(boundedOptions.ngrokRestartMaxMs, 5000);
+assert.equal(boundedOptions.ngrokStableResetMs, 90000);
+assert.equal(boundedOptions.openBrowser, false);
 
 console.log('[verify-start-all] all assertions passed');

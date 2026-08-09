@@ -1,0 +1,50 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-monitor-supervisor-'));
+process.env.DEVFLOW_APP_ROOT = tempRoot;
+process.env.DEVFLOW_DB_PATH = path.join(tempRoot, 'devflow.db');
+
+const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
+executeAllMigrations();
+const { default: db } = await import('../../src/db/index.js');
+const { getDevFlowDiagnostics } = await import('../../src/server/services/mcpToolMonitor.js');
+
+test('diagnostics distinguish API health from ngrok tunnel recovery state', () => {
+  const diagnostics = getDevFlowDiagnostics({
+    supervisorState: {
+      version: 1,
+      supervisor: 'start-all',
+      mode: 'all',
+      shuttingDown: false,
+      startedAt: '2026-08-09T03:00:00.000Z',
+      updatedAt: '2026-08-09T03:00:05.000Z',
+      processes: {
+        server: { label: 'server', status: 'running', pid: 100, restartAttempt: 0 },
+        ngrok: {
+          label: 'ngrok',
+          status: 'restarting',
+          restartAttempt: 2,
+          nextRetryAt: '2026-08-09T03:00:09.000Z',
+          lastExitCode: 1,
+        },
+      },
+    },
+  } as any);
+
+  assert.equal(diagnostics.runtimeSupervisor?.summary, 'api-healthy-tunnel-restarting');
+  assert.equal(diagnostics.runtimeSupervisor?.api.status, 'healthy');
+  assert.equal(diagnostics.runtimeSupervisor?.tunnel.status, 'restarting');
+  assert.equal(diagnostics.runtimeSupervisor?.tunnel.restartAttempt, 2);
+  assert.equal(diagnostics.runtimeSupervisor?.tunnel.lastExitCode, 1);
+});
+
+test.after(() => {
+  delete process.env.DEVFLOW_APP_ROOT;
+  delete process.env.DEVFLOW_DB_PATH;
+  db.close();
+  fs.rmSync(tempRoot, { recursive: true, force: true });
+});

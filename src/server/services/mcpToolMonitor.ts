@@ -1,4 +1,9 @@
 import db from '../../db/index';
+import {
+  buildDevFlowSupervisorDiagnostics,
+  readDevFlowSupervisorState,
+  type DevFlowSupervisorState,
+} from '../../lib/devFlowSupervisor';
 import { getJobMetrics } from './mcpToolJobService';
 import { getLocalSearchRuntimeStatus } from './localFileService';
 import { getSessionWorkspaceMetrics } from './sessionWorkspaceService';
@@ -269,8 +274,12 @@ export function buildIsolationDiagnostics(jobMetrics: any, workspaceMetrics: any
   };
 }
 
-export function getDevFlowDiagnostics(options?: { now?: number; windowMs?: number }) {
+export function getDevFlowDiagnostics(options?: { now?: number; windowMs?: number; supervisorState?: DevFlowSupervisorState | null }) {
   const now = options?.now ?? Date.now();
+  const supervisorState = options && Object.prototype.hasOwnProperty.call(options, 'supervisorState')
+    ? options.supervisorState ?? null
+    : readDevFlowSupervisorState();
+  const runtimeSupervisor = buildDevFlowSupervisorDiagnostics(supervisorState);
   const toolSummary = getToolCallSummary({ now, windowMs: options?.windowMs });
   const jobMetrics = getJobMetrics();
   const isolation = buildIsolationDiagnostics(jobMetrics, getSessionWorkspaceMetrics(), getWorkspaceIntegrationMetrics());
@@ -295,6 +304,7 @@ export function getDevFlowDiagnostics(options?: { now?: number; windowMs?: numbe
   return {
     generatedAt: new Date(now).toISOString(),
     search: getLocalSearchRuntimeStatus(),
+    runtimeSupervisor,
     isolation,
     mcp: {
       queueDepth: (jobMetrics as any).queueDepth,

@@ -116,6 +116,7 @@ test('applyLocalPatch dry-run and apply recover wrong hunk counts with recount',
     patch,
   });
   assert.equal(applied.applied, true);
+  assert.ok('changedFiles' in applied);
   assert.deepEqual(applied.changedFiles, ['note.txt']);
   assert.equal(readText(fixture.root, 'note.txt'), 'line1\nupdated\nline3\n');
 });
@@ -192,6 +193,7 @@ test('multi-file native unified diff still validates and applies', () => {
     patch,
   });
 
+  assert.ok('changedFiles' in result);
   assert.deepEqual(result.changedFiles, ['a.txt', 'b.txt']);
   assert.equal(readText(fixture.root, 'a.txt'), 'ALPHA\n');
   assert.equal(readText(fixture.root, 'b.txt'), 'BETA\n');

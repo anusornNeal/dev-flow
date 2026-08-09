@@ -89,9 +89,10 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
 
   const git = gitProbe.ok === true ? {
     ok: true,
-    clean: Array.isArray(gitProbe.value.files) && gitProbe.value.files.length === 0,
+    clean: Array.isArray(gitProbe.value.files) && gitProbe.value.files.length === 0 && !gitProbe.value.operation?.blocked,
     changedFileCount: Array.isArray(gitProbe.value.files) ? gitProbe.value.files.length : 0,
     changedFiles: Array.isArray(gitProbe.value.files) ? gitProbe.value.files : [],
+    operation: gitProbe.value.operation || { blocked: false, code: null, kind: null, marker: null, unmergedPathCount: 0, unmergedPaths: [] },
   } : {
     ok: false,
     clean: false,
@@ -99,7 +100,8 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
   };
 
   if (!git.ok) recommendations.push('Git status is unavailable; check projectId/localPath and whether the project is a git repository.');
-  if (git.ok && !git.clean) recommendations.push('Working tree has local changes; review or commit them before starting unrelated work.');
+  if (git.ok && git.operation?.blocked) recommendations.push(`Git ${git.operation.kind || 'operation'} state is unresolved (${git.operation.unmergedPathCount || 0} unmerged paths); do not start unrelated write/integration work until the operation is resolved or aborted.`);
+  if (git.ok && !git.clean && !git.operation?.blocked) recommendations.push('Working tree has local changes; review or commit them before starting unrelated work.');
 
   const queueDepth = Number(diagnostics?.mcp?.queueDepth || 0);
   const isolation = diagnostics?.isolation || {
@@ -146,20 +148,29 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
     commit_git_changes: catalog.tools.some((tool: any) => tool.name === 'commit_git_changes'),
     devflow_health_check: catalog.tools.some((tool: any) => tool.name === 'devflow_health_check'),
   };
-  const hasErrors = !git.ok || catalog.tools.length === 0;
+  const hasErrors = !git.ok || Boolean(git.ok && git.operation?.blocked) || catalog.tools.length === 0;
   const hasWarnings = recommendations.some((recommendation) => !recommendation.startsWith('No verified recovery snapshot exists yet;'));
   const status = hasErrors ? 'error' : hasWarnings ? 'warning' : 'ok';
   const healthEventProjectId = typeof args.projectId === 'string' ? args.projectId : undefined;
   const healthEventKey = healthEventProjectId || 'global';
   const healthEventSignature = status === 'ok'
     ? ''
-    : [status, failedJobs, staleAgentRuns, Number(durableJobs.staleRunning || 0), sloPerformance.regressions.length].join(':');
+    : [
+        status,
+        failedJobs,
+        staleAgentRuns,
+        Number(durableJobs.staleRunning || 0),
+        sloPerformance.regressions.length,
+        git.ok ? git.operation?.code || '' : 'git-unavailable',
+        git.ok ? git.operation?.kind || '' : '',
+        git.ok ? git.operation?.unmergedPathCount || 0 : 0,
+      ].join(':');
   const priorHealthEventSignature = lastHealthEventSignatures.get(healthEventKey) || '';
   if (healthEventSignature && healthEventSignature !== priorHealthEventSignature) {
     publishServerEvent('health.regression', {
       projectId: healthEventProjectId,
       status,
-      reason: `failedJobs=${failedJobs};staleAgents=${staleAgentRuns};staleJobs=${Number(durableJobs.staleRunning || 0)};slo=${sloPerformance.regressions.length}`,
+      reason: `failedJobs=${failedJobs};staleAgents=${staleAgentRuns};staleJobs=${Number(durableJobs.staleRunning || 0)};slo=${sloPerformance.regressions.length};gitBlocker=${git.ok ? git.operation?.code || 'none' : 'unavailable'};gitKind=${git.ok ? git.operation?.kind || 'none' : 'unknown'};unmerged=${git.ok ? git.operation?.unmergedPathCount || 0 : 0}`,
     });
   }
   if (healthEventSignature) lastHealthEventSignatures.set(healthEventKey, healthEventSignature);

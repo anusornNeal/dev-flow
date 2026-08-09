@@ -10,6 +10,7 @@ import { getJobMetrics } from './mcpToolJobService';
 import { getLocalSearchRuntimeStatus } from './localFileService';
 import { getSessionWorkspaceMetrics } from './sessionWorkspaceService';
 import { getWorkspaceIntegrationMetrics } from './workspaceIntegrationService';
+import { getMcpTransportSummary } from './mcpTransportMonitor';
 import { DEVFLOW_CONTRACT_VERSION, getCapabilityCatalog } from '../contracts/devflowContract';
 import {
   classifyRuntimeIdentity,
@@ -556,6 +557,7 @@ export function getDevFlowDiagnostics(options?: {
   const runtimeDiagnosis = classifyRuntimeIdentity(runtime, options?.clientState);
   const telemetryPersistence = flushPerformanceTelemetry({ now });
   const toolSummary = getToolCallSummary({ now, windowMs: options?.windowMs });
+  const mcpTransport = getMcpTransportSummary({ now, windowMs: options?.windowMs });
   const performanceHistory = getPerformanceHistoryComparison({ now, windowMs: options?.windowMs });
   const jobMetrics = getJobMetrics();
   const isolation = buildIsolationDiagnostics(jobMetrics, getSessionWorkspaceMetrics(), getWorkspaceIntegrationMetrics());
@@ -601,6 +603,7 @@ export function getDevFlowDiagnostics(options?: {
       recentFailures,
     },
     tools: toolSummary,
+    mcpTransport,
     telemetryPersistence,
     performanceHistory,
     recommendations,

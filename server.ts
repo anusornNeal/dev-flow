@@ -17,6 +17,7 @@ import { bootstrap, writeAgentLog } from './src/server/bootstrap';
 import { getDevFlowAppRoot, resolveFromDevFlowAppRoot, getDevFlowUploadsDir } from './src/lib/devFlowPaths';
 import { markDevFlowRestartHealthy } from './src/lib/devFlowRestart';
 import { recordToolCall } from './src/server/services/mcpToolMonitor';
+import { classifyMcpTransportOperation, createMcpTransportRequestTracker } from './src/server/services/mcpTransportMonitor';
 
 async function startServer() {
   const { state } = bootstrap();
@@ -56,8 +57,26 @@ async function startServer() {
     next();
   });
 
+  app.use('/mcp', (req, res, next) => {
+    res.locals.mcpTransportStartedAt = Date.now();
+    next();
+  });
   app.use('/mcp', express.json({ limit: '1mb' }));
-  app.post('/mcp', createStatelessMcpHttpHandler(apiBaseUrl));
+  app.post('/mcp', async (req, res, next) => {
+    const startedAt = Number(res.locals.mcpTransportStartedAt || Date.now());
+    const tracker = createMcpTransportRequestTracker({
+      operation: classifyMcpTransportOperation(req.body),
+      startedAt,
+      parseMs: Math.max(0, Date.now() - startedAt),
+    });
+    let responseFinishedAt: number | undefined;
+    res.once('finish', () => { responseFinishedAt = Date.now(); });
+    try {
+      await createStatelessMcpHttpHandler(apiBaseUrl, undefined, tracker.hooks)(req, res, next);
+    } finally {
+      tracker.complete({ statusCode: res.statusCode, responseFinishedAt });
+    }
+  });
 
   app.get('/sse', async (_req, res) => {
     const mcpServer = createDevFlowMcpServer(apiBaseUrl);

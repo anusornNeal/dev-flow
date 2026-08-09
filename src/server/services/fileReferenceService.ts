@@ -4,6 +4,7 @@ import crypto, { randomUUID } from 'node:crypto';
 import type { AppState } from '../types';
 import { createApiError } from './api';
 import { findProjectByIdentifier } from './taskService';
+import { createOrReuseSessionWorkspace, resolveSessionWorkspace } from './sessionWorkspaceService';
 
 const DEFAULT_REF_TTL_MS = 10 * 60_000;
 const MIN_REF_TTL_MS = 1_000;
@@ -147,6 +148,29 @@ function projectFor(state: AppState, args: Record<string, any>) {
 
 function resolveRequestedIdentity(state: AppState, args: Record<string, any>, fallbackRoot?: string) {
   const project = projectFor(state, args);
+  if (project) {
+    const workspaceId = typeof args.workspaceId === 'string' ? args.workspaceId.trim() : '';
+    if (workspaceId) {
+      const workspace = resolveSessionWorkspace(workspaceId);
+      if (!workspace || workspace.projectId !== project.id) {
+        throw createApiError(404, 'WORKSPACE_NOT_FOUND', `Workspace '${workspaceId}' was not found for project '${project.id}'.`, { affectedId: workspaceId });
+      }
+      return {
+        canonicalRoot: realPath(workspace.root),
+        projectIdentity: `workspace:${workspace.workspaceId}`,
+      };
+    }
+
+    const sessionId = typeof args.sessionId === 'string' ? args.sessionId.trim() : '';
+    if (sessionId) {
+      const workspace = createOrReuseSessionWorkspace(project, sessionId);
+      return {
+        canonicalRoot: realPath(workspace.root),
+        projectIdentity: `workspace:${workspace.workspaceId}`,
+      };
+    }
+  }
+
   const rawRoot = project?.localPath || (typeof args.localPath === 'string' ? args.localPath.trim() : '') || fallbackRoot || '';
   if (!rawRoot || !fs.existsSync(rawRoot)) {
     const requested = args.projectId || args.projectName || args.repo || args.repoUrl || args.localPath || 'project';

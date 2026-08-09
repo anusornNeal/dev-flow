@@ -1,11 +1,12 @@
 import { createHash, randomUUID } from 'crypto';
 import type { AppState } from '../types';
-import { createJob, updateJobStatus, appendJobLog, writeJobResult, getJob, readJobLog, readJobResult, listInterruptedJobs, listRecentJobs, startBackgroundJobCleanup } from '../repositories/mcpToolJobRepository';
+import { createJob, updateJobStatus, appendJobLog, writeJobResult, getJob, readJobLog, readJobResult, listRecentJobs, startBackgroundJobCleanup, claimJob, heartbeatJob, requestJobCancellation, transitionJobStatus, listRecoverableJobs, setJobRecoveryClassification, requeueJobForRecovery, getDurableJobMetrics, type McpToolJob } from '../repositories/mcpToolJobRepository';
 import { createApiError, normalizeUnknownError } from './api';
 import { resolveProjectResourceIdentity, resolveProjectRoot } from './localFileService';
 import { isDevFlowRestartPending, readDevFlowRestartState } from '../../lib/devFlowRestart';
 import { getRepoRevisionForRoot } from './repoRevisionService';
 import { getProjectCommandExecutionIdentity } from './projectCommandService';
+import { getToolDefinitionByName } from '../contracts/devflowContract';
 import {
   buildQueueEntryDiagnostics,
   decrementScheduledResource,
@@ -22,7 +23,7 @@ import {
   type ResourceAccessMode,
   type SchedulerQueueEntry,
 } from './mcpToolJobScheduler';
-import { runBuiltinToolJob } from './mcpToolJobRunnerRegistry';
+import { getBuiltinToolJobRecoveryPolicy, runBuiltinToolJob } from './mcpToolJobRunnerRegistry';
 
 type Logger = { stdout: (data: string) => void; stderr: (data: string) => void };
 type AsyncRunner = (
@@ -69,6 +70,9 @@ const followerToLeader = new Map<string, string>();
 let singleFlightHits = 0;
 const MAX_RECENT_QUEUE_WAITS = 200;
 const recentQueueWaitTelemetry: FinalizedQueueWaitTelemetry[] = [];
+const JOB_LEASE_MS = 30_000;
+const JOB_HEARTBEAT_MS = 10_000;
+const JOB_WORKER_ID = `devflow-${process.pid}-${randomUUID().slice(0, 8)}`;
 
 function resourceScopeFor(resourceKey: string): FinalizedQueueWaitTelemetry['resourceScope'] {
   if (resourceKey.startsWith('workspace:')) return 'workspace';
@@ -315,6 +319,33 @@ function buildJobSummary(job: ReturnType<typeof getJob>) {
   };
 }
 
+function getRecoveryJobKind(toolName: string): JobKind {
+  const definition = getToolDefinitionByName(toolName);
+  return (definition?.executionPolicy?.jobKind || 'repo-command') as JobKind;
+}
+
+function enqueueRecoveredJob(state: AppState, job: McpToolJob) {
+  if (queue.some((entry) => entry.jobId === job.jobId) || activeJobs.has(job.jobId)) return false;
+  const kind = getRecoveryJobKind(job.toolName);
+  const schedulerProfile = getSchedulerProfile(state, job.toolName, job.args, kind);
+  const parsedUpdatedAt = Date.parse(job.updatedAt);
+  const enqueuedAt = Number.isFinite(parsedUpdatedAt) ? parsedUpdatedAt : Date.now();
+  queue.push({
+    jobId: job.jobId,
+    resourceKey: job.resourceKey,
+    kind,
+    state,
+    toolName: job.toolName,
+    args: job.args,
+    accessMode: schedulerProfile.accessMode,
+    costClass: schedulerProfile.costClass,
+    enqueuedAt,
+    schedulerPriority: getSchedulerPriority(job.toolName, job.args, schedulerProfile.accessMode),
+    waitTelemetry: { lastObservedAt: Date.now(), workspaceLockWaitMs: 0, capacityWaitMs: 0, blockerReasons: {} },
+  });
+  return true;
+}
+
 export function getQueueMetrics() {
   const activeJobsList = Array.from(activeJobs.values()).map(({ entry }) => ({
     jobId: entry.jobId,
@@ -325,6 +356,7 @@ export function getQueueMetrics() {
     costClass: entry.costClass,
   }));
   const recentJobs = listRecentJobs(50);
+  const durable = getDurableJobMetrics();
   const terminalJobs = recentJobs.filter(job => ['succeeded', 'failed', 'timed_out', 'cancelled'].includes(job.status));
   const failedJobs = terminalJobs.filter(job => job.status === 'failed' || job.status === 'timed_out');
   const waitSamples = recentJobs.map(job => job.waitMs).filter((value): value is number => typeof value === 'number');
@@ -345,6 +377,7 @@ export function getQueueMetrics() {
       averageRunMs: average(runSamples),
       singleFlightHits,
       waitTelemetry: summarizeQueueWaitTelemetry(),
+      durable,
       failures: failedJobs.slice(0, 10).map(job => ({
         jobId: job.jobId,
         toolName: job.toolName,
@@ -356,12 +389,43 @@ export function getQueueMetrics() {
   };
 }
 
-export function initMcpToolJobs() {
-  const interrupted = listInterruptedJobs();
-  if (interrupted.length > 0) {
-    console.log(`[mcp-tool-job] Marked ${interrupted.length} stale jobs as failed on startup.`);
+export function initMcpToolJobs(state?: AppState) {
+  const summary = { resumable: 0, retryable: 0, interrupted: 0 };
+  let queuedRecoveredWork = false;
+
+  for (const job of listRecoverableJobs()) {
+    if (job.status === 'queued') {
+      const classified = setJobRecoveryClassification(job.jobId, 'resumable');
+      if (!classified) continue;
+      summary.resumable += 1;
+      if (state) queuedRecoveredWork = enqueueRecoveredJob(state, classified) || queuedRecoveredWork;
+      continue;
+    }
+
+    if (getBuiltinToolJobRecoveryPolicy(job.toolName) === 'retryable') {
+      const requeued = requeueJobForRecovery(job.jobId);
+      if (!requeued) continue;
+      appendJobLog(job.jobId, 'stderr', '\n[Job Recovery] Previous worker lease expired; retrying safe job after restart.\n');
+      summary.retryable += 1;
+      if (state) queuedRecoveredWork = enqueueRecoveredJob(state, requeued) || queuedRecoveredWork;
+      continue;
+    }
+
+    const interrupted = transitionJobStatus(job.jobId, ['running'], {
+      status: 'failed',
+      failureSummary: 'Server restarted before this job completed; automatic retry is unsafe.',
+      recoveryClassification: 'interrupted',
+    });
+    if (interrupted) {
+      appendJobLog(job.jobId, 'stderr', '\n[Job Interrupted] Server restarted; this job is not safe to retry automatically.\n');
+      summary.interrupted += 1;
+    }
   }
+
+  if (queuedRecoveredWork) setImmediate(processQueue);
+  if (summary.interrupted > 0) console.log(`[mcp-tool-job] Marked ${summary.interrupted} stale unsafe jobs as interrupted on startup.`);
   startBackgroundJobCleanup();
+  return summary;
 }
 
 export function getToolJobStatus(jobId: string) {
@@ -389,11 +453,14 @@ export function getToolJobStatus(jobId: string) {
 
 export function cancelToolJob(jobId: string) {
   const leaderJobId = followerToLeader.get(jobId);
+  const reason = leaderJobId ? 'Cancelled single-flight follower.' : activeJobs.has(jobId) ? 'Cancellation requested.' : 'Cancelled before start.';
+  const persisted = requestJobCancellation(jobId, reason);
+  if (!persisted) return false;
+
   if (leaderJobId) {
     followerToLeader.delete(jobId);
     singleFlightFollowers.get(leaderJobId)?.delete(jobId);
     appendJobLog(jobId, 'stderr', '\n[Job Cancelled] Cancelled single-flight follower without cancelling shared execution.\n');
-    updateJobStatus(jobId, { status: 'cancelled', failureSummary: 'Cancelled single-flight follower.' });
     notifyJobWaiters(jobId);
     return true;
   }
@@ -403,24 +470,21 @@ export function cancelToolJob(jobId: string) {
     const [cancelledEntry] = queue.splice(qIdx, 1);
     finalizeQueueWaitTelemetry(cancelledEntry);
     appendJobLog(jobId, 'stderr', '\n[Job Cancelled] Cancelled before start.\n');
-    updateJobStatus(jobId, { status: 'cancelled', failureSummary: 'Cancelled before start.' });
     finalizeSingleFlight(cancelledEntry);
     notifyJobWaiters(jobId);
     return true;
   }
-  
+
   const active = activeJobs.get(jobId);
   if (active) {
-    if (active.cancelFn) {
-      active.cancelFn();
-    }
+    active.cancelFn?.();
     appendJobLog(jobId, 'stderr', '\n[Job Cancelled] Cancellation requested.\n');
-    updateJobStatus(jobId, { status: 'cancelled', failureSummary: 'Cancellation requested.' });
     notifyJobWaiters(jobId);
     return true;
   }
-  
-  return false;
+
+  notifyJobWaiters(jobId);
+  return true;
 }
 
 export function enqueueToolJob(state: AppState, toolName: string, args: any, kind: JobKind) {
@@ -539,9 +603,20 @@ function transitionJobAccess(jobId: string, nextAccessMode: ResourceAccessMode) 
 }
 
 async function startJob(entry: QueueEntry) {
+  const claimed = claimJob(entry.jobId, JOB_WORKER_ID, JOB_LEASE_MS);
+  if (!claimed) {
+    finalizeSingleFlight(entry);
+    setImmediate(processQueue);
+    return;
+  }
+
   incrementScheduledResource(entry);
   activeJobs.set(entry.jobId, { entry });
-  updateJobStatus(entry.jobId, { status: 'running' });
+  const heartbeat = setInterval(() => {
+    const renewed = heartbeatJob(entry.jobId, JOB_WORKER_ID, JOB_LEASE_MS);
+    if (!renewed) activeJobs.get(entry.jobId)?.cancelFn?.();
+  }, JOB_HEARTBEAT_MS);
+  heartbeat.unref();
 
   const logger = {
     stdout: (data: string) => appendJobLog(entry.jobId, 'stdout', data),
@@ -551,7 +626,7 @@ async function startJob(entry: QueueEntry) {
   try {
     let result: any;
     const testRunner = testRunners.get(entry.toolName);
-    
+
     if (testRunner) {
       result = await testRunner(
         entry.state,
@@ -571,17 +646,16 @@ async function startJob(entry: QueueEntry) {
       );
     }
 
-    // Check if cancelled during execution
     const currentStatus = getJob(entry.jobId)?.status;
     if (currentStatus === 'cancelled' || currentStatus === 'timed_out') {
-      // Don't overwrite cancelled/timed_out status
+      // Persisted cancellation/timeout wins over a late worker result.
     } else if (isTimedOutResult(result)) {
       writeJobResult(entry.jobId, result);
-      updateJobStatus(entry.jobId, { status: 'timed_out', failureSummary: 'Job timed out.' });
+      transitionJobStatus(entry.jobId, ['running'], { status: 'timed_out', failureSummary: 'Job timed out.' }, { workerId: JOB_WORKER_ID });
       logger.stderr(`\n[Job Timed Out]\n`);
     } else {
       writeJobResult(entry.jobId, result);
-      updateJobStatus(entry.jobId, { status: 'succeeded' });
+      transitionJobStatus(entry.jobId, ['running'], { status: 'succeeded' }, { workerId: JOB_WORKER_ID });
     }
   } catch (error: any) {
     const currentStatus = getJob(entry.jobId)?.status;
@@ -603,7 +677,7 @@ async function startJob(entry: QueueEntry) {
         message: normalizedError.message || failureSummary,
         error: normalizedError,
       });
-      updateJobStatus(entry.jobId, { status: 'timed_out', failureSummary });
+      transitionJobStatus(entry.jobId, ['running'], { status: 'timed_out', failureSummary }, { workerId: JOB_WORKER_ID });
       logger.stderr(`\n[Job Timed Out]`);
     } else {
       writeJobResult(entry.jobId, {
@@ -613,15 +687,14 @@ async function startJob(entry: QueueEntry) {
         message: normalizedError.message || failureSummary,
         error: normalizedError,
       });
-      updateJobStatus(entry.jobId, { status: 'failed', failureSummary });
+      transitionJobStatus(entry.jobId, ['running'], { status: 'failed', failureSummary }, { workerId: JOB_WORKER_ID });
       logger.stderr(`\n[Job Failed] ${error.message}\n${error.stack || ''}`);
     }
   } finally {
+    clearInterval(heartbeat);
     decrementScheduledResource(entry);
     activeJobs.delete(entry.jobId);
     finalizeSingleFlight(entry);
-    
-    // Process queue to see if anything else can start
     setImmediate(processQueue);
   }
 }
@@ -629,7 +702,7 @@ async function startJob(entry: QueueEntry) {
 export function getJobMetrics() {
   const queueMetrics = getQueueMetrics();
   return {
-    queueDepth: queue.length,
+    queueDepth: queueMetrics.metrics.durable.queued,
     activeJobs: Array.from(activeJobs.entries()).map(([jobId, data]) => ({
       jobId,
       toolName: data.entry.toolName,

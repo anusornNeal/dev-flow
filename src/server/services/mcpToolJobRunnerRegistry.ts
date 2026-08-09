@@ -26,6 +26,8 @@ export interface BuiltinToolJobContext {
   transitionAccess: (accessMode: ResourceAccessMode) => void;
 }
 
+export type BuiltinToolJobRecoveryPolicy = 'retryable' | 'interrupted';
+
 const BUILTIN_TOOL_RUNNER_NAMES = [
   'run_project_command',
   'apply_patch',
@@ -44,8 +46,16 @@ const BUILTIN_TOOL_RUNNER_NAMES = [
   'apply_project_atlas_agent_update',
 ] as const;
 
+const RETRYABLE_AFTER_RESTART = new Set<string>([
+  'search_local_files',
+]);
+
 export function getBuiltinToolRunnerNames() {
   return [...BUILTIN_TOOL_RUNNER_NAMES];
+}
+
+export function getBuiltinToolJobRecoveryPolicy(toolName: string): BuiltinToolJobRecoveryPolicy {
+  return RETRYABLE_AFTER_RESTART.has(toolName) ? 'retryable' : 'interrupted';
 }
 
 export async function runBuiltinToolJob(input: BuiltinToolJobInput, context: BuiltinToolJobContext) {

@@ -153,6 +153,43 @@ test('Activity contains notes, agent execution, and task history without visible
   assert.doesNotMatch(html, /Auto[- ]Work/i);
 });
 
+test('child task renders parent navigation in the inspector header without the old content banner', () => {
+  const parent = makeTask();
+  const child: Task = {
+    ...makeTask(),
+    id: 'child-parent-nav',
+    displayId: 'DVF-CHILD-NAV',
+    title: 'Child navigation fixture',
+    parentId: parent.id,
+  };
+  const html = renderToStaticMarkup(React.createElement(TaskDetailsDrawer as any, {
+    task: child,
+    allTasks: [parent, child],
+    onClose: noop,
+    onUpdate: noop,
+    onDelete: noop,
+    onSelectTask: noop,
+  }));
+
+  assert.match(html, /aria-label="Open parent task DVF-INSPECT"/);
+  assert.match(html, /Inspector information architecture fixture/);
+  assert.doesNotMatch(html, />Parent task</);
+  assert.doesNotMatch(html, />Open parent</);
+});
+
+test('root tasks and children with unavailable parent data omit parent navigation', () => {
+  const rootHtml = renderToStaticMarkup(React.createElement(TaskDetailsDrawer as any, {
+    task: makeTask(), allTasks: [makeTask()], onClose: noop, onUpdate: noop, onDelete: noop, onSelectTask: noop,
+  }));
+  assert.doesNotMatch(rootHtml, /Open parent task/);
+
+  const orphan: Task = { ...makeTask(), id: 'orphan', parentId: 'missing-parent' };
+  const orphanHtml = renderToStaticMarkup(React.createElement(TaskDetailsDrawer as any, {
+    task: orphan, allTasks: [orphan], onClose: noop, onUpdate: noop, onDelete: noop, onSelectTask: noop,
+  }));
+  assert.doesNotMatch(orphanHtml, /Open parent task/);
+});
+
 test('TaskDetailsDrawer is materially decomposed instead of remaining a 1,200-line monolith', () => {
   const source = fs.readFileSync('src/components/TaskDetailsDrawer.tsx', 'utf8');
   const lineCount = source.split(/\r?\n/).length;

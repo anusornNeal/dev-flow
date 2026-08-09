@@ -241,18 +241,11 @@ export default function TaskDetailsDrawer({
         onDelete={() => onDelete(task.id)}
         isEditing={edit.isEditing}
         onToggleEdit={() => edit.setIsEditing((value) => !value)}
+        parentTask={parentTask}
+        onSelectParent={onSelectTask}
         onSave={edit.handleSave}
         onDiscard={() => edit.setIsEditing(false)}
       >
-        {parentTask && (
-          <div className="mx-auto mb-5 flex max-w-6xl flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#d8cabb] bg-[#f5efe7] px-4 py-3 dark:border-[#584a3b] dark:bg-[#292119]">
-            <div className="min-w-0">
-              <p className="text-[10px] font-black uppercase tracking-[0.1em] text-[#9a6a34] dark:text-[#e0a070]">Parent task</p>
-              <p className="truncate text-[13px] font-bold text-[#594638] dark:text-[#f1e7de]">{parentTask.displayId || parentTask.id} · {parentTask.title}</p>
-            </div>
-            {onSelectTask && <button type="button" onClick={() => onSelectTask(parentTask)} className="rounded-lg border border-[#d9c5aa] bg-white px-3 py-2 text-[11px] font-extrabold text-[#7c5d42] dark:border-[#584a3b] dark:bg-[#211a15] dark:text-[#eadfd5]">Open parent</button>}
-          </div>
-        )}
         {content}
       </TaskInspectorShell>
 

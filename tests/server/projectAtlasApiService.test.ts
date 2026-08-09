@@ -149,21 +149,169 @@ test('getTaskFocusedAtlasContext renders read order and guardrails', () => {
   assert.ok((context?.recommendedReadOrder ?? []).some((entry: string) => entry.includes('src/3.ts')));
 });
 
-test('maybeRefreshAtlasOnProjectOpen reports authored cache status without scheduling local generation', () => {
+test('maybeRefreshAtlasOnProjectOpen leaves a fresh matching atlas idle', () => {
+  saveLatestAtlas({
+    ...atlas,
+    freshness: {
+      status: 'fresh',
+      generatedAt: '2026-07-02T00:30:00.000Z',
+      repoFingerprint: 'rev-current',
+    },
+  });
+
+  const scheduled: Array<() => void> = [];
+  const result = maybeRefreshAtlasOnProjectOpen(project, {
+    now: '2026-07-02T01:00:00.000Z',
+    repoRevision: { token: 'rev-current', head: '0123456789abcdef', branch: 'develop', changedFiles: [] },
+    scheduler: (run: () => void) => scheduled.push(run),
+  } as any) as any;
+
+  assert.equal(result.shouldRefresh, false);
+  assert.equal(result.lifecycleState, 'fresh');
+  assert.equal(result.reason, 'not-needed');
+  assert.equal(scheduled.length, 0);
+});
+
+test('maybeRefreshAtlasOnProjectOpen schedules one revision-aware refresh and preserves the last good graph', () => {
+  fs.mkdirSync(path.join(tempRoot, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(tempRoot, 'src', '0.ts'), 'export const changed = true;\n', 'utf8');
+  saveLatestAtlas({
+    ...atlas,
+    freshness: {
+      status: 'fresh',
+      generatedAt: '2026-07-02T00:00:00.000Z',
+      repoFingerprint: 'rev-old',
+    },
+  });
+
+  const scheduled: Array<() => void> = [];
+  const repoRevision = {
+    token: 'rev-new',
+    head: '0123456789abcdef',
+    branch: 'develop',
+    changedFiles: [{
+      path: 'src/0.ts',
+      workingPath: 'src/0.ts',
+      status: 'M',
+      staged: false,
+      fingerprint: 'changed',
+    }],
+  };
+  const first = maybeRefreshAtlasOnProjectOpen(project, {
+    now: '2026-07-02T01:00:00.000Z',
+    repoRevision,
+    scheduler: (run: () => void) => scheduled.push(run),
+  } as any) as any;
+  const second = maybeRefreshAtlasOnProjectOpen(project, {
+    now: '2026-07-02T01:00:01.000Z',
+    repoRevision,
+    scheduler: (run: () => void) => scheduled.push(run),
+  } as any) as any;
+
+  assert.equal(first.shouldRefresh, true);
+  assert.equal(first.lifecycleState, 'generating');
+  assert.equal(first.strategy, 'incremental');
+  assert.equal(second.deduplicated, true);
+  assert.equal(scheduled.length, 1);
+  assert.equal(getProjectAtlasStatus(project.id).nodeCount, atlas.nodes.length);
+
+  scheduled[0]();
+  const refreshed = getProjectAtlasStatus(project.id);
+  assert.equal(refreshed.freshness.status, 'fresh');
+  assert.equal(refreshed.freshness.repoFingerprint, 'rev-new');
+  assert.ok(refreshed.nodeCount >= atlas.nodes.length);
+  assert.equal(refreshed.authoring.state, 'chatgpt-authored');
+});
+
+test('maybeRefreshAtlasOnProjectOpen records scheduler failures without breaking callers', () => {
   saveLatestAtlas({
     ...atlas,
     freshness: {
       status: 'stale',
       generatedAt: '2026-07-01T00:00:00.000Z',
+      repoFingerprint: 'rev-before-scheduler-failure',
     },
   });
 
-  const first = maybeRefreshAtlasOnProjectOpen(project, { now: '2026-07-02T01:00:00.000Z' });
-  const second = maybeRefreshAtlasOnProjectOpen(project, { now: '2026-07-02T02:00:00.000Z' });
+  let result: any;
+  assert.doesNotThrow(() => {
+    result = maybeRefreshAtlasOnProjectOpen(project, {
+      now: '2026-07-02T02:00:00.000Z',
+      repoRevision: { token: 'rev-scheduler-failure', head: 'abcdef0123456789', branch: 'develop', changedFiles: [] },
+      scheduler: () => {
+        throw new Error('scheduler unavailable');
+      },
+    } as any);
+  });
 
-  assert.equal(first.shouldRefresh, false);
-  assert.equal(first.reason, 'ask-chatgpt-update');
-  assert.equal(second.shouldRefresh, false);
+  assert.equal(result.shouldRefresh, true);
+  assert.equal(result.scheduled, false);
+  assert.equal(result.lifecycleState, 'failed-retryable');
+  const failed = getProjectAtlasStatus(project.id);
+  assert.equal(failed.lifecycleState, 'failed-retryable');
+  assert.equal(failed.retryable, true);
+  assert.equal(failed.nodeCount, atlas.nodes.length);
+  assert.match(failed.lastError ?? '', /scheduler unavailable/i);
+});
+
+test('maybeRefreshAtlasOnProjectOpen falls back to a full rebuild for unsafe diffs', () => {
+  saveLatestAtlas({
+    ...atlas,
+    freshness: {
+      status: 'fresh',
+      generatedAt: '2026-07-02T00:00:00.000Z',
+      repoFingerprint: 'rev-before-delete',
+    },
+  });
+  const scheduled: Array<() => void> = [];
+  const result = maybeRefreshAtlasOnProjectOpen(project, {
+    now: '2026-07-02T02:30:00.000Z',
+    repoRevision: {
+      token: 'rev-delete',
+      head: 'abcdef0123456789',
+      branch: 'develop',
+      changedFiles: [{ path: 'src/deleted.ts', workingPath: 'src/deleted.ts', status: 'D', staged: false, fingerprint: 'missing' }],
+    },
+    scheduler: (run: () => void) => scheduled.push(run),
+  } as any) as any;
+
+  assert.equal(result.strategy, 'full');
+  assert.equal(result.lifecycleState, 'generating');
+  assert.equal(getProjectAtlasStatus(project.id).nodeCount, atlas.nodes.length);
+  scheduled[0]();
+  const refreshed = getProjectAtlasStatus(project.id);
+  assert.equal(refreshed.freshness.status, 'fresh');
+  assert.equal(refreshed.freshness.repoFingerprint, 'rev-delete');
+});
+
+test('maybeRefreshAtlasOnProjectOpen bootstraps a missing atlas without blocking the caller', () => {
+  const missingProject = { ...project, id: 'project-api-missing' };
+  const scheduled: Array<() => void> = [];
+  const result = maybeRefreshAtlasOnProjectOpen(missingProject, {
+    now: '2026-07-02T03:00:00.000Z',
+    repoRevision: { token: 'rev-bootstrap', head: 'abcdef0123456789', branch: 'develop', changedFiles: [] },
+    scheduler: (run: () => void) => scheduled.push(run),
+  } as any) as any;
+
+  assert.equal(result.cacheStatus, 'missing');
+  assert.equal(result.shouldRefresh, true);
+  assert.equal(result.lifecycleState, 'generating');
+  assert.equal(result.strategy, 'bootstrap');
+  assert.equal(scheduled.length, 1);
+
+  scheduled[0]();
+  const refreshed = getProjectAtlasStatus(missingProject.id);
+  assert.equal(refreshed.cacheStatus, 'ok');
+  assert.equal(refreshed.freshness.status, 'fresh');
+  assert.equal(refreshed.freshness.repoFingerprint, 'rev-bootstrap');
+});
+
+test('rescanProjectAtlasSafely keeps manual rescan semantics', () => {
+  const result = rescanProjectAtlasSafely(project, { now: '2026-07-02T04:00:00.000Z' });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.atlas.freshness.status, 'fresh');
+  assert.equal(result.atlas.freshness.scanMode, 'manual');
 });
 
 test('rescanProjectAtlasSafely preserves last good atlas when scan fails', () => {

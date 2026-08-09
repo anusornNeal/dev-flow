@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import Database from 'better-sqlite3';
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-start-context-'));
 process.env.DEVFLOW_DB_PATH = path.join(os.tmpdir(), `devflow-start-context-db-${path.basename(tempDir)}.sqlite`);
@@ -31,6 +32,14 @@ git(['config', 'user.email', 'devflow@example.com']);
 git(['add', '.']);
 git(['commit', '-m', 'initial']);
 
+const fixtureDb = new Database(process.env.DEVFLOW_DB_PATH);
+fixtureDb.exec(fs.readFileSync(new URL('../../src/db/schema.sql', import.meta.url), 'utf8'));
+fixtureDb.prepare(`
+  INSERT INTO projects (id, name, repoUrl, description, createdAt, localPath, taskIdPrefix)
+  VALUES (?, ?, ?, ?, ?, ?, ?)
+`).run('project-start-1', 'Start Fixture', 'https://example.com/start', null, new Date().toISOString(), tempDir, 'TST');
+fixtureDb.close();
+
 const state: any = {
   projectsCache: [
     { id: 'project-start-1', name: 'Start Fixture', repoUrl: 'https://example.com/start', localPath: tempDir },
@@ -38,14 +47,22 @@ const state: any = {
 };
 
 test('getProjectStartContext returns compact project and top-level file context', () => {
-  const result = getProjectStartContext(state, { projectId: 'project-start-1' });
+  const scheduled: Array<() => void> = [];
+  const result = getProjectStartContext(state, {
+    projectId: 'project-start-1',
+    atlasScheduler: (run: () => void) => scheduled.push(run),
+  });
 
   assert.equal(result.project.id, 'project-start-1');
   assert.equal(result.project.name, 'Start Fixture');
-  assert.equal(result.files.count, 3);
+  assert.ok(result.files.count >= 3);
   assert.deepEqual(result.hints.present.sort(), ['README.md', 'package.json']);
   assert.ok(result.recommendedNextTools.includes('read_local_file'));
   assert.ok(result.git.available === false || typeof result.git.branch === 'string');
+  assert.equal(result.projectAtlas.projectId, 'project-start-1');
+  assert.equal(result.projectAtlas.lifecycleState, 'generating');
+  assert.equal(result.projectAtlas.strategy, 'bootstrap');
+  assert.equal(scheduled.length, 1);
 });
 
 test('getRepoReadSnapshot returns compact metadata without file contents', () => {

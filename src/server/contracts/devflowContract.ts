@@ -532,7 +532,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'get_authoring_skills',
-    description: 'Get the full content of all authoring skills (lean skills: router, core, schema, reviewer, examples) that define how tasks are structured in DevFlow.',
+    description: 'Get the full content of all authoring skills, including lean common guidance and on-demand evidence, decomposition, and execution specialists.',
     inputSchema: emptyObjectSchema,
     outputSchema: { type: 'object' },
     lightweight: true,
@@ -548,12 +548,12 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'get_authoring_skill',
-    description: 'Read one DevFlow authoring skill by id, such as 00-skill-router, 01-authoring-core, 02-schema-reference, 03-reviewer-core, or 04-examples.',
+    description: 'Read one DevFlow authoring skill by id. Use the router first, then load only the common or specialist skill required for the current workflow.',
     inputSchema: {
       type: 'object',
       properties: {
-        id: { type: 'string', enum: ['00-skill-router', '01-authoring-core', '02-schema-reference', '03-reviewer-core', '04-examples'] },
-        skillId: { type: 'string', enum: ['00-skill-router', '01-authoring-core', '02-schema-reference', '03-reviewer-core', '04-examples'] },
+        id: { type: 'string', enum: ['00-skill-router', '01-authoring-core', '02-schema-reference', '03-reviewer-core', '04-examples', '05-authoring-evidence', '06-authoring-decomposition', '07-authoring-execution'] },
+        skillId: { type: 'string', enum: ['00-skill-router', '01-authoring-core', '02-schema-reference', '03-reviewer-core', '04-examples', '05-authoring-evidence', '06-authoring-decomposition', '07-authoring-execution'] },
       },
     },
     outputSchema: { type: 'object' },

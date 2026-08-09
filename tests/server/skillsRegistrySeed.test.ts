@@ -29,6 +29,9 @@ test('initSkillsRepository seeds all repo authoring skills when the database is 
     '02-schema-reference',
     '03-reviewer-core',
     '04-examples',
+    '05-authoring-evidence',
+    '06-authoring-decomposition',
+    '07-authoring-execution',
   ]);
 
   const authoringCore = getSkills().find((skill: any) => skill.id === '01-authoring-core');
@@ -69,6 +72,9 @@ test('authoring skills endpoint returns the repo skill set in file order', async
     '02-schema-reference',
     '03-reviewer-core',
     '04-examples',
+    '05-authoring-evidence',
+    '06-authoring-decomposition',
+    '07-authoring-execution',
   ]);
 });
 

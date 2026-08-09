@@ -9,6 +9,9 @@ const AUTHORING_SKILL_IDS = [
   '02-schema-reference',
   '03-reviewer-core',
   '04-examples',
+  '05-authoring-evidence',
+  '06-authoring-decomposition',
+  '07-authoring-execution',
 ];
 const AUTHORING_SKILL_ID_SET = new Set(AUTHORING_SKILL_IDS);
 

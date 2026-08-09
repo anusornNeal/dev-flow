@@ -30,14 +30,19 @@ import { getRepoContextWithHandle } from '../services/contextHandleService';
 import { getRepoSemanticIndex } from '../services/repoInspectionIndexService';
 import { cleanupSessionWorkspace, createOrReuseSessionWorkspace } from '../services/sessionWorkspaceService';
 import { abortWorkspaceIntegration, integrateWorkspaceCommits, retryWorkspaceIntegration } from '../services/workspaceIntegrationService';
+import { getRuntimeIdentity } from '../services/runtimeIdentityService';
 
 export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) {
   app.get('/api/capabilities', (_req, res) => {
     try {
       const catalog = getCapabilityCatalog();
+      const runtime = getRuntimeIdentity();
       return res.json({
         name: 'dev-flow',
         contractVersion: catalog.contractVersion,
+        runtimeInstanceId: runtime.runtimeInstanceId,
+        runtimeStartedAt: runtime.runtimeStartedAt,
+        transport: runtime.transport,
         schemaVersion: catalog.contractVersion,
         modules: {
           api: true,
@@ -77,7 +82,21 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
   app.get('/api/diagnostics', (req, res) => {
     try {
       const windowMs = Number.isFinite(Number(req.query.windowMs)) ? Number(req.query.windowMs) : undefined;
-      return res.json(getDevFlowDiagnostics({ windowMs }));
+      const previousContractVersion = typeof req.query.previousContractVersion === 'string' ? req.query.previousContractVersion : undefined;
+      const previousRuntimeInstanceId = typeof req.query.previousRuntimeInstanceId === 'string' ? req.query.previousRuntimeInstanceId : undefined;
+      const clientToolsVisible = req.query.clientToolsVisible === 'true'
+        ? true
+        : req.query.clientToolsVisible === 'false'
+          ? false
+          : undefined;
+      const clientState = previousContractVersion || previousRuntimeInstanceId || clientToolsVisible !== undefined
+        ? {
+            contractVersion: previousContractVersion,
+            runtimeInstanceId: previousRuntimeInstanceId,
+            toolsVisible: clientToolsVisible,
+          }
+        : undefined;
+      return res.json(getDevFlowDiagnostics({ windowMs, clientState }));
     } catch (error) {
       return sendApiError(res, error);
     }

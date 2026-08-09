@@ -31,6 +31,7 @@ export interface CreateExecutionSessionInput {
 
 export interface ExecutionSessionEvidenceInput {
   kind: string;
+  evidenceId?: string;
   path?: string | null;
   repoRevision?: string | null;
   fileRevision?: string | null;
@@ -197,7 +198,7 @@ export function recordExecutionSessionEvidence(
         ? buildRepoEvidenceIdentity({ repoRevision, filePath: evidencePath, fileRevision })
         : repoRevision;
     saved.push(saveExecutionSessionEvidence({
-      id: evidenceId(id, { kind, path: evidencePath, contextHandle }),
+      id: entry.evidenceId ? String(entry.evidenceId) : evidenceId(id, { kind, path: evidencePath, contextHandle }),
       sessionId: id,
       kind,
       path: evidencePath,

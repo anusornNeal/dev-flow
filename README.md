@@ -200,6 +200,8 @@ Session evidence records carry repository and file revision identities. On resum
 
 Lifecycle is explicit: active sessions can record context, changed files, verification evidence, and revision-bound evidence; completed, cancelled, or expired sessions are terminal and cannot mutate as active work. Run `npm run test:execution-session` for the focused persistence/revision lifecycle suite.
 
+Cross-agent handoff snapshots stay compact: they persist completed/pending work, decisions, dependencies, risks, verification state, and revision-bound evidence references without copying prior source bodies. Resume revalidates the current repository and reports exactly which changed/stale targets require a fresh read; changing ChatGPT/Codex/review provider labels never changes the logical execution-session id.
+
 DevFlow's git tools are intentionally local-only. They do not push, rebase, reset, amend, or checkout branches.
 
 ## Backup, Restore, and Migration

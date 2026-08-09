@@ -7,6 +7,7 @@ import { taskWorkflowEvidenceMigration } from './005-task-workflow-evidence.js';
 import { taskBoardArchiveMigration } from './006-task-board-archive.js';
 import { taskDisplayIdIndexMigration } from './007-task-display-id-index.js';
 import { mcpToolJobsMigration } from './008-mcp-tool-jobs.js';
+import { performanceTelemetryHistoryMigration } from './008-performance-telemetry-history.js';
 import { executionSessionsMigration } from './010-execution-sessions.js';
 import db from '../index.js';
 
@@ -19,6 +20,7 @@ export const DEVFLOW_MIGRATIONS = [
   taskBoardArchiveMigration,
   taskDisplayIdIndexMigration,
   mcpToolJobsMigration,
+  performanceTelemetryHistoryMigration,
   executionSessionsMigration,
 ] as const;
 

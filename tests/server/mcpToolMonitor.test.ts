@@ -142,6 +142,14 @@ test('isolation diagnostics separate correctness and capacity waits without leak
           capacityWait: { count: 2, totalMs: 70, p50Ms: 30, p95Ms: 40 },
           blockerReasons: { writer_barrier: 2, capacity_saturated: 2 },
         },
+        phaseTelemetry: {
+          admissionWait: { count: 3, totalMs: 6, p50Ms: 2, p95Ms: 3 },
+          queueWait: { count: 3, totalMs: 150, p50Ms: 50, p95Ms: 80 },
+          workspaceLockWait: { count: 3, totalMs: 42, p50Ms: 12, p95Ms: 20 },
+          capacityWait: { count: 2, totalMs: 70, p50Ms: 30, p95Ms: 40 },
+          execution: { count: 3, totalMs: 270, p50Ms: 90, p95Ms: 120 },
+          responseHandoff: { count: 3, totalMs: 7, p50Ms: 2, p95Ms: 4 },
+        },
       },
       capacity: { verify: { active: 2, limit: 2, saturated: true } },
     } as any,
@@ -151,6 +159,9 @@ test('isolation diagnostics separate correctness and capacity waits without leak
 
   assert.equal(isolation.waits.workspaceLockWait.p95Ms, 20);
   assert.equal(isolation.waits.capacityWait.p95Ms, 40);
+  assert.equal(isolation.phases.queueWait.p95Ms, 80);
+  assert.equal(isolation.phases.execution.p95Ms, 120);
+  assert.equal(isolation.phases.responseHandoff.p95Ms, 4);
   assert.equal(isolation.capacity.saturated, true);
   assert.equal(isolation.workspaces.known, 4);
   assert.equal(isolation.integrations.conflicts, 1);

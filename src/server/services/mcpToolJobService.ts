@@ -55,10 +55,35 @@ type FinalizedQueueWaitTelemetry = {
   blockerReasons: Record<string, number>;
 };
 
+type JobPhaseTelemetryState = {
+  jobId: string;
+  resourceScope: FinalizedQueueWaitTelemetry['resourceScope'];
+  admissionWaitMs: number;
+  enqueuedAt: number;
+  queueCompletedAt?: number;
+  executionStartedAt?: number;
+  executionCompletedAt?: number;
+  responseHandoffMs: number;
+  workspaceLockWaitMs: number;
+  capacityWaitMs: number;
+  blockerReasons: Record<string, number>;
+  finalized?: boolean;
+};
+
+type JobPhaseTimings = {
+  admissionWaitMs: number;
+  queueWaitMs: number;
+  workspaceLockWaitMs: number;
+  capacityWaitMs: number;
+  executionMs: number;
+  responseHandoffMs: number;
+};
+
 interface QueueEntry extends SchedulerQueueEntry {
   state: AppState;
   singleFlightKey?: string;
   waitTelemetry: QueueWaitTelemetry;
+  phaseTelemetry: JobPhaseTelemetryState;
 }
 
 const queue: QueueEntry[] = [];
@@ -71,6 +96,8 @@ const followerToLeader = new Map<string, string>();
 let singleFlightHits = 0;
 const MAX_RECENT_QUEUE_WAITS = 200;
 const recentQueueWaitTelemetry: FinalizedQueueWaitTelemetry[] = [];
+const MAX_JOB_PHASE_TELEMETRY = 500;
+const jobPhaseTelemetryById = new Map<string, JobPhaseTelemetryState>();
 const JOB_LEASE_MS = 30_000;
 const JOB_HEARTBEAT_MS = 10_000;
 const JOB_WORKER_ID = `devflow-${process.pid}-${randomUUID().slice(0, 8)}`;
@@ -109,8 +136,66 @@ function finalizeQueueWaitTelemetry(entry: QueueEntry, now = Date.now()) {
   if (entry.waitTelemetry.finalized) return;
   advanceQueueWaitTelemetry(entry, null, now);
   entry.waitTelemetry.finalized = true;
-  recentQueueWaitTelemetry.push(finalizedQueueWaitRecord(entry, now));
+  const finalized = finalizedQueueWaitRecord(entry, now);
+  entry.phaseTelemetry.queueCompletedAt = now;
+  entry.phaseTelemetry.workspaceLockWaitMs = finalized.workspaceLockWaitMs;
+  entry.phaseTelemetry.capacityWaitMs = finalized.capacityWaitMs;
+  entry.phaseTelemetry.blockerReasons = { ...finalized.blockerReasons };
+  rememberJobPhaseTelemetry(entry.phaseTelemetry);
+  recentQueueWaitTelemetry.push(finalized);
   if (recentQueueWaitTelemetry.length > MAX_RECENT_QUEUE_WAITS) recentQueueWaitTelemetry.splice(0, recentQueueWaitTelemetry.length - MAX_RECENT_QUEUE_WAITS);
+}
+
+function rememberJobPhaseTelemetry(state: JobPhaseTelemetryState) {
+  jobPhaseTelemetryById.delete(state.jobId);
+  jobPhaseTelemetryById.set(state.jobId, state);
+  while (jobPhaseTelemetryById.size > MAX_JOB_PHASE_TELEMETRY) {
+    const oldest = jobPhaseTelemetryById.keys().next().value as string | undefined;
+    if (!oldest) break;
+    jobPhaseTelemetryById.delete(oldest);
+  }
+}
+
+function getJobPhaseTimings(state: JobPhaseTelemetryState, entry?: QueueEntry, now = Date.now()): JobPhaseTimings {
+  const wait = entry ? finalizedQueueWaitRecord(entry, now) : null;
+  const queueEnd = state.executionStartedAt ?? state.queueCompletedAt ?? now;
+  const queueWaitMs = Math.max(0, queueEnd - state.enqueuedAt);
+  const rawWorkspaceWaitMs = wait?.workspaceLockWaitMs ?? state.workspaceLockWaitMs;
+  const workspaceLockWaitMs = Math.min(queueWaitMs, Math.max(0, rawWorkspaceWaitMs));
+  const rawCapacityWaitMs = wait?.capacityWaitMs ?? state.capacityWaitMs;
+  const capacityWaitMs = Math.min(Math.max(0, queueWaitMs - workspaceLockWaitMs), Math.max(0, rawCapacityWaitMs));
+  const executionMs = state.executionStartedAt
+    ? Math.max(0, (state.executionCompletedAt ?? now) - state.executionStartedAt)
+    : 0;
+  return {
+    admissionWaitMs: Math.max(0, state.admissionWaitMs),
+    queueWaitMs,
+    workspaceLockWaitMs,
+    capacityWaitMs,
+    executionMs,
+    responseHandoffMs: Math.max(0, state.responseHandoffMs),
+  };
+}
+
+function summarizeJobPhaseTelemetry() {
+  const now = Date.now();
+  const queuedById = new Map(queue.map((entry) => [entry.jobId, entry]));
+  const activeById = new Map(Array.from(activeJobs.entries(), ([jobId, value]) => [jobId, value.entry]));
+  const timings = Array.from(jobPhaseTelemetryById.values()).map((state) => getJobPhaseTimings(state, queuedById.get(state.jobId) || activeById.get(state.jobId), now));
+  const summary = (values: number[]) => ({
+    count: values.length,
+    totalMs: values.reduce((sum, value) => sum + value, 0),
+    p50Ms: percentile(values, 50),
+    p95Ms: percentile(values, 95),
+  });
+  return {
+    admissionWait: summary(timings.map((entry) => entry.admissionWaitMs)),
+    queueWait: summary(timings.map((entry) => entry.queueWaitMs)),
+    workspaceLockWait: summary(timings.map((entry) => entry.workspaceLockWaitMs).filter((value) => value > 0)),
+    capacityWait: summary(timings.map((entry) => entry.capacityWaitMs).filter((value) => value > 0)),
+    execution: summary(timings.map((entry) => entry.executionMs)),
+    responseHandoff: summary(timings.map((entry) => entry.responseHandoffMs)),
+  };
 }
 
 function percentile(values: number[], percentileValue: number) {
@@ -350,6 +435,17 @@ function enqueueRecoveredJob(state: AppState, job: McpToolJob) {
   const schedulerProfile = getSchedulerProfile(state, job.toolName, job.args, kind);
   const parsedUpdatedAt = Date.parse(job.updatedAt);
   const enqueuedAt = Number.isFinite(parsedUpdatedAt) ? parsedUpdatedAt : Date.now();
+  const phaseTelemetry: JobPhaseTelemetryState = {
+    jobId: job.jobId,
+    resourceScope: resourceScopeFor(job.resourceKey),
+    admissionWaitMs: 0,
+    enqueuedAt,
+    responseHandoffMs: 0,
+    workspaceLockWaitMs: 0,
+    capacityWaitMs: 0,
+    blockerReasons: {},
+  };
+  rememberJobPhaseTelemetry(phaseTelemetry);
   queue.push({
     jobId: job.jobId,
     resourceKey: job.resourceKey,
@@ -362,6 +458,7 @@ function enqueueRecoveredJob(state: AppState, job: McpToolJob) {
     enqueuedAt,
     schedulerPriority: getSchedulerPriority(job.toolName, job.args, schedulerProfile.accessMode),
     waitTelemetry: { lastObservedAt: Date.now(), workspaceLockWaitMs: 0, capacityWaitMs: 0, blockerReasons: {} },
+    phaseTelemetry,
   });
   return true;
 }
@@ -397,6 +494,7 @@ export function getQueueMetrics() {
       averageRunMs: average(runSamples),
       singleFlightHits,
       waitTelemetry: summarizeQueueWaitTelemetry(),
+      phaseTelemetry: summarizeJobPhaseTelemetry(),
       durable,
       failures: failedJobs.slice(0, 10).map(job => ({
         jobId: job.jobId,
@@ -459,9 +557,11 @@ export function getToolJobStatus(jobId: string) {
   const blocker = position >= 0 && entry ? getBlockerForQueueEntry(entry, position, queue, activeSchedulerEntries()) : null;
   const errorCode = job.status === 'failed' || job.status === 'timed_out' ? getTerminalJobErrorCode(jobId) : undefined;
   const recovery = recoveryPolicyForJobStatus(job.status, errorCode);
+  const phaseState = entry?.phaseTelemetry || jobPhaseTelemetryById.get(jobId);
   return {
     ...job,
     queuePosition: position >= 0 ? position + 1 : 0,
+    ...(phaseState ? { phaseTimings: getJobPhaseTimings(phaseState, entry) } : {}),
     ...(entry ? {
       accessMode: entry.accessMode,
       costClass: entry.costClass,
@@ -511,6 +611,7 @@ export function cancelToolJob(jobId: string) {
 }
 
 export function enqueueToolJob(state: AppState, toolName: string, args: any, kind: JobKind) {
+  const admissionStartedAt = Date.now();
   const restartState = readDevFlowRestartState();
   if (isDevFlowRestartPending(restartState)) {
     throw createApiError(409, 'RESTART_IN_PROGRESS', 'New MCP tool jobs are blocked while DevFlow restart is pending.', {
@@ -563,6 +664,18 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
 
   const jobId = `job-${Date.now()}-${randomUUID().slice(0, 8)}`;
   const job = createJob(jobId, toolName, args, resourceKey);
+  const enqueuedAt = Date.now();
+  const phaseTelemetry: JobPhaseTelemetryState = {
+    jobId,
+    resourceScope: resourceScopeFor(resourceKey),
+    admissionWaitMs: Math.max(0, enqueuedAt - admissionStartedAt),
+    enqueuedAt,
+    responseHandoffMs: 0,
+    workspaceLockWaitMs: 0,
+    capacityWaitMs: 0,
+    blockerReasons: {},
+  };
+  rememberJobPhaseTelemetry(phaseTelemetry);
 
   const entry: QueueEntry = {
     jobId,
@@ -573,10 +686,11 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
     args,
     accessMode: schedulerProfile.accessMode,
     costClass: schedulerProfile.costClass,
-    enqueuedAt: Date.now(),
+    enqueuedAt,
     schedulerPriority: getSchedulerPriority(toolName, args, schedulerProfile.accessMode),
     singleFlightKey: singleFlightKey || undefined,
-    waitTelemetry: { lastObservedAt: Date.now(), workspaceLockWaitMs: 0, capacityWaitMs: 0, blockerReasons: {} },
+    waitTelemetry: { lastObservedAt: enqueuedAt, workspaceLockWaitMs: 0, capacityWaitMs: 0, blockerReasons: {} },
+    phaseTelemetry,
   };
   if (singleFlightKey) singleFlightLeaders.set(singleFlightKey, jobId);
 
@@ -634,6 +748,7 @@ async function startJob(entry: QueueEntry) {
   }
 
   incrementScheduledResource(entry);
+  if (!entry.phaseTelemetry.executionStartedAt) entry.phaseTelemetry.executionStartedAt = Date.now();
   activeJobs.set(entry.jobId, { entry });
   const heartbeat = setInterval(() => {
     const renewed = heartbeatJob(entry.jobId, JOB_WORKER_ID, JOB_LEASE_MS);
@@ -668,6 +783,7 @@ async function startJob(entry: QueueEntry) {
         },
       );
     }
+    entry.phaseTelemetry.executionCompletedAt = Date.now();
 
     const currentStatus = getJob(entry.jobId)?.status;
     if (currentStatus === 'cancelled' || currentStatus === 'timed_out') {
@@ -681,6 +797,7 @@ async function startJob(entry: QueueEntry) {
       transitionJobStatus(entry.jobId, ['running'], { status: 'succeeded' }, { workerId: JOB_WORKER_ID });
     }
   } catch (error: any) {
+    if (!entry.phaseTelemetry.executionCompletedAt) entry.phaseTelemetry.executionCompletedAt = Date.now();
     const currentStatus = getJob(entry.jobId)?.status;
     const normalizedError = normalizeUnknownError(error).error;
     const failureSummary = summarizeError(error);
@@ -715,6 +832,14 @@ async function startJob(entry: QueueEntry) {
     }
   } finally {
     clearInterval(heartbeat);
+    if (!entry.phaseTelemetry.executionCompletedAt) entry.phaseTelemetry.executionCompletedAt = Date.now();
+    const waitSnapshot = finalizedQueueWaitRecord(entry, entry.phaseTelemetry.executionStartedAt ?? Date.now());
+    entry.phaseTelemetry.workspaceLockWaitMs = waitSnapshot.workspaceLockWaitMs;
+    entry.phaseTelemetry.capacityWaitMs = waitSnapshot.capacityWaitMs;
+    entry.phaseTelemetry.blockerReasons = { ...waitSnapshot.blockerReasons };
+    entry.phaseTelemetry.responseHandoffMs = Math.max(0, Date.now() - entry.phaseTelemetry.executionCompletedAt);
+    entry.phaseTelemetry.finalized = true;
+    rememberJobPhaseTelemetry(entry.phaseTelemetry);
     decrementScheduledResource(entry);
     activeJobs.delete(entry.jobId);
     finalizeSingleFlight(entry);
@@ -744,6 +869,7 @@ export function getJobMetrics() {
 
 export function __resetQueueWaitTelemetryForTests() {
   recentQueueWaitTelemetry.length = 0;
+  jobPhaseTelemetryById.clear();
 }
 
 export function __setToolJobTestRunner(toolName: string, runner: AsyncRunner | null) {

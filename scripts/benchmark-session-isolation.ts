@@ -35,10 +35,15 @@ async function waitForTerminal(waitForToolJob: any, jobIds: string[]) {
   await Promise.all(jobIds.map((jobId) => waitForToolJob(jobId, 10_000)));
 }
 
-function p95(values: number[]) {
+function percentile(values: number[], percentileValue: number) {
   if (values.length === 0) return 0;
   const sorted = [...values].sort((left, right) => left - right);
-  return sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * 0.95) - 1)];
+  const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil(sorted.length * percentileValue) - 1));
+  return sorted[index];
+}
+
+function p95(values: number[]) {
+  return percentile(values, 0.95);
 }
 
 try {
@@ -82,6 +87,7 @@ try {
   cleanupBenchmark = () => {
     __setToolJobTestRunner('benchmark_write', null);
     __setToolJobTestRunner('run_project_command', null);
+    __setToolJobTestRunner('benchmark_read', null);
     for (const workspace of workspaces) {
       try { cleanupSessionWorkspace(workspace.workspaceId, { force: true }); } catch { /* best-effort benchmark cleanup */ }
     }
@@ -170,6 +176,10 @@ try {
   let activeVerify = 0;
   let maxActiveVerify = 0;
   let verifyProcessSpawns = 0;
+  __setToolJobTestRunner('benchmark_read', async (_state, args) => {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    return { ok: true, label: args.label };
+  });
   __setToolJobTestRunner('run_project_command', async (_state, args) => {
     verifyStarts.push(args.label);
     activeVerify += 1;
@@ -196,6 +206,22 @@ try {
   await new Promise((resolve) => setTimeout(resolve, 20));
   const capacityQueued = verifyJobs.map((job) => getToolJobStatus(job.jobId)).filter((status) => status?.status === 'queued' && status?.waitType === 'capacity');
   assert.equal(capacityQueued.length, 2);
+
+  const interactiveReadLatenciesMs: number[] = [];
+  for (let index = 0; index < 6; index += 1) {
+    const startedAt = Date.now();
+    const interactive = enqueueToolJob(state, 'benchmark_read', {
+      projectId,
+      workspaceId: workspaces[index % workspaces.length].workspaceId,
+      label: `interactive-${index}`,
+      singleFlight: false,
+    }, 'repo-read');
+    const status = await waitForToolJob(interactive.jobId, 5_000);
+    assert.equal(status?.status, 'succeeded', 'interactive read should complete while verification capacity is saturated');
+    interactiveReadLatenciesMs.push(Date.now() - startedAt);
+  }
+  await new Promise((resolve) => setTimeout(resolve, 100));
+
   verifyBlocks.get('verify-0')!.resolve();
   verifyBlocks.get('verify-1')!.resolve();
   await waitUntil(() => verifyStarts.length === 4, 'remaining verifies should start after capacity frees');
@@ -203,6 +229,15 @@ try {
   verifyBlocks.get('verify-3')!.resolve();
   await waitForTerminal(waitForToolJob, verifyJobs.map((job) => job.jobId));
   const verifyWallMs = Date.now() - verifyStartedAt;
+  const verificationThroughputPerSecond = Number((verifyJobs.length / (Math.max(1, verifyWallMs) / 1000)).toFixed(2));
+  const verifyPhases = verifyJobs.map((job, index) => ({
+    verification: index + 1,
+    ...(getToolJobStatus(job.jobId) as any)?.phaseTimings,
+  }));
+  const waitDominatedCall = verifyPhases
+    .filter((entry) => Number(entry.queueWaitMs || 0) > Number(entry.executionMs || 0))
+    .sort((left, right) => (Number(right.queueWaitMs || 0) - Number(right.executionMs || 0)) - (Number(left.queueWaitMs || 0) - Number(left.executionMs || 0)))[0] || null;
+  assert.ok(waitDominatedCall, 'mixed workload must include at least one verification call dominated by scheduler waiting');
   const perSession = workspaces.map((_, index) => {
     const editStatus = getToolJobStatus(isolatedJobs[index].jobId);
     const verifyStatus = getToolJobStatus(verifyJobs[index].jobId);
@@ -220,7 +255,9 @@ try {
   const isolatedWorkflowWallMs = isolatedWallMs + verifyWallMs;
   const isolatedThroughputSessionsPerSecond = Number((workspaces.length / (Math.max(1, isolatedWorkflowWallMs) / 1000)).toFixed(2));
 
-  const waitTelemetry = getQueueMetrics().metrics.waitTelemetry;
+  const queueMetrics = getQueueMetrics().metrics;
+  const waitTelemetry = queueMetrics.waitTelemetry;
+  const phaseTelemetry = queueMetrics.phaseTelemetry;
   assert.equal(sharedInitialStarts, 1);
   assert.equal(sharedMaxActive, 1);
   assert.equal(sharedQueuedBlockers.every((waitType) => waitType === 'workspace_lock'), true);
@@ -242,7 +279,15 @@ try {
     sharedRoot: { wallMs: sharedWallMs, queueWaitP95Ms: sharedWaitP95Ms, workspaceLockWaitP95Ms: sharedLockWait.p95Ms, initialConcurrentStarts: sharedInitialStarts, maxActiveWrites: sharedMaxActive, workspaceLockBlocked: sharedQueuedBlockers.length },
     isolated: { wallMs: isolatedWallMs, queueWaitP95Ms: isolatedWaitP95Ms, workspaceLockWaitP95Ms: isolatedLockWait.p95Ms, initialConcurrentStarts: isolatedInitialStarts, maxActiveWrites: isolatedMaxActive, workspaceLockBlocked: 0, workflowWallMs: isolatedWorkflowWallMs, throughputSessionsPerSecond: isolatedThroughputSessionsPerSecond },
     sameWorkspace: { serialized: sameWorkspaceMaxActive === 1, blocker: sameWorkspaceQueued?.waitType || null },
-    verifyCapacity: { limit: 2, maxActive: maxActiveVerify, capacityQueued: capacityQueued.length, processSpawns: verifyProcessSpawns },
+    verifyCapacity: { limit: 2, maxActive: maxActiveVerify, capacityQueued: capacityQueued.length, processSpawns: verifyProcessSpawns, throughputPerSecond: verificationThroughputPerSecond },
+    interactive: {
+      samples: interactiveReadLatenciesMs.length,
+      p50Ms: percentile(interactiveReadLatenciesMs, 0.5),
+      p95Ms: p95(interactiveReadLatenciesMs),
+      maxMs: Math.max(...interactiveReadLatenciesMs),
+    },
+    waitDominatedCall,
+    phases: phaseTelemetry,
     perSession,
     waits: waitTelemetry,
     structuralImprovement: { sharedInitialConcurrency: sharedInitialStarts, isolatedInitialConcurrency: isolatedInitialStarts },

@@ -515,6 +515,8 @@ export function getPerformanceHistoryComparison(options: {
 
 export function buildIsolationDiagnostics(jobMetrics: any, workspaceMetrics: any, integrationMetrics: any) {
   const waitTelemetry = jobMetrics?.metrics?.waitTelemetry || {};
+  const phaseTelemetry = jobMetrics?.metrics?.phaseTelemetry || {};
+  const emptyTiming = { count: 0, totalMs: 0, p50Ms: 0, p95Ms: 0 };
   const active = Array.isArray(jobMetrics?.activeJobs) ? jobMetrics.activeJobs : [];
   const activeResources = { workspaces: 0, sharedRepos: 0, other: 0 };
   const seen = new Set<string>();
@@ -534,6 +536,14 @@ export function buildIsolationDiagnostics(jobMetrics: any, workspaceMetrics: any
       workspaceLockWait: waitTelemetry.workspaceLockWait || { count: 0, totalMs: 0, p50Ms: 0, p95Ms: 0 },
       capacityWait: waitTelemetry.capacityWait || { count: 0, totalMs: 0, p50Ms: 0, p95Ms: 0 },
       blockerReasons: waitTelemetry.blockerReasons || {},
+    },
+    phases: {
+      admissionWait: phaseTelemetry.admissionWait || emptyTiming,
+      queueWait: phaseTelemetry.queueWait || emptyTiming,
+      workspaceLockWait: phaseTelemetry.workspaceLockWait || waitTelemetry.workspaceLockWait || emptyTiming,
+      capacityWait: phaseTelemetry.capacityWait || waitTelemetry.capacityWait || emptyTiming,
+      execution: phaseTelemetry.execution || emptyTiming,
+      responseHandoff: phaseTelemetry.responseHandoff || emptyTiming,
     },
     capacity: { active: verifyActive, limit: verifyLimit, saturated: verifyCapacity.saturated === true || (verifyLimit > 0 && verifyActive >= verifyLimit) },
     workspaces: {

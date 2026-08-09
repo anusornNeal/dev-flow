@@ -100,6 +100,16 @@ function assertPatchSize(patch: string, maxPatchBytes: number) {
 }
 
 export function validatePatchPaths(root: string, patch: string) {
+  const unsupportedPseudoPatch = /^\*\*\*\s+(?:Begin Patch|End Patch|Update File:|Add File:|Delete File:|Move to:)/m.exec(patch);
+  if (unsupportedPseudoPatch) {
+    throw createApiError(
+      400,
+      'UNSUPPORTED_PATCH_FORMAT',
+      'Unsupported pseudo-patch syntax. Use Steno/structured editing or provide a native Git unified diff.',
+      { details: { marker: unsupportedPseudoPatch[0] } },
+    );
+  }
+
   if (/^GIT binary patch$/m.test(patch) || /^Binary files .+ differ$/m.test(patch)) {
     throw createApiError(400, 'BINARY_PATCH_UNSUPPORTED', 'Binary patches are not supported.');
   }
@@ -197,7 +207,7 @@ export function applyLocalPatch(state: AppState, args: Record<string, any>): Loc
 
   const changedFiles = validatePatchPaths(root, patch);
   const dryRun = normalizePatchFlag(args.dryRun ?? args.check);
-  const gitArgs = ['apply', dryRun ? '--check' : '--whitespace=nowarn'];
+  const gitArgs = ['apply', '--recount', dryRun ? '--check' : '--whitespace=nowarn'];
   const result = spawnSync('git', gitArgs, {
     cwd: root,
     input: patch,
@@ -253,7 +263,7 @@ export async function applyLocalPatchAsync(state: AppState, args: Record<string,
   const { maxPatchBytes, maxSummaryBytes } = resolvePatchLimits(args);
   assertPatchSize(patch, maxPatchBytes);
   const changedFiles = validatePatchPaths(root, patch);
-  const gitArgs = ['apply', dryRun ? '--check' : '--whitespace=nowarn'];
+  const gitArgs = ['apply', '--recount', dryRun ? '--check' : '--whitespace=nowarn'];
   
   return new Promise((resolve, reject) => {
     const child = spawn('git', gitArgs, {

@@ -127,7 +127,7 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
     devflow_health_check: catalog.tools.some((tool: any) => tool.name === 'devflow_health_check'),
   };
   const hasErrors = !git.ok || catalog.tools.length === 0;
-  const hasWarnings = recommendations.length > 0;
+  const hasWarnings = recommendations.some((recommendation) => !recommendation.startsWith('No verified recovery snapshot exists yet;'));
   const status = hasErrors ? 'error' : hasWarnings ? 'warning' : 'ok';
   const healthEventProjectId = typeof args.projectId === 'string' ? args.projectId : undefined;
   const healthEventKey = healthEventProjectId || 'global';

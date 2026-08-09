@@ -44,7 +44,7 @@ const express = (await import('express')).default;
 const { registerApiRoutes } = await import('../src/server/routes/registerApiRoutes.js');
 const { createProject } = await import('../src/server/repositories/projectRepository.js');
 const { getTasks, saveTask } = await import('../src/server/repositories/taskRepository.js');
-const { getCapabilityCatalog, getMcpToolList, getToolDefinitionByName } = await import('../src/server/contracts/devflowContract.js');
+const { getCapabilityCatalog, getMcpToolList, getMcpToolSurfaceIdentity, getToolDefinitionByName } = await import('../src/server/contracts/devflowContract.js');
 
 const state = {
   _testTasks: [
@@ -447,15 +447,22 @@ try {
   assert.equal(typeof missingProjectFileBody.error.retryable, 'boolean');
   assert.equal(typeof missingProjectFileBody.error.correlationId, 'string');
 
-  console.log('[verify] Testing MCP tool catalog parity and aliases...');
-  const mcpTools = getMcpToolList();
-  assert.ok(mcpTools.some((tool) => tool.name === 'get_agent_context'));
-  assert.ok(mcpTools.some((tool) => tool.name === 'get_agent_task_context'));
-  assert.ok(mcpTools.some((tool) => tool.name === 'import_tasks_from_file'));
-  assert.ok(mcpTools.some((tool) => tool.name === 'apply_patch'));
-  assert.ok(mcpTools.some((tool) => tool.name === 'run_project_command'));
-  assert.ok(mcpTools.some((tool) => tool.name === 'parse_test_report'));
-  assert.ok(mcpTools.length > catalog.tools.length);
+  console.log('[verify] Testing MCP tool catalog parity, consolidation, and surface identity...');
+  const mcpTools = getMcpToolList('full');
+  const mcpToolNames = new Set(mcpTools.map((tool) => tool.name));
+  for (const removed of ['get_agent_context', 'get_agent_task_context', 'apply_patch', 'parse_test_report']) {
+    assert.equal(mcpToolNames.has(removed), false, `full MCP surface should not advertise consolidated tool ${removed}`);
+  }
+  for (const exposed of ['import_tasks_from_file', 'run_project_command', 'get_task', 'get_repo_context_bundle', 'edit_local_files_batch']) {
+    assert.equal(mcpToolNames.has(exposed), true, `full MCP surface should advertise canonical tool ${exposed}`);
+  }
+  assert.ok(mcpTools.length < catalog.tools.length);
+  assert.match(catalog.mcpProfile.toolSurfaceIdentity, /^[0-9a-f]{64}$/);
+  assert.equal(
+    catalog.mcpProfile.toolSurfaceIdentity,
+    getMcpToolSurfaceIdentity(getMcpToolList(catalog.mcpProfile.active)),
+    'capability fingerprint must match the active advertised MCP schema surface',
+  );
 
   const createTaskSchema = catalog.tools.find((tool) => tool.name === 'create_task')?.inputSchema;
   const updateTaskSchema = catalog.tools.find((tool) => tool.name === 'update_task')?.inputSchema;
@@ -670,18 +677,20 @@ try {
   assert.ok(readLocalTool, 'read_local_file must be resolvable by name');
   assert.match(readLocalTool.description, /Prefer this/i);
 
-  console.log('[verify] Testing prompt override MCP tools...');
-  const newToolNames = ['list_prompt_skills', 'get_prompt_skill', 'update_prompt_override', 'delete_prompt_override'];
-  for (const toolName of newToolNames) {
+  console.log('[verify] Testing prompt override backend compatibility and MCP consolidation...');
+  const promptBackendTools = ['list_prompt_skills', 'get_prompt_skill', 'update_prompt_override', 'delete_prompt_override'];
+  for (const toolName of promptBackendTools) {
     assert.ok(
       catalog.tools.some((tool) => tool.name === toolName),
-      `Missing tool in catalog: ${toolName}`,
+      `Missing backend-compatible tool in catalog: ${toolName}`,
     );
-    assert.ok(
-      mcpTools.some((tool) => tool.name === toolName),
-      `Missing tool in MCP list: ${toolName}`,
+    assert.equal(
+      mcpToolNames.has(toolName),
+      false,
+      `Consolidated prompt tool should not be advertised directly over MCP: ${toolName}`,
     );
   }
+  assert.equal(mcpToolNames.has('get_authoring_skill'), true, 'get_authoring_skill must replace prompt-skill read tools on MCP');
   const updateOverrideSchema = catalog.tools.find((tool) => tool.name === 'update_prompt_override')?.inputSchema as any;
   const getSkillSchema = catalog.tools.find((tool) => tool.name === 'get_prompt_skill')?.inputSchema as any;
   const deleteOverrideSchema = catalog.tools.find((tool) => tool.name === 'delete_prompt_override')?.inputSchema as any;

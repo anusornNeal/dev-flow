@@ -14,6 +14,7 @@ import {
 import { taskToolDefinitions } from './devflowTaskTools';
 import { gitToolDefinitions } from './devflowGitTools';
 import { workspaceToolDefinitions } from './devflowWorkspaceTools';
+import { buildMcpTransportInputSchema } from './mcpSchemaTransport';
 export type { DevFlowToolDefinition, DevFlowToolHttpRequest } from './devflowContractCore';
 export const DEVFLOW_CONTRACT_VERSION = '2026-08-08.7';
 
@@ -1519,6 +1520,7 @@ export function getMcpToolList(profile: DevFlowToolProfile = 'full') {
   const tools = [];
   for (const tool of devFlowToolDefinitions) {
     if (!isToolAllowedInProfile(tool.name, profile)) continue;
+    const inputSchema = buildMcpTransportInputSchema(tool.inputSchema);
     let outputSchema = tool.outputSchema;
     let description = tool.description;
 
@@ -1544,14 +1546,14 @@ export function getMcpToolList(profile: DevFlowToolProfile = 'full') {
     tools.push({
       name: tool.name,
       description,
-      inputSchema: tool.inputSchema,
+      inputSchema,
       outputSchema,
     });
     for (const alias of tool.aliases || []) {
       tools.push({
         name: alias,
         description: `${description} Alias for ${tool.name}.`,
-        inputSchema: tool.inputSchema,
+        inputSchema,
         outputSchema,
       });
     }

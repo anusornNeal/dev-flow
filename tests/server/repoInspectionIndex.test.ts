@@ -15,7 +15,7 @@ createProject({ id: 'project-index-1', name: 'Index Fixture', repoUrl: 'https://
 
 const { getRepoInspectionIndex, clearRepoInspectionIndexCache } = await import('../../src/server/services/repoInspectionIndexService.js');
 const { mergeProjectFileRules } = await import('../../src/server/services/projectRulesService.js');
-const { invalidateRepoReadCaches } = await import('../../src/server/services/repoCacheInvalidationService.js');
+const { invalidateRepoReadCaches, invalidateRepoCacheDependencies } = await import('../../src/server/services/repoCacheInvalidationService.js');
 
 const state: any = {
   projectsCache: [
@@ -83,6 +83,35 @@ test('getRepoInspectionIndex incrementally refreshes a changed working-tree file
   assert.equal(second.cache.refresh, 'incremental');
   assert.equal(second.cache.changedEntries, 1);
   assert.ok(second.matches.some((entry: any) => entry.symbols.includes('UpdatedThing')));
+});
+
+test('project-rules dependency invalidation rebuilds the repo index even when the Git revision is unchanged', () => {
+  clearRepoInspectionIndexCache();
+  const first = getRepoInspectionIndex(state, {
+    projectId: 'project-index-1',
+    q: 'UpdatedThing',
+  });
+  const warm = getRepoInspectionIndex(state, {
+    projectId: 'project-index-1',
+    q: 'UpdatedThing',
+  });
+  assert.equal(first.cache.refresh, 'rebuild');
+  assert.equal(warm.cache.refresh, 'hit');
+
+  invalidateRepoCacheDependencies({
+    root: tempDir,
+    reason: 'project-rules-updated',
+    dependencies: ['project-rules'],
+    paths: ['config/project-rules.json'],
+  });
+
+  const afterRules = getRepoInspectionIndex(state, {
+    projectId: 'project-index-1',
+    q: 'UpdatedThing',
+  });
+  assert.equal(afterRules.cache.refresh, 'rebuild');
+  assert.equal(typeof afterRules.cache.lineageToken, 'string');
+  assert.ok(afterRules.cache.lineageToken.length > 0);
 });
 
 test('getRepoInspectionIndex skips heavy folders by default and can opt in with includeIgnored', () => {

@@ -10,6 +10,7 @@ import { loadProjectCommandPreset } from './projectCommandConfigService';
 import { getRepoRevisionForRoot } from './repoRevisionService';
 import { getCachedCommandResult, rememberCommandResult } from './commandResultCacheService';
 import { readWorkspaceMetadataFile } from './workspaceMetadataCacheService';
+import { getRepoCacheLineage, recordRepoCacheAccess, registerRepoCacheInvalidator } from './repoCacheInvalidationService';
 
 const ALLOWED_COMMANDS = ['typecheck', 'test', 'lint', 'build', 'verify'] as const;
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -19,6 +20,11 @@ const MAX_TIMEOUT_MS = 300_000;
 const MAX_OUTPUT_BYTES = 100_000;
 const MAX_PACKAGE_JSON_BYTES = 10 * 1024 * 1024;
 const packageScriptsParseCache = new Map<string, { size: number; mtimeMs: number; scripts: Record<string, string> }>();
+const PROJECT_COMMAND_CACHE_DEPENDENCIES = ['repo-content', 'repo-revision', 'project-rules'] as const;
+
+registerRepoCacheInvalidator('verification-results', () => 0, {
+  dependencies: [...PROJECT_COMMAND_CACHE_DEPENDENCIES],
+});
 
 type AllowedCommand = typeof ALLOWED_COMMANDS[number];
 type CommandStatus = 'succeeded' | 'failed' | 'timed_out';
@@ -92,6 +98,7 @@ export interface RunProjectCommandResult {
     hit: boolean;
     key: string;
     repoRevision: string;
+    lineageToken?: string;
     cachedAt?: string;
     originalDurationMs?: number;
   };
@@ -379,6 +386,7 @@ function resolveOutputBudget(args: Record<string, any>, resolvedCommand: Resolve
 export type ProjectCommandExecutionIdentity = {
   key: string;
   repoRevision: string;
+  lineageToken: string;
   semanticKey: string;
   command: string;
 };
@@ -397,9 +405,11 @@ function buildProjectCommandExecutionIdentity(
   } catch {
     return null;
   }
+  const lineageToken = getRepoCacheLineage(root, [...PROJECT_COMMAND_CACHE_DEPENDENCIES]).token;
   const semanticKey = semanticKeyForResolvedCommand(root, resolvedCommand, cwdPath);
   const identity = {
     repoRevision: revision.token,
+    lineageToken,
     semanticKey,
     cwd: path.relative(root, cwdPath) || '.',
     timeoutMs,
@@ -417,7 +427,7 @@ function buildProjectCommandExecutionIdentity(
     },
   };
   const key = crypto.createHash('sha256').update(JSON.stringify(identity)).digest('hex');
-  return { key, repoRevision: revision.token, semanticKey, command: resolvedCommand.command };
+  return { key, repoRevision: revision.token, lineageToken, semanticKey, command: resolvedCommand.command };
 }
 
 export function getProjectCommandExecutionIdentity(state: AppState, args: Record<string, any>): ProjectCommandExecutionIdentity | null {
@@ -456,6 +466,7 @@ function cachedCommandResult(
 ) {
   if (!cacheContext) return null;
   const cached = getCachedCommandResult<RunProjectCommandResult>(cacheContext.key);
+  recordRepoCacheAccess('verification-results', Boolean(cached));
   if (!cached) return null;
   return {
     ...cached.value,
@@ -471,6 +482,7 @@ function cachedCommandResult(
       hit: true,
       key: cacheContext.key,
       repoRevision: cacheContext.repoRevision,
+      lineageToken: cacheContext.lineageToken,
       cachedAt: new Date(cached.createdAt).toISOString(),
       originalDurationMs: cached.value.durationMs,
     },
@@ -490,6 +502,7 @@ function rememberSuccessfulCommandResult(
       hit: false,
       key: cacheContext.key,
       repoRevision: cacheContext.repoRevision,
+      lineageToken: cacheContext.lineageToken,
       originalDurationMs: result.durationMs,
     },
   } satisfies RunProjectCommandResult;

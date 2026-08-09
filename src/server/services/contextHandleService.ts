@@ -4,20 +4,27 @@ import type { AppState } from '../types';
 import { resolveProjectRoot } from './localFileService';
 import { getRepoContextBundle } from './projectStartContextService';
 import { getRepoRevisionForRoot } from './repoRevisionService';
+import { getRepoCacheLineage, recordRepoCacheAccess, registerRepoCacheInvalidator } from './repoCacheInvalidationService';
 
 const HANDLE_TTL_MS = 5 * 60_000;
 const MAX_HANDLES = 128;
+const CONTEXT_HANDLE_DEPENDENCIES = ['repo-content', 'repo-revision', 'project-rules'] as const;
 
 type ContextHandleEntry = {
   id: string;
   root: string;
   optionsHash: string;
   repoRevision: string;
+  lineageToken: string;
   snippetRevisions: Map<string, string>;
   expiresAt: number;
 };
 
 const handles = new Map<string, ContextHandleEntry>();
+
+registerRepoCacheInvalidator('context-handles', () => 0, {
+  dependencies: [...CONTEXT_HANDLE_DEPENDENCIES],
+});
 
 function prune(now = Date.now()) {
   for (const [id, entry] of handles) {
@@ -63,6 +70,7 @@ function storeHandle(root: string, hash: string, bundle: any, existingId?: strin
     root: path.resolve(root),
     optionsHash: hash,
     repoRevision: String(bundle.repoRevision || ''),
+    lineageToken: getRepoCacheLineage(root, [...CONTEXT_HANDLE_DEPENDENCIES]).token,
     snippetRevisions: snippetRevisionMap(bundle),
     expiresAt: Date.now() + HANDLE_TTL_MS,
   };
@@ -83,6 +91,7 @@ export function getRepoContextWithHandle(state: AppState, args: Record<string, a
   const requestedHandle = typeof args.contextHandle === 'string' ? args.contextHandle.trim() : '';
   prune();
   const existing = requestedHandle ? handles.get(requestedHandle) : undefined;
+  const currentLineage = getRepoCacheLineage(root, [...CONTEXT_HANDLE_DEPENDENCIES]);
 
   if (existing && existing.root === root && existing.optionsHash === hash) {
     let revision;
@@ -91,10 +100,11 @@ export function getRepoContextWithHandle(state: AppState, args: Record<string, a
     } catch {
       revision = undefined;
     }
-    if (revision && revision.token === existing.repoRevision) {
+    if (revision && revision.token === existing.repoRevision && existing.lineageToken === currentLineage.token) {
       existing.expiresAt = Date.now() + HANDLE_TTL_MS;
       handles.delete(existing.id);
       handles.set(existing.id, existing);
+      recordRepoCacheAccess('context-handles', true, root);
       return {
         status: 'not_modified' as const,
         contextHandle: existing.id,
@@ -105,6 +115,7 @@ export function getRepoContextWithHandle(state: AppState, args: Record<string, a
     }
   }
 
+  recordRepoCacheAccess('context-handles', false, root);
   const bundle = getRepoContextBundle(state, args);
   if (!existing || existing.root !== root || existing.optionsHash !== hash) {
     const stored = storeHandle(root, hash, bundle);

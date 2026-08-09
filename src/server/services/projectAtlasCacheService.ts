@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { getProjectAtlasCachePath } from '../../lib/devFlowPaths.js';
 import type { AtlasFreshness, AtlasScanMode, ProjectAtlas } from '../../types.js';
+import { getRepoCacheLineage, invalidateRepoCacheDependencies, recordRepoCacheAccess, registerRepoCacheInvalidator } from './repoCacheInvalidationService.js';
 
 export type AtlasCacheReadStatus = 'ok' | 'missing' | 'invalid';
 
@@ -10,6 +11,7 @@ export interface AtlasCacheReadResult {
   atlas: ProjectAtlas;
   path: string;
   error?: string;
+  cache?: { hit: boolean; lineageToken: string };
 }
 
 export interface BuildEmptyAtlasInput {
@@ -25,6 +27,7 @@ export interface ReadAtlasCacheInput {
 
 export interface WriteAtlasCacheInput {
   atlas: ProjectAtlas;
+  invalidationKind?: 'source' | 'authored' | 'metadata';
 }
 
 export interface AtlasFreshnessCheckInput {
@@ -35,6 +38,21 @@ export interface AtlasFreshnessCheckInput {
 }
 
 const DEFAULT_ATLAS_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const ATLAS_CACHE_DEPENDENCIES = ['atlas-source', 'atlas-authored'] as const;
+
+function atlasScope(projectId: string) {
+  return `atlas:${projectId}`;
+}
+
+registerRepoCacheInvalidator('project-atlas', () => 0, { dependencies: [...ATLAS_CACHE_DEPENDENCIES] });
+
+function atlasCacheMetadata(projectId: string, hit: boolean) {
+  recordRepoCacheAccess('project-atlas', hit);
+  return {
+    hit,
+    lineageToken: getRepoCacheLineage(undefined, [...ATLAS_CACHE_DEPENDENCIES], atlasScope(projectId)).token,
+  };
+}
 
 export function buildEmptyProjectAtlas(input: BuildEmptyAtlasInput): ProjectAtlas {
   return {
@@ -57,18 +75,19 @@ export function buildEmptyProjectAtlas(input: BuildEmptyAtlasInput): ProjectAtla
 export function readAtlasCache(input: ReadAtlasCacheInput): AtlasCacheReadResult {
   const cachePath = getProjectAtlasCachePath(input.projectId);
   if (!fs.existsSync(cachePath)) {
-    return { status: 'missing', atlas: buildEmptyProjectAtlas({ projectId: input.projectId }), path: cachePath };
+    return { status: 'missing', atlas: buildEmptyProjectAtlas({ projectId: input.projectId }), path: cachePath, cache: atlasCacheMetadata(input.projectId, false) };
   }
 
   try {
     const parsed = JSON.parse(fs.readFileSync(cachePath, 'utf8')) as ProjectAtlas;
-    return { status: 'ok', atlas: normalizeProjectAtlas(parsed, input.projectId), path: cachePath };
+    return { status: 'ok', atlas: normalizeProjectAtlas(parsed, input.projectId), path: cachePath, cache: atlasCacheMetadata(input.projectId, true) };
   } catch (error) {
     return {
       status: 'invalid',
       atlas: buildEmptyProjectAtlas({ projectId: input.projectId }),
       path: cachePath,
       error: error instanceof Error ? error.message : String(error),
+      cache: atlasCacheMetadata(input.projectId, false),
     };
   }
 }
@@ -77,7 +96,23 @@ export function writeAtlasCache(input: WriteAtlasCacheInput) {
   const cachePath = getProjectAtlasCachePath(input.atlas.projectId);
   fs.mkdirSync(path.dirname(cachePath), { recursive: true });
   fs.writeFileSync(cachePath, `${JSON.stringify(input.atlas, null, 2)}\n`, 'utf8');
+  const invalidationKind = input.invalidationKind ?? (input.atlas.authoring ? 'authored' : 'source');
+  if (invalidationKind !== 'metadata') {
+    invalidateRepoCacheDependencies({
+      scope: atlasScope(input.atlas.projectId),
+      reason: invalidationKind === 'authored' ? 'atlas-authored-update' : 'atlas-source-refresh',
+      dependencies: [invalidationKind === 'authored' ? 'atlas-authored' : 'atlas-source'],
+    });
+  }
   return { path: cachePath };
+}
+
+export function markProjectAtlasSourceDrift(projectId: string, reason = 'repo-source-drift') {
+  return invalidateRepoCacheDependencies({
+    scope: atlasScope(projectId),
+    reason,
+    dependencies: ['atlas-source'],
+  });
 }
 
 export function markAtlasDailyOpenChecked(projectId: string, now = new Date().toISOString()) {
@@ -89,7 +124,7 @@ export function markAtlasDailyOpenChecked(projectId: string, now = new Date().to
       lastDailyOpenCheckedAt: now,
     },
   };
-  writeAtlasCache({ atlas });
+  writeAtlasCache({ atlas, invalidationKind: 'metadata' });
   return { status: cached.status, atlas };
 }
 

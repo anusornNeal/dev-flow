@@ -45,43 +45,12 @@ Stop repo inspection when you can name:
 
 If targeted inspection cannot identify likely files/functions, create a blocked/prep card instead of guessing.
 
-## Local file read/write workflow
+## Repository edit policy
+- For LLM-authored existing-file changes, prefer Steno Edit or a structured anchored edit; do not synthesize native unified diffs when a guarded structured edit is suitable.
+- `safe_edit_local_file` remains a simpler option for a tiny anchored single-file edit.
+- `apply_patch` is an exception for an already-existing or trusted native Git unified diff or a documented fallback. `*** Begin Patch` / `*** Update File` is not valid native Git diff input.
+- Preserve preview/revision guards, re-read and re-prepare stale source, and never retry the same failed write payload unchanged.
 
-Repository edits are a guarded workflow, not a free-form rewrite.
-
-Before reading files:
-- Use `get_repo_context_bundle` first when a project is known. Include diff context when current changes may matter.
-- Use targeted queries based on task ids, screen names, visible strings, route names, classes, functions, or failing tests.
-- Use `read_file_snippets_batch` for several focused ranges, or `read_local_file` for one exact file/range.
-- Prefer local reads before remote GitHub/Jira reads unless the user explicitly asks for remote data.
-
-Before writing files:
-- Confirm the working tree is clean or understand the existing diff.
-- Read the exact target file content or range first; use the returned file revision/hash as a guard when the write tool supports it.
-- Choose the lowest-risk write tool:
-  - For LLM-authored existing-file changes, default to `prepare_compact_edit` + `apply_prepared_edit` when revision-bound file refs and anchored edits are available; do not synthesize native unified diffs when Steno or a structured anchored edit can express the change safely. Use Steno Edit v1 universal tuples (`R`, `IB`, `IA`, `DB`) and the request-local `s` string table only for strings repeated inside that request. Apply by `editPlanId` only; if a fileRef/plan is stale, expired, consumed, or lost after restart, re-read and re-prepare instead of replaying it.
-  - `safe_edit_local_file` is an explicitly allowed simpler path for a tiny anchored single-file edit, especially in a large route, contract, service, or generated-looking file.
-  - `edit_local_files_batch` is the guarded fallback for one or more anchored edits; always dry-run first, then apply the same validated intent.
-  - `apply_patch` is an exception for an already-existing or trusted native Git unified diff, a trusted generated native Git unified diff, or a documented fallback when Steno/structured anchored editing is unsuitable. Run dry-run/check first. `*** Begin Patch` / `*** Update File` pseudo-patch syntax is not a native Git unified diff and must not be sent to `apply_patch`.
-  - `write_local_file` only for new files, generated files, or small full-file replacements where the complete content is known.
-- Do not use full-file writes for large source files when an anchored edit is possible.
-- Do not retry the same failed write payload unchanged. Read the error, adjust the anchor/context/tool, then try a new payload.
-- Steno Edit is transport shorthand, not a source-language dictionary. Do not invent global, repository-specific, or language-specific token dictionaries; fall back to `safe_edit_local_file`, `edit_local_files_batch`, or the narrow `apply_patch` exception when compact preparation is not the clearest safe path.
-
-### Smart verification workflow
-
-Use risk-matched verification instead of rerunning the whole repository after every edit:
-- **FAST**: smallest targeted non-FULL evidence during tight edit loops. Semantic duplicates such as equivalent compiler scripts should count once.
-- **SAFE**: broader focused checks when shared helpers, contracts, persistence, workflow, or multiple files are affected.
-- **FULL**: repository-wide/final integration gate when the card or review requires it. Do not weaken or remove coverage to make FULL faster.
-- Prefer `apply_and_verify` when the edit shape is supported and it can safely combine apply + diff + verification.
-- Cached/single-flight evidence is acceptable for iterative deterministic checks, but use `forceFresh` when the final review gate requires fresh proof.
-
-After writing files:
-- Inspect `get_git_diff` or targeted file snippets before claiming the edit is correct.
-- Run the most targeted available verification first; run the broader `test`/`verify` preset when the change touches shared workflow, skill, schema, queue, or repository tooling.
-- Commit one small scope at a time. Use `commit_git_changes` dry-run before the real commit, stage only the intended files, and never push.
-- If a tool returns a `jobId`, poll status/log/result until the final result is known before continuing.
 ## Implementation map
 Implementation-ready cards must connect requirements to concrete code areas. Put this in `repoContext` using a compact form such as:
 
@@ -104,6 +73,9 @@ Do not copy requirement prose into every field.
 
 ## Delta rule
 A card describes the delta from current behavior. Preserve existing behavior unless the requirement explicitly changes it. When updating an existing card, merge new evidence into the current truth and remove superseded assumptions instead of stacking contradictions.
+
+## Embedded bug thread rule
+For defects reported against an existing task, use `open_task_bug` and keep the fix in that task. Do not use `create_task` for feedback that belongs to the existing implementation/review loop.
 
 ## Scope rule
 One card should represent one coherent implementation boundary. If independent work can be implemented, verified, or reviewed separately, load `06-authoring-decomposition` and split it rather than hiding real work in a long checklist.

@@ -84,6 +84,7 @@ test('authoring skills route existing task defects to embedded bug threads', () 
   assert.match(authoringCore, /Do not use `create_task`/);
   assert.match(schemaReference, /open_task_bug/);
 });
+test('reviewer and examples keep embedded bug-thread routing visible', () => {
   assert.match(reviewerCore, /open_task_bug/);
   assert.match(skillRouter, /03-reviewer-core/);
   assert.match(skillRouter, /open_task_bug/);

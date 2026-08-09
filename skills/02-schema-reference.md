@@ -13,24 +13,17 @@ If this file conflicts with a live schema, follow the live schema and fix this g
 ## Semantic field placement
 ### `description`
 State the requested behavior and scope delta. Keep implementation archaeology out unless it changes product behavior.
-- `get_jira_authoring_bundle`: one-call Jira packet for issue summary, description, comments, attachment metadata, related issues, and existing DevFlow duplicate cards. Use it before individual Jira proxy tools.
-- `get_repo_context_bundle`: one-call repo packet for project metadata, git status, repo index matches, focused file snippets, and optional diff context. Prefer this first when a project is known.
-- `get_project_atlas`: compact project knowledge graph for architecture, onboarding, unclear targetFiles, cross-module impact, module boundaries, and read order. Use modes `compact`, `standard`, `agent-context`, `chatgpt-context`, `task-focused`, or `diff-impact`; keep it companion-only after `get_repo_context_bundle`, and never let stale/noisy/inferred Atlas summaries silently override explicit targetFiles or exact local reads.
-- `get_repo_inspection_index`: cached repo index for likely files, classes, composables, functions, routes, mappers, helpers, and tests. Use it as a targeted fallback when the repo context bundle is unavailable or insufficient.
-- `read_file_snippets_batch(includeFileRef=true)`: preferred multi-file Steno bootstrap after the bundle/index identifies exact targets; returns bounded snippets plus revision-bound refs in one round trip, with optional aggregate byte limits and partial per-file errors.
-- `read_local_file`: read one exact local file or line range before editing; request `includeFileRef=true` for genuinely single-file Steno work.
-- `prepare_compact_edit` + `apply_prepared_edit`: default compact edit flow for LLM-authored existing-file changes when revision-bound anchored edits are available. Preparation is the no-write preview; apply only the returned plan id and re-read/re-prepare stale plans.
-- `apply_and_verify`: composite fast path for supported prepared/structured edits when mutation, diff capture, and risk-aware verification can safely run together.
-- `safe_edit_local_file`: explicitly allowed simpler path for a tiny anchored single-file edit when Steno is unnecessary; prefer it over full-file writes for route, contract, and service files.
-- `edit_local_files_batch`: guarded multi-file anchored fallback. Dry-run first, then apply after the preview matches intent.
-- `apply_patch`: exception for an already-existing or trusted native Git unified diff, a trusted generated native Git unified diff, or a documented fallback when structured/Steno editing is unsuitable. `*** Begin Patch` / `*** Update File` pseudo-patch syntax is not valid input. Use dry-run/check before apply.
-- `write_local_file`: create new files or perform small full-file replacements only when complete content is known. Avoid it for large source files when anchored edits are possible.
-- `run_project_command`: run allowlisted verification presets after local edits. Prefer the smallest risk-matched FAST/SAFE evidence; use FULL for required final integration/review gates and `forceFresh` when fresh evidence is required.
-- `commit_git_changes`: commit one small verified scope. Use dry-run first and stage only intended files. Never push.
-- `validate_task_quality`: preflight the card before `create_task` or `update_task`. It blocks implementation-ready cards that still depend on Jira/source links, lack focused `targetFiles`, or lack an `Implementation map` in `repoContext`.
-- `open_task_bug`: create an embedded bug thread under an existing task for defect feedback, review failures, or user reports like “เปิดบัค”. Use this instead of `create_task` when the work belongs to an existing card.
-- `devflow_health_check`: read-only workflow readiness check for git cleanliness, tool capability counts, queue diagnostics, and recommendations.
-- `move_task_to_status`: move a card to a target lane by following allowed transition paths automatically. Prefer it over repeated manual `move_task_status` calls when closing or reopening a card.
+- `get_jira_authoring_bundle`: bounded Jira evidence packet; use before individual Jira proxy reads.
+- `get_repo_context_bundle`: preferred first repo packet; use `get_project_atlas` for cross-module/read-order hints and `get_repo_inspection_index` only as a targeted fallback.
+- `read_file_snippets_batch(includeFileRef=true)` / `read_local_file(includeFileRef=true)`: bounded Steno bootstrap for multi-file / single-file work.
+- `prepare_compact_edit` + `apply_prepared_edit`: default for LLM-authored existing-file changes when revision-bound anchored edits fit; preview first and re-read/re-prepare stale plans.
+- `safe_edit_local_file`: simpler tiny anchored single-file edit. `edit_local_files_batch`: guarded structured fallback.
+- `apply_patch`: exception for an existing/trusted native Git unified diff or documented fallback. `*** Begin Patch` / `*** Update File` is invalid input.
+- `write_local_file`: new files or small known full-file replacements only.
+- `apply_and_verify` / `run_project_command`: risk-matched verification; use fresh final evidence when required.
+- `commit_git_changes`: commit only the intended verified scope; never push by default.
+- `validate_task_quality`: optional preflight for server-enforced authoring quality. `open_task_bug`: keep defects inside an existing task instead of creating a new card.
+- `devflow_health_check`: compact readiness diagnostics. `move_task_to_status`: follow allowed status paths.
 
 ### `repoContext`
 Put repository evidence and implementation guidance here. Implementation-ready work should normally contain:

@@ -16,11 +16,11 @@ Use these before writing implementation-ready cards:
 - `get_repo_inspection_index`: cached repo index for likely files, classes, composables, functions, routes, mappers, helpers, and tests. Use it as a targeted fallback when the repo context bundle is unavailable or insufficient.
 - `read_file_snippets_batch(includeFileRef=true)`: preferred multi-file Steno bootstrap after the bundle/index identifies exact targets; returns bounded snippets plus revision-bound refs in one round trip, with optional aggregate byte limits and partial per-file errors.
 - `read_local_file`: read one exact local file or line range before editing; request `includeFileRef=true` for genuinely single-file Steno work.
-- `prepare_compact_edit` + `apply_prepared_edit`: preferred compact edit flow for supported anchored changes. Preparation is the no-write preview; apply only the returned plan id and re-read/re-prepare stale plans.
+- `prepare_compact_edit` + `apply_prepared_edit`: default compact edit flow for LLM-authored existing-file changes when revision-bound anchored edits are available. Preparation is the no-write preview; apply only the returned plan id and re-read/re-prepare stale plans.
 - `apply_and_verify`: composite fast path for supported prepared/structured edits when mutation, diff capture, and risk-aware verification can safely run together.
+- `safe_edit_local_file`: explicitly allowed simpler path for a tiny anchored single-file edit when Steno is unnecessary; prefer it over full-file writes for route, contract, and service files.
 - `edit_local_files_batch`: guarded multi-file anchored fallback. Dry-run first, then apply after the preview matches intent.
-- `safe_edit_local_file`: focused local edit tool for small anchored changes in large files. Prefer it over full-file writes for route, contract, and service files.
-- `apply_patch`: compact unified-diff tool for stable, small patches. Use dry-run/check before apply.
+- `apply_patch`: exception for an already-existing or trusted native Git unified diff, a trusted generated native Git unified diff, or a documented fallback when structured/Steno editing is unsuitable. `*** Begin Patch` / `*** Update File` pseudo-patch syntax is not valid input. Use dry-run/check before apply.
 - `write_local_file`: create new files or perform small full-file replacements only when complete content is known. Avoid it for large source files when anchored edits are possible.
 - `run_project_command`: run allowlisted verification presets after local edits. Prefer the smallest risk-matched FAST/SAFE evidence; use FULL for required final integration/review gates and `forceFresh` when fresh evidence is required.
 - `commit_git_changes`: commit one small verified scope. Use dry-run first and stage only intended files. Never push.

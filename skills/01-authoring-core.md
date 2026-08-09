@@ -238,14 +238,14 @@ Before writing files:
 - Confirm the working tree is clean or understand the existing diff.
 - Read the exact target file content or range first; use the returned file revision/hash as a guard when the write tool supports it.
 - Choose the lowest-risk write tool:
-  - `prepare_compact_edit` + `apply_prepared_edit` for repeated or multi-file anchored edits when `read_local_file(includeFileRef=true)` is available. Use Steno Edit v1 universal tuples (`R`, `IB`, `IA`, `DB`) and the request-local `s` string table only for strings repeated inside that request. Apply by `editPlanId` only; if a fileRef/plan is stale, expired, consumed, or lost after restart, re-read and re-prepare instead of replaying it.
-  - `edit_local_files_batch` for one or more anchored edits; always dry-run first, then apply the same validated intent.
-  - `safe_edit_local_file` for a small anchored edit in a large route, contract, service, or generated-looking file.
-  - `apply_patch` for compact unified diffs when context is stable; run dry-run/check first.
+  - For LLM-authored existing-file changes, default to `prepare_compact_edit` + `apply_prepared_edit` when revision-bound file refs and anchored edits are available; do not synthesize native unified diffs when Steno or a structured anchored edit can express the change safely. Use Steno Edit v1 universal tuples (`R`, `IB`, `IA`, `DB`) and the request-local `s` string table only for strings repeated inside that request. Apply by `editPlanId` only; if a fileRef/plan is stale, expired, consumed, or lost after restart, re-read and re-prepare instead of replaying it.
+  - `safe_edit_local_file` is an explicitly allowed simpler path for a tiny anchored single-file edit, especially in a large route, contract, service, or generated-looking file.
+  - `edit_local_files_batch` is the guarded fallback for one or more anchored edits; always dry-run first, then apply the same validated intent.
+  - `apply_patch` is an exception for an already-existing or trusted native Git unified diff, a trusted generated native Git unified diff, or a documented fallback when Steno/structured anchored editing is unsuitable. Run dry-run/check first. `*** Begin Patch` / `*** Update File` pseudo-patch syntax is not a native Git unified diff and must not be sent to `apply_patch`.
   - `write_local_file` only for new files, generated files, or small full-file replacements where the complete content is known.
 - Do not use full-file writes for large source files when an anchored edit is possible.
 - Do not retry the same failed write payload unchanged. Read the error, adjust the anchor/context/tool, then try a new payload.
-- Steno Edit is transport shorthand, not a source-language dictionary. Do not invent global, repository-specific, or language-specific token dictionaries; fall back to `safe_edit_local_file`, `edit_local_files_batch`, or `apply_patch` when compact preparation is not the clearest safe path.
+- Steno Edit is transport shorthand, not a source-language dictionary. Do not invent global, repository-specific, or language-specific token dictionaries; fall back to `safe_edit_local_file`, `edit_local_files_batch`, or the narrow `apply_patch` exception when compact preparation is not the clearest safe path.
 
 ### Smart verification workflow
 

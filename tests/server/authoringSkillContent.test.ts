@@ -89,6 +89,18 @@ test('DevFlow execution guidance prefers Steno and smart verification lanes', ()
   assert.match(executionRules, /forceFresh/);
 });
 
+test('DevFlow edit policy defaults LLM-authored existing-file changes to Steno', () => {
+  assert.equal(skillRouter.includes('LLM-authored existing-file'), true);
+  assert.equal(skillRouter.includes('trusted native Git unified diff'), true);
+  assert.equal(authoringCore.includes('do not synthesize native unified diffs'), true);
+  assert.equal(authoringCore.includes('tiny anchored single-file edit'), true);
+  assert.equal(authoringCore.includes('already-existing or trusted native Git unified diff'), true);
+  assert.equal(schemaReference.includes('LLM-authored existing-file'), true);
+  assert.equal(schemaReference.includes('*** Begin Patch'), true);
+  assert.equal(executionRules.includes('LLM-authored existing-file'), true);
+  assert.equal(executionRules.includes('trusted native Git unified diff'), true);
+});
+
 test('authoring skills route existing task defects to embedded bug threads', () => {
   assert.match(skillRouter, /open_task_bug/);
   assert.match(authoringCore, /Embedded bug thread rule/);

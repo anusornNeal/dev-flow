@@ -19,7 +19,7 @@ export interface McpStreamableHttpSessionOptions {
   idleTtlMs?: number;
   maxSessions?: number;
   now?: () => number;
-  sessionIdGenerator?: () => string;
+  sessionIdGenerator?: () => string;  requestHooks?: (req: any, res: any) => McpStreamableHttpLifecycleHooks | undefined;
 }
 
 export const NOOP_MCP_STREAMABLE_HTTP_LIFECYCLE_HOOKS: McpStreamableHttpLifecycleHooks = {};
@@ -91,29 +91,29 @@ export function createReusableMcpHttpHandler(
   const maxSessions = boundedPositiveInt(options.maxSessions, DEFAULT_MAX_SESSIONS, 1024);
   const configuredSessionIdGenerator = options.sessionIdGenerator || randomUUID;
 
-  const closeSession = async (entry: SessionEntry) => {
+  const closeSession = async (entry: SessionEntry, requestHooks: McpStreamableHttpLifecycleHooks = hooks) => {
     if (entry.closed) return;
     entry.closed = true;
     if (entry.sessionId && sessions.get(entry.sessionId) === entry) sessions.delete(entry.sessionId);
-    await runTimedPhase(hooks, 'close', () => entry.transport.close()).catch(() => {});
+    await runTimedPhase(requestHooks, 'close', () => entry.transport.close()).catch(() => {});
   };
 
-  const pruneIdleSessions = async () => {
+  const pruneIdleSessions = async (requestHooks: McpStreamableHttpLifecycleHooks = hooks) => {
     const cutoff = now() - idleTtlMs;
     const expired = Array.from(sessions.values())
       .filter((entry) => !entry.closed && entry.inFlight === 0 && entry.lastUsedAt <= cutoff)
       .sort((left, right) => left.lastUsedAt - right.lastUsedAt);
-    for (const entry of expired) await closeSession(entry);
+    for (const entry of expired) await closeSession(entry, requestHooks);
   };
 
-  const ensureCapacity = async () => {
-    await pruneIdleSessions();
+  const ensureCapacity = async (requestHooks: McpStreamableHttpLifecycleHooks = hooks) => {
+    await pruneIdleSessions(requestHooks);
     if (sessions.size < maxSessions) return true;
     const idle = Array.from(sessions.values())
       .filter((entry) => !entry.closed && entry.inFlight === 0)
       .sort((left, right) => left.lastUsedAt - right.lastUsedAt);
     for (const entry of idle) {
-      await closeSession(entry);
+      await closeSession(entry, requestHooks);
       if (sessions.size < maxSessions) return true;
     }
     return sessions.size < maxSessions;
@@ -137,7 +137,8 @@ export function createReusableMcpHttpHandler(
       });
     }
 
-    await pruneIdleSessions();
+    const requestHooks = options.requestHooks?.(req, res) || hooks;
+    await pruneIdleSessions(requestHooks);
     const requestedSessionId = requestSessionId(req);
     let entry = requestedSessionId ? sessions.get(requestedSessionId) : undefined;
     if (requestedSessionId && !entry) {
@@ -150,7 +151,7 @@ export function createReusableMcpHttpHandler(
 
     const isNewSession = !entry;
     if (!entry) {
-      if (!(await ensureCapacity())) {
+      if (!(await ensureCapacity(requestHooks))) {
         return res.status(503).json({
           jsonrpc: '2.0',
           error: { code: -32002, message: 'MCP session capacity is temporarily exhausted.' },
@@ -170,9 +171,9 @@ export function createReusableMcpHttpHandler(
         closed: false,
       };
       try {
-        await runTimedPhase(hooks, 'connect', () => mcpServer.connect(transport));
+        await runTimedPhase(requestHooks, 'connect', () => mcpServer.connect(transport));
       } catch (error) {
-        await closeSession(entry);
+        await closeSession(entry, requestHooks);
         throw error;
       }
     }
@@ -180,19 +181,19 @@ export function createReusableMcpHttpHandler(
     entry.inFlight += 1;
     entry.lastUsedAt = now();
     try {
-      await runTimedPhase(hooks, 'handle', () => entry!.transport.handleRequest(req, res, req.body));
+      await runTimedPhase(requestHooks, 'handle', () => entry!.transport.handleRequest(req, res, req.body));
       if (isNewSession) {
         const generatedSessionId = String(entry.transport.sessionId || '').trim();
         if (generatedSessionId) {
           entry.sessionId = generatedSessionId;
           sessions.set(generatedSessionId, entry);
         } else {
-          await closeSession(entry);
+          await closeSession(entry, requestHooks);
         }
       }
     } catch (error) {
       console.error('MCP Streamable HTTP request error:', error);
-      await closeSession(entry);
+      await closeSession(entry, requestHooks);
       if (!res.headersSent) {
         return res.status(500).json({
           jsonrpc: '2.0',

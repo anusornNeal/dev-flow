@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { FULL_VERIFY_PARALLELISM, VERIFICATION_STEPS } from '../../scripts/verifyPlan.js';
+import { buildVerificationStageSegments, FULL_VERIFY_PARALLELISM, VERIFICATION_STEPS } from '../../scripts/verifyPlan.js';
 
 const BASELINE_LABELS = [
   'lint',
@@ -10,6 +10,7 @@ const BASELINE_LABELS = [
   'devflow restart contract',
   'devflow restart state',
   'devflow contract',
+  'devflow tool profiles',
   'project atlas cache',
   'project atlas agent update',
   'project atlas api',
@@ -27,6 +28,10 @@ const BASELINE_LABELS = [
   'task git workflow service',
   'mcp fetch errors',
   'mcp tool job queue',
+  'mcp scheduler policy',
+  'project resolution',
+  'session workspace service',
+  'workspace integration service',
   'agent runs',
   'figma integration',
   'gateway safety',
@@ -57,6 +62,9 @@ test('shared-resource and integration gates remain serial', () => {
     'devflow restart contract',
     'devflow restart state',
     'devflow contract',
+    'devflow tool profiles',
+    'session workspace service',
+    'workspace integration service',
     'agent runs',
     'figma integration',
     'gateway safety',
@@ -70,6 +78,22 @@ test('shared-resource and integration gates remain serial', () => {
   for (const step of VERIFICATION_STEPS) {
     if (serialLabels.has(step.label)) assert.equal(step.parallelSafe, false, `${step.label} must remain serial`);
   }
+});
+
+test('mixed FULL verify stages batch parallel-safe work without crossing serial barriers', () => {
+  const stageTwo = VERIFICATION_STEPS.filter((step) => step.stage === 2);
+  const segments = buildVerificationStageSegments(stageTwo);
+
+  assert.equal(stageTwo.some((step) => step.parallelSafe), true);
+  assert.equal(stageTwo.some((step) => !step.parallelSafe), true);
+  assert.equal(segments.length, 2);
+  assert.equal(segments[0]?.parallel, true);
+  assert.equal(segments[0]?.steps.every((step) => step.parallelSafe), true);
+  assert.equal(segments[1]?.parallel, false);
+  assert.deepEqual(segments[1]?.steps.map((step) => step.label), [
+    'session workspace service',
+    'workspace integration service',
+  ]);
 });
 
 test('FULL verify runner consumes the staged plan without a serial spawnSync loop', () => {

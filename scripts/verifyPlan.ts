@@ -8,6 +8,25 @@ export type VerificationStep = {
 
 export const FULL_VERIFY_PARALLELISM = 4;
 
+export type VerificationStageSegment = {
+  parallel: boolean;
+  steps: VerificationStep[];
+};
+
+export function buildVerificationStageSegments(steps: VerificationStep[]): VerificationStageSegment[] {
+  const segments: VerificationStageSegment[] = [];
+  for (const step of steps) {
+    const parallel = step.parallelSafe;
+    const current = segments[segments.length - 1];
+    if (current && current.parallel === parallel) {
+      current.steps.push(step);
+      continue;
+    }
+    segments.push({ parallel, steps: [step] });
+  }
+  return segments;
+}
+
 export const VERIFICATION_STEPS: VerificationStep[] = [
   { label: 'lint', command: 'npm', args: ['run', 'lint'], stage: 0, parallelSafe: false },
   { label: 'devflow restart route', command: 'npx', args: ['tsx', '--test', 'tests/server/devflowRestartRoute.test.ts'], stage: 1, parallelSafe: false },

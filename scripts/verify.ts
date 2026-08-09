@@ -2,7 +2,7 @@ import { spawn } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { FULL_VERIFY_PARALLELISM, VERIFICATION_STEPS, type VerificationStep } from './verifyPlan.js';
+import { buildVerificationStageSegments, FULL_VERIFY_PARALLELISM, VERIFICATION_STEPS, type VerificationStep } from './verifyPlan.js';
 
 const MAX_STEP_OUTPUT_BYTES = 20_000;
 const MAX_CAPTURE_BYTES = 10 * 1024 * 1024;
@@ -136,11 +136,12 @@ export async function runFullVerification() {
     const stages = Array.from(new Set(VERIFICATION_STEPS.map((step) => step.stage))).sort((a, b) => a - b);
     for (const stage of stages) {
       const steps = VERIFICATION_STEPS.filter((step) => step.stage === stage);
-      const allParallelSafe = steps.length > 1 && steps.every((step) => step.parallelSafe);
-      const failed = allParallelSafe
-        ? await runParallelStage(steps, tempDbDir)
-        : await runSerialStage(steps, tempDbDir);
-      if (failed) return failed.exitCode ?? 1;
+      for (const segment of buildVerificationStageSegments(steps)) {
+        const failed = segment.parallel && segment.steps.length > 1
+          ? await runParallelStage(segment.steps, tempDbDir)
+          : await runSerialStage(segment.steps, tempDbDir);
+        if (failed) return failed.exitCode ?? 1;
+      }
     }
     console.log('[verify] Verification completed successfully.');
     return 0;

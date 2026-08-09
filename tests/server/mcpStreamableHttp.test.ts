@@ -17,7 +17,7 @@ async function withMcpServer(
   const runtimeInstanceId = randomUUID();
   let apiBaseUrl = '';
 
-  app.get('/api/capabilities', (_req, res) => {
+  app.get('/api/workflow-health', (_req, res) => {
     res.json({ contractVersion: 'test-contract', runtimeInstanceId, marker: 'streamable-http-call-ok' });
   });
   app.use('/mcp', express.json({ limit: '1mb' }));
@@ -44,8 +44,8 @@ function createClient(baseUrl: string, name: string) {
   return { client, transport };
 }
 
-async function callCapabilities(client: Client) {
-  const result = await client.callTool({ name: 'get_capabilities', arguments: {} }) as any;
+async function callHealth(client: Client) {
+  const result = await client.callTool({ name: 'devflow_health_check', arguments: {} }) as any;
   assert.equal(result.isError, undefined);
   const text = String(result.content?.[0]?.text || '');
   assert.match(text, /streamable-http-call-ok/);
@@ -134,15 +134,15 @@ test('optional lifecycle timing hook observes connect, handle, and close without
   assert.ok(events.every((event) => event.outcome === 'success'));
 });
 
-test('official Streamable HTTP client can connect, list tools, and call get_capabilities without a server session', async () => {
+test('official Streamable HTTP client can connect, list tools, and call a current exposed tool without a server session', async () => {
   await withMcpServer(async (baseUrl) => {
     const { client, transport } = createClient(baseUrl, 'devflow-streamable-http-test');
 
     try {
       await client.connect(transport);
       const listed = await client.listTools();
-      assert.ok(listed.tools.some((tool) => tool.name === 'get_capabilities'));
-      await callCapabilities(client);
+      assert.ok(listed.tools.some((tool) => tool.name === 'devflow_health_check'));
+      await callHealth(client);
       assert.equal((transport as any).sessionId, undefined, 'stateless client must not receive a server session id');
     } finally {
       await client.close();
@@ -157,7 +157,7 @@ test('two Streamable HTTP clients operate concurrently without shared server ses
 
     try {
       await Promise.all([a.client.connect(a.transport), b.client.connect(b.transport)]);
-      await Promise.all([callCapabilities(a.client), callCapabilities(b.client)]);
+      await Promise.all([callHealth(a.client), callHealth(b.client)]);
       assert.equal((a.transport as any).sessionId, undefined);
       assert.equal((b.transport as any).sessionId, undefined);
     } finally {
@@ -174,7 +174,7 @@ test('a fresh Streamable HTTP client reconnects to a replacement runtime without
     const first = createClient(baseUrl, 'devflow-before-restart');
     try {
       await first.client.connect(first.transport);
-      firstRuntimeInstanceId = (await callCapabilities(first.client)).runtimeInstanceId;
+      firstRuntimeInstanceId = (await callHealth(first.client)).runtimeInstanceId;
       assert.equal((first.transport as any).sessionId, undefined);
     } finally {
       await first.client.close();
@@ -185,7 +185,7 @@ test('a fresh Streamable HTTP client reconnects to a replacement runtime without
     const second = createClient(baseUrl, 'devflow-after-restart');
     try {
       await second.client.connect(second.transport);
-      secondRuntimeInstanceId = (await callCapabilities(second.client)).runtimeInstanceId;
+      secondRuntimeInstanceId = (await callHealth(second.client)).runtimeInstanceId;
       assert.equal((second.transport as any).sessionId, undefined);
     } finally {
       await second.client.close();

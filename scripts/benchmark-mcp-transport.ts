@@ -6,7 +6,8 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
-import { createDevFlowMcpServer, createStatelessMcpHttpHandler } from '../src/server/mcp.js';
+import { createDevFlowMcpServer } from '../src/server/mcp.js';
+import { createStatelessMcpHttpHandler } from '../src/server/mcpStreamableHttp.js';
 
 export type BenchmarkOptions = {
   coldSamples?: number;

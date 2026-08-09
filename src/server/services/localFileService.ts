@@ -421,6 +421,8 @@ export function readFileSnippetsBatch(state: AppState, args: Record<string, any>
     repo: args.repo,
     repoUrl: args.repoUrl,
     localPath: args.localPath,
+    sessionId: args.sessionId,
+    workspaceId: args.workspaceId,
   };
   const results: any[] = [];
   let totalReturnedBytes = 0;

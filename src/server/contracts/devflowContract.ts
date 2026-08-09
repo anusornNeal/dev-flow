@@ -915,12 +915,12 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   {
     name: 'apply_patch',
     executionPolicy: { mode: 'job', jobKind: 'repo-write' },
-    description: 'Apply or dry-run a small unified diff, or perform structured guarded delete/move path operations inside a resolved local project root.',
+    description: 'Apply or dry-run an already-existing or trusted native Git unified diff, or perform structured guarded delete/move path operations inside a resolved local project root. For LLM-authored existing-file changes, prefer prepare_compact_edit + apply_prepared_edit instead of synthesizing patch text.',
     inputSchema: {
       type: 'object',
       properties: {
         ...projectIdentifierProperties,
-        patch: { type: 'string', description: 'Unified diff patch text, max 100 KB by default.' },
+        patch: { type: 'string', description: 'native Git unified diff patch text, max 100 KB by default. `*** Begin Patch` / `*** Update File` pseudo-patch syntax is not valid input.' },
         operations: {
           type: 'array', minItems: 1, maxItems: 100,
           description: 'Structured semantic path operations. Use instead of patch for delete/move.',

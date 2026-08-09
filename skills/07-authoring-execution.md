@@ -12,9 +12,10 @@ Keep repository paths relative in portable metadata. Let DevFlow resolve the act
 
 ## Guarded edits
 Prefer preview before mutation.
-- Use `prepare_compact_edit` for small/medium anchor-based multi-file Steno edits when exact fileRefs are available.
+- For LLM-authored existing-file changes, default to `prepare_compact_edit` + `apply_prepared_edit` when revision-bound anchored edits are available; do not synthesize native unified diffs when Steno or a structured anchored edit expresses the change safely.
 - Apply an unchanged Steno preview with `apply_prepared_edit` using only the returned plan id.
-- Use structured safe edit/batch operations when Steno is unsuitable.
+- `safe_edit_local_file` is the simpler option for a tiny anchored single-file edit; `edit_local_files_batch` remains the guarded structured fallback.
+- Use `apply_patch` only for an already-existing or trusted native Git unified diff, a trusted generated diff, or a documented fallback when Steno/structured editing is unsuitable. `*** Begin Patch` / `*** Update File` pseudo-patch syntax is not valid input.
 - Use `apply_and_verify` when the supported edit path can safely combine mutation, diff capture, and risk-aware verification.
 
 Revision/hash guards must remain authoritative. If a target changes, re-read and re-prepare rather than forcing a stale edit.

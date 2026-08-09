@@ -66,7 +66,24 @@ test('repo execution guidance is load-on-demand and keeps guarded edit rules', (
   assert.match(executionRules, /apply_and_verify/);
 });
 
-test('review and bug workflows retain specialist guidance', () => {
+test('DevFlow edit policy defaults LLM-authored existing-file changes to Steno', () => {
+  assert.equal(skillRouter.includes('LLM-authored existing-file'), true);
+  assert.equal(skillRouter.includes('trusted native Git unified diff'), true);
+  assert.equal(authoringCore.includes('do not synthesize native unified diffs'), true);
+  assert.equal(authoringCore.includes('tiny anchored single-file edit'), true);
+  assert.equal(authoringCore.includes('already-existing or trusted native Git unified diff'), true);
+  assert.equal(schemaReference.includes('LLM-authored existing-file'), true);
+  assert.equal(schemaReference.includes('*** Begin Patch'), true);
+  assert.equal(executionRules.includes('LLM-authored existing-file'), true);
+  assert.equal(executionRules.includes('trusted native Git unified diff'), true);
+});
+
+test('authoring skills route existing task defects to embedded bug threads', () => {
+  assert.match(skillRouter, /open_task_bug/);
+  assert.match(authoringCore, /Embedded bug thread rule/);
+  assert.match(authoringCore, /Do not use `create_task`/);
+  assert.match(schemaReference, /open_task_bug/);
+});
   assert.match(reviewerCore, /open_task_bug/);
   assert.match(skillRouter, /03-reviewer-core/);
   assert.match(skillRouter, /open_task_bug/);

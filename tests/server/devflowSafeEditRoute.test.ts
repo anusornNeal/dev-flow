@@ -149,6 +149,17 @@ test('devflowContract maps get_task_prompt to JSON route', () => {
   assert.ok(req.path.startsWith('/api/tasks/DVF-1/prompt-json'));
 });
 
+test('apply_patch contract narrows patch input to native Git unified diff', () => {
+  const tool = getToolDefinitionByName('apply_patch');
+  assert.ok(tool);
+  assert.equal(tool.description.includes('native Git unified diff'), true);
+  assert.equal(tool.description.includes('prepare_compact_edit'), true);
+  const patchDescription = tool.inputSchema?.properties?.patch?.description || '';
+  assert.equal(patchDescription.includes('native Git unified diff'), true);
+  assert.equal(patchDescription.includes('*** Begin Patch'), true);
+  assert.equal(patchDescription.includes('not valid'), true);
+});
+
 test('devflowContract exposes open_task_bug for embedded task bug threads', () => {
   const tool = getToolDefinitionByName('open_task_bug');
   assert.ok(tool, 'open_task_bug should be defined');

@@ -8,6 +8,8 @@ export interface ScanProjectForAtlasInput {
   projectId: string;
   root: string;
   path?: string;
+  paths?: string[];
+  knownFilePaths?: string[];
   includeIgnored?: boolean;
 }
 
@@ -36,7 +38,7 @@ export function scanProjectForAtlas(input: ScanProjectForAtlasInput): ProjectAtl
     throw new Error('Atlas scan path must stay inside the project root.');
   }
 
-  walkAtlasFiles(root, basePath, {
+  const scanOptions = {
     includeIgnored: input.includeIgnored === true,
     rules,
     skippedDirectories,
@@ -46,7 +48,21 @@ export function scanProjectForAtlas(input: ScanProjectForAtlasInput): ProjectAtl
     markTruncated: () => {
       truncated = true;
     },
-  });
+  };
+  const boundedPaths = Array.isArray(input.paths)
+    ? Array.from(new Set(input.paths.map((value) => String(value).trim()).filter(Boolean))).sort()
+    : [];
+  if (boundedPaths.length > 0) {
+    for (const relativePath of boundedPaths) {
+      if (files.length >= rules.maxFiles) {
+        truncated = true;
+        break;
+      }
+      collectAtlasFile(root, path.resolve(root, relativePath), scanOptions);
+    }
+  } else {
+    walkAtlasFiles(root, basePath, scanOptions);
+  }
 
   const atlas = buildAtlasGraphFromScan({
     projectId: input.projectId,
@@ -57,6 +73,7 @@ export function scanProjectForAtlas(input: ScanProjectForAtlasInput): ProjectAtl
     warnings,
     errors,
     startedAt,
+    knownFilePaths: input.knownFilePaths,
   });
   const scanStats = buildAtlasScanStats({
     fileCount: files.length,
@@ -67,6 +84,45 @@ export function scanProjectForAtlas(input: ScanProjectForAtlasInput): ProjectAtl
     startedAt,
   });
   return { atlas, scanStats };
+}
+
+function collectAtlasFile(
+  root: string,
+  fullPath: string,
+  options: {
+    rules: EffectiveScanRules;
+    files: AtlasScannedFile[];
+    warnings: string[];
+    errors: string[];
+  },
+) {
+  const resolved = path.resolve(fullPath);
+  const relativePath = toRelativePath(root, resolved);
+  if (resolved !== root && !resolved.startsWith(`${root}${path.sep}`)) {
+    throw new Error('Atlas scan path must stay inside the project root.');
+  }
+  if (!fs.existsSync(resolved)) {
+    options.warnings.push(`Skipped missing file ${relativePath}`);
+    return;
+  }
+  const stat = fs.statSync(resolved);
+  if (!stat.isFile()) {
+    options.warnings.push(`Skipped non-file path ${relativePath}`);
+    return;
+  }
+  const fileName = path.basename(resolved);
+  const extension = path.extname(fileName).toLowerCase();
+  if (!isScannableFile(fileName, extension, relativePath)) return;
+  if (stat.size > options.rules.maxFileBytes) {
+    options.warnings.push(`Skipped oversized file ${relativePath}`);
+    return;
+  }
+  try {
+    const content = fs.readFileSync(resolved, 'utf8');
+    options.files.push(buildScannedFile(relativePath, extension, stat.size, content));
+  } catch (error) {
+    options.errors.push(`Unable to read ${relativePath}: ${formatError(error)}`);
+  }
 }
 
 function walkAtlasFiles(

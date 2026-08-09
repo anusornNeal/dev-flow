@@ -133,6 +133,24 @@ test('scanProjectForAtlas builds deterministic verified graph facts from a small
   assert.equal(result.scanStats.warnings.length, 0);
 });
 
+test('scanProjectForAtlas supports bounded changed-file scans with known graph paths', () => {
+  const result = scanProjectForAtlas({
+    projectId: 'project-scan-1',
+    root: tempDir,
+    paths: ['src/server/routes/tasks.ts'],
+    knownFilePaths: ['src/server/routes/tasks.ts', 'src/server/services/taskService.ts'],
+  } as any);
+  const scannedNodes = result.atlas.nodes.filter((node: any) => typeof node.path === 'string' && node.path.endsWith('.ts'));
+
+  assert.equal(result.scanStats.scannedFileCount, 1);
+  assert.deepEqual(scannedNodes.map((node: any) => node.path), ['src/server/routes/tasks.ts']);
+  assert.ok(result.atlas.edges.some((edge: any) =>
+    edge.kind === 'imports' &&
+    edge.source === 'file:src/server/routes/tasks.ts' &&
+    edge.target === 'file:src/server/services/taskService.ts'
+  ));
+});
+
 test.after(() => {
   fs.rmSync(tempDir, { recursive: true, force: true });
 });

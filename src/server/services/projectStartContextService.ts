@@ -9,6 +9,7 @@ import { getRepoInspectionIndex } from './repoInspectionIndexService';
 import { registerRepoCacheInvalidator } from './repoCacheInvalidationService';
 import { getRepoRevisionForRoot } from './repoRevisionService';
 import { ensureRepoChangeWatcher } from './workspaceChangeWatcherService';
+import { maybeRefreshAtlasOnProjectOpen } from './projectAtlasService.js';
 
 const HINT_FILES = ['AGENTS.md', 'README.md', 'package.json', 'tsconfig.json', 'vite.config.ts', 'gradlew.bat', 'build.gradle', 'settings.gradle'];
 
@@ -67,6 +68,23 @@ export function getProjectStartContext(state: AppState, args: Record<string, any
     }
   }
 
+  const atlasRefresh = maybeRefreshAtlasOnProjectOpen(project, {
+    now: typeof args.atlasNow === 'string' ? args.atlasNow : undefined,
+    scheduler: typeof args.atlasScheduler === 'function' ? args.atlasScheduler : undefined,
+  });
+  const projectAtlas = {
+    projectId: atlasRefresh.projectId,
+    cacheStatus: atlasRefresh.cacheStatus,
+    lifecycleState: atlasRefresh.lifecycleState,
+    stale: atlasRefresh.stale,
+    shouldRefresh: atlasRefresh.shouldRefresh,
+    scheduled: atlasRefresh.scheduled,
+    deduplicated: atlasRefresh.deduplicated,
+    strategy: atlasRefresh.strategy,
+    reason: atlasRefresh.reason,
+    lastError: atlasRefresh.freshness?.lastError,
+  };
+
   const presentHints = root
     ? HINT_FILES.filter((fileName) => fs.existsSync(path.join(root, fileName)))
     : [];
@@ -84,6 +102,7 @@ export function getProjectStartContext(state: AppState, args: Record<string, any
     git,
     repoRevision,
     changeWatcher,
+    projectAtlas,
     files: topLevel,
     hints: {
       present: presentHints,
@@ -172,6 +191,7 @@ export function getRepoReadSnapshot(state: AppState, args: Record<string, any>) 
     query,
     repoRevision: start.repoRevision,
     path: typeof args.path === 'string' ? args.path : '.',
+    projectAtlas: start.projectAtlas,
     git: {
       available: start.git?.available === true,
       branch: start.git?.branch,
@@ -272,6 +292,7 @@ export function getRepoContextBundle(state: AppState, args: Record<string, any>)
     query,
     repoRevision: start.repoRevision,
     git: start.git,
+    projectAtlas: start.projectAtlas,
     hints: start.hints,
     index: {
       cache: index.cache,

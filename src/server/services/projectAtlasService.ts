@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import type { AtlasFreshness, ProjectAtlas } from '../../types.js';
 import type { Project } from '../../types.js';
 import { renderAtlasMarkdown } from '../../lib/projectAtlasExport.js';
@@ -12,6 +14,7 @@ import {
 } from './projectAtlasCacheService.js';
 import { applyProjectAtlasAgentUpdatePatch, type ApplyProjectAtlasAgentUpdateOptions } from './projectAtlasAgentUpdateService.js';
 import { scanProjectForAtlas } from './projectAtlasScannerService.js';
+import { getRepoRevisionForRoot, type RepoRevision } from './repoRevisionService.js';
 
 export type ProjectAtlasApiMode = 'compact' | 'standard' | 'full' | 'chatgpt-context' | 'agent-context' | 'task-focused' | 'diff-impact';
 
@@ -41,6 +44,24 @@ export interface AtlasTaskLike {
 const DEFAULT_ATLAS_OUTPUT_LIMIT = 80;
 const MAX_ATLAS_OUTPUT_LIMIT = 1000;
 
+export type ProjectAtlasLifecycleState = 'missing' | 'generating' | 'fresh' | 'stale' | 'failed-retryable';
+export type ProjectAtlasRefreshStrategy = 'bootstrap' | 'incremental' | 'full';
+
+export interface ProjectAtlasRefreshInput {
+  now?: string;
+  repoRevision?: RepoRevision;
+  scheduler?: (run: () => void) => void;
+}
+
+type ActiveAtlasRefresh = {
+  revisionToken?: string;
+  strategy: ProjectAtlasRefreshStrategy;
+};
+
+const activeAtlasRefreshes = new Map<string, ActiveAtlasRefresh>();
+const DEFAULT_INCREMENTAL_FILE_LIMIT = 8;
+
+
 export function readLatestAtlas(projectId: string) {
   return readAtlasCache({ projectId });
 }
@@ -68,24 +89,219 @@ export function getAtlasRefreshStatus(
   };
 }
 
-export function maybeRefreshAtlasOnProjectOpen(project: Project, input: { now?: string } = {}) {
+export function maybeRefreshAtlasOnProjectOpen(project: Project, input: ProjectAtlasRefreshInput = {}) {
   const cached = readLatestAtlas(project.id);
   const freshness = cached.atlas.freshness;
-  const stale = isAtlasStale(freshness, input);
+  const repoRevision = resolveAtlasRepoRevision(project, input.repoRevision);
+  const stale = isAtlasStale(freshness, {
+    now: input.now,
+    repoFingerprint: repoRevision?.token,
+  });
+  const active = activeAtlasRefreshes.get(project.id);
+
+  if (!stale && cached.status === 'ok') {
+    return {
+      projectId: project.id,
+      cacheStatus: cached.status,
+      stale: false,
+      shouldRefresh: false,
+      scheduled: false,
+      deduplicated: false,
+      lifecycleState: 'fresh' as ProjectAtlasLifecycleState,
+      reason: 'not-needed',
+      strategy: undefined,
+      freshness,
+      repoFingerprint: repoRevision?.token,
+    };
+  }
+
+  const strategy = chooseAtlasRefreshStrategy(project, cached.atlas, repoRevision, cached.status);
+  if (active) {
+    return {
+      projectId: project.id,
+      cacheStatus: cached.status,
+      stale: true,
+      shouldRefresh: true,
+      scheduled: false,
+      deduplicated: active.revisionToken === repoRevision?.token,
+      lifecycleState: 'generating' as ProjectAtlasLifecycleState,
+      reason: 'refresh-in-progress',
+      strategy: active.strategy,
+      freshness,
+      repoFingerprint: repoRevision?.token,
+    };
+  }
+
+  if (!project.localPath) {
+    return {
+      projectId: project.id,
+      cacheStatus: cached.status,
+      stale: true,
+      shouldRefresh: false,
+      scheduled: false,
+      deduplicated: false,
+      lifecycleState: freshness.status === 'error' ? 'failed-retryable' as ProjectAtlasLifecycleState : 'missing' as ProjectAtlasLifecycleState,
+      reason: 'missing-local-path',
+      strategy,
+      freshness,
+      repoFingerprint: repoRevision?.token,
+    };
+  }
+
+  activeAtlasRefreshes.set(project.id, { revisionToken: repoRevision?.token, strategy });
+  const scheduler = input.scheduler ?? ((run: () => void) => setTimeout(run, 0));
+  try {
+    scheduler(() => {
+      try {
+        if (strategy === 'incremental' && repoRevision) {
+          refreshProjectAtlasIncrementally(project, repoRevision, input.now);
+        } else {
+          rescanProjectAtlasSafely(project, {
+            now: input.now,
+            manualRescan: false,
+            repoFingerprint: repoRevision?.token,
+          });
+        }
+      } catch (error) {
+        recordAtlasRefreshFailure(project.id, error, input.now);
+      } finally {
+        activeAtlasRefreshes.delete(project.id);
+      }
+    });
+  } catch (error) {
+    activeAtlasRefreshes.delete(project.id);
+    const failedAtlas = recordAtlasRefreshFailure(project.id, error, input.now);
+    return {
+      projectId: project.id,
+      cacheStatus: cached.status,
+      stale: true,
+      shouldRefresh: true,
+      scheduled: false,
+      deduplicated: false,
+      lifecycleState: 'failed-retryable' as ProjectAtlasLifecycleState,
+      reason: 'refresh-schedule-failed',
+      strategy,
+      freshness: failedAtlas.freshness,
+      repoFingerprint: repoRevision?.token,
+    };
+  }
 
   return {
     projectId: project.id,
     cacheStatus: cached.status,
-    stale,
-    shouldRefresh: false,
-    reason: stale ? 'ask-chatgpt-update' : 'not-needed',
+    stale: true,
+    shouldRefresh: true,
+    scheduled: true,
+    deduplicated: false,
+    lifecycleState: 'generating' as ProjectAtlasLifecycleState,
+    reason: cached.status === 'missing' || freshness.status === 'not-generated' ? 'missing-atlas' : 'stale-atlas',
+    strategy,
     freshness,
+    repoFingerprint: repoRevision?.token,
   };
+}
+
+function recordAtlasRefreshFailure(projectId: string, error: unknown, now?: string) {
+  const cached = readLatestAtlas(projectId);
+  const message = error instanceof Error ? error.message : String(error);
+  const atlas: ProjectAtlas = {
+    ...cached.atlas,
+    freshness: {
+      ...cached.atlas.freshness,
+      status: 'error',
+      staleReason: 'refresh-failed',
+      lastError: message,
+      lastDailyOpenCheckedAt: now ?? cached.atlas.freshness.lastDailyOpenCheckedAt,
+    },
+  };
+  saveLatestAtlas(atlas);
+  return atlas;
+}
+
+function resolveAtlasRepoRevision(project: Project, explicit?: RepoRevision) {
+  if (explicit) return explicit;
+  if (!project.localPath) return undefined;
+  try {
+    return getRepoRevisionForRoot(project.localPath);
+  } catch {
+    return undefined;
+  }
+}
+
+function chooseAtlasRefreshStrategy(
+  project: Project,
+  atlas: ProjectAtlas,
+  repoRevision: RepoRevision | undefined,
+  cacheStatus: string,
+): ProjectAtlasRefreshStrategy {
+  if (cacheStatus !== 'ok' || atlas.nodes.length === 0 || atlas.freshness.status === 'not-generated') return 'bootstrap';
+  if (canRefreshAtlasIncrementally(project, atlas, repoRevision)) return 'incremental';
+  return 'full';
+}
+
+function canRefreshAtlasIncrementally(project: Project, atlas: ProjectAtlas, repoRevision?: RepoRevision) {
+  if (!project.localPath || !repoRevision || atlas.nodes.length === 0) return false;
+  if (repoRevision.changedFiles.length === 0 || repoRevision.changedFiles.length > DEFAULT_INCREMENTAL_FILE_LIMIT) return false;
+  return repoRevision.changedFiles.every((file) => {
+    const status = file.status.toUpperCase();
+    if (status.includes('D') || status.includes('R') || file.workingPath.includes(' -> ')) return false;
+    return fs.existsSync(path.resolve(project.localPath as string, file.workingPath));
+  });
+}
+
+function refreshProjectAtlasIncrementally(project: Project, repoRevision: RepoRevision, now?: string) {
+  if (!project.localPath) throw new Error('Project has no localPath configured for Atlas scan');
+  const cached = readLatestAtlas(project.id);
+  if (cached.status !== 'ok' || cached.atlas.nodes.length === 0) {
+    return rescanProjectAtlasSafely(project, { now, manualRescan: false, repoFingerprint: repoRevision.token });
+  }
+  const changedPaths = repoRevision.changedFiles.map((file) => file.workingPath.replace(/\\/g, '/'));
+  const knownFilePaths = cached.atlas.nodes.map((node) => node.path).filter((value): value is string => Boolean(value));
+  const partial = scanProjectForAtlas({
+    projectId: project.id,
+    root: project.localPath,
+    paths: changedPaths,
+    knownFilePaths,
+  });
+  if (partial.scanStats.errors.length > 0) {
+    throw new Error(partial.scanStats.errors.join('; '));
+  }
+  if (partial.scanStats.scannedFileCount !== changedPaths.length) {
+    throw new Error('Incremental Atlas refresh could not scan every changed file.');
+  }
+
+  const changedNodeIds = new Set(changedPaths.map((filePath) => `file:${filePath}`));
+  const nodes = new Map(cached.atlas.nodes.map((node) => [node.id, node]));
+  for (const node of partial.atlas.nodes) nodes.set(node.id, node);
+  const edges = new Map(
+    cached.atlas.edges
+      .filter((edge) => !changedNodeIds.has(edge.source) && !(edge.kind === 'contains' && changedNodeIds.has(edge.target)))
+      .map((edge) => [edge.id, edge]),
+  );
+  for (const edge of partial.atlas.edges) edges.set(edge.id, edge);
+
+  const atlas: ProjectAtlas = {
+    ...cached.atlas,
+    nodes: Array.from(nodes.values()).sort((left, right) => left.id.localeCompare(right.id)),
+    edges: Array.from(edges.values()).sort((left, right) => left.id.localeCompare(right.id)),
+    freshness: {
+      ...cached.atlas.freshness,
+      generatedAt: now ?? new Date().toISOString(),
+      repoFingerprint: repoRevision.token,
+      scanMode: 'automatic',
+      status: 'fresh',
+      staleReason: undefined,
+      lastError: undefined,
+    },
+  };
+  saveLatestAtlas(atlas);
+  return { ok: true, projectId: project.id, atlas, scanStats: partial.scanStats, status: getProjectAtlasStatus(project.id) };
 }
 
 export function getProjectAtlasForApi(project: Project, input: ProjectAtlasApiInput = {}) {
   const mode = input.mode ?? 'compact';
   const limit = normalizeAtlasLimit(input.limit, mode === 'full' ? 500 : DEFAULT_ATLAS_OUTPUT_LIMIT);
+  const refreshStatus = maybeRefreshAtlasOnProjectOpen(project);
   const cached = readLatestAtlas(project.id);
   const atlas = cached.status === 'ok' ? getManagedProjectAtlas(cached.atlas) : cached.atlas;
   const status = getProjectAtlasStatus(project.id);
@@ -97,6 +313,8 @@ export function getProjectAtlasForApi(project: Project, input: ProjectAtlasApiIn
     generatedAt: status.generatedAt,
     freshness: atlas.freshness,
     cacheStatus: cached.status,
+    lifecycleState: refreshStatus.lifecycleState,
+    refreshStatus,
   };
 
   if (mode === 'chatgpt-context' || mode === 'agent-context') {
@@ -191,7 +409,7 @@ export function rescanProjectAtlas(project: Project) {
   };
 }
 
-export function rescanProjectAtlasSafely(project: Project, input: { now?: string; manualRescan?: boolean } = {}) {
+export function rescanProjectAtlasSafely(project: Project, input: { now?: string; manualRescan?: boolean; repoFingerprint?: string } = {}) {
   try {
     const result = rescanProjectAtlas(project);
     const atlas = {
@@ -199,6 +417,7 @@ export function rescanProjectAtlasSafely(project: Project, input: { now?: string
       freshness: {
         ...result.atlas.freshness,
         generatedAt: input.now ?? result.atlas.freshness.generatedAt ?? new Date().toISOString(),
+        repoFingerprint: input.repoFingerprint ?? result.atlas.freshness.repoFingerprint,
         scanMode: input.manualRescan === false ? 'automatic' as const : 'manual' as const,
         status: 'fresh' as const,
         lastError: undefined,
@@ -236,10 +455,24 @@ export function getProjectAtlasStatus(projectId: string) {
   const cached = readLatestAtlas(projectId);
   const freshness = cached.atlas.freshness;
   const authoring = cached.atlas.authoring;
+  const stale = isAtlasStale(freshness);
+  const active = activeAtlasRefreshes.get(projectId);
+  const lifecycleState: ProjectAtlasLifecycleState = active
+    ? 'generating'
+    : cached.status !== 'ok' || freshness.status === 'not-generated'
+      ? 'missing'
+      : freshness.status === 'error'
+        ? 'failed-retryable'
+        : stale
+          ? 'stale'
+          : 'fresh';
   return {
     projectId,
     cacheStatus: cached.status,
-    stale: isAtlasStale(freshness),
+    stale,
+    lifecycleState,
+    refreshStrategy: active?.strategy,
+    retryable: lifecycleState === 'failed-retryable',
     generatedAt: freshness.generatedAt,
     freshness,
     nodeCount: cached.atlas.nodes.length,

@@ -21,6 +21,7 @@ export interface BuildAtlasGraphInput {
   warnings: string[];
   errors: string[];
   startedAt: number;
+  knownFilePaths?: string[];
 }
 
 export function buildAtlasGraphFromScan(input: BuildAtlasGraphInput): ProjectAtlas {
@@ -51,7 +52,7 @@ export function buildAtlasGraphFromScan(input: BuildAtlasGraphInput): ProjectAtl
     });
   }
 
-  const filePaths = new Set(input.files.map((file) => file.path));
+  const filePaths = new Set([...(input.knownFilePaths ?? []), ...input.files.map((file) => file.path)]);
   for (const file of input.files) {
     for (const importPath of file.imports) {
       const target = resolveImportTarget(file.path, importPath, filePaths);

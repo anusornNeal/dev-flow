@@ -67,6 +67,21 @@ test('getRepoInspectionIndex returns focused file and symbol matches from cachea
   assert.ok(first.matches.some((entry: any) => entry.symbols.includes('DetailsTabContent')));
 });
 
+test('getRepoInspectionIndex keeps explicit target files even when query terms do not match them', () => {
+  clearRepoInspectionIndexCache();
+  const result = getRepoInspectionIndex(state, {
+    projectId: 'project-index-1',
+    q: 'OtherThing',
+    targetFiles: ['app/src/JobDetailScreen.kt'],
+    limit: 2,
+  });
+
+  assert.equal(result.matches.length, 2);
+  const target = result.matches.find((entry: any) => entry.path.replace(/\\/g, '/') === 'app/src/JobDetailScreen.kt');
+  assert.ok(target);
+  assert.equal(target.explicitTarget, true);
+});
+
 test('getRepoInspectionIndex incrementally refreshes a changed working-tree file inside the cache TTL', () => {
   clearRepoInspectionIndexCache();
   const first = getRepoInspectionIndex(state, {

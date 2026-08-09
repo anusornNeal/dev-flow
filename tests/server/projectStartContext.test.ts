@@ -4,7 +4,6 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import Database from 'better-sqlite3';
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-start-context-'));
 process.env.DEVFLOW_DB_PATH = path.join(os.tmpdir(), `devflow-start-context-db-${path.basename(tempDir)}.sqlite`);
@@ -20,6 +19,13 @@ fs.writeFileSync(path.join(tempDir, 'package.json'), '{"name":"fixture"}\n', 'ut
 fs.writeFileSync(path.join(tempDir, 'README.md'), '# Fixture\n', 'utf8');
 fs.mkdirSync(path.join(tempDir, 'src'));
 fs.writeFileSync(path.join(tempDir, 'src', 'snapshotService.ts'), "export function snapshotExample() { return 'snapshot'; }\n", 'utf8');
+for (let index = 0; index < 10; index += 1) {
+  fs.writeFileSync(
+    path.join(tempDir, 'src', `sharedContext${index}.ts`),
+    `export function SharedContext${index}() { return '${'x'.repeat(240)}'; }\n`,
+    'utf8',
+  );
+}
 
 function git(args: string[]) {
   const result = spawnSync('git', args, { cwd: tempDir, encoding: 'utf8', shell: false });
@@ -32,19 +38,12 @@ git(['config', 'user.email', 'devflow@example.com']);
 git(['add', '.']);
 git(['commit', '-m', 'initial']);
 
-const fixtureDb = new Database(process.env.DEVFLOW_DB_PATH);
-fixtureDb.exec(fs.readFileSync(new URL('../../src/db/schema.sql', import.meta.url), 'utf8'));
-fixtureDb.prepare(`
-  INSERT INTO projects (id, name, repoUrl, description, createdAt, localPath, taskIdPrefix)
-  VALUES (?, ?, ?, ?, ?, ?, ?)
-`).run('project-start-1', 'Start Fixture', 'https://example.com/start', null, new Date().toISOString(), tempDir, 'TST');
-fixtureDb.close();
-
 const state: any = {
   projectsCache: [
     { id: 'project-start-1', name: 'Start Fixture', repoUrl: 'https://example.com/start', localPath: tempDir },
   ],
 };
+createProject(state.projectsCache[0]);
 
 test('getProjectStartContext returns compact project and top-level file context', () => {
   const scheduled: Array<() => void> = [];

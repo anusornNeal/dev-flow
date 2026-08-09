@@ -418,6 +418,53 @@ test('mcpToolJobService - equivalent repo-command verification uses single-fligh
   }
 });
 
+test('mcpToolJobService - live single-flight consumers protect an older verification candidate from supersession', async () => {
+  const root = process.cwd();
+  const state = makeState(root);
+  const gateA = deferred();
+  const gateB = deferred();
+  const starts: string[] = [];
+  __setToolJobTestRunner('run_project_command', async (_state, args) => {
+    starts.push(args.verificationCandidateKey);
+    if (args.verificationCandidateKey === 'A') await gateA.promise;
+    if (args.verificationCandidateKey === 'B') await gateB.promise;
+    return { ok: true, candidate: args.verificationCandidateKey };
+  });
+
+  try {
+    const argsA = {
+      localPath: root,
+      command: 'typecheck',
+      verificationSeriesKey: 'shared-series',
+      verificationCandidateKey: 'A',
+    };
+    const leaderA = enqueueToolJob(state, 'run_project_command', argsA, 'repo-command');
+    const followerA = enqueueToolJob(state, 'run_project_command', argsA, 'repo-command');
+    assert.strictEqual(followerA.sharedWith, leaderA.jobId);
+    await waitUntil(() => starts.includes('A'), 'Expected candidate A leader to start');
+
+    const candidateB = enqueueToolJob(state, 'run_project_command', {
+      ...argsA,
+      verificationCandidateKey: 'B',
+      singleFlight: false,
+    }, 'repo-command');
+
+    assert.notStrictEqual(getToolJobStatus(leaderA.jobId)?.status, 'cancelled');
+    assert.equal((getToolJobStatus(leaderA.jobId) as any)?.superseded, undefined);
+    assert.equal(getToolJobStatus(followerA.jobId)?.status, 'running');
+
+    gateA.resolve();
+    gateB.resolve();
+    await waitForStatus(leaderA.jobId, 'succeeded');
+    await waitForStatus(followerA.jobId, 'succeeded');
+    await waitForStatus(candidateB.jobId, 'succeeded');
+  } finally {
+    gateA.resolve();
+    gateB.resolve();
+    __setToolJobTestRunner('run_project_command', null);
+  }
+});
+
 test('mcpToolJobService - safe verification runs concurrently with same-repo reads', async () => {
   const root = makeTempRepo('verify-read');
   const state = makeState(root);
@@ -797,6 +844,188 @@ test('mcpToolJobService - phase telemetry separates queue blockers from executio
     blockers.first.resolve();
     blockers.second.resolve();
     __setToolJobTestRunner(toolName, null);
+  }
+});
+
+test('mcpToolJobService - newer verification candidates supersede obsolete queued work', async () => {
+  const roots = [makeTempRepo('supersede-block-a'), makeTempRepo('supersede-block-b'), makeTempRepo('supersede-target')];
+  const state = makeState(...roots);
+  const blockers = { blockA: deferred(), blockB: deferred(), candidateC: deferred() };
+  const starts: string[] = [];
+  __setToolJobTestRunner('run_project_command', async (_state, args) => {
+    starts.push(args.label);
+    const blocker = blockers[args.label as keyof typeof blockers];
+    if (blocker) await blocker.promise;
+    return { ok: true, label: args.label };
+  });
+
+  try {
+    const blockA = enqueueToolJob(state, 'run_project_command', { localPath: roots[0], command: 'typecheck', label: 'blockA', singleFlight: false }, 'repo-command');
+    const blockB = enqueueToolJob(state, 'run_project_command', { localPath: roots[1], command: 'typecheck', label: 'blockB', singleFlight: false }, 'repo-command');
+    await waitUntil(() => starts.includes('blockA') && starts.includes('blockB'), 'Expected verification capacity blockers to start');
+
+    const candidateA = enqueueToolJob(state, 'run_project_command', {
+      localPath: roots[2], command: 'typecheck', label: 'candidateA', singleFlight: false,
+      verificationSeriesKey: 'workspace-verify', verificationCandidateKey: 'A',
+    }, 'repo-command');
+    const candidateB = enqueueToolJob(state, 'run_project_command', {
+      localPath: roots[2], command: 'typecheck', label: 'candidateB', singleFlight: false,
+      verificationSeriesKey: 'workspace-verify', verificationCandidateKey: 'B',
+    }, 'repo-command');
+    const candidateC = enqueueToolJob(state, 'run_project_command', {
+      localPath: roots[2], command: 'typecheck', label: 'candidateC', singleFlight: false,
+      verificationSeriesKey: 'workspace-verify', verificationCandidateKey: 'C',
+    }, 'repo-command');
+
+    assert.equal(getToolJobStatus(candidateA.jobId)?.status, 'cancelled');
+    assert.equal((getToolJobStatus(candidateA.jobId) as any)?.supersededByCandidateKey, 'B');
+    assert.equal((readJobResult(candidateA.jobId) as any)?.result?.code, 'JOB_SUPERSEDED');
+    assert.equal(getToolJobStatus(candidateB.jobId)?.status, 'cancelled');
+    assert.equal((getToolJobStatus(candidateB.jobId) as any)?.supersededByCandidateKey, 'C');
+    assert.equal(getToolJobStatus(candidateC.jobId)?.status, 'queued');
+    assert.equal(getQueueMetrics().queue.filter((entry: any) => entry.resourceKey === getToolJobStatus(candidateC.jobId)?.resourceKey).length, 1);
+
+    blockers.blockA.resolve();
+    blockers.blockB.resolve();
+    await waitForStatus(blockA.jobId, 'succeeded');
+    await waitForStatus(blockB.jobId, 'succeeded');
+    await waitUntil(() => starts.includes('candidateC'), 'Newest candidate should start after capacity frees');
+    blockers.candidateC.resolve();
+    await waitForStatus(candidateC.jobId, 'succeeded');
+  } finally {
+    blockers.blockA.resolve();
+    blockers.blockB.resolve();
+    blockers.candidateC.resolve();
+    __setToolJobTestRunner('run_project_command', null);
+  }
+});
+
+test('mcpToolJobService - required verification is not superseded by a newer candidate', async () => {
+  const roots = [makeTempRepo('required-block-a'), makeTempRepo('required-block-b'), makeTempRepo('required-target')];
+  const state = makeState(...roots);
+  const gates = { blockA: deferred(), blockB: deferred(), requiredA: deferred(), candidateB: deferred() };
+  const starts: string[] = [];
+  __setToolJobTestRunner('run_project_command', async (_state, args) => {
+    starts.push(args.label);
+    const gate = gates[args.label as keyof typeof gates];
+    if (gate) await gate.promise;
+    return { ok: true, label: args.label };
+  });
+
+  try {
+    const blockA = enqueueToolJob(state, 'run_project_command', { localPath: roots[0], command: 'typecheck', label: 'blockA', singleFlight: false }, 'repo-command');
+    const blockB = enqueueToolJob(state, 'run_project_command', { localPath: roots[1], command: 'typecheck', label: 'blockB', singleFlight: false }, 'repo-command');
+    await waitUntil(() => starts.includes('blockA') && starts.includes('blockB'), 'Expected verification capacity blockers to start');
+
+    const requiredA = enqueueToolJob(state, 'run_project_command', {
+      localPath: roots[2], command: 'typecheck', label: 'requiredA', singleFlight: false,
+      verificationSeriesKey: 'review-gate', verificationCandidateKey: 'A', verificationRequired: true,
+    }, 'repo-command');
+    const candidateB = enqueueToolJob(state, 'run_project_command', {
+      localPath: roots[2], command: 'typecheck', label: 'candidateB', singleFlight: false,
+      verificationSeriesKey: 'review-gate', verificationCandidateKey: 'B',
+    }, 'repo-command');
+
+    assert.equal(getToolJobStatus(requiredA.jobId)?.status, 'queued');
+    assert.equal((getToolJobStatus(requiredA.jobId) as any)?.supersededByCandidateKey, undefined);
+    assert.equal(getToolJobStatus(candidateB.jobId)?.status, 'queued');
+
+    gates.blockA.resolve();
+    gates.blockB.resolve();
+    await waitForStatus(blockA.jobId, 'succeeded');
+    await waitForStatus(blockB.jobId, 'succeeded');
+    gates.requiredA.resolve();
+    gates.candidateB.resolve();
+    await waitForStatus(requiredA.jobId, 'succeeded');
+    await waitForStatus(candidateB.jobId, 'succeeded');
+  } finally {
+    Object.values(gates).forEach((gate) => gate.resolve());
+    __setToolJobTestRunner('run_project_command', null);
+  }
+});
+
+test('mcpToolJobService - verification backlog returns structured backpressure instead of growing unbounded', async () => {
+  const roots = [makeTempRepo('backpressure-block-a'), makeTempRepo('backpressure-block-b'), makeTempRepo('backpressure-target')];
+  const state = makeState(...roots);
+  const gates = { blockA: deferred(), blockB: deferred() };
+  const starts: string[] = [];
+  __setToolJobTestRunner('run_project_command', async (_state, args) => {
+    starts.push(args.label);
+    const gate = gates[args.label as keyof typeof gates];
+    if (gate) await gate.promise;
+    return { ok: true };
+  });
+
+  try {
+    const blockA = enqueueToolJob(state, 'run_project_command', { localPath: roots[0], command: 'typecheck', label: 'blockA', singleFlight: false }, 'repo-command');
+    const blockB = enqueueToolJob(state, 'run_project_command', { localPath: roots[1], command: 'typecheck', label: 'blockB', singleFlight: false }, 'repo-command');
+    await waitUntil(() => starts.includes('blockA') && starts.includes('blockB'), 'Expected verification capacity blockers to start');
+
+    const queuedOne = enqueueToolJob(state, 'run_project_command', { localPath: roots[2], command: 'typecheck', singleFlight: false, verificationBacklogLimit: 2 }, 'repo-command');
+    const queuedTwo = enqueueToolJob(state, 'run_project_command', { localPath: roots[2], command: 'typecheck', singleFlight: false, verificationBacklogLimit: 2 }, 'repo-command');
+    const targetResourceKey = getToolJobStatus(queuedOne.jobId)?.resourceKey;
+    assert.equal(targetResourceKey, getToolJobStatus(queuedTwo.jobId)?.resourceKey);
+    assert.throws(
+      () => enqueueToolJob(state, 'run_project_command', { localPath: roots[2], command: 'typecheck', singleFlight: false, verificationBacklogLimit: 2 }, 'repo-command'),
+      (error: any) => error?.payload?.code === 'VERIFICATION_BACKPRESSURE' && error?.status === 429,
+    );
+    assert.equal(getQueueMetrics().metrics.backpressure.rejections >= 1, true);
+    assert.equal(getQueueMetrics().queue.filter((entry: any) => entry.resourceKey === targetResourceKey).length, 2);
+
+    gates.blockA.resolve();
+    gates.blockB.resolve();
+    await waitForStatus(blockA.jobId, 'succeeded');
+    await waitForStatus(blockB.jobId, 'succeeded');
+  } finally {
+    gates.blockA.resolve();
+    gates.blockB.resolve();
+    __setToolJobTestRunner('run_project_command', null);
+  }
+});
+
+test('mcpToolJobService - running obsolete verification uses cooperative cancellation and remains non-authoritative', async () => {
+  const root = makeTempRepo('supersede-running');
+  const state = makeState(root);
+  const startedA = deferred();
+  const finishB = deferred();
+  let cancellationRequested = false;
+  __setToolJobTestRunner('run_project_command', async (_state, args, _logger, setCancelFn) => {
+    if (args.label === 'A') {
+      await new Promise((_resolve, reject) => {
+        setCancelFn(() => {
+          cancellationRequested = true;
+          const error = new Error('superseded');
+          error.name = 'AbortError';
+          reject(error);
+        });
+        startedA.resolve();
+      });
+    }
+    if (args.label === 'B') await finishB.promise;
+    return { ok: true, label: args.label };
+  });
+
+  try {
+    const candidateA = enqueueToolJob(state, 'run_project_command', {
+      localPath: root, command: 'typecheck', label: 'A', singleFlight: false,
+      verificationSeriesKey: 'running-series', verificationCandidateKey: 'A',
+    }, 'repo-command');
+    await startedA.promise;
+    const candidateB = enqueueToolJob(state, 'run_project_command', {
+      localPath: root, command: 'typecheck', label: 'B', singleFlight: false,
+      verificationSeriesKey: 'running-series', verificationCandidateKey: 'B',
+    }, 'repo-command');
+
+    await waitForStatus(candidateA.jobId, 'cancelled');
+    assert.equal(cancellationRequested, true);
+    assert.equal((getToolJobStatus(candidateA.jobId) as any)?.authoritative, false);
+    assert.equal((getToolJobStatus(candidateA.jobId) as any)?.supersededByCandidateKey, 'B');
+    assert.equal((readJobResult(candidateA.jobId) as any)?.result?.code, 'JOB_SUPERSEDED');
+    finishB.resolve();
+    await waitForStatus(candidateB.jobId, 'succeeded');
+  } finally {
+    finishB.resolve();
+    __setToolJobTestRunner('run_project_command', null);
   }
 });
 

@@ -5,10 +5,12 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import express from 'express';
+import { executeAllMigrations } from '../../src/db/migrations/index.js';
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-restart-route-'));
 process.env.DEVFLOW_APP_ROOT = tempRoot;
 process.env.DEVFLOW_DB_PATH = path.join(tempRoot, 'devflow.db');
+executeAllMigrations();
 
 const { registerDevFlowRoutes } = await import('../../src/server/routes/devflow.js');
 const {
@@ -88,7 +90,7 @@ test('supervised restart acknowledges before scheduling server exit', async () =
     const response = await fetch(`${baseUrl}/api/restart`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
     const body = await response.json() as any;
 
-    assert.equal(response.status, 200);
+    assert.equal(response.status, 200, JSON.stringify(body));
     assert.equal(body.accepted, true);
     assert.equal(body.duplicate, false);
     assert.match(body.ticket, /^restart-/);

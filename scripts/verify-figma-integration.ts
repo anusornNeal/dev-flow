@@ -10,6 +10,8 @@ import type { AppState, ApiRouteDeps } from '../src/server/types.js';
 
 const { registerSettingsRoutes } = await import('../src/server/routes/settings.js');
 const { FigmaService } = await import('../src/server/services/figmaService.js');
+const { createMemoryCredentialVaultProvider, setCredentialVaultProviderForTests } = await import('../src/server/services/credentialVaultService.js');
+setCredentialVaultProviderForTests(createMemoryCredentialVaultProvider());
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-figma-'));
 process.env.DEVFLOW_DB_PATH = path.join(tempDir, 'devflow.db');

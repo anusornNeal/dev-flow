@@ -3,6 +3,7 @@ import path from 'node:path';
 import { getProjectAtlasCachePath } from '../../lib/devFlowPaths.js';
 import type { AtlasFreshness, AtlasScanMode, ProjectAtlas } from '../../types.js';
 import { getRepoCacheLineage, invalidateRepoCacheDependencies, recordRepoCacheAccess, registerRepoCacheInvalidator } from './repoCacheInvalidationService.js';
+import { publishServerEvent } from './serverEventService.js';
 
 export type AtlasCacheReadStatus = 'ok' | 'missing' | 'invalid';
 
@@ -104,6 +105,12 @@ export function writeAtlasCache(input: WriteAtlasCacheInput) {
       dependencies: [invalidationKind === 'authored' ? 'atlas-authored' : 'atlas-source'],
     });
   }
+  publishServerEvent('atlas.changed', {
+    projectId: input.atlas.projectId,
+    entityId: input.atlas.projectId,
+    status: input.atlas.freshness?.status,
+    reason: invalidationKind === 'metadata' ? 'metadata-updated' : invalidationKind === 'authored' ? 'authored-updated' : 'source-refreshed',
+  });
   return { path: cachePath };
 }
 

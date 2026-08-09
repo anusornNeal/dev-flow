@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { recordRepoChanges } from './repoChangeJournalService';
+import { publishServerEvent } from './serverEventService.js';
 
 export type RepoCacheDependency =
   | 'repo-content'
@@ -169,6 +170,12 @@ export function invalidateRepoCacheDependencies(input: {
       metrics.lastInvalidatedAt = invalidatedAt;
       return { name, count };
     });
+
+  const atlasProjectId = input.scope?.startsWith('atlas:') ? input.scope.slice('atlas:'.length) : undefined;
+  publishServerEvent('cache.invalidated', {
+    projectId: atlasProjectId,
+    reason: input.reason || dependencies.join(','),
+  });
 
   return {
     root: input.root,

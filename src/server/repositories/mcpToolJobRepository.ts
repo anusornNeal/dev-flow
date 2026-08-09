@@ -3,6 +3,7 @@ import path from 'path';
 import { createHash } from 'crypto';
 import db from '../../db/index.js';
 import { getDevFlowAppRoot } from '../../lib/devFlowPaths';
+import { publishServerEvent } from '../services/serverEventService.js';
 
 export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'timed_out' | 'cancelled';
 export type JobRecoveryClassification = 'resumable' | 'retryable' | 'interrupted' | 'terminal';
@@ -297,6 +298,16 @@ function persistLifecycle(job: McpToolJob, expectedStatus: JobStatus, workerId?:
   return Number(result.changes || 0) === 1;
 }
 
+function publishJobLifecycleEvent(job: McpToolJob, reason: string) {
+  const projectId = typeof job.args?.projectId === 'string' ? job.args.projectId : undefined;
+  publishServerEvent('job.changed', {
+    projectId,
+    entityId: job.jobId,
+    status: job.status,
+    reason,
+  });
+}
+
 export function createJob(jobId: string, toolName: string, args: any, resourceKey: string): McpToolJob {
   ensureJobsDir();
   const artifactDir = getArtifactDir(jobId);
@@ -329,6 +340,7 @@ export function createJob(jobId: string, toolName: string, args: any, resourceKe
   fs.writeFileSync(path.join(artifactDir, 'stderr.log'), '');
   writeCompatibilityStatus(job);
   upsertRecentJobCache(job);
+  publishJobLifecycleEvent(job, 'created');
   return job;
 }
 
@@ -343,20 +355,24 @@ export function transitionJobStatus(
   options: JobTransitionOptions = {},
 ): McpToolJob | null {
   if (expectedStatuses.length === 0) return null;
-  return db.transaction(() => {
+  let previousStatus: JobStatus | null = null;
+  const stored = db.transaction(() => {
     const current = getJob(jobId);
     if (!current || !expectedStatuses.includes(current.status)) return null;
     if (TERMINAL_STATUSES.includes(current.status) && updates.status) return null;
     if (options.workerId && current.leaseOwner !== options.workerId) return null;
 
+    previousStatus = current.status;
     const updated = buildUpdatedJob(current, updates, options.nowMs ?? Date.now());
     if (!persistLifecycle(updated, current.status, options.workerId)) return null;
-    const stored = getDbJob(jobId);
-    if (!stored) return null;
-    writeCompatibilityStatus(stored);
-    upsertRecentJobCache(stored);
-    return stored;
+    const persisted = getDbJob(jobId);
+    if (!persisted) return null;
+    writeCompatibilityStatus(persisted);
+    upsertRecentJobCache(persisted);
+    return persisted;
   })();
+  if (stored && previousStatus !== stored.status) publishJobLifecycleEvent(stored, 'transition');
+  return stored;
 }
 
 export function updateJobStatus(jobId: string, updates: Partial<McpToolJob>): McpToolJob | null {
@@ -370,7 +386,7 @@ export function claimJob(jobId: string, workerId: string, leaseMs: number, nowMs
   const nowIso = new Date(nowMs).toISOString();
   const leaseExpiresAt = new Date(nowMs + boundedLeaseMs).toISOString();
 
-  return db.transaction(() => {
+  const claimed = db.transaction(() => {
     const current = getJob(jobId);
     if (!current || current.cancelRequestedAt || TERMINAL_STATUSES.includes(current.status)) return null;
     const canClaimQueued = current.status === 'queued';
@@ -399,6 +415,8 @@ export function claimJob(jobId: string, workerId: string, leaseMs: number, nowMs
     }
     return claimed;
   })();
+  if (claimed) publishJobLifecycleEvent(claimed, 'claimed');
+  return claimed;
 }
 
 export function heartbeatJob(jobId: string, workerId: string, leaseMs: number, nowMs = Date.now()): McpToolJob | null {
@@ -420,7 +438,7 @@ export function heartbeatJob(jobId: string, workerId: string, leaseMs: number, n
 
 export function requestJobCancellation(jobId: string, reason = 'Cancellation requested.', nowMs = Date.now()): McpToolJob | null {
   const nowIso = new Date(nowMs).toISOString();
-  return db.transaction(() => {
+  const cancelled = db.transaction(() => {
     const current = getJob(jobId);
     if (!current || TERMINAL_STATUSES.includes(current.status)) return null;
     const startTime = toTimestamp(current.startedAt, current.createdAt || nowIso);
@@ -439,6 +457,8 @@ export function requestJobCancellation(jobId: string, reason = 'Cancellation req
     }
     return cancelled;
   })();
+  if (cancelled) publishJobLifecycleEvent(cancelled, 'cancelled');
+  return cancelled;
 }
 
 export function setJobRecoveryClassification(jobId: string, classification: JobRecoveryClassification, nowMs = Date.now()) {
@@ -454,7 +474,7 @@ export function setJobRecoveryClassification(jobId: string, classification: JobR
 
 export function requeueJobForRecovery(jobId: string, nowMs = Date.now()): McpToolJob | null {
   const nowIso = new Date(nowMs).toISOString();
-  return db.transaction(() => {
+  const requeued = db.transaction(() => {
     const current = getJob(jobId);
     if (!current || current.status !== 'running' || current.cancelRequestedAt) return null;
     if (current.leaseExpiresAt && Date.parse(current.leaseExpiresAt) > nowMs) return null;
@@ -475,6 +495,8 @@ export function requeueJobForRecovery(jobId: string, nowMs = Date.now()): McpToo
     }
     return updated;
   })();
+  if (requeued) publishJobLifecycleEvent(requeued, 'recovery-requeue');
+  return requeued;
 }
 
 export function listRecoverableJobs(nowMs = Date.now()): McpToolJob[] {

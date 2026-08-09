@@ -10,11 +10,13 @@ import { registerTaskRoutes } from './tasks';
 import { registerAttachmentRoutes } from './attachments';
 import { registerFigmaRoutes } from './figma';
 import { registerMcpToolJobRoutes } from './mcpToolJobs';
+import { registerEventRoutes } from './events';
 import { initMcpToolJobs } from '../services/mcpToolJobService';
 
 export function registerApiRoutes(app: express.Express, deps: ApiRouteDeps) {
   app.use('/api', express.json({ limit: '50mb' }));
   installApiRequestContext(app);
+  registerEventRoutes(app);
   registerDevFlowRoutes(app, deps);
   registerSkillRoutes(app, deps);
   registerProjectRoutes(app, deps);

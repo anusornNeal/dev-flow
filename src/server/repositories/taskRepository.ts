@@ -3,6 +3,7 @@ import db, { withDbTransaction } from '../../db/index';
 import type { AppState } from '../types';
 import { ACTIVE_AGENT_RUN_STATUSES, type AgentRun } from './agentRunRepository';
 import { normalizeTaskCategoryAndTags } from '../services/taskService';
+import { publishServerEvent } from '../services/serverEventService.js';
 
 const TASK_COLUMNS = [
   'id',
@@ -509,6 +510,7 @@ export function archiveInactiveDoneTasks(options: { now?: string; cutoff?: strin
           )
       )
   `).run(now, cutoff, cutoff);
+  if (result.changes > 0) publishServerEvent('task.changed', { reason: 'archive-inactive', status: 'archived' });
   return { archivedCount: result.changes, now, cutoff };
 }
 
@@ -519,7 +521,9 @@ export function restoreArchivedTask(taskId: string, now = new Date().toISOString
     SET archivedAt = NULL, updatedAt = ?
     WHERE id = ? AND archivedAt IS NOT NULL
   `).run(now, taskId);
-  return getTask(taskId);
+  const restored = getTask(taskId);
+  if (restored) publishServerEvent('task.changed', { projectId: restored.projectId, entityId: restored.id, status: restored.status, reason: 'restored' });
+  return restored;
 }
 
 export function getPendingTasks(): any[] {
@@ -579,6 +583,7 @@ export function saveTask(task: any) {
   withDbTransaction(() => {
     db.prepare(TASK_UPSERT_SQL).run(...serializeTaskForRow(task));
   });
+  publishServerEvent('task.changed', { projectId: task.projectId, entityId: task.id, status: task.status, reason: 'saved' });
 }
 
 export function saveTasksAtomic(tasks: any[]) {
@@ -588,11 +593,14 @@ export function saveTasksAtomic(tasks: any[]) {
     const statement = db.prepare(TASK_UPSERT_SQL);
     for (const task of tasks) statement.run(...serializeTaskForRow(task));
   });
+  const projectIds = Array.from(new Set(tasks.map((task) => String(task.projectId || '')).filter(Boolean)));
+  if (projectIds.length === 0) publishServerEvent('task.changed', { reason: 'batch-saved' });
+  for (const projectId of projectIds) publishServerEvent('task.changed', { projectId, reason: 'batch-saved' });
 }
 
 export function saveTaskWithExpectedUpdatedAt(task: any, expectedUpdatedAt: string | null | undefined) {
   ensureTaskColumns();
-  return withDbTransaction(() => {
+  const saved = withDbTransaction(() => {
     const existing = db.prepare('SELECT updatedAt FROM tasks WHERE id = ?').get(task.id) as { updatedAt?: string | null } | undefined;
     if (existing && expectedUpdatedAt !== undefined && (existing.updatedAt || null) !== (expectedUpdatedAt || null)) {
       throw new StaleTaskUpdateError(task.id);
@@ -600,24 +608,33 @@ export function saveTaskWithExpectedUpdatedAt(task: any, expectedUpdatedAt: stri
     db.prepare(TASK_UPSERT_SQL).run(...serializeTaskForRow(task));
     return getTask(task.id);
   });
+  if (saved) publishServerEvent('task.changed', { projectId: saved.projectId, entityId: saved.id, status: saved.status, reason: 'saved-cas' });
+  return saved;
 }
 
 export function deleteTask(taskId: string) {
+  const existing = getTask(taskId);
   withDbTransaction(() => {
     db.prepare('DELETE FROM tasks WHERE id = ?').run(taskId);
   });
+  publishServerEvent('task.changed', { projectId: existing?.projectId, entityId: taskId, status: 'deleted', reason: 'deleted' });
 }
 
 export function deleteTasksByIds(taskIds: string[]) {
   if (taskIds.length === 0) return;
   const placeholders = taskIds.map(() => '?').join(',');
+  const affected = db.prepare(`SELECT id, projectId FROM tasks WHERE id IN (${placeholders})`).all(...taskIds) as Array<{ id: string; projectId?: string }>;
   withDbTransaction(() => {
     db.prepare(`DELETE FROM tasks WHERE id IN (${placeholders})`).run(...taskIds);
   });
+  const projectIds = Array.from(new Set(affected.map((task) => String(task.projectId || '')).filter(Boolean)));
+  if (projectIds.length === 0) publishServerEvent('task.changed', { status: 'deleted', reason: 'batch-deleted' });
+  for (const projectId of projectIds) publishServerEvent('task.changed', { projectId, status: 'deleted', reason: 'batch-deleted' });
 }
 
 export function deleteTasksByProjectId(projectId: string) {
   withDbTransaction(() => {
     db.prepare('DELETE FROM tasks WHERE projectId = ?').run(projectId);
   });
+  publishServerEvent('task.changed', { projectId, status: 'deleted', reason: 'project-deleted' });
 }

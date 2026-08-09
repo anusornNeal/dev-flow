@@ -1,5 +1,6 @@
 import { normalizeLocalPathIdentity } from '../../lib/platformRuntime.js';
 import db, { withDbTransaction } from '../../db/index.js';
+import { publishServerEvent } from '../services/serverEventService.js';
 
 export function getProjects(): any[] {
   return db.prepare('SELECT * FROM projects').all() as any[];
@@ -74,6 +75,7 @@ export function createProject(project: any): void {
       project.taskIdPrefix || null,
     );
   });
+  publishServerEvent('project.changed', { projectId: project.id, entityId: project.id, status: 'available', reason: 'created' });
 }
 
 export function updateProject(project: any): void {
@@ -81,10 +83,12 @@ export function updateProject(project: any): void {
     const stmt = db.prepare('UPDATE projects SET name = ?, repoUrl = ?, description = ?, createdAt = ?, localPath = ?, taskIdPrefix = ? WHERE id = ?');
     stmt.run(project.name, project.repoUrl || null, project.description || null, project.createdAt, project.localPath || null, project.taskIdPrefix || null, project.id);
   });
+  publishServerEvent('project.changed', { projectId: project.id, entityId: project.id, status: 'available', reason: 'updated' });
 }
 
 export function deleteProject(id: string): void {
   withDbTransaction(() => {
     db.prepare('DELETE FROM projects WHERE id = ?').run(id);
   });
+  publishServerEvent('project.changed', { projectId: id, entityId: id, status: 'deleted', reason: 'deleted' });
 }

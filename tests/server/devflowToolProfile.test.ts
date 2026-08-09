@@ -43,6 +43,20 @@ test('coding MCP profile is lean, alias-free, and preserves representative workf
   }
 });
 
+test('async tool guidance requires same-turn durable job completion', () => {
+  const coding = getMcpToolList('coding');
+  const command = coding.find((tool: any) => tool.name === 'run_project_command');
+  assert.ok(command);
+  assert.match(command.description, /same assistant turn/i);
+  assert.match(command.description, /do not ask the user for another message/i);
+
+  const executionRules = fs.readFileSync(new URL('../../skills/prompt.execution-rules.md', import.meta.url), 'utf8');
+  assert.match(executionRules, /get_tool_job_result/);
+  assert.match(executionRules, /same assistant turn/i);
+  assert.match(executionRules, /do not ask the user for another message/i);
+  assert.match(executionRules, /preserve.*jobId/i);
+});
+
 test('tool profile summary reports serialized schema bytes', () => {
   const summary = getToolProfileSummary();
   assert.ok(summary.full.toolCount > summary.coding.toolCount);

@@ -5,6 +5,11 @@ import { createCorrelationId } from './services/api';
 import { getCapabilityCatalog, getMcpToolList, getToolDefinitionByName, isToolAllowedInProfile, resolveDevFlowToolProfile } from './contracts/devflowContract';
 import { recordToolCall } from './services/mcpToolMonitor';
 
+const DEFAULT_MCP_HTTP_TIMEOUT_MS = 30_000;
+const TOOL_JOB_RESULT_TIMEOUT_HEADROOM_MS = 5_000;
+const DEFAULT_ASYNC_JOB_EAGER_WAIT_MS = 20_000;
+const PROJECT_COMMAND_EAGER_WAIT_MS = 1_000;
+
 function buildMcpToolError(params: {
   toolName: string;
   method: string;
@@ -46,6 +51,7 @@ function buildMcpFetchError(params: {
   apiBaseUrl: string;
   error: any;
   correlationId: string;
+  timeoutMs: number;
 }) {
   const isTimeout = params.error?.name === 'AbortError';
   return buildMcpToolError({
@@ -55,12 +61,25 @@ function buildMcpFetchError(params: {
     apiBaseUrl: params.apiBaseUrl,
     code: isTimeout ? 'TIMEOUT' : 'FETCH_FAILED',
     message: isTimeout
-      ? `Request to DevFlow API timed out after 30s.`
+      ? `Request to DevFlow API timed out after ${Math.ceil(params.timeoutMs / 1000)}s.`
       : `Failed to connect to DevFlow API: ${params.error?.message || 'Unknown network error'}`,
     retryable: true,
     correlationId: params.correlationId,
     cause: params.error,
   });
+}
+
+function resolveHttpRequestTimeoutMs(request: { path: string }) {
+  const match = request.path.match(/^\/api\/tool-jobs\/[^/]+\/result\?[^#]*\bwaitMs=(\d+)/);
+  const waitMs = match ? Number(match[1]) : 0;
+  if (Number.isFinite(waitMs) && waitMs > 0) {
+    return Math.max(DEFAULT_MCP_HTTP_TIMEOUT_MS, waitMs + TOOL_JOB_RESULT_TIMEOUT_HEADROOM_MS);
+  }
+  return DEFAULT_MCP_HTTP_TIMEOUT_MS;
+}
+
+function resolveAsyncJobEagerWaitMs(toolName: string) {
+  return toolName === 'run_project_command' ? PROJECT_COMMAND_EAGER_WAIT_MS : DEFAULT_ASYNC_JOB_EAGER_WAIT_MS;
 }
 
 async function executeHttpRequest(
@@ -78,7 +97,8 @@ async function executeHttpRequest(
   };
   const startedAt = Date.now();
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 30000);
+  const timeoutMs = resolveHttpRequestTimeoutMs(request);
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     const response = await fetch(url, {
@@ -148,6 +168,7 @@ async function executeHttpRequest(
         apiBaseUrl: baseUrl,
         error,
         correlationId,
+        timeoutMs,
       }),
     };
     return { response: { ok: false, status: 503 } as any, parsedBody, durationMs };
@@ -263,7 +284,7 @@ export function createDevFlowMcpServer(baseUrl: string, profileOverride?: string
       const waitStartedAt = Date.now();
       const resultRes = await executeHttpRequest(
         baseUrl,
-        { method: 'GET', path: `/api/tool-jobs/${jobId}/result?waitMs=20000` },
+        { method: 'GET', path: `/api/tool-jobs/${jobId}/result?waitMs=${resolveAsyncJobEagerWaitMs(toolName)}` },
         correlationId,
         toolName,
       );

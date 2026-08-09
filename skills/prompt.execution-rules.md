@@ -14,5 +14,6 @@
 - Reuse valid deterministic evidence during iteration, but use `forceFresh` when a final review gate requires fresh proof.
 - Commit one small scope before starting the next scope.
 - Spawn or split subtasks only when needed, and keep them inside the current card boundary.
+- When an async DevFlow tool returns a durable `jobId`, call `get_tool_job_result(jobId, waitMs=30000)` immediately and keep bounded polling in the same assistant turn until terminal whenever the DevFlow tool surface remains available. Do not ask the user for another message merely to continue an already-started job; if the tool surface disappears, preserve and report the `jobId` for recovery after refresh/reconnect.
 - If blocked, report the blocker clearly.
 - Work only on this current task and stop when it is complete.

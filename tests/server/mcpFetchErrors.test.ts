@@ -227,6 +227,40 @@ test('mcp server preserves successful JSON response shape', async (t) => {
   assert.equal(JSON.parse(response.content[0].text).id, '00-skill-router');
 });
 
+test('get_tool_job_result keeps transport timeout headroom above the requested long-poll wait', async (t) => {
+  const originalFetch = global.fetch;
+  const originalSetTimeout = global.setTimeout;
+  const observedTimeouts: number[] = [];
+
+  t.after(() => {
+    global.fetch = originalFetch;
+    global.setTimeout = originalSetTimeout;
+  });
+
+  global.setTimeout = ((handler: (...args: any[]) => void, _timeout?: number, ...args: any[]) => {
+    observedTimeouts.push(Number(_timeout || 0));
+    return originalSetTimeout(handler, 60_000, ...args);
+  }) as typeof setTimeout;
+
+  global.fetch = async () => ({
+    ok: true,
+    status: 200,
+    headers: { get: () => 'application/json' },
+    text: async () => JSON.stringify({ jobId: 'job-long-poll', status: 'running', ready: false, result: null }),
+  } as unknown as Response);
+
+  const server = createDevFlowMcpServer('http://127.0.0.1:3000');
+  const handler = (server as any)._requestHandlers.get('tools/call');
+  const response = await handler({
+    method: 'tools/call',
+    params: { name: 'get_tool_job_result', arguments: { jobId: 'job-long-poll', waitMs: 30000 } },
+  });
+
+  assert.equal(response.isError, undefined);
+  assert.equal(observedTimeouts.length, 1);
+  assert.ok(observedTimeouts[0] >= 35_000, `expected result-poll transport timeout headroom, got ${observedTimeouts[0]}ms`);
+});
+
 test('mcp server unwraps async job result envelope for run_project_command', async (t) => {
   const originalFetch = global.fetch;
   const requests: string[] = [];
@@ -306,7 +340,7 @@ test('mcp server unwraps async job result envelope for run_project_command', asy
   assert.equal(JSON.parse(response.content[0].text).status, 'succeeded');
   assert.deepEqual(requests, [
     'http://127.0.0.1:3000/api/tool-jobs',
-    'http://127.0.0.1:3000/api/tool-jobs/job-command-1/result?waitMs=20000',
+    'http://127.0.0.1:3000/api/tool-jobs/job-command-1/result?waitMs=1000',
   ]);
 });
 
@@ -347,7 +381,7 @@ test('mcp server returns compact server-guided pending completion without status
   const packet = response.structuredContent;
   assert.deepEqual(requests, [
     'http://127.0.0.1:3000/api/tool-jobs',
-    'http://127.0.0.1:3000/api/tool-jobs/job-long-1/result?waitMs=20000',
+    'http://127.0.0.1:3000/api/tool-jobs/job-long-1/result?waitMs=1000',
   ]);
   assert.equal(packet.code, 'JOB_STILL_RUNNING');
   assert.equal(packet.nextPollAfterMs, 2000);

@@ -12,6 +12,7 @@ import {
   type ExecutionSessionEvidenceRecord,
   type ExecutionSessionRecord,
 } from '../repositories/executionSessionRepository.js';
+import { getTask } from '../repositories/taskRepository.js';
 import { getFileRevision, resolveSafePath } from './localFileService.js';
 import { buildRepoEvidenceIdentity, getRepoRevisionForRoot } from './repoRevisionService.js';
 
@@ -46,6 +47,33 @@ export interface ExecutionSessionProgressPatch {
   verification?: unknown[];
   branch?: string | null;
   repoRevision?: string | null;
+}
+
+export interface RecordExecutionOwnedChangesOptions {
+  repoRoot: string;
+  source: string;
+  now?: Date;
+}
+
+export interface ExecutionOwnershipState {
+  sessionId: string;
+  repoRevision: string;
+  ownedFiles: Array<{
+    path: string;
+    acquisitionFileRevision: string;
+    knownFileRevision: string;
+    currentFileRevision: string;
+    source: string;
+    acquiredAt?: string;
+    observedAt?: string;
+    drifted: boolean;
+  }>;
+  ownedChanges: string[];
+  unrelatedChanges: string[];
+  scopeDrift: string[];
+  ownershipDrift: Array<{ path: string; knownFileRevision: string; currentFileRevision: string }>;
+  verificationFresh: boolean | null;
+  verificationRecordedAt?: string;
 }
 
 function executionSessionError(code: string, message: string) {
@@ -88,6 +116,37 @@ function normalizeEvidencePath(value?: string | null) {
 function normalizeStringList(values?: string[]) {
   if (!Array.isArray(values)) return [];
   return [...new Set(values.map((value) => String(value).trim().replace(/\\/g, '/')).filter(Boolean))].sort();
+}
+
+function requireRepoRoot(repoRoot?: string) {
+  if (!repoRoot) throw executionSessionError('EXECUTION_SESSION_REPO_ROOT_REQUIRED', 'repoRoot is required for execution ownership provenance.');
+  return path.resolve(repoRoot);
+}
+
+function currentOwnedFileRevision(root: string, relativePath: string) {
+  try {
+    const fullPath = resolveSafePath(root, relativePath);
+    if (!fs.existsSync(fullPath) || !fs.statSync(fullPath).isFile()) return 'missing';
+    return getFileRevision(fullPath).token;
+  } catch {
+    return 'missing';
+  }
+}
+
+function ownedRevisionFingerprint(entries: Array<{ path: string; revision: string }>) {
+  const digest = crypto.createHash('sha256');
+  for (const entry of [...entries].sort((left, right) => left.path.localeCompare(right.path))) {
+    digest.update(entry.path);
+    digest.update('\0');
+    digest.update(entry.revision);
+    digest.update('\0');
+  }
+  return digest.digest('hex').slice(0, 32);
+}
+
+function readStringMetadata(metadata: Record<string, unknown>, key: string) {
+  const value = metadata[key];
+  return typeof value === 'string' && value ? value : undefined;
 }
 
 function boundedTtlMs(value?: number) {
@@ -223,8 +282,166 @@ export function recordExecutionSessionEvidence(
   return saved;
 }
 
+export function recordExecutionOwnedChanges(
+  id: string,
+  paths: string[],
+  options: RecordExecutionOwnedChangesOptions,
+) {
+  const session = requireSession(id);
+  assertActive(session);
+  const root = requireRepoRoot(options.repoRoot);
+  const nowIso = (options.now || new Date()).toISOString();
+  const source = String(options.source || '').trim();
+  if (!source) throw executionSessionError('EXECUTION_OWNERSHIP_SOURCE_REQUIRED', 'Execution ownership source is required.');
+  const repo = getRepoRevisionForRoot(root);
+  const existing = new Map(
+    listExecutionSessionEvidence(id)
+      .filter((entry) => entry.kind === 'owned-change' && entry.path)
+      .map((entry) => [entry.path!, entry] as const),
+  );
+  const ownedPaths = normalizeStringList(paths)
+    .map((entry) => normalizeEvidencePath(entry))
+    .filter((entry): entry is string => Boolean(entry));
+
+  for (const ownedPath of ownedPaths) {
+    const currentFileRevision = currentOwnedFileRevision(root, ownedPath);
+    const prior = existing.get(ownedPath);
+    const priorMetadata = prior?.metadata || {};
+    const acquisitionFileRevision = readStringMetadata(priorMetadata, 'acquisitionFileRevision') || prior?.fileRevision || currentFileRevision;
+    const acquisitionRepoRevision = readStringMetadata(priorMetadata, 'acquisitionRepoRevision') || prior?.repoRevision || repo.token;
+    const acquiredAt = readStringMetadata(priorMetadata, 'acquiredAt') || prior?.createdAt || nowIso;
+    saveExecutionSessionEvidence({
+      id: evidenceId(id, { kind: 'owned-change', path: ownedPath, contextHandle: session.contextHandle }),
+      sessionId: id,
+      kind: 'owned-change',
+      path: ownedPath,
+      repoRevision: repo.token,
+      fileRevision: currentFileRevision,
+      revisionIdentity: buildRepoEvidenceIdentity({ repoRevision: repo.token, filePath: ownedPath, fileRevision: currentFileRevision }),
+      contextHandle: session.contextHandle,
+      stale: false,
+      metadata: {
+        ...priorMetadata,
+        executionSource: source,
+        acquisitionFileRevision,
+        acquisitionRepoRevision,
+        acquiredAt,
+        knownFileRevision: currentFileRevision,
+        observedAt: nowIso,
+      },
+      createdAt: prior?.createdAt || nowIso,
+      updatedAt: nowIso,
+    });
+  }
+
+  updateExecutionSessionRecord(id, {
+    changedFiles: normalizeStringList([...session.changedFiles, ...ownedPaths]),
+    repoRevision: repo.token,
+    updatedAt: nowIso,
+  });
+  return getExecutionOwnershipState(id, { repoRoot: root });
+}
+
+export function getExecutionOwnershipState(
+  id: string,
+  options: { repoRoot: string; expectedPaths?: string[] },
+): ExecutionOwnershipState {
+  const session = requireSession(id);
+  const root = requireRepoRoot(options.repoRoot);
+  const repo = getRepoRevisionForRoot(root);
+  const evidence = listExecutionSessionEvidence(id);
+  const ownedEvidence = evidence.filter((entry) => entry.kind === 'owned-change' && entry.path);
+  const ownedFiles = ownedEvidence.map((entry) => {
+    const metadata = entry.metadata || {};
+    const currentFileRevision = currentOwnedFileRevision(root, entry.path!);
+    const knownFileRevision = readStringMetadata(metadata, 'knownFileRevision') || entry.fileRevision || 'missing';
+    return {
+      path: entry.path!,
+      acquisitionFileRevision: readStringMetadata(metadata, 'acquisitionFileRevision') || entry.fileRevision || 'missing',
+      knownFileRevision,
+      currentFileRevision,
+      source: readStringMetadata(metadata, 'executionSource') || 'unknown',
+      acquiredAt: readStringMetadata(metadata, 'acquiredAt'),
+      observedAt: readStringMetadata(metadata, 'observedAt'),
+      drifted: currentFileRevision !== knownFileRevision,
+    };
+  }).sort((left, right) => left.path.localeCompare(right.path));
+
+  const ownedPathSet = new Set(ownedFiles.map((entry) => entry.path));
+  const changedPaths = normalizeStringList(repo.changedFiles.map((entry) => entry.workingPath));
+  const ownedChanges = changedPaths.filter((entry) => ownedPathSet.has(entry));
+  const unrelatedChanges = changedPaths.filter((entry) => !ownedPathSet.has(entry));
+  const task = session.taskId ? getTask(session.taskId) : undefined;
+  const taskScope = Array.isArray(task?.targetFiles) ? task.targetFiles : [];
+  const expectedScope = new Set(normalizeStringList([...(options.expectedPaths || taskScope), ...ownedFiles.map((entry) => entry.path)]));
+  const scopeDrift = expectedScope.size > 0 ? changedPaths.filter((entry) => !expectedScope.has(entry)) : [];
+  const currentOwnedFingerprint = ownedRevisionFingerprint(
+    ownedFiles.map((entry) => ({ path: entry.path, revision: entry.currentFileRevision })),
+  );
+  const verificationBinding = evidence.filter((entry) => entry.kind === 'verification-binding').at(-1);
+  const boundFingerprint = verificationBinding ? readStringMetadata(verificationBinding.metadata || {}, 'ownedFingerprint') : undefined;
+  const verificationFresh = session.verification.length === 0
+    ? null
+    : Boolean(boundFingerprint) && boundFingerprint === currentOwnedFingerprint;
+
+  return {
+    sessionId: id,
+    repoRevision: repo.token,
+    ownedFiles,
+    ownedChanges,
+    unrelatedChanges,
+    scopeDrift,
+    ownershipDrift: ownedFiles
+      .filter((entry) => entry.drifted)
+      .map((entry) => ({ path: entry.path, knownFileRevision: entry.knownFileRevision, currentFileRevision: entry.currentFileRevision })),
+    verificationFresh,
+    verificationRecordedAt: verificationBinding ? readStringMetadata(verificationBinding.metadata || {}, 'recordedAt') : undefined,
+  };
+}
+
+export function recordExecutionVerificationEvidence(
+  id: string,
+  verification: unknown[],
+  options: { repoRoot: string; now?: Date },
+) {
+  const session = requireSession(id);
+  assertActive(session);
+  const root = requireRepoRoot(options.repoRoot);
+  const nowIso = (options.now || new Date()).toISOString();
+  const repo = getRepoRevisionForRoot(root);
+  const ownership = getExecutionOwnershipState(id, { repoRoot: root });
+  const ownedFingerprint = ownedRevisionFingerprint(
+    ownership.ownedFiles.map((entry) => ({ path: entry.path, revision: entry.currentFileRevision })),
+  );
+  const binding = saveExecutionSessionEvidence({
+    id: evidenceId(id, { kind: 'verification-binding', path: null, contextHandle: session.contextHandle }),
+    sessionId: id,
+    kind: 'verification-binding',
+    path: null,
+    repoRevision: null,
+    fileRevision: null,
+    revisionIdentity: ownedFingerprint,
+    contextHandle: session.contextHandle,
+    stale: false,
+    metadata: {
+      ownedFingerprint,
+      ownedPaths: ownership.ownedFiles.map((entry) => entry.path),
+      recordedAt: nowIso,
+      checkCount: Array.isArray(verification) ? verification.length : 0,
+    },
+    createdAt: nowIso,
+    updatedAt: nowIso,
+  });
+  const updated = updateExecutionSessionRecord(id, {
+    verification: Array.isArray(verification) ? verification : [],
+    repoRevision: repo.token,
+    updatedAt: nowIso,
+  })!;
+  return { session: updated, binding, ownership: getExecutionOwnershipState(id, { repoRoot: root }) };
+}
+
 function currentEvidenceStaleness(entry: ExecutionSessionEvidenceRecord, root: string, repoRevision: string) {
-  if (entry.kind === 'file' && entry.path) {
+  if (entry.path && entry.fileRevision) {
     try {
       const fullPath = resolveSafePath(root, entry.path);
       if (!fs.existsSync(fullPath) || !fs.statSync(fullPath).isFile()) return true;

@@ -27,10 +27,15 @@ const BASELINE_LABELS = [
   'local path mutation service',
   'task git workflow service',
   'mcp fetch errors',
+  'mcp streamable http',
+  'runtime identity diagnostics',
   'mcp tool job queue',
+  'mcp tool job recovery',
   'mcp scheduler policy',
   'project resolution',
+  'mcp transport benchmark gate',
   'session workspace service',
+  'steno session isolation',
   'workspace integration service',
   'agent runs',
   'figma integration',
@@ -63,7 +68,9 @@ test('shared-resource and integration gates remain serial', () => {
     'devflow restart state',
     'devflow contract',
     'devflow tool profiles',
+    'mcp transport benchmark gate',
     'session workspace service',
+    'steno session isolation',
     'workspace integration service',
     'agent runs',
     'figma integration',
@@ -91,7 +98,9 @@ test('mixed FULL verify stages batch parallel-safe work without crossing serial 
   assert.equal(segments[0]?.steps.every((step) => step.parallelSafe), true);
   assert.equal(segments[1]?.parallel, false);
   assert.deepEqual(segments[1]?.steps.map((step) => step.label), [
+    'mcp transport benchmark gate',
     'session workspace service',
+    'steno session isolation',
     'workspace integration service',
   ]);
 });

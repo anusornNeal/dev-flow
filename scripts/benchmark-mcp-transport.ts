@@ -6,8 +6,9 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { createDevFlowMcpServer } from '../src/server/mcp.js';
-import { createStatelessMcpHttpHandler } from '../src/server/mcpStreamableHttp.js';
+import { createReusableMcpHttpHandler } from '../src/server/mcpStreamableHttp.js';
 
 export type BenchmarkOptions = {
   coldSamples?: number;
@@ -24,8 +25,8 @@ type LatencyStats = {
 };
 
 type ProtocolMeasurements = {
-  transport: 'streamable-http' | 'legacy-sse';
-  endpoint: '/mcp' | '/sse';
+  transport: 'streamable-http' | 'streamable-http-stateless-baseline' | 'legacy-sse';
+  endpoint: '/mcp' | '/mcp-baseline' | '/sse';
   cold: {
     initialize: LatencyStats;
     listTools: LatencyStats;
@@ -47,6 +48,8 @@ const DEFAULT_COLD_SAMPLES = 8;
 const DEFAULT_WARM_SAMPLES = 30;
 const BENCHMARK_TOOL_NAME = 'get_tool_schema';
 const BENCHMARK_TOOL_ARGS = { toolName: BENCHMARK_TOOL_NAME };
+const WARM_P50_BASELINE_RATIO_MAX = 0.95;
+const WARM_P95_BASELINE_DELTA_MAX_MS = 2;
 
 function round(value: number) {
   return Math.round(value * 1000) / 1000;
@@ -112,9 +115,23 @@ function compareLatency(candidate: LatencyStats, baseline: LatencyStats) {
   };
 }
 
+function warmRegressionBudget(candidate: LatencyStats, baseline: LatencyStats) {
+  const p50Ratio = baseline.p50Ms > 0 ? round(candidate.p50Ms / baseline.p50Ms) : null;
+  const p95DeltaMs = round(candidate.p95Ms - baseline.p95Ms);
+  return {
+    maxP50Ratio: WARM_P50_BASELINE_RATIO_MAX,
+    maxP95DeltaMs: WARM_P95_BASELINE_DELTA_MAX_MS,
+    actualP50Ratio: p50Ratio,
+    actualP95DeltaMs: p95DeltaMs,
+    passed: p50Ratio !== null && p50Ratio <= WARM_P50_BASELINE_RATIO_MAX
+      && p95DeltaMs <= WARM_P95_BASELINE_DELTA_MAX_MS,
+  };
+}
+
 async function startBenchmarkServer() {
   const app = express();
   app.use('/mcp', express.json({ limit: '1mb' }));
+  app.use('/mcp-baseline', express.json({ limit: '1mb' }));
 
   app.get('/api/capabilities/tools/:toolName', (req, res) => {
     res.json({
@@ -126,7 +143,24 @@ async function startBenchmarkServer() {
   });
 
   let apiBaseUrl = '';
-  app.post('/mcp', (req, res, next) => createStatelessMcpHttpHandler(apiBaseUrl, 'full')(req, res, next));
+  let reusableMcpHandler: ReturnType<typeof createReusableMcpHttpHandler> | null = null;
+  app.post('/mcp', (req, res, next) => {
+    if (!reusableMcpHandler) throw new Error('Reusable MCP benchmark handler is not initialized.');
+    return reusableMcpHandler(req, res, next);
+  });
+  app.post('/mcp-baseline', async (req, res, next) => {
+    const mcpServer = createDevFlowMcpServer(apiBaseUrl, 'full');
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
+    try {
+      await mcpServer.connect(transport);
+      await transport.handleRequest(req, res, req.body);
+    } catch (error) {
+      if (!res.headersSent) res.status(500).json({ error: 'Stateless baseline transport failed.' });
+      else next(error);
+    } finally {
+      await transport.close().catch(() => {});
+    }
+  });
 
   const activeSseTransports = new Map<string, SSEServerTransport>();
   app.get('/sse', async (_req, res) => {
@@ -158,6 +192,7 @@ async function startBenchmarkServer() {
   const address = server.address();
   if (!address || typeof address === 'string') throw new Error('Failed to bind MCP transport benchmark server.');
   apiBaseUrl = `http://127.0.0.1:${address.port}`;
+  reusableMcpHandler = createReusableMcpHttpHandler(apiBaseUrl, 'full');
 
   return {
     baseUrl: apiBaseUrl,
@@ -174,6 +209,12 @@ function streamableClient(baseUrl: string, label: string) {
   return { client, transport };
 }
 
+function statelessBaselineClient(baseUrl: string, label: string) {
+  const client = new Client({ name: `benchmark-mcp-baseline-${label}`, version: '1.0.0' });
+  const transport = new StreamableHTTPClientTransport(new URL('/mcp-baseline', baseUrl));
+  return { client, transport };
+}
+
 function sseClient(baseUrl: string, label: string) {
   const client = new Client({ name: `benchmark-sse-${label}`, version: '1.0.0' });
   const transport = new SSEClientTransport(new URL('/sse', baseUrl));
@@ -182,11 +223,15 @@ function sseClient(baseUrl: string, label: string) {
 
 async function benchmarkProtocol(
   baseUrl: string,
-  transport: 'streamable-http' | 'legacy-sse',
+  transport: 'streamable-http' | 'streamable-http-stateless-baseline' | 'legacy-sse',
   coldSamples: number,
   warmSamples: number,
 ): Promise<ProtocolMeasurements> {
-  const createClient = transport === 'streamable-http' ? streamableClient : sseClient;
+  const createClient = transport === 'streamable-http'
+    ? streamableClient
+    : transport === 'streamable-http-stateless-baseline'
+      ? statelessBaselineClient
+      : sseClient;
   const initializeSamples: number[] = [];
   const coldListSamples: number[] = [];
   const coldCallSamples: number[] = [];
@@ -229,7 +274,11 @@ async function benchmarkProtocol(
 
   return {
     transport,
-    endpoint: transport === 'streamable-http' ? '/mcp' : '/sse',
+    endpoint: transport === 'streamable-http'
+      ? '/mcp'
+      : transport === 'streamable-http-stateless-baseline'
+        ? '/mcp-baseline'
+        : '/sse',
     cold: {
       initialize: summarize(initializeSamples),
       listTools: summarize(coldListSamples),
@@ -249,10 +298,13 @@ export async function runMcpTransportBenchmark(options: BenchmarkOptions = {}) {
   const fixture = await startBenchmarkServer();
 
   try {
+    const streamableHttpBaseline = await benchmarkProtocol(fixture.baseUrl, 'streamable-http-stateless-baseline', coldSamples, warmSamples);
     const streamableHttp = await benchmarkProtocol(fixture.baseUrl, 'streamable-http', coldSamples, warmSamples);
     const legacySse = await benchmarkProtocol(fixture.baseUrl, 'legacy-sse', coldSamples, warmSamples);
+    const warmListBudget = warmRegressionBudget(streamableHttp.warm.listTools, streamableHttpBaseline.warm.listTools);
+    const warmCallBudget = warmRegressionBudget(streamableHttp.warm.callTool, streamableHttpBaseline.warm.callTool);
     return {
-      schemaVersion: 1 as const,
+      schemaVersion: 2 as const,
       benchmark: 'devflow-mcp-transport-local' as const,
       generatedAt: new Date().toISOString(),
       environment: {
@@ -266,26 +318,46 @@ export async function runMcpTransportBenchmark(options: BenchmarkOptions = {}) {
         toolName: BENCHMARK_TOOL_NAME,
       },
       protocols: {
+        streamableHttpBaseline,
         streamableHttp,
         legacySse,
       },
       comparison: {
-        baseline: 'legacySse' as const,
+        baseline: 'streamableHttpBaseline' as const,
         candidate: 'streamableHttp' as const,
         cold: {
-          initialize: compareLatency(streamableHttp.cold.initialize, legacySse.cold.initialize),
-          listTools: compareLatency(streamableHttp.cold.listTools, legacySse.cold.listTools),
-          callTool: compareLatency(streamableHttp.cold.callTool, legacySse.cold.callTool),
+          initialize: compareLatency(streamableHttp.cold.initialize, streamableHttpBaseline.cold.initialize),
+          listTools: compareLatency(streamableHttp.cold.listTools, streamableHttpBaseline.cold.listTools),
+          callTool: compareLatency(streamableHttp.cold.callTool, streamableHttpBaseline.cold.callTool),
         },
+        warm: {
+          listTools: compareLatency(streamableHttp.warm.listTools, streamableHttpBaseline.warm.listTools),
+          callTool: compareLatency(streamableHttp.warm.callTool, streamableHttpBaseline.warm.callTool),
+        },
+      },
+      fallbackComparison: {
+        baseline: 'legacySse' as const,
+        candidate: 'streamableHttp' as const,
         warm: {
           listTools: compareLatency(streamableHttp.warm.listTools, legacySse.warm.listTools),
           callTool: compareLatency(streamableHttp.warm.callTool, legacySse.warm.callTool),
         },
       },
+      regressionBudget: {
+        thresholdSource: 'same-run-stateless-baseline' as const,
+        warmP50BaselineRatioMax: WARM_P50_BASELINE_RATIO_MAX,
+        warmP95BaselineDeltaMaxMs: WARM_P95_BASELINE_DELTA_MAX_MS,
+        warm: {
+          listTools: warmListBudget,
+          callTool: warmCallBudget,
+        },
+        passed: warmListBudget.passed && warmCallBudget.passed,
+      },
       limitations: [
         'Measures localhost/loopback protocol and DevFlow server overhead inside one Node.js process; machine load can affect results.',
         'Does not measure ChatGPT model/tool-selection time, ngrok or other tunnel latency, internet routing, or platform-side MCP registry/serialization overhead.',
-        'Use repeated runs on the same machine and revision for before/after engineering comparisons; final pass/fail latency thresholds belong to the integration gate.',
+        'The stateless baseline intentionally recreates the pre-session-reuse per-request MCP server/transport behavior in the same process so before/after ratios share machine load.',
+        'The warm regression gate requires p50 to improve by at least 5% versus the same-run stateless baseline while allowing at most +2 ms p95 tail variance, preserving a material steady-state gain without making the gate flaky on millisecond-scale outliers.',
       ],
     };
   } finally {

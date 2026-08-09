@@ -18,6 +18,22 @@ npm run start:all
 
 `start:all` keeps the existing setup + DevFlow server + ngrok behavior. Both standard launch modes use the same restart handoff and token validation.
 
+### ngrok self-healing in `start:all`
+
+When the ngrok child exits unexpectedly or fails to spawn, the supervisor keeps the DevFlow API child running and retries **ngrok only**. Retry delay uses bounded exponential backoff: 1s, 2s, 4s, and so on up to 30s by default. If one ngrok child stays alive for 60s, the retry attempt counter resets so a later failure starts again at the base delay. The supervisor maintains at most one pending retry timer per managed child.
+
+Intentional `SIGINT`/`SIGTERM` shutdown sets the supervisor shutdown state first, cancels pending retry/stability timers, and then stops children; intentional shutdown therefore never starts an ngrok retry loop.
+
+The defaults can be tuned without changing MCP authentication or transport behavior:
+
+```env
+DEVFLOW_NGROK_RESTART_BASE_MS=1000
+DEVFLOW_NGROK_RESTART_MAX_MS=30000
+DEVFLOW_NGROK_STABLE_RESET_MS=60000
+```
+
+Runtime child state is persisted under `.devflow/supervisor-state.json`. `getDevFlowDiagnostics()` reads that state and reports API and tunnel lifecycle independently, including summaries such as `both-healthy`, `api-healthy-tunnel-restarting`, `api-healthy-tunnel-down`, and `api-down-tunnel-healthy`. These are child-process lifecycle diagnostics; `tunnel=healthy` means the ngrok child is running, not that an external Internet reachability probe succeeded.
+
 ## Raw/debug startup
 
 ```bash
@@ -67,3 +83,5 @@ A local Windows benchmark on August 8, 2026 measured three cold-ish launches of 
 - Measured supervisor startup overhead: **414 ms (+7.7%)** on this machine.
 
 This is a machine-local startup measurement, not an SLO. The supervisor is a parent process only; once the server is running, normal HTTP/MCP requests still go directly to the server and do not traverse an additional supervisor request hop.
+
+For the ngrok self-healing change, the existing `verify-start-all` harness remained sub-second in DevFlow's command runner (about 0.43s total in the final focused run, with 6–9ms runner process-startup time observed across RED/GREEN runs). The repository does not currently contain a separate TCP-to-ready startup benchmark script, so the historical cold-start numbers above remain the comparable machine-local reference rather than being replaced by a different measurement method.

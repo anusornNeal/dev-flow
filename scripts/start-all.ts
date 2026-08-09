@@ -15,16 +15,26 @@ import {
   markDevFlowRestartRestarting,
   readDevFlowRestartState,
 } from '../src/lib/devFlowRestart';
+import {
+  createDevFlowSupervisorState,
+  updateDevFlowSupervisorProcess,
+  updateDevFlowSupervisorState,
+  writeDevFlowSupervisorState,
+  type DevFlowSupervisorProcessLabel,
+} from '../src/lib/devFlowSupervisor';
 
 type StartAllOptions = {
   port: number;
   ngrokDomain: string;
   openBrowser: boolean;
   openBrowserDelayMs: number;
+  ngrokRestartBaseMs: number;
+  ngrokRestartMaxMs: number;
+  ngrokStableResetMs: number;
 };
 
 type ManagedProcess = {
-  label: string;
+  label: DevFlowSupervisorProcessLabel;
   command: string;
   args: string[];
   env?: Record<string, string>;
@@ -42,6 +52,9 @@ type StartAllPlan = {
 
 const DEFAULT_PORT = 3000;
 const DEFAULT_BROWSER_DELAY_MS = 4000;
+const DEFAULT_NGROK_RESTART_BASE_MS = 1000;
+const DEFAULT_NGROK_RESTART_MAX_MS = 30000;
+const DEFAULT_NGROK_STABLE_RESET_MS = 60000;
 
 function parsePositiveInteger(value: string | undefined, fallback: number) {
   if (!value) return fallback;
@@ -83,11 +96,19 @@ export function buildNgrokArgs({ port, domain }: { port: number; domain: string 
 }
 
 export function resolveStartAllOptions(env: NodeJS.ProcessEnv = process.env): StartAllOptions {
+  const ngrokRestartBaseMs = parsePositiveInteger(env.DEVFLOW_NGROK_RESTART_BASE_MS, DEFAULT_NGROK_RESTART_BASE_MS);
+  const ngrokRestartMaxMs = Math.max(
+    ngrokRestartBaseMs,
+    parsePositiveInteger(env.DEVFLOW_NGROK_RESTART_MAX_MS, DEFAULT_NGROK_RESTART_MAX_MS),
+  );
   return {
     port: parsePositiveInteger(env.DEVFLOW_PORT || env.PORT, DEFAULT_PORT),
     ngrokDomain: (env.DEVFLOW_NGROK_DOMAIN || '').trim(),
     openBrowser: parseBoolean(env.DEVFLOW_OPEN_BROWSER, true),
     openBrowserDelayMs: parsePositiveInteger(env.DEVFLOW_OPEN_BROWSER_DELAY_MS, DEFAULT_BROWSER_DELAY_MS),
+    ngrokRestartBaseMs,
+    ngrokRestartMaxMs,
+    ngrokStableResetMs: parsePositiveInteger(env.DEVFLOW_NGROK_STABLE_RESET_MS, DEFAULT_NGROK_STABLE_RESET_MS),
   };
 }
 
@@ -106,9 +127,12 @@ export function buildStartAllPlan(
       [DEVFLOW_RESTART_SUPERVISOR_TOKEN_ENV]: supervisorToken,
     },
   };
-  const processes = mode === 'all'
-    ? [server, { label: 'ngrok', command: executableFor('ngrok'), args: buildNgrokArgs({ port: options.port, domain: options.ngrokDomain }) }]
-    : [server];
+  const ngrok: ManagedProcess = {
+    label: 'ngrok',
+    command: executableFor('ngrok'),
+    args: buildNgrokArgs({ port: options.port, domain: options.ngrokDomain }),
+  };
+  const processes: ManagedProcess[] = mode === 'all' ? [server, ngrok] : [server];
 
   return {
     mode,
@@ -161,6 +185,24 @@ export function shouldRestartServerProcess(input: {
     && Boolean(input.supervisorToken) && input.restartState.supervisorToken === input.supervisorToken;
 }
 
+export function shouldRestartManagedProcess(input: {
+  label: string;
+  mode: StartAllMode;
+  shuttingDown: boolean;
+}) {
+  return !input.shuttingDown && input.mode === 'all' && input.label === 'ngrok';
+}
+
+export function computeManagedProcessRestartDelayMs(
+  attempt: number,
+  options: { baseMs: number; maxMs: number },
+) {
+  const normalizedAttempt = Math.max(1, Math.floor(attempt));
+  const baseMs = Math.max(1, Math.floor(options.baseMs));
+  const maxMs = Math.max(baseMs, Math.floor(options.maxMs));
+  return Math.min(maxMs, baseMs * (2 ** Math.min(30, normalizedAttempt - 1)));
+}
+
 type ProcessCallbacks = {
   onExit?: (child: ChildProcessWithoutNullStreams, code: number | null, signal: NodeJS.Signals | null) => void;
   onError?: (child: ChildProcessWithoutNullStreams, error: Error) => void;
@@ -198,15 +240,87 @@ function startProcess(processConfig: ManagedProcess, callbacks: ProcessCallbacks
 export function startAll(mode: StartAllMode = 'all') {
   if (mode === 'all') runSetup();
 
-  const plan = buildStartAllPlan(resolveStartAllOptions(), randomUUID(), mode);
-  const children = new Map<string, ChildProcessWithoutNullStreams>();
+  const options = resolveStartAllOptions();
+  const plan = buildStartAllPlan(options, randomUUID(), mode);
+  const children = new Map<DevFlowSupervisorProcessLabel, ChildProcessWithoutNullStreams>();
+  const restartTimers = new Map<DevFlowSupervisorProcessLabel, NodeJS.Timeout>();
+  const stableTimers = new Map<DevFlowSupervisorProcessLabel, NodeJS.Timeout>();
+  const restartAttempts = new Map<DevFlowSupervisorProcessLabel, number>();
   let shuttingDown = false;
 
-  const launch = (processConfig: ManagedProcess): ChildProcessWithoutNullStreams => {
+  writeDevFlowSupervisorState(createDevFlowSupervisorState({
+    mode,
+    processLabels: plan.processes.map((entry) => entry.label),
+  }));
+
+  const clearTimer = (timers: Map<DevFlowSupervisorProcessLabel, NodeJS.Timeout>, label: DevFlowSupervisorProcessLabel) => {
+    const timer = timers.get(label);
+    if (timer) clearTimeout(timer);
+    timers.delete(label);
+  };
+
+  let launch: (processConfig: ManagedProcess) => ChildProcessWithoutNullStreams;
+
+  const scheduleManagedRestart = (
+    processConfig: ManagedProcess,
+    detail: { code?: number | null; signal?: NodeJS.Signals | null; message: string },
+  ) => {
+    if (!shouldRestartManagedProcess({ label: processConfig.label, mode, shuttingDown })) return false;
+    if (restartTimers.has(processConfig.label)) return true;
+
+    const attempt = (restartAttempts.get(processConfig.label) || 0) + 1;
+    restartAttempts.set(processConfig.label, attempt);
+    const delayMs = computeManagedProcessRestartDelayMs(attempt, {
+      baseMs: options.ngrokRestartBaseMs,
+      maxMs: options.ngrokRestartMaxMs,
+    });
+    const nextRetryAt = new Date(Date.now() + delayMs).toISOString();
+    updateDevFlowSupervisorProcess(processConfig.label, {
+      status: 'restarting',
+      pid: undefined,
+      restartAttempt: attempt,
+      nextRetryAt,
+      ...('code' in detail ? { lastExitCode: detail.code } : {}),
+      ...('signal' in detail ? { lastSignal: detail.signal || null } : {}),
+      lastExitAt: new Date().toISOString(),
+      message: detail.message,
+    });
+    console.warn(`[start-all] ${processConfig.label} restart scheduled attempt=${attempt} delayMs=${delayMs}: ${detail.message}`);
+
+    const timer = setTimeout(() => {
+      restartTimers.delete(processConfig.label);
+      if (shuttingDown) return;
+      launch(processConfig);
+    }, delayMs);
+    restartTimers.set(processConfig.label, timer);
+    return true;
+  };
+
+  launch = (processConfig: ManagedProcess): ChildProcessWithoutNullStreams => {
+    clearTimer(stableTimers, processConfig.label);
     const child = startProcess(processConfig, {
       onExit: (exitedChild, code, signal) => {
-        if (children.get(processConfig.label) === exitedChild) {
-          children.delete(processConfig.label);
+        if (children.get(processConfig.label) !== exitedChild) return;
+        children.delete(processConfig.label);
+        clearTimer(stableTimers, processConfig.label);
+        const detail = signal ? `signal ${signal}` : `code ${code ?? 'unknown'}`;
+
+        if (processConfig.label === 'ngrok') {
+          if (scheduleManagedRestart(processConfig, {
+            code,
+            signal,
+            message: `ngrok exited unexpectedly with ${detail}.`,
+          })) return;
+          updateDevFlowSupervisorProcess('ngrok', {
+            status: shuttingDown ? 'stopped' : 'failed',
+            pid: undefined,
+            lastExitAt: new Date().toISOString(),
+            lastExitCode: code,
+            lastSignal: signal,
+            nextRetryAt: undefined,
+            message: shuttingDown ? 'ngrok stopped during intentional supervisor shutdown.' : `ngrok exited with ${detail}.`,
+          });
+          return;
         }
 
         const restartState = readDevFlowRestartState();
@@ -218,6 +332,14 @@ export function startAll(mode: StartAllMode = 'all') {
           shuttingDown,
           restartState,
         })) {
+          updateDevFlowSupervisorProcess('server', {
+            status: 'restarting',
+            pid: undefined,
+            lastExitAt: new Date().toISOString(),
+            lastExitCode: code,
+            lastSignal: signal,
+            message: `Restart ticket ${restartState!.ticket} accepted; relaunching DevFlow server.`,
+          });
           console.log(`[start-all] Restart ticket ${restartState!.ticket} accepted; relaunching DevFlow server.`);
           try {
             const replacement = launch(processConfig);
@@ -233,32 +355,55 @@ export function startAll(mode: StartAllMode = 'all') {
           return;
         }
 
+        updateDevFlowSupervisorProcess('server', {
+          status: shuttingDown ? 'stopped' : 'failed',
+          pid: undefined,
+          lastExitAt: new Date().toISOString(),
+          lastExitCode: code,
+          lastSignal: signal,
+          message: shuttingDown ? 'DevFlow server stopped during intentional supervisor shutdown.' : `DevFlow server exited with ${detail}.`,
+        });
+
         if (
           !shuttingDown
-          && processConfig.label === 'server'
           && restartState?.status === 'accepted'
           && restartState.supervisorToken === supervisorToken
         ) {
-          const detail = signal ? `signal ${signal}` : `code ${code ?? 'unknown'}`;
           markDevFlowRestartFailed(restartState.ticket, `DevFlow exited with ${detail} before restart handoff completed.`);
           return;
         }
 
         if (
           !shuttingDown
-          && processConfig.label === 'server'
           && restartState?.status === 'restarting'
           && restartState.replacementPid === exitedChild.pid
         ) {
-          const detail = signal ? `signal ${signal}` : `code ${code ?? 'unknown'}`;
           markDevFlowRestartFailed(restartState.ticket, `Replacement DevFlow server exited with ${detail} before becoming healthy.`);
         }
       },
       onError: (failedChild, error) => {
+        if (children.get(processConfig.label) !== failedChild) return;
+        children.delete(processConfig.label);
+        clearTimer(stableTimers, processConfig.label);
+
+        if (processConfig.label === 'ngrok') {
+          if (scheduleManagedRestart(processConfig, { message: `ngrok failed to start: ${error.message}` })) return;
+          updateDevFlowSupervisorProcess('ngrok', {
+            status: shuttingDown ? 'stopped' : 'failed',
+            pid: undefined,
+            message: error.message,
+          });
+          return;
+        }
+
+        updateDevFlowSupervisorProcess('server', {
+          status: shuttingDown ? 'stopped' : 'failed',
+          pid: undefined,
+          message: `DevFlow server failed to start: ${error.message}`,
+        });
         const restartState = readDevFlowRestartState();
         if (
           !shuttingDown
-          && processConfig.label === 'server'
           && restartState?.status === 'restarting'
           && restartState.replacementPid === failedChild.pid
         ) {
@@ -268,6 +413,32 @@ export function startAll(mode: StartAllMode = 'all') {
     });
 
     children.set(processConfig.label, child);
+    updateDevFlowSupervisorProcess(processConfig.label, {
+      status: child.pid ? 'running' : 'starting',
+      ...(child.pid ? { pid: child.pid } : { pid: undefined }),
+      startedAt: new Date().toISOString(),
+      restartAttempt: restartAttempts.get(processConfig.label) || 0,
+      nextRetryAt: undefined,
+      message: child.pid ? `${processConfig.label} child process is running.` : `${processConfig.label} child process is starting.`,
+    });
+
+    if (processConfig.label === 'ngrok') {
+      const stableChild = child;
+      const timer = setTimeout(() => {
+        stableTimers.delete('ngrok');
+        if (shuttingDown || children.get('ngrok') !== stableChild) return;
+        restartAttempts.set('ngrok', 0);
+        updateDevFlowSupervisorProcess('ngrok', {
+          status: 'running',
+          restartAttempt: 0,
+          nextRetryAt: undefined,
+          message: 'ngrok child process is stable; restart backoff reset.',
+        });
+      }, options.ngrokStableResetMs);
+      timer.unref();
+      stableTimers.set('ngrok', timer);
+    }
+
     return child;
   };
 
@@ -280,9 +451,19 @@ export function startAll(mode: StartAllMode = 'all') {
   }
 
   const shutdown = () => {
+    if (shuttingDown) return;
     shuttingDown = true;
     console.log('[start-all] Stopping services...');
-    for (const child of children.values()) {
+    updateDevFlowSupervisorState({ shuttingDown: true });
+    for (const label of Array.from(restartTimers.keys())) clearTimer(restartTimers, label);
+    for (const label of Array.from(stableTimers.keys())) clearTimer(stableTimers, label);
+    for (const [label, child] of children.entries()) {
+      updateDevFlowSupervisorProcess(label, {
+        status: 'stopped',
+        pid: undefined,
+        nextRetryAt: undefined,
+        message: `${label} stopped during intentional supervisor shutdown.`,
+      });
       if (!child.killed) child.kill();
     }
     process.exit(0);

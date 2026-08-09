@@ -87,6 +87,8 @@ Use ngrok only when you want a public URL, external callbacks, or the full one-c
 
 `npm run start:all` runs setup, starts the DevFlow server, starts ngrok, and opens the browser. If `DEVFLOW_NGROK_DOMAIN` is set in `.env`, DevFlow uses that static ngrok domain; otherwise it runs `ngrok http 3000`.
 
+If ngrok exits unexpectedly, `start:all` leaves the DevFlow API running and restarts ngrok automatically with bounded exponential backoff. Intentional supervisor shutdown cancels pending ngrok retries. Runtime diagnostics report the API and tunnel child states separately; see `docs/runtime-supervisor.md` for the lifecycle and failure-state details.
+
 Optional ngrok/browser settings:
 
 ```env
@@ -94,6 +96,9 @@ DEVFLOW_PORT=3000
 DEVFLOW_NGROK_DOMAIN="your-static-domain.ngrok-free.dev"
 DEVFLOW_OPEN_BROWSER=true
 DEVFLOW_OPEN_BROWSER_DELAY_MS=4000
+DEVFLOW_NGROK_RESTART_BASE_MS=1000
+DEVFLOW_NGROK_RESTART_MAX_MS=30000
+DEVFLOW_NGROK_STABLE_RESET_MS=60000
 ```
 
 ## Optional Setup: Agent CLIs and Tokens

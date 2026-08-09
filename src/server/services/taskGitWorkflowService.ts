@@ -1,8 +1,11 @@
 import type { AppState } from '../types';
 import type { TaskGitEvidence, VerificationEvidenceCheck, VerificationEvidenceStatus } from '../../types';
 import { getTasks } from '../repositories/taskRepository';
+import { listExecutionSessionsForTask } from '../repositories/executionSessionRepository';
 import { getGitBranch, getGitStatus, getGitSyncStatus } from './gitService';
 import { createApiError } from './api';
+import { getExecutionOwnershipState } from './executionSessionService';
+import { resolveProjectRoot } from './localFileService';
 
 const VALID_VERIFICATION_STATUSES = new Set<VerificationEvidenceStatus>(['passed', 'failed', 'not-run']);
 const UNRESOLVED_BUG_STATUSES = new Set(['open', 'fixing', 'reopened']);
@@ -139,6 +142,47 @@ export function syncTaskWithGit(state: AppState, task: any, args: Record<string,
 function addBlocker(blockers: ReviewBlocker[], code: string, message: string, details?: unknown) {
   if (blockers.some((blocker) => blocker.code === code)) return;
   blockers.push({ code, message, ...(details === undefined ? {} : { details }) });
+}
+
+export function getExecutionOwnershipReviewBlockers(state: AppState, task: any, args: Record<string, any>): ReviewBlocker[] {
+  if (!task?.id || !task?.projectId) return [];
+  const workspaceId = typeof args.workspaceId === 'string' && args.workspaceId.trim() ? args.workspaceId.trim() : undefined;
+  const sessions = listExecutionSessionsForTask(task.id);
+  const session = workspaceId
+    ? sessions.find((entry) => entry.workspaceId === workspaceId)
+    : sessions.find((entry) => !entry.workspaceId);
+  if (!session) return [];
+
+  try {
+    const root = resolveProjectRoot(state, { projectId: task.projectId, ...(workspaceId ? { workspaceId } : {}) });
+    const ownership = getExecutionOwnershipState(session.id, { repoRoot: root });
+    const blockers: ReviewBlocker[] = [];
+    if (ownership.ownershipDrift.length > 0) {
+      addBlocker(blockers, 'EXECUTION_OWNERSHIP_DRIFT', `${ownership.ownershipDrift.length} execution-owned file(s) changed after the last known execution revision.`, {
+        files: ownership.ownershipDrift,
+        executionSessionId: session.id,
+      });
+    }
+    if (ownership.scopeDrift.length > 0) {
+      addBlocker(blockers, 'EXECUTION_SCOPE_DRIFT', `${ownership.scopeDrift.length} changed file(s) are outside the recorded task/session scope.`, {
+        files: ownership.scopeDrift,
+        executionSessionId: session.id,
+      });
+    }
+    if (ownership.verificationFresh === false) {
+      addBlocker(blockers, 'EXECUTION_VERIFICATION_STALE', 'Execution verification evidence is stale because owned content changed after verification.', {
+        executionSessionId: session.id,
+        verificationRecordedAt: ownership.verificationRecordedAt,
+      });
+    }
+    return blockers;
+  } catch (error: any) {
+    return [{
+      code: 'EXECUTION_OWNERSHIP_UNAVAILABLE',
+      message: error?.payload?.message || error?.message || 'Execution ownership state could not be evaluated.',
+      details: { executionSessionId: session.id, code: error?.payload?.code || error?.code },
+    }];
+  }
 }
 
 function validateTaskState(task: any, gitEvidence: TaskGitEvidence | undefined, verificationEvidence: VerificationEvidenceCheck[], args: Record<string, any>) {
@@ -280,6 +324,7 @@ export function evaluateReviewSubmission(state: AppState, task: any, args: Recor
     });
   }
   blockers.push(...validateTaskState(task, gitEvidence, verificationEvidence, args));
+  blockers.push(...getExecutionOwnershipReviewBlockers(state, task, args));
   return {
     blocked: blockers.length > 0,
     blockers,

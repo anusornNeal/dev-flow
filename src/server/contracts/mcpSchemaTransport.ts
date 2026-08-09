@@ -4,6 +4,18 @@ function isRecord(value: unknown): value is JsonSchema {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
+const transportInputSchemaCache = new WeakMap<JsonSchema, JsonSchema>();
+
+function deepFreezeSchemaValue<T>(value: T): T {
+  if (Array.isArray(value)) {
+    for (const entry of value) deepFreezeSchemaValue(entry);
+    return Object.freeze(value) as T;
+  }
+  if (!isRecord(value)) return value;
+  for (const entry of Object.values(value)) deepFreezeSchemaValue(entry);
+  return Object.freeze(value) as T;
+}
+
 function mergeRequired(parentRequired: unknown, branchRequired: unknown) {
   const values = [
     ...(Array.isArray(parentRequired) ? parentRequired : []),
@@ -49,5 +61,10 @@ function normalizeSchemaValue(value: any): any {
 }
 
 export function buildMcpTransportInputSchema(schema: JsonSchema): JsonSchema {
-  return normalizeSchemaValue(schema);
+  const cached = transportInputSchemaCache.get(schema);
+  if (cached) return cached;
+
+  const normalized = deepFreezeSchemaValue(normalizeSchemaValue(schema));
+  transportInputSchemaCache.set(schema, normalized);
+  return normalized;
 }

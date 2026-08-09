@@ -122,9 +122,25 @@ test('capability catalog exposes active MCP profile and schema bytes', () => {
   delete process.env.DEVFLOW_MCP_TOOL_PROFILE;
   try {
     const catalog = getCapabilityCatalog();
+    const repeatedCatalog = getCapabilityCatalog();
+    const codingTools = getMcpToolList('coding');
+    const repeatedCodingTools = getMcpToolList('coding');
+    const profileSummary = getToolProfileSummary();
+    const repeatedProfileSummary = getToolProfileSummary();
+    const fullRead = getMcpToolList('full').find((tool: any) => tool.name === 'read_local_file');
+    const codingRead = codingTools.find((tool: any) => tool.name === 'read_local_file');
+
     assert.equal(catalog.mcpProfile.active, 'coding');
-    assert.equal(catalog.mcpProfile.toolCount, getMcpToolList('coding').length);
+    assert.equal(catalog.mcpProfile.toolCount, codingTools.length);
     assert.ok(catalog.mcpProfile.schemaBytes > 0);
+    assert.equal(repeatedCodingTools, codingTools, 'unchanged profile should reuse the immutable MCP tool list');
+    assert.equal(repeatedProfileSummary, profileSummary, 'profile schema-byte summary should be memoized');
+    assert.equal(repeatedCatalog.tools, catalog.tools, 'capability catalog should reuse static tool materialization');
+    assert.equal(repeatedCatalog.matrix, catalog.matrix, 'capability catalog should reuse static matrix materialization');
+    assert.equal(repeatedCatalog.workflow, catalog.workflow, 'capability catalog should reuse static workflow materialization');
+    assert.equal(fullRead?.inputSchema, codingRead?.inputSchema, 'transport normalization should be reused across profile lists');
+    assert.equal(Object.isFrozen(codingTools), true, 'cached tool lists should be immutable');
+    assert.equal(Object.isFrozen(codingRead?.inputSchema), true, 'cached transport schemas should be immutable');
   } finally {
     if (previous === undefined) delete process.env.DEVFLOW_MCP_TOOL_PROFILE;
     else process.env.DEVFLOW_MCP_TOOL_PROFILE = previous;

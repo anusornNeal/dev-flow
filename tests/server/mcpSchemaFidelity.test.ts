@@ -78,7 +78,10 @@ test('transport normalization preserves nested objects, arrays, enums, descripti
   );
 
   const exposed = buildMcpTransportInputSchema(fixture);
+  const repeated = buildMcpTransportInputSchema(fixture);
 
+  assert.equal(repeated, exposed, 'unchanged canonical schema should reuse its normalized transport materialization');
+  assert.equal(Object.isFrozen(exposed), true, 'cached transport schema should be immutable');
   assert.deepEqual(fixture, before, 'canonical fixture must not be mutated');
   assert.equal(exposed.properties, undefined, 'Schema mismatch at fixture.inputSchema.properties: materialized union should not duplicate shared parent properties');
   assert.equal(exposed.required, undefined, 'Schema mismatch at fixture.inputSchema.required: parent required fields should move into materialized branches');

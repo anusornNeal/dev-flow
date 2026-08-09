@@ -1571,7 +1571,7 @@ export function getMcpToolList(profile: DevFlowToolProfile = 'full') {
     let description = tool.description;
 
     if (tool.executionPolicy?.mode === 'job') {
-      description = `${description}\n\nNote: This tool may run asynchronously. If it takes longer than 20 seconds, it may return a \`jobId\` instead of the final result. Use \`get_tool_job_result(jobId, waitMs=30000)\` as the normal completion path; use \`get_tool_job_status\` or \`get_tool_job_log\` only when diagnostic detail is needed.`;
+      description = `${description}\n\nNote: This tool may run asynchronously and return a durable \`jobId\` before completion. When that happens, call \`get_tool_job_result(jobId, waitMs=30000)\` immediately and continue bounded polling in the same assistant turn until the job is terminal whenever the DevFlow tool surface remains available. Do not ask the user for another message merely to continue an already-started job. If the tool surface disappears, preserve and report the \`jobId\` so a refreshed connection can resume it; use \`get_tool_job_status\` or \`get_tool_job_log\` only when diagnostic detail is needed.`;
       if (outputSchema) {
         outputSchema = {
           type: 'object',
@@ -1699,7 +1699,7 @@ export function getCapabilityCatalog() {
       let description = tool.description;
 
       if (tool.executionPolicy?.mode === 'job') {
-        description = `${description}\n\nNote: This tool may run asynchronously. If it takes longer than 20 seconds, it may return a \`jobId\` instead of the final result. Use \`get_tool_job_result(jobId, waitMs=30000)\` as the normal completion path; use \`get_tool_job_status\` or \`get_tool_job_log\` only when diagnostic detail is needed.`;
+        description = `${description}\n\nNote: This tool may run asynchronously and return a durable \`jobId\` before completion. When that happens, call \`get_tool_job_result(jobId, waitMs=30000)\` immediately and continue bounded polling in the same assistant turn until the job is terminal whenever the DevFlow tool surface remains available. Do not ask the user for another message merely to continue an already-started job. If the tool surface disappears, preserve and report the \`jobId\` so a refreshed connection can resume it; use \`get_tool_job_status\` or \`get_tool_job_log\` only when diagnostic detail is needed.`;
         if (outputSchema) {
           outputSchema = {
             type: 'object',

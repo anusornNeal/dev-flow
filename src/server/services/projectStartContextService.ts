@@ -9,6 +9,7 @@ import { getRepoInspectionIndex } from './repoInspectionIndexService';
 import { registerRepoCacheInvalidator } from './repoCacheInvalidationService';
 import { getRepoRevisionForRoot } from './repoRevisionService';
 import { ensureRepoChangeWatcher } from './workspaceChangeWatcherService';
+import { createContextBudgetPlan, rankContextEvidence } from './contextBudgetPlanner.js';
 
 const HINT_FILES = ['AGENTS.md', 'README.md', 'package.json', 'tsconfig.json', 'vite.config.ts', 'gradlew.bat', 'build.gradle', 'settings.gradle'];
 
@@ -199,10 +200,28 @@ export function getRepoReadSnapshot(state: AppState, args: Record<string, any>) 
 export function getRepoContextBundle(state: AppState, args: Record<string, any>) {
   const project = resolveProject(state, args);
   const query = typeof args.q === 'string' ? args.q : typeof args.query === 'string' ? args.query : '';
-  const indexLimit = parsePositiveInt(args.limit, 8, 20);
-  const snippetLimit = parsePositiveInt(args.snippetLimit, Math.min(indexLimit, 5), 10);
-  const snippetLines = parsePositiveInt(args.snippetLines, 80, 160);
-  const maxSnippetBytes = parsePositiveInt(args.maxSnippetBytes, 12000, 50000);
+  const plannerInput = {
+    query,
+    intent: args.intent,
+    complexity: args.complexity,
+    targetFiles: Array.isArray(args.targetFiles) ? args.targetFiles : [],
+    deep: args.deep === true || args.deep === 'true',
+    disclosureLevel: args.disclosureLevel,
+  };
+  const basePlan = createContextBudgetPlan(plannerInput);
+  const indexLimit = parsePositiveInt(args.limit, basePlan.budget.indexLimit, 50);
+  const snippetLimit = parsePositiveInt(args.snippetLimit, Math.min(indexLimit, basePlan.budget.snippetLimit), 10);
+  const snippetLines = parsePositiveInt(args.snippetLines, basePlan.budget.snippetLines, 160);
+  const maxSnippetBytes = parsePositiveInt(args.maxSnippetBytes, basePlan.budget.maxSnippetBytes, 50000);
+  const maxTotalSnippetBytes = snippetLimit * maxSnippetBytes;
+  const effectiveBudget = {
+    indexLimit,
+    snippetLimit,
+    snippetLines,
+    maxSnippetBytes,
+    maxTotalSnippetBytes,
+    estimatedTokenBudget: Math.ceil(maxTotalSnippetBytes / 4),
+  };
 
   const start = getProjectStartContext(state, { ...args, projectId: project.id, limit: args.topLevelLimit || 40 });
   const index = getRepoInspectionIndex(state, {
@@ -211,10 +230,19 @@ export function getRepoContextBundle(state: AppState, args: Record<string, any>)
     q: query,
     path: args.path,
     limit: indexLimit,
+    targetFiles: plannerInput.targetFiles,
     includeIgnored: args.includeIgnored,
   });
+  const evidence = rankContextEvidence(index.matches || [], plannerInput).slice(0, indexLimit);
+  const matchesByPath = new Map((index.matches || []).map((match: any) => [String(match.path).replace(/\\/g, '/'), match]));
+  const rankedMatches = evidence.map((entry) => ({
+    ...(matchesByPath.get(entry.path) as any || {}),
+    path: entry.path,
+    evidenceRank: entry.rank,
+    evidenceReasons: entry.reasons,
+  }));
 
-  const snippets = (index.matches || []).slice(0, snippetLimit).map((match: any) => {
+  const snippets = rankedMatches.slice(0, snippetLimit).map((match: any) => {
     try {
       const snippet = readLocalFile(state, {
         ...args,
@@ -228,6 +256,8 @@ export function getRepoContextBundle(state: AppState, args: Record<string, any>)
         path: match.path,
         score: match.score,
         symbols: match.symbols,
+        evidenceRank: match.evidenceRank,
+        evidenceReasons: match.evidenceReasons,
         startLine: snippet.startLine,
         endLine: snippet.endLine,
         totalLines: snippet.totalLines,
@@ -240,6 +270,8 @@ export function getRepoContextBundle(state: AppState, args: Record<string, any>)
       return {
         path: match.path,
         score: match.score,
+        evidenceRank: match.evidenceRank,
+        evidenceReasons: match.evidenceReasons,
         error: error?.message || 'Could not read snippet.',
       };
     }
@@ -267,18 +299,25 @@ export function getRepoContextBundle(state: AppState, args: Record<string, any>)
     }
   }
 
+  const returnedSnippetBytes = snippets.reduce((total: number, snippet: any) => total + Buffer.byteLength(String(snippet.content || ''), 'utf8'), 0);
   return {
     project: start.project,
     query,
     repoRevision: start.repoRevision,
     git: start.git,
     hints: start.hints,
+    contextPlan: {
+      ...basePlan,
+      budget: effectiveBudget,
+      evidence,
+      returnedSnippetBytes,
+    },
     index: {
       cache: index.cache,
       generatedAt: index.generatedAt,
       metadata: index.metadata,
-      count: index.matches?.length || 0,
-      matches: (index.matches || []).slice(0, indexLimit),
+      count: rankedMatches.length,
+      matches: rankedMatches,
     },
     snippets,
     diff,

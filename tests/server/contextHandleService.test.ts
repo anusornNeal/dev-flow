@@ -52,6 +52,26 @@ test('context handle returns NOT_MODIFIED without returning full snippets again'
   assert.equal(second.bundle, undefined);
 });
 
+test('context handle treats planner intent/depth as part of bundle identity', () => {
+  const first = getRepoContextWithHandle(state, {
+    projectId: 'project-context-handle', q: 'Example architecture', intent: 'small-bug',
+  });
+  assert.equal(first.status, 'full');
+  assert.equal(first.bundle?.contextPlan.intent, 'small-bug');
+
+  const architecture = getRepoContextWithHandle(state, {
+    projectId: 'project-context-handle', q: 'Example architecture', intent: 'architecture', contextHandle: first.contextHandle,
+  });
+  assert.equal(architecture.status, 'full');
+  assert.equal(architecture.bundle?.contextPlan.intent, 'architecture');
+
+  const deep = getRepoContextWithHandle(state, {
+    projectId: 'project-context-handle', q: 'Example architecture', intent: 'architecture', deep: true, contextHandle: architecture.contextHandle,
+  });
+  assert.equal(deep.status, 'full');
+  assert.equal(deep.bundle?.contextPlan.disclosureLevel, 'full-file');
+});
+
 test('context handle returns only changed snippet revisions after a file edit', () => {
   const first = getRepoContextWithHandle(state, {
     projectId: 'project-context-handle', q: 'Example', limit: 5, snippetLimit: 2,

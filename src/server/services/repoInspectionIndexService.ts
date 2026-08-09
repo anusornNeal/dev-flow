@@ -398,18 +398,27 @@ export function getRepoInspectionIndex(state: AppState, args: Record<string, any
     .map((term) => term.trim())
     .filter(Boolean);
   const limit = Number.isFinite(Number(args.limit)) ? Math.max(1, Math.min(50, Number(args.limit))) : 15;
+  const explicitTargets = new Set(
+    (Array.isArray(args.targetFiles) ? args.targetFiles : [])
+      .map((value: unknown) => String(value || '').trim().replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase())
+      .filter(Boolean),
+  );
 
   const matches = index.entries
-    .map((entry) => ({ entry, score: scoreEntry(entry, queryTerms) }))
-    .filter(({ score }) => score > 0)
-    .sort((left, right) => right.score - left.score || left.entry.path.localeCompare(right.entry.path))
+    .map((entry) => {
+      const normalizedPath = entry.path.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase();
+      return { entry, score: scoreEntry(entry, queryTerms), explicitTarget: explicitTargets.has(normalizedPath) };
+    })
+    .filter(({ score, explicitTarget }) => score > 0 || explicitTarget)
+    .sort((left, right) => Number(right.explicitTarget) - Number(left.explicitTarget) || right.score - left.score || left.entry.path.localeCompare(right.entry.path))
     .slice(0, limit)
-    .map(({ entry, score }) => ({
+    .map(({ entry, score, explicitTarget }) => ({
       path: entry.path,
       extension: entry.extension,
       symbols: entry.symbols,
       imports: entry.imports,
       score,
+      explicitTarget,
     }));
 
   return {

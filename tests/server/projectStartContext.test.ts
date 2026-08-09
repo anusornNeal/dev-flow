@@ -6,14 +6,25 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-start-context-'));
-process.env.DEVFLOW_DB_PATH = path.join(tempDir, 'devflow.db');
+process.env.DEVFLOW_DB_PATH = path.join(os.tmpdir(), `devflow-start-context-db-${path.basename(tempDir)}.sqlite`);
 
+const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
+executeAllMigrations();
+const { createProject } = await import('../../src/server/repositories/projectRepository.js');
 const { getProjectStartContext, getRepoContextBundle, getRepoReadSnapshot } = await import('../../src/server/services/projectStartContextService.js');
+const { stopAllRepoChangeWatchers } = await import('../../src/server/services/workspaceChangeWatcherService.js');
 
 fs.writeFileSync(path.join(tempDir, 'package.json'), '{"name":"fixture"}\n', 'utf8');
 fs.writeFileSync(path.join(tempDir, 'README.md'), '# Fixture\n', 'utf8');
 fs.mkdirSync(path.join(tempDir, 'src'));
 fs.writeFileSync(path.join(tempDir, 'src', 'snapshotService.ts'), "export function snapshotExample() { return 'snapshot'; }\n", 'utf8');
+for (let index = 0; index < 10; index += 1) {
+  fs.writeFileSync(
+    path.join(tempDir, 'src', `sharedContext${index}.ts`),
+    `export function SharedContext${index}() { return '${'x'.repeat(240)}'; }\n`,
+    'utf8',
+  );
+}
 
 function git(args: string[]) {
   const result = spawnSync('git', args, { cwd: tempDir, encoding: 'utf8', shell: false });
@@ -31,6 +42,7 @@ const state: any = {
     { id: 'project-start-1', name: 'Start Fixture', repoUrl: 'https://example.com/start', localPath: tempDir },
   ],
 };
+createProject(state.projectsCache[0]);
 
 test('getProjectStartContext returns compact project and top-level file context', () => {
   const result = getProjectStartContext(state, { projectId: 'project-start-1' });
@@ -68,7 +80,66 @@ test('getRepoContextBundle exposes repo and snippet revisions', () => {
   assert.notEqual(second.repoRevision, first.repoRevision);
 });
 
+test('getRepoContextBundle applies smaller intent defaults and exposes ranked evidence', () => {
+  const simple = getRepoContextBundle(state, {
+    projectId: 'project-start-1',
+    q: 'update config SharedContext',
+    targetFiles: ['src/sharedContext0.ts'],
+  });
+  const broadBaseline = getRepoContextBundle(state, {
+    projectId: 'project-start-1',
+    q: 'update config SharedContext',
+    limit: 8,
+    snippetLimit: 5,
+    snippetLines: 80,
+    maxSnippetBytes: 12000,
+  });
+  const architecture = getRepoContextBundle(state, {
+    projectId: 'project-start-1',
+    q: 'architecture SharedContext dependency flow',
+  });
+
+  assert.equal(simple.contextPlan.intent, 'authoring');
+  assert.equal(simple.contextPlan.disclosureLevel, 'symbols');
+  assert.equal(simple.contextPlan.budget.indexLimit, 5);
+  assert.equal(simple.contextPlan.budget.snippetLimit, 2);
+  assert.ok(simple.index.matches.length <= 5);
+  assert.ok(simple.snippets.length <= 2);
+  assert.equal(simple.contextPlan.evidence[0].path, 'src/sharedContext0.ts');
+  assert.equal(simple.contextPlan.evidence[0].rank, 'Must');
+  assert.ok(simple.contextPlan.evidence[0].reasons.includes('explicit-target'));
+  const targetSnippet = simple.snippets.find((entry: any) => entry.path === 'src/sharedContext0.ts');
+  assert.equal(targetSnippet?.evidenceRank, 'Must');
+  assert.ok(targetSnippet?.evidenceReasons.includes('explicit-target'));
+  assert.equal(typeof targetSnippet?.revision, 'string');
+
+  assert.equal(architecture.contextPlan.intent, 'architecture');
+  assert.ok(architecture.contextPlan.budget.snippetLimit > simple.contextPlan.budget.snippetLimit);
+  assert.ok(architecture.snippets.length > simple.snippets.length);
+  assert.ok(JSON.stringify(simple).length < JSON.stringify(broadBaseline).length);
+});
+
+test('getRepoContextBundle preserves explicit caller budgets over planner defaults', () => {
+  const result = getRepoContextBundle(state, {
+    projectId: 'project-start-1',
+    q: 'architecture SharedContext',
+    limit: 2,
+    snippetLimit: 1,
+    snippetLines: 20,
+    maxSnippetBytes: 1000,
+  });
+
+  assert.equal(result.contextPlan.intent, 'architecture');
+  assert.equal(result.contextPlan.budget.indexLimit, 2);
+  assert.equal(result.contextPlan.budget.snippetLimit, 1);
+  assert.equal(result.contextPlan.budget.snippetLines, 20);
+  assert.equal(result.contextPlan.budget.maxSnippetBytes, 1000);
+  assert.equal(result.index.matches.length, 2);
+  assert.equal(result.snippets.length, 1);
+});
+
 test.after(() => {
+  stopAllRepoChangeWatchers();
   try {
     fs.rmSync(tempDir, { recursive: true, force: true });
   } catch {}

@@ -17,7 +17,7 @@ import { workspaceToolDefinitions } from './devflowWorkspaceTools';
 import { buildMcpTransportInputSchema } from './mcpSchemaTransport';
 import { resolveRuntimeMcpToolProfileValue } from './mcpToolProfileConfig';
 export type { DevFlowToolDefinition, DevFlowToolHttpRequest } from './devflowContractCore';
-export const DEVFLOW_CONTRACT_VERSION = '2026-08-09.1';
+export const DEVFLOW_CONTRACT_VERSION = '2026-08-09.2';
 
 export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   {
@@ -295,6 +295,11 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
         snippetLimit: { type: 'number', description: 'Maximum snippets returned from top matches.' },
         snippetLines: { type: 'number', description: 'Maximum leading lines per snippet.' },
         maxSnippetBytes: { type: 'number', description: 'Maximum bytes per snippet.' },
+        intent: { type: 'string', enum: ['authoring', 'small-bug', 'verification', 'cross-module', 'architecture'], description: 'Optional intent override for deterministic context budgeting.' },
+        complexity: { type: 'string', description: 'Optional complexity hint such as small, cross-module, architecture, or deep.' },
+        targetFiles: { type: 'array', items: { type: 'string' }, description: 'Explicit relative target files to rank as Must evidence when present.' },
+        deep: { type: 'boolean', description: 'Deliberately request the deep architecture budget and allow explicit full-file escalation.' },
+        disclosureLevel: { type: 'string', enum: ['project-summary', 'symbols', 'snippets', 'related', 'full-file'], description: 'Optional progressive-disclosure override. full-file still requires explicit read_local_file escalation.' },
         includeDiff: { type: 'boolean', description: 'Include current git diff summary and capped diff content.' },
         diffPath: { type: 'string', description: 'Optional path to limit diff.' },
         maxDiffBytes: { type: 'number', description: 'Maximum diff bytes returned.' },

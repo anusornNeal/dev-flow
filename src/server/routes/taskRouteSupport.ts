@@ -747,15 +747,16 @@ export function triggerTaskAgent(task: any, deps: ApiRouteDeps, routeLabel: stri
   const triggerBat = getAgentTriggerScriptPath();
   const invokeTriggerScript = resolveFromDevFlowAppRoot('scripts', 'invoke-agent-trigger.ps1');
   const apiBaseUrl = getDevFlowApiBaseUrl();
+  const runtimeSettings = getSettings();
 
   const execOpts = {
     cwd: project?.localPath || undefined,
     env: {
       ...process.env,
-      GITHUB_PERSONAL_ACCESS_TOKEN: getSettings().githubToken || process.env.GITHUB_PERSONAL_ACCESS_TOKEN || '',
-      JIRA_BASE_URL: getSettings().jiraBaseUrl || process.env.JIRA_BASE_URL || '',
-      JIRA_EMAIL: getSettings().jiraEmail || process.env.JIRA_EMAIL || '',
-      JIRA_API_TOKEN: getSettings().jiraToken || process.env.JIRA_API_TOKEN || process.env.JIRA_PERSONAL_ACCESS_TOKEN || '',
+      GITHUB_PERSONAL_ACCESS_TOKEN: runtimeSettings.githubToken || process.env.GITHUB_PERSONAL_ACCESS_TOKEN || '',
+      JIRA_BASE_URL: runtimeSettings.jiraBaseUrl || process.env.JIRA_BASE_URL || '',
+      JIRA_EMAIL: runtimeSettings.jiraEmail || process.env.JIRA_EMAIL || '',
+      JIRA_API_TOKEN: runtimeSettings.jiraToken || process.env.JIRA_API_TOKEN || process.env.JIRA_PERSONAL_ACCESS_TOKEN || '',
       DEVFLOW_AGENT_EXECUTION_MODE: executionMode,
       DEVFLOW_API_BASE_URL: apiBaseUrl,
     }

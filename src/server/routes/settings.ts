@@ -11,6 +11,21 @@ import { getDevFlowDataDir, getDevFlowDbPath, resolveFromDevFlowAppRoot } from '
 import { runAgentLaunchPreflight } from '../services/agentLaunchConfig';
 import { resolveAgentExecutionMode } from '../services/agentRunService';
 import { continueTaskQueueForProject } from './tasks';
+import { getCredentialVaultDiagnostics } from '../services/credentialVaultService';
+
+function persistSettingsOrRespond(res: express.Response, settings: Partial<Parameters<typeof saveSettings>[0]>) {
+  try {
+    saveSettings(settings);
+    return true;
+  } catch {
+    res.status(503).json({
+      error: 'Settings could not be saved securely. Configure a supported credential vault or use environment variables.',
+      code: 'SETTINGS_SECURE_PERSISTENCE_FAILED',
+      credentialVault: getCredentialVaultDiagnostics(),
+    });
+    return false;
+  }
+}
 
 function validateAutoWorkConfiguration(deps: ApiRouteDeps) {
   const queuedTasks = getTasks()
@@ -58,6 +73,7 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
       jiraEmail: settings.jiraEmail ?? '',
       autoWork: settings.autoWork ?? false,
       agentExecutionMode: settings.agentExecutionMode ?? '',
+      credentialVault: getCredentialVaultDiagnostics(),
     });
   });
 
@@ -119,6 +135,10 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
       settings.figmaToken = figmaToken.trim();
     }
 
+    if (clearGithubToken === true) settings.githubToken = '';
+    if (clearJiraToken === true) settings.jiraToken = '';
+    if (clearFigmaToken === true) settings.figmaToken = '';
+
     if (typeof jiraBaseUrl === 'string') {
       settings.jiraBaseUrl = jiraBaseUrl.trim();
     }
@@ -171,7 +191,7 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
       if (typeof agentExecutionMode === 'string') {
         settings.agentExecutionMode = agentExecutionMode;
       }
-      saveSettings(settings);
+      if (!persistSettingsOrRespond(res, settings)) return;
       return res.json({ success: true, autoWork, autoWorkTrigger });
     }
 
@@ -179,7 +199,7 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
       settings.agentExecutionMode = agentExecutionMode;
     }
 
-    saveSettings(settings);
+    if (!persistSettingsOrRespond(res, settings)) return;
     return res.json({ success: true });
   });
 

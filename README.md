@@ -96,9 +96,15 @@ DEVFLOW_OPEN_BROWSER=true
 DEVFLOW_OPEN_BROWSER_DELAY_MS=4000
 ```
 
+### Trusted remote API boundary
+
+Local loopback requests keep the existing one-click workflow. When `/api` is reached through a forwarded or non-loopback client, read-only requests remain available but privileged mutation methods are denied by default. To opt in to trusted remote mutations, set `DEVFLOW_TRUSTED_REMOTE_TOKEN` and send the same value as `Authorization: Bearer <token>` (or `X-DevFlow-Remote-Token`). This policy applies to `/api`; MCP transport endpoints keep their own transport policy.
+
 ## Optional Setup: Agent CLIs and Tokens
 
 You can use DevFlow as a local board without any tokens.
+
+Integration secrets entered through Settings are stored outside SQLite through the credential-vault abstraction. Windows uses current-user DPAPI-backed encrypted storage; environment variables override persisted credentials and remain the fallback on platforms where secure persistence is unavailable. Legacy plaintext token rows are migrated and cleared only after secure storage succeeds.
 
 Configure these only when you need agent launching or connector-backed context:
 

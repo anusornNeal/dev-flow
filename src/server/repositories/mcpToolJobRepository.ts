@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { getDevFlowAppRoot } from '../../lib/devFlowPaths';
+import { redactCredentialText } from '../services/credentialVaultService';
 
 export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'timed_out' | 'cancelled';
 
@@ -79,6 +80,7 @@ export function getRecentJobCacheStats() {
 }
 
 function redactValue(value: any): any {
+  if (typeof value === 'string') return redactCredentialText(value);
   if (Array.isArray(value)) return value.map(redactValue);
   if (!value || typeof value !== 'object') return value;
   const copy: Record<string, any> = {};
@@ -165,7 +167,8 @@ export function updateJobStatus(jobId: string, updates: Partial<McpToolJob>): Mc
 
   const now = new Date();
   const nowIso = now.toISOString();
-  const updated: McpToolJob = { ...job, ...updates, updatedAt: nowIso };
+  const safeUpdates = redactValue(updates) as Partial<McpToolJob>;
+  const updated: McpToolJob = { ...job, ...safeUpdates, updatedAt: nowIso };
 
   if (updates.status === 'running' && !job.startedAt) {
     updated.startedAt = nowIso;
@@ -189,15 +192,16 @@ export function updateJobStatus(jobId: string, updates: Partial<McpToolJob>): Mc
 export function appendJobLog(jobId: string, stream: 'stdout' | 'stderr', data: string) {
   const jobDir = getJobDir(jobId);
   if (!fs.existsSync(jobDir)) return;
-  fs.appendFileSync(path.join(jobDir, `${stream}.log`), data);
+  fs.appendFileSync(path.join(jobDir, `${stream}.log`), redactCredentialText(data));
 }
 
 export function writeJobResult(jobId: string, result: any) {
   const jobDir = getJobDir(jobId);
   if (!fs.existsSync(jobDir)) return;
-  fs.writeFileSync(path.join(jobDir, 'result.json'), JSON.stringify(result, null, 2));
-  if (result?.patch) {
-    fs.writeFileSync(path.join(jobDir, 'patch.diff'), result.patch);
+  const safeResult = redactValue(result);
+  fs.writeFileSync(path.join(jobDir, 'result.json'), JSON.stringify(safeResult, null, 2));
+  if (safeResult?.patch) {
+    fs.writeFileSync(path.join(jobDir, 'patch.diff'), safeResult.patch);
   }
 }
 

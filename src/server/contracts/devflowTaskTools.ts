@@ -139,6 +139,7 @@ export const taskToolDefinitions: DevFlowToolDefinition[] = [
       type: 'object', properties: {
         ...taskIdentifierProperty,
         remote: { type: 'string', description: 'Git remote name. Defaults to origin.' }, fetch: { type: 'boolean', description: 'Fetch the remote before collecting synchronization evidence. Defaults to true.' }, forceFresh: { type: 'boolean', description: 'Bypass reusable fresh remote evidence and force a new remote fetch.' },
+        workspaceId: { type: 'string', description: 'Opaque managed workspace id. Use this when the task was implemented in an isolated DevFlow worktree so Git evidence is collected from that exact workspace.' },
         checks: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, command: { type: 'string' }, status: { type: 'string', enum: ['passed', 'failed', 'not-run'] }, summary: { type: 'string' }, output: { type: 'string' }, recordedAt: { type: 'string' } }, required: ['command', 'status'] } },
         ...booleanFlagSchema.properties, ...mutationResponseModeProperty,
       }, required: ['taskId'],
@@ -151,6 +152,7 @@ export const taskToolDefinitions: DevFlowToolDefinition[] = [
       type: 'object', properties: {
         ...taskIdentifierProperty,
         remote: { type: 'string', description: 'Git remote name. Defaults to origin.' }, fetch: { type: 'boolean', description: 'Fetch the remote before evaluating review readiness. Defaults to true.' }, forceFresh: { type: 'boolean', description: 'Bypass reusable fresh remote evidence and force a new remote fetch.' },
+        workspaceId: { type: 'string', description: 'Opaque managed workspace id. Use this when review evidence must be collected from an isolated DevFlow worktree.' },
         checks: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, command: { type: 'string' }, status: { type: 'string', enum: ['passed', 'failed', 'not-run'] }, summary: { type: 'string' }, output: { type: 'string' }, recordedAt: { type: 'string' } }, required: ['command', 'status'] } },
         requireCleanTree: { type: 'boolean' }, requirePushedHead: { type: 'boolean' }, requireBranchMatch: { type: 'boolean' }, requireChecklistComplete: { type: 'boolean' }, requireVerificationEvidence: { type: 'boolean' },
         ...booleanFlagSchema.properties, ...mutationResponseModeProperty,

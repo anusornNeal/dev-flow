@@ -15,6 +15,13 @@ test('task bug and review route modules expose focused registration functions', 
   assert.equal(typeof registerTaskWorkflowRoutes, 'function');
 });
 
+test('blocked review does not persist branch-mismatched diagnostic Git evidence', () => {
+  const source = fs.readFileSync('src/server/routes/taskReviewRoutes.ts', 'utf8');
+  assert.match(source, /evidenceBranchMismatch/);
+  assert.match(source, /blocker\.code === 'TASK_BRANCH_MISMATCH'/);
+  assert.match(source, /evaluation\.gitEvidence && !evidenceBranchMismatch/);
+});
+
 test('registerTaskRoutes composes focused bug and review modules instead of owning their endpoints', () => {
   const source = fs.readFileSync('src/server/routes/tasks.ts', 'utf8');
   assert.match(source, /registerTaskReadRoutes\(app, deps\)/);

@@ -41,9 +41,10 @@ export function registerTaskReviewRoutes(app: express.Express, deps: ApiRouteDep
       }
 
       const evaluation = evaluateReviewSubmission(deps.state, task, req.body || {});
+      const evidenceBranchMismatch = evaluation.blockers.some((blocker) => blocker.code === 'TASK_BRANCH_MISMATCH');
       const updatedTask = {
         ...task,
-        ...(evaluation.gitEvidence ? { gitEvidence: evaluation.gitEvidence } : {}),
+        ...(evaluation.gitEvidence && !evidenceBranchMismatch ? { gitEvidence: evaluation.gitEvidence } : {}),
         verificationEvidence: evaluation.verificationEvidence,
         updatedAt: new Date().toISOString(),
       };

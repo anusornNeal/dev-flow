@@ -48,6 +48,8 @@ export interface VerificationEvidenceCheck {
 }
 
 export interface TaskGitEvidence {
+  evidenceSource?: 'project-root' | 'managed-workspace';
+  workspaceId?: string;
   branch: string;
   commit: string;
   remote: string;

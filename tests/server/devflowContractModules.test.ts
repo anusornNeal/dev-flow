@@ -25,6 +25,16 @@ test('task-domain contracts are owned by a focused module and composed into the 
   assert.deepEqual(aggregateNames.slice(first, first + TASK_TOOL_NAMES.length), TASK_TOOL_NAMES);
 });
 
+test('task Git workflow contracts expose opaque workspace provenance inputs', () => {
+  for (const toolName of ['sync_task_with_git', 'submit_task_for_review']) {
+    const tool = taskToolDefinitions.find((entry) => entry.name === toolName);
+    assert.ok(tool, `${toolName} contract must exist`);
+    const workspaceId = (tool?.inputSchema as any)?.properties?.workspaceId;
+    assert.equal(workspaceId?.type, 'string', `${toolName} must expose workspaceId as a string`);
+    assert.match(String(workspaceId?.description || ''), /workspace/i);
+  }
+});
+
 test('git-domain contracts are owned by a focused module and composed into the aggregate catalog', () => {
   assert.deepEqual(gitToolDefinitions.map((tool) => tool.name), GIT_TOOL_NAMES);
   const aggregateNames = devFlowToolDefinitions.map((tool) => tool.name);

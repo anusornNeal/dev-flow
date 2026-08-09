@@ -65,21 +65,42 @@ export function normalizeVerificationEvidence(args: Record<string, any>, task?: 
   });
 }
 
-function collectGitEvidence(state: AppState, task: any, args: Record<string, any>): TaskGitEvidence {
+function collectGitEvidence(
+  state: AppState,
+  task: any,
+  args: Record<string, any>,
+  options: { rejectBranchMismatch?: boolean } = {},
+): TaskGitEvidence {
   if (!task?.projectId) {
     throw createApiError(400, 'TASK_PROJECT_REQUIRED', 'Task must belong to a project before Git evidence can be collected.', {
       affectedId: task?.id,
     });
   }
   const remote = typeof args.remote === 'string' && args.remote.trim() ? args.remote.trim() : 'origin';
+  const workspaceId = typeof args.workspaceId === 'string' && args.workspaceId.trim() ? args.workspaceId.trim() : undefined;
   const sync = getGitSyncStatus(state, {
     projectId: task.projectId,
+    workspaceId,
     remote,
     fetch: flag(args.fetch, true),
     forceFresh: flag(args.forceFresh, false),
     nowMs: args.nowMs,
   });
+  const expectedBranch = typeof task.branch === 'string' ? task.branch.trim() : '';
+  if (options.rejectBranchMismatch && expectedBranch && sync.branch !== expectedBranch) {
+    throw createApiError(409, 'TASK_GIT_EVIDENCE_BRANCH_MISMATCH', `Task expects branch '${expectedBranch}' but Git evidence resolved branch '${sync.branch}'.`, {
+      affectedId: task.displayId || task.id,
+      details: {
+        expectedBranch,
+        observedBranch: sync.branch,
+        evidenceSource: workspaceId ? 'managed-workspace' : 'project-root',
+        workspaceId,
+      },
+    });
+  }
   return {
+    evidenceSource: workspaceId ? 'managed-workspace' : 'project-root',
+    workspaceId,
     branch: sync.branch,
     commit: sync.localHead,
     remote: sync.remote,
@@ -101,7 +122,7 @@ function collectGitEvidence(state: AppState, task: any, args: Record<string, any
 
 export function syncTaskWithGit(state: AppState, task: any, args: Record<string, any>) {
   if (!task) throw createApiError(404, 'TASK_NOT_FOUND', 'Task was not found.');
-  const gitEvidence = collectGitEvidence(state, task, args);
+  const gitEvidence = collectGitEvidence(state, task, args, { rejectBranchMismatch: true });
   const verificationEvidence = normalizeVerificationEvidence(args, task);
   return {
     gitEvidence,

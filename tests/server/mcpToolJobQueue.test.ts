@@ -14,6 +14,7 @@ import {
   waitForToolJob,
   getQueueMetrics,
   getToolJobWaitGuidance,
+  __resetQueueWaitTelemetryForTests,
 } from '../../src/server/services/mcpToolJobService';
 import { readJobLog, readJobResult } from '../../src/server/repositories/mcpToolJobRepository';
 import { createProject } from '../../src/server/repositories/projectRepository.js';
@@ -738,6 +739,60 @@ test('mcpToolJobService - pending jobs expose wait-result recovery instead of du
     await waitForStatus(job.jobId, 'succeeded');
   } finally {
     gate.resolve();
+    __setToolJobTestRunner(toolName, null);
+  }
+});
+
+test('mcpToolJobService - phase telemetry separates queue blockers from execution without overlap', async () => {
+  const root = makeTempRepo('phase-telemetry');
+  const state = makeState(root);
+  const toolName = `test_phase_telemetry_${randomUUID()}`;
+  const starts: string[] = [];
+  const blockers = { first: deferred(), second: deferred() };
+  installControlledRunner(toolName, starts, blockers);
+  __resetQueueWaitTelemetryForTests();
+
+  try {
+    const first = enqueueToolJob(state, toolName, { localPath: root, label: 'first', singleFlight: false }, 'repo-write');
+    await waitUntil(() => starts.includes('first'), 'Expected first job to start');
+    const second = enqueueToolJob(state, toolName, { localPath: root, label: 'second', singleFlight: false }, 'repo-write');
+    await new Promise(resolve => setTimeout(resolve, 60));
+
+    const queued: any = getToolJobStatus(second.jobId);
+    assert.equal(queued.status, 'queued');
+    assert.equal(typeof queued.phaseTimings.admissionWaitMs, 'number');
+    assert.equal(queued.phaseTimings.queueWaitMs > 0, true);
+    assert.equal(queued.phaseTimings.workspaceLockWaitMs > 0, true);
+    assert.equal(queued.phaseTimings.capacityWaitMs, 0);
+    assert.equal(queued.phaseTimings.executionMs, 0);
+    assert.equal(queued.phaseTimings.responseHandoffMs, 0);
+    assert.equal(
+      queued.phaseTimings.workspaceLockWaitMs + queued.phaseTimings.capacityWaitMs <= queued.phaseTimings.queueWaitMs,
+      true,
+      'queue blocker phases must not double-count queue wall time',
+    );
+
+    blockers.first.resolve();
+    await waitForStatus(first.jobId, 'succeeded');
+    await waitUntil(() => starts.includes('second'), 'Expected second job to start');
+    await new Promise(resolve => setTimeout(resolve, 25));
+    const running: any = getToolJobStatus(second.jobId);
+    assert.equal(running.phaseTimings.executionMs > 0, true);
+
+    blockers.second.resolve();
+    const terminal: any = await waitForStatus(second.jobId, 'succeeded');
+    assert.equal(terminal.phaseTimings.queueWaitMs >= terminal.phaseTimings.workspaceLockWaitMs, true);
+    assert.equal(terminal.phaseTimings.executionMs > 0, true);
+    assert.equal(typeof terminal.phaseTimings.responseHandoffMs, 'number');
+
+    const metrics: any = getQueueMetrics();
+    assert.equal(metrics.metrics.phaseTelemetry.queueWait.count >= 1, true);
+    assert.equal(metrics.metrics.phaseTelemetry.workspaceLockWait.p95Ms > 0, true);
+    assert.equal(metrics.metrics.phaseTelemetry.execution.p95Ms > 0, true);
+    assert.doesNotMatch(JSON.stringify(metrics.metrics.phaseTelemetry), /phase-telemetry|localPath|Users|\\\\/);
+  } finally {
+    blockers.first.resolve();
+    blockers.second.resolve();
     __setToolJobTestRunner(toolName, null);
   }
 });

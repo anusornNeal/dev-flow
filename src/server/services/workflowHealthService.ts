@@ -105,7 +105,15 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
 
   const queueDepth = Number(diagnostics?.mcp?.queueDepth || 0);
   const isolation = diagnostics?.isolation || {
-    waits: { workspaceLockWait: { count: 0, p50Ms: 0, p95Ms: 0 }, capacityWait: { count: 0, p50Ms: 0, p95Ms: 0 }, blockerReasons: {} },
+    waits: { workspaceLockWait: { count: 0, totalMs: 0, p50Ms: 0, p95Ms: 0 }, capacityWait: { count: 0, totalMs: 0, p50Ms: 0, p95Ms: 0 }, blockerReasons: {} },
+    phases: {
+      admissionWait: { count: 0, totalMs: 0, p50Ms: 0, p95Ms: 0 },
+      queueWait: { count: 0, totalMs: 0, p50Ms: 0, p95Ms: 0 },
+      workspaceLockWait: { count: 0, totalMs: 0, p50Ms: 0, p95Ms: 0 },
+      capacityWait: { count: 0, totalMs: 0, p50Ms: 0, p95Ms: 0 },
+      execution: { count: 0, totalMs: 0, p50Ms: 0, p95Ms: 0 },
+      responseHandoff: { count: 0, totalMs: 0, p50Ms: 0, p95Ms: 0 },
+    },
     capacity: { active: 0, limit: 0, saturated: false },
     workspaces: { known: 0, active: 0, integrationRequired: 0 },
     integrations: { conflicts: 0, pendingConflicts: 0 },

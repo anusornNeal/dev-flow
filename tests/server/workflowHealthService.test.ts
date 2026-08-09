@@ -61,6 +61,10 @@ test('getWorkflowHealth returns ok for a clean repo', () => {
   assert.equal(result.capabilities.asyncToolCount > 0, true);
   assert.equal(typeof result.diagnostics.isolation.waits.workspaceLockWait.p95Ms, 'number');
   assert.equal(typeof result.diagnostics.isolation.waits.capacityWait.p95Ms, 'number');
+  assert.equal(typeof result.diagnostics.isolation.phases.admissionWait.p95Ms, 'number');
+  assert.equal(typeof result.diagnostics.isolation.phases.queueWait.p95Ms, 'number');
+  assert.equal(typeof result.diagnostics.isolation.phases.execution.p95Ms, 'number');
+  assert.equal(typeof result.diagnostics.isolation.phases.responseHandoff.p95Ms, 'number');
   assert.equal(typeof result.diagnostics.isolation.workspaces.known, 'number');
   assert.equal(typeof result.diagnostics.isolation.integrations.conflicts, 'number');
 });

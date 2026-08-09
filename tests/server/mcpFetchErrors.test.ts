@@ -13,20 +13,23 @@ test.after(() => {
   else process.env.DEVFLOW_MCP_TOOL_PROFILE = previousToolProfile;
 });
 
-test('lean MCP profile deterministically rejects hidden compatibility tools before network access', async () => {
-  process.env.DEVFLOW_MCP_TOOL_PROFILE = 'coding';
-  try {
-    const server = createDevFlowMcpServer('http://127.0.0.1:3000');
-    const handler = (server as any)._requestHandlers.get('tools/call');
-    const response = await handler({ method: 'tools/call', params: { name: 'get_figma_file', arguments: { fileKey: 'file-key' } } });
-    assert.equal(response.isError, true);
-    const payload = JSON.parse(response.content[0].text);
-    assert.equal(payload.code, 'TOOL_PROFILE_MISMATCH');
-    assert.equal(payload.details.activeProfile, 'coding');
-    assert.match(payload.details.guidance, /DEVFLOW_MCP_TOOL_PROFILE=full/);
-  } finally {
-    process.env.DEVFLOW_MCP_TOOL_PROFILE = 'full';
-  }
+test('globally consolidated MCP tools are rejected even in full before network access', async (t) => {
+  const originalFetch = global.fetch;
+  let fetchCalls = 0;
+  t.after(() => { global.fetch = originalFetch; });
+  global.fetch = async () => {
+    fetchCalls += 1;
+    throw new Error('network should not be reached');
+  };
+
+  const server = createDevFlowMcpServer('http://127.0.0.1:3000');
+  const handler = (server as any)._requestHandlers.get('tools/call');
+  const response = await handler({ method: 'tools/call', params: { name: 'get_figma_file', arguments: { fileKey: 'file-key' } } });
+  assert.equal(response.isError, true);
+  const payload = JSON.parse(response.content[0].text);
+  assert.equal(payload.code, 'TOOL_NOT_EXPOSED');
+  assert.match(payload.details.guidance, /get_figma_authoring_context/);
+  assert.equal(fetchCalls, 0);
 });
 
 test('mcp server handles ECONNREFUSED fetch errors without crashing', async (t) => {
@@ -387,6 +390,39 @@ test('mcp server returns compact server-guided pending completion without status
   assert.equal(packet.nextPollAfterMs, 2000);
   assert.equal(packet.recommendedWaitMs, 30000);
   assert.equal(Buffer.byteLength(JSON.stringify(packet), 'utf8') < 600, true);
+});
+
+test('mcp server eager-polls non-command async jobs for only one second', async (t) => {
+  const originalFetch = global.fetch;
+  const requests: string[] = [];
+  t.after(() => { global.fetch = originalFetch; });
+
+  global.fetch = async (url: RequestInfo | URL) => {
+    const urlText = String(url);
+    requests.push(urlText);
+    const body = urlText.endsWith('/api/tool-jobs')
+      ? { jobId: 'job-commit-1', status: 'queued' }
+      : { jobId: 'job-commit-1', status: 'running', ready: false, result: null, code: 'JOB_STILL_RUNNING', recommendedWaitMs: 30000 };
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => 'application/json' },
+      text: async () => JSON.stringify(body),
+    } as unknown as Response;
+  };
+
+  const server = createDevFlowMcpServer('http://127.0.0.1:3000');
+  const handler = (server as any)._requestHandlers.get('tools/call');
+  const response = await handler({
+    method: 'tools/call',
+    params: { name: 'commit_git_changes', arguments: { projectId: 'proj-1', message: 'test', stageAll: true } },
+  });
+
+  assert.equal(response.structuredContent.code, 'JOB_STILL_RUNNING');
+  assert.deepEqual(requests, [
+    'http://127.0.0.1:3000/api/tool-jobs',
+    'http://127.0.0.1:3000/api/tool-jobs/job-commit-1/result?waitMs=1000',
+  ]);
 });
 
 test('mcp server does not surface null text when async job result is temporarily missing', async (t) => {

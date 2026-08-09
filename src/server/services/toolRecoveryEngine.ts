@@ -73,7 +73,7 @@ export async function executeWithToolRecovery<TPayload, TResult>(input: Recovery
   const evidence = (outcome: string, extra: Partial<RecoveryEvidence> = {}): RecoveryEvidence => ({
     outcome,
     steps: [...steps],
-    externalAgentCalls: 1,
+    externalAgentCalls: 0,
     internalAttempts,
     manualRecoveryCallsAvoided: steps.filter((step) => step.outcome === 'executed').length,
     ...extra,

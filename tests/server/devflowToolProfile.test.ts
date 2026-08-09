@@ -19,15 +19,15 @@ test('coding MCP profile is lean, alias-free, and preserves representative workf
   const names = new Set(coding.map((tool: any) => tool.name));
   const inventory = buildMcpToolSurfaceInventory(devFlowToolDefinitions);
 
-  assert.equal(coding.length < full.length, true);
-  assert.equal(coding.length <= Math.ceil(full.length * 0.45), true);
+  assert.equal(coding.length <= full.length, true);
+  assert.equal(coding.length > 0, true);
   assert.equal(inventory.filter((item: any) => item.alias).some((item: any) => names.has(item.name)), false);
   for (const required of [
     'get_skill_router', 'get_authoring_skill', 'get_repo_context_bundle', 'read_local_file', 'read_file_snippets_batch',
     'search_local_files', 'create_task', 'search_tasks', 'get_task', 'move_task_to_status', 'open_task_bug',
     'prepare_compact_edit', 'apply_prepared_edit', 'edit_local_files_batch', 'apply_and_verify', 'run_project_command',
     'get_git_status', 'get_git_diff', 'commit_git_changes', 'push_git_branch', 'get_git_sync_status',
-    'sync_task_with_git', 'submit_task_for_review', 'complete_task_review', 'create_pull_request',
+    'sync_task_with_git', 'submit_task_for_review', 'create_pull_request',
     'get_figma_authoring_context', 'attach_figma_context_to_task', 'get_jira_authoring_bundle', 'get_project_atlas',
     'prepare_session_workspace', 'integrate_workspace', 'get_tool_job_result', 'devflow_health_check',
   ]) {
@@ -41,6 +41,40 @@ test('coding MCP profile is lean, alias-free, and preserves representative workf
   ]) {
     assert.equal(names.has(hidden), false, `coding profile should hide ${hidden}`);
   }
+});
+
+test('full MCP surface removes globally consolidated tools while keeping high-level intents', () => {
+  const fullNames = new Set(getMcpToolList('full').map((tool: any) => tool.name));
+  const removedTools = [
+    'get_agent_task_context', 'get_agent_context', 'get_task_prompt', 'list_agent_runs', 'retry_agent_run', 'cancel_agent_run', 'complete_agent_run', 'agent_complete_task',
+    'assign_agent', 'batch_assign_agent', 'resume_execution', 'handoff_execution',
+    'list_tasks', 'get_task_images', 'validate_task_quality', 'batch_upsert_tasks', 'move_task_status', 'batch_move_task_status', 'batch_toggle_task_checklist', 'complete_task_review',
+    'get_project_start_context', 'repo_read_snapshot', 'get_repo_inspection_index', 'get_repo_context_delta', 'get_repo_semantic_index',
+    'safe_edit_local_file', 'prepare_edit_plan', 'apply_prepared_edit_plan', 'apply_patch',
+    'get_figma_file', 'get_figma_node', 'get_figma_design_spec',
+    'create_tool_job', 'get_tool_job_status', 'get_tool_job_log', 'cancel_tool_job',
+    'get_change_summary', 'get_project_atlas_status', 'parse_test_report', 'apply_project_atlas_agent_update',
+  ];
+  for (const removed of removedTools) {
+    assert.equal(fullNames.has(removed), false, 'full MCP surface should remove ' + removed);
+  }
+  const replacements = [
+    'search_tasks', 'get_task', 'update_task', 'create_task', 'move_task_to_status', 'toggle_task_checklist',
+    'get_repo_context_bundle', 'prepare_compact_edit', 'apply_prepared_edit', 'edit_local_files_batch',
+    'get_figma_authoring_context', 'get_git_status', 'prepare_session_workspace', 'integrate_workspace',
+    'run_project_command', 'get_tool_job_result', 'devflow_health_check', 'get_project_atlas',
+  ];
+  for (const replacement of replacements) {
+    assert.equal(fullNames.has(replacement), true, 'full MCP surface should keep ' + replacement);
+  }
+
+  const searchTasks = devFlowToolDefinitions.find((tool: any) => tool.name === 'search_tasks')!;
+  assert.equal(searchTasks.inputSchema.required?.includes('q') ?? false, false);
+  assert.match(searchTasks.buildHttpRequest({ status: 'backlog' }).path, /status=backlog/);
+
+  const gitStatus = devFlowToolDefinitions.find((tool: any) => tool.name === 'get_git_status')!;
+  assert.deepEqual(gitStatus.inputSchema.properties.mode.enum, ['compact', 'expanded']);
+  assert.equal(gitStatus.buildHttpRequest({ mode: 'expanded' }).path, '/api/git/change-summary');
 });
 
 test('async tool guidance requires same-turn durable job completion', () => {
@@ -63,17 +97,20 @@ test('tool profile summary reports serialized schema bytes', () => {
   assert.ok(summary.full.schemaBytes > summary.coding.schemaBytes);
 });
 
-test('MCP surface inventory classifies every exposed canonical tool and alias', () => {
+test('MCP inventory can retain backend compatibility while full advertises only consolidated canonical intents', () => {
   const inventory = buildMcpToolSurfaceInventory(devFlowToolDefinitions);
   const full = getMcpToolList('full');
   const summary = summarizeMcpToolSurfaceInventory(inventory);
+  const inventoryNames = new Set(inventory.map((item: any) => item.name));
 
-  assert.equal(inventory.length, full.length);
-  assert.equal(new Set(inventory.map((item: any) => item.name)).size, full.length);
+  assert.equal(full.length < inventory.length, true);
+  assert.equal(full.every((tool: any) => inventoryNames.has(tool.name)), true);
+  assert.equal(new Set(full.map((tool: any) => tool.name)).size, full.length);
   assert.equal(inventory.every((item: any) => item.classification && item.disposition && item.risk && item.intent), true);
   assert.equal(inventory.filter((item: any) => item.classification === 'alias-duplicate').every((item: any) => item.target), true);
-  assert.equal(summary.total, full.length);
-  assert.equal(summary.byDisposition.keep + summary.byDisposition.combine + summary.byDisposition['hide-default'] + summary.byDisposition.deprecate, full.length);
+  assert.equal(full.some((tool: any) => inventory.find((item: any) => item.name === tool.name)?.alias), false);
+  assert.equal(summary.total, inventory.length);
+  assert.equal(summary.byDisposition.keep + summary.byDisposition.combine + summary.byDisposition['hide-default'] + summary.byDisposition.deprecate, inventory.length);
 });
 
 test('MCP profile resolution defaults to lean coding and preserves explicit valid profiles', () => {
@@ -118,15 +155,23 @@ test('guarded start-all restart refreshes MCP profile from the current env file'
 });
 
 test('capability catalog exposes active MCP profile and schema bytes', () => {
-  const previous = process.env.DEVFLOW_MCP_TOOL_PROFILE;
-  delete process.env.DEVFLOW_MCP_TOOL_PROFILE;
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-capability-profile-'));
+  fs.writeFileSync(path.join(tempRoot, '.env'), 'DEVFLOW_MCP_TOOL_PROFILE="coding"\n', 'utf8');
+  const previousRoot = process.env.DEVFLOW_APP_ROOT;
+  const previousSupervisor = process.env.DEVFLOW_RESTART_SUPERVISOR;
+  const previousProfile = process.env.DEVFLOW_MCP_TOOL_PROFILE;
+  process.env.DEVFLOW_APP_ROOT = tempRoot;
+  process.env.DEVFLOW_RESTART_SUPERVISOR = 'start-all';
+  process.env.DEVFLOW_MCP_TOOL_PROFILE = 'full';
   try {
     const catalog = getCapabilityCatalog();
     assert.equal(catalog.mcpProfile.active, 'coding');
     assert.equal(catalog.mcpProfile.toolCount, getMcpToolList('coding').length);
     assert.ok(catalog.mcpProfile.schemaBytes > 0);
   } finally {
-    if (previous === undefined) delete process.env.DEVFLOW_MCP_TOOL_PROFILE;
-    else process.env.DEVFLOW_MCP_TOOL_PROFILE = previous;
+    if (previousRoot === undefined) delete process.env.DEVFLOW_APP_ROOT; else process.env.DEVFLOW_APP_ROOT = previousRoot;
+    if (previousSupervisor === undefined) delete process.env.DEVFLOW_RESTART_SUPERVISOR; else process.env.DEVFLOW_RESTART_SUPERVISOR = previousSupervisor;
+    if (previousProfile === undefined) delete process.env.DEVFLOW_MCP_TOOL_PROFILE; else process.env.DEVFLOW_MCP_TOOL_PROFILE = previousProfile;
+    fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 });

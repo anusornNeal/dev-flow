@@ -14,7 +14,6 @@ import {
 import { taskToolDefinitions } from './devflowTaskTools';
 import { gitToolDefinitions } from './devflowGitTools';
 import { workspaceToolDefinitions } from './devflowWorkspaceTools';
-import { executionToolDefinitions } from './devflowExecutionTools';
 import { buildMcpTransportInputSchema } from './mcpSchemaTransport';
 import { resolveRuntimeMcpToolProfileValue } from './mcpToolProfileConfig';
 export type { DevFlowToolDefinition, DevFlowToolHttpRequest } from './devflowContractCore';
@@ -524,7 +523,6 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   },
   ...taskToolDefinitions,
   ...workspaceToolDefinitions,
-  ...executionToolDefinitions,
   {
     name: 'list_skills',
     description: 'List DevFlow skills. Optionally filter by kind: authoring, workflow, prompt, or custom.',
@@ -1511,7 +1509,7 @@ export function getToolSchema(name: string) {
   if (!tool) {
     throw createApiError(404, 'TOOL_NOT_FOUND', `DevFlow tool '${name}' was not found.`, {
       affectedId: name,
-      details: { nextAction: 'Call get_capabilities to inspect available tool names.' },
+      details: { nextAction: 'Use the advertised MCP tool list or call devflow_health_check for runtime capability diagnostics.' },
     });
   }
   return {
@@ -1541,19 +1539,72 @@ export function resolveDevFlowToolProfile(value?: string) {
 
 const CODING_PROFILE_TOOLS = new Set([
   'get_tool_schema', 'devflow_health_check', 'list_projects',
-  'search_tasks', 'create_task', 'get_task', 'update_task', 'move_task_to_status', 'toggle_task_checklist', 'assign_agent', 'open_task_bug',
-  'sync_task_with_git', 'submit_task_for_review', 'complete_task_review', 'get_agent_task_context',
+  'search_tasks', 'create_task', 'get_task', 'update_task', 'move_task_to_status', 'toggle_task_checklist', 'open_task_bug',
+  'sync_task_with_git', 'submit_task_for_review',
   'get_skill_router', 'get_authoring_skill', 'get_jira_authoring_bundle',
   'get_figma_authoring_context', 'attach_figma_context_to_task', 'get_project_atlas',
   'get_repo_context_bundle', 'list_local_files', 'read_local_file', 'read_file_snippets_batch', 'search_local_files',
   'write_local_file', 'edit_local_files_batch', 'prepare_compact_edit', 'apply_prepared_edit', 'apply_and_verify', 'delete_local_path', 'move_local_path',
   'run_project_command',
-  'get_git_status', 'get_git_diff', 'get_git_log', 'get_git_show', 'get_git_branch', 'get_git_sync_status', 'get_change_summary',
+  'get_git_status', 'get_git_diff', 'get_git_log', 'get_git_show', 'get_git_branch', 'get_git_sync_status',
   'ensure_git_branch', 'commit_git_changes', 'push_git_branch', 'create_pull_request',
-  'prepare_session_workspace', 'integrate_workspace', 'resume_execution', 'handoff_execution', 'get_tool_job_result',
+  'prepare_session_workspace', 'integrate_workspace', 'get_tool_job_result',
 ]);
 
+const MCP_CONSOLIDATION_REPLACEMENTS: Record<string, string> = {
+  get_capabilities: 'devflow_health_check',
+  get_tool_call_summary: 'devflow_health_check',
+  get_change_summary: 'get_git_status',
+  get_schema: 'get_task',
+  validate_task_quality: 'create_task/update_task',
+  get_project_start_context: 'get_repo_context_bundle',
+  repo_read_snapshot: 'get_repo_context_bundle',
+  get_repo_inspection_index: 'get_repo_context_bundle',
+  get_repo_context_delta: 'get_repo_context_bundle',
+  get_repo_semantic_index: 'get_repo_context_bundle',
+  list_tasks: 'search_tasks',
+  get_task_images: 'get_task',
+  batch_upsert_tasks: 'create_task/update_task',
+  move_task_status: 'move_task_to_status',
+  batch_move_task_status: 'move_task_to_status',
+  batch_toggle_task_checklist: 'toggle_task_checklist',
+  complete_task_review: 'move_task_to_status',
+  get_authoring_skills: 'get_authoring_skill',
+  list_skills: 'get_authoring_skill',
+  get_skill: 'get_authoring_skill',
+  update_skill: 'DevFlow Settings UI',
+  safe_edit_local_file: 'edit_local_files_batch',
+  prepare_edit_plan: 'prepare_compact_edit',
+  apply_prepared_edit_plan: 'apply_prepared_edit',
+  apply_patch: 'edit_local_files_batch',
+  get_figma_file: 'get_figma_authoring_context',
+  get_figma_node: 'get_figma_authoring_context',
+  get_figma_design_spec: 'get_figma_authoring_context',
+  get_project_atlas_status: 'get_project_atlas',
+  apply_project_atlas_agent_update: 'get_project_atlas',
+  parse_test_report: 'run_project_command',
+  create_tool_job: 'normal async tool invocation',
+  get_tool_job_status: 'get_tool_job_result',
+  get_tool_job_log: 'devflow_health_check',
+  cancel_tool_job: 'DevFlow runtime UI',
+  list_prompt_skills: 'get_authoring_skill',
+  get_prompt_skill: 'get_authoring_skill',
+  update_prompt_override: 'DevFlow Settings UI',
+  delete_prompt_override: 'DevFlow Settings UI',
+};
+
+export function getMcpConsolidationReplacement(name: string) {
+  const canonical = getToolDefinitionByName(name)?.name || name;
+  return MCP_CONSOLIDATION_REPLACEMENTS[canonical];
+}
+
+export function isToolExposedInMcp(name: string) {
+  const canonical = getToolDefinitionByName(name)?.name || name;
+  return MCP_CONSOLIDATION_REPLACEMENTS[canonical] === undefined;
+}
+
 export function isToolAllowedInProfile(name: string, profile: DevFlowToolProfile) {
+  if (!isToolExposedInMcp(name)) return false;
   if (profile === 'full') return true;
   if (profile === 'coding') return CODING_PROFILE_TOOLS.has(name);
   if (profile === 'atlas') return name.includes('atlas') || ['get_repo_context_bundle', 'read_local_file', 'read_file_snippets_batch', 'search_local_files'].includes(name);
@@ -1571,7 +1622,7 @@ export function getMcpToolList(profile: DevFlowToolProfile = 'full') {
     let description = tool.description;
 
     if (tool.executionPolicy?.mode === 'job') {
-      description = `${description}\n\nNote: This tool may run asynchronously and return a durable \`jobId\` before completion. When that happens, call \`get_tool_job_result(jobId, waitMs=30000)\` immediately and continue bounded polling in the same assistant turn until the job is terminal whenever the DevFlow tool surface remains available. Do not ask the user for another message merely to continue an already-started job. If the tool surface disappears, preserve and report the \`jobId\` so a refreshed connection can resume it; use \`get_tool_job_status\` or \`get_tool_job_log\` only when diagnostic detail is needed.`;
+      description = `${description}\n\nNote: This tool may run asynchronously and return a durable \`jobId\` before completion. When that happens, call \`get_tool_job_result(jobId, waitMs=30000)\` immediately and continue bounded polling in the same assistant turn until the job is terminal whenever the DevFlow tool surface remains available. Do not ask the user for another message merely to continue an already-started job. If the tool surface disappears, preserve and report the \`jobId\` so a refreshed connection can resume it.`;
       if (outputSchema) {
         outputSchema = {
           type: 'object',
@@ -1596,16 +1647,6 @@ export function getMcpToolList(profile: DevFlowToolProfile = 'full') {
       inputSchema,
       outputSchema,
     });
-    if (profile === 'full') {
-      for (const alias of tool.aliases || []) {
-        tools.push({
-          name: alias,
-          description: `${description} Alias for ${tool.name}.`,
-          inputSchema,
-          outputSchema,
-        });
-      }
-    }
   }
   return tools;
 }
@@ -1699,7 +1740,7 @@ export function getCapabilityCatalog() {
       let description = tool.description;
 
       if (tool.executionPolicy?.mode === 'job') {
-        description = `${description}\n\nNote: This tool may run asynchronously and return a durable \`jobId\` before completion. When that happens, call \`get_tool_job_result(jobId, waitMs=30000)\` immediately and continue bounded polling in the same assistant turn until the job is terminal whenever the DevFlow tool surface remains available. Do not ask the user for another message merely to continue an already-started job. If the tool surface disappears, preserve and report the \`jobId\` so a refreshed connection can resume it; use \`get_tool_job_status\` or \`get_tool_job_log\` only when diagnostic detail is needed.`;
+        description = `${description}\n\nNote: This tool may run asynchronously and return a durable \`jobId\` before completion. When that happens, call \`get_tool_job_result(jobId, waitMs=30000)\` immediately and continue bounded polling in the same assistant turn until the job is terminal whenever the DevFlow tool surface remains available. Do not ask the user for another message merely to continue an already-started job. If the tool surface disappears, preserve and report the \`jobId\` so a refreshed connection can resume it.`;
         if (outputSchema) {
           outputSchema = {
             type: 'object',

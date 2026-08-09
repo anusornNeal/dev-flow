@@ -32,6 +32,10 @@ export async function executeRecoveryAwareTool<TResult>(
         const value: any = await attempt(payload);
         const code = structuredResultErrorCode(value);
         if (code) {
+          const unsplittableBatchLimit = code === 'BATCH_BYTE_LIMIT'
+            && toolName === 'read_file_snippets_batch'
+            && (!Array.isArray(payload.files) || payload.files.length < 2);
+          if (unsplittableBatchLimit) return value as TResult;
           const policy = getToolRecoveryPolicy(code);
           if (policy.category !== 'terminal') {
             structuredFailure = value;

@@ -40,6 +40,7 @@ test('BATCH_BYTE_LIMIT splits bounded work without replaying the oversized paylo
   assert.deepEqual(attempts, [['a', 'b', 'c', 'd'], ['a', 'b'], ['c', 'd']]);
   assert.equal(result.recovery.steps[0].strategy, 'split-batch');
   assert.equal(result.recovery.manualRecoveryCallsAvoided, 1);
+  assert.equal(result.recovery.externalAgentCalls, 0);
   assert.doesNotMatch(JSON.stringify(result), /do-not-leak/);
 });
 
@@ -223,7 +224,7 @@ test('engine reports compact automatic-recovery call reduction evidence', async 
     adapters: { refreshContext: async () => ({ contextHandle: 'new', prompt: 'must-not-appear' }) },
   });
   assert.equal(result.ok, true);
-  assert.equal(result.recovery.externalAgentCalls, 1);
+  assert.equal(result.recovery.externalAgentCalls, 0);
   assert.equal(result.recovery.internalAttempts, 2);
   assert.equal(result.recovery.manualRecoveryCallsAvoided, 1);
   assert.doesNotMatch(JSON.stringify(result.recovery), /must-not-appear|prompt|contextHandle/);

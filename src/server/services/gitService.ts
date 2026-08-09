@@ -1,4 +1,4 @@
-import { spawnSync } from 'child_process';
+import { execFile, spawnSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import type { AppState } from '../types';
@@ -54,6 +54,25 @@ function runGit(args: string[], root: string, timeoutMs = 15_000): string {
   }
 
   return result.stdout || '';
+}
+
+function runGitAsync(args: string[], root: string, timeoutMs = 15_000): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile('git', ['--no-pager', ...args], {
+      cwd: root,
+      encoding: 'utf8',
+      timeout: timeoutMs,
+      maxBuffer: 1024 * 1024,
+      windowsHide: true,
+    }, (error, stdout, stderr) => {
+      if (error) {
+        const message = String(stderr || error.message || 'unknown error').trim();
+        reject(createApiError(500, 'GIT_EXEC_ERROR', `Failed to run git: ${message}`, { details: stderr || undefined }));
+        return;
+      }
+      resolve(stdout || '');
+    });
+  });
 }
 
 function flag(value: unknown, fallback = false) {
@@ -447,24 +466,30 @@ export function getGitStatus(state: AppState, args: Record<string, any>) {
   };
 }
 
-export function getGitBranch(state: AppState, args: Record<string, any>) {
-  const root = resolveProjectRoot(state, args);
-  ensureGitRepo(root);
-
-  const output = runGit(['branch', '--list'], root);
+function parseGitBranches(root: string, output: string) {
   const lines = output.trim().split(/\r?\n/).filter(Boolean);
   let current = '';
   const branches: string[] = [];
 
   for (const line of lines) {
     const name = line.replace(/^\*\s*/, '').trim();
-    if (line.startsWith('*')) {
-      current = name;
-    }
+    if (line.startsWith('*')) current = name;
     branches.push(name);
   }
 
   return { root, current, branches };
+}
+
+export function getGitBranch(state: AppState, args: Record<string, any>) {
+  const root = resolveProjectRoot(state, args);
+  ensureGitRepo(root);
+  return parseGitBranches(root, runGit(['branch', '--list'], root));
+}
+
+export async function getGitBranchAsync(state: AppState, args: Record<string, any>) {
+  const root = resolveProjectRoot(state, args);
+  ensureGitRepo(root);
+  return parseGitBranches(root, await runGitAsync(['branch', '--list'], root));
 }
 
 export function commitGitChanges(state: AppState, args: Record<string, any>) {

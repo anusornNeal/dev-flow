@@ -12,7 +12,7 @@ const { executeAllMigrations } = await import('../../src/db/migrations/index.js'
 executeAllMigrations();
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
 
-const { commitGitChanges, getGitStatus, getGitLog, getGitWorkspaceSnapshotForRoot } = await import('../../src/server/services/gitService.js');
+const { commitGitChanges, getGitStatus, getGitLog, getGitBranchAsync, getGitWorkspaceSnapshotForRoot } = await import('../../src/server/services/gitService.js');
 
 function git(root: string, args: string[]) {
   const result = spawnSync('git', args, {
@@ -46,6 +46,19 @@ function stateFor(repo: string): any {
     ],
   };
 }
+
+test('getGitBranchAsync is asynchronous and preserves branch result shape', async () => {
+  const repo = createRepo('async-branch-read');
+  git(repo, ['branch', 'feature/test-branch']);
+
+  const pending = getGitBranchAsync(stateFor(repo), { projectId: 'project-git' });
+  assert.equal(pending instanceof Promise, true, 'branch listing must not synchronously block the request path');
+  const result = await pending;
+
+  assert.equal(typeof result.current, 'string');
+  assert.equal(result.branches.includes('feature/test-branch'), true);
+  assert.equal(result.branches.includes(result.current), true);
+});
 
 test('commitGitChanges rejects missing commit messages', () => {
   const repo = createRepo('missing-message');

@@ -1,4 +1,4 @@
-import { VALID_AGENTS, VALID_BUG_STATUSES, VALID_MODELS, VALID_STATUSES } from '../constants';
+import { VALID_BUG_STATUSES, VALID_STATUSES } from '../constants';
 import {
   booleanFlagSchema,
   bugThreadMutationProperties,
@@ -36,17 +36,18 @@ export const taskToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'search_tasks',
-    description: 'Search local DevFlow tasks without fetching the full board. Prefer this over list_tasks when the user gives any title, id, status, keyword, or repository hint.',
+    description: 'Search or list local DevFlow tasks with optional query, parent, status, paging, and response-density filters. This is the single task-collection read intent for ChatGPT.',
     inputSchema: {
       type: 'object',
       properties: {
         ...projectIdentifierProperties,
-        q: { type: 'string', description: 'Search query.' },
+        q: { type: 'string', description: 'Optional search query. Omit to list by the supplied filters.' },
+        parentId: { type: 'string', description: 'Optional parent task identifier.' },
         status: { type: 'string', enum: VALID_STATUSES, description: 'Task status filter.' },
         limit: { type: 'number', description: 'Max tasks returned.' },
-        mode: { type: 'string', enum: ['minimal', 'summary', 'standard'], description: 'Response density.' },
+        offset: { type: 'number', description: 'Offset for pagination.' },
+        mode: { type: 'string', enum: ['minimal', 'summary', 'standard', 'full', 'debug'], description: 'Response density.' },
       },
-      required: ['q'],
     },
     outputSchema: { type: 'object' },
     lightweight: true,
@@ -54,7 +55,7 @@ export const taskToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'get_task',
-    description: 'Read a single local DevFlow task by internal id or displayId. Prefer get_agent_task_context for agent work, and use this before remote GitHub reads when the user did not explicitly ask for GitHub.',
+    description: 'Read a single local DevFlow task by internal id or displayId. Use mode="agent-context" for the compact implementation context package, and prefer this before remote GitHub reads when the user did not explicitly ask for GitHub.',
     inputSchema: { type: 'object', properties: { ...taskIdentifierProperty, mode: { type: 'string', enum: ['minimal', 'summary', 'standard', 'full', 'agent-context', 'debug'], description: 'Response density.' } }, required: ['taskId'] },
     outputSchema: { type: 'object' },
     buildHttpRequest: (args) => ({ method: 'GET', path: withQuery(`/api/tasks/${encodePathSegment(String(args.taskId))}`, { mode: args.mode || 'standard' }) }),
@@ -65,19 +66,6 @@ export const taskToolDefinitions: DevFlowToolDefinition[] = [
     inputSchema: { type: 'object', properties: { ...taskIdentifierProperty }, required: ['taskId'] },
     outputSchema: { type: 'object' }, lightweight: true,
     buildHttpRequest: (args) => ({ method: 'GET', path: `/api/tasks/${encodePathSegment(String(args.taskId))}/images` }),
-  },
-  {
-    name: 'get_agent_task_context', aliases: ['get_agent_context'],
-    description: 'Get the token-efficient local agent task context package. Prefer this first for ChatGPT/Codex work on a DevFlow card unless the user explicitly asks to inspect GitHub, Jira, or another remote source.',
-    inputSchema: { type: 'object', properties: { ...taskIdentifierProperty, includeLogs: { type: 'boolean' }, mode: { type: 'string', enum: ['agent-context', 'full', 'debug'] } }, required: ['taskId'] },
-    outputSchema: { type: 'object' },
-    buildHttpRequest: (args) => ({ method: 'GET', path: withQuery(`/api/tasks/${encodePathSegment(String(args.taskId))}/agent-context`, { includeLogs: args.includeLogs, mode: args.mode }) }),
-  },
-  {
-    name: 'get_task_prompt', description: 'Render the task prompt that DevFlow would give to an agent.',
-    inputSchema: { type: 'object', properties: { ...taskIdentifierProperty, includeLogs: { type: 'boolean' }, mode: { type: 'string', enum: ['standard', 'full', 'debug'] } }, required: ['taskId'] },
-    outputSchema: { type: 'object', properties: { content: { type: 'string' } } },
-    buildHttpRequest: (args) => ({ method: 'GET', path: withQuery(`/api/tasks/${encodePathSegment(String(args.taskId))}/prompt-json`, { includeLogs: args.includeLogs, mode: args.mode }) }),
   },
   {
     name: 'open_task_bug', aliases: ['create_bug_thread', 'add_task_bug'],
@@ -94,7 +82,7 @@ export const taskToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'create_task',
-    description: 'Create one task or an atomic parent/children task set. Server-side mutation validation is authoritative; validate_task_quality remains available as optional preflight diagnostics.',
+    description: 'Create one task or an atomic parent/children task set. Server-side mutation validation is authoritative; provide implementation-ready fields directly instead of using a separate preflight tool.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -118,7 +106,7 @@ export const taskToolDefinitions: DevFlowToolDefinition[] = [
     },
   },
   {
-    name: 'update_task', description: 'Update a task by internal id or displayId. Server-side mutation validation is authoritative; keep targetFiles aligned with the Implementation map and use validate_task_quality only when preview diagnostics are useful.',
+    name: 'update_task', description: 'Update a task by internal id or displayId. Server-side mutation validation is authoritative; keep targetFiles aligned with the Implementation map and provide implementation-ready fields directly.',
     inputSchema: { type: 'object', properties: { ...taskIdentifierProperty, ...taskMutationProperties, ...projectIdentifierProperties, ...booleanFlagSchema.properties, ...mutationControlProperties, ...mutationResponseModeProperty }, required: ['taskId'] },
     outputSchema: { type: 'object' },
     buildHttpRequest: ({ taskId, responseMode, ...body }) => ({ method: 'PUT', path: withQuery(`/api/tasks/${encodePathSegment(String(taskId))}`, { responseMode: responseMode || 'summary' }), body, headers: body.isAgentRequest ? { 'x-agent-request': 'true' } : undefined }),
@@ -191,35 +179,8 @@ export const taskToolDefinitions: DevFlowToolDefinition[] = [
     buildHttpRequest: (args) => ({ method: 'POST', path: '/api/tasks/batch/checklist/toggle', body: args }),
   },
   {
-    name: 'assign_agent', description: 'Assign or update agent/model/effort for a task.',
-    inputSchema: { type: 'object', properties: { ...taskIdentifierProperty, agent: { type: 'string', enum: VALID_AGENTS }, model: { type: 'string', enum: VALID_MODELS }, effort: { type: 'string', description: 'Reasoning effort level. Valid values strictly depend on the selected agent/model pair.' }, ...booleanFlagSchema.properties, ...mutationResponseModeProperty }, required: ['taskId'] }, outputSchema: { type: 'object' },
-    buildHttpRequest: ({ taskId, isAgentRequest, responseMode, ...body }) => ({ method: 'POST', path: withQuery(`/api/tasks/${encodePathSegment(String(taskId))}/assign`, { responseMode: responseMode || 'summary' }), body, headers: isAgentRequest ? { 'x-agent-request': 'true' } : undefined }),
-  },
-  {
-    name: 'batch_assign_agent', description: 'Assign agent configuration for multiple tasks.',
-    inputSchema: { type: 'object', properties: { assignments: { type: 'array', items: { type: 'object', properties: { ...taskIdentifierProperty, agent: { type: 'string', enum: VALID_AGENTS }, model: { type: 'string', enum: VALID_MODELS }, effort: { type: 'string', description: 'Reasoning effort level. Valid values strictly depend on the selected agent/model pair.' }, ...booleanFlagSchema.properties }, required: ['taskId'] } } }, required: ['assignments'] }, outputSchema: { type: 'object' },
-    buildHttpRequest: (args) => ({ method: 'POST', path: '/api/tasks/batch/assign', body: args }),
-  },
-  {
     name: 'delete_task', description: 'Delete a task by internal id or displayId.',
     inputSchema: { type: 'object', properties: { ...taskIdentifierProperty, ...booleanFlagSchema.properties }, required: ['taskId'] }, outputSchema: { type: 'object' },
     buildHttpRequest: ({ taskId, isAgentRequest, emergency }) => ({ method: 'DELETE', path: withQuery(`/api/tasks/${encodePathSegment(String(taskId))}`, { emergency }), headers: isAgentRequest ? { 'x-agent-request': 'true' } : undefined }),
-  },
-  {
-    name: 'list_agent_runs', description: 'List agent runs for a task.', inputSchema: { type: 'object', properties: taskIdentifierProperty, required: ['taskId'] }, outputSchema: { type: 'object' },
-    buildHttpRequest: ({ taskId }) => ({ method: 'GET', path: `/api/tasks/${encodePathSegment(String(taskId))}/agent-runs` }),
-  },
-  {
-    name: 'retry_agent_run', description: 'Retry the latest failed agent run for a task.', inputSchema: { type: 'object', properties: taskIdentifierProperty, required: ['taskId'] }, outputSchema: { type: 'object' },
-    buildHttpRequest: ({ taskId }) => ({ method: 'POST', path: `/api/tasks/${encodePathSegment(String(taskId))}/agent-runs/retry`, body: {} }),
-  },
-  {
-    name: 'cancel_agent_run', description: 'Cancel active agent runs for a task.', inputSchema: { type: 'object', properties: { ...taskIdentifierProperty, reason: { type: 'string', description: 'Optional cancellation reason.' } }, required: ['taskId'] }, outputSchema: { type: 'object' },
-    buildHttpRequest: ({ taskId, ...body }) => ({ method: 'POST', path: `/api/tasks/${encodePathSegment(String(taskId))}/agent-runs/cancel`, body }),
-  },
-  {
-    name: 'complete_agent_run', aliases: ['agent_complete_task'], description: 'Official completion callback for external agents/workers to close or report an agent run.',
-    inputSchema: { type: 'object', properties: { ...taskIdentifierProperty, runId: { type: 'string', description: 'Optional explicit run id. Defaults to the active run.' }, status: { type: 'string', enum: ['success', 'failed', 'cancelled'], description: 'Completion outcome.' }, summary: { type: 'string', description: 'Human-readable summary of the result.' }, changedFiles: { type: 'array', items: { type: 'string' }, description: 'Changed files reported by the agent.' }, tests: { type: 'array', items: { type: 'object', properties: { command: { type: 'string' }, result: { type: 'string', enum: ['passed', 'failed', 'not-run'] }, output: { type: 'string' } }, required: ['command', 'result'] } }, notes: { type: 'string', description: 'Optional extra notes.' }, moveTo: { type: 'string', enum: ['backlog', 'todo', 'in-progress', 'ready-for-review'], description: 'Optional non-done target status.' } }, required: ['taskId', 'status', 'summary'] }, outputSchema: { type: 'object' },
-    buildHttpRequest: ({ taskId, ...body }) => ({ method: 'POST', path: `/api/tasks/${encodePathSegment(String(taskId))}/agent-complete`, body, headers: { 'x-agent-request': 'true' } }),
   },
 ];

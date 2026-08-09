@@ -2,13 +2,12 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { createCorrelationId } from './services/api';
-import { getCapabilityCatalog, getMcpToolList, getToolDefinitionByName, isToolAllowedInProfile, resolveDevFlowToolProfile } from './contracts/devflowContract';
+import { getCapabilityCatalog, getMcpConsolidationReplacement, getMcpToolList, getToolDefinitionByName, isToolAllowedInProfile, isToolExposedInMcp, resolveDevFlowToolProfile } from './contracts/devflowContract';
 import { recordToolCall } from './services/mcpToolMonitor';
 
 const DEFAULT_MCP_HTTP_TIMEOUT_MS = 30_000;
 const TOOL_JOB_RESULT_TIMEOUT_HEADROOM_MS = 5_000;
-const DEFAULT_ASYNC_JOB_EAGER_WAIT_MS = 20_000;
-const PROJECT_COMMAND_EAGER_WAIT_MS = 1_000;
+const DEFAULT_ASYNC_JOB_EAGER_WAIT_MS = 1_000;
 
 function buildMcpToolError(params: {
   toolName: string;
@@ -78,8 +77,8 @@ function resolveHttpRequestTimeoutMs(request: { path: string }) {
   return DEFAULT_MCP_HTTP_TIMEOUT_MS;
 }
 
-function resolveAsyncJobEagerWaitMs(toolName: string) {
-  return toolName === 'run_project_command' ? PROJECT_COMMAND_EAGER_WAIT_MS : DEFAULT_ASYNC_JOB_EAGER_WAIT_MS;
+function resolveAsyncJobEagerWaitMs(_toolName: string) {
+  return DEFAULT_ASYNC_JOB_EAGER_WAIT_MS;
 }
 
 async function executeHttpRequest(
@@ -248,6 +247,25 @@ export function createDevFlowMcpServer(baseUrl: string, profileOverride?: string
       return {
         isError: true,
         content: [{ type: 'text', text: JSON.stringify({ code: 'UNKNOWN_TOOL', message: `Unknown tool: ${toolName}`, retryable: false, correlationId }) }],
+      };
+    }
+
+    if (!isToolExposedInMcp(tool.name)) {
+      const replacement = getMcpConsolidationReplacement(tool.name);
+      return {
+        isError: true,
+        content: [{ type: 'text', text: JSON.stringify({
+          code: 'TOOL_NOT_EXPOSED',
+          message: `Tool ${toolName} was consolidated out of the ChatGPT MCP surface.`,
+          retryable: false,
+          correlationId,
+          details: {
+            replacement: replacement || null,
+            guidance: replacement
+              ? `Use ${replacement} instead.`
+              : 'Use the higher-level DevFlow workflow tool for this intent.',
+          },
+        }) }],
       };
     }
 

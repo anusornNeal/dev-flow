@@ -16,7 +16,7 @@ const workflows: Record<string, string[]> = {
   commitWorkflow: ['get_git_status', 'get_git_diff', 'commit_git_changes', 'get_git_sync_status', 'sync_task_with_git'],
   figmaAuthoring: ['get_figma_authoring_context', 'attach_figma_context_to_task'],
   workspaceIsolation: ['prepare_session_workspace', 'integrate_workspace'],
-  reviewAndPublish: ['submit_task_for_review', 'complete_task_review', 'create_pull_request', 'push_git_branch'],
+  reviewAndPublish: ['submit_task_for_review', 'move_task_to_status', 'create_pull_request', 'push_git_branch'],
 };
 
 const workflowResults = Object.fromEntries(Object.entries(workflows).map(([name, tools]) => {
@@ -30,7 +30,7 @@ for (const [name, result] of Object.entries(workflowResults) as any) {
 
 const aliasNames = inventory.filter((item) => item.alias).map((item) => item.name);
 assert.equal(aliasNames.some((name) => codingNames.has(name)), false);
-assert.equal(aliasNames.every((name) => fullNames.has(name)), true);
+assert.equal(aliasNames.some((name) => fullNames.has(name)), false);
 
 const compatibilityOnly = [
   'validate_task_quality',
@@ -51,35 +51,36 @@ const compatibilityOnly = [
   'get_figma_design_spec',
 ];
 assert.equal(compatibilityOnly.every((name) => !codingNames.has(name)), true);
-assert.equal(compatibilityOnly.every((name) => fullNames.has(name)), true);
+assert.equal(compatibilityOnly.every((name) => !fullNames.has(name)), true);
 
+const LEGACY_FULL_BASELINE = { toolCount: 109, schemaBytes: 173_705 };
 const summary = getToolProfileSummary();
 const reduction = (before: number, after: number) => Math.round(((before - after) / before) * 10_000) / 100;
 const approximateTokens = (bytes: number) => Math.ceil(bytes / 4);
 
 console.log(JSON.stringify({
   before: {
-    profile: 'full',
+    profile: 'legacy-full-baseline',
+    toolCount: LEGACY_FULL_BASELINE.toolCount,
+    schemaBytes: LEGACY_FULL_BASELINE.schemaBytes,
+    approximateSchemaTokens: approximateTokens(LEGACY_FULL_BASELINE.schemaBytes),
+  },
+  after: {
+    profile: 'full-consolidated',
     toolCount: summary.full.toolCount,
     schemaBytes: summary.full.schemaBytes,
     approximateSchemaTokens: approximateTokens(summary.full.schemaBytes),
   },
-  after: {
-    profile: 'coding',
-    toolCount: summary.coding.toolCount,
-    schemaBytes: summary.coding.schemaBytes,
-    approximateSchemaTokens: approximateTokens(summary.coding.schemaBytes),
-  },
   reduction: {
-    toolCountPercent: reduction(summary.full.toolCount, summary.coding.toolCount),
-    schemaBytesPercent: reduction(summary.full.schemaBytes, summary.coding.schemaBytes),
-    approximateSchemaTokensPercent: reduction(approximateTokens(summary.full.schemaBytes), approximateTokens(summary.coding.schemaBytes)),
+    toolCountPercent: reduction(LEGACY_FULL_BASELINE.toolCount, summary.full.toolCount),
+    schemaBytesPercent: reduction(LEGACY_FULL_BASELINE.schemaBytes, summary.full.schemaBytes),
+    approximateSchemaTokensPercent: reduction(approximateTokens(LEGACY_FULL_BASELINE.schemaBytes), approximateTokens(summary.full.schemaBytes)),
   },
   workflowResults,
   compatibility: {
-    aliasesHiddenFromDefault: aliasNames.length,
-    compatibilityOnlyToolsHiddenFromDefault: compatibilityOnly.length,
-    fullProfileRetainsCompatibility: true,
+    backendAliasesNotAdvertised: aliasNames.length,
+    compatibilityOnlyToolsNotAdvertised: compatibilityOnly.length,
+    backendDefinitionsRemainAvailableInternally: true,
   },
   note: 'Structural evaluation: measures catalog/schema decision surface and workflow tool availability; it does not claim a measured model wrong-tool rate.',
 }, null, 2));

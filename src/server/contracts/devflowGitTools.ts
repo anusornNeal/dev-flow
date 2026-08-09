@@ -21,9 +21,9 @@ export const gitToolDefinitions: DevFlowToolDefinition[] = [
     buildHttpRequest: (args) => ({ method: 'GET', path: withQuery('/api/git/show', { ...args, responseMode: args.responseMode || 'compact' }) }),
   },
   {
-    name: 'get_git_status', description: 'Show the working tree status (git status --porcelain).',
-    inputSchema: { type: 'object', properties: { ...projectIdentifierProperties } }, outputSchema: { type: 'object' }, lightweight: true,
-    buildHttpRequest: (args) => ({ method: 'GET', path: withQuery('/api/git/status', args) }),
+    name: 'get_git_status', description: 'Show working-tree status. Use mode="expanded" for status buckets, line totals, rename details, and top-directory counts.',
+    inputSchema: { type: 'object', properties: { ...projectIdentifierProperties, mode: { type: 'string', enum: ['compact', 'expanded'], description: 'compact returns changed files; expanded returns the former change-summary detail.' } } }, outputSchema: { type: 'object' }, lightweight: true,
+    buildHttpRequest: ({ mode, ...args }) => ({ method: 'GET', path: withQuery(mode === 'expanded' ? '/api/git/change-summary' : '/api/git/status', args) }),
   },
   {
     name: 'get_change_summary', description: 'Summarize expanded tracked and untracked changes with status buckets, line totals, rename details, and top-directory counts.',

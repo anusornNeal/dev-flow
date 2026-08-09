@@ -49,6 +49,29 @@ test('runtime recovers BATCH_BYTE_LIMIT by splitting the semantic batch internal
   assert.equal(recovered.errorCount, 0);
   assert.equal(recovered.files.some((entry: any) => entry?.error?.code === 'BATCH_BYTE_LIMIT'), false);
   assert.deepEqual(recovered.files.map((entry: any) => path.basename(entry.path)), ['a.txt', 'b.txt', 'c.txt', 'd.txt']);
+  assert.equal(recovered.recoveryEngine.externalAgentCalls, 0);
+});
+
+test('runtime skips split recovery when a single file cannot be subdivided', async () => {
+  fs.writeFileSync(path.join(repoRoot, 'single.txt'), `single:${'x'.repeat(200)}\n`, 'utf8');
+  const args = {
+    projectId: project.id,
+    maxTotalBytes: 60,
+    allowPartial: true,
+    files: [{ filePath: 'single.txt', maxBytes: 120 }],
+  };
+  const raw: any = readFileSnippetsBatch(state, args);
+  assert.equal(raw.files.some((entry: any) => entry?.error?.code === 'BATCH_BYTE_LIMIT'), true);
+
+  const result: any = await executeRecoveryAwareTool(
+    state,
+    'read_file_snippets_batch',
+    args,
+    (payload) => readFileSnippetsBatch(state, payload),
+  );
+
+  assert.equal(result.files.some((entry: any) => entry?.error?.code === 'BATCH_BYTE_LIMIT'), true);
+  assert.equal(result.recoveryEngine, undefined);
 });
 
 test('runtime turns stale prepared edit into a fresh preview and never auto-applies it', async () => {

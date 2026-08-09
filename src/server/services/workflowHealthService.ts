@@ -1,5 +1,5 @@
 import type { AppState } from '../types';
-import { getCapabilityCatalog } from '../contracts/devflowContract';
+import { getCapabilityCatalog, getMcpToolList } from '../contracts/devflowContract';
 import { getGitStatus } from './gitService';
 import { getDevFlowDiagnostics } from './mcpToolMonitor';
 import { getLocalSearchRuntimeStatus } from './localFileService';
@@ -63,6 +63,9 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
   };
   const windowMs = numberArg(args.windowMs, 10 * 60 * 1000);
   const catalog = getCapabilityCatalog();
+  const advertisedTools = getMcpToolList(catalog.mcpProfile.active);
+  const advertisedNames = new Set(advertisedTools.map((tool) => tool.name));
+  const advertisedDefinitions = catalog.tools.filter((tool: any) => advertisedNames.has(tool.name));
   const catalogMs = phaseMs();
   const diagnostics = getDevFlowDiagnostics({ windowMs });
   const diagnosticsMs = phaseMs();
@@ -166,12 +169,13 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
     ok: status !== 'error',
     status,
     generatedAt: new Date().toISOString(),
-    checks: { git: git.ok, capabilityCatalog: catalog.tools.length > 0, diagnostics: true, recovery: Boolean(recovery.lastVerifiedGoodBackup) && !recovery.failureReason },
+    checks: { git: git.ok, capabilityCatalog: advertisedTools.length > 0, diagnostics: true, recovery: Boolean(recovery.lastVerifiedGoodBackup) && !recovery.failureReason },
     capabilities: {
       contractVersion: catalog.contractVersion,
-      toolCount: catalog.tools.length,
-      lightweightToolCount: catalog.tools.filter((tool: any) => tool.lightweight).length,
-      asyncToolCount: catalog.tools.filter((tool: any) => tool.executionPolicy?.mode === 'job').length,
+      toolCount: advertisedTools.length,
+      backendToolCount: catalog.tools.length,
+      lightweightToolCount: advertisedDefinitions.filter((tool: any) => tool.lightweight).length,
+      asyncToolCount: advertisedDefinitions.filter((tool: any) => tool.executionPolicy?.mode === 'job').length,
       search,
       keyToolsPresent,
     },

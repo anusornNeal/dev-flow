@@ -56,6 +56,7 @@ export const VERIFICATION_STEPS: VerificationStep[] = [
   { label: 'mcp tool job recovery', command: 'npx', args: ['tsx', '--test', 'tests/server/mcpToolJobRecovery.test.ts'], stage: 2, parallelSafe: true },
   { label: 'mcp scheduler policy', command: 'npx', args: ['tsx', '--test', 'tests/server/mcpToolJobScheduler.test.ts'], stage: 2, parallelSafe: true },
   { label: 'project resolution', command: 'npx', args: ['tsx', '--test', 'tests/server/projectResolution.test.ts'], stage: 2, parallelSafe: true },
+  { label: 'mcp transport benchmark gate', command: 'npx', args: ['tsx', '--test', 'tests/server/mcpTransportBenchmark.test.ts'], stage: 2, parallelSafe: false },
   { label: 'session workspace service', command: 'npx', args: ['tsx', '--test', 'tests/server/sessionWorkspaceService.test.ts'], stage: 2, parallelSafe: false },
   { label: 'steno session isolation', command: 'npx', args: ['tsx', '--test', 'tests/server/stenoSessionIsolation.test.ts'], stage: 2, parallelSafe: false },
   { label: 'workspace integration service', command: 'npx', args: ['tsx', '--test', 'tests/server/workspaceIntegrationService.test.ts'], stage: 2, parallelSafe: false },

@@ -10,6 +10,7 @@ process.env.DEVFLOW_JOBS_DIR = path.join(tempRoot, 'jobs');
 process.env.DEVFLOW_RUNTIME_DIR = path.join(tempRoot, 'runtime');
 let closeDatabase: (() => void) | null = null;
 let cleanupBenchmark: (() => void) | null = null;
+const DVF_0443_INTERACTIVE_P95_BASELINE_MS = 99;
 
 function git(root: string, args: string[]) {
   const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', shell: false });
@@ -258,6 +259,9 @@ try {
   const queueMetrics = getQueueMetrics().metrics;
   const waitTelemetry = queueMetrics.waitTelemetry;
   const phaseTelemetry = queueMetrics.phaseTelemetry;
+  const interactiveP50Ms = percentile(interactiveReadLatenciesMs, 0.5);
+  const interactiveP95Ms = p95(interactiveReadLatenciesMs);
+  const interactiveP95ImprovementPct = Number((((DVF_0443_INTERACTIVE_P95_BASELINE_MS - interactiveP95Ms) / DVF_0443_INTERACTIVE_P95_BASELINE_MS) * 100).toFixed(1));
   assert.equal(sharedInitialStarts, 1);
   assert.equal(sharedMaxActive, 1);
   assert.equal(sharedQueuedBlockers.every((waitType) => waitType === 'workspace_lock'), true);
@@ -273,6 +277,7 @@ try {
   assert.equal(verifyProcessSpawns, 4);
   assert.equal(waitTelemetry.workspaceLockWait.count >= 1, true);
   assert.equal(waitTelemetry.capacityWait.count >= 2, true);
+  assert.equal(interactiveP95Ms <= DVF_0443_INTERACTIVE_P95_BASELINE_MS * 0.75, true, `interactive p95 ${interactiveP95Ms}ms should improve materially from DVF-0443 baseline ${DVF_0443_INTERACTIVE_P95_BASELINE_MS}ms`);
 
   const result = {
     sessions: workspaces.length,
@@ -282,9 +287,11 @@ try {
     verifyCapacity: { limit: 2, maxActive: maxActiveVerify, capacityQueued: capacityQueued.length, processSpawns: verifyProcessSpawns, throughputPerSecond: verificationThroughputPerSecond },
     interactive: {
       samples: interactiveReadLatenciesMs.length,
-      p50Ms: percentile(interactiveReadLatenciesMs, 0.5),
-      p95Ms: p95(interactiveReadLatenciesMs),
+      p50Ms: interactiveP50Ms,
+      p95Ms: interactiveP95Ms,
       maxMs: Math.max(...interactiveReadLatenciesMs),
+      dvf0443BaselineP95Ms: DVF_0443_INTERACTIVE_P95_BASELINE_MS,
+      p95ImprovementPct: interactiveP95ImprovementPct,
     },
     waitDominatedCall,
     phases: phaseTelemetry,

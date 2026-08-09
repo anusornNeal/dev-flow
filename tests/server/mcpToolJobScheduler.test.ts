@@ -58,6 +58,30 @@ test('global verify capacity blocks a third workspace separately from correctnes
   decrementScheduledResource(activeB);
 });
 
+test('verify saturation does not block interactive reads or independent workspace writes', () => {
+  resetSchedulerResourceStateForTests();
+  setGlobalVerifyCapacityForTests(2);
+  const activeA = entry({ jobId: 'verify-a', resourceKey: 'workspace:a', accessMode: 'verify', costClass: 'verify', kind: 'repo-command', toolName: 'run_project_command' });
+  const activeB = entry({ jobId: 'verify-b', resourceKey: 'workspace:b', accessMode: 'verify', costClass: 'verify', kind: 'repo-command', toolName: 'run_project_command' });
+  incrementScheduledResource(activeA);
+  incrementScheduledResource(activeB);
+
+  const queuedVerify = entry({ jobId: 'verify-c', resourceKey: 'workspace:c', accessMode: 'verify', costClass: 'verify', kind: 'repo-command', toolName: 'run_project_command' });
+  const interactiveRead = entry({ jobId: 'read-c', resourceKey: 'workspace:c', accessMode: 'read', costClass: 'light-read', kind: 'repo-read' });
+  const independentWrite = entry({ jobId: 'write-c', resourceKey: 'workspace:c', accessMode: 'write', costClass: 'write', kind: 'repo-write' });
+  const conflictingWrite = entry({ jobId: 'write-a', resourceKey: 'workspace:a', accessMode: 'write', costClass: 'write', kind: 'repo-write' });
+  const queue = [queuedVerify, interactiveRead, independentWrite, conflictingWrite];
+
+  assert.equal(getBlockerForQueueEntry(queuedVerify, 0, queue, [activeA, activeB])?.blockReason, 'capacity_saturated');
+  assert.equal(getBlockerForQueueEntry(interactiveRead, 1, queue, [activeA, activeB]), null);
+  assert.equal(getBlockerForQueueEntry(independentWrite, 2, queue, [activeA, activeB]), null);
+  assert.equal(getBlockerForQueueEntry(conflictingWrite, 3, queue, [activeA, activeB])?.blockReason, 'active_resource');
+  assert.equal(selectNextRunnableQueueIndex(queue, [activeA, activeB]), 1, 'interactive read should be admitted ahead of blocked verification');
+
+  decrementScheduledResource(activeA);
+  decrementScheduledResource(activeB);
+});
+
 test('targeted verification can start ahead of queued full verification while aging prevents permanent starvation', () => {
   resetSchedulerResourceStateForTests();
   setGlobalVerifyCapacityForTests(1);

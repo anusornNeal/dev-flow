@@ -80,6 +80,29 @@ function resolveAsyncJobEagerWaitMs(_toolName: string) {
   return DEFAULT_ASYNC_JOB_EAGER_WAIT_MS;
 }
 
+function buildImmediateAsyncJobHandle(admission: any) {
+  const jobId = String(admission?.jobId || '');
+  const status = String(admission?.status || 'queued');
+  return {
+    jobId,
+    status,
+    ready: false,
+    result: null,
+    code: 'JOB_QUEUED',
+    message: admission?.blockReason
+      ? `Job ${jobId} is queued because ${admission.blockReason}.`
+      : `Job ${jobId} is queued and will continue asynchronously.`,
+    ...(admission?.queuePosition !== undefined ? { queuePosition: admission.queuePosition } : {}),
+    ...(admission?.waitType ? { waitType: admission.waitType } : {}),
+    ...(admission?.blockReason ? { blockReason: admission.blockReason } : {}),
+    ...(admission?.blockedByJobId ? { blockedByJobId: admission.blockedByJobId } : {}),
+    ...(admission?.blockedByAccessMode ? { blockedByAccessMode: admission.blockedByAccessMode } : {}),
+    nextPollAfterMs: 2000,
+    recommendedWaitMs: 30000,
+    nextAction: admission?.nextAction || `Call get_tool_job_result for ${jobId} with waitMs=30000.`,
+  };
+}
+
 async function executeHttpRequest(
   baseUrl: string,
   request: { method: string; path: string; body?: unknown; headers?: Record<string, string> },
@@ -261,7 +284,11 @@ export function createDevFlowMcpServer(baseUrl: string, profileOverride?: string
     let { response, parsedBody, durationMs } = await executeHttpRequest(baseUrl, httpRequest as any, correlationId, toolName);
 
     if (isAsyncJob && response.ok && parsedBody && typeof parsedBody === 'object' && 'jobId' in parsedBody) {
-      const jobId = (parsedBody as any).jobId;
+      const admissionPacket = parsedBody as any;
+      const jobId = admissionPacket.jobId;
+      if (admissionPacket.handoffImmediately === true) {
+        parsedBody = buildImmediateAsyncJobHandle(admissionPacket);
+      } else {
       const waitStartedAt = Date.now();
       const resultRes = await executeHttpRequest(
         baseUrl,
@@ -324,6 +351,7 @@ export function createDevFlowMcpServer(baseUrl: string, profileOverride?: string
           };
         }
         durationMs += Date.now() - waitStartedAt;
+      }
       }
     }
     const responseBytes = Buffer.byteLength(typeof parsedBody === 'string' ? parsedBody : JSON.stringify(parsedBody ?? null), 'utf8');

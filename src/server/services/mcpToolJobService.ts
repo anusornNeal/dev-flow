@@ -610,6 +610,20 @@ export function cancelToolJob(jobId: string) {
   return true;
 }
 
+function resolveAdmissionResourceKey(state: AppState, args: any, kind: JobKind) {
+  if (kind === 'skill-read') return 'skill-cache';
+  const workspaceId = typeof args?.workspaceId === 'string' ? args.workspaceId.trim() : '';
+  if (workspaceId) {
+    // Execution validates the workspace again. Admission only needs its stable opaque scheduler identity.
+    return `workspace:${workspaceId}`;
+  }
+  try {
+    return resolveProjectResourceIdentity(state, args);
+  } catch {
+    return 'repo:unknown';
+  }
+}
+
 export function enqueueToolJob(state: AppState, toolName: string, args: any, kind: JobKind) {
   const admissionStartedAt = Date.now();
   const restartState = readDevFlowRestartState();
@@ -624,17 +638,7 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
     });
   }
 
-  let resourceKey = 'global';
-  if (kind !== 'skill-read') {
-    try {
-      resourceKey = resolveProjectResourceIdentity(state, args);
-    } catch {
-      resourceKey = `repo:unknown`;
-    }
-  } else {
-    resourceKey = 'skill-cache';
-  }
-
+  const resourceKey = resolveAdmissionResourceKey(state, args, kind);
   const schedulerProfile = getSchedulerProfile(state, toolName, args, kind);
   const singleFlightKey = singleFlightKeyFor(state, toolName, args, kind, resourceKey);
   if (singleFlightKey) {
@@ -695,16 +699,24 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
   if (singleFlightKey) singleFlightLeaders.set(singleFlightKey, jobId);
 
   queue.push(entry);
-  
-  // Try to process queue
+  const queuePosition = queue.length;
+  const admissionBlocker = getBlockerForQueueEntry(entry, queuePosition - 1, queue, activeSchedulerEntries());
+  const handoffImmediately = Boolean(admissionBlocker);
+  if (admissionBlocker) advanceQueueWaitTelemetry(entry, admissionBlocker, Date.now());
+
+  // Keep execution decoupled from admission so returning a durable handle never runs a long job inline.
   setImmediate(processQueue);
 
   return {
     jobId,
     status: job.status,
-    queuePosition: queue.length,
+    queuePosition,
     sharedWith: undefined as string | undefined,
-    nextAction: 'Wait for job completion or inspect get_tool_job_status/get_tool_job_log; call cancel_tool_job to stop the job.'
+    handoffImmediately,
+    ...(admissionBlocker || {}),
+    nextAction: handoffImmediately
+      ? `Call get_tool_job_result for ${jobId} with waitMs=30000; call cancel_tool_job to stop the job.`
+      : 'Wait for job completion or inspect get_tool_job_status/get_tool_job_log; call cancel_tool_job to stop the job.'
   };
 }
 

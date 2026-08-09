@@ -392,6 +392,50 @@ test('mcp server returns compact server-guided pending completion without status
   assert.equal(Buffer.byteLength(JSON.stringify(packet), 'utf8') < 600, true);
 });
 
+test('mcp server returns a blocked async job handle immediately without eager result polling', async (t) => {
+  const originalFetch = global.fetch;
+  const requests: string[] = [];
+  t.after(() => { global.fetch = originalFetch; });
+
+  global.fetch = async (url: RequestInfo | URL) => {
+    const urlText = String(url);
+    requests.push(urlText);
+    const body = urlText.endsWith('/api/tool-jobs')
+      ? {
+          jobId: 'job-capacity-1',
+          status: 'queued',
+          queuePosition: 3,
+          handoffImmediately: true,
+          waitType: 'capacity',
+          blockReason: 'capacity_saturated',
+          nextAction: 'Call get_tool_job_result for job-capacity-1 with waitMs=30000.',
+        }
+      : { error: 'eager result polling should have been skipped' };
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => 'application/json' },
+      text: async () => JSON.stringify(body),
+    } as unknown as Response;
+  };
+
+  const server = createDevFlowMcpServer('http://127.0.0.1:3000');
+  const handler = (server as any)._requestHandlers.get('tools/call');
+  const response = await handler({
+    method: 'tools/call',
+    params: { name: 'run_project_command', arguments: { projectId: 'proj-1', command: 'test' } },
+  });
+
+  assert.deepEqual(requests, ['http://127.0.0.1:3000/api/tool-jobs']);
+  assert.equal(response.structuredContent.jobId, 'job-capacity-1');
+  assert.equal(response.structuredContent.ready, false);
+  assert.equal(response.structuredContent.result, null);
+  assert.equal(response.structuredContent.code, 'JOB_QUEUED');
+  assert.equal(response.structuredContent.waitType, 'capacity');
+  assert.equal(response.structuredContent.blockReason, 'capacity_saturated');
+  assert.match(response.structuredContent.nextAction, /get_tool_job_result/i);
+});
+
 test('mcp server eager-polls non-command async jobs for only one second', async (t) => {
   const originalFetch = global.fetch;
   const requests: string[] = [];

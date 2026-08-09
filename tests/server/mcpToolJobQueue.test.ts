@@ -480,9 +480,12 @@ test('mcpToolJobService - verification pool allows two jobs and queues the third
   try {
     const first = enqueueToolJob(state, 'run_project_command', { localPath: root, command: 'typecheck', forceFresh: true }, 'repo-command');
     const second = enqueueToolJob(state, 'run_project_command', { localPath: root, command: 'lint', forceFresh: true }, 'repo-command');
-    const third = enqueueToolJob(state, 'run_project_command', { localPath: root, command: 'test', forceFresh: true }, 'repo-command');
-
     await waitUntil(() => starts.includes('typecheck') && starts.includes('lint'), 'Expected two verification jobs to start');
+
+    const third: any = enqueueToolJob(state, 'run_project_command', { localPath: root, command: 'test', forceFresh: true }, 'repo-command');
+    assert.strictEqual(third.handoffImmediately, true);
+    assert.strictEqual(third.waitType, 'capacity');
+    assert.strictEqual(third.blockReason, 'capacity_saturated');
     await new Promise(resolve => setTimeout(resolve, 75));
     assert.strictEqual(starts.includes('test'), false);
     assert.strictEqual(getToolJobStatus(third.jobId)?.status, 'queued');

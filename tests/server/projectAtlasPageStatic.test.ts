@@ -19,3 +19,12 @@ test('ProjectAtlasPage leaves Atlas page identity to the global header and keeps
   assert.match(pageSource, /<AtlasSearchBar/);
   assert.match(headerSource, /sticky top-0 z-\[50\]/);
 });
+
+test('Atlas header and toolbar keep responsive wrapping with global header above page controls', () => {
+  assert.match(headerSource, /flex flex-col md:flex-row/);
+  assert.match(headerSource, /items-start md:items-center sticky top-0 z-\[50\]/);
+  assert.match(pageSource, /relative z-20 shrink-0/);
+  assert.match(pageSource, /role="toolbar"[\s\S]*?flex flex-wrap items-center/);
+  assert.match(pageSource, /flex min-w-0 flex-1 flex-wrap items-center/);
+  assert.match(pageSource, /flex min-w-0 flex-wrap gap-1\.5/);
+});

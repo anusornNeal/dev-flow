@@ -6,8 +6,18 @@ import { displayIdCounterRepairMigration } from './004-display-id-counter-repair
 import { taskWorkflowEvidenceMigration } from './005-task-workflow-evidence.js';
 import { taskBoardArchiveMigration } from './006-task-board-archive.js';
 import { taskDisplayIdIndexMigration } from './007-task-display-id-index.js';
+export const DEVFLOW_MIGRATIONS = [
+  initMigration,
+  persistenceHardeningMigration,
+  taskBugThreadsMigration,
+  displayIdCounterRepairMigration,
+  taskWorkflowEvidenceMigration,
+  taskBoardArchiveMigration,
+  taskDisplayIdIndexMigration,
+] as const;
+
 import db from '../index.js';
 
 export function executeAllMigrations() {
-  runMigrations(db, [initMigration, persistenceHardeningMigration, taskBugThreadsMigration, displayIdCounterRepairMigration, taskWorkflowEvidenceMigration, taskBoardArchiveMigration, taskDisplayIdIndexMigration]);
+  runMigrations(db, [...DEVFLOW_MIGRATIONS]);
 }

@@ -5,6 +5,7 @@ import { getDevFlowDiagnostics } from './mcpToolMonitor';
 import { getLocalSearchRuntimeStatus } from './localFileService';
 import { evaluatePerformanceSlo } from './performanceSloService';
 import { performance as nodePerformance } from 'node:perf_hooks';
+import { getRecoveryStatus } from './backupIntegrityService';
 
 type Probe<T> = { ok: true; value: T } | { ok: false; error: { message: string; code?: string; status?: number } };
 
@@ -67,6 +68,7 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
   const search = getLocalSearchRuntimeStatus();
   const searchMs = phaseMs();
   const sloPerformance = evaluatePerformanceSlo(Array.isArray(diagnostics?.tools?.topTools) ? diagnostics.tools.topTools : []);
+  const recovery = getRecoveryStatus();
   const sloMs = phaseMs();
 
   const git = gitProbe.ok === true ? {
@@ -106,6 +108,8 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
   }
   if (staleAgentRuns > 0) recommendations.push('There are stale agent runs; cancel or retry them before starting more agent-owned work.');
   if (duplicateBursts > 0) recommendations.push('Duplicate tool bursts detected; prefer get_repo_context_bundle before repeated reads/searches.');
+  if (!recovery.lastVerifiedGoodBackup) recommendations.push('No verified recovery snapshot exists yet; create one from Settings or export a backup.');
+  if (recovery.failureReason) recommendations.push(`Recovery verification needs attention: ${recovery.failureReason.code} — ${recovery.failureReason.reason}`);
   if (sloPerformance.regressions.length > 0) {
     const slow = sloPerformance.regressions.slice(0, 3).map((entry) => `${entry.toolName} p95=${entry.p95DurationMs}ms>${entry.budgetMs}ms`).join(', ');
     recommendations.push(`Performance SLO regression detected: ${slow}.`);
@@ -125,7 +129,7 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
     ok: status !== 'error',
     status,
     generatedAt: new Date().toISOString(),
-    checks: { git: git.ok, capabilityCatalog: catalog.tools.length > 0, diagnostics: true },
+    checks: { git: git.ok, capabilityCatalog: catalog.tools.length > 0, diagnostics: true, recovery: Boolean(recovery.lastVerifiedGoodBackup) && !recovery.failureReason },
     capabilities: {
       contractVersion: catalog.contractVersion,
       toolCount: catalog.tools.length,
@@ -135,7 +139,7 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
       keyToolsPresent,
     },
     git,
-    diagnostics: { queueDepth, failedJobs, failedJobGroups, failedJobSummaries, staleAgentRuns, duplicateBursts, performance: sloPerformance, isolation },
+    diagnostics: { queueDepth, failedJobs, failedJobGroups, failedJobSummaries, staleAgentRuns, duplicateBursts, performance: sloPerformance, isolation, recovery },
     performance: {
       totalMs: Math.round((nodePerformance.now() - startedAt) * 100) / 100,
       phases: { catalogMs, diagnosticsMs, gitMs, searchMs, sloMs },

@@ -3,6 +3,17 @@ import path from 'path';
 import fs from 'fs';
 import { getDevFlowDbPath } from '../lib/devFlowPaths.js';
 
+export function configureDatabaseConnection(connection: InstanceType<typeof Database>, options: { readonly?: boolean } = {}) {
+  if (!options.readonly) connection.pragma('journal_mode = WAL');
+  connection.pragma('foreign_keys = ON');
+  connection.pragma('busy_timeout = 5000');
+  return connection;
+}
+
+export function openIsolatedDatabase(dbPath: string, options: { readonly?: boolean } = {}) {
+  return configureDatabaseConnection(new Database(dbPath, { readonly: options.readonly === true }), options);
+}
+
 let _db: InstanceType<typeof Database> | null = null;
 
 function getDb(): InstanceType<typeof Database> {
@@ -12,10 +23,7 @@ function getDb(): InstanceType<typeof Database> {
     if (!fs.existsSync(dataDir)) {
       fs.mkdirSync(dataDir, { recursive: true });
     }
-    _db = new Database(dbPath);
-    _db.pragma('journal_mode = WAL');
-    _db.pragma('foreign_keys = ON');
-    _db.pragma('busy_timeout = 5000');
+    _db = configureDatabaseConnection(new Database(dbPath));
   }
   return _db;
 }

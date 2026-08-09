@@ -6,12 +6,12 @@ import { saveSettings, getSettings } from '../repositories/settingsRepository.js
 import fs from 'fs';
 import path from 'path';
 import db from '../../db/index';
-import Database from 'better-sqlite3';
 import { getDevFlowDataDir, getDevFlowDbPath, resolveFromDevFlowAppRoot } from '../../lib/devFlowPaths';
 import { runAgentLaunchPreflight } from '../services/agentLaunchConfig';
 import { resolveAgentExecutionMode } from '../services/agentRunService';
 import { continueTaskQueueForProject } from './tasks';
 import { getCredentialVaultDiagnostics } from '../services/credentialVaultService';
+import { createVerifiedBackupSnapshot, getRecoveryStatus, runLatestRestoreDrill, verifyBackupFile } from '../services/backupIntegrityService';
 
 function persistSettingsOrRespond(res: express.Response, settings: Partial<Parameters<typeof saveSettings>[0]>) {
   try {
@@ -74,6 +74,7 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
       autoWork: settings.autoWork ?? false,
       agentExecutionMode: settings.agentExecutionMode ?? '',
       credentialVault: getCredentialVaultDiagnostics(),
+      recovery: getRecoveryStatus(),
     });
   });
 
@@ -203,49 +204,38 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
     return res.json({ success: true });
   });
 
+  app.get('/api/recovery/status', (_req, res) => {
+    res.json(getRecoveryStatus());
+  });
+
+  app.post('/api/recovery/snapshot', async (_req, res) => {
+    try {
+      const snapshot = await createVerifiedBackupSnapshot({ sourceDb: db, sourceDbPath: getDevFlowDbPath() });
+      return res.status(snapshot.usable ? 201 : 500).json({ snapshot, recovery: getRecoveryStatus() });
+    } catch (error: any) {
+      return res.status(500).json({ error: 'Recovery snapshot failed.', code: 'BACKUP_SNAPSHOT_FAILED', reason: error?.message || String(error) });
+    }
+  });
+
+  app.post('/api/recovery/restore-drill', async (_req, res) => {
+    const drill = await runLatestRestoreDrill({ activeDbPath: getDevFlowDbPath() });
+    return res.status(drill.ok ? 200 : 409).json({ drill, recovery: getRecoveryStatus() });
+  });
+
   app.get('/api/export', async (_req, res) => {
     try {
-      const dataDir = getDevFlowDataDir();
-      if (!fs.existsSync(dataDir)) {
-        fs.mkdirSync(dataDir, { recursive: true });
-      }
-
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const tempFile = path.join(dataDir, `devflow-export-temp-${timestamp}.db`);
       const exportFilename = `devflow-backup-${timestamp}.db`;
-
-      // Perform a safe live backup
-      await db.backup(tempFile);
-
-      // Open the temp database to strip secrets
-      const tempDb = new Database(tempFile);
-      try {
-        tempDb.prepare("UPDATE settings SET value = '' WHERE key IN ('githubToken', 'jiraToken', 'figmaToken')").run();
-      } finally {
-        tempDb.close();
+      const snapshot = await createVerifiedBackupSnapshot({ sourceDb: db, sourceDbPath: getDevFlowDbPath() });
+      if (!snapshot.usable) {
+        return res.status(500).json({ error: 'Backup failed integrity validation.', code: 'BACKUP_VALIDATION_FAILED' });
       }
-
-      // Send file to client
-      res.download(tempFile, exportFilename, (err) => {
-        // Clean up the temp file after download finishes or errors
-        if (fs.existsSync(tempFile)) {
-          try {
-            fs.unlinkSync(tempFile);
-          } catch (unlinkErr) {
-            console.error('Failed to clean up temp export file:', unlinkErr);
-          }
-        }
-        if (err) {
-          console.error('Export download error:', err);
-          // Only send error if headers aren't sent yet
-          if (!res.headersSent) {
-            res.status(500).json({ error: 'Failed to send export file' });
-          }
-        }
+      return res.download(snapshot.dbPath, exportFilename, (err) => {
+        if (err && !res.headersSent) res.status(500).json({ error: 'Failed to send export file' });
       });
     } catch (error: any) {
       console.error('Export failed:', error);
-      res.status(500).json({ error: error.message ?? 'Export failed' });
+      return res.status(500).json({ error: error.message ?? 'Export failed' });
     }
   });
 
@@ -262,48 +252,24 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
 
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
       const tempFile = path.join(dataDir, `devflow-import-temp-${timestamp}.db`);
-      const safetyBackup = path.join(dataDir, `devflow-safety-${timestamp}.db`);
       const targetDbFile = getDevFlowDbPath();
 
       // 1. Save uploaded file to temp path
       fs.writeFileSync(tempFile, req.body);
 
-      // 2. Validate the uploaded database and get row counts
-      let isValid = false;
-      const counts: Record<string, number> = {};
-      try {
-        const tempDb = new Database(tempFile);
-        
-        // Check for required tables
-        const requiredTables = ['projects', 'tasks', 'settings', 'skills', 'counters'];
-        const tables = tempDb.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[];
-        const tableNames = tables.map(t => t.name);
-        
-        isValid = requiredTables.every(t => tableNames.includes(t));
-        
-        if (isValid) {
-          counts.projects = (tempDb.prepare('SELECT COUNT(*) AS c FROM projects').get() as { c: number }).c;
-          counts.tasks = (tempDb.prepare('SELECT COUNT(*) AS c FROM tasks').get() as { c: number }).c;
-          counts.skills = (tempDb.prepare('SELECT COUNT(*) AS c FROM skills').get() as { c: number }).c;
-          counts.settings = (tempDb.prepare('SELECT COUNT(*) AS c FROM settings').get() as { c: number }).c;
-          counts.agent_runs = (tempDb.prepare("SELECT COUNT(*) AS c FROM sqlite_master WHERE type='table' AND name='agent_runs'").get() as { c: number }).c > 0
-            ? (tempDb.prepare('SELECT COUNT(*) AS c FROM agent_runs').get() as { c: number }).c
-            : 0;
-        }
-        tempDb.close();
-      } catch (err) {
-        console.error('Validation failed:', err);
-        isValid = false;
-      }
-
-      if (!isValid) {
+      // 2. Validate integrity and migration compatibility before touching the active DB.
+      const verification = verifyBackupFile({ backupPath: tempFile });
+      if (!verification.ok) {
         if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
-        return res.status(400).json({ error: 'Invalid DevFlow database file. Required tables are missing or file is corrupted.' });
+        return res.status(400).json({ error: verification.reason || 'Invalid DevFlow database file.', code: verification.code });
       }
+      const counts = verification.counts || {};
 
-      // 3. Create safety backup of current DB
+      // 3. Create a verified, secret-sanitized safety snapshot of the current DB.
+      let safetyBackupPath = '';
       if (fs.existsSync(targetDbFile)) {
-        await db.backup(safetyBackup);
+        const safetySnapshot = await createVerifiedBackupSnapshot({ sourceDb: db, sourceDbPath: targetDbFile });
+        safetyBackupPath = safetySnapshot.dbPath;
       }
 
       // 4. Safely replace current DB
@@ -324,7 +290,7 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
       res.json({
         success: true,
         restartRequired: true,
-        safetyBackupPath: safetyBackup,
+        safetyBackupPath,
         counts
       });
     } catch (error: any) {

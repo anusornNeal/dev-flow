@@ -192,10 +192,13 @@ DevFlow's git tools are intentionally local-only. They do not push, rebase, rese
 
 ## Backup, Restore, and Migration
 
-- Run `npm run backup` to create a timestamped backup under `data/`.
-- Run `npm run restore <path-to-backup>` to restore a `.db` file or backup bundle. Restore asks for confirmation and creates a safety backup first.
-- Use the Settings screen export/import flow when moving data between machines.
-- Run `npm run migrate:json` only when importing old JSON-based DevFlow data into SQLite.
+- Settings can create **verified recovery snapshots**. Each retained snapshot has a SHA-256 checksum, creation/source metadata, migration/schema version, SQLite `integrity_check` result, core record counts, and a local manifest under the DevFlow backups directory.
+- Snapshot retention is bounded (`DEVFLOW_BACKUP_RETENTION`, default 7, minimum 2, maximum 50) and keeps the newest verified recovery points. Exporting through Settings creates the same verified, secret-sanitized snapshot before download.
+- **Run restore drill** copies the newest verified snapshot into an isolated temporary directory, checks checksum/integrity/schema compatibility, applies only known pending DevFlow migrations to that temporary copy, validates core tables/records, then deletes the drill copy. It never replaces or opens the active DB path as the drill target.
+- Import validates SQLite integrity and migration compatibility before the active DB is touched, and reports reason codes such as `BACKUP_CHECKSUM_MISMATCH`, `BACKUP_SQLITE_CORRUPT`, `BACKUP_SCHEMA_INCOMPATIBLE`, and `BACKUP_REQUIRED_TABLES_MISSING` instead of one generic validation failure.
+- Current compatibility policy accepts databases whose applied migration IDs are all known to this DevFlow build; missing known migrations are upgradeable during a drill/restart, while unknown/future migration IDs are rejected.
+- Portable snapshots clear persisted GitHub/Jira/Figma token rows. The credential vault remains separate and raw integration secrets are not copied into recovery snapshots.
+- `npm run backup` / `npm run restore <path-to-backup>` remain available for the existing CLI flow. Run `npm run test:backup-integrity` for focused recovery-system verification, and `npm run migrate:json` only when importing old JSON-based DevFlow data into SQLite.
 
 ## Moving to Another Machine
 

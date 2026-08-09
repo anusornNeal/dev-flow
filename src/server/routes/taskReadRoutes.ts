@@ -1,7 +1,7 @@
 import type express from 'express';
 import type { ApiRouteDeps } from '../types';
 import { TASK_SCHEMA_DEF } from '../constants';
-import { archiveInactiveDoneTasks, getTasks, queryTaskBoardPage, restoreArchivedTask } from '../repositories/taskRepository.js';
+import { archiveInactiveDoneTasks, getTaskByIdentifier, getTasks, queryTaskBoardPage, restoreArchivedTask } from '../repositories/taskRepository.js';
 import { getActiveRunForTask, getLatestAgentRunForTask } from '../repositories/agentRunRepository';
 import { findTaskByIdentifier, getAgentTaskContext, renderTaskPrompt } from '../services/taskService';
 import { buildTaskGitWarnings } from '../services/taskGitWorkflowService';
@@ -57,7 +57,12 @@ export function registerTaskReadRoutes(app: express.Express, deps: ApiRouteDeps)
       const task = findTaskByIdentifier(deps.state, req.params.id);
       return res.json({ ...context, workflowWarnings: task ? buildTaskGitWarnings(task) : [] });
     }
-    const task = findTaskByIdentifier(deps.state, req.params.id);
+    const repositoryMode = mode === 'minimal' || mode === 'summary'
+      ? mode
+      : mode === 'full' || mode === 'debug'
+        ? 'full'
+        : 'standard';
+    const task = getTaskByIdentifier(req.params.id, repositoryMode);
     if (!task) return res.status(404).json({ error: 'Task not found' });
     return res.json(toTaskResponse(task, mode));
   });

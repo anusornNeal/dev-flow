@@ -372,6 +372,50 @@ export function getTask(id: string): any | undefined {
   return parseTaskRow(row, runsByTaskId);
 }
 
+export type TaskSingleReadMode = 'minimal' | 'summary' | 'standard' | 'full';
+
+function getTaskRowByIdentifier(identifier: string, columns: string) {
+  return db.prepare(`
+    SELECT ${columns}
+    FROM tasks
+    WHERE id = ? OR displayId = ?
+    ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END
+    LIMIT 1
+  `).get(identifier, identifier, identifier) as any | undefined;
+}
+
+export function getTaskByIdentifier(identifier: string, mode: TaskSingleReadMode = 'full'): any | undefined {
+  ensureTaskColumns();
+  if (mode === 'minimal') {
+    return getTaskRowByIdentifier(identifier, 'id, displayId, title, status, projectId');
+  }
+
+  if (mode === 'summary') {
+    const row = getTaskRowByIdentifier(
+      identifier,
+      'id, displayId, title, status, priority, projectId, parentId, agent, model, effort, updatedAt, archivedAt, bugs',
+    );
+    if (!row) return undefined;
+    const latestRun = db.prepare(`
+      SELECT id, status, agent, errorMessage, createdAt, startedAt, endedAt
+      FROM agent_runs
+      WHERE taskId = ?
+      ORDER BY createdAt DESC
+      LIMIT 1
+    `).get(row.id) as Partial<AgentRun> | undefined;
+    return {
+      ...row,
+      bugs: parseJsonArray(row.bugs),
+      latestAgentRun: latestRun || undefined,
+    };
+  }
+
+  const row = getTaskRowByIdentifier(identifier, '*');
+  if (!row) return undefined;
+  const runsByTaskId = getAllAgentRunsByTaskId([row.id]);
+  return parseTaskRow(row, runsByTaskId);
+}
+
 export function getTasksByProjectId(projectId: string): any[] {
   ensureTaskColumns();
   const rows = db.prepare('SELECT * FROM tasks WHERE projectId = ?').all(projectId) as any[];

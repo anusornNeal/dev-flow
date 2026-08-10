@@ -1,10 +1,45 @@
 import fs from 'fs';
 import path from 'path';
+import crypto from 'node:crypto';
 import { createApiError } from './api';
 import { resolveSafePath } from './localFileService';
 import { readWorkspaceMetadataFile } from './workspaceMetadataCacheService';
 
 const MAX_CONFIG_BYTES = 100_000;
+export const PROJECT_COMMAND_CONFIG_RELATIVE_PATHS = [
+  '.devflow/commands.yaml',
+  '.devflow/commands.json',
+] as const;
+
+export type ProjectCommandConfigSnapshot = {
+  fingerprint: string;
+  relativePaths: string[];
+};
+
+export function getProjectCommandConfigSnapshot(root: string): ProjectCommandConfigSnapshot {
+  const entries = PROJECT_COMMAND_CONFIG_RELATIVE_PATHS.flatMap((relativePath) => {
+    const absolutePath = path.resolve(root, relativePath);
+    if (!fs.existsSync(absolutePath)) return [];
+    const stat = fs.lstatSync(absolutePath);
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      throw createApiError(400, 'INVALID_COMMAND_CONFIG', `Command config '${relativePath}' must be a regular file inside the repository.`);
+    }
+    if (stat.size > MAX_CONFIG_BYTES) {
+      throw createApiError(400, 'COMMAND_CONFIG_TOO_LARGE', `Command config must be ${MAX_CONFIG_BYTES} bytes or less.`);
+    }
+    const normalizedContent = fs.readFileSync(absolutePath, 'utf8').replace(/\r\n/g, '\n');
+    return [{
+      relativePath,
+      size: Buffer.byteLength(normalizedContent, 'utf8'),
+      sha256: crypto.createHash('sha256').update(normalizedContent, 'utf8').digest('hex'),
+    }];
+  });
+  const fingerprint = crypto.createHash('sha256').update(JSON.stringify(entries)).digest('hex');
+  return {
+    fingerprint,
+    relativePaths: entries.map((entry) => entry.relativePath),
+  };
+}
 const MAX_PRESET_NAME_LENGTH = 64;
 const MAX_EXECUTABLE_LENGTH = 200;
 const MAX_ARG_LENGTH = 4_000;
@@ -129,8 +164,8 @@ function parseStrictCommandYaml(content: string) {
 }
 
 function readConfig(root: string) {
-  const yamlPath = path.join(root, '.devflow', 'commands.yaml');
-  const jsonPath = path.join(root, '.devflow', 'commands.json');
+  const yamlPath = path.resolve(root, PROJECT_COMMAND_CONFIG_RELATIVE_PATHS[0]);
+  const jsonPath = path.resolve(root, PROJECT_COMMAND_CONFIG_RELATIVE_PATHS[1]);
   const yamlExists = fs.existsSync(yamlPath);
   const jsonExists = fs.existsSync(jsonPath);
 
@@ -140,8 +175,8 @@ function readConfig(root: string) {
   if (!yamlExists && !jsonExists) return null;
 
   const configPath = yamlExists ? yamlPath : jsonPath;
-  const stat = fs.statSync(configPath);
-  if (!stat.isFile()) {
+  const stat = fs.lstatSync(configPath);
+  if (stat.isSymbolicLink() || !stat.isFile()) {
     throw createApiError(400, 'INVALID_COMMAND_CONFIG', `Command config '${path.relative(root, configPath)}' is not a file.`);
   }
   if (stat.size > MAX_CONFIG_BYTES) {

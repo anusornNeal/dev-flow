@@ -6,7 +6,7 @@ import { resolvePackageManagerInvocation } from '../../lib/platformRuntime';
 import type { AppState } from '../types';
 import { createApiError } from './api';
 import { resolveProjectRoot, resolveSafePath } from './localFileService';
-import { loadProjectCommandPreset } from './projectCommandConfigService';
+import { getProjectCommandConfigSnapshot, loadProjectCommandPreset } from './projectCommandConfigService';
 import { getRepoRevisionForRoot } from './repoRevisionService';
 import {
   createVerificationCandidate,
@@ -418,6 +418,7 @@ export type ProjectCommandExecutionIdentity = {
   lineageToken: string;
   semanticKey: string;
   command: string;
+  commandConfigFingerprint?: string;
 };
 
 function buildProjectCommandExecutionIdentity(
@@ -439,6 +440,9 @@ function buildProjectCommandExecutionIdentity(
   }
   const lineageToken = overrides.lineageToken ?? getRepoCacheLineage(root, [...PROJECT_COMMAND_CACHE_DEPENDENCIES]).token;
   const semanticKey = semanticKeyForResolvedCommand(root, resolvedCommand, cwdPath);
+  const commandConfigFingerprint = resolvedCommand.source === 'repository-config'
+    ? getProjectCommandConfigSnapshot(root).fingerprint
+    : undefined;
   const identity = {
     repoRevision,
     lineageToken,
@@ -449,6 +453,7 @@ function buildProjectCommandExecutionIdentity(
     responseMode,
     source: resolvedCommand.source,
     configPath: resolvedCommand.configPath,
+    commandConfigFingerprint,
     platform: process.platform,
     arch: process.arch,
     node: process.version,
@@ -459,7 +464,14 @@ function buildProjectCommandExecutionIdentity(
     },
   };
   const key = crypto.createHash('sha256').update(JSON.stringify(identity)).digest('hex');
-  return { key, repoRevision, lineageToken, semanticKey, command: resolvedCommand.command };
+  return {
+    key,
+    repoRevision,
+    lineageToken,
+    semanticKey,
+    command: resolvedCommand.command,
+    ...(commandConfigFingerprint ? { commandConfigFingerprint } : {}),
+  };
 }
 
 export function getProjectCommandExecutionIdentity(state: AppState, args: Record<string, any>): ProjectCommandExecutionIdentity | null {
@@ -491,12 +503,14 @@ function readProjectCommandVerificationCandidate(value: unknown): ProjectCommand
     || typeof raw.repoRevision !== 'string'
     || typeof raw.snapshotCommit !== 'string'
     || typeof raw.createdAt !== 'string'
+    || (raw.commandConfigFingerprint !== undefined && (typeof raw.commandConfigFingerprint !== 'string' || !/^[a-f0-9]{64}$/i.test(raw.commandConfigFingerprint)))
     || !executionIdentity
     || typeof executionIdentity.key !== 'string'
     || typeof executionIdentity.repoRevision !== 'string'
     || typeof executionIdentity.lineageFingerprint !== 'string'
     || typeof executionIdentity.semanticKey !== 'string'
     || typeof executionIdentity.command !== 'string'
+    || (executionIdentity.commandConfigFingerprint !== undefined && (typeof executionIdentity.commandConfigFingerprint !== 'string' || !/^[a-f0-9]{64}$/i.test(executionIdentity.commandConfigFingerprint)))
   ) {
     throw createApiError(400, 'VERIFICATION_CANDIDATE_INVALID', 'Project command verification candidate metadata is invalid.');
   }
@@ -505,6 +519,7 @@ function readProjectCommandVerificationCandidate(value: unknown): ProjectCommand
     repoRevision: raw.repoRevision,
     snapshotCommit: raw.snapshotCommit,
     createdAt: raw.createdAt,
+    ...(raw.commandConfigFingerprint ? { commandConfigFingerprint: raw.commandConfigFingerprint } : {}),
     executionIdentity: { ...executionIdentity },
   };
 }
@@ -519,6 +534,7 @@ export function bindProjectCommandVerificationCandidate(
   if (
     resolvedCandidate.repoRevision !== candidate.repoRevision
     || resolvedCandidate.snapshotCommit !== candidate.snapshotCommit
+    || (candidate.commandConfigFingerprint !== undefined && resolvedCandidate.commandConfigFingerprint !== candidate.commandConfigFingerprint)
   ) {
     throw createApiError(409, 'VERIFICATION_CANDIDATE_MISMATCH', 'Verification candidate metadata no longer matches its immutable snapshot.');
   }
@@ -550,6 +566,7 @@ export function bindProjectCommandVerificationCandidate(
       lineageFingerprint: executionIdentity.lineageToken,
       semanticKey: executionIdentity.semanticKey,
       command: executionIdentity.command,
+      ...(executionIdentity.commandConfigFingerprint ? { commandConfigFingerprint: executionIdentity.commandConfigFingerprint } : {}),
     },
   };
 }
@@ -592,7 +609,7 @@ function withVerificationCandidate(
       repoRevision: candidate.repoRevision,
       snapshotCommit: candidate.snapshotCommit,
       executionKey: executionIdentity.key,
-      current: isVerificationCandidateCurrent(sourceRoot, candidate),
+      current: isVerificationCandidateCurrent(sourceRoot, candidate, candidate.executionIdentity.commandConfigFingerprint),
     },
   };
 }
@@ -743,6 +760,7 @@ export async function runProjectCommandAsync(state: AppState, args: Record<strin
     if (
       resolvedCandidate.repoRevision !== suppliedCandidate.repoRevision
       || resolvedCandidate.snapshotCommit !== suppliedCandidate.snapshotCommit
+      || (suppliedCandidate.commandConfigFingerprint !== undefined && resolvedCandidate.commandConfigFingerprint !== suppliedCandidate.commandConfigFingerprint)
       || suppliedCandidate.executionIdentity.repoRevision !== suppliedCandidate.repoRevision
     ) {
       throw createApiError(409, 'VERIFICATION_CANDIDATE_MISMATCH', 'Verification candidate metadata no longer matches its immutable snapshot.');

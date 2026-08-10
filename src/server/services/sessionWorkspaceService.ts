@@ -224,6 +224,18 @@ export function resolveSessionWorkspace(workspaceId: string) {
   return touch(workspace);
 }
 
+export function resolveSessionWorkspaceForRecovery(workspaceId: string) {
+  const workspace = readMetadata(String(workspaceId || '').trim());
+  if (!workspace) return null;
+  const root = canonicalContainment(workspace.root);
+  if (!fs.existsSync(root)) return null;
+  const workspaceTopLevel = runGit(root, ['rev-parse', '--show-toplevel'], true);
+  if (workspaceTopLevel.status !== 0 || path.resolve((workspaceTopLevel.stdout || '').trim()) !== path.resolve(root)) return null;
+  const projectTopLevel = runGit(workspace.projectRoot, ['rev-parse', '--show-toplevel'], true);
+  if (projectTopLevel.status !== 0 || path.resolve((projectTopLevel.stdout || '').trim()) !== path.resolve(workspace.projectRoot)) return null;
+  return touch(workspace);
+}
+
 export function acquireSessionWorkspace(workspaceId: string) {
   const workspace = resolveSessionWorkspace(workspaceId);
   if (!workspace) throw createApiError(404, 'WORKSPACE_NOT_FOUND', `Workspace '${workspaceId}' was not found.`, { affectedId: workspaceId });
@@ -277,6 +289,16 @@ export function markSessionWorkspaceIntegrationRequired(workspaceId: string, req
   const workspace = readMetadata(workspaceId);
   if (!workspace) throw createApiError(404, 'WORKSPACE_NOT_FOUND', `Workspace '${workspaceId}' was not found.`, { affectedId: workspaceId });
   const next = { ...workspace, state: required ? 'integration-required' as const : 'ready' as const };
+  writeMetadata(next);
+  return next;
+}
+
+export function markSessionWorkspaceIntegrated(workspaceId: string, integratedRevision: string) {
+  const workspace = readMetadata(workspaceId);
+  if (!workspace) throw createApiError(404, 'WORKSPACE_NOT_FOUND', `Workspace '${workspaceId}' was not found.`, { affectedId: workspaceId });
+  const nextRevision = String(integratedRevision || '').trim();
+  if (!nextRevision) throw createApiError(400, 'WORKSPACE_INTEGRATED_REVISION_REQUIRED', 'Integrated revision is required when advancing the workspace baseline.', { affectedId: workspaceId });
+  const next = { ...workspace, state: 'ready' as const, baseRevision: nextRevision };
   writeMetadata(next);
   return next;
 }

@@ -52,14 +52,48 @@ test('clean committed workspace integrates locally with source/base evidence and
   const before = git(root, ['rev-parse', 'HEAD']).stdout;
   const result = integrateWorkspaceCommits(workspace.workspaceId);
   assert.equal(result.status, 'succeeded');
-  assert.equal(result.strategy, 'merge');
+  assert.equal(result.strategy, 'rebase-ff');
   assert.equal(result.baseHeadBefore, before);
   assert.notEqual(result.baseHeadAfter, before);
   assert.equal(result.sourceCommits.length, 2);
+  const integratedParents = git(root, ['rev-list', '--parents', `${before}..${result.baseHeadAfter}`]).stdout.split(/\r?\n/).filter(Boolean);
+  assert.equal(integratedParents.length, 2);
+  assert.equal(integratedParents.every((line) => line.trim().split(/\s+/).length === 2), true, 'default integration must preserve linear commits without a merge bubble');
   assert.deepEqual(result.changedFiles.sort(), ['workspace-2.txt', 'workspace.txt']);
   assert.equal(fs.readFileSync(path.join(root, 'workspace.txt'), 'utf8').replace(/\r\n/g, '\n'), 'one\n');
   assert.equal(git(root, ['status', '--porcelain']).stdout, '');
   assert.equal(git(root, ['rev-parse', '--verify', workspace.branch]).status, 0);
+});
+
+test('advanced base rebases workspace commits and fast-forwards linearly', () => {
+  const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-integration-advanced-'));
+  process.env.DEVFLOW_RUNTIME_DIR = runtimeRoot;
+  resetSessionWorkspaceRuntimeForTests();
+  const root = repoFixture();
+  const workspace = createOrReuseSessionWorkspace(project(root), 'chat-advanced');
+  commitFile(workspace.root, 'workspace.txt', 'one\n', 'workspace one');
+  commitFile(workspace.root, 'workspace-2.txt', 'two\n', 'workspace two');
+  commitFile(root, 'base-only.txt', 'base\nadvanced\n', 'advance base');
+  const baseHeadBefore = git(root, ['rev-parse', 'HEAD']).stdout;
+  const originalSourceHead = git(workspace.root, ['rev-parse', 'HEAD']).stdout;
+
+  const result = integrateWorkspaceCommits(workspace.workspaceId);
+  assert.equal(result.status, 'succeeded');
+  assert.equal(result.strategy, 'rebase-ff');
+  assert.equal(result.baseHeadBefore, baseHeadBefore);
+  assert.equal(result.sourceHead, originalSourceHead);
+  assert.notEqual(result.baseHeadAfter, originalSourceHead);
+  assert.equal(git(root, ['merge-base', '--is-ancestor', baseHeadBefore, result.baseHeadAfter]).status, 0);
+  const integratedParents = git(root, ['rev-list', '--parents', `${baseHeadBefore}..${result.baseHeadAfter}`]).stdout.split(/\r?\n/).filter(Boolean);
+  assert.equal(integratedParents.length, 2);
+  assert.equal(integratedParents.every((line) => line.trim().split(/\s+/).length === 2), true);
+  assert.equal(fs.readFileSync(path.join(root, 'base-only.txt'), 'utf8').replace(/\r\n/g, '\n'), 'base\nadvanced\n');
+  assert.equal(fs.readFileSync(path.join(root, 'workspace.txt'), 'utf8').replace(/\r\n/g, '\n'), 'one\n');  const repeated = integrateWorkspaceCommits(workspace.workspaceId);
+  assert.equal(repeated.status, 'succeeded');
+  assert.equal(repeated.alreadyIntegrated, true);
+  assert.equal(repeated.baseHeadAfter, result.baseHeadAfter);
+  assert.equal(repeated.sourceCommits.length, 0, 'already-integrated evidence must not reclassify advanced-base commits as workspace commits');
+  assert.equal(repeated.integratedCommits.length, 0);
 });
 
 test('dirty base blocks integration before mutation', () => {
@@ -110,17 +144,20 @@ test('same-line conflict returns INTEGRATION_CONFLICT and abort restores clean b
   commitFile(workspace.root, 'shared.txt', 'workspace\n', 'workspace change');
   commitFile(root, 'shared.txt', 'base changed\n', 'base change');
   const baseHeadBefore = git(root, ['rev-parse', 'HEAD']).stdout;
+  const sourceHeadBefore = git(workspace.root, ['rev-parse', 'HEAD']).stdout;
 
   const conflict = integrateWorkspaceCommits(workspace.workspaceId);
   assert.equal(conflict.status, 'conflict');
   assert.equal(conflict.code, 'INTEGRATION_CONFLICT');
+  assert.equal(conflict.strategy, 'rebase-ff');
   assert.deepEqual(conflict.conflictedPaths, ['shared.txt']);
   assert.equal(conflict.baseHeadBefore, baseHeadBefore);
-  assert.equal(conflict.sourceHead, git(workspace.root, ['rev-parse', 'HEAD']).stdout);
+  assert.equal(conflict.sourceHead, sourceHeadBefore);
+  assert.notEqual(git(workspace.root, ['rev-parse', 'HEAD']).stdout, sourceHeadBefore, 'rebase conflict may move the worktree HEAD while preserving original source evidence');
   assert.equal(git(root, ['rev-parse', 'HEAD']).stdout, baseHeadBefore);
   assert.equal(git(root, ['status', '--porcelain']).stdout, '');
   assert.equal(git(root, ['rev-parse', '-q', '--verify', 'MERGE_HEAD'], true).status, 1);
-  assert.equal(git(workspace.root, ['rev-parse', '-q', '--verify', 'MERGE_HEAD'], true).status, 0);
+  assert.equal(git(workspace.root, ['rev-parse', '-q', '--verify', 'REBASE_HEAD'], true).status, 0);
 
   const unrelated = createOrReuseSessionWorkspace(project(root), 'chat-unrelated');
   commitFile(unrelated.root, 'unrelated.txt', 'unrelated\n', 'unrelated change');
@@ -153,6 +190,8 @@ test('retry completes a deliberately resolved conflict without losing source com
   git(workspace.root, ['add', 'shared.txt']);
   const retried = retryWorkspaceIntegration(workspace.workspaceId);
   assert.equal(retried.status, 'succeeded');
+  assert.equal(retried.strategy, 'rebase-ff');
+  assert.notEqual(retried.baseHeadAfter, conflict.sourceHead);
   assert.equal(fs.readFileSync(path.join(root, 'shared.txt'), 'utf8').replace(/\r\n/g, '\n'), 'resolved\n');
   assert.equal(git(root, ['status', '--porcelain']).stdout, '');
   assert.equal(git(workspace.root, ['status', '--porcelain']).stdout, '');

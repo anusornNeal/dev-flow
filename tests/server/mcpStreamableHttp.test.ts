@@ -48,6 +48,15 @@ function createClient(baseUrl: string, name: string) {
   return { client, transport };
 }
 
+async function readMcpResponse(response: Response) {
+  const contentType = response.headers.get('content-type') || '';
+  if (/application\/json/i.test(contentType)) return response.json() as Promise<any>;
+  const text = await response.text();
+  const dataLine = text.split(/\r?\n/).find((line) => line.startsWith('data:'));
+  assert.ok(dataLine, `Expected MCP SSE data frame, got: ${text.slice(0, 200)}`);
+  return JSON.parse(dataLine.slice('data:'.length).trim()) as any;
+}
+
 async function callHealth(client: Client) {
   const result = await client.callTool({ name: 'devflow_health_check', arguments: {} }) as any;
   assert.equal(result.isError, undefined);
@@ -95,9 +104,10 @@ test('Streamable HTTP handler initializes a reusable server session', async () =
       }),
     });
 
-    const body = await response.json() as any;
+    const body = await readMcpResponse(response);
     assert.equal(response.status, 200, JSON.stringify(body));
     assert.equal(body.jsonrpc, '2.0');
+    assert.match(response.headers.get('content-type') || '', /^text\/event-stream/i, 'Streamable HTTP POST responses should use request-scoped SSE');
     assert.equal(body.id, 1);
     assert.equal(body.result?.serverInfo?.name, 'dev-flow-mcp');
     assert.match(response.headers.get('mcp-session-id') || '', /^[0-9a-f-]{20,}$/i, 'stateful mode must issue a reusable session id');
@@ -188,7 +198,7 @@ test('optional lifecycle timing hook keeps the active session open after initial
       }),
     });
 
-    const body = await response.json() as any;
+    const body = await readMcpResponse(response);
     assert.equal(response.status, 200, JSON.stringify(body));
     assert.equal(body.result?.serverInfo?.name, 'dev-flow-mcp');
   }, {

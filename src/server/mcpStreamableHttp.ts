@@ -170,7 +170,7 @@ export function createReusableMcpHttpHandler(
       const mcpServer = createDevFlowMcpServer(apiBaseUrl, profileOverride);
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: nextSessionId,
-        enableJsonResponse: true,
+        enableJsonResponse: false,
       });
       entry = {
         sessionId: '',

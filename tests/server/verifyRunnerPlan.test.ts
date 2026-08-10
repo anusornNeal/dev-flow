@@ -11,6 +11,12 @@ const BASELINE_LABELS = [
   'devflow restart state',
   'devflow contract',
   'devflow tool profiles',
+  'task claim service',
+  'task claim routes',
+  'task claim contract',
+  'board loop skill registry',
+  'board loop skill content',
+  'task claim card ui',
   'project atlas cache',
   'project atlas agent update',
   'project atlas api',
@@ -86,6 +92,40 @@ test('shared-resource and integration gates remain serial', () => {
     if (serialLabels.has(step.label)) assert.equal(step.parallelSafe, false, `${step.label} must remain serial`);
   }
 });
+
+test('Stage 1 parallelizes only proven-isolated claim, skill, and UI checks behind serial runtime gates', () => {
+  const stageOne = VERIFICATION_STEPS.filter((step) => step.stage === 1);
+  const approvedParallel = [
+    'task claim service',
+    'task claim routes',
+    'task claim contract',
+    'board loop skill registry',
+    'board loop skill content',
+    'task claim card ui',
+  ];
+  const protectedSerial = [
+    'devflow restart route',
+    'devflow restart contract',
+    'devflow restart state',
+    'devflow contract',
+    'devflow tool profiles',
+  ];
+
+  for (const label of approvedParallel) {
+    assert.equal(stageOne.find((step) => step.label === label)?.parallelSafe, true, `${label} should be parallel-safe`);
+  }
+  for (const label of protectedSerial) {
+    assert.equal(stageOne.find((step) => step.label === label)?.parallelSafe, false, `${label} must stay serial`);
+  }
+
+  const segments = buildVerificationStageSegments(stageOne);
+  assert.equal(segments.length, 2);
+  assert.equal(segments[0]?.parallel, false);
+  assert.deepEqual(segments[0]?.steps.map((step) => step.label), protectedSerial);
+  assert.equal(segments[1]?.parallel, true);
+  assert.deepEqual(segments[1]?.steps.map((step) => step.label), approvedParallel);
+});
+
 
 test('mixed FULL verify stages batch parallel-safe work without crossing serial barriers', () => {
   const stageTwo = VERIFICATION_STEPS.filter((step) => step.stage === 2);

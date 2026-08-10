@@ -542,6 +542,7 @@ export function buildIsolationDiagnostics(jobMetrics: any, workspaceMetrics: any
       queueWait: phaseTelemetry.queueWait || emptyTiming,
       workspaceLockWait: phaseTelemetry.workspaceLockWait || waitTelemetry.workspaceLockWait || emptyTiming,
       capacityWait: phaseTelemetry.capacityWait || waitTelemetry.capacityWait || emptyTiming,
+      candidatePreparation: phaseTelemetry.candidatePreparation || emptyTiming,
       execution: phaseTelemetry.execution || emptyTiming,
       responseHandoff: phaseTelemetry.responseHandoff || emptyTiming,
     },

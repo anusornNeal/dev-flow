@@ -1197,11 +1197,13 @@ test('mcpToolJobService - phase telemetry separates queue blockers from executio
     await new Promise(resolve => setTimeout(resolve, 25));
     const running: any = getToolJobStatus(second.jobId);
     assert.equal(running.phaseTimings.executionMs > 0, true);
+    assert.equal(typeof running.phaseTimings.candidatePreparationMs, 'number');
 
     blockers.second.resolve();
     const terminal: any = await waitForStatus(second.jobId, 'succeeded');
     assert.equal(terminal.phaseTimings.queueWaitMs >= terminal.phaseTimings.workspaceLockWaitMs, true);
     assert.equal(terminal.phaseTimings.executionMs > 0, true);
+    assert.equal(typeof terminal.phaseTimings.candidatePreparationMs, 'number');
     assert.equal(typeof terminal.phaseTimings.responseHandoffMs, 'number');
 
     const metrics: any = getQueueMetrics();

@@ -28,6 +28,7 @@ const {
 } = await import('../../src/server/services/mcpToolJobService.js');
 const {
   prepareProjectCommandVerificationCandidate,
+  runProjectCommand,
 } = await import('../../src/server/services/projectCommandService.js');
 const {
   resolveVerificationCandidate,
@@ -108,7 +109,64 @@ function assertCandidateReleased(candidateId: string) {
   );
 }
 
-test('queued run_project_command freezes candidate A at enqueue even when live workspace advances to B before execution', async () => {
+test('fresh cached run_project_command completes durable job before candidate creation or process execution', async () => {
+  const { root, projectId } = makeVerificationRepo('cache-first');
+  const state = makeState(root, projectId);
+  const args = {
+    localPath: root,
+    command: 'test',
+    cacheResult: true,
+    singleFlight: false,
+  };
+  const primed = runProjectCommand(state, args);
+  assert.equal(primed.ok, true);
+  assert.equal(primed.cache?.hit, false);
+
+  const job = enqueueToolJob(state, 'run_project_command', args, 'repo-command');
+  assert.equal(job.status, 'succeeded', 'fresh cache hit should be terminal on admission');
+  assert.equal(job.queuePosition, 0);
+  const persisted = getJob(job.jobId);
+  assert.equal(persisted?.args?.__verificationCandidate, undefined, 'cache hit must not create/persist a candidate');
+  const result = readJobResult(job.jobId) as any;
+  assert.equal(result?.result?.cache?.hit, true);
+  assert.equal(result?.result?.processSpawns, 0);
+});
+
+test('queued cache miss persists cheap admission identity and defers immutable candidate creation', async () => {
+  const { root, projectId } = makeVerificationRepo('deferred-candidate');
+  const state = makeState(root, projectId);
+  const writeTool = `candidate_defer_write_${randomUUID()}`;
+  const blocker = deferred();
+  __setToolJobTestRunner(writeTool, async () => {
+    await blocker.promise;
+    return { ok: true };
+  });
+
+  try {
+    const write = enqueueToolJob(state, writeTool, { localPath: root }, 'repo-write');
+    await waitForStatus(write.jobId, 'running');
+    const verify = enqueueToolJob(state, 'run_project_command', {
+      localPath: root,
+      command: 'test',
+      cacheResult: false,
+      forceFresh: true,
+      singleFlight: false,
+    }, 'repo-command');
+    assert.equal(getToolJobStatus(verify.jobId)?.status, 'queued');
+    const persisted = getJob(verify.jobId);
+    assert.equal(persisted?.args?.__verificationCandidate, undefined, 'queued miss must not pre-create candidate worktree');
+    assert.match(String(persisted?.args?.__projectCommandAdmissionIdentity?.key || ''), /^[a-f0-9]{64}$/);
+    assert.equal(cancelToolJob(verify.jobId), true);
+    assert.equal(getToolJobStatus(verify.jobId)?.status, 'cancelled');
+    blocker.resolve();
+    await waitForStatus(write.jobId, 'succeeded');
+  } finally {
+    blocker.resolve();
+    __setToolJobTestRunner(writeTool, null);
+  }
+});
+
+test('queued run_project_command refuses to verify a newer workspace than its captured admission identity', async () => {
   const { root, projectId } = makeVerificationRepo('queued-a-b');
   const state = makeState(root, projectId);
   const writeTool = `candidate_write_${randomUUID()}`;
@@ -131,27 +189,24 @@ test('queued run_project_command freezes candidate A at enqueue even when live w
     }, 'repo-command');
     assert.equal(getToolJobStatus(verify.jobId)?.status, 'queued');
     const persisted = getJob(verify.jobId);
-    const candidateId = String(persisted?.args?.__verificationCandidate?.candidateId || '');
-    assert.match(candidateId, /^vc_[a-f0-9]{24}$/);
-    assert.doesNotMatch(JSON.stringify(persisted?.args?.__verificationCandidate), /verification-candidates|[A-Z]:\\|\/tmp\//i);
+    assert.equal(persisted?.args?.__verificationCandidate, undefined);
+    assert.match(String(persisted?.args?.__projectCommandAdmissionIdentity?.key || ''), /^[a-f0-9]{64}$/);
 
     fs.writeFileSync(path.join(root, 'src', 'value.txt'), 'candidate-b\n', 'utf8');
     writeBlocker.resolve();
     await waitForStatus(write.jobId, 'succeeded');
-    await waitForStatus(verify.jobId, 'succeeded');
+    await waitForStatus(verify.jobId, 'failed');
 
     const result = readJobResult(verify.jobId) as any;
-    assert.equal(result?.result?.stdout?.trim(), 'candidate-a');
-    assert.equal(result?.result?.verificationCandidate?.candidateId, candidateId);
-    assert.equal(result?.result?.verificationCandidate?.current, false);
-    assertCandidateReleased(candidateId);
+    assert.equal(result?.result?.code, 'VERIFICATION_ADMISSION_STALE');
+    assert.equal(getJob(verify.jobId)?.args?.__verificationCandidate, undefined, 'stale admission must not persist a newer candidate');
   } finally {
     writeBlocker.resolve();
     __setToolJobTestRunner(writeTool, null);
   }
 });
 
-test('cancelling a queued verification releases its immutable candidate immediately', async () => {
+test('cancelling a queued verification never creates an immutable candidate', async () => {
   const { root, projectId } = makeVerificationRepo('queued-cancel');
   const state = makeState(root, projectId);
   const writeTool = `candidate_cancel_write_${randomUUID()}`;
@@ -169,11 +224,10 @@ test('cancelling a queued verification releases its immutable candidate immediat
       command: 'test',
       singleFlight: false,
     }, 'repo-command');
-    const candidateId = String(getJob(verify.jobId)?.args?.__verificationCandidate?.candidateId || '');
-    assert.match(candidateId, /^vc_[a-f0-9]{24}$/);
+    assert.equal(getJob(verify.jobId)?.args?.__verificationCandidate, undefined);
     assert.equal(cancelToolJob(verify.jobId), true);
     assert.equal(getToolJobStatus(verify.jobId)?.status, 'cancelled');
-    assertCandidateReleased(candidateId);
+    assert.equal(getJob(verify.jobId)?.args?.__verificationCandidate, undefined);
 
     writeBlocker.resolve();
     await waitForStatus(write.jobId, 'succeeded');
@@ -193,9 +247,9 @@ test('active cancellation releases the candidate after the running process exits
     singleFlight: false,
     forceFresh: true,
   }, 'repo-command');
-  const candidateId = String(getJob(verify.jobId)?.args?.__verificationCandidate?.candidateId || '');
-  assert.match(candidateId, /^vc_[a-f0-9]{24}$/);
   await waitForStatus(verify.jobId, 'running');
+  await waitUntil(() => /^vc_[a-f0-9]{24}$/.test(String(getJob(verify.jobId)?.args?.__verificationCandidate?.candidateId || '')), 'Expected active verification candidate to be persisted');
+  const candidateId = String(getJob(verify.jobId)?.args?.__verificationCandidate?.candidateId || '');
   assert.equal(cancelToolJob(verify.jobId), true);
   assert.equal(getToolJobStatus(verify.jobId)?.status, 'cancelled');
   await waitForCandidateRelease(candidateId);
@@ -203,7 +257,7 @@ test('active cancellation releases the candidate after the running process exits
 
 test('failed verification result still releases its immutable candidate', async () => {
   const { root, projectId } = makeVerificationRepo('failed-result');
-  fs.writeFileSync(path.join(root, 'scripts', 'read.mjs'), "process.stderr.write('expected failure');\nprocess.exitCode = 2;\n", 'utf8');
+  fs.writeFileSync(path.join(root, 'scripts', 'read.mjs'), "await new Promise((resolve) => setTimeout(resolve, 250));\nprocess.stderr.write('expected failure');\nprocess.exitCode = 2;\n", 'utf8');
   const state = makeState(root, projectId);
   const verify = enqueueToolJob(state, 'run_project_command', {
     localPath: root,
@@ -211,8 +265,9 @@ test('failed verification result still releases its immutable candidate', async 
     singleFlight: false,
     forceFresh: true,
   }, 'repo-command');
+  await waitForStatus(verify.jobId, 'running');
+  await waitUntil(() => /^vc_[a-f0-9]{24}$/.test(String(getJob(verify.jobId)?.args?.__verificationCandidate?.candidateId || '')), 'Expected failing verification candidate to be persisted');
   const candidateId = String(getJob(verify.jobId)?.args?.__verificationCandidate?.candidateId || '');
-  assert.match(candidateId, /^vc_[a-f0-9]{24}$/);
   await waitForStatus(verify.jobId, 'succeeded');
   const result = readJobResult(verify.jobId) as any;
   assert.equal(result?.result?.ok, false);
@@ -220,7 +275,7 @@ test('failed verification result still releases its immutable candidate', async 
   await waitForCandidateRelease(candidateId);
 });
 
-test('queued supersession releases obsolete candidate A while candidate B remains runnable', async () => {
+test('queued supersession cancels obsolete work before candidate creation while the newest candidate remains runnable', async () => {
   const { root, projectId } = makeVerificationRepo('queued-supersede');
   const state = makeState(root, projectId);
   const writeTool = `candidate_supersede_write_${randomUUID()}`;
@@ -241,8 +296,7 @@ test('queued supersession releases obsolete candidate A while candidate B remain
       verificationSeriesKey: 'series-a',
       verificationCandidateKey: 'candidate-a',
     }, 'repo-command');
-    const firstCandidateId = String(getJob(first.jobId)?.args?.__verificationCandidate?.candidateId || '');
-    assert.match(firstCandidateId, /^vc_[a-f0-9]{24}$/);
+    assert.equal(getJob(first.jobId)?.args?.__verificationCandidate, undefined);
     assert.equal(getToolJobStatus(first.jobId)?.status, 'queued');
 
     const second = enqueueToolJob(state, 'run_project_command', {
@@ -252,16 +306,16 @@ test('queued supersession releases obsolete candidate A while candidate B remain
       verificationSeriesKey: 'series-a',
       verificationCandidateKey: 'candidate-b',
     }, 'repo-command');
-    const secondCandidateId = String(getJob(second.jobId)?.args?.__verificationCandidate?.candidateId || '');
-    assert.match(secondCandidateId, /^vc_[a-f0-9]{24}$/);
+    assert.equal(getJob(second.jobId)?.args?.__verificationCandidate, undefined);
     assert.equal(getToolJobStatus(first.jobId)?.status, 'cancelled');
-    assertCandidateReleased(firstCandidateId);
-    assert.equal(resolveVerificationCandidate(secondCandidateId).candidateId, secondCandidateId);
+    assert.equal(getJob(first.jobId)?.args?.__verificationCandidate, undefined);
 
     writeBlocker.resolve();
     await waitForStatus(write.jobId, 'succeeded');
     await waitForStatus(second.jobId, 'succeeded');
-    assertCandidateReleased(secondCandidateId);
+    const secondCandidateId = String(getJob(second.jobId)?.args?.__verificationCandidate?.candidateId || '');
+    assert.match(secondCandidateId, /^vc_[a-f0-9]{24}$/);
+    await waitForCandidateRelease(secondCandidateId);
   } finally {
     writeBlocker.resolve();
     __setToolJobTestRunner(writeTool, null);
@@ -303,5 +357,5 @@ test('startup recovery resumes a persisted queued candidate A without recapturin
   assert.equal(result?.result?.stdout?.trim(), 'candidate-a');
   assert.equal(result?.result?.verificationCandidate?.candidateId, candidate?.candidateId);
   assert.equal(result?.result?.verificationCandidate?.current, false);
-  assertCandidateReleased(candidate!.candidateId);
+  await waitForCandidateRelease(candidate!.candidateId);
 });

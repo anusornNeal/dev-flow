@@ -5,8 +5,8 @@ import { createApiError, normalizeUnknownError } from './api';
 import { resolveProjectResourceIdentity, resolveProjectRoot } from './localFileService';
 import { isDevFlowRestartPending, readDevFlowRestartState } from '../../lib/devFlowRestart';
 import { getRepoRevisionForRoot } from './repoRevisionService';
-import { getProjectCommandExecutionIdentity, prepareProjectCommandVerificationCandidate } from './projectCommandService';
-import { releaseVerificationCandidate } from './verificationCandidateService';
+import { getProjectCommandAdmissionPreflight, getProjectCommandExecutionIdentity, prepareProjectCommandVerificationCandidateAsync, type ProjectCommandExecutionIdentity } from './projectCommandService';
+import { releaseVerificationCandidate, releaseVerificationCandidateAsync } from './verificationCandidateService';
 import { getToolDefinitionByName } from '../contracts/devflowContract';
 import {
   buildQueueEntryDiagnostics,
@@ -73,6 +73,8 @@ type JobPhaseTelemetryState = {
   admissionWaitMs: number;
   enqueuedAt: number;
   queueCompletedAt?: number;
+  candidatePreparationStartedAt?: number;
+  candidatePreparationCompletedAt?: number;
   executionStartedAt?: number;
   executionCompletedAt?: number;
   responseHandoffMs: number;
@@ -87,6 +89,7 @@ type JobPhaseTimings = {
   queueWaitMs: number;
   workspaceLockWaitMs: number;
   capacityWaitMs: number;
+  candidatePreparationMs: number;
   executionMs: number;
   responseHandoffMs: number;
 };
@@ -199,12 +202,15 @@ function rememberJobPhaseTelemetry(state: JobPhaseTelemetryState) {
 
 function getJobPhaseTimings(state: JobPhaseTelemetryState, entry?: QueueEntry, now = Date.now()): JobPhaseTimings {
   const wait = entry ? finalizedQueueWaitRecord(entry, now) : null;
-  const queueEnd = state.executionStartedAt ?? state.queueCompletedAt ?? now;
+  const queueEnd = state.queueCompletedAt ?? state.candidatePreparationStartedAt ?? state.executionStartedAt ?? now;
   const queueWaitMs = Math.max(0, queueEnd - state.enqueuedAt);
   const rawWorkspaceWaitMs = wait?.workspaceLockWaitMs ?? state.workspaceLockWaitMs;
   const workspaceLockWaitMs = Math.min(queueWaitMs, Math.max(0, rawWorkspaceWaitMs));
   const rawCapacityWaitMs = wait?.capacityWaitMs ?? state.capacityWaitMs;
   const capacityWaitMs = Math.min(Math.max(0, queueWaitMs - workspaceLockWaitMs), Math.max(0, rawCapacityWaitMs));
+  const candidatePreparationMs = state.candidatePreparationStartedAt
+    ? Math.max(0, (state.candidatePreparationCompletedAt ?? state.executionStartedAt ?? now) - state.candidatePreparationStartedAt)
+    : 0;
   const executionMs = state.executionStartedAt
     ? Math.max(0, (state.executionCompletedAt ?? now) - state.executionStartedAt)
     : 0;
@@ -213,6 +219,7 @@ function getJobPhaseTimings(state: JobPhaseTelemetryState, entry?: QueueEntry, n
     queueWaitMs,
     workspaceLockWaitMs,
     capacityWaitMs,
+    candidatePreparationMs,
     executionMs,
     responseHandoffMs: Math.max(0, state.responseHandoffMs),
   };
@@ -234,6 +241,7 @@ function summarizeJobPhaseTelemetry() {
     queueWait: summary(timings.map((entry) => entry.queueWaitMs)),
     workspaceLockWait: summary(timings.map((entry) => entry.workspaceLockWaitMs).filter((value) => value > 0)),
     capacityWait: summary(timings.map((entry) => entry.capacityWaitMs).filter((value) => value > 0)),
+    candidatePreparation: summary(timings.map((entry) => entry.candidatePreparationMs).filter((value) => value > 0)),
     execution: summary(timings.map((entry) => entry.executionMs)),
     responseHandoff: summary(timings.map((entry) => entry.responseHandoffMs)),
   };
@@ -351,7 +359,8 @@ function supersedeObsoleteVerification(policy: VerificationQueuePolicy) {
     recordSupersession(entry, policy.candidateKey, false);
     requestJobCancellation(entry.jobId, `Verification superseded by candidate ${policy.candidateKey}.`);
     writeJobResult(entry.jobId, supersededJobResult(entry, policy.candidateKey));
-    finalizeQueueWaitTelemetry(entry);    releaseVerificationCandidateForArgs(entry.args);
+    finalizeQueueWaitTelemetry(entry);
+    void releaseVerificationCandidateForArgsAsync(entry.args).catch(() => {});
     appendJobLog(entry.jobId, 'stderr', `\n[Verification Superseded] Replaced by candidate ${policy.candidateKey}.\n`);
     finalizeSingleFlight(entry);
     notifyJobWaiters(entry.jobId);
@@ -415,6 +424,26 @@ function releaseVerificationCandidateForArgs(args: any) {
   return candidateId ? releaseVerificationCandidate(candidateId) : false;
 }
 
+async function releaseVerificationCandidateForArgsAsync(args: any) {
+  const candidateId = verificationCandidateIdForArgs(args);
+  return candidateId ? await releaseVerificationCandidateAsync(candidateId) : false;
+}
+
+function projectCommandAdmissionIdentityForArgs(args: any): ProjectCommandExecutionIdentity | null {
+  const raw = args?.__projectCommandAdmissionIdentity;
+  if (!raw || typeof raw !== 'object') return null;
+  if (!/^[a-f0-9]{64}$/i.test(String(raw.key || ''))) return null;
+  if (!String(raw.repoRevision || '').trim() || !String(raw.lineageToken || '').trim() || !String(raw.semanticKey || '').trim() || !String(raw.command || '').trim()) return null;
+  return {
+    key: String(raw.key),
+    repoRevision: String(raw.repoRevision),
+    lineageToken: String(raw.lineageToken),
+    semanticKey: String(raw.semanticKey),
+    command: String(raw.command),
+    ...(raw.commandConfigFingerprint ? { commandConfigFingerprint: String(raw.commandConfigFingerprint) } : {}),
+  };
+}
+
 function singleFlightKeyFor(state: AppState, toolName: string, args: any, kind: JobKind, resourceKey: string) {
   const enabled = kind === 'repo-read'
     ? args?.singleFlight !== false
@@ -423,7 +452,7 @@ function singleFlightKeyFor(state: AppState, toolName: string, args: any, kind: 
 
   if (kind === 'repo-command' && toolName === 'run_project_command') {
     try {
-      const capturedExecutionKey = args?.__verificationCandidate?.executionIdentity?.key;
+      const capturedExecutionKey = args?.__verificationCandidate?.executionIdentity?.key || projectCommandAdmissionIdentityForArgs(args)?.key;
       const executionIdentity = typeof capturedExecutionKey === 'string' && capturedExecutionKey.trim()
         ? { key: capturedExecutionKey.trim() }
         : getProjectCommandExecutionIdentity(state, args);
@@ -875,7 +904,8 @@ export function cancelToolJob(jobId: string) {
   const qIdx = queue.findIndex(q => q.jobId === jobId);
   if (qIdx >= 0) {
     const [cancelledEntry] = queue.splice(qIdx, 1);
-    finalizeQueueWaitTelemetry(cancelledEntry);    releaseVerificationCandidateForArgs(cancelledEntry.args);
+    finalizeQueueWaitTelemetry(cancelledEntry);
+    void releaseVerificationCandidateForArgsAsync(cancelledEntry.args).catch(() => {});
     appendJobLog(jobId, 'stderr', '\n[Job Cancelled] Cancelled before start.\n');
     finalizeSingleFlight(cancelledEntry);
     notifyJobWaiters(jobId);
@@ -896,8 +926,10 @@ export function cancelToolJob(jobId: string) {
 }
 
 function releaseTerminalVerificationCandidate(job: Pick<McpToolJob, 'args'> | null | undefined) {
-  if (!job) return false;
-  return releaseVerificationCandidateForArgs(job.args);
+  const candidateId = verificationCandidateIdForArgs(job?.args);
+  if (!candidateId) return false;
+  void releaseVerificationCandidateAsync(candidateId).catch(() => {});
+  return true;
 }
 
 function resolveAdmissionResourceKey(state: AppState, args: any, kind: JobKind) {
@@ -928,15 +960,63 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
     });
   }
 
-  const resourceKey = resolveAdmissionResourceKey(state, args, kind);
-  const schedulerProfile = getSchedulerProfile(state, toolName, args, kind, resourceKey);
-  const initialSingleFlightKey = singleFlightKeyFor(state, toolName, args, kind, resourceKey);
+  let jobArgs = args;
+  let admissionPreflight: ReturnType<typeof getProjectCommandAdmissionPreflight> | null = null;
+  if (toolName === 'run_project_command' && kind === 'repo-command' && !testRunners.has(toolName) && !verificationCandidateIdForArgs(args)) {
+    const cleanArgs = { ...args };
+    delete cleanArgs.__projectCommandAdmissionIdentity;
+    admissionPreflight = getProjectCommandAdmissionPreflight(state, cleanArgs);
+    jobArgs = admissionPreflight.executionIdentity
+      ? { ...cleanArgs, __projectCommandAdmissionIdentity: admissionPreflight.executionIdentity }
+      : cleanArgs;
+  }
+
+  const resourceKey = resolveAdmissionResourceKey(state, jobArgs, kind);
+  const schedulerProfile = getSchedulerProfile(state, toolName, jobArgs, kind, resourceKey);
+
+  if (admissionPreflight?.cachedResult) {
+    const jobId = `job-${Date.now()}-${randomUUID().slice(0, 8)}`;
+    const verification = verificationPolicyFor(jobArgs, schedulerProfile.accessMode, resourceKey);
+    if (verification) supersedeObsoleteVerification(verification);
+    createJob(jobId, toolName, jobArgs, resourceKey);
+    writeJobResult(jobId, admissionPreflight.cachedResult);
+    transitionJobStatus(jobId, ['queued'], { status: 'succeeded' });
+    const completedAt = Date.now();
+    const phaseTelemetry: JobPhaseTelemetryState = {
+      jobId,
+      resourceScope: resourceScopeFor(resourceKey),
+      admissionWaitMs: Math.max(0, completedAt - admissionStartedAt),
+      enqueuedAt: completedAt,
+      queueCompletedAt: completedAt,
+      executionStartedAt: completedAt,
+      executionCompletedAt: completedAt,
+      responseHandoffMs: 0,
+      workspaceLockWaitMs: 0,
+      capacityWaitMs: 0,
+      blockerReasons: {},
+      finalized: true,
+    };
+    rememberJobPhaseTelemetry(phaseTelemetry);
+    return {
+      jobId,
+      status: 'succeeded' as const,
+      queuePosition: 0,
+      sharedWith: undefined as string | undefined,
+      handoffImmediately: false,
+      cacheHit: true,
+      accessMode: schedulerProfile.accessMode,
+      costClass: schedulerProfile.costClass,
+      nextAction: `Call get_tool_job_result for ${jobId} to read the cached result.`,
+    };
+  }
+
+  const initialSingleFlightKey = singleFlightKeyFor(state, toolName, jobArgs, kind, resourceKey);
   if (initialSingleFlightKey) {
     const leaderJobId = singleFlightLeaders.get(initialSingleFlightKey);
     const leaderStatus = leaderJobId ? getJob(leaderJobId) : null;
     if (leaderJobId && leaderStatus && !isTerminalStatus(leaderStatus.status)) {
       const followerJobId = `job-${Date.now()}-${randomUUID().slice(0, 8)}`;
-      createJob(followerJobId, toolName, args, resourceKey);
+      createJob(followerJobId, toolName, jobArgs, resourceKey);
       updateJobStatus(followerJobId, { status: 'running' });
       appendJobLog(followerJobId, 'stdout', `[Single Flight] Following ${leaderJobId}.\n`);
       const followers = singleFlightFollowers.get(leaderJobId) || new Set<string>();
@@ -956,15 +1036,6 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
     }
   }
 
-  let jobArgs = args;
-  let ownedVerificationCandidateId = '';
-  if (toolName === 'run_project_command' && kind === 'repo-command' && !verificationCandidateIdForArgs(args)) {
-    const verificationCandidate = prepareProjectCommandVerificationCandidate(state, args);
-    if (verificationCandidate) {
-      ownedVerificationCandidateId = verificationCandidate.candidateId;
-      jobArgs = { ...args, __verificationCandidate: verificationCandidate };
-    }
-  }
   const singleFlightKey = singleFlightKeyFor(state, toolName, jobArgs, kind, resourceKey);
 
   const jobId = `job-${Date.now()}-${randomUUID().slice(0, 8)}`;
@@ -978,7 +1049,6 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
     }
     job = createJob(jobId, toolName, jobArgs, resourceKey);
   } catch (error) {
-    if (ownedVerificationCandidateId) releaseVerificationCandidate(ownedVerificationCandidateId);
     throw error;
   }
   const enqueuedAt = Date.now();
@@ -1166,11 +1236,37 @@ async function transitionJobAccess(
   return createVerificationExecutionLease(entry, leaseGeneration, permit);
 }
 
+async function prepareVerificationCandidateForActiveJob(entry: QueueEntry, leaseGeneration: number, leaseGuard: JobLeaseGuard) {
+  if (entry.toolName !== 'run_project_command' || entry.kind !== 'repo-command' || testRunners.has(entry.toolName) || verificationCandidateIdForArgs(entry.args)) return;
+  const expectedExecutionKey = projectCommandAdmissionIdentityForArgs(entry.args)?.key;
+  const controller = new AbortController();
+  setJobActiveContext(entry.jobId, () => controller.abort(), leaseGeneration);
+  entry.phaseTelemetry.candidatePreparationStartedAt = Date.now();
+  rememberJobPhaseTelemetry(entry.phaseTelemetry);
+  try {
+    const candidate = await prepareProjectCommandVerificationCandidateAsync(entry.state, entry.args, {
+      expectedExecutionKey,
+      signal: controller.signal,
+    });
+    if (!candidate) return;
+    const nextArgs = { ...entry.args, __verificationCandidate: candidate };
+    const persisted = transitionJobStatus(entry.jobId, ['running'], { args: nextArgs }, leaseGuard);
+    if (!persisted) {
+      await releaseVerificationCandidateAsync(candidate.candidateId).catch(() => {});
+      throw transitionAbortError(entry.jobId);
+    }
+    entry.args = nextArgs;
+  } finally {
+    entry.phaseTelemetry.candidatePreparationCompletedAt = Date.now();
+    rememberJobPhaseTelemetry(entry.phaseTelemetry);
+  }
+}
+
 async function startJob(entry: QueueEntry) {
   const claimed = claimJob(entry.jobId, JOB_WORKER_ID, JOB_LEASE_MS);
   if (!claimed) {
     const persisted = getJob(entry.jobId);
-    if (persisted && isTerminalStatus(persisted.status)) releaseVerificationCandidateForArgs(entry.args);
+    if (persisted && isTerminalStatus(persisted.status)) void releaseVerificationCandidateForArgsAsync(entry.args).catch(() => {});
     finalizeSingleFlight(entry);
     setImmediate(processQueue);
     return;
@@ -1179,7 +1275,6 @@ async function startJob(entry: QueueEntry) {
   const leaseGeneration = claimed.leaseGeneration || 0;
   const leaseGuard: JobLeaseGuard = { workerId: JOB_WORKER_ID, leaseGeneration };
   incrementScheduledResource(entry);
-  if (!entry.phaseTelemetry.executionStartedAt) entry.phaseTelemetry.executionStartedAt = Date.now();
   activeJobs.set(entry.jobId, { entry, leaseGeneration });
   const heartbeat = setInterval(() => {
     const active = activeJobs.get(entry.jobId);
@@ -1198,6 +1293,9 @@ async function startJob(entry: QueueEntry) {
   };
 
   try {
+    await prepareVerificationCandidateForActiveJob(entry, leaseGeneration, leaseGuard);
+    if (!entry.phaseTelemetry.executionStartedAt) entry.phaseTelemetry.executionStartedAt = Date.now();
+    rememberJobPhaseTelemetry(entry.phaseTelemetry);
     let result: any;
     const testRunner = testRunners.get(entry.toolName);
 
@@ -1284,7 +1382,7 @@ async function startJob(entry: QueueEntry) {
     const leaseWasAlreadyReleased = releasedSchedulerLeases.has(leaseKey);
     if (!leaseWasAlreadyReleased) {
       if (!entry.phaseTelemetry.executionCompletedAt) entry.phaseTelemetry.executionCompletedAt = Date.now();
-      const waitSnapshot = finalizedQueueWaitRecord(entry, entry.phaseTelemetry.executionStartedAt ?? Date.now());
+      const waitSnapshot = finalizedQueueWaitRecord(entry, entry.phaseTelemetry.queueCompletedAt ?? entry.phaseTelemetry.candidatePreparationStartedAt ?? entry.phaseTelemetry.executionStartedAt ?? Date.now());
       entry.phaseTelemetry.workspaceLockWaitMs = waitSnapshot.workspaceLockWaitMs;
       entry.phaseTelemetry.capacityWaitMs = waitSnapshot.capacityWaitMs;
       entry.phaseTelemetry.blockerReasons = { ...waitSnapshot.blockerReasons };
@@ -1296,11 +1394,11 @@ async function startJob(entry: QueueEntry) {
     const active = activeJobs.get(entry.jobId);
     if (active?.leaseGeneration === leaseGeneration) {
       activeJobs.delete(entry.jobId);
-      releaseVerificationCandidateForArgs(entry.args);
       finalizeSingleFlight(entry);
     }
     releasedSchedulerLeases.delete(leaseKey);
     setImmediate(processQueue);
+    await releaseVerificationCandidateForArgsAsync(entry.args).catch(() => {});
   }
 }
 

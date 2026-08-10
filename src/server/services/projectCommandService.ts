@@ -10,8 +10,10 @@ import { getProjectCommandConfigSnapshot, loadProjectCommandPreset } from './pro
 import { getRepoRevisionForRoot } from './repoRevisionService';
 import {
   createVerificationCandidate,
+  createVerificationCandidateAsync,
   isVerificationCandidateCurrent,
   releaseVerificationCandidate,
+  releaseVerificationCandidateAsync,
   resolveVerificationCandidate,
   type VerificationCandidateIdentity,
 } from './verificationCandidateService';
@@ -486,6 +488,11 @@ export function getProjectCommandExecutionIdentity(state: AppState, args: Record
   return buildProjectCommandExecutionIdentity(root, resolvedCommand, cwdPath, timeoutMs, maxOutputBytes, responseMode);
 }
 
+export type ProjectCommandAdmissionPreflight = {
+  executionIdentity: ProjectCommandExecutionIdentity | null;
+  cachedResult: RunProjectCommandResult | null;
+};
+
 export type ProjectCommandVerificationExecutionIdentity = Omit<ProjectCommandExecutionIdentity, 'lineageToken'> & {
   lineageFingerprint: string;
 };
@@ -569,6 +576,35 @@ export function bindProjectCommandVerificationCandidate(
       ...(executionIdentity.commandConfigFingerprint ? { commandConfigFingerprint: executionIdentity.commandConfigFingerprint } : {}),
     },
   };
+}
+
+export async function prepareProjectCommandVerificationCandidateAsync(
+  state: AppState,
+  args: Record<string, any>,
+  options: { expectedExecutionKey?: string; signal?: AbortSignal } = {},
+): Promise<ProjectCommandVerificationCandidate | null> {
+  const sourceRoot = resolveProjectRoot(state, args);
+  const descriptor = describeProjectCommand(state, args);
+  if (descriptor.access !== 'verify') return null;
+
+  let candidate: VerificationCandidateIdentity;
+  try {
+    candidate = await createVerificationCandidateAsync(sourceRoot, { signal: options.signal });
+  } catch (error: any) {
+    const code = error?.payload?.code || error?.code;
+    if (code === 'NOT_GIT_REPO') return null;
+    throw error;
+  }
+  try {
+    const bound = bindProjectCommandVerificationCandidate(state, args, candidate);
+    if (options.expectedExecutionKey && bound.executionIdentity.key !== options.expectedExecutionKey) {
+      throw createApiError(409, 'VERIFICATION_ADMISSION_STALE', 'Repository verification identity changed after job admission; refusing to verify a different revision.');
+    }
+    return bound;
+  } catch (error) {
+    await releaseVerificationCandidateAsync(candidate.candidateId).catch(() => {});
+    throw error;
+  }
 }
 
 export function prepareProjectCommandVerificationCandidate(
@@ -660,6 +696,36 @@ function cachedCommandResult(
       originalDurationMs: cached.value.durationMs,
     },
   } satisfies RunProjectCommandResult;
+}
+
+export function getProjectCommandAdmissionPreflight(
+  state: AppState,
+  args: Record<string, any>,
+): ProjectCommandAdmissionPreflight {
+  const totalStartedAt = Date.now();
+  const root = resolveProjectRoot(state, args);
+  const command = resolveCommandLabel(args.command ?? args.preset);
+  const resolvedCommand = resolveAllowedCommand(root, command);
+  const cwdPath = resolveSafeCommandCwd(root, args.cwd ?? resolvedCommand.cwd);
+  const timeoutMs = Number.isFinite(Number(args.timeoutMs))
+    ? Math.max(1, Math.min(MAX_TIMEOUT_MS, Number(args.timeoutMs)))
+    : resolvedCommand.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const { responseMode, maxOutputBytes } = resolveOutputBudget(args, resolvedCommand);
+  const executionIdentity = buildProjectCommandExecutionIdentity(root, resolvedCommand, cwdPath, timeoutMs, maxOutputBytes, responseMode);
+  const resolutionMs = Date.now() - totalStartedAt;
+  const cacheLookupStartedAt = Date.now();
+  const cacheContext = commandCacheContext(root, resolvedCommand, cwdPath, timeoutMs, maxOutputBytes, responseMode, args, executionIdentity);
+  const cached = args.forceFresh === true ? null : cachedCommandResult(cacheContext, command, resolutionMs, responseMode);
+  const cacheLookupMs = Date.now() - cacheLookupStartedAt;
+  return {
+    executionIdentity,
+    cachedResult: cached ? withPerformancePhases(cached, {
+      resolutionMs,
+      cacheLookupMs,
+      resultNormalizationMs: 0,
+      totalMs: Date.now() - totalStartedAt,
+    }) : null,
+  };
 }
 
 function rememberSuccessfulCommandResult(

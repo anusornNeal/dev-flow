@@ -1,12 +1,28 @@
-import { executeAllMigrations } from '../../src/db/migrations/index.js';
-executeAllMigrations();
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import assert from 'node:assert';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { randomUUID } from 'crypto';
-import {
+
+const TEST_STATE_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-mcp-job-queue-'));
+const TEST_DB_PATH = path.join(TEST_STATE_ROOT, 'devflow.sqlite');
+const TEST_JOBS_DIR = path.join(TEST_STATE_ROOT, 'jobs');
+const TEST_RUNTIME_DIR = path.join(TEST_STATE_ROOT, 'runtime');
+const previousTestStateEnv = {
+  dbPath: process.env.DEVFLOW_DB_PATH,
+  jobsDir: process.env.DEVFLOW_JOBS_DIR,
+  runtimeDir: process.env.DEVFLOW_RUNTIME_DIR,
+};
+
+process.env.DEVFLOW_DB_PATH = TEST_DB_PATH;
+process.env.DEVFLOW_JOBS_DIR = TEST_JOBS_DIR;
+process.env.DEVFLOW_RUNTIME_DIR = TEST_RUNTIME_DIR;
+
+const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
+const { default: db } = await import('../../src/db/index.js');
+executeAllMigrations();
+const {
   __setToolJobTestRunner,
   enqueueToolJob,
   getToolJobStatus,
@@ -15,16 +31,46 @@ import {
   getQueueMetrics,
   getToolJobWaitGuidance,
   __resetQueueWaitTelemetryForTests,
-} from '../../src/server/services/mcpToolJobService';
-import { heartbeatJob, readJobLog, readJobResult } from '../../src/server/repositories/mcpToolJobRepository';
-import { createProject } from '../../src/server/repositories/projectRepository.js';
-import { registerMcpToolJobRoutes } from '../../src/server/routes/mcpToolJobs.js';
-import { createApiError } from '../../src/server/services/api.js';
+} = await import('../../src/server/services/mcpToolJobService');
+const { heartbeatJob, readJobLog, readJobResult } = await import('../../src/server/repositories/mcpToolJobRepository');
+const { createProject } = await import('../../src/server/repositories/projectRepository.js');
+const { registerMcpToolJobRoutes } = await import('../../src/server/routes/mcpToolJobs.js');
+const { createApiError } = await import('../../src/server/services/api.js');
+
+function restoreTestEnv(name: 'DEVFLOW_DB_PATH' | 'DEVFLOW_JOBS_DIR' | 'DEVFLOW_RUNTIME_DIR', value: string | undefined) {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+}
+
+after(() => {
+  try { db.close(); } catch { /* best-effort isolated test cleanup */ }
+  fs.rmSync(TEST_STATE_ROOT, { recursive: true, force: true });
+  restoreTestEnv('DEVFLOW_DB_PATH', previousTestStateEnv.dbPath);
+  restoreTestEnv('DEVFLOW_JOBS_DIR', previousTestStateEnv.jobsDir);
+  restoreTestEnv('DEVFLOW_RUNTIME_DIR', previousTestStateEnv.runtimeDir);
+});
 
 try { createProject({ id: 'proj_1', name: 'dev-flow', localPath: process.cwd() }); } catch(e) {}
 const MOCK_STATE: any = {
   projects: [{ id: 'proj_1', name: 'dev-flow', localPath: process.cwd() }],
 };
+
+test('mcpToolJobQueue - isolates database and runtime state before repository mutations', () => {
+  assert.strictEqual(process.env.DEVFLOW_DB_PATH, TEST_DB_PATH);
+  assert.strictEqual(process.env.DEVFLOW_JOBS_DIR, TEST_JOBS_DIR);
+  assert.strictEqual(process.env.DEVFLOW_RUNTIME_DIR, TEST_RUNTIME_DIR);
+  assert.ok(fs.existsSync(TEST_DB_PATH));
+  assert.ok(path.resolve(TEST_DB_PATH).startsWith(path.resolve(TEST_STATE_ROOT)));
+  assert.ok(path.resolve(TEST_JOBS_DIR).startsWith(path.resolve(TEST_STATE_ROOT)));
+  assert.ok(path.resolve(TEST_RUNTIME_DIR).startsWith(path.resolve(TEST_STATE_ROOT)));
+  if (previousTestStateEnv.dbPath) assert.notStrictEqual(path.resolve(TEST_DB_PATH), path.resolve(previousTestStateEnv.dbPath));
+  if (previousTestStateEnv.jobsDir) assert.notStrictEqual(path.resolve(TEST_JOBS_DIR), path.resolve(previousTestStateEnv.jobsDir));
+  if (previousTestStateEnv.runtimeDir) assert.notStrictEqual(path.resolve(TEST_RUNTIME_DIR), path.resolve(previousTestStateEnv.runtimeDir));
+
+  const fixture = db.prepare('SELECT id, localPath FROM projects WHERE id = ?').get('proj_1') as { id: string; localPath: string } | undefined;
+  assert.strictEqual(fixture?.id, 'proj_1');
+  assert.strictEqual(fixture?.localPath, process.cwd());
+});
 
 type Deferred<T = void> = {
   promise: Promise<T>;

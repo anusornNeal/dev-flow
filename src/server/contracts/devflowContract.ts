@@ -18,7 +18,7 @@ import { workspaceToolDefinitions } from './devflowWorkspaceTools';
 import { buildMcpTransportInputSchema } from './mcpSchemaTransport';
 import { resolveRuntimeMcpToolProfileValue } from './mcpToolProfileConfig';
 export type { DevFlowToolDefinition, DevFlowToolHttpRequest } from './devflowContractCore';
-export const DEVFLOW_CONTRACT_VERSION = '2026-08-09.5';
+export const DEVFLOW_CONTRACT_VERSION = '2026-08-10.1';
 
 export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   {
@@ -62,6 +62,30 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
       method: 'GET',
       path: withQuery('/api/tool-monitor/summary', { windowMs: args.windowMs }),
     }),
+  },
+  {
+    name: 'get_recovery_handoff',
+    description: 'Read one compact DevFlow-owned recovery packet after MCP client registry loss. Reuses durable job/workspace state and never replays mutations.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        projectId: { type: 'string', description: 'Project internal id.' },
+        projectName: { type: 'string', description: 'Project name when it is unique and safe to resolve.' },
+        repo: { type: 'string', description: 'Repository URL or shorthand.' },
+        repoUrl: { type: 'string', description: 'Repository URL.' },
+        localPath: { type: 'string', description: 'Absolute local project path.' },
+        taskId: { type: 'string', description: 'Task internal id or displayId such as DVF-0478.' },
+        workspaceId: { type: 'string', description: 'Opaque managed workspace id to recover without creating a replacement workspace.' },
+        jobId: { type: 'string', description: 'Accepted durable MCP tool job id to query/reuse.' },
+        previousContractVersion: { type: 'string', description: 'Contract version previously observed by the client.' },
+        previousRuntimeInstanceId: { type: 'string', description: 'Runtime instance id previously observed by the client.' },
+        previousToolSurfaceIdentity: { type: 'string', description: 'MCP tool-surface fingerprint previously observed by the client.' },
+        clientToolsVisible: { type: 'boolean', description: 'Whether the prior client still reported DevFlow tools as visible.' },
+      },
+    },
+    outputSchema: { type: 'object' },
+    lightweight: true,
+    buildHttpRequest: (args) => ({ method: 'GET', path: withQuery('/api/recovery/handoff', args) }),
   },
   {
     name: 'devflow_health_check',
@@ -1550,7 +1574,7 @@ const CODING_PROFILE_TOOLS = new Set([
   'run_project_command',
   'get_git_status', 'get_git_diff', 'get_git_log', 'get_git_show', 'get_git_branch', 'get_git_sync_status',
   'ensure_git_branch', 'commit_git_changes', 'push_git_branch', 'create_pull_request',
-  'prepare_session_workspace', 'integrate_workspace', 'get_tool_job_result',
+  'prepare_session_workspace', 'integrate_workspace', 'get_tool_job_result', 'get_recovery_handoff',
 ]);
 
 const MCP_CONSOLIDATION_REPLACEMENTS: Record<string, string> = {
@@ -1610,7 +1634,7 @@ export function isToolAllowedInProfile(name: string, profile: DevFlowToolProfile
   if (profile === 'full') return true;
   if (profile === 'coding') return CODING_PROFILE_TOOLS.has(name);
   if (profile === 'atlas') return name.includes('atlas') || ['get_repo_context_bundle', 'read_local_file', 'read_file_snippets_batch', 'search_local_files'].includes(name);
-  if (profile === 'diagnostics') return /health|diagnostic|job|tool_call|restart/.test(name);
+  if (profile === 'diagnostics') return /health|diagnostic|job|tool_call|restart|recovery/.test(name);
   if (profile === 'review') return /task|review|bug|git|diff|test_report|health|execution/.test(name);
   return /task|jira|figma|repo_context|repo_inspection|read_local|search_local|authoring|skill/.test(name);
 }

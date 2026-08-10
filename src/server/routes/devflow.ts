@@ -33,6 +33,7 @@ import { cleanupManagedWorkspaceBranches, cleanupSessionWorkspace, createOrReuse
 import { finalizeSupersededWorkspace, inspectWorkspaceRecovery } from '../services/workspaceRecoveryService';
 import { abortWorkspaceIntegration, integrateWorkspaceCommits, retryWorkspaceIntegration } from '../services/workspaceIntegrationService';
 import { getRuntimeIdentity } from '../services/runtimeIdentityService';
+import { getWorkflowRecoveryHandoff } from '../services/workflowRecoveryHandoffService';
 import { buildTaskCommitPlan, commitTaskOwnedChanges } from '../services/taskCommitPlanService.js';
 import { finalizeTaskWorkspace } from '../services/taskWorkspaceFinalizationService.js';
 
@@ -105,6 +106,14 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
           }
         : undefined;
       return res.json(getDevFlowDiagnostics({ windowMs, clientState }));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.get('/api/recovery/handoff', (req, res) => {
+    try {
+      return res.json(getWorkflowRecoveryHandoff(deps.state, req.query as Record<string, any>));
     } catch (error) {
       return sendApiError(res, error);
     }

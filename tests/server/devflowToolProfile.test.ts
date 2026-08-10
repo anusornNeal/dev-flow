@@ -117,7 +117,7 @@ test('coding MCP profile is lean, alias-free, and preserves representative workf
     'get_git_status', 'get_git_diff', 'commit_git_changes', 'push_git_branch', 'get_git_sync_status',
     'sync_task_with_git', 'submit_task_for_review', 'create_pull_request',
     'get_figma_authoring_context', 'attach_figma_context_to_task', 'get_jira_authoring_bundle', 'get_project_atlas',
-    'prepare_session_workspace', 'integrate_workspace', 'get_tool_job_result', 'devflow_health_check',
+    'prepare_session_workspace', 'integrate_workspace', 'get_tool_job_result', 'get_recovery_handoff', 'devflow_health_check',
   ]) {
     assert.equal(names.has(required), true, `coding profile should include ${required}`);
   }
@@ -129,6 +129,11 @@ test('coding MCP profile is lean, alias-free, and preserves representative workf
   ]) {
     assert.equal(names.has(hidden), false, `coding profile should hide ${hidden}`);
   }
+});
+
+test('diagnostics MCP profile keeps the recovery handoff surface available', () => {
+  const names = new Set(getMcpToolList('diagnostics').map((tool: any) => tool.name));
+  assert.equal(names.has('get_recovery_handoff'), true);
 });
 
 test('full MCP surface removes globally consolidated tools while keeping high-level intents', () => {

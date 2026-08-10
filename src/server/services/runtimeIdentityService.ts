@@ -32,6 +32,7 @@ export interface RuntimeDiagnosis {
   code: RuntimeDiagnosisCode;
   detail: string;
   nextAction: string;
+  recoverySurface?: 'get_recovery_handoff';
 }
 
 const runtimeIdentity: Omit<RuntimeIdentity, 'transport'> = {
@@ -93,7 +94,8 @@ export function classifyRuntimeIdentity(
     return {
       code: 'client-registry-desync',
       detail: 'The DevFlow runtime and contract are unchanged and the server diagnostic surface is healthy, but the client reports missing tools. DevFlow cannot repair the ChatGPT tool registry automatically.',
-      nextAction: 'Refresh or reconnect the ChatGPT plugin; if tools remain stale, open a fresh chat so the client reloads the tool registry.',
+      nextAction: 'Refresh or reconnect the ChatGPT plugin; if tools remain stale, open a fresh chat so the client reloads the tool registry. After tools are available again, call get_recovery_handoff to resume from DevFlow-owned durable state.',
+      recoverySurface: 'get_recovery_handoff',
     };
   }
 

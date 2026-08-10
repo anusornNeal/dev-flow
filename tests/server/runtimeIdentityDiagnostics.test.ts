@@ -142,6 +142,7 @@ test('runtime diagnostics classify restart, deployment change, and likely client
     },
   } as any) as any;
   assert.equal(desynced.runtimeDiagnosis.code, 'client-registry-desync');
+  assert.equal(desynced.runtimeDiagnosis.recoverySurface, 'get_recovery_handoff');
   assert.match(desynced.runtimeDiagnosis.nextAction, /fresh chat|refresh|reconnect/i);
   assert.match(desynced.runtimeDiagnosis.detail, /cannot repair/i);
 });
@@ -158,12 +159,14 @@ test('capabilities and diagnostics routes expose runtime identity and accept cli
     assert.deepEqual(capabilities.transport, ['streamable-http', 'legacy-sse']);
     assert.equal(capabilities.modules.mcpStreamableHttp, true);
     assert.equal(capabilities.modules.mcpSse, true);
+    assert.equal(capabilities.tools.some((tool: any) => tool.name === 'get_recovery_handoff'), true);
 
     const diagnosticsResponse = await fetch(`${baseUrl}/api/diagnostics?previousContractVersion=${encodeURIComponent(capabilities.contractVersion)}&previousRuntimeInstanceId=${encodeURIComponent(capabilities.runtimeInstanceId)}&clientToolsVisible=false`);
     const diagnostics = await diagnosticsResponse.json() as any;
     assert.equal(diagnosticsResponse.status, 200);
     assert.equal(diagnostics.runtime.runtimeInstanceId, capabilities.runtimeInstanceId);
     assert.equal(diagnostics.runtimeDiagnosis.code, 'client-registry-desync');
+    assert.equal(diagnostics.runtimeDiagnosis.recoverySurface, 'get_recovery_handoff');
 
     const driftResponse = await fetch(`${baseUrl}/api/diagnostics?previousContractVersion=${encodeURIComponent(capabilities.contractVersion)}&previousRuntimeInstanceId=previous-runtime&previousToolSurfaceIdentity=${'0'.repeat(64)}`);
     const drift = await driftResponse.json() as any;

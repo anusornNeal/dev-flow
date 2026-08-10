@@ -368,6 +368,7 @@ function clearActiveAgentIfSettled(task: any) {
 }
 
 export function syncTaskAgentStateForStatus(task: any, previousStatus?: string) {
+  if (task.status !== 'in-progress' && task.claim) task.claim = undefined;
   if (task.status === 'backlog') {
     if (previousStatus !== 'backlog') {
       const resetReason = 'Manual reset: moved task to backlog and cancelled the active agent run.';

@@ -12,6 +12,7 @@ const examples = read('04-examples.md');
 const evidenceSkill = read('05-authoring-evidence.md');
 const decompositionSkill = read('06-authoring-decomposition.md');
 const executionSkill = read('07-authoring-execution.md');
+const boardLoopSkill = read('08-board-loop-execution.md');
 const executionRules = read('prompt.execution-rules.md');
 
 test('common authoring static guidance is lean and schema shapes stay live', () => {
@@ -64,6 +65,18 @@ test('repo execution guidance is load-on-demand and keeps guarded edit rules', (
   assert.match(executionSkill, /FULL/);
   assert.match(skillRouter, /07-authoring-execution/);
   assert.match(executionRules, /apply_and_verify/);
+});
+
+test('board-loop skill requires atomic claims, scope-aware parallel work, and full-loop repetition', () => {
+  assert.match(skillRouter, /08-board-loop-execution/);
+  assert.match(boardLoopSkill, /claim_task/);
+  assert.match(boardLoopSkill, /TASK_ALREADY_CLAIMED/);
+  assert.match(boardLoopSkill, /TASK_SCOPE_CONFLICT/);
+  assert.match(boardLoopSkill, /managed workspace/i);
+  assert.match(boardLoopSkill, /integrate_workspace/);
+  assert.match(boardLoopSkill, /repeat|loop/i);
+  assert.match(boardLoopSkill, /Do not push/i);
+  assert.match(boardLoopSkill, /restart/i);
 });
 
 test('DevFlow edit policy defaults LLM-authored existing-file changes to Steno', () => {

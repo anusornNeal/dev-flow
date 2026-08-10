@@ -112,6 +112,41 @@ export const taskToolDefinitions: DevFlowToolDefinition[] = [
     buildHttpRequest: ({ taskId, responseMode, ...body }) => ({ method: 'PUT', path: withQuery(`/api/tasks/${encodePathSegment(String(taskId))}`, { responseMode: responseMode || 'summary' }), body, headers: body.isAgentRequest ? { 'x-agent-request': 'true' } : undefined }),
   },
   {
+    name: 'claim_task',
+    description: 'Atomically claim one eligible task for this caller session. Successful claims move the task to in-progress, bind a managed workspace, and reject duplicate or overlapping active work.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...taskIdentifierProperty,
+        sessionId: { type: 'string', description: 'Opaque caller chat/session id. The raw value is never persisted on the task.' },
+        ownerKind: { type: 'string', enum: ['chat', 'codex', 'claude', 'antigravity', 'agent'], description: 'Optional short owner kind for UI display.' },
+        ownerLabel: { type: 'string', description: 'Optional compact owner label such as Chat A3 or Codex C7.' },
+        allowScopeConflict: { type: 'boolean', description: 'Explicitly allow a target-file overlap with another active claim. Defaults to false.' },
+        ...mutationResponseModeProperty,
+      },
+      required: ['taskId', 'sessionId'],
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: ({ taskId, responseMode, ...body }) => ({ method: 'POST', path: withQuery(`/api/tasks/${encodePathSegment(String(taskId))}/claim`, { responseMode: responseMode || 'summary' }), body }),
+  },
+  {
+    name: 'release_task_claim',
+    description: 'Release a task claim owned by this caller session and return the task to backlog or todo. Use emergency only for explicit recovery.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...taskIdentifierProperty,
+        sessionId: { type: 'string', description: 'Opaque caller chat/session id that owns the claim.' },
+        nextStatus: { type: 'string', enum: ['backlog', 'todo'], description: 'Lane after release. Defaults to backlog.' },
+        emergency: { type: 'boolean', description: 'Explicit recovery override for a claim owned by another session.' },
+        ...mutationResponseModeProperty,
+      },
+      required: ['taskId', 'sessionId'],
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: ({ taskId, responseMode, ...body }) => ({ method: 'POST', path: withQuery(`/api/tasks/${encodePathSegment(String(taskId))}/claim/release`, { responseMode: responseMode || 'summary' }), body }),
+  },
+  {
     name: 'batch_upsert_tasks', description: 'Create or update multiple independent tasks in one round trip. For an atomic parent/children authoring set, prefer create_task with parent and children.',
     inputSchema: { type: 'object', properties: { tasks: { type: 'array', items: { type: 'object' } } }, required: ['tasks'] }, outputSchema: { type: 'object' },
     buildHttpRequest: (args) => ({ method: 'POST', path: '/api/tasks/batch', body: args.tasks ?? args }),

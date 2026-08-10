@@ -125,6 +125,15 @@ export interface BugThread {
   updatedAt: string;
 }
 
+export interface TaskClaim {
+  sessionIdHash: string;
+  workspaceId: string;
+  ownerKind: 'chat' | 'codex' | 'claude' | 'antigravity' | 'agent';
+  ownerLabel: string;
+  claimedAt: string;
+  expiresAt: string;
+}
+
 export interface Task {
   id: string;
   displayId?: string; // e.g. buddy2-0001
@@ -139,6 +148,7 @@ export interface Task {
   createdAt: string;
   updatedAt: string;
   archivedAt?: string | null;
+  claim?: TaskClaim;
   logs: LogEntry[];
   targetFiles?: string[];
   checklist?: ChecklistItem[];

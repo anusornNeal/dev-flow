@@ -60,7 +60,7 @@ export function registerTaskWorkflowRoutes(app: express.Express, deps: ApiRouteD
     }
     saveTask(updatedTask);
     syncTaskAgentStateForStatus(updatedTask, previousStatus);
-    saveTask(getTasks()[taskIndex]);
+    saveTask(updatedTask);
     const standardPayload = {
       success: true,
       message: `Successfully relocated task schema from ${previousStatus} to ${targetStatus}`,

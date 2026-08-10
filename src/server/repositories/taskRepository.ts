@@ -37,6 +37,7 @@ const TASK_COLUMNS = [
   'gitEvidence',
   'verificationEvidence',
   'archivedAt',
+  'claim',
 ] as const;
 
 const TASK_UPSERT_SQL = `
@@ -72,7 +73,8 @@ const TASK_UPSERT_SQL = `
     bugs = excluded.bugs,
     gitEvidence = excluded.gitEvidence,
     verificationEvidence = excluded.verificationEvidence,
-    archivedAt = COALESCE(excluded.archivedAt, tasks.archivedAt)
+    archivedAt = COALESCE(excluded.archivedAt, tasks.archivedAt),
+    claim = excluded.claim
 `;
 
 export class StaleTaskUpdateError extends Error {
@@ -294,6 +296,7 @@ function parseTaskRow(item: any, runsByTaskId: Map<string, AgentRun[]>) {
     bugs: parseJsonArray(item.bugs),
     gitEvidence: parseJsonObject(item.gitEvidence),
     verificationEvidence: parseJsonArray(item.verificationEvidence),
+    claim: parseJsonObject(item.claim),
     images: (() => {
       const imgs = parseJsonArray(item.images);
       const legacy = parseJsonArray(item.designImages);
@@ -394,7 +397,7 @@ export function getTaskByIdentifier(identifier: string, mode: TaskSingleReadMode
   if (mode === 'summary') {
     const row = getTaskRowByIdentifier(
       identifier,
-      'id, displayId, title, status, priority, projectId, parentId, agent, model, effort, updatedAt, archivedAt, bugs',
+      'id, displayId, title, status, priority, projectId, parentId, agent, model, effort, updatedAt, archivedAt, bugs, claim',
     );
     if (!row) return undefined;
     const latestRun = db.prepare(`
@@ -407,6 +410,7 @@ export function getTaskByIdentifier(identifier: string, mode: TaskSingleReadMode
     return {
       ...row,
       bugs: parseJsonArray(row.bugs),
+      claim: parseJsonObject(row.claim),
       latestAgentRun: latestRun || undefined,
     };
   }
@@ -575,6 +579,7 @@ function serializeTaskForRow(item: any) {
     item.gitEvidence ? JSON.stringify(item.gitEvidence) : null,
     Array.isArray(item.verificationEvidence) ? JSON.stringify(item.verificationEvidence) : null,
     item.archivedAt ?? null,
+    item.claim ? JSON.stringify(item.claim) : null,
   ];
 }
 

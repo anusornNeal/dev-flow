@@ -395,6 +395,12 @@ test('describeProjectCommand gives equivalent package scripts one semantic key a
   assert.equal(typecheck.semanticKey, lint.semanticKey);
   assert.equal(typecheck.scope, 'broad');
   assert.equal(testCommand.scope, 'full');
+  assert.equal(typecheck.verificationClass, 'fast');
+  assert.deepEqual(typecheck.sharedResources, ['typescript']);
+  assert.equal(lint.verificationClass, 'fast');
+  assert.deepEqual(lint.sharedResources, ['typescript']);
+  assert.equal(testCommand.verificationClass, 'heavy');
+  assert.deepEqual(testCommand.sharedResources, ['repo']);
 });
 
 test('describeProjectCommand classifies verification access conservatively', () => {

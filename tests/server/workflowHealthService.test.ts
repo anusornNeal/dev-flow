@@ -23,6 +23,8 @@ const {
   clearRecentJobCache,
   getRecentJobCacheStats,
   claimJob,
+  requeueJobForRecovery,
+  requestJobCancellation,
 } = await import('../../src/server/repositories/mcpToolJobRepository.js');
 
 function git(root: string, args: string[]) {
@@ -269,6 +271,34 @@ test('workflow health warm p95 remains below the 750ms SLO with a populated job 
   const p95 = samples[Math.ceil(samples.length * 0.95) - 1];
   console.log(`[health-benchmark] warm samples=${samples.length} p50=${p50.toFixed(1)}ms p95=${p95.toFixed(1)}ms scanCount=${getRecentJobCacheStats().diskScanCount}`);
   assert.equal(p95 <= 750, true, `expected warm p95 <= 750ms, got ${p95.toFixed(1)}ms`);
+});
+
+test('workflow health distinguishes durable lease, recovery, cancellation, and fencing states', () => {
+  const repo = createRepo('durable-lease-health');
+  const now = Date.now();
+  const suffix = path.basename(repo);
+
+  const healthy = createJob(`job-health-healthy-${suffix}`, 'run_project_command', { command: 'typecheck' }, `repo:${repo}`);
+  claimJob(healthy.jobId, 'health-worker', 60_000, now);
+
+  const stale = createJob(`job-health-stale-${suffix}`, 'run_project_command', { command: 'typecheck' }, `repo:${repo}`);
+  claimJob(stale.jobId, 'stale-worker', 1_000, now - 5_000);
+
+  const recovered = createJob(`job-health-recovered-${suffix}`, 'run_project_command', { command: 'typecheck' }, `repo:${repo}`);
+  claimJob(recovered.jobId, 'recovered-worker', 1_000, now - 5_000);
+  requeueJobForRecovery(recovered.jobId, now);
+
+  const cancelled = createJob(`job-health-cancelled-${suffix}`, 'read_local_file', {}, `repo:${repo}`);
+  requestJobCancellation(cancelled.jobId, 'synthetic cancel', now);
+
+  const result = getWorkflowHealth(stateFor(repo), { projectId: 'project-health' });
+  const durable = result.diagnostics.durableJobs as any;
+  assert.equal(durable.healthyRunning >= 1, true);
+  assert.equal(durable.staleRunning >= 1, true);
+  assert.equal(durable.recovered >= 1, true);
+  assert.equal(durable.cancelled >= 1, true);
+  assert.equal(typeof durable.detached, 'number');
+  assert.equal(typeof durable.fencedLateWrites, 'number');
 });
 
 test('workflow health reports historical regressions separately from insufficient samples', () => {

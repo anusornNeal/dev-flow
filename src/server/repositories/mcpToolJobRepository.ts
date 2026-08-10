@@ -25,6 +25,9 @@ export interface McpToolJob {
   leaseOwner?: string;
   leaseExpiresAt?: string;
   heartbeatAt?: string;
+  leaseGeneration?: number;
+  detachedAt?: string;
+  fencedWriteCount?: number;
   cancelRequestedAt?: string;
   cancelReason?: string;
   recoveryClassification?: JobRecoveryClassification;
@@ -39,7 +42,13 @@ export interface McpToolJob {
 
 export interface JobTransitionOptions {
   workerId?: string;
+  leaseGeneration?: number;
   nowMs?: number;
+}
+
+export interface JobLeaseGuard {
+  workerId: string;
+  leaseGeneration: number;
 }
 
 function resolveJobsDir() {
@@ -170,6 +179,9 @@ function rowToJob(row: any): McpToolJob {
     leaseOwner: row.lease_owner || undefined,
     leaseExpiresAt: row.lease_expires_at || undefined,
     heartbeatAt: row.heartbeat_at || undefined,
+    leaseGeneration: Number(row.lease_generation || 0),
+    detachedAt: row.detached_at || undefined,
+    fencedWriteCount: Number(row.fenced_write_count || 0),
     cancelRequestedAt: row.cancel_requested_at || undefined,
     cancelReason: row.cancel_reason || undefined,
     recoveryClassification: row.recovery_classification || undefined,
@@ -259,15 +271,17 @@ function buildUpdatedJob(job: McpToolJob, updates: Partial<McpToolJob>, nowMs: n
   return updated;
 }
 
-function persistLifecycle(job: McpToolJob, expectedStatus: JobStatus, workerId?: string) {
+function persistLifecycle(job: McpToolJob, expectedStatus: JobStatus, options: JobTransitionOptions = {}) {
+  const workerClause = options.workerId ? ' AND lease_owner = ?' : '';
+  const generationClause = options.leaseGeneration !== undefined ? ' AND lease_generation = ?' : '';
   const result = db.prepare(`
     UPDATE mcp_tool_jobs SET
       tool_name = ?, status = ?, created_at = ?, updated_at = ?, started_at = ?, completed_at = ?,
       wait_ms = ?, duration_ms = ?, failure_summary = ?, args_json = ?, resource_key = ?,
-      lease_owner = ?, lease_expires_at = ?, heartbeat_at = ?, cancel_requested_at = ?, cancel_reason = ?,
-      recovery_classification = ?, artifact_dir = ?, stdout_bytes = ?, stderr_bytes = ?, result_bytes = ?,
-      result_sha256 = ?, patch_bytes = ?, patch_sha256 = ?
-    WHERE job_id = ? AND status = ?${workerId ? ' AND lease_owner = ?' : ''}
+      lease_owner = ?, lease_expires_at = ?, heartbeat_at = ?, lease_generation = ?, detached_at = ?,
+      cancel_requested_at = ?, cancel_reason = ?, recovery_classification = ?, artifact_dir = ?,
+      stdout_bytes = ?, stderr_bytes = ?, result_bytes = ?, result_sha256 = ?, patch_bytes = ?, patch_sha256 = ?, fenced_write_count = ?
+    WHERE job_id = ? AND status = ?${workerClause}${generationClause}
   `).run(
     job.toolName,
     job.status,
@@ -283,6 +297,8 @@ function persistLifecycle(job: McpToolJob, expectedStatus: JobStatus, workerId?:
     job.leaseOwner || null,
     job.leaseExpiresAt || null,
     job.heartbeatAt || null,
+    job.leaseGeneration || 0,
+    job.detachedAt || null,
     job.cancelRequestedAt || null,
     job.cancelReason || null,
     job.recoveryClassification || null,
@@ -293,9 +309,11 @@ function persistLifecycle(job: McpToolJob, expectedStatus: JobStatus, workerId?:
     job.resultSha256 || null,
     job.patchBytes || 0,
     job.patchSha256 || null,
+    job.fencedWriteCount || 0,
     job.jobId,
     expectedStatus,
-    ...(workerId ? [workerId] : []),
+    ...(options.workerId ? [options.workerId] : []),
+    ...(options.leaseGeneration !== undefined ? [options.leaseGeneration] : []),
   );
   return Number(result.changes || 0) === 1;
 }
@@ -363,10 +381,11 @@ export function transitionJobStatus(
     if (!current || !expectedStatuses.includes(current.status)) return null;
     if (TERMINAL_STATUSES.includes(current.status) && updates.status) return null;
     if (options.workerId && current.leaseOwner !== options.workerId) return null;
+    if (options.leaseGeneration !== undefined && current.leaseGeneration !== options.leaseGeneration) return null;
 
     previousStatus = current.status;
     const updated = buildUpdatedJob(current, updates, options.nowMs ?? Date.now());
-    if (!persistLifecycle(updated, current.status, options.workerId)) return null;
+    if (!persistLifecycle(updated, current.status, options)) return null;
     const persisted = getDbJob(jobId);
     if (!persisted) return null;
     writeCompatibilityStatus(persisted);
@@ -401,7 +420,8 @@ export function claimJob(jobId: string, workerId: string, leaseMs: number, nowMs
     const result = db.prepare(`
       UPDATE mcp_tool_jobs SET
         status = 'running', updated_at = ?, started_at = ?, wait_ms = ?,
-        lease_owner = ?, lease_expires_at = ?, heartbeat_at = ?
+        lease_owner = ?, lease_expires_at = ?, heartbeat_at = ?,
+        lease_generation = lease_generation + 1
       WHERE job_id = ?
         AND cancel_requested_at IS NULL
         AND (
@@ -422,14 +442,17 @@ export function claimJob(jobId: string, workerId: string, leaseMs: number, nowMs
   return claimed;
 }
 
-export function heartbeatJob(jobId: string, workerId: string, leaseMs: number, nowMs = Date.now()): McpToolJob | null {
+export function heartbeatJob(jobId: string, workerId: string, leaseMs: number, nowMs = Date.now(), leaseGeneration?: number): McpToolJob | null {
   const boundedLeaseMs = Math.max(1_000, Math.min(5 * 60_000, Math.floor(leaseMs || 0)));
   const nowIso = new Date(nowMs).toISOString();
   const leaseExpiresAt = new Date(nowMs + boundedLeaseMs).toISOString();
+  const generationClause = leaseGeneration !== undefined ? ' AND lease_generation = ?' : '';
   const result = db.prepare(`
     UPDATE mcp_tool_jobs SET updated_at = ?, heartbeat_at = ?, lease_expires_at = ?
-    WHERE job_id = ? AND status = 'running' AND lease_owner = ? AND cancel_requested_at IS NULL
-  `).run(nowIso, nowIso, leaseExpiresAt, jobId, workerId);
+    WHERE job_id = ? AND status = 'running' AND lease_owner = ?
+      AND lease_expires_at IS NOT NULL AND lease_expires_at > ?
+      AND cancel_requested_at IS NULL${generationClause}
+  `).run(nowIso, nowIso, leaseExpiresAt, jobId, workerId, nowIso, ...(leaseGeneration !== undefined ? [leaseGeneration] : []));
   if (Number(result.changes || 0) !== 1) return null;
   const updated = getDbJob(jobId);
   if (updated) {
@@ -462,6 +485,47 @@ export function requestJobCancellation(jobId: string, reason = 'Cancellation req
   })();
   if (cancelled) publishJobLifecycleEvent(cancelled, 'cancelled');
   return cancelled;
+}
+
+export function markJobConsumerAttached(jobId: string, nowMs = Date.now()): McpToolJob | null {
+  const nowIso = new Date(nowMs).toISOString();
+  const result = db.prepare(`
+    UPDATE mcp_tool_jobs SET detached_at = NULL, updated_at = ?
+    WHERE job_id = ? AND status IN ('queued', 'running')
+  `).run(nowIso, jobId);
+  if (Number(result.changes || 0) !== 1) return getDbJob(jobId);
+  const updated = getDbJob(jobId);
+  if (updated) upsertRecentJobCache(updated);
+  return updated;
+}
+
+export function markJobConsumerDetached(jobId: string, nowMs = Date.now()): McpToolJob | null {
+  const nowIso = new Date(nowMs).toISOString();
+  const result = db.prepare(`
+    UPDATE mcp_tool_jobs SET detached_at = COALESCE(detached_at, ?), updated_at = ?
+    WHERE job_id = ? AND status IN ('queued', 'running')
+  `).run(nowIso, nowIso, jobId);
+  if (Number(result.changes || 0) !== 1) return getDbJob(jobId);
+  const updated = getDbJob(jobId);
+  if (updated) upsertRecentJobCache(updated);
+  return updated;
+}
+
+function fencedLeaseWrite(jobId: string, guard: JobLeaseGuard | undefined) {
+  const job = getDbJob(jobId);
+  if (!job) return { allowed: false, job: null as McpToolJob | null };
+  if (!guard) return { allowed: true, job };
+  const leaseExpiresAtMs = job.leaseExpiresAt ? Date.parse(job.leaseExpiresAt) : NaN;
+  const allowed = job.status === 'running'
+    && job.leaseOwner === guard.workerId
+    && job.leaseGeneration === guard.leaseGeneration
+    && Number.isFinite(leaseExpiresAtMs)
+    && leaseExpiresAtMs > Date.now();
+  if (allowed) return { allowed: true, job };
+  db.prepare('UPDATE mcp_tool_jobs SET fenced_write_count = fenced_write_count + 1 WHERE job_id = ?').run(jobId);
+  const updated = getDbJob(jobId);
+  if (updated) upsertRecentJobCache(updated);
+  return { allowed: false, job: updated };
 }
 
 export function setJobRecoveryClassification(jobId: string, classification: JobRecoveryClassification, nowMs = Date.now()) {
@@ -516,44 +580,46 @@ export function listRecoverableJobs(nowMs = Date.now()): McpToolJob[] {
   return rows.map(rowToJob);
 }
 
-export function appendJobLog(jobId: string, stream: 'stdout' | 'stderr', data: string) {
-  const job = getJob(jobId);
-  if (!job) return;
-  fs.mkdirSync(job.artifactDir, { recursive: true });
-  const filePath = path.join(job.artifactDir, `${stream}.log`);
-  fs.appendFileSync(filePath, redactCredentialText(data));
-  const bytes = fs.statSync(filePath).size;
-  db.prepare(`UPDATE mcp_tool_jobs SET ${stream === 'stdout' ? 'stdout_bytes' : 'stderr_bytes'} = ? WHERE job_id = ?`).run(bytes, jobId);
-  if (recentJobsCache) {
+export function appendJobLog(jobId: string, stream: 'stdout' | 'stderr', data: string, guard?: JobLeaseGuard) {
+  return db.transaction(() => {
+    const lease = fencedLeaseWrite(jobId, guard);
+    if (!lease.allowed || !lease.job) return false;
+    fs.mkdirSync(lease.job.artifactDir, { recursive: true });
+    const filePath = path.join(lease.job.artifactDir, `${stream}.log`);
+    fs.appendFileSync(filePath, redactCredentialText(data));
+    const bytes = fs.statSync(filePath).size;
+    db.prepare(`UPDATE mcp_tool_jobs SET ${stream === 'stdout' ? 'stdout_bytes' : 'stderr_bytes'} = ? WHERE job_id = ?`).run(bytes, jobId);
     const updated = getDbJob(jobId);
     if (updated) upsertRecentJobCache(updated);
-  }
+    return true;
+  })();
 }
 
-export function writeJobResult(jobId: string, result: any) {
-  const job = getJob(jobId);
-  if (!job) return;
-  fs.mkdirSync(job.artifactDir, { recursive: true });
-  const safeResult = redactValue(result);
-  const resultPath = path.join(job.artifactDir, 'result.json');
-  fs.writeFileSync(resultPath, JSON.stringify(safeResult, null, 2));
-  const resultMeta = fileMetadata(resultPath);
+export function writeJobResult(jobId: string, result: any, guard?: JobLeaseGuard) {
+  return db.transaction(() => {
+    const lease = fencedLeaseWrite(jobId, guard);
+    if (!lease.allowed || !lease.job) return false;
+    fs.mkdirSync(lease.job.artifactDir, { recursive: true });
+    const safeResult = redactValue(result);
+    const resultPath = path.join(lease.job.artifactDir, 'result.json');
+    fs.writeFileSync(resultPath, JSON.stringify(safeResult, null, 2));
+    const resultMeta = fileMetadata(resultPath);
 
-  let patchMeta = { bytes: 0, sha256: undefined as string | undefined };
-  if (safeResult?.patch) {
-    const patchPath = path.join(job.artifactDir, 'patch.diff');
-    fs.writeFileSync(patchPath, safeResult.patch);
-    patchMeta = fileMetadata(patchPath);
-  }
+    let patchMeta = { bytes: 0, sha256: undefined as string | undefined };
+    if (safeResult?.patch) {
+      const patchPath = path.join(lease.job.artifactDir, 'patch.diff');
+      fs.writeFileSync(patchPath, safeResult.patch);
+      patchMeta = fileMetadata(patchPath);
+    }
 
-  db.prepare(`
-    UPDATE mcp_tool_jobs SET result_bytes = ?, result_sha256 = ?, patch_bytes = ?, patch_sha256 = ?
-    WHERE job_id = ?
-  `).run(resultMeta.bytes, resultMeta.sha256 || null, patchMeta.bytes, patchMeta.sha256 || null, jobId);
-  if (recentJobsCache) {
+    db.prepare(`
+      UPDATE mcp_tool_jobs SET result_bytes = ?, result_sha256 = ?, patch_bytes = ?, patch_sha256 = ?
+      WHERE job_id = ?
+    `).run(resultMeta.bytes, resultMeta.sha256 || null, patchMeta.bytes, patchMeta.sha256 || null, jobId);
     const updated = getDbJob(jobId);
     if (updated) upsertRecentJobCache(updated);
-  }
+    return true;
+  })();
 }
 
 export function readJobLog(jobId: string, stream: 'stdout' | 'stderr' | 'both'): { log: string; truncated: boolean; bytes: number; returnedBytes: number } {
@@ -596,11 +662,15 @@ export function getDurableJobMetrics(nowMs = Date.now()) {
     SELECT
       SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END) AS queued,
       SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS running,
+      SUM(CASE WHEN status = 'running' AND lease_owner IS NOT NULL AND lease_expires_at > ? THEN 1 ELSE 0 END) AS healthy_running,
+      SUM(CASE WHEN status IN ('queued', 'running') AND detached_at IS NOT NULL THEN 1 ELSE 0 END) AS detached,
       SUM(CASE WHEN status IN ('failed', 'timed_out') THEN 1 ELSE 0 END) AS failed,
+      SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled,
       SUM(CASE WHEN recovery_classification IN ('resumable', 'retryable', 'interrupted') THEN 1 ELSE 0 END) AS recovered,
-      SUM(CASE WHEN status = 'running' AND (lease_expires_at IS NULL OR lease_expires_at <= ?) THEN 1 ELSE 0 END) AS stale_running
+      SUM(CASE WHEN status = 'running' AND lease_owner IS NOT NULL AND (lease_expires_at IS NULL OR lease_expires_at <= ?) THEN 1 ELSE 0 END) AS stale_running,
+      SUM(fenced_write_count) AS fenced_late_writes
     FROM mcp_tool_jobs
-  `).get(nowIso) as any;
+  `).get(nowIso, nowIso) as any;
   const oldestLease = db.prepare(`
     SELECT MIN(heartbeat_at) AS oldest_heartbeat FROM mcp_tool_jobs WHERE status = 'running' AND heartbeat_at IS NOT NULL
   `).get() as any;
@@ -608,9 +678,13 @@ export function getDurableJobMetrics(nowMs = Date.now()) {
   return {
     queued: Number(counts?.queued || 0),
     running: Number(counts?.running || 0),
+    healthyRunning: Number(counts?.healthy_running || 0),
+    detached: Number(counts?.detached || 0),
     failed: Number(counts?.failed || 0),
+    cancelled: Number(counts?.cancelled || 0),
     recovered: Number(counts?.recovered || 0),
     staleRunning: Number(counts?.stale_running || 0),
+    fencedLateWrites: Number(counts?.fenced_late_writes || 0),
     oldestLeaseAgeMs: Number.isFinite(oldestHeartbeatMs) ? Math.max(0, nowMs - oldestHeartbeatMs) : 0,
   };
 }

@@ -64,6 +64,19 @@ test('claim and heartbeat are atomic and reject competing workers', () => {
   assert.equal(repo.heartbeatJob(job.jobId, 'worker-b', 30_000, 2_001), null);
 });
 
+test('expired lease loses heartbeat and fenced-write authority before reaping', () => {
+  const job = createJob('expired-authority');
+  const claimed = repo.claimJob(job.jobId, 'worker-a', 1_000, 1_000);
+  assert.equal(claimed?.leaseGeneration, 1);
+  const guard = { workerId: 'worker-a', leaseGeneration: claimed.leaseGeneration };
+
+  assert.equal(repo.heartbeatJob(job.jobId, 'worker-a', 30_000, 2_500, claimed.leaseGeneration), null);
+  assert.equal(repo.appendJobLog(job.jobId, 'stdout', 'late progress\n', guard), false);
+  assert.equal(repo.writeJobResult(job.jobId, { ok: true, stale: true }, guard), false);
+  assert.equal(repo.readJobResult(job.jobId), null);
+  assert.equal(repo.getDurableJobMetrics(2_500).fencedLateWrites >= 2, true);
+});
+
 test('terminal transitions are compare-and-set and cannot be overwritten', () => {
   const job = createJob('terminal');
   assert.ok(repo.claimJob(job.jobId, 'worker-a', 30_000, 1_000));

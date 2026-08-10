@@ -9,6 +9,7 @@ import { taskDisplayIdIndexMigration } from './007-task-display-id-index.js';
 import { mcpToolJobsMigration } from './008-mcp-tool-jobs.js';
 import { performanceTelemetryHistoryMigration } from './008-performance-telemetry-history.js';
 import { executionSessionsMigration } from './010-execution-sessions.js';
+import { mcpToolJobLeaseFencingMigration } from './011-mcp-tool-job-lease-fencing.js';
 import db from '../index.js';
 
 export const DEVFLOW_MIGRATIONS = [
@@ -22,6 +23,7 @@ export const DEVFLOW_MIGRATIONS = [
   mcpToolJobsMigration,
   performanceTelemetryHistoryMigration,
   executionSessionsMigration,
+  mcpToolJobLeaseFencingMigration,
 ] as const;
 
 export function executeAllMigrations() {

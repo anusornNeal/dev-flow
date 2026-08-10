@@ -122,7 +122,7 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
   const failedJobs = Number(diagnostics?.mcp?.metrics?.failedJobs || 0);
   const failedJobSummaries = Array.isArray(diagnostics?.mcp?.metrics?.failures) ? diagnostics.mcp.metrics.failures.slice(0, 10) : [];
   const failedJobGroups = summarizeFailedJobGroups(failedJobSummaries);
-  const durableJobs = diagnostics?.mcp?.metrics?.durable || { queued: 0, running: 0, failed: 0, recovered: 0, staleRunning: 0, oldestLeaseAgeMs: 0 };
+  const durableJobs = diagnostics?.mcp?.metrics?.durable || { queued: 0, running: 0, healthyRunning: 0, detached: 0, failed: 0, cancelled: 0, recovered: 0, staleRunning: 0, fencedLateWrites: 0, oldestLeaseAgeMs: 0 };
   const staleAgentRuns = Number(diagnostics?.agents?.staleCount || 0);
   const duplicateBursts = Array.isArray(diagnostics?.tools?.duplicateBursts) ? diagnostics.tools.duplicateBursts.length : 0;
   if (queueDepth > 0) recommendations.push('MCP tool jobs are queued; inspect job status/log before starting conflicting repo work.');

@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'crypto';
 import type { AppState } from '../types';
-import { createJob, updateJobStatus, appendJobLog, writeJobResult, getJob, readJobLog, readJobResult, listRecentJobs, startBackgroundJobCleanup, claimJob, heartbeatJob, requestJobCancellation, transitionJobStatus, listRecoverableJobs, setJobRecoveryClassification, requeueJobForRecovery, getDurableJobMetrics, type McpToolJob } from '../repositories/mcpToolJobRepository';
+import { createJob, updateJobStatus, appendJobLog, writeJobResult, getJob, readJobLog, readJobResult, listRecentJobs, startBackgroundJobCleanup, claimJob, heartbeatJob, requestJobCancellation, transitionJobStatus, listRecoverableJobs, setJobRecoveryClassification, requeueJobForRecovery, getDurableJobMetrics, markJobConsumerAttached, markJobConsumerDetached, type McpToolJob, type JobLeaseGuard } from '../repositories/mcpToolJobRepository';
 import { createApiError, normalizeUnknownError } from './api';
 import { resolveProjectResourceIdentity, resolveProjectRoot } from './localFileService';
 import { isDevFlowRestartPending, readDevFlowRestartState } from '../../lib/devFlowRestart';
@@ -105,7 +105,8 @@ interface QueueEntry extends SchedulerQueueEntry {
 }
 
 const queue: QueueEntry[] = [];
-const activeJobs = new Map<string, { entry: QueueEntry; cancelFn?: () => void }>();
+const activeJobs = new Map<string, { entry: QueueEntry; cancelFn?: () => void; leaseGeneration: number }>();
+const releasedSchedulerLeases = new Set<string>();
 const testRunners = new Map<string, AsyncRunner>();
 const jobWaiters = new Map<string, Set<(status: ReturnType<typeof getToolJobStatus>) => void>>();
 const singleFlightLeaders = new Map<string, string>();
@@ -125,7 +126,10 @@ const DEFAULT_VERIFICATION_BACKLOG_PER_PROJECT = 12;
 const jobPhaseTelemetryById = new Map<string, JobPhaseTelemetryState>();
 const JOB_LEASE_MS = 30_000;
 const JOB_HEARTBEAT_MS = 10_000;
+const JOB_RECOVERY_SWEEP_MS = 5_000;
 const JOB_WORKER_ID = `devflow-${process.pid}-${randomUUID().slice(0, 8)}`;
+let durableRecoveryTimer: NodeJS.Timeout | undefined;
+let durableRecoveryState: AppState | undefined;
 
 function resourceScopeFor(resourceKey: string): FinalizedQueueWaitTelemetry['resourceScope'] {
   if (resourceKey.startsWith('workspace:')) return 'workspace';
@@ -470,6 +474,7 @@ export function waitForToolJob(jobId: string, waitMs = 20_000) {
   const boundedWaitMs = Math.max(0, Math.min(30_000, Number(waitMs) || 0));
   if (boundedWaitMs === 0) return Promise.resolve(current);
 
+  markJobConsumerAttached(jobId);
   return new Promise<ReturnType<typeof getToolJobStatus>>((resolve) => {
     let settled = false;
     let timer: NodeJS.Timeout;
@@ -479,7 +484,9 @@ export function waitForToolJob(jobId: string, waitMs = 20_000) {
       clearTimeout(timer);
       const waiters = jobWaiters.get(jobId);
       waiters?.delete(finish);
-      if (waiters?.size === 0) jobWaiters.delete(jobId);
+      const noLiveWaiters = !waiters || waiters.size === 0;
+      if (noLiveWaiters) jobWaiters.delete(jobId);
+      if (noLiveWaiters && status && !isTerminalStatus(status.status)) markJobConsumerDetached(jobId);
       resolve(status);
     };
     const waiters = jobWaiters.get(jobId) || new Set();
@@ -600,6 +607,7 @@ function enqueueRecoveredJob(state: AppState, job: McpToolJob) {
   if (queue.some((entry) => entry.jobId === job.jobId) || activeJobs.has(job.jobId)) return false;
   const kind = getRecoveryJobKind(job.toolName);
   const schedulerProfile = getSchedulerProfile(state, job.toolName, job.args, kind);
+  const recoveredSingleFlightKey = Array.from(singleFlightLeaders.entries()).find(([, leaderJobId]) => leaderJobId === job.jobId)?.[0];
   const parsedUpdatedAt = Date.parse(job.updatedAt);
   const enqueuedAt = Number.isFinite(parsedUpdatedAt) ? parsedUpdatedAt : Date.now();
   const phaseTelemetry: JobPhaseTelemetryState = {
@@ -624,6 +632,7 @@ function enqueueRecoveredJob(state: AppState, job: McpToolJob) {
     costClass: schedulerProfile.costClass,
     enqueuedAt,
     schedulerPriority: getSchedulerPriority(job.toolName, job.args, schedulerProfile.accessMode),
+    singleFlightKey: recoveredSingleFlightKey,
     verification: verificationPolicyFor(job.args, schedulerProfile.accessMode, job.resourceKey),
     waitTelemetry: { lastObservedAt: Date.now(), workspaceLockWaitMs: 0, capacityWaitMs: 0, blockerReasons: {} },
     phaseTelemetry,
@@ -685,23 +694,51 @@ export function getQueueMetrics() {
   };
 }
 
-export function initMcpToolJobs(state?: AppState) {
+function schedulerLeaseKey(jobId: string, leaseGeneration: number) {
+  return `${jobId}:${leaseGeneration}`;
+}
+
+function releaseSchedulerLease(entry: QueueEntry, leaseGeneration: number) {
+  const key = schedulerLeaseKey(entry.jobId, leaseGeneration);
+  if (releasedSchedulerLeases.has(key)) return false;
+  releasedSchedulerLeases.add(key);
+  decrementScheduledResource(entry);
+  return true;
+}
+
+function releaseStaleActiveLease(job: McpToolJob) {
+  const active = activeJobs.get(job.jobId);
+  if (!active || active.leaseGeneration !== job.leaseGeneration) return undefined;
+  try {
+    active.cancelFn?.();
+  } catch {
+    // Lease recovery must still release scheduler capacity if cooperative cancellation throws.
+  }
+  releaseSchedulerLease(active.entry, active.leaseGeneration);
+  activeJobs.delete(job.jobId);
+  return active;
+}
+
+function runDurableJobRecoveryPass(state?: AppState, nowMs = Date.now()) {
   const summary = { resumable: 0, retryable: 0, interrupted: 0 };
   let queuedRecoveredWork = false;
 
-  for (const job of listRecoverableJobs()) {
+  for (const job of listRecoverableJobs(nowMs)) {
+    if (followerToLeader.has(job.jobId)) continue;
     if (job.status === 'queued') {
-      const classified = setJobRecoveryClassification(job.jobId, 'resumable');
+      if (queue.some((entry) => entry.jobId === job.jobId) || activeJobs.has(job.jobId)) continue;
+      const classified = setJobRecoveryClassification(job.jobId, 'resumable', nowMs);
       if (!classified) continue;
       summary.resumable += 1;
       if (state) queuedRecoveredWork = enqueueRecoveredJob(state, classified) || queuedRecoveredWork;
       continue;
     }
 
+    const staleActive = releaseStaleActiveLease(job);
     if (getBuiltinToolJobRecoveryPolicy(job.toolName) === 'retryable') {
-      const requeued = requeueJobForRecovery(job.jobId);
+      const requeued = requeueJobForRecovery(job.jobId, nowMs);
       if (!requeued) continue;
-      appendJobLog(job.jobId, 'stderr', '\n[Job Recovery] Previous worker lease expired; retrying safe job after restart.\n');
+      appendJobLog(job.jobId, 'stderr', '\n[Job Recovery] Previous worker lease expired; retrying retry-safe durable job.\n');
       summary.retryable += 1;
       if (state) queuedRecoveredWork = enqueueRecoveredJob(state, requeued) || queuedRecoveredWork;
       continue;
@@ -709,19 +746,45 @@ export function initMcpToolJobs(state?: AppState) {
 
     const interrupted = transitionJobStatus(job.jobId, ['running'], {
       status: 'failed',
-      failureSummary: 'Server restarted before this job completed; automatic retry is unsafe.',
+      failureSummary: 'Worker lease expired before this job completed; automatic retry is unsafe.',
       recoveryClassification: 'interrupted',
+    }, {
+      workerId: job.leaseOwner,
+      leaseGeneration: job.leaseGeneration,
+      nowMs,
     });
     if (interrupted) {
-      appendJobLog(job.jobId, 'stderr', '\n[Job Interrupted] Server restarted; this job is not safe to retry automatically.\n');      releaseTerminalVerificationCandidate(interrupted);
+      appendJobLog(job.jobId, 'stderr', '\n[Job Interrupted] Worker lease expired; this job is not safe to retry automatically.\n');
+      releaseTerminalVerificationCandidate(interrupted);
+      if (staleActive) finalizeSingleFlight(staleActive.entry);
       summary.interrupted += 1;
     }
   }
 
   if (queuedRecoveredWork) setImmediate(processQueue);
-  if (summary.interrupted > 0) console.log(`[mcp-tool-job] Marked ${summary.interrupted} stale unsafe jobs as interrupted on startup.`);
-  startBackgroundJobCleanup();
   return summary;
+}
+
+function startDurableJobRecoveryLoop(state?: AppState) {
+  if (state) durableRecoveryState = state;
+  if (durableRecoveryTimer) return;
+  durableRecoveryTimer = setInterval(() => {
+    if (durableRecoveryState) runDurableJobRecoveryPass(durableRecoveryState, Date.now());
+  }, JOB_RECOVERY_SWEEP_MS);
+  durableRecoveryTimer.unref?.();
+}
+
+export function initMcpToolJobs(state?: AppState) {
+  if (state) durableRecoveryState = state;
+  const summary = runDurableJobRecoveryPass(state, Date.now());
+  if (summary.interrupted > 0) console.log(`[mcp-tool-job] Marked ${summary.interrupted} stale unsafe jobs as interrupted.`);
+  startBackgroundJobCleanup();
+  startDurableJobRecoveryLoop(state);
+  return summary;
+}
+
+export function __runDurableJobRecoveryPassForTests(state?: AppState, nowMs = Date.now()) {
+  return runDurableJobRecoveryPass(state, nowMs);
 }
 
 export function getToolJobStatus(jobId: string) {
@@ -955,21 +1018,19 @@ async function processQueue() {
   }
 }
 
-function setJobActiveContext(jobId: string, cancelFn: () => void) {
+function setJobActiveContext(jobId: string, cancelFn: () => void, leaseGeneration: number) {
   const active = activeJobs.get(jobId);
-  if (active) {
-    active.cancelFn = cancelFn;
-  }
+  if (active?.leaseGeneration === leaseGeneration) active.cancelFn = cancelFn;
 }
 
-function transitionJobAccess(jobId: string, nextAccessMode: ResourceAccessMode) {
+function transitionJobAccess(jobId: string, nextAccessMode: ResourceAccessMode, leaseGeneration: number) {
   const active = activeJobs.get(jobId);
-  if (!active) throw new Error(`Cannot transition scheduler access for inactive job ${jobId}.`);
+  if (!active || active.leaseGeneration !== leaseGeneration) return;
 
   const entry = active.entry;
   const changed = transitionScheduledResource(entry, nextAccessMode);
   if (!changed) return;
-  appendJobLog(jobId, 'stdout', '[Scheduler] Access downgraded write -> verify.\n');
+  appendJobLog(jobId, 'stdout', '[Scheduler] Access downgraded write -> verify.\n', { workerId: JOB_WORKER_ID, leaseGeneration });
   setImmediate(processQueue);
 }
 
@@ -977,26 +1038,28 @@ async function startJob(entry: QueueEntry) {
   const claimed = claimJob(entry.jobId, JOB_WORKER_ID, JOB_LEASE_MS);
   if (!claimed) {
     const persisted = getJob(entry.jobId);
-    if (persisted && isTerminalStatus(persisted.status)) {
-      releaseVerificationCandidateForArgs(entry.args);
-    }
+    if (persisted && isTerminalStatus(persisted.status)) releaseVerificationCandidateForArgs(entry.args);
     finalizeSingleFlight(entry);
     setImmediate(processQueue);
     return;
   }
 
+  const leaseGeneration = claimed.leaseGeneration || 0;
+  const leaseGuard: JobLeaseGuard = { workerId: JOB_WORKER_ID, leaseGeneration };
   incrementScheduledResource(entry);
   if (!entry.phaseTelemetry.executionStartedAt) entry.phaseTelemetry.executionStartedAt = Date.now();
-  activeJobs.set(entry.jobId, { entry });
+  activeJobs.set(entry.jobId, { entry, leaseGeneration });
   const heartbeat = setInterval(() => {
-    const renewed = heartbeatJob(entry.jobId, JOB_WORKER_ID, JOB_LEASE_MS);
-    if (!renewed) activeJobs.get(entry.jobId)?.cancelFn?.();
+    const active = activeJobs.get(entry.jobId);
+    if (!active || active.leaseGeneration !== leaseGeneration) return;
+    const renewed = heartbeatJob(entry.jobId, JOB_WORKER_ID, JOB_LEASE_MS, Date.now(), leaseGeneration);
+    if (!renewed) active.cancelFn?.();
   }, JOB_HEARTBEAT_MS);
   heartbeat.unref();
 
   const logger = {
-    stdout: (data: string) => appendJobLog(entry.jobId, 'stdout', data),
-    stderr: (data: string) => appendJobLog(entry.jobId, 'stderr', data),
+    stdout: (data: string) => appendJobLog(entry.jobId, 'stdout', data, leaseGuard),
+    stderr: (data: string) => appendJobLog(entry.jobId, 'stderr', data, leaseGuard),
   };
 
   try {
@@ -1008,16 +1071,16 @@ async function startJob(entry: QueueEntry) {
         entry.state,
         entry.args,
         logger,
-        (cancelFn) => setJobActiveContext(entry.jobId, cancelFn),
-        (accessMode) => transitionJobAccess(entry.jobId, accessMode),
+        (cancelFn) => setJobActiveContext(entry.jobId, cancelFn, leaseGeneration),
+        (accessMode) => transitionJobAccess(entry.jobId, accessMode, leaseGeneration),
       );
     } else {
       result = await runBuiltinToolJob(
         { toolName: entry.toolName, state: entry.state, args: entry.args },
         {
           logger,
-          setCancelFn: (cancelFn) => setJobActiveContext(entry.jobId, cancelFn),
-          transitionAccess: (accessMode) => transitionJobAccess(entry.jobId, accessMode),
+          setCancelFn: (cancelFn) => setJobActiveContext(entry.jobId, cancelFn, leaseGeneration),
+          transitionAccess: (accessMode) => transitionJobAccess(entry.jobId, accessMode, leaseGeneration),
         },
       );
     }
@@ -1027,12 +1090,14 @@ async function startJob(entry: QueueEntry) {
     if (currentStatus === 'cancelled' || currentStatus === 'timed_out') {
       // Persisted cancellation/timeout wins over a late worker result.
     } else if (isTimedOutResult(result)) {
-      writeJobResult(entry.jobId, result);
-      transitionJobStatus(entry.jobId, ['running'], { status: 'timed_out', failureSummary: 'Job timed out.' }, { workerId: JOB_WORKER_ID });
-      logger.stderr(`\n[Job Timed Out]\n`);
+      const wrote = writeJobResult(entry.jobId, result, leaseGuard);
+      const transitioned = wrote
+        ? transitionJobStatus(entry.jobId, ['running'], { status: 'timed_out', failureSummary: 'Job timed out.' }, leaseGuard)
+        : null;
+      if (transitioned) appendJobLog(entry.jobId, 'stderr', '\n[Job Timed Out]\n');
     } else {
-      writeJobResult(entry.jobId, result);
-      transitionJobStatus(entry.jobId, ['running'], { status: 'succeeded' }, { workerId: JOB_WORKER_ID });
+      const wrote = writeJobResult(entry.jobId, result, leaseGuard);
+      if (wrote) transitionJobStatus(entry.jobId, ['running'], { status: 'succeeded' }, leaseGuard);
     }
   } catch (error: any) {
     if (!entry.phaseTelemetry.executionCompletedAt) entry.phaseTelemetry.executionCompletedAt = Date.now();
@@ -1041,7 +1106,7 @@ async function startJob(entry: QueueEntry) {
     const failureSummary = summarizeError(error);
     if (currentStatus === 'cancelled') {
       const supersession = jobSupersessionById.get(entry.jobId);
-      writeJobResult(entry.jobId, supersession
+      const cancelledResult = supersession
         ? Object.assign(supersededJobResult(entry, supersession.supersededByCandidateKey), { error: normalizedError })
         : {
             ok: false,
@@ -1049,41 +1114,57 @@ async function startJob(entry: QueueEntry) {
             code: 'JOB_CANCELLED',
             message: 'Job was cancelled before completion.',
             error: normalizedError,
-          });
+          };
+      const active = activeJobs.get(entry.jobId);
+      if (active?.leaseGeneration === leaseGeneration) writeJobResult(entry.jobId, cancelledResult);
+      else writeJobResult(entry.jobId, cancelledResult, leaseGuard);
     } else if (error.name === 'AbortError' || error.message.includes('ETIMEDOUT') || error.code === 'ETIMEDOUT') {
-      writeJobResult(entry.jobId, {
+      const wrote = writeJobResult(entry.jobId, {
         ok: false,
         status: 'timed_out',
         code: normalizedError.code || 'JOB_TIMED_OUT',
         message: normalizedError.message || failureSummary,
         error: normalizedError,
-      });
-      transitionJobStatus(entry.jobId, ['running'], { status: 'timed_out', failureSummary }, { workerId: JOB_WORKER_ID });
-      logger.stderr(`\n[Job Timed Out]`);
+      }, leaseGuard);
+      const transitioned = wrote
+        ? transitionJobStatus(entry.jobId, ['running'], { status: 'timed_out', failureSummary }, leaseGuard)
+        : null;
+      if (transitioned) appendJobLog(entry.jobId, 'stderr', '\n[Job Timed Out]\n');
     } else {
-      writeJobResult(entry.jobId, {
+      const wrote = writeJobResult(entry.jobId, {
         ok: false,
         status: 'failed',
         code: normalizedError.code || 'JOB_FAILED',
         message: normalizedError.message || failureSummary,
         error: normalizedError,
-      });
-      transitionJobStatus(entry.jobId, ['running'], { status: 'failed', failureSummary }, { workerId: JOB_WORKER_ID });
-      logger.stderr(`\n[Job Failed] ${error.message}\n${error.stack || ''}`);
+      }, leaseGuard);
+      const transitioned = wrote
+        ? transitionJobStatus(entry.jobId, ['running'], { status: 'failed', failureSummary }, leaseGuard)
+        : null;
+      if (transitioned) appendJobLog(entry.jobId, 'stderr', `\n[Job Failed] ${error.message}\n${error.stack || ''}`);
     }
   } finally {
     clearInterval(heartbeat);
-    if (!entry.phaseTelemetry.executionCompletedAt) entry.phaseTelemetry.executionCompletedAt = Date.now();
-    const waitSnapshot = finalizedQueueWaitRecord(entry, entry.phaseTelemetry.executionStartedAt ?? Date.now());
-    entry.phaseTelemetry.workspaceLockWaitMs = waitSnapshot.workspaceLockWaitMs;
-    entry.phaseTelemetry.capacityWaitMs = waitSnapshot.capacityWaitMs;
-    entry.phaseTelemetry.blockerReasons = { ...waitSnapshot.blockerReasons };
-    entry.phaseTelemetry.responseHandoffMs = Math.max(0, Date.now() - entry.phaseTelemetry.executionCompletedAt);
-    entry.phaseTelemetry.finalized = true;
-    rememberJobPhaseTelemetry(entry.phaseTelemetry);
-    decrementScheduledResource(entry);
-    activeJobs.delete(entry.jobId);    releaseVerificationCandidateForArgs(entry.args);
-    finalizeSingleFlight(entry);
+    const leaseKey = schedulerLeaseKey(entry.jobId, leaseGeneration);
+    const leaseWasAlreadyReleased = releasedSchedulerLeases.has(leaseKey);
+    if (!leaseWasAlreadyReleased) {
+      if (!entry.phaseTelemetry.executionCompletedAt) entry.phaseTelemetry.executionCompletedAt = Date.now();
+      const waitSnapshot = finalizedQueueWaitRecord(entry, entry.phaseTelemetry.executionStartedAt ?? Date.now());
+      entry.phaseTelemetry.workspaceLockWaitMs = waitSnapshot.workspaceLockWaitMs;
+      entry.phaseTelemetry.capacityWaitMs = waitSnapshot.capacityWaitMs;
+      entry.phaseTelemetry.blockerReasons = { ...waitSnapshot.blockerReasons };
+      entry.phaseTelemetry.responseHandoffMs = Math.max(0, Date.now() - entry.phaseTelemetry.executionCompletedAt);
+      entry.phaseTelemetry.finalized = true;
+      rememberJobPhaseTelemetry(entry.phaseTelemetry);
+    }
+    releaseSchedulerLease(entry, leaseGeneration);
+    const active = activeJobs.get(entry.jobId);
+    if (active?.leaseGeneration === leaseGeneration) {
+      activeJobs.delete(entry.jobId);
+      releaseVerificationCandidateForArgs(entry.args);
+      finalizeSingleFlight(entry);
+    }
+    releasedSchedulerLeases.delete(leaseKey);
     setImmediate(processQueue);
   }
 }

@@ -2,12 +2,31 @@ import { normalizeLocalPathIdentity } from '../../lib/platformRuntime.js';
 import db, { withDbTransaction } from '../../db/index.js';
 import { publishServerEvent } from '../services/serverEventService.js';
 
+function deserializeProject(row: any) {
+  if (!row) return row;
+  let gitWorkflowPolicy: unknown = undefined;
+  if (typeof row.gitWorkflowPolicy === 'string' && row.gitWorkflowPolicy.trim()) {
+    try {
+      gitWorkflowPolicy = JSON.parse(row.gitWorkflowPolicy);
+    } catch {
+      gitWorkflowPolicy = undefined;
+    }
+  } else if (row.gitWorkflowPolicy && typeof row.gitWorkflowPolicy === 'object') {
+    gitWorkflowPolicy = row.gitWorkflowPolicy;
+  }
+  return { ...row, gitWorkflowPolicy };
+}
+
+function serializeGitWorkflowPolicy(value: unknown) {
+  return value === undefined || value === null ? null : JSON.stringify(value);
+}
+
 export function getProjects(): any[] {
-  return db.prepare('SELECT * FROM projects').all() as any[];
+  return (db.prepare('SELECT * FROM projects').all() as any[]).map(deserializeProject);
 }
 
 export function getProject(id: string): any | undefined {
-  return db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as any | undefined;
+  return deserializeProject(db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as any | undefined);
 }
 
 export function normalizeProjectNameAlias(value: unknown) {
@@ -55,15 +74,16 @@ export function findProjectIdentityConflicts(project: any) {
 export function createProject(project: any): void {
   withDbTransaction(() => {
     const stmt = db.prepare(`
-      INSERT INTO projects (id, name, repoUrl, description, createdAt, localPath, taskIdPrefix)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO projects (id, name, repoUrl, description, createdAt, localPath, taskIdPrefix, gitWorkflowPolicy)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         name = excluded.name,
         repoUrl = excluded.repoUrl,
         description = excluded.description,
         createdAt = COALESCE(projects.createdAt, excluded.createdAt),
         localPath = excluded.localPath,
-        taskIdPrefix = excluded.taskIdPrefix
+        taskIdPrefix = excluded.taskIdPrefix,
+        gitWorkflowPolicy = excluded.gitWorkflowPolicy
     `);
     stmt.run(
       project.id,
@@ -73,6 +93,7 @@ export function createProject(project: any): void {
       project.createdAt || new Date().toISOString(),
       project.localPath || null,
       project.taskIdPrefix || null,
+      serializeGitWorkflowPolicy(project.gitWorkflowPolicy),
     );
   });
   publishServerEvent('project.changed', { projectId: project.id, entityId: project.id, status: 'available', reason: 'created' });
@@ -80,8 +101,17 @@ export function createProject(project: any): void {
 
 export function updateProject(project: any): void {
   withDbTransaction(() => {
-    const stmt = db.prepare('UPDATE projects SET name = ?, repoUrl = ?, description = ?, createdAt = ?, localPath = ?, taskIdPrefix = ? WHERE id = ?');
-    stmt.run(project.name, project.repoUrl || null, project.description || null, project.createdAt, project.localPath || null, project.taskIdPrefix || null, project.id);
+    const stmt = db.prepare('UPDATE projects SET name = ?, repoUrl = ?, description = ?, createdAt = ?, localPath = ?, taskIdPrefix = ?, gitWorkflowPolicy = ? WHERE id = ?');
+    stmt.run(
+      project.name,
+      project.repoUrl || null,
+      project.description || null,
+      project.createdAt,
+      project.localPath || null,
+      project.taskIdPrefix || null,
+      serializeGitWorkflowPolicy(project.gitWorkflowPolicy),
+      project.id,
+    );
   });
   publishServerEvent('project.changed', { projectId: project.id, entityId: project.id, status: 'available', reason: 'updated' });
 }

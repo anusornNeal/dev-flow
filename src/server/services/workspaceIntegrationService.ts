@@ -3,6 +3,8 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { getDevFlowWorkspacesDir } from '../../lib/devFlowPaths';
 import { createApiError } from './api';
+import type { GitIntegrationStrategy } from '../../types.js';
+import { renderGitWorkflowTemplate, resolveProjectGitWorkflowPolicy, resolveTaskTicketContext } from './projectGitWorkflowPolicyService';
 import {
   markSessionWorkspaceIntegrated,
   markSessionWorkspaceIntegrationRequired,
@@ -15,7 +17,7 @@ export type WorkspaceIntegrationConflict = {
   status: 'conflict';
   code: 'INTEGRATION_CONFLICT';
   workspaceId: string;
-  strategy: 'rebase-ff';
+  strategy: GitIntegrationStrategy;
   baseBranch: string;
   sourceBranch: string;
   baseRevision: string;
@@ -24,12 +26,13 @@ export type WorkspaceIntegrationConflict = {
   sourceCommits: string[];
   changedFiles: string[];
   conflictedPaths: string[];
+  mergeMessage?: string;
 };
 
 export type WorkspaceIntegrationSuccess = {
   status: 'succeeded';
   workspaceId: string;
-  strategy: 'rebase-ff';
+  strategy: GitIntegrationStrategy;
   baseBranch: string;
   sourceBranch: string;
   baseRevision: string;
@@ -48,7 +51,7 @@ const integrationMetrics = { attempts: 0, successes: 0, conflicts: 0, aborts: 0,
 type PersistedIntegrationState = {
   workspaceId: string;
   status: 'conflict';
-  strategy: 'rebase-ff';
+  strategy: GitIntegrationStrategy;
   baseBranch: string;
   sourceBranch: string;
   baseRevision: string;
@@ -57,6 +60,7 @@ type PersistedIntegrationState = {
   sourceCommits: string[];
   changedFiles: string[];
   conflictedPaths: string[];
+  mergeMessage?: string;
   recordedAt: string;
 };
 
@@ -139,6 +143,7 @@ function rebaseInProgress(root: string) {
 }
 
 function restoreSourceHead(workspace: SessionWorkspace, sourceHead: string) {
+  if (mergeInProgress(workspace.root)) runGit(workspace.root, ['merge', '--abort'], { allowFailure: true, timeoutMs: 60_000 });
   if (rebaseInProgress(workspace.root)) runGit(workspace.root, ['rebase', '--abort'], { allowFailure: true, timeoutMs: 60_000 });
   if (head(workspace.root) !== sourceHead) runGit(workspace.root, ['reset', '--hard', sourceHead], { timeoutMs: 60_000 });
   if (head(workspace.root) !== sourceHead || !clean(workspace.root)) {
@@ -217,9 +222,152 @@ function validateIntegrationPreconditions(workspace: SessionWorkspace) {
   return { baseHead, sourceHead };
 }
 
-export function integrateWorkspaceCommits(workspaceId: string): WorkspaceIntegrationSuccess | WorkspaceIntegrationConflict {
+export type WorkspaceIntegrationTaskContext = {
+  id?: string;
+  displayId?: string;
+  jiraKey?: string;
+  title?: string;
+  category?: string;
+  type?: string;
+  projectId?: string;
+};
+
+export type WorkspaceIntegrationOptions = {
+  task?: WorkspaceIntegrationTaskContext;
+};
+
+function integrateWorkspaceWithMergePolicy(
+  workspace: SessionWorkspace,
+  baseHeadBefore: string,
+  sourceHead: string,
+  commits: string[],
+  files: string[],
+  mergeMessageTemplate: string,
+  task?: WorkspaceIntegrationTaskContext,
+): WorkspaceIntegrationSuccess | WorkspaceIntegrationConflict {
+  if (task?.projectId && task.projectId !== workspace.projectId) {
+    throw createApiError(409, 'WORKSPACE_TASK_PROJECT_MISMATCH', 'The integration task belongs to a different project than this workspace.', {
+      affectedId: workspace.workspaceId,
+      details: { workspaceProjectId: workspace.projectId, taskProjectId: task.projectId },
+    });
+  }
+  const mergeMessage = renderGitWorkflowTemplate(mergeMessageTemplate, resolveTaskTicketContext(task || {}));
+  markSessionWorkspaceIntegrationRequired(workspace.workspaceId, true);
+
+  if (!isAncestor(workspace.root, baseHeadBefore, sourceHead)) {
+    const probe = runGit(workspace.root, ['merge', '--no-commit', '--no-ff', baseHeadBefore], { allowFailure: true, timeoutMs: 60_000 });
+    if (probe.status !== 0) {
+      const conflicts = conflictedPaths(workspace.root);
+      if (conflicts.length === 0 || !mergeInProgress(workspace.root)) {
+        restoreSourceHead(workspace, sourceHead);
+        throw createApiError(409, 'WORKSPACE_INTEGRATION_FAILED', 'Local workspace merge preflight failed without a recoverable conflict.', {
+          affectedId: workspace.workspaceId,
+          details: { stderr: probe.stderr, sourceHead, baseHeadBefore },
+        });
+      }
+      const state: PersistedIntegrationState = {
+        workspaceId: workspace.workspaceId,
+        status: 'conflict',
+        strategy: 'merge',
+        baseBranch: workspace.baseBranch,
+        sourceBranch: workspace.branch,
+        baseRevision: workspace.baseRevision,
+        baseHeadBefore,
+        sourceHead,
+        sourceCommits: commits,
+        changedFiles: files,
+        conflictedPaths: conflicts,
+        mergeMessage,
+        recordedAt: new Date().toISOString(),
+      };
+      writeIntegrationState(state);
+      integrationMetrics.conflicts += 1;
+      return {
+        status: 'conflict',
+        code: 'INTEGRATION_CONFLICT',
+        workspaceId: state.workspaceId,
+        strategy: 'merge',
+        baseBranch: state.baseBranch,
+        sourceBranch: state.sourceBranch,
+        baseRevision: state.baseRevision,
+        baseHeadBefore: state.baseHeadBefore,
+        sourceHead: state.sourceHead,
+        sourceCommits: state.sourceCommits,
+        changedFiles: state.changedFiles,
+        conflictedPaths: state.conflictedPaths,
+        mergeMessage,
+      };
+    }
+    if (mergeInProgress(workspace.root)) runGit(workspace.root, ['merge', '--abort'], { timeoutMs: 60_000 });
+    if (!clean(workspace.root) || head(workspace.root) !== sourceHead) {
+      restoreSourceHead(workspace, sourceHead);
+      throw createApiError(409, 'WORKSPACE_SOURCE_PROBE_RESTORE_FAILED', 'Merge preflight did not restore the isolated source workspace cleanly.', {
+        affectedId: workspace.workspaceId,
+        details: { expectedHead: sourceHead, currentHead: head(workspace.root) },
+      });
+    }
+  }
+
+  const currentBaseHead = head(workspace.projectRoot);
+  if (mergeInProgress(workspace.projectRoot) || !clean(workspace.projectRoot) || branch(workspace.projectRoot) !== workspace.baseBranch || currentBaseHead !== baseHeadBefore) {
+    throw createApiError(409, 'WORKSPACE_BASE_CHANGED_DURING_INTEGRATION', 'Shared base changed after merge preflight. Retry from the latest clean base.', {
+      affectedId: workspace.workspaceId,
+      details: { expectedHead: baseHeadBefore, currentHead: currentBaseHead },
+    });
+  }
+
+  const merge = runGit(workspace.projectRoot, ['merge', '--no-ff', '-m', mergeMessage, sourceHead], { allowFailure: true, timeoutMs: 60_000 });
+  if (merge.status !== 0) {
+    const conflicts = conflictedPaths(workspace.projectRoot);
+    if (mergeInProgress(workspace.projectRoot)) runGit(workspace.projectRoot, ['merge', '--abort'], { allowFailure: true, timeoutMs: 60_000 });
+    if (head(workspace.projectRoot) !== baseHeadBefore || !clean(workspace.projectRoot)) {
+      throw createApiError(500, 'WORKSPACE_BASE_RECOVERY_FAILED', 'Failed merge integration could not restore the shared base to its recorded clean state.', {
+        affectedId: workspace.workspaceId,
+        details: { expectedHead: baseHeadBefore, currentHead: head(workspace.projectRoot), conflictedPaths: conflicts },
+      });
+    }
+    throw createApiError(409, 'WORKSPACE_INTEGRATION_FAILED', 'Configured merge integration failed after isolated preflight; the shared base was restored.', {
+      affectedId: workspace.workspaceId,
+      details: { stderr: merge.stderr, sourceHead, baseHeadBefore, conflictedPaths: conflicts },
+    });
+  }
+
+  const baseHeadAfter = head(workspace.projectRoot);
+  const sourceSync = runGit(workspace.root, ['merge', '--ff-only', baseHeadAfter], { allowFailure: true, timeoutMs: 60_000 });
+  if (sourceSync.status !== 0) {
+    runGit(workspace.projectRoot, ['reset', '--hard', baseHeadBefore], { timeoutMs: 60_000 });
+    restoreSourceHead(workspace, sourceHead);
+    throw createApiError(500, 'WORKSPACE_SOURCE_SYNC_FAILED', 'Merge commit was created but could not be mirrored back to the isolated workspace; the shared base was restored.', {
+      affectedId: workspace.workspaceId,
+      details: { stderr: sourceSync.stderr, baseHeadBefore, attemptedMergeHead: baseHeadAfter },
+    });
+  }
+
+  const integratedCommits = sourceCommits(workspace.projectRoot, baseHeadBefore, baseHeadAfter);
+  clearIntegrationState(workspace.workspaceId);
+  markSessionWorkspaceIntegrated(workspace.workspaceId, baseHeadAfter);
+  integrationMetrics.successes += 1;
+  return {
+    status: 'succeeded',
+    workspaceId: workspace.workspaceId,
+    strategy: 'merge',
+    baseBranch: workspace.baseBranch,
+    sourceBranch: workspace.branch,
+    baseRevision: workspace.baseRevision,
+    baseHeadBefore,
+    baseHeadAfter,
+    sourceHead,
+    integratedHead: baseHeadAfter,
+    sourceCommits: commits,
+    integratedCommits,
+    changedFiles: files,
+  };
+}
+
+export function integrateWorkspaceCommits(workspaceId: string, options: WorkspaceIntegrationOptions = {}): WorkspaceIntegrationSuccess | WorkspaceIntegrationConflict {
   integrationMetrics.attempts += 1;
   const workspace = resolveWorkspaceForIntegration(workspaceId);
+  const policy = resolveProjectGitWorkflowPolicy({ gitWorkflowPolicy: workspace.gitWorkflowPolicy } as any);
   const { baseHead: baseHeadBefore, sourceHead } = validateIntegrationPreconditions(workspace);
   const commits = sourceCommits(workspace.projectRoot, workspace.baseRevision, sourceHead);
   const files = changedFiles(workspace.projectRoot, workspace.baseRevision, sourceHead);
@@ -231,7 +379,7 @@ export function integrateWorkspaceCommits(workspaceId: string): WorkspaceIntegra
     return {
       status: 'succeeded',
       workspaceId: workspace.workspaceId,
-      strategy: 'rebase-ff',
+      strategy: policy.integrationStrategy,
       baseBranch: workspace.baseBranch,
       sourceBranch: workspace.branch,
       baseRevision: workspace.baseRevision,
@@ -244,6 +392,10 @@ export function integrateWorkspaceCommits(workspaceId: string): WorkspaceIntegra
       changedFiles: files,
       alreadyIntegrated: true,
     };
+  }
+
+  if (policy.integrationStrategy === 'merge') {
+    return integrateWorkspaceWithMergePolicy(workspace, baseHeadBefore, sourceHead, commits, files, policy.mergeMessageTemplate, options.task);
   }
 
   markSessionWorkspaceIntegrationRequired(workspace.workspaceId, true);
@@ -355,7 +507,9 @@ export function abortWorkspaceIntegration(workspaceId: string) {
   const state = readIntegrationState(workspace.workspaceId);
   if (!state) throw createApiError(409, 'WORKSPACE_INTEGRATION_NOT_PENDING', 'No recoverable workspace integration is pending.', { affectedId: workspace.workspaceId });
 
-  if (rebaseInProgress(workspace.root)) {
+  if (state.strategy === 'merge' && mergeInProgress(workspace.root)) {
+    runGit(workspace.root, ['merge', '--abort'], { timeoutMs: 60_000 });
+  } else if (rebaseInProgress(workspace.root)) {
     runGit(workspace.root, ['rebase', '--abort'], { timeoutMs: 60_000 });
   } else if (head(workspace.root) !== state.sourceHead) {
     if (!clean(workspace.root)) {
@@ -397,6 +551,67 @@ export function retryWorkspaceIntegration(workspaceId: string): WorkspaceIntegra
       affectedId: workspace.workspaceId,
       details: { expectedHead: state.baseHeadBefore, currentHead: currentBaseHead },
     });
+  }
+
+  if (state.strategy === 'merge') {
+    if (mergeInProgress(workspace.root)) {
+      const conflicts = conflictedPaths(workspace.root);
+      if (conflicts.length > 0) {
+        const nextState = { ...state, conflictedPaths: conflicts, recordedAt: new Date().toISOString() };
+        writeIntegrationState(nextState);
+        integrationMetrics.conflicts += 1;
+        return { ...nextState, status: 'conflict', code: 'INTEGRATION_CONFLICT' };
+      }
+      if (!state.mergeMessage) {
+        throw createApiError(409, 'WORKSPACE_MERGE_MESSAGE_MISSING', 'Configured merge resolution is missing its recorded merge message. Abort and retry the integration from a fresh conflict state.', {
+          affectedId: workspace.workspaceId,
+        });
+      }
+      const commit = runGit(workspace.root, ['commit', '-m', state.mergeMessage], { allowFailure: true, timeoutMs: 60_000 });
+      if (commit.status !== 0) {
+        throw createApiError(409, 'WORKSPACE_RESOLUTION_COMMIT_FAILED', 'Resolved merge could not be finalized in the isolated workspace. Ensure all conflict resolutions are staged.', {
+          affectedId: workspace.workspaceId,
+          details: { stderr: commit.stderr },
+        });
+      }
+    }
+
+    const resolutionHead = head(workspace.root);
+    if (resolutionHead === state.sourceHead || mergeInProgress(workspace.root) || !clean(workspace.root) || !isAncestor(workspace.root, state.sourceHead, resolutionHead) || !isAncestor(workspace.root, state.baseHeadBefore, resolutionHead)) {
+      throw createApiError(409, 'WORKSPACE_RETRY_STATE_INVALID', 'Isolated merge resolution must be a clean merge commit containing both the recorded source and base revisions.', {
+        affectedId: workspace.workspaceId,
+        details: { sourceHead: state.sourceHead, baseHeadBefore: state.baseHeadBefore, resolutionHead },
+      });
+    }
+
+    const fastForward = runGit(workspace.projectRoot, ['merge', '--ff-only', resolutionHead], { allowFailure: true, timeoutMs: 60_000 });
+    if (fastForward.status !== 0) {
+      throw createApiError(409, 'WORKSPACE_RESOLUTION_APPLY_FAILED', 'Resolved merge could not be fast-forwarded onto the shared base.', {
+        affectedId: workspace.workspaceId,
+        details: { stderr: fastForward.stderr, resolutionHead, baseHeadBefore: state.baseHeadBefore },
+      });
+    }
+
+    const baseHeadAfter = head(workspace.projectRoot);
+    const integratedCommits = sourceCommits(workspace.projectRoot, state.baseHeadBefore, resolutionHead);
+    clearIntegrationState(workspace.workspaceId);
+    markSessionWorkspaceIntegrated(workspace.workspaceId, baseHeadAfter);
+    integrationMetrics.successes += 1;
+    return {
+      status: 'succeeded',
+      workspaceId: workspace.workspaceId,
+      strategy: 'merge',
+      baseBranch: state.baseBranch,
+      sourceBranch: state.sourceBranch,
+      baseRevision: state.baseRevision,
+      baseHeadBefore: state.baseHeadBefore,
+      baseHeadAfter,
+      sourceHead: state.sourceHead,
+      integratedHead: resolutionHead,
+      sourceCommits: state.sourceCommits,
+      integratedCommits,
+      changedFiles: state.changedFiles,
+    };
   }
 
   if (rebaseInProgress(workspace.root)) {

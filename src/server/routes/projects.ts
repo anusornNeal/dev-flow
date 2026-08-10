@@ -5,6 +5,7 @@ import { getProjects, getProject, createProject as dbCreateProject, updateProjec
 import { createApiError, sendApiError } from '../services/api';
 import { findProjectByIdentifier } from '../services/taskService';
 import { validateString } from '../validation';
+import { validateGitWorkflowPolicy } from '../services/projectGitWorkflowPolicyService';
 import { getPromptPipelineStructure, renderPromptTemplate, PromptRenderContext } from '../services/promptTemplateService';
 import { readAtlasCache } from '../services/projectAtlasCacheService';
 import { getManagedProjectAtlas, maybeRefreshAtlasOnProjectOpen } from '../services/projectAtlasService';
@@ -65,6 +66,7 @@ export function registerProjectRoutes(app: express.Express, deps: ApiRouteDeps) 
         repoUrl: project.repoUrl,
         localPath: project.localPath,
         taskIdPrefix: project.taskIdPrefix,
+        gitWorkflowPolicy: project.gitWorkflowPolicy,
       })));
     }
 
@@ -72,13 +74,20 @@ export function registerProjectRoutes(app: express.Express, deps: ApiRouteDeps) 
   });
 
   app.post('/api/projects', (req, res) => {
-    const { name, repoUrl, description, localPath, taskIdPrefix } = req.body;
+    const { name, repoUrl, description, localPath, taskIdPrefix, gitWorkflowPolicy } = req.body;
 
     const nameErr = validateString(name, 'name', true);
     if (nameErr) return res.status(400).json({ error: nameErr });
 
     const repoErr = validateString(repoUrl, 'repoUrl', true);
     if (repoErr) return res.status(400).json({ error: repoErr });
+
+    let normalizedGitWorkflowPolicy;
+    try {
+      normalizedGitWorkflowPolicy = validateGitWorkflowPolicy(gitWorkflowPolicy);
+    } catch (error) {
+      return sendApiError(res, error);
+    }
 
     const newProject = {
       id: `project-${Date.now()}-${Math.floor(Math.random() * 1000000)}`,
@@ -87,6 +96,7 @@ export function registerProjectRoutes(app: express.Express, deps: ApiRouteDeps) 
       description: (description || '').trim(),
       localPath: (localPath || '').trim() || undefined,
       taskIdPrefix: (taskIdPrefix || '').trim() || undefined,
+      gitWorkflowPolicy: normalizedGitWorkflowPolicy,
       createdAt: new Date().toISOString(),
     };
 
@@ -103,13 +113,20 @@ export function registerProjectRoutes(app: express.Express, deps: ApiRouteDeps) 
       return res.status(404).json({ error: 'Project not found' });
     }
 
-    const { name, repoUrl, description, localPath, taskIdPrefix } = req.body;
+    const { name, repoUrl, description, localPath, taskIdPrefix, gitWorkflowPolicy } = req.body;
 
     if (name !== undefined) project.name = name.trim();
     if (repoUrl !== undefined) project.repoUrl = repoUrl.trim();
     if (description !== undefined) project.description = description.trim();
     if (localPath !== undefined) project.localPath = localPath.trim() || undefined;
     if (taskIdPrefix !== undefined) project.taskIdPrefix = taskIdPrefix.trim() || undefined;
+    if (gitWorkflowPolicy !== undefined) {
+      try {
+        project.gitWorkflowPolicy = validateGitWorkflowPolicy(gitWorkflowPolicy);
+      } catch (error) {
+        return sendApiError(res, error);
+      }
+    }
 
     if (rejectProjectIdentityConflict(res, project)) return;
 

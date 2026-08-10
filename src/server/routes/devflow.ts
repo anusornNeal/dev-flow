@@ -1,5 +1,5 @@
 import { getProjects } from '../repositories/projectRepository.js';
-import { getTasks } from '../repositories/taskRepository.js';
+import { getTaskByIdentifier, getTasks } from '../repositories/taskRepository.js';
 import type express from 'express';
 import type { ApiRouteDeps } from '../types';
 import { getCapabilityCatalog, getToolSchema } from '../contracts/devflowContract';
@@ -152,7 +152,10 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
 
   app.post('/api/workspaces/integrate', (req, res) => {
     try {
-      const result = integrateWorkspaceCommits(req.body?.workspaceId);
+      const taskId = typeof req.body?.taskId === 'string' ? req.body.taskId.trim() : '';
+      const task = taskId ? getTaskByIdentifier(taskId, 'full') : undefined;
+      if (taskId && !task) throw createApiError(404, 'TASK_NOT_FOUND', `Task '${taskId}' was not found for workspace integration.`, { affectedId: taskId });
+      const result = integrateWorkspaceCommits(req.body?.workspaceId, { task });
       return res.status(result.status === 'conflict' ? 409 : 200).json(result);
     } catch (error) {
       return sendApiError(res, error);

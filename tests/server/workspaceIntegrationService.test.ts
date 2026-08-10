@@ -30,8 +30,14 @@ function repoFixture() {
   return root;
 }
 
-function project(root: string) {
-  return { id: `project-${path.basename(root)}`, name: 'Fixture', localPath: root, repoUrl: 'https://invalid.example/devflow/no-network.git' } as any;
+function project(root: string, gitWorkflowPolicy?: Record<string, unknown>) {
+  return {
+    id: `project-${path.basename(root)}`,
+    name: 'Fixture',
+    localPath: root,
+    repoUrl: 'https://invalid.example/devflow/no-network.git',
+    gitWorkflowPolicy,
+  } as any;
 }
 
 function commitFile(root: string, file: string, content: string, message: string) {
@@ -88,12 +94,81 @@ test('advanced base rebases workspace commits and fast-forwards linearly', () =>
   assert.equal(integratedParents.length, 2);
   assert.equal(integratedParents.every((line) => line.trim().split(/\s+/).length === 2), true);
   assert.equal(fs.readFileSync(path.join(root, 'base-only.txt'), 'utf8').replace(/\r\n/g, '\n'), 'base\nadvanced\n');
-  assert.equal(fs.readFileSync(path.join(root, 'workspace.txt'), 'utf8').replace(/\r\n/g, '\n'), 'one\n');  const repeated = integrateWorkspaceCommits(workspace.workspaceId);
+  assert.equal(fs.readFileSync(path.join(root, 'workspace.txt'), 'utf8').replace(/\r\n/g, '\n'), 'one\n');
+  const repeated = integrateWorkspaceCommits(workspace.workspaceId);
   assert.equal(repeated.status, 'succeeded');
   assert.equal(repeated.alreadyIntegrated, true);
   assert.equal(repeated.baseHeadAfter, result.baseHeadAfter);
   assert.equal(repeated.sourceCommits.length, 0, 'already-integrated evidence must not reclassify advanced-base commits as workspace commits');
   assert.equal(repeated.integratedCommits.length, 0);
+});
+
+test('explicit merge policy preserves merge topology and ticket-aware merge marker', () => {
+  const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-integration-merge-policy-'));
+  process.env.DEVFLOW_RUNTIME_DIR = runtimeRoot;
+  resetSessionWorkspaceRuntimeForTests();
+  const root = repoFixture();
+  const workspace = createOrReuseSessionWorkspace(project(root, {
+    integrationStrategy: 'merge',
+    mergeMessageTemplate: 'Merge {ticket}',
+  }), 'chat-merge-policy');
+  commitFile(workspace.root, 'workspace.txt', 'workspace\n', '[QCA-3617] Fix: workspace change');
+  commitFile(root, 'base-only.txt', 'base\nadvanced\n', 'advance base');
+  const baseHeadBefore = git(root, ['rev-parse', 'HEAD']).stdout;
+
+  const result = integrateWorkspaceCommits(workspace.workspaceId, {
+    task: { jiraKey: 'QCA-3617', displayId: 'DVF-0453', title: 'Fix installer summary', category: 'Fix' },
+  });
+  assert.equal(result.status, 'succeeded');
+  assert.equal(result.strategy, 'merge');
+  assert.equal(result.baseHeadBefore, baseHeadBefore);
+  assert.equal(git(root, ['log', '-1', '--format=%s']).stdout, 'Merge QCA-3617');
+  const parents = git(root, ['rev-list', '--parents', '-n', '1', result.baseHeadAfter]).stdout.trim().split(/\s+/);
+  assert.equal(parents.length, 3, 'explicit merge policy must preserve a two-parent merge commit');
+  assert.equal(fs.readFileSync(path.join(root, 'workspace.txt'), 'utf8').replace(/\r\n/g, '\n'), 'workspace\n');
+  assert.equal(fs.readFileSync(path.join(root, 'base-only.txt'), 'utf8').replace(/\r\n/g, '\n'), 'base\nadvanced\n');
+});
+
+test('explicit merge conflicts can abort and retry without mutating the shared base early', () => {
+  const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-integration-merge-conflict-'));
+  process.env.DEVFLOW_RUNTIME_DIR = runtimeRoot;
+  resetSessionWorkspaceRuntimeForTests();
+  const root = repoFixture();
+  const workspace = createOrReuseSessionWorkspace(project(root, {
+    integrationStrategy: 'merge',
+    mergeMessageTemplate: 'Merge {ticket}',
+  }), 'chat-merge-conflict');
+  commitFile(workspace.root, 'shared.txt', 'workspace changed\n', '[QCA-3617] Fix: workspace conflict');
+  const sourceHeadBefore = git(workspace.root, ['rev-parse', 'HEAD']).stdout;
+  commitFile(root, 'shared.txt', 'base changed\n', 'base conflict');
+  const baseHeadBefore = git(root, ['rev-parse', 'HEAD']).stdout;
+  const options = {
+    task: { jiraKey: 'QCA-3617', displayId: 'DVF-0453', title: 'Fix installer summary', category: 'Fix' },
+  };
+
+  const firstConflict = integrateWorkspaceCommits(workspace.workspaceId, options);
+  assert.equal(firstConflict.status, 'conflict');
+  assert.equal(firstConflict.strategy, 'merge');
+  assert.equal(git(root, ['rev-parse', 'HEAD']).stdout, baseHeadBefore, 'shared base must remain unchanged while merge conflict is isolated');
+  assert.equal(git(workspace.root, ['rev-parse', '-q', '--verify', 'MERGE_HEAD'], true).status, 0);
+
+  const aborted = abortWorkspaceIntegration(workspace.workspaceId);
+  assert.equal(aborted.status, 'aborted');
+  assert.equal(git(workspace.root, ['rev-parse', 'HEAD']).stdout, sourceHeadBefore);
+  assert.equal(git(workspace.root, ['status', '--porcelain']).stdout, '');
+  assert.equal(git(root, ['rev-parse', 'HEAD']).stdout, baseHeadBefore);
+
+  const secondConflict = integrateWorkspaceCommits(workspace.workspaceId, options);
+  assert.equal(secondConflict.status, 'conflict');
+  fs.writeFileSync(path.join(workspace.root, 'shared.txt'), 'resolved\n');
+  git(workspace.root, ['add', 'shared.txt']);
+  const retried = retryWorkspaceIntegration(workspace.workspaceId);
+  assert.equal(retried.status, 'succeeded');
+  assert.equal(retried.strategy, 'merge');
+  assert.equal(git(root, ['log', '-1', '--format=%s']).stdout, 'Merge QCA-3617');
+  const parents = git(root, ['rev-list', '--parents', '-n', '1', retried.baseHeadAfter]).stdout.trim().split(/\s+/);
+  assert.equal(parents.length, 3);
+  assert.equal(fs.readFileSync(path.join(root, 'shared.txt'), 'utf8').replace(/\r\n/g, '\n'), 'resolved\n');
 });
 
 test('dirty base blocks integration before mutation', () => {

@@ -187,6 +187,20 @@ export interface Task {
   repo?: string;
 }
 
+export type GitIntegrationStrategy = 'rebase-ff' | 'merge';
+
+export interface GitWorkflowPolicy {
+  integrationStrategy?: GitIntegrationStrategy;
+  commitMessageTemplate?: string;
+  mergeMessageTemplate?: string;
+}
+
+export interface ResolvedGitWorkflowPolicy {
+  integrationStrategy: GitIntegrationStrategy;
+  commitMessageTemplate: string;
+  mergeMessageTemplate: string;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -194,6 +208,7 @@ export interface Project {
   description?: string;
   localPath?: string; // Absolute path to the local project directory
   taskIdPrefix?: string; // Custom prefix for task display IDs (e.g. DVF)
+  gitWorkflowPolicy?: GitWorkflowPolicy;
   createdAt: string;
 }
 

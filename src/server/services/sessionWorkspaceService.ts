@@ -4,6 +4,8 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { getDevFlowWorkspacesDir } from '../../lib/devFlowPaths';
 import { createApiError } from './api';
+import type { GitWorkflowPolicy } from '../../types.js';
+import { validateGitWorkflowPolicy } from './projectGitWorkflowPolicyService';
 
 export type SessionWorkspaceState = 'ready' | 'active' | 'integration-required';
 
@@ -16,6 +18,7 @@ export type SessionWorkspace = {
   branch: string;
   baseBranch: string;
   baseRevision: string;
+  gitWorkflowPolicy?: GitWorkflowPolicy;
   state: SessionWorkspaceState;
   createdAt: string;
   lastUsedAt: string;
@@ -157,7 +160,7 @@ function validateReusableWorkspace(workspace: SessionWorkspace, projectRoot: str
   return currentBranch(root) === workspace.branch;
 }
 
-export function createOrReuseSessionWorkspace(project: { id: string; localPath?: string | null }, sessionId: string) {
+export function createOrReuseSessionWorkspace(project: { id: string; localPath?: string | null; gitWorkflowPolicy?: unknown }, sessionId: string) {
   const cleanSessionId = String(sessionId || '').trim();
   if (!cleanSessionId) throw createApiError(400, 'SESSION_ID_REQUIRED', 'sessionId is required to create an isolated workspace.');
   if (!project?.id) throw createApiError(400, 'PROJECT_ID_REQUIRED', 'project.id is required to create an isolated workspace.');
@@ -207,6 +210,7 @@ export function createOrReuseSessionWorkspace(project: { id: string; localPath?:
     branch,
     baseBranch,
     baseRevision,
+    gitWorkflowPolicy: validateGitWorkflowPolicy(project.gitWorkflowPolicy),
     state: 'ready',
     createdAt: new Date(now).toISOString(),
     lastUsedAt: new Date(now).toISOString(),

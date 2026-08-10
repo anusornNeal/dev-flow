@@ -7,7 +7,8 @@ CREATE TABLE IF NOT EXISTS projects (
   description TEXT,
   createdAt TEXT,
   localPath TEXT,
-  taskIdPrefix TEXT
+  taskIdPrefix TEXT,
+  gitWorkflowPolicy TEXT
 );
 
 CREATE TABLE IF NOT EXISTS tasks (

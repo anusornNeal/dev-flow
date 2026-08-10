@@ -371,6 +371,7 @@ export function getProjectStartContext(state: AppState, args: Record<string, any
       repoUrl: project.repoUrl,
       localPath: project.localPath,
       taskIdPrefix: project.taskIdPrefix,
+      gitWorkflowPolicy: project.gitWorkflowPolicy,
       workspaceId: typeof args.workspaceId === 'string' ? args.workspaceId : undefined,
       isolatedSession: Boolean(args.sessionId || args.workspaceId),
     },

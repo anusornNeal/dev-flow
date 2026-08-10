@@ -4,6 +4,11 @@ import path from 'node:path';
 import { getGitWorkspaceSnapshotForRoot } from './gitService';
 
 const MAX_HASH_FILE_BYTES = 2 * 1024 * 1024;
+const DEPENDENCY_IDENTITY_PATHS = [
+  'package.json', 'package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lock', 'bun.lockb', 'deno.lock',
+  'gradle.properties', 'settings.gradle', 'settings.gradle.kts', 'build.gradle', 'build.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties',
+  'Gemfile.lock', 'Podfile.lock', 'Package.resolved', 'pyproject.toml', 'poetry.lock', 'requirements.txt', 'Cargo.lock', 'go.sum',
+] as const;
 
 export type RepoRevisionChangedFile = {
   path: string;
@@ -53,6 +58,51 @@ export function buildRepoEvidenceIdentity(input: {
   digest.update('\0');
   digest.update(String(input.fileRevision || 'unknown-file'));
   return `${normalizedPath}:${digest.digest('hex').slice(0, 20)}`;
+}
+
+export type RepoAffectedInputIdentity = {
+  mode: 'full' | 'scoped';
+  fingerprint: string;
+  paths: string[];
+};
+
+function normalizeScopedPath(root: string, value: unknown) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const normalizedRoot = path.resolve(root);
+  const absolutePath = path.resolve(normalizedRoot, value);
+  const relativePath = path.relative(normalizedRoot, absolutePath).replace(/\\/g, '/');
+  if (!relativePath || relativePath === '..' || relativePath.startsWith('../') || path.isAbsolute(relativePath)) return null;
+  return relativePath;
+}
+
+export function buildRepoAffectedInputIdentity(root: string, repoRevision: RepoRevision, affectedInputPaths?: unknown): RepoAffectedInputIdentity {
+  if (!Array.isArray(affectedInputPaths) || affectedInputPaths.length === 0) {
+    return { mode: 'full', fingerprint: repoRevision.token, paths: [] };
+  }
+  const normalized = affectedInputPaths.map((entry) => normalizeScopedPath(root, entry));
+  if (normalized.some((entry) => !entry)) {
+    return { mode: 'full', fingerprint: repoRevision.token, paths: [] };
+  }
+  const paths = Array.from(new Set(normalized as string[])).sort();
+  const digest = crypto.createHash('sha256');
+  digest.update(repoRevision.head || repoRevision.token.split(':')[0] || 'unknown-head');
+  for (const relativePath of paths) {
+    digest.update('\0');
+    digest.update(relativePath);
+    digest.update('\0');
+    digest.update(fingerprintChangedFile(root, relativePath));
+  }
+  return { mode: 'scoped', fingerprint: `scoped:${digest.digest('hex')}`, paths };
+}
+
+export function getRepoDependencyFingerprint(root: string) {
+  const normalizedRoot = path.resolve(root);
+  const entries = DEPENDENCY_IDENTITY_PATHS.flatMap((relativePath) => {
+    const absolutePath = path.resolve(normalizedRoot, relativePath);
+    if (!fs.existsSync(absolutePath)) return [];
+    return [{ path: relativePath, fingerprint: fingerprintChangedFile(normalizedRoot, relativePath) }];
+  });
+  return crypto.createHash('sha256').update(JSON.stringify(entries)).digest('hex');
 }
 
 export function getRepoRevisionForRoot(root: string): RepoRevision {

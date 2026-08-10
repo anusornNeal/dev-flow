@@ -7,7 +7,7 @@ import type { AppState } from '../types';
 import { createApiError } from './api';
 import { resolveProjectRoot, resolveSafePath } from './localFileService';
 import { getProjectCommandConfigSnapshot, loadProjectCommandPreset } from './projectCommandConfigService';
-import { getRepoRevisionForRoot } from './repoRevisionService';
+import { buildRepoAffectedInputIdentity, getRepoDependencyFingerprint, getRepoRevisionForRoot } from './repoRevisionService';
 import {
   createVerificationCandidate,
   createVerificationCandidateAsync,
@@ -120,6 +120,13 @@ export interface RunProjectCommandResult {
     lineageToken?: string;
     cachedAt?: string;
     originalDurationMs?: number;
+    evidenceId?: string;
+    sourceConsumerId?: string;
+    consumers?: string[];
+    reusable?: boolean;
+    affectedInputFingerprint?: string;
+    dependencyFingerprint?: string;
+    environmentFingerprint?: string;
   };
 }
 
@@ -454,6 +461,13 @@ export type ProjectCommandExecutionIdentity = {
   semanticKey: string;
   command: string;
   commandConfigFingerprint?: string;
+  affectedInputFingerprint?: string;
+  affectedInputPaths?: string[];
+  dependencyFingerprint?: string;
+  environmentFingerprint?: string;
+  platform?: string;
+  arch?: string;
+  runtime?: string;
 };
 
 function buildProjectCommandExecutionIdentity(
@@ -464,22 +478,42 @@ function buildProjectCommandExecutionIdentity(
   maxOutputBytes: number,
   responseMode: 'compact' | 'standard' | 'debug',
   overrides: { repoRevision?: string; lineageToken?: string } = {},
+  identityArgs: Record<string, any> = {},
 ): ProjectCommandExecutionIdentity | null {
-  let repoRevision = overrides.repoRevision;
-  if (!repoRevision) {
-    try {
-      repoRevision = getRepoRevisionForRoot(root).token;
-    } catch {
-      return null;
-    }
+  let observedRevision;
+  try {
+    observedRevision = getRepoRevisionForRoot(root);
+  } catch {
+    return null;
   }
+  const repoRevision = overrides.repoRevision ?? observedRevision.token;
   const lineageToken = overrides.lineageToken ?? getRepoCacheLineage(root, [...PROJECT_COMMAND_CACHE_DEPENDENCIES]).token;
   const semanticKey = semanticKeyForResolvedCommand(root, resolvedCommand, cwdPath);
   const commandConfigFingerprint = resolvedCommand.source === 'repository-config'
     ? getProjectCommandConfigSnapshot(root).fingerprint
     : undefined;
+  const lineageHead = repoRevision.split(':')[0] || observedRevision.head;
+  const affectedInputs = buildRepoAffectedInputIdentity(root, {
+    ...observedRevision,
+    token: repoRevision,
+    head: lineageHead,
+  }, identityArgs.affectedInputPaths);
+  const dependencyFingerprint = getRepoDependencyFingerprint(root);
+  const environment = {
+    CI: process.env.CI || '',
+    NODE_ENV: process.env.NODE_ENV || '',
+    NODE_OPTIONS: process.env.NODE_OPTIONS || '',
+  };
+  const environmentFingerprint = crypto.createHash('sha256').update(JSON.stringify({
+    platform: process.platform,
+    arch: process.arch,
+    runtime: process.version,
+    environment,
+  })).digest('hex');
   const identity = {
-    repoRevision,
+    revisionLineage: lineageHead,
+    affectedInputFingerprint: affectedInputs.fingerprint,
+    affectedInputPaths: affectedInputs.paths,
     lineageToken,
     semanticKey,
     cwd: path.relative(root, cwdPath) || '.',
@@ -489,14 +523,11 @@ function buildProjectCommandExecutionIdentity(
     source: resolvedCommand.source,
     configPath: resolvedCommand.configPath,
     commandConfigFingerprint,
+    dependencyFingerprint,
+    environmentFingerprint,
     platform: process.platform,
     arch: process.arch,
-    node: process.version,
-    env: {
-      CI: process.env.CI || '',
-      NODE_ENV: process.env.NODE_ENV || '',
-      NODE_OPTIONS: process.env.NODE_OPTIONS || '',
-    },
+    runtime: process.version,
   };
   const key = crypto.createHash('sha256').update(JSON.stringify(identity)).digest('hex');
   return {
@@ -506,6 +537,13 @@ function buildProjectCommandExecutionIdentity(
     semanticKey,
     command: resolvedCommand.command,
     ...(commandConfigFingerprint ? { commandConfigFingerprint } : {}),
+    affectedInputFingerprint: affectedInputs.fingerprint,
+    affectedInputPaths: affectedInputs.paths,
+    dependencyFingerprint,
+    environmentFingerprint,
+    platform: process.platform,
+    arch: process.arch,
+    runtime: process.version,
   };
 }
 
@@ -518,7 +556,7 @@ export function getProjectCommandExecutionIdentity(state: AppState, args: Record
     ? Math.max(1, Math.min(MAX_TIMEOUT_MS, Number(args.timeoutMs)))
     : resolvedCommand.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const { responseMode, maxOutputBytes } = resolveOutputBudget(args, resolvedCommand);
-  return buildProjectCommandExecutionIdentity(root, resolvedCommand, cwdPath, timeoutMs, maxOutputBytes, responseMode);
+  return buildProjectCommandExecutionIdentity(root, resolvedCommand, cwdPath, timeoutMs, maxOutputBytes, responseMode, {}, args);
 }
 
 export type ProjectCommandAdmissionPreflight = {
@@ -594,6 +632,7 @@ export function bindProjectCommandVerificationCandidate(
     maxOutputBytes,
     responseMode,
     { repoRevision: candidate.repoRevision, lineageToken },
+    args,
   );
   if (!executionIdentity) {
     throw createApiError(500, 'VERIFICATION_CANDIDATE_IDENTITY_FAILED', 'Verification candidate execution identity could not be created.');
@@ -697,7 +736,7 @@ function commandCacheContext(
   const explicitlyDisabled = args.cacheResult === false || String(args.cacheResult).toLowerCase() === 'false';
   const automaticStaticCache = resolvedCommand.command === 'typecheck' || resolvedCommand.command === 'lint';
   if (explicitlyDisabled || (!explicitCache && !automaticStaticCache)) return null;
-  return identityOverride ?? buildProjectCommandExecutionIdentity(root, resolvedCommand, cwdPath, timeoutMs, maxOutputBytes, responseMode);
+  return identityOverride ?? buildProjectCommandExecutionIdentity(root, resolvedCommand, cwdPath, timeoutMs, maxOutputBytes, responseMode, {}, args);
 }
 
 function cachedCommandResult(
@@ -705,9 +744,11 @@ function cachedCommandResult(
   command: string,
   resolutionMs = 0,
   responseMode: 'compact' | 'standard' | 'debug' = 'standard',
+  args: Record<string, any> = {},
 ) {
   if (!cacheContext) return null;
-  const cached = getCachedCommandResult<RunProjectCommandResult>(cacheContext.key);
+  const consumerId = typeof args.evidenceConsumerId === 'string' ? args.evidenceConsumerId : undefined;
+  const cached = getCachedCommandResult<RunProjectCommandResult>(cacheContext.key, consumerId);
   recordRepoCacheAccess('verification-results', Boolean(cached));
   if (!cached) return null;
   return {
@@ -727,6 +768,12 @@ function cachedCommandResult(
       lineageToken: cacheContext.lineageToken,
       cachedAt: new Date(cached.createdAt).toISOString(),
       originalDurationMs: cached.value.durationMs,
+      ...(cached.evidence?.evidenceId ? { evidenceId: cached.evidence.evidenceId } : {}),
+      ...(cached.evidence?.sourceConsumerId ? { sourceConsumerId: cached.evidence.sourceConsumerId } : {}),
+      ...(cached.evidence ? { consumers: [...cached.evidence.consumers], reusable: cached.evidence.reusable } : {}),
+      affectedInputFingerprint: cacheContext.affectedInputFingerprint,
+      dependencyFingerprint: cacheContext.dependencyFingerprint,
+      environmentFingerprint: cacheContext.environmentFingerprint,
     },
   } satisfies RunProjectCommandResult;
 }
@@ -748,7 +795,7 @@ export function getProjectCommandAdmissionPreflight(
   const resolutionMs = Date.now() - totalStartedAt;
   const cacheLookupStartedAt = Date.now();
   const cacheContext = commandCacheContext(root, resolvedCommand, cwdPath, timeoutMs, maxOutputBytes, responseMode, args, executionIdentity);
-  const cached = args.forceFresh === true ? null : cachedCommandResult(cacheContext, command, resolutionMs, responseMode);
+  const cached = args.forceFresh === true ? null : cachedCommandResult(cacheContext, command, resolutionMs, responseMode, args);
   const cacheLookupMs = Date.now() - cacheLookupStartedAt;
   return {
     executionIdentity,
@@ -767,7 +814,13 @@ function rememberSuccessfulCommandResult(
   args: Record<string, any>,
 ) {
   if (!cacheContext) return result;
-  if (result.ok) rememberCommandResult(cacheContext.key, result, args.cacheTtlMs);
+  const retryAttempt = Number.isFinite(Number(args.retryAttempt)) ? Math.max(0, Math.floor(Number(args.retryAttempt))) : 0;
+  const lowConfidence = String(args.verificationConfidence || '').toLowerCase() === 'low' || retryAttempt > 0 || args.flaky === true;
+  const reusable = !lowConfidence || args.allowLowConfidenceEvidenceReuse === true;
+  const sourceConsumerId = typeof args.evidenceConsumerId === 'string' ? args.evidenceConsumerId : undefined;
+  const remembered = result.ok && reusable
+    ? rememberCommandResult(cacheContext.key, result, args.cacheTtlMs, { sourceConsumerId, reusable: true })
+    : null;
   return {
     ...result,
     cache: {
@@ -776,6 +829,13 @@ function rememberSuccessfulCommandResult(
       repoRevision: cacheContext.repoRevision,
       lineageToken: cacheContext.lineageToken,
       originalDurationMs: result.durationMs,
+      reusable,
+      ...(remembered?.evidence?.evidenceId ? { evidenceId: remembered.evidence.evidenceId } : {}),
+      ...(remembered?.evidence?.sourceConsumerId ? { sourceConsumerId: remembered.evidence.sourceConsumerId } : {}),
+      ...(remembered?.evidence ? { consumers: [...remembered.evidence.consumers] } : {}),
+      affectedInputFingerprint: cacheContext.affectedInputFingerprint,
+      dependencyFingerprint: cacheContext.dependencyFingerprint,
+      environmentFingerprint: cacheContext.environmentFingerprint,
     },
   } satisfies RunProjectCommandResult;
 }
@@ -795,7 +855,7 @@ export function runProjectCommand(state: AppState, args: Record<string, any>): R
 
   const cacheLookupStartedAt = Date.now();
   const cacheContext = commandCacheContext(root, resolvedCommand, cwdPath, timeoutMs, maxOutputBytes, responseMode, args);
-  const cached = args.forceFresh === true ? null : cachedCommandResult(cacheContext, command, resolutionMs, responseMode);
+  const cached = args.forceFresh === true ? null : cachedCommandResult(cacheContext, command, resolutionMs, responseMode, args);
   const cacheLookupMs = Date.now() - cacheLookupStartedAt;
   if (cached) {
     return withPerformancePhases(cached, {
@@ -891,6 +951,7 @@ export async function runProjectCommandAsync(state: AppState, args: Record<strin
         repoRevision: suppliedCandidate.repoRevision,
         lineageToken: suppliedCandidate.executionIdentity.lineageFingerprint,
       },
+      args,
     );
     if (!executionIdentity || executionIdentity.key !== suppliedCandidate.executionIdentity.key) {
       throw createApiError(409, 'VERIFICATION_CANDIDATE_IDENTITY_MISMATCH', 'Verification command no longer matches the captured candidate execution identity.');
@@ -909,7 +970,7 @@ export async function runProjectCommandAsync(state: AppState, args: Record<strin
     args,
     executionIdentity,
   );
-  const cached = args.forceFresh === true ? null : cachedCommandResult(cacheContext, command, resolutionMs, responseMode);
+  const cached = args.forceFresh === true ? null : cachedCommandResult(cacheContext, command, resolutionMs, responseMode, args);
   const cacheLookupMs = Date.now() - cacheLookupStartedAt;
   if (cached) {
     return withVerificationCandidate(withPerformancePhases(cached, {

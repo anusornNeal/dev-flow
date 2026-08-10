@@ -666,3 +666,104 @@ test('automatic static verification cache invalidates when NODE_OPTIONS changes'
     else process.env.NODE_OPTIONS = previousNodeOptions;
   }
 });
+
+test('verification evidence reuses across consumers when only unrelated inputs change', () => {
+  const root = createProject('scoped-evidence-reuse', { typecheck: 'node scripts/static.mjs' });
+  const counterPath = path.join(tempRoot, 'scoped-evidence-reuse-counter.txt');
+  fs.writeFileSync(path.join(root, 'source.ts'), 'export const value = 1;\n', 'utf8');
+  fs.writeFileSync(path.join(root, 'README.md'), 'one\n', 'utf8');
+  fs.writeFileSync(path.join(root, 'scripts', 'static.mjs'), [
+    "import fs from 'node:fs';",
+    `const counterPath = ${JSON.stringify(counterPath)};`,
+    "const next = fs.existsSync(counterPath) ? Number(fs.readFileSync(counterPath, 'utf8')) + 1 : 1;",
+    "fs.writeFileSync(counterPath, String(next), 'utf8');",
+  ].join('\n'), 'utf8');
+  const git = (args: string[]) => {
+    const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', shell: false });
+    assert.equal(result.status, 0, result.stderr || result.stdout || `git ${args.join(' ')} failed`);
+  };
+  git(['init']);
+  git(['config', 'user.name', 'DevFlow Test']);
+  git(['config', 'user.email', 'devflow@example.com']);
+  git(['add', '.']);
+  git(['commit', '-m', 'initial']);
+
+  const baseArgs = { projectId: 'project-command', command: 'typecheck', affectedInputPaths: ['source.ts'] };
+  const first = runProjectCommand(stateFor(root), { ...baseArgs, evidenceConsumerId: 'session-a' });
+  fs.writeFileSync(path.join(root, 'README.md'), 'two\n', 'utf8');
+  const second = runProjectCommand(stateFor(root), { ...baseArgs, evidenceConsumerId: 'session-b' });
+
+  assert.equal(first.cache?.hit, false);
+  assert.equal(second.cache?.hit, true);
+  assert.equal(second.processSpawns, 0);
+  assert.ok(second.cache?.evidenceId);
+  assert.equal(second.cache?.sourceConsumerId, 'session-a');
+  assert.deepEqual(second.cache?.consumers, ['session-a', 'session-b']);
+
+  fs.writeFileSync(path.join(root, 'source.ts'), 'export const value = 2;\n', 'utf8');
+  const third = runProjectCommand(stateFor(root), { ...baseArgs, evidenceConsumerId: 'session-c' });
+  assert.equal(third.cache?.hit, false);
+  assert.equal(fs.readFileSync(counterPath, 'utf8'), '2');
+});
+
+test('verification evidence invalidates when dependency identity changes inside a scoped reuse', () => {
+  const root = createProject('dependency-evidence-invalidation', { typecheck: 'node scripts/static.mjs' });
+  const counterPath = path.join(tempRoot, 'dependency-evidence-invalidation-counter.txt');
+  fs.writeFileSync(path.join(root, 'source.ts'), 'export const value = 1;\n', 'utf8');
+  fs.writeFileSync(path.join(root, 'package-lock.json'), '{"lockfileVersion":3,"packages":{}}\n', 'utf8');
+  fs.writeFileSync(path.join(root, 'scripts', 'static.mjs'), [
+    "import fs from 'node:fs';",
+    `const counterPath = ${JSON.stringify(counterPath)};`,
+    "const next = fs.existsSync(counterPath) ? Number(fs.readFileSync(counterPath, 'utf8')) + 1 : 1;",
+    "fs.writeFileSync(counterPath, String(next), 'utf8');",
+  ].join('\n'), 'utf8');
+  const git = (args: string[]) => {
+    const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', shell: false });
+    assert.equal(result.status, 0, result.stderr || result.stdout || `git ${args.join(' ')} failed`);
+  };
+  git(['init']);
+  git(['config', 'user.name', 'DevFlow Test']);
+  git(['config', 'user.email', 'devflow@example.com']);
+  git(['add', '.']);
+  git(['commit', '-m', 'initial']);
+
+  const args = { projectId: 'project-command', command: 'typecheck', affectedInputPaths: ['source.ts'] };
+  const first = runProjectCommand(stateFor(root), args);
+  fs.writeFileSync(path.join(root, 'package-lock.json'), '{"lockfileVersion":3,"packages":{"x":{}}}\n', 'utf8');
+  const second = runProjectCommand(stateFor(root), args);
+
+  assert.equal(first.cache?.hit, false);
+  assert.equal(second.cache?.hit, false);
+  assert.equal(second.processSpawns, 1);
+  assert.equal(fs.readFileSync(counterPath, 'utf8'), '2');
+});
+
+test('low-confidence or retried PASS is not promoted to reusable evidence by default', () => {
+  const root = createProject('low-confidence-evidence', { typecheck: 'node scripts/static.mjs' });
+  const counterPath = path.join(tempRoot, 'low-confidence-evidence-counter.txt');
+  fs.writeFileSync(path.join(root, 'source.ts'), 'export const value = 1;\n', 'utf8');
+  fs.writeFileSync(path.join(root, 'scripts', 'static.mjs'), [
+    "import fs from 'node:fs';",
+    `const counterPath = ${JSON.stringify(counterPath)};`,
+    "const next = fs.existsSync(counterPath) ? Number(fs.readFileSync(counterPath, 'utf8')) + 1 : 1;",
+    "fs.writeFileSync(counterPath, String(next), 'utf8');",
+  ].join('\n'), 'utf8');
+  const git = (args: string[]) => {
+    const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', shell: false });
+    assert.equal(result.status, 0, result.stderr || result.stdout || `git ${args.join(' ')} failed`);
+  };
+  git(['init']);
+  git(['config', 'user.name', 'DevFlow Test']);
+  git(['config', 'user.email', 'devflow@example.com']);
+  git(['add', '.']);
+  git(['commit', '-m', 'initial']);
+
+  const baseArgs = { projectId: 'project-command', command: 'typecheck', affectedInputPaths: ['source.ts'] };
+  const first = runProjectCommand(stateFor(root), { ...baseArgs, verificationConfidence: 'low', retryAttempt: 1 });
+  const second = runProjectCommand(stateFor(root), baseArgs);
+
+  assert.equal(first.cache?.hit, false);
+  assert.equal(first.cache?.reusable, false);
+  assert.equal(second.cache?.hit, false);
+  assert.equal(fs.readFileSync(counterPath, 'utf8'), '2');
+});

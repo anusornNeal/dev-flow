@@ -504,6 +504,17 @@ function resourceProfileDescriptorFor(
   };
 }
 
+export function describeProjectCommandResourceProfile(state: AppState, args: Record<string, any>) {
+  const root = resolveProjectRoot(state, args);
+  const commandDescriptor = describeProjectCommand(state, args);
+  const resourceDescriptor = resourceProfileDescriptorFor(root, commandDescriptor, args);
+  return {
+    descriptor: commandDescriptor,
+    resourceDescriptor,
+    prediction: predictVerificationResourceCost(resourceDescriptor),
+  };
+}
+
 function relativePredictionError(predicted: number | undefined, actual: number | undefined) {
   if (predicted === undefined || actual === undefined || !Number.isFinite(predicted) || !Number.isFinite(actual) || predicted <= 0) return undefined;
   return Math.abs(actual - predicted) / predicted;

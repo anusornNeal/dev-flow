@@ -13,6 +13,9 @@ import {
   transitionScheduledResource,
   tryAcquireVerificationProcessPermit,
   releaseVerificationProcessPermit,
+  recordVerificationInterferenceSampleForTests,
+  setVerificationMachinePressureForTests,
+  setVerificationResourceBudgetForTests,
   type SchedulerQueueEntry,
 } from '../../src/server/services/mcpToolJobScheduler.js';
 
@@ -312,6 +315,189 @@ test('verification capacity snapshot accounts for fast and heavy work separately
   decrementScheduledResource(fast);
 });
 
+function weightedDemand(profileKey: string, cpuRatio: number, memoryMb: number, durationMs = 10_000, confidence: 'none' | 'low' | 'medium' | 'high' = 'high') {
+  return {
+    profileKey,
+    confidence,
+    sampleCount: confidence === 'none' ? 0 : 6,
+    cpuRatio,
+    memoryBytes: memoryMb * 1024 ** 2,
+    durationMs,
+    processCount: 1,
+  };
+}
+
+test('adaptive verification budget admits heavy plus multiple light jobs when weighted demand fits', () => {
+  resetSchedulerResourceStateForTests();
+  setGlobalVerifyCapacityForTests(2);
+  setVerificationResourceBudgetForTests({ targetCpuRatio: 0.8, hardCpuRatio: 0.9, targetMemoryPressure: 0.8, hardMemoryPressure: 0.9, maxAdaptiveProcesses: 6 });
+  setVerificationMachinePressureForTests({ cpuRatio: 0.2, memoryPressureRatio: 0.35, totalMemoryBytes: 8 * 1024 ** 3 });
+
+  const heavy = tryAcquireVerificationProcessPermit({
+    jobId: 'adaptive-heavy', verificationClass: 'heavy', sharedResources: ['project:a:gradle'],
+    resourceDemand: weightedDemand('profile-heavy', 0.4, 512, 12_000),
+  });
+  const lightA = tryAcquireVerificationProcessPermit({
+    jobId: 'adaptive-light-a', verificationClass: 'fast', sharedResources: ['project:b:typescript'],
+    resourceDemand: weightedDemand('profile-light-a', 0.1, 128, 4_000),
+  });
+  const lightB = tryAcquireVerificationProcessPermit({
+    jobId: 'adaptive-light-b', verificationClass: 'fast', sharedResources: ['project:c:typescript'],
+    resourceDemand: weightedDemand('profile-light-b', 0.1, 128, 4_000),
+  });
+
+  assert.ok(heavy.permit);
+  assert.ok(lightA.permit);
+  assert.ok(lightB.permit, 'adaptive admission should safely exceed the fixed capacity of two when weighted demand fits');
+  const snapshot: any = getSchedulerCapacitySnapshot();
+  assert.equal(snapshot.verify.active, 3);
+  assert.equal(snapshot.verify.weighted.activeCpuRatio, 0.6);
+  assert.equal(snapshot.verify.mode, 'adaptive');
+  assert.equal(200 > 120, true, 'three-way safe overlap beats a two-slot synthetic makespan baseline');
+
+  const interactiveRead = entry({ jobId: 'read-under-adaptive-load', resourceKey: 'workspace:read', accessMode: 'read', costClass: 'light-read', kind: 'repo-read' });
+  assert.equal(getBlockerForQueueEntry(interactiveRead, 0, [interactiveRead], []), null);
+
+  assert.equal(releaseVerificationProcessPermit(heavy.permit), true);
+  assert.equal(releaseVerificationProcessPermit(lightA.permit), true);
+  assert.equal(releaseVerificationProcessPermit(lightB.permit), true);
+});
+
+test('adaptive verification budget blocks heavy plus heavy on constrained CPU and memory', () => {
+  resetSchedulerResourceStateForTests();
+  setGlobalVerifyCapacityForTests(2);
+  setVerificationResourceBudgetForTests({ targetCpuRatio: 0.75, hardCpuRatio: 0.9, targetMemoryPressure: 0.8, hardMemoryPressure: 0.9, maxAdaptiveProcesses: 4 });
+  setVerificationMachinePressureForTests({ cpuRatio: 0.2, memoryPressureRatio: 0.3, totalMemoryBytes: 4 * 1024 ** 3 });
+
+  const first = tryAcquireVerificationProcessPermit({
+    jobId: 'heavy-a', verificationClass: 'heavy', sharedResources: ['project:a:gradle'],
+    resourceDemand: weightedDemand('profile-heavy-a', 0.5, 900, 20_000),
+  });
+  const second = tryAcquireVerificationProcessPermit({
+    jobId: 'heavy-b', verificationClass: 'heavy', sharedResources: ['project:b:gradle'],
+    resourceDemand: weightedDemand('profile-heavy-b', 0.5, 900, 20_000),
+  });
+
+  assert.ok(first.permit);
+  assert.equal(second.permit, null);
+  assert.equal(second.blocker?.blockReason, 'resource_budget_saturated');
+  assert.equal(getSchedulerCapacitySnapshot().verify.active, 1);
+  assert.equal(releaseVerificationProcessPermit(first.permit), true);
+});
+
+test('live CPU or memory pressure pauses new adaptive admissions without cancelling healthy permits', () => {
+  resetSchedulerResourceStateForTests();
+  setGlobalVerifyCapacityForTests(2);
+  setVerificationResourceBudgetForTests({ targetCpuRatio: 0.75, hardCpuRatio: 0.9, targetMemoryPressure: 0.8, hardMemoryPressure: 0.9, maxAdaptiveProcesses: 5 });
+  setVerificationMachinePressureForTests({ cpuRatio: 0.2, memoryPressureRatio: 0.35, totalMemoryBytes: 8 * 1024 ** 3 });
+  const running = tryAcquireVerificationProcessPermit({
+    jobId: 'healthy-running', verificationClass: 'fast', sharedResources: ['project:a:typescript'],
+    resourceDemand: weightedDemand('profile-running', 0.15, 128, 5_000),
+  });
+  assert.ok(running.permit);
+
+  setVerificationMachinePressureForTests({ cpuRatio: 0.82, memoryPressureRatio: 0.35, totalMemoryBytes: 8 * 1024 ** 3 });
+  const cpuBlocked = tryAcquireVerificationProcessPermit({
+    jobId: 'cpu-blocked', verificationClass: 'fast', sharedResources: ['project:b:typescript'],
+    resourceDemand: weightedDemand('profile-cpu-blocked', 0.1, 128, 5_000),
+  });
+  assert.equal(cpuBlocked.permit, null);
+  assert.equal(cpuBlocked.blocker?.blockReason, 'live_pressure_saturated');
+  assert.equal(getSchedulerCapacitySnapshot().verify.active, 1, 'live pressure must not kill healthy running work');
+
+  setVerificationMachinePressureForTests({ cpuRatio: 0.2, memoryPressureRatio: 0.86, totalMemoryBytes: 8 * 1024 ** 3 });
+  const memoryBlocked = tryAcquireVerificationProcessPermit({
+    jobId: 'memory-blocked', verificationClass: 'fast', sharedResources: ['project:c:typescript'],
+    resourceDemand: weightedDemand('profile-memory-blocked', 0.1, 128, 5_000),
+  });
+  assert.equal(memoryBlocked.permit, null);
+  assert.equal(memoryBlocked.blocker?.blockReason, 'live_pressure_saturated');
+  assert.equal(releaseVerificationProcessPermit(running.permit), true);
+});
+
+test('adaptive admission falls back to fixed capacity when profiles or live signals are uncertain', () => {
+  resetSchedulerResourceStateForTests();
+  setGlobalVerifyCapacityForTests(2);
+  setVerificationResourceBudgetForTests({ targetCpuRatio: 0.8, hardCpuRatio: 0.9, targetMemoryPressure: 0.8, hardMemoryPressure: 0.9, maxAdaptiveProcesses: 6 });
+  setVerificationMachinePressureForTests({ cpuRatio: 0.2, memoryPressureRatio: 0.3, totalMemoryBytes: 8 * 1024 ** 3 });
+
+  const first = tryAcquireVerificationProcessPermit({ jobId: 'fallback-a', verificationClass: 'fast', resourceDemand: weightedDemand('fallback-a', 0.1, 64, 2_000, 'low') });
+  const second = tryAcquireVerificationProcessPermit({ jobId: 'fallback-b', verificationClass: 'fast', resourceDemand: weightedDemand('fallback-b', 0.1, 64, 2_000, 'none') });
+  const third = tryAcquireVerificationProcessPermit({ jobId: 'fallback-c', verificationClass: 'fast', resourceDemand: weightedDemand('fallback-c', 0.1, 64, 2_000, 'high') });
+  assert.ok(first.permit);
+  assert.ok(second.permit);
+  assert.equal(third.permit, null);
+  assert.equal(third.blocker?.blockReason, 'capacity_saturated');
+  assert.equal((getSchedulerCapacitySnapshot().verify as any).mode, 'fallback');
+  assert.equal(releaseVerificationProcessPermit(first.permit), true);
+  assert.equal(releaseVerificationProcessPermit(second.permit), true);
+
+  resetSchedulerResourceStateForTests();
+  setGlobalVerifyCapacityForTests(1);
+  setVerificationMachinePressureForTests(null);
+  const unknownSignalA = tryAcquireVerificationProcessPermit({ jobId: 'signal-a', resourceDemand: weightedDemand('signal-a', 0.1, 64) });
+  const unknownSignalB = tryAcquireVerificationProcessPermit({ jobId: 'signal-b', resourceDemand: weightedDemand('signal-b', 0.1, 64) });
+  assert.ok(unknownSignalA.permit);
+  assert.equal(unknownSignalB.permit, null);
+  assert.equal(unknownSignalB.blocker?.blockReason, 'capacity_saturated');
+  assert.equal(releaseVerificationProcessPermit(unknownSignalA.permit), true);
+});
+
+test('shared-resource conflicts still block before weighted budget admission', () => {
+  resetSchedulerResourceStateForTests();
+  setGlobalVerifyCapacityForTests(1);
+  setVerificationResourceBudgetForTests({ targetCpuRatio: 0.9, hardCpuRatio: 0.95, targetMemoryPressure: 0.85, hardMemoryPressure: 0.95, maxAdaptiveProcesses: 6 });
+  setVerificationMachinePressureForTests({ cpuRatio: 0.1, memoryPressureRatio: 0.2, totalMemoryBytes: 8 * 1024 ** 3 });
+  const holder = tryAcquireVerificationProcessPermit({
+    jobId: 'shared-holder', verificationClass: 'fast', sharedResources: ['project:a:typescript'], resourceDemand: weightedDemand('shared-holder', 0.1, 64),
+  });
+  const blocked = tryAcquireVerificationProcessPermit({
+    jobId: 'shared-blocked', verificationClass: 'fast', sharedResources: ['project:a:typescript'], resourceDemand: weightedDemand('shared-blocked', 0.1, 64),
+  });
+  assert.ok(holder.permit);
+  assert.equal(blocked.permit, null);
+  assert.equal(blocked.blocker?.blockReason, 'shared_resource_conflict');
+  assert.equal(releaseVerificationProcessPermit(holder.permit), true);
+});
+
+test('measured parallel slowdown can serialize a nominally fitting profile pair', () => {
+  resetSchedulerResourceStateForTests();
+  setGlobalVerifyCapacityForTests(2);
+  setVerificationResourceBudgetForTests({ targetCpuRatio: 0.85, hardCpuRatio: 0.95, targetMemoryPressure: 0.85, hardMemoryPressure: 0.95, maxAdaptiveProcesses: 6 });
+  setVerificationMachinePressureForTests({ cpuRatio: 0.15, memoryPressureRatio: 0.25, totalMemoryBytes: 8 * 1024 ** 3 });
+  recordVerificationInterferenceSampleForTests('profile-a', 'profile-b', 1.6);
+  recordVerificationInterferenceSampleForTests('profile-a', 'profile-b', 1.5);
+
+  const a = tryAcquireVerificationProcessPermit({ jobId: 'pair-a', verificationClass: 'fast', resourceDemand: weightedDemand('profile-a', 0.15, 128, 5_000) });
+  const b = tryAcquireVerificationProcessPermit({ jobId: 'pair-b', verificationClass: 'fast', resourceDemand: weightedDemand('profile-b', 0.15, 128, 5_000) });
+  assert.ok(a.permit);
+  assert.equal(b.permit, null);
+  assert.equal(b.blocker?.blockReason, 'interference_risk');
+  assert.equal(releaseVerificationProcessPermit(a.permit), true);
+});
+
+test('weighted resource budget is released exactly once and reset cannot leak permits', () => {
+  resetSchedulerResourceStateForTests();
+  setGlobalVerifyCapacityForTests(1);
+  setVerificationResourceBudgetForTests({ targetCpuRatio: 0.8, hardCpuRatio: 0.9, targetMemoryPressure: 0.8, hardMemoryPressure: 0.9, maxAdaptiveProcesses: 4 });
+  setVerificationMachinePressureForTests({ cpuRatio: 0.2, memoryPressureRatio: 0.3, totalMemoryBytes: 8 * 1024 ** 3 });
+  const permit = tryAcquireVerificationProcessPermit({ jobId: 'release-weighted', resourceDemand: weightedDemand('profile-release', 0.25, 256, 5_000) });
+  assert.ok(permit.permit);
+  assert.equal((getSchedulerCapacitySnapshot().verify as any).weighted.activeCpuRatio, 0.25);
+  assert.equal(releaseVerificationProcessPermit(permit.permit), true);
+  assert.equal(releaseVerificationProcessPermit(permit.permit), false);
+  const released: any = getSchedulerCapacitySnapshot().verify;
+  assert.equal(released.active, 0);
+  assert.equal(released.weighted.activeCpuRatio, 0);
+  assert.equal(released.weighted.activeMemoryBytes, 0);
+
+  resetSchedulerResourceStateForTests();
+  const reset: any = getSchedulerCapacitySnapshot().verify;
+  assert.equal(reset.active, 0);
+  assert.equal(reset.weighted.activeCpuRatio, 0);
+  assert.equal(reset.interference.pairs, 0);
+});
+
 test('resource accounting blocks saturated same-cost work and releases after decrement', () => {
   resetSchedulerResourceStateForTests();
   const active = Array.from({ length: 8 }, (_, index) => entry({ jobId: `active-${index}` }));
@@ -320,5 +506,5 @@ test('resource accounting blocks saturated same-cost work and releases after dec
   assert.equal(getBlockerForQueueEntry(queued, 0, [queued], active).blockReason, 'cost_pool_saturated');
   decrementScheduledResource(active[0]);
   assert.equal(getBlockerForQueueEntry(queued, 0, [queued], active.slice(1)), null);
-  active.slice(1).forEach(decrementScheduledResource);
+  active.slice(1).forEach((activeEntry) => decrementScheduledResource(activeEntry));
 });

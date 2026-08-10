@@ -884,6 +884,7 @@ function enqueueRecoveredJob(state: AppState, job: McpToolJob) {
     costClass: schedulerProfile.costClass,
     verificationClass: schedulerProfile.verificationClass,
     sharedResources: schedulerProfile.sharedResources,
+    verificationDemand: schedulerProfile.verificationDemand,
     enqueuedAt,
     schedulerPriority: verificationAwareSchedulerPriority(recoveredBasePriority, recoveredVerification),
     singleFlightKey: recoveredSingleFlightKey,
@@ -973,11 +974,11 @@ function waitForSchedulerCapacityChange() {
   });
 }
 
-function releaseSchedulerLease(entry: QueueEntry, leaseGeneration: number) {
+function releaseSchedulerLease(entry: QueueEntry, leaseGeneration: number, observation?: { actualDurationMs?: number }) {
   const key = schedulerLeaseKey(entry.jobId, leaseGeneration);
   if (releasedSchedulerLeases.has(key)) return false;
   releasedSchedulerLeases.add(key);
-  decrementScheduledResource(entry);
+  decrementScheduledResource(entry, observation);
   notifySchedulerCapacityWaiters();
   return true;
 }
@@ -1337,6 +1338,7 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
     costClass: schedulerProfile.costClass,
     verificationClass: schedulerProfile.verificationClass,
     sharedResources: schedulerProfile.sharedResources,
+    verificationDemand: schedulerProfile.verificationDemand,
     enqueuedAt,
     schedulerPriority: verificationAwareSchedulerPriority(
       getSchedulerPriority(toolName, jobArgs, schedulerProfile.accessMode, schedulerProfile.verificationClass),
@@ -1409,6 +1411,7 @@ function scopedPermitRequest(entry: QueueEntry, request: VerificationPermitDeman
     jobId: entry.jobId,
     verificationClass: request.verificationClass,
     sharedResources: scopeVerificationResources(entry.args, entry.resourceKey, request.sharedResources || []),
+    resourceDemand: request.resourceDemand ?? entry.verificationDemand,
   };
 }
 
@@ -1445,9 +1448,11 @@ function createVerificationExecutionLease(
   let reservedPermit: VerificationProcessPermit | undefined = initialPermit;
   let disposed = false;
 
-  const releasePermit = (permit: VerificationProcessPermit) => {
+  const releasePermit = (permit: VerificationProcessPermit, result?: unknown) => {
     if (entry.verificationPermitId === permit.id) entry.verificationPermitId = undefined;
-    if (releaseVerificationProcessPermit(permit)) notifySchedulerCapacityWaiters();
+    const actualDurationMs = Number((result as any)?.resourceProfile?.actual?.durationMs);
+    const observation = Number.isFinite(actualDurationMs) && actualDurationMs > 0 ? { actualDurationMs } : undefined;
+    if (releaseVerificationProcessPermit(permit, observation)) notifySchedulerCapacityWaiters();
   };
 
   return {
@@ -1456,11 +1461,13 @@ function createVerificationExecutionLease(
       assertActiveTransitionLease(entry.jobId, leaseGeneration);
       const permit = reservedPermit || await acquireVerificationPermitForActiveJob(entry.jobId, leaseGeneration, request);
       reservedPermit = undefined;
+      let result: T | undefined;
       try {
         assertActiveTransitionLease(entry.jobId, leaseGeneration);
-        return await run();
+        result = await run();
+        return result;
       } finally {
-        releasePermit(permit);
+        releasePermit(permit, result);
       }
     },
     dispose: () => {
@@ -1554,6 +1561,7 @@ async function startJob(entry: QueueEntry) {
   heartbeat.unref();
 
   const logger = bufferedLogger.logger;
+  let completedResult: any;
 
   try {
     await prepareVerificationCandidateForActiveJob(entry, leaseGeneration, leaseGuard);
@@ -1580,6 +1588,7 @@ async function startJob(entry: QueueEntry) {
         },
       );
     }
+    completedResult = result;
     entry.phaseTelemetry.executionCompletedAt = Date.now();
     bufferedLogger.flush();
 
@@ -1656,7 +1665,12 @@ async function startJob(entry: QueueEntry) {
       entry.phaseTelemetry.finalized = true;
       rememberJobPhaseTelemetry(entry.phaseTelemetry);
     }
-    releaseSchedulerLease(entry, leaseGeneration);
+    const completedDurationMs = Number(completedResult?.resourceProfile?.actual?.durationMs);
+    releaseSchedulerLease(
+      entry,
+      leaseGeneration,
+      Number.isFinite(completedDurationMs) && completedDurationMs > 0 ? { actualDurationMs: completedDurationMs } : undefined,
+    );
     const active = activeJobs.get(entry.jobId);
     if (active?.leaseGeneration === leaseGeneration) {
       activeJobs.delete(entry.jobId);

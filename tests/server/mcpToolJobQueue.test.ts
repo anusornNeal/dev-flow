@@ -679,7 +679,7 @@ test('mcpToolJobService - verification pool allows two jobs and queues the third
     const third: any = enqueueToolJob(state, 'run_project_command', { localPath: root, command: 'test', forceFresh: true }, 'repo-command');
     assert.strictEqual(third.handoffImmediately, true);
     assert.strictEqual(third.waitType, 'capacity');
-    assert.strictEqual(third.blockReason, 'capacity_saturated');
+    assert.strictEqual(third.blockReason, 'shared_resource_conflict');
     await new Promise(resolve => setTimeout(resolve, 75));
     assert.strictEqual(starts.includes('test'), false);
     assert.strictEqual(getToolJobStatus(third.jobId)?.status, 'queued');

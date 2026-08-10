@@ -5,6 +5,7 @@ import { getGitDiff } from './gitService';
 import {
   bindProjectCommandVerificationCandidate,
   describeProjectCommand,
+  describeProjectCommandResourceProfile,
   getProjectCommandExecutionIdentity,
   runProjectCommand,
   runProjectCommandAsync,
@@ -144,6 +145,15 @@ type VerificationLogger = { stdout: (data: string) => void; stderr: (data: strin
 type VerificationPermitDemand = {
   verificationClass?: 'fast' | 'heavy';
   sharedResources?: string[];
+  resourceDemand?: {
+    profileKey: string;
+    confidence: 'none' | 'low' | 'medium' | 'high';
+    sampleCount: number;
+    cpuRatio: number;
+    memoryBytes: number;
+    durationMs: number;
+    processCount: number;
+  };
 };
 type VerificationExecutionLease = {
   runWithPermit: <T>(request: VerificationPermitDemand, run: () => Promise<T>) => Promise<T>;
@@ -247,14 +257,28 @@ export async function applyAndVerifyAsync(
     responseMode: args.responseMode ?? 'compact',
   });
 
-  const permitDemandForStep = (step: (typeof plan.steps)[number]): VerificationPermitDemand => ({
-    verificationClass: step.verificationClass,
-    sharedResources: step.sharedResources?.length
-      ? step.sharedResources
-      : step.resourceKey
-        ? [step.resourceKey]
-        : [],
-  });
+  const permitDemandForStep = (step: (typeof plan.steps)[number]): VerificationPermitDemand => {
+    const profile = describeProjectCommandResourceProfile(state, commandArgs(step.command));
+    const prediction = profile.prediction;
+    const admissionVector = prediction.confidence === 'high' ? prediction.expected : prediction.upperBound;
+    return {
+      verificationClass: step.verificationClass,
+      sharedResources: step.sharedResources?.length
+        ? step.sharedResources
+        : step.resourceKey
+          ? [step.resourceKey]
+          : [],
+      resourceDemand: {
+        profileKey: prediction.profileKey,
+        confidence: prediction.confidence,
+        sampleCount: prediction.sampleCount,
+        cpuRatio: admissionVector.cpuRatio,
+        memoryBytes: admissionVector.memoryBytes,
+        durationMs: prediction.expected.durationMs,
+        processCount: admissionVector.processCount,
+      },
+    };
+  };
   let verificationExecutionLease = unrestrictedVerificationExecutionLease;
 
   const runStep = async (step: (typeof plan.steps)[number]) => {

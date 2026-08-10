@@ -100,7 +100,9 @@ assert.ok(renderResult.content.includes('Load full task details from the local D
 assert.ok(renderResult.content.includes('GET /api/tasks/DVF-0080/agent-context?mode=agent-context'));
 assert.ok(renderResult.content.includes('**Attached Images API:** GET /api/tasks/DVF-0080/images'));
 assert.ok(renderResult.content.includes('https://github.com/anusornNeal/dev-flow'));
-assert.ok(renderResult.content.includes(fixtureLocalPath));
+assert.ok(!renderResult.content.includes(fixtureLocalPath));
+assert.ok(renderResult.content.includes('Managed workspace: use the opaque workspace selected by DevFlow'));
+assert.ok(renderResult.content.includes('never reconstruct its physical path'));
 assert.ok(renderResult.content.includes('# DevFlow Agent Task'));
 assert.ok(renderResult.usedSkills.includes('prompt.project-rules'));
 assert.ok(renderResult.content.includes('## DevFlow Usage'));

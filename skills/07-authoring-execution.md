@@ -37,6 +37,7 @@ Before committing:
 - inspect `get_git_status` / diff for unrelated changes;
 - never stage another session's work;
 - when an execution session owns the task scope, call `plan_task_commit` first and prefer `commit_task_owned_changes` so only execution-owned files are staged;
+- for task-aware commits, pass conventional `<type>[(scope)]: <description>` input. DevFlow's default renders `[<cardId>] <type>: <description>` from the authoritative task/Jira id; explicit project templates override the default, so do not manually duplicate the prefix;
 - preserve unrelated dirty files exactly as reported by the task-aware plan;
 - use an explicit file list when task-aware execution ownership is unavailable and concurrent chats may share the base repo;
 - dry-run `commit_git_changes` before a fallback low-level commit when practical.

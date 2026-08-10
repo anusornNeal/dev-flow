@@ -4,6 +4,7 @@ import { listExecutionSessionsForTask } from '../repositories/executionSessionRe
 import { createApiError } from './api.js';
 import { getExecutionOwnershipState } from './executionSessionService.js';
 import { commitGitChanges } from './gitService.js';
+import { renderTaskCommitMessage } from './projectGitWorkflowPolicyService.js';
 import { resolveSessionWorkspace } from './sessionWorkspaceService.js';
 
 export type TaskCommitPlanBlocker = {
@@ -117,9 +118,11 @@ export function commitTaskOwnedChanges(state: AppState, args: Record<string, any
     });
   }
   const workspace = resolveSessionWorkspace(plan.workspaceId)!;
+  const task = getTaskByIdentifier(args.taskId, 'full') || { id: plan.taskId };
+  const message = renderTaskCommitMessage(args.message, task as any, { gitWorkflowPolicy: workspace.gitWorkflowPolicy } as any);
   const result = commitGitChanges(state, {
     localPath: workspace.root,
-    message: args.message,
+    message,
     files: plan.ownedChangedFiles,
     stageAll: false,
     dryRun: args.dryRun === true,

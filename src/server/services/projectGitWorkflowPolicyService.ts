@@ -3,12 +3,21 @@ import { createApiError } from './api.js';
 
 const DEFAULT_POLICY: ResolvedGitWorkflowPolicy = {
   integrationStrategy: 'rebase-ff',
-  commitMessageTemplate: '{type}: {title}',
+  commitMessageTemplate: '[{ticket}] {type}: {title}',
   mergeMessageTemplate: 'Merge {ticket}',
 };
 
 const ALLOWED_TEMPLATE_FIELDS = new Set(['ticket', 'title', 'type']);
 const MAX_TEMPLATE_LENGTH = 200;
+
+type TaskTicketSource = {
+  id?: string;
+  displayId?: string;
+  jiraKey?: string;
+  title?: string;
+  category?: string;
+  type?: string;
+};
 
 type TemplateContext = {
   ticket: string;
@@ -70,14 +79,7 @@ export function resolveProjectGitWorkflowPolicy(project: Pick<Project, 'gitWorkf
   };
 }
 
-export function resolveTaskTicketContext(task: {
-  id?: string;
-  displayId?: string;
-  jiraKey?: string;
-  title?: string;
-  category?: string;
-  type?: string;
-}): TemplateContext {
+export function resolveTaskTicketContext(task: TaskTicketSource): TemplateContext {
   return {
     ticket: String(task?.jiraKey || task?.displayId || task?.id || '').trim(),
     title: String(task?.title || '').trim(),
@@ -96,5 +98,32 @@ export function renderGitWorkflowTemplate(template: string, context: Partial<Tem
       });
     }
     return value;
+  });
+}
+
+export function renderTaskCommitMessage(
+  message: unknown,
+  task: TaskTicketSource,
+  project?: Pick<Project, 'gitWorkflowPolicy'> | null,
+) {
+  const raw = String(message || '').trim();
+  if (!raw) {
+    throw createApiError(400, 'GIT_COMMIT_MESSAGE_REQUIRED', 'Task-aware commit message must be a non-empty string.');
+  }
+
+  const withoutTicketPrefix = raw.replace(/^\[[^\]\r\n]+\]\s*/, '').trim();
+  const conventional = withoutTicketPrefix.match(/^([A-Za-z][A-Za-z0-9-]*)(?:\([^)\r\n]+\))?!?:\s*([\s\S]+)$/);
+  const type = String(conventional?.[1] || 'chore').trim().toLowerCase();
+  const title = String(conventional?.[2] || withoutTicketPrefix).trim();
+  if (!title) {
+    throw createApiError(400, 'GIT_COMMIT_MESSAGE_REQUIRED', 'Task-aware commit description must be non-empty.');
+  }
+
+  const ticketContext = resolveTaskTicketContext(task);
+  const policy = resolveProjectGitWorkflowPolicy(project);
+  return renderGitWorkflowTemplate(policy.commitMessageTemplate, {
+    ticket: ticketContext.ticket,
+    type,
+    title,
   });
 }

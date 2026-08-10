@@ -52,6 +52,9 @@ test('task-aware commit tools expose scoped planning and async commit wiring', (
   assert.equal((plan?.inputSchema as any)?.required?.includes('workspaceId'), true);
   assert.equal((commit?.executionPolicy as any)?.mode, 'job');
   assert.equal((commit?.inputSchema as any)?.required?.includes('message'), true);
+  const messageDescription = String((commit?.inputSchema as any)?.properties?.message?.description || '');
+  assert.match(messageDescription, /conventional/i);
+  assert.match(messageDescription, /task|ticket|card/i);
   const routeSource = fs.readFileSync('src/server/routes/devflow.ts', 'utf8');
   assert.match(routeSource, /\/api\/git\/task-commit\/plan/);
   assert.match(routeSource, /\/api\/git\/task-commit\/commit/);

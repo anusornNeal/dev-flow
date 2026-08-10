@@ -85,7 +85,7 @@ Workflow Rules:
 - Verify the work before marking any mini-task as completed.
 - Check only the mini-tasks that are actually completed and verified.
 - Do not blindly check every mini-task.
-- Resolve the repository Git policy before integration. Default `rebase-ff`; if explicit policy requires `merge`, preserve that merge policy. Follow the configured commit message template or repository commit convention and use DevFlow-managed integration rather than rewriting another session's history.
+- Resolve the repository Git policy before integration. Default `rebase-ff`; if explicit policy requires `merge`, preserve that merge policy. For task-aware commits, provide conventional `<type>[(scope)]: <description>` input and let DevFlow render the configured template; the default is `[<cardId>] <type>: <description>` using the authoritative task/Jira id. Explicit project commit templates remain authoritative, so do not hand-duplicate the card prefix. Use DevFlow-managed integration rather than rewriting another session's history.
 - Do not push unless the user explicitly requests it.
 - Move the task to ready-for-review only after implementation and verification are complete.
 - If verification cannot be completed, leave clear notes explaining what was and was not verified.

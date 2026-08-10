@@ -53,11 +53,12 @@ test('commit plan selects only execution-owned changed files and preserves unrel
   assert.deepEqual(plan.unrelatedChangedFiles, ['src/unrelated.ts']);
   assert.equal(plan.verificationFresh, true);
 
-  const committed = commitPlan.commitTaskOwnedChanges({ countersCache: {} }, { taskId, workspaceId: workspace.workspaceId, message: 'fix: scoped owned change' });
+  const committed = commitPlan.commitTaskOwnedChanges({ countersCache: {} }, { taskId, workspaceId: workspace.workspaceId, message: 'fix(scope): scoped owned change' });
   assert.deepEqual(committed.committedFiles, ['src/owned.ts']);
   assert.deepEqual(committed.unrelatedChangesPreserved, ['src/unrelated.ts']);
   assert.match(git(workspace.root, ['status', '--porcelain']), /src\/unrelated\.ts/);
   assert.doesNotMatch(git(workspace.root, ['status', '--porcelain']), /src\/owned\.ts/);
+  assert.equal(git(workspace.root, ['log', '-1', '--pretty=%s']), '[task-scoped] fix: scoped owned change');
 });
 
 test('commit plan blocks stale verification after an owned file changes again', () => {

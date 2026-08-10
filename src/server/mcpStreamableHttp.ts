@@ -128,11 +128,12 @@ export function createReusableMcpHttpHandler(
   };
 
   return async (req: any, res: any, next?: (error?: unknown) => void) => {
-    if (req.method !== 'POST') {
-      res.setHeader('Allow', 'POST');
+    const method = String(req.method || '').toUpperCase();
+    if (method !== 'POST' && method !== 'GET') {
+      res.setHeader('Allow', 'GET, POST');
       return res.status(405).json({
         jsonrpc: '2.0',
-        error: { code: -32000, message: 'Method Not Allowed: DevFlow MCP accepts POST requests only.' },
+        error: { code: -32000, message: 'Method Not Allowed: DevFlow MCP accepts GET and POST requests.' },
         id: null,
       });
     }
@@ -141,6 +142,13 @@ export function createReusableMcpHttpHandler(
     await pruneIdleSessions(requestHooks);
     const requestedSessionId = requestSessionId(req);
     let entry = requestedSessionId ? sessions.get(requestedSessionId) : undefined;
+    if (method === 'GET' && !requestedSessionId) {
+      return res.status(400).json({
+        jsonrpc: '2.0',
+        error: { code: -32000, message: 'MCP session id is required to open the Streamable HTTP GET stream.' },
+        id: null,
+      });
+    }
     if (requestedSessionId && !entry) {
       return res.status(404).json({
         jsonrpc: '2.0',

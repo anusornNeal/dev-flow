@@ -36,8 +36,10 @@ Record the command/check, pass/fail result, and what behavior it proves. A cache
 Before committing:
 - inspect `get_git_status` / diff for unrelated changes;
 - never stage another session's work;
-- use an explicit file list when concurrent chats may share the base repo;
-- dry-run `commit_git_changes` before the real commit when practical.
+- when an execution session owns the task scope, call `plan_task_commit` first and prefer `commit_task_owned_changes` so only execution-owned files are staged;
+- preserve unrelated dirty files exactly as reported by the task-aware plan;
+- use an explicit file list when task-aware execution ownership is unavailable and concurrent chats may share the base repo;
+- dry-run `commit_git_changes` before a fallback low-level commit when practical.
 
 Create small scope-aligned local commits. Resolve the repository Git policy before integration: the default policy is `rebase-ff`, while an explicit project policy may require `merge`; follow the policy rather than assuming topology from branch names. Preserve the configured commit message template or existing repository commit convention when creating commits, and let `integrate_workspace` enforce the resolved policy instead of hand-rolling integration. Do not push unless the user explicitly requests it.
 

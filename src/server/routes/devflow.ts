@@ -33,6 +33,8 @@ import { cleanupManagedWorkspaceBranches, cleanupSessionWorkspace, createOrReuse
 import { finalizeSupersededWorkspace, inspectWorkspaceRecovery } from '../services/workspaceRecoveryService';
 import { abortWorkspaceIntegration, integrateWorkspaceCommits, retryWorkspaceIntegration } from '../services/workspaceIntegrationService';
 import { getRuntimeIdentity } from '../services/runtimeIdentityService';
+import { buildTaskCommitPlan, commitTaskOwnedChanges } from '../services/taskCommitPlanService.js';
+import { finalizeTaskWorkspace } from '../services/taskWorkspaceFinalizationService.js';
 
 export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) {
   app.get('/api/capabilities', (_req, res) => {
@@ -204,6 +206,15 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
       const project = findProjectByIdentifier(deps.state, req.body || {});
       if (!project) throw createApiError(404, 'PROJECT_NOT_FOUND', 'Project could not be resolved for managed branch cleanup.');
       return res.json(cleanupManagedWorkspaceBranches(project, { baseBranch: req.body?.baseBranch, dryRun: req.body?.dryRun === true }));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.post('/api/workspaces/finalize-task', (req, res) => {
+    try {
+      const result = finalizeTaskWorkspace(deps.state, req.body || {});
+      return res.status(result.status === 'completed' ? 200 : 409).json(result);
     } catch (error) {
       return sendApiError(res, error);
     }
@@ -557,6 +568,22 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
   app.post('/api/github/pull-requests', async (req, res) => {
     try {
       return res.json(await createPullRequest(deps.state, req.body as Record<string, any>));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.get('/api/git/task-commit/plan', (req, res) => {
+    try {
+      return res.json(buildTaskCommitPlan(deps.state, req.query as Record<string, any>));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.post('/api/git/task-commit/commit', (req, res) => {
+    try {
+      return res.json(commitTaskOwnedChanges(deps.state, req.body as Record<string, any>));
     } catch (error) {
       return sendApiError(res, error);
     }

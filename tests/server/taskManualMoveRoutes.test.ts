@@ -13,6 +13,7 @@ const { registerApiRoutes } = await import('../../src/server/routes/registerApiR
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
 const { saveTask, getTask } = await import('../../src/server/repositories/taskRepository.js');
 const { createAgentRun } = await import('../../src/server/repositories/agentRunRepository.js');
+const { buildTaskGitWarnings } = await import('../../src/server/services/taskGitWorkflowService.js');
 
 const project = { id: 'project-manual-move', name: 'Manual Move', repoUrl: 'https://example.com/manual', localPath: tempDir };
 createProject(project as any);
@@ -98,16 +99,37 @@ test('strict/default API move remains blocked rather than silently overriding', 
   assert.equal(result.body.confirmationRequired, false);
   assert.equal(getTask('strict-default')?.status, 'in-progress');
 });
+test('move tool contract exposes structured recoveryDisposition for manual DONE recovery', async () => {
+  const { getToolDefinitionByName } = await import('../../src/server/contracts/devflowContract.js');
+  for (const name of ['move_task_status', 'move_task_to_status']) {
+    const schema = getToolDefinitionByName(name)?.inputSchema?.properties?.recoveryDisposition;
+    assert.equal(schema?.type, 'object');
+    assert.deepEqual(schema?.properties?.classification?.enum, ['confirmed-missing', 'recoverable-workspace', 'implemented-metadata-drift', 'superseded', 'follow-up']);
+    assert.ok(schema?.required?.includes('classification'));
+    assert.ok(schema?.required?.includes('summary'));
+  }
+});
+
 test('move-to applies the same confirmation and explicit override semantics across a transition path', async () => {
   const first = await post('manual-path', { status: 'done', intent: 'manual' }, 'move-to');
   assert.equal(first.response.status, 409);
   assert.equal(first.body.code, 'MOVE_CONFIRMATION_REQUIRED');
   assert.equal(getTask('manual-path')?.status, 'in-progress');
 
-  const override = await post('manual-path', { status: 'done', intent: 'manual', manualOverride: true }, 'move-to');
+  const missingDisposition = await post('manual-path', { status: 'done', intent: 'manual', manualOverride: true }, 'move-to');
+  assert.equal(missingDisposition.response.status, 409);
+  assert.equal(missingDisposition.body.code, 'MOVE_RECOVERY_DISPOSITION_REQUIRED');
+  assert.equal(getTask('manual-path')?.status, 'in-progress');
+
+  const recoveryDisposition = { classification: 'follow-up', summary: 'Finish the intentionally deferred verification and checklist scope.', followUpTaskId: 'DVF-0999', workspaceId: 'ws_recovery' };
+  const override = await post('manual-path', { status: 'done', intent: 'manual', manualOverride: true, recoveryDisposition }, 'move-to');
   assert.equal(override.response.status, 200);
   assert.equal(override.body.task.status, 'done');
   assert.equal(override.body.autoWorkTrigger, null);
   assert.ok(Array.isArray(override.body.path));
-  assert.ok((getTask('manual-path')?.logs || []).some((entry: any) => /Manual override move in-progress -> done/.test(entry.message)));
+  const persisted = getTask('manual-path');
+  assert.ok((persisted?.logs || []).some((entry: any) => /\[recovery-disposition\]/.test(entry.message) && /follow-up/.test(entry.message)));
+  const warning = buildTaskGitWarnings(persisted).find((entry: any) => entry.code === 'RECOVERY_DISPOSITION_RECORDED');
+  assert.ok(warning);
+  assert.deepEqual((warning as any).details.recoveryDisposition, recoveryDisposition);
 });

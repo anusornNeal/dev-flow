@@ -18,8 +18,9 @@ Act as one cooperative board worker. Repeatedly take one eligible scope, complet
 7. Use the returned managed workspace only. Call `get_repo_context_bundle` before implementation, reuse relevant WIP/commits when present, and do not derive or hardcode workspace filesystem paths.
 8. Implement only the claimed scope. Use focused tests first, then the verification required by the card. Poll async verification jobs to terminal in the same turn when possible.
 9. Commit the claimed scope separately. Recheck latest local `develop` and active sibling work before integration. Resolve from latest `develop` without overwriting another chat's work.
-10. Integrate locally with `integrate_workspace`, verify the integrated result when required, and close the card only after evidence passes.
-11. Refresh the board and repeat from step 1 until there is no eligible unclaimed work for this worker.
+10. After the workspace is clean and committed and the required checks pass, prefer `finalize_task_workspace` as the terminal path. It integrates locally, syncs local Git/verification evidence, completes the task, and removes the safe clean managed worktree/branch in one deterministic flow.
+11. If finalization returns `needs-recovery`, preserve the workspace and use `inspect_workspace_recovery`, `integrate_workspace`, conflict recovery, or explicit cleanup primitives as diagnostic/recovery fallbacks. Never force-clean ambiguous work.
+12. Refresh the board and repeat from step 1 until there is no eligible unclaimed work for this worker.
 
 ## Ownership and release
 

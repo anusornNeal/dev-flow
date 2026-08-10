@@ -58,6 +58,22 @@ export const workspaceToolDefinitions: DevFlowToolDefinition[] = [
     buildHttpRequest: (args) => ({ method: 'POST', path: '/api/workspaces/branches/cleanup', body: args }),
   },
   {
+    name: 'finalize_task_workspace',
+    description: 'Complete one clean committed managed workspace as a local-only terminal task flow: verify supplied checks, integrate into the configured local base, sync local Git evidence, mark the task done, and remove the safe clean workspace/branch. Never pushes or fetches; dirty/conflicted work is preserved for recovery.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspaceId: { type: 'string', description: 'Opaque DevFlow workspace id.' },
+        taskId: { type: 'string', description: 'DevFlow task id/displayId to finalize.' },
+        checks: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, command: { type: 'string' }, status: { type: 'string', enum: ['passed', 'failed', 'not-run'] }, summary: { type: 'string' }, output: { type: 'string' }, recordedAt: { type: 'string' } }, required: ['command', 'status'] } },
+        requireChecklistComplete: { type: 'boolean', description: 'Require every checklist item complete before finalization. Defaults to true.' },
+      },
+      required: ['workspaceId', 'taskId', 'checks'],
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: (args) => ({ method: 'POST', path: '/api/workspaces/finalize-task', body: args }),
+  },
+  {
     name: 'cleanup_session_workspace',
     description: 'Remove a clean, inactive, integration-safe managed session worktree. Normal cleanup refuses dirty/active/integration-required workspaces.',
     inputSchema: { type: 'object', properties: { workspaceId: { type: 'string', description: 'Opaque DevFlow workspace id.' } }, required: ['workspaceId'] },

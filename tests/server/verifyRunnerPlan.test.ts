@@ -32,6 +32,9 @@ const BASELINE_LABELS = [
   'git workflow service',
   'local path mutation service',
   'task git workflow service',
+  'task commit plan',
+  'task manual move recovery',
+  'task workspace finalization',
   'mcp fetch errors',
   'mcp streamable http',
   'runtime identity diagnostics',
@@ -126,6 +129,15 @@ test('Stage 1 parallelizes only proven-isolated claim, skill, and UI checks behi
   assert.deepEqual(segments[1]?.steps.map((step) => step.label), approvedParallel);
 });
 
+
+test('DVF-0477 workflow-integrity regressions stay in the FULL verify plan', () => {
+  for (const label of ['task commit plan', 'task manual move recovery', 'task workspace finalization']) {
+    const step = VERIFICATION_STEPS.find((entry) => entry.label === label);
+    assert.ok(step, `${label} should remain in FULL verification`);
+    assert.equal(step?.stage, 2);
+    assert.equal(step?.parallelSafe, true);
+  }
+});
 
 test('mixed FULL verify stages batch parallel-safe work without crossing serial barriers', () => {
   const stageTwo = VERIFICATION_STEPS.filter((step) => step.stage === 2);

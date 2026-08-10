@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluateMove } from '../../src/server/useCases/taskUseCases.js';
+import { evaluateMove, normalizeRecoveryDisposition, requiresRecoveryDispositionForDone } from '../../src/server/useCases/taskUseCases.js';
 import { buildTaskStatusMoveRequest } from '../../src/lib/taskStatusMove.js';
 import { getToolDefinitionByName } from '../../src/server/contracts/devflowContract.js';
 
@@ -32,6 +32,17 @@ test('strict/default callers do not inherit manual override semantics', () => {
   const decision = evaluateMove({ softBlockers: soft, hardBlockers: [] });
   assert.equal(decision.allowed, false);
   assert.equal(decision.outcome, 'blocked');
+});
+
+test('unfinished DONE override requires a bounded recovery disposition', () => {
+  assert.equal(requiresRecoveryDispositionForDone('done', [{ code: 'CHECKLIST_INCOMPLETE', message: 'unfinished', bypassable: true }]), true);
+  assert.equal(requiresRecoveryDispositionForDone('ready-for-review', [{ code: 'CHECKLIST_INCOMPLETE', message: 'unfinished', bypassable: true }]), false);
+  assert.equal(requiresRecoveryDispositionForDone('done', [{ code: 'HEAD_NOT_PUSHED', message: 'local only', bypassable: true }]), false);
+  assert.deepEqual(normalizeRecoveryDisposition({ classification: 'follow-up', summary: '  finish remaining scope  ', followUpTaskId: ' DVF-0999 ', workspaceId: ' ws_abc123 ' }), {
+    classification: 'follow-up', summary: 'finish remaining scope', followUpTaskId: 'DVF-0999', workspaceId: 'ws_abc123',
+  });
+  assert.throws(() => normalizeRecoveryDisposition({ classification: 'unknown', summary: 'x' }), /classification/i);
+  assert.throws(() => normalizeRecoveryDisposition({ classification: 'follow-up', summary: '   ' }), /summary/i);
 });
 
 test('Board move request declares manual intent and override without emergency', () => {

@@ -338,6 +338,23 @@ function addWarning(warnings: TaskWorkflowWarning[], code: string, message: stri
   warnings.push({ code, message, severity, ...(details === undefined ? {} : { details }) });
 }
 
+function readRecoveryDispositionFromLogs(task: any) {
+  const logs = Array.isArray(task?.logs) ? [...task.logs].reverse() : [];
+  for (const entry of logs) {
+    const message = String(entry?.message || '');
+    const marker = '[recovery-disposition] ';
+    const index = message.indexOf(marker);
+    if (index < 0) continue;
+    try {
+      const parsed = JSON.parse(message.slice(index + marker.length));
+      if (parsed?.classification && parsed?.summary) return parsed;
+    } catch {
+      // Ignore malformed historical log entries; they must not break task reads.
+    }
+  }
+  return null;
+}
+
 export function buildTaskGitWarnings(task: any): TaskWorkflowWarning[] {
   const warnings: TaskWorkflowWarning[] = [];
   if (!task?.projectId) return warnings;
@@ -382,6 +399,13 @@ export function buildTaskGitWarnings(task: any): TaskWorkflowWarning[] {
     if (task.branch && evidence.branch && task.branch !== evidence.branch) {
       addWarning(warnings, 'RECORDED_BRANCH_MISMATCH', `Recorded Git evidence is for '${evidence.branch}', not task branch '${task.branch}'.`, 'error');
     }
+  }
+
+  const recoveryDisposition = readRecoveryDispositionFromLogs(task);
+  if (recoveryDisposition) {
+    addWarning(warnings, 'RECOVERY_DISPOSITION_RECORDED', `Task closure records recovery disposition '${recoveryDisposition.classification}'.`, 'warning', {
+      recoveryDisposition,
+    });
   }
 
   if (task.status === 'ready-for-review' && !evidence?.pushed) {

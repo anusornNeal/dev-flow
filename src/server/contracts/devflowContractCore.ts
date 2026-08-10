@@ -48,6 +48,18 @@ export const mutationResponseModeProperty = {
 
 export const manualMoveOverrideProperties = {
   manualOverride: { type: 'boolean', description: 'Explicitly confirm bypassing soft workflow gates for a human/manual status move. Hard safety blockers remain enforced.' },
+  recoveryDisposition: {
+    type: 'object',
+    description: 'Required when a manual DONE override bypasses unfinished implementation/evidence blockers. Records why remaining scope is recoverable, preserved, superseded, or delegated to follow-up work.',
+    properties: {
+      classification: { type: 'string', enum: ['confirmed-missing', 'recoverable-workspace', 'implemented-metadata-drift', 'superseded', 'follow-up'] },
+      summary: { type: 'string' },
+      followUpTaskId: { type: 'string' },
+      workspaceId: { type: 'string', description: 'Optional opaque managed workspace id; never a filesystem path.' },
+    },
+    required: ['classification', 'summary'],
+    additionalProperties: false,
+  },
 };
 
 export const mutationControlProperties = {

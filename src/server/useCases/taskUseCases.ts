@@ -251,6 +251,53 @@ export function applyChecklistToggle(items: ChecklistItem[], id: string): Checkl
   return next;
 }
 
+export const RECOVERY_DISPOSITION_CLASSIFICATIONS = ['confirmed-missing', 'recoverable-workspace', 'implemented-metadata-drift', 'superseded', 'follow-up'] as const;
+export type RecoveryDispositionClassification = typeof RECOVERY_DISPOSITION_CLASSIFICATIONS[number];
+export interface RecoveryDisposition {
+  classification: RecoveryDispositionClassification;
+  summary: string;
+  followUpTaskId?: string;
+  workspaceId?: string;
+}
+
+const RECOVERY_REQUIRED_BLOCKER_CODES = new Set([
+  'CHECKLIST_INCOMPLETE',
+  'VERIFICATION_EVIDENCE_MISSING',
+  'VERIFICATION_FAILED',
+  'VERIFICATION_NOT_RUN',
+  'GIT_EVIDENCE_MISSING',
+  'CHILD_TASK_BLOCKING',
+  'CHILD_EVIDENCE_MISSING',
+]);
+
+function boundedOpaqueId(value: unknown, field: string) {
+  if (value == null || String(value).trim() === '') return undefined;
+  const normalized = String(value).trim();
+  if (normalized.length > 200 || /[\\/]/.test(normalized) || /^[a-zA-Z]:/.test(normalized)) {
+    throw new Error(`${field} must be a bounded opaque identifier, not a filesystem path.`);
+  }
+  return normalized;
+}
+
+export function normalizeRecoveryDisposition(value: unknown): RecoveryDisposition {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('recoveryDisposition must be an object.');
+  const raw = value as Record<string, unknown>;
+  const classification = String(raw.classification || '').trim() as RecoveryDispositionClassification;
+  if (!RECOVERY_DISPOSITION_CLASSIFICATIONS.includes(classification)) {
+    throw new Error(`recoveryDisposition classification must be one of: ${RECOVERY_DISPOSITION_CLASSIFICATIONS.join(', ')}.`);
+  }
+  const summary = String(raw.summary || '').trim();
+  if (!summary) throw new Error('recoveryDisposition summary is required.');
+  if (summary.length > 1000) throw new Error('recoveryDisposition summary must be at most 1000 characters.');
+  const followUpTaskId = boundedOpaqueId(raw.followUpTaskId, 'followUpTaskId');
+  const workspaceId = boundedOpaqueId(raw.workspaceId, 'workspaceId');
+  return { classification, summary, ...(followUpTaskId ? { followUpTaskId } : {}), ...(workspaceId ? { workspaceId } : {}) };
+}
+
+export function requiresRecoveryDispositionForDone(targetStatus: string, bypassedBlockers: Array<{ code?: string; message?: string; bypassable?: boolean; details?: unknown }> = []) {
+  return targetStatus === 'done' && bypassedBlockers.some((blocker) => RECOVERY_REQUIRED_BLOCKER_CODES.has(String(blocker?.code || '')));
+}
+
 export type MoveIntent = 'strict' | 'manual';
 
 export interface MoveBlocker {

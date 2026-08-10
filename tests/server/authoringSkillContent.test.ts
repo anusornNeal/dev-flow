@@ -59,6 +59,8 @@ test('repo execution guidance is load-on-demand and keeps guarded edit rules', (
   assert.match(executionSkill, /prepare_compact_edit/);
   assert.match(executionSkill, /apply_prepared_edit/);
   assert.match(executionSkill, /apply_and_verify/);
+  assert.match(executionSkill, /plan_task_commit/);
+  assert.match(executionSkill, /commit_task_owned_changes/);
   assert.match(executionSkill, /Do not retry the same failed write payload unchanged/);
   assert.match(executionSkill, /FAST/);
   assert.match(executionSkill, /SAFE/);
@@ -76,6 +78,8 @@ test('board-loop skill requires atomic claims, scope-aware parallel work, and fu
   assert.match(boardLoopSkill, /TASK_SCOPE_CONFLICT/);
   assert.match(boardLoopSkill, /managed workspace/i);
   assert.match(boardLoopSkill, /integrate_workspace/);
+  assert.match(boardLoopSkill, /finalize_task_workspace/);
+  assert.match(boardLoopSkill, /needs-recovery/);
   assert.match(boardLoopSkill, /repeat|loop/i);
   assert.match(boardLoopSkill, /Do not push/i);
   assert.match(boardLoopSkill, /restart/i);

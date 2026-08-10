@@ -9,6 +9,7 @@ const EXPECTED_RUNNERS = [
   'ensure_git_branch',
   'push_git_branch',
   'commit_git_changes',
+  'commit_task_owned_changes',
   'edit_local_files_batch',
   'prepare_edit_plan',
   'apply_prepared_edit_plan',

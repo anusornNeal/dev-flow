@@ -57,6 +57,18 @@ export const gitToolDefinitions: DevFlowToolDefinition[] = [
     outputSchema: { type: 'object' }, buildHttpRequest: (args) => ({ method: 'POST', path: '/api/github/pull-requests', body: args }),
   },
   {
+    name: 'plan_task_commit', description: 'Build a read-only task-aware local commit plan from execution ownership. Returns owned versus unrelated changes, drift/freshness blockers, and whether a scoped commit is allowed.',
+    inputSchema: { type: 'object', properties: { ...projectIdentifierProperties, taskId: { type: 'string', description: 'DevFlow task id/displayId whose execution ownership defines commit scope.' } }, required: ['taskId', 'workspaceId'] },
+    outputSchema: { type: 'object' }, lightweight: true,
+    buildHttpRequest: (args) => ({ method: 'GET', path: withQuery('/api/git/task-commit/plan', args) }),
+  },
+  {
+    name: 'commit_task_owned_changes', executionPolicy: { mode: 'job', jobKind: 'repo-command' }, description: 'Commit only files owned by the selected task execution session after ownership and verification freshness checks. Unrelated dirty files are preserved and this tool never pushes.',
+    inputSchema: { type: 'object', properties: { ...projectIdentifierProperties, taskId: { type: 'string', description: 'DevFlow task id/displayId whose execution ownership defines commit scope.' }, message: { type: 'string', description: 'Commit message. Required.' }, dryRun: { type: 'boolean', description: 'Preview the scoped commit without creating it.' } }, required: ['taskId', 'workspaceId', 'message'] },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: (args) => ({ method: 'POST', path: '/api/git/task-commit/commit', body: args }),
+  },
+  {
     name: 'commit_git_changes', executionPolicy: { mode: 'job', jobKind: 'repo-command' }, description: 'Safely create a local git commit in the resolved project repository. This tool must never push, amend, reset, checkout, rebase, or perform remote operations.',
     inputSchema: { type: 'object', properties: { ...projectIdentifierProperties, message: { type: 'string', description: 'Commit message. Required.' }, stageAll: { type: 'boolean', description: 'Stage all working tree changes before committing.' }, files: { type: 'array', items: { type: 'string' }, description: 'Specific files to stage before committing.' }, dryRun: { type: 'boolean', description: 'Return a preview/status summary without creating the commit.' } }, required: ['message'] },
     outputSchema: { type: 'object' }, buildHttpRequest: (args) => ({ method: 'POST', path: '/api/git/commit', body: args }),

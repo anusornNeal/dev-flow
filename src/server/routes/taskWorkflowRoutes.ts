@@ -5,7 +5,7 @@ import { VALID_STATUSES } from '../constants';
 import { getActiveRunForTask } from '../repositories/agentRunRepository';
 import { getTasks, saveTask } from '../repositories/taskRepository.js';
 import { getTransitionPath, getValidationErrorMessage, isValidTransition } from '../../lib/statusTransitions';
-import { evaluateMove, ensureCloseWarningBug } from '../useCases/taskUseCases';
+import { evaluateMove, ensureCloseWarningBug, normalizeRecoveryDisposition, requiresRecoveryDispositionForDone } from '../useCases/taskUseCases';
 import { validateEnum } from '../validation';
 import {
   appendTaskLog,
@@ -39,9 +39,12 @@ export function registerTaskWorkflowRoutes(app: express.Express, deps: ApiRouteD
       hardBlockers,
     });
     if (!moveDecision.allowed) return sendMoveBlocked(res, previousStatus, targetStatus, moveDecision);
+    const recovery = prepareMoveRecoveryDisposition(targetStatus, moveDecision.bypassedBlockers, req.body.recoveryDisposition);
+    if (recovery.error) return res.status(recovery.error.status).json(recovery.error.body);
     if (moveDecision.bypassedBlockers.length > 0) {
       appendTaskLog(task, `Manual override move ${previousStatus} -> ${targetStatus}; bypassed soft blockers: ${moveDecision.bypassedBlockers.map((blocker) => `${blocker.code}: ${blocker.message}`).join(' | ')}`, 'move');
     }
+    if (recovery.value) appendTaskLog(task, `[recovery-disposition] ${JSON.stringify(recovery.value)}`, 'update');
 
     let updatedTask = {
       ...task,
@@ -97,7 +100,10 @@ export function registerTaskWorkflowRoutes(app: express.Express, deps: ApiRouteD
       hardBlockers,
     });
     if (!moveDecision.allowed) return sendMoveBlocked(res, fromStatus, targetStatus, moveDecision, path);
+    const recovery = prepareMoveRecoveryDisposition(targetStatus, moveDecision.bypassedBlockers, req.body.recoveryDisposition);
+    if (recovery.error) return res.status(recovery.error.status).json(recovery.error.body);
     if (moveDecision.bypassedBlockers.length > 0) appendTaskLog(task, `Manual override move ${fromStatus} -> ${targetStatus}; bypassed soft blockers: ${moveDecision.bypassedBlockers.map((blocker) => `${blocker.code}: ${blocker.message}`).join(' | ')}`, 'move');
+    if (recovery.value) appendTaskLog(task, `[recovery-disposition] ${JSON.stringify(recovery.value)}`, 'update');
 
     const movedStatuses: Array<{ from: TaskStatus; to: TaskStatus }> = [];
     for (let index = 1; index < path.length; index += 1) {
@@ -126,6 +132,42 @@ export function registerTaskWorkflowRoutes(app: express.Express, deps: ApiRouteD
       movedStatuses,
     }));
   });
+}
+
+function prepareMoveRecoveryDisposition(targetStatus: TaskStatus, bypassedBlockers: Array<{ code?: string }>, raw: unknown) {
+  const required = requiresRecoveryDispositionForDone(targetStatus, bypassedBlockers);
+  if (required && (raw === undefined || raw === null)) {
+    return {
+      error: {
+        status: 409,
+        body: {
+          success: false,
+          code: 'MOVE_RECOVERY_DISPOSITION_REQUIRED',
+          error: 'A recovery disposition is required before unfinished scope can be manually overridden to DONE.',
+          message: 'Record how the unfinished implementation/evidence will be recovered, preserved, superseded, or followed up before moving this task to DONE.',
+          confirmationRequired: true,
+          targetStatus,
+          blockers: bypassedBlockers,
+        },
+      },
+    } as const;
+  }
+  if (raw === undefined || raw === null) return { value: undefined } as const;
+  try {
+    return { value: normalizeRecoveryDisposition(raw) } as const;
+  } catch (error: any) {
+    return {
+      error: {
+        status: 400,
+        body: {
+          success: false,
+          code: 'INVALID_RECOVERY_DISPOSITION',
+          error: error?.message || 'Invalid recoveryDisposition.',
+          message: error?.message || 'Invalid recoveryDisposition.',
+        },
+      },
+    } as const;
+  }
 }
 
 function sendMoveBlocked(

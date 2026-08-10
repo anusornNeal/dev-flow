@@ -3,6 +3,7 @@ import { getProjects } from '../repositories/projectRepository';
 import { applyAndVerifyAsync } from './applyAndVerifyService';
 import { editFilesBatch } from './fileEditBatchService';
 import { commitGitChanges, ensureGitBranch, pushGitBranch } from './gitService';
+import { commitTaskOwnedChanges } from './taskCommitPlanService.js';
 import { applyLocalPatchAsync } from './localPatchService';
 import { searchLocalFilesAsync } from './localFileService';
 import { deleteLocalPath, moveLocalPath } from './localPathMutationService';
@@ -44,6 +45,7 @@ const BUILTIN_TOOL_RUNNER_NAMES = [
   'ensure_git_branch',
   'push_git_branch',
   'commit_git_changes',
+  'commit_task_owned_changes',
   'edit_local_files_batch',
   'prepare_edit_plan',
   'apply_prepared_edit_plan',
@@ -88,6 +90,7 @@ export async function runBuiltinToolJob(input: BuiltinToolJobInput, context: Bui
   if (toolName === 'ensure_git_branch') return ensureGitBranch(state, args);
   if (toolName === 'push_git_branch') return pushGitBranch(state, args);
   if (toolName === 'commit_git_changes') return commitGitChanges(state, args);
+  if (toolName === 'commit_task_owned_changes') return commitTaskOwnedChanges(state, args);
   if (toolName === 'edit_local_files_batch') return editFilesBatch(state, args);
   if (toolName === 'prepare_edit_plan') return prepareEditPlan(state, args);
   if (toolName === 'apply_prepared_edit_plan') {

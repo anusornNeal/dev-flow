@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'crypto';
 import type { AppState } from '../types';
-import { createJob, updateJobStatus, appendJobLog, writeJobResult, getJob, readJobLog, readJobResult, listRecentJobs, startBackgroundJobCleanup, claimJob, heartbeatJob, requestJobCancellation, transitionJobStatus, listRecoverableJobs, setJobRecoveryClassification, requeueJobForRecovery, getDurableJobMetrics, markJobConsumerAttached, markJobConsumerDetached, type McpToolJob, type JobLeaseGuard } from '../repositories/mcpToolJobRepository';
+import { createJob, updateJobStatus, appendJobLog, writeJobResult, getJob, readJobLog, readJobResult, listRecentJobs, startBackgroundJobCleanup, claimJob, heartbeatJob, requestJobCancellation, transitionJobStatus, listRecoverableJobs, setJobRecoveryClassification, requeueJobForRecovery, getDurableJobMetrics, markJobConsumerAttached, markJobConsumerDetached, markJobSuperseded, getLatestAcceptedGreenGeneration, type McpToolJob, type JobLeaseGuard } from '../repositories/mcpToolJobRepository';
 import { createApiError, normalizeUnknownError } from './api';
 import { resolveProjectResourceIdentity, resolveProjectRoot } from './localFileService';
 import { isDevFlowRestartPending, readDevFlowRestartState } from '../../lib/devFlowRestart';
@@ -94,18 +94,34 @@ type JobPhaseTimings = {
   responseHandoffMs: number;
 };
 
+type VerificationEvidenceIntent = 'red-required' | 'red-deferred' | 'green' | 'focused';
+type VerificationWorkKind = 'behavioral' | 'review' | 'docs' | 'cleanup';
+
 type VerificationQueuePolicy = {
   seriesKey?: string;
   candidateKey?: string;
+  generation?: number;
+  evidenceIntent?: VerificationEvidenceIntent;
   required: boolean;
+  workKind: VerificationWorkKind;
+  acceptedGreenGeneration?: number;
+  lag?: number;
+  lagWarnThreshold: number;
+  lagBlockThreshold: number;
   projectKey: string;
   resourceBacklogLimit: number;
   projectBacklogLimit: number;
 };
 
+type SupersedingVerification = {
+  candidateKey: string;
+  generation?: number;
+};
+
 type JobSupersession = {
   candidateKey?: string;
   supersededByCandidateKey: string;
+  supersededByGeneration?: number;
   cooperativeCancellationRequested: boolean;
   recordedAt: number;
 };
@@ -132,12 +148,17 @@ let singleFlightHits = 0;
 let supersededQueuedJobs = 0;
 let cooperativeSupersedeCancellations = 0;
 let verificationBackpressureRejections = 0;
+let verificationLagWarnings = 0;
+let verificationLagBlocks = 0;
+let maxVerificationLagObserved = 0;
 const MAX_RECENT_QUEUE_WAITS = 200;
 const recentQueueWaitTelemetry: FinalizedQueueWaitTelemetry[] = [];
 const MAX_JOB_PHASE_TELEMETRY = 500;
 const MAX_JOB_SUPERSESSION_RECORDS = 500;
 const DEFAULT_VERIFICATION_BACKLOG_PER_RESOURCE = 3;
 const DEFAULT_VERIFICATION_BACKLOG_PER_PROJECT = 12;
+const DEFAULT_VERIFICATION_LAG_WARN_THRESHOLD = 2;
+const DEFAULT_VERIFICATION_LAG_BLOCK_THRESHOLD = 4;
 const jobPhaseTelemetryById = new Map<string, JobPhaseTelemetryState>();
 const JOB_LEASE_MS = 30_000;
 const JOB_HEARTBEAT_MS = 10_000;
@@ -347,13 +368,42 @@ function boundedBacklogLimit(value: unknown, fallback: number) {
   return Math.max(1, Math.min(100, Math.floor(numeric)));
 }
 
+function normalizedNonNegativeInteger(value: unknown) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric >= 0 ? Math.floor(numeric) : undefined;
+}
+
+function boundedLagThreshold(value: unknown, fallback: number) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(0, Math.min(100, Math.floor(numeric)));
+}
+
+function verificationEvidenceIntentFor(value: unknown): VerificationEvidenceIntent | undefined {
+  const normalized = normalizedOptionalString(value);
+  return normalized === 'red-required' || normalized === 'red-deferred' || normalized === 'green' || normalized === 'focused'
+    ? normalized
+    : undefined;
+}
+
+function verificationWorkKindFor(value: unknown): VerificationWorkKind {
+  const normalized = normalizedOptionalString(value);
+  return normalized === 'review' || normalized === 'docs' || normalized === 'cleanup' ? normalized : 'behavioral';
+}
+
 function hasExplicitVerificationPolicy(args: any) {
   return Boolean(
     normalizedOptionalString(args?.verificationSeriesKey)
     || normalizedOptionalString(args?.verificationCandidateKey)
+    || args?.verificationGeneration !== undefined
+    || normalizedOptionalString(args?.verificationEvidenceIntent)
+    || normalizedOptionalString(args?.verificationWorkKind)
     || args?.verificationRequired === true
     || args?.reviewRequired === true
     || args?.requiredVerification === true
+    || args?.acceptedGreenGeneration !== undefined
+    || args?.verificationLagWarnThreshold !== undefined
+    || args?.verificationLagBlockThreshold !== undefined
     || args?.verificationBacklogLimit !== undefined
     || args?.verificationWorkspaceBacklogLimit !== undefined
     || args?.verificationProjectBacklogLimit !== undefined
@@ -364,10 +414,31 @@ function verificationPolicyFor(args: any, accessMode: ResourceAccessMode, resour
   if (accessMode !== 'verify') return undefined;
   const sharedLimit = boundedBacklogLimit(args?.verificationBacklogLimit, DEFAULT_VERIFICATION_BACKLOG_PER_RESOURCE);
   const projectId = normalizedOptionalString(args?.projectId);
+  const seriesKey = normalizedOptionalString(args?.verificationSeriesKey);
+  const candidateKey = normalizedOptionalString(args?.verificationCandidateKey);
+  const generation = normalizedNonNegativeInteger(args?.verificationGeneration);
+  const evidenceIntent = verificationEvidenceIntentFor(args?.verificationEvidenceIntent);
+  const explicitAcceptedGreenGeneration = normalizedNonNegativeInteger(args?.acceptedGreenGeneration);
+  const acceptedGreenGeneration = explicitAcceptedGreenGeneration ?? (seriesKey ? getLatestAcceptedGreenGeneration(seriesKey) : undefined);
+  const lag = generation !== undefined && acceptedGreenGeneration !== undefined
+    ? Math.max(0, generation - acceptedGreenGeneration)
+    : undefined;
+  const lagWarnThreshold = boundedLagThreshold(args?.verificationLagWarnThreshold, DEFAULT_VERIFICATION_LAG_WARN_THRESHOLD);
+  const lagBlockThreshold = Math.max(
+    lagWarnThreshold,
+    boundedLagThreshold(args?.verificationLagBlockThreshold, DEFAULT_VERIFICATION_LAG_BLOCK_THRESHOLD),
+  );
   return {
-    seriesKey: normalizedOptionalString(args?.verificationSeriesKey),
-    candidateKey: normalizedOptionalString(args?.verificationCandidateKey),
-    required: args?.verificationRequired === true || args?.reviewRequired === true || args?.requiredVerification === true,
+    seriesKey,
+    candidateKey,
+    generation,
+    evidenceIntent,
+    required: evidenceIntent === 'red-required' || args?.verificationRequired === true || args?.reviewRequired === true || args?.requiredVerification === true,
+    workKind: verificationWorkKindFor(args?.verificationWorkKind),
+    acceptedGreenGeneration,
+    lag,
+    lagWarnThreshold,
+    lagBlockThreshold,
     projectKey: projectId ? `project:${projectId}` : resourceKey,
     resourceBacklogLimit: boundedBacklogLimit(args?.verificationWorkspaceBacklogLimit, sharedLimit),
     projectBacklogLimit: boundedBacklogLimit(args?.verificationProjectBacklogLimit, Math.max(sharedLimit, DEFAULT_VERIFICATION_BACKLOG_PER_PROJECT)),
@@ -392,25 +463,57 @@ function canSupersedeVerification(entry: QueueEntry) {
   return entry.accessMode === 'verify' && entry.verification?.required !== true && !hasLiveSharedConsumer(entry.jobId);
 }
 
-function supersededJobResult(entry: QueueEntry, supersededByCandidateKey: string) {
+function supersededJobResult(verification: VerificationQueuePolicy | undefined, supersededByCandidateKey: string, supersededByGeneration?: number) {
   return {
     ok: false,
     status: 'cancelled',
     code: 'JOB_SUPERSEDED',
-    message: `Verification candidate ${entry.verification?.candidateKey || 'unknown'} was superseded by ${supersededByCandidateKey}.`,
-    verificationCandidateKey: entry.verification?.candidateKey,
+    message: `Verification candidate ${verification?.candidateKey || 'unknown'} was superseded by ${supersededByCandidateKey}.`,
+    verificationCandidateKey: verification?.candidateKey,
+    verificationGeneration: verification?.generation,
     supersededByCandidateKey,
+    supersededByGeneration,
     authoritative: false,
   };
 }
 
-function recordSupersession(entry: QueueEntry, supersededByCandidateKey: string, cooperativeCancellationRequested: boolean) {
+function recordSupersession(
+  entry: QueueEntry,
+  supersededByCandidateKey: string,
+  supersededByGeneration: number | undefined,
+  cooperativeCancellationRequested: boolean,
+) {
+  const persisted = markJobSuperseded(entry.jobId, supersededByCandidateKey, supersededByGeneration);
+  if (!persisted) return false;
   rememberJobSupersession(entry.jobId, {
     candidateKey: entry.verification?.candidateKey,
     supersededByCandidateKey,
+    supersededByGeneration,
     cooperativeCancellationRequested,
     recordedAt: Date.now(),
   });
+  return true;
+}
+
+function findNewerVerification(policy: VerificationQueuePolicy): SupersedingVerification | undefined {
+  if (policy.required || !policy.seriesKey || !policy.candidateKey || policy.generation === undefined) return undefined;
+  let newest: SupersedingVerification | undefined;
+  for (const job of listRecentJobs(200)) {
+    if (job.verificationSeriesKey !== policy.seriesKey || job.verificationGeneration === undefined || job.verificationGeneration <= policy.generation) continue;
+    if (!job.verificationCandidateKey || job.supersededAt) continue;
+    if (!newest || job.verificationGeneration > (newest.generation ?? -1)) {
+      newest = { candidateKey: job.verificationCandidateKey, generation: job.verificationGeneration };
+    }
+  }
+  return newest;
+}
+
+function shouldSupersedeExisting(entry: QueueEntry, policy: VerificationQueuePolicy) {
+  const existing = entry.verification;
+  if (!existing || existing.seriesKey !== policy.seriesKey || existing.candidateKey === policy.candidateKey) return false;
+  if (existing.generation !== undefined && policy.generation !== undefined) return existing.generation < policy.generation;
+  if (existing.generation !== undefined && policy.generation === undefined) return false;
+  return true;
 }
 
 function supersedeObsoleteVerification(policy: VerificationQueuePolicy) {
@@ -418,12 +521,10 @@ function supersedeObsoleteVerification(policy: VerificationQueuePolicy) {
 
   for (let index = queue.length - 1; index >= 0; index -= 1) {
     const entry = queue[index];
-    if (entry.verification?.seriesKey !== policy.seriesKey || entry.verification?.candidateKey === policy.candidateKey) continue;
-    if (!canSupersedeVerification(entry)) continue;
+    if (!shouldSupersedeExisting(entry, policy) || !canSupersedeVerification(entry)) continue;
+    if (!recordSupersession(entry, policy.candidateKey, policy.generation, false)) continue;
     queue.splice(index, 1);
-    recordSupersession(entry, policy.candidateKey, false);
-    requestJobCancellation(entry.jobId, `Verification superseded by candidate ${policy.candidateKey}.`);
-    writeJobResult(entry.jobId, supersededJobResult(entry, policy.candidateKey));
+    writeJobResult(entry.jobId, supersededJobResult(entry.verification, policy.candidateKey, policy.generation));
     finalizeQueueWaitTelemetry(entry);
     void releaseVerificationCandidateForArgsAsync(entry.args).catch(() => {});
     appendJobLog(entry.jobId, 'stderr', `\n[Verification Superseded] Replaced by candidate ${policy.candidateKey}.\n`);
@@ -434,18 +535,61 @@ function supersedeObsoleteVerification(policy: VerificationQueuePolicy) {
 
   for (const active of activeJobs.values()) {
     const entry = active.entry;
-    if (entry.verification?.seriesKey !== policy.seriesKey || entry.verification?.candidateKey === policy.candidateKey) continue;
-    if (!canSupersedeVerification(entry)) continue;
+    if (!shouldSupersedeExisting(entry, policy) || !canSupersedeVerification(entry)) continue;
     const canCancel = typeof active.cancelFn === 'function' && entry.args?.allowSupersedeRunning !== false;
-    recordSupersession(entry, policy.candidateKey, canCancel);
+    if (!recordSupersession(entry, policy.candidateKey, policy.generation, canCancel)) continue;
+    writeJobResult(entry.jobId, supersededJobResult(entry.verification, policy.candidateKey, policy.generation));
     appendJobLog(entry.jobId, 'stderr', `\n[Verification Superseded] Newer candidate ${policy.candidateKey} is authoritative.\n`);
     if (canCancel) {
-      requestJobCancellation(entry.jobId, `Verification superseded by candidate ${policy.candidateKey}.`);
-      writeJobResult(entry.jobId, supersededJobResult(entry, policy.candidateKey));
       active.cancelFn?.();
       cooperativeSupersedeCancellations += 1;
     }
   }
+}
+
+function terminalizeIncomingSupersededJob(jobId: string, verification: VerificationQueuePolicy, superseding: SupersedingVerification) {
+  const persisted = markJobSuperseded(jobId, superseding.candidateKey, superseding.generation);
+  if (!persisted) return false;
+  rememberJobSupersession(jobId, {
+    candidateKey: verification.candidateKey,
+    supersededByCandidateKey: superseding.candidateKey,
+    supersededByGeneration: superseding.generation,
+    cooperativeCancellationRequested: false,
+    recordedAt: Date.now(),
+  });
+  writeJobResult(jobId, supersededJobResult(verification, superseding.candidateKey, superseding.generation));
+  appendJobLog(jobId, 'stderr', `\n[Verification Superseded] Request is older than candidate ${superseding.candidateKey}.\n`);
+  supersededQueuedJobs += 1;
+  notifyJobWaiters(jobId);
+  return true;
+}
+
+function enforceVerificationLag(policy: VerificationQueuePolicy) {
+  if (policy.lag === undefined) return;
+  maxVerificationLagObserved = Math.max(maxVerificationLagObserved, policy.lag);
+  if (policy.lag >= policy.lagWarnThreshold) verificationLagWarnings += 1;
+  if (policy.required || policy.workKind !== 'behavioral' || policy.lag < policy.lagBlockThreshold) return;
+  verificationLagBlocks += 1;
+  throw createApiError(429, 'VERIFICATION_LAG_BACKPRESSURE', 'Verification lag is too large for another behavioral revision; catch up GREEN evidence before continuing.', {
+    retryable: true,
+    details: {
+      seriesKey: policy.seriesKey,
+      verificationGeneration: policy.generation,
+      acceptedGreenGeneration: policy.acceptedGreenGeneration,
+      lag: policy.lag,
+      warnThreshold: policy.lagWarnThreshold,
+      blockThreshold: policy.lagBlockThreshold,
+      workKind: policy.workKind,
+      requiredVerification: policy.required,
+    },
+  });
+}
+
+function verificationAwareSchedulerPriority(basePriority: number, policy: VerificationQueuePolicy | undefined) {
+  if (!policy || policy.required || policy.workKind !== 'behavioral' || policy.lag === undefined || policy.lag < policy.lagWarnThreshold) {
+    return basePriority;
+  }
+  return Math.min(9, basePriority + 2);
 }
 
 function enforceVerificationBackpressure(policy: VerificationQueuePolicy, resourceKey: string) {
@@ -727,6 +871,8 @@ function enqueueRecoveredJob(state: AppState, job: McpToolJob) {
     blockerReasons: {},
   };
   rememberJobPhaseTelemetry(phaseTelemetry);
+  const recoveredVerification = verificationPolicyFor(job.args, schedulerProfile.accessMode, job.resourceKey);
+  const recoveredBasePriority = getSchedulerPriority(job.toolName, job.args, schedulerProfile.accessMode, schedulerProfile.verificationClass);
   queue.push({
     jobId: job.jobId,
     resourceKey: job.resourceKey,
@@ -739,9 +885,9 @@ function enqueueRecoveredJob(state: AppState, job: McpToolJob) {
     verificationClass: schedulerProfile.verificationClass,
     sharedResources: schedulerProfile.sharedResources,
     enqueuedAt,
-    schedulerPriority: getSchedulerPriority(job.toolName, job.args, schedulerProfile.accessMode, schedulerProfile.verificationClass),
+    schedulerPriority: verificationAwareSchedulerPriority(recoveredBasePriority, recoveredVerification),
     singleFlightKey: recoveredSingleFlightKey,
-    verification: verificationPolicyFor(job.args, schedulerProfile.accessMode, job.resourceKey),
+    verification: recoveredVerification,
     waitTelemetry: { lastObservedAt: Date.now(), workspaceLockWaitMs: 0, capacityWaitMs: 0, blockerReasons: {} },
     phaseTelemetry,
   });
@@ -780,6 +926,7 @@ export function getQueueMetrics() {
       singleFlightHits,
       superseded: {
         queued: supersededQueuedJobs,
+        savedExecutions: supersededQueuedJobs,
         cooperativeCancellationRequests: cooperativeSupersedeCancellations,
         tracked: jobSupersessionById.size,
       },
@@ -787,6 +934,13 @@ export function getQueueMetrics() {
         rejections: verificationBackpressureRejections,
         defaultResourceLimit: DEFAULT_VERIFICATION_BACKLOG_PER_RESOURCE,
         defaultProjectLimit: DEFAULT_VERIFICATION_BACKLOG_PER_PROJECT,
+      },
+      lag: {
+        warnings: verificationLagWarnings,
+        blocks: verificationLagBlocks,
+        maxObserved: maxVerificationLagObserved,
+        defaultWarnThreshold: DEFAULT_VERIFICATION_LAG_WARN_THRESHOLD,
+        defaultBlockThreshold: DEFAULT_VERIFICATION_LAG_BLOCK_THRESHOLD,
       },
       waitTelemetry: summarizeQueueWaitTelemetry(),
       phaseTelemetry: summarizeJobPhaseTelemetry(),
@@ -925,6 +1079,9 @@ export function getToolJobStatus(jobId: string) {
     ? verificationPolicyFor(job.args, 'verify', job.resourceKey)
     : undefined);
   const supersession = jobSupersessionById.get(jobId);
+  const supersededByCandidateKey = job.supersededByCandidateKey || supersession?.supersededByCandidateKey;
+  const supersededByGeneration = job.supersededByGeneration ?? supersession?.supersededByGeneration;
+  const isSuperseded = Boolean(job.supersededAt || supersededByCandidateKey);
   return {
     ...job,
     queuePosition: position >= 0 ? position + 1 : 0,
@@ -937,13 +1094,18 @@ export function getToolJobStatus(jobId: string) {
     ...(verification ? {
       verificationCandidateKey: verification.candidateKey,
       verificationSeriesKey: verification.seriesKey,
+      verificationGeneration: verification.generation,
+      verificationEvidenceIntent: verification.evidenceIntent,
       verificationRequired: verification.required,
+      acceptedGreenGeneration: verification.acceptedGreenGeneration,
+      verificationLag: verification.lag,
     } : {}),
-    ...(supersession ? {
+    ...(isSuperseded ? {
       superseded: true,
       authoritative: false,
-      supersededByCandidateKey: supersession.supersededByCandidateKey,
-      cooperativeCancellationRequested: supersession.cooperativeCancellationRequested,
+      supersededByCandidateKey,
+      supersededByGeneration,
+      cooperativeCancellationRequested: supersession?.cooperativeCancellationRequested || false,
     } : {}),
     ...(blocker || {}),
     lastLog: getLastLog(jobId),
@@ -1044,8 +1206,23 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
   if (admissionPreflight?.cachedResult) {
     const jobId = `job-${Date.now()}-${randomUUID().slice(0, 8)}`;
     const verification = verificationPolicyFor(jobArgs, schedulerProfile.accessMode, resourceKey);
-    if (verification) supersedeObsoleteVerification(verification);
+    const superseding = verification ? findNewerVerification(verification) : undefined;
+    if (verification && !superseding) supersedeObsoleteVerification(verification);
     createJob(jobId, toolName, jobArgs, resourceKey);
+    if (verification && superseding) {
+      terminalizeIncomingSupersededJob(jobId, verification, superseding);
+      return {
+        jobId,
+        status: 'cancelled' as const,
+        queuePosition: 0,
+        sharedWith: undefined as string | undefined,
+        handoffImmediately: false,
+        cacheHit: false,
+        accessMode: schedulerProfile.accessMode,
+        costClass: schedulerProfile.costClass,
+        nextAction: `Verification request was superseded by ${superseding.candidateKey}.`,
+      };
+    }
     writeJobResult(jobId, admissionPreflight.cachedResult);
     transitionJobStatus(jobId, ['queued'], { status: 'succeeded' });
     const completedAt = Date.now();
@@ -1108,13 +1285,31 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
   const jobId = `job-${Date.now()}-${randomUUID().slice(0, 8)}`;
   let job;
   let verification: VerificationQueuePolicy | undefined;
+  let superseding: SupersedingVerification | undefined;
   try {
     verification = verificationPolicyFor(jobArgs, schedulerProfile.accessMode, resourceKey);
     if (verification) {
-      supersedeObsoleteVerification(verification);
-      enforceVerificationBackpressure(verification, resourceKey);
+      superseding = findNewerVerification(verification);
+      if (!superseding) {
+        enforceVerificationLag(verification);
+        supersedeObsoleteVerification(verification);
+        enforceVerificationBackpressure(verification, resourceKey);
+      }
     }
     job = createJob(jobId, toolName, jobArgs, resourceKey);
+    if (verification && superseding) {
+      terminalizeIncomingSupersededJob(jobId, verification, superseding);
+      return {
+        jobId,
+        status: 'cancelled' as const,
+        queuePosition: 0,
+        sharedWith: undefined as string | undefined,
+        handoffImmediately: false,
+        accessMode: schedulerProfile.accessMode,
+        costClass: schedulerProfile.costClass,
+        nextAction: `Verification request was superseded by ${superseding.candidateKey}.`,
+      };
+    }
   } catch (error) {
     throw error;
   }
@@ -1143,7 +1338,10 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
     verificationClass: schedulerProfile.verificationClass,
     sharedResources: schedulerProfile.sharedResources,
     enqueuedAt,
-    schedulerPriority: getSchedulerPriority(toolName, jobArgs, schedulerProfile.accessMode, schedulerProfile.verificationClass),
+    schedulerPriority: verificationAwareSchedulerPriority(
+      getSchedulerPriority(toolName, jobArgs, schedulerProfile.accessMode, schedulerProfile.verificationClass),
+      verification,
+    ),
     singleFlightKey: singleFlightKey || undefined,
     verification,
     waitTelemetry: { lastObservedAt: enqueuedAt, workspaceLockWaitMs: 0, capacityWaitMs: 0, blockerReasons: {} },
@@ -1407,7 +1605,7 @@ async function startJob(entry: QueueEntry) {
     if (currentStatus === 'cancelled') {
       const supersession = jobSupersessionById.get(entry.jobId);
       const cancelledResult = supersession
-        ? Object.assign(supersededJobResult(entry, supersession.supersededByCandidateKey), { error: normalizedError })
+        ? Object.assign(supersededJobResult(entry.verification, supersession.supersededByCandidateKey, supersession.supersededByGeneration), { error: normalizedError })
         : {
             ok: false,
             status: 'cancelled',
@@ -1497,6 +1695,9 @@ export function __resetQueueWaitTelemetryForTests() {
   supersededQueuedJobs = 0;
   cooperativeSupersedeCancellations = 0;
   verificationBackpressureRejections = 0;
+  verificationLagWarnings = 0;
+  verificationLagBlocks = 0;
+  maxVerificationLagObserved = 0;
 }
 
 export function __setToolJobTestRunner(toolName: string, runner: AsyncRunner | null) {

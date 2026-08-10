@@ -13,6 +13,7 @@ import { mcpToolJobLeaseFencingMigration } from './011-mcp-tool-job-lease-fencin
 import { taskClaimsMigration } from './012-task-claims.js';
 import { projectGitWorkflowPolicyMigration } from './013-project-git-workflow-policy.js';
 import { mcpLatencyTelemetryMigration } from './014-mcp-latency-telemetry.js';
+import { mcpToolJobVerificationLifecycleMigration } from './015-mcp-tool-job-verification-lifecycle.js';
 import db from '../index.js';
 
 export const DEVFLOW_MIGRATIONS = [
@@ -30,6 +31,7 @@ export const DEVFLOW_MIGRATIONS = [
   taskClaimsMigration,
   projectGitWorkflowPolicyMigration,
   mcpLatencyTelemetryMigration,
+  mcpToolJobVerificationLifecycleMigration,
 ] as const;
 
 export function executeAllMigrations() {

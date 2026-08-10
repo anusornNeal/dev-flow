@@ -30,6 +30,13 @@ export interface McpToolJob {
   fencedWriteCount?: number;
   cancelRequestedAt?: string;
   cancelReason?: string;
+  verificationSeriesKey?: string;
+  verificationCandidateKey?: string;
+  verificationGeneration?: number;
+  verificationEvidenceIntent?: string;
+  supersededByCandidateKey?: string;
+  supersededByGeneration?: number;
+  supersededAt?: string;
   recoveryClassification?: JobRecoveryClassification;
   artifactDir: string;
   stdoutBytes?: number;
@@ -162,6 +169,25 @@ function parseArgs(value: unknown) {
   }
 }
 
+function normalizedJobString(value: unknown) {
+  const normalized = typeof value === 'string' ? value.trim() : '';
+  return normalized || undefined;
+}
+
+function normalizedJobGeneration(value: unknown) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric >= 0 ? Math.floor(numeric) : undefined;
+}
+
+function verificationMetadataFromArgs(args: any) {
+  return {
+    verificationSeriesKey: normalizedJobString(args?.verificationSeriesKey),
+    verificationCandidateKey: normalizedJobString(args?.verificationCandidateKey),
+    verificationGeneration: normalizedJobGeneration(args?.verificationGeneration),
+    verificationEvidenceIntent: normalizedJobString(args?.verificationEvidenceIntent),
+  };
+}
+
 function rowToJob(row: any): McpToolJob {
   return {
     jobId: row.job_id,
@@ -184,6 +210,13 @@ function rowToJob(row: any): McpToolJob {
     fencedWriteCount: Number(row.fenced_write_count || 0),
     cancelRequestedAt: row.cancel_requested_at || undefined,
     cancelReason: row.cancel_reason || undefined,
+    verificationSeriesKey: row.verification_series_key || undefined,
+    verificationCandidateKey: row.verification_candidate_key || undefined,
+    verificationGeneration: row.verification_generation == null ? undefined : Number(row.verification_generation),
+    verificationEvidenceIntent: row.verification_evidence_intent || undefined,
+    supersededByCandidateKey: row.superseded_by_candidate_key || undefined,
+    supersededByGeneration: row.superseded_by_generation == null ? undefined : Number(row.superseded_by_generation),
+    supersededAt: row.superseded_at || undefined,
     recoveryClassification: row.recovery_classification || undefined,
     artifactDir: row.artifact_dir || getArtifactDir(row.job_id),
     stdoutBytes: Number(row.stdout_bytes || 0),
@@ -280,6 +313,8 @@ function persistLifecycle(job: McpToolJob, expectedStatus: JobStatus, options: J
       wait_ms = ?, duration_ms = ?, failure_summary = ?, args_json = ?, resource_key = ?,
       lease_owner = ?, lease_expires_at = ?, heartbeat_at = ?, lease_generation = ?, detached_at = ?,
       cancel_requested_at = ?, cancel_reason = ?, recovery_classification = ?, artifact_dir = ?,
+      verification_series_key = ?, verification_candidate_key = ?, verification_generation = ?, verification_evidence_intent = ?,
+      superseded_by_candidate_key = ?, superseded_by_generation = ?, superseded_at = ?,
       stdout_bytes = ?, stderr_bytes = ?, result_bytes = ?, result_sha256 = ?, patch_bytes = ?, patch_sha256 = ?, fenced_write_count = ?
     WHERE job_id = ? AND status = ?${workerClause}${generationClause}
   `).run(
@@ -303,6 +338,13 @@ function persistLifecycle(job: McpToolJob, expectedStatus: JobStatus, options: J
     job.cancelReason || null,
     job.recoveryClassification || null,
     job.artifactDir,
+    job.verificationSeriesKey || null,
+    job.verificationCandidateKey || null,
+    job.verificationGeneration ?? null,
+    job.verificationEvidenceIntent || null,
+    job.supersededByCandidateKey || null,
+    job.supersededByGeneration ?? null,
+    job.supersededAt || null,
     job.stdoutBytes || 0,
     job.stderrBytes || 0,
     job.resultBytes || 0,
@@ -333,6 +375,7 @@ export function createJob(jobId: string, toolName: string, args: any, resourceKe
   const artifactDir = getArtifactDir(jobId);
   fs.mkdirSync(artifactDir, { recursive: true });
   const safeArgs = redactValue(args);
+  const verificationMetadata = verificationMetadataFromArgs(safeArgs);
   const now = new Date().toISOString();
   const job: McpToolJob = {
     jobId,
@@ -342,6 +385,7 @@ export function createJob(jobId: string, toolName: string, args: any, resourceKe
     updatedAt: now,
     args: safeArgs,
     resourceKey,
+    ...verificationMetadata,
     artifactDir,
     stdoutBytes: 0,
     stderrBytes: 0,
@@ -351,9 +395,14 @@ export function createJob(jobId: string, toolName: string, args: any, resourceKe
 
   db.prepare(`
     INSERT INTO mcp_tool_jobs (
-      job_id, tool_name, status, created_at, updated_at, args_json, resource_key, artifact_dir
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(jobId, toolName, job.status, now, now, JSON.stringify(safeArgs), resourceKey, artifactDir);
+      job_id, tool_name, status, created_at, updated_at, args_json, resource_key, artifact_dir,
+      verification_series_key, verification_candidate_key, verification_generation, verification_evidence_intent
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    jobId, toolName, job.status, now, now, JSON.stringify(safeArgs), resourceKey, artifactDir,
+    job.verificationSeriesKey || null, job.verificationCandidateKey || null,
+    job.verificationGeneration ?? null, job.verificationEvidenceIntent || null,
+  );
 
   fs.writeFileSync(path.join(artifactDir, 'input.json'), JSON.stringify({ toolName, args: safeArgs, resourceKey }, null, 2));
   fs.writeFileSync(path.join(artifactDir, 'stdout.log'), '');
@@ -410,7 +459,7 @@ export function claimJob(jobId: string, workerId: string, leaseMs: number, nowMs
 
   const claimed = db.transaction(() => {
     const current = getJob(jobId);
-    if (!current || current.cancelRequestedAt || TERMINAL_STATUSES.includes(current.status)) return null;
+    if (!current || current.cancelRequestedAt || current.supersededAt || TERMINAL_STATUSES.includes(current.status)) return null;
     const canClaimQueued = current.status === 'queued';
     const canClaimExpired = current.status === 'running' && (!current.leaseExpiresAt || Date.parse(current.leaseExpiresAt) <= nowMs);
     if (!canClaimQueued && !canClaimExpired) return null;
@@ -424,6 +473,7 @@ export function claimJob(jobId: string, workerId: string, leaseMs: number, nowMs
         lease_generation = lease_generation + 1
       WHERE job_id = ?
         AND cancel_requested_at IS NULL
+        AND superseded_at IS NULL
         AND (
           status = 'queued'
           OR (status = 'running' AND (lease_expires_at IS NULL OR lease_expires_at <= ?))
@@ -487,6 +537,41 @@ export function requestJobCancellation(jobId: string, reason = 'Cancellation req
   return cancelled;
 }
 
+export function markJobSuperseded(
+  jobId: string,
+  supersededByCandidateKey: string,
+  supersededByGeneration?: number,
+  reason = `Verification superseded by candidate ${supersededByCandidateKey}.`,
+  nowMs = Date.now(),
+): McpToolJob | null {
+  const nowIso = new Date(nowMs).toISOString();
+  const superseded = db.transaction(() => {
+    const current = getJob(jobId);
+    if (!current || TERMINAL_STATUSES.includes(current.status)) return null;
+    const startTime = toTimestamp(current.startedAt, current.createdAt || nowIso);
+    const result = db.prepare(`
+      UPDATE mcp_tool_jobs SET
+        status = 'cancelled', updated_at = ?, completed_at = ?, duration_ms = ?,
+        failure_summary = ?, cancel_requested_at = ?, cancel_reason = ?, recovery_classification = 'terminal',
+        lease_owner = NULL, lease_expires_at = NULL, heartbeat_at = NULL,
+        superseded_by_candidate_key = ?, superseded_by_generation = ?, superseded_at = ?
+      WHERE job_id = ? AND status IN ('queued', 'running') AND superseded_at IS NULL
+    `).run(
+      nowIso, nowIso, Math.max(0, nowMs - startTime), reason, nowIso, reason,
+      supersededByCandidateKey, supersededByGeneration ?? null, nowIso, jobId,
+    );
+    if (Number(result.changes || 0) !== 1) return null;
+    const persisted = getDbJob(jobId);
+    if (persisted) {
+      writeCompatibilityStatus(persisted);
+      upsertRecentJobCache(persisted);
+    }
+    return persisted;
+  })();
+  if (superseded) publishJobLifecycleEvent(superseded, 'superseded');
+  return superseded;
+}
+
 export function markJobConsumerAttached(jobId: string, nowMs = Date.now()): McpToolJob | null {
   const nowIso = new Date(nowMs).toISOString();
   const result = db.prepare(`
@@ -543,7 +628,7 @@ export function requeueJobForRecovery(jobId: string, nowMs = Date.now()): McpToo
   const nowIso = new Date(nowMs).toISOString();
   const requeued = db.transaction(() => {
     const current = getJob(jobId);
-    if (!current || current.status !== 'running' || current.cancelRequestedAt) return null;
+    if (!current || current.status !== 'running' || current.cancelRequestedAt || current.supersededAt) return null;
     if (current.leaseExpiresAt && Date.parse(current.leaseExpiresAt) > nowMs) return null;
     const result = db.prepare(`
       UPDATE mcp_tool_jobs SET
@@ -552,6 +637,7 @@ export function requeueJobForRecovery(jobId: string, nowMs = Date.now()): McpToo
         recovery_classification = 'retryable',
         failure_summary = 'Server restarted while this retry-safe job was running.'
       WHERE job_id = ? AND status = 'running' AND cancel_requested_at IS NULL
+        AND superseded_at IS NULL
         AND (lease_expires_at IS NULL OR lease_expires_at <= ?)
     `).run(nowIso, jobId, nowIso);
     if (Number(result.changes || 0) !== 1) return null;
@@ -571,6 +657,7 @@ export function listRecoverableJobs(nowMs = Date.now()): McpToolJob[] {
   const rows = db.prepare(`
     SELECT * FROM mcp_tool_jobs
     WHERE cancel_requested_at IS NULL
+      AND superseded_at IS NULL
       AND (
         status = 'queued'
         OR (status = 'running' AND (lease_expires_at IS NULL OR lease_expires_at <= ?))
@@ -578,6 +665,21 @@ export function listRecoverableJobs(nowMs = Date.now()): McpToolJob[] {
     ORDER BY created_at ASC
   `).all(nowIso) as any[];
   return rows.map(rowToJob);
+}
+
+export function getLatestAcceptedGreenGeneration(seriesKey: string): number | undefined {
+  const normalized = normalizedJobString(seriesKey);
+  if (!normalized) return undefined;
+  const row = db.prepare(`
+    SELECT MAX(verification_generation) AS generation
+    FROM mcp_tool_jobs
+    WHERE verification_series_key = ?
+      AND verification_generation IS NOT NULL
+      AND verification_evidence_intent = 'green'
+      AND status = 'succeeded'
+      AND superseded_at IS NULL
+  `).get(normalized) as { generation?: number | null } | undefined;
+  return row?.generation == null ? undefined : Number(row.generation);
 }
 
 export function appendJobLog(jobId: string, stream: 'stdout' | 'stderr', data: string, guard?: JobLeaseGuard) {

@@ -32,7 +32,7 @@ const {
   getToolJobWaitGuidance,
   __resetQueueWaitTelemetryForTests,
 } = await import('../../src/server/services/mcpToolJobService');
-const { heartbeatJob, readJobLog, readJobResult } = await import('../../src/server/repositories/mcpToolJobRepository');
+const { getLatestAcceptedGreenGeneration, heartbeatJob, listRecoverableJobs, readJobLog, readJobResult } = await import('../../src/server/repositories/mcpToolJobRepository');
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
 const { registerMcpToolJobRoutes } = await import('../../src/server/routes/mcpToolJobs.js');
 const { createApiError } = await import('../../src/server/services/api.js');
@@ -1365,6 +1365,165 @@ test('mcpToolJobService - newer verification candidates supersede obsolete queue
   }
 });
 
+test('mcpToolJobService - generation ordering never lets an older request supersede a newer queued revision', async () => {
+  const roots = [makeTempRepo('generation-block-a'), makeTempRepo('generation-block-b'), makeTempRepo('generation-target')];
+  const state = makeState(...roots);
+  const blockers = { blockA: deferred(), blockB: deferred(), newer: deferred() };
+  const starts: string[] = [];
+  __setToolJobTestRunner('run_project_command', async (_state, args) => {
+    starts.push(args.label);
+    const blocker = blockers[args.label as keyof typeof blockers];
+    if (blocker) await blocker.promise;
+    return { ok: true, label: args.label };
+  });
+
+  try {
+    const blockA = enqueueToolJob(state, 'run_project_command', { localPath: roots[0], command: 'typecheck', label: 'blockA', singleFlight: false }, 'repo-command');
+    const blockB = enqueueToolJob(state, 'run_project_command', { localPath: roots[1], command: 'typecheck', label: 'blockB', singleFlight: false }, 'repo-command');
+    await waitUntil(() => starts.includes('blockA') && starts.includes('blockB'), 'Expected verification capacity blockers to start');
+
+    const newer = enqueueToolJob(state, 'run_project_command', {
+      localPath: roots[2], command: 'typecheck', label: 'newer', singleFlight: false,
+      verificationSeriesKey: 'generation-order', verificationCandidateKey: 'rev-2', verificationGeneration: 2,
+      verificationEvidenceIntent: 'green',
+    }, 'repo-command');
+    const stale = enqueueToolJob(state, 'run_project_command', {
+      localPath: roots[2], command: 'typecheck', label: 'stale', singleFlight: false,
+      verificationSeriesKey: 'generation-order', verificationCandidateKey: 'rev-1', verificationGeneration: 1,
+      verificationEvidenceIntent: 'green',
+    }, 'repo-command');
+
+    assert.equal(getToolJobStatus(newer.jobId)?.status, 'queued');
+    assert.equal(getToolJobStatus(stale.jobId)?.status, 'cancelled');
+    assert.equal((getToolJobStatus(stale.jobId) as any)?.supersededByCandidateKey, 'rev-2');
+    assert.equal(typeof (getToolJobStatus(stale.jobId) as any)?.supersededAt, 'string');
+    assert.equal(starts.includes('stale'), false);
+    assert.equal(listRecoverableJobs().some((job) => job.jobId === stale.jobId), false);
+
+    __resetQueueWaitTelemetryForTests();
+    assert.equal((getToolJobStatus(stale.jobId) as any)?.supersededByCandidateKey, 'rev-2');
+    assert.equal(typeof (getToolJobStatus(stale.jobId) as any)?.supersededAt, 'string');
+
+    blockers.blockA.resolve();
+    blockers.blockB.resolve();
+    await waitForStatus(blockA.jobId, 'succeeded');
+    await waitForStatus(blockB.jobId, 'succeeded');
+    await waitUntil(() => starts.includes('newer'), 'Newer generation should execute after capacity frees');
+    blockers.newer.resolve();
+    await waitForStatus(newer.jobId, 'succeeded');
+    assert.equal(starts.includes('stale'), false);
+  } finally {
+    Object.values(blockers).forEach((blocker) => blocker.resolve());
+    __setToolJobTestRunner('run_project_command', null);
+  }
+});
+
+test('mcpToolJobService - medium verification lag deprioritizes speculative behavior behind normal verification', async () => {
+  const roots = [
+    makeTempRepo('lag-priority-block-a'),
+    makeTempRepo('lag-priority-block-b'),
+    makeTempRepo('lag-priority-medium'),
+    makeTempRepo('lag-priority-normal'),
+  ];
+  const state = makeState(...roots);
+  const gates = { blockA: deferred(), blockB: deferred(), medium: deferred(), normal: deferred() };
+  const starts: string[] = [];
+  __setToolJobTestRunner('run_project_command', async (_state, args) => {
+    starts.push(args.label);
+    const gate = gates[args.label as keyof typeof gates];
+    if (gate) await gate.promise;
+    return { ok: true, label: args.label };
+  });
+
+  try {
+    const baseline = enqueueToolJob(state, 'run_project_command', {
+      localPath: roots[2], command: 'typecheck', label: 'baseline', singleFlight: false,
+      verificationSeriesKey: 'lag-priority-series', verificationCandidateKey: 'rev-1', verificationGeneration: 1,
+      verificationEvidenceIntent: 'green', verificationLagWarnThreshold: 2, verificationLagBlockThreshold: 5,
+    }, 'repo-command');
+    await waitForStatus(baseline.jobId, 'succeeded');
+
+    const blockA = enqueueToolJob(state, 'run_project_command', { localPath: roots[0], command: 'typecheck', label: 'blockA', singleFlight: false }, 'repo-command');
+    const blockB = enqueueToolJob(state, 'run_project_command', { localPath: roots[1], command: 'typecheck', label: 'blockB', singleFlight: false }, 'repo-command');
+    await waitUntil(() => starts.includes('blockA') && starts.includes('blockB'), 'Expected verification capacity blockers to start');
+
+    const medium = enqueueToolJob(state, 'run_project_command', {
+      localPath: roots[2], command: 'typecheck', label: 'medium', singleFlight: false,
+      verificationSeriesKey: 'lag-priority-series', verificationCandidateKey: 'rev-3', verificationGeneration: 3,
+      verificationEvidenceIntent: 'green', verificationWorkKind: 'behavioral',
+      verificationLagWarnThreshold: 2, verificationLagBlockThreshold: 5,
+    }, 'repo-command');
+    const normal = enqueueToolJob(state, 'run_project_command', {
+      localPath: roots[3], command: 'typecheck', label: 'normal', singleFlight: false,
+    }, 'repo-command');
+    assert.equal(getToolJobStatus(medium.jobId)?.status, 'queued');
+    assert.equal(getToolJobStatus(normal.jobId)?.status, 'queued');
+
+    gates.blockA.resolve();
+    await waitForStatus(blockA.jobId, 'succeeded');
+    await waitUntil(() => starts.includes('normal'), 'Normal verification should run before medium-lag speculative work');
+    assert.equal(starts.includes('medium'), false);
+
+    gates.normal.resolve();
+    await waitForStatus(normal.jobId, 'succeeded');
+    await waitUntil(() => starts.includes('medium'), 'Medium-lag work should remain runnable after higher-priority verification finishes');
+    gates.medium.resolve();
+    gates.blockB.resolve();
+    await waitForStatus(medium.jobId, 'succeeded');
+    await waitForStatus(blockB.jobId, 'succeeded');
+  } finally {
+    Object.values(gates).forEach((gate) => gate.resolve());
+    __setToolJobTestRunner('run_project_command', null);
+  }
+});
+
+test('mcpToolJobService - accepted GREEN evidence drives warning and blocking verification lag thresholds', async () => {
+  const root = makeTempRepo('verification-lag');
+  const state = makeState(root);
+  __setToolJobTestRunner('run_project_command', async (_state, args) => ({ ok: true, label: args.label }));
+
+  try {
+    const baseline = enqueueToolJob(state, 'run_project_command', {
+      localPath: root, command: 'typecheck', label: 'baseline', singleFlight: false,
+      verificationSeriesKey: 'lag-series', verificationCandidateKey: 'rev-1', verificationGeneration: 1,
+      verificationEvidenceIntent: 'green', verificationLagWarnThreshold: 2, verificationLagBlockThreshold: 4,
+    }, 'repo-command');
+    await waitForStatus(baseline.jobId, 'succeeded');
+
+    const warned = enqueueToolJob(state, 'run_project_command', {
+      localPath: root, command: 'typecheck', label: 'warned', singleFlight: false,
+      verificationSeriesKey: 'lag-series', verificationCandidateKey: 'rev-3', verificationGeneration: 3,
+      verificationEvidenceIntent: 'green', verificationLagWarnThreshold: 2, verificationLagBlockThreshold: 4,
+    }, 'repo-command');
+    await waitForStatus(warned.jobId, 'succeeded');
+    const metrics: any = getQueueMetrics().metrics;
+    assert.equal(metrics.lag.warnings >= 1, true);
+    assert.equal(metrics.lag.maxObserved >= 2, true);
+
+    assert.throws(
+      () => enqueueToolJob(state, 'run_project_command', {
+        localPath: root, command: 'typecheck', label: 'blocked', singleFlight: false,
+        verificationSeriesKey: 'lag-series', verificationCandidateKey: 'rev-7', verificationGeneration: 7,
+        verificationEvidenceIntent: 'green', verificationWorkKind: 'behavioral',
+        verificationLagWarnThreshold: 2, verificationLagBlockThreshold: 4,
+      }, 'repo-command'),
+      (error: any) => error?.payload?.code === 'VERIFICATION_LAG_BACKPRESSURE' && error?.status === 429,
+    );
+
+    const safeCleanup = enqueueToolJob(state, 'run_project_command', {
+      localPath: root, command: 'typecheck', label: 'cleanup', singleFlight: false,
+      verificationSeriesKey: 'lag-series', verificationCandidateKey: 'cleanup-7', verificationGeneration: 7,
+      verificationEvidenceIntent: 'focused', verificationWorkKind: 'cleanup',
+      verificationLagWarnThreshold: 2, verificationLagBlockThreshold: 4,
+    }, 'repo-command');
+    await waitForStatus(safeCleanup.jobId, 'succeeded');
+    assert.equal(getLatestAcceptedGreenGeneration('lag-series'), 3, 'focused cleanup must not advance the accepted GREEN checkpoint');
+    assert.equal((getQueueMetrics().metrics as any).lag.blocks >= 1, true);
+  } finally {
+    __setToolJobTestRunner('run_project_command', null);
+  }
+});
+
 test('mcpToolJobService - required verification is not superseded by a newer candidate', async () => {
   const roots = [makeTempRepo('required-block-a'), makeTempRepo('required-block-b'), makeTempRepo('required-target')];
   const state = makeState(...roots);
@@ -1384,11 +1543,11 @@ test('mcpToolJobService - required verification is not superseded by a newer can
 
     const requiredA = enqueueToolJob(state, 'run_project_command', {
       localPath: roots[2], command: 'typecheck', label: 'requiredA', singleFlight: false,
-      verificationSeriesKey: 'review-gate', verificationCandidateKey: 'A', verificationRequired: true,
+      verificationSeriesKey: 'review-gate', verificationCandidateKey: 'A', verificationGeneration: 1, verificationEvidenceIntent: 'red-required',
     }, 'repo-command');
     const candidateB = enqueueToolJob(state, 'run_project_command', {
       localPath: roots[2], command: 'typecheck', label: 'candidateB', singleFlight: false,
-      verificationSeriesKey: 'review-gate', verificationCandidateKey: 'B',
+      verificationSeriesKey: 'review-gate', verificationCandidateKey: 'B', verificationGeneration: 2, verificationEvidenceIntent: 'green',
     }, 'repo-command');
 
     assert.equal(getToolJobStatus(requiredA.jobId)?.status, 'queued');
@@ -1403,6 +1562,52 @@ test('mcpToolJobService - required verification is not superseded by a newer can
     gates.candidateB.resolve();
     await waitForStatus(requiredA.jobId, 'succeeded');
     await waitForStatus(candidateB.jobId, 'succeeded');
+  } finally {
+    Object.values(gates).forEach((gate) => gate.resolve());
+    __setToolJobTestRunner('run_project_command', null);
+  }
+});
+
+test('mcpToolJobService - deferred RED evidence may be superseded when a newer revision makes it obsolete', async () => {
+  const roots = [makeTempRepo('red-deferred-block-a'), makeTempRepo('red-deferred-block-b'), makeTempRepo('red-deferred-target')];
+  const state = makeState(...roots);
+  const gates = { blockA: deferred(), blockB: deferred(), greenB: deferred() };
+  const starts: string[] = [];
+  __setToolJobTestRunner('run_project_command', async (_state, args) => {
+    starts.push(args.label);
+    const gate = gates[args.label as keyof typeof gates];
+    if (gate) await gate.promise;
+    return { ok: true, label: args.label };
+  });
+
+  try {
+    const blockA = enqueueToolJob(state, 'run_project_command', { localPath: roots[0], command: 'typecheck', label: 'blockA', singleFlight: false }, 'repo-command');
+    const blockB = enqueueToolJob(state, 'run_project_command', { localPath: roots[1], command: 'typecheck', label: 'blockB', singleFlight: false }, 'repo-command');
+    await waitUntil(() => starts.includes('blockA') && starts.includes('blockB'), 'Expected verification capacity blockers to start');
+
+    const deferredRed = enqueueToolJob(state, 'run_project_command', {
+      localPath: roots[2], command: 'typecheck', label: 'redA', singleFlight: false,
+      verificationSeriesKey: 'red-deferred-series', verificationCandidateKey: 'A', verificationGeneration: 1,
+      verificationEvidenceIntent: 'red-deferred',
+    }, 'repo-command');
+    const greenB = enqueueToolJob(state, 'run_project_command', {
+      localPath: roots[2], command: 'typecheck', label: 'greenB', singleFlight: false,
+      verificationSeriesKey: 'red-deferred-series', verificationCandidateKey: 'B', verificationGeneration: 2,
+      verificationEvidenceIntent: 'green',
+    }, 'repo-command');
+
+    assert.equal(getToolJobStatus(deferredRed.jobId)?.status, 'cancelled');
+    assert.equal((getToolJobStatus(deferredRed.jobId) as any)?.supersededByCandidateKey, 'B');
+    assert.equal(starts.includes('redA'), false);
+    assert.equal(getToolJobStatus(greenB.jobId)?.status, 'queued');
+
+    gates.blockA.resolve();
+    gates.blockB.resolve();
+    await waitForStatus(blockA.jobId, 'succeeded');
+    await waitForStatus(blockB.jobId, 'succeeded');
+    await waitUntil(() => starts.includes('greenB'), 'Newer GREEN revision should execute after capacity frees');
+    gates.greenB.resolve();
+    await waitForStatus(greenB.jobId, 'succeeded');
   } finally {
     Object.values(gates).forEach((gate) => gate.resolve());
     __setToolJobTestRunner('run_project_command', null);

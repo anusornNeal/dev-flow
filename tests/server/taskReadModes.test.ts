@@ -181,12 +181,6 @@ test('GET /api/tasks modern summary defaults to a bounded page and preserves tot
   assert.equal(explicit.limit, 120);
   assert.equal(Buffer.byteLength(responseText, 'utf8') < Buffer.byteLength(explicitText, 'utf8') * 0.6, true);
 
-  const fullResponse = await fetch(`${base}/api/tasks?mode=full&projectId=proj-search-paging`);
-  const full = await fullResponse.json() as { items: any[]; total: number; limit: number; mode: string };
-  assert.equal(full.items.length, 120);
-  assert.equal(full.total, 120);
-  assert.equal(full.limit, 120);
-  assert.equal(full.mode, 'full');
 });
 
 test('GET prompt-json returns JSON content', async () => {

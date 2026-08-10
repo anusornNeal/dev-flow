@@ -5,7 +5,8 @@ import { createApiError, normalizeUnknownError } from './api';
 import { resolveProjectResourceIdentity, resolveProjectRoot } from './localFileService';
 import { isDevFlowRestartPending, readDevFlowRestartState } from '../../lib/devFlowRestart';
 import { getRepoRevisionForRoot } from './repoRevisionService';
-import { getProjectCommandExecutionIdentity } from './projectCommandService';
+import { getProjectCommandExecutionIdentity, prepareProjectCommandVerificationCandidate } from './projectCommandService';
+import { releaseVerificationCandidate } from './verificationCandidateService';
 import { getToolDefinitionByName } from '../contracts/devflowContract';
 import {
   buildQueueEntryDiagnostics,
@@ -334,7 +335,7 @@ function supersedeObsoleteVerification(policy: VerificationQueuePolicy) {
     recordSupersession(entry, policy.candidateKey, false);
     requestJobCancellation(entry.jobId, `Verification superseded by candidate ${policy.candidateKey}.`);
     writeJobResult(entry.jobId, supersededJobResult(entry, policy.candidateKey));
-    finalizeQueueWaitTelemetry(entry);
+    finalizeQueueWaitTelemetry(entry);    releaseVerificationCandidateForArgs(entry.args);
     appendJobLog(entry.jobId, 'stderr', `\n[Verification Superseded] Replaced by candidate ${policy.candidateKey}.\n`);
     finalizeSingleFlight(entry);
     notifyJobWaiters(entry.jobId);
@@ -388,6 +389,16 @@ function notifyJobWaiters(jobId: string) {
   for (const resolve of waiters) resolve(status);
 }
 
+function verificationCandidateIdForArgs(args: any) {
+  const candidateId = args?.__verificationCandidate?.candidateId;
+  return typeof candidateId === 'string' && candidateId.trim() ? candidateId.trim() : '';
+}
+
+function releaseVerificationCandidateForArgs(args: any) {
+  const candidateId = verificationCandidateIdForArgs(args);
+  return candidateId ? releaseVerificationCandidate(candidateId) : false;
+}
+
 function singleFlightKeyFor(state: AppState, toolName: string, args: any, kind: JobKind, resourceKey: string) {
   const enabled = kind === 'repo-read'
     ? args?.singleFlight !== false
@@ -396,7 +407,10 @@ function singleFlightKeyFor(state: AppState, toolName: string, args: any, kind: 
 
   if (kind === 'repo-command' && toolName === 'run_project_command') {
     try {
-      const executionIdentity = getProjectCommandExecutionIdentity(state, args);
+      const capturedExecutionKey = args?.__verificationCandidate?.executionIdentity?.key;
+      const executionIdentity = typeof capturedExecutionKey === 'string' && capturedExecutionKey.trim()
+        ? { key: capturedExecutionKey.trim() }
+        : getProjectCommandExecutionIdentity(state, args);
       if (!executionIdentity) return null;
       return createHash('sha256').update(stableStringify({ resourceKey, toolName, kind, executionKey: executionIdentity.key })).digest('hex');
     } catch {
@@ -699,7 +713,7 @@ export function initMcpToolJobs(state?: AppState) {
       recoveryClassification: 'interrupted',
     });
     if (interrupted) {
-      appendJobLog(job.jobId, 'stderr', '\n[Job Interrupted] Server restarted; this job is not safe to retry automatically.\n');
+      appendJobLog(job.jobId, 'stderr', '\n[Job Interrupted] Server restarted; this job is not safe to retry automatically.\n');      releaseTerminalVerificationCandidate(interrupted);
       summary.interrupted += 1;
     }
   }
@@ -770,7 +784,7 @@ export function cancelToolJob(jobId: string) {
   const qIdx = queue.findIndex(q => q.jobId === jobId);
   if (qIdx >= 0) {
     const [cancelledEntry] = queue.splice(qIdx, 1);
-    finalizeQueueWaitTelemetry(cancelledEntry);
+    finalizeQueueWaitTelemetry(cancelledEntry);    releaseVerificationCandidateForArgs(cancelledEntry.args);
     appendJobLog(jobId, 'stderr', '\n[Job Cancelled] Cancelled before start.\n');
     finalizeSingleFlight(cancelledEntry);
     notifyJobWaiters(jobId);
@@ -787,6 +801,11 @@ export function cancelToolJob(jobId: string) {
 
   notifyJobWaiters(jobId);
   return true;
+}
+
+function releaseTerminalVerificationCandidate(job: Pick<McpToolJob, 'args'> | null | undefined) {
+  if (!job) return false;
+  return releaseVerificationCandidateForArgs(job.args);
 }
 
 function resolveAdmissionResourceKey(state: AppState, args: any, kind: JobKind) {
@@ -819,9 +838,9 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
 
   const resourceKey = resolveAdmissionResourceKey(state, args, kind);
   const schedulerProfile = getSchedulerProfile(state, toolName, args, kind);
-  const singleFlightKey = singleFlightKeyFor(state, toolName, args, kind, resourceKey);
-  if (singleFlightKey) {
-    const leaderJobId = singleFlightLeaders.get(singleFlightKey);
+  const initialSingleFlightKey = singleFlightKeyFor(state, toolName, args, kind, resourceKey);
+  if (initialSingleFlightKey) {
+    const leaderJobId = singleFlightLeaders.get(initialSingleFlightKey);
     const leaderStatus = leaderJobId ? getJob(leaderJobId) : null;
     if (leaderJobId && leaderStatus && !isTerminalStatus(leaderStatus.status)) {
       const followerJobId = `job-${Date.now()}-${randomUUID().slice(0, 8)}`;
@@ -845,14 +864,31 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
     }
   }
 
-  const jobId = `job-${Date.now()}-${randomUUID().slice(0, 8)}`;
-  const verification = verificationPolicyFor(args, schedulerProfile.accessMode, resourceKey);
-  if (verification) {
-    supersedeObsoleteVerification(verification);
-    enforceVerificationBackpressure(verification, resourceKey);
+  let jobArgs = args;
+  let ownedVerificationCandidateId = '';
+  if (toolName === 'run_project_command' && kind === 'repo-command' && !verificationCandidateIdForArgs(args)) {
+    const verificationCandidate = prepareProjectCommandVerificationCandidate(state, args);
+    if (verificationCandidate) {
+      ownedVerificationCandidateId = verificationCandidate.candidateId;
+      jobArgs = { ...args, __verificationCandidate: verificationCandidate };
+    }
   }
+  const singleFlightKey = singleFlightKeyFor(state, toolName, jobArgs, kind, resourceKey);
 
-  const job = createJob(jobId, toolName, args, resourceKey);
+  const jobId = `job-${Date.now()}-${randomUUID().slice(0, 8)}`;
+  let job;
+  let verification: VerificationQueuePolicy | undefined;
+  try {
+    verification = verificationPolicyFor(jobArgs, schedulerProfile.accessMode, resourceKey);
+    if (verification) {
+      supersedeObsoleteVerification(verification);
+      enforceVerificationBackpressure(verification, resourceKey);
+    }
+    job = createJob(jobId, toolName, jobArgs, resourceKey);
+  } catch (error) {
+    if (ownedVerificationCandidateId) releaseVerificationCandidate(ownedVerificationCandidateId);
+    throw error;
+  }
   const enqueuedAt = Date.now();
   const phaseTelemetry: JobPhaseTelemetryState = {
     jobId,
@@ -872,11 +908,11 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
     kind,
     state,
     toolName,
-    args,
+    args: jobArgs,
     accessMode: schedulerProfile.accessMode,
     costClass: schedulerProfile.costClass,
     enqueuedAt,
-    schedulerPriority: getSchedulerPriority(toolName, args, schedulerProfile.accessMode),
+    schedulerPriority: getSchedulerPriority(toolName, jobArgs, schedulerProfile.accessMode),
     singleFlightKey: singleFlightKey || undefined,
     verification,
     waitTelemetry: { lastObservedAt: enqueuedAt, workspaceLockWaitMs: 0, capacityWaitMs: 0, blockerReasons: {} },
@@ -940,6 +976,10 @@ function transitionJobAccess(jobId: string, nextAccessMode: ResourceAccessMode) 
 async function startJob(entry: QueueEntry) {
   const claimed = claimJob(entry.jobId, JOB_WORKER_ID, JOB_LEASE_MS);
   if (!claimed) {
+    const persisted = getJob(entry.jobId);
+    if (persisted && isTerminalStatus(persisted.status)) {
+      releaseVerificationCandidateForArgs(entry.args);
+    }
     finalizeSingleFlight(entry);
     setImmediate(processQueue);
     return;
@@ -1042,7 +1082,7 @@ async function startJob(entry: QueueEntry) {
     entry.phaseTelemetry.finalized = true;
     rememberJobPhaseTelemetry(entry.phaseTelemetry);
     decrementScheduledResource(entry);
-    activeJobs.delete(entry.jobId);
+    activeJobs.delete(entry.jobId);    releaseVerificationCandidateForArgs(entry.args);
     finalizeSingleFlight(entry);
     setImmediate(processQueue);
   }

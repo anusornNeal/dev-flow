@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-apply-verify-'));
 process.env.DEVFLOW_DB_PATH = path.join(os.tmpdir(), `devflow-apply-verify-db-${path.basename(tempRoot)}.sqlite`);
+process.env.DEVFLOW_RUNTIME_DIR = path.join(tempRoot, 'runtime');
 
 const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
 executeAllMigrations();
@@ -104,12 +105,14 @@ test('applyAndVerifyAsync runs resource-safe targeted verification commands conc
   assert.equal(result.verification.length, 2);
   assert.equal(result.verification.every((entry: any) => entry.status === 'succeeded'), true);
   const summedVerificationMs = result.verification.reduce((sum: number, entry: any) => sum + Number(entry.durationMs || 0), 0);
+  const verificationWallMs = Number(result.verificationPerformance?.wallMs || 0);
   assert.equal(
-    elapsedMs < summedVerificationMs * 0.8,
+    verificationWallMs < summedVerificationMs * 0.8,
     true,
-    `expected concurrent wall time ${elapsedMs}ms to be materially below summed verification time ${summedVerificationMs}ms`,
+    `expected concurrent verification wall time ${verificationWallMs}ms to be materially below summed verification time ${summedVerificationMs}ms`,
   );
-  assert.equal(typeof result.verificationPerformance?.wallMs, 'number');
+  assert.equal(typeof result.verificationPerformance?.candidatePreparationMs, 'number');
+  assert.equal(elapsedMs >= verificationWallMs, true, 'end-to-end elapsed time should include candidate preparation');
   assert.equal(result.verificationPerformance?.processSpawns, 2);
 });
 
@@ -179,6 +182,42 @@ test('applyAndVerifyAsync fails cheap prerequisite before launching a later isol
   assert.equal(result.ok, false);
   assert.equal(result.verification[0]?.command, 'typecheck');
   assert.equal(fs.existsSync(expensiveCounter), false, 'later expensive stage must not launch after prerequisite failure');
+});
+
+test('applyAndVerifyAsync preserves candidate A evidence but rejects it as current after workspace advances to B', async () => {
+  const root = fixture('candidate-drift');
+  const marker = path.join(tempRoot, 'candidate-drift-started.txt');
+  fs.writeFileSync(path.join(root, 'scripts', 'test.mjs'), [
+    "import fs from 'node:fs';",
+    `fs.writeFileSync(${JSON.stringify(marker)}, 'started', 'utf8');`,
+    "await new Promise((resolve) => setTimeout(resolve, 400));",
+    "process.stdout.write(fs.readFileSync('src/value.ts', 'utf8'));",
+  ].join('\n'), 'utf8');
+  git(root, ['add', '.']);
+  git(root, ['commit', '-m', 'candidate drift fixture']);
+
+  const verificationPromise = applyAndVerifyAsync(stateFor(root), {
+    projectId: 'project-apply-verify',
+    files: [{ filePath: 'src/value.ts', edits: [{ type: 'replace', find: 'value = 1', replaceWith: 'value = 5' }] }],
+    requestedCommands: ['test'],
+    cacheVerificationResults: false,
+    forceFresh: true,
+  });
+
+  for (let attempt = 0; attempt < 80 && !fs.existsSync(marker); attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.equal(fs.existsSync(marker), true, 'verification should start before live workspace mutation');
+  fs.writeFileSync(path.join(root, 'src', 'value.ts'), 'export const value = 6;\n', 'utf8');
+
+  const result = await verificationPromise;
+  assert.equal(result.ok, false);
+  assert.equal(result.status, 'verification_stale');
+  assert.equal(result.verification.length, 1);
+  assert.equal(result.verification[0]?.ok, true, 'candidate A verification itself should still pass');
+  assert.match(result.verification[0]?.stdout || '', /value = 5/);
+  assert.equal(result.verification[0]?.verificationCandidate?.current, false);
+  assert.deepEqual(result.staleVerificationCommands, ['test']);
 });
 
 test.after(() => fs.rmSync(tempRoot, { recursive: true, force: true }));

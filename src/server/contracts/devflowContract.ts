@@ -71,13 +71,14 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
       properties: {
         ...projectIdentifierProperties,
         windowMs: { type: 'number', description: 'Recent telemetry window in milliseconds. Default is 10 minutes.' },
+        responseMode: { type: 'string', enum: ['compact', 'summary', 'full', 'debug'], description: 'Response density. MCP defaults to compact; summary aliases compact, debug aliases full.' },
       },
     },
     outputSchema: { type: 'object' },
     lightweight: true,
     buildHttpRequest: (args) => ({
       method: 'GET',
-      path: withQuery('/api/workflow-health', args),
+      path: withQuery('/api/workflow-health', { ...args, responseMode: args.responseMode || 'compact' }),
     }),
   },
   {

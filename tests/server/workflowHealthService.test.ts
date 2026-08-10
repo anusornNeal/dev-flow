@@ -14,6 +14,7 @@ executeAllMigrations();
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
 
 const { getWorkflowHealth } = await import('../../src/server/services/workflowHealthService.js');
+const { getToolDefinitionByName } = await import('../../src/server/contracts/devflowContract.js');
 const serverEvents = await import('../../src/server/services/serverEventService.js');
 const { clearToolCallRecords, recordToolCall, flushPerformanceTelemetry } = await import('../../src/server/services/mcpToolMonitor.js');
 const { default: db } = await import('../../src/db/index.js');
@@ -70,6 +71,92 @@ test('getWorkflowHealth returns ok for a clean repo', () => {
   assert.equal(typeof result.diagnostics.isolation.workspaces.known, 'number');
   assert.equal(typeof result.diagnostics.isolation.integrations.conflicts, 'number');
 });
+
+test('compact health preserves operational warnings while cutting response bytes by at least half', () => {
+  const repo = createRepo('compact-shape');
+  const full = getWorkflowHealth(stateFor(repo), { projectId: 'project-health', responseMode: 'full' }) as any;
+  const compact = getWorkflowHealth(stateFor(repo), { projectId: 'project-health', responseMode: 'compact' }) as any;
+  const fullBytes = Buffer.byteLength(JSON.stringify(full), 'utf8');
+  const compactBytes = Buffer.byteLength(JSON.stringify(compact), 'utf8');
+
+  assert.equal(compact.ok, true);
+  assert.equal(compact.status, 'ok');
+  assert.equal(compact.git.clean, true);
+  assert.equal(compact.git.operation.blocked, false);
+  assert.equal(typeof compact.queue.depth, 'number');
+  assert.equal(typeof compact.queue.capacity.saturated, 'boolean');
+  assert.equal(typeof compact.runtime.search.backend, 'string');
+  assert.equal(compact.runtime.capabilities.keyToolsPresent.get_repo_context_bundle, true);
+  assert.equal(Array.isArray(compact.regressions), true);
+  assert.equal(typeof compact.recovery.hasVerifiedGoodBackup, 'boolean');
+  assert.equal(Array.isArray(compact.recommendations), true);
+  assert.equal(compact.diagnostics, undefined, 'compact mode must omit deep diagnostics');
+  assert.equal(compact.capabilities, undefined, 'compact mode must omit the full capability packet');
+  assert.equal(compactBytes <= fullBytes * 0.5, true, `expected compact <=50% of full (${compactBytes} vs ${fullBytes})`);
+  assert.equal(compactBytes <= 3_000, true, `expected ordinary compact health <=3KB, got ${compactBytes} bytes`);
+  console.log(`[health-bytes] full=${fullBytes} compact=${compactBytes} reduction=${Math.round((1 - compactBytes / fullBytes) * 100)}%`);
+});
+
+test('compact health keeps grouped failure and recovery warning context without verbose examples', () => {
+  const repo = createRepo('compact-warning');
+  createJob('job-health-compact-failed', 'run_project_command', { command: 'verify' }, `repo:${repo}`);
+  updateJobStatus('job-health-compact-failed', { status: 'failed', failureSummary: 'synthetic compact failure' });
+
+  const full = getWorkflowHealth(stateFor(repo), { projectId: 'project-health', responseMode: 'full' }) as any;
+  const compact = getWorkflowHealth(stateFor(repo), { projectId: 'project-health', responseMode: 'summary' }) as any;
+  const fullBytes = Buffer.byteLength(JSON.stringify(full), 'utf8');
+  const compactBytes = Buffer.byteLength(JSON.stringify(compact), 'utf8');
+  assert.equal(compact.status, 'warning');
+  assert.equal(compact.failures.total > 0, true);
+  assert.equal(compact.failures.groups.some((group: any) => group.toolName === 'run_project_command'), true);
+  assert.equal(compact.failures.groups.some((group: any) => 'examples' in group), false);
+  assert.equal(compact.recovery.hasVerifiedGoodBackup, false);
+  assert.match(compact.recommendations.join('\n'), /run_project_command/);
+  assert.equal(compactBytes <= fullBytes * 0.5, true, `expected warning compact <=50% of full (${compactBytes} vs ${fullBytes})`);
+  db.prepare('DELETE FROM mcp_tool_jobs WHERE job_id = ?').run('job-health-compact-failed');
+  clearRecentJobCache();
+});
+
+test('compact health surfaces active current SLO regressions without historical payloads', () => {
+  const repo = createRepo('compact-current-regression');
+  clearToolCallRecords();
+  const now = Date.now();
+  for (let index = 0; index < 3; index += 1) {
+    recordToolCall({
+      toolName: 'search_local_files',
+      args: { projectId: 'project-health' },
+      status: 200,
+      durationMs: 1_500 + index,
+      timestamp: now - 10 + index,
+    });
+  }
+  const compact = getWorkflowHealth(stateFor(repo), { projectId: 'project-health', responseMode: 'compact', windowMs: 1_000 }) as any;
+  assert.equal(compact.status, 'warning');
+  assert.equal(compact.regressions.some((entry: any) => entry.toolName === 'search_local_files' && entry.status === 'regressed'), true);
+  assert.equal(compact.diagnostics, undefined);
+  assert.match(compact.recommendations.join('\n'), /Performance SLO regression/);
+  clearToolCallRecords();
+});
+
+test('full and debug health modes preserve the detailed diagnostic shape', () => {
+  const repo = createRepo('full-debug-shape');
+  for (const responseMode of ['full', 'debug']) {
+    const result = getWorkflowHealth(stateFor(repo), { projectId: 'project-health', responseMode }) as any;
+    assert.equal(typeof result.capabilities.toolCount, 'number');
+    assert.equal(typeof result.diagnostics.isolation.phases.queueWait.p95Ms, 'number');
+    assert.equal(Array.isArray(result.diagnostics.performance.history.comparisons), true);
+    assert.equal(Array.isArray(result.diagnostics.failedJobSummaries), true);
+  }
+});
+
+test('devflow_health_check contract defaults MCP requests to compact and permits explicit full diagnostics', () => {
+  const tool = getToolDefinitionByName('devflow_health_check');
+  assert.ok(tool);
+  assert.deepEqual(tool.inputSchema?.properties?.responseMode?.enum, ['compact', 'summary', 'full', 'debug']);
+  assert.equal(tool.buildHttpRequest({ projectId: 'project-health' }).path.includes('responseMode=compact'), true);
+  assert.equal(tool.buildHttpRequest({ projectId: 'project-health', responseMode: 'full' }).path.includes('responseMode=full'), true);
+});
+
 
 test('getWorkflowHealth reports fallback search backend when ripgrep is unavailable', () => {
   const repo = createRepo('search-backend');

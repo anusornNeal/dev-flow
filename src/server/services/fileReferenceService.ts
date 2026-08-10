@@ -148,19 +148,29 @@ function projectFor(state: AppState, args: Record<string, any>) {
 
 function resolveRequestedIdentity(state: AppState, args: Record<string, any>, fallbackRoot?: string) {
   const project = projectFor(state, args);
-  if (project) {
-    const workspaceId = typeof args.workspaceId === 'string' ? args.workspaceId.trim() : '';
-    if (workspaceId) {
-      const workspace = resolveSessionWorkspace(workspaceId);
-      if (!workspace || workspace.projectId !== project.id) {
-        throw createApiError(404, 'WORKSPACE_NOT_FOUND', `Workspace '${workspaceId}' was not found for project '${project.id}'.`, { affectedId: workspaceId });
-      }
-      return {
-        canonicalRoot: realPath(workspace.root),
-        projectIdentity: `workspace:${workspace.workspaceId}`,
-      };
+  const workspaceId = typeof args.workspaceId === 'string' ? args.workspaceId.trim() : '';
+  if (workspaceId) {
+    const workspace = resolveSessionWorkspace(workspaceId);
+    if (!workspace) {
+      throw createApiError(404, 'WORKSPACE_NOT_FOUND', `Workspace '${workspaceId}' was not found.`, { affectedId: workspaceId });
     }
+    const requestedIdentifier = args.projectId || args.projectName || args.repo || args.repoUrl;
+    if (requestedIdentifier && !project) {
+      throw createApiError(404, 'PROJECT_NOT_FOUND', `Project '${requestedIdentifier}' was not found for fileRef resolution.`, { affectedId: String(requestedIdentifier) });
+    }
+    if (project && workspace.projectId !== project.id) {
+      throw createApiError(409, 'WORKSPACE_PROJECT_MISMATCH', `Workspace '${workspaceId}' belongs to project '${workspace.projectId}', not '${project.id}'.`, {
+        affectedId: workspaceId,
+        details: { workspaceProjectId: workspace.projectId, requestedProjectId: project.id },
+      });
+    }
+    return {
+      canonicalRoot: realPath(workspace.root),
+      projectIdentity: `workspace:${workspace.workspaceId}`,
+    };
+  }
 
+  if (project) {
     const sessionId = typeof args.sessionId === 'string' ? args.sessionId.trim() : '';
     if (sessionId) {
       const workspace = createOrReuseSessionWorkspace(project, sessionId);

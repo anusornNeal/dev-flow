@@ -14,6 +14,11 @@ executeAllMigrations();
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
 
 const { applyAndVerify, applyAndVerifyAsync } = await import('../../src/server/services/applyAndVerifyService.js');
+const {
+  cleanupSessionWorkspace,
+  createOrReuseSessionWorkspace,
+  resetSessionWorkspaceRuntimeForTests,
+} = await import('../../src/server/services/sessionWorkspaceService.js');
 
 function git(root: string, args: string[]) {
   const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', shell: false });
@@ -284,6 +289,42 @@ test('applyAndVerifyAsync preserves candidate A evidence but rejects it as curre
   assert.match(result.verification[0]?.stdout || '', /value = 5/);
   assert.equal(result.verification[0]?.verificationCandidate?.current, false);
   assert.deepEqual(result.staleVerificationCommands, ['test']);
+});
+
+test('applyAndVerify keeps edit, diff and verification on the requested managed workspace', () => {
+  resetSessionWorkspaceRuntimeForTests();
+  const root = fixture('managed-workspace-root');
+  fs.writeFileSync(path.join(root, 'scripts', 'test.mjs'), [
+    "import fs from 'node:fs';",
+    "const source = fs.readFileSync('src/value.ts', 'utf8');",
+    "if (!source.includes('value = 9')) { process.stderr.write(source); process.exit(7); }",
+    "process.stdout.write(source);",
+  ].join('\n'), 'utf8');
+  git(root, ['add', '.']);
+  git(root, ['commit', '-m', 'workspace verification fixture']);
+  const project = { id: 'project-apply-verify', name: 'Apply Verify', repoUrl: 'https://example.com/apply-verify', localPath: root };
+  const workspace = createOrReuseSessionWorkspace(project, 'apply-verify-managed-workspace');
+
+  try {
+    const result = applyAndVerify(stateFor(root), {
+      projectId: 'project-apply-verify',
+      workspaceId: workspace.workspaceId,
+      files: [{ filePath: 'src/value.ts', edits: [{ type: 'replace', find: 'value = 1', replaceWith: 'value = 9' }] }],
+      requestedCommands: ['test'],
+      cacheVerificationResults: false,
+      forceFresh: true,
+    });
+
+    assert.equal(result.ok, true);
+    assert.match(result.diff.diff, /value = 9/);
+    assert.equal(result.verification[0]?.status, 'succeeded');
+    assert.match(result.verification[0]?.stdout || '', /value = 9/);
+    assert.match(fs.readFileSync(path.join(workspace.root, 'src', 'value.ts'), 'utf8'), /value = 9/);
+    assert.match(fs.readFileSync(path.join(root, 'src', 'value.ts'), 'utf8'), /value = 1/);
+  } finally {
+    git(workspace.root, ['restore', '--staged', '--worktree', '--', 'src/value.ts']);
+    cleanupSessionWorkspace(workspace.workspaceId);
+  }
 });
 
 test.after(() => fs.rmSync(tempRoot, { recursive: true, force: true }));

@@ -15,6 +15,18 @@ import { planVerification } from './verificationPlannerService';
 import { resolveProjectRoot } from './localFileService';
 import { createVerificationCandidate, releaseVerificationCandidate } from './verificationCandidateService';
 
+function projectScopeArgs(args: Record<string, any>) {
+  return {
+    projectId: args.projectId,
+    projectName: args.projectName,
+    repo: args.repo,
+    repoUrl: args.repoUrl,
+    localPath: args.localPath,
+    sessionId: args.sessionId,
+    workspaceId: args.workspaceId,
+  };
+}
+
 function changedPaths(edit: any) {
   return (edit?.files || [])
     .filter((file: any) => file?.changed === true)
@@ -25,11 +37,7 @@ function changedPaths(edit: any) {
 function buildVerificationPlan(state: AppState, args: Record<string, any>, files: string[]) {
   const requestedCommands = Array.isArray(args.requestedCommands) ? args.requestedCommands : [];
   const resolvedCommands = requestedCommands.map((command: string) => describeProjectCommand(state, {
-    projectId: args.projectId,
-    projectName: args.projectName,
-    repo: args.repo,
-    repoUrl: args.repoUrl,
-    localPath: args.localPath,
+    ...projectScopeArgs(args),
     command,
   }));
   return planVerification({
@@ -84,11 +92,7 @@ export function applyAndVerify(state: AppState, args: Record<string, any>) {
   let diff: any;
   try {
     diff = getGitDiff(state, {
-      projectId: args.projectId,
-      projectName: args.projectName,
-      repo: args.repo,
-      repoUrl: args.repoUrl,
-      localPath: args.localPath,
+      ...projectScopeArgs(args),
       ...(typeof args.diffPath === 'string' && args.diffPath.trim() ? { path: args.diffPath.trim() } : {}),
     });
   } catch (error) {
@@ -106,11 +110,7 @@ export function applyAndVerify(state: AppState, args: Record<string, any>) {
   const verification: RunProjectCommandResult[] = [];
   for (const step of plan.steps) {
     const result = runProjectCommand(state, {
-      projectId: args.projectId,
-      projectName: args.projectName,
-      repo: args.repo,
-      repoUrl: args.repoUrl,
-      localPath: args.localPath,
+      ...projectScopeArgs(args),
       command: step.command,
       cacheResult: args.cacheVerificationResults !== false,
       forceFresh: args.forceFresh === true,
@@ -207,11 +207,7 @@ export async function applyAndVerifyAsync(
   let diff: any;
   try {
     diff = getGitDiff(state, {
-      projectId: args.projectId,
-      projectName: args.projectName,
-      repo: args.repo,
-      repoUrl: args.repoUrl,
-      localPath: args.localPath,
+      ...projectScopeArgs(args),
       responseMode: args.responseMode ?? 'compact',
       ...(typeof args.diffPath === 'string' && args.diffPath.trim() ? { path: args.diffPath.trim() } : {}),
     });

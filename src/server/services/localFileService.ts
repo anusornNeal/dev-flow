@@ -168,23 +168,41 @@ function readLineWindowSync(filePath: string, startLine: number, endLine: number
   };
 }
 
-export function resolveProjectResourceIdentity(state: AppState, args: Record<string, any>) {
-  const identifierProject = findProjectByIdentifier(state, {
+function findIdentifierProject(state: AppState, args: Record<string, any>) {
+  return findProjectByIdentifier(state, {
     projectId: typeof args.projectId === 'string' ? args.projectId.trim() : undefined,
     projectName: typeof args.projectName === 'string' ? args.projectName.trim() : undefined,
     repo: typeof args.repo === 'string' ? args.repo.trim() : undefined,
     repoUrl: typeof args.repoUrl === 'string' ? args.repoUrl.trim() : undefined,
     localPath: typeof args.localPath === 'string' ? args.localPath.trim() : undefined,
   });
+}
+
+function resolveExplicitWorkspace(state: AppState, args: Record<string, any>, identifierProject: ReturnType<typeof findIdentifierProject>) {
+  const workspaceId = typeof args.workspaceId === 'string' ? args.workspaceId.trim() : '';
+  if (!workspaceId) return null;
+  const workspace = resolveSessionWorkspace(workspaceId);
+  if (!workspace) {
+    throw createApiError(404, 'WORKSPACE_NOT_FOUND', `Workspace '${workspaceId}' was not found.`, { affectedId: workspaceId });
+  }
+  const requestedIdentifier = args.projectId || args.projectName || args.repo || args.repoUrl;
+  if (requestedIdentifier && !identifierProject) {
+    throw createApiError(404, 'PROJECT_NOT_FOUND', `Project '${requestedIdentifier}' was not found.`, { affectedId: String(requestedIdentifier) });
+  }
+  if (identifierProject && workspace.projectId !== identifierProject.id) {
+    throw createApiError(409, 'WORKSPACE_PROJECT_MISMATCH', `Workspace '${workspaceId}' belongs to project '${workspace.projectId}', not '${identifierProject.id}'.`, {
+      affectedId: workspaceId,
+      details: { workspaceProjectId: workspace.projectId, requestedProjectId: identifierProject.id },
+    });
+  }
+  return workspace;
+}
+
+export function resolveProjectResourceIdentity(state: AppState, args: Record<string, any>) {
+  const identifierProject = findIdentifierProject(state, args);
+  const workspace = resolveExplicitWorkspace(state, args, identifierProject);
+  if (workspace) return `workspace:${workspace.workspaceId}`;
   if (identifierProject) {
-    const workspaceId = typeof args.workspaceId === 'string' ? args.workspaceId.trim() : '';
-    if (workspaceId) {
-      const workspace = resolveSessionWorkspace(workspaceId);
-      if (!workspace || workspace.projectId !== identifierProject.id) {
-        throw createApiError(404, 'WORKSPACE_NOT_FOUND', `Workspace '${workspaceId}' was not found for project '${identifierProject.id}'.`, { affectedId: workspaceId });
-      }
-      return `workspace:${workspace.workspaceId}`;
-    }
     const sessionId = typeof args.sessionId === 'string' ? args.sessionId.trim() : '';
     if (sessionId) return `workspace:${createOrReuseSessionWorkspace(identifierProject, sessionId).workspaceId}`;
   }
@@ -192,32 +210,18 @@ export function resolveProjectResourceIdentity(state: AppState, args: Record<str
 }
 
 export function resolveProjectRoot(state: AppState, args: Record<string, any>) {
-  const identifierProject = findProjectByIdentifier(state, {
-    projectId: typeof args.projectId === 'string' ? args.projectId.trim() : undefined,
-    projectName: typeof args.projectName === 'string' ? args.projectName.trim() : undefined,
-    repo: typeof args.repo === 'string' ? args.repo.trim() : undefined,
-    repoUrl: typeof args.repoUrl === 'string' ? args.repoUrl.trim() : undefined,
-    localPath: typeof args.localPath === 'string' ? args.localPath.trim() : undefined,
-  });
+  const identifierProject = findIdentifierProject(state, args);
+  const workspace = resolveExplicitWorkspace(state, args, identifierProject);
+  if (workspace) return workspace.root;
 
   if (identifierProject) {
-    const workspaceId = typeof args.workspaceId === 'string' ? args.workspaceId.trim() : '';
-    if (workspaceId) {
-      const workspace = resolveSessionWorkspace(workspaceId);
-      if (!workspace || workspace.projectId !== identifierProject.id) {
-        throw createApiError(404, 'WORKSPACE_NOT_FOUND', `Workspace '${workspaceId}' was not found for project '${identifierProject.id}'.`, { affectedId: workspaceId });
-      }
-      return workspace.root;
-    }
     const sessionId = typeof args.sessionId === 'string' ? args.sessionId.trim() : '';
     if (sessionId) return createOrReuseSessionWorkspace(identifierProject, sessionId).root;
     return identifierProject.localPath || getDevFlowAppRoot();
   }
 
   const directLocalPath = typeof args.localPath === 'string' ? args.localPath.trim() : '';
-  if (directLocalPath) {
-    return directLocalPath;
-  }
+  if (directLocalPath) return directLocalPath;
 
   const requestedIdentifier = args.projectId || args.projectName || args.repo || args.repoUrl;
   if (requestedIdentifier) {

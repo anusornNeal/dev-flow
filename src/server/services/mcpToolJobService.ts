@@ -606,7 +606,7 @@ function getRecoveryJobKind(toolName: string): JobKind {
 function enqueueRecoveredJob(state: AppState, job: McpToolJob) {
   if (queue.some((entry) => entry.jobId === job.jobId) || activeJobs.has(job.jobId)) return false;
   const kind = getRecoveryJobKind(job.toolName);
-  const schedulerProfile = getSchedulerProfile(state, job.toolName, job.args, kind);
+  const schedulerProfile = getSchedulerProfile(state, job.toolName, job.args, kind, job.resourceKey);
   const recoveredSingleFlightKey = Array.from(singleFlightLeaders.entries()).find(([, leaderJobId]) => leaderJobId === job.jobId)?.[0];
   const parsedUpdatedAt = Date.parse(job.updatedAt);
   const enqueuedAt = Number.isFinite(parsedUpdatedAt) ? parsedUpdatedAt : Date.now();
@@ -630,8 +630,10 @@ function enqueueRecoveredJob(state: AppState, job: McpToolJob) {
     args: job.args,
     accessMode: schedulerProfile.accessMode,
     costClass: schedulerProfile.costClass,
+    verificationClass: schedulerProfile.verificationClass,
+    sharedResources: schedulerProfile.sharedResources,
     enqueuedAt,
-    schedulerPriority: getSchedulerPriority(job.toolName, job.args, schedulerProfile.accessMode),
+    schedulerPriority: getSchedulerPriority(job.toolName, job.args, schedulerProfile.accessMode, schedulerProfile.verificationClass),
     singleFlightKey: recoveredSingleFlightKey,
     verification: verificationPolicyFor(job.args, schedulerProfile.accessMode, job.resourceKey),
     waitTelemetry: { lastObservedAt: Date.now(), workspaceLockWaitMs: 0, capacityWaitMs: 0, blockerReasons: {} },
@@ -900,7 +902,7 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
   }
 
   const resourceKey = resolveAdmissionResourceKey(state, args, kind);
-  const schedulerProfile = getSchedulerProfile(state, toolName, args, kind);
+  const schedulerProfile = getSchedulerProfile(state, toolName, args, kind, resourceKey);
   const initialSingleFlightKey = singleFlightKeyFor(state, toolName, args, kind, resourceKey);
   if (initialSingleFlightKey) {
     const leaderJobId = singleFlightLeaders.get(initialSingleFlightKey);
@@ -974,8 +976,10 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
     args: jobArgs,
     accessMode: schedulerProfile.accessMode,
     costClass: schedulerProfile.costClass,
+    verificationClass: schedulerProfile.verificationClass,
+    sharedResources: schedulerProfile.sharedResources,
     enqueuedAt,
-    schedulerPriority: getSchedulerPriority(toolName, jobArgs, schedulerProfile.accessMode),
+    schedulerPriority: getSchedulerPriority(toolName, jobArgs, schedulerProfile.accessMode, schedulerProfile.verificationClass),
     singleFlightKey: singleFlightKey || undefined,
     verification,
     waitTelemetry: { lastObservedAt: enqueuedAt, workspaceLockWaitMs: 0, capacityWaitMs: 0, blockerReasons: {} },

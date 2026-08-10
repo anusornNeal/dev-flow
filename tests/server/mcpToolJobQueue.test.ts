@@ -715,6 +715,71 @@ test('mcpToolJobService - write job atomically downgrades to verify and unblocks
   }
 });
 
+test('mcpToolJobService - queued heavy verification yields to newer fast verification when one slot is available', async () => {
+  const root = makeTempRepo('resource-aware-fast-lane');
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({
+    type: 'module',
+    scripts: {
+      typecheck: 'tsc --noEmit',
+      verify: 'node -e "0"',
+    },
+  }, null, 2));
+  const state = makeState(root);
+  const starts: string[] = [];
+  const gates = {
+    heavy1: deferred(),
+    heavy2: deferred(),
+    fast: deferred(),
+  };
+
+  __setToolJobTestRunner('run_project_command', async (_state, args) => {
+    starts.push(args.label);
+    const gate = gates[args.label as keyof typeof gates];
+    if (gate) await gate.promise;
+    return { ok: true, label: args.label };
+  });
+
+  try {
+    const heavy1 = enqueueToolJob(state, 'run_project_command', {
+      localPath: root,
+      command: 'verify',
+      label: 'heavy1',
+      singleFlight: false,
+    }, 'repo-command');
+    await waitUntil(() => starts.includes('heavy1'), 'Expected first heavy verification to start');
+
+    const heavy2 = enqueueToolJob(state, 'run_project_command', {
+      localPath: root,
+      command: 'verify',
+      label: 'heavy2',
+      singleFlight: false,
+    }, 'repo-command');
+    const fast = enqueueToolJob(state, 'run_project_command', {
+      localPath: root,
+      command: 'typecheck',
+      label: 'fast',
+      singleFlight: false,
+    }, 'repo-command');
+
+    await waitUntil(() => starts.includes('fast'), 'Expected fast verification to take the spare slot ahead of queued heavy work');
+    assert.strictEqual(getToolJobStatus(fast.jobId)?.status, 'running');
+    assert.strictEqual(getToolJobStatus(heavy2.jobId)?.status, 'queued');
+    assert.strictEqual((getToolJobStatus(heavy2.jobId) as any)?.blockReason, 'capacity_saturated');
+
+    gates.fast.resolve();
+    await waitForStatus(fast.jobId, 'succeeded');
+    await waitUntil(() => starts.includes('heavy2'), 'Expected heavy verification to start when the fast slot is released');
+
+    gates.heavy1.resolve();
+    gates.heavy2.resolve();
+    await waitForStatus(heavy1.jobId, 'succeeded');
+    await waitForStatus(heavy2.jobId, 'succeeded');
+  } finally {
+    Object.values(gates).forEach((gate) => gate.resolve());
+    __setToolJobTestRunner('run_project_command', null);
+  }
+});
+
 test('mcpToolJobService - stress read/write/command queue ordering on one repo', async () => {
   const root = makeTempRepo('stress-same-repo');
   const state = makeState(root);

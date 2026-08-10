@@ -249,7 +249,7 @@ try {
   const resourceMixRoot = path.join(tempRoot, 'resource-mix-repo');
   fs.mkdirSync(path.join(resourceMixRoot, 'scripts'), { recursive: true });
   fs.mkdirSync(path.join(resourceMixRoot, '.devflow'), { recursive: true });
-  fs.writeFileSync(path.join(resourceMixRoot, 'scripts', 'heavy.mjs'), "await new Promise((resolve) => setTimeout(resolve, 900));\n", 'utf8');
+  fs.writeFileSync(path.join(resourceMixRoot, 'scripts', 'heavy.mjs'), "await new Promise((resolve) => setTimeout(resolve, 1800));\n", 'utf8');
   fs.writeFileSync(path.join(resourceMixRoot, 'scripts', 'fast.mjs'), "await new Promise((resolve) => setTimeout(resolve, 250));\n", 'utf8');
   fs.writeFileSync(path.join(resourceMixRoot, 'package.json'), JSON.stringify({
     type: 'module',
@@ -281,6 +281,7 @@ try {
     responseMode: 'compact',
     forceFresh: true,
     singleFlight: false,
+    verificationBacklogLimit: 8,
   }, 'repo-command');
   const heavyRunningDeadline = now() + 3000;
   while (getToolJobStatus(heavyJob.jobId)?.status === 'queued' && now() < heavyRunningDeadline) {
@@ -289,10 +290,22 @@ try {
   if (getToolJobStatus(heavyJob.jobId)?.status !== 'running') {
     throw new Error('Resource-mix heavy verification did not enter running state.');
   }
+  const secondHeavyQueuedAt = now();
+  const secondHeavyJob = enqueueToolJob(resourceMixState, 'run_project_command', {
+    projectId: 'benchmark-resource-mix',
+    command: 'verify',
+    responseMode: 'compact',
+    forceFresh: true,
+    singleFlight: false,
+    verificationBacklogLimit: 8,
+  }, 'repo-command');
+  await new Promise((resolve) => setTimeout(resolve, 75));
+  const secondHeavyStatusBeforeFast = getToolJobStatus(secondHeavyJob.jobId)?.status || 'unknown';
 
   const queuedJobs = [
     { kind: 'heavy' as const, jobId: heavyJob.jobId, queuedAt: resourceMixStartedAt },
-    ...Array.from({ length: 3 }, () => {
+    { kind: 'heavy' as const, jobId: secondHeavyJob.jobId, queuedAt: secondHeavyQueuedAt },
+    ...Array.from({ length: 1 }, () => {
       const queuedAt = now();
       const job = enqueueToolJob(resourceMixState, 'run_project_command', {
         projectId: 'benchmark-resource-mix',
@@ -300,6 +313,7 @@ try {
         responseMode: 'compact',
         forceFresh: true,
         singleFlight: false,
+        verificationBacklogLimit: 8,
       }, 'repo-command');
       return { kind: 'fast' as const, jobId: job.jobId, queuedAt };
     }),
@@ -337,6 +351,7 @@ try {
     ok: completedJobs.every((entry) => entry.status?.status === 'succeeded'),
     currentVerifyCapacity: Number(getQueueMetrics().capacity?.verify?.capacity || 0),
     maxConcurrentProcesses: activeVerifySamples.length > 0 ? Math.max(...activeVerifySamples) : 0,
+    secondHeavyStatusBeforeFast,
     totalWallMs: now() - resourceMixStartedAt,
     fast: summarizeResourceJobs('fast'),
     heavy: summarizeResourceJobs('heavy'),

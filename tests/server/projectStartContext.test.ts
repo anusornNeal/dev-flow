@@ -118,6 +118,56 @@ test('getRepoContextBundle applies intent-aware budgets and evidence reasons', (
   assert.ok(explicitFull.contextPlan.budgets.snippetBytes >= 120_000);
 });
 
+test('getRepoContextBundle enforces an aggregate budget for metadata-heavy project summaries', () => {
+  const heavyDir = path.join(tempDir, 'metadata-heavy');
+  fs.mkdirSync(heavyDir, { recursive: true });
+  try {
+    for (let fileIndex = 0; fileIndex < 20; fileIndex += 1) {
+      const imports = Array.from({ length: 24 }, (_, index) => `import value${index} from 'package-${fileIndex}-${index}';`).join('\n');
+      const symbols = Array.from({ length: 60 }, (_, index) => `export function MetadataHeavy${fileIndex}_${index}() { return value${index % 24}; }`).join('\n');
+      fs.writeFileSync(path.join(heavyDir, `metadataHeavy${fileIndex}.ts`), `${imports}\n${symbols}\n`, 'utf8');
+    }
+    clearRepoInspectionIndexCache(tempDir);
+
+    const budgetBytes = 12_000;
+    const compact = getRepoContextBundle(state, {
+      projectId: 'project-start-1',
+      q: 'metadata heavy implementation symbols imports',
+      disclosureLevel: 'project-summary',
+      targetFiles: ['metadata-heavy/metadataHeavy0.ts'],
+      limit: 20,
+      maxContextBytes: budgetBytes,
+    });
+    const compactBytes = Buffer.byteLength(JSON.stringify(compact), 'utf8');
+
+    assert.equal(compactBytes <= budgetBytes, true, `aggregate bundle should fit ${budgetBytes} bytes, got ${compactBytes}`);
+    assert.equal(compact.contextPlan.responseBudget.budgetBytes, budgetBytes);
+    assert.equal(compact.contextPlan.responseBudget.returnedBytes, compactBytes);
+    assert.equal(compact.contextPlan.responseBudget.budgetExhausted, true);
+    assert.equal(compact.contextPlan.responseBudget.omitted.indexMatchDetails > 0, true);
+    const target = compact.contextPlan.evidence.find((entry: any) => entry.path.replace(/\\/g, '/') === 'metadata-heavy/metadataHeavy0.ts');
+    assert.ok(target);
+    assert.equal(target.rank, 'must');
+    assert.equal(target.explicitTarget, true);
+    assert.equal(compact.index.matches.every((entry: any) => !('imports' in entry) && !('reasons' in entry)), true);
+
+    const expanded = getRepoContextBundle(state, {
+      projectId: 'project-start-1',
+      q: 'metadata heavy implementation symbols imports',
+      disclosureLevel: 'project-summary',
+      targetFiles: ['metadata-heavy/metadataHeavy0.ts'],
+      limit: 20,
+      maxContextBytes: 40_000,
+    });
+    const expandedBytes = Buffer.byteLength(JSON.stringify(expanded), 'utf8');
+    assert.equal(expandedBytes <= 40_000, true);
+    assert.equal(expandedBytes > compactBytes, true);
+  } finally {
+    fs.rmSync(heavyDir, { recursive: true, force: true });
+    clearRepoInspectionIndexCache(tempDir);
+  }
+});
+
 test('getRepoContextBundle exposes repo and snippet revisions', () => {
   const first = getRepoContextBundle(state, { projectId: 'project-start-1', q: 'snapshot', limit: 5, snippetLimit: 2 });
 

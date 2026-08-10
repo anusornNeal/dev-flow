@@ -491,6 +491,123 @@ export function getRepoReadSnapshot(state: AppState, args: Record<string, any>) 
   };
 }
 
+function serializedContextBytes(value: unknown) {
+  return Buffer.byteLength(JSON.stringify(value), 'utf8');
+}
+
+function compactContextEvidenceReference(entry: any) {
+  return {
+    path: entry.path,
+    ...(entry.extension ? { extension: entry.extension } : {}),
+    ...(Number.isFinite(Number(entry.score)) ? { score: entry.score } : {}),
+    ...(entry.explicitTarget === true ? { explicitTarget: true } : {}),
+    rank: entry.rank,
+    isTest: entry.isTest === true,
+    selected: entry.selected === true,
+  };
+}
+
+function stabilizeResponseBudgetBytes(response: any) {
+  const meta = response?.contextPlan?.responseBudget;
+  if (!meta) return serializedContextBytes(response);
+  let bytes = serializedContextBytes(response);
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    if (meta.returnedBytes === bytes) break;
+    meta.returnedBytes = bytes;
+    bytes = serializedContextBytes(response);
+  }
+  meta.returnedBytes = bytes;
+  return serializedContextBytes(response);
+}
+
+function applyAggregateContextBudget(response: any, budgetBytes: number) {
+  const estimatedBytesBeforeCompaction = serializedContextBytes(response);
+  const omitted = {
+    indexMatchDetails: 0,
+    evidenceDetails: 0,
+    evidenceEntries: 0,
+    snippetContentBytes: 0,
+    diffBytes: 0,
+    gitFileDetails: 0,
+  };
+  const fullIndexMatches = Array.isArray(response.index?.matches) ? response.index.matches : [];
+  response.index.matches = fullIndexMatches.map((entry: any) => compactContextEvidenceReference(entry));
+  omitted.indexMatchDetails = fullIndexMatches.filter((entry: any) => entry.symbols?.length || entry.imports?.length || entry.reasons?.length).length;
+
+  response.contextPlan.responseBudget = {
+    budgetBytes,
+    returnedBytes: 0,
+    estimatedBytesBeforeCompaction,
+    budgetExhausted: estimatedBytesBeforeCompaction > budgetBytes,
+    omitted,
+  };
+
+  const decisionBudget = Math.max(1, budgetBytes - 256);
+  const currentBytes = () => stabilizeResponseBudgetBytes(response);
+  const compactEvidenceRank = (rank: 'optional' | 'should' | 'must') => {
+    response.contextPlan.evidence = (response.contextPlan.evidence || []).map((entry: any) => {
+      if (entry.rank !== rank) return entry;
+      if (!entry.symbols?.length && !entry.imports?.length && !entry.reasons?.length) return entry;
+      omitted.evidenceDetails += 1;
+      return compactContextEvidenceReference(entry);
+    });
+  };
+
+  if (currentBytes() > decisionBudget) compactEvidenceRank('optional');
+  if (currentBytes() > decisionBudget) compactEvidenceRank('should');
+  if (currentBytes() > decisionBudget) compactEvidenceRank('must');
+
+  if (currentBytes() > decisionBudget && Array.isArray(response.snippets)) {
+    for (let index = response.snippets.length - 1; index >= 0 && currentBytes() > decisionBudget; index -= 1) {
+      const snippet = response.snippets[index];
+      if (snippet?.rank === 'must' || typeof snippet?.content !== 'string') continue;
+      omitted.snippetContentBytes += Buffer.byteLength(snippet.content, 'utf8');
+      response.snippets.splice(index, 1);
+    }
+  }
+
+  if (currentBytes() > decisionBudget && Array.isArray(response.snippets)) {
+    for (const snippet of response.snippets) {
+      if (currentBytes() <= decisionBudget || typeof snippet?.content !== 'string') break;
+      const originalBytes = Buffer.byteLength(snippet.content, 'utf8');
+      const keepBytes = Math.max(0, Math.min(originalBytes, 1024));
+      if (keepBytes >= originalBytes) continue;
+      snippet.content = Buffer.from(snippet.content, 'utf8').subarray(0, keepBytes).toString('utf8');
+      snippet.aggregateTruncated = true;
+      snippet.originalReturnedBytes = snippet.returnedBytes ?? originalBytes;
+      snippet.returnedBytes = Buffer.byteLength(snippet.content, 'utf8');
+      omitted.snippetContentBytes += Math.max(0, originalBytes - snippet.returnedBytes);
+    }
+  }
+
+  if (currentBytes() > decisionBudget && response.diff?.diff) {
+    omitted.diffBytes += Buffer.byteLength(String(response.diff.diff), 'utf8');
+    response.diff = { ...response.diff, diff: '', truncated: true, returnedBytes: 0 };
+  }
+
+  if (currentBytes() > decisionBudget && Array.isArray(response.contextPlan.evidence)) {
+    for (let index = response.contextPlan.evidence.length - 1; index >= 0 && currentBytes() > decisionBudget; index -= 1) {
+      const entry = response.contextPlan.evidence[index];
+      if (entry?.rank === 'must') continue;
+      response.contextPlan.evidence.splice(index, 1);
+      omitted.evidenceEntries += 1;
+    }
+  }
+
+  if (currentBytes() > decisionBudget && Array.isArray(response.index?.matches)) {
+    const mustPaths = new Set((response.contextPlan.evidence || []).filter((entry: any) => entry.rank === 'must').map((entry: any) => String(entry.path)));
+    response.index.matches = response.index.matches.filter((entry: any) => mustPaths.has(String(entry.path)));
+  }
+
+  if (currentBytes() > decisionBudget && Array.isArray(response.git?.files) && response.git.files.length > 20) {
+    omitted.gitFileDetails += response.git.files.length - 20;
+    response.git = { ...response.git, files: response.git.files.slice(0, 20).map((entry: any) => ({ path: entry.path || entry.workingPath, status: entry.status })) };
+  }
+
+  stabilizeResponseBudgetBytes(response);
+  return response;
+}
+
 export function getRepoContextBundle(state: AppState, args: Record<string, any>) {
   const bundleStartedAt = nodePerformance.now();
   const project = resolveProject(state, args);
@@ -555,7 +672,13 @@ export function getRepoContextBundle(state: AppState, args: Record<string, any>)
   const snippetLimit = parsePositiveInt(args.snippetLimit, Math.min(indexLimit, contextPlan.budgets.snippetLimit), 20);
   const snippetLines = parsePositiveInt(args.snippetLines, contextPlan.budgets.snippetLines, contextPlan.disclosureLevel === 'full-file' ? 1000 : 240);
   const maxSnippetBytes = parsePositiveInt(args.maxSnippetBytes, contextPlan.budgets.perSnippetBytes, 100000);
-  const snippetByteBudget = parsePositiveInt(args.maxContextBytes ?? args.maxSnippetTotalBytes, contextPlan.budgets.snippetBytes, 500000);
+  const aggregateContextBudget = parsePositiveInt(args.maxContextBytes, contextPlan.budgets.maxContextBytes, 500000);
+  const reservedMetadataBytes = Math.min(12_000, Math.floor(aggregateContextBudget * 0.25));
+  const defaultSnippetBudget = Math.min(contextPlan.budgets.snippetBytes, Math.max(1, aggregateContextBudget - reservedMetadataBytes));
+  const snippetByteBudget = Math.min(
+    aggregateContextBudget,
+    parsePositiveInt(args.maxSnippetTotalBytes, defaultSnippetBudget, 500000),
+  );
   const selectedEvidence = contextPlan.evidence
     .filter((entry) => entry.rank !== 'optional' || contextPlan.intent === 'architecture-analysis' || contextPlan.disclosureLevel === 'full-file')
     .slice(0, snippetLimit);
@@ -653,7 +776,7 @@ export function getRepoContextBundle(state: AppState, args: Record<string, any>)
       snippetLines,
       perSnippetBytes: maxSnippetBytes,
       snippetBytes: snippetByteBudget,
-      maxContextBytes: parsePositiveInt(args.maxContextBytes, contextPlan.budgets.maxContextBytes, 500000),
+      maxContextBytes: aggregateContextBudget,
     },
     selectedEvidenceCount: snippets.length,
     returnedSnippetBytes,
@@ -685,21 +808,36 @@ export function getRepoContextBundle(state: AppState, args: Record<string, any>)
       'run_project_command',
     ],
   };
-  const responseAssemblyMs = roundDuration(nodePerformance.now() - responseAssemblyStartedAt);
-  const phases: RepoContextBundlePhaseTimings = {
+  const initialResponseAssemblyMs = roundDuration(nodePerformance.now() - responseAssemblyStartedAt);
+  const initialPhases: RepoContextBundlePhaseTimings = {
     startContextMs,
     repoIndexMs,
     snippetReadMs,
     snippetReadCount,
     diffMs,
+    responseAssemblyMs: initialResponseAssemblyMs,
+  };
+  const bundled = applyAggregateContextBudget({
+    ...response,
+    performance: {
+      cacheState: index.cache?.hit === true ? 'warm' as const : 'cold' as const,
+      totalMs: roundDuration(nodePerformance.now() - bundleStartedAt),
+      phases: initialPhases,
+      dominantPhase: dominantRepoContextPhase(initialPhases),
+    },
+  }, aggregateContextBudget);
+  const responseAssemblyMs = roundDuration(nodePerformance.now() - responseAssemblyStartedAt);
+  const phases: RepoContextBundlePhaseTimings = {
+    ...initialPhases,
     responseAssemblyMs,
   };
-  const performance = {
+  bundled.performance = {
     cacheState: index.cache?.hit === true ? 'warm' as const : 'cold' as const,
     totalMs: roundDuration(nodePerformance.now() - bundleStartedAt),
     phases,
     dominantPhase: dominantRepoContextPhase(phases),
   };
-  recordRepoContextBundlePerformance(performance);
-  return { ...response, performance };
+  stabilizeResponseBudgetBytes(bundled);
+  recordRepoContextBundlePerformance(bundled.performance);
+  return bundled;
 }

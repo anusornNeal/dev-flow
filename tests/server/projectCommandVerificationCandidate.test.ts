@@ -13,6 +13,7 @@ const { executeAllMigrations } = await import('../../src/db/migrations/index.js'
 executeAllMigrations();
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
 const {
+  describeProjectCommand,
   prepareProjectCommandVerificationCandidate,
   runProjectCommandAsync,
 } = await import('../../src/server/services/projectCommandService.js');
@@ -95,6 +96,98 @@ test('async project verification runs against candidate A after live workspace a
 
   releaseVerificationCandidate(candidate!.candidateId);
 });
+
+test('package-script verification candidate stays current when only ignored repository command config changes', async () => {
+  const { root, projectId } = fixture('package-currentness');
+  fs.appendFileSync(path.join(root, '.gitignore'), '.devflow/\n', 'utf8');
+  git(root, ['add', '.gitignore']);
+  git(root, ['commit', '-m', 'ignore devflow config']);
+  fs.mkdirSync(path.join(root, '.devflow'), { recursive: true });
+  const configPath = path.join(root, '.devflow', 'commands.yaml');
+  fs.writeFileSync(configPath, [
+    'commands:',
+    '  unrelated:',
+    '    executable: node',
+    '    args:',
+    '      - scripts/read.mjs',
+    '    category: test',
+    '',
+  ].join('\n'), 'utf8');
+
+  const state = stateFor(root, projectId);
+  const args = { projectId, command: 'test', cacheResult: false, forceFresh: true };
+  const candidate = prepareProjectCommandVerificationCandidate(state, args);
+  assert.ok(candidate);
+  try {
+    fs.appendFileSync(configPath, '# unrelated config change\n', 'utf8');
+    const result = await runProjectCommandAsync(state, { ...args, __verificationCandidate: candidate }, logger, () => {});
+    assert.equal(result.ok, true);
+    assert.equal(result.stdout.trim(), 'candidate-a');
+    assert.equal(result.verificationCandidate?.current, true, 'package-script candidate currentness must ignore unrelated repository command config changes');
+  } finally {
+    releaseVerificationCandidate(candidate!.candidateId);
+  }
+});
+
+for (const extension of ['yaml', 'json'] as const) {
+  test(`ignored commands.${extension} preset resolves and executes from immutable candidate`, async () => {
+    const { root, projectId } = fixture(`ignored-config-${extension}`);
+    fs.appendFileSync(path.join(root, '.gitignore'), '.devflow/\n', 'utf8');
+    git(root, ['add', '.gitignore']);
+    git(root, ['commit', '-m', 'ignore devflow config']);
+    fs.mkdirSync(path.join(root, '.devflow'), { recursive: true });
+    const configPath = path.join(root, '.devflow', `commands.${extension}`);
+    const originalConfig = extension === 'yaml'
+      ? [
+          'commands:',
+          '  snapshot-read:',
+          '    executable: node',
+          '    args:',
+          '      - scripts/read.mjs',
+          '    category: test',
+          '',
+        ].join('\n')
+      : JSON.stringify({ commands: { 'snapshot-read': { executable: 'node', args: ['scripts/read.mjs'], category: 'test' } } }, null, 2);
+    fs.writeFileSync(configPath, originalConfig, 'utf8');
+
+    const state = stateFor(root, projectId);
+    const args = { projectId, command: 'snapshot-read', cacheResult: true, forceFresh: false };
+    const sourceDescriptor = describeProjectCommand(state, args);
+    assert.equal(sourceDescriptor.source, 'repository-config');
+
+    const candidate = prepareProjectCommandVerificationCandidate(state, args);
+    assert.ok(candidate);
+    assert.match(candidate!.commandConfigFingerprint || '', /^[a-f0-9]{64}$/);
+    try {
+      fs.writeFileSync(path.join(root, 'src', 'value.txt'), 'candidate-b\n', 'utf8');
+      const changedConfig = extension === 'yaml'
+        ? [
+            'commands:',
+            '  snapshot-read:',
+            '    executable: node',
+            '    args:',
+            '      - scripts/missing.mjs',
+            '    category: test',
+            '',
+          ].join('\n')
+        : JSON.stringify({ commands: { 'snapshot-read': { executable: 'node', args: ['scripts/missing.mjs'], category: 'test' } } }, null, 2);
+      fs.writeFileSync(configPath, changedConfig, 'utf8');
+
+      const result = await runProjectCommandAsync(
+        state,
+        { ...args, __verificationCandidate: candidate },
+        logger,
+        () => {},
+      );
+      assert.equal(result.ok, true, result.stderr || result.stdout);
+      assert.equal(result.stdout.trim(), 'candidate-a');
+      assert.equal(result.verificationCandidate?.candidateId, candidate!.candidateId);
+      assert.equal(result.verificationCandidate?.current, false);
+    } finally {
+      releaseVerificationCandidate(candidate!.candidateId);
+    }
+  });
+}
 
 test('verification candidate can use ignored installed dependencies from the source environment', async () => {
   const { root, projectId } = fixture('ignored-dependency');

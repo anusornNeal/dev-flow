@@ -10,7 +10,7 @@ process.env.DEVFLOW_DB_PATH = path.join(tempRoot, 'devflow.db');
 
 const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
 executeAllMigrations();
-const { runProjectCommand, describeProjectCommand } = await import('../../src/server/services/projectCommandService.js');
+const { runProjectCommand, describeProjectCommand, getProjectCommandExecutionIdentity } = await import('../../src/server/services/projectCommandService.js');
 const { clearWorkspaceMetadataCache, getWorkspaceMetadataCacheStats } = await import('../../src/server/services/workspaceMetadataCacheService.js');
 const { createProject: upsertProject } = await import('../../src/server/repositories/projectRepository.js');
 const { invalidateRepoCacheDependencies } = await import('../../src/server/services/repoCacheInvalidationService.js');
@@ -498,6 +498,95 @@ test('equivalent static package aliases reuse one semantic verification result',
   assert.equal(second.cache?.hit, true);
   assert.equal(second.processSpawns, 0);
   assert.equal(fs.readFileSync(counterPath, 'utf8'), '1');
+});
+
+test('repository command execution identity changes when ignored command config policy changes', () => {
+  clearWorkspaceMetadataCache();
+  const root = createConfigProject('repository-config-identity', [
+    'commands:',
+    '  focused:',
+    '    executable: node',
+    '    args:',
+    '      - scripts/pass.mjs',
+    '    category: test',
+    '',
+  ].join('\n'));
+  fs.writeFileSync(path.join(root, 'scripts', 'pass.mjs'), 'process.exit(0);\n', 'utf8');
+  fs.writeFileSync(path.join(root, '.gitignore'), '.devflow/\n', 'utf8');
+  const git = (args: string[]) => {
+    const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', shell: false });
+    assert.equal(result.status, 0, result.stderr || result.stdout || `git ${args.join(' ')} failed`);
+  };
+  git(['init']);
+  git(['config', 'user.name', 'DevFlow Test']);
+  git(['config', 'user.email', 'devflow@example.com']);
+  git(['add', 'scripts/pass.mjs', '.gitignore']);
+  git(['commit', '-m', 'initial']);
+  const state = stateFor(root);
+  const first = getProjectCommandExecutionIdentity(state, { projectId: 'project-command', command: 'focused' });
+  assert.ok(first);
+
+  fs.writeFileSync(path.join(root, '.devflow', 'commands.yaml'), [
+    'commands:',
+    '  focused:',
+    '    executable: node',
+    '    args:',
+    '      - scripts/pass.mjs',
+    '    category: build',
+    '',
+  ].join('\n'), 'utf8');
+  clearWorkspaceMetadataCache();
+  const second = getProjectCommandExecutionIdentity(state, { projectId: 'project-command', command: 'focused' });
+  assert.ok(second);
+  assert.notEqual(second!.key, first!.key, 'raw repository command config changes must invalidate command execution/cache identity');
+});
+
+test('ignored repository command config change does not reuse stale cached verification output', () => {
+  clearWorkspaceMetadataCache();
+  const root = createConfigProject('repository-config-cache', [
+    'commands:',
+    '  focused:',
+    '    executable: node',
+    '    args:',
+    '      - scripts/one.mjs',
+    '    category: test',
+    '',
+  ].join('\n'));
+  fs.writeFileSync(path.join(root, 'scripts', 'one.mjs'), "process.stdout.write('one');\n", 'utf8');
+  fs.writeFileSync(path.join(root, 'scripts', 'two.mjs'), "process.stdout.write('two');\n", 'utf8');
+  fs.writeFileSync(path.join(root, '.gitignore'), '.devflow/\n', 'utf8');
+  const git = (args: string[]) => {
+    const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', shell: false });
+    assert.equal(result.status, 0, result.stderr || result.stdout || `git ${args.join(' ')} failed`);
+  };
+  git(['init']);
+  git(['config', 'user.name', 'DevFlow Test']);
+  git(['config', 'user.email', 'devflow@example.com']);
+  git(['add', 'scripts/one.mjs', 'scripts/two.mjs', '.gitignore']);
+  git(['commit', '-m', 'initial']);
+  const state = stateFor(root);
+
+  const first = runProjectCommand(state, { projectId: 'project-command', command: 'focused', cacheResult: true });
+  assert.equal(first.ok, true);
+  assert.equal(first.stdout, 'one');
+  assert.equal(first.cache?.hit, false);
+
+  fs.writeFileSync(path.join(root, '.devflow', 'commands.yaml'), [
+    'commands:',
+    '  focused:',
+    '    executable: node',
+    '    args:',
+    '      - scripts/two.mjs',
+    '    category: test',
+    '',
+  ].join('\n'), 'utf8');
+  clearWorkspaceMetadataCache();
+
+  const second = runProjectCommand(state, { projectId: 'project-command', command: 'focused', cacheResult: true });
+  assert.equal(second.ok, true);
+  assert.equal(second.stdout, 'two');
+  assert.equal(second.cache?.hit, false, 'changed ignored config must produce a new cache identity');
+  assert.notEqual(second.cache?.key, first.cache?.key);
 });
 
 test('automatic static verification cache invalidates when NODE_OPTIONS changes', () => {

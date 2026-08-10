@@ -5,12 +5,14 @@ import { spawnSync } from 'node:child_process';
 import { getDevFlowWorkspacesDir } from '../../lib/devFlowPaths';
 import { createApiError } from './api';
 import { getRepoRevisionForRoot } from './repoRevisionService';
+import { getProjectCommandConfigSnapshot } from './projectCommandConfigService';
 
 export type VerificationCandidateIdentity = {
   candidateId: string;
   repoRevision: string;
   snapshotCommit: string;
   createdAt: string;
+  commandConfigFingerprint?: string;
 };
 
 export type ResolvedVerificationCandidate = VerificationCandidateIdentity & {
@@ -108,6 +110,7 @@ function readRecord(candidateId: string): VerificationCandidateRecord | null {
     if (parsed.candidateId !== candidateId || !CANDIDATE_ID_PATTERN.test(parsed.candidateId)) return null;
     if (!/^[a-f0-9]{40}$/i.test(String(parsed.snapshotCommit || ''))) return null;
     if (!String(parsed.repoRevision || '').trim() || !String(parsed.sourceRoot || '').trim()) return null;
+    if (parsed.commandConfigFingerprint !== undefined && !/^[a-f0-9]{64}$/i.test(String(parsed.commandConfigFingerprint))) return null;
     return parsed;
   } catch {
     return null;
@@ -120,12 +123,14 @@ function publicIdentity(record: VerificationCandidateRecord): VerificationCandid
     repoRevision: record.repoRevision,
     snapshotCommit: record.snapshotCommit,
     createdAt: record.createdAt,
+    ...(record.commandConfigFingerprint ? { commandConfigFingerprint: record.commandConfigFingerprint } : {}),
   };
 }
 
 export function createVerificationCandidate(repoRoot: string): VerificationCandidateIdentity {
   const sourceRoot = path.resolve(repoRoot);
   const sourceRevision = getRepoRevisionForRoot(sourceRoot);
+  const sourceCommandConfig = getProjectCommandConfigSnapshot(sourceRoot);
   const candidateId = `vc_${crypto.randomBytes(12).toString('hex')}`;
   const root = candidateRoot(candidateId);
   fs.mkdirSync(candidateRootsDir(), { recursive: true });
@@ -144,6 +149,9 @@ export function createVerificationCandidate(repoRoot: string): VerificationCandi
   try {
     runGit(sourceRoot, ['read-tree', 'HEAD'], { env: gitEnv });
     runGit(sourceRoot, ['add', '-A', '--', '.'], { env: gitEnv });
+    if (sourceCommandConfig.relativePaths.length > 0) {
+      runGit(sourceRoot, ['add', '-f', '--', ...sourceCommandConfig.relativePaths], { env: gitEnv });
+    }
     const tree = String(runGit(sourceRoot, ['write-tree'], { env: gitEnv }).stdout || '').trim();
     if (!/^[a-f0-9]{40}$/i.test(tree)) {
       throw createApiError(500, 'VERIFICATION_CANDIDATE_TREE_INVALID', 'Verification candidate tree could not be created.');
@@ -155,11 +163,16 @@ export function createVerificationCandidate(repoRoot: string): VerificationCandi
 
     runGit(sourceRoot, ['worktree', 'add', '--detach', root, snapshotCommit], { timeoutMs: 60_000 });
     bridgeInstalledDependencies(sourceRoot, root);
+    const candidateCommandConfig = getProjectCommandConfigSnapshot(root);
+    if (candidateCommandConfig.fingerprint !== sourceCommandConfig.fingerprint) {
+      throw createApiError(409, 'VERIFICATION_CANDIDATE_CONFIG_MISMATCH', 'Repository command configuration changed while the verification candidate was being created.');
+    }
     const record: VerificationCandidateRecord = {
       candidateId,
       repoRevision: sourceRevision.token,
       snapshotCommit,
       createdAt: new Date().toISOString(),
+      commandConfigFingerprint: sourceCommandConfig.fingerprint,
       sourceRoot,
     };
     writeRecord(record);
@@ -193,9 +206,15 @@ export function resolveVerificationCandidate(candidateId: string): ResolvedVerif
 export function isVerificationCandidateCurrent(
   repoRoot: string,
   candidate: Pick<VerificationCandidateIdentity, 'repoRevision'>,
+  commandConfigFingerprint?: string,
 ) {
   try {
-    return getRepoRevisionForRoot(path.resolve(repoRoot)).token === candidate.repoRevision;
+    const root = path.resolve(repoRoot);
+    if (getRepoRevisionForRoot(root).token !== candidate.repoRevision) return false;
+    if (commandConfigFingerprint) {
+      return getProjectCommandConfigSnapshot(root).fingerprint === commandConfigFingerprint;
+    }
+    return true;
   } catch {
     return false;
   }

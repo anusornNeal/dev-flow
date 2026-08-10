@@ -75,6 +75,40 @@ test('verification candidate freezes tracked, untracked, and deleted state while
   assert.throws(() => resolveVerificationCandidate(candidate.candidateId), /candidate/i);
 });
 
+test('verification candidate snapshots only allowlisted ignored command config files', () => {
+  const root = fixture('ignored-command-config');
+  fs.writeFileSync(path.join(root, '.gitignore'), '.devflow/\n', 'utf8');
+  git(root, ['add', '.gitignore']);
+  git(root, ['commit', '-m', 'ignore devflow config']);
+  fs.mkdirSync(path.join(root, '.devflow'), { recursive: true });
+  const commandConfig = [
+    'commands:',
+    '  focused:',
+    '    executable: node',
+    '    args:',
+    '      - scripts/test.mjs',
+    '    category: test',
+    '',
+  ].join('\n');
+  fs.writeFileSync(path.join(root, '.devflow', 'commands.yaml'), commandConfig, 'utf8');
+  fs.writeFileSync(path.join(root, '.devflow', 'private-state.json'), '{"secret":"must-not-copy"}\n', 'utf8');
+
+  const candidate = createVerificationCandidate(root);
+  assert.match(candidate.commandConfigFingerprint || '', /^[a-f0-9]{64}$/);
+  try {
+    const resolved = resolveVerificationCandidate(candidate.candidateId);
+    assert.equal(normalizedText(path.join(resolved.root, '.devflow', 'commands.yaml')), commandConfig);
+    assert.equal(fs.existsSync(path.join(resolved.root, '.devflow', 'private-state.json')), false);
+    assert.equal(resolved.commandConfigFingerprint, candidate.commandConfigFingerprint);
+    assert.equal(isVerificationCandidateCurrent(root, candidate, candidate.commandConfigFingerprint), true);
+
+    fs.appendFileSync(path.join(root, '.devflow', 'commands.yaml'), '# changed\n', 'utf8');
+    assert.equal(isVerificationCandidateCurrent(root, candidate, candidate.commandConfigFingerprint), false, 'ignored command config changes must stale repository-config candidate currentness');
+  } finally {
+    releaseVerificationCandidate(candidate.candidateId);
+  }
+});
+
 test('verification candidate registry can be resolved from disk and release is idempotent', () => {
   const root = fixture('persisted');
   fs.writeFileSync(path.join(root, 'src', 'value.txt'), 'candidate-a\n', 'utf8');

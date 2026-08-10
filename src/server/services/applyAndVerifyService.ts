@@ -141,10 +141,23 @@ export function applyAndVerify(state: AppState, args: Record<string, any>) {
 }
 
 type VerificationLogger = { stdout: (data: string) => void; stderr: (data: string) => void };
+type VerificationPermitDemand = {
+  verificationClass?: 'fast' | 'heavy';
+  sharedResources?: string[];
+};
+type VerificationExecutionLease = {
+  runWithPermit: <T>(request: VerificationPermitDemand, run: () => Promise<T>) => Promise<T>;
+  dispose: () => void;
+};
 
 const silentVerificationLogger: VerificationLogger = {
   stdout: () => {},
   stderr: () => {},
+};
+
+const unrestrictedVerificationExecutionLease: VerificationExecutionLease = {
+  runWithPermit: async (_request, run) => run(),
+  dispose: () => {},
 };
 
 export async function applyAndVerifyAsync(
@@ -152,7 +165,10 @@ export async function applyAndVerifyAsync(
   args: Record<string, any>,
   logger: VerificationLogger = silentVerificationLogger,
   setCancelFn: (fn: () => void) => void = () => {},
-  transitionAccess: (accessMode: 'verify') => void = () => {},
+  transitionAccess: (
+    accessMode: 'verify',
+    request?: VerificationPermitDemand,
+  ) => void | VerificationExecutionLease | Promise<void | VerificationExecutionLease> = () => unrestrictedVerificationExecutionLease,
 ) {
   const edit = typeof args.editPlanId === 'string' && args.editPlanId.trim()
     ? applyPreparedEditPlan({ editPlanId: args.editPlanId })
@@ -231,29 +247,42 @@ export async function applyAndVerifyAsync(
     responseMode: args.responseMode ?? 'compact',
   });
 
-  const runStep = async (step: { command: string }) => {
-    let cancelFn: (() => void) | undefined;
+  const permitDemandForStep = (step: (typeof plan.steps)[number]): VerificationPermitDemand => ({
+    verificationClass: step.verificationClass,
+    sharedResources: step.sharedResources?.length
+      ? step.sharedResources
+      : step.resourceKey
+        ? [step.resourceKey]
+        : [],
+  });
+  let verificationExecutionLease = unrestrictedVerificationExecutionLease;
+
+  const runStep = async (step: (typeof plan.steps)[number]) => {
     const stepArgs = commandArgs(step.command);
     const boundCandidate = baseCandidate
       ? bindProjectCommandVerificationCandidate(state, stepArgs, baseCandidate)
       : null;
-    try {
-      return await runProjectCommandAsync(state, {
-        ...stepArgs,
-        ...(boundCandidate ? { __verificationCandidate: boundCandidate } : {}),
-      }, logger, (fn) => {
-        cancelFn = fn;
-        activeCancels.add(fn);
-      });
-    } finally {
-      if (cancelFn) activeCancels.delete(cancelFn);
-    }
+    return verificationExecutionLease.runWithPermit(permitDemandForStep(step), async () => {
+      let cancelFn: (() => void) | undefined;
+      try {
+        return await runProjectCommandAsync(state, {
+          ...stepArgs,
+          ...(boundCandidate ? { __verificationCandidate: boundCandidate } : {}),
+        }, logger, (fn) => {
+          cancelFn = fn;
+          activeCancels.add(fn);
+        });
+      } finally {
+        if (cancelFn) activeCancels.delete(cancelFn);
+      }
+    });
   };
 
   let parallelVerification = false;
   try {
     if (plan.steps.length > 0) {
-      transitionAccess('verify');
+      const transitionedLease = await transitionAccess('verify', permitDemandForStep(plan.steps[0]));
+      if (transitionedLease) verificationExecutionLease = transitionedLease;
     }
 
     const stageIds = Array.from(new Set(plan.steps.map((step) => Number.isFinite(step.stage) ? Number(step.stage) : 0))).sort((a, b) => a - b);
@@ -342,6 +371,7 @@ export async function applyAndVerifyAsync(
       verificationPerformance: verificationPerformance(),
     };
   } finally {
+    verificationExecutionLease.dispose();
     if (baseCandidate) releaseVerificationCandidate(baseCandidate.candidateId);
   }
 }

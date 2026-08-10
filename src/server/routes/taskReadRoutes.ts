@@ -42,9 +42,13 @@ export function registerTaskReadRoutes(app: express.Express, deps: ApiRouteDeps)
     }
     if (!hasModernQuery) return res.json(getTasks());
     const offset = Number.isFinite(Number(req.query.offset)) ? Math.max(0, Number(req.query.offset)) : 0;
-    const limit = Number.isFinite(Number(req.query.limit))
+    const hasExplicitLimit = Number.isFinite(Number(req.query.limit));
+    const preserveUnboundedMode = mode === 'board' || mode === 'full' || mode === 'debug';
+    const limit = hasExplicitLimit
       ? Math.max(1, Math.min(500, Number(req.query.limit)))
-      : filteredTasks.length || 0;
+      : preserveUnboundedMode
+        ? filteredTasks.length || 0
+        : 50;
     const pagedTasks = filteredTasks.slice(offset, limit ? offset + limit : undefined);
     return res.json({ items: pagedTasks.map((task) => toTaskResponse(task, mode)), total: filteredTasks.length, offset, limit, mode });
   });

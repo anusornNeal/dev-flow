@@ -86,6 +86,31 @@ const state: any = {
 ((state as any).projectsCache || []).forEach(p => createProject(p));
 ((state as any)._testTasks || []).forEach((task: any) => saveTask(task));
 
+createProject({
+  id: 'proj-search-paging',
+  name: 'Search Paging Fixture',
+  repoUrl: 'https://github.com/example/search-paging',
+  createdAt: '2026-06-19T00:00:00.000Z',
+});
+for (let index = 0; index < 120; index += 1) {
+  saveTask({
+    id: `task-paging-${String(index).padStart(3, '0')}`,
+    displayId: `PG-${String(index + 1).padStart(4, '0')}`,
+    title: `Paging task ${index + 1}`,
+    description: `Paging fixture ${index + 1}`,
+    projectId: 'proj-search-paging',
+    status: index % 2 === 0 ? 'todo' : 'backlog',
+    priority: 'medium',
+    category: 'backend',
+    branch: 'develop',
+    tags: [],
+    targetFiles: [],
+    checklist: [],
+    createdAt: '2026-06-19T00:00:00.000Z',
+    updatedAt: `2026-06-19T00:${String(index % 60).padStart(2, '0')}:00.000Z`,
+  });
+}
+
 
 
 const app = express();
@@ -119,6 +144,43 @@ test('GET /api/tasks?mode=board returns board fields without full detail blobs',
   assert.equal(item.logs, undefined);
   assert.equal(item.reasoning, undefined);
   assert.equal(item.acceptanceCriteria, undefined);
+});
+
+test('GET /api/tasks modern summary defaults to a bounded page and preserves totals', async () => {
+  const response = await fetch(`${base}/api/tasks?mode=summary&projectId=proj-search-paging`);
+  assert.equal(response.status, 200);
+  const responseText = await response.text();
+  const body = JSON.parse(responseText) as { items: any[]; total: number; offset: number; limit: number; mode: string };
+  assert.equal(body.items.length, 50);
+  assert.equal(body.total, 120);
+  assert.equal(body.offset, 0);
+  assert.equal(body.limit, 50);
+  assert.equal(body.mode, 'summary');
+
+  const nextResponse = await fetch(`${base}/api/tasks?mode=summary&projectId=proj-search-paging&offset=50`);
+  const next = await nextResponse.json() as { items: any[]; total: number; offset: number; limit: number };
+  assert.equal(next.items.length, 50);
+  assert.equal(next.total, 120);
+  assert.equal(next.offset, 50);
+  assert.equal(next.limit, 50);
+  assert.equal(new Set([...body.items, ...next.items].map((item) => item.id)).size, 100);
+
+  const filteredResponse = await fetch(`${base}/api/tasks?mode=summary&projectId=proj-search-paging&status=todo&limit=17&offset=10`);
+  const filtered = await filteredResponse.json() as { items: any[]; total: number; offset: number; limit: number };
+  assert.equal(filtered.items.length, 17);
+  assert.equal(filtered.total, 60);
+  assert.equal(filtered.offset, 10);
+  assert.equal(filtered.limit, 17);
+  assert.equal(filtered.items.every((item) => item.status === 'todo'), true);
+
+  const explicitResponse = await fetch(`${base}/api/tasks?mode=summary&projectId=proj-search-paging&limit=120`);
+  const explicitText = await explicitResponse.text();
+  const explicit = JSON.parse(explicitText) as { items: any[]; total: number; limit: number };
+  assert.equal(explicit.items.length, 120);
+  assert.equal(explicit.total, 120);
+  assert.equal(explicit.limit, 120);
+  assert.equal(Buffer.byteLength(responseText, 'utf8') < Buffer.byteLength(explicitText, 'utf8') * 0.6, true);
+
 });
 
 test('GET prompt-json returns JSON content', async () => {

@@ -120,6 +120,12 @@ test('full MCP surface removes globally consolidated tools while keeping high-le
   const searchTasks = devFlowToolDefinitions.find((tool: any) => tool.name === 'search_tasks')!;
   assert.equal(searchTasks.inputSchema.required?.includes('q') ?? false, false);
   assert.match(searchTasks.buildHttpRequest({ status: 'backlog' }).path, /status=backlog/);
+  assert.match(searchTasks.buildHttpRequest({ status: 'backlog' }).path, /limit=50/);
+  assert.match(searchTasks.buildHttpRequest({ status: 'backlog', limit: 75 }).path, /limit=75/);
+  assert.match(searchTasks.description, /bounded|default page|defaults? to 50/i);
+  assert.match(searchTasks.inputSchema.properties.limit.description, /default.*50|50.*default/i);
+  assert.doesNotMatch(searchTasks.buildHttpRequest({ mode: 'full' }).path, /limit=/);
+  assert.match(searchTasks.buildHttpRequest({ mode: 'full', limit: 125 }).path, /limit=125/);
 
   const gitStatus = devFlowToolDefinitions.find((tool: any) => tool.name === 'get_git_status')!;
   assert.deepEqual(gitStatus.inputSchema.properties.mode.enum, ['compact', 'expanded']);

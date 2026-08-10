@@ -70,6 +70,8 @@ test('repo execution guidance is load-on-demand and keeps guarded edit rules', (
 test('board-loop skill requires atomic claims, scope-aware parallel work, and full-loop repetition', () => {
   assert.match(skillRouter, /08-board-loop-execution/);
   assert.match(boardLoopSkill, /claim_task/);
+  assert.match(boardLoopSkill, /claim_next_task/);
+  assert.match(boardLoopSkill, /fallback/i);
   assert.match(boardLoopSkill, /TASK_ALREADY_CLAIMED/);
   assert.match(boardLoopSkill, /TASK_SCOPE_CONFLICT/);
   assert.match(boardLoopSkill, /managed workspace/i);

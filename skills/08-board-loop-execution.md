@@ -8,12 +8,13 @@ Act as one cooperative board worker. Repeatedly take one eligible scope, complet
 
 ## Required loop
 
-1. Refresh board/task state before every selection. Prefer concise `search_tasks` pages and inspect parent/children only as needed.
-2. Skip work that is already claimed, blocked by dependencies, explicitly reserved for a final gate, or likely to collide with another active scope.
-3. Prefer implementation-ready leaf cards. A claimed parent does not lock all children: independent sibling children may run in parallel when their target scope is disjoint and dependencies allow it.
-4. Atomically call `claim_task` before implementation. Supply this chat's stable opaque `sessionId` plus a short `ownerLabel` when available. The successful claim moves the card to `in-progress` and returns the managed workspace to use.
-5. If `claim_task` returns `TASK_ALREADY_CLAIMED`, refresh and immediately try another eligible card. Do not fight or override the other claimant.
-6. If `claim_task` returns `TASK_SCOPE_CONFLICT`, skip that card and try another independent card. Use `allowScopeConflict` only when the user explicitly requests coordinated overlapping work and the collision is understood.
+1. For ordinary next-card board loops, prefer `claim_next_task` with the project id, this chat's stable opaque `sessionId`, and a short `ownerLabel`. It performs bounded deterministic selection and the authoritative claim under one project lock.
+2. Treat `claim_next_task` as a fast path, not planning intelligence. It only auto-selects clear runnable leaf work with explicit target-file scope and skips active claims, exact scope conflicts, explicit dependency blockers, and `final-gate` work.
+3. If the user names a specific card, scope is ambiguous, the fast path is unavailable, or it returns `NO_ELIGIBLE_TASK`, fall back to concise `search_tasks` inspection followed by explicit `claim_task`.
+4. A claimed parent does not lock all children: independent sibling children may run in parallel when their target scope is disjoint and dependencies allow it.
+5. A successful `claim_next_task` or `claim_task` moves the card to `in-progress` and returns the managed workspace to use.
+6. If fallback `claim_task` returns `TASK_ALREADY_CLAIMED`, refresh and immediately try another eligible card. Do not fight or override the other claimant.
+7. If fallback `claim_task` returns `TASK_SCOPE_CONFLICT`, skip that card and try another independent card. Use `allowScopeConflict` only when the user explicitly requests coordinated overlapping work and the collision is understood.
 7. Use the returned managed workspace only. Call `get_repo_context_bundle` before implementation, reuse relevant WIP/commits when present, and do not derive or hardcode workspace filesystem paths.
 8. Implement only the claimed scope. Use focused tests first, then the verification required by the card. Poll async verification jobs to terminal in the same turn when possible.
 9. Commit the claimed scope separately. Recheck latest local `develop` and active sibling work before integration. Resolve from latest `develop` without overwriting another chat's work.

@@ -116,6 +116,24 @@ export const taskToolDefinitions: DevFlowToolDefinition[] = [
     buildHttpRequest: ({ taskId, responseMode, ...body }) => ({ method: 'PUT', path: withQuery(`/api/tasks/${encodePathSegment(String(taskId))}`, { responseMode: responseMode || 'summary' }), body, headers: body.isAgentRequest ? { 'x-agent-request': 'true' } : undefined }),
   },
   {
+    name: 'claim_next_task',
+    description: 'Atomically select and claim the next deterministic eligible leaf task for one board-loop worker. Selection is bounded and conservative; use search_tasks + claim_task as the fallback for explicit or ambiguous work.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        projectId: { type: 'string', description: 'Project internal id used for bounded next-task selection.' },
+        sessionId: { type: 'string', description: 'Opaque caller chat/session id. The raw value is never persisted on the task.' },
+        ownerKind: { type: 'string', enum: ['chat', 'codex', 'claude', 'antigravity', 'agent'], description: 'Optional short owner kind for UI display.' },
+        ownerLabel: { type: 'string', description: 'Optional compact owner label such as Chat A3 or Codex C7.' },
+        limit: { type: 'number', description: 'Maximum runnable tasks to inspect. Defaults to 50 and is capped at 100.' },
+        ...mutationResponseModeProperty,
+      },
+      required: ['projectId', 'sessionId'],
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: ({ responseMode, ...body }) => ({ method: 'POST', path: withQuery('/api/tasks/claim-next', { responseMode: responseMode || 'summary' }), body }),
+  },
+  {
     name: 'claim_task',
     description: 'Atomically claim one eligible task for this caller session. Successful claims move the task to in-progress, bind a managed workspace, and reject duplicate or overlapping active work.',
     inputSchema: {

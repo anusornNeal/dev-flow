@@ -20,6 +20,7 @@ export interface SchedulerQueueEntry {
   schedulerPriority?: number;
   verificationClass?: ProjectCommandVerificationClass;
   sharedResources?: string[];
+  verificationPermitId?: string;
 }
 
 export interface SchedulerBlocker {
@@ -41,6 +42,19 @@ export type SchedulerProfile = {
   sharedResources?: string[];
 };
 
+export type VerificationProcessPermitRequest = {
+  jobId: string;
+  verificationClass?: ProjectCommandVerificationClass;
+  sharedResources?: string[];
+};
+
+export type VerificationProcessPermit = {
+  id: string;
+  jobId: string;
+  verificationClass: ProjectCommandVerificationClass;
+  sharedResources: string[];
+};
+
 const MAX_CONCURRENCY: Record<JobCostClass, number> = {
   'light-read': 8,
   search: 4,
@@ -56,6 +70,9 @@ let globalVerifyCapacity = Math.max(1, Math.min(4, Number(process.env.DEVFLOW_MA
 let activeGlobalVerify = 0;
 let activeFastVerify = 0;
 let activeHeavyVerify = 0;
+let verificationPermitSequence = 0;
+const activeVerificationPermits = new Map<string, VerificationProcessPermit>();
+const activeSharedVerificationResources = new Map<string, number>();
 
 function getResourceStats(resourceKey: string): ResourceStats {
   let stats = activeResources.get(resourceKey);
@@ -69,7 +86,7 @@ function getResourceStats(resourceKey: string): ResourceStats {
   return stats;
 }
 
-function scopeVerificationResources(args: any, resourceScope: string | undefined, resources: string[]) {
+export function scopeVerificationResources(args: any, resourceScope: string | undefined, resources: string[]) {
   const projectId = typeof args?.projectId === 'string' ? args.projectId.trim() : '';
   const scope = projectId ? `project:${projectId}` : (resourceScope || 'verification');
   return Array.from(new Set(resources.filter(Boolean).map((resource) => `${scope}:${resource}`)));
@@ -123,14 +140,92 @@ function verificationClassForEntry(entry: SchedulerQueueEntry): ProjectCommandVe
   return entry.verificationClass === 'fast' ? 'fast' : 'heavy';
 }
 
+function verificationClassForRequest(request: VerificationProcessPermitRequest): ProjectCommandVerificationClass {
+  return request.verificationClass === 'fast' ? 'fast' : 'heavy';
+}
+
+function normalizedSharedResources(resources: string[] | undefined) {
+  return Array.from(new Set((resources || []).map((resource) => String(resource || '').trim()).filter(Boolean)));
+}
+
+function updateSharedResourceUsage(resources: string[], delta: 1 | -1) {
+  for (const resource of resources) {
+    const next = Math.max(0, (activeSharedVerificationResources.get(resource) || 0) + delta);
+    if (next === 0) activeSharedVerificationResources.delete(resource);
+    else activeSharedVerificationResources.set(resource, next);
+  }
+}
+
+export function getVerificationProcessPermitBlocker(request: VerificationProcessPermitRequest): SchedulerBlocker | null {
+  if (activeGlobalVerify >= globalVerifyCapacity) {
+    return { blockReason: 'capacity_saturated', waitType: 'capacity' };
+  }
+  const resources = normalizedSharedResources(request.sharedResources);
+  for (const resource of resources) {
+    if ((activeSharedVerificationResources.get(resource) || 0) >= sharedResourceCapacity(resource)) {
+      const blockingPermit = Array.from(activeVerificationPermits.values()).find((permit) => permit.sharedResources.includes(resource));
+      return {
+        blockedByJobId: blockingPermit?.jobId,
+        blockedByAccessMode: 'verify',
+        blockReason: 'shared_resource_conflict',
+        waitType: 'capacity',
+      };
+    }
+  }
+  return null;
+}
+
+export function tryAcquireVerificationProcessPermit(request: VerificationProcessPermitRequest) {
+  const normalizedRequest: VerificationProcessPermitRequest = {
+    ...request,
+    sharedResources: normalizedSharedResources(request.sharedResources),
+  };
+  const blocker = getVerificationProcessPermitBlocker(normalizedRequest);
+  if (blocker) return { permit: null as VerificationProcessPermit | null, blocker };
+
+  const permit: VerificationProcessPermit = {
+    id: `verify-permit-${++verificationPermitSequence}`,
+    jobId: request.jobId,
+    verificationClass: verificationClassForRequest(request),
+    sharedResources: normalizedRequest.sharedResources || [],
+  };
+  activeVerificationPermits.set(permit.id, permit);
+  activeGlobalVerify += 1;
+  if (permit.verificationClass === 'fast') activeFastVerify += 1;
+  else activeHeavyVerify += 1;
+  updateSharedResourceUsage(permit.sharedResources, 1);
+  return { permit, blocker: null as SchedulerBlocker | null };
+}
+
+export function releaseVerificationProcessPermit(permit: VerificationProcessPermit) {
+  const active = activeVerificationPermits.get(permit.id);
+  if (!active) return false;
+  activeVerificationPermits.delete(permit.id);
+  activeGlobalVerify = Math.max(0, activeGlobalVerify - 1);
+  if (active.verificationClass === 'fast') activeFastVerify = Math.max(0, activeFastVerify - 1);
+  else activeHeavyVerify = Math.max(0, activeHeavyVerify - 1);
+  updateSharedResourceUsage(active.sharedResources, -1);
+  return true;
+}
+
 export function incrementScheduledResource(entry: SchedulerQueueEntry) {
   const stats = getResourceStats(entry.resourceKey);
   stats.accessCount[entry.accessMode] += 1;
   stats.costCount[entry.costClass] += 1;
   if (entry.costClass === 'verify') {
-    activeGlobalVerify += 1;
-    if (verificationClassForEntry(entry) === 'fast') activeFastVerify += 1;
-    else activeHeavyVerify += 1;
+    const reservation = tryAcquireVerificationProcessPermit({
+      jobId: entry.jobId,
+      verificationClass: verificationClassForEntry(entry),
+      sharedResources: entry.sharedResources,
+    });
+    if (!reservation.permit) {
+      stats.accessCount[entry.accessMode] = Math.max(0, stats.accessCount[entry.accessMode] - 1);
+      stats.costCount[entry.costClass] = Math.max(0, stats.costCount[entry.costClass] - 1);
+      const activeCount = stats.accessCount.read + stats.accessCount.verify + stats.accessCount.write;
+      if (activeCount === 0) activeResources.delete(entry.resourceKey);
+      throw new Error(`Scheduler admitted verification without an available process permit for ${entry.jobId}.`);
+    }
+    entry.verificationPermitId = reservation.permit.id;
   }
 }
 
@@ -138,27 +233,34 @@ export function decrementScheduledResource(entry: SchedulerQueueEntry) {
   const stats = getResourceStats(entry.resourceKey);
   stats.accessCount[entry.accessMode] = Math.max(0, stats.accessCount[entry.accessMode] - 1);
   stats.costCount[entry.costClass] = Math.max(0, stats.costCount[entry.costClass] - 1);
-  if (entry.costClass === 'verify') {
-    activeGlobalVerify = Math.max(0, activeGlobalVerify - 1);
-    if (verificationClassForEntry(entry) === 'fast') activeFastVerify = Math.max(0, activeFastVerify - 1);
-    else activeHeavyVerify = Math.max(0, activeHeavyVerify - 1);
+  if (entry.verificationPermitId) {
+    const permit = activeVerificationPermits.get(entry.verificationPermitId);
+    if (permit) releaseVerificationProcessPermit(permit);
+    entry.verificationPermitId = undefined;
   }
   const activeCount = stats.accessCount.read + stats.accessCount.verify + stats.accessCount.write;
   if (activeCount === 0) activeResources.delete(entry.resourceKey);
 }
 
-export function transitionScheduledResource(entry: SchedulerQueueEntry, nextAccessMode: ResourceAccessMode) {
+export function transitionScheduledResource(
+  entry: SchedulerQueueEntry,
+  nextAccessMode: ResourceAccessMode,
+  verificationPermit?: VerificationProcessPermit,
+) {
   if (entry.accessMode === nextAccessMode) return false;
   if (entry.accessMode !== 'write' || nextAccessMode !== 'verify') {
     throw new Error(`Unsafe scheduler access transition ${entry.accessMode} -> ${nextAccessMode} for ${entry.jobId}.`);
   }
+  const activePermit = verificationPermit ? activeVerificationPermits.get(verificationPermit.id) : undefined;
+  if (!activePermit || activePermit.jobId !== entry.jobId) {
+    throw new Error(`A reserved verification process permit is required before write -> verify transition for ${entry.jobId}.`);
+  }
   const stats = getResourceStats(entry.resourceKey);
   stats.accessCount.write = Math.max(0, stats.accessCount.write - 1);
   stats.costCount.write = Math.max(0, stats.costCount.write - 1);
-  entry.verificationClass = entry.verificationClass || 'heavy';
-  activeGlobalVerify += 1;
-  if (verificationClassForEntry(entry) === 'fast') activeFastVerify += 1;
-  else activeHeavyVerify += 1;
+  entry.verificationClass = activePermit.verificationClass;
+  entry.sharedResources = [...activePermit.sharedResources];
+  entry.verificationPermitId = activePermit.id;
   entry.accessMode = 'verify';
   entry.costClass = 'verify';
   stats.accessCount.verify += 1;
@@ -176,18 +278,6 @@ function findActiveEntry(
 
 function sharedResourceCapacity(resource: string) {
   return resource.endsWith(':repo') ? 2 : 1;
-}
-
-function findSharedResourceConflict(entry: SchedulerQueueEntry, activeEntries: SchedulerQueueEntry[]) {
-  if (entry.accessMode !== 'verify' || !entry.sharedResources?.length) return undefined;
-  for (const resource of entry.sharedResources) {
-    const sharing = activeEntries.filter((active) =>
-      active.accessMode === 'verify'
-      && active.sharedResources?.includes(resource),
-    );
-    if (sharing.length >= sharedResourceCapacity(resource)) return sharing[0];
-  }
-  return undefined;
 }
 
 export function getBlockerForQueueEntry(
@@ -220,18 +310,12 @@ export function getBlockerForQueueEntry(
   }
 
   if (entry.costClass === 'verify') {
-    if (activeGlobalVerify >= globalVerifyCapacity) {
-      return { blockReason: 'capacity_saturated', waitType: 'capacity' };
-    }
-    const sharedConflict = findSharedResourceConflict(entry, activeEntries);
-    if (sharedConflict) {
-      return {
-        blockedByJobId: sharedConflict.jobId,
-        blockedByAccessMode: sharedConflict.accessMode,
-        blockReason: 'shared_resource_conflict',
-        waitType: 'capacity',
-      };
-    }
+    const processBlocker = getVerificationProcessPermitBlocker({
+      jobId: entry.jobId,
+      verificationClass: verificationClassForEntry(entry),
+      sharedResources: entry.sharedResources,
+    });
+    if (processBlocker) return processBlocker;
   }
 
   const stats = activeResources.get(entry.resourceKey);
@@ -309,5 +393,8 @@ export function resetSchedulerResourceStateForTests() {
   activeGlobalVerify = 0;
   activeFastVerify = 0;
   activeHeavyVerify = 0;
+  verificationPermitSequence = 0;
+  activeVerificationPermits.clear();
+  activeSharedVerificationResources.clear();
   globalVerifyCapacity = Math.max(1, Math.min(4, Number(process.env.DEVFLOW_MAX_VERIFY_PROCESSES) || Math.min(2, os.cpus().length || 1)));
 }

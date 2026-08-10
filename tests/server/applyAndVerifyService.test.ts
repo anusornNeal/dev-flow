@@ -116,6 +116,72 @@ test('applyAndVerifyAsync runs resource-safe targeted verification commands conc
   assert.equal(result.verificationPerformance?.processSpawns, 2);
 });
 
+test('applyAndVerifyAsync routes every parallel child through the scheduler verification governor', async () => {
+  const root = fixture('governed-parallel');
+  fs.mkdirSync(path.join(root, '.devflow'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'scripts', 'target-a.mjs'), "await new Promise((resolve) => setTimeout(resolve, 120)); process.stdout.write('target a ok\\n');\n", 'utf8');
+  fs.writeFileSync(path.join(root, 'scripts', 'target-b.mjs'), "await new Promise((resolve) => setTimeout(resolve, 120)); process.stdout.write('target b ok\\n');\n", 'utf8');
+  fs.writeFileSync(path.join(root, '.devflow', 'commands.yaml'), [
+    'commands:',
+    '  target-a:',
+    '    executable: node',
+    '    args:',
+    '      - scripts/target-a.mjs',
+    '    category: test',
+    '  target-b:',
+    '    executable: node',
+    '    args:',
+    '      - scripts/target-b.mjs',
+    '    category: test',
+    '',
+  ].join('\n'), 'utf8');
+  git(root, ['add', '.']);
+  git(root, ['commit', '-m', 'governor fixtures']);
+
+  let active = 0;
+  let maxActive = 0;
+  let permitRuns = 0;
+  const waiters: Array<() => void> = [];
+  const acquire = async () => {
+    while (active >= 1) await new Promise<void>((resolve) => waiters.push(resolve));
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+  };
+  const release = () => {
+    active -= 1;
+    waiters.shift()?.();
+  };
+
+  const result = await applyAndVerifyAsync(
+    stateFor(root),
+    {
+      projectId: 'project-apply-verify',
+      files: [{ filePath: 'src/value.ts', edits: [{ type: 'replace', find: 'value = 1', replaceWith: 'value = 7' }] }],
+      requestedCommands: ['target-a', 'target-b'],
+      cacheVerificationResults: false,
+      forceFresh: true,
+    },
+    { stdout: () => {}, stderr: () => {} },
+    () => {},
+    async () => ({
+      runWithPermit: async (_request: any, run: () => Promise<any>) => {
+        await acquire();
+        permitRuns += 1;
+        try {
+          return await run();
+        } finally {
+          release();
+        }
+      },
+      dispose: () => {},
+    }),
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(permitRuns, 2, 'each verification subprocess must execute through the governor');
+  assert.equal(maxActive, 1, 'governor capacity must bound child verification concurrency');
+});
+
 test('applyAndVerifyAsync requests verify access after mutation and before verification starts', async () => {
   const root = fixture('phase-transition');
   const verificationMarker = path.join(tempRoot, 'phase-transition-marker.txt');

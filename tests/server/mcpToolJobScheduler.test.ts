@@ -10,6 +10,9 @@ import {
   decrementScheduledResource,
   selectNextRunnableQueueIndex,
   setGlobalVerifyCapacityForTests,
+  transitionScheduledResource,
+  tryAcquireVerificationProcessPermit,
+  releaseVerificationProcessPermit,
   type SchedulerQueueEntry,
 } from '../../src/server/services/mcpToolJobScheduler.js';
 
@@ -82,6 +85,103 @@ test('verify saturation does not block interactive reads or independent workspac
 
   decrementScheduledResource(activeA);
   decrementScheduledResource(activeB);
+});
+
+test('write to verify transition requires a reserved process permit and never overbooks capacity', () => {
+  resetSchedulerResourceStateForTests();
+  setGlobalVerifyCapacityForTests(1);
+  const activeVerify = entry({
+    jobId: 'verify-active',
+    resourceKey: 'workspace:a',
+    accessMode: 'verify',
+    costClass: 'verify',
+    kind: 'repo-command',
+    toolName: 'run_project_command',
+    verificationClass: 'heavy',
+    sharedResources: ['project:a:compiler'],
+  });
+  const writer = entry({
+    jobId: 'writer-transition',
+    resourceKey: 'workspace:b',
+    accessMode: 'write',
+    costClass: 'write',
+    kind: 'repo-command',
+    toolName: 'apply_and_verify',
+  });
+  incrementScheduledResource(activeVerify);
+  incrementScheduledResource(writer);
+
+  const saturated = tryAcquireVerificationProcessPermit({
+    jobId: writer.jobId,
+    verificationClass: 'heavy',
+    sharedResources: ['project:b:typescript'],
+  });
+  assert.equal(saturated.permit, null);
+  assert.equal(saturated.blocker?.blockReason, 'capacity_saturated');
+  assert.equal(getSchedulerCapacitySnapshot().verify.active, 1);
+  assert.throws(() => transitionScheduledResource(writer, 'verify'), /verification process permit/i);
+  assert.equal(writer.accessMode, 'write');
+
+  decrementScheduledResource(activeVerify);
+  const reserved = tryAcquireVerificationProcessPermit({
+    jobId: writer.jobId,
+    verificationClass: 'heavy',
+    sharedResources: ['project:b:typescript'],
+  });
+  assert.ok(reserved.permit);
+  assert.equal(getSchedulerCapacitySnapshot().verify.active, 1);
+  assert.equal(transitionScheduledResource(writer, 'verify', reserved.permit), true);
+  assert.equal(writer.accessMode, 'verify');
+  assert.equal(getSchedulerCapacitySnapshot().verify.active, 1, 'composite parent must not double-count its reserved child permit');
+
+  assert.equal(releaseVerificationProcessPermit(reserved.permit), true);
+  decrementScheduledResource(writer);
+  assert.equal(getSchedulerCapacitySnapshot().verify.active, 0);
+});
+
+test('write to verify transition honors shared verification resource conflicts before downgrade', () => {
+  resetSchedulerResourceStateForTests();
+  setGlobalVerifyCapacityForTests(2);
+  const writer = entry({
+    jobId: 'writer-shared-transition',
+    resourceKey: 'workspace:writer',
+    accessMode: 'write',
+    costClass: 'write',
+    kind: 'repo-command',
+    toolName: 'apply_and_verify',
+  });
+  incrementScheduledResource(writer);
+
+  const holder = tryAcquireVerificationProcessPermit({
+    jobId: 'verify-holder',
+    verificationClass: 'fast',
+    sharedResources: ['project:a:typescript'],
+  });
+  assert.ok(holder.permit);
+
+  const blocked = tryAcquireVerificationProcessPermit({
+    jobId: writer.jobId,
+    verificationClass: 'fast',
+    sharedResources: ['project:a:typescript'],
+  });
+  assert.equal(blocked.permit, null);
+  assert.equal(blocked.blocker?.blockReason, 'shared_resource_conflict');
+  assert.equal(blocked.blocker?.blockedByJobId, 'verify-holder');
+  assert.equal(writer.accessMode, 'write');
+  assert.equal(getSchedulerCapacitySnapshot().verify.active, 1);
+
+  assert.equal(releaseVerificationProcessPermit(holder.permit), true);
+  const reserved = tryAcquireVerificationProcessPermit({
+    jobId: writer.jobId,
+    verificationClass: 'fast',
+    sharedResources: ['project:a:typescript'],
+  });
+  assert.ok(reserved.permit);
+  assert.equal(transitionScheduledResource(writer, 'verify', reserved.permit), true);
+  assert.equal(writer.accessMode, 'verify');
+  assert.equal(releaseVerificationProcessPermit(reserved.permit), true);
+  decrementScheduledResource(writer);
+  assert.equal(getSchedulerCapacitySnapshot().verify.active, 0);
 });
 
 test('targeted verification can start ahead of queued full verification while aging prevents permanent starvation', () => {

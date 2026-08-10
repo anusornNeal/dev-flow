@@ -14,6 +14,11 @@ import type { ResourceAccessMode } from './mcpToolJobScheduler';
 import { executeRecoveryAwareTool } from './devFlowRecoveryRuntime.js';
 
 type Logger = { stdout: (data: string) => void; stderr: (data: string) => void };
+type VerificationPermitDemand = { verificationClass?: 'fast' | 'heavy'; sharedResources?: string[] };
+type VerificationExecutionLease = {
+  runWithPermit: <T>(request: VerificationPermitDemand, run: () => Promise<T>) => Promise<T>;
+  dispose: () => void;
+};
 
 export interface BuiltinToolJobInput {
   toolName: string;
@@ -24,7 +29,10 @@ export interface BuiltinToolJobInput {
 export interface BuiltinToolJobContext {
   logger: Logger;
   setCancelFn: (fn: () => void) => void;
-  transitionAccess: (accessMode: ResourceAccessMode) => void;
+  transitionAccess: (
+    accessMode: ResourceAccessMode,
+    request?: VerificationPermitDemand,
+  ) => void | VerificationExecutionLease | Promise<void | VerificationExecutionLease>;
 }
 
 export type BuiltinToolJobRecoveryPolicy = 'retryable' | 'interrupted';

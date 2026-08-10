@@ -19,6 +19,11 @@ import {
   selectNextRunnableQueueIndex,
   incrementScheduledResource,
   transitionScheduledResource,
+  tryAcquireVerificationProcessPermit,
+  releaseVerificationProcessPermit,
+  scopeVerificationResources,
+  type VerificationProcessPermit,
+  type VerificationProcessPermitRequest,
   type JobKind,
   type JobCostClass,
   type ResourceAccessMode,
@@ -28,12 +33,18 @@ import { getBuiltinToolJobRecoveryPolicy, runBuiltinToolJob } from './mcpToolJob
 import { recoveryPolicyForJobStatus, type ToolRecoveryPolicy } from './toolRecoveryPolicy.js';
 
 type Logger = { stdout: (data: string) => void; stderr: (data: string) => void };
+type VerificationPermitDemand = Omit<VerificationProcessPermitRequest, 'jobId'>;
+type VerificationExecutionLease = {
+  runWithPermit: <T>(request: VerificationPermitDemand, run: () => Promise<T>) => Promise<T>;
+  dispose: () => void;
+};
+type TransitionAccessResult = void | VerificationExecutionLease | Promise<void | VerificationExecutionLease>;
 type AsyncRunner = (
   state: AppState,
   args: any,
   logger: Logger,
   setCancelFn: (fn: () => void) => void,
-  transitionAccess: (accessMode: ResourceAccessMode) => void,
+  transitionAccess: (accessMode: ResourceAccessMode, request?: VerificationPermitDemand) => TransitionAccessResult,
 ) => Promise<any>;
 
 type QueueWaitType = 'workspace_lock' | 'capacity';
@@ -109,6 +120,7 @@ const activeJobs = new Map<string, { entry: QueueEntry; cancelFn?: () => void; l
 const releasedSchedulerLeases = new Set<string>();
 const testRunners = new Map<string, AsyncRunner>();
 const jobWaiters = new Map<string, Set<(status: ReturnType<typeof getToolJobStatus>) => void>>();
+const schedulerCapacityWaiters = new Set<() => void>();
 const singleFlightLeaders = new Map<string, string>();
 const singleFlightFollowers = new Map<string, Set<string>>();
 const followerToLeader = new Map<string, string>();
@@ -700,11 +712,25 @@ function schedulerLeaseKey(jobId: string, leaseGeneration: number) {
   return `${jobId}:${leaseGeneration}`;
 }
 
+function notifySchedulerCapacityWaiters() {
+  if (schedulerCapacityWaiters.size === 0) return;
+  const waiters = Array.from(schedulerCapacityWaiters);
+  schedulerCapacityWaiters.clear();
+  for (const wake of waiters) wake();
+}
+
+function waitForSchedulerCapacityChange() {
+  return new Promise<void>((resolve) => {
+    schedulerCapacityWaiters.add(resolve);
+  });
+}
+
 function releaseSchedulerLease(entry: QueueEntry, leaseGeneration: number) {
   const key = schedulerLeaseKey(entry.jobId, leaseGeneration);
   if (releasedSchedulerLeases.has(key)) return false;
   releasedSchedulerLeases.add(key);
   decrementScheduledResource(entry);
+  notifySchedulerCapacityWaiters();
   return true;
 }
 
@@ -859,6 +885,7 @@ export function cancelToolJob(jobId: string) {
   const active = activeJobs.get(jobId);
   if (active) {
     active.cancelFn?.();
+    notifySchedulerCapacityWaiters();
     appendJobLog(jobId, 'stderr', '\n[Job Cancelled] Cancellation requested.\n');
     notifyJobWaiters(jobId);
     return true;
@@ -1027,15 +1054,116 @@ function setJobActiveContext(jobId: string, cancelFn: () => void, leaseGeneratio
   if (active?.leaseGeneration === leaseGeneration) active.cancelFn = cancelFn;
 }
 
-function transitionJobAccess(jobId: string, nextAccessMode: ResourceAccessMode, leaseGeneration: number) {
-  const active = activeJobs.get(jobId);
-  if (!active || active.leaseGeneration !== leaseGeneration) return;
+function transitionAbortError(jobId: string) {
+  const error = new Error(`Verification transition for ${jobId} was cancelled or lost its worker lease.`);
+  error.name = 'AbortError';
+  return error;
+}
 
-  const entry = active.entry;
-  const changed = transitionScheduledResource(entry, nextAccessMode);
-  if (!changed) return;
-  appendJobLog(jobId, 'stdout', '[Scheduler] Access downgraded write -> verify.\n', { workerId: JOB_WORKER_ID, leaseGeneration });
+function assertActiveTransitionLease(jobId: string, leaseGeneration: number) {
+  const active = activeJobs.get(jobId);
+  const status = getJob(jobId)?.status;
+  if (!active || active.leaseGeneration !== leaseGeneration || status === 'cancelled' || status === 'timed_out') {
+    throw transitionAbortError(jobId);
+  }
+  return active.entry;
+}
+
+function scopedPermitRequest(entry: QueueEntry, request: VerificationPermitDemand): VerificationProcessPermitRequest {
+  return {
+    jobId: entry.jobId,
+    verificationClass: request.verificationClass,
+    sharedResources: scopeVerificationResources(entry.args, entry.resourceKey, request.sharedResources || []),
+  };
+}
+
+async function acquireVerificationPermitForActiveJob(
+  jobId: string,
+  leaseGeneration: number,
+  request: VerificationPermitDemand,
+) {
+  let loggedWait = false;
+  while (true) {
+    const entry = assertActiveTransitionLease(jobId, leaseGeneration);
+    const reservation = tryAcquireVerificationProcessPermit(scopedPermitRequest(entry, request));
+    if (reservation.permit) return reservation.permit;
+
+    if (!loggedWait) {
+      appendJobLog(jobId, 'stdout', `[Scheduler] Waiting for verification capacity (${reservation.blocker?.blockReason || 'capacity'}).\n`, { workerId: JOB_WORKER_ID, leaseGeneration });
+      loggedWait = true;
+    }
+    const waitStartedAt = Date.now();
+    await waitForSchedulerCapacityChange();
+    const waitedMs = Math.max(0, Date.now() - waitStartedAt);
+    entry.waitTelemetry.capacityWaitMs += waitedMs;
+    if (reservation.blocker?.blockReason) {
+      entry.waitTelemetry.blockerReasons[reservation.blocker.blockReason] = (entry.waitTelemetry.blockerReasons[reservation.blocker.blockReason] || 0) + 1;
+    }
+  }
+}
+
+function createVerificationExecutionLease(
+  entry: QueueEntry,
+  leaseGeneration: number,
+  initialPermit: VerificationProcessPermit,
+): VerificationExecutionLease {
+  let reservedPermit: VerificationProcessPermit | undefined = initialPermit;
+  let disposed = false;
+
+  const releasePermit = (permit: VerificationProcessPermit) => {
+    if (entry.verificationPermitId === permit.id) entry.verificationPermitId = undefined;
+    if (releaseVerificationProcessPermit(permit)) notifySchedulerCapacityWaiters();
+  };
+
+  return {
+    runWithPermit: async <T>(request: VerificationPermitDemand, run: () => Promise<T>) => {
+      if (disposed) throw transitionAbortError(entry.jobId);
+      assertActiveTransitionLease(entry.jobId, leaseGeneration);
+      const permit = reservedPermit || await acquireVerificationPermitForActiveJob(entry.jobId, leaseGeneration, request);
+      reservedPermit = undefined;
+      try {
+        assertActiveTransitionLease(entry.jobId, leaseGeneration);
+        return await run();
+      } finally {
+        releasePermit(permit);
+      }
+    },
+    dispose: () => {
+      if (disposed) return;
+      disposed = true;
+      if (reservedPermit) {
+        releasePermit(reservedPermit);
+        reservedPermit = undefined;
+      }
+    },
+  };
+}
+
+async function transitionJobAccess(
+  jobId: string,
+  nextAccessMode: ResourceAccessMode,
+  leaseGeneration: number,
+  request: VerificationPermitDemand = {},
+): Promise<void | VerificationExecutionLease> {
+  const entry = assertActiveTransitionLease(jobId, leaseGeneration);
+  if (entry.accessMode === nextAccessMode) return;
+
+  const permit = await acquireVerificationPermitForActiveJob(jobId, leaseGeneration, request);
+  try {
+    const changed = transitionScheduledResource(entry, nextAccessMode, permit);
+    if (!changed) {
+      releaseVerificationProcessPermit(permit);
+      notifySchedulerCapacityWaiters();
+      return;
+    }
+  } catch (error) {
+    releaseVerificationProcessPermit(permit);
+    notifySchedulerCapacityWaiters();
+    throw error;
+  }
+  appendJobLog(jobId, 'stdout', '[Scheduler] Access downgraded write -> verify with reserved process capacity.\n', { workerId: JOB_WORKER_ID, leaseGeneration });
   setImmediate(processQueue);
+  return createVerificationExecutionLease(entry, leaseGeneration, permit);
 }
 
 async function startJob(entry: QueueEntry) {
@@ -1057,7 +1185,10 @@ async function startJob(entry: QueueEntry) {
     const active = activeJobs.get(entry.jobId);
     if (!active || active.leaseGeneration !== leaseGeneration) return;
     const renewed = heartbeatJob(entry.jobId, JOB_WORKER_ID, JOB_LEASE_MS, Date.now(), leaseGeneration);
-    if (!renewed) active.cancelFn?.();
+    if (!renewed) {
+      active.cancelFn?.();
+      notifySchedulerCapacityWaiters();
+    }
   }, JOB_HEARTBEAT_MS);
   heartbeat.unref();
 
@@ -1076,7 +1207,7 @@ async function startJob(entry: QueueEntry) {
         entry.args,
         logger,
         (cancelFn) => setJobActiveContext(entry.jobId, cancelFn, leaseGeneration),
-        (accessMode) => transitionJobAccess(entry.jobId, accessMode, leaseGeneration),
+        (accessMode, request) => transitionJobAccess(entry.jobId, accessMode, leaseGeneration, request),
       );
     } else {
       result = await runBuiltinToolJob(
@@ -1084,7 +1215,7 @@ async function startJob(entry: QueueEntry) {
         {
           logger,
           setCancelFn: (cancelFn) => setJobActiveContext(entry.jobId, cancelFn, leaseGeneration),
-          transitionAccess: (accessMode) => transitionJobAccess(entry.jobId, accessMode, leaseGeneration),
+          transitionAccess: (accessMode, request) => transitionJobAccess(entry.jobId, accessMode, leaseGeneration, request),
         },
       );
     }

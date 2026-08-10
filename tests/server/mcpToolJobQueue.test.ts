@@ -36,6 +36,11 @@ const { heartbeatJob, readJobLog, readJobResult } = await import('../../src/serv
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
 const { registerMcpToolJobRoutes } = await import('../../src/server/routes/mcpToolJobs.js');
 const { createApiError } = await import('../../src/server/services/api.js');
+const {
+  getSchedulerCapacitySnapshot,
+  resetSchedulerResourceStateForTests,
+  setGlobalVerifyCapacityForTests,
+} = await import('../../src/server/services/mcpToolJobScheduler.js');
 
 function restoreTestEnv(name: 'DEVFLOW_DB_PATH' | 'DEVFLOW_JOBS_DIR' | 'DEVFLOW_RUNTIME_DIR', value: string | undefined) {
   if (value === undefined) delete process.env[name];
@@ -714,9 +719,10 @@ test('mcpToolJobService - write job atomically downgrades to verify and unblocks
     starts.push(args.label);
     if (args.label === 'primary') {
       await downgradeGate.promise;
-      transitionAccess('verify');
+      const verificationLease = await transitionAccess('verify', { verificationClass: 'fast', sharedResources: ['test:downgrade'] });
       starts.push('downgraded');
       await primaryDone.promise;
+      verificationLease?.dispose?.();
     } else if (args.label === 'read') {
       await readDone.promise;
     } else if (args.label === 'writer') {
@@ -758,6 +764,256 @@ test('mcpToolJobService - write job atomically downgrades to verify and unblocks
     readDone.resolve();
     writerDone.resolve();
     __setToolJobTestRunner(toolName, null);
+  }
+});
+
+test('mcpToolJobService - write to verify transition waits for real process capacity while independent reads stay runnable', async () => {
+  resetSchedulerResourceStateForTests();
+  setGlobalVerifyCapacityForTests(1);
+  const verifyRoot = makeTempRepo('transition-capacity-verify');
+  const writerRoot = makeTempRepo('transition-capacity-writer');
+  const readRoot = makeTempRepo('transition-capacity-read');
+  const state = makeState(verifyRoot, writerRoot, readRoot);
+  const writeTool = `test_transition_capacity_${randomUUID()}`;
+  const readTool = `test_transition_read_${randomUUID()}`;
+  const starts: string[] = [];
+  const verifyDone = deferred();
+  const writerDone = deferred();
+  const readDone = deferred();
+
+  __setToolJobTestRunner('run_project_command', async () => {
+    starts.push('verify-active');
+    await verifyDone.promise;
+    return { ok: true };
+  });
+  __setToolJobTestRunner(writeTool, async (_state, _args, _logger, _setCancelFn, transitionAccess: any) => {
+    starts.push('writer-mutation');
+    const lease = await transitionAccess('verify', { verificationClass: 'fast', sharedResources: ['typescript'] });
+    starts.push('writer-downgraded');
+    await lease.runWithPermit({ verificationClass: 'fast', sharedResources: ['typescript'] }, async () => {
+      starts.push('writer-child');
+      assert.strictEqual(getSchedulerCapacitySnapshot().verify.active, 1, 'child process must reuse the reserved transition permit');
+      await writerDone.promise;
+    });
+    lease.dispose();
+    return { ok: true };
+  });
+  __setToolJobTestRunner(readTool, async () => {
+    starts.push('independent-read');
+    await readDone.promise;
+    return { ok: true };
+  });
+
+  try {
+    const activeVerify = enqueueToolJob(state, 'run_project_command', {
+      localPath: verifyRoot,
+      command: 'typecheck',
+      forceFresh: true,
+      singleFlight: false,
+    }, 'repo-command');
+    await waitUntil(() => starts.includes('verify-active'), 'Expected verification capacity to be occupied');
+    assert.strictEqual(getSchedulerCapacitySnapshot().verify.active, 1);
+
+    const transitioningWriter = enqueueToolJob(state, writeTool, { localPath: writerRoot }, 'repo-command');
+    await waitUntil(() => starts.includes('writer-mutation'), 'Expected writer mutation phase to start');
+    await new Promise(resolve => setTimeout(resolve, 75));
+    assert.strictEqual(starts.includes('writer-downgraded'), false, 'transition must wait while verification capacity is saturated');
+    assert.strictEqual(getToolJobStatus(transitioningWriter.jobId)?.accessMode, 'write');
+    assert.strictEqual(getSchedulerCapacitySnapshot().verify.active, 1);
+
+    const independentRead = enqueueToolJob(state, readTool, { localPath: readRoot, singleFlight: false }, 'repo-read');
+    await waitUntil(() => starts.includes('independent-read'), 'Expected independent read to run while transition waits for capacity');
+    readDone.resolve();
+    await waitForStatus(independentRead.jobId, 'succeeded');
+
+    verifyDone.resolve();
+    await waitForStatus(activeVerify.jobId, 'succeeded');
+    await waitUntil(() => starts.includes('writer-downgraded') && starts.includes('writer-child'), 'Expected writer to reserve freed capacity then start verification');
+    assert.strictEqual(getToolJobStatus(transitioningWriter.jobId)?.accessMode, 'verify');
+    assert.strictEqual(getSchedulerCapacitySnapshot().verify.active, 1);
+
+    writerDone.resolve();
+    await waitForStatus(transitioningWriter.jobId, 'succeeded');
+    assert.strictEqual(getSchedulerCapacitySnapshot().verify.active, 0, 'terminal writer must release the reserved verification permit');
+  } finally {
+    verifyDone.resolve();
+    writerDone.resolve();
+    readDone.resolve();
+    __setToolJobTestRunner('run_project_command', null);
+    __setToolJobTestRunner(writeTool, null);
+    __setToolJobTestRunner(readTool, null);
+    resetSchedulerResourceStateForTests();
+  }
+});
+
+test('mcpToolJobService - cancelling a writer waiting for verification capacity releases its write lock without leaking a permit', async () => {
+  resetSchedulerResourceStateForTests();
+  setGlobalVerifyCapacityForTests(1);
+  const verifyRoot = makeTempRepo('transition-cancel-verify');
+  const writerRoot = makeTempRepo('transition-cancel-writer');
+  const state = makeState(verifyRoot, writerRoot);
+  const writeTool = `test_transition_cancel_${randomUUID()}`;
+  const readTool = `test_transition_cancel_read_${randomUUID()}`;
+  const starts: string[] = [];
+  const verifyDone = deferred();
+  const readDone = deferred();
+
+  __setToolJobTestRunner('run_project_command', async () => {
+    starts.push('verify-active');
+    await verifyDone.promise;
+    return { ok: true };
+  });
+  __setToolJobTestRunner(writeTool, async (_state, _args, _logger, _setCancelFn, transitionAccess: any) => {
+    starts.push('writer-mutation');
+    await transitionAccess('verify', { verificationClass: 'fast', sharedResources: ['typescript'] });
+    starts.push('writer-downgraded');
+    return { ok: true };
+  });
+  __setToolJobTestRunner(readTool, async () => {
+    starts.push('same-root-read');
+    await readDone.promise;
+    return { ok: true };
+  });
+
+  try {
+    const activeVerify = enqueueToolJob(state, 'run_project_command', {
+      localPath: verifyRoot,
+      command: 'typecheck',
+      forceFresh: true,
+      singleFlight: false,
+    }, 'repo-command');
+    await waitUntil(() => starts.includes('verify-active'), 'Expected verification capacity to be occupied');
+
+    const writer = enqueueToolJob(state, writeTool, { localPath: writerRoot }, 'repo-command');
+    await waitUntil(() => starts.includes('writer-mutation'), 'Expected writer mutation phase to start');
+    await new Promise(resolve => setTimeout(resolve, 75));
+    assert.strictEqual(starts.includes('writer-downgraded'), false);
+    assert.strictEqual(getToolJobStatus(writer.jobId)?.accessMode, 'write');
+    assert.strictEqual(getSchedulerCapacitySnapshot().verify.active, 1);
+
+    assert.strictEqual(cancelToolJob(writer.jobId), true);
+    await waitForStatus(writer.jobId, 'cancelled');
+    const sameRootRead = enqueueToolJob(state, readTool, { localPath: writerRoot, singleFlight: false }, 'repo-read');
+    await waitUntil(() => starts.includes('same-root-read'), 'Expected cancelled transition to release the writer lock');
+    assert.strictEqual(starts.includes('writer-downgraded'), false, 'cancelled writer must never enter verify phase');
+    assert.strictEqual(getSchedulerCapacitySnapshot().verify.active, 1, 'cancelled writer must not leak or acquire a verification permit');
+
+    readDone.resolve();
+    await waitForStatus(sameRootRead.jobId, 'succeeded');
+    verifyDone.resolve();
+    await waitForStatus(activeVerify.jobId, 'succeeded');
+    assert.strictEqual(getSchedulerCapacitySnapshot().verify.active, 0);
+  } finally {
+    verifyDone.resolve();
+    readDone.resolve();
+    __setToolJobTestRunner('run_project_command', null);
+    __setToolJobTestRunner(writeTool, null);
+    __setToolJobTestRunner(readTool, null);
+    resetSchedulerResourceStateForTests();
+  }
+});
+
+test('mcpToolJobService - verification failure after write downgrade releases the reserved process permit', async () => {
+  resetSchedulerResourceStateForTests();
+  setGlobalVerifyCapacityForTests(1);
+  const root = makeTempRepo('transition-failure-release');
+  const state = makeState(root);
+  const writeTool = `test_transition_failure_${randomUUID()}`;
+
+  __setToolJobTestRunner(writeTool, async (_state, _args, _logger, _setCancelFn, transitionAccess: any) => {
+    await transitionAccess('verify', { verificationClass: 'fast', sharedResources: ['typescript'] });
+    assert.strictEqual(getSchedulerCapacitySnapshot().verify.active, 1);
+    throw new Error('expected failure before the reserved permit is consumed');
+  });
+
+  try {
+    const writer = enqueueToolJob(state, writeTool, { localPath: root }, 'repo-command');
+    await waitForStatus(writer.jobId, 'failed');
+    assert.strictEqual(getSchedulerCapacitySnapshot().verify.active, 0, 'failed child verification must release its process permit');
+  } finally {
+    __setToolJobTestRunner(writeTool, null);
+    resetSchedulerResourceStateForTests();
+  }
+});
+
+test('mcpToolJobService - timed out write-to-verify job releases an unconsumed reserved process permit', async () => {
+  resetSchedulerResourceStateForTests();
+  setGlobalVerifyCapacityForTests(1);
+  const root = makeTempRepo('transition-timeout-release');
+  const state = makeState(root);
+  const writeTool = `test_transition_timeout_${randomUUID()}`;
+
+  __setToolJobTestRunner(writeTool, async (_state, _args, _logger, _setCancelFn, transitionAccess: any) => {
+    await transitionAccess('verify', { verificationClass: 'fast', sharedResources: ['typescript'] });
+    assert.strictEqual(getSchedulerCapacitySnapshot().verify.active, 1);
+    return { ok: false, timedOut: true, status: 'timed_out' };
+  });
+
+  try {
+    const writer = enqueueToolJob(state, writeTool, { localPath: root }, 'repo-command');
+    await waitForStatus(writer.jobId, 'timed_out');
+    assert.strictEqual(getSchedulerCapacitySnapshot().verify.active, 0, 'timed out transition must release its reserved verification permit');
+  } finally {
+    __setToolJobTestRunner(writeTool, null);
+    resetSchedulerResourceStateForTests();
+  }
+});
+
+test('mcpToolJobService - concurrent composite transitions share one global verification process budget', async () => {
+  resetSchedulerResourceStateForTests();
+  setGlobalVerifyCapacityForTests(1);
+  const rootA = makeTempRepo('composite-budget-a');
+  const rootB = makeTempRepo('composite-budget-b');
+  const state = makeState(rootA, rootB);
+  const writeTool = `test_composite_budget_${randomUUID()}`;
+  const starts: string[] = [];
+  const childGates = { a: deferred(), b: deferred() };
+  let activeChildren = 0;
+  let maxActiveChildren = 0;
+
+  __setToolJobTestRunner(writeTool, async (_state, args, _logger, _setCancelFn, transitionAccess: any) => {
+    const label = args.label as keyof typeof childGates;
+    starts.push(`${label}-mutation`);
+    const lease = await transitionAccess('verify', { verificationClass: 'fast', sharedResources: ['typescript'] });
+    starts.push(`${label}-verify`);
+    await lease.runWithPermit({ verificationClass: 'fast', sharedResources: ['typescript'] }, async () => {
+      activeChildren += 1;
+      maxActiveChildren = Math.max(maxActiveChildren, activeChildren);
+      starts.push(`${label}-child`);
+      try {
+        await childGates[label].promise;
+      } finally {
+        activeChildren -= 1;
+      }
+    });
+    lease.dispose();
+    return { ok: true, label };
+  });
+
+  try {
+    const first = enqueueToolJob(state, writeTool, { localPath: rootA, label: 'a', singleFlight: false }, 'repo-command');
+    const second = enqueueToolJob(state, writeTool, { localPath: rootB, label: 'b', singleFlight: false }, 'repo-command');
+    await waitUntil(() => starts.includes('a-mutation') && starts.includes('b-mutation'), 'Expected both independent mutation phases to start');
+    await waitUntil(() => starts.some((value) => value.endsWith('-child')), 'Expected one composite verification child to start');
+    await new Promise(resolve => setTimeout(resolve, 75));
+    assert.strictEqual(maxActiveChildren, 1);
+    assert.strictEqual(getSchedulerCapacitySnapshot().verify.active, 1);
+
+    const firstLabel = starts.includes('a-child') ? 'a' : 'b';
+    const secondLabel = firstLabel === 'a' ? 'b' : 'a';
+    childGates[firstLabel].resolve();
+    await waitUntil(() => starts.includes(`${secondLabel}-child`), 'Expected waiting composite to consume the freed global permit');
+    assert.strictEqual(maxActiveChildren, 1, 'two composite jobs must share the same global child-process budget');
+    childGates[secondLabel].resolve();
+
+    await waitForStatus(first.jobId, 'succeeded');
+    await waitForStatus(second.jobId, 'succeeded');
+    assert.strictEqual(getSchedulerCapacitySnapshot().verify.active, 0);
+  } finally {
+    childGates.a.resolve();
+    childGates.b.resolve();
+    __setToolJobTestRunner(writeTool, null);
+    resetSchedulerResourceStateForTests();
   }
 });
 

@@ -10,7 +10,8 @@ process.env.DEVFLOW_DB_PATH = path.join(tempRoot, 'devflow.db');
 
 const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
 executeAllMigrations();
-const { runProjectCommand, describeProjectCommand, getProjectCommandExecutionIdentity } = await import('../../src/server/services/projectCommandService.js');
+const projectCommandService = await import('../../src/server/services/projectCommandService.js');
+const { runProjectCommand, runProjectCommandAsync, describeProjectCommand, getProjectCommandExecutionIdentity } = projectCommandService;
 const { clearWorkspaceMetadataCache, getWorkspaceMetadataCacheStats } = await import('../../src/server/services/workspaceMetadataCacheService.js');
 const { createProject: upsertProject } = await import('../../src/server/repositories/projectRepository.js');
 const { invalidateRepoCacheDependencies } = await import('../../src/server/services/repoCacheInvalidationService.js');
@@ -168,6 +169,44 @@ test('runProjectCommand compact mode caps payload and exposes process/startup me
   assert.equal(typeof result.performance?.resultNormalizationMs, 'number');
   assert.equal(typeof result.performance?.totalMs, 'number');
   assert.equal((result.performance?.totalMs || 0) >= (result.performance?.executionMs || 0), true);
+});
+
+
+test('bounded command capture retains only the response head while counting total bytes', () => {
+  const createCapture = (projectCommandService as any).__createBoundedCommandOutputCaptureForTests;
+  assert.equal(typeof createCapture, 'function');
+  const capture = createCapture(64);
+  for (let index = 0; index < 1000; index += 1) capture.append(Buffer.from('abcdefgh', 'utf8'));
+
+  const snapshot = capture.snapshot();
+  assert.equal(snapshot.bytes, 8000);
+  assert.equal(snapshot.truncated, true);
+  assert.equal(Buffer.byteLength(snapshot.value, 'utf8') <= 64, true);
+});
+
+test('runProjectCommandAsync reports full byte counts while returning bounded output', async () => {
+  const root = createProject('async-bounded-output', {
+    test: 'node scripts/async-output.mjs',
+  });
+  const emittedBytes = 256 * 1024;
+  fs.writeFileSync(path.join(root, 'scripts', 'async-output.mjs'), `process.stdout.write('z'.repeat(${emittedBytes}));\n`);
+  let streamedBytes = 0;
+
+  const result = await runProjectCommandAsync(
+    stateFor(root),
+    { projectId: 'project-command', command: 'test', maxOutputBytes: 2048, forceFresh: true },
+    {
+      stdout: (data) => { streamedBytes += Buffer.byteLength(data, 'utf8'); },
+      stderr: () => {},
+    },
+    () => {},
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.stdoutBytes, emittedBytes);
+  assert.equal(result.stdoutTruncated, true);
+  assert.equal(streamedBytes, emittedBytes);
+  assert.equal(Buffer.byteLength(result.stdout, 'utf8') < 2200, true);
 });
 
 test('runProjectCommand reuses an explicitly cached successful result only for the same repo revision', () => {

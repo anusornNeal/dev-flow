@@ -119,7 +119,7 @@ interface QueueEntry extends SchedulerQueueEntry {
 }
 
 const queue: QueueEntry[] = [];
-const activeJobs = new Map<string, { entry: QueueEntry; cancelFn?: () => void; leaseGeneration: number }>();
+const activeJobs = new Map<string, { entry: QueueEntry; cancelFn?: () => void; closeLogs?: () => void; leaseGeneration: number }>();
 const releasedSchedulerLeases = new Set<string>();
 const testRunners = new Map<string, AsyncRunner>();
 const jobWaiters = new Map<string, Set<(status: ReturnType<typeof getToolJobStatus>) => void>>();
@@ -141,6 +141,71 @@ const DEFAULT_VERIFICATION_BACKLOG_PER_PROJECT = 12;
 const jobPhaseTelemetryById = new Map<string, JobPhaseTelemetryState>();
 const JOB_LEASE_MS = 30_000;
 const JOB_HEARTBEAT_MS = 10_000;
+const JOB_LOG_BATCH_BYTES = 32 * 1024;
+const JOB_LOG_FLUSH_MS = 75;
+
+type BufferedJobLogger = {
+  logger: Logger;
+  flush: () => void;
+  close: () => void;
+};
+
+function createBufferedJobLogger(jobId: string, guard: JobLeaseGuard): BufferedJobLogger {
+  let stdoutPending = '';
+  let stderrPending = '';
+  let stdoutPendingBytes = 0;
+  let stderrPendingBytes = 0;
+  let closed = false;
+
+  const flushStream = (stream: 'stdout' | 'stderr') => {
+    const data = stream === 'stdout' ? stdoutPending : stderrPending;
+    if (!data) return;
+    if (stream === 'stdout') {
+      stdoutPending = '';
+      stdoutPendingBytes = 0;
+    } else {
+      stderrPending = '';
+      stderrPendingBytes = 0;
+    }
+    appendJobLog(jobId, stream, data, guard);
+  };
+
+  const flush = () => {
+    flushStream('stdout');
+    flushStream('stderr');
+  };
+
+  const append = (stream: 'stdout' | 'stderr', data: string) => {
+    if (closed || !data) return;
+    const bytes = Buffer.byteLength(data, 'utf8');
+    if (stream === 'stdout') {
+      stdoutPending += data;
+      stdoutPendingBytes += bytes;
+      if (stdoutPendingBytes >= JOB_LOG_BATCH_BYTES) flushStream('stdout');
+    } else {
+      stderrPending += data;
+      stderrPendingBytes += bytes;
+      if (stderrPendingBytes >= JOB_LOG_BATCH_BYTES) flushStream('stderr');
+    }
+  };
+
+  const timer = setInterval(flush, JOB_LOG_FLUSH_MS);
+  timer.unref();
+
+  return {
+    logger: {
+      stdout: (data: string) => append('stdout', data),
+      stderr: (data: string) => append('stderr', data),
+    },
+    flush,
+    close: () => {
+      if (closed) return;
+      flush();
+      closed = true;
+      clearInterval(timer);
+    },
+  };
+}
 const JOB_RECOVERY_SWEEP_MS = 5_000;
 const JOB_WORKER_ID = `devflow-${process.pid}-${randomUUID().slice(0, 8)}`;
 let durableRecoveryTimer: NodeJS.Timeout | undefined;
@@ -889,7 +954,9 @@ export function getToolJobStatus(jobId: string) {
 
 export function cancelToolJob(jobId: string) {
   const leaderJobId = followerToLeader.get(jobId);
-  const reason = leaderJobId ? 'Cancelled single-flight follower.' : activeJobs.has(jobId) ? 'Cancellation requested.' : 'Cancelled before start.';
+  const activeBeforeCancel = activeJobs.get(jobId);
+  const reason = leaderJobId ? 'Cancelled single-flight follower.' : activeBeforeCancel ? 'Cancellation requested.' : 'Cancelled before start.';
+  activeBeforeCancel?.closeLogs?.();
   const persisted = requestJobCancellation(jobId, reason);
   if (!persisted) return false;
 
@@ -912,7 +979,7 @@ export function cancelToolJob(jobId: string) {
     return true;
   }
 
-  const active = activeJobs.get(jobId);
+  const active = activeBeforeCancel ?? activeJobs.get(jobId);
   if (active) {
     active.cancelFn?.();
     notifySchedulerCapacityWaiters();
@@ -1274,8 +1341,9 @@ async function startJob(entry: QueueEntry) {
 
   const leaseGeneration = claimed.leaseGeneration || 0;
   const leaseGuard: JobLeaseGuard = { workerId: JOB_WORKER_ID, leaseGeneration };
+  const bufferedLogger = createBufferedJobLogger(entry.jobId, leaseGuard);
   incrementScheduledResource(entry);
-  activeJobs.set(entry.jobId, { entry, leaseGeneration });
+  activeJobs.set(entry.jobId, { entry, leaseGeneration, closeLogs: bufferedLogger.close });
   const heartbeat = setInterval(() => {
     const active = activeJobs.get(entry.jobId);
     if (!active || active.leaseGeneration !== leaseGeneration) return;
@@ -1287,10 +1355,7 @@ async function startJob(entry: QueueEntry) {
   }, JOB_HEARTBEAT_MS);
   heartbeat.unref();
 
-  const logger = {
-    stdout: (data: string) => appendJobLog(entry.jobId, 'stdout', data, leaseGuard),
-    stderr: (data: string) => appendJobLog(entry.jobId, 'stderr', data, leaseGuard),
-  };
+  const logger = bufferedLogger.logger;
 
   try {
     await prepareVerificationCandidateForActiveJob(entry, leaseGeneration, leaseGuard);
@@ -1318,6 +1383,7 @@ async function startJob(entry: QueueEntry) {
       );
     }
     entry.phaseTelemetry.executionCompletedAt = Date.now();
+    bufferedLogger.flush();
 
     const currentStatus = getJob(entry.jobId)?.status;
     if (currentStatus === 'cancelled' || currentStatus === 'timed_out') {
@@ -1334,6 +1400,7 @@ async function startJob(entry: QueueEntry) {
     }
   } catch (error: any) {
     if (!entry.phaseTelemetry.executionCompletedAt) entry.phaseTelemetry.executionCompletedAt = Date.now();
+    bufferedLogger.flush();
     const currentStatus = getJob(entry.jobId)?.status;
     const normalizedError = normalizeUnknownError(error).error;
     const failureSummary = summarizeError(error);
@@ -1378,6 +1445,7 @@ async function startJob(entry: QueueEntry) {
     }
   } finally {
     clearInterval(heartbeat);
+    bufferedLogger.close();
     const leaseKey = schedulerLeaseKey(entry.jobId, leaseGeneration);
     const leaseWasAlreadyReleased = releasedSchedulerLeases.has(leaseKey);
     if (!leaseWasAlreadyReleased) {

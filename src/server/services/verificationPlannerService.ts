@@ -2,6 +2,7 @@ export type VerificationRisk = 'low' | 'medium' | 'high';
 export type ExecutionLane = 'fast' | 'safe' | 'full';
 export type VerificationCommandScope = 'targeted' | 'broad' | 'full';
 export type VerificationCommandCost = 'low' | 'medium' | 'high';
+export type VerificationExecutionClass = 'fast' | 'heavy';
 
 export type VerificationCommandDescriptor = {
   command: string;
@@ -9,6 +10,8 @@ export type VerificationCommandDescriptor = {
   scope: VerificationCommandScope;
   cost: VerificationCommandCost;
   resourceKey: string;
+  verificationClass?: VerificationExecutionClass;
+  sharedResources?: string[];
 };
 
 export type VerificationPlanInput = {
@@ -26,6 +29,8 @@ export type VerificationPlanStep = {
   scope?: VerificationCommandScope;
   cost?: VerificationCommandCost;
   resourceKey?: string;
+  verificationClass?: VerificationExecutionClass;
+  sharedResources?: string[];
   stage?: number;
   reason: string;
 };
@@ -173,6 +178,8 @@ export function planVerification(input: VerificationPlanInput): VerificationPlan
         cost: descriptor.cost,
         resourceKey: descriptor.resourceKey,
         stage: COST_RANK[descriptor.cost],
+        verificationClass: descriptor.verificationClass ?? (descriptor.scope === 'full' || descriptor.cost === 'high' ? 'heavy' : 'fast'),
+        sharedResources: unique(descriptor.sharedResources?.length ? descriptor.sharedResources : [descriptor.resourceKey]),
       } : {}),
       reason: lane === 'full'
         ? 'Selected by FULL verification plan.'

@@ -77,4 +77,36 @@ test('explicit FULL lane selects one FULL descriptor and marks broad verificatio
   assert.equal(plan.lane, 'full');
   assert.deepEqual(plan.commands, ['verify']);
   assert.equal(plan.requiresBroadVerify, true);
+  assert.equal(plan.steps[0]?.verificationClass, 'heavy');
+  assert.deepEqual(plan.steps[0]?.sharedResources, ['repo']);
+});
+
+test('planner propagates fast verification resource metadata without changing selection', () => {
+  const plan = planVerification({
+    changedFiles: ['src/components/Toolbar.tsx'],
+    resolvedCommands: [
+      {
+        command: 'typecheck',
+        semanticKey: 'tsc',
+        scope: 'broad',
+        cost: 'medium',
+        resourceKey: 'typescript',
+        verificationClass: 'fast',
+        sharedResources: ['typescript'],
+      },
+      {
+        command: 'verify',
+        semanticKey: 'full-verify',
+        scope: 'full',
+        cost: 'high',
+        resourceKey: 'repo',
+        verificationClass: 'heavy',
+        sharedResources: ['repo'],
+      },
+    ],
+  });
+
+  assert.deepEqual(plan.commands, ['typecheck']);
+  assert.equal(plan.steps[0]?.verificationClass, 'fast');
+  assert.deepEqual(plan.steps[0]?.sharedResources, ['typescript']);
 });

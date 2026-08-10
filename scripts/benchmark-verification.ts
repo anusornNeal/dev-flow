@@ -23,6 +23,20 @@ const compactCommandMetrics = (result: any, wallMs: number, queueWaitMs = 0) => 
   cacheHit: result?.cache?.hit === true,
 });
 
+const percentile = (values: number[], percentileValue: number) => {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((left, right) => left - right);
+  const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil((percentileValue / 100) * sorted.length) - 1));
+  return sorted[index];
+};
+
+const summarizeLatency = (values: number[]) => ({
+  count: values.length,
+  p50Ms: percentile(values, 50),
+  p95Ms: percentile(values, 95),
+  maxMs: values.length > 0 ? Math.max(...values) : 0,
+});
+
 function git(repo: string, args: string[]) {
   const result = spawnSync('git', args, { cwd: repo, encoding: 'utf8', shell: false });
   if (result.status !== 0) throw new Error(result.stderr || result.stdout || `git ${args.join(' ')} failed`);
@@ -232,6 +246,105 @@ try {
     parallelVerification: targetedResult.parallelVerification === true,
   };
 
+  const resourceMixRoot = path.join(tempRoot, 'resource-mix-repo');
+  fs.mkdirSync(path.join(resourceMixRoot, 'scripts'), { recursive: true });
+  fs.mkdirSync(path.join(resourceMixRoot, '.devflow'), { recursive: true });
+  fs.writeFileSync(path.join(resourceMixRoot, 'scripts', 'heavy.mjs'), "await new Promise((resolve) => setTimeout(resolve, 900));\n", 'utf8');
+  fs.writeFileSync(path.join(resourceMixRoot, 'scripts', 'fast.mjs'), "await new Promise((resolve) => setTimeout(resolve, 250));\n", 'utf8');
+  fs.writeFileSync(path.join(resourceMixRoot, 'package.json'), JSON.stringify({
+    type: 'module',
+    scripts: { verify: 'node scripts/heavy.mjs' },
+  }, null, 2), 'utf8');
+  fs.writeFileSync(path.join(resourceMixRoot, '.devflow', 'commands.yaml'), [
+    'commands:',
+    '  fast-check:',
+    '    executable: node',
+    '    args:',
+    '      - scripts/fast.mjs',
+    '    category: test',
+    '',
+  ].join('\n'), 'utf8');
+  git(resourceMixRoot, ['init']);
+  git(resourceMixRoot, ['config', 'user.name', 'DevFlow Benchmark']);
+  git(resourceMixRoot, ['config', 'user.email', 'devflow-benchmark@example.com']);
+  git(resourceMixRoot, ['add', '.']);
+  git(resourceMixRoot, ['commit', '-m', 'initial']);
+  createProject({ id: 'benchmark-resource-mix', name: 'Resource Mix Benchmark', repoUrl: 'https://example.com/resource-mix', localPath: resourceMixRoot });
+  const resourceMixState: any = {
+    projectsCache: [{ id: 'benchmark-resource-mix', name: 'Resource Mix Benchmark', repoUrl: 'https://example.com/resource-mix', localPath: resourceMixRoot }],
+  };
+
+  const resourceMixStartedAt = now();
+  const heavyJob = enqueueToolJob(resourceMixState, 'run_project_command', {
+    projectId: 'benchmark-resource-mix',
+    command: 'verify',
+    responseMode: 'compact',
+    forceFresh: true,
+    singleFlight: false,
+  }, 'repo-command');
+  const heavyRunningDeadline = now() + 3000;
+  while (getToolJobStatus(heavyJob.jobId)?.status === 'queued' && now() < heavyRunningDeadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  if (getToolJobStatus(heavyJob.jobId)?.status !== 'running') {
+    throw new Error('Resource-mix heavy verification did not enter running state.');
+  }
+
+  const queuedJobs = [
+    { kind: 'heavy' as const, jobId: heavyJob.jobId, queuedAt: resourceMixStartedAt },
+    ...Array.from({ length: 3 }, () => {
+      const queuedAt = now();
+      const job = enqueueToolJob(resourceMixState, 'run_project_command', {
+        projectId: 'benchmark-resource-mix',
+        command: 'fast-check',
+        responseMode: 'compact',
+        forceFresh: true,
+        singleFlight: false,
+      }, 'repo-command');
+      return { kind: 'fast' as const, jobId: job.jobId, queuedAt };
+    }),
+  ];
+
+  const activeVerifySamples: number[] = [];
+  let sampleResourceMix = true;
+  const sampler = (async () => {
+    while (sampleResourceMix) {
+      activeVerifySamples.push(Number(getQueueMetrics().capacity?.verify?.active || 0));
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  })();
+  const completedJobs = await Promise.all(queuedJobs.map(async (entry) => {
+    await waitForToolJob(entry.jobId, 30_000);
+    return {
+      ...entry,
+      completedAt: now(),
+      status: getToolJobStatus(entry.jobId),
+    };
+  }));
+  sampleResourceMix = false;
+  await sampler;
+
+  const summarizeResourceJobs = (kind: 'fast' | 'heavy') => {
+    const jobs = completedJobs.filter((entry) => entry.kind === kind);
+    return {
+      wall: summarizeLatency(jobs.map((entry) => Math.max(0, entry.completedAt - entry.queuedAt))),
+      capacityWait: summarizeLatency(jobs.map((entry) => Number(entry.status?.phaseTimings?.capacityWaitMs || 0))),
+      queueWait: summarizeLatency(jobs.map((entry) => Number(entry.status?.phaseTimings?.queueWaitMs ?? entry.status?.waitMs ?? 0))),
+      execution: summarizeLatency(jobs.map((entry) => Number(entry.status?.phaseTimings?.executionMs ?? entry.status?.durationMs ?? 0))),
+    };
+  };
+  const resourceMix = {
+    ok: completedJobs.every((entry) => entry.status?.status === 'succeeded'),
+    currentVerifyCapacity: Number(getQueueMetrics().capacity?.verify?.capacity || 0),
+    maxConcurrentProcesses: activeVerifySamples.length > 0 ? Math.max(...activeVerifySamples) : 0,
+    totalWallMs: now() - resourceMixStartedAt,
+    fast: summarizeResourceJobs('fast'),
+    heavy: summarizeResourceJobs('heavy'),
+  };
+  if (!resourceMix.ok) {
+    throw new Error(`Resource-mix benchmark failed: ${JSON.stringify(resourceMix)}`);
+  }
+
   let full: any = null;
   if (process.argv.includes('--full')) {
     startedAt = now();
@@ -276,6 +389,7 @@ try {
       concurrentTypecheck,
       multiChat,
       targeted,
+      resourceMix,
       full,
     },
   };

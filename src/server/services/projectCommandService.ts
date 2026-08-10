@@ -51,6 +51,7 @@ type ResolvedCommand = {
 export type ProjectCommandScope = 'targeted' | 'broad' | 'full';
 export type ProjectCommandCost = 'low' | 'medium' | 'high';
 export type ProjectCommandAccess = 'verify' | 'write';
+export type ProjectCommandVerificationClass = 'fast' | 'heavy';
 
 export type ProjectCommandDescriptor = {
   command: string;
@@ -59,6 +60,8 @@ export type ProjectCommandDescriptor = {
   cost: ProjectCommandCost;
   access: ProjectCommandAccess;
   resourceKey: string;
+  verificationClass: ProjectCommandVerificationClass;
+  sharedResources: string[];
   executable: string;
   args: string[];
   cwd: string;
@@ -349,6 +352,14 @@ function accessForResolvedCommand(resolvedCommand: ResolvedCommand): ProjectComm
   return resolvedCommand.category === 'test' ? 'verify' : 'write';
 }
 
+function verificationClassFor(scope: ProjectCommandScope, cost: ProjectCommandCost): ProjectCommandVerificationClass {
+  return scope === 'full' || cost === 'high' ? 'heavy' : 'fast';
+}
+
+function sharedResourcesFor(resourceKey: string) {
+  return [resourceKey];
+}
+
 export function describeProjectCommand(state: AppState, args: Record<string, any>): ProjectCommandDescriptor {
   const root = resolveProjectRoot(state, args);
   const command = resolveCommandLabel(args.command ?? args.preset);
@@ -366,6 +377,8 @@ export function describeProjectCommand(state: AppState, args: Record<string, any
       : scope === 'targeted'
         ? `command:${semanticKey.slice(0, 16)}`
         : 'repo';
+  const verificationClass = verificationClassFor(scope, cost);
+  const sharedResources = sharedResourcesFor(resourceKey);
 
   return {
     command,
@@ -374,6 +387,8 @@ export function describeProjectCommand(state: AppState, args: Record<string, any
     cost,
     access,
     resourceKey,
+    verificationClass,
+    sharedResources,
     executable: resolvedCommand.executable,
     args: [...resolvedCommand.args],
     cwd: path.relative(root, cwdPath) || '.',

@@ -12,6 +12,7 @@ import { getRepoContextBundlePerformanceSummary } from './projectStartContextSer
 import { getSessionWorkspaceMetrics } from './sessionWorkspaceService';
 import { getWorkspaceIntegrationMetrics } from './workspaceIntegrationService';
 import { getMcpTransportSummary } from './mcpTransportMonitor';
+import { getVerificationResourceProfileDiagnostics } from './verificationResourceProfileService';
 import { DEVFLOW_CONTRACT_VERSION, getCapabilityCatalog } from '../contracts/devflowContract';
 import {
   classifyRuntimeIdentity,
@@ -663,6 +664,7 @@ export function getDevFlowDiagnostics(options?: {
   const toolSummary = getToolCallSummary({ now, windowMs: options?.windowMs });
   const mcpTransport = getMcpTransportSummary({ now, windowMs: options?.windowMs });
   const performanceHistory = getPerformanceHistoryComparison({ now, windowMs: options?.windowMs });
+  const verificationResources = getVerificationResourceProfileDiagnostics();
   const jobMetrics = getJobMetrics();
   const isolation = buildIsolationDiagnostics(jobMetrics, getSessionWorkspaceMetrics(), getWorkspaceIntegrationMetrics());
   const activeAgentRuns = getActiveAgentRuns(now);
@@ -710,6 +712,7 @@ export function getDevFlowDiagnostics(options?: {
     mcpTransport,
     telemetryPersistence,
     performanceHistory,
+    verificationResources,
     recommendations,
   };
 }

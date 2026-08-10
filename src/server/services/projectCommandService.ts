@@ -2,7 +2,14 @@ import { spawnSync, spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'node:crypto';
-import { resolvePackageManagerInvocation } from '../../lib/platformRuntime';
+import {
+  captureSystemResourceSnapshot,
+  diffSystemResourceSnapshots,
+  getMachineRuntimeProfile,
+  normalizeLocalPathIdentity,
+  resolvePackageManagerInvocation,
+  sampleProcessTreeResources,
+} from '../../lib/platformRuntime';
 import type { AppState } from '../types';
 import { createApiError } from './api';
 import { resolveProjectRoot, resolveSafePath } from './localFileService';
@@ -20,6 +27,12 @@ import {
 import { getCachedCommandResult, rememberCommandResult } from './commandResultCacheService';
 import { readWorkspaceMetadataFile } from './workspaceMetadataCacheService';
 import { getRepoCacheLineage, recordRepoCacheAccess, registerRepoCacheInvalidator } from './repoCacheInvalidationService';
+import {
+  predictVerificationResourceCost,
+  recordVerificationResourceSample,
+  type VerificationResourcePrediction,
+  type VerificationResourceProfileDescriptor,
+} from './verificationResourceProfileService';
 
 const ALLOWED_COMMANDS = ['typecheck', 'test', 'lint', 'build', 'verify'] as const;
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -30,6 +43,9 @@ const MAX_OUTPUT_BYTES = 100_000;
 const MAX_PACKAGE_JSON_BYTES = 10 * 1024 * 1024;
 const packageScriptsParseCache = new Map<string, { size: number; mtimeMs: number; scripts: Record<string, string> }>();
 const PROJECT_COMMAND_CACHE_DEPENDENCIES = ['repo-content', 'repo-revision', 'project-rules'] as const;
+const PROCESS_RESOURCE_SAMPLE_DELAY_MS = 1_000;
+const PROCESS_RESOURCE_SAMPLE_INTERVAL_MS = 1_500;
+const MACHINE_RUNTIME_PROFILE = getMachineRuntimeProfile();
 
 registerRepoCacheInvalidator('verification-results', () => 0, {
   dependencies: [...PROJECT_COMMAND_CACHE_DEPENDENCIES],
@@ -112,6 +128,28 @@ export interface RunProjectCommandResult {
     snapshotCommit: string;
     executionKey: string;
     current: boolean;
+  };
+  resourceProfile?: {
+    profileKey: string;
+    machineKey: string;
+    sharedResources: string[];
+    prediction: VerificationResourcePrediction;
+    actual: {
+      durationMs: number;
+      systemCpuRatio: number;
+      memoryPressureRatio: number;
+      cpuRatio?: number;
+      memoryBytes?: number;
+      processCount?: number;
+      processTreeAccounting: boolean;
+      processTreeSampleAttempts: number;
+      processTreeSampleCount: number;
+    };
+    predictionError: {
+      duration?: number;
+      cpu?: number;
+      memory?: number;
+    };
   };
   cache?: {
     hit: boolean;
@@ -402,11 +440,12 @@ function sharedResourcesFor(resourceKey: string) {
   return [resourceKey];
 }
 
-export function describeProjectCommand(state: AppState, args: Record<string, any>): ProjectCommandDescriptor {
-  const root = resolveProjectRoot(state, args);
-  const command = resolveCommandLabel(args.command ?? args.preset);
-  const resolvedCommand = resolveAllowedCommand(root, command);
-  const cwdPath = resolveSafeCommandCwd(root, args.cwd ?? resolvedCommand.cwd);
+function buildProjectCommandDescriptor(
+  root: string,
+  command: string,
+  resolvedCommand: ResolvedCommand,
+  cwdPath: string,
+): ProjectCommandDescriptor {
   const semanticKey = semanticKeyForResolvedCommand(root, resolvedCommand, cwdPath);
   const scope = scopeForResolvedCommand(root, command, resolvedCommand);
   const normalizedScript = normalizeScript(resolvedCommand.script);
@@ -421,7 +460,6 @@ export function describeProjectCommand(state: AppState, args: Record<string, any
         : 'repo';
   const verificationClass = verificationClassFor(scope, cost);
   const sharedResources = sharedResourcesFor(resourceKey);
-
   return {
     command,
     semanticKey,
@@ -436,6 +474,93 @@ export function describeProjectCommand(state: AppState, args: Record<string, any
     cwd: path.relative(root, cwdPath) || '.',
     source: resolvedCommand.source,
     ...(resolvedCommand.configPath ? { configPath: resolvedCommand.configPath } : {}),
+  };
+}
+
+export function describeProjectCommand(state: AppState, args: Record<string, any>): ProjectCommandDescriptor {
+  const root = resolveProjectRoot(state, args);
+  const command = resolveCommandLabel(args.command ?? args.preset);
+  const resolvedCommand = resolveAllowedCommand(root, command);
+  const cwdPath = resolveSafeCommandCwd(root, args.cwd ?? resolvedCommand.cwd);
+  return buildProjectCommandDescriptor(root, command, resolvedCommand, cwdPath);
+}
+
+function resourceProfileDescriptorFor(
+  root: string,
+  commandDescriptor: ProjectCommandDescriptor,
+  args: Record<string, any>,
+): VerificationResourceProfileDescriptor {
+  const projectId = typeof args.projectId === 'string' && args.projectId.trim() ? args.projectId.trim() : '';
+  const repositoryKey = projectId
+    ? `project:${projectId}`
+    : `repo:${crypto.createHash('sha256').update(normalizeLocalPathIdentity(root)).digest('hex').slice(0, 24)}`;
+  return {
+    repositoryKey,
+    semanticKey: commandDescriptor.semanticKey,
+    machineKey: MACHINE_RUNTIME_PROFILE.key,
+    cost: commandDescriptor.cost,
+    verificationClass: commandDescriptor.verificationClass,
+    sharedResources: [...commandDescriptor.sharedResources],
+  };
+}
+
+function relativePredictionError(predicted: number | undefined, actual: number | undefined) {
+  if (predicted === undefined || actual === undefined || !Number.isFinite(predicted) || !Number.isFinite(actual) || predicted <= 0) return undefined;
+  return Math.abs(actual - predicted) / predicted;
+}
+
+type ProcessResourceAggregate = {
+  attempts: number;
+  samples: number;
+  treeAccounting: boolean;
+  maxCpuRatio?: number;
+  maxRssBytes?: number;
+  maxProcessCount?: number;
+};
+
+function finalizeResourceProfile(
+  descriptor: VerificationResourceProfileDescriptor,
+  prediction: VerificationResourcePrediction,
+  systemStart: ReturnType<typeof captureSystemResourceSnapshot>,
+  durationMs: number,
+  status: CommandStatus,
+  processAggregate: ProcessResourceAggregate = { attempts: 0, samples: 0, treeAccounting: false },
+) {
+  const systemDelta = diffSystemResourceSnapshots(systemStart, captureSystemResourceSnapshot());
+  const actualCpuRatio = processAggregate.maxCpuRatio ?? systemDelta.cpuUtilization;
+  const actual = {
+    durationMs,
+    systemCpuRatio: systemDelta.cpuUtilization,
+    memoryPressureRatio: systemDelta.peakMemoryPressure,
+    ...(actualCpuRatio !== undefined ? { cpuRatio: actualCpuRatio } : {}),
+    ...(processAggregate.maxRssBytes !== undefined ? { memoryBytes: processAggregate.maxRssBytes } : {}),
+    ...(processAggregate.maxProcessCount !== undefined ? { processCount: processAggregate.maxProcessCount } : {}),
+    processTreeAccounting: processAggregate.treeAccounting,
+    processTreeSampleAttempts: processAggregate.attempts,
+    processTreeSampleCount: processAggregate.samples,
+  };
+  recordVerificationResourceSample(descriptor, {
+    status,
+    durationMs,
+    cpuRatio: actual.cpuRatio,
+    memoryBytes: actual.memoryBytes,
+    processCount: actual.processCount,
+    systemCpuRatio: actual.systemCpuRatio,
+    memoryPressureRatio: actual.memoryPressureRatio,
+    treeAccounting: actual.processTreeAccounting,
+    predicted: prediction,
+  });
+  return {
+    profileKey: prediction.profileKey,
+    machineKey: descriptor.machineKey,
+    sharedResources: [...descriptor.sharedResources],
+    prediction,
+    actual,
+    predictionError: {
+      duration: relativePredictionError(prediction.expected.durationMs, durationMs),
+      cpu: relativePredictionError(prediction.expected.cpuRatio, actualCpuRatio),
+      memory: relativePredictionError(prediction.expected.memoryBytes, processAggregate.maxRssBytes),
+    },
   };
 }
 
@@ -866,6 +991,10 @@ export function runProjectCommand(state: AppState, args: Record<string, any>): R
     });
   }
 
+  const commandDescriptor = buildProjectCommandDescriptor(root, command, resolvedCommand, cwdPath);
+  const resourceDescriptor = resourceProfileDescriptorFor(root, commandDescriptor, args);
+  const resourcePrediction = predictVerificationResourceCost(resourceDescriptor);
+  const systemResourceStart = captureSystemResourceSnapshot();
   const startedAt = Date.now();
   const result = spawnSync(resolvedCommand.executable, resolvedCommand.args, {
     cwd: cwdPath,
@@ -905,7 +1034,14 @@ export function runProjectCommand(state: AppState, args: Record<string, any>): R
     resultNormalizationMs,
     totalMs: Date.now() - totalStartedAt,
   });
-  return rememberSuccessfulCommandResult(cacheContext, finalizedResult, args);
+  const resourceProfile = finalizeResourceProfile(
+    resourceDescriptor,
+    resourcePrediction,
+    systemResourceStart,
+    durationMs,
+    finalizedResult.status,
+  );
+  return rememberSuccessfulCommandResult(cacheContext, { ...finalizedResult, resourceProfile }, args);
 }
 
 export async function runProjectCommandAsync(state: AppState, args: Record<string, any>, logger: { stdout: (data: string) => void, stderr: (data: string) => void }, setCancelFn: (fn: () => void) => void): Promise<RunProjectCommandResult> {
@@ -981,6 +1117,10 @@ export async function runProjectCommandAsync(state: AppState, args: Record<strin
     }), sourceRoot, suppliedCandidate, executionIdentity);
   }
 
+  const commandDescriptor = buildProjectCommandDescriptor(executionRoot, command, resolvedCommand, executionCwdPath);
+  const resourceDescriptor = resourceProfileDescriptorFor(sourceRoot, commandDescriptor, args);
+  const resourcePrediction = predictVerificationResourceCost(resourceDescriptor);
+  const systemResourceStart = captureSystemResourceSnapshot();
   const startedAt = Date.now();
 
   return new Promise((resolve, reject) => {
@@ -998,6 +1138,36 @@ export async function runProjectCommandAsync(state: AppState, args: Record<strin
     let timedOut = false;
     const stdoutCapture = createBoundedCommandOutputCapture(maxOutputBytes);
     const stderrCapture = createBoundedCommandOutputCapture(maxOutputBytes);
+    const processAggregate: ProcessResourceAggregate = { attempts: 0, samples: 0, treeAccounting: false };
+    let resourceSampleInterval: NodeJS.Timeout | undefined;
+    const sampleChildResources = () => {
+      if (!child.pid) return;
+      processAggregate.attempts += 1;
+      const sample = sampleProcessTreeResources(child.pid);
+      if (!sample.supported) return;
+      processAggregate.samples += 1;
+      processAggregate.treeAccounting = processAggregate.treeAccounting || sample.treeAccounting;
+      if (sample.cpuRatio !== undefined) {
+        processAggregate.maxCpuRatio = Math.max(processAggregate.maxCpuRatio ?? 0, sample.cpuRatio);
+      }
+      if (sample.rssBytes !== undefined) {
+        processAggregate.maxRssBytes = Math.max(processAggregate.maxRssBytes ?? 0, sample.rssBytes);
+      }
+      if (sample.processCount !== undefined) {
+        processAggregate.maxProcessCount = Math.max(processAggregate.maxProcessCount ?? 0, sample.processCount);
+      }
+    };
+    const resourceSampleDelay = setTimeout(() => {
+      sampleChildResources();
+      resourceSampleInterval = setInterval(sampleChildResources, PROCESS_RESOURCE_SAMPLE_INTERVAL_MS);
+      resourceSampleInterval.unref?.();
+    }, PROCESS_RESOURCE_SAMPLE_DELAY_MS);
+    resourceSampleDelay.unref?.();
+    const clearResourceSampling = () => {
+      clearTimeout(resourceSampleDelay);
+      if (resourceSampleInterval) clearInterval(resourceSampleInterval);
+      resourceSampleInterval = undefined;
+    };
 
     const timeoutId = setTimeout(() => {
       timedOut = true;
@@ -1006,6 +1176,7 @@ export async function runProjectCommandAsync(state: AppState, args: Record<strin
 
     setCancelFn(() => {
       clearTimeout(timeoutId);
+      clearResourceSampling();
       child.kill('SIGTERM');
       reject(new Error('Job cancelled'));
     });
@@ -1024,11 +1195,13 @@ export async function runProjectCommandAsync(state: AppState, args: Record<strin
 
     child.on('error', (err) => {
       clearTimeout(timeoutId);
+      clearResourceSampling();
       reject(createApiError(500, 'COMMAND_EXEC_ERROR', `Failed to run '${command}'.`, { details: err.message }));
     });
 
     child.on('close', (code, signal) => {
       clearTimeout(timeoutId);
+      clearResourceSampling();
       const durationMs = Date.now() - startedAt;
 
       const resultNormalizationStartedAt = Date.now();
@@ -1058,7 +1231,15 @@ export async function runProjectCommandAsync(state: AppState, args: Record<strin
         resultNormalizationMs,
         totalMs: Date.now() - totalStartedAt,
       });
-      const candidateResult = withVerificationCandidate(finalizedResult, sourceRoot, suppliedCandidate, executionIdentity);
+      const resourceProfile = finalizeResourceProfile(
+        resourceDescriptor,
+        resourcePrediction,
+        systemResourceStart,
+        durationMs,
+        finalizedResult.status,
+        processAggregate,
+      );
+      const candidateResult = withVerificationCandidate({ ...finalizedResult, resourceProfile }, sourceRoot, suppliedCandidate, executionIdentity);
       resolve(rememberSuccessfulCommandResult(cacheContext, candidateResult, args));
     });
   });

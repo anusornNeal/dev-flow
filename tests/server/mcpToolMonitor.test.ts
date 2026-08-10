@@ -19,6 +19,7 @@ const {
   flushPerformanceTelemetry,
   getPerformanceHistoryComparison,
 } = await import('../../src/server/services/mcpToolMonitor.js');
+const { clearVerificationResourceProfilesForTests, predictVerificationResourceCost, recordVerificationResourceSample } = await import('../../src/server/services/verificationResourceProfileService.js');
 
 test('tool monitor summarizes repeated tool calls and duplicate bursts', () => {
   clearToolCallRecords();
@@ -161,6 +162,34 @@ test('tool monitor groups response bytes by mode and tracks truncation', () => {
   assert.equal(gitShow?.p95ResponseBytes, 42000);
   assert.equal(summary.latestCalls[0].responseMode, 'standard');
   assert.equal(summary.latestCalls[1].responseTruncated, true);
+});
+
+test('diagnostics expose bounded verification resource profiles and prediction error telemetry', () => {
+  clearVerificationResourceProfilesForTests();
+  const descriptor = {
+    repositoryKey: 'project:diagnostics',
+    semanticKey: 'semantic:test',
+    machineKey: 'machine-test',
+    cost: 'medium' as const,
+    verificationClass: 'fast' as const,
+    sharedResources: ['typescript'],
+  };
+  const predicted = predictVerificationResourceCost(descriptor);
+  recordVerificationResourceSample(descriptor, {
+    status: 'succeeded',
+    durationMs: predicted.expected.durationMs / 2,
+    cpuRatio: predicted.expected.cpuRatio / 2,
+    memoryBytes: predicted.expected.memoryBytes / 2,
+    processCount: 2,
+    predicted,
+  });
+
+  const diagnostics = getDevFlowDiagnostics({ supervisorState: null } as any) as any;
+  assert.equal(diagnostics.verificationResources.profileCount, 1);
+  assert.equal(diagnostics.verificationResources.profiles[0].sampleCount, 1);
+  assert.deepEqual(diagnostics.verificationResources.profiles[0].sharedResources, ['typescript']);
+  assert.equal(diagnostics.verificationResources.predictionComparisons, 1);
+  assert.equal(diagnostics.verificationResources.meanAbsoluteRelativeError.duration > 0, true);
 });
 
 test('diagnostics expose local search backend fallback counters', () => {

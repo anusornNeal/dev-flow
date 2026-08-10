@@ -15,6 +15,7 @@ const { runProjectCommand, runProjectCommandAsync, describeProjectCommand, getPr
 const { clearWorkspaceMetadataCache, getWorkspaceMetadataCacheStats } = await import('../../src/server/services/workspaceMetadataCacheService.js');
 const { createProject: upsertProject } = await import('../../src/server/repositories/projectRepository.js');
 const { invalidateRepoCacheDependencies } = await import('../../src/server/services/repoCacheInvalidationService.js');
+const { clearVerificationResourceProfilesForTests, getVerificationResourceProfileDiagnostics } = await import('../../src/server/services/verificationResourceProfileService.js');
 
 function createProject(name: string, scripts: Record<string, string>) {
   const root = path.join(tempRoot, name);
@@ -232,6 +233,7 @@ test('runProjectCommand reuses an explicitly cached successful result only for t
   git(['add', '.']);
   git(['commit', '-m', 'initial']);
 
+  clearVerificationResourceProfilesForTests();
   const first = runProjectCommand(stateFor(root), { projectId: 'project-command', command: 'test', cacheResult: true });
   const second = runProjectCommand(stateFor(root), { projectId: 'project-command', command: 'test', cacheResult: true });
 
@@ -239,6 +241,7 @@ test('runProjectCommand reuses an explicitly cached successful result only for t
   assert.equal(second.cache?.hit, true);
   assert.equal(fs.readFileSync(counterPath, 'utf8'), '1');
   assert.equal(second.stdout, first.stdout);
+  assert.equal(getVerificationResourceProfileDiagnostics().retainedSamples, 1, 'cache hit must not be recorded as a second execution sample');
 
   fs.writeFileSync(path.join(root, 'source.txt'), 'two\n', 'utf8');
   const third = runProjectCommand(stateFor(root), { projectId: 'project-command', command: 'test', cacheResult: true });
@@ -736,6 +739,65 @@ test('verification evidence invalidates when dependency identity changes inside 
   assert.equal(second.cache?.hit, false);
   assert.equal(second.processSpawns, 1);
   assert.equal(fs.readFileSync(counterPath, 'utf8'), '2');
+});
+
+test('project command execution returns machine-specific predicted and actual resource telemetry', () => {
+  clearVerificationResourceProfilesForTests();
+  const root = createProject('resource-profile-sync', { typecheck: 'node scripts/resource.mjs' });
+  fs.writeFileSync(path.join(root, 'scripts', 'resource.mjs'), "let sum = 0; for (let i = 0; i < 100000; i += 1) sum += i; process.stdout.write(String(sum));\n", 'utf8');
+
+  const state = stateFor(root);
+  const result = runProjectCommand(state, { projectId: 'project-command', command: 'typecheck', forceFresh: true });
+
+  assert.equal(result.ok, true);
+  assert.ok(result.resourceProfile?.profileKey);
+  assert.ok(result.resourceProfile?.machineKey);
+  assert.deepEqual(result.resourceProfile?.sharedResources, describeProjectCommand(state, { projectId: 'project-command', command: 'typecheck' }).sharedResources);
+  assert.equal(typeof result.resourceProfile?.prediction.expected.durationMs, 'number');
+  assert.equal(typeof result.resourceProfile?.actual.durationMs, 'number');
+  assert.equal(typeof result.resourceProfile?.actual.systemCpuRatio, 'number');
+  assert.equal(typeof result.resourceProfile?.actual.memoryPressureRatio, 'number');
+  assert.equal(result.resourceProfile?.actual.processTreeSampleCount, 0);
+  assert.equal(JSON.stringify(result.resourceProfile).includes(root), false);
+  assert.equal(getVerificationResourceProfileDiagnostics().retainedSamples, 1);
+});
+
+test('short async project commands avoid process-tree polling overhead', async () => {
+  clearVerificationResourceProfilesForTests();
+  const root = createProject('resource-profile-short-async', { test: 'node scripts/short.mjs' });
+  fs.writeFileSync(path.join(root, 'scripts', 'short.mjs'), "await new Promise((resolve) => setTimeout(resolve, 50));\n", 'utf8');
+  let cancel = () => {};
+
+  const result = await runProjectCommandAsync(
+    stateFor(root),
+    { projectId: 'project-command', command: 'test', forceFresh: true },
+    { stdout: () => {}, stderr: () => {} },
+    (fn) => { cancel = fn; },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.resourceProfile?.actual.processTreeSampleCount, 0);
+  assert.equal(result.resourceProfile?.actual.processTreeAccounting, false);
+  assert.equal(typeof cancel, 'function');
+});
+
+test('long async project commands take bounded live process samples without requiring them for success', async () => {
+  clearVerificationResourceProfilesForTests();
+  const root = createProject('resource-profile-long-async', { test: 'node scripts/long.mjs' });
+  fs.writeFileSync(path.join(root, 'scripts', 'long.mjs'), "await new Promise((resolve) => setTimeout(resolve, 1400));\n", 'utf8');
+
+  const result = await runProjectCommandAsync(
+    stateFor(root),
+    { projectId: 'project-command', command: 'test', forceFresh: true },
+    { stdout: () => {}, stderr: () => {} },
+    () => {},
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal((result.resourceProfile?.actual.processTreeSampleAttempts || 0) >= 1, true);
+  assert.equal((result.resourceProfile?.actual.processTreeSampleCount || 0) <= result.resourceProfile!.actual.processTreeSampleAttempts, true);
+  assert.equal(typeof result.resourceProfile?.actual.durationMs, 'number');
+  assert.equal(getVerificationResourceProfileDiagnostics().retainedSamples, 1);
 });
 
 test('low-confidence or retried PASS is not promoted to reusable evidence by default', () => {

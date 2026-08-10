@@ -343,7 +343,7 @@ test('mcp server unwraps async job result envelope for run_project_command', asy
   assert.equal(JSON.parse(response.content[0].text).status, 'succeeded');
   assert.deepEqual(requests, [
     'http://127.0.0.1:3000/api/tool-jobs',
-    'http://127.0.0.1:3000/api/tool-jobs/job-command-1/result?waitMs=1000',
+    'http://127.0.0.1:3000/api/tool-jobs/job-command-1/result?waitMs=15000',
   ]);
 });
 
@@ -384,7 +384,7 @@ test('mcp server returns compact server-guided pending completion without status
   const packet = response.structuredContent;
   assert.deepEqual(requests, [
     'http://127.0.0.1:3000/api/tool-jobs',
-    'http://127.0.0.1:3000/api/tool-jobs/job-long-1/result?waitMs=1000',
+    'http://127.0.0.1:3000/api/tool-jobs/job-long-1/result?waitMs=15000',
   ]);
   assert.equal(packet.code, 'JOB_STILL_RUNNING');
   assert.equal(packet.nextPollAfterMs, 2000);
@@ -436,7 +436,7 @@ test('mcp server returns a blocked async job handle immediately without eager re
   assert.match(response.structuredContent.nextAction, /get_tool_job_result/i);
 });
 
-test('mcp server eager-polls non-command async jobs for only one second', async (t) => {
+test('mcp server keeps eligible async jobs on the original request for the streaming window', async (t) => {
   const originalFetch = global.fetch;
   const requests: string[] = [];
   t.after(() => { global.fetch = originalFetch; });
@@ -463,9 +463,10 @@ test('mcp server eager-polls non-command async jobs for only one second', async 
   });
 
   assert.equal(response.structuredContent.code, 'JOB_STILL_RUNNING');
+  assert.equal(response.structuredContent.completionMode, 'durable-handoff');
   assert.deepEqual(requests, [
     'http://127.0.0.1:3000/api/tool-jobs',
-    'http://127.0.0.1:3000/api/tool-jobs/job-commit-1/result?waitMs=1000',
+    'http://127.0.0.1:3000/api/tool-jobs/job-commit-1/result?waitMs=15000',
   ]);
 });
 
@@ -518,4 +519,37 @@ test('mcp server does not surface null text when async job result is temporarily
   assert.notEqual(response.content[0].text, 'null');
   assert.equal(response.structuredContent.code, 'JOB_RESULT_NOT_READY');
   assert.equal(JSON.parse(response.content[0].text).result, null);
+});
+
+test('mcp server hands off disconnected async requests without duplicating durable admission', async (t) => {
+  const originalFetch = global.fetch;
+  const requests: string[] = [];
+  t.after(() => { global.fetch = originalFetch; });
+
+  global.fetch = async (url: RequestInfo | URL) => {
+    const urlText = String(url);
+    requests.push(urlText);
+    const body = urlText.endsWith('/api/tool-jobs')
+      ? { jobId: 'job-disconnect-1', status: 'queued' }
+      : { jobId: 'job-disconnect-1', status: 'running', ready: false, result: null };
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => 'application/json' },
+      text: async () => JSON.stringify(body),
+    } as unknown as Response;
+  };
+
+  const controller = new AbortController();
+  controller.abort();
+  const server = createDevFlowMcpServer('http://127.0.0.1:3000');
+  const handler = (server as any)._requestHandlers.get('tools/call');
+  const response = await handler({
+    method: 'tools/call',
+    params: { name: 'run_project_command', arguments: { projectId: 'proj-1', command: 'test' } },
+  }, { signal: controller.signal });
+
+  assert.equal(response.structuredContent.jobId, 'job-disconnect-1');
+  assert.equal(response.structuredContent.completionMode, 'durable-handoff');
+  assert.deepEqual(requests, ['http://127.0.0.1:3000/api/tool-jobs']);
 });

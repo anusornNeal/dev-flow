@@ -61,6 +61,52 @@ test('tool monitor summarizes repeated tool calls and duplicate bursts', () => {
   ]);
 });
 
+test('tool monitor separates logical request completion from execution and keeps handoff telemetry bounded', () => {
+  clearToolCallRecords();
+  const now = Date.now();
+  recordToolCall({
+    toolName: 'run_project_command',
+    args: { projectId: 'project-streaming', secret: 'do-not-retain' },
+    status: 200,
+    durationMs: 2_950,
+    logicalOperationDurationMs: 3_000,
+    completionMode: 'request-stream',
+    handoffCount: 0,
+    pollCount: 1,
+    jobId: 'job-stream-1',
+    executionDurationMs: 2_700,
+    timestamp: now,
+  });
+  recordToolCall({
+    toolName: 'run_project_command',
+    args: { projectId: 'project-streaming', secret: 'do-not-retain' },
+    status: 200,
+    durationMs: 1_000,
+    logicalOperationDurationMs: 1_005,
+    completionMode: 'durable-handoff',
+    handoffCount: 1,
+    pollCount: 1,
+    jobId: 'job-stream-2',
+    executionDurationMs: 0,
+    timestamp: now + 1,
+  });
+
+  const summary = getToolCallSummary({ now: now + 10, windowMs: 1_000 });
+  const tool = summary.topTools.find((entry) => entry.toolName === 'run_project_command');
+  assert.deepEqual(tool?.completionModes, { 'inline-json': 0, 'request-stream': 1, 'durable-handoff': 1 });
+  assert.equal(tool?.handoffCount, 1);
+  assert.equal(tool?.pollCount, 2);
+  assert.equal(tool?.logicalOperationP50Ms, 1_005);
+  assert.equal(tool?.logicalOperationP95Ms, 3_000);
+  assert.equal(tool?.executionP50Ms, 0);
+  assert.equal(tool?.executionP95Ms, 2_700);
+  assert.equal(summary.latestCalls[0].completionMode, 'durable-handoff');
+  assert.equal(summary.latestCalls[0].logicalOperationDurationMs, 1_005);
+  assert.equal(summary.latestCalls[0].jobId, 'job-stream-2');
+  assert.equal(summary.latestCalls[0].executionDurationMs, 0);
+  assert.doesNotMatch(JSON.stringify(summary), /do-not-retain/);
+});
+
 test('tool monitor attaches aggregate repo-context dominant phase without payload data', async () => {
   const {
     clearRepoContextBundlePerformanceRecords,
@@ -187,6 +233,12 @@ test('monitor flush persists aggregate telemetry without raw args or machine pat
       cacheHit: index < 2,
       processSpawns: index === 0 ? 1 : 0,
       responseTruncated: index === 4,
+      jobId: `job-history-${index}`,
+      executionDurationMs: 100 + index,
+      logicalOperationDurationMs: 200 + index,
+      completionMode: index === 4 ? 'durable-handoff' : 'request-stream',
+      handoffCount: index === 4 ? 1 : 0,
+      pollCount: 1,
       timestamp: now + index,
     });
   }
@@ -204,6 +256,14 @@ test('monitor flush persists aggregate telemetry without raw args or machine pat
   assert.equal(row.processSpawns, 1);
   assert.equal(row.truncatedCount, 1);
   assert.equal(row.truncationRate, 0.2);
+  assert.equal(row.executionP50Ms, 102);
+  assert.equal(row.executionP95Ms, 104);
+  assert.equal(row.logicalOperationP50Ms, 202);
+  assert.equal(row.logicalOperationP95Ms, 204);
+  assert.equal(row.handoffCount, 1);
+  assert.equal(row.pollCount, 5);
+  assert.equal(row.requestStreamCount, 4);
+  assert.equal(row.durableHandoffCount, 1);
   assert.doesNotMatch(JSON.stringify(row), /do-not-store|private|localPath|inputHash/);
   assert.equal(flushPerformanceTelemetry({ now: now + 200, force: true }).inserted, 0);
 });

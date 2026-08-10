@@ -22,6 +22,15 @@ export interface PerformanceTelemetrySnapshot {
   truncationRate?: number;
   cacheHitCount: number;
   processSpawns: number;
+  executionP50Ms?: number;
+  executionP95Ms?: number;
+  logicalOperationP50Ms?: number;
+  logicalOperationP95Ms?: number;
+  handoffCount?: number;
+  pollCount?: number;
+  inlineJsonCount?: number;
+  requestStreamCount?: number;
+  durableHandoffCount?: number;
 }
 
 type CompactionOptions = {
@@ -73,6 +82,15 @@ function normalizeSnapshot(snapshot: PerformanceTelemetrySnapshot): PerformanceT
     truncationRate: count > 0 ? Math.round((truncatedCount / count) * 10_000) / 10_000 : 0,
     cacheHitCount: nonNegativeInteger(snapshot.cacheHitCount),
     processSpawns: nonNegativeInteger(snapshot.processSpawns),
+    executionP50Ms: Math.max(0, finiteNumber(snapshot.executionP50Ms)),
+    executionP95Ms: Math.max(0, finiteNumber(snapshot.executionP95Ms)),
+    logicalOperationP50Ms: Math.max(0, finiteNumber(snapshot.logicalOperationP50Ms)),
+    logicalOperationP95Ms: Math.max(0, finiteNumber(snapshot.logicalOperationP95Ms)),
+    handoffCount: nonNegativeInteger(snapshot.handoffCount),
+    pollCount: nonNegativeInteger(snapshot.pollCount),
+    inlineJsonCount: nonNegativeInteger(snapshot.inlineJsonCount),
+    requestStreamCount: nonNegativeInteger(snapshot.requestStreamCount),
+    durableHandoffCount: nonNegativeInteger(snapshot.durableHandoffCount),
   };
 }
 
@@ -106,8 +124,10 @@ export function persistPerformanceSnapshots(snapshots: PerformanceTelemetrySnaps
     INSERT INTO performance_telemetry_snapshots (
       windowStart, windowEnd, toolName, projectScope, contractRevision, appRevision,
       count, errorCount, p50DurationMs, p95DurationMs, inputBytes, responseBytes,
-      truncatedCount, truncationRate, cacheHitCount, processSpawns
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      truncatedCount, truncationRate, cacheHitCount, processSpawns,
+      executionP50Ms, executionP95Ms, logicalOperationP50Ms, logicalOperationP95Ms,
+      handoffCount, pollCount, inlineJsonCount, requestStreamCount, durableHandoffCount
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   const writeBatch = db.transaction((items: PerformanceTelemetrySnapshot[]) => {
@@ -132,6 +152,15 @@ export function persistPerformanceSnapshots(snapshots: PerformanceTelemetrySnaps
         snapshot.truncationRate,
         snapshot.cacheHitCount,
         snapshot.processSpawns,
+        snapshot.executionP50Ms,
+        snapshot.executionP95Ms,
+        snapshot.logicalOperationP50Ms,
+        snapshot.logicalOperationP95Ms,
+        snapshot.handoffCount,
+        snapshot.pollCount,
+        snapshot.inlineJsonCount,
+        snapshot.requestStreamCount,
+        snapshot.durableHandoffCount,
       );
       inserted += 1;
     }
@@ -160,7 +189,9 @@ export function getPerformanceBaseline(query: BaselineQuery) {
   const rows = db.prepare(`
     SELECT windowStart, windowEnd, toolName, projectScope, contractRevision, appRevision,
            count, errorCount, p50DurationMs, p95DurationMs, inputBytes, responseBytes,
-           truncatedCount, truncationRate, cacheHitCount, processSpawns
+           truncatedCount, truncationRate, cacheHitCount, processSpawns,
+           executionP50Ms, executionP95Ms, logicalOperationP50Ms, logicalOperationP95Ms,
+           handoffCount, pollCount, inlineJsonCount, requestStreamCount, durableHandoffCount
     FROM performance_telemetry_snapshots
     WHERE toolName = ? AND projectScope = ? AND windowEnd < ?
       ${appRevisionFilter}
@@ -181,10 +212,10 @@ export function getPerformanceBaseline(query: BaselineQuery) {
     };
   }
 
-  const weighted = (key: 'p50DurationMs' | 'p95DurationMs') => Math.round(
+  const weighted = (key: 'p50DurationMs' | 'p95DurationMs' | 'executionP50Ms' | 'executionP95Ms' | 'logicalOperationP50Ms' | 'logicalOperationP95Ms') => Math.round(
     rows.reduce((sum, row) => sum + finiteNumber(row[key]) * nonNegativeInteger(row.count), 0) / sampleCount,
   );
-  const sum = (key: 'errorCount' | 'inputBytes' | 'responseBytes' | 'truncatedCount' | 'cacheHitCount' | 'processSpawns') =>
+  const sum = (key: 'errorCount' | 'inputBytes' | 'responseBytes' | 'truncatedCount' | 'cacheHitCount' | 'processSpawns' | 'handoffCount' | 'pollCount' | 'inlineJsonCount' | 'requestStreamCount' | 'durableHandoffCount') =>
     rows.reduce((total, row) => total + nonNegativeInteger(row[key]), 0);
 
   const truncatedCount = sum('truncatedCount');
@@ -204,6 +235,15 @@ export function getPerformanceBaseline(query: BaselineQuery) {
     truncationRate: Math.round((truncatedCount / sampleCount) * 10_000) / 10_000,
     cacheHitCount: sum('cacheHitCount'),
     processSpawns: sum('processSpawns'),
+    executionP50Ms: weighted('executionP50Ms'),
+    executionP95Ms: weighted('executionP95Ms'),
+    logicalOperationP50Ms: weighted('logicalOperationP50Ms'),
+    logicalOperationP95Ms: weighted('logicalOperationP95Ms'),
+    handoffCount: sum('handoffCount'),
+    pollCount: sum('pollCount'),
+    inlineJsonCount: sum('inlineJsonCount'),
+    requestStreamCount: sum('requestStreamCount'),
+    durableHandoffCount: sum('durableHandoffCount'),
     windowStart: Math.min(...rows.map((row) => nonNegativeInteger(row.windowStart))),
     windowEnd: Math.max(...rows.map((row) => nonNegativeInteger(row.windowEnd))),
   };

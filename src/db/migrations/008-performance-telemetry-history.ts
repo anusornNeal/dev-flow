@@ -22,6 +22,15 @@ export const performanceTelemetryHistoryMigration: Migration = {
         truncationRate REAL NOT NULL,
         cacheHitCount INTEGER NOT NULL,
         processSpawns INTEGER NOT NULL,
+        executionP50Ms REAL NOT NULL DEFAULT 0,
+        executionP95Ms REAL NOT NULL DEFAULT 0,
+        logicalOperationP50Ms REAL NOT NULL DEFAULT 0,
+        logicalOperationP95Ms REAL NOT NULL DEFAULT 0,
+        handoffCount INTEGER NOT NULL DEFAULT 0,
+        pollCount INTEGER NOT NULL DEFAULT 0,
+        inlineJsonCount INTEGER NOT NULL DEFAULT 0,
+        requestStreamCount INTEGER NOT NULL DEFAULT 0,
+        durableHandoffCount INTEGER NOT NULL DEFAULT 0,
         createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
 

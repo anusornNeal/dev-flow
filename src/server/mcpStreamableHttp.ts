@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { createDevFlowMcpServer } from './mcp';
+import { runMcpRequestScope } from './mcpRequestContext';
 
 export type McpStreamableHttpLifecyclePhase = 'connect' | 'handle' | 'close';
 export type McpStreamableHttpLifecycleOutcome = 'success' | 'error';
@@ -188,8 +189,18 @@ export function createReusableMcpHttpHandler(
 
     entry.inFlight += 1;
     entry.lastUsedAt = now();
+    const requestAbortController = new AbortController();
+    const abortRequest = () => {
+      if (!res.writableEnded) requestAbortController.abort();
+    };
+    req.once?.('aborted', abortRequest);
+    req.socket?.once?.('close', abortRequest);
+    res.once?.('close', abortRequest);
     try {
-      await runTimedPhase(requestHooks, 'handle', () => entry!.transport.handleRequest(req, res, req.body));
+      await runTimedPhase(requestHooks, 'handle', () => runMcpRequestScope(
+        requestAbortController.signal,
+        () => entry!.transport.handleRequest(req, res, req.body),
+      ));
       if (isNewSession) {
         const generatedSessionId = String(entry.transport.sessionId || '').trim();
         if (generatedSessionId) {
@@ -211,6 +222,9 @@ export function createReusableMcpHttpHandler(
       }
       next?.(error);
     } finally {
+      req.removeListener?.('aborted', abortRequest);
+      req.socket?.removeListener?.('close', abortRequest);
+      res.removeListener?.('close', abortRequest);
       entry.inFlight = Math.max(0, entry.inFlight - 1);
       entry.lastUsedAt = now();
     }

@@ -12,6 +12,7 @@ import { executionSessionsMigration } from './010-execution-sessions.js';
 import { mcpToolJobLeaseFencingMigration } from './011-mcp-tool-job-lease-fencing.js';
 import { taskClaimsMigration } from './012-task-claims.js';
 import { projectGitWorkflowPolicyMigration } from './013-project-git-workflow-policy.js';
+import { mcpLatencyTelemetryMigration } from './014-mcp-latency-telemetry.js';
 import db from '../index.js';
 
 export const DEVFLOW_MIGRATIONS = [
@@ -28,6 +29,7 @@ export const DEVFLOW_MIGRATIONS = [
   mcpToolJobLeaseFencingMigration,
   taskClaimsMigration,
   projectGitWorkflowPolicyMigration,
+  mcpLatencyTelemetryMigration,
 ] as const;
 
 export function executeAllMigrations() {

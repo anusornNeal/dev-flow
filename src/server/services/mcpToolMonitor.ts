@@ -27,6 +27,7 @@ const PERFORMANCE_FLUSH_INTERVAL_MS = 60 * 1000;
 const PERFORMANCE_MIN_SAMPLES = 5;
 const PERFORMANCE_REGRESSION_THRESHOLD = 0.15;
 const MAX_PENDING_DURATION_SAMPLES = 500;
+type CompletionMode = 'inline-json' | 'request-stream' | 'durable-handoff';
 
 interface ToolCallInput {
   toolName: string;
@@ -40,6 +41,12 @@ interface ToolCallInput {
   processSpawns?: number;
   responseMode?: string;
   responseTruncated?: boolean;
+  completionMode?: CompletionMode;
+  handoffCount?: number;
+  pollCount?: number;
+  logicalOperationDurationMs?: number;
+  jobId?: string;
+  executionDurationMs?: number;
   timestamp?: number;
 }
 
@@ -54,6 +61,12 @@ interface ToolCallRecord {
   processSpawns?: number;
   responseMode?: string;
   responseTruncated?: boolean;
+  completionMode: CompletionMode;
+  handoffCount: number;
+  pollCount: number;
+  logicalOperationDurationMs: number;
+  jobId?: string;
+  executionDurationMs?: number;
   timestamp: number;
   inputHash: string;
   projectScope: string;
@@ -72,6 +85,11 @@ type PendingPerformanceBucket = {
   truncatedCount: number;
   cacheHitCount: number;
   processSpawns: number;
+  completionModes: Record<CompletionMode, number>;
+  handoffCount: number;
+  pollCount: number;
+  logicalOperationDurationSamples: number[];
+  executionDurationSamples: number[];
 };
 
 const records: ToolCallRecord[] = [];
@@ -133,6 +151,11 @@ function updatePendingPerformance(record: ToolCallRecord) {
     truncatedCount: 0,
     cacheHitCount: 0,
     processSpawns: 0,
+    completionModes: { 'inline-json': 0, 'request-stream': 0, 'durable-handoff': 0 },
+    handoffCount: 0,
+    pollCount: 0,
+    logicalOperationDurationSamples: [],
+    executionDurationSamples: [],
   };
   bucket.windowStart = Math.min(bucket.windowStart, record.timestamp);
   bucket.windowEnd = Math.max(bucket.windowEnd, record.timestamp);
@@ -144,6 +167,15 @@ function updatePendingPerformance(record: ToolCallRecord) {
   bucket.truncatedCount += record.responseTruncated === true ? 1 : 0;
   bucket.cacheHitCount += record.cacheHit === true ? 1 : 0;
   bucket.processSpawns += Number(record.processSpawns || 0);
+  bucket.completionModes[record.completionMode] += 1;
+  bucket.handoffCount += record.handoffCount;
+  bucket.pollCount += record.pollCount;
+  if (bucket.logicalOperationDurationSamples.length < MAX_PENDING_DURATION_SAMPLES) {
+    bucket.logicalOperationDurationSamples.push(record.logicalOperationDurationMs);
+  }
+  if (record.executionDurationMs !== undefined && bucket.executionDurationSamples.length < MAX_PENDING_DURATION_SAMPLES) {
+    bucket.executionDurationSamples.push(record.executionDurationMs);
+  }
   pendingPerformance.set(key, bucket);
 }
 
@@ -185,6 +217,14 @@ export function recordToolCall(input: ToolCallInput) {
     processSpawns: input.processSpawns,
     responseMode: input.responseMode,
     responseTruncated: input.responseTruncated,
+    completionMode: input.completionMode || 'inline-json',
+    handoffCount: Math.max(0, Number(input.handoffCount || 0)),
+    pollCount: Math.max(0, Number(input.pollCount || 0)),
+    logicalOperationDurationMs: Math.max(0, Number(input.logicalOperationDurationMs ?? input.durationMs)),
+    ...(input.jobId ? { jobId: String(input.jobId).slice(0, 200) } : {}),
+    ...(input.executionDurationMs !== undefined && Number.isFinite(Number(input.executionDurationMs))
+      ? { executionDurationMs: Math.max(0, Number(input.executionDurationMs)) }
+      : {}),
     timestamp: input.timestamp ?? Date.now(),
     inputHash: hashText(stableStringify(input.args || {})),
     projectScope: getProjectScope(input.args || {}),
@@ -227,6 +267,11 @@ export function getToolCallSummary(options?: { now?: number; windowMs?: number }
     maxInputBytes: number;
     cacheHitCount: number;
     processSpawns: number;
+    completionModes: Record<CompletionMode, number>;
+    handoffCount: number;
+    pollCount: number;
+    logicalOperationDurationSamples: number[];
+    executionDurationSamples: number[];
     phases: Record<string, number>;
   }>();
   const byToolAndInput = new Map<string, { toolName: string; inputHash: string; count: number; firstSeenAt: number; lastSeenAt: number }>();
@@ -249,6 +294,11 @@ export function getToolCallSummary(options?: { now?: number; windowMs?: number }
       maxInputBytes: 0,
       cacheHitCount: 0,
       processSpawns: 0,
+      completionModes: { 'inline-json': 0, 'request-stream': 0, 'durable-handoff': 0 },
+      handoffCount: 0,
+      pollCount: 0,
+      logicalOperationDurationSamples: [],
+      executionDurationSamples: [],
       phases: {},
     };
     tool.count += 1;
@@ -266,6 +316,15 @@ export function getToolCallSummary(options?: { now?: number; windowMs?: number }
     tool.maxInputBytes = Math.max(tool.maxInputBytes, record.inputBytes);
     tool.cacheHitCount += record.cacheHit === true ? 1 : 0;
     tool.processSpawns += Number(record.processSpawns || 0);
+    tool.completionModes[record.completionMode] += 1;
+    tool.handoffCount += record.handoffCount;
+    tool.pollCount += record.pollCount;
+    if (tool.logicalOperationDurationSamples.length < MAX_PENDING_DURATION_SAMPLES) {
+      tool.logicalOperationDurationSamples.push(record.logicalOperationDurationMs);
+    }
+    if (record.executionDurationMs !== undefined && tool.executionDurationSamples.length < MAX_PENDING_DURATION_SAMPLES) {
+      tool.executionDurationSamples.push(record.executionDurationMs);
+    }
     if (record.phase) tool.phases[record.phase] = (tool.phases[record.phase] || 0) + 1;
     tool.avgDurationMs = Math.round(tool.totalDurationMs / tool.count);
     byTool.set(record.toolName, tool);
@@ -303,7 +362,7 @@ export function getToolCallSummary(options?: { now?: number; windowMs?: number }
     totalCalls: recent.length,
     topTools: Array.from(byTool.values())
       .sort((left, right) => right.count - left.count)
-      .map(({ totalDurationMs, durationSamples, responseByteSamples, ...entry }) => {
+      .map(({ totalDurationMs, durationSamples, responseByteSamples, logicalOperationDurationSamples, executionDurationSamples, ...entry }) => {
         const bundleEvidence = entry.toolName === 'get_repo_context_bundle'
           ? (bundlePerformance.warm.count > 0 ? bundlePerformance.warm : bundlePerformance.cold)
           : null;
@@ -313,6 +372,13 @@ export function getToolCallSummary(options?: { now?: number; windowMs?: number }
           p95DurationMs: percentile(durationSamples, 95),
           p50ResponseBytes: percentile(responseByteSamples, 50),
           p95ResponseBytes: percentile(responseByteSamples, 95),
+          completionModes: entry.completionModes,
+          handoffCount: entry.handoffCount,
+          pollCount: entry.pollCount,
+          logicalOperationP50Ms: percentile(logicalOperationDurationSamples, 50),
+          logicalOperationP95Ms: percentile(logicalOperationDurationSamples, 95),
+          executionP50Ms: percentile(executionDurationSamples, 50),
+          executionP95Ms: percentile(executionDurationSamples, 95),
           ...(bundleEvidence && bundleEvidence.count > 0 ? {
             dominantPhase: bundleEvidence.dominantPhase,
             dominantPhaseP95Ms: bundleEvidence.dominantPhaseP95Ms,
@@ -333,6 +399,12 @@ export function getToolCallSummary(options?: { now?: number; windowMs?: number }
       processSpawns: Number(record.processSpawns || 0),
       responseMode: record.responseMode,
       responseTruncated: record.responseTruncated === true,
+      completionMode: record.completionMode,
+      handoffCount: record.handoffCount,
+      pollCount: record.pollCount,
+      logicalOperationDurationMs: record.logicalOperationDurationMs,
+      ...(record.jobId ? { jobId: record.jobId } : {}),
+      ...(record.executionDurationMs !== undefined ? { executionDurationMs: record.executionDurationMs } : {}),
       inputHash: record.inputHash,
       timestamp: new Date(record.timestamp).toISOString(),
     })),
@@ -373,6 +445,15 @@ export function flushPerformanceTelemetry(options: {
     truncatedCount: bucket.truncatedCount,
     cacheHitCount: bucket.cacheHitCount,
     processSpawns: bucket.processSpawns,
+    executionP50Ms: percentile(bucket.executionDurationSamples, 50),
+    executionP95Ms: percentile(bucket.executionDurationSamples, 95),
+    logicalOperationP50Ms: percentile(bucket.logicalOperationDurationSamples, 50),
+    logicalOperationP95Ms: percentile(bucket.logicalOperationDurationSamples, 95),
+    handoffCount: bucket.handoffCount,
+    pollCount: bucket.pollCount,
+    inlineJsonCount: bucket.completionModes['inline-json'],
+    requestStreamCount: bucket.completionModes['request-stream'],
+    durableHandoffCount: bucket.completionModes['durable-handoff'],
   }));
 
   const result = persistPerformanceSnapshots(snapshots, {

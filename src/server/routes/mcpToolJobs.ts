@@ -99,6 +99,7 @@ export function registerMcpToolJobRoutes(app: express.Express, deps: ApiRouteDep
       return res.json({
         jobId: req.params.jobId,
         status: status.status,
+        ...(status.phaseTimings ? { phaseTimings: status.phaseTimings } : {}),
         ready: true,
         result: safeResult,
         nextPollAfterMs: 0,

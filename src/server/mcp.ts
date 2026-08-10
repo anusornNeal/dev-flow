@@ -3,10 +3,11 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 import { createCorrelationId } from './services/api';
 import { getCapabilityCatalog, getMcpConsolidationReplacement, getMcpToolList, getToolDefinitionByName, isToolAllowedInProfile, isToolExposedInMcp, resolveDevFlowToolProfile } from './contracts/devflowContract';
 import { recordToolCall } from './services/mcpToolMonitor';
+import { getMcpRequestSignal } from './mcpRequestContext';
 
 const DEFAULT_MCP_HTTP_TIMEOUT_MS = 30_000;
 const TOOL_JOB_RESULT_TIMEOUT_HEADROOM_MS = 5_000;
-const DEFAULT_ASYNC_JOB_EAGER_WAIT_MS = 1_000;
+const DEFAULT_ASYNC_JOB_STREAM_WINDOW_MS = 15_000;
 
 function buildMcpToolError(params: {
   toolName: string;
@@ -77,7 +78,7 @@ function resolveHttpRequestTimeoutMs(request: { path: string }) {
 }
 
 function resolveAsyncJobEagerWaitMs(_toolName: string) {
-  return DEFAULT_ASYNC_JOB_EAGER_WAIT_MS;
+  return DEFAULT_ASYNC_JOB_STREAM_WINDOW_MS;
 }
 
 function buildImmediateAsyncJobHandle(admission: any) {
@@ -99,6 +100,9 @@ function buildImmediateAsyncJobHandle(admission: any) {
     ...(admission?.blockedByAccessMode ? { blockedByAccessMode: admission.blockedByAccessMode } : {}),
     nextPollAfterMs: 2000,
     recommendedWaitMs: 30000,
+    completionMode: 'durable-handoff',
+    handoffCount: 1,
+    pollCount: 0,
     nextAction: admission?.nextAction || `Call get_tool_job_result for ${jobId} with waitMs=30000.`,
   };
 }
@@ -107,7 +111,8 @@ async function executeHttpRequest(
   baseUrl: string,
   request: { method: string; path: string; body?: unknown; headers?: Record<string, string> },
   correlationId: string,
-  toolName: string
+  toolName: string,
+  requestSignal?: AbortSignal,
 ) {
   const url = `${baseUrl}${request.path}`;
   const headers: Record<string, string> = {
@@ -120,6 +125,9 @@ async function executeHttpRequest(
   const controller = new AbortController();
   const timeoutMs = resolveHttpRequestTimeoutMs(request);
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const abortRequest = () => controller.abort();
+  if (requestSignal?.aborted) controller.abort();
+  else requestSignal?.addEventListener('abort', abortRequest, { once: true });
 
   try {
     const response = await fetch(url, {
@@ -195,6 +203,7 @@ async function executeHttpRequest(
     return { response: { ok: false, status: 503 } as any, parsedBody, durationMs };
   } finally {
     clearTimeout(timeoutId);
+    requestSignal?.removeEventListener('abort', abortRequest);
   }
 }
 
@@ -222,7 +231,15 @@ export function createDevFlowMcpServer(baseUrl: string, profileOverride?: string
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: getMcpToolList(activeProfile) as any }));
 
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+    const logicalOperationStartedAt = Date.now();
+    const scopedSignal = getMcpRequestSignal();
+    const requestSignals = [extra?.signal, scopedSignal].filter((signal): signal is AbortSignal => Boolean(signal));
+    const requestSignal = requestSignals.length === 0
+      ? undefined
+      : requestSignals.length === 1
+        ? requestSignals[0]
+        : AbortSignal.any(requestSignals);
     const toolName = request.params.name;
     const args = (request.params.arguments || {}) as Record<string, any>;
     const inputBytes = Buffer.byteLength(JSON.stringify(args), 'utf8');
@@ -275,6 +292,12 @@ export function createDevFlowMcpServer(baseUrl: string, profileOverride?: string
 
     let httpRequest;
     let isAsyncJob = false;
+    let jobId: string | undefined;
+    let executionDurationMs: number | undefined;
+    let phaseTimings: { executionMs?: number } | undefined;
+    let completionMode: 'inline-json' | 'request-stream' | 'durable-handoff' = 'inline-json';
+    let handoffCount = 0;
+    let pollCount = 0;
     if (tool.executionPolicy?.mode === 'job') {
       isAsyncJob = true;
       httpRequest = { method: 'POST', path: '/api/tool-jobs', body: { toolName, args } };
@@ -285,73 +308,96 @@ export function createDevFlowMcpServer(baseUrl: string, profileOverride?: string
 
     if (isAsyncJob && response.ok && parsedBody && typeof parsedBody === 'object' && 'jobId' in parsedBody) {
       const admissionPacket = parsedBody as any;
-      const jobId = admissionPacket.jobId;
-      if (admissionPacket.handoffImmediately === true) {
+      jobId = String(admissionPacket.jobId || '');
+      const handoff = () => {
         parsedBody = buildImmediateAsyncJobHandle(admissionPacket);
-      } else {
-      const waitStartedAt = Date.now();
-      const resultRes = await executeHttpRequest(
-        baseUrl,
-        { method: 'GET', path: `/api/tool-jobs/${jobId}/result?waitMs=${resolveAsyncJobEagerWaitMs(toolName)}` },
-        correlationId,
-        toolName,
-      );
-      if (resultRes.response.ok && resultRes.parsedBody && typeof resultRes.parsedBody === 'object') {
-        let resultPacket = resultRes.parsedBody as any;
-        const hasWaitShape = 'ready' in resultPacket || 'status' in resultPacket || 'result' in resultPacket;
+        completionMode = 'durable-handoff';
+        handoffCount = 1;
+      };
 
-        if (!hasWaitShape) {
-          const statusRes = await executeHttpRequest(
-            baseUrl,
-            { method: 'GET', path: `/api/tool-jobs/${jobId}` },
-            correlationId,
-            toolName,
-          );
-          if (statusRes.response.ok && statusRes.parsedBody && typeof statusRes.parsedBody === 'object') {
-            const legacyStatus = (statusRes.parsedBody as any).status;
-            const terminal = ['succeeded', 'failed', 'timed_out', 'cancelled', 'interrupted'].includes(legacyStatus);
-            if (terminal) {
-              const legacyResultRes = await executeHttpRequest(
-                baseUrl,
-                { method: 'GET', path: `/api/tool-jobs/${jobId}/result` },
-                correlationId,
-                toolName,
-              );
-              if (legacyResultRes.response.ok && legacyResultRes.parsedBody && typeof legacyResultRes.parsedBody === 'object') {
-                resultPacket = legacyResultRes.parsedBody as any;
+      if (admissionPacket.handoffImmediately === true || requestSignal?.aborted) {
+        handoff();
+      } else {
+        const waitStartedAt = Date.now();
+        pollCount = 1;
+        const resultRes = await executeHttpRequest(
+          baseUrl,
+          { method: 'GET', path: `/api/tool-jobs/${jobId}/result?waitMs=${resolveAsyncJobEagerWaitMs(toolName)}` },
+          correlationId,
+          toolName,
+          requestSignal,
+        );
+        durationMs += Date.now() - waitStartedAt;
+
+        if (requestSignal?.aborted) {
+          handoff();
+        } else if (resultRes.response.ok && resultRes.parsedBody && typeof resultRes.parsedBody === 'object') {
+          let resultPacket = resultRes.parsedBody as any;
+          phaseTimings = resultPacket.phaseTimings;
+          const hasWaitShape = 'ready' in resultPacket || 'status' in resultPacket || 'result' in resultPacket;
+
+          if (!hasWaitShape) {
+            const statusRes = await executeHttpRequest(
+              baseUrl,
+              { method: 'GET', path: `/api/tool-jobs/${jobId}` },
+              correlationId,
+              toolName,
+            );
+            if (statusRes.response.ok && statusRes.parsedBody && typeof statusRes.parsedBody === 'object') {
+              phaseTimings = (statusRes.parsedBody as any).phaseTimings;
+              const legacyStatus = (statusRes.parsedBody as any).status;
+              const terminal = ['succeeded', 'failed', 'timed_out', 'cancelled', 'interrupted'].includes(legacyStatus);
+              if (terminal) {
+                const legacyResultRes = await executeHttpRequest(
+                  baseUrl,
+                  { method: 'GET', path: `/api/tool-jobs/${jobId}/result` },
+                  correlationId,
+                  toolName,
+                );
+                if (legacyResultRes.response.ok && legacyResultRes.parsedBody && typeof legacyResultRes.parsedBody === 'object') {
+                  resultPacket = legacyResultRes.parsedBody as any;
+                }
+              } else {
+                resultPacket = { jobId, status: legacyStatus, ready: false, result: null };
               }
-            } else {
-              resultPacket = { jobId, status: legacyStatus, ready: false, result: null };
             }
           }
-        }
 
-        const status = resultPacket.status;
-        const ready = 'ready' in resultPacket
-          ? resultPacket.ready === true
-          : ['succeeded', 'failed', 'timed_out', 'cancelled', 'interrupted'].includes(status);
-        const jobResult = resultPacket.result;
-        if (ready && jobResult !== null && jobResult !== undefined) {
-          parsedBody = jobResult && typeof jobResult === 'object' && 'result' in jobResult
-            ? (jobResult as any).result
-            : jobResult;
+          const status = resultPacket.status;
+          const ready = 'ready' in resultPacket
+            ? resultPacket.ready === true
+            : ['succeeded', 'failed', 'timed_out', 'cancelled', 'interrupted'].includes(status);
+          const jobResult = resultPacket.result;
+          executionDurationMs = Number(phaseTimings?.executionMs);
+          if (!Number.isFinite(executionDurationMs) || executionDurationMs < 0) executionDurationMs = undefined;
+          if (ready && jobResult !== null && jobResult !== undefined) {
+            parsedBody = jobResult && typeof jobResult === 'object' && 'result' in jobResult
+              ? (jobResult as any).result
+              : jobResult;
+            completionMode = 'request-stream';
+          } else {
+            parsedBody = {
+              jobId,
+              status,
+              ready,
+              result: null,
+              code: resultPacket.code || (ready ? 'JOB_RESULT_NOT_READY' : 'JOB_STILL_RUNNING'),
+              message: resultPacket.message || (ready
+                ? `Job ${jobId} reached ${status} but no result payload was available yet.`
+                : `Job ${jobId} is still ${status} after the bounded MCP wait.`),
+              ...(resultPacket.nextPollAfterMs !== undefined ? { nextPollAfterMs: resultPacket.nextPollAfterMs } : {}),
+              ...(resultPacket.recommendedWaitMs !== undefined ? { recommendedWaitMs: resultPacket.recommendedWaitMs } : {}),
+              ...(resultPacket.nextAction ? { nextAction: resultPacket.nextAction } : {}),
+              completionMode: 'durable-handoff',
+              handoffCount: 1,
+              pollCount,
+            };
+            completionMode = 'durable-handoff';
+            handoffCount = 1;
+          }
         } else {
-          parsedBody = {
-            jobId,
-            status,
-            ready,
-            result: null,
-            code: resultPacket.code || (ready ? 'JOB_RESULT_NOT_READY' : 'JOB_STILL_RUNNING'),
-            message: resultPacket.message || (ready
-              ? `Job ${jobId} reached ${status} but no result payload was available yet.`
-              : `Job ${jobId} is still ${status} after the bounded MCP wait.`),
-            ...(resultPacket.nextPollAfterMs !== undefined ? { nextPollAfterMs: resultPacket.nextPollAfterMs } : {}),
-            ...(resultPacket.recommendedWaitMs !== undefined ? { recommendedWaitMs: resultPacket.recommendedWaitMs } : {}),
-            ...(resultPacket.nextAction ? { nextAction: resultPacket.nextAction } : {}),
-          };
+          handoff();
         }
-        durationMs += Date.now() - waitStartedAt;
-      }
       }
     }
     const responseBytes = Buffer.byteLength(typeof parsedBody === 'string' ? parsedBody : JSON.stringify(parsedBody ?? null), 'utf8');
@@ -370,6 +416,12 @@ export function createDevFlowMcpServer(baseUrl: string, profileOverride?: string
       responseTruncated: parsedBody && typeof parsedBody === 'object'
         ? ((parsedBody as any).truncated === true || (parsedBody as any).previewOmitted === true)
         : false,
+      completionMode,
+      handoffCount,
+      pollCount,
+      logicalOperationDurationMs: Math.max(0, Date.now() - logicalOperationStartedAt),
+      ...(jobId ? { jobId } : {}),
+      ...(executionDurationMs !== undefined ? { executionDurationMs } : {}),
     });
     console.log(`[mcp] cid=${correlationId} tool=${toolName} status=${response.status} durationMs=${durationMs}`);
 

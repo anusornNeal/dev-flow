@@ -182,6 +182,100 @@ test('mcpToolJobService - completed job has persisted result', async () => {
   }
 });
 
+
+test('mcpToolJobService - batches verbose durable output and flushes it before success', async () => {
+  const root = makeTempRepo('verbose-log-batching');
+  const state = makeState(root);
+  const toolName = `test_verbose_log_${randomUUID()}`;
+  const chunkCount = 200;
+  const chunk = 'verbose-chunk-payload-0123456789\\n';
+  const expectedBytes = Buffer.byteLength(chunk, 'utf8') * chunkCount;
+  const originalAppendFileSync = fs.appendFileSync;
+  let persistenceWrites = 0;
+
+  fs.appendFileSync = ((file: fs.PathOrFileDescriptor, data: string | Uint8Array, options?: fs.WriteFileOptions) => {
+    if (String(data).includes('verbose-chunk-payload-')) persistenceWrites += 1;
+    return originalAppendFileSync(file, data, options as any);
+  }) as typeof fs.appendFileSync;
+
+  __setToolJobTestRunner(toolName, async (_state, _args, logger) => {
+    for (let index = 0; index < chunkCount; index += 1) logger.stdout(chunk);
+    return { emitted: chunkCount };
+  });
+
+  try {
+    const jobInfo = enqueueToolJob(state, toolName, { localPath: root }, 'repo-command');
+    const status = await waitForStatus(jobInfo.jobId, 'succeeded');
+    const logs = readJobLog(jobInfo.jobId, 'stdout');
+
+    assert.equal(status?.stdoutBytes, expectedBytes);
+    assert.equal(logs.bytes, expectedBytes);
+    assert.equal(logs.log.includes('verbose-chunk-payload-'), true);
+    assert.equal(persistenceWrites < chunkCount / 4, true, `expected batching, saw ${persistenceWrites} writes for ${chunkCount} chunks`);
+  } finally {
+    fs.appendFileSync = originalAppendFileSync;
+    __setToolJobTestRunner(toolName, null);
+  }
+});
+
+test('mcpToolJobService - batched durable logs redact credentials across adjacent chunks', async () => {
+  const root = makeTempRepo('batched-log-redaction');
+  const state = makeState(root);
+  const toolName = `test_batched_redaction_${randomUUID()}`;
+  const secret = `ghp_${randomUUID().replace(/-/g, '')}`;
+  const previousToken = process.env.GITHUB_PERSONAL_ACCESS_TOKEN;
+  process.env.GITHUB_PERSONAL_ACCESS_TOKEN = secret;
+
+  __setToolJobTestRunner(toolName, async (_state, _args, logger) => {
+    const split = Math.floor(secret.length / 2);
+    logger.stdout(`credential=${secret.slice(0, split)}`);
+    logger.stdout(`${secret.slice(split)}\\n`);
+    return { ok: true };
+  });
+
+  try {
+    const jobInfo = enqueueToolJob(state, toolName, { localPath: root }, 'repo-command');
+    await waitForStatus(jobInfo.jobId, 'succeeded');
+    const logs = readJobLog(jobInfo.jobId, 'stdout');
+    assert.equal(logs.log.includes(secret), false);
+    assert.equal(logs.log.includes('[REDACTED]'), true);
+  } finally {
+    if (previousToken === undefined) delete process.env.GITHUB_PERSONAL_ACCESS_TOKEN;
+    else process.env.GITHUB_PERSONAL_ACCESS_TOKEN = previousToken;
+    __setToolJobTestRunner(toolName, null);
+  }
+});
+
+test('mcpToolJobService - active cancellation flushes pending batched logs before terminal state', async () => {
+  const root = makeTempRepo('cancel-log-flush');
+  const state = makeState(root);
+  const toolName = `test_cancel_log_flush_${randomUUID()}`;
+  const emitted = deferred();
+  const pendingLine = 'pending-before-cancel\\n';
+
+  __setToolJobTestRunner(toolName, async (_state, _args, logger, setCancelFn) => {
+    await new Promise((_resolve, reject) => {
+      setCancelFn(() => reject(new Error('Job cancelled')));
+      logger.stdout(pendingLine);
+      emitted.resolve();
+    });
+    return { unreachable: true };
+  });
+
+  try {
+    const jobInfo = enqueueToolJob(state, toolName, { localPath: root }, 'repo-command');
+    await emitted.promise;
+    assert.equal(cancelToolJob(jobInfo.jobId), true);
+    const status = await waitForStatus(jobInfo.jobId, 'cancelled');
+    const logs = readJobLog(jobInfo.jobId, 'stdout');
+    assert.equal(status?.status, 'cancelled');
+    assert.equal(logs.log.includes(pendingLine.trim()), true);
+    assert.equal(logs.bytes >= Buffer.byteLength(pendingLine, 'utf8'), true);
+  } finally {
+    __setToolJobTestRunner(toolName, null);
+  }
+});
+
 test('mcpToolJobService - log tailing', async () => {
   const jobInfo = enqueueToolJob(MOCK_STATE, 'search_local_files', { query: 'mcpToolJobService' }, 'repo-read');
   

@@ -123,8 +123,9 @@ export interface RunProjectCommandResult {
   };
 }
 
-function truncateOutput(value: string, maxBytes: number) {
-  const bytes = Buffer.byteLength(value, 'utf8');
+function truncateOutput(value: string, maxBytes: number, totalBytes?: number) {
+  const capturedBytes = Buffer.byteLength(value, 'utf8');
+  const bytes = totalBytes ?? capturedBytes;
   if (bytes <= maxBytes) {
     return { value, bytes, truncated: false };
   }
@@ -136,6 +137,36 @@ function truncateOutput(value: string, maxBytes: number) {
   };
 }
 
+type BoundedCommandOutputCapture = {
+  append: (data: Buffer | string) => void;
+  snapshot: () => { value: string; bytes: number; truncated: boolean };
+};
+
+function createBoundedCommandOutputCapture(maxBytes: number): BoundedCommandOutputCapture {
+  const limit = Math.max(1, maxBytes);
+  const head = Buffer.allocUnsafe(limit);
+  let headBytes = 0;
+  let totalBytes = 0;
+
+  return {
+    append: (data) => {
+      const chunk = Buffer.isBuffer(data) ? data : Buffer.from(data, 'utf8');
+      totalBytes += chunk.byteLength;
+      if (headBytes >= limit) return;
+      const copyBytes = Math.min(limit - headBytes, chunk.byteLength);
+      chunk.copy(head, headBytes, 0, copyBytes);
+      headBytes += copyBytes;
+    },
+    snapshot: () => ({
+      value: head.subarray(0, headBytes).toString('utf8'),
+      bytes: totalBytes,
+      truncated: totalBytes > limit,
+    }),
+  };
+}
+
+export const __createBoundedCommandOutputCaptureForTests = createBoundedCommandOutputCapture;
+
 function buildCommandResult(input: {
   command: string;
   root: string;
@@ -146,12 +177,14 @@ function buildCommandResult(input: {
   signal: NodeJS.Signals | null;
   stdoutRaw: string;
   stderrRaw: string;
+  stdoutBytesTotal?: number;
+  stderrBytesTotal?: number;
   maxOutputBytes: number;
   responseMode?: 'compact' | 'standard' | 'debug';
   resolutionMs?: number;
 }): RunProjectCommandResult {
-  const stdout = truncateOutput(input.stdoutRaw || '', input.maxOutputBytes);
-  const stderr = truncateOutput(input.stderrRaw || '', input.maxOutputBytes);
+  const stdout = truncateOutput(input.stdoutRaw || '', input.maxOutputBytes, input.stdoutBytesTotal);
+  const stderr = truncateOutput(input.stderrRaw || '', input.maxOutputBytes, input.stderrBytesTotal);
   const status: CommandStatus = input.timedOut
     ? 'timed_out'
     : input.exitCode === 0
@@ -902,8 +935,8 @@ export async function runProjectCommandAsync(state: AppState, args: Record<strin
     });
 
     let timedOut = false;
-    let stdoutBuffer = '';
-    let stderrBuffer = '';
+    const stdoutCapture = createBoundedCommandOutputCapture(maxOutputBytes);
+    const stderrCapture = createBoundedCommandOutputCapture(maxOutputBytes);
 
     const timeoutId = setTimeout(() => {
       timedOut = true;
@@ -917,15 +950,15 @@ export async function runProjectCommandAsync(state: AppState, args: Record<strin
     });
 
     child.stdout.on('data', (data) => {
-      const chunk = data.toString('utf8');
-      stdoutBuffer += chunk;
-      logger.stdout(chunk);
+      const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
+      stdoutCapture.append(buffer);
+      logger.stdout(buffer.toString('utf8'));
     });
 
     child.stderr.on('data', (data) => {
-      const chunk = data.toString('utf8');
-      stderrBuffer += chunk;
-      logger.stderr(chunk);
+      const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
+      stderrCapture.append(buffer);
+      logger.stderr(buffer.toString('utf8'));
     });
 
     child.on('error', (err) => {
@@ -938,6 +971,8 @@ export async function runProjectCommandAsync(state: AppState, args: Record<strin
       const durationMs = Date.now() - startedAt;
 
       const resultNormalizationStartedAt = Date.now();
+      const stdoutSnapshot = stdoutCapture.snapshot();
+      const stderrSnapshot = stderrCapture.snapshot();
       const commandResult = buildCommandResult({
         command,
         root: sourceRoot,
@@ -946,8 +981,10 @@ export async function runProjectCommandAsync(state: AppState, args: Record<strin
         durationMs,
         timedOut,
         signal,
-        stdoutRaw: stdoutBuffer,
-        stderrRaw: stderrBuffer,
+        stdoutRaw: stdoutSnapshot.value,
+        stderrRaw: stderrSnapshot.value,
+        stdoutBytesTotal: stdoutSnapshot.bytes,
+        stderrBytesTotal: stderrSnapshot.bytes,
         maxOutputBytes,
         responseMode,
         resolutionMs,

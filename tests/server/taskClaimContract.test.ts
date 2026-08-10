@@ -14,6 +14,24 @@ test('claim_task and release_task_claim are canonical task tools with required c
   }
 });
 
+
+test('claim_next_task is a bounded project-level optimization with explicit session identity', () => {
+  const tool = taskToolDefinitions.find((entry) => entry.name === 'claim_next_task');
+  assert.ok(tool);
+  assert.equal((tool.inputSchema as any)?.properties?.projectId?.type, 'string');
+  assert.equal((tool.inputSchema as any)?.properties?.sessionId?.type, 'string');
+  assert.ok((tool.inputSchema as any)?.required?.includes('projectId'));
+  assert.ok((tool.inputSchema as any)?.required?.includes('sessionId'));
+  assert.equal((tool.inputSchema as any)?.required?.includes('taskId'), false);
+  const request = tool.buildHttpRequest({ projectId: 'project-1', sessionId: 'chat-a', limit: 25 });
+  assert.equal(request.path, '/api/tasks/claim-next?responseMode=summary');
+  const body = request.body as any;
+  assert.equal(body.projectId, 'project-1');
+  assert.equal(body.sessionId, 'chat-a');
+  assert.equal(body.limit, 25);
+  assert.ok(devFlowToolDefinitions.some((entry) => entry.name === 'claim_next_task'));
+});
+
 test('claim_task maps to the atomic claim route and release maps to owner release route', () => {
   const claim = taskToolDefinitions.find((entry) => entry.name === 'claim_task')!;
   const release = taskToolDefinitions.find((entry) => entry.name === 'release_task_claim')!;

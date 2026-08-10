@@ -24,6 +24,12 @@ test('blocked review does not persist branch-mismatched diagnostic Git evidence'
   assert.match(source, /evaluation\.gitEvidence && !evidenceBranchMismatch/);
 });
 
+test('task claim routes expose the composite next-claim fast path', () => {
+  const source = fs.readFileSync('src/server/routes/taskClaimRoutes.ts', 'utf8');
+  assert.match(source, /\/api\/tasks\/claim-next/);
+  assert.match(source, /claimNextTaskForSession/);
+});
+
 test('registerTaskRoutes composes focused bug and review modules instead of owning their endpoints', () => {
   const source = fs.readFileSync('src/server/routes/tasks.ts', 'utf8');
   assert.match(source, /registerTaskReadRoutes\(app, deps\)/);

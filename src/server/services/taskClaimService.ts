@@ -22,6 +22,10 @@ export type ClaimTaskInput = {
   ttlMs?: number;
 };
 
+export type ClaimNextTaskInput = Omit<ClaimTaskInput, 'allowScopeConflict'> & {
+  limit?: number;
+};
+
 export type ReleaseTaskClaimInput = {
   sessionId: string;
   nextStatus?: TaskStatus;
@@ -81,6 +85,105 @@ function findScopeConflicts(task: any, projectTasks: any[], nowMs: number) {
   return conflicts;
 }
 
+const NEXT_TASK_DEFAULT_LIMIT = 50;
+const NEXT_TASK_MAX_LIMIT = 100;
+const NEXT_TASK_PRIORITY: Record<string, number> = { high: 0, medium: 1, low: 2 };
+
+function boundedNextTaskLimit(value: unknown) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return NEXT_TASK_DEFAULT_LIMIT;
+  return Math.max(1, Math.min(NEXT_TASK_MAX_LIMIT, Math.floor(numeric)));
+}
+
+function normalizedTags(task: any) {
+  return (Array.isArray(task?.tags) ? task.tags : [])
+    .map((tag: unknown) => String(tag || '').trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function isExplicitFinalGate(task: any) {
+  return normalizedTags(task).includes('final-gate');
+}
+
+function hasBlockingDependency(task: any, projectTasks: any[]) {
+  const dependencyTags = normalizedTags(task).filter((tag) => tag.startsWith('depends-on:') || tag.startsWith('blocked-by:'));
+  if (dependencyTags.length === 0) return false;
+  for (const tag of dependencyTags) {
+    const identifier = tag.slice(tag.indexOf(':') + 1).trim();
+    if (!identifier) return true;
+    const dependency = projectTasks.find((candidate) =>
+      String(candidate.id || '').toLowerCase() === identifier || String(candidate.displayId || '').toLowerCase() === identifier);
+    if (!dependency || dependency.status !== 'done') return true;
+  }
+  return false;
+}
+
+function compareNextTaskOrder(left: any, right: any) {
+  const priorityDelta = (NEXT_TASK_PRIORITY[String(left.priority || 'medium').toLowerCase()] ?? 1)
+    - (NEXT_TASK_PRIORITY[String(right.priority || 'medium').toLowerCase()] ?? 1);
+  if (priorityDelta !== 0) return priorityDelta;
+  const createdDelta = String(left.createdAt || '').localeCompare(String(right.createdAt || ''));
+  if (createdDelta !== 0) return createdDelta;
+  return String(left.displayId || left.id || '').localeCompare(String(right.displayId || right.id || ''));
+}
+
+function claimTaskForSessionLocked(taskId: string, input: ClaimTaskInput, cleanSessionId: string, project: any) {
+  const task = getTaskByIdentifier(taskId, 'full');
+  if (!task) throw createApiError(404, 'TASK_NOT_FOUND', `Task '${taskId}' was not found.`, { affectedId: taskId });
+  if (!CLAIMABLE_STATUSES.has(task.status)) {
+    throw createApiError(409, 'TASK_NOT_CLAIMABLE', `Task '${task.displayId || task.id}' is in '${task.status}' and cannot be claimed.`, { affectedId: task.id });
+  }
+
+  const nowMs = Date.now();
+  const hash = sessionIdHash(cleanSessionId);
+  if (isActiveClaim(task.claim, nowMs)) {
+    if (task.claim.sessionIdHash !== hash) {
+      throw createApiError(409, 'TASK_ALREADY_CLAIMED', `Task '${task.displayId || task.id}' is already claimed by ${task.claim.ownerLabel}.`, {
+        affectedId: task.id,
+        details: { claim: task.claim },
+      });
+    }
+    const workspace = createOrReuseSessionWorkspace(project, cleanSessionId);
+    return { task, claim: task.claim, workspace: { workspaceId: workspace.workspaceId, branch: workspace.branch, state: workspace.state }, reused: true };
+  }
+
+  if (!input.allowScopeConflict) {
+    const conflicts = findScopeConflicts(task, getTasksByProjectId(task.projectId), nowMs);
+    if (conflicts.length > 0) {
+      throw createApiError(409, 'TASK_SCOPE_CONFLICT', `Task '${task.displayId || task.id}' overlaps active claimed scope.`, {
+        affectedId: task.id,
+        details: { conflicts },
+      });
+    }
+  }
+
+  const workspace = createOrReuseSessionWorkspace(project, cleanSessionId);
+  const ownerKind = normalizeOwnerKind(input.ownerKind);
+  const claimedAt = new Date(nowMs).toISOString();
+  const claim: TaskClaim = {
+    sessionIdHash: hash,
+    workspaceId: workspace.workspaceId,
+    ownerKind,
+    ownerLabel: normalizeOwnerLabel(input.ownerLabel, ownerKind, hash),
+    claimedAt,
+    expiresAt: new Date(nowMs + boundedTtlMs(input.ttlMs)).toISOString(),
+  };
+  const updated = {
+    ...task,
+    status: 'in-progress' as TaskStatus,
+    claim,
+    updatedAt: claimedAt,
+    logs: [...(Array.isArray(task.logs) ? task.logs : []), {
+      id: `log-task-claim-${nowMs}`,
+      timestamp: claimedAt,
+      message: `Task claimed by ${claim.ownerLabel} in managed workspace ${claim.workspaceId}.`,
+      type: 'update',
+    }],
+  };
+  saveTask(updated);
+  return { task: getTaskByIdentifier(task.id, 'full') || updated, claim, workspace: { workspaceId: workspace.workspaceId, branch: workspace.branch, state: workspace.state }, reused: false };
+}
+
 export function claimTaskForSession(taskId: string, input: ClaimTaskInput) {
   const cleanSessionId = String(input?.sessionId || '').trim();
   if (!cleanSessionId) throw createApiError(400, 'SESSION_ID_REQUIRED', 'sessionId is required to claim a task.');
@@ -89,62 +192,59 @@ export function claimTaskForSession(taskId: string, input: ClaimTaskInput) {
   if (!initial.projectId) throw createApiError(400, 'TASK_PROJECT_REQUIRED', 'Task must belong to a project before it can be claimed.', { affectedId: initial.id });
   const project = getProject(initial.projectId);
   if (!project) throw createApiError(404, 'PROJECT_NOT_FOUND', `Project '${initial.projectId}' was not found.`, { affectedId: initial.projectId });
+  return withSyncLock(`task-claim:${initial.projectId}`, () => claimTaskForSessionLocked(taskId, input, cleanSessionId, project));
+}
 
-  return withSyncLock(`task-claim:${initial.projectId}`, () => {
-    const task = getTaskByIdentifier(taskId, 'full');
-    if (!task) throw createApiError(404, 'TASK_NOT_FOUND', `Task '${taskId}' was not found.`, { affectedId: taskId });
-    if (!CLAIMABLE_STATUSES.has(task.status)) {
-      throw createApiError(409, 'TASK_NOT_CLAIMABLE', `Task '${task.displayId || task.id}' is in '${task.status}' and cannot be claimed.`, { affectedId: task.id });
-    }
+export function claimNextTaskForSession(projectId: string, input: ClaimNextTaskInput) {
+  const cleanProjectId = String(projectId || '').trim();
+  const cleanSessionId = String(input?.sessionId || '').trim();
+  if (!cleanProjectId) throw createApiError(400, 'PROJECT_ID_REQUIRED', 'projectId is required to claim the next task.');
+  if (!cleanSessionId) throw createApiError(400, 'SESSION_ID_REQUIRED', 'sessionId is required to claim the next task.');
+  const project = getProject(cleanProjectId);
+  if (!project) throw createApiError(404, 'PROJECT_NOT_FOUND', `Project '${cleanProjectId}' was not found.`, { affectedId: cleanProjectId });
+  const limit = boundedNextTaskLimit(input.limit);
 
+  return withSyncLock(`task-claim:${cleanProjectId}`, () => {
     const nowMs = Date.now();
-    const hash = sessionIdHash(cleanSessionId);
-    if (isActiveClaim(task.claim, nowMs)) {
-      if (task.claim.sessionIdHash !== hash) {
-        throw createApiError(409, 'TASK_ALREADY_CLAIMED', `Task '${task.displayId || task.id}' is already claimed by ${task.claim.ownerLabel}.`, {
-          affectedId: task.id,
-          details: { claim: task.claim },
-        });
+    const projectTasks = getTasksByProjectId(cleanProjectId);
+    const parentIds = new Set(projectTasks.map((task) => String(task.parentId || '')).filter(Boolean));
+    const bounded = projectTasks
+      .filter((task) => (task.status === 'backlog' || task.status === 'todo') && !task.archivedAt)
+      .sort(compareNextTaskOrder)
+      .slice(0, limit);
+    let deferred = 0;
+
+    for (const task of bounded) {
+      if (parentIds.has(String(task.id))) {
+        deferred += 1;
+        continue;
       }
-      const workspace = createOrReuseSessionWorkspace(project, cleanSessionId);
-      return { task, claim: task.claim, workspace: { workspaceId: workspace.workspaceId, branch: workspace.branch, state: workspace.state }, reused: true };
+      if (isActiveClaim(task.claim, nowMs)) continue;
+      if (isExplicitFinalGate(task) || hasBlockingDependency(task, projectTasks)) {
+        deferred += 1;
+        continue;
+      }
+      if (normalizedTargetFiles(task).size === 0) {
+        deferred += 1;
+        continue;
+      }
+      if (findScopeConflicts(task, projectTasks, nowMs).length > 0) {
+        deferred += 1;
+        continue;
+      }
+
+      const claimed = claimTaskForSessionLocked(task.id, { ...input, allowScopeConflict: false }, cleanSessionId, project);
+      return { status: 'claimed' as const, ...claimed, scanned: bounded.length, deferred, limit };
     }
 
-    if (!input.allowScopeConflict) {
-      const conflicts = findScopeConflicts(task, getTasksByProjectId(task.projectId), nowMs);
-      if (conflicts.length > 0) {
-        throw createApiError(409, 'TASK_SCOPE_CONFLICT', `Task '${task.displayId || task.id}' overlaps active claimed scope.`, {
-          affectedId: task.id,
-          details: { conflicts },
-        });
-      }
-    }
-
-    const workspace = createOrReuseSessionWorkspace(project, cleanSessionId);
-    const ownerKind = normalizeOwnerKind(input.ownerKind);
-    const claimedAt = new Date(nowMs).toISOString();
-    const claim: TaskClaim = {
-      sessionIdHash: hash,
-      workspaceId: workspace.workspaceId,
-      ownerKind,
-      ownerLabel: normalizeOwnerLabel(input.ownerLabel, ownerKind, hash),
-      claimedAt,
-      expiresAt: new Date(nowMs + boundedTtlMs(input.ttlMs)).toISOString(),
+    return {
+      status: 'no-eligible' as const,
+      code: 'NO_ELIGIBLE_TASK',
+      projectId: cleanProjectId,
+      scanned: bounded.length,
+      deferred,
+      limit,
     };
-    const updated = {
-      ...task,
-      status: 'in-progress' as TaskStatus,
-      claim,
-      updatedAt: claimedAt,
-      logs: [...(Array.isArray(task.logs) ? task.logs : []), {
-        id: `log-task-claim-${nowMs}`,
-        timestamp: claimedAt,
-        message: `Task claimed by ${claim.ownerLabel} in managed workspace ${claim.workspaceId}.`,
-        type: 'update',
-      }],
-    };
-    saveTask(updated);
-    return { task: getTaskByIdentifier(task.id, 'full') || updated, claim, workspace: { workspaceId: workspace.workspaceId, branch: workspace.branch, state: workspace.state }, reused: false };
   });
 }
 

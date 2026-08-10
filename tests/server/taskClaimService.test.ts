@@ -69,6 +69,44 @@ seedTask('task-c', ['src/B.ts'], 'parent');
 seedTask('task-stale', ['README.md']);
 seedTask('task-release', ['src/Release.ts']);
 
+function createCandidateProject(projectId: string) {
+  createProject({
+    id: projectId,
+    name: projectId,
+    repoUrl: `https://example.test/${projectId}.git`,
+    localPath: repoRoot,
+    taskIdPrefix: 'NXT',
+    createdAt: new Date().toISOString(),
+  });
+}
+
+function seedCandidateTask(projectId: string, id: string, targetFiles: string[], options: {
+  priority?: 'high' | 'medium' | 'low';
+  parentId?: string;
+  tags?: string[];
+  status?: 'backlog' | 'todo' | 'in-progress';
+  createdAt?: string;
+} = {}) {
+  const now = options.createdAt || new Date().toISOString();
+  saveTask({
+    id,
+    displayId: id.toUpperCase(),
+    projectId,
+    title: id,
+    description: '',
+    status: options.status || 'backlog',
+    priority: options.priority || 'medium',
+    category: 'backend',
+    tags: options.tags || [],
+    targetFiles,
+    checklist: [],
+    parentId: options.parentId,
+    createdAt: now,
+    updatedAt: now,
+    logs: [],
+  });
+}
+
 test('claim moves task to in-progress, binds opaque workspace, and is idempotent for the same session', () => {
   const first = claims.claimTaskForSession('task-a', { sessionId: 'chat-alpha-secret', ownerKind: 'chat', ownerLabel: 'Chat A3' });
   assert.equal(first.task.status, 'in-progress');
@@ -124,6 +162,60 @@ test('release is owner-guarded, clears claim, and returns task to requested runn
   assert.equal(released.task.status, 'todo');
   assert.equal(released.task.claim, undefined);
   assert.equal(getTask('task-release')?.claim, undefined);
+});
+
+
+test('claim next selects the highest-priority eligible leaf and keeps final gates and parents out of auto-selection', () => {
+  const projectId = 'project-next-selection';
+  createCandidateProject(projectId);
+  seedCandidateTask(projectId, 'next-parent', ['src/Parent.ts'], { priority: 'high', createdAt: '2026-08-10T00:00:00.000Z' });
+  seedCandidateTask(projectId, 'next-child', ['src/Child.ts'], { parentId: 'next-parent', priority: 'medium', createdAt: '2026-08-10T00:00:01.000Z' });
+  seedCandidateTask(projectId, 'next-final', ['src/Final.ts'], { priority: 'high', tags: ['final-gate'], createdAt: '2026-08-10T00:00:02.000Z' });
+  seedCandidateTask(projectId, 'next-blocked', ['src/Blocked.ts'], { priority: 'high', tags: ['depends-on:missing-task'], createdAt: '2026-08-10T00:00:02.500Z' });
+  seedCandidateTask(projectId, 'next-high', ['src/High.ts'], { priority: 'high', createdAt: '2026-08-10T00:00:03.000Z' });
+  seedCandidateTask(projectId, 'next-low', ['src/Low.ts'], { priority: 'low', createdAt: '2026-08-10T00:00:04.000Z' });
+
+  const first = claims.claimNextTaskForSession(projectId, { sessionId: 'next-worker-alpha', ownerLabel: 'Chat N1', limit: 10 });
+  assert.equal(first.status, 'claimed');
+  assert.equal(first.task.id, 'next-high');
+  assert.match(first.workspace.workspaceId, /^ws_[a-f0-9]{16}$/);
+  assert.equal(JSON.stringify(first).includes('next-worker-alpha'), false);
+  assert.equal(JSON.stringify(first).includes(repoRoot), false);
+
+  const second = claims.claimNextTaskForSession(projectId, { sessionId: 'next-worker-beta', ownerLabel: 'Chat N2', limit: 10 });
+  assert.equal(second.status, 'claimed');
+  assert.equal(second.task.id, 'next-child');
+  assert.notEqual(second.task.id, first.task.id);
+});
+
+test('claim next defers ambiguous and conflicting scope instead of overriding it', () => {
+  const projectId = 'project-next-deferred';
+  createCandidateProject(projectId);
+  seedCandidateTask(projectId, 'next-anchor', ['src/Shared.ts'], { priority: 'high' });
+  seedCandidateTask(projectId, 'next-overlap', ['src/Shared.ts'], { priority: 'high' });
+  seedCandidateTask(projectId, 'next-uncertain', [], { priority: 'high' });
+  claims.claimTaskForSession('next-anchor', { sessionId: 'anchor-owner', ownerLabel: 'Chat Anchor' });
+
+  const result = claims.claimNextTaskForSession(projectId, { sessionId: 'deferred-worker', ownerLabel: 'Chat Deferred', limit: 10 });
+  assert.equal(result.status, 'no-eligible');
+  assert.equal(result.code, 'NO_ELIGIBLE_TASK');
+  assert.equal(result.scanned, 2);
+  assert.equal(result.deferred >= 2, true);
+});
+
+test('claim next gives one winner when multiple workers contend for one eligible task', () => {
+  const projectId = 'project-next-race';
+  createCandidateProject(projectId);
+  seedCandidateTask(projectId, 'next-only', ['src/Only.ts'], { priority: 'high' });
+
+  const attempts = ['A', 'B', 'C', 'D', 'E'].map((label) =>
+    claims.claimNextTaskForSession(projectId, { sessionId: `race-worker-${label}`, ownerLabel: `Chat ${label}`, limit: 10 }));
+  const winners = attempts.filter((result: any) => result.status === 'claimed') as Array<{ status: 'claimed'; task: any }>;
+  const misses = attempts.filter((result: any) => result.status === 'no-eligible');
+  assert.equal(winners.length, 1);
+  assert.equal(winners[0].task.id, 'next-only');
+  assert.equal(misses.length, 4);
+  assert.equal(getTask('next-only')?.claim?.ownerLabel, 'Chat A');
 });
 
 test.after(() => {

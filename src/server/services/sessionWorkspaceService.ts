@@ -96,6 +96,59 @@ function currentHead(root: string) {
   return (runGit(root, ['rev-parse', 'HEAD']).stdout || '').trim();
 }
 
+function isAncestor(root: string, ancestor: string, descendant: string) {
+  return runGit(root, ['merge-base', '--is-ancestor', ancestor, descendant], true).status === 0;
+}
+
+function patchEquivalent(root: string, baseHead: string, sourceHead: string) {
+  const result = runGit(root, ['cherry', baseHead, sourceHead], true);
+  if (result.status !== 0) return false;
+  const rows = (result.stdout || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  return rows.length > 0 && rows.every((line) => line.startsWith('- '));
+}
+
+function checkedOutBranches(root: string) {
+  const result = runGit(root, ['worktree', 'list', '--porcelain'], true);
+  const branches = new Set<string>();
+  for (const line of (result.stdout || '').split(/\r?\n/)) {
+    const match = line.match(/^branch refs\/heads\/(.+)$/);
+    if (match) branches.add(match[1]);
+  }
+  return branches;
+}
+
+function managedBranchPrefix(projectId: string) {
+  return `devflow/ws/${safeSegment(projectId)}/`;
+}
+
+function getManagedBranchDisposition(
+  projectRoot: string,
+  projectId: string,
+  branch: string,
+  baseBranch: string,
+  options: { allowCheckedOut?: boolean } = {},
+) {
+  if (!branch.startsWith(managedBranchPrefix(projectId)) || !branchExists(projectRoot, branch)) return { safe: false as const, reason: 'not-managed-or-missing' as const };
+  if (!options.allowCheckedOut && checkedOutBranches(projectRoot).has(branch)) return { safe: false as const, reason: 'checked-out' as const };
+  const baseHeadResult = runGit(projectRoot, ['rev-parse', baseBranch], true);
+  const sourceHeadResult = runGit(projectRoot, ['rev-parse', branch], true);
+  if (baseHeadResult.status !== 0 || sourceHeadResult.status !== 0) return { safe: false as const, reason: 'unresolvable' as const };
+  const baseHead = (baseHeadResult.stdout || '').trim();
+  const sourceHead = (sourceHeadResult.stdout || '').trim();
+  if (isAncestor(projectRoot, sourceHead, baseHead)) return { safe: true as const, reason: 'merged' as const, sourceHead, baseHead };
+  if (patchEquivalent(projectRoot, baseHead, sourceHead)) return { safe: true as const, reason: 'patch-equivalent' as const, sourceHead, baseHead };
+  return { safe: false as const, reason: 'unique-commits' as const, sourceHead, baseHead };
+}
+
+function removeManagedBranchIfSafe(workspace: SessionWorkspace) {
+  const disposition = getManagedBranchDisposition(workspace.projectRoot, workspace.projectId, workspace.branch, workspace.baseBranch);
+  if (!disposition.safe) return { removed: false, disposition: disposition.reason };
+  const result = runGit(workspace.projectRoot, ['branch', '-D', workspace.branch], true);
+  return result.status === 0
+    ? { removed: true, disposition: disposition.reason }
+    : { removed: false, disposition: 'delete-failed' as const };
+}
+
 function canonicalContainment(candidate: string) {
   const rootsBase = path.resolve(workspaceRootsDir());
   fs.mkdirSync(rootsBase, { recursive: true });
@@ -137,6 +190,11 @@ function readMetadata(workspaceId: string) {
   } catch {
     return null;
   }
+}
+
+export function getSessionWorkspaceMetadataForRecovery(workspaceId: string) {
+  const workspace = readMetadata(String(workspaceId || '').trim());
+  return workspace ? { ...workspace } : null;
 }
 
 function touch(workspace: SessionWorkspace) {
@@ -275,6 +333,16 @@ export function cleanupSessionWorkspace(workspaceId: string, options: { force?: 
       throw createApiError(409, 'WORKSPACE_INTEGRATION_REQUIRED', 'Workspace still requires integration before cleanup.', { affectedId: workspaceId });
     }
   }
+  if (!options.force) {
+    const branchDisposition = getManagedBranchDisposition(workspace.projectRoot, workspace.projectId, workspace.branch, workspace.baseBranch, { allowCheckedOut: true });
+    if (!branchDisposition.safe) {
+      workspaceLifecycleCounters.cleanupBlocked += 1;
+      throw createApiError(409, 'WORKSPACE_UNINTEGRATED_COMMITS', 'Workspace branch still contains unique or unverifiable commits and cannot be removed by normal cleanup.', {
+        affectedId: workspaceId,
+        details: { branch: workspace.branch, disposition: branchDisposition.reason },
+      });
+    }
+  }
   if (fs.existsSync(root)) {
     const result = runGit(workspace.projectRoot, ['worktree', 'remove', ...(options.force ? ['--force'] : []), root], true);
     if (result.status !== 0) {
@@ -282,11 +350,12 @@ export function cleanupSessionWorkspace(workspaceId: string, options: { force?: 
       throw createApiError(409, 'WORKSPACE_REMOVE_FAILED', 'Git refused to remove the workspace.', { affectedId: workspaceId, details: result.stderr?.trim() });
     }
   }
+  const branchCleanup = removeManagedBranchIfSafe(workspace);
   fs.rmSync(metadataPath(workspaceId), { force: true });
   memoryRegistry.delete(workspaceId);
   activeWorkspaceRefs.delete(workspaceId);
   workspaceLifecycleCounters.cleaned += 1;
-  return { removed: true, workspaceId, branch: workspace.branch };
+  return { removed: true, workspaceId, branch: workspace.branch, branchRemoved: branchCleanup.removed, branchDisposition: branchCleanup.disposition };
 }
 
 export function markSessionWorkspaceIntegrationRequired(workspaceId: string, required = true) {
@@ -305,6 +374,35 @@ export function markSessionWorkspaceIntegrated(workspaceId: string, integratedRe
   const next = { ...workspace, state: 'ready' as const, baseRevision: nextRevision };
   writeMetadata(next);
   return next;
+}
+
+export function cleanupManagedWorkspaceBranches(
+  project: { id: string; localPath?: string | null },
+  options: { baseBranch?: string; dryRun?: boolean } = {},
+) {
+  if (!project?.id) throw createApiError(400, 'PROJECT_ID_REQUIRED', 'project.id is required to clean managed workspace branches.');
+  const projectRoot = ensureRepository(path.resolve(String(project.localPath || '')));
+  const baseBranch = String(options.baseBranch || currentBranch(projectRoot)).trim();
+  const prefix = managedBranchPrefix(project.id);
+  const refs = runGit(projectRoot, ['for-each-ref', '--format=%(refname:short)', `refs/heads/${prefix}`], true);
+  const branches = (refs.stdout || '').split(/\r?\n/).map((entry) => entry.trim()).filter(Boolean);
+  const removed: Array<{ branch: string; disposition: string }> = [];
+  const preserved: Array<{ branch: string; disposition: string }> = [];
+  for (const branchName of branches) {
+    const disposition = getManagedBranchDisposition(projectRoot, project.id, branchName, baseBranch);
+    if (!disposition.safe) {
+      preserved.push({ branch: branchName, disposition: disposition.reason });
+      continue;
+    }
+    if (options.dryRun) {
+      removed.push({ branch: branchName, disposition: disposition.reason });
+      continue;
+    }
+    const deletion = runGit(projectRoot, ['branch', '-D', branchName], true);
+    if (deletion.status === 0) removed.push({ branch: branchName, disposition: disposition.reason });
+    else preserved.push({ branch: branchName, disposition: 'delete-failed' });
+  }
+  return { projectId: project.id, baseBranch, dryRun: options.dryRun === true, removed, preserved };
 }
 
 export function getSessionWorkspaceMetrics() {

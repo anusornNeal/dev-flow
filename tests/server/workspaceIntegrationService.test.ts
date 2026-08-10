@@ -103,6 +103,28 @@ test('advanced base rebases workspace commits and fast-forwards linearly', () =>
   assert.equal(repeated.integratedCommits.length, 0);
 });
 
+test('recreated patch-equivalent workspace is recognized without replaying an empty commit', () => {
+  const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-integration-equivalent-'));
+  process.env.DEVFLOW_RUNTIME_DIR = runtimeRoot;
+  resetSessionWorkspaceRuntimeForTests();
+  const root = repoFixture();
+  const workspace = createOrReuseSessionWorkspace(project(root), 'chat-equivalent');
+  commitFile(workspace.root, 'workspace.txt', 'same patch\n', 'old workspace implementation');
+  const sourceHead = git(workspace.root, ['rev-parse', 'HEAD']).stdout;
+  commitFile(root, 'workspace.txt', 'same patch\n', 'recreated implementation on latest develop');
+  const baseHeadBefore = git(root, ['rev-parse', 'HEAD']).stdout;
+  assert.notEqual(sourceHead, baseHeadBefore);
+
+  const result = integrateWorkspaceCommits(workspace.workspaceId);
+  assert.equal(result.status, 'succeeded');
+  assert.equal(result.alreadyIntegrated, true);
+  assert.equal(result.patchEquivalent, true);
+  assert.equal(result.baseHeadBefore, baseHeadBefore);
+  assert.equal(result.baseHeadAfter, baseHeadBefore, 'patch-equivalent recovery must not add an empty/replayed commit');
+  assert.equal(git(root, ['rev-parse', 'HEAD']).stdout, baseHeadBefore);
+  assert.equal(git(root, ['status', '--porcelain']).stdout, '');
+});
+
 test('explicit merge policy preserves merge topology and ticket-aware merge marker', () => {
   const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-integration-merge-policy-'));
   process.env.DEVFLOW_RUNTIME_DIR = runtimeRoot;

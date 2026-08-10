@@ -44,6 +44,7 @@ export type WorkspaceIntegrationSuccess = {
   integratedCommits: string[];
   changedFiles: string[];
   alreadyIntegrated?: boolean;
+  patchEquivalent?: boolean;
 };
 
 const integrationMetrics = { attempts: 0, successes: 0, conflicts: 0, aborts: 0, retries: 0 };
@@ -156,6 +157,13 @@ function restoreSourceHead(workspace: SessionWorkspace, sourceHead: string) {
 
 function isAncestor(root: string, ancestor: string, descendant: string) {
   return runGit(root, ['merge-base', '--is-ancestor', ancestor, descendant], { allowFailure: true }).status === 0;
+}
+
+function patchEquivalentToBase(root: string, baseHead: string, sourceHead: string) {
+  const result = runGit(root, ['cherry', baseHead, sourceHead], { allowFailure: true });
+  if (result.status !== 0) return false;
+  const rows = result.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  return rows.length > 0 && rows.every((line) => line.startsWith('- '));
 }
 
 function sourceCommits(root: string, baseRevision: string, sourceHead: string) {
@@ -391,6 +399,29 @@ export function integrateWorkspaceCommits(workspaceId: string, options: Workspac
       integratedCommits: commits,
       changedFiles: files,
       alreadyIntegrated: true,
+    };
+  }
+
+  if (commits.length > 0 && patchEquivalentToBase(workspace.root, baseHeadBefore, sourceHead)) {
+    clearIntegrationState(workspace.workspaceId);
+    markSessionWorkspaceIntegrated(workspace.workspaceId, baseHeadBefore);
+    integrationMetrics.successes += 1;
+    return {
+      status: 'succeeded',
+      workspaceId: workspace.workspaceId,
+      strategy: policy.integrationStrategy,
+      baseBranch: workspace.baseBranch,
+      sourceBranch: workspace.branch,
+      baseRevision: workspace.baseRevision,
+      baseHeadBefore,
+      baseHeadAfter: baseHeadBefore,
+      sourceHead,
+      integratedHead: baseHeadBefore,
+      sourceCommits: commits,
+      integratedCommits: [],
+      changedFiles: files,
+      alreadyIntegrated: true,
+      patchEquivalent: true,
     };
   }
 

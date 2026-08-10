@@ -29,7 +29,8 @@ import { applyAndVerifyAsync } from '../services/applyAndVerifyService';
 import { getRepoContextWithHandle } from '../services/contextHandleService';
 import { executeRecoveryAwareTool } from '../services/devFlowRecoveryRuntime.js';
 import { getRepoSemanticIndex } from '../services/repoInspectionIndexService';
-import { cleanupSessionWorkspace, createOrReuseSessionWorkspace } from '../services/sessionWorkspaceService';
+import { cleanupManagedWorkspaceBranches, cleanupSessionWorkspace, createOrReuseSessionWorkspace } from '../services/sessionWorkspaceService';
+import { finalizeSupersededWorkspace, inspectWorkspaceRecovery } from '../services/workspaceRecoveryService';
 import { abortWorkspaceIntegration, integrateWorkspaceCommits, retryWorkspaceIntegration } from '../services/workspaceIntegrationService';
 import { getRuntimeIdentity } from '../services/runtimeIdentityService';
 
@@ -174,6 +175,35 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
     try {
       const result = retryWorkspaceIntegration(req.body?.workspaceId);
       return res.status(result.status === 'conflict' ? 409 : 200).json(result);
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.post('/api/workspaces/recovery/inspect', (req, res) => {
+    try {
+      return res.json(inspectWorkspaceRecovery(req.body?.workspaceId));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.post('/api/workspaces/recovery/finalize-superseded', (req, res) => {
+    try {
+      return res.json(finalizeSupersededWorkspace(req.body?.workspaceId, {
+        supersededByCommit: req.body?.supersededByCommit,
+        temporaryPaths: req.body?.temporaryPaths,
+      }));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.post('/api/workspaces/branches/cleanup', (req, res) => {
+    try {
+      const project = findProjectByIdentifier(deps.state, req.body || {});
+      if (!project) throw createApiError(404, 'PROJECT_NOT_FOUND', 'Project could not be resolved for managed branch cleanup.');
+      return res.json(cleanupManagedWorkspaceBranches(project, { baseBranch: req.body?.baseBranch, dryRun: req.body?.dryRun === true }));
     } catch (error) {
       return sendApiError(res, error);
     }

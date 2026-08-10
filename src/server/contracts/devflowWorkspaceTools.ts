@@ -37,6 +37,27 @@ export const workspaceToolDefinitions: DevFlowToolDefinition[] = [
     buildHttpRequest: (args) => ({ method: 'POST', path: '/api/workspaces/integration/retry', body: args }),
   },
   {
+    name: 'inspect_workspace_recovery',
+    description: 'Inspect one managed workspace for dirty, stale, unique-commit, already-integrated, or patch-equivalent recovery state without mutating Git.',
+    inputSchema: { type: 'object', properties: { workspaceId: { type: 'string', description: 'Opaque DevFlow workspace id.' } }, required: ['workspaceId'] },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: (args) => ({ method: 'POST', path: '/api/workspaces/recovery/inspect', body: args }),
+  },
+  {
+    name: 'finalize_superseded_workspace',
+    description: 'Discard only dirty workspace files proven equivalent to a supplied commit already contained in the local base, plus explicitly-declared temporary paths, then safely clean the workspace. Ambiguous work is preserved.',
+    inputSchema: { type: 'object', properties: { workspaceId: { type: 'string', description: 'Opaque DevFlow workspace id.' }, supersededByCommit: { type: 'string', description: 'Local commit already contained in the base branch that supersedes this workspace work.' }, temporaryPaths: { type: 'array', items: { type: 'string' }, description: 'Explicit temporary paths allowed to be discarded during superseded cleanup.' } }, required: ['workspaceId', 'supersededByCommit'] },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: (args) => ({ method: 'POST', path: '/api/workspaces/recovery/finalize-superseded', body: args }),
+  },
+  {
+    name: 'cleanup_managed_workspace_branches',
+    description: 'Dry-run or remove only DevFlow-managed local workspace branches that are merged or patch-equivalent to the selected local base. Checked-out, unique, and unverifiable branches are preserved. Never pushes or fetches.',
+    inputSchema: { type: 'object', properties: { ...projectIdentifierProperties, baseBranch: { type: 'string', description: 'Local base branch. Defaults to the active branch.' }, dryRun: { type: 'boolean', description: 'Preview safe branch removals without changing Git.' } } },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: (args) => ({ method: 'POST', path: '/api/workspaces/branches/cleanup', body: args }),
+  },
+  {
     name: 'cleanup_session_workspace',
     description: 'Remove a clean, inactive, integration-safe managed session worktree. Normal cleanup refuses dirty/active/integration-required workspaces.',
     inputSchema: { type: 'object', properties: { workspaceId: { type: 'string', description: 'Opaque DevFlow workspace id.' } }, required: ['workspaceId'] },

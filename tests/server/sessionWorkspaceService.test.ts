@@ -76,5 +76,22 @@ test('normal cleanup refuses dirty workspace and clean cleanup removes worktree'
   git(workspace.root, ['checkout', '--', 'README.md']);
   const result = cleanupSessionWorkspace(workspace.workspaceId);
   assert.equal(result.removed, true);
+  assert.equal(result.branchRemoved, true);
   assert.equal(fs.existsSync(workspace.root), false);
+  assert.notEqual(spawnSync('git', ['show-ref', '--verify', '--quiet', `refs/heads/${workspace.branch}`], { cwd: repo, shell: false }).status, 0);
+});
+
+test('normal cleanup preserves clean workspace with unique commits', () => {
+  const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-workspace-unique-'));
+  process.env.DEVFLOW_RUNTIME_DIR = runtimeRoot;
+  resetSessionWorkspaceRuntimeForTests();
+  const repo = createRepo();
+  const workspace = createOrReuseSessionWorkspace(project(repo), 'unique-chat');
+  fs.writeFileSync(path.join(workspace.root, 'unique.txt'), 'unique\n');
+  git(workspace.root, ['add', 'unique.txt']);
+  git(workspace.root, ['commit', '-m', 'unique workspace commit']);
+
+  assert.throws(() => cleanupSessionWorkspace(workspace.workspaceId), /unique|unintegrated/i);
+  assert.equal(fs.existsSync(workspace.root), true);
+  assert.equal(spawnSync('git', ['show-ref', '--verify', '--quiet', `refs/heads/${workspace.branch}`], { cwd: repo, shell: false }).status, 0);
 });

@@ -3,10 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useRef, useEffect } from 'react';
-import { GitBranch, Copy, Check, Trash2, FileCode, CheckSquare, Image as ImageIcon, Link as LinkIcon, Lock, AlertTriangle, Ban, CircleCheck, Bot, Zap, ChevronDown, Flame, Coffee, Layout, Server } from 'lucide-react';
+import React, { useState } from 'react';
+import { GitBranch, Copy, Check, Trash2, FileCode, CheckSquare, Image as ImageIcon, Link as LinkIcon, Lock, AlertTriangle, Ban, CircleCheck, Flame, Coffee, Layout, Server } from 'lucide-react';
 import { Task } from '../types';
-import { AGENTS_CONFIG, getModelConfig, defaultModelForAgent, defaultEffortForModel, getDisplayModelName } from '../lib/agentsConfig';
+import { getDisplayModelName } from '../lib/agentsConfig';
 import { getAutoWorkState } from '../lib/autoWorkState';
 import CopyTemplateButton from './CopyTemplateButton';
 import { AgentLogo } from './AgentLogo';
@@ -26,25 +26,6 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
   const [copied, setCopied] = useState(false);
   const [idCopied, setIdCopied] = useState(false);
   const [isDrag, setIsDrag] = useState(false);
-  const [isEditingAgent, setIsEditingAgent] = useState(false);
-  const [agentMenuOpen, setAgentMenuOpen] = useState(false);
-  const [modelMenuOpen, setModelMenuOpen] = useState(false);
-
-  const editContainerRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    function handleClickOutside(event: MouseEvent) {
-      if (isEditingAgent && editContainerRef.current && !editContainerRef.current.contains(event.target as Node)) {
-        setIsEditingAgent(false);
-        setAgentMenuOpen(false);
-        setModelMenuOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => {
-      document.removeEventListener("mousedown", handleClickOutside);
-    };
-  }, [isEditingAgent]);
 
   const handleCopyBranch = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -74,6 +55,7 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
   const completedSteps = task.checklist?.filter(item => item.completed).length || 0;
   const filesCount = task.targetFiles?.length || 0;
   const unresolvedBugCount = task.unresolvedBugCount ?? (task.bugs || []).filter((bug) => ['open', 'fixing', 'fixed', 'reopened'].includes(bug.status)).length;
+  const activeClaim = task.claim && Date.parse(task.claim.expiresAt) > Date.now() ? task.claim : null;
   
   const hasEffectiveAssignment = Boolean(task.agent || task.model || task.effort);
 
@@ -311,153 +293,13 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
             )}
           </div>
 
-          {/* Row 2: Agent, Model & Effort */}
-          {!isEditingAgent && (
+          {/* Active task claim */}
+          {activeClaim && (
             <div className="flex items-center w-full mt-0.5">
-              <span 
-                onClick={(e) => { e.stopPropagation(); setIsEditingAgent(true); }}
-                className="flex items-center gap-1.5 px-2 py-1 rounded-md border border-[#ebdcb9] dark:border-[#584a3b]/40 bg-[#fdfbf7]/50 dark:bg-[#292119]/50 text-[#8a725f] dark:text-[#f3eadf] text-[9.5px] font-mono font-bold w-full shadow-sm overflow-hidden cursor-pointer hover:bg-[#fffbf4] dark:bg-[#292119] dark:hover:bg-[#382f25] transition-colors"
-              >
-                {hasEffectiveAssignment ? (
-                  <>
-                    <AgentLogo agent={task.model || task.agent} size={12} className="shrink-0 relative -top-[0.5px] text-[#b49f8e] dark:text-[#b8ab9f]" />
-                    <span className="leading-none mt-[1px] truncate flex-1 text-left">
-                      {getDisplayModelName(task.agent, task.model) || task.agent || 'Agent'}
-                    </span>
-                    {task.effort && (
-                      <>
-                        <span className="text-[#ebdcb9] dark:text-[#584a3b] mx-0.5 relative -top-[0.5px] shrink-0">|</span>
-                        <Zap size={11} className="relative -top-[0.5px] shrink-0 text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d]" />
-                        <span className="leading-none mt-[1px] shrink-0">{task.effort}</span>
-                      </>
-                    )}
-                  </>
-                ) : (
-                  <>
-                    <Bot size={12} className="shrink-0 relative -top-[0.5px] text-[#b49f8e]/60 dark:text-[#b8ab9f]/60" />
-                    <span className="leading-none mt-[1px] truncate flex-1 text-left italic text-[#8a725f]/60 dark:text-[#f3eadf]/60">
-                      Unassigned
-                    </span>
-                  </>
-                )}
+              <span className="flex items-center gap-1.5 px-2 py-1 rounded-md border border-[#ebdcb9] dark:border-[#584a3b]/40 bg-[#fdfbf7]/50 dark:bg-[#292119]/50 text-[#8a725f] dark:text-[#f3eadf] text-[9.5px] font-mono font-bold w-full shadow-sm overflow-hidden" title={`Claimed by ${activeClaim.ownerLabel}`}>
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+                <span className="leading-none mt-[1px] truncate">กำลังทำ · {activeClaim.ownerLabel}</span>
               </span>
-            </div>
-          )}
-          {isEditingAgent && (
-            <div 
-              ref={editContainerRef}
-              className="flex items-center gap-1 px-1.5 py-0.5 rounded-md border border-[#ebdcb9] dark:border-[#584a3b]/40 bg-[#fdfbf7]/50 dark:bg-[#292119]/50 text-[#8a725f] dark:text-[#f3eadf] text-[9.5px] font-mono font-bold w-full shadow-sm" 
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="flex items-center gap-0.5 flex-1 min-w-0">
-                {/* Custom Agent Dropdown */}
-                <div className="relative flex-1 min-w-0 flex flex-col">
-                  <div 
-                    onClick={() => { setAgentMenuOpen(!agentMenuOpen); setModelMenuOpen(false); }}
-                    className="w-full bg-transparent hover:bg-[#ebdcb9] dark:bg-[#584a3b]/20 dark:hover:bg-[#584a3b]/20 rounded py-0.5 px-0.5 outline-none text-[#8a725f] dark:text-[#f3eadf] font-mono font-bold transition-all cursor-pointer flex items-center justify-between"
-                  >
-                    <div className="flex items-center gap-1 truncate">
-                      {task.agent ? <AgentLogo agent={task.agent} size={11} className="shrink-0" /> : <Bot size={11} className="shrink-0 opacity-60" />}
-                      <span className="truncate">{task.agent || 'Unassigned'}</span>
-                    </div>
-                    <ChevronDown size={10} className="shrink-0 opacity-50 ml-0.5" />
-                  </div>
-                  
-                  {agentMenuOpen && (
-                    <div className="absolute top-full left-0 mt-1 w-28 bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-lg shadow-lg z-50 py-1 flex flex-col font-mono text-[9.5px] text-[#8a725f] dark:text-[#f3eadf]">
-                      {[
-                        { id: '', name: 'Unassigned', icon: <Bot size={11} className="opacity-60" /> },
-                        { id: 'Codex', name: 'Codex' },
-                        { id: 'Antigravity', name: 'Antigravity' },
-                        { id: 'Claude', name: 'Claude' }
-                      ].map(opt => (
-                        <button
-                          key={opt.id}
-                          className={`flex items-center gap-1.5 px-2 py-1.5 hover:bg-[#ebdcb9]/20 dark:hover:bg-[#584a3b]/20 text-left transition-colors ${task.agent === opt.id ? 'bg-[#ebdcb9]/30 dark:bg-[#584a3b]/30 font-extrabold' : 'font-bold'}`}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            const val = opt.id;
-                            if (onUpdate) {
-                              const defaultModel = val ? defaultModelForAgent(val) : '';
-                              const defaultEffort = val ? defaultEffortForModel(val, defaultModel) : '';
-                              onUpdate({
-                                ...task,
-                                agent: val || '',
-                                model: defaultModel || '',
-                                effort: defaultEffort || ''
-                              });
-                            }
-                            setAgentMenuOpen(false);
-                          }}
-                        >
-                          {opt.id ? <AgentLogo agent={opt.id} size={11} className="shrink-0" /> : opt.icon}
-                          <span className="truncate">{opt.name}</span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                {task.agent && (
-                  <>
-                    <span className="text-[#ebdcb9] dark:text-[#584a3b] shrink-0 mx-0.5">|</span>
-                    {/* Custom Model Dropdown */}
-                    <div className="relative flex-1 min-w-0 flex flex-col">
-                      <div 
-                        onClick={() => { setModelMenuOpen(!modelMenuOpen); setAgentMenuOpen(false); }}
-                        className="w-full bg-transparent hover:bg-[#ebdcb9] dark:bg-[#584a3b]/20 dark:hover:bg-[#584a3b]/20 rounded py-0.5 px-0.5 outline-none text-[#8a725f] dark:text-[#f3eadf] font-mono font-bold transition-all cursor-pointer flex items-center justify-between"
-                      >
-                        <span className="truncate">{getDisplayModelName(task.agent, task.model) || 'Default'}</span>
-                        <ChevronDown size={10} className="shrink-0 opacity-50 ml-0.5" />
-                      </div>
-                      
-                      {modelMenuOpen && (
-                        <div className="absolute top-full left-0 mt-1 w-32 bg-white dark:bg-[#292119] border border-[#ebdcb9] dark:border-[#584a3b] rounded-lg shadow-lg z-50 py-1 flex flex-col font-mono text-[9.5px] text-[#8a725f] dark:text-[#f3eadf]">
-                          <button
-                            className={`flex items-center gap-1.5 px-2 py-1.5 hover:bg-[#ebdcb9]/20 dark:hover:bg-[#584a3b]/20 text-left transition-colors ${!task.model ? 'bg-[#ebdcb9]/30 dark:bg-[#584a3b]/30 font-extrabold' : 'font-bold'}`}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (onUpdate) {
-                                onUpdate({ ...task, model: undefined, effort: undefined });
-                              }
-                              setModelMenuOpen(false);
-                            }}
-                          >
-                            <Zap size={11} className="opacity-60 shrink-0 text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d]" />
-                            <span className="truncate">Default</span>
-                          </button>
-                          {AGENTS_CONFIG[task.agent as import('../lib/agentsConfig').AgentName]?.map(m => (
-                            <button
-                              key={m.model_name}
-                              className={`flex items-center gap-1.5 px-2 py-1.5 hover:bg-[#ebdcb9]/20 dark:hover:bg-[#584a3b]/20 text-left transition-colors ${task.model === m.model_name ? 'bg-[#ebdcb9]/30 dark:bg-[#584a3b]/30 font-extrabold' : 'font-bold'}`}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (onUpdate) {
-                                  onUpdate({
-                                    ...task,
-                                    model: m.model_name,
-                                    effort: defaultEffortForModel(task.agent!, m.model_name)
-                                  });
-                                }
-                                setModelMenuOpen(false);
-                              }}
-                            >
-                              <span className="truncate">{m.display_name || m.model_name}</span>
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </>
-                )}
-              </div>
-              <button
-                onClick={(e) => { e.stopPropagation(); setIsEditingAgent(false); setAgentMenuOpen(false); setModelMenuOpen(false); }}
-                className="shrink-0 ml-1 p-0.5 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 dark:hover:bg-emerald-900/30 rounded transition-colors flex items-center justify-center"
-                title="Done editing"
-              >
-                <Check size={11} strokeWidth={3} />
-              </button>
             </div>
           )}
         </div>

@@ -38,6 +38,7 @@ import { registerTaskReviewRoutes } from './taskReviewRoutes';
 import { registerLegacyTaskAgentRoutes } from './taskLegacyAgentRoutes';
 import { registerTaskReadRoutes } from './taskReadRoutes';
 import { registerTaskWorkflowRoutes } from './taskWorkflowRoutes';
+import { registerTaskClaimRoutes } from './taskClaimRoutes';
 import { buildTaskGitWarnings, evaluateReviewSubmission, syncTaskWithGit } from '../services/taskGitWorkflowService';
 
 import {
@@ -68,7 +69,7 @@ import {
 export { completeAgentRunForTask, continueTaskQueueForProject, triggerTaskAgent } from './taskRouteSupport';
 export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
   registerTaskSetAuthoringRoute(app, deps);
-  registerTaskReadRoutes(app, deps);  registerTaskBugRoutes(app, deps);  registerTaskReviewRoutes(app, deps);  registerLegacyTaskAgentRoutes(app, deps);
+  registerTaskReadRoutes(app, deps);  registerTaskBugRoutes(app, deps);  registerTaskReviewRoutes(app, deps);  registerLegacyTaskAgentRoutes(app, deps);  registerTaskClaimRoutes(app, deps);
   app.post('/api/tasks/draft-from-jira', async (req, res, next) => {
     try {
       const fingerprint = buildIdempotencyFingerprint(req.method, req.path, req.body);

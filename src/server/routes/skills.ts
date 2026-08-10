@@ -12,6 +12,7 @@ const AUTHORING_SKILL_IDS = [
   '05-authoring-evidence',
   '06-authoring-decomposition',
   '07-authoring-execution',
+  '08-board-loop-execution',
 ];
 const AUTHORING_SKILL_ID_SET = new Set(AUTHORING_SKILL_IDS);
 

@@ -15,7 +15,8 @@ const MASTER_SKILL_SEEDS = [
   { id: '04-examples', name: 'Examples', description: 'Examples of well-formed DevFlow cards and task patches.' },
   { id: '05-authoring-evidence', name: 'Authoring Evidence Skill', description: 'Jira, Figma, and Project Atlas evidence rules loaded on demand.' },
   { id: '06-authoring-decomposition', name: 'Authoring Decomposition Skill', description: 'Parent/child and frontend/backend split rules loaded on demand.' },
-  { id: '07-authoring-execution', name: 'Authoring Execution Skill', description: 'Guarded repository editing and verification rules loaded on demand.' }
+  { id: '07-authoring-execution', name: 'Authoring Execution Skill', description: 'Guarded repository editing and verification rules loaded on demand.' },
+  { id: '08-board-loop-execution', name: 'Board Loop Execution Skill', description: 'Atomic multi-chat board claiming and full-loop execution rules loaded on demand.' }
 ];
 
 const LEGACY_MASTER_SKILL_IDS = new Set(MASTER_SKILL_SEEDS.map((skill) => skill.id));

@@ -562,8 +562,8 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        id: { type: 'string', enum: ['00-skill-router', '01-authoring-core', '02-schema-reference', '03-reviewer-core', '04-examples', '05-authoring-evidence', '06-authoring-decomposition', '07-authoring-execution'] },
-        skillId: { type: 'string', enum: ['00-skill-router', '01-authoring-core', '02-schema-reference', '03-reviewer-core', '04-examples', '05-authoring-evidence', '06-authoring-decomposition', '07-authoring-execution'] },
+        id: { type: 'string', enum: ['00-skill-router', '01-authoring-core', '02-schema-reference', '03-reviewer-core', '04-examples', '05-authoring-evidence', '06-authoring-decomposition', '07-authoring-execution', '08-board-loop-execution'] },
+        skillId: { type: 'string', enum: ['00-skill-router', '01-authoring-core', '02-schema-reference', '03-reviewer-core', '04-examples', '05-authoring-evidence', '06-authoring-decomposition', '07-authoring-execution', '08-board-loop-execution'] },
       },
     },
     outputSchema: { type: 'object' },

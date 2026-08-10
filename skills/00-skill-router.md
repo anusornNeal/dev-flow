@@ -26,6 +26,9 @@ Load `06-authoring-decomposition` only for large work, parent/child authoring, f
 ## Repository implementation/editing
 Load `07-authoring-execution` only when the current action includes local code/file edits, verification, or commit work. Multi-file edits should bootstrap with `read_file_snippets_batch(includeFileRef=true)`; a genuinely single-file edit may use `read_local_file(includeFileRef=true)`.
 
+## Continuous board execution
+Load `08-board-loop-execution` for board-loop / keep-taking-work requests. It requires atomic `claim_task` ownership so concurrent chats skip duplicate or overlapping work.
+
 ## Review and existing-task defects
 Load `03-reviewer-core` for review, review feedback, corrected review assumptions, and embedded bug guidance. Use `open_task_bug` for a distinct defect on an existing task; do not create a new top-level task unless the user explicitly requests one.
 

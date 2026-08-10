@@ -104,7 +104,18 @@ test('syncTaskWithGit records published head and normalized verification evidenc
 test('workspace-bound Git evidence stays on the implementation worktree when develop advances concurrently', () => {
   const fixture = setup('workspace-evidence');
   const workspace = createOrReuseSessionWorkspace({ id: fixture.projectId, localPath: fixture.root }, 'task-workspace-evidence');
-  const task = createTask(fixture.projectId, { branch: workspace.branch });
+  const claimedAt = new Date().toISOString();
+  const task = createTask(fixture.projectId, {
+    branch: 'develop',
+    claim: {
+      sessionIdHash: 'workspace-evidence',
+      workspaceId: workspace.workspaceId,
+      ownerKind: 'chat',
+      ownerLabel: 'Chat Evidence',
+      claimedAt,
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    },
+  });
 
   fs.writeFileSync(path.join(workspace.root, 'workspace.txt'), 'task implementation\n');
   git(workspace.root, ['add', 'workspace.txt']);
@@ -130,6 +141,72 @@ test('workspace-bound Git evidence stays on the implementation worktree when dev
   assert.equal(result.gitEvidence.workspaceId, workspace.workspaceId);
   assert.equal(result.gitEvidence.evidenceSource, 'managed-workspace');
 });
+
+test('workspace-bound Git evidence rejects a workspace that is not the task active claim', () => {
+  const fixture = setup('workspace-foreign-claim');
+  const workspace = createOrReuseSessionWorkspace({ id: fixture.projectId, localPath: fixture.root }, 'workspace-foreign-claim');
+  const claimedAt = new Date().toISOString();
+  const task = createTask(fixture.projectId, {
+    branch: 'develop',
+    claim: {
+      sessionIdHash: 'foreign-claim',
+      workspaceId: 'ws_foreign_claim',
+      ownerKind: 'chat',
+      ownerLabel: 'Chat Other',
+      claimedAt,
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    },
+  });
+
+  assert.throws(
+    () => syncTaskWithGit(fixture.state, task, { workspaceId: workspace.workspaceId, remote: 'origin', fetch: false, checks: passedChecks }),
+    (error: any) => error?.payload?.code === 'TASK_GIT_EVIDENCE_CLAIM_MISMATCH',
+  );
+});
+
+test('workspace-bound Git evidence rejects an expired task claim', () => {
+  const fixture = setup('workspace-stale-claim');
+  const workspace = createOrReuseSessionWorkspace({ id: fixture.projectId, localPath: fixture.root }, 'workspace-stale-claim');
+  const task = createTask(fixture.projectId, {
+    branch: 'develop',
+    claim: {
+      sessionIdHash: 'stale-claim',
+      workspaceId: workspace.workspaceId,
+      ownerKind: 'chat',
+      ownerLabel: 'Chat Stale',
+      claimedAt: new Date(Date.now() - 120_000).toISOString(),
+      expiresAt: new Date(Date.now() - 60_000).toISOString(),
+    },
+  });
+
+  assert.throws(
+    () => syncTaskWithGit(fixture.state, task, { workspaceId: workspace.workspaceId, remote: 'origin', fetch: false, checks: passedChecks }),
+    (error: any) => error?.payload?.code === 'TASK_GIT_EVIDENCE_CLAIM_INACTIVE',
+  );
+});
+
+test('workspace-bound Git evidence rejects a managed workspace created from the wrong base branch', () => {
+  const fixture = setup('workspace-base-mismatch');
+  git(fixture.root, ['switch', '-c', 'feature/base']);
+  const workspace = createOrReuseSessionWorkspace({ id: fixture.projectId, localPath: fixture.root }, 'workspace-base-mismatch');
+  const task = createTask(fixture.projectId, {
+    branch: 'develop',
+    claim: {
+      sessionIdHash: 'base-mismatch',
+      workspaceId: workspace.workspaceId,
+      ownerKind: 'chat',
+      ownerLabel: 'Chat Base',
+      claimedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    },
+  });
+
+  assert.throws(
+    () => syncTaskWithGit(fixture.state, task, { workspaceId: workspace.workspaceId, remote: 'origin', fetch: false, checks: passedChecks }),
+    (error: any) => error?.payload?.code === 'TASK_GIT_EVIDENCE_BRANCH_MISMATCH',
+  );
+});
+
 
 test('syncTaskWithGit rejects project-root evidence when the task expects an isolated workspace branch', () => {
   const fixture = setup('workspace-mismatch');

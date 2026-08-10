@@ -6,6 +6,7 @@ import { getGitBranch, getGitStatus, getGitSyncStatus } from './gitService';
 import { createApiError } from './api';
 import { getExecutionOwnershipState } from './executionSessionService';
 import { resolveProjectRoot } from './localFileService';
+import { getSessionWorkspaceMetadataForRecovery } from './sessionWorkspaceService';
 
 const VALID_VERIFICATION_STATUSES = new Set<VerificationEvidenceStatus>(['passed', 'failed', 'not-run']);
 const UNRESOLVED_BUG_STATUSES = new Set(['open', 'fixing', 'reopened']);
@@ -81,6 +82,26 @@ function collectGitEvidence(
   }
   const remote = typeof args.remote === 'string' && args.remote.trim() ? args.remote.trim() : 'origin';
   const workspaceId = typeof args.workspaceId === 'string' && args.workspaceId.trim() ? args.workspaceId.trim() : undefined;
+  const managedWorkspace = workspaceId ? getSessionWorkspaceMetadataForRecovery(workspaceId) : null;
+  if (workspaceId) {
+    if (!managedWorkspace || managedWorkspace.projectId !== task.projectId) {
+      throw createApiError(404, 'WORKSPACE_NOT_FOUND', `Workspace '${workspaceId}' was not found for task project '${task.projectId}'.`, { affectedId: workspaceId });
+    }
+    const claim = task.claim;
+    if (!claim || claim.workspaceId !== workspaceId) {
+      throw createApiError(409, 'TASK_GIT_EVIDENCE_CLAIM_MISMATCH', 'Managed workspace Git evidence must come from the task active claimed workspace.', {
+        affectedId: task.displayId || task.id,
+        details: { workspaceId, claimedWorkspaceId: claim?.workspaceId || null },
+      });
+    }
+    const expiresAtMs = Date.parse(String(claim.expiresAt || ''));
+    if (!Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()) {
+      throw createApiError(409, 'TASK_GIT_EVIDENCE_CLAIM_INACTIVE', 'Managed workspace Git evidence requires a non-expired active task claim.', {
+        affectedId: task.displayId || task.id,
+        details: { workspaceId, expiresAt: claim.expiresAt || null },
+      });
+    }
+  }
   const sync = getGitSyncStatus(state, {
     projectId: task.projectId,
     workspaceId,
@@ -90,16 +111,30 @@ function collectGitEvidence(
     nowMs: args.nowMs,
   });
   const expectedBranch = typeof task.branch === 'string' ? task.branch.trim() : '';
-  if (options.rejectBranchMismatch && expectedBranch && sync.branch !== expectedBranch) {
-    throw createApiError(409, 'TASK_GIT_EVIDENCE_BRANCH_MISMATCH', `Task expects branch '${expectedBranch}' but Git evidence resolved branch '${sync.branch}'.`, {
-      affectedId: task.displayId || task.id,
-      details: {
-        expectedBranch,
-        observedBranch: sync.branch,
-        evidenceSource: workspaceId ? 'managed-workspace' : 'project-root',
-        workspaceId,
-      },
-    });
+  if (options.rejectBranchMismatch && expectedBranch) {
+    if (workspaceId) {
+      if (managedWorkspace!.baseBranch !== expectedBranch) {
+        throw createApiError(409, 'TASK_GIT_EVIDENCE_BRANCH_MISMATCH', `Task expects base branch '${expectedBranch}' but managed workspace was created from '${managedWorkspace!.baseBranch}'.`, {
+          affectedId: task.displayId || task.id,
+          details: {
+            expectedBranch,
+            observedBranch: sync.branch,
+            observedBaseBranch: managedWorkspace!.baseBranch,
+            evidenceSource: 'managed-workspace',
+            workspaceId,
+          },
+        });
+      }
+    } else if (sync.branch !== expectedBranch) {
+      throw createApiError(409, 'TASK_GIT_EVIDENCE_BRANCH_MISMATCH', `Task expects branch '${expectedBranch}' but Git evidence resolved branch '${sync.branch}'.`, {
+        affectedId: task.displayId || task.id,
+        details: {
+          expectedBranch,
+          observedBranch: sync.branch,
+          evidenceSource: 'project-root',
+        },
+      });
+    }
   }
   return {
     evidenceSource: workspaceId ? 'managed-workspace' : 'project-root',

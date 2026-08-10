@@ -31,7 +31,9 @@ const { executeAllMigrations } = await import('../../src/db/migrations/index.js'
 executeAllMigrations();
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
 const { getTask, saveTask } = await import('../../src/server/repositories/taskRepository.js');
+const { listExecutionSessionsForTask } = await import('../../src/server/repositories/executionSessionRepository.js');
 const claims = await import('../../src/server/services/taskClaimService.js');
+const commitPlan = await import('../../src/server/services/taskCommitPlanService.js');
 
 createProject({
   id: 'project-claim',
@@ -120,6 +122,13 @@ test('claim moves task to in-progress, binds opaque workspace, and is idempotent
   const same = claims.claimTaskForSession('task-a', { sessionId: 'chat-alpha-secret', ownerKind: 'chat', ownerLabel: 'Chat A3' });
   assert.equal(same.reused, true);
   assert.equal(same.claim.workspaceId, first.claim.workspaceId);
+  const sessions = listExecutionSessionsForTask('task-a').filter((entry: any) => entry.workspaceId === first.claim.workspaceId);
+  assert.equal(sessions.length, 1);
+  assert.equal(sessions[0].status, 'active');
+  assert.equal(sessions[0].projectId, 'project-claim');
+  const plan = commitPlan.buildTaskCommitPlan({ countersCache: {} }, { taskId: 'task-a', workspaceId: first.claim.workspaceId });
+  assert.equal(plan.executionSessionId, sessions[0].id);
+  assert.ok(plan.blockers.some((entry: any) => entry.code === 'TASK_COMMIT_NO_OWNED_CHANGES'));
 
   assert.throws(
     () => claims.claimTaskForSession('task-a', { sessionId: 'chat-beta-secret', ownerKind: 'chat', ownerLabel: 'Chat B4' }),

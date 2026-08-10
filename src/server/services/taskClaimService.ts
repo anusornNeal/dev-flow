@@ -1,8 +1,10 @@
 import crypto from 'node:crypto';
 import { getProject } from '../repositories/projectRepository.js';
+import { listExecutionSessionsForTask } from '../repositories/executionSessionRepository.js';
 import { getTaskByIdentifier, getTasksByProjectId, saveTask } from '../repositories/taskRepository.js';
 import { createOrReuseSessionWorkspace } from './sessionWorkspaceService.js';
 import { createApiError } from './api.js';
+import { createExecutionSession } from './executionSessionService.js';
 import { withSyncLock } from './lockAndIdempotencyService.js';
 import type { TaskClaim, TaskStatus } from '../../types.js';
 
@@ -127,6 +129,19 @@ function compareNextTaskOrder(left: any, right: any) {
   return String(left.displayId || left.id || '').localeCompare(String(right.displayId || right.id || ''));
 }
 
+function ensureClaimExecutionSession(task: any, workspace: any) {
+  const existing = listExecutionSessionsForTask(task.id)
+    .find((entry) => entry.workspaceId === workspace.workspaceId && entry.status === 'active');
+  if (existing) return existing;
+  return createExecutionSession({
+    projectId: task.projectId,
+    taskId: task.id,
+    workspaceId: workspace.workspaceId,
+    repoRoot: workspace.root,
+    branch: workspace.branch,
+  });
+}
+
 function claimTaskForSessionLocked(taskId: string, input: ClaimTaskInput, cleanSessionId: string, project: any) {
   const task = getTaskByIdentifier(taskId, 'full');
   if (!task) throw createApiError(404, 'TASK_NOT_FOUND', `Task '${taskId}' was not found.`, { affectedId: taskId });
@@ -144,6 +159,7 @@ function claimTaskForSessionLocked(taskId: string, input: ClaimTaskInput, cleanS
       });
     }
     const workspace = createOrReuseSessionWorkspace(project, cleanSessionId);
+    ensureClaimExecutionSession(task, workspace);
     return { task, claim: task.claim, workspace: { workspaceId: workspace.workspaceId, branch: workspace.branch, state: workspace.state }, reused: true };
   }
 
@@ -180,6 +196,7 @@ function claimTaskForSessionLocked(taskId: string, input: ClaimTaskInput, cleanS
       type: 'update',
     }],
   };
+  ensureClaimExecutionSession(updated, workspace);
   saveTask(updated);
   return { task: getTaskByIdentifier(task.id, 'full') || updated, claim, workspace: { workspaceId: workspace.workspaceId, branch: workspace.branch, state: workspace.state }, reused: false };
 }

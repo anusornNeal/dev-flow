@@ -43,8 +43,8 @@ Branch:
 Repository:
 {project.repo}
 
-Local Path:
-{project.localPath}
+Managed Workspace:
+Use the opaque DevFlow-managed workspace supplied with this run. Do not derive, persist, or expose its filesystem path.
 
 Objective:
 {objective}
@@ -85,6 +85,8 @@ Workflow Rules:
 - Verify the work before marking any mini-task as completed.
 - Check only the mini-tasks that are actually completed and verified.
 - Do not blindly check every mini-task.
+- Resolve the repository Git policy before integration. Default `rebase-ff`; if explicit policy requires `merge`, preserve that merge policy. Follow the configured commit message template or repository commit convention and use DevFlow-managed integration rather than rewriting another session's history.
+- Do not push unless the user explicitly requests it.
 - Move the task to ready-for-review only after implementation and verification are complete.
 - If verification cannot be completed, leave clear notes explaining what was and was not verified.
 
@@ -109,7 +111,7 @@ Output Expectations:
 
 ## Placeholder Rules
 
-`get_task_for_agent` should build the final agent-ready package and fill these placeholders.
+Use the current agent-context task read (`get_task` with `mode="agent-context"`) as the source for the final agent-ready package and fill these placeholders.
 
 The prompt builder may omit empty sections, but it must not hide important orchestration metadata.
 
@@ -122,7 +124,7 @@ The final prompt should include:
 - objective
 - requirements
 - repo context
-- local path
+- opaque managed-workspace identity / repository context
 - target files
 - acceptance criteria
 - verification

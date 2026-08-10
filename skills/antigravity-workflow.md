@@ -29,7 +29,7 @@ Known verified behavior:
 
 ## Command Behavior
 
-DevFlow should launch Antigravity from the task project local path.
+DevFlow should launch Antigravity inside the task's DevFlow-managed workspace. The runtime resolves the physical cwd internally; prompts and task metadata should carry only opaque workspace/repository identity, not a derived filesystem path.
 
 Conceptual command shape:
 
@@ -37,13 +37,7 @@ Conceptual command shape:
 agy --model <MODEL> --dangerously-skip-permissions -i
 ```
 
-The process cwd must be:
-
-```text
-{project.localPath}
-```
-
-The final task prompt should be built from:
+The process cwd must be the managed workspace root resolved internally by DevFlow. The final task prompt should be built from:
 
 ```text
 skills/agent-task-prompt-template.md
@@ -99,7 +93,7 @@ Log at minimum:
 - taskId
 - projectId
 - project name if available
-- localPath
+- workspaceId (preferred); include a resolved cwd only in internal diagnostics when strictly needed, never in the task prompt
 - branch
 - model
 - effort
@@ -124,10 +118,10 @@ If `agy` is not found:
 - Tell the user Antigravity CLI is not available on PATH.
 - Do not fallback to another agent unless explicitly configured.
 
-If the local path is missing:
+If DevFlow cannot resolve the managed workspace root internally:
 
 - Mark the run as failed.
-- Do not launch from the wrong directory.
+- Do not guess, derive, or launch from another directory.
 
 If model is missing:
 

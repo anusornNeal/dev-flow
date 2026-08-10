@@ -132,7 +132,7 @@ Call `open_task_bug` with this shape. Do not call `create_task` unless the user 
 ```json
 {
   "projectName": "dev-flow",
-  "title": "[QCA-3242] Foundation, merge, and review for Details tab update",
+  "title": "[QCA-3242] Foundation, integration, and review for Details tab update",
   "description": "Define the shared foundation for the Details tab update, split child work, and own final integration/review.",
   "status": "backlog",
   "priority": "medium",
@@ -161,7 +161,7 @@ Call `open_task_bug` with this shape. Do not call `create_task` unless the user 
     },
     {
       "id": "found-4",
-      "text": "Review and merge child branches back into the foundation branch.",
+      "text": "Review and integrate child work according to the repository Git policy.",
       "completed": false
     },
     {
@@ -174,8 +174,8 @@ Call `open_task_bug` with this shape. Do not call `create_task` unless the user 
   "model": "GPT-5.4",
   "agent": "Codex",
   "reasoning": "Parent owns architecture, child boundaries, branch integration, and final verification.",
-  "acceptanceCriteria": "- Child task boundaries are clear.\n- Shared contracts are defined.\n- Final merged flow satisfies the Jira requirement.\n- No child branch conflicts remain unresolved.",
-  "verification": "- Inspect each child branch before merge.\n- Run targeted build/test commands.\n- Manually verify final full flow after merge.",
+  "acceptanceCriteria": "- Child task boundaries are clear.\n- Shared contracts are defined.\n- Final integrated flow satisfies the Jira requirement.\n- No child integration conflicts remain unresolved.",
+  "verification": "- Inspect each child worktree/branch before integration.\n- Run targeted build/test commands.\n- Manually verify the final flow after repository-policy integration.",
   "repoContext": "Implementation map:\n- File: JobDetailInfoTab.kt\n  Class/function: Details tab entry points\n  Current behavior: Details tab work spans multiple detail pages and shared attachment behavior.\n  Expected change: define child boundaries and shared contracts before implementation.\n- File: shared/AttachmentPreviewContract.kt (new)\n  Class/function: AttachmentPreviewContract\n  Current behavior: attachment open/share behavior is duplicated or undefined across child pages.\n  Expected change: define the shared contract for child implementation cards.\n\nChild boundaries:\n- Frontend child cards own individual screens/routes.\n- Backend/data child cards own API/model/mapper changes if needed.\n\nOut of scope:\n- Parent does not implement all child screens directly.",
   "jiraKey": "QCA-3242",
   "repo": "https://github.com/org/repo",

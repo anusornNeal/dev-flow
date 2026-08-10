@@ -62,14 +62,16 @@ Use local git inspection whenever available:
 
 If the branch is missing or cannot be inspected, do not approve the card.
 
+Resolve the repository Git policy before judging integration. The default is `rebase-ff`; when explicit policy requires `merge`, review against that merge policy instead. Confirm commits follow the configured commit message template or repository commit convention, and treat `integrate_workspace` evidence as authoritative for managed-workspace integration. Do not require a push unless repository/user policy explicitly requires publication.
+
 ## Parent and Subtask Rule
 
 If reviewing a parent card:
 
 - Read every child/subtask.
-- Check whether child branches were merged or integrated as expected.
+- Check whether child work was integrated according to the repository Git policy.
 - Verify parent acceptance criteria against the combined final state.
-- Do not mark the parent done if any required child task is still incomplete, failed, unreviewed, or not merged.
+- Do not mark the parent done if any required child task is still incomplete, failed, unreviewed, or not integrated.
 
 If reviewing a subtask:
 

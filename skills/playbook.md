@@ -21,13 +21,13 @@ Instead, extract the useful information from Jira and the repo, then write it in
 
 ## Required Tools and Fallback Rules
 
-Use the available tools in this order when applicable:
+Use current consolidated intents in this order when applicable:
 
-- `Dev_Jira`: read Jira issue, description, comments, subtasks, linked issues, attachments, priority, and status.
-- `Dev_Github`: inspect the repository from GitHub when accessible.
-- `Dev_Flow`: read project schema/playbook, read local repo files, search local files, inspect existing tasks, and create/update tasks.
+- `get_jira_authoring_bundle`: gather bounded Jira requirement evidence, comments, attachment metadata, related keys, and duplicate hints in one packet.
+- `get_repo_context_bundle`: inspect the current local repository first; use `get_project_atlas` for architecture/read-order hints and targeted file/search reads only when the bundle is insufficient.
+- `search_tasks`, `get_task`, `create_task`, and `update_task`: inspect and mutate DevFlow cards through the current canonical task intents.
 
-If `Dev_Github` cannot access the repo, fall back to `Dev_Flow` local repo tools.
+Use connected Jira/GitHub sources only when the user explicitly needs remote source evidence that the DevFlow composites do not provide. Prefer the local repository as implementation truth when it is available.
 
 If Jira cannot be read and the user did not provide enough detail, do not create an implementation-ready card. Create a blocked/prep card or ask for missing information.
 

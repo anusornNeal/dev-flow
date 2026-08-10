@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { getDevFlowWorkspacesDir } from '../../lib/devFlowPaths';
 import { createApiError } from './api';
 import { getRepoRevisionForRoot } from './repoRevisionService';
@@ -76,6 +76,87 @@ function runGit(
     });
   }
   return result;
+}
+
+function abortCandidateError() {
+  const error = new Error('Verification candidate preparation was cancelled.');
+  error.name = 'AbortError';
+  return error;
+}
+
+async function runGitAsync(
+  root: string,
+  args: string[],
+  options: { env?: NodeJS.ProcessEnv; allowFailure?: boolean; timeoutMs?: number; signal?: AbortSignal } = {},
+) {
+  if (options.signal?.aborted) throw abortCandidateError();
+  return await new Promise<{ stdout: string; stderr: string; status: number | null }>((resolve, reject) => {
+    const child = spawn('git', args, { cwd: root, shell: false, env: options.env });
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutId);
+      options.signal?.removeEventListener('abort', onAbort);
+      callback();
+    };
+    const onAbort = () => {
+      child.kill('SIGTERM');
+      finish(() => reject(abortCandidateError()));
+    };
+    const timeoutId = setTimeout(() => {
+      child.kill('SIGTERM');
+      finish(() => reject(createApiError(500, 'VERIFICATION_CANDIDATE_GIT_TIMEOUT', `Verification candidate Git command timed out: ${args.join(' ')}`)));
+    }, options.timeoutMs ?? 30_000);
+    options.signal?.addEventListener('abort', onAbort, { once: true });
+    child.stdout?.on('data', (chunk) => { stdout += chunk.toString('utf8'); });
+    child.stderr?.on('data', (chunk) => { stderr += chunk.toString('utf8'); });
+    child.once('error', (error) => finish(() => reject(createApiError(500, 'VERIFICATION_CANDIDATE_GIT_FAILED', `Verification candidate Git command failed: ${error.message}`, { details: { args } }))));
+    child.once('close', (status) => finish(() => {
+      if (!options.allowFailure && status !== 0) {
+        reject(createApiError(500, 'VERIFICATION_CANDIDATE_GIT_FAILED', `Verification candidate Git command failed: ${String(stderr || args.join(' ')).trim()}`, { details: { args, status } }));
+      } else {
+        resolve({ stdout, stderr, status });
+      }
+    }));
+  });
+}
+
+async function bridgeInstalledDependenciesAsync(sourceRoot: string, root: string) {
+  const sourceNodeModules = path.join(sourceRoot, 'node_modules');
+  const candidateNodeModules = path.join(root, 'node_modules');
+  try {
+    await fs.promises.access(sourceNodeModules);
+  } catch {
+    return;
+  }
+  try {
+    await fs.promises.lstat(candidateNodeModules);
+    return;
+  } catch (error: any) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
+  await fs.promises.symlink(sourceNodeModules, candidateNodeModules, process.platform === 'win32' ? 'junction' : 'dir');
+}
+
+async function removeInstalledDependencyBridgeAsync(root: string) {
+  const candidateNodeModules = path.join(root, 'node_modules');
+  try {
+    const stat = await fs.promises.lstat(candidateNodeModules);
+    if (stat.isSymbolicLink()) await fs.promises.unlink(candidateNodeModules);
+  } catch (error: any) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
+}
+
+async function writeRecordAsync(record: VerificationCandidateRecord) {
+  await fs.promises.mkdir(candidateRegistryDir(), { recursive: true });
+  const target = candidateMetadataPath(record.candidateId);
+  const temporary = `${target}.${process.pid}.${Date.now()}.tmp`;
+  await fs.promises.writeFile(temporary, `${JSON.stringify(record, null, 2)}\n`, 'utf8');
+  await fs.promises.rename(temporary, target);
 }
 
 function bridgeInstalledDependencies(sourceRoot: string, root: string) {
@@ -190,6 +271,74 @@ export function createVerificationCandidate(repoRoot: string): VerificationCandi
   }
 }
 
+export async function createVerificationCandidateAsync(
+  repoRoot: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<VerificationCandidateIdentity> {
+  const sourceRoot = path.resolve(repoRoot);
+  const sourceRevision = getRepoRevisionForRoot(sourceRoot);
+  const sourceCommandConfig = getProjectCommandConfigSnapshot(sourceRoot);
+  const candidateId = `vc_${crypto.randomBytes(12).toString('hex')}`;
+  const root = candidateRoot(candidateId);
+  await fs.promises.mkdir(candidateRootsDir(), { recursive: true });
+  await fs.promises.mkdir(candidateTempDir(), { recursive: true });
+  const indexPath = path.join(candidateTempDir(), `${candidateId}.index`);
+  const gitEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    GIT_INDEX_FILE: indexPath,
+    GIT_AUTHOR_NAME: 'DevFlow Verification',
+    GIT_AUTHOR_EMAIL: 'devflow-verification@local',
+    GIT_COMMITTER_NAME: 'DevFlow Verification',
+    GIT_COMMITTER_EMAIL: 'devflow-verification@local',
+  };
+
+  try {
+    await runGitAsync(sourceRoot, ['read-tree', 'HEAD'], { env: gitEnv, signal: options.signal });
+    await runGitAsync(sourceRoot, ['add', '-A', '--', '.'], { env: gitEnv, signal: options.signal });
+    if (sourceCommandConfig.relativePaths.length > 0) {
+      await runGitAsync(sourceRoot, ['add', '-f', '--', ...sourceCommandConfig.relativePaths], { env: gitEnv, signal: options.signal });
+    }
+    const tree = String((await runGitAsync(sourceRoot, ['write-tree'], { env: gitEnv, signal: options.signal })).stdout || '').trim();
+    if (!/^[a-f0-9]{40}$/i.test(tree)) {
+      throw createApiError(500, 'VERIFICATION_CANDIDATE_TREE_INVALID', 'Verification candidate tree could not be created.');
+    }
+    const snapshotCommit = String((await runGitAsync(sourceRoot, ['commit-tree', tree, '-p', sourceRevision.head, '-m', `DevFlow verification candidate ${candidateId}`], { env: gitEnv, signal: options.signal })).stdout || '').trim();
+    if (!/^[a-f0-9]{40}$/i.test(snapshotCommit)) {
+      throw createApiError(500, 'VERIFICATION_CANDIDATE_COMMIT_INVALID', 'Verification candidate snapshot commit could not be created.');
+    }
+    await runGitAsync(sourceRoot, ['worktree', 'add', '--detach', root, snapshotCommit], { timeoutMs: 60_000, signal: options.signal });
+    await bridgeInstalledDependenciesAsync(sourceRoot, root);
+    if (options.signal?.aborted) throw abortCandidateError();
+    const candidateCommandConfig = getProjectCommandConfigSnapshot(root);
+    const currentRevision = getRepoRevisionForRoot(sourceRoot);
+    if (candidateCommandConfig.fingerprint !== sourceCommandConfig.fingerprint || currentRevision.token !== sourceRevision.token) {
+      throw createApiError(409, 'VERIFICATION_CANDIDATE_SOURCE_CHANGED', 'Repository content or command configuration changed while the verification candidate was being created.');
+    }
+    const record: VerificationCandidateRecord = {
+      candidateId,
+      repoRevision: sourceRevision.token,
+      snapshotCommit,
+      createdAt: new Date().toISOString(),
+      commandConfigFingerprint: sourceCommandConfig.fingerprint,
+      sourceRoot,
+    };
+    await writeRecordAsync(record);
+    return publicIdentity(record);
+  } catch (error) {
+    try {
+      await removeInstalledDependencyBridgeAsync(root);
+      if (fs.existsSync(sourceRoot)) await runGitAsync(sourceRoot, ['worktree', 'remove', '--force', root], { allowFailure: true, timeoutMs: 60_000 });
+      await fs.promises.rm(root, { recursive: true, force: true });
+      await fs.promises.rm(candidateMetadataPath(candidateId), { force: true });
+    } catch {
+      // Original preparation failure is authoritative; best-effort cleanup is retried by worktree prune later.
+    }
+    throw error;
+  } finally {
+    await fs.promises.rm(indexPath, { force: true }).catch(() => {});
+  }
+}
+
 export function resolveVerificationCandidate(candidateId: string): ResolvedVerificationCandidate {
   const normalizedId = requireCandidateId(candidateId);
   const record = readRecord(normalizedId);
@@ -218,6 +367,22 @@ export function isVerificationCandidateCurrent(
   } catch {
     return false;
   }
+}
+
+export async function releaseVerificationCandidateAsync(candidateId: string) {
+  const normalizedId = requireCandidateId(candidateId);
+  const record = readRecord(normalizedId);
+  if (!record) return false;
+  const root = candidateRoot(normalizedId);
+  const sourceRoot = path.resolve(record.sourceRoot);
+  await removeInstalledDependencyBridgeAsync(root);
+  if (fs.existsSync(sourceRoot)) {
+    await runGitAsync(sourceRoot, ['worktree', 'remove', '--force', root], { allowFailure: true, timeoutMs: 60_000 });
+    await runGitAsync(sourceRoot, ['worktree', 'prune'], { allowFailure: true });
+  }
+  await fs.promises.rm(root, { recursive: true, force: true });
+  await fs.promises.rm(candidateMetadataPath(normalizedId), { force: true });
+  return true;
 }
 
 export function releaseVerificationCandidate(candidateId: string) {

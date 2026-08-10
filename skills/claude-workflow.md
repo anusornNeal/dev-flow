@@ -36,11 +36,7 @@ If additional subcommands exist, inspect those too before relying on them.
 
 ## Command Behavior
 
-The process cwd should be the task project local path:
-
-```text
-{project.localPath}
-```
+The process cwd should be the managed workspace root resolved internally by DevFlow; do not inject or ask the agent to reconstruct the physical path.
 
 The final task prompt should be built from:
 
@@ -114,7 +110,7 @@ Log at minimum:
 - taskId
 - projectId
 - project name if available
-- localPath
+- workspaceId (preferred); include a resolved cwd only in internal diagnostics when strictly needed, never in the task prompt
 - branch
 - model
 - model handling mode
@@ -140,10 +136,10 @@ If `claude` is not found:
 - Tell the user Claude CLI is not available on PATH.
 - Do not fallback to another agent unless explicitly configured.
 
-If the local path is missing:
+If DevFlow cannot resolve the managed workspace root internally:
 
 - Mark the run as failed.
-- Do not launch from the wrong directory.
+- Do not guess, derive, or launch from another directory.
 
 If required flags are not confirmed:
 

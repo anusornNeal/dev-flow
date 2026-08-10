@@ -24,6 +24,10 @@ const UI_OR_INTERNAL_ONLY_TOOL_REFERENCES = new Set([
   'cancel_tool_job',
 ]);
 
+const MAINTAINED_SKILLS = fs.readdirSync(new URL('../../skills/', import.meta.url))
+  .filter((name) => name.endsWith('.md'))
+  .sort();
+
 function findActionableHiddenToolReferences(content: string, advertisedNames: Set<string>) {
   const knownNames = new Set<string>();
   for (const tool of devFlowToolDefinitions) {
@@ -54,6 +58,41 @@ test('protected DevFlow skills only recommend tools advertised by the full MCP s
   }
 
   assert.deepEqual(staleReferences, [], 'master skills must not recommend hidden/removed MCP tools');
+});
+
+test('all maintained DevFlow skills avoid stale tool namespaces and direct managed-workspace path placeholders', () => {
+  const advertisedNames = new Set(getMcpToolList('full').map((tool: any) => tool.name));
+  const staleReferences: string[] = [];
+
+  for (const skillName of MAINTAINED_SKILLS) {
+    const content = fs.readFileSync(new URL('../../skills/' + skillName, import.meta.url), 'utf8');
+    for (const name of findActionableHiddenToolReferences(content, advertisedNames)) {
+      staleReferences.push(skillName + ': hidden tool ' + name);
+    }
+    if (/Dev_(?:Jira|Github|Flow)\./.test(content) || /`Dev_(?:Jira|Github|Flow)`/.test(content)) {
+      staleReferences.push(skillName + ': stale Dev_* namespace');
+    }
+    if (/\{\{?workspace\.localPath\}?\}|\{project\.localPath\}/.test(content)) {
+      staleReferences.push(skillName + ': direct managed-workspace path placeholder');
+    }
+  }
+
+  assert.deepEqual(staleReferences, [], 'maintained skills must use current consolidated intents and opaque workspace identity');
+});
+
+test('execution and review guidance resolves repository Git policy instead of assuming merge topology', () => {
+  for (const skillName of [
+    '07-authoring-execution.md',
+    'prompt.execution-rules.md',
+    'agent-task-prompt-template.md',
+    'ready-for-review-reviewer-skill.md',
+  ]) {
+    const content = fs.readFileSync(new URL('../../skills/' + skillName, import.meta.url), 'utf8');
+    assert.match(content, /repository Git policy|repo(?:sitory)?-aware Git policy/i, `${skillName} should resolve repository Git policy`);
+    assert.match(content, /rebase-ff/i, `${skillName} should name the default rebase-ff strategy`);
+    assert.match(content, /merge[^\n]*policy|policy[^\n]*merge/i, `${skillName} should preserve explicit merge-policy overrides`);
+    assert.match(content, /commit[^\n]*(?:template|convention|policy)/i, `${skillName} should preserve repo-native commit naming`);
+  }
 });
 
 test('stdio MCP entrypoint loads dotenv before creating the server', () => {

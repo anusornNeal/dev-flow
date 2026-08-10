@@ -39,7 +39,7 @@ Before committing:
 - use an explicit file list when concurrent chats may share the base repo;
 - dry-run `commit_git_changes` before the real commit when practical.
 
-Create small scope-aligned local commits. Do not push unless the user explicitly requests it.
+Create small scope-aligned local commits. Resolve the repository Git policy before integration: the default policy is `rebase-ff`, while an explicit project policy may require `merge`; follow the policy rather than assuming topology from branch names. Preserve the configured commit message template or existing repository commit convention when creating commits, and let `integrate_workspace` enforce the resolved policy instead of hand-rolling integration. Do not push unless the user explicitly requests it.
 
 ## Multi-session safety
 If another session modifies one of the same target files, stop before mutation and re-resolve ownership/workspace state. Independent files may proceed with revision guards and explicit-file commits.

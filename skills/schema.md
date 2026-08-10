@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This document defines how to write Dev Flow cards and what JSON fields/values should be sent to `Dev_Flow.create_task` or `Dev_Flow.update_task`.
+This document defines how to write Dev Flow cards and what JSON fields/values should be sent to the current `create_task` or `update_task` intents.
 
 It combines card-writing rules, schema reference, allowed values, and examples.
 
@@ -13,7 +13,7 @@ DevFlow exposes two interfaces for creating tasks. They accept slightly differen
 | Interface | Project field | Notes |
 |---|---|---|
 | Raw API (`POST /api/tasks`) | `projectId` (required) | Must send the internal project UUID. |
-| MCP tool (`Dev_Flow.create_task`) | `projectId`, `projectName`, `repo`, `repoUrl`, or `localPath` | The MCP layer resolves whichever identifier you provide into a `projectId`. Only one is needed. Prefer `projectName` or `repo` for readability. |
+| MCP tool (`create_task`) | `projectId`, `projectName`, `repo`, `repoUrl`, or `localPath` | The MCP layer resolves whichever project identifier you provide into a `projectId`. Only one is needed. Prefer `projectName` or `repo` for readability. |
 
 All other task fields are identical across both interfaces.
 
@@ -455,7 +455,7 @@ If Jira priority is missing, infer from user impact and write the reason in `rea
 
 ### Example: Bug Fix Card
 
-Using MCP `Dev_Flow.create_task`:
+Using MCP `create_task`:
 
 ```json
 {
@@ -604,13 +604,13 @@ Using raw API `POST /api/tasks`:
 
 ### Example: Parent Task with Subtasks
 
-Parent (foundation, merge, and review owner):
+Parent (foundation, integration, and review owner):
 
 ```json
 {
   "projectName": "dev-flow",
-  "title": "[QCA-3242][Android] Foundation, merge, and review for Details tab update",
-  "description": "Define shared foundation and review/merge child feature slices.",
+  "title": "[QCA-3242][Android] Foundation, integration, and review for Details tab update",
+  "description": "Define shared foundation and review/integrate child feature slices according to repository Git policy.",
   "status": "backlog",
   "priority": "medium",
   "branch": "feature/qca-3242-foundation",
@@ -633,16 +633,16 @@ Parent (foundation, merge, and review owner):
     },
     {
       "id": "found-3",
-      "text": "Review and merge child branches back into the foundation branch.",
+      "text": "Review and integrate child work according to the repository Git policy.",
       "completed": false
     }
   ],
   "effort": "high",
   "model": "GPT-5.4",
   "agent": "Codex",
-  "reasoning": "Parent owns foundation, shared contracts, merge/review, and final integration.",
-  "acceptanceCriteria": "- Shared contracts are clear for child tasks.\n- Final merged flow passes integration verification.",
-  "verification": "- Inspect child branches before merge.\n- Run full manual flow after merge.",
+  "reasoning": "Parent owns foundation, shared contracts, policy-aware integration/review, and final verification.",
+  "acceptanceCriteria": "- Shared contracts are clear for child tasks.\n- Final integrated flow passes integration verification.",
+  "verification": "- Inspect child work before integration.\n- Run the full manual flow after repository-policy integration.",
   "repoContext": "Repo: q-chang/buddy-android\nArea: My Jobs / Installation / Job Detail\n\nThis parent is the source of truth for shared contracts.",
   "jiraKey": "QCA-3242",
   "repo": "https://github.com/q-chang/buddy-android"
@@ -721,7 +721,7 @@ For a Codex parallel task like QCA-3242:
 
 Rationale:
 
-- Parent needs stronger model for foundation and merge/review.
+- Parent needs a stronger model for foundation and repository-policy integration/review.
 - Existing layout slice can use Mini if entry points and contract are clear.
 - New pages with navigation/preview/share should not start on Mini.
 

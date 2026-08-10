@@ -31,18 +31,18 @@ Known verified behavior:
 
 ## Command Behavior
 
-DevFlow should launch Codex from the task project local path by using `-C` / `--cd`.
+DevFlow should launch Codex in the DevFlow-managed workspace by resolving the physical root internally, then passing that resolved cwd to `-C` / `--cd`. Never ask the agent to derive the workspace path.
 
 Conceptual command shape:
 
 ```bash
-codex -C <LOCAL_PATH> -m <MODEL> -a never -s danger-full-access
+codex -C <RESOLVED_MANAGED_WORKSPACE_ROOT> -m <MODEL> -a never -s danger-full-access
 ```
 
 Alternative dangerous mode, if configured:
 
 ```bash
-codex -C <LOCAL_PATH> -m <MODEL> --dangerously-bypass-approvals-and-sandbox
+codex -C <RESOLVED_MANAGED_WORKSPACE_ROOT> -m <MODEL> --dangerously-bypass-approvals-and-sandbox
 ```
 
 The final task prompt should be built from:
@@ -113,7 +113,7 @@ Log at minimum:
 - taskId
 - projectId
 - project name if available
-- localPath
+- workspaceId (preferred); include a resolved cwd only in internal diagnostics when strictly needed, never in the task prompt
 - branch
 - model
 - effort
@@ -147,10 +147,10 @@ If `codex` is not found:
 - Tell the user Codex CLI is not available on PATH.
 - Do not fallback to another agent unless explicitly configured.
 
-If the local path is missing:
+If DevFlow cannot resolve the managed workspace root internally:
 
 - Mark the run as failed.
-- Do not launch from the wrong directory.
+- Do not guess, derive, or launch from another directory.
 
 If model is missing:
 

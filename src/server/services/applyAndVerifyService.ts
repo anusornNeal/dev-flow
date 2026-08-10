@@ -2,8 +2,17 @@ import type { AppState } from '../types';
 import { editFilesBatch } from './fileEditBatchService';
 import { applyPreparedEditPlan } from './preparedEditService';
 import { getGitDiff } from './gitService';
-import { describeProjectCommand, runProjectCommand, runProjectCommandAsync, type RunProjectCommandResult } from './projectCommandService';
+import {
+  bindProjectCommandVerificationCandidate,
+  describeProjectCommand,
+  getProjectCommandExecutionIdentity,
+  runProjectCommand,
+  runProjectCommandAsync,
+  type RunProjectCommandResult,
+} from './projectCommandService';
 import { planVerification } from './verificationPlannerService';
+import { resolveProjectRoot } from './localFileService';
+import { createVerificationCandidate, releaseVerificationCandidate } from './verificationCandidateService';
 
 function changedPaths(edit: any) {
   return (edit?.files || [])
@@ -193,32 +202,45 @@ export async function applyAndVerifyAsync(
     };
   }
 
-  if (plan.steps.length > 0) {
-    transitionAccess('verify');
-  }
-
+  const candidatePreparationStartedAt = Date.now();
+  const sourceRoot = resolveProjectRoot(state, args);
+  const baseCandidate = plan.steps.length > 0 ? createVerificationCandidate(sourceRoot) : null;
+  const candidatePreparationMs = Date.now() - candidatePreparationStartedAt;
   const verification: RunProjectCommandResult[] = [];
   const verificationStartedAt = Date.now();
+  const verificationPerformance = () => ({
+    ...summarizeVerificationPerformance(verificationStartedAt, verification),
+    candidatePreparationMs,
+  });
   const activeCancels = new Set<() => void>();
   setCancelFn(() => {
     for (const cancel of activeCancels) cancel();
   });
 
+  const commandArgs = (command: string) => ({
+    projectId: args.projectId,
+    projectName: args.projectName,
+    repo: args.repo,
+    repoUrl: args.repoUrl,
+    localPath: args.localPath,
+    command,
+    cacheResult: args.cacheVerificationResults !== false,
+    forceFresh: args.forceFresh === true,
+    maxOutputBytes: args.maxOutputBytes,
+    timeoutMs: args.timeoutMs,
+    responseMode: args.responseMode ?? 'compact',
+  });
+
   const runStep = async (step: { command: string }) => {
     let cancelFn: (() => void) | undefined;
+    const stepArgs = commandArgs(step.command);
+    const boundCandidate = baseCandidate
+      ? bindProjectCommandVerificationCandidate(state, stepArgs, baseCandidate)
+      : null;
     try {
       return await runProjectCommandAsync(state, {
-        projectId: args.projectId,
-        projectName: args.projectName,
-        repo: args.repo,
-        repoUrl: args.repoUrl,
-        localPath: args.localPath,
-        command: step.command,
-        cacheResult: args.cacheVerificationResults !== false,
-        forceFresh: args.forceFresh === true,
-        maxOutputBytes: args.maxOutputBytes,
-        timeoutMs: args.timeoutMs,
-        responseMode: args.responseMode ?? 'compact',
+        ...stepArgs,
+        ...(boundCandidate ? { __verificationCandidate: boundCandidate } : {}),
       }, logger, (fn) => {
         cancelFn = fn;
         activeCancels.add(fn);
@@ -229,68 +251,97 @@ export async function applyAndVerifyAsync(
   };
 
   let parallelVerification = false;
-  const stageIds = Array.from(new Set(plan.steps.map((step) => Number.isFinite(step.stage) ? Number(step.stage) : 0))).sort((a, b) => a - b);
+  try {
+    if (plan.steps.length > 0) {
+      transitionAccess('verify');
+    }
 
-  for (const stageId of stageIds) {
-    const stageSteps = plan.steps.filter((step) => (Number.isFinite(step.stage) ? Number(step.stage) : 0) === stageId);
-    const inferredResourceKeys = stageSteps
-      .filter((step) => step.parallelGroup !== 'isolated')
-      .map((step) => step.resourceKey)
-      .filter((value): value is string => Boolean(value));
-    const resourceSafe = stageSteps.every((step) => step.parallelGroup === 'isolated' || Boolean(step.resourceKey && step.resourceKey !== 'repo'));
-    const inferredResourcesDistinct = new Set(inferredResourceKeys).size === inferredResourceKeys.length;
-    const canParallelizeStage = stageSteps.length > 1 && resourceSafe && inferredResourcesDistinct;
+    const stageIds = Array.from(new Set(plan.steps.map((step) => Number.isFinite(step.stage) ? Number(step.stage) : 0))).sort((a, b) => a - b);
 
-    if (canParallelizeStage) {
-      parallelVerification = true;
-      for (let offset = 0; offset < stageSteps.length; offset += 4) {
-        const batch = stageSteps.slice(offset, offset + 4);
-        const results = await Promise.all(batch.map(runStep));
-        verification.push(...results);
-        const failed = results.find((result) => !result.ok);
-        if (failed) {
+    for (const stageId of stageIds) {
+      const stageSteps = plan.steps.filter((step) => (Number.isFinite(step.stage) ? Number(step.stage) : 0) === stageId);
+      const inferredResourceKeys = stageSteps
+        .filter((step) => step.parallelGroup !== 'isolated')
+        .map((step) => step.resourceKey)
+        .filter((value): value is string => Boolean(value));
+      const resourceSafe = stageSteps.every((step) => step.parallelGroup === 'isolated' || Boolean(step.resourceKey && step.resourceKey !== 'repo'));
+      const inferredResourcesDistinct = new Set(inferredResourceKeys).size === inferredResourceKeys.length;
+      const canParallelizeStage = stageSteps.length > 1 && resourceSafe && inferredResourcesDistinct;
+
+      if (canParallelizeStage) {
+        parallelVerification = true;
+        for (let offset = 0; offset < stageSteps.length; offset += 4) {
+          const batch = stageSteps.slice(offset, offset + 4);
+          const results = await Promise.all(batch.map(runStep));
+          verification.push(...results);
+          const failed = results.find((result) => !result.ok);
+          if (failed) {
+            return {
+              ok: false,
+              status: failed.timedOut ? 'verification_timed_out' as const : 'verification_failed' as const,
+              edit,
+              plan,
+              diff,
+              verification,
+              parallelVerification,
+              verificationPerformance: verificationPerformance(),
+            };
+          }
+        }
+        continue;
+      }
+
+      for (const step of stageSteps) {
+        const result = await runStep(step);
+        verification.push(result);
+        if (!result.ok) {
           return {
             ok: false,
-            status: failed.timedOut ? 'verification_timed_out' as const : 'verification_failed' as const,
+            status: result.timedOut ? 'verification_timed_out' as const : 'verification_failed' as const,
             edit,
             plan,
             diff,
             verification,
             parallelVerification,
-            verificationPerformance: summarizeVerificationPerformance(verificationStartedAt, verification),
+            verificationPerformance: verificationPerformance(),
           };
         }
       }
-      continue;
     }
 
-    for (const step of stageSteps) {
-      const result = await runStep(step);
-      verification.push(result);
-      if (!result.ok) {
-        return {
-          ok: false,
-          status: result.timedOut ? 'verification_timed_out' as const : 'verification_failed' as const,
-          edit,
-          plan,
-          diff,
-          verification,
-          parallelVerification,
-          verificationPerformance: summarizeVerificationPerformance(verificationStartedAt, verification),
-        };
-      }
+    const staleVerificationCommands = Array.from(new Set(verification.flatMap((result) => {
+      const verifiedCandidate = result.verificationCandidate;
+      if (!verifiedCandidate) return [];
+      const currentIdentity = getProjectCommandExecutionIdentity(state, commandArgs(result.command));
+      return currentIdentity?.key === verifiedCandidate.executionKey ? [] : [result.command];
+    })));
+    if (staleVerificationCommands.length > 0) {
+      return {
+        ok: false,
+        status: 'verification_stale' as const,
+        noChanges,
+        edit,
+        plan,
+        diff,
+        verification,
+        staleVerificationCommands,
+        parallelVerification,
+        verificationPerformance: verificationPerformance(),
+      };
     }
+
+    return {
+      ok: true,
+      status: 'succeeded' as const,
+      noChanges,
+      edit,
+      plan,
+      diff,
+      verification,
+      parallelVerification,
+      verificationPerformance: verificationPerformance(),
+    };
+  } finally {
+    if (baseCandidate) releaseVerificationCandidate(baseCandidate.candidateId);
   }
-
-  return {
-    ok: true,
-    status: 'succeeded' as const,
-    noChanges,
-    edit,
-    plan,
-    diff,
-    verification,
-    parallelVerification,
-    verificationPerformance: summarizeVerificationPerformance(verificationStartedAt, verification),
-  };
 }

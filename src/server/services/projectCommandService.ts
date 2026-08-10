@@ -8,6 +8,13 @@ import { createApiError } from './api';
 import { resolveProjectRoot, resolveSafePath } from './localFileService';
 import { loadProjectCommandPreset } from './projectCommandConfigService';
 import { getRepoRevisionForRoot } from './repoRevisionService';
+import {
+  createVerificationCandidate,
+  isVerificationCandidateCurrent,
+  releaseVerificationCandidate,
+  resolveVerificationCandidate,
+  type VerificationCandidateIdentity,
+} from './verificationCandidateService';
 import { getCachedCommandResult, rememberCommandResult } from './commandResultCacheService';
 import { readWorkspaceMetadataFile } from './workspaceMetadataCacheService';
 import { getRepoCacheLineage, recordRepoCacheAccess, registerRepoCacheInvalidator } from './repoCacheInvalidationService';
@@ -93,6 +100,13 @@ export interface RunProjectCommandResult {
     stderrBytes: number;
     stdoutTruncated: boolean;
     stderrTruncated: boolean;
+  };
+  verificationCandidate?: {
+    candidateId: string;
+    repoRevision: string;
+    snapshotCommit: string;
+    executionKey: string;
+    current: boolean;
   };
   cache?: {
     hit: boolean;
@@ -398,17 +412,20 @@ function buildProjectCommandExecutionIdentity(
   timeoutMs: number,
   maxOutputBytes: number,
   responseMode: 'compact' | 'standard' | 'debug',
+  overrides: { repoRevision?: string; lineageToken?: string } = {},
 ): ProjectCommandExecutionIdentity | null {
-  let revision;
-  try {
-    revision = getRepoRevisionForRoot(root);
-  } catch {
-    return null;
+  let repoRevision = overrides.repoRevision;
+  if (!repoRevision) {
+    try {
+      repoRevision = getRepoRevisionForRoot(root).token;
+    } catch {
+      return null;
+    }
   }
-  const lineageToken = getRepoCacheLineage(root, [...PROJECT_COMMAND_CACHE_DEPENDENCIES]).token;
+  const lineageToken = overrides.lineageToken ?? getRepoCacheLineage(root, [...PROJECT_COMMAND_CACHE_DEPENDENCIES]).token;
   const semanticKey = semanticKeyForResolvedCommand(root, resolvedCommand, cwdPath);
   const identity = {
-    repoRevision: revision.token,
+    repoRevision,
     lineageToken,
     semanticKey,
     cwd: path.relative(root, cwdPath) || '.',
@@ -427,7 +444,7 @@ function buildProjectCommandExecutionIdentity(
     },
   };
   const key = crypto.createHash('sha256').update(JSON.stringify(identity)).digest('hex');
-  return { key, repoRevision: revision.token, lineageToken, semanticKey, command: resolvedCommand.command };
+  return { key, repoRevision, lineageToken, semanticKey, command: resolvedCommand.command };
 }
 
 export function getProjectCommandExecutionIdentity(state: AppState, args: Record<string, any>): ProjectCommandExecutionIdentity | null {
@@ -442,6 +459,129 @@ export function getProjectCommandExecutionIdentity(state: AppState, args: Record
   return buildProjectCommandExecutionIdentity(root, resolvedCommand, cwdPath, timeoutMs, maxOutputBytes, responseMode);
 }
 
+export type ProjectCommandVerificationExecutionIdentity = Omit<ProjectCommandExecutionIdentity, 'lineageToken'> & {
+  lineageFingerprint: string;
+};
+
+export type ProjectCommandVerificationCandidate = VerificationCandidateIdentity & {
+  executionIdentity: ProjectCommandVerificationExecutionIdentity;
+};
+
+function readProjectCommandVerificationCandidate(value: unknown): ProjectCommandVerificationCandidate | null {
+  if (!value || typeof value !== 'object') return null;
+  const raw = value as any;
+  const executionIdentity = raw.executionIdentity as ProjectCommandVerificationExecutionIdentity | undefined;
+  if (
+    typeof raw.candidateId !== 'string'
+    || typeof raw.repoRevision !== 'string'
+    || typeof raw.snapshotCommit !== 'string'
+    || typeof raw.createdAt !== 'string'
+    || !executionIdentity
+    || typeof executionIdentity.key !== 'string'
+    || typeof executionIdentity.repoRevision !== 'string'
+    || typeof executionIdentity.lineageFingerprint !== 'string'
+    || typeof executionIdentity.semanticKey !== 'string'
+    || typeof executionIdentity.command !== 'string'
+  ) {
+    throw createApiError(400, 'VERIFICATION_CANDIDATE_INVALID', 'Project command verification candidate metadata is invalid.');
+  }
+  return {
+    candidateId: raw.candidateId,
+    repoRevision: raw.repoRevision,
+    snapshotCommit: raw.snapshotCommit,
+    createdAt: raw.createdAt,
+    executionIdentity: { ...executionIdentity },
+  };
+}
+
+export function bindProjectCommandVerificationCandidate(
+  state: AppState,
+  args: Record<string, any>,
+  candidate: VerificationCandidateIdentity,
+): ProjectCommandVerificationCandidate {
+  const sourceRoot = resolveProjectRoot(state, args);
+  const resolvedCandidate = resolveVerificationCandidate(candidate.candidateId);
+  if (
+    resolvedCandidate.repoRevision !== candidate.repoRevision
+    || resolvedCandidate.snapshotCommit !== candidate.snapshotCommit
+  ) {
+    throw createApiError(409, 'VERIFICATION_CANDIDATE_MISMATCH', 'Verification candidate metadata no longer matches its immutable snapshot.');
+  }
+  const command = resolveCommandLabel(args.command ?? args.preset);
+  const resolvedCommand = resolveAllowedCommand(resolvedCandidate.root, command);
+  const cwdPath = resolveSafeCommandCwd(resolvedCandidate.root, args.cwd ?? resolvedCommand.cwd);
+  const timeoutMs = Number.isFinite(Number(args.timeoutMs))
+    ? Math.max(1, Math.min(MAX_TIMEOUT_MS, Number(args.timeoutMs)))
+    : resolvedCommand.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const { responseMode, maxOutputBytes } = resolveOutputBudget(args, resolvedCommand);
+  const lineageToken = getRepoCacheLineage(sourceRoot, [...PROJECT_COMMAND_CACHE_DEPENDENCIES]).token;
+  const executionIdentity = buildProjectCommandExecutionIdentity(
+    resolvedCandidate.root,
+    resolvedCommand,
+    cwdPath,
+    timeoutMs,
+    maxOutputBytes,
+    responseMode,
+    { repoRevision: candidate.repoRevision, lineageToken },
+  );
+  if (!executionIdentity) {
+    throw createApiError(500, 'VERIFICATION_CANDIDATE_IDENTITY_FAILED', 'Verification candidate execution identity could not be created.');
+  }
+  return {
+    ...candidate,
+    executionIdentity: {
+      key: executionIdentity.key,
+      repoRevision: executionIdentity.repoRevision,
+      lineageFingerprint: executionIdentity.lineageToken,
+      semanticKey: executionIdentity.semanticKey,
+      command: executionIdentity.command,
+    },
+  };
+}
+
+export function prepareProjectCommandVerificationCandidate(
+  state: AppState,
+  args: Record<string, any>,
+): ProjectCommandVerificationCandidate | null {
+  const sourceRoot = resolveProjectRoot(state, args);
+  const descriptor = describeProjectCommand(state, args);
+  if (descriptor.access !== 'verify') return null;
+
+  let candidate: VerificationCandidateIdentity;
+  try {
+    candidate = createVerificationCandidate(sourceRoot);
+  } catch (error: any) {
+    const code = error?.payload?.code || error?.code;
+    if (code === 'NOT_GIT_REPO') return null;
+    throw error;
+  }
+  try {
+    return bindProjectCommandVerificationCandidate(state, args, candidate);
+  } catch (error) {
+    releaseVerificationCandidate(candidate.candidateId);
+    throw error;
+  }
+}
+
+function withVerificationCandidate(
+  result: RunProjectCommandResult,
+  sourceRoot: string,
+  candidate: ProjectCommandVerificationCandidate | null,
+  executionIdentity: ProjectCommandExecutionIdentity | null,
+): RunProjectCommandResult {
+  if (!candidate || !executionIdentity) return result;
+  return {
+    ...result,
+    verificationCandidate: {
+      candidateId: candidate.candidateId,
+      repoRevision: candidate.repoRevision,
+      snapshotCommit: candidate.snapshotCommit,
+      executionKey: executionIdentity.key,
+      current: isVerificationCandidateCurrent(sourceRoot, candidate),
+    },
+  };
+}
+
 function commandCacheContext(
   root: string,
   resolvedCommand: ResolvedCommand,
@@ -450,12 +590,13 @@ function commandCacheContext(
   maxOutputBytes: number,
   responseMode: 'compact' | 'standard' | 'debug',
   args: Record<string, any>,
+  identityOverride?: ProjectCommandExecutionIdentity | null,
 ) {
   const explicitCache = args.cacheResult === true || String(args.cacheResult).toLowerCase() === 'true';
   const explicitlyDisabled = args.cacheResult === false || String(args.cacheResult).toLowerCase() === 'false';
   const automaticStaticCache = resolvedCommand.command === 'typecheck' || resolvedCommand.command === 'lint';
   if (explicitlyDisabled || (!explicitCache && !automaticStaticCache)) return null;
-  return buildProjectCommandExecutionIdentity(root, resolvedCommand, cwdPath, timeoutMs, maxOutputBytes, responseMode);
+  return identityOverride ?? buildProjectCommandExecutionIdentity(root, resolvedCommand, cwdPath, timeoutMs, maxOutputBytes, responseMode);
 }
 
 function cachedCommandResult(
@@ -579,35 +720,80 @@ export function runProjectCommand(state: AppState, args: Record<string, any>): R
 export async function runProjectCommandAsync(state: AppState, args: Record<string, any>, logger: { stdout: (data: string) => void, stderr: (data: string) => void }, setCancelFn: (fn: () => void) => void): Promise<RunProjectCommandResult> {
   const totalStartedAt = Date.now();
   const resolutionStartedAt = totalStartedAt;
-  const root = resolveProjectRoot(state, args);
+  const sourceRoot = resolveProjectRoot(state, args);
+  const suppliedCandidate = readProjectCommandVerificationCandidate(args.__verificationCandidate);
+  let executionRoot = sourceRoot;
+  if (suppliedCandidate) {
+    const resolvedCandidate = resolveVerificationCandidate(suppliedCandidate.candidateId);
+    if (
+      resolvedCandidate.repoRevision !== suppliedCandidate.repoRevision
+      || resolvedCandidate.snapshotCommit !== suppliedCandidate.snapshotCommit
+      || suppliedCandidate.executionIdentity.repoRevision !== suppliedCandidate.repoRevision
+    ) {
+      throw createApiError(409, 'VERIFICATION_CANDIDATE_MISMATCH', 'Verification candidate metadata no longer matches its immutable snapshot.');
+    }
+    executionRoot = resolvedCandidate.root;
+  }
+
   const command = resolveCommandLabel(args.command ?? args.preset);
-  const resolvedCommand = resolveAllowedCommand(root, command);
-  const cwdPath = resolveSafeCommandCwd(root, args.cwd ?? resolvedCommand.cwd);
+  const resolvedCommand = resolveAllowedCommand(executionRoot, command);
+  const executionCwdPath = resolveSafeCommandCwd(executionRoot, args.cwd ?? resolvedCommand.cwd);
+  const displayCwdPath = suppliedCandidate
+    ? resolveSafeCommandCwd(sourceRoot, args.cwd ?? resolvedCommand.cwd)
+    : executionCwdPath;
   const timeoutMs = Number.isFinite(Number(args.timeoutMs))
     ? Math.max(1, Math.min(MAX_TIMEOUT_MS, Number(args.timeoutMs)))
     : resolvedCommand.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const { responseMode, maxOutputBytes } = resolveOutputBudget(args, resolvedCommand);
+
+  let executionIdentity: ProjectCommandExecutionIdentity | null = null;
+  if (suppliedCandidate) {
+    executionIdentity = buildProjectCommandExecutionIdentity(
+      executionRoot,
+      resolvedCommand,
+      executionCwdPath,
+      timeoutMs,
+      maxOutputBytes,
+      responseMode,
+      {
+        repoRevision: suppliedCandidate.repoRevision,
+        lineageToken: suppliedCandidate.executionIdentity.lineageFingerprint,
+      },
+    );
+    if (!executionIdentity || executionIdentity.key !== suppliedCandidate.executionIdentity.key) {
+      throw createApiError(409, 'VERIFICATION_CANDIDATE_IDENTITY_MISMATCH', 'Verification command no longer matches the captured candidate execution identity.');
+    }
+  }
   const resolutionMs = Date.now() - resolutionStartedAt;
 
   const cacheLookupStartedAt = Date.now();
-  const cacheContext = commandCacheContext(root, resolvedCommand, cwdPath, timeoutMs, maxOutputBytes, responseMode, args);
+  const cacheContext = commandCacheContext(
+    executionRoot,
+    resolvedCommand,
+    executionCwdPath,
+    timeoutMs,
+    maxOutputBytes,
+    responseMode,
+    args,
+    executionIdentity,
+  );
   const cached = args.forceFresh === true ? null : cachedCommandResult(cacheContext, command, resolutionMs, responseMode);
   const cacheLookupMs = Date.now() - cacheLookupStartedAt;
   if (cached) {
-    return withPerformancePhases(cached, {
+    return withVerificationCandidate(withPerformancePhases(cached, {
       resolutionMs,
       cacheLookupMs,
       resultNormalizationMs: 0,
       totalMs: Date.now() - totalStartedAt,
-    });
+    }), sourceRoot, suppliedCandidate, executionIdentity);
   }
 
   const startedAt = Date.now();
-  
+
   return new Promise((resolve, reject) => {
     const spawnStartedAt = Date.now();
     const child = spawn(resolvedCommand.executable, resolvedCommand.args, {
-      cwd: cwdPath,
+      cwd: executionCwdPath,
       shell: false,
     });
 
@@ -655,8 +841,8 @@ export async function runProjectCommandAsync(state: AppState, args: Record<strin
       const resultNormalizationStartedAt = Date.now();
       const commandResult = buildCommandResult({
         command,
-        root,
-        cwdPath,
+        root: sourceRoot,
+        cwdPath: displayCwdPath,
         exitCode: code,
         durationMs,
         timedOut,
@@ -675,8 +861,8 @@ export async function runProjectCommandAsync(state: AppState, args: Record<strin
         resultNormalizationMs,
         totalMs: Date.now() - totalStartedAt,
       });
-      resolve(rememberSuccessfulCommandResult(cacheContext, finalizedResult, args));
+      const candidateResult = withVerificationCandidate(finalizedResult, sourceRoot, suppliedCandidate, executionIdentity);
+      resolve(rememberSuccessfulCommandResult(cacheContext, candidateResult, args));
     });
   });
 }
-

@@ -16,7 +16,7 @@ import {
   getToolJobWaitGuidance,
   __resetQueueWaitTelemetryForTests,
 } from '../../src/server/services/mcpToolJobService';
-import { readJobLog, readJobResult } from '../../src/server/repositories/mcpToolJobRepository';
+import { heartbeatJob, readJobLog, readJobResult } from '../../src/server/repositories/mcpToolJobRepository';
 import { createProject } from '../../src/server/repositories/projectRepository.js';
 import { registerMcpToolJobRoutes } from '../../src/server/routes/mcpToolJobs.js';
 import { createApiError } from '../../src/server/services/api.js';
@@ -372,9 +372,11 @@ test('mcpToolJobService - identical safe in-flight reads use leader/follower sin
   try {
     const args = { localPath: root, query: 'same-query', singleFlight: true };
     const first = enqueueToolJob(state, toolName, args, 'repo-read');
+    const staleBeforeFollower = getQueueMetrics().metrics.durable.staleRunning;
     const second = enqueueToolJob(state, toolName, args, 'repo-read');
     assert.notStrictEqual(first.jobId, second.jobId);
     assert.strictEqual(second.sharedWith, first.jobId);
+    assert.strictEqual(getQueueMetrics().metrics.durable.staleRunning, staleBeforeFollower);
 
     await waitUntil(() => starts === 1, 'Expected only the single-flight leader to execute');
     blocker.resolve();
@@ -1026,6 +1028,99 @@ test('mcpToolJobService - running obsolete verification uses cooperative cancell
   } finally {
     finishB.resolve();
     __setToolJobTestRunner('run_project_command', null);
+  }
+});
+
+test('mcpToolJobService - bounded waiter detaches without cancelling durable execution', async () => {
+  const root = makeTempRepo('durable-detach');
+  const state = makeState(root);
+  const gate = deferred();
+  const toolName = `test_durable_detach_${randomUUID()}`;
+  __setToolJobTestRunner(toolName, async () => {
+    await gate.promise;
+    return { ok: true };
+  });
+
+  try {
+    const job = enqueueToolJob(state, toolName, { localPath: root }, 'repo-read');
+    await waitUntil(() => getToolJobStatus(job.jobId)?.status === 'running', 'Expected durable job to start');
+
+    const observed = await waitForToolJob(job.jobId, 5);
+    assert.equal(observed?.status, 'running');
+    const detached: any = getToolJobStatus(job.jobId);
+    assert.equal(detached?.status, 'running');
+    assert.equal(typeof detached?.detachedAt, 'string');
+
+    gate.resolve();
+    await waitForStatus(job.jobId, 'succeeded');
+  } finally {
+    gate.resolve();
+    __setToolJobTestRunner(toolName, null);
+  }
+});
+
+test('mcpToolJobService - stale retry-safe lease recovery releases capacity and fences zombie completion', async () => {
+  const root = process.cwd();
+  const state = makeState(root);
+  const firstStarted = deferred();
+  const zombieFinish = deferred();
+  let attempt = 0;
+
+  __setToolJobTestRunner('search_local_files', async (_state, args) => {
+    if (args?.query !== 'lease-fencing') return { ok: true, unrelatedRecovery: true };
+    attempt += 1;
+    if (attempt === 1) {
+      firstStarted.resolve();
+      await zombieFinish.promise;
+      return { ok: true, attempt: 1 };
+    }
+    return { ok: true, attempt };
+  });
+
+  try {
+    const job = enqueueToolJob(state, 'search_local_files', {
+      localPath: root,
+      query: 'lease-fencing',
+    }, 'repo-read');
+    await firstStarted.promise;
+    const follower = enqueueToolJob(state, 'search_local_files', {
+      localPath: root,
+      query: 'lease-fencing',
+    }, 'repo-read');
+    assert.equal(follower.sharedWith, job.jobId);
+
+    const firstLease: any = getToolJobStatus(job.jobId);
+    assert.equal(firstLease?.status, 'running');
+    assert.equal(firstLease?.leaseGeneration, 1);
+    assert.equal(typeof firstLease?.leaseOwner, 'string');
+
+    const expired = (heartbeatJob as any)(
+      job.jobId,
+      firstLease.leaseOwner,
+      1_000,
+      Date.now() - 5_000,
+      firstLease.leaseGeneration,
+    );
+    assert.ok(expired);
+
+    const serviceModule: any = await import('../../src/server/services/mcpToolJobService.js');
+    assert.equal(typeof serviceModule.__runDurableJobRecoveryPassForTests, 'function');
+    const recovery = serviceModule.__runDurableJobRecoveryPassForTests(state, Date.now());
+    assert.equal(recovery.retryable >= 1, true);
+
+    await waitForStatus(job.jobId, 'succeeded');
+    await waitForStatus(follower.jobId, 'succeeded');
+    assert.equal((readJobResult(job.jobId) as any)?.result?.attempt, 2);
+    assert.equal((readJobResult(follower.jobId) as any)?.result?.attempt, 2);
+
+    zombieFinish.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal((readJobResult(job.jobId) as any)?.result?.attempt, 2);
+    assert.equal((getToolJobStatus(job.jobId) as any)?.leaseGeneration, 2);
+    assert.equal((getQueueMetrics().metrics.durable as any).fencedLateWrites >= 1, true);
+  } finally {
+    zombieFinish.resolve();
+    __setToolJobTestRunner('search_local_files', null);
   }
 });
 

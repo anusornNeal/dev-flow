@@ -32,6 +32,18 @@ function numberArg(value: unknown, fallback: number) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+type WorkflowHealthResponseMode = 'compact' | 'full';
+
+function resolveWorkflowHealthResponseMode(args: Record<string, any>): WorkflowHealthResponseMode {
+  const raw = String(args.responseMode || args.mode || '').trim().toLowerCase();
+  if (raw === 'compact' || raw === 'summary') return 'compact';
+  return 'full';
+}
+
+function compactFailureGroups(groups: Array<{ toolName: string; count: number; statuses: string[]; examples: any[] }>) {
+  return groups.map(({ toolName, count, statuses }) => ({ toolName, count, statuses }));
+}
+
 function summarizeFailedJobGroups(failures: any[]) {
   const groups = new Map<string, { toolName: string; count: number; statuses: string[]; examples: any[] }>();
   for (const failure of failures) {
@@ -52,8 +64,9 @@ function summarizeFailedJobGroups(failures: any[]) {
   return Array.from(groups.values()).sort((left, right) => right.count - left.count);
 }
 
-export function getWorkflowHealth(state: AppState, args: Record<string, any> = {}) {
+export function getWorkflowHealth(state: AppState, args: Record<string, any> = {}): Record<string, any> {
   const recommendations: string[] = [];
+  const responseMode = resolveWorkflowHealthResponseMode(args);
   const startedAt = nodePerformance.now();
   let phaseStartedAt = startedAt;
   const phaseMs = () => {
@@ -184,7 +197,7 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
   if (healthEventSignature) lastHealthEventSignatures.set(healthEventKey, healthEventSignature);
   else lastHealthEventSignatures.delete(healthEventKey);
 
-  return {
+  const fullResult = {
     ok: status !== 'error',
     status,
     generatedAt: new Date().toISOString(),
@@ -217,5 +230,76 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
       phases: { catalogMs, diagnosticsMs, gitMs, searchMs, sloMs },
     },
     recommendations,
+  };
+
+  if (responseMode === 'full') return fullResult;
+
+  const compactGit = git.ok
+    ? {
+        ok: true,
+        clean: git.clean,
+        changedFileCount: git.changedFileCount,
+        operation: {
+          blocked: Boolean(git.operation?.blocked),
+          code: git.operation?.code || null,
+          kind: git.operation?.kind || null,
+          unmergedPathCount: Number(git.operation?.unmergedPathCount || 0),
+        },
+      }
+    : { ok: false, clean: false, error: git.error };
+  const compactRegressions = sloPerformance.regressions.slice(0, 5).map((entry: any) => ({
+    toolName: entry.toolName,
+    p50DurationMs: entry.p50DurationMs,
+    p95DurationMs: entry.p95DurationMs,
+    budgetMs: entry.budgetMs,
+    status: entry.status,
+  }));
+
+  return {
+    ok: fullResult.ok,
+    status: fullResult.status,
+    generatedAt: fullResult.generatedAt,
+    checks: fullResult.checks,
+    git: compactGit,
+    queue: {
+      depth: queueDepth,
+      capacity: isolation.capacity,
+      durableJobs: {
+        queued: Number(durableJobs.queued || 0),
+        running: Number(durableJobs.running || 0),
+        healthyRunning: Number(durableJobs.healthyRunning || 0),
+        staleRunning: Number(durableJobs.staleRunning || 0),
+        detached: Number(durableJobs.detached || 0),
+      },
+    },
+    failures: {
+      total: failedJobs,
+      groups: compactFailureGroups(failedJobGroups),
+    },
+    regressions: compactRegressions,
+    runtime: {
+      search: {
+        backend: search.backend,
+        ripgrepSource: search.ripgrepSource,
+        fallbackAvailable: search.fallbackAvailable,
+        fallbackReason: search.fallbackReason,
+        circuitOpen: search.circuitOpen,
+        infrastructureFailureCount: search.infrastructureFailureCount,
+      },
+      capabilities: {
+        contractVersion: catalog.contractVersion,
+        toolCount: advertisedTools.length,
+        backendToolCount: catalog.tools.length,
+        keyToolsPresent,
+      },
+    },
+    recovery: {
+      hasVerifiedGoodBackup: Boolean(recovery.lastVerifiedGoodBackup),
+      failureReason: recovery.failureReason
+        ? { code: recovery.failureReason.code, reason: recovery.failureReason.reason, recordedAt: recovery.failureReason.recordedAt }
+        : null,
+    },
+    performance: { totalMs: fullResult.performance.totalMs },
+    recommendations: recommendations.slice(0, 8),
   };
 }

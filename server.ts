@@ -65,7 +65,7 @@ async function startServer() {
   const reusableMcpHttpHandler = createReusableMcpHttpHandler(apiBaseUrl, undefined, undefined, {
     requestHooks: (_req, res) => res.locals.mcpTransportTracker?.hooks,
   });
-  app.post('/mcp', async (req, res, next) => {
+  app.all('/mcp', async (req, res, next) => {
     const startedAt = Number(res.locals.mcpTransportStartedAt || Date.now());
     const tracker = createMcpTransportRequestTracker({
       operation: classifyMcpTransportOperation(req.body),

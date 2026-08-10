@@ -23,7 +23,7 @@ async function withMcpServer(
     res.json({ contractVersion: 'test-contract', runtimeInstanceId, marker: 'streamable-http-call-ok' });
   });
   app.use('/mcp', express.json({ limit: '1mb' }));
-  app.post('/mcp', (req, res, next) => {
+  app.all('/mcp', (req, res, next) => {
     if (!handler) throw new Error('MCP test handler is not initialized.');
     return handler(req, res, next);
   });
@@ -70,7 +70,7 @@ test('Streamable HTTP lifecycle plumbing lives in a focused transport module', (
 
 test('production server mounts the Streamable HTTP handler at /mcp while retaining /sse', () => {
   const source = fs.readFileSync(new URL('../../server.ts', import.meta.url), 'utf8');
-  assert.match(source, /app\.post\(['"]\/mcp['"]/);
+  assert.match(source, /app\.all\(['"]\/mcp['"]/);
   assert.match(source, /app\.get\(['"]\/sse['"]/);
   assert.match(source, /app\.post\(['"]\/sse['"]/);
 });
@@ -101,6 +101,68 @@ test('Streamable HTTP handler initializes a reusable server session', async () =
     assert.equal(body.id, 1);
     assert.equal(body.result?.serverInfo?.name, 'dev-flow-mcp');
     assert.match(response.headers.get('mcp-session-id') || '', /^[0-9a-f-]{20,}$/i, 'stateful mode must issue a reusable session id');
+  });
+});
+
+test('GET /mcp opens the SDK standalone SSE stream for an initialized session', async () => {
+  await withMcpServer(async (baseUrl) => {
+    const initialized = await fetch(`${baseUrl}/mcp`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 'get-stream-init',
+        method: 'initialize',
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'devflow-get-stream-test', version: '1.0.0' },
+        },
+      }),
+    });
+    assert.equal(initialized.status, 200);
+    const sessionId = initialized.headers.get('mcp-session-id') || '';
+    assert.match(sessionId, /^[0-9a-f-]{20,}$/i);
+    await initialized.body?.cancel();
+
+    const stream = await fetch(`${baseUrl}/mcp`, {
+      method: 'GET',
+      headers: {
+        Accept: 'text/event-stream',
+        'mcp-session-id': sessionId,
+        'mcp-protocol-version': '2025-06-18',
+      },
+    });
+    assert.equal(stream.status, 200);
+    assert.match(stream.headers.get('content-type') || '', /^text\/event-stream/i);
+    await stream.body?.cancel();
+  });
+});
+
+test('GET /mcp preserves 404 only for a genuine stale session id', async () => {
+  await withMcpServer(async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/mcp`, {
+      method: 'GET',
+      headers: {
+        Accept: 'text/event-stream',
+        'mcp-session-id': randomUUID(),
+        'mcp-protocol-version': '2025-06-18',
+      },
+    });
+    assert.equal(response.status, 404);
+    await response.body?.cancel();
+  });
+});
+
+test('unsupported /mcp methods return 405 and advertise GET plus POST', async () => {
+  await withMcpServer(async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/mcp`, { method: 'PUT' });
+    assert.equal(response.status, 405);
+    assert.equal(response.headers.get('allow'), 'GET, POST');
+    await response.body?.cancel();
   });
 });
 

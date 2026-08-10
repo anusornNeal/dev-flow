@@ -101,7 +101,7 @@ test('tracker records initialize, tools/list, and tools/call lifecycle phases fr
     next();
   });
   app.use('/mcp', express.json({ limit: '1mb' }));
-  app.post('/mcp', async (req, res, next) => {
+  app.all('/mcp', async (req, res, next) => {
     if (!handler) throw new Error('MCP transport test handler is not initialized.');
     const startedAt = Number(res.locals.mcpTransportStartedAt || Date.now());
     const tracker = createMcpTransportRequestTracker({
@@ -135,6 +135,12 @@ test('tracker records initialize, tools/list, and tools/call lifecycle phases fr
     await client.listTools();
     const call = await client.callTool({ name: 'devflow_health_check', arguments: {} }) as any;
     assert.equal(call.isError, undefined);
+    await client.close();
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      const pendingSummary = getMcpTransportSummary({ windowMs: 60_000 });
+      if ((pendingSummary.byOperation.find((entry) => entry.operation === 'other')?.count || 0) >= 2) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
 
     const summary = getMcpTransportSummary({ windowMs: 60_000 });
     for (const operation of ['initialize', 'tools/list', 'tools/call'] as const) {
@@ -146,6 +152,10 @@ test('tracker records initialize, tools/list, and tools/call lifecycle phases fr
         assert.equal(phase.p95Ms >= 0, true);
       }
     }
+
+    const other = summary.byOperation.find((entry) => entry.operation === 'other');
+    assert.ok((other?.count || 0) >= 2, 'initialized notification and GET SSE lifecycle should both be tracked as bounded other operations');
+    assert.equal(other?.errorCount, 0, 'normal GET SSE lifecycle must not be recorded as a transport error');
   } finally {
     await client.close();
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));

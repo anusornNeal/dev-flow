@@ -1,3 +1,9 @@
+import { execFile } from 'node:child_process';
+import { promises as fs } from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { pathToFileURL } from 'node:url';
+
 import {
   composeUiPreviewDocument,
   UI_PREVIEW_CAPABILITY_GUARD_SCRIPT,
@@ -50,6 +56,136 @@ type BrowserLike = {
 };
 
 type BrowserFactory = () => Promise<BrowserLike>;
+
+type SystemBrowserCapture = (
+  input: UiPreviewCaptureInput,
+  viewport: Required<UiPreviewViewport>,
+  timeoutMs: number,
+) => Promise<Buffer>;
+
+function isMissingExecutable(error: unknown) {
+  return (error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT';
+}
+
+function isProcessTimeout(error: unknown) {
+  const candidate = error as (Error & { killed?: boolean; code?: string }) | undefined;
+  return candidate?.killed === true || candidate?.code === 'ETIMEDOUT' || /timed out|timeout/i.test(toErrorMessage(error));
+}
+
+function browserExecutableCandidates() {
+  const candidates: string[] = [];
+  if (process.platform === 'win32') {
+    const programFiles = process.env.ProgramFiles;
+    const programFilesX86 = process.env['ProgramFiles(x86)'];
+    const localAppData = process.env.LOCALAPPDATA;
+    if (programFilesX86) candidates.push(path.join(programFilesX86, 'Microsoft', 'Edge', 'Application', 'msedge.exe'));
+    if (programFiles) candidates.push(path.join(programFiles, 'Microsoft', 'Edge', 'Application', 'msedge.exe'));
+    if (localAppData) candidates.push(path.join(localAppData, 'Microsoft', 'Edge', 'Application', 'msedge.exe'));
+    if (programFiles) candidates.push(path.join(programFiles, 'Google', 'Chrome', 'Application', 'chrome.exe'));
+    if (programFilesX86) candidates.push(path.join(programFilesX86, 'Google', 'Chrome', 'Application', 'chrome.exe'));
+    if (localAppData) candidates.push(path.join(localAppData, 'Google', 'Chrome', 'Application', 'chrome.exe'));
+    candidates.push('msedge.exe', 'chrome.exe', 'chromium.exe');
+  } else if (process.platform === 'darwin') {
+    candidates.push(
+      '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      '/Applications/Chromium.app/Contents/MacOS/Chromium',
+    );
+    if (process.env.HOME) {
+      candidates.push(
+        path.join(process.env.HOME, 'Applications', 'Microsoft Edge.app', 'Contents', 'MacOS', 'Microsoft Edge'),
+        path.join(process.env.HOME, 'Applications', 'Google Chrome.app', 'Contents', 'MacOS', 'Google Chrome'),
+      );
+    }
+    candidates.push('microsoft-edge', 'google-chrome', 'chromium');
+  } else {
+    candidates.push('google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser', 'microsoft-edge');
+  }
+  return [...new Set(candidates)];
+}
+
+function execFileBounded(file: string, args: string[], timeoutMs: number) {
+  return new Promise<void>((resolve, reject) => {
+    execFile(file, args, { timeout: timeoutMs, windowsHide: true, maxBuffer: 1024 * 1024 }, (error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
+}
+
+function isPngBuffer(value: Buffer) {
+  return value.length >= 8 && value.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+}
+
+async function defaultSystemBrowserCapture(
+  input: UiPreviewCaptureInput,
+  viewport: Required<UiPreviewViewport>,
+  timeoutMs: number,
+): Promise<Buffer> {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'devflow-ui-preview-browser-'));
+  const htmlPath = path.join(tempRoot, 'preview.html');
+  const screenshotPath = path.join(tempRoot, 'preview.png');
+  const profileDir = path.join(tempRoot, 'profile');
+  try {
+    const document = composeUiPreviewDocument(input);
+    await fs.writeFile(htmlPath, document.html, 'utf8');
+    const args = [
+      '--headless=new',
+      '--disable-gpu',
+      '--hide-scrollbars',
+      '--no-first-run',
+      '--no-default-browser-check',
+      '--disable-extensions',
+      '--disable-background-networking',
+      '--disable-component-update',
+      '--disable-default-apps',
+      '--disable-sync',
+      '--metrics-recording-only',
+      '--mute-audio',
+      `--user-data-dir=${profileDir}`,
+      `--window-size=${viewport.width},${viewport.height}`,
+      `--force-device-scale-factor=${viewport.deviceScaleFactor}`,
+      `--screenshot=${screenshotPath}`,
+      pathToFileURL(htmlPath).href,
+    ];
+    let lastError: unknown;
+    let executableReached = false;
+    for (const executable of browserExecutableCandidates()) {
+      try {
+        await execFileBounded(executable, args, timeoutMs);
+        executableReached = true;
+        const png = await fs.readFile(screenshotPath);
+        if (!isPngBuffer(png)) throw new Error(`System browser '${executable}' did not produce a valid PNG screenshot.`);
+        return png;
+      } catch (error) {
+        if (isProcessTimeout(error)) {
+          throw new UiPreviewScreenshotError(
+            'UI_PREVIEW_CAPTURE_TIMEOUT',
+            `System browser UI preview capture exceeded the ${timeoutMs}ms safety timeout.`,
+            error,
+          );
+        }
+        if (!isMissingExecutable(error)) executableReached = true;
+        lastError = error;
+        await fs.rm(screenshotPath, { force: true }).catch(() => {});
+      }
+    }
+    if (!executableReached) {
+      throw new UiPreviewScreenshotError(
+        'UI_PREVIEW_RENDERER_UNAVAILABLE',
+        'Playwright is unavailable and no compatible system Edge/Chrome/Chromium renderer was found.',
+        lastError,
+      );
+    }
+    throw new UiPreviewScreenshotError(
+      'UI_PREVIEW_CAPTURE_FAILED',
+      `System browser UI preview capture failed: ${toErrorMessage(lastError)}`,
+      lastError,
+    );
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true }).catch(() => {});
+  }
+}
 
 const DEFAULT_CAPTURE_TIMEOUT_MS = 5_000;
 const MAX_CAPTURE_TIMEOUT_MS = 5_000;
@@ -131,11 +267,13 @@ function ignoreRejection(value: unknown) {
 export function createUiPreviewScreenshotService(options: {
   artifactStore?: UiPreviewArtifactStore;
   browserFactory?: BrowserFactory;
+  systemBrowserCapture?: SystemBrowserCapture | null;
   captureTimeoutMs?: number;
 } = {}) {
   const artifactStore = options.artifactStore ?? createUiPreviewArtifactStore();
   const captureTimeoutMs = normalizeCaptureTimeout(options.captureTimeoutMs);
   const browserFactory = options.browserFactory ?? (() => defaultBrowserFactory(captureTimeoutMs));
+  const systemBrowserCapture = options.systemBrowserCapture === undefined ? defaultSystemBrowserCapture : options.systemBrowserCapture;
   let browserPromise: Promise<BrowserLike> | null = null;
   let activeBrowser: BrowserLike | null = null;
 
@@ -235,6 +373,27 @@ export function createUiPreviewScreenshotService(options: {
     }
   }
 
+  async function captureWithSystemBrowser(input: UiPreviewCaptureInput): Promise<UiPreviewCaptureResult> {
+    if (!systemBrowserCapture) {
+      throw new UiPreviewScreenshotError(
+        'UI_PREVIEW_RENDERER_UNAVAILABLE',
+        'Playwright Chromium is unavailable. Install dependencies, then run `npx playwright install chromium`.',
+      );
+    }
+    const viewport = normalizeViewport(input.viewport);
+    const png = Buffer.from(await systemBrowserCapture(input, viewport, captureTimeoutMs));
+    if (!isPngBuffer(png)) {
+      throw new UiPreviewScreenshotError('UI_PREVIEW_CAPTURE_FAILED', 'System browser renderer returned an invalid PNG screenshot.');
+    }
+    const saved = await artifactStore.writePng(png);
+    return {
+      artifactId: saved.artifactId,
+      absolutePath: saved.absolutePath,
+      png,
+      viewport,
+    };
+  }
+
   async function capture(input: UiPreviewCaptureInput): Promise<UiPreviewCaptureResult> {
     let lastError: unknown;
     for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -242,14 +401,16 @@ export function createUiPreviewScreenshotService(options: {
         return await captureOnce(input);
       } catch (error) {
         lastError = error;
-        if (error instanceof UiPreviewScreenshotError) throw error;
+        if (error instanceof UiPreviewScreenshotError) {
+          if (error.code === 'UI_PREVIEW_RENDERER_UNAVAILABLE') {
+            invalidateBrowser();
+            return captureWithSystemBrowser(input);
+          }
+          throw error;
+        }
         if (isRendererUnavailableError(error)) {
           invalidateBrowser();
-          throw new UiPreviewScreenshotError(
-            'UI_PREVIEW_RENDERER_UNAVAILABLE',
-            'Playwright Chromium is unavailable. Install dependencies, then run `npx playwright install chromium`.',
-            error,
-          );
+          return captureWithSystemBrowser(input);
         }
         if (attempt === 0 && isBrowserCrashError(error)) {
           const previousBrowser = activeBrowser;

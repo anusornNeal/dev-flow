@@ -158,11 +158,34 @@ test('renderer unavailable is actionable without requiring Chromium at service c
     const service = createUiPreviewScreenshotService({
       artifactStore: createUiPreviewArtifactStore({ rootDir: root }),
       browserFactory: async () => { throw new Error("Executable doesn't exist at chromium"); },
+      systemBrowserCapture: null,
     });
     await assert.rejects(
       () => service.capture({ html: '<p>x</p>', viewport: { width: 320, height: 240 } }),
       (error: any) => error?.code === 'UI_PREVIEW_RENDERER_UNAVAILABLE' && /npx playwright install chromium/.test(error.message),
     );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('falls back to system browser capture when Playwright is unavailable', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-ui-preview-system-browser-'));
+  let fallbackCalls = 0;
+  try {
+    const service = createUiPreviewScreenshotService({
+      artifactStore: createUiPreviewArtifactStore({ rootDir: root }),
+      browserFactory: async () => { throw new Error("Cannot find package 'playwright'"); },
+      systemBrowserCapture: async (_input: any, viewport: any) => {
+        fallbackCalls += 1;
+        assert.deepEqual(viewport, { width: 360, height: 240, deviceScaleFactor: 1 });
+        return PNG;
+      },
+    });
+    const result = await service.capture({ html: '<main>fallback</main>', viewport: { width: 360, height: 240 } });
+    assert.equal(fallbackCalls, 1);
+    assert.deepEqual(result.png, PNG);
+    assert.equal(fs.existsSync(result.absolutePath), true);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

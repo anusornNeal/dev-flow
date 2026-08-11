@@ -65,6 +65,21 @@ test('master skills replace stale machine-specific source paths with repo-relati
   assert.match(router.content, /DevFlow Skill Router/);
 });
 
+test('skill router keeps ambiguous DevFlow visual requests in DevFlow and makes image generation explicit opt-in', () => {
+  initSkillsRepository();
+
+  const router = getSkills().find((skill: any) => skill.id === '00-skill-router');
+  assert.ok(router);
+
+  assert.match(router.content, /preview UI|UI preview/i);
+  assert.match(router.content, /mockup|mock up/i);
+  assert.match(router.content, /concept/i);
+  assert.match(router.content, /redesign|layout/i);
+  assert.match(router.content, /DevFlow/i);
+  assert.match(router.content, /image generation/i);
+  assert.match(router.content, /explicit opt-in|explicitly asks|clear(?:ly)? asks/i);
+});
+
 test('authoring skills endpoint returns the repo skill set in file order', async () => {
   const app = express();
   registerSkillRoutes(app, { state: {}, writeAgentLog: () => {} } as any);

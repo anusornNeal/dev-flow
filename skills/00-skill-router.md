@@ -20,3 +20,5 @@ Choose the smallest DevFlow guidance set that matches the current action. This f
 - Master skills define policy. Compatibility documents and examples are non-authoritative.
 - Keep portable task metadata repository-relative and avoid machine-specific local paths.
 - If live tool structure conflicts with prose, follow the live tool structure and update the stale guidance.
+- In DevFlow context, visual-product requests such as `preview UI`, `UI preview`, `mockup`, `mock up`, `concept`, `วาด concept`, `ลองทำหน้า...`, `ทำให้ดู`, redesign, or layout stay in DevFlow and route to real repository work plus DevFlow preview/evidence when applicable.
+- Image generation is explicit opt-in only when the user clearly asks to generate or create an image, for example `เจนภาพ`, `ทำรูป`, `เจนรูป`, or `generate image`; `mockup` or `concept` alone is not image-generation intent.

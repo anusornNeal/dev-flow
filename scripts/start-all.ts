@@ -131,6 +131,7 @@ export function buildStartAllPlan(
     env: {
       [DEVFLOW_RESTART_SUPERVISOR_ENV]: DEVFLOW_RESTART_SUPERVISOR_START_ALL,
       [DEVFLOW_RESTART_SUPERVISOR_TOKEN_ENV]: supervisorToken,
+      DISABLE_HMR: process.env.DISABLE_HMR === 'false' ? 'false' : 'true',
     },
   };
   const ngrok: ManagedProcess = {

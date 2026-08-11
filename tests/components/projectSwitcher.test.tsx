@@ -133,10 +133,9 @@ test('Sidebar no longer owns the primary interactive project selector', () => {
   assert.doesNotMatch(source, /Interactive Project Selector/);
   assert.doesNotMatch(source, /isProjectDropdownOpen/);
 });
-test('App routes one active project id through the switcher, Board, and Atlas', () => {
+test('App routes one active project id through the switcher and Board only', () => {
   const source = fs.readFileSync('src/App.tsx', 'utf8');
   assert.match(source, /<ProjectSwitcher[\s\S]*activeProjectId=\{activeProjectId\}[\s\S]*setActiveProjectId=\{setActiveProjectId\}/);
   assert.match(source, /useBoardViewModel\(\{[\s\S]*projectId: activeProjectId \|\| null/);
-  assert.match(source, /<ProjectAtlasPage[^>]*projectId=\{activeProjectId \|\| null\}/);
-  assert.doesNotMatch(source, /activePage !== 'atlas' && \(\s*<Header/);
+  assert.doesNotMatch(source, /ProjectAtlasPage|activePage|atlasEventRevision/);
 });

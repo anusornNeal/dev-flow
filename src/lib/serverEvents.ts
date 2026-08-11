@@ -140,17 +140,31 @@ export function startReactiveServerRefresh(options: ReactiveRefreshOptions) {
   const clearEvery = options.clearIntervalFn || ((handle) => window.clearInterval(handle));
   const fallbackMs = Math.max(10_000, options.fallbackMs ?? 60_000);
   const refresh = () => { void options.refresh(); };
+  let fallbackTimer: any = null;
+
+  const stopFallback = () => {
+    if (fallbackTimer === null) return;
+    clearEvery(fallbackTimer);
+    fallbackTimer = null;
+  };
+  const startFallback = () => {
+    if (fallbackTimer !== null) return;
+    fallbackTimer = setEvery(refresh, fallbackMs);
+  };
 
   refresh();
+  startFallback();
   const unsubscribe = subscribe((event) => {
     if (!allowed.has(event.type)) return;
     if (options.projectId && event.projectId && options.projectId !== event.projectId) return;
     refresh();
+  }, {
+    onAvailable: stopFallback,
+    onUnavailable: startFallback,
   });
-  const fallbackTimer = setEvery(refresh, fallbackMs);
 
   return () => {
     unsubscribe();
-    clearEvery(fallbackTimer);
+    stopFallback();
   };
 }

@@ -103,3 +103,44 @@ test('reactive refresh runs immediately for matching synthetic events while fall
   assert.equal(listener, null);
   assert.equal(cleared, true);
 });
+
+test('reactive refresh fallback runs only while the SSE stream is unavailable', () => {
+  let listener: ((event: any) => void) | null = null;
+  let availability: { onAvailable?: () => void; onUnavailable?: () => void } = {};
+  const intervalCallbacks: Array<() => void> = [];
+  const cleared: number[] = [];
+  let refreshes = 0;
+
+  const stop = client.startReactiveServerRefresh({
+    refresh: () => { refreshes += 1; },
+    eventTypes: ['task.changed', 'stream.reset'],
+    fallbackMs: 60_000,
+    subscribe: (next: (event: any) => void, options: any) => {
+      listener = next;
+      availability = options;
+      return () => { listener = null; };
+    },
+    setIntervalFn: (callback: () => void) => {
+      intervalCallbacks.push(callback);
+      return intervalCallbacks.length;
+    },
+    clearIntervalFn: (handle: number) => { cleared.push(handle); },
+  });
+
+  assert.equal(refreshes, 1, 'initial reconciliation still runs immediately');
+  assert.equal(intervalCallbacks.length, 1, 'fallback is armed until SSE becomes available');
+  availability.onAvailable?.();
+  assert.deepEqual(cleared, [1], 'fallback stops as soon as SSE connects');
+
+  listener?.({ v: 1, type: 'task.changed', at: new Date().toISOString() });
+  assert.equal(refreshes, 2);
+  availability.onUnavailable?.();
+  assert.equal(intervalCallbacks.length, 2, 'fallback restarts only after SSE becomes unavailable');
+  intervalCallbacks[1]?.();
+  assert.equal(refreshes, 3);
+  availability.onAvailable?.();
+  assert.deepEqual(cleared, [1, 2], 'reconnect clears the outage fallback again');
+
+  stop();
+  assert.equal(listener, null);
+});

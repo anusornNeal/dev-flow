@@ -17,7 +17,6 @@ import {
   ChevronLeft,
   ChevronRight,
   Settings,
-  Waypoints,
   Search
 } from 'lucide-react';
 import { Task, TaskPriority, Project } from '../types';
@@ -34,8 +33,6 @@ interface SidebarProps {
   searchQuery: string;
   setSearchQuery: (query: string) => void;
   onOpenSettings: () => void;
-  activePage?: 'board' | 'atlas';
-  onSetActivePage?: (page: 'board' | 'atlas') => void;
   isCollapsed?: boolean;
   width?: number;
   onToggleCollapsed?: () => void;
@@ -55,8 +52,6 @@ export default function Sidebar({
   searchQuery,
   setSearchQuery,
   onOpenSettings,
-  activePage = 'board',
-  onSetActivePage,
   isCollapsed = false,
   width = 288,
   onToggleCollapsed,
@@ -104,24 +99,13 @@ export default function Sidebar({
           <Coffee size={20} />
         </div>
         <div className="mt-4 flex flex-col gap-2">
-          <button
-            type="button"
-            onClick={() => onSetActivePage?.('atlas')}
-            title="Project Atlas"
-            aria-label="Project Atlas"
-            className={`flex h-10 w-10 cursor-pointer items-center justify-center rounded-xl border ${activePage === 'atlas' ? 'border-[#d89745] bg-[#ffeace] text-[#714a1a] dark:border-[#f0b84d] dark:bg-[#3a2f26] dark:text-[#f3eadf]' : 'border-[#e5d4bb] bg-[#fff7ec] text-[#a46c24] hover:bg-[#ffeace] dark:border-[#6d5642] dark:bg-[#2b2119] dark:text-[#d6b56d]'}`}
-          >
-            <Waypoints size={18} />
-          </button>
-          <button
-            type="button"
-            onClick={() => onSetActivePage?.('board')}
+          <div
             title="Sprint Board"
             aria-label="Sprint Board"
-            className={`flex h-10 w-10 cursor-pointer items-center justify-center rounded-xl border ${activePage === 'board' ? 'border-[#d89745] bg-[#ffeace] text-[#714a1a] dark:border-[#f0b84d] dark:bg-[#3a2f26] dark:text-[#f3eadf]' : 'border-[#e5d4bb] bg-[#fff7ec] text-[#a46c24] hover:bg-[#ffeace] dark:border-[#6d5642] dark:bg-[#2b2119] dark:text-[#d6b56d]'}`}
+            className="flex h-10 w-10 items-center justify-center rounded-xl border border-[#d89745] bg-[#ffeace] text-[#714a1a] dark:border-[#f0b84d] dark:bg-[#3a2f26] dark:text-[#f3eadf]"
           >
             <FolderGit size={18} />
-          </button>
+          </div>
           <button
             type="button"
             onClick={onToggleCollapsed}
@@ -135,7 +119,7 @@ export default function Sidebar({
         <div className="mt-4 h-px bg-[#e5d4bb] dark:bg-[#584a3b]" />
         <div className="mt-4 flex min-h-0 flex-1 flex-col items-center gap-2">
           <div className="[writing-mode:vertical-rl] max-h-56 rotate-180 truncate text-[10px] font-black uppercase tracking-widest text-[#9a5b13] dark:text-[#d6b56d]" title={activeProject?.name}>
-            {activeProject?.taskIdPrefix || activeProject?.name || 'Atlas'}
+            {activeProject?.taskIdPrefix || activeProject?.name || 'Project'}
           </div>
           <span className="rounded-full border border-[#e0c7a8] bg-[#fff7eb] px-1.5 py-1 text-[9px] font-black text-[#9a5b13] dark:border-[#6d5642] dark:bg-[#2b2119] dark:text-[#f0b84d]" title="Task count">
             {totalTasks}
@@ -251,30 +235,10 @@ export default function Sidebar({
       {/* Stats Section with beautiful orange values */}
       <div className="px-6 py-2 border-b border-[#e5d4bb] dark:border-[#584a3b]">
         <div className="mb-4 grid grid-cols-1 gap-2">
-          <button
-            type="button"
-            onClick={() => onSetActivePage?.('board')}
-            className={`flex items-center justify-between rounded-xl border px-3 py-2 text-left text-[11px] font-extrabold transition-colors ${
-              activePage === 'board'
-                ? 'bg-[#ffeace] border-[#e7bc8c] text-[#714a1a] dark:bg-[#3a2f26] dark:border-[#584a3b] dark:text-[#f3eadf]'
-                : 'bg-[#fffbf6] border-[#e5d4bb] text-[#6e584a] hover:bg-[#fff9f1] dark:bg-[#1e1914] dark:border-[#584a3b] dark:text-[#f3eadf]'
-            }`}
-          >
+          <div className="flex items-center justify-between rounded-xl border border-[#e7bc8c] bg-[#ffeace] px-3 py-2 text-left text-[11px] font-extrabold text-[#714a1a] dark:border-[#584a3b] dark:bg-[#3a2f26] dark:text-[#f3eadf]">
             <span className="flex items-center gap-2"><FolderGit size={14} /> Sprint Board</span>
             <span className="font-mono text-[9px]">{totalTasks}</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => onSetActivePage?.('atlas')}
-            className={`flex items-center justify-between rounded-xl border px-3 py-2 text-left text-[11px] font-extrabold transition-colors ${
-              activePage === 'atlas'
-                ? 'bg-[#ffeace] border-[#e7bc8c] text-[#714a1a] dark:bg-[#3a2f26] dark:border-[#584a3b] dark:text-[#f3eadf]'
-                : 'bg-[#fffbf6] border-[#e5d4bb] text-[#6e584a] hover:bg-[#fff9f1] dark:bg-[#1e1914] dark:border-[#584a3b] dark:text-[#f3eadf]'
-            }`}
-          >
-            <span className="flex items-center gap-2"><Waypoints size={14} /> Project Atlas</span>
-            <span className="font-mono text-[9px]">Graph</span>
-          </button>
+          </div>
         </div>
         <h3 className="text-[10px] font-bold text-[#8C7565] dark:text-[#f3eadf] uppercase tracking-widest mb-3.5 flex items-center gap-1.5">
           <TrendingUp size={12} className="text-[#df9433] dark:text-[#e0a070] dark:text-[#d6b56d]" /> Work Progress

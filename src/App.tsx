@@ -22,7 +22,6 @@ import TemplateModal from './components/TemplateModal';
 import ObservabilityModal from './components/ObservabilityModal';
 import { Header } from './components/Header';
 import ProjectSwitcher from './components/ProjectSwitcher';
-import { ProjectAtlasPage } from './components/ProjectAtlasPage';
 import { BoardLane } from './components/BoardLane';
 import BatchImportModal from './components/BatchImportModal';
 import ConfirmModal from './components/ConfirmModal';
@@ -46,7 +45,6 @@ export default function App() {
 
   const boardViewModel = useBoardViewModel({
     projectId: activeProjectId || null,
-    pollIntervalMs: 60_000,
   });
   const tasks = boardViewModel.tasks as unknown as Task[];
   const setTasks = boardViewModel.setTasks as unknown as (u: (prev: Task[]) => Task[]) => void;
@@ -79,10 +77,6 @@ export default function App() {
   } | null>(null);
   const [mounted, setMounted] = useState(false);
   const [ngrokUrl, setNgrokUrl] = useState('');
-  const [atlasEventRevision, setAtlasEventRevision] = useState(0);
-  const [activePage, setActivePage] = useState<'board' | 'atlas'>(() =>
-    window.location.hash === '#atlas' ? 'atlas' : 'board'
-  );
   const [sidebarLayout, setSidebarLayout] = useState(() =>
     resolveInitialSidebarLayout(window.localStorage, window.innerWidth)
   );
@@ -106,33 +100,10 @@ export default function App() {
 
 
   useEffect(() => {
-    const syncPageFromHash = () => {
-      setActivePage(window.location.hash === '#atlas' ? 'atlas' : 'board');
-    };
-    window.addEventListener('hashchange', syncPageFromHash);
-    return () => window.removeEventListener('hashchange', syncPageFromHash);
+    if (window.location.hash === '#atlas') {
+      window.history.replaceState('', document.title, window.location.pathname + window.location.search);
+    }
   }, []);
-
-  useEffect(() => {
-    const linkedProjectId = new URLSearchParams(window.location.search).get('projectId');
-    if (
-      activePage === 'atlas' &&
-      linkedProjectId &&
-      linkedProjectId !== activeProjectId &&
-      projects.some((project) => project.id === linkedProjectId)
-    ) {
-      setActiveProjectId(linkedProjectId);
-    }
-  }, [activePage, activeProjectId, projects, setActiveProjectId]);
-
-  const handleSetActivePage = (page: 'board' | 'atlas') => {
-    setActivePage(page);
-    if (page === 'atlas') {
-      window.location.hash = 'atlas';
-    } else if (window.location.hash === '#atlas') {
-      window.history.pushState('', document.title, window.location.pathname + window.location.search);
-    }
-  };
 
   // Filter States
   const [selectedPriority, setSelectedPriority] = useState<Task['priority'] | 'all'>('all');
@@ -212,30 +183,40 @@ export default function App() {
   };
 
   useEffect(() => {
+    let fallbackTimer: number | null = null;
+    const stopFallback = () => {
+      if (fallbackTimer === null) return;
+      window.clearInterval(fallbackTimer);
+      fallbackTimer = null;
+    };
+    const runFallback = () => {
+      void boardViewModel.refresh();
+      void projectsViewModel.refresh();
+      void fetchSettingsFromApi();
+    };
+    const startFallback = () => {
+      if (fallbackTimer !== null) return;
+      fallbackTimer = window.setInterval(runFallback, 60_000);
+    };
+
     const unsubscribe = subscribeServerEvents((event) => {
       const affectsActiveProject = !event.projectId || event.projectId === activeProjectId;
       if (event.type === 'stream.reset') {
-        void boardViewModel.refresh();
-        void projectsViewModel.refresh();
-        void fetchSettingsFromApi();
-        setAtlasEventRevision((value) => value + 1);
+        runFallback();
         return;
       }
       if (event.type === 'task.changed' && affectsActiveProject) void boardViewModel.refresh();
       if (event.type === 'project.changed') void projectsViewModel.refresh();
       if (event.type === 'settings.changed') void fetchSettingsFromApi();
-      if ((event.type === 'atlas.changed' || event.type === 'cache.invalidated') && affectsActiveProject) {
-        setAtlasEventRevision((value) => value + 1);
-      }
+    }, {
+      onAvailable: stopFallback,
+      onUnavailable: startFallback,
     });
-    const fallbackTimer = window.setInterval(() => {
-      void projectsViewModel.refresh();
-      void fetchSettingsFromApi();
-      setAtlasEventRevision((value) => value + 1);
-    }, 60_000);
+    startFallback();
+
     return () => {
       unsubscribe();
-      window.clearInterval(fallbackTimer);
+      stopFallback();
     };
   }, [activeProjectId, boardViewModel.refresh, projectsViewModel.refresh]);
 
@@ -518,8 +499,6 @@ export default function App() {
           searchQuery={searchQuery}
           setSearchQuery={setSearchQuery}
           onOpenSettings={() => setIsSettingsModalOpen(true)}
-          activePage={activePage}
-          onSetActivePage={handleSetActivePage}
           isCollapsed={sidebarLayout.collapsed}
           width={sidebarLayout.width}
           onToggleCollapsed={toggleSidebarCollapsed}
@@ -527,12 +506,11 @@ export default function App() {
         />
 
         {/* 2. Main KanBan Board viewport area */}
-        <main className={`min-w-0 flex-1 flex flex-col h-full overflow-y-auto ${activePage === 'atlas' ? 'bg-[#18120d]' : 'bg-[#faf7f0] dark:bg-[#1e1914]'}`}>
+        <main className="min-w-0 flex-1 flex flex-col h-full overflow-y-auto bg-[#faf7f0] dark:bg-[#1e1914]">
           
           {/* Top Control Navigation bar */}
           <Header
             filteredTasksCount={filteredTasks.length}
-            activePage={activePage}
             projectSwitcher={(
               <ProjectSwitcher
                 projects={projects}
@@ -561,12 +539,7 @@ export default function App() {
             </div>
           )}
 
-          {activePage === 'atlas' ? (
-            <div className="flex-1 min-h-0 overflow-hidden">
-              <ProjectAtlasPage key={`${activeProjectId || 'none'}:${atlasEventRevision}`} projectId={activeProjectId || null} />
-            </div>
-          ) : (
-            <div className="flex-1 overflow-x-auto p-6 bg-[#faf7f0] dark:bg-[#1e1914]">
+          <div className="flex-1 overflow-x-auto p-6 bg-[#faf7f0] dark:bg-[#1e1914]">
               <div className="flex w-max items-stretch min-h-[calc(100vh-210px)] pb-2">
                 {BOARD_COLUMNS.map(col => {
                   const columnTasks = filteredTasks
@@ -598,12 +571,11 @@ export default function App() {
                 })}
               </div>
             </div>
-          )}
         </main>
       </div>
 
       {/* Footer Status Bar */}
-      {activePage !== 'atlas' && <footer className="h-6.5 bg-[#ebdcb9]/40 dark:bg-[#584a3b]/40 border-t border-[#ebdcb9] dark:border-[#584a3b] px-4 flex items-center justify-between shrink-0 select-none text-[10px] font-mono text-[#8c7463] dark:text-[#f3eadf] font-bold">
+      <footer className="h-6.5 bg-[#ebdcb9]/40 dark:bg-[#584a3b]/40 border-t border-[#ebdcb9] dark:border-[#584a3b] px-4 flex items-center justify-between shrink-0 select-none text-[10px] font-mono text-[#8c7463] dark:text-[#f3eadf] font-bold">
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-1.5">
             <span className="w-1.5 h-1.5 rounded-full bg-orange-500 animate-pulse"></span>
@@ -615,7 +587,7 @@ export default function App() {
         <div className="text-[#8c7463] dark:text-[#f3eadf]">
           Styled cozy & warm
         </div>
-      </footer>}
+      </footer>
 
       {/* 3. Detail Drawer (shown on clicking a card) */}
       {selectedTask && (

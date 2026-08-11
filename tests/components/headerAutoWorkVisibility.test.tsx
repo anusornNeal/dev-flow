@@ -13,7 +13,6 @@ test('Header no longer renders the legacy Auto Work control', () => {
 
   const html = renderToStaticMarkup(React.createElement(Header as any, {
     filteredTasksCount: 3,
-    activePage: 'board',
     ngrokUrl: null,
     theme: 'light',
     setTheme: noop,

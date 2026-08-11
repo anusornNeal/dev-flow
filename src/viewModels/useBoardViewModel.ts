@@ -9,7 +9,6 @@ const PAGE_SIZE = BOARD_PAGE_SIZE;
 
 export interface UseBoardViewModelOptions {
   projectId: string | null;
-  pollIntervalMs?: number;
 }
 
 export interface BoardLanePageState {
@@ -36,6 +35,50 @@ function mergeUniqueTasks(tasks: DomainTask[]) {
 }
 export function getBoardLaneRefreshLimit(loaded: number) {
   return Math.max(BOARD_PAGE_SIZE, Number.isFinite(loaded) ? loaded : 0);
+}
+
+export type BoardRefreshToken = { projectId: string; generation: number };
+
+export function createBoardRefreshCoordinator() {
+  let activeProjectId: string | null = null;
+  let generation = 0;
+  let inFlight = false;
+  let queued = false;
+
+  const reset = (projectId: string | null) => {
+    if (activeProjectId === projectId) return;
+    activeProjectId = projectId;
+    generation += 1;
+    inFlight = false;
+    queued = false;
+  };
+
+  return {
+    reset,
+    begin(projectId: string | null): BoardRefreshToken | null {
+      reset(projectId);
+      if (!projectId) return null;
+      if (inFlight) {
+        queued = true;
+        return null;
+      }
+      inFlight = true;
+      return { projectId, generation };
+    },
+    finish(token: BoardRefreshToken) {
+      if (token.projectId !== activeProjectId || token.generation !== generation) {
+        return { apply: false, rerun: false };
+      }
+      inFlight = false;
+      const rerun = queued;
+      queued = false;
+      return { apply: true, rerun };
+    },
+  };
+}
+
+export function shouldShowBoardInitialLoading(hasSnapshot: boolean) {
+  return !hasSnapshot;
 }
 
 export function mergeBoardTaskPage(
@@ -79,30 +122,35 @@ export interface UseBoardViewModel {
 }
 
 export function useBoardViewModel(options: UseBoardViewModelOptions): UseBoardViewModel {
-  const { projectId, pollIntervalMs = 5000 } = options;
+  const { projectId } = options;
   const [tasks, setTasksState] = useState<DomainTask[]>([]);
   const [lanePages, setLanePages] = useState<BoardLanePages>(() => emptyLanePages());
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const mountedRef = useRef(true);
+  const activeProjectRef = useRef<string | null>(projectId);
   const loadedLimitsRef = useRef<Record<Lane, number>>(initialLoadedLimits());
   const pendingIdsRef = useRef<Set<string>>(new Set());
+  const hasSnapshotRef = useRef(false);
+  const refreshCoordinatorRef = useRef(createBoardRefreshCoordinator());
 
   const refresh = useCallback(async () => {
-    if (!projectId) {
-      setTasksState([]);
-      setLanePages(emptyLanePages());
-      return;
-    }
-    setLoading(true);
+    const token = refreshCoordinatorRef.current.begin(projectId);
+    if (!token) return;
+
+    const initialLoad = shouldShowBoardInitialLoading(hasSnapshotRef.current);
+    if (initialLoad) setLoading(true);
     setError(null);
+    let completion = { apply: false, rerun: false };
+
     try {
       const pages = await Promise.all(LANES.map(async (lane) => {
         const limit = getBoardLaneRefreshLimit(loadedLimitsRef.current[lane]);
-        const page = await taskRepository.listPage({ projectId, status: lane, limit, offset: 0 });
+        const page = await taskRepository.listPage({ projectId: token.projectId, status: lane, limit, offset: 0 });
         return { lane, page };
       }));
-      if (!mountedRef.current) return;
+      completion = refreshCoordinatorRef.current.finish(token);
+      if (!completion.apply || !mountedRef.current) return;
 
       const serverTasks = mergeUniqueTasks(pages.flatMap(({ page }) => [...page.items, ...page.relatedItems]));
       setTasksState((prev) => mergeWithPendingMoves(serverTasks, prev, pendingIdsRef.current));
@@ -119,10 +167,15 @@ export function useBoardViewModel(options: UseBoardViewModelOptions): UseBoardVi
         }
         return next;
       });
+      hasSnapshotRef.current = true;
     } catch (err) {
-      if (mountedRef.current) setError(err instanceof Error ? err.message : String(err));
+      completion = refreshCoordinatorRef.current.finish(token);
+      if (completion.apply && mountedRef.current) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
     } finally {
-      if (mountedRef.current) setLoading(false);
+      if (completion.apply && initialLoad && mountedRef.current) setLoading(false);
+      if (completion.rerun && mountedRef.current) queueMicrotask(() => { void refresh(); });
     }
   }, [projectId]);
 
@@ -133,7 +186,7 @@ export function useBoardViewModel(options: UseBoardViewModelOptions): UseBoardVi
     setLanePages((prev) => ({ ...prev, [lane]: { ...prev[lane], loading: true } }));
     try {
       const page = await taskRepository.listPage({ projectId, status: lane, limit: PAGE_SIZE, offset: currentOffset });
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || activeProjectRef.current !== projectId) return;
       const incoming = [...page.items, ...page.relatedItems];
       setTasksState((prev) => mergeBoardTaskPage(prev, incoming, pendingIdsRef.current));
       const loaded = currentOffset + page.items.length;
@@ -160,16 +213,17 @@ export function useBoardViewModel(options: UseBoardViewModelOptions): UseBoardVi
   }, []);
 
   useEffect(() => {
+    activeProjectRef.current = projectId;
+    refreshCoordinatorRef.current.reset(projectId);
     loadedLimitsRef.current = initialLoadedLimits();
     pendingIdsRef.current.clear();
+    hasSnapshotRef.current = false;
+    setTasksState([]);
     setLanePages(emptyLanePages());
-    refresh();
-    if (!projectId) return;
-    const interval = setInterval(() => {
-      refresh();
-    }, pollIntervalMs);
-    return () => clearInterval(interval);
-  }, [projectId, pollIntervalMs, refresh]);
+    setError(null);
+    setLoading(Boolean(projectId));
+    void refresh();
+  }, [projectId, refresh]);
 
   const setTaskPending = useCallback((taskId: string, pending: boolean) => {
     if (pending) pendingIdsRef.current.add(taskId);

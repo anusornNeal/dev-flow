@@ -248,12 +248,14 @@ async function startServer() {
 
   if (process.env.NODE_ENV !== 'production') {
     const isWindows = process.platform === 'win32';
+    const disableHmr = process.env.DISABLE_HMR === 'true';
     const viteConfig: any = {
       root: getDevFlowAppRoot(),
       server: {
         middlewareMode: true,
         allowedHosts: true,
-        watch: {
+        hmr: disableHmr ? false : undefined,
+        watch: disableHmr ? null : {
           ignored: ['**/tasks.json'],
         },
       },

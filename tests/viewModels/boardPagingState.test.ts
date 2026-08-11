@@ -2,8 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   BOARD_PAGE_SIZE,
+  createBoardRefreshCoordinator,
   getBoardLaneRefreshLimit,
   mergeBoardTaskPage,
+  shouldShowBoardInitialLoading,
   updateBoardLanePageState,
   type BoardLanePages,
 } from '../../src/viewModels/useBoardViewModel.js';
@@ -51,4 +53,32 @@ test('poll refresh stays bounded to the amount already loaded in each lane', () 
   assert.equal(getBoardLaneRefreshLimit(0), BOARD_PAGE_SIZE);
   assert.equal(getBoardLaneRefreshLimit(25), 25);
   assert.equal(getBoardLaneRefreshLimit(50), 50);
+});
+
+test('background refresh loading is shown only before the first successful snapshot', () => {
+  assert.equal(shouldShowBoardInitialLoading(false), true);
+  assert.equal(shouldShowBoardInitialLoading(true), false);
+});
+
+test('refresh coordinator coalesces burst triggers into one follow-up request', () => {
+  const coordinator = createBoardRefreshCoordinator();
+  const first = coordinator.begin('project-a');
+  assert.ok(first);
+  assert.equal(coordinator.begin('project-a'), null, 'second trigger while in flight should be coalesced');
+  assert.equal(coordinator.begin('project-a'), null, 'additional burst triggers stay bounded');
+  assert.deepEqual(coordinator.finish(first!), { apply: true, rerun: true });
+
+  const followUp = coordinator.begin('project-a');
+  assert.ok(followUp);
+  assert.deepEqual(coordinator.finish(followUp!), { apply: true, rerun: false });
+});
+
+test('refresh coordinator rejects stale responses after an active-project switch', () => {
+  const coordinator = createBoardRefreshCoordinator();
+  const stale = coordinator.begin('project-a');
+  assert.ok(stale);
+  const current = coordinator.begin('project-b');
+  assert.ok(current, 'project switch should not wait for the stale project request');
+  assert.deepEqual(coordinator.finish(stale!), { apply: false, rerun: false });
+  assert.deepEqual(coordinator.finish(current!), { apply: true, rerun: false });
 });

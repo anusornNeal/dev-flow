@@ -21,6 +21,7 @@ import { renderPromptTemplate } from './promptTemplateService';
 import { getTaskFocusedAtlasContext } from './projectAtlasService';
 import { buildTaskBugSummaryJson, renderTaskBugSummaryMarkdown } from '../../lib/bugThreadExport';
 import { createApiError } from './api';
+import { listTaskUiEvidenceForAgent } from './taskUiEvidenceService';
 
 const TASK_CATEGORY_SET = new Set<string>(VALID_TASK_CATEGORIES);
 
@@ -514,6 +515,27 @@ export function getAgentTaskContext(state: AppState, targetId: string, includeLo
       }) : undefined,
     }),
   };
+
+  const uiEvidencePage = listTaskUiEvidenceForAgent(task.id, { limit: 5 });
+  if (uiEvidencePage.items.length > 0) {
+    agentContext.uiDesignEvidence = {
+      items: uiEvidencePage.items.map((item: any) => ({
+        evidenceId: item.evidenceId,
+        previewId: item.previewId,
+        title: item.title,
+        frozenRevision: item.frozenRevision,
+        latestRevision: item.latestRevision,
+        current: item.current,
+        attachedAt: item.attachedAt,
+        frozenPreviewUrl: item.frozenPreviewUrl,
+        latestPreviewUrl: item.latestPreviewUrl,
+        screenshotUrl: item.screenshotUrl,
+        specSummary: item.spec?.summary,
+      })),
+      nextCursor: uiEvidencePage.nextCursor,
+      limit: uiEvidencePage.limit,
+    };
+  }
 
   if (includeLogs) {
     agentContext.logs = task.logs;

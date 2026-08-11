@@ -15,10 +15,11 @@ import {
 import { taskToolDefinitions } from './devflowTaskTools';
 import { gitToolDefinitions } from './devflowGitTools';
 import { workspaceToolDefinitions } from './devflowWorkspaceTools';
+import { uiPreviewToolDefinitions } from './devflowUiPreviewTools';
 import { buildMcpTransportInputSchema } from './mcpSchemaTransport';
 import { resolveRuntimeMcpToolProfileValue } from './mcpToolProfileConfig';
 export type { DevFlowToolDefinition, DevFlowToolHttpRequest } from './devflowContractCore';
-export const DEVFLOW_CONTRACT_VERSION = '2026-08-10.1';
+export const DEVFLOW_CONTRACT_VERSION = '2026-08-11.1';
 
 export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   {
@@ -548,6 +549,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
     }),
   },
   ...taskToolDefinitions,
+  ...uiPreviewToolDefinitions,
   ...workspaceToolDefinitions,
   {
     name: 'list_skills',
@@ -1566,6 +1568,7 @@ export function resolveDevFlowToolProfile(value?: string) {
 const CODING_PROFILE_TOOLS = new Set([
   'get_tool_schema', 'devflow_health_check', 'list_projects',
   'search_tasks', 'create_task', 'get_task', 'update_task', 'move_task_to_status', 'toggle_task_checklist', 'open_task_bug',
+  'create_ui_preview', 'update_ui_preview', 'get_ui_preview', 'attach_ui_preview_to_task',
   'sync_task_with_git', 'submit_task_for_review',
   'get_skill_router', 'get_authoring_skill', 'get_jira_authoring_bundle',
   'get_figma_authoring_context', 'attach_figma_context_to_task', 'get_project_atlas',

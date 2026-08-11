@@ -17,13 +17,8 @@ delete process.env.FIGMA_PERSONAL_ACCESS_TOKEN;
 const vault = await import('../../src/server/services/credentialVaultService.js');
 const access = await import('../../src/server/services/apiAccessPolicyService.js');
 const db = (await import('../../src/db/index.js')).default;
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS settings (
-    key TEXT PRIMARY KEY,
-    value TEXT
-  );
-`);
+const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
+executeAllMigrations();
 
 const provider = vault.createMemoryCredentialVaultProvider();
 vault.setCredentialVaultProviderForTests(provider);
@@ -101,6 +96,17 @@ test('read-only remote API requests remain available without privileged authoriz
   const result = access.evaluateApiAccessPolicy({ method: 'GET', remoteAddress: '10.0.0.5' });
   assert.equal(result.allowed, true);
   assert.equal(result.trust, 'remote-readonly');
+});
+
+test('strict UI preview access rejects remote or mixed forwarded chains while accepting loopback forms', () => {
+  assert.equal(access.evaluateStrictLoopbackAccess({ remoteAddress: '127.0.0.1' }).allowed, true);
+  assert.equal(access.evaluateStrictLoopbackAccess({ remoteAddress: '::1' }).allowed, true);
+  assert.equal(access.evaluateStrictLoopbackAccess({ remoteAddress: '::ffff:127.0.0.7' }).allowed, true);
+  assert.equal(access.evaluateStrictLoopbackAccess({ remoteAddress: '10.0.0.5' }).allowed, false);
+  assert.equal(access.evaluateStrictLoopbackAccess({ remoteAddress: '127.0.0.1', forwardedFor: '127.0.0.2, 203.0.113.9' }).allowed, false);
+  assert.equal(access.evaluateStrictLoopbackAccess({ remoteAddress: '127.0.0.1', forwarded: 'for=127.0.0.2, for="[::1]"' }).allowed, true);
+  assert.equal(access.evaluateStrictLoopbackAccess({ remoteAddress: '127.0.0.1', forwarded: 'for=_hidden' }).allowed, false);
+  assert.equal(access.evaluateStrictLoopbackAccess({ remoteAddress: '127.0.0.1', forwardedFor: '127.999.0.1' }).allowed, false);
 });
 
 test('redaction removes configured credential values from diagnostic text', () => {

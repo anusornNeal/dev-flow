@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { isIP } from 'node:net';
 import type express from 'express';
 
 export interface ApiAccessPolicyInput {
@@ -78,6 +79,91 @@ export function evaluateApiAccessPolicy(input: ApiAccessPolicyInput): ApiAccessP
   }
 
   return { allowed: true, trust: 'trusted-remote' };
+}
+
+export interface StrictLoopbackAccessInput {
+  remoteAddress?: string | null;
+  forwardedFor?: string | null;
+  forwarded?: string | null;
+}
+
+export interface StrictLoopbackAccessDecision {
+  allowed: boolean;
+  code?: 'UI_PREVIEW_LOCAL_ONLY';
+  message?: string;
+}
+
+function normalizeForwardedAddress(value: string) {
+  let candidate = value.trim();
+  if (!candidate || /^unknown$/i.test(candidate) || candidate.startsWith('_')) return null;
+  if (candidate.startsWith('"') && candidate.endsWith('"')) candidate = candidate.slice(1, -1).trim();
+  const bracketed = candidate.match(/^\[([^\]]+)\](?::\d+)?$/);
+  if (bracketed) {
+    const normalized = normalizeIp(bracketed[1]);
+    return isIP(normalized) ? normalized : null;
+  }
+  const ipv4WithPort = candidate.match(/^(\d{1,3}(?:\.\d{1,3}){3}):\d+$/);
+  if (ipv4WithPort) {
+    const normalized = normalizeIp(ipv4WithPort[1]);
+    return isIP(normalized) ? normalized : null;
+  }
+  if (!/^[0-9a-f:.]+$/i.test(candidate)) return null;
+  const normalized = normalizeIp(candidate);
+  return isIP(normalized) ? normalized : null;
+}
+
+function parseForwardedForChain(value?: string | null) {
+  if (value == null) return [] as string[];
+  const raw = String(value).trim();
+  if (!raw) return null;
+  const chain = raw.split(',').map((entry) => normalizeForwardedAddress(entry));
+  return chain.every((entry): entry is string => Boolean(entry)) ? chain : null;
+}
+
+function parseForwardedHeaderChain(value?: string | null) {
+  if (value == null) return [] as string[];
+  const raw = String(value).trim();
+  if (!raw) return null;
+  const chain: string[] = [];
+  for (const element of raw.split(',')) {
+    const forParams = element.split(';')
+      .map((part) => part.trim())
+      .filter((part) => /^for=/i.test(part));
+    if (forParams.length !== 1) return null;
+    const address = normalizeForwardedAddress(forParams[0].slice(forParams[0].indexOf('=') + 1));
+    if (!address) return null;
+    chain.push(address);
+  }
+  return chain;
+}
+
+export function evaluateStrictLoopbackAccess(input: StrictLoopbackAccessInput): StrictLoopbackAccessDecision {
+  if (!isLoopback(input.remoteAddress)) {
+    return { allowed: false, code: 'UI_PREVIEW_LOCAL_ONLY', message: 'UI preview documents and artifacts are available only from the local loopback interface.' };
+  }
+  const forwardedFor = parseForwardedForChain(input.forwardedFor);
+  const forwarded = parseForwardedHeaderChain(input.forwarded);
+  if (forwardedFor === null || forwarded === null) {
+    return { allowed: false, code: 'UI_PREVIEW_LOCAL_ONLY', message: 'Malformed or unknown forwarding information is not trusted for UI preview access.' };
+  }
+  if (![...forwardedFor, ...forwarded].every((address) => isLoopback(address))) {
+    return { allowed: false, code: 'UI_PREVIEW_LOCAL_ONLY', message: 'Forwarded UI preview access must remain entirely on loopback.' };
+  }
+  return { allowed: true };
+}
+
+export function createStrictLoopbackAccessMiddleware() {
+  return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const forwarded = req.headers.forwarded;
+    const forwardedFor = req.headers['x-forwarded-for'];
+    const decision = evaluateStrictLoopbackAccess({
+      remoteAddress: req.socket?.remoteAddress,
+      forwarded: Array.isArray(forwarded) ? forwarded.join(',') : forwarded,
+      forwardedFor: Array.isArray(forwardedFor) ? forwardedFor.join(',') : forwardedFor,
+    });
+    if (decision.allowed) return next();
+    return res.status(403).json({ error: decision.message, code: decision.code });
+  };
 }
 
 export function createPrivilegedApiAccessMiddleware() {

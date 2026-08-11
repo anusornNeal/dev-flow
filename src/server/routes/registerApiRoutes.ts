@@ -12,6 +12,7 @@ import { registerFigmaRoutes } from './figma';
 import { registerMcpToolJobRoutes } from './mcpToolJobs';
 import { registerEventRoutes } from './events';
 import { registerExecutionSessionRoutes } from './executionSessions';
+import { registerUiPreviewRoutes } from './uiPreviews';
 import { initMcpToolJobs } from '../services/mcpToolJobService';
 import { createPrivilegedApiAccessMiddleware } from '../services/apiAccessPolicyService';
 
@@ -26,6 +27,7 @@ export function registerApiRoutes(app: express.Express, deps: ApiRouteDeps) {
   registerProjectRoutes(app, deps);
   registerSettingsRoutes(app, deps);
   registerTaskRoutes(app, deps);
+  registerUiPreviewRoutes(app, deps);
   registerAttachmentRoutes(app, deps);
   registerPromptOverrideRoutes(app, deps);
   registerFigmaRoutes(app, deps);

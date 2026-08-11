@@ -1,0 +1,154 @@
+import fs from 'node:fs';
+import type express from 'express';
+import type { ApiRouteDeps } from '../types.js';
+import { createApiError, sendApiError } from '../services/api.js';
+import { createStrictLoopbackAccessMiddleware } from '../services/apiAccessPolicyService.js';
+import { createUiPreviewArtifactStore, type UiPreviewArtifactStore } from '../services/uiPreviewArtifactStore.js';
+import { composeUiPreviewDocument } from '../services/uiPreviewDocumentService.js';
+import { createUiPreviewRepository } from '../repositories/uiPreviewRepository.js';
+import { createUiPreviewService, type UiPreviewService } from '../services/uiPreviewService.js';
+import { createUiPreviewScreenshotService } from '../services/uiPreviewScreenshotService.js';
+import { createTaskUiEvidenceService, type TaskUiEvidenceService } from '../services/taskUiEvidenceService.js';
+import { getDevFlowApiBaseUrl } from '../services/agentRunService.js';
+
+export interface UiPreviewRouteOverrides {
+  previewService?: Pick<UiPreviewService, 'create' | 'update' | 'get'>;
+  evidenceService?: Pick<TaskUiEvidenceService, 'attach' | 'list'>;
+  artifactStore?: UiPreviewArtifactStore;
+  runtimePort?: () => number;
+}
+
+function runtimePortFromApiBaseUrl() {
+  const parsed = new URL(getDevFlowApiBaseUrl());
+  const port = Number(parsed.port || (parsed.protocol === 'https:' ? 443 : 80));
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw createApiError(503, 'UI_PREVIEW_RUNTIME_UNAVAILABLE', 'DevFlow API runtime port is unavailable for UI preview URL resolution.');
+  }
+  return port;
+}
+
+function parseRevision(value: unknown) {
+  if (value === undefined || value === null || value === '') return undefined;
+  const revision = Number(value);
+  if (!Number.isInteger(revision) || revision < 1) throw createApiError(400, 'UI_PREVIEW_INVALID_REVISION', 'revision must be a positive integer.');
+  return revision;
+}
+
+function noStore(res: express.Response) {
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+}
+
+function apiErrorForUiPreview(error: unknown) {
+  if (error && typeof error === 'object' && 'code' in error && typeof (error as any).code === 'string') {
+    const code = String((error as any).code);
+    const message = error instanceof Error ? error.message : code;
+    if (/NOT_FOUND/.test(code)) return createApiError(404, code, message);
+    if (/CONFLICT|STALE|IDEMPOTENCY/.test(code)) return createApiError(409, code, message);
+    if (/RENDERER_UNAVAILABLE|CAPTURE_FAILED|CAPTURE_TIMEOUT|RUNTIME_UNAVAILABLE/.test(code)) return createApiError(503, code, message, { retryable: true });
+    return createApiError(400, code, message);
+  }
+  return error;
+}
+
+export function registerUiPreviewRoutes(app: express.Express, _deps: ApiRouteDeps, overrides: UiPreviewRouteOverrides = {}) {
+  const runtimePort = overrides.runtimePort ?? runtimePortFromApiBaseUrl;
+  const previewRepository = createUiPreviewRepository();
+  const previewService = overrides.previewService ?? createUiPreviewService({ repository: previewRepository, runtimePort });
+  const screenshotService = overrides.evidenceService ? null : createUiPreviewScreenshotService();
+  const evidenceService = overrides.evidenceService ?? createTaskUiEvidenceService({
+    previewRepository,
+    screenshotService: screenshotService!,
+    runtimePort,
+  });
+  const artifactStore = overrides.artifactStore ?? screenshotService?.artifactStore ?? createUiPreviewArtifactStore();
+  const strictLocal = createStrictLoopbackAccessMiddleware();
+
+  app.post('/api/ui-previews', (req, res) => {
+    try {
+      return res.status(201).json(previewService.create(req.body || {}));
+    } catch (error) {
+      return sendApiError(res, apiErrorForUiPreview(error));
+    }
+  });
+
+  app.put('/api/ui-previews/:previewId', (req, res) => {
+    try {
+      return res.json(previewService.update({ ...(req.body || {}), previewId: req.params.previewId } as any));
+    } catch (error) {
+      return sendApiError(res, apiErrorForUiPreview(error));
+    }
+  });
+
+  app.get('/api/ui-previews/:previewId', (req, res) => {
+    try {
+      const mode = req.query.mode === 'source' ? 'source' : 'summary';
+      return res.json(previewService.get({ previewId: req.params.previewId, revision: parseRevision(req.query.revision), mode }));
+    } catch (error) {
+      return sendApiError(res, apiErrorForUiPreview(error));
+    }
+  });
+
+  app.get('/api/tasks/:taskId/ui-evidence', (req, res) => {
+    try {
+      return res.json(evidenceService.list({
+        taskId: req.params.taskId,
+        cursor: typeof req.query.cursor === 'string' ? req.query.cursor : undefined,
+        limit: req.query.limit === undefined ? undefined : Number(req.query.limit),
+      }));
+    } catch (error) {
+      return sendApiError(res, apiErrorForUiPreview(error));
+    }
+  });
+
+  app.post('/api/tasks/:taskId/ui-evidence', async (req, res) => {
+    try {
+      const result = await evidenceService.attach({
+        taskId: req.params.taskId,
+        previewId: req.body?.previewId,
+        revision: parseRevision(req.body?.revision),
+        idempotencyKey: req.body?.idempotencyKey,
+      });
+      return res.json(result);
+    } catch (error) {
+      return sendApiError(res, apiErrorForUiPreview(error));
+    }
+  });
+
+  app.get('/api/ui-previews/:previewId/document', strictLocal, (req, res) => {
+    try {
+      const source = previewService.get({
+        previewId: req.params.previewId,
+        revision: parseRevision(req.query.revision),
+        mode: 'source',
+      }) as any;
+      const document = composeUiPreviewDocument(source);
+      noStore(res);
+      res.setHeader('Content-Security-Policy', document.csp);
+      res.type('html');
+      return res.send(document.html);
+    } catch (error) {
+      return sendApiError(res, apiErrorForUiPreview(error));
+    }
+  });
+
+  app.get('/api/ui-preview-artifacts/:artifactId', strictLocal, (req, res) => {
+    try {
+      let artifactPath: string;
+      try {
+        artifactPath = artifactStore.resolveArtifactPath(req.params.artifactId);
+      } catch (error) {
+        throw createApiError(400, 'UI_PREVIEW_ARTIFACT_INVALID', error instanceof Error ? error.message : 'Invalid UI preview artifact id.');
+      }
+      if (!fs.existsSync(artifactPath) || !fs.statSync(artifactPath).isFile()) {
+        throw createApiError(404, 'UI_PREVIEW_ARTIFACT_NOT_FOUND', `UI preview artifact '${req.params.artifactId}' was not found.`);
+      }
+      noStore(res);
+      res.type('png');
+      return res.send(fs.readFileSync(artifactPath));
+    } catch (error) {
+      return sendApiError(res, apiErrorForUiPreview(error));
+    }
+  });
+}

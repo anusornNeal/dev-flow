@@ -69,17 +69,34 @@ test('section keeps one current card per preview, newest first, and groups older
   assert.match(html, /Previous revisions/);
   assert.match(html, /Revision 1/);
   assert.match(html, /Revision 2/);
-  assert.match(html, /Open Preview/);
+  assert.equal((html.match(/aria-label="Open Design: [^"]+"/g) || []).length, 2);
+  assert.equal((html.match(/>Open Preview</g) || []).length, 1, 'only historical evidence keeps Open Preview');
   assert.match(html, /Open Latest/);
   assert.match(html, /rel="noopener noreferrer"/);
   assert.match(html, /artifacts\/a2\.png/);
   assert.doesNotMatch(html, /emptySection/);
 });
 
+test('current frozen screenshot is the safe Open Design target and missing frozen URL is not clickable', () => {
+  const clickable = renderToStaticMarkup(React.createElement(UiDesignEvidenceSection as any, {
+    evidence: [evidence()],
+  }));
+  assert.match(clickable, /aria-label="Open Design: Preview A"/);
+  assert.match(clickable, /href="http:\/\/127\.0\.0\.1:3000\/previews\/a\/2"/);
+  assert.match(clickable, /rel="noopener noreferrer"/);
+
+  const withoutFrozenUrl = renderToStaticMarkup(React.createElement(UiDesignEvidenceSection as any, {
+    evidence: [evidence({ frozenPreviewUrl: '' })],
+  }));
+  assert.match(withoutFrozenUrl, /artifacts\/a2\.png/);
+  assert.doesNotMatch(withoutFrozenUrl, /Open Design/);
+});
+
 test('Open Latest appears only when backend latestRevision is newer than frozen revision', () => {
   const html = renderToStaticMarkup(React.createElement(UiDesignEvidenceSection as any, {
     evidence: [evidence({ latestRevision: 2 })],
   }));
-  assert.match(html, /Open Preview/);
+  assert.match(html, /Open Design/);
+  assert.doesNotMatch(html, />Open Preview</);
   assert.doesNotMatch(html, /Open Latest/);
 });

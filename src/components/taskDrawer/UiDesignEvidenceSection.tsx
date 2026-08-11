@@ -130,17 +130,33 @@ function CurrentEvidenceCard({ item, previous }: { item: TaskUiEvidence; previou
   const title = item.title || item.previewId;
   return (
     <article className="overflow-hidden rounded-2xl border border-[#eadbc5] bg-white/80 dark:border-[#584a3b] dark:bg-[#292119]/70">
-      {item.screenshotUrl && <img src={item.screenshotUrl} alt={`${title} UI preview`} className="max-h-[420px] w-full border-b border-[#eadbc5] object-contain dark:border-[#584a3b]" />}
+      {item.screenshotUrl && item.frozenPreviewUrl ? (
+        <a
+          href={item.frozenPreviewUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label={`Open Design: ${title}`}
+          className="group relative block cursor-pointer border-b border-[#eadbc5] dark:border-[#584a3b]"
+        >
+          <img src={item.screenshotUrl} alt={`${title} UI preview`} className="max-h-[420px] w-full object-contain" />
+          <span className="pointer-events-none absolute bottom-3 right-3 inline-flex items-center gap-1.5 rounded-lg border border-white/70 bg-black/70 px-2.5 py-1.5 text-[11px] font-extrabold text-white shadow-sm">
+            <ExternalLink size={12} /> Open Design
+          </span>
+        </a>
+      ) : item.screenshotUrl ? (
+        <img src={item.screenshotUrl} alt={`${title} UI preview`} className="max-h-[420px] w-full border-b border-[#eadbc5] object-contain dark:border-[#584a3b]" />
+      ) : null}
       <div className="space-y-3 p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="truncate text-[13px] font-black text-[#584638] dark:text-[#f1e7de]">{title}</div>
             <EvidenceMeta item={item} />
           </div>
-          <div className="flex flex-wrap gap-2">
-            {item.frozenPreviewUrl && <PreviewLink href={item.frozenPreviewUrl}>Open Preview</PreviewLink>}
-            {item.latestRevision > item.frozenRevision && item.latestPreviewUrl && <PreviewLink href={item.latestPreviewUrl}>Open Latest</PreviewLink>}
-          </div>
+          {item.latestRevision > item.frozenRevision && item.latestPreviewUrl && (
+            <div className="flex flex-wrap gap-2">
+              <PreviewLink href={item.latestPreviewUrl}>Open Latest</PreviewLink>
+            </div>
+          )}
         </div>
         <SpecSummary spec={item.spec} />
         {previous.length > 0 && (

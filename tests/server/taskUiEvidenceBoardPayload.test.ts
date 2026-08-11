@@ -8,7 +8,7 @@ test('board/search task payloads never serialize UI evidence or preview source e
     tags: [], targetFiles: [], checklist: [], images: [], createdAt: '2026-08-11T00:00:00.000Z', updatedAt: '2026-08-11T00:00:00.000Z',
     uiEvidence: [{ evidenceId: 'uie_secret', html: 'LEAK-ME' }],
     uiDesignEvidence: [{ evidenceId: 'uie_secret_2', css: 'LEAK-CSS' }],
-    previewHtml: '<main>LEAK-SOURCE</main>',
+    previewHtml: '<main>LEAK-SOURCE</main>',    hasUiDesign: true,
   };
 
   for (const mode of ['minimal', 'summary', 'board'] as const) {
@@ -16,6 +16,7 @@ test('board/search task payloads never serialize UI evidence or preview source e
     const serialized = JSON.stringify(response);
     assert.equal('uiEvidence' in response, false);
     assert.equal('uiDesignEvidence' in response, false);
-    assert.doesNotMatch(serialized, /uie_secret|LEAK-ME|LEAK-CSS|LEAK-SOURCE/);
+    assert.doesNotMatch(serialized, /uie_secret|LEAK-ME|LEAK-CSS|LEAK-SOURCE/);    if (mode === 'board') assert.equal(response.hasUiDesign, true);
+    else assert.equal('hasUiDesign' in response, false);
   }
 });

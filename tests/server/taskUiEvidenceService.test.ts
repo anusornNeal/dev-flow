@@ -13,6 +13,7 @@ const { createUiPreviewRepository } = await import('../../src/server/repositorie
 const { createTaskUiEvidenceRepository } = await import('../../src/server/repositories/taskUiEvidenceRepository.js');
 const { createUiPreviewService } = await import('../../src/server/services/uiPreviewService.js');
 const { createTaskUiEvidenceService } = await import('../../src/server/services/taskUiEvidenceService.js');
+const serverEvents = await import('../../src/server/services/serverEventService.js') as any;
 
 const previewRepository = createUiPreviewRepository(db as any);
 const evidenceRepository = createTaskUiEvidenceRepository(db as any);
@@ -101,6 +102,27 @@ test('attach freezes one revision, replays persisted idempotency without recaptu
   );
 });
 
+test('successful evidence attach publishes task.changed once and same-revision replay does not duplicate it', async () => {
+  seedTask('task-a');
+  const previews = createPreviewService();
+  const created = previews.create({ html: '<main>event</main>', spec });
+  serverEvents.__resetServerEventsForTests();
+  const received: any[] = [];
+  const subscription = serverEvents.subscribeServerEvents((event: any) => received.push(event));
+  try {
+    const evidence = createEvidenceService();
+    await evidence.attach({ taskId: 'task-a', previewId: created.previewId, revision: 1 });
+    assert.deepEqual(
+      received.filter((event) => event.type === 'task.changed').map((event) => [event.entityId, event.reason]),
+      [['task-a', 'ui-design-evidence']],
+    );
+    await evidence.attach({ taskId: 'task-a', previewId: created.previewId, revision: 1 });
+    assert.equal(received.filter((event) => event.type === 'task.changed').length, 1);
+  } finally {
+    subscription.unsubscribe();
+  }
+});
+
 test('same revision collapses and a late lower revision can never supersede a higher current revision', async () => {
   seedTask();
   const previews = createPreviewService();
@@ -184,7 +206,9 @@ test('failed capture leaves a standalone preview unbound and retryable', async (
 test('evidence-record failure rolls back task binding', async () => {
   seedTask('task-a');
   const previews = createPreviewService();
-  const created = previews.create({ html: '<main>record failure</main>', spec });
+  const created = previews.create({ html: '<main>record failure</main>', spec });  serverEvents.__resetServerEventsForTests();
+  const received: any[] = [];
+  const subscription = serverEvents.subscribeServerEvents((event: any) => received.push(event));
   const failingRepository = {
     ...evidenceRepository,
     recordEvidence: () => { throw new Error('record failed'); },
@@ -197,8 +221,13 @@ test('evidence-record failure rolls back task binding', async () => {
     runtimePort: () => 43210,
   });
 
-  await assert.rejects(service.attach({ taskId: 'task-a', previewId: created.previewId }));
-  assert.equal(previewRepository.getPreview(created.previewId)?.taskId, null);
+  try {
+    await assert.rejects(service.attach({ taskId: 'task-a', previewId: created.previewId }));
+    assert.equal(previewRepository.getPreview(created.previewId)?.taskId, null);
+    assert.equal(received.filter((event) => event.type === 'ui-preview.changed' && event.reason === 'bound').length, 0);
+  } finally {
+    subscription.unsubscribe();
+  }
 });
 
 test('concurrent different-task attach cannot leave evidence for the losing task', async () => {

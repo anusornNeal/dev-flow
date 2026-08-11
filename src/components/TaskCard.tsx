@@ -125,6 +125,11 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
                 <Server size={10} />
                 Backend
               </span>
+            )}            {task.hasUiDesign && (
+              <span aria-label="Task has UI Design" className="inline-flex items-center gap-1 bg-[#f2e9ff] dark:bg-[#332642] text-[#714b9d] dark:text-[#d8b9f4] px-1.5 py-0.5 rounded-md text-[10px] font-bold shadow-sm border border-[#d9c2f4] dark:border-[#624b7c]">
+                <ImageIcon size={10} />
+                Design
+              </span>
             )}
 
             {/* In Progress Key */}

@@ -56,6 +56,30 @@ test('TaskCard shows every child display ID alongside all subtask titles', () =>
   }
 });
 
+test('TaskCard shows a non-clickable Design badge only when frozen UI evidence exists', () => {
+  const withDesign = renderToStaticMarkup(React.createElement(TaskCard as any, {
+    task: makeTask({ hasUiDesign: true }),
+    subtasks: [],
+    onSelect: noop,
+    onDelete: noop,
+    onDragStart: noop,
+    onUpdate: noop,
+  }));
+  assert.match(withDesign, /Task has UI Design/);
+  assert.match(withDesign, />Design</);
+  assert.doesNotMatch(withDesign, /aria-label="Task has UI Design"[^>]*<(button|a)/);
+
+  const withoutDesign = renderToStaticMarkup(React.createElement(TaskCard as any, {
+    task: makeTask({ hasUiDesign: false }),
+    subtasks: [],
+    onSelect: noop,
+    onDelete: noop,
+    onDragStart: noop,
+    onUpdate: noop,
+  }));
+  assert.doesNotMatch(withoutDesign, /Task has UI Design/);
+});
+
 test('Task Details subtask section renders more than five children without show-more controls', () => {
   const task = makeTask();
   const children = makeChildren();

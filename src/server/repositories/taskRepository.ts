@@ -288,7 +288,7 @@ function parseJsonObject(value: unknown): Record<string, any> | undefined {
 function parseTaskRow(item: any, runsByTaskId: Map<string, AgentRun[]>) {
   const parsedTags = parseJsonArray(item.tags);
   const task = {
-    ...item,
+    ...item,    hasUiDesign: item.hasUiDesign === undefined ? undefined : Boolean(item.hasUiDesign),
     tags: parsedTags,
     targetFiles: parseJsonArray(item.targetFiles),
     checklist: parseJsonArray(item.checklist),
@@ -470,7 +470,12 @@ export function queryTaskBoardPage(options: TaskBoardPageOptions) {
   const whereSql = `WHERE ${where.join(' AND ')}`;
   const totalRow = db.prepare(`SELECT COUNT(*) AS total FROM tasks ${whereSql}`).get(...params) as { total: number };
   const rows = db.prepare(`
-    SELECT * FROM tasks
+    SELECT tasks.*,
+      CASE WHEN EXISTS (
+        SELECT 1 FROM task_ui_evidence e
+        WHERE e.task_id = tasks.id AND e.is_current = 1
+      ) THEN 1 ELSE 0 END AS hasUiDesign
+    FROM tasks
     ${whereSql}
     ORDER BY createdAt DESC, id DESC
     LIMIT ? OFFSET ?
@@ -479,7 +484,14 @@ export function queryTaskBoardPage(options: TaskBoardPageOptions) {
   const items = rows.map((row) => parseTaskRow(row, runsByTaskId));
   const parentIds = rows.map((row) => row.id);
   const childRows = parentIds.length > 0
-    ? db.prepare(`SELECT * FROM tasks WHERE archivedAt IS NULL AND parentId IN (${parentIds.map(() => '?').join(', ')}) ORDER BY createdAt ASC`).all(...parentIds) as any[]
+    ? db.prepare(`SELECT tasks.*,
+        CASE WHEN EXISTS (
+          SELECT 1 FROM task_ui_evidence e
+          WHERE e.task_id = tasks.id AND e.is_current = 1
+        ) THEN 1 ELSE 0 END AS hasUiDesign
+      FROM tasks
+      WHERE archivedAt IS NULL AND parentId IN (${parentIds.map(() => '?').join(', ')})
+      ORDER BY createdAt ASC`).all(...parentIds) as any[]
     : [];
   const relatedItems = childRows.map((row) => parseTaskRow(row, new Map()));
   const total = Number(totalRow?.total || 0);

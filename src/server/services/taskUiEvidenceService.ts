@@ -20,7 +20,7 @@ import {
   type UiPreviewCaptureInput,
   type UiPreviewCaptureResult,
 } from './uiPreviewScreenshotService.js';
-import { resolveUiPreviewUrl } from './uiPreviewUrlResolver.js';
+import { resolveUiPreviewUrl } from './uiPreviewUrlResolver.js';import { publishServerEvent } from './serverEventService.js';
 
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 50;
@@ -255,8 +255,10 @@ export function createTaskUiEvidenceService(deps: TaskUiEvidenceServiceDependenc
         });
         const evidenceId = createEvidenceId();
         const commit = database.transaction(() => {
-          previewRepository.bindPreviewToTask(previewId, taskId);
-          return evidenceRepository.recordEvidence({
+          const beforeBinding = previewRepository.getPreview(previewId);
+          const bindingChanged = !beforeBinding?.taskId;
+          previewRepository.bindPreviewToTask(previewId, taskId, { publishEvent: false });
+          const recorded = evidenceRepository.recordEvidence({
             evidenceId,
             taskId,
             previewId,
@@ -267,9 +269,15 @@ export function createTaskUiEvidenceService(deps: TaskUiEvidenceServiceDependenc
             screenshotHeight: capture.viewport.height,
             screenshotSha256: screenshotSha256(capture.png),
           });
+          if (recorded.outcome === 'stale') throw staleError(taskId, previewId, frozenRevision, recorded.evidence);
+          return { recorded, bindingChanged };
         });
-        const recorded = typeof commit.immediate === 'function' ? commit.immediate() : commit();
-        if (recorded.outcome === 'stale') throw staleError(taskId, previewId, frozenRevision, recorded.evidence);
+        const committed = typeof commit.immediate === 'function' ? commit.immediate() : commit();
+        const { recorded, bindingChanged } = committed;
+        if (bindingChanged) publishServerEvent('ui-preview.changed', { entityId: previewId, reason: 'bound' });
+        if (recorded.outcome === 'inserted' || recorded.outcome === 'superseded') {
+          publishServerEvent('task.changed', { entityId: taskId, reason: 'ui-design-evidence' });
+        }
         const row = selectEvidenceRow(recorded.evidence.evidenceId);
         if (!row) throw new UiPreviewError('UI_PREVIEW_EVIDENCE_NOT_FOUND', `Task UI evidence '${recorded.evidence.evidenceId}' was not found after capture.`);
         return shapeEvidenceRow(row);

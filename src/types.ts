@@ -154,7 +154,7 @@ export interface Task {
   checklist?: ChecklistItem[];
   bugs?: BugThread[];
   unresolvedBugCount?: number;
-  latestUnresolvedBug?: Pick<BugThread, 'id' | 'title' | 'status' | 'severity' | 'updatedAt'> | null;
+  latestUnresolvedBug?: Pick<BugThread, 'id' | 'title' | 'status' | 'severity' | 'updatedAt'> | null;  hasUiDesign?: boolean;
   repoContext?: string;
   specUrl?: string;
   images?: TaskImage[]; // New unlimited local image storage

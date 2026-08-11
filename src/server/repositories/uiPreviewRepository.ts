@@ -245,7 +245,7 @@ export function createUiPreviewRepository(database: DatabaseLike = db) {
     return result;
   }
 
-  function bindPreviewToTask(previewId: string, taskId: string) {
+  function bindPreviewToTask(previewId: string, taskId: string, options: { publishEvent?: boolean } = {}) {
     const result = transaction(() => {
       const preview = requirePreview(previewId);
       if (preview.taskId && preview.taskId !== taskId) {
@@ -257,7 +257,7 @@ export function createUiPreviewRepository(database: DatabaseLike = db) {
       }
       return { changed, preview: requirePreview(previewId) };
     });
-    if (result.changed) publishServerEvent('ui-preview.changed', { entityId: previewId, reason: 'bound' });
+    if (result.changed && options.publishEvent !== false) publishServerEvent('ui-preview.changed', { entityId: previewId, reason: 'bound' });
     return result.preview;
   }
 

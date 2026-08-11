@@ -190,14 +190,6 @@ test('diagnostics MCP profile keeps the recovery handoff surface available', () 
   assert.equal(names.has('get_recovery_handoff'), true);
 });
 
-test('every agent-facing MCP profile exposes the canonical bootstrap pair', () => {
-  for (const profile of ['full', 'coding', 'authoring', 'review', 'atlas'] as const) {
-    const names = new Set(getMcpToolList(profile).map((tool: any) => tool.name));
-    assert.equal(names.has('get_skill_router'), true, `${profile} must expose get_skill_router`);
-    assert.equal(names.has('get_authoring_skill'), true, `${profile} must expose get_authoring_skill`);
-  }
-});
-
 test('full MCP surface removes globally consolidated tools while keeping high-level intents', () => {
   const fullNames = new Set(getMcpToolList('full').map((tool: any) => tool.name));
   const removedTools = [

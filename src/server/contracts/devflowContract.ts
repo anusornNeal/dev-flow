@@ -570,7 +570,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'get_skill_router',
-    description: 'Mandatory workflow entrypoint for every fresh agent-facing DevFlow MCP session. Read the canonical 00-skill-router before normal authoring, implementation, review, board-loop, or Atlas workflow tools.',
+    description: 'Read only the DevFlow authoring skill router (00-skill-router). Prefer this first before loading the full authoring skill set.',
     inputSchema: emptyObjectSchema,
     outputSchema: { type: 'object' },
     lightweight: true,
@@ -578,7 +578,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'get_authoring_skill',
-    description: 'Read one DevFlow authoring skill by id. This remains available during bootstrap, but reading a specialist does not replace the required get_skill_router handshake for normal workflows.',
+    description: 'Read one DevFlow authoring skill by id. Use the router first, then load only the common or specialist skill required for the current workflow.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1558,8 +1558,6 @@ export function resolveDevFlowToolProfile(value?: string) {
   return { profile: 'coding' as DevFlowToolProfile, configured, fallback: true };
 }
 
-const AGENT_BOOTSTRAP_TOOLS = new Set(['get_skill_router', 'get_authoring_skill']);
-
 const CODING_PROFILE_TOOLS = new Set([
   'get_tool_schema', 'devflow_health_check', 'list_projects',
   'search_tasks', 'create_task', 'get_task', 'update_task', 'move_task_to_status', 'toggle_task_checklist', 'open_task_bug',
@@ -1629,7 +1627,6 @@ export function isToolExposedInMcp(name: string) {
 export function isToolAllowedInProfile(name: string, profile: DevFlowToolProfile) {
   if (!isToolExposedInMcp(name)) return false;
   if (profile === 'full') return true;
-  if (profile !== 'diagnostics' && AGENT_BOOTSTRAP_TOOLS.has(name)) return true;
   if (profile === 'coding') return CODING_PROFILE_TOOLS.has(name);
   if (profile === 'atlas') return name.includes('atlas') || ['get_repo_context_bundle', 'read_local_file', 'read_file_snippets_batch', 'search_local_files'].includes(name);
   if (profile === 'diagnostics') return /health|diagnostic|job|tool_call|restart|recovery/.test(name);

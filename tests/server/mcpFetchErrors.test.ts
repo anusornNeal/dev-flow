@@ -13,166 +13,6 @@ test.after(() => {
   else process.env.DEVFLOW_MCP_TOOL_PROFILE = previousToolProfile;
 });
 
-async function callTool(handler: any, name: string, arguments_: Record<string, any> = {}) {
-  return handler({ method: 'tools/call', params: { name, arguments: arguments_ } });
-}
-
-async function bootstrapHandler(handler: any) {
-  const delegatedFetch = global.fetch;
-  global.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    if (String(input).endsWith('/api/skills/authoring/00-skill-router')) {
-      return new Response(JSON.stringify({ id: '00-skill-router', content: '# router' }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      });
-    }
-    return delegatedFetch(input, init);
-  }) as typeof fetch;
-  try {
-    const response = await callTool(handler, 'get_skill_router');
-    assert.equal(response.isError, undefined, response.content?.[0]?.text);
-  } finally {
-    global.fetch = delegatedFetch;
-  }
-}
-
-test('mcp server blocks ordinary workflow tools before router bootstrap without network access', async (t) => {
-  const originalFetch = global.fetch;
-  let fetchCalls = 0;
-  t.after(() => { global.fetch = originalFetch; });
-  global.fetch = async () => {
-    fetchCalls += 1;
-    throw new Error('blocked workflow must not reach the backend');
-  };
-
-  const server = createDevFlowMcpServer('http://127.0.0.1:3000', 'full');
-  const handler = (server as any)._requestHandlers.get('tools/call');
-  const response = await callTool(handler, 'search_tasks', { projectId: 'proj-1' });
-
-  assert.equal(response.isError, true);
-  const payload = JSON.parse(response.content[0].text);
-  assert.equal(payload.code, 'BOOTSTRAP_REQUIRED');
-  assert.equal(payload.details.nextAction, 'get_skill_router');
-  assert.equal(payload.details.activeProfile, 'full');
-  assert.equal(fetchCalls, 0);
-});
-
-test('successful router read bootstraps only that MCP server instance', async (t) => {
-  const originalFetch = global.fetch;
-  const requests: string[] = [];
-  t.after(() => { global.fetch = originalFetch; });
-  global.fetch = async (input: RequestInfo | URL) => {
-    const url = String(input);
-    requests.push(url);
-    const body = url.endsWith('/api/skills/authoring/00-skill-router')
-      ? { id: '00-skill-router', content: '# router' }
-      : url.includes('/api/tasks')
-        ? { tasks: [] }
-        : { error: 'unexpected request' };
-    return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
-  };
-
-  const first = createDevFlowMcpServer('http://127.0.0.1:3000', 'full');
-  const second = createDevFlowMcpServer('http://127.0.0.1:3000', 'full');
-  const firstHandler = (first as any)._requestHandlers.get('tools/call');
-  const secondHandler = (second as any)._requestHandlers.get('tools/call');
-
-  const router = await callTool(firstHandler, 'get_skill_router');
-  assert.equal(router.isError, undefined);
-  const allowed = await callTool(firstHandler, 'search_tasks', { projectId: 'proj-1' });
-  assert.equal(allowed.isError, undefined);
-  const blocked = await callTool(secondHandler, 'search_tasks', { projectId: 'proj-1' });
-  assert.equal(blocked.isError, true);
-  assert.equal(JSON.parse(blocked.content[0].text).code, 'BOOTSTRAP_REQUIRED');
-  assert.equal(requests.filter((url) => url.includes('/api/tasks')).length, 1);
-});
-
-test('coding authoring review and atlas workflows require and then honor router bootstrap', async (t) => {
-  const originalFetch = global.fetch;
-  let ordinaryBackendCalls = 0;
-  t.after(() => { global.fetch = originalFetch; });
-  global.fetch = async (input: RequestInfo | URL) => {
-    const url = String(input);
-    if (url.endsWith('/api/skills/authoring/00-skill-router')) {
-      return new Response(JSON.stringify({ id: '00-skill-router', content: '# router' }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      });
-    }
-    ordinaryBackendCalls += 1;
-    return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'content-type': 'application/json' } });
-  };
-
-  const cases = [
-    ['coding', 'search_tasks', { projectId: 'proj-1' }],
-    ['authoring', 'search_tasks', { projectId: 'proj-1' }],
-    ['review', 'get_task', { taskId: 'DVF-0001' }],
-    ['atlas', 'get_project_atlas', { projectId: 'proj-1' }],
-  ] as const;
-
-  for (const [profile, toolName, args] of cases) {
-    const server = createDevFlowMcpServer('http://127.0.0.1:3000', profile);
-    const handler = (server as any)._requestHandlers.get('tools/call');
-    const beforeCalls = ordinaryBackendCalls;
-
-    const blocked = await callTool(handler, toolName, args);
-    assert.equal(blocked.isError, true, `${profile} should block ${toolName} before router bootstrap`);
-    assert.equal(JSON.parse(blocked.content[0].text).code, 'BOOTSTRAP_REQUIRED');
-    assert.equal(ordinaryBackendCalls, beforeCalls, `${profile} blocked call must not reach backend`);
-
-    const router = await callTool(handler, 'get_skill_router');
-    assert.equal(router.isError, undefined, `${profile} router should be callable during bootstrap`);
-    const allowed = await callTool(handler, toolName, args);
-    assert.equal(allowed.isError, undefined, `${profile} should allow ${toolName} after router bootstrap`);
-    assert.equal(ordinaryBackendCalls, beforeCalls + 1);
-  }
-});
-
-test('reading a specialist skill before the router does not acknowledge bootstrap', async (t) => {
-  const originalFetch = global.fetch;
-  t.after(() => { global.fetch = originalFetch; });
-  global.fetch = async (input: RequestInfo | URL) => {
-    const url = String(input);
-    const body = url.includes('/api/skills/authoring/07-authoring-execution')
-      ? { id: '07-authoring-execution', content: '# execution' }
-      : { tasks: [] };
-    return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
-  };
-
-  const server = createDevFlowMcpServer('http://127.0.0.1:3000', 'full');
-  const handler = (server as any)._requestHandlers.get('tools/call');
-  const specialist = await callTool(handler, 'get_authoring_skill', { id: '07-authoring-execution' });
-  assert.equal(specialist.isError, undefined);
-  const blocked = await callTool(handler, 'search_tasks', { projectId: 'proj-1' });
-  assert.equal(JSON.parse(blocked.content[0].text).code, 'BOOTSTRAP_REQUIRED');
-});
-
-test('pre-bootstrap recovery reads stay available while restart mutation remains guarded', async (t) => {
-  const originalFetch = global.fetch;
-  const requests: string[] = [];
-  t.after(() => { global.fetch = originalFetch; });
-  global.fetch = async (input: RequestInfo | URL) => {
-    const url = String(input);
-    requests.push(url);
-    return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'content-type': 'application/json' } });
-  };
-
-  const server = createDevFlowMcpServer('http://127.0.0.1:3000', 'full');
-  const handler = (server as any)._requestHandlers.get('tools/call');
-  for (const [name, args] of [
-    ['devflow_health_check', {}],
-    ['get_recovery_handoff', {}],
-    ['get_devflow_restart_status', {}],
-    ['get_tool_job_result', { jobId: 'job-1' }],
-  ] as const) {
-    const response = await callTool(handler, name, args);
-    assert.equal(response.isError, undefined, `${name} should remain available before bootstrap`);
-  }
-  const restart = await callTool(handler, 'restart_devflow', { reason: 'test' });
-  assert.equal(JSON.parse(restart.content[0].text).code, 'BOOTSTRAP_REQUIRED');
-  assert.equal(requests.some((url) => url.endsWith('/api/restart')), false);
-});
-
 test('globally consolidated MCP tools are rejected even in full before network access', async (t) => {
   const originalFetch = global.fetch;
   let fetchCalls = 0;
@@ -489,7 +329,6 @@ test('mcp server unwraps async job result envelope for run_project_command', asy
 
   const server = createDevFlowMcpServer('http://127.0.0.1:3000');
   const handler = (server as any)._requestHandlers.get('tools/call');
-  await bootstrapHandler(handler);
 
   const response = await handler({
     method: 'tools/call',
@@ -538,7 +377,6 @@ test('mcp server returns compact server-guided pending completion without status
 
   const server = createDevFlowMcpServer('http://127.0.0.1:3000');
   const handler = (server as any)._requestHandlers.get('tools/call');
-  await bootstrapHandler(handler);
   const response = await handler({
     method: 'tools/call',
     params: { name: 'run_project_command', arguments: { projectId: 'proj-1', command: 'test' } },
@@ -583,7 +421,6 @@ test('mcp server returns a blocked async job handle immediately without eager re
 
   const server = createDevFlowMcpServer('http://127.0.0.1:3000');
   const handler = (server as any)._requestHandlers.get('tools/call');
-  await bootstrapHandler(handler);
   const response = await handler({
     method: 'tools/call',
     params: { name: 'run_project_command', arguments: { projectId: 'proj-1', command: 'test' } },
@@ -620,7 +457,6 @@ test('mcp server keeps eligible async jobs on the original request for the strea
 
   const server = createDevFlowMcpServer('http://127.0.0.1:3000');
   const handler = (server as any)._requestHandlers.get('tools/call');
-  await bootstrapHandler(handler);
   const response = await handler({
     method: 'tools/call',
     params: { name: 'commit_git_changes', arguments: { projectId: 'proj-1', message: 'test', stageAll: true } },
@@ -670,7 +506,6 @@ test('mcp server does not surface null text when async job result is temporarily
 
   const server = createDevFlowMcpServer('http://127.0.0.1:3000');
   const handler = (server as any)._requestHandlers.get('tools/call');
-  await bootstrapHandler(handler);
 
   const response = await handler({
     method: 'tools/call',
@@ -709,7 +544,6 @@ test('mcp server hands off disconnected async requests without duplicating durab
   controller.abort();
   const server = createDevFlowMcpServer('http://127.0.0.1:3000');
   const handler = (server as any)._requestHandlers.get('tools/call');
-  await bootstrapHandler(handler);
   const response = await handler({
     method: 'tools/call',
     params: { name: 'run_project_command', arguments: { projectId: 'proj-1', command: 'test' } },

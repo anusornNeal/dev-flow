@@ -8,16 +8,6 @@ import { getMcpRequestSignal } from './mcpRequestContext';
 const DEFAULT_MCP_HTTP_TIMEOUT_MS = 30_000;
 const TOOL_JOB_RESULT_TIMEOUT_HEADROOM_MS = 5_000;
 const DEFAULT_ASYNC_JOB_STREAM_WINDOW_MS = 15_000;
-const DEVFLOW_MCP_BOOTSTRAP_INSTRUCTIONS = 'Before normal DevFlow workflows, call get_skill_router once for this fresh MCP session. Follow the router to load only the required specialist skill. In DevFlow context, ambiguous UI, preview, mockup, concept, redesign, or layout requests stay in DevFlow; external image generation requires an explicit image-generation request. Recovery diagnostics stay available before bootstrap.';
-const PRE_BOOTSTRAP_ALLOWED_TOOLS = new Set([
-  'get_skill_router',
-  'get_authoring_skill',
-  'devflow_health_check',
-  'get_recovery_handoff',
-  'get_tool_job_result',
-  'get_devflow_restart_status',
-  'inspect_workspace_recovery',
-]);
 
 function buildMcpToolError(params: {
   toolName: string;
@@ -234,13 +224,9 @@ function toMcpTextPayload(data: unknown) {
 export function createDevFlowMcpServer(baseUrl: string, profileOverride?: string) {
   const profileResolution = resolveDevFlowToolProfile(profileOverride);
   const activeProfile = profileResolution.profile;
-  let bootstrapComplete = false;
   const server = new Server(
     { name: 'dev-flow-mcp', version: getCapabilityCatalog().contractVersion },
-    {
-      capabilities: { tools: {} },
-      instructions: DEVFLOW_MCP_BOOTSTRAP_INSTRUCTIONS,
-    },
+    { capabilities: { tools: {} } },
   );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: getMcpToolList(activeProfile) as any }));
@@ -299,25 +285,6 @@ export function createDevFlowMcpServer(baseUrl: string, profileOverride?: string
             configuredProfile: profileResolution.configured,
             fallback: profileResolution.fallback,
             guidance: 'Select DEVFLOW_MCP_TOOL_PROFILE=full or a specialized profile that contains this tool, then restart/refresh the MCP session.',
-          },
-        }) }],
-      };
-    }
-
-    if (!bootstrapComplete && !PRE_BOOTSTRAP_ALLOWED_TOOLS.has(tool.name)) {
-      return {
-        isError: true,
-        content: [{ type: 'text', text: JSON.stringify({
-          code: 'BOOTSTRAP_REQUIRED',
-          message: `Fresh DevFlow MCP sessions must read get_skill_router before calling ${toolName}.`,
-          retryable: false,
-          correlationId,
-          details: {
-            activeProfile,
-            configuredProfile: profileResolution.configured,
-            fallback: profileResolution.fallback,
-            nextAction: 'get_skill_router',
-            guidance: 'Call get_skill_router successfully once in this MCP session, then retry the blocked workflow tool.',
           },
         }) }],
       };
@@ -482,15 +449,6 @@ export function createDevFlowMcpServer(baseUrl: string, profileOverride?: string
       };
     }
 
-    if (
-      tool.name === 'get_skill_router' &&
-      parsedBody &&
-      typeof parsedBody === 'object' &&
-      !Array.isArray(parsedBody) &&
-      (parsedBody as any).id === '00-skill-router'
-    ) {
-      bootstrapComplete = true;
-    }
     return toMcpTextPayload(parsedBody);
   });
 

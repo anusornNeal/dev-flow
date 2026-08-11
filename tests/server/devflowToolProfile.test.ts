@@ -94,6 +94,46 @@ test('skill router keeps ambiguous DevFlow visual intents in DevFlow and image g
   assert.match(content, /mockup.*not image-generation intent/i);
 });
 
+test('legacy schema and dead MCP compatibility bookkeeping are fully removed', () => {
+  const names = new Set(devFlowToolDefinitions.map((tool: any) => tool.name));
+  assert.equal(names.has('get_schema'), false);
+  assert.equal(names.has('get_tool_schema'), true);
+
+  const contractSource = fs.readFileSync(new URL('../../src/server/contracts/devflowContract.ts', import.meta.url), 'utf8');
+  const classifierSource = fs.readFileSync(new URL('../../src/server/contracts/mcpToolSurfaceClassification.ts', import.meta.url), 'utf8');
+  const readRoutesSource = fs.readFileSync(new URL('../../src/server/routes/taskReadRoutes.ts', import.meta.url), 'utf8');
+  const constantsSource = fs.readFileSync(new URL('../../src/server/constants.ts', import.meta.url), 'utf8');
+  assert.doesNotMatch(contractSource, /\bget_schema\b/);
+  assert.doesNotMatch(classifierSource, /DEPRECATED_AGENT_RUNNER|\bdeprecated\b|\bdeprecate\b/);
+  assert.doesNotMatch(readRoutesSource, /\/api\/schema\/task|TASK_SCHEMA_DEF/);
+  assert.doesNotMatch(constantsSource, /TASK_SCHEMA_DEF/);
+});
+
+test('confirmed one-off cleanup artifacts and stale OpenAPI catalog are absent', () => {
+  const removedPaths = [
+    'script.cjs',
+    'update-apis-full-fields.cjs',
+    'move-dvf-0247.cjs',
+    'context.json',
+    'metadata.json',
+    'scripts/check-final.cjs',
+    'scripts/check-imports.cjs',
+    'scripts/check-state.cjs',
+    'scripts/show-context.cjs',
+    'scripts/temp-edit.cjs',
+    'patches/dvf-0253-detailed-update.json',
+    'docs/openapi.yaml',
+    'src/components/ChatGptStarterPromptButton.tsx',
+    'src/lib/chatGptStarterPrompt.ts',
+    'tests/lib/chatGptStarterPrompt.test.ts',
+    'src/components/JsonTemplateModal.tsx',
+    'src/components/jsonTemplateModal/data.ts',
+  ];
+  for (const removedPath of removedPaths) {
+    assert.equal(fs.existsSync(removedPath), false, `${removedPath} should be removed`);
+  }
+});
+
 test('execution and review guidance resolves repository Git policy instead of assuming merge topology', () => {
   for (const skillName of [
     '03-reviewer-core.md',
@@ -248,7 +288,23 @@ test('MCP inventory can retain backend compatibility while full advertises only 
   assert.equal(inventory.filter((item: any) => item.classification === 'alias-duplicate').every((item: any) => item.target), true);
   assert.equal(full.some((tool: any) => inventory.find((item: any) => item.name === tool.name)?.alias), false);
   assert.equal(summary.total, inventory.length);
-  assert.equal(summary.byDisposition.keep + summary.byDisposition.combine + summary.byDisposition['hide-default'] + summary.byDisposition.deprecate, inventory.length);
+  assert.equal(summary.byDisposition.keep + summary.byDisposition.combine + summary.byDisposition['hide-default'], inventory.length);
+});
+
+test('MCP cleanup preserves coding workflows within the established surface budget', () => {
+  const codingNames = new Set(getMcpToolList('coding').map((tool: any) => tool.name));
+  const requiredWorkflows = [
+    ['get_skill_router', 'get_authoring_skill', 'get_repo_context_bundle', 'create_task'],
+    ['read_file_snippets_batch', 'prepare_compact_edit', 'apply_prepared_edit', 'run_project_command'],
+    ['search_tasks', 'get_task', 'move_task_to_status', 'open_task_bug'],
+    ['get_git_status', 'get_git_diff', 'commit_git_changes', 'sync_task_with_git'],
+  ];
+  for (const tools of requiredWorkflows) {
+    assert.deepEqual(tools.filter((name) => !codingNames.has(name)), []);
+  }
+  const profileSummary = getToolProfileSummary();
+  assert.ok(profileSummary.full.toolCount <= 109);
+  assert.ok(profileSummary.full.schemaBytes <= 173_705);
 });
 
 test('MCP profile resolution defaults to lean coding and preserves explicit valid profiles', () => {

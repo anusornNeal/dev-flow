@@ -29,6 +29,8 @@ for (const [name, result] of Object.entries(workflowResults) as any) {
 }
 
 const aliasNames = inventory.filter((item) => item.alias).map((item) => item.name);
+assert.equal(inventory.some((item) => item.name === 'get_schema'), false);
+assert.equal(fullNames.has('get_tool_schema'), true);
 assert.equal(aliasNames.some((name) => codingNames.has(name)), false);
 assert.equal(aliasNames.some((name) => fullNames.has(name)), false);
 
@@ -44,8 +46,6 @@ const compatibilityOnly = [
   'get_tool_job_status',
   'get_tool_job_log',
   'get_tool_call_summary',
-  'get_task_prompt',
-  'list_agent_runs',
   'get_figma_file',
   'get_figma_node',
   'get_figma_design_spec',

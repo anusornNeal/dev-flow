@@ -14,7 +14,7 @@ const atlas: any = {
     { id: 'file:src/server/routes/tasks.ts', label: 'tasks.ts', kind: 'route', path: 'src/server/routes/tasks.ts', metadata: {} },
     { id: 'file:src/server/services/agentRunService.ts', label: 'agentRunService.ts', kind: 'file', path: 'src/server/services/agentRunService.ts', metadata: {} },
     { id: 'file:src/server/contracts/devflowContract.ts', label: 'devflowContract.ts', kind: 'file', path: 'src/server/contracts/devflowContract.ts', metadata: {} },
-    { id: 'file:src/lib/chatGptStarterPrompt.ts', label: 'chatGptStarterPrompt.ts', kind: 'file', path: 'src/lib/chatGptStarterPrompt.ts', metadata: {} },
+    { id: 'file:src/server/services/promptTemplateService.ts', label: 'promptTemplateService.ts', kind: 'file', path: 'src/server/services/promptTemplateService.ts', metadata: {} },
     { id: 'file:skills/01-authoring-core.md', label: '01-authoring-core.md', kind: 'file', path: 'skills/01-authoring-core.md', metadata: {} },
     { id: 'file:src/db/migrations/001_init.ts', label: '001_init.ts', kind: 'database', path: 'src/db/migrations/001_init.ts', metadata: {} },
     { id: 'file:src/components/TaskList.tsx', label: 'TaskList.tsx', kind: 'component', path: 'src/components/TaskList.tsx', metadata: {} },

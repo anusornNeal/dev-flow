@@ -4,10 +4,9 @@ export type McpToolSurfaceClassification =
   | 'first-class-intent'
   | 'alias-duplicate'
   | 'diagnostic-advanced'
-  | 'internal-mechanic'
-  | 'deprecated';
+  | 'internal-mechanic';
 
-export type McpToolSurfaceDisposition = 'keep' | 'combine' | 'hide-default' | 'deprecate';
+export type McpToolSurfaceDisposition = 'keep' | 'combine' | 'hide-default';
 export type McpToolRisk = 'read' | 'write' | 'destructive' | 'external-effect' | 'runtime-control';
 
 export type McpToolSurfaceInventoryItem = {
@@ -24,14 +23,6 @@ export type McpToolSurfaceInventoryItem = {
 
 type CanonicalDecision = Omit<McpToolSurfaceInventoryItem, 'name' | 'canonicalName' | 'alias'>;
 
-const DEPRECATED_AGENT_RUNNER = new Set([
-  'get_task_prompt',
-  'list_agent_runs',
-  'retry_agent_run',
-  'cancel_agent_run',
-  'complete_agent_run',
-]);
-
 const DIAGNOSTIC_ADVANCED = new Set([
   'get_capabilities',
   'get_tool_schema',
@@ -39,7 +30,6 @@ const DIAGNOSTIC_ADVANCED = new Set([
   'devflow_health_check',
   'restart_devflow',
   'get_devflow_restart_status',
-  'get_schema',
   'get_project_atlas_status',
   'parse_test_report',
   'get_tool_job_status',
@@ -137,16 +127,6 @@ function classifyCanonical(name: string): CanonicalDecision {
   const risk = inferRisk(name);
   const intent = intentFor(name);
 
-  if (DEPRECATED_AGENT_RUNNER.has(name)) {
-    return {
-      classification: 'deprecated',
-      disposition: 'deprecate',
-      intent: 'legacy-agent-runner',
-      risk,
-      rationale: 'Agent Runner is deprecated for the current architecture; keep service compatibility but remove it from the default MCP decision surface.',
-    };
-  }
-
   if (INTERNAL_TARGETS[name]) {
     return {
       classification: 'internal-mechanic',
@@ -232,13 +212,11 @@ export function summarizeMcpToolSurfaceInventory(inventory: McpToolSurfaceInvent
     'alias-duplicate': 0,
     'diagnostic-advanced': 0,
     'internal-mechanic': 0,
-    deprecated: 0,
   };
   const byDisposition: Record<McpToolSurfaceDisposition, number> = {
     keep: 0,
     combine: 0,
     'hide-default': 0,
-    deprecate: 0,
   };
   const byRisk: Record<McpToolRisk, number> = {
     read: 0,

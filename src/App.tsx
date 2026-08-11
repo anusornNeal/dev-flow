@@ -15,7 +15,6 @@ import { subscribeServerEvents } from './lib/serverEvents';
 import Sidebar from './components/Sidebar';
 import TaskDetailsDrawer from './components/TaskDetailsDrawer';
 import CreateTaskModal from './components/CreateTaskModal';
-import JsonTemplateModal from './components/JsonTemplateModal';
 import SkillsModal from './components/SkillsModal';
 import SettingsModal from './components/SettingsModal';
 import TemplateModal from './components/TemplateModal';
@@ -63,7 +62,6 @@ export default function App() {
 
 
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
-  const [isJsonModalOpen, setIsJsonModalOpen] = useState(false);
   const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
   const [isSkillsModalOpen, setIsSkillsModalOpen] = useState(false);
   const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
@@ -565,7 +563,6 @@ export default function App() {
             theme={theme}
             setTheme={setTheme}
             setIsSettingsModalOpen={setIsSettingsModalOpen}
-            setIsJsonModalOpen={setIsJsonModalOpen}
             setIsSkillsModalOpen={setIsSkillsModalOpen}
             setIsTemplateModalOpen={setIsTemplateModalOpen}
             setIsObservabilityModalOpen={setIsObservabilityModalOpen}
@@ -660,13 +657,6 @@ export default function App() {
         <BatchImportModal
           onClose={() => setIsBatchModalOpen(false)}
           onImport={handleBatchImport}
-        />
-      )}
-
-      {/* 5. JSON Schema Doc Modal */}
-      {isJsonModalOpen && (
-        <JsonTemplateModal
-          onClose={() => setIsJsonModalOpen(false)}
         />
       )}
 

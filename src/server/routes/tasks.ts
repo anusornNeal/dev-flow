@@ -6,7 +6,7 @@ import path from 'path';
 import db from '../../db/index';
 import type express from 'express';
 import type { ApiRouteDeps } from '../types';
-import { TASK_SCHEMA_DEF, VALID_AGENTS, LEGACY_VALID_EFFORTS_FALLBACK, VALID_MODELS, VALID_STATUSES } from '../constants';
+import { VALID_AGENTS, LEGACY_VALID_EFFORTS_FALLBACK, VALID_MODELS, VALID_STATUSES } from '../constants';
 import { ACTIVE_AGENT_RUN_STATUSES, cancelActiveRunsForTask, cancelStaleActiveRuns, createAgentRun, getActiveRunForProjectAndAgent, getActiveRunForTask, getLatestAgentRunForTask, listActiveRunSummariesForProject, listAgentRunsForTask, updateAgentRunStatus, type AgentRun } from '../repositories/agentRunRepository';
 import { archiveInactiveDoneTasks, deleteTasksByIds, generateDisplayId, queryTaskBoardPage, resolveDisplayIdForNewTask, restoreArchivedTask, saveTask, getTasks } from '../repositories/taskRepository.js';
 import { listAttachmentsForTask } from '../repositories/attachmentRepository';

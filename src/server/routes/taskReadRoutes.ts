@@ -1,6 +1,5 @@
 import type express from 'express';
 import type { ApiRouteDeps } from '../types';
-import { TASK_SCHEMA_DEF } from '../constants';
 import { archiveInactiveDoneTasks, getTaskByIdentifier, getTasks, queryTaskBoardPage, restoreArchivedTask } from '../repositories/taskRepository.js';
 import { getActiveRunForTask, getLatestAgentRunForTask } from '../repositories/agentRunRepository';
 import { findTaskByIdentifier, getAgentTaskContext, renderTaskPrompt } from '../services/taskService';
@@ -14,8 +13,6 @@ import {
 } from './taskRouteSupport';
 
 export function registerTaskReadRoutes(app: express.Express, deps: ApiRouteDeps) {
-  app.get('/api/schema/task', (_req, res) => res.json(TASK_SCHEMA_DEF));
-
   app.get('/api/tasks', (_req, res) => {
     runThrottledStaleCleanup(deps);
     const req = _req as express.Request;

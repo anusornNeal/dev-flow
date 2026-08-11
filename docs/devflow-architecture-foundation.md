@@ -177,14 +177,10 @@ The following behaviors must remain compatible end-to-end. Each child PR is resp
 - Settings backup / restore
 
 ### 10.10 MCP tools
-- `get_capabilities` returns current contract version
-- `get_schema` returns task JSON schema
-- `list_projects`, `list_tasks`, `search_tasks`, `get_task`, `get_task_images`, `get_task_prompt`
-- `create_task`, `update_task`, `batch_upsert_tasks`, `move_task_status`, `toggle_task_checklist`
-- `assign_agent`, `list_agent_runs`, `retry_agent_run`, `cancel_agent_run`, `complete_agent_run`
-- `list_skills`, `get_authoring_skills`, `get_skill`, `update_skill`
-- `list_local_files`, `read_local_file`, `search_local_files`
-- `get_git_log`, `get_git_diff`, `get_git_show`, `get_git_status`, `get_git_branch`
+- `devflow_health_check` and `get_tool_schema` provide current runtime/schema diagnostics
+- `search_tasks`, `get_task`, `create_task`, `update_task`, and `move_task_to_status` cover current task workflows
+- `get_skill_router` / `get_authoring_skill` provide agent guidance; Prompt Template rendering remains the task prompt source
+- Repository/workspace/verification tools expose local file, Git, workspace, and command workflows through the live MCP contract
 
 ### 10.11 SSE / proxy
 - MCP SSE session lifecycle works

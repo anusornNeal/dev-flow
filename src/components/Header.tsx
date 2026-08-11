@@ -1,7 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Cat, Moon, Sun, FileCode, Code, FileText, Plus, Sparkles, Blocks, ChevronDown } from 'lucide-react';
 import NgrokStatusPanel from './NgrokStatusPanel';
-import ChatGptStarterPromptButton from './ChatGptStarterPromptButton';
 
 interface HeaderProps {
   filteredTasksCount: number;
@@ -13,7 +12,6 @@ interface HeaderProps {
   theme: string;
   setTheme: (theme: "light" | "dark") => void;
   setIsSettingsModalOpen: (open: boolean) => void;
-  setIsJsonModalOpen: (open: boolean) => void;
   setIsSkillsModalOpen: (open: boolean) => void;
   setIsTemplateModalOpen: (open: boolean) => void;
   setIsObservabilityModalOpen: (open: boolean) => void;
@@ -31,7 +29,6 @@ export function Header({
   theme,
   setTheme,
   setIsSettingsModalOpen,
-  setIsJsonModalOpen,
   setIsSkillsModalOpen,
   setIsTemplateModalOpen,
   setIsCreateModalOpen,
@@ -101,12 +98,6 @@ export function Header({
           {isMenuOpen && (
             <div className="absolute right-0 mt-2 bg-white dark:bg-[#292119] rounded-xl shadow-xl border border-[#ebdcb9] dark:border-[#584a3b] py-1.5 min-w-[180px] z-50 flex flex-col overflow-hidden">
               <button
-                onClick={() => { setIsJsonModalOpen(true); setIsMenuOpen(false); }}
-                className="w-full text-left px-4 py-2 hover:bg-[#ebdcb9] dark:bg-[#584a3b]/30 dark:hover:bg-[#584a3b]/40 text-xs font-bold text-[#7a6455] dark:text-[#f3eadf] flex items-center gap-2 transition-colors cursor-pointer"
-              >
-                <FileCode size={14} className="text-[#a46c24] dark:text-[#d6b56d]" /> Schema Spec
-              </button>
-              <button
                 onClick={() => { setIsSkillsModalOpen(true); setIsMenuOpen(false); }}
                 className="w-full text-left px-4 py-2 hover:bg-[#ebdcb9] dark:bg-[#584a3b]/30 dark:hover:bg-[#584a3b]/40 text-xs font-bold text-[#7a6455] dark:text-[#f3eadf] flex items-center gap-2 transition-colors cursor-pointer"
               >
@@ -118,7 +109,6 @@ export function Header({
               >
                 <FileText size={14} className="text-[#a46c24] dark:text-[#d6b56d]" /> Prompt Template
               </button>
-              <ChatGptStarterPromptButton />
             </div>
           )}
         </div>

@@ -19,7 +19,7 @@ import { uiPreviewToolDefinitions } from './devflowUiPreviewTools';
 import { buildMcpTransportInputSchema } from './mcpSchemaTransport';
 import { resolveRuntimeMcpToolProfileValue } from './mcpToolProfileConfig';
 export type { DevFlowToolDefinition, DevFlowToolHttpRequest } from './devflowContractCore';
-export const DEVFLOW_CONTRACT_VERSION = '2026-08-11.2';
+export const DEVFLOW_CONTRACT_VERSION = '2026-08-11.3';
 
 export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   {
@@ -228,13 +228,6 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
         jiraKey: args.jiraKey || args.issueKey || args.key,
       },
     }),
-  },
-  {
-    name: 'get_schema',
-    description: 'Get the DevFlow task JSON schema.',
-    inputSchema: emptyObjectSchema,
-    outputSchema: { type: 'object' },
-    buildHttpRequest: () => ({ method: 'GET', path: '/api/schema/task' }),
   },
   {
     name: 'list_projects',
@@ -1586,7 +1579,6 @@ const MCP_CONSOLIDATION_REPLACEMENTS: Record<string, string> = {
   get_capabilities: 'devflow_health_check',
   get_tool_call_summary: 'devflow_health_check',
   get_change_summary: 'get_git_status',
-  get_schema: 'get_task',
   validate_task_quality: 'create_task/update_task',
   get_project_start_context: 'get_repo_context_bundle',
   repo_read_snapshot: 'get_repo_context_bundle',

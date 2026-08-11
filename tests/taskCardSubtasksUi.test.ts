@@ -95,6 +95,31 @@ test('Task Details subtask section renders more than five children without show-
   assert.doesNotMatch(html, /show less/i);
 });
 
+test('Task Details subtask cards use compact two-column markup and conditional design badges', () => {
+  const task = makeTask();
+  const children = [
+    makeTask({ id: 'child-design', displayId: 'DVF-DESIGN', title: 'Designed child with a title long enough to wrap onto two compact lines', parentId: task.id, status: 'in-progress', priority: 'high', model: 'GPT-5.6 Sol', hasUiDesign: true }),
+    makeTask({ id: 'child-plain', displayId: 'DVF-PLAIN', title: 'Plain child', parentId: task.id, status: 'todo', priority: 'low', model: 'GPT-5.6 Sol', hasUiDesign: false }),
+  ];
+  const html = renderToStaticMarkup(React.createElement(SubtasksSection as any, {
+    task,
+    subTasks: children,
+    canCreateSubtask: false,
+    onCreateSubtask: noop,
+    onSelectTask: noop,
+  }));
+
+  assert.match(html, /grid-cols-1/);
+  assert.match(html, /sm:grid-cols-2/);
+  assert.doesNotMatch(html, /h-\[90px\]/);
+  assert.match(html, /line-clamp-2/);
+  assert.match(html, /DVF-DESIGN/);
+  assert.match(html, />active</);
+  assert.match(html, />DESIGN</);
+  assert.equal((html.match(/>DESIGN</g) || []).length, 1);
+  assert.doesNotMatch(html, /GPT-5\.6 Sol/);
+});
+
 test('inspector hides Subtasks and keyboard navigation skips it when unavailable', () => {
   const task = makeTask();
   const html = renderToStaticMarkup(React.createElement(TaskInspectorShell as any, {

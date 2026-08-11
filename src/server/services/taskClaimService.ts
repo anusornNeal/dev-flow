@@ -173,6 +173,28 @@ function resolveRecoverableTaskWorkspace(task: any) {
   return recovered[0] || null;
 }
 
+function promoteImmediateParentToInProgress(task: any, nowMs = Date.now()) {
+  const parentId = String(task?.parentId || '').trim();
+  if (!parentId) return null;
+  const parent = getTaskByIdentifier(parentId, 'full');
+  if (!parent || parent.projectId !== task.projectId || parent.status === 'in-progress') return parent || null;
+
+  const timestamp = new Date(nowMs).toISOString();
+  const updated = {
+    ...parent,
+    status: 'in-progress' as TaskStatus,
+    updatedAt: timestamp,
+    logs: [...(Array.isArray(parent.logs) ? parent.logs : []), {
+      id: `log-task-parent-active-${nowMs}-${task.id}`,
+      timestamp,
+      message: `Parent moved to in-progress because active child ${task.displayId || task.id} is claimed.`,
+      type: 'update',
+    }],
+  };
+  saveTask(updated);
+  return updated;
+}
+
 function claimTaskForSessionLocked(taskId: string, input: ClaimTaskInput, cleanSessionId: string, project: any) {
   const task = getTaskByIdentifier(taskId, 'full');
   if (!task) throw createApiError(404, 'TASK_NOT_FOUND', `Task '${taskId}' was not found.`, { affectedId: taskId });
@@ -192,6 +214,7 @@ function claimTaskForSessionLocked(taskId: string, input: ClaimTaskInput, cleanS
     const workspace = resolveRecoverableTaskWorkspace(task)
       || createOrReuseSessionWorkspace(project, cleanSessionId, { taskDisplayId: task.displayId });
     ensureClaimExecutionSession(task, workspace);
+    promoteImmediateParentToInProgress(task, nowMs);
     return { task, claim: task.claim, workspace: { workspaceId: workspace.workspaceId, branch: workspace.branch, state: workspace.state }, reused: true };
   }
 
@@ -231,6 +254,7 @@ function claimTaskForSessionLocked(taskId: string, input: ClaimTaskInput, cleanS
   };
   ensureClaimExecutionSession(updated, workspace);
   saveTask(updated);
+  promoteImmediateParentToInProgress(updated, nowMs);
   return { task: getTaskByIdentifier(task.id, 'full') || updated, claim, workspace: { workspaceId: workspace.workspaceId, branch: workspace.branch, state: workspace.state }, reused: false };
 }
 

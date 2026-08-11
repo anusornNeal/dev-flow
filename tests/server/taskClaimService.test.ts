@@ -204,6 +204,73 @@ test('released task resumes its existing numbered workspace instead of creating 
   assert.equal(resumedWorkspace.root, firstWorkspace.root);
 });
 
+test('claiming a child promotes its immediate parent without creating parent execution ownership', () => {
+  seedTask('parent-promote', ['src/ParentPromote.ts'], undefined, 'DVF-0700');
+  seedTask('child-promote', ['src/ChildPromote.ts'], 'parent-promote', 'DVF-0701');
+  const parentBefore = getTask('parent-promote');
+  parentBefore.status = 'todo';
+  saveTask(parentBefore);
+
+  const claimed = claims.claimTaskForSession('child-promote', { sessionId: 'parent-promote-owner', ownerLabel: 'Chat Parent Promote' });
+  assert.equal(claimed.task.status, 'in-progress');
+
+  const parentAfter = getTask('parent-promote');
+  assert.equal(parentAfter.status, 'in-progress');
+  assert.equal(parentAfter.claim, undefined);
+  assert.equal(listExecutionSessionsForTask('parent-promote').length, 0);
+
+  claims.releaseTaskClaim('child-promote', { sessionId: 'parent-promote-owner', nextStatus: 'todo' });
+  assert.equal(getTask('parent-promote')?.status, 'in-progress');
+});
+
+test('same-session child claim reconciles parent drift without duplicate promotion logs', () => {
+  seedTask('parent-reconcile', ['src/ParentReconcile.ts'], undefined, 'DVF-0710');
+  seedTask('child-reconcile', ['src/ChildReconcile.ts'], 'parent-reconcile', 'DVF-0711');
+
+  const first = claims.claimTaskForSession('child-reconcile', { sessionId: 'parent-reconcile-owner', ownerLabel: 'Chat Parent Reconcile' });
+  const parentAfterFirst = getTask('parent-reconcile');
+  assert.equal(parentAfterFirst.status, 'in-progress');
+  const firstPromotionLogs = (parentAfterFirst.logs || []).filter((entry: any) => /active child/i.test(entry.message));
+  assert.equal(firstPromotionLogs.length, 1);
+
+  const same = claims.claimTaskForSession('child-reconcile', { sessionId: 'parent-reconcile-owner', ownerLabel: 'Chat Parent Reconcile' });
+  assert.equal(same.reused, true);
+  const parentAfterSame = getTask('parent-reconcile');
+  assert.equal((parentAfterSame.logs || []).filter((entry: any) => /active child/i.test(entry.message)).length, 1);
+
+  parentAfterSame.status = 'done';
+  parentAfterSame.updatedAt = new Date().toISOString();
+  saveTask(parentAfterSame);
+  claims.claimTaskForSession('child-reconcile', { sessionId: 'parent-reconcile-owner', ownerLabel: 'Chat Parent Reconcile' });
+  const repaired = getTask('parent-reconcile');
+  assert.equal(repaired.status, 'in-progress');
+  assert.equal((repaired.logs || []).filter((entry: any) => /active child/i.test(entry.message)).length, 2);
+  assert.equal(repaired.claim, undefined);
+});
+
+test('sibling child claims keep one stable parent promotion across review and done states', () => {
+  for (const [suffix, status] of [['a', 'ready-for-review'], ['b', 'done']] as const) {
+    const parentId = `parent-sibling-${suffix}`;
+    const firstChildId = `child-sibling-${suffix}-1`;
+    const secondChildId = `child-sibling-${suffix}-2`;
+    seedTask(parentId, [`src/ParentSibling${suffix}.ts`], undefined, suffix === 'a' ? 'DVF-0720' : 'DVF-0730');
+    seedTask(firstChildId, [`src/ChildSibling${suffix}1.ts`], parentId, suffix === 'a' ? 'DVF-0721' : 'DVF-0731');
+    seedTask(secondChildId, [`src/ChildSibling${suffix}2.ts`], parentId, suffix === 'a' ? 'DVF-0722' : 'DVF-0732');
+    const parent = getTask(parentId);
+    parent.status = status;
+    saveTask(parent);
+
+    claims.claimTaskForSession(firstChildId, { sessionId: `sibling-${suffix}-1`, ownerLabel: `Chat Sibling ${suffix}1` });
+    claims.claimTaskForSession(secondChildId, { sessionId: `sibling-${suffix}-2`, ownerLabel: `Chat Sibling ${suffix}2` });
+
+    const promoted = getTask(parentId);
+    assert.equal(promoted.status, 'in-progress');
+    assert.equal(promoted.claim, undefined);
+    assert.equal(listExecutionSessionsForTask(parentId).length, 0);
+    assert.equal((promoted.logs || []).filter((entry: any) => /active child/i.test(entry.message)).length, 1);
+  }
+});
+
 test('overlapping active target-file scope blocks while disjoint sibling scope can run in parallel', () => {
   assert.throws(
     () => claims.claimTaskForSession('task-b', { sessionId: 'chat-beta-scope', ownerKind: 'chat', ownerLabel: 'Chat B4' }),

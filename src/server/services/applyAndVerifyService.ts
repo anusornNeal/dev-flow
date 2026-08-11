@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { AppState } from '../types';
 import { editFilesBatch } from './fileEditBatchService';
 import { applyPreparedEditPlan } from './preparedEditService';
@@ -6,7 +7,6 @@ import {
   bindProjectCommandVerificationCandidate,
   describeProjectCommand,
   describeProjectCommandResourceProfile,
-  getProjectCommandExecutionIdentity,
   runProjectCommand,
   runProjectCommandAsync,
   type RunProjectCommandResult,
@@ -15,6 +15,7 @@ import { planVerification } from './verificationPlannerService';
 import { resolveProjectRoot } from './localFileService';
 import { createVerificationCandidate, releaseVerificationCandidate } from './verificationCandidateService';
 import { loadProjectVerificationImpactRules } from './projectCommandConfigService';
+import { createVerificationBatch, type VerificationBatchSnapshot } from './verificationBatchService';
 
 function projectScopeArgs(args: Record<string, any>) {
   return {
@@ -232,6 +233,21 @@ export async function applyAndVerifyAsync(
   const baseCandidate = plan.steps.length > 0 ? createVerificationCandidate(sourceRoot) : null;
   const candidatePreparationMs = Date.now() - candidatePreparationStartedAt;
   const verification: RunProjectCommandResult[] = [];
+  const batchCandidate = baseCandidate ? Object.freeze({
+    candidateId: baseCandidate.candidateId,
+    repoRevision: baseCandidate.repoRevision,
+    executionKey: createHash('sha256').update(JSON.stringify({
+      candidateId: baseCandidate.candidateId,
+      repoRevision: baseCandidate.repoRevision,
+      snapshotCommit: baseCandidate.snapshotCommit,
+      requiredChecks: plan.steps.map((step) => step.checkId),
+    })).digest('hex'),
+  }) : null;
+  const verificationBatch = batchCandidate
+    ? createVerificationBatch(batchCandidate, plan.steps.map((step) => step.checkId))
+    : null;
+  const completedVerification: Array<{ step: (typeof plan.steps)[number]; result: RunProjectCommandResult }> = [];
+  const expectedExecutionKeys = new Map<string, string>();
   const verificationStartedAt = Date.now();
   const verificationPerformance = () => ({
     ...summarizeVerificationPerformance(verificationStartedAt, verification),
@@ -255,6 +271,34 @@ export async function applyAndVerifyAsync(
     timeoutMs: args.timeoutMs,
     responseMode: args.responseMode ?? 'compact',
   });
+
+  const buildVerificationBatchSnapshot = (): VerificationBatchSnapshot | undefined => {
+    if (!verificationBatch || !batchCandidate) return undefined;
+    for (const { step, result } of completedVerification) {
+      const verifiedCandidate = result.verificationCandidate;
+      const expectedExecutionKey = expectedExecutionKeys.get(step.checkId);
+      const candidateCurrent = Boolean(
+        verifiedCandidate
+        && verifiedCandidate.candidateId === batchCandidate.candidateId
+        && verifiedCandidate.repoRevision === batchCandidate.repoRevision
+        && verifiedCandidate.current !== false
+        && expectedExecutionKey
+        && verifiedCandidate.executionKey === expectedExecutionKey
+      );
+      verificationBatch.recordResult({
+        checkId: step.checkId,
+        status: candidateCurrent ? (result.ok ? 'passed' : 'failed') : 'stale',
+        candidate: batchCandidate,
+      });
+    }
+    return verificationBatch.snapshot();
+  };
+
+  const staleCommandsForBatch = (snapshot: VerificationBatchSnapshot | undefined) => {
+    if (!snapshot || snapshot.stale.length === 0) return [] as string[];
+    const stale = new Set(snapshot.stale);
+    return Array.from(new Set(completedVerification.flatMap(({ step }) => stale.has(step.checkId) ? [step.command] : [])));
+  };
 
   const permitDemandForStep = (step: (typeof plan.steps)[number]): VerificationPermitDemand => {
     const profile = describeProjectCommandResourceProfile(state, commandArgs(step.command));
@@ -285,6 +329,7 @@ export async function applyAndVerifyAsync(
     const boundCandidate = baseCandidate
       ? bindProjectCommandVerificationCandidate(state, stepArgs, baseCandidate)
       : null;
+    if (boundCandidate) expectedExecutionKeys.set(step.checkId, boundCandidate.executionIdentity.key);
     return verificationExecutionLease.runWithPermit(permitDemandForStep(step), async () => {
       let cancelFn: (() => void) | undefined;
       try {
@@ -312,33 +357,48 @@ export async function applyAndVerifyAsync(
 
     for (const stageId of stageIds) {
       const stageSteps = plan.steps.filter((step) => (Number.isFinite(step.stage) ? Number(step.stage) : 0) === stageId);
-      const inferredResourceKeys = stageSteps
-        .filter((step) => step.parallelGroup !== 'isolated')
-        .map((step) => step.resourceKey)
-        .filter((value): value is string => Boolean(value));
-      const resourceSafe = stageSteps.every((step) => step.parallelGroup === 'isolated' || Boolean(step.resourceKey && step.resourceKey !== 'repo'));
-      const inferredResourcesDistinct = new Set(inferredResourceKeys).size === inferredResourceKeys.length;
-      const canParallelizeStage = stageSteps.length > 1 && resourceSafe && inferredResourcesDistinct;
+      const claimedResources = stageSteps.flatMap((step) => {
+        if (step.parallelGroup === 'isolated') return [] as string[];
+        if (step.sharedResources?.length) return step.sharedResources;
+        if (step.resourceKey) return [step.resourceKey];
+        return ['repo'];
+      });
+      const resourceSafe = stageSteps.every((step) => {
+        if (step.parallelGroup === 'isolated') return true;
+        const resources = step.sharedResources?.length ? step.sharedResources : step.resourceKey ? [step.resourceKey] : ['repo'];
+        return resources.length > 0 && !resources.includes('repo');
+      });
+      const resourcesDistinct = new Set(claimedResources).size === claimedResources.length;
+      const canParallelizeStage = stageSteps.length > 1 && resourceSafe && resourcesDistinct;
 
       if (canParallelizeStage) {
         parallelVerification = true;
-        for (let offset = 0; offset < stageSteps.length; offset += 4) {
-          const batch = stageSteps.slice(offset, offset + 4);
-          const results = await Promise.all(batch.map(runStep));
-          verification.push(...results);
-          const failed = results.find((result) => !result.ok);
-          if (failed) {
-            return {
-              ok: false,
-              status: failed.timedOut ? 'verification_timed_out' as const : 'verification_failed' as const,
-              edit,
-              plan,
-              diff,
-              verification,
-              parallelVerification,
-              verificationPerformance: verificationPerformance(),
-            };
-          }
+        const results = await Promise.all(stageSteps.map(runStep));
+        verification.push(...results);
+        completedVerification.push(...results.map((result, index) => ({ step: stageSteps[index], result })));
+        const failed = results.find((result) => !result.ok);
+        if (failed) {
+          const verificationBatchSnapshot = buildVerificationBatchSnapshot();
+          const staleVerificationCommands = staleCommandsForBatch(verificationBatchSnapshot);
+          return {
+            ok: false,
+            status: staleVerificationCommands.length > 0
+              ? 'verification_stale' as const
+              : failed.timedOut
+                ? 'verification_timed_out' as const
+                : 'verification_failed' as const,
+            edit,
+            plan,
+            diff,
+            verification,
+            verificationBatch: verificationBatchSnapshot,
+            staleVerificationCommands,
+            failingVerificationChecks: verificationBatchSnapshot
+              ? [...verificationBatchSnapshot.failed, ...verificationBatchSnapshot.stale]
+              : [],
+            parallelVerification,
+            verificationPerformance: verificationPerformance(),
+          };
         }
         continue;
       }
@@ -346,14 +406,26 @@ export async function applyAndVerifyAsync(
       for (const step of stageSteps) {
         const result = await runStep(step);
         verification.push(result);
+        completedVerification.push({ step, result });
         if (!result.ok) {
+          const verificationBatchSnapshot = buildVerificationBatchSnapshot();
+          const staleVerificationCommands = staleCommandsForBatch(verificationBatchSnapshot);
           return {
             ok: false,
-            status: result.timedOut ? 'verification_timed_out' as const : 'verification_failed' as const,
+            status: staleVerificationCommands.length > 0
+              ? 'verification_stale' as const
+              : result.timedOut
+                ? 'verification_timed_out' as const
+                : 'verification_failed' as const,
             edit,
             plan,
             diff,
             verification,
+            verificationBatch: verificationBatchSnapshot,
+            staleVerificationCommands,
+            failingVerificationChecks: verificationBatchSnapshot
+              ? [...verificationBatchSnapshot.failed, ...verificationBatchSnapshot.stale]
+              : [],
             parallelVerification,
             verificationPerformance: verificationPerformance(),
           };
@@ -361,22 +433,22 @@ export async function applyAndVerifyAsync(
       }
     }
 
-    const staleVerificationCommands = Array.from(new Set(verification.flatMap((result) => {
-      const verifiedCandidate = result.verificationCandidate;
-      if (!verifiedCandidate) return [];
-      const currentIdentity = getProjectCommandExecutionIdentity(state, commandArgs(result.command));
-      return currentIdentity?.key === verifiedCandidate.executionKey ? [] : [result.command];
-    })));
-    if (staleVerificationCommands.length > 0) {
+    const verificationBatchSnapshot = buildVerificationBatchSnapshot();
+    const staleVerificationCommands = staleCommandsForBatch(verificationBatchSnapshot);
+    if (!verificationBatchSnapshot?.canComplete) {
       return {
         ok: false,
-        status: 'verification_stale' as const,
+        status: staleVerificationCommands.length > 0 ? 'verification_stale' as const : 'verification_incomplete' as const,
         noChanges,
         edit,
         plan,
         diff,
         verification,
+        verificationBatch: verificationBatchSnapshot,
         staleVerificationCommands,
+        failingVerificationChecks: verificationBatchSnapshot
+          ? [...verificationBatchSnapshot.failed, ...verificationBatchSnapshot.stale, ...verificationBatchSnapshot.pending]
+          : [],
         parallelVerification,
         verificationPerformance: verificationPerformance(),
       };
@@ -390,6 +462,9 @@ export async function applyAndVerifyAsync(
       plan,
       diff,
       verification,
+      verificationBatch: verificationBatchSnapshot,
+      staleVerificationCommands: [] as string[],
+      failingVerificationChecks: [] as string[],
       parallelVerification,
       verificationPerformance: verificationPerformance(),
     };

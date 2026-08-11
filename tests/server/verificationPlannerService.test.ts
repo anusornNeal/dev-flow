@@ -259,3 +259,18 @@ test('TDD policy exposes authored-test and GREEN-required transition states', ()
   assert.equal(greenRequired.tdd.greenRequired, true);
   assert.equal(greenRequired.tdd.canIntegrate, false);
 });
+
+test('planner assigns stable required GREEN check identities to selected steps', () => {
+  const plan = planVerification({
+    changedFiles: ['src/service.ts'],
+    requestedLane: 'safe',
+    requestedCommands: ['typecheck', 'lint'],
+    resolvedCommands: [
+      { command: 'typecheck', semanticKey: 'tsc', scope: 'broad', cost: 'medium', resourceKey: 'typescript' },
+      { command: 'lint', semanticKey: 'eslint', scope: 'targeted', cost: 'low', resourceKey: 'eslint' },
+    ],
+  });
+
+  assert.deepEqual(plan.steps.map((step: any) => step.checkId).sort(), ['green:eslint', 'green:tsc']);
+  assert.equal(new Set(plan.steps.map((step: any) => step.checkId)).size, plan.steps.length);
+});

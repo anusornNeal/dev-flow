@@ -67,6 +67,7 @@ export type VerificationPlanInput = {
 };
 
 export type VerificationPlanStep = {
+  checkId: string;
   command: string;
   parallelGroup?: string;
   semanticKey?: string;
@@ -394,6 +395,7 @@ export function planVerification(input: VerificationPlanInput): VerificationPlan
       ? 'Selected by configured change-impact mapping.'
       : undefined;
     return {
+      checkId: `green:${descriptor?.semanticKey || command}`,
       command,
       ...(isolated.has(command) ? { parallelGroup: 'isolated' } : {}),
       ...(descriptor ? {

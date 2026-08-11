@@ -119,6 +119,11 @@ test('applyAndVerifyAsync runs resource-safe targeted verification commands conc
   assert.equal(typeof result.verificationPerformance?.candidatePreparationMs, 'number');
   assert.equal(elapsedMs >= verificationWallMs, true, 'end-to-end elapsed time should include candidate preparation');
   assert.equal(result.verificationPerformance?.processSpawns, 2);
+  assert.equal(result.verificationBatch?.canComplete, true);
+  assert.equal(result.verificationBatch?.requiredChecks.length, 2);
+  assert.equal(result.verificationBatch?.passed.length, 2);
+  assert.equal(result.verificationBatch?.pending.length, 0);
+  assert.equal(result.verification.every((entry: any) => entry.verificationCandidate?.candidateId === result.verificationBatch?.candidate.candidateId), true);
 });
 
 test('applyAndVerifyAsync routes every parallel child through the scheduler verification governor', async () => {
@@ -253,6 +258,9 @@ test('applyAndVerifyAsync fails cheap prerequisite before launching a later isol
   assert.equal(result.ok, false);
   assert.equal(result.verification[0]?.command, 'typecheck');
   assert.equal(fs.existsSync(expensiveCounter), false, 'later expensive stage must not launch after prerequisite failure');
+  assert.equal(result.verificationBatch?.canComplete, false);
+  assert.equal(result.verificationBatch?.failed.length, 1);
+  assert.equal(result.verificationBatch?.pending.length, 1);
 });
 
 test('applyAndVerifyAsync preserves candidate A evidence but rejects it as current after workspace advances to B', async () => {
@@ -289,6 +297,9 @@ test('applyAndVerifyAsync preserves candidate A evidence but rejects it as curre
   assert.match(result.verification[0]?.stdout || '', /value = 5/);
   assert.equal(result.verification[0]?.verificationCandidate?.current, false);
   assert.deepEqual(result.staleVerificationCommands, ['test']);
+  assert.equal(result.verificationBatch?.canComplete, false);
+  assert.equal(result.verificationBatch?.stale.length, 1);
+  assert.equal(result.verificationBatch?.failed.length, 0);
 });
 
 test('applyAndVerify keeps edit, diff and verification on the requested managed workspace', () => {

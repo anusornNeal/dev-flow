@@ -87,10 +87,15 @@ test('all maintained DevFlow skills avoid stale tool namespaces and direct manag
 
 test('skill router keeps ambiguous DevFlow visual intents in DevFlow and image generation explicit opt-in', () => {
   const content = fs.readFileSync(new URL('../../skills/00-skill-router.md', import.meta.url), 'utf8');
-  assert.match(content, /UI preview, mockup, concept, redesign, layout/i);
+  assert.match(content, /UI preview/i);
+  assert.match(content, /mockup/i);
+  assert.match(content, /concept/i);
+  assert.match(content, /redesign/i);
+  assert.match(content, /layout/i);
   assert.match(content, /stay in DevFlow/i);
-  assert.match(content, /real repository work and DevFlow preview\/evidence/i);
-  assert.match(content, /External image generation is explicit opt-in only/i);
+  assert.match(content, /real repository work/i);
+  assert.match(content, /DevFlow preview\/evidence/i);
+  assert.match(content, /Image generation is explicit opt-in only/i);
   assert.match(content, /mockup.*not image-generation intent/i);
 });
 

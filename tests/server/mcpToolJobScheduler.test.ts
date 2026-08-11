@@ -316,6 +316,52 @@ test('same shared verification resource serializes while independent resource cl
   decrementScheduledResource(active);
 });
 
+test('independent verification permits sharing one scheduler resource can fill configured capacity', () => {
+  resetSchedulerResourceStateForTests();
+  setGlobalVerifyCapacityForTests(3);
+  const activeA = entry({
+    jobId: 'green-a',
+    resourceKey: 'workspace:green',
+    accessMode: 'verify',
+    costClass: 'verify',
+    kind: 'repo-command',
+    toolName: 'run_project_command',
+    verificationClass: 'fast',
+    sharedResources: ['project:a:test-a'],
+  });
+  const activeB = entry({
+    jobId: 'green-b',
+    resourceKey: 'workspace:green',
+    accessMode: 'verify',
+    costClass: 'verify',
+    kind: 'repo-command',
+    toolName: 'run_project_command',
+    verificationClass: 'fast',
+    sharedResources: ['project:a:test-b'],
+  });
+  incrementScheduledResource(activeA);
+  incrementScheduledResource(activeB);
+
+  const queued = entry({
+    jobId: 'green-c',
+    resourceKey: 'workspace:green',
+    accessMode: 'verify',
+    costClass: 'verify',
+    kind: 'repo-command',
+    toolName: 'run_project_command',
+    verificationClass: 'fast',
+    sharedResources: ['project:a:test-c'],
+  });
+
+  assert.equal(getSchedulerCapacitySnapshot().verify.active, 2);
+  assert.equal(getBlockerForQueueEntry(queued, 0, [queued], [activeA, activeB]), null);
+  incrementScheduledResource(queued);
+  assert.equal(getSchedulerCapacitySnapshot().verify.active, 3);
+  decrementScheduledResource(queued);
+  decrementScheduledResource(activeB);
+  decrementScheduledResource(activeA);
+});
+
 test('same fast verification resource consumes its own capacity pool', () => {
   resetSchedulerResourceStateForTests();
   setGlobalVerifyCapacityForTests(2);

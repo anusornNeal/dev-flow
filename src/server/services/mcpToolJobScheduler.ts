@@ -550,13 +550,12 @@ export function getBlockerForQueueEntry(
   }
 
   if (entry.costClass === 'verify') {
-    const processBlocker = getVerificationProcessPermitBlocker({
+    return getVerificationProcessPermitBlocker({
       jobId: entry.jobId,
       verificationClass: verificationClassForEntry(entry),
       sharedResources: entry.sharedResources,
       resourceDemand: entry.verificationDemand,
     });
-    if (processBlocker) return processBlocker;
   }
 
   const stats = activeResources.get(entry.resourceKey);

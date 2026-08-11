@@ -21,22 +21,25 @@ Preview before mutation when practical.
 - Apply only the returned prepared plan. If source changes or a plan expires/is consumed, re-read and re-prepare instead of replaying it.
 - Use `edit_local_files_batch` as the guarded structured fallback when compact edits are unsuitable.
 - Use `write_local_file` for new files or intentional full-file replacements when that is clearer and bounded.
-- Use `apply_and_verify` when its supported edit path can safely combine mutation, diff capture, and risk-aware verification.
+- Reserve `apply_and_verify` for the final GREEN pass when it can serve as that single planned verification execution; do not use it during implementation because it would add an intermediate test run.
 
 Revision and hash guards are authoritative. Do not retry the same failed write payload unchanged; inspect the error and change the source revision, anchor, target, payload, or tool strategy.
 
-## Test-first implementation
-For behavior changes and bug fixes, author focused tests before implementation when the repository and task make automated regression proof practical. Run a focused RED check when the failure is meaningful or repository/task TDD policy requires it, then implement the smallest change that reaches GREEN.
+## Two-pass verification (test-first)
+For testable behavior changes and bug fixes, use exactly two planned verification executions: RED → IMPLEMENT → GREEN.
 
-Strict repository or task TDD policy overrides lighter defaults. Regardless of whether RED execution is practical, focused GREEN evidence for changed behavior is required before commit unless the task explicitly defines a different proof method.
+1. **RED** — before implementation, author or select the focused regression test that proves the requested behavior is missing or broken. Run it once and confirm it fails for the expected reason. This is the first planned test run.
+2. **IMPLEMENT** — implement the entire required scope to completion. Update code, tests, docs, generated artifacts, and checklist-related implementation as needed. During this phase, do not run tests, builds, lint, `apply_and_verify`, or other verification commands. Static inspection, diffs, and guarded edits are allowed.
+3. **GREEN** — only after implementation is complete, run one fresh risk-appropriate verification command. This is the second planned test run and it must cover the RED regression plus the task's required acceptance criteria.
 
-## Smart verification
-Use the smallest risk-appropriate verification lane while iterating:
-- **FAST** — focused deterministic checks for low-risk local changes.
+No intermediate verification is part of the normal flow. The planned test budget is two verification executions: RED then GREEN. If the final GREEN fails or infrastructure interrupts it, keep the task in progress, fix from the available failure evidence, and rerun only the minimum recovery GREEN needed; recovery reruns are exceptions, not an iterative test loop.
+
+Choose the final GREEN scope by risk:
+- **FAST** — focused deterministic checks for low-risk leaf/local changes.
 - **SAFE** — broader targeted checks for shared contracts, cross-file behavior, or higher-risk changes.
-- **FULL** — repository-wide or milestone verification when project policy, risk, or final integration requires it.
+- **FULL** — repository-wide verification only when project policy, parent/integration completion, or milestone risk requires it.
 
-Do not delete meaningful checks merely to reduce runtime. Record what each check proves. Reuse valid deterministic evidence during iteration only when freshness rules allow it; use fresh final evidence when the closing gate requires it.
+Do not delete meaningful checks merely to reduce runtime. Record what the RED and GREEN checks prove, and use fresh final evidence when the closing gate requires it.
 
 ## Async tool completion
 When an async DevFlow operation returns a durable job id, call `get_tool_job_result` with a bounded wait and continue polling in the same assistant turn until terminal while the tool surface remains available. If connectivity disappears, preserve the job id and recover it after reconnect rather than replaying the mutation.

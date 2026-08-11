@@ -147,9 +147,10 @@ test('07 owns implementation, verification, task workspace lifecycle, and termin
   ]) {
     assert.match(executionSkill, new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'), `07 should own ${token}`);
   }
-  assert.match(executionSkill, /FAST/);
-  assert.match(executionSkill, /SAFE/);
-  assert.match(executionSkill, /FULL/);
+  assert.match(executionSkill, /Two-pass verification/i);
+  assert.match(executionSkill, /RED[\s\S]*implement[\s\S]*GREEN/i);
+  assert.match(executionSkill, /exactly two|two verification executions/i);
+  assert.match(executionSkill, /no intermediate|do not run[^\n]*intermediate/i);
   assert.match(executionSkill, /tests?.*before.*implementation|test-first|TDD/i);
   assert.match(executionSkill, /prefer `finalize_task_workspace`|preferred terminal/i);
   assert.match(executionSkill, /integrate_workspace.*fallback|fallback.*integrate_workspace/i);
@@ -185,6 +186,8 @@ test('runtime execution prompt stays narrow and worker-focused', () => {
   assert.match(executionRules, /Fetch DevFlow context only when needed, but do not guess task requirements/);
   assert.match(executionRules, /get_tool_job_result/);
   assert.match(executionRules, /same assistant turn/i);
+  assert.match(executionRules, /RED[\s\S]*IMPLEMENT[\s\S]*GREEN/i);
+  assert.match(executionRules, /without intermediate tests|no intermediate/i);
   assert.match(executionRules, /Work only on this current task and stop when it is complete/);
   assert.doesNotMatch(executionRules, /01-authoring-core|02-schema-reference|03-reviewer-core|open_task_bug/);
 });

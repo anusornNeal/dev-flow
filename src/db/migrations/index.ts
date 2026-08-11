@@ -15,6 +15,7 @@ import { projectGitWorkflowPolicyMigration } from './013-project-git-workflow-po
 import { mcpLatencyTelemetryMigration } from './014-mcp-latency-telemetry.js';
 import { mcpToolJobVerificationLifecycleMigration } from './015-mcp-tool-job-verification-lifecycle.js';
 import { uiPreviewsMigration } from './016-ui-previews.js';
+import { uiPreviewObjectStorageMigration } from './017-ui-preview-object-storage.js';
 import db from '../index.js';
 
 export const DEVFLOW_MIGRATIONS = [
@@ -34,6 +35,7 @@ export const DEVFLOW_MIGRATIONS = [
   mcpLatencyTelemetryMigration,
   mcpToolJobVerificationLifecycleMigration,
   uiPreviewsMigration,
+  uiPreviewObjectStorageMigration,
 ] as const;
 
 export function executeAllMigrations() {

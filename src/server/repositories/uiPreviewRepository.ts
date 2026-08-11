@@ -1,4 +1,7 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import { brotliCompressSync, brotliDecompressSync } from 'node:zlib';
 import db from '../../db/index.js';
 import type { JsonValue, UiPreviewRecord, UiPreviewRevision, UiPreviewViewport, UiSpecV1 } from '../domain/uiPreview.js';
 import {
@@ -8,11 +11,21 @@ import {
   UiPreviewRevisionConflictError,
   UiPreviewTaskConflictError,
 } from '../domain/uiPreview.js';
+import { createUiPreviewObjectMetadataRepository } from './uiPreviewObjectMetadataRepository.js';
+import { createUiPreviewSourceObjectStore, type UiPreviewSourceObjectStore } from '../services/uiPreviewSourceObjectStore.js';
 import { publishServerEvent } from '../services/serverEventService.js';
 
 export const UI_PREVIEW_HASH_SCHEMA_VERSION = 1;
 
+const LEGACY_SOURCE_SENTINEL = '';
+const LEGACY_SPEC_SENTINEL = '{}';
+
 type DatabaseLike = any;
+
+export interface UiPreviewRepositoryOptions {
+  database?: DatabaseLike;
+  sourceStore?: UiPreviewSourceObjectStore;
+}
 
 function nowIso() {
   return new Date().toISOString();
@@ -39,8 +52,8 @@ export function stableJsonStringify(value: unknown) {
   return JSON.stringify(stableJsonValue(value));
 }
 
-function sha256(value: string) {
-  return createHash('sha256').update(value, 'utf8').digest('hex');
+function sha256(value: string | Uint8Array) {
+  return createHash('sha256').update(value).digest('hex');
 }
 
 export function fingerprintCanonicalRequest(value: unknown) {
@@ -82,7 +95,7 @@ function parsePreview(row: any): UiPreviewRecord | null {
   };
 }
 
-function parseRevision(row: any): UiPreviewRevision | null {
+function parseLegacyRevision(row: any): UiPreviewRevision | null {
   if (!row) return null;
   return {
     previewId: row.preview_id,
@@ -156,7 +169,18 @@ function decodeListCursor(value?: string | null) {
   }
 }
 
-export function createUiPreviewRepository(database: DatabaseLike = db) {
+function resolveRepositoryOptions(databaseOrOptions: DatabaseLike | UiPreviewRepositoryOptions) {
+  if (databaseOrOptions && typeof databaseOrOptions.prepare === 'function' && typeof databaseOrOptions.transaction === 'function') {
+    return { database: databaseOrOptions as DatabaseLike } satisfies UiPreviewRepositoryOptions;
+  }
+  return (databaseOrOptions || {}) as UiPreviewRepositoryOptions;
+}
+
+export function createUiPreviewRepository(databaseOrOptions: DatabaseLike | UiPreviewRepositoryOptions = db) {
+  const options = resolveRepositoryOptions(databaseOrOptions);
+  const database = options.database ?? db;
+  const sourceStore = options.sourceStore ?? createUiPreviewSourceObjectStore();
+  const metadataRepository = createUiPreviewObjectMetadataRepository(database);
   const transaction = <T>(work: () => T): T => database.transaction(work)();
 
   function getPreview(previewId: string) {
@@ -167,6 +191,93 @@ export function createUiPreviewRepository(database: DatabaseLike = db) {
     const preview = getPreview(previewId);
     if (!preview) throw new UiPreviewNotFoundError(previewId);
     return preview;
+  }
+
+  function readSourceObject(objectHash: string) {
+    const metadata = metadataRepository.getObjectMetadata(objectHash);
+    if (!metadata || metadata.kind !== 'source' || metadata.codec !== 'br') {
+      throw new UiPreviewError('UI_PREVIEW_STORAGE_OBJECT_INVALID', `UI preview source object metadata '${objectHash}' is missing or invalid.`);
+    }
+    try {
+      const absolutePath = sourceStore.resolveObjectPath(objectHash);
+      const stored = fs.readFileSync(absolutePath);
+      if (stored.byteLength !== metadata.storedBytes) {
+        throw new Error(`stored byte count ${stored.byteLength} does not match metadata ${metadata.storedBytes}`);
+      }
+      const raw = Buffer.from(brotliDecompressSync(stored));
+      if (raw.byteLength !== metadata.rawBytes || sha256(raw) !== objectHash) {
+        throw new Error('raw bytes do not match immutable object metadata');
+      }
+      return raw.toString('utf8');
+    } catch (error) {
+      throw new UiPreviewError(
+        'UI_PREVIEW_STORAGE_OBJECT_INVALID',
+        `UI preview source object '${objectHash}' could not be reconstructed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  function persistSourceObject(value: string) {
+    const raw = Buffer.from(value, 'utf8');
+    const objectHash = sha256(raw);
+    const absolutePath = sourceStore.resolveObjectPath(objectHash);
+    if (!fs.existsSync(absolutePath)) {
+      const stored = brotliCompressSync(raw);
+      fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
+      const tempPath = `${absolutePath}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+      try {
+        fs.writeFileSync(tempPath, stored, { flag: 'wx' });
+        try {
+          fs.renameSync(tempPath, absolutePath);
+        } catch (error) {
+          if (!fs.existsSync(absolutePath)) throw error;
+        }
+      } finally {
+        fs.rmSync(tempPath, { force: true });
+      }
+    }
+
+    const stored = fs.readFileSync(absolutePath);
+    const verifiedRaw = Buffer.from(brotliDecompressSync(stored));
+    if (sha256(verifiedRaw) !== objectHash || !verifiedRaw.equals(raw)) {
+      throw new UiPreviewError('UI_PREVIEW_STORAGE_OBJECT_INVALID', `Existing UI preview source object '${objectHash}' failed integrity verification.`);
+    }
+    metadataRepository.insertOrVerifyObjectMetadata({
+      objectHash,
+      kind: 'source',
+      codec: 'br',
+      rawBytes: raw.byteLength,
+      storedBytes: stored.byteLength,
+    });
+    return objectHash;
+  }
+
+  function persistRevisionObjects(input: Pick<CreatePreviewRevisionInput, 'html' | 'css' | 'js' | 'spec'>) {
+    return {
+      htmlObjectHash: persistSourceObject(input.html),
+      cssObjectHash: persistSourceObject(input.css),
+      jsObjectHash: persistSourceObject(input.js),
+      specObjectHash: persistSourceObject(stableJsonStringify(input.spec)),
+    };
+  }
+
+  function parseRevision(row: any): UiPreviewRevision | null {
+    if (!row) return null;
+    const manifest = metadataRepository.getRevisionManifest(String(row.preview_id), Number(row.revision));
+    if (!manifest) return parseLegacyRevision(row);
+    const specJson = readSourceObject(manifest.specObjectHash);
+    return {
+      previewId: row.preview_id,
+      revision: Number(row.revision),
+      title: row.title ?? null,
+      html: readSourceObject(manifest.htmlObjectHash),
+      css: readSourceObject(manifest.cssObjectHash),
+      js: readSourceObject(manifest.jsObjectHash),
+      spec: JSON.parse(specJson),
+      viewport: JSON.parse(row.viewport_json),
+      contentHash: row.content_hash,
+      createdAt: row.created_at,
+    };
   }
 
   function getRevision(previewId: string, revision?: number) {
@@ -180,28 +291,56 @@ export function createUiPreviewRepository(database: DatabaseLike = db) {
     return parseRevision(row);
   }
 
+  function insertManifestBackedRevision(input: {
+    previewId: string;
+    revision: number;
+    title: string | null;
+    viewport: UiPreviewViewport;
+    contentHash: string;
+    createdAt: string;
+    objectHashes: ReturnType<typeof persistRevisionObjects>;
+  }) {
+    database.prepare(`
+      INSERT INTO ui_preview_revisions
+        (preview_id, revision, title, html, css, js, spec_json, viewport_json, content_hash, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      input.previewId,
+      input.revision,
+      input.title,
+      LEGACY_SOURCE_SENTINEL,
+      LEGACY_SOURCE_SENTINEL,
+      LEGACY_SOURCE_SENTINEL,
+      LEGACY_SPEC_SENTINEL,
+      JSON.stringify(input.viewport),
+      input.contentHash,
+      input.createdAt,
+    );
+    metadataRepository.insertOrVerifyRevisionManifest({
+      previewId: input.previewId,
+      revision: input.revision,
+      ...input.objectHashes,
+      createdAt: input.createdAt,
+    });
+  }
+
   function createPreview(input: CreatePreviewRevisionInput) {
+    const createdAt = input.createdAt || nowIso();
+    const objectHashes = persistRevisionObjects(input);
     const preview = transaction(() => {
-      const createdAt = input.createdAt || nowIso();
       database.prepare(`
         INSERT INTO ui_previews (id, task_id, latest_revision, created_at, updated_at)
         VALUES (?, ?, 1, ?, ?)
       `).run(input.id, input.taskId, createdAt, createdAt);
-      database.prepare(`
-        INSERT INTO ui_preview_revisions
-          (preview_id, revision, title, html, css, js, spec_json, viewport_json, content_hash, created_at)
-        VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        input.id,
-        input.title,
-        input.html,
-        input.css,
-        input.js,
-        JSON.stringify(input.spec),
-        JSON.stringify(input.viewport),
-        input.contentHash,
+      insertManifestBackedRevision({
+        previewId: input.id,
+        revision: 1,
+        title: input.title,
+        viewport: input.viewport,
+        contentHash: input.contentHash,
         createdAt,
-      );
+        objectHashes,
+      });
       return requirePreview(input.id);
     });
     publishServerEvent('ui-preview.changed', { entityId: input.id, reason: 'created' });
@@ -209,6 +348,17 @@ export function createUiPreviewRepository(database: DatabaseLike = db) {
   }
 
   function appendRevision(input: AppendPreviewRevisionInput) {
+    const previewBefore = requirePreview(input.previewId);
+    if (input.expectedRevision !== undefined && input.expectedRevision !== previewBefore.latestRevision) {
+      throw new UiPreviewRevisionConflictError(input.previewId, input.expectedRevision, previewBefore.latestRevision);
+    }
+    const currentBefore = getRevision(input.previewId, previewBefore.latestRevision);
+    if (!currentBefore) throw new UiPreviewNotFoundError(input.previewId);
+    if (currentBefore.contentHash === input.contentHash) {
+      return { changed: false as const, preview: previewBefore, revision: currentBefore };
+    }
+
+    const objectHashes = persistRevisionObjects(input);
     const result = transaction(() => {
       const preview = requirePreview(input.previewId);
       if (input.expectedRevision !== undefined && input.expectedRevision !== preview.latestRevision) {
@@ -221,28 +371,72 @@ export function createUiPreviewRepository(database: DatabaseLike = db) {
       }
       const nextRevision = preview.latestRevision + 1;
       const createdAt = input.createdAt || nowIso();
-      database.prepare(`
-        INSERT INTO ui_preview_revisions
-          (preview_id, revision, title, html, css, js, spec_json, viewport_json, content_hash, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        input.previewId,
-        nextRevision,
-        input.title,
-        input.html,
-        input.css,
-        input.js,
-        JSON.stringify(input.spec),
-        JSON.stringify(input.viewport),
-        input.contentHash,
+      insertManifestBackedRevision({
+        previewId: input.previewId,
+        revision: nextRevision,
+        title: input.title,
+        viewport: input.viewport,
+        contentHash: input.contentHash,
         createdAt,
-      );
+        objectHashes,
+      });
       database.prepare('UPDATE ui_previews SET latest_revision = ?, updated_at = ? WHERE id = ?')
         .run(nextRevision, createdAt, input.previewId);
       return { changed: true as const, preview: requirePreview(input.previewId), revision: getRevision(input.previewId, nextRevision)! };
     });
     if (result.changed) publishServerEvent('ui-preview.changed', { entityId: input.previewId, reason: 'updated' });
     return result;
+  }
+
+  function migrateLegacyRevisions() {
+    const rows = database.prepare(`
+      SELECT r.*
+      FROM ui_preview_revisions r
+      LEFT JOIN ui_preview_revision_manifests m
+        ON m.preview_id = r.preview_id AND m.revision = r.revision
+      WHERE m.preview_id IS NULL
+      ORDER BY r.preview_id, r.revision
+    `).all() as any[];
+    let migrated = 0;
+
+    for (const row of rows) {
+      const legacy = parseLegacyRevision(row);
+      if (!legacy) continue;
+      const objectHashes = persistRevisionObjects(legacy);
+      for (const objectHash of Object.values(objectHashes)) readSourceObject(objectHash);
+
+      transaction(() => {
+        if (metadataRepository.getRevisionManifest(legacy.previewId, legacy.revision)) return;
+        metadataRepository.insertOrVerifyRevisionManifest({
+          previewId: legacy.previewId,
+          revision: legacy.revision,
+          ...objectHashes,
+          createdAt: legacy.createdAt,
+        });
+        const reconstructed = parseRevision(row);
+        if (!reconstructed
+          || reconstructed.html !== legacy.html
+          || reconstructed.css !== legacy.css
+          || reconstructed.js !== legacy.js
+          || stableJsonStringify(reconstructed.spec) !== stableJsonStringify(legacy.spec)) {
+          throw new UiPreviewError('UI_PREVIEW_STORAGE_MIGRATION_VERIFY_FAILED', `UI preview '${legacy.previewId}' revision ${legacy.revision} failed source reconstruction verification.`);
+        }
+        database.prepare(`
+          UPDATE ui_preview_revisions
+          SET html = ?, css = ?, js = ?, spec_json = ?
+          WHERE preview_id = ? AND revision = ?
+        `).run(
+          LEGACY_SOURCE_SENTINEL,
+          LEGACY_SOURCE_SENTINEL,
+          LEGACY_SOURCE_SENTINEL,
+          LEGACY_SPEC_SENTINEL,
+          legacy.previewId,
+          legacy.revision,
+        );
+        migrated += 1;
+      });
+    }
+    return { scanned: rows.length, migrated };
   }
 
   function bindPreviewToTask(previewId: string, taskId: string, options: { publishEvent?: boolean } = {}) {
@@ -302,7 +496,6 @@ export function createUiPreviewRepository(database: DatabaseLike = db) {
         p.created_at,
         p.updated_at,
         r.title,
-        r.spec_json,
         t.id AS linked_task_id,
         t.displayId AS linked_task_display_id,
         t.title AS linked_task_title,
@@ -316,21 +509,24 @@ export function createUiPreviewRepository(database: DatabaseLike = db) {
     `).all(...params, limit + 1) as any[];
     const hasMore = rows.length > limit;
     const visible = rows.slice(0, limit);
-    const items = visible.map((row) => ({
-      previewId: String(row.preview_id),
-      taskId: row.task_id ?? null,
-      title: row.title ?? null,
-      specSummary: (JSON.parse(row.spec_json || '{}') as any)?.summary || {},
-      latestRevision: Number(row.latest_revision),
-      createdAt: String(row.created_at),
-      updatedAt: String(row.updated_at),
-      linkedTask: row.task_id && row.linked_task_id ? {
-        id: String(row.linked_task_id),
-        displayId: row.linked_task_display_id ?? null,
-        title: String(row.linked_task_title || row.linked_task_id),
-        projectId: row.linked_task_project_id ?? null,
-      } : null,
-    }));
+    const items = visible.map((row) => {
+      const revision = getRevision(String(row.preview_id), Number(row.latest_revision));
+      return {
+        previewId: String(row.preview_id),
+        taskId: row.task_id ?? null,
+        title: row.title ?? null,
+        specSummary: (revision?.spec.summary || {}) as UiSpecV1['summary'],
+        latestRevision: Number(row.latest_revision),
+        createdAt: String(row.created_at),
+        updatedAt: String(row.updated_at),
+        linkedTask: row.task_id && row.linked_task_id ? {
+          id: String(row.linked_task_id),
+          displayId: row.linked_task_display_id ?? null,
+          title: String(row.linked_task_title || row.linked_task_id),
+          projectId: row.linked_task_project_id ?? null,
+        } : null,
+      };
+    });
     const last = items.at(-1);
     return {
       items,
@@ -369,6 +565,7 @@ export function createUiPreviewRepository(database: DatabaseLike = db) {
   return {
     createPreview,
     appendRevision,
+    migrateLegacyRevisions,
     bindPreviewToTask,
     deleteStandalonePreview,
     getPreview,

@@ -63,6 +63,7 @@ function apiErrorForUiPreview(error: unknown) {
 export function registerUiPreviewRoutes(app: express.Express, _deps: ApiRouteDeps, overrides: UiPreviewRouteOverrides = {}) {
   const runtimePort = overrides.runtimePort ?? runtimePortFromApiBaseUrl;
   const previewRepository = createUiPreviewRepository();
+  if (!overrides.previewService && !overrides.evidenceService) previewRepository.migrateLegacyRevisions();
   const previewService = overrides.previewService ?? createUiPreviewService({ repository: previewRepository, runtimePort });
   const screenshotService = overrides.evidenceService ? null : createUiPreviewScreenshotService();
   const evidenceService = overrides.evidenceService ?? createTaskUiEvidenceService({

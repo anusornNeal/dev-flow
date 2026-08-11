@@ -22,6 +22,15 @@ Act as one cooperative board worker. Repeatedly take one eligible scope, complet
 11. If finalization returns `needs-recovery`, preserve the workspace and use `inspect_workspace_recovery`, `integrate_workspace`, conflict recovery, or explicit cleanup primitives as diagnostic/recovery fallbacks. Never force-clean ambiguous work.
 12. Refresh the board and repeat from step 1 until there is no eligible unclaimed work for this worker.
 
+## TDD verification policy
+
+- Tests are authored before implementation. Record this as the authored-test state before production changes begin.
+- RED-required means execute the focused failing test before implementation. It applies to high-risk changes, non-obvious defect reproduction, concurrency, persistence, Git, migration, security, strict-TDD repositories, and ordinary low/medium-risk work while verification capacity is available.
+- RED-deferred is allowed only for low/medium-risk work when the expected failure is structurally obvious and explicit verification resource pressure is saturated. Record the evidence as deferred; never report deferred RED as an executed failure.
+- After executed RED proof, the workflow is GREEN-required. A deferred RED path still carries the same GREEN gate.
+- Focused GREEN remains mandatory before commit, integration, task closure, or moving on to the next board card. Only successful focused GREEN reaches verified state.
+- Preserve repository/task strict-TDD overrides. Never use model self-assessed numeric confidence as a verification gate.
+
 ## Ownership and release
 
 - A claim is the source of truth for chat ownership; do not use the legacy card agent selector as a work claim.

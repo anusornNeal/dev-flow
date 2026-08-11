@@ -3,6 +3,31 @@ export type ExecutionLane = 'fast' | 'safe' | 'full';
 export type VerificationCommandScope = 'targeted' | 'broad' | 'full';
 export type VerificationCommandCost = 'low' | 'medium' | 'high';
 export type VerificationExecutionClass = 'fast' | 'heavy';
+export type VerificationRedProof = 'obvious' | 'non-obvious';
+export type VerificationResourcePressure = 'available' | 'saturated';
+export type VerificationTddState = 'authored-test' | 'red-required' | 'red-deferred' | 'green-required' | 'verified';
+export type VerificationRedDecision = 'required' | 'deferred';
+export type VerificationRedEvidence = 'not-run' | 'deferred' | 'failed-as-expected' | 'executed';
+
+export type VerificationTddInput = {
+  testAuthored?: boolean;
+  redProof?: VerificationRedProof;
+  resourcePressure?: VerificationResourcePressure;
+  strictTdd?: boolean;
+  redExecuted?: boolean;
+  redFailedAsExpected?: boolean;
+  greenPassed?: boolean;
+};
+
+export type VerificationTddPolicy = {
+  state: VerificationTddState;
+  redDecision: VerificationRedDecision;
+  redEvidence: VerificationRedEvidence;
+  greenRequired: boolean;
+  canIntegrate: boolean;
+  reasons: string[];
+};
+
 
 export type VerificationCommandDescriptor = {
   command: string;
@@ -38,6 +63,7 @@ export type VerificationPlanInput = {
   resolvedCommands?: VerificationCommandDescriptor[];
   resourceIsolatedCommands?: string[];
   impactRules?: VerificationImpactRule[];
+  tdd?: VerificationTddInput;
 };
 
 export type VerificationPlanStep = {
@@ -61,6 +87,7 @@ export type VerificationPlan = {
   requiresBroadVerify: boolean;
   reasons: string[];
   impact: VerificationImpactDecision;
+  tdd: VerificationTddPolicy;
 };
 
 const HIGH_RISK_PATHS = [
@@ -216,6 +243,82 @@ function evaluateImpact(
   };
 }
 
+export function planTddPolicy(risk: VerificationRisk, input: VerificationTddInput = {}): VerificationTddPolicy {
+  const reasons: string[] = [];
+  if (!input.testAuthored) {
+    return {
+      state: 'authored-test',
+      redDecision: 'required',
+      redEvidence: 'not-run',
+      greenRequired: true,
+      canIntegrate: false,
+      reasons: ['Author a focused test before implementation.'],
+    };
+  }
+
+  const redProof = input.redProof ?? 'non-obvious';
+  const resourcePressure = input.resourcePressure ?? 'available';
+  const redCanDefer = input.strictTdd !== true
+    && risk !== 'high'
+    && redProof === 'obvious'
+    && resourcePressure === 'saturated';
+  const redDecision: VerificationRedDecision = redCanDefer ? 'deferred' : 'required';
+
+  if (input.strictTdd === true) reasons.push('Strict TDD requires executed RED evidence.');
+  if (risk === 'high') reasons.push('High-risk work requires executed RED evidence.');
+  if (redProof === 'non-obvious') reasons.push('Non-obvious RED proof must be executed.');
+  if (resourcePressure === 'available') reasons.push('Verification capacity is available, so RED runs normally.');
+  if (redCanDefer) reasons.push('RED is deferred because proof is obvious and verification resources are saturated.');
+
+  const redEvidence: VerificationRedEvidence = input.redExecuted
+    ? (input.redFailedAsExpected ? 'failed-as-expected' : 'executed')
+    : redCanDefer
+      ? 'deferred'
+      : 'not-run';
+  const redSatisfied = redCanDefer || (input.redExecuted === true && input.redFailedAsExpected === true);
+  if (input.greenPassed === true && redSatisfied) {
+    return {
+      state: 'verified',
+      redDecision,
+      redEvidence,
+      greenRequired: false,
+      canIntegrate: true,
+      reasons: [...reasons, 'Focused GREEN passed.'],
+    };
+  }
+
+  if (redCanDefer) {
+    return {
+      state: 'red-deferred',
+      redDecision,
+      redEvidence,
+      greenRequired: true,
+      canIntegrate: false,
+      reasons,
+    };
+  }
+
+  if (redSatisfied) {
+    return {
+      state: 'green-required',
+      redDecision,
+      redEvidence,
+      greenRequired: true,
+      canIntegrate: false,
+      reasons,
+    };
+  }
+
+  return {
+    state: 'red-required',
+    redDecision,
+    redEvidence,
+    greenRequired: true,
+    canIntegrate: false,
+    reasons,
+  };
+}
+
 export function planVerification(input: VerificationPlanInput): VerificationPlan {
   const files = unique((input.changedFiles || []).map(normalizePath));
   const classification = classifyRisk(files);
@@ -224,6 +327,7 @@ export function planVerification(input: VerificationPlanInput): VerificationPlan
   const resolvedCommands = Array.isArray(input.resolvedCommands) ? input.resolvedCommands : [];
   const availableCommands = unique([...requestedCommands, ...resolvedCommands.map((entry) => entry.command)]);
   const impactEvaluation = evaluateImpact(files, normalizeImpactRules(input.impactRules), availableCommands, classification.risk);
+  const tdd = planTddPolicy(classification.risk, input.tdd);
   let lane: ExecutionLane = classification.risk === 'high' ? 'safe' : 'fast';
 
   if (impactEvaluation.mode === 'configured') {
@@ -333,5 +437,6 @@ export function planVerification(input: VerificationPlanInput): VerificationPlan
       selectedCommands: commands,
       omittedCommands,
     },
+    tdd,
   };
 }

@@ -177,3 +177,85 @@ test('repository verification impact mapping loads from declarative project conf
     reason: 'Service module mapping from repository config.',
   }]);
 });
+
+test('RED may defer only for low/medium risk with obvious proof under saturated resources', () => {
+  const low = planVerification({
+    changedFiles: ['README.md'],
+    tdd: { testAuthored: true, redProof: 'obvious', resourcePressure: 'saturated' },
+  });
+  assert.equal(low.tdd.state, 'red-deferred');
+  assert.equal(low.tdd.redDecision, 'deferred');
+  assert.equal(low.tdd.redEvidence, 'deferred');
+  assert.equal(low.tdd.canIntegrate, false);
+
+  const medium = planVerification({
+    changedFiles: ['src/service.ts'],
+    tdd: { testAuthored: true, redProof: 'obvious', resourcePressure: 'saturated' },
+  });
+  assert.equal(medium.risk, 'medium');
+  assert.equal(medium.tdd.state, 'red-deferred');
+});
+
+test('RED stays required when capacity is free, proof is non-obvious, risk is high, or strict TDD is enabled', () => {
+  const free = planVerification({
+    changedFiles: ['src/service.ts'],
+    tdd: { testAuthored: true, redProof: 'obvious', resourcePressure: 'available' },
+  });
+  assert.equal(free.tdd.state, 'red-required');
+
+  const nonObvious = planVerification({
+    changedFiles: ['src/service.ts'],
+    tdd: { testAuthored: true, redProof: 'non-obvious', resourcePressure: 'saturated' },
+  });
+  assert.equal(nonObvious.tdd.state, 'red-required');
+
+  const high = planVerification({
+    changedFiles: ['src/server/contracts/devflowContract.ts'],
+    tdd: { testAuthored: true, redProof: 'obvious', resourcePressure: 'saturated' },
+  });
+  assert.equal(high.risk, 'high');
+  assert.equal(high.tdd.state, 'red-required');
+
+  const strict = planVerification({
+    changedFiles: ['README.md'],
+    tdd: { testAuthored: true, redProof: 'obvious', resourcePressure: 'saturated', strictTdd: true },
+  });
+  assert.equal(strict.tdd.state, 'red-required');
+});
+
+test('focused GREEN remains mandatory before integration even when RED was deferred', () => {
+  const waitingForGreen = planVerification({
+    changedFiles: ['src/service.ts'],
+    tdd: { testAuthored: true, redProof: 'obvious', resourcePressure: 'saturated', greenPassed: false },
+  });
+  assert.equal(waitingForGreen.tdd.state, 'red-deferred');
+  assert.equal(waitingForGreen.tdd.greenRequired, true);
+  assert.equal(waitingForGreen.tdd.canIntegrate, false);
+
+  const verified = planVerification({
+    changedFiles: ['src/service.ts'],
+    tdd: { testAuthored: true, redProof: 'obvious', resourcePressure: 'saturated', greenPassed: true },
+  });
+  assert.equal(verified.tdd.state, 'verified');
+  assert.equal(verified.tdd.greenRequired, false);
+  assert.equal(verified.tdd.canIntegrate, true);
+});
+
+test('TDD policy exposes authored-test and GREEN-required transition states', () => {
+  const authored = planVerification({ changedFiles: ['src/service.ts'] });
+  assert.equal(authored.tdd.state, 'authored-test');
+
+  const greenRequired = planVerification({
+    changedFiles: ['src/service.ts'],
+    tdd: {
+      testAuthored: true,
+      redProof: 'non-obvious',
+      resourcePressure: 'available',
+      redExecuted: true,
+      redFailedAsExpected: true,
+    },
+  });
+  assert.equal(greenRequired.tdd.state, 'green-required');
+  assert.equal(greenRequired.tdd.greenRequired, true);
+  assert.equal(greenRequired.tdd.canIntegrate, false);
+});

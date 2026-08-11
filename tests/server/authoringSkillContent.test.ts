@@ -82,6 +82,13 @@ test('board-loop skill requires atomic claims, scope-aware parallel work, and fu
   assert.match(boardLoopSkill, /needs-recovery/);
   assert.match(boardLoopSkill, /repeat|loop/i);
   assert.match(boardLoopSkill, /Do not push/i);
+  assert.match(boardLoopSkill, /tests are authored before implementation/i);
+  assert.match(boardLoopSkill, /RED-required/i);
+  assert.match(boardLoopSkill, /RED-deferred/i);
+  assert.match(boardLoopSkill, /resource pressure/i);
+  assert.match(boardLoopSkill, /high-risk/i);
+  assert.match(boardLoopSkill, /Focused GREEN.*mandatory/i);
+  assert.doesNotMatch(boardLoopSkill, /confidence percentage|confidence score/i);
   assert.match(boardLoopSkill, /restart/i);
 });
 

@@ -180,6 +180,26 @@ test('GET /api/tasks modern summary defaults to a bounded page and preserves tot
   assert.equal(explicit.total, 120);
   assert.equal(explicit.limit, 120);
   assert.equal(Buffer.byteLength(responseText, 'utf8') < Buffer.byteLength(explicitText, 'utf8') * 0.6, true);
+  const fullResponse = await fetch(`${base}/api/tasks?mode=full&projectId=proj-search-paging`);
+  const full = await fullResponse.json() as { items: any[]; total: number; limit: number; mode: string };
+  assert.equal(full.items.length, 50);
+  assert.equal(full.total, 120);
+  assert.equal(full.limit, 50);
+  assert.equal(full.mode, 'full');
+
+  const debugResponse = await fetch(`${base}/api/tasks?mode=debug&projectId=proj-search-paging`);
+  const debug = await debugResponse.json() as { items: any[]; total: number; limit: number; mode: string };
+  assert.equal(debug.items.length, 50);
+  assert.equal(debug.total, 120);
+  assert.equal(debug.limit, 50);
+  assert.equal(debug.mode, 'debug');
+
+  const allResponse = await fetch(`${base}/api/tasks?mode=full&projectId=proj-search-paging&all=true`);
+  const all = await allResponse.json() as { items: any[]; total: number; limit: number; mode: string };
+  assert.equal(all.items.length, 120);
+  assert.equal(all.total, 120);
+  assert.equal(all.limit, 120);
+  assert.equal(all.mode, 'full');
 
 });
 

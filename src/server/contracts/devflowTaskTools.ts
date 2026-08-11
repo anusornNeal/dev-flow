@@ -36,7 +36,7 @@ export const taskToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'search_tasks',
-    description: 'Search or list local DevFlow tasks with optional query, parent, status, paging, and response-density filters. This is the single task-collection read intent for ChatGPT. Paged reads default to a bounded page of 50 items while preserving explicit full/debug reads.',
+    description: 'Search or list local DevFlow tasks with optional query, parent, status, paging, and response-density filters. This is the single task-collection read intent for ChatGPT. Every response-density mode defaults to a bounded page of 50 items; set all=true only when the caller explicitly needs the entire matching collection.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -44,8 +44,9 @@ export const taskToolDefinitions: DevFlowToolDefinition[] = [
         q: { type: 'string', description: 'Optional search query. Omit to list by the supplied filters.' },
         parentId: { type: 'string', description: 'Optional parent task identifier.' },
         status: { type: 'string', enum: VALID_STATUSES, description: 'Task status filter.' },
-        limit: { type: 'number', description: 'Max tasks returned. Defaults to 50 for paged search_tasks reads.' },
+        limit: { type: 'number', description: 'Max tasks returned. Defaults to 50 for search_tasks reads unless all=true is explicitly requested.' },
         offset: { type: 'number', description: 'Offset for pagination.' },
+        all: { type: 'boolean', description: 'Explicitly return the entire matching task collection when no limit is supplied. Use only when an all-task read is actually required.' },
         mode: { type: 'string', enum: ['minimal', 'summary', 'standard', 'full', 'debug'], description: 'Response density.' },
       },
     },
@@ -53,7 +54,7 @@ export const taskToolDefinitions: DevFlowToolDefinition[] = [
     lightweight: true,
     buildHttpRequest: (args) => {
       const mode = args.mode || 'summary';
-      const defaultLimit = mode === 'full' || mode === 'debug' ? undefined : 50;
+      const defaultLimit = args.all === true ? undefined : 50;
       return { method: 'GET', path: withQuery('/api/tasks', { ...args, mode, limit: args.limit ?? defaultLimit }) };
     },
   },

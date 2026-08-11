@@ -20,7 +20,7 @@ export function registerTaskReadRoutes(app: express.Express, deps: ApiRouteDeps)
     runThrottledStaleCleanup(deps);
     const req = _req as express.Request;
     const mode = parseTaskReadMode(req.query.mode, 'full');
-    const hasModernQuery = ['mode', 'projectId', 'projectName', 'repo', 'repoUrl', 'localPath', 'parentId', 'status', 'q', 'limit', 'offset', 'archived'].some((key) => req.query[key] !== undefined);
+    const hasModernQuery = ['mode', 'projectId', 'projectName', 'repo', 'repoUrl', 'localPath', 'parentId', 'status', 'q', 'limit', 'offset', 'archived', 'all'].some((key) => req.query[key] !== undefined);
     const boardArchive = mode === 'board' && req.query.archived !== 'true'
       ? archiveInactiveDoneTasks()
       : { archivedCount: 0, skipped: true };
@@ -43,7 +43,8 @@ export function registerTaskReadRoutes(app: express.Express, deps: ApiRouteDeps)
     if (!hasModernQuery) return res.json(getTasks());
     const offset = Number.isFinite(Number(req.query.offset)) ? Math.max(0, Number(req.query.offset)) : 0;
     const hasExplicitLimit = Number.isFinite(Number(req.query.limit));
-    const preserveUnboundedMode = mode === 'board' || mode === 'full' || mode === 'debug';
+    const explicitAll = req.query.all === 'true';
+    const preserveUnboundedMode = mode === 'board' || explicitAll;
     const limit = hasExplicitLimit
       ? Math.max(1, Math.min(500, Number(req.query.limit)))
       : preserveUnboundedMode

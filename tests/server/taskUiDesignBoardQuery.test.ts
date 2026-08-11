@@ -16,7 +16,7 @@ const { createTaskUiEvidenceRepository } = await import('../../src/server/reposi
 
 const previewRepository = createUiPreviewRepository(db as any);
 const evidenceRepository = createTaskUiEvidenceRepository(db as any);
-const spec = { schemaVersion: 1, summary: { screen: 'Board design' } };
+const spec = { schemaVersion: 1 as const, summary: { screen: 'Board design' } };
 const viewport = { width: 800, height: 600, deviceScaleFactor: 1 };
 
 test('board query exposes one lightweight hasUiDesign signal from current evidence', () => {

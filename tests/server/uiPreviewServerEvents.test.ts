@@ -14,7 +14,7 @@ const tasks = await import('../../src/server/repositories/taskRepository.js') as
 const { createUiPreviewRepository } = await import('../../src/server/repositories/uiPreviewRepository.js');
 
 const repository = createUiPreviewRepository();
-const spec = { schemaVersion: 1, summary: { screen: 'Event preview' } };
+const spec = { schemaVersion: 1 as const, summary: { screen: 'Event preview' } };
 const viewport = { width: 800, height: 600, deviceScaleFactor: 1 };
 
 function collectEvents() {

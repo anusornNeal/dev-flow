@@ -132,7 +132,8 @@ export function toTaskResponse(task: any, mode: TaskReadMode) {
       model: task.model,
       effort: task.effort,
       repo: task.repo,
-      sourceUrl: task.sourceUrl,      hasUiDesign: Boolean(task.hasUiDesign),
+      sourceUrl: task.sourceUrl,
+      hasUiDesign: Boolean(task.hasUiDesign),
       ...bugSummaryFields(task),
     };
   }

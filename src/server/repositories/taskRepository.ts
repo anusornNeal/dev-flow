@@ -288,7 +288,8 @@ function parseJsonObject(value: unknown): Record<string, any> | undefined {
 function parseTaskRow(item: any, runsByTaskId: Map<string, AgentRun[]>) {
   const parsedTags = parseJsonArray(item.tags);
   const task = {
-    ...item,    hasUiDesign: item.hasUiDesign === undefined ? undefined : Boolean(item.hasUiDesign),
+    ...item,
+    hasUiDesign: item.hasUiDesign === undefined ? undefined : Boolean(item.hasUiDesign),
     tags: parsedTags,
     targetFiles: parseJsonArray(item.targetFiles),
     checklist: parseJsonArray(item.checklist),

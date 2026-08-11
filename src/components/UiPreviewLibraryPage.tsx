@@ -247,7 +247,8 @@ export default function UiPreviewLibraryPage({ onOpenTask, initialItems = [], di
       <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
         {items.map((item) => {
           const linked = Boolean(item.taskId && item.linkedTask);
-          const pending = Boolean(pendingAttach[item.previewId]);          const deleting = Boolean(pendingDelete[item.previewId]);
+          const pending = Boolean(pendingAttach[item.previewId]);
+          const deleting = Boolean(pendingDelete[item.previewId]);
           return (
             <article key={item.previewId} className="rounded-2xl border border-[#e5d4bb] bg-white p-4 shadow-sm dark:border-[#584a3b] dark:bg-[#292119]">
               <div className="flex items-start justify-between gap-3">

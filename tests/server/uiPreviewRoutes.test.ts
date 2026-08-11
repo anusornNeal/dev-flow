@@ -83,7 +83,8 @@ async function withServer(run: (baseUrl: string) => Promise<void>) {
       nextCursor: null,
       limit: Math.min(50, input.limit || 20),
       filter: input.filter || 'all',
-    }),    delete: (input: any) => {
+    }),
+    delete: (input: any) => {
       if (input.previewId === 'uip_linked_route') {
         const error: any = new Error('linked preview cannot be deleted');
         error.code = 'UI_PREVIEW_DELETE_LINKED_CONFLICT';

@@ -206,7 +206,8 @@ test('failed capture leaves a standalone preview unbound and retryable', async (
 test('evidence-record failure rolls back task binding', async () => {
   seedTask('task-a');
   const previews = createPreviewService();
-  const created = previews.create({ html: '<main>record failure</main>', spec });  serverEvents.__resetServerEventsForTests();
+  const created = previews.create({ html: '<main>record failure</main>', spec });
+  serverEvents.__resetServerEventsForTests();
   const received: any[] = [];
   const subscription = serverEvents.subscribeServerEvents((event: any) => received.push(event));
   const failingRepository = {

@@ -1,7 +1,9 @@
 import React from 'react';
 import { ExternalLink, Image as ImageIcon } from 'lucide-react';
+import type { TaskUiEvidence } from '../../client/uiPreviewClient';
 import type { Task, TaskCategory, TaskImage, TaskPriority, TaskStatus } from '../../types';
 import MarkdownRenderer from '../MarkdownRenderer';
+import UiDesignEvidenceSection from './UiDesignEvidenceSection';
 
 interface TaskOverviewTabProps {
   task: Task;
@@ -34,6 +36,13 @@ interface TaskOverviewTabProps {
   setEditedImages: React.Dispatch<React.SetStateAction<TaskImage[]>>;
   uploadImage: (file: File) => Promise<void>;
   onViewImage: (image: TaskImage) => void;
+  uiEvidence: TaskUiEvidence[];
+  uiEvidenceLoading: boolean;
+  uiEvidenceLoadingMore: boolean;
+  uiEvidenceError: string | null;
+  uiEvidenceNextCursor: string | null;
+  onRefreshUiEvidence: () => void;
+  onLoadMoreUiEvidence: () => void;
 }
 
 const fieldClass = 'w-full rounded-xl border border-[#e3d2bb] bg-white px-3.5 py-2.5 text-[13px] text-[#44352c] outline-none focus:border-[#d89745] dark:border-[#584a3b] dark:bg-[#292119] dark:text-[#f1e7de]';
@@ -136,6 +145,15 @@ export default function TaskOverviewTab(props: TaskOverviewTabProps) {
         {task.description ? <div className="prose max-w-none text-[13px] leading-6 dark:prose-invert"><MarkdownRenderer content={task.description} /></div> : <p className="text-[#9a8879]">No description.</p>}
       </ReadSection>
       {task.acceptanceCriteria && <ReadSection title="Acceptance criteria"><p className="whitespace-pre-wrap">{task.acceptanceCriteria}</p></ReadSection>}
+      <UiDesignEvidenceSection
+        evidence={props.uiEvidence}
+        loading={props.uiEvidenceLoading}
+        loadingMore={props.uiEvidenceLoadingMore}
+        error={props.uiEvidenceError}
+        nextCursor={props.uiEvidenceNextCursor}
+        onRefresh={props.onRefreshUiEvidence}
+        onLoadMore={props.onLoadMoreUiEvidence}
+      />
       {task.reasoning && <ReadSection title="Reasoning"><p className="whitespace-pre-wrap">{task.reasoning}</p></ReadSection>}
       {task.repoContext && <ReadSection title="Repository context"><p className="whitespace-pre-wrap font-mono text-[12px]">{task.repoContext}</p></ReadSection>}
 

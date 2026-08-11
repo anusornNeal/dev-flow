@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type { LogEntry, Task, TaskImage } from '../types';
 import CreateTaskModal from './CreateTaskModal';
 import ImageViewer from './ImageViewer';
@@ -17,6 +17,11 @@ import TaskWorkTab from './taskDrawer/TaskWorkTab';
 import TaskInspectorActivityTab from './taskDrawer/TaskInspectorActivityTab';
 import BugThreadsSection from './taskDrawer/BugThreadsSection';
 import SubtasksSection from './taskDrawer/SubtasksSection';
+import {
+  createTaskUiEvidenceRequestGate,
+  getTaskUiEvidence,
+  type TaskUiEvidencePage,
+} from '../client/uiPreviewClient';
 
 interface TaskDetailsDrawerProps {
   task: Task;
@@ -48,11 +53,58 @@ export default function TaskDetailsDrawer({
   const [copiedHistoryPath, setCopiedHistoryPath] = useState<string | null>(null);
   const [isAddingSubtask, setIsAddingSubtask] = useState(false);
   const [isRetryingRun, setIsRetryingRun] = useState(false);
+  const [uiEvidencePage, setUiEvidencePage] = useState<TaskUiEvidencePage>({ items: [], nextCursor: null, limit: 20 });
+  const [uiEvidenceLoading, setUiEvidenceLoading] = useState(false);
+  const [uiEvidenceLoadingMore, setUiEvidenceLoadingMore] = useState(false);
+  const [uiEvidenceError, setUiEvidenceError] = useState<string | null>(null);
+  const uiEvidenceGateRef = useRef(createTaskUiEvidenceRequestGate());
+
+  const refreshUiEvidence = useCallback(async ({ cursor = null, append = false }: { cursor?: string | null; append?: boolean } = {}) => {
+    const token = uiEvidenceGateRef.current.begin(initialTask.id);
+    if (append) {
+      setUiEvidenceLoadingMore(true);
+    } else {
+      setUiEvidenceLoading(true);
+      setUiEvidenceError(null);
+    }
+    try {
+      const page = await getTaskUiEvidence(initialTask.id, { cursor, limit: 20 });
+      if (!uiEvidenceGateRef.current.isCurrent(token)) return;
+      setUiEvidencePage((current) => {
+        if (!append) return page;
+        const seen = new Set<string>();
+        const items = [...current.items, ...page.items].filter((item) => {
+          const key = item.evidenceId || `${item.previewId}:${item.frozenRevision}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+        return { items, nextCursor: page.nextCursor, limit: page.limit };
+      });
+      setUiEvidenceError(null);
+    } catch (error) {
+      if (!uiEvidenceGateRef.current.isCurrent(token)) return;
+      setUiEvidenceError(error instanceof Error ? error.message : String(error));
+    } finally {
+      if (uiEvidenceGateRef.current.isCurrent(token)) {
+        setUiEvidenceLoading(false);
+        setUiEvidenceLoadingMore(false);
+      }
+    }
+  }, [initialTask.id]);
 
   useEffect(() => {
     if (drawerViewModel.task?.id !== initialTask.id) void drawerViewModel.open(initialTask.id);
     setActiveTab(initialTab);
   }, [initialTask.id, initialTab]);
+
+  useEffect(() => {
+    uiEvidenceGateRef.current.invalidate();
+    setUiEvidencePage({ items: [], nextCursor: null, limit: 20 });
+    setUiEvidenceError(null);
+    void refreshUiEvidence();
+    return () => uiEvidenceGateRef.current.invalidate();
+  }, [initialTask.id, refreshUiEvidence]);
 
   const task = {
     description: '',
@@ -70,6 +122,16 @@ export default function TaskDetailsDrawer({
   const runArtifacts = useRunArtifacts(task);
   const latestRun = task.latestAgentRun;
   const canRetryLatestRun = Boolean(latestRun && !task.activeAgent && ['failed', 'cancelled'].includes(latestRun.status));
+
+  const handleClose = () => {
+    uiEvidenceGateRef.current.invalidate();
+    onClose();
+  };
+
+  const handleLoadMoreUiEvidence = () => {
+    if (!uiEvidencePage.nextCursor || uiEvidenceLoadingMore) return;
+    void refreshUiEvidence({ cursor: uiEvidencePage.nextCursor, append: true });
+  };
 
   const handleToggleChecklistItem = (itemIdentifier: string) => {
     drawerViewModel.toggleChecklist(itemIdentifier);
@@ -161,6 +223,13 @@ export default function TaskDetailsDrawer({
       setEditedImages={edit.setEditedImages}
       uploadImage={edit.uploadImage}
       onViewImage={setViewingImage}
+      uiEvidence={uiEvidencePage.items}
+      uiEvidenceLoading={uiEvidenceLoading}
+      uiEvidenceLoadingMore={uiEvidenceLoadingMore}
+      uiEvidenceError={uiEvidenceError}
+      uiEvidenceNextCursor={uiEvidencePage.nextCursor}
+      onRefreshUiEvidence={() => { void refreshUiEvidence(); }}
+      onLoadMoreUiEvidence={handleLoadMoreUiEvidence}
     />
   );
 
@@ -237,7 +306,7 @@ export default function TaskDetailsDrawer({
         task={task}
         activeTab={activeTab}
         onTabChange={setActiveTab}
-        onClose={onClose}
+        onClose={handleClose}
         onDelete={() => onDelete(task.id)}
         isEditing={edit.isEditing}
         onToggleEdit={() => edit.setIsEditing((value) => !value)}

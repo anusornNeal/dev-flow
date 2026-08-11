@@ -4,6 +4,12 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import fs from 'node:fs';
 import TaskDetailsDrawer from '../../src/components/TaskDetailsDrawer.js';
+import UiDesignEvidenceSection from '../../src/components/taskDrawer/UiDesignEvidenceSection.js';
+import {
+  buildTaskUiEvidencePath,
+  createTaskUiEvidenceRequestGate,
+  type TaskUiEvidence,
+} from '../../src/client/uiPreviewClient.js';
 import type { Task } from '../../src/types.js';
 
 function makeTask(): Task {
@@ -221,4 +227,73 @@ test('TaskDetailsDrawer is materially decomposed instead of remaining a 1,200-li
   for (const component of ['TaskInspectorShell', 'TaskOverviewTab', 'TaskWorkTab', 'TaskInspectorActivityTab']) {
     assert.match(source, new RegExp(component));
   }
+});
+
+test('UI evidence client always requests a bounded page and stale generations cannot win', () => {
+  assert.equal(buildTaskUiEvidencePath('task 1'), '/api/tasks/task%201/ui-evidence?limit=20');
+  assert.equal(
+    buildTaskUiEvidencePath('task 1', { limit: 999, cursor: 'next/cursor=' }),
+    '/api/tasks/task%201/ui-evidence?limit=50&cursor=next%2Fcursor%3D',
+  );
+
+  const gate = createTaskUiEvidenceRequestGate();
+  const taskA = gate.begin('task-a');
+  const taskB = gate.begin('task-b');
+  assert.equal(gate.isCurrent(taskA), false);
+  assert.equal(gate.isCurrent(taskB), true);
+  const firstRefresh = gate.begin('task-b');
+  const secondRefresh = gate.begin('task-b');
+  assert.equal(gate.isCurrent(firstRefresh), false);
+  assert.equal(gate.isCurrent(secondRefresh), true);
+  gate.invalidate();
+  assert.equal(gate.isCurrent(secondRefresh), false);
+});
+
+test('UI Design evidence renders frozen/current semantics without duplicate current cards', () => {
+  const makeEvidence = (overrides: Partial<TaskUiEvidence> = {}): TaskUiEvidence => ({
+    evidenceId: 'ev-a2',
+    taskId: 'task-1',
+    previewId: 'preview-a',
+    title: 'Preview A',
+    frozenRevision: 2,
+    latestRevision: 3,
+    frozenPreviewUrl: 'http://127.0.0.1:3000/previews/a/2',
+    latestPreviewUrl: 'http://127.0.0.1:3000/previews/a/latest',
+    screenshotUrl: 'http://127.0.0.1:3000/artifacts/a2.png',
+    attachedAt: '2026-08-11T02:05:00.000Z',
+    current: true,
+    spec: { schemaVersion: 1, summary: { screen: 'Checkout', purpose: 'Review purchase' }, layout: { sections: ['Header', 'Cart'] }, emptySection: {} },
+    ...overrides,
+  });
+  const evidence: TaskUiEvidence[] = [
+    makeEvidence(),
+    makeEvidence({ evidenceId: 'ev-a2-duplicate', attachedAt: '2026-08-11T02:04:59.000Z' }),
+    makeEvidence({ evidenceId: 'ev-a1', frozenRevision: 1, current: false, attachedAt: '2026-08-11T01:00:00.000Z', frozenPreviewUrl: 'http://127.0.0.1:3000/previews/a/1' }),
+    makeEvidence({ evidenceId: 'ev-b1', previewId: 'preview-b', title: 'Preview B', frozenRevision: 1, latestRevision: 1, latestPreviewUrl: 'http://127.0.0.1:3000/previews/b/latest', attachedAt: '2026-08-11T02:10:00.000Z' }),
+  ];
+  const html = renderToStaticMarkup(React.createElement(UiDesignEvidenceSection as any, { evidence }));
+  assert.match(html, /UI Design/);
+  assert.ok(html.indexOf('Preview B') < html.indexOf('Preview A'));
+  assert.equal((html.match(/>Preview A<\/div>/g) || []).length, 1);
+  assert.match(html, /Previous revisions/);
+  assert.match(html, /Revision 1/);
+  assert.match(html, /Revision 2/);
+  assert.match(html, /Open Preview/);
+  assert.equal((html.match(/Open Latest/g) || []).length, 1);
+  assert.match(html, /rel="noopener noreferrer"/);
+  assert.match(html, /artifacts\/a2\.png/);
+  assert.doesNotMatch(html, /emptySection/);
+});
+
+test('Task overview places UI Design evidence between Acceptance Criteria and Reasoning', () => {
+  const source = fs.readFileSync('src/components/taskDrawer/TaskOverviewTab.tsx', 'utf8');
+  const acceptance = source.indexOf('{task.acceptanceCriteria && <ReadSection title="Acceptance criteria"');
+  const uiDesign = source.indexOf('<UiDesignEvidenceSection');
+  const reasoning = source.indexOf('{task.reasoning && <ReadSection title="Reasoning"');
+  assert.ok(acceptance >= 0 && uiDesign > acceptance && reasoning > uiDesign);
+
+  const drawerSource = fs.readFileSync('src/components/TaskDetailsDrawer.tsx', 'utf8');
+  assert.match(drawerSource, /getTaskUiEvidence\(initialTask\.id, \{ cursor, limit: 20 \}\)/);
+  assert.match(drawerSource, /createTaskUiEvidenceRequestGate/);
+  assert.match(drawerSource, /uiEvidenceGateRef\.current\.invalidate\(\)/);
 });

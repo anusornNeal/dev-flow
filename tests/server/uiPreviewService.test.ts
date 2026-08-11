@@ -99,6 +99,18 @@ test('durable create/update idempotency replays the original logical revision af
   assert.throws(() => service.update({ previewId: first.previewId, expectedRevision: 1, html: '<main>DIFFERENT</main>', idempotencyKey: 'update-key' }), (error: any) => error?.code === 'UI_PREVIEW_IDEMPOTENCY_CONFLICT');
 });
 
+test('library list resolves latest unpinned runtime URLs and returns summary metadata only', () => {
+  const created = service.create({ title: 'Library', html: '<main>secret</main>', css: 'secret-css', js: 'secret-js', spec });
+  service.update({ previewId: created.previewId, expectedRevision: 1, html: '<main>latest secret</main>' });
+  const page = service.list({ filter: 'all', limit: 20 });
+  assert.equal(page.items.length, 1);
+  assert.equal(page.items[0].latestRevision, 2);
+  assert.equal(page.items[0].specSummary.screen, 'Service');
+  assert.match(page.items[0].latestPreviewUrl, /^http:\/\/127\.0\.0\.1:43123\/api\/ui-previews\//);
+  assert.doesNotMatch(page.items[0].latestPreviewUrl, /revision=/);
+  assert.doesNotMatch(JSON.stringify(page), /latest secret|secret-css|secret-js/);
+});
+
 test('create/update/get core does not depend on project workspace, git, verification, or playwright services', async () => {
   const source = fs.readFileSync(path.resolve('src/server/services/uiPreviewService.ts'), 'utf8');
   assert.doesNotMatch(source, /gitService|workspace|runProjectCommand|playwright|screenshot/i);

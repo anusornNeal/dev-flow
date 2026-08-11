@@ -21,6 +21,8 @@ function renderSidebar(overrides: Record<string, unknown> = {}) {
     searchQuery: '',
     setSearchQuery: noop,
     onOpenSettings: noop,
+    activePage: 'board',
+    onSetActivePage: noop,
     isCollapsed: false,
     width: 320,
     onToggleCollapsed: noop,
@@ -34,6 +36,7 @@ test('collapsed sidebar is a 64px global rail with navigation, filter, and setti
   assert.match(html, /width:64px/);
   assert.match(html, /aria-label="Expand sidebar"/);
   assert.match(html, /title="Sprint Board"/);
+  assert.match(html, /title="UI Previews"/);
   assert.doesNotMatch(html, /Project Atlas/);
   assert.match(html, /title="Search and filters"/);
   assert.match(html, /title="Settings"/);
@@ -48,11 +51,12 @@ test('expanded sidebar uses persisted width and exposes an accessible horizontal
   assert.match(html, /aria-label="Collapse sidebar"/);
 });
 
-test('sidebar keeps Board layout controls without Atlas navigation state', () => {
+test('sidebar keeps global Board/Preview navigation without resurrecting Atlas state', () => {
   const source = fs.readFileSync('src/components/Sidebar.tsx', 'utf8');
   const appSource = fs.readFileSync('src/App.tsx', 'utf8');
-  assert.doesNotMatch(source, /activePage|onSetActivePage|Project Atlas|Waypoints/);
-  assert.doesNotMatch(appSource, /isAtlasSidebarCollapsed/);
+  assert.match(source, /activePage|onSetActivePage|UI Previews/);
+  assert.doesNotMatch(source, /Project Atlas|Waypoints/);
+  assert.doesNotMatch(appSource, /isAtlasSidebarCollapsed|ProjectAtlasPage|atlasEventRevision/);
   assert.match(appSource, /isCollapsed=\{sidebarLayout\.collapsed\}/);
   assert.match(appSource, /width=\{sidebarLayout\.width\}/);
 });

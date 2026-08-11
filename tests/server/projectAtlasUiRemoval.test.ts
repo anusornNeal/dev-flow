@@ -10,9 +10,9 @@ const projectRoutesSource = fs.readFileSync('src/server/routes/projects.ts', 'ut
 test('Project Atlas browser UI is physically removed while backend Atlas stays separate', () => {
   assert.equal(fs.existsSync('src/components/ProjectAtlasPage.tsx'), false);
   assert.equal(fs.existsSync('src/components/projectAtlas'), false);
-  assert.doesNotMatch(appSource, /ProjectAtlasPage|atlasEventRevision|activePage/);
-  assert.doesNotMatch(sidebarSource, /Project Atlas|Waypoints|activePage|onSetActivePage/);
-  assert.doesNotMatch(headerSource, /Project Atlas|activePage|knowledge graph/);
+  assert.doesNotMatch(appSource, /ProjectAtlasPage|atlasEventRevision|setActivePage\('atlas'\)|'board' \| 'atlas'/);
+  assert.doesNotMatch(sidebarSource, /Project Atlas|Waypoints|'board' \| 'atlas'/);
+  assert.doesNotMatch(headerSource, /Project Atlas|knowledge graph/);
 });
 
 test('legacy Atlas browser route is removed without deleting agent-facing Atlas services', () => {
@@ -25,5 +25,7 @@ test('legacy Atlas browser route is removed without deleting agent-facing Atlas 
 test('legacy #atlas startup is normalized to the Board without a reload loop', () => {
   assert.match(appSource, /window\.location\.hash === '#atlas'/);
   assert.match(appSource, /window\.history\.replaceState/);
-  assert.doesNotMatch(appSource, /addEventListener\('hashchange'/);
+  assert.match(appSource, /setActivePage\('board'\)/);
+  assert.match(appSource, /addEventListener\('hashchange'/);
+  assert.doesNotMatch(appSource, /window\.location\.reload|setActivePage\('atlas'\)|ProjectAtlasPage/);
 });

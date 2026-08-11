@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import db from '../../db/index.js';
 import type { JsonValue, UiPreviewRecord, UiPreviewRevision, UiPreviewViewport, UiSpecV1 } from '../domain/uiPreview.js';
 import {
+  UiPreviewError,
   UiPreviewIdempotencyConflictError,
   UiPreviewNotFoundError,
   UiPreviewRevisionConflictError,
@@ -122,6 +123,38 @@ export interface AppendPreviewRevisionInput {
   createdAt?: string;
 }
 
+export type UiPreviewListFilter = 'all' | 'standalone' | 'linked';
+
+export interface ListUiPreviewsInput {
+  filter?: UiPreviewListFilter;
+  cursor?: string | null;
+  limit?: number;
+}
+
+const UI_PREVIEW_LIST_DEFAULT_LIMIT = 20;
+const UI_PREVIEW_LIST_MAX_LIMIT = 50;
+
+function clampListLimit(value: unknown) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return UI_PREVIEW_LIST_DEFAULT_LIMIT;
+  return Math.max(1, Math.min(UI_PREVIEW_LIST_MAX_LIMIT, Math.trunc(parsed)));
+}
+
+function encodeListCursor(row: { updatedAt: string; previewId: string }) {
+  return Buffer.from(JSON.stringify(row), 'utf8').toString('base64url');
+}
+
+function decodeListCursor(value?: string | null) {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as Record<string, unknown>;
+    if (typeof parsed.updatedAt !== 'string' || !parsed.updatedAt || typeof parsed.previewId !== 'string' || !parsed.previewId) throw new Error('invalid cursor');
+    return { updatedAt: parsed.updatedAt, previewId: parsed.previewId };
+  } catch {
+    throw new UiPreviewError('UI_PREVIEW_CURSOR_INVALID', 'UI preview library cursor is invalid.');
+  }
+}
+
 export function createUiPreviewRepository(database: DatabaseLike = db) {
   const transaction = <T>(work: () => T): T => database.transaction(work)();
 
@@ -220,6 +253,68 @@ export function createUiPreviewRepository(database: DatabaseLike = db) {
     });
   }
 
+  function listPreviews(input: ListUiPreviewsInput = {}) {
+    const filter = input.filter ?? 'all';
+    if (!['all', 'standalone', 'linked'].includes(filter)) {
+      throw new UiPreviewError('UI_PREVIEW_FILTER_INVALID', `Unsupported UI preview filter '${String(filter)}'.`);
+    }
+    const limit = clampListLimit(input.limit);
+    const cursor = decodeListCursor(input.cursor);
+    const where: string[] = [];
+    const params: any[] = [];
+    if (filter === 'standalone') where.push('p.task_id IS NULL');
+    if (filter === 'linked') where.push('p.task_id IS NOT NULL');
+    if (cursor) {
+      where.push('(p.updated_at < ? OR (p.updated_at = ? AND p.id < ?))');
+      params.push(cursor.updatedAt, cursor.updatedAt, cursor.previewId);
+    }
+    const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+    const rows = database.prepare(`
+      SELECT
+        p.id AS preview_id,
+        p.task_id,
+        p.latest_revision,
+        p.created_at,
+        p.updated_at,
+        r.title,
+        r.spec_json,
+        t.id AS linked_task_id,
+        t.displayId AS linked_task_display_id,
+        t.title AS linked_task_title,
+        t.projectId AS linked_task_project_id
+      FROM ui_previews p
+      JOIN ui_preview_revisions r ON r.preview_id = p.id AND r.revision = p.latest_revision
+      LEFT JOIN tasks t ON t.id = p.task_id
+      ${whereSql}
+      ORDER BY p.updated_at DESC, p.id DESC
+      LIMIT ?
+    `).all(...params, limit + 1) as any[];
+    const hasMore = rows.length > limit;
+    const visible = rows.slice(0, limit);
+    const items = visible.map((row) => ({
+      previewId: String(row.preview_id),
+      taskId: row.task_id ?? null,
+      title: row.title ?? null,
+      specSummary: (JSON.parse(row.spec_json || '{}') as any)?.summary || {},
+      latestRevision: Number(row.latest_revision),
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+      linkedTask: row.task_id && row.linked_task_id ? {
+        id: String(row.linked_task_id),
+        displayId: row.linked_task_display_id ?? null,
+        title: String(row.linked_task_title || row.linked_task_id),
+        projectId: row.linked_task_project_id ?? null,
+      } : null,
+    }));
+    const last = items.at(-1);
+    return {
+      items,
+      nextCursor: hasMore && last ? encodeListCursor({ updatedAt: last.updatedAt, previewId: last.previewId }) : null,
+      limit,
+      filter,
+    };
+  }
+
   function countRevisions(previewId: string) {
     return Number((database.prepare('SELECT COUNT(*) AS count FROM ui_preview_revisions WHERE preview_id = ?').get(previewId) as any)?.count || 0);
   }
@@ -252,6 +347,7 @@ export function createUiPreviewRepository(database: DatabaseLike = db) {
     bindPreviewToTask,
     getPreview,
     getRevision,
+    listPreviews,
     countRevisions,
     runIdempotent,
   };

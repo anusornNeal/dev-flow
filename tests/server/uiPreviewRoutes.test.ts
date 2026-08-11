@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { request as httpRequest } from 'node:http';
 import express from 'express';
 import { registerUiPreviewRoutes } from '../../src/server/routes/uiPreviews.js';
 import { evaluateStrictLoopbackAccess } from '../../src/server/services/apiAccessPolicyService.js';
@@ -52,6 +53,24 @@ const source = {
   previewUrl: 'http://127.0.0.1:45555/api/ui-previews/uip_route/document?revision=2',
 };
 
+function rawGetStatus(baseUrl: string, headers: Record<string, string>) {
+  return new Promise<number>((resolve, reject) => {
+    const url = new URL(baseUrl);
+    const req = httpRequest({
+      hostname: url.hostname,
+      port: url.port,
+      path: `${url.pathname}${url.search}`,
+      method: 'GET',
+      headers,
+    }, (res) => {
+      res.resume();
+      res.once('end', () => resolve(res.statusCode || 0));
+    });
+    req.once('error', reject);
+    req.end();
+  });
+}
+
 async function withServer(run: (baseUrl: string) => Promise<void>) {
   const app = express();
   app.use(express.json());
@@ -59,6 +78,12 @@ async function withServer(run: (baseUrl: string) => Promise<void>) {
     create: (input: any) => ({ previewId: 'uip_route', revision: 1, latestRevision: 1, changed: true, ...input }),
     update: (input: any) => ({ previewId: input.previewId, revision: 2, latestRevision: 2, changed: true }),
     get: (input: any) => input.mode === 'source' ? source : { ...source, html: undefined, css: undefined, js: undefined, spec: undefined },
+    list: (input: any) => ({
+      items: [{ previewId: 'uip_route', taskId: null, title: 'Route preview', specSummary: { screen: 'Route preview' }, latestRevision: 2, createdAt: '2026-08-11T01:00:00.000Z', updatedAt: '2026-08-11T02:00:00.000Z', latestPreviewUrl: 'http://127.0.0.1:45555/api/ui-previews/uip_route/document' }],
+      nextCursor: null,
+      limit: Math.min(50, input.limit || 20),
+      filter: input.filter || 'all',
+    }),
   };
   const evidenceService = {
     list: (input: any) => ({ items: [{ evidenceId: 'uie_1', previewId: 'uip_route', frozenRevision: 2 }], nextCursor: null, limit: Math.min(50, input.limit || 20) }),
@@ -123,6 +148,28 @@ test('document and screenshot routes are local-only, no-store, and ignore Host a
 
     const traversalArtifact = await fetch(`${baseUrl}/api/ui-preview-artifacts/${encodeURIComponent('../secret.png')}`);
     assert.ok([400, 404].includes(traversalArtifact.status));
+  });
+});
+
+test('preview collection is strict-loopback, host-validated, no-store, bounded, and summary-only', async () => {
+  await withServer(async (baseUrl) => {
+    const local = await fetch(`${baseUrl}/api/ui-previews?filter=standalone&limit=999`);
+    assert.equal(local.status, 200);
+    assert.match(local.headers.get('cache-control') || '', /no-store/);
+    const body = await local.json() as any;
+    assert.equal(body.limit, 50);
+    assert.equal(body.filter, 'standalone');
+    assert.equal(body.items[0].latestRevision, 2);
+    assert.equal('html' in body.items[0], false);
+    assert.equal('spec' in body.items[0], false);
+    assert.doesNotMatch(JSON.stringify(body), /secret-css|secret-js|screenshot|evidence/);
+
+    const remoteForward = await fetch(`${baseUrl}/api/ui-previews`, { headers: { 'x-forwarded-for': '203.0.113.9' } });
+    assert.equal(remoteForward.status, 403);
+    const malformedForward = await fetch(`${baseUrl}/api/ui-previews`, { headers: { forwarded: 'for=unknown' } });
+    assert.equal(malformedForward.status, 403);
+    const spoofedHostStatus = await rawGetStatus(`${baseUrl}/api/ui-previews`, { Host: 'attacker.example' });
+    assert.equal(spoofedHostStatus, 403);
   });
 });
 

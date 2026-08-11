@@ -164,6 +164,61 @@ test('evidence history is cursor-paged, newest-first, hard-capped, and never ret
   assert.deepEqual(capped.items[0].spec, spec);
 });
 
+test('failed capture leaves a standalone preview unbound and retryable', async () => {
+  seedTask('task-a');
+  const previews = createPreviewService();
+  const created = previews.create({ html: '<main>standalone</main>', spec });
+  const failing = createEvidenceService(async () => {
+    throw Object.assign(new Error('renderer unavailable'), { code: 'UI_PREVIEW_RENDERER_UNAVAILABLE' });
+  });
+
+  await assert.rejects(failing.attach({ taskId: 'task-a', previewId: created.previewId, idempotencyKey: 'failed-capture' }));
+  assert.equal(previewRepository.getPreview(created.previewId)?.taskId, null);
+  assert.equal(evidenceRepository.getCurrentEvidence('task-a', created.previewId), null);
+
+  const retry = await createEvidenceService().attach({ taskId: 'task-a', previewId: created.previewId, idempotencyKey: 'retry-after-failure' });
+  assert.equal(retry.taskId, 'task-a');
+  assert.equal(previewRepository.getPreview(created.previewId)?.taskId, 'task-a');
+});
+
+test('evidence-record failure rolls back task binding', async () => {
+  seedTask('task-a');
+  const previews = createPreviewService();
+  const created = previews.create({ html: '<main>record failure</main>', spec });
+  const failingRepository = {
+    ...evidenceRepository,
+    recordEvidence: () => { throw new Error('record failed'); },
+  };
+  const service = createTaskUiEvidenceService({
+    database: db as any,
+    previewRepository,
+    evidenceRepository: failingRepository as any,
+    screenshotService: { capture: async (input: any) => ({ artifactId: artifactId(), absolutePath: '', png: png(), viewport: input.viewport }) } as any,
+    runtimePort: () => 43210,
+  });
+
+  await assert.rejects(service.attach({ taskId: 'task-a', previewId: created.previewId }));
+  assert.equal(previewRepository.getPreview(created.previewId)?.taskId, null);
+});
+
+test('concurrent different-task attach cannot leave evidence for the losing task', async () => {
+  seedTask('task-a'); seedTask('task-b');
+  const previews = createPreviewService();
+  const created = previews.create({ html: '<main>race</main>', spec });
+  const captures: Array<(value: any) => void> = [];
+  const service = createEvidenceService((input: any) => new Promise((resolve) => captures.push(() => resolve({ artifactId: artifactId(), absolutePath: '', png: png(), viewport: input.viewport }))));
+
+  const first = service.attach({ taskId: 'task-a', previewId: created.previewId });
+  const second = service.attach({ taskId: 'task-b', previewId: created.previewId });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  captures[0]!(true);
+  await first;
+  captures[1]!(true);
+  await assert.rejects(second, (error: any) => error?.code === 'UI_PREVIEW_TASK_CONFLICT');
+  assert.equal(previewRepository.getPreview(created.previewId)?.taskId, 'task-a');
+  assert.equal(evidenceRepository.getCurrentEvidence('task-b', created.previewId), null);
+});
+
 test('fresh evidence reads regenerate frozen/latest/screenshot URLs from the current runtime port', async () => {
   seedTask();
   let runtimePort = 43210;

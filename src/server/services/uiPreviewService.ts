@@ -5,6 +5,7 @@ import {
   fingerprintCanonicalRequest,
   hashUiPreviewContent,
   type UiPreviewRepository,
+  type ListUiPreviewsInput,
 } from '../repositories/uiPreviewRepository.js';
 import { normalizeUiPreviewInput } from './uiSpecValidator.js';
 import { resolveUiPreviewUrl } from './uiPreviewUrlResolver.js';
@@ -151,6 +152,18 @@ export function createUiPreviewService(deps: UiPreviewServiceDependencies) {
     return shapeRevision(operation.result, operation.replayed);
   }
 
+  function list(input: ListUiPreviewsInput = {}) {
+    const page = deps.repository.listPreviews(input);
+    const port = deps.runtimePort();
+    return {
+      ...page,
+      items: page.items.map((item) => ({
+        ...item,
+        latestPreviewUrl: resolveUiPreviewUrl({ previewId: item.previewId, port }),
+      })),
+    };
+  }
+
   function get(input: GetUiPreviewInput): any {
     const preview = deps.repository.getPreview(input.previewId);
     if (!preview) throw new UiPreviewError('UI_PREVIEW_NOT_FOUND', `UI preview '${input.previewId}' was not found.`);
@@ -180,7 +193,7 @@ export function createUiPreviewService(deps: UiPreviewServiceDependencies) {
     return summary;
   }
 
-  return { create, update, get };
+  return { create, update, get, list };
 }
 
 export type UiPreviewService = ReturnType<typeof createUiPreviewService>;

@@ -103,6 +103,34 @@ test('evidence keeps highest frozen revision current and collapses same revision
   assert.equal(evidenceRepo.listEvidence('task-a', 'uip_one').length, 2);
 });
 
+test('preview library list is deterministic, filtered, cursor-paged, and summary-only', () => {
+  seedTask('task-linked');
+  db.prepare('UPDATE tasks SET displayId = ?, projectId = ?, title = ? WHERE id = ?')
+    .run('DVF-0502', 'project-a', 'Linked task', 'task-linked');
+
+  repo.createPreview({ id: 'uip_old', taskId: null, title: 'Old', html: '<main>old secret</main>', css: 'secret-css', js: 'secret-js', spec: { schemaVersion: 1, summary: { screen: 'Old screen' } }, viewport, contentHash: 'old', createdAt: '2026-08-11T01:00:00.000Z' });
+  repo.createPreview({ id: 'uip_linked', taskId: 'task-linked', title: 'Linked', html: '<main>linked secret</main>', css: '', js: '', spec: { schemaVersion: 1, summary: { screen: 'Linked screen' } }, viewport, contentHash: 'linked', createdAt: '2026-08-11T02:00:00.000Z' });
+  repo.createPreview({ id: 'uip_latest', taskId: null, title: 'Latest', html: '<main>latest secret</main>', css: '', js: '', spec: { schemaVersion: 1, summary: { screen: 'Latest screen' } }, viewport, contentHash: 'latest', createdAt: '2026-08-11T03:00:00.000Z' });
+
+  const first = repo.listPreviews({ filter: 'all', limit: 2 });
+  assert.deepEqual(first.items.map((item: any) => item.previewId), ['uip_latest', 'uip_linked']);
+  assert.ok(first.nextCursor);
+  const second = repo.listPreviews({ filter: 'all', limit: 2, cursor: first.nextCursor });
+  assert.deepEqual(second.items.map((item: any) => item.previewId), ['uip_old']);
+  assert.equal(second.nextCursor, null);
+
+  const standalone = repo.listPreviews({ filter: 'standalone', limit: 50 });
+  assert.deepEqual(standalone.items.map((item: any) => item.previewId), ['uip_latest', 'uip_old']);
+  const linked = repo.listPreviews({ filter: 'linked', limit: 50 });
+  assert.deepEqual(linked.items.map((item: any) => item.previewId), ['uip_linked']);
+  assert.deepEqual(linked.items[0].linkedTask, { id: 'task-linked', displayId: 'DVF-0502', title: 'Linked task', projectId: 'project-a' });
+  assert.deepEqual(linked.items[0].specSummary, { screen: 'Linked screen' });
+  assert.doesNotMatch(JSON.stringify(linked), /linked secret|secret-css|secret-js|html|css|js/);
+
+  assert.throws(() => repo.listPreviews({ filter: 'all', limit: 20, cursor: 'not-a-valid-cursor' }), (error: any) => error?.code === 'UI_PREVIEW_CURSOR_INVALID');
+  assert.equal(repo.listPreviews({ filter: 'all', limit: 999 }).limit, 50);
+});
+
 test('evidence for another preview remains current', () => {
   seedTask('task-a');
   for (const id of ['uip_one', 'uip_two']) repo.createPreview({ id, taskId: 'task-a', title: null, html: '<main>a</main>', css: '', js: '', spec, viewport, contentHash: `hash-${id}` });

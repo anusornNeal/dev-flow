@@ -23,6 +23,8 @@ import ObservabilityModal from './components/ObservabilityModal';
 import { Header } from './components/Header';
 import ProjectSwitcher from './components/ProjectSwitcher';
 import { BoardLane } from './components/BoardLane';
+import UiPreviewLibraryPage from './components/UiPreviewLibraryPage';
+import type { UiPreviewLinkedTask } from './client/uiPreviewClient';
 import BatchImportModal from './components/BatchImportModal';
 import ConfirmModal from './components/ConfirmModal';
 import TaskMoveBlockerDialog, { type TaskMoveDecision } from './components/TaskMoveBlockerDialog';
@@ -77,6 +79,7 @@ export default function App() {
   } | null>(null);
   const [mounted, setMounted] = useState(false);
   const [ngrokUrl, setNgrokUrl] = useState('');
+  const [activePage, setActivePage] = useState<'board' | 'previews'>(() => window.location.hash === '#previews' ? 'previews' : 'board');
   const [sidebarLayout, setSidebarLayout] = useState(() =>
     resolveInitialSidebarLayout(window.localStorage, window.innerWidth)
   );
@@ -100,10 +103,30 @@ export default function App() {
 
 
   useEffect(() => {
-    if (window.location.hash === '#atlas') {
-      window.history.replaceState('', document.title, window.location.pathname + window.location.search);
-    }
+    const syncPageFromHash = () => {
+      if (window.location.hash === '#atlas') {
+        window.history.replaceState('', document.title, window.location.pathname + window.location.search);
+        setActivePage('board');
+        return;
+      }
+      setActivePage(window.location.hash === '#previews' ? 'previews' : 'board');
+    };
+    syncPageFromHash();
+    window.addEventListener('hashchange', syncPageFromHash);
+    return () => window.removeEventListener('hashchange', syncPageFromHash);
   }, []);
+
+  const handleSetActivePage = (page: 'board' | 'previews') => {
+    setSelectedTask(null);
+    setActivePage(page);
+    if (page === 'previews') {
+      if (window.location.hash !== '#previews') window.location.hash = 'previews';
+      return;
+    }
+    if (window.location.hash) {
+      window.history.pushState('', document.title, window.location.pathname + window.location.search);
+    }
+  };
 
   // Filter States
   const [selectedPriority, setSelectedPriority] = useState<Task['priority'] | 'all'>('all');
@@ -472,6 +495,18 @@ export default function App() {
     searchQuery,
   });
 
+  const handleOpenPreviewTask = async (task: UiPreviewLinkedTask) => {
+    try {
+      if (task.projectId && task.projectId !== activeProjectId) setActiveProjectId(task.projectId);
+      const result = await apiClient.fetchJson<Task>('GET', `/api/tasks/${encodeURIComponent(task.id)}?mode=standard`);
+      handleSetActivePage('board');
+      setSelectedTask(result.data);
+      setPersistenceError(null);
+    } catch (error) {
+      setPersistenceError(error instanceof Error ? `Could not open linked task: ${error.message}` : 'Could not open linked task.');
+    }
+  };
+
   if (!mounted) {
     return (
       <div className="min-h-screen bg-[#faf6ef] dark:bg-[#292119] flex flex-col items-center justify-center text-[#8a6e5a] dark:text-[#f3eadf] font-mono text-xs gap-3">
@@ -499,6 +534,8 @@ export default function App() {
           searchQuery={searchQuery}
           setSearchQuery={setSearchQuery}
           onOpenSettings={() => setIsSettingsModalOpen(true)}
+          activePage={activePage}
+          onSetActivePage={handleSetActivePage}
           isCollapsed={sidebarLayout.collapsed}
           width={sidebarLayout.width}
           onToggleCollapsed={toggleSidebarCollapsed}
@@ -511,7 +548,10 @@ export default function App() {
           {/* Top Control Navigation bar */}
           <Header
             filteredTasksCount={filteredTasks.length}
-            projectSwitcher={(
+            title={activePage === 'previews' ? 'UI Previews' : 'Sprint Backlog'}
+            subtitle={activePage === 'previews' ? 'Global' : 'Pocket Sandbox'}
+            contextLabel={activePage === 'previews' ? 'All local previews' : `${filteredTasks.length} tasks`}
+            projectSwitcher={activePage === 'board' ? (
               <ProjectSwitcher
                 projects={projects}
                 activeProjectId={activeProjectId}
@@ -520,7 +560,7 @@ export default function App() {
                 onDeleteProject={handleDeleteProject}
                 onUpdateProject={handleUpdateProject}
               />
-            )}
+            ) : undefined}
             ngrokUrl={ngrokUrl}
             theme={theme}
             setTheme={setTheme}
@@ -539,6 +579,9 @@ export default function App() {
             </div>
           )}
 
+          {activePage === 'previews' ? (
+            <UiPreviewLibraryPage onOpenTask={handleOpenPreviewTask} />
+          ) : (
           <div className="flex-1 overflow-x-auto p-6 bg-[#faf7f0] dark:bg-[#1e1914]">
               <div className="flex w-max items-stretch min-h-[calc(100vh-210px)] pb-2">
                 {BOARD_COLUMNS.map(col => {
@@ -571,6 +614,7 @@ export default function App() {
                 })}
               </div>
             </div>
+          )}
         </main>
       </div>
 

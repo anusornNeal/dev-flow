@@ -227,13 +227,16 @@ export function createTaskUiEvidenceService(deps: TaskUiEvidenceServiceDependenc
     const frozenRevision = input.revision ?? preview.latestRevision;
     const revision = previewRepository.getRevision(previewId, frozenRevision);
     if (!revision) throw new UiPreviewError('UI_PREVIEW_REVISION_NOT_FOUND', `UI preview '${previewId}' revision ${frozenRevision} was not found.`);
-    previewRepository.bindPreviewToTask(previewId, taskId);
+    if (preview.taskId && preview.taskId !== taskId) {
+      previewRepository.bindPreviewToTask(previewId, taskId);
+    }
 
     const current = evidenceRepository.getCurrentEvidence(taskId, previewId);
     if (current?.frozenRevision > frozenRevision) throw staleError(taskId, previewId, frozenRevision, current);
     if (current?.frozenRevision === frozenRevision) {
       const row = selectEvidenceRow(current.evidenceId);
       if (!row) throw new UiPreviewError('UI_PREVIEW_EVIDENCE_NOT_FOUND', `Task UI evidence '${current.evidenceId}' was not found.`);
+      previewRepository.bindPreviewToTask(previewId, taskId);
       const result = shapeEvidenceRow(row);
       persistIdempotency(input.idempotencyKey, requestFingerprint, result);
       return result;
@@ -251,17 +254,21 @@ export function createTaskUiEvidenceService(deps: TaskUiEvidenceServiceDependenc
           viewport: revision.viewport,
         });
         const evidenceId = createEvidenceId();
-        const recorded = evidenceRepository.recordEvidence({
-          evidenceId,
-          taskId,
-          previewId,
-          frozenRevision,
-          frozenSpec: revision.spec,
-          screenshotArtifactId: capture.artifactId,
-          screenshotWidth: capture.viewport.width,
-          screenshotHeight: capture.viewport.height,
-          screenshotSha256: screenshotSha256(capture.png),
+        const commit = database.transaction(() => {
+          previewRepository.bindPreviewToTask(previewId, taskId);
+          return evidenceRepository.recordEvidence({
+            evidenceId,
+            taskId,
+            previewId,
+            frozenRevision,
+            frozenSpec: revision.spec,
+            screenshotArtifactId: capture.artifactId,
+            screenshotWidth: capture.viewport.width,
+            screenshotHeight: capture.viewport.height,
+            screenshotSha256: screenshotSha256(capture.png),
+          });
         });
+        const recorded = typeof commit.immediate === 'function' ? commit.immediate() : commit();
         if (recorded.outcome === 'stale') throw staleError(taskId, previewId, frozenRevision, recorded.evidence);
         const row = selectEvidenceRow(recorded.evidence.evidenceId);
         if (!row) throw new UiPreviewError('UI_PREVIEW_EVIDENCE_NOT_FOUND', `Task UI evidence '${recorded.evidence.evidenceId}' was not found after capture.`);

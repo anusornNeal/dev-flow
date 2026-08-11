@@ -5,6 +5,9 @@ import ChatGptStarterPromptButton from './ChatGptStarterPromptButton';
 
 interface HeaderProps {
   filteredTasksCount: number;
+  title?: string;
+  subtitle?: string;
+  contextLabel?: string;
   projectSwitcher?: React.ReactNode;
   ngrokUrl: string | null;
   theme: string;
@@ -20,6 +23,9 @@ interface HeaderProps {
 
 export function Header({
   filteredTasksCount,
+  title = 'Sprint Backlog',
+  subtitle = 'Pocket Sandbox',
+  contextLabel,
   projectSwitcher,
   ngrokUrl,
   theme,
@@ -55,12 +61,12 @@ export function Header({
         <div className="shrink-0">
           <h1 className="text-[#3c2a1a] dark:text-[#f3eadf] font-extrabold font-sans text-lg tracking-tight flex items-center gap-2">
             <Cat className="text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d] shrink-0" size={18} />
-            Sprint Backlog
+            {title}
           </h1>
           <p className="text-[11px] text-[#816b5a] dark:text-[#d6b56d] font-mono mt-0.5 font-medium flex items-center gap-1.5">
-            <span>Pocket Sandbox</span>
+            <span>{subtitle}</span>
             <span className="w-1 h-1 rounded-full bg-[#dcd0bc] dark:bg-[#d6b56d] dark:bg-[#e0a070]" />
-            <span className="font-bold">{filteredTasksCount} tasks</span>
+            <span className="font-bold">{contextLabel || `${filteredTasksCount} tasks`}</span>
           </p>
         </div>
         {projectSwitcher}

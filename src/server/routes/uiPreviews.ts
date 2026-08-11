@@ -12,7 +12,7 @@ import { createTaskUiEvidenceService, type TaskUiEvidenceService } from '../serv
 import { getDevFlowApiBaseUrl } from '../services/agentRunService.js';
 
 export interface UiPreviewRouteOverrides {
-  previewService?: Pick<UiPreviewService, 'create' | 'update' | 'get'>;
+  previewService?: Pick<UiPreviewService, 'create' | 'update' | 'get' | 'list'>;
   evidenceService?: Pick<TaskUiEvidenceService, 'attach' | 'list'>;
   artifactStore?: UiPreviewArtifactStore;
   runtimePort?: () => number;
@@ -32,6 +32,14 @@ function parseRevision(value: unknown) {
   const revision = Number(value);
   if (!Number.isInteger(revision) || revision < 1) throw createApiError(400, 'UI_PREVIEW_INVALID_REVISION', 'revision must be a positive integer.');
   return revision;
+}
+
+function isLoopbackHostHeader(value: unknown) {
+  const host = String(value || '').trim().toLowerCase();
+  if (!host) return false;
+  if (/^\[::1\](?::\d+)?$/.test(host)) return true;
+  const hostname = host.split(':')[0];
+  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname.startsWith('127.');
 }
 
 function noStore(res: express.Response) {
@@ -64,6 +72,27 @@ export function registerUiPreviewRoutes(app: express.Express, _deps: ApiRouteDep
   });
   const artifactStore = overrides.artifactStore ?? screenshotService?.artifactStore ?? createUiPreviewArtifactStore();
   const strictLocal = createStrictLoopbackAccessMiddleware();
+
+  app.get('/api/ui-previews', strictLocal, (req, res) => {
+    try {
+      if (!isLoopbackHostHeader(req.headers.host)) {
+        throw createApiError(403, 'UI_PREVIEW_LOCAL_ONLY', 'UI preview library enumeration requires a loopback Host header.');
+      }
+      const rawFilter = typeof req.query.filter === 'string' ? req.query.filter : 'all';
+      if (!['all', 'standalone', 'linked'].includes(rawFilter)) {
+        throw createApiError(400, 'UI_PREVIEW_FILTER_INVALID', `Unsupported UI preview filter '${rawFilter}'.`);
+      }
+      const result = previewService.list({
+        filter: rawFilter as 'all' | 'standalone' | 'linked',
+        cursor: typeof req.query.cursor === 'string' ? req.query.cursor : undefined,
+        limit: req.query.limit === undefined ? undefined : Number(req.query.limit),
+      });
+      noStore(res);
+      return res.json(result);
+    } catch (error) {
+      return sendApiError(res, apiErrorForUiPreview(error));
+    }
+  });
 
   app.post('/api/ui-previews', (req, res) => {
     try {

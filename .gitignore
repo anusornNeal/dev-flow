@@ -23,6 +23,7 @@ ORIGINAL_REQUEST.md
 /data/*.db-wal
 /data/uploads/
 /data/backups/
+/data/ui-preview-artifacts/
 /data/*.log
 
 *.bak

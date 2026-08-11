@@ -7,12 +7,16 @@ import { syncTaskWithGit } from './taskGitWorkflowService.js';
 import { clearTaskClaimWhenLeavingInProgress } from './taskClaimService.js';
 import { cleanupSessionWorkspace, getSessionWorkspaceMetadataForRecovery } from './sessionWorkspaceService.js';
 import { inspectWorkspaceRecovery } from './workspaceRecoveryService.js';
-import { integrateWorkspaceCommits } from './workspaceIntegrationService.js';
+import { integrateWorkspaceCommits, type WorkspaceIntegrationSuccess } from './workspaceIntegrationService.js';
+import { loadProjectVerificationImpactRules } from './projectCommandConfigService.js';
+import { planVerification, type VerificationPlan } from './verificationPlannerService.js';
 
 export type TaskWorkspaceFinalizationCheck = {
   name?: string;
   command: string;
   status: 'passed' | 'failed' | 'not-run';
+  scope?: 'targeted' | 'broad' | 'full';
+  repoRevision?: string;
   summary?: string;
   output?: string;
   recordedAt?: string;
@@ -23,6 +27,16 @@ export type TaskWorkspaceFinalizationInput = {
   workspaceId: string;
   checks?: TaskWorkspaceFinalizationCheck[];
   requireChecklistComplete?: boolean;
+};
+
+type PostIntegrationRequirement = {
+  required: boolean;
+  reason: string;
+  repoRevision: string;
+  requiredCommands: string[];
+  missingCommands: string[];
+  broadEvidenceRequired: boolean;
+  baseAdvanced: boolean;
 };
 
 function appendFinalizationLog(task: any, message: string) {
@@ -77,6 +91,67 @@ function localOnlyEvidence(task: any, baseBranch: string, commit: string, checks
   return { gitEvidence, verificationEvidence, task: { ...task, gitEvidence, verificationEvidence, updatedAt: recordedAt } };
 }
 
+function planCombinedVerification(
+  integration: WorkspaceIntegrationSuccess,
+  checks: TaskWorkspaceFinalizationCheck[],
+  impactRules: ReturnType<typeof loadProjectVerificationImpactRules>,
+) {
+  const requestedCommands = Array.from(new Set([
+    ...checks.map((check) => String(check.command || '').trim()),
+    ...impactRules.flatMap((rule) => rule.commands.map((command) => String(command || '').trim())),
+  ].filter(Boolean)));
+  const sourcePlan = planVerification({
+    changedFiles: integration.changedFiles,
+    requestedCommands,
+    impactRules,
+  });
+  const combinedPlan = planVerification({
+    changedFiles: integration.combinedChangedFiles,
+    requestedCommands,
+    impactRules,
+  });
+  return { sourcePlan, combinedPlan };
+}
+
+function evaluatePostIntegrationRequirement(
+  integration: WorkspaceIntegrationSuccess,
+  checks: TaskWorkspaceFinalizationCheck[],
+  sourcePlan: VerificationPlan,
+  combinedPlan: VerificationPlan,
+): PostIntegrationRequirement {
+  const baseAdvanced = integration.baseHeadBefore !== integration.baseRevision;
+  const planEscalated = combinedPlan.risk !== sourcePlan.risk
+    || combinedPlan.lane !== sourcePlan.lane
+    || combinedPlan.requiresBroadVerify !== sourcePlan.requiresBroadVerify
+    || combinedPlan.commands.some((command) => !sourcePlan.commands.includes(command));
+  const required = baseAdvanced || combinedPlan.risk === 'high' || planEscalated;
+  const revision = integration.baseHeadAfter;
+  const revisionBound = checks.filter((check) => check.status === 'passed' && String(check.repoRevision || '').trim() === revision);
+  const hasFullEvidence = revisionBound.some((check) => check.scope === 'full');
+  const hasBroadEvidence = hasFullEvidence || revisionBound.some((check) => check.scope === 'broad');
+  const broadEvidenceRequired = combinedPlan.requiresBroadVerify;
+  const missingCommands = hasFullEvidence
+    ? []
+    : combinedPlan.commands.filter((command) => !revisionBound.some((check) => check.command === command));
+  const evidenceSatisfied = !required
+    || (broadEvidenceRequired ? hasBroadEvidence : missingCommands.length === 0 && revisionBound.length > 0);
+
+  let reason = 'Pre-integration evidence remains valid for the integrated state.';
+  if (required && baseAdvanced) reason = 'The target branch advanced after the workspace base revision, so combined-state verification must be revision-bound to the integrated HEAD.';
+  else if (required && combinedPlan.risk === 'high') reason = 'High-risk combined changes require revision-bound post-integration verification.';
+  else if (required && planEscalated) reason = 'Combined-state impact escalated the verification plan after integration.';
+
+  return {
+    required: required && !evidenceSatisfied,
+    reason,
+    repoRevision: revision,
+    requiredCommands: combinedPlan.commands,
+    missingCommands,
+    broadEvidenceRequired,
+    baseAdvanced,
+  };
+}
+
 export function finalizeTaskWorkspace(state: AppState, input: TaskWorkspaceFinalizationInput) {
   const taskId = String(input?.taskId || '').trim();
   const workspaceId = String(input?.workspaceId || '').trim();
@@ -112,17 +187,33 @@ export function finalizeTaskWorkspace(state: AppState, input: TaskWorkspaceFinal
   const refreshedMetadata = getSessionWorkspaceMetadataForRecovery(workspaceId);
   if (!refreshedMetadata) throw createApiError(409, 'WORKSPACE_METADATA_LOST', 'Workspace metadata disappeared during finalization.', { affectedId: workspaceId });
 
+  const checks = input.checks || [];
+  const impactRules = loadProjectVerificationImpactRules(refreshedMetadata.projectRoot);
+  const { sourcePlan, combinedPlan } = planCombinedVerification(integration, checks, impactRules);
+  const postIntegration = evaluatePostIntegrationRequirement(integration, checks, sourcePlan, combinedPlan);
+  if (postIntegration.required) {
+    return {
+      status: 'blocked' as const,
+      code: 'POST_INTEGRATION_VERIFICATION_REQUIRED' as const,
+      message: postIntegration.reason,
+      integration,
+      sourcePlan,
+      combinedPlan,
+      postIntegration,
+    };
+  }
+
   const evidenceTask = { ...task, branch: refreshedMetadata.baseBranch };
   let synced: ReturnType<typeof syncTaskWithGit>;
   try {
     synced = syncTaskWithGit(state, evidenceTask, {
       projectId: task.projectId,
       fetch: false,
-      checks: input.checks,
+      checks,
     });
   } catch (error: any) {
     if (error?.payload?.code !== 'GIT_REMOTE_NOT_FOUND') throw error;
-    synced = localOnlyEvidence(evidenceTask, refreshedMetadata.baseBranch, integration.baseHeadAfter, input.checks || []) as ReturnType<typeof syncTaskWithGit>;
+    synced = localOnlyEvidence(evidenceTask, refreshedMetadata.baseBranch, integration.baseHeadAfter, checks) as ReturnType<typeof syncTaskWithGit>;
   }
   const finalTask = clearTaskClaimWhenLeavingInProgress({
     ...synced.task,
@@ -130,7 +221,10 @@ export function finalizeTaskWorkspace(state: AppState, input: TaskWorkspaceFinal
     branch: refreshedMetadata.baseBranch,
     updatedAt: new Date().toISOString(),
   });
-  appendFinalizationLog(finalTask, `Finalized managed workspace ${workspaceId} into ${refreshedMetadata.baseBranch}@${integration.baseHeadAfter.slice(0, 12)} with ${synced.verificationEvidence.length} passed verification check(s).`);
+  appendFinalizationLog(
+    finalTask,
+    `Finalized managed workspace ${workspaceId} into ${refreshedMetadata.baseBranch}@${integration.baseHeadAfter.slice(0, 12)} with ${synced.verificationEvidence.length} passed verification check(s); combined impact covered ${integration.combinedChangedFiles.length} changed file(s).`,
+  );
   saveTask(finalTask);
 
   const session = listExecutionSessionsForTask(task.id).find((entry) => entry.workspaceId === workspaceId && entry.status === 'active');
@@ -146,6 +240,9 @@ export function finalizeTaskWorkspace(state: AppState, input: TaskWorkspaceFinal
     status: 'completed' as const,
     task: getTaskByIdentifier(task.id, 'full') || finalTask,
     integration,
+    sourcePlan,
+    combinedPlan,
+    postIntegration,
     gitEvidence: synced.gitEvidence,
     verificationEvidence: synced.verificationEvidence,
     cleanup,

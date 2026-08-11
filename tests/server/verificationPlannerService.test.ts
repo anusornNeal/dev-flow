@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 const { planVerification } = await import('../../src/server/services/verificationPlannerService.js');
+const { loadProjectVerificationImpactRules } = await import('../../src/server/services/projectCommandConfigService.js');
 
 test('low-risk isolated UI change selects FAST lane with targeted checks', () => {
   const plan = planVerification({
@@ -109,4 +113,67 @@ test('planner propagates fast verification resource metadata without changing se
   assert.deepEqual(plan.commands, ['typecheck']);
   assert.equal(plan.steps[0]?.verificationClass, 'fast');
   assert.deepEqual(plan.steps[0]?.sharedResources, ['typescript']);
+});
+
+
+test('configured impact rules select the smallest covered verification and explain omissions', () => {
+  const plan = planVerification({
+    changedFiles: ['src/server/services/exampleService.ts'],
+    requestedCommands: ['typecheck', 'test', 'verify'],
+    impactRules: [
+      {
+        id: 'service-unit',
+        patterns: ['src/server/services/**'],
+        commands: ['test'],
+        reason: 'Service changes are covered by focused service tests.',
+      },
+    ],
+  });
+
+  assert.deepEqual(plan.commands, ['test']);
+  assert.equal(plan.impact.mode, 'configured');
+  assert.deepEqual(plan.impact.coveredFiles, ['src/server/services/exampleService.ts']);
+  assert.deepEqual(plan.impact.unknownFiles, []);
+  assert.deepEqual(plan.impact.matchedRuleIds, ['service-unit']);
+  assert.ok(plan.impact.omittedCommands.some((entry: any) => entry.command === 'verify' && /not selected/i.test(entry.reason)));
+});
+
+test('unknown impact falls back conservatively instead of trusting partial mappings', () => {
+  const plan = planVerification({
+    changedFiles: ['src/server/services/exampleService.ts', 'scripts/unknown-tool.ts'],
+    requestedCommands: ['typecheck', 'test', 'verify'],
+    impactRules: [
+      { id: 'service-unit', patterns: ['src/server/services/**'], commands: ['test'] },
+    ],
+  });
+
+  assert.equal(plan.impact.mode, 'fallback');
+  assert.deepEqual(plan.impact.unknownFiles, ['scripts/unknown-tool.ts']);
+  assert.deepEqual(plan.commands, ['typecheck', 'test']);
+  assert.ok(plan.reasons.some((reason: string) => /fallback/i.test(reason)));
+});
+
+test('repository verification impact mapping loads from declarative project config', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-impact-config-'));
+  fs.mkdirSync(path.join(root, '.devflow'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.devflow', 'verification-impact.json'), JSON.stringify({
+    rules: [
+      {
+        id: 'service-tests',
+        patterns: ['src/services/**'],
+        commands: ['test:service'],
+        lane: 'fast',
+        reason: 'Service module mapping from repository config.',
+      },
+    ],
+  }));
+
+  const rules = loadProjectVerificationImpactRules(root);
+  assert.deepEqual(rules, [{
+    id: 'service-tests',
+    patterns: ['src/services/**'],
+    commands: ['test:service'],
+    lane: 'fast',
+    reason: 'Service module mapping from repository config.',
+  }]);
 });

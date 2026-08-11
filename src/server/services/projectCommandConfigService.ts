@@ -4,12 +4,14 @@ import crypto from 'node:crypto';
 import { createApiError } from './api';
 import { resolveSafePath } from './localFileService';
 import { readWorkspaceMetadataFile } from './workspaceMetadataCacheService';
+import type { VerificationImpactRule } from './verificationPlannerService';
 
 const MAX_CONFIG_BYTES = 100_000;
 export const PROJECT_COMMAND_CONFIG_RELATIVE_PATHS = [
   '.devflow/commands.yaml',
   '.devflow/commands.json',
 ] as const;
+export const PROJECT_VERIFICATION_IMPACT_RELATIVE_PATH = '.devflow/verification-impact.json' as const;
 
 export type ProjectCommandConfigSnapshot = {
   fingerprint: string;
@@ -17,7 +19,8 @@ export type ProjectCommandConfigSnapshot = {
 };
 
 export function getProjectCommandConfigSnapshot(root: string): ProjectCommandConfigSnapshot {
-  const entries = PROJECT_COMMAND_CONFIG_RELATIVE_PATHS.flatMap((relativePath) => {
+  const relevantPaths = [...PROJECT_COMMAND_CONFIG_RELATIVE_PATHS, PROJECT_VERIFICATION_IMPACT_RELATIVE_PATH];
+  const entries = relevantPaths.flatMap((relativePath) => {
     const absolutePath = path.resolve(root, relativePath);
     if (!fs.existsSync(absolutePath)) return [];
     const stat = fs.lstatSync(absolutePath);
@@ -308,4 +311,75 @@ export function loadProjectCommandPreset(root: string, commandName: string): Pro
     category,
     configPath: config.configPath,
   };
+}
+
+const MAX_IMPACT_RULES = 100;
+const MAX_IMPACT_PATTERNS = 50;
+const MAX_IMPACT_COMMANDS = 20;
+const MAX_IMPACT_TEXT = 500;
+
+function validateImpactStringList(value: unknown, field: string, ruleId: string, maxItems: number) {
+  if (!Array.isArray(value) || value.length === 0 || value.length > maxItems) {
+    throw createApiError(400, 'INVALID_VERIFICATION_IMPACT_CONFIG', `Impact rule '${ruleId}' ${field} must contain 1-${maxItems} string values.`);
+  }
+  return Array.from(new Set(value.map((entry) => {
+    if (typeof entry !== 'string' || !entry.trim() || entry.length > MAX_IMPACT_TEXT || /[\r\n\0]/.test(entry)) {
+      throw createApiError(400, 'INVALID_VERIFICATION_IMPACT_CONFIG', `Impact rule '${ruleId}' contains an invalid ${field} value.`);
+    }
+    return entry.trim().replace(/\\/g, '/');
+  })));
+}
+
+export function loadProjectVerificationImpactRules(root: string): VerificationImpactRule[] {
+  const configPath = path.resolve(root, PROJECT_VERIFICATION_IMPACT_RELATIVE_PATH);
+  if (!fs.existsSync(configPath)) return [];
+  const stat = fs.lstatSync(configPath);
+  if (stat.isSymbolicLink() || !stat.isFile() || stat.size > MAX_CONFIG_BYTES) {
+    throw createApiError(400, 'INVALID_VERIFICATION_IMPACT_CONFIG', `Verification impact config '${PROJECT_VERIFICATION_IMPACT_RELATIVE_PATH}' must be a regular file no larger than ${MAX_CONFIG_BYTES} bytes.`);
+  }
+  const metadata = readWorkspaceMetadataFile(configPath, MAX_CONFIG_BYTES);
+  if (!metadata) return [];
+
+  let parsed: any;
+  try {
+    parsed = JSON.parse(metadata.content);
+  } catch (error) {
+    throw createApiError(400, 'INVALID_VERIFICATION_IMPACT_CONFIG', `Could not parse '${PROJECT_VERIFICATION_IMPACT_RELATIVE_PATH}'.`, {
+      details: error instanceof Error ? error.message : String(error),
+    });
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !Array.isArray(parsed.rules) || parsed.rules.length > MAX_IMPACT_RULES) {
+    throw createApiError(400, 'INVALID_VERIFICATION_IMPACT_CONFIG', `Verification impact config requires a 'rules' array with at most ${MAX_IMPACT_RULES} entries.`);
+  }
+
+  return parsed.rules.map((raw: any, index: number) => {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw createApiError(400, 'INVALID_VERIFICATION_IMPACT_CONFIG', `Verification impact rule ${index + 1} must be an object.`);
+    }
+    const id = typeof raw.id === 'string' && raw.id.trim() ? raw.id.trim() : `rule-${index + 1}`;
+    if (id.length > 64 || !/^[A-Za-z0-9][A-Za-z0-9:_-]*$/.test(id)) {
+      throw createApiError(400, 'INVALID_VERIFICATION_IMPACT_CONFIG', `Verification impact rule id '${id}' is invalid.`);
+    }
+    const lane = raw.lane === undefined ? undefined : String(raw.lane).trim().toLowerCase();
+    if (lane !== undefined && lane !== 'fast' && lane !== 'safe' && lane !== 'full') {
+      throw createApiError(400, 'INVALID_VERIFICATION_IMPACT_CONFIG', `Impact rule '${id}' lane must be fast, safe, or full.`);
+    }
+    const reason = raw.reason === undefined ? undefined : String(raw.reason).trim();
+    if (reason !== undefined && (reason.length > MAX_IMPACT_TEXT || /[\r\n\0]/.test(reason))) {
+      throw createApiError(400, 'INVALID_VERIFICATION_IMPACT_CONFIG', `Impact rule '${id}' reason is invalid.`);
+    }
+    const commands = validateImpactStringList(raw.commands, 'commands', id, MAX_IMPACT_COMMANDS);
+    for (const command of commands) {
+      if (!/^[A-Za-z0-9][A-Za-z0-9:_-]{0,63}$/.test(command)) {
+        throw createApiError(400, 'INVALID_VERIFICATION_IMPACT_CONFIG', `Impact rule '${id}' command '${command}' is invalid.`);
+      }
+    }
+    return {
+      id,
+      patterns: validateImpactStringList(raw.patterns, 'patterns', id, MAX_IMPACT_PATTERNS),
+      commands,
+      ...(lane ? { lane: lane as VerificationImpactRule['lane'] } : {}),
+      ...(reason ? { reason } : {}),
+    };
+  });
 }

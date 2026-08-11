@@ -136,3 +136,62 @@ test('finalization refuses incomplete checklist and missing verification before 
   assert.equal(verificationBlocked.code, 'VERIFICATION_EVIDENCE_MISSING');
   assert.equal(fs.existsSync(workspace.root), true);
 });
+
+
+test('finalization blocks pre-integration evidence when sibling changes escalate combined-state verification', () => {
+  const { root, task, workspace, state } = fixture('combined-gate');
+  fs.writeFileSync(path.join(workspace.root, 'tracked.txt'), 'implemented\n');
+  git(workspace.root, ['add', 'tracked.txt']);
+  git(workspace.root, ['commit', '-m', 'implement task']);
+  fs.writeFileSync(path.join(root, 'package.json'), '{"scripts":{"verify":"node -e \\\"process.exit(0)\\\""}}\n');
+  git(root, ['add', 'package.json']);
+  git(root, ['commit', '-m', 'sibling config change']);
+
+  const preIntegration = finalizeTaskWorkspace(state, { taskId: task.id, workspaceId: workspace.workspaceId, checks });
+  assert.equal(preIntegration.status, 'blocked');
+  assert.equal(preIntegration.code, 'POST_INTEGRATION_VERIFICATION_REQUIRED');
+  assert.ok(preIntegration.integration.combinedChangedFiles.includes('package.json'));
+  assert.equal(getTask(task.id)?.status, 'in-progress');
+
+  const integratedHead = git(root, ['rev-parse', 'HEAD']).stdout;
+  const postIntegrationChecks = [
+    ...checks,
+    { name: 'combined-full', command: 'verify', scope: 'full' as const, status: 'passed' as const, repoRevision: integratedHead },
+  ];
+  const completed = finalizeTaskWorkspace(state, { taskId: task.id, workspaceId: workspace.workspaceId, checks: postIntegrationChecks });
+  assert.equal(completed.status, 'completed');
+  assert.equal(getTask(task.id)?.status, 'done');
+});
+
+test('combined repository mapping can require a verification command absent from pre-integration evidence', () => {
+  const { root, task, workspace, state } = fixture('combined-mapping');
+  fs.mkdirSync(path.join(workspace.root, 'src', 'service'), { recursive: true });
+  fs.writeFileSync(path.join(workspace.root, 'src', 'service', 'a.ts'), 'export const a = 1;\n');
+  git(workspace.root, ['add', 'src/service/a.ts']);
+  git(workspace.root, ['commit', '-m', 'service change']);
+
+  fs.mkdirSync(path.join(root, '.devflow'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'src', 'feature'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'src', 'feature', 'b.ts'), 'export const b = 2;\n');
+  fs.writeFileSync(path.join(root, '.devflow', 'verification-impact.json'), JSON.stringify({
+    rules: [
+      { id: 'service', patterns: ['src/service/**'], commands: ['test:service'] },
+      { id: 'feature', patterns: ['src/feature/**'], commands: ['test:integration'] },
+      { id: 'impact-policy', patterns: ['.devflow/verification-impact.json'], commands: ['test:integration'] },
+    ],
+  }));
+  git(root, ['add', 'src/feature/b.ts', '.devflow/verification-impact.json']);
+  git(root, ['commit', '-m', 'sibling feature and impact mapping']);
+
+  const result = finalizeTaskWorkspace(state, {
+    taskId: task.id,
+    workspaceId: workspace.workspaceId,
+    checks: [{ name: 'service', command: 'test:service', status: 'passed' }],
+  });
+
+  assert.equal(result.status, 'blocked');
+  assert.equal(result.code, 'POST_INTEGRATION_VERIFICATION_REQUIRED');
+  assert.ok(result.combinedPlan.commands.includes('test:integration'));
+  assert.ok(result.postIntegration.missingCommands.includes('test:integration'));
+  assert.equal(getTask(task.id)?.status, 'in-progress');
+});

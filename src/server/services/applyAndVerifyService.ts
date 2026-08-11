@@ -14,6 +14,7 @@ import {
 import { planVerification } from './verificationPlannerService';
 import { resolveProjectRoot } from './localFileService';
 import { createVerificationCandidate, releaseVerificationCandidate } from './verificationCandidateService';
+import { loadProjectVerificationImpactRules } from './projectCommandConfigService';
 
 function projectScopeArgs(args: Record<string, any>) {
   return {
@@ -36,6 +37,7 @@ function changedPaths(edit: any) {
 
 function buildVerificationPlan(state: AppState, args: Record<string, any>, files: string[]) {
   const requestedCommands = Array.isArray(args.requestedCommands) ? args.requestedCommands : [];
+  const impactRules = loadProjectVerificationImpactRules(resolveProjectRoot(state, args));
   const resolvedCommands = requestedCommands.map((command: string) => describeProjectCommand(state, {
     ...projectScopeArgs(args),
     command,
@@ -46,6 +48,7 @@ function buildVerificationPlan(state: AppState, args: Record<string, any>, files
     requestedCommands,
     resolvedCommands,
     resourceIsolatedCommands: Array.isArray(args.resourceIsolatedCommands) ? args.resourceIsolatedCommands : [],
+    impactRules,
   });
 }
 

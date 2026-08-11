@@ -65,7 +65,7 @@ export const workspaceToolDefinitions: DevFlowToolDefinition[] = [
       properties: {
         workspaceId: { type: 'string', description: 'Opaque DevFlow workspace id.' },
         taskId: { type: 'string', description: 'DevFlow task id/displayId to finalize.' },
-        checks: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, command: { type: 'string' }, status: { type: 'string', enum: ['passed', 'failed', 'not-run'] }, summary: { type: 'string' }, output: { type: 'string' }, recordedAt: { type: 'string' } }, required: ['command', 'status'] } },
+        checks: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, command: { type: 'string' }, status: { type: 'string', enum: ['passed', 'failed', 'not-run'] }, scope: { type: 'string', enum: ['targeted', 'broad', 'full'], description: 'Verification coverage scope for combined-state finalization.' }, repoRevision: { type: 'string', description: 'Exact integrated Git revision this verification check was run against.' }, summary: { type: 'string' }, output: { type: 'string' }, recordedAt: { type: 'string' } }, required: ['command', 'status'] } },
         requireChecklistComplete: { type: 'boolean', description: 'Require every checklist item complete before finalization. Defaults to true.' },
       },
       required: ['workspaceId', 'taskId', 'checks'],

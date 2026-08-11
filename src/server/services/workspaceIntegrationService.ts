@@ -43,6 +43,9 @@ export type WorkspaceIntegrationSuccess = {
   sourceCommits: string[];
   integratedCommits: string[];
   changedFiles: string[];
+  combinedChangedFiles: string[];
+  combinedImpactBaseRevision: string;
+  combinedImpactHead: string;
   alreadyIntegrated?: boolean;
   patchEquivalent?: boolean;
 };
@@ -174,6 +177,14 @@ function sourceCommits(root: string, baseRevision: string, sourceHead: string) {
 function changedFiles(root: string, baseRevision: string, sourceHead: string) {
   const output = runGit(root, ['diff', '--name-only', `${baseRevision}..${sourceHead}`]).stdout;
   return output ? output.split(/\r?\n/).filter(Boolean).map((entry) => entry.replace(/\\/g, '/')) : [];
+}
+
+function combinedImpact(workspace: SessionWorkspace, combinedHead: string) {
+  return {
+    combinedChangedFiles: changedFiles(workspace.projectRoot, workspace.baseRevision, combinedHead),
+    combinedImpactBaseRevision: workspace.baseRevision,
+    combinedImpactHead: combinedHead,
+  };
 }
 
 function conflictedPaths(root: string) {
@@ -369,6 +380,7 @@ function integrateWorkspaceWithMergePolicy(
     sourceCommits: commits,
     integratedCommits,
     changedFiles: files,
+    ...combinedImpact(workspace, baseHeadAfter),
   };
 }
 
@@ -398,6 +410,7 @@ export function integrateWorkspaceCommits(workspaceId: string, options: Workspac
       sourceCommits: commits,
       integratedCommits: commits,
       changedFiles: files,
+      ...combinedImpact(workspace, baseHeadBefore),
       alreadyIntegrated: true,
     };
   }
@@ -420,6 +433,7 @@ export function integrateWorkspaceCommits(workspaceId: string, options: Workspac
       sourceCommits: commits,
       integratedCommits: [],
       changedFiles: files,
+      ...combinedImpact(workspace, baseHeadBefore),
       alreadyIntegrated: true,
       patchEquivalent: true,
     };
@@ -530,6 +544,7 @@ export function integrateWorkspaceCommits(workspaceId: string, options: Workspac
     sourceCommits: commits,
     integratedCommits,
     changedFiles: files,
+    ...combinedImpact(workspace, baseHeadAfter),
   };
 }
 
@@ -642,6 +657,7 @@ export function retryWorkspaceIntegration(workspaceId: string): WorkspaceIntegra
       sourceCommits: state.sourceCommits,
       integratedCommits,
       changedFiles: state.changedFiles,
+      ...combinedImpact(workspace, baseHeadAfter),
     };
   }
 
@@ -711,6 +727,7 @@ export function retryWorkspaceIntegration(workspaceId: string): WorkspaceIntegra
     sourceCommits: state.sourceCommits,
     integratedCommits,
     changedFiles: state.changedFiles,
+    ...combinedImpact(workspace, baseHeadAfter),
   };
 }
 

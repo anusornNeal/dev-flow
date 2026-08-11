@@ -295,3 +295,21 @@ test('retry completes a deliberately resolved conflict without losing source com
   assert.equal(git(workspace.root, ['rev-parse', '-q', '--verify', 'MERGE_HEAD'], true).status, 1);
   assert.equal(git(root, ['cat-file', '-e', `${conflict.sourceHead}^{commit}`]).status, 0);
 });
+
+
+test('integration reports combined target-branch changed files including sibling commits', () => {
+  const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-integration-combined-impact-'));
+  process.env.DEVFLOW_RUNTIME_DIR = runtimeRoot;
+  resetSessionWorkspaceRuntimeForTests();
+  const root = repoFixture();
+  const workspace = createOrReuseSessionWorkspace(project(root), 'chat-combined-impact');
+  commitFile(workspace.root, 'workspace.txt', 'workspace\n', 'workspace change');
+  commitFile(root, 'base-only.txt', 'base\nsibling\n', 'sibling base change');
+
+  const result = integrateWorkspaceCommits(workspace.workspaceId);
+  assert.equal(result.status, 'succeeded');
+  assert.deepEqual(result.changedFiles, ['workspace.txt']);
+  assert.deepEqual(result.combinedChangedFiles.sort(), ['base-only.txt', 'workspace.txt']);
+  assert.equal(result.combinedImpactBaseRevision, workspace.baseRevision);
+  assert.equal(result.combinedImpactHead, result.baseHeadAfter);
+});

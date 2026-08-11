@@ -6,7 +6,7 @@ import { resolveProjectResourceIdentity, resolveProjectRoot } from './localFileS
 import { isDevFlowRestartPending, readDevFlowRestartState } from '../../lib/devFlowRestart';
 import { getRepoRevisionForRoot } from './repoRevisionService';
 import { getProjectCommandAdmissionPreflight, getProjectCommandExecutionIdentity, prepareProjectCommandVerificationCandidateAsync, type ProjectCommandExecutionIdentity } from './projectCommandService';
-import { releaseVerificationCandidate, releaseVerificationCandidateAsync } from './verificationCandidateService';
+import { isVerificationCandidateCurrent, releaseVerificationCandidate, releaseVerificationCandidateAsync } from './verificationCandidateService';
 import { getToolDefinitionByName } from '../contracts/devflowContract';
 import {
   buildQueueEntryDiagnostics,
@@ -473,8 +473,74 @@ function supersededJobResult(verification: VerificationQueuePolicy | undefined, 
     verificationGeneration: verification?.generation,
     supersededByCandidateKey,
     supersededByGeneration,
+    verificationFreshness: 'superseded',
+    stale: true,
+    superseded: true,
     authoritative: false,
   };
+}
+
+function staleGreenJobResult(verification: VerificationQueuePolicy | undefined) {
+  return {
+    ok: false,
+    status: 'cancelled',
+    code: 'VERIFICATION_RESULT_STALE',
+    message: `Verification candidate ${verification?.candidateKey || 'unknown'} became stale before its GREEN result could be accepted.`,
+    verificationCandidateKey: verification?.candidateKey,
+    verificationGeneration: verification?.generation,
+    verificationFreshness: 'stale',
+    stale: true,
+    superseded: false,
+    authoritative: false,
+  };
+}
+
+function currentGreenJobResult(result: any, verification: VerificationQueuePolicy | undefined) {
+  if (verification?.evidenceIntent !== 'green' || !result || typeof result !== 'object' || Array.isArray(result)) return result;
+  return {
+    ...result,
+    verificationFreshness: 'current',
+    stale: false,
+    superseded: false,
+    authoritative: true,
+  };
+}
+
+function capturedGreenCandidateIsCurrent(entry: QueueEntry) {
+  if (entry.verification?.evidenceIntent !== 'green') return true;
+  const candidate = entry.args?.__verificationCandidate;
+  if (!candidate || typeof candidate.repoRevision !== 'string' || !candidate.repoRevision.trim()) return true;
+  try {
+    const root = resolveProjectRoot(entry.state, entry.args);
+    return isVerificationCandidateCurrent(root, candidate, candidate.commandConfigFingerprint);
+  } catch {
+    return false;
+  }
+}
+
+function terminalizeObsoleteGreenResult(entry: QueueEntry, leaseGuard: JobLeaseGuard) {
+  const verification = entry.verification;
+  if (verification?.evidenceIntent !== 'green') return false;
+
+  const superseding = findNewerVerification(verification);
+  if (superseding) {
+    if (recordSupersession(entry, superseding.candidateKey, superseding.generation, false)) {
+      writeJobResult(entry.jobId, supersededJobResult(verification, superseding.candidateKey, superseding.generation));
+      appendJobLog(entry.jobId, 'stderr', `\n[Verification Superseded] Late GREEN fenced by candidate ${superseding.candidateKey}.\n`);
+      return true;
+    }
+    if (getJob(entry.jobId)?.supersededAt) return true;
+  }
+
+  if (capturedGreenCandidateIsCurrent(entry)) return false;
+  const transitioned = transitionJobStatus(entry.jobId, ['running'], {
+    status: 'cancelled',
+    failureSummary: 'Verification candidate became stale before GREEN completion.',
+  }, leaseGuard);
+  if (!transitioned) return getJob(entry.jobId)?.status !== 'running';
+  writeJobResult(entry.jobId, staleGreenJobResult(verification));
+  appendJobLog(entry.jobId, 'stderr', '\n[Verification Stale] Repository or command configuration changed before GREEN completion.\n');
+  return true;
 }
 
 function recordSupersession(
@@ -1083,6 +1149,15 @@ export function getToolJobStatus(jobId: string) {
   const supersededByCandidateKey = job.supersededByCandidateKey || supersession?.supersededByCandidateKey;
   const supersededByGeneration = job.supersededByGeneration ?? supersession?.supersededByGeneration;
   const isSuperseded = Boolean(job.supersededAt || supersededByCandidateKey);
+  const terminalResult = isTerminalStatus(job.status) ? readJobResult(jobId)?.result : undefined;
+  const resultFreshness = terminalResult?.verificationFreshness;
+  const verificationFreshness = isSuperseded
+    ? 'superseded'
+    : resultFreshness === 'stale'
+      ? 'stale'
+      : verification?.evidenceIntent === 'green' && job.status === 'succeeded'
+        ? 'current'
+        : undefined;
   return {
     ...job,
     queuePosition: position >= 0 ? position + 1 : 0,
@@ -1101,9 +1176,13 @@ export function getToolJobStatus(jobId: string) {
       acceptedGreenGeneration: verification.acceptedGreenGeneration,
       verificationLag: verification.lag,
     } : {}),
+    ...(verificationFreshness ? {
+      verificationFreshness,
+      authoritative: verificationFreshness === 'current',
+      stale: verificationFreshness === 'stale',
+      superseded: verificationFreshness === 'superseded',
+    } : {}),
     ...(isSuperseded ? {
-      superseded: true,
-      authoritative: false,
       supersededByCandidateKey,
       supersededByGeneration,
       cooperativeCancellationRequested: supersession?.cooperativeCancellationRequested || false,
@@ -1593,8 +1672,11 @@ async function startJob(entry: QueueEntry) {
     bufferedLogger.flush();
 
     const currentStatus = getJob(entry.jobId)?.status;
+    const obsoleteGreen = currentStatus === 'running' ? terminalizeObsoleteGreenResult(entry, leaseGuard) : false;
     if (currentStatus === 'cancelled' || currentStatus === 'timed_out') {
       // Persisted cancellation/timeout wins over a late worker result.
+    } else if (obsoleteGreen) {
+      // A newer generation or changed repository fenced this GREEN before terminal acceptance.
     } else if (isTimedOutResult(result)) {
       const wrote = writeJobResult(entry.jobId, result, leaseGuard);
       const transitioned = wrote
@@ -1602,7 +1684,9 @@ async function startJob(entry: QueueEntry) {
         : null;
       if (transitioned) appendJobLog(entry.jobId, 'stderr', '\n[Job Timed Out]\n');
     } else {
-      const wrote = writeJobResult(entry.jobId, result, leaseGuard);
+      const acceptedResult = currentGreenJobResult(result, entry.verification);
+      completedResult = acceptedResult;
+      const wrote = writeJobResult(entry.jobId, acceptedResult, leaseGuard);
       if (wrote) transitionJobStatus(entry.jobId, ['running'], { status: 'succeeded' }, leaseGuard);
     }
   } catch (error: any) {

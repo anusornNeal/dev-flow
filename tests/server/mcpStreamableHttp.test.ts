@@ -22,6 +22,12 @@ async function withMcpServer(
   app.get('/api/workflow-health', (_req, res) => {
     res.json({ contractVersion: 'test-contract', runtimeInstanceId, marker: 'streamable-http-call-ok' });
   });
+  app.get('/api/skills/authoring/00-skill-router', (_req, res) => {
+    res.json({ id: '00-skill-router', content: '# router' });
+  });
+  app.get('/api/tasks', (_req, res) => {
+    res.json({ tasks: [], marker: 'streamable-http-tasks-ok' });
+  });
   app.use('/mcp', express.json({ limit: '1mb' }));
   app.all('/mcp', (req, res, next) => {
     if (!handler) throw new Error('MCP test handler is not initialized.');
@@ -110,7 +116,37 @@ test('Streamable HTTP handler initializes a reusable server session', async () =
     assert.match(response.headers.get('content-type') || '', /^text\/event-stream/i, 'Streamable HTTP POST responses should use request-scoped SSE');
     assert.equal(body.id, 1);
     assert.equal(body.result?.serverInfo?.name, 'dev-flow-mcp');
+    assert.match(body.result?.instructions || '', /get_skill_router/i);
+    assert.match(body.result?.instructions || '', /before normal DevFlow workflows/i);
+    assert.match(body.result?.instructions || '', /UI.*preview.*mockup.*concept/i);
+    assert.match(body.result?.instructions || '', /image generation requires an explicit image-generation request/i);
     assert.match(response.headers.get('mcp-session-id') || '', /^[0-9a-f-]{20,}$/i, 'stateful mode must issue a reusable session id');
+  });
+});
+
+test('Streamable HTTP bootstrap is isolated per session and unlocks only after router read', async () => {
+  await withMcpServer(async (baseUrl) => {
+    const first = createClient(baseUrl, 'devflow-bootstrap-first');
+    const second = createClient(baseUrl, 'devflow-bootstrap-second');
+    try {
+      await Promise.all([first.client.connect(first.transport), second.client.connect(second.transport)]);
+
+      const blockedFirst = await first.client.callTool({ name: 'search_tasks', arguments: { projectId: 'proj-1' } }) as any;
+      assert.equal(blockedFirst.isError, true);
+      assert.equal(JSON.parse(String(blockedFirst.content?.[0]?.text || '{}')).code, 'BOOTSTRAP_REQUIRED');
+
+      const router = await first.client.callTool({ name: 'get_skill_router', arguments: {} }) as any;
+      assert.equal(router.isError, undefined);
+      const allowedFirst = await first.client.callTool({ name: 'search_tasks', arguments: { projectId: 'proj-1' } }) as any;
+      assert.equal(allowedFirst.isError, undefined);
+      assert.match(String(allowedFirst.content?.[0]?.text || ''), /streamable-http-tasks-ok/);
+
+      const stillBlockedSecond = await second.client.callTool({ name: 'search_tasks', arguments: { projectId: 'proj-1' } }) as any;
+      assert.equal(stillBlockedSecond.isError, true);
+      assert.equal(JSON.parse(String(stillBlockedSecond.content?.[0]?.text || '{}')).code, 'BOOTSTRAP_REQUIRED');
+    } finally {
+      await Promise.all([first.client.close(), second.client.close()]);
+    }
   });
 });
 

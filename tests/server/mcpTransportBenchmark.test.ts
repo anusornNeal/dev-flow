@@ -22,7 +22,7 @@ test('transport benchmark returns machine-readable cold/warm MCP and SSE metrics
   assert.deepEqual(result.config, {
     coldSamples: 2,
     warmSamples: 20,
-    toolName: 'get_tool_schema',
+    toolName: 'get_skill_router',
   });
 
   for (const protocolName of ['streamableHttpBaseline', 'streamableHttp', 'legacySse'] as const) {

@@ -52,8 +52,8 @@ type ProtocolMeasurements = {
 
 const DEFAULT_COLD_SAMPLES = 8;
 const DEFAULT_WARM_SAMPLES = 30;
-const BENCHMARK_TOOL_NAME = 'get_tool_schema';
-const BENCHMARK_TOOL_ARGS = { toolName: BENCHMARK_TOOL_NAME };
+const BENCHMARK_TOOL_NAME = 'get_skill_router';
+const BENCHMARK_TOOL_ARGS = {};
 const WARM_P50_BASELINE_RATIO_MAX = 0.95;
 const WARM_P95_BASELINE_DELTA_MAX_MS = 2;
 const ASYNC_BENCHMARK_DURATIONS_MS = [3_000, 10_000] as const;
@@ -279,6 +279,10 @@ async function startBenchmarkServer() {
       ready: true,
       result: { result: job.result },
     });
+  });
+
+  app.get('/api/skills/authoring/00-skill-router', (_req, res) => {
+    res.json({ id: '00-skill-router', content: '# benchmark router' });
   });
 
   app.get('/api/capabilities/tools/:toolName', (req, res) => {

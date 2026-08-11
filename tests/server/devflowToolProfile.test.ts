@@ -85,6 +85,15 @@ test('all maintained DevFlow skills avoid stale tool namespaces and direct manag
   assert.deepEqual(staleReferences, [], 'maintained skills must use current consolidated intents and opaque workspace identity');
 });
 
+test('skill router keeps ambiguous DevFlow visual intents in DevFlow and image generation explicit opt-in', () => {
+  const content = fs.readFileSync(new URL('../../skills/00-skill-router.md', import.meta.url), 'utf8');
+  assert.match(content, /UI preview, mockup, concept, redesign, layout/i);
+  assert.match(content, /stay in DevFlow/i);
+  assert.match(content, /real repository work and DevFlow preview\/evidence/i);
+  assert.match(content, /External image generation is explicit opt-in only/i);
+  assert.match(content, /mockup.*not image-generation intent/i);
+});
+
 test('execution and review guidance resolves repository Git policy instead of assuming merge topology', () => {
   for (const skillName of [
     '03-reviewer-core.md',
@@ -139,6 +148,14 @@ test('coding MCP profile is lean, alias-free, and preserves representative workf
 test('diagnostics MCP profile keeps the recovery handoff surface available', () => {
   const names = new Set(getMcpToolList('diagnostics').map((tool: any) => tool.name));
   assert.equal(names.has('get_recovery_handoff'), true);
+});
+
+test('every agent-facing MCP profile exposes the canonical bootstrap pair', () => {
+  for (const profile of ['full', 'coding', 'authoring', 'review', 'atlas'] as const) {
+    const names = new Set(getMcpToolList(profile).map((tool: any) => tool.name));
+    assert.equal(names.has('get_skill_router'), true, `${profile} must expose get_skill_router`);
+    assert.equal(names.has('get_authoring_skill'), true, `${profile} must expose get_authoring_skill`);
+  }
 });
 
 test('full MCP surface removes globally consolidated tools while keeping high-level intents', () => {

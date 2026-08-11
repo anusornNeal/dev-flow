@@ -20,3 +20,6 @@ Choose the smallest DevFlow guidance set that matches the current action. This f
 - Master skills define policy. Compatibility documents and examples are non-authoritative.
 - Keep portable task metadata repository-relative and avoid machine-specific local paths.
 - If live tool structure conflicts with prose, follow the live tool structure and update the stale guidance.
+- In DevFlow context, ambiguous visual-product requests such as UI preview, mockup, concept, redesign, layout, `ลองทำหน้า...`, `ทำให้ดู`, or `วาด concept` stay in DevFlow. Route them to the smallest authoring/evidence/execution path needed to produce real repository work and DevFlow preview/evidence.
+- External image generation is explicit opt-in only when the user clearly asks to generate or create an image, for example `generate image`, `เจนภาพ`, `ทำรูป`, or `เจนรูป`. `mockup` or `วาด concept` alone is not image-generation intent.
+

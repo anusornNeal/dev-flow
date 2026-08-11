@@ -18,6 +18,20 @@ npm run start:all
 
 `start:all` keeps the existing setup + DevFlow server + ngrok behavior. Both standard launch modes use the same restart handoff and token validation.
 
+## Single-instance runtime ownership
+
+Both `npm run dev` and `npm run start:all` now enter the same authoritative single-instance supervisor path. The first launcher atomically claims `.devflow/runtime-owner/` and publishes `owner.json` with an opaque runtime instance id plus a loopback-only control endpoint/token. A later launcher does not trust the recorded PID by itself: it challenges the control endpoint and requires the supervisor name, opaque instance id, PID, and lifecycle state to match before reusing the runtime.
+
+A dead or invalid control identity is treated as stale ownership. Recovery quarantines/removes only the stale ownership directory and races again for the atomic claim; it never kills a process by PID, process name, or listening port. If the configured DevFlow port is already occupied after a new owner is established, startup fails with `DEVFLOW_PORT_CONFLICT` and leaves the unrelated process untouched.
+
+Repeated healthy launches open/focus the recorded DevFlow app URL and exit without spawning another supervisor/server/ngrok tree.
+
+### Windows launcher and tray
+
+`Start DevFlow.bat` launches the hidden tray bootstrap. The tray uses a project-scoped Windows mutex so duplicate tray launches reuse the existing control surface instead of creating another hidden icon. The tray may request `npm run start:all`, but it never owns the resulting processes; the single-instance supervisor decides whether to start a new runtime or reuse the existing one.
+
+Tray **Restart DevFlow** calls the same `/api/restart` guarded ticket path as `restart_devflow`, so queued/active MCP work still produces `RESTART_BUSY` instead of a force kill. Tray **Stop Server && Exit** sends an authenticated loopback shutdown request to the owner control endpoint and exits only after that request is accepted. The tray contains no port sweep, `taskkill`, kill-by-process-name, direct server spawn, or direct ngrok spawn path.
+
 ### ngrok self-healing in `start:all`
 
 When the ngrok child exits unexpectedly or fails to spawn, the supervisor keeps the DevFlow API child running and retries **ngrok only**. Retry delay uses bounded exponential backoff: 1s, 2s, 4s, and so on up to 30s by default. If one ngrok child stays alive for 60s, the retry attempt counter resets so a later failure starts again at the base delay. The supervisor maintains at most one pending retry timer per managed child.

@@ -16,6 +16,10 @@ import {
   readDevFlowRestartState,
 } from '../src/lib/devFlowRestart';
 import {
+  acquireDevFlowRuntimeOwnership,
+  assertDevFlowRuntimePortAvailable,
+} from '../src/lib/devFlowRuntimeOwnership';
+import {
   createDevFlowSupervisorState,
   updateDevFlowSupervisorProcess,
   updateDevFlowSupervisorState,
@@ -41,6 +45,7 @@ type ManagedProcess = {
 };
 
 type StartAllMode = 'all' | 'server-only';
+type RuntimeLifecycleStatus = 'starting' | 'running' | 'stopping' | 'failed';
 
 type StartAllPlan = {
   mode: StartAllMode;
@@ -70,6 +75,7 @@ function parseBoolean(value: string | undefined, fallback: boolean) {
 function executableFor(command: string) {
   return process.platform === 'win32' ? `${command}.cmd` : command;
 }
+
 export function buildNpmInvocation(args: string[], env: NodeJS.ProcessEnv = process.env) {
   const npmExecPath = String(env.npm_execpath || '').trim();
   if (npmExecPath) {
@@ -166,7 +172,9 @@ function runSetup() {
   });
 
   if (result.status !== 0) {
-    process.exit(result.status ?? 1);
+    const error = new Error(`DevFlow setup failed with exit code ${result.status ?? 1}.`) as Error & { exitCode?: number };
+    error.exitCode = result.status ?? 1;
+    throw error;
   }
 }
 
@@ -237,11 +245,55 @@ function startProcess(processConfig: ManagedProcess, callbacks: ProcessCallbacks
   return child;
 }
 
-export function startAll(mode: StartAllMode = 'all') {
-  if (mode === 'all') runSetup();
+function stopManagedProcessTree(child: ChildProcessWithoutNullStreams) {
+  if (!child.pid || child.exitCode !== null) return;
+  if (process.platform === 'win32') {
+    const result = spawnSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], {
+      stdio: 'ignore',
+      shell: false,
+      windowsHide: true,
+    });
+    if (result.status === 0 || child.exitCode !== null) return;
+  }
+  if (!child.killed) child.kill();
+}
 
+export async function startAll(mode: StartAllMode = 'all') {
   const options = resolveStartAllOptions();
   const plan = buildStartAllPlan(options, randomUUID(), mode);
+  let lifecycleStatus: RuntimeLifecycleStatus = 'starting';
+  let shutdownRequested = false;
+  let shutdownHandler: (() => void) | null = null;
+
+  const ownership = await acquireDevFlowRuntimeOwnership({
+    mode,
+    appUrl: plan.appUrl,
+    getLifecycleStatus: () => lifecycleStatus,
+    onShutdown: () => {
+      shutdownRequested = true;
+      shutdownHandler?.();
+    },
+  });
+
+  if (ownership.status === 'reused') {
+    console.log(`[start-all] Reusing healthy DevFlow runtime ${ownership.owner.instanceId} (pid=${ownership.owner.pid}).`);
+    if (mode === 'all' && options.openBrowser) openUrl(ownership.owner.appUrl);
+    return { reused: true, owner: ownership.owner };
+  }
+
+  if (ownership.recoveredStaleOwner) {
+    console.warn('[start-all] Recovered stale DevFlow runtime ownership before startup.');
+  }
+
+  try {
+    await assertDevFlowRuntimePortAvailable(options.port);
+    if (mode === 'all') runSetup();
+  } catch (error) {
+    lifecycleStatus = 'failed';
+    await ownership.release();
+    throw error;
+  }
+
   const children = new Map<DevFlowSupervisorProcessLabel, ChildProcessWithoutNullStreams>();
   const restartTimers = new Map<DevFlowSupervisorProcessLabel, NodeJS.Timeout>();
   const stableTimers = new Map<DevFlowSupervisorProcessLabel, NodeJS.Timeout>();
@@ -332,6 +384,7 @@ export function startAll(mode: StartAllMode = 'all') {
           shuttingDown,
           restartState,
         })) {
+          lifecycleStatus = 'starting';
           updateDevFlowSupervisorProcess('server', {
             status: 'restarting',
             pid: undefined,
@@ -344,17 +397,20 @@ export function startAll(mode: StartAllMode = 'all') {
           try {
             const replacement = launch(processConfig);
             if (!replacement.pid) {
+              lifecycleStatus = 'failed';
               markDevFlowRestartFailed(restartState!.ticket, 'Restart supervisor could not resolve the replacement server process id.');
               return;
             }
             markDevFlowRestartRestarting(restartState!.ticket, replacement.pid);
           } catch (error) {
+            lifecycleStatus = 'failed';
             const message = error instanceof Error ? error.message : String(error);
             markDevFlowRestartFailed(restartState!.ticket, `Restart supervisor failed to relaunch DevFlow: ${message}`);
           }
           return;
         }
 
+        lifecycleStatus = shuttingDown ? 'stopping' : 'failed';
         updateDevFlowSupervisorProcess('server', {
           status: shuttingDown ? 'stopped' : 'failed',
           pid: undefined,
@@ -396,6 +452,7 @@ export function startAll(mode: StartAllMode = 'all') {
           return;
         }
 
+        lifecycleStatus = shuttingDown ? 'stopping' : 'failed';
         updateDevFlowSupervisorProcess('server', {
           status: shuttingDown ? 'stopped' : 'failed',
           pid: undefined,
@@ -421,6 +478,8 @@ export function startAll(mode: StartAllMode = 'all') {
       nextRetryAt: undefined,
       message: child.pid ? `${processConfig.label} child process is running.` : `${processConfig.label} child process is starting.`,
     });
+
+    if (processConfig.label === 'server' && child.pid) lifecycleStatus = 'running';
 
     if (processConfig.label === 'ngrok') {
       const stableChild = child;
@@ -453,6 +512,7 @@ export function startAll(mode: StartAllMode = 'all') {
   const shutdown = () => {
     if (shuttingDown) return;
     shuttingDown = true;
+    lifecycleStatus = 'stopping';
     console.log('[start-all] Stopping services...');
     updateDevFlowSupervisorState({ shuttingDown: true });
     for (const label of Array.from(restartTimers.keys())) clearTimer(restartTimers, label);
@@ -464,13 +524,17 @@ export function startAll(mode: StartAllMode = 'all') {
         nextRetryAt: undefined,
         message: `${label} stopped during intentional supervisor shutdown.`,
       });
-      if (!child.killed) child.kill();
+      stopManagedProcessTree(child);
     }
-    process.exit(0);
+    void ownership.release().finally(() => process.exit(0));
   };
+
+  shutdownHandler = shutdown;
+  if (shutdownRequested) shutdown();
 
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
+  return { reused: false, owner: ownership.owner };
 }
 
 const entryPath = process.argv[1] ? path.resolve(process.argv[1]) : '';
@@ -478,5 +542,9 @@ const currentPath = fileURLToPath(import.meta.url);
 
 if (entryPath === currentPath) {
   const mode: StartAllMode = process.argv.slice(2).includes('--server-only') ? 'server-only' : 'all';
-  startAll(mode);
+  startAll(mode).catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[start-all] ${message}`);
+    process.exitCode = typeof (error as any)?.exitCode === 'number' ? (error as any).exitCode : 1;
+  });
 }

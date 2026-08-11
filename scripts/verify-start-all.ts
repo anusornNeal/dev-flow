@@ -6,6 +6,16 @@ assert.equal(packageJson.scripts.dev, 'tsx scripts/start-all.ts --server-only');
 assert.equal(packageJson.scripts['dev:server'], 'tsx server.ts');
 assert.equal(packageJson.scripts['start:all'], 'tsx scripts/start-all.ts');
 
+const trayScript = fs.readFileSync(new URL('./tray-server.ps1', import.meta.url), 'utf8');
+const windowsLauncher = fs.readFileSync(new URL('../Start DevFlow.bat', import.meta.url), 'utf8');
+assert.doesNotMatch(trayScript, /taskkill|Stop-Process|netstat\s+-ano/i);
+assert.doesNotMatch(trayScript, /Start-Process[^\n]+ngrok(?:\.exe)?/i);
+assert.match(trayScript, /\/api\/restart/i);
+assert.match(trayScript, /runtime-owner[\\/]owner\.json/i);
+assert.match(trayScript, /System\.Threading\.Mutex/i);
+assert.match(windowsLauncher, /run-server\.vbs/i);
+assert.doesNotMatch(windowsLauncher, /npm\s+run\s+start:all/i);
+
 const {
   buildNgrokArgs,
   buildNpmInvocation,

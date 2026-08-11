@@ -11,126 +11,139 @@ public class IconExtractor {
 "@
 
 $projectDir = Split-Path -Parent $PSScriptRoot
+$runtimeOwnerPath = Join-Path $projectDir ".devflow\runtime-owner\owner.json"
+$logDir = Join-Path $projectDir "logs"
+$logFile = Join-Path $logDir "tray.log"
 
-# Avoid multiple instances running at the same time by killing existing ones on port 3000
-foreach ($p in (netstat -ano | Select-String ":3000" | ForEach-Object { $_.Line.Split(' ', [StringSplitOptions]::RemoveEmptyEntries)[-1] })) {
-    if ($p -ne "0") {
-        try { Stop-Process -Id $p -Force -ErrorAction SilentlyContinue } catch {}
+function Write-TrayLog([string]$Level, [string]$Message) {
+    if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir | Out-Null }
+    $timestamp = Get-Date -Format "yyyy-MM-ddTHH:mm:ssK"
+    Add-Content -Path $logFile -Value "[$timestamp] [$Level] $Message"
+}
+
+function Get-RuntimeOwner {
+    if (-not (Test-Path $runtimeOwnerPath)) { return $null }
+    try {
+        return Get-Content -Path $runtimeOwnerPath -Raw | ConvertFrom-Json
+    } catch {
+        return $null
     }
 }
 
-# Start process
-$process = Start-Process -FilePath "cmd.exe" -ArgumentList "/c npm run dev" -WorkingDirectory $projectDir -WindowStyle Hidden -PassThru
+function Get-AppUrl {
+    $owner = Get-RuntimeOwner
+    if ($null -ne $owner -and -not [string]::IsNullOrWhiteSpace([string]$owner.appUrl)) {
+        return ([string]$owner.appUrl).TrimEnd('/')
+    }
+    return "http://localhost:3000"
+}
 
-# Start ngrok process
-$ngrokCommandArgs = "http 3000" # NOTE: Change to "http --domain=YOUR_DOMAIN.ngrok-free.app 3000" if you have a static domain
-$ngrokProcess = Start-Process -FilePath "ngrok.exe" -ArgumentList $ngrokCommandArgs -WindowStyle Hidden -PassThru
+function Show-TrayMessage([string]$Title, [string]$Message, [int]$Duration = 3500) {
+    if ($null -eq $script:notifyIcon) { return }
+    $script:notifyIcon.BalloonTipTitle = $Title
+    $script:notifyIcon.BalloonTipText = $Message
+    $script:notifyIcon.ShowBalloonTip($Duration)
+}
 
-# UI Context
+$sha = [System.Security.Cryptography.SHA256]::Create()
+try {
+    $projectIdentity = $projectDir.ToLowerInvariant()
+    $hashBytes = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($projectIdentity))
+    $hash = -join ($hashBytes[0..7] | ForEach-Object { $_.ToString("x2") })
+} finally {
+    $sha.Dispose()
+}
+
+$mutexName = "Local\DevFlowTray-$hash"
+$mutex = New-Object System.Threading.Mutex($false, $mutexName)
+$ownsMutex = $false
+try {
+    $ownsMutex = $mutex.WaitOne(0, $false)
+} catch [System.Threading.AbandonedMutexException] {
+    $ownsMutex = $true
+}
+
+if (-not $ownsMutex) {
+    Start-Process (Get-AppUrl)
+    $mutex.Dispose()
+    exit 0
+}
+
+# Bootstrap through the authoritative single-instance supervisor. The tray never owns its child processes.
+try {
+    Start-Process -FilePath "cmd.exe" -ArgumentList "/c npm run start:all" -WorkingDirectory $projectDir -WindowStyle Hidden | Out-Null
+    Write-TrayLog "INFO" "Requested authoritative DevFlow supervisor startup."
+} catch {
+    Write-TrayLog "ERROR" "Failed to request supervisor startup: $_"
+}
+
 $menu = New-Object System.Windows.Forms.ContextMenu
 
 $titleItem = New-Object System.Windows.Forms.MenuItem
-$titleItem.Text = "DevFlow + ngrok (Running)"
+$titleItem.Text = "DevFlow Supervisor"
 $titleItem.Enabled = $false
 $menu.MenuItems.Add($titleItem)
-
 $menu.MenuItems.Add("-")
 
 $openItem = New-Object System.Windows.Forms.MenuItem
 $openItem.Text = "Open App in Browser"
-$openItem.add_Click({
-    Start-Process "http://localhost:3000"
-})
+$openItem.add_Click({ Start-Process (Get-AppUrl) })
 $menu.MenuItems.Add($openItem)
 
 $ngrokItem = New-Object System.Windows.Forms.MenuItem
 $ngrokItem.Text = "Open ngrok Dashboard"
-$ngrokItem.add_Click({
-    Start-Process "http://localhost:4040"
-})
+$ngrokItem.add_Click({ Start-Process "http://localhost:4040" })
 $menu.MenuItems.Add($ngrokItem)
-
 $menu.MenuItems.Add("-")
 
 $restartItem = New-Object System.Windows.Forms.MenuItem
 $restartItem.Text = "Restart DevFlow"
 $restartItem.add_Click({
-    $logFile = Join-Path $projectDir "logs\tray.log"
-    if (-not (Test-Path (Join-Path $projectDir "logs"))) { New-Item -ItemType Directory -Path (Join-Path $projectDir "logs") | Out-Null }
-    
-    $timestamp = Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ"
-    Add-Content -Path $logFile -Value "[$timestamp] [INFO] Restarting DevFlow..."
-    
+    $appUrl = Get-AppUrl
+    Write-TrayLog "INFO" "Requesting guarded DevFlow restart through $appUrl/api/restart."
     try {
-        Start-Process "taskkill" -ArgumentList "/T /F /PID $($script:process.Id)" -WindowStyle Hidden -Wait
-    } catch {}
-    try {
-        Start-Process "taskkill" -ArgumentList "/T /F /PID $($script:ngrokProcess.Id)" -WindowStyle Hidden -Wait
-    } catch {}
-    
-    foreach ($p in (netstat -ano | Select-String ":3000" | ForEach-Object { $_.Line.Split(' ', [StringSplitOptions]::RemoveEmptyEntries)[-1] })) {
-        if ($p -ne "0") {
-            try { Stop-Process -Id $p -Force -ErrorAction SilentlyContinue } catch {}
-        }
-    }
-    try { Stop-Process -Name "ngrok" -Force -ErrorAction SilentlyContinue } catch {}
-    
-    try {
-        $script:process = Start-Process -FilePath "cmd.exe" -ArgumentList "/c npm run dev" -WorkingDirectory $projectDir -WindowStyle Hidden -PassThru
-        $ngrokCommandArgs = "http 3000"
-        $script:ngrokProcess = Start-Process -FilePath "ngrok.exe" -ArgumentList $ngrokCommandArgs -WindowStyle Hidden -PassThru
-        
-        $timestamp = Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ"
-        Add-Content -Path $logFile -Value "[$timestamp] [INFO] Restart succeeded. New PID: $($script:process.Id)"
-        
-        $script:notifyIcon.BalloonTipTitle = "DevFlow Restarted"
-        $script:notifyIcon.BalloonTipText = "DevFlow has been restarted successfully."
-        $script:notifyIcon.ShowBalloonTip(3000)
+        $result = Invoke-RestMethod -Method Post -Uri "$appUrl/api/restart" -ContentType "application/json" -Body "{}" -TimeoutSec 10
+        $ticket = if ($result.ticket) { [string]$result.ticket } else { "accepted" }
+        Write-TrayLog "INFO" "Guarded restart accepted: $ticket"
+        Show-TrayMessage "DevFlow Restart Requested" "Guarded restart accepted ($ticket)."
     } catch {
-        $timestamp = Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ"
-        Add-Content -Path $logFile -Value "[$timestamp] [ERROR] Restart failed: $_"
-        
-        $script:notifyIcon.BalloonTipTitle = "DevFlow Restart Failed"
-        $script:notifyIcon.BalloonTipText = "Check logs/tray.log for details."
-        $script:notifyIcon.ShowBalloonTip(5000)
+        $message = $_.Exception.Message
+        Write-TrayLog "WARN" "Guarded restart refused or failed: $message"
+        Show-TrayMessage "DevFlow Restart Not Started" $message 5000
     }
 })
 $menu.MenuItems.Add($restartItem)
-
 $menu.MenuItems.Add("-")
 
 $exitItem = New-Object System.Windows.Forms.MenuItem
 $exitItem.Text = "Stop Server && Exit"
 $exitItem.add_Click({
-    try {
-        Start-Process "taskkill" -ArgumentList "/T /F /PID $($script:process.Id)" -WindowStyle Hidden -Wait
-    } catch {}
-    try {
-        Start-Process "taskkill" -ArgumentList "/T /F /PID $($script:ngrokProcess.Id)" -WindowStyle Hidden -Wait
-    } catch {}
-    
-    foreach ($p in (netstat -ano | Select-String ":3000" | ForEach-Object { $_.Line.Split(' ', [StringSplitOptions]::RemoveEmptyEntries)[-1] })) {
-        if ($p -ne "0") {
-            try { Stop-Process -Id $p -Force -ErrorAction SilentlyContinue } catch {}
-        }
+    $owner = Get-RuntimeOwner
+    if ($null -eq $owner -or -not $owner.controlPort -or [string]::IsNullOrWhiteSpace([string]$owner.controlToken)) {
+        Show-TrayMessage "DevFlow Stop Failed" "No verified supervisor ownership record is available." 5000
+        return
     }
-    # Also kill any lingering ngrok processes just in case
-    try { Stop-Process -Name "ngrok" -Force -ErrorAction SilentlyContinue } catch {}
-    
-    $script:notifyIcon.Visible = $false
-    $script:notifyIcon.Dispose()
-    [System.Windows.Forms.Application]::Exit()
+
+    try {
+        $headers = @{ "x-devflow-runtime-token" = [string]$owner.controlToken }
+        $controlUrl = "http://127.0.0.1:$($owner.controlPort)/shutdown"
+        Invoke-RestMethod -Method Post -Uri $controlUrl -Headers $headers -ContentType "application/json" -Body "{}" -TimeoutSec 10 | Out-Null
+        Write-TrayLog "INFO" "Supervisor shutdown accepted for runtime $($owner.instanceId)."
+        $script:notifyIcon.Visible = $false
+        $script:notifyIcon.Dispose()
+        [System.Windows.Forms.Application]::Exit()
+    } catch {
+        $message = $_.Exception.Message
+        Write-TrayLog "ERROR" "Supervisor shutdown failed: $message"
+        Show-TrayMessage "DevFlow Stop Failed" $message 5000
+    }
 })
 $menu.MenuItems.Add($exitItem)
 
-$script:process = $process
-$script:ngrokProcess = $ngrokProcess
 $script:notifyIcon = New-Object System.Windows.Forms.NotifyIcon
-
-# Extract the star icon from shell32.dll (index 130)
 $largeIcons = New-Object IntPtr[] 1
 $smallIcons = New-Object IntPtr[] 1
-$extracted = [IconExtractor]::ExtractIconEx("$env:SystemRoot\System32\shell32.dll", 130, $largeIcons, $smallIcons, 1)
+[void][IconExtractor]::ExtractIconEx("$env:SystemRoot\System32\shell32.dll", 130, $largeIcons, $smallIcons, 1)
 
 if ($smallIcons[0] -ne [IntPtr]::Zero) {
     $script:notifyIcon.Icon = [System.Drawing.Icon]::FromHandle($smallIcons[0])
@@ -144,13 +157,23 @@ $script:notifyIcon.Text = "DevFlow Server"
 $script:notifyIcon.ContextMenu = $menu
 $script:notifyIcon.Visible = $true
 
-# Wait a bit then open browser
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 4000
 $timer.add_Tick({
     $timer.Stop()
-    Start-Process "http://localhost:3000"
+    Start-Process (Get-AppUrl)
 })
 $timer.Start()
 
-[System.Windows.Forms.Application]::Run()
+try {
+    [System.Windows.Forms.Application]::Run()
+} finally {
+    if ($script:notifyIcon) {
+        $script:notifyIcon.Visible = $false
+        $script:notifyIcon.Dispose()
+    }
+    if ($ownsMutex) {
+        try { $mutex.ReleaseMutex() } catch {}
+    }
+    $mutex.Dispose()
+}

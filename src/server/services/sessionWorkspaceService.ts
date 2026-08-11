@@ -147,14 +147,22 @@ function managedBranchPrefix(projectId: string) {
   return `devflow/ws/${safeSegment(projectId)}/`;
 }
 
+function workspaceBranchFor(projectId: string, workspaceIdentity: string, taskRootLeaf: string | null) {
+  return taskRootLeaf || `${managedBranchPrefix(projectId)}${sessionHash(workspaceIdentity)}`;
+}
+
+function isManagedBranchForWorkspace(projectId: string, branch: string, taskRootLeaf?: string | null) {
+  return branch.startsWith(managedBranchPrefix(projectId)) || Boolean(taskRootLeaf && branch === taskRootLeaf);
+}
+
 function getManagedBranchDisposition(
   projectRoot: string,
   projectId: string,
   branch: string,
   baseBranch: string,
-  options: { allowCheckedOut?: boolean } = {},
+  options: { allowCheckedOut?: boolean; taskRootLeaf?: string | null } = {},
 ) {
-  if (!branch.startsWith(managedBranchPrefix(projectId)) || !branchExists(projectRoot, branch)) return { safe: false as const, reason: 'not-managed-or-missing' as const };
+  if (!isManagedBranchForWorkspace(projectId, branch, options.taskRootLeaf) || !branchExists(projectRoot, branch)) return { safe: false as const, reason: 'not-managed-or-missing' as const };
   if (!options.allowCheckedOut && checkedOutBranches(projectRoot).has(branch)) return { safe: false as const, reason: 'checked-out' as const };
   const baseHeadResult = runGit(projectRoot, ['rev-parse', baseBranch], true);
   const sourceHeadResult = runGit(projectRoot, ['rev-parse', branch], true);
@@ -167,7 +175,7 @@ function getManagedBranchDisposition(
 }
 
 function removeManagedBranchIfSafe(workspace: SessionWorkspace) {
-  const disposition = getManagedBranchDisposition(workspace.projectRoot, workspace.projectId, workspace.branch, workspace.baseBranch);
+  const disposition = getManagedBranchDisposition(workspace.projectRoot, workspace.projectId, workspace.branch, workspace.baseBranch, { taskRootLeaf: workspace.taskRootLeaf });
   if (!disposition.safe) return { removed: false, disposition: disposition.reason };
   const result = runGit(workspace.projectRoot, ['branch', '-D', workspace.branch], true);
   return result.status === 0
@@ -268,11 +276,12 @@ export function createOrReuseSessionWorkspace(
     return touch(existing);
   }
 
-  const rootLeaf = taskNumberFolder(taskDisplayId) || workspaceId;
+  const taskRootLeaf = taskNumberFolder(taskDisplayId);
+  const rootLeaf = taskRootLeaf || workspaceId;
   const root = canonicalContainment(managedRootFor(project.id, rootLeaf));
   const baseBranch = currentBranch(projectRoot);
   const baseRevision = currentHead(projectRoot);
-  const branch = `devflow/ws/${safeSegment(project.id)}/${sessionHash(workspaceIdentity)}`;
+  const branch = workspaceBranchFor(project.id, workspaceIdentity, taskRootLeaf);
 
   fs.mkdirSync(path.dirname(root), { recursive: true });
   runGit(projectRoot, ['worktree', 'prune'], true);
@@ -285,6 +294,12 @@ export function createOrReuseSessionWorkspace(
   }
 
   if (branchExists(projectRoot, branch)) {
+    if (taskRootLeaf) {
+      throw createApiError(409, 'WORKSPACE_BRANCH_COLLISION', `Task workspace branch '${branch}' already exists without compatible managed workspace ownership.`, {
+        affectedId: workspaceId,
+        details: { branch, taskDisplayId, taskRootLeaf },
+      });
+    }
     const add = runGit(projectRoot, ['worktree', 'add', root, branch], true);
     if (add.status !== 0) {
       throw createApiError(409, 'WORKSPACE_BRANCH_IN_USE', `Workspace branch '${branch}' already exists or is checked out elsewhere.`, {
@@ -308,7 +323,7 @@ export function createOrReuseSessionWorkspace(
     baseBranch,
     baseRevision,
     gitWorkflowPolicy: validateGitWorkflowPolicy(project.gitWorkflowPolicy),
-    ...(taskDisplayId ? { taskDisplayId, taskRootLeaf: rootLeaf } : {}),
+    ...(taskDisplayId ? { taskDisplayId, taskRootLeaf: taskRootLeaf || rootLeaf } : {}),
     state: 'ready',
     createdAt: new Date(now).toISOString(),
     lastUsedAt: new Date(now).toISOString(),
@@ -374,7 +389,10 @@ export function cleanupSessionWorkspace(workspaceId: string, options: { force?: 
     }
   }
   if (!options.force) {
-    const branchDisposition = getManagedBranchDisposition(workspace.projectRoot, workspace.projectId, workspace.branch, workspace.baseBranch, { allowCheckedOut: true });
+    const branchDisposition = getManagedBranchDisposition(workspace.projectRoot, workspace.projectId, workspace.branch, workspace.baseBranch, {
+      allowCheckedOut: true,
+      taskRootLeaf: workspace.taskRootLeaf,
+    });
     if (!branchDisposition.safe) {
       workspaceLifecycleCounters.cleanupBlocked += 1;
       throw createApiError(409, 'WORKSPACE_UNINTEGRATED_COMMITS', 'Workspace branch still contains unique or unverifiable commits and cannot be removed by normal cleanup.', {

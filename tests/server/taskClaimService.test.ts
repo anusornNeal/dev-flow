@@ -138,7 +138,7 @@ test('claim moves task to in-progress, binds opaque workspace, and is idempotent
   );
 });
 
-test('task claims use only the trailing card number for the visible worktree folder', () => {
+test('task claims use the trailing card number for the visible worktree folder and Git branch', () => {
   seedTask('task-folder-dvf', ['src/DvfFolder.ts'], undefined, 'DVF-0469');
   seedTask('task-folder-bsa', ['src/BsaFolder.ts'], undefined, 'BSA-0057');
 
@@ -147,13 +147,14 @@ test('task claims use only the trailing card number for the visible worktree fol
   assert.ok(dvfWorkspace);
   assert.equal(path.basename(dvfWorkspace.root), '0469');
   assert.match(dvfWorkspace.workspaceId, /^ws_[a-f0-9]{16}$/);
-  assert.match(dvfWorkspace.branch, /^devflow\/ws\//);
+  assert.equal(dvfWorkspace.branch, '0469');
 
   const bsa = claims.claimTaskForSession('task-folder-bsa', { sessionId: 'folder-bsa', ownerLabel: 'Chat BSA' });
   const bsaWorkspace = workspaces.resolveSessionWorkspace(bsa.claim.workspaceId);
   assert.ok(bsaWorkspace);
   assert.equal(path.basename(bsaWorkspace.root), '0057');
   assert.match(bsaWorkspace.workspaceId, /^ws_[a-f0-9]{16}$/);
+  assert.equal(bsaWorkspace.branch, '0057');
 });
 
 test('same chat session claiming different cards receives isolated task-numbered workspaces', () => {
@@ -172,6 +173,8 @@ test('same chat session claiming different cards receives isolated task-numbered
   assert.notEqual(firstWorkspace.branch, secondWorkspace.branch);
   assert.equal(path.basename(firstWorkspace.root), '0601');
   assert.equal(path.basename(secondWorkspace.root), '0602');
+  assert.equal(firstWorkspace.branch, '0601');
+  assert.equal(secondWorkspace.branch, '0602');
 });
 
 test('occupied task-number root fails closed instead of creating a suffixed worktree', () => {
@@ -202,6 +205,8 @@ test('released task resumes its existing numbered workspace instead of creating 
   assert.equal(resumed.claim.workspaceId, first.claim.workspaceId);
   assert.equal(path.basename(resumedWorkspace.root), '0501');
   assert.equal(resumedWorkspace.root, firstWorkspace.root);
+  assert.equal(firstWorkspace.branch, '0501');
+  assert.equal(resumedWorkspace.branch, '0501');
 });
 
 test('claiming a child promotes its immediate parent without creating parent execution ownership', () => {

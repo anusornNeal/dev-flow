@@ -71,6 +71,21 @@ test('clean committed workspace integrates locally with source/base evidence and
   assert.equal(git(root, ['rev-parse', '--verify', workspace.branch]).status, 0);
 });
 
+test('task-owned numeric branch integrates with the same workspace evidence contract', () => {
+  const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-integration-task-branch-'));
+  process.env.DEVFLOW_RUNTIME_DIR = runtimeRoot;
+  resetSessionWorkspaceRuntimeForTests();
+  const root = repoFixture();
+  const workspace = createOrReuseSessionWorkspace(project(root), 'chat-task-branch', { taskDisplayId: 'DVF-0801' });
+  assert.equal(workspace.branch, '0801');
+  commitFile(workspace.root, 'task-branch.txt', 'task branch\n', 'task branch change');
+
+  const result = integrateWorkspaceCommits(workspace.workspaceId);
+  assert.equal(result.status, 'succeeded');
+  assert.equal(result.sourceBranch, '0801');
+  assert.equal(fs.readFileSync(path.join(root, 'task-branch.txt'), 'utf8').replace(/\r\n/g, '\n'), 'task branch\n');
+});
+
 test('advanced base rebases workspace commits and fast-forwards linearly', () => {
   const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-integration-advanced-'));
   process.env.DEVFLOW_RUNTIME_DIR = runtimeRoot;

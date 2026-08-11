@@ -59,6 +59,7 @@ test('same session creates distinct task-owned workspaces while standalone reuse
   const standalone = createOrReuseSessionWorkspace(project(repo), 'shared-chat');
   const standaloneAgain = createOrReuseSessionWorkspace(project(repo), 'shared-chat');
   assert.equal(standaloneAgain.workspaceId, standalone.workspaceId);
+  assert.match(standalone.branch, /^devflow\/ws\//);
 
   const taskA = createOrReuseSessionWorkspace(project(repo), 'task-chat', { taskDisplayId: 'DVF-0489' });
   const taskB = createOrReuseSessionWorkspace(project(repo), 'task-chat', { taskDisplayId: 'DVF-0490' });
@@ -69,8 +70,30 @@ test('same session creates distinct task-owned workspaces while standalone reuse
   assert.notEqual(taskA.branch, taskB.branch);
   assert.equal(path.basename(taskA.root), '0489');
   assert.equal(path.basename(taskB.root), '0490');
+  assert.equal(taskA.branch, '0489');
+  assert.equal(taskB.branch, '0490');
   assert.equal(taskAAgain.workspaceId, taskA.workspaceId);
   assert.equal(taskAAgain.root, taskA.root);
+});
+
+test('task-owned numeric branch collisions fail closed and clean task workspaces can remove their branch', () => {
+  const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-workspace-task-branch-collision-'));
+  process.env.DEVFLOW_RUNTIME_DIR = runtimeRoot;
+  resetSessionWorkspaceRuntimeForTests();
+  const repo = createRepo();
+  git(repo, ['branch', '0499']);
+
+  assert.throws(
+    () => createOrReuseSessionWorkspace(project(repo), 'collision-chat', { taskDisplayId: 'DVF-0499' }),
+    (error: any) => error?.payload?.code === 'WORKSPACE_BRANCH_COLLISION',
+  );
+
+  const taskWorkspace = createOrReuseSessionWorkspace(project(repo), 'cleanup-task-chat', { taskDisplayId: 'DVF-0502' });
+  assert.equal(taskWorkspace.branch, '0502');
+  const result = cleanupSessionWorkspace(taskWorkspace.workspaceId);
+  assert.equal(result.removed, true);
+  assert.equal(result.branchRemoved, true);
+  assert.notEqual(spawnSync('git', ['show-ref', '--verify', '--quiet', 'refs/heads/0502'], { cwd: repo, shell: false }).status, 0);
 });
 
 test('task-aware creation preserves a dirty legacy session workspace instead of reusing or deleting it', () => {

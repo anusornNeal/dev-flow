@@ -5,6 +5,7 @@ import {
   renderGitWorkflowTemplate,
   resolveProjectGitWorkflowPolicy,
   resolveTaskTicketContext,
+  taskCommitSubjectMatchesPolicy,
   validateGitWorkflowPolicy,
 } from '../../src/server/services/projectGitWorkflowPolicyService.js';
 
@@ -60,6 +61,24 @@ test('task commit messages preserve explicit project template overrides', () => 
     } as any),
     'perf: reuse evidence',
   );
+});
+
+test('task commit subject policy matcher honors Jira ticket context and custom templates', () => {
+  assert.equal(
+    taskCommitSubjectMatchesPolicy('[QCA-3617] fix: restore request streaming', { jiraKey: 'QCA-3617', displayId: 'CARD-0453' } as any),
+    true,
+  );
+  assert.equal(
+    taskCommitSubjectMatchesPolicy('[CARD-0453] fix: restore request streaming', { jiraKey: 'QCA-3617', displayId: 'CARD-0453' } as any),
+    false,
+  );
+  assert.equal(
+    taskCommitSubjectMatchesPolicy('QCA-3617::perf::reuse evidence', { jiraKey: 'QCA-3617' } as any, {
+      gitWorkflowPolicy: { commitMessageTemplate: '{ticket}::{type}::{title}' },
+    } as any),
+    true,
+  );
+  assert.equal(taskCommitSubjectMatchesPolicy('[CARD-1] feat(scope): bypass', { displayId: 'CARD-1' } as any), false);
 });
 
 test('template rendering supports ticket title and type without repo-specific branches', () => {

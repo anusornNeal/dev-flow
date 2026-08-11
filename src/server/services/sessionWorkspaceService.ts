@@ -231,6 +231,25 @@ export function getSessionWorkspaceMetadataForRecovery(workspaceId: string) {
   return workspace ? { ...workspace } : null;
 }
 
+export function resolveSessionWorkspaceByRoot(root: string) {
+  const cleanRoot = String(root || '').trim();
+  if (!cleanRoot) return null;
+  const resolvedRoot = path.resolve(cleanRoot);
+
+  for (const workspace of memoryRegistry.values()) {
+    if (path.resolve(workspace.root) === resolvedRoot) return workspace;
+  }
+
+  const registryDir = workspaceRegistryDir();
+  if (!fs.existsSync(registryDir)) return null;
+  for (const entry of fs.readdirSync(registryDir)) {
+    if (!entry.endsWith('.json')) continue;
+    const workspace = readMetadata(entry.slice(0, -'.json'.length));
+    if (workspace && path.resolve(workspace.root) === resolvedRoot) return workspace;
+  }
+  return null;
+}
+
 function touch(workspace: SessionWorkspace) {
   const now = Date.now();
   const next: SessionWorkspace = {

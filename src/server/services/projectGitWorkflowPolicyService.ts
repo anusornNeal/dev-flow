@@ -127,3 +127,35 @@ export function renderTaskCommitMessage(
     title,
   });
 }
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+export function taskCommitSubjectMatchesPolicy(
+  subject: unknown,
+  task: TaskTicketSource,
+  project?: Pick<Project, 'gitWorkflowPolicy'> | null,
+) {
+  const actual = String(subject || '').trim();
+  if (!actual || /[\r\n]/.test(actual)) return false;
+  const ticketContext = resolveTaskTicketContext(task);
+  const template = resolveProjectGitWorkflowPolicy(project).commitMessageTemplate;
+  let pattern = '^';
+  let cursor = 0;
+  for (const match of template.matchAll(/\{(ticket|title|type)\}/g)) {
+    pattern += escapeRegExp(template.slice(cursor, match.index));
+    const field = match[1] as keyof TemplateContext;
+    if (field === 'ticket') {
+      if (!ticketContext.ticket) return false;
+      pattern += escapeRegExp(ticketContext.ticket);
+    } else if (field === 'type') {
+      pattern += '[a-z][a-z0-9-]*';
+    } else {
+      pattern += '[^\\r\\n]+';
+    }
+    cursor = (match.index || 0) + match[0].length;
+  }
+  pattern += `${escapeRegExp(template.slice(cursor))}$`;
+  return new RegExp(pattern).test(actual);
+}

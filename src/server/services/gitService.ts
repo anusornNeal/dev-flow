@@ -4,6 +4,7 @@ import path from 'path';
 import type { AppState } from '../types';
 import { createApiError } from './api';
 import { resolveProjectRoot, resolveSafePath } from './localFileService';
+import { resolveSessionWorkspaceByRoot } from './sessionWorkspaceService';
 import { invalidateRepoReadCaches } from './repoCacheInvalidationService';
 import { recordGitRemoteEvidence } from './gitRemoteEvidenceService';
 import {
@@ -519,8 +520,19 @@ export async function getGitBranchAsync(state: AppState, args: Record<string, an
   return parseGitBranches(root, await runGitAsync(['branch', '--list'], root));
 }
 
-export function commitGitChanges(state: AppState, args: Record<string, any>) {
+export function commitGitChanges(
+  state: AppState,
+  args: Record<string, any>,
+  options: { taskAware?: boolean } = {},
+) {
   const root = resolveProjectRoot(state, args);
+  const managedWorkspace = resolveSessionWorkspaceByRoot(root);
+  if (managedWorkspace?.taskDisplayId && options.taskAware !== true) {
+    throw createApiError(409, 'TASK_BOUND_GENERIC_COMMIT_FORBIDDEN', 'Generic commit_git_changes cannot commit inside a task-bound managed workspace. Use commit_task_owned_changes so ownership and the project task-commit policy are enforced.', {
+      affectedId: managedWorkspace.workspaceId,
+      details: { workspaceId: managedWorkspace.workspaceId, taskDisplayId: managedWorkspace.taskDisplayId, nextTool: 'commit_task_owned_changes' },
+    });
+  }
   ensureGitRepo(root);
   ensureNoInProgressOperation(root);
 

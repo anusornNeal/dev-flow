@@ -62,17 +62,21 @@ function fixture(label: string) {
     updatedAt: new Date().toISOString(),
   } as any;
   saveTask(task);
-  const workspace = createOrReuseSessionWorkspace(project, `session-${label}`);
+  const workspace = createOrReuseSessionWorkspace(project, `session-${label}`, { taskDisplayId: task.displayId });
   return { root, project, task, workspace, state: { projectsCache: [project], countersCache: {}, skillsRegistry: [] } as any };
 }
 
 const checks = [{ name: 'focused', command: 'focused-test', status: 'passed' as const, summary: 'focused verification passed' }];
 
+function taskCommitSubject(task: any, title: string, type = 'chore') {
+  return `[${task.jiraKey || task.displayId || task.id}] ${type}: ${title}`;
+}
+
 test('committed workspace finalizes into local develop and removes clean worktree/branch', () => {
   const { root, task, workspace, state } = fixture('success');
   fs.writeFileSync(path.join(workspace.root, 'tracked.txt'), 'implemented\n');
   git(workspace.root, ['add', 'tracked.txt']);
-  git(workspace.root, ['commit', '-m', 'implement task']);
+  git(workspace.root, ['commit', '-m', taskCommitSubject(task, 'implement task')]);
 
   const claimed = getTask(task.id)!;
   claimed.claim = { workspaceId: workspace.workspaceId, sessionIdHash: 'fixture-session', ownerLabel: 'Fixture chat', ownerKind: 'chat', claimedAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
@@ -94,6 +98,22 @@ test('committed workspace finalizes into local develop and removes clean worktre
   assert.ok((saved.logs || []).some((entry: any) => /Finalized managed workspace/.test(entry.message)));
 });
 
+test('finalization rejects malformed task commit subjects before mutating develop', () => {
+  const { root, task, workspace, state } = fixture('malformed-subject');
+  fs.writeFileSync(path.join(workspace.root, 'tracked.txt'), 'malformed\n');
+  git(workspace.root, ['add', 'tracked.txt']);
+  git(workspace.root, ['commit', '-m', 'feat(scope): bypass task policy']);
+  const baseHead = git(root, ['rev-parse', 'HEAD']).stdout;
+
+  assert.throws(
+    () => finalizeTaskWorkspace(state, { taskId: task.id, workspaceId: workspace.workspaceId, checks }),
+    (error: any) => error?.payload?.code === 'TASK_COMMIT_SUBJECT_INVALID',
+  );
+  assert.equal(git(root, ['rev-parse', 'HEAD']).stdout, baseHead);
+  assert.equal(getTask(task.id)?.status, 'in-progress');
+  assert.equal(fs.existsSync(workspace.root), true);
+});
+
 test('dirty workspace is preserved as needs-recovery and task stays open', () => {
   const { task, workspace, state } = fixture('dirty');
   fs.writeFileSync(path.join(workspace.root, 'tracked.txt'), 'uncommitted\n');
@@ -108,7 +128,7 @@ test('integration conflict is preserved and shared base is not marked done', () 
   const { root, task, workspace, state } = fixture('conflict');
   fs.writeFileSync(path.join(workspace.root, 'tracked.txt'), 'workspace\n');
   git(workspace.root, ['add', 'tracked.txt']);
-  git(workspace.root, ['commit', '-m', 'workspace change']);
+  git(workspace.root, ['commit', '-m', taskCommitSubject(task, 'workspace change')]);
   fs.writeFileSync(path.join(root, 'tracked.txt'), 'base changed\n');
   git(root, ['add', 'tracked.txt']);
   git(root, ['commit', '-m', 'advance base']);
@@ -142,7 +162,7 @@ test('finalization blocks pre-integration evidence when sibling changes escalate
   const { root, task, workspace, state } = fixture('combined-gate');
   fs.writeFileSync(path.join(workspace.root, 'tracked.txt'), 'implemented\n');
   git(workspace.root, ['add', 'tracked.txt']);
-  git(workspace.root, ['commit', '-m', 'implement task']);
+  git(workspace.root, ['commit', '-m', taskCommitSubject(task, 'implement task')]);
   fs.writeFileSync(path.join(root, 'package.json'), '{"scripts":{"verify":"node -e \\\"process.exit(0)\\\""}}\n');
   git(root, ['add', 'package.json']);
   git(root, ['commit', '-m', 'sibling config change']);
@@ -168,7 +188,7 @@ test('combined repository mapping can require a verification command absent from
   fs.mkdirSync(path.join(workspace.root, 'src', 'service'), { recursive: true });
   fs.writeFileSync(path.join(workspace.root, 'src', 'service', 'a.ts'), 'export const a = 1;\n');
   git(workspace.root, ['add', 'src/service/a.ts']);
-  git(workspace.root, ['commit', '-m', 'service change']);
+  git(workspace.root, ['commit', '-m', taskCommitSubject(task, 'service change')]);
 
   fs.mkdirSync(path.join(root, '.devflow'), { recursive: true });
   fs.mkdirSync(path.join(root, 'src', 'feature'), { recursive: true });

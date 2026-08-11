@@ -71,19 +71,36 @@ test('clean committed workspace integrates locally with source/base evidence and
   assert.equal(git(root, ['rev-parse', '--verify', workspace.branch]).status, 0);
 });
 
-test('task-owned numeric branch integrates with the same workspace evidence contract', () => {
+test('task-owned workspace rejects malformed commit subjects before integration', () => {
   const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-integration-task-branch-'));
   process.env.DEVFLOW_RUNTIME_DIR = runtimeRoot;
   resetSessionWorkspaceRuntimeForTests();
   const root = repoFixture();
-  const workspace = createOrReuseSessionWorkspace(project(root), 'chat-task-branch', { taskDisplayId: 'DVF-0801' });
+  const workspace = createOrReuseSessionWorkspace(project(root), 'chat-task-branch', { taskDisplayId: 'CARD-0801' });
   assert.equal(workspace.branch, '0801');
   commitFile(workspace.root, 'task-branch.txt', 'task branch\n', 'task branch change');
 
-  const result = integrateWorkspaceCommits(workspace.workspaceId);
+  assert.throws(
+    () => integrateWorkspaceCommits(workspace.workspaceId, { task: { displayId: 'CARD-0801', projectId: workspace.projectId } }),
+    (error: any) => error?.payload?.code === 'TASK_COMMIT_SUBJECT_INVALID' && /commit_task_owned_changes/.test(error.message),
+  );
+  assert.equal(fs.existsSync(path.join(root, 'task-branch.txt')), false);
+});
+
+test('task-owned workspace integrates canonical subjects with custom policy and Jira ticket context', () => {
+  const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-integration-task-policy-'));
+  process.env.DEVFLOW_RUNTIME_DIR = runtimeRoot;
+  resetSessionWorkspaceRuntimeForTests();
+  const root = repoFixture();
+  const gitWorkflowPolicy = { commitMessageTemplate: '{ticket}::{type}::{title}' };
+  const workspace = createOrReuseSessionWorkspace(project(root, gitWorkflowPolicy), 'chat-task-policy', { taskDisplayId: 'CARD-0802' });
+  commitFile(workspace.root, 'task-policy.txt', 'task policy\n', 'QCA-9002::fix::preserve policy');
+
+  const result = integrateWorkspaceCommits(workspace.workspaceId, {
+    task: { displayId: 'CARD-0802', jiraKey: 'QCA-9002', projectId: workspace.projectId },
+  });
   assert.equal(result.status, 'succeeded');
-  assert.equal(result.sourceBranch, '0801');
-  assert.equal(fs.readFileSync(path.join(root, 'task-branch.txt'), 'utf8').replace(/\r\n/g, '\n'), 'task branch\n');
+  assert.equal(fs.readFileSync(path.join(root, 'task-policy.txt'), 'utf8').replace(/\r\n/g, '\n'), 'task policy\n');
 });
 
 test('advanced base rebases workspace commits and fast-forwards linearly', () => {
@@ -149,7 +166,7 @@ test('explicit merge policy preserves merge topology and ticket-aware merge mark
     integrationStrategy: 'merge',
     mergeMessageTemplate: 'Merge {ticket}',
   }), 'chat-merge-policy');
-  commitFile(workspace.root, 'workspace.txt', 'workspace\n', '[QCA-3617] Fix: workspace change');
+  commitFile(workspace.root, 'workspace.txt', 'workspace\n', '[QCA-3617] fix: workspace change');
   commitFile(root, 'base-only.txt', 'base\nadvanced\n', 'advance base');
   const baseHeadBefore = git(root, ['rev-parse', 'HEAD']).stdout;
 
@@ -175,7 +192,7 @@ test('explicit merge conflicts can abort and retry without mutating the shared b
     integrationStrategy: 'merge',
     mergeMessageTemplate: 'Merge {ticket}',
   }), 'chat-merge-conflict');
-  commitFile(workspace.root, 'shared.txt', 'workspace changed\n', '[QCA-3617] Fix: workspace conflict');
+  commitFile(workspace.root, 'shared.txt', 'workspace changed\n', '[QCA-3617] fix: workspace conflict');
   const sourceHeadBefore = git(workspace.root, ['rev-parse', 'HEAD']).stdout;
   commitFile(root, 'shared.txt', 'base changed\n', 'base conflict');
   const baseHeadBefore = git(root, ['rev-parse', 'HEAD']).stdout;

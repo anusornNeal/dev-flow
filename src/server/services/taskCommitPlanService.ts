@@ -126,7 +126,7 @@ export function commitTaskOwnedChanges(state: AppState, args: Record<string, any
     files: plan.ownedChangedFiles,
     stageAll: false,
     dryRun: args.dryRun === true,
-  });
+  }, { taskAware: true });
   const { root: _physicalRoot, ...safeResult } = result as any;
   return {
     ...safeResult,

@@ -49,7 +49,7 @@ Before committing:
 - inspect `get_git_status` and the relevant diff;
 - never stage another session's work;
 - call `plan_task_commit` for execution-owned scope;
-- prefer `commit_task_owned_changes` so only files owned by this task/session are committed;
+- use `commit_task_owned_changes` for task-bound managed workspaces so only files owned by this task/session are committed; generic `commit_git_changes` is forbidden for task-bound workspaces;
 - preserve unrelated dirty files exactly as reported by the plan.
 
 Use a conventional commit input and let DevFlow apply the authoritative task/ticket prefix and project commit policy. Resolve the repository Git policy before terminal integration: the default is `rebase-ff`; an explicit `merge` policy overrides it. Preserve the configured commit message template or repository commit convention.

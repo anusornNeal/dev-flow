@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { getDevFlowWorkspacesDir } from '../../lib/devFlowPaths';
 import { createApiError } from './api';
 import type { GitIntegrationStrategy } from '../../types.js';
-import { renderGitWorkflowTemplate, resolveProjectGitWorkflowPolicy, resolveTaskTicketContext } from './projectGitWorkflowPolicyService';
+import { renderGitWorkflowTemplate, resolveProjectGitWorkflowPolicy, resolveTaskTicketContext, taskCommitSubjectMatchesPolicy } from './projectGitWorkflowPolicyService';
 import {
   markSessionWorkspaceIntegrated,
   markSessionWorkspaceIntegrationRequired,
@@ -172,6 +172,43 @@ function patchEquivalentToBase(root: string, baseHead: string, sourceHead: strin
 function sourceCommits(root: string, baseRevision: string, sourceHead: string) {
   const output = runGit(root, ['rev-list', '--reverse', `${baseRevision}..${sourceHead}`]).stdout;
   return output ? output.split(/\r?\n/).filter(Boolean) : [];
+}
+
+function validateTaskCommitSubjects(
+  workspace: SessionWorkspace,
+  commits: string[],
+  task?: WorkspaceIntegrationTaskContext,
+) {
+  if (task?.projectId && task.projectId !== workspace.projectId) {
+    throw createApiError(409, 'WORKSPACE_TASK_PROJECT_MISMATCH', 'The integration task belongs to a different project than this workspace.', {
+      affectedId: workspace.workspaceId,
+      details: { workspaceProjectId: workspace.projectId, taskProjectId: task.projectId },
+    });
+  }
+  const taskContext = task || (workspace.taskDisplayId
+    ? { displayId: workspace.taskDisplayId, projectId: workspace.projectId }
+    : null);
+  if (!taskContext) return;
+
+  const invalid = commits.map((commit) => {
+    const subject = runGit(workspace.root, ['show', '-s', '--format=%s', commit]).stdout.trim();
+    return taskCommitSubjectMatchesPolicy(subject, taskContext, { gitWorkflowPolicy: workspace.gitWorkflowPolicy } as any)
+      ? null
+      : { commit, subject };
+  }).filter(Boolean) as Array<{ commit: string; subject: string }>;
+  if (invalid.length === 0) return;
+
+  const policy = resolveProjectGitWorkflowPolicy({ gitWorkflowPolicy: workspace.gitWorkflowPolicy } as any);
+  throw createApiError(409, 'TASK_COMMIT_SUBJECT_INVALID', 'Task-owned workspace contains commit subjects that do not match the authoritative project task-commit policy. Recommit with commit_task_owned_changes before integration.', {
+    affectedId: workspace.workspaceId,
+    details: {
+      workspaceId: workspace.workspaceId,
+      taskDisplayId: workspace.taskDisplayId || task?.displayId || null,
+      commitMessageTemplate: policy.commitMessageTemplate,
+      invalid,
+      nextTool: 'commit_task_owned_changes',
+    },
+  });
 }
 
 function changedFiles(root: string, baseRevision: string, sourceHead: string) {
@@ -390,6 +427,7 @@ export function integrateWorkspaceCommits(workspaceId: string, options: Workspac
   const policy = resolveProjectGitWorkflowPolicy({ gitWorkflowPolicy: workspace.gitWorkflowPolicy } as any);
   const { baseHead: baseHeadBefore, sourceHead } = validateIntegrationPreconditions(workspace);
   const commits = sourceCommits(workspace.projectRoot, workspace.baseRevision, sourceHead);
+  validateTaskCommitSubjects(workspace, commits, options.task);
   const files = changedFiles(workspace.projectRoot, workspace.baseRevision, sourceHead);
 
   if (isAncestor(workspace.projectRoot, sourceHead, baseHeadBefore)) {

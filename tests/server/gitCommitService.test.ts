@@ -11,6 +11,7 @@ process.env.DEVFLOW_DB_PATH = path.join(os.tmpdir(), `devflow-git-commit-db-${pa
 const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
 executeAllMigrations();
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
+const { createOrReuseSessionWorkspace, resetSessionWorkspaceRuntimeForTests } = await import('../../src/server/services/sessionWorkspaceService.js');
 
 const { commitGitChanges, getGitStatus, getGitLog, getGitBranchAsync, getGitWorkspaceSnapshotForRoot } = await import('../../src/server/services/gitService.js');
 
@@ -74,6 +75,25 @@ test('commitGitChanges rejects an empty working tree', () => {
     () => commitGitChanges(stateFor(repo), { projectId: 'project-git', stageAll: true, message: 'chore: no changes' }),
     (error: any) => error?.payload?.code === 'NO_CHANGES_TO_COMMIT',
   );
+});
+
+test('commitGitChanges rejects generic commits for task-bound managed workspaces by workspaceId and localPath', () => {
+  const repo = createRepo('task-bound-generic');
+  process.env.DEVFLOW_RUNTIME_DIR = path.join(tempRoot, 'runtime-task-bound-generic');
+  resetSessionWorkspaceRuntimeForTests();
+  const project = stateFor(repo).projectsCache[0];
+  const workspace = createOrReuseSessionWorkspace(project, 'chat-task-bound-generic', { taskDisplayId: 'CARD-9001' });
+  fs.writeFileSync(path.join(workspace.root, 'base.txt'), 'task change\n');
+
+  for (const target of [{ workspaceId: workspace.workspaceId }, { localPath: workspace.root }]) {
+    assert.throws(
+      () => commitGitChanges(stateFor(repo), { ...target, stageAll: true, message: 'feat(scope): bypass task policy' }),
+      (error: any) => error?.payload?.code === 'TASK_BOUND_GENERIC_COMMIT_FORBIDDEN'
+        && /commit_task_owned_changes/.test(error.message),
+    );
+  }
+
+  assert.match(git(workspace.root, ['status', '--porcelain']), /base\.txt/);
 });
 
 test('commitGitChanges stages and commits all local changes', () => {

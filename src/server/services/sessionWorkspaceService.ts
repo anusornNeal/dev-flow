@@ -40,6 +40,11 @@ function safeSegment(value: string) {
   return normalized || 'workspace';
 }
 
+function taskNumberFolder(value: unknown) {
+  const match = String(value || '').trim().match(/(\d+)$/);
+  return match?.[1] || null;
+}
+
 function workspaceIdFor(projectId: string, sessionId: string) {
   const digest = crypto.createHash('sha256').update(`${projectId}\u0000${sessionId}`).digest('hex');
   return `ws_${digest.slice(0, 16)}`;
@@ -218,7 +223,11 @@ function validateReusableWorkspace(workspace: SessionWorkspace, projectRoot: str
   return currentBranch(root) === workspace.branch;
 }
 
-export function createOrReuseSessionWorkspace(project: { id: string; localPath?: string | null; gitWorkflowPolicy?: unknown }, sessionId: string) {
+export function createOrReuseSessionWorkspace(
+  project: { id: string; localPath?: string | null; gitWorkflowPolicy?: unknown },
+  sessionId: string,
+  options: { taskDisplayId?: string | null } = {},
+) {
   const cleanSessionId = String(sessionId || '').trim();
   if (!cleanSessionId) throw createApiError(400, 'SESSION_ID_REQUIRED', 'sessionId is required to create an isolated workspace.');
   if (!project?.id) throw createApiError(400, 'PROJECT_ID_REQUIRED', 'project.id is required to create an isolated workspace.');
@@ -230,7 +239,8 @@ export function createOrReuseSessionWorkspace(project: { id: string; localPath?:
     return touch(existing);
   }
 
-  const root = canonicalContainment(managedRootFor(project.id, workspaceId));
+  const rootLeaf = taskNumberFolder(options.taskDisplayId) || workspaceId;
+  const root = canonicalContainment(managedRootFor(project.id, rootLeaf));
   const baseBranch = currentBranch(projectRoot);
   const baseRevision = currentHead(projectRoot);
   const branch = `devflow/ws/${safeSegment(project.id)}/${sessionHash(cleanSessionId)}`;

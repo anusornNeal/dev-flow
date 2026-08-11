@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { getProject } from '../repositories/projectRepository.js';
 import { listExecutionSessionsForTask } from '../repositories/executionSessionRepository.js';
 import { getTaskByIdentifier, getTasksByProjectId, saveTask } from '../repositories/taskRepository.js';
-import { createOrReuseSessionWorkspace } from './sessionWorkspaceService.js';
+import { createOrReuseSessionWorkspace, resolveSessionWorkspaceForRecovery } from './sessionWorkspaceService.js';
 import { createApiError } from './api.js';
 import { createExecutionSession } from './executionSessionService.js';
 import { withSyncLock } from './lockAndIdempotencyService.js';
@@ -142,6 +142,29 @@ function ensureClaimExecutionSession(task: any, workspace: any) {
   });
 }
 
+function resolveRecoverableTaskWorkspace(task: any) {
+  const preferredWorkspaceId = String(task?.claim?.workspaceId || '').trim();
+  if (preferredWorkspaceId) {
+    const preferred = resolveSessionWorkspaceForRecovery(preferredWorkspaceId);
+    if (preferred?.projectId === task.projectId) return preferred;
+  }
+
+  const candidateIds = Array.from(new Set(listExecutionSessionsForTask(task.id)
+    .filter((entry) => entry.status === 'active')
+    .map((entry) => String(entry.workspaceId || '').trim())
+    .filter(Boolean)));
+  const recovered = candidateIds
+    .map((workspaceId) => resolveSessionWorkspaceForRecovery(workspaceId))
+    .filter((workspace): workspace is NonNullable<typeof workspace> => Boolean(workspace && workspace.projectId === task.projectId));
+  if (recovered.length > 1) {
+    throw createApiError(409, 'TASK_WORKSPACE_AMBIGUOUS', `Task '${task.displayId || task.id}' has multiple recoverable managed workspaces. Recover or clean them before claiming the task again.`, {
+      affectedId: task.id,
+      details: { workspaceIds: recovered.map((workspace) => workspace.workspaceId) },
+    });
+  }
+  return recovered[0] || null;
+}
+
 function claimTaskForSessionLocked(taskId: string, input: ClaimTaskInput, cleanSessionId: string, project: any) {
   const task = getTaskByIdentifier(taskId, 'full');
   if (!task) throw createApiError(404, 'TASK_NOT_FOUND', `Task '${taskId}' was not found.`, { affectedId: taskId });
@@ -158,7 +181,8 @@ function claimTaskForSessionLocked(taskId: string, input: ClaimTaskInput, cleanS
         details: { claim: task.claim },
       });
     }
-    const workspace = createOrReuseSessionWorkspace(project, cleanSessionId);
+    const workspace = resolveRecoverableTaskWorkspace(task)
+      || createOrReuseSessionWorkspace(project, cleanSessionId, { taskDisplayId: task.displayId });
     ensureClaimExecutionSession(task, workspace);
     return { task, claim: task.claim, workspace: { workspaceId: workspace.workspaceId, branch: workspace.branch, state: workspace.state }, reused: true };
   }
@@ -173,7 +197,8 @@ function claimTaskForSessionLocked(taskId: string, input: ClaimTaskInput, cleanS
     }
   }
 
-  const workspace = createOrReuseSessionWorkspace(project, cleanSessionId);
+  const workspace = resolveRecoverableTaskWorkspace(task)
+    || createOrReuseSessionWorkspace(project, cleanSessionId, { taskDisplayId: task.displayId });
   const ownerKind = normalizeOwnerKind(input.ownerKind);
   const claimedAt = new Date(nowMs).toISOString();
   const claim: TaskClaim = {

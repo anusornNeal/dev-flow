@@ -4,7 +4,7 @@
 
 **Goal:** Make task-owned managed worktrees use only the trailing numeric card number as the visible physical folder while preserving opaque workspace/branch identity and fail-closed collision recovery.
 
-**Architecture:** Extend `createOrReuseSessionWorkspace` with optional task display identity and resolve the visible root leaf independently from `workspaceId`. `taskClaimService` supplies the task display id. Reuse remains keyed by opaque workspace metadata; a different workspace targeting an already-populated card-number root is rejected by the existing occupied-root guard, so no numeric suffix fallback is introduced.
+**Architecture:** Extend `createOrReuseSessionWorkspace` with optional task display identity and resolve the visible root leaf independently from `workspaceId`. `taskClaimService` reuses one recoverable task workspace from claim/execution-session evidence before creating a new one, and supplies the task display id only when creation is required. A different unassociated workspace targeting an already-populated card-number root is rejected by the existing occupied-root guard, so no numeric suffix fallback is introduced.
 
 **Tech Stack:** TypeScript, Node.js Git worktrees, node:test, DevFlow managed workspace services.
 
@@ -35,7 +35,7 @@ Add fixtures whose display ids are exactly `DVF-0469` and `BSA-0057`. Claim them
 
 - [ ] **Step 2: Add collision test**
 
-Create two disjoint tasks with the same display id `DVF-0499`. Claim the first from one session. Claiming the second from another session must throw `WORKSPACE_ROOT_OCCUPIED` (or a more specific task-root recovery code if introduced), and the project task-root parent must contain no `0499-2` sibling.
+Create an unassociated workspace occupying task root `0500`, then claim a task whose display id is `DVF-0500`. The claim must throw `WORKSPACE_ROOT_OCCUPIED`, and the project task-root parent must contain no `0500-2` sibling. Also cover release/reclaim of `DVF-0501`: the new claimant must resume the original workspace id/root instead of creating another workspace.
 
 - [ ] **Step 3: Add direct-session compatibility assertion**
 
@@ -84,7 +84,7 @@ Do not add any suffix retry. Existing non-empty root handling must continue to t
 
 - [ ] **Step 3: Wire task claims**
 
-In both same-session reuse and fresh claim paths call:
+Resolve a single recoverable task workspace first from `task.claim.workspaceId` or active execution sessions. If one exists, reuse it. If multiple recoverable workspaces exist, fail closed as ambiguous. Only when none exists call:
 
 ```ts
 createOrReuseSessionWorkspace(project, cleanSessionId, { taskDisplayId: task.displayId })

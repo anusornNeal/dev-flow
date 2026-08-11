@@ -34,21 +34,23 @@ const { getTask, saveTask } = await import('../../src/server/repositories/taskRe
 const { listExecutionSessionsForTask } = await import('../../src/server/repositories/executionSessionRepository.js');
 const claims = await import('../../src/server/services/taskClaimService.js');
 const commitPlan = await import('../../src/server/services/taskCommitPlanService.js');
+const workspaces = await import('../../src/server/services/sessionWorkspaceService.js');
 
-createProject({
+const claimProject = {
   id: 'project-claim',
   name: 'Claim Project',
   repoUrl: 'https://example.test/claim.git',
   localPath: repoRoot,
   taskIdPrefix: 'CLM',
   createdAt: new Date().toISOString(),
-});
+};
+createProject(claimProject);
 
-function seedTask(id: string, targetFiles: string[], parentId?: string) {
+function seedTask(id: string, targetFiles: string[], parentId?: string, displayId?: string) {
   const now = new Date().toISOString();
   saveTask({
     id,
-    displayId: id.toUpperCase(),
+    displayId: displayId || id.toUpperCase(),
     projectId: 'project-claim',
     title: id,
     description: '',
@@ -134,6 +136,54 @@ test('claim moves task to in-progress, binds opaque workspace, and is idempotent
     () => claims.claimTaskForSession('task-a', { sessionId: 'chat-beta-secret', ownerKind: 'chat', ownerLabel: 'Chat B4' }),
     (error: any) => error?.payload?.code === 'TASK_ALREADY_CLAIMED',
   );
+});
+
+test('task claims use only the trailing card number for the visible worktree folder', () => {
+  seedTask('task-folder-dvf', ['src/DvfFolder.ts'], undefined, 'DVF-0469');
+  seedTask('task-folder-bsa', ['src/BsaFolder.ts'], undefined, 'BSA-0057');
+
+  const dvf = claims.claimTaskForSession('task-folder-dvf', { sessionId: 'folder-dvf', ownerLabel: 'Chat DVF' });
+  const dvfWorkspace = workspaces.resolveSessionWorkspace(dvf.claim.workspaceId);
+  assert.ok(dvfWorkspace);
+  assert.equal(path.basename(dvfWorkspace.root), '0469');
+  assert.match(dvfWorkspace.workspaceId, /^ws_[a-f0-9]{16}$/);
+  assert.match(dvfWorkspace.branch, /^devflow\/ws\//);
+
+  const bsa = claims.claimTaskForSession('task-folder-bsa', { sessionId: 'folder-bsa', ownerLabel: 'Chat BSA' });
+  const bsaWorkspace = workspaces.resolveSessionWorkspace(bsa.claim.workspaceId);
+  assert.ok(bsaWorkspace);
+  assert.equal(path.basename(bsaWorkspace.root), '0057');
+  assert.match(bsaWorkspace.workspaceId, /^ws_[a-f0-9]{16}$/);
+});
+
+test('occupied task-number root fails closed instead of creating a suffixed worktree', () => {
+  seedTask('task-folder-collision', ['src/CollisionFolder.ts'], undefined, 'DVF-0500');
+  const occupied = workspaces.createOrReuseSessionWorkspace(claimProject, 'collision-owner', { taskDisplayId: 'DVF-0500' } as any);
+  const rootsDir = path.dirname(occupied.root);
+  try {
+    assert.throws(
+      () => claims.claimTaskForSession('task-folder-collision', { sessionId: 'collision-claim', ownerLabel: 'Chat Collision' }),
+      (error: any) => error?.payload?.code === 'WORKSPACE_ROOT_OCCUPIED',
+    );
+    assert.equal(fs.existsSync(path.join(rootsDir, '0500-2')), false);
+  } finally {
+    workspaces.cleanupSessionWorkspace(occupied.workspaceId);
+  }
+});
+
+test('released task resumes its existing numbered workspace instead of creating another one', () => {
+  seedTask('task-folder-resume', ['src/ResumeFolder.ts'], undefined, 'DVF-0501');
+  const first = claims.claimTaskForSession('task-folder-resume', { sessionId: 'resume-owner-a', ownerLabel: 'Chat Resume A' });
+  const firstWorkspace = workspaces.resolveSessionWorkspace(first.claim.workspaceId);
+  assert.ok(firstWorkspace);
+
+  claims.releaseTaskClaim('task-folder-resume', { sessionId: 'resume-owner-a', nextStatus: 'todo' });
+  const resumed = claims.claimTaskForSession('task-folder-resume', { sessionId: 'resume-owner-b', ownerLabel: 'Chat Resume B' });
+  const resumedWorkspace = workspaces.resolveSessionWorkspace(resumed.claim.workspaceId);
+  assert.ok(resumedWorkspace);
+  assert.equal(resumed.claim.workspaceId, first.claim.workspaceId);
+  assert.equal(path.basename(resumedWorkspace.root), '0501');
+  assert.equal(resumedWorkspace.root, firstWorkspace.root);
 });
 
 test('overlapping active target-file scope blocks while disjoint sibling scope can run in parallel', () => {

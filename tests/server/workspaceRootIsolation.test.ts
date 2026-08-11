@@ -60,6 +60,7 @@ test('workspaceId-only file and Git flows stay on the authoritative managed work
   createProject(project);
   const state = { projectsCache: [project] } as any;
   const workspace = createOrReuseSessionWorkspace(project, 'workspace-isolation-session');
+  assert.match(path.basename(workspace.root), /^ws_[a-f0-9]{16}$/);
 
   try {
     const resolvedRoot = resolveProjectRoot(state, { workspaceId: workspace.workspaceId });

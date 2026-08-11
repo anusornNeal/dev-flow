@@ -15,7 +15,8 @@ mcp-servers.json
 
 .agents/
 .commandcode/
-.devflow/
+.devflow/*
+!.devflow/commands.yaml
 ORIGINAL_REQUEST.md
 
 /data/*.db

@@ -19,7 +19,7 @@ import { uiPreviewToolDefinitions } from './devflowUiPreviewTools';
 import { buildMcpTransportInputSchema } from './mcpSchemaTransport';
 import { resolveRuntimeMcpToolProfileValue } from './mcpToolProfileConfig';
 export type { DevFlowToolDefinition, DevFlowToolHttpRequest } from './devflowContractCore';
-export const DEVFLOW_CONTRACT_VERSION = '2026-08-11.3';
+export const DEVFLOW_CONTRACT_VERSION = '2026-08-11.4';
 
 export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   {
@@ -1241,6 +1241,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
         ...projectIdentifierProperties,
         command: { type: 'string', minLength: 1, maxLength: 64, pattern: '^[A-Za-z0-9][A-Za-z0-9:_-]*$', description: 'Built-in or repository-defined verification preset name.' },
         preset: { type: 'string', minLength: 1, maxLength: 64, pattern: '^[A-Za-z0-9][A-Za-z0-9:_-]*$', description: 'Alias for command.' },
+        targets: { type: 'array', minItems: 1, maxItems: 20, items: { type: 'string', minLength: 1, maxLength: 500 }, description: 'Optional bounded repository-relative file targets. Accepted only when the selected repository preset explicitly sets acceptsTargets: true; values are appended as literal argv and never interpreted as shell syntax.' },
         cwd: { type: 'string', description: 'Optional safe subdirectory under the project root.' },
         timeoutMs: { type: 'number', description: 'Optional timeout in milliseconds, capped at 300000.' },
         maxOutputBytes: { type: 'number', description: 'Optional per-stream stdout/stderr byte limit, capped at 100000.' },

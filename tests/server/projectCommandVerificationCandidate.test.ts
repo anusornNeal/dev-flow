@@ -223,6 +223,52 @@ test('verification candidate can use ignored installed dependencies from the sou
   assert.equal(fs.existsSync(path.join(dependencyRoot, 'index.js')), true, 'candidate cleanup must not remove source dependencies');
 });
 
+test('focused verification candidate identity is target-specific and rejects target substitution', async () => {
+  const { root, projectId } = fixture('focused-target-candidate');
+  fs.appendFileSync(path.join(root, '.gitignore'), '.devflow/\n', 'utf8');
+  fs.mkdirSync(path.join(root, 'tests'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'scripts', 'target-read.mjs'), [
+    "import fs from 'node:fs';",
+    "process.stdout.write(fs.readFileSync(process.argv[2], 'utf8').trim());",
+    '',
+  ].join('\n'), 'utf8');
+  fs.writeFileSync(path.join(root, 'tests', 'a.txt'), 'target-a\n', 'utf8');
+  fs.writeFileSync(path.join(root, 'tests', 'b.txt'), 'target-b\n', 'utf8');
+  git(root, ['add', '.gitignore', 'scripts/target-read.mjs', 'tests/a.txt', 'tests/b.txt']);
+  git(root, ['commit', '-m', 'add focused target fixtures']);
+  fs.mkdirSync(path.join(root, '.devflow'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.devflow', 'commands.yaml'), [
+    'commands:',
+    '  test-focused:',
+    '    executable: node',
+    '    args:',
+    '      - scripts/target-read.mjs',
+    '    acceptsTargets: true',
+    '    category: test',
+    '',
+  ].join('\n'), 'utf8');
+
+  const state = stateFor(root, projectId);
+  const argsA = { projectId, command: 'test-focused', targets: ['tests/a.txt'], cacheResult: false, forceFresh: true };
+  const argsB = { ...argsA, targets: ['tests/b.txt'] };
+  const candidateA = prepareProjectCommandVerificationCandidate(state, argsA);
+  const candidateB = prepareProjectCommandVerificationCandidate(state, argsB);
+  assert.ok(candidateA && candidateB);
+  assert.notEqual(candidateA!.executionIdentity.key, candidateB!.executionIdentity.key);
+  try {
+    const result = await runProjectCommandAsync(state, { ...argsA, __verificationCandidate: candidateA }, logger, () => {});
+    assert.equal(result.ok, true, result.stderr || result.stdout);
+    assert.equal(result.stdout.trim(), 'target-a');
+    await assert.rejects(
+      runProjectCommandAsync(state, { ...argsB, __verificationCandidate: candidateA }, logger, () => {}),
+      (error: any) => error?.payload?.code === 'VERIFICATION_CANDIDATE_IDENTITY_MISMATCH',
+    );
+  } finally {
+    releaseVerificationCandidate(candidateA!.candidateId);
+    releaseVerificationCandidate(candidateB!.candidateId);
+  }
+});
+
 test('write-access project command does not create a verification candidate', () => {
   const { root, projectId } = fixture('write-access');
   const candidate = prepareProjectCommandVerificationCandidate(stateFor(root, projectId), {

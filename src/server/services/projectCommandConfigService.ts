@@ -52,7 +52,7 @@ const MAX_SHARED_RESOURCE_LENGTH = 200;
 const MAX_TIMEOUT_MS = 300_000;
 const MAX_OUTPUT_BYTES = 100_000;
 const ALLOWED_CATEGORIES = new Set(['verification', 'validate', 'test', 'lint', 'build']);
-const ALLOWED_KEYS = new Set(['executable', 'args', 'cwd', 'timeoutMs', 'maxOutputBytes', 'category', 'sharedResources']);
+const ALLOWED_KEYS = new Set(['executable', 'args', 'cwd', 'timeoutMs', 'maxOutputBytes', 'category', 'sharedResources', 'acceptsTargets']);
 const parsedConfigCache = new Map<string, { size: number; mtimeMs: number; parsed: any; configPath: string }>();
 
 export interface ProjectCommandPreset {
@@ -65,6 +65,7 @@ export interface ProjectCommandPreset {
   category: string;
   sharedResources?: string[];
   configPath: string;
+  acceptsTargets: boolean;
 }
 
 function parseScalar(rawValue: string, lineNumber: number): unknown {
@@ -274,6 +275,14 @@ function validateSharedResources(value: unknown, name: string) {
   return Array.from(new Set(resources));
 }
 
+function validateAcceptsTargets(value: unknown, name: string) {
+  if (value === undefined) return false;
+  if (typeof value !== 'boolean') {
+    throw createApiError(400, 'COMMAND_CONFIG_INVALID_ACCEPTS_TARGETS', `Preset '${name}' acceptsTargets must be a boolean.`);
+  }
+  return value;
+}
+
 function validateBoundedInteger(value: unknown, field: string, name: string, max: number) {
   if (value === undefined) return undefined;
   const numeric = Number(value);
@@ -332,6 +341,7 @@ export function loadProjectCommandPreset(root: string, commandName: string): Pro
     category,
     sharedResources: validateSharedResources(rawPreset.sharedResources, commandName),
     configPath: config.configPath,
+    acceptsTargets: validateAcceptsTargets(rawPreset.acceptsTargets, commandName),
   };
 }
 

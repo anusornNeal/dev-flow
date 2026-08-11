@@ -818,6 +818,144 @@ test('long async project commands take bounded live process samples without requ
   assert.equal(getVerificationResourceProfileDiagnostics().retainedSamples, 1);
 });
 
+test('repository focused preset accepts validated target files and separates command identity', () => {
+  const root = createConfigProject('focused-targets', [
+    'commands:',
+    '  test-focused:',
+    '    executable: node',
+    '    args:',
+    '      - scripts/argv.mjs',
+    '    acceptsTargets: true',
+    '    category: test',
+    '',
+  ].join('\n'));
+  fs.mkdirSync(path.join(root, 'tests'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'scripts', 'argv.mjs'), "process.stdout.write(process.argv.slice(2).join('|'));\n", 'utf8');
+  fs.writeFileSync(path.join(root, 'tests', 'a.test.ts'), 'a\n', 'utf8');
+  fs.writeFileSync(path.join(root, 'tests', 'b.test.ts'), 'b\n', 'utf8');
+  const git = (args: string[]) => {
+    const command = spawnSync('git', args, { cwd: root, encoding: 'utf8', shell: false });
+    assert.equal(command.status, 0, command.stderr || command.stdout || `git ${args.join(' ')} failed`);
+  };
+  git(['init']);
+  git(['config', 'user.name', 'DevFlow Test']);
+  git(['config', 'user.email', 'devflow@example.com']);
+  git(['add', '.']);
+  git(['commit', '-m', 'focused target fixture']);
+  const state = stateFor(root);
+
+  const aArgs = { projectId: 'project-command', command: 'test-focused', targets: ['tests/a.test.ts'] };
+  const bArgs = { projectId: 'project-command', command: 'test-focused', targets: ['tests/b.test.ts'] };
+  const aDescriptor = describeProjectCommand(state, aArgs);
+  const bDescriptor = describeProjectCommand(state, bArgs);
+  const aIdentity = getProjectCommandExecutionIdentity(state, aArgs);
+  const bIdentity = getProjectCommandExecutionIdentity(state, bArgs);
+  const result = runProjectCommand(state, aArgs);
+
+  assert.deepEqual(aDescriptor.args.slice(-1), ['tests/a.test.ts']);
+  assert.notEqual(aDescriptor.semanticKey, bDescriptor.semanticKey);
+  assert.ok(aIdentity && bIdentity);
+  assert.notEqual(aIdentity!.key, bIdentity!.key);
+  assert.equal(result.ok, true);
+  assert.equal(result.stdout, 'tests/a.test.ts');
+});
+
+test('focused targets require explicit preset opt-in and reject unsafe target paths', () => {
+  const root = createConfigProject('focused-target-validation', [
+    'commands:',
+    '  focused:',
+    '    executable: node',
+    '    args:',
+    '      - scripts/pass.mjs',
+    '    acceptsTargets: true',
+    '    category: test',
+    '  ordinary:',
+    '    executable: node',
+    '    args:',
+    '      - scripts/pass.mjs',
+    '    category: test',
+    '',
+  ].join('\n'));
+  fs.mkdirSync(path.join(root, 'tests'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'scripts', 'pass.mjs'), 'process.exit(0);\n', 'utf8');
+  fs.writeFileSync(path.join(root, 'tests', 'ok.test.ts'), 'ok\n', 'utf8');
+  const state = stateFor(root);
+
+  assert.throws(
+    () => describeProjectCommand(state, { projectId: 'project-command', command: 'ordinary', targets: ['tests/ok.test.ts'] }),
+    (error: any) => error?.payload?.code === 'COMMAND_TARGETS_NOT_ALLOWED',
+  );
+  for (const targets of [
+    [],
+    ['../outside.test.ts'],
+    [path.resolve(root, 'tests/ok.test.ts')],
+    ['tests/missing.test.ts'],
+    [''],
+    [123 as any],
+    Array.from({ length: 21 }, (_, index) => `tests/${index}.test.ts`),
+    [`tests/${'a'.repeat(490)}.test.ts`],
+  ]) {
+    assert.throws(
+      () => describeProjectCommand(state, { projectId: 'project-command', command: 'focused', targets }),
+      (error: any) => String(error?.payload?.code || '').startsWith('COMMAND_TARGET'),
+      JSON.stringify(targets),
+    );
+  }
+});
+
+test('focused targets reject symlink escapes before process spawn', (t) => {
+  const root = createConfigProject('focused-target-symlink', [
+    'commands:',
+    '  focused:',
+    '    executable: node',
+    '    args:',
+    '      - scripts/pass.mjs',
+    '    acceptsTargets: true',
+    '    category: test',
+    '',
+  ].join('\n'));
+  fs.writeFileSync(path.join(root, 'scripts', 'pass.mjs'), 'process.exit(0);\n', 'utf8');
+  const outside = path.join(tempRoot, 'focused-target-outside.test.ts');
+  fs.writeFileSync(outside, 'outside\n', 'utf8');
+  const link = path.join(root, 'escape.test.ts');
+  try {
+    fs.symlinkSync(outside, link, 'file');
+  } catch {
+    t.skip('symlink creation is unavailable in this environment');
+    return;
+  }
+
+  assert.throws(
+    () => describeProjectCommand(stateFor(root), { projectId: 'project-command', command: 'focused', targets: ['escape.test.ts'] }),
+    (error: any) => String(error?.payload?.code || '').startsWith('COMMAND_TARGET'),
+  );
+});
+
+test('repository npm and npx presets use platform-safe package-manager invocation', () => {
+  for (const executable of ['npm', 'npx'] as const) {
+    const root = createConfigProject(`repo-${executable}-safe`, [
+      'commands:',
+      '  safe:',
+      `    executable: ${executable}`,
+      '    args:',
+      '      - --version',
+      '    category: test',
+      '',
+    ].join('\n'));
+    const state = stateFor(root);
+    const descriptor = describeProjectCommand(state, { projectId: 'project-command', command: 'safe' });
+    const result = runProjectCommand(state, { projectId: 'project-command', command: 'safe', cacheResult: false });
+    if (process.platform === 'win32') {
+      assert.equal(descriptor.executable, process.execPath);
+      assert.match(descriptor.args[0] || '', new RegExp(`${executable}-cli\\.js$`, 'i'));
+    } else {
+      assert.equal(descriptor.executable, executable);
+    }
+    assert.equal(result.ok, true, result.stderr || result.stdout);
+    assert.doesNotMatch(result.stderr, /ENOENT/i);
+  }
+});
+
 test('low-confidence or retried PASS is not promoted to reusable evidence by default', () => {
   const root = createProject('low-confidence-evidence', { typecheck: 'node scripts/static.mjs' });
   const counterPath = path.join(tempRoot, 'low-confidence-evidence-counter.txt');

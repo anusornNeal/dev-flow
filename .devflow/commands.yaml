@@ -1,0 +1,16 @@
+commands:
+  test-focused:
+    executable: node
+    args:
+      - node_modules/tsx/dist/cli.mjs
+      - --test
+    acceptsTargets: true
+    category: test
+  test-command-service:
+    executable: node
+    args:
+      - ../../../../../node_modules/tsx/dist/cli.mjs
+      - --test
+      - tests/server/projectCommandService.test.ts
+      - tests/server/projectCommandVerificationCandidate.test.ts
+    category: test

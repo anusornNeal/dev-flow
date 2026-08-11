@@ -41,6 +41,8 @@ const COMPACT_MAX_OUTPUT_BYTES = 2_000;
 const MAX_TIMEOUT_MS = 300_000;
 const MAX_OUTPUT_BYTES = 100_000;
 const MAX_PACKAGE_JSON_BYTES = 10 * 1024 * 1024;
+const MAX_COMMAND_TARGETS = 20;
+const MAX_COMMAND_TARGET_LENGTH = 500;
 const packageScriptsParseCache = new Map<string, { size: number; mtimeMs: number; scripts: Record<string, string> }>();
 const PROJECT_COMMAND_CACHE_DEPENDENCIES = ['repo-content', 'repo-revision', 'project-rules'] as const;
 const PROCESS_RESOURCE_SAMPLE_DELAY_MS = 1_000;
@@ -65,6 +67,10 @@ type ResolvedCommand = {
   script?: string;
   category?: string;
   sharedResources?: string[];
+  acceptsTargets?: boolean;
+  configuredExecutable?: string;
+  configuredArgs?: string[];
+  targets?: string[];
 };
 
 export type ProjectCommandScope = 'targeted' | 'broad' | 'full';
@@ -351,10 +357,74 @@ function readPackageScripts(root: string) {
   return { exists: true, scripts };
 }
 
-function resolveAllowedCommand(root: string, command: string): ResolvedCommand {
+function hasCommandTargetRequest(args: Record<string, any>) {
+  return Object.prototype.hasOwnProperty.call(args, 'targets');
+}
+
+function resolveCommandTargets(root: string, args: Record<string, any>, acceptsTargets: boolean) {
+  const supplied = hasCommandTargetRequest(args);
+  if (!supplied) {
+    if (acceptsTargets) {
+      throw createApiError(400, 'COMMAND_TARGETS_REQUIRED', 'This verification preset requires at least one focused target path.');
+    }
+    return [] as string[];
+  }
+  if (!acceptsTargets) {
+    throw createApiError(400, 'COMMAND_TARGETS_NOT_ALLOWED', 'This verification preset does not accept caller-supplied target paths.');
+  }
+  if (!Array.isArray(args.targets) || args.targets.length === 0) {
+    throw createApiError(400, 'COMMAND_TARGETS_REQUIRED', 'Focused targets must contain at least one repository-relative file path.');
+  }
+  if (args.targets.length > MAX_COMMAND_TARGETS) {
+    throw createApiError(400, 'COMMAND_TARGETS_TOO_MANY', `Focused targets may contain at most ${MAX_COMMAND_TARGETS} paths.`);
+  }
+
+  const resolvedRoot = path.resolve(root);
+  const realRoot = fs.realpathSync(resolvedRoot);
+  const realRootWithSep = realRoot.endsWith(path.sep) ? realRoot : `${realRoot}${path.sep}`;
+  const normalizedTargets = args.targets.map((entry: unknown, index: number) => {
+    if (typeof entry !== 'string') {
+      throw createApiError(400, 'COMMAND_TARGET_INVALID', `Focused target ${index + 1} must be a string.`);
+    }
+    const normalized = entry.trim().replace(/\\/g, '/');
+    if (!normalized || normalized.length > MAX_COMMAND_TARGET_LENGTH || /[\r\n\0]/.test(normalized)) {
+      throw createApiError(400, 'COMMAND_TARGET_INVALID', `Focused target ${index + 1} is empty, malformed, or too long.`);
+    }
+    if (normalized.startsWith('/') || normalized.startsWith('//') || /^[A-Za-z]:\//.test(normalized)) {
+      throw createApiError(403, 'COMMAND_TARGET_OUTSIDE_ROOT', `Focused target '${normalized}' must be repository-relative.`);
+    }
+    const segments = normalized.split('/');
+    if (segments.some((segment) => segment === '..' || segment === '.')) {
+      throw createApiError(403, 'COMMAND_TARGET_OUTSIDE_ROOT', `Focused target '${normalized}' may not contain traversal segments.`);
+    }
+
+    const absolutePath = resolveSafePath(resolvedRoot, normalized);
+    let stat: fs.Stats;
+    try {
+      stat = fs.lstatSync(absolutePath);
+    } catch (error: any) {
+      if (error?.code === 'ENOENT') {
+        throw createApiError(404, 'COMMAND_TARGET_NOT_FOUND', `Focused target '${normalized}' was not found.`);
+      }
+      throw error;
+    }
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      throw createApiError(403, 'COMMAND_TARGET_INVALID_TYPE', `Focused target '${normalized}' must be a regular file.`);
+    }
+    const realTarget = fs.realpathSync(absolutePath);
+    if (realTarget !== realRoot && !realTarget.startsWith(realRootWithSep)) {
+      throw createApiError(403, 'COMMAND_TARGET_OUTSIDE_ROOT', `Focused target '${normalized}' resolves outside the repository root.`);
+    }
+    return path.relative(resolvedRoot, absolutePath).replace(/\\/g, '/');
+  });
+  return Array.from(new Set(normalizedTargets));
+}
+
+function resolveAllowedCommand(root: string, command: string, requestArgs: Record<string, any> = {}): ResolvedCommand {
   const packageConfig = readPackageScripts(root);
   const isBuiltIn = (ALLOWED_COMMANDS as readonly string[]).includes(command);
   if (isBuiltIn && packageConfig.scripts[command]) {
+    resolveCommandTargets(root, requestArgs, false);
     const invocation = resolvePackageManagerInvocation('npm', ['run', '--silent', command]);
     return {
       command,
@@ -367,10 +437,16 @@ function resolveAllowedCommand(root: string, command: string): ResolvedCommand {
 
   const configured = loadProjectCommandPreset(root, command);
   if (configured) {
+    const targets = resolveCommandTargets(root, requestArgs, configured.acceptsTargets);
+    const configuredArgs = [...configured.args];
+    const effectiveArgs = [...configuredArgs, ...targets];
+    const invocation = configured.executable === 'npm' || configured.executable === 'npx'
+      ? resolvePackageManagerInvocation(configured.executable, effectiveArgs)
+      : { executable: configured.executable, args: effectiveArgs };
     return {
       command,
-      executable: configured.executable,
-      args: configured.args,
+      executable: invocation.executable,
+      args: invocation.args,
       cwd: configured.cwd,
       timeoutMs: configured.timeoutMs,
       maxOutputBytes: configured.maxOutputBytes,
@@ -378,6 +454,10 @@ function resolveAllowedCommand(root: string, command: string): ResolvedCommand {
       configPath: configured.configPath,
       category: configured.category,
       sharedResources: configured.sharedResources,
+      acceptsTargets: configured.acceptsTargets,
+      configuredExecutable: configured.executable,
+      configuredArgs,
+      targets,
     };
   }
 
@@ -407,8 +487,9 @@ function semanticKeyForResolvedCommand(root: string, resolvedCommand: ResolvedCo
       }
     : {
         source: resolvedCommand.source,
-        executable: resolvedCommand.executable,
-        args: resolvedCommand.args,
+        executable: resolvedCommand.configuredExecutable ?? resolvedCommand.executable,
+        args: resolvedCommand.configuredArgs ?? resolvedCommand.args,
+        targets: resolvedCommand.targets ?? [],
         cwd: path.relative(root, cwdPath) || '.',
         configPath: resolvedCommand.configPath,
         sharedResources: resolvedCommand.sharedResources,
@@ -484,7 +565,7 @@ function buildProjectCommandDescriptor(
 export function describeProjectCommand(state: AppState, args: Record<string, any>): ProjectCommandDescriptor {
   const root = resolveProjectRoot(state, args);
   const command = resolveCommandLabel(args.command ?? args.preset);
-  const resolvedCommand = resolveAllowedCommand(root, command);
+  const resolvedCommand = resolveAllowedCommand(root, command, args);
   const cwdPath = resolveSafeCommandCwd(root, args.cwd ?? resolvedCommand.cwd);
   return buildProjectCommandDescriptor(root, command, resolvedCommand, cwdPath);
 }
@@ -637,7 +718,7 @@ function buildProjectCommandExecutionIdentity(
     ...observedRevision,
     token: repoRevision,
     head: lineageHead,
-  }, identityArgs.affectedInputPaths);
+  }, identityArgs.affectedInputPaths ?? resolvedCommand.targets);
   const dependencyFingerprint = getRepoDependencyFingerprint(root);
   const environment = {
     CI: process.env.CI || '',
@@ -690,7 +771,7 @@ function buildProjectCommandExecutionIdentity(
 export function getProjectCommandExecutionIdentity(state: AppState, args: Record<string, any>): ProjectCommandExecutionIdentity | null {
   const root = resolveProjectRoot(state, args);
   const command = resolveCommandLabel(args.command ?? args.preset);
-  const resolvedCommand = resolveAllowedCommand(root, command);
+  const resolvedCommand = resolveAllowedCommand(root, command, args);
   const cwdPath = resolveSafeCommandCwd(root, args.cwd ?? resolvedCommand.cwd);
   const timeoutMs = Number.isFinite(Number(args.timeoutMs))
     ? Math.max(1, Math.min(MAX_TIMEOUT_MS, Number(args.timeoutMs)))
@@ -757,7 +838,7 @@ export function bindProjectCommandVerificationCandidate(
     throw createApiError(409, 'VERIFICATION_CANDIDATE_MISMATCH', 'Verification candidate metadata no longer matches its immutable snapshot.');
   }
   const command = resolveCommandLabel(args.command ?? args.preset);
-  const resolvedCommand = resolveAllowedCommand(resolvedCandidate.root, command);
+  const resolvedCommand = resolveAllowedCommand(resolvedCandidate.root, command, args);
   const cwdPath = resolveSafeCommandCwd(resolvedCandidate.root, args.cwd ?? resolvedCommand.cwd);
   const timeoutMs = Number.isFinite(Number(args.timeoutMs))
     ? Math.max(1, Math.min(MAX_TIMEOUT_MS, Number(args.timeoutMs)))
@@ -925,7 +1006,7 @@ export function getProjectCommandAdmissionPreflight(
   const totalStartedAt = Date.now();
   const root = resolveProjectRoot(state, args);
   const command = resolveCommandLabel(args.command ?? args.preset);
-  const resolvedCommand = resolveAllowedCommand(root, command);
+  const resolvedCommand = resolveAllowedCommand(root, command, args);
   const cwdPath = resolveSafeCommandCwd(root, args.cwd ?? resolvedCommand.cwd);
   const timeoutMs = Number.isFinite(Number(args.timeoutMs))
     ? Math.max(1, Math.min(MAX_TIMEOUT_MS, Number(args.timeoutMs)))
@@ -985,7 +1066,7 @@ export function runProjectCommand(state: AppState, args: Record<string, any>): R
   const resolutionStartedAt = totalStartedAt;
   const root = resolveProjectRoot(state, args);
   const command = resolveCommandLabel(args.command ?? args.preset);
-  const resolvedCommand = resolveAllowedCommand(root, command);
+  const resolvedCommand = resolveAllowedCommand(root, command, args);
   const cwdPath = resolveSafeCommandCwd(root, args.cwd ?? resolvedCommand.cwd);
   const timeoutMs = Number.isFinite(Number(args.timeoutMs))
     ? Math.max(1, Math.min(MAX_TIMEOUT_MS, Number(args.timeoutMs)))
@@ -1079,7 +1160,7 @@ export async function runProjectCommandAsync(state: AppState, args: Record<strin
   }
 
   const command = resolveCommandLabel(args.command ?? args.preset);
-  const resolvedCommand = resolveAllowedCommand(executionRoot, command);
+  const resolvedCommand = resolveAllowedCommand(executionRoot, command, args);
   const executionCwdPath = resolveSafeCommandCwd(executionRoot, args.cwd ?? resolvedCommand.cwd);
   const displayCwdPath = suppliedCandidate
     ? resolveSafeCommandCwd(sourceRoot, args.cwd ?? resolvedCommand.cwd)

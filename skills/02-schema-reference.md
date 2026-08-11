@@ -1,58 +1,53 @@
 # DevFlow Schema Semantic Reference
 
 ## Purpose
-Use this only when the live tool schema does not answer a semantic placement question. `get_tool_schema` is authoritative for field types, enums, required fields, aliases, and nested JSON shapes; use the `create_task` or `update_task` schema when reasoning about task fields. Do not duplicate those lists here.
+Use this skill only for semantic task-field placement that a structural tool schema cannot express. It does not maintain a second task schema.
 
-## Authoring helper tools
-- `get_tool_schema`: authoritative input/output shape for one MCP tool; use it for `create_task` or `update_task` when task-field details matter.
-- `devflow_health_check`: current runtime/tool-surface diagnostics when exposure or connectivity is in doubt.
+## Structural source of truth
+`get_tool_schema` is authoritative for live tool input/output structure, including field types, required fields, enums, aliases, and nested shapes. For task mutations, inspect the live `create_task` or `update_task` schema when exact structure matters.
 
-If this file conflicts with a live schema, follow the live schema and fix this guidance.
+If this document conflicts with a live schema, follow the live schema and correct this document. Do not copy changing model, status, effort, or tool-shape catalogs into this file.
 
 ## Semantic field placement
 ### `description`
-State the requested behavior and scope delta. Keep implementation archaeology out unless it changes product behavior.
-- `get_jira_authoring_bundle`: bounded Jira evidence packet; use before individual Jira proxy reads.
-- `get_repo_context_bundle`: preferred first repo packet; use `get_project_atlas` for cross-module/read-order hints and `search_local_files` only as a targeted fallback when exact repository evidence is still missing.
-- `read_file_snippets_batch(includeFileRef=true)` / `read_local_file(includeFileRef=true)`: bounded Steno bootstrap for multi-file / single-file work.
-- `prepare_compact_edit` + `apply_prepared_edit`: default for LLM-authored existing-file changes when revision-bound anchored edits fit; preview first and re-read/re-prepare stale plans.
-- `edit_local_files_batch`: guarded structured fallback for anchored edits when Steno is unsuitable; translate a trusted native Git unified diff into revision-guarded operations. Do not paste `*** Begin Patch` pseudo-patch syntax into MCP edit tools.
-- `write_local_file`: new files or small known full-file replacements only.
-- `apply_and_verify` / `run_project_command`: risk-matched verification; use fresh final evidence when required.
-- `commit_git_changes`: commit only the intended verified scope; never push by default.
-- `create_task` / `update_task`: authoritative server-side authoring validation. `open_task_bug`: keep defects inside an existing task instead of creating a new card.
-- `devflow_health_check`: compact readiness diagnostics. `move_task_to_status`: follow allowed status paths.
+State requested behavior, the scope delta, and important exclusions. Keep code archaeology out unless it changes the observable requirement.
 
 ### `repoContext`
-Put repository evidence and implementation guidance here. Implementation-ready work should normally contain:
+Put current repository findings, implementation guidance, dependencies, and constraints here. An implementation-ready card should normally include a compact Implementation map:
 
-`Implementation map:\n- File: <repo-relative path>\n  Class/function: <symbol>\n  Current behavior: <evidence>\n  Expected change: <delta>`
+```text
+Implementation map:
+- File: <repo-relative path>
+  Class/function: <symbol when known>
+  Current behavior: <evidence>
+  Expected change: <delta>
+```
 
-Use repo-relative paths. Do not persist machine-specific absolute paths.
+Use repository-relative paths. Do not persist machine-specific workspace paths.
 
 ### `targetFiles`
-List focused repo-relative files supported by the implementation map. Do not use it as a speculative directory dump.
+List focused repo-relative implementation and test files supported by the implementation map. Do not use this field as a speculative directory dump.
 
 ### `checklist`
-Use for milestones inside one implementation boundary. If entries are independently implementable/reviewable, use child cards instead.
+Use for milestones inside one coherent card boundary. Independently executable or reviewable work belongs in child cards instead of a long checklist.
 
 ### `acceptanceCriteria`
-Describe observable pass/fail outcomes, including important negative or edge behavior.
+Describe observable pass/fail outcomes. Include negative cases or preserved behavior when they are material to correctness.
 
 ### `verification`
-Name concrete automated/manual evidence and the smallest useful test scope. Final fresh gates remain available when required.
+State concrete automated, manual, or evidence-based checks and what they prove. Keep command/tool mechanics in execution guidance rather than duplicating them here.
+
+### `reasoning`
+Record why the chosen scope, decomposition, or implementation boundary is appropriate when that context helps a future implementer or reviewer.
 
 ### `parentId`
-Use only for a real parent/child implementation relationship, not loose topical grouping.
+Use only for a real parent/child implementation relationship. It is not a general topic-grouping field.
 
-### source/design fields
-Use Jira/Figma/source identifiers as provenance; summarize the implementation-relevant evidence in `repoContext`. Load `05-authoring-evidence` for source-specific rules.
+### Source and design provenance
+Use Jira, Figma, specification, image, or source fields for provenance when the live task schema exposes them. Summarize implementation-relevant conclusions in `repoContext` instead of relying on an external link as the only task instruction.
 
 ## Status semantics
-Default newly authored cards to `backlog` unless the user/workflow explicitly queues or starts the work. Do not infer `todo` from implementation readiness alone.
+New authoring defaults to backlog unless the user or workflow explicitly queues or starts implementation. Implementation readiness alone does not mean work has started.
 
 ## Mutation semantics
-Create/update mutations enforce the authoritative server-side quality gate; do not add a duplicate validation round trip unless a currently advertised diagnostic explicitly requires it.
-
-## Execution references
-When implementation follows immediately, load `07-authoring-execution`. It covers `read_file_snippets_batch(includeFileRef=true)`, guarded edits, `write_local_file`, verification, and `commit_git_changes` without duplicating their schemas here.
+Server-side create/update validation is authoritative. Do not add a duplicate validation round trip merely because this semantic reference exists.

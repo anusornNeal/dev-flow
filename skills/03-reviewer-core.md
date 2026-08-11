@@ -1,265 +1,121 @@
 # DevFlow Reviewer Core
 
 ## Purpose
+This is the canonical ChatGPT policy for reviewing DevFlow cards in `ready-for-review` and for handling review defects on existing tasks. Compatibility reviewer documents are non-authoritative.
 
-Review DevFlow cards in `ready-for-review` and review defect feedback on existing cards.
-
-`ready-for-review` means “needs real review,” not “done.” The reviewer must inspect the actual implementation, verify checklist items and acceptance criteria, and move the card either to `done` or back to `in-progress`.
+`ready-for-review` means the implementation needs real inspection. A reviewer must evaluate the actual work and either complete the card or return it to implementation with precise current guidance.
 
 ## Core rule
+Never approve from card text, checklist state, or an agent summary alone. Inspect implementation evidence: the relevant branch or integrated commit, diff, changed files, tests, related project patterns, active embedded bugs, and requirement evidence needed to judge correctness.
 
-Never approve a card by reading only the card, checklist, or agent summary.
+## Requirement authority and implementation evidence
+Keep desired behavior separate from evidence about what currently exists.
 
-A valid review must inspect the real work: branch, commits, diff, changed files, related existing code, active embedded bugs, tests, and design/business evidence when relevant.
-
-## Evidence hierarchy
-
-When evidence conflicts, use this order:
-
+### Desired requirement authority
+When requirements conflict, prefer:
 1. Latest explicit user or product-owner clarification.
-2. Current DevFlow card, Jira requirement, approved comments, and attached Figma/design evidence.
-3. Actual repository implementation and established project patterns.
-4. Reviewer inference or assumption.
+2. Current approved DevFlow task/specification, Jira requirement/comments, and approved Figma/design evidence.
+3. Older requirement summaries.
+4. Reviewer inference.
 
-Never preserve or create a defect from a lower-priority assumption that conflicts with stronger evidence.
+A reviewer assumption must never override a current approved requirement.
 
-When the user corrects a review assumption:
+### Implementation evidence
+Actual repository implementation, branch/diff state, tests, runtime evidence, and established project patterns describe the current system and whether the requested change was implemented correctly.
 
-- re-read the affected code, design, and project pattern,
-- update or replace the review guidance,
-- archive invalid bug threads,
-- archive or clearly supersede obsolete bug guidance,
-- keep only one current implementation-guidance bug open for the same defect set.
+Repository implementation cannot override the desired requirement merely because current code or an older pattern behaves differently. When current code differs from the approved requirement, judge whether the card correctly implements the required delta.
 
-Do not leave contradictory open bugs and expect the implementer to decide which one is current. If bug-status mutation is unavailable, record the supersession in task reasoning and treat the obsolete bug as non-blocking until it can be archived.
+If the user corrects a reviewer assumption, re-read the affected requirement and implementation evidence, replace contradictory guidance, and retire the invalid assumption instead of stacking another conflicting instruction.
 
-## Required inputs
+## Required review inputs
+Before pass/fail, inspect as applicable:
+1. Current task and its latest requirements.
+2. Parent task when reviewing a child; required children when reviewing a parent.
+3. Active and historical embedded bug threads that may contain corrected or superseded guidance.
+4. Assigned branch, managed-workspace commit, or latest relevant integrated commit.
+5. Actual diff and changed files.
+6. Related project code and tests needed to understand the changed behavior.
+7. Checklist, acceptance criteria, verification, `repoContext`, and `targetFiles`.
+8. Jira/Figma/specification evidence when the decision depends on those sources.
 
-Before deciding pass/fail, read:
+Use bounded repository context first and expand only where the review decision still lacks evidence.
 
-1. Current card.
-2. Parent card if the card has a parent.
-3. Child/subtask cards if the card is a parent.
-4. Active and historical embedded bug threads, especially corrected or superseded guidance.
-5. Assigned branch or latest relevant integrated commit.
-6. Actual changed files from the branch/diff.
-7. Related existing code and project patterns needed to judge correctness.
-8. Checklist, acceptance criteria, verification, repoContext, targetFiles, Jira, and Figma/design evidence when applicable.
+## Git and integration review
+Resolve the repository Git policy before treating branch topology as correct or incorrect. The default policy is `rebase-ff`; an explicit project `merge` policy overrides that default. Confirm commits respect the configured commit message template or the repository commit convention.
 
-Use `get_repo_context_bundle` first when the project is known. If the composite tool fails, do not repeat the same payload unchanged; switch to targeted task, git, search, and file reads.
+For a local or managed-workspace review:
+- identify the intended branch or integrated revision;
+- confirm the relevant work is inspectable;
+- inspect diff and changed files, not only commit messages;
+- read nearby helpers, shared components, or tests when correctness depends on them;
+- verify no unrelated scope was accidentally included.
 
-Use `get_project_atlas` only as a review companion when target files, implementation maps, module boundaries, cross-module impact, architecture claims, or read order are vague. Treat verified Atlas facts separately from inferred summaries, and never use Atlas to approve without inspecting actual target files.
+Do not require publication/push unless current user or repository policy requires it. Branch placement alone is not a defect when integrated-revision review is explicitly acceptable.
 
-For large Figma files, read one node at a time. Separate file-access, node-access, and design-spec failures instead of treating all failures as a connection or permission problem.
+## Checklist and acceptance criteria
+Verify every required checklist item against real evidence. Toggle only an item that is actually satisfied. An unchecked or unverifiable required item is not implicitly complete.
 
-For verification evidence, targeted FAST/SAFE checks and valid cached evidence may support iteration, but they do not replace a required final FULL gate. When fresh proof is required for review, run it with `forceFresh` (directly or through the supported smart verification flow) before approval.
+Evaluate acceptance criteria as observable outcomes. Include preserved behavior, failure paths, and negative cases when the requirement makes them material.
 
-## Branch and implementation review
+## Parent and child review
+For a parent:
+- inspect every required child;
+- confirm required child work is complete and integrated;
+- verify the combined outcome rather than only each slice independently;
+- do not close the parent while a required child or current defect remains unresolved.
 
-For local branch review:
+For a child:
+- read the parent boundary and shared contracts first;
+- verify the child stays inside its scope and does not violate parent integration constraints.
 
-1. Identify the intended branch or latest relevant integrated commit.
-2. Confirm it exists and inspect working-tree state.
-3. Inspect diff against the intended base or previous reviewed commit.
-4. Inspect recent commits when useful.
-5. Read changed files, not only diff snippets.
-6. Read the nearest shared helper, component, base class, and tests when the change depends on them.
-7. Compare implementation with the corrected current requirement.
+Independent sibling children do not become defects merely because they were implemented in parallel.
 
-If branch or commit cannot be inspected, do not approve.
+## Figma and visual review
+When visual acceptance depends on an approved Figma source, inspect the exact referenced evidence needed for the card. Compare only properties that belong to the requirement: copy, state, layout, spacing, typography, assets, interactions, or responsive behavior as applicable.
 
-Branch placement alone is not a defect when the product owner explicitly confirms that integrated-branch review is acceptable.
+Do not invent pixel-perfect requirements from reviewer preference. Do not approve a visual requirement from a URL alone when the underlying evidence is required and unavailable.
 
-## Project-pattern rule
+## Terminal-path review
+For changes to async helpers, API wrappers, loading or optimistic state, retries, lifecycle behavior, shared base logic, or request ordering, inspect every materially distinct terminal path, such as:
+- success;
+- business/local error;
+- service/global error;
+- retry;
+- cancel, back, or dismissal;
+- duplicate action;
+- overlapping or out-of-order requests;
+- lifecycle re-entry or stale responses.
 
-Before prescribing a replacement helper, component, dialog, resource, API wrapper, fallback, or navigation behavior, inspect how equivalent flows are implemented elsewhere in the project.
+Require regression coverage for branches whose behavior is materially different. A test of one error branch does not prove another differently-routed branch.
 
-Do not turn any of these into defects when they are explicitly approved:
+## Embedded defects
+When review finds a defect on the existing task, inspect current bug threads first.
+- Update or reopen the existing thread when it is the same root cause.
+- Use `open_task_bug` only for a distinct root cause that needs a new embedded thread.
+- Retire or supersede invalid guidance rather than leaving contradictory current bugs.
+- Do not create a new top-level card unless the user explicitly requests separate work.
 
-- intentional no-op behavior,
-- native or shared component choice,
-- approved fallback behavior,
-- destination or architecture choice,
-- shared-component scope,
-- branch preference.
-
-Do not require a custom UI component merely because Figma dimensions differ from a native component unless pixel-level replacement is explicitly required. Preserve native/shared components when directed and review only requested properties.
-
-## Checklist rule
-
-For each checklist item:
-
-- verify against actual implementation,
-- check it only when truly satisfied,
-- leave it unchecked when failed or unverified,
-- never bulk-check without inspection,
-- never trust an agent summary alone.
-
-If an item cannot be verified because branch, commit, files, tests, or context are missing, treat it as not passed.
-
-## Parent/subtask rule
-
-When reviewing a parent:
-
-- read every child card,
-- confirm child work is integrated as expected,
-- verify final combined behavior,
-- do not mark the parent done while a required child is incomplete, failed, unreviewed, unintegrated, or has unresolved current bugs.
-
-When reviewing a child:
-
-- read the parent first,
-- confirm parent architecture and scope,
-- verify the child does not break parent integration rules.
-
-## Frontend and Figma review rule
-
-When reviewing a frontend card that has a Figma source:
-
-- confirm the exact Figma file and node referenced by the card were fetched during authoring,
-- inspect the relevant node or normalized design spec when visual behavior is part of acceptance,
-- verify the frontend child contains its own Figma evidence rather than relying only on the parent,
-- compare required states, copy, spacing, typography, colors, assets, interactions, and responsive behavior that belong to the card,
-- do not approve from a Figma URL alone.
-
-If the Figma node cannot be inspected and visual acceptance depends on it, treat visual verification as incomplete unless the user explicitly designates another final source of truth.
-
-## Terminal-path review rule
-
-When implementation changes an API wrapper, async helper, optimistic state, loading state, retry behavior, error routing, lifecycle callback, or shared base class, review every meaningful terminal path:
-
-- success,
-- local/business error,
-- service/global error,
-- retry,
-- cancel, back, or error-screen dismissal,
-- duplicate action,
-- overlapping or out-of-order requests,
-- lifecycle re-entry,
-- stale response after a newer state change.
-
-Loading locks, optimistic values, cached content, and one-shot effects must reach a valid final state on every terminal path.
-
-A test covering only a local 400 error does not prove network, 500, or 503 behavior when the shared helper routes service errors differently. Review the helper implementation itself and require focused regression tests for materially different branches.
-
-## Review process
-
-For each review:
-
-1. Read the task, parent/children, current requirement, and embedded bugs.
-2. Resolve invalid or superseded guidance before judging implementation.
-3. Identify branch, commit, target files, checklist, acceptance criteria, and verification.
-4. Inspect branch, commit, diff, changed files, and nearest project patterns.
-5. Compare Jira/Figma evidence when the decision is visual or business-rule dependent.
-6. Verify checklist and acceptance criteria one by one.
-7. Evaluate tests, manual evidence, and terminal paths.
-8. Decide pass/fail.
-9. Update checklist, bug status, reasoning, and review note.
-10. Move status.
+A current defect should state observed behavior, expected behavior, evidence, related areas, preserved behavior or scope boundaries, and copy-ready fix guidance.
 
 ## Pass criteria
+A card passes only when:
+- implementation matches the latest approved requirement;
+- required acceptance criteria and checklist items are verified;
+- required verification evidence is valid;
+- parent/child integration is consistent;
+- no current unresolved implementation defect remains;
+- actual branch or integrated work was inspected;
+- no additional coding is required for the card boundary.
 
-A card passes only when all are true:
-
-- implementation matches the latest verified requirement,
-- all acceptance criteria pass,
-- all required checklist items are verified,
-- required verification is complete or reasonably proven,
-- parent/subtask relationships are consistent,
-- no current unresolved implementation bug remains,
-- no obvious regression or scope violation is found,
-- branch or integrated commit was actually inspected,
-- no further coding work is required.
-
-Pass transition:
-
-```text
-ready-for-review -> done
-```
-
-Do not move a card to `done` while required behavior, active bug guidance, tests, integration verification, or UAT remain unverified.
-
-## Static-review rule
-
-If the user explicitly skips build, tests, or UAT:
-
-- perform the best possible static review,
-- label the result as static review,
-- distinguish verified implementation facts from unverified runtime behavior,
-- leave command/integration/UAT verification pending,
-- do not claim tests passed,
-- do not close the card as fully done unless the user explicitly waives those gates and the project workflow allows it.
+Normal pass transition: `ready-for-review -> done`.
 
 ## Fail criteria
+Return or keep the card in `in-progress` when implementation is incomplete, required evidence is missing, verification fails, scope is wrong, integration is incomplete, a current defect remains, or the implementation cannot be inspected sufficiently to approve.
 
-Move or keep the card in `in-progress` when any are true:
+Normal fail transition: `ready-for-review -> in-progress`.
 
-- implementation is missing or incomplete,
-- a checklist item fails or cannot be verified,
-- acceptance criteria are not fully satisfied,
-- branch or commit cannot be inspected,
-- implementation changes unrelated scope,
-- affected modules or tests were omitted,
-- parent/subtask integration is incomplete,
-- tests or verification fail,
-- required files were not changed or wrong files were changed,
-- the card depends on unfinished work,
-- review finds a bug, regression, race, stale-state path, or unclear behavior needing code changes.
-
-Fail transition:
-
-```text
-ready-for-review -> in-progress
-```
-
-When review finds a defect, inspect existing embedded bug threads first:
-
-- update or reopen the existing thread when the root cause is the same,
-- use `open_task_bug` only for a distinct root cause that needs a new embedded bug thread,
-- archive invalid or obsolete threads,
-- do not create a separate top-level task unless explicitly requested.
-
-Every current bug must include observed behavior, expected behavior, exact evidence, related areas, preserved behavior, out-of-scope boundaries, and a copy-ready fix prompt.
+## Static-review exception
+If the user explicitly waives runtime/build/UAT checks, perform the strongest static review possible and identify what remains unverified. Do not claim skipped checks passed. Close only when the explicit waiver and project workflow permit closure.
 
 ## Review note
-
-Every decision needs a useful note.
-
-For passed cards, include:
-
-- branch/commit inspected,
-- checklist and acceptance result,
-- verification result,
-- resolved bug status,
-- final status.
-
-For failed cards, include:
-
-- branch/commit inspected or why unavailable,
-- exact failing behavior and terminal path,
-- failed checklist or acceptance criteria,
-- exact fix required,
-- active bug thread used as current guidance,
-- final status.
-
-Avoid vague notes such as:
-
-```text
-looks good
-needs fix
-```
-
-## Anti-patterns
-
-Do not:
-
-- approve from card text only,
-- trust agent summary without code inspection,
-- preserve a bug after its assumptions are disproven,
-- create multiple contradictory bugs for the same defect,
-- ignore project patterns before prescribing implementation,
-- review only success and one local-error path,
-- require custom UI when native/shared behavior is explicitly approved,
-- skip parent/subtask review,
-- approve when branch, design evidence, or behavior cannot be verified,
-- move to done while any required item is uncertain.
+Record enough evidence for the next reader to understand the decision: revision inspected, key checklist/acceptance results, verification result, current defect disposition, and resulting status. Avoid notes such as “looks good” or “needs fix” without evidence.

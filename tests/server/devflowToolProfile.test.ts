@@ -11,7 +11,12 @@ const PROTECTED_MASTER_SKILLS = [
   '00-skill-router.md',
   '01-authoring-core.md',
   '02-schema-reference.md',
+  '03-reviewer-core.md',
+  '04-examples.md',
+  '05-authoring-evidence.md',
+  '06-authoring-decomposition.md',
   '07-authoring-execution.md',
+  '08-board-loop-execution.md',
   'prompt.execution-rules.md',
   'ready-for-review-reviewer-skill.md',
   'schema.md',
@@ -82,10 +87,10 @@ test('all maintained DevFlow skills avoid stale tool namespaces and direct manag
 
 test('execution and review guidance resolves repository Git policy instead of assuming merge topology', () => {
   for (const skillName of [
+    '03-reviewer-core.md',
     '07-authoring-execution.md',
     'prompt.execution-rules.md',
     'agent-task-prompt-template.md',
-    'ready-for-review-reviewer-skill.md',
   ]) {
     const content = fs.readFileSync(new URL('../../skills/' + skillName, import.meta.url), 'utf8');
     assert.match(content, /repository Git policy|repo(?:sitory)?-aware Git policy/i, `${skillName} should resolve repository Git policy`);

@@ -1,39 +1,43 @@
 # DevFlow Authoring Decomposition Specialist
 
 ## Purpose
-Load only when the requested work is large enough that one card would hide independent implementation, verification, review, or ownership boundaries.
+Load this skill when one card would hide independent implementation, verification, review, or ownership boundaries.
 
 ## Subtask-first decomposition
-Prefer a parent plus focused child cards when the work contains independent implementation units. The parent owns outcome, orchestration, dependencies, shared constraints, and final integration evidence; children own concrete implementation slices.
+Prefer a parent plus focused child cards when the work contains independent implementation units. The parent owns the end-to-end outcome, shared constraints, dependency graph, and final integration evidence; children own concrete implementation slices.
 
 Do not hide real subtask work inside a long checklist. A checklist is for milestones inside one coherent implementation boundary, not a substitute for cards that can be implemented or reviewed independently.
 
 Create separate cards when:
 - parts can be implemented or verified independently;
-- different modules/files have distinct failure modes or ownership;
-- one part is a prerequisite for another;
+- different modules or files have distinct failure modes or ownership;
+- one slice is a real prerequisite for another;
 - frontend and backend can progress independently;
-- rollout/migration/measurement is independently testable;
-- a parent would otherwise contain multiple separate commit scopes.
+- rollout, migration, or measurement is independently testable;
+- one parent would otherwise contain multiple separate commit scopes.
 
-Keep one card when the changes are tightly coupled, share one implementation/test boundary, and splitting would create artificial coordination overhead.
+Keep one card when changes are tightly coupled, share one implementation/test boundary, and splitting would create artificial coordination overhead.
+
+## Parallel child semantics
+Independent children are parallel by default when their target scope is disjoint and no real dependency blocks them. Sharing a parent does not serialize siblings.
+
+Do not invent ordering because cards were authored sequentially. State a prerequisite only when one child truly needs another child's contract, migration, generated artifact, integrated state, or other completed output before it can proceed safely.
+
+When target files overlap materially, call out the ownership boundary or dependency so orchestration can avoid concurrent conflicting edits.
 
 ## Frontend/backend split
-Split frontend/backend work when contracts and implementation can be developed or reviewed separately. Record the shared API/data contract and dependency direction explicitly.
+Split frontend/backend work when the contract and each implementation slice can be developed, verified, or reviewed separately. Record the shared contract and prerequisite direction explicitly.
 
-Do not split merely because both frontend and backend files are touched. Keep one general card when a single atomic behavior requires both sides to change together and cannot be meaningfully verified separately.
+Do not split merely because both frontend and backend files are touched. Keep one general card when one atomic behavior requires both sides to change together and cannot be meaningfully verified separately.
 
 ## Parent rules
-- Parent describes the end-to-end outcome and dependency graph, not a duplicate copy of every child detail.
-- Parent checklist tracks child completion/integration milestones.
-- Parent verification owns final integrated evidence when appropriate.
-- Child `parentId` must reference the real parent.
+- Describe the final outcome and dependency graph, not a duplicate copy of every child detail.
+- Track child completion and integration milestones.
+- Own final combined verification when appropriate.
+- Keep child boundaries focused enough to allow safe parallel ownership.
 
 ## Child rules
-Each child still needs focused `targetFiles`, an implementation map, observable acceptance criteria, and concrete verification. Do not rely on the parent for implementation-critical details that the child needs to execute safely.
-
-## Dependency ordering
-State prerequisites explicitly. Work that can run in parallel should not be serialized by wording alone. Work that depends on a schema/contract/migration should declare that dependency so the orchestrator can schedule it correctly.
+Each child still needs focused `targetFiles`, an implementation map, observable acceptance criteria, and concrete verification. Do not rely on the parent for implementation-critical details the child needs to execute safely.
 
 ## Status rule
-Unless the user/workflow explicitly queues or starts implementation, keep every newly authored parent and child in `backlog` by default.
+Unless the user or workflow explicitly queues or starts implementation, keep newly authored parent and child cards in `backlog`.

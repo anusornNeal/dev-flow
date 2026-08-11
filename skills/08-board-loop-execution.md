@@ -1,57 +1,42 @@
 # DevFlow Board Loop Execution
 
-Use this skill when the user asks DevFlow to keep taking work from the board until no eligible work remains, including phrases such as `loop board`, `loop tasks`, `ทำงานบนบอร์ดต่อ`, `หยิบงานบนบอร์ดไปเรื่อยๆ`, or equivalent multi-chat worker instructions.
+## Purpose
+Use this skill when the user asks DevFlow to keep taking eligible work from the board, such as `loop board`, `loop tasks`, or equivalent multi-chat worker instructions.
+
+This skill owns board orchestration only. Load `07-authoring-execution` for implementation, edit, test, verification, commit, workspace-terminal, and recovery details.
 
 ## Goal
-
-Act as one cooperative board worker. Repeatedly take one eligible scope, complete the full local loop, then refresh the board and take the next eligible scope. Multiple chats may work in parallel, but duplicate claims and overlapping active scope must be avoided.
+Act as one cooperative board worker. Repeatedly claim one eligible scope, complete its local task loop, refresh the board, and take another eligible scope until no safe work remains for this worker.
 
 ## Required loop
-
-1. For ordinary next-card board loops, prefer `claim_next_task` with the project id, this chat's stable opaque `sessionId`, and a short `ownerLabel`. It performs bounded deterministic selection and the authoritative claim under one project lock.
-2. Treat `claim_next_task` as a fast path, not planning intelligence. It only auto-selects clear runnable leaf work with explicit target-file scope and skips active claims, exact scope conflicts, explicit dependency blockers, and `final-gate` work.
-3. If the user names a specific card, scope is ambiguous, the fast path is unavailable, or it returns `NO_ELIGIBLE_TASK`, fall back to concise `search_tasks` inspection followed by explicit `claim_task`.
-4. A claimed parent does not lock all children: independent sibling children may run in parallel when their target scope is disjoint and dependencies allow it.
-5. A successful `claim_next_task` or `claim_task` moves the card to `in-progress` and returns the managed workspace to use.
-6. If fallback `claim_task` returns `TASK_ALREADY_CLAIMED`, refresh and immediately try another eligible card. Do not fight or override the other claimant.
-7. If fallback `claim_task` returns `TASK_SCOPE_CONFLICT`, skip that card and try another independent card. Use `allowScopeConflict` only when the user explicitly requests coordinated overlapping work and the collision is understood.
-7. Use the returned managed workspace only. Call `get_repo_context_bundle` before implementation, reuse relevant WIP/commits when present, and do not derive or hardcode workspace filesystem paths.
-8. Implement only the claimed scope. Use focused tests first, then the verification required by the card. Poll async verification jobs to terminal in the same turn when possible.
-9. Commit the claimed scope separately. Recheck latest local `develop` and active sibling work before integration. Resolve from latest `develop` without overwriting another chat's work.
-10. After the workspace is clean and committed and the required checks pass, prefer `finalize_task_workspace` as the terminal path. It integrates locally, syncs local Git/verification evidence, completes the task, and removes the safe clean managed worktree/branch in one deterministic flow.
-11. If finalization returns `needs-recovery`, preserve the workspace and use `inspect_workspace_recovery`, `integrate_workspace`, conflict recovery, or explicit cleanup primitives as diagnostic/recovery fallbacks. Never force-clean ambiguous work.
-12. Refresh the board and repeat from step 1 until there is no eligible unclaimed work for this worker.
-
-## TDD verification policy
-
-- Tests are authored before implementation. Record this as the authored-test state before production changes begin.
-- RED-required means execute the focused failing test before implementation. It applies to high-risk changes, non-obvious defect reproduction, concurrency, persistence, Git, migration, security, strict-TDD repositories, and ordinary low/medium-risk work while verification capacity is available.
-- RED-deferred is allowed only for low/medium-risk work when the expected failure is structurally obvious and explicit verification resource pressure is saturated. Record the evidence as deferred; never report deferred RED as an executed failure.
-- After executed RED proof, the workflow is GREEN-required. A deferred RED path still carries the same GREEN gate.
-- Focused GREEN remains mandatory before commit, integration, task closure, or moving on to the next board card. Only successful focused GREEN reaches verified state.
-- Preserve repository/task strict-TDD overrides. Never use model self-assessed numeric confidence as a verification gate.
+1. For ordinary next-card selection, prefer `claim_next_task` with the project id and this chat's stable session identity. It performs bounded selection and the authoritative claim under the project lock.
+2. If the user names a specific card, selection is ambiguous, the fast path is unavailable, or it reports no eligible task, use a bounded `search_tasks` read followed by explicit `claim_task`.
+3. If `claim_task` returns `TASK_ALREADY_CLAIMED`, do not override the owner. Refresh and choose another eligible task.
+4. If `claim_task` returns `TASK_SCOPE_CONFLICT`, skip the conflicting card and choose independent work. Allow overlapping scope only when the user explicitly requests coordinated overlap and the collision is understood.
+5. Use only the managed workspace returned by the successful claim. Load `07-authoring-execution` and implement exactly the claimed scope under its ownership and verification policy.
+6. Independent sibling children may run in parallel when target scope is disjoint and no real prerequisite blocks them. A shared parent does not serialize siblings by itself.
+7. Before terminal completion, refresh relevant local base/sibling state so integration does not overwrite newer independent work.
+8. After the execution specialist has produced a clean committed workspace and required checks, prefer `finalize_task_workspace` for the terminal task flow.
+9. If finalization reports `needs-recovery`, preserve the workspace. Inspect with `inspect_workspace_recovery` and use integration/conflict/cleanup primitives only as explicit recovery paths. Never force-clean ambiguous WIP.
+10. Refresh the board and repeat from step 1 until a fresh bounded read shows no eligible unclaimed work for this worker.
 
 ## Ownership and release
+- A successful claim is the source of truth for work ownership; the legacy agent selector is not a claim.
+- Idempotent retries by the same session should reuse the same task/workspace rather than create a replacement.
+- If abandoning an owned task before completion, use `release_task_claim` when safe so the board does not retain a knowingly stale claim.
+- Never release or override another session's claim except explicit emergency recovery requested by the user.
 
-- A claim is the source of truth for chat ownership; do not use the legacy card agent selector as a work claim.
-- The same session may retry `claim_task` idempotently and reuse its managed workspace.
-- If abandoning work before completion, use `release_task_claim` to return the card to `backlog` or `todo`; never leave a knowingly stale claim when a safe release is possible.
-- Do not release or override another session's claim except explicit emergency recovery requested by the user.
+## Parallel scheduling
+- Prefer independent child or leaf work with clear target scope.
+- Treat overlapping active `targetFiles` as a collision by default.
+- When target scope is broad or uncertain, inspect task context before claiming rather than assuming non-overlap.
+- Final integration, cleanup, migration, or restart gates wait for their real prerequisites and related active work to settle.
 
-## Parallelism rules
-
-- Parallelize independent child cards even when they share the same parent.
-- Treat overlapping exact `targetFiles` on active claims as a collision by default.
-- When target files are incomplete or broad, inspect task context before claiming; do not assume non-overlap merely because file lists are empty.
-- Final integration/restart/cleanup gate cards wait for all required children and active related work to settle.
-
-## Git and runtime safety
-
+## Runtime and Git safety
 - Do not push unless the user explicitly asks.
-- Do not restart DevFlow while ordinary board-loop workers or related active claims are still running.
-- Restart only when the currently claimed card explicitly owns a final restart/runtime gate and its dependencies are complete; perform the minimum required restart and verify after reconnect.
-- Never reset, delete, or overwrite another chat's worktree/WIP to make your own task easier.
+- Do not restart DevFlow merely to advance a normal board loop while related workers are active.
+- Restart only when the claimed scope owns a required runtime/restart gate and its prerequisites are complete.
+- Never reset, delete, or overwrite another chat's worktree, branch, or WIP to make the loop progress.
 
 ## Stop condition
-
-Stop successfully when a fresh board read shows no eligible unclaimed work for this worker. Report blockers separately from completed work; do not claim blocked cards merely to keep the loop busy.
+Stop successfully when fresh board state shows no eligible unclaimed task for this worker. Report blocked/conflicting work separately instead of claiming it only to keep the loop busy.

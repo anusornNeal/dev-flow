@@ -1,18 +1,12 @@
 ## Execution Rules
 
-- Work in the local repository whenever possible.
+- Work in the local repository and DevFlow-managed workspace selected for the current task whenever possible.
 - Fetch DevFlow context only when needed, but do not guess task requirements.
-- Start repo work with one compact read-only context call, preferably `get_repo_context_bundle` when a project is known.
-- Keep every tool payload short, focused, and scoped to the current task.
-- Do not repeat the same failed or abnormal tool payload; pause and inspect a small health/status signal before continuing.
-- For LLM-authored existing-file changes, prefer Steno Edit as the default path: use `read_file_snippets_batch(includeFileRef=true)` for multiple exact targets, or `read_local_file(includeFileRef=true)` for single-file work; prepare with `prepare_compact_edit`, then apply the returned plan with `apply_prepared_edit`.
-- Treat `prepare_compact_edit` as the no-write validation/preview step; apply only the prepared plan id after it succeeds, and re-read/re-prepare stale, expired, or consumed plans instead of replaying them.
-- Use `edit_local_files_batch` as the guarded fallback when Steno is unsuitable or cannot express the edit safely, including a trusted native Git unified diff translated into revision-guarded operations.
-- Prefer smart verification: FAST for the smallest targeted loop, SAFE for broader risk-matched checks, and FULL only for required final/integration gates.
-- Use `apply_and_verify` when its supported edit path can safely combine apply, diff capture, and verification; otherwise verify with the smallest relevant `run_project_command`.
-- Reuse valid deterministic evidence during iteration, but use `forceFresh` when a final review gate requires fresh proof.
-- Commit one small scope before starting the next scope. Resolve the repository Git policy before integration: default `rebase-ff`; when explicit policy requires `merge`, preserve that merge policy. Follow the configured commit message template or repository commit convention, and use `integrate_workspace` as the authoritative integration path. Never push unless the user explicitly requests it.
-- Spawn or split subtasks only when needed, and keep them inside the current card boundary.
-- When an async DevFlow tool returns a durable `jobId`, call `get_tool_job_result(jobId, waitMs=30000)` immediately and keep bounded polling in the same assistant turn until terminal whenever the DevFlow tool surface remains available. Do not ask the user for another message merely to continue an already-started job; if the tool surface disappears, preserve and report the `jobId` for recovery after refresh/reconnect.
-- If blocked, report the blocker clearly.
+- Keep tool payloads short, focused, and scoped to the current task. Do not derive or persist a managed workspace's physical path.
+- Do not repeat the same failed or abnormal mutation payload unchanged. Inspect a small current status/error signal and change the strategy, source revision, identifier, or payload before retrying.
+- Use the current advertised DevFlow tool surface and its live schemas for guarded repository mutation and verification. Prefer the smallest risk-matched verification that proves the current change, while preserving any required final gate.
+- When an async DevFlow tool returns a durable `jobId`, call `get_tool_job_result(jobId, waitMs=30000)` immediately and keep bounded polling in the same assistant turn until terminal whenever the DevFlow tool surface remains available. Do not ask the user for another message merely to continue an already-started job. If the tool surface disappears, preserve and report the `jobId` so the same operation can be recovered after reconnect rather than replayed.
+- Commit only the current task-owned scope. Do not absorb unrelated dirty files or another worker's WIP.
+- Resolve the repository Git policy before integration: the default is `rebase-ff`; an explicit `merge` policy overrides it. Preserve the configured commit message template or repository commit convention. Never push unless the user explicitly requests publication.
+- If blocked, report the concrete blocker and preserve recoverable task/workspace state.
 - Work only on this current task and stop when it is complete.

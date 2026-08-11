@@ -1,34 +1,42 @@
 # DevFlow Authoring Evidence Specialist
 
 ## Purpose
-Load only when card authoring depends on Jira, Figma, Project Atlas, or another source that needs special evidence handling.
+Load this skill only when authoring depends on Jira, Figma, Project Atlas, or another source that needs provenance and authority rules. It separates desired requirements from evidence about the implementation that exists today.
 
 ## Jira evidence
-Use `get_jira_authoring_bundle` first for Jira-originated work. It should provide the issue, comments/attachments metadata, related keys, local duplicate hints, and recommended next reads in one bounded packet.
+Use `get_jira_authoring_bundle` first for Jira-originated work. It provides a bounded packet of issue text, comments, attachment metadata, related keys, local duplicate hints, and recommended next reads.
 
-Do not start with repeated individual Jira calls when the bundle can answer the question. Read individual Jira evidence only when the bundle identifies missing material evidence.
+Do not fan out into repeated source calls when the bundle already answers the requirement. Read additional Jira material only when the bundle identifies material missing evidence.
 
-Treat Jira as requirement/source evidence, not implementation truth. Inspect the current repository before naming implementation files or symbols. If an existing DevFlow card represents the same root work, update/merge it rather than creating a duplicate.
+Jira is requirement provenance, not repository implementation truth. Inspect current code before naming files, symbols, or current behavior.
 
 ## Figma evidence
-For a frontend card with a Figma source, preserve exact file/node provenance and node-specific implementation evidence.
+For frontend work with an approved Figma source, preserve exact file/node provenance.
 
-Use the smallest sequence that proves the design:
-- start with `get_figma_authoring_context` for the exact relevant node set (max 8) so file metadata, normalized specs, source refs, and compact summary arrive together;
-- use `attach_figma_context_to_task` only when the owning card should persist the exact refs automatically after creation;
-- fall back to the lower-level file/node/design-spec tools only for diagnostics or evidence that the composite intentionally omits;
-- avoid fetching unrelated frames or whole design trees.
+Use `get_figma_authoring_context` for the exact relevant node set so normalized design evidence and source references arrive together. Use `attach_figma_context_to_task` when the owning card should persist those exact refs. Keep reads bounded to the nodes that affect the card.
 
-The composite context is the normal source for layout, typography, spacing, colors, constraints, assets, exact node URLs, and bounded implementation summary. Put the implementation-relevant evidence in the owning frontend card and keep node-specific verification explicit.
-
-Figma evidence rule: do not convert visual guesses into exact dimensions/copy when the source can provide them, and do not make Figma mandatory for frontend work that has no Figma source.
+Do not turn visual guesses into exact copy, spacing, dimensions, or assets when the approved design source can provide them. Do not make Figma mandatory when the requirement has no Figma source.
 
 ## Project Atlas
-Use `get_project_atlas` as a companion, not a replacement for current repository evidence. It is appropriate for architecture, module boundaries, cross-module impact, onboarding/read order, or uncertain target files.
+Use `get_project_atlas` as repository-navigation and architecture evidence for uncertain targets, module boundaries, cross-module impact, onboarding, or read order.
 
-Prefer task-focused/diff-impact context when applicable. Verified Atlas facts may guide likely files and dependencies, but current repo evidence wins if the Atlas is stale or conflicts with code; do not override them silently.
+Atlas does not replace current file inspection. Treat stale or inferred Atlas context as navigation hints and verify implementation claims against current repository evidence before writing the implementation map.
 
-Do not create every-file graph nodes or load the full Atlas for a simple clearly targeted card.
+## Desired requirement authority
+Desired behavior is established by requirement sources, not by whatever the current code happens to do. Resolve conflicts in this order when applicable:
+1. Latest explicit user or product-owner clarification.
+2. Current approved DevFlow task/specification and approved Jira comments or requirement text.
+3. Current approved Figma/design evidence for visual and interaction requirements.
+4. Older requirement summaries or inferred interpretations.
 
-## Evidence priority
-Latest explicit user clarification > current repository behavior > current source evidence (Jira/Figma) > stale summaries/inferred Atlas context. Record conflicts that materially affect implementation rather than blending incompatible assumptions.
+When two current approved requirement sources genuinely conflict, record the conflict or obtain the missing product decision instead of silently blending them.
+
+## Implementation evidence
+Repository files, branch/diff state, tests, logs, and established project patterns describe what exists now, where the change belongs, and what regressions must be preserved. Atlas may supplement this implementation evidence when it is current and verified.
+
+Repository evidence cannot override an approved requirement merely because current code behaves differently. A mismatch between current code and desired behavior is often the implementation delta the card exists to change.
+
+Likewise, requirement documents should not invent current implementation facts. Confirm current behavior and implementation targets from repository evidence before putting them in `repoContext` or `targetFiles`.
+
+## Conflict recording
+Keep desired behavior and current implementation findings separately understandable. If a source is stale, inferred, inaccessible, or superseded, say so when that limitation changes scope or confidence. Remove superseded assumptions from the card instead of preserving contradictory guidance.

@@ -8,18 +8,19 @@ const SKILLS_DIR = getDevFlowSkillsDir();
 const LEGACY_REGISTRY_BACKUP_FILE = path.join(SKILLS_DIR, 'registry.json.bak');
 const SKILL_FILE_CACHE_TTL_MS = 30_000;
 const MASTER_SKILL_SEEDS = [
-  { id: '00-skill-router', name: 'Skill Router', description: 'Routes DevFlow task authoring work to the right lean skill.' },
-  { id: '01-authoring-core', name: 'Authoring Core Skill', description: 'Core rules for writing concise, implementation-ready DevFlow cards.' },
-  { id: '02-schema-reference', name: 'Schema Reference', description: 'Field-level reference for DevFlow task structure.' },
-  { id: '03-reviewer-core', name: 'Reviewer Core Skill', description: 'Rules for reviewing DevFlow cards before they are ready for implementation.' },
-  { id: '04-examples', name: 'Examples', description: 'Examples of well-formed DevFlow cards and task patches.' },
-  { id: '05-authoring-evidence', name: 'Authoring Evidence Skill', description: 'Jira, Figma, and Project Atlas evidence rules loaded on demand.' },
-  { id: '06-authoring-decomposition', name: 'Authoring Decomposition Skill', description: 'Parent/child and frontend/backend split rules loaded on demand.' },
-  { id: '07-authoring-execution', name: 'Authoring Execution Skill', description: 'Guarded repository editing and verification rules loaded on demand.' },
-  { id: '08-board-loop-execution', name: 'Board Loop Execution Skill', description: 'Atomic multi-chat board claiming and full-loop execution rules loaded on demand.' }
+  { id: '00-skill-router', name: 'Skill Router', description: 'Routes each DevFlow action to the smallest canonical authoring skill set.' },
+  { id: '01-authoring-core', name: 'Authoring Core Skill', description: 'Common rules for concise, implementation-ready DevFlow card authoring.' },
+  { id: '02-schema-reference', name: 'Schema Reference', description: 'Semantic task-field placement guidance backed by live tool schemas.' },
+  { id: '03-reviewer-core', name: 'Reviewer Core Skill', description: 'Canonical ready-for-review and existing-task defect review policy.' },
+  { id: '04-examples', name: 'Examples', description: 'Optional concise examples for DevFlow card shapes and task patterns.' },
+  { id: '05-authoring-evidence', name: 'Authoring Evidence Skill', description: 'Source evidence and requirement-authority guidance for Jira, Figma, and Project Atlas.' },
+  { id: '06-authoring-decomposition', name: 'Authoring Decomposition Skill', description: 'Parent/child boundaries, parallel slices, and prerequisite direction.' },
+  { id: '07-authoring-execution', name: 'Authoring Execution Skill', description: 'Task-owned implementation, verification, commit, and managed workspace lifecycle.' },
+  { id: '08-board-loop-execution', name: 'Board Loop Execution Skill', description: 'Board claim, parallel scheduling, finalization, and recovery orchestration.' }
 ];
 
 const LEGACY_MASTER_SKILL_IDS = new Set(MASTER_SKILL_SEEDS.map((skill) => skill.id));
+const MASTER_SKILL_SEEDS_BY_ID = new Map(MASTER_SKILL_SEEDS.map((skill) => [skill.id, skill]));
 
 const skillFileCache = new Map<string, { content: string; mtimeMs: number; cachedAt: number }>();
 
@@ -117,6 +118,18 @@ export function initSkillsRepository() {
     skill.isCustom = Boolean(skill.isCustom);
     skill.isProtected = Boolean(skill.isProtected);
     if (!skill.isCustom) {
+      const masterSeed = MASTER_SKILL_SEEDS_BY_ID.get(skill.id);
+      if (masterSeed) {
+        if (skill.name !== masterSeed.name) {
+          skill.name = masterSeed.name;
+          needsSave = true;
+        }
+        if (skill.description !== masterSeed.description) {
+          skill.description = masterSeed.description;
+          needsSave = true;
+        }
+      }
+
       const expectedSourcePath = masterSkillSourcePath(skill.id);
       if (skill.sourcePath !== expectedSourcePath) {
         skill.sourcePath = expectedSourcePath;

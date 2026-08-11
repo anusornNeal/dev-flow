@@ -41,6 +41,17 @@ test('initSkillsRepository seeds all repo authoring skills when the database is 
   assert.equal(authoringCore.isProtected, true);
 });
 
+test('canonical master metadata replaces stale persisted descriptions', () => {
+  db.prepare('UPDATE skills SET description = ? WHERE id = ?').run('Rules for reviewing DevFlow cards before they are ready for implementation.', '03-reviewer-core');
+
+  initSkillsRepository();
+
+  const reviewer = getSkills().find((skill: any) => skill.id === '03-reviewer-core');
+  assert.ok(reviewer);
+  assert.match(reviewer.description, /ready-for-review/i);
+  assert.doesNotMatch(reviewer.description, /before they are ready for implementation/i);
+});
+
 test('master skills replace stale machine-specific source paths with repo-relative paths', () => {
   const stalePath = path.join(tempDir, 'old-machine', 'skills', '00-skill-router.md');
   db.prepare('UPDATE skills SET sourcePath = ? WHERE id = ?').run(stalePath, '00-skill-router');

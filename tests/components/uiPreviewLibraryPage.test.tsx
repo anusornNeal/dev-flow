@@ -49,6 +49,16 @@ test('linked item keeps library presence and exposes task context/open action', 
   assert.doesNotMatch(html, /Attach to Task/);
 });
 
+test('preview library re-arms its mounted guard when StrictMode replays mount effects', () => {
+  const component = fs.readFileSync('src/components/UiPreviewLibraryPage.tsx', 'utf8');
+  const setupIndex = component.indexOf('mounted.current = true');
+  const cleanupIndex = component.indexOf('mounted.current = false');
+
+  assert.ok(setupIndex >= 0, 'mount effect setup must restore mounted.current before async requests settle');
+  assert.ok(cleanupIndex >= 0, 'unmount cleanup must still mark the component unmounted');
+  assert.ok(setupIndex < cleanupIndex, 'StrictMode replay requires setup to re-arm the mounted guard before cleanup can clear it');
+});
+
 test('App and Sidebar use direct #previews history navigation without resurrecting Atlas UI', () => {
   const app = fs.readFileSync('src/App.tsx', 'utf8');
   const sidebar = fs.readFileSync('src/components/Sidebar.tsx', 'utf8');

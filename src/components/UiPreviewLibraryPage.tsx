@@ -49,10 +49,13 @@ export default function UiPreviewLibraryPage({ onOpenTask, initialItems = [], di
   const activeAttachTokens = useRef<Record<string, ReturnType<typeof attachStore.current.begin> extends infer T ? Exclude<T, null> : never>>({});
   const mounted = useRef(true);
 
-  useEffect(() => () => {
-    mounted.current = false;
-    requestGate.current.invalidate();
-    attachStore.current.invalidate();
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      requestGate.current.invalidate();
+      attachStore.current.invalidate();
+    };
   }, []);
 
   const load = useCallback(async (append = false, cursor: string | null = null) => {

@@ -290,7 +290,10 @@ function getResourceStats(resourceKey: string): ResourceStats {
 export function scopeVerificationResources(args: any, resourceScope: string | undefined, resources: string[]) {
   const projectId = typeof args?.projectId === 'string' ? args.projectId.trim() : '';
   const scope = projectId ? `project:${projectId}` : (resourceScope || 'verification');
-  return Array.from(new Set(resources.filter(Boolean).map((resource) => `${scope}:${resource}`)));
+  return Array.from(new Set(resources
+    .map((resource) => String(resource || '').trim())
+    .filter(Boolean)
+    .map((resource) => resource.startsWith('global:') ? resource : `${scope}:${resource}`)));
 }
 
 function verificationDemandFromPrediction(prediction: ReturnType<typeof describeProjectCommandResourceProfile>['prediction']): VerificationResourceDemand {
@@ -650,6 +653,10 @@ export function buildQueueEntryDiagnostics(
   now = Date.now(),
 ) {
   const blocker = getBlockerForQueueEntry(entry, queueIndex, queue, activeEntries, now);
+  const queueAgeMs = Math.max(0, now - entry.enqueuedAt);
+  const schedulerPriority = entry.schedulerPriority ?? 0;
+  const agingBoost = Math.floor(queueAgeMs / PRIORITY_AGING_MS);
+  const effectivePriority = Math.max(0, schedulerPriority - agingBoost);
   return {
     jobId: entry.jobId,
     toolName: entry.toolName,
@@ -660,7 +667,10 @@ export function buildQueueEntryDiagnostics(
     ...(entry.verificationClass ? { verificationClass: entry.verificationClass } : {}),
     ...(entry.sharedResources?.length ? { sharedResources: entry.sharedResources } : {}),
     ...(entry.verificationDemand ? { verificationDemand: entry.verificationDemand } : {}),
-    queueAgeMs: Math.max(0, now - entry.enqueuedAt),
+    schedulerPriority,
+    agingBoost,
+    effectivePriority,
+    queueAgeMs,
     ...(blocker || {}),
   };
 }

@@ -47,10 +47,12 @@ const MAX_PRESET_NAME_LENGTH = 64;
 const MAX_EXECUTABLE_LENGTH = 200;
 const MAX_ARG_LENGTH = 4_000;
 const MAX_ARGS = 100;
+const MAX_SHARED_RESOURCES = 16;
+const MAX_SHARED_RESOURCE_LENGTH = 200;
 const MAX_TIMEOUT_MS = 300_000;
 const MAX_OUTPUT_BYTES = 100_000;
 const ALLOWED_CATEGORIES = new Set(['verification', 'validate', 'test', 'lint', 'build']);
-const ALLOWED_KEYS = new Set(['executable', 'args', 'cwd', 'timeoutMs', 'maxOutputBytes', 'category']);
+const ALLOWED_KEYS = new Set(['executable', 'args', 'cwd', 'timeoutMs', 'maxOutputBytes', 'category', 'sharedResources']);
 const parsedConfigCache = new Map<string, { size: number; mtimeMs: number; parsed: any; configPath: string }>();
 
 export interface ProjectCommandPreset {
@@ -61,6 +63,7 @@ export interface ProjectCommandPreset {
   timeoutMs?: number;
   maxOutputBytes?: number;
   category: string;
+  sharedResources?: string[];
   configPath: string;
 }
 
@@ -90,7 +93,7 @@ function parseStrictCommandYaml(content: string) {
   const result: Record<string, Record<string, unknown>> = {};
   let sawCommands = false;
   let currentCommand = '';
-  let readingArgs = false;
+  let readingListKey: 'args' | 'sharedResources' | '' = '';
   const lines = content.replace(/^\uFEFF/, '').split(/\r?\n/);
 
   for (let index = 0; index < lines.length; index += 1) {
@@ -109,7 +112,7 @@ function parseStrictCommandYaml(content: string) {
       }
       sawCommands = true;
       currentCommand = '';
-      readingArgs = false;
+      readingListKey = '';
       continue;
     }
 
@@ -127,7 +130,7 @@ function parseStrictCommandYaml(content: string) {
         throw createApiError(400, 'INVALID_COMMAND_CONFIG', `Duplicate command preset '${currentCommand}'.`);
       }
       result[currentCommand] = {};
-      readingArgs = false;
+      readingListKey = '';
       continue;
     }
 
@@ -142,18 +145,18 @@ function parseStrictCommandYaml(content: string) {
       }
       const key = trimmed.slice(0, separator).trim();
       const rawValue = trimmed.slice(separator + 1);
-      if (key === 'args' && !rawValue.trim()) {
-        result[currentCommand].args = [];
-        readingArgs = true;
+      if ((key === 'args' || key === 'sharedResources') && !rawValue.trim()) {
+        result[currentCommand][key] = [];
+        readingListKey = key;
       } else {
         result[currentCommand][key] = parseScalar(rawValue, lineNumber);
-        readingArgs = false;
+        readingListKey = '';
       }
       continue;
     }
 
-    if (indent === 6 && readingArgs && trimmed.startsWith('- ')) {
-      (result[currentCommand].args as unknown[]).push(parseScalar(trimmed.slice(2), lineNumber));
+    if (indent === 6 && readingListKey && trimmed.startsWith('- ')) {
+      (result[currentCommand][readingListKey] as unknown[]).push(parseScalar(trimmed.slice(2), lineNumber));
       continue;
     }
 
@@ -253,6 +256,24 @@ function validateArgs(value: unknown, name: string) {
   });
 }
 
+function validateSharedResources(value: unknown, name: string) {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length > MAX_SHARED_RESOURCES) {
+    throw createApiError(400, 'COMMAND_CONFIG_INVALID_SHARED_RESOURCES', `Preset '${name}' sharedResources must be an array with at most ${MAX_SHARED_RESOURCES} entries.`);
+  }
+  const resources = value.map((entry, index) => {
+    if (typeof entry !== 'string') {
+      throw createApiError(400, 'COMMAND_CONFIG_INVALID_SHARED_RESOURCE', `Preset '${name}' shared resource ${index + 1} must be a string.`);
+    }
+    const resource = entry.trim();
+    if (!resource || resource.length > MAX_SHARED_RESOURCE_LENGTH || !/^[A-Za-z0-9][A-Za-z0-9:._/-]*$/.test(resource)) {
+      throw createApiError(400, 'COMMAND_CONFIG_INVALID_SHARED_RESOURCE', `Preset '${name}' shared resource ${index + 1} is invalid.`);
+    }
+    return resource;
+  });
+  return Array.from(new Set(resources));
+}
+
 function validateBoundedInteger(value: unknown, field: string, name: string, max: number) {
   if (value === undefined) return undefined;
   const numeric = Number(value);
@@ -309,6 +330,7 @@ export function loadProjectCommandPreset(root: string, commandName: string): Pro
     timeoutMs: validateBoundedInteger(rawPreset.timeoutMs, 'timeoutMs', commandName, MAX_TIMEOUT_MS),
     maxOutputBytes: validateBoundedInteger(rawPreset.maxOutputBytes, 'maxOutputBytes', commandName, MAX_OUTPUT_BYTES),
     category,
+    sharedResources: validateSharedResources(rawPreset.sharedResources, commandName),
     configPath: config.configPath,
   };
 }

@@ -64,6 +64,7 @@ type ResolvedCommand = {
   configPath?: string;
   script?: string;
   category?: string;
+  sharedResources?: string[];
 };
 
 export type ProjectCommandScope = 'targeted' | 'broad' | 'full';
@@ -376,6 +377,7 @@ function resolveAllowedCommand(root: string, command: string): ResolvedCommand {
       source: 'repository-config',
       configPath: configured.configPath,
       category: configured.category,
+      sharedResources: configured.sharedResources,
     };
   }
 
@@ -409,6 +411,7 @@ function semanticKeyForResolvedCommand(root: string, resolvedCommand: ResolvedCo
         args: resolvedCommand.args,
         cwd: path.relative(root, cwdPath) || '.',
         configPath: resolvedCommand.configPath,
+        sharedResources: resolvedCommand.sharedResources,
       };
   return crypto.createHash('sha256').update(JSON.stringify(identity)).digest('hex');
 }
@@ -436,8 +439,9 @@ function verificationClassFor(scope: ProjectCommandScope, cost: ProjectCommandCo
   return scope === 'full' || cost === 'high' ? 'heavy' : 'fast';
 }
 
-function sharedResourcesFor(resourceKey: string) {
-  return [resourceKey];
+function sharedResourcesFor(resourceKey: string, configured: string[] | undefined) {
+  const resources = Array.from(new Set((configured || []).map((resource) => String(resource || '').trim()).filter(Boolean)));
+  return resources.length > 0 ? resources : [resourceKey];
 }
 
 function buildProjectCommandDescriptor(
@@ -459,7 +463,7 @@ function buildProjectCommandDescriptor(
         ? `command:${semanticKey.slice(0, 16)}`
         : 'repo';
   const verificationClass = verificationClassFor(scope, cost);
-  const sharedResources = sharedResourcesFor(resourceKey);
+  const sharedResources = sharedResourcesFor(resourceKey, resolvedCommand.sharedResources);
   return {
     command,
     semanticKey,

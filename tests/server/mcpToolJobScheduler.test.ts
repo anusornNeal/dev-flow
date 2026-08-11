@@ -5,6 +5,8 @@ import {
   getSchedulerCapacitySnapshot,
   getSchedulerPriority,
   getSchedulerProfile,
+  buildQueueEntryDiagnostics,
+  scopeVerificationResources,
   resetSchedulerResourceStateForTests,
   incrementScheduledResource,
   decrementScheduledResource,
@@ -230,6 +232,45 @@ test('verification class metadata drives fast priority while aging still promote
   assert.equal(selectNextRunnableQueueIndex([heavy, fast], [], now), 1);
   heavy.enqueuedAt = now - 31_000;
   assert.equal(selectNextRunnableQueueIndex([heavy, fast], [], now), 0);
+});
+
+test('global shared resources conflict across projects while unprefixed resources remain project scoped', () => {
+  resetSchedulerResourceStateForTests();
+  setGlobalVerifyCapacityForTests(2);
+  const projectA = scopeVerificationResources({ projectId: 'a' }, undefined, ['global:port:5432', 'typescript']);
+  const projectB = scopeVerificationResources({ projectId: 'b' }, undefined, ['global:port:5432', 'typescript']);
+  assert.deepEqual(projectA, ['global:port:5432', 'project:a:typescript']);
+  assert.deepEqual(projectB, ['global:port:5432', 'project:b:typescript']);
+
+  const holder = tryAcquireVerificationProcessPermit({ jobId: 'project-a', verificationClass: 'fast', sharedResources: projectA });
+  assert.ok(holder.permit);
+  const blocked = tryAcquireVerificationProcessPermit({ jobId: 'project-b', verificationClass: 'fast', sharedResources: projectB });
+  assert.equal(blocked.permit, null);
+  assert.equal(blocked.blocker?.blockReason, 'shared_resource_conflict');
+  assert.equal(blocked.blocker?.blockedByJobId, 'project-a');
+  assert.equal(releaseVerificationProcessPermit(holder.permit), true);
+
+  const afterRelease = tryAcquireVerificationProcessPermit({ jobId: 'project-b', verificationClass: 'fast', sharedResources: projectB });
+  assert.ok(afterRelease.permit);
+  assert.equal(releaseVerificationProcessPermit(afterRelease.permit), true);
+});
+
+test('queue diagnostics expose priority aging without changing scheduler ordering', () => {
+  const now = 120_000;
+  const heavy = entry({
+    jobId: 'aged-heavy',
+    resourceKey: 'workspace:a',
+    accessMode: 'verify',
+    costClass: 'verify',
+    verificationClass: 'heavy',
+    schedulerPriority: 2,
+    enqueuedAt: now - 61_000,
+  });
+  const diagnostics = buildQueueEntryDiagnostics(heavy, 0, [heavy], [], now) as any;
+  assert.equal(diagnostics.schedulerPriority, 2);
+  assert.equal(diagnostics.agingBoost, 2);
+  assert.equal(diagnostics.effectivePriority, 0);
+  assert.equal(diagnostics.queueAgeMs, 61_000);
 });
 
 test('same shared verification resource serializes while independent resource classes overlap', () => {

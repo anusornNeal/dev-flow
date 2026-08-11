@@ -324,6 +324,24 @@ test('runProjectCommand executes a repository-defined YAML preset without packag
   assert.match(result.stdout, /custom ok/);
 });
 
+test('repository-defined verification preset carries declarative shared resources into its descriptor', () => {
+  const root = createConfigProject('json-shared-resources', JSON.stringify({
+    commands: {
+      'test:integration': {
+        executable: 'node',
+        args: ['scripts/pass.mjs'],
+        category: 'test',
+        sharedResources: ['global:port:5432', 'database'],
+      },
+    },
+  }, null, 2), 'json');
+  fs.writeFileSync(path.join(root, 'scripts', 'pass.mjs'), 'process.exit(0);\n');
+
+  const descriptor = describeProjectCommand(stateFor(root), { projectId: 'project-command', command: 'test:integration' });
+  assert.equal(descriptor.access, 'verify');
+  assert.deepEqual(descriptor.sharedResources, ['global:port:5432', 'database']);
+});
+
 test('runProjectCommand executes a repository-defined JSON preset', () => {
   const root = createConfigProject('json-custom', JSON.stringify({
     commands: {

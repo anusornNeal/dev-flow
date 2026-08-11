@@ -253,6 +253,21 @@ export function createUiPreviewRepository(database: DatabaseLike = db) {
     });
   }
 
+  function deleteStandalonePreview(previewId: string) {
+    return transaction(() => {
+      const preview = requirePreview(previewId);
+      if (preview.taskId) {
+        throw new UiPreviewError(
+          'UI_PREVIEW_DELETE_LINKED_CONFLICT',
+          `UI preview '${previewId}' is linked to task '${preview.taskId}' and cannot be deleted from the Preview Library.`,
+        );
+      }
+      const deletedRevisions = countRevisions(previewId);
+      database.prepare('DELETE FROM ui_previews WHERE id = ?').run(previewId);
+      return { previewId, deleted: true as const, deletedRevisions };
+    });
+  }
+
   function listPreviews(input: ListUiPreviewsInput = {}) {
     const filter = input.filter ?? 'all';
     if (!['all', 'standalone', 'linked'].includes(filter)) {
@@ -345,6 +360,7 @@ export function createUiPreviewRepository(database: DatabaseLike = db) {
     createPreview,
     appendRevision,
     bindPreviewToTask,
+    deleteStandalonePreview,
     getPreview,
     getRevision,
     listPreviews,

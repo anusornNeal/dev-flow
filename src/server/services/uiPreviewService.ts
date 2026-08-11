@@ -152,6 +152,12 @@ export function createUiPreviewService(deps: UiPreviewServiceDependencies) {
     return shapeRevision(operation.result, operation.replayed);
   }
 
+  function remove(input: { previewId: string }) {
+    const previewId = String(input.previewId || '').trim();
+    if (!previewId) throw new UiPreviewError('UI_PREVIEW_VALIDATION_FAILED', 'previewId is required.');
+    return deps.repository.deleteStandalonePreview(previewId);
+  }
+
   function list(input: ListUiPreviewsInput = {}) {
     const page = deps.repository.listPreviews(input);
     const port = deps.runtimePort();
@@ -193,7 +199,7 @@ export function createUiPreviewService(deps: UiPreviewServiceDependencies) {
     return summary;
   }
 
-  return { create, update, get, list };
+  return { create, update, delete: remove, get, list };
 }
 
 export type UiPreviewService = ReturnType<typeof createUiPreviewService>;

@@ -1,4 +1,4 @@
-import { apiGet, apiPost } from './apiClient';
+import { apiDelete, apiGet, apiPost } from './apiClient';
 
 export interface TaskUiEvidence {
   evidenceId: string;
@@ -247,6 +247,10 @@ export async function attachUiPreviewToTask(input: { taskId: string; previewId: 
     idempotencyKey: input.idempotencyKey,
   });
   return result.data;
+}
+
+export function deleteUiPreview(previewId: string) {
+  return apiDelete<{ previewId: string; deleted: true; deletedRevisions: number }>(`/api/ui-previews/${encodeURIComponent(previewId)}`);
 }
 
 export function createUiPreviewLibraryRequestGate() {

@@ -131,6 +131,33 @@ test('preview library list is deterministic, filtered, cursor-paged, and summary
   assert.equal(repo.listPreviews({ filter: 'all', limit: 999 }).limit, 50);
 });
 
+test('standalone preview deletion removes all revisions while linked and missing previews fail closed', () => {
+  repo.createPreview({ id: 'uip_delete', taskId: null, title: 'Delete me', html: '<main>a</main>', css: '', js: '', spec, viewport, contentHash: 'delete-a' });
+  repo.appendRevision({ previewId: 'uip_delete', expectedRevision: 1, title: 'Delete me', html: '<main>b</main>', css: '', js: '', spec, viewport, contentHash: 'delete-b' });
+
+  const removed = (repo as any).deleteStandalonePreview('uip_delete');
+  assert.deepEqual(removed, { previewId: 'uip_delete', deleted: true, deletedRevisions: 2 });
+  assert.equal(repo.getPreview('uip_delete'), null);
+  assert.equal(repo.countRevisions('uip_delete'), 0);
+
+  seedTask('task-delete-linked');
+  repo.createPreview({ id: 'uip_linked_delete', taskId: 'task-delete-linked', title: 'Keep me', html: '<main>linked</main>', css: '', js: '', spec, viewport, contentHash: 'linked-delete' });
+  evidenceRepo.recordEvidence({ evidenceId: 'uie_keep', taskId: 'task-delete-linked', previewId: 'uip_linked_delete', frozenRevision: 1, frozenSpec: spec, screenshotArtifactId: 'shot-keep', screenshotWidth: 1440, screenshotHeight: 900 });
+
+  assert.throws(
+    () => (repo as any).deleteStandalonePreview('uip_linked_delete'),
+    (error: any) => error?.code === 'UI_PREVIEW_DELETE_LINKED_CONFLICT',
+  );
+  assert.equal(repo.getPreview('uip_linked_delete')?.taskId, 'task-delete-linked');
+  assert.equal(repo.countRevisions('uip_linked_delete'), 1);
+  assert.equal(evidenceRepo.listEvidence('task-delete-linked', 'uip_linked_delete').length, 1);
+
+  assert.throws(
+    () => (repo as any).deleteStandalonePreview('uip_missing_delete'),
+    (error: any) => error?.code === 'UI_PREVIEW_NOT_FOUND',
+  );
+});
+
 test('evidence for another preview remains current', () => {
   seedTask('task-a');
   for (const id of ['uip_one', 'uip_two']) repo.createPreview({ id, taskId: 'task-a', title: null, html: '<main>a</main>', css: '', js: '', spec, viewport, contentHash: `hash-${id}` });

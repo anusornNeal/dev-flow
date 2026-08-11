@@ -12,7 +12,7 @@ import { createTaskUiEvidenceService, type TaskUiEvidenceService } from '../serv
 import { getDevFlowApiBaseUrl } from '../services/agentRunService.js';
 
 export interface UiPreviewRouteOverrides {
-  previewService?: Pick<UiPreviewService, 'create' | 'update' | 'get' | 'list'>;
+  previewService?: Pick<UiPreviewService, 'create' | 'update' | 'delete' | 'get' | 'list'>;
   evidenceService?: Pick<TaskUiEvidenceService, 'attach' | 'list'>;
   artifactStore?: UiPreviewArtifactStore;
   runtimePort?: () => number;
@@ -105,6 +105,17 @@ export function registerUiPreviewRoutes(app: express.Express, _deps: ApiRouteDep
   app.put('/api/ui-previews/:previewId', (req, res) => {
     try {
       return res.json(previewService.update({ ...(req.body || {}), previewId: req.params.previewId } as any));
+    } catch (error) {
+      return sendApiError(res, apiErrorForUiPreview(error));
+    }
+  });
+
+  app.delete('/api/ui-previews/:previewId', strictLocal, (req, res) => {
+    try {
+      if (!isLoopbackHostHeader(req.headers.host)) {
+        throw createApiError(403, 'UI_PREVIEW_LOCAL_ONLY', 'UI preview deletion requires a loopback Host header.');
+      }
+      return res.json(previewService.delete({ previewId: req.params.previewId }));
     } catch (error) {
       return sendApiError(res, apiErrorForUiPreview(error));
     }

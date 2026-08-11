@@ -8,6 +8,7 @@ import {
   normalizeUiPreviewLibraryPage,
   createUiPreviewLibraryRequestGate,
   createUiPreviewAttachAttemptStore,
+  deleteUiPreview,
 } from '../../src/client/uiPreviewClient.js';
 
 test('buildTaskUiEvidencePath always uses bounded paging and encodes cursor/task ids', () => {
@@ -90,6 +91,26 @@ test('attach attempt store collapses duplicate pending clicks and reuses only un
   assert.equal(store.isCurrent(next!), false);
   const afterCancel = store.begin('uip-1', 'DVF-0502');
   assert.equal(afterCancel?.idempotencyKey, 'attach-2', 'cancel keeps the uncertain logical key for a safe retry');
+});
+
+test('deleteUiPreview sends DELETE to the encoded preview endpoint', async () => {
+  const originalFetch = globalThis.fetch;
+  let captured: { input: string; method?: string } | null = null;
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    captured = { input: String(input), method: init?.method };
+    return new Response(JSON.stringify({ previewId: 'uip-1', deleted: true, deletedRevisions: 2 }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  }) as typeof fetch;
+  try {
+    const result = await deleteUiPreview('uip-1');
+    assert.equal(captured?.input, '/api/ui-previews/uip-1');
+    assert.equal(captured?.method, 'DELETE');
+    assert.deepEqual(result.data, { previewId: 'uip-1', deleted: true, deletedRevisions: 2 });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test('request gate invalidates older task and refresh generations', () => {

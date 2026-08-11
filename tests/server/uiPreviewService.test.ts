@@ -17,7 +17,11 @@ const service = createUiPreviewService({ repository, runtimePort: () => 43123 })
 const spec = { schemaVersion: 1, summary: { screen: 'Service' }, sections: [{ id: 'main' }] };
 
 function reset() {
-  db.exec('DELETE FROM task_ui_evidence; DELETE FROM ui_preview_idempotency; DELETE FROM ui_preview_revisions; DELETE FROM ui_previews;');
+  db.exec('DELETE FROM task_ui_evidence; DELETE FROM ui_preview_idempotency; DELETE FROM ui_preview_revisions; DELETE FROM ui_previews; DELETE FROM tasks;');
+}
+
+function seedTask(id: string) {
+  db.prepare('INSERT INTO tasks (id, title, status) VALUES (?, ?, ?)').run(id, id, 'todo');
 }
 
 test.beforeEach(reset);
@@ -109,6 +113,19 @@ test('library list resolves latest unpinned runtime URLs and returns summary met
   assert.match(page.items[0].latestPreviewUrl, /^http:\/\/127\.0\.0\.1:43123\/api\/ui-previews\//);
   assert.doesNotMatch(page.items[0].latestPreviewUrl, /revision=/);
   assert.doesNotMatch(JSON.stringify(page), /latest secret|secret-css|secret-js/);
+});
+
+test('delete removes standalone previews and rejects linked or missing previews', () => {
+  const created = service.create({ html: '<main>delete</main>', spec });
+  service.update({ previewId: created.previewId, expectedRevision: 1, html: '<main>delete-2</main>' });
+  const removed = (service as any).delete({ previewId: created.previewId });
+  assert.deepEqual(removed, { previewId: created.previewId, deleted: true, deletedRevisions: 2 });
+  assert.equal(repository.getPreview(created.previewId), null);
+
+  seedTask('task-linked-service');
+  const linked = service.create({ taskId: 'task-linked-service', html: '<main>linked</main>', spec });
+  assert.throws(() => (service as any).delete({ previewId: linked.previewId }), (error: any) => error?.code === 'UI_PREVIEW_DELETE_LINKED_CONFLICT');
+  assert.throws(() => (service as any).delete({ previewId: 'uip_missing_service' }), (error: any) => error?.code === 'UI_PREVIEW_NOT_FOUND');
 });
 
 test('create/update/get core does not depend on project workspace, git, verification, or playwright services', async () => {

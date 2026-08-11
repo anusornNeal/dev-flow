@@ -53,14 +53,14 @@ const source = {
   previewUrl: 'http://127.0.0.1:45555/api/ui-previews/uip_route/document?revision=2',
 };
 
-function rawGetStatus(baseUrl: string, headers: Record<string, string>) {
+function rawGetStatus(baseUrl: string, headers: Record<string, string>, method = 'GET') {
   return new Promise<number>((resolve, reject) => {
     const url = new URL(baseUrl);
     const req = httpRequest({
       hostname: url.hostname,
       port: url.port,
       path: `${url.pathname}${url.search}`,
-      method: 'GET',
+      method,
       headers,
     }, (res) => {
       res.resume();
@@ -83,7 +83,20 @@ async function withServer(run: (baseUrl: string) => Promise<void>) {
       nextCursor: null,
       limit: Math.min(50, input.limit || 20),
       filter: input.filter || 'all',
-    }),
+    }),    delete: (input: any) => {
+      if (input.previewId === 'uip_linked_route') {
+        const error: any = new Error('linked preview cannot be deleted');
+        error.code = 'UI_PREVIEW_DELETE_LINKED_CONFLICT';
+        throw error;
+      }
+      if (input.previewId === 'uip_missing_route') {
+        const error: any = new Error('preview not found');
+        error.code = 'UI_PREVIEW_NOT_FOUND';
+        throw error;
+      }
+      return { previewId: input.previewId, deleted: true, deletedRevisions: 2 };
+    },
+
   };
   const evidenceService = {
     list: (input: any) => ({ items: [{ evidenceId: 'uie_1', previewId: 'uip_route', frozenRevision: 2 }], nextCursor: null, limit: Math.min(50, input.limit || 20) }),
@@ -170,6 +183,24 @@ test('preview collection is strict-loopback, host-validated, no-store, bounded, 
     assert.equal(malformedForward.status, 403);
     const spoofedHostStatus = await rawGetStatus(`${baseUrl}/api/ui-previews`, { Host: 'attacker.example' });
     assert.equal(spoofedHostStatus, 403);
+  });
+});
+
+test('preview deletion is strict-loopback and maps standalone, linked, and missing outcomes', async () => {
+  await withServer(async (baseUrl) => {
+    const removed = await fetch(`${baseUrl}/api/ui-previews/uip_route`, { method: 'DELETE' });
+    assert.equal(removed.status, 200);
+    assert.deepEqual(await removed.json(), { previewId: 'uip_route', deleted: true, deletedRevisions: 2 });
+
+    const linked = await fetch(`${baseUrl}/api/ui-previews/uip_linked_route`, { method: 'DELETE' });
+    assert.equal(linked.status, 409);
+    assert.equal(((await linked.json()) as any).error.code, 'UI_PREVIEW_DELETE_LINKED_CONFLICT');
+
+    const missing = await fetch(`${baseUrl}/api/ui-previews/uip_missing_route`, { method: 'DELETE' });
+    assert.equal(missing.status, 404);
+
+    const spoofedHost = await rawGetStatus(`${baseUrl}/api/ui-previews/uip_route`, { Host: 'attacker.example' }, 'DELETE');
+    assert.equal(spoofedHost, 403);
   });
 });
 

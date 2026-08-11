@@ -2,7 +2,11 @@ import crypto from 'node:crypto';
 import { getProject } from '../repositories/projectRepository.js';
 import { listExecutionSessionsForTask } from '../repositories/executionSessionRepository.js';
 import { getTaskByIdentifier, getTasksByProjectId, saveTask } from '../repositories/taskRepository.js';
-import { createOrReuseSessionWorkspace, resolveSessionWorkspaceForRecovery } from './sessionWorkspaceService.js';
+import {
+  createOrReuseSessionWorkspace,
+  isSessionWorkspaceCompatibleWithTask,
+  resolveSessionWorkspaceForRecovery,
+} from './sessionWorkspaceService.js';
 import { createApiError } from './api.js';
 import { createExecutionSession } from './executionSessionService.js';
 import { withSyncLock } from './lockAndIdempotencyService.js';
@@ -146,7 +150,7 @@ function resolveRecoverableTaskWorkspace(task: any) {
   const preferredWorkspaceId = String(task?.claim?.workspaceId || '').trim();
   if (preferredWorkspaceId) {
     const preferred = resolveSessionWorkspaceForRecovery(preferredWorkspaceId);
-    if (preferred?.projectId === task.projectId) return preferred;
+    if (preferred?.projectId === task.projectId && isSessionWorkspaceCompatibleWithTask(preferred, task.displayId)) return preferred;
   }
 
   const candidateIds = Array.from(new Set(listExecutionSessionsForTask(task.id)
@@ -155,7 +159,11 @@ function resolveRecoverableTaskWorkspace(task: any) {
     .filter(Boolean)));
   const recovered = candidateIds
     .map((workspaceId) => resolveSessionWorkspaceForRecovery(workspaceId))
-    .filter((workspace): workspace is NonNullable<typeof workspace> => Boolean(workspace && workspace.projectId === task.projectId));
+    .filter((workspace): workspace is NonNullable<typeof workspace> => Boolean(
+      workspace
+      && workspace.projectId === task.projectId
+      && isSessionWorkspaceCompatibleWithTask(workspace, task.displayId),
+    ));
   if (recovered.length > 1) {
     throw createApiError(409, 'TASK_WORKSPACE_AMBIGUOUS', `Task '${task.displayId || task.id}' has multiple recoverable managed workspaces. Recover or clean them before claiming the task again.`, {
       affectedId: task.id,

@@ -51,6 +51,45 @@ test('two session ids create distinct opaque workspaces and same session reuses 
   assert.equal(resolveSessionWorkspace(first.workspaceId)?.root, first.root);
 });
 
+test('same session creates distinct task-owned workspaces while standalone reuse stays session-scoped', () => {
+  const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-workspace-task-identity-'));
+  process.env.DEVFLOW_RUNTIME_DIR = runtimeRoot;
+  resetSessionWorkspaceRuntimeForTests();
+  const repo = createRepo();
+  const standalone = createOrReuseSessionWorkspace(project(repo), 'shared-chat');
+  const standaloneAgain = createOrReuseSessionWorkspace(project(repo), 'shared-chat');
+  assert.equal(standaloneAgain.workspaceId, standalone.workspaceId);
+
+  const taskA = createOrReuseSessionWorkspace(project(repo), 'task-chat', { taskDisplayId: 'DVF-0489' });
+  const taskB = createOrReuseSessionWorkspace(project(repo), 'task-chat', { taskDisplayId: 'DVF-0490' });
+  const taskAAgain = createOrReuseSessionWorkspace(project(repo), 'task-chat', { taskDisplayId: 'DVF-0489' });
+
+  assert.notEqual(taskA.workspaceId, taskB.workspaceId);
+  assert.notEqual(taskA.root, taskB.root);
+  assert.notEqual(taskA.branch, taskB.branch);
+  assert.equal(path.basename(taskA.root), '0489');
+  assert.equal(path.basename(taskB.root), '0490');
+  assert.equal(taskAAgain.workspaceId, taskA.workspaceId);
+  assert.equal(taskAAgain.root, taskA.root);
+});
+
+test('task-aware creation preserves a dirty legacy session workspace instead of reusing or deleting it', () => {
+  const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-workspace-legacy-preserve-'));
+  process.env.DEVFLOW_RUNTIME_DIR = runtimeRoot;
+  resetSessionWorkspaceRuntimeForTests();
+  const repo = createRepo();
+  const legacy = createOrReuseSessionWorkspace(project(repo), 'legacy-shared-chat');
+  fs.appendFileSync(path.join(legacy.root, 'README.md'), 'legacy dirty\n');
+
+  const taskWorkspace = createOrReuseSessionWorkspace(project(repo), 'legacy-shared-chat', { taskDisplayId: 'DVF-0491' });
+
+  assert.notEqual(taskWorkspace.workspaceId, legacy.workspaceId);
+  assert.notEqual(taskWorkspace.root, legacy.root);
+  assert.equal(path.basename(taskWorkspace.root), '0491');
+  assert.equal(fs.existsSync(legacy.root), true);
+  assert.match(fs.readFileSync(path.join(legacy.root, 'README.md'), 'utf8'), /legacy dirty/);
+});
+
 test('workspace metadata can be rediscovered after runtime reset without duplicating the worktree', () => {
   const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-workspace-restart-'));
   process.env.DEVFLOW_RUNTIME_DIR = runtimeRoot;

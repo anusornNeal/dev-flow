@@ -19,6 +19,8 @@ export type SessionWorkspace = {
   baseBranch: string;
   baseRevision: string;
   gitWorkflowPolicy?: GitWorkflowPolicy;
+  taskDisplayId?: string;
+  taskRootLeaf?: string;
   state: SessionWorkspaceState;
   createdAt: string;
   lastUsedAt: string;
@@ -44,6 +46,25 @@ function taskNumberFolder(value: unknown) {
   const match = String(value || '').trim().match(/(\d+)$/);
   return match?.[1] || null;
 }
+function normalizedTaskDisplayId(value: unknown) {
+  const normalized = String(value || '').trim();
+  return normalized || null;
+}
+
+function workspaceIdentityForSession(sessionId: string, taskDisplayId: string | null) {
+  return taskDisplayId ? `${sessionId}\u0000task:${taskDisplayId}` : sessionId;
+}
+
+export function isSessionWorkspaceCompatibleWithTask(workspace: SessionWorkspace, taskDisplayId: unknown) {
+  const expectedDisplayId = normalizedTaskDisplayId(taskDisplayId);
+  if (!expectedDisplayId) return true;
+  if (workspace.taskDisplayId && normalizedTaskDisplayId(workspace.taskDisplayId) !== expectedDisplayId) return false;
+  const expectedRootLeaf = taskNumberFolder(expectedDisplayId);
+  if (expectedRootLeaf && path.basename(path.resolve(workspace.root)) !== expectedRootLeaf) return false;
+  if (workspace.taskRootLeaf && expectedRootLeaf && workspace.taskRootLeaf !== expectedRootLeaf) return false;
+  return true;
+}
+
 
 function workspaceIdFor(projectId: string, sessionId: string) {
   const digest = crypto.createHash('sha256').update(`${projectId}\u0000${sessionId}`).digest('hex');
@@ -232,18 +253,26 @@ export function createOrReuseSessionWorkspace(
   if (!cleanSessionId) throw createApiError(400, 'SESSION_ID_REQUIRED', 'sessionId is required to create an isolated workspace.');
   if (!project?.id) throw createApiError(400, 'PROJECT_ID_REQUIRED', 'project.id is required to create an isolated workspace.');
   const projectRoot = ensureRepository(path.resolve(String(project.localPath || '')));
-  const workspaceId = workspaceIdFor(project.id, cleanSessionId);
+  const taskDisplayId = normalizedTaskDisplayId(options.taskDisplayId);
+  const workspaceIdentity = workspaceIdentityForSession(cleanSessionId, taskDisplayId);
+  const workspaceId = workspaceIdFor(project.id, workspaceIdentity);
   const existing = readMetadata(workspaceId);
   if (existing && validateReusableWorkspace(existing, projectRoot)) {
+    if (taskDisplayId && !isSessionWorkspaceCompatibleWithTask(existing, taskDisplayId)) {
+      throw createApiError(409, 'WORKSPACE_TASK_MISMATCH', 'Existing managed workspace does not belong to the requested task identity.', {
+        affectedId: workspaceId,
+        details: { taskDisplayId, root: existing.root },
+      });
+    }
     workspaceLifecycleCounters.reused += 1;
     return touch(existing);
   }
 
-  const rootLeaf = taskNumberFolder(options.taskDisplayId) || workspaceId;
+  const rootLeaf = taskNumberFolder(taskDisplayId) || workspaceId;
   const root = canonicalContainment(managedRootFor(project.id, rootLeaf));
   const baseBranch = currentBranch(projectRoot);
   const baseRevision = currentHead(projectRoot);
-  const branch = `devflow/ws/${safeSegment(project.id)}/${sessionHash(cleanSessionId)}`;
+  const branch = `devflow/ws/${safeSegment(project.id)}/${sessionHash(workspaceIdentity)}`;
 
   fs.mkdirSync(path.dirname(root), { recursive: true });
   runGit(projectRoot, ['worktree', 'prune'], true);
@@ -279,6 +308,7 @@ export function createOrReuseSessionWorkspace(
     baseBranch,
     baseRevision,
     gitWorkflowPolicy: validateGitWorkflowPolicy(project.gitWorkflowPolicy),
+    ...(taskDisplayId ? { taskDisplayId, taskRootLeaf: rootLeaf } : {}),
     state: 'ready',
     createdAt: new Date(now).toISOString(),
     lastUsedAt: new Date(now).toISOString(),

@@ -156,6 +156,24 @@ test('task claims use only the trailing card number for the visible worktree fol
   assert.match(bsaWorkspace.workspaceId, /^ws_[a-f0-9]{16}$/);
 });
 
+test('same chat session claiming different cards receives isolated task-numbered workspaces', () => {
+  seedTask('task-same-session-a', ['src/SameSessionA.ts'], undefined, 'DVF-0601');
+  seedTask('task-same-session-b', ['src/SameSessionB.ts'], undefined, 'DVF-0602');
+
+  const first = claims.claimTaskForSession('task-same-session-a', { sessionId: 'shared-task-session', ownerLabel: 'Chat Shared' });
+  const second = claims.claimTaskForSession('task-same-session-b', { sessionId: 'shared-task-session', ownerLabel: 'Chat Shared' });
+  const firstWorkspace = workspaces.resolveSessionWorkspace(first.claim.workspaceId);
+  const secondWorkspace = workspaces.resolveSessionWorkspace(second.claim.workspaceId);
+
+  assert.ok(firstWorkspace);
+  assert.ok(secondWorkspace);
+  assert.notEqual(first.claim.workspaceId, second.claim.workspaceId);
+  assert.notEqual(firstWorkspace.root, secondWorkspace.root);
+  assert.notEqual(firstWorkspace.branch, secondWorkspace.branch);
+  assert.equal(path.basename(firstWorkspace.root), '0601');
+  assert.equal(path.basename(secondWorkspace.root), '0602');
+});
+
 test('occupied task-number root fails closed instead of creating a suffixed worktree', () => {
   seedTask('task-folder-collision', ['src/CollisionFolder.ts'], undefined, 'DVF-0500');
   const occupied = workspaces.createOrReuseSessionWorkspace(claimProject, 'collision-owner', { taskDisplayId: 'DVF-0500' } as any);

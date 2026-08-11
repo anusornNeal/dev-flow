@@ -21,18 +21,18 @@ Preview before mutation when practical.
 - Apply only the returned prepared plan. If source changes or a plan expires/is consumed, re-read and re-prepare instead of replaying it.
 - Use `edit_local_files_batch` as the guarded structured fallback when compact edits are unsuitable.
 - Use `write_local_file` for new files or intentional full-file replacements when that is clearer and bounded.
-- Reserve `apply_and_verify` for the final GREEN pass when it can serve as that single planned verification execution; do not use it during implementation because it would add an intermediate test run.
+- Reserve `apply_and_verify` for the final GREEN phase when it can serve as one required check in that phase; do not use it during implementation because it would add intermediate verification.
 
 Revision and hash guards are authoritative. Do not retry the same failed write payload unchanged; inspect the error and change the source revision, anchor, target, payload, or tool strategy.
 
 ## Two-pass verification (test-first)
-For testable behavior changes and bug fixes, use exactly two planned verification executions: RED → IMPLEMENT → GREEN.
+For testable behavior changes and bug fixes, use exactly two logical verification phases: RED → IMPLEMENT → GREEN.
 
 1. **RED** — before implementation, author or select the focused regression test that proves the requested behavior is missing or broken. Run it once and confirm it fails for the expected reason. This is the first planned test run.
 2. **IMPLEMENT** — implement the entire required scope to completion. Update code, tests, docs, generated artifacts, and checklist-related implementation as needed. During this phase, do not run tests, builds, lint, `apply_and_verify`, or other verification commands. Static inspection, diffs, and guarded edits are allowed.
-3. **GREEN** — only after implementation is complete, run one fresh risk-appropriate verification command. This is the second planned test run and it must cover the RED regression plus the task's required acceptance criteria.
+3. **GREEN** — only after implementation is complete, enter one final risk-appropriate GREEN phase. Before GREEN fan-out, freeze one verification candidate/revision. The final GREEN may run multiple independent required checks in parallel, but every check must execute against that same frozen candidate and the parallel fan-out still counts as one logical final GREEN phase, not iterative testing. While that GREEN batch is active, do not mutate the task workspace or its files. Join all required GREEN checks before completion; every mandatory check must succeed. Evidence from another revision or candidate is invalid for this GREEN.
 
-No intermediate verification is part of the normal flow. The planned test budget is two verification executions: RED then GREEN. If the final GREEN fails or infrastructure interrupts it, keep the task in progress, fix from the available failure evidence, and rerun only the minimum recovery GREEN needed; recovery reruns are exceptions, not an iterative test loop.
+No intermediate verification is part of the normal flow. The planned verification budget is two logical phases: RED then final GREEN. Parallel checks inside that final GREEN do not create extra phases. If any required GREEN check fails, the frozen candidate becomes stale, or infrastructure interrupts the batch, keep the task in progress, fix from the available failure evidence, then run only the minimum recovery GREEN against a newly frozen candidate. Recovery reruns are exceptions, not an iterative test loop.
 
 Choose the final GREEN scope by risk:
 - **FAST** — focused deterministic checks for low-risk leaf/local changes.

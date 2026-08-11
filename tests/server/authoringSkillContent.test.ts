@@ -152,6 +152,11 @@ test('07 owns implementation, verification, task workspace lifecycle, and termin
   assert.match(executionSkill, /exactly two|two verification executions/i);
   assert.match(executionSkill, /no intermediate|do not run[^\n]*intermediate/i);
   assert.match(executionSkill, /tests?.*before.*implementation|test-first|TDD/i);
+  assert.match(executionSkill, /one frozen candidate|same frozen candidate/i);
+  assert.match(executionSkill, /parallel[\s\S]*GREEN|GREEN[\s\S]*parallel/i);
+  assert.match(executionSkill, /do not mutate[\s\S]*GREEN|GREEN[\s\S]*do not mutate/i);
+  assert.match(executionSkill, /join[\s\S]*required|all required[\s\S]*join/i);
+  assert.match(executionSkill, /another revision[\s\S]*invalid|other revision[\s\S]*invalid|evidence[\s\S]*same frozen candidate/i);
   assert.match(executionSkill, /prefer `finalize_task_workspace`|preferred terminal/i);
   assert.match(executionSkill, /integrate_workspace.*fallback|fallback.*integrate_workspace/i);
   assert.match(executionSkill, /Do not push/i);
@@ -188,6 +193,11 @@ test('runtime execution prompt stays narrow and worker-focused', () => {
   assert.match(executionRules, /same assistant turn/i);
   assert.match(executionRules, /RED[\s\S]*IMPLEMENT[\s\S]*GREEN/i);
   assert.match(executionRules, /without intermediate tests|no intermediate/i);
+  assert.match(executionRules, /one frozen candidate|same frozen candidate/i);
+  assert.match(executionRules, /parallel[\s\S]*GREEN|GREEN[\s\S]*parallel/i);
+  assert.match(executionRules, /do not mutate[\s\S]*GREEN|GREEN[\s\S]*do not mutate/i);
+  assert.match(executionRules, /join[\s\S]*required|all required[\s\S]*join/i);
+  assert.match(executionRules, /another revision[\s\S]*invalid|other revision[\s\S]*invalid|evidence[\s\S]*same frozen candidate/i);
   assert.match(executionRules, /Work only on this current task and stop when it is complete/);
   assert.doesNotMatch(executionRules, /01-authoring-core|02-schema-reference|03-reviewer-core|open_task_bug/);
 });

@@ -7,6 +7,7 @@ export const SERVER_EVENT_REPLAY_LIMIT = 256;
 export type ServerDomainEventType =
   | 'task.changed'
   | 'job.changed'
+  | 'ui-preview.changed'
   | 'atlas.changed'
   | 'project.changed'
   | 'health.regression'

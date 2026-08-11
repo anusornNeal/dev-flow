@@ -1,6 +1,7 @@
 export type ServerEventType =
   | 'task.changed'
   | 'job.changed'
+  | 'ui-preview.changed'
   | 'atlas.changed'
   | 'project.changed'
   | 'health.regression'
@@ -41,6 +42,7 @@ type SubscribeOptions = {
 const EVENT_TYPES: ServerEventType[] = [
   'task.changed',
   'job.changed',
+  'ui-preview.changed',
   'atlas.changed',
   'project.changed',
   'health.regression',

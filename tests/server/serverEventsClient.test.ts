@@ -46,7 +46,10 @@ test('subscription dispatches compact events immediately and cleanup closes the 
   const source = FakeEventSource.instances[0];
   source.emit('job.changed', { v: 1, id: '7', type: 'job.changed', at: new Date().toISOString(), entityId: 'job-7', status: 'running' }, '7');
   assert.equal(received.length, 1);
-  assert.equal(received[0].entityId, 'job-7');
+  assert.equal(received[0].entityId, 'job-7');  source.emit('ui-preview.changed', { v: 1, id: '8', type: 'ui-preview.changed', at: new Date().toISOString(), entityId: 'uip-8', reason: 'created' }, '8');
+  assert.equal(received.length, 2);
+  assert.equal(received[1].type, 'ui-preview.changed');
+  assert.equal(received[1].entityId, 'uip-8');
 
   unsubscribe();
   assert.equal(source.closed, true);

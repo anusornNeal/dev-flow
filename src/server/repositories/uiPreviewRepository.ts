@@ -8,6 +8,7 @@ import {
   UiPreviewRevisionConflictError,
   UiPreviewTaskConflictError,
 } from '../domain/uiPreview.js';
+import { publishServerEvent } from '../services/serverEventService.js';
 
 export const UI_PREVIEW_HASH_SCHEMA_VERSION = 1;
 
@@ -180,7 +181,7 @@ export function createUiPreviewRepository(database: DatabaseLike = db) {
   }
 
   function createPreview(input: CreatePreviewRevisionInput) {
-    return transaction(() => {
+    const preview = transaction(() => {
       const createdAt = input.createdAt || nowIso();
       database.prepare(`
         INSERT INTO ui_previews (id, task_id, latest_revision, created_at, updated_at)
@@ -203,10 +204,12 @@ export function createUiPreviewRepository(database: DatabaseLike = db) {
       );
       return requirePreview(input.id);
     });
+    publishServerEvent('ui-preview.changed', { entityId: input.id, reason: 'created' });
+    return preview;
   }
 
   function appendRevision(input: AppendPreviewRevisionInput) {
-    return transaction(() => {
+    const result = transaction(() => {
       const preview = requirePreview(input.previewId);
       if (input.expectedRevision !== undefined && input.expectedRevision !== preview.latestRevision) {
         throw new UiPreviewRevisionConflictError(input.previewId, input.expectedRevision, preview.latestRevision);
@@ -238,23 +241,28 @@ export function createUiPreviewRepository(database: DatabaseLike = db) {
         .run(nextRevision, createdAt, input.previewId);
       return { changed: true as const, preview: requirePreview(input.previewId), revision: getRevision(input.previewId, nextRevision)! };
     });
+    if (result.changed) publishServerEvent('ui-preview.changed', { entityId: input.previewId, reason: 'updated' });
+    return result;
   }
 
   function bindPreviewToTask(previewId: string, taskId: string) {
-    return transaction(() => {
+    const result = transaction(() => {
       const preview = requirePreview(previewId);
       if (preview.taskId && preview.taskId !== taskId) {
         throw new UiPreviewTaskConflictError(previewId, preview.taskId, taskId);
       }
-      if (!preview.taskId) {
+      const changed = !preview.taskId;
+      if (changed) {
         database.prepare('UPDATE ui_previews SET task_id = ?, updated_at = ? WHERE id = ?').run(taskId, nowIso(), previewId);
       }
-      return requirePreview(previewId);
+      return { changed, preview: requirePreview(previewId) };
     });
+    if (result.changed) publishServerEvent('ui-preview.changed', { entityId: previewId, reason: 'bound' });
+    return result.preview;
   }
 
   function deleteStandalonePreview(previewId: string) {
-    return transaction(() => {
+    const result = transaction(() => {
       const preview = requirePreview(previewId);
       if (preview.taskId) {
         throw new UiPreviewError(
@@ -266,6 +274,8 @@ export function createUiPreviewRepository(database: DatabaseLike = db) {
       database.prepare('DELETE FROM ui_previews WHERE id = ?').run(previewId);
       return { previewId, deleted: true as const, deletedRevisions };
     });
+    publishServerEvent('ui-preview.changed', { entityId: previewId, reason: 'deleted' });
+    return result;
   }
 
   function listPreviews(input: ListUiPreviewsInput = {}) {

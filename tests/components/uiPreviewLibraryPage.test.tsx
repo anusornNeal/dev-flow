@@ -34,6 +34,8 @@ test('library surface clearly communicates global/latest semantics and core acti
   assert.match(html, /Copy Latest Link/);
   assert.match(html, /Attach to Task/);
   assert.match(html, /rel="noopener noreferrer"/);
+  assert.match(html, /Delete/);
+  assert.doesNotMatch(html, />uip-1</);
 });
 
 test('linked item keeps library presence and exposes task context/open action', () => {
@@ -47,6 +49,30 @@ test('linked item keeps library presence and exposes task context/open action', 
   assert.match(html, /Preview card/);
   assert.match(html, /Open Task/);
   assert.doesNotMatch(html, /Attach to Task/);
+  assert.doesNotMatch(html, /Delete/);
+});
+
+test('untitled previews use a neutral label instead of exposing internal ids', () => {
+  const html = renderToStaticMarkup(React.createElement(UiPreviewLibraryPage as any, {
+    initialItems: [{ ...sample, previewId: 'uip-secret-internal', title: null, specSummary: {} }],
+    disableAutoLoad: true,
+    onOpenTask: () => {},
+  }));
+  assert.match(html, /Untitled preview/);
+  assert.doesNotMatch(html, />uip-secret-internal</);
+});
+
+test('library source uses explicit delete confirmation and silent preview-event refresh without clearing cards', () => {
+  const component = fs.readFileSync('src/components/UiPreviewLibraryPage.tsx', 'utf8');
+  assert.match(component, /subscribeServerEvents/);
+  assert.match(component, /ui-preview\.changed/);
+  assert.match(component, /window\.confirm/);
+  assert.match(component, /deleteUiPreview/);
+  assert.match(component, /background/);
+  const refreshStart = component.indexOf('const refresh');
+  const copyStart = component.indexOf('const copyLatest');
+  assert.ok(refreshStart >= 0 && copyStart > refreshStart);
+  assert.doesNotMatch(component.slice(refreshStart, copyStart), /setItems\(\[\]\)/);
 });
 
 test('preview library re-arms its mounted guard when StrictMode replays mount effects', () => {

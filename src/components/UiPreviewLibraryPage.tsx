@@ -1,10 +1,12 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ExternalLink, Link2, RefreshCw, Paperclip, FolderOpen, Loader2 } from 'lucide-react';
+import { ExternalLink, Link2, RefreshCw, Paperclip, FolderOpen, Loader2, Trash2 } from 'lucide-react';
 import { ApiError, apiGet } from '../client/apiClient';
+import { subscribeServerEvents } from '../lib/serverEvents';
 import {
   attachUiPreviewToTask,
   createUiPreviewAttachAttemptStore,
   createUiPreviewLibraryRequestGate,
+  deleteUiPreview,
   getUiPreviewLibraryPage,
   type UiPreviewLibraryFilter,
   type UiPreviewLibraryItem,
@@ -31,7 +33,7 @@ function formatUpdatedAt(value: string) {
 
 function summaryLabel(item: UiPreviewLibraryItem) {
   const screen = typeof item.specSummary.screen === 'string' ? item.specSummary.screen : '';
-  return item.title || screen || item.previewId;
+  return item.title || screen || 'Untitled preview';
 }
 
 export default function UiPreviewLibraryPage({ onOpenTask, initialItems = [], disableAutoLoad = false }: UiPreviewLibraryPageProps) {
@@ -44,6 +46,7 @@ export default function UiPreviewLibraryPage({ onOpenTask, initialItems = [], di
   const [feedback, setFeedback] = useState<Record<string, string>>({});
   const [taskInputs, setTaskInputs] = useState<Record<string, string>>({});
   const [pendingAttach, setPendingAttach] = useState<Record<string, string>>({});
+  const [pendingDelete, setPendingDelete] = useState<Record<string, boolean>>({});
   const requestGate = useRef(createUiPreviewLibraryRequestGate());
   const attachStore = useRef(createUiPreviewAttachAttemptStore());
   const activeAttachTokens = useRef<Record<string, ReturnType<typeof attachStore.current.begin> extends infer T ? Exclude<T, null> : never>>({});
@@ -58,22 +61,25 @@ export default function UiPreviewLibraryPage({ onOpenTask, initialItems = [], di
     };
   }, []);
 
-  const load = useCallback(async (append = false, cursor: string | null = null) => {
+  const load = useCallback(async (mode: 'initial' | 'background' | 'append' = 'initial', cursor: string | null = null) => {
+    const append = mode === 'append';
+    const background = mode === 'background';
     const token = requestGate.current.begin(filter);
     if (append) setLoadingMore(true);
-    else setLoading(true);
-    setError(null);
+    else if (!background) setLoading(true);
+    if (!background) setError(null);
     try {
       const page = await getUiPreviewLibraryPage({ filter, cursor, limit: 20 });
       if (!mounted.current || !requestGate.current.isCurrent(token)) return;
       setItems((current) => append ? [...current, ...page.items.filter((incoming) => !current.some((item) => item.previewId === incoming.previewId))] : page.items);
       setNextCursor(page.nextCursor);
+      setError(null);
     } catch (loadError) {
       if (!mounted.current || !requestGate.current.isCurrent(token)) return;
       setError(loadError instanceof Error ? loadError.message : 'Failed to load UI previews.');
     } finally {
       if (mounted.current && requestGate.current.isCurrent(token)) {
-        setLoading(false);
+        if (!background) setLoading(false);
         setLoadingMore(false);
       }
     }
@@ -83,14 +89,53 @@ export default function UiPreviewLibraryPage({ onOpenTask, initialItems = [], di
     if (disableAutoLoad) return;
     setItems([]);
     setNextCursor(null);
-    void load(false, null);
+    void load('initial', null);
   }, [disableAutoLoad, filter, load]);
+
+  useEffect(() => {
+    if (disableAutoLoad) return;
+    return subscribeServerEvents((event) => {
+      if (event.type !== 'ui-preview.changed') return;
+      void load('background', null);
+    });
+  }, [disableAutoLoad, load]);
 
   const refresh = () => {
     requestGate.current.invalidate();
-    setItems([]);
     setNextCursor(null);
-    void load(false, null);
+    void load('background', null);
+  };
+
+  const removePreview = async (item: UiPreviewLibraryItem) => {
+    const label = summaryLabel(item);
+    const confirmed = window.confirm(`Delete “${label}”? This permanently removes the standalone preview and all of its revisions.`);
+    if (!confirmed) return;
+    setPendingDelete((current) => ({ ...current, [item.previewId]: true }));
+    setFeedback((current) => ({ ...current, [item.previewId]: 'Deleting preview…' }));
+    try {
+      await deleteUiPreview(item.previewId);
+      if (!mounted.current) return;
+      setItems((current) => current.filter((candidate) => candidate.previewId !== item.previewId));
+      setFeedback((current) => {
+        const next = { ...current };
+        delete next[item.previewId];
+        return next;
+      });
+    } catch (deleteError) {
+      if (!mounted.current) return;
+      setFeedback((current) => ({
+        ...current,
+        [item.previewId]: `Delete failed: ${deleteError instanceof Error ? deleteError.message : 'Unknown error'}`,
+      }));
+    } finally {
+      if (mounted.current) {
+        setPendingDelete((current) => {
+          const next = { ...current };
+          delete next[item.previewId];
+          return next;
+        });
+      }
+    }
   };
 
   const copyLatest = async (item: UiPreviewLibraryItem) => {
@@ -202,13 +247,12 @@ export default function UiPreviewLibraryPage({ onOpenTask, initialItems = [], di
       <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
         {items.map((item) => {
           const linked = Boolean(item.taskId && item.linkedTask);
-          const pending = Boolean(pendingAttach[item.previewId]);
+          const pending = Boolean(pendingAttach[item.previewId]);          const deleting = Boolean(pendingDelete[item.previewId]);
           return (
             <article key={item.previewId} className="rounded-2xl border border-[#e5d4bb] bg-white p-4 shadow-sm dark:border-[#584a3b] dark:bg-[#292119]">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <h3 className="truncate text-sm font-extrabold text-[#3e3129] dark:text-[#f3eadf]" title={summaryLabel(item)}>{summaryLabel(item)}</h3>
-                  <p className="mt-1 font-mono text-[10px] text-[#917d71] dark:text-[#d6b56d]">{item.previewId}</p>
                 </div>
                 <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-black ${linked ? 'bg-[#e9f7e7] text-[#39713b] dark:bg-[#263a27] dark:text-[#b8dfb9]' : 'bg-[#fff0d6] text-[#95601e] dark:bg-[#3a2f26] dark:text-[#f0b84d]'}`}>{linked ? 'Linked' : 'Standalone'}</span>
               </div>
@@ -228,6 +272,7 @@ export default function UiPreviewLibraryPage({ onOpenTask, initialItems = [], di
               <div className="mt-4 flex flex-wrap gap-2">
                 <a href={item.latestPreviewUrl} target="_blank" rel="noopener noreferrer" className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-[#d89745] bg-[#ffeace] px-2.5 py-2 text-[11px] font-extrabold text-[#714a1a] hover:bg-[#ffdfb4] dark:border-[#6d5642] dark:bg-[#3a2f26] dark:text-[#f3eadf]"><ExternalLink size={13} /> Open Latest Preview</a>
                 <button type="button" onClick={() => void copyLatest(item)} className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-[#d8c5aa] px-2.5 py-2 text-[11px] font-extrabold text-[#6e584a] hover:bg-[#fff7ec] dark:border-[#584a3b] dark:text-[#f3eadf]"><Link2 size={13} /> Copy Latest Link</button>
+                {!linked && <button type="button" onClick={() => void removePreview(item)} disabled={deleting} className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-[#e1aaa0] px-2.5 py-2 text-[11px] font-extrabold text-[#a03b32] hover:bg-[#fff4f1] disabled:cursor-not-allowed disabled:opacity-60 dark:border-[#76534d] dark:text-[#efb5aa]"><Trash2 size={13} /> {deleting ? 'Deleting…' : 'Delete'}</button>}
                 {linked && item.linkedTask && <button type="button" onClick={() => void onOpenTask(item.linkedTask!)} className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-[#d8c5aa] px-2.5 py-2 text-[11px] font-extrabold text-[#6e584a] hover:bg-[#fff7ec] dark:border-[#584a3b] dark:text-[#f3eadf]"><FolderOpen size={13} /> Open Task</button>}
               </div>
 
@@ -246,7 +291,7 @@ export default function UiPreviewLibraryPage({ onOpenTask, initialItems = [], di
 
       {nextCursor && (
         <div className="mt-5 flex justify-center">
-          <button type="button" onClick={() => void load(true, nextCursor)} disabled={loadingMore} className="cursor-pointer rounded-xl border border-[#d8c5aa] bg-white px-4 py-2 text-xs font-extrabold text-[#714a1a] hover:bg-[#fff7ec] disabled:cursor-not-allowed disabled:opacity-60 dark:border-[#584a3b] dark:bg-[#292119] dark:text-[#f3eadf]">{loadingMore ? 'Loading…' : 'Load more'}</button>
+          <button type="button" onClick={() => void load('append', nextCursor)} disabled={loadingMore} className="cursor-pointer rounded-xl border border-[#d8c5aa] bg-white px-4 py-2 text-xs font-extrabold text-[#714a1a] hover:bg-[#fff7ec] disabled:cursor-not-allowed disabled:opacity-60 dark:border-[#584a3b] dark:bg-[#292119] dark:text-[#f3eadf]">{loadingMore ? 'Loading…' : 'Load more'}</button>
         </div>
       )}
     </section>

@@ -47,7 +47,11 @@ export default function TaskDetailsDrawer({
   onShowLog,
 }: TaskDetailsDrawerProps) {
   const drawerViewModel = useTaskDrawerViewModel();
-  const [activeTab, setActiveTab] = useState<TaskInspectorTab>(initialTab);
+  const [activeTab, setActiveTab] = useState<TaskInspectorTab>(() => (
+    initialTab === 'subtasks' && !allTasks.some((candidate) => candidate.parentId === initialTask.id)
+      ? 'overview'
+      : initialTab
+  ));
   const [viewingImage, setViewingImage] = useState<TaskImage | null>(null);
   const [newComment, setNewComment] = useState('');
   const [copiedHistoryPath, setCopiedHistoryPath] = useState<string | null>(null);
@@ -95,7 +99,7 @@ export default function TaskDetailsDrawer({
 
   useEffect(() => {
     if (drawerViewModel.task?.id !== initialTask.id) void drawerViewModel.open(initialTask.id);
-    setActiveTab(initialTab);
+    setActiveTab(initialTab === 'subtasks' && !allTasks.some((candidate) => candidate.parentId === initialTask.id) ? 'overview' : initialTab);
   }, [initialTask.id, initialTab]);
 
   useEffect(() => {
@@ -117,11 +121,16 @@ export default function TaskDetailsDrawer({
 
   const parentTask = task.parentId ? allTasks.find((candidate) => candidate.id === task.parentId) : undefined;
   const subTasks = allTasks.filter((candidate) => candidate.parentId === task.id);
+  const hasSubtasks = subTasks.length > 0;
   const disclosure = useDrawerDisclosure(task.id);
   const edit = useTaskDrawerEditState({ task, onUpdate });
   const runArtifacts = useRunArtifacts(task);
   const latestRun = task.latestAgentRun;
   const canRetryLatestRun = Boolean(latestRun && !task.activeAgent && ['failed', 'cancelled'].includes(latestRun.status));
+
+  useEffect(() => {
+    if (!hasSubtasks && activeTab === 'subtasks') setActiveTab('overview');
+  }, [activeTab, hasSubtasks]);
 
   const handleClose = () => {
     uiEvidenceGateRef.current.invalidate();
@@ -260,11 +269,9 @@ export default function TaskDetailsDrawer({
       <SubtasksSection
         task={task}
         subTasks={subTasks}
-        showAllSubtasks={disclosure.showAllSubtasks}
         canCreateSubtask={Boolean(onCreateTask) && !task.parentId}
         onCreateSubtask={() => setIsAddingSubtask(true)}
         onSelectTask={onSelectTask}
-        onShowAllSubtasksChange={disclosure.setShowAllSubtasks}
       />
     </div>
   );
@@ -305,6 +312,7 @@ export default function TaskDetailsDrawer({
       <TaskInspectorShell
         task={task}
         activeTab={activeTab}
+        showSubtasks={hasSubtasks}
         onTabChange={setActiveTab}
         onClose={handleClose}
         onDelete={() => onDelete(task.id)}

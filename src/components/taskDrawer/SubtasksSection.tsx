@@ -4,27 +4,22 @@ import type { Task } from '../../types';
 interface SubtasksSectionProps {
   task: Task;
   subTasks: Task[];
-  showAllSubtasks: boolean;
   canCreateSubtask: boolean;
   onCreateSubtask: () => void;
   onSelectTask?: (task: Task) => void;
-  onShowAllSubtasksChange: (value: boolean) => void;
 }
 
 export default function SubtasksSection({
   task,
   subTasks,
-  showAllSubtasks,
   canCreateSubtask,
   onCreateSubtask,
   onSelectTask,
-  onShowAllSubtasksChange,
 }: SubtasksSectionProps) {
   if (task.parentId) return null;
 
   const completedSubtasks = subTasks.filter(subTask => subTask.status === 'done').length;
   const completionPercent = subTasks.length > 0 ? Math.round((completedSubtasks / subTasks.length) * 100) : 0;
-  const visibleSubtasks = showAllSubtasks ? subTasks : subTasks.slice(0, 4);
 
   return (
     <div className="space-y-3.5 border-t border-[#ebdcb9] dark:border-[#584a3b] pt-5 font-sans">
@@ -58,29 +53,10 @@ export default function SubtasksSection({
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 select-none">
-            {visibleSubtasks.map(subTask => (
+            {subTasks.map(subTask => (
               <SubtaskCard key={subTask.id} task={subTask} onSelectTask={onSelectTask} />
             ))}
           </div>
-
-          {subTasks.length > 4 && !showAllSubtasks && (
-            <button
-              type="button"
-              onClick={() => onShowAllSubtasksChange(true)}
-              className="w-full text-center text-[10px] font-mono text-[#a47a32] dark:text-[#d6b56d] hover:text-[#8a6020] dark:hover:text-[#e0a070] font-bold transition-colors cursor-pointer pl-1"
-            >
-              show {subTasks.length - 4} more ↓
-            </button>
-          )}
-          {subTasks.length > 4 && showAllSubtasks && (
-            <button
-              type="button"
-              onClick={() => onShowAllSubtasksChange(false)}
-              className="w-full text-center text-[10px] font-mono text-[#a47a32] dark:text-[#d6b56d] hover:text-[#8a6020] dark:hover:text-[#e0a070] font-bold transition-colors cursor-pointer pl-1"
-            >
-              show less ↑
-            </button>
-          )}
         </div>
       )}
     </div>
@@ -95,6 +71,7 @@ interface SubtaskCardProps {
 function SubtaskCard({ task, onSelectTask }: SubtaskCardProps) {
   const subDone = task.status === 'done';
   const subInProgress = task.status === 'in-progress';
+  const displayId = task.displayId || task.id;
 
   return (
     <div
@@ -110,21 +87,20 @@ function SubtaskCard({ task, onSelectTask }: SubtaskCardProps) {
       }`}
     >
       <div className="space-y-1 min-w-0 pr-1">
-        <p className={`text-[11px] font-extrabold leading-snug truncate ${subDone ? 'line-through text-gray-400 dark:text-[#b8ab9f] font-normal' : 'text-[#3e3129] dark:text-[#f3eadf]'}`}>
-          {task.title}
-        </p>
         <button
           type="button"
           onClick={event => {
             event.stopPropagation();
-            const idToCopy = task.displayId || task.id;
-            navigator.clipboard.writeText(idToCopy);
+            navigator.clipboard.writeText(displayId);
           }}
-          className="flex items-center gap-1 text-[9px] font-mono text-gray-400 dark:text-[#b8ab9f]/80 hover:text-[#d89745] dark:text-[#d6b56d] dark:hover:text-[#e0a070] dark:text-[#d6b56d] font-bold cursor-pointer"
+          className="inline-flex items-center rounded-md bg-[#f4eadc] dark:bg-[#3a2f26] px-1.5 py-0.5 text-[9px] font-mono font-black text-[#8a6020] dark:text-[#e0a070] hover:text-[#d89745] cursor-pointer"
           title="Copy Card ID"
         >
-          ID: #{task.displayId || task.id}
+          {displayId}
         </button>
+        <p className={`text-[11px] font-extrabold leading-snug truncate ${subDone ? 'line-through text-gray-400 dark:text-[#b8ab9f] font-normal' : 'text-[#3e3129] dark:text-[#f3eadf]'}`}>
+          {task.title}
+        </p>
       </div>
 
       <div className="flex items-center justify-between select-none font-mono text-[7.5px] font-bold">

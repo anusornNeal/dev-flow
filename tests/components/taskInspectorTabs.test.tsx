@@ -143,20 +143,21 @@ test('Subtasks has dedicated content while Work stays focused on implementation 
   assert.match(subtasksHtml, /Subtasks Breakdown \(1\/1\)/);
   assert.match(subtasksHtml, /Dedicated subtask fixture/);
   assert.match(subtasksHtml, /100% complete/);
-  assert.match(subtasksHtml, /ID: #DVF-CHILD/);
+  assert.match(subtasksHtml, /DVF-CHILD/);
 
   const workHtml = renderDrawer('work', [child]);
   assert.doesNotMatch(workHtml, /Subtasks Breakdown/);
   assert.doesNotMatch(workHtml, /Dedicated subtask fixture/);
 });
 
-test('Subtasks tab owns subtask progress, list, show-more, and create affordance', () => {
+test('Subtasks tab owns subtask progress, complete list, and create affordance', () => {
   const html = renderDrawer('subtasks');
   assert.match(html, /Subtasks Breakdown \(1\/5\)/);
   assert.match(html, /Child task 1/);
   assert.match(html, /Child task 4/);
-  assert.doesNotMatch(html, /Child task 5/);
-  assert.match(html, /show 1 more/);
+  assert.match(html, /Child task 5/);
+  assert.doesNotMatch(html, /show \\d+ more/i);
+  assert.doesNotMatch(html, /show less/i);
   assert.match(html, /Create Subtask Spec/);
   assert.doesNotMatch(html, /1 of 2 complete/);
 });

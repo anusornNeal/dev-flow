@@ -26,13 +26,14 @@ const TABS: Array<{ id: TaskInspectorTab; label: string }> = [
   { id: 'activity', label: 'Activity' },
 ];
 
-export function resolveTaskInspectorTabKey(activeTab: TaskInspectorTab, key: string): TaskInspectorTab | null {
-  const currentIndex = TABS.findIndex((tab) => tab.id === activeTab);
+export function resolveTaskInspectorTabKey(activeTab: TaskInspectorTab, key: string, showSubtasks = true): TaskInspectorTab | null {
+  const visibleTabs = showSubtasks ? TABS : TABS.filter((tab) => tab.id !== 'subtasks');
+  const currentIndex = visibleTabs.findIndex((tab) => tab.id === activeTab);
   if (currentIndex < 0) return null;
-  if (key === 'Home') return TABS[0].id;
-  if (key === 'End') return TABS[TABS.length - 1].id;
-  if (key === 'ArrowRight') return TABS[(currentIndex + 1) % TABS.length].id;
-  if (key === 'ArrowLeft') return TABS[(currentIndex - 1 + TABS.length) % TABS.length].id;
+  if (key === 'Home') return visibleTabs[0].id;
+  if (key === 'End') return visibleTabs[visibleTabs.length - 1].id;
+  if (key === 'ArrowRight') return visibleTabs[(currentIndex + 1) % visibleTabs.length].id;
+  if (key === 'ArrowLeft') return visibleTabs[(currentIndex - 1 + visibleTabs.length) % visibleTabs.length].id;
   return null;
 }
 
@@ -72,6 +73,7 @@ interface TaskInspectorShellProps {
   onSave?: () => void;
   onDiscard?: () => void;
   children: React.ReactNode;
+  showSubtasks?: boolean;
 }
 
 export default function TaskInspectorShell({
@@ -87,11 +89,15 @@ export default function TaskInspectorShell({
   onSave,
   onDiscard,
   children,
+  showSubtasks = true,
 }: TaskInspectorShellProps) {
+
   const [widthVw, setWidthVw] = useState(TASK_INSPECTOR_DEFAULT_WIDTH_VW);
   const [fullScreen, setFullScreen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const tabRefs = useRef<Partial<Record<TaskInspectorTab, HTMLButtonElement | null>>>({});
+  const visibleTabs = showSubtasks ? TABS : TABS.filter((tab) => tab.id !== 'subtasks');
+
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -165,7 +171,7 @@ export default function TaskInspectorShell({
         </header>
 
         <nav role="tablist" aria-label="Task inspector sections" className="sticky top-0 z-20 flex shrink-0 gap-1 border-b border-[#e5d4bb] bg-[#fcfaf5]/96 px-5 py-2 backdrop-blur dark:border-[#584a3b] dark:bg-[#1e1914]/96">
-          {TABS.map((tab) => (
+          {visibleTabs.map((tab) => (
             <button
               key={tab.id}
               ref={(node) => { tabRefs.current[tab.id] = node; }}
@@ -175,7 +181,7 @@ export default function TaskInspectorShell({
               tabIndex={activeTab === tab.id ? 0 : -1}
               onClick={() => onTabChange(tab.id)}
               onKeyDown={(event) => {
-                const nextTab = resolveTaskInspectorTabKey(tab.id, event.key);
+                const nextTab = resolveTaskInspectorTabKey(tab.id, event.key, showSubtasks);
                 if (!nextTab) return;
                 event.preventDefault();
                 onTabChange(nextTab);

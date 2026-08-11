@@ -355,6 +355,7 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
                     >
                       {subDone && <span className="text-[8px] leading-none mb-0.5">✓</span>}
                     </button>
+                    <span className="shrink-0 rounded bg-[#f3eadf] dark:bg-[#3a2f26] px-1 py-0.5 font-mono text-[8.5px] font-black text-[#8a6020] dark:text-[#e0a070]">{sub.displayId || sub.id}</span>
                     <span className={`truncate flex-1 hover:underline text-[10px] font-sans ${subDone ? 'line-through' : ''}`}>{sub.title}</span>
                   </div>
                   

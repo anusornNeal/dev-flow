@@ -4,7 +4,6 @@ import { useEffect, useState } from 'react';
 export function useDrawerDisclosure(taskId: string) {
   const [showAllFiles, setShowAllFiles] = useState(false);
   const [showAllChecklist, setShowAllChecklist] = useState(false);
-  const [showAllSubtasks, setShowAllSubtasks] = useState(false);
   const [openSections, setOpenSections] = useState<Set<string>>(new Set());
 
   const toggleSection = (key: string) => {
@@ -29,7 +28,6 @@ export function useDrawerDisclosure(taskId: string) {
   useEffect(() => {
     setShowAllFiles(false);
     setShowAllChecklist(false);
-    setShowAllSubtasks(false);
     setOpenSections(new Set());
   }, [taskId]);
 
@@ -38,8 +36,6 @@ export function useDrawerDisclosure(taskId: string) {
     setShowAllFiles,
     showAllChecklist,
     setShowAllChecklist,
-    showAllSubtasks,
-    setShowAllSubtasks,
     openSections,
     handleAccordionClick,
   };

@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+
 import {
   getBlockerForQueueEntry,
   getSchedulerCapacitySnapshot,
@@ -537,6 +539,15 @@ test('weighted resource budget is released exactly once and reset cannot leak pe
   assert.equal(reset.active, 0);
   assert.equal(reset.weighted.activeCpuRatio, 0);
   assert.equal(reset.interference.pairs, 0);
+});
+
+test('DVF-0476 benchmark declares the 3+3 adaptive gate before execution', () => {
+  const source = fs.readFileSync(new URL('../../scripts/benchmark-session-isolation.ts', import.meta.url), 'utf8');
+  assert.match(source, /DVF_0476_AGENT_SPLIT\s*=\s*\{\s*devflow:\s*3,\s*sumora:\s*3\s*\}/);
+  assert.match(source, /DVF_0476_MIN_IMPROVEMENT_PCT\s*=\s*15/);
+  assert.match(source, /adaptiveVerificationGate/);
+  assert.match(source, /fixedBaseline/);
+  assert.match(source, /crossRepoFairness/);
 });
 
 test('resource accounting blocks saturated same-cost work and releases after decrement', () => {

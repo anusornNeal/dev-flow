@@ -25,6 +25,7 @@ ORIGINAL_REQUEST.md
 /data/uploads/
 /data/backups/
 /data/ui-preview-artifacts/
+/data/ui-preview-objects/
 /data/*.log
 
 *.bak

@@ -138,14 +138,21 @@ test('execution and review guidance resolves repository Git policy instead of as
   for (const skillName of [
     '03-reviewer-core.md',
     '07-authoring-execution.md',
-    'prompt.execution-rules.md',
-    'agent-task-prompt-template.md',
   ]) {
     const content = fs.readFileSync(new URL('../../skills/' + skillName, import.meta.url), 'utf8');
     assert.match(content, /repository Git policy|repo(?:sitory)?-aware Git policy/i, `${skillName} should resolve repository Git policy`);
     assert.match(content, /rebase-ff/i, `${skillName} should name the default rebase-ff strategy`);
     assert.match(content, /merge[^\n]*policy|policy[^\n]*merge/i, `${skillName} should preserve explicit merge-policy overrides`);
     assert.match(content, /commit[^\n]*(?:template|convention|policy)/i, `${skillName} should preserve repo-native commit naming`);
+  }
+
+  const compatibilityPrompt = fs.readFileSync(new URL('../../skills/agent-task-prompt-template.md', import.meta.url), 'utf8');
+  assert.match(compatibilityPrompt, /compatibility|non-authoritative/i);
+  assert.match(compatibilityPrompt, /config\/prompt-pipeline\.json/);
+  assert.doesNotMatch(compatibilityPrompt, /^## Workflow Rules$/m);
+  for (const workflowName of ['codex-workflow.md', 'antigravity-workflow.md', 'claude-workflow.md']) {
+    const workflow = fs.readFileSync(new URL('../../skills/' + workflowName, import.meta.url), 'utf8');
+    assert.doesNotMatch(workflow, /agent-task-prompt-template\.md/);
   }
 });
 

@@ -1,5 +1,5 @@
-# DevFlow Agent Task
+# DevFlow Implementation Worker
 
-- Task: `{{task.displayId}}` - {{task.title}}
+Task: `{{task.displayId}}` - {{task.title}}
 
-This is a compact launch prompt. Use DevFlow/local repo tools to load details when needed.
+Implement this DevFlow card completely. Use the connected DevFlow tool surface as the source of current task and workspace state.

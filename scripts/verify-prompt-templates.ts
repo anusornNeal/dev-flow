@@ -93,32 +93,47 @@ assert.equal(simpleResult, 'Task DVF-0080 uses Codex');
 
 console.log('[verify] Testing rendered prompt sections...');
 const renderResult = renderPromptTemplate('default', mockContext);
-assert.ok(renderResult.usedSkills.includes('prompt.header'));
-assert.ok(renderResult.usedSkills.includes('prompt.task-context'));
-assert.ok(renderResult.content.includes('Fetch checklist details from DevFlow before reporting completion.'));
-assert.ok(renderResult.content.includes('Load full task details from the local DevFlow HTTP API when needed.'));
-assert.ok(renderResult.content.includes('GET /api/tasks/DVF-0080/agent-context?mode=agent-context'));
-assert.ok(renderResult.content.includes('**Attached Images API:** GET /api/tasks/DVF-0080/images'));
-assert.ok(renderResult.content.includes('https://github.com/anusornNeal/dev-flow'));
+assert.deepEqual(renderResult.usedSkills, [
+  'prompt.header',
+  'prompt.task-context',
+  'prompt.execution-rules',
+  'prompt.completion-contract',
+]);
+assert.ok(renderResult.content.includes('# DevFlow Implementation Worker'));
+assert.ok(renderResult.content.includes('get_task'));
+assert.ok(renderResult.content.includes('mode="agent-context"'));
+assert.ok(renderResult.content.includes('both the frozen screenshot and the full structured spec'));
+assert.ok(renderResult.content.includes('finalize_task_workspace'));
+assert.ok(renderResult.content.includes('task-owned changes'));
+assert.ok(renderResult.content.includes('Never push unless the user explicitly requests it.'));
+assert.ok(renderResult.content.includes('preserve the managed workspace'));
+assert.equal(renderResult.content.includes('/api/tasks/'), false);
+for (const engineName of ['Codex', 'Antigravity', 'Claude']) {
+  assert.equal(renderResult.content.includes(engineName), false);
+}
 assert.ok(!renderResult.content.includes(fixtureLocalPath));
-assert.ok(renderResult.content.includes('Managed workspace: use the opaque workspace selected by DevFlow'));
-assert.ok(renderResult.content.includes('never reconstruct its physical path'));
-assert.ok(renderResult.content.includes('# DevFlow Agent Task'));
-assert.ok(renderResult.usedSkills.includes('prompt.project-rules'));
-assert.ok(renderResult.content.includes('## DevFlow Usage'));
-assert.ok(renderResult.content.includes('Prefer local repo access for code, git, and tests.'));
-assert.ok(renderResult.content.includes('## Execution Rules'));
-assert.ok(renderResult.content.includes('Fetch DevFlow context only when needed, but do not guess task requirements.'));
-assert.ok(renderResult.content.includes('## Completion'));
-assert.ok(renderResult.content.includes('Report changed behavior/files, verification run, and remaining risk. Then stop.'));
-assert.ok(renderResult.content.includes('Work only on this current task and stop when it is complete.'));
+assert.ok(!renderResult.content.includes('Render prompts from the real agent task context.'));
+assert.ok(!renderResult.content.includes('Prompt contains the real task fields.'));
 assert.ok(!renderResult.content.includes('DVF-0081: Use production task context'));
-assert.ok(!renderResult.content.includes('Prefer clean architecture and modular design.'));
-assert.ok(!renderResult.content.includes('Avoid god classes, god files, and monolithic implementation.'));
-assert.ok(!renderResult.content.includes('## Checklist'));
-assert.ok(!renderResult.content.includes('## Subtasks'));
-assert.ok(!renderResult.content.includes('## End'));
-assert.ok(!renderResult.content.includes('Current card only'));
+assert.ok(Buffer.byteLength(renderResult.content, 'utf8') <= 2600);
+
+const hugeContextRender = renderPromptTemplate('default', {
+  ...mockContext,
+  instruction: { description: 'HUGE-DESCRIPTION-'.repeat(5000), reasoning: 'HUGE-REASONING-'.repeat(5000) },
+  requirements: {
+    acceptanceCriteria: 'HUGE-ACCEPTANCE-'.repeat(5000),
+    verification: 'HUGE-VERIFICATION-'.repeat(5000),
+    checklist: Array.from({ length: 200 }, (_, index) => ({ text: 'Huge checklist ' + index + ' ' + 'x'.repeat(200), completed: false })),
+    targetFiles: Array.from({ length: 200 }, (_, index) => 'src/huge/' + index + '.ts'),
+  },
+  repoContext: 'HUGE-REPO-CONTEXT-'.repeat(5000),
+  orchestration: {
+    role: 'parent',
+    hasSubtasks: true,
+    subtasks: Array.from({ length: 100 }, (_, index) => ({ displayId: 'DVF-HUGE-' + index, title: 'HUGE-SUBTASK-'.repeat(100) })),
+  },
+});
+assert.equal(hugeContextRender.content, renderResult.content, 'copied worker prompt must not grow with full card content');
 
 const agentsInstructions = fs.readFileSync(path.join(process.cwd(), 'AGENTS.md'), 'utf8');
 assert.ok(agentsInstructions.includes('Prefer clean architecture.'));
@@ -133,7 +148,7 @@ const originalCwd = process.cwd();
 process.chdir(outsideCwd);
 try {
   const stableRootRender = renderPromptTemplate('default', mockContext);
-  assert.ok(stableRootRender.content.includes('Load full task details from the local DevFlow HTTP API when needed.'));
+  assert.ok(stableRootRender.content.includes('get_task'));
   assert.ok(stableRootRender.usedSkills.includes('prompt.header'));
 } finally {
   process.chdir(originalCwd);
@@ -147,8 +162,8 @@ const noOverrideRender = renderPromptTemplate('default', {
     localPath: path.join(outsideCwd, 'some-other-project'),
   },
 });
-assert.ok(noOverrideRender.content.includes('# DevFlow Agent Task'));
-assert.ok(noOverrideRender.content.includes('Load full task details from the local DevFlow HTTP API when needed.'));
+assert.ok(noOverrideRender.content.includes('# DevFlow Implementation Worker'));
+assert.ok(noOverrideRender.content.includes('get_task'));
 assert.ok(noOverrideRender.content.includes('## Completion'));
 assert.ok(!noOverrideRender.content.includes('This prompt is the sole source of truth for your DevFlow task context.'));
 
@@ -166,7 +181,7 @@ try {
     },
   });
   assert.ok(legacyOverrideRender.content.includes('# Legacy Override Header'));
-  assert.ok(!legacyOverrideRender.content.includes('# DevFlow Agent Task'));
+  assert.ok(!legacyOverrideRender.content.includes('# DevFlow Implementation Worker'));
 } finally {
   fs.rmSync(legacyOverrideWorkspace, { recursive: true, force: true });
 }
@@ -219,9 +234,7 @@ const sparseContext: PromptRenderContext = {
 
 const sparseRender = renderPromptTemplate('default', sparseContext);
 assert.ok(!sparseRender.content.includes('(none)'));
-assert.ok(!sparseRender.content.includes('(none)'));
-assert.ok(sparseRender.content.includes('- Task: `` - Sparse Prompt Task'));
-assert.ok(!sparseRender.content.includes('Attached Images API'));
+assert.ok(sparseRender.content.includes('Task: `` - Sparse Prompt Task'));
 assert.ok(!sparseRender.content.includes('Attached Images API'));
 
 console.log('[verify] Testing real task prompt shares omission logic...');
@@ -297,7 +310,8 @@ const imageState = {
 } as any;
 imageState._testTasks.forEach(t => saveTask(t));
 const imageTaskPrompt = renderTaskPrompt(imageState, 'task-image').renderResult.content;
-assert.ok(imageTaskPrompt.includes(`**Attached Images API:** GET /api/tasks/${imageDisplayId}/images`));
+assert.ok(!imageTaskPrompt.includes('Attached Images API'));
+assert.equal(imageTaskPrompt.includes('/api/tasks/'), false);
 
 console.log('[verify] Prompt template coverage passed!');
 
@@ -308,14 +322,14 @@ assert.equal(resolvePromptSectionId('prompt.header', 'Codex'), 'prompt.header');
 // Allowed ids (in the default pipeline)
 assert.equal(isAllowedPromptSkillId('prompt.header', 'codex'), true);
 assert.equal(isAllowedPromptSkillId('prompt.task-context', 'codex'), true);
-assert.equal(isAllowedPromptSkillId('prompt.repo-context', 'codex'), true);
-assert.equal(isAllowedPromptSkillId('prompt.project-rules', 'codex'), true);
+assert.equal(isAllowedPromptSkillId('prompt.repo-context', 'codex'), false);
+assert.equal(isAllowedPromptSkillId('prompt.project-rules', 'codex'), false);
 assert.equal(isAllowedPromptSkillId('prompt.checklist', 'codex'), false);
 assert.equal(isAllowedPromptSkillId('prompt.subtasks', 'codex'), false);
 assert.equal(isAllowedPromptSkillId('prompt.execution-rules', 'codex'), true);
 assert.equal(isAllowedPromptSkillId('prompt.completion-contract', 'codex'), true);
 assert.equal(isAllowedPromptSkillId('prompt.footer', 'codex'), false);
-assert.equal(isAllowedPromptSkillId('prompt.agent-specific.codex', 'codex'), true);
+assert.equal(isAllowedPromptSkillId('prompt.agent-specific.codex', 'codex'), false);
 
 // Disallowed ids
 assert.equal(isAllowedPromptSkillId('../etc/passwd', 'codex'), false);
@@ -331,7 +345,7 @@ assert.equal(isAllowedPromptSkillId('a'.repeat(129), 'codex'), false);
 
 // Compact list omits large content fields
 const sections = listPromptSectionsForWorkspace({ agent: 'codex' });
-assert.ok(sections.length >= 7, 'pipeline should have at least 7 sections');
+assert.equal(sections.length, 4, 'manual worker pipeline should expose only four canonical sections');
 for (const section of sections) {
   assert.equal((section as any).masterContent, undefined, `section ${section.id} should not include masterContent`);
   assert.equal((section as any).overrideContent, undefined, `section ${section.id} should not include overrideContent`);
@@ -344,7 +358,7 @@ for (const section of sections) {
 const defaultAgentSections = listPromptSectionsForWorkspace({ agent: 'default' });
 assert.ok(!defaultAgentSections.some((section) => section.id === 'prompt.agent-specific.default'));
 
-// Legacy override files can still be created/removed, but no longer affect effective prompt content.
+// Project-local overrides remain supported for canonical pipeline sections.
 const overrideWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-override-'));
 try {
   writePromptOverrideForWorkspace(overrideWorkspace, 'prompt.header', '# override\nbody', { agent: 'codex' });

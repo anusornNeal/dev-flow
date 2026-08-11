@@ -4,7 +4,7 @@
 
 This file defines how DevFlow should launch and manage Claude tasks.
 
-Use this file for Claude-specific behavior only. Do not duplicate the central task prompt template here.
+This file documents optional/legacy Claude CLI launch behavior only. It does not define the manual Copy Prompt; that prompt is engine-agnostic and comes from `config/prompt-pipeline.json`.
 
 ## When to Use
 
@@ -41,7 +41,7 @@ The process cwd should be the managed workspace root resolved internally by DevF
 The final task prompt should be built from:
 
 ```text
-skills/agent-task-prompt-template.md
+config/prompt-pipeline.json
 ```
 
 Only use CLI flags that have been verified on the installed Claude CLI.

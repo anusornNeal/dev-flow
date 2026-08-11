@@ -89,9 +89,7 @@ export function getPromptPipeline(pipelineId: string = 'default'): string[] {
   return [
     'prompt.header',
     'prompt.task-context',
-    'prompt.repo-context',
     'prompt.execution-rules',
-    'prompt.agent-specific.{agent}',
     'prompt.completion-contract'
   ];
 }
@@ -275,8 +273,7 @@ export function isAllowedPromptSkillId(skillId: unknown, agent: string, pipeline
   if (!PROMPT_SKILL_ID_PATTERN.test(skillId)) return false;
   if (skillId.includes('..')) return false;
   const resolved = getPromptPipeline(pipelineId).map((raw) => resolvePromptSectionId(raw, agent));
-  if (resolved.includes(skillId)) return true;
-  return skillId === `prompt.agent-specific.${(agent || 'default').toLowerCase()}`;
+  return resolved.includes(skillId);
 }
 
 export function listPromptSectionsForWorkspace(opts: { pipelineId?: string; agent?: string; localPath?: string }) {

@@ -16,10 +16,7 @@ import { validateEnum, validateString } from '../validation';
 import { buildLaunchMetadataBlock, resolveAgentLaunchPlan } from './agentLaunchConfig';
 import { getModelConfig } from '../../lib/agentsConfig';
 import { resolveAgentExecutionMode } from './agentRunService';
-import { getProjectRulesContext } from './projectRulesService';
 import { renderPromptTemplate } from './promptTemplateService';
-import { getTaskFocusedAtlasContext } from './projectAtlasService';
-import { buildTaskBugSummaryJson, renderTaskBugSummaryMarkdown } from '../../lib/bugThreadExport';
 import { createApiError } from './api';
 import { listTaskUiEvidenceForAgent } from './taskUiEvidenceService';
 
@@ -411,6 +408,47 @@ export function resolveProjectIdFromRepo(state: AppState, item: any, req: any): 
   throw new Error("Target project could not be resolved. Please provide a valid 'projectId' or repository identifier.");
 }
 
+const UNRESOLVED_AGENT_BUG_STATUSES = new Set(['open', 'fixing', 'fixed', 'reopened']);
+
+function compactAgentContextText(value: unknown, maxLength = 2000) {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  return trimmed.length <= maxLength ? trimmed : `${trimmed.slice(0, maxLength)}…`;
+}
+
+function buildCompactAgentBugSummary(task: any) {
+  const bugs = Array.isArray(task.bugs) ? task.bugs : [];
+  if (bugs.length === 0) return undefined;
+  const unresolved = bugs
+    .filter((bug: any) => UNRESOLVED_AGENT_BUG_STATUSES.has(String(bug?.status || '')))
+    .sort((left: any, right: any) => {
+      const latestTime = (bug: any) => {
+        const versions = Array.isArray(bug?.versions) ? bug.versions : [];
+        const latestVersion = versions[versions.length - 1];
+        return Date.parse(latestVersion?.createdAt || bug?.updatedAt || bug?.createdAt || '') || 0;
+      };
+      return latestTime(right) - latestTime(left);
+    });
+  const latest = unresolved[0];
+  const versions = Array.isArray(latest?.versions) ? latest.versions : [];
+  const latestVersion = versions[versions.length - 1];
+  return {
+    unresolvedBugCount: unresolved.length,
+    latestUnresolvedBug: latest ? {
+      id: latest.id,
+      title: latest.title,
+      status: latest.status,
+      severity: latest.severity,
+      source: latest.source,
+      actual: compactAgentContextText(latest.actual),
+      expected: compactAgentContextText(latest.expected),
+      relatedAreas: Array.isArray(latest.relatedAreas) ? latest.relatedAreas.slice(0, 20) : undefined,
+      fixPrompt: compactAgentContextText(latestVersion?.prompt, 3000),
+    } : null,
+  };
+}
+
 export function getAgentTaskContext(state: AppState, targetId: string, includeLogs = false) {
   const task = findTaskByIdentifier(state, targetId);
   if (!task) return null;
@@ -473,13 +511,7 @@ export function getAgentTaskContext(state: AppState, targetId: string, includeLo
       checklist: task.checklist,
       targetFiles: task.targetFiles,
     }),
-    bugSummary: Array.isArray(task.bugs) && task.bugs.length > 0
-      ? cleanObject({
-          json: buildTaskBugSummaryJson(task),
-          markdown: renderTaskBugSummaryMarkdown(task),
-        })
-      : undefined,
-    projectRules: getProjectRulesContext(),
+    bugSummary: buildCompactAgentBugSummary(task),
     repoContext: task.repoContext || undefined,
     orchestration: cleanObject({
       role,
@@ -491,16 +523,6 @@ export function getAgentTaskContext(state: AppState, targetId: string, includeLo
         status: subtask.status,
         priority: subtask.priority,
         branch: subtask.branch,
-        spawnAgent: subtask.agent || 'Antigravity',
-        spawnModel: subtask.model || 'Gemini 3.5 Flash',
-        spawnEffort: subtask.effort || 'medium',
-        instruction: cleanObject({
-          description: subtask.description,
-          reasoning: subtask.reasoning,
-        }),
-        acceptanceCriteria: subtask.acceptanceCriteria,
-        verification: subtask.verification,
-        checklist: subtask.checklist,
         targetFiles: subtask.targetFiles,
       })) : undefined,
       parentBoundary: parentRaw ? cleanObject({
@@ -509,9 +531,7 @@ export function getAgentTaskContext(state: AppState, targetId: string, includeLo
         title: parentRaw.title,
         status: parentRaw.status,
         branch: parentRaw.branch,
-        instruction: cleanObject({
-          description: parentRaw.description,
-        }),
+        targetFiles: parentRaw.targetFiles,
       }) : undefined,
     }),
   };
@@ -541,18 +561,6 @@ export function getAgentTaskContext(state: AppState, targetId: string, includeLo
     agentContext.logs = task.logs;
   }
 
-  if (project) {
-    const projectAtlas = getTaskFocusedAtlasContext(project, task, {
-      explicit: /\b(project atlas|attach atlas)\b/i.test([
-        task.title,
-        task.description,
-        task.repoContext,
-        task.reasoning,
-      ].filter(Boolean).join(' ')),
-    });
-    if (projectAtlas) agentContext.projectAtlas = projectAtlas;
-  }
-
   if (!agentContext.repoContext) delete agentContext.repoContext;
   if (Object.keys(agentContext.requirements).length === 0) delete agentContext.requirements;
   if (Object.keys(agentContext.assignment).length === 0) delete agentContext.assignment;
@@ -568,8 +576,6 @@ export function buildTaskPromptRenderContext(taskContext: NonNullable<ReturnType
     workspace: taskContext.workspace || {},
     instruction: taskContext.instruction || {},
     requirements: taskContext.requirements || {},
-    projectRules: taskContext.projectRules || {},
-    projectAtlas: taskContext.projectAtlas || {},
     repoContext: taskContext.repoContext || '',
     orchestration: taskContext.orchestration || {},
     agent: taskContext.assignment?.agent || '',

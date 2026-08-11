@@ -4,7 +4,7 @@
 
 This file defines how DevFlow should launch and manage Antigravity tasks.
 
-Use this file for Antigravity-specific behavior only. Do not duplicate the central task prompt template here.
+This file documents optional/legacy Antigravity CLI launch behavior only. It does not define the manual Copy Prompt; that prompt is engine-agnostic and comes from `config/prompt-pipeline.json`.
 
 ## When to Use
 
@@ -40,7 +40,7 @@ agy --model <MODEL> --dangerously-skip-permissions -i
 The process cwd must be the managed workspace root resolved internally by DevFlow. The final task prompt should be built from:
 
 ```text
-skills/agent-task-prompt-template.md
+config/prompt-pipeline.json
 ```
 
 Then the final prompt should be passed into the interactive Antigravity session according to the supported local runner behavior.

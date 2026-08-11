@@ -1,44 +1,26 @@
-# DevFlow Lean Skills
+# DevFlow Skills
 
-ชุดนี้เป็นเวอร์ชัน lean ของ DevFlow authoring skills โดยแยก core rules, schema, reviewer และ examples ออกจากกันเพื่อลด context noise
+DevFlow keeps authoring/execution policy and the manual worker prompt separate so each surface can stay small and authoritative.
 
-## Files
+## Authoring and execution skills
 
-1. `00-skill-router.md`
-   - ใช้เป็นตัวบอกว่า task แบบไหนควรโหลด skill ไหน
-   - ควรโหลดเสมอก่อนเลือก skill รายละเอียด
+Start with `00-skill-router.md`, then load only the specialist it selects:
 
-2. `01-authoring-core.md`
-   - กฎหลักสำหรับเขียน DevFlow card
-   - โหลดทุกครั้งที่สร้าง/อัปเดตการ์ดจาก Jira/repo
+- `01-authoring-core.md` — implementation-ready card authoring.
+- `02-schema-reference.md` — semantic task-field placement when live schemas are insufficient.
+- `03-reviewer-core.md` — review and existing-task defect handling.
+- `04-examples.md` — examples only.
+- `05-authoring-evidence.md` — Jira/Figma/Atlas/source evidence.
+- `06-authoring-decomposition.md` — parent/child boundaries and parallel slices.
+- `07-authoring-execution.md` — repository implementation, verification, task-owned commit, and workspace lifecycle.
+- `08-board-loop-execution.md` — continuous board-loop orchestration.
 
-3. `02-schema-reference.md`
-   - field, enum, validation, placement rule
-   - โหลดเฉพาะตอนจะ call create/update task หรือเช็ก JSON
+Master skills are authoritative policy. Compatibility files and examples do not override them.
 
-4. `03-reviewer-core.md`
-   - กฎรีวิว card ที่อยู่ ready-for-review
-   - โหลดเฉพาะตอนตรวจงาน/เลื่อน done/in-progress
+## Manual worker prompt
 
-5. `04-examples.md`
-   - ตัวอย่าง JSON และ pattern
-   - โหลดเฉพาะตอนต้องการดู sample หรือ agent เขียนผิด format
+The card Copy Prompt action produces one engine-agnostic implementation bootstrap. Its only production source is `config/prompt-pipeline.json` plus the `skills/prompt.*.md` sections listed by that pipeline.
 
-## Recommended loading
+The bootstrap intentionally stays small: it identifies the card, tells the worker to load compact `get_task(mode="agent-context")` context through the live DevFlow tool surface, establishes the minimum execution/completion contract, and leaves large task/design/repository data to on-demand reads.
 
-### Create or update implementation card
-Load:
-- `00-skill-router.md`
-- `01-authoring-core.md`
-- `02-schema-reference.md`
-
-Load `04-examples.md` only when output format is unclear.
-
-### Review ready-for-review card
-Load:
-- `00-skill-router.md`
-- `03-reviewer-core.md`
-- `02-schema-reference.md`
-
-### Token saving
-Do not load examples by default. Most runs only need core + schema.
+`agent-task-prompt-template.md` is a non-authoritative compatibility pointer. Codex, Antigravity, and Claude workflow documents may describe optional/legacy CLI launch behavior, but they do not define different task prompts.

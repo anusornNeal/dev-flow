@@ -635,7 +635,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
       type: 'object',
       properties: {
         ...projectIdentifierProperties,
-        agent: { type: 'string', description: 'Agent id used to resolve prompt.agent-specific.{agent} entries (default: "default").' },
+        agent: { type: 'string', description: 'Compatibility selector retained for older prompt-override callers. The default manual worker pipeline is engine-agnostic.' },
         pipeline: { type: 'string', description: 'Pipeline id from config/prompt-pipeline.json (default: "default").' },
       },
     },
@@ -682,7 +682,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
       properties: {
         ...projectIdentifierProperties,
         sectionId: { type: 'string', description: 'Prompt section id, e.g. "prompt.header" or "prompt.task-context".' },
-        agent: { type: 'string', description: 'Agent id used to resolve prompt.agent-specific.{agent} entries.' },
+        agent: { type: 'string', description: 'Compatibility selector retained for older prompt-override callers. Canonical manual worker sections are engine-agnostic.' },
         pipeline: { type: 'string', description: 'Pipeline id (default: "default").' },
       },
       required: ['sectionId'],

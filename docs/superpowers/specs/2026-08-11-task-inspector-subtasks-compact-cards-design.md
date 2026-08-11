@@ -66,7 +66,9 @@ Each card should read in this order:
 3. **Bottom metadata row**
    - Keep only compact secondary metadata that helps distinguish work quickly.
    - Priority remains visible.
-   - Keep the existing **model** pill when a model is present, plus the existing **priority** pill. Do **not** add category to the card in this scope. Both should use small, low-emphasis styling so they do not compete with ID, title, and status.
+   - Remove the model / agent pill (for example `GPT-5.6 Sol`) from this compact surface.
+   - When the child task already has design, show a small `DESIGN` pill next to priority. Tasks without design must not show the pill.
+   - Do **not** add category to the card in this scope.
    - Metadata text should remain legible at roughly 9–10px minimum rather than becoming micro-text.
 
 The card should not add new task data or require backend changes.
@@ -138,7 +140,8 @@ This is the main implementation target. The compact layout should be achieved pr
 - reduced vertical whitespace;
 - two-line child titles;
 - top-row ID + status hierarchy;
-- compact model + priority metadata;
+- compact priority metadata with no model / agent pill;
+- conditional `DESIGN` pill for child tasks that have design;
 - compact completion summary;
 - responsive 2-column → 1-column behavior;
 - dark-mode parity;
@@ -167,6 +170,8 @@ Cover at minimum:
 - all child tasks remain rendered when there are more than five;
 - each child display ID remains visible;
 - status labels remain present for representative states;
+- model / agent pills are absent from compact child cards;
+- `DESIGN` appears only for child tasks that have design;
 - no `show more` / `show less` controls are introduced;
 - the subtask grid still exposes the responsive 1-column / 2-column contract;
 - the old fixed `h-[90px]` card constraint is no longer present;
@@ -197,7 +202,7 @@ The design is successful when:
 
 1. Subtasks remain displayed as **two compact columns** at standard inspector width and one column on narrow width.
 2. Typical child cards are visibly shorter and contain substantially less empty vertical space than the current fixed 90px cards.
-3. Every card exposes **ID at top-left**, **status at top-right**, **title up to two lines**, and compact model + priority metadata below when available.
+3. Every card exposes **ID at top-left**, **status at top-right**, **title up to two lines**, compact priority below, no model / agent pill, and a small `DESIGN` pill only when that child task has design.
 4. `ACTIVE`, `DONE`, and not-started cards are distinguishable without heavy full-card coloring.
 5. The progress summary remains visible but consumes less vertical space.
 6. Clicking the card still selects the child task; clicking the ID still copies the ID without selecting the card.

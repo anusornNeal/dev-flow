@@ -10,6 +10,7 @@ const trayScript = fs.readFileSync(new URL('./tray-server.ps1', import.meta.url)
 const windowsLauncher = fs.readFileSync(new URL('../Start DevFlow.bat', import.meta.url), 'utf8');
 assert.doesNotMatch(trayScript, /taskkill|Stop-Process|netstat\s+-ano/i);
 assert.doesNotMatch(trayScript, /Start-Process[^\n]+ngrok(?:\.exe)?/i);
+assert.doesNotMatch(trayScript, /\$timer\.add_Tick/);
 assert.match(trayScript, /\/api\/restart/i);
 assert.match(trayScript, /runtime-owner[\\/]owner\.json/i);
 assert.match(trayScript, /System\.Threading\.Mutex/i);
@@ -70,7 +71,13 @@ if (process.env.npm_execpath) {
   assert.equal(plan.processes[0].command, process.execPath);
   assert.equal(plan.processes[0].args[0], process.env.npm_execpath);
 }
-assert.deepEqual(plan.processes[1].args, ['http', '--domain=team-devflow.ngrok-free.dev', '3456']);
+if (process.platform === 'win32') {
+  assert.equal(plan.processes[1].command, 'cmd.exe');
+  assert.deepEqual(plan.processes[1].args, ['/d', '/s', '/c', 'ngrok', 'http', '--domain=team-devflow.ngrok-free.dev', '3456']);
+} else {
+  assert.equal(plan.processes[1].command, 'ngrok');
+  assert.deepEqual(plan.processes[1].args, ['http', '--domain=team-devflow.ngrok-free.dev', '3456']);
+}
 assert.equal(plan.appUrl, 'http://localhost:3456');
 assert.equal(plan.openBrowser, true);
 assert.equal(plan.openBrowserDelayMs, 250);

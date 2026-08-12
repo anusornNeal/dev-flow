@@ -157,14 +157,6 @@ $script:notifyIcon.Text = "DevFlow Server"
 $script:notifyIcon.ContextMenu = $menu
 $script:notifyIcon.Visible = $true
 
-$timer = New-Object System.Windows.Forms.Timer
-$timer.Interval = 4000
-$timer.add_Tick({
-    $timer.Stop()
-    Start-Process (Get-AppUrl)
-})
-$timer.Start()
-
 try {
     [System.Windows.Forms.Application]::Run()
 } finally {

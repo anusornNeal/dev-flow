@@ -76,6 +76,14 @@ function executableFor(command: string) {
   return process.platform === 'win32' ? `${command}.cmd` : command;
 }
 
+function buildNgrokInvocation(args: string[]) {
+  if (process.platform === 'win32') {
+    return { command: 'cmd.exe', args: ['/d', '/s', '/c', 'ngrok', ...args] };
+  }
+
+  return { command: 'ngrok', args };
+}
+
 export function buildNpmInvocation(args: string[], env: NodeJS.ProcessEnv = process.env) {
   const npmExecPath = String(env.npm_execpath || '').trim();
   if (npmExecPath) {
@@ -134,10 +142,10 @@ export function buildStartAllPlan(
       DISABLE_HMR: process.env.DISABLE_HMR === 'false' ? 'false' : 'true',
     },
   };
+  const ngrokInvocation = buildNgrokInvocation(buildNgrokArgs({ port: options.port, domain: options.ngrokDomain }));
   const ngrok: ManagedProcess = {
     label: 'ngrok',
-    command: executableFor('ngrok'),
-    args: buildNgrokArgs({ port: options.port, domain: options.ngrokDomain }),
+    ...ngrokInvocation,
   };
   const processes: ManagedProcess[] = mode === 'all' ? [server, ngrok] : [server];
 

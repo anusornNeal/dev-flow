@@ -72,7 +72,7 @@ function isActiveClaim(claim: unknown, nowMs = Date.now()): claim is TaskClaim {
   return Boolean(candidate.sessionIdHash && candidate.workspaceId && candidate.expiresAt && Date.parse(candidate.expiresAt) > nowMs);
 }
 
-function normalizeScopePath(value: unknown) {
+function normalizeScopePath(value: unknown): string {
   return String(value || '')
     .trim()
     .replace(/\\/g, '/')
@@ -124,7 +124,7 @@ function findScopeConflicts(task: any, projectTasks: any[], nowMs: number) {
   return findScopeConflictsForPaths(task.id, normalizedTargetFiles(task), projectTasks, nowMs);
 }
 
-function normalizeRequestedScopePaths(value: unknown) {
+function normalizeRequestedScopePaths(value: unknown): string[] {
   if (!Array.isArray(value) || value.length === 0) {
     throw createApiError(400, 'TASK_SCOPE_PATHS_REQUIRED', 'paths must contain at least one repository-relative path.');
   }

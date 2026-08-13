@@ -132,7 +132,7 @@ export interface TaskClaim {
   ownerLabel: string;
   claimedAt: string;
   expiresAt: string;
-  reservedPaths?: string[];
+  reservedPaths?: string[]; // Canonical runtime scope reserved beyond initial targetFiles.
 }
 
 export interface Task {

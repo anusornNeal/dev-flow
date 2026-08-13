@@ -24,6 +24,7 @@ test('expand_task_scope is a bounded owner-guarded first-class write intent', ()
   assert.equal(schema?.properties?.paths?.type, 'array');
   assert.equal(schema?.properties?.paths?.minItems, 1);
   assert.equal(schema?.properties?.paths?.maxItems, 100);
+  assert.match(String(tool.description || ''), /targetFiles/);
   assert.ok(schema?.required?.includes('taskId'));
   assert.ok(schema?.required?.includes('sessionId'));
   assert.ok(schema?.required?.includes('paths'));

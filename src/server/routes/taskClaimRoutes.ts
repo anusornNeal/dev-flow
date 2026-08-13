@@ -27,7 +27,8 @@ export function registerTaskClaimRoutes(app: express.Express, _deps: ApiRouteDep
 
   app.post('/api/tasks/:id/claim/scope', (req, res) => {
     try {
-      const result = expandTaskClaimScope(req.params.id, req.body || {});
+      const body = req.body || {};
+      const result = expandTaskClaimScope(req.params.id, body);
       return res.json(toMutationResponse(req, result.task, result));
     } catch (error) {
       return sendApiError(res, error);

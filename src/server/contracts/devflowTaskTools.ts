@@ -154,7 +154,7 @@ export const taskToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'expand_task_scope',
-    description: 'Explicitly extend the active claimed file scope for one task after runtime dependency discovery. The caller must own the active claim; new paths are normalized, persisted on the claim, and rejected on overlap with other active claimed scopes.',
+    description: 'Explicitly extend the active claimed file scope for one task after runtime dependency discovery while keeping targetFiles as the initial declared scope. The caller must own the active claim; new paths are normalized, persisted on the claim, and rejected on overlap with other active claimed scopes.',
     inputSchema: {
       type: 'object',
       properties: {

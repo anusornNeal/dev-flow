@@ -373,10 +373,10 @@ test('runtime scope expansion reserves discovered paths without mutating targetF
   seedTask('task-runtime-expander', ['src/RuntimeOther.ts']);
   const owner = claims.claimTaskForSession('task-runtime-owner', { sessionId: 'runtime-owner', ownerLabel: 'Chat Runtime' });
   assert.throws(
-    () => (claims as any).expandTaskClaimScope('task-runtime-owner', { sessionId: 'wrong-runtime-owner', paths: ['src/RuntimeShared.ts'] }),
+    () => claims.expandTaskClaimScope('task-runtime-owner', { sessionId: 'wrong-runtime-owner', paths: ['src/RuntimeShared.ts'] }),
     (error: any) => error?.payload?.code === 'TASK_CLAIM_OWNER_MISMATCH',
   );
-  const expanded = (claims as any).expandTaskClaimScope('task-runtime-owner', { sessionId: 'runtime-owner', paths: ['SRC/RuntimeShared.ts', 'src/RuntimeShared.ts'] });
+  const expanded = claims.expandTaskClaimScope('task-runtime-owner', { sessionId: 'runtime-owner', paths: ['SRC/RuntimeShared.ts', 'src/RuntimeShared.ts'] });
   assert.deepEqual(getTask('task-runtime-owner')?.targetFiles, ['src/RuntimeOwner.ts']);
   assert.deepEqual(expanded.addedPaths, ['src/runtimeshared.ts']);
   assert.deepEqual(expanded.claim.reservedPaths, ['src/runtimeshared.ts']);
@@ -388,7 +388,7 @@ test('runtime scope expansion reserves discovered paths without mutating targetF
   );
   claims.claimTaskForSession('task-runtime-expander', { sessionId: 'runtime-expander', ownerLabel: 'Chat Expander' });
   assert.throws(
-    () => (claims as any).expandTaskClaimScope('task-runtime-expander', { sessionId: 'runtime-expander', paths: ['src/RuntimeShared.ts'] }),
+    () => claims.expandTaskClaimScope('task-runtime-expander', { sessionId: 'runtime-expander', paths: ['src/RuntimeShared.ts'] }),
     (error: any) => error?.payload?.code === 'TASK_SCOPE_CONFLICT' && error?.payload?.details?.conflicts?.[0]?.taskId === 'task-runtime-owner',
   );
   claims.releaseTaskClaim('task-runtime-owner', { sessionId: 'runtime-owner', nextStatus: 'todo' });
@@ -403,7 +403,7 @@ test('claim-next defers a candidate that overlaps an active runtime reservation'
   seedCandidateTask(projectId, 'runtime-anchor', ['src/Anchor.ts'], { priority: 'high' });
   seedCandidateTask(projectId, 'runtime-candidate', ['src/RuntimeShared.ts'], { priority: 'high' });
   claims.claimTaskForSession('runtime-anchor', { sessionId: 'runtime-next-owner', ownerLabel: 'Chat Runtime Next' });
-  (claims as any).expandTaskClaimScope('runtime-anchor', { sessionId: 'runtime-next-owner', paths: ['src/RuntimeShared.ts'] });
+  claims.expandTaskClaimScope('runtime-anchor', { sessionId: 'runtime-next-owner', paths: ['src/RuntimeShared.ts'] });
   const result = claims.claimNextTaskForSession(projectId, { sessionId: 'runtime-next-worker', ownerLabel: 'Chat Runtime Worker', limit: 10 });
   assert.equal(result.status, 'no-eligible');
   assert.equal(result.code, 'NO_ELIGIBLE_TASK');

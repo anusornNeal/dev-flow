@@ -26,7 +26,7 @@ test('task-domain contracts are owned by a focused module and composed into the 
   assert.deepEqual(aggregateNames.slice(first, first + TASK_TOOL_NAMES.length), TASK_TOOL_NAMES);
 });
 
-test('task scope expansion is a first-class owner-guarded mutation contract', () => {
+test('task scope expansion keeps a first-class owner-guarded mutation contract', () => {
   const tool = taskToolDefinitions.find((entry) => entry.name === 'expand_task_scope');
   assert.ok(tool);
   assert.equal((tool?.inputSchema as any)?.required?.includes('taskId'), true);

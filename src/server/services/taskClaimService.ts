@@ -32,6 +32,11 @@ export type ClaimNextTaskInput = Omit<ClaimTaskInput, 'allowScopeConflict'> & {
   limit?: number;
 };
 
+export type ExpandTaskClaimScopeInput = {
+  sessionId: string;
+  paths: string[];
+};
+
 export type ReleaseTaskClaimInput = {
   sessionId: string;
   nextStatus?: TaskStatus;
@@ -67,28 +72,83 @@ function isActiveClaim(claim: unknown, nowMs = Date.now()): claim is TaskClaim {
   return Boolean(candidate.sessionIdHash && candidate.workspaceId && candidate.expiresAt && Date.parse(candidate.expiresAt) > nowMs);
 }
 
-function normalizedTargetFiles(task: any): Set<string> {
-  return new Set<string>((Array.isArray(task?.targetFiles) ? task.targetFiles : [])
-    .map((file: unknown) => String(file || '').trim().replace(/\\/g, '/').toLowerCase())
+function normalizeScopePath(value: unknown) {
+  return String(value || '')
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/^\.\/+/, '')
+    .replace(/\/+/g, '/')
+    .toLowerCase();
+}
+
+function normalizedScopePaths(values: unknown): Set<string> {
+  return new Set<string>((Array.isArray(values) ? values : [])
+    .map(normalizeScopePath)
     .filter(Boolean));
 }
 
-function findScopeConflicts(task: any, projectTasks: any[], nowMs: number) {
-  const targetFiles = normalizedTargetFiles(task);
-  if (targetFiles.size === 0) return [];
+function normalizedTargetFiles(task: any): Set<string> {
+  return normalizedScopePaths(task?.targetFiles);
+}
+
+function normalizedReservedPaths(task: any): Set<string> {
+  return normalizedScopePaths(task?.claim?.reservedPaths);
+}
+
+function effectiveClaimedScope(task: any, nowMs = Date.now()): Set<string> {
+  const scope = normalizedTargetFiles(task);
+  if (isActiveClaim(task?.claim, nowMs)) {
+    for (const file of normalizedReservedPaths(task)) scope.add(file);
+  }
+  return scope;
+}
+
+function findScopeConflictsForPaths(taskId: string, requestedPaths: Set<string>, projectTasks: any[], nowMs: number) {
+  if (requestedPaths.size === 0) return [];
   const conflicts: Array<{ taskId: string; displayId?: string; ownerLabel: string; files: string[] }> = [];
   for (const candidate of projectTasks) {
-    if (candidate.id === task.id || candidate.status !== 'in-progress' || !isActiveClaim(candidate.claim, nowMs)) continue;
-    const overlap = [...normalizedTargetFiles(candidate)].filter((file) => targetFiles.has(file));
+    if (candidate.id === taskId || candidate.status !== 'in-progress' || !isActiveClaim(candidate.claim, nowMs)) continue;
+    const overlap = [...effectiveClaimedScope(candidate, nowMs)].filter((file) => requestedPaths.has(file));
     if (overlap.length === 0) continue;
     conflicts.push({
       taskId: candidate.id,
       displayId: candidate.displayId,
       ownerLabel: candidate.claim.ownerLabel,
-      files: overlap,
+      files: overlap.sort(),
     });
   }
   return conflicts;
+}
+
+function findScopeConflicts(task: any, projectTasks: any[], nowMs: number) {
+  return findScopeConflictsForPaths(task.id, normalizedTargetFiles(task), projectTasks, nowMs);
+}
+
+function normalizeRequestedScopePaths(value: unknown) {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw createApiError(400, 'TASK_SCOPE_PATHS_REQUIRED', 'paths must contain at least one repository-relative path.');
+  }
+  if (value.length > 100) {
+    throw createApiError(400, 'TASK_SCOPE_PATHS_LIMIT', 'paths may contain at most 100 entries.');
+  }
+  const normalized = new Set<string>();
+  for (const raw of value) {
+    const supplied = String(raw || '').trim();
+    const path = normalizeScopePath(supplied);
+    const unsafe = !path
+      || path.length > 500
+      || path === '.'
+      || path.startsWith('/')
+      || /^[a-z]:\//.test(path)
+      || path.split('/').some((segment) => segment === '..');
+    if (unsafe) {
+      throw createApiError(400, 'TASK_SCOPE_PATH_INVALID', `Scope path '${supplied || '<empty>'}' must be a bounded repository-relative path.`, {
+        details: { path: supplied },
+      });
+    }
+    normalized.add(path);
+  }
+  return [...normalized].sort();
 }
 
 const NEXT_TASK_DEFAULT_LIMIT = 50;
@@ -318,6 +378,76 @@ export function claimNextTaskForSession(projectId: string, input: ClaimNextTaskI
       scanned: bounded.length,
       deferred,
       limit,
+    };
+  });
+}
+
+export function expandTaskClaimScope(taskId: string, input: ExpandTaskClaimScopeInput) {
+  const cleanSessionId = String(input?.sessionId || '').trim();
+  if (!cleanSessionId) throw createApiError(400, 'SESSION_ID_REQUIRED', 'sessionId is required to expand task scope.');
+  const requestedPaths = normalizeRequestedScopePaths(input?.paths);
+  const initial = getTaskByIdentifier(taskId, 'full');
+  if (!initial) throw createApiError(404, 'TASK_NOT_FOUND', `Task '${taskId}' was not found.`, { affectedId: taskId });
+  if (!initial.projectId) throw createApiError(400, 'TASK_PROJECT_REQUIRED', 'Task must belong to a project before its scope can be expanded.', { affectedId: initial.id });
+
+  return withSyncLock(`task-claim:${initial.projectId}`, () => {
+    const task = getTaskByIdentifier(taskId, 'full');
+    if (!task) throw createApiError(404, 'TASK_NOT_FOUND', `Task '${taskId}' was not found.`, { affectedId: taskId });
+    const nowMs = Date.now();
+    if (task.status !== 'in-progress' || !isActiveClaim(task.claim, nowMs)) {
+      throw createApiError(409, 'TASK_CLAIM_NOT_ACTIVE', `Task '${task.displayId || task.id}' must have an active claim before its scope can expand.`, { affectedId: task.id });
+    }
+    const hash = sessionIdHash(cleanSessionId);
+    if (task.claim.sessionIdHash !== hash) {
+      throw createApiError(403, 'TASK_CLAIM_OWNER_MISMATCH', `Task '${task.displayId || task.id}' is claimed by another session.`, { affectedId: task.id });
+    }
+
+    const currentScope = effectiveClaimedScope(task, nowMs);
+    const addedPaths = requestedPaths.filter((file) => !currentScope.has(file));
+    if (addedPaths.length > 0) {
+      const conflicts = findScopeConflictsForPaths(task.id, new Set(addedPaths), getTasksByProjectId(task.projectId), nowMs);
+      if (conflicts.length > 0) {
+        throw createApiError(409, 'TASK_SCOPE_CONFLICT', `Task '${task.displayId || task.id}' scope expansion overlaps active claimed scope.`, {
+          affectedId: task.id,
+          details: { conflicts },
+        });
+      }
+    }
+
+    if (addedPaths.length === 0) {
+      return {
+        task,
+        claim: task.claim,
+        addedPaths: [] as string[],
+        effectiveScope: [...currentScope].sort(),
+        reused: true,
+      };
+    }
+
+    const reservedPaths = new Set(normalizedReservedPaths(task));
+    for (const file of addedPaths) reservedPaths.add(file);
+    const timestamp = new Date(nowMs).toISOString();
+    const claim: TaskClaim = { ...task.claim, reservedPaths: [...reservedPaths].sort() };
+    const updated = {
+      ...task,
+      claim,
+      updatedAt: timestamp,
+      logs: [...(Array.isArray(task.logs) ? task.logs : []), {
+        id: `log-task-scope-expand-${nowMs}`,
+        timestamp,
+        message: `Task claimed scope expanded by ${claim.ownerLabel}: ${addedPaths.join(', ')}.`,
+        type: 'update',
+      }],
+    };
+    saveTask(updated);
+    const effectiveScope = normalizedTargetFiles(updated);
+    for (const file of claim.reservedPaths || []) effectiveScope.add(file);
+    return {
+      task: getTaskByIdentifier(task.id, 'full') || updated,
+      claim,
+      addedPaths,
+      effectiveScope: [...effectiveScope].sort(),
+      reused: false,
     };
   });
 }

@@ -2,7 +2,7 @@ commands:
   test-focused:
     executable: node
     args:
-      - node_modules/tsx/dist/cli.mjs
+      - ../../../../../node_modules/tsx/dist/cli.mjs
       - --test
     acceptsTargets: true
     category: test

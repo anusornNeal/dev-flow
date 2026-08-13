@@ -104,7 +104,7 @@ function inferRisk(name: string): McpToolRisk {
   if (EXTERNAL_EFFECT_TOOLS.has(name)) return 'external-effect';
   if (DESTRUCTIVE_TOOLS.has(name)) return 'destructive';
   if (RUNTIME_CONTROL_TOOLS.has(name)) return 'runtime-control';
-  if (/^(create|update|write|apply|move|toggle|batch_|assign|delete|import|sync|submit|complete|retry|cancel|prepare|integrate|cleanup|ensure|commit|attach|push|restart)/.test(name)) return 'write';
+  if (/^(create|update|write|apply|move|toggle|batch_|assign|delete|import|sync|submit|complete|retry|cancel|prepare|integrate|cleanup|ensure|commit|attach|push|restart|expand)/.test(name)) return 'write';
   return 'read';
 }
 

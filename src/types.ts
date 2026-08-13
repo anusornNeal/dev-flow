@@ -132,6 +132,7 @@ export interface TaskClaim {
   ownerLabel: string;
   claimedAt: string;
   expiresAt: string;
+  reservedPaths?: string[];
 }
 
 export interface Task {

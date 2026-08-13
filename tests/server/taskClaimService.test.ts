@@ -367,6 +367,60 @@ test('claim next gives one winner when multiple workers contend for one eligible
   assert.equal(getTask('next-only')?.claim?.ownerLabel, 'Chat A');
 });
 
+test('runtime scope expansion reserves discovered paths without mutating targetFiles and release frees them', () => {
+  seedTask('task-runtime-owner', ['src/RuntimeOwner.ts']);
+  seedTask('task-runtime-contender', ['src/RuntimeShared.ts']);
+  seedTask('task-runtime-expander', ['src/RuntimeOther.ts']);
+  const owner = claims.claimTaskForSession('task-runtime-owner', { sessionId: 'runtime-owner', ownerLabel: 'Chat Runtime' });
+  assert.throws(
+    () => (claims as any).expandTaskClaimScope('task-runtime-owner', { sessionId: 'wrong-runtime-owner', paths: ['src/RuntimeShared.ts'] }),
+    (error: any) => error?.payload?.code === 'TASK_CLAIM_OWNER_MISMATCH',
+  );
+  const expanded = (claims as any).expandTaskClaimScope('task-runtime-owner', { sessionId: 'runtime-owner', paths: ['SRC/RuntimeShared.ts', 'src/RuntimeShared.ts'] });
+  assert.deepEqual(getTask('task-runtime-owner')?.targetFiles, ['src/RuntimeOwner.ts']);
+  assert.deepEqual(expanded.addedPaths, ['src/runtimeshared.ts']);
+  assert.deepEqual(expanded.claim.reservedPaths, ['src/runtimeshared.ts']);
+  assert.deepEqual(expanded.effectiveScope, ['src/runtimeowner.ts', 'src/runtimeshared.ts']);
+  assert.equal(expanded.claim.workspaceId, owner.claim.workspaceId);
+  assert.throws(
+    () => claims.claimTaskForSession('task-runtime-contender', { sessionId: 'runtime-contender', ownerLabel: 'Chat Contender' }),
+    (error: any) => error?.payload?.code === 'TASK_SCOPE_CONFLICT' && error?.payload?.details?.conflicts?.[0]?.files?.includes('src/runtimeshared.ts'),
+  );
+  claims.claimTaskForSession('task-runtime-expander', { sessionId: 'runtime-expander', ownerLabel: 'Chat Expander' });
+  assert.throws(
+    () => (claims as any).expandTaskClaimScope('task-runtime-expander', { sessionId: 'runtime-expander', paths: ['src/RuntimeShared.ts'] }),
+    (error: any) => error?.payload?.code === 'TASK_SCOPE_CONFLICT' && error?.payload?.details?.conflicts?.[0]?.taskId === 'task-runtime-owner',
+  );
+  claims.releaseTaskClaim('task-runtime-owner', { sessionId: 'runtime-owner', nextStatus: 'todo' });
+  const contender = claims.claimTaskForSession('task-runtime-contender', { sessionId: 'runtime-contender', ownerLabel: 'Chat Contender' });
+  assert.equal(contender.task.status, 'in-progress');
+  assert.ok((getTask('task-runtime-owner')?.logs || []).some((entry: any) => /scope.*src\/runtimeshared\.ts/i.test(entry.message)));
+});
+
+test('claim-next defers a candidate that overlaps an active runtime reservation', () => {
+  const projectId = 'project-runtime-next';
+  createCandidateProject(projectId);
+  seedCandidateTask(projectId, 'runtime-anchor', ['src/Anchor.ts'], { priority: 'high' });
+  seedCandidateTask(projectId, 'runtime-candidate', ['src/RuntimeShared.ts'], { priority: 'high' });
+  claims.claimTaskForSession('runtime-anchor', { sessionId: 'runtime-next-owner', ownerLabel: 'Chat Runtime Next' });
+  (claims as any).expandTaskClaimScope('runtime-anchor', { sessionId: 'runtime-next-owner', paths: ['src/RuntimeShared.ts'] });
+  const result = claims.claimNextTaskForSession(projectId, { sessionId: 'runtime-next-worker', ownerLabel: 'Chat Runtime Worker', limit: 10 });
+  assert.equal(result.status, 'no-eligible');
+  assert.equal(result.code, 'NO_ELIGIBLE_TASK');
+});
+
+test('expired runtime reservations stop blocking new claims', () => {
+  seedTask('task-runtime-expired-owner', ['src/ExpiredOwner.ts']);
+  seedTask('task-runtime-expired-contender', ['src/ExpiredShared.ts']);
+  const owner = claims.claimTaskForSession('task-runtime-expired-owner', { sessionId: 'runtime-expired-owner', ownerLabel: 'Chat Expired Owner' });
+  (claims as any).expandTaskClaimScope('task-runtime-expired-owner', { sessionId: 'runtime-expired-owner', paths: ['src/ExpiredShared.ts'] });
+  const staleTask = getTask('task-runtime-expired-owner');
+  staleTask.claim = { ...owner.claim, reservedPaths: ['src/expiredshared.ts'], expiresAt: new Date(Date.now() - 1000).toISOString() };
+  saveTask(staleTask);
+  const contender = claims.claimTaskForSession('task-runtime-expired-contender', { sessionId: 'runtime-expired-contender', ownerLabel: 'Chat Expired Contender' });
+  assert.equal(contender.task.status, 'in-progress');
+});
+
 test.after(() => {
   try { fs.rmSync(tempRoot, { recursive: true, force: true }); } catch {}
 });

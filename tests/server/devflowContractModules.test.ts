@@ -8,7 +8,7 @@ import { workspaceToolDefinitions } from '../../src/server/contracts/devflowWork
 
 const TASK_TOOL_NAMES = [
   'list_tasks', 'search_tasks', 'get_task', 'get_task_images',
-  'open_task_bug', 'update_task_bug_status', 'create_task', 'update_task', 'claim_next_task', 'claim_task', 'release_task_claim', 'batch_upsert_tasks', 'import_tasks_from_file',
+  'open_task_bug', 'update_task_bug_status', 'create_task', 'update_task', 'claim_next_task', 'claim_task', 'expand_task_scope', 'release_task_claim', 'batch_upsert_tasks', 'import_tasks_from_file',
   'sync_task_with_git', 'submit_task_for_review', 'move_task_status', 'move_task_to_status', 'complete_task_review',
   'batch_move_task_status', 'toggle_task_checklist', 'batch_toggle_task_checklist', 'delete_task',
 ];
@@ -24,6 +24,18 @@ test('task-domain contracts are owned by a focused module and composed into the 
   const first = aggregateNames.indexOf(TASK_TOOL_NAMES[0]);
   assert.ok(first >= 0);
   assert.deepEqual(aggregateNames.slice(first, first + TASK_TOOL_NAMES.length), TASK_TOOL_NAMES);
+});
+
+test('task scope expansion is a first-class owner-guarded mutation contract', () => {
+  const tool = taskToolDefinitions.find((entry) => entry.name === 'expand_task_scope');
+  assert.ok(tool);
+  assert.equal((tool?.inputSchema as any)?.required?.includes('taskId'), true);
+  assert.equal((tool?.inputSchema as any)?.required?.includes('sessionId'), true);
+  assert.equal((tool?.inputSchema as any)?.required?.includes('paths'), true);
+  const req = tool?.buildHttpRequest({ taskId: 'DVF-1', sessionId: 'chat-secret', paths: ['src/New.ts'] });
+  assert.equal(req?.method, 'POST');
+  assert.equal(req?.path, '/api/tasks/DVF-1/claim/scope?responseMode=summary');
+  assert.deepEqual((req?.body as any)?.paths, ['src/New.ts']);
 });
 
 test('task Git workflow contracts expose opaque workspace provenance inputs', () => {

@@ -153,6 +153,22 @@ export const taskToolDefinitions: DevFlowToolDefinition[] = [
     buildHttpRequest: ({ taskId, responseMode, ...body }) => ({ method: 'POST', path: withQuery(`/api/tasks/${encodePathSegment(String(taskId))}/claim`, { responseMode: responseMode || 'summary' }), body }),
   },
   {
+    name: 'expand_task_scope',
+    description: 'Explicitly extend the active claimed file scope for one task after runtime dependency discovery. The caller must own the active claim; new paths are normalized, persisted on the claim, and rejected on overlap with other active claimed scopes.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...taskIdentifierProperty,
+        sessionId: { type: 'string', description: 'Opaque caller session id that owns the active task claim.' },
+        paths: { type: 'array', minItems: 1, maxItems: 100, items: { type: 'string', minLength: 1, maxLength: 500 }, description: 'Repository-relative paths to reserve in addition to the task targetFiles.' },
+        ...mutationResponseModeProperty,
+      },
+      required: ['taskId', 'sessionId', 'paths'],
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: ({ taskId, responseMode, ...body }) => ({ method: 'POST', path: withQuery(`/api/tasks/${encodePathSegment(String(taskId))}/claim/scope`, { responseMode: responseMode || 'summary' }), body }),
+  },
+  {
     name: 'release_task_claim',
     description: 'Release a task claim owned by this caller session and return the task to backlog or todo. Use emergency only for explicit recovery.',
     inputSchema: {

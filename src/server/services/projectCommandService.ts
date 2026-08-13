@@ -698,7 +698,13 @@ function buildProjectCommandExecutionIdentity(
   timeoutMs: number,
   maxOutputBytes: number,
   responseMode: 'compact' | 'standard' | 'debug',
-  overrides: { repoRevision?: string; lineageToken?: string; dependencyFingerprint?: string } = {},
+  overrides: {
+    repoRevision?: string;
+    lineageToken?: string;
+    dependencyFingerprint?: string;
+    affectedInputFingerprint?: string;
+    affectedInputPaths?: string[];
+  } = {},
   identityArgs: Record<string, any> = {},
 ): ProjectCommandExecutionIdentity | null {
   let observedRevision;
@@ -714,11 +720,16 @@ function buildProjectCommandExecutionIdentity(
     ? getProjectCommandConfigSnapshot(root).fingerprint
     : undefined;
   const lineageHead = repoRevision.split(':')[0] || observedRevision.head;
-  const affectedInputs = buildRepoAffectedInputIdentity(root, {
-    ...observedRevision,
-    token: repoRevision,
-    head: lineageHead,
-  }, identityArgs.affectedInputPaths ?? resolvedCommand.targets);
+  const affectedInputs = overrides.affectedInputFingerprint
+    ? {
+        fingerprint: overrides.affectedInputFingerprint,
+        paths: overrides.affectedInputPaths ? [...overrides.affectedInputPaths] : [],
+      }
+    : buildRepoAffectedInputIdentity(root, {
+        ...observedRevision,
+        token: repoRevision,
+        head: lineageHead,
+      }, identityArgs.affectedInputPaths ?? resolvedCommand.targets);
   const dependencyFingerprint = overrides.dependencyFingerprint ?? getRepoDependencyFingerprint(root);
   const environment = {
     CI: process.env.CI || '',
@@ -735,7 +746,6 @@ function buildProjectCommandExecutionIdentity(
     revisionLineage: lineageHead,
     affectedInputFingerprint: affectedInputs.fingerprint,
     affectedInputPaths: affectedInputs.paths,
-    lineageToken,
     semanticKey,
     cwd: path.relative(root, cwdPath) || '.',
     timeoutMs,
@@ -811,6 +821,8 @@ function readProjectCommandVerificationCandidate(value: unknown): ProjectCommand
     || typeof executionIdentity.command !== 'string'
     || (executionIdentity.commandConfigFingerprint !== undefined && (typeof executionIdentity.commandConfigFingerprint !== 'string' || !/^[a-f0-9]{64}$/i.test(executionIdentity.commandConfigFingerprint)))
     || (executionIdentity.dependencyFingerprint !== undefined && (typeof executionIdentity.dependencyFingerprint !== 'string' || !/^[a-f0-9]{64}$/i.test(executionIdentity.dependencyFingerprint)))
+    || (executionIdentity.affectedInputFingerprint !== undefined && typeof executionIdentity.affectedInputFingerprint !== 'string')
+    || (executionIdentity.affectedInputPaths !== undefined && (!Array.isArray(executionIdentity.affectedInputPaths) || executionIdentity.affectedInputPaths.some((entry) => typeof entry !== 'string')))
   ) {
     throw createApiError(400, 'VERIFICATION_CANDIDATE_INVALID', 'Project command verification candidate metadata is invalid.');
   }
@@ -828,7 +840,12 @@ export function bindProjectCommandVerificationCandidate(
   state: AppState,
   args: Record<string, any>,
   candidate: VerificationCandidateIdentity,
-  options: { lineageToken?: string; dependencyFingerprint?: string } = {},
+  options: {
+    lineageToken?: string;
+    dependencyFingerprint?: string;
+    affectedInputFingerprint?: string;
+    affectedInputPaths?: string[];
+  } = {},
 ): ProjectCommandVerificationCandidate {
   const sourceRoot = resolveProjectRoot(state, args);
   const resolvedCandidate = resolveVerificationCandidate(candidate.candidateId);
@@ -858,6 +875,8 @@ export function bindProjectCommandVerificationCandidate(
       repoRevision: candidate.repoRevision,
       lineageToken,
       dependencyFingerprint: options.dependencyFingerprint,
+      affectedInputFingerprint: options.affectedInputFingerprint,
+      affectedInputPaths: options.affectedInputPaths,
     },
     args,
   );
@@ -874,6 +893,12 @@ export function bindProjectCommandVerificationCandidate(
       command: executionIdentity.command,
       ...(executionIdentity.commandConfigFingerprint ? { commandConfigFingerprint: executionIdentity.commandConfigFingerprint } : {}),
       ...(executionIdentity.dependencyFingerprint ? { dependencyFingerprint: executionIdentity.dependencyFingerprint } : {}),
+      ...(executionIdentity.affectedInputFingerprint ? { affectedInputFingerprint: executionIdentity.affectedInputFingerprint } : {}),
+      ...(executionIdentity.affectedInputPaths ? { affectedInputPaths: [...executionIdentity.affectedInputPaths] } : {}),
+      ...(executionIdentity.environmentFingerprint ? { environmentFingerprint: executionIdentity.environmentFingerprint } : {}),
+      ...(executionIdentity.platform ? { platform: executionIdentity.platform } : {}),
+      ...(executionIdentity.arch ? { arch: executionIdentity.arch } : {}),
+      ...(executionIdentity.runtime ? { runtime: executionIdentity.runtime } : {}),
     },
   };
 }
@@ -911,11 +936,36 @@ export async function prepareProjectCommandVerificationCandidateAsync(
         ? {
             lineageToken: preparationIdentity.lineageToken,
             dependencyFingerprint: preparationIdentity.dependencyFingerprint,
+            affectedInputFingerprint: preparationIdentity.affectedInputFingerprint,
+            affectedInputPaths: preparationIdentity.affectedInputPaths,
           }
         : {},
     );
     if (options.expectedExecutionKey && bound.executionIdentity.key !== options.expectedExecutionKey) {
-      throw createApiError(409, 'VERIFICATION_ADMISSION_STALE', 'Repository verification identity changed after job admission; refusing to verify a different revision.');
+      const comparableFields = [
+        'repoRevision',
+        'semanticKey',
+        'command',
+        'commandConfigFingerprint',
+        'affectedInputFingerprint',
+        'dependencyFingerprint',
+        'environmentFingerprint',
+        'platform',
+        'arch',
+        'runtime',
+      ] as const;
+      const mismatchedFields = preparationIdentity
+        ? comparableFields.filter((field) => preparationIdentity[field] !== bound.executionIdentity[field])
+        : [];
+      const mismatchSummary = mismatchedFields.length > 0 ? mismatchedFields.join(',') : 'unexposed-key-material';
+      throw createApiError(409, 'VERIFICATION_ADMISSION_STALE', `Repository verification identity changed after job admission; refusing to verify a different revision. Candidate-bind mismatch: ${mismatchSummary}.`, {
+        details: {
+          stage: 'candidate-bind',
+          mismatchedFields,
+          admissionKey: options.expectedExecutionKey,
+          candidateKey: bound.executionIdentity.key,
+        },
+      });
     }
     return bound;
   } catch (error) {
@@ -1200,6 +1250,8 @@ export async function runProjectCommandAsync(state: AppState, args: Record<strin
       repoRevision: suppliedCandidate.repoRevision,
       lineageToken: suppliedCandidate.executionIdentity.lineageFingerprint,
       dependencyFingerprint: suppliedCandidate.executionIdentity.dependencyFingerprint,
+      affectedInputFingerprint: suppliedCandidate.executionIdentity.affectedInputFingerprint,
+      affectedInputPaths: suppliedCandidate.executionIdentity.affectedInputPaths,
     };
     executionIdentity = buildProjectCommandExecutionIdentity(
       executionRoot,

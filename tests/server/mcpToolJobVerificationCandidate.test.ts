@@ -200,6 +200,57 @@ test('unchanged queued run_project_command survives admission and candidate prep
   await waitForCandidateRelease(candidateId);
 });
 
+test('queued focused verification accepts a stable dirty untracked target', async () => {
+  const { root, projectId } = makeVerificationRepo('queued-dirty-focused');
+  fs.appendFileSync(path.join(root, '.gitignore'), '.devflow/\n', 'utf8');
+  fs.mkdirSync(path.join(root, 'tests'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'scripts', 'target-read.mjs'), [
+    "import fs from 'node:fs';",
+    "process.stdout.write(fs.readFileSync(process.argv[2], 'utf8').trim());",
+    '',
+  ].join('\n'), 'utf8');
+  git(root, ['add', '.gitignore', 'scripts/target-read.mjs']);
+  git(root, ['commit', '-m', 'add focused dirty fixture']);
+  fs.mkdirSync(path.join(root, '.devflow'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.devflow', 'commands.yaml'), [
+    'commands:',
+    '  test-focused:',
+    '    executable: node',
+    '    args:',
+    '      - scripts/target-read.mjs',
+    '    acceptsTargets: true',
+    '    category: test',
+    '',
+  ].join('\n'), 'utf8');
+  fs.writeFileSync(path.join(root, 'tests', 'new-target.txt'), 'dirty-target\n', 'utf8');
+
+  const state = makeState(root, projectId);
+  const verify = enqueueToolJob(state, 'run_project_command', {
+    localPath: root,
+    command: 'test-focused',
+    targets: ['tests/new-target.txt'],
+    cacheResult: false,
+    forceFresh: true,
+    singleFlight: false,
+  }, 'repo-command');
+
+  await waitUntil(() => {
+    const status = getToolJobStatus(verify.jobId)?.status;
+    return status === 'succeeded' || status === 'failed' || status === 'timed_out' || status === 'cancelled';
+  }, `Expected ${verify.jobId} to reach a terminal state`);
+  const terminal = getToolJobStatus(verify.jobId);
+  assert.equal(terminal?.status, 'succeeded', JSON.stringify(terminal));
+  const persisted = getJob(verify.jobId);
+  assert.equal(
+    persisted?.args?.__verificationCandidate?.executionIdentity?.key,
+    persisted?.args?.__projectCommandAdmissionIdentity?.key,
+  );
+  const result = readJobResult(verify.jobId) as any;
+  assert.equal(result?.result?.ok, true);
+  assert.equal(result?.result?.stdout?.trim(), 'dirty-target');
+  await waitForCandidateRelease(String(persisted?.args?.__verificationCandidate?.candidateId || ''));
+});
+
 test('queued run_project_command refuses to verify a newer workspace than its captured admission identity', async () => {
   const { root, projectId } = makeVerificationRepo('queued-a-b');
   const state = makeState(root, projectId);

@@ -20,6 +20,7 @@ const {
   runProjectCommandAsync,
 } = await import('../../src/server/services/projectCommandService.js');
 const { releaseVerificationCandidate } = await import('../../src/server/services/verificationCandidateService.js');
+const { invalidateRepoCacheDependencies } = await import('../../src/server/services/repoCacheInvalidationService.js');
 
 function git(root: string, args: string[]) {
   const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', shell: false });
@@ -268,6 +269,80 @@ test('focused verification candidate identity is target-specific and rejects tar
   } finally {
     releaseVerificationCandidate(candidateA!.candidateId);
     releaseVerificationCandidate(candidateB!.candidateId);
+  }
+});
+
+test('cache lineage invalidation alone does not stale an unchanged admission identity', async () => {
+  const { root, projectId } = fixture('lineage-only-admission');
+  const state = stateFor(root, projectId);
+  const args = { projectId, command: 'test', cacheResult: false, forceFresh: true };
+  const preflight = getProjectCommandAdmissionPreflight(state, args);
+  assert.ok(preflight.executionIdentity);
+
+  invalidateRepoCacheDependencies({
+    root,
+    dependencies: ['repo-content'],
+    reason: 'test cache lineage only',
+  });
+
+  const candidate = await prepareProjectCommandVerificationCandidateAsync(state, args, {
+    expectedExecutionKey: preflight.executionIdentity!.key,
+  });
+  assert.ok(candidate);
+  try {
+    assert.equal(candidate!.executionIdentity.key, preflight.executionIdentity!.key);
+    assert.notEqual(candidate!.executionIdentity.lineageFingerprint, preflight.executionIdentity!.lineageToken);
+  } finally {
+    releaseVerificationCandidate(candidate!.candidateId);
+  }
+});
+
+test('stable dirty untracked focused target survives async candidate preparation', async () => {
+  const { root, projectId } = fixture('dirty-focused-admission');
+  fs.appendFileSync(path.join(root, '.gitignore'), '.devflow/\n', 'utf8');
+  fs.mkdirSync(path.join(root, 'tests'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'scripts', 'target-read.mjs'), [
+    "import fs from 'node:fs';",
+    "process.stdout.write(fs.readFileSync(process.argv[2], 'utf8').trim());",
+    '',
+  ].join('\n'), 'utf8');
+  git(root, ['add', '.gitignore', 'scripts/target-read.mjs']);
+  git(root, ['commit', '-m', 'add focused dirty fixture']);
+  fs.mkdirSync(path.join(root, '.devflow'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.devflow', 'commands.yaml'), [
+    'commands:',
+    '  test-focused:',
+    '    executable: node',
+    '    args:',
+    '      - scripts/target-read.mjs',
+    '    acceptsTargets: true',
+    '    category: test',
+    '',
+  ].join('\n'), 'utf8');
+  fs.writeFileSync(path.join(root, 'tests', 'new-target.txt'), 'dirty-target\n', 'utf8');
+
+  const state = stateFor(root, projectId);
+  const args = {
+    projectId,
+    command: 'test-focused',
+    targets: ['tests/new-target.txt'],
+    cacheResult: false,
+    forceFresh: true,
+  };
+  const preflight = getProjectCommandAdmissionPreflight(state, args);
+  assert.ok(preflight.executionIdentity);
+
+  const candidate = await prepareProjectCommandVerificationCandidateAsync(state, args, {
+    expectedExecutionKey: preflight.executionIdentity!.key,
+  });
+  assert.ok(candidate);
+  try {
+    assert.equal(candidate!.executionIdentity.key, preflight.executionIdentity!.key);
+    const result = await runProjectCommandAsync(state, { ...args, __verificationCandidate: candidate }, logger, () => {});
+    assert.equal(result.ok, true, result.stderr || result.stdout);
+    assert.equal(result.stdout.trim(), 'dirty-target');
+  } finally {
+    releaseVerificationCandidate(candidate!.candidateId);
   }
 });
 

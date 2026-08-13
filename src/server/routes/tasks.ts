@@ -270,7 +270,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     }
 
     const toggleDecision = evaluateChecklistToggleMutation(task.status, Boolean(item.completed));
-    if (!toggleDecision.ok) {
+    if (toggleDecision.ok === false) {
       return res.status(409).json({
         code: toggleDecision.code,
         error: toggleDecision.message,

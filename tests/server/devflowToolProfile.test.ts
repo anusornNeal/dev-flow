@@ -98,6 +98,11 @@ test('skill router keeps ambiguous DevFlow visual intents in DevFlow and image g
   assert.match(content, /DevFlow preview\/evidence/i);
   assert.match(content, /Image generation is explicit opt-in only/i);
   assert.match(content, /mockup.*not image-generation intent/i);
+  assert.match(content, /brainstorming-guidance/);
+  assert.match(content, /ui-ux-guidance/);
+  assert.ok(content.indexOf('brainstorming-guidance') < content.indexOf('ui-ux-guidance'), 'new UI features should route brainstorming before UI/UX guidance');
+  assert.match(content, /Pure backend.*should not load either guidance skill/i);
+
 });
 
 test('legacy schema and dead MCP compatibility bookkeeping are fully removed', () => {
@@ -178,7 +183,7 @@ test('coding MCP profile is lean, alias-free, and preserves representative workf
   assert.equal(coding.length > 0, true);
   assert.equal(inventory.filter((item: any) => item.alias).some((item: any) => names.has(item.name)), false);
   for (const required of [
-    'get_skill_router', 'get_authoring_skill', 'get_repo_context_bundle', 'read_local_file', 'read_file_snippets_batch',
+    'get_skill_router', 'get_authoring_skill', 'get_guidance_skill', 'get_repo_context_bundle', 'read_local_file', 'read_file_snippets_batch',
     'search_local_files', 'create_task', 'search_tasks', 'get_task', 'move_task_to_status', 'open_task_bug',
     'prepare_compact_edit', 'apply_prepared_edit', 'edit_local_files_batch', 'apply_and_verify', 'run_project_command',
     'get_git_status', 'get_git_diff', 'commit_git_changes', 'push_git_branch', 'get_git_sync_status',
@@ -196,6 +201,19 @@ test('coding MCP profile is lean, alias-free, and preserves representative workf
   ]) {
     assert.equal(names.has(hidden), false, `coding profile should hide ${hidden}`);
   }
+});
+
+test('guidance MCP capability is read-only, stable-id bounded, and available on the coding surface', () => {
+  const tool = devFlowToolDefinitions.find((entry: any) => entry.name === 'get_guidance_skill');
+  assert.ok(tool);
+  assert.deepEqual(tool.inputSchema.properties.id.enum, ['brainstorming-guidance', 'ui-ux-guidance']);
+  assert.deepEqual(tool.inputSchema.properties.skillId.enum, ['brainstorming-guidance', 'ui-ux-guidance']);
+  assert.equal(getMcpToolList('coding').some((entry: any) => entry.name === 'get_guidance_skill'), true);
+  assert.equal(getMcpToolList('full').some((entry: any) => entry.name === 'get_guidance_skill'), true);
+  assert.equal(getMcpConsolidationReplacement('get_guidance_skill'), undefined);
+  assert.equal(tool.buildHttpRequest({}).method, 'GET');
+  assert.equal(tool.buildHttpRequest({}).path, '/api/skills/guidance');
+  assert.equal(tool.buildHttpRequest({ id: 'ui-ux-guidance' }).path, '/api/skills/guidance/ui-ux-guidance');
 });
 
 test('diagnostics MCP profile keeps the recovery handoff surface available', () => {

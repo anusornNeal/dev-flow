@@ -39,6 +39,17 @@ test('initSkillsRepository seeds all repo authoring skills when the database is 
   assert.ok(authoringCore);
   assert.ok(authoringCore.content.includes('DevFlow Authoring Core'));
   assert.equal(authoringCore.isProtected, true);
+
+  const guidance = getSkills().filter((skill: any) => skill.kind === 'guidance');
+  assert.deepEqual(guidance.map((skill: any) => skill.id), ['brainstorming-guidance', 'ui-ux-guidance']);
+  for (const skill of guidance) {
+    assert.equal(skill.isCustom, false);
+    assert.equal(skill.isProtected, false);
+    assert.equal(skill.sourceType, 'repo-file');
+    assert.equal(skill.sourcePath, `skills/${skill.id}.md`);
+    assert.ok(skill.content.length > 0);
+  }
+
 });
 
 test('canonical master metadata replaces stale persisted descriptions', () => {
@@ -121,6 +132,36 @@ test('authoring skill endpoint returns one requested repo skill', async () => {
   assert.equal(response.status, 200);
   assert.equal(body.id, '00-skill-router');
   assert.match(body.content, /Skill Router/);
+});
+
+test('guidance namespace lists compact metadata and retrieves only allowlisted guidance content', async () => {
+  initSkillsRepository();
+  const app = express();
+  registerSkillRoutes(app, { state: {}, writeAgentLog: () => {} } as any);
+  const server = http.createServer(app);
+  await new Promise<void>((resolve) => server.listen(0, resolve));
+  const addr = server.address();
+  if (!addr || typeof addr === 'string') throw new Error('Server address unavailable');
+  const base = `http://127.0.0.1:${addr.port}`;
+
+  const listResponse = await fetch(`${base}/api/skills/guidance`);
+  const listBody = await listResponse.json() as any[];
+  const oneResponse = await fetch(`${base}/api/skills/guidance/brainstorming-guidance`);
+  const oneBody = await oneResponse.json() as any;
+  const unknownResponse = await fetch(`${base}/api/skills/guidance/00-skill-router`);
+  const authoringResponse = await fetch(`${base}/api/skills/authoring`);
+  const authoringBody = await authoringResponse.json() as any[];
+  await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+
+  assert.equal(listResponse.status, 200);
+  assert.deepEqual(listBody.map((skill: any) => skill.id), ['brainstorming-guidance', 'ui-ux-guidance']);
+  assert.ok(listBody.every((skill: any) => skill.kind === 'guidance' && !Object.hasOwn(skill, 'content')));
+  assert.equal(oneResponse.status, 200);
+  assert.equal(oneBody.id, 'brainstorming-guidance');
+  assert.equal(oneBody.kind, 'guidance');
+  assert.match(oneBody.content, /Brainstorming Guidance/i);
+  assert.equal(unknownResponse.status, 404);
+  assert.equal(authoringBody.some((skill: any) => skill.kind === 'guidance'), false);
 });
 
 test.after(() => {

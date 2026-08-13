@@ -12,9 +12,13 @@ Choose the smallest DevFlow guidance set that matches the current action. This f
 6. **Large or independently executable scope** — add `06-authoring-decomposition`. It owns parent/child boundaries, parallel slices, and prerequisite direction.
 7. **Repository implementation** — load `07-authoring-execution` when the task continues into local edits, tests, verification, commit, workspace lifecycle, or recovery.
 8. **Continuous board work** — load `08-board-loop-execution` for loop-board / keep-taking-work requests. It owns claim selection and orchestration; implementation details stay delegated to the execution specialist.
+9. **Creative feature or behavior design** — load `brainstorming-guidance` on demand before implementation when the request needs exploration, alternatives, trade-offs, or an approval gate.
+10. **UI/UX work** — load `ui-ux-guidance` on demand for screens, layout, visual hierarchy, interaction, navigation, accessibility, animation, responsive behavior, or data presentation. For a new UI feature, load `brainstorming-guidance` first and `ui-ux-guidance` second.
 
 ## Routing rules
 - Load only the minimum set needed for the current action.
+- Retrieve guidance skills through `get_guidance_skill`; they are advisory and do not override DevFlow execution, verification, commit, or workspace policy.
+- Pure backend, infrastructure, or non-visual maintenance should not load either guidance skill.
 - Ordinary authoring must not load review, execution, decomposition, examples, or semantic-schema guidance unless the request actually needs them.
 - When multiple specialists apply, keep each concern with its owner instead of copying the same rule into several files.
 - Master skills define policy. Compatibility documents and examples are non-authoritative.

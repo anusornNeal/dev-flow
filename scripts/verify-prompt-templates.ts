@@ -358,6 +358,18 @@ for (const section of sections) {
 const defaultAgentSections = listPromptSectionsForWorkspace({ agent: 'default' });
 assert.ok(!defaultAgentSections.some((section) => section.id === 'prompt.agent-specific.default'));
 
+const promptPipeline = JSON.parse(fs.readFileSync(new URL('../config/prompt-pipeline.json', import.meta.url), 'utf8'));
+assert.deepEqual(promptPipeline.default, [
+  'prompt.header',
+  'prompt.task-context',
+  'prompt.execution-rules',
+  'prompt.completion-contract',
+]);
+assert.ok(promptPipeline.default.every((id: string) => id.startsWith('prompt.')));
+assert.equal(promptPipeline.default.includes('brainstorming-guidance'), false);
+assert.equal(promptPipeline.default.includes('ui-ux-guidance'), false);
+
+
 // Project-local overrides remain supported for canonical pipeline sections.
 const overrideWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-override-'));
 try {

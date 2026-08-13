@@ -19,8 +19,17 @@ const MASTER_SKILL_SEEDS = [
   { id: '08-board-loop-execution', name: 'Board Loop Execution Skill', description: 'Board claim, parallel scheduling, finalization, and recovery orchestration.' }
 ];
 
-const LEGACY_MASTER_SKILL_IDS = new Set(MASTER_SKILL_SEEDS.map((skill) => skill.id));
-const MASTER_SKILL_SEEDS_BY_ID = new Map(MASTER_SKILL_SEEDS.map((skill) => [skill.id, skill]));
+const GUIDANCE_SKILL_SEEDS = [
+  { id: 'brainstorming-guidance', name: 'Brainstorming Guidance', description: 'On-demand design-process guidance for shaping ideas into an approved design before implementation.', kind: 'guidance', isProtected: false },
+  { id: 'ui-ux-guidance', name: 'UI/UX Guidance', description: 'On-demand visual, interaction, accessibility, and product UI quality guidance.', kind: 'guidance', isProtected: false },
+];
+
+const REPO_SKILL_SEEDS = [
+  ...MASTER_SKILL_SEEDS.map((skill) => ({ ...skill, kind: 'master', isProtected: true })),
+  ...GUIDANCE_SKILL_SEEDS,
+];
+const REPO_SKILL_IDS = new Set(REPO_SKILL_SEEDS.map((skill) => skill.id));
+const REPO_SKILL_SEEDS_BY_ID = new Map(REPO_SKILL_SEEDS.map((skill) => [skill.id, skill]));
 
 const skillFileCache = new Map<string, { content: string; mtimeMs: number; cachedAt: number }>();
 
@@ -88,8 +97,8 @@ export function initSkillsRepository() {
 
   const legacySeedsById = new Map(readLegacySkillSeeds().map((seed) => [seed.id, seed]));
 
-  const additions = MASTER_SKILL_SEEDS
-    .filter((seed) => LEGACY_MASTER_SKILL_IDS.has(seed.id) && !existingIds.has(seed.id))
+  const additions = REPO_SKILL_SEEDS
+    .filter((seed) => !existingIds.has(seed.id))
     .map((seed) => {
       const legacySeed = legacySeedsById.get(seed.id);
       const filePath = masterSkillFilePath(seed.id);
@@ -97,9 +106,9 @@ export function initSkillsRepository() {
         id: seed.id,
         name: legacySeed?.name || seed.name,
         description: legacySeed?.description || seed.description || '',
-        kind: 'master',
+        kind: seed.kind,
         isCustom: false,
-        isProtected: true,
+        isProtected: seed.isProtected,
         sourceType: 'repo-file',
         sourcePath: masterSkillSourcePath(seed.id),
         filePath,
@@ -118,14 +127,26 @@ export function initSkillsRepository() {
     skill.isCustom = Boolean(skill.isCustom);
     skill.isProtected = Boolean(skill.isProtected);
     if (!skill.isCustom) {
-      const masterSeed = MASTER_SKILL_SEEDS_BY_ID.get(skill.id);
-      if (masterSeed) {
-        if (skill.name !== masterSeed.name) {
-          skill.name = masterSeed.name;
+      const repoSeed = REPO_SKILL_SEEDS_BY_ID.get(skill.id);
+      if (repoSeed) {
+        if (skill.name !== repoSeed.name) {
+          skill.name = repoSeed.name;
           needsSave = true;
         }
-        if (skill.description !== masterSeed.description) {
-          skill.description = masterSeed.description;
+        if (skill.description !== repoSeed.description) {
+          skill.description = repoSeed.description;
+          needsSave = true;
+        }
+        if (skill.kind !== repoSeed.kind) {
+          skill.kind = repoSeed.kind;
+          needsSave = true;
+        }
+        if (skill.isProtected !== repoSeed.isProtected) {
+          skill.isProtected = repoSeed.isProtected;
+          needsSave = true;
+        }
+        if (skill.sourceType !== 'repo-file') {
+          skill.sourceType = 'repo-file';
           needsSave = true;
         }
       }
@@ -155,7 +176,7 @@ export function initSkillsRepository() {
     }
   });
 
-  if (currentSkills.some((skill) => LEGACY_MASTER_SKILL_IDS.has(skill.id) && !skill.content)) needsSave = true;
+  if (currentSkills.some((skill) => REPO_SKILL_IDS.has(skill.id) && !skill.content)) needsSave = true;
   if (needsSave) saveAllSkills(currentSkills);
 }
 

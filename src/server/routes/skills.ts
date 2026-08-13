@@ -15,10 +15,18 @@ const AUTHORING_SKILL_IDS = [
   '08-board-loop-execution',
 ];
 const AUTHORING_SKILL_ID_SET = new Set(AUTHORING_SKILL_IDS);
+const GUIDANCE_SKILL_IDS = ['brainstorming-guidance', 'ui-ux-guidance'];
+const GUIDANCE_SKILL_ID_SET = new Set(GUIDANCE_SKILL_IDS);
+
 
 function sortAuthoringSkills(skills: any[]) {
   return [...skills].sort((left, right) => AUTHORING_SKILL_IDS.indexOf(left.id) - AUTHORING_SKILL_IDS.indexOf(right.id));
 }
+
+function sortGuidanceSkills(skills: any[]) {
+  return [...skills].sort((left, right) => GUIDANCE_SKILL_IDS.indexOf(left.id) - GUIDANCE_SKILL_IDS.indexOf(right.id));
+}
+
 
 export function registerSkillRoutes(app: express.Express, deps: ApiRouteDeps) {
   app.get('/api/skills', (req, res) => {
@@ -27,6 +35,8 @@ export function registerSkillRoutes(app: express.Express, deps: ApiRouteDeps) {
 
     if (kind === 'authoring') {
       skills = sortAuthoringSkills(skills.filter((s) => AUTHORING_SKILL_ID_SET.has(s.id)));
+    } else if (kind === 'guidance') {
+      skills = sortGuidanceSkills(skills.filter((s) => GUIDANCE_SKILL_ID_SET.has(s.id)));
     } else if (kind === 'workflow') {
       skills = skills.filter((s) => s.id.endsWith('-workflow'));
     } else if (kind === 'prompt') {
@@ -64,6 +74,30 @@ export function registerSkillRoutes(app: express.Express, deps: ApiRouteDeps) {
     }
     const skill = getSkill(req.params.id);
     if (!skill) return res.status(404).json({ error: 'Authoring skill not found' });
+    return res.json({
+      ...skill,
+      content: readSkillContent(skill),
+    });
+  });
+
+  app.get('/api/skills/guidance', (_req, res) => {
+    const guidance = sortGuidanceSkills(getSkills().filter((skill) => GUIDANCE_SKILL_ID_SET.has(skill.id)));
+    return res.json(guidance.map((skill) => ({
+      id: skill.id,
+      name: skill.name,
+      description: skill.description,
+      isCustom: skill.isCustom,
+      isProtected: skill.isProtected,
+      kind: skill.kind,
+    })));
+  });
+
+  app.get('/api/skills/guidance/:id', (req, res) => {
+    if (!GUIDANCE_SKILL_ID_SET.has(req.params.id)) {
+      return res.status(404).json({ error: 'Guidance skill not found' });
+    }
+    const skill = getSkill(req.params.id);
+    if (!skill) return res.status(404).json({ error: 'Guidance skill not found' });
     return res.json({
       ...skill,
       content: readSkillContent(skill),

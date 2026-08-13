@@ -19,7 +19,7 @@ import { uiPreviewToolDefinitions } from './devflowUiPreviewTools';
 import { buildMcpTransportInputSchema } from './mcpSchemaTransport';
 import { resolveRuntimeMcpToolProfileValue } from './mcpToolProfileConfig';
 export type { DevFlowToolDefinition, DevFlowToolHttpRequest } from './devflowContractCore';
-export const DEVFLOW_CONTRACT_VERSION = '2026-08-11.4';
+export const DEVFLOW_CONTRACT_VERSION = '2026-08-13.1';
 
 export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   {
@@ -592,6 +592,26 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
       method: 'GET',
       path: `/api/skills/authoring/${encodePathSegment(String(args.id || args.skillId))}`,
     }),
+  },
+  {
+    name: 'get_guidance_skill',
+    description: 'List DevFlow guidance skills when no id is supplied, or read one on-demand guidance skill by stable id. This capability is read-only and separate from protected authoring masters.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', enum: ['brainstorming-guidance', 'ui-ux-guidance'] },
+        skillId: { type: 'string', enum: ['brainstorming-guidance', 'ui-ux-guidance'] },
+      },
+    },
+    outputSchema: { type: 'object' },
+    lightweight: true,
+    buildHttpRequest: (args) => {
+      const id = String(args.id || args.skillId || '').trim();
+      return {
+        method: 'GET',
+        path: id ? `/api/skills/guidance/${encodePathSegment(id)}` : '/api/skills/guidance',
+      };
+    },
   },
   {
     name: 'get_skill',
@@ -1565,7 +1585,7 @@ const CODING_PROFILE_TOOLS = new Set([
   'search_tasks', 'create_task', 'get_task', 'update_task', 'move_task_to_status', 'toggle_task_checklist', 'open_task_bug',
   'create_ui_preview', 'update_ui_preview', 'get_ui_preview', 'attach_ui_preview_to_task',
   'sync_task_with_git', 'submit_task_for_review',
-  'get_skill_router', 'get_authoring_skill', 'get_jira_authoring_bundle',
+  'get_skill_router', 'get_authoring_skill', 'get_guidance_skill', 'get_jira_authoring_bundle',
   'get_figma_authoring_context', 'attach_figma_context_to_task', 'get_project_atlas',
   'get_repo_context_bundle', 'list_local_files', 'read_local_file', 'read_file_snippets_batch', 'search_local_files',
   'write_local_file', 'edit_local_files_batch', 'prepare_compact_edit', 'apply_prepared_edit', 'apply_and_verify', 'delete_local_path', 'move_local_path',

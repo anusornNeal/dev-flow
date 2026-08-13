@@ -251,6 +251,22 @@ export function applyChecklistToggle(items: ChecklistItem[], id: string): Checkl
   return next;
 }
 
+export type ChecklistToggleDecision =
+  | { ok: true; completed: boolean }
+  | { ok: false; code: 'CHECKLIST_TERMINAL_STATE_CONFLICT'; message: string };
+
+export function evaluateChecklistToggleMutation(status: string, completed: boolean): ChecklistToggleDecision {
+  const nextCompleted = !completed;
+  if (status === 'done' && !nextCompleted) {
+    return {
+      ok: false,
+      code: 'CHECKLIST_TERMINAL_STATE_CONFLICT',
+      message: 'Cannot mark a checklist item incomplete while the task is DONE.',
+    };
+  }
+  return { ok: true, completed: nextCompleted };
+}
+
 export const RECOVERY_DISPOSITION_CLASSIFICATIONS = ['confirmed-missing', 'recoverable-workspace', 'implemented-metadata-drift', 'superseded', 'follow-up'] as const;
 export type RecoveryDispositionClassification = typeof RECOVERY_DISPOSITION_CLASSIFICATIONS[number];
 export interface RecoveryDisposition {

@@ -25,6 +25,7 @@ import {
   ensureCloseWarningBug,
   updateBugStatus,
   applyChecklistToggle as applyChecklistToggleUseCase,
+  evaluateChecklistToggleMutation,
   evaluateMove,
   validateTaskPatch as validateTaskPatchUseCase,
 } from '../useCases/taskUseCases';
@@ -266,6 +267,16 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
 
     if (task.status === 'in-progress' && !canOverrideTaskLock(task, req.body, undefined, req.headers['x-agent-request'])) {
       return res.status(403).json({ error: 'Task is locked by an agent. Use emergency flag to override.' });
+    }
+
+    const toggleDecision = evaluateChecklistToggleMutation(task.status, Boolean(item.completed));
+    if (!toggleDecision.ok) {
+      return res.status(409).json({
+        code: toggleDecision.code,
+        error: toggleDecision.message,
+        retryable: false,
+        affectedId: task.id,
+      });
     }
 
     // Delegate the pure flip to the use-case so the route handler stays focused on transport concerns.

@@ -5,7 +5,7 @@ import { applyTaskCategoryAndTagsUpdate, extractDesignImages, extractImages, nor
 import { validateTaskQualityForMutation } from '../services/taskQualityService';
 import { resolveDisplayIdForNewTask, saveTask, getTasks } from '../repositories/taskRepository.js';
 import { getValidationErrorMessage, isValidTransition } from '../../lib/statusTransitions';
-import { applyChecklistToggle as applyChecklistToggleUseCase } from '../useCases/taskUseCases';
+import { evaluateChecklistToggleMutation } from '../useCases/taskUseCases';
 import { VALID_STATUSES } from '../constants';
 import { validateEnum } from '../validation';
 import { appendTaskLog, canOverrideTaskLock, createTaskLogEntry, getTaskIndexByIdentifier, syncTaskAgentStateForStatus, validateParentReviewMove } from './taskRouteSupport';
@@ -246,7 +246,21 @@ export function registerTaskBatchRoutes(app: express.Express, deps: ApiRouteDeps
           return { success: false, affectedId: task.id, error: { code: 'TASK_LOCKED', message: 'Task is locked by an agent. Use emergency flag to override.', retryable: false, affectedId: task.id } };
         }
 
-        checklistItem.completed = !checklistItem.completed;
+        const toggleDecision = evaluateChecklistToggleMutation(task.status, Boolean(checklistItem.completed));
+        if (!toggleDecision.ok) {
+          return {
+            success: false,
+            affectedId: task.id,
+            error: {
+              code: toggleDecision.code,
+              message: toggleDecision.message,
+              retryable: false,
+              affectedId: task.id,
+            },
+          };
+        }
+
+        checklistItem.completed = toggleDecision.completed;
         task.updatedAt = new Date().toISOString();
         task.logs = [...(task.logs || []), createTaskLogEntry(`Checklist step "${checklistItem.text}" set to ${checklistItem.completed ? 'COMPLETED' : 'INCOMPLETE'} via Batch API`)];
         saveTask(task);

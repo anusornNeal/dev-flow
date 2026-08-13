@@ -166,6 +166,40 @@ test('queued cache miss persists cheap admission identity and defers immutable c
   }
 });
 
+test('unchanged queued run_project_command survives admission and candidate preparation', async () => {
+  const { root, projectId } = makeVerificationRepo('queued-unchanged');
+  const state = makeState(root, projectId);
+  const verify = enqueueToolJob(state, 'run_project_command', {
+    localPath: root,
+    command: 'test',
+    cacheResult: false,
+    forceFresh: true,
+    singleFlight: false,
+  }, 'repo-command');
+
+  await waitUntil(() => {
+    const status = getToolJobStatus(verify.jobId)?.status;
+    return status === 'succeeded' || status === 'failed' || status === 'timed_out' || status === 'cancelled';
+  }, `Expected ${verify.jobId} to reach a terminal state`);
+  const terminal = getToolJobStatus(verify.jobId);
+  assert.equal(terminal?.status, 'succeeded', JSON.stringify(terminal));
+  const persisted = getJob(verify.jobId);
+  const admissionKey = String(persisted?.args?.__projectCommandAdmissionIdentity?.key || '');
+  const candidateKey = String(persisted?.args?.__verificationCandidate?.executionIdentity?.key || '');
+  const candidateId = String(persisted?.args?.__verificationCandidate?.candidateId || '');
+  assert.match(admissionKey, /^[a-f0-9]{64}$/);
+  assert.equal(candidateKey, admissionKey);
+  assert.equal(
+    persisted?.args?.__verificationCandidate?.executionIdentity?.dependencyFingerprint,
+    persisted?.args?.__projectCommandAdmissionIdentity?.dependencyFingerprint,
+  );
+  assert.match(candidateId, /^vc_[a-f0-9]{24}$/);
+  const result = readJobResult(verify.jobId) as any;
+  assert.equal(result?.result?.ok, true);
+  assert.equal(result?.result?.stdout?.trim(), 'candidate-a');
+  await waitForCandidateRelease(candidateId);
+});
+
 test('queued run_project_command refuses to verify a newer workspace than its captured admission identity', async () => {
   const { root, projectId } = makeVerificationRepo('queued-a-b');
   const state = makeState(root, projectId);

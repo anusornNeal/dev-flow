@@ -698,7 +698,7 @@ function buildProjectCommandExecutionIdentity(
   timeoutMs: number,
   maxOutputBytes: number,
   responseMode: 'compact' | 'standard' | 'debug',
-  overrides: { repoRevision?: string; lineageToken?: string } = {},
+  overrides: { repoRevision?: string; lineageToken?: string; dependencyFingerprint?: string } = {},
   identityArgs: Record<string, any> = {},
 ): ProjectCommandExecutionIdentity | null {
   let observedRevision;
@@ -719,7 +719,7 @@ function buildProjectCommandExecutionIdentity(
     token: repoRevision,
     head: lineageHead,
   }, identityArgs.affectedInputPaths ?? resolvedCommand.targets);
-  const dependencyFingerprint = getRepoDependencyFingerprint(root);
+  const dependencyFingerprint = overrides.dependencyFingerprint ?? getRepoDependencyFingerprint(root);
   const environment = {
     CI: process.env.CI || '',
     NODE_ENV: process.env.NODE_ENV || '',
@@ -810,6 +810,7 @@ function readProjectCommandVerificationCandidate(value: unknown): ProjectCommand
     || typeof executionIdentity.semanticKey !== 'string'
     || typeof executionIdentity.command !== 'string'
     || (executionIdentity.commandConfigFingerprint !== undefined && (typeof executionIdentity.commandConfigFingerprint !== 'string' || !/^[a-f0-9]{64}$/i.test(executionIdentity.commandConfigFingerprint)))
+    || (executionIdentity.dependencyFingerprint !== undefined && (typeof executionIdentity.dependencyFingerprint !== 'string' || !/^[a-f0-9]{64}$/i.test(executionIdentity.dependencyFingerprint)))
   ) {
     throw createApiError(400, 'VERIFICATION_CANDIDATE_INVALID', 'Project command verification candidate metadata is invalid.');
   }
@@ -827,6 +828,7 @@ export function bindProjectCommandVerificationCandidate(
   state: AppState,
   args: Record<string, any>,
   candidate: VerificationCandidateIdentity,
+  options: { lineageToken?: string; dependencyFingerprint?: string } = {},
 ): ProjectCommandVerificationCandidate {
   const sourceRoot = resolveProjectRoot(state, args);
   const resolvedCandidate = resolveVerificationCandidate(candidate.candidateId);
@@ -844,7 +846,7 @@ export function bindProjectCommandVerificationCandidate(
     ? Math.max(1, Math.min(MAX_TIMEOUT_MS, Number(args.timeoutMs)))
     : resolvedCommand.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const { responseMode, maxOutputBytes } = resolveOutputBudget(args, resolvedCommand);
-  const lineageToken = getRepoCacheLineage(sourceRoot, [...PROJECT_COMMAND_CACHE_DEPENDENCIES]).token;
+  const lineageToken = options.lineageToken ?? getRepoCacheLineage(sourceRoot, [...PROJECT_COMMAND_CACHE_DEPENDENCIES]).token;
   const executionIdentity = buildProjectCommandExecutionIdentity(
     resolvedCandidate.root,
     resolvedCommand,
@@ -852,7 +854,11 @@ export function bindProjectCommandVerificationCandidate(
     timeoutMs,
     maxOutputBytes,
     responseMode,
-    { repoRevision: candidate.repoRevision, lineageToken },
+    {
+      repoRevision: candidate.repoRevision,
+      lineageToken,
+      dependencyFingerprint: options.dependencyFingerprint,
+    },
     args,
   );
   if (!executionIdentity) {
@@ -867,6 +873,7 @@ export function bindProjectCommandVerificationCandidate(
       semanticKey: executionIdentity.semanticKey,
       command: executionIdentity.command,
       ...(executionIdentity.commandConfigFingerprint ? { commandConfigFingerprint: executionIdentity.commandConfigFingerprint } : {}),
+      ...(executionIdentity.dependencyFingerprint ? { dependencyFingerprint: executionIdentity.dependencyFingerprint } : {}),
     },
   };
 }
@@ -880,6 +887,13 @@ export async function prepareProjectCommandVerificationCandidateAsync(
   const descriptor = describeProjectCommand(state, args);
   if (descriptor.access !== 'verify') return null;
 
+  const preparationIdentity = options.expectedExecutionKey
+    ? getProjectCommandExecutionIdentity(state, args)
+    : null;
+  if (options.expectedExecutionKey && preparationIdentity?.key !== options.expectedExecutionKey) {
+    throw createApiError(409, 'VERIFICATION_ADMISSION_STALE', 'Repository verification identity changed after job admission; refusing to verify a different revision.');
+  }
+
   let candidate: VerificationCandidateIdentity;
   try {
     candidate = await createVerificationCandidateAsync(sourceRoot, { signal: options.signal });
@@ -889,7 +903,17 @@ export async function prepareProjectCommandVerificationCandidateAsync(
     throw error;
   }
   try {
-    const bound = bindProjectCommandVerificationCandidate(state, args, candidate);
+    const bound = bindProjectCommandVerificationCandidate(
+      state,
+      args,
+      candidate,
+      preparationIdentity
+        ? {
+            lineageToken: preparationIdentity.lineageToken,
+            dependencyFingerprint: preparationIdentity.dependencyFingerprint,
+          }
+        : {},
+    );
     if (options.expectedExecutionKey && bound.executionIdentity.key !== options.expectedExecutionKey) {
       throw createApiError(409, 'VERIFICATION_ADMISSION_STALE', 'Repository verification identity changed after job admission; refusing to verify a different revision.');
     }
@@ -1012,7 +1036,7 @@ export function getProjectCommandAdmissionPreflight(
     ? Math.max(1, Math.min(MAX_TIMEOUT_MS, Number(args.timeoutMs)))
     : resolvedCommand.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const { responseMode, maxOutputBytes } = resolveOutputBudget(args, resolvedCommand);
-  const executionIdentity = buildProjectCommandExecutionIdentity(root, resolvedCommand, cwdPath, timeoutMs, maxOutputBytes, responseMode);
+  const executionIdentity = buildProjectCommandExecutionIdentity(root, resolvedCommand, cwdPath, timeoutMs, maxOutputBytes, responseMode, {}, args);
   const resolutionMs = Date.now() - totalStartedAt;
   const cacheLookupStartedAt = Date.now();
   const cacheContext = commandCacheContext(root, resolvedCommand, cwdPath, timeoutMs, maxOutputBytes, responseMode, args, executionIdentity);
@@ -1172,6 +1196,11 @@ export async function runProjectCommandAsync(state: AppState, args: Record<strin
 
   let executionIdentity: ProjectCommandExecutionIdentity | null = null;
   if (suppliedCandidate) {
+    const candidateIdentityOverrides = {
+      repoRevision: suppliedCandidate.repoRevision,
+      lineageToken: suppliedCandidate.executionIdentity.lineageFingerprint,
+      dependencyFingerprint: suppliedCandidate.executionIdentity.dependencyFingerprint,
+    };
     executionIdentity = buildProjectCommandExecutionIdentity(
       executionRoot,
       resolvedCommand,
@@ -1179,10 +1208,7 @@ export async function runProjectCommandAsync(state: AppState, args: Record<strin
       timeoutMs,
       maxOutputBytes,
       responseMode,
-      {
-        repoRevision: suppliedCandidate.repoRevision,
-        lineageToken: suppliedCandidate.executionIdentity.lineageFingerprint,
-      },
+      candidateIdentityOverrides,
       args,
     );
     if (!executionIdentity || executionIdentity.key !== suppliedCandidate.executionIdentity.key) {

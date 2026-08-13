@@ -14,7 +14,9 @@ executeAllMigrations();
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
 const {
   describeProjectCommand,
+  getProjectCommandAdmissionPreflight,
   prepareProjectCommandVerificationCandidate,
+  prepareProjectCommandVerificationCandidateAsync,
   runProjectCommandAsync,
 } = await import('../../src/server/services/projectCommandService.js');
 const { releaseVerificationCandidate } = await import('../../src/server/services/verificationCandidateService.js');
@@ -267,6 +269,42 @@ test('focused verification candidate identity is target-specific and rejects tar
     releaseVerificationCandidate(candidateA!.candidateId);
     releaseVerificationCandidate(candidateB!.candidateId);
   }
+});
+
+test('unchanged admission identity stays stable through async candidate preparation', async () => {
+  const { root, projectId } = fixture('unchanged-admission');
+  const state = stateFor(root, projectId);
+  const args = { projectId, command: 'test', cacheResult: false, forceFresh: true };
+  const preflight = getProjectCommandAdmissionPreflight(state, args);
+  assert.ok(preflight.executionIdentity);
+
+  const candidate = await prepareProjectCommandVerificationCandidateAsync(state, args, {
+    expectedExecutionKey: preflight.executionIdentity!.key,
+  });
+  assert.ok(candidate);
+  try {
+    assert.equal(candidate!.executionIdentity.key, preflight.executionIdentity!.key);
+    assert.equal(candidate!.executionIdentity.dependencyFingerprint, preflight.executionIdentity!.dependencyFingerprint);
+    assert.equal(candidate!.repoRevision, preflight.executionIdentity!.repoRevision);
+  } finally {
+    releaseVerificationCandidate(candidate!.candidateId);
+  }
+});
+
+test('async candidate preparation still rejects a genuinely changed execution identity', async () => {
+  const { root, projectId } = fixture('stale-admission');
+  const state = stateFor(root, projectId);
+  const args = { projectId, command: 'test', cacheResult: false, forceFresh: true };
+  const preflight = getProjectCommandAdmissionPreflight(state, args);
+  assert.ok(preflight.executionIdentity);
+
+  fs.writeFileSync(path.join(root, 'src', 'value.txt'), 'candidate-b\n', 'utf8');
+  await assert.rejects(
+    prepareProjectCommandVerificationCandidateAsync(state, args, {
+      expectedExecutionKey: preflight.executionIdentity!.key,
+    }),
+    (error: any) => error?.payload?.code === 'VERIFICATION_ADMISSION_STALE',
+  );
 });
 
 test('write-access project command does not create a verification candidate', () => {

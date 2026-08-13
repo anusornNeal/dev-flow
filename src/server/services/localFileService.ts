@@ -574,6 +574,7 @@ export function writeLocalFile(state: AppState, args: Record<string, any>) {
 
   const targetPath = resolveSafePath(root, filePath);
   const existed = fs.existsSync(targetPath);
+  const previousContent = existed ? fs.readFileSync(targetPath, 'utf8') : null;
   if (args.createOnly === true || String(args.createOnly).toLowerCase() === 'true') {
     if (existed) {
       throw createApiError(409, 'FILE_EXISTS', `File '${filePath}' already exists.`, { affectedId: filePath });
@@ -583,8 +584,7 @@ export function writeLocalFile(state: AppState, args: Record<string, any>) {
   assertFileRevisionMatches(targetPath, args, filePath);
 
   if (existed) {
-    const existingContent = fs.readFileSync(targetPath, 'utf8');
-    if (existingContent === content) {
+    if (previousContent === content) {
       const revision = getFileRevision(targetPath);
       return {
         root,
@@ -599,10 +599,36 @@ export function writeLocalFile(state: AppState, args: Record<string, any>) {
     }
   }
 
+  if (typeof args.__authorizeOwnedChanges === 'function') {
+    args.__authorizeOwnedChanges([filePath]);
+  }
   fs.mkdirSync(path.dirname(targetPath), { recursive: true });
   fs.writeFileSync(targetPath, content, 'utf8');
+  if (typeof args.__recordOwnedChanges === 'function') {
+    try {
+      args.__recordOwnedChanges([filePath]);
+    } catch (error) {
+      try {
+        if (existed) fs.writeFileSync(targetPath, previousContent!, 'utf8');
+        else fs.rmSync(targetPath, { force: true });
+        invalidateRepoReadCaches(root, 'writeLocalFileOwnershipRollback', { paths: [filePath] });
+      } catch (rollbackError) {
+        throw createApiError(500, 'WRITE_OWNERSHIP_ROLLBACK_FAILED', `Ownership persistence failed and file rollback could not restore '${filePath}'.`, {
+          affectedId: filePath,
+          details: {
+            cause: error instanceof Error ? error.message : String(error),
+            rollbackError: rollbackError instanceof Error ? rollbackError.message : String(rollbackError),
+          },
+        });
+      }
+      throw createApiError(409, 'WRITE_OWNERSHIP_FAILED', `Ownership persistence failed; write to '${filePath}' was rolled back.`, {
+        affectedId: filePath,
+        details: { cause: error instanceof Error ? error.message : String(error) },
+      });
+    }
+  }
   const revision = getFileRevision(targetPath);
-  const cacheInvalidation = invalidateRepoReadCaches(root, 'writeLocalFile', { paths: [filePath] });
+  invalidateRepoReadCaches(root, 'writeLocalFile', { paths: [filePath] });
 
   return {
     root,

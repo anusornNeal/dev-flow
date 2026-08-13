@@ -75,6 +75,28 @@ test('applyAndVerify short-circuits verification for a proven no-op unless force
   assert.deepEqual(result.verification, []);
 });
 
+test('applyAndVerify requires an explicit no-checks policy for an empty verification plan', () => {
+  const root = fixture('no-checks-policy');
+  const withoutPolicy = applyAndVerify(stateFor(root), {
+    projectId: 'project-apply-verify',
+    files: [{ filePath: 'src/value.ts', edits: [{ type: 'replace', find: 'value = 1', replaceWith: 'value = 2' }] }],
+    requestedCommands: [],
+  });
+  assert.equal(withoutPolicy.ok, false);
+  assert.equal(withoutPolicy.status, 'verification_incomplete');
+
+  git(root, ['restore', '--worktree', '--', 'src/value.ts']);
+  const withPolicy = applyAndVerify(stateFor(root), {
+    projectId: 'project-apply-verify',
+    files: [{ filePath: 'src/value.ts', edits: [{ type: 'replace', find: 'value = 1', replaceWith: 'value = 2' }] }],
+    requestedCommands: [],
+    noChecksRequired: true,
+  });
+  assert.equal(withPolicy.ok, true);
+  assert.equal(withPolicy.verificationPolicy, 'no-checks-required');
+  assert.deepEqual(withPolicy.verification, []);
+});
+
 test('applyAndVerifyAsync runs resource-safe targeted verification commands concurrently without caller isolation hints', async () => {
   const root = fixture('parallel');
   fs.mkdirSync(path.join(root, '.devflow'), { recursive: true });

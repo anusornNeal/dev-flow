@@ -160,6 +160,20 @@ test('safeEditFileService test suite', async (t) => {
     assert.equal(fs.readFileSync(testFile, 'utf8'), 'newer content\n');
   });
 
+  await t.test('rolls back a safe edit when ownership persistence fails', () => {
+    const before = fs.readFileSync(testFile, 'utf8');
+    const result = safeEditFile(mockState, {
+      filePath: relativeFilePath,
+      mode: 'apply',
+      __recordOwnedChanges: () => { throw new Error('synthetic ownership failure'); },
+      edits: [{ type: 'replace', find: 'line3', replaceWith: 'lineThree' }],
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.changed, false);
+    assert.equal(result.error?.code, 'OWNERSHIP_RECORD_FAILED');
+    assert.equal(fs.readFileSync(testFile, 'utf8'), before);
+  });
+
   await t.test('matches LF anchors against CRLF files and preserves CRLF output', () => {
     fs.writeFileSync(testFile, 'alpha\r\nbeta\r\ngamma\r\n', 'utf8');
     const result = safeEditFile(mockState, {

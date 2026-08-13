@@ -14,11 +14,12 @@ import { prepareCompactEdit } from './stenoEditProtocolService';
 import type { ResourceAccessMode } from './mcpToolJobScheduler';
 import { executeRecoveryAwareTool } from './devFlowRecoveryRuntime.js';
 import {
-  getActiveTaskExecutionSessionForWorkspace,
-  recordExecutionOwnedChanges,
-  recordExecutionVerificationEvidence,
+  authorizeTaskExecutionMutationPaths,
+  captureExecutionVerificationProvenance,
+  getTaskExecutionMutationBinding,
+  recordTaskExecutionMutationPaths,
+  recordTaskExecutionVerificationResult,
 } from './executionSessionService.js';
-import { resolveSessionWorkspace } from './sessionWorkspaceService.js';
 
 type Logger = { stdout: (data: string) => void; stderr: (data: string) => void };
 type VerificationPermitDemand = { verificationClass?: 'fast' | 'heavy'; sharedResources?: string[] };
@@ -75,40 +76,18 @@ export function getBuiltinToolJobRecoveryPolicy(toolName: string): BuiltinToolJo
   return RETRYABLE_AFTER_RESTART.has(toolName) ? 'retryable' : 'interrupted';
 }
 
-function taskExecutionBinding(args: any) {
-  const workspaceId = String(args?.workspaceId || '').trim();
-  if (!workspaceId) return null;
-  const session = getActiveTaskExecutionSessionForWorkspace(workspaceId);
-  if (!session?.taskId) return null;
-  const workspace = resolveSessionWorkspace(workspaceId);
-  if (!workspace || workspace.projectId !== session.projectId) return null;
-  return { session, workspace };
+function authorizeTaskOwnedPaths(args: any, paths: string[]) {
+  return authorizeTaskExecutionMutationPaths(args, paths);
 }
 
-function recordTaskOwnedMutation(args: any, result: any, source: string) {
-  if (!result?.ok || result?.dryRun === true || result?.changed !== true) return;
-  const binding = taskExecutionBinding(args);
-  if (!binding) return;
-  const changedPaths = Array.isArray(result.files)
-    ? result.files
-      .filter((entry: any) => entry?.ok && entry?.changed && typeof entry?.filePath === 'string')
-      .map((entry: any) => entry.filePath)
-    : [];
-  if (changedPaths.length === 0) return;
-  recordExecutionOwnedChanges(binding.session.id, changedPaths, {
-    repoRoot: binding.workspace.root,
-    source,
-  });
+function recordTaskOwnedPaths(args: any, paths: string[], source: string) {
+  return recordTaskExecutionMutationPaths(args, paths, source);
 }
 
-function recordTaskVerification(args: any, result: any) {
-  if (!result?.ok || result?.status !== 'succeeded') return;
-  const binding = taskExecutionBinding(args);
-  if (!binding) return;
-  recordExecutionVerificationEvidence(binding.session.id, [{
-    name: String(args?.command || args?.preset || 'run_project_command'),
-    status: 'passed',
-  }], { repoRoot: binding.workspace.root });
+function captureTaskVerification(args: any) {
+  const binding = getTaskExecutionMutationBinding(args);
+  if (!binding) return null;
+  return captureExecutionVerificationProvenance(binding.session.id, { repoRoot: binding.workspace.root });
 }
 
 export async function runBuiltinToolJob(input: BuiltinToolJobInput, context: BuiltinToolJobContext) {
@@ -116,12 +95,17 @@ export async function runBuiltinToolJob(input: BuiltinToolJobInput, context: Bui
   const { logger, setCancelFn, transitionAccess } = context;
 
   if (toolName === 'run_project_command') {
+    const captured = captureTaskVerification(args);
     const result = await runProjectCommandAsync(state, args, logger, setCancelFn);
-    recordTaskVerification(args, result);
+    recordTaskExecutionVerificationResult(args, result, captured);
     return result;
   }
   if (toolName === 'apply_patch') {
-    return await applyLocalPatchAsync(state, args, logger, setCancelFn);
+    return await applyLocalPatchAsync(state, {
+      ...args,
+      __authorizeOwnedChanges: (paths: string[]) => authorizeTaskOwnedPaths(args, paths),
+      __recordOwnedChanges: (paths: string[]) => recordTaskOwnedPaths(args, paths, toolName),
+    }, logger, setCancelFn);
   }
   if (toolName === 'search_local_files') {
     return await executeRecoveryAwareTool(
@@ -136,40 +120,67 @@ export async function runBuiltinToolJob(input: BuiltinToolJobInput, context: Bui
   if (toolName === 'commit_git_changes') return commitGitChanges(state, args);
   if (toolName === 'commit_task_owned_changes') return commitTaskOwnedChanges(state, args);
   if (toolName === 'edit_local_files_batch') {
-    const result = editFilesBatch(state, args);
-    recordTaskOwnedMutation(args, result, toolName);
-    return result;
+    return editFilesBatch(state, {
+      ...args,
+      __authorizeOwnedChanges: (paths: string[]) => authorizeTaskOwnedPaths(args, paths),
+      __recordOwnedChanges: (paths: string[]) => recordTaskOwnedPaths(args, paths, toolName),
+    });
   }
   if (toolName === 'prepare_edit_plan') return prepareEditPlan(state, args);
   if (toolName === 'apply_prepared_edit_plan') {
     const sourceArgs = getPreparedEditRecoveryArgs(String(args?.editPlanId || '')) || args;
-    const result = await executeRecoveryAwareTool(state, toolName, args, (payload) => applyPreparedEditPlan(payload));
-    recordTaskOwnedMutation(sourceArgs, result, toolName);
-    return result;
+    return await executeRecoveryAwareTool(
+      state,
+      toolName,
+      args,
+      (payload) => applyPreparedEditPlan(payload, {
+        authorizeOwnedChanges: (paths) => authorizeTaskOwnedPaths(sourceArgs, paths),
+        recordOwnedChanges: (paths) => recordTaskOwnedPaths(sourceArgs, paths, toolName),
+      }),
+    );
   }
   if (toolName === 'prepare_compact_edit') return prepareCompactEdit(state, args);
   if (toolName === 'apply_prepared_edit') {
     const sourceArgs = getPreparedEditRecoveryArgs(String(args?.editPlanId || '')) || args;
     const payload = { editPlanId: args?.editPlanId };
-    const result = await executeRecoveryAwareTool(state, toolName, payload, (nextPayload) => applyPreparedEditPlan(nextPayload));
-    recordTaskOwnedMutation(sourceArgs, result, toolName);
-    return result;
+    return await executeRecoveryAwareTool(
+      state,
+      toolName,
+      payload,
+      (nextPayload) => applyPreparedEditPlan(nextPayload, {
+        authorizeOwnedChanges: (paths) => authorizeTaskOwnedPaths(sourceArgs, paths),
+        recordOwnedChanges: (paths) => recordTaskOwnedPaths(sourceArgs, paths, toolName),
+      }),
+    );
   }
   if (toolName === 'apply_and_verify') {
-    const result = await applyAndVerifyAsync(state, args, logger, setCancelFn, transitionAccess);
-    recordTaskOwnedMutation(args, result?.edit, toolName);
-    if (result?.ok === true) {
-      const binding = taskExecutionBinding(args);
-      if (binding) {
-        recordExecutionVerificationEvidence(binding.session.id, Array.isArray(result.verification) ? result.verification : [], {
-          repoRoot: binding.workspace.root,
-        });
-      }
-    }
+    let captured: ReturnType<typeof captureTaskVerification> = null;
+    const result = await applyAndVerifyAsync(state, {
+      ...args,
+      __authorizeOwnedChanges: (paths: string[]) => authorizeTaskOwnedPaths(args, paths),
+      __recordOwnedChanges: (paths: string[]) => recordTaskOwnedPaths(args, paths, toolName),
+      __captureVerificationProvenance: () => {
+        captured = captureTaskVerification(args);
+        return captured;
+      },
+    }, logger, setCancelFn, transitionAccess);
+    recordTaskExecutionVerificationResult(args, result, captured);
     return result;
   }
-  if (toolName === 'delete_local_path') return deleteLocalPath(state, args);
-  if (toolName === 'move_local_path') return moveLocalPath(state, args);
+  if (toolName === 'delete_local_path') {
+    return deleteLocalPath(state, {
+      ...args,
+      __authorizeOwnedChanges: (paths: string[]) => authorizeTaskOwnedPaths(args, paths),
+      __recordOwnedChanges: (paths: string[]) => recordTaskOwnedPaths(args, paths, toolName),
+    });
+  }
+  if (toolName === 'move_local_path') {
+    return moveLocalPath(state, {
+      ...args,
+      __authorizeOwnedChanges: (paths: string[]) => authorizeTaskOwnedPaths(args, paths),
+      __recordOwnedChanges: (paths: string[]) => recordTaskOwnedPaths(args, paths, toolName),
+    });
+  }
   if (toolName === 'apply_project_atlas_agent_update') {
     const project = findProjectForAtlasUpdate(args);
     if (!project) throw new Error('Project not found for Project Atlas agent update.');

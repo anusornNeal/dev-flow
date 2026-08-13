@@ -23,6 +23,19 @@ function invalidResult(dryRun: boolean, filePath: string, code: string, message:
   return { ok: false, dryRun, changed: false, files: [], errors: [{ filePath, code, message }] };
 }
 
+function rollbackWrittenFiles(written: PreparedSafeEditFile[]) {
+  const failures: Array<{ filePath: string; message: string }> = [];
+  for (const prior of [...written].reverse()) {
+    if (!prior.ok) continue;
+    try {
+      fs.writeFileSync(prior.targetPath, prior.before, 'utf8');
+    } catch (error) {
+      failures.push({ filePath: prior.result.filePath, message: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  return failures;
+}
+
 export function editFilesBatch(state: AppState, args: Record<string, any>): FileEditBatchResult {
   const dryRun = args.mode !== 'apply';
   const files = Array.isArray(args.files) ? args.files : [];
@@ -51,25 +64,55 @@ export function editFilesBatch(state: AppState, args: Record<string, any>): File
   }
   if (dryRun) return { ok: true, dryRun: true, changed: planned.some((result) => result.changed), preflightReused: false, files: planned };
 
+  const plannedChangedPaths = planned.filter((result) => result.ok && result.changed).map((result) => result.filePath);
+  if (plannedChangedPaths.length > 0 && typeof args.__authorizeOwnedChanges === 'function') {
+    args.__authorizeOwnedChanges(plannedChangedPaths);
+  }
+
   const applied: SafeEditResult[] = [];
   const written: PreparedSafeEditFile[] = [];
   for (const preparedFile of prepared) {
     const result = applyPreparedSafeEditFile(preparedFile);
     applied.push(result);
     if (!result.ok) {
-      for (const prior of written) {
-        if (prior.ok) fs.writeFileSync(prior.targetPath, prior.before, 'utf8');
-      }
+      const rollbackFailures = rollbackWrittenFiles(written);
       return {
         ok: false,
         dryRun: false,
         changed: false,
         preflightReused: true,
         files: applied,
-        errors: [{ filePath: result.filePath, code: result.error?.code, message: result.error?.message || 'Edit failed during apply; restored previous file contents.' }],
+        errors: [
+          { filePath: result.filePath, code: result.error?.code, message: result.error?.message || 'Edit failed during apply; restored previous file contents.' },
+          ...rollbackFailures.map((entry) => ({ filePath: entry.filePath, code: 'ROLLBACK_FAILED', message: entry.message })),
+        ],
       };
     }
     if (result.changed) written.push(preparedFile);
+  }
+
+  const changedPaths = applied.filter((result) => result.ok && result.changed).map((result) => result.filePath);
+  if (changedPaths.length > 0 && typeof args.__recordOwnedChanges === 'function') {
+    try {
+      args.__recordOwnedChanges(changedPaths);
+    } catch (error) {
+      const rollbackFailures = rollbackWrittenFiles(written);
+      const recoveryRequired = rollbackFailures.length > 0;
+      return {
+        ok: false,
+        dryRun: false,
+        changed: recoveryRequired,
+        preflightReused: true,
+        files: applied,
+        errors: [{
+          filePath: changedPaths.join(', '),
+          code: recoveryRequired ? 'OWNERSHIP_ROLLBACK_FAILED' : 'OWNERSHIP_RECORD_FAILED',
+          message: recoveryRequired
+            ? `Ownership persistence failed and filesystem rollback was incomplete: ${rollbackFailures.map((entry) => `${entry.filePath}: ${entry.message}`).join('; ')}`
+            : `Ownership persistence failed; file writes were rolled back: ${error instanceof Error ? error.message : String(error)}`,
+        }],
+      };
+    }
   }
 
   return { ok: true, dryRun: false, changed: applied.some((result) => result.changed), preflightReused: true, files: applied };

@@ -29,6 +29,7 @@ const { saveTask } = await import('../../src/server/repositories/taskRepository.
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
 const sessions = await import('../../src/server/services/executionSessionService.js');
 const { getExecutionOwnershipReviewBlockers } = await import('../../src/server/services/taskGitWorkflowService.js');
+const { getFileRevision } = await import('../../src/server/services/localFileService.js');
 
 const now = new Date().toISOString();
 createProject({ id: 'project-owned', name: 'owned', repoUrl: '', localPath: repoRoot, createdAt: now });
@@ -133,6 +134,113 @@ test('binds verification freshness to owned content only and exposes review bloc
   assert.ok(blockers.some((entry: any) => entry.code === 'EXECUTION_OWNERSHIP_DRIFT'));
   assert.ok(blockers.some((entry: any) => entry.code === 'EXECUTION_SCOPE_DRIFT'));
   assert.ok(blockers.some((entry: any) => entry.code === 'EXECUTION_VERIFICATION_STALE'));
+});
+
+test('legacy ownership adoption requires explicit dirty paths, revisions, and audit reason', () => {
+  resetRepo();
+  const session = createSession();
+  fs.writeFileSync(path.join(repoRoot, 'src', 'A.ts'), 'export const A = 2;\n', 'utf8');
+  fs.writeFileSync(path.join(repoRoot, 'src', 'B.ts'), 'export const B = 2;\n', 'utf8');
+  const before = sessions.getExecutionOwnershipState(session.id, { repoRoot });
+  assert.deepEqual(before.unrelatedChanges, ['src/A.ts', 'src/B.ts']);
+  const aRevision = getFileRevision(path.join(repoRoot, 'src', 'A.ts')).token;
+  const bRevision = getFileRevision(path.join(repoRoot, 'src', 'B.ts')).token;
+
+  assert.throws(
+    () => sessions.adoptExecutionOwnedChanges(session.id, [
+      { path: 'src/A.ts', expectedRevision: 'stale-revision' },
+    ], { repoRoot, reason: 'Recover a verified legacy mutation from before ownership plumbing.' }),
+    (error: any) => error?.code === 'EXECUTION_ADOPTION_REVISION_MISMATCH',
+  );
+  assert.deepEqual(sessions.getExecutionOwnershipState(session.id, { repoRoot }).ownedChanges, []);
+
+  const adopted = sessions.adoptExecutionOwnedChanges(session.id, [
+    { path: 'src/A.ts', expectedRevision: aRevision },
+  ], { repoRoot, reason: 'Recover a verified legacy mutation from before ownership plumbing.' });
+  assert.deepEqual(adopted.adoptedPaths, ['src/A.ts']);
+  const after = sessions.getExecutionOwnershipState(session.id, { repoRoot });
+  assert.deepEqual(after.ownedChanges, ['src/A.ts']);
+  assert.deepEqual(after.unrelatedChanges, ['src/B.ts']);
+  assert.equal(after.ownedFiles[0].source, 'legacy-adoption');
+
+  assert.throws(
+    () => sessions.adoptExecutionOwnedChanges(session.id, [
+      { path: 'src/B.ts', expectedRevision: bRevision },
+    ], { repoRoot, reason: 'short' }),
+    (error: any) => error?.code === 'EXECUTION_ADOPTION_REASON_REQUIRED',
+  );
+});
+
+test('explicit no-check-required verification binds freshness and later owned mutation stales it', () => {
+  resetRepo();
+  const session = createSession();
+  fs.writeFileSync(path.join(repoRoot, 'src', 'A.ts'), 'export const A = 2;\n', 'utf8');
+  sessions.recordExecutionOwnedChanges(session.id, ['src/A.ts'], { repoRoot, source: 'ChatGPT' });
+  const provenance = sessions.captureExecutionVerificationProvenance(session.id, { repoRoot });
+  const recorded = sessions.recordExecutionVerificationEvidence(session.id, [], {
+    repoRoot,
+    provenance: {
+      policy: 'no-checks-required',
+      expectedRepoRevision: provenance.repoRevision,
+      expectedOwnedFingerprint: provenance.ownedFingerprint,
+    },
+  });
+  assert.equal(recorded.binding.metadata.verificationPolicy, 'no-checks-required');
+  assert.equal(recorded.ownership.verificationFresh, true);
+
+  fs.writeFileSync(path.join(repoRoot, 'src', 'A.ts'), 'export const A = 3;\n', 'utf8');
+  assert.equal(sessions.getExecutionOwnershipState(session.id, { repoRoot }).verificationFresh, false);
+});
+
+test('strict verification provenance rejects stale candidate rebinding', () => {
+  resetRepo();
+  const session = createSession();
+  fs.writeFileSync(path.join(repoRoot, 'src', 'A.ts'), 'export const A = 2;\n', 'utf8');
+  sessions.recordExecutionOwnedChanges(session.id, ['src/A.ts'], { repoRoot, source: 'ChatGPT' });
+  const provenance = sessions.captureExecutionVerificationProvenance(session.id, { repoRoot });
+
+  fs.writeFileSync(path.join(repoRoot, 'src', 'A.ts'), 'export const A = 3;\n', 'utf8');
+  assert.throws(
+    () => sessions.recordExecutionVerificationEvidence(session.id, [
+      { name: 'focused', command: 'ownership-fixture', status: 'passed' },
+    ], {
+      repoRoot,
+      provenance: {
+        policy: 'checks-passed',
+        expectedRepoRevision: provenance.repoRevision,
+        expectedOwnedFingerprint: provenance.ownedFingerprint,
+        candidateId: 'vc_fixture',
+        candidateRepoRevision: provenance.repoRevision,
+        executionKey: 'execution-fixture',
+      },
+    }),
+    (error: any) => error?.code === 'EXECUTION_VERIFICATION_STALE',
+  );
+  assert.notEqual(sessions.getExecutionOwnershipState(session.id, { repoRoot }).verificationFresh, true);
+});
+
+test('strict verification provenance persists candidate identity only for current passed checks', () => {
+  resetRepo();
+  const session = createSession();
+  fs.writeFileSync(path.join(repoRoot, 'src', 'A.ts'), 'export const A = 2;\n', 'utf8');
+  sessions.recordExecutionOwnedChanges(session.id, ['src/A.ts'], { repoRoot, source: 'ChatGPT' });
+  const provenance = sessions.captureExecutionVerificationProvenance(session.id, { repoRoot });
+  const recorded = sessions.recordExecutionVerificationEvidence(session.id, [
+    { name: 'focused', command: 'ownership-fixture', status: 'passed' },
+  ], {
+    repoRoot,
+    provenance: {
+      policy: 'checks-passed',
+      expectedRepoRevision: provenance.repoRevision,
+      expectedOwnedFingerprint: provenance.ownedFingerprint,
+      candidateId: 'vc_fixture_current',
+      candidateRepoRevision: provenance.repoRevision,
+      executionKey: 'execution-current',
+    },
+  });
+  assert.equal(recorded.ownership.verificationFresh, true);
+  assert.equal(recorded.binding.metadata.candidateId, 'vc_fixture_current');
+  assert.equal(recorded.binding.metadata.verificationPolicy, 'checks-passed');
 });
 
 test.after(() => {

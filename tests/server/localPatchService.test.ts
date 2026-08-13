@@ -199,6 +199,36 @@ test('multi-file native unified diff still validates and applies', () => {
   assert.equal(readText(fixture.root, 'b.txt'), 'BETA\n');
 });
 
+test('applyLocalPatch rolls back when ownership persistence fails', () => {
+  const fixture = createFixture('ownership-rollback-sync');
+  const patch = wrongCountPatch();
+
+  assert.throws(
+    () => applyLocalPatch(fixture.state, {
+      projectId: fixture.projectId,
+      patch,
+      __recordOwnedChanges: () => { throw new Error('synthetic ownership failure'); },
+    }),
+    (error: any) => error?.payload?.code === 'PATCH_OWNERSHIP_FAILED',
+  );
+  assert.equal(readText(fixture.root, 'note.txt'), 'line1\nline2\nline3\n');
+});
+
+test('applyLocalPatchAsync rolls back when ownership persistence fails', async () => {
+  const fixture = createFixture('ownership-rollback-async');
+  const patch = wrongCountPatch();
+
+  await assert.rejects(
+    () => callAsync(fixture.state, {
+      projectId: fixture.projectId,
+      patch,
+      __recordOwnedChanges: () => { throw new Error('synthetic ownership failure'); },
+    }),
+    (error: any) => error?.payload?.code === 'PATCH_OWNERSHIP_FAILED',
+  );
+  assert.equal(readText(fixture.root, 'note.txt'), 'line1\nline2\nline3\n');
+});
+
 test('path traversal and binary patch safety guards remain authoritative', () => {
   const fixture = createFixture('safety-guards');
 

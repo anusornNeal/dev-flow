@@ -204,6 +204,28 @@ test('moveLocalPath rejects destination collisions and protected paths', () => {
   );
 });
 
+test('applyPathMutations rolls back completed operations when ownership persistence fails', () => {
+  const fixture = createFixture('ownership-rollback');
+  fs.writeFileSync(path.join(fixture.root, 'a.txt'), 'a\n');
+  fs.writeFileSync(path.join(fixture.root, 'b.txt'), 'b\n');
+
+  assert.throws(
+    () => applyPathMutations(fixture.state, {
+      projectId: fixture.projectId,
+      __recordOwnedChanges: () => { throw new Error('synthetic ownership failure'); },
+      operations: [
+        { type: 'move', from: 'a.txt', to: 'a-renamed.txt' },
+        { type: 'delete', path: 'b.txt' },
+      ],
+    }),
+    (error: any) => error?.payload?.code === 'PATH_MUTATION_OWNERSHIP_FAILED',
+  );
+
+  assert.equal(fs.readFileSync(path.join(fixture.root, 'a.txt'), 'utf8'), 'a\n');
+  assert.equal(fs.readFileSync(path.join(fixture.root, 'b.txt'), 'utf8'), 'b\n');
+  assert.equal(fs.existsSync(path.join(fixture.root, 'a-renamed.txt')), false);
+});
+
 test('applyPathMutations rolls back completed moves when a later filesystem operation fails', () => {
   const fixture = createFixture('rollback');
   fs.writeFileSync(path.join(fixture.root, 'a.txt'), 'a\n');

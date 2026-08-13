@@ -161,6 +161,69 @@ function buildChangedFileMetadata(root: string, changedFiles: string[]): LocalPa
   });
 }
 
+type PatchPreimage = {
+  relativePath: string;
+  targetPath: string;
+  existed: boolean;
+  content: Buffer | null;
+};
+
+function capturePatchPreimages(root: string, changedFiles: string[]): PatchPreimage[] {
+  return changedFiles.map((relativePath) => {
+    const targetPath = resolveSafePath(root, relativePath);
+    const existed = fs.existsSync(targetPath);
+    return {
+      relativePath,
+      targetPath,
+      existed,
+      content: existed ? fs.readFileSync(targetPath) : null,
+    };
+  });
+}
+
+function rollbackPatchPreimages(root: string, preimages: PatchPreimage[]) {
+  const failures: Array<{ path: string; message: string }> = [];
+  for (const preimage of [...preimages].reverse()) {
+    try {
+      if (preimage.existed) {
+        fs.mkdirSync(path.dirname(preimage.targetPath), { recursive: true });
+        fs.writeFileSync(preimage.targetPath, preimage.content!);
+      } else {
+        fs.rmSync(preimage.targetPath, { force: true });
+      }
+    } catch (error) {
+      failures.push({ path: preimage.relativePath, message: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  invalidateRepoReadCaches(root, 'patchOwnershipRollback', { paths: preimages.map((entry) => entry.relativePath) });
+  return failures;
+}
+
+function persistPatchOwnershipOrRollback(
+  args: Record<string, any>,
+  root: string,
+  changedFiles: string[],
+  preimages: PatchPreimage[],
+) {
+  if (typeof args.__recordOwnedChanges !== 'function' || changedFiles.length === 0) return;
+  try {
+    args.__recordOwnedChanges(changedFiles);
+  } catch (error) {
+    const rollbackFailures = rollbackPatchPreimages(root, preimages);
+    if (rollbackFailures.length > 0) {
+      throw createApiError(500, 'PATCH_OWNERSHIP_ROLLBACK_FAILED', 'Ownership persistence failed and patch rollback was incomplete. Recovery is required.', {
+        details: {
+          cause: error instanceof Error ? error.message : String(error),
+          rollbackFailures,
+        },
+      });
+    }
+    throw createApiError(409, 'PATCH_OWNERSHIP_FAILED', 'Ownership persistence failed; patch changes were rolled back.', {
+      details: { cause: error instanceof Error ? error.message : String(error) },
+    });
+  }
+}
+
 function buildPatchResult(params: {
   root: string;
   changedFiles: string[];
@@ -207,6 +270,10 @@ export function applyLocalPatch(state: AppState, args: Record<string, any>): Loc
 
   const changedFiles = validatePatchPaths(root, patch);
   const dryRun = normalizePatchFlag(args.dryRun ?? args.check);
+  if (!dryRun && typeof args.__authorizeOwnedChanges === 'function') {
+    args.__authorizeOwnedChanges(changedFiles);
+  }
+  const preimages = dryRun ? [] : capturePatchPreimages(root, changedFiles);
   const gitArgs = ['apply', '--recount', dryRun ? '--check' : '--whitespace=nowarn'];
   const result = spawnSync('git', gitArgs, {
     cwd: root,
@@ -244,6 +311,7 @@ export function applyLocalPatch(state: AppState, args: Record<string, any>): Loc
   }
 
   if (!dryRun) {
+    persistPatchOwnershipOrRollback(args, root, changedFiles, preimages);
     invalidateRepoReadCaches(root, 'applyLocalPatch', { paths: changedFiles });
   }
 
@@ -263,6 +331,10 @@ export async function applyLocalPatchAsync(state: AppState, args: Record<string,
   const { maxPatchBytes, maxSummaryBytes } = resolvePatchLimits(args);
   assertPatchSize(patch, maxPatchBytes);
   const changedFiles = validatePatchPaths(root, patch);
+  if (!dryRun && typeof args.__authorizeOwnedChanges === 'function') {
+    args.__authorizeOwnedChanges(changedFiles);
+  }
+  const preimages = dryRun ? [] : capturePatchPreimages(root, changedFiles);
   const gitArgs = ['apply', '--recount', dryRun ? '--check' : '--whitespace=nowarn'];
   
   return new Promise((resolve, reject) => {
@@ -325,6 +397,12 @@ export async function applyLocalPatchAsync(state: AppState, args: Record<string,
       }
 
       if (!dryRun) {
+        try {
+          persistPatchOwnershipOrRollback(args, root, changedFiles, preimages);
+        } catch (error) {
+          reject(error);
+          return;
+        }
         invalidateRepoReadCaches(root, 'applyLocalPatchAsync', { paths: changedFiles });
       }
 

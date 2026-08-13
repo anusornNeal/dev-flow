@@ -241,6 +241,25 @@ test('rollback write errors are reported structurally and never escape', () => {
   assert.match(applied.rollback?.failures[0].message || '', /synthetic rollback/i);
 });
 
+test('prepared edit rolls back writes when ownership persistence fails', () => {
+  write('ownership-rollback.txt', 'alpha one');
+  const prepared = prepareEditPlan(state, {
+    projectId: 'project-prepared-edit',
+    files: [{ filePath: 'ownership-rollback.txt', edits: [{ type: 'replace', find: 'one', replaceWith: 'uno' }] }],
+  });
+
+  const applied = applyPreparedEditPlan(
+    { editPlanId: prepared.editPlanId! },
+    { recordOwnedChanges: () => { throw new Error('synthetic ownership failure'); } },
+  );
+
+  assert.equal(applied.ok, false);
+  assert.equal(applied.changed, false);
+  assert.equal(applied.code, 'EDIT_PLAN_OWNERSHIP_FAILED');
+  assert.deepEqual(applied.rollback?.restored, ['ownership-rollback.txt']);
+  assert.equal(read('ownership-rollback.txt'), 'alpha one');
+});
+
 test.after(() => {
   clearPreparedEditPlans();
   try {

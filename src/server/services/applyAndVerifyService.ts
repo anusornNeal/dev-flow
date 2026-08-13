@@ -64,7 +64,13 @@ function summarizeVerificationPerformance(startedAt: number, verification: RunPr
 
 export function applyAndVerify(state: AppState, args: Record<string, any>) {
   const edit = typeof args.editPlanId === 'string' && args.editPlanId.trim()
-    ? applyPreparedEditPlan({ editPlanId: args.editPlanId })
+    ? applyPreparedEditPlan(
+      { editPlanId: args.editPlanId },
+      {
+        authorizeOwnedChanges: typeof args.__authorizeOwnedChanges === 'function' ? args.__authorizeOwnedChanges : undefined,
+        recordOwnedChanges: typeof args.__recordOwnedChanges === 'function' ? args.__recordOwnedChanges : undefined,
+      },
+    )
     : editFilesBatch(state, { ...args, mode: 'apply', files: args.files });
 
   if (!edit.ok) {
@@ -112,6 +118,18 @@ export function applyAndVerify(state: AppState, args: Record<string, any>) {
   }
 
   const verification: RunProjectCommandResult[] = [];
+  if (plan.steps.length === 0 && args.noChecksRequired !== true) {
+    return {
+      ok: false,
+      status: 'verification_incomplete' as const,
+      noChanges,
+      edit,
+      plan,
+      diff,
+      verification,
+      verificationPolicy: 'checks-required' as const,
+    };
+  }
   for (const step of plan.steps) {
     const result = runProjectCommand(state, {
       ...projectScopeArgs(args),
@@ -142,6 +160,7 @@ export function applyAndVerify(state: AppState, args: Record<string, any>) {
     plan,
     diff,
     verification,
+    verificationPolicy: plan.steps.length === 0 ? 'no-checks-required' as const : 'checks-passed' as const,
   };
 }
 
@@ -185,7 +204,13 @@ export async function applyAndVerifyAsync(
   ) => void | VerificationExecutionLease | Promise<void | VerificationExecutionLease> = () => unrestrictedVerificationExecutionLease,
 ) {
   const edit = typeof args.editPlanId === 'string' && args.editPlanId.trim()
-    ? applyPreparedEditPlan({ editPlanId: args.editPlanId })
+    ? applyPreparedEditPlan(
+      { editPlanId: args.editPlanId },
+      {
+        authorizeOwnedChanges: typeof args.__authorizeOwnedChanges === 'function' ? args.__authorizeOwnedChanges : undefined,
+        recordOwnedChanges: typeof args.__recordOwnedChanges === 'function' ? args.__recordOwnedChanges : undefined,
+      },
+    )
     : editFilesBatch(state, { ...args, mode: 'apply', files: args.files });
 
   if (!edit.ok) {
@@ -228,6 +253,36 @@ export async function applyAndVerifyAsync(
     };
   }
 
+  if (typeof args.__captureVerificationProvenance === 'function') {
+    args.__captureVerificationProvenance();
+  }
+  if (plan.steps.length === 0) {
+    if (args.noChecksRequired !== true) {
+      return {
+        ok: false,
+        status: 'verification_incomplete' as const,
+        noChanges,
+        edit,
+        plan,
+        diff,
+        verification: [] as RunProjectCommandResult[],
+        verificationPolicy: 'checks-required' as const,
+        parallelVerification: false,
+      };
+    }
+    return {
+      ok: true,
+      status: 'succeeded' as const,
+      noChanges,
+      edit,
+      plan,
+      diff,
+      verification: [] as RunProjectCommandResult[],
+      verificationPolicy: 'no-checks-required' as const,
+      parallelVerification: false,
+      verificationPerformance: { wallMs: 0, summedExecutionMs: 0, processSpawns: 0, cacheHits: 0, candidatePreparationMs: 0 },
+    };
+  }
   const candidatePreparationStartedAt = Date.now();
   const sourceRoot = resolveProjectRoot(state, args);
   const baseCandidate = plan.steps.length > 0 ? createVerificationCandidate(sourceRoot) : null;
@@ -467,6 +522,7 @@ export async function applyAndVerifyAsync(
       failingVerificationChecks: [] as string[],
       parallelVerification,
       verificationPerformance: verificationPerformance(),
+      verificationPolicy: 'checks-passed' as const,
     };
   } finally {
     verificationExecutionLease.dispose();

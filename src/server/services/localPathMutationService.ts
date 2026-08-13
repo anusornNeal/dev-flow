@@ -62,6 +62,10 @@ export interface PathMutationResult {
   backupCleanupWarning?: string;
 }
 
+type CompletedPathMutation =
+  | { type: 'delete'; sourcePath: string; backupPath: string }
+  | { type: 'move'; sourcePath: string; destinationPath: string };
+
 export interface PathMutationIo {
   existsSync(targetPath: fs.PathLike): boolean;
   lstatSync(targetPath: fs.PathLike): fs.Stats;
@@ -275,6 +279,24 @@ function serializePlan(root: string, planned: PlannedOperation[]) {
       });
 }
 
+function rollbackCompletedMutations(completed: CompletedPathMutation[], io: PathMutationIo) {
+  const rollbackErrors: string[] = [];
+  for (const completedOperation of [...completed].reverse()) {
+    try {
+      if (completedOperation.type === 'delete') {
+        if (io.existsSync(completedOperation.backupPath)) {
+          io.renameSync(completedOperation.backupPath, completedOperation.sourcePath);
+        }
+      } else if (io.existsSync(completedOperation.destinationPath)) {
+        io.renameSync(completedOperation.destinationPath, completedOperation.sourcePath);
+      }
+    } catch (rollbackError) {
+      rollbackErrors.push(rollbackError instanceof Error ? rollbackError.message : String(rollbackError));
+    }
+  }
+  return rollbackErrors;
+}
+
 function buildResult(root: string, planned: PlannedOperation[], dryRun: boolean, rolledBack: boolean): PathMutationResult {
   const operations = serializePlan(root, planned);
   const affectedPaths = Array.from(new Set(planned.flatMap((plan) => plan.type === 'delete' ? [plan.path] : [plan.from, plan.to]))).sort();
@@ -304,14 +326,14 @@ export function applyPathMutations(
   const dryRun = bool(args.dryRun ?? args.check) || String(args.mode || '').toLowerCase() === 'dry-run';
   const result = buildResult(root, planned, dryRun, false);
   if (dryRun) return result;
+  if (result.affectedPaths.length > 0 && typeof args.__authorizeOwnedChanges === 'function') {
+    args.__authorizeOwnedChanges(result.affectedPaths);
+  }
 
   const transactionId = `${Date.now()}-${crypto.randomBytes(6).toString('hex')}`;
   const backupDir = path.join(root, '.devflow', 'path-mutation-backups', transactionId);
   io.mkdirSync(backupDir, { recursive: true });
-  const completed: Array<
-    | { type: 'delete'; sourcePath: string; backupPath: string }
-    | { type: 'move'; sourcePath: string; destinationPath: string }
-  > = [];
+  const completed: CompletedPathMutation[] = [];
 
   try {
     for (let index = 0; index < planned.length; index += 1) {
@@ -326,20 +348,7 @@ export function applyPathMutations(
       }
     }
   } catch (error) {
-    const rollbackErrors: string[] = [];
-    for (const completedOperation of completed.reverse()) {
-      try {
-        if (completedOperation.type === 'delete') {
-          if (io.existsSync(completedOperation.backupPath)) {
-            io.renameSync(completedOperation.backupPath, completedOperation.sourcePath);
-          }
-        } else if (io.existsSync(completedOperation.destinationPath)) {
-          io.renameSync(completedOperation.destinationPath, completedOperation.sourcePath);
-        }
-      } catch (rollbackError) {
-        rollbackErrors.push(rollbackError instanceof Error ? rollbackError.message : String(rollbackError));
-      }
-    }
+    const rollbackErrors = rollbackCompletedMutations(completed, io);
     try {
       io.rmSync(backupDir, { recursive: true, force: true });
     } catch (cleanupError) {
@@ -353,6 +362,27 @@ export function applyPathMutations(
       },
       retryable: rollbackErrors.length === 0,
     });
+  }
+
+  if (typeof args.__recordOwnedChanges === 'function' && result.affectedPaths.length > 0) {
+    try {
+      args.__recordOwnedChanges(result.affectedPaths);
+    } catch (error) {
+      const rollbackErrors = rollbackCompletedMutations(completed, io);
+      try {
+        io.rmSync(backupDir, { recursive: true, force: true });
+      } catch (cleanupError) {
+        rollbackErrors.push(cleanupError instanceof Error ? cleanupError.message : String(cleanupError));
+      }
+      if (rollbackErrors.length > 0) {
+        throw createApiError(500, 'PATH_MUTATION_OWNERSHIP_ROLLBACK_FAILED', 'Ownership persistence failed and path rollback was incomplete. Recovery is required.', {
+          details: { cause: error instanceof Error ? error.message : String(error), rollbackErrors },
+        });
+      }
+      throw createApiError(409, 'PATH_MUTATION_OWNERSHIP_FAILED', 'Ownership persistence failed; path mutation was rolled back.', {
+        details: { cause: error instanceof Error ? error.message : String(error) },
+      });
+    }
   }
 
   let backupCleanupWarning: string | undefined;

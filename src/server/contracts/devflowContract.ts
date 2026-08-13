@@ -1168,6 +1168,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
         requestedCommands: { type: 'array', items: { type: 'string' }, description: 'Verification preset names available to run_project_command.' },
         resourceIsolatedCommands: { type: 'array', items: { type: 'string' }, description: 'Commands explicitly proven safe to parallelize by future schedulers.' },
         forceVerification: { type: 'boolean' },
+        noChecksRequired: { type: 'boolean', description: 'Explicitly declare that no verification command is required when the resolved plan has zero checks. Without this flag, an empty plan is incomplete.' },
         cacheVerificationResults: { type: 'boolean' },
         timeoutMs: { type: 'number' },
         maxOutputBytes: { type: 'number' },

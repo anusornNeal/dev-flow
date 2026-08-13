@@ -97,6 +97,22 @@ test('writeLocalFile blocks paths outside the project root', () => {
   );
 });
 
+test('writeLocalFile rolls back when ownership persistence fails', () => {
+  const target = path.join(tempDir, 'ownership-write.txt');
+  fs.writeFileSync(target, 'before', 'utf8');
+
+  assert.throws(
+    () => writeLocalFile(state, {
+      projectId: 'project-write-1',
+      filePath: 'ownership-write.txt',
+      content: 'after',
+      __recordOwnedChanges: () => { throw new Error('synthetic ownership failure'); },
+    }),
+    (error: any) => error?.payload?.code === 'WRITE_OWNERSHIP_FAILED',
+  );
+  assert.equal(fs.readFileSync(target, 'utf8'), 'before');
+});
+
 test.after(() => {
   fs.rmSync(tempDir, { recursive: true, force: true });
 });

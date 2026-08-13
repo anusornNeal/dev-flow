@@ -103,6 +103,27 @@ test('editFilesBatch stops before writing when any preflight edit fails', () => 
   assert.equal(readFixture('preflight-b.txt'), 'beta two');
 });
 
+test('editFilesBatch rolls back writes when ownership persistence fails', () => {
+  writeFixture('ownership-a.txt', 'alpha one');
+  writeFixture('ownership-b.txt', 'beta two');
+
+  const result = editFilesBatch(state, {
+    projectId: 'project-file-edit-batch-1',
+    mode: 'apply',
+    __recordOwnedChanges: () => { throw new Error('synthetic ownership failure'); },
+    files: [
+      { filePath: 'ownership-a.txt', edits: [{ type: 'replace', find: 'one', replaceWith: 'uno' }] },
+      { filePath: 'ownership-b.txt', edits: [{ type: 'replace', find: 'two', replaceWith: 'dos' }] },
+    ],
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.changed, false);
+  assert.equal(result.errors?.[0]?.code, 'OWNERSHIP_RECORD_FAILED');
+  assert.equal(readFixture('ownership-a.txt'), 'alpha one');
+  assert.equal(readFixture('ownership-b.txt'), 'beta two');
+});
+
 test.after(() => {
   // SQLite remains open for the process on Windows; OS temp cleanup owns tempDir.
 });

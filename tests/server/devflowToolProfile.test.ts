@@ -6,6 +6,7 @@ import path from 'node:path';
 
 const { devFlowToolDefinitions, getCapabilityCatalog, getMcpConsolidationReplacement, getMcpToolList, getMcpToolSurfaceIdentity, getToolProfileSummary, resolveDevFlowToolProfile } = await import('../../src/server/contracts/devflowContract.js');
 const { buildMcpToolSurfaceInventory, summarizeMcpToolSurfaceInventory } = await import('../../src/server/contracts/mcpToolSurfaceClassification.js');
+const { getTaskMutationOwnershipStrategy } = await import('../../src/server/services/executionSessionService.js');
 
 const PROTECTED_MASTER_SKILLS = [
   '00-skill-router.md',
@@ -293,6 +294,38 @@ test('MCP inventory can retain backend compatibility while full advertises only 
   assert.equal(full.some((tool: any) => inventory.find((item: any) => item.name === tool.name)?.alias), false);
   assert.equal(summary.total, inventory.length);
   assert.equal(summary.byDisposition.keep + summary.byDisposition.combine + summary.byDisposition['hide-default'], inventory.length);
+});
+
+test('legacy ownership adoption tool requires explicit files, revisions, task workspace, and audit reason', () => {
+  const tool = devFlowToolDefinitions.find((entry: any) => entry.name === 'attach_task_owned_changes');
+  assert.ok(tool);
+  assert.deepEqual(tool.inputSchema.required, ['taskId', 'workspaceId', 'files', 'reason']);
+  assert.equal(tool.inputSchema.properties.files.minItems, 1);
+  assert.deepEqual(tool.inputSchema.properties.files.items.required, ['path', 'expectedRevision']);
+  assert.equal(tool.inputSchema.properties.reason.minLength, 10);
+  const request = tool.buildHttpRequest?.({
+    taskId: 'DVF-0001', workspaceId: 'ws_fixture',
+    files: [{ path: 'src/a.ts', expectedRevision: 'revision' }],
+    reason: 'Explicit legacy recovery reason',
+  });
+  assert.equal(request?.path, '/api/git/task-commit/adopt-owned-changes');
+});
+
+test('task-bound repo mutation tools declare ownership strategy or explicit plan-only exemption', () => {
+  const inventory = buildMcpToolSurfaceInventory(devFlowToolDefinitions);
+  const repoMutationTools = inventory
+    .filter((item: any) => !item.alias)
+    .filter((item: any) => (
+      (item.intent === 'repo-work' && (item.risk === 'write' || item.risk === 'destructive'))
+      || item.name === 'apply_and_verify'
+    ));
+  const missing = repoMutationTools
+    .filter((item: any) => !getTaskMutationOwnershipStrategy(item.name))
+    .map((item: any) => item.name)
+    .sort();
+  assert.deepEqual(missing, [], `repo mutation tools missing ownership strategy: ${missing.join(', ')}`);
+  assert.equal(getTaskMutationOwnershipStrategy('prepare_edit_plan'), 'plan-only-exempt');
+  assert.equal(getTaskMutationOwnershipStrategy('prepare_compact_edit'), 'plan-only-exempt');
 });
 
 test('MCP cleanup preserves coding workflows within the established surface budget', () => {

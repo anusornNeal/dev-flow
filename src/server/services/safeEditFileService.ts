@@ -27,7 +27,9 @@ type SafeEditErrorCode =
   | 'INVALID_OPERATION'
   | 'UNSAFE_PATH'
   | 'CONTENT_CHANGED'
-  | 'WRITE_FAILED';
+  | 'WRITE_FAILED'
+  | 'OWNERSHIP_RECORD_FAILED'
+  | 'OWNERSHIP_ROLLBACK_FAILED';
 
 type NewlineStyle = 'lf' | 'crlf' | 'mixed' | 'none';
 
@@ -407,5 +409,53 @@ export function applyPreparedSafeEditFile(prepared: PreparedSafeEditFile): SafeE
 
 export function safeEditFile(state: AppState, args: Record<string, any>): SafeEditResult {
   const prepared = prepareSafeEditFile(state, args);
-  return args.mode === 'apply' ? applyPreparedSafeEditFile(prepared) : prepared.result;
+  if (args.mode !== 'apply') return prepared.result;
+  if (prepared.ok && prepared.result.changed && typeof args.__authorizeOwnedChanges === 'function') {
+    args.__authorizeOwnedChanges([prepared.result.filePath]);
+  }
+  const applied = applyPreparedSafeEditFile(prepared);
+  if (!applied.ok || !applied.changed || typeof args.__recordOwnedChanges !== 'function') return applied;
+  if (!prepared.ok) return applied;
+
+  try {
+    args.__recordOwnedChanges([applied.filePath]);
+    return applied;
+  } catch (error) {
+    try {
+      const current = fs.readFileSync(prepared.targetPath, 'utf8');
+      if (current !== prepared.after) {
+        return {
+          ...applied,
+          ok: false,
+          changed: true,
+          error: {
+            code: 'OWNERSHIP_ROLLBACK_FAILED',
+            message: `Ownership persistence failed and '${applied.filePath}' changed again before rollback. Recovery is required.`,
+          },
+        };
+      }
+      fs.writeFileSync(prepared.targetPath, prepared.before, 'utf8');
+      invalidateRepoReadCaches(prepared.root, 'safeEditOwnershipRollback', { paths: [applied.filePath] });
+      return {
+        ...applied,
+        ok: false,
+        changed: false,
+        revisionAfter: getFileRevision(prepared.targetPath),
+        error: {
+          code: 'OWNERSHIP_RECORD_FAILED',
+          message: `Ownership persistence failed; safe edit was rolled back: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      };
+    } catch (rollbackError) {
+      return {
+        ...applied,
+        ok: false,
+        changed: true,
+        error: {
+          code: 'OWNERSHIP_ROLLBACK_FAILED',
+          message: `Ownership persistence failed and safe-edit rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
+        },
+      };
+    }
+  }
 }

@@ -10,10 +10,19 @@ import {
   type PreparedSafeEditFile,
   type SafeEditResult,
 } from './safeEditFileService';
+import { getActiveTaskExecutionSessionForWorkspace } from './executionSessionService.js';
+import { resolveSessionWorkspace } from './sessionWorkspaceService.js';
 
 const DEFAULT_PLAN_TTL_MS = 180_000;
 const MAX_PLAN_TTL_MS = 300_000;
 const MAX_PLANS = 128;
+
+type PreparedExecutionProvenance = {
+  workspaceId: string;
+  executionSessionId: string;
+  taskId: string;
+  projectId: string;
+};
 
 type StoredEditPlan = {
   editPlanId: string;
@@ -22,6 +31,7 @@ type StoredEditPlan = {
   status: 'prepared' | 'applying' | 'consumed';
   prepared: PreparedSafeEditFile[];
   sourceArgs: Record<string, any>;
+  executionProvenance: PreparedExecutionProvenance | null;
 };
 
 export type PreparedEditPlanResult = {
@@ -94,6 +104,44 @@ function recoverySourceArgs(args: Record<string, any>) {
   return copy;
 }
 
+function capturePreparedExecutionProvenance(args: Record<string, any>): PreparedExecutionProvenance | null {
+  const workspaceId = String(args?.workspaceId || '').trim();
+  if (!workspaceId) return null;
+  const session = getActiveTaskExecutionSessionForWorkspace(workspaceId);
+  if (!session?.taskId) return null;
+  const workspace = resolveSessionWorkspace(workspaceId);
+  if (!workspace || workspace.projectId !== session.projectId) {
+    throw Object.assign(new Error(`Workspace '${workspaceId}' is not bound to the active task execution session.`), { code: 'EDIT_PLAN_STALE' });
+  }
+  return {
+    workspaceId,
+    executionSessionId: session.id,
+    taskId: session.taskId,
+    projectId: session.projectId,
+  };
+}
+
+function preparedExecutionProvenanceError(provenance: PreparedExecutionProvenance | null) {
+  if (!provenance) return null;
+  try {
+    const workspace = resolveSessionWorkspace(provenance.workspaceId);
+    const session = getActiveTaskExecutionSessionForWorkspace(provenance.workspaceId);
+    if (
+      !workspace
+      || !session?.taskId
+      || workspace.projectId !== provenance.projectId
+      || session.id !== provenance.executionSessionId
+      || session.taskId !== provenance.taskId
+      || session.projectId !== provenance.projectId
+    ) {
+      return 'Prepared edit execution/workspace provenance is no longer current.';
+    }
+    return null;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
+
 export function getPreparedEditRecoveryArgs(editPlanId: string) {
   const plan = plans.get(String(editPlanId || '').trim());
   return plan ? recoverySourceArgs(plan.sourceArgs) : null;
@@ -164,6 +212,7 @@ export function prepareEditPlan(state: AppState, args: Record<string, any>): Pre
     status: 'prepared',
     prepared,
     sourceArgs: recoverySourceArgs(args),
+    executionProvenance: capturePreparedExecutionProvenance(args),
   };
   plans.set(editPlanId, stored);
 
@@ -243,7 +292,13 @@ function planRecovery(code: string, action: 're-read' | 're-prepare' | 'inspect-
   };
 }
 
-export function applyPreparedEditPlan(args: { editPlanId?: string }): PreparedEditPlanResult {
+export function applyPreparedEditPlan(
+  args: { editPlanId?: string },
+  options: {
+    authorizeOwnedChanges?: (paths: string[]) => void;
+    recordOwnedChanges?: (paths: string[]) => void;
+  } = {},
+): PreparedEditPlanResult {
   const editPlanId = String(args.editPlanId || '').trim();
   if (!editPlanId) {
     return { ok: false, changed: false, files: [], code: 'INVALID_ARGS', message: 'editPlanId is required.' };
@@ -281,6 +336,29 @@ export function applyPreparedEditPlan(args: { editPlanId?: string }): PreparedEd
       message: `Prepared edit plan '${editPlanId}' has already been consumed.`,
       recovery: planRecovery('EDIT_PLAN_CONSUMED', 'inspect-result', 'Do not replay or automatically re-prepare a consumed plan. Inspect the prior apply result or current diff before deciding the next edit.'),
     };
+  }
+
+  const provenanceError = preparedExecutionProvenanceError(plan.executionProvenance);
+  if (provenanceError) {
+    plan.status = 'consumed';
+    return {
+      ok: false,
+      changed: false,
+      editPlanId,
+      consumed: true,
+      files: plan.prepared.map((entry) => entry.result),
+      code: 'EDIT_PLAN_STALE',
+      message: `${provenanceError} Re-read and prepare a new plan in the current execution workspace.`,
+      recovery: planRecovery('EDIT_PLAN_STALE', 're-read', 'Re-read from the current task execution workspace and prepare a new plan. The stale plan is consumed.'),
+    };
+  }
+
+  const plannedChangedPaths = plan.prepared
+    .map((entry) => entry.result)
+    .filter((result) => result.ok && result.changed)
+    .map((result) => result.filePath);
+  if (plannedChangedPaths.length > 0 && options.authorizeOwnedChanges) {
+    options.authorizeOwnedChanges(plannedChangedPaths);
   }
 
   plan.status = 'applying';
@@ -358,6 +436,29 @@ export function applyPreparedEditPlan(args: { editPlanId?: string }): PreparedEd
       };
     }
     if (prepared.ok && result.changed) written.push(prepared);
+  }
+
+  const changedPaths = applied.filter((result) => result.ok && result.changed).map((result) => result.filePath);
+  if (changedPaths.length > 0 && options.recordOwnedChanges) {
+    try {
+      options.recordOwnedChanges(changedPaths);
+    } catch (error) {
+      const rollback = rollbackWrittenFiles(written);
+      plan.status = 'consumed';
+      const recoveryRequired = rollback.failures.length > 0 || rollback.conflicts.length > 0;
+      return {
+        ok: false,
+        changed: recoveryRequired,
+        editPlanId,
+        consumed: true,
+        files: applied,
+        code: recoveryRequired ? 'EDIT_PLAN_RECOVERY_REQUIRED' : 'EDIT_PLAN_OWNERSHIP_FAILED',
+        message: recoveryRequired
+          ? 'Ownership persistence failed and prepared-edit rollback could not fully restore the workspace.'
+          : `Ownership persistence failed; prepared writes were rolled back: ${error instanceof Error ? error.message : String(error)}`,
+        rollback,
+      };
+    }
   }
 
   plan.status = 'consumed';

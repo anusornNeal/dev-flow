@@ -147,16 +147,24 @@ test('07 owns implementation, verification, task workspace lifecycle, and termin
   ]) {
     assert.match(executionSkill, new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'), `07 should own ${token}`);
   }
-  assert.match(executionSkill, /Two-pass verification/i);
-  assert.match(executionSkill, /RED[\s\S]*implement[\s\S]*GREEN/i);
-  assert.match(executionSkill, /exactly two|two verification executions/i);
+  assert.match(executionSkill, /UNDERSTAND\/DESIGN[\s\S]*IMPLEMENT[\s\S]*VERIFY/i);
+  assert.match(executionSkill, /contract[\s\S]*boundar(?:y|ies)[\s\S]*edge cases/i);
+  assert.match(executionSkill, /bug[\s\S]*(?:reproduc|defect evidence)/i);
+  assert.match(executionSkill, /existing failing test|focused test/i);
+  assert.match(executionSkill, /deterministic command|deterministic scenario/i);
+  assert.match(executionSkill, /runtime.*log|log.*evidence/i);
+  assert.match(executionSkill, /impractical|unsafe|nondeterministic|no independent information/i);
   assert.match(executionSkill, /no intermediate|do not run[^\n]*intermediate/i);
-  assert.match(executionSkill, /tests?.*before.*implementation|test-first|TDD/i);
   assert.match(executionSkill, /one frozen candidate|same frozen candidate/i);
-  assert.match(executionSkill, /parallel[\s\S]*GREEN|GREEN[\s\S]*parallel/i);
-  assert.match(executionSkill, /do not mutate[\s\S]*GREEN|GREEN[\s\S]*do not mutate/i);
+  assert.match(executionSkill, /parallel[\s\S]*(?:final verification|verification batch)|(?:final verification|verification batch)[\s\S]*parallel/i);
+  assert.match(executionSkill, /do not mutate[\s\S]*(?:final verification|verification batch)|(?:final verification|verification batch)[\s\S]*do not mutate/i);
   assert.match(executionSkill, /join[\s\S]*required|all required[\s\S]*join/i);
   assert.match(executionSkill, /another revision[\s\S]*invalid|other revision[\s\S]*invalid|evidence[\s\S]*same frozen candidate/i);
+  assert.match(executionSkill, /FAST[\s\S]*SAFE[\s\S]*FULL/i);
+  assert.match(executionSkill, /FULL[\s\S]*(?:not the normal leaf|parent|integration|milestone)/i);
+  assert.doesNotMatch(executionSkill, /exactly two logical verification phases/i);
+  assert.doesNotMatch(executionSkill, /Two-pass verification \(test-first\)/i);
+  assert.doesNotMatch(executionSkill, /testable behavior changes[\s\S]{0,160}RED/i);
   assert.match(executionSkill, /prefer `finalize_task_workspace`|preferred terminal/i);
   assert.match(executionSkill, /integrate_workspace.*fallback|fallback.*integrate_workspace/i);
   assert.match(executionSkill, /Do not push/i);
@@ -186,18 +194,22 @@ test('08 owns only board orchestration and delegates implementation policy to 07
   }
 });
 
-test('runtime execution prompt stays narrow and worker-focused', () => {
+test('runtime execution prompt stays compact and worker-focused', () => {
   assert.equal(Buffer.byteLength(executionRules) <= 3_500, true);
   assert.match(executionRules, /Fetch DevFlow context only when needed, but do not guess task requirements/);
   assert.match(executionRules, /get_tool_job_result/);
   assert.match(executionRules, /same assistant turn/i);
-  assert.match(executionRules, /RED[\s\S]*IMPLEMENT[\s\S]*GREEN/i);
+  assert.match(executionRules, /UNDERSTAND\/DESIGN[\s\S]*IMPLEMENT[\s\S]*VERIFY/i);
+  assert.match(executionRules, /bug[\s\S]*(?:reproduc|defect evidence)/i);
+  assert.match(executionRules, /existing evidence|existing failing test|focused test/i);
   assert.match(executionRules, /without intermediate tests|no intermediate/i);
   assert.match(executionRules, /one frozen candidate|same frozen candidate/i);
-  assert.match(executionRules, /parallel[\s\S]*GREEN|GREEN[\s\S]*parallel/i);
-  assert.match(executionRules, /do not mutate[\s\S]*GREEN|GREEN[\s\S]*do not mutate/i);
+  assert.match(executionRules, /parallel[\s\S]*(?:final verification|verification batch)|(?:final verification|verification batch)[\s\S]*parallel/i);
+  assert.match(executionRules, /do not mutate[\s\S]*(?:final verification|verification batch)|(?:final verification|verification batch)[\s\S]*do not mutate/i);
   assert.match(executionRules, /join[\s\S]*required|all required[\s\S]*join/i);
   assert.match(executionRules, /another revision[\s\S]*invalid|other revision[\s\S]*invalid|evidence[\s\S]*same frozen candidate/i);
+  assert.doesNotMatch(executionRules, /Testable changes:\s*RED\s*→\s*IMPLEMENT\s*→\s*GREEN/i);
+  assert.doesNotMatch(executionRules, /exactly two|test-first|TDD/i);
   assert.match(executionRules, /Work only on this current task and stop when it is complete/);
   assert.doesNotMatch(executionRules, /01-authoring-core|02-schema-reference|03-reviewer-core|open_task_bug/);
 });

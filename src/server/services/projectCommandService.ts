@@ -1031,7 +1031,13 @@ function commandCacheContext(
   const explicitlyDisabled = args.cacheResult === false || String(args.cacheResult).toLowerCase() === 'false';
   const automaticStaticCache = resolvedCommand.command === 'typecheck' || resolvedCommand.command === 'lint';
   if (explicitlyDisabled || (!explicitCache && !automaticStaticCache)) return null;
-  return identityOverride ?? buildProjectCommandExecutionIdentity(root, resolvedCommand, cwdPath, timeoutMs, maxOutputBytes, responseMode, {}, args);
+  const executionIdentity = identityOverride ?? buildProjectCommandExecutionIdentity(root, resolvedCommand, cwdPath, timeoutMs, maxOutputBytes, responseMode, {}, args);
+  if (!executionIdentity) return null;
+  const cacheKey = crypto.createHash('sha256').update(JSON.stringify({
+    executionKey: executionIdentity.key,
+    lineageToken: executionIdentity.lineageToken,
+  })).digest('hex');
+  return { ...executionIdentity, key: cacheKey };
 }
 
 function cachedCommandResult(

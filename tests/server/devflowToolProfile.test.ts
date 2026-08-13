@@ -296,19 +296,17 @@ test('MCP inventory can retain backend compatibility while full advertises only 
   assert.equal(summary.byDisposition.keep + summary.byDisposition.combine + summary.byDisposition['hide-default'], inventory.length);
 });
 
-test('legacy ownership adoption tool requires explicit files, revisions, task workspace, and audit reason', () => {
-  const tool = devFlowToolDefinitions.find((entry: any) => entry.name === 'attach_task_owned_changes');
-  assert.ok(tool);
-  assert.deepEqual(tool.inputSchema.required, ['taskId', 'workspaceId', 'files', 'reason']);
-  assert.equal(tool.inputSchema.properties.files.minItems, 1);
-  assert.deepEqual(tool.inputSchema.properties.files.items.required, ['path', 'expectedRevision']);
-  assert.equal(tool.inputSchema.properties.reason.minLength, 10);
-  const request = tool.buildHttpRequest?.({
-    taskId: 'DVF-0001', workspaceId: 'ws_fixture',
-    files: [{ path: 'src/a.ts', expectedRevision: 'revision' }],
-    reason: 'Explicit legacy recovery reason',
-  });
-  assert.equal(request?.path, '/api/git/task-commit/adopt-owned-changes');
+test('legacy ownership adoption stays explicit, revision-bound, scoped, and auditable without auto-adopting Git diff', () => {
+  const routeSource = fs.readFileSync('src/server/routes/devflow.ts', 'utf8');
+  const executionSource = fs.readFileSync('src/server/services/executionSessionService.ts', 'utf8');
+  assert.match(routeSource, /\/api\/git\/task-commit\/adopt-owned-changes/);
+  assert.match(routeSource, /adoptTaskExecutionOwnedChanges/);
+  assert.match(executionSource, /adoptExecutionOwnedChanges/);
+  assert.match(executionSource, /expectedRevision/);
+  assert.match(executionSource, /adoptionReason/);
+  assert.match(executionSource, /EXECUTION_ADOPTION_NOT_UNOWNED_DIRTY/);
+  assert.match(executionSource, /authorizeTaskExecutionMutationPaths/);
+  assert.doesNotMatch(executionSource, /adopt[^\n]{0,80}(?:getGitStatus|git status|changedPaths)/i);
 });
 
 test('task-bound repo mutation tools declare ownership strategy or explicit plan-only exemption', () => {

@@ -188,7 +188,16 @@ test('explicit no-check-required verification binds freshness and later owned mu
   assert.equal(recorded.binding.metadata.verificationPolicy, 'no-checks-required');
   assert.equal(recorded.ownership.verificationFresh, true);
 
-  fs.writeFileSync(path.join(repoRoot, 'src', 'A.ts'), 'export const A = 3;\n', 'utf8');
+  const ownedPath = path.join(repoRoot, 'src', 'A.ts');
+  const stat = fs.statSync(ownedPath);
+  fs.utimesSync(ownedPath, stat.atime, new Date(stat.mtimeMs + 5_000));
+  const mtimeOnly = sessions.getExecutionOwnershipState(session.id, { repoRoot });
+  assert.deepEqual(mtimeOnly.ownershipDrift, []);
+  assert.equal(mtimeOnly.verificationFresh, true);
+  assert.notEqual(mtimeOnly.ownedFiles[0].observedFileRevision, mtimeOnly.ownedFiles[0].knownFileRevision);
+  assert.equal(mtimeOnly.ownedFiles[0].currentFileRevision, mtimeOnly.ownedFiles[0].knownFileRevision);
+
+  fs.writeFileSync(ownedPath, 'export const A = 3;\n', 'utf8');
   assert.equal(sessions.getExecutionOwnershipState(session.id, { repoRoot }).verificationFresh, false);
 });
 

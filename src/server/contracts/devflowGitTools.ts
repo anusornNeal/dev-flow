@@ -63,32 +63,6 @@ export const gitToolDefinitions: DevFlowToolDefinition[] = [
     buildHttpRequest: (args) => ({ method: 'GET', path: withQuery('/api/git/task-commit/plan', args) }),
   },
   {
-    name: 'attach_task_owned_changes',
-    description: 'Explicitly adopt legacy dirty/unowned workspace paths into the active task execution using caller-supplied path revisions and an audit reason. Never enumerates or auto-adopts the Git diff.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        ...projectIdentifierProperties,
-        taskId: { type: 'string', description: 'DevFlow task id/displayId that owns the selected workspace.' },
-        files: {
-          type: 'array', minItems: 1, maxItems: 100,
-          items: {
-            type: 'object',
-            properties: {
-              path: { type: 'string', description: 'Explicit repository-relative dirty/unowned path to adopt.' },
-              expectedRevision: { type: 'string', description: 'Exact current file revision token (or missing marker) observed before adoption.' },
-            },
-            required: ['path', 'expectedRevision'],
-          },
-        },
-        reason: { type: 'string', minLength: 10, maxLength: 1000, description: 'Audit reason explaining why legacy ownership adoption is safe.' },
-      },
-      required: ['taskId', 'workspaceId', 'files', 'reason'],
-    },
-    outputSchema: { type: 'object' },
-    buildHttpRequest: (args) => ({ method: 'POST', path: '/api/git/task-commit/adopt-owned-changes', body: args }),
-  },
-  {
     name: 'commit_task_owned_changes', executionPolicy: { mode: 'job', jobKind: 'repo-command' }, description: 'Commit only files owned by the selected task execution session after ownership and verification freshness checks. Unrelated dirty files are preserved and this tool never pushes.',
     inputSchema: { type: 'object', properties: { ...projectIdentifierProperties, taskId: { type: 'string', description: 'DevFlow task id/displayId whose execution ownership defines commit scope.' }, message: { type: 'string', description: 'Conventional commit input such as fix(scope): description. DevFlow normalizes it through the task/project commit policy and adds the authoritative task/ticket prefix by default.' }, dryRun: { type: 'boolean', description: 'Preview the scoped commit without creating it.' } }, required: ['taskId', 'workspaceId', 'message'] },
     outputSchema: { type: 'object' },

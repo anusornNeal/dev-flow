@@ -104,6 +104,7 @@ export interface ExecutionOwnershipState {
     acquisitionFileRevision: string;
     knownFileRevision: string;
     currentFileRevision: string;
+    observedFileRevision: string;
     source: string;
     acquiredAt?: string;
     observedAt?: string;
@@ -176,6 +177,18 @@ function currentOwnedFileRevision(root: string, relativePath: string) {
   } catch {
     return 'missing';
   }
+}
+
+function ownedRevisionContentIdentity(revision: string) {
+  const normalized = String(revision || '').trim();
+  if (!normalized || normalized === 'missing') return normalized || 'missing';
+  const parts = normalized.split(':');
+  if (parts.length < 3) return normalized;
+  return `${parts[0]}:${parts[parts.length - 1]}`;
+}
+
+function sameOwnedContentRevision(left: string, right: string) {
+  return ownedRevisionContentIdentity(left) === ownedRevisionContentIdentity(right);
 }
 
 function ownedRevisionFingerprint(entries: Array<{ path: string; revision: string }>) {
@@ -506,17 +519,20 @@ export function getExecutionOwnershipState(
   const ownedEvidence = evidence.filter((entry) => entry.kind === 'owned-change' && entry.path);
   const ownedFiles = ownedEvidence.map((entry) => {
     const metadata = entry.metadata || {};
-    const currentFileRevision = currentOwnedFileRevision(root, entry.path!);
+    const observedFileRevision = currentOwnedFileRevision(root, entry.path!);
     const knownFileRevision = readStringMetadata(metadata, 'knownFileRevision') || entry.fileRevision || 'missing';
+    const contentEquivalent = sameOwnedContentRevision(observedFileRevision, knownFileRevision);
+    const currentFileRevision = contentEquivalent ? knownFileRevision : observedFileRevision;
     return {
       path: entry.path!,
       acquisitionFileRevision: readStringMetadata(metadata, 'acquisitionFileRevision') || entry.fileRevision || 'missing',
       knownFileRevision,
       currentFileRevision,
+      observedFileRevision,
       source: readStringMetadata(metadata, 'executionSource') || 'unknown',
       acquiredAt: readStringMetadata(metadata, 'acquiredAt'),
       observedAt: readStringMetadata(metadata, 'observedAt'),
-      drifted: currentFileRevision !== knownFileRevision,
+      drifted: !contentEquivalent,
     };
   }).sort((left, right) => left.path.localeCompare(right.path));
 

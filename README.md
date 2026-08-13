@@ -1,123 +1,195 @@
 # DevFlow
 
-DevFlow is a local-first development task board and AI-agent orchestration app. It helps you organize projects and tasks, attach repository context, launch coding agents, track agent runs, verify changes locally, and keep the whole workflow on your machine.
+DevFlow is a local-first development task board and AI-agent orchestration app. It keeps projects, tasks, repository context, agent runs, verification, and local Git operations together, and exposes a controlled MCP server that ChatGPT and other agents can use.
 
-The project is Windows-first, but the Node/Vite app can also run on macOS for normal local development.
+DevFlow is Windows-first and also supports normal local development on macOS.
 
-## What DevFlow Can Do
+## First-time Setup
 
-- **Project and task board**: manage projects, cards, priorities, statuses, checklists, target files, branches, and review flow.
-- **AI agent orchestration**: prepare agent-ready prompts and launch configured agents such as Codex, Antigravity, or Claude from a DevFlow card.
-- **Agent run tracking**: store queued/running/succeeded/failed/cancelled run history in SQLite and keep prompt/log artifacts under `.devflow/runs/`.
-- **Local repository tools**: inspect git status/diff, read local files, apply guarded edits, run verification commands, and create local commits without pushing.
-- **MCP server**: expose DevFlow tools to ChatGPT/agents so they can work with projects, tasks, files, git, and verification through one controlled interface.
-- **Connector helpers**: centralize external context such as Jira/GitHub configuration into reusable tools when credentials are configured.
-- **Skills and prompts**: store reusable authoring/review guidance and prompt templates in SQLite while keeping built-in skill markdown in `skills/`.
-- **Backup and restore**: export, backup, restore, and migrate local DevFlow data without requiring an external database server.
+This is the recommended path for a new machine. The goal is to get from a fresh clone to a working DevFlow app that ChatGPT can reach through MCP.
 
-## Tech Stack
+### 1. Install the prerequisites
 
-- TypeScript
-- React + Vite frontend
-- Express/Node server
-- SQLite via `better-sqlite3`
-- Model Context Protocol (MCP) server layer
-- Local Windows launcher scripts for one-click startup
-
-## Prerequisites
-
-Required:
+Install:
 
 - Node.js
 - npm
 - Git
+- ngrok
 
-Optional, depending on your workflow:
-
-- `ngrok` only if you want a public tunnel or the one-click `start:all` flow.
-- Codex, Antigravity, Claude, or other agent CLIs only if you want DevFlow to launch agents.
-- Jira/GitHub credentials only if you want connector-backed context tools.
-
-## Local Setup
-
-For an already cloned repo, the normal local setup is only:
+Clone DevFlow and initialize the local environment:
 
 ```bash
+git clone https://github.com/anusornNeal/dev-flow.git
+cd dev-flow
 npm install
 npm run setup
-npm run dev
 ```
 
-Then open:
+`npm run setup` creates the local data/uploads/backups folders, initializes SQLite, and copies `.env.example` to `.env` when `.env` does not already exist.
+
+### 2. Create an ngrok account and get your free domain
+
+1. Create an ngrok account.
+2. Copy your ngrok **authtoken** from the ngrok dashboard and add it to the ngrok CLI once:
+
+```bash
+ngrok config add-authtoken <YOUR_NGROK_AUTHTOKEN>
+```
+
+3. Find the free **development domain** assigned to your account, for example:
+
+```text
+your-name.ngrok-free.app
+```
+
+The free ngrok plan currently provides an automatically assigned development domain. You do not need to buy or reserve a custom domain for the normal DevFlow setup.
+
+### 3. Start DevFlow with ngrok
+
+Recommended one-click startup:
+
+- **Windows:** double-click `Start DevFlow.bat`
+- **macOS:** double-click `Start DevFlow.command`
+- **Terminal / any OS:** run:
+
+```bash
+npm run start:all
+```
+
+`start:all` runs setup, starts DevFlow, starts ngrok, and opens the browser. Without an explicit domain override, ngrok uses the development domain assigned to your account.
+
+DevFlow runs locally at:
 
 ```text
 http://localhost:3000
 ```
 
-`npm run setup` creates the local data/uploads/backups folders, initializes the SQLite schema, and copies `.env.example` to `.env` if `.env` does not already exist.
-
-For a brand-new machine, clone the repo first:
+For local-only development without ngrok:
 
 ```bash
-git clone https://github.com/anusornNeal/dev-flow.git
-cd dev-flow
+npm run dev
 ```
 
-Manual `.env` copy is only needed if you want to edit config before running setup:
+### 4. Put the ngrok URL in DevFlow Settings
+
+Open **DevFlow → Settings** and set **ngrok URL** to the full HTTPS URL:
+
+```text
+https://your-name.ngrok-free.app
+```
+
+Use the full URL including `https://`.
+
+If you intentionally use a paid/custom ngrok domain, you can also pin the launcher to it in `.env`:
+
+```env
+DEVFLOW_NGROK_DOMAIN="your-custom-domain.ngrok.app"
+```
+
+For the normal free development domain, this override is usually unnecessary.
+
+### 5. Add integration tokens in Settings
+
+Still in **DevFlow → Settings → Integrations**, fill in the integrations you want DevFlow to use:
+
+- **GitHub Access Token** — required only for GitHub-backed context/tools.
+- **Jira Base URL** — for example `https://your-domain.atlassian.net`.
+- **Jira Email** — the email used by your Jira account.
+- **Jira Access Token** — required only when using Jira-backed context/tools.
+- **Figma Access Token** — required only when using Figma design context.
+
+You do not need every token just to run the DevFlow board or its own MCP tools. Add the credentials for the integrations you actually use.
+
+Secrets entered through Settings are stored through DevFlow's credential-vault abstraction. On Windows this uses current-user DPAPI-backed encrypted storage. Environment variables remain available as overrides/fallbacks.
+
+### 6. Connect DevFlow MCP to ChatGPT
+
+DevFlow exposes its current MCP transport at:
+
+```text
+https://your-name.ngrok-free.app/mcp
+```
+
+Use `/mcp` for new ChatGPT connections. `/sse` remains a legacy compatibility transport and should not be used for a new setup.
+
+In ChatGPT web, where custom MCP apps/connectors are available for your plan/workspace:
+
+1. Enable **Developer mode** for custom MCP apps if it is not already enabled.
+2. Open **Settings → Apps → Create** (workspace/admin wording can vary by plan).
+3. Create a custom app for DevFlow.
+4. Set the MCP endpoint to:
+
+   ```text
+   https://your-name.ngrok-free.app/mcp
+   ```
+
+5. Use **no authentication** for the current personal/local DevFlow MCP transport unless you have added your own gateway/authentication in front of it.
+6. Choose **Scan Tools** and confirm that ChatGPT can discover the DevFlow tools.
+7. Create/enable the app.
+
+OpenAI changes Developer mode and custom MCP availability over time, so the exact menu names and plan requirements can change. The stable DevFlow-side requirement is the public HTTPS endpoint ending in `/mcp`.
+
+### 7. Verify the connection
+
+Before testing ChatGPT, confirm that the public DevFlow endpoint is reachable:
+
+```text
+https://your-name.ngrok-free.app/api/capabilities
+```
+
+Then start a ChatGPT conversation with the DevFlow app enabled and ask it to perform a simple read-only action, such as listing DevFlow projects or checking DevFlow health.
+
+If ChatGPT can scan the tools and call a read-only DevFlow tool successfully, the first-time setup is complete.
+
+## What DevFlow Can Do
+
+- **Project and task board** — manage projects, cards, priorities, statuses, checklists, target files, branches, and review flow.
+- **AI agent orchestration** — prepare agent-ready prompts and launch configured agents such as Codex, Antigravity, or Claude from a DevFlow card.
+- **Agent run tracking** — store queued/running/succeeded/failed/cancelled run history in SQLite and keep prompt/log artifacts under `.devflow/runs/`.
+- **Local repository tools** — inspect Git status/diff, read local files, apply guarded edits, run verification commands, and create local commits without pushing.
+- **MCP server** — expose DevFlow tools to ChatGPT/agents through one controlled interface.
+- **Connector helpers** — centralize Jira, GitHub, Figma, and other external context when credentials are configured.
+- **Skills and prompts** — store reusable authoring/review guidance and prompt templates.
+- **Backup and restore** — export, back up, restore, and migrate local DevFlow data without an external database server.
+
+## Startup Modes
+
+### Local only
 
 ```bash
-cp .env.example .env
+npm run dev
 ```
 
-On Windows PowerShell:
+Starts DevFlow at `http://localhost:3000` without ngrok.
 
-```powershell
-Copy-Item .env.example .env
+### DevFlow + ngrok + browser
+
+```bash
+npm run start:all
 ```
 
-## Optional Setup: ngrok and One-Click Startup
+`start:all` runs setup, starts DevFlow, starts ngrok, and opens the browser. If ngrok exits unexpectedly, the supervisor keeps the DevFlow API running and restarts ngrok with bounded backoff. Public reachability is monitored separately from the ngrok process lifecycle.
 
-You do **not** need ngrok for normal local use. `npm run dev` is enough for `http://localhost:3000`.
+See `docs/runtime-supervisor.md` for restart, tunnel-health, collision-recovery, and diagnostic behavior.
 
-Use ngrok only when you want a public URL, external callbacks, or the full one-click startup flow:
+## Settings and Environment Variables
 
-- Windows: double-click `Start DevFlow.bat` or `scripts/start-all.bat`.
-- macOS: double-click `Start DevFlow.command`.
-- Any OS with a terminal: run `npm run start:all`.
+Most configuration can be done through **DevFlow → Settings**. Environment variables are useful for launcher/runtime overrides and automation.
 
-`npm run start:all` runs setup, starts the DevFlow server, starts ngrok, and opens the browser. If `DEVFLOW_NGROK_DOMAIN` is set in `.env`, DevFlow uses that static ngrok domain; otherwise it runs `ngrok http 3000`.
-
-If ngrok exits unexpectedly, `start:all` leaves the DevFlow API running and restarts ngrok automatically with bounded exponential backoff. Intentional supervisor shutdown cancels pending ngrok retries. Runtime diagnostics report the API and tunnel child states separately; see `docs/runtime-supervisor.md` for the lifecycle and failure-state details.
-
-Optional ngrok/browser settings:
+Common values:
 
 ```env
 DEVFLOW_PORT=3000
-DEVFLOW_NGROK_DOMAIN="your-static-domain.ngrok-free.dev"
+DEVFLOW_NGROK_DOMAIN=""
 DEVFLOW_OPEN_BROWSER=true
 DEVFLOW_OPEN_BROWSER_DELAY_MS=4000
-DEVFLOW_NGROK_RESTART_BASE_MS=1000
-DEVFLOW_NGROK_RESTART_MAX_MS=30000
-DEVFLOW_NGROK_STABLE_RESET_MS=60000
-```
 
-### Trusted remote API boundary
-
-Local loopback requests keep the existing one-click workflow. When `/api` is reached through a forwarded or non-loopback client, read-only requests remain available but privileged mutation methods are denied by default. To opt in to trusted remote mutations, set `DEVFLOW_TRUSTED_REMOTE_TOKEN` and send the same value as `Authorization: Bearer <token>` (or `X-DevFlow-Remote-Token`). This policy applies to `/api`; MCP transport endpoints keep their own transport policy.
-
-## Optional Setup: Agent CLIs and Tokens
-
-You can use DevFlow as a local board without any tokens.
-
-Integration secrets entered through Settings are stored outside SQLite through the credential-vault abstraction. Windows uses current-user DPAPI-backed encrypted storage; environment variables override persisted credentials and remain the fallback on platforms where secure persistence is unavailable. Legacy plaintext token rows are migrated and cleared only after secure storage succeeds.
-
-Configure these only when you need agent launching or connector-backed context:
-
-```env
 GITHUB_PERSONAL_ACCESS_TOKEN=""
 JIRA_BASE_URL=""
 JIRA_EMAIL=""
 JIRA_API_TOKEN=""
+
 DEVFLOW_AGENT_TRIGGER_SCRIPT="scripts/trigger-agent.bat"
 DEVFLOW_AGENT_EXECUTION_MODE="safe"
 DEVFLOW_MCP_TOOL_PROFILE="coding"
@@ -125,105 +197,94 @@ DEVFLOW_MCP_TOOL_PROFILE="coding"
 
 Notes:
 
-- GitHub/Jira tokens are for connector-backed context tools, not basic local task board usage.
-- Agent CLI setup is separate from DevFlow setup. Install and authenticate Codex, Antigravity, Claude, or another CLI before asking DevFlow to launch it.
-- UI settings can override connector credentials where supported.
-- MCP sessions default to the lean `coding` tool profile when `DEVFLOW_MCP_TOOL_PROFILE` is unset. Set it explicitly to `full`, `authoring`, `review`, `atlas`, or `diagnostics` when that broader/specialized surface is needed; unknown values safely fall back to `coding` and are exposed in capability diagnostics.
+- `DEVFLOW_NGROK_DOMAIN` is an optional launcher override. The normal free ngrok development-domain flow can leave it empty.
+- GitHub/Jira/Figma credentials are optional unless you use those integrations.
+- Agent CLI authentication is separate from DevFlow integration tokens. Install and authenticate Codex, Antigravity, Claude, or another CLI before asking DevFlow to launch it.
+- MCP sessions default to the lean `coding` tool profile when `DEVFLOW_MCP_TOOL_PROFILE` is unset. Available explicit profiles include `full`, `authoring`, `review`, `atlas`, and `diagnostics`.
+
+### Trusted remote API boundary
+
+The public ngrok URL also exposes DevFlow's HTTP surface. Local loopback requests keep the normal one-click workflow. For `/api` requests coming through a forwarded or non-loopback client, privileged mutation methods are denied by default unless trusted remote mutation access is explicitly configured.
+
+To opt in to trusted remote `/api` mutations:
+
+```env
+DEVFLOW_TRUSTED_REMOTE_TOKEN="choose-a-secret"
+```
+
+Send the same value as `Authorization: Bearer <token>` or `X-DevFlow-Remote-Token`.
+
+This `/api` policy is separate from the MCP transport policy.
 
 ## Common Commands
 
 | Command | Purpose |
 | --- | --- |
-| `npm run setup` | Create local `data/`, `uploads/`, and backup folders and bootstrap `.env` when safe. |
-| `npm run dev` | Start the development server. |
-| `npm run start:all` | Optional ngrok flow: run setup, start the server, start ngrok, and open the app. |
-| `npm run doctor` | Check Node/npm, env files, SQLite storage, DB initialization, port availability, and project paths. |
+| `npm run setup` | Create local folders, initialize storage, and bootstrap `.env` when safe. |
+| `npm run dev` | Start the local DevFlow server. |
+| `npm run start:all` | Start DevFlow + ngrok + browser. |
+| `npm run doctor` | Check Node/npm, env files, SQLite, DB initialization, port availability, and project paths. |
 | `npm run typecheck` | Run TypeScript no-emit verification. |
 | `npm run lint` | Alias for TypeScript no-emit verification. |
 | `npm run verify` | Run the repository verification harness. |
 | `npm test` | Alias for `npm run verify`. |
-| `npm run build` | Build the frontend and server into `dist/`. |
+| `npm run build` | Build frontend and server into `dist/`. |
 | `npm run start` | Run the built server from `dist/server.js`. |
 | `npm run mcp` | Start the DevFlow MCP server entrypoint. |
 | `npm run backup` | Create a timestamped local backup. |
-| `npm run restore <path>` | Restore from a backup DB or backup bundle. |
+| `npm run restore <path>` | Restore from a backup DB or bundle. |
 | `npm run migrate:json` | Migrate legacy JSON task/project data into SQLite. |
 
-Targeted verification scripts are also available, including `test:gateway`, `test:orchestration`, `test:prompt-templates`, `test:start-all`, `test:sqlite`, `test:import-tasks`, `test:figma`, `test:task-row-persistence`, and `test:dvf-0224`.
+## Agent Workflow
 
-## Environment Configuration
+A typical DevFlow agent run:
 
-Most users can run local DevFlow without editing `.env`. Edit `.env` only for public URL, browser startup behavior, connector credentials, or agent launcher overrides.
+1. Create or update a card with clear scope, target files, acceptance criteria, and verification.
+2. Assign a supported agent/model/effort.
+3. Move the card into an executable status when Auto Work is enabled.
+4. DevFlow creates an agent run and its prompt artifact.
+5. The configured agent works from the prompt and repository context.
+6. DevFlow tracks the run and retains logs/prompts for inspection.
 
-- `APP_URL`: external app URL when hosted or tunneled.
-- `DEVFLOW_PORT`: local app port, defaulting to `3000` in normal usage.
-- `DEVFLOW_NGROK_DOMAIN`, `DEVFLOW_OPEN_BROWSER`, `DEVFLOW_OPEN_BROWSER_DELAY_MS`: optional ngrok/startup behavior.
-- `GITHUB_PERSONAL_ACCESS_TOKEN`: optional GitHub connector token fallback.
-- `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN`: optional Jira connector credential fallback.
-- `DEVFLOW_AGENT_TRIGGER_SCRIPT`, `DEVFLOW_AGENT_EXECUTION_MODE`: optional agent launcher behavior.
-- `DEVFLOW_MCP_TOOL_PROFILE`: optional MCP surface override. Default is `coding`; `full`, `authoring`, `review`, `atlas`, and `diagnostics` remain available explicitly.
+For repository work through MCP, prefer the managed DevFlow workflow:
+
+1. Read compact repository context with `get_repo_context_bundle`.
+2. Read exact files before editing.
+3. Use guarded edits in a managed workspace.
+4. Inspect Git status/diff.
+5. Run risk-appropriate final verification.
+6. Commit only task-owned changes.
+7. Integrate locally according to the project Git policy.
+8. Do not push unless explicitly requested.
 
 ## Data and Persistence
 
 - SQLite is the runtime source of truth for tasks, projects, skills, settings, and agent runs.
 - The default local DB lives under `data/devflow.db`.
-- Legacy JSON files are migration inputs/backups only, not active runtime storage.
+- Runtime agent artifacts live under `.devflow/runs/` and are ignored by Git.
+- Managed workspaces are local and isolated from the shared base branch while work is in progress.
 - No external database server is required.
-- Runtime agent artifacts under `.devflow/runs/` are ignored by git.
 
-## Agent Workflow
+## Backup, Restore, and Moving to Another Machine
 
-A typical agent run looks like this:
+DevFlow Settings can create verified recovery snapshots with checksum/integrity/schema metadata. Secrets are not copied into portable backups.
 
-1. Create or update a DevFlow card with clear scope, target files, acceptance criteria, and verification.
-2. Assign an agent/model/effort supported by `config/agents/<agent>.json`.
-3. Move the card into an executable status when Auto Work is enabled.
-4. DevFlow creates an `agent_runs` record and writes `.devflow/runs/<runId>/prompt.md`.
-5. DevFlow launches the configured trigger script, defaulting to `scripts/trigger-agent.bat` unless `DEVFLOW_AGENT_TRIGGER_SCRIPT` is set.
-6. The agent works from the prompt and local repo context.
-7. DevFlow tracks run status and keeps logs/prompts for inspection.
+To move DevFlow to another machine:
 
-For repository work through MCP, the recommended safe loop is:
+1. Open **Settings** on the old machine.
+2. Export a backup.
+3. Copy the backup to the new machine.
+4. Clone the repo and run `npm install` + `npm run setup`.
+5. Restore the backup through Settings or `npm run restore <path>`.
+6. Re-enter machine-local integration credentials if needed.
+7. Configure ngrok on the new machine and run `npm run start:all`.
+8. Update the ChatGPT MCP app endpoint if the public domain changed.
 
-1. Inspect repo context with `get_repo_context_bundle`.
-   - DevFlow now infers an intent profile (`authoring`, `small-bug-fix`, `cross-module-change`, `verification-debugging`, or `architecture-analysis`) and returns ranked Must/Should/Optional evidence with reasons.
-   - Automatic disclosure stays bounded from symbols/snippets up through callers/tests. `full-file` is an explicit override only.
-   - Use `targetFiles` to force known files into Must evidence, `contextIntent` to override inference, `disclosureLevel` for deliberate escalation, and `maxContextBytes` to cap aggregate snippet bytes.
-   - Evidence carries repo/file revision identities so later reads can detect staleness instead of silently reusing old context.
-2. Read exact files before editing.
-3. Dry-run edits before apply.
-4. Inspect git diff.
-5. Run targeted verification with `run_project_command`.
-6. Dry-run `commit_git_changes`, then commit only intended files.
-7. Move the task with `move_task_to_status` when closing or reopening cards.
+## Tech Stack
 
-### Durable execution sessions
-
-DevFlow persists logical execution sessions in SQLite so coding state can survive fresh tool calls and runtime restarts. `executionSessionId` is the durable identity; project/task ids and an opaque `workspaceId` may be associated with it, but a machine-specific repository path is never persisted as session identity.
-
-Session evidence records carry repository and file revision identities. On resume, DevFlow rechecks file evidence against the current repository copy: unchanged evidence stays reusable while only changed or missing file evidence is marked stale. A ContextHandle remains a short-lived cache primitive that a session may reference; it is not the durable session model, and its cache key includes context intent, targets, disclosure level, and byte budget.
-
-Lifecycle is explicit: active sessions can record context, changed files, verification evidence, and revision-bound evidence; completed, cancelled, or expired sessions are terminal and cannot mutate as active work. Run `npm run test:execution-session` for the focused persistence/revision lifecycle suite.
-
-Cross-agent handoff snapshots stay compact: they persist completed/pending work, decisions, dependencies, risks, verification state, and revision-bound evidence references without copying prior source bodies. Resume revalidates the current repository and reports exactly which changed/stale targets require a fresh read; changing ChatGPT/Codex/review provider labels never changes the logical execution-session id.
-
-DevFlow's git tools are intentionally local-only. They do not push, rebase, reset, amend, or checkout branches.
-
-## Backup, Restore, and Migration
-
-- Settings can create **verified recovery snapshots**. Each retained snapshot has a SHA-256 checksum, creation/source metadata, migration/schema version, SQLite `integrity_check` result, core record counts, and a local manifest under the DevFlow backups directory.
-- Snapshot retention is bounded (`DEVFLOW_BACKUP_RETENTION`, default 7, minimum 2, maximum 50) and keeps the newest verified recovery points. Exporting through Settings creates the same verified, secret-sanitized snapshot before download.
-- **Run restore drill** copies the newest verified snapshot into an isolated temporary directory, checks checksum/integrity/schema compatibility, applies only known pending DevFlow migrations to that temporary copy, validates core tables/records, then deletes the drill copy. It never replaces or opens the active DB path as the drill target.
-- Import validates SQLite integrity and migration compatibility before the active DB is touched, and reports reason codes such as `BACKUP_CHECKSUM_MISMATCH`, `BACKUP_SQLITE_CORRUPT`, `BACKUP_SCHEMA_INCOMPATIBLE`, and `BACKUP_REQUIRED_TABLES_MISSING` instead of one generic validation failure.
-- Current compatibility policy accepts databases whose applied migration IDs are all known to this DevFlow build; missing known migrations are upgradeable during a drill/restart, while unknown/future migration IDs are rejected.
-- Portable snapshots clear persisted GitHub/Jira/Figma token rows. The credential vault remains separate and raw integration secrets are not copied into recovery snapshots.
-- `npm run backup` / `npm run restore <path-to-backup>` remain available for the existing CLI flow. Run `npm run test:backup-integrity` for focused recovery-system verification, and `npm run migrate:json` only when importing old JSON-based DevFlow data into SQLite.
-
-## Moving to Another Machine
-
-1. Open **Settings** in DevFlow on the old machine.
-2. Click **Export Backup** in the Data Management section.
-3. Copy the exported backup to the new machine.
-4. Clone this repo on the new machine and run `npm install`.
-5. Restore through the Settings UI or run `npm run restore <path-to-exported-backup>`.
-6. Start DevFlow with `npm run dev` or `npm run start:all`.
+- TypeScript
+- React + Vite
+- Express / Node.js
+- SQLite via `better-sqlite3`
+- Model Context Protocol (MCP)
+- Local managed Git workspaces and verification tooling

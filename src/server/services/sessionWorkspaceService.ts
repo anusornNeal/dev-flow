@@ -226,6 +226,44 @@ function readMetadata(workspaceId: string) {
   }
 }
 
+function getSessionWorkspaceRegistrySnapshot() {
+  const workspaces = new Map<string, SessionWorkspace>();
+  const registryDir = workspaceRegistryDir();
+  if (fs.existsSync(registryDir)) {
+    for (const entry of fs.readdirSync(registryDir, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+      const workspace = readMetadata(entry.name.slice(0, -'.json'.length));
+      if (workspace?.workspaceId && workspace?.projectId && workspace?.state) {
+        workspaces.set(workspace.workspaceId, workspace);
+      }
+    }
+  }
+  for (const [workspaceId, workspace] of memoryRegistry) workspaces.set(workspaceId, workspace);
+  return workspaces;
+}
+
+export function listSessionWorkspaceMetadataForRecovery(projectId: string, limit = 50) {
+  const cleanProjectId = String(projectId || '').trim();
+  const boundedLimit = Math.max(1, Math.min(100, Math.floor(Number(limit) || 50)));
+  if (!cleanProjectId) {
+    return { projectId: cleanProjectId, workspaces: [], total: 0, truncated: false };
+  }
+  const projectWorkspaces = Array.from(getSessionWorkspaceRegistrySnapshot().values())
+    .filter((workspace) => workspace.projectId === cleanProjectId)
+    .sort((left, right) => left.workspaceId.localeCompare(right.workspaceId));
+  return {
+    projectId: cleanProjectId,
+    workspaces: projectWorkspaces.slice(0, boundedLimit).map((workspace) => ({
+      workspaceId: workspace.workspaceId,
+      projectId: workspace.projectId,
+      state: workspace.state,
+      lastUsedAt: workspace.lastUsedAt,
+    })),
+    total: projectWorkspaces.length,
+    truncated: projectWorkspaces.length > boundedLimit,
+  };
+}
+
 export function getSessionWorkspaceMetadataForRecovery(workspaceId: string) {
   const workspace = readMetadata(String(workspaceId || '').trim());
   return workspace ? { ...workspace } : null;
@@ -483,24 +521,11 @@ export function cleanupManagedWorkspaceBranches(
 }
 
 export function getSessionWorkspaceMetrics() {
-  const states = new Map<string, SessionWorkspaceState>();
-  const registryDir = workspaceRegistryDir();
-  if (fs.existsSync(registryDir)) {
-    for (const entry of fs.readdirSync(registryDir, { withFileTypes: true })) {
-      if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
-      try {
-        const parsed = JSON.parse(fs.readFileSync(path.join(registryDir, entry.name), 'utf8')) as SessionWorkspace;
-        if (parsed?.workspaceId && parsed?.state) states.set(parsed.workspaceId, parsed.state);
-      } catch {
-        // Ignore corrupt/stale registry entries in aggregate diagnostics.
-      }
-    }
-  }
-  for (const [workspaceId, workspace] of memoryRegistry) states.set(workspaceId, workspace.state);
+  const workspaces = getSessionWorkspaceRegistrySnapshot();
   return {
-    knownWorkspaces: states.size,
+    knownWorkspaces: workspaces.size,
     activeWorkspaces: activeWorkspaceRefs.size,
-    integrationRequired: Array.from(states.values()).filter((state) => state === 'integration-required').length,
+    integrationRequired: Array.from(workspaces.values()).filter((workspace) => workspace.state === 'integration-required').length,
     ...workspaceLifecycleCounters,
   };
 }

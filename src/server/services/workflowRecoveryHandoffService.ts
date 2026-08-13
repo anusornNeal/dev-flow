@@ -6,6 +6,7 @@ import { DEVFLOW_CONTRACT_VERSION, getCapabilityCatalog } from '../contracts/dev
 import { findProjectByIdentifier } from './taskService.js';
 import { classifyRuntimeIdentity, getRuntimeIdentity, type RuntimeClientState } from './runtimeIdentityService.js';
 import { inspectWorkspaceRecovery, type WorkspaceRecoveryInspection } from './workspaceRecoveryService.js';
+import { listSessionWorkspaceMetadataForRecovery } from './sessionWorkspaceService.js';
 
 export type WorkflowRecoveryContinuationAction =
   | 'query-job'
@@ -119,6 +120,13 @@ function blocked(reason: string, extra: Record<string, any> = {}) {
   };
 }
 
+function requiresRecoveryContinuation(inspection: WorkspaceRecoveryInspection) {
+  return inspection.disposition === 'needs-recovery'
+    || inspection.disposition === 'stale-registry'
+    || inspection.state === 'integration-required'
+    || inspection.disposition === 'committed-not-integrated';
+}
+
 export function getWorkflowRecoveryHandoff(state: AppState, args: RecoveryArgs = {}) {
   const diagnosis = runtimeDiagnosis(args);
   const explicitTaskId = clean(args.taskId);
@@ -170,6 +178,7 @@ export function getWorkflowRecoveryHandoff(state: AppState, args: RecoveryArgs =
     }
   }
 
+  let discoveredInspection: WorkspaceRecoveryInspection | undefined;
   if (!task && project) {
     const activeClaims = getTasks().filter((candidate) =>
       candidate.projectId === project.id
@@ -189,14 +198,37 @@ export function getWorkflowRecoveryHandoff(state: AppState, args: RecoveryArgs =
     if (activeClaims.length === 1) {
       task = getTaskByIdentifier(activeClaims[0].id, 'summary');
       workspaceId = workspaceId || clean(task?.claim?.workspaceId);
+    } else if (!explicitTaskId && !explicitWorkspaceId && !explicitJobId && !workspaceId) {
+      const registry = listSessionWorkspaceMetadataForRecovery(project.id, 50);
+      if (registry.truncated) {
+        return blocked('Recovery workspace discovery exceeded its bounded registry view; stop instead of guessing which managed workspace is actionable.', {
+          ...(diagnosis ? { diagnosis } : {}),
+          project: compactProject(project),
+          candidates: { tasks: [], workspaces: registry.workspaces.map((workspace) => workspace.workspaceId) },
+        });
+      }
+      const actionableInspections = registry.workspaces
+        .map((workspace) => inspectWorkspaceRecovery(workspace.workspaceId))
+        .filter(requiresRecoveryContinuation);
+      if (actionableInspections.length > 1) {
+        return blocked('Recovery is ambiguous because multiple actionable managed workspaces exist for this project.', {
+          ...(diagnosis ? { diagnosis } : {}),
+          project: compactProject(project),
+          candidates: { tasks: [], workspaces: actionableInspections.map((inspection) => inspection.workspaceId) },
+        });
+      }
+      if (actionableInspections.length === 1) {
+        discoveredInspection = actionableInspections[0];
+        workspaceId = actionableInspections[0].workspaceId;
+      }
     }
   }
 
   if (!project && task?.projectId) project = getProject(task.projectId);
   if (!workspaceId) workspaceId = clean(task?.claim?.workspaceId);
 
-  let inspection: WorkspaceRecoveryInspection | undefined;
-  if (workspaceId) inspection = inspectWorkspaceRecovery(workspaceId);
+  let inspection: WorkspaceRecoveryInspection | undefined = discoveredInspection;
+  if (workspaceId && !inspection) inspection = inspectWorkspaceRecovery(workspaceId);
   if (!project && inspection?.projectId) project = getProject(inspection.projectId);
 
   if (!task && !inspection && !exactJob && !project) {

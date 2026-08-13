@@ -50,6 +50,21 @@ createProject({
   createdAt: new Date().toISOString(),
 });
 
+let isolatedProjectCounter = 0;
+function seedIsolatedProject(label: string) {
+  isolatedProjectCounter += 1;
+  const id = `project-recovery-${label}-${isolatedProjectCounter}`;
+  createProject({
+    id,
+    name: `Recovery Handoff ${label}`,
+    repoUrl: `https://example.test/${id}.git`,
+    localPath: repoRoot,
+    taskIdPrefix: 'RCI',
+    createdAt: new Date().toISOString(),
+  });
+  return id;
+}
+
 function seedClaimedTask(label: string) {
   const workspace = createOrReuseSessionWorkspace({ id: projectId, localPath: repoRoot }, `session-${label}`);
   const now = new Date().toISOString();
@@ -241,6 +256,91 @@ test('conflicting task and job recovery selectors fail closed instead of composi
     assert.equal(body.continuation.action, 'blocked');
     assert.match(body.continuation.reason, /conflict|mismatch|different|unsafe/i);
     assert.notEqual(body.continuation.action, 'query-job');
+  });
+});
+
+test('project-only recovery discovers a sole integration-required workspace even without an active task claim', async () => {
+  const isolatedProjectId = seedIsolatedProject('unclaimed-integration');
+  const workspace = createOrReuseSessionWorkspace({ id: isolatedProjectId, localPath: repoRoot }, 'session-unclaimed-integration');
+  fs.writeFileSync(path.join(workspace.root, 'tracked.txt'), 'unclaimed committed work\n', 'utf8');
+  git(workspace.root, ['add', 'tracked.txt']);
+  git(workspace.root, ['commit', '-m', 'unclaimed recovery work']);
+  markSessionWorkspaceIntegrationRequired(workspace.workspaceId, true);
+
+  await withServer(async (baseUrl) => {
+    const { response, body } = await json(baseUrl, new URLSearchParams({ projectId: isolatedProjectId }));
+    assert.equal(response.status, 200);
+    assert.equal(body.workspace.workspaceId, workspace.workspaceId);
+    assert.equal(body.workspace.state, 'integration-required');
+    assert.equal(body.continuation.action, 'finish-integration');
+    assert.equal(body.continuation.workspaceId, workspace.workspaceId);
+  });
+});
+
+test('project-only recovery discovers a sole dirty workspace without an active task claim', async () => {
+  const isolatedProjectId = seedIsolatedProject('unclaimed-dirty');
+  const workspace = createOrReuseSessionWorkspace({ id: isolatedProjectId, localPath: repoRoot }, 'session-unclaimed-dirty');
+  fs.writeFileSync(path.join(workspace.root, 'tracked.txt'), 'unclaimed dirty work\n', 'utf8');
+
+  await withServer(async (baseUrl) => {
+    const { response, body } = await json(baseUrl, new URLSearchParams({ projectId: isolatedProjectId }));
+    assert.equal(response.status, 200);
+    assert.equal(body.workspace.workspaceId, workspace.workspaceId);
+    assert.equal(body.workspace.disposition, 'needs-recovery');
+    assert.equal(body.continuation.action, 'continue-workspace');
+    assert.equal(body.continuation.workspaceId, workspace.workspaceId);
+  });
+});
+
+test('project-only recovery keeps no-action when the project has no actionable managed workspace', async () => {
+  const isolatedProjectId = seedIsolatedProject('no-action');
+  createOrReuseSessionWorkspace({ id: isolatedProjectId, localPath: repoRoot }, 'session-no-action');
+
+  await withServer(async (baseUrl) => {
+    const { response, body } = await json(baseUrl, new URLSearchParams({ projectId: isolatedProjectId }));
+    assert.equal(response.status, 200);
+    assert.equal(body.status, 'current');
+    assert.equal(body.continuation.action, 'no-action');
+    assert.equal(Object.prototype.hasOwnProperty.call(body, 'workspace'), false);
+  });
+});
+
+test('project-only recovery blocks when multiple unclaimed managed workspaces are actionable', async () => {
+  const isolatedProjectId = seedIsolatedProject('multiple-actionable');
+  const dirty = createOrReuseSessionWorkspace({ id: isolatedProjectId, localPath: repoRoot }, 'session-multiple-dirty');
+  fs.writeFileSync(path.join(dirty.root, 'tracked.txt'), 'multiple dirty work\n', 'utf8');
+  const integration = createOrReuseSessionWorkspace({ id: isolatedProjectId, localPath: repoRoot }, 'session-multiple-integration');
+  fs.writeFileSync(path.join(integration.root, 'tracked.txt'), 'multiple committed work\n', 'utf8');
+  git(integration.root, ['add', 'tracked.txt']);
+  git(integration.root, ['commit', '-m', 'multiple integration work']);
+  markSessionWorkspaceIntegrationRequired(integration.workspaceId, true);
+
+  await withServer(async (baseUrl) => {
+    const { response, body } = await json(baseUrl, new URLSearchParams({ projectId: isolatedProjectId }));
+    assert.equal(response.status, 200);
+    assert.equal(body.status, 'blocked');
+    assert.equal(body.continuation.action, 'blocked');
+    assert.match(body.continuation.reason, /ambiguous|multiple/i);
+    assert.equal(body.candidates.workspaces.includes(dirty.workspaceId), true);
+    assert.equal(body.candidates.workspaces.includes(integration.workspaceId), true);
+  });
+});
+
+test('explicit workspace selector keeps precedence over project-only actionable workspace discovery', async () => {
+  const isolatedProjectId = seedIsolatedProject('explicit-workspace');
+  const selected = createOrReuseSessionWorkspace({ id: isolatedProjectId, localPath: repoRoot }, 'session-explicit-selected');
+  fs.writeFileSync(path.join(selected.root, 'tracked.txt'), 'selected dirty work\n', 'utf8');
+  const other = createOrReuseSessionWorkspace({ id: isolatedProjectId, localPath: repoRoot }, 'session-explicit-other');
+  fs.writeFileSync(path.join(other.root, 'tracked.txt'), 'other dirty work\n', 'utf8');
+
+  await withServer(async (baseUrl) => {
+    const query = new URLSearchParams({ projectId: isolatedProjectId, workspaceId: selected.workspaceId });
+    const { response, body } = await json(baseUrl, query);
+    assert.equal(response.status, 200);
+    assert.equal(body.workspace.workspaceId, selected.workspaceId);
+    assert.notEqual(body.workspace.workspaceId, other.workspaceId);
+    assert.equal(body.continuation.action, 'continue-workspace');
+    assert.equal(body.continuation.workspaceId, selected.workspaceId);
   });
 });
 

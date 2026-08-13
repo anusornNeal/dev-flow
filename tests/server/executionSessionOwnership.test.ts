@@ -89,6 +89,18 @@ test('separates execution-owned changes from unrelated working-tree changes and 
   assert.deepEqual(ownership.scopeDrift, ['src/B.ts']);
 });
 
+test('owned-change evidence does not authorize paths outside the claimed task scope', () => {
+  resetRepo();
+  const session = createSession();
+  fs.writeFileSync(path.join(repoRoot, 'src', 'B.ts'), 'export const B = 2;\n', 'utf8');
+  sessions.recordExecutionOwnedChanges(session.id, ['src/B.ts'], { repoRoot, source: 'ChatGPT' });
+
+  const ownership = sessions.getExecutionOwnershipState(session.id, { repoRoot });
+  assert.deepEqual(ownership.ownedChanges, ['src/B.ts']);
+  assert.deepEqual(ownership.unrelatedChanges, []);
+  assert.deepEqual(ownership.scopeDrift, ['src/B.ts']);
+});
+
 test('detects ownership drift while preserving the original acquisition revision across refreshes', () => {
   resetRepo();
   const session = createSession();

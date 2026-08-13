@@ -546,7 +546,7 @@ export function getExecutionOwnershipState(
     ...(Array.isArray((task?.claim as any)?.reservedPaths) ? (task!.claim as any).reservedPaths : []),
   ];
   const expectedScope = new Set(
-    normalizeStringList([...(options.expectedPaths || taskScope), ...ownedFiles.map((entry) => entry.path)])
+    normalizeStringList(options.expectedPaths || taskScope)
       .map(normalizeClaimScopePath)
       .filter(Boolean),
   );

@@ -7,12 +7,18 @@ import { commitTaskOwnedChanges } from './taskCommitPlanService.js';
 import { applyLocalPatchAsync } from './localPatchService';
 import { searchLocalFilesAsync } from './localFileService';
 import { deleteLocalPath, moveLocalPath } from './localPathMutationService';
-import { applyPreparedEditPlan, prepareEditPlan } from './preparedEditService';
+import { applyPreparedEditPlan, getPreparedEditRecoveryArgs, prepareEditPlan } from './preparedEditService';
 import { applyProjectAtlasAgentUpdate } from './projectAtlasService';
 import { runProjectCommandAsync } from './projectCommandService';
 import { prepareCompactEdit } from './stenoEditProtocolService';
 import type { ResourceAccessMode } from './mcpToolJobScheduler';
 import { executeRecoveryAwareTool } from './devFlowRecoveryRuntime.js';
+import {
+  getActiveTaskExecutionSessionForWorkspace,
+  recordExecutionOwnedChanges,
+  recordExecutionVerificationEvidence,
+} from './executionSessionService.js';
+import { resolveSessionWorkspace } from './sessionWorkspaceService.js';
 
 type Logger = { stdout: (data: string) => void; stderr: (data: string) => void };
 type VerificationPermitDemand = { verificationClass?: 'fast' | 'heavy'; sharedResources?: string[] };
@@ -69,12 +75,50 @@ export function getBuiltinToolJobRecoveryPolicy(toolName: string): BuiltinToolJo
   return RETRYABLE_AFTER_RESTART.has(toolName) ? 'retryable' : 'interrupted';
 }
 
+function taskExecutionBinding(args: any) {
+  const workspaceId = String(args?.workspaceId || '').trim();
+  if (!workspaceId) return null;
+  const session = getActiveTaskExecutionSessionForWorkspace(workspaceId);
+  if (!session?.taskId) return null;
+  const workspace = resolveSessionWorkspace(workspaceId);
+  if (!workspace || workspace.projectId !== session.projectId) return null;
+  return { session, workspace };
+}
+
+function recordTaskOwnedMutation(args: any, result: any, source: string) {
+  if (!result?.ok || result?.dryRun === true || result?.changed !== true) return;
+  const binding = taskExecutionBinding(args);
+  if (!binding) return;
+  const changedPaths = Array.isArray(result.files)
+    ? result.files
+      .filter((entry: any) => entry?.ok && entry?.changed && typeof entry?.filePath === 'string')
+      .map((entry: any) => entry.filePath)
+    : [];
+  if (changedPaths.length === 0) return;
+  recordExecutionOwnedChanges(binding.session.id, changedPaths, {
+    repoRoot: binding.workspace.root,
+    source,
+  });
+}
+
+function recordTaskVerification(args: any, result: any) {
+  if (!result?.ok || result?.status !== 'succeeded') return;
+  const binding = taskExecutionBinding(args);
+  if (!binding) return;
+  recordExecutionVerificationEvidence(binding.session.id, [{
+    name: String(args?.command || args?.preset || 'run_project_command'),
+    status: 'passed',
+  }], { repoRoot: binding.workspace.root });
+}
+
 export async function runBuiltinToolJob(input: BuiltinToolJobInput, context: BuiltinToolJobContext) {
   const { toolName, state, args } = input;
   const { logger, setCancelFn, transitionAccess } = context;
 
   if (toolName === 'run_project_command') {
-    return await runProjectCommandAsync(state, args, logger, setCancelFn);
+    const result = await runProjectCommandAsync(state, args, logger, setCancelFn);
+    recordTaskVerification(args, result);
+    return result;
   }
   if (toolName === 'apply_patch') {
     return await applyLocalPatchAsync(state, args, logger, setCancelFn);
@@ -91,18 +135,38 @@ export async function runBuiltinToolJob(input: BuiltinToolJobInput, context: Bui
   if (toolName === 'push_git_branch') return pushGitBranch(state, args);
   if (toolName === 'commit_git_changes') return commitGitChanges(state, args);
   if (toolName === 'commit_task_owned_changes') return commitTaskOwnedChanges(state, args);
-  if (toolName === 'edit_local_files_batch') return editFilesBatch(state, args);
+  if (toolName === 'edit_local_files_batch') {
+    const result = editFilesBatch(state, args);
+    recordTaskOwnedMutation(args, result, toolName);
+    return result;
+  }
   if (toolName === 'prepare_edit_plan') return prepareEditPlan(state, args);
   if (toolName === 'apply_prepared_edit_plan') {
-    return await executeRecoveryAwareTool(state, toolName, args, (payload) => applyPreparedEditPlan(payload));
+    const sourceArgs = getPreparedEditRecoveryArgs(String(args?.editPlanId || '')) || args;
+    const result = await executeRecoveryAwareTool(state, toolName, args, (payload) => applyPreparedEditPlan(payload));
+    recordTaskOwnedMutation(sourceArgs, result, toolName);
+    return result;
   }
   if (toolName === 'prepare_compact_edit') return prepareCompactEdit(state, args);
   if (toolName === 'apply_prepared_edit') {
+    const sourceArgs = getPreparedEditRecoveryArgs(String(args?.editPlanId || '')) || args;
     const payload = { editPlanId: args?.editPlanId };
-    return await executeRecoveryAwareTool(state, toolName, payload, (nextPayload) => applyPreparedEditPlan(nextPayload));
+    const result = await executeRecoveryAwareTool(state, toolName, payload, (nextPayload) => applyPreparedEditPlan(nextPayload));
+    recordTaskOwnedMutation(sourceArgs, result, toolName);
+    return result;
   }
   if (toolName === 'apply_and_verify') {
-    return await applyAndVerifyAsync(state, args, logger, setCancelFn, transitionAccess);
+    const result = await applyAndVerifyAsync(state, args, logger, setCancelFn, transitionAccess);
+    recordTaskOwnedMutation(args, result?.edit, toolName);
+    if (result?.ok === true) {
+      const binding = taskExecutionBinding(args);
+      if (binding) {
+        recordExecutionVerificationEvidence(binding.session.id, Array.isArray(result.verification) ? result.verification : [], {
+          repoRoot: binding.workspace.root,
+        });
+      }
+    }
+    return result;
   }
   if (toolName === 'delete_local_path') return deleteLocalPath(state, args);
   if (toolName === 'move_local_path') return moveLocalPath(state, args);

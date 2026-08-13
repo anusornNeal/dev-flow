@@ -5,6 +5,7 @@ import {
   createExecutionSessionRecord,
   getExecutionSessionById,
   listExecutionSessionEvidence,
+  listExecutionSessionsForWorkspace,
   markExpiredExecutionSessions,
   replaceExecutionSessionEvidenceStaleness,
   saveExecutionSessionEvidence,
@@ -280,6 +281,20 @@ export function recordExecutionSessionEvidence(
     });
   }
   return saved;
+}
+
+export function getActiveTaskExecutionSessionForWorkspace(workspaceId: string) {
+  const normalized = normalizeWorkspaceIdentity(workspaceId);
+  if (!normalized) return null;
+  const active = listExecutionSessionsForWorkspace(normalized)
+    .filter((entry) => entry.status === 'active' && Boolean(entry.taskId));
+  if (active.length > 1) {
+    throw executionSessionError(
+      'EXECUTION_SESSION_WORKSPACE_AMBIGUOUS',
+      `Workspace '${normalized}' has multiple active task execution sessions.`,
+    );
+  }
+  return active[0] || null;
 }
 
 export function recordExecutionOwnedChanges(

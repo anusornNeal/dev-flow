@@ -139,6 +139,12 @@ export function listExecutionSessionsForTask(taskId: string): ExecutionSessionRe
     .filter((entry): entry is ExecutionSessionRecord => Boolean(entry));
 }
 
+export function listExecutionSessionsForWorkspace(workspaceId: string): ExecutionSessionRecord[] {
+  return (db.prepare('SELECT * FROM execution_sessions WHERE workspaceId = ? ORDER BY updatedAt DESC').all(workspaceId) as any[])
+    .map(normalizeSession)
+    .filter((entry): entry is ExecutionSessionRecord => Boolean(entry));
+}
+
 export function updateExecutionSessionRecord(
   id: string,
   patch: Partial<Pick<ExecutionSessionRecord, 'workspaceId' | 'branch' | 'baseRevision' | 'repoRevision' | 'status' | 'contextHandle' | 'changedFiles' | 'verification' | 'updatedAt' | 'expiresAt' | 'endedAt'>>,

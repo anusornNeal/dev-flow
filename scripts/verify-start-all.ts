@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 const packageJson = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 assert.equal(packageJson.scripts.dev, 'tsx scripts/start-all.ts --server-only');
@@ -25,6 +27,10 @@ const {
   resolveStartAllOptions,
   shouldRestartServerProcess,
   shouldRestartManagedProcess,
+  classifyNgrokDiagnosticLine,
+  sanitizeNgrokDiagnosticLine,
+  shouldRecoverNgrokTunnel,
+  appendNgrokDiagnosticRecord,
 } = await import('./start-all');
 
 assert.deepEqual(buildNgrokArgs({ port: 3000, domain: 'example.ngrok-free.dev' }), [
@@ -51,6 +57,11 @@ assert.deepEqual(resolveStartAllOptions({
   ngrokRestartBaseMs: 1000,
   ngrokRestartMaxMs: 30000,
   ngrokStableResetMs: 60000,
+  ngrokProbeIntervalMs: 15000,
+  ngrokProbeTimeoutMs: 5000,
+  ngrokProbeFailureThreshold: 3,
+  ngrokCollisionBackoffMs: 30000,
+  ngrokLogMaxBytes: 131072,
 });
 
 const options = {
@@ -61,6 +72,11 @@ const options = {
   ngrokRestartBaseMs: 1000,
   ngrokRestartMaxMs: 30000,
   ngrokStableResetMs: 60000,
+  ngrokProbeIntervalMs: 15000,
+  ngrokProbeTimeoutMs: 5000,
+  ngrokProbeFailureThreshold: 3,
+  ngrokCollisionBackoffMs: 30000,
+  ngrokLogMaxBytes: 131072,
 };
 const plan = buildStartAllPlan(options, 'all-token', 'all');
 
@@ -149,5 +165,82 @@ assert.equal(boundedOptions.ngrokRestartBaseMs, 5000);
 assert.equal(boundedOptions.ngrokRestartMaxMs, 5000);
 assert.equal(boundedOptions.ngrokStableResetMs, 90000);
 assert.equal(boundedOptions.openBrowser, false);
+
+const collision = classifyNgrokDiagnosticLine('failed to start: ERR_NGROK_334 endpoint already online');
+assert.equal(collision.errorCode, 'ERR_NGROK_334');
+assert.equal(collision.classification, 'endpoint-session-collision');
+
+assert.equal(
+  sanitizeNgrokDiagnosticLine('url=https://secret.ngrok-free.app/path?token=abc123 authtoken=very-secret'),
+  'url=[url] authtoken=[redacted]',
+);
+
+assert.equal(shouldRecoverNgrokTunnel({
+  tunnelStatus: 'degraded',
+  consecutiveProbeFailures: 1,
+  failureThreshold: 3,
+  localApiHealthy: true,
+  ngrokProcessRunning: true,
+  shuttingDown: false,
+  nowMs: 1000,
+}), false);
+assert.equal(shouldRecoverNgrokTunnel({
+  tunnelStatus: 'down',
+  consecutiveProbeFailures: 3,
+  failureThreshold: 3,
+  localApiHealthy: true,
+  ngrokProcessRunning: true,
+  shuttingDown: false,
+  nowMs: 40000,
+}), true);
+assert.equal(shouldRecoverNgrokTunnel({
+  tunnelStatus: 'down',
+  consecutiveProbeFailures: 3,
+  failureThreshold: 3,
+  localApiHealthy: false,
+  ngrokProcessRunning: true,
+  shuttingDown: false,
+  nowMs: 40000,
+}), false);
+assert.equal(shouldRecoverNgrokTunnel({
+  tunnelStatus: 'down',
+  consecutiveProbeFailures: 3,
+  failureThreshold: 3,
+  localApiHealthy: true,
+  ngrokProcessRunning: true,
+  shuttingDown: false,
+  collisionBackoffUntilMs: 45000,
+  nowMs: 40000,
+}), false);
+
+assert.equal(shouldRecoverNgrokTunnel({
+  tunnelStatus: 'down',
+  consecutiveProbeFailures: 3,
+  failureThreshold: 3,
+  localApiHealthy: true,
+  ngrokProcessRunning: true,
+  shuttingDown: true,
+  nowMs: 40000,
+}), false);
+
+const diagnosticsRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-ngrok-diagnostics-'));
+const diagnosticsPath = path.join(diagnosticsRoot, 'ngrok-diagnostics.jsonl');
+for (let index = 0; index < 30; index += 1) {
+  appendNgrokDiagnosticRecord({
+    filePath: diagnosticsPath,
+    stream: index % 2 === 0 ? 'stdout' : 'stderr',
+    line: `event=${index} url=https://secret.ngrok-free.app/path?token=abc${index} ERR_NGROK_334`,
+    maxBytes: 1024,
+    now: `2026-08-13T00:00:${String(index).padStart(2, '0')}.000Z`,
+  });
+}
+const persistedDiagnostics = fs.readFileSync(diagnosticsPath, 'utf8');
+assert.ok(Buffer.byteLength(persistedDiagnostics, 'utf8') <= 1024);
+assert.doesNotMatch(persistedDiagnostics, /secret\.ngrok|abc\d+/i);
+const persistedRecords = persistedDiagnostics.trim().split(/\r?\n/).map((line) => JSON.parse(line));
+assert.ok(persistedRecords.length > 0);
+assert.ok(persistedRecords.every((entry) => entry.errorCode === 'ERR_NGROK_334'));
+assert.ok(persistedRecords.every((entry) => entry.classification === 'endpoint-session-collision'));
+fs.rmSync(diagnosticsRoot, { recursive: true, force: true });
 
 console.log('[verify-start-all] all assertions passed');

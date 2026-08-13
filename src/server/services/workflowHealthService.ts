@@ -117,6 +117,7 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
   if (git.ok && !git.clean && !git.operation?.blocked) recommendations.push('Working tree has local changes; review or commit them before starting unrelated work.');
 
   const queueDepth = Number(diagnostics?.mcp?.queueDepth || 0);
+  const runtimeSupervisor = diagnostics?.runtimeSupervisor;
   const isolation = diagnostics?.isolation || {
     waits: { workspaceLockWait: { count: 0, totalMs: 0, p50Ms: 0, p95Ms: 0 }, capacityWait: { count: 0, totalMs: 0, p50Ms: 0, p95Ms: 0 }, blockerReasons: {} },
     phases: {
@@ -138,6 +139,9 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
   const durableJobs = diagnostics?.mcp?.metrics?.durable || { queued: 0, running: 0, healthyRunning: 0, detached: 0, failed: 0, cancelled: 0, recovered: 0, staleRunning: 0, fencedLateWrites: 0, oldestLeaseAgeMs: 0 };
   const staleAgentRuns = Number(diagnostics?.agents?.staleCount || 0);
   const duplicateBursts = Array.isArray(diagnostics?.tools?.duplicateBursts) ? diagnostics.tools.duplicateBursts.length : 0;
+  if (runtimeSupervisor?.api?.status === 'healthy' && (runtimeSupervisor?.tunnel?.status === 'degraded' || runtimeSupervisor?.tunnel?.status === 'down')) {
+    recommendations.push(`Public tunnel is ${runtimeSupervisor.tunnel.status} while the local API is healthy; inspect runtime supervisor probe and ngrok diagnostic evidence.`);
+  }
   if (queueDepth > 0) recommendations.push('MCP tool jobs are queued; inspect job status/log before starting conflicting repo work.');
   if (Number(durableJobs.staleRunning || 0) > 0) recommendations.push('A stale MCP tool job lease was detected in durable state; inspect recovery classification before retrying the job.');
   if (isolation.capacity?.saturated) recommendations.push('Verification capacity is saturated; queued verify work is capacity-limited rather than blocked by a workspace correctness lock.');
@@ -224,6 +228,7 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
       telemetryPersistence: diagnostics?.telemetryPersistence,
       isolation,
       recovery,
+      runtimeSupervisor,
     },
     performance: {
       totalMs: Math.round((nodePerformance.now() - startedAt) * 100) / 100,
@@ -292,6 +297,16 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
         backendToolCount: catalog.tools.length,
         keyToolsPresent,
       },
+      supervisor: runtimeSupervisor ? {
+        summary: runtimeSupervisor.summary,
+        apiStatus: runtimeSupervisor.api?.status,
+        tunnelStatus: runtimeSupervisor.tunnel?.status,
+        tunnelProcessStatus: runtimeSupervisor.tunnel?.processStatus,
+        lastProbeAt: runtimeSupervisor.tunnel?.lastProbeAt,
+        consecutiveProbeFailures: runtimeSupervisor.tunnel?.consecutiveProbeFailures,
+        lastErrorCode: runtimeSupervisor.tunnel?.lastErrorCode,
+        lastErrorClass: runtimeSupervisor.tunnel?.lastErrorClass,
+      } : null,
     },
     recovery: {
       hasVerifiedGoodBackup: Boolean(recovery.lastVerifiedGoodBackup),

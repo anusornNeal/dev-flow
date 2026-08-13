@@ -681,6 +681,9 @@ export function getDevFlowDiagnostics(options?: {
   if ((jobMetrics as any).queueDepth > 0) {
     recommendations.push('MCP tool jobs are queued; inspect get_tool_job_status/log for the oldest queued job.');
   }
+  if (runtimeSupervisor.api.status === 'healthy' && (runtimeSupervisor.tunnel.status === 'degraded' || runtimeSupervisor.tunnel.status === 'down')) {
+    recommendations.push(`Public ngrok tunnel is ${runtimeSupervisor.tunnel.status} while the local DevFlow API is healthy; inspect supervisor probe evidence and bounded ngrok diagnostics.`);
+  }
   if (staleAgentRuns.length > 0) {
     recommendations.push('Some agent runs are stale; cancel or retry them before starting more work on the same task.');
   }

@@ -19,12 +19,17 @@ import {
   acquireDevFlowRuntimeOwnership,
   assertDevFlowRuntimePortAvailable,
 } from '../src/lib/devFlowRuntimeOwnership';
+import { getDevFlowRuntimeDir } from '../src/lib/devFlowPaths';
 import {
+  advanceDevFlowTunnelHealth,
   createDevFlowSupervisorState,
+  readDevFlowSupervisorState,
   updateDevFlowSupervisorProcess,
   updateDevFlowSupervisorState,
+  updateDevFlowSupervisorTunnelHealth,
   writeDevFlowSupervisorState,
   type DevFlowSupervisorProcessLabel,
+  type DevFlowTunnelHealthState,
 } from '../src/lib/devFlowSupervisor';
 
 type StartAllOptions = {
@@ -35,6 +40,11 @@ type StartAllOptions = {
   ngrokRestartBaseMs: number;
   ngrokRestartMaxMs: number;
   ngrokStableResetMs: number;
+  ngrokProbeIntervalMs: number;
+  ngrokProbeTimeoutMs: number;
+  ngrokProbeFailureThreshold: number;
+  ngrokCollisionBackoffMs: number;
+  ngrokLogMaxBytes: number;
 };
 
 type ManagedProcess = {
@@ -60,6 +70,11 @@ const DEFAULT_BROWSER_DELAY_MS = 4000;
 const DEFAULT_NGROK_RESTART_BASE_MS = 1000;
 const DEFAULT_NGROK_RESTART_MAX_MS = 30000;
 const DEFAULT_NGROK_STABLE_RESET_MS = 60000;
+const DEFAULT_NGROK_PROBE_INTERVAL_MS = 15000;
+const DEFAULT_NGROK_PROBE_TIMEOUT_MS = 5000;
+const DEFAULT_NGROK_PROBE_FAILURE_THRESHOLD = 3;
+const DEFAULT_NGROK_COLLISION_BACKOFF_MS = 30000;
+const DEFAULT_NGROK_LOG_MAX_BYTES = 128 * 1024;
 
 function parsePositiveInteger(value: string | undefined, fallback: number) {
   if (!value) return fallback;
@@ -123,6 +138,11 @@ export function resolveStartAllOptions(env: NodeJS.ProcessEnv = process.env): St
     ngrokRestartBaseMs,
     ngrokRestartMaxMs,
     ngrokStableResetMs: parsePositiveInteger(env.DEVFLOW_NGROK_STABLE_RESET_MS, DEFAULT_NGROK_STABLE_RESET_MS),
+    ngrokProbeIntervalMs: parsePositiveInteger(env.DEVFLOW_NGROK_PROBE_INTERVAL_MS, DEFAULT_NGROK_PROBE_INTERVAL_MS),
+    ngrokProbeTimeoutMs: parsePositiveInteger(env.DEVFLOW_NGROK_PROBE_TIMEOUT_MS, DEFAULT_NGROK_PROBE_TIMEOUT_MS),
+    ngrokProbeFailureThreshold: parsePositiveInteger(env.DEVFLOW_NGROK_PROBE_FAILURE_THRESHOLD, DEFAULT_NGROK_PROBE_FAILURE_THRESHOLD),
+    ngrokCollisionBackoffMs: parsePositiveInteger(env.DEVFLOW_NGROK_COLLISION_BACKOFF_MS, DEFAULT_NGROK_COLLISION_BACKOFF_MS),
+    ngrokLogMaxBytes: parsePositiveInteger(env.DEVFLOW_NGROK_LOG_MAX_BYTES, DEFAULT_NGROK_LOG_MAX_BYTES),
   };
 }
 
@@ -220,7 +240,127 @@ export function computeManagedProcessRestartDelayMs(
   return Math.min(maxMs, baseMs * (2 ** Math.min(30, normalizedAttempt - 1)));
 }
 
+export function classifyNgrokDiagnosticLine(line: string): {
+  errorCode?: string;
+  classification: 'endpoint-session-collision' | 'ngrok-error' | 'unclassified';
+} {
+  const errorCode = String(line || '').match(/\bERR_NGROK_\d+\b/i)?.[0]?.toUpperCase();
+  if (errorCode === 'ERR_NGROK_334') {
+    return { errorCode, classification: 'endpoint-session-collision' as const };
+  }
+  if (errorCode) return { errorCode, classification: 'ngrok-error' as const };
+  return { classification: 'unclassified' as const };
+}
+
+export function sanitizeNgrokDiagnosticLine(line: string) {
+  return String(line || '')
+    .replace(/https?:\/\/[^\s"']+/gi, '[url]')
+    .replace(/\b(token|authtoken)=([^\s]+)/gi, '$1=[redacted]')
+    .replace(/\b(token|authtoken)\s+([^\s]+)/gi, '$1 [redacted]')
+    .trim();
+}
+
+export function appendNgrokDiagnosticRecord(input: {
+  filePath: string;
+  stream: 'stdout' | 'stderr' | 'supervisor';
+  line: string;
+  maxBytes: number;
+  now?: string;
+}) {
+  const message = sanitizeNgrokDiagnosticLine(input.line).slice(0, 2048);
+  if (!message) return null;
+  const classification = classifyNgrokDiagnosticLine(message);
+  const record = {
+    at: input.now || new Date().toISOString(),
+    stream: input.stream,
+    message,
+    ...classification,
+  };
+  fs.mkdirSync(path.dirname(input.filePath), { recursive: true });
+  let lines: string[] = [];
+  try {
+    lines = fs.existsSync(input.filePath)
+      ? fs.readFileSync(input.filePath, 'utf8').split(/\r?\n/).filter(Boolean)
+      : [];
+  } catch {
+    lines = [];
+  }
+  lines.push(JSON.stringify(record));
+  const maxBytes = Math.max(512, Math.floor(input.maxBytes));
+  while (lines.length > 0 && Buffer.byteLength(`${lines.join('\n')}\n`, 'utf8') > maxBytes) lines.shift();
+  fs.writeFileSync(input.filePath, `${lines.join('\n')}\n`, 'utf8');
+  return record;
+}
+
+export function shouldRecoverNgrokTunnel(input: {
+  tunnelStatus: string;
+  consecutiveProbeFailures: number;
+  failureThreshold: number;
+  localApiHealthy: boolean;
+  ngrokProcessRunning: boolean;
+  shuttingDown: boolean;
+  collisionBackoffUntilMs?: number;
+  nowMs?: number;
+}) {
+  const nowMs = input.nowMs ?? Date.now();
+  return !input.shuttingDown
+    && input.tunnelStatus === 'down'
+    && input.consecutiveProbeFailures >= Math.max(1, input.failureThreshold)
+    && input.localApiHealthy
+    && input.ngrokProcessRunning
+    && (!input.collisionBackoffUntilMs || input.collisionBackoffUntilMs <= nowMs);
+}
+
+async function probeHttpEndpoint(url: string, timeoutMs: number, requireSuccessStatus: boolean) {
+  const startedAt = Date.now();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.max(100, timeoutMs));
+  timer.unref();
+  try {
+    const response = await fetch(url, { signal: controller.signal, redirect: 'manual' });
+    const ok = requireSuccessStatus ? response.ok : response.status >= 200 && response.status < 500;
+    return {
+      ok,
+      statusCode: response.status,
+      latencyMs: Date.now() - startedAt,
+      message: ok ? `HTTP ${response.status}` : `HTTP ${response.status}`,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      latencyMs: Date.now() - startedAt,
+      message: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function discoverNgrokPublicUrl(domain: string, timeoutMs: number) {
+  if (domain.trim()) return `https://${domain.trim()}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.max(100, timeoutMs));
+  timer.unref();
+  try {
+    const response = await fetch('http://127.0.0.1:4040/api/tunnels', { signal: controller.signal });
+    if (!response.ok) return null;
+    const payload = await response.json() as { tunnels?: Array<{ public_url?: string }> };
+    const publicUrl = payload.tunnels?.map((entry) => String(entry.public_url || '')).find((value) => /^https?:\/\//i.test(value));
+    return publicUrl || null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function apiCapabilitiesUrl(baseUrl: string) {
+  return new URL('/api/capabilities', baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`).toString();
+}
+
 type ProcessCallbacks = {
+  onStdout?: (child: ChildProcessWithoutNullStreams, text: string) => void;
+  onStderr?: (child: ChildProcessWithoutNullStreams, text: string) => void;
   onExit?: (child: ChildProcessWithoutNullStreams, code: number | null, signal: NodeJS.Signals | null) => void;
   onError?: (child: ChildProcessWithoutNullStreams, error: Error) => void;
 };
@@ -233,11 +373,17 @@ function startProcess(processConfig: ManagedProcess, callbacks: ProcessCallbacks
   });
 
   child.stdout.on('data', (chunk) => {
-    process.stdout.write(`[${processConfig.label}] ${chunk}`);
+    const text = String(chunk);
+    const rendered = processConfig.label === 'ngrok' ? sanitizeNgrokDiagnosticLine(text) : text;
+    process.stdout.write(`[${processConfig.label}] ${rendered}${rendered.endsWith('\n') ? '' : '\n'}`);
+    callbacks.onStdout?.(child, text);
   });
 
   child.stderr.on('data', (chunk) => {
-    process.stderr.write(`[${processConfig.label}] ${chunk}`);
+    const text = String(chunk);
+    const rendered = processConfig.label === 'ngrok' ? sanitizeNgrokDiagnosticLine(text) : text;
+    process.stderr.write(`[${processConfig.label}] ${rendered}${rendered.endsWith('\n') ? '' : '\n'}`);
+    callbacks.onStderr?.(child, text);
   });
 
   child.on('exit', (code, signal) => {
@@ -307,6 +453,42 @@ export async function startAll(mode: StartAllMode = 'all') {
   const restartTimers = new Map<DevFlowSupervisorProcessLabel, NodeJS.Timeout>();
   const stableTimers = new Map<DevFlowSupervisorProcessLabel, NodeJS.Timeout>();
   const restartAttempts = new Map<DevFlowSupervisorProcessLabel, number>();
+  let tunnelProbeTimer: NodeJS.Timeout | null = null;
+  let tunnelProbeInFlight = false;
+  let collisionBackoffUntilMs = 0;
+  let recoveryStopChild: ChildProcessWithoutNullStreams | null = null;
+  const ngrokDiagnosticLogPath = path.join(getDevFlowRuntimeDir(), 'ngrok-diagnostics.jsonl');
+
+  const currentTunnelHealth = (): DevFlowTunnelHealthState => readDevFlowSupervisorState()?.tunnelHealth || {
+    status: 'unknown',
+    consecutiveProbeFailures: 0,
+  };
+
+  const captureNgrokDiagnostic = (stream: 'stdout' | 'stderr' | 'supervisor', raw: string) => {
+    for (const line of String(raw || '').split(/\r?\n/).filter((entry) => entry.trim())) {
+      const record = appendNgrokDiagnosticRecord({
+        filePath: ngrokDiagnosticLogPath,
+        stream,
+        line,
+        maxBytes: options.ngrokLogMaxBytes,
+      });
+      if (!record?.errorCode) continue;
+      const collision = record.errorCode === 'ERR_NGROK_334';
+      if (collision) {
+        collisionBackoffUntilMs = Math.max(collisionBackoffUntilMs, Date.now() + options.ngrokCollisionBackoffMs);
+      }
+      updateDevFlowSupervisorTunnelHealth({
+        ...currentTunnelHealth(),
+        lastErrorCode: record.errorCode,
+        lastErrorClass: record.classification,
+        ...(collision ? { nextRecoveryAt: new Date(collisionBackoffUntilMs).toISOString() } : {}),
+        message: collision
+          ? 'ngrok endpoint/session collision detected; recovery is paused for bounded backoff.'
+          : `ngrok reported ${record.errorCode}; see bounded diagnostics for the redacted event.`,
+      });
+    }
+  };
+
   let shuttingDown = false;
 
   writeDevFlowSupervisorState(createDevFlowSupervisorState({
@@ -331,10 +513,14 @@ export async function startAll(mode: StartAllMode = 'all') {
 
     const attempt = (restartAttempts.get(processConfig.label) || 0) + 1;
     restartAttempts.set(processConfig.label, attempt);
-    const delayMs = computeManagedProcessRestartDelayMs(attempt, {
+    const baseDelayMs = computeManagedProcessRestartDelayMs(attempt, {
       baseMs: options.ngrokRestartBaseMs,
       maxMs: options.ngrokRestartMaxMs,
     });
+    const collisionDelayMs = processConfig.label === 'ngrok'
+      ? Math.max(0, collisionBackoffUntilMs - Date.now())
+      : 0;
+    const delayMs = Math.max(baseDelayMs, collisionDelayMs);
     const nextRetryAt = new Date(Date.now() + delayMs).toISOString();
     updateDevFlowSupervisorProcess(processConfig.label, {
       status: 'restarting',
@@ -360,6 +546,12 @@ export async function startAll(mode: StartAllMode = 'all') {
   launch = (processConfig: ManagedProcess): ChildProcessWithoutNullStreams => {
     clearTimer(stableTimers, processConfig.label);
     const child = startProcess(processConfig, {
+      onStdout: (_runningChild, text) => {
+        if (processConfig.label === 'ngrok') captureNgrokDiagnostic('stdout', text);
+      },
+      onStderr: (_runningChild, text) => {
+        if (processConfig.label === 'ngrok') captureNgrokDiagnostic('stderr', text);
+      },
       onExit: (exitedChild, code, signal) => {
         if (children.get(processConfig.label) !== exitedChild) return;
         children.delete(processConfig.label);
@@ -367,10 +559,16 @@ export async function startAll(mode: StartAllMode = 'all') {
         const detail = signal ? `signal ${signal}` : `code ${code ?? 'unknown'}`;
 
         if (processConfig.label === 'ngrok') {
+          const recoveryExit = recoveryStopChild === exitedChild;
+          if (recoveryExit) recoveryStopChild = null;
+          const exitMessage = recoveryExit
+            ? `ngrok stopped for public tunnel recovery with ${detail}.`
+            : `ngrok exited unexpectedly with ${detail}.`;
+          captureNgrokDiagnostic('supervisor', exitMessage);
           if (scheduleManagedRestart(processConfig, {
             code,
             signal,
-            message: `ngrok exited unexpectedly with ${detail}.`,
+            message: exitMessage,
           })) return;
           updateDevFlowSupervisorProcess('ngrok', {
             status: shuttingDown ? 'stopped' : 'failed',
@@ -452,6 +650,7 @@ export async function startAll(mode: StartAllMode = 'all') {
         clearTimer(stableTimers, processConfig.label);
 
         if (processConfig.label === 'ngrok') {
+          captureNgrokDiagnostic('supervisor', `ngrok failed to start: ${error.message}`);
           if (scheduleManagedRestart(processConfig, { message: `ngrok failed to start: ${error.message}` })) return;
           updateDevFlowSupervisorProcess('ngrok', {
             status: shuttingDown ? 'stopped' : 'failed',
@@ -510,9 +709,76 @@ export async function startAll(mode: StartAllMode = 'all') {
     return child;
   };
 
+  function scheduleTunnelProbe(delayMs = options.ngrokProbeIntervalMs) {
+    if (mode !== 'all' || shuttingDown) return;
+    if (tunnelProbeTimer) clearTimeout(tunnelProbeTimer);
+    tunnelProbeTimer = setTimeout(() => {
+      tunnelProbeTimer = null;
+      void runTunnelProbe();
+    }, Math.max(250, delayMs));
+    tunnelProbeTimer.unref();
+  }
+
+  async function runTunnelProbe() {
+    if (mode !== 'all' || shuttingDown || tunnelProbeInFlight) return;
+    const ngrokChild = children.get('ngrok');
+    if (!ngrokChild?.pid || ngrokChild.exitCode !== null) {
+      scheduleTunnelProbe();
+      return;
+    }
+
+    tunnelProbeInFlight = true;
+    try {
+      const publicBaseUrl = await discoverNgrokPublicUrl(options.ngrokDomain, options.ngrokProbeTimeoutMs);
+      const publicProbe = publicBaseUrl
+        ? await probeHttpEndpoint(apiCapabilitiesUrl(publicBaseUrl), options.ngrokProbeTimeoutMs, true)
+        : { ok: false, latencyMs: 0, message: 'ngrok public URL is unavailable from the configured domain or local inspector.' };
+      let next = advanceDevFlowTunnelHealth(currentTunnelHealth(), publicProbe, {
+        failureThreshold: options.ngrokProbeFailureThreshold,
+      });
+      updateDevFlowSupervisorTunnelHealth(next);
+
+      if (next.status !== 'down') return;
+      const localProbe = await probeHttpEndpoint(apiCapabilitiesUrl(plan.appUrl), options.ngrokProbeTimeoutMs, true);
+      const canRecover = shouldRecoverNgrokTunnel({
+        tunnelStatus: next.status,
+        consecutiveProbeFailures: next.consecutiveProbeFailures,
+        failureThreshold: options.ngrokProbeFailureThreshold,
+        localApiHealthy: localProbe.ok,
+        ngrokProcessRunning: children.get('ngrok') === ngrokChild && ngrokChild.exitCode === null,
+        shuttingDown,
+        collisionBackoffUntilMs,
+      });
+
+      if (canRecover && recoveryStopChild !== ngrokChild) {
+        next = {
+          ...next,
+          recoveryAttempt: Math.max(0, next.recoveryAttempt || 0) + 1,
+          lastRecoveryAt: new Date().toISOString(),
+          nextRecoveryAt: undefined,
+          message: 'Persistent public tunnel failure while local API is healthy; restarting ngrok only.',
+        };
+        updateDevFlowSupervisorTunnelHealth(next);
+        captureNgrokDiagnostic('supervisor', next.message || 'ngrok-only recovery requested.');
+        recoveryStopChild = ngrokChild;
+        stopManagedProcessTree(ngrokChild);
+      } else if (!localProbe.ok) {
+        updateDevFlowSupervisorTunnelHealth({
+          ...next,
+          message: 'Public tunnel is down, but local DevFlow API is also unhealthy; ngrok-only recovery suppressed.',
+        });
+      }
+    } finally {
+      tunnelProbeInFlight = false;
+      scheduleTunnelProbe();
+    }
+  }
+
   for (const processConfig of plan.processes) {
     launch(processConfig);
   }
+
+  if (mode === 'all') scheduleTunnelProbe(Math.min(options.ngrokProbeIntervalMs, 5000));
 
   if (plan.openBrowser) {
     setTimeout(() => openUrl(plan.appUrl), plan.openBrowserDelayMs);
@@ -524,6 +790,8 @@ export async function startAll(mode: StartAllMode = 'all') {
     lifecycleStatus = 'stopping';
     console.log('[start-all] Stopping services...');
     updateDevFlowSupervisorState({ shuttingDown: true });
+    if (tunnelProbeTimer) clearTimeout(tunnelProbeTimer);
+    tunnelProbeTimer = null;
     for (const label of Array.from(restartTimers.keys())) clearTimer(restartTimers, label);
     for (const label of Array.from(stableTimers.keys())) clearTimer(stableTimers, label);
     for (const [label, child] of children.entries()) {

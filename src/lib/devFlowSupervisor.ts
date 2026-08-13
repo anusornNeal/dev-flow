@@ -8,6 +8,23 @@ export const DEVFLOW_SUPERVISOR_NAME = 'start-all' as const;
 export type DevFlowSupervisorMode = 'all' | 'server-only';
 export type DevFlowSupervisorProcessLabel = 'server' | 'ngrok';
 export type DevFlowSupervisorProcessStatus = 'starting' | 'running' | 'restarting' | 'stopped' | 'failed';
+export type DevFlowTunnelHealthStatus = 'unknown' | 'healthy' | 'degraded' | 'down';
+
+export type DevFlowTunnelHealthState = {
+  status: DevFlowTunnelHealthStatus;
+  lastProbeAt?: string;
+  lastProbeStatusCode?: number;
+  lastProbeLatencyMs?: number;
+  lastSuccessAt?: string;
+  lastFailureAt?: string;
+  consecutiveProbeFailures: number;
+  lastErrorCode?: string;
+  lastErrorClass?: string;
+  lastRecoveryAt?: string;
+  recoveryAttempt?: number;
+  nextRecoveryAt?: string;
+  message?: string;
+};
 
 export type DevFlowSupervisorProcessState = {
   label: DevFlowSupervisorProcessLabel;
@@ -30,11 +47,12 @@ export type DevFlowSupervisorState = {
   startedAt: string;
   updatedAt: string;
   processes: Partial<Record<DevFlowSupervisorProcessLabel, DevFlowSupervisorProcessState>>;
+  tunnelHealth?: DevFlowTunnelHealthState;
 };
 
 export type DevFlowSupervisorChildDiagnostic = {
   enabled: boolean;
-  status: 'healthy' | 'restarting' | 'down' | 'disabled' | 'unknown';
+  status: 'healthy' | 'degraded' | 'restarting' | 'down' | 'disabled' | 'unknown';
   processStatus?: DevFlowSupervisorProcessStatus;
   pid?: number;
   restartAttempt: number;
@@ -43,6 +61,18 @@ export type DevFlowSupervisorChildDiagnostic = {
   lastExitCode?: number | null;
   lastSignal?: string | null;
   message?: string;
+  reachabilityStatus?: DevFlowTunnelHealthStatus;
+  lastProbeAt?: string;
+  lastProbeStatusCode?: number;
+  lastProbeLatencyMs?: number;
+  lastSuccessAt?: string;
+  lastFailureAt?: string;
+  consecutiveProbeFailures?: number;
+  lastErrorCode?: string;
+  lastErrorClass?: string;
+  lastRecoveryAt?: string;
+  recoveryAttempt?: number;
+  nextRecoveryAt?: string;
 };
 
 export function getDevFlowSupervisorStatePath() {
@@ -59,6 +89,33 @@ function isProcessStatus(value: unknown): value is DevFlowSupervisorProcessStatu
     || value === 'restarting'
     || value === 'stopped'
     || value === 'failed';
+}
+
+function isTunnelHealthStatus(value: unknown): value is DevFlowTunnelHealthStatus {
+  return value === 'unknown' || value === 'healthy' || value === 'degraded' || value === 'down';
+}
+
+function normalizeTunnelHealth(value: unknown): DevFlowTunnelHealthState | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const input = value as Record<string, unknown>;
+  if (!isTunnelHealthStatus(input.status)) return undefined;
+  return {
+    status: input.status,
+    consecutiveProbeFailures: Number.isInteger(input.consecutiveProbeFailures) && Number(input.consecutiveProbeFailures) >= 0
+      ? Number(input.consecutiveProbeFailures)
+      : 0,
+    ...(typeof input.lastProbeAt === 'string' ? { lastProbeAt: input.lastProbeAt } : {}),
+    ...(Number.isInteger(input.lastProbeStatusCode) ? { lastProbeStatusCode: Number(input.lastProbeStatusCode) } : {}),
+    ...(typeof input.lastProbeLatencyMs === 'number' && Number.isFinite(input.lastProbeLatencyMs) && input.lastProbeLatencyMs >= 0 ? { lastProbeLatencyMs: input.lastProbeLatencyMs } : {}),
+    ...(typeof input.lastSuccessAt === 'string' ? { lastSuccessAt: input.lastSuccessAt } : {}),
+    ...(typeof input.lastFailureAt === 'string' ? { lastFailureAt: input.lastFailureAt } : {}),
+    ...(typeof input.lastErrorCode === 'string' ? { lastErrorCode: input.lastErrorCode } : {}),
+    ...(typeof input.lastErrorClass === 'string' ? { lastErrorClass: input.lastErrorClass } : {}),
+    ...(typeof input.lastRecoveryAt === 'string' ? { lastRecoveryAt: input.lastRecoveryAt } : {}),
+    ...(Number.isInteger(input.recoveryAttempt) && Number(input.recoveryAttempt) >= 0 ? { recoveryAttempt: Number(input.recoveryAttempt) } : {}),
+    ...(typeof input.nextRecoveryAt === 'string' ? { nextRecoveryAt: input.nextRecoveryAt } : {}),
+    ...(typeof input.message === 'string' ? { message: input.message } : {}),
+  };
 }
 
 function normalizeProcessState(label: DevFlowSupervisorProcessLabel, value: unknown): DevFlowSupervisorProcessState | undefined {
@@ -79,6 +136,10 @@ function normalizeProcessState(label: DevFlowSupervisorProcessLabel, value: unkn
   };
 }
 
+function processLabelsIncludeNgrok(labels: DevFlowSupervisorProcessLabel[]) {
+  return labels.includes('ngrok');
+}
+
 export function createDevFlowSupervisorState(input: {
   mode: DevFlowSupervisorMode;
   processLabels: DevFlowSupervisorProcessLabel[];
@@ -97,6 +158,7 @@ export function createDevFlowSupervisorState(input: {
     startedAt: now,
     updatedAt: now,
     processes,
+    ...(processLabelsIncludeNgrok(input.processLabels) ? { tunnelHealth: { status: 'unknown' as const, consecutiveProbeFailures: 0 } } : {}),
   };
 }
 
@@ -125,6 +187,7 @@ export function readDevFlowSupervisorState(): DevFlowSupervisorState | null {
       startedAt: parsed.startedAt,
       updatedAt: parsed.updatedAt,
       processes,
+      ...(normalizeTunnelHealth(parsed.tunnelHealth) ? { tunnelHealth: normalizeTunnelHealth(parsed.tunnelHealth) } : {}),
     };
   } catch {
     return null;
@@ -163,6 +226,51 @@ export function updateDevFlowSupervisorProcess(
   });
 }
 
+export function advanceDevFlowTunnelHealth(
+  previous: DevFlowTunnelHealthState | undefined,
+  probe: { ok: boolean; statusCode?: number; latencyMs?: number; message?: string },
+  options: { failureThreshold: number; now?: string },
+): DevFlowTunnelHealthState {
+  const now = options.now || new Date().toISOString();
+  const failureThreshold = Math.max(1, Math.floor(options.failureThreshold));
+  const latencyMs = Number.isFinite(probe.latencyMs) && Number(probe.latencyMs) >= 0 ? Number(probe.latencyMs) : undefined;
+  const statusCode = Number.isInteger(probe.statusCode) ? Number(probe.statusCode) : undefined;
+  if (probe.ok) {
+    return {
+      ...(previous || {}),
+      status: 'healthy',
+      lastProbeAt: now,
+      lastProbeStatusCode: statusCode,
+      lastProbeLatencyMs: latencyMs,
+      lastSuccessAt: now,
+      consecutiveProbeFailures: 0,
+      nextRecoveryAt: undefined,
+      message: probe.message || 'Public tunnel probe succeeded.',
+    };
+  }
+
+  const consecutiveProbeFailures = Math.max(0, previous?.consecutiveProbeFailures || 0) + 1;
+  return {
+    ...(previous || {}),
+    status: consecutiveProbeFailures >= failureThreshold ? 'down' : 'degraded',
+    lastProbeAt: now,
+    lastProbeStatusCode: statusCode,
+    lastProbeLatencyMs: latencyMs,
+    lastFailureAt: now,
+    consecutiveProbeFailures,
+    message: probe.message || 'Public tunnel probe failed.',
+  };
+}
+
+export function updateDevFlowSupervisorTunnelHealth(
+  tunnelHealth: DevFlowTunnelHealthState,
+  now = new Date().toISOString(),
+) {
+  const current = readDevFlowSupervisorState();
+  if (!current) return null;
+  return writeDevFlowSupervisorState({ ...current, tunnelHealth, updatedAt: now });
+}
+
 function childDiagnostic(
   state: DevFlowSupervisorState,
   label: DevFlowSupervisorProcessLabel,
@@ -190,22 +298,49 @@ function childDiagnostic(
   };
 }
 
+function tunnelDiagnostic(state: DevFlowSupervisorState): DevFlowSupervisorChildDiagnostic {
+  const enabled = state.mode === 'all';
+  if (!enabled) return { enabled: false, status: 'disabled', restartAttempt: 0 };
+  const base = childDiagnostic(state, 'ngrok', true);
+  const health = state.tunnelHealth || { status: 'unknown' as const, consecutiveProbeFailures: 0 };
+  const status = base.processStatus === 'running' ? health.status : base.status;
+  return {
+    ...base,
+    status,
+    reachabilityStatus: health.status,
+    ...(health.lastProbeAt ? { lastProbeAt: health.lastProbeAt } : {}),
+    ...(Number.isInteger(health.lastProbeStatusCode) ? { lastProbeStatusCode: health.lastProbeStatusCode } : {}),
+    ...(Number.isFinite(health.lastProbeLatencyMs) ? { lastProbeLatencyMs: health.lastProbeLatencyMs } : {}),
+    ...(health.lastSuccessAt ? { lastSuccessAt: health.lastSuccessAt } : {}),
+    ...(health.lastFailureAt ? { lastFailureAt: health.lastFailureAt } : {}),
+    consecutiveProbeFailures: health.consecutiveProbeFailures,
+    ...(health.lastErrorCode ? { lastErrorCode: health.lastErrorCode } : {}),
+    ...(health.lastErrorClass ? { lastErrorClass: health.lastErrorClass } : {}),
+    ...(health.lastRecoveryAt ? { lastRecoveryAt: health.lastRecoveryAt } : {}),
+    ...(Number.isInteger(health.recoveryAttempt) ? { recoveryAttempt: health.recoveryAttempt } : {}),
+    ...(health.nextRecoveryAt ? { nextRecoveryAt: health.nextRecoveryAt } : {}),
+    ...(health.message ? { message: health.message } : {}),
+  };
+}
+
 export function buildDevFlowSupervisorDiagnostics(state: DevFlowSupervisorState | null = readDevFlowSupervisorState()) {
   if (!state) {
     return {
       available: false,
       summary: 'unavailable' as const,
-      api: { enabled: true, status: 'unknown' as const, restartAttempt: 0 },
-      tunnel: { enabled: false, status: 'unknown' as const, restartAttempt: 0 },
+      api: { enabled: true, status: 'unknown', restartAttempt: 0 } as DevFlowSupervisorChildDiagnostic,
+      tunnel: { enabled: false, status: 'unknown', restartAttempt: 0 } as DevFlowSupervisorChildDiagnostic,
     };
   }
 
   const api = childDiagnostic(state, 'server', true);
-  const tunnel = childDiagnostic(state, 'ngrok', state.mode === 'all');
+  const tunnel = tunnelDiagnostic(state);
   let summary = 'degraded';
   if (state.shuttingDown) summary = 'shutting-down';
   else if (!tunnel.enabled && api.status === 'healthy') summary = 'api-healthy-tunnel-disabled';
   else if (api.status === 'healthy' && tunnel.status === 'healthy') summary = 'both-healthy';
+  else if (api.status === 'healthy' && tunnel.status === 'unknown') summary = 'api-healthy-tunnel-unknown';
+  else if (api.status === 'healthy' && tunnel.status === 'degraded') summary = 'api-healthy-tunnel-degraded';
   else if (api.status === 'healthy' && tunnel.status === 'restarting') summary = 'api-healthy-tunnel-restarting';
   else if (api.status === 'healthy' && tunnel.status === 'down') summary = 'api-healthy-tunnel-down';
   else if (api.status === 'down' && tunnel.status === 'healthy') summary = 'api-down-tunnel-healthy';

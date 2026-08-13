@@ -36,17 +36,30 @@ Tray **Restart DevFlow** calls the same `/api/restart` guarded ticket path as `r
 
 When the ngrok child exits unexpectedly or fails to spawn, the supervisor keeps the DevFlow API child running and retries **ngrok only**. Retry delay uses bounded exponential backoff: 1s, 2s, 4s, and so on up to 30s by default. If one ngrok child stays alive for 60s, the retry attempt counter resets so a later failure starts again at the base delay. The supervisor maintains at most one pending retry timer per managed child.
 
-Intentional `SIGINT`/`SIGTERM` shutdown sets the supervisor shutdown state first, cancels pending retry/stability timers, and then stops children; intentional shutdown therefore never starts an ngrok retry loop.
+`start:all` also probes public reachability independently from the ngrok PID. The default probe cadence is 15 seconds with a 5-second timeout. A newly running ngrok process starts with tunnel reachability `unknown`; only a successful public `/api/capabilities` probe makes it `healthy`. One or two consecutive failures are `degraded`. Three consecutive failures make it `down`. A single transient failure never restarts ngrok.
 
-The defaults can be tuned without changing MCP authentication or transport behavior:
+When the public tunnel is `down`, the supervisor probes the local DevFlow `/api/capabilities` endpoint before any recovery. If the local API is healthy, the supervisor stops and restarts **ngrok only**. If the local API is also unhealthy, tunnel-only recovery is suppressed so a server problem is not misclassified as an ngrok problem. Tunnel degradation never requests a DevFlow server restart.
+
+ngrok stdout/stderr and supervisor recovery decisions are retained as bounded timestamped JSONL in `.devflow/ngrok-diagnostics.jsonl` (128 KiB by default). URLs and token-like values are redacted before persistence. `ERR_NGROK_334` is classified as an endpoint/session collision and activates a bounded collision backoff before another ngrok launch, preventing a hot restart loop while preserving the single-instance supervisor ownership model.
+
+Intentional `SIGINT`/`SIGTERM` shutdown sets the supervisor shutdown state first, cancels pending retry, stability, and public-probe timers, and then stops children; intentional shutdown therefore never starts an ngrok retry or tunnel-recovery loop.
+
+The defaults can be tuned without changing MCP transport behavior:
 
 ```env
 DEVFLOW_NGROK_RESTART_BASE_MS=1000
 DEVFLOW_NGROK_RESTART_MAX_MS=30000
 DEVFLOW_NGROK_STABLE_RESET_MS=60000
+DEVFLOW_NGROK_PROBE_INTERVAL_MS=15000
+DEVFLOW_NGROK_PROBE_TIMEOUT_MS=5000
+DEVFLOW_NGROK_PROBE_FAILURE_THRESHOLD=3
+DEVFLOW_NGROK_COLLISION_BACKOFF_MS=30000
+DEVFLOW_NGROK_LOG_MAX_BYTES=131072
 ```
 
-Runtime child state is persisted under `.devflow/supervisor-state.json`. `getDevFlowDiagnostics()` reads that state and reports API and tunnel lifecycle independently, including summaries such as `both-healthy`, `api-healthy-tunnel-restarting`, `api-healthy-tunnel-down`, and `api-down-tunnel-healthy`. These are child-process lifecycle diagnostics; `tunnel=healthy` means the ngrok child is running, not that an external Internet reachability probe succeeded.
+Runtime state is persisted under `.devflow/supervisor-state.json`. `getDevFlowDiagnostics()` reports ngrok process lifecycle and public tunnel reachability separately, including combinations such as process-running + tunnel-unknown/degraded/down. Probe evidence includes the last probe time/status/latency, last success, consecutive failures, and recent classified ngrok error/recovery metadata when available.
+
+The outage investigated on August 13, 2026 remains **root-cause unconfirmed**. `ERR_NGROK_334` is a reproducible collision failure mode, but it must not be treated as proof that it caused that historical outage. Future incidents can be attributed only from the persisted probe/log/recovery timeline or other concrete evidence.
 
 ## Raw/debug startup
 

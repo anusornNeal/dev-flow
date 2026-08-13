@@ -49,6 +49,30 @@ test('supervisor state round-trips and supports per-child lifecycle updates', ()
   assert.equal(persisted?.processes.ngrok?.lastExitCode, 1);
 });
 
+test('legacy supervisor state without tunnel health remains readable and reports reachability unknown', () => {
+  resetState();
+  const statePath = path.join(tempRoot, '.devflow', 'supervisor-state.json');
+  fs.mkdirSync(path.dirname(statePath), { recursive: true });
+  fs.writeFileSync(statePath, JSON.stringify({
+    version: 1,
+    supervisor: 'start-all',
+    mode: 'all',
+    shuttingDown: false,
+    startedAt: '2026-08-09T03:00:00.000Z',
+    updatedAt: '2026-08-09T03:00:01.000Z',
+    processes: {
+      server: { label: 'server', status: 'running', pid: 100, restartAttempt: 0 },
+      ngrok: { label: 'ngrok', status: 'running', pid: 200, restartAttempt: 0 },
+    },
+  }), 'utf8');
+
+  const persisted = supervisor.readDevFlowSupervisorState();
+  assert.equal(persisted?.tunnelHealth, undefined);
+  const diagnostics = supervisor.buildDevFlowSupervisorDiagnostics(persisted);
+  assert.equal(diagnostics.tunnel.processStatus, 'running');
+  assert.equal(diagnostics.tunnel.status, 'unknown');
+});
+
 test('diagnostics distinguish both healthy from API healthy with tunnel restarting', () => {
   const bothHealthy = supervisor.buildDevFlowSupervisorDiagnostics({
     version: 1,
@@ -60,6 +84,14 @@ test('diagnostics distinguish both healthy from API healthy with tunnel restarti
     processes: {
       server: { label: 'server', status: 'running', pid: 100, restartAttempt: 0 },
       ngrok: { label: 'ngrok', status: 'running', pid: 200, restartAttempt: 0 },
+    },
+    tunnelHealth: {
+      status: 'healthy',
+      lastProbeAt: '2026-08-09T03:00:02.000Z',
+      lastProbeStatusCode: 200,
+      lastProbeLatencyMs: 80,
+      lastSuccessAt: '2026-08-09T03:00:02.000Z',
+      consecutiveProbeFailures: 0,
     },
   });
   assert.equal(bothHealthy.summary, 'both-healthy');
@@ -96,6 +128,14 @@ test('diagnostics distinguish ngrok healthy while API child is down', () => {
       server: { label: 'server', status: 'failed', lastExitCode: 1, restartAttempt: 0 },
       ngrok: { label: 'ngrok', status: 'running', pid: 200, restartAttempt: 0 },
     },
+    tunnelHealth: {
+      status: 'healthy',
+      lastProbeAt: '2026-08-09T03:00:05.000Z',
+      lastProbeStatusCode: 200,
+      lastProbeLatencyMs: 90,
+      lastSuccessAt: '2026-08-09T03:00:05.000Z',
+      consecutiveProbeFailures: 0,
+    },
   });
 
   assert.equal(diagnostics.summary, 'api-down-tunnel-healthy');
@@ -119,6 +159,90 @@ test('server-only diagnostics report the tunnel as disabled', () => {
   assert.equal(diagnostics.summary, 'api-healthy-tunnel-disabled');
   assert.equal(diagnostics.tunnel.enabled, false);
   assert.equal(diagnostics.tunnel.status, 'disabled');
+});
+
+test('running ngrok is not treated as publicly healthy before a reachability probe succeeds', () => {
+  const diagnostics = supervisor.buildDevFlowSupervisorDiagnostics({
+    version: 1,
+    supervisor: 'start-all',
+    mode: 'all',
+    shuttingDown: false,
+    startedAt: '2026-08-13T00:00:00.000Z',
+    updatedAt: '2026-08-13T00:00:01.000Z',
+    processes: {
+      server: { label: 'server', status: 'running', pid: 100, restartAttempt: 0 },
+      ngrok: { label: 'ngrok', status: 'running', pid: 200, restartAttempt: 0 },
+    },
+  });
+
+  assert.equal(diagnostics.api.status, 'healthy');
+  assert.equal(diagnostics.tunnel.processStatus, 'running');
+  assert.equal(diagnostics.tunnel.status, 'unknown');
+  assert.equal(diagnostics.summary, 'api-healthy-tunnel-unknown');
+});
+
+test('public tunnel probe failures degrade before becoming down and recover on success', () => {
+  const degraded = supervisor.advanceDevFlowTunnelHealth(undefined, {
+    ok: false,
+    statusCode: 502,
+    latencyMs: 120,
+    message: 'public probe failed',
+  }, { failureThreshold: 3, now: '2026-08-13T00:00:10.000Z' });
+  assert.equal(degraded.status, 'degraded');
+  assert.equal(degraded.consecutiveProbeFailures, 1);
+
+  const stillDegraded = supervisor.advanceDevFlowTunnelHealth(degraded, {
+    ok: false,
+    statusCode: 502,
+    latencyMs: 130,
+    message: 'public probe failed again',
+  }, { failureThreshold: 3, now: '2026-08-13T00:00:20.000Z' });
+  assert.equal(stillDegraded.status, 'degraded');
+  assert.equal(stillDegraded.consecutiveProbeFailures, 2);
+
+  const down = supervisor.advanceDevFlowTunnelHealth(stillDegraded, {
+    ok: false,
+    latencyMs: 140,
+    message: 'public probe timed out',
+  }, { failureThreshold: 3, now: '2026-08-13T00:00:30.000Z' });
+  assert.equal(down.status, 'down');
+  assert.equal(down.consecutiveProbeFailures, 3);
+
+  const recovered = supervisor.advanceDevFlowTunnelHealth(down, {
+    ok: true,
+    statusCode: 200,
+    latencyMs: 80,
+  }, { failureThreshold: 3, now: '2026-08-13T00:00:40.000Z' });
+  assert.equal(recovered.status, 'healthy');
+  assert.equal(recovered.consecutiveProbeFailures, 0);
+  assert.equal(recovered.lastSuccessAt, '2026-08-13T00:00:40.000Z');
+});
+
+test('diagnostics expose running process with degraded public tunnel independently', () => {
+  const diagnostics = supervisor.buildDevFlowSupervisorDiagnostics({
+    version: 1,
+    supervisor: 'start-all',
+    mode: 'all',
+    shuttingDown: false,
+    startedAt: '2026-08-13T00:00:00.000Z',
+    updatedAt: '2026-08-13T00:00:11.000Z',
+    processes: {
+      server: { label: 'server', status: 'running', pid: 100, restartAttempt: 0 },
+      ngrok: { label: 'ngrok', status: 'running', pid: 200, restartAttempt: 0 },
+    },
+    tunnelHealth: {
+      status: 'degraded',
+      lastProbeAt: '2026-08-13T00:00:10.000Z',
+      lastProbeStatusCode: 502,
+      lastProbeLatencyMs: 120,
+      consecutiveProbeFailures: 1,
+    },
+  } as any);
+
+  assert.equal(diagnostics.tunnel.status, 'degraded');
+  assert.equal(diagnostics.tunnel.processStatus, 'running');
+  assert.equal(diagnostics.tunnel.consecutiveProbeFailures, 1);
+  assert.equal(diagnostics.summary, 'api-healthy-tunnel-degraded');
 });
 
 test('supervisor source changes do not introduce MCP authentication fields or token requirements', () => {

@@ -300,21 +300,44 @@ test('idle sessions are pruned and stale session ids require a fresh initialize'
   assert.ok(events.some((event) => event.phase === 'close' && event.outcome === 'success'));
 });
 
-test('two Streamable HTTP clients operate concurrently without shared server session state', async () => {
+test('five concurrent Streamable HTTP clients reuse isolated MCP sessions across repeated calls', async () => {
+  const events: Array<{ phase: string; durationMs: number; outcome: string }> = [];
+  const observedSockets = new Set<any>();
+  const observedRequestSessionIds = new Set<string>();
+
   await withMcpServer(async (baseUrl) => {
-    const a = createClient(baseUrl, 'devflow-client-a');
-    const b = createClient(baseUrl, 'devflow-client-b');
+    const clients = Array.from({ length: 5 }, (_, index) => createClient(baseUrl, `devflow-client-${index + 1}`));
 
     try {
-      await Promise.all([a.client.connect(a.transport), b.client.connect(b.transport)]);
-      await Promise.all([callHealth(a.client), callHealth(b.client)]);
-      assert.match(String((a.transport as any).sessionId || ''), /^[0-9a-f-]{20,}$/i);
-      assert.match(String((b.transport as any).sessionId || ''), /^[0-9a-f-]{20,}$/i);
-      assert.notEqual((a.transport as any).sessionId, (b.transport as any).sessionId);
+      await Promise.all(clients.map(({ client, transport }) => client.connect(transport)));
+      const initialSessionIds = clients.map(({ transport }) => String((transport as any).sessionId || ''));
+      initialSessionIds.forEach((sessionId) => assert.match(sessionId, /^[0-9a-f-]{20,}$/i));
+      assert.equal(new Set(initialSessionIds).size, clients.length, 'each client must own an isolated MCP session');
+
+      await Promise.all(clients.map(({ client }) => client.listTools()));
+      await Promise.all(clients.map(({ client }) => callHealth(client)));
+      await Promise.all(clients.map(({ client }) => callHealth(client)));
+
+      const finalSessionIds = clients.map(({ transport }) => String((transport as any).sessionId || ''));
+      assert.deepEqual(finalSessionIds, initialSessionIds, 'repeated calls must retain each client MCP session');
     } finally {
-      await Promise.all([a.client.close(), b.client.close()]);
+      await Promise.all(clients.map(({ client }) => client.close()));
     }
+  }, {
+    onTiming: (event) => events.push(event),
+  }, {
+    requestHooks: (req) => {
+      observedSockets.add(req.socket);
+      const sessionId = String(req.headers?.['mcp-session-id'] || '').trim();
+      if (sessionId) observedRequestSessionIds.add(sessionId);
+      return { onTiming: (event) => events.push(event) };
+    },
   });
+
+  assert.equal(events.filter((event) => event.phase === 'connect').length, 5, 'server must create exactly one transport per MCP session');
+  assert.equal(events.filter((event) => event.phase === 'close').length, 0, 'normal repeated calls must not close reusable sessions');
+  assert.equal(observedRequestSessionIds.size, 5, 'all five reusable MCP session ids must reach repeated server requests');
+  assert.ok(observedSockets.size >= 1, 'TCP socket observations are diagnostic only; socket reuse is controlled by the client/edge');
 });
 
 test('a fresh Streamable HTTP client reconnects to a replacement runtime without old protocol session state', async () => {

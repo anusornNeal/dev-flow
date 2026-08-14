@@ -31,6 +31,13 @@ const {
   sanitizeNgrokDiagnosticLine,
   shouldRecoverNgrokTunnel,
   appendNgrokDiagnosticRecord,
+  appendNgrokProbeDiagnosticRecord,
+  appendNgrokPressureDiagnosticRecord,
+  classifyPublicProbeFailure,
+  extractNgrokPressureSnapshot,
+  getNgrokRecoveryDecision,
+  sampleNgrokInspectorPressure,
+  sanitizeRetryAfter,
 } = await import('./start-all');
 const {
   advanceDevFlowTunnelHealth,
@@ -181,6 +188,41 @@ assert.equal(
   'url=[url] authtoken=[redacted]',
 );
 
+assert.equal(classifyPublicProbeFailure({ statusCode: 429 }), 'rate-limit');
+assert.equal(classifyPublicProbeFailure({ statusCode: 503 }), 'http-5xx');
+assert.equal(classifyPublicProbeFailure({ error: Object.assign(new Error('request timed out'), { name: 'AbortError' }) }), 'timeout');
+assert.equal(classifyPublicProbeFailure({ error: Object.assign(new Error('getaddrinfo ENOTFOUND'), { code: 'ENOTFOUND' }) }), 'dns');
+assert.equal(classifyPublicProbeFailure({ error: new Error('TLS certificate verify failed') }), 'tls');
+assert.equal(sanitizeRetryAfter('120'), '120');
+assert.equal(sanitizeRetryAfter('Wed, 21 Oct 2015 07:28:00 GMT'), '2015-10-21T07:28:00.000Z');
+assert.equal(sanitizeRetryAfter('token=secret'), undefined);
+
+const safePressure = extractNgrokPressureSnapshot({
+  tunnels: [{
+    public_url: 'https://secret.ngrok-free.app/token=abc123',
+    metrics: {
+      conns: { count: 12, gauge: 2, rate1: 1.5 },
+      http: { count: 30, rate1: 4.5 },
+    },
+    requests: [{ body: 'raw-secret-body' }],
+  }],
+});
+assert.deepEqual(safePressure, {
+  connectionCount: 12,
+  activeConnections: 2,
+  connectionRate1: 1.5,
+  requestCount: 30,
+  requestRate1: 4.5,
+});
+assert.doesNotMatch(JSON.stringify(safePressure), /secret|token|body|url/i);
+assert.equal(await sampleNgrokInspectorPressure(100, (async () => { throw new Error('inspector unavailable'); }) as any), undefined);
+
+assert.equal(getNgrokRecoveryDecision({
+  tunnelStatus: 'down', consecutiveProbeFailures: 3, failureThreshold: 3,
+  localApiHealthy: true, ngrokProcessRunning: true, shuttingDown: false,
+  collisionBackoffUntilMs: 5000, nowMs: 1000,
+}), 'suppressed-collision-backoff');
+
 const generationA = resetDevFlowTunnelHealthForGeneration(undefined, 'A', {
   startupGraceMs: 0,
   now: '2026-08-13T00:00:00.000Z',
@@ -314,6 +356,56 @@ const persistedRecords = persistedDiagnostics.trim().split(/\r?\n/).map((line) =
 assert.ok(persistedRecords.length > 0);
 assert.ok(persistedRecords.every((entry) => entry.errorCode === 'ERR_NGROK_334'));
 assert.ok(persistedRecords.every((entry) => entry.classification === 'endpoint-session-collision'));
+const probeDiagnosticsPath = path.join(diagnosticsRoot, 'ngrok-probe-diagnostics.jsonl');
+appendNgrokProbeDiagnosticRecord({
+  filePath: probeDiagnosticsPath,
+  failureClass: 'timeout',
+  latencyMs: 5000,
+  generation: 'B',
+  consecutiveProbeFailures: 1,
+  recoveryDecision: 'threshold-not-reached',
+  maxBytes: 2048,
+  now: '2026-08-13T00:01:00.000Z',
+});
+appendNgrokProbeDiagnosticRecord({
+  filePath: probeDiagnosticsPath,
+  failureClass: 'rate-limit',
+  statusCode: 429,
+  latencyMs: 80,
+  generation: 'B',
+  consecutiveProbeFailures: 2,
+  recoveryDecision: 'threshold-not-reached',
+  retryAfter: '120',
+  maxBytes: 2048,
+  now: '2026-08-13T00:01:01.000Z',
+});
+appendNgrokProbeDiagnosticRecord({
+  filePath: probeDiagnosticsPath,
+  failureClass: 'http-5xx',
+  statusCode: 503,
+  latencyMs: 90,
+  generation: 'B',
+  consecutiveProbeFailures: 3,
+  recoveryDecision: 'restart-ngrok',
+  retryAfter: 'token=must-not-persist',
+  maxBytes: 2048,
+  now: '2026-08-13T00:01:02.000Z',
+});
+appendNgrokPressureDiagnosticRecord({
+  filePath: probeDiagnosticsPath,
+  generation: 'B',
+  pressure: safePressure,
+  maxBytes: 2048,
+  now: '2026-08-13T00:01:02.500Z',
+});
+const probeDiagnostics = fs.readFileSync(probeDiagnosticsPath, 'utf8');
+assert.ok(Buffer.byteLength(probeDiagnostics, 'utf8') <= 2048);
+assert.doesNotMatch(probeDiagnostics, /ngrok-free|must-not-persist|raw-secret|token=/i);
+const probeRecords = probeDiagnostics.trim().split(/\r?\n/).map((line) => JSON.parse(line));
+assert.deepEqual(probeRecords.filter((entry) => entry.kind === 'public-probe-failure').map((entry) => entry.failureClass), ['timeout', 'rate-limit', 'http-5xx']);
+assert.equal(probeRecords.find((entry) => entry.failureClass === 'rate-limit')?.retryAfter, '120');
+assert.equal(probeRecords.find((entry) => entry.kind === 'ngrok-pressure')?.pressure?.requestRate1, 4.5);
+
 fs.rmSync(diagnosticsRoot, { recursive: true, force: true });
 
 console.log('[verify-start-all] all assertions passed');

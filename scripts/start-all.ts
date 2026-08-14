@@ -264,6 +264,23 @@ export function sanitizeNgrokDiagnosticLine(line: string) {
     .trim();
 }
 
+function appendBoundedNgrokDiagnosticRecord(filePath: string, record: Record<string, unknown>, maxBytes: number) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  let lines: string[] = [];
+  try {
+    lines = fs.existsSync(filePath)
+      ? fs.readFileSync(filePath, 'utf8').split(/\r?\n/).filter(Boolean)
+      : [];
+  } catch {
+    lines = [];
+  }
+  lines.push(JSON.stringify(record));
+  const boundedMaxBytes = Math.max(512, Math.floor(maxBytes));
+  while (lines.length > 0 && Buffer.byteLength(`${lines.join('\n')}\n`, 'utf8') > boundedMaxBytes) lines.shift();
+  fs.writeFileSync(filePath, `${lines.join('\n')}\n`, 'utf8');
+  return record;
+}
+
 export function appendNgrokDiagnosticRecord(input: {
   filePath: string;
   stream: 'stdout' | 'stderr' | 'supervisor';
@@ -274,29 +291,138 @@ export function appendNgrokDiagnosticRecord(input: {
   const message = sanitizeNgrokDiagnosticLine(input.line).slice(0, 2048);
   if (!message) return null;
   const classification = classifyNgrokDiagnosticLine(message);
-  const record = {
+  return appendBoundedNgrokDiagnosticRecord(input.filePath, {
     at: input.now || new Date().toISOString(),
     stream: input.stream,
     message,
     ...classification,
-  };
-  fs.mkdirSync(path.dirname(input.filePath), { recursive: true });
-  let lines: string[] = [];
-  try {
-    lines = fs.existsSync(input.filePath)
-      ? fs.readFileSync(input.filePath, 'utf8').split(/\r?\n/).filter(Boolean)
-      : [];
-  } catch {
-    lines = [];
-  }
-  lines.push(JSON.stringify(record));
-  const maxBytes = Math.max(512, Math.floor(input.maxBytes));
-  while (lines.length > 0 && Buffer.byteLength(`${lines.join('\n')}\n`, 'utf8') > maxBytes) lines.shift();
-  fs.writeFileSync(input.filePath, `${lines.join('\n')}\n`, 'utf8');
-  return record;
+  }, input.maxBytes);
 }
 
-export function shouldRecoverNgrokTunnel(input: {
+export function classifyPublicProbeFailure(input: { statusCode?: number; error?: unknown }) {
+  const statusCode = Number.isInteger(input.statusCode) ? Number(input.statusCode) : undefined;
+  if (statusCode === 429) return 'rate-limit' as const;
+  if (statusCode && statusCode >= 500) return 'http-5xx' as const;
+  if (statusCode && statusCode >= 400) return 'http-4xx' as const;
+  if (statusCode) return 'http-other' as const;
+  const error = input.error as { name?: unknown; code?: unknown; message?: unknown } | undefined;
+  const text = `${String(error?.name || '')} ${String(error?.code || '')} ${String(error?.message || input.error || '')}`.toLowerCase();
+  if (/abort|timeout|timed out/.test(text)) return 'timeout' as const;
+  if (/enotfound|getaddrinfo|dns/.test(text)) return 'dns' as const;
+  if (/tls|ssl|certificate|cert_/.test(text)) return 'tls' as const;
+  if (/econnrefused|econnreset|socket|connection|fetch failed/.test(text)) return 'connection' as const;
+  return 'network' as const;
+}
+
+export function sanitizeRetryAfter(value: string | null | undefined) {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) return undefined;
+  if (/^\d{1,9}$/.test(trimmed)) return trimmed;
+  const parsed = Date.parse(trimmed);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : undefined;
+}
+
+function safeDiagnosticGeneration(value: unknown) {
+  const generation = String(value || '').trim();
+  return /^[A-Za-z0-9._-]{1,64}$/.test(generation) ? generation : undefined;
+}
+
+function safeDiagnosticNumber(value: unknown) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : undefined;
+}
+
+export function extractNgrokPressureSnapshot(payload: unknown) {
+  const tunnels = Array.isArray((payload as any)?.tunnels) ? (payload as any).tunnels : [];
+  const snapshot = {
+    connectionCount: 0,
+    activeConnections: 0,
+    connectionRate1: 0,
+    requestCount: 0,
+    requestRate1: 0,
+  };
+  let observed = false;
+  for (const tunnel of tunnels) {
+    const conns = tunnel?.metrics?.conns || {};
+    const http = tunnel?.metrics?.http || {};
+    for (const [source, key] of [
+      [conns, 'count'], [conns, 'gauge'], [conns, 'rate1'], [http, 'count'], [http, 'rate1'],
+    ] as const) {
+      if (safeDiagnosticNumber(source?.[key]) !== undefined) observed = true;
+    }
+    snapshot.connectionCount += safeDiagnosticNumber(conns.count) || 0;
+    snapshot.activeConnections += safeDiagnosticNumber(conns.gauge) || 0;
+    snapshot.connectionRate1 += safeDiagnosticNumber(conns.rate1) || 0;
+    snapshot.requestCount += safeDiagnosticNumber(http.count) || 0;
+    snapshot.requestRate1 += safeDiagnosticNumber(http.rate1) || 0;
+  }
+  return observed ? snapshot : undefined;
+}
+
+export async function sampleNgrokInspectorPressure(timeoutMs: number, fetchImpl: typeof fetch = fetch) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.max(100, Math.min(500, timeoutMs)));
+  timer.unref();
+  try {
+    const response = await fetchImpl('http://127.0.0.1:4040/api/tunnels', { signal: controller.signal });
+    if (!response.ok) return undefined;
+    return extractNgrokPressureSnapshot(await response.json());
+  } catch {
+    return undefined;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export function appendNgrokProbeDiagnosticRecord(input: {
+  filePath: string;
+  failureClass: string;
+  statusCode?: number;
+  latencyMs?: number;
+  generation?: string;
+  consecutiveProbeFailures: number;
+  recoveryDecision: string;
+  retryAfter?: string;
+  maxBytes: number;
+  now?: string;
+}) {
+  const allowedFailureClasses = new Set(['rate-limit', 'http-5xx', 'http-4xx', 'http-other', 'timeout', 'dns', 'tls', 'connection', 'network', 'public-url-unavailable']);
+  const allowedRecoveryDecisions = new Set(['threshold-not-reached', 'restart-ngrok', 'suppressed-shutdown', 'suppressed-local-api-unhealthy', 'suppressed-ngrok-not-running', 'suppressed-startup-grace', 'suppressed-collision-backoff']);
+  const failureClass = allowedFailureClasses.has(input.failureClass) ? input.failureClass : 'network';
+  const recoveryDecision = allowedRecoveryDecisions.has(input.recoveryDecision) ? input.recoveryDecision : 'threshold-not-reached';
+  const retryAfter = sanitizeRetryAfter(input.retryAfter);
+  const generation = safeDiagnosticGeneration(input.generation);
+  return appendBoundedNgrokDiagnosticRecord(input.filePath, {
+    at: input.now || new Date().toISOString(),
+    kind: 'public-probe-failure',
+    failureClass,
+    ...(Number.isInteger(input.statusCode) ? { statusCode: input.statusCode } : {}),
+    ...(safeDiagnosticNumber(input.latencyMs) !== undefined ? { latencyMs: safeDiagnosticNumber(input.latencyMs) } : {}),
+    ...(generation ? { generation } : {}),
+    consecutiveProbeFailures: Math.max(0, Math.floor(input.consecutiveProbeFailures || 0)),
+    recoveryDecision,
+    ...(retryAfter ? { retryAfter } : {}),
+  }, input.maxBytes);
+}
+
+export function appendNgrokPressureDiagnosticRecord(input: {
+  filePath: string;
+  generation?: string;
+  pressure: ReturnType<typeof extractNgrokPressureSnapshot>;
+  maxBytes: number;
+  now?: string;
+}) {
+  if (!input.pressure) return null;
+  const generation = safeDiagnosticGeneration(input.generation);
+  return appendBoundedNgrokDiagnosticRecord(input.filePath, {
+    at: input.now || new Date().toISOString(),
+    kind: 'ngrok-pressure',
+    ...(generation ? { generation } : {}),
+    pressure: input.pressure,
+  }, input.maxBytes);
+}
+
+export function getNgrokRecoveryDecision(input: {
   tunnelStatus: string;
   consecutiveProbeFailures: number;
   failureThreshold: number;
@@ -308,13 +434,17 @@ export function shouldRecoverNgrokTunnel(input: {
   nowMs?: number;
 }) {
   const nowMs = input.nowMs ?? Date.now();
-  return !input.shuttingDown
-    && input.tunnelStatus === 'down'
-    && input.consecutiveProbeFailures >= Math.max(1, input.failureThreshold)
-    && input.localApiHealthy
-    && input.ngrokProcessRunning
-    && (!input.startupGraceUntilMs || input.startupGraceUntilMs <= nowMs)
-    && (!input.collisionBackoffUntilMs || input.collisionBackoffUntilMs <= nowMs);
+  if (input.shuttingDown) return 'suppressed-shutdown' as const;
+  if (input.tunnelStatus !== 'down' || input.consecutiveProbeFailures < Math.max(1, input.failureThreshold)) return 'threshold-not-reached' as const;
+  if (!input.localApiHealthy) return 'suppressed-local-api-unhealthy' as const;
+  if (!input.ngrokProcessRunning) return 'suppressed-ngrok-not-running' as const;
+  if (input.startupGraceUntilMs && input.startupGraceUntilMs > nowMs) return 'suppressed-startup-grace' as const;
+  if (input.collisionBackoffUntilMs && input.collisionBackoffUntilMs > nowMs) return 'suppressed-collision-backoff' as const;
+  return 'restart-ngrok' as const;
+}
+
+export function shouldRecoverNgrokTunnel(input: Parameters<typeof getNgrokRecoveryDecision>[0]) {
+  return getNgrokRecoveryDecision(input) === 'restart-ngrok';
 }
 
 async function probeHttpEndpoint(url: string, timeoutMs: number, requireSuccessStatus: boolean) {
@@ -329,13 +459,16 @@ async function probeHttpEndpoint(url: string, timeoutMs: number, requireSuccessS
       ok,
       statusCode: response.status,
       latencyMs: Date.now() - startedAt,
-      message: ok ? `HTTP ${response.status}` : `HTTP ${response.status}`,
+      message: `HTTP ${response.status}`,
+      ...(ok ? {} : { failureClass: classifyPublicProbeFailure({ statusCode: response.status }) }),
+      ...(response.status === 429 ? { retryAfter: sanitizeRetryAfter(response.headers.get('retry-after')) } : {}),
     };
   } catch (error) {
     return {
       ok: false,
       latencyMs: Date.now() - startedAt,
       message: error instanceof Error ? error.message : String(error),
+      failureClass: classifyPublicProbeFailure({ error }),
     };
   } finally {
     clearTimeout(timer);
@@ -748,7 +881,7 @@ export async function startAll(mode: StartAllMode = 'all') {
       const publicBaseUrl = await discoverNgrokPublicUrl(options.ngrokDomain, options.ngrokProbeTimeoutMs);
       const publicProbe = publicBaseUrl
         ? await probeHttpEndpoint(apiCapabilitiesUrl(publicBaseUrl), options.ngrokProbeTimeoutMs, true)
-        : { ok: false, latencyMs: 0, message: 'ngrok public URL is unavailable from the configured domain or local inspector.' };
+        : { ok: false, statusCode: undefined, latencyMs: 0, message: 'ngrok public URL is unavailable from the configured domain or local inspector.', failureClass: 'public-url-unavailable' as const, retryAfter: undefined };
       let next = advanceDevFlowTunnelHealth(currentTunnelHealth(), publicProbe, {
         failureThreshold: options.ngrokProbeFailureThreshold,
         generation: probeGeneration,
@@ -756,9 +889,41 @@ export async function startAll(mode: StartAllMode = 'all') {
       if (probeGeneration && next.generation !== probeGeneration) return;
       updateDevFlowSupervisorTunnelHealth(next);
 
+      if (!publicProbe.ok && next.status !== 'down') {
+        const recoveryDecision = getNgrokRecoveryDecision({
+          tunnelStatus: next.status,
+          consecutiveProbeFailures: next.consecutiveProbeFailures,
+          failureThreshold: options.ngrokProbeFailureThreshold,
+          localApiHealthy: true,
+          ngrokProcessRunning: children.get('ngrok') === ngrokChild && ngrokChild.exitCode === null,
+          shuttingDown,
+          startupGraceUntilMs: next.startupGraceUntil ? Date.parse(next.startupGraceUntil) : undefined,
+          collisionBackoffUntilMs,
+        });
+        appendNgrokProbeDiagnosticRecord({
+          filePath: ngrokDiagnosticLogPath,
+          failureClass: publicProbe.failureClass || 'network',
+          statusCode: publicProbe.statusCode,
+          latencyMs: publicProbe.latencyMs,
+          generation: next.generation,
+          consecutiveProbeFailures: next.consecutiveProbeFailures,
+          recoveryDecision,
+          retryAfter: 'retryAfter' in publicProbe ? publicProbe.retryAfter : undefined,
+          maxBytes: options.ngrokLogMaxBytes,
+        });
+        void sampleNgrokInspectorPressure(options.ngrokProbeTimeoutMs).then((pressure) => {
+          appendNgrokPressureDiagnosticRecord({
+            filePath: ngrokDiagnosticLogPath,
+            generation: next.generation,
+            pressure,
+            maxBytes: options.ngrokLogMaxBytes,
+          });
+        });
+        return;
+      }
       if (next.status !== 'down') return;
       const localProbe = await probeHttpEndpoint(apiCapabilitiesUrl(plan.appUrl), options.ngrokProbeTimeoutMs, true);
-      const canRecover = shouldRecoverNgrokTunnel({
+      const recoveryDecision = getNgrokRecoveryDecision({
         tunnelStatus: next.status,
         consecutiveProbeFailures: next.consecutiveProbeFailures,
         failureThreshold: options.ngrokProbeFailureThreshold,
@@ -768,6 +933,28 @@ export async function startAll(mode: StartAllMode = 'all') {
         startupGraceUntilMs: next.startupGraceUntil ? Date.parse(next.startupGraceUntil) : undefined,
         collisionBackoffUntilMs,
       });
+      if (!publicProbe.ok) {
+        appendNgrokProbeDiagnosticRecord({
+          filePath: ngrokDiagnosticLogPath,
+          failureClass: publicProbe.failureClass || 'network',
+          statusCode: publicProbe.statusCode,
+          latencyMs: publicProbe.latencyMs,
+          generation: next.generation,
+          consecutiveProbeFailures: next.consecutiveProbeFailures,
+          recoveryDecision,
+          retryAfter: 'retryAfter' in publicProbe ? publicProbe.retryAfter : undefined,
+          maxBytes: options.ngrokLogMaxBytes,
+        });
+        void sampleNgrokInspectorPressure(options.ngrokProbeTimeoutMs).then((pressure) => {
+          appendNgrokPressureDiagnosticRecord({
+            filePath: ngrokDiagnosticLogPath,
+            generation: next.generation,
+            pressure,
+            maxBytes: options.ngrokLogMaxBytes,
+          });
+        });
+      }
+      const canRecover = recoveryDecision === 'restart-ngrok';
 
       if (canRecover && recoveryStopChild !== ngrokChild) {
         next = {

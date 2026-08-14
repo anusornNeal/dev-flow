@@ -158,6 +158,51 @@ test('devflow_health_check contract defaults MCP requests to compact and permits
 });
 
 
+test('workflow health exposes bounded sanitized tunnel failure timeline in full and compact modes', () => {
+  const repo = createRepo('tunnel-evidence');
+  const previousAppRoot = process.env.DEVFLOW_APP_ROOT;
+  const runtimeRoot = path.join(tempRoot, 'tunnel-evidence-runtime');
+  const runtimeDir = path.join(runtimeRoot, '.devflow');
+  fs.mkdirSync(runtimeDir, { recursive: true });
+  fs.writeFileSync(path.join(runtimeDir, 'supervisor-state.json'), JSON.stringify({
+    version: 1,
+    supervisor: 'start-all',
+    mode: 'all',
+    shuttingDown: false,
+    startedAt: '2026-08-13T00:00:00.000Z',
+    updatedAt: '2026-08-13T00:02:00.000Z',
+    processes: {
+      server: { label: 'server', status: 'running', pid: 100, restartAttempt: 0 },
+      ngrok: { label: 'ngrok', status: 'running', pid: 200, restartAttempt: 0 },
+    },
+    tunnelHealth: { status: 'degraded', generation: 'B', consecutiveProbeFailures: 2 },
+  }), 'utf8');
+  const evidence = [
+    { at: '2026-08-13T00:01:00.000Z', kind: 'public-probe-failure', failureClass: 'timeout', latencyMs: 5000, generation: 'B', consecutiveProbeFailures: 1, recoveryDecision: 'threshold-not-reached', url: 'https://secret.ngrok-free.app' },
+    { at: '2026-08-13T00:01:01.000Z', kind: 'public-probe-failure', failureClass: 'rate-limit', statusCode: 429, latencyMs: 80, generation: 'B', consecutiveProbeFailures: 2, recoveryDecision: 'threshold-not-reached', retryAfter: '120', token: 'secret-token' },
+    { at: '2026-08-13T00:01:02.000Z', kind: 'public-probe-failure', failureClass: 'http-5xx', statusCode: 503, latencyMs: 90, generation: 'B', consecutiveProbeFailures: 3, recoveryDecision: 'restart-ngrok', body: 'raw-secret-body' },
+    { at: '2026-08-13T00:01:03.000Z', kind: 'ngrok-pressure', generation: 'B', pressure: { connectionCount: 12, activeConnections: 2, connectionRate1: 1.5, requestCount: 30, requestRate1: 4.5 }, rawRequestHistory: 'request-secret' },
+  ];
+  fs.writeFileSync(path.join(runtimeDir, 'ngrok-diagnostics.jsonl'), `${evidence.map((entry) => JSON.stringify(entry)).join('\n')}\n`, 'utf8');
+  process.env.DEVFLOW_APP_ROOT = runtimeRoot;
+  try {
+    const full = getWorkflowHealth(stateFor(repo), { projectId: 'project-health', responseMode: 'full' }) as any;
+    const compact = getWorkflowHealth(stateFor(repo), { projectId: 'project-health', responseMode: 'compact' }) as any;
+    const failures = full.diagnostics.runtimeSupervisor.tunnel.recentFailures;
+    assert.equal(failures.length, 3);
+    assert.deepEqual(failures.map((entry: any) => entry.failureClass), ['http-5xx', 'rate-limit', 'timeout']);
+    assert.equal(full.diagnostics.runtimeSupervisor.tunnel.pressure.requestRate1, 4.5);
+    assert.equal(compact.runtime.supervisor.recentTunnelFailures.length, 3);
+    assert.equal(compact.runtime.supervisor.recentTunnelFailures[1].retryAfter, '120');
+    assert.equal(compact.runtime.supervisor.pressure.activeConnections, 2);
+    const rendered = JSON.stringify({ full: full.diagnostics.runtimeSupervisor.tunnel, compact: compact.runtime.supervisor });
+    assert.doesNotMatch(rendered, /secret\.ngrok|secret-token|raw-secret-body|request-secret/i);
+  } finally {
+    if (previousAppRoot === undefined) delete process.env.DEVFLOW_APP_ROOT;
+    else process.env.DEVFLOW_APP_ROOT = previousAppRoot;
+  }
+});
+
 test('getWorkflowHealth reports fallback search backend when ripgrep is unavailable', () => {
   const repo = createRepo('search-backend');
   const previous = {

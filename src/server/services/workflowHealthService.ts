@@ -118,6 +118,9 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
 
   const queueDepth = Number(diagnostics?.mcp?.queueDepth || 0);
   const runtimeSupervisor = diagnostics?.runtimeSupervisor;
+  const recentTunnelFailures = Array.isArray(runtimeSupervisor?.tunnel?.recentFailures)
+    ? runtimeSupervisor.tunnel.recentFailures.slice(0, 8)
+    : [];
   const isolation = diagnostics?.isolation || {
     waits: { workspaceLockWait: { count: 0, totalMs: 0, p50Ms: 0, p95Ms: 0 }, capacityWait: { count: 0, totalMs: 0, p50Ms: 0, p95Ms: 0 }, blockerReasons: {} },
     phases: {
@@ -306,6 +309,8 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
         consecutiveProbeFailures: runtimeSupervisor.tunnel?.consecutiveProbeFailures,
         lastErrorCode: runtimeSupervisor.tunnel?.lastErrorCode,
         lastErrorClass: runtimeSupervisor.tunnel?.lastErrorClass,
+        ...(recentTunnelFailures.length ? { recentTunnelFailures: recentTunnelFailures.slice(0, 3) } : {}),
+        ...(runtimeSupervisor.tunnel?.pressure ? { pressure: runtimeSupervisor.tunnel.pressure } : {}),
       } : null,
     },
     recovery: {

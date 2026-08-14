@@ -12,6 +12,7 @@ import {
 } from '../../lib/devFlowRestart';
 import { createApiError } from './api';
 import { getQueueMetrics } from './mcpToolJobService';
+import { getMcpRestartActivitySnapshot } from './mcpTransportMonitor';
 
 const PENDING_RESTART_TTL_MS = 2 * 60 * 1000;
 
@@ -21,6 +22,7 @@ type RestartServiceDeps = {
   now?: () => Date;
   uuid?: () => string;
   getQueueMetrics?: typeof getQueueMetrics;
+  getMcpRestartActivitySnapshot?: typeof getMcpRestartActivitySnapshot;
 };
 
 function normalizeReason(value: unknown) {
@@ -82,27 +84,36 @@ export function requestDevFlowRestart(
     );
   }
 
+  const now = (deps.now || (() => new Date()))();
+  const nowMs = now.getTime();
   const metrics = (deps.getQueueMetrics || getQueueMetrics)();
-  if (metrics.queueLength > 0 || metrics.activeJobs > 0) {
+  const mcpActivity = (deps.getMcpRestartActivitySnapshot || getMcpRestartActivitySnapshot)({ now: nowMs });
+  const toolJobsBusy = metrics.queueLength > 0 || metrics.activeJobs > 0;
+  const inFlightMcpBusy = mcpActivity.inFlightMeaningfulOperations > 0;
+  const recentMcpBusy = mcpActivity.recentMeaningfulOperations > 0;
+  if (toolJobsBusy || inFlightMcpBusy || recentMcpBusy) {
     throw createApiError(
       409,
       'RESTART_BUSY',
-      'DevFlow restart is blocked while MCP tool jobs are queued or running.',
+      'DevFlow restart is blocked until active MCP work becomes quiescent.',
       {
         retryable: true,
         details: {
+          blockers: {
+            toolJobs: toolJobsBusy,
+            inFlightMcp: inFlightMcpBusy,
+            recentMcpActivity: recentMcpBusy,
+          },
           queueLength: metrics.queueLength,
           activeJobs: metrics.activeJobs,
           active: metrics.active,
           queue: metrics.queue,
-          nextAction: 'Wait for active tool jobs to finish or cancel them explicitly, then retry restart_devflow.',
+          mcpActivity,
+          nextAction: `Wait for active work to finish and for ${mcpActivity.quiescenceWindowMs}ms of meaningful MCP quiescence, then retry restart_devflow.`,
         },
       },
     );
   }
-
-  const now = (deps.now || (() => new Date()))();
-  const nowMs = now.getTime();
   const existing = readDevFlowRestartState();
   if (existing && isDevFlowRestartPending(existing) && isFreshPendingRestart(existing.updatedAt, nowMs)) {
     return {

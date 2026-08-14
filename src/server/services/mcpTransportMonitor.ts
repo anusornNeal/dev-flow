@@ -5,6 +5,10 @@ import type {
 
 const MAX_RECORDS = 500;
 const DEFAULT_WINDOW_MS = 10 * 60 * 1000;
+export const DEFAULT_RESTART_QUIESCENCE_WINDOW_MS = 5_000;
+const MAX_RESTART_QUIESCENCE_WINDOW_MS = 60_000;
+let nextTrackerId = 0;
+const activeRestartMeaningfulTrackers = new Set<number>();
 
 export type McpTransportOperation = 'initialize' | 'tools/list' | 'tools/call' | 'other';
 export type McpTransportPhase = 'parse' | 'connect' | 'handle' | 'close' | 'responseFinalize';
@@ -44,14 +48,24 @@ function summarizeSamples(values: number[]) {
 
 export function clearMcpTransportRecords() {
   records.length = 0;
+  activeRestartMeaningfulTrackers.clear();
+  nextTrackerId = 0;
 }
 
 export function classifyMcpTransportOperation(body: unknown): McpTransportOperation {
   const method = typeof (body as any)?.method === 'string' ? String((body as any).method) : '';
   if (method === 'initialize') return 'initialize';
   if (method === 'tools/list') return 'tools/list';
-  if (method === 'tools/call') return 'tools/call';
+  if (method === 'tools/call') {
+    const toolName = typeof (body as any)?.params?.name === 'string' ? String((body as any).params.name) : '';
+    if (toolName === 'restart_devflow') return 'other';
+    return 'tools/call';
+  }
   return 'other';
+}
+
+function isRestartMeaningfulOperation(operation: McpTransportOperation) {
+  return operation === 'initialize' || operation === 'tools/list' || operation === 'tools/call';
 }
 
 export function recordMcpTransportRequest(input: McpTransportRequestInput) {
@@ -70,6 +84,37 @@ export function recordMcpTransportRequest(input: McpTransportRequestInput) {
   };
   records.push(record);
   if (records.length > MAX_RECORDS) records.splice(0, records.length - MAX_RECORDS);
+}
+
+export function getMcpRestartActivitySnapshot(options?: { now?: number; quiescenceWindowMs?: number }) {
+  const now = options?.now ?? Date.now();
+  const configuredWindowMs = Number(options?.quiescenceWindowMs);
+  const quiescenceWindowMs = Number.isFinite(configuredWindowMs)
+    ? Math.max(0, Math.min(MAX_RESTART_QUIESCENCE_WINDOW_MS, configuredWindowMs))
+    : DEFAULT_RESTART_QUIESCENCE_WINDOW_MS;
+  const cutoff = now - quiescenceWindowMs;
+  const recentMeaningful = records.filter((record) => (
+    isRestartMeaningfulOperation(record.operation)
+    && record.timestamp >= cutoff
+    && record.timestamp <= now
+  ));
+  const lastMeaningfulTimestamp = recentMeaningful.reduce(
+    (latest, record) => Math.max(latest, record.timestamp),
+    0,
+  );
+  const inFlightMeaningfulOperations = activeRestartMeaningfulTrackers.size;
+
+  return {
+    busy: inFlightMeaningfulOperations > 0 || recentMeaningful.length > 0,
+    quiescenceWindowMs,
+    inFlightMeaningfulOperations,
+    recentMeaningfulOperations: recentMeaningful.length,
+    lastMeaningfulActivityAt: lastMeaningfulTimestamp > 0 ? new Date(lastMeaningfulTimestamp).toISOString() : null,
+    privacy: {
+      rawSessionIdentifiersStored: false,
+      rawClientIdentifiersStored: false,
+    },
+  };
 }
 
 export function getMcpTransportSummary(options?: { now?: number; windowMs?: number }) {
@@ -119,8 +164,10 @@ export function createMcpTransportRequestTracker(input: {
   operation: McpTransportOperation;
   startedAt?: number;
   parseMs?: number;
+  now?: () => number;
 }) {
-  const startedAt = input.startedAt ?? Date.now();
+  const now = input.now || Date.now;
+  const startedAt = input.startedAt ?? now();
   const phaseMs: McpTransportPhaseMs = {
     parse: nonNegative(input.parseMs),
     connect: 0,
@@ -129,6 +176,8 @@ export function createMcpTransportRequestTracker(input: {
     responseFinalize: 0,
   };
   let completed = false;
+  const trackerId = isRestartMeaningfulOperation(input.operation) ? ++nextTrackerId : null;
+  if (trackerId !== null) activeRestartMeaningfulTrackers.add(trackerId);
 
   const onTiming = (event: McpStreamableHttpLifecycleTiming) => {
     if (event.phase === 'connect' || event.phase === 'handle' || event.phase === 'close') {
@@ -143,7 +192,8 @@ export function createMcpTransportRequestTracker(input: {
     complete(params?: { statusCode?: number; responseFinishedAt?: number }) {
       if (completed) return;
       completed = true;
-      const responseFinishedAt = params?.responseFinishedAt ?? Date.now();
+      if (trackerId !== null) activeRestartMeaningfulTrackers.delete(trackerId);
+      const responseFinishedAt = params?.responseFinishedAt ?? now();
       const totalMs = Math.max(0, responseFinishedAt - startedAt);
       phaseMs.responseFinalize = Math.max(0, totalMs - phaseMs.parse - phaseMs.connect - phaseMs.handle);
       recordMcpTransportRequest({
@@ -151,6 +201,7 @@ export function createMcpTransportRequestTracker(input: {
         statusCode: params?.statusCode ?? 0,
         totalMs,
         phaseMs,
+        timestamp: responseFinishedAt,
       });
     },
   };

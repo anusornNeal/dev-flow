@@ -19,11 +19,19 @@ const {
   enqueueToolJob,
   getToolJobStatus,
 } = await import('../../src/server/services/mcpToolJobService.js');
+const {
+  classifyMcpTransportOperation,
+  clearMcpTransportRecords,
+  createMcpTransportRequestTracker,
+  recordMcpTransportRequest,
+} = await import('../../src/server/services/mcpTransportMonitor.js');
+const { requestDevFlowRestart } = await import('../../src/server/services/restartService.js');
 
 const restartStatePath = path.join(tempRoot, '.devflow', 'restart-state.json');
 
 function resetRestartState() {
   fs.rmSync(restartStatePath, { force: true });
+  clearMcpTransportRecords();
 }
 
 function enableSupervisor() {
@@ -178,6 +186,112 @@ test('restart route rejects while an MCP tool job is active', async () => {
     release();
     cancelToolJob(job.jobId);
     __setToolJobTestRunner(toolName, null);
+  }
+});
+
+test('restart route rejects while a meaningful MCP operation is in flight', async () => {
+  resetRestartState();
+  enableSupervisor();
+  const exits: number[] = [];
+  const tracker = createMcpTransportRequestTracker({ operation: 'tools/list' });
+
+  try {
+    await withServer((code) => exits.push(code), async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/api/restart`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      const body = await response.json() as any;
+
+      assert.equal(response.status, 409);
+      assert.equal(body.error?.code, 'RESTART_BUSY');
+      assert.equal(body.error?.details?.blockers?.inFlightMcp, true);
+      assert.equal(body.error?.details?.blockers?.recentMcpActivity, false);
+      assert.deepEqual(exits, []);
+      assert.equal(fs.existsSync(restartStatePath), false, 'blocked restart must not write a ticket');
+    });
+  } finally {
+    tracker.complete({ statusCode: 200 });
+  }
+});
+
+test('recent meaningful MCP activity blocks restart until the bounded quiescence window expires', () => {
+  resetRestartState();
+  const activityAt = 10_000;
+  let nowMs = activityAt + 1_000;
+  recordMcpTransportRequest({
+    operation: 'tools/call',
+    statusCode: 200,
+    totalMs: 25,
+    phaseMs: { parse: 1, connect: 0, handle: 20, close: 0, responseFinalize: 4 },
+    timestamp: activityAt,
+  });
+  const deps = {
+    env: {
+      DEVFLOW_RESTART_SUPERVISOR: 'start-all',
+      DEVFLOW_RESTART_SUPERVISOR_TOKEN: 'restart-quiescence-test-token',
+    },
+    now: () => new Date(nowMs),
+    uuid: () => 'quiescence-window-test',
+  };
+
+  assert.throws(
+    () => requestDevFlowRestart({}, deps),
+    (error: any) => {
+      assert.equal(error?.payload?.code, 'RESTART_BUSY');
+      assert.equal(error?.payload?.details?.blockers?.recentMcpActivity, true);
+      assert.equal(error?.payload?.details?.mcpActivity?.quiescenceWindowMs, 5_000);
+      return true;
+    },
+  );
+  assert.equal(fs.existsSync(restartStatePath), false, 'recent activity must not write a restart ticket');
+
+  nowMs = activityAt + 5_001;
+  const accepted = requestDevFlowRestart({}, deps);
+  assert.equal(accepted.accepted, true);
+  assert.equal(accepted.duplicate, false);
+  assert.equal(fs.existsSync(restartStatePath), true);
+});
+
+test('restart_devflow MCP request does not block itself', async () => {
+  resetRestartState();
+  enableSupervisor();
+  const exits: number[] = [];
+  const operation = classifyMcpTransportOperation({
+    method: 'tools/call',
+    params: { name: 'restart_devflow', arguments: {} },
+  });
+  assert.equal(operation, 'other');
+  const tracker = createMcpTransportRequestTracker({ operation });
+
+  try {
+    await withServer((code) => exits.push(code), async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/api/restart`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      const body = await response.json() as any;
+      assert.equal(response.status, 200, JSON.stringify(body));
+      assert.equal(body.accepted, true);
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.deepEqual(exits, [75]);
+    });
+  } finally {
+    tracker.complete({ statusCode: 200 });
+  }
+});
+
+test('idle long-lived MCP stream activity does not block restart indefinitely', async () => {
+  resetRestartState();
+  enableSupervisor();
+  const exits: number[] = [];
+  const idleStreamTracker = createMcpTransportRequestTracker({ operation: 'other' });
+
+  try {
+    await withServer((code) => exits.push(code), async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/api/restart`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      const body = await response.json() as any;
+      assert.equal(response.status, 200, JSON.stringify(body));
+      assert.equal(body.accepted, true);
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.deepEqual(exits, [75]);
+    });
+  } finally {
+    idleStreamTracker.complete({ statusCode: 200 });
   }
 });
 

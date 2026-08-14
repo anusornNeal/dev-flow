@@ -32,6 +32,10 @@ const {
   shouldRecoverNgrokTunnel,
   appendNgrokDiagnosticRecord,
 } = await import('./start-all');
+const {
+  advanceDevFlowTunnelHealth,
+  resetDevFlowTunnelHealthForGeneration,
+} = await import('../src/lib/devFlowSupervisor');
 
 assert.deepEqual(buildNgrokArgs({ port: 3000, domain: 'example.ngrok-free.dev' }), [
   'http',
@@ -59,6 +63,7 @@ assert.deepEqual(resolveStartAllOptions({
   ngrokStableResetMs: 60000,
   ngrokProbeIntervalMs: 15000,
   ngrokProbeTimeoutMs: 5000,
+  ngrokProbeStartupGraceMs: 5000,
   ngrokProbeFailureThreshold: 3,
   ngrokCollisionBackoffMs: 30000,
   ngrokLogMaxBytes: 131072,
@@ -74,6 +79,7 @@ const options = {
   ngrokStableResetMs: 60000,
   ngrokProbeIntervalMs: 15000,
   ngrokProbeTimeoutMs: 5000,
+  ngrokProbeStartupGraceMs: 5000,
   ngrokProbeFailureThreshold: 3,
   ngrokCollisionBackoffMs: 30000,
   ngrokLogMaxBytes: 131072,
@@ -174,6 +180,73 @@ assert.equal(
   sanitizeNgrokDiagnosticLine('url=https://secret.ngrok-free.app/path?token=abc123 authtoken=very-secret'),
   'url=[url] authtoken=[redacted]',
 );
+
+const generationA = resetDevFlowTunnelHealthForGeneration(undefined, 'A', {
+  startupGraceMs: 0,
+  now: '2026-08-13T00:00:00.000Z',
+});
+let lifecycleHealth = generationA;
+for (const now of ['2026-08-13T00:00:01.000Z', '2026-08-13T00:00:02.000Z', '2026-08-13T00:00:03.000Z']) {
+  lifecycleHealth = advanceDevFlowTunnelHealth(lifecycleHealth, { ok: false }, {
+    failureThreshold: 3,
+    generation: 'A',
+    now,
+  });
+}
+assert.equal(lifecycleHealth.status, 'down');
+assert.equal(lifecycleHealth.consecutiveProbeFailures, 3);
+
+lifecycleHealth = resetDevFlowTunnelHealthForGeneration(lifecycleHealth, 'B', {
+  startupGraceMs: 5000,
+  now: '2026-08-13T00:00:04.000Z',
+});
+assert.equal(lifecycleHealth.status, 'unknown');
+assert.equal(lifecycleHealth.consecutiveProbeFailures, 0);
+assert.equal(shouldRecoverNgrokTunnel({
+  tunnelStatus: 'down',
+  consecutiveProbeFailures: 3,
+  failureThreshold: 3,
+  localApiHealthy: true,
+  ngrokProcessRunning: true,
+  shuttingDown: false,
+  startupGraceUntilMs: Date.parse(lifecycleHealth.startupGraceUntil!),
+  nowMs: Date.parse('2026-08-13T00:00:05.000Z'),
+}), false);
+
+for (const [index, now] of ['2026-08-13T00:00:10.000Z', '2026-08-13T00:00:11.000Z'].entries()) {
+  lifecycleHealth = advanceDevFlowTunnelHealth(lifecycleHealth, { ok: false }, {
+    failureThreshold: 3,
+    generation: 'B',
+    now,
+  });
+  assert.equal(lifecycleHealth.status, 'degraded');
+  assert.equal(lifecycleHealth.consecutiveProbeFailures, index + 1);
+  assert.equal(shouldRecoverNgrokTunnel({
+    tunnelStatus: lifecycleHealth.status,
+    consecutiveProbeFailures: lifecycleHealth.consecutiveProbeFailures,
+    failureThreshold: 3,
+    localApiHealthy: true,
+    ngrokProcessRunning: true,
+    shuttingDown: false,
+    nowMs: Date.parse(now),
+  }), false);
+}
+lifecycleHealth = advanceDevFlowTunnelHealth(lifecycleHealth, { ok: false }, {
+  failureThreshold: 3,
+  generation: 'B',
+  now: '2026-08-13T00:00:12.000Z',
+});
+assert.equal(lifecycleHealth.status, 'down');
+assert.equal(lifecycleHealth.consecutiveProbeFailures, 3);
+assert.equal(shouldRecoverNgrokTunnel({
+  tunnelStatus: lifecycleHealth.status,
+  consecutiveProbeFailures: lifecycleHealth.consecutiveProbeFailures,
+  failureThreshold: 3,
+  localApiHealthy: true,
+  ngrokProcessRunning: true,
+  shuttingDown: false,
+  nowMs: Date.parse('2026-08-13T00:00:12.000Z'),
+}), true);
 
 assert.equal(shouldRecoverNgrokTunnel({
   tunnelStatus: 'degraded',

@@ -12,6 +12,9 @@ export type DevFlowTunnelHealthStatus = 'unknown' | 'healthy' | 'degraded' | 'do
 
 export type DevFlowTunnelHealthState = {
   status: DevFlowTunnelHealthStatus;
+  generation?: string;
+  generationStartedAt?: string;
+  startupGraceUntil?: string;
   lastProbeAt?: string;
   lastProbeStatusCode?: number;
   lastProbeLatencyMs?: number;
@@ -62,6 +65,9 @@ export type DevFlowSupervisorChildDiagnostic = {
   lastSignal?: string | null;
   message?: string;
   reachabilityStatus?: DevFlowTunnelHealthStatus;
+  tunnelGeneration?: string;
+  generationStartedAt?: string;
+  startupGraceUntil?: string;
   lastProbeAt?: string;
   lastProbeStatusCode?: number;
   lastProbeLatencyMs?: number;
@@ -104,6 +110,9 @@ function normalizeTunnelHealth(value: unknown): DevFlowTunnelHealthState | undef
     consecutiveProbeFailures: Number.isInteger(input.consecutiveProbeFailures) && Number(input.consecutiveProbeFailures) >= 0
       ? Number(input.consecutiveProbeFailures)
       : 0,
+    ...(typeof input.generation === 'string' ? { generation: input.generation } : {}),
+    ...(typeof input.generationStartedAt === 'string' ? { generationStartedAt: input.generationStartedAt } : {}),
+    ...(typeof input.startupGraceUntil === 'string' ? { startupGraceUntil: input.startupGraceUntil } : {}),
     ...(typeof input.lastProbeAt === 'string' ? { lastProbeAt: input.lastProbeAt } : {}),
     ...(Number.isInteger(input.lastProbeStatusCode) ? { lastProbeStatusCode: Number(input.lastProbeStatusCode) } : {}),
     ...(typeof input.lastProbeLatencyMs === 'number' && Number.isFinite(input.lastProbeLatencyMs) && input.lastProbeLatencyMs >= 0 ? { lastProbeLatencyMs: input.lastProbeLatencyMs } : {}),
@@ -226,18 +235,48 @@ export function updateDevFlowSupervisorProcess(
   });
 }
 
+export function resetDevFlowTunnelHealthForGeneration(
+  previous: DevFlowTunnelHealthState | undefined,
+  generation: string,
+  options: { startupGraceMs: number; now?: string },
+): DevFlowTunnelHealthState {
+  const now = options.now || new Date().toISOString();
+  const parsedNowMs = Date.parse(now);
+  const nowMs = Number.isFinite(parsedNowMs) ? parsedNowMs : Date.now();
+  const startupGraceMs = Math.max(0, Math.floor(options.startupGraceMs));
+  return {
+    status: 'unknown',
+    generation,
+    generationStartedAt: now,
+    startupGraceUntil: new Date(nowMs + startupGraceMs).toISOString(),
+    consecutiveProbeFailures: 0,
+    ...(previous?.lastRecoveryAt ? { lastRecoveryAt: previous.lastRecoveryAt } : {}),
+    ...(Number.isInteger(previous?.recoveryAttempt) ? { recoveryAttempt: previous?.recoveryAttempt } : {}),
+    ...(previous?.lastErrorCode ? { lastErrorCode: previous.lastErrorCode } : {}),
+    ...(previous?.lastErrorClass ? { lastErrorClass: previous.lastErrorClass } : {}),
+    message: 'ngrok process generation started; public tunnel reachability is unknown during startup grace.',
+  };
+}
+
 export function advanceDevFlowTunnelHealth(
   previous: DevFlowTunnelHealthState | undefined,
   probe: { ok: boolean; statusCode?: number; latencyMs?: number; message?: string },
-  options: { failureThreshold: number; now?: string },
+  options: { failureThreshold: number; now?: string; generation?: string },
 ): DevFlowTunnelHealthState {
   const now = options.now || new Date().toISOString();
   const failureThreshold = Math.max(1, Math.floor(options.failureThreshold));
   const latencyMs = Number.isFinite(probe.latencyMs) && Number(probe.latencyMs) >= 0 ? Number(probe.latencyMs) : undefined;
   const statusCode = Number.isInteger(probe.statusCode) ? Number(probe.statusCode) : undefined;
+  if (options.generation && previous?.generation && previous.generation !== options.generation) {
+    return previous;
+  }
+  const current = {
+    ...(previous || { status: 'unknown' as const, consecutiveProbeFailures: 0 }),
+    ...(options.generation ? { generation: options.generation } : {}),
+  };
   if (probe.ok) {
     return {
-      ...(previous || {}),
+      ...current,
       status: 'healthy',
       lastProbeAt: now,
       lastProbeStatusCode: statusCode,
@@ -249,9 +288,23 @@ export function advanceDevFlowTunnelHealth(
     };
   }
 
-  const consecutiveProbeFailures = Math.max(0, previous?.consecutiveProbeFailures || 0) + 1;
+  const startupGraceUntilMs = current.startupGraceUntil ? Date.parse(current.startupGraceUntil) : Number.NaN;
+  if (Number.isFinite(startupGraceUntilMs) && Date.parse(now) < startupGraceUntilMs) {
+    return {
+      ...current,
+      status: 'unknown',
+      lastProbeAt: now,
+      lastProbeStatusCode: statusCode,
+      lastProbeLatencyMs: latencyMs,
+      lastFailureAt: now,
+      consecutiveProbeFailures: 0,
+      message: probe.message || 'Public tunnel probe failed during ngrok startup grace; failure is not counted.',
+    };
+  }
+
+  const consecutiveProbeFailures = Math.max(0, current.consecutiveProbeFailures || 0) + 1;
   return {
-    ...(previous || {}),
+    ...current,
     status: consecutiveProbeFailures >= failureThreshold ? 'down' : 'degraded',
     lastProbeAt: now,
     lastProbeStatusCode: statusCode,
@@ -308,6 +361,9 @@ function tunnelDiagnostic(state: DevFlowSupervisorState): DevFlowSupervisorChild
     ...base,
     status,
     reachabilityStatus: health.status,
+    ...(health.generation ? { tunnelGeneration: health.generation } : {}),
+    ...(health.generationStartedAt ? { generationStartedAt: health.generationStartedAt } : {}),
+    ...(health.startupGraceUntil ? { startupGraceUntil: health.startupGraceUntil } : {}),
     ...(health.lastProbeAt ? { lastProbeAt: health.lastProbeAt } : {}),
     ...(Number.isInteger(health.lastProbeStatusCode) ? { lastProbeStatusCode: health.lastProbeStatusCode } : {}),
     ...(Number.isFinite(health.lastProbeLatencyMs) ? { lastProbeLatencyMs: health.lastProbeLatencyMs } : {}),

@@ -23,6 +23,7 @@ import { getDevFlowRuntimeDir } from '../src/lib/devFlowPaths';
 import {
   advanceDevFlowTunnelHealth,
   createDevFlowSupervisorState,
+  resetDevFlowTunnelHealthForGeneration,
   readDevFlowSupervisorState,
   updateDevFlowSupervisorProcess,
   updateDevFlowSupervisorState,
@@ -42,6 +43,7 @@ type StartAllOptions = {
   ngrokStableResetMs: number;
   ngrokProbeIntervalMs: number;
   ngrokProbeTimeoutMs: number;
+  ngrokProbeStartupGraceMs: number;
   ngrokProbeFailureThreshold: number;
   ngrokCollisionBackoffMs: number;
   ngrokLogMaxBytes: number;
@@ -72,6 +74,7 @@ const DEFAULT_NGROK_RESTART_MAX_MS = 30000;
 const DEFAULT_NGROK_STABLE_RESET_MS = 60000;
 const DEFAULT_NGROK_PROBE_INTERVAL_MS = 15000;
 const DEFAULT_NGROK_PROBE_TIMEOUT_MS = 5000;
+const DEFAULT_NGROK_PROBE_STARTUP_GRACE_MS = 5000;
 const DEFAULT_NGROK_PROBE_FAILURE_THRESHOLD = 3;
 const DEFAULT_NGROK_COLLISION_BACKOFF_MS = 30000;
 const DEFAULT_NGROK_LOG_MAX_BYTES = 128 * 1024;
@@ -140,6 +143,7 @@ export function resolveStartAllOptions(env: NodeJS.ProcessEnv = process.env): St
     ngrokStableResetMs: parsePositiveInteger(env.DEVFLOW_NGROK_STABLE_RESET_MS, DEFAULT_NGROK_STABLE_RESET_MS),
     ngrokProbeIntervalMs: parsePositiveInteger(env.DEVFLOW_NGROK_PROBE_INTERVAL_MS, DEFAULT_NGROK_PROBE_INTERVAL_MS),
     ngrokProbeTimeoutMs: parsePositiveInteger(env.DEVFLOW_NGROK_PROBE_TIMEOUT_MS, DEFAULT_NGROK_PROBE_TIMEOUT_MS),
+    ngrokProbeStartupGraceMs: parsePositiveInteger(env.DEVFLOW_NGROK_PROBE_STARTUP_GRACE_MS, DEFAULT_NGROK_PROBE_STARTUP_GRACE_MS),
     ngrokProbeFailureThreshold: parsePositiveInteger(env.DEVFLOW_NGROK_PROBE_FAILURE_THRESHOLD, DEFAULT_NGROK_PROBE_FAILURE_THRESHOLD),
     ngrokCollisionBackoffMs: parsePositiveInteger(env.DEVFLOW_NGROK_COLLISION_BACKOFF_MS, DEFAULT_NGROK_COLLISION_BACKOFF_MS),
     ngrokLogMaxBytes: parsePositiveInteger(env.DEVFLOW_NGROK_LOG_MAX_BYTES, DEFAULT_NGROK_LOG_MAX_BYTES),
@@ -300,6 +304,7 @@ export function shouldRecoverNgrokTunnel(input: {
   ngrokProcessRunning: boolean;
   shuttingDown: boolean;
   collisionBackoffUntilMs?: number;
+  startupGraceUntilMs?: number;
   nowMs?: number;
 }) {
   const nowMs = input.nowMs ?? Date.now();
@@ -308,6 +313,7 @@ export function shouldRecoverNgrokTunnel(input: {
     && input.consecutiveProbeFailures >= Math.max(1, input.failureThreshold)
     && input.localApiHealthy
     && input.ngrokProcessRunning
+    && (!input.startupGraceUntilMs || input.startupGraceUntilMs <= nowMs)
     && (!input.collisionBackoffUntilMs || input.collisionBackoffUntilMs <= nowMs);
 }
 
@@ -457,6 +463,7 @@ export async function startAll(mode: StartAllMode = 'all') {
   let tunnelProbeInFlight = false;
   let collisionBackoffUntilMs = 0;
   let recoveryStopChild: ChildProcessWithoutNullStreams | null = null;
+  let ngrokGeneration = 0;
   const ngrokDiagnosticLogPath = path.join(getDevFlowRuntimeDir(), 'ngrok-diagnostics.jsonl');
 
   const currentTunnelHealth = (): DevFlowTunnelHealthState => readDevFlowSupervisorState()?.tunnelHealth || {
@@ -545,6 +552,14 @@ export async function startAll(mode: StartAllMode = 'all') {
 
   launch = (processConfig: ManagedProcess): ChildProcessWithoutNullStreams => {
     clearTimer(stableTimers, processConfig.label);
+    if (processConfig.label === 'ngrok') {
+      ngrokGeneration += 1;
+      updateDevFlowSupervisorTunnelHealth(resetDevFlowTunnelHealthForGeneration(
+        currentTunnelHealth(),
+        String(ngrokGeneration),
+        { startupGraceMs: options.ngrokProbeStartupGraceMs },
+      ));
+    }
     const child = startProcess(processConfig, {
       onStdout: (_runningChild, text) => {
         if (processConfig.label === 'ngrok') captureNgrokDiagnostic('stdout', text);
@@ -728,6 +743,7 @@ export async function startAll(mode: StartAllMode = 'all') {
     }
 
     tunnelProbeInFlight = true;
+    const probeGeneration = currentTunnelHealth().generation;
     try {
       const publicBaseUrl = await discoverNgrokPublicUrl(options.ngrokDomain, options.ngrokProbeTimeoutMs);
       const publicProbe = publicBaseUrl
@@ -735,7 +751,9 @@ export async function startAll(mode: StartAllMode = 'all') {
         : { ok: false, latencyMs: 0, message: 'ngrok public URL is unavailable from the configured domain or local inspector.' };
       let next = advanceDevFlowTunnelHealth(currentTunnelHealth(), publicProbe, {
         failureThreshold: options.ngrokProbeFailureThreshold,
+        generation: probeGeneration,
       });
+      if (probeGeneration && next.generation !== probeGeneration) return;
       updateDevFlowSupervisorTunnelHealth(next);
 
       if (next.status !== 'down') return;
@@ -747,6 +765,7 @@ export async function startAll(mode: StartAllMode = 'all') {
         localApiHealthy: localProbe.ok,
         ngrokProcessRunning: children.get('ngrok') === ngrokChild && ngrokChild.exitCode === null,
         shuttingDown,
+        startupGraceUntilMs: next.startupGraceUntil ? Date.parse(next.startupGraceUntil) : undefined,
         collisionBackoffUntilMs,
       });
 

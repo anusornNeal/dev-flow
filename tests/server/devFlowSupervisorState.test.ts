@@ -181,6 +181,85 @@ test('running ngrok is not treated as publicly healthy before a reachability pro
   assert.equal(diagnostics.summary, 'api-healthy-tunnel-unknown');
 });
 
+test('tunnel health is reset and isolated by ngrok process generation', () => {
+  const generationA = supervisor.resetDevFlowTunnelHealthForGeneration(undefined, 'A', {
+    startupGraceMs: 0,
+    now: '2026-08-13T00:00:00.000Z',
+  });
+  const a1 = supervisor.advanceDevFlowTunnelHealth(generationA, { ok: false }, {
+    failureThreshold: 3,
+    generation: 'A',
+    now: '2026-08-13T00:00:01.000Z',
+  });
+  const a2 = supervisor.advanceDevFlowTunnelHealth(a1, { ok: false }, {
+    failureThreshold: 3,
+    generation: 'A',
+    now: '2026-08-13T00:00:02.000Z',
+  });
+  const a3 = supervisor.advanceDevFlowTunnelHealth(a2, { ok: false }, {
+    failureThreshold: 3,
+    generation: 'A',
+    now: '2026-08-13T00:00:03.000Z',
+  });
+  assert.equal(a3.status, 'down');
+  assert.equal(a3.consecutiveProbeFailures, 3);
+
+  const generationB = supervisor.resetDevFlowTunnelHealthForGeneration(a3, 'B', {
+    startupGraceMs: 5000,
+    now: '2026-08-13T00:00:04.000Z',
+  });
+  assert.equal(generationB.status, 'unknown');
+  assert.equal(generationB.generation, 'B');
+  assert.equal(generationB.consecutiveProbeFailures, 0);
+
+  const duringGrace = supervisor.advanceDevFlowTunnelHealth(generationB, { ok: false }, {
+    failureThreshold: 3,
+    generation: 'B',
+    now: '2026-08-13T00:00:05.000Z',
+  });
+  assert.equal(duringGrace.status, 'unknown');
+  assert.equal(duringGrace.consecutiveProbeFailures, 0);
+
+  const b1 = supervisor.advanceDevFlowTunnelHealth(duringGrace, { ok: false }, {
+    failureThreshold: 3,
+    generation: 'B',
+    now: '2026-08-13T00:00:10.000Z',
+  });
+  const b2 = supervisor.advanceDevFlowTunnelHealth(b1, { ok: false }, {
+    failureThreshold: 3,
+    generation: 'B',
+    now: '2026-08-13T00:00:11.000Z',
+  });
+  assert.equal(b1.status, 'degraded');
+  assert.equal(b1.consecutiveProbeFailures, 1);
+  assert.equal(b2.status, 'degraded');
+  assert.equal(b2.consecutiveProbeFailures, 2);
+
+  const staleSuccessFromA = supervisor.advanceDevFlowTunnelHealth(b2, { ok: true, statusCode: 200 }, {
+    failureThreshold: 3,
+    generation: 'A',
+    now: '2026-08-13T00:00:12.000Z',
+  });
+  assert.deepEqual(staleSuccessFromA, b2);
+
+  const b3 = supervisor.advanceDevFlowTunnelHealth(b2, { ok: false }, {
+    failureThreshold: 3,
+    generation: 'B',
+    now: '2026-08-13T00:00:13.000Z',
+  });
+  assert.equal(b3.status, 'down');
+  assert.equal(b3.consecutiveProbeFailures, 3);
+
+  const recoveredB = supervisor.advanceDevFlowTunnelHealth(b3, { ok: true, statusCode: 200 }, {
+    failureThreshold: 3,
+    generation: 'B',
+    now: '2026-08-13T00:00:14.000Z',
+  });
+  assert.equal(recoveredB.status, 'healthy');
+  assert.equal(recoveredB.generation, 'B');
+  assert.equal(recoveredB.consecutiveProbeFailures, 0);
+});
+
 test('public tunnel probe failures degrade before becoming down and recover on success', () => {
   const degraded = supervisor.advanceDevFlowTunnelHealth(undefined, {
     ok: false,

@@ -264,7 +264,7 @@ export function sanitizeNgrokDiagnosticLine(line: string) {
     .trim();
 }
 
-function appendBoundedNgrokDiagnosticRecord(filePath: string, record: Record<string, unknown>, maxBytes: number) {
+function appendBoundedNgrokDiagnosticRecord<T extends Record<string, unknown>>(filePath: string, record: T, maxBytes: number): T {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   let lines: string[] = [];
   try {
@@ -447,7 +447,16 @@ export function shouldRecoverNgrokTunnel(input: Parameters<typeof getNgrokRecove
   return getNgrokRecoveryDecision(input) === 'restart-ngrok';
 }
 
-async function probeHttpEndpoint(url: string, timeoutMs: number, requireSuccessStatus: boolean) {
+type PublicProbeResult = {
+  ok: boolean;
+  statusCode?: number;
+  latencyMs: number;
+  message: string;
+  failureClass?: ReturnType<typeof classifyPublicProbeFailure> | 'public-url-unavailable';
+  retryAfter?: string;
+};
+
+async function probeHttpEndpoint(url: string, timeoutMs: number, requireSuccessStatus: boolean): Promise<PublicProbeResult> {
   const startedAt = Date.now();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), Math.max(100, timeoutMs));
@@ -879,9 +888,9 @@ export async function startAll(mode: StartAllMode = 'all') {
     const probeGeneration = currentTunnelHealth().generation;
     try {
       const publicBaseUrl = await discoverNgrokPublicUrl(options.ngrokDomain, options.ngrokProbeTimeoutMs);
-      const publicProbe = publicBaseUrl
+      const publicProbe: PublicProbeResult = publicBaseUrl
         ? await probeHttpEndpoint(apiCapabilitiesUrl(publicBaseUrl), options.ngrokProbeTimeoutMs, true)
-        : { ok: false, statusCode: undefined, latencyMs: 0, message: 'ngrok public URL is unavailable from the configured domain or local inspector.', failureClass: 'public-url-unavailable' as const, retryAfter: undefined };
+        : { ok: false, statusCode: undefined, latencyMs: 0, message: 'ngrok public URL is unavailable from the configured domain or local inspector.', failureClass: 'public-url-unavailable', retryAfter: undefined };
       let next = advanceDevFlowTunnelHealth(currentTunnelHealth(), publicProbe, {
         failureThreshold: options.ngrokProbeFailureThreshold,
         generation: probeGeneration,

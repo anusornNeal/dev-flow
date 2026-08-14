@@ -40,7 +40,7 @@ When the ngrok child exits unexpectedly or fails to spawn, the supervisor keeps 
 
 When the public tunnel is `down`, the supervisor probes the local DevFlow `/api/capabilities` endpoint before any recovery. If the local API is healthy, the supervisor stops and restarts **ngrok only**. If the local API is also unhealthy, tunnel-only recovery is suppressed so a server problem is not misclassified as an ngrok problem. Tunnel degradation never requests a DevFlow server restart.
 
-ngrok stdout/stderr and supervisor recovery decisions are retained as bounded timestamped JSONL in `.devflow/ngrok-diagnostics.jsonl` (128 KiB by default). URLs and token-like values are redacted before persistence. `ERR_NGROK_334` is classified as an endpoint/session collision and activates a bounded collision backoff before another ngrok launch, preventing a hot restart loop while preserving the single-instance supervisor ownership model.
+ngrok stdout/stderr, classified public-probe failures, supervisor recovery decisions, and safe aggregate ngrok pressure samples are retained as bounded timestamped JSONL in `.devflow/ngrok-diagnostics.jsonl` (128 KiB by default). Probe evidence may include failure class, status, latency, process generation, failure count, sanitized `Retry-After`, and the recovery decision. Inspector pressure stores aggregate connection/request counters and rates only; public URLs, token-like values, raw headers, raw request history, and request bodies are not persisted or projected into workflow health. `ERR_NGROK_334` is classified as an endpoint/session collision and activates a bounded collision backoff before another ngrok launch, preventing a hot restart loop while preserving the single-instance supervisor ownership model.
 
 Intentional `SIGINT`/`SIGTERM` shutdown sets the supervisor shutdown state first, cancels pending retry, stability, and public-probe timers, and then stops children; intentional shutdown therefore never starts an ngrok retry or tunnel-recovery loop.
 
@@ -72,7 +72,7 @@ npm run dev:server
 ## Restart lifecycle
 
 1. `restart_devflow` verifies that the process was launched by the DevFlow supervisor and has the matching opaque supervisor token.
-2. Restart is rejected with `RESTART_BUSY` while MCP jobs are queued or active.
+2. Restart is rejected with `RESTART_BUSY` while durable MCP jobs are queued/active or meaningful Streamable HTTP MCP operations are in-flight/recent inside the bounded quiescence window. An idle long-lived MCP stream and the `restart_devflow` request itself do not keep the runtime permanently busy.
 3. DevFlow persists an accepted restart ticket and returns the MCP response before exiting with the dedicated restart exit code.
 4. The supervisor validates the ticket/token pair and launches a replacement raw server process.
 5. The replacement runtime marks the ticket healthy after startup. Duplicate restart requests reuse the current fresh ticket rather than scheduling multiple exits.
@@ -101,6 +101,17 @@ npm run start:all
 ```
 
 The supervisor identifier remains `start-all` internally for backward compatibility with existing restart tickets and tests; it now represents the shared supervisor implementation, not a requirement that users invoke the `start:all` npm command.
+## Five-client MCP load and recovery regression
+
+On August 14, 2026, `npm run smoke-multi-mcp` exercised the production Streamable HTTP MCP transport with five concurrent clients. The local deterministic mode used three rounds (5 initializes + 15 tool-list calls + 15 compact `devflow_health_check` calls, 35 bounded MCP operations total). The run completed in 6866 ms, with round p50 1652 ms and p95 4205 ms. A restart request issued immediately after meaningful MCP activity returned `RESTART_BUSY`; with the same clients left connected but idle for the 5000 ms quiescence window, restart was accepted and the isolated child exited with code 75 only after that explicit request.
+
+The same local run injected the production tunnel-health state machine across process generations. Generation A reached the fresh three-failure threshold and produced `restart-ngrok`. Generation B then reset to zero inherited failures, ignored failure counting during startup grace, stayed below recovery threshold after two fresh failures, and returned to `healthy` on success. No recovery loop was observed, and the local API runtime identity remained stable through the ngrok-only recovery simulation.
+
+The bounded public mode then ran five clients for two rounds (5 initializes + 10 tool-list calls + 10 compact health calls, 25 bounded MCP operations). It completed in 3085 ms, with round p50 1241 ms and p95 1464 ms. The live API PID remained 17576 before and after the run, the runtime instance/contract remained stable, and tunnel status remained healthy. The local ngrok inspector was available and its aggregate counters increased by 1 connection and 37 HTTP requests during the 3085 ms observation window; the observed one-minute-rate samples peaked at about 0.477 connections and 0.839 requests. These are shared-tunnel aggregate measurements and may include ambient traffic from other clients/probes, so they must not be attributed solely to the harness.
+
+No provider limit was configured for this run, so DevFlow does **not** claim a numeric safety margin from those measurements. MCP session reuse is server-controlled and verified separately, but TCP socket reuse remains partly controlled by the external client and ngrok edge; this harness therefore does not claim a keep-alive or connection-rate guarantee. The public smoke reports no public URL and reads/stores no raw inspector request history or request bodies.
+
+## Startup benchmark
 ## Startup benchmark
 
 A local Windows benchmark on August 8, 2026 measured three cold-ish launches of each path until the DevFlow TCP port accepted connections:

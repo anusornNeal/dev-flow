@@ -36,6 +36,7 @@
     "restore": "tsx scripts/restore.ts",
     "migrate:json": "tsx scripts/migrate-json-to-sqlite.ts",
     "smoke-multi-sse": "node scripts/smoke-multi-sse.mjs",
+    "smoke-multi-mcp": "tsx scripts/smoke-multi-mcp.mjs",
     "test:dvf-0224": "tsx scripts/verify-dvf-0224.ts",
     "test:verify-runner-plan": "tsx --test tests/server/verifyRunnerPlan.test.ts",
     "benchmark:verification": "tsx scripts/benchmark-verification.ts",

@@ -61,6 +61,21 @@ test('commit plan selects only execution-owned changed files and preserves unrel
   assert.equal(git(workspace.root, ['log', '-1', '--pretty=%s']), '[task-scoped] fix: scoped owned change');
 });
 
+test('commit plan matches execution-owned files inside a wholly new nested directory', () => {
+  const { workspace, taskId, session } = createFixture('new-nested');
+  const ownedPath = 'src/generated/region/RegionSummary.kt';
+  fs.mkdirSync(path.dirname(path.join(workspace.root, ownedPath)), { recursive: true });
+  fs.writeFileSync(path.join(workspace.root, ownedPath), 'class RegionSummary\n');
+  execution.recordExecutionOwnedChanges(session.id, [ownedPath], { repoRoot: workspace.root, source: 'task-edit' });
+  execution.recordExecutionVerificationEvidence(session.id, [{ name: 'focused', status: 'passed' }], { repoRoot: workspace.root });
+
+  const plan = commitPlan.buildTaskCommitPlan({ countersCache: {} }, { taskId, workspaceId: workspace.workspaceId });
+  assert.equal(plan.commitAllowed, true);
+  assert.deepEqual(plan.ownedChangedFiles, [ownedPath]);
+  assert.deepEqual(plan.unrelatedChangedFiles, []);
+  assert.deepEqual(plan.scopeDrift, []);
+});
+
 test('commit plan blocks stale verification after an owned file changes again', () => {
   const { workspace, taskId, session } = createFixture('stale');
   fs.writeFileSync(path.join(workspace.root, 'src', 'owned.ts'), 'export const owned = 3;\n');

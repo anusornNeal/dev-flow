@@ -45,7 +45,7 @@ export function getGitWorkspaceStatusForRoot(root: string) {
 
 export function getGitWorkspaceSnapshotForRoot(root: string) {
   ensureGitRepo(root);
-  const output = runGit(['status', '--porcelain=v2', '--branch'], root);
+  const output = runGit(['status', '--porcelain=v2', '--branch', '--untracked-files=all'], root);
   let branch = 'HEAD';
   let head = 'unborn';
   const files: Array<{ path: string; staged: boolean; status: string }> = [];

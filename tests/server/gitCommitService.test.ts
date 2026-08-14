@@ -187,16 +187,22 @@ test('commitGitChanges rejects unsafe selected paths', () => {
   );
 });
 
-test('getGitWorkspaceSnapshotForRoot returns HEAD, branch and working-tree files from one porcelain snapshot', () => {
+test('getGitWorkspaceSnapshotForRoot returns exact files from one porcelain snapshot', () => {
   const repo = createRepo('workspace-snapshot');
   fs.writeFileSync(path.join(repo, 'base.txt'), 'updated\n');
   fs.writeFileSync(path.join(repo, 'new.txt'), 'new\n');
+  fs.mkdirSync(path.join(repo, 'nested', 'brand-new'), { recursive: true });
+  fs.writeFileSync(path.join(repo, 'nested', 'brand-new', 'one.txt'), 'one\n');
+  fs.writeFileSync(path.join(repo, 'nested', 'brand-new', 'two.txt'), 'two\n');
 
   const snapshot = getGitWorkspaceSnapshotForRoot(repo);
   assert.match(snapshot.head, /^[a-f0-9]{40}$/);
   assert.ok(snapshot.branch.length > 0);
   assert.ok(snapshot.files.some((file: any) => file.path === 'base.txt'));
   assert.ok(snapshot.files.some((file: any) => file.path === 'new.txt'));
+  assert.ok(snapshot.files.some((file: any) => file.path === 'nested/brand-new/one.txt'));
+  assert.ok(snapshot.files.some((file: any) => file.path === 'nested/brand-new/two.txt'));
+  assert.equal(snapshot.files.some((file: any) => file.path === 'nested/brand-new/'), false);
 });
 
 test.after(() => {

@@ -19,6 +19,11 @@ import { resolveAgentExecutionMode } from './agentRunService';
 import { renderPromptTemplate } from './promptTemplateService';
 import { createApiError } from './api';
 import { listTaskUiEvidenceForAgent } from './taskUiEvidenceService';
+import { getActiveTaskExecutionSessionForWorkspace } from './executionSessionService.js';
+import { getLatestExecutionCheckpoint } from './executionCheckpointService.js';
+import { preflightHarnessExecutionGuard } from './harnessExecutionGuardService.js';
+import { HARNESS_POLICY_VERSION } from './harnessPolicyService.js';
+import { HARNESS_STRATEGY_VERSION, recommendHarnessStrategy } from './harnessStrategyService.js';
 
 const TASK_CATEGORY_SET = new Set<string>(VALID_TASK_CATEGORIES);
 
@@ -449,6 +454,148 @@ function buildCompactAgentBugSummary(task: any) {
   };
 }
 
+export const CHATGPT_HARNESS_ENVELOPE_VERSION = 'chatgpt-harness-envelope.v1' as const;
+
+const HARNESS_ACTION_PROBES = [
+  { action: 'mutation', toolName: 'write_local_file' },
+  { action: 'verification', toolName: 'run_project_command' },
+  { action: 'commit', toolName: 'commit_task_owned_changes' },
+  { action: 'finalization', toolName: 'finalize_task_workspace' },
+] as const;
+
+function harnessRiskForTask(task: any) {
+  if (task?.priority === 'high') return 'high' as const;
+  if (task?.priority === 'low') return 'low' as const;
+  return 'medium' as const;
+}
+
+function harnessKindForTask(task: any) {
+  const targets = Array.isArray(task?.targetFiles) ? task.targetFiles : [];
+  const text = [task?.title, task?.description, ...(Array.isArray(task?.tags) ? task.tags : [])]
+    .map((entry) => String(entry || '').toLowerCase())
+    .join(' ');
+  if (targets.length >= 5) return 'cross-module' as const;
+  if (/\bbug|fix|defect|regression\b/.test(text)) return 'bug-fix' as const;
+  if (task?.category === 'frontend' && targets.length <= 1) return 'small-ui' as const;
+  return 'unknown' as const;
+}
+
+function activeClaimWorkspaceId(task: any) {
+  const workspaceId = typeof task?.claim?.workspaceId === 'string' ? task.claim.workspaceId.trim() : '';
+  const expiresAt = Date.parse(String(task?.claim?.expiresAt || ''));
+  return workspaceId && Number.isFinite(expiresAt) && expiresAt > Date.now() ? workspaceId : null;
+}
+
+export function buildChatGptHarnessEnvelope(state: AppState, task: any) {
+  const workspaceId = activeClaimWorkspaceId(task);
+  let session: any = null;
+  let bindingError: string | null = null;
+  if (workspaceId) {
+    try {
+      session = getActiveTaskExecutionSessionForWorkspace(workspaceId);
+    } catch (error: any) {
+      bindingError = String(error?.code || error?.message || 'EXECUTION_BINDING_UNAVAILABLE').slice(0, 160);
+    }
+  }
+
+  const checkpoint = session ? getLatestExecutionCheckpoint(session.id) : null;
+  const targetPath = Array.isArray(task?.targetFiles) && task.targetFiles.length > 0
+    ? String(task.targetFiles[0])
+    : 'README.md';
+  const decisions = session && workspaceId
+    ? HARNESS_ACTION_PROBES.map(({ action, toolName }) => {
+        const args: Record<string, any> = {
+          workspaceId,
+          taskId: task.id,
+          harnessOperationId: `agent-context:${action}`,
+        };
+        if (action === 'mutation') args.filePath = targetPath;
+        return { action, decision: preflightHarnessExecutionGuard(state, toolName, args) };
+      })
+    : [];
+  const policy = decisions.find((entry) => entry.decision.policy)?.decision.policy || null;
+  const policyBlockers = decisions
+    .filter((entry) => !entry.decision.allowed && entry.decision.reasonCode !== 'EXECUTION_LIFECYCLE_STAGE_BLOCKED')
+    .map((entry) => entry.decision.reasonCode)
+    .filter(Boolean);
+  const hardBlockers = [...new Set([
+    ...(Array.isArray(checkpoint?.blockers) ? checkpoint.blockers.map(String) : []),
+    ...policyBlockers,
+    ...(bindingError ? [bindingError] : []),
+  ])].slice(0, 12);
+
+  const strategy = recommendHarnessStrategy({
+    task: {
+      risk: harnessRiskForTask(task),
+      kind: harnessKindForTask(task),
+      targetFileCount: Array.isArray(task?.targetFiles) ? task.targetFiles.length : undefined,
+      sharedContract: Array.isArray(task?.targetFiles) ? task.targetFiles.length > 1 : undefined,
+      hardSafetyAffected: hardBlockers.length > 0,
+    },
+    policy: policy ? {
+      planningEvidence: policy.planningEvidence,
+      verification: policy.verification,
+      hardSafetyBlocked: hardBlockers.length > 0,
+    } : undefined,
+    rollout: { mode: 'shadow' },
+  });
+
+  const checkpointFreshness = !checkpoint
+    ? 'missing'
+    : !checkpoint.sourceRepoRevision || !session?.repoRevision || checkpoint.sourceRepoRevision === session.repoRevision
+      ? 'fresh'
+      : 'stale';
+  const contextFreshness = !session?.contextHandle
+    ? 'missing'
+    : !checkpoint || checkpoint.contextHandle === session.contextHandle
+      ? 'fresh'
+      : 'stale';
+  const allowedNextActionClasses = session
+    ? decisions.filter((entry) => entry.decision.allowed).map((entry) => entry.action)
+    : ['claim'];
+
+  return {
+    version: CHATGPT_HARNESS_ENVELOPE_VERSION,
+    target: 'chatgpt',
+    routing: 'chatgpt-only',
+    execution: {
+      claimed: Boolean(workspaceId),
+      sessionId: session?.id || null,
+      workspaceId: workspaceId || null,
+      stage: session?.lifecycle?.stage || 'unclaimed',
+      checkpointRef: checkpoint?.id || null,
+      checkpointFreshness,
+    },
+    policy: {
+      version: policy?.version || HARNESS_POLICY_VERSION,
+      policyId: policy?.policyId || null,
+      inputFingerprint: policy?.inputFingerprint || null,
+      freshness: policy ? 'fresh' : 'unavailable',
+    },
+    strategy: {
+      version: HARNESS_STRATEGY_VERSION,
+      strategyVersion: strategy.strategyVersion,
+      decisionId: strategy.decisionId,
+      mode: strategy.rollout.mode,
+      status: strategy.status,
+      confidence: strategy.confidence,
+      reasonCodes: strategy.reasonCodes.slice(0, 8),
+    },
+    context: {
+      handle: session?.contextHandle || null,
+      freshness: contextFreshness,
+    },
+    recovery: {
+      checkpointRef: checkpoint?.id || null,
+      pendingOperationIds: Array.isArray(checkpoint?.pendingOperations)
+        ? checkpoint.pendingOperations.map((entry: any) => entry.operationId).filter(Boolean).slice(0, 8)
+        : [],
+    },
+    allowedNextActionClasses,
+    hardBlockers,
+  };
+}
+
 export function getAgentTaskContext(state: AppState, targetId: string, includeLogs = false) {
   const task = findTaskByIdentifier(state, targetId);
   if (!task) return null;
@@ -513,6 +660,7 @@ export function getAgentTaskContext(state: AppState, targetId: string, includeLo
     }),
     bugSummary: buildCompactAgentBugSummary(task),
     repoContext: task.repoContext || undefined,
+    harness: buildChatGptHarnessEnvelope(state, task),
     orchestration: cleanObject({
       role,
       hasSubtasks,

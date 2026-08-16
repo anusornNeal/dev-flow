@@ -7,6 +7,10 @@ import { evaluatePerformanceSlo } from './performanceSloService';
 import { performance as nodePerformance } from 'node:perf_hooks';
 import { publishServerEvent } from './serverEventService.js';
 import { getRecoveryStatus } from './backupIntegrityService';
+import { buildChatGptHarnessEnvelope, findTaskByIdentifier } from './taskService.js';
+import { getActiveTaskExecutionSessionForWorkspace } from './executionSessionService.js';
+import { HARNESS_POLICY_VERSION } from './harnessPolicyService.js';
+import { HARNESS_STRATEGY_VERSION } from './harnessStrategyService.js';
 
 const lastHealthEventSignatures = new Map<string, string>();
 
@@ -64,6 +68,53 @@ function summarizeFailedJobGroups(failures: any[]) {
   return Array.from(groups.values()).sort((left, right) => right.count - left.count);
 }
 
+export const CHATGPT_HARNESS_HEALTH_VERSION = 'chatgpt-harness-health.v1' as const;
+
+export function getChatGptHarnessHealthSnapshot(state: AppState, args: Record<string, any> = {}) {
+  let taskId = typeof args.taskId === 'string' ? args.taskId.trim() : '';
+  const workspaceId = typeof args.workspaceId === 'string' ? args.workspaceId.trim() : '';
+  if (!taskId && workspaceId) {
+    try {
+      taskId = getActiveTaskExecutionSessionForWorkspace(workspaceId)?.taskId || '';
+    } catch {
+      taskId = '';
+    }
+  }
+  const task = taskId ? findTaskByIdentifier(state, taskId) : null;
+  if (!task) {
+    return {
+      version: CHATGPT_HARNESS_HEALTH_VERSION,
+      status: 'idle',
+      mode: 'chatgpt-only',
+      execution: { stage: 'unclaimed', sessionId: null, workspaceId: workspaceId || null },
+      checkpoint: { freshness: 'missing', ref: null },
+      policy: { version: HARNESS_POLICY_VERSION, freshness: 'unavailable', policyId: null },
+      context: { freshness: 'missing', handle: null },
+      strategy: { version: HARNESS_STRATEGY_VERSION, mode: 'shadow', status: 'baseline', regressionState: 'unknown' },
+      recovery: { pendingOperationCount: 0 },
+      hardBlockers: [],
+    };
+  }
+  const envelope = buildChatGptHarnessEnvelope(state, task);
+  return {
+    version: CHATGPT_HARNESS_HEALTH_VERSION,
+    status: envelope.execution.sessionId ? 'active' : 'idle',
+    mode: 'chatgpt-only',
+    execution: {
+      stage: envelope.execution.stage,
+      sessionId: envelope.execution.sessionId,
+      workspaceId: envelope.execution.workspaceId,
+      allowedNextActionClasses: envelope.allowedNextActionClasses,
+    },
+    checkpoint: { freshness: envelope.execution.checkpointFreshness, ref: envelope.execution.checkpointRef },
+    policy: envelope.policy,
+    context: envelope.context,
+    strategy: { ...envelope.strategy, regressionState: 'unknown' },
+    recovery: { pendingOperationCount: envelope.recovery.pendingOperationIds.length },
+    hardBlockers: envelope.hardBlockers,
+  };
+}
+
 export function getWorkflowHealth(state: AppState, args: Record<string, any> = {}): Record<string, any> {
   const recommendations: string[] = [];
   const responseMode = resolveWorkflowHealthResponseMode(args);
@@ -88,6 +139,7 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
   const searchMs = phaseMs();
   const sloPerformance = evaluatePerformanceSlo(Array.isArray(diagnostics?.tools?.topTools) ? diagnostics.tools.topTools : []);
   const recovery = getRecoveryStatus();
+  const harness = getChatGptHarnessHealthSnapshot(state, args);
   const historicalPerformance = diagnostics?.performanceHistory || {
     windowMs,
     minSamples: 5,
@@ -99,6 +151,7 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
     insufficientSamples: [],
   };
   const sloMs = phaseMs();
+  const harnessMs = phaseMs();
 
   const git = gitProbe.ok === true ? {
     ok: true,
@@ -232,10 +285,11 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
       isolation,
       recovery,
       runtimeSupervisor,
+      harness,
     },
     performance: {
       totalMs: Math.round((nodePerformance.now() - startedAt) * 100) / 100,
-      phases: { catalogMs, diagnosticsMs, gitMs, searchMs, sloMs },
+      phases: { catalogMs, diagnosticsMs, gitMs, searchMs, sloMs, harnessMs },
     },
     recommendations,
   };
@@ -285,6 +339,7 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
       groups: compactFailureGroups(failedJobGroups),
     },
     regressions: compactRegressions,
+    harness,
     runtime: {
       search: {
         backend: search.backend,

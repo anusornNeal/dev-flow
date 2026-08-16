@@ -76,7 +76,6 @@ export default function App() {
     model?: string | null;
   } | null>(null);
   const [mounted, setMounted] = useState(false);
-  const [ngrokUrl, setNgrokUrl] = useState('');
   const [activePage, setActivePage] = useState<'board' | 'previews'>(() => window.location.hash === '#previews' ? 'previews' : 'board');
   const [sidebarLayout, setSidebarLayout] = useState(() =>
     resolveInitialSidebarLayout(window.localStorage, window.innerWidth)
@@ -130,19 +129,6 @@ export default function App() {
   const [selectedPriority, setSelectedPriority] = useState<Task['priority'] | 'all'>('all');
   const [selectedTag, setSelectedTag] = useState<string | 'all'>('all');
   const [searchQuery, setSearchQuery] = useState('');
-
-  // 0. Load settings from REST API (GET /api/settings)
-  const fetchSettingsFromApi = async () => {
-    try {
-      const res = await fetch('/api/settings', { cache: 'no-store' });
-      if (res.ok) {
-        const data = await res.json();
-        setNgrokUrl(data.ngrokUrl ?? '');
-      }
-    } catch (err) {
-      console.warn('Failed to fetch settings:', err);
-    }
-  };
 
   // 0. Load projects from REST API (delegated to projectRepository / useProjectViewModel)
   const fetchProjectsFromApi = async () => {
@@ -213,7 +199,6 @@ export default function App() {
     const runFallback = () => {
       void boardViewModel.refresh();
       void projectsViewModel.refresh();
-      void fetchSettingsFromApi();
     };
     const startFallback = () => {
       if (fallbackTimer !== null) return;
@@ -228,7 +213,6 @@ export default function App() {
       }
       if (event.type === 'task.changed' && affectsActiveProject) void boardViewModel.refresh();
       if (event.type === 'project.changed') void projectsViewModel.refresh();
-      if (event.type === 'settings.changed') void fetchSettingsFromApi();
     }, {
       onAvailable: stopFallback,
       onUnavailable: startFallback,
@@ -243,7 +227,6 @@ export default function App() {
 
   useEffect(() => {
     setMounted(true);
-    fetchSettingsFromApi();
     fetchProjectsFromApi();
   }, []);
 
@@ -559,10 +542,8 @@ export default function App() {
                 onUpdateProject={handleUpdateProject}
               />
             ) : undefined}
-            ngrokUrl={ngrokUrl}
             theme={theme}
             setTheme={setTheme}
-            setIsSettingsModalOpen={setIsSettingsModalOpen}
             setIsSkillsModalOpen={setIsSkillsModalOpen}
             setIsTemplateModalOpen={setIsTemplateModalOpen}
             setIsObservabilityModalOpen={setIsObservabilityModalOpen}
@@ -679,12 +660,7 @@ export default function App() {
         <ObservabilityModal onClose={() => setIsObservabilityModalOpen(false)} />
       )}
       {isSettingsModalOpen && (
-        <SettingsModal
-          onClose={() => {
-            setIsSettingsModalOpen(false);
-            fetchSettingsFromApi();
-          }}
-        />
+        <SettingsModal onClose={() => setIsSettingsModalOpen(false)} />
       )}
 
       {/* 9. Actionable task move blocker dialog */}

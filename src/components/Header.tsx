@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Cat, Moon, Sun, FileCode, Code, FileText, Plus, Sparkles, Blocks, ChevronDown } from 'lucide-react';
-import NgrokStatusPanel from './NgrokStatusPanel';
+import ZrokStatusPanel from './ZrokStatusPanel';
 
 interface HeaderProps {
   filteredTasksCount: number;
@@ -8,10 +8,8 @@ interface HeaderProps {
   subtitle?: string;
   contextLabel?: string;
   projectSwitcher?: React.ReactNode;
-  ngrokUrl: string | null;
   theme: string;
   setTheme: (theme: "light" | "dark") => void;
-  setIsSettingsModalOpen: (open: boolean) => void;
   setIsSkillsModalOpen: (open: boolean) => void;
   setIsTemplateModalOpen: (open: boolean) => void;
   setIsObservabilityModalOpen: (open: boolean) => void;
@@ -25,10 +23,8 @@ export function Header({
   subtitle = 'Pocket Sandbox',
   contextLabel,
   projectSwitcher,
-  ngrokUrl,
   theme,
   setTheme,
-  setIsSettingsModalOpen,
   setIsSkillsModalOpen,
   setIsTemplateModalOpen,
   setIsCreateModalOpen,
@@ -70,10 +66,7 @@ export function Header({
       </div>
 
       <div className="flex flex-wrap items-center justify-end gap-2.5 w-full md:w-auto">
-        <NgrokStatusPanel 
-          ngrokUrl={ngrokUrl} 
-          onOpenSettings={() => setIsSettingsModalOpen(true)} 
-        />
+        <ZrokStatusPanel />
         {/* Theme Toggle */}
         <button
           onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}

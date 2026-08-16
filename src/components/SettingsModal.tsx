@@ -3,10 +3,8 @@ import { AlertCircle, CheckCircle2, Loader2, Save, X } from 'lucide-react';
 import AgentExecutionModeSection from './settings/AgentExecutionModeSection';
 import BackupSettingsSection from './settings/BackupSettingsSection';
 import IntegrationsSettingsSection from './settings/IntegrationsSettingsSection';
-import NgrokSettingsSection from './settings/NgrokSettingsSection';
 
 interface SettingsData {
-  ngrokUrl: string;
   githubTokenMasked: boolean;
   jiraTokenMasked: boolean;
   figmaTokenMasked: boolean;
@@ -23,7 +21,6 @@ type SaveStatus = 'idle' | 'success' | 'error';
 type ImportStatus = 'idle' | 'importing' | 'success' | 'error';
 
 export default function SettingsModal({ onClose }: SettingsModalProps) {
-  const [ngrokUrl, setNgrokUrl] = useState('');
   const [githubToken, setGithubToken] = useState('');
   const [githubTokenMasked, setGithubTokenMasked] = useState(false);
   const [showGithubToken, setShowGithubToken] = useState(false);
@@ -55,7 +52,6 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
     fetch('/api/settings', { cache: 'no-store' })
       .then(response => response.json())
       .then((data: SettingsData) => {
-        setNgrokUrl(data.ngrokUrl ?? '');
         setGithubTokenMasked(data.githubTokenMasked ?? false);
         setJiraTokenMasked(data.jiraTokenMasked ?? false);
         setFigmaTokenMasked(data.figmaTokenMasked ?? false);
@@ -101,7 +97,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
     setSaveStatus('idle');
 
     try {
-      const payload: Record<string, unknown> = { ngrokUrl, jiraBaseUrl, jiraEmail, agentExecutionMode };
+      const payload: Record<string, unknown> = { jiraBaseUrl, jiraEmail, agentExecutionMode };
       if (showGithubToken && githubToken.trim() !== '') {
         payload.githubToken = githubToken;
       } else if (clearGithubToken) {
@@ -226,7 +222,6 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
         ) : (
           <>
             <div className="p-6 flex flex-col gap-6 overflow-y-auto min-h-0">
-              <NgrokSettingsSection ngrokUrl={ngrokUrl} onNgrokUrlChange={setNgrokUrl} />
               <IntegrationsSettingsSection
                 githubToken={{
                   value: githubToken,

@@ -32,7 +32,6 @@ export function getSettings() {
   const map = readSettingsMap();
   migrateLegacySecretSettings(map);
 
-  const ngrokUrl = map.get('ngrokUrl') ?? '';
   const githubToken = resolveCredentialWithLegacyFallback('githubToken', map);
   const jiraToken = resolveCredentialWithLegacyFallback('jiraToken', map);
   const figmaToken = resolveCredentialWithLegacyFallback('figmaToken', map);
@@ -41,7 +40,7 @@ export function getSettings() {
   const autoWork = map.get('autoWork') === 'true';
   const agentExecutionMode = map.get('agentExecutionMode') || '';
 
-  return { ngrokUrl, githubToken, jiraToken, figmaToken, jiraBaseUrl, jiraEmail, autoWork, agentExecutionMode };
+  return { githubToken, jiraToken, figmaToken, jiraBaseUrl, jiraEmail, autoWork, agentExecutionMode };
 }
 
 export function saveSettings(settings: Partial<ReturnType<typeof getSettings>>) {
@@ -57,7 +56,6 @@ export function saveSettings(settings: Partial<ReturnType<typeof getSettings>>) 
 
   const stmt = db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)');
   db.transaction(() => {
-    stmt.run('ngrokUrl', updated.ngrokUrl ?? '');
     stmt.run('jiraBaseUrl', updated.jiraBaseUrl ?? '');
     stmt.run('jiraEmail', updated.jiraEmail ?? '');
     stmt.run('autoWork', updated.autoWork ? 'true' : 'false');

@@ -65,7 +65,6 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
   app.get('/api/settings', (_req, res) => {
     const settings = getSettings();
     res.json({
-      ngrokUrl: settings.ngrokUrl ?? '',
       githubTokenMasked: (settings.githubToken?.length ?? 0) > 0,
       jiraTokenMasked: (settings.jiraToken?.length ?? 0) > 0,
       figmaTokenMasked: (settings.figmaToken?.length ?? 0) > 0,
@@ -80,12 +79,9 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
 
   app.post('/api/settings', (req, res) => {
     const settings: Partial<Parameters<typeof saveSettings>[0]> = {};
-    const { ngrokUrl, githubToken, jiraToken, figmaToken, jiraBaseUrl, jiraEmail, autoWork, agentExecutionMode, clearGithubToken, clearJiraToken, clearFigmaToken } = req.body;
+    const { githubToken, jiraToken, figmaToken, jiraBaseUrl, jiraEmail, autoWork, agentExecutionMode, clearGithubToken, clearJiraToken, clearFigmaToken } = req.body;
 
     // Validate types
-    if (ngrokUrl !== undefined && typeof ngrokUrl !== 'string') {
-      return res.status(400).json({ error: 'ngrokUrl must be a string' });
-    }
     if (githubToken !== undefined && typeof githubToken !== 'string') {
       return res.status(400).json({ error: 'githubToken must be a string' });
     }
@@ -118,10 +114,6 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
     }
     if (clearFigmaToken !== undefined && typeof clearFigmaToken !== 'boolean') {
       return res.status(400).json({ error: 'clearFigmaToken must be a boolean' });
-    }
-
-    if (typeof ngrokUrl === 'string') {
-      settings.ngrokUrl = ngrokUrl.trim();
     }
 
     if (typeof githubToken === 'string') {

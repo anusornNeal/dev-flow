@@ -41,7 +41,7 @@ test('central domain mutation boundaries publish compact invalidation events wit
       localPath: tempRoot,
       createdAt: now,
     });
-    settings.saveSettings({ githubToken: secret, ngrokUrl: 'https://example.invalid' });
+    settings.saveSettings({ jiraBaseUrl: 'https://example.invalid' });
     tasks.saveTask({
       id: `task-events-${Date.now()}`,
       displayId: 'EVT-0001',

@@ -247,6 +247,7 @@ test('repeated calls reuse one MCP server and transport lifecycle for the active
 test('idle sessions are pruned and stale session ids require a fresh initialize', async () => {
   let fakeNow = 1_000;
   const events: Array<{ phase: string; durationMs: number; outcome: string }> = [];
+  const lifecycle: streamableHttpModule.McpStreamableHttpSessionLifecycleEvent[] = [];
   const initialize = (baseUrl: string, name: string) => fetch(`${baseUrl}/mcp`, {
     method: 'POST',
     headers: {
@@ -295,9 +296,147 @@ test('idle sessions are pruned and stale session ids require a fresh initialize'
     idleTtlMs: 100,
     maxSessions: 2,
     now: () => fakeNow,
+    onSessionLifecycle: (event) => lifecycle.push(event),
   });
 
   assert.ok(events.some((event) => event.phase === 'close' && event.outcome === 'success'));
+  assert.equal(lifecycle.filter((event) => event.kind === 'ttl-expired').length, 1);
+  assert.equal(lifecycle.filter((event) => event.kind === 'stale-session-404').length, 1);
+});
+
+test('default retention keeps an interrupted GET session reusable past the old five-minute threshold', async () => {
+  let fakeNow = 1_000;
+  const lifecycle: streamableHttpModule.McpStreamableHttpSessionLifecycleEvent[] = [];
+  await withMcpServer(async (baseUrl) => {
+    const initialized = await fetch(`${baseUrl}/mcp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({
+        jsonrpc: '2.0', id: 'retain-init', method: 'initialize',
+        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'retain-test', version: '1.0.0' } },
+      }),
+    });
+    const sessionId = initialized.headers.get('mcp-session-id') || '';
+    assert.equal(initialized.status, 200);
+    await initialized.body?.cancel();
+
+    const firstStream = await fetch(`${baseUrl}/mcp`, {
+      method: 'GET',
+      headers: { Accept: 'text/event-stream', 'mcp-session-id': sessionId, 'mcp-protocol-version': '2025-06-18' },
+    });
+    assert.equal(firstStream.status, 200);
+    await firstStream.body?.cancel();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    fakeNow += 10 * 60 * 1000;
+    const reusedStream = await fetch(`${baseUrl}/mcp`, {
+      method: 'GET',
+      headers: { Accept: 'text/event-stream', 'mcp-session-id': sessionId, 'mcp-protocol-version': '2025-06-18' },
+    });
+    assert.equal(reusedStream.status, 200, 'default 60-minute retention must survive 10 minutes of idle time');
+    await reusedStream.body?.cancel();
+  }, undefined, {
+    now: () => fakeNow,
+    onSessionLifecycle: (event) => lifecycle.push(event),
+  });
+
+  assert.equal(lifecycle.filter((event) => event.kind === 'ttl-expired').length, 0);
+});
+
+test('active GET streams are protected from TTL pruning until interruption completes', async () => {
+  let fakeNow = 1_000;
+  const lifecycle: streamableHttpModule.McpStreamableHttpSessionLifecycleEvent[] = [];
+  const initialize = (baseUrl: string, name: string) => fetch(`${baseUrl}/mcp`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
+    body: JSON.stringify({
+      jsonrpc: '2.0', id: name, method: 'initialize',
+      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name, version: '1.0.0' } },
+    }),
+  });
+
+  await withMcpServer(async (baseUrl) => {
+    const first = await initialize(baseUrl, 'active-first');
+    const sessionId = first.headers.get('mcp-session-id') || '';
+    assert.equal(first.status, 200);
+    await first.body?.cancel();
+
+    const activeStream = await fetch(`${baseUrl}/mcp`, {
+      method: 'GET',
+      headers: { Accept: 'text/event-stream', 'mcp-session-id': sessionId, 'mcp-protocol-version': '2025-06-18' },
+    });
+    assert.equal(activeStream.status, 200);
+
+    fakeNow += 1_000;
+    const second = await initialize(baseUrl, 'active-second');
+    assert.equal(second.status, 200);
+    await second.body?.cancel();
+    assert.equal(lifecycle.filter((event) => event.kind === 'ttl-expired').length, 0, 'in-flight GET stream must not be TTL-pruned');
+
+    await activeStream.body?.cancel();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const reused = await fetch(`${baseUrl}/mcp`, {
+      method: 'GET',
+      headers: { Accept: 'text/event-stream', 'mcp-session-id': sessionId, 'mcp-protocol-version': '2025-06-18' },
+    });
+    assert.equal(reused.status, 200);
+    await reused.body?.cancel();
+  }, undefined, {
+    idleTtlMs: 100,
+    maxSessions: 2,
+    now: () => fakeNow,
+    onSessionLifecycle: (event) => lifecycle.push(event),
+  });
+});
+
+test('capacity pressure evicts only eligible idle sessions and lifecycle telemetry contains no session ids', async () => {
+  let fakeNow = 1_000;
+  const lifecycle: streamableHttpModule.McpStreamableHttpSessionLifecycleEvent[] = [];
+  const initialize = (baseUrl: string, name: string) => fetch(`${baseUrl}/mcp`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
+    body: JSON.stringify({
+      jsonrpc: '2.0', id: name, method: 'initialize',
+      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name, version: '1.0.0' } },
+    }),
+  });
+
+  await withMcpServer(async (baseUrl) => {
+    const first = await initialize(baseUrl, 'capacity-active');
+    const activeSessionId = first.headers.get('mcp-session-id') || '';
+    await first.body?.cancel();
+    const activeStream = await fetch(`${baseUrl}/mcp`, {
+      method: 'GET',
+      headers: { Accept: 'text/event-stream', 'mcp-session-id': activeSessionId, 'mcp-protocol-version': '2025-06-18' },
+    });
+    assert.equal(activeStream.status, 200);
+
+    fakeNow += 1;
+    const second = await initialize(baseUrl, 'capacity-idle');
+    const idleSessionId = second.headers.get('mcp-session-id') || '';
+    await second.body?.cancel();
+
+    fakeNow += 1;
+    const third = await initialize(baseUrl, 'capacity-third');
+    assert.equal(third.status, 200);
+    await third.body?.cancel();
+
+    const staleIdle = await fetch(`${baseUrl}/mcp`, {
+      method: 'GET',
+      headers: { Accept: 'text/event-stream', 'mcp-session-id': idleSessionId, 'mcp-protocol-version': '2025-06-18' },
+    });
+    assert.equal(staleIdle.status, 404, 'capacity pressure should evict the oldest idle session');
+    await staleIdle.body?.cancel();
+    assert.equal(lifecycle.filter((event) => event.kind === 'capacity-evicted').length, 1);
+    assert.doesNotMatch(JSON.stringify(lifecycle), new RegExp(`${activeSessionId}|${idleSessionId}|sessionId`, 'i'));
+
+    await activeStream.body?.cancel();
+  }, undefined, {
+    idleTtlMs: 60 * 60 * 1000,
+    maxSessions: 2,
+    now: () => fakeNow,
+    onSessionLifecycle: (event) => lifecycle.push(event),
+  });
 });
 
 test('five concurrent Streamable HTTP clients reuse isolated MCP sessions across repeated calls', async () => {

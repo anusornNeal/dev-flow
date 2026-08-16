@@ -1,6 +1,7 @@
 import type {
   McpStreamableHttpLifecycleHooks,
   McpStreamableHttpLifecycleTiming,
+  McpStreamableHttpSessionLifecycleEvent,
 } from '../mcpStreamableHttp';
 
 const MAX_RECORDS = 500;
@@ -27,6 +28,43 @@ type McpTransportRecord = McpTransportRequestInput & { timestamp: number };
 
 const records: McpTransportRecord[] = [];
 
+const sessionLifecycleDiagnostics = {
+  activeSessions: 0,
+  idleSessions: 0,
+  created: 0,
+  ttlExpired: 0,
+  errorClosed: 0,
+  capacityEvicted: 0,
+  staleSession404: 0,
+  lastMcpRequestAt: 0,
+  lastLifecycleEventAt: 0,
+};
+
+function resetSessionLifecycleDiagnostics() {
+  sessionLifecycleDiagnostics.activeSessions = 0;
+  sessionLifecycleDiagnostics.idleSessions = 0;
+  sessionLifecycleDiagnostics.created = 0;
+  sessionLifecycleDiagnostics.ttlExpired = 0;
+  sessionLifecycleDiagnostics.errorClosed = 0;
+  sessionLifecycleDiagnostics.capacityEvicted = 0;
+  sessionLifecycleDiagnostics.staleSession404 = 0;
+  sessionLifecycleDiagnostics.lastMcpRequestAt = 0;
+  sessionLifecycleDiagnostics.lastLifecycleEventAt = 0;
+}
+
+export function recordMcpStreamableHttpSessionLifecycle(event: McpStreamableHttpSessionLifecycleEvent) {
+  sessionLifecycleDiagnostics.activeSessions = Math.max(0, Math.floor(nonNegative(event.activeSessions)));
+  sessionLifecycleDiagnostics.idleSessions = Math.max(0, Math.floor(nonNegative(event.idleSessions)));
+  const timestamp = Number.isFinite(Number(event.timestamp)) ? Number(event.timestamp) : Date.now();
+  sessionLifecycleDiagnostics.lastLifecycleEventAt = timestamp;
+  if (event.kind === 'request-start') sessionLifecycleDiagnostics.lastMcpRequestAt = timestamp;
+  if (event.kind === 'created') sessionLifecycleDiagnostics.created += 1;
+  if (event.kind === 'ttl-expired') sessionLifecycleDiagnostics.ttlExpired += 1;
+  if (event.kind === 'error-closed') sessionLifecycleDiagnostics.errorClosed += 1;
+  if (event.kind === 'capacity-evicted') sessionLifecycleDiagnostics.capacityEvicted += 1;
+  if (event.kind === 'stale-session-404') sessionLifecycleDiagnostics.staleSession404 += 1;
+}
+
 function nonNegative(value: unknown) {
   const number = Number(value);
   return Number.isFinite(number) ? Math.max(0, number) : 0;
@@ -50,6 +88,7 @@ export function clearMcpTransportRecords() {
   records.length = 0;
   activeRestartMeaningfulTrackers.clear();
   nextTrackerId = 0;
+  resetSessionLifecycleDiagnostics();
 }
 
 export function classifyMcpTransportOperation(body: unknown): McpTransportOperation {
@@ -148,9 +187,26 @@ export function getMcpTransportSummary(options?: { now?: number; windowMs?: numb
     totalRequests: recent.length,
     retainedRecords: records.length,
     byOperation,
+    sessions: {
+      activeSessions: sessionLifecycleDiagnostics.activeSessions,
+      idleSessions: sessionLifecycleDiagnostics.idleSessions,
+      created: sessionLifecycleDiagnostics.created,
+      ttlExpired: sessionLifecycleDiagnostics.ttlExpired,
+      errorClosed: sessionLifecycleDiagnostics.errorClosed,
+      capacityEvicted: sessionLifecycleDiagnostics.capacityEvicted,
+      staleSession404: sessionLifecycleDiagnostics.staleSession404,
+      lastMcpRequestAt: sessionLifecycleDiagnostics.lastMcpRequestAt > 0
+        ? new Date(sessionLifecycleDiagnostics.lastMcpRequestAt).toISOString()
+        : null,
+      lastLifecycleEventAt: sessionLifecycleDiagnostics.lastLifecycleEventAt > 0
+        ? new Date(sessionLifecycleDiagnostics.lastLifecycleEventAt).toISOString()
+        : null,
+    },
     privacy: {
       rawPayloadsStored: false,
       aggregateNumericTimingsOnly: true,
+      rawSessionIdentifiersStored: false,
+      rawClientIdentifiersStored: false,
     },
     downstreamToolTelemetry: {
       source: 'tools',

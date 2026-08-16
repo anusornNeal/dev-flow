@@ -9,6 +9,7 @@ import {
   clearMcpTransportRecords,
   createMcpTransportRequestTracker,
   getMcpTransportSummary,
+  recordMcpStreamableHttpSessionLifecycle,
   recordMcpTransportRequest,
 } from '../../src/server/services/mcpTransportMonitor.js';
 import { createReusableMcpHttpHandler } from '../../src/server/mcpStreamableHttp.js';
@@ -57,6 +58,26 @@ test('transport monitor aggregates bounded p50/p95 timings without retaining pay
   assert.doesNotMatch(JSON.stringify(summary), /password|secret|arguments|params/);
 });
 
+test('session lifecycle diagnostics expose bounded aggregate counts and timestamps only', () => {
+  clearMcpTransportRecords();
+  const now = 20_000;
+  recordMcpStreamableHttpSessionLifecycle({ kind: 'request-start', timestamp: now, activeSessions: 1, idleSessions: 2 });
+  recordMcpStreamableHttpSessionLifecycle({ kind: 'created', timestamp: now + 1, activeSessions: 1, idleSessions: 2 });
+  recordMcpStreamableHttpSessionLifecycle({ kind: 'capacity-evicted', timestamp: now + 2, activeSessions: 1, idleSessions: 1 });
+  recordMcpStreamableHttpSessionLifecycle({ kind: 'stale-session-404', timestamp: now + 3, activeSessions: 1, idleSessions: 1 });
+
+  const summary = getMcpTransportSummary({ now: now + 10, windowMs: 1_000 });
+  assert.equal(summary.sessions.activeSessions, 1);
+  assert.equal(summary.sessions.idleSessions, 1);
+  assert.equal(summary.sessions.created, 1);
+  assert.equal(summary.sessions.capacityEvicted, 1);
+  assert.equal(summary.sessions.staleSession404, 1);
+  assert.equal(summary.sessions.lastMcpRequestAt, new Date(now).toISOString());
+  assert.equal(summary.privacy.rawSessionIdentifiersStored, false);
+  assert.equal(summary.privacy.rawClientIdentifiersStored, false);
+  assert.doesNotMatch(JSON.stringify(summary.sessions), /sessionId|clientId|secret/i);
+});
+
 test('transport monitor retention is bounded', () => {
   clearMcpTransportRecords();
   for (let index = 0; index < 550; index += 1) {
@@ -86,6 +107,8 @@ test('production MCP route records transport timings and diagnostics expose the 
   assert.match(serverSource, /createMcpTransportRequestTracker/);
   assert.match(serverSource, /classifyMcpTransportOperation/);
   assert.match(serverSource, /tracker\.complete/);
+  assert.match(serverSource, /DEVFLOW_MCP_SESSION_IDLE_TTL_MS/);
+  assert.match(serverSource, /onSessionLifecycle:\s*recordMcpStreamableHttpSessionLifecycle/);
   assert.match(diagnosticsSource, /getMcpTransportSummary/);
   assert.match(diagnosticsSource, /mcpTransport/);
 });
@@ -126,6 +149,7 @@ test('tracker records initialize, tools/list, and tools/call lifecycle phases fr
   apiBaseUrl = `http://127.0.0.1:${address.port}`;
   handler = createReusableMcpHttpHandler(apiBaseUrl, 'full', undefined, {
     requestHooks: (_req, res) => res.locals.mcpTransportTracker?.hooks,
+    onSessionLifecycle: recordMcpStreamableHttpSessionLifecycle,
   });
 
   const client = new Client({ name: 'transport-monitor-test', version: '1.0.0' });

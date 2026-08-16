@@ -17,7 +17,11 @@ import { bootstrap, writeAgentLog } from './src/server/bootstrap';
 import { getDevFlowAppRoot, resolveFromDevFlowAppRoot, getDevFlowUploadsDir } from './src/lib/devFlowPaths';
 import { markDevFlowRestartHealthy } from './src/lib/devFlowRestart';
 import { recordToolCall } from './src/server/services/mcpToolMonitor';
-import { classifyMcpTransportOperation, createMcpTransportRequestTracker } from './src/server/services/mcpTransportMonitor';
+import {
+  classifyMcpTransportOperation,
+  createMcpTransportRequestTracker,
+  recordMcpStreamableHttpSessionLifecycle,
+} from './src/server/services/mcpTransportMonitor';
 
 async function startServer() {
   const { state } = bootstrap();
@@ -63,7 +67,9 @@ async function startServer() {
   });
   app.use('/mcp', express.json({ limit: '1mb' }));
   const reusableMcpHttpHandler = createReusableMcpHttpHandler(apiBaseUrl, undefined, undefined, {
+    idleTtlMs: Number(process.env.DEVFLOW_MCP_SESSION_IDLE_TTL_MS),
     requestHooks: (_req, res) => res.locals.mcpTransportTracker?.hooks,
+    onSessionLifecycle: recordMcpStreamableHttpSessionLifecycle,
   });
   app.all('/mcp', async (req, res, next) => {
     const startedAt = Number(res.locals.mcpTransportStartedAt || Date.now());

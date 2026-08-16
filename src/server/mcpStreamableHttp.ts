@@ -16,16 +16,34 @@ export interface McpStreamableHttpLifecycleHooks {
   onTiming?: (event: McpStreamableHttpLifecycleTiming) => void;
 }
 
+export type McpStreamableHttpSessionLifecycleKind =
+  | 'request-start'
+  | 'request-end'
+  | 'created'
+  | 'ttl-expired'
+  | 'error-closed'
+  | 'capacity-evicted'
+  | 'stale-session-404';
+
+export interface McpStreamableHttpSessionLifecycleEvent {
+  kind: McpStreamableHttpSessionLifecycleKind;
+  timestamp: number;
+  activeSessions: number;
+  idleSessions: number;
+}
+
 export interface McpStreamableHttpSessionOptions {
   idleTtlMs?: number;
   maxSessions?: number;
   now?: () => number;
-  sessionIdGenerator?: () => string;  requestHooks?: (req: any, res: any) => McpStreamableHttpLifecycleHooks | undefined;
+  sessionIdGenerator?: () => string;
+  requestHooks?: (req: any, res: any) => McpStreamableHttpLifecycleHooks | undefined;
+  onSessionLifecycle?: (event: McpStreamableHttpSessionLifecycleEvent) => void;
 }
 
 export const NOOP_MCP_STREAMABLE_HTTP_LIFECYCLE_HOOKS: McpStreamableHttpLifecycleHooks = {};
 
-const DEFAULT_SESSION_IDLE_TTL_MS = 5 * 60 * 1000;
+const DEFAULT_SESSION_IDLE_TTL_MS = 60 * 60 * 1000;
 const DEFAULT_MAX_SESSIONS = 64;
 
 type SessionEntry = {
@@ -92,11 +110,36 @@ export function createReusableMcpHttpHandler(
   const maxSessions = boundedPositiveInt(options.maxSessions, DEFAULT_MAX_SESSIONS, 1024);
   const configuredSessionIdGenerator = options.sessionIdGenerator || randomUUID;
 
-  const closeSession = async (entry: SessionEntry, requestHooks: McpStreamableHttpLifecycleHooks = hooks) => {
+  const emitSessionLifecycle = (kind: McpStreamableHttpSessionLifecycleKind) => {
+    let activeSessions = 0;
+    let idleSessions = 0;
+    for (const entry of sessions.values()) {
+      if (entry.closed) continue;
+      if (entry.inFlight > 0) activeSessions += 1;
+      else idleSessions += 1;
+    }
+    try {
+      options.onSessionLifecycle?.({
+        kind,
+        timestamp: now(),
+        activeSessions,
+        idleSessions,
+      });
+    } catch {
+      // Aggregate lifecycle telemetry must never alter transport behavior.
+    }
+  };
+
+  const closeSession = async (
+    entry: SessionEntry,
+    reason: Extract<McpStreamableHttpSessionLifecycleKind, 'ttl-expired' | 'error-closed' | 'capacity-evicted'>,
+    requestHooks: McpStreamableHttpLifecycleHooks = hooks,
+  ) => {
     if (entry.closed) return;
     entry.closed = true;
     if (entry.sessionId && sessions.get(entry.sessionId) === entry) sessions.delete(entry.sessionId);
     await runTimedPhase(requestHooks, 'close', () => entry.transport.close()).catch(() => {});
+    emitSessionLifecycle(reason);
   };
 
   const pruneIdleSessions = async (requestHooks: McpStreamableHttpLifecycleHooks = hooks) => {
@@ -104,7 +147,7 @@ export function createReusableMcpHttpHandler(
     const expired = Array.from(sessions.values())
       .filter((entry) => !entry.closed && entry.inFlight === 0 && entry.lastUsedAt <= cutoff)
       .sort((left, right) => left.lastUsedAt - right.lastUsedAt);
-    for (const entry of expired) await closeSession(entry, requestHooks);
+    for (const entry of expired) await closeSession(entry, 'ttl-expired', requestHooks);
   };
 
   const ensureCapacity = async (requestHooks: McpStreamableHttpLifecycleHooks = hooks) => {
@@ -114,7 +157,7 @@ export function createReusableMcpHttpHandler(
       .filter((entry) => !entry.closed && entry.inFlight === 0)
       .sort((left, right) => left.lastUsedAt - right.lastUsedAt);
     for (const entry of idle) {
-      await closeSession(entry, requestHooks);
+      await closeSession(entry, 'capacity-evicted', requestHooks);
       if (sessions.size < maxSessions) return true;
     }
     return sessions.size < maxSessions;
@@ -140,6 +183,7 @@ export function createReusableMcpHttpHandler(
     }
 
     const requestHooks = options.requestHooks?.(req, res) || hooks;
+    emitSessionLifecycle('request-start');
     await pruneIdleSessions(requestHooks);
     const requestedSessionId = requestSessionId(req);
     let entry = requestedSessionId ? sessions.get(requestedSessionId) : undefined;
@@ -151,6 +195,7 @@ export function createReusableMcpHttpHandler(
       });
     }
     if (requestedSessionId && !entry) {
+      emitSessionLifecycle('stale-session-404');
       return res.status(404).json({
         jsonrpc: '2.0',
         error: { code: -32001, message: 'MCP session not found or expired. Reinitialize a fresh session.' },
@@ -182,7 +227,7 @@ export function createReusableMcpHttpHandler(
       try {
         await runTimedPhase(requestHooks, 'connect', () => mcpServer.connect(transport));
       } catch (error) {
-        await closeSession(entry, requestHooks);
+        await closeSession(entry, 'error-closed', requestHooks);
         throw error;
       }
     }
@@ -206,13 +251,14 @@ export function createReusableMcpHttpHandler(
         if (generatedSessionId) {
           entry.sessionId = generatedSessionId;
           sessions.set(generatedSessionId, entry);
+          emitSessionLifecycle('created');
         } else {
-          await closeSession(entry, requestHooks);
+          await closeSession(entry, 'error-closed', requestHooks);
         }
       }
     } catch (error) {
       console.error('MCP Streamable HTTP request error:', error);
-      await closeSession(entry, requestHooks);
+      await closeSession(entry, 'error-closed', requestHooks);
       if (!res.headersSent) {
         return res.status(500).json({
           jsonrpc: '2.0',
@@ -227,6 +273,7 @@ export function createReusableMcpHttpHandler(
       res.removeListener?.('close', abortRequest);
       entry.inFlight = Math.max(0, entry.inFlight - 1);
       entry.lastUsedAt = now();
+      emitSessionLifecycle('request-end');
     }
   };
 }

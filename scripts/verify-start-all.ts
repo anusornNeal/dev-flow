@@ -70,7 +70,7 @@ assert.deepEqual(resolveStartAllOptions({
   ngrokStableResetMs: 60000,
   ngrokProbeIntervalMs: 15000,
   ngrokProbeTimeoutMs: 5000,
-  ngrokProbeStartupGraceMs: 5000,
+  ngrokProbeStartupGraceMs: 30000,
   ngrokProbeFailureThreshold: 3,
   ngrokCollisionBackoffMs: 30000,
   ngrokLogMaxBytes: 131072,
@@ -178,6 +178,8 @@ assert.equal(boundedOptions.ngrokRestartBaseMs, 5000);
 assert.equal(boundedOptions.ngrokRestartMaxMs, 5000);
 assert.equal(boundedOptions.ngrokStableResetMs, 90000);
 assert.equal(boundedOptions.openBrowser, false);
+const cappedGraceOptions = resolveStartAllOptions({ DEVFLOW_NGROK_PROBE_STARTUP_GRACE_MS: '999999' });
+assert.equal(cappedGraceOptions.ngrokProbeStartupGraceMs, 120000);
 
 const collision = classifyNgrokDiagnosticLine('failed to start: ERR_NGROK_334 endpoint already online');
 assert.equal(collision.errorCode, 'ERR_NGROK_334');
@@ -243,7 +245,7 @@ lifecycleHealth = resetDevFlowTunnelHealthForGeneration(lifecycleHealth, 'B', {
   now: '2026-08-13T00:00:04.000Z',
 });
 assert.equal(lifecycleHealth.status, 'unknown');
-assert.equal(lifecycleHealth.consecutiveProbeFailures, 0);
+assert.equal(lifecycleHealth.consecutiveProbeFailures, 0);assert.equal(lifecycleHealth.lifecyclePhase, 'cold-start');
 assert.equal(shouldRecoverNgrokTunnel({
   tunnelStatus: 'down',
   consecutiveProbeFailures: 3,
@@ -255,7 +257,16 @@ assert.equal(shouldRecoverNgrokTunnel({
   nowMs: Date.parse('2026-08-13T00:00:05.000Z'),
 }), false);
 
-for (const [index, now] of ['2026-08-13T00:00:10.000Z', '2026-08-13T00:00:11.000Z'].entries()) {
+for (const [index, now] of ['2026-08-13T00:00:10.000Z', '2026-08-13T00:00:11.000Z'].entries()) {const coldStartFailure = advanceDevFlowTunnelHealth(lifecycleHealth, { ok: false, statusCode: 502 }, {
+  failureThreshold: 3,
+  generation: 'B',
+  now: '2026-08-13T00:00:05.000Z',
+});
+assert.equal(coldStartFailure.status, 'unknown');
+assert.equal(coldStartFailure.lifecyclePhase, 'cold-start');
+assert.equal(coldStartFailure.consecutiveProbeFailures, 0);
+
+
   lifecycleHealth = advanceDevFlowTunnelHealth(lifecycleHealth, { ok: false }, {
     failureThreshold: 3,
     generation: 'B',
@@ -279,7 +290,7 @@ lifecycleHealth = advanceDevFlowTunnelHealth(lifecycleHealth, { ok: false }, {
   now: '2026-08-13T00:00:12.000Z',
 });
 assert.equal(lifecycleHealth.status, 'down');
-assert.equal(lifecycleHealth.consecutiveProbeFailures, 3);
+assert.equal(lifecycleHealth.consecutiveProbeFailures, 3);assert.equal(lifecycleHealth.lifecyclePhase, 'cold-start');
 assert.equal(shouldRecoverNgrokTunnel({
   tunnelStatus: lifecycleHealth.status,
   consecutiveProbeFailures: lifecycleHealth.consecutiveProbeFailures,
@@ -288,6 +299,34 @@ assert.equal(shouldRecoverNgrokTunnel({
   ngrokProcessRunning: true,
   shuttingDown: false,
   nowMs: Date.parse('2026-08-13T00:00:12.000Z'),
+}), true);
+
+const firstHealthyInGrace = advanceDevFlowTunnelHealth(resetDevFlowTunnelHealthForGeneration(undefined, 'C', {
+  startupGraceMs: 30000,
+  now: '2026-08-13T00:01:00.000Z',
+}), { ok: true, statusCode: 200 }, {
+  failureThreshold: 3,
+  generation: 'C',
+  now: '2026-08-13T00:01:05.000Z',
+});
+assert.equal(firstHealthyInGrace.lifecyclePhase, 'steady-state');
+const steadyFailureBeforeOriginalGraceEnds = advanceDevFlowTunnelHealth(firstHealthyInGrace, { ok: false, statusCode: 502 }, {
+  failureThreshold: 3,
+  generation: 'C',
+  now: '2026-08-13T00:01:10.000Z',
+});
+assert.equal(steadyFailureBeforeOriginalGraceEnds.status, 'degraded');
+assert.equal(steadyFailureBeforeOriginalGraceEnds.consecutiveProbeFailures, 1);
+assert.equal(shouldRecoverNgrokTunnel({
+  tunnelStatus: 'down',
+  consecutiveProbeFailures: 3,
+  failureThreshold: 3,
+  localApiHealthy: true,
+  ngrokProcessRunning: true,
+  shuttingDown: false,
+  startupGraceUntilMs: Date.parse(firstHealthyInGrace.startupGraceUntil!),
+  lifecyclePhase: firstHealthyInGrace.lifecyclePhase,
+  nowMs: Date.parse('2026-08-13T00:01:10.000Z'),
 }), true);
 
 assert.equal(shouldRecoverNgrokTunnel({

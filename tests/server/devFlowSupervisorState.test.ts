@@ -181,6 +181,47 @@ test('running ngrok is not treated as publicly healthy before a reachability pro
   assert.equal(diagnostics.summary, 'api-healthy-tunnel-unknown');
 });
 
+test('cold-start failures are diagnostic-only until success or grace expiry', () => {
+  const coldStart = supervisor.resetDevFlowTunnelHealthForGeneration(undefined, 'cold', {
+    startupGraceMs: 30000,
+    now: '2026-08-13T00:00:00.000Z',
+  });
+  assert.equal(coldStart.lifecyclePhase, 'cold-start');
+
+  const firstFailure = supervisor.advanceDevFlowTunnelHealth(coldStart, { ok: false, statusCode: 502 }, {
+    failureThreshold: 3,
+    generation: 'cold',
+    now: '2026-08-13T00:00:05.000Z',
+  });
+  const secondFailure = supervisor.advanceDevFlowTunnelHealth(firstFailure, { ok: false }, {
+    failureThreshold: 3,
+    generation: 'cold',
+    now: '2026-08-13T00:00:10.000Z',
+  });
+  assert.equal(secondFailure.status, 'unknown');
+  assert.equal(secondFailure.lifecyclePhase, 'cold-start');
+  assert.equal(secondFailure.consecutiveProbeFailures, 0);
+  assert.equal(secondFailure.lastFailureAt, '2026-08-13T00:00:10.000Z');
+
+  const firstSuccess = supervisor.advanceDevFlowTunnelHealth(secondFailure, { ok: true, statusCode: 200 }, {
+    failureThreshold: 3,
+    generation: 'cold',
+    now: '2026-08-13T00:00:12.000Z',
+  });
+  assert.equal(firstSuccess.status, 'healthy');
+  assert.equal(firstSuccess.lifecyclePhase, 'steady-state');
+  assert.equal(firstSuccess.consecutiveProbeFailures, 0);
+
+  const steadyFailureInsideOriginalGrace = supervisor.advanceDevFlowTunnelHealth(firstSuccess, { ok: false, statusCode: 502 }, {
+    failureThreshold: 3,
+    generation: 'cold',
+    now: '2026-08-13T00:00:15.000Z',
+  });
+  assert.equal(steadyFailureInsideOriginalGrace.status, 'degraded');
+  assert.equal(steadyFailureInsideOriginalGrace.lifecyclePhase, 'steady-state');
+  assert.equal(steadyFailureInsideOriginalGrace.consecutiveProbeFailures, 1);
+});
+
 test('tunnel health is reset and isolated by ngrok process generation', () => {
   const generationA = supervisor.resetDevFlowTunnelHealthForGeneration(undefined, 'A', {
     startupGraceMs: 0,
@@ -210,7 +251,7 @@ test('tunnel health is reset and isolated by ngrok process generation', () => {
   });
   assert.equal(generationB.status, 'unknown');
   assert.equal(generationB.generation, 'B');
-  assert.equal(generationB.consecutiveProbeFailures, 0);
+  assert.equal(generationB.consecutiveProbeFailures, 0);  assert.equal(generationB.lifecyclePhase, 'cold-start');
 
   const duringGrace = supervisor.advanceDevFlowTunnelHealth(generationB, { ok: false }, {
     failureThreshold: 3,
@@ -233,7 +274,7 @@ test('tunnel health is reset and isolated by ngrok process generation', () => {
   assert.equal(b1.status, 'degraded');
   assert.equal(b1.consecutiveProbeFailures, 1);
   assert.equal(b2.status, 'degraded');
-  assert.equal(b2.consecutiveProbeFailures, 2);
+  assert.equal(b2.consecutiveProbeFailures, 2);  assert.equal(b2.lifecyclePhase, 'cold-start');
 
   const staleSuccessFromA = supervisor.advanceDevFlowTunnelHealth(b2, { ok: true, statusCode: 200 }, {
     failureThreshold: 3,
@@ -257,7 +298,7 @@ test('tunnel health is reset and isolated by ngrok process generation', () => {
   });
   assert.equal(recoveredB.status, 'healthy');
   assert.equal(recoveredB.generation, 'B');
-  assert.equal(recoveredB.consecutiveProbeFailures, 0);
+  assert.equal(recoveredB.consecutiveProbeFailures, 0);  assert.equal(recoveredB.lifecyclePhase, 'steady-state');
 });
 
 test('public tunnel probe failures degrade before becoming down and recover on success', () => {

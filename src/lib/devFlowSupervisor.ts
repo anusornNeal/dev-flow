@@ -9,12 +9,14 @@ export type DevFlowSupervisorMode = 'all' | 'server-only';
 export type DevFlowSupervisorProcessLabel = 'server' | 'ngrok';
 export type DevFlowSupervisorProcessStatus = 'starting' | 'running' | 'restarting' | 'stopped' | 'failed';
 export type DevFlowTunnelHealthStatus = 'unknown' | 'healthy' | 'degraded' | 'down';
+export type DevFlowTunnelLifecyclePhase = 'cold-start' | 'steady-state';
 
 export type DevFlowTunnelHealthState = {
   status: DevFlowTunnelHealthStatus;
   generation?: string;
   generationStartedAt?: string;
   startupGraceUntil?: string;
+  lifecyclePhase?: DevFlowTunnelLifecyclePhase;
   lastProbeAt?: string;
   lastProbeStatusCode?: number;
   lastProbeLatencyMs?: number;
@@ -68,6 +70,7 @@ export type DevFlowSupervisorChildDiagnostic = {
   tunnelGeneration?: string;
   generationStartedAt?: string;
   startupGraceUntil?: string;
+  tunnelLifecyclePhase?: DevFlowTunnelLifecyclePhase;
   lastProbeAt?: string;
   lastProbeStatusCode?: number;
   lastProbeLatencyMs?: number;
@@ -113,6 +116,7 @@ function normalizeTunnelHealth(value: unknown): DevFlowTunnelHealthState | undef
     ...(typeof input.generation === 'string' ? { generation: input.generation } : {}),
     ...(typeof input.generationStartedAt === 'string' ? { generationStartedAt: input.generationStartedAt } : {}),
     ...(typeof input.startupGraceUntil === 'string' ? { startupGraceUntil: input.startupGraceUntil } : {}),
+    ...(input.lifecyclePhase === 'cold-start' || input.lifecyclePhase === 'steady-state' ? { lifecyclePhase: input.lifecyclePhase } : {}),
     ...(typeof input.lastProbeAt === 'string' ? { lastProbeAt: input.lastProbeAt } : {}),
     ...(Number.isInteger(input.lastProbeStatusCode) ? { lastProbeStatusCode: Number(input.lastProbeStatusCode) } : {}),
     ...(typeof input.lastProbeLatencyMs === 'number' && Number.isFinite(input.lastProbeLatencyMs) && input.lastProbeLatencyMs >= 0 ? { lastProbeLatencyMs: input.lastProbeLatencyMs } : {}),
@@ -249,6 +253,7 @@ export function resetDevFlowTunnelHealthForGeneration(
     generation,
     generationStartedAt: now,
     startupGraceUntil: new Date(nowMs + startupGraceMs).toISOString(),
+    lifecyclePhase: 'cold-start',
     consecutiveProbeFailures: 0,
     ...(previous?.lastRecoveryAt ? { lastRecoveryAt: previous.lastRecoveryAt } : {}),
     ...(Number.isInteger(previous?.recoveryAttempt) ? { recoveryAttempt: previous?.recoveryAttempt } : {}),
@@ -274,9 +279,12 @@ export function advanceDevFlowTunnelHealth(
     ...(previous || { status: 'unknown' as const, consecutiveProbeFailures: 0 }),
     ...(options.generation ? { generation: options.generation } : {}),
   };
+  const lifecyclePhase: DevFlowTunnelLifecyclePhase = current.lifecyclePhase
+    || (current.generation ? (current.lastSuccessAt ? 'steady-state' : 'cold-start') : 'steady-state');
   if (probe.ok) {
     return {
       ...current,
+      lifecyclePhase: 'steady-state',
       status: 'healthy',
       lastProbeAt: now,
       lastProbeStatusCode: statusCode,
@@ -284,34 +292,38 @@ export function advanceDevFlowTunnelHealth(
       lastSuccessAt: now,
       consecutiveProbeFailures: 0,
       nextRecoveryAt: undefined,
-      message: probe.message || 'Public tunnel probe succeeded.',
+      message: probe.message || 'Public tunnel probe succeeded; ngrok generation is in steady state.',
     };
   }
 
   const startupGraceUntilMs = current.startupGraceUntil ? Date.parse(current.startupGraceUntil) : Number.NaN;
-  if (Number.isFinite(startupGraceUntilMs) && Date.parse(now) < startupGraceUntilMs) {
+  if (lifecyclePhase === 'cold-start' && Number.isFinite(startupGraceUntilMs) && Date.parse(now) < startupGraceUntilMs) {
     return {
       ...current,
+      lifecyclePhase,
       status: 'unknown',
       lastProbeAt: now,
       lastProbeStatusCode: statusCode,
       lastProbeLatencyMs: latencyMs,
       lastFailureAt: now,
       consecutiveProbeFailures: 0,
-      message: probe.message || 'Public tunnel probe failed during ngrok startup grace; failure is not counted.',
+      message: probe.message || 'Public tunnel probe failed during ngrok cold-start grace; failure is recorded but not counted for recovery.',
     };
   }
 
   const consecutiveProbeFailures = Math.max(0, current.consecutiveProbeFailures || 0) + 1;
   return {
     ...current,
+    lifecyclePhase,
     status: consecutiveProbeFailures >= failureThreshold ? 'down' : 'degraded',
     lastProbeAt: now,
     lastProbeStatusCode: statusCode,
     lastProbeLatencyMs: latencyMs,
     lastFailureAt: now,
     consecutiveProbeFailures,
-    message: probe.message || 'Public tunnel probe failed.',
+    message: probe.message || (lifecyclePhase === 'cold-start'
+      ? 'Public tunnel probe failed after ngrok cold-start grace; failure counts toward ngrok-only recovery.'
+      : 'Public tunnel probe failed in steady state.'),
   };
 }
 
@@ -364,6 +376,7 @@ function tunnelDiagnostic(state: DevFlowSupervisorState): DevFlowSupervisorChild
     ...(health.generation ? { tunnelGeneration: health.generation } : {}),
     ...(health.generationStartedAt ? { generationStartedAt: health.generationStartedAt } : {}),
     ...(health.startupGraceUntil ? { startupGraceUntil: health.startupGraceUntil } : {}),
+    ...(health.lifecyclePhase ? { tunnelLifecyclePhase: health.lifecyclePhase } : {}),
     ...(health.lastProbeAt ? { lastProbeAt: health.lastProbeAt } : {}),
     ...(Number.isInteger(health.lastProbeStatusCode) ? { lastProbeStatusCode: health.lastProbeStatusCode } : {}),
     ...(Number.isFinite(health.lastProbeLatencyMs) ? { lastProbeLatencyMs: health.lastProbeLatencyMs } : {}),

@@ -74,7 +74,8 @@ const DEFAULT_NGROK_RESTART_MAX_MS = 30000;
 const DEFAULT_NGROK_STABLE_RESET_MS = 60000;
 const DEFAULT_NGROK_PROBE_INTERVAL_MS = 15000;
 const DEFAULT_NGROK_PROBE_TIMEOUT_MS = 5000;
-const DEFAULT_NGROK_PROBE_STARTUP_GRACE_MS = 5000;
+const DEFAULT_NGROK_PROBE_STARTUP_GRACE_MS = 30000;
+const MAX_NGROK_PROBE_STARTUP_GRACE_MS = 120000;
 const DEFAULT_NGROK_PROBE_FAILURE_THRESHOLD = 3;
 const DEFAULT_NGROK_COLLISION_BACKOFF_MS = 30000;
 const DEFAULT_NGROK_LOG_MAX_BYTES = 128 * 1024;
@@ -143,7 +144,10 @@ export function resolveStartAllOptions(env: NodeJS.ProcessEnv = process.env): St
     ngrokStableResetMs: parsePositiveInteger(env.DEVFLOW_NGROK_STABLE_RESET_MS, DEFAULT_NGROK_STABLE_RESET_MS),
     ngrokProbeIntervalMs: parsePositiveInteger(env.DEVFLOW_NGROK_PROBE_INTERVAL_MS, DEFAULT_NGROK_PROBE_INTERVAL_MS),
     ngrokProbeTimeoutMs: parsePositiveInteger(env.DEVFLOW_NGROK_PROBE_TIMEOUT_MS, DEFAULT_NGROK_PROBE_TIMEOUT_MS),
-    ngrokProbeStartupGraceMs: parsePositiveInteger(env.DEVFLOW_NGROK_PROBE_STARTUP_GRACE_MS, DEFAULT_NGROK_PROBE_STARTUP_GRACE_MS),
+    ngrokProbeStartupGraceMs: Math.min(
+      parsePositiveInteger(env.DEVFLOW_NGROK_PROBE_STARTUP_GRACE_MS, DEFAULT_NGROK_PROBE_STARTUP_GRACE_MS),
+      MAX_NGROK_PROBE_STARTUP_GRACE_MS,
+    ),
     ngrokProbeFailureThreshold: parsePositiveInteger(env.DEVFLOW_NGROK_PROBE_FAILURE_THRESHOLD, DEFAULT_NGROK_PROBE_FAILURE_THRESHOLD),
     ngrokCollisionBackoffMs: parsePositiveInteger(env.DEVFLOW_NGROK_COLLISION_BACKOFF_MS, DEFAULT_NGROK_COLLISION_BACKOFF_MS),
     ngrokLogMaxBytes: parsePositiveInteger(env.DEVFLOW_NGROK_LOG_MAX_BYTES, DEFAULT_NGROK_LOG_MAX_BYTES),
@@ -431,6 +435,7 @@ export function getNgrokRecoveryDecision(input: {
   shuttingDown: boolean;
   collisionBackoffUntilMs?: number;
   startupGraceUntilMs?: number;
+  lifecyclePhase?: DevFlowTunnelHealthState['lifecyclePhase'];
   nowMs?: number;
 }) {
   const nowMs = input.nowMs ?? Date.now();
@@ -438,7 +443,7 @@ export function getNgrokRecoveryDecision(input: {
   if (input.tunnelStatus !== 'down' || input.consecutiveProbeFailures < Math.max(1, input.failureThreshold)) return 'threshold-not-reached' as const;
   if (!input.localApiHealthy) return 'suppressed-local-api-unhealthy' as const;
   if (!input.ngrokProcessRunning) return 'suppressed-ngrok-not-running' as const;
-  if (input.startupGraceUntilMs && input.startupGraceUntilMs > nowMs) return 'suppressed-startup-grace' as const;
+  if (input.lifecyclePhase !== 'steady-state' && input.startupGraceUntilMs && input.startupGraceUntilMs > nowMs) return 'suppressed-startup-grace' as const;
   if (input.collisionBackoffUntilMs && input.collisionBackoffUntilMs > nowMs) return 'suppressed-collision-backoff' as const;
   return 'restart-ngrok' as const;
 }
@@ -907,6 +912,7 @@ export async function startAll(mode: StartAllMode = 'all') {
           ngrokProcessRunning: children.get('ngrok') === ngrokChild && ngrokChild.exitCode === null,
           shuttingDown,
           startupGraceUntilMs: next.startupGraceUntil ? Date.parse(next.startupGraceUntil) : undefined,
+          lifecyclePhase: next.lifecyclePhase,
           collisionBackoffUntilMs,
         });
         appendNgrokProbeDiagnosticRecord({
@@ -940,6 +946,7 @@ export async function startAll(mode: StartAllMode = 'all') {
         ngrokProcessRunning: children.get('ngrok') === ngrokChild && ngrokChild.exitCode === null,
         shuttingDown,
         startupGraceUntilMs: next.startupGraceUntil ? Date.parse(next.startupGraceUntil) : undefined,
+        lifecyclePhase: next.lifecyclePhase,
         collisionBackoffUntilMs,
       });
       if (!publicProbe.ok) {

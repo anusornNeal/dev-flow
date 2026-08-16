@@ -25,6 +25,8 @@ const LOCAL_ROUNDS = 3;
 const PUBLIC_ROUNDS = 2;
 const MCP_TIMEOUT_MS = 15_000;
 const HTTP_TIMEOUT_MS = 10_000;
+const MCP_PROTOCOL_VERSION = '2025-06-18';
+const LOCAL_SESSION_IDLE_TTL_MS = 8_000;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -165,6 +167,9 @@ function errorCodeFromCall(call) {
 async function runFiveClientProfile(baseUrl, rounds, label, onRound) {
   const connectedAt = Date.now();
   const clients = await Promise.all(Array.from({ length: CLIENT_COUNT }, (_, index) => connectClient(baseUrl, `${label}-${index + 1}`)));
+  const initialSessionIds = clients.map(({ transport }) => String(transport.sessionId || ''));
+  initialSessionIds.forEach((sessionId, index) => assert.match(sessionId, /^[0-9a-f-]{20,}$/i, `${label} client ${index + 1} did not receive a reusable MCP session id.`));
+  assert.equal(new Set(initialSessionIds).size, CLIENT_COUNT, `${label} clients must hold isolated MCP sessions.`);
   const roundDurations = [];
   let listCalls = 0;
   let toolCalls = 0;
@@ -184,8 +189,11 @@ async function runFiveClientProfile(baseUrl, rounds, label, onRound) {
       roundDurations.push(Date.now() - startedAt);
       await onRound?.(round + 1);
     }
+    const finalSessionIds = clients.map(({ transport }) => String(transport.sessionId || ''));
+    assert.deepEqual(finalSessionIds, initialSessionIds, `${label} clients changed MCP session ids across repeated calls.`);
     return {
       clients,
+      sessionIds: initialSessionIds,
       metrics: {
         clientCount: CLIENT_COUNT,
         rounds,
@@ -206,6 +214,84 @@ async function runFiveClientProfile(baseUrl, rounds, label, onRound) {
 
 async function closeProfile(profile) {
   await Promise.all(profile.clients.map(({ client }) => client.close().catch(() => {})));
+}
+
+function rawMcpHeaders(sessionId, accept = 'application/json, text/event-stream') {
+  return {
+    'Content-Type': 'application/json',
+    Accept: accept,
+    'mcp-protocol-version': MCP_PROTOCOL_VERSION,
+    ...(sessionId ? { 'mcp-session-id': sessionId } : {}),
+  };
+}
+
+async function rawMcpPost(baseUrl, body, sessionId) {
+  return fetch(new URL('/mcp', `${baseUrl.replace(/\/$/, '')}/`), {
+    method: 'POST',
+    headers: rawMcpHeaders(sessionId),
+    body: JSON.stringify(body),
+  });
+}
+
+async function exerciseInterruptedRawSession(baseUrl, profile) {
+  const initialized = await rawMcpPost(baseUrl, {
+    jsonrpc: '2.0',
+    id: 'raw-retention-init',
+    method: 'initialize',
+    params: {
+      protocolVersion: MCP_PROTOCOL_VERSION,
+      capabilities: {},
+      clientInfo: { name: 'devflow-raw-retention-smoke', version: '1.0.0' },
+    },
+  });
+  assert.equal(initialized.status, 200, `Raw MCP initialize failed with HTTP ${initialized.status}.`);
+  const sessionId = initialized.headers.get('mcp-session-id') || '';
+  assert.match(sessionId, /^[0-9a-f-]{20,}$/i, 'Raw MCP initialize did not return a session id.');
+  await initialized.body?.cancel();
+
+  const abortController = new AbortController();
+  const interruptedStream = await fetch(new URL('/mcp', `${baseUrl.replace(/\/$/, '')}/`), {
+    method: 'GET',
+    headers: rawMcpHeaders(sessionId, 'text/event-stream'),
+    signal: abortController.signal,
+  });
+  assert.equal(interruptedStream.status, 200, `Raw MCP GET stream failed with HTTP ${interruptedStream.status}.`);
+  abortController.abort();
+  await interruptedStream.body?.cancel().catch(() => {});
+  await sleep(100);
+
+  const reusedBeforeExpiry = await rawMcpPost(baseUrl, {
+    jsonrpc: '2.0', id: 'raw-retention-before-expiry', method: 'tools/list', params: {},
+  }, sessionId);
+  assert.equal(reusedBeforeExpiry.status, 200, `Interrupted raw session was not reusable before expiry: HTTP ${reusedBeforeExpiry.status}.`);
+  await reusedBeforeExpiry.body?.cancel();
+
+  await Promise.all(profile.clients.map(({ client }, index) => client.listTools(undefined, { timeout: MCP_TIMEOUT_MS })
+    .then((listed) => assert.ok(listed.tools?.length, `Official client ${index + 1} failed after raw GET interruption.`))));
+
+  await sleep(Math.floor(LOCAL_SESSION_IDLE_TTL_MS / 2));
+  await Promise.all(profile.clients.map(({ client }) => client.listTools(undefined, { timeout: MCP_TIMEOUT_MS })));
+  await sleep(Math.ceil(LOCAL_SESSION_IDLE_TTL_MS / 2) + 300);
+
+  const staleAfterExpiry = await rawMcpPost(baseUrl, {
+    jsonrpc: '2.0', id: 'raw-retention-after-expiry', method: 'tools/list', params: {},
+  }, sessionId);
+  assert.equal(staleAfterExpiry.status, 404, `Raw session should become stale only after configured expiry; got HTTP ${staleAfterExpiry.status}.`);
+  await staleAfterExpiry.body?.cancel();
+
+  await Promise.all(profile.clients.map(({ client }, index) => client.listTools(undefined, { timeout: MCP_TIMEOUT_MS })
+    .then((listed) => assert.ok(listed.tools?.length, `Official client ${index + 1} did not survive the compressed retention boundary.`))));
+  const finalOfficialSessionIds = profile.clients.map(({ transport }) => String(transport.sessionId || ''));
+  assert.deepEqual(finalOfficialSessionIds, profile.sessionIds, 'Official MCP sessions changed during raw interruption/retention smoke.');
+
+  return {
+    configuredIdleTtlMs: LOCAL_SESSION_IDLE_TTL_MS,
+    rawSessionObserved: true,
+    getStreamInterrupted: true,
+    reusableBeforeExpiry: true,
+    staleStatusAfterExpiry: staleAfterExpiry.status,
+    officialClientSessionsStable: true,
+  };
 }
 
 function runTunnelRecoveryInjection() {
@@ -244,38 +330,76 @@ function runTunnelRecoveryInjection() {
   assert.equal(health.status, 'unknown');
   assert.equal(health.consecutiveProbeFailures, 0);
 
-  const decisions = [];
-  for (const now of ['2026-08-14T00:00:10.000Z', '2026-08-14T00:00:11.000Z']) {
+  health = advanceDevFlowTunnelHealth(health, { ok: true, statusCode: 200 }, {
+    failureThreshold: 3,
+    generation: 'B',
+    now: '2026-08-14T00:00:06.000Z',
+  });
+  assert.equal(health.status, 'healthy');
+  assert.equal(health.lifecyclePhase, 'steady-state');
+  assert.equal(health.consecutiveProbeFailures, 0);
+
+  health = advanceDevFlowTunnelHealth(health, { ok: false, failureClass: 'connection' }, {
+    failureThreshold: 3,
+    generation: 'B',
+    now: '2026-08-14T00:00:07.000Z',
+  });
+  assert.equal(health.status, 'degraded', 'First success must enter steady state immediately, even before the original grace expires.');
+  assert.equal(health.consecutiveProbeFailures, 1);
+  const steadyFailureDecision = getNgrokRecoveryDecision({
+    tunnelStatus: health.status,
+    consecutiveProbeFailures: health.consecutiveProbeFailures,
+    failureThreshold: 3,
+    localApiHealthy: true,
+    ngrokProcessRunning: true,
+    shuttingDown: false,
+    lifecyclePhase: health.lifecyclePhase,
+    startupGraceUntilMs: Date.parse(health.startupGraceUntil),
+    nowMs: Date.parse('2026-08-14T00:00:07.000Z'),
+  });
+  assert.equal(steadyFailureDecision, 'threshold-not-reached');
+
+  health = resetDevFlowTunnelHealthForGeneration(health, 'C', {
+    startupGraceMs: 5_000,
+    now: '2026-08-14T00:00:20.000Z',
+  });
+  health = advanceDevFlowTunnelHealth(health, { ok: false, failureClass: 'connection' }, {
+    failureThreshold: 3,
+    generation: 'C',
+    now: '2026-08-14T00:00:21.000Z',
+  });
+  assert.equal(health.status, 'unknown');
+  assert.equal(health.consecutiveProbeFailures, 0);
+
+  const postGraceDecisions = [];
+  for (const now of ['2026-08-14T00:00:26.000Z', '2026-08-14T00:00:27.000Z', '2026-08-14T00:00:28.000Z']) {
     health = advanceDevFlowTunnelHealth(health, { ok: false, failureClass: 'connection' }, {
       failureThreshold: 3,
-      generation: 'B',
+      generation: 'C',
       now,
     });
-    const decision = getNgrokRecoveryDecision({
+    postGraceDecisions.push(getNgrokRecoveryDecision({
       tunnelStatus: health.status,
       consecutiveProbeFailures: health.consecutiveProbeFailures,
       failureThreshold: 3,
       localApiHealthy: true,
       ngrokProcessRunning: true,
       shuttingDown: false,
+      lifecyclePhase: health.lifecyclePhase,
+      startupGraceUntilMs: Date.parse(health.startupGraceUntil),
       nowMs: Date.parse(now),
-    });
-    decisions.push(decision);
-    assert.equal(decision, 'threshold-not-reached');
+    }));
   }
-  health = advanceDevFlowTunnelHealth(health, { ok: true, statusCode: 200 }, {
-    failureThreshold: 3,
-    generation: 'B',
-    now: '2026-08-14T00:00:12.000Z',
-  });
-  assert.equal(health.status, 'healthy');
-  assert.equal(health.consecutiveProbeFailures, 0);
+  assert.deepEqual(postGraceDecisions, ['threshold-not-reached', 'threshold-not-reached', 'restart-ngrok']);
   return {
     firstGeneration: 'A',
-    recoveredGeneration: health.generation,
     firstGenerationRecoveryDecision: recoveryA,
-    recoveredGenerationFailureDecisions: decisions,
-    recoveredGenerationFinalStatus: health.status,
+    firstSuccessGeneration: 'B',
+    firstSuccessEnteredSteadyState: true,
+    steadyFailureDecision,
+    neverHealthyGeneration: 'C',
+    neverHealthyPostGraceDecisions: postGraceDecisions,
+    neverHealthyFinalStatus: health.status,
     inheritedFailures: 0,
     recoveryLoopDetected: false,
   };
@@ -301,6 +425,7 @@ async function runLocalMode() {
       DEVFLOW_RESTART_SUPERVISOR: 'start-all',
       DEVFLOW_RESTART_SUPERVISOR_TOKEN: 'multi-mcp-local-smoke-token',
       DEVFLOW_OPEN_BROWSER: 'false',
+      DEVFLOW_MCP_SESSION_IDLE_TTL_MS: String(LOCAL_SESSION_IDLE_TTL_MS),
       DISABLE_HMR: 'true',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -315,6 +440,7 @@ async function runLocalMode() {
     assert.ok(childPid, 'Local DevFlow child did not expose a PID.');
 
     profile = await runFiveClientProfile(baseUrl, LOCAL_ROUNDS, 'local');
+    const sessionRetention = await exerciseInterruptedRawSession(baseUrl, profile);
     const busyRestart = await callTool(profile.clients[0].client, 'restart_devflow', { reason: 'multi-mcp local busy-gate smoke' });
     assert.equal(errorCodeFromCall(busyRestart), 'RESTART_BUSY', 'restart_devflow must be rejected while recent meaningful MCP work is hot.');
     assert.equal(child.exitCode, null, 'Blocked restart must not exit the local API process.');
@@ -343,6 +469,7 @@ async function runLocalMode() {
       contractVersion: capabilityBefore.contractVersion,
       repoRevision: revisionBefore,
       recovery,
+      sessionRetention,
       restartGuard: {
         busyResult: 'RESTART_BUSY',
         idleClientsStayedConnectedDuringQuiescence: true,

@@ -50,6 +50,7 @@ test('context handle returns NOT_MODIFIED without returning full snippets again'
   });
   assert.equal(second.status, 'not_modified');
   assert.equal(second.bundle, undefined);
+  assert.equal(second.contextGovernor?.delivery?.mode, 'reuse-handle');
 });
 
 test('context handle does not reuse cached context across intent, target, or budget changes', () => {
@@ -86,6 +87,7 @@ test('context handle returns only changed snippet revisions after a file edit', 
   assert.equal(second.status, 'delta');
   assert.equal(second.changedSnippets.length, 1);
   assert.equal(second.changedSnippets[0].path.replace(/\\/g, '/'), 'src/Example.ts');
+  assert.equal(second.contextGovernor?.delivery?.mode, 'refresh-delta');
 });
 
 test('context handle refuses NOT_MODIFIED after coordinator invalidates a dependency without a Git revision change', () => {
@@ -104,6 +106,26 @@ test('context handle refuses NOT_MODIFIED after coordinator invalidates a depend
   });
 
   assert.equal(second.status, 'delta');
+});
+
+test('context handle surfaces a blocker instead of adaptively reading secret-bearing paths', () => {
+  const first = getRepoContextWithHandle(state, {
+    projectId: 'project-context-handle', q: 'Example', limit: 5, snippetLimit: 2,
+  });
+  const second = getRepoContextWithHandle(state, {
+    projectId: 'project-context-handle',
+    q: 'Example',
+    limit: 5,
+    snippetLimit: 2,
+    contextHandle: first.contextHandle,
+    contextSufficient: false,
+    missingFiles: ['.env'],
+  });
+
+  assert.equal(second.status, 'not_modified');
+  assert.equal(second.missingContext?.status, 'blocked');
+  assert.ok(second.contextGovernor?.blockers.some((entry: any) => entry.code === 'CONTEXT_SENSITIVE_PATH_DENIED'));
+  assert.equal(second.changedSnippets.length, 0);
 });
 
 test.after(() => {

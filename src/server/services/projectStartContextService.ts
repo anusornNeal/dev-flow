@@ -9,7 +9,7 @@ import { getGitDiff } from './gitService';
 import { getRepoInspectionIndex } from './repoInspectionIndexService';
 import { registerRepoCacheInvalidator } from './repoCacheInvalidationService';
 import { buildRepoEvidenceIdentity, getRepoRevisionForRoot } from './repoRevisionService';
-import { planContextBudget } from './contextBudgetPlannerService';
+import { contextGovernorInputFromArgs, planContextGovernor } from './contextGovernorService';
 import { ensureRepoChangeWatcher } from './workspaceChangeWatcherService';
 import { maybeRefreshAtlasOnProjectOpen } from './projectAtlasService.js';
 
@@ -618,30 +618,15 @@ export function getRepoContextBundle(state: AppState, args: Record<string, any>)
     : typeof args.targetFiles === 'string'
       ? args.targetFiles.split(',').map((value: string) => value.trim()).filter(Boolean)
       : [];
-  const requestedIntent = String(args.contextIntent || args.intent || '').trim().toLowerCase();
-  const deepArchitectureRequested = (args.deep === true || args.deep === 'true')
-    && (requestedIntent === 'architecture' || requestedIntent === 'architecture-analysis');
-  const requestedDisclosureLevel = typeof args.disclosureLevel === 'string'
-    ? args.disclosureLevel
-    : typeof args.contextDepth === 'string'
-      ? args.contextDepth
-      : deepArchitectureRequested || args.fullFile === true
-        ? 'full-file'
-        : undefined;
-
   const startContextStartedAt = nodePerformance.now();
   const start = getProjectStartContext(state, { ...args, projectId: project.id, limit: args.topLevelLimit || 40 });
   const startContextMs = roundDuration(nodePerformance.now() - startContextStartedAt);
   const changedFiles = Array.isArray(start.git?.files) ? start.git.files : [];
-  const initialPlan = planContextBudget({
-    query,
-    intent: args.contextIntent || args.intent,
-    complexity: args.complexity,
-    targetFiles,
+  const initialPlan = planContextGovernor(contextGovernorInputFromArgs(args, {
+    repoRevision: start.repoRevision,
     changedFiles,
-    requestedDisclosureLevel,
-  });
-  const indexLimit = parsePositiveInt(args.limit, initialPlan.budgets.indexLimit, 30);
+  }));
+  const indexLimit = Math.min(initialPlan.budgets.indexLimit, parsePositiveInt(args.limit, initialPlan.budgets.indexLimit, 30));
 
   const repoIndexStartedAt = nodePerformance.now();
   const index = getRepoInspectionIndex(state, {
@@ -661,19 +646,15 @@ export function getRepoContextBundle(state: AppState, args: Record<string, any>)
   const explicitTargetCandidates = targetFiles
     .filter((filePath) => !indexedPaths.has(filePath.replace(/\\/g, '/').toLowerCase()))
     .map((filePath) => ({ path: filePath, extension: path.extname(filePath).toLowerCase(), symbols: [], imports: [], score: 0 }));
-  const contextPlan = planContextBudget({
-    query,
-    intent: initialPlan.intent,
-    complexity: args.complexity,
-    candidates: [...indexedCandidates, ...explicitTargetCandidates],
-    targetFiles,
+  const contextPlan = planContextGovernor(contextGovernorInputFromArgs(args, {
+    repoRevision: start.repoRevision,
     changedFiles,
-    requestedDisclosureLevel,
-  });
-  const snippetLimit = parsePositiveInt(args.snippetLimit, Math.min(indexLimit, contextPlan.budgets.snippetLimit), 20);
-  const snippetLines = parsePositiveInt(args.snippetLines, contextPlan.budgets.snippetLines, contextPlan.disclosureLevel === 'full-file' ? 1000 : 240);
-  const maxSnippetBytes = parsePositiveInt(args.maxSnippetBytes, contextPlan.budgets.perSnippetBytes, 100000);
-  const aggregateContextBudget = parsePositiveInt(args.maxContextBytes, contextPlan.budgets.maxContextBytes, 500000);
+    candidates: [...indexedCandidates, ...explicitTargetCandidates],
+  }));
+  const snippetLimit = Math.min(contextPlan.budgets.snippetLimit, parsePositiveInt(args.snippetLimit, Math.min(indexLimit, contextPlan.budgets.snippetLimit), 20));
+  const snippetLines = Math.min(contextPlan.budgets.snippetLines, parsePositiveInt(args.snippetLines, contextPlan.budgets.snippetLines, contextPlan.disclosureLevel === 'full-file' ? 1000 : 240));
+  const maxSnippetBytes = Math.min(contextPlan.budgets.perSnippetBytes, parsePositiveInt(args.maxSnippetBytes, contextPlan.budgets.perSnippetBytes, 100000));
+  const aggregateContextBudget = Math.min(contextPlan.budgets.maxContextBytes, parsePositiveInt(args.maxContextBytes, contextPlan.budgets.maxContextBytes, 500000));
   const reservedMetadataBytes = Math.min(12_000, Math.floor(aggregateContextBudget * 0.25));
   const defaultSnippetBudget = Math.min(contextPlan.budgets.snippetBytes, Math.max(1, aggregateContextBudget - reservedMetadataBytes));
   const snippetByteBudget = Math.min(

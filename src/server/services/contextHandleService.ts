@@ -5,6 +5,7 @@ import { resolveProjectRoot } from './localFileService';
 import { getMissingContextDelta, getRepoContextBundle, normalizeMissingContextRequest } from './projectStartContextService';
 import { getRepoRevisionForRoot } from './repoRevisionService';
 import { getRepoCacheLineage, recordRepoCacheAccess, registerRepoCacheInvalidator } from './repoCacheInvalidationService';
+import { applyContextGovernorPlanToArgs, contextGovernorInputFromArgs, planContextGovernor } from './contextGovernorService';
 
 const HANDLE_TTL_MS = 5 * 60_000;
 const MAX_HANDLES = 128;
@@ -16,6 +17,7 @@ type ContextHandleEntry = {
   optionsHash: string;
   repoRevision: string;
   lineageToken: string;
+  governorPlanIdentity: string;
   snippetRevisions: Map<string, string>;
   knownEvidenceRevisions: Map<string, string>;
   expiresAt: number;
@@ -69,7 +71,7 @@ function snippetRevisionMap(bundle: any) {
   return map;
 }
 
-function storeHandle(root: string, hash: string, bundle: any, existingId?: string, existingEntry?: ContextHandleEntry) {
+function storeHandle(root: string, hash: string, bundle: any, governorPlanIdentity: string, existingId?: string, existingEntry?: ContextHandleEntry) {
   prune();
   const id = existingId || `ctx-${randomUUID()}`;
   const knownEvidenceRevisions = existingEntry?.knownEvidenceRevisions
@@ -89,6 +91,7 @@ function storeHandle(root: string, hash: string, bundle: any, existingId?: strin
     optionsHash: hash,
     repoRevision: String(bundle.repoRevision || ''),
     lineageToken: getRepoCacheLineage(root, [...CONTEXT_HANDLE_DEPENDENCIES]).token,
+    governorPlanIdentity: governorPlanIdentity || String(bundle?.contextPlan?.planIdentity || existingEntry?.governorPlanIdentity || ''),
     snippetRevisions: snippetRevisionMap(bundle),
     knownEvidenceRevisions,
     expiresAt: Date.now() + HANDLE_TTL_MS,
@@ -118,9 +121,25 @@ export function getRepoContextWithHandle(state: AppState, args: Record<string, a
   prune();
   const existing = requestedHandle ? handles.get(requestedHandle) : undefined;
   const currentLineage = getRepoCacheLineage(root, [...CONTEXT_HANDLE_DEPENDENCIES]);
-  const missingRequest = normalizeMissingContextRequest(args);
+  let currentRevision;
+  try {
+    currentRevision = getRepoRevisionForRoot(root);
+  } catch {
+    currentRevision = undefined;
+  }
+  const governor = planContextGovernor(contextGovernorInputFromArgs(args, {
+    repoRevision: currentRevision?.token,
+    lineageToken: currentLineage.token,
+    handle: existing ? {
+      planIdentity: existing.governorPlanIdentity,
+      repoRevision: existing.repoRevision,
+      lineageToken: existing.lineageToken,
+    } : undefined,
+  }));
+  const governedArgs = applyContextGovernorPlanToArgs(args, governor);
+  const missingRequest = normalizeMissingContextRequest(governedArgs);
 
-  if (existing && existing.root === root && existing.optionsHash === hash && missingRequest.requested) {
+  if (existing && existing.root === root && existing.optionsHash === hash && missingRequest.requested && governor.delivery.mode !== 'blocked') {
     recordRepoCacheAccess('context-handles', true, root);
     if (!missingRequest.specific) {
       existing.expiresAt = Date.now() + HANDLE_TTL_MS;
@@ -132,24 +151,23 @@ export function getRepoContextWithHandle(state: AppState, args: Record<string, a
         changedSnippets: [],
         changedRelationships: [],
         removedPaths: [],
-        missingContext: { status: 'specific-evidence-required' as const, request: missingRequest },
+        missingContext: {
+          status: governor.blockers.length > 0 ? 'blocked' as const : 'specific-evidence-required' as const,
+          request: missingRequest,
+          blockers: governor.blockers,
+        },
+        contextGovernor: governor,
         metrics: { returnedBytes: 0, estimatedTokens: 0, knownEvidenceSkipped: 0, followUpCalls: 0, recoverySuccess: false },
       };
     }
 
-    const delta = getMissingContextDelta(state, args);
-    let revision;
-    try {
-      revision = getRepoRevisionForRoot(root);
-    } catch {
-      revision = undefined;
-    }
+    const delta = getMissingContextDelta(state, governedArgs);
     const freshSnippets = (delta.snippets || []).filter((snippet: any) => {
       const key = String(snippet.evidenceKey || '');
       const value = String(snippet.revision || snippet.fileRevision?.token || '');
       return key && value && existing.knownEvidenceRevisions.get(key) !== value;
     });
-    const relationshipRevision = String(revision?.token || existing.repoRevision || '');
+    const relationshipRevision = String(currentRevision?.token || existing.repoRevision || '');
     const freshRelationships = (delta.relationships || []).filter((entry: any) => {
       const key = String(entry.evidenceKey || '');
       return key && relationshipRevision && existing.knownEvidenceRevisions.get(key) !== relationshipRevision;
@@ -161,7 +179,7 @@ export function getRepoContextWithHandle(state: AppState, args: Record<string, a
     for (const relationship of freshRelationships) {
       existing.knownEvidenceRevisions.set(String(relationship.evidenceKey), relationshipRevision);
     }
-    const currentRepoRevision = String(revision?.token || existing.repoRevision || '');
+    const currentRepoRevision = String(currentRevision?.token || existing.repoRevision || '');
     existing.lineageToken = getRepoCacheLineage(root, [...CONTEXT_HANDLE_DEPENDENCIES]).token;
     existing.expiresAt = Date.now() + HANDLE_TTL_MS;
     handles.delete(existing.id);
@@ -177,7 +195,13 @@ export function getRepoContextWithHandle(state: AppState, args: Record<string, a
       changedSnippets: freshSnippets,
       changedRelationships: freshRelationships,
       removedPaths: [],
-      missingContext: { status: delta.status, request: delta.request, budget: delta.budget },
+      missingContext: {
+        status: governor.blockers.length > 0 ? 'blocked' as const : delta.status,
+        request: delta.request,
+        budget: delta.budget,
+        blockers: governor.blockers,
+      },
+      contextGovernor: governor,
       metrics: {
         returnedBytes,
         estimatedTokens: Math.ceil(returnedBytes / 4),
@@ -188,14 +212,8 @@ export function getRepoContextWithHandle(state: AppState, args: Record<string, a
     };
   }
 
-  if (existing && existing.root === root && existing.optionsHash === hash) {
-    let revision;
-    try {
-      revision = getRepoRevisionForRoot(root);
-    } catch {
-      revision = undefined;
-    }
-    if (revision && revision.token === existing.repoRevision && existing.lineageToken === currentLineage.token) {
+  if (existing && existing.root === root && existing.optionsHash === hash && governor.delivery.mode === 'reuse-handle') {
+    if (currentRevision && currentRevision.token === existing.repoRevision && existing.lineageToken === currentLineage.token) {
       existing.expiresAt = Date.now() + HANDLE_TTL_MS;
       handles.delete(existing.id);
       handles.set(existing.id, existing);
@@ -204,6 +222,7 @@ export function getRepoContextWithHandle(state: AppState, args: Record<string, a
         status: 'not_modified' as const,
         contextHandle: existing.id,
         repoRevision: existing.repoRevision,
+        contextGovernor: governor,
         changedSnippets: [],
         removedPaths: [],
       };
@@ -211,13 +230,14 @@ export function getRepoContextWithHandle(state: AppState, args: Record<string, a
   }
 
   recordRepoCacheAccess('context-handles', false, root);
-  const bundle = getRepoContextBundle(state, args);
+  const bundle = getRepoContextBundle(state, governedArgs);
   if (!existing || existing.root !== root || existing.optionsHash !== hash) {
-    const stored = storeHandle(root, hash, bundle);
+    const stored = storeHandle(root, hash, bundle, governor.planIdentity);
     return {
       status: 'full' as const,
       contextHandle: stored.id,
       repoRevision: stored.repoRevision,
+      contextGovernor: governor,
       bundle,
       changedSnippets: bundle.snippets || [],
       removedPaths: [],
@@ -231,12 +251,13 @@ export function getRepoContextWithHandle(state: AppState, args: Record<string, a
     return existing.snippetRevisions.get(normalizedPath) !== revision;
   });
   const removedPaths = Array.from(existing.snippetRevisions.keys()).filter((filePath) => !nextRevisions.has(filePath));
-  const stored = storeHandle(root, hash, bundle, existing.id, existing);
+  const stored = storeHandle(root, hash, bundle, governor.planIdentity, existing.id, existing);
 
   return {
     status: 'delta' as const,
     contextHandle: stored.id,
     repoRevision: stored.repoRevision,
+    contextGovernor: governor,
     changedSnippets,
     removedPaths,
     git: bundle.git,

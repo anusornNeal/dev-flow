@@ -30,6 +30,9 @@ export type ContextBudgetQualityReport = {
   successRateDelta: number;
   unchangedStatus: string;
   recoveryStatus: string;
+  governorBytes: number;
+  governorReuseCount: number;
+  governorExpansionCount: number;
 };
 
 export async function runContextBudgetQualityBenchmark(): Promise<ContextBudgetQualityReport> {
@@ -74,6 +77,9 @@ export async function runContextBudgetQualityBenchmark(): Promise<ContextBudgetQ
     const baselineBytes = byteSize(initial);
     const unchangedBytes = byteSize(unchanged);
     const recoveryBytes = byteSize(recovery);
+    const governorBytes = byteSize(initial.contextGovernor) + byteSize(unchanged.contextGovernor) + byteSize(recovery.contextGovernor);
+    const governorReuseCount = [initial, unchanged, recovery].filter((entry) => entry.contextGovernor?.delivery?.mode === 'reuse-handle').length;
+    const governorExpansionCount = [initial, unchanged, recovery].filter((entry) => entry.contextGovernor?.expansion?.requested === true).length;
     const totalOptimizedBytes = unchangedBytes + recoveryBytes;
     const bytesSaved = Math.max(0, baselineBytes * 2 - totalOptimizedBytes);
     const recoverySuccess = recovery.status === 'delta' && recovery.changedSnippets?.some((entry: any) => String(entry.content || '').includes('DeepBenchmarkHelper'));
@@ -96,6 +102,9 @@ export async function runContextBudgetQualityBenchmark(): Promise<ContextBudgetQ
       successRateDelta: optimizedSuccessRate - baselineSuccessRate,
       unchangedStatus: String(unchanged.status),
       recoveryStatus: String(recovery.status),
+      governorBytes,
+      governorReuseCount,
+      governorExpansionCount,
     };
     stopAllRepoChangeWatchers();
     clearContextHandles();

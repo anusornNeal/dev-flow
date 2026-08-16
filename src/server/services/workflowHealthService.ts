@@ -171,9 +171,6 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
 
   const queueDepth = Number(diagnostics?.mcp?.queueDepth || 0);
   const runtimeSupervisor = diagnostics?.runtimeSupervisor;
-  const recentTunnelFailures = Array.isArray(runtimeSupervisor?.tunnel?.recentFailures)
-    ? runtimeSupervisor.tunnel.recentFailures.slice(0, 8)
-    : [];
   const isolation = diagnostics?.isolation || {
     waits: { workspaceLockWait: { count: 0, totalMs: 0, p50Ms: 0, p95Ms: 0 }, capacityWait: { count: 0, totalMs: 0, p50Ms: 0, p95Ms: 0 }, blockerReasons: {} },
     phases: {
@@ -196,7 +193,7 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
   const staleAgentRuns = Number(diagnostics?.agents?.staleCount || 0);
   const duplicateBursts = Array.isArray(diagnostics?.tools?.duplicateBursts) ? diagnostics.tools.duplicateBursts.length : 0;
   if (runtimeSupervisor?.api?.status === 'healthy' && (runtimeSupervisor?.tunnel?.status === 'degraded' || runtimeSupervisor?.tunnel?.status === 'down')) {
-    recommendations.push(`Public tunnel is ${runtimeSupervisor.tunnel.status} while the local API is healthy; inspect runtime supervisor probe and ngrok diagnostic evidence.`);
+    recommendations.push(`Public zrok route is ${runtimeSupervisor.tunnel.status} while the local API is healthy; inspect zrok service/share state and runtime supervisor public-probe evidence.`);
   }
   if (queueDepth > 0) recommendations.push('MCP tool jobs are queued; inspect job status/log before starting conflicting repo work.');
   if (Number(durableJobs.staleRunning || 0) > 0) recommendations.push('A stale MCP tool job lease was detected in durable state; inspect recovery classification before retrying the job.');
@@ -364,8 +361,10 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
         consecutiveProbeFailures: runtimeSupervisor.tunnel?.consecutiveProbeFailures,
         lastErrorCode: runtimeSupervisor.tunnel?.lastErrorCode,
         lastErrorClass: runtimeSupervisor.tunnel?.lastErrorClass,
-        ...(recentTunnelFailures.length ? { recentTunnelFailures: recentTunnelFailures.slice(0, 3) } : {}),
-        ...(runtimeSupervisor.tunnel?.pressure ? { pressure: runtimeSupervisor.tunnel.pressure } : {}),
+        lastFailureAt: runtimeSupervisor.tunnel?.lastFailureAt,
+        lastRecoveryAt: runtimeSupervisor.tunnel?.lastRecoveryAt,
+        recoveryAttempt: runtimeSupervisor.tunnel?.recoveryAttempt,
+        nextRecoveryAt: runtimeSupervisor.tunnel?.nextRecoveryAt,
       } : null,
     },
     recovery: {

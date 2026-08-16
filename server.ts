@@ -54,7 +54,7 @@ async function startServer() {
   app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', '*');
     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, ngrok-skip-browser-warning, x-correlation-id, mcp-session-id, mcp-protocol-version');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-correlation-id, mcp-session-id, mcp-protocol-version');
     if (req.method === 'OPTIONS') {
       return res.sendStatus(200);
     }

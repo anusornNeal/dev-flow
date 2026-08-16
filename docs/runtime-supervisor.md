@@ -1,65 +1,99 @@
 # DevFlow Runtime Supervisor
 
-DevFlow's standard development command is restart-capable by default.
+DevFlow has two supported supervised launch modes. Both share the same guarded API restart contract; the difference is whether the launcher also reconciles the persistent zrok public transport.
 
 ## Standard startup
+
+Local development:
 
 ```bash
 npm run dev
 ```
 
-`npm run dev` starts `scripts/start-all.ts --server-only`. The supervisor then launches the raw server through `npm run dev:server` and injects a fresh restart supervisor token. The raw server command is deliberately separate so the supervisor never recursively launches itself.
+`npm run dev` starts `scripts/start-all.ts --server-only`. The supervisor launches the raw API through `npm run dev:server` and injects a fresh restart supervisor token. The raw server command remains separate so the supervisor never recursively launches itself.
 
-Use the all-services launcher when ngrok and browser startup are wanted:
+Full one-click startup:
 
 ```bash
 npm run start:all
 ```
 
-`start:all` keeps the existing setup + DevFlow server + ngrok behavior. Both standard launch modes use the same restart handoff and token validation.
+`start:all` runs setup, starts/reuses the DevFlow API runtime, reconciles zrok, and opens the browser.
+
+On Windows, `Start DevFlow.bat` launches the hidden tray bootstrap, which requests the same `start:all` path.
 
 ## Single-instance runtime ownership
 
-Both `npm run dev` and `npm run start:all` now enter the same authoritative single-instance supervisor path. The first launcher atomically claims `.devflow/runtime-owner/` and publishes `owner.json` with an opaque runtime instance id plus a loopback-only control endpoint/token. A later launcher does not trust the recorded PID by itself: it challenges the control endpoint and requires the supervisor name, opaque instance id, PID, and lifecycle state to match before reusing the runtime.
+Both launch modes enter the same authoritative single-instance supervisor path. The first launcher atomically claims `.devflow/runtime-owner/` and publishes `owner.json` with an opaque runtime instance id plus a loopback-only control endpoint/token. A later launcher challenges that control endpoint and requires the supervisor name, instance id, PID, and lifecycle state to match before reusing the runtime.
 
-A dead or invalid control identity is treated as stale ownership. Recovery quarantines/removes only the stale ownership directory and races again for the atomic claim; it never kills a process by PID, process name, or listening port. If the configured DevFlow port is already occupied after a new owner is established, startup fails with `DEVFLOW_PORT_CONFLICT` and leaves the unrelated process untouched.
+A dead or invalid control identity is treated as stale ownership. Recovery removes only stale ownership metadata and races again for the atomic claim; it never kills a process merely because a PID, process name, or port looks familiar. If the configured DevFlow port is occupied after a new owner is established, startup fails with `DEVFLOW_PORT_CONFLICT` and leaves the unrelated process untouched.
 
-Repeated healthy launches open/focus the recorded DevFlow app URL and exit without spawning another supervisor/server/ngrok tree.
+Repeated healthy launches focus/open the recorded DevFlow app URL and do not create a duplicate supervisor/API tree.
 
-### Windows launcher and tray
+## zrok lifecycle
 
-`Start DevFlow.bat` launches the hidden tray bootstrap. The tray uses a project-scoped Windows mutex so duplicate tray launches reuse the existing control surface instead of creating another hidden icon. The tray may request `npm run start:all`, but it never owns the resulting processes; the single-instance supervisor decides whether to start a new runtime or reuse the existing one.
+zrok is deliberately not a child tunnel process. On Windows, the one-click bootstrap installs or repairs a persistent `zrokAgent` service and a reserved public name/share.
 
-Tray **Restart DevFlow** calls the same `/api/restart` guarded ticket path as `restart_devflow`, so queued/active MCP work still produces `RESTART_BUSY` instead of a force kill. Tray **Stop Server && Exit** sends an authenticated loopback shutdown request to the owner control endpoint and exits only after that request is accepted. The tray contains no port sweep, `taskkill`, kill-by-process-name, direct server spawn, or direct ngrok spawn path.
+The first run may require:
 
-### ngrok self-healing in `start:all`
+1. Administrator approval to install/configure the Windows service.
+2. A zrok account token if the service environment has not been enabled yet.
+3. Creation of the configured reserved name if the account does not already own it.
+4. Agent remoting enrollment so a second enrolled machine can report `Standby` and perform explicit takeover.
 
-When the ngrok child exits unexpectedly or fails to spawn, the supervisor keeps the DevFlow API child running and retries **ngrok only**. Retry delay uses bounded exponential backoff: 1s, 2s, 4s, and so on up to 30s by default. If one ngrok child stays alive for 60s, the retry attempt counter resets so a later failure starts again at the base delay. The supervisor maintains at most one pending retry timer per managed child.
+The token is requested with a secure prompt and used only for zrok environment enablement; it is not stored in `.env` by the bootstrap.
 
-`start:all` also probes public reachability independently from the ngrok PID. The default probe cadence is 15 seconds with a 5-second timeout. A newly running ngrok process starts with tunnel reachability `unknown`; only a successful public `/api/capabilities` probe makes it `healthy`. One or two consecutive failures are `degraded`. Three consecutive failures make it `down`. A single transient failure never restarts ngrok.
+The default reserved name is `devflow-mixed`, producing the stable public base URL `https://devflow-mixed.shares.zrok.io`. Set `DEVFLOW_ZROK_RESERVED_NAME` before first bootstrap when another reserved name is required.
 
-When the public tunnel is `down`, the supervisor probes the local DevFlow `/api/capabilities` endpoint before any recovery. If the local API is healthy, the supervisor stops and restarts **ngrok only**. If the local API is also unhealthy, tunnel-only recovery is suppressed so a server problem is not misclassified as an ngrok problem. Tunnel degradation never requests a DevFlow server restart.
+### Service/share reconciliation
 
-ngrok stdout/stderr, classified public-probe failures, supervisor recovery decisions, and safe aggregate ngrok pressure samples are retained as bounded timestamped JSONL in `.devflow/ngrok-diagnostics.jsonl` (128 KiB by default). Probe evidence may include failure class, status, latency, process generation, failure count, sanitized `Retry-After`, and the recovery decision. Inspector pressure stores aggregate connection/request counters and rates only; public URLs, token-like values, raw headers, raw request history, and request bodies are not persisted or projected into workflow health. `ERR_NGROK_334` is classified as an endpoint/session collision and activates a bounded collision backoff before another ngrok launch, preventing a hot restart loop while preserving the single-instance supervisor ownership model.
+`start:all` invokes `scripts/zrok-bootstrap.ps1` as an idempotent reconciliation step. A successful bootstrap means the required zrok tooling/environment, reserved name, agent enrollment, and Windows service are ready. The supervisor models this logical transport lifecycle as `processes.zrok`, but no zrok child PID is owned by the supervisor.
 
-Intentional `SIGINT`/`SIGTERM` shutdown sets the supervisor shutdown state first, cancels pending retry, stability, and public-probe timers, and then stops children; intentional shutdown therefore never starts an ngrok retry or tunnel-recovery loop.
+After service/share readiness, the supervisor probes the public `/api/capabilities` endpoint independently. A fresh generation starts as `unknown`; successful public reachability makes it `healthy`. After startup grace, consecutive failures become `degraded` and then `down` at the configured threshold.
 
-The defaults can be tuned without changing MCP transport behavior:
+If the public route is `down`, DevFlow probes the local API before recovery. When local `/api/capabilities` is healthy, DevFlow reconciles the zrok service/share only. When the local API is unhealthy, transport-only recovery is suppressed so an API failure is not misclassified as a zrok failure.
+
+A supervisor shutdown stops its DevFlow API child but intentionally leaves the persistent zrok Agent Service/reserved share running. Starting DevFlow again reconciles and reuses that state.
+
+### zrok status and takeover
+
+`GET /api/zrok/status` is the bounded source of truth used by the UI and smoke tooling. It reports one of:
+
+- `setup-required`
+- `starting`
+- `online`
+- `degraded`
+- `offline`
+- `standby`
+- `setup-error`
+
+The status packet includes bounded service/share/public-health evidence and the managed MCP URL; it does not expose account tokens or enrollment secrets.
+
+If another enrolled machine is actively serving the same reserved name, this machine reports `standby`. DevFlow never automatically steals ownership. `POST /api/zrok/takeover` is an explicit operation: it verifies the remote owner, fences the previous owner where supported, activates the local share, and verifies public routing before reporting success.
+
+## Public probe configuration
+
+Defaults can be tuned without changing the MCP endpoint contract:
 
 ```env
-DEVFLOW_NGROK_RESTART_BASE_MS=1000
-DEVFLOW_NGROK_RESTART_MAX_MS=30000
-DEVFLOW_NGROK_STABLE_RESET_MS=60000
-DEVFLOW_NGROK_PROBE_INTERVAL_MS=15000
-DEVFLOW_NGROK_PROBE_TIMEOUT_MS=5000
-DEVFLOW_NGROK_PROBE_FAILURE_THRESHOLD=3
-DEVFLOW_NGROK_COLLISION_BACKOFF_MS=30000
-DEVFLOW_NGROK_LOG_MAX_BYTES=131072
+DEVFLOW_ZROK_RESERVED_NAME="devflow-mixed"
+DEVFLOW_ZROK_PUBLIC_URL="https://devflow-mixed.shares.zrok.io"
+DEVFLOW_ZROK_PROBE_INTERVAL_MS=15000
+DEVFLOW_ZROK_PROBE_TIMEOUT_MS=5000
+DEVFLOW_ZROK_PROBE_STARTUP_GRACE_MS=30000
+DEVFLOW_ZROK_PROBE_FAILURE_THRESHOLD=3
+DEVFLOW_ZROK_RECOVERY_COOLDOWN_MS=15000
 ```
 
-Runtime state is persisted under `.devflow/supervisor-state.json`. `getDevFlowDiagnostics()` reports ngrok process lifecycle and public tunnel reachability separately, including combinations such as process-running + tunnel-unknown/degraded/down. Probe evidence includes the last probe time/status/latency, last success, consecutive failures, and recent classified ngrok error/recovery metadata when available.
+Runtime supervisor state is persisted under `.devflow/supervisor-state.json`. `getDevFlowDiagnostics()` reads that bounded state directly. It reports API lifecycle and zrok/public-route health separately, including public probe status, latency, generation, consecutive failures, error classification, and recovery attempt metadata when present. It no longer depends on a provider-specific local inspector or a separate tunnel-pressure log.
 
-The outage investigated on August 13, 2026 remains **root-cause unconfirmed**. `ERR_NGROK_334` is a reproducible collision failure mode, but it must not be treated as proof that it caused that historical outage. Future incidents can be attributed only from the persisted probe/log/recovery timeline or other concrete evidence.
+## Windows launcher and tray
+
+The tray uses a project-scoped Windows mutex so duplicate tray launches reuse the existing control surface. It may request `npm run start:all`, but it does not own the resulting processes; the single-instance supervisor remains authoritative.
+
+Tray **Restart DevFlow** calls the same `/api/restart` guarded-ticket path as `restart_devflow`. Active/queued meaningful MCP work still produces `RESTART_BUSY` rather than a force kill.
+
+Tray **Stop Server && Exit** sends an authenticated loopback shutdown request to the runtime-owner control endpoint. The tray does not sweep ports, kill by process name, directly spawn the raw server, or stop/recreate the zrok Agent Service.
 
 ## Raw/debug startup
 
@@ -67,21 +101,28 @@ The outage investigated on August 13, 2026 remains **root-cause unconfirmed**. `
 npm run dev:server
 ```
 
-`dev:server` runs `tsx server.ts` directly. It is intended for tests and debugging only and is intentionally **not** self-restartable. A server cannot safely terminate itself and promise to return unless a durable parent process owns relaunch.
+`dev:server` runs `tsx server.ts` directly. It is intended for tests/debugging and is intentionally not self-restartable. A server cannot safely terminate itself and promise relaunch unless a durable parent process owns the handoff.
 
-## Restart lifecycle
+## Guarded restart lifecycle
 
-1. `restart_devflow` verifies that the process was launched by the DevFlow supervisor and has the matching opaque supervisor token.
-2. Restart is rejected with `RESTART_BUSY` while durable MCP jobs are queued/active or meaningful Streamable HTTP MCP operations are in-flight/recent inside the bounded quiescence window. An idle long-lived MCP stream and the `restart_devflow` request itself do not keep the runtime permanently busy.
-3. DevFlow persists an accepted restart ticket and returns the MCP response before exiting with the dedicated restart exit code.
-4. The supervisor validates the ticket/token pair and launches a replacement raw server process.
-5. The replacement runtime marks the ticket healthy after startup. Duplicate restart requests reuse the current fresh ticket rather than scheduling multiple exits.
+`restart_devflow` is API-only and preserves external transport state.
 
-Missing or spoofed supervisor state continues to return `RESTART_UNSUPPORTED`; callers should relaunch with `npm run dev` rather than weakening the safety gate.
+1. The request verifies the supported supervisor identity and matching opaque token.
+2. Restart is rejected with `RESTART_BUSY` while durable MCP jobs are queued/active or meaningful Streamable HTTP MCP operations are in-flight/recent inside the bounded quiescence window. The restart request itself and an idle long-lived MCP stream do not keep the runtime permanently busy.
+3. DevFlow persists an accepted restart ticket with `runtimeScope=devflow-api-only` and `externalTransportPolicy=preserve-service-and-endpoint`.
+4. DevFlow returns the MCP response before exiting with the dedicated restart exit code.
+5. The supervisor validates the ticket/token pair and launches a replacement raw API process.
+6. The replacement runtime marks the same ticket healthy after startup. Duplicate fresh restart requests reuse the current ticket.
+
+The zrok Agent Service and reserved share are outside this restart path. A normal DevFlow API restart therefore does not stop/re-enroll zrok or intentionally change the public MCP URL.
+
+After reconnect, `get_devflow_restart_status` can read the durable ticket. Missing/spoofed supervisor state remains `RESTART_UNSUPPORTED`; callers should relaunch through a supported supervisor instead of weakening the gate.
+
+The internal supervisor identifier remains `start-all` for backward compatibility with durable restart tickets and tests. The identifier names the supervisor implementation; it does not imply that every supported launch must invoke the `start:all` npm script.
 
 ## Process graph
 
-Standard development:
+Local development:
 
 ```text
 npm run dev
@@ -90,36 +131,39 @@ npm run dev
             -> server.ts
 ```
 
-All services:
+Full Windows startup:
 
 ```text
-npm run start:all
+Start DevFlow.bat / npm run start:all
   -> DevFlow supervisor
        -> npm run dev:server
             -> server.ts
-       -> ngrok
+
+persistent external transport
+  -> Windows Service: zrokAgent
+       -> reserved zrok share
+            -> https://<reserved-name>.shares.zrok.io/mcp
 ```
 
-The supervisor identifier remains `start-all` internally for backward compatibility with existing restart tickets and tests; it now represents the shared supervisor implementation, not a requirement that users invoke the `start:all` npm command.
-## Five-client MCP load and recovery regression
+The API runtime and zrok transport can therefore be restarted/reconciled independently.
 
-On August 14, 2026, `npm run smoke-multi-mcp` exercised the production Streamable HTTP MCP transport with five concurrent clients. The local deterministic mode used three rounds (5 initializes + 15 tool-list calls + 15 compact `devflow_health_check` calls, 35 bounded MCP operations total). The run completed in 6866 ms, with round p50 1652 ms and p95 4205 ms. A restart request issued immediately after meaningful MCP activity returned `RESTART_BUSY`; with the same clients left connected but idle for the 5000 ms quiescence window, restart was accepted and the isolated child exited with code 75 only after that explicit request.
+## MCP regression smoke
 
-The same local run injected the production tunnel-health state machine across process generations. Generation A reached the fresh three-failure threshold and produced `restart-ngrok`. Generation B then reset to zero inherited failures, ignored failure counting during startup grace, stayed below recovery threshold after two fresh failures, and returned to `healthy` on success. No recovery loop was observed, and the local API runtime identity remained stable through the ngrok-only recovery simulation.
+`scripts/smoke-multi-mcp.mjs` keeps two bounded modes:
 
-The bounded public mode then ran five clients for two rounds (5 initializes + 10 tool-list calls + 10 compact health calls, 25 bounded MCP operations). It completed in 3085 ms, with round p50 1241 ms and p95 1464 ms. The live API PID remained 17576 before and after the run, the runtime instance/contract remained stable, and tunnel status remained healthy. The local ngrok inspector was available and its aggregate counters increased by 1 connection and 37 HTTP requests during the 3085 ms observation window; the observed one-minute-rate samples peaked at about 0.477 connections and 0.839 requests. These are shared-tunnel aggregate measurements and may include ambient traffic from other clients/probes, so they must not be attributed solely to the harness.
+- **local** — starts an isolated raw DevFlow API, exercises five MCP sessions, raw stream interruption/session retention, restart busy/quiescence behavior, and the production tunnel-health state machine.
+- **public** — discovers the managed public base URL from the local `/api/zrok/status` contract and runs five clients against the reserved zrok `/mcp` endpoint. It verifies API/runtime contract stability and that the managed public URL/service generation does not unexpectedly change during the bounded run.
 
-No provider limit was configured for this run, so DevFlow does **not** claim a numeric safety margin from those measurements. MCP session reuse is server-controlled and verified separately, but TCP socket reuse remains partly controlled by the external client and ngrok edge; this harness therefore does not claim a keep-alive or connection-rate guarantee. The public smoke reports no public URL and reads/stores no raw inspector request history or request bodies.
+The public smoke does not use a local provider inspector, does not read provider request history/bodies, and does not invent a numeric provider-rate safety margin.
+
+Public `restart_devflow` verification is kept separate from a `run_project_command` smoke invocation because the command itself is a durable active MCP job and correctly causes the guarded restart gate to return `RESTART_BUSY`. Perform the explicit public restart check from an otherwise quiescent MCP client, then verify `/api/zrok/status` reports the same MCP URL after reconnect.
 
 ## Startup benchmark
-## Startup benchmark
 
-A local Windows benchmark on August 8, 2026 measured three cold-ish launches of each path until the DevFlow TCP port accepted connections:
+A local Windows benchmark on August 8, 2026 measured three cold-ish launches until the DevFlow TCP port accepted connections:
 
 - Raw `npm run dev:server`: 5298 / 5540 / 5188 ms; average **5342 ms**.
 - Supervised `npm run dev`: 5653 / 5812 / 5803 ms; average **5756 ms**.
-- Measured supervisor startup overhead: **414 ms (+7.7%)** on this machine.
+- Measured supervisor startup overhead: **414 ms (+7.7%)** on that machine.
 
-This is a machine-local startup measurement, not an SLO. The supervisor is a parent process only; once the server is running, normal HTTP/MCP requests still go directly to the server and do not traverse an additional supervisor request hop.
-
-For the ngrok self-healing change, the existing `verify-start-all` harness remained sub-second in DevFlow's command runner (about 0.43s total in the final focused run, with 6–9ms runner process-startup time observed across RED/GREEN runs). The repository does not currently contain a separate TCP-to-ready startup benchmark script, so the historical cold-start numbers above remain the comparable machine-local reference rather than being replaced by a different measurement method.
+This is a machine-local historical measurement, not an SLO. The supervisor is a parent process only; once the API is running, normal HTTP/MCP requests go directly to the server and do not traverse another supervisor request hop.

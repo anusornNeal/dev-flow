@@ -1,7 +1,4 @@
-import fs from 'node:fs';
-import path from 'node:path';
 import db from '../../db/index';
-import { getDevFlowRuntimeDir } from '../../lib/devFlowPaths';
 import {
   buildDevFlowSupervisorDiagnostics,
   readDevFlowSupervisorState,
@@ -645,51 +642,6 @@ export function buildIsolationDiagnostics(jobMetrics: any, workspaceMetrics: any
   };
 }
 
-function readRecentNgrokTunnelEvidence(limit = 8) {
-  const filePath = path.join(getDevFlowRuntimeDir(), 'ngrok-diagnostics.jsonl');
-  const failures: any[] = [];
-  let pressure: any = undefined;
-  const failureClasses = new Set(['rate-limit', 'http-5xx', 'http-4xx', 'http-other', 'timeout', 'dns', 'tls', 'connection', 'network', 'public-url-unavailable']);
-  const recoveryDecisions = new Set(['threshold-not-reached', 'restart-ngrok', 'suppressed-shutdown', 'suppressed-local-api-unhealthy', 'suppressed-ngrok-not-running', 'suppressed-startup-grace', 'suppressed-collision-backoff']);
-  try {
-    const lines = fs.readFileSync(filePath, 'utf8').split(/\r?\n/).filter(Boolean).reverse();
-    for (const line of lines) {
-      let entry: any;
-      try { entry = JSON.parse(line); } catch { continue; }
-      if (!pressure && entry?.kind === 'ngrok-pressure' && entry.pressure && typeof entry.pressure === 'object') {
-        const safeNumber = (value: unknown) => Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) : 0;
-        pressure = {
-          at: typeof entry.at === 'string' ? entry.at.slice(0, 40) : undefined,
-          ...(typeof entry.generation === 'string' && /^[A-Za-z0-9._-]{1,64}$/.test(entry.generation) ? { generation: entry.generation } : {}),
-          connectionCount: safeNumber(entry.pressure.connectionCount),
-          activeConnections: safeNumber(entry.pressure.activeConnections),
-          connectionRate1: safeNumber(entry.pressure.connectionRate1),
-          requestCount: safeNumber(entry.pressure.requestCount),
-          requestRate1: safeNumber(entry.pressure.requestRate1),
-        };
-      }
-      if (entry?.kind !== 'public-probe-failure' || failures.length >= Math.max(1, limit)) continue;
-      if (!failureClasses.has(entry.failureClass) || !recoveryDecisions.has(entry.recoveryDecision)) continue;
-      const retryAfter = typeof entry.retryAfter === 'string' && (/^\d{1,9}$/.test(entry.retryAfter) || /^\d{4}-\d{2}-\d{2}T/.test(entry.retryAfter))
-        ? entry.retryAfter.slice(0, 40)
-        : undefined;
-      failures.push({
-        at: typeof entry.at === 'string' ? entry.at.slice(0, 40) : undefined,
-        failureClass: entry.failureClass,
-        ...(Number.isInteger(entry.statusCode) ? { statusCode: Number(entry.statusCode) } : {}),
-        ...(Number.isFinite(Number(entry.latencyMs)) && Number(entry.latencyMs) >= 0 ? { latencyMs: Number(entry.latencyMs) } : {}),
-        ...(typeof entry.generation === 'string' && /^[A-Za-z0-9._-]{1,64}$/.test(entry.generation) ? { generation: entry.generation } : {}),
-        consecutiveProbeFailures: Math.max(0, Math.floor(Number(entry.consecutiveProbeFailures) || 0)),
-        recoveryDecision: entry.recoveryDecision,
-        ...(retryAfter ? { retryAfter } : {}),
-      });
-    }
-  } catch {
-    return { failures: [], pressure: undefined };
-  }
-  return { failures, pressure };
-}
-
 export function getDevFlowDiagnostics(options?: {
   now?: number;
   windowMs?: number;
@@ -700,16 +652,7 @@ export function getDevFlowDiagnostics(options?: {
   const supervisorState = options && Object.prototype.hasOwnProperty.call(options, 'supervisorState')
     ? options.supervisorState ?? null
     : readDevFlowSupervisorState();
-  const runtimeSupervisorBase = buildDevFlowSupervisorDiagnostics(supervisorState);
-  const tunnelEvidence = readRecentNgrokTunnelEvidence();
-  const runtimeSupervisor = {
-    ...runtimeSupervisorBase,
-    tunnel: {
-      ...runtimeSupervisorBase.tunnel,
-      ...(tunnelEvidence.failures.length ? { recentFailures: tunnelEvidence.failures } : {}),
-      ...(tunnelEvidence.pressure ? { pressure: tunnelEvidence.pressure } : {}),
-    },
-  };
+  const runtimeSupervisor = buildDevFlowSupervisorDiagnostics(supervisorState);
   const capabilityCatalog = getCapabilityCatalog();
   const runtime = {
     ...getRuntimeIdentity(),
@@ -739,7 +682,7 @@ export function getDevFlowDiagnostics(options?: {
     recommendations.push('MCP tool jobs are queued; inspect get_tool_job_status/log for the oldest queued job.');
   }
   if (runtimeSupervisor.api.status === 'healthy' && (runtimeSupervisor.tunnel.status === 'degraded' || runtimeSupervisor.tunnel.status === 'down')) {
-    recommendations.push(`Public ngrok tunnel is ${runtimeSupervisor.tunnel.status} while the local DevFlow API is healthy; inspect supervisor probe evidence and bounded ngrok diagnostics.`);
+    recommendations.push(`Public zrok route is ${runtimeSupervisor.tunnel.status} while the local DevFlow API is healthy; inspect zrok service/share state and supervisor public-probe evidence.`);
   }
   if (staleAgentRuns.length > 0) {
     recommendations.push('Some agent runs are stale; cancel or retry them before starting more work on the same task.');

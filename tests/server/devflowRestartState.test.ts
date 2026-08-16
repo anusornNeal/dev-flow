@@ -8,6 +8,8 @@ const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-restart-state-')
 process.env.DEVFLOW_APP_ROOT = tempRoot;
 
 const {
+  DEVFLOW_RESTART_EXTERNAL_TRANSPORT_POLICY,
+  DEVFLOW_RESTART_RUNTIME_SCOPE,
   markDevFlowRestartFailed,
   markDevFlowRestartHealthy,
   markDevFlowRestartRestarting,
@@ -22,6 +24,8 @@ function seedAcceptedRestart(ticket: string) {
     status: 'accepted',
     supervisor: 'start-all',
     supervisorToken: 'restart-state-test-token',
+    runtimeScope: DEVFLOW_RESTART_RUNTIME_SCOPE,
+    externalTransportPolicy: DEVFLOW_RESTART_EXTERNAL_TRANSPORT_POLICY,
     requestedAt: now,
     updatedAt: now,
     requestedByPid: 123,

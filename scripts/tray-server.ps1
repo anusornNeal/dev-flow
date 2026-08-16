@@ -90,10 +90,10 @@ $openItem.Text = "Open App in Browser"
 $openItem.add_Click({ Start-Process (Get-AppUrl) })
 $menu.MenuItems.Add($openItem)
 
-$ngrokItem = New-Object System.Windows.Forms.MenuItem
-$ngrokItem.Text = "Open ngrok Dashboard"
-$ngrokItem.add_Click({ Start-Process "http://localhost:4040" })
-$menu.MenuItems.Add($ngrokItem)
+$zrokItem = New-Object System.Windows.Forms.MenuItem
+$zrokItem.Text = "Open zrok Status"
+$zrokItem.add_Click({ Start-Process "$(Get-AppUrl)/api/zrok/status" })
+$menu.MenuItems.Add($zrokItem)
 $menu.MenuItems.Add("-")
 
 $restartItem = New-Object System.Windows.Forms.MenuItem

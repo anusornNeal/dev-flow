@@ -182,11 +182,11 @@ The following behaviors must remain compatible end-to-end. Each child PR is resp
 - `get_skill_router` / `get_authoring_skill` provide agent guidance; Prompt Template rendering remains the task prompt source
 - Repository/workspace/verification tools expose local file, Git, workspace, and command workflows through the live MCP contract
 
-### 10.11 SSE / proxy
-- MCP SSE session lifecycle works
-- Multiple concurrent SSE clients supported (`smoke-multi-sse`)
-- External proxy (e.g. ngrok) reaches backend correctly
-- CORS preflight handled
+### 10.11 MCP transport / public route
+- Streamable HTTP MCP session lifecycle works on `/mcp`
+- Legacy SSE compatibility remains covered where required
+- The managed zrok reserved route reaches the backend correctly
+- CORS preflight is handled without provider-specific headers
 - Static + Vite dev middleware still serves frontend
 
 ### 10.12 Agent-run lifecycle

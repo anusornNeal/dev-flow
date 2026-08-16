@@ -6,7 +6,7 @@ DevFlow is Windows-first and also supports normal local development on macOS.
 
 ## First-time Setup
 
-This is the recommended path for a new machine. The goal is to get from a fresh clone to a working DevFlow app that ChatGPT can reach through MCP.
+The recommended Windows path is intentionally short: install the normal development prerequisites, start DevFlow once, paste your zrok account token when prompted, then use the stable MCP URL shown by DevFlow.
 
 ### 1. Install the prerequisites
 
@@ -15,9 +15,8 @@ Install:
 - Node.js
 - npm
 - Git
-- ngrok
 
-Clone DevFlow and initialize the local environment:
+Clone DevFlow and install dependencies:
 
 ```bash
 git clone https://github.com/anusornNeal/dev-flow.git
@@ -28,36 +27,39 @@ npm run setup
 
 `npm run setup` creates the local data/uploads/backups folders, initializes SQLite, and copies `.env.example` to `.env` when `.env` does not already exist.
 
-### 2. Create an ngrok account and get your free domain
+### 2. Start DevFlow
 
-1. Create an ngrok account.
-2. Copy your ngrok **authtoken** from the ngrok dashboard and add it to the ngrok CLI once:
+Recommended one-click startup on Windows:
 
-```bash
-ngrok config add-authtoken <YOUR_NGROK_AUTHTOKEN>
-```
+- Double-click `Start DevFlow.bat`.
 
-3. Find the free **development domain** assigned to your account, for example:
-
-```text
-your-name.ngrok-free.app
-```
-
-The free ngrok plan currently provides an automatically assigned development domain. You do not need to buy or reserve a custom domain for the normal DevFlow setup.
-
-### 3. Start DevFlow with ngrok
-
-Recommended one-click startup:
-
-- **Windows:** double-click `Start DevFlow.bat`
-- **macOS:** double-click `Start DevFlow.command`
-- **Terminal / any OS:** run:
+Terminal startup:
 
 ```bash
 npm run start:all
 ```
 
-`start:all` runs setup, starts DevFlow, starts ngrok, and opens the browser. Without an explicit domain override, ngrok uses the development domain assigned to your account.
+On the first Windows run, DevFlow bootstraps zrok for you. Administrator approval is required to install the persistent `zrokAgent` Windows service. If the zrok environment has not been enabled yet, the bootstrap prompts for:
+
+```text
+zrok account token
+```
+
+Paste the zrok account token from your zrok account. The prompt uses a secure string; DevFlow uses the token to enable the zrok environment and does not write the account token to `.env`.
+
+The bootstrap then installs/repairs the local zrok tooling as needed, creates or reuses the configured reserved public name, enrolls the agent for remote control, and starts the `zrokAgent` service. Later DevFlow launches reuse that persistent service/share instead of creating a new public URL.
+
+The default reserved name is `devflow-mixed`, so the default public base URL is:
+
+```text
+https://devflow-mixed.shares.zrok.io
+```
+
+If you use another reserved name, configure it before first bootstrap:
+
+```env
+DEVFLOW_ZROK_RESERVED_NAME="your-reserved-name"
+```
 
 DevFlow runs locally at:
 
@@ -65,33 +67,23 @@ DevFlow runs locally at:
 http://localhost:3000
 ```
 
-For local-only development without ngrok:
+For local-only development without public zrok setup/reconciliation:
 
 ```bash
 npm run dev
 ```
 
-### 4. Put the ngrok URL in DevFlow Settings
+### 3. Confirm zrok status
 
-Open **DevFlow → Settings** and set **ngrok URL** to the full HTTPS URL:
+The header shows the live zrok state from DevFlow's backend: `Setup required`, `Starting`, `Online`, `Degraded`, `Offline`, `Standby`, or `Setup error`.
 
-```text
-https://your-name.ngrok-free.app
-```
+Open the zrok status panel to see agent-service state, reserved-share state, public reachability, latency, and the current MCP URL. The UI does not infer health from a configured string; `Online` requires live backend/public-probe evidence.
 
-Use the full URL including `https://`.
+If the same reserved name is active on another enrolled machine, this machine reports `Standby`. DevFlow never steals ownership automatically. Use **Take over** only when you intentionally want this machine to become active; DevFlow fences the previous owner first and verifies the public route after takeover.
 
-If you intentionally use a paid/custom ngrok domain, you can also pin the launcher to it in `.env`:
+### 4. Add optional integration credentials
 
-```env
-DEVFLOW_NGROK_DOMAIN="your-custom-domain.ngrok.app"
-```
-
-For the normal free development domain, this override is usually unnecessary.
-
-### 5. Add integration tokens in Settings
-
-Still in **DevFlow → Settings → Integrations**, fill in the integrations you want DevFlow to use:
+Open **DevFlow → Settings → Integrations** and fill in only the integrations you use:
 
 - **GitHub Access Token** — required only for GitHub-backed context/tools.
 - **Jira Base URL** — for example `https://your-domain.atlassian.net`.
@@ -99,48 +91,43 @@ Still in **DevFlow → Settings → Integrations**, fill in the integrations you
 - **Jira Access Token** — required only when using Jira-backed context/tools.
 - **Figma Access Token** — required only when using Figma design context.
 
-You do not need every token just to run the DevFlow board or its own MCP tools. Add the credentials for the integrations you actually use.
+You do not need these credentials just to run the DevFlow board or its own MCP tools.
 
 Secrets entered through Settings are stored through DevFlow's credential-vault abstraction. On Windows this uses current-user DPAPI-backed encrypted storage. Environment variables remain available as overrides/fallbacks.
 
-### 6. Connect DevFlow MCP to ChatGPT
+### 5. Connect DevFlow MCP to ChatGPT
 
-DevFlow exposes its current MCP transport at:
+Use the MCP URL shown in the zrok status panel. With the default reserved name it is:
 
 ```text
-https://your-name.ngrok-free.app/mcp
+https://devflow-mixed.shares.zrok.io/mcp
 ```
 
-Use `/mcp` for new ChatGPT connections. `/sse` remains a legacy compatibility transport and should not be used for a new setup.
+Use `/mcp` for new ChatGPT connections. `/sse` is a legacy compatibility transport and should not be used for a new setup.
 
-In ChatGPT web, where custom MCP apps/connectors are available for your plan/workspace:
+In ChatGPT, where custom MCP apps/connectors are available for your plan/workspace:
 
-1. Enable **Developer mode** for custom MCP apps if it is not already enabled.
-2. Open **Settings → Apps → Create** (workspace/admin wording can vary by plan).
+1. Enable Developer mode for custom MCP apps if required by your workspace.
+2. Open the app/connector creation flow.
 3. Create a custom app for DevFlow.
-4. Set the MCP endpoint to:
+4. Set the MCP endpoint to the `/mcp` URL shown by DevFlow.
+5. Use no MCP authentication for the current personal/local DevFlow transport unless you intentionally placed another authenticated gateway in front of it.
+6. Scan tools and confirm that ChatGPT discovers DevFlow tools.
+7. Enable the app.
 
-   ```text
-   https://your-name.ngrok-free.app/mcp
-   ```
+OpenAI can change the exact ChatGPT menu names and plan/workspace availability over time. The stable DevFlow-side requirement is a reachable public HTTPS endpoint ending in `/mcp`.
 
-5. Use **no authentication** for the current personal/local DevFlow MCP transport unless you have added your own gateway/authentication in front of it.
-6. Choose **Scan Tools** and confirm that ChatGPT can discover the DevFlow tools.
-7. Create/enable the app.
+### 6. Verify the connection
 
-OpenAI changes Developer mode and custom MCP availability over time, so the exact menu names and plan requirements can change. The stable DevFlow-side requirement is the public HTTPS endpoint ending in `/mcp`.
-
-### 7. Verify the connection
-
-Before testing ChatGPT, confirm that the public DevFlow endpoint is reachable:
+Open the status panel and confirm the zrok state is `Online`, then verify the public capabilities endpoint. With the default name:
 
 ```text
-https://your-name.ngrok-free.app/api/capabilities
+https://devflow-mixed.shares.zrok.io/api/capabilities
 ```
 
-Then start a ChatGPT conversation with the DevFlow app enabled and ask it to perform a simple read-only action, such as listing DevFlow projects or checking DevFlow health.
+Finally, ask ChatGPT to perform a read-only action such as listing DevFlow projects or checking DevFlow health.
 
-If ChatGPT can scan the tools and call a read-only DevFlow tool successfully, the first-time setup is complete.
+If ChatGPT can scan the tools and call a read-only DevFlow tool successfully, first-time setup is complete.
 
 ## What DevFlow Can Do
 
@@ -161,27 +148,28 @@ If ChatGPT can scan the tools and call a read-only DevFlow tool successfully, th
 npm run dev
 ```
 
-Starts DevFlow at `http://localhost:3000` without ngrok.
+Starts the restart-capable DevFlow supervisor and local API at `http://localhost:3000` without reconciling the public zrok service/share.
 
-### DevFlow + ngrok + browser
+### DevFlow + zrok + browser
 
 ```bash
 npm run start:all
 ```
 
-`start:all` runs setup, starts DevFlow, starts ngrok, and opens the browser. If ngrok exits unexpectedly, the supervisor keeps the DevFlow API running and restarts ngrok with bounded backoff. Public reachability is monitored separately from the ngrok process lifecycle.
+`start:all` runs setup, starts/reuses the DevFlow API runtime, reconciles the persistent zrok Agent Service/reserved share, verifies public reachability, and opens the browser. zrok is not a child tunnel process: the Windows service/share remains alive independently of a guarded DevFlow API restart.
 
-See `docs/runtime-supervisor.md` for restart, tunnel-health, collision-recovery, and diagnostic behavior.
+See `docs/runtime-supervisor.md` for restart, public-health, zrok reconciliation, and diagnostic behavior.
 
 ## Settings and Environment Variables
 
-Most configuration can be done through **DevFlow → Settings**. Environment variables are useful for launcher/runtime overrides and automation.
+Most user-facing configuration is in DevFlow Settings. zrok lifecycle configuration is launcher/runtime configuration rather than a manually edited URL in Settings.
 
 Common values:
 
 ```env
 DEVFLOW_PORT=3000
-DEVFLOW_NGROK_DOMAIN=""
+DEVFLOW_ZROK_RESERVED_NAME="devflow-mixed"
+DEVFLOW_ZROK_PUBLIC_URL="https://devflow-mixed.shares.zrok.io"
 DEVFLOW_OPEN_BROWSER=true
 DEVFLOW_OPEN_BROWSER_DELAY_MS=4000
 
@@ -197,14 +185,16 @@ DEVFLOW_MCP_TOOL_PROFILE="coding"
 
 Notes:
 
-- `DEVFLOW_NGROK_DOMAIN` is an optional launcher override. The normal free ngrok development-domain flow can leave it empty.
+- `DEVFLOW_ZROK_RESERVED_NAME` selects the managed reserved name. Keep it stable if you want the ChatGPT MCP URL to remain stable.
+- `DEVFLOW_ZROK_PUBLIC_URL` may pin the expected public base URL; the runtime/status backend remains the source of truth for actual reachability.
+- Do not store the zrok account token in `.env`; first-run bootstrap requests it interactively when needed.
 - GitHub/Jira/Figma credentials are optional unless you use those integrations.
 - Agent CLI authentication is separate from DevFlow integration tokens. Install and authenticate Codex, Antigravity, Claude, or another CLI before asking DevFlow to launch it.
 - MCP sessions default to the lean `coding` tool profile when `DEVFLOW_MCP_TOOL_PROFILE` is unset. Available explicit profiles include `full`, `authoring`, `review`, `atlas`, and `diagnostics`.
 
 ### Trusted remote API boundary
 
-The public ngrok URL also exposes DevFlow's HTTP surface. Local loopback requests keep the normal one-click workflow. For `/api` requests coming through a forwarded or non-loopback client, privileged mutation methods are denied by default unless trusted remote mutation access is explicitly configured.
+The public zrok route also exposes DevFlow's HTTP surface. Local loopback requests keep the normal one-click workflow. For `/api` requests coming through a forwarded or non-loopback client, privileged mutation methods are denied by default unless trusted remote mutation access is explicitly configured.
 
 To opt in to trusted remote `/api` mutations:
 
@@ -216,13 +206,21 @@ Send the same value as `Authorization: Bearer <token>` or `X-DevFlow-Remote-Toke
 
 This `/api` policy is separate from the MCP transport policy.
 
+## Runtime and Restart Model
+
+`restart_devflow` is intentionally API-only. An accepted guarded restart replaces the DevFlow API process after returning the MCP response, while the persistent zrok Agent Service and reserved share remain outside the restart scope. The public MCP URL is therefore expected to stay the same across a normal DevFlow restart.
+
+Meaningful queued/active MCP work still blocks restart with `RESTART_BUSY`. After reconnect, `get_devflow_restart_status` can read the same durable restart ticket.
+
+Stopping the DevFlow supervisor from the tray stops the supervised DevFlow server, but does not tear down the persistent zrok Windows service/share. Starting DevFlow again reconciles and reuses that zrok state.
+
 ## Common Commands
 
 | Command | Purpose |
 | --- | --- |
 | `npm run setup` | Create local folders, initialize storage, and bootstrap `.env` when safe. |
-| `npm run dev` | Start the local DevFlow server. |
-| `npm run start:all` | Start DevFlow + ngrok + browser. |
+| `npm run dev` | Start the restart-capable local DevFlow server without zrok reconciliation. |
+| `npm run start:all` | Start/reuse DevFlow, reconcile zrok, and open the browser. |
 | `npm run doctor` | Check Node/npm, env files, SQLite, DB initialization, port availability, and project paths. |
 | `npm run typecheck` | Run TypeScript no-emit verification. |
 | `npm run lint` | Alias for TypeScript no-emit verification. |
@@ -271,14 +269,23 @@ DevFlow Settings can create verified recovery snapshots with checksum/integrity/
 
 To move DevFlow to another machine:
 
-1. Open **Settings** on the old machine.
-2. Export a backup.
-3. Copy the backup to the new machine.
-4. Clone the repo and run `npm install` + `npm run setup`.
-5. Restore the backup through Settings or `npm run restore <path>`.
-6. Re-enter machine-local integration credentials if needed.
-7. Configure ngrok on the new machine and run `npm run start:all`.
-8. Update the ChatGPT MCP app endpoint if the public domain changed.
+1. Open Settings on the old machine and export a backup.
+2. Copy the backup to the new machine.
+3. Clone the repo and run `npm install` + `npm run setup`.
+4. Restore the backup through Settings or `npm run restore <path>`.
+5. Re-enter machine-local integration credentials if needed.
+6. Run `Start DevFlow.bat`/`npm run start:all` on the new machine and complete zrok bootstrap if that machine is not enrolled yet.
+7. If the reserved name is currently active on the old machine, the new machine should show `Standby`; use the explicit **Take over** action when you intentionally move ownership.
+8. Keep the same reserved name to keep the ChatGPT MCP URL stable. If you deliberately change the reserved name, update the ChatGPT MCP app endpoint.
+
+## Troubleshooting zrok
+
+- **Setup required** — run `Start DevFlow.bat` or `npm run start:all`; approve elevation and enter the zrok account token if prompted.
+- **Starting** — the service/share or public probe is still converging. The startup grace window prevents an immediate false recovery loop.
+- **Degraded/Offline with local DevFlow healthy** — use **Recheck** first. The supervisor can reconcile the zrok service/share without restarting the local API.
+- **Standby** — another enrolled machine owns the reserved name. Use **Take over** only when intentional.
+- **Setup error** — inspect the status-panel message and zrok Agent Service state; rerunning `start:all` is idempotent and repairs missing/stopped bootstrap components where safe.
+- **DevFlow restart blocked** — `RESTART_BUSY` means meaningful MCP work is still active/recent. Do not force-kill it; retry after work becomes quiescent.
 
 ## Tech Stack
 
@@ -287,4 +294,5 @@ To move DevFlow to another machine:
 - Express / Node.js
 - SQLite via `better-sqlite3`
 - Model Context Protocol (MCP)
+- zrok persistent Agent Service + reserved public share
 - Local managed Git workspaces and verification tooling

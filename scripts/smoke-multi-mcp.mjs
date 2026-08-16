@@ -13,10 +13,7 @@ import {
   resetDevFlowTunnelHealthForGeneration,
 } from '../src/lib/devFlowSupervisor.ts';
 import { DEFAULT_RESTART_QUIESCENCE_WINDOW_MS } from '../src/server/services/mcpTransportMonitor.ts';
-import {
-  extractNgrokPressureSnapshot,
-  getNgrokRecoveryDecision,
-} from './start-all.ts';
+import { getZrokRecoveryDecision } from './start-all.ts';
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, '..');
@@ -65,7 +62,6 @@ async function fetchJson(baseUrl, route, options = {}) {
       ...options,
       headers: {
         Accept: 'application/json',
-        'ngrok-skip-browser-warning': 'true',
         ...(options.headers || {}),
       },
       signal: controller.signal,
@@ -294,12 +290,12 @@ async function exerciseInterruptedRawSession(baseUrl, profile) {
   };
 }
 
-function runTunnelRecoveryInjection() {
+function runZrokRecoveryInjection() {
   let health = resetDevFlowTunnelHealthForGeneration(undefined, 'A', {
     startupGraceMs: 0,
-    now: '2026-08-14T00:00:00.000Z',
+    now: '2026-08-16T00:00:00.000Z',
   });
-  for (const now of ['2026-08-14T00:00:01.000Z', '2026-08-14T00:00:02.000Z', '2026-08-14T00:00:03.000Z']) {
+  for (const now of ['2026-08-16T00:00:01.000Z', '2026-08-16T00:00:02.000Z', '2026-08-16T00:00:03.000Z']) {
     health = advanceDevFlowTunnelHealth(health, { ok: false, failureClass: 'connection' }, {
       failureThreshold: 3,
       generation: 'A',
@@ -307,25 +303,24 @@ function runTunnelRecoveryInjection() {
     });
   }
   assert.equal(health.status, 'down');
-  const recoveryA = getNgrokRecoveryDecision({
+  const recoveryA = getZrokRecoveryDecision({
     tunnelStatus: health.status,
     consecutiveProbeFailures: health.consecutiveProbeFailures,
     failureThreshold: 3,
     localApiHealthy: true,
-    ngrokProcessRunning: true,
     shuttingDown: false,
-    nowMs: Date.parse('2026-08-14T00:00:03.000Z'),
+    nowMs: Date.parse('2026-08-16T00:00:03.000Z'),
   });
-  assert.equal(recoveryA, 'restart-ngrok');
+  assert.equal(recoveryA, 'reconcile-zrok');
 
   health = resetDevFlowTunnelHealthForGeneration(health, 'B', {
     startupGraceMs: 5_000,
-    now: '2026-08-14T00:00:04.000Z',
+    now: '2026-08-16T00:00:04.000Z',
   });
   health = advanceDevFlowTunnelHealth(health, { ok: false, failureClass: 'connection' }, {
     failureThreshold: 3,
     generation: 'B',
-    now: '2026-08-14T00:00:05.000Z',
+    now: '2026-08-16T00:00:05.000Z',
   });
   assert.equal(health.status, 'unknown');
   assert.equal(health.consecutiveProbeFailures, 0);
@@ -333,7 +328,7 @@ function runTunnelRecoveryInjection() {
   health = advanceDevFlowTunnelHealth(health, { ok: true, statusCode: 200 }, {
     failureThreshold: 3,
     generation: 'B',
-    now: '2026-08-14T00:00:06.000Z',
+    now: '2026-08-16T00:00:06.000Z',
   });
   assert.equal(health.status, 'healthy');
   assert.equal(health.lifecyclePhase, 'steady-state');
@@ -342,55 +337,53 @@ function runTunnelRecoveryInjection() {
   health = advanceDevFlowTunnelHealth(health, { ok: false, failureClass: 'connection' }, {
     failureThreshold: 3,
     generation: 'B',
-    now: '2026-08-14T00:00:07.000Z',
+    now: '2026-08-16T00:00:07.000Z',
   });
   assert.equal(health.status, 'degraded', 'First success must enter steady state immediately, even before the original grace expires.');
   assert.equal(health.consecutiveProbeFailures, 1);
-  const steadyFailureDecision = getNgrokRecoveryDecision({
+  const steadyFailureDecision = getZrokRecoveryDecision({
     tunnelStatus: health.status,
     consecutiveProbeFailures: health.consecutiveProbeFailures,
     failureThreshold: 3,
     localApiHealthy: true,
-    ngrokProcessRunning: true,
     shuttingDown: false,
     lifecyclePhase: health.lifecyclePhase,
     startupGraceUntilMs: Date.parse(health.startupGraceUntil),
-    nowMs: Date.parse('2026-08-14T00:00:07.000Z'),
+    nowMs: Date.parse('2026-08-16T00:00:07.000Z'),
   });
   assert.equal(steadyFailureDecision, 'threshold-not-reached');
 
   health = resetDevFlowTunnelHealthForGeneration(health, 'C', {
     startupGraceMs: 5_000,
-    now: '2026-08-14T00:00:20.000Z',
+    now: '2026-08-16T00:00:20.000Z',
   });
   health = advanceDevFlowTunnelHealth(health, { ok: false, failureClass: 'connection' }, {
     failureThreshold: 3,
     generation: 'C',
-    now: '2026-08-14T00:00:21.000Z',
+    now: '2026-08-16T00:00:21.000Z',
   });
   assert.equal(health.status, 'unknown');
   assert.equal(health.consecutiveProbeFailures, 0);
 
   const postGraceDecisions = [];
-  for (const now of ['2026-08-14T00:00:26.000Z', '2026-08-14T00:00:27.000Z', '2026-08-14T00:00:28.000Z']) {
+  for (const now of ['2026-08-16T00:00:26.000Z', '2026-08-16T00:00:27.000Z', '2026-08-16T00:00:28.000Z']) {
     health = advanceDevFlowTunnelHealth(health, { ok: false, failureClass: 'connection' }, {
       failureThreshold: 3,
       generation: 'C',
       now,
     });
-    postGraceDecisions.push(getNgrokRecoveryDecision({
+    postGraceDecisions.push(getZrokRecoveryDecision({
       tunnelStatus: health.status,
       consecutiveProbeFailures: health.consecutiveProbeFailures,
       failureThreshold: 3,
       localApiHealthy: true,
-      ngrokProcessRunning: true,
       shuttingDown: false,
       lifecyclePhase: health.lifecyclePhase,
       startupGraceUntilMs: Date.parse(health.startupGraceUntil),
       nowMs: Date.parse(now),
     }));
   }
-  assert.deepEqual(postGraceDecisions, ['threshold-not-reached', 'threshold-not-reached', 'restart-ngrok']);
+  assert.deepEqual(postGraceDecisions, ['threshold-not-reached', 'threshold-not-reached', 'reconcile-zrok']);
   return {
     firstGeneration: 'A',
     firstGenerationRecoveryDecision: recoveryA,
@@ -445,11 +438,11 @@ async function runLocalMode() {
     assert.equal(errorCodeFromCall(busyRestart), 'RESTART_BUSY', 'restart_devflow must be rejected while recent meaningful MCP work is hot.');
     assert.equal(child.exitCode, null, 'Blocked restart must not exit the local API process.');
 
-    const recovery = runTunnelRecoveryInjection();
+    const recovery = runZrokRecoveryInjection();
     const capabilityAfterRecovery = await fetchJson(baseUrl, '/api/capabilities');
     assert.equal(child.exitCode, null, 'Tunnel-only recovery simulation must not exit the local API process.');
-    assert.equal(capabilityAfterRecovery.runtimeInstanceId, capabilityBefore.runtimeInstanceId, 'Local API runtime identity changed during ngrok-only recovery simulation.');
-    assert.equal(capabilityAfterRecovery.contractVersion, capabilityBefore.contractVersion, 'Local API contract revision changed during ngrok-only recovery simulation.');
+    assert.equal(capabilityAfterRecovery.runtimeInstanceId, capabilityBefore.runtimeInstanceId, 'Local API runtime identity changed during zrok-only recovery simulation.');
+    assert.equal(capabilityAfterRecovery.contractVersion, capabilityBefore.contractVersion, 'Local API contract revision changed during zrok-only recovery simulation.');
     assert.equal(gitRevision(), revisionBefore, 'Repository revision changed during the local smoke run.');
 
     await sleep(DEFAULT_RESTART_QUIESCENCE_WINDOW_MS + 350);
@@ -500,34 +493,26 @@ async function runLocalMode() {
   }
 }
 
-async function readNgrokInspector() {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 2_000);
-  timer.unref?.();
-  try {
-    const response = await fetch('http://127.0.0.1:4040/api/tunnels', { signal: controller.signal });
-    if (!response.ok) return { available: false, publicBaseUrl: null, pressure: null };
-    const payload = await response.json();
-    const publicBaseUrl = Array.isArray(payload?.tunnels)
-      ? payload.tunnels.map((entry) => String(entry?.public_url || '')).find((value) => /^https:\/\//i.test(value)) || null
-      : null;
-    return {
-      available: true,
-      publicBaseUrl: publicBaseUrl ? normalizeBaseUrl(publicBaseUrl) : null,
-      pressure: extractNgrokPressureSnapshot(payload) || null,
-    };
-  } catch {
-    return { available: false, publicBaseUrl: null, pressure: null };
-  } finally {
-    clearTimeout(timer);
-  }
+function localRuntimeBaseUrl() {
+  const configured = String(process.env.DEVFLOW_LOCAL_URL || process.env.DEVFLOW_APP_URL || '').trim();
+  if (configured) return normalizeBaseUrl(configured);
+  const port = Number(process.env.DEVFLOW_PORT || process.env.PORT || 3000);
+  return `http://127.0.0.1:${Number.isInteger(port) && port > 0 ? port : 3000}`;
 }
 
-async function resolvePublicBaseUrl(inspector) {
-  if (process.env.DEVFLOW_PUBLIC_URL) return normalizeBaseUrl(process.env.DEVFLOW_PUBLIC_URL);
-  if (process.env.DEVFLOW_NGROK_DOMAIN) return normalizeBaseUrl(`https://${process.env.DEVFLOW_NGROK_DOMAIN}`);
-  if (inspector.publicBaseUrl) return inspector.publicBaseUrl;
-  throw new Error('No configured public ngrok endpoint was found. Set DEVFLOW_PUBLIC_URL/DEVFLOW_NGROK_DOMAIN or run the local ngrok inspector on 127.0.0.1:4040.');
+async function resolveManagedPublicRoute() {
+  const localBaseUrl = localRuntimeBaseUrl();
+  const zrokStatus = await fetchJson(localBaseUrl, '/api/zrok/status');
+  const candidate = String(zrokStatus.baseUrl || zrokStatus.mcpUrl || '').trim();
+  if (!candidate) {
+    throw new Error(`DevFlow zrok status did not expose a managed public URL (status=${String(zrokStatus.status || 'unknown')}).`);
+  }
+  return {
+    localBaseUrl,
+    baseUrl: normalizeBaseUrl(candidate),
+    mcpUrl: String(zrokStatus.mcpUrl || new URL('/mcp', `${normalizeBaseUrl(candidate)}/`).toString()),
+    status: zrokStatus,
+  };
 }
 
 function safeSupervisorSnapshot(health) {
@@ -545,73 +530,24 @@ function safeSupervisorSnapshot(health) {
   };
 }
 
-function pressureDelta(before, after, elapsedMs) {
-  if (!before || !after) return null;
-  const minutes = Math.max(elapsedMs / 60_000, 1 / 60_000);
-  const connectionDelta = Math.max(0, Number(after.connectionCount || 0) - Number(before.connectionCount || 0));
-  const requestDelta = Math.max(0, Number(after.requestCount || 0) - Number(before.requestCount || 0));
-  return {
-    connectionDelta,
-    requestDelta,
-    aggregateConnectionsPerMinute: Math.round((connectionDelta / minutes) * 100) / 100,
-    aggregateRequestsPerMinute: Math.round((requestDelta / minutes) * 100) / 100,
-    beforeRate1: {
-      connections: Number(before.connectionRate1 || 0),
-      requests: Number(before.requestRate1 || 0),
-    },
-    afterRate1: {
-      connections: Number(after.connectionRate1 || 0),
-      requests: Number(after.requestRate1 || 0),
-    },
-  };
-}
-
-function configuredMargin(observed) {
-  const connectionLimit = Number(process.env.DEVFLOW_NGROK_CONNECTION_LIMIT_PER_MINUTE);
-  const requestLimit = Number(process.env.DEVFLOW_NGROK_REQUEST_LIMIT_PER_MINUTE);
-  const validConnectionLimit = Number.isFinite(connectionLimit) && connectionLimit > 0 ? connectionLimit : null;
-  const validRequestLimit = Number.isFinite(requestLimit) && requestLimit > 0 ? requestLimit : null;
-  if (!observed) return { limitKnown: false, note: 'ngrok inspector pressure was unavailable; no margin was computed.' };
-  if (!validConnectionLimit && !validRequestLimit) {
-    return {
-      limitKnown: false,
-      note: 'No configured/provider per-minute limit was supplied; measured aggregate pressure is reported without inventing a safety margin.',
-    };
-  }
-  return {
-    limitKnown: true,
-    ...(validConnectionLimit ? {
-      connectionLimitPerMinute: validConnectionLimit,
-      connectionHeadroomPerMinute: Math.round((validConnectionLimit - observed.aggregateConnectionsPerMinute) * 100) / 100,
-    } : {}),
-    ...(validRequestLimit ? {
-      requestLimitPerMinute: validRequestLimit,
-      requestHeadroomPerMinute: Math.round((validRequestLimit - observed.aggregateRequestsPerMinute) * 100) / 100,
-    } : {}),
-  };
-}
-
 async function runPublicMode() {
-  const inspectorBefore = await readNgrokInspector();
-  const baseUrl = await resolvePublicBaseUrl(inspectorBefore);
+  const routeBefore = await resolveManagedPublicRoute();
+  const baseUrl = routeBefore.baseUrl;
   const capabilityBefore = await fetchJson(baseUrl, '/api/capabilities');
   const healthBefore = await fetchJson(baseUrl, '/api/workflow-health?responseMode=full');
   const supervisorBefore = safeSupervisorSnapshot(healthBefore);
   const revisionBefore = gitRevision();
-  const pressureSamples = inspectorBefore.pressure ? [inspectorBefore.pressure] : [];
   const startedAt = Date.now();
-  const profile = await runFiveClientProfile(baseUrl, PUBLIC_ROUNDS, 'public', async () => {
-    const sample = await readNgrokInspector();
-    if (sample.pressure) pressureSamples.push(sample.pressure);
-  });
+  const profile = await runFiveClientProfile(baseUrl, PUBLIC_ROUNDS, 'public');
   try {
     const elapsedMs = Date.now() - startedAt;
     const capabilityAfter = await fetchJson(baseUrl, '/api/capabilities');
     const healthAfter = await fetchJson(baseUrl, '/api/workflow-health?responseMode=full');
     const supervisorAfter = safeSupervisorSnapshot(healthAfter);
-    const inspectorAfter = await readNgrokInspector();
-    if (inspectorAfter.pressure) pressureSamples.push(inspectorAfter.pressure);
+    const routeAfter = await resolveManagedPublicRoute();
 
+    assert.equal(routeAfter.baseUrl, routeBefore.baseUrl, 'Managed zrok public base URL changed during the bounded public run.');
+    assert.equal(routeAfter.mcpUrl, routeBefore.mcpUrl, 'Managed zrok MCP URL changed during the bounded public run.');
     assert.equal(capabilityAfter.runtimeInstanceId, capabilityBefore.runtimeInstanceId, 'Public run changed the DevFlow runtime instance; API restart/disconnect occurred.');
     assert.equal(capabilityAfter.contractVersion, capabilityBefore.contractVersion, 'Public run changed the DevFlow contract revision.');
     assert.equal(gitRevision(), revisionBefore, 'Repository revision changed during the public smoke run.');
@@ -619,17 +555,11 @@ async function runPublicMode() {
       assert.equal(supervisorAfter.apiPid, supervisorBefore.apiPid, 'Public run changed the local API PID.');
     }
     if (supervisorBefore.tunnelGeneration && supervisorAfter.tunnelGeneration) {
-      assert.equal(supervisorAfter.tunnelGeneration, supervisorBefore.tunnelGeneration, 'Public bounded run triggered an ngrok generation change/recovery.');
+      assert.equal(supervisorAfter.tunnelGeneration, supervisorBefore.tunnelGeneration, 'Public bounded run triggered a zrok generation change/recovery.');
     }
     if (supervisorBefore.recoveryAttempt !== null && supervisorAfter.recoveryAttempt !== null) {
-      assert.equal(supervisorAfter.recoveryAttempt, supervisorBefore.recoveryAttempt, 'Public bounded run increased ngrok recovery attempts.');
+      assert.equal(supervisorAfter.recoveryAttempt, supervisorBefore.recoveryAttempt, 'Public bounded run increased zrok recovery attempts.');
     }
-
-    const observedPressure = pressureDelta(inspectorBefore.pressure, inspectorAfter.pressure, elapsedMs);
-    const peakRate1 = pressureSamples.reduce((peak, sample) => ({
-      connections: Math.max(peak.connections, Number(sample?.connectionRate1 || 0)),
-      requests: Math.max(peak.requests, Number(sample?.requestRate1 || 0)),
-    }), { connections: 0, requests: 0 });
 
     return {
       mode: 'public',
@@ -638,22 +568,21 @@ async function runPublicMode() {
       runtimeInstanceIdStable: true,
       contractVersion: capabilityBefore.contractVersion,
       repoRevision: revisionBefore,
+      zrokStatusBefore: routeBefore.status.status || null,
+      zrokStatusAfter: routeAfter.status.status || null,
       supervisorBefore,
       supervisorAfter,
       apiPidStable: supervisorBefore.apiPid !== null && supervisorAfter.apiPid !== null ? supervisorBefore.apiPid === supervisorAfter.apiPid : null,
-      ngrokGenerationStable: supervisorBefore.tunnelGeneration && supervisorAfter.tunnelGeneration
+      tunnelGenerationStable: supervisorBefore.tunnelGeneration && supervisorAfter.tunnelGeneration
         ? supervisorBefore.tunnelGeneration === supervisorAfter.tunnelGeneration
         : null,
-      ngrokRecoveryAttemptStable: supervisorBefore.recoveryAttempt !== null && supervisorAfter.recoveryAttempt !== null
+      zrokRecoveryAttemptStable: supervisorBefore.recoveryAttempt !== null && supervisorAfter.recoveryAttempt !== null
         ? supervisorBefore.recoveryAttempt === supervisorAfter.recoveryAttempt
         : null,
-      inspectorAvailable: inspectorBefore.available || inspectorAfter.available,
-      pressure: observedPressure,
-      peakRate1,
-      margin: configuredMargin(observedPressure),
+      managedMcpUrlStable: routeAfter.mcpUrl === routeBefore.mcpUrl,
       privacy: {
         publicUrlReported: false,
-        rawInspectorRequestsRead: false,
+        providerInspectorRead: false,
         rawRequestBodiesStored: false,
       },
     };

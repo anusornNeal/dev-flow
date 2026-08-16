@@ -603,7 +603,7 @@ export async function runMcpTransportBenchmark(options: BenchmarkOptions = {}) {
       },
       limitations: [
         'Measures localhost/loopback protocol and DevFlow server overhead inside one Node.js process; machine load can affect results.',
-        'Does not measure ChatGPT model/tool-selection time, ngrok or other tunnel latency, internet routing, or platform-side MCP registry/serialization overhead.',
+        'Does not measure ChatGPT model/tool-selection time, external public-tunnel latency, internet routing, or platform-side MCP registry/serialization overhead.',
         'The stateless baseline intentionally recreates the pre-session-reuse per-request MCP server/transport behavior in the same process so before/after ratios share machine load.',
         'The warm regression gate requires p50 to improve by at least 5% versus the same-run stateless baseline while allowing at most +2 ms p95 tail variance, preserving a material steady-state gain without making the gate flaky on millisecond-scale outliers.',
         'The legacy SSE comparison is an enforced same-run user-experience control for sync and 3s/10s durable jobs; a passing sync round exits immediately. An initial failure runs two interleaved alternating-order sync-only retries. The repeated decision passes on a 2-of-3 majority, or when all three rounds show a retry-set median within the measured jitter band (<=1.35x or <=3 ms p95 delta), while sustained regressions outside that band still fail and durable jobs are not rerun.',

@@ -3,6 +3,8 @@
 Date: 2026-08-08
 Task: DVF-0354
 
+> **Historical design artifact:** References to the transport stack in this dated document describe the system as it existed on 2026-08-08. Current public transport guidance is `docs/runtime-supervisor.md`; transport notes here are not setup/runtime instructions.
+
 ## Problem
 
 DevFlow currently uses `JobKind` as both execution category and repository lock semantics. `repo-command` and `repo-write` are counted as writers, so long read-only verification such as typecheck can block file reads, search, and context retrieval on the same repository for tens of seconds. The queue also uses a per-pass `blockedResources` shortcut that can create avoidable same-repo head-of-line blocking.

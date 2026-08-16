@@ -6,7 +6,7 @@ export const DEVFLOW_SUPERVISOR_STATE_VERSION = 1 as const;
 export const DEVFLOW_SUPERVISOR_NAME = 'start-all' as const;
 
 export type DevFlowSupervisorMode = 'all' | 'server-only';
-export type DevFlowSupervisorProcessLabel = 'server' | 'ngrok';
+export type DevFlowSupervisorProcessLabel = 'server' | 'zrok';
 export type DevFlowSupervisorProcessStatus = 'starting' | 'running' | 'restarting' | 'stopped' | 'failed';
 export type DevFlowTunnelHealthStatus = 'unknown' | 'healthy' | 'degraded' | 'down';
 export type DevFlowTunnelLifecyclePhase = 'cold-start' | 'steady-state';
@@ -149,8 +149,8 @@ function normalizeProcessState(label: DevFlowSupervisorProcessLabel, value: unkn
   };
 }
 
-function processLabelsIncludeNgrok(labels: DevFlowSupervisorProcessLabel[]) {
-  return labels.includes('ngrok');
+function processLabelsIncludeTunnel(labels: DevFlowSupervisorProcessLabel[]) {
+  return labels.includes('zrok');
 }
 
 export function createDevFlowSupervisorState(input: {
@@ -171,7 +171,7 @@ export function createDevFlowSupervisorState(input: {
     startedAt: now,
     updatedAt: now,
     processes,
-    ...(processLabelsIncludeNgrok(input.processLabels) ? { tunnelHealth: { status: 'unknown' as const, consecutiveProbeFailures: 0 } } : {}),
+    ...(processLabelsIncludeTunnel(input.processLabels) ? { tunnelHealth: { status: 'unknown' as const, consecutiveProbeFailures: 0 } } : {}),
   };
 }
 
@@ -188,10 +188,11 @@ export function readDevFlowSupervisorState(): DevFlowSupervisorState | null {
       ? parsed.processes as Record<string, unknown>
       : {};
     const processes: DevFlowSupervisorState['processes'] = {};
-    for (const label of ['server', 'ngrok'] as const) {
+    for (const label of ['server', 'zrok'] as const) {
       const normalized = normalizeProcessState(label, rawProcesses[label]);
       if (normalized) processes[label] = normalized;
     }
+    const tunnelHealth = normalizeTunnelHealth(parsed.tunnelHealth);
     return {
       version: DEVFLOW_SUPERVISOR_STATE_VERSION,
       supervisor: DEVFLOW_SUPERVISOR_NAME,
@@ -200,7 +201,7 @@ export function readDevFlowSupervisorState(): DevFlowSupervisorState | null {
       startedAt: parsed.startedAt,
       updatedAt: parsed.updatedAt,
       processes,
-      ...(normalizeTunnelHealth(parsed.tunnelHealth) ? { tunnelHealth: normalizeTunnelHealth(parsed.tunnelHealth) } : {}),
+      ...(tunnelHealth ? { tunnelHealth } : {}),
     };
   } catch {
     return null;
@@ -259,7 +260,7 @@ export function resetDevFlowTunnelHealthForGeneration(
     ...(Number.isInteger(previous?.recoveryAttempt) ? { recoveryAttempt: previous?.recoveryAttempt } : {}),
     ...(previous?.lastErrorCode ? { lastErrorCode: previous.lastErrorCode } : {}),
     ...(previous?.lastErrorClass ? { lastErrorClass: previous.lastErrorClass } : {}),
-    message: 'ngrok process generation started; public tunnel reachability is unknown during startup grace.',
+    message: 'zrok service/share generation started; public tunnel reachability is unknown during startup grace.',
   };
 }
 
@@ -272,15 +273,15 @@ export function advanceDevFlowTunnelHealth(
   const failureThreshold = Math.max(1, Math.floor(options.failureThreshold));
   const latencyMs = Number.isFinite(probe.latencyMs) && Number(probe.latencyMs) >= 0 ? Number(probe.latencyMs) : undefined;
   const statusCode = Number.isInteger(probe.statusCode) ? Number(probe.statusCode) : undefined;
-  if (options.generation && previous?.generation && previous.generation !== options.generation) {
-    return previous;
-  }
+  if (options.generation && previous?.generation && previous.generation !== options.generation) return previous;
+
   const current = {
     ...(previous || { status: 'unknown' as const, consecutiveProbeFailures: 0 }),
     ...(options.generation ? { generation: options.generation } : {}),
   };
   const lifecyclePhase: DevFlowTunnelLifecyclePhase = current.lifecyclePhase
     || (current.generation ? (current.lastSuccessAt ? 'steady-state' : 'cold-start') : 'steady-state');
+
   if (probe.ok) {
     return {
       ...current,
@@ -292,7 +293,7 @@ export function advanceDevFlowTunnelHealth(
       lastSuccessAt: now,
       consecutiveProbeFailures: 0,
       nextRecoveryAt: undefined,
-      message: probe.message || 'Public tunnel probe succeeded; ngrok generation is in steady state.',
+      message: probe.message || 'Public tunnel probe succeeded; zrok service/share is reachable.',
     };
   }
 
@@ -307,7 +308,7 @@ export function advanceDevFlowTunnelHealth(
       lastProbeLatencyMs: latencyMs,
       lastFailureAt: now,
       consecutiveProbeFailures: 0,
-      message: probe.message || 'Public tunnel probe failed during ngrok cold-start grace; failure is recorded but not counted for recovery.',
+      message: probe.message || 'Public tunnel probe failed during zrok startup grace; recovery threshold is not advanced yet.',
     };
   }
 
@@ -321,9 +322,7 @@ export function advanceDevFlowTunnelHealth(
     lastProbeLatencyMs: latencyMs,
     lastFailureAt: now,
     consecutiveProbeFailures,
-    message: probe.message || (lifecyclePhase === 'cold-start'
-      ? 'Public tunnel probe failed after ngrok cold-start grace; failure counts toward ngrok-only recovery.'
-      : 'Public tunnel probe failed in steady state.'),
+    message: probe.message || 'Public zrok tunnel probe failed.',
   };
 }
 
@@ -366,7 +365,7 @@ function childDiagnostic(
 function tunnelDiagnostic(state: DevFlowSupervisorState): DevFlowSupervisorChildDiagnostic {
   const enabled = state.mode === 'all';
   if (!enabled) return { enabled: false, status: 'disabled', restartAttempt: 0 };
-  const base = childDiagnostic(state, 'ngrok', true);
+  const base = childDiagnostic(state, 'zrok', true);
   const health = state.tunnelHealth || { status: 'unknown' as const, consecutiveProbeFailures: 0 };
   const status = base.processStatus === 'running' ? health.status : base.status;
   return {

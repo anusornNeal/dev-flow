@@ -193,6 +193,9 @@ test('lifecycle retries are idempotent and invalid or in-flight transitions fail
   assert.throws(() => sessions.recordExecutionLifecycleTransition(created.id, {
     toStage: 'implementing', reasonCode: 'mutation-accepted', evidence: { id: 'mutation-accepted-1', kind: 'async-mutation', status: 'accepted' },
   }), (error: any) => error?.code === 'EXECUTION_LIFECYCLE_EVIDENCE_NOT_TERMINAL');
+  assert.throws(() => sessions.recordExecutionLifecycleTransition(created.id, {
+    toStage: 'compatibility', reasonCode: 'invalid-runtime-sentinel', evidence: { id: 'compatibility-target-1', kind: 'untyped-runtime-input', status: 'completed' },
+  } as any), (error: any) => error?.code === 'EXECUTION_LIFECYCLE_STAGE_REQUIRED');
   assert.equal(repository.getExecutionSessionById(created.id)?.lifecycle.stage, 'context-ready');
 });
 

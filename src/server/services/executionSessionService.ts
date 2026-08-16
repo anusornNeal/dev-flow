@@ -328,13 +328,14 @@ export function getExecutionSessionState(id: string) {
 }
 
 export function recordExecutionLifecycleTransition(id: string, input: ExecutionLifecycleTransitionInput) {
-  const toStage = String(input?.toStage || '').trim() as ExecutionLifecycleTransitionInput['toStage'];
+  const rawToStage = String(input?.toStage || '').trim();
   const reasonCode = String(input?.reasonCode || '').trim();
   const originEvidenceId = String(input?.evidence?.id || '').trim();
   const evidenceKind = String(input?.evidence?.kind || '').trim();
   const evidenceStatus = input?.evidence?.status;
   const operationId = input?.evidence?.operationId ? String(input.evidence.operationId) : null;
-  if (!toStage || toStage === 'compatibility') throw executionSessionError('EXECUTION_LIFECYCLE_STAGE_REQUIRED', 'A concrete observable lifecycle target stage is required.');
+  if (!rawToStage || rawToStage === 'compatibility') throw executionSessionError('EXECUTION_LIFECYCLE_STAGE_REQUIRED', 'A concrete observable lifecycle target stage is required.');
+  const toStage = rawToStage as ExecutionLifecycleTransitionInput['toStage'];
   if (!reasonCode) throw executionSessionError('EXECUTION_LIFECYCLE_REASON_REQUIRED', 'Lifecycle transition reasonCode is required.');
   if (!originEvidenceId || !evidenceKind) throw executionSessionError('EXECUTION_LIFECYCLE_EVIDENCE_REQUIRED', 'Lifecycle transitions require authoritative evidence id and kind.');
   if (evidenceStatus !== 'completed') {

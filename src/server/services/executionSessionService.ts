@@ -11,6 +11,7 @@ import {
   saveExecutionSessionEvidence,
   updateExecutionSessionRecord,
   type ExecutionSessionEvidenceRecord,
+  type ExecutionLifecycleStage,
   type ExecutionSessionRecord,
 } from '../repositories/executionSessionRepository.js';
 import { getTask, getTaskByIdentifier } from '../repositories/taskRepository.js';
@@ -22,6 +23,18 @@ import { createApiError } from './api.js';
 
 const DEFAULT_SESSION_TTL_MS = 24 * 60 * 60_000;
 const MAX_SESSION_TTL_MS = 30 * 24 * 60 * 60_000;
+
+const EXECUTION_LIFECYCLE_TRANSITIONS: Readonly<Record<ExecutionLifecycleStage, readonly ExecutionLifecycleStage[]>> = Object.freeze({
+  compatibility: ['created'],
+  created: ['context-ready'],
+  'context-ready': ['plan-recorded', 'implementing'],
+  'plan-recorded': ['implementing'],
+  implementing: ['verifying'],
+  verifying: ['repairing', 'committed'],
+  repairing: ['verifying'],
+  committed: ['finalized'],
+  finalized: [],
+});
 
 export type TaskMutationOwnershipStrategy = 'transactional-owned' | 'plan-only-exempt';
 const TASK_MUTATION_OWNERSHIP_STRATEGIES: Readonly<Record<string, TaskMutationOwnershipStrategy>> = Object.freeze({
@@ -72,6 +85,20 @@ export interface ExecutionSessionProgressPatch {
   repoRevision?: string | null;
 }
 
+export interface ExecutionLifecycleObservedEvidence {
+  id: string;
+  kind: string;
+  status: 'completed' | 'accepted' | 'running' | 'failed' | 'cancelled';
+  operationId?: string | null;
+}
+
+export interface ExecutionLifecycleTransitionInput {
+  toStage: Exclude<ExecutionLifecycleStage, 'compatibility'>;
+  reasonCode: string;
+  evidence: ExecutionLifecycleObservedEvidence;
+  now?: Date;
+}
+
 export interface RecordExecutionOwnedChangesOptions {
   repoRoot: string;
   source: string;
@@ -118,9 +145,10 @@ export interface ExecutionOwnershipState {
   verificationRecordedAt?: string;
 }
 
-function executionSessionError(code: string, message: string) {
-  const error = new Error(message) as Error & { code?: string };
+function executionSessionError(code: string, message: string, details?: unknown) {
+  const error = new Error(message) as Error & { code?: string; details?: unknown };
   error.code = code;
+  if (details !== undefined) error.details = details;
   return error;
 }
 
@@ -227,6 +255,15 @@ function evidenceId(sessionId: string, input: { kind: string; path: string | nul
   return `evidence-${digest}`;
 }
 
+function lifecycleTransitionEvidenceId(sessionId: string, originEvidenceId: string) {
+  const digest = crypto.createHash('sha256').update(sessionId).update('|lifecycle|').update(originEvidenceId).digest('hex').slice(0, 24);
+  return `lifecycle-${digest}`;
+}
+
+function lifecycleTransitionForOrigin(sessionId: string, originEvidenceId: string) {
+  return listExecutionSessionEvidence(sessionId).find((entry) => entry.kind === 'lifecycle-transition' && entry.metadata?.originEvidenceId === originEvidenceId) || null;
+}
+
 function sessionSnapshot(session: ExecutionSessionRecord) {
   return { ...session };
 }
@@ -239,24 +276,43 @@ export function createExecutionSession(input: CreateExecutionSessionInput) {
   const workspaceId = normalizeWorkspaceIdentity(input.workspaceId);
   let repoRevision: ReturnType<typeof getRepoRevisionForRoot> | null = null;
   if (input.repoRoot) repoRevision = getRepoRevisionForRoot(path.resolve(input.repoRoot));
+  const sessionId = `exec-${randomUUID()}`;
+  const originEvidenceId = `session-created:${sessionId}`;
 
-  return createExecutionSessionRecord({
-    id: `exec-${randomUUID()}`,
-    projectId,
-    taskId: input.taskId ? String(input.taskId) : null,
-    workspaceId,
-    branch: input.branch ? String(input.branch) : repoRevision?.branch || null,
-    baseRevision: repoRevision?.head || null,
-    repoRevision: repoRevision?.token || null,
-    status: 'active',
-    contextHandle: input.contextHandle ? String(input.contextHandle) : null,
-    changedFiles: [],
-    verification: [],
-    createdAt: nowIso,
-    updatedAt: nowIso,
-    expiresAt: new Date(now.getTime() + boundedTtlMs(input.ttlMs)).toISOString(),
-    endedAt: null,
+  withDbTransaction(() => {
+    createExecutionSessionRecord({
+      id: sessionId,
+      projectId,
+      taskId: input.taskId ? String(input.taskId) : null,
+      workspaceId,
+      branch: input.branch ? String(input.branch) : repoRevision?.branch || null,
+      baseRevision: repoRevision?.head || null,
+      repoRevision: repoRevision?.token || null,
+      status: 'active',
+      contextHandle: input.contextHandle ? String(input.contextHandle) : null,
+      changedFiles: [],
+      verification: [],
+      createdAt: nowIso,
+      updatedAt: nowIso,
+      expiresAt: new Date(now.getTime() + boundedTtlMs(input.ttlMs)).toISOString(),
+      endedAt: null,
+    });
+    saveExecutionSessionEvidence({
+      id: lifecycleTransitionEvidenceId(sessionId, originEvidenceId),
+      sessionId,
+      kind: 'lifecycle-transition',
+      path: null,
+      repoRevision: null,
+      fileRevision: null,
+      revisionIdentity: originEvidenceId,
+      contextHandle: input.contextHandle ? String(input.contextHandle) : null,
+      stale: false,
+      metadata: { fromStage: 'compatibility', toStage: 'created', reasonCode: 'session-created', originEvidenceId, operationId: null, evidenceKind: 'session-created', evidenceStatus: 'completed', sequence: 1, observedAt: nowIso },
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    });
   });
+  return requireSession(sessionId);
 }
 
 export function getExecutionSessionState(id: string) {
@@ -265,6 +321,51 @@ export function getExecutionSessionState(id: string) {
     session: sessionSnapshot(session),
     evidence: listExecutionSessionEvidence(id),
   };
+}
+
+export function recordExecutionLifecycleTransition(id: string, input: ExecutionLifecycleTransitionInput) {
+  const toStage = String(input?.toStage || '').trim() as ExecutionLifecycleTransitionInput['toStage'];
+  const reasonCode = String(input?.reasonCode || '').trim();
+  const originEvidenceId = String(input?.evidence?.id || '').trim();
+  const evidenceKind = String(input?.evidence?.kind || '').trim();
+  const evidenceStatus = input?.evidence?.status;
+  const operationId = input?.evidence?.operationId ? String(input.evidence.operationId) : null;
+  if (!toStage || toStage === 'compatibility') throw executionSessionError('EXECUTION_LIFECYCLE_STAGE_REQUIRED', 'A concrete observable lifecycle target stage is required.');
+  if (!reasonCode) throw executionSessionError('EXECUTION_LIFECYCLE_REASON_REQUIRED', 'Lifecycle transition reasonCode is required.');
+  if (!originEvidenceId || !evidenceKind) throw executionSessionError('EXECUTION_LIFECYCLE_EVIDENCE_REQUIRED', 'Lifecycle transitions require authoritative evidence id and kind.');
+  if (evidenceStatus !== 'completed') {
+    throw executionSessionError('EXECUTION_LIFECYCLE_EVIDENCE_NOT_TERMINAL', `Lifecycle evidence '${originEvidenceId}' is ${String(evidenceStatus || 'unknown')}; only completed observable work may advance execution stage.`, {
+      evidenceId: originEvidenceId, evidenceKind, evidenceStatus: evidenceStatus || null, requestedStage: toStage,
+    });
+  }
+
+  const nowIso = (input.now || new Date()).toISOString();
+  let result!: { session: ExecutionSessionRecord; transition: ExecutionSessionEvidenceRecord; changed: boolean; idempotent: boolean };
+  withDbTransaction(() => {
+    const session = requireSession(id);
+    assertActive(session);
+    const duplicate = lifecycleTransitionForOrigin(id, originEvidenceId);
+    if (duplicate) {
+      const metadata = duplicate.metadata || {};
+      const same = metadata.toStage === toStage && metadata.reasonCode === reasonCode && metadata.evidenceKind === evidenceKind && (metadata.operationId || null) === operationId;
+      if (!same) throw executionSessionError('EXECUTION_LIFECYCLE_IDEMPOTENCY_CONFLICT', `Lifecycle evidence '${originEvidenceId}' was already reconciled to a different transition.`, { evidenceId: originEvidenceId, existing: metadata, requested: { toStage, reasonCode, evidenceKind, operationId } });
+      result = { session, transition: duplicate, changed: false, idempotent: true };
+      return;
+    }
+
+    const fromStage = session.lifecycle.stage;
+    const allowed = EXECUTION_LIFECYCLE_TRANSITIONS[fromStage] || [];
+    if (!allowed.includes(toStage)) throw executionSessionError('EXECUTION_LIFECYCLE_TRANSITION_BLOCKED', `Lifecycle transition ${fromStage} -> ${toStage} is not allowed.`, { fromStage, toStage, allowedStages: allowed, reasonCode, evidenceId: originEvidenceId });
+    const transition = saveExecutionSessionEvidence({
+      id: lifecycleTransitionEvidenceId(id, originEvidenceId), sessionId: id, kind: 'lifecycle-transition', path: null,
+      repoRevision: null, fileRevision: null, revisionIdentity: operationId || originEvidenceId, contextHandle: session.contextHandle, stale: false,
+      metadata: { fromStage, toStage, reasonCode, originEvidenceId, operationId, evidenceKind, evidenceStatus: 'completed', sequence: (session.lifecycle.lastTransition?.sequence || 0) + 1, observedAt: nowIso },
+      createdAt: nowIso, updatedAt: nowIso,
+    });
+    updateExecutionSessionRecord(id, { updatedAt: nowIso });
+    result = { session: requireSession(id), transition, changed: true, idempotent: false };
+  });
+  return result;
 }
 
 export function updateExecutionSessionProgress(id: string, patch: ExecutionSessionProgressPatch) {

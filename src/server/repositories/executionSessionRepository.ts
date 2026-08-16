@@ -3,6 +3,28 @@ import db, { withDbTransaction } from '../../db/index.js';
 export const EXECUTION_SESSION_STATUSES = ['active', 'completed', 'cancelled', 'expired'] as const;
 export type ExecutionSessionStatus = typeof EXECUTION_SESSION_STATUSES[number];
 
+export const EXECUTION_LIFECYCLE_STAGES = ['compatibility', 'created', 'context-ready', 'plan-recorded', 'implementing', 'verifying', 'repairing', 'committed', 'finalized'] as const;
+export type ExecutionLifecycleStage = typeof EXECUTION_LIFECYCLE_STAGES[number];
+
+export interface ExecutionLifecycleTransition {
+  evidenceId: string;
+  fromStage: ExecutionLifecycleStage | null;
+  toStage: ExecutionLifecycleStage;
+  reasonCode: string;
+  originEvidenceId: string;
+  operationId: string | null;
+  evidenceKind: string;
+  evidenceStatus: 'completed';
+  sequence: number;
+  observedAt: string;
+}
+
+export interface ExecutionLifecycleState {
+  stage: ExecutionLifecycleStage;
+  legacyCompatibility: boolean;
+  lastTransition: ExecutionLifecycleTransition | null;
+}
+
 export interface ExecutionSessionRecord {
   id: string;
   projectId: string;
@@ -12,6 +34,7 @@ export interface ExecutionSessionRecord {
   baseRevision: string | null;
   repoRevision: string | null;
   status: ExecutionSessionStatus;
+  lifecycle: ExecutionLifecycleState;
   contextHandle: string | null;
   changedFiles: string[];
   verification: unknown[];
@@ -36,7 +59,7 @@ export interface ExecutionSessionEvidenceRecord {
   updatedAt: string;
 }
 
-export interface CreateExecutionSessionRecordInput extends Omit<ExecutionSessionRecord, 'changedFiles' | 'verification'> {
+export interface CreateExecutionSessionRecordInput extends Omit<ExecutionSessionRecord, 'changedFiles' | 'verification' | 'lifecycle'> {
   changedFiles?: string[];
   verification?: unknown[];
 }
@@ -64,6 +87,36 @@ function parseObject(value: unknown): Record<string, unknown> {
   }
 }
 
+function asLifecycleStage(value: unknown): ExecutionLifecycleStage | null {
+  const normalized = String(value || '');
+  return (EXECUTION_LIFECYCLE_STAGES as readonly string[]).includes(normalized) ? normalized as ExecutionLifecycleStage : null;
+}
+
+export function getExecutionLifecycleStateForSession(sessionId: string): ExecutionLifecycleState {
+  const row = db.prepare(`SELECT * FROM execution_session_evidence WHERE sessionId = ? AND kind = 'lifecycle-transition' ORDER BY rowid DESC LIMIT 1`).get(sessionId);
+  const evidence = normalizeEvidence(row);
+  if (!evidence) return { stage: 'compatibility', legacyCompatibility: true, lastTransition: null };
+  const metadata = evidence.metadata || {};
+  const toStage = asLifecycleStage(metadata.toStage);
+  if (!toStage || toStage === 'compatibility') return { stage: 'compatibility', legacyCompatibility: true, lastTransition: null };
+  return {
+    stage: toStage,
+    legacyCompatibility: false,
+    lastTransition: {
+      evidenceId: evidence.id,
+      fromStage: asLifecycleStage(metadata.fromStage),
+      toStage,
+      reasonCode: typeof metadata.reasonCode === 'string' ? metadata.reasonCode : '',
+      originEvidenceId: typeof metadata.originEvidenceId === 'string' ? metadata.originEvidenceId : '',
+      operationId: typeof metadata.operationId === 'string' && metadata.operationId ? metadata.operationId : null,
+      evidenceKind: typeof metadata.evidenceKind === 'string' ? metadata.evidenceKind : '',
+      evidenceStatus: 'completed',
+      sequence: Number.isFinite(Number(metadata.sequence)) ? Number(metadata.sequence) : 0,
+      observedAt: typeof metadata.observedAt === 'string' && metadata.observedAt ? metadata.observedAt : evidence.createdAt,
+    },
+  };
+}
+
 function normalizeSession(row: any): ExecutionSessionRecord | null {
   if (!row) return null;
   return {
@@ -75,6 +128,7 @@ function normalizeSession(row: any): ExecutionSessionRecord | null {
     baseRevision: row.baseRevision == null ? null : String(row.baseRevision),
     repoRevision: row.repoRevision == null ? null : String(row.repoRevision),
     status: row.status as ExecutionSessionStatus,
+    lifecycle: getExecutionLifecycleStateForSession(String(row.id)),
     contextHandle: row.contextHandle == null ? null : String(row.contextHandle),
     changedFiles: parseArray(row.changedFilesJson).map(String),
     verification: parseArray(row.verificationJson),

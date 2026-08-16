@@ -20,6 +20,10 @@ import { buildRepoEvidenceIdentity, getRepoRevisionForRoot } from './repoRevisio
 import { withDbTransaction } from '../../db/index.js';
 import { resolveSessionWorkspace } from './sessionWorkspaceService.js';
 import { createApiError } from './api.js';
+import {
+  recordAutomaticExecutionCheckpoint,
+  recordExecutionPendingOperationReference,
+} from './executionCheckpointService.js';
 
 const DEFAULT_SESSION_TTL_MS = 24 * 60 * 60_000;
 const MAX_SESSION_TTL_MS = 30 * 24 * 60 * 60_000;
@@ -334,12 +338,21 @@ export function recordExecutionLifecycleTransition(id: string, input: ExecutionL
   if (!reasonCode) throw executionSessionError('EXECUTION_LIFECYCLE_REASON_REQUIRED', 'Lifecycle transition reasonCode is required.');
   if (!originEvidenceId || !evidenceKind) throw executionSessionError('EXECUTION_LIFECYCLE_EVIDENCE_REQUIRED', 'Lifecycle transitions require authoritative evidence id and kind.');
   if (evidenceStatus !== 'completed') {
+    if ((evidenceStatus === 'accepted' || evidenceStatus === 'running') && operationId) {
+      recordExecutionPendingOperationReference(id, {
+        operationId,
+        evidenceId: originEvidenceId,
+        kind: evidenceKind,
+        status: evidenceStatus,
+      }, input.now || new Date());
+    }
     throw executionSessionError('EXECUTION_LIFECYCLE_EVIDENCE_NOT_TERMINAL', `Lifecycle evidence '${originEvidenceId}' is ${String(evidenceStatus || 'unknown')}; only completed observable work may advance execution stage.`, {
       evidenceId: originEvidenceId, evidenceKind, evidenceStatus: evidenceStatus || null, requestedStage: toStage,
     });
   }
 
-  const nowIso = (input.now || new Date()).toISOString();
+  const now = input.now || new Date();
+  const nowIso = now.toISOString();
   let result!: { session: ExecutionSessionRecord; transition: ExecutionSessionEvidenceRecord; changed: boolean; idempotent: boolean };
   withDbTransaction(() => {
     const session = requireSession(id);
@@ -363,7 +376,9 @@ export function recordExecutionLifecycleTransition(id: string, input: ExecutionL
       createdAt: nowIso, updatedAt: nowIso,
     });
     updateExecutionSessionRecord(id, { updatedAt: nowIso });
-    result = { session: requireSession(id), transition, changed: true, idempotent: false };
+    const refreshed = requireSession(id);
+    recordAutomaticExecutionCheckpoint(id, transition, now);
+    result = { session: refreshed, transition, changed: true, idempotent: false };
   });
   return result;
 }

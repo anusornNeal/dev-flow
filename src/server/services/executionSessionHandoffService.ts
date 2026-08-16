@@ -7,6 +7,11 @@ import {
   recordExecutionSessionEvidence,
   resumeExecutionSession,
 } from './executionSessionService.js';
+import {
+  compactVerificationReferences,
+  enrichExecutionCheckpointFromHandoff,
+  getLatestExecutionCheckpoint,
+} from './executionCheckpointService.js';
 
 export interface CreateExecutionHandoffInput {
   fromAgent?: string | null;
@@ -159,7 +164,7 @@ export function createExecutionHandoffSnapshot(
   const noteValue = compactString(input.note);
   const note = noteValue ? redactWorkspaceRoot(noteValue, options.repoRoot) : null;
   const snapshotId = `handoff-${randomUUID()}`;
-  const sourceEvidence = evidence.filter((entry) => entry.kind !== 'handoff').map(evidenceRef);
+  const sourceEvidence = evidence.filter((entry) => entry.kind !== 'handoff' && entry.kind !== 'checkpoint').map(evidenceRef);
   const snapshot: ExecutionHandoffSnapshot = {
     id: snapshotId,
     executionSessionId: session.id,
@@ -196,6 +201,12 @@ export function createExecutionHandoffSnapshot(
     repoRevision: session.repoRevision,
     metadata: { snapshot },
   }], { repoRoot: options.repoRoot, now });
+  enrichExecutionCheckpointFromHandoff(sessionId, {
+    completedWork: snapshot.completedWork,
+    pendingNextWork: snapshot.pendingNextWork,
+    decisions: snapshot.decisions,
+    blockers: [...snapshot.dependencies, ...snapshot.risks],
+  }, now);
   return snapshot;
 }
 
@@ -210,6 +221,7 @@ export function getExecutionSessionResumeView(
     now: options.now,
   });
   const latestHandoff = listExecutionHandoffSnapshots(sessionId)[0] || null;
+  const latestCheckpoint = getLatestExecutionCheckpoint(sessionId);
   const progress = taskProgress(state, resumed.session.taskId);
   const fileEvidence = resumed.evidence.filter((entry) => entry.kind === 'file');
   const staleEvidence = fileEvidence.filter((entry) => entry.stale).map(evidenceRef);
@@ -218,18 +230,53 @@ export function getExecutionSessionResumeView(
     ...resumed.session.changedFiles,
     ...staleEvidence.map((entry) => entry.path).filter((entry): entry is string => Boolean(entry)),
   ])].sort();
-  let validity: 'valid' | 'stale' | 'terminal' | 'workspace-mismatch' = staleEvidence.length > 0 ? 'stale' : 'valid';
+  const currentRepoRevision = resumed.currentRepoRevision || resumed.session.repoRevision;
+  const checkpointFresh = !latestCheckpoint?.sourceRepoRevision || !currentRepoRevision || latestCheckpoint.sourceRepoRevision === currentRepoRevision;
+  const contextFresh = !latestCheckpoint || latestCheckpoint.contextHandle === resumed.session.contextHandle;
+  const verificationReferences = latestCheckpoint?.verificationReferences?.length
+    ? latestCheckpoint.verificationReferences
+    : compactVerificationReferences(resumed.session.verification);
+  const verificationFreshness: 'fresh' | 'stale' | 'missing' = verificationReferences.length === 0
+    ? 'missing'
+    : checkpointFresh && contextFresh && staleEvidence.length === 0 ? 'fresh' : 'stale';
+  let validity: 'valid' | 'stale' | 'terminal' | 'workspace-mismatch' = staleEvidence.length > 0 || !checkpointFresh || !contextFresh ? 'stale' : 'valid';
   if (!resumed.resumable && resumed.reason === 'SESSION_TERMINAL') validity = 'terminal';
   if (!resumed.resumable && resumed.reason === 'WORKSPACE_MISMATCH') validity = 'workspace-mismatch';
 
   const warnings: string[] = [];
   if (staleEvidence.length > 0) warnings.push(`Fresh-read required for stale targets: ${staleEvidence.map((entry) => entry.path).filter(Boolean).join(', ')}.`);
+  if (!checkpointFresh) warnings.push('Automatic checkpoint was recorded against an older repository revision; revalidate affected evidence before mutation.');
+  if (!contextFresh) warnings.push('Context handle changed after the latest checkpoint; refresh context before relying on checkpointed decisions.');
+  if ((latestCheckpoint?.pendingOperations.length || 0) > 0) warnings.push('Pending durable operations must be inspected by operation id; do not replay lifecycle-affecting mutations solely because the prior client response was lost.');
   if (validity === 'terminal') warnings.push(`Execution session is terminal (${resumed.session.status}); review evidence is available but active mutation is disabled.`);
   if (validity === 'workspace-mismatch') warnings.push('Requested workspace does not match the logical workspace associated with this execution session.');
   const receivingAgent = compactString(options.receivingAgent);
   if (receivingAgent && latestHandoff?.toAgent && receivingAgent !== latestHandoff.toAgent) {
     warnings.push(`Latest handoff targets '${latestHandoff.toAgent}', while the receiving agent is '${receivingAgent}'.`);
   }
+
+  const recoveryBlockers: Array<{ code: string; message: string; replacementExecutionAllowed: false; operationId?: string }> = [];
+  if (validity === 'workspace-mismatch') recoveryBlockers.push({
+    code: 'WORKSPACE_MISMATCH',
+    message: 'Resume must use the same logical workspace; do not create a replacement execution automatically.',
+    replacementExecutionAllowed: false,
+  });
+  if (validity === 'terminal') recoveryBlockers.push({
+    code: 'SESSION_TERMINAL',
+    message: `Execution session is terminal (${resumed.session.status}) and cannot resume active mutation.`,
+    replacementExecutionAllowed: false,
+  });
+  if (!checkpointFresh || !contextFresh || staleEvidence.length > 0) recoveryBlockers.push({
+    code: 'FRESHNESS_REVALIDATION_REQUIRED',
+    message: 'Checkpoint/context/evidence freshness must be restored before lifecycle-affecting mutation continues.',
+    replacementExecutionAllowed: false,
+  });
+  for (const pending of latestCheckpoint?.pendingOperations || []) recoveryBlockers.push({
+    code: 'PENDING_DURABLE_OPERATION',
+    message: 'Inspect the durable operation outcome before deciding whether any mutation is still required.',
+    replacementExecutionAllowed: false,
+    operationId: pending.operationId,
+  });
 
   return {
     executionSessionId: resumed.session.id,
@@ -243,15 +290,30 @@ export function getExecutionSessionResumeView(
       branch: resumed.session.branch,
       baseRevision: resumed.session.baseRevision,
       repoRevision: resumed.session.repoRevision,
-      currentRepoRevision: resumed.currentRepoRevision || resumed.session.repoRevision,
+      currentRepoRevision,
       contextHandle: resumed.session.contextHandle,
     },
     task: latestHandoff?.task || progress.task,
-    lastCompletedStage: latestHandoff?.lastCompletedStage || progress.completed.at(-1) || null,
-    completedWork: latestHandoff?.completedWork || progress.completed,
-    pendingNextWork: latestHandoff?.pendingNextWork || progress.pending,
+    stage: resumed.session.lifecycle.stage,
+    lifecycle: resumed.session.lifecycle,
+    lastCompletedStage: latestHandoff?.lastCompletedStage || latestCheckpoint?.stage || progress.completed.at(-1) || null,
+    completedWork: latestHandoff?.completedWork?.length ? latestHandoff.completedWork : latestCheckpoint?.completedWork?.length ? latestCheckpoint.completedWork : progress.completed,
+    pendingNextWork: latestHandoff?.pendingNextWork?.length ? latestHandoff.pendingNextWork : latestCheckpoint?.pendingNextWork?.length ? latestCheckpoint.pendingNextWork : progress.pending,
+    decisions: latestHandoff?.decisions?.length ? latestHandoff.decisions : latestCheckpoint?.decisions || [],
+    blockers: latestCheckpoint?.blockers || [],
     changedFiles: [...resumed.session.changedFiles],
     verification: [...resumed.session.verification],
+    verificationReferences,
+    contextHandleLineage: latestCheckpoint?.contextHandleLineage || (resumed.session.contextHandle ? [resumed.session.contextHandle] : []),
+    pendingOperations: latestCheckpoint?.pendingOperations || [],
+    checkpoint: latestCheckpoint,
+    recoveryBlockers,
+    freshness: {
+      checkpoint: checkpointFresh ? 'fresh' : 'stale',
+      context: contextFresh ? 'fresh' : 'stale',
+      evidence: staleEvidence.length === 0 ? 'fresh' : 'stale',
+      verification: verificationFreshness,
+    },
     handoff: latestHandoff,
     reusableEvidence,
     staleEvidence,

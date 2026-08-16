@@ -19,6 +19,11 @@ function resolveActiveExecutionRepoRoot(deps: ApiRouteDeps, executionSessionId: 
     if (!workspace) {
       throw createApiError(404, 'WORKSPACE_NOT_FOUND', `Workspace '${workspaceId}' was not found for execution session '${executionSessionId}'.`, {
         affectedId: workspaceId,
+        details: {
+          recoveryBlocker: 'EXECUTION_WORKSPACE_UNAVAILABLE',
+          replacementExecutionAllowed: false,
+          guidance: 'Recover or revalidate the existing logical workspace before resuming; never create a replacement execution automatically.',
+        },
       });
     }
     if (workspace.projectId !== session.projectId) {

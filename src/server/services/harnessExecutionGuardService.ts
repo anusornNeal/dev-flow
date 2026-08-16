@@ -1,0 +1,447 @@
+import { createHash } from 'node:crypto';
+import type { AppState } from '../types';
+import { getProject } from '../repositories/projectRepository.js';
+import { getTaskByIdentifier, getTasks, getTasksByProjectId } from '../repositories/taskRepository.js';
+import { createApiError } from './api.js';
+import { getProjectRulesContext } from './projectRulesService.js';
+import {
+  evaluateHarnessPolicy,
+  type HarnessPolicy,
+  type HarnessPolicyInput,
+  type HarnessSoftChoices,
+  type HarnessRisk,
+  type HarnessWorkKind,
+} from './harnessPolicyService.js';
+import {
+  getTaskExecutionMutationBinding,
+  recordExecutionLifecycleTransition,
+  type ExecutionLifecycleTransitionInput,
+} from './executionSessionService.js';
+
+export type HarnessExecutionAction = 'mutation' | 'verification' | 'commit' | 'finalization' | 'restart';
+
+export type HarnessExecutionGuardDecision = {
+  guarded: boolean;
+  allowed: boolean;
+  action: HarnessExecutionAction | null;
+  toolName: string;
+  reasonCode: string;
+  guidance: string[];
+  policy: null | Pick<HarnessPolicy, 'version' | 'policyId' | 'inputFingerprint' | 'revisionFingerprint' | 'planningEvidence' | 'verification' | 'restart' | 'finalization'>;
+  execution: null | {
+    sessionId: string;
+    taskId: string | null;
+    workspaceId: string | null;
+    stage: string;
+    transitionEvidenceId: string | null;
+  };
+  operationId: string;
+};
+
+const MUTATION_TOOLS = new Set([
+  'write_local_file',
+  'safe_edit_local_file',
+  'apply_patch',
+  'edit_local_files_batch',
+  'apply_prepared_edit_plan',
+  'apply_prepared_edit',
+  'delete_local_path',
+  'move_local_path',
+]);
+const VERIFICATION_TOOLS = new Set(['run_project_command', 'apply_and_verify']);
+const COMMIT_TOOLS = new Set(['commit_task_owned_changes', 'commit_git_changes']);
+const FINALIZATION_TOOLS = new Set(['finalize_task_workspace']);
+const RESTART_TOOLS = new Set(['restart_devflow']);
+
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record).sort().filter((key) => !key.startsWith('__')).map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
+}
+
+function fingerprint(value: unknown) {
+  return createHash('sha256').update(stableStringify(value), 'utf8').digest('hex');
+}
+
+function boundedString(value: unknown) {
+  const text = typeof value === 'string' ? value.trim() : '';
+  return text ? text.slice(0, 240) : null;
+}
+
+function actionForTool(toolName: string): HarnessExecutionAction | null {
+  if (MUTATION_TOOLS.has(toolName)) return 'mutation';
+  if (VERIFICATION_TOOLS.has(toolName)) return 'verification';
+  if (COMMIT_TOOLS.has(toolName)) return 'commit';
+  if (FINALIZATION_TOOLS.has(toolName)) return 'finalization';
+  if (RESTART_TOOLS.has(toolName)) return 'restart';
+  return null;
+}
+
+export function isHarnessLifecycleAffectingTool(toolName: string) {
+  return actionForTool(String(toolName || '').trim()) !== null;
+}
+
+function taskRisk(task: any): HarnessRisk {
+  if (!task) return 'unknown';
+  if (task.priority === 'high') return 'high';
+  if (task.priority === 'medium') return 'medium';
+  if (task.priority === 'low') return 'low';
+  return 'unknown';
+}
+
+function taskKind(task: any): HarnessWorkKind {
+  if (!task) return 'unknown';
+  const tags = Array.isArray(task.tags) ? task.tags.map((entry: unknown) => String(entry).toLowerCase()) : [];
+  const targets = Array.isArray(task.targetFiles) ? task.targetFiles : [];
+  if (tags.some((entry: string) => /bug|fix|defect/.test(entry))) return 'bug-fix';
+  if (tags.some((entry: string) => /ui|ux|frontend/.test(entry)) && targets.length <= 2) return 'small-ui';
+  if (targets.length >= 4 || tags.some((entry: string) => /cross-module|architecture|migration/.test(entry))) return 'cross-module';
+  if (task.priority === 'high') return 'high-risk';
+  return 'unknown';
+}
+
+function softChoices(value: unknown): HarnessSoftChoices | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  const result: HarnessSoftChoices = {};
+  if (typeof raw.planningEvidenceRequired === 'boolean') result.planningEvidenceRequired = raw.planningEvidenceRequired;
+  if (raw.contextSearchBudgetClass === 'compact' || raw.contextSearchBudgetClass === 'standard' || raw.contextSearchBudgetClass === 'expanded') result.contextSearchBudgetClass = raw.contextSearchBudgetClass;
+  if (raw.verificationCoverage === 'none' || raw.verificationCoverage === 'targeted' || raw.verificationCoverage === 'broad' || raw.verificationCoverage === 'full') result.verificationCoverage = raw.verificationCoverage;
+  if (typeof raw.parallelAllowed === 'boolean') result.parallelAllowed = raw.parallelAllowed;
+  return Object.keys(result).length ? result : undefined;
+}
+
+function projectRevision(project: any) {
+  if (!project) return '<unknown>';
+  return fingerprint({
+    id: project.id,
+    name: project.name,
+    repoUrl: project.repoUrl,
+    localPath: project.localPath,
+    taskIdPrefix: project.taskIdPrefix,
+    gitWorkflowPolicy: project.gitWorkflowPolicy,
+  });
+}
+
+function rulesRevision(project: any) {
+  try {
+    return fingerprint(getProjectRulesContext(project?.localPath || undefined));
+  } catch {
+    return '<unknown>';
+  }
+}
+
+function relatedWorkActive(projectId: string | undefined, taskId: string | undefined) {
+  const tasks = projectId ? getTasksByProjectId(projectId) : getTasks();
+  return tasks.some((entry) => entry.id !== taskId && entry.status === 'in-progress');
+}
+
+function resolveExplicitPolicy(args: Record<string, any>, task: any) {
+  const envelope = args?.harnessPolicy && typeof args.harnessPolicy === 'object' ? args.harnessPolicy : {};
+  return {
+    user: softChoices(envelope.userExplicit || args?.harnessPolicyOverride),
+    task: softChoices(envelope.taskExplicit || task?.harnessPolicy?.explicit),
+    taskDefaults: softChoices(task?.harnessPolicy?.defaults),
+    userRevision: boundedString(envelope.userRevision) || fingerprint(softChoices(envelope.userExplicit || args?.harnessPolicyOverride) || {}),
+  };
+}
+
+function candidatePathValues(args: Record<string, any>) {
+  const values: string[] = [];
+  const push = (value: unknown) => {
+    if (typeof value === 'string' && value.trim()) values.push(value.trim());
+  };
+  push(args?.filePath);
+  push(args?.path);
+  if (Array.isArray(args?.files)) for (const entry of args.files) push(typeof entry === 'string' ? entry : entry?.filePath || entry?.path);
+  return values;
+}
+
+function pathsLookSafe(args: Record<string, any>) {
+  const paths = candidatePathValues(args);
+  return paths.every((entry) => {
+    const normalized = entry.replace(/\\/g, '/');
+    return !/^[a-zA-Z]:\//.test(normalized)
+      && !normalized.startsWith('/')
+      && normalized !== '..'
+      && !normalized.startsWith('../')
+      && !normalized.includes('/../');
+  });
+}
+
+function operationIdentity(toolName: string, args: Record<string, any>) {
+  const explicit = boundedString(args?.harnessOperationId || args?.operationId || args?.jobId || args?.editPlanId);
+  return explicit || `guard-op-${fingerprint({ toolName, args }).slice(0, 32)}`;
+}
+
+function resolveTaskWithoutBinding(args: Record<string, any>) {
+  const taskId = boundedString(args?.taskId);
+  return taskId ? getTaskByIdentifier(taskId, 'full') : undefined;
+}
+
+function buildPolicyInput(toolName: string, args: Record<string, any>, binding: ReturnType<typeof getTaskExecutionMutationBinding> | null): HarnessPolicyInput {
+  const task = binding?.task || resolveTaskWithoutBinding(args);
+  const projectId = task?.projectId || boundedString(args?.projectId) || undefined;
+  const project = projectId ? getProject(projectId) : undefined;
+  const explicit = resolveExplicitPolicy(args, task);
+  const session = binding?.session;
+  const action = actionForTool(toolName);
+  return {
+    task: {
+      revision: task?.updatedAt || '<unknown>',
+      risk: taskRisk(task),
+      kind: taskKind(task),
+      explicit: explicit.task,
+      defaults: explicit.taskDefaults,
+    },
+    user: {
+      revision: explicit.userRevision,
+      explicit: explicit.user,
+    },
+    project: {
+      revision: projectRevision(project),
+    },
+    rules: {
+      revision: rulesRevision(project),
+    },
+    runtime: {
+      revision: fingerprint({
+        sessionId: session?.id || null,
+        stage: session?.lifecycle.stage || null,
+        transitionEvidenceId: session?.lifecycle.lastTransition?.evidenceId || null,
+        repoRevision: session?.repoRevision || null,
+        workspaceId: binding?.workspaceId || boundedString(args?.workspaceId),
+        claimExpiresAt: task?.claim?.expiresAt || null,
+      }),
+      scopeRelationship: binding ? 'disjoint' : 'unknown',
+      relatedWorkActive: action === 'restart' ? relatedWorkActive(projectId, task?.id) : false,
+      restartRequested: action === 'restart',
+      managedWorkspace: binding ? true : undefined,
+      ownershipProven: binding ? binding.task?.claim?.workspaceId === binding.workspaceId : undefined,
+      pathsSafe: pathsLookSafe(args),
+      workingTreeClean: undefined,
+      commitOwned: toolName === 'commit_task_owned_changes' ? true : undefined,
+      integrationSafe: undefined,
+    },
+  };
+}
+
+function compactPolicy(policy: HarnessPolicy): HarnessExecutionGuardDecision['policy'] {
+  return {
+    version: policy.version,
+    policyId: policy.policyId,
+    inputFingerprint: policy.inputFingerprint,
+    revisionFingerprint: policy.revisionFingerprint,
+    planningEvidence: policy.planningEvidence,
+    verification: policy.verification,
+    restart: policy.restart,
+    finalization: policy.finalization,
+  };
+}
+
+function executionIdentity(binding: ReturnType<typeof getTaskExecutionMutationBinding> | null): HarnessExecutionGuardDecision['execution'] {
+  if (!binding) return null;
+  return {
+    sessionId: binding.session.id,
+    taskId: binding.session.taskId,
+    workspaceId: binding.workspaceId,
+    stage: binding.session.lifecycle.stage,
+    transitionEvidenceId: binding.session.lifecycle.lastTransition?.evidenceId || null,
+  };
+}
+
+function blockedDecision(toolName: string, action: HarnessExecutionAction, operationId: string, policy: HarnessPolicy, binding: ReturnType<typeof getTaskExecutionMutationBinding> | null, reasonCode: string, guidance: string[]): HarnessExecutionGuardDecision {
+  return {
+    guarded: true,
+    allowed: false,
+    action,
+    toolName,
+    reasonCode,
+    guidance,
+    policy: compactPolicy(policy),
+    execution: executionIdentity(binding),
+    operationId,
+  };
+}
+
+export function preflightHarnessExecutionGuard(_state: AppState, toolNameValue: string, argsValue: Record<string, any> = {}): HarnessExecutionGuardDecision {
+  const toolName = String(toolNameValue || '').trim();
+  const action = actionForTool(toolName);
+  const args = argsValue || {};
+  const operationId = operationIdentity(toolName, args);
+  if (!action) {
+    return { guarded: false, allowed: true, action: null, toolName, reasonCode: 'LIGHTWEIGHT_UNGUARDED', guidance: [], policy: null, execution: null, operationId };
+  }
+
+  const explicitExecutionIntent = Boolean(
+    boundedString(args?.taskId)
+    || boundedString(args?.harnessPolicyFingerprint)
+    || boundedString(args?.harnessOperationId),
+  );
+  let binding: ReturnType<typeof getTaskExecutionMutationBinding> | null = null;
+  try {
+    binding = getTaskExecutionMutationBinding(args);
+  } catch (error: any) {
+    const policy = evaluateHarnessPolicy(buildPolicyInput(toolName, args, null));
+    return blockedDecision(toolName, action, operationId, policy, null, error?.code || 'EXECUTION_BINDING_REQUIRED', [String(error?.message || 'Execution binding could not be proven.')]);
+  }
+
+  if (action !== 'restart' && !binding && !explicitExecutionIntent) {
+    return {
+      guarded: false,
+      allowed: true,
+      action,
+      toolName,
+      reasonCode: 'GENERIC_NON_EXECUTION_UNGUARDED',
+      guidance: [],
+      policy: null,
+      execution: null,
+      operationId,
+    };
+  }
+
+  const policyInput = buildPolicyInput(toolName, args, binding);
+  const policy = evaluateHarnessPolicy(policyInput);
+  const suppliedFingerprint = boundedString(args?.harnessPolicyFingerprint);
+  if (suppliedFingerprint && suppliedFingerprint !== policy.inputFingerprint) {
+    return blockedDecision(toolName, action, operationId, policy, binding, 'HARNESS_POLICY_STALE', ['Recompute execution policy from current task/project/rule/runtime facts before retrying.']);
+  }
+
+  if (toolName === 'commit_git_changes') {
+    return blockedDecision(toolName, action, operationId, policy, binding, 'TASK_OWNED_COMMIT_REQUIRED', ['Lifecycle commits must use commit_task_owned_changes so execution ownership and verification freshness remain authoritative.']);
+  }
+  if (action !== 'restart' && !binding) {
+    return blockedDecision(toolName, action, operationId, policy, null, 'MANAGED_WORKSPACE_REQUIRED', ['Lifecycle-affecting execution requires an actively claimed task-bound managed workspace.']);
+  }
+  if (binding && !pathsLookSafe(args)) {
+    return blockedDecision(toolName, action, operationId, policy, binding, 'REPO_RELATIVE_PATH_SAFETY_REQUIRED', ['Lifecycle-affecting task paths must remain repository-relative.']);
+  }
+  if (binding) {
+    const stage = binding.session.lifecycle.stage;
+    const allowedStages: Record<Exclude<HarnessExecutionAction, 'restart'>, readonly string[]> = {
+      mutation: ['context-ready', 'plan-recorded', 'implementing', 'repairing'],
+      verification: ['implementing', 'repairing'],
+      commit: ['verifying'],
+      finalization: ['committed'],
+    };
+    if (action !== 'restart' && !allowedStages[action].includes(stage)) {
+      return blockedDecision(toolName, action, operationId, policy, binding, 'EXECUTION_LIFECYCLE_STAGE_BLOCKED', [`${action} is not allowed while execution stage is '${stage}'. Allowed stages: ${allowedStages[action].join(', ')}.`]);
+    }
+  }
+  if (action === 'restart' && policy.restart.value.gate !== 'allowed') {
+    return blockedDecision(toolName, action, operationId, policy, binding, policy.restart.reasonCodes[0] || 'RESTART_BLOCKED', ['Restart is blocked until related active work is known inactive.']);
+  }
+
+  const guidance = [
+    ...policy.planningEvidence.reasonCodes.map((code) => `planning:${code}`),
+    ...policy.verification.reasonCodes.map((code) => `verification:${code}`),
+  ].slice(0, 10);
+  return {
+    guarded: true,
+    allowed: true,
+    action,
+    toolName,
+    reasonCode: 'HARNESS_EXECUTION_ALLOWED',
+    guidance,
+    policy: compactPolicy(policy),
+    execution: executionIdentity(binding),
+    operationId,
+  };
+}
+
+export function assertHarnessExecutionAllowed(state: AppState, toolName: string, args: Record<string, any> = {}) {
+  const decision = preflightHarnessExecutionGuard(state, toolName, args);
+  if (!decision.allowed) {
+    throw createApiError(409, decision.reasonCode, `Harness execution guard blocked '${toolName}'.`, { details: decision });
+  }
+  return decision;
+}
+
+const NON_TERMINAL_RESULT_STATUSES = new Set(['accepted', 'queued', 'pending', 'running', 'scheduled']);
+const FAILED_RESULT_STATUSES = new Set(['failed', 'cancelled', 'timed_out', 'interrupted', 'blocked', 'needs-recovery', 'conflict']);
+
+function resultIsTerminal(result: any) {
+  if (!result || typeof result !== 'object') return false;
+  const status = typeof result.status === 'string' ? result.status : '';
+  return !NON_TERMINAL_RESULT_STATUSES.has(status) && result.ready !== false;
+}
+
+function resultFailed(result: any) {
+  const status = typeof result?.status === 'string' ? result.status : '';
+  return result?.ok === false
+    || result?.timedOut === true
+    || FAILED_RESULT_STATUSES.has(status)
+    || (typeof result?.exitCode === 'number' && result.exitCode !== 0);
+}
+
+function mutationHadAuthoritativeEffect(result: any) {
+  if (!resultIsTerminal(result) || resultFailed(result) || result?.dryRun === true) return false;
+  const effectFlags = ['changed', 'removed', 'moved', 'applied', 'created']
+    .filter((key) => typeof result?.[key] === 'boolean')
+    .map((key) => result[key] as boolean);
+  return effectFlags.length === 0 || effectFlags.some(Boolean);
+}
+
+function commitWasCreated(result: any) {
+  if (!resultIsTerminal(result) || resultFailed(result) || result?.dryRun === true) return false;
+  return Boolean(boundedString(result?.commitHash || result?.hash));
+}
+
+function transition(sessionId: string, toStage: ExecutionLifecycleTransitionInput['toStage'], reasonCode: string, decision: HarnessExecutionGuardDecision, evidenceSuffix: string, kind: string) {
+  return recordExecutionLifecycleTransition(sessionId, {
+    toStage,
+    reasonCode,
+    evidence: {
+      id: `harness:${decision.operationId}:${evidenceSuffix}`,
+      kind,
+      status: 'completed',
+      operationId: decision.operationId,
+    },
+  });
+}
+
+export function recordHarnessExecutionOutcome(decision: HarnessExecutionGuardDecision, result: any) {
+  if (!decision.guarded || !decision.allowed || !decision.execution?.sessionId || !decision.action) return null;
+  const sessionId = decision.execution.sessionId;
+
+  if (decision.action === 'mutation') {
+    if (!mutationHadAuthoritativeEffect(result)) return null;
+    const current = getTaskExecutionMutationBinding({ workspaceId: decision.execution.workspaceId });
+    if (!current) return null;
+    if (current.session.lifecycle.stage === 'context-ready' || current.session.lifecycle.stage === 'plan-recorded') {
+      return transition(sessionId, 'implementing', 'authoritative-mutation-succeeded', decision, 'mutation', 'tool-result');
+    }
+    return current.session.lifecycle;
+  }
+  if (decision.action === 'verification') {
+    if (!resultIsTerminal(result)) return null;
+    const current = getTaskExecutionMutationBinding({ workspaceId: decision.execution.workspaceId });
+    if (!current) return null;
+    if (current.session.lifecycle.stage === 'implementing' || current.session.lifecycle.stage === 'repairing') {
+      transition(sessionId, 'verifying', 'verification-result-observed', decision, 'verification', 'verification-result');
+    }
+    if (resultFailed(result)) {
+      const refreshed = getTaskExecutionMutationBinding({ workspaceId: decision.execution.workspaceId });
+      if (refreshed?.session.lifecycle.stage === 'verifying') {
+        return transition(sessionId, 'repairing', 'verification-failed-repair-required', decision, 'repair', 'verification-result');
+      }
+      return null;
+    }
+    return getTaskExecutionMutationBinding({ workspaceId: decision.execution.workspaceId })?.session.lifecycle || null;
+  }
+  if (decision.action === 'commit') {
+    if (!commitWasCreated(result)) return null;
+    const current = getTaskExecutionMutationBinding({ workspaceId: decision.execution.workspaceId });
+    if (!current || current.session.lifecycle.stage !== 'verifying') return current?.session.lifecycle || null;
+    return transition(sessionId, 'committed', 'task-owned-commit-succeeded', decision, 'commit', 'git-commit');
+  }
+  if (decision.action === 'finalization') {
+    // The authoritative finalization service records the finalized lifecycle transition
+    // after integration/cleanup succeed and before it makes the execution session terminal.
+    return result?.status === 'completed' ? result : null;
+  }
+  return null;
+}

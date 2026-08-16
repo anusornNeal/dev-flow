@@ -35,7 +35,7 @@ import { abortWorkspaceIntegration, integrateWorkspaceCommits, retryWorkspaceInt
 import { getRuntimeIdentity } from '../services/runtimeIdentityService';
 import { getWorkflowRecoveryHandoff } from '../services/workflowRecoveryHandoffService';
 import { buildTaskCommitPlan, commitTaskOwnedChanges } from '../services/taskCommitPlanService.js';
-import { finalizeTaskWorkspace } from '../services/taskWorkspaceFinalizationService.js';
+import { finalizeTaskWorkspace, type TaskWorkspaceFinalizationInput } from '../services/taskWorkspaceFinalizationService.js';
 import {
   authorizeTaskExecutionMutationPaths,
   captureExecutionVerificationProvenance,
@@ -44,6 +44,7 @@ import {
   recordTaskExecutionMutationPaths,
   recordTaskExecutionVerificationResult,
 } from '../services/executionSessionService.js';
+import { assertHarnessExecutionAllowed, recordHarnessExecutionOutcome } from '../services/harnessExecutionGuardService.js';
 
 export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) {
   const ownedArgs = (args: Record<string, any>, source: string) => ({
@@ -51,6 +52,18 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
     __authorizeOwnedChanges: (paths: string[]) => authorizeTaskExecutionMutationPaths(args, paths),
     __recordOwnedChanges: (paths: string[]) => recordTaskExecutionMutationPaths(args, paths, source),
   });
+  const guarded = (toolName: string, args: Record<string, any>, run: () => any) => {
+    const decision = assertHarnessExecutionAllowed(deps.state, toolName, args);
+    const result = run();
+    recordHarnessExecutionOutcome(decision, result);
+    return result;
+  };
+  const guardedAsync = async (toolName: string, args: Record<string, any>, run: () => Promise<any>) => {
+    const decision = assertHarnessExecutionAllowed(deps.state, toolName, args);
+    const result = await run();
+    recordHarnessExecutionOutcome(decision, result);
+    return result;
+  };
   const captureTaskVerification = (args: Record<string, any>) => {
     const binding = getTaskExecutionMutationBinding(args);
     return binding
@@ -151,7 +164,8 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
       if (!deps.restartProcess) {
         throw createApiError(409, 'RESTART_UNSUPPORTED', 'This DevFlow host cannot schedule a safe process restart.');
       }
-      const result = requestDevFlowRestart(req.body as Record<string, any>);
+      const args = req.body as Record<string, any>;
+      const result = guarded('restart_devflow', args, () => requestDevFlowRestart(args));
       if (!result.duplicate) {
         res.once('finish', () => {
           deps.restartProcess?.(result.exitCode, result.shutdownDelayMs);
@@ -241,7 +255,8 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
 
   app.post('/api/workspaces/finalize-task', (req, res) => {
     try {
-      const result = finalizeTaskWorkspace(deps.state, req.body || {});
+      const args = req.body as Record<string, any>;
+      const result = guarded('finalize_task_workspace', args, () => finalizeTaskWorkspace(deps.state, args as TaskWorkspaceFinalizationInput));
       return res.status(result.status === 'completed' ? 200 : 409).json(result);
     } catch (error) {
       return sendApiError(res, error);
@@ -290,7 +305,7 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
   app.post('/api/local-files/write', (req, res) => {
     try {
       const args = req.body as Record<string, any>;
-      return res.json(writeLocalFile(deps.state, ownedArgs(args, 'write_local_file')));
+      return res.json(guarded('write_local_file', args, () => writeLocalFile(deps.state, ownedArgs(args, 'write_local_file'))));
     } catch (error) {
       return sendApiError(res, error);
     }
@@ -299,7 +314,7 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
   app.post('/api/local-files/apply-patch', (req, res) => {
     try {
       const args = req.body as Record<string, any>;
-      return res.json(applyLocalPatch(deps.state, ownedArgs(args, 'apply_patch')));
+      return res.json(guarded('apply_patch', args, () => applyLocalPatch(deps.state, ownedArgs(args, 'apply_patch'))));
     } catch (error) {
       return sendApiError(res, error);
     }
@@ -308,7 +323,7 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
   app.post('/api/local-files/delete', (req, res) => {
     try {
       const args = req.body as Record<string, any>;
-      return res.json(deleteLocalPath(deps.state, ownedArgs(args, 'delete_local_path')));
+      return res.json(guarded('delete_local_path', args, () => deleteLocalPath(deps.state, ownedArgs(args, 'delete_local_path'))));
     } catch (error) {
       return sendApiError(res, error);
     }
@@ -317,7 +332,7 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
   app.post('/api/local-files/move', (req, res) => {
     try {
       const args = req.body as Record<string, any>;
-      return res.json(moveLocalPath(deps.state, ownedArgs(args, 'move_local_path')));
+      return res.json(guarded('move_local_path', args, () => moveLocalPath(deps.state, ownedArgs(args, 'move_local_path'))));
     } catch (error) {
       return sendApiError(res, error);
     }
@@ -326,7 +341,7 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
   app.post('/api/local-files/safe-edit', (req, res) => {
     try {
       const args = req.body as Record<string, any>;
-      return res.json(safeEditFile(deps.state, ownedArgs(args, 'safe_edit_local_file')));
+      return res.json(guarded('safe_edit_local_file', args, () => safeEditFile(deps.state, ownedArgs(args, 'safe_edit_local_file'))));
     } catch (error) {
       return sendApiError(res, error);
     }
@@ -335,7 +350,7 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
   app.post('/api/local-files/edit-batch', (req, res) => {
     try {
       const args = req.body as Record<string, any>;
-      return res.json(editFilesBatch(deps.state, ownedArgs(args, 'edit_local_files_batch')));
+      return res.json(guarded('edit_local_files_batch', args, () => editFilesBatch(deps.state, ownedArgs(args, 'edit_local_files_batch'))));
     } catch (error) {
       return sendApiError(res, error);
     }
@@ -353,7 +368,7 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
     try {
       const args = req.body as Record<string, any>;
       const sourceArgs = getPreparedEditRecoveryArgs(String(args?.editPlanId || '')) || args;
-      const result = await executeRecoveryAwareTool(
+      const result = await guardedAsync('apply_prepared_edit_plan', sourceArgs, () => executeRecoveryAwareTool(
         deps.state,
         'apply_prepared_edit_plan',
         args,
@@ -361,7 +376,7 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
           authorizeOwnedChanges: (paths) => authorizeTaskExecutionMutationPaths(sourceArgs, paths),
           recordOwnedChanges: (paths) => recordTaskExecutionMutationPaths(sourceArgs, paths, 'apply_prepared_edit_plan'),
         }),
-      );
+      ));
       return res.json(result);
     } catch (error) {
       return sendApiError(res, error);
@@ -380,7 +395,7 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
     try {
       const args = { editPlanId: req.body?.editPlanId };
       const sourceArgs = getPreparedEditRecoveryArgs(String(args.editPlanId || '')) || args;
-      const result = await executeRecoveryAwareTool(
+      const result = await guardedAsync('apply_prepared_edit', sourceArgs, () => executeRecoveryAwareTool(
         deps.state,
         'apply_prepared_edit',
         args,
@@ -388,7 +403,7 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
           authorizeOwnedChanges: (paths) => authorizeTaskExecutionMutationPaths(sourceArgs, paths),
           recordOwnedChanges: (paths) => recordTaskExecutionMutationPaths(sourceArgs, paths, 'apply_prepared_edit'),
         }),
-      );
+      ));
       return res.json(result);
     } catch (error) {
       return sendApiError(res, error);
@@ -399,14 +414,17 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
     try {
       const args = req.body as Record<string, any>;
       let captured: ReturnType<typeof captureTaskVerification> = null;
-      const result = await applyAndVerifyAsync(deps.state, {
-        ...ownedArgs(args, 'apply_and_verify'),
-        __captureVerificationProvenance: () => {
-          captured = captureTaskVerification(args);
-          return captured;
-        },
+      const result = await guardedAsync('apply_and_verify', args, async () => {
+        const verified = await applyAndVerifyAsync(deps.state, {
+          ...ownedArgs(args, 'apply_and_verify'),
+          __captureVerificationProvenance: () => {
+            captured = captureTaskVerification(args);
+            return captured;
+          },
+        });
+        recordTaskExecutionVerificationResult(args, verified, captured);
+        return verified;
       });
-      recordTaskExecutionVerificationResult(args, result, captured);
       return res.json(result);
     } catch (error) {
       return sendApiError(res, error);
@@ -417,8 +435,11 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
     try {
       const args = req.body as Record<string, any>;
       const captured = captureTaskVerification(args);
-      const result = runProjectCommand(deps.state, args);
-      recordTaskExecutionVerificationResult(args, result, captured);
+      const result = guarded('run_project_command', args, () => {
+        const verified = runProjectCommand(deps.state, args);
+        recordTaskExecutionVerificationResult(args, verified, captured);
+        return verified;
+      });
       return res.json(result);
     } catch (error) {
       return sendApiError(res, error);
@@ -647,7 +668,8 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
 
   app.post('/api/git/task-commit/commit', (req, res) => {
     try {
-      return res.json(commitTaskOwnedChanges(deps.state, req.body as Record<string, any>));
+      const args = req.body as Record<string, any>;
+      return res.json(guarded('commit_task_owned_changes', args, () => commitTaskOwnedChanges(deps.state, args)));
     } catch (error) {
       return sendApiError(res, error);
     }
@@ -655,7 +677,8 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
 
   app.post('/api/git/commit', (req, res) => {
     try {
-      return res.json(commitGitChanges(deps.state, req.body as Record<string, any>));
+      const args = req.body as Record<string, any>;
+      return res.json(guarded('commit_git_changes', args, () => commitGitChanges(deps.state, args)));
     } catch (error) {
       return sendApiError(res, error);
     }

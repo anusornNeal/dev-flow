@@ -14,6 +14,12 @@ import { prepareCompactEdit } from './stenoEditProtocolService';
 import type { ResourceAccessMode } from './mcpToolJobScheduler';
 import { executeRecoveryAwareTool } from './devFlowRecoveryRuntime.js';
 import {
+  assertHarnessExecutionAllowed,
+  isHarnessLifecycleAffectingTool,
+  recordHarnessExecutionOutcome,
+  type HarnessExecutionGuardDecision,
+} from './harnessExecutionGuardService.js';
+import {
   authorizeTaskExecutionMutationPaths,
   captureExecutionVerificationProvenance,
   getTaskExecutionMutationBinding,
@@ -93,19 +99,29 @@ function captureTaskVerification(args: any) {
 export async function runBuiltinToolJob(input: BuiltinToolJobInput, context: BuiltinToolJobContext) {
   const { toolName, state, args } = input;
   const { logger, setCancelFn, transitionAccess } = context;
+  const preflight = (guardArgs: any = args): HarnessExecutionGuardDecision | null => isHarnessLifecycleAffectingTool(toolName)
+    ? assertHarnessExecutionAllowed(state, toolName, guardArgs)
+    : null;
+  const complete = (decision: HarnessExecutionGuardDecision | null, result: any) => {
+    if (decision) recordHarnessExecutionOutcome(decision, result);
+    return result;
+  };
 
   if (toolName === 'run_project_command') {
+    const guard = preflight();
     const captured = captureTaskVerification(args);
     const result = await runProjectCommandAsync(state, args, logger, setCancelFn);
     recordTaskExecutionVerificationResult(args, result, captured);
-    return result;
+    return complete(guard, result);
   }
   if (toolName === 'apply_patch') {
-    return await applyLocalPatchAsync(state, {
+    const guard = preflight();
+    const result = await applyLocalPatchAsync(state, {
       ...args,
       __authorizeOwnedChanges: (paths: string[]) => authorizeTaskOwnedPaths(args, paths),
       __recordOwnedChanges: (paths: string[]) => recordTaskOwnedPaths(args, paths, toolName),
     }, logger, setCancelFn);
+    return complete(guard, result);
   }
   if (toolName === 'search_local_files') {
     return await executeRecoveryAwareTool(
@@ -117,19 +133,28 @@ export async function runBuiltinToolJob(input: BuiltinToolJobInput, context: Bui
   }
   if (toolName === 'ensure_git_branch') return ensureGitBranch(state, args);
   if (toolName === 'push_git_branch') return pushGitBranch(state, args);
-  if (toolName === 'commit_git_changes') return commitGitChanges(state, args);
-  if (toolName === 'commit_task_owned_changes') return commitTaskOwnedChanges(state, args);
+  if (toolName === 'commit_git_changes') {
+    const guard = preflight();
+    return complete(guard, commitGitChanges(state, args));
+  }
+  if (toolName === 'commit_task_owned_changes') {
+    const guard = preflight();
+    return complete(guard, commitTaskOwnedChanges(state, args));
+  }
   if (toolName === 'edit_local_files_batch') {
-    return editFilesBatch(state, {
+    const guard = preflight();
+    const result = editFilesBatch(state, {
       ...args,
       __authorizeOwnedChanges: (paths: string[]) => authorizeTaskOwnedPaths(args, paths),
       __recordOwnedChanges: (paths: string[]) => recordTaskOwnedPaths(args, paths, toolName),
     });
+    return complete(guard, result);
   }
   if (toolName === 'prepare_edit_plan') return prepareEditPlan(state, args);
   if (toolName === 'apply_prepared_edit_plan') {
     const sourceArgs = getPreparedEditRecoveryArgs(String(args?.editPlanId || '')) || args;
-    return await executeRecoveryAwareTool(
+    const guard = preflight(sourceArgs);
+    const result = await executeRecoveryAwareTool(
       state,
       toolName,
       args,
@@ -138,12 +163,14 @@ export async function runBuiltinToolJob(input: BuiltinToolJobInput, context: Bui
         recordOwnedChanges: (paths) => recordTaskOwnedPaths(sourceArgs, paths, toolName),
       }),
     );
+    return complete(guard, result);
   }
   if (toolName === 'prepare_compact_edit') return prepareCompactEdit(state, args);
   if (toolName === 'apply_prepared_edit') {
     const sourceArgs = getPreparedEditRecoveryArgs(String(args?.editPlanId || '')) || args;
+    const guard = preflight(sourceArgs);
     const payload = { editPlanId: args?.editPlanId };
-    return await executeRecoveryAwareTool(
+    const result = await executeRecoveryAwareTool(
       state,
       toolName,
       payload,
@@ -152,8 +179,10 @@ export async function runBuiltinToolJob(input: BuiltinToolJobInput, context: Bui
         recordOwnedChanges: (paths) => recordTaskOwnedPaths(sourceArgs, paths, toolName),
       }),
     );
+    return complete(guard, result);
   }
   if (toolName === 'apply_and_verify') {
+    const guard = preflight();
     let captured: ReturnType<typeof captureTaskVerification> = null;
     const result = await applyAndVerifyAsync(state, {
       ...args,
@@ -165,21 +194,25 @@ export async function runBuiltinToolJob(input: BuiltinToolJobInput, context: Bui
       },
     }, logger, setCancelFn, transitionAccess);
     recordTaskExecutionVerificationResult(args, result, captured);
-    return result;
+    return complete(guard, result);
   }
   if (toolName === 'delete_local_path') {
-    return deleteLocalPath(state, {
+    const guard = preflight();
+    const result = deleteLocalPath(state, {
       ...args,
       __authorizeOwnedChanges: (paths: string[]) => authorizeTaskOwnedPaths(args, paths),
       __recordOwnedChanges: (paths: string[]) => recordTaskOwnedPaths(args, paths, toolName),
     });
+    return complete(guard, result);
   }
   if (toolName === 'move_local_path') {
-    return moveLocalPath(state, {
+    const guard = preflight();
+    const result = moveLocalPath(state, {
       ...args,
       __authorizeOwnedChanges: (paths: string[]) => authorizeTaskOwnedPaths(args, paths),
       __recordOwnedChanges: (paths: string[]) => recordTaskOwnedPaths(args, paths, toolName),
     });
+    return complete(guard, result);
   }
   if (toolName === 'apply_project_atlas_agent_update') {
     const project = findProjectForAtlasUpdate(args);

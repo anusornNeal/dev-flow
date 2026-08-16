@@ -2,7 +2,7 @@ import type { AppState } from '../types.js';
 import { getTaskByIdentifier, saveTask } from '../repositories/taskRepository.js';
 import { listExecutionSessionsForTask } from '../repositories/executionSessionRepository.js';
 import { createApiError } from './api.js';
-import { completeExecutionSession } from './executionSessionService.js';
+import { completeExecutionSession, recordExecutionLifecycleTransition } from './executionSessionService.js';
 import { syncTaskWithGit } from './taskGitWorkflowService.js';
 import { clearTaskClaimWhenLeavingInProgress } from './taskClaimService.js';
 import { cleanupSessionWorkspace, getSessionWorkspaceMetadataForRecovery } from './sessionWorkspaceService.js';
@@ -228,14 +228,25 @@ export function finalizeTaskWorkspace(state: AppState, input: TaskWorkspaceFinal
   saveTask(finalTask);
 
   const session = listExecutionSessionsForTask(task.id).find((entry) => entry.workspaceId === workspaceId && entry.status === 'active');
+  const cleanup = cleanupSessionWorkspace(workspaceId);
   if (session) {
+    if (session.lifecycle.stage === 'committed') {
+      recordExecutionLifecycleTransition(session.id, {
+        toStage: 'finalized',
+        reasonCode: 'workspace-finalization-succeeded',
+        evidence: {
+          id: `workspace-finalization:${workspaceId}:${integration.baseHeadAfter}`,
+          kind: 'workspace-finalization',
+          status: 'completed',
+          operationId: `finalize:${workspaceId}:${integration.baseHeadAfter}`,
+        },
+      });
+    }
     completeExecutionSession(session.id, {
       changedFiles: integration.changedFiles,
       verification: session.verification,
     });
   }
-
-  const cleanup = cleanupSessionWorkspace(workspaceId);
   return {
     status: 'completed' as const,
     task: getTaskByIdentifier(task.id, 'full') || finalTask,

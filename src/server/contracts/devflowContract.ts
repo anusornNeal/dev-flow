@@ -108,7 +108,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'restart_devflow',
-    description: 'Request a guarded restart of the DevFlow API runtime. Safe restart is available only when DevFlow is hosted by the start-all supervisor; active MCP tool jobs block restart.',
+    description: 'Request a guarded restart of the DevFlow API runtime only. The persistent external transport (including the zrok Agent Service/reserved share) stays outside restart scope so its public MCP endpoint is expected to remain unchanged. Safe restart requires the start-all supervisor; active MCP work blocks restart.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -124,7 +124,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'get_devflow_restart_status',
-    description: 'Read the latest DevFlow restart ticket state after reconnecting, or query a specific restart ticket.',
+    description: 'Read the latest DevFlow restart ticket state after reconnecting, including the API-only restart scope and preserved external-transport policy, or query a specific restart ticket.',
     inputSchema: {
       type: 'object',
       properties: {

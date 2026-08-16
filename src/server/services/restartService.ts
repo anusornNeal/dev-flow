@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import {
   DEVFLOW_RESTART_ACK_DELAY_MS,
   DEVFLOW_RESTART_EXIT_CODE,
+  DEVFLOW_RESTART_EXTERNAL_TRANSPORT_POLICY,
+  DEVFLOW_RESTART_RUNTIME_SCOPE,
   DEVFLOW_RESTART_SUPERVISOR_ENV,
   DEVFLOW_RESTART_SUPERVISOR_TOKEN_ENV,
   DEVFLOW_RESTART_SUPERVISOR_START_ALL,
@@ -73,7 +75,7 @@ export function requestDevFlowRestart(
     throw createApiError(
       409,
       'RESTART_UNSUPPORTED',
-      'Safe DevFlow restart requires the DevFlow supervisor. Start DevFlow with npm run dev (or npm run start:all when ngrok is needed); raw npm run dev:server is intentionally not restartable.',
+      'Safe DevFlow restart requires the DevFlow supervisor. Start DevFlow with npm run dev or npm run start:all; raw npm run dev:server is intentionally not restartable. Persistent external transport services such as zrok are outside the API restart scope and remain running.',
       {
         details: {
           requiredSupervisor: DEVFLOW_RESTART_SUPERVISOR_START_ALL,
@@ -122,6 +124,8 @@ export function requestDevFlowRestart(
       ticket: existing.ticket,
       status: existing.status,
       supervisor: existing.supervisor,
+      runtimeScope: existing.runtimeScope,
+      externalTransportPolicy: existing.externalTransportPolicy,
       exitCode: DEVFLOW_RESTART_EXIT_CODE,
       shutdownDelayMs: DEVFLOW_RESTART_ACK_DELAY_MS,
       queuePolicy: 'reject-while-busy',
@@ -139,6 +143,8 @@ export function requestDevFlowRestart(
     status: 'accepted',
     supervisor,
     supervisorToken,
+    runtimeScope: DEVFLOW_RESTART_RUNTIME_SCOPE,
+    externalTransportPolicy: DEVFLOW_RESTART_EXTERNAL_TRANSPORT_POLICY,
     requestedAt,
     updatedAt: requestedAt,
     requestedByPid: deps.pid ?? process.pid,
@@ -152,6 +158,8 @@ export function requestDevFlowRestart(
     ticket: state.ticket,
     status: state.status,
     supervisor: state.supervisor,
+    runtimeScope: state.runtimeScope,
+    externalTransportPolicy: state.externalTransportPolicy,
     exitCode: DEVFLOW_RESTART_EXIT_CODE,
     shutdownDelayMs: DEVFLOW_RESTART_ACK_DELAY_MS,
     queuePolicy: 'reject-while-busy',

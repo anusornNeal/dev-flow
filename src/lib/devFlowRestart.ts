@@ -7,6 +7,8 @@ export const DEVFLOW_RESTART_ACK_DELAY_MS = 750;
 export const DEVFLOW_RESTART_SUPERVISOR_ENV = 'DEVFLOW_RESTART_SUPERVISOR';
 export const DEVFLOW_RESTART_SUPERVISOR_TOKEN_ENV = 'DEVFLOW_RESTART_SUPERVISOR_TOKEN';
 export const DEVFLOW_RESTART_SUPERVISOR_START_ALL = 'start-all';
+export const DEVFLOW_RESTART_RUNTIME_SCOPE = 'devflow-api-only' as const;
+export const DEVFLOW_RESTART_EXTERNAL_TRANSPORT_POLICY = 'preserve-service-and-endpoint' as const;
 
 export type DevFlowRestartStatus = 'accepted' | 'restarting' | 'healthy' | 'failed';
 
@@ -15,6 +17,8 @@ export interface DevFlowRestartState {
   status: DevFlowRestartStatus;
   supervisor: string;
   supervisorToken?: string;
+  runtimeScope: typeof DEVFLOW_RESTART_RUNTIME_SCOPE;
+  externalTransportPolicy: typeof DEVFLOW_RESTART_EXTERNAL_TRANSPORT_POLICY;
   requestedAt: string;
   updatedAt: string;
   requestedByPid: number;
@@ -37,7 +41,11 @@ export function readDevFlowRestartState(): DevFlowRestartState | null {
       return null;
     }
     if (!Number.isInteger(parsed.requestedByPid)) return null;
-    return parsed as DevFlowRestartState;
+    return {
+      ...parsed,
+      runtimeScope: DEVFLOW_RESTART_RUNTIME_SCOPE,
+      externalTransportPolicy: DEVFLOW_RESTART_EXTERNAL_TRANSPORT_POLICY,
+    } as DevFlowRestartState;
   } catch {
     return null;
   }

@@ -25,7 +25,7 @@ const {
   createMcpTransportRequestTracker,
   recordMcpTransportRequest,
 } = await import('../../src/server/services/mcpTransportMonitor.js');
-const { requestDevFlowRestart } = await import('../../src/server/services/restartService.js');
+const { getDevFlowRestartStatus, requestDevFlowRestart } = await import('../../src/server/services/restartService.js');
 
 const restartStatePath = path.join(tempRoot, '.devflow', 'restart-state.json');
 
@@ -101,6 +101,8 @@ test('supervised restart acknowledges before scheduling server exit', async () =
     assert.equal(response.status, 200, JSON.stringify(body));
     assert.equal(body.accepted, true);
     assert.equal(body.duplicate, false);
+    assert.equal(body.runtimeScope, 'devflow-api-only');
+    assert.equal(body.externalTransportPolicy, 'preserve-service-and-endpoint');
     assert.match(body.ticket, /^restart-/);
     assert.equal('supervisorToken' in body, false);
 
@@ -108,10 +110,33 @@ test('supervised restart acknowledges before scheduling server exit', async () =
     const statusBody = await statusResponse.json() as any;
     assert.equal(statusResponse.status, 200);
     assert.equal(statusBody.status, 'accepted');
+    assert.equal(statusBody.runtimeScope, 'devflow-api-only');
+    assert.equal(statusBody.externalTransportPolicy, 'preserve-service-and-endpoint');
     assert.equal('supervisorToken' in statusBody, false);
     await new Promise((resolve) => setImmediate(resolve));
     assert.deepEqual(exits, [75]);
   });
+});
+
+test('legacy restart tickets normalize to the zrok-era API-only lifecycle contract after reconnect', () => {
+  resetRestartState();
+  fs.mkdirSync(path.dirname(restartStatePath), { recursive: true });
+  const now = new Date().toISOString();
+  fs.writeFileSync(restartStatePath, JSON.stringify({
+    ticket: 'restart-legacy-contract',
+    status: 'restarting',
+    supervisor: 'start-all',
+    supervisorToken: 'legacy-token',
+    requestedAt: now,
+    updatedAt: now,
+    requestedByPid: process.pid,
+  }), 'utf8');
+
+  const status = getDevFlowRestartStatus({ ticket: 'restart-legacy-contract' }) as any;
+  assert.equal(status.status, 'restarting');
+  assert.equal(status.runtimeScope, 'devflow-api-only');
+  assert.equal(status.externalTransportPolicy, 'preserve-service-and-endpoint');
+  assert.equal('supervisorToken' in status, false);
 });
 
 test('duplicate restart requests reuse one ticket and schedule one exit', async () => {
@@ -129,6 +154,8 @@ test('duplicate restart requests reuse one ticket and schedule one exit', async 
     assert.equal(second.status, 200);
     assert.equal(firstBody.ticket, secondBody.ticket);
     assert.equal(secondBody.duplicate, true);
+    assert.equal(secondBody.runtimeScope, 'devflow-api-only');
+    assert.equal(secondBody.externalTransportPolicy, 'preserve-service-and-endpoint');
     await new Promise((resolve) => setImmediate(resolve));
     assert.deepEqual(exits, [75]);
   });

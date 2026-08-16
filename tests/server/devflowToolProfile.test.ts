@@ -379,6 +379,12 @@ test('MCP profile resolution defaults to lean coding and preserves explicit vali
   }
 });
 
+test('restart profile resolution remains independent from tunnel-provider lifecycle', () => {
+  const source = fs.readFileSync(new URL('../../src/server/contracts/mcpToolProfileConfig.ts', import.meta.url), 'utf8');
+  assert.match(source, /DEVFLOW_RESTART_SUPERVISOR_START_ALL/);
+  assert.doesNotMatch(source, /ngrok|zrok/i);
+});
+
 test('guarded start-all restart refreshes MCP profile from the current env file', () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-profile-refresh-'));
   fs.writeFileSync(path.join(tempRoot, '.env'), 'DEVFLOW_MCP_TOOL_PROFILE="coding"\n', 'utf8');

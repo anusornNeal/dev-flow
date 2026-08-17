@@ -27,6 +27,12 @@ export type ZrokStatusKind =
   | 'standby'
   | 'setup-error';
 
+export type ZrokActionability = {
+  canRecheck: boolean;
+  canTakeOver: boolean;
+  takeoverBlockedReason?: string;
+};
+
 export type ZrokRuntimeStatus = {
   status: ZrokStatusKind;
   baseUrl?: string;
@@ -37,7 +43,7 @@ export type ZrokRuntimeStatus = {
   latencyMs?: number;
   lastCheckedAt?: string;
   message?: string;
-  actionability?: string;
+  actionability?: ZrokActionability;
   remoteOwner?: string;
 };
 
@@ -133,6 +139,17 @@ function nestedStatus(value: unknown) {
   return safeString(record.status) || safeString(record.state) || safeString(record.message) || safeString(record.name);
 }
 
+function normalizeActionability(value: unknown): ZrokActionability | undefined {
+  const input = asRecord(value);
+  if (!input) return undefined;
+  const blockedReason = safeString(input.takeoverBlockedReason);
+  return {
+    canRecheck: input.canRecheck !== false,
+    canTakeOver: input.canTakeOver === true,
+    ...(blockedReason ? { takeoverBlockedReason: blockedReason } : {}),
+  };
+}
+
 export function normalizeZrokStatusKind(value: unknown): ZrokStatusKind {
   const normalized = String(value || '')
     .trim()
@@ -172,7 +189,7 @@ export function normalizeZrokStatus(payload: unknown): ZrokRuntimeStatus {
       lastCheckedAt: safeString(input.lastCheckedAt ?? input.lastCheckAt ?? publicDetail?.lastCheckedAt),
     } : {}),
     ...(safeString(input.message) ? { message: safeString(input.message) } : {}),
-    ...(safeString(input.actionability) ? { actionability: safeString(input.actionability) } : {}),
+    ...(normalizeActionability(input.actionability) ? { actionability: normalizeActionability(input.actionability) } : {}),
     ...(safeString(owner?.label ?? owner?.machineName ?? owner?.name) ? { remoteOwner: safeString(owner?.label ?? owner?.machineName ?? owner?.name) } : {}),
   };
 }
@@ -303,6 +320,11 @@ export default function ZrokStatusPanel({
   const StatusIcon = presentation.icon;
   const mcpUrl = resolveMcpUrl(status);
   const takeoverBusy = actionState === 'taking-over' || actionState === 'verifying';
+  const canRecheck = status.actionability?.canRecheck !== false;
+  const canTakeOver = status.status === 'standby' && status.actionability?.canTakeOver === true;
+  const takeoverBlockedReason = status.status === 'standby' && !canTakeOver
+    ? status.actionability?.takeoverBlockedReason
+    : undefined;
   const statusLabel = status.latencyMs !== undefined && status.status === 'online'
     ? `${presentation.label} · ${status.latencyMs} ms`
     : presentation.label;
@@ -322,7 +344,7 @@ export default function ZrokStatusPanel({
   };
 
   const handleTakeover = async () => {
-    if (takeoverBusy) return;
+    if (takeoverBusy || !canTakeOver) return;
     setActionState('taking-over');
     setActionMessage('Requesting explicit takeover…');
     try {
@@ -430,7 +452,7 @@ export default function ZrokStatusPanel({
             </div>
           </div>
 
-          {(actionMessage || status.status === 'setup-required' || status.status === 'setup-error') && (
+          {(actionMessage || takeoverBlockedReason || status.status === 'setup-required' || status.status === 'setup-error') && (
             <div
               className={`mx-3.5 mb-2 rounded-lg border px-2.5 py-2 text-[10px] font-mono leading-4 ${
                 actionState === 'error' || status.status === 'setup-error'
@@ -442,7 +464,7 @@ export default function ZrokStatusPanel({
             >
               <div className="flex items-start gap-1.5">
                 {actionState === 'success' ? <CheckCircle2 size={12} className="mt-0.5 shrink-0" aria-hidden="true" /> : <AlertCircle size={12} className="mt-0.5 shrink-0" aria-hidden="true" />}
-                <span>{actionMessage || status.message || presentation.description}</span>
+                <span>{actionMessage || takeoverBlockedReason || status.message || presentation.description}</span>
               </div>
             </div>
           )}
@@ -451,7 +473,7 @@ export default function ZrokStatusPanel({
             <button
               type="button"
               onClick={() => void refresh(true)}
-              disabled={rechecking || takeoverBusy}
+              disabled={!canRecheck || rechecking || takeoverBusy}
               className="flex min-h-7 items-center gap-1.5 rounded-lg border border-[#ddd0ba] bg-white px-2.5 py-1 text-[10px] font-bold text-[#725e4f] outline-none transition-colors hover:bg-[#f6efe3] focus-visible:ring-2 focus-visible:ring-[#d89745]/60 disabled:cursor-not-allowed disabled:opacity-50 dark:border-[#584a3b] dark:bg-[#292119] dark:text-[#e8dbcd] dark:hover:bg-[#352a21] cursor-pointer"
               aria-label="Recheck zrok status"
             >
@@ -459,7 +481,7 @@ export default function ZrokStatusPanel({
               {rechecking ? 'Checking…' : 'Recheck'}
             </button>
 
-            {status.status === 'standby' && (
+            {canTakeOver && (
               <button
                 type="button"
                 onClick={() => void handleTakeover()}

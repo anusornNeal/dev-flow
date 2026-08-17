@@ -45,6 +45,26 @@ test('normalizes the bounded backend contract without projecting secrets', () =>
   assert.doesNotMatch(JSON.stringify(normalized), /must-not-leak|accountToken/);
 });
 
+test('normalizes only the structured zrok actionability fields', () => {
+  const normalized = normalizeZrokStatus({
+    status: 'standby',
+    actionability: {
+      canRecheck: true,
+      canTakeOver: false,
+      takeoverBlockedReason: 'Remote control unsupported.',
+      accountToken: 'must-not-leak',
+      internalReason: 'must-not-project',
+    },
+  });
+
+  assert.deepEqual(normalized.actionability, {
+    canRecheck: true,
+    canTakeOver: false,
+    takeoverBlockedReason: 'Remote control unsupported.',
+  });
+  assert.doesNotMatch(JSON.stringify(normalized), /must-not-leak|internalReason/);
+});
+
 test('renders Setup required without pretending the tunnel is online', () => {
   const html = renderStatus({
     status: 'setup-required',
@@ -96,12 +116,28 @@ test('renders Standby with remote ownership context and explicit Take over actio
     agentService: 'running',
     share: 'standby',
     publicReachability: 'remote owner',
+    actionability: { canRecheck: true, canTakeOver: true },
   });
   assert.match(html, /Standby/);
   assert.match(html, /Active on Office PC/);
   assert.match(html, />Take over</);
   assert.match(html, /aria-label="Take over zrok connection from the active machine"/);
   assert.match(html, /Nothing is taken over automatically/);
+});
+
+test('does not offer takeover when backend blocks it and shows the blocked reason', () => {
+  const html = renderStatus({
+    status: 'standby',
+    actionability: {
+      canRecheck: true,
+      canTakeOver: false,
+      takeoverBlockedReason: 'Remote control unsupported.',
+    },
+  });
+
+  assert.doesNotMatch(html, />Take over</);
+  assert.match(html, /Remote control unsupported\./);
+  assert.match(html, /aria-label="Recheck zrok status"/);
 });
 
 test('renders Setup error with alert semantics', () => {
@@ -112,7 +148,11 @@ test('renders Setup error with alert semantics', () => {
 });
 
 test('takeover busy state is disabled, explicit, and exposes progress accessibly', () => {
-  const html = renderStatus({ status: 'standby', remoteOwner: 'Laptop' }, 'taking-over');
+  const html = renderStatus({
+    status: 'standby',
+    remoteOwner: 'Laptop',
+    actionability: { canRecheck: true, canTakeOver: true },
+  }, 'taking-over');
   assert.match(html, /Taking over…/);
   assert.match(html, /disabled=""/);
   assert.match(html, /aria-busy="true"/);

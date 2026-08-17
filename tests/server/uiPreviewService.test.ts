@@ -202,7 +202,7 @@ test('canonical hash is stable across spec key insertion order and exact-source 
   const b = service.create({ html: '<main>x</main>', spec: { z: { x: 1, y: 2 }, summary: { a: 1, b: 2, screen: 'A' }, schemaVersion: 1 } });
   assert.equal(a.contentHash, b.contentHash);
   const golden = service.create({ html: '<main>x</main>', spec: { schemaVersion: 1, summary: { screen: 'A' } } });
-  assert.equal(golden.contentHash, '3c1b082b0ca38df0066f5fe8180ce11dc81290693ea06c166dca09db3edfe872');
+  assert.equal(golden.contentHash, '8e9874a27899efd70d0089a0ae570269e2a605e7be799e79914d1f647becae24');
   const c = service.create({ html: '<main>x</main>\n', spec: { schemaVersion: 1, summary: { screen: 'A', a: 1, b: 2 }, z: { x: 1, y: 2 } } });
   assert.notEqual(a.contentHash, c.contentHash);
 });

@@ -14,3 +14,12 @@ commands:
       - tests/server/projectCommandService.test.ts
       - tests/server/projectCommandVerificationCandidate.test.ts
     category: test
+  test-zrok-bootstrap:
+    executable: powershell.exe
+    args:
+      - -NoProfile
+      - -ExecutionPolicy
+      - Bypass
+      - -File
+      - scripts/verify-zrok-bootstrap.ps1
+    category: test

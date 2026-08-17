@@ -140,7 +140,7 @@ export function getMcpRestartActivitySnapshot(options?: { now?: number; quiescen
   const recentInitializeOperations = recentMeaningful.filter((record) => record.operation === 'initialize').length;
   const recentToolsListOperations = recentMeaningful.filter((record) => record.operation === 'tools/list').length;
   const recentToolCalls = recentMeaningful.filter((record) => record.operation === 'tools/call').length;
-  const recentQuiescenceBusy = recentInitializeOperations > 0 || recentToolCalls > 0 || recentToolsListOperations > 1;
+  const recentQuiescenceBusy = recentInitializeOperations > 1 || recentToolCalls > 0 || recentToolsListOperations > 1;
   const lastMeaningfulTimestamp = recentMeaningful.reduce(
     (latest, record) => Math.max(latest, record.timestamp),
     0,

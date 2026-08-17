@@ -239,6 +239,30 @@ test('restart route rejects while a meaningful MCP operation is in flight', asyn
   }
 });
 
+test('a single completed initialize does not extend restart quiescence', () => {
+  resetRestartState();
+  const activityAt = 10_000;
+  recordMcpTransportRequest({
+    operation: 'initialize',
+    statusCode: 200,
+    totalMs: 10,
+    phaseMs: { parse: 1, connect: 0, handle: 7, close: 0, responseFinalize: 2 },
+    timestamp: activityAt,
+  });
+
+  const accepted = requestDevFlowRestart({}, {
+    env: {
+      DEVFLOW_RESTART_SUPERVISOR: 'start-all',
+      DEVFLOW_RESTART_SUPERVISOR_TOKEN: 'restart-initialize-test-token',
+    },
+    now: () => new Date(activityAt + 1_000),
+    uuid: () => 'initialize-window-test',
+  });
+
+  assert.equal(accepted.accepted, true);
+  assert.equal(accepted.duplicate, false);
+});
+
 test('a single completed tools/list does not extend restart quiescence', () => {
   resetRestartState();
   const activityAt = 10_000;

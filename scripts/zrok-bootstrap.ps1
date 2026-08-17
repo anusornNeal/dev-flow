@@ -29,6 +29,81 @@ function Get-RemotingEnrollmentFailureCode([object[]]$Output) {
     return 'remoting-enroll-failed'
 }
 
+function Read-ZrokReservedNameSelection([string]$SelectionPath) {
+    try {
+        if ([string]::IsNullOrWhiteSpace($SelectionPath) -or -not (Test-Path -LiteralPath $SelectionPath -PathType Leaf)) { return '' }
+        $item = Get-Item -LiteralPath $SelectionPath
+        if ($item.Length -le 0 -or $item.Length -gt 4096) { return '' }
+        $record = Get-Content -LiteralPath $SelectionPath -Raw | ConvertFrom-Json
+        $name = ([string]$record.reservedName).Trim()
+        if ([string]::IsNullOrWhiteSpace($name) -or $name.Length -gt 256 -or $name -match '[\x00-\x1f\x7f]') { return '' }
+        return $name
+    } catch {
+        return ''
+    }
+}
+
+function Write-ZrokReservedNameSelection([string]$SelectionPath, [string]$ReservedName) {
+    $name = ([string]$ReservedName).Trim()
+    if ([string]::IsNullOrWhiteSpace($name) -or $name.Length -gt 256 -or $name -match '[\x00-\x1f\x7f]') {
+        throw (New-BootstrapException 'reserved-name-required' 'A valid zrok reserved name is required.')
+    }
+    $directory = Split-Path -Parent $SelectionPath
+    $tempPath = $null
+    try {
+        if (-not [string]::IsNullOrWhiteSpace($directory)) { New-Item -ItemType Directory -Path $directory -Force | Out-Null }
+        $tempPath = Join-Path $directory ('.zrok-selection-' + [Guid]::NewGuid().ToString('N') + '.tmp')
+        $json = [ordered]@{ reservedName = $name } | ConvertTo-Json -Compress
+        [System.IO.File]::WriteAllText($tempPath, $json, (New-Object System.Text.UTF8Encoding($false)))
+        Move-Item -LiteralPath $tempPath -Destination $SelectionPath -Force
+    } catch {
+        if ($_.Exception.Data.Contains('BootstrapCode')) { throw }
+        throw (New-BootstrapException 'selection-save-failed' 'Unable to save the local zrok reserved-name selection.')
+    } finally {
+        if ($null -ne $tempPath) { Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+function Get-DefaultZrokReservedNameSuggestion {
+    $machine = ([string]$env:COMPUTERNAME).Trim().ToLowerInvariant() -replace '[^a-z0-9-]', '-'
+    $machine = $machine.Trim('-')
+    if ([string]::IsNullOrWhiteSpace($machine)) { return 'devflow-local' }
+    if ($machine.Length -gt 48) { $machine = $machine.Substring(0, 48).Trim('-') }
+    if ([string]::IsNullOrWhiteSpace($machine)) { return 'devflow-local' }
+    return "devflow-$machine"
+}
+
+function Read-ZrokReservedNameChoice([string[]]$OwnedNames) {
+    $names = @($OwnedNames | ForEach-Object { ([string]$_).Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique)
+    if ($names.Count -gt 0) {
+        Write-Host 'DevFlow zrok setup: use an existing reserved name or create a new one.'
+        for ($index = 0; $index -lt $names.Count; $index++) {
+            Write-Host ("[{0}] {1}" -f ($index + 1), $names[$index])
+        }
+        Write-Host '[N] Create new'
+        while ($true) {
+            $choice = ([string](Read-Host 'Select existing number or N to create new (Enter = 1)')).Trim()
+            if ([string]::IsNullOrWhiteSpace($choice)) { return $names[0] }
+            if ($choice -match '^(?i:n|new)$') { break }
+            $selectedIndex = 0
+            if ([int]::TryParse($choice, [ref]$selectedIndex) -and $selectedIndex -ge 1 -and $selectedIndex -le $names.Count) {
+                return $names[$selectedIndex - 1]
+            }
+            Write-Host 'Choose one of the listed numbers, or N to create a new reserved name.'
+        }
+    } else {
+        Write-Host 'No existing reserved zrok names were found for this account. Create a new one.'
+    }
+
+    $suggestion = Get-DefaultZrokReservedNameSuggestion
+    while ($true) {
+        $name = ([string](Read-Host "New zrok reserved name [$suggestion]")).Trim()
+        if ([string]::IsNullOrWhiteSpace($name)) { $name = $suggestion }
+        if ($name.Length -le 256 -and $name -notmatch '[\x00-\x1f\x7f]') { return $name }
+        Write-Host 'Reserved name must be non-empty, at most 256 characters, and contain no control characters.'
+    }
+}
+
 function Invoke-ZrokBootstrap {
     param(
         [Parameter(Mandatory = $true)][hashtable]$Ops,
@@ -36,6 +111,7 @@ function Invoke-ZrokBootstrap {
         [bool]$EnableRemoting = $true
     )
 
+    $resolvedReservedName = ([string]$ReservedName).Trim()
     $changed = New-Object System.Collections.Generic.List[string]
     try {
         $zrokPath = & $Ops.GetZrokPath
@@ -63,16 +139,29 @@ function Invoke-ZrokBootstrap {
             [void]$changed.Add('environment-enabled')
         }
 
-        if (-not [string]::IsNullOrWhiteSpace($ReservedName)) {
-            $nameState = [string](& $Ops.GetReservedNameState $zrokPath $ReservedName)
-            if ($nameState -eq 'Conflict') {
-                throw (New-BootstrapException 'reserved-name-conflict' "The zrok public name '$ReservedName' is not available to this account.")
-            }
-            if ($nameState -eq 'Missing') {
-                & $Ops.CreateReservedName $zrokPath $ReservedName
-                [void]$changed.Add('reserved-name-created')
+        if ([string]::IsNullOrWhiteSpace($resolvedReservedName)) {
+            $ownedReservedNames = @(& $Ops.ListOwnedReservedNames $zrokPath) | ForEach-Object { ([string]$_).Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique
+            $savedReservedName = ([string](& $Ops.GetSavedReservedName)).Trim()
+            if (-not [string]::IsNullOrWhiteSpace($savedReservedName) -and $ownedReservedNames -contains $savedReservedName) {
+                $resolvedReservedName = $savedReservedName
+            } else {
+                $resolvedReservedName = ([string](& $Ops.ChooseReservedName (,$ownedReservedNames))).Trim()
             }
         }
+
+        if ([string]::IsNullOrWhiteSpace($resolvedReservedName)) {
+            throw (New-BootstrapException 'reserved-name-required' 'Choose an existing zrok reserved name or create a new one.')
+        }
+
+        $nameState = [string](& $Ops.GetReservedNameState $zrokPath $resolvedReservedName)
+        if ($nameState -eq 'Conflict') {
+            throw (New-BootstrapException 'reserved-name-conflict' "The zrok public name '$resolvedReservedName' is not available to this account.")
+        }
+        if ($nameState -eq 'Missing') {
+            & $Ops.CreateReservedName $zrokPath $resolvedReservedName
+            [void]$changed.Add('reserved-name-created')
+        }
+        & $Ops.SaveReservedName $resolvedReservedName
 
         $remoteControl = 'available'
         $remotingChanged = $false
@@ -111,7 +200,7 @@ function Invoke-ZrokBootstrap {
             message = 'zrok bootstrap is ready.'
             zrokPath = [string]$zrokPath
             serviceName = 'zrokAgent'
-            reservedName = $ReservedName
+            reservedName = $resolvedReservedName
             remoteControl = $remoteControl
             remotingEnabled = $EnableRemoting
             changed = @($changed)
@@ -123,7 +212,7 @@ function Invoke-ZrokBootstrap {
             code = $code
             message = $_.Exception.Message
             serviceName = 'zrokAgent'
-            reservedName = $ReservedName
+            reservedName = $resolvedReservedName
             changed = @($changed)
         }
     }
@@ -274,6 +363,13 @@ function New-DefaultZrokBootstrapOps {
     $serviceProfile = Join-Path $env:SystemRoot 'System32\config\systemprofile'
     $zrokDir = Join-Path $serviceProfile '.zrok2'
     $agentEnrollmentPath = Join-Path $zrokDir 'agent-enrollment.json'
+    $repoRoot = Split-Path -Parent $PSScriptRoot
+    $runtimeDir = if ([string]::IsNullOrWhiteSpace([string]$env:DEVFLOW_RUNTIME_DIR)) {
+        Join-Path $repoRoot '.devflow'
+    } else {
+        [System.IO.Path]::GetFullPath([string]$env:DEVFLOW_RUNTIME_DIR)
+    }
+    $selectionPath = Join-Path $runtimeDir 'zrok-selection.json'
 
     return @{
         GetZrokPath = { return (Find-ZrokExecutable $InstallDir) }.GetNewClosure()
@@ -305,6 +401,41 @@ function New-DefaultZrokBootstrapOps {
                 $plain = $null
                 if ($bstr -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
             }
+        }.GetNewClosure()
+        GetSavedReservedName = {
+            return (Read-ZrokReservedNameSelection $selectionPath)
+        }.GetNewClosure()
+        ListOwnedReservedNames = {
+            param($ZrokPath)
+            try {
+                $raw = Invoke-ZrokQuiet $ZrokPath $serviceProfile @('list', 'names', '--json') 'list-names-failed' 'Unable to list zrok reserved names for this account.'
+                $json = ($raw -join [Environment]::NewLine) | ConvertFrom-Json
+                $entries = if ($null -ne $json.names) { @($json.names) } else { @($json) }
+                $names = New-Object System.Collections.Generic.List[string]
+                foreach ($entry in $entries) {
+                    $name = ([string]$entry.name).Trim()
+                    if ([string]::IsNullOrWhiteSpace($name)) { $name = ([string]$entry.Name).Trim() }
+                    $namespace = ([string]$entry.namespaceToken).Trim()
+                    if ([string]::IsNullOrWhiteSpace($namespace)) { $namespace = ([string]$entry.namespace_token).Trim() }
+                    if ([string]::IsNullOrWhiteSpace($namespace)) { $namespace = ([string]$entry.NamespaceToken).Trim() }
+                    $reservedValue = if ($null -ne $entry.reserved) { $entry.reserved } else { $entry.Reserved }
+                    if (-not [string]::IsNullOrWhiteSpace($name) -and $namespace -eq $NamespaceToken -and [bool]$reservedValue) {
+                        [void]$names.Add($name)
+                    }
+                }
+                return @($names | Sort-Object -Unique)
+            } catch {
+                if ($_.Exception.Data.Contains('BootstrapCode')) { throw }
+                throw (New-BootstrapException 'list-names-failed' 'Unable to list zrok reserved names for this account.')
+            }
+        }.GetNewClosure()
+        ChooseReservedName = {
+            param([string[]]$OwnedNames)
+            return (Read-ZrokReservedNameChoice $OwnedNames)
+        }.GetNewClosure()
+        SaveReservedName = {
+            param([string]$Name)
+            Write-ZrokReservedNameSelection $selectionPath $Name
         }.GetNewClosure()
         GetServiceState = {
             $service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue

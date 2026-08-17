@@ -47,15 +47,17 @@ zrok account token
 
 Paste the zrok account token from your zrok account. The prompt uses a secure string; DevFlow uses the token to enable the zrok environment and does not write the account token to `.env`.
 
-The bootstrap then installs/repairs the local zrok tooling as needed, creates or reuses the configured reserved public name, enrolls the agent for remote control, and starts the `zrokAgent` service. Later DevFlow launches reuse that persistent service/share instead of creating a new public URL.
+After the zrok environment is ready, the bootstrap resolves which reserved name this machine should manage. If `DEVFLOW_ZROK_RESERVED_NAME` is configured, that explicit name is used non-interactively. Otherwise DevFlow reuses a valid name saved on this machine; on the first setup for a machine it lists the reserved names owned by the zrok account and lets you choose an existing name or **Create new**. The selected name is saved locally in ignored `.devflow/zrok-selection.json` so later launches do not ask again.
 
-DevFlow does not bake a reserved name or public URL into the repository. If you want a stable reserved name, configure it before first bootstrap:
+That local selection file contains only the reserved name. It does not contain the zrok account token or a public endpoint. The bootstrap then creates the selected name only when needed, enrolls the agent for remote control, and starts the `zrokAgent` service.
+
+DevFlow does not bake a reserved name or public URL into the repository. For unattended/non-interactive setup you can still override the saved selection explicitly:
 
 ```env
 DEVFLOW_ZROK_RESERVED_NAME="your-reserved-name"
 ```
 
-After bootstrap, use the public base URL reported by the zrok status panel/API. Do not derive it by concatenating the reserved name with a provider domain.
+After bootstrap, use the public base URL reported by the live zrok status panel/API. Do not enter or derive an endpoint by concatenating the reserved name with a provider domain.
 
 DevFlow runs locally at:
 
@@ -271,9 +273,10 @@ To move DevFlow to another machine:
 3. Clone the repo and run `npm install` + `npm run setup`.
 4. Restore the backup through Settings or `npm run restore <path>`.
 5. Re-enter machine-local integration credentials if needed.
-6. Run `Start DevFlow.bat`/`npm run start:all` on the new machine and complete zrok bootstrap if that machine is not enrolled yet.
-7. If the reserved name is currently active on the old machine, the new machine should show `Standby`; use the explicit **Take over** action when you intentionally move ownership.
-8. Keep the same reserved name to keep the ChatGPT MCP URL stable. If you deliberately change the reserved name, update the ChatGPT MCP app endpoint.
+6. Run `Start DevFlow.bat`/`npm run start:all` on the new machine. Enter the zrok account token only if that machine still needs environment enablement.
+7. When prompted for the zrok reserved name, choose the existing reserved name used by the old machine. Choose **Create new** only when you intentionally want a separate public identity.
+8. If that existing reserved name is still active on the old machine, the new machine should show `Standby`; use the explicit **Take over** action only when you intentionally move ownership.
+9. DevFlow discovers the actual public endpoint from live zrok state. If you deliberately choose a different reserved name, use the newly reported MCP URL when updating the ChatGPT MCP app.
 
 ## Troubleshooting zrok
 

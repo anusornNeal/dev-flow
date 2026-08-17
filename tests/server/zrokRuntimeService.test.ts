@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import type { ZrokLocalAgentShare, ZrokLocalAgentStatus } from '../../src/server/services/zrokAgentConsoleClient.js';
 import {
   createDefaultZrokRuntimeAdapter,
@@ -474,6 +477,45 @@ test('resolves the bootstrap-installed zrok binary from ProgramFiles and falls b
   assert.equal(resolveZrokBinary({ platform: 'win32', programFilesDir: '' }), 'zrok2');
   assert.equal(resolveZrokBinary({ platform: 'linux' }), 'zrok2');
   assert.equal(resolveZrokBinary({ binary: 'D:\\tools\\zrok2.exe', platform: 'win32' }), 'D:\\tools\\zrok2.exe');
+});
+
+test('saved local reserved name is read safely and explicit configuration wins', async () => {
+  const runtimeModule = await import('../../src/server/services/zrokRuntimeService.js');
+  const resolver = (runtimeModule as unknown as { resolveZrokPreferredName?: unknown }).resolveZrokPreferredName;
+  assert.equal(typeof resolver, 'function', 'runtime should expose bounded preferred-name resolution');
+  if (typeof resolver !== 'function') return;
+  const resolvePreferredName = resolver as (explicit?: string, selectionPath?: string) => string | undefined;
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-zrok-selection-'));
+  const selectionPath = path.join(tempDir, 'zrok-selection.json');
+  try {
+    fs.writeFileSync(selectionPath, JSON.stringify({ reservedName: 'saved-beta', ignored: 'not-used' }));
+    assert.equal(resolvePreferredName(undefined, selectionPath), 'saved-beta');
+    assert.equal(resolvePreferredName(' env-override ', selectionPath), 'env-override');
+    fs.writeFileSync(selectionPath, '{not-json');
+    assert.equal(resolvePreferredName(undefined, selectionPath), undefined);
+    fs.writeFileSync(selectionPath, JSON.stringify({ reservedName: 'x'.repeat(300) }));
+    assert.equal(resolvePreferredName(undefined, selectionPath), undefined);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('preferred reserved name disambiguates multiple owned names', async () => {
+  const { adapter } = makeFixture({
+    names: [
+      { ...makeName(''), name: 'alpha' },
+      { ...makeName(''), name: 'beta' },
+    ],
+    shares: [],
+    localAgentStatus: { reachable: true, shares: [] },
+  });
+  const actual = await createZrokRuntimeService(adapter, {
+    ...baseConfig(),
+    nameSelection: undefined,
+    preferredName: 'beta',
+  }).getStatus();
+  assert.equal(actual.status, 'offline');
+  assert.equal(actual.share.owner, 'none');
 });
 
 test('status reports Setup error when the managed reserved name cannot be identified', async () => {

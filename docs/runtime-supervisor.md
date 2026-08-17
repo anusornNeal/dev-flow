@@ -38,12 +38,13 @@ The first run may require:
 
 1. Administrator approval to install/configure the Windows service.
 2. A zrok account token if the service environment has not been enabled yet.
-3. Creation of the configured reserved name if the account does not already own it.
-4. Agent remoting enrollment when the controller supports that capability. An explicit HTTP 501/unimplemented response leaves local service readiness intact and reports remote control as unsupported.
+3. Reserved-name selection: an explicit `DEVFLOW_ZROK_RESERVED_NAME` wins; otherwise a valid local saved selection is reused; otherwise the bootstrap lists account-owned reserved names and lets the user choose an existing name or create a new one.
+4. Creation of the selected reserved name only when the account does not already own it.
+5. Agent remoting enrollment when the controller supports that capability. An explicit HTTP 501/unimplemented response leaves local service readiness intact and reports remote control as unsupported.
 
-The token is requested with a secure prompt and used only for zrok environment enablement; it is not stored in `.env` by the bootstrap.
+The token is requested with a secure prompt and used only for zrok environment enablement; it is not stored in `.env` or in DevFlow's local selection state. The resolved reserved name is stored as the only field in ignored `.devflow/zrok-selection.json`, making repeated startup and multi-name accounts deterministic without persisting a credential.
 
-The bootstrap does not construct a public hostname from the reserved name. The local Agent's live `frontendEndpoint`, exposed by `/api/zrok/status`, is authoritative; `DEVFLOW_ZROK_PUBLIC_URL` is only an explicit fallback when live status is temporarily unavailable.
+The bootstrap never asks for or constructs a public hostname from the reserved name. The local Agent's live `frontendEndpoint`, exposed by `/api/zrok/status`, is authoritative; `DEVFLOW_ZROK_PUBLIC_URL` is only an explicit fallback when live status is temporarily unavailable. On another machine, choosing a reserved name already active elsewhere leads to `Standby`; ownership changes remain an explicit Take over operation.
 
 ### Service/share reconciliation
 

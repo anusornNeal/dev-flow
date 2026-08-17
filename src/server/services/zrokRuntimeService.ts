@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { getRuntimeIdentity } from './runtimeIdentityService.js';
+import { getDevFlowRuntimeDir } from '../../lib/devFlowPaths.js';
 import {
   createZrokAgentConsoleClient,
   selectTargetShare,
@@ -1175,13 +1176,38 @@ export function createDefaultZrokRuntimeAdapter(options: DefaultZrokRuntimeAdapt
   };
 }
 
+const MAX_ZROK_SELECTION_BYTES = 4_096;
+const MAX_ZROK_RESERVED_NAME_LENGTH = 256;
+
+export function readZrokSelectedReservedName(
+  selectionPath = path.join(getDevFlowRuntimeDir(), 'zrok-selection.json'),
+): string | undefined {
+  try {
+    if (!fs.existsSync(selectionPath)) return undefined;
+    const stat = fs.statSync(selectionPath);
+    if (!stat.isFile() || stat.size <= 0 || stat.size > MAX_ZROK_SELECTION_BYTES) return undefined;
+    const payload = JSON.parse(fs.readFileSync(selectionPath, 'utf8')) as Record<string, unknown>;
+    const name = typeof payload.reservedName === 'string' ? payload.reservedName.trim() : '';
+    if (!name || name.length > MAX_ZROK_RESERVED_NAME_LENGTH || /[\u0000-\u001f\u007f]/.test(name)) return undefined;
+    return name;
+  } catch {
+    return undefined;
+  }
+}
+
+export function resolveZrokPreferredName(explicit?: string, selectionPath?: string): string | undefined {
+  const configured = explicit?.trim();
+  if (configured) return configured;
+  return readZrokSelectedReservedName(selectionPath);
+}
+
 function defaultConfig(): ZrokRuntimeConfig {
   const runtime = getRuntimeIdentity();
   return {
     serviceName: process.env.DEVFLOW_ZROK_SERVICE_NAME?.trim() || 'zrokAgent',
     target: process.env.DEVFLOW_ZROK_TARGET?.trim() || 'http://127.0.0.1:3000',
     nameSelection: process.env.DEVFLOW_ZROK_NAME_SELECTION?.trim() || undefined,
-    preferredName: process.env.DEVFLOW_ZROK_RESERVED_NAME?.trim() || undefined,
+    preferredName: resolveZrokPreferredName(process.env.DEVFLOW_ZROK_RESERVED_NAME),
     baseUrl: process.env.DEVFLOW_ZROK_BASE_URL?.trim() || undefined,
     expectedRuntimeInstanceId: runtime.runtimeInstanceId,
   };

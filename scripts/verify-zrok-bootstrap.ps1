@@ -29,7 +29,10 @@ function New-FakeBootstrapOps {
         [ValidateSet('Missing','Owned','Conflict')][string]$NameState = 'Owned',
         [bool]$RemotingEnrolled = $true,
         [bool]$RemotingEnrollmentUnsupported = $false,
-        [string]$FailOperation = ''
+        [string]$FailOperation = '',
+        [string]$SavedReservedName = '',
+        [string[]]$OwnedReservedNames = @('test-reserved-name'),
+        [string]$ChosenReservedName = 'test-reserved-name'
     )
 
     $state = [ordered]@{
@@ -39,6 +42,13 @@ function New-FakeBootstrapOps {
         serviceState = $ServiceState
         nameState = $NameState
         remotingEnrolled = $RemotingEnrolled
+        savedReservedName = $SavedReservedName
+        ownedReservedNames = @($OwnedReservedNames)
+        chosenReservedName = $ChosenReservedName
+        savedReads = 0
+        listNames = 0
+        chooseName = 0
+        saveName = 0
         tokenReads = 0
         installZrok = 0
         installNssm = 0
@@ -122,6 +132,29 @@ function New-FakeBootstrapOps {
             $state.startService++
             $state.serviceState = 'Running'
         }.GetNewClosure()
+        GetSavedReservedName = {
+            [void]$state.calls.Add('GetSavedReservedName')
+            $state.savedReads++
+            return [string]$state.savedReservedName
+        }.GetNewClosure()
+        ListOwnedReservedNames = {
+            param($ZrokPath)
+            [void]$state.calls.Add('ListOwnedReservedNames')
+            $state.listNames++
+            return @($state.ownedReservedNames)
+        }.GetNewClosure()
+        ChooseReservedName = {
+            param([string[]]$OwnedNames)
+            [void]$state.calls.Add('ChooseReservedName')
+            $state.chooseName++
+            return [string]$state.chosenReservedName
+        }.GetNewClosure()
+        SaveReservedName = {
+            param([string]$Name)
+            [void]$state.calls.Add('SaveReservedName')
+            $state.saveName++
+            $state.savedReservedName = $Name
+        }.GetNewClosure()
         GetReservedNameState = {
             param($ZrokPath, $ReservedName)
             [void]$state.calls.Add('GetReservedNameState')
@@ -177,6 +210,27 @@ Invoke-Case 'environment marker detection requires non-empty environment.json' {
 }
 
 Invoke-Case 'remoting enrollment classification is narrow' {
+
+Invoke-Case 'local reserved-name selection persists only the selected name' {
+    $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("devflow-zrok-selection-test-" + [Guid]::NewGuid().ToString('N'))
+    [void][System.IO.Directory]::CreateDirectory($tempDir)
+    try {
+        $selectionPath = Join-Path $tempDir 'zrok-selection.json'
+        Write-ZrokReservedNameSelection $selectionPath 'saved-name'
+        Assert-Equal (Read-ZrokReservedNameSelection $selectionPath) 'saved-name' 'saved name round-trips'
+        $json = Get-Content -LiteralPath $selectionPath -Raw | ConvertFrom-Json
+        Assert-Equal @($json.PSObject.Properties).Count 1 'selection file contains one property only'
+        Assert-Equal ([string]$json.reservedName) 'saved-name' 'selection file stores the selected reserved name'
+        Assert-True (-not ((Get-Content -LiteralPath $selectionPath -Raw) -match 'token|secret|endpoint')) 'selection file must not contain credential or endpoint fields'
+        [System.IO.File]::WriteAllText($selectionPath, '{not-json')
+        Assert-Equal (Read-ZrokReservedNameSelection $selectionPath) '' 'malformed selection is ignored'
+        [System.IO.File]::WriteAllText($selectionPath, ('x' * 5000))
+        Assert-Equal (Read-ZrokReservedNameSelection $selectionPath) '' 'oversized selection is ignored'
+    } finally {
+        [System.IO.Directory]::Delete($tempDir, $true)
+    }
+}
+
     Assert-Equal (Get-RemotingEnrollmentFailureCode @('controller request failed: HTTP 501 Not Implemented')) 'remoting-unimplemented' 'HTTP 501 is unsupported capability'
     Assert-Equal (Get-RemotingEnrollmentFailureCode @('controller request 501 failed without an HTTP status')) 'remoting-enroll-failed' 'an unrelated number is not an unsupported capability'
     Assert-Equal (Get-RemotingEnrollmentFailureCode @('controller request failed: 500 internal server error')) 'remoting-enroll-failed' 'other controller failures remain fatal'
@@ -250,13 +304,54 @@ Invoke-Case 'stopped service is started without reinstall' {
     Assert-Equal $fake.State.startService 1 'stopped service should start'
 }
 
-Invoke-Case 'absent reserved name skips name reconciliation' {
-    $fake = New-FakeBootstrapOps -NameState Missing
+Invoke-Case 'explicit reserved name bypasses saved and interactive selection' {
+    $fake = New-FakeBootstrapOps -SavedReservedName 'saved-name' -OwnedReservedNames @('saved-name','explicit-name') -ChosenReservedName 'saved-name'
+    $result = Invoke-ZrokBootstrap -Ops $fake.Ops -ReservedName 'explicit-name' -EnableRemoting $true
+    Assert-Equal $result.ok $true 'explicit selection should succeed'
+    Assert-Equal $result.reservedName 'explicit-name' 'explicit reserved name remains authoritative'
+    Assert-Equal $fake.State.savedReads 0 'explicit name must not read saved selection'
+    Assert-Equal $fake.State.listNames 0 'explicit name must not list account names'
+    Assert-Equal $fake.State.chooseName 0 'explicit name must not prompt for selection'
+    Assert-Equal $fake.State.savedReservedName 'explicit-name' 'explicit name becomes the local saved selection'
+}
+
+Invoke-Case 'saved owned reserved name is reused without prompting' {
+    $fake = New-FakeBootstrapOps -SavedReservedName 'saved-name' -OwnedReservedNames @('saved-name','other-name') -ChosenReservedName 'other-name'
     $result = Invoke-ZrokBootstrap -Ops $fake.Ops -ReservedName '' -EnableRemoting $true
-    Assert-Equal $result.ok $true 'local readiness does not require a configured reserved name'
-    Assert-Equal $result.reservedName '' 'result preserves absent reserved-name configuration'
-    Assert-Equal $fake.State.createName 0 'bootstrap must not create a default reserved name'
-    Assert-True (-not ($fake.State.calls.Contains('GetReservedNameState'))) 'bootstrap must not query an absent reserved name'
+    Assert-Equal $result.ok $true 'saved selection should succeed'
+    Assert-Equal $result.reservedName 'saved-name' 'saved owned name is reused'
+    Assert-Equal $fake.State.listNames 1 'saved selection is validated against account names'
+    Assert-Equal $fake.State.chooseName 0 'valid saved selection must not prompt'
+    Assert-Equal $fake.State.createName 0 'owned saved name must not be recreated'
+}
+
+Invoke-Case 'interactive existing reserved name is reused and saved' {
+    $fake = New-FakeBootstrapOps -OwnedReservedNames @('alpha','beta') -ChosenReservedName 'beta'
+    $result = Invoke-ZrokBootstrap -Ops $fake.Ops -ReservedName '' -EnableRemoting $true
+    Assert-Equal $result.ok $true 'interactive existing selection should succeed'
+    Assert-Equal $result.reservedName 'beta' 'chosen existing name is returned'
+    Assert-Equal $fake.State.chooseName 1 'missing saved selection asks once'
+    Assert-Equal $fake.State.createName 0 'existing chosen name is reused'
+    Assert-Equal $fake.State.savedReservedName 'beta' 'chosen existing name is persisted locally'
+}
+
+Invoke-Case 'interactive new reserved name is created once and saved' {
+    $fake = New-FakeBootstrapOps -NameState Missing -OwnedReservedNames @('alpha') -ChosenReservedName 'new-machine-name'
+    $result = Invoke-ZrokBootstrap -Ops $fake.Ops -ReservedName '' -EnableRemoting $true
+    Assert-Equal $result.ok $true 'interactive new selection should succeed'
+    Assert-Equal $result.reservedName 'new-machine-name' 'new chosen name is returned'
+    Assert-Equal $fake.State.chooseName 1 'new selection asks once'
+    Assert-Equal $fake.State.createName 1 'missing chosen name is created once'
+    Assert-Equal $fake.State.savedReservedName 'new-machine-name' 'new chosen name is persisted locally'
+}
+
+Invoke-Case 'stale saved name falls back to account selection' {
+    $fake = New-FakeBootstrapOps -SavedReservedName 'stale-name' -OwnedReservedNames @('current-name') -ChosenReservedName 'current-name'
+    $result = Invoke-ZrokBootstrap -Ops $fake.Ops -ReservedName '' -EnableRemoting $true
+    Assert-Equal $result.ok $true 'stale saved selection should recover'
+    Assert-Equal $result.reservedName 'current-name' 'interactive replacement wins over stale saved name'
+    Assert-Equal $fake.State.chooseName 1 'stale saved selection prompts once'
+    Assert-Equal $fake.State.savedReservedName 'current-name' 'replacement selection is persisted'
 }
 
 Invoke-Case 'unsupported remoting preserves local readiness' {

@@ -9,7 +9,7 @@ process.env.DEVFLOW_DB_PATH = path.join(tempRoot, 'devflow.db');
 const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
 executeAllMigrations();
 const { default: db } = await import('../../src/db/index.js');
-const { createUiPreviewRepository, fingerprintCanonicalRequest } = await import('../../src/server/repositories/uiPreviewRepository.js');
+const { createUiPreviewRepository, fingerprintCanonicalRequest, hashUiPreviewContent } = await import('../../src/server/repositories/uiPreviewRepository.js');
 const { createTaskUiEvidenceRepository } = await import('../../src/server/repositories/taskUiEvidenceRepository.js');
 
 const repo = createUiPreviewRepository(db as any);
@@ -156,6 +156,65 @@ test('standalone preview deletion removes all revisions while linked and missing
     () => (repo as any).deleteStandalonePreview('uip_missing_delete'),
     (error: any) => error?.code === 'UI_PREVIEW_NOT_FOUND',
   );
+});
+
+
+test('canonical workspace hashing is stable for JSON key order and sensitive to workspace-visible changes', () => {
+  const screens = [
+    { screenId: 'overview', name: 'Overview', html: '<main>overview</main>', css: '', js: '', spec: { schemaVersion: 1 as const, summary: { screen: 'Overview', alpha: 'a', beta: 'b' } } },
+    { screenId: 'details', name: 'Details', html: '<main>details</main>', css: '.x{}', js: '', spec: { schemaVersion: 1 as const, summary: { screen: 'Details' } } },
+  ];
+  const base = hashUiPreviewContent({ title: 'Workspace', screens, defaultScreenId: 'overview', viewport });
+  const reorderedKeys = hashUiPreviewContent({
+    title: 'Workspace',
+    screens: [
+      { ...screens[0], spec: { summary: { beta: 'b', alpha: 'a', screen: 'Overview' }, schemaVersion: 1 as const } },
+      screens[1],
+    ],
+    defaultScreenId: 'overview',
+    viewport,
+  });
+  assert.equal(base, reorderedKeys);
+  assert.notEqual(base, hashUiPreviewContent({ title: 'Workspace', screens: [...screens].reverse(), defaultScreenId: 'overview', viewport }));
+  assert.notEqual(base, hashUiPreviewContent({ title: 'Workspace', screens, defaultScreenId: 'details', viewport }));
+  assert.notEqual(base, hashUiPreviewContent({ title: 'Workspace', screens: [{ ...screens[0], html: '<main>changed</main>' }, screens[1]], defaultScreenId: 'overview', viewport }));
+});
+
+test('canonical workspace revisions persist and unchanged full replacements do not manufacture revisions', () => {
+  const screens = [
+    { screenId: 'overview', name: 'Overview', html: '<main>overview</main>', css: '', js: '', spec: { schemaVersion: 1 as const, summary: { screen: 'Overview' } } },
+    { screenId: 'details', name: 'Details', html: '<main>details</main>', css: '', js: '', spec: { schemaVersion: 1 as const, summary: { screen: 'Details' } } },
+  ];
+  const contentHash = hashUiPreviewContent({ title: 'Workspace', screens, defaultScreenId: 'details', viewport });
+  repo.createPreview({
+    id: 'uip_workspace', taskId: null, title: 'Workspace',
+    html: screens[1].html, css: screens[1].css, js: screens[1].js, spec: screens[1].spec,
+    screens, defaultScreenId: 'details', viewport, contentHash,
+  });
+  const first = repo.getRevision('uip_workspace', 1)!;
+  assert.equal(first.defaultScreenId, 'details');
+  assert.deepEqual(first.screens, screens);
+  assert.equal(first.html, '<main>details</main>');
+
+  const changedScreens = [screens[0], { ...screens[1], html: '<main>details v2</main>' }];
+  const changedHash = hashUiPreviewContent({ title: 'Workspace', screens: changedScreens, defaultScreenId: 'details', viewport });
+  const changed = repo.appendRevision({
+    previewId: 'uip_workspace', expectedRevision: 1, title: 'Workspace',
+    html: changedScreens[1].html, css: changedScreens[1].css, js: changedScreens[1].js, spec: changedScreens[1].spec,
+    screens: changedScreens, defaultScreenId: 'details', viewport, contentHash: changedHash,
+  });
+  assert.equal(changed.changed, true);
+  assert.equal(changed.revision.revision, 2);
+  assert.equal(repo.countRevisions('uip_workspace'), 2);
+  assert.equal(repo.getRevision('uip_workspace', 2)?.screens[1].html, '<main>details v2</main>');
+
+  const duplicate = repo.appendRevision({
+    previewId: 'uip_workspace', expectedRevision: 2, title: 'Workspace',
+    html: changedScreens[1].html, css: changedScreens[1].css, js: changedScreens[1].js, spec: changedScreens[1].spec,
+    screens: changedScreens, defaultScreenId: 'details', viewport, contentHash: changedHash,
+  });
+  assert.equal(duplicate.changed, false);
+  assert.equal(repo.countRevisions('uip_workspace'), 2);
 });
 
 test('evidence for another preview remains current', () => {

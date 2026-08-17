@@ -66,6 +66,19 @@ export function createUiPreviewStorageReachabilityRepository(database: DatabaseL
         }));
       }
     }
+    const workspaceRows = database.prepare(`
+      SELECT preview_id, revision, workspace_object_hash
+      FROM ui_preview_workspace_revision_manifests
+    `).all() as Array<Record<string, unknown>>;
+    for (const row of workspaceRows) {
+      roots.add(assertPersistedObjectHash(row.workspace_object_hash, {
+        source: 'workspace-revision-manifest',
+        previewId: row.preview_id,
+        revision: row.revision,
+        component: 'workspace',
+      }));
+    }
+
     return roots;
   }
 

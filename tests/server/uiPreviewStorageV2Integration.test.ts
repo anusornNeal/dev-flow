@@ -84,6 +84,38 @@ test('legacy revision migration is idempotent and clears bodies only after a man
   }
 });
 
+test('canonical multi-screen workspace persists as one CAS object and reconstructs after reopen', () => {
+  const dbName = 'workspace-cas';
+  let database = createDatabase(dbName);
+  const sourceStore = createUiPreviewSourceObjectStore({ rootDir: path.join(root, 'workspace-source-objects') });
+  const screens = [
+    { screenId: 'overview', name: 'Overview', html: '<main>one</main>', css: '', js: '', spec: { schemaVersion: 1 as const, summary: { screen: 'Overview' } } },
+    { screenId: 'details', name: 'Details', html: '<main>two</main>', css: '.details{}', js: '', spec: { schemaVersion: 1 as const, summary: { screen: 'Details' } } },
+  ];
+  try {
+    const repository = createUiPreviewRepository({ database, sourceStore });
+    repository.createPreview({
+      id: 'uip_workspace_v2', taskId: null, title: 'Workspace',
+      html: screens[0].html, css: screens[0].css, js: screens[0].js, spec: screens[0].spec,
+      screens, defaultScreenId: 'overview', viewport, contentHash: 'workspace-content-1',
+    });
+    const row = database.prepare('SELECT html, css, js, spec_json FROM ui_preview_revisions WHERE preview_id = ?').get('uip_workspace_v2') as any;
+    assert.deepEqual(row, { html: '', css: '', js: '', spec_json: '{}' });
+    assert.equal((database.prepare('SELECT COUNT(*) AS count FROM ui_preview_revision_manifests WHERE preview_id = ?').get('uip_workspace_v2') as any).count, 0);
+    assert.equal((database.prepare('SELECT COUNT(*) AS count FROM ui_preview_workspace_revision_manifests WHERE preview_id = ?').get('uip_workspace_v2') as any).count, 1);
+    assert.equal((database.prepare("SELECT COUNT(*) AS count FROM ui_preview_objects WHERE kind = 'source'").get() as any).count, 1);
+    database.close();
+
+    database = createDatabase(dbName);
+    const reopened = createUiPreviewRepository({ database, sourceStore }).getRevision('uip_workspace_v2', 1)!;
+    assert.equal(reopened.defaultScreenId, 'overview');
+    assert.deepEqual(reopened.screens, screens);
+    assert.equal(reopened.html, '<main>one</main>');
+  } finally {
+    try { database.close(); } catch {}
+  }
+});
+
 test('public artifact ids remain stable while identical PNG bytes dedupe physically', async () => {
   const database = createDatabase('screenshot-cas');
   const metadataRepository = createUiPreviewObjectMetadataRepository(database);

@@ -54,6 +54,56 @@ test('healthy metadata, manifests, artifacts, and physical bytes produce no issu
   assert.deepEqual(result.summary.truncated, { objects: false, manifests: false, artifacts: false });
 });
 
+test('validates canonical workspace manifests without misclassifying legacy manifests', async () => {
+  const workspaceBytes = Buffer.from(JSON.stringify({
+    schemaVersion: 1,
+    title: 'Workspace',
+    screens: [
+      { screenId: 'overview', name: 'Overview', html: '<main>one</main>', css: '', js: '', spec: { schemaVersion: 1, summary: { screen: 'Overview' } } },
+      { screenId: 'details', name: 'Details', html: '<main>two</main>', css: '', js: '', spec: { schemaVersion: 1, summary: { screen: 'Details' } } },
+    ],
+    defaultScreenId: 'overview',
+    viewport: { width: 800, height: 600, deviceScaleFactor: 1 },
+  }));
+  const workspace = object(workspaceBytes);
+  const healthy = createUiPreviewStorageIntegrityService({
+    readObject: async (objectHash) => objectHash === workspace.objectHash
+      ? { bytes: workspaceBytes, storedByteLength: workspace.storedBytes }
+      : null,
+  });
+  const healthyResult = await healthy.scan({
+    objects: [workspace],
+    manifests: [{ previewId: 'uip_workspace', revision: 1, workspaceObjectHash: workspace.objectHash }],
+  });
+  assert.deepEqual(healthyResult.issues, []);
+
+  const malformedBytes = Buffer.from('{"schemaVersion":1}');
+  const malformed = object(malformedBytes);
+  const malformedResult = await createUiPreviewStorageIntegrityService({
+    readObject: async () => ({ bytes: malformedBytes, storedByteLength: malformed.storedBytes }),
+  }).scan({
+    objects: [malformed],
+    manifests: [{ previewId: 'uip_bad_workspace', revision: 2, workspaceObjectHash: malformed.objectHash }],
+  });
+  assert.ok(malformedResult.issues.some((issue) => issue.code === 'WORKSPACE_MANIFEST_INVALID'));
+
+  const missingHash = 'f'.repeat(64);
+  const missingResult = await healthy.scan({
+    objects: [workspace],
+    manifests: [{ previewId: 'uip_missing_workspace', revision: 3, workspaceObjectHash: missingHash }],
+  });
+  assert.ok(missingResult.issues.some((issue) => issue.code === 'WORKSPACE_MANIFEST_OBJECT_MISSING'));
+
+  const wrongKind = { ...workspace, kind: 'screenshot' as const, codec: 'identity' as const, storedBytes: workspaceBytes.byteLength };
+  const wrongKindResult = await createUiPreviewStorageIntegrityService({
+    readObject: async () => ({ bytes: workspaceBytes, storedByteLength: workspaceBytes.byteLength }),
+  }).scan({
+    objects: [wrongKind],
+    manifests: [{ previewId: 'uip_wrong_kind_workspace', revision: 4, workspaceObjectHash: wrongKind.objectHash }],
+  });
+  assert.ok(wrongKindResult.issues.some((issue) => issue.code === 'WORKSPACE_MANIFEST_WRONG_KIND'));
+});
+
 test('reports physical missing, hash, raw size, stored size, kind, codec, and PNG issues distinctly', async () => {
   const good = Buffer.from('good');
   const wrong = Buffer.from('wrong');

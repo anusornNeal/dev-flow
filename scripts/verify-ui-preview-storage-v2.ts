@@ -54,6 +54,17 @@ try {
     contentHash: 'storage-v2-two',
   });
 
+  const workspaceScreens = [
+    { screenId: 'overview', name: 'Overview', html: '<main>workspace overview</main>', css: '', js: '', spec: { schemaVersion: 1 as const, summary: { screen: 'Overview' } } },
+    { screenId: 'details', name: 'Details', html: '<main>workspace details</main>', css: '.details{}', js: '', spec: { schemaVersion: 1 as const, summary: { screen: 'Details' } } },
+  ];
+  repository.createPreview({
+    id: 'uip_storage_workspace_verify', taskId: null, title: 'Workspace verifier',
+    html: workspaceScreens[0].html, css: workspaceScreens[0].css, js: workspaceScreens[0].js, spec: workspaceScreens[0].spec,
+    screens: workspaceScreens, defaultScreenId: 'overview', viewport, contentHash: 'storage-workspace-one',
+  });
+  assert.equal((database.prepare('SELECT COUNT(*) AS count FROM ui_preview_workspace_revision_manifests WHERE preview_id = ?').get('uip_storage_workspace_verify') as any).count, 1);
+
   const legacyCreatedAt = '2026-01-01T00:00:00.000Z';
   database.prepare('INSERT INTO ui_previews (id, task_id, latest_revision, created_at, updated_at) VALUES (?, NULL, 1, ?, ?)')
     .run('uip_storage_v2_legacy', legacyCreatedAt, legacyCreatedAt);
@@ -80,6 +91,12 @@ try {
   assert.equal(repository.getRevision('uip_storage_v2_verify', 1)?.html, '<main>one</main>');
   assert.equal(repository.getRevision('uip_storage_v2_verify', 2)?.html, '<main>two</main>');
   assert.deepEqual(repository.getRevision('uip_storage_v2_verify', 2)?.spec, spec);
+  const reopenedWorkspace = repository.getRevision('uip_storage_workspace_verify', 1)!;
+  assert.equal(reopenedWorkspace.defaultScreenId, 'overview');
+  assert.deepEqual(reopenedWorkspace.screens, workspaceScreens);
+  const workspaceManifest = database.prepare('SELECT workspace_object_hash FROM ui_preview_workspace_revision_manifests WHERE preview_id = ? AND revision = 1').get('uip_storage_workspace_verify') as any;
+  assert.ok(workspaceManifest?.workspace_object_hash);
+
 
   const metadataRepository = createUiPreviewObjectMetadataRepository(database);
   const artifactStore = createUiPreviewArtifactStore({
@@ -129,6 +146,7 @@ try {
 
   const reachability = createUiPreviewStorageReachabilityRepository(database).collectReachableObjectHashes();
   assert.ok(reachability.objectHashes.includes(screenshotMapping.objectHash));
+  assert.ok(reachability.objectHashes.includes(String(workspaceManifest.workspace_object_hash)));
   assert.ok(!reachability.objectHashes.includes(orphan.objectHash));
 
   const objectRows = database.prepare(`
@@ -158,7 +176,7 @@ try {
     rawBytes: Number(row.raw_bytes),
     storedBytes: Number(row.stored_bytes),
   }));
-  const manifests = (database.prepare(`
+  const legacyManifests = (database.prepare(`
     SELECT preview_id, revision, html_object_hash, css_object_hash, js_object_hash, spec_object_hash
     FROM ui_preview_revision_manifests ORDER BY preview_id, revision
   `).all() as any[]).map((row) => ({
@@ -169,6 +187,15 @@ try {
     jsObjectHash: String(row.js_object_hash),
     specObjectHash: String(row.spec_object_hash),
   }));
+  const workspaceManifests = (database.prepare(`
+    SELECT preview_id, revision, workspace_object_hash
+    FROM ui_preview_workspace_revision_manifests ORDER BY preview_id, revision
+  `).all() as any[]).map((row) => ({
+    previewId: String(row.preview_id),
+    revision: Number(row.revision),
+    workspaceObjectHash: String(row.workspace_object_hash),
+  }));
+  const manifests = [...legacyManifests, ...workspaceManifests];
   const artifacts = (database.prepare('SELECT artifact_id, object_hash FROM ui_preview_artifact_objects').all() as any[])
     .map((row) => ({ artifactId: String(row.artifact_id), objectHash: String(row.object_hash) }));
 
@@ -189,7 +216,7 @@ try {
   const cleanScan = await integrity.scan({ objects, manifests, artifacts });
   assert.equal(cleanScan.summary.issueCount, 0);
 
-  const firstSourceHash = manifests[0].htmlObjectHash;
+  const firstSourceHash = legacyManifests[0].htmlObjectHash;
   const corruptScan = await createUiPreviewStorageIntegrityService({
     readObject: async (objectHash, metadata) => {
       const physical = await readPhysical(objectHash, metadata);

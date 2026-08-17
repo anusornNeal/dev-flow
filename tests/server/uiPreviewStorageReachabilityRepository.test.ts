@@ -23,6 +23,11 @@ function createDatabase(name: string) {
       js_object_hash TEXT NOT NULL,
       spec_object_hash TEXT NOT NULL
     );
+    CREATE TABLE ui_preview_workspace_revision_manifests (
+      preview_id TEXT NOT NULL,
+      revision INTEGER NOT NULL,
+      workspace_object_hash TEXT NOT NULL
+    );
     CREATE TABLE ui_preview_artifact_objects (
       artifact_id TEXT PRIMARY KEY,
       object_hash TEXT NOT NULL
@@ -83,6 +88,26 @@ test('roots every retained manifest revision, deduplicates component reuse, and 
   }
 });
 
+test('roots canonical workspace manifest objects alongside legacy source manifests', () => {
+  const database = createDatabase('workspace-manifests');
+  try {
+    insertManifest(database, {
+      previewId: 'uip-legacy', revision: 1,
+      html: hash('1'), css: hash('2'), js: hash('3'), spec: hash('4'),
+    });
+    database.prepare('INSERT INTO ui_preview_workspace_revision_manifests (preview_id, revision, workspace_object_hash) VALUES (?, ?, ?)')
+      .run('uip-workspace', 1, hash('5'));
+    database.prepare('INSERT INTO ui_preview_workspace_revision_manifests (preview_id, revision, workspace_object_hash) VALUES (?, ?, ?)')
+      .run('uip-workspace', 2, hash('5'));
+
+    const result = createUiPreviewStorageReachabilityRepository(database as any).collectReachableObjectHashes();
+    assert.deepEqual(result.objectHashes, [hash('1'), hash('2'), hash('3'), hash('4'), hash('5')]);
+    assert.deepEqual(result.counts, { source: 5, screenshot: 0, total: 5 });
+  } finally {
+    database.close();
+  }
+});
+
 test('roots screenshots only through retained task evidence, including superseded evidence history', () => {
   const database = createDatabase('evidence');
   try {
@@ -130,6 +155,20 @@ test('fails closed when any persisted reachable source or screenshot hash is inv
         previewId: 'uip-invalid', revision: 1,
         html: 'NOT-A-HASH', css: hash('b'), js: hash('c'), spec: hash('d'),
       });
+      assert.throws(
+        () => createUiPreviewStorageReachabilityRepository(database as any).collectReachableObjectHashes(),
+        (error: any) => error?.code === 'UI_PREVIEW_STORAGE_REACHABILITY_INVALID_HASH',
+      );
+    } finally {
+      database.close();
+    }
+  });
+
+  await t.test('workspace manifest', () => {
+    const database = createDatabase('invalid-workspace');
+    try {
+      database.prepare('INSERT INTO ui_preview_workspace_revision_manifests (preview_id, revision, workspace_object_hash) VALUES (?, ?, ?)')
+        .run('uip-invalid-workspace', 1, 'NOT-A-HASH');
       assert.throws(
         () => createUiPreviewStorageReachabilityRepository(database as any).collectReachableObjectHashes(),
         (error: any) => error?.code === 'UI_PREVIEW_STORAGE_REACHABILITY_INVALID_HASH',

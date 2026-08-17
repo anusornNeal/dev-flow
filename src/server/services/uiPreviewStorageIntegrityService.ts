@@ -15,14 +15,25 @@ export interface UiPreviewStorageIntegrityObject {
   storedBytes?: number;
 }
 
-export interface UiPreviewStorageIntegrityManifest {
-  previewId: string;
-  revision: number;
-  htmlObjectHash: string;
-  cssObjectHash: string;
-  jsObjectHash: string;
-  specObjectHash: string;
-}
+export type UiPreviewStorageIntegrityManifest =
+  | {
+      previewId: string;
+      revision: number;
+      htmlObjectHash: string;
+      cssObjectHash: string;
+      jsObjectHash: string;
+      specObjectHash: string;
+      workspaceObjectHash?: never;
+    }
+  | {
+      previewId: string;
+      revision: number;
+      workspaceObjectHash: string;
+      htmlObjectHash?: never;
+      cssObjectHash?: never;
+      jsObjectHash?: never;
+      specObjectHash?: never;
+    };
 
 export interface UiPreviewStorageIntegrityArtifact {
   artifactId: string;
@@ -45,6 +56,9 @@ export type UiPreviewStorageIntegrityIssueCode =
   | 'OBJECT_STORED_SIZE_MISMATCH'
   | 'SCREENSHOT_INVALID_PNG'
   | 'MANIFEST_OBJECT_MISSING'
+  | 'WORKSPACE_MANIFEST_OBJECT_MISSING'
+  | 'WORKSPACE_MANIFEST_WRONG_KIND'
+  | 'WORKSPACE_MANIFEST_INVALID'
   | 'ARTIFACT_OBJECT_MISSING'
   | 'ARTIFACT_WRONG_KIND';
 
@@ -54,7 +68,7 @@ export interface UiPreviewStorageIntegrityIssue {
   objectHash?: string;
   previewId?: string;
   revision?: number;
-  component?: 'html' | 'css' | 'js' | 'spec';
+  component?: 'html' | 'css' | 'js' | 'spec' | 'workspace';
   artifactId?: string;
 }
 
@@ -130,6 +144,39 @@ function addIssue(issues: UiPreviewStorageIntegrityIssue[], issue: UiPreviewStor
   issues.push(issue);
 }
 
+function isValidWorkspaceObject(bytes: Uint8Array) {
+  let parsed: any;
+  try {
+    parsed = JSON.parse(Buffer.from(bytes).toString('utf8'));
+  } catch {
+    return false;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || parsed.schemaVersion !== 1
+    || !(parsed.title === null || typeof parsed.title === 'string')
+    || !Array.isArray(parsed.screens) || parsed.screens.length === 0
+    || typeof parsed.defaultScreenId !== 'string') {
+    return false;
+  }
+  const ids = new Set<string>();
+  for (const screen of parsed.screens) {
+    if (!screen || typeof screen !== 'object' || Array.isArray(screen)
+      || typeof screen.screenId !== 'string' || !screen.screenId || ids.has(screen.screenId)
+      || typeof screen.name !== 'string' || !screen.name.trim()
+      || typeof screen.html !== 'string' || typeof screen.css !== 'string' || typeof screen.js !== 'string'
+      || !screen.spec || typeof screen.spec !== 'object' || Array.isArray(screen.spec)
+      || screen.spec.schemaVersion !== 1
+      || !screen.spec.summary || typeof screen.spec.summary !== 'object'
+      || typeof screen.spec.summary.screen !== 'string' || !screen.spec.summary.screen.trim()) {
+      return false;
+    }
+    ids.add(screen.screenId);
+  }
+  const viewport = parsed.viewport;
+  return ids.has(parsed.defaultScreenId)
+    && viewport && typeof viewport === 'object' && !Array.isArray(viewport)
+    && Number.isFinite(viewport.width) && Number.isFinite(viewport.height) && Number.isFinite(viewport.deviceScaleFactor);
+}
+
 export function createUiPreviewStorageIntegrityService(
   dependencies: UiPreviewStorageIntegrityDependencies,
 ): UiPreviewStorageIntegrityService {
@@ -152,6 +199,7 @@ export function createUiPreviewStorageIntegrityService(
     const artifacts = allArtifacts.slice(0, maxArtifacts);
     const issues: UiPreviewStorageIntegrityIssue[] = [];
     const metadataByHash = new Map<string, UiPreviewStorageIntegrityObject>();
+    const physicalBytesByHash = new Map<string, Uint8Array>();
 
     for (const metadata of objects) {
       const objectHash = String(metadata?.objectHash ?? '');
@@ -203,6 +251,7 @@ export function createUiPreviewStorageIntegrityService(
       }
 
       const bytes = Buffer.from(physical.bytes);
+      physicalBytesByHash.set(objectHash, bytes);
       const actualHash = hashBytes(bytes);
       if (actualHash !== objectHash) {
         addIssue(issues, {
@@ -245,8 +294,25 @@ export function createUiPreviewStorageIntegrityService(
       ['spec', 'specObjectHash'],
     ] as const;
     for (const manifest of manifests) {
+      if (Object.prototype.hasOwnProperty.call(manifest, 'workspaceObjectHash')) {
+        const objectHash = String(manifest.workspaceObjectHash || '');
+        const metadata = metadataByHash.get(objectHash);
+        if (!metadata) {
+          addIssue(issues, { code: 'WORKSPACE_MANIFEST_OBJECT_MISSING', previewId: manifest.previewId, revision: manifest.revision, component: 'workspace', objectHash, message: 'Workspace manifest object is missing from metadata.' });
+          continue;
+        }
+        if (metadata.kind !== 'source') {
+          addIssue(issues, { code: 'WORKSPACE_MANIFEST_WRONG_KIND', previewId: manifest.previewId, revision: manifest.revision, component: 'workspace', objectHash, message: 'Workspace manifest must reference a source object.' });
+          continue;
+        }
+        const workspaceBytes = physicalBytesByHash.get(objectHash);
+        if (workspaceBytes && !isValidWorkspaceObject(workspaceBytes)) {
+          addIssue(issues, { code: 'WORKSPACE_MANIFEST_INVALID', previewId: manifest.previewId, revision: manifest.revision, component: 'workspace', objectHash, message: 'Workspace manifest references malformed workspace source.' });
+        }
+        continue;
+      }
       for (const [component, field] of manifestComponents) {
-        const objectHash = manifest[field];
+        const objectHash = String(manifest[field] ?? '');
         if (!metadataByHash.has(objectHash)) {
           addIssue(issues, {
             code: 'MANIFEST_OBJECT_MISSING',

@@ -182,6 +182,17 @@ Invoke-Case 'remoting enrollment classification is narrow' {
     Assert-Equal (Get-RemotingEnrollmentFailureCode @('controller request failed: 500 internal server error')) 'remoting-enroll-failed' 'other controller failures remain fatal'
 }
 
+Invoke-Case 'native stderr capture preserves zrok failure output under stop preference' {
+    $powerShellPath = (Get-Process -Id $PID).Path
+    $captured = Invoke-NativeCaptured $powerShellPath @(
+        '-NoProfile',
+        '-Command',
+        '[Console]::Error.WriteLine("controller request failed: HTTP 501 Not Implemented"); exit 1'
+    )
+    Assert-Equal $captured.ExitCode 1 'native capture preserves the process exit code'
+    Assert-Equal (Get-RemotingEnrollmentFailureCode $captured.Output) 'remoting-unimplemented' 'stderr remains available for 501 classification'
+}
+
 Invoke-Case 'fresh machine installs, enables, creates service/name/remoting' {
     $fake = New-FakeBootstrapOps -ZrokInstalled:$false -NssmInstalled:$false -EnvironmentEnabled:$false -ServiceState Missing -NameState Missing -RemotingEnrolled:$false
     $result = Invoke-ZrokBootstrap -Ops $fake.Ops -ReservedName 'devflow-mixed' -EnableRemoting $true

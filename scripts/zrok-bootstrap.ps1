@@ -139,6 +139,21 @@ function Invoke-WithServiceProfile {
         $env:USERPROFILE = $oldUserProfile
     }
 }
+function Invoke-NativeCaptured {
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [Parameter(Mandatory = $true)][object[]]$Arguments
+    )
+    $oldErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $output = & $FilePath @Arguments 2>&1
+        $exitCode = $LASTEXITCODE
+        return @{ ExitCode = $exitCode; Output = @($output) }
+    } finally {
+        $ErrorActionPreference = $oldErrorActionPreference
+    }
+}
 
 function Invoke-ZrokQuiet {
     param(
@@ -149,8 +164,7 @@ function Invoke-ZrokQuiet {
         [string]$FailureMessage = 'zrok command failed.'
     )
     $result = Invoke-WithServiceProfile $ServiceProfile {
-        $output = & $ZrokPath @Arguments 2>&1
-        return @{ ExitCode = $LASTEXITCODE; Output = @($output) }
+        return (Invoke-NativeCaptured $ZrokPath $Arguments)
     }
     if ($result.ExitCode -ne 0) {
         throw (New-BootstrapException $FailureCode $FailureMessage)
@@ -282,8 +296,7 @@ function New-DefaultZrokBootstrapOps {
                 $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($Token)
                 $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
                 $result = Invoke-WithServiceProfile $serviceProfile {
-                    $output = & $ZrokPath 'enable' $plain 2>&1
-                    return @{ ExitCode = $LASTEXITCODE; Output = @($output) }
+                    return (Invoke-NativeCaptured $ZrokPath @('enable', $plain))
                 }
                 if ($result.ExitCode -ne 0) {
                     throw (New-BootstrapException 'enable-failed' 'Unable to enable the zrok service environment. Check the account token and network connection.')
@@ -351,8 +364,7 @@ function New-DefaultZrokBootstrapOps {
         CreateReservedName = {
             param($ZrokPath, $Name)
             $result = Invoke-WithServiceProfile $serviceProfile {
-                $output = & $ZrokPath 'create' 'name' $Name '--namespace-token' $NamespaceToken 2>&1
-                return @{ ExitCode = $LASTEXITCODE; Output = @($output) }
+                return (Invoke-NativeCaptured $ZrokPath @('create', 'name', $Name, '--namespace-token', $NamespaceToken))
             }
             if ($result.ExitCode -ne 0) {
                 $text = ($result.Output -join ' ')
@@ -367,8 +379,7 @@ function New-DefaultZrokBootstrapOps {
         EnrollRemoting = {
             param($ZrokPath)
             $result = Invoke-WithServiceProfile $serviceProfile {
-                $output = & $ZrokPath 'agent' 'enroll' '--headless' 2>&1
-                return @{ ExitCode = $LASTEXITCODE; Output = @($output) }
+                return (Invoke-NativeCaptured $ZrokPath @('agent', 'enroll', '--headless'))
             }
             if ($result.ExitCode -ne 0) {
                 $code = Get-RemotingEnrollmentFailureCode $result.Output

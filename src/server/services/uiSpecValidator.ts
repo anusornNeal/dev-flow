@@ -1,5 +1,5 @@
-import type { JsonValue, UiPreviewViewport, UiSpecV1 } from '../domain/uiPreview.js';
-import { UiPreviewError } from '../domain/uiPreview.js';
+import type { JsonValue, UiPreviewScreen, UiPreviewViewport, UiSpecV1 } from '../domain/uiPreview.js';
+import { UI_PREVIEW_SCREEN_ID_PATTERN, UiPreviewError } from '../domain/uiPreview.js';
 
 export const UI_PREVIEW_LIMITS = Object.freeze({
   htmlBytes: 1_000_000,
@@ -7,6 +7,8 @@ export const UI_PREVIEW_LIMITS = Object.freeze({
   jsBytes: 500_000,
   specBytes: 250_000,
   titleBytes: 4_000,
+  screenIdBytes: 120,
+  screenNameBytes: 4_000,
   minWidth: 320,
   maxWidth: 3840,
   minHeight: 200,
@@ -99,22 +101,92 @@ const OUTER_DOCUMENT_PATTERN = /<!doctype\b|<\s*html\b|<\s*head\b|<\s*body\b/i;
 
 export interface NormalizeUiPreviewInput {
   title?: string | null;
-  html: string;
+  html?: string;
   css?: string | null;
   js?: string | null;
-  spec: unknown;
+  spec?: unknown;
+  screens?: unknown;
+  defaultScreenId?: unknown;
   viewport?: Partial<UiPreviewViewport> | null;
 }
 
-export function normalizeUiPreviewInput(input: NormalizeUiPreviewInput) {
+export interface NormalizedUiPreviewInput {
+  title: string | null;
+  html: string;
+  css: string;
+  js: string;
+  spec: UiSpecV1;
+  screens: UiPreviewScreen[];
+  defaultScreenId: string;
+  viewport: UiPreviewViewport;
+}
+
+function normalizeScreenId(value: unknown, path: string) {
+  const screenId = assertStringWithin(path, value, UI_PREVIEW_LIMITS.screenIdBytes);
+  if (!UI_PREVIEW_SCREEN_ID_PATTERN.test(screenId)) {
+    validationError(`${path} must be a URL-safe opaque screen identifier.`);
+  }
+  return screenId;
+}
+
+function normalizeScreen(value: unknown, index: number): UiPreviewScreen {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) validationError(`screens[${index}] must be an object.`);
+  const input = value as Record<string, unknown>;
+  const screenId = normalizeScreenId(input.screenId, `screens[${index}].screenId`);
+  const name = assertStringWithin(`screens[${index}].name`, input.name, UI_PREVIEW_LIMITS.screenNameBytes);
+  const html = assertStringWithin(`screens[${index}].html`, input.html, UI_PREVIEW_LIMITS.htmlBytes);
+  if (OUTER_DOCUMENT_PATTERN.test(html)) validationError(`screens[${index}].html must be a body fragment; complete outer document wrappers are not allowed.`);
+  const css = assertStringWithin(`screens[${index}].css`, input.css, UI_PREVIEW_LIMITS.cssBytes, { allowEmpty: true });
+  const js = assertStringWithin(`screens[${index}].js`, input.js, UI_PREVIEW_LIMITS.jsBytes, { allowEmpty: true });
+  const spec = normalizeUiSpecV1(input.spec);
+  return { screenId, name, html, css, js, spec };
+}
+
+export function normalizeUiPreviewInput(input: NormalizeUiPreviewInput): NormalizedUiPreviewInput {
+  const title = input.title === '' || input.title === null || input.title === undefined
+    ? null
+    : assertStringWithin('title', input.title, UI_PREVIEW_LIMITS.titleBytes, { allowEmpty: true });
+  const viewport = normalizeUiPreviewViewport(input.viewport);
+  const hasScreens = input.screens !== undefined;
+  const hasLegacySource = ['html', 'css', 'js', 'spec'].some((key) => Object.prototype.hasOwnProperty.call(input, key));
+
+  if (hasScreens && hasLegacySource) validationError('screens cannot be mixed with legacy html/css/js/spec source fields.');
+
+  if (hasScreens) {
+    if (!Array.isArray(input.screens) || input.screens.length === 0) validationError('screens must be a non-empty array.');
+    const screens = input.screens.map((screen, index) => normalizeScreen(screen, index));
+    const uniqueIds = new Set(screens.map((screen) => screen.screenId));
+    if (uniqueIds.size !== screens.length) validationError('screens must use unique screenId values.');
+    const defaultScreenId = input.defaultScreenId === undefined
+      ? screens[0].screenId
+      : normalizeScreenId(input.defaultScreenId, 'defaultScreenId');
+    const defaultScreen = screens.find((screen) => screen.screenId === defaultScreenId);
+    if (!defaultScreen) validationError('defaultScreenId must reference an existing screen.');
+    return {
+      title,
+      html: defaultScreen.html,
+      css: defaultScreen.css,
+      js: defaultScreen.js,
+      spec: defaultScreen.spec,
+      screens,
+      defaultScreenId,
+      viewport,
+    };
+  }
+
+  if (input.defaultScreenId !== undefined) validationError('defaultScreenId is only valid with canonical screens input.');
   const html = assertStringWithin('html', input.html, UI_PREVIEW_LIMITS.htmlBytes);
   if (OUTER_DOCUMENT_PATTERN.test(html)) validationError('html must be a body fragment; complete outer document wrappers are not allowed.');
   const css = assertStringWithin('css', input.css ?? '', UI_PREVIEW_LIMITS.cssBytes, { allowEmpty: true });
   const js = assertStringWithin('js', input.js ?? '', UI_PREVIEW_LIMITS.jsBytes, { allowEmpty: true });
-  const title = input.title === '' || input.title === null || input.title === undefined
-    ? null
-    : assertStringWithin('title', input.title, UI_PREVIEW_LIMITS.titleBytes, { allowEmpty: true });
   const spec = normalizeUiSpecV1(input.spec);
-  const viewport = normalizeUiPreviewViewport(input.viewport);
-  return { title, html, css, js, spec, viewport };
+  const screens: UiPreviewScreen[] = [{
+    screenId: 'main',
+    name: spec.summary.screen.trim() || title?.trim() || 'Main',
+    html,
+    css,
+    js,
+    spec,
+  }];
+  return { title, html, css, js, spec, screens, defaultScreenId: 'main', viewport };
 }

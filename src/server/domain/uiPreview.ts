@@ -12,6 +12,28 @@ export interface UiPreviewViewport {
   deviceScaleFactor: number;
 }
 
+export const UI_PREVIEW_SCREEN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,119}$/;
+
+export interface UiPreviewScreen {
+  screenId: string;
+  name: string;
+  html: string;
+  css: string;
+  js: string;
+  spec: UiSpecV1;
+}
+
+export interface UiPreviewWorkspaceRevision {
+  previewId: string;
+  revision: number;
+  title: string | null;
+  screens: UiPreviewScreen[];
+  defaultScreenId: string;
+  viewport: UiPreviewViewport;
+  contentHash: string;
+  createdAt: string;
+}
+
 export interface UiPreviewRevision {
   previewId: string;
   revision: number;

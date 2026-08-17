@@ -16,6 +16,7 @@ import { mcpLatencyTelemetryMigration } from './014-mcp-latency-telemetry.js';
 import { mcpToolJobVerificationLifecycleMigration } from './015-mcp-tool-job-verification-lifecycle.js';
 import { uiPreviewsMigration } from './016-ui-previews.js';
 import { uiPreviewObjectStorageMigration } from './017-ui-preview-object-storage.js';
+import { uiPreviewWorkspacesMigration } from './018-ui-preview-workspaces.js';
 import db from '../index.js';
 
 export const DEVFLOW_MIGRATIONS = [
@@ -36,6 +37,7 @@ export const DEVFLOW_MIGRATIONS = [
   mcpToolJobVerificationLifecycleMigration,
   uiPreviewsMigration,
   uiPreviewObjectStorageMigration,
+  uiPreviewWorkspacesMigration,
 ] as const;
 
 export function executeAllMigrations() {

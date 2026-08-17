@@ -17,7 +17,7 @@ const serverEvents = await import('../../src/server/services/serverEventService.
 
 const previewRepository = createUiPreviewRepository(db as any);
 const evidenceRepository = createTaskUiEvidenceRepository(db as any);
-const spec = { schemaVersion: 1, summary: { screen: 'Evidence' } };
+const spec = { schemaVersion: 1 as const, summary: { screen: 'Evidence' } };
 let previewCounter = 0;
 let evidenceCounter = 0;
 let artifactCounter = 0;

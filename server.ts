@@ -14,7 +14,7 @@ import { registerApiRoutes } from './src/server/routes/registerApiRoutes';
 import { createDevFlowMcpServer } from './src/server/mcp';
 import { createReusableMcpHttpHandler } from './src/server/mcpStreamableHttp';
 import { bootstrap, writeAgentLog } from './src/server/bootstrap';
-import { getDevFlowAppRoot, resolveFromDevFlowAppRoot, getDevFlowUploadsDir } from './src/lib/devFlowPaths';
+import { getDevFlowAppRoot, getDevFlowRuntimeDir, resolveFromDevFlowAppRoot, getDevFlowUploadsDir } from './src/lib/devFlowPaths';
 import { markDevFlowRestartHealthy } from './src/lib/devFlowRestart';
 import { recordToolCall } from './src/server/services/mcpToolMonitor';
 import {
@@ -257,6 +257,10 @@ async function startServer() {
     const disableHmr = process.env.DISABLE_HMR === 'true';
     const viteConfig: any = {
       root: getDevFlowAppRoot(),
+      cacheDir: path.join(getDevFlowRuntimeDir(), 'vite-cache'),
+      resolve: {
+        dedupe: ['react', 'react-dom'],
+      },
       server: {
         middlewareMode: true,
         allowedHosts: true,
@@ -275,6 +279,7 @@ async function startServer() {
       viteConfig.configFile = false;
       viteConfig.plugins = [reactPlugin(), tailwindcssPlugin()];
       viteConfig.resolve = {
+        ...viteConfig.resolve,
         alias: {
           '@': getDevFlowAppRoot(),
         },

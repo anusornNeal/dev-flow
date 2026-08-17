@@ -34,4 +34,6 @@ test('inline Vite middleware honors DISABLE_HMR on Windows and non-Windows paths
   assert.match(source, /const disableHmr = process\.env\.DISABLE_HMR === 'true'/);
   assert.match(source, /hmr: disableHmr \? false/);
   assert.match(source, /watch: disableHmr \? null/);
+  assert.match(source, /cacheDir: path\.join\(getDevFlowRuntimeDir\(\), 'vite-cache'\)/);
+  assert.match(source, /dedupe: \['react', 'react-dom'\]/);
 });

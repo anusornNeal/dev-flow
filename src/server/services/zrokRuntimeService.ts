@@ -3,6 +3,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { getRuntimeIdentity } from './runtimeIdentityService.js';
+import {
+  createZrokAgentConsoleClient,
+  selectTargetShare,
+  type ZrokAgentConsoleClient,
+  type ZrokLocalAgentShare,
+  type ZrokLocalAgentStatus,
+} from './zrokAgentConsoleClient.js';
 
 export type ZrokRuntimeStatusCode =
   | 'setup-required'
@@ -109,6 +116,7 @@ export interface ZrokRuntimeAdapter {
   isInstalled(): Promise<boolean>;
   readEnvironment(): Promise<ZrokEnvironmentSnapshot>;
   getServiceState(serviceName: string): Promise<ZrokServiceState>;
+  getLocalAgentStatus(): Promise<ZrokLocalAgentStatus>;
   listNames(): Promise<ZrokNameRecord[]>;
   listShares(): Promise<ZrokShareRecord[]>;
   listEnvironments(): Promise<ZrokEnvironmentRecord[]>;
@@ -167,7 +175,9 @@ function normalizeBaseUrl(value?: string | null) {
   const text = String(value || '').trim();
   if (!text) return null;
   try {
-    const url = new URL(text);
+    const candidate = /^[a-z][a-z\d+.-]*:\/\//i.test(text) ? text : `https://${text}`;
+    const url = new URL(candidate);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
     url.pathname = url.pathname.replace(/\/+$/, '');
     url.search = '';
     url.hash = '';
@@ -301,6 +311,76 @@ function isRemoteAgentEnrolled(environments: ZrokEnvironmentRecord[], envZId: st
   return environments.some((environment) => environment.envZId === envZId && environment.remoteAgent);
 }
 
+function localShareState(share: ZrokLocalAgentShare): ZrokShareState {
+  const status = normalizeName(share.status);
+  if (status === 'active' || status === 'retrying' || status === 'failed') return status;
+  return 'unknown';
+}
+
+async function statusFromLocalAgent(
+  adapter: ZrokRuntimeAdapter,
+  config: ZrokRuntimeConfig,
+  serviceState: ZrokServiceState,
+  share: ZrokLocalAgentShare,
+): Promise<ZrokRuntimeStatus> {
+  const checkedAt = adapter.now().toISOString();
+  const baseUrl = normalizeBaseUrl(share.frontendEndpoint);
+  const shareState = localShareState(share);
+  let probe: ZrokPublicProbe = { state: 'unknown', latencyMs: null, routedToThisMachine: null };
+  if (baseUrl) {
+    try {
+      probe = await adapter.probePublic({ baseUrl, expectedRuntimeInstanceId: config.expectedRuntimeInstanceId });
+    } catch {
+      probe = { state: 'unhealthy', latencyMs: null, routedToThisMachine: null };
+    }
+  }
+
+  if (serviceState === 'starting' || shareState === 'retrying') {
+    return publicStatus('starting', checkedAt, {
+      baseUrl,
+      serviceState,
+      shareState,
+      owner: 'local',
+      probe,
+      message: shareState === 'retrying'
+        ? 'The local zrok share is retrying its connection.'
+        : 'The local zrok agent service is starting.',
+    });
+  }
+  if (serviceState === 'missing' || serviceState === 'stopped' || shareState === 'failed') {
+    return publicStatus('offline', checkedAt, {
+      baseUrl,
+      serviceState,
+      shareState,
+      owner: 'local',
+      probe,
+      message: shareState === 'failed'
+        ? 'The local zrok share failed to start.'
+        : 'The local zrok agent service is not running.',
+    });
+  }
+  if (baseUrl && shareState === 'active' && probe.state === 'healthy' && probe.routedToThisMachine === true) {
+    return publicStatus('online', checkedAt, {
+      baseUrl,
+      serviceState,
+      shareState,
+      owner: 'local',
+      probe,
+      message: 'The public zrok endpoint is routing to this DevFlow runtime.',
+    });
+  }
+  return publicStatus('degraded', checkedAt, {
+    baseUrl,
+    serviceState,
+    shareState,
+    owner: 'local',
+    probe,
+    message: baseUrl
+      ? 'The local zrok share exists, but the public DevFlow endpoint is not healthy.'
+      : 'The local zrok Agent reported an invalid public endpoint.',
+  });
+}
+
 async function loadDiscovery(
   adapter: ZrokRuntimeAdapter,
   config: ZrokRuntimeConfig,
@@ -313,6 +393,32 @@ async function loadDiscovery(
       shareState: 'missing',
       owner: 'none',
       message: 'zrok is not installed yet. Start DevFlow setup to finish zrok configuration.',
+    });
+  }
+
+  let serviceState: ZrokServiceState;
+  try {
+    serviceState = await adapter.getServiceState(config.serviceName);
+  } catch {
+    serviceState = 'unknown';
+  }
+
+  let localAgentStatus: ZrokLocalAgentStatus = { reachable: false, shares: [] };
+  try {
+    localAgentStatus = await adapter.getLocalAgentStatus();
+  } catch {}
+  const localSelection = selectTargetShare(localAgentStatus, config.target);
+  if (localSelection.kind === 'one' && localSelection.share) {
+    return statusFromLocalAgent(adapter, config, serviceState, localSelection.share);
+  }
+  if (localSelection.kind === 'ambiguous') {
+    const blockedReason = 'Multiple local zrok shares match the configured DevFlow target.';
+    return publicStatus('degraded', checkedAt, {
+      serviceState,
+      shareState: 'unknown',
+      owner: 'unknown',
+      message: blockedReason,
+      takeoverBlockedReason: blockedReason,
     });
   }
 
@@ -331,13 +437,6 @@ async function loadDiscovery(
       owner: 'none',
       message: 'The local zrok environment is not enabled yet. Start DevFlow setup to finish zrok configuration.',
     });
-  }
-
-  let serviceState: ZrokServiceState;
-  try {
-    serviceState = await adapter.getServiceState(config.serviceName);
-  } catch {
-    serviceState = 'unknown';
   }
 
   let names: ZrokNameRecord[];
@@ -377,9 +476,9 @@ async function loadDiscovery(
     : !currentShare
       ? 'unknown'
       : currentShare.envZId === environment.envZId
-        ? 'local'
+        ? 'unknown'
         : 'remote';
-  const baseUrl = normalizeBaseUrl(config.baseUrl || managedName.url || currentShare?.frontendEndpoints[0]);
+  const baseUrl = normalizeBaseUrl(currentShare?.frontendEndpoints[0] || managedName.url || config.baseUrl);
   let publicProbe: ZrokPublicProbe = { state: 'unknown', latencyMs: null, routedToThisMachine: null };
   if (baseUrl) {
     try {
@@ -578,6 +677,14 @@ export function createZrokRuntimeService(
     }
 
     if ('status' in discovery) {
+      if (discovery.status === 'online' && discovery.share.owner === 'local') {
+        return {
+          ok: true,
+          changed: false,
+          message: 'This machine already owns the managed zrok endpoint.',
+          status: discovery,
+        };
+      }
       return safeTakeoverFailure(
         'ZROK_TAKEOVER_NOT_AVAILABLE',
         'Takeover is unavailable until zrok setup is healthy.',
@@ -803,6 +910,7 @@ export interface DefaultZrokRuntimeAdapterOptions {
   commandTimeoutMs?: number;
   fetchTimeoutMs?: number;
   fetchImpl?: typeof fetch;
+  agentConsoleClient?: ZrokAgentConsoleClient;
 }
 
 export function createDefaultZrokRuntimeAdapter(options: DefaultZrokRuntimeAdapterOptions = {}): ZrokRuntimeAdapter {
@@ -811,6 +919,7 @@ export function createDefaultZrokRuntimeAdapter(options: DefaultZrokRuntimeAdapt
   const commandTimeoutMs = options.commandTimeoutMs ?? 7_500;
   const fetchTimeoutMs = options.fetchTimeoutMs ?? 5_000;
   const fetchImpl = options.fetchImpl || fetch;
+  const agentConsoleClient = options.agentConsoleClient || createZrokAgentConsoleClient({ fetchImpl });
 
   const command = (args: string[]): CommandResult => {
     const result = spawnSync(binary, args, {
@@ -896,6 +1005,10 @@ export function createDefaultZrokRuntimeAdapter(options: DefaultZrokRuntimeAdapt
       if (status === 'startpending' || status === 'continuepending') return 'starting';
       if (status === 'stopped' || status === 'paused' || status === 'stoppending' || status === 'pausepending') return 'stopped';
       return 'unknown';
+    },
+
+    async getLocalAgentStatus() {
+      return agentConsoleClient.getStatus();
     },
 
     async listNames() {

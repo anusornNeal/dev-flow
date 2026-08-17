@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import type { ZrokLocalAgentShare, ZrokLocalAgentStatus } from '../../src/server/services/zrokAgentConsoleClient.js';
 import {
   createZrokRuntimeService,
   type ZrokAgentStatusSnapshot,
@@ -35,6 +36,7 @@ interface FixtureState {
   startCalls: number;
   failUnshare: boolean;
   failStart: boolean;
+  localAgentStatus: ZrokLocalAgentStatus;
 }
 
 function baseConfig(): ZrokRuntimeConfig {
@@ -93,6 +95,16 @@ function makeFixture(overrides: Partial<FixtureState> = {}) {
     startCalls: 0,
     failUnshare: false,
     failStart: false,
+    localAgentStatus: {
+      reachable: true,
+      shares: [{
+        shareMode: 'public',
+        backendMode: 'proxy',
+        backendEndpoint: 'http://127.0.0.1:3000',
+        frontendEndpoint: STABLE_URL,
+        status: 'active',
+      }],
+    },
     ...overrides,
   };
 
@@ -105,6 +117,12 @@ function makeFixture(overrides: Partial<FixtureState> = {}) {
     },
     async getServiceState() {
       return state.serviceState;
+    },
+    async getLocalAgentStatus() {
+      return {
+        reachable: state.localAgentStatus.reachable,
+        shares: state.localAgentStatus.shares.map((share) => ({ ...share })),
+      };
     },
     async listNames() {
       return state.names.map((name) => ({ ...name }));
@@ -132,6 +150,10 @@ function makeFixture(overrides: Partial<FixtureState> = {}) {
       state.names = [makeName(LOCAL_TOKEN)];
       state.shares = [makeShare(LOCAL_ENV, LOCAL_TOKEN)];
       state.agentShares.set(LOCAL_ENV, { reachable: true, shares: [{ token: LOCAL_TOKEN, status: 'active' }] });
+      state.localAgentStatus = {
+        reachable: true,
+        shares: [makeLocalAgentShare(STABLE_URL)],
+      };
       state.probe = { state: 'healthy', latencyMs: 65, routedToThisMachine: true };
     },
     async probePublic() {
@@ -150,8 +172,19 @@ function remoteOwnerFixture(overrides: Partial<FixtureState> = {}) {
     names: [makeName(REMOTE_TOKEN)],
     shares: [makeShare(REMOTE_ENV, REMOTE_TOKEN)],
     probe: { state: 'healthy', latencyMs: 120, routedToThisMachine: false },
+    localAgentStatus: { reachable: true, shares: [] },
     ...overrides,
   });
+}
+
+function makeLocalAgentShare(frontendEndpoint: string): ZrokLocalAgentShare {
+  return {
+    shareMode: 'public',
+    backendMode: 'proxy',
+    backendEndpoint: 'http://127.0.0.1:3000',
+    frontendEndpoint,
+    status: 'active',
+  };
 }
 
 test('status reports Setup required when zrok is not installed', async () => {
@@ -186,6 +219,104 @@ test('status reports Online only when public routing reaches this runtime', asyn
   assert.equal(status.latencyMs, 87);
 });
 
+test('uses the local Agent share across profile identities', async () => {
+  const shareToken = 'service-profile-share-token';
+  const { service } = makeFixture({
+    environment: {
+      enabled: true,
+      envZId: 'interactive-env',
+      apiEndpoint: 'https://controller.example',
+      accountToken: 'secret',
+    },
+    names: [makeName(shareToken)],
+    shares: [makeShare('service-env', shareToken)],
+    localAgentStatus: {
+      reachable: true,
+      shares: [makeLocalAgentShare('dynamic.example.net')],
+    },
+    probe: { state: 'healthy', latencyMs: 20, routedToThisMachine: true },
+  });
+
+  const actual = await service.getStatus();
+
+  assert.equal(actual.status, 'online');
+  assert.equal(actual.baseUrl, 'https://dynamic.example.net');
+  assert.equal(actual.mcpUrl, 'https://dynamic.example.net/mcp');
+  assert.equal(actual.share.owner, 'local');
+});
+
+test('prefers the live custom Agent domain over configured and account URLs', async () => {
+  const fixture = makeFixture({
+    localAgentStatus: {
+      reachable: true,
+      shares: [makeLocalAgentShare('https://custom.devflow.example/app/')],
+    },
+  });
+  const service = createZrokRuntimeService(fixture.adapter, {
+    ...baseConfig(),
+    baseUrl: 'https://configured.example',
+  });
+
+  const actual = await service.getStatus();
+
+  assert.equal(actual.baseUrl, 'https://custom.devflow.example/app');
+  assert.equal(actual.mcpUrl, 'https://custom.devflow.example/app/mcp');
+});
+
+test('degrades when multiple local Agent shares match the runtime target', async () => {
+  const { service } = makeFixture({
+    localAgentStatus: {
+      reachable: true,
+      shares: [
+        makeLocalAgentShare('first.example.net'),
+        makeLocalAgentShare('second.example.net'),
+      ],
+    },
+  });
+
+  const actual = await service.getStatus();
+
+  assert.equal(actual.status, 'degraded');
+  assert.equal(actual.share.owner, 'unknown');
+  assert.equal(actual.actionability.canTakeOver, false);
+  assert.match(actual.actionability.takeoverBlockedReason || '', /multiple local zrok shares/i);
+});
+
+test('does not infer local service ownership from the interactive profile alone', async () => {
+  const { service } = makeFixture({
+    localAgentStatus: { reachable: true, shares: [] },
+  });
+
+  const actual = await service.getStatus();
+
+  assert.equal(actual.status, 'degraded');
+  assert.equal(actual.share.owner, 'unknown');
+  assert.equal(actual.actionability.canTakeOver, false);
+});
+
+test('does not expose local share or account tokens in the runtime payload', async () => {
+  const shareToken = 'local-share-secret';
+  const { service } = makeFixture({
+    environment: {
+      enabled: true,
+      envZId: 'interactive-env',
+      apiEndpoint: 'https://controller.example',
+      accountToken: SECRET_ACCOUNT_TOKEN,
+    },
+    names: [makeName(shareToken)],
+    shares: [makeShare('service-env', shareToken)],
+    localAgentStatus: {
+      reachable: true,
+      shares: [makeLocalAgentShare('private.example.net')],
+    },
+  });
+
+  const serialized = JSON.stringify(await service.getStatus());
+
+  assert.equal(serialized.includes(shareToken), false);
+  assert.equal(serialized.includes(SECRET_ACCOUNT_TOKEN), false);
+});
+
 test('status reports Degraded when the local share exists but public routing is unhealthy', async () => {
   const { service } = makeFixture({
     probe: { state: 'unhealthy', latencyMs: 150, routedToThisMachine: null },
@@ -201,6 +332,7 @@ test('status reports Offline when no machine currently owns the managed name', a
   const { service } = makeFixture({
     names: [makeName('')],
     shares: [],
+    localAgentStatus: { reachable: true, shares: [] },
     probe: { state: 'unhealthy', latencyMs: 90, routedToThisMachine: null },
   });
   const status = await service.getStatus();
@@ -252,6 +384,7 @@ test('status reports Setup error when the managed reserved name cannot be identi
       { ...makeName(''), name: 'beta' },
     ],
     shares: [],
+    localAgentStatus: { reachable: true, shares: [] },
   });
   const config = { ...baseConfig(), nameSelection: undefined };
   const actual = await createZrokRuntimeService(adapter, config).getStatus();
@@ -387,7 +520,11 @@ test('takeover aborts on a stale ownership race before remote unshare', async ()
 });
 
 test('takeover is unavailable when there is no remote owner', async () => {
-  const { service, state } = makeFixture({ names: [makeName('')], shares: [] });
+  const { service, state } = makeFixture({
+    names: [makeName('')],
+    shares: [],
+    localAgentStatus: { reachable: true, shares: [] },
+  });
   const result = await service.takeOver();
   assert.equal(result.ok, false);
   assert.equal(result.code, 'ZROK_TAKEOVER_NOT_AVAILABLE');

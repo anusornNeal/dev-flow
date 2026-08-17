@@ -121,6 +121,45 @@ test('diagnostics project bounded zrok supervisor evidence without provider insp
   assert.equal(diagnostics.runtimeSupervisor.tunnel.recentFailures, undefined);
 });
 
+test('diagnostics resolve to both-healthy after live zrok recovery replaces stale failed state', () => {
+  const diagnostics = getDevFlowDiagnostics({
+    supervisorState: {
+      version: 1,
+      supervisor: 'start-all',
+      mode: 'all',
+      shuttingDown: false,
+      startedAt: '2026-08-17T00:00:00.000Z',
+      updatedAt: '2026-08-17T00:00:20.000Z',
+      processes: {
+        server: { label: 'server', status: 'running', pid: 100, restartAttempt: 0 },
+        zrok: {
+          label: 'zrok',
+          status: 'running',
+          restartAttempt: 0,
+          startedAt: '2026-08-17T00:00:20.000Z',
+          message: 'zrok service/share recovered from live status.',
+        },
+      },
+      tunnelHealth: {
+        status: 'healthy',
+        generation: '1',
+        lifecyclePhase: 'steady-state',
+        lastProbeAt: '2026-08-17T00:00:20.000Z',
+        lastProbeStatusCode: 200,
+        lastSuccessAt: '2026-08-17T00:00:20.000Z',
+        consecutiveProbeFailures: 0,
+        message: 'Public tunnel probe succeeded; zrok service/share is reachable.',
+      },
+    },
+  } as any);
+
+  assert.equal(diagnostics.runtimeSupervisor?.summary, 'both-healthy');
+  assert.equal(diagnostics.runtimeSupervisor?.tunnel.processStatus, 'running');
+  assert.equal(diagnostics.runtimeSupervisor?.tunnel.status, 'healthy');
+  assert.equal(diagnostics.runtimeSupervisor?.tunnel.lastExitCode, undefined);
+  assert.doesNotMatch(diagnostics.runtimeSupervisor?.tunnel.message || '', /startup|bootstrap failed/i);
+});
+
 test.after(() => {
   delete process.env.DEVFLOW_APP_ROOT;
   delete process.env.DEVFLOW_DB_PATH;

@@ -15,6 +15,7 @@ const {
   apiZrokStatusUrl,
   getZrokRecoveryDecision,
   normalizeZrokPublicUrl,
+  shouldRecoverZrokSupervisorProcess,
   parseZrokBootstrapResult,
   probeZrokPublicRoute,
   probeZrokRuntimeStatus,
@@ -254,6 +255,30 @@ assert.equal(getZrokRecoveryDecision({
   recoveryCooldownUntilMs: 45000,
   nowMs: 40000,
 }), 'suppressed-recovery-cooldown');
+assert.equal(shouldRecoverZrokSupervisorProcess({
+  publicRouteHealthy: true,
+  processStatus: 'failed',
+  zrokStatus: 'online',
+  zrokShareState: 'active',
+}), true);
+assert.equal(shouldRecoverZrokSupervisorProcess({
+  publicRouteHealthy: false,
+  processStatus: 'failed',
+  zrokStatus: 'online',
+  zrokShareState: 'active',
+}), false);
+assert.equal(shouldRecoverZrokSupervisorProcess({
+  publicRouteHealthy: true,
+  processStatus: 'failed',
+  zrokStatus: 'standby',
+  zrokShareState: 'remote-active',
+}), false);
+assert.equal(shouldRecoverZrokSupervisorProcess({
+  publicRouteHealthy: true,
+  processStatus: 'running',
+  zrokStatus: 'online',
+  zrokShareState: 'active',
+}), false);
 let health = resetDevFlowTunnelHealthForGeneration(undefined, 'A', {
   startupGraceMs: 5000,
   now: '2026-08-16T00:00:00.000Z',
@@ -299,6 +324,12 @@ const startAllSource = fs.readFileSync(new URL('./start-all.ts', import.meta.url
 const supervisorSource = fs.readFileSync(new URL('../src/lib/devFlowSupervisor.ts', import.meta.url), 'utf8');
 assert.doesNotMatch(startAllSource, /scheduleZrokReconcile|reconcileZrok/);
 assert.match(startAllSource, /bootstrapZrokAtStartup\(\)/);
+const failedBootstrapSection = startAllSource.slice(
+  startAllSource.indexOf('Startup zrok bootstrap failed'),
+  startAllSource.indexOf('async function runTunnelProbe'),
+);
+assert.equal(failedBootstrapSection.includes('scheduleTunnelProbe(250)'), true);
+assert.equal(failedBootstrapSection.includes('runZrokBootstrap('), false);
 const retiredTunnelName = ['n', 'grok'].join('');
 for (const source of [startAllSource, supervisorSource]) {
   assert.equal(source.toLowerCase().includes(retiredTunnelName), false);

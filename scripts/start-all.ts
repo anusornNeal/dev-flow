@@ -352,6 +352,18 @@ export function getZrokRecoveryDecision(input: {
   return 'suppressed-periodic-recovery' as const;
 }
 
+export function shouldRecoverZrokSupervisorProcess(input: {
+  publicRouteHealthy: boolean;
+  processStatus?: string;
+  zrokStatus?: string;
+  zrokShareState?: string;
+}) {
+  if (!input.publicRouteHealthy) return false;
+  if (String(input.processStatus || '').trim().toLowerCase() === 'running') return false;
+  return String(input.zrokStatus || '').trim().toLowerCase() === 'online'
+    && String(input.zrokShareState || '').trim().toLowerCase() === 'active';
+}
+
 export function apiCapabilitiesUrl(baseUrl: string) {
   return new URL('api/capabilities', baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`).toString();
 }
@@ -615,6 +627,7 @@ export async function startAll(mode: StartAllMode = 'all') {
       nextRecoveryAt: undefined,
       message: `zrok startup bootstrap is not ready: ${result.message}; periodic bootstrap is disabled.`,
     });
+    scheduleTunnelProbe(250);
   };
 
   async function runTunnelProbe() {
@@ -633,6 +646,29 @@ export async function startAll(mode: StartAllMode = 'all') {
       });
       if (probeGeneration && next.generation !== probeGeneration) return;
       updateDevFlowSupervisorTunnelHealth(next);
+
+      const zrokProcessStatus = readDevFlowSupervisorState()?.processes.zrok?.status;
+      if (shouldRecoverZrokSupervisorProcess({
+        publicRouteHealthy: publicProbe.ok,
+        processStatus: zrokProcessStatus,
+        zrokStatus: localZrokStatus?.status,
+        zrokShareState: localZrokStatus?.shareState,
+      })) {
+        updateDevFlowSupervisorProcess('zrok', {
+          status: 'running',
+          startedAt: new Date().toISOString(),
+          restartAttempt: 0,
+          nextRetryAt: undefined,
+          lastExitAt: undefined,
+          lastExitCode: undefined,
+          lastSignal: undefined,
+          message: activePublicUrl
+            ? `zrok service/share recovered from live status at ${activePublicUrl}.`
+            : 'zrok service/share recovered from live status.',
+        });
+        recoveryCooldownUntilMs = 0;
+      }
+
       if (next.status !== 'down') return;
 
       const localProbe = await probeHttpEndpoint(apiCapabilitiesUrl(plan.appUrl), options.zrokProbeTimeoutMs, true);

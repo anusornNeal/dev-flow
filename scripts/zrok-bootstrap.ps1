@@ -21,6 +21,14 @@ function Get-BootstrapErrorCode([System.Exception]$Exception) {
     return 'bootstrap-failed'
 }
 
+function Get-RemotingEnrollmentFailureCode([object[]]$Output) {
+    $text = @($Output) -join ' '
+    if ($text -match '(?i)\bHTTP(?:\s+(?:response\s+)?status)?\s*[:=]?\s*501\b|\bstatus(?:\s+code)?\s*[:=]?\s*501\b|\bunimplemented\b|\bnot\s+implemented\b') {
+        return 'remoting-unimplemented'
+    }
+    return 'remoting-enroll-failed'
+}
+
 function Invoke-ZrokBootstrap {
     param(
         [Parameter(Mandatory = $true)][hashtable]$Ops,
@@ -64,11 +72,17 @@ function Invoke-ZrokBootstrap {
             [void]$changed.Add('reserved-name-created')
         }
 
+        $remoteControl = 'available'
         $remotingChanged = $false
         if ($EnableRemoting -and -not (& $Ops.TestRemotingEnrolled $zrokPath)) {
-            & $Ops.EnrollRemoting $zrokPath
-            $remotingChanged = $true
-            [void]$changed.Add('agent-remoting-enrolled')
+            try {
+                & $Ops.EnrollRemoting $zrokPath
+                $remotingChanged = $true
+                [void]$changed.Add('agent-remoting-enrolled')
+            } catch {
+                if ((Get-BootstrapErrorCode $_.Exception) -ne 'remoting-unimplemented') { throw }
+                $remoteControl = 'unsupported'
+            }
         }
 
         $serviceState = [string](& $Ops.GetServiceState)
@@ -96,7 +110,7 @@ function Invoke-ZrokBootstrap {
             zrokPath = [string]$zrokPath
             serviceName = 'zrokAgent'
             reservedName = $ReservedName
-            publicHost = "$ReservedName.shares.zrok.io"
+            remoteControl = $remoteControl
             remotingEnabled = $EnableRemoting
             changed = @($changed)
         }
@@ -350,7 +364,19 @@ function New-DefaultZrokBootstrapOps {
         }.GetNewClosure()
         EnrollRemoting = {
             param($ZrokPath)
-            Invoke-ZrokQuiet $ZrokPath $serviceProfile @('agent', 'enroll', '--headless') 'remoting-enroll-failed' 'Unable to enroll the zrok agent for remote control.' | Out-Null
+            $result = Invoke-WithServiceProfile $serviceProfile {
+                $output = & $ZrokPath 'agent' 'enroll' '--headless' 2>&1
+                return @{ ExitCode = $LASTEXITCODE; Output = @($output) }
+            }
+            if ($result.ExitCode -ne 0) {
+                $code = Get-RemotingEnrollmentFailureCode $result.Output
+                $message = if ($code -eq 'remoting-unimplemented') {
+                    'The zrok controller does not support Agent remote-control enrollment.'
+                } else {
+                    'Unable to enroll the zrok agent for remote control.'
+                }
+                throw (New-BootstrapException $code $message)
+            }
         }.GetNewClosure()
     }
 }

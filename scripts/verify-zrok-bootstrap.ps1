@@ -28,6 +28,7 @@ function New-FakeBootstrapOps {
         [ValidateSet('Missing','Stopped','Running')][string]$ServiceState = 'Running',
         [ValidateSet('Missing','Owned','Conflict')][string]$NameState = 'Owned',
         [bool]$RemotingEnrolled = $true,
+        [bool]$RemotingEnrollmentUnsupported = $false,
         [string]$FailOperation = ''
     )
 
@@ -141,6 +142,11 @@ function New-FakeBootstrapOps {
         EnrollRemoting = {
             param($ZrokPath)
             [void]$state.calls.Add('EnrollRemoting')
+            if ($RemotingEnrollmentUnsupported) {
+                $ex = New-Object System.InvalidOperationException('fake controller returned HTTP 501 unimplemented')
+                $ex.Data['BootstrapCode'] = 'remoting-unimplemented'
+                throw $ex
+            }
             & $failIf 'EnrollRemoting' 'remoting-enroll-failed'
             $state.enrollRemoting++
             $state.remotingEnrolled = $true
@@ -170,6 +176,12 @@ Invoke-Case 'environment marker detection requires non-empty environment.json' {
     }
 }
 
+Invoke-Case 'remoting enrollment classification is narrow' {
+    Assert-Equal (Get-RemotingEnrollmentFailureCode @('controller request failed: HTTP 501 Not Implemented')) 'remoting-unimplemented' 'HTTP 501 is unsupported capability'
+    Assert-Equal (Get-RemotingEnrollmentFailureCode @('controller request 501 failed without an HTTP status')) 'remoting-enroll-failed' 'an unrelated number is not an unsupported capability'
+    Assert-Equal (Get-RemotingEnrollmentFailureCode @('controller request failed: 500 internal server error')) 'remoting-enroll-failed' 'other controller failures remain fatal'
+}
+
 Invoke-Case 'fresh machine installs, enables, creates service/name/remoting' {
     $fake = New-FakeBootstrapOps -ZrokInstalled:$false -NssmInstalled:$false -EnvironmentEnabled:$false -ServiceState Missing -NameState Missing -RemotingEnrolled:$false
     $result = Invoke-ZrokBootstrap -Ops $fake.Ops -ReservedName 'devflow-mixed' -EnableRemoting $true
@@ -182,6 +194,7 @@ Invoke-Case 'fresh machine installs, enables, creates service/name/remoting' {
     Assert-Equal $fake.State.startService 1 'service starts once'
     Assert-Equal $fake.State.createName 1 'reserved name creates once'
     Assert-Equal $fake.State.enrollRemoting 1 'remoting enrolls once'
+    Assert-Equal $result.remoteControl 'available' 'successful enrollment exposes remote-control capability'
     Assert-True (-not (($result | ConvertTo-Json -Depth 8) -match 'SUPER-SECRET')) 'result must not expose token'
 }
 
@@ -224,6 +237,23 @@ Invoke-Case 'stopped service is started without reinstall' {
     Assert-True $result.ok 'stopped service should recover'
     Assert-Equal $fake.State.installService 0 'stopped service must not reinstall'
     Assert-Equal $fake.State.startService 1 'stopped service should start'
+}
+
+Invoke-Case 'unsupported remoting preserves local readiness' {
+    $fake = New-FakeBootstrapOps -RemotingEnrolled:$false -RemotingEnrollmentUnsupported:$true -ServiceState Running
+    $result = Invoke-ZrokBootstrap -Ops $fake.Ops -ReservedName 'account-specific-name' -EnableRemoting $true
+    $json = $result | ConvertTo-Json -Depth 8
+    Assert-Equal $result.ok $true 'local readiness remains available'
+    Assert-Equal $result.remoteControl 'unsupported' 'capability is explicit'
+    Assert-True (-not ($json -match 'account-specific-name\.shares\.zrok\.io')) 'bootstrap must not synthesize a public hostname'
+    Assert-True (-not ($result.PSObject.Properties.Name -contains 'publicHost')) 'bootstrap result must omit constructed public host output'
+}
+
+Invoke-Case 'ordinary remoting enrollment failure remains fatal' {
+    $fake = New-FakeBootstrapOps -RemotingEnrolled:$false -FailOperation EnrollRemoting -ServiceState Running
+    $result = Invoke-ZrokBootstrap -Ops $fake.Ops -ReservedName 'account-specific-name' -EnableRemoting $true
+    Assert-Equal $result.ok $false 'unclassified enrollment failure must fail bootstrap'
+    Assert-Equal $result.code 'remoting-enroll-failed' 'unclassified enrollment failure code is preserved'
 }
 
 Invoke-Case 'reserved-name conflict is actionable and non-destructive' {

@@ -302,6 +302,7 @@ test('PC smoke uses real Chromium to create, update, attach, freeze screenshot e
   const { initMigration } = await import('../../src/db/migrations/001-init.js');
   const { uiPreviewsMigration } = await import('../../src/db/migrations/016-ui-previews.js');
   const { uiPreviewObjectStorageMigration } = await import('../../src/db/migrations/017-ui-preview-object-storage.js');
+  const { uiPreviewWorkspacesMigration } = await import('../../src/db/migrations/018-ui-preview-workspaces.js');
   const { createUiPreviewRepository } = await import('../../src/server/repositories/uiPreviewRepository.js');
   const { createTaskUiEvidenceRepository } = await import('../../src/server/repositories/taskUiEvidenceRepository.js');
   const { createUiPreviewService } = await import('../../src/server/services/uiPreviewService.js');
@@ -315,6 +316,7 @@ test('PC smoke uses real Chromium to create, update, attach, freeze screenshot e
   initMigration.up(smokeDb as any);
   uiPreviewsMigration.up(smokeDb as any);
   uiPreviewObjectStorageMigration.up(smokeDb as any);
+  uiPreviewWorkspacesMigration.up(smokeDb as any);
   smokeDb.prepare('INSERT INTO tasks (id, displayId, title, status) VALUES (?, ?, ?, ?)')
     .run('task-pc-smoke', 'DVF-PC-SMOKE', 'PC smoke', 'todo');
 

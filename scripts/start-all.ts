@@ -77,6 +77,12 @@ type PublicProbeResult = {
   failureClass?: ReturnType<typeof classifyPublicProbeFailure> | 'public-url-unavailable';
 };
 
+export type ZrokRuntimeStatusProbe = {
+  status?: string;
+  shareState?: string;
+  baseUrl?: string;
+};
+
 const DEFAULT_PORT = 3000;
 const DEFAULT_BROWSER_DELAY_MS = 4000;
 const DEFAULT_ZROK_PROBE_INTERVAL_MS = 15000;
@@ -85,6 +91,8 @@ const DEFAULT_ZROK_PROBE_STARTUP_GRACE_MS = 30000;
 const MAX_ZROK_PROBE_STARTUP_GRACE_MS = 120000;
 const DEFAULT_ZROK_PROBE_FAILURE_THRESHOLD = 3;
 const DEFAULT_ZROK_RECOVERY_COOLDOWN_MS = 15000;
+const MAX_ZROK_RUNTIME_STATUS_BYTES = 256 * 1024;
+const MAX_ZROK_PUBLIC_URL_LENGTH = 4096;
 
 function parsePositiveInteger(value: string | undefined, fallback: number) {
   if (!value) return fallback;
@@ -119,24 +127,22 @@ export function buildNpmInvocation(args: string[], env: NodeJS.ProcessEnv = proc
 
 export function normalizeZrokPublicUrl(input: { publicUrl?: string; reservedName?: string }) {
   const publicUrl = String(input.publicUrl || '').trim();
-  if (publicUrl) {
+  if (publicUrl && publicUrl.length <= MAX_ZROK_PUBLIC_URL_LENGTH) {
+    if (/^[a-z][a-z\d+.-]*:\/\//i.test(publicUrl) && !/^https?:\/\//i.test(publicUrl)) return '';
     const candidate = /^https?:\/\//i.test(publicUrl) ? publicUrl : `https://${publicUrl}`;
     try {
       const parsed = new URL(candidate);
-      return parsed.origin;
+      if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:') || parsed.username || parsed.password) return '';
+      parsed.pathname = parsed.pathname.replace(/\/+$/, '');
+      parsed.search = '';
+      parsed.hash = '';
+      return parsed.toString().replace(/\/$/, '');
     } catch {
       return '';
     }
   }
 
-  const reservedName = String(input.reservedName || '').trim();
-  if (!reservedName) return '';
-  const host = reservedName.includes('.') ? reservedName : `${reservedName}.shares.zrok.io`;
-  try {
-    return new URL(`https://${host}`).origin;
-  } catch {
-    return '';
-  }
+  return '';
 }
 
 export function resolveStartAllOptions(env: NodeJS.ProcessEnv = process.env): StartAllOptions {
@@ -144,7 +150,6 @@ export function resolveStartAllOptions(env: NodeJS.ProcessEnv = process.env): St
     port: parsePositiveInteger(env.DEVFLOW_PORT || env.PORT, DEFAULT_PORT),
     zrokPublicUrl: normalizeZrokPublicUrl({
       publicUrl: env.DEVFLOW_ZROK_PUBLIC_URL || env.DEVFLOW_PUBLIC_URL,
-      reservedName: env.DEVFLOW_ZROK_RESERVED_NAME,
     }),
     zrokReservedName: String(env.DEVFLOW_ZROK_RESERVED_NAME || '').trim(),
     openBrowser: parseBoolean(env.DEVFLOW_OPEN_BROWSER, true),
@@ -186,11 +191,22 @@ export function buildStartAllPlan(
   };
 }
 
-export function buildZrokBootstrapInvocation(rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')) {
+export function buildZrokBootstrapInvocation(
+  rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'),
+  reservedName = '',
+) {
   const scriptPath = path.join(rootDir, 'scripts', 'zrok-bootstrap.ps1');
+  const configuredReservedName = String(reservedName || '').trim();
   return {
     command: process.platform === 'win32' ? 'powershell.exe' : 'pwsh',
-    args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath],
+    args: [
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-File',
+      scriptPath,
+      ...(configuredReservedName ? ['-ReservedName', configuredReservedName] : []),
+    ],
     scriptPath,
   };
 }
@@ -201,12 +217,14 @@ export function parseZrokBootstrapResult(output: string, fallbackPublicUrl = '')
     try {
       const payload = JSON.parse(lines[index]) as Record<string, unknown>;
       const status = String(payload.status || payload.state || '').trim().toLowerCase();
+      const code = String(payload.code || '').trim().toLowerCase();
       const ready = typeof payload.ready === 'boolean'
         ? payload.ready
-        : ['ready', 'running', 'healthy', 'ok', 'success'].includes(status);
+        : typeof payload.ok === 'boolean'
+          ? payload.ok && (!code || ['ready', 'ok', 'success'].includes(code))
+          : ['ready', 'running', 'healthy', 'ok', 'success'].includes(status);
       const publicUrl = normalizeZrokPublicUrl({
         publicUrl: String(payload.publicUrl || payload.shareUrl || payload.url || payload.endpoint || fallbackPublicUrl || ''),
-        reservedName: String(payload.reservedName || payload.shareName || payload.name || ''),
       });
       return {
         ready,
@@ -225,8 +243,11 @@ export function parseZrokBootstrapResult(output: string, fallbackPublicUrl = '')
   };
 }
 
-export function runZrokBootstrap(options: Pick<StartAllOptions, 'zrokPublicUrl'>, rootDir?: string): ZrokBootstrapResult {
-  const invocation = buildZrokBootstrapInvocation(rootDir);
+export function runZrokBootstrap(
+  options: Pick<StartAllOptions, 'zrokPublicUrl' | 'zrokReservedName'>,
+  rootDir?: string,
+): ZrokBootstrapResult {
+  const invocation = buildZrokBootstrapInvocation(rootDir, options.zrokReservedName);
   if (!fs.existsSync(invocation.scriptPath)) {
     return {
       ready: false,
@@ -311,6 +332,8 @@ export function getZrokRecoveryDecision(input: {
   consecutiveProbeFailures: number;
   failureThreshold: number;
   localApiHealthy: boolean;
+  zrokStatus?: string;
+  zrokShareState?: string;
   shuttingDown: boolean;
   startupGraceUntilMs?: number;
   lifecyclePhase?: DevFlowTunnelHealthState['lifecyclePhase'];
@@ -320,27 +343,35 @@ export function getZrokRecoveryDecision(input: {
   const nowMs = input.nowMs ?? Date.now();
   if (input.shuttingDown) return 'suppressed-shutdown' as const;
   if (input.tunnelStatus !== 'down' || input.consecutiveProbeFailures < Math.max(1, input.failureThreshold)) return 'threshold-not-reached' as const;
+  const zrokStatus = String(input.zrokStatus || '').trim().toLowerCase();
+  const zrokShareState = String(input.zrokShareState || '').trim().toLowerCase();
+  if (zrokStatus === 'standby' || zrokShareState === 'remote-active') return 'suppressed-standby' as const;
   if (!input.localApiHealthy) return 'suppressed-local-api-unhealthy' as const;
   if (input.lifecyclePhase !== 'steady-state' && input.startupGraceUntilMs && input.startupGraceUntilMs > nowMs) return 'suppressed-startup-grace' as const;
   if (input.recoveryCooldownUntilMs && input.recoveryCooldownUntilMs > nowMs) return 'suppressed-recovery-cooldown' as const;
-  return 'reconcile-zrok' as const;
-}
-
-export function shouldRecoverZrokTunnel(input: Parameters<typeof getZrokRecoveryDecision>[0]) {
-  return getZrokRecoveryDecision(input) === 'reconcile-zrok';
+  return 'suppressed-periodic-recovery' as const;
 }
 
 export function apiCapabilitiesUrl(baseUrl: string) {
-  return new URL('/api/capabilities', baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`).toString();
+  return new URL('api/capabilities', baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`).toString();
 }
 
-async function probeHttpEndpoint(url: string, timeoutMs: number, requireSuccessStatus: boolean): Promise<PublicProbeResult> {
+export function apiZrokStatusUrl(baseUrl: string) {
+  return new URL('api/zrok/status', baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`).toString();
+}
+
+async function probeHttpEndpoint(
+  url: string,
+  timeoutMs: number,
+  requireSuccessStatus: boolean,
+  fetchImpl: typeof fetch = fetch,
+): Promise<PublicProbeResult> {
   const startedAt = Date.now();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), Math.max(100, timeoutMs));
   timer.unref();
   try {
-    const response = await fetch(url, { signal: controller.signal, redirect: 'manual' });
+    const response = await fetchImpl(url, { signal: controller.signal, redirect: 'manual' });
     const ok = requireSuccessStatus ? response.ok : response.status >= 200 && response.status < 500;
     return {
       ok,
@@ -359,6 +390,89 @@ async function probeHttpEndpoint(url: string, timeoutMs: number, requireSuccessS
   } finally {
     clearTimeout(timer);
   }
+}
+
+export async function probeZrokRuntimeStatus(
+  baseUrl: string,
+  timeoutMs: number,
+  fetchImpl: typeof fetch = fetch,
+): Promise<ZrokRuntimeStatusProbe | undefined> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.max(100, timeoutMs));
+  timer.unref();
+  try {
+    const response = await fetchImpl(apiZrokStatusUrl(baseUrl), { signal: controller.signal, redirect: 'manual' });
+    if (!response.ok) return undefined;
+    const contentLengthHeader = response.headers.get('content-length');
+    const contentLength = contentLengthHeader ? Number(contentLengthHeader) : null;
+    if (contentLength !== null && Number.isFinite(contentLength) && contentLength > MAX_ZROK_RUNTIME_STATUS_BYTES) {
+      await response.body?.cancel();
+      return undefined;
+    }
+    const body = await readBoundedResponseText(response, MAX_ZROK_RUNTIME_STATUS_BYTES);
+    if (body === null) return undefined;
+    const parsed = JSON.parse(body) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
+    const payload = parsed as Record<string, unknown>;
+    const share = payload.share && typeof payload.share === 'object'
+      ? payload.share as Record<string, unknown>
+      : undefined;
+    return {
+      status: typeof payload.status === 'string' ? payload.status : undefined,
+      shareState: typeof share?.state === 'string' ? share.state : undefined,
+      baseUrl: typeof payload.baseUrl === 'string' ? payload.baseUrl : undefined,
+    };
+  } catch {
+    return undefined;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function readBoundedResponseText(response: Response, maxBytes: number): Promise<string | null> {
+  if (!response.body) return '';
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let bytesRead = 0;
+  let text = '';
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) return text + decoder.decode();
+      bytesRead += value.byteLength;
+      if (bytesRead > maxBytes) {
+        await reader.cancel();
+        return null;
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+export function selectZrokPublicProbeUrl(currentPublicUrl: string, runtimeStatus?: ZrokRuntimeStatusProbe) {
+  return normalizeZrokPublicUrl({ publicUrl: runtimeStatus?.baseUrl })
+    || normalizeZrokPublicUrl({ publicUrl: currentPublicUrl });
+}
+
+export async function probeZrokPublicRoute(
+  localBaseUrl: string,
+  currentPublicUrl: string,
+  timeoutMs: number,
+  fetchImpl: typeof fetch = fetch,
+) {
+  const runtimeStatus = await probeZrokRuntimeStatus(localBaseUrl, timeoutMs, fetchImpl);
+  const publicUrl = selectZrokPublicProbeUrl(currentPublicUrl, runtimeStatus);
+  const publicProbe: PublicProbeResult = publicUrl
+    ? await probeHttpEndpoint(apiCapabilitiesUrl(publicUrl), timeoutMs, true, fetchImpl)
+    : {
+        ok: false,
+        latencyMs: 0,
+        message: 'zrok public URL is unavailable from live status/bootstrap/configuration.',
+        failureClass: 'public-url-unavailable',
+      };
+  return { runtimeStatus, publicUrl, publicProbe };
 }
 
 type ProcessCallbacks = {
@@ -432,7 +546,6 @@ export async function startAll(mode: StartAllMode = 'all') {
   const children = new Map<DevFlowSupervisorProcessLabel, ChildProcessWithoutNullStreams>();
   let tunnelProbeTimer: NodeJS.Timeout | null = null;
   let tunnelProbeInFlight = false;
-  let zrokRecoveryTimer: NodeJS.Timeout | null = null;
   let zrokGeneration = 0;
   let recoveryCooldownUntilMs = 0;
   let activePublicUrl = options.zrokPublicUrl;
@@ -458,23 +571,7 @@ export async function startAll(mode: StartAllMode = 'all') {
     tunnelProbeTimer.unref();
   };
 
-  const scheduleZrokReconcile = (delayMs: number, reason: string) => {
-    if (mode !== 'all' || shuttingDown || zrokRecoveryTimer) return;
-    const nextRetryAt = new Date(Date.now() + delayMs).toISOString();
-    updateDevFlowSupervisorProcess('zrok', {
-      status: 'restarting',
-      restartAttempt: Math.max(0, readDevFlowSupervisorState()?.processes.zrok?.restartAttempt || 0) + 1,
-      nextRetryAt,
-      message: reason,
-    });
-    zrokRecoveryTimer = setTimeout(() => {
-      zrokRecoveryTimer = null;
-      if (!shuttingDown) reconcileZrok(reason);
-    }, Math.max(250, delayMs));
-    zrokRecoveryTimer.unref();
-  };
-
-  const reconcileZrok = (reason: string) => {
+  const bootstrapZrokAtStartup = () => {
     if (mode !== 'all' || shuttingDown) return;
     zrokGeneration += 1;
     updateDevFlowSupervisorTunnelHealth(resetDevFlowTunnelHealthForGeneration(
@@ -483,9 +580,9 @@ export async function startAll(mode: StartAllMode = 'all') {
       { startupGraceMs: options.zrokProbeStartupGraceMs },
     ));
     updateDevFlowSupervisorProcess('zrok', {
-      status: reason === 'startup' ? 'starting' : 'restarting',
+      status: 'starting',
       nextRetryAt: undefined,
-      message: `Reconciling zrok service/share: ${reason}`,
+      message: 'Bootstrapping zrok service/share during startup.',
     });
 
     const result = runZrokBootstrap(options);
@@ -505,21 +602,19 @@ export async function startAll(mode: StartAllMode = 'all') {
       return;
     }
 
-    recoveryCooldownUntilMs = Date.now() + options.zrokRecoveryCooldownMs;
     updateDevFlowSupervisorProcess('zrok', {
       status: 'failed',
-      nextRetryAt: new Date(recoveryCooldownUntilMs).toISOString(),
-      message: result.message,
+      nextRetryAt: undefined,
+      message: `Startup zrok bootstrap failed: ${result.message}; periodic bootstrap is disabled.`,
     });
     updateDevFlowSupervisorTunnelHealth({
       ...currentTunnelHealth(),
       status: 'down',
       lastFailureAt: new Date().toISOString(),
       consecutiveProbeFailures: Math.max(options.zrokProbeFailureThreshold, currentTunnelHealth().consecutiveProbeFailures),
-      nextRecoveryAt: new Date(recoveryCooldownUntilMs).toISOString(),
-      message: `zrok service/share is not ready: ${result.message}`,
+      nextRecoveryAt: undefined,
+      message: `zrok startup bootstrap is not ready: ${result.message}; periodic bootstrap is disabled.`,
     });
-    scheduleZrokReconcile(options.zrokRecoveryCooldownMs, 'bootstrap/service readiness recovery');
   };
 
   async function runTunnelProbe() {
@@ -527,14 +622,10 @@ export async function startAll(mode: StartAllMode = 'all') {
     tunnelProbeInFlight = true;
     const probeGeneration = currentTunnelHealth().generation;
     try {
-      const publicProbe: PublicProbeResult = activePublicUrl
-        ? await probeHttpEndpoint(apiCapabilitiesUrl(activePublicUrl), options.zrokProbeTimeoutMs, true)
-        : {
-            ok: false,
-            latencyMs: 0,
-            message: 'zrok public URL is unavailable from bootstrap/configuration.',
-            failureClass: 'public-url-unavailable',
-          };
+      const routeProbe = await probeZrokPublicRoute(plan.appUrl, activePublicUrl, options.zrokProbeTimeoutMs);
+      const localZrokStatus = routeProbe.runtimeStatus;
+      activePublicUrl = routeProbe.publicUrl;
+      const publicProbe = routeProbe.publicProbe;
 
       let next = advanceDevFlowTunnelHealth(currentTunnelHealth(), publicProbe, {
         failureThreshold: options.zrokProbeFailureThreshold,
@@ -550,23 +641,25 @@ export async function startAll(mode: StartAllMode = 'all') {
         consecutiveProbeFailures: next.consecutiveProbeFailures,
         failureThreshold: options.zrokProbeFailureThreshold,
         localApiHealthy: localProbe.ok,
+        zrokStatus: localZrokStatus?.status,
+        zrokShareState: localZrokStatus?.shareState,
         shuttingDown,
         startupGraceUntilMs: next.startupGraceUntil ? Date.parse(next.startupGraceUntil) : undefined,
         lifecyclePhase: next.lifecyclePhase,
         recoveryCooldownUntilMs,
       });
 
-      if (decision === 'reconcile-zrok') {
-        recoveryCooldownUntilMs = Date.now() + options.zrokRecoveryCooldownMs;
-        next = {
+      if (decision === 'suppressed-standby') {
+        updateDevFlowSupervisorTunnelHealth({
           ...next,
-          recoveryAttempt: Math.max(0, next.recoveryAttempt || 0) + 1,
-          lastRecoveryAt: new Date().toISOString(),
-          nextRecoveryAt: new Date(recoveryCooldownUntilMs).toISOString(),
-          message: 'Public zrok tunnel is down while local API is healthy; reconciling zrok service/share only.',
-        };
-        updateDevFlowSupervisorTunnelHealth(next);
-        scheduleZrokReconcile(250, 'public tunnel recovery');
+          message: 'Public zrok route is unavailable, but local zrok is Standby; automatic repair is suppressed.',
+        });
+      } else if (decision === 'suppressed-periodic-recovery') {
+        recoveryCooldownUntilMs = Date.now() + options.zrokRecoveryCooldownMs;
+        updateDevFlowSupervisorTunnelHealth({
+          ...next,
+          message: 'Public zrok tunnel is down while local API is healthy; periodic bootstrap/elevation is disabled.',
+        });
       } else if (!localProbe.ok) {
         updateDevFlowSupervisorTunnelHealth({
           ...next,
@@ -672,7 +765,7 @@ export async function startAll(mode: StartAllMode = 'all') {
   };
 
   launchServer();
-  if (mode === 'all') reconcileZrok('startup');
+  if (mode === 'all') bootstrapZrokAtStartup();
 
   if (plan.openBrowser) setTimeout(() => openUrl(plan.appUrl), plan.openBrowserDelayMs);
 
@@ -682,9 +775,7 @@ export async function startAll(mode: StartAllMode = 'all') {
     lifecycleStatus = 'stopping';
     updateDevFlowSupervisorState({ shuttingDown: true });
     if (tunnelProbeTimer) clearTimeout(tunnelProbeTimer);
-    if (zrokRecoveryTimer) clearTimeout(zrokRecoveryTimer);
     tunnelProbeTimer = null;
-    zrokRecoveryTimer = null;
     const serverChild = children.get('server');
     if (serverChild) {
       updateDevFlowSupervisorProcess('server', {

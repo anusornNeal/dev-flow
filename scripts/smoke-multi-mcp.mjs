@@ -311,7 +311,7 @@ function runZrokRecoveryInjection() {
     shuttingDown: false,
     nowMs: Date.parse('2026-08-16T00:00:03.000Z'),
   });
-  assert.equal(recoveryA, 'reconcile-zrok');
+  assert.equal(recoveryA, 'suppressed-periodic-recovery');
 
   health = resetDevFlowTunnelHealthForGeneration(health, 'B', {
     startupGraceMs: 5_000,
@@ -383,7 +383,7 @@ function runZrokRecoveryInjection() {
       nowMs: Date.parse(now),
     }));
   }
-  assert.deepEqual(postGraceDecisions, ['threshold-not-reached', 'threshold-not-reached', 'reconcile-zrok']);
+  assert.deepEqual(postGraceDecisions, ['threshold-not-reached', 'threshold-not-reached', 'suppressed-periodic-recovery']);
   return {
     firstGeneration: 'A',
     firstGenerationRecoveryDecision: recoveryA,

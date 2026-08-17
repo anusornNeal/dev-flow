@@ -39,19 +39,19 @@ The first run may require:
 1. Administrator approval to install/configure the Windows service.
 2. A zrok account token if the service environment has not been enabled yet.
 3. Creation of the configured reserved name if the account does not already own it.
-4. Agent remoting enrollment so a second enrolled machine can report `Standby` and perform explicit takeover.
+4. Agent remoting enrollment when the controller supports that capability. An explicit HTTP 501/unimplemented response leaves local service readiness intact and reports remote control as unsupported.
 
 The token is requested with a secure prompt and used only for zrok environment enablement; it is not stored in `.env` by the bootstrap.
 
-The default reserved name is `devflow-mixed`, producing the stable public base URL `https://devflow-mixed.shares.zrok.io`. Set `DEVFLOW_ZROK_RESERVED_NAME` before first bootstrap when another reserved name is required.
+The bootstrap does not construct a public hostname from the reserved name. The local Agent's live `frontendEndpoint`, exposed by `/api/zrok/status`, is authoritative; `DEVFLOW_ZROK_PUBLIC_URL` is only an explicit fallback when live status is temporarily unavailable.
 
 ### Service/share reconciliation
 
-`start:all` invokes `scripts/zrok-bootstrap.ps1` as an idempotent reconciliation step. A successful bootstrap means the required zrok tooling/environment, reserved name, agent enrollment, and Windows service are ready. The supervisor models this logical transport lifecycle as `processes.zrok`, but no zrok child PID is owned by the supervisor.
+`start:all` invokes `scripts/zrok-bootstrap.ps1` once during startup as an idempotent setup step. A successful bootstrap means the required zrok tooling/environment, reserved name, agent enrollment, and Windows service are ready. The supervisor models this logical transport lifecycle as `processes.zrok`, but no zrok child PID is owned by the supervisor.
 
-After service/share readiness, the supervisor probes the public `/api/capabilities` endpoint independently. A fresh generation starts as `unknown`; successful public reachability makes it `healthy`. After startup grace, consecutive failures become `degraded` and then `down` at the configured threshold.
+After service/share readiness, the supervisor reads local `/api/zrok/status` before each public probe and adopts any valid live `baseUrl`, including when no public URL was configured at startup. A changed Agent endpoint replaces the probe target without restarting DevFlow; missing or invalid status URLs leave the current valid target unchanged. A fresh generation starts as `unknown`; successful public reachability makes it `healthy`. After startup grace, consecutive failures become `degraded` and then `down` at the configured threshold.
 
-If the public route is `down`, DevFlow probes the local API before recovery. When local `/api/capabilities` is healthy, DevFlow reconciles the zrok service/share only. When the local API is unhealthy, transport-only recovery is suppressed so an API failure is not misclassified as a zrok failure.
+If the public route is `down`, DevFlow probes the local API and reads the local zrok status without mutation. `Standby`/`remote-active` remains observational and never triggers repair, re-enrollment, or takeover. Other periodic public-route failures are also observation-only: DevFlow does not invoke the bootstrap or Windows elevation path; the persistent agent service/share remains untouched for manual Recheck or explicit Takeover.
 
 A supervisor shutdown stops its DevFlow API child but intentionally leaves the persistent zrok Agent Service/reserved share running. Starting DevFlow again reconciles and reuses that state.
 
@@ -77,7 +77,8 @@ Defaults can be tuned without changing the MCP endpoint contract:
 
 ```env
 DEVFLOW_ZROK_RESERVED_NAME="devflow-mixed"
-DEVFLOW_ZROK_PUBLIC_URL="https://devflow-mixed.shares.zrok.io"
+# Optional fallback; live /api/zrok/status baseUrl takes precedence.
+DEVFLOW_ZROK_PUBLIC_URL="https://your-current-zrok-endpoint.example"
 DEVFLOW_ZROK_PROBE_INTERVAL_MS=15000
 DEVFLOW_ZROK_PROBE_TIMEOUT_MS=5000
 DEVFLOW_ZROK_PROBE_STARTUP_GRACE_MS=30000
@@ -142,7 +143,7 @@ Start DevFlow.bat / npm run start:all
 persistent external transport
   -> Windows Service: zrokAgent
        -> reserved zrok share
-            -> https://<reserved-name>.shares.zrok.io/mcp
+            -> <live Agent frontendEndpoint>/mcp
 ```
 
 The API runtime and zrok transport can therefore be restarted/reconciled independently.

@@ -4,7 +4,8 @@ import type { ApiRouteDeps } from '../types.js';
 import { createApiError, sendApiError } from '../services/api.js';
 import { createStrictLoopbackAccessMiddleware } from '../services/apiAccessPolicyService.js';
 import { createUiPreviewArtifactStore, type UiPreviewArtifactStore } from '../services/uiPreviewArtifactStore.js';
-import { composeUiPreviewDocument } from '../services/uiPreviewDocumentService.js';
+import { composeUiPreviewDocument, composeUiPreviewWorkspaceDocument } from '../services/uiPreviewDocumentService.js';
+import { UI_PREVIEW_SCREEN_ID_PATTERN, UiPreviewError } from '../domain/uiPreview.js';
 import { createUiPreviewRepository } from '../repositories/uiPreviewRepository.js';
 import { createUiPreviewService, type UiPreviewService } from '../services/uiPreviewService.js';
 import { createUiPreviewScreenshotService } from '../services/uiPreviewScreenshotService.js';
@@ -32,6 +33,25 @@ function parseRevision(value: unknown) {
   const revision = Number(value);
   if (!Number.isInteger(revision) || revision < 1) throw createApiError(400, 'UI_PREVIEW_INVALID_REVISION', 'revision must be a positive integer.');
   return revision;
+}
+
+function parseScreenId(value: unknown) {
+  if (value === undefined || value === null || value === '') return undefined;
+  if (typeof value !== 'string' || !UI_PREVIEW_SCREEN_ID_PATTERN.test(value)) {
+    throw new UiPreviewError('UI_PREVIEW_INVALID_SCREEN_ID', 'screenId must be a URL-safe opaque UI preview screen id.');
+  }
+  return value;
+}
+
+function documentScreensFromSource(source: any) {
+  if (Array.isArray(source.screens) && source.screens.length > 0) return source.screens;
+  return [{
+    screenId: 'main',
+    name: source.spec?.summary?.screen || source.title || 'Main',
+    html: source.html,
+    css: source.css || '',
+    js: source.js || '',
+  }];
 }
 
 function isLoopbackHostHeader(value: unknown) {
@@ -159,12 +179,49 @@ export function registerUiPreviewRoutes(app: express.Express, _deps: ApiRouteDep
 
   app.get('/api/ui-previews/:previewId/document', strictLocal, (req, res) => {
     try {
+      const revision = parseRevision(req.query.revision);
+      const requestedScreenId = parseScreenId(req.query.screenId);
       const source = previewService.get({
         previewId: req.params.previewId,
-        revision: parseRevision(req.query.revision),
+        revision,
         mode: 'source',
       }) as any;
-      const document = composeUiPreviewDocument(source);
+      const screens = documentScreensFromSource(source);
+      const defaultScreenId = typeof source.defaultScreenId === 'string' ? source.defaultScreenId : screens[0]?.screenId;
+      const selectedScreenId = requestedScreenId ?? defaultScreenId;
+      const selectedScreen = screens.find((screen: any) => screen.screenId === selectedScreenId);
+      if (!selectedScreen) {
+        throw new UiPreviewError(
+          'UI_PREVIEW_SCREEN_NOT_FOUND',
+          `UI preview '${req.params.previewId}' does not contain screen '${selectedScreenId}'.`,
+        );
+      }
+
+      const document = screens.length === 1
+        ? composeUiPreviewDocument({
+            title: source.title,
+            html: selectedScreen.html,
+            css: selectedScreen.css,
+            js: selectedScreen.js,
+          })
+        : composeUiPreviewWorkspaceDocument({
+            title: source.title,
+            selectedScreenId,
+            screens: screens.map((screen: any) => {
+              const query = new URLSearchParams();
+              const exactRevision = Number.isInteger(source.revision) ? source.revision : revision;
+              if (exactRevision !== undefined) query.set('revision', String(exactRevision));
+              query.set('screenId', screen.screenId);
+              return {
+                screenId: screen.screenId,
+                name: screen.name,
+                html: screen.html,
+                css: screen.css,
+                js: screen.js,
+                href: `/api/ui-previews/${encodeURIComponent(req.params.previewId)}/document?${query.toString()}`,
+              };
+            }),
+          });
       noStore(res);
       res.setHeader('Content-Security-Policy', document.csp);
       res.type('html');

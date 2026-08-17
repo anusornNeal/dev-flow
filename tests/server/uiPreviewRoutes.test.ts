@@ -53,6 +53,31 @@ const source = {
   previewUrl: 'http://127.0.0.1:45555/api/ui-previews/uip_route/document?revision=2',
 };
 
+const multiScreenSource = {
+  ...source,
+  previewId: 'uip_multi_route',
+  title: 'Workspace preview',
+  defaultScreenId: 'overview',
+  screens: [
+    {
+      screenId: 'overview',
+      name: 'Overview',
+      html: '<main id="overview-screen">overview</main>',
+      css: 'main{display:block}',
+      js: 'window.overviewRan=true',
+      spec: { schemaVersion: 1, summary: { screen: 'Overview' } },
+    },
+    {
+      screenId: 'details',
+      name: 'Details',
+      html: '<main id="details-screen">details</main>',
+      css: 'main{font-weight:700}',
+      js: 'window.detailsRan=true',
+      spec: { schemaVersion: 1, summary: { screen: 'Details' } },
+    },
+  ],
+};
+
 function rawGetStatus(baseUrl: string, headers: Record<string, string>, method = 'GET') {
   return new Promise<number>((resolve, reject) => {
     const url = new URL(baseUrl);
@@ -77,7 +102,12 @@ async function withServer(run: (baseUrl: string) => Promise<void>) {
   const previewService = {
     create: (input: any) => ({ previewId: 'uip_route', revision: 1, latestRevision: 1, changed: true, ...input }),
     update: (input: any) => ({ previewId: input.previewId, revision: 2, latestRevision: 2, changed: true }),
-    get: (input: any) => input.mode === 'source' ? source : { ...source, html: undefined, css: undefined, js: undefined, spec: undefined },
+    get: (input: any) => {
+      const selectedSource = input.previewId === 'uip_multi_route' ? multiScreenSource : source;
+      return input.mode === 'source'
+        ? selectedSource
+        : { ...selectedSource, html: undefined, css: undefined, js: undefined, spec: undefined, screens: undefined };
+    },
     list: (input: any) => ({
       items: [{ previewId: 'uip_route', taskId: null, title: 'Route preview', specSummary: { screen: 'Route preview' }, latestRevision: 2, createdAt: '2026-08-11T01:00:00.000Z', updatedAt: '2026-08-11T02:00:00.000Z', latestPreviewUrl: 'http://127.0.0.1:45555/api/ui-previews/uip_route/document' }],
       nextCursor: null,
@@ -165,6 +195,43 @@ test('document and screenshot routes are local-only, no-store, and ignore Host a
   });
 });
 
+test('multi-screen document route renders navigator, supports deep links, and rejects invalid screen ids', async () => {
+  await withServer(async (baseUrl) => {
+    const initial = await fetch(`${baseUrl}/api/ui-previews/uip_multi_route/document?revision=2`);
+    assert.equal(initial.status, 200);
+    const initialBody = await initial.text();
+    assert.match(initialBody, /data-ui-preview-workspace/);
+    assert.match(initialBody, /aria-label="Preview screens"/);
+    assert.match(initialBody, /aria-current="page">Overview/);
+    assert.match(initialBody, /id=&quot;overview-screen&quot;/);
+    assert.doesNotMatch(initialBody, /id=&quot;details-screen&quot;/);
+    assert.match(initialBody, /revision=2&amp;screenId=details/);
+    assert.match(initialBody, /sandbox="allow-scripts"/);
+    assert.doesNotMatch(initialBody, /allow-same-origin/);
+
+    const deepLink = await fetch(`${baseUrl}/api/ui-previews/uip_multi_route/document?revision=2&screenId=details`);
+    assert.equal(deepLink.status, 200);
+    const deepLinkBody = await deepLink.text();
+    assert.match(deepLinkBody, /aria-current="page">Details/);
+    assert.match(deepLinkBody, /id=&quot;details-screen&quot;/);
+    assert.doesNotMatch(deepLinkBody, /id=&quot;overview-screen&quot;/);
+
+    const invalid = await fetch(`${baseUrl}/api/ui-previews/uip_multi_route/document?revision=2&screenId=${encodeURIComponent('../escape')}`);
+    assert.equal(invalid.status, 400);
+    assert.equal(((await invalid.json()) as any).error.code, 'UI_PREVIEW_INVALID_SCREEN_ID');
+
+    const missing = await fetch(`${baseUrl}/api/ui-previews/uip_multi_route/document?revision=2&screenId=missing`);
+    assert.equal(missing.status, 404);
+    assert.equal(((await missing.json()) as any).error.code, 'UI_PREVIEW_SCREEN_NOT_FOUND');
+
+    const legacy = await fetch(`${baseUrl}/api/ui-previews/uip_route/document?revision=2`);
+    const legacyBody = await legacy.text();
+    assert.match(legacyBody, /id="route-preview"/);
+    assert.doesNotMatch(legacyBody, /data-ui-preview-workspace/);
+    assert.doesNotMatch(legacyBody, /<iframe/);
+  });
+});
+
 test('preview collection is strict-loopback, host-validated, no-store, bounded, and summary-only', async () => {
   await withServer(async (baseUrl) => {
     const local = await fetch(`${baseUrl}/api/ui-previews?filter=standalone&limit=999`);
@@ -234,6 +301,7 @@ test('PC smoke uses real Chromium to create, update, attach, freeze screenshot e
   const BetterSqlite3 = (await import('better-sqlite3')).default;
   const { initMigration } = await import('../../src/db/migrations/001-init.js');
   const { uiPreviewsMigration } = await import('../../src/db/migrations/016-ui-previews.js');
+  const { uiPreviewObjectStorageMigration } = await import('../../src/db/migrations/017-ui-preview-object-storage.js');
   const { createUiPreviewRepository } = await import('../../src/server/repositories/uiPreviewRepository.js');
   const { createTaskUiEvidenceRepository } = await import('../../src/server/repositories/taskUiEvidenceRepository.js');
   const { createUiPreviewService } = await import('../../src/server/services/uiPreviewService.js');
@@ -246,6 +314,7 @@ test('PC smoke uses real Chromium to create, update, attach, freeze screenshot e
   smokeDb.pragma('foreign_keys = ON');
   initMigration.up(smokeDb as any);
   uiPreviewsMigration.up(smokeDb as any);
+  uiPreviewObjectStorageMigration.up(smokeDb as any);
   smokeDb.prepare('INSERT INTO tasks (id, displayId, title, status) VALUES (?, ?, ?, ?)')
     .run('task-pc-smoke', 'DVF-PC-SMOKE', 'PC smoke', 'todo');
 

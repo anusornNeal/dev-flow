@@ -108,6 +108,72 @@ test('sanitizes malformed payload entries and omits unknown fields', async () =>
   }]);
 });
 
+test('normalizes the live Agent console frontendEndpoint array schema', async () => {
+  const client = createZrokAgentConsoleClient({
+    ports: [8888],
+    fetchImpl: fakeAgentFetch({
+      8888: { shares: [{
+        token: 'secret',
+        shareMode: 'public',
+        backendMode: 'proxy',
+        backendEndpoint: 'http://127.0.0.1:3000',
+        frontendEndpoint: ['devflow-mixed.shares.zrok.io'],
+        status: 'active',
+      }] },
+    }),
+  });
+
+  const status = await client.getStatus();
+  assert.deepEqual(status.shares, [{
+    shareMode: 'public',
+    backendMode: 'proxy',
+    backendEndpoint: 'http://127.0.0.1:3000',
+    frontendEndpoint: 'devflow-mixed.shares.zrok.io',
+    status: 'active',
+  }]);
+  assert.equal(JSON.stringify(status).includes('secret'), false);
+});
+
+test('drops ambiguous or unsafe frontend endpoint arrays', async () => {
+  const client = createZrokAgentConsoleClient({
+    ports: [8888],
+    fetchImpl: fakeAgentFetch({
+      8888: { shares: [
+        {
+          shareMode: 'public',
+          backendMode: 'proxy',
+          backendEndpoint: 'http://127.0.0.1:3000',
+          frontendEndpoint: ['one.example.net', 'two.example.net'],
+          status: 'active',
+        },
+        {
+          shareMode: 'public',
+          backendMode: 'proxy',
+          backendEndpoint: 'http://127.0.0.1:3001',
+          frontendEndpoint: ['\u0000invalid', 'valid.example.net'],
+          status: 'active',
+        },
+        {
+          shareMode: 'public',
+          backendMode: 'proxy',
+          backendEndpoint: 'http://127.0.0.1:3002',
+          frontendEndpoint: ['x'.repeat(2_049)],
+          status: 'active',
+        },
+      ] },
+    }),
+  });
+
+  const status = await client.getStatus();
+  assert.deepEqual(status.shares, [{
+    shareMode: 'public',
+    backendMode: 'proxy',
+    backendEndpoint: 'http://127.0.0.1:3001',
+    frontendEndpoint: 'valid.example.net',
+    status: 'active',
+  }]);
+});
+
 test('matches canonical backend targets exactly and preserves path semantics', () => {
   const status = {
     reachable: true,

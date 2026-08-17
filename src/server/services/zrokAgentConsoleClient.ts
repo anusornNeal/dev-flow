@@ -3,6 +3,8 @@ const DEFAULT_PORTS = Array.from({ length: 101 }, (_, index) => 8888 + index);
 const REQUEST_TIMEOUT_MS = 250;
 const DISCOVERY_TIMEOUT_MS = 1_500;
 const MAX_RESPONSE_BYTES = 256 * 1024;
+const MAX_FRONTEND_ENDPOINT_LENGTH = 2_048;
+const MAX_FRONTEND_ENDPOINT_CANDIDATES = 16;
 
 export interface ZrokLocalAgentShare {
   shareMode: string;
@@ -51,13 +53,37 @@ function stringField(record: Record<string, unknown>, name: keyof ZrokLocalAgent
   return typeof value === 'string' && value.trim() ? value : null;
 }
 
+function usableFrontendEndpoint(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const endpoint = value.trim();
+  if (!endpoint || endpoint.length > MAX_FRONTEND_ENDPOINT_LENGTH || /[\u0000-\u001f\u007f]/.test(endpoint)) return null;
+  try {
+    const candidate = /^[a-z][a-z\d+.-]*:\/\//i.test(endpoint) ? endpoint : `https://${endpoint}`;
+    const url = new URL(candidate);
+    if ((url.protocol !== 'http:' && url.protocol !== 'https:') || url.username || url.password) return null;
+    return endpoint;
+  } catch {
+    return null;
+  }
+}
+
+function frontendEndpointField(value: unknown): string | null {
+  const candidates = Array.isArray(value) ? value : [value];
+  if (candidates.length > MAX_FRONTEND_ENDPOINT_CANDIDATES) return null;
+  const usable = candidates.flatMap((candidate) => {
+    const endpoint = usableFrontendEndpoint(candidate);
+    return endpoint ? [endpoint] : [];
+  });
+  return usable.length === 1 ? usable[0] : null;
+}
+
 function sanitizeShare(value: unknown): ZrokLocalAgentShare | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
   const shareMode = stringField(record, 'shareMode');
   const backendMode = stringField(record, 'backendMode');
   const backendEndpoint = stringField(record, 'backendEndpoint');
-  const frontendEndpoint = stringField(record, 'frontendEndpoint');
+  const frontendEndpoint = frontendEndpointField(record.frontendEndpoint);
   const status = stringField(record, 'status');
   if (!shareMode || !backendMode || !backendEndpoint || !frontendEndpoint || !status) return null;
   return { shareMode, backendMode, backendEndpoint, frontendEndpoint, status };

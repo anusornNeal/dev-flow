@@ -355,6 +355,25 @@ test('status reports Standby without mutating a healthy remote owner', async () 
   assert.equal(state.startCalls, 0);
 });
 
+test('blocks takeover when local Agent authority is unreachable', async () => {
+  const { service, state } = remoteOwnerFixture({
+    localAgentStatus: { reachable: false, shares: [] },
+  });
+
+  const status = await service.getStatus();
+  const takeover = await service.takeOver();
+
+  assert.equal(status.status, 'degraded');
+  assert.equal(status.share.owner, 'unknown');
+  assert.equal(status.actionability.canTakeOver, false);
+  assert.match(status.actionability.takeoverBlockedReason || '', /local zrok Agent.*unreachable/i);
+  assert.equal(takeover.ok, false);
+  assert.equal(takeover.code, 'ZROK_TAKEOVER_NOT_AVAILABLE');
+  assert.equal(takeover.status.share.owner, 'unknown');
+  assert.equal(state.unshareCalls, 0);
+  assert.equal(state.startCalls, 0);
+});
+
 test('remote ownership stays Standby even while the local agent service is starting', async () => {
   const { service } = remoteOwnerFixture({ serviceState: 'starting' });
   const status = await service.getStatus();

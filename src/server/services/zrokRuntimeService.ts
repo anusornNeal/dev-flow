@@ -407,6 +407,16 @@ async function loadDiscovery(
   try {
     localAgentStatus = await adapter.getLocalAgentStatus();
   } catch {}
+  if (!localAgentStatus.reachable) {
+    const blockedReason = 'The local zrok Agent authority is unreachable, so ownership cannot be determined safely.';
+    return publicStatus('degraded', checkedAt, {
+      serviceState,
+      shareState: 'unknown',
+      owner: 'unknown',
+      message: blockedReason,
+      takeoverBlockedReason: blockedReason,
+    });
+  }
   const localSelection = selectTargetShare(localAgentStatus, config.target);
   if (localSelection.kind === 'one' && localSelection.share) {
     return statusFromLocalAgent(adapter, config, serviceState, localSelection.share);

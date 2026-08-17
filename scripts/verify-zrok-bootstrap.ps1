@@ -209,8 +209,6 @@ Invoke-Case 'environment marker detection requires non-empty environment.json' {
     }
 }
 
-Invoke-Case 'remoting enrollment classification is narrow' {
-
 Invoke-Case 'local reserved-name selection persists only the selected name' {
     $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("devflow-zrok-selection-test-" + [Guid]::NewGuid().ToString('N'))
     [void][System.IO.Directory]::CreateDirectory($tempDir)
@@ -231,6 +229,7 @@ Invoke-Case 'local reserved-name selection persists only the selected name' {
     }
 }
 
+Invoke-Case 'remoting enrollment classification is narrow' {
     Assert-Equal (Get-RemotingEnrollmentFailureCode @('controller request failed: HTTP 501 Not Implemented')) 'remoting-unimplemented' 'HTTP 501 is unsupported capability'
     Assert-Equal (Get-RemotingEnrollmentFailureCode @('controller request 501 failed without an HTTP status')) 'remoting-enroll-failed' 'an unrelated number is not an unsupported capability'
     Assert-Equal (Get-RemotingEnrollmentFailureCode @('controller request failed: 500 internal server error')) 'remoting-enroll-failed' 'other controller failures remain fatal'

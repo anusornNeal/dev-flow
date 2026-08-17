@@ -48,6 +48,45 @@ test('uses only the configured loopback host and probes ports sequentially', asy
   assert.throws(() => createZrokAgentConsoleClient({ host: '127.0.0.2' }), /loopback/i);
 });
 
+test('refuses redirects from the loopback Agent console', async () => {
+  let redirect: RequestRedirect | undefined;
+  const client = createZrokAgentConsoleClient({
+    ports: [8888],
+    fetchImpl: async (_input, init) => {
+      redirect = init?.redirect;
+      return new Response(JSON.stringify({ shares: [] }), { status: 200 });
+    },
+  });
+  await client.getStatus();
+  assert.equal(redirect, 'error');
+});
+
+test('rejects an oversized streamed body before reading it completely', async () => {
+  let textReads = 0;
+  let cancelled = false;
+  const oversizedChunk = new Uint8Array(256 * 1024 + 1);
+  const response = {
+    status: 200,
+    headers: new Headers(),
+    body: new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(oversizedChunk);
+      },
+      cancel() {
+        cancelled = true;
+      },
+    }),
+    async text() {
+      textReads += 1;
+      return '{}';
+    },
+  } as unknown as Response;
+  const client = createZrokAgentConsoleClient({ ports: [8888], fetchImpl: async () => response });
+  assert.deepEqual(await client.getStatus(), { reachable: false, shares: [] });
+  assert.equal(textReads, 0);
+  assert.equal(cancelled, true);
+});
+
 test('sanitizes malformed payload entries and omits unknown fields', async () => {
   const client = createZrokAgentConsoleClient({
     ports: [8888],

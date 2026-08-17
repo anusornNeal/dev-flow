@@ -83,6 +83,28 @@ function parseStatus(payload: string): ZrokLocalAgentStatus | null {
   };
 }
 
+async function readResponseText(response: Response): Promise<string | null> {
+  if (!response.body) return '';
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let bytesRead = 0;
+  let text = '';
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) return text + decoder.decode();
+      bytesRead += value.byteLength;
+      if (bytesRead > MAX_RESPONSE_BYTES) {
+        await reader.cancel();
+        return null;
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 function canonicalTarget(value: string): string | null {
   try {
     const url = new URL(value.trim());
@@ -122,12 +144,16 @@ export function createZrokAgentConsoleClient(options: CreateZrokAgentConsoleClie
           const response = await fetchImpl(urlFor(host, port), {
             method: 'GET',
             headers: { accept: 'application/json' },
+            redirect: 'error',
             signal: AbortSignal.timeout(Math.min(REQUEST_TIMEOUT_MS, remainingMs)),
           });
           if (response.status !== 200) continue;
-          const contentLength = Number(response.headers.get('content-length'));
-          if (Number.isFinite(contentLength) && contentLength > MAX_RESPONSE_BYTES) continue;
-          const status = parseStatus(await response.text());
+          const contentLengthHeader = response.headers.get('content-length');
+          const contentLength = contentLengthHeader ? Number(contentLengthHeader) : null;
+          if (contentLength !== null && Number.isFinite(contentLength) && contentLength > MAX_RESPONSE_BYTES) continue;
+          const body = await readResponseText(response);
+          if (body === null) continue;
+          const status = parseStatus(body);
           if (status) return status;
         } catch {
           // A local port can legitimately be closed while the agent starts.

@@ -19,9 +19,9 @@ import {
 const LOCAL_ENV = 'local-env-zid';
 const REMOTE_ENV = 'remote-env-zid';
 const SECRET_ACCOUNT_TOKEN = 'account-super-secret-do-not-leak';
-const MANAGED_NAME = 'devflow-mixed';
+const MANAGED_NAME = 'test-reserved-name';
 const NAME_SELECTION = `public:${MANAGED_NAME}`;
-const STABLE_URL = 'https://devflow-mixed.shares.zrok.io';
+const STABLE_URL = 'https://zrok-test.example.test';
 const REMOTE_TOKEN = 'remote-share-token';
 const LOCAL_TOKEN = 'local-share-token';
 
@@ -466,11 +466,12 @@ test('preserves unsupported remote-control capability from an HTTP 501 controlle
   assert.deepEqual(status, { reachable: false, remoteControl: 'unsupported', shares: [] });
 });
 
-test('resolves the bootstrap-installed zrok binary on Windows without PATH', () => {
+test('resolves the bootstrap-installed zrok binary from ProgramFiles and falls back to PATH', () => {
   assert.equal(
     resolveZrokBinary({ platform: 'win32', programFilesDir: 'C:\\Program Files' }),
     'C:\\Program Files\\zrok2\\zrok2.exe',
   );
+  assert.equal(resolveZrokBinary({ platform: 'win32', programFilesDir: '' }), 'zrok2');
   assert.equal(resolveZrokBinary({ platform: 'linux' }), 'zrok2');
   assert.equal(resolveZrokBinary({ binary: 'D:\\tools\\zrok2.exe', platform: 'win32' }), 'D:\\tools\\zrok2.exe');
 });

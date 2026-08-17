@@ -24,7 +24,7 @@ Concretely, the parent card delivers:
 
 ## 3. Current-state pain points
 
-Confirmed from filesystem inspection at `C:\Users\tatar\Projects\dev-flow`:
+Confirmed from filesystem inspection at the repository root:
 
 - `src/components/TaskDetailsDrawer.tsx` — 102,177 bytes / ~2,500 lines. Owns drawer UI plus edit state, save logic, checklist mutations, image upload/paste, comments, subtasks, agent config, run history, retry, copy helpers, progressive disclosure, multiple rendering modes.
 - `src/server/routes/tasks.ts` — 84,504 bytes / ~2,200 lines. Combines route handlers, validation glue, mutations, parent blockers, agent lifecycle, queue continuation, prompt endpoints, import/batch paths, image handling, and process launch integration.

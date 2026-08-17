@@ -28,7 +28,7 @@ function jsonResponse(body: unknown, status = 200) {
 test('normalizes the bounded backend contract without projecting secrets', () => {
   const normalized = normalizeZrokStatus({
     status: 'ONLINE',
-    baseUrl: 'https://devflow-mixed.shares.zrok.io',
+    baseUrl: 'https://zrok-test.example.test',
     agentService: { status: 'running' },
     share: { state: 'ready' },
     publicReachability: { status: 'healthy', latencyMs: 37 },
@@ -41,7 +41,7 @@ test('normalizes the bounded backend contract without projecting secrets', () =>
   assert.equal(normalized.share, 'ready');
   assert.equal(normalized.publicReachability, 'healthy');
   assert.equal(normalized.latencyMs, 37);
-  assert.equal(resolveMcpUrl(normalized), 'https://devflow-mixed.shares.zrok.io/mcp');
+  assert.equal(resolveMcpUrl(normalized), 'https://zrok-test.example.test/mcp');
   assert.doesNotMatch(JSON.stringify(normalized), /must-not-leak|accountToken/);
 });
 
@@ -87,14 +87,14 @@ test('renders Starting as a distinct non-healthy state', () => {
 test('renders Online only from live backend status with latency and MCP URL', () => {
   const html = renderStatus({
     status: 'online',
-    baseUrl: 'https://devflow-mixed.shares.zrok.io',
+    baseUrl: 'https://zrok-test.example.test',
     agentService: 'running',
     share: 'ready',
     publicReachability: 'healthy',
     latencyMs: 48,
   });
   assert.match(html, /Online · 48 ms/);
-  assert.match(html, /https:\/\/devflow-mixed\.shares\.zrok\.io\/mcp/);
+  assert.match(html, /https:\/\/zrok-test\.example\.test\/mcp/);
   assert.match(html, /aria-label="Copy MCP URL"/);
   assert.doesNotMatch(html, /\/sse/);
 });
@@ -111,7 +111,7 @@ test('renders Degraded and Offline without healthy language', () => {
 test('renders Standby with remote ownership context and explicit Take over action', () => {
   const html = renderStatus({
     status: 'standby',
-    baseUrl: 'https://devflow-mixed.shares.zrok.io',
+    baseUrl: 'https://zrok-test.example.test',
     remoteOwner: 'Office PC',
     agentService: 'running',
     share: 'standby',

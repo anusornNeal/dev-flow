@@ -349,11 +349,12 @@ Expected: PASS.
 Start local server:
 
 ```powershell
-$out='C:\Users\tatar\Projects\dev-flow\logs\atlas-focus-edges.out.log'
-$err='C:\Users\tatar\Projects\dev-flow\logs\atlas-focus-edges.err.log'
+$repoRoot = (Resolve-Path '.').Path
+$out = Join-Path $repoRoot 'logs\atlas-focus-edges.out.log'
+$err = Join-Path $repoRoot 'logs\atlas-focus-edges.err.log'
 foreach ($log in @($out,$err)) { if (Test-Path $log) { Remove-Item -LiteralPath $log -Force } }
 $args='/c set DEVFLOW_PORT=3100&& set PORT=3100&& npm run dev'
-Start-Process -FilePath 'cmd.exe' -ArgumentList $args -WorkingDirectory 'C:\Users\tatar\Projects\dev-flow' -RedirectStandardOutput $out -RedirectStandardError $err -WindowStyle Hidden -PassThru
+Start-Process -FilePath 'cmd.exe' -ArgumentList $args -WorkingDirectory $repoRoot -RedirectStandardOutput $out -RedirectStandardError $err -WindowStyle Hidden -PassThru
 ```
 
 Open `http://localhost:3100/?projectId=project-1781141088281-533757#atlas` and confirm:

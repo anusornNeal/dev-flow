@@ -937,7 +937,10 @@ export function resolveZrokBinary(input: {
   if (explicit) return explicit;
   const platform = input.platform || process.platform;
   if (platform === 'win32') {
-    const programFilesDir = input.programFilesDir || process.env.ProgramFiles || 'C:\\Program Files';
+    const programFilesDir = input.programFilesDir !== undefined
+      ? input.programFilesDir.trim()
+      : process.env.ProgramFiles?.trim();
+    if (!programFilesDir) return 'zrok2';
     return path.win32.join(programFilesDir, 'zrok2', 'zrok2.exe');
   }
   return 'zrok2';

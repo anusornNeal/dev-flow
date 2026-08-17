@@ -195,7 +195,7 @@ Invoke-Case 'native stderr capture preserves zrok failure output under stop pref
 
 Invoke-Case 'fresh machine installs, enables, creates service/name/remoting' {
     $fake = New-FakeBootstrapOps -ZrokInstalled:$false -NssmInstalled:$false -EnvironmentEnabled:$false -ServiceState Missing -NameState Missing -RemotingEnrolled:$false
-    $result = Invoke-ZrokBootstrap -Ops $fake.Ops -ReservedName 'devflow-mixed' -EnableRemoting $true
+    $result = Invoke-ZrokBootstrap -Ops $fake.Ops -ReservedName 'test-reserved-name' -EnableRemoting $true
     Assert-True $result.ok ("fresh bootstrap should succeed: " + ($result | ConvertTo-Json -Depth 8 -Compress))
     Assert-Equal $fake.State.installZrok 1 'zrok installs once'
     Assert-Equal $fake.State.installNssm 1 'nssm installs once'
@@ -211,8 +211,8 @@ Invoke-Case 'fresh machine installs, enables, creates service/name/remoting' {
 
 Invoke-Case 'repeated run is idempotent and never re-prompts' {
     $fake = New-FakeBootstrapOps -ZrokInstalled:$false -NssmInstalled:$false -EnvironmentEnabled:$false -ServiceState Missing -NameState Missing -RemotingEnrolled:$false
-    $first = Invoke-ZrokBootstrap -Ops $fake.Ops -ReservedName 'devflow-mixed' -EnableRemoting $true
-    $second = Invoke-ZrokBootstrap -Ops $fake.Ops -ReservedName 'devflow-mixed' -EnableRemoting $true
+    $first = Invoke-ZrokBootstrap -Ops $fake.Ops -ReservedName 'test-reserved-name' -EnableRemoting $true
+    $second = Invoke-ZrokBootstrap -Ops $fake.Ops -ReservedName 'test-reserved-name' -EnableRemoting $true
     Assert-True ($first.ok -and $second.ok) 'both runs should succeed'
     Assert-Equal $fake.State.installZrok 1 'zrok must not reinstall'
     Assert-Equal $fake.State.installNssm 1 'nssm must not reinstall'
@@ -224,7 +224,7 @@ Invoke-Case 'repeated run is idempotent and never re-prompts' {
 
 Invoke-Case 'already configured machine performs no destructive mutation' {
     $fake = New-FakeBootstrapOps
-    $result = Invoke-ZrokBootstrap -Ops $fake.Ops -ReservedName 'devflow-mixed' -EnableRemoting $true
+    $result = Invoke-ZrokBootstrap -Ops $fake.Ops -ReservedName 'test-reserved-name' -EnableRemoting $true
     Assert-True $result.ok 'configured bootstrap should succeed'
     Assert-Equal $fake.State.tokenReads 0 'configured environment must not prompt'
     Assert-Equal $fake.State.installService 0 'running service must not reinstall'
@@ -235,7 +235,7 @@ Invoke-Case 'already configured machine performs no destructive mutation' {
 
 Invoke-Case 'partial environment prompts only for enablement' {
     $fake = New-FakeBootstrapOps -EnvironmentEnabled:$false
-    $result = Invoke-ZrokBootstrap -Ops $fake.Ops -ReservedName 'devflow-mixed' -EnableRemoting $true
+    $result = Invoke-ZrokBootstrap -Ops $fake.Ops -ReservedName 'test-reserved-name' -EnableRemoting $true
     Assert-True $result.ok 'partial environment should recover'
     Assert-Equal $fake.State.tokenReads 1 'missing environment requests token'
     Assert-Equal $fake.State.enable 1 'missing environment enables once'
@@ -244,7 +244,7 @@ Invoke-Case 'partial environment prompts only for enablement' {
 
 Invoke-Case 'stopped service is started without reinstall' {
     $fake = New-FakeBootstrapOps -ServiceState Stopped
-    $result = Invoke-ZrokBootstrap -Ops $fake.Ops -ReservedName 'devflow-mixed' -EnableRemoting $true
+    $result = Invoke-ZrokBootstrap -Ops $fake.Ops -ReservedName 'test-reserved-name' -EnableRemoting $true
     Assert-True $result.ok 'stopped service should recover'
     Assert-Equal $fake.State.installService 0 'stopped service must not reinstall'
     Assert-Equal $fake.State.startService 1 'stopped service should start'
@@ -278,7 +278,7 @@ Invoke-Case 'ordinary remoting enrollment failure remains fatal' {
 
 Invoke-Case 'reserved-name conflict is actionable and non-destructive' {
     $fake = New-FakeBootstrapOps -NameState Conflict
-    $result = Invoke-ZrokBootstrap -Ops $fake.Ops -ReservedName 'devflow-mixed' -EnableRemoting $true
+    $result = Invoke-ZrokBootstrap -Ops $fake.Ops -ReservedName 'test-reserved-name' -EnableRemoting $true
     Assert-True (-not $result.ok) 'name conflict should fail'
     Assert-Equal $result.code 'reserved-name-conflict' 'name conflict code'
     Assert-Equal $fake.State.createName 0 'conflict must not create/overwrite name'
@@ -286,14 +286,14 @@ Invoke-Case 'reserved-name conflict is actionable and non-destructive' {
 
 Invoke-Case 'download failure returns structured error' {
     $fake = New-FakeBootstrapOps -ZrokInstalled:$false -FailOperation InstallZrok
-    $result = Invoke-ZrokBootstrap -Ops $fake.Ops -ReservedName 'devflow-mixed' -EnableRemoting $true
+    $result = Invoke-ZrokBootstrap -Ops $fake.Ops -ReservedName 'test-reserved-name' -EnableRemoting $true
     Assert-True (-not $result.ok) 'download failure should fail'
     Assert-Equal $result.code 'download-failed' 'download failure code'
 }
 
 Invoke-Case 'bad token returns structured error without token leakage' {
     $fake = New-FakeBootstrapOps -EnvironmentEnabled:$false -FailOperation EnableEnvironment
-    $result = Invoke-ZrokBootstrap -Ops $fake.Ops -ReservedName 'devflow-mixed' -EnableRemoting $true
+    $result = Invoke-ZrokBootstrap -Ops $fake.Ops -ReservedName 'test-reserved-name' -EnableRemoting $true
     $json = $result | ConvertTo-Json -Depth 8
     Assert-True (-not $result.ok) 'bad token should fail'
     Assert-Equal $result.code 'enable-failed' 'bad token code'

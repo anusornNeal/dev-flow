@@ -76,7 +76,7 @@ If another enrolled machine is actively serving the same reserved name, this mac
 Defaults can be tuned without changing the MCP endpoint contract:
 
 ```env
-DEVFLOW_ZROK_RESERVED_NAME="devflow-mixed"
+DEVFLOW_ZROK_RESERVED_NAME="your-reserved-name"
 # Optional fallback; live /api/zrok/status baseUrl takes precedence.
 DEVFLOW_ZROK_PUBLIC_URL="https://your-current-zrok-endpoint.example"
 DEVFLOW_ZROK_PROBE_INTERVAL_MS=15000

@@ -38,7 +38,7 @@ These rules apply to every task in this plan. They are copied verbatim from `doc
 
 - [ ] **Step 1: Create DevFlow child card `DVF-0188a`**
 
-Run from `C:\Users\tatar\Projects\dev-flow`:
+Run from the repository root:
 
 ```bash
 curl -s -X POST http://127.0.0.1:3000/api/tasks \

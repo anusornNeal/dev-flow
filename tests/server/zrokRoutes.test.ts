@@ -9,8 +9,8 @@ import type { ZrokRuntimeService, ZrokRuntimeStatus, ZrokTakeoverResult } from '
 const SAFE_STATUS: ZrokRuntimeStatus = {
   status: 'standby',
   statusLabel: 'Standby',
-  baseUrl: 'https://devflow-mixed.shares.zrok.io',
-  mcpUrl: 'https://devflow-mixed.shares.zrok.io/mcp',
+  baseUrl: 'https://zrok-test.example.test',
+  mcpUrl: 'https://zrok-test.example.test/mcp',
   agentService: { state: 'running' },
   share: { state: 'remote-active', owner: 'remote' },
   publicReachability: { state: 'healthy', routedToThisMachine: false },

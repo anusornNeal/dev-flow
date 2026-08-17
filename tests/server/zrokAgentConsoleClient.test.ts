@@ -118,7 +118,7 @@ test('normalizes the live Agent console frontendEndpoint array schema', async ()
         shareMode: 'public',
         backendMode: 'proxy',
         backendEndpoint: 'http://127.0.0.1:3000',
-        frontendEndpoint: ['devflow-mixed.shares.zrok.io'],
+        frontendEndpoint: ['zrok-test.example.test'],
         status: 'active',
       }] },
     }),
@@ -129,7 +129,7 @@ test('normalizes the live Agent console frontendEndpoint array schema', async ()
     shareMode: 'public',
     backendMode: 'proxy',
     backendEndpoint: 'http://127.0.0.1:3000',
-    frontendEndpoint: 'devflow-mixed.shares.zrok.io',
+    frontendEndpoint: 'zrok-test.example.test',
     status: 'active',
   }]);
   assert.equal(JSON.stringify(status).includes('secret'), false);

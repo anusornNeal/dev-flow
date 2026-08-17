@@ -33,24 +33,24 @@ assert.deepEqual(buildNpmInvocation(['run', 'dev:server'], { npm_execpath: 'C:\\
   args: ['C:\\node\\npm-cli.js', 'run', 'dev:server'],
 });
 
-assert.equal(normalizeZrokPublicUrl({ publicUrl: 'devflow-mixed.shares.zrok.io/mcp' }), 'https://devflow-mixed.shares.zrok.io/mcp');
+assert.equal(normalizeZrokPublicUrl({ publicUrl: 'zrok-test.example.test/mcp' }), 'https://zrok-test.example.test/mcp');
 assert.equal(
   normalizeZrokPublicUrl({ publicUrl: 'https://custom.example/app///?ignored=query#ignored' }),
   'https://custom.example/app',
 );
 assert.equal(normalizeZrokPublicUrl({ publicUrl: 'https://user:secret@custom.example/app' }), '');
-assert.equal(normalizeZrokPublicUrl({ reservedName: 'devflow-mixed' }), '');
-assert.equal(normalizeZrokPublicUrl({ reservedName: 'devflow-mixed.shares.zrok.io' }), '');
+assert.equal(normalizeZrokPublicUrl({ reservedName: 'test-reserved-name' }), '');
+assert.equal(normalizeZrokPublicUrl({ reservedName: 'not-a-public-url.example.test' }), '');
 assert.equal(normalizeZrokPublicUrl({}), '');
 
 assert.deepEqual(resolveStartAllOptions({
   DEVFLOW_PORT: '3456',
-  DEVFLOW_ZROK_RESERVED_NAME: 'devflow-mixed',
+  DEVFLOW_ZROK_RESERVED_NAME: 'test-reserved-name',
   DEVFLOW_OPEN_BROWSER_DELAY_MS: '250',
 }), {
   port: 3456,
   zrokPublicUrl: '',
-  zrokReservedName: 'devflow-mixed',
+  zrokReservedName: 'test-reserved-name',
   openBrowser: true,
   openBrowserDelayMs: 250,
   zrokProbeIntervalMs: 15000,
@@ -65,7 +65,7 @@ assert.equal(capped.zrokProbeStartupGraceMs, 120000);
 
 const options = resolveStartAllOptions({
   DEVFLOW_PORT: '3456',
-  DEVFLOW_ZROK_PUBLIC_URL: 'https://devflow-mixed.shares.zrok.io',
+  DEVFLOW_ZROK_PUBLIC_URL: 'https://zrok-test.example.test',
   DEVFLOW_OPEN_BROWSER_DELAY_MS: '250',
 });
 const plan = buildStartAllPlan(options, 'all-token', 'all');
@@ -92,7 +92,7 @@ assert.equal(bootstrapInvocationWithoutName.args.includes('-ReservedName'), fals
 
 assert.deepEqual(parseZrokBootstrapResult(JSON.stringify({
   status: 'ready',
-  reservedName: 'devflow-mixed',
+  reservedName: 'test-reserved-name',
   message: 'ready',
 })), {
   ready: true,
@@ -111,21 +111,21 @@ assert.deepEqual(parseZrokBootstrapResult(JSON.stringify({
 });
 assert.deepEqual(parseZrokBootstrapResult([
   'progress line',
-  JSON.stringify({ ready: true, publicUrl: 'https://devflow-mixed.shares.zrok.io/mcp' }),
+  JSON.stringify({ ready: true, publicUrl: 'https://zrok-test.example.test/mcp' }),
 ].join('\n')), {
   ready: true,
-  publicUrl: 'https://devflow-mixed.shares.zrok.io/mcp',
+  publicUrl: 'https://zrok-test.example.test/mcp',
   message: 'zrok bootstrap is ready.',
 });
-assert.equal(parseZrokBootstrapResult('not-json', 'https://fallback.shares.zrok.io').ready, false);
-assert.equal(parseZrokBootstrapResult('not-json', 'https://fallback.shares.zrok.io').publicUrl, 'https://fallback.shares.zrok.io');
+assert.equal(parseZrokBootstrapResult('not-json', 'https://fallback.example.test').ready, false);
+assert.equal(parseZrokBootstrapResult('not-json', 'https://fallback.example.test').publicUrl, 'https://fallback.example.test');
 const notReady = parseZrokBootstrapResult(JSON.stringify({ ready: false, status: 'degraded', message: 'service stopped' }));
 assert.equal(notReady.ready, false);
 assert.equal(notReady.message, 'service stopped');
 
-assert.equal(apiCapabilitiesUrl('https://devflow-mixed.shares.zrok.io'), 'https://devflow-mixed.shares.zrok.io/api/capabilities');
+assert.equal(apiCapabilitiesUrl('https://zrok-test.example.test'), 'https://zrok-test.example.test/api/capabilities');
 assert.equal(apiCapabilitiesUrl('https://custom.example/app'), 'https://custom.example/app/api/capabilities');
-assert.equal(apiZrokStatusUrl('https://devflow-mixed.shares.zrok.io'), 'https://devflow-mixed.shares.zrok.io/api/zrok/status');
+assert.equal(apiZrokStatusUrl('https://zrok-test.example.test'), 'https://zrok-test.example.test/api/zrok/status');
 const dynamicRuntime = await probeZrokRuntimeStatus('http://localhost:3456', 500, async () => new Response(JSON.stringify({
   status: 'online',
   baseUrl: 'https://dynamic-account.example/app',

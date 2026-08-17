@@ -49,17 +49,13 @@ Paste the zrok account token from your zrok account. The prompt uses a secure st
 
 The bootstrap then installs/repairs the local zrok tooling as needed, creates or reuses the configured reserved public name, enrolls the agent for remote control, and starts the `zrokAgent` service. Later DevFlow launches reuse that persistent service/share instead of creating a new public URL.
 
-The default reserved name is `devflow-mixed`, so the default public base URL is:
-
-```text
-https://devflow-mixed.shares.zrok.io
-```
-
-If you use another reserved name, configure it before first bootstrap:
+DevFlow does not bake a reserved name or public URL into the repository. If you want a stable reserved name, configure it before first bootstrap:
 
 ```env
 DEVFLOW_ZROK_RESERVED_NAME="your-reserved-name"
 ```
+
+After bootstrap, use the public base URL reported by the zrok status panel/API. Do not derive it by concatenating the reserved name with a provider domain.
 
 DevFlow runs locally at:
 
@@ -97,10 +93,10 @@ Secrets entered through Settings are stored through DevFlow's credential-vault a
 
 ### 5. Connect DevFlow MCP to ChatGPT
 
-Use the MCP URL shown in the zrok status panel. With the default reserved name it is:
+Use the MCP URL shown in the zrok status panel. The repository does not contain a baked public endpoint. A configured endpoint will have the `/mcp` path, for example:
 
 ```text
-https://devflow-mixed.shares.zrok.io/mcp
+https://your-zrok-public-host.example/mcp
 ```
 
 Use `/mcp` for new ChatGPT connections. `/sse` is a legacy compatibility transport and should not be used for a new setup.
@@ -119,10 +115,10 @@ OpenAI can change the exact ChatGPT menu names and plan/workspace availability o
 
 ### 6. Verify the connection
 
-Open the status panel and confirm the zrok state is `Online`, then verify the public capabilities endpoint. With the default name:
+Open the status panel and confirm the zrok state is `Online`, then verify the public capabilities endpoint using the live base URL, for example:
 
 ```text
-https://devflow-mixed.shares.zrok.io/api/capabilities
+https://your-zrok-public-host.example/api/capabilities
 ```
 
 Finally, ask ChatGPT to perform a read-only action such as listing DevFlow projects or checking DevFlow health.
@@ -168,8 +164,9 @@ Common values:
 
 ```env
 DEVFLOW_PORT=3000
-DEVFLOW_ZROK_RESERVED_NAME="devflow-mixed"
-DEVFLOW_ZROK_PUBLIC_URL="https://devflow-mixed.shares.zrok.io"
+DEVFLOW_ZROK_RESERVED_NAME="your-reserved-name"
+# Optional fallback only; live /api/zrok/status remains authoritative.
+DEVFLOW_ZROK_PUBLIC_URL="https://your-zrok-public-host.example"
 DEVFLOW_OPEN_BROWSER=true
 DEVFLOW_OPEN_BROWSER_DELAY_MS=4000
 

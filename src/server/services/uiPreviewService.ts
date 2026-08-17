@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { UiPreviewError } from '../domain/uiPreview.js';
-import type { UiPreviewViewport, UiSpecV1 } from '../domain/uiPreview.js';
+import type { UiPreviewScreen, UiPreviewViewport, UiSpecV1 } from '../domain/uiPreview.js';
 import {
   fingerprintCanonicalRequest,
   hashUiPreviewContent,
@@ -19,10 +19,12 @@ export interface UiPreviewServiceDependencies {
 export interface CreateUiPreviewInput {
   taskId?: string | null;
   title?: string | null;
-  html: string;
+  html?: string;
   css?: string | null;
   js?: string | null;
-  spec: unknown;
+  spec?: unknown;
+  screens?: unknown;
+  defaultScreenId?: unknown;
   viewport?: Partial<UiPreviewViewport> | null;
   idempotencyKey?: string;
 }
@@ -35,6 +37,8 @@ export interface UpdateUiPreviewInput {
   css?: string | null;
   js?: string | null;
   spec?: unknown;
+  screens?: unknown;
+  defaultScreenId?: unknown;
   viewport?: Partial<UiPreviewViewport> | null;
   idempotencyKey?: string;
 }
@@ -65,7 +69,7 @@ function normalizeTaskId(value: string | null | undefined) {
 
 function updateRequestFingerprint(input: UpdateUiPreviewInput) {
   const patch: Record<string, unknown> = {};
-  for (const key of ['title', 'html', 'css', 'js', 'spec', 'viewport'] as const) {
+  for (const key of ['title', 'html', 'css', 'js', 'spec', 'screens', 'defaultScreenId', 'viewport'] as const) {
     if (hasOwn(input, key)) patch[key] = input[key];
   }
   return fingerprintCanonicalRequest({
@@ -73,6 +77,50 @@ function updateRequestFingerprint(input: UpdateUiPreviewInput) {
     expectedRevision: input.expectedRevision ?? null,
     patch,
   });
+}
+
+type RevisionWithWorkspace = {
+  title: string | null;
+  html?: string;
+  css?: string;
+  js?: string;
+  spec?: UiSpecV1;
+  screens?: UiPreviewScreen[];
+  defaultScreenId?: string;
+  viewport: UiPreviewViewport;
+};
+
+function canonicalWorkspace(revision: RevisionWithWorkspace) {
+  const screens = Array.isArray(revision.screens) && revision.screens.length > 0
+    ? revision.screens
+    : [{
+        screenId: 'main',
+        name: revision.spec?.summary?.screen?.trim() || revision.title?.trim() || 'Main',
+        html: revision.html || '',
+        css: revision.css || '',
+        js: revision.js || '',
+        spec: revision.spec as UiSpecV1,
+      }];
+  const defaultScreenId = typeof revision.defaultScreenId === 'string'
+    && screens.some((screen) => screen.screenId === revision.defaultScreenId)
+    ? revision.defaultScreenId
+    : screens[0].screenId;
+  const defaultScreen = screens.find((screen) => screen.screenId === defaultScreenId) || screens[0];
+  return { screens, defaultScreenId, defaultScreen };
+}
+
+function workspaceSummary(revision: RevisionWithWorkspace) {
+  const workspace = canonicalWorkspace(revision);
+  return {
+    screenCount: workspace.screens.length,
+    defaultScreenId: workspace.defaultScreenId,
+    defaultScreenSummary: {
+      screenId: workspace.defaultScreen.screenId,
+      name: workspace.defaultScreen.name,
+      specSummary: workspace.defaultScreen.spec.summary,
+    },
+    specSummary: workspace.defaultScreen.spec.summary,
+  };
 }
 
 export function createUiPreviewService(deps: UiPreviewServiceDependencies) {
@@ -92,7 +140,7 @@ export function createUiPreviewService(deps: UiPreviewServiceDependencies) {
       title: revision.title,
       contentHash: revision.contentHash,
       viewport: revision.viewport,
-      specSummary: revision.spec.summary,
+      ...workspaceSummary(revision as unknown as RevisionWithWorkspace),
       previewUrl: resolveUiPreviewUrl({ previewId: identity.previewId, revision: identity.revision, port: deps.runtimePort() }),
     };
   }
@@ -123,17 +171,44 @@ export function createUiPreviewService(deps: UiPreviewServiceDependencies) {
       if (!preview) throw new UiPreviewError('UI_PREVIEW_NOT_FOUND', `UI preview '${input.previewId}' was not found.`);
       const current = deps.repository.getRevision(input.previewId, preview.latestRevision);
       if (!current) throw new UiPreviewError('UI_PREVIEW_NOT_FOUND', `UI preview '${input.previewId}' has no current revision.`);
+      const currentWorkspace = canonicalWorkspace(current as unknown as RevisionWithWorkspace);
       const viewport = hasOwn(input, 'viewport')
         ? { ...current.viewport, ...(input.viewport || {}) }
         : current.viewport;
-      const resolved = normalizeUiPreviewInput({
-        title: hasOwn(input, 'title') ? input.title : current.title,
-        html: hasOwn(input, 'html') ? (input.html as string) : current.html,
-        css: hasOwn(input, 'css') ? input.css : current.css,
-        js: hasOwn(input, 'js') ? input.js : current.js,
-        spec: hasOwn(input, 'spec') ? input.spec : current.spec,
-        viewport,
-      });
+      const hasCanonicalInput = hasOwn(input, 'screens') || hasOwn(input, 'defaultScreenId');
+      const hasLegacySourceInput = ['html', 'css', 'js', 'spec'].some((key) => hasOwn(input, key));
+      let resolved;
+      if (hasCanonicalInput) {
+        resolved = normalizeUiPreviewInput({
+          title: hasOwn(input, 'title') ? input.title : current.title,
+          screens: input.screens,
+          defaultScreenId: input.defaultScreenId,
+          viewport,
+        });
+      } else if (hasLegacySourceInput) {
+        const legacyCompatible = currentWorkspace.screens.length === 1 && currentWorkspace.defaultScreen.screenId === 'main';
+        if (!legacyCompatible) {
+          throw new UiPreviewError(
+            'UI_PREVIEW_VALIDATION_FAILED',
+            'Legacy html/css/js/spec patch fields cannot modify a canonical workspace; replace the complete screens array instead.',
+          );
+        }
+        resolved = normalizeUiPreviewInput({
+          title: hasOwn(input, 'title') ? input.title : current.title,
+          html: hasOwn(input, 'html') ? (input.html as string) : currentWorkspace.defaultScreen.html,
+          css: hasOwn(input, 'css') ? input.css : currentWorkspace.defaultScreen.css,
+          js: hasOwn(input, 'js') ? input.js : currentWorkspace.defaultScreen.js,
+          spec: hasOwn(input, 'spec') ? input.spec : currentWorkspace.defaultScreen.spec,
+          viewport,
+        });
+      } else {
+        resolved = normalizeUiPreviewInput({
+          title: hasOwn(input, 'title') ? input.title : current.title,
+          screens: currentWorkspace.screens,
+          defaultScreenId: currentWorkspace.defaultScreenId,
+          viewport,
+        });
+      }
       const contentHash = hashUiPreviewContent(resolved);
       const result = deps.repository.appendRevision({
         previewId: input.previewId,
@@ -163,10 +238,14 @@ export function createUiPreviewService(deps: UiPreviewServiceDependencies) {
     const port = deps.runtimePort();
     return {
       ...page,
-      items: page.items.map((item) => ({
-        ...item,
-        latestPreviewUrl: resolveUiPreviewUrl({ previewId: item.previewId, port }),
-      })),
+      items: page.items.map((item) => {
+        const revision = deps.repository.getRevision(item.previewId, item.latestRevision);
+        return {
+          ...item,
+          ...(revision ? workspaceSummary(revision as unknown as RevisionWithWorkspace) : {}),
+          latestPreviewUrl: resolveUiPreviewUrl({ previewId: item.previewId, port }),
+        };
+      }),
     };
   }
 
@@ -184,16 +263,19 @@ export function createUiPreviewService(deps: UiPreviewServiceDependencies) {
       title: revision.title,
       contentHash: revision.contentHash,
       viewport: revision.viewport,
-      specSummary: revision.spec.summary,
+      ...workspaceSummary(revision as unknown as RevisionWithWorkspace),
       previewUrl: resolveUiPreviewUrl({ previewId: preview.id, revision: revision.revision, port: deps.runtimePort() }),
     };
     if (input.mode === 'source') {
+      const workspace = canonicalWorkspace(revision as unknown as RevisionWithWorkspace);
       return {
         ...summary,
-        html: revision.html,
-        css: revision.css,
-        js: revision.js,
-        spec: revision.spec as UiSpecV1,
+        screens: workspace.screens,
+        defaultScreenId: workspace.defaultScreenId,
+        html: workspace.defaultScreen.html,
+        css: workspace.defaultScreen.css,
+        js: workspace.defaultScreen.js,
+        spec: workspace.defaultScreen.spec,
       };
     }
     return summary;

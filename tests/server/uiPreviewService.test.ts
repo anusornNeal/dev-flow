@@ -16,6 +16,91 @@ const repository = createUiPreviewRepository(db as any);
 const service = createUiPreviewService({ repository, runtimePort: () => 43123 });
 const spec = { schemaVersion: 1, summary: { screen: 'Service' }, sections: [{ id: 'main' }] };
 
+function createWorkspaceService() {
+  const previews = new Map<string, { record: any; revisions: any[] }>();
+  const idempotency = new Map<string, { fingerprint: string; result: any }>();
+  let previewId = 0;
+  const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
+  const repository = {
+    runIdempotent(operation: string, key: string | undefined, fingerprint: string, work: () => any) {
+      if (!key) return { replayed: false, result: work() };
+      const storageKey = `${operation}:${key}`;
+      const existing = idempotency.get(storageKey);
+      if (existing) {
+        if (existing.fingerprint !== fingerprint) {
+          const error: any = new Error('idempotency conflict');
+          error.code = 'UI_PREVIEW_IDEMPOTENCY_CONFLICT';
+          throw error;
+        }
+        return { replayed: true, result: clone(existing.result) };
+      }
+      const result = work();
+      idempotency.set(storageKey, { fingerprint, result: clone(result) });
+      return { replayed: false, result };
+    },
+    createPreview(input: any) {
+      const createdAt = '2026-08-17T00:00:00.000Z';
+      const record = { id: input.id, taskId: input.taskId ?? null, latestRevision: 1, createdAt, updatedAt: createdAt };
+      const revision = { ...clone(input), previewId: input.id, revision: 1, createdAt };
+      previews.set(input.id, { record, revisions: [revision] });
+      return record;
+    },
+    getPreview(id: string) {
+      return previews.get(id)?.record ?? null;
+    },
+    getRevision(id: string, revision?: number) {
+      const stored = previews.get(id);
+      if (!stored) return null;
+      const selected = revision ?? stored.record.latestRevision;
+      return stored.revisions.find((item) => item.revision === selected) ?? null;
+    },
+    appendRevision(input: any) {
+      const stored = previews.get(input.previewId);
+      if (!stored) throw new Error('missing preview');
+      if (input.expectedRevision !== undefined && input.expectedRevision !== stored.record.latestRevision) {
+        const error: any = new Error('revision conflict');
+        error.code = 'UI_PREVIEW_REVISION_CONFLICT';
+        throw error;
+      }
+      const current = stored.revisions[stored.revisions.length - 1];
+      const comparable = (value: any) => JSON.stringify({
+        title: value.title,
+        screens: value.screens,
+        defaultScreenId: value.defaultScreenId,
+        viewport: value.viewport,
+      });
+      if (comparable(current) === comparable(input)) return { changed: false, preview: stored.record, revision: current };
+      const nextRevision = stored.record.latestRevision + 1;
+      const createdAt = `2026-08-17T00:00:0${nextRevision}.000Z`;
+      const revision = { ...clone(input), previewId: input.previewId, revision: nextRevision, createdAt };
+      stored.revisions.push(revision);
+      stored.record.latestRevision = nextRevision;
+      stored.record.updatedAt = createdAt;
+      return { changed: true, preview: stored.record, revision };
+    },
+    listPreviews(input: any = {}) {
+      const items = [...previews.values()].map(({ record, revisions }) => {
+        const revision = revisions[revisions.length - 1];
+        return {
+          previewId: record.id,
+          taskId: record.taskId,
+          title: revision.title,
+          specSummary: revision.spec?.summary ?? {},
+          latestRevision: record.latestRevision,
+          createdAt: record.createdAt,
+          updatedAt: record.updatedAt,
+          linkedTask: null,
+        };
+      });
+      return { items, nextCursor: null, limit: input.limit ?? 20, filter: input.filter ?? 'all' };
+    },
+  } as any;
+  return {
+    service: createUiPreviewService({ repository, runtimePort: () => 43123, createId: () => `uip_workspace_${++previewId}` }),
+    repository,
+  };
+}
+
 function reset() {
   db.exec('DELETE FROM task_ui_evidence; DELETE FROM ui_preview_idempotency; DELETE FROM ui_preview_revisions; DELETE FROM ui_previews; DELETE FROM tasks;');
 }
@@ -46,6 +131,70 @@ test('create returns bounded metadata and source is opt-in', () => {
   assert.equal(source.css, 'main{}');
   assert.equal(source.js, 'window.x=1');
   assert.deepEqual(source.spec, spec);
+});
+
+test('multi-screen service preserves canonical workspace metadata, full replacement, and idempotency identity', () => {
+  const { service: workspaceService } = createWorkspaceService();
+  const screens = [
+    { screenId: 'overview', name: 'Overview', html: '<main>secret-overview</main>', css: 'o{}', js: 'o()', spec: { schemaVersion: 1, summary: { screen: 'Overview' } } },
+    { screenId: 'details', name: 'Details', html: '<main>secret-details</main>', css: 'd{}', js: 'd()', spec: { schemaVersion: 1, summary: { screen: 'Details' } } },
+  ];
+  const created = workspaceService.create({ title: 'Workspace', screens, defaultScreenId: 'details', idempotencyKey: 'workspace-create' });
+  assert.equal(created.screenCount, 2);
+  assert.equal(created.defaultScreenId, 'details');
+  assert.equal(created.defaultScreenSummary.name, 'Details');
+  assert.equal(created.specSummary.screen, 'Details');
+
+  const summary = workspaceService.get({ previewId: created.previewId });
+  assert.equal(summary.screenCount, 2);
+  assert.equal(summary.defaultScreenId, 'details');
+  assert.equal('screens' in summary, false);
+  assert.equal('html' in summary, false);
+
+  const source = workspaceService.get({ previewId: created.previewId, mode: 'source' });
+  assert.deepEqual(source.screens, screens);
+  assert.equal(source.defaultScreenId, 'details');
+  assert.equal(source.html, '<main>secret-details</main>', 'legacy source aliases follow the default screen');
+  assert.equal(source.spec.summary.screen, 'Details');
+
+  const page = workspaceService.list({ filter: 'all', limit: 20 });
+  assert.equal(page.items[0].screenCount, 2);
+  assert.equal(page.items[0].defaultScreenId, 'details');
+  assert.equal(page.items[0].defaultScreenSummary.name, 'Details');
+  assert.doesNotMatch(JSON.stringify(page), /secret-overview|secret-details|o\(\)|d\(\)/);
+
+  const replacement = [
+    { ...screens[0], html: '<main>overview-v2</main>' },
+    { ...screens[1], html: '<main>details-v2</main>' },
+  ];
+  const updated = workspaceService.update({
+    previewId: created.previewId,
+    expectedRevision: 1,
+    screens: replacement,
+    defaultScreenId: 'overview',
+    idempotencyKey: 'workspace-update',
+  });
+  assert.equal(updated.revision, 2);
+  assert.equal(updated.defaultScreenId, 'overview');
+  assert.equal(updated.defaultScreenSummary.name, 'Overview');
+
+  const replay = workspaceService.update({
+    previewId: created.previewId,
+    expectedRevision: 1,
+    screens: replacement,
+    defaultScreenId: 'overview',
+    idempotencyKey: 'workspace-update',
+  });
+  assert.equal(replay.revision, 2);
+  assert.equal(replay.replayed, true);
+  assert.throws(() => workspaceService.update({
+    previewId: created.previewId,
+    expectedRevision: 1,
+    screens: [{ ...replacement[0], html: '<main>different</main>' }, replacement[1]],
+    defaultScreenId: 'overview',
+    idempotencyKey: 'workspace-update',
+  }), (error: any) => error?.code === 'UI_PREVIEW_IDEMPOTENCY_CONFLICT');
+  assert.throws(() => workspaceService.update({ previewId: created.previewId, html: '<main>legacy patch</main>' }), /replace the complete screens array/i);
 });
 
 test('canonical hash is stable across spec key insertion order and exact-source significant', () => {
@@ -130,5 +279,5 @@ test('delete removes standalone previews and rejects linked or missing previews'
 
 test('create/update/get core does not depend on project workspace, git, verification, or playwright services', async () => {
   const source = fs.readFileSync(path.resolve('src/server/services/uiPreviewService.ts'), 'utf8');
-  assert.doesNotMatch(source, /gitService|workspace|runProjectCommand|playwright|screenshot/i);
+  assert.doesNotMatch(source, /gitService|sessionWorkspace|projectWorkspace|runProjectCommand|playwright|screenshot/i);
 });

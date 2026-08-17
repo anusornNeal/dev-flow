@@ -35,6 +35,13 @@ function summaryLabel(item: UiPreviewLibraryItem) {
   const screen = typeof item.specSummary.screen === 'string' ? item.specSummary.screen : '';
   return item.title || screen || 'Untitled preview';
 }
+function workspaceSummary(item: UiPreviewLibraryItem) {
+  if (!item.screenCount || item.screenCount <= 1) return null;
+  const defaultName = item.defaultScreenSummary?.name
+    || (typeof item.defaultScreenSummary?.specSummary.screen === 'string' ? item.defaultScreenSummary.specSummary.screen : '');
+  return defaultName ? `${item.screenCount} screens · Default ${defaultName}` : `${item.screenCount} screens`;
+}
+
 
 export default function UiPreviewLibraryPage({ onOpenTask, initialItems = [], disableAutoLoad = false }: UiPreviewLibraryPageProps) {
   const [filter, setFilter] = useState<UiPreviewLibraryFilter>('all');
@@ -248,12 +255,14 @@ export default function UiPreviewLibraryPage({ onOpenTask, initialItems = [], di
         {items.map((item) => {
           const linked = Boolean(item.taskId && item.linkedTask);
           const pending = Boolean(pendingAttach[item.previewId]);
+          const workspace = workspaceSummary(item);
           const deleting = Boolean(pendingDelete[item.previewId]);
           return (
             <article key={item.previewId} className="rounded-2xl border border-[#e5d4bb] bg-white p-4 shadow-sm dark:border-[#584a3b] dark:bg-[#292119]">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <h3 className="truncate text-sm font-extrabold text-[#3e3129] dark:text-[#f3eadf]" title={summaryLabel(item)}>{summaryLabel(item)}</h3>
+                  {workspace && <p className="mt-1 truncate text-[10px] font-bold text-[#927d6c] dark:text-[#ad9d91]">{workspace}</p>}
                 </div>
                 <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-black ${linked ? 'bg-[#e9f7e7] text-[#39713b] dark:bg-[#263a27] dark:text-[#b8dfb9]' : 'bg-[#fff0d6] text-[#95601e] dark:bg-[#3a2f26] dark:text-[#f0b84d]'}`}>{linked ? 'Linked' : 'Standalone'}</span>
               </div>

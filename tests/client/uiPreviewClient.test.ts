@@ -33,6 +33,7 @@ test('normalizeTaskUiEvidencePage keeps metadata/spec urls and bounded cursor me
       screenshotUrl: 'http://127.0.0.1:3000/a/shot',
       attachedAt: '2026-08-11T02:00:00.000Z',
       current: true,
+      primaryScreenId: 'checkout',
       spec: { schemaVersion: 1, summary: { screen: 'Checkout' } },
     }],
     nextCursor: 'cursor-2',
@@ -44,6 +45,7 @@ test('normalizeTaskUiEvidencePage keeps metadata/spec urls and bounded cursor me
   assert.equal(page.items[0].frozenRevision, 2);
   assert.equal(page.items[0].latestRevision, 4);
   assert.equal(page.items[0].frozenPreviewUrl, 'http://127.0.0.1:3000/p/frozen');
+  assert.equal(page.items[0].primaryScreenId, 'checkout');
   assert.deepEqual(page.items[0].spec, { schemaVersion: 1, summary: { screen: 'Checkout' } });
   assert.equal(page.nextCursor, 'cursor-2');
   assert.equal(page.limit, 20);
@@ -55,13 +57,56 @@ test('preview library path is bounded and never requests raw source mode', () =>
   assert.doesNotMatch(buildUiPreviewLibraryPath({ filter: 'standalone' }), /mode=source|revision=/);
 });
 
-test('preview library normalization keeps latest summary and linked task context only', () => {
-  const page = normalizeUiPreviewLibraryPage({ items: [{ previewId: 'uip-1', taskId: 'task-1', title: 'Checkout', specSummary: { screen: 'Checkout' }, latestRevision: 4, createdAt: 'a', updatedAt: 'b', latestPreviewUrl: 'http://127.0.0.1:3000/latest', linkedTask: { id: 'task-1', displayId: 'DVF-0502', title: 'Task', projectId: 'project-a' }, html: 'secret' }], nextCursor: 'c', limit: 20 });
+test('preview library normalization keeps bounded workspace metadata and linked task context only', () => {
+  const page = normalizeUiPreviewLibraryPage({
+    items: [{
+      previewId: 'uip-1',
+      taskId: 'task-1',
+      title: 'Checkout',
+      specSummary: { screen: 'Checkout' },
+      screenCount: 3,
+      defaultScreenId: 'checkout',
+      defaultScreenSummary: { screenId: 'checkout', name: 'Checkout', specSummary: { screen: 'Checkout' }, html: 'secret-screen-source' },
+      latestRevision: 4,
+      createdAt: 'a',
+      updatedAt: 'b',
+      latestPreviewUrl: 'http://127.0.0.1:3000/latest',
+      linkedTask: { id: 'task-1', displayId: 'DVF-0502', title: 'Task', projectId: 'project-a' },
+      html: 'secret',
+      screens: [{ screenId: 'checkout', html: 'raw-source' }],
+    }],
+    nextCursor: 'c',
+    limit: 20,
+  });
   assert.equal(page.items[0].latestRevision, 4);
   assert.equal(page.items[0].latestPreviewUrl, 'http://127.0.0.1:3000/latest');
+  assert.equal(page.items[0].screenCount, 3);
+  assert.equal(page.items[0].defaultScreenId, 'checkout');
+  assert.deepEqual(page.items[0].defaultScreenSummary, { screenId: 'checkout', name: 'Checkout', specSummary: { screen: 'Checkout' } });
   assert.deepEqual(page.items[0].linkedTask, { id: 'task-1', displayId: 'DVF-0502', title: 'Task', projectId: 'project-a' });
   assert.equal('html' in page.items[0], false);
+  assert.equal('screens' in page.items[0], false);
+  assert.equal('html' in (page.items[0].defaultScreenSummary || {}), false);
   assert.equal(page.nextCursor, 'c');
+});
+
+test('preview library normalization drops malformed workspace metadata', () => {
+  const page = normalizeUiPreviewLibraryPage({ items: [{
+    previewId: 'uip-1',
+    taskId: null,
+    title: 'Checkout',
+    specSummary: {},
+    screenCount: -4,
+    defaultScreenId: '../unsafe',
+    defaultScreenSummary: { screenId: '../unsafe', name: 42, specSummary: 'bad' },
+    latestRevision: 1,
+    createdAt: 'a',
+    updatedAt: 'b',
+    latestPreviewUrl: 'http://127.0.0.1:3000/latest',
+  }] });
+  assert.equal(page.items[0].screenCount, null);
+  assert.equal(page.items[0].defaultScreenId, null);
+  assert.equal(page.items[0].defaultScreenSummary, null);
 });
 
 test('library request gate invalidates stale filter, refresh, and navigation generations', () => {

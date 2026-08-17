@@ -77,12 +77,12 @@ test('section keeps one current card per preview, newest first, and groups older
   assert.doesNotMatch(html, /emptySection/);
 });
 
-test('current frozen screenshot is the safe Open Design target and missing frozen URL is not clickable', () => {
+test('current frozen screenshot is the safe Open Design target and deep-links its primary screen', () => {
   const clickable = renderToStaticMarkup(React.createElement(UiDesignEvidenceSection as any, {
-    evidence: [evidence()],
+    evidence: [evidence({ primaryScreenId: 'checkout', frozenPreviewUrl: 'http://127.0.0.1:3000/previews/a/2?revision=2' })],
   }));
   assert.match(clickable, /aria-label="Open Design: Preview A"/);
-  assert.match(clickable, /href="http:\/\/127\.0\.0\.1:3000\/previews\/a\/2"/);
+  assert.match(clickable, /href="http:\/\/127\.0\.0\.1:3000\/previews\/a\/2\?revision=2&amp;screenId=checkout"/);
   assert.match(clickable, /rel="noopener noreferrer"/);
 
   const withoutFrozenUrl = renderToStaticMarkup(React.createElement(UiDesignEvidenceSection as any, {
@@ -90,6 +90,11 @@ test('current frozen screenshot is the safe Open Design target and missing froze
   }));
   assert.match(withoutFrozenUrl, /artifacts\/a2\.png/);
   assert.doesNotMatch(withoutFrozenUrl, /Open Design/);
+
+  const legacy = renderToStaticMarkup(React.createElement(UiDesignEvidenceSection as any, {
+    evidence: [evidence({ primaryScreenId: null, frozenPreviewUrl: 'http://127.0.0.1:3000/previews/a/2' })],
+  }));
+  assert.match(legacy, /href="http:\/\/127\.0\.0\.1:3000\/previews\/a\/2"/);
 });
 
 test('Open Latest appears only when backend latestRevision is newer than frozen revision', () => {

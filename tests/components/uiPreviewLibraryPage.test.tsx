@@ -10,6 +10,9 @@ const sample = {
   taskId: null,
   title: 'Checkout concept',
   specSummary: { screen: 'Checkout' },
+  screenCount: 3,
+  defaultScreenId: 'checkout',
+  defaultScreenSummary: { screenId: 'checkout', name: 'Checkout', specSummary: { screen: 'Checkout' } },
   latestRevision: 4,
   createdAt: '2026-08-11T01:00:00.000Z',
   updatedAt: '2026-08-11T02:00:00.000Z',
@@ -30,6 +33,8 @@ test('library surface clearly communicates global/latest semantics and core acti
   assert.match(html, />Standalone</);
   assert.match(html, />Linked</);
   assert.match(html, /Latest rev 4/);
+  assert.match(html, /3 screens/);
+  assert.match(html, /Default Checkout/);
   assert.match(html, /Open Latest Preview/);
   assert.match(html, /Copy Latest Link/);
   assert.match(html, /Attach to Task/);
@@ -50,6 +55,22 @@ test('linked item keeps library presence and exposes task context/open action', 
   assert.match(html, /Open Task/);
   assert.doesNotMatch(html, /Attach to Task/);
   assert.doesNotMatch(html, /Delete/);
+});
+
+test('single-screen and legacy previews avoid noisy screen-count copy', () => {
+  const singleScreen = renderToStaticMarkup(React.createElement(UiPreviewLibraryPage as any, {
+    initialItems: [{ ...sample, screenCount: 1, defaultScreenId: 'main', defaultScreenSummary: { screenId: 'main', name: 'Checkout', specSummary: { screen: 'Checkout' } } }],
+    disableAutoLoad: true,
+    onOpenTask: () => {},
+  }));
+  assert.doesNotMatch(singleScreen, /1 screen/);
+
+  const legacy = renderToStaticMarkup(React.createElement(UiPreviewLibraryPage as any, {
+    initialItems: [{ ...sample, screenCount: null, defaultScreenId: null, defaultScreenSummary: null }],
+    disableAutoLoad: true,
+    onOpenTask: () => {},
+  }));
+  assert.doesNotMatch(legacy, /screens/);
 });
 
 test('untitled previews use a neutral label instead of exposing internal ids', () => {

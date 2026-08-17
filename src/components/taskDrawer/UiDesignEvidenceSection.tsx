@@ -126,13 +126,27 @@ function EvidenceMeta({ item }: { item: TaskUiEvidence }) {
   );
 }
 
+function withPrimaryScreen(href: string, primaryScreenId?: string | null) {
+  if (!href || !primaryScreenId) return href;
+  const hashIndex = href.indexOf('#');
+  const base = hashIndex >= 0 ? href.slice(0, hashIndex) : href;
+  const hash = hashIndex >= 0 ? href.slice(hashIndex) : '';
+  const encodedScreenId = encodeURIComponent(primaryScreenId);
+  const screenParam = /([?&])screenId=[^&#]*/;
+  const withScreen = screenParam.test(base)
+    ? base.replace(screenParam, `$1screenId=${encodedScreenId}`)
+    : `${base}${base.includes('?') ? '&' : '?'}screenId=${encodedScreenId}`;
+  return `${withScreen}${hash}`;
+}
+
 function CurrentEvidenceCard({ item, previous }: { item: TaskUiEvidence; previous: TaskUiEvidence[] }) {
   const title = item.title || item.previewId;
+  const frozenPreviewUrl = withPrimaryScreen(item.frozenPreviewUrl, item.primaryScreenId);
   return (
     <article className="overflow-hidden rounded-2xl border border-[#eadbc5] bg-white/80 dark:border-[#584a3b] dark:bg-[#292119]/70">
-      {item.screenshotUrl && item.frozenPreviewUrl ? (
+      {item.screenshotUrl && frozenPreviewUrl ? (
         <a
-          href={item.frozenPreviewUrl}
+          href={frozenPreviewUrl}
           target="_blank"
           rel="noopener noreferrer"
           aria-label={`Open Design: ${title}`}
@@ -166,7 +180,7 @@ function CurrentEvidenceCard({ item, previous }: { item: TaskUiEvidence; previou
               {previous.map((older) => (
                 <div key={older.evidenceId} className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-[#f8f1e6] px-3 py-2 dark:bg-[#211a15]">
                   <EvidenceMeta item={older} />
-                  {older.frozenPreviewUrl && <PreviewLink href={older.frozenPreviewUrl}>Open Preview</PreviewLink>}
+                  {older.frozenPreviewUrl && <PreviewLink href={withPrimaryScreen(older.frozenPreviewUrl, older.primaryScreenId)}>Open Preview</PreviewLink>}
                 </div>
               ))}
             </div>

@@ -12,6 +12,7 @@ export interface TaskUiEvidence {
   screenshotUrl: string;
   attachedAt: string;
   current?: boolean;
+  primaryScreenId?: string | null;
   spec: Record<string, unknown>;
 }
 
@@ -39,12 +40,21 @@ export interface UiPreviewLinkedTask {
   title: string;
   projectId: string | null;
 }
+export interface UiPreviewDefaultScreenSummary {
+  screenId: string;
+  name: string | null;
+  specSummary: Record<string, unknown>;
+}
+
 
 export interface UiPreviewLibraryItem {
   previewId: string;
   taskId: string | null;
   title: string | null;
   specSummary: Record<string, unknown>;
+  screenCount?: number | null;
+  defaultScreenId?: string | null;
+  defaultScreenSummary?: UiPreviewDefaultScreenSummary | null;
   latestRevision: number;
   createdAt: string;
   updatedAt: string;
@@ -100,6 +110,41 @@ function asString(value: unknown) {
 function asOptionalString(value: unknown) {
   return typeof value === 'string' && value.length > 0 ? value : null;
 }
+const SCREEN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,119}$/;
+const SCREEN_SUMMARY_SOURCE_KEYS = new Set(['html', 'css', 'js', 'screens', 'source']);
+
+function asScreenId(value: unknown) {
+  const screenId = asOptionalString(value);
+  return screenId && SCREEN_ID_PATTERN.test(screenId) ? screenId : null;
+}
+
+function asScreenCount(value: unknown) {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+
+function normalizeSpecSummary(value: unknown) {
+  const input = record(value);
+  if (!input) return {};
+  return Object.fromEntries(Object.entries(input).filter(([key, entry]) => {
+    if (SCREEN_SUMMARY_SOURCE_KEYS.has(key)) return false;
+    return entry === null
+      || typeof entry === 'string'
+      || typeof entry === 'boolean'
+      || (typeof entry === 'number' && Number.isFinite(entry));
+  }));
+}
+
+function normalizeDefaultScreenSummary(value: unknown, defaultScreenId: string | null): UiPreviewDefaultScreenSummary | null {
+  const input = record(value);
+  if (!input) return null;
+  const screenId = asScreenId(input.screenId) || defaultScreenId;
+  if (!screenId || (defaultScreenId && screenId !== defaultScreenId)) return null;
+  const specSummary = normalizeSpecSummary(record(input.specSummary) || record(input.summary) || input);
+  const name = asOptionalString(input.name)
+    || (typeof specSummary.screen === 'string' ? specSummary.screen : null);
+  return { screenId, name, specSummary };
+}
+
 
 function asRevision(value: unknown, fallback = 0) {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0
@@ -131,6 +176,7 @@ function normalizeEvidence(value: unknown): TaskUiEvidence | null {
       : typeof input.isCurrent === 'boolean'
         ? input.isCurrent
         : undefined,
+    primaryScreenId: asScreenId(input.primaryScreenId),
     spec: record(input.spec) || {},
   };
 }
@@ -155,11 +201,17 @@ function normalizeLibraryItem(value: unknown): UiPreviewLibraryItem | null {
   const latestRevision = asRevision(input.latestRevision);
   const latestPreviewUrl = asString(input.latestPreviewUrl);
   if (!previewId || latestRevision < 1 || !latestPreviewUrl) return null;
+  const screenCount = asScreenCount(input.screenCount);
+  const defaultScreenId = asScreenId(input.defaultScreenId);
+  const defaultScreenSummary = normalizeDefaultScreenSummary(input.defaultScreenSummary ?? input.defaultScreen, defaultScreenId);
   return {
     previewId,
     taskId: asOptionalString(input.taskId),
     title: asOptionalString(input.title),
     specSummary: record(input.specSummary) || {},
+    screenCount,
+    defaultScreenId,
+    defaultScreenSummary,
     latestRevision,
     createdAt: asString(input.createdAt),
     updatedAt: asString(input.updatedAt),

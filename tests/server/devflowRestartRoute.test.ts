@@ -239,6 +239,60 @@ test('restart route rejects while a meaningful MCP operation is in flight', asyn
   }
 });
 
+test('a single completed tools/list does not extend restart quiescence', () => {
+  resetRestartState();
+  const activityAt = 10_000;
+  recordMcpTransportRequest({
+    operation: 'tools/list',
+    statusCode: 200,
+    totalMs: 10,
+    phaseMs: { parse: 1, connect: 0, handle: 7, close: 0, responseFinalize: 2 },
+    timestamp: activityAt,
+  });
+
+  const accepted = requestDevFlowRestart({}, {
+    env: {
+      DEVFLOW_RESTART_SUPERVISOR: 'start-all',
+      DEVFLOW_RESTART_SUPERVISOR_TOKEN: 'restart-discovery-test-token',
+    },
+    now: () => new Date(activityAt + 1_000),
+    uuid: () => 'discovery-window-test',
+  });
+
+  assert.equal(accepted.accepted, true);
+  assert.equal(accepted.duplicate, false);
+});
+
+test('multiple completed tools/list calls preserve multi-client restart quiescence', () => {
+  resetRestartState();
+  const activityAt = 10_000;
+  for (const timestamp of [activityAt, activityAt + 100]) {
+    recordMcpTransportRequest({
+      operation: 'tools/list',
+      statusCode: 200,
+      totalMs: 10,
+      phaseMs: { parse: 1, connect: 0, handle: 7, close: 0, responseFinalize: 2 },
+      timestamp,
+    });
+  }
+
+  assert.throws(
+    () => requestDevFlowRestart({}, {
+      env: {
+        DEVFLOW_RESTART_SUPERVISOR: 'start-all',
+        DEVFLOW_RESTART_SUPERVISOR_TOKEN: 'restart-multi-discovery-test-token',
+      },
+      now: () => new Date(activityAt + 1_000),
+      uuid: () => 'multi-discovery-window-test',
+    }),
+    (error: any) => {
+      assert.equal(error?.payload?.code, 'RESTART_BUSY');
+      assert.equal(error?.payload?.details?.mcpActivity?.recentToolsListOperations, 2);
+      return true;
+    },
+  );
+});
+
 test('recent meaningful MCP activity blocks restart until the bounded quiescence window expires', () => {
   resetRestartState();
   const activityAt = 10_000;
@@ -286,6 +340,11 @@ test('restart_devflow MCP request does not block itself', async () => {
     params: { name: 'restart_devflow', arguments: {} },
   });
   assert.equal(operation, 'other');
+  const namespacedOperation = classifyMcpTransportOperation({
+    method: 'tools/call',
+    params: { name: 'devflowz.restart_devflow', arguments: {} },
+  });
+  assert.equal(namespacedOperation, 'other');
   const tracker = createMcpTransportRequestTracker({ operation });
 
   try {

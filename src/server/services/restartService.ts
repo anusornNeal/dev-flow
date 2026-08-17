@@ -92,7 +92,7 @@ export function requestDevFlowRestart(
   const mcpActivity = (deps.getMcpRestartActivitySnapshot || getMcpRestartActivitySnapshot)({ now: nowMs });
   const toolJobsBusy = metrics.queueLength > 0 || metrics.activeJobs > 0;
   const inFlightMcpBusy = mcpActivity.inFlightMeaningfulOperations > 0;
-  const recentMcpBusy = mcpActivity.recentMeaningfulOperations > 0;
+  const recentMcpBusy = mcpActivity.recentQuiescenceBusy;
   if (toolJobsBusy || inFlightMcpBusy || recentMcpBusy) {
     throw createApiError(
       409,

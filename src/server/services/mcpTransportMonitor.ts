@@ -97,7 +97,7 @@ export function classifyMcpTransportOperation(body: unknown): McpTransportOperat
   if (method === 'tools/list') return 'tools/list';
   if (method === 'tools/call') {
     const toolName = typeof (body as any)?.params?.name === 'string' ? String((body as any).params.name) : '';
-    if (toolName === 'restart_devflow') return 'other';
+    if (/^(?:restart_devflow|.*(?:[.:/]|__)restart_devflow)$/.test(toolName.trim())) return 'other';
     return 'tools/call';
   }
   return 'other';
@@ -137,6 +137,10 @@ export function getMcpRestartActivitySnapshot(options?: { now?: number; quiescen
     && record.timestamp >= cutoff
     && record.timestamp <= now
   ));
+  const recentInitializeOperations = recentMeaningful.filter((record) => record.operation === 'initialize').length;
+  const recentToolsListOperations = recentMeaningful.filter((record) => record.operation === 'tools/list').length;
+  const recentToolCalls = recentMeaningful.filter((record) => record.operation === 'tools/call').length;
+  const recentQuiescenceBusy = recentInitializeOperations > 0 || recentToolCalls > 0 || recentToolsListOperations > 1;
   const lastMeaningfulTimestamp = recentMeaningful.reduce(
     (latest, record) => Math.max(latest, record.timestamp),
     0,
@@ -144,10 +148,14 @@ export function getMcpRestartActivitySnapshot(options?: { now?: number; quiescen
   const inFlightMeaningfulOperations = activeRestartMeaningfulTrackers.size;
 
   return {
-    busy: inFlightMeaningfulOperations > 0 || recentMeaningful.length > 0,
+    busy: inFlightMeaningfulOperations > 0 || recentQuiescenceBusy,
     quiescenceWindowMs,
     inFlightMeaningfulOperations,
     recentMeaningfulOperations: recentMeaningful.length,
+    recentInitializeOperations,
+    recentToolsListOperations,
+    recentToolCalls,
+    recentQuiescenceBusy,
     lastMeaningfulActivityAt: lastMeaningfulTimestamp > 0 ? new Date(lastMeaningfulTimestamp).toISOString() : null,
     privacy: {
       rawSessionIdentifiersStored: false,

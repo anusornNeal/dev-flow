@@ -528,6 +528,47 @@ export function getTaskExecutionMutationBinding(args: Record<string, any>) {
   return { workspaceId, workspace, session, task, claimedScope };
 }
 
+export function recordTaskExecutionContextReady(
+  args: Record<string, any>,
+  input: { contextHandle: string; repoRevision?: string | null; contextPlanIdentity?: string | null },
+) {
+  const binding = getTaskExecutionMutationBinding(args);
+  if (!binding) return null;
+
+  const contextHandle = String(input?.contextHandle || '').trim();
+  if (!contextHandle) {
+    throw taskMutationError(409, 'TASK_CONTEXT_HANDLE_REQUIRED', `Task '${binding.task.displayId || binding.task.id}' context evidence requires a context handle.`);
+  }
+
+  const repoRevision = String(input?.repoRevision || binding.session.repoRevision || '').trim() || null;
+  updateExecutionSessionProgress(binding.session.id, { contextHandle, repoRevision });
+  recordExecutionSessionEvidence(binding.session.id, [{
+    evidenceId: `context-bundle:${contextHandle}`,
+    kind: 'context-bundle',
+    repoRevision,
+    revisionIdentity: repoRevision || contextHandle,
+    contextHandle,
+    metadata: {
+      source: 'repo-context-bundle',
+      ...(input?.contextPlanIdentity ? { contextPlanIdentity: String(input.contextPlanIdentity) } : {}),
+    },
+  }], { repoRoot: binding.workspace.root });
+
+  const current = getActiveTaskExecutionSessionForWorkspace(binding.workspaceId);
+  if (current?.lifecycle.stage === 'created') {
+    recordExecutionLifecycleTransition(binding.session.id, {
+      toStage: 'context-ready',
+      reasonCode: 'task-context-acquired',
+      evidence: {
+        id: `context-ready:${contextHandle}`,
+        kind: 'context-bundle',
+        status: 'completed',
+      },
+    });
+  }
+  return getActiveTaskExecutionSessionForWorkspace(binding.workspaceId);
+}
+
 export function authorizeTaskExecutionMutationPaths(args: Record<string, any>, paths: string[]) {
   const binding = getTaskExecutionMutationBinding(args);
   if (!binding) return null;

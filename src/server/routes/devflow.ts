@@ -26,7 +26,7 @@ import { getDevFlowRestartStatus, requestDevFlowRestart } from '../services/rest
 import { applyPreparedEditPlan, getPreparedEditRecoveryArgs, prepareEditPlan } from '../services/preparedEditService';
 import { prepareCompactEdit } from '../services/stenoEditProtocolService';
 import { applyAndVerifyAsync } from '../services/applyAndVerifyService';
-import { getRepoContextWithHandle } from '../services/contextHandleService';
+import { createRepoContextHandleForBundle, getRepoContextWithHandle } from '../services/contextHandleService';
 import { executeRecoveryAwareTool } from '../services/devFlowRecoveryRuntime.js';
 import { getRepoSemanticIndex } from '../services/repoInspectionIndexService';
 import { cleanupManagedWorkspaceBranches, cleanupSessionWorkspace, createOrReuseSessionWorkspace } from '../services/sessionWorkspaceService';
@@ -41,6 +41,7 @@ import {
   captureExecutionVerificationProvenance,
   getTaskExecutionMutationBinding,
   adoptTaskExecutionOwnedChanges,
+  recordTaskExecutionContextReady,
   recordTaskExecutionMutationPaths,
   recordTaskExecutionVerificationResult,
 } from '../services/executionSessionService.js';
@@ -472,7 +473,15 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
 
   app.get('/api/repo-context-bundle', (req, res) => {
     try {
-      return res.json(getRepoContextBundle(deps.state, req.query as Record<string, any>));
+      const args = req.query as Record<string, any>;
+      const bundle = getRepoContextBundle(deps.state, args);
+      const contextHandle = createRepoContextHandleForBundle(deps.state, args, bundle);
+      recordTaskExecutionContextReady(args, {
+        contextHandle,
+        repoRevision: bundle.repoRevision,
+        contextPlanIdentity: bundle.contextPlan?.planIdentity,
+      });
+      return res.json({ ...bundle, contextHandle });
     } catch (error) {
       return sendApiError(res, error);
     }

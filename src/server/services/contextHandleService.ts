@@ -101,6 +101,13 @@ function storeHandle(root: string, hash: string, bundle: any, governorPlanIdenti
   return entry;
 }
 
+export function createRepoContextHandleForBundle(state: AppState, args: Record<string, any>, bundle: any) {
+  const root = path.resolve(resolveProjectRoot(state, args));
+  const hash = optionsHash(args);
+  const governorPlanIdentity = String(bundle?.contextPlan?.planIdentity || '');
+  return storeHandle(root, hash, bundle, governorPlanIdentity).id;
+}
+
 export function clearContextHandles() {
   const count = handles.size;
   handles.clear();

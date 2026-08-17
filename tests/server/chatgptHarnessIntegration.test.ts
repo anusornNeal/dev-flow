@@ -104,12 +104,19 @@ test('combined harness envelope follows claim, context, mutation, repair, resume
   try {
     const session = executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)!;
     assert.equal(session.lifecycle.stage, 'created');
-    executionSessions.updateExecutionSessionProgress(session.id, { contextHandle: 'ctx-harness-a' });
-    executionSessions.recordExecutionLifecycleTransition(session.id, {
-      toStage: 'context-ready',
-      reasonCode: 'context-ready',
-      evidence: { id: 'context-ready-1', kind: 'context-bundle', status: 'completed' },
+    executionSessions.recordTaskExecutionContextReady({ workspaceId }, {
+      contextHandle: 'ctx-harness-a',
+      repoRevision: session.repoRevision,
+      contextPlanIdentity: 'plan-harness-a',
     });
+    executionSessions.recordTaskExecutionContextReady({ workspaceId }, {
+      contextHandle: 'ctx-harness-a',
+      repoRevision: session.repoRevision,
+      contextPlanIdentity: 'plan-harness-a',
+    });
+    const contextTransitions = executionSessions.getExecutionSessionState(session.id).evidence
+      .filter((entry: any) => entry.kind === 'lifecycle-transition' && entry.metadata?.toStage === 'context-ready');
+    assert.equal(contextTransitions.length, 1);
 
     let context = getAgentTaskContext(state, task.id, false)!;
     assert.equal(context.harness.execution.sessionId, session.id);

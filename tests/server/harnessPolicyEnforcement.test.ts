@@ -83,8 +83,17 @@ test('execution guard composes policy, ownership, lifecycle, retry identity, and
     assert.equal(tooEarly.allowed, false);
     assert.equal(tooEarly.reasonCode, 'EXECUTION_LIFECYCLE_STAGE_BLOCKED');
 
-    executionSessions.recordExecutionLifecycleTransition(session.id, {
-      toStage: 'context-ready', reasonCode: 'context-ready', evidence: { id: 'context-harness-1', kind: 'context-bundle', status: 'completed' },
+    const unclaimedContext = executionSessions.recordTaskExecutionContextReady({ projectId: project.id }, {
+      contextHandle: 'ctx-unclaimed',
+      repoRevision: session.repoRevision,
+    });
+    assert.equal(unclaimedContext, null);
+    assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'created');
+
+    executionSessions.recordTaskExecutionContextReady({ workspaceId }, {
+      contextHandle: 'ctx-harness-1',
+      repoRevision: session.repoRevision,
+      contextPlanIdentity: 'plan-harness-1',
     });
 
     const safe = preflightHarnessExecutionGuard(state, 'write_local_file', { workspaceId, filePath: 'value.txt', harnessOperationId: 'mutation-1' });

@@ -59,7 +59,12 @@ export class WindowsDpapiCredentialVaultProvider implements CredentialVaultProvi
   isAvailable() {
     if (process.platform !== 'win32') return false;
     if (this.availability !== null) return this.availability;
-    const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '$PSVersionTable.PSVersion.Major'], {
+    const script = [
+      'Add-Type -AssemblyName System.Security',
+      '[System.Security.Cryptography.ProtectedData].FullName',
+      '[System.Security.Cryptography.DataProtectionScope]::CurrentUser',
+    ].join(';');
+    const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
       encoding: 'utf8',
       windowsHide: true,
       timeout: 5_000,
@@ -74,8 +79,9 @@ export class WindowsDpapiCredentialVaultProvider implements CredentialVaultProvi
     const encrypted = readJsonFile(this.filePath)[key];
     if (!encrypted) return '';
     const script = [
+      'Add-Type -AssemblyName System.Security',
       '$bytes=[Convert]::FromBase64String($env:DEVFLOW_DPAPI_BLOB)',
-      '$plain=[Security.Cryptography.ProtectedData]::Unprotect($bytes,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser)',
+      '$plain=[System.Security.Cryptography.ProtectedData]::Unprotect($bytes,$null,[System.Security.Cryptography.DataProtectionScope]::CurrentUser)',
       '[Text.Encoding]::UTF8.GetString($plain)',
     ].join(';');
     const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
@@ -95,8 +101,9 @@ export class WindowsDpapiCredentialVaultProvider implements CredentialVaultProvi
   set(key: CredentialKey, value: string) {
     if (!this.isAvailable()) throw new Error('Secure credential storage is unavailable on this platform.');
     const script = [
+      'Add-Type -AssemblyName System.Security',
       '$plain=[Text.Encoding]::UTF8.GetBytes($env:DEVFLOW_SECRET_VALUE)',
-      '$encrypted=[Security.Cryptography.ProtectedData]::Protect($plain,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser)',
+      '$encrypted=[System.Security.Cryptography.ProtectedData]::Protect($plain,$null,[System.Security.Cryptography.DataProtectionScope]::CurrentUser)',
       '[Convert]::ToBase64String($encrypted)',
     ].join(';');
     const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {

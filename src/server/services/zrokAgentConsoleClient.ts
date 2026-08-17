@@ -72,11 +72,12 @@ function parseStatus(payload: string): ZrokLocalAgentStatus | null {
     return null;
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-  const shares = (parsed as Record<string, unknown>).shares;
-  if (shares !== undefined && !Array.isArray(shares)) return null;
+  const rawShares = (parsed as Record<string, unknown>).shares;
+  if (rawShares !== undefined && !Array.isArray(rawShares)) return null;
+  const shares = Array.isArray(rawShares) ? rawShares : [];
   return {
     reachable: true,
-    shares: (shares || []).flatMap((share) => {
+    shares: shares.flatMap((share) => {
       const sanitized = sanitizeShare(share);
       return sanitized ? [sanitized] : [];
     }),

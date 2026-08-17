@@ -22,6 +22,7 @@ ORIGINAL_REQUEST.md
 /data/*.db
 /data/*.db-shm
 /data/*.db-wal
+/data/credentials.vault.json
 /data/uploads/
 /data/backups/
 /data/ui-preview-artifacts/

@@ -239,6 +239,15 @@ Invoke-Case 'stopped service is started without reinstall' {
     Assert-Equal $fake.State.startService 1 'stopped service should start'
 }
 
+Invoke-Case 'absent reserved name skips name reconciliation' {
+    $fake = New-FakeBootstrapOps -NameState Missing
+    $result = Invoke-ZrokBootstrap -Ops $fake.Ops -ReservedName '' -EnableRemoting $true
+    Assert-Equal $result.ok $true 'local readiness does not require a configured reserved name'
+    Assert-Equal $result.reservedName '' 'result preserves absent reserved-name configuration'
+    Assert-Equal $fake.State.createName 0 'bootstrap must not create a default reserved name'
+    Assert-True (-not ($fake.State.calls.Contains('GetReservedNameState'))) 'bootstrap must not query an absent reserved name'
+}
+
 Invoke-Case 'unsupported remoting preserves local readiness' {
     $fake = New-FakeBootstrapOps -RemotingEnrolled:$false -RemotingEnrollmentUnsupported:$true -ServiceState Running
     $result = Invoke-ZrokBootstrap -Ops $fake.Ops -ReservedName 'account-specific-name' -EnableRemoting $true

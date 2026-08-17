@@ -1,6 +1,6 @@
 param(
     [switch]$NoRun,
-    [string]$ReservedName = 'devflow-mixed',
+    [string]$ReservedName = '',
     [switch]$DisableRemoting,
     [string]$ResultPath = '',
     [switch]$ElevatedChild
@@ -32,7 +32,7 @@ function Get-RemotingEnrollmentFailureCode([object[]]$Output) {
 function Invoke-ZrokBootstrap {
     param(
         [Parameter(Mandatory = $true)][hashtable]$Ops,
-        [Parameter(Mandatory = $true)][string]$ReservedName,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ReservedName,
         [bool]$EnableRemoting = $true
     )
 
@@ -63,13 +63,15 @@ function Invoke-ZrokBootstrap {
             [void]$changed.Add('environment-enabled')
         }
 
-        $nameState = [string](& $Ops.GetReservedNameState $zrokPath $ReservedName)
-        if ($nameState -eq 'Conflict') {
-            throw (New-BootstrapException 'reserved-name-conflict' "The zrok public name '$ReservedName' is not available to this account.")
-        }
-        if ($nameState -eq 'Missing') {
-            & $Ops.CreateReservedName $zrokPath $ReservedName
-            [void]$changed.Add('reserved-name-created')
+        if (-not [string]::IsNullOrWhiteSpace($ReservedName)) {
+            $nameState = [string](& $Ops.GetReservedNameState $zrokPath $ReservedName)
+            if ($nameState -eq 'Conflict') {
+                throw (New-BootstrapException 'reserved-name-conflict' "The zrok public name '$ReservedName' is not available to this account.")
+            }
+            if ($nameState -eq 'Missing') {
+                & $Ops.CreateReservedName $zrokPath $ReservedName
+                [void]$changed.Add('reserved-name-created')
+            }
         }
 
         $remoteControl = 'available'

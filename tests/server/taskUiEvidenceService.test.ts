@@ -58,10 +58,10 @@ function createPreviewService() {
   });
 }
 
-function createEvidenceService(capture?: (input: any) => Promise<any>) {
+function createEvidenceService(capture?: (input: any) => Promise<any>, repository: any = previewRepository) {
   return createTaskUiEvidenceService({
     database: db as any,
-    previewRepository,
+    previewRepository: repository,
     evidenceRepository,
     screenshotService: {
       capture: capture || (async (input: any) => {
@@ -72,6 +72,17 @@ function createEvidenceService(capture?: (input: any) => Promise<any>) {
     runtimePort: () => 43210,
     createEvidenceId: () => `uie_${++evidenceCounter}`,
   });
+}
+
+function createWorkspaceRepository(overrides: Record<string, { defaultScreenId: string; screens: any[] }>) {
+  return {
+    ...previewRepository,
+    getRevision(previewId: string, revision: number) {
+      const base = previewRepository.getRevision(previewId, revision) as any;
+      const override = overrides[`${previewId}:${revision}`];
+      return base && override ? { ...base, ...override } : base;
+    },
+  } as any;
 }
 
 test('attach freezes one revision, replays persisted idempotency without recapture, and keeps latest live', async () => {
@@ -247,6 +258,123 @@ test('concurrent different-task attach cannot leave evidence for the losing task
   await assert.rejects(second, (error: any) => error?.code === 'UI_PREVIEW_TASK_CONFLICT');
   assert.equal(previewRepository.getPreview(created.previewId)?.taskId, 'task-a');
   assert.equal(evidenceRepository.getCurrentEvidence('task-b', created.previewId), null);
+});
+
+test('multi-screen attach validates and freezes the exact primary screen without recapturing same-primary evidence', async () => {
+  seedTask();
+  const previews = createPreviewService();
+  const created = previews.create({ html: '<main>legacy shell</main>', spec });
+  const overviewSpec = { schemaVersion: 1, summary: { screen: 'Overview' } };
+  const detailsSpec = { schemaVersion: 1, summary: { screen: 'Details' } };
+  const repository = createWorkspaceRepository({
+    [`${created.previewId}:1`]: {
+      defaultScreenId: 'overview',
+      screens: [
+        { screenId: 'overview', name: 'Overview', html: '<main>overview-source</main>', css: '.overview{}', js: 'overview()', spec: overviewSpec },
+        { screenId: 'details', name: 'Details', html: '<main>details-source</main>', css: '.details{}', js: 'details()', spec: detailsSpec },
+      ],
+    },
+  });
+  const captures: any[] = [];
+  const evidence = createEvidenceService(async (input: any) => {
+    captures.push(input);
+    return { artifactId: artifactId(), absolutePath: '', png: png(), viewport: input.viewport };
+  }, repository);
+
+  await assert.rejects(
+    evidence.attach({ taskId: 'task-a', previewId: created.previewId, revision: 1, primaryScreenId: 'missing' }),
+    (error: any) => error?.code === 'UI_PREVIEW_SCREEN_NOT_FOUND',
+  );
+  assert.equal(captures.length, 0);
+  assert.equal(evidenceRepository.getCurrentEvidence('task-a', created.previewId), null);
+
+  const frozen = await evidence.attach({ taskId: 'task-a', previewId: created.previewId, revision: 1, primaryScreenId: 'details' });
+  assert.equal(frozen.primaryScreenId, 'details');
+  assert.deepEqual(frozen.primaryScreenSummary, detailsSpec.summary);
+  assert.match(frozen.frozenPreviewUrl, /revision=1/);
+  assert.match(frozen.frozenPreviewUrl, /screenId=details/);
+  assert.equal(captures.length, 1);
+  assert.equal(captures[0].html, '<main>details-source</main>');
+  assert.equal(captures[0].css, '.details{}');
+  assert.equal(captures[0].js, 'details()');
+  assert.deepEqual((evidenceRepository.getCurrentEvidence('task-a', created.previewId) as any).frozenSpec, detailsSpec);
+  assert.equal((evidenceRepository.getCurrentEvidence('task-a', created.previewId) as any).primaryScreenId, 'details');
+
+  const same = await evidence.attach({ taskId: 'task-a', previewId: created.previewId, revision: 1, primaryScreenId: 'details' });
+  assert.equal(same.evidenceId, frozen.evidenceId);
+  assert.equal(captures.length, 1);
+  await assert.rejects(
+    evidence.attach({ taskId: 'task-a', previewId: created.previewId, revision: 1, primaryScreenId: 'overview' }),
+    (error: any) => error?.code === 'UI_PREVIEW_EVIDENCE_PRIMARY_SCREEN_CONFLICT',
+  );
+  assert.equal((evidenceRepository.getCurrentEvidence('task-a', created.previewId) as any).primaryScreenId, 'details');
+});
+
+test('omitted primary screen deterministically freezes the workspace default', async () => {
+  seedTask();
+  const previews = createPreviewService();
+  const created = previews.create({ html: '<main>legacy shell</main>', spec });
+  const overviewSpec = { schemaVersion: 1, summary: { screen: 'Overview' } };
+  const repository = createWorkspaceRepository({
+    [`${created.previewId}:1`]: {
+      defaultScreenId: 'overview',
+      screens: [
+        { screenId: 'overview', name: 'Overview', html: '<main>default-overview</main>', css: '', js: '', spec: overviewSpec },
+        { screenId: 'details', name: 'Details', html: '<main>details</main>', css: '', js: '', spec },
+      ],
+    },
+  });
+  let capturedHtml = '';
+  const evidence = createEvidenceService(async (input: any) => {
+    capturedHtml = input.html;
+    return { artifactId: artifactId(), absolutePath: '', png: png(), viewport: input.viewport };
+  }, repository);
+  const frozen = await evidence.attach({ taskId: 'task-a', previewId: created.previewId, revision: 1 });
+  assert.equal(frozen.primaryScreenId, 'overview');
+  assert.equal(capturedHtml, '<main>default-overview</main>');
+  assert.equal((evidenceRepository.getCurrentEvidence('task-a', created.previewId) as any).primaryScreenId, 'overview');
+});
+
+test('frozen primary deep link stays exact while latest link disappears when that screen no longer exists', async () => {
+  seedTask();
+  const previews = createPreviewService();
+  const created = previews.create({ html: '<main>rev1</main>', spec });
+  previews.update({ previewId: created.previewId, expectedRevision: 1, html: '<main>rev2</main>' });
+  const detailsSpec = { schemaVersion: 1, summary: { screen: 'Details' } };
+  const repository = createWorkspaceRepository({
+    [`${created.previewId}:1`]: {
+      defaultScreenId: 'details',
+      screens: [{ screenId: 'details', name: 'Details', html: '<main>frozen-details</main>', css: '', js: '', spec: detailsSpec }],
+    },
+    [`${created.previewId}:2`]: {
+      defaultScreenId: 'overview',
+      screens: [{ screenId: 'overview', name: 'Overview', html: '<main>latest-overview</main>', css: '', js: '', spec }],
+    },
+  });
+  const evidence = createEvidenceService(undefined, repository);
+  const frozen = await evidence.attach({ taskId: 'task-a', previewId: created.previewId, revision: 1, primaryScreenId: 'details' });
+  assert.match(frozen.frozenPreviewUrl, /revision=1/);
+  assert.match(frozen.frozenPreviewUrl, /screenId=details/);
+  assert.equal(frozen.latestRevision, 2);
+  assert.equal(frozen.latestPreviewUrl, null);
+  const reread = evidence.list({ taskId: 'task-a', limit: 20 }).items[0];
+  assert.match(reread.frozenPreviewUrl, /screenId=details/);
+  assert.equal(reread.latestPreviewUrl, null);
+});
+
+test('legacy null primary evidence remains readable as the legacy/default main screen', () => {
+  seedTask();
+  const previews = createPreviewService();
+  const created = previews.create({ html: '<main>legacy</main>', spec });
+  evidenceRepository.recordEvidence({
+    evidenceId: 'uie_legacy_primary', taskId: 'task-a', previewId: created.previewId, frozenRevision: 1,
+    frozenSpec: spec, screenshotArtifactId: artifactId(), screenshotWidth: 1440, screenshotHeight: 900,
+  });
+  const item = createEvidenceService().list({ taskId: 'task-a', limit: 20 }).items[0];
+  assert.equal(item.primaryScreenId, 'main');
+  assert.deepEqual(item.primaryScreenSummary, spec.summary);
+  assert.doesNotMatch(item.frozenPreviewUrl, /screenId=/);
+  assert.doesNotMatch(item.latestPreviewUrl || '', /screenId=/);
 });
 
 test('fresh evidence reads regenerate frozen/latest/screenshot URLs from the current runtime port', async () => {

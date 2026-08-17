@@ -11,9 +11,12 @@ import {
   type UiPreviewRepository,
 } from '../repositories/uiPreviewRepository.js';
 import {
+  UI_PREVIEW_SCREEN_ID_PATTERN,
   UiPreviewError,
   UiPreviewIdempotencyConflictError,
   type TaskUiEvidence,
+  type UiPreviewScreen,
+  type UiSpecV1,
 } from '../domain/uiPreview.js';
 import {
   createUiPreviewScreenshotService,
@@ -33,6 +36,11 @@ type ScreenshotServiceLike = {
   capture(input: UiPreviewCaptureInput): Promise<UiPreviewCaptureResult>;
 };
 
+type WorkspaceRevisionView = {
+  screens: UiPreviewScreen[];
+  defaultScreenId: string;
+};
+
 export interface TaskUiEvidenceServiceDependencies {
   database?: DatabaseLike;
   previewRepository?: UiPreviewRepository;
@@ -47,6 +55,7 @@ export interface AttachUiPreviewInput {
   taskId: string;
   previewId: string;
   revision?: number;
+  primaryScreenId?: string;
   idempotencyKey?: string;
 }
 
@@ -62,6 +71,7 @@ type EvidenceRow = {
   preview_id: string;
   frozen_revision: number;
   frozen_spec_json: string;
+  primary_screen_id: string | null;
   screenshot_artifact_id: string;
   screenshot_width: number;
   screenshot_height: number;
@@ -113,6 +123,62 @@ function screenshotSha256(bytes: Uint8Array) {
   return createHash('sha256').update(bytes).digest('hex');
 }
 
+function validatePrimaryScreenId(value: unknown) {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || !UI_PREVIEW_SCREEN_ID_PATTERN.test(value)) {
+    throw new UiPreviewError('UI_PREVIEW_INVALID_SCREEN_ID', 'primaryScreenId must be a URL-safe opaque UI preview screen id.');
+  }
+  return value;
+}
+
+function normalizeWorkspaceRevision(revision: any): WorkspaceRevisionView {
+  if (Array.isArray(revision?.screens)) {
+    if (revision.screens.length === 0 || typeof revision.defaultScreenId !== 'string') {
+      throw new UiPreviewError('UI_PREVIEW_WORKSPACE_INVALID', 'UI preview workspace revision has an invalid screen manifest.');
+    }
+    const screens = revision.screens as UiPreviewScreen[];
+    if (!screens.every((screen) => screen && typeof screen.screenId === 'string' && typeof screen.name === 'string')) {
+      throw new UiPreviewError('UI_PREVIEW_WORKSPACE_INVALID', 'UI preview workspace revision contains an invalid screen.');
+    }
+    if (!screens.some((screen) => screen.screenId === revision.defaultScreenId)) {
+      throw new UiPreviewError('UI_PREVIEW_WORKSPACE_INVALID', 'UI preview workspace defaultScreenId does not reference an existing screen.');
+    }
+    return { screens, defaultScreenId: revision.defaultScreenId };
+  }
+
+  if (typeof revision?.html !== 'string' || !revision?.spec) {
+    throw new UiPreviewError('UI_PREVIEW_WORKSPACE_INVALID', 'UI preview revision cannot be normalized to a workspace screen.');
+  }
+  const spec = revision.spec as UiSpecV1;
+  return {
+    defaultScreenId: 'main',
+    screens: [{
+      screenId: 'main',
+      name: spec.summary?.screen || revision.title || 'Main',
+      html: revision.html,
+      css: revision.css || '',
+      js: revision.js || '',
+      spec,
+    }],
+  };
+}
+
+function selectPrimaryScreen(workspace: WorkspaceRevisionView, requestedPrimaryScreenId?: string) {
+  const primaryScreenId = requestedPrimaryScreenId ?? workspace.defaultScreenId;
+  const screen = workspace.screens.find((candidate) => candidate.screenId === primaryScreenId);
+  if (!screen) {
+    throw new UiPreviewError('UI_PREVIEW_SCREEN_NOT_FOUND', `UI preview screen '${primaryScreenId}' does not exist in the selected frozen revision.`);
+  }
+  return screen;
+}
+
+function primaryScreenConflict(taskId: string, previewId: string, revision: number, currentScreenId: string, requestedScreenId: string) {
+  return new UiPreviewError(
+    'UI_PREVIEW_EVIDENCE_PRIMARY_SCREEN_CONFLICT',
+    `UI preview '${previewId}' revision ${revision} is already frozen for task '${taskId}' with primary screen '${currentScreenId}', not '${requestedScreenId}'.`,
+  );
+}
+
 export function createTaskUiEvidenceService(deps: TaskUiEvidenceServiceDependencies) {
   const database = deps.database ?? db;
   const previewRepository = deps.previewRepository ?? createUiPreviewRepository(database);
@@ -144,6 +210,25 @@ export function createTaskUiEvidenceService(deps: TaskUiEvidenceServiceDependenc
     const port = deps.runtimePort();
     const frozenRevision = Number(row.frozen_revision);
     const latestRevision = Number(row.latest_revision);
+    const frozenSpec = JSON.parse(row.frozen_spec_json) as UiSpecV1;
+    const storedPrimaryScreenId = row.primary_screen_id ?? null;
+    const primaryScreenId = storedPrimaryScreenId ?? 'main';
+    let latestPreviewUrl: string | null;
+
+    if (storedPrimaryScreenId === null) {
+      latestPreviewUrl = resolveUiPreviewUrl({ previewId: row.preview_id, port });
+    } else {
+      const latest = previewRepository.getRevision(row.preview_id, latestRevision);
+      if (!latest) {
+        latestPreviewUrl = null;
+      } else {
+        const latestWorkspace = normalizeWorkspaceRevision(latest);
+        latestPreviewUrl = latestWorkspace.screens.some((screen) => screen.screenId === storedPrimaryScreenId)
+          ? resolveUiPreviewUrl({ previewId: row.preview_id, screenId: storedPrimaryScreenId, port })
+          : null;
+      }
+    }
+
     return {
       evidenceId: row.evidence_id,
       taskId: row.task_id,
@@ -151,12 +236,19 @@ export function createTaskUiEvidenceService(deps: TaskUiEvidenceServiceDependenc
       title: row.title ?? null,
       frozenRevision,
       latestRevision,
-      frozenPreviewUrl: resolveUiPreviewUrl({ previewId: row.preview_id, revision: frozenRevision, port }),
-      latestPreviewUrl: resolveUiPreviewUrl({ previewId: row.preview_id, port }),
+      primaryScreenId,
+      primaryScreenSummary: frozenSpec.summary,
+      frozenPreviewUrl: resolveUiPreviewUrl({
+        previewId: row.preview_id,
+        revision: frozenRevision,
+        ...(storedPrimaryScreenId === null ? {} : { screenId: storedPrimaryScreenId }),
+        port,
+      }),
+      latestPreviewUrl,
       screenshotUrl: resolveArtifactUrl(row.screenshot_artifact_id, port),
       attachedAt: row.created_at,
       current: Number(row.is_current) === 1,
-      spec: JSON.parse(row.frozen_spec_json),
+      spec: frozenSpec,
       ...(options.replayed ? { replayed: true } : {}),
     };
   }
@@ -214,11 +306,13 @@ export function createTaskUiEvidenceService(deps: TaskUiEvidenceServiceDependenc
     if (input.revision !== undefined && (!Number.isInteger(input.revision) || input.revision < 1)) {
       throw new UiPreviewError('UI_PREVIEW_INVALID_REVISION', 'revision must be a positive integer.');
     }
+    const requestedPrimaryScreenId = validatePrimaryScreenId(input.primaryScreenId);
 
     const requestFingerprint = fingerprintCanonicalRequest({
       taskId,
       previewId,
       revision: input.revision ?? null,
+      primaryScreenId: requestedPrimaryScreenId ?? null,
     });
     const replay = readIdempotency(input.idempotencyKey, requestFingerprint);
     if (replay) return replay;
@@ -228,6 +322,8 @@ export function createTaskUiEvidenceService(deps: TaskUiEvidenceServiceDependenc
     const frozenRevision = input.revision ?? preview.latestRevision;
     const revision = previewRepository.getRevision(previewId, frozenRevision);
     if (!revision) throw new UiPreviewError('UI_PREVIEW_REVISION_NOT_FOUND', `UI preview '${previewId}' revision ${frozenRevision} was not found.`);
+    const workspace = normalizeWorkspaceRevision(revision);
+    const primaryScreen = selectPrimaryScreen(workspace, requestedPrimaryScreenId);
     if (preview.taskId && preview.taskId !== taskId) {
       previewRepository.bindPreviewToTask(previewId, taskId);
     }
@@ -235,6 +331,10 @@ export function createTaskUiEvidenceService(deps: TaskUiEvidenceServiceDependenc
     const current = evidenceRepository.getCurrentEvidence(taskId, previewId);
     if (current?.frozenRevision > frozenRevision) throw staleError(taskId, previewId, frozenRevision, current);
     if (current?.frozenRevision === frozenRevision) {
+      const currentPrimaryScreenId = current.primaryScreenId ?? workspace.defaultScreenId;
+      if (currentPrimaryScreenId !== primaryScreen.screenId) {
+        throw primaryScreenConflict(taskId, previewId, frozenRevision, currentPrimaryScreenId, primaryScreen.screenId);
+      }
       const row = selectEvidenceRow(current.evidenceId);
       if (!row) throw new UiPreviewError('UI_PREVIEW_EVIDENCE_NOT_FOUND', `Task UI evidence '${current.evidenceId}' was not found.`);
       previewRepository.bindPreviewToTask(previewId, taskId);
@@ -243,15 +343,15 @@ export function createTaskUiEvidenceService(deps: TaskUiEvidenceServiceDependenc
       return result;
     }
 
-    const flightKey = `${taskId}\u0000${previewId}\u0000${frozenRevision}`;
+    const flightKey = `${taskId}\u0000${previewId}\u0000${frozenRevision}\u0000${primaryScreen.screenId}`;
     let shared = inFlight.get(flightKey);
     if (!shared) {
       shared = (async () => {
         const capture = await screenshotService.capture({
-          title: revision.title,
-          html: revision.html,
-          css: revision.css,
-          js: revision.js,
+          title: revision.title ?? primaryScreen.name,
+          html: primaryScreen.html,
+          css: primaryScreen.css,
+          js: primaryScreen.js,
           viewport: revision.viewport,
         });
         const evidenceId = createEvidenceId();
@@ -264,7 +364,8 @@ export function createTaskUiEvidenceService(deps: TaskUiEvidenceServiceDependenc
             taskId,
             previewId,
             frozenRevision,
-            frozenSpec: revision.spec,
+            frozenSpec: primaryScreen.spec,
+            primaryScreenId: primaryScreen.screenId,
             screenshotArtifactId: capture.artifactId,
             screenshotWidth: capture.viewport.width,
             screenshotHeight: capture.viewport.height,

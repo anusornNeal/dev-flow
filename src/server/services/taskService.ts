@@ -698,6 +698,8 @@ export function getAgentTaskContext(state: AppState, targetId: string, includeLo
         frozenPreviewUrl: item.frozenPreviewUrl,
         latestPreviewUrl: item.latestPreviewUrl,
         screenshotUrl: item.screenshotUrl,
+        primaryScreenId: item.primaryScreenId,
+        primaryScreenSummary: item.primaryScreenSummary,
         specSummary: item.spec?.summary,
       })),
       nextCursor: uiEvidencePage.nextCursor,

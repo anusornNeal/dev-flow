@@ -33,7 +33,7 @@ test('agent context includes bounded frozen UI evidence metadata without preview
   });
   evidenceRepo.recordEvidence({
     evidenceId: 'uie_agent_context', taskId: 'task-agent-ui', previewId: 'uip_agent_context', frozenRevision: 1,
-    frozenSpec: spec, screenshotArtifactId: `uisa_${'b'.repeat(32)}`, screenshotWidth: 1200, screenshotHeight: 800,
+    frozenSpec: spec, primaryScreenId: 'main', screenshotArtifactId: `uisa_${'b'.repeat(32)}`, screenshotWidth: 1200, screenshotHeight: 800,
   });
 
   const context = getAgentTaskContext({ countersCache: {} }, 'DVF-UICTX', false) as any;
@@ -44,6 +44,8 @@ test('agent context includes bounded frozen UI evidence metadata without preview
   assert.equal(context.uiDesignEvidence.items[0].previewId, 'uip_agent_context');
   assert.equal(typeof context.uiDesignEvidence.items[0].screenshotUrl, 'string');
   assert.deepEqual(context.uiDesignEvidence.items[0].specSummary, spec.summary);
+  assert.equal(context.uiDesignEvidence.items[0].primaryScreenId, 'main');
+  assert.deepEqual(context.uiDesignEvidence.items[0].primaryScreenSummary, spec.summary);
   assert.equal('spec' in context.uiDesignEvidence.items[0], false);
   assert.equal('screenshotArtifactId' in context.uiDesignEvidence.items[0], false);
   const serialized = JSON.stringify(context.uiDesignEvidence);

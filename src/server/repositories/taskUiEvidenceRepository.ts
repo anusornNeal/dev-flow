@@ -1,7 +1,9 @@
 import db from '../../db/index.js';
 import type { TaskUiEvidence, UiSpecV1 } from '../domain/uiPreview.js';
+import { UiPreviewError } from '../domain/uiPreview.js';
 
 export type TaskUiEvidenceOutcome = 'inserted' | 'same-revision' | 'superseded' | 'stale';
+export type TaskUiEvidenceRecord = TaskUiEvidence & { primaryScreenId: string | null };
 
 type DatabaseLike = any;
 
@@ -9,7 +11,7 @@ function nowIso() {
   return new Date().toISOString();
 }
 
-function parseEvidence(row: any): TaskUiEvidence | null {
+function parseEvidence(row: any): TaskUiEvidenceRecord | null {
   if (!row) return null;
   return {
     evidenceId: row.evidence_id,
@@ -21,6 +23,7 @@ function parseEvidence(row: any): TaskUiEvidence | null {
     screenshotWidth: Number(row.screenshot_width),
     screenshotHeight: Number(row.screenshot_height),
     screenshotSha256: row.screenshot_sha256 ?? null,
+    primaryScreenId: row.primary_screen_id ?? null,
     isCurrent: Number(row.is_current) === 1,
     createdAt: row.created_at,
     supersededAt: row.superseded_at ?? null,
@@ -34,11 +37,19 @@ export interface RecordTaskUiEvidenceInput {
   previewId: string;
   frozenRevision: number;
   frozenSpec: UiSpecV1;
+  primaryScreenId?: string | null;
   screenshotArtifactId: string;
   screenshotWidth: number;
   screenshotHeight: number;
   screenshotSha256?: string | null;
   createdAt?: string;
+}
+
+function primaryScreenConflict(input: Pick<RecordTaskUiEvidenceInput, 'taskId' | 'previewId' | 'frozenRevision' | 'primaryScreenId'>, existing: TaskUiEvidenceRecord) {
+  return new UiPreviewError(
+    'UI_PREVIEW_EVIDENCE_PRIMARY_SCREEN_CONFLICT',
+    `UI preview '${input.previewId}' revision ${input.frozenRevision} is already frozen for task '${input.taskId}' with primary screen '${existing.primaryScreenId ?? 'legacy/default'}', not '${input.primaryScreenId ?? 'legacy/default'}'.`,
+  );
 }
 
 export function createTaskUiEvidenceRepository(database: DatabaseLike = db) {
@@ -64,19 +75,26 @@ export function createTaskUiEvidenceRepository(database: DatabaseLike = db) {
     return (rows as any[]).map((row) => parseEvidence(row)!);
   }
 
-  function recordEvidence(input: RecordTaskUiEvidenceInput): { outcome: TaskUiEvidenceOutcome; evidence: TaskUiEvidence } {
+  function recordEvidence(input: RecordTaskUiEvidenceInput): { outcome: TaskUiEvidenceOutcome; evidence: TaskUiEvidenceRecord } {
+    const requestedPrimaryScreenId = input.primaryScreenId ?? null;
     const work = () => {
       const current = getCurrentEvidence(input.taskId, input.previewId);
       if (current) {
         if (current.frozenRevision > input.frozenRevision) return { outcome: 'stale' as const, evidence: current };
-        if (current.frozenRevision === input.frozenRevision) return { outcome: 'same-revision' as const, evidence: current };
+        if (current.frozenRevision === input.frozenRevision) {
+          if (current.primaryScreenId !== requestedPrimaryScreenId) throw primaryScreenConflict(input, current);
+          return { outcome: 'same-revision' as const, evidence: current };
+        }
       }
 
       const sameRevision = parseEvidence(database.prepare(`
         SELECT * FROM task_ui_evidence
         WHERE task_id = ? AND preview_id = ? AND frozen_revision = ?
       `).get(input.taskId, input.previewId, input.frozenRevision));
-      if (sameRevision) return { outcome: 'same-revision' as const, evidence: sameRevision };
+      if (sameRevision) {
+        if (sameRevision.primaryScreenId !== requestedPrimaryScreenId) throw primaryScreenConflict(input, sameRevision);
+        return { outcome: 'same-revision' as const, evidence: sameRevision };
+      }
 
       const createdAt = input.createdAt || nowIso();
       if (current) {
@@ -89,16 +107,17 @@ export function createTaskUiEvidenceRepository(database: DatabaseLike = db) {
 
       database.prepare(`
         INSERT INTO task_ui_evidence (
-          evidence_id, task_id, preview_id, frozen_revision, frozen_spec_json,
+          evidence_id, task_id, preview_id, frozen_revision, frozen_spec_json, primary_screen_id,
           screenshot_artifact_id, screenshot_width, screenshot_height, screenshot_sha256,
           is_current, created_at, superseded_at, superseded_by_evidence_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL, NULL)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL, NULL)
       `).run(
         input.evidenceId,
         input.taskId,
         input.previewId,
         input.frozenRevision,
         JSON.stringify(input.frozenSpec),
+        requestedPrimaryScreenId,
         input.screenshotArtifactId,
         input.screenshotWidth,
         input.screenshotHeight,

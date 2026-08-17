@@ -7,13 +7,8 @@ export type CrossPlatformViolation = {
   preview: string;
 };
 
-const EXEMPT_PATHS = new Set([
-  'src/runner.ts', // deprecated Windows-only Agent Runner; not an architecture baseline
-]);
-
 export function findCrossPlatformViolations(filePath: string, source: string): CrossPlatformViolation[] {
   const normalizedPath = filePath.replace(/\\/g, '/');
-  if (EXEMPT_PATHS.has(normalizedPath)) return [];
   const violations: CrossPlatformViolation[] = [];
   const lines = source.split(/\r?\n/);
   lines.forEach((line, index) => {

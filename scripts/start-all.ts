@@ -194,11 +194,25 @@ export function buildStartAllPlan(
 export function buildZrokBootstrapInvocation(
   rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'),
   reservedName = '',
+  platform: NodeJS.Platform = process.platform,
 ) {
-  const scriptPath = path.join(rootDir, 'scripts', 'zrok-bootstrap.ps1');
   const configuredReservedName = String(reservedName || '').trim();
+  if (platform === 'darwin') {
+    const scriptPath = path.join(rootDir, 'scripts', 'zrok-bootstrap-macos.ts');
+    const tsxCliPath = path.join(rootDir, 'node_modules', 'tsx', 'dist', 'cli.mjs');
+    return {
+      command: process.execPath,
+      args: [
+        tsxCliPath,
+        scriptPath,
+        ...(configuredReservedName ? ['--reserved-name', configuredReservedName] : []),
+      ],
+      scriptPath,
+    };
+  }
+  const scriptPath = path.join(rootDir, 'scripts', 'zrok-bootstrap.ps1');
   return {
-    command: process.platform === 'win32' ? 'powershell.exe' : 'pwsh',
+    command: platform === 'win32' ? 'powershell.exe' : 'pwsh',
     args: [
       '-NoProfile',
       '-ExecutionPolicy',

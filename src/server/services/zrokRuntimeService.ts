@@ -944,6 +944,10 @@ export function resolveZrokBinary(input: {
     if (!programFilesDir) return 'zrok2';
     return path.win32.join(programFilesDir, 'zrok2', 'zrok2.exe');
   }
+  if (platform === 'darwin') {
+    const localBinary = path.join(getDevFlowRuntimeDir(), 'bin', 'zrok2');
+    if (fs.existsSync(localBinary)) return localBinary;
+  }
   return 'zrok2';
 }
 
@@ -1021,6 +1025,13 @@ export function createDefaultZrokRuntimeAdapter(options: DefaultZrokRuntimeAdapt
     },
 
     async getServiceState(serviceName: string) {
+      if (process.platform === 'darwin') {
+        try {
+          return (await agentConsoleClient.getStatus()).reachable ? 'running' : 'stopped';
+        } catch {
+          return 'unknown';
+        }
+      }
       if (process.platform !== 'win32') return 'unknown';
       const script = [
         '$svc=Get-Service -Name $env:DEVFLOW_ZROK_SERVICE_QUERY -ErrorAction Stop',

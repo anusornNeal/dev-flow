@@ -124,6 +124,62 @@ export class WindowsDpapiCredentialVaultProvider implements CredentialVaultProvi
   }
 }
 
+export class MacOSKeychainCredentialVaultProvider implements CredentialVaultProvider {
+  readonly name = 'macos-keychain';
+  private availability: boolean | null = null;
+  private readonly cache = new Map<CredentialKey, string>();
+
+  constructor(
+    private readonly platform: NodeJS.Platform = process.platform,
+    private readonly runner: typeof spawnSync = spawnSync,
+    private readonly securityPath = '/usr/bin/security',
+  ) {}
+
+  private run(args: string[], timeout = 10_000) {
+    return this.runner(this.securityPath, args, {
+      encoding: 'utf8',
+      shell: false,
+      windowsHide: true,
+      timeout,
+    });
+  }
+
+  private service(key: CredentialKey) {
+    return `com.devflow.credentials.${key}`;
+  }
+
+  isAvailable() {
+    if (this.platform !== 'darwin') return false;
+    if (this.availability !== null) return this.availability;
+    const result = this.run(['list-keychains'], 5_000);
+    this.availability = result.status === 0 && !result.error;
+    return this.availability;
+  }
+
+  get(key: CredentialKey) {
+    if (!this.isAvailable()) return '';
+    if (this.cache.has(key)) return this.cache.get(key) || '';
+    const result = this.run(['find-generic-password', '-a', 'devflow', '-s', this.service(key), '-w']);
+    if (result.status !== 0) return '';
+    const value = String(result.stdout || '').replace(/\r?\n$/, '');
+    this.cache.set(key, value);
+    return value;
+  }
+
+  set(key: CredentialKey, value: string) {
+    if (!this.isAvailable()) throw new Error('Secure credential storage is unavailable on this platform.');
+    const result = this.run(['add-generic-password', '-U', '-a', 'devflow', '-s', this.service(key), '-w', value]);
+    if (result.status !== 0) throw new Error(`Credential vault write failed for ${key}.`);
+    this.cache.set(key, value);
+  }
+
+  delete(key: CredentialKey) {
+    this.cache.delete(key);
+    if (!this.isAvailable()) return;
+    this.run(['delete-generic-password', '-a', 'devflow', '-s', this.service(key)]);
+  }
+}
+
 export function createMemoryCredentialVaultProvider(): CredentialVaultProvider {
   const values = new Map<CredentialKey, string>();
   return {
@@ -147,6 +203,7 @@ export function createUnavailableCredentialVaultProvider(name = 'env-only'): Cre
 
 function createDefaultProvider(): CredentialVaultProvider {
   if (process.platform === 'win32') return new WindowsDpapiCredentialVaultProvider();
+  if (process.platform === 'darwin') return new MacOSKeychainCredentialVaultProvider();
   return createUnavailableCredentialVaultProvider(`${process.platform}-env-only`);
 }
 

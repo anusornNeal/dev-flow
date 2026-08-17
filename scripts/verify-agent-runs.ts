@@ -51,6 +51,7 @@ assert.equal(latest?.errorMessage, 'manual cancel');
 assert.equal(listAgentRunsForTask('task-1').length, 1);
 
 const {
+  buildAgentTriggerInvocation,
   buildPromptReference,
   createAgentRunFiles,
   getAgentRunHistoryPaths,
@@ -79,7 +80,21 @@ assert.ok(historyPaths.resultPath.endsWith(path.join(run.id, 'result.json')));
 assert.equal(resolveAgentExecutionMode(undefined), 'safe');
 assert.equal(resolveAgentExecutionMode('full'), 'full');
 assert.equal(resolveAgentExecutionMode('unexpected'), 'safe');
-assert.equal(getAgentTriggerScriptPath(tempDir), path.join(tempDir, 'scripts', 'trigger-agent.bat'));
+assert.equal(getAgentTriggerScriptPath(tempDir, 'win32'), path.join(tempDir, 'scripts', 'trigger-agent.bat'));
+assert.equal(getAgentTriggerScriptPath(tempDir, 'darwin'), path.join(tempDir, 'src', 'runner.ts'));
+const darwinTrigger = buildAgentTriggerInvocation({
+  appRoot: tempDir,
+  platform: 'darwin',
+  forwardedArgs: ['Codex', 'task-mac'],
+});
+assert.equal(darwinTrigger.command, process.execPath);
+assert.deepEqual(darwinTrigger.args, [
+  path.join(tempDir, 'node_modules', 'tsx', 'dist', 'cli.mjs'),
+  path.join(tempDir, 'src', 'runner.ts'),
+  'Codex',
+  'task-mac',
+]);
+assert.equal(darwinTrigger.args.some((arg) => /powershell|\.bat|\.ps1/i.test(arg)), false);
 
 const successfulRun = createAgentRun({
   taskId: 'task-success',
@@ -406,6 +421,7 @@ const {
   buildAgentCliArgs,
   buildLauncherDispatch,
   createAgentLaunchScript,
+  createPortableLaunchScript,
   mapModelForAgent,
   normalizeRunnerPaths,
 } = await import('../src/runner');
@@ -625,12 +641,37 @@ assert.match(launchScript, /pause/);
 const launcherDispatch = buildLauncherDispatch({
   cwd: fixtureWorkDir,
   launchScriptPath,
-});
+}, 'win32');
 assert.equal(launcherDispatch.command, 'powershell.exe');
 assert.ok(launcherDispatch.args.includes('Start-Process'));
 assert.ok(launcherDispatch.args.includes(launchScriptPath));
 assert.ok(launcherDispatch.args.includes(fixtureWorkDir));
 assert.equal(launcherDispatch.args.includes('start'), false);
+
+const portableLaunchScriptPath = createPortableLaunchScript({
+  runId: 'run-script-mac',
+  taskId: 'task-script-mac',
+  apiBaseUrl: 'http://localhost:3000',
+  runDir: files.runDir,
+  executable: '/opt/homebrew/bin/codex',
+  args: ['-m', 'gpt-5.5', buildPromptReference(files.promptPath)],
+  cwd: '/tmp/devflow-work',
+  logPath: files.logPath,
+  platform: 'darwin',
+});
+const portableLaunchScript = fs.readFileSync(portableLaunchScriptPath, 'utf8');
+assert.ok(portableLaunchScriptPath.endsWith('launch.mjs'));
+assert.match(portableLaunchScript, /\/usr\/bin\/script/);
+assert.match(portableLaunchScript, /shell: false/);
+assert.match(portableLaunchScript, /agent-runs/);
+assert.doesNotMatch(portableLaunchScript, /powershell|\.bat|\.ps1/i);
+assert.equal(portableLaunchScript.includes('GITHUB_PERSONAL_ACCESS_TOKEN'), false);
+const darwinLauncherDispatch = buildLauncherDispatch({
+  cwd: '/tmp/devflow-work',
+  launchScriptPath: portableLaunchScriptPath,
+}, 'darwin');
+assert.equal(darwinLauncherDispatch.command, process.execPath);
+assert.deepEqual(darwinLauncherDispatch.args, [portableLaunchScriptPath]);
 
 const miniLowLaunchScriptPath = createCodexLaunchScript({
   runId: 'run-script-test-low',

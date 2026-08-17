@@ -67,6 +67,7 @@ export interface BuildCodexLaunchConfigInput {
   environment?: Record<string, string | undefined>;
   logPath?: string;
   promptReferenceOverride?: string;
+  platform?: NodeJS.Platform;
 }
 
 export interface BuiltAgentLaunchConfig {
@@ -283,8 +284,10 @@ export function runAgentLaunchPreflight(input: {
   effort?: string | null;
   executionMode: AgentExecutionMode;
   appRoot?: string;
+  platform?: NodeJS.Platform;
 }): AgentLaunchPreflightResult {
   const appRoot = path.resolve(input.appRoot || getDevFlowAppRoot());
+  const platform = input.platform || process.platform;
   const agent = input.agent || '';
   const localPath = input.localPath || '';
 
@@ -345,7 +348,7 @@ export function runAgentLaunchPreflight(input: {
   const executablePath = resolveAgentExecutable(launchPlan.config.executables);
   if (!executablePath) {
     const message = launchPlan.config.name === 'Antigravity'
-      ? 'Antigravity CLI not found. Set DEVFLOW_AGY_EXE or add agy.exe to PATH.'
+      ? 'Antigravity CLI not found. Set DEVFLOW_AGY_EXE or add agy to PATH.'
       : `${launchPlan.config.name} executable was not found from the configured env/path/command sources.`;
     return {
       ok: false,
@@ -356,7 +359,7 @@ export function runAgentLaunchPreflight(input: {
     };
   }
 
-  const triggerScriptPath = getAgentTriggerScriptPath(appRoot);
+  const triggerScriptPath = getAgentTriggerScriptPath(appRoot, platform);
   if (!fs.existsSync(triggerScriptPath)) {
     return {
       ok: false,
@@ -368,7 +371,7 @@ export function runAgentLaunchPreflight(input: {
     };
   }
 
-  const invokeTriggerScriptPath = getInvokeAgentTriggerScriptPath(appRoot);
+  const invokeTriggerScriptPath = getInvokeAgentTriggerScriptPath(appRoot, platform);
   if (!fs.existsSync(invokeTriggerScriptPath)) {
     return {
       ok: false,
@@ -423,6 +426,7 @@ export function buildAgentLaunchConfig(input: BuildCodexLaunchConfigInput): Buil
     effort: input.task.effort,
     executionMode: input.executionMode,
     appRoot,
+    platform: input.platform,
   });
 
   if (!preflight.ok || !preflight.launchPlan?.config || !preflight.executablePath) {

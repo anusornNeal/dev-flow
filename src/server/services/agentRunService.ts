@@ -49,12 +49,59 @@ export function getDevFlowApiBaseUrl() {
   return (process.env.DEVFLOW_API_BASE_URL || 'http://localhost:3000').replace(/\/$/, '');
 }
 
-export function getAgentTriggerScriptPath(baseDir = getDevFlowAppRoot()) {
-  return process.env.DEVFLOW_AGENT_TRIGGER_SCRIPT || path.join(baseDir, 'scripts', 'trigger-agent.bat');
+export function getAgentRunnerPath(baseDir = getDevFlowAppRoot()) {
+  return path.join(baseDir, 'src', 'runner.ts');
 }
 
-export function getInvokeAgentTriggerScriptPath(baseDir = getDevFlowAppRoot()) {
-  return path.join(baseDir, 'scripts', 'invoke-agent-trigger.ps1');
+export function getAgentTsxCliPath(baseDir = getDevFlowAppRoot()) {
+  return path.join(baseDir, 'node_modules', 'tsx', 'dist', 'cli.mjs');
+}
+
+export function getAgentTriggerScriptPath(baseDir = getDevFlowAppRoot(), platform: NodeJS.Platform = process.platform) {
+  const explicit = platform === 'win32' ? process.env.DEVFLOW_AGENT_TRIGGER_SCRIPT?.trim() : '';
+  if (explicit) return path.resolve(baseDir, explicit);
+  return platform === 'win32'
+    ? path.join(baseDir, 'scripts', 'trigger-agent.bat')
+    : getAgentRunnerPath(baseDir);
+}
+
+export function getInvokeAgentTriggerScriptPath(baseDir = getDevFlowAppRoot(), platform: NodeJS.Platform = process.platform) {
+  return platform === 'win32'
+    ? path.join(baseDir, 'scripts', 'invoke-agent-trigger.ps1')
+    : getAgentTsxCliPath(baseDir);
+}
+
+export function buildAgentTriggerInvocation(input: {
+  appRoot?: string;
+  forwardedArgs: string[];
+  platform?: NodeJS.Platform;
+}) {
+  const appRoot = path.resolve(input.appRoot || getDevFlowAppRoot());
+  const platform = input.platform || process.platform;
+  const triggerPath = getAgentTriggerScriptPath(appRoot, platform);
+  const invokePath = getInvokeAgentTriggerScriptPath(appRoot, platform);
+  if (platform === 'win32') {
+    return {
+      command: 'powershell.exe',
+      args: [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        invokePath,
+        triggerPath,
+        ...input.forwardedArgs,
+      ],
+      triggerPath,
+      invokePath,
+    };
+  }
+  return {
+    command: process.execPath,
+    args: [invokePath, triggerPath, ...input.forwardedArgs],
+    triggerPath,
+    invokePath,
+  };
 }
 
 export function getAgentRunsBaseDir(baseDir = getDevFlowAppRoot()) {

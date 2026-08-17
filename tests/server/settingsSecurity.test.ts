@@ -56,6 +56,42 @@ test('saving integration tokens stores secrets in the vault and leaves SQLite se
   assert.ok(rows.every((row) => row.value === ''), JSON.stringify(rows));
 });
 
+test('macOS credential provider uses Keychain without shell execution', () => {
+  const values = new Map<string, string>();
+  const calls: Array<{ command: string; args: string[]; options: any }> = [];
+  const fakeSecurity = ((command: string, args: string[], options: any) => {
+    calls.push({ command, args: [...args], options });
+    if (args[0] === 'list-keychains') return { status: 0, stdout: 'login.keychain-db\n', stderr: '' } as any;
+    const service = args[args.indexOf('-s') + 1];
+    if (args[0] === 'add-generic-password') {
+      values.set(service, args[args.indexOf('-w') + 1]);
+      return { status: 0, stdout: '', stderr: '' } as any;
+    }
+    if (args[0] === 'find-generic-password') {
+      return values.has(service)
+        ? { status: 0, stdout: `${values.get(service)}\n`, stderr: '' } as any
+        : { status: 44, stdout: '', stderr: 'not found' } as any;
+    }
+    if (args[0] === 'delete-generic-password') {
+      values.delete(service);
+      return { status: 0, stdout: '', stderr: '' } as any;
+    }
+    return { status: 1, stdout: '', stderr: 'unexpected command' } as any;
+  }) as any;
+
+  const first = new vault.MacOSKeychainCredentialVaultProvider('darwin', fakeSecurity);
+  assert.equal(first.name, 'macos-keychain');
+  assert.equal(first.isAvailable(), true);
+  first.set('githubToken', 'mac-keychain-secret');
+  const second = new vault.MacOSKeychainCredentialVaultProvider('darwin', fakeSecurity);
+  assert.equal(second.get('githubToken'), 'mac-keychain-secret');
+  second.delete('githubToken');
+  assert.equal(new vault.MacOSKeychainCredentialVaultProvider('darwin', fakeSecurity).get('githubToken'), '');
+  assert.ok(calls.every((call) => call.command === '/usr/bin/security'));
+  assert.ok(calls.every((call) => call.options?.shell === false));
+  assert.equal(new vault.MacOSKeychainCredentialVaultProvider('win32', fakeSecurity).isAvailable(), false);
+});
+
 test('credential persistence fails closed when no secure provider is available', () => {
   vault.setCredentialVaultProviderForTests(vault.createUnavailableCredentialVaultProvider('test-unavailable'));
   assert.throws(() => vault.setCredential('githubToken', 'must-not-persist'), /secure credential storage is unavailable/i);

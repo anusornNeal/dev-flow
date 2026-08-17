@@ -2,11 +2,11 @@
 
 DevFlow is a local-first development task board and AI-agent orchestration app. It keeps projects, tasks, repository context, agent runs, verification, and local Git operations together, and exposes a controlled MCP server that ChatGPT and other agents can use.
 
-DevFlow is Windows-first and also supports normal local development on macOS.
+DevFlow treats Windows and macOS as first-class local runtime targets.
 
 ## First-time Setup
 
-The recommended Windows path is intentionally short: install the normal development prerequisites, start DevFlow once, paste your zrok account token when prompted, then use the stable MCP URL shown by DevFlow.
+The recommended path on Windows and macOS is intentionally short: install the normal development prerequisites, start DevFlow once, paste your zrok account token when prompted, then use the stable MCP URL shown by DevFlow.
 
 ### 1. Install the prerequisites
 
@@ -33,23 +33,27 @@ Recommended one-click startup on Windows:
 
 - Double-click `Start DevFlow.bat`.
 
-Terminal startup:
+Terminal startup on Windows or macOS:
 
 ```bash
 npm run start:all
 ```
 
-On the first Windows run, DevFlow bootstraps zrok for you. Administrator approval is required to install the persistent `zrokAgent` Windows service. If the zrok environment has not been enabled yet, the bootstrap prompts for:
+On Windows, DevFlow keeps the existing persistent `zrokAgent` Windows service bootstrap and may request Administrator approval when the service is installed for the first time.
+
+On macOS, `start:all` uses the native TypeScript bootstrap: it reuses `zrok2` from `DEVFLOW_ZROK_BIN`/PATH when available or downloads the matching darwin binary into `.devflow/bin/zrok2`, then runs the zrok Agent as a user-scoped process. No PowerShell, NSSM, or sudo installation is required for the DevFlow-managed macOS path.
+
+If the zrok environment has not been enabled yet, either platform prompts for:
 
 ```text
 zrok account token
 ```
 
-Paste the zrok account token from your zrok account. The prompt uses a secure string; DevFlow uses the token to enable the zrok environment and does not write the account token to `.env`.
+Paste the zrok account token from your zrok account. The prompt does not echo the token; DevFlow uses it to enable the zrok environment and does not write the account token to `.env`.
 
-After the zrok environment is ready, the bootstrap resolves which reserved name this machine should manage. If `DEVFLOW_ZROK_RESERVED_NAME` is configured, that explicit name is used non-interactively. Otherwise DevFlow reuses a valid name saved on this machine; on the first setup for a machine it lists the reserved names owned by the zrok account and lets you choose an existing name or **Create new**. The selected name is saved locally in ignored `.devflow/zrok-selection.json` so later launches do not ask again.
+After the zrok environment is ready, the bootstrap resolves which reserved name this machine should manage. If `DEVFLOW_ZROK_RESERVED_NAME` is configured, that explicit name is used non-interactively. Otherwise DevFlow reuses a valid name saved on this machine. On Windows, first-time setup can prompt you to choose an existing reserved name or **Create new**. On macOS, the non-shell bootstrap reuses the first existing public reserved name when no selection exists, or creates a hostname-based `devflow-...` reserved name when the account has none. The selected name is saved locally in ignored `.devflow/zrok-selection.json` so later launches do not ask again.
 
-That local selection file contains only the reserved name. It does not contain the zrok account token or a public endpoint. The bootstrap then creates the selected name only when needed, enrolls the agent for remote control, and starts the `zrokAgent` service.
+That local selection file contains only the reserved name. It does not contain the zrok account token or a public endpoint. The bootstrap then creates the selected name only when needed, enrolls the agent for remote control, and starts the platform-specific zrok Agent lifecycle: Windows service on Windows or a user-scoped Agent process on macOS.
 
 DevFlow does not bake a reserved name or public URL into the repository. For unattended/non-interactive setup you can still override the saved selection explicitly:
 
@@ -91,7 +95,7 @@ Open **DevFlow → Settings → Integrations** and fill in only the integrations
 
 You do not need these credentials just to run the DevFlow board or its own MCP tools.
 
-Secrets entered through Settings are stored through DevFlow's credential-vault abstraction. On Windows this uses current-user DPAPI-backed encrypted storage. Environment variables remain available as overrides/fallbacks.
+Secrets entered through Settings are stored through DevFlow's credential-vault abstraction. Windows uses current-user DPAPI-backed encrypted storage; macOS uses the current user's Keychain through `/usr/bin/security`. If secure storage is unavailable, credential writes fail closed. Environment variables remain available as runtime overrides/fallbacks.
 
 ### 5. Connect DevFlow MCP to ChatGPT
 
@@ -154,7 +158,7 @@ Starts the restart-capable DevFlow supervisor and local API at `http://localhost
 npm run start:all
 ```
 
-`start:all` runs setup, starts/reuses the DevFlow API runtime, reconciles the persistent zrok Agent Service/reserved share, verifies public reachability, and opens the browser. zrok is not a child tunnel process: the Windows service/share remains alive independently of a guarded DevFlow API restart.
+`start:all` runs setup, starts/reuses the DevFlow API runtime, reconciles the zrok Agent/reserved share, verifies public reachability, and opens the browser. On Windows the Agent is a persistent service; on macOS it is a detached user-scoped Agent process started/reused by `start:all`. In both cases the zrok lifecycle stays outside a guarded DevFlow API-only restart.
 
 See `docs/runtime-supervisor.md` for restart, public-health, zrok reconciliation, and diagnostic behavior.
 
@@ -177,7 +181,7 @@ JIRA_BASE_URL=""
 JIRA_EMAIL=""
 JIRA_API_TOKEN=""
 
-DEVFLOW_AGENT_TRIGGER_SCRIPT="scripts/trigger-agent.bat"
+DEVFLOW_AGENT_TRIGGER_SCRIPT="scripts/trigger-agent.bat" # optional Windows override; macOS uses the native runner path
 DEVFLOW_AGENT_EXECUTION_MODE="safe"
 DEVFLOW_MCP_TOOL_PROFILE="coding"
 ```
@@ -207,11 +211,11 @@ This `/api` policy is separate from the MCP transport policy.
 
 ## Runtime and Restart Model
 
-`restart_devflow` is intentionally API-only. An accepted guarded restart replaces the DevFlow API process after returning the MCP response, while the persistent zrok Agent Service and reserved share remain outside the restart scope. The public MCP URL is therefore expected to stay the same across a normal DevFlow restart.
+`restart_devflow` is intentionally API-only. An accepted guarded restart replaces the DevFlow API process after returning the MCP response, while the platform zrok Agent and reserved share remain outside the restart scope. The public MCP URL is therefore expected to stay the same across a normal DevFlow restart.
 
 Meaningful queued/active MCP work still blocks restart with `RESTART_BUSY`. After reconnect, `get_devflow_restart_status` can read the same durable restart ticket.
 
-Stopping the DevFlow supervisor from the tray stops the supervised DevFlow server, but does not tear down the persistent zrok Windows service/share. Starting DevFlow again reconciles and reuses that zrok state.
+Stopping the DevFlow supervisor stops the supervised DevFlow server, but does not intentionally tear down the zrok Agent/share. Windows keeps the service-managed Agent; macOS reuses a still-running user Agent or starts it again on the next `npm run start:all` (including after a reboot/login cycle).
 
 ## Common Commands
 

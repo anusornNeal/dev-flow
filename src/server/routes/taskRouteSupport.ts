@@ -11,7 +11,7 @@ import { ACTIVE_AGENT_RUN_STATUSES, cancelActiveRunsForTask, cancelStaleActiveRu
 import { deleteTasksByIds, generateDisplayId, saveTask, getTasks } from '../repositories/taskRepository.js';
 import { listAttachmentsForTask } from '../repositories/attachmentRepository';
 import { AgentOrchestrationWorker } from '../services/agentOrchestrationWorker';
-import { appendAgentRunLog, buildAgentCompletionSummary, createAgentRunFiles, createAgentRunResultRecord, getAgentRunHistoryPaths, getAgentTriggerScriptPath, getDevFlowApiBaseUrl, resolveAgentExecutionMode, resolveFromDevFlowAppRoot, writeAgentRunLaunchMetadata, writeAgentRunOutputSummary, writeAgentRunResult } from '../services/agentRunService';
+import { appendAgentRunLog, buildAgentCompletionSummary, buildAgentTriggerInvocation, createAgentRunFiles, createAgentRunResultRecord, getAgentRunHistoryPaths, getDevFlowApiBaseUrl, resolveAgentExecutionMode, resolveFromDevFlowAppRoot, writeAgentRunLaunchMetadata, writeAgentRunOutputSummary, writeAgentRunResult } from '../services/agentRunService';
 import { extractImages, extractDesignImages, findProjectByIdentifier, findTaskByIdentifier, getAgentTaskContext, normalizeAgentCompletionPayload, normalizeTaskCategoryAndTags, applyTaskCategoryAndTagsUpdate, renderTaskPrompt, resolveProjectIdFromRepo, validateAgentCompletionPayload, validateAgentParams, validateTaskPayload } from '../services/taskService';
 import { validateTaskQualityForMutation } from '../services/taskQualityService';
 import { createApiError, sendApiError } from '../services/api';
@@ -746,9 +746,22 @@ export function triggerTaskAgent(task: any, deps: ApiRouteDeps, routeLabel: stri
   applyRunSummaryToTask(task, currentRun);
   saveTask(task);
 
-  const triggerBat = getAgentTriggerScriptPath();
-  const invokeTriggerScript = resolveFromDevFlowAppRoot('scripts', 'invoke-agent-trigger.ps1');
   const apiBaseUrl = getDevFlowApiBaseUrl();
+  const appRoot = resolveFromDevFlowAppRoot();
+  const triggerInvocation = buildAgentTriggerInvocation({
+    appRoot,
+    forwardedArgs: [
+      task.agent,
+      task.id,
+      project?.localPath || 'none',
+      task.model || 'none',
+      task.effort || 'none',
+      run.id,
+      files.promptPath,
+      files.logPath,
+      apiBaseUrl,
+    ],
+  });
   const runtimeSettings = getSettings();
 
   const execOpts = {
@@ -795,7 +808,7 @@ export function triggerTaskAgent(task: any, deps: ApiRouteDeps, routeLabel: stri
 
   deps.writeAgentLog('TRIGGER', `Spawning run=${run.id} agent=${task.agent} for task=${task.id} ("${task.title}") via ${routeLabel}${project?.localPath ? ' at ' + project.localPath : ''}`);
   appendAgentRunLog(files.logPath, `Launch plan: agent=${launchPlan.agent} model=${launchPlan.devFlowModel || 'none'} resolvedModel=${launchPlan.resolvedModel || 'none'} effort=${launchPlan.selectedEffort || 'none'} effortHandling=${launchPlan.effortHandling.mode} executionMode=${executionMode}`);
-  appendAgentRunLog(files.logPath, `cwd=${project?.localPath || 'none'} triggerScript=${triggerBat} promptPath=${files.promptPath}`);
+  appendAgentRunLog(files.logPath, `cwd=${project?.localPath || 'none'} trigger=${triggerInvocation.command} source=${triggerInvocation.triggerPath} promptPath=${files.promptPath}`);
   appendAgentRunLog(files.logPath, agentLaunchPreview.previewText);
   writeAgentRunLaunchMetadata(files.runDir, {
     runId: run.id,
@@ -806,7 +819,8 @@ export function triggerTaskAgent(task: any, deps: ApiRouteDeps, routeLabel: stri
     cwd: project?.localPath || null,
     promptPath: files.promptPath,
     logPath: files.logPath,
-    triggerScript: triggerBat,
+    triggerScript: triggerInvocation.triggerPath,
+    triggerCommand: triggerInvocation.command,
     launchPlan,
     launchPackage: {
       executable: agentLaunchPreview.executable,
@@ -824,26 +838,10 @@ export function triggerTaskAgent(task: any, deps: ApiRouteDeps, routeLabel: stri
     status: 'starting',
     summary: startingSummary,
   }));
-  execFile('powershell.exe', [
-    '-NoProfile',
-    '-ExecutionPolicy',
-    'Bypass',
-    '-File',
-    invokeTriggerScript,
-    triggerBat,
-    task.agent,
-    task.id,
-    project?.localPath || 'none',
-    task.model || 'none',
-    task.effort || 'none',
-    run.id,
-    files.promptPath,
-    files.logPath,
-    apiBaseUrl,
-  ], execOpts, (error) => {
+  execFile(triggerInvocation.command, triggerInvocation.args, execOpts, (error) => {
     if (error) {
-      const reason = error.message || 'trigger-agent.bat failed.';
-      deps.writeAgentLog('ERROR', `trigger-agent.bat failed for run=${run.id} task=${task.id}: ${error.message}`);
+      const reason = error.message || 'Agent trigger handoff failed.';
+      deps.writeAgentLog('ERROR', `Agent trigger handoff failed for run=${run.id} task=${task.id}: ${error.message}`);
       failTaskRun(task, deps, run.id, reason, {
         runDir: files.runDir,
         logPath: files.logPath,

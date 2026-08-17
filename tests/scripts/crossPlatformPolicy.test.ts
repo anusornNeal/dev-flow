@@ -11,8 +11,11 @@ test('cross-platform guard rejects developer-specific absolute paths and shell e
   assert.deepEqual(violations.map((entry) => entry.code).sort(), ['HARDCODED_HOME_PATH', 'HARDCODED_HOME_PATH', 'SHELL_TRUE_SHARED_RUNTIME'].sort());
 });
 
-test('deprecated Windows-only runner is an explicit scoped exception', () => {
-  assert.deepEqual(findCrossPlatformViolations('src/runner.ts', `powershell.exe C:\\Users\\someone`), []);
+test('portable runner is subject to the same cross-platform path guard', () => {
+  assert.deepEqual(
+    findCrossPlatformViolations('src/runner.ts', `powershell.exe C:\\Users\\someone`).map((entry) => entry.code),
+    ['HARDCODED_HOME_PATH'],
+  );
 });
 
 test('normal portable path and shell:false code passes', () => {

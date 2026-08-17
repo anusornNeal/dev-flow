@@ -83,12 +83,19 @@ assert.deepEqual(serverOnly.processes.map((entry) => entry.label), ['server']);
 assert.equal(serverOnly.openBrowser, false);
 assert.equal(serverOnly.processes[0].env?.DEVFLOW_RESTART_SUPERVISOR_TOKEN, 'server-token');
 
-const bootstrapInvocation = buildZrokBootstrapInvocation('C:\\repo', 'account-specific-name');
+const bootstrapInvocation = buildZrokBootstrapInvocation('C:\\repo', 'account-specific-name', 'win32');
 assert.match(bootstrapInvocation.scriptPath.replace(/\\/g, '/'), /scripts\/zrok-bootstrap\.ps1$/);
+assert.equal(bootstrapInvocation.command, 'powershell.exe');
 assert.ok(bootstrapInvocation.args.includes('-File'));
 assert.deepEqual(bootstrapInvocation.args.slice(-2), ['-ReservedName', 'account-specific-name']);
-const bootstrapInvocationWithoutName = buildZrokBootstrapInvocation('C:\\repo');
+const bootstrapInvocationWithoutName = buildZrokBootstrapInvocation('C:\\repo', '', 'win32');
 assert.equal(bootstrapInvocationWithoutName.args.includes('-ReservedName'), false);
+const macBootstrapInvocation = buildZrokBootstrapInvocation('C:\\repo', 'account-specific-name', 'darwin');
+assert.equal(macBootstrapInvocation.command, process.execPath);
+assert.match(macBootstrapInvocation.scriptPath.replace(/\\/g, '/'), /scripts\/zrok-bootstrap-macos\.ts$/);
+assert.match(macBootstrapInvocation.args[0].replace(/\\/g, '/'), /node_modules\/tsx\/dist\/cli\.mjs$/);
+assert.deepEqual(macBootstrapInvocation.args.slice(-2), ['--reserved-name', 'account-specific-name']);
+assert.equal(macBootstrapInvocation.args.some((arg) => /powershell|\.ps1|nssm/i.test(arg)), false);
 
 assert.deepEqual(parseZrokBootstrapResult(JSON.stringify({
   status: 'ready',

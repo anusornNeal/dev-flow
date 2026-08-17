@@ -49,7 +49,13 @@ function buildLoggedLaunchCommandLine(executable: string, args: string[], logPat
 export function buildLauncherDispatch(input: {
   cwd: string;
   launchScriptPath: string;
-}) {
+}, platform: NodeJS.Platform = process.platform) {
+  if (platform !== 'win32') {
+    return {
+      command: process.execPath,
+      args: [input.launchScriptPath],
+    };
+  }
   return {
     command: 'powershell.exe',
     args: [
@@ -177,6 +183,35 @@ export function createCodexLaunchScript(input: {
   return launchScriptPath;
 }
 
+export function createPortableLaunchScript(input: {
+  runId: string;
+  taskId: string;
+  apiBaseUrl: string;
+  runDir: string;
+  executable: string;
+  args: string[];
+  cwd: string;
+  logPath?: string | null;
+  platform?: NodeJS.Platform;
+}) {
+  fs.mkdirSync(input.runDir, { recursive: true });
+  const launchScriptPath = path.join(input.runDir, 'launch.mjs');
+  const spec = {
+    runId: input.runId,
+    taskId: input.taskId,
+    apiBaseUrl: input.apiBaseUrl,
+    executable: input.executable,
+    args: input.args,
+    cwd: input.cwd,
+    logPath: input.logPath || '',
+    platform: input.platform || process.platform,
+  };
+  const source = `import fs from 'node:fs';\nimport path from 'node:path';\nimport { spawn } from 'node:child_process';\nconst spec = ${JSON.stringify(spec)};\nconst append = (message) => { if (spec.logPath) fs.appendFileSync(spec.logPath, '[' + new Date().toISOString() + '] ' + message + '\\n', 'utf8'); };\nlet fd = null;\nif (spec.logPath) { fs.mkdirSync(path.dirname(spec.logPath), { recursive: true }); fd = fs.openSync(spec.logPath, 'a', 0o600); }\nconst command = spec.platform === 'darwin' ? '/usr/bin/script' : spec.executable;\nconst args = spec.platform === 'darwin' ? ['-q', '/dev/null', spec.executable, ...spec.args] : spec.args;\nappend('--- agent output start ---');\nlet spawnError = null;\nlet child;\ntry { child = spawn(command, args, { cwd: spec.cwd, env: process.env, shell: false, stdio: ['ignore', fd ?? 'ignore', fd ?? 'ignore'] }); } catch (error) { spawnError = error; }\nconst exitCode = child ? await new Promise((resolve) => { let settled = false; const finish = (value) => { if (!settled) { settled = true; resolve(value); } }; child.once('error', (error) => { spawnError = error; finish(1); }); child.once('close', (code) => finish(Number.isInteger(code) ? code : 1)); }) : 1;\nconst success = exitCode === 0 && !spawnError;\nconst errorMessage = success ? null : (spawnError?.message || 'Agent process exited with code ' + exitCode);\nappend('--- agent output end (exit=' + exitCode + ') ---');\ntry { const response = await fetch(spec.apiBaseUrl + '/api/tasks/' + encodeURIComponent(spec.taskId) + '/agent-runs/' + encodeURIComponent(spec.runId) + '/complete', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ success, exitCode, errorMessage }) }); if (!response.ok) append('completion callback failed with HTTP ' + response.status); } catch (error) { append('completion callback failed: ' + (error?.message || String(error))); }\nif (fd !== null) fs.closeSync(fd);\nprocess.exit(exitCode);\n`;
+  fs.writeFileSync(launchScriptPath, source, { encoding: 'utf8', mode: 0o700 });
+  try { fs.chmodSync(launchScriptPath, 0o700); } catch {}
+  return launchScriptPath;
+}
+
 function readPromptReference(taskId: string, promptPath: string, apiBaseUrl: string) {
   if (promptPath && fs.existsSync(promptPath)) {
     return buildPromptReference(promptPath);
@@ -249,7 +284,19 @@ function main() {
   appendRunnerLog(paths.logPath, agentLaunchConfig.previewText);
   
   let launchScriptPath = '';
-  if (config.name === 'Codex') {
+  if (process.platform !== 'win32') {
+    launchScriptPath = createPortableLaunchScript({
+      runId,
+      taskId,
+      apiBaseUrl,
+      runDir,
+      executable,
+      args: spawnArgs,
+      cwd,
+      logPath: paths.logPath,
+      platform: process.platform,
+    });
+  } else if (config.name === 'Codex') {
     launchScriptPath = createCodexLaunchScript({ 
       runId, 
       taskId, 

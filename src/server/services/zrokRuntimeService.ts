@@ -104,6 +104,7 @@ export interface ZrokAgentShareRecord {
 export interface ZrokAgentStatusSnapshot {
   reachable: boolean;
   shares: ZrokAgentShareRecord[];
+  remoteControl?: 'available' | 'unsupported' | 'unavailable';
 }
 
 export interface ZrokPublicProbe {
@@ -172,12 +173,14 @@ class ZrokRuntimeInternalError extends Error {
 }
 
 function normalizeBaseUrl(value?: string | null) {
-  const text = String(value || '').trim();
+  const raw = String(value || '');
+  if (/[\u0000-\u001f\u007f]/.test(raw)) return null;
+  const text = raw.trim();
   if (!text) return null;
   try {
     const candidate = /^[a-z][a-z\d+.-]*:\/\//i.test(text) ? text : `https://${text}`;
     const url = new URL(candidate);
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+    if ((url.protocol !== 'http:' && url.protocol !== 'https:') || url.username || url.password) return null;
     url.pathname = url.pathname.replace(/\/+$/, '');
     url.search = '';
     url.hash = '';
@@ -545,7 +548,8 @@ function statusFromDiscovery(adapter: ZrokRuntimeAdapter, discovery: DiscoverySn
     let blockedReason: string | undefined;
     if (serviceState !== 'running') blockedReason = 'The local zrok agent service must be running before takeover.';
     else if (!remoteEnrolled) blockedReason = 'The active machine is not enrolled for authenticated zrok agent remoting.';
-    else if (!remotelyVisible) blockedReason = 'The active machine cannot be fenced through authenticated zrok agent remoting right now.';
+    else if (ownerAgentStatus?.remoteControl === 'unsupported') blockedReason = 'Remote zrok agent control is unsupported by the controller.';
+    else if (!remotelyVisible || ownerAgentStatus?.remoteControl !== 'available') blockedReason = 'The active machine cannot be fenced through authenticated zrok agent remoting right now.';
 
     return publicStatus('standby', checkedAt, {
       baseUrl,
@@ -726,6 +730,7 @@ export function createZrokRuntimeService(
       discovery.serviceState !== 'running'
       || !isRemoteAgentEnrolled(discovery.environments, remoteShare.envZId)
       || !discovery.ownerAgentStatus?.reachable
+      || discovery.ownerAgentStatus.remoteControl !== 'available'
       || !discovery.ownerAgentStatus.shares.some((share) => share.token === remoteShare.shareToken)
     ) {
       return safeTakeoverFailure(
@@ -923,8 +928,23 @@ export interface DefaultZrokRuntimeAdapterOptions {
   agentConsoleClient?: ZrokAgentConsoleClient;
 }
 
+export function resolveZrokBinary(input: {
+  binary?: string;
+  platform?: NodeJS.Platform;
+  programFilesDir?: string;
+} = {}) {
+  const explicit = input.binary?.trim() || process.env.DEVFLOW_ZROK_BIN?.trim();
+  if (explicit) return explicit;
+  const platform = input.platform || process.platform;
+  if (platform === 'win32') {
+    const programFilesDir = input.programFilesDir || process.env.ProgramFiles || 'C:\\Program Files';
+    return path.win32.join(programFilesDir, 'zrok2', 'zrok2.exe');
+  }
+  return 'zrok2';
+}
+
 export function createDefaultZrokRuntimeAdapter(options: DefaultZrokRuntimeAdapterOptions = {}): ZrokRuntimeAdapter {
-  const binary = options.binary || process.env.DEVFLOW_ZROK_BIN?.trim() || 'zrok2';
+  const binary = resolveZrokBinary(options);
   const zrokDir = path.resolve(options.zrokDir || process.env.DEVFLOW_ZROK_DIR?.trim() || path.join(os.homedir(), '.zrok2'));
   const commandTimeoutMs = options.commandTimeoutMs ?? 7_500;
   const fetchTimeoutMs = options.fetchTimeoutMs ?? 5_000;
@@ -1091,9 +1111,15 @@ export function createDefaultZrokRuntimeAdapter(options: DefaultZrokRuntimeAdapt
             : 'unknown';
           return [{ token, status }];
         });
-        return { reachable: true, shares };
-      } catch {
-        return { reachable: false, shares: [] };
+        return { reachable: true, remoteControl: 'available', shares };
+      } catch (error) {
+        return {
+          reachable: false,
+          remoteControl: error instanceof ZrokRuntimeInternalError && error.code === 'ZROK_AGENT_HTTP_501'
+            ? 'unsupported'
+            : 'unavailable',
+          shares: [],
+        };
       }
     },
 

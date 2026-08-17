@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import type { ZrokLocalAgentShare } from '../../src/server/services/zrokAgentConsoleClient.js';
 import {
   createZrokAgentConsoleClient,
   selectTargetShare,
@@ -186,6 +187,32 @@ test('matches canonical backend targets exactly and preserves path semantics', (
   assert.equal(selectTargetShare(status, 'http://localhost:3000/api/').kind, 'one');
   assert.equal(selectTargetShare(status, 'http://localhost:3000').kind, 'none');
   assert.equal(selectTargetShare(status, 'http://localhost:3000/api/v2').kind, 'one');
+});
+
+test('selects only public proxy shares with a recognized lifecycle', () => {
+  const target = 'http://127.0.0.1:3000';
+  const makeShare = (overrides: Partial<ZrokLocalAgentShare>): ZrokLocalAgentShare => ({
+    shareMode: 'public',
+    backendMode: 'proxy',
+    backendEndpoint: target,
+    frontendEndpoint: 'agent.example.net',
+    status: 'active',
+    ...overrides,
+  });
+
+  for (const lifecycle of ['active', 'retrying', 'failed']) {
+    const result = selectTargetShare({
+      reachable: true,
+      shares: [
+        makeShare({ shareMode: 'private' }),
+        makeShare({ backendMode: 'tunnel' }),
+        makeShare({ status: 'unknown' }),
+        makeShare({ status: lifecycle }),
+      ],
+    }, target);
+    assert.equal(result.kind, 'one');
+    assert.equal(result.share?.status, lifecycle);
+  }
 });
 
 test('returns none or ambiguous when target selection is not unique', () => {

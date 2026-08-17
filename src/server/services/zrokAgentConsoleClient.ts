@@ -151,7 +151,15 @@ export function selectTargetShare(
 ): { kind: 'none' | 'one' | 'ambiguous'; share?: ZrokLocalAgentShare } {
   const canonical = canonicalTarget(target);
   if (!canonical) return { kind: 'none' };
-  const matches = status.shares.filter((share) => canonicalTarget(share.backendEndpoint) === canonical);
+  const matches = status.shares.filter((share) => {
+    const shareMode = share.shareMode.trim().toLowerCase();
+    const backendMode = share.backendMode.trim().toLowerCase();
+    const lifecycle = share.status.trim().toLowerCase();
+    return shareMode === 'public'
+      && backendMode === 'proxy'
+      && (lifecycle === 'active' || lifecycle === 'retrying' || lifecycle === 'failed')
+      && canonicalTarget(share.backendEndpoint) === canonical;
+  });
   if (matches.length === 1) return { kind: 'one', share: matches[0] };
   return { kind: matches.length ? 'ambiguous' : 'none' };
 }

@@ -2,7 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { ZrokLocalAgentShare, ZrokLocalAgentStatus } from '../../src/server/services/zrokAgentConsoleClient.js';
 import {
+  createDefaultZrokRuntimeAdapter,
   createZrokRuntimeService,
+  resolveZrokBinary,
   type ZrokAgentStatusSnapshot,
   type ZrokEnvironmentRecord,
   type ZrokEnvironmentSnapshot,
@@ -135,7 +137,11 @@ function makeFixture(overrides: Partial<FixtureState> = {}) {
     },
     async getAgentStatus(input) {
       const snapshot = state.agentShares.get(input.envZId) || { reachable: false, shares: [] };
-      return { reachable: snapshot.reachable, shares: snapshot.shares.map((share) => ({ ...share })) };
+      return {
+        reachable: snapshot.reachable,
+        remoteControl: snapshot.remoteControl ?? 'available',
+        shares: snapshot.shares.map((share) => ({ ...share })),
+      };
     },
     async unshareRemote(input) {
       state.unshareCalls += 1;
@@ -261,6 +267,40 @@ test('prefers the live custom Agent domain over configured and account URLs', as
 
   assert.equal(actual.baseUrl, 'https://custom.devflow.example/app');
   assert.equal(actual.mcpUrl, 'https://custom.devflow.example/app/mcp');
+});
+
+test('rejects credentials and control characters from every public URL source', async () => {
+  const local = makeFixture({
+    localAgentStatus: {
+      reachable: true,
+      shares: [makeLocalAgentShare('https://user:secret@local.example.net\n')],
+    },
+  });
+  const localStatus = await local.service.getStatus();
+  assert.equal(localStatus.baseUrl, null);
+  assert.equal(localStatus.mcpUrl, null);
+
+  const controlOnly = makeFixture({
+    localAgentStatus: {
+      reachable: true,
+      shares: [makeLocalAgentShare('https://local.example.net\u000b')],
+    },
+  });
+  const controlOnlyStatus = await controlOnly.service.getStatus();
+  assert.equal(controlOnlyStatus.baseUrl, null);
+  assert.equal(controlOnlyStatus.mcpUrl, null);
+
+  const configFixture = makeFixture({
+    names: [{ ...makeName(''), url: undefined }],
+    shares: [],
+    localAgentStatus: { reachable: true, shares: [] },
+  });
+  const configStatus = await createZrokRuntimeService(configFixture.adapter, {
+    ...baseConfig(),
+    baseUrl: 'https://user:secret@configured.example.net\u000b',
+  }).getStatus();
+  assert.equal(configStatus.baseUrl, null);
+  assert.equal(configStatus.mcpUrl, null);
 });
 
 test('degrades when multiple local Agent shares match the runtime target', async () => {
@@ -394,6 +434,45 @@ test('status keeps Standby but blocks takeover when authenticated remote fencing
   assert.equal(status.status, 'standby');
   assert.equal(status.actionability.canTakeOver, false);
   assert.match(status.actionability.takeoverBlockedReason || '', /cannot be fenced/i);
+});
+
+test('status keeps Standby but blocks takeover when remote fencing is explicitly unsupported', async () => {
+  const { service } = remoteOwnerFixture({
+    agentShares: new Map([
+      [LOCAL_ENV, { reachable: true, shares: [] }],
+      [REMOTE_ENV, {
+        reachable: true,
+        remoteControl: 'unsupported',
+        shares: [{ token: REMOTE_TOKEN, status: 'active' }],
+      }],
+    ]),
+  });
+  const status = await service.getStatus();
+  assert.equal(status.status, 'standby');
+  assert.equal(status.actionability.canTakeOver, false);
+  assert.match(status.actionability.takeoverBlockedReason || '', /unsupported/i);
+});
+
+test('preserves unsupported remote-control capability from an HTTP 501 controller response', async () => {
+  const adapter = createDefaultZrokRuntimeAdapter({
+    binary: 'zrok2',
+    fetchImpl: async () => new Response('', { status: 501 }),
+  });
+  const status = await adapter.getAgentStatus({
+    apiEndpoint: 'https://controller.example',
+    accountToken: 'secret',
+    envZId: REMOTE_ENV,
+  });
+  assert.deepEqual(status, { reachable: false, remoteControl: 'unsupported', shares: [] });
+});
+
+test('resolves the bootstrap-installed zrok binary on Windows without PATH', () => {
+  assert.equal(
+    resolveZrokBinary({ platform: 'win32', programFilesDir: 'C:\\Program Files' }),
+    'C:\\Program Files\\zrok2\\zrok2.exe',
+  );
+  assert.equal(resolveZrokBinary({ platform: 'linux' }), 'zrok2');
+  assert.equal(resolveZrokBinary({ binary: 'D:\\tools\\zrok2.exe', platform: 'win32' }), 'D:\\tools\\zrok2.exe');
 });
 
 test('status reports Setup error when the managed reserved name cannot be identified', async () => {

@@ -21,6 +21,14 @@ import {
 
 export type HarnessExecutionAction = 'mutation' | 'verification' | 'commit' | 'finalization' | 'restart';
 
+type RestartExecutionBlocker = {
+  category: 'execution-session';
+  sessionId: string;
+  taskId: string | null;
+  workspaceId: string | null;
+  stage: string;
+};
+
 export type HarnessExecutionGuardDecision = {
   guarded: boolean;
   allowed: boolean;
@@ -37,6 +45,7 @@ export type HarnessExecutionGuardDecision = {
     transitionEvidenceId: string | null;
   };
   operationId: string;
+  restartBlockers?: RestartExecutionBlocker[];
 };
 
 const MUTATION_TOOLS = new Set([
@@ -135,9 +144,31 @@ function rulesRevision(project: any) {
   }
 }
 
-function relatedWorkActive(projectId: string | undefined, taskId: string | undefined) {
+const RESTART_SENSITIVE_EXECUTION_STAGES = new Set(['implementing', 'verifying', 'repairing']);
+const MAX_RESTART_BLOCKERS = 10;
+
+function relatedWorkActivity(projectId: string | undefined, taskId: string | undefined) {
   const tasks = projectId ? getTasksByProjectId(projectId) : getTasks();
-  return tasks.some((entry) => entry.id !== taskId && entry.status === 'in-progress');
+  const blockers: RestartExecutionBlocker[] = [];
+  for (const entry of tasks) {
+    if (entry.id === taskId || !entry.claim?.workspaceId) continue;
+    let relatedBinding: ReturnType<typeof getTaskExecutionMutationBinding> | null = null;
+    try {
+      relatedBinding = getTaskExecutionMutationBinding({ workspaceId: entry.claim.workspaceId });
+    } catch {
+      continue;
+    }
+    if (!relatedBinding || !RESTART_SENSITIVE_EXECUTION_STAGES.has(relatedBinding.session.lifecycle.stage)) continue;
+    blockers.push({
+      category: 'execution-session',
+      sessionId: relatedBinding.session.id,
+      taskId: relatedBinding.session.taskId,
+      workspaceId: relatedBinding.workspaceId,
+      stage: relatedBinding.session.lifecycle.stage,
+    });
+    if (blockers.length >= MAX_RESTART_BLOCKERS) break;
+  }
+  return { active: blockers.length > 0, blockers };
 }
 
 function resolveExplicitPolicy(args: Record<string, any>, task: any) {
@@ -218,7 +249,7 @@ function buildPolicyInput(toolName: string, args: Record<string, any>, binding: 
         claimExpiresAt: task?.claim?.expiresAt || null,
       }),
       scopeRelationship: binding ? 'disjoint' : 'unknown',
-      relatedWorkActive: action === 'restart' ? relatedWorkActive(projectId, task?.id) : false,
+      relatedWorkActive: action === 'restart' ? relatedWorkActivity(projectId, task?.id).active : false,
       restartRequested: action === 'restart',
       managedWorkspace: binding ? true : undefined,
       ownershipProven: binding ? binding.task?.claim?.workspaceId === binding.workspaceId : undefined,
@@ -254,7 +285,7 @@ function executionIdentity(binding: ReturnType<typeof getTaskExecutionMutationBi
   };
 }
 
-function blockedDecision(toolName: string, action: HarnessExecutionAction, operationId: string, policy: HarnessPolicy, binding: ReturnType<typeof getTaskExecutionMutationBinding> | null, reasonCode: string, guidance: string[]): HarnessExecutionGuardDecision {
+function blockedDecision(toolName: string, action: HarnessExecutionAction, operationId: string, policy: HarnessPolicy, binding: ReturnType<typeof getTaskExecutionMutationBinding> | null, reasonCode: string, guidance: string[], restartBlockers: RestartExecutionBlocker[] = []): HarnessExecutionGuardDecision {
   return {
     guarded: true,
     allowed: false,
@@ -265,6 +296,7 @@ function blockedDecision(toolName: string, action: HarnessExecutionAction, opera
     policy: compactPolicy(policy),
     execution: executionIdentity(binding),
     operationId,
+    ...(restartBlockers.length > 0 ? { restartBlockers } : {}),
   };
 }
 
@@ -333,7 +365,22 @@ export function preflightHarnessExecutionGuard(_state: AppState, toolNameValue: 
     }
   }
   if (action === 'restart' && policy.restart.value.gate !== 'allowed') {
-    return blockedDecision(toolName, action, operationId, policy, binding, policy.restart.reasonCodes[0] || 'RESTART_BLOCKED', ['Restart is blocked until related active work is known inactive.']);
+    const task = binding?.task || resolveTaskWithoutBinding(args);
+    const projectId = task?.projectId || boundedString(args?.projectId) || undefined;
+    const restartActivity = relatedWorkActivity(projectId, task?.id);
+    const blockerSummary = restartActivity.blockers.map((entry) => `${entry.category}:${entry.stage}:${entry.taskId || 'unbound'}`);
+    return blockedDecision(
+      toolName,
+      action,
+      operationId,
+      policy,
+      binding,
+      policy.restart.reasonCodes[0] || 'RESTART_BLOCKED',
+      blockerSummary.length > 0
+        ? [`Restart would interrupt live execution: ${blockerSummary.join(', ')}`]
+        : ['Restart is blocked until related active work is known inactive.'],
+      restartActivity.blockers,
+    );
   }
 
   const guidance = [

@@ -196,8 +196,40 @@ test('execution guard composes policy, ownership, lifecycle, retry identity, and
       checklist: [], logs: [], bugs: [], images: [], createdAt: now, updatedAt: new Date().toISOString(),
     } as any);
     const restart = preflightHarnessExecutionGuard(state, 'restart_devflow', { projectId: project.id });
-    assert.equal(restart.allowed, false);
+    assert.equal(restart.allowed, true);
     assert.equal(restart.action, 'restart');
+    assert.equal(restart.restartBlockers, undefined);
+
+    const liveTask = {
+      id: 'task-related-live', displayId: 'DVF-HARNESS-0004', title: 'Related live execution', description: 'Blocks restart only while execution is live.',
+      projectId: project.id, status: 'todo', priority: 'high', category: 'backend', tags: [], targetFiles: ['live.txt'],
+      checklist: [], logs: [], bugs: [], images: [], createdAt: now, updatedAt: new Date().toISOString(),
+    } as any;
+    saveTask(liveTask);
+    const liveClaim = claimTaskForSession(liveTask.id, { sessionId: 'harness-related-live-session', ownerKind: 'chat', ownerLabel: 'Harness live test' });
+    const liveWorkspaceId = liveClaim.claim.workspaceId;
+    const liveSession = executionSessions.getActiveTaskExecutionSessionForWorkspace(liveWorkspaceId)!;
+
+    const createdRestart = preflightHarnessExecutionGuard(state, 'restart_devflow', { projectId: project.id });
+    assert.equal(createdRestart.allowed, true);
+    executionSessions.recordExecutionLifecycleTransition(liveSession.id, {
+      toStage: 'context-ready', reasonCode: 'live-context', evidence: { id: 'live-context', kind: 'context-bundle', status: 'completed' },
+    });
+    executionSessions.recordExecutionLifecycleTransition(liveSession.id, {
+      toStage: 'implementing', reasonCode: 'live-mutation', evidence: { id: 'live-mutation', kind: 'owned-change', status: 'completed' },
+    });
+
+    const blockedRestart = preflightHarnessExecutionGuard(state, 'restart_devflow', { projectId: project.id });
+    assert.equal(blockedRestart.allowed, false);
+    assert.equal(blockedRestart.reasonCode, 'RELATED_WORK_ACTIVE');
+    assert.equal(blockedRestart.restartBlockers?.length, 1);
+    assert.equal(blockedRestart.restartBlockers?.[0]?.category, 'execution-session');
+    assert.equal(blockedRestart.restartBlockers?.[0]?.taskId, liveTask.id);
+    assert.equal(blockedRestart.restartBlockers?.[0]?.stage, 'implementing');
+    assert.match(blockedRestart.guidance[0] || '', /execution-session:implementing/);
+    executionSessions.completeExecutionSession(liveSession.id);
+    saveTask({ ...liveTask, status: 'done', claim: undefined, updatedAt: new Date().toISOString() } as any);
+    cleanupSessionWorkspace(liveWorkspaceId);
 
     assert.equal(getBuiltinToolJobRecoveryPolicy('apply_patch'), 'interrupted');
     assert.equal(getBuiltinToolJobRecoveryPolicy('apply_prepared_edit'), 'interrupted');

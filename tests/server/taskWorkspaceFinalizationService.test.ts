@@ -168,18 +168,30 @@ test('finalization blocks pre-integration evidence when sibling changes escalate
   git(root, ['commit', '-m', 'sibling config change']);
 
   const preIntegration = finalizeTaskWorkspace(state, { taskId: task.id, workspaceId: workspace.workspaceId, checks });
-  assert.equal(preIntegration.status, 'blocked');
+  assert.equal(preIntegration.status, 'continuation');
   assert.equal(preIntegration.code, 'POST_INTEGRATION_VERIFICATION_REQUIRED');
   assert.ok(preIntegration.integration.combinedChangedFiles.includes('package.json'));
   assert.equal(getTask(task.id)?.status, 'in-progress');
 
   const integratedHead = git(root, ['rev-parse', 'HEAD']).stdout;
+  assert.equal(preIntegration.continuation.repoRevision, integratedHead);
+  assert.deepEqual(preIntegration.continuation.requiredCommands, preIntegration.postIntegration.requiredCommands);
+  assert.deepEqual(preIntegration.continuation.missingCommands, preIntegration.postIntegration.missingCommands);
+  assert.equal(preIntegration.continuation.broadEvidenceRequired, preIntegration.postIntegration.broadEvidenceRequired);
+  assert.equal(preIntegration.continuation.requiredScope, preIntegration.postIntegration.broadEvidenceRequired ? 'broad-or-full' : 'targeted');
+  assert.equal(preIntegration.continuation.nextAction.action, 'RUN_POST_INTEGRATION_VERIFICATION_AND_RETRY');
+  assert.equal(preIntegration.continuation.nextAction.tool, 'finalize_task_workspace');
+  assert.equal(preIntegration.continuation.nextAction.bindChecksToRepoRevision, true);
   const postIntegrationChecks = [
     ...checks,
     { name: 'combined-full', command: 'verify', scope: 'full' as const, status: 'passed' as const, repoRevision: integratedHead },
   ];
   const completed = finalizeTaskWorkspace(state, { taskId: task.id, workspaceId: workspace.workspaceId, checks: postIntegrationChecks });
   assert.equal(completed.status, 'completed');
+  assert.equal(completed.integration.alreadyIntegrated, true);
+  assert.equal(completed.integration.baseHeadBefore, integratedHead);
+  assert.equal(completed.integration.baseHeadAfter, integratedHead);
+  assert.equal(git(root, ['rev-parse', 'HEAD']).stdout, integratedHead);
   assert.equal(getTask(task.id)?.status, 'done');
 });
 
@@ -209,7 +221,7 @@ test('combined repository mapping can require a verification command absent from
     checks: [{ name: 'service', command: 'test:service', status: 'passed' }],
   });
 
-  assert.equal(result.status, 'blocked');
+  assert.equal(result.status, 'continuation');
   assert.equal(result.code, 'POST_INTEGRATION_VERIFICATION_REQUIRED');
   assert.ok(result.combinedPlan.commands.includes('test:integration'));
   assert.ok(result.postIntegration.missingCommands.includes('test:integration'));

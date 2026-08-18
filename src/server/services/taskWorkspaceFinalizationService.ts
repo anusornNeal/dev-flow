@@ -36,7 +36,13 @@ type PostIntegrationRequirement = {
   requiredCommands: string[];
   missingCommands: string[];
   broadEvidenceRequired: boolean;
+  requiredScope: 'targeted' | 'broad-or-full';
   baseAdvanced: boolean;
+  nextAction: {
+    action: 'RUN_POST_INTEGRATION_VERIFICATION_AND_RETRY';
+    tool: 'finalize_task_workspace';
+    bindChecksToRepoRevision: true;
+  };
 };
 
 function appendFinalizationLog(task: any, message: string) {
@@ -148,7 +154,13 @@ function evaluatePostIntegrationRequirement(
     requiredCommands: combinedPlan.commands,
     missingCommands,
     broadEvidenceRequired,
+    requiredScope: broadEvidenceRequired ? 'broad-or-full' : 'targeted',
     baseAdvanced,
+    nextAction: {
+      action: 'RUN_POST_INTEGRATION_VERIFICATION_AND_RETRY',
+      tool: 'finalize_task_workspace',
+      bindChecksToRepoRevision: true,
+    },
   };
 }
 
@@ -193,9 +205,18 @@ export function finalizeTaskWorkspace(state: AppState, input: TaskWorkspaceFinal
   const postIntegration = evaluatePostIntegrationRequirement(integration, checks, sourcePlan, combinedPlan);
   if (postIntegration.required) {
     return {
-      status: 'blocked' as const,
+      status: 'continuation' as const,
       code: 'POST_INTEGRATION_VERIFICATION_REQUIRED' as const,
       message: postIntegration.reason,
+      continuation: {
+        code: 'POST_INTEGRATION_VERIFICATION_REQUIRED' as const,
+        repoRevision: postIntegration.repoRevision,
+        requiredCommands: postIntegration.requiredCommands,
+        missingCommands: postIntegration.missingCommands,
+        broadEvidenceRequired: postIntegration.broadEvidenceRequired,
+        requiredScope: postIntegration.requiredScope,
+        nextAction: postIntegration.nextAction,
+      },
       integration,
       sourcePlan,
       combinedPlan,

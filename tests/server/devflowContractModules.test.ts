@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { workspaceFinalizationHttpStatus } from '../../src/server/routes/devflow.js';
 import { devFlowToolDefinitions } from '../../src/server/contracts/devflowContract.js';
 import { taskToolDefinitions } from '../../src/server/contracts/devflowTaskTools.js';
 import { gitToolDefinitions } from '../../src/server/contracts/devflowGitTools.js';
@@ -80,6 +81,14 @@ test('workspace finalization is a first-class local-only terminal tool', () => {
   assert.equal((tool?.inputSchema as any)?.required?.includes('checks'), true);
   assert.match(String(tool?.description || ''), /Never pushes or fetches/i);
   assert.equal(tool?.buildHttpRequest({ taskId: 'DVF-1', workspaceId: 'ws_1', checks: [] }).path, '/api/workspaces/finalize-task');
+});
+
+test('workspace finalization transport preserves verification continuation without weakening hard conflicts', () => {
+  assert.equal(workspaceFinalizationHttpStatus({ status: 'completed' }), 200);
+  assert.equal(workspaceFinalizationHttpStatus({ status: 'continuation', code: 'POST_INTEGRATION_VERIFICATION_REQUIRED' }), 200);
+  assert.equal(workspaceFinalizationHttpStatus({ status: 'needs-recovery', code: 'INTEGRATION_CONFLICT' }), 409);
+  assert.equal(workspaceFinalizationHttpStatus({ status: 'needs-recovery', code: 'WORKSPACE_DIRTY' }), 409);
+  assert.equal(workspaceFinalizationHttpStatus({ status: 'blocked', code: 'VERIFICATION_NOT_PASSED' }), 409);
 });
 
 test('task-domain aliases remain available through focused definitions', () => {

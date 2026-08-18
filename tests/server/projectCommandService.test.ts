@@ -11,7 +11,8 @@ process.env.DEVFLOW_DB_PATH = path.join(tempRoot, 'devflow.db');
 const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
 executeAllMigrations();
 const projectCommandService = await import('../../src/server/services/projectCommandService.js');
-const { runProjectCommand, runProjectCommandAsync, describeProjectCommand, getProjectCommandExecutionIdentity } = projectCommandService;
+const { runProjectCommand, runProjectCommandAsync, describeProjectCommand, getProjectCommandExecutionIdentity, prepareProjectCommandVerificationCandidateAsync } = projectCommandService;
+const { isVerificationCandidateCurrent, releaseVerificationCandidate } = await import('../../src/server/services/verificationCandidateService.js');
 const { clearWorkspaceMetadataCache, getWorkspaceMetadataCacheStats } = await import('../../src/server/services/workspaceMetadataCacheService.js');
 const { createProject: upsertProject } = await import('../../src/server/repositories/projectRepository.js');
 const { invalidateRepoCacheDependencies } = await import('../../src/server/services/repoCacheInvalidationService.js');
@@ -304,6 +305,147 @@ test('runProjectCommand validation failures remain structured ApiErrors', () => 
     () => runProjectCommand(stateFor(root), { projectId: 'project-command', command: 'unsafe' }),
     (error: any) => error?.payload?.code === 'COMMAND_NOT_ALLOWED',
   );
+});
+
+test('runProjectCommand executes exact benchmark package scripts through the safe package-manager path', () => {
+  const root = createProject('benchmark-package-safe', {
+    'benchmark:adaptive-source-disclosure': 'node scripts/benchmark.mjs',
+    'admin:unsafe': 'node scripts/admin.mjs',
+  });
+  fs.writeFileSync(path.join(root, 'scripts', 'benchmark.mjs'), "process.stdout.write('benchmark ok\\n');\n");
+  fs.writeFileSync(path.join(root, 'scripts', 'admin.mjs'), "process.stdout.write('unsafe\\n');\n");
+  const state = stateFor(root);
+  const args = { projectId: 'project-command', command: 'benchmark:adaptive-source-disclosure' };
+  const descriptor = describeProjectCommand(state, args);
+  const result = runProjectCommand(state, args);
+
+  assert.equal(descriptor.source, 'package-json');
+  assert.equal(descriptor.access, 'verify');
+  assert.equal(descriptor.scope, 'broad');
+  assert.equal(result.ok, true);
+  assert.equal(result.command, 'benchmark:adaptive-source-disclosure');
+  assert.match(result.stdout, /benchmark ok/);
+});
+
+test('benchmark package fallback stays narrow and returns actionable command guidance', () => {
+  const root = createProject('benchmark-policy-guidance', {
+    'benchmark:adaptive-source-disclosure': 'node scripts/pass.mjs',
+    'admin:unsafe': 'node scripts/pass.mjs',
+  });
+  fs.writeFileSync(path.join(root, 'scripts', 'pass.mjs'), 'process.exit(0);\n');
+  const state = stateFor(root);
+
+  assert.throws(
+    () => runProjectCommand(state, { projectId: 'project-command', command: 'admin:unsafe' }),
+    (error: any) => {
+      assert.equal(error?.payload?.code, 'COMMAND_NOT_ALLOWED');
+      assert.equal(error?.payload?.details?.availableCommands?.includes('admin:unsafe'), false);
+      assert.ok(error?.payload?.details?.availableCommands?.includes('benchmark:adaptive-source-disclosure'));
+      assert.equal(typeof error?.payload?.details?.nextAction, 'string');
+      return true;
+    },
+  );
+  assert.throws(
+    () => runProjectCommand(state, { projectId: 'project-command', command: 'benchmark:adaptive-source-disclosur' }),
+    (error: any) => {
+      assert.equal(error?.payload?.code, 'COMMAND_NOT_CONFIGURED');
+      assert.equal(error?.payload?.details?.nearestValidCommands?.[0], 'benchmark:adaptive-source-disclosure');
+      assert.equal(typeof error?.payload?.details?.nextAction, 'string');
+      return true;
+    },
+  );
+  for (const command of ['benchmark:ok && whoami', './benchmark:ok', 'npm run benchmark:ok', '../benchmark:ok']) {
+    assert.throws(
+      () => runProjectCommand(state, { projectId: 'project-command', command }),
+      (error: any) => error?.payload?.code === 'COMMAND_NOT_ALLOWED' && typeof error?.payload?.details?.nextAction === 'string',
+      command,
+    );
+  }
+});
+
+test('repository-config preset wins over benchmark package fallback with the same name', () => {
+  const root = createProject('benchmark-config-precedence', {
+    'benchmark:adaptive-source-disclosure': 'node scripts/package.mjs',
+  });
+  fs.mkdirSync(path.join(root, '.devflow'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.devflow', 'commands.json'), JSON.stringify({
+    commands: {
+      'benchmark:adaptive-source-disclosure': {
+        executable: 'node',
+        args: ['scripts/config.mjs'],
+        category: 'test',
+      },
+    },
+  }, null, 2));
+  fs.writeFileSync(path.join(root, 'scripts', 'package.mjs'), "process.stdout.write('package\\n');\n");
+  fs.writeFileSync(path.join(root, 'scripts', 'config.mjs'), "process.stdout.write('config\\n');\n");
+  const state = stateFor(root);
+  const args = { projectId: 'project-command', command: 'benchmark:adaptive-source-disclosure' };
+  const descriptor = describeProjectCommand(state, args);
+  const result = runProjectCommand(state, args);
+
+  assert.equal(descriptor.source, 'repository-config');
+  assert.equal(result.ok, true);
+  assert.equal(result.stdout.trim(), 'config');
+});
+
+test('benchmark package scripts retain timeout and output bounds', () => {
+  const root = createProject('benchmark-bounds', {
+    'benchmark:slow': 'node scripts/slow.mjs',
+    'benchmark:noisy': 'node scripts/noisy.mjs',
+  });
+  fs.writeFileSync(path.join(root, 'scripts', 'slow.mjs'), 'setTimeout(() => process.exit(0), 2000);\n');
+  fs.writeFileSync(path.join(root, 'scripts', 'noisy.mjs'), "process.stdout.write('x'.repeat(4096));\n");
+  const state = stateFor(root);
+  const timeoutResult = runProjectCommand(state, { projectId: 'project-command', command: 'benchmark:slow', timeoutMs: 25 });
+  const outputResult = runProjectCommand(state, { projectId: 'project-command', command: 'benchmark:noisy', maxOutputBytes: 128 });
+
+  assert.equal(timeoutResult.status, 'timed_out');
+  assert.equal(timeoutResult.timedOut, true);
+  assert.equal(outputResult.ok, true);
+  assert.equal(outputResult.stdoutTruncated, true);
+  assert.ok(outputResult.stdoutBytes >= 4096);
+  assert.ok(Buffer.byteLength(outputResult.stdout, 'utf8') < outputResult.stdoutBytes);
+});
+
+test('benchmark package scripts retain verification candidate and cache identity behavior', async () => {
+  const root = createProject('benchmark-cache-candidate', {
+    'benchmark:cache': 'node scripts/counter.mjs',
+  });
+  const counterPath = path.join(tempRoot, 'benchmark-cache-counter.txt');
+  fs.writeFileSync(path.join(root, 'scripts', 'counter.mjs'), [
+    "import fs from 'node:fs';",
+    `const counterPath = ${JSON.stringify(counterPath)};`,
+    "const next = fs.existsSync(counterPath) ? Number(fs.readFileSync(counterPath, 'utf8')) + 1 : 1;",
+    "fs.writeFileSync(counterPath, String(next), 'utf8');",
+    "process.stdout.write(String(next));",
+  ].join('\n'));
+  const git = (args: string[]) => {
+    const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', shell: false });
+    assert.equal(result.status, 0, result.stderr || result.stdout || `git ${args.join(' ')} failed`);
+  };
+  git(['init']);
+  git(['config', 'user.name', 'DevFlow Test']);
+  git(['config', 'user.email', 'devflow@example.com']);
+  git(['add', '.']);
+  git(['commit', '-m', 'benchmark fixture']);
+  const state = stateFor(root);
+  const args = { projectId: 'project-command', command: 'benchmark:cache', cacheResult: true };
+  const identity = getProjectCommandExecutionIdentity(state, args);
+  assert.ok(identity);
+  assert.equal(identity?.command, 'benchmark:cache');
+  const candidate = await prepareProjectCommandVerificationCandidateAsync(state, args, { expectedExecutionKey: identity!.key });
+  assert.ok(candidate);
+  assert.equal(isVerificationCandidateCurrent(root, candidate!, candidate?.executionIdentity.commandConfigFingerprint), true);
+
+  const first = runProjectCommand(state, args);
+  const second = runProjectCommand(state, args);
+
+  assert.equal(first.cache?.hit, false);
+  assert.equal(second.cache?.hit, true);
+  assert.equal(fs.readFileSync(counterPath, 'utf8'), '1');
+  assert.equal(first.resourceProfile?.sharedResources.length, describeProjectCommand(state, args).sharedResources.length);
+  releaseVerificationCandidate(candidate!.candidateId);
 });
 
 test('runProjectCommand executes a repository-defined YAML preset without package.json', () => {

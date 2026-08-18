@@ -35,6 +35,34 @@ import {
 } from './verificationResourceProfileService';
 
 const ALLOWED_COMMANDS = ['typecheck', 'test', 'lint', 'build', 'verify'] as const;
+const SAFE_BENCHMARK_PACKAGE_SCRIPT = /^benchmark:[A-Za-z0-9][A-Za-z0-9:_-]*$/;
+const MAX_COMMAND_GUIDANCE = 12;
+const MAX_NEAREST_COMMAND_GUIDANCE = 5;
+
+function isSafeBenchmarkPackageScript(command: string) {
+  return SAFE_BENCHMARK_PACKAGE_SCRIPT.test(command);
+}
+
+function commonPrefixLength(left: string, right: string) {
+  const limit = Math.min(left.length, right.length);
+  let index = 0;
+  while (index < limit && left[index] === right[index]) index += 1;
+  return index;
+}
+
+function buildCommandGuidance(command: string, scripts: Record<string, string> = {}) {
+  const availableCommands = Object.keys(scripts)
+    .filter((name) => (ALLOWED_COMMANDS as readonly string[]).includes(name) || isSafeBenchmarkPackageScript(name))
+    .sort()
+    .slice(0, MAX_COMMAND_GUIDANCE);
+  const candidates = Array.from(new Set([...(ALLOWED_COMMANDS as readonly string[]), ...availableCommands]));
+  const nearestValidCommands = candidates
+    .map((candidate) => ({ candidate, score: commonPrefixLength(command, candidate) }))
+    .sort((left, right) => right.score - left.score || left.candidate.localeCompare(right.candidate))
+    .slice(0, MAX_NEAREST_COMMAND_GUIDANCE)
+    .map((entry) => entry.candidate);
+  return { availableCommands, nearestValidCommands };
+}
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 12_000;
 const COMPACT_MAX_OUTPUT_BYTES = 2_000;
@@ -309,8 +337,14 @@ function resolveCommandLabel(value: unknown): string {
   throw createApiError(
     400,
     'COMMAND_NOT_ALLOWED',
-    `Command '${normalized || String(value || '')}' is not a valid verification preset name. Use a built-in package script or define it in .devflow/commands.yaml.`,
-    { affectedId: normalized || undefined },
+    `Command '${normalized || String(value || '')}' is not a valid verification preset name. Use a built-in package script, an explicit benchmark:* package script, or define it in .devflow/commands.yaml.`,
+    {
+      affectedId: normalized || undefined,
+      details: {
+        ...buildCommandGuidance(normalized),
+        nextAction: 'Use a preset name matching [A-Za-z0-9][A-Za-z0-9:_-]*, or choose a configured repository preset.',
+      },
+    },
   );
 }
 
@@ -423,6 +457,7 @@ function resolveCommandTargets(root: string, args: Record<string, any>, acceptsT
 function resolveAllowedCommand(root: string, command: string, requestArgs: Record<string, any> = {}): ResolvedCommand {
   const packageConfig = readPackageScripts(root);
   const isBuiltIn = (ALLOWED_COMMANDS as readonly string[]).includes(command);
+  const isSafeBenchmark = isSafeBenchmarkPackageScript(command);
   if (isBuiltIn && packageConfig.scripts[command]) {
     resolveCommandTargets(root, requestArgs, false);
     const invocation = resolvePackageManagerInvocation('npm', ['run', '--silent', command]);
@@ -461,16 +496,36 @@ function resolveAllowedCommand(root: string, command: string, requestArgs: Recor
     };
   }
 
-  if (!isBuiltIn) {
-    throw createApiError(400, 'COMMAND_NOT_ALLOWED', `Command '${command}' is not a built-in verification preset and is not defined in .devflow/commands.yaml or .devflow/commands.json.`, {
+  if (isSafeBenchmark && packageConfig.scripts[command]) {
+    resolveCommandTargets(root, requestArgs, false);
+    const invocation = resolvePackageManagerInvocation('npm', ['run', '--silent', command]);
+    return {
+      command,
+      executable: invocation.executable,
+      args: invocation.args,
+      source: 'package-json',
+      script: packageConfig.scripts[command],
+    };
+  }
+
+  const guidance = buildCommandGuidance(command, packageConfig.scripts);
+  if (!isBuiltIn && !isSafeBenchmark) {
+    throw createApiError(400, 'COMMAND_NOT_ALLOWED', `Command '${command}' is not an allowed direct package verification script and is not defined in .devflow/commands.yaml or .devflow/commands.json.`, {
       affectedId: command,
-      details: { nextAction: `Define commands.${command} with executable and args in .devflow/commands.yaml.` },
+      details: {
+        ...guidance,
+        nextAction: `Use a built-in or benchmark:* package script, or define commands.${command} explicitly in .devflow/commands.yaml.`,
+      },
     });
   }
 
-  throw createApiError(400, 'COMMAND_NOT_CONFIGURED', `Verification command '${command}' is not configured. Add a package.json script or a repository command preset.`, {
+  throw createApiError(400, 'COMMAND_NOT_CONFIGURED', `Verification command '${command}' is allowed by policy but is not configured. Add the exact package.json script or a repository command preset.`, {
     affectedId: command,
-    details: { packageJsonFound: packageConfig.exists, nextAction: `Configure '${command}' in package.json scripts or .devflow/commands.yaml.` },
+    details: {
+      packageJsonFound: packageConfig.exists,
+      ...guidance,
+      nextAction: `Configure '${command}' exactly in package.json scripts or .devflow/commands.yaml.`,
+    },
   });
 }
 

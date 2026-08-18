@@ -136,20 +136,26 @@ test('execution guard composes policy, ownership, lifecycle, retry identity, and
     recordHarnessExecutionOutcome(mutationDecision, { ok: true, changed: true });
     assert.equal(lifecycleEvidenceCount(session.id), afterFirst);
 
-    const verifyDecision = preflightHarnessExecutionGuard(state, 'run_project_command', { workspaceId, harnessOperationId: 'verify-failed' });
+    const verificationArgs = { workspaceId, command: 'test-focused', targets: ['tests/server/example.test.ts'] };
+    const redVerificationArgs = {
+      ...verificationArgs,
+      __verificationCandidate: { candidateId: 'candidate-red', repoRevision: 'revision-a', executionKey: 'red-key' },
+    };
+    const verifyDecision = preflightHarnessExecutionGuard(state, 'run_project_command', redVerificationArgs);
     recordHarnessExecutionOutcome(verifyDecision, { status: 'failed', ok: false });
     assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'repairing');
 
-    const recoveryFailure = preflightHarnessExecutionGuard(state, 'run_project_command', { workspaceId, harnessOperationId: 'verify-recovery-failed' });
+    const recoveryFailure = preflightHarnessExecutionGuard(state, 'run_project_command', redVerificationArgs);
+    assert.equal(recoveryFailure.operationId, verifyDecision.operationId);
     const lifecycleBeforeRecoveryFailure = lifecycleEvidenceCount(session.id);
     recordHarnessExecutionOutcome(recoveryFailure, { status: 'failed', ok: false, exitCode: 1 });
     assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'repairing');
     assert.equal(lifecycleEvidenceCount(session.id), lifecycleBeforeRecoveryFailure);
-    assert.equal(executionSessions.getExecutionSessionState(session.id).evidence.filter((entry: any) => entry.id === 'harness:verify-recovery-failed:verification-failure').length, 1);
+    assert.equal(executionSessions.getExecutionSessionState(session.id).evidence.filter((entry: any) => entry.id === `harness:${verifyDecision.operationId}:verification-failure`).length, 1);
     recordHarnessExecutionOutcome(recoveryFailure, { status: 'failed', ok: false, exitCode: 1 });
     assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'repairing');
     assert.equal(lifecycleEvidenceCount(session.id), lifecycleBeforeRecoveryFailure);
-    assert.equal(executionSessions.getExecutionSessionState(session.id).evidence.filter((entry: any) => entry.id === 'harness:verify-recovery-failed:verification-failure').length, 1);
+    assert.equal(executionSessions.getExecutionSessionState(session.id).evidence.filter((entry: any) => entry.id === `harness:${verifyDecision.operationId}:verification-failure`).length, 1);
 
     const softOverride = preflightHarnessExecutionGuard(state, 'write_local_file', {
       workspaceId, filePath: 'value.txt',
@@ -167,12 +173,19 @@ test('execution guard composes policy, ownership, lifecycle, retry identity, and
     assert.equal(tooEarlyOwnedCommit.allowed, false);
     assert.equal(tooEarlyOwnedCommit.reasonCode, 'EXECUTION_LIFECYCLE_STAGE_BLOCKED');
 
-    const verifySuccess = preflightHarnessExecutionGuard(state, 'run_project_command', { workspaceId, harnessOperationId: 'verify-success' });
+    const greenVerificationArgs = {
+      ...verificationArgs,
+      __verificationCandidate: { candidateId: 'candidate-green', repoRevision: 'revision-b', executionKey: 'green-key' },
+    };
+    const verifySuccess = preflightHarnessExecutionGuard(state, 'run_project_command', greenVerificationArgs);
+    assert.notEqual(verifySuccess.operationId, verifyDecision.operationId);
     const lifecycleBeforeRecoverySuccess = lifecycleEvidenceCount(session.id);
     recordHarnessExecutionOutcome(verifySuccess, { status: 'passed', ok: true, exitCode: 0 });
     assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'verifying');
     assert.equal(lifecycleEvidenceCount(session.id), lifecycleBeforeRecoverySuccess + 1);
-    recordHarnessExecutionOutcome(verifySuccess, { status: 'passed', ok: true, exitCode: 0 });
+    const verifySuccessReplay = preflightHarnessExecutionGuard(state, 'run_project_command', greenVerificationArgs);
+    assert.equal(verifySuccessReplay.operationId, verifySuccess.operationId);
+    recordHarnessExecutionOutcome(verifySuccessReplay, { status: 'passed', ok: true, exitCode: 0 });
     assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'verifying');
     assert.equal(lifecycleEvidenceCount(session.id), lifecycleBeforeRecoverySuccess + 1);
 

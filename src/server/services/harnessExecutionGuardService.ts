@@ -206,7 +206,15 @@ function pathsLookSafe(args: Record<string, any>) {
 
 function operationIdentity(toolName: string, args: Record<string, any>) {
   const explicit = boundedString(args?.harnessOperationId || args?.operationId || args?.jobId || args?.editPlanId);
-  return explicit || `guard-op-${fingerprint({ toolName, args }).slice(0, 32)}`;
+  if (explicit) return explicit;
+  const verificationRevision = VERIFICATION_TOOLS.has(toolName)
+    ? boundedString(args?.__verificationCandidate?.repoRevision || args?.__projectCommandAdmissionIdentity?.repoRevision)
+    : null;
+  return `guard-op-${fingerprint({
+    toolName,
+    args,
+    ...(verificationRevision ? { verificationRevision } : {}),
+  }).slice(0, 32)}`;
 }
 
 function resolveTaskWithoutBinding(args: Record<string, any>) {

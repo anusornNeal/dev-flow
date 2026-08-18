@@ -86,6 +86,7 @@ test('workspace finalization is a first-class local-only terminal tool', () => {
 test('workspace finalization transport preserves verification continuation without weakening hard conflicts', () => {
   assert.equal(workspaceFinalizationHttpStatus({ status: 'completed' }), 200);
   assert.equal(workspaceFinalizationHttpStatus({ status: 'continuation', code: 'POST_INTEGRATION_VERIFICATION_REQUIRED' }), 200);
+  assert.equal(workspaceFinalizationHttpStatus({ status: 'continuation', code: 'POST_INTEGRATION_FINALIZATION_REQUIRED' }), 200);
   assert.equal(workspaceFinalizationHttpStatus({ status: 'needs-recovery', code: 'INTEGRATION_CONFLICT' }), 409);
   assert.equal(workspaceFinalizationHttpStatus({ status: 'needs-recovery', code: 'WORKSPACE_DIRTY' }), 409);
   assert.equal(workspaceFinalizationHttpStatus({ status: 'blocked', code: 'VERIFICATION_NOT_PASSED' }), 409);

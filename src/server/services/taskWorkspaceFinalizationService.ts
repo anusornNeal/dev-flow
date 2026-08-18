@@ -3,7 +3,7 @@ import { getTaskByIdentifier, saveTask } from '../repositories/taskRepository.js
 import { listExecutionSessionsForTask } from '../repositories/executionSessionRepository.js';
 import { createApiError } from './api.js';
 import { completeExecutionSession, recordExecutionLifecycleTransition } from './executionSessionService.js';
-import { syncTaskWithGit } from './taskGitWorkflowService.js';
+import { normalizeVerificationEvidence } from './taskGitWorkflowService.js';
 import { clearTaskClaimWhenLeavingInProgress } from './taskClaimService.js';
 import { cleanupSessionWorkspace, getSessionWorkspaceMetadataForRecovery } from './sessionWorkspaceService.js';
 import { inspectWorkspaceRecovery } from './workspaceRecoveryService.js';
@@ -74,7 +74,7 @@ function verifyFinalizationInput(task: any, input: TaskWorkspaceFinalizationInpu
 
 function localOnlyEvidence(task: any, baseBranch: string, commit: string, checks: TaskWorkspaceFinalizationCheck[]) {
   const recordedAt = new Date().toISOString();
-  const verificationEvidence = checks.map((check) => ({ ...check, recordedAt: check.recordedAt || recordedAt }));
+  const verificationEvidence = normalizeVerificationEvidence({ checks }, task);
   const gitEvidence = {
     evidenceSource: 'project-root',
     branch: baseBranch,
@@ -164,7 +164,63 @@ function evaluatePostIntegrationRequirement(
   };
 }
 
-export function finalizeTaskWorkspace(state: AppState, input: TaskWorkspaceFinalizationInput) {
+type PostIntegrationFinalizationPhase = 'metadata' | 'verification-plan' | 'boundary-save' | 'evidence' | 'task-save' | 'execution-lifecycle' | 'cleanup';
+
+function postIntegrationBoundaryLogId(workspaceId: string, repoRevision: string) {
+  return `log-workspace-finalization-boundary-${workspaceId}-${repoRevision}`;
+}
+
+function hasPostIntegrationBoundary(task: any, workspaceId: string, repoRevision: string) {
+  const id = postIntegrationBoundaryLogId(workspaceId, repoRevision);
+  return Array.isArray(task?.logs) && task.logs.some((entry: any) => entry?.id === id);
+}
+
+function persistPostIntegrationBoundary(task: any, workspaceId: string, repoRevision: string) {
+  if (hasPostIntegrationBoundary(task, workspaceId, repoRevision)) return task;
+  const now = new Date().toISOString();
+  const next = {
+    ...task,
+    logs: [...(Array.isArray(task.logs) ? task.logs : []), {
+      id: postIntegrationBoundaryLogId(workspaceId, repoRevision),
+      timestamp: now,
+      message: `Post-integration finalization boundary accepted for workspace ${workspaceId} at ${repoRevision.slice(0, 12)}; no revision-bound verification continuation was required.`,
+      type: 'update',
+    }],
+    updatedAt: now,
+  };
+  saveTask(next);
+  return next;
+}
+
+function postIntegrationFinalizationContinuation(
+  integration: WorkspaceIntegrationSuccess,
+  phase: PostIntegrationFinalizationPhase,
+  error: any,
+  context: Record<string, unknown> = {},
+) {
+  const errorCode = String(error?.payload?.code || error?.code || 'POST_INTEGRATION_FINALIZATION_FAILED');
+  const errorMessage = String(error?.payload?.message || error?.message || 'Post-integration finalization failed.').slice(0, 500);
+  return {
+    status: 'continuation' as const,
+    code: 'POST_INTEGRATION_FINALIZATION_REQUIRED' as const,
+    message: `Workspace integration succeeded, but finalization phase '${phase}' must be retried.`,
+    continuation: {
+      code: 'POST_INTEGRATION_FINALIZATION_REQUIRED' as const,
+      phase,
+      repoRevision: integration.baseHeadAfter,
+      error: { code: errorCode, message: errorMessage },
+      nextAction: {
+        action: 'RETRY_FINALIZE_TASK_WORKSPACE' as const,
+        tool: 'finalize_task_workspace' as const,
+        reintegrate: false as const,
+      },
+    },
+    integration,
+    ...context,
+  };
+}
+
+export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFinalizationInput) {
   const taskId = String(input?.taskId || '').trim();
   const workspaceId = String(input?.workspaceId || '').trim();
   if (!taskId) throw createApiError(400, 'TASK_ID_REQUIRED', 'taskId is required for task workspace finalization.');
@@ -196,87 +252,129 @@ export function finalizeTaskWorkspace(state: AppState, input: TaskWorkspaceFinal
     return { status: 'needs-recovery' as const, code: 'INTEGRATION_CONFLICT' as const, integration };
   }
 
-  const refreshedMetadata = getSessionWorkspaceMetadataForRecovery(workspaceId);
-  if (!refreshedMetadata) throw createApiError(409, 'WORKSPACE_METADATA_LOST', 'Workspace metadata disappeared during finalization.', { affectedId: workspaceId });
-
   const checks = input.checks || [];
-  const impactRules = loadProjectVerificationImpactRules(refreshedMetadata.projectRoot);
-  const { sourcePlan, combinedPlan } = planCombinedVerification(integration, checks, impactRules);
-  const postIntegration = evaluatePostIntegrationRequirement(integration, checks, sourcePlan, combinedPlan);
-  if (postIntegration.required) {
-    return {
-      status: 'continuation' as const,
-      code: 'POST_INTEGRATION_VERIFICATION_REQUIRED' as const,
-      message: postIntegration.reason,
-      continuation: {
+  let phase: PostIntegrationFinalizationPhase = 'metadata';
+  let sourcePlan: VerificationPlan | undefined;
+  let combinedPlan: VerificationPlan | undefined;
+  let postIntegration: PostIntegrationRequirement | undefined;
+  let gitEvidence: any;
+  let verificationEvidence: any[] = [];
+  let finalTask: any = task;
+  let workingTask: any = task;
+
+  try {
+    const refreshedMetadata = getSessionWorkspaceMetadataForRecovery(workspaceId);
+    if (!refreshedMetadata) throw createApiError(409, 'WORKSPACE_METADATA_LOST', 'Workspace metadata disappeared during finalization.', { affectedId: workspaceId });
+
+    phase = 'verification-plan';
+    const impactRules = loadProjectVerificationImpactRules(refreshedMetadata.projectRoot);
+    const plans = planCombinedVerification(integration, checks, impactRules);
+    sourcePlan = plans.sourcePlan;
+    combinedPlan = plans.combinedPlan;
+    postIntegration = evaluatePostIntegrationRequirement(integration, checks, sourcePlan, combinedPlan);
+    const boundaryAlreadyAccepted = hasPostIntegrationBoundary(task, workspaceId, integration.baseHeadAfter);
+    if (boundaryAlreadyAccepted && postIntegration.required) {
+      postIntegration = {
+        ...postIntegration,
+        required: false,
+        reason: 'A prior finalization attempt already cleared post-integration verification for this exact integrated revision.',
+      };
+    }
+    if (postIntegration.required) {
+      return {
+        status: 'continuation' as const,
         code: 'POST_INTEGRATION_VERIFICATION_REQUIRED' as const,
-        repoRevision: postIntegration.repoRevision,
-        requiredCommands: postIntegration.requiredCommands,
-        missingCommands: postIntegration.missingCommands,
-        broadEvidenceRequired: postIntegration.broadEvidenceRequired,
-        requiredScope: postIntegration.requiredScope,
-        nextAction: postIntegration.nextAction,
-      },
+        message: postIntegration.reason,
+        continuation: {
+          code: 'POST_INTEGRATION_VERIFICATION_REQUIRED' as const,
+          repoRevision: postIntegration.repoRevision,
+          requiredCommands: postIntegration.requiredCommands,
+          missingCommands: postIntegration.missingCommands,
+          broadEvidenceRequired: postIntegration.broadEvidenceRequired,
+          requiredScope: postIntegration.requiredScope,
+          nextAction: postIntegration.nextAction,
+        },
+        integration,
+        sourcePlan,
+        combinedPlan,
+        postIntegration,
+      };
+    }
+
+    phase = 'boundary-save';
+    workingTask = persistPostIntegrationBoundary(task, workspaceId, integration.baseHeadAfter);
+    finalTask = workingTask;
+
+    phase = 'evidence';
+    const alreadyDurable = workingTask.status === 'done'
+      && workingTask.branch === refreshedMetadata.baseBranch
+      && workingTask.gitEvidence?.commit === integration.baseHeadAfter
+      && Array.isArray(workingTask.verificationEvidence);
+    if (alreadyDurable) {
+      finalTask = workingTask;
+      gitEvidence = workingTask.gitEvidence;
+      verificationEvidence = workingTask.verificationEvidence;
+    } else {
+      const evidenceTask = { ...workingTask, branch: refreshedMetadata.baseBranch };
+      const synced = localOnlyEvidence(evidenceTask, refreshedMetadata.baseBranch, integration.baseHeadAfter, checks);
+      gitEvidence = synced.gitEvidence;
+      verificationEvidence = synced.verificationEvidence;
+      finalTask = clearTaskClaimWhenLeavingInProgress({
+        ...synced.task,
+        status: 'done',
+        branch: refreshedMetadata.baseBranch,
+        updatedAt: new Date().toISOString(),
+      });
+      appendFinalizationLog(
+        finalTask,
+        `Finalized managed workspace ${workspaceId} into ${refreshedMetadata.baseBranch}@${integration.baseHeadAfter.slice(0, 12)} with ${verificationEvidence.length} passed verification check(s); combined impact covered ${integration.combinedChangedFiles.length} changed file(s).`,
+      );
+      phase = 'task-save';
+      saveTask(finalTask);
+    }
+
+    phase = 'execution-lifecycle';
+    const session = listExecutionSessionsForTask(task.id).find((entry) => entry.workspaceId === workspaceId && entry.status === 'active');
+    if (session) {
+      if (session.lifecycle.stage === 'committed') {
+        recordExecutionLifecycleTransition(session.id, {
+          toStage: 'finalized',
+          reasonCode: 'workspace-finalization-succeeded',
+          evidence: {
+            id: `workspace-finalization:${workspaceId}:${integration.baseHeadAfter}`,
+            kind: 'workspace-finalization',
+            status: 'completed',
+            operationId: `finalize:${workspaceId}:${integration.baseHeadAfter}`,
+          },
+        });
+      }
+      completeExecutionSession(session.id, {
+        changedFiles: integration.changedFiles,
+        verification: session.verification,
+      });
+    }
+
+    phase = 'cleanup';
+    const cleanup = cleanupSessionWorkspace(workspaceId);
+    return {
+      status: 'completed' as const,
+      task: getTaskByIdentifier(task.id, 'full') || finalTask,
       integration,
       sourcePlan,
       combinedPlan,
       postIntegration,
+      gitEvidence,
+      verificationEvidence,
+      cleanup,
     };
-  }
-
-  const evidenceTask = { ...task, branch: refreshedMetadata.baseBranch };
-  let synced: ReturnType<typeof syncTaskWithGit>;
-  try {
-    synced = syncTaskWithGit(state, evidenceTask, {
-      projectId: task.projectId,
-      fetch: false,
-      checks,
-    });
   } catch (error: any) {
-    if (error?.payload?.code !== 'GIT_REMOTE_NOT_FOUND') throw error;
-    synced = localOnlyEvidence(evidenceTask, refreshedMetadata.baseBranch, integration.baseHeadAfter, checks) as ReturnType<typeof syncTaskWithGit>;
-  }
-  const finalTask = clearTaskClaimWhenLeavingInProgress({
-    ...synced.task,
-    status: 'done',
-    branch: refreshedMetadata.baseBranch,
-    updatedAt: new Date().toISOString(),
-  });
-  appendFinalizationLog(
-    finalTask,
-    `Finalized managed workspace ${workspaceId} into ${refreshedMetadata.baseBranch}@${integration.baseHeadAfter.slice(0, 12)} with ${synced.verificationEvidence.length} passed verification check(s); combined impact covered ${integration.combinedChangedFiles.length} changed file(s).`,
-  );
-  saveTask(finalTask);
-
-  const session = listExecutionSessionsForTask(task.id).find((entry) => entry.workspaceId === workspaceId && entry.status === 'active');
-  const cleanup = cleanupSessionWorkspace(workspaceId);
-  if (session) {
-    if (session.lifecycle.stage === 'committed') {
-      recordExecutionLifecycleTransition(session.id, {
-        toStage: 'finalized',
-        reasonCode: 'workspace-finalization-succeeded',
-        evidence: {
-          id: `workspace-finalization:${workspaceId}:${integration.baseHeadAfter}`,
-          kind: 'workspace-finalization',
-          status: 'completed',
-          operationId: `finalize:${workspaceId}:${integration.baseHeadAfter}`,
-        },
-      });
-    }
-    completeExecutionSession(session.id, {
-      changedFiles: integration.changedFiles,
-      verification: session.verification,
+    return postIntegrationFinalizationContinuation(integration, phase, error, {
+      ...(sourcePlan ? { sourcePlan } : {}),
+      ...(combinedPlan ? { combinedPlan } : {}),
+      ...(postIntegration ? { postIntegration } : {}),
+      ...(gitEvidence ? { gitEvidence } : {}),
+      ...(verificationEvidence.length > 0 ? { verificationEvidence } : {}),
+      task: getTaskByIdentifier(task.id, 'full') || finalTask,
     });
   }
-  return {
-    status: 'completed' as const,
-    task: getTaskByIdentifier(task.id, 'full') || finalTask,
-    integration,
-    sourcePlan,
-    combinedPlan,
-    postIntegration,
-    gitEvidence: synced.gitEvidence,
-    verificationEvidence: synced.verificationEvidence,
-    cleanup,
-  };
 }

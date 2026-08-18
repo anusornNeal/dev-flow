@@ -11,8 +11,8 @@ const { executeAllMigrations } = await import('../../src/db/migrations/index.js'
 executeAllMigrations();
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
 const { saveTask, getTask } = await import('../../src/server/repositories/taskRepository.js');
-const { createOrReuseSessionWorkspace, resetSessionWorkspaceRuntimeForTests } = await import('../../src/server/services/sessionWorkspaceService.js');
-const { createExecutionSession, getExecutionSessionState } = await import('../../src/server/services/executionSessionService.js');
+const { createOrReuseSessionWorkspace, resetSessionWorkspaceRuntimeForTests, acquireSessionWorkspace, releaseSessionWorkspace } = await import('../../src/server/services/sessionWorkspaceService.js');
+const { createExecutionSession, getExecutionSessionState, recordExecutionLifecycleTransition } = await import('../../src/server/services/executionSessionService.js');
 const { finalizeTaskWorkspace } = await import('../../src/server/services/taskWorkspaceFinalizationService.js');
 
 function git(root: string, args: string[], allowFailure = false) {
@@ -226,4 +226,104 @@ test('combined repository mapping can require a verification command absent from
   assert.ok(result.combinedPlan.commands.includes('test:integration'));
   assert.ok(result.postIntegration.missingCommands.includes('test:integration'));
   assert.equal(getTask(task.id)?.status, 'in-progress');
+});
+
+test('post-integration evidence failure returns a resumable continuation and retry does not integrate twice', () => {
+  const { root, task, workspace, state } = fixture('post-integration-evidence-retry');
+  fs.writeFileSync(path.join(workspace.root, 'tracked.txt'), 'implemented\n');
+  git(workspace.root, ['add', 'tracked.txt']);
+  git(workspace.root, ['commit', '-m', taskCommitSubject(task, 'implement task')]);
+  const claimed = getTask(task.id)!;
+  claimed.claim = { workspaceId: workspace.workspaceId, sessionIdHash: 'fixture-session', ownerLabel: 'Fixture chat', ownerKind: 'chat', claimedAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+  saveTask(claimed);
+
+  const first = finalizeTaskWorkspace(state, {
+    taskId: task.id,
+    workspaceId: workspace.workspaceId,
+    checks: [{ name: 'broken-evidence', command: '', status: 'passed' }],
+  });
+  assert.equal(first.status, 'continuation');
+  assert.equal(first.code, 'POST_INTEGRATION_FINALIZATION_REQUIRED');
+  assert.equal(first.continuation.phase, 'evidence');
+  assert.equal(first.continuation.error.code, 'VERIFICATION_COMMAND_REQUIRED');
+  assert.equal(first.continuation.nextAction.action, 'RETRY_FINALIZE_TASK_WORKSPACE');
+  assert.equal(first.continuation.nextAction.reintegrate, false);
+  const integratedHead = git(root, ['rev-parse', 'HEAD']).stdout;
+  assert.equal(first.integration.baseHeadAfter, integratedHead);
+  assert.equal(getTask(task.id)?.status, 'in-progress');
+  assert.equal(fs.existsSync(workspace.root), true);
+
+  const second = finalizeTaskWorkspace(state, { taskId: task.id, workspaceId: workspace.workspaceId, checks });
+  assert.equal(second.status, 'completed', JSON.stringify(second));
+  assert.equal(second.integration.alreadyIntegrated, true);
+  assert.equal(second.integration.baseHeadBefore, integratedHead);
+  assert.equal(second.integration.baseHeadAfter, integratedHead);
+  assert.equal(git(root, ['rev-parse', 'HEAD']).stdout, integratedHead);
+  assert.equal(getTask(task.id)?.status, 'done');
+  assert.equal(fs.existsSync(workspace.root), false);
+});
+
+test('local finalization succeeds with an origin remote but no upstream or pushed head', () => {
+  const { root, task, workspace, state } = fixture('local-no-upstream');
+  const remote = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-finalize-unpublished-origin-'));
+  git(remote, ['init', '--bare']);
+  git(root, ['remote', 'add', 'origin', remote]);
+  fs.writeFileSync(path.join(workspace.root, 'tracked.txt'), 'implemented\n');
+  git(workspace.root, ['add', 'tracked.txt']);
+  git(workspace.root, ['commit', '-m', taskCommitSubject(task, 'implement task')]);
+  const claimed = getTask(task.id)!;
+  claimed.claim = { workspaceId: workspace.workspaceId, sessionIdHash: 'fixture-session', ownerLabel: 'Fixture chat', ownerKind: 'chat', claimedAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+  saveTask(claimed);
+
+  const result = finalizeTaskWorkspace(state, { taskId: task.id, workspaceId: workspace.workspaceId, checks });
+  assert.equal(result.status, 'completed');
+  assert.equal(result.gitEvidence.commit, git(root, ['rev-parse', 'HEAD']).stdout);
+  assert.equal(result.gitEvidence.trackingBranch, null);
+  assert.equal(result.gitEvidence.remoteHead, null);
+  assert.equal(result.gitEvidence.pushed, false);
+  assert.equal(getTask(task.id)?.status, 'done');
+});
+
+test('cleanup failure is resumable after task evidence and lifecycle are durable', () => {
+  const { root, task, workspace, state } = fixture('cleanup-retry');
+  fs.writeFileSync(path.join(workspace.root, 'tracked.txt'), 'implemented\n');
+  git(workspace.root, ['add', 'tracked.txt']);
+  git(workspace.root, ['commit', '-m', taskCommitSubject(task, 'implement task')]);
+  const claimed = getTask(task.id)!;
+  claimed.claim = { workspaceId: workspace.workspaceId, sessionIdHash: 'fixture-session', ownerLabel: 'Fixture chat', ownerKind: 'chat', claimedAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+  saveTask(claimed);
+  const execution = createExecutionSession({ projectId: task.projectId, taskId: task.id, workspaceId: workspace.workspaceId, branch: workspace.branch, repoRoot: workspace.root });
+  const advance = (toStage: any, id: string, kind: string) => recordExecutionLifecycleTransition(execution.id, {
+    toStage,
+    reasonCode: id,
+    evidence: { id, kind, status: 'completed', operationId: `op-${id}` },
+  });
+  advance('context-ready', 'cleanup-context', 'context-bundle');
+  advance('implementing', 'cleanup-change', 'owned-change');
+  advance('verifying', 'cleanup-verify', 'verification-candidate');
+  advance('committed', 'cleanup-commit', 'git-commit');
+  acquireSessionWorkspace(workspace.workspaceId);
+
+  const first = finalizeTaskWorkspace(state, { taskId: task.id, workspaceId: workspace.workspaceId, checks });
+  assert.equal(first.status, 'continuation');
+  assert.equal(first.code, 'POST_INTEGRATION_FINALIZATION_REQUIRED');
+  assert.equal(first.continuation.phase, 'cleanup');
+  assert.equal(first.continuation.error.code, 'WORKSPACE_ACTIVE');
+  const integratedHead = git(root, ['rev-parse', 'HEAD']).stdout;
+  const durableTask = getTask(task.id)!;
+  assert.equal(durableTask.status, 'done');
+  assert.equal(durableTask.gitEvidence?.commit, integratedHead);
+  assert.equal(getExecutionSessionState(execution.id).session.status, 'completed');
+  assert.equal(getExecutionSessionState(execution.id).session.lifecycle.stage, 'finalized');
+  const finalizationLogCount = (durableTask.logs || []).filter((entry: any) => /Finalized managed workspace/.test(entry.message)).length;
+  assert.equal(finalizationLogCount, 1);
+  assert.equal(fs.existsSync(workspace.root), true);
+
+  releaseSessionWorkspace(workspace.workspaceId);
+  const second = finalizeTaskWorkspace(state, { taskId: task.id, workspaceId: workspace.workspaceId, checks });
+  assert.equal(second.status, 'completed', JSON.stringify(second));
+  assert.equal(second.integration.alreadyIntegrated, true);
+  assert.equal(git(root, ['rev-parse', 'HEAD']).stdout, integratedHead);
+  assert.equal((getTask(task.id)?.logs || []).filter((entry: any) => /Finalized managed workspace/.test(entry.message)).length, 1);
+  assert.equal(fs.existsSync(workspace.root), false);
 });

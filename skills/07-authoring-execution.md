@@ -45,6 +45,9 @@ Do not delete meaningful checks merely to reduce runtime. Record what the pre-im
 ## Async tool completion
 When an async DevFlow operation returns a durable job id, call `get_tool_job_result` with a bounded wait and continue polling in the same assistant turn until terminal while the tool surface remains available. If connectivity disappears, preserve the job id and recover it after reconnect rather than replaying the mutation.
 
+## Checklist bookkeeping
+When several checklist items become complete from the same finished implementation or verification evidence, batch them in one `toggle_task_checklist` call with `checklistIds`. Use the single `checklistId` form when only one item changes. Do not batch speculative items or mark checklist items complete before the supporting work/evidence exists.
+
 ## Task-owned commit
 Before committing:
 - inspect `get_git_status` and the relevant diff;

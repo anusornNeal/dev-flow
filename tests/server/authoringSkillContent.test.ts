@@ -167,6 +167,7 @@ test('07 owns implementation, verification, task workspace lifecycle, and termin
   assert.doesNotMatch(executionSkill, /testable behavior changes[\s\S]{0,160}RED/i);
   assert.match(executionSkill, /prefer `finalize_task_workspace`|preferred terminal/i);
   assert.match(executionSkill, /integrate_workspace.*fallback|fallback.*integrate_workspace/i);
+  assert.match(executionSkill, /batch[\s\S]*checklist|checklist[\s\S]*batch/i);
   assert.match(executionSkill, /Do not push/i);
 });
 

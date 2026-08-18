@@ -243,9 +243,45 @@ export const taskToolDefinitions: DevFlowToolDefinition[] = [
     buildHttpRequest: (args) => ({ method: 'POST', path: '/api/tasks/batch/move', body: args }),
   },
   {
-    name: 'toggle_task_checklist', description: 'Toggle one checklist item on a task.',
-    inputSchema: { type: 'object', properties: { ...taskIdentifierProperty, checklistId: { type: 'string', description: 'Checklist item id or text.' }, ...booleanFlagSchema.properties, ...mutationResponseModeProperty }, required: ['taskId', 'checklistId'] }, outputSchema: { type: 'object' },
-    buildHttpRequest: ({ taskId, isAgentRequest, responseMode, ...body }) => ({ method: 'POST', path: withQuery(`/api/tasks/${encodePathSegment(String(taskId))}/checklist/toggle`, { responseMode: responseMode || 'summary' }), body, headers: isAgentRequest ? { 'x-agent-request': 'true' } : undefined }),
+    name: 'toggle_task_checklist', description: 'Toggle one or many checklist items on one task in a single round trip.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...taskIdentifierProperty,
+        checklistId: { type: 'string', description: 'Checklist item id or text.' },
+        checklistIds: { type: 'array', minItems: 1, maxItems: 20, items: { type: 'string', minLength: 1 }, description: 'Checklist item ids or text for one task; use this when multiple items can be updated together.' },
+        ...booleanFlagSchema.properties,
+        ...mutationResponseModeProperty,
+      },
+      anyOf: [
+        { required: ['taskId', 'checklistId'] },
+        { required: ['taskId', 'checklistIds'] },
+      ],
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: (args) => {
+      const { taskId, isAgentRequest, responseMode, checklistIds, ...body } = args;
+      if (Array.isArray(checklistIds)) {
+        return {
+          method: 'POST',
+          path: '/api/tasks/batch/checklist/toggle',
+          body: {
+            toggles: checklistIds.map((checklistId: string) => ({
+              taskId,
+              checklistId,
+              ...(isAgentRequest ? { isAgentRequest: true } : {}),
+              ...(args.emergency === true ? { emergency: true } : {}),
+            })),
+          },
+        };
+      }
+      return {
+        method: 'POST',
+        path: withQuery(`/api/tasks/${encodePathSegment(String(taskId))}/checklist/toggle`, { responseMode: responseMode || 'summary' }),
+        body,
+        headers: isAgentRequest ? { 'x-agent-request': 'true' } : undefined,
+      };
+    },
   },
   {
     name: 'batch_toggle_task_checklist', description: 'Toggle checklist items for multiple tasks.',

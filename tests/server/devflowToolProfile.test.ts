@@ -203,6 +203,35 @@ test('coding MCP profile is lean, alias-free, and preserves representative workf
   }
 });
 
+test('checklist tool keeps single-item compatibility and supports one-task batch requests', () => {
+  const tool = devFlowToolDefinitions.find((entry: any) => entry.name === 'toggle_task_checklist')!;
+  assert.ok(tool);
+  assert.equal(tool.inputSchema.properties.checklistIds.type, 'array');
+  assert.equal(tool.inputSchema.properties.checklistIds.minItems, 1);
+  assert.equal(tool.inputSchema.properties.checklistIds.maxItems <= 20, true);
+  assert.deepEqual(tool.inputSchema.anyOf, [
+    { required: ['taskId', 'checklistId'] },
+    { required: ['taskId', 'checklistIds'] },
+  ]);
+
+  const single = tool.buildHttpRequest({ taskId: 'DVF-0001', checklistId: 'a', isAgentRequest: true, responseMode: 'ack' });
+  assert.equal(single.method, 'POST');
+  assert.match(single.path, /\/api\/tasks\/DVF-0001\/checklist\/toggle/);
+  assert.deepEqual(single.body, { checklistId: 'a' });
+  assert.equal(single.headers?.['x-agent-request'], 'true');
+
+  const batch = tool.buildHttpRequest({ taskId: 'DVF-0001', checklistIds: ['a', 'b'], isAgentRequest: true, emergency: true, responseMode: 'ack' });
+  assert.equal(batch.method, 'POST');
+  assert.equal(batch.path, '/api/tasks/batch/checklist/toggle');
+  assert.deepEqual(batch.body, {
+    toggles: [
+      { taskId: 'DVF-0001', checklistId: 'a', isAgentRequest: true, emergency: true },
+      { taskId: 'DVF-0001', checklistId: 'b', isAgentRequest: true, emergency: true },
+    ],
+  });
+  assert.equal(getMcpToolList('full').some((entry: any) => entry.name === 'batch_toggle_task_checklist'), false);
+});
+
 test('guidance MCP capability is read-only, stable-id bounded, and available on the coding surface', () => {
   const tool = devFlowToolDefinitions.find((entry: any) => entry.name === 'get_guidance_skill');
   assert.ok(tool);

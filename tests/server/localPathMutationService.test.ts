@@ -204,6 +204,37 @@ test('moveLocalPath rejects destination collisions and protected paths', () => {
   );
 });
 
+test('exact DevFlow command config files can be migrated while other DevFlow paths stay protected', () => {
+  const fixture = createFixture('command-config-migration');
+  fs.mkdirSync(path.join(fixture.root, '.devflow', 'nested'), { recursive: true });
+  fs.writeFileSync(path.join(fixture.root, '.devflow', 'commands.yaml'), 'commands:\n');
+  fs.writeFileSync(path.join(fixture.root, '.devflow', 'commands.json'), '{"commands":{}}\n');
+  fs.writeFileSync(path.join(fixture.root, '.devflow', 'nested', 'commands.yaml'), 'commands:\n');
+
+  const moved = moveLocalPath(fixture.state, {
+    projectId: fixture.projectId,
+    moves: [{ from: '.devflow/commands.json', to: 'commands.json.backup' }],
+  });
+  assert.equal(moved.applied, true);
+  assert.equal(fs.existsSync(path.join(fixture.root, '.devflow', 'commands.json')), false);
+  assert.equal(fs.readFileSync(path.join(fixture.root, 'commands.json.backup'), 'utf8'), '{"commands":{}}\n');
+
+  const deleted = deleteLocalPath(fixture.state, {
+    projectId: fixture.projectId,
+    paths: ['.devflow/commands.yaml'],
+  });
+  assert.equal(deleted.applied, true);
+  assert.equal(fs.existsSync(path.join(fixture.root, '.devflow', 'commands.yaml')), false);
+
+  assert.throws(
+    () => deleteLocalPath(fixture.state, {
+      projectId: fixture.projectId,
+      paths: ['.devflow/nested/commands.yaml'],
+    }),
+    (error: any) => error?.payload?.code === 'PROTECTED_PATH',
+  );
+});
+
 test('applyPathMutations rolls back completed operations when ownership persistence fails', () => {
   const fixture = createFixture('ownership-rollback');
   fs.writeFileSync(path.join(fixture.root, 'a.txt'), 'a\n');

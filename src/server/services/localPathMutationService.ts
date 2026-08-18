@@ -13,6 +13,10 @@ import { invalidateRepoReadCaches } from './repoCacheInvalidationService';
 
 const MAX_OPERATIONS = 100;
 const PROTECTED_SEGMENTS = new Set(['.git', '.devflow']);
+const MUTABLE_DEVFLOW_COMMAND_CONFIG_PATHS = new Set([
+  '.devflow/commands.yaml',
+  '.devflow/commands.json',
+]);
 
 type DeleteOperation = {
   type: 'delete';
@@ -96,7 +100,8 @@ function normalizeRelativePath(value: unknown, field: string) {
     throw createApiError(400, 'PATH_REQUIRED', `${field} must identify a path inside the project root.`);
   }
   const segments = normalized.split('/').filter(Boolean);
-  if (segments.some((segment) => PROTECTED_SEGMENTS.has(segment))) {
+  const containsProtectedSegment = segments.some((segment) => PROTECTED_SEGMENTS.has(segment));
+  if (containsProtectedSegment && !MUTABLE_DEVFLOW_COMMAND_CONFIG_PATHS.has(normalized)) {
     throw createApiError(403, 'PROTECTED_PATH', `Path '${normalized}' is protected and cannot be mutated.`, { affectedId: normalized });
   }
   return normalized;

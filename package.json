@@ -43,7 +43,9 @@
     "benchmark:mcp-transport": "tsx scripts/benchmark-mcp-transport.ts",
     "test:mcp-transport-benchmark": "tsx --test tests/server/mcpTransportBenchmark.test.ts",
     "test:harness-eval": "tsx --test tests/server/harnessEval.test.ts",
-    "benchmark:chatgpt-harness": "tsx scripts/benchmark-chatgpt-harness.ts"
+    "benchmark:chatgpt-harness": "tsx scripts/benchmark-chatgpt-harness.ts",
+    "benchmark:adaptive-source-disclosure": "tsx scripts/benchmark-adaptive-source-disclosure.ts",
+    "test:adaptive-source-disclosure-benchmark": "tsx --test tests/server/adaptiveSourceDisclosureBenchmark.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

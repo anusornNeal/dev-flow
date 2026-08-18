@@ -76,6 +76,34 @@ test('commit plan matches execution-owned files inside a wholly new nested direc
   assert.deepEqual(plan.scopeDrift, []);
 });
 
+test('commit plan accepts owned repair drift only when fresh verification covers the current revisions', () => {
+  const { workspace, taskId, session } = createFixture('verified-repair');
+  fs.writeFileSync(path.join(workspace.root, 'src', 'owned.ts'), 'export const owned = 10;\n');
+  execution.recordExecutionOwnedChanges(session.id, ['src/owned.ts'], { repoRoot: workspace.root, source: 'task-edit' });
+  fs.writeFileSync(path.join(workspace.root, 'src', 'owned.ts'), 'export const owned = 11;\n');
+
+  let ownership = execution.getExecutionOwnershipState(session.id, { repoRoot: workspace.root });
+  assert.deepEqual(ownership.ownershipDrift.map((entry: any) => entry.path), ['src/owned.ts']);
+  assert.equal(ownership.verificationFresh, null);
+  execution.recordExecutionVerificationEvidence(session.id, [{ name: 'recovery', status: 'passed' }], { repoRoot: workspace.root });
+
+  ownership = execution.getExecutionOwnershipState(session.id, { repoRoot: workspace.root });
+  assert.equal(ownership.verificationFresh, true);
+  assert.deepEqual(ownership.verifiedOwnershipDrift.map((entry: any) => entry.path), ['src/owned.ts']);
+  let plan = commitPlan.buildTaskCommitPlan({ countersCache: {} }, { taskId, workspaceId: workspace.workspaceId });
+  assert.equal(plan.commitAllowed, true);
+  assert.deepEqual(plan.verifiedOwnershipDrift.map((entry: any) => entry.path), ['src/owned.ts']);
+  assert.equal(plan.blockers.some((entry: any) => entry.code === 'EXECUTION_OWNERSHIP_DRIFT'), false);
+
+  fs.writeFileSync(path.join(workspace.root, 'src', 'owned.ts'), 'export const owned = 12;\n');
+  plan = commitPlan.buildTaskCommitPlan({ countersCache: {} }, { taskId, workspaceId: workspace.workspaceId });
+  assert.equal(plan.commitAllowed, false);
+  assert.equal(plan.verificationFresh, false);
+  assert.deepEqual(plan.verifiedOwnershipDrift, []);
+  assert.ok(plan.blockers.some((entry: any) => entry.code === 'EXECUTION_OWNERSHIP_DRIFT'));
+  assert.ok(plan.blockers.some((entry: any) => entry.code === 'EXECUTION_VERIFICATION_NOT_FRESH'));
+});
+
 test('commit plan blocks stale verification after an owned file changes again', () => {
   const { workspace, taskId, session } = createFixture('stale');
   fs.writeFileSync(path.join(workspace.root, 'src', 'owned.ts'), 'export const owned = 3;\n');

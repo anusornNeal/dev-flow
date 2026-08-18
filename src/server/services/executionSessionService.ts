@@ -145,6 +145,7 @@ export interface ExecutionOwnershipState {
   unrelatedChanges: string[];
   scopeDrift: string[];
   ownershipDrift: Array<{ path: string; knownFileRevision: string; currentFileRevision: string }>;
+  verifiedOwnershipDrift: Array<{ path: string; knownFileRevision: string; currentFileRevision: string }>;
   verificationFresh: boolean | null;
   verificationRecordedAt?: string;
 }
@@ -726,6 +727,10 @@ export function getExecutionOwnershipState(
     : session.verification.length === 0
       ? null
       : false;
+  const ownershipDrift = ownedFiles
+    .filter((entry) => entry.drifted)
+    .map((entry) => ({ path: entry.path, knownFileRevision: entry.knownFileRevision, currentFileRevision: entry.currentFileRevision }));
+  const verifiedOwnershipDrift = verificationFresh === true ? ownershipDrift : [];
 
   return {
     sessionId: id,
@@ -735,9 +740,8 @@ export function getExecutionOwnershipState(
     ownedChanges,
     unrelatedChanges,
     scopeDrift,
-    ownershipDrift: ownedFiles
-      .filter((entry) => entry.drifted)
-      .map((entry) => ({ path: entry.path, knownFileRevision: entry.knownFileRevision, currentFileRevision: entry.currentFileRevision })),
+    ownershipDrift,
+    verifiedOwnershipDrift,
     verificationFresh,
     verificationRecordedAt: verificationBinding ? readStringMetadata(verificationBinding.metadata || {}, 'recordedAt') : undefined,
   };

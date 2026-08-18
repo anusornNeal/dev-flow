@@ -148,6 +148,33 @@ test('binds verification freshness to owned content only and exposes review bloc
   assert.ok(blockers.some((entry: any) => entry.code === 'EXECUTION_VERIFICATION_STALE'));
 });
 
+test('review ownership drift is non-blocking only when fresh verification covers the current owned revisions', () => {
+  resetRepo();
+  const session = createSession();
+  fs.writeFileSync(path.join(repoRoot, 'src', 'A.ts'), 'export const A = 2;\n', 'utf8');
+  sessions.recordExecutionOwnedChanges(session.id, ['src/A.ts'], { repoRoot, source: 'ChatGPT' });
+  fs.writeFileSync(path.join(repoRoot, 'src', 'A.ts'), 'export const A = 3;\n', 'utf8');
+  sessions.recordExecutionVerificationEvidence(session.id, [
+    { name: 'recovery', command: 'ownership-fixture', status: 'passed', summary: 'green repaired state' },
+  ], { repoRoot });
+
+  let ownership = sessions.getExecutionOwnershipState(session.id, { repoRoot });
+  assert.equal(ownership.verificationFresh, true);
+  assert.deepEqual(ownership.ownershipDrift.map((entry: any) => entry.path), ['src/A.ts']);
+  assert.deepEqual(ownership.verifiedOwnershipDrift.map((entry: any) => entry.path), ['src/A.ts']);
+  let blockers = getExecutionOwnershipReviewBlockers(state, { id: 'task-owned', projectId: 'project-owned' }, {});
+  assert.equal(blockers.some((entry: any) => entry.code === 'EXECUTION_OWNERSHIP_DRIFT'), false);
+  assert.equal(blockers.some((entry: any) => entry.code === 'EXECUTION_VERIFICATION_STALE'), false);
+
+  fs.writeFileSync(path.join(repoRoot, 'src', 'A.ts'), 'export const A = 4;\n', 'utf8');
+  ownership = sessions.getExecutionOwnershipState(session.id, { repoRoot });
+  assert.equal(ownership.verificationFresh, false);
+  assert.deepEqual(ownership.verifiedOwnershipDrift, []);
+  blockers = getExecutionOwnershipReviewBlockers(state, { id: 'task-owned', projectId: 'project-owned' }, {});
+  assert.ok(blockers.some((entry: any) => entry.code === 'EXECUTION_OWNERSHIP_DRIFT'));
+  assert.ok(blockers.some((entry: any) => entry.code === 'EXECUTION_VERIFICATION_STALE'));
+});
+
 test('legacy ownership adoption requires explicit dirty paths, revisions, and audit reason', () => {
   resetRepo();
   const session = createSession();

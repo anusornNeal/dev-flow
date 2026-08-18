@@ -21,6 +21,7 @@ export type TaskCommitPlan = {
   unrelatedChangedFiles: string[];
   scopeDrift: string[];
   ownershipDrift: Array<{ path: string; knownFileRevision: string; currentFileRevision: string }>;
+  verifiedOwnershipDrift: Array<{ path: string; knownFileRevision: string; currentFileRevision: string }>;
   verificationFresh: boolean | null;
   commitAllowed: boolean;
   blockers: TaskCommitPlanBlocker[];
@@ -52,7 +53,7 @@ function buildBlockers(input: {
   if (input.ownedChangedFiles.length === 0) {
     blockers.push({ code: 'TASK_COMMIT_NO_OWNED_CHANGES', message: 'No current working-tree changes belong to this execution session.' });
   }
-  if (input.ownershipDrift.length > 0) {
+  if (input.ownershipDrift.length > 0 && input.verificationFresh !== true) {
     blockers.push({
       code: 'EXECUTION_OWNERSHIP_DRIFT',
       message: `${input.ownershipDrift.length} owned file(s) changed outside the last known execution revision.`,
@@ -103,6 +104,7 @@ export function buildTaskCommitPlan(_state: AppState, args: Record<string, any>)
     unrelatedChangedFiles: ownership.unrelatedChanges,
     scopeDrift: ownership.scopeDrift,
     ownershipDrift: ownership.ownershipDrift,
+    verifiedOwnershipDrift: ownership.verifiedOwnershipDrift,
     verificationFresh: ownership.verificationFresh,
     commitAllowed: blockers.length === 0,
     blockers,

@@ -192,7 +192,7 @@ export function getExecutionOwnershipReviewBlockers(state: AppState, task: any, 
     const root = resolveProjectRoot(state, { projectId: task.projectId, ...(workspaceId ? { workspaceId } : {}) });
     const ownership = getExecutionOwnershipState(session.id, { repoRoot: root });
     const blockers: ReviewBlocker[] = [];
-    if (ownership.ownershipDrift.length > 0) {
+    if (ownership.ownershipDrift.length > 0 && ownership.verificationFresh !== true) {
       addBlocker(blockers, 'EXECUTION_OWNERSHIP_DRIFT', `${ownership.ownershipDrift.length} execution-owned file(s) changed after the last known execution revision.`, {
         files: ownership.ownershipDrift,
         executionSessionId: session.id,

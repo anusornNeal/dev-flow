@@ -173,6 +173,14 @@ test('07 owns implementation, verification, task workspace lifecycle, and termin
 test('08 owns only board orchestration and delegates implementation policy to 07', () => {
   assert.match(boardLoopSkill, /claim_next_task/);
   assert.match(boardLoopSkill, /claim_task/);
+  assert.match(boardLoopSkill, /status=backlog[\s\S]*status=todo/i);
+  assert.match(boardLoopSkill, /mode=minimal[\s\S]*mode=summary|mode=summary[\s\S]*mode=minimal/i);
+  assert.match(boardLoopSkill, /unfiltered[\s\S]*(?:ordinary )?next-work selection/i);
+  assert.match(boardLoopSkill, /backlog-only[\s\S]*never proof/i);
+  assert.match(boardLoopSkill, /Completed tasks may still be read/i);
+  assert.match(boardLoopSkill, /parent\/child completion[\s\S]*review or audit[\s\S]*history/i);
+  assert.match(boardLoopSkill, /known by id[\s\S]*get_task/i);
+
   assert.match(boardLoopSkill, /TASK_ALREADY_CLAIMED/);
   assert.match(boardLoopSkill, /TASK_SCOPE_CONFLICT/);
   assert.match(boardLoopSkill, /finalize_task_workspace/);

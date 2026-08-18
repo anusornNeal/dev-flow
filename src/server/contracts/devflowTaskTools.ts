@@ -36,7 +36,7 @@ export const taskToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'search_tasks',
-    description: 'Search or list local DevFlow tasks with optional query, parent, status, paging, and response-density filters. This is the single task-collection read intent for ChatGPT. Every response-density mode defaults to a bounded page of 50 items; set all=true only when the caller explicitly needs the entire matching collection.',
+    description: 'Search or list local DevFlow tasks with optional query, parent, status, paging, and response-density filters. This is the single task-collection read intent for ChatGPT. Every response-density mode defaults to a bounded page of 50 items; set all=true only when the caller explicitly needs the entire matching collection. For board-loop next-work fallback, use bounded minimal/summary reads filtered across backlog and todo rather than an unfiltered or done collection; generic completed-task history, audit, and evidence reads remain supported.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -118,7 +118,7 @@ export const taskToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'claim_next_task',
-    description: 'Atomically select and claim the next deterministic eligible leaf task for one board-loop worker. Selection is bounded and conservative; use search_tasks + claim_task as the fallback for explicit or ambiguous work.',
+    description: 'Atomically select and claim the next deterministic eligible leaf task for one board-loop worker. Selection is bounded and conservative. For explicit or ambiguous fallback work, use bounded minimal/summary search_tasks reads across both backlog and todo before claim_task; never use an unfiltered or done collection as ordinary next-work selection.',
     inputSchema: {
       type: 'object',
       properties: {

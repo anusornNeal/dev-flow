@@ -252,6 +252,11 @@ test('full MCP surface removes globally consolidated tools while keeping high-le
   assert.match(searchTasks.buildHttpRequest({ status: 'backlog' }).path, /limit=50/);
   assert.match(searchTasks.buildHttpRequest({ status: 'backlog', limit: 75 }).path, /limit=75/);
   assert.match(searchTasks.description, /bounded|default page|defaults? to 50/i);
+  assert.match(searchTasks.description, /board-loop[\s\S]*backlog[\s\S]*todo/i);
+  assert.match(searchTasks.description, /minimal\/summary/i);
+  assert.match(searchTasks.description, /unfiltered[\s\S]*done collection/i);
+  assert.match(searchTasks.description, /history[\s\S]*audit[\s\S]*evidence|audit[\s\S]*evidence[\s\S]*history/i);
+
   assert.match(searchTasks.inputSchema.properties.limit.description, /default.*50|50.*default/i);
   assert.match(searchTasks.buildHttpRequest({ mode: 'full' }).path, /limit=50/);
   assert.match(searchTasks.buildHttpRequest({ mode: 'debug' }).path, /limit=50/);

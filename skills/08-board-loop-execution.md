@@ -10,7 +10,7 @@ Act as one cooperative board worker. Repeatedly claim one eligible scope, comple
 
 ## Required loop
 1. For ordinary next-card selection, prefer `claim_next_task` with the project id and this chat's stable session identity. It performs bounded selection and the authoritative claim under the project lock.
-2. If the user names a specific card, selection is ambiguous, the fast path is unavailable, or it reports no eligible task, use a bounded `search_tasks` read followed by explicit `claim_task`.
+2. If the user names a specific card, selection is ambiguous, the fast path is unavailable, or it reports no eligible task, fall back only to actionable task collections: use bounded `search_tasks` with `mode=minimal` or `mode=summary`, inspect `status=backlog` and `status=todo` as separate claimable lanes, then use explicit `claim_task`. Do not use an unfiltered collection, `all=true`, full/debug density, or a `done` collection for ordinary next-work selection. A backlog-only read is never proof that no eligible work remains.
 3. If `claim_task` returns `TASK_ALREADY_CLAIMED`, do not override the owner. Refresh and choose another eligible task.
 4. If `claim_task` returns `TASK_SCOPE_CONFLICT`, skip the conflicting card and choose independent work. Allow overlapping scope only when the user explicitly requests coordinated overlap and the collision is understood.
 5. Use only the managed workspace returned by the successful claim. Load `07-authoring-execution` and implement exactly the claimed scope under its ownership and verification policy.
@@ -18,7 +18,11 @@ Act as one cooperative board worker. Repeatedly claim one eligible scope, comple
 7. Before terminal completion, refresh relevant local base/sibling state so integration does not overwrite newer independent work.
 8. After the execution specialist has produced a clean committed workspace and required checks, prefer `finalize_task_workspace` for the terminal task flow.
 9. If finalization reports `needs-recovery`, preserve the workspace. Inspect with `inspect_workspace_recovery` and use integration/conflict/cleanup primitives only as explicit recovery paths. Never force-clean ambiguous WIP.
-10. Refresh the board and repeat from step 1 until a fresh bounded read shows no eligible unclaimed work for this worker.
+10. Refresh the board and repeat from step 1. When fallback selection is needed to prove a stop condition, exhaust both bounded claimable lanes (`status=backlog` and `status=todo`) before concluding no eligible unclaimed work remains.
+
+
+## Completed-task evidence reads
+The actionable-only collection rule applies to ordinary next-work selection, not to later evidence reads. Completed tasks may still be read when needed for parent/child completion checks, integrated-state verification, review or audit, retrospective/history work, or an explicit user history request. When a completed task is already known by id, prefer `get_task` instead of loading a completed collection.
 
 ## Ownership and release
 - A successful claim is the source of truth for work ownership; the legacy agent selector is not a claim.

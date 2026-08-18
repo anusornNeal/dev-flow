@@ -53,6 +53,10 @@ test('claim_next_task is a bounded project-level optimization with explicit sess
   assert.equal(body.projectId, 'project-1');
   assert.equal(body.sessionId, 'chat-a');
   assert.equal(body.limit, 25);
+  assert.match(String(tool.description || ''), /bounded[\s\S]*minimal\/summary/i);
+  assert.match(String(tool.description || ''), /backlog[\s\S]*todo/i);
+  assert.match(String(tool.description || ''), /unfiltered[\s\S]*done[\s\S]*(?:next-work|selection)/i);
+
   assert.ok(devFlowToolDefinitions.some((entry) => entry.name === 'claim_next_task'));
 });
 

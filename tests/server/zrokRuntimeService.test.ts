@@ -27,6 +27,8 @@ const NAME_SELECTION = `public:${MANAGED_NAME}`;
 const STABLE_URL = 'https://zrok-test.example.test';
 const REMOTE_TOKEN = 'remote-share-token';
 const LOCAL_TOKEN = 'local-share-token';
+const LOCAL_HOST = 'LAPTOP-UNVM1ETB\\mixed; LAPTOP-UNVM1ETB; windows; Microsoft Windows 11 Pro; standalone; 10.0.26100; 10.0.26100; amd64';
+const REMOTE_HOST = 'OTHER-PC\\mixed; OTHER-PC; windows; Microsoft Windows 11 Pro; standalone; 10.0.26100; 10.0.26100; amd64';
 
 interface FixtureState {
   installed: boolean;
@@ -38,8 +40,10 @@ interface FixtureState {
   agentShares: Map<string, ZrokAgentStatusSnapshot>;
   probe: ZrokPublicProbe;
   unshareCalls: number;
+  deleteCalls: Array<{ envZId: string; shareToken: string }>;
   startCalls: number;
   failUnshare: boolean;
+  failDelete: boolean;
   failStart: boolean;
   localAgentStatus: ZrokLocalAgentStatus;
 }
@@ -88,8 +92,8 @@ function makeFixture(overrides: Partial<FixtureState> = {}) {
     names: [makeName(LOCAL_TOKEN)],
     shares: [makeShare(LOCAL_ENV, LOCAL_TOKEN)],
     environments: [
-      { envZId: LOCAL_ENV, remoteAgent: true },
-      { envZId: REMOTE_ENV, remoteAgent: true },
+      { envZId: LOCAL_ENV, remoteAgent: true, description: 'mixed@LAPTOP-UNVM1ETB', host: LOCAL_HOST },
+      { envZId: REMOTE_ENV, remoteAgent: true, description: 'mixed@OTHER-PC', host: REMOTE_HOST },
     ],
     agentShares: new Map([
       [LOCAL_ENV, { reachable: true, shares: [{ token: LOCAL_TOKEN, status: 'active' }] }],
@@ -97,8 +101,10 @@ function makeFixture(overrides: Partial<FixtureState> = {}) {
     ]),
     probe: { state: 'healthy', latencyMs: 87, routedToThisMachine: true },
     unshareCalls: 0,
+    deleteCalls: [],
     startCalls: 0,
     failUnshare: false,
+    failDelete: false,
     failStart: false,
     localAgentStatus: {
       reachable: true,
@@ -152,6 +158,15 @@ function makeFixture(overrides: Partial<FixtureState> = {}) {
       const remote = state.agentShares.get(input.envZId);
       if (remote) remote.shares = remote.shares.filter((share) => share.token !== input.shareToken);
       state.shares = state.shares.filter((share) => share.shareToken !== input.shareToken);
+      state.names = state.names.map((name) => name.shareToken === input.shareToken ? { ...name, shareToken: '' } : name);
+    },
+    async deleteShare(input) {
+      state.deleteCalls.push({ ...input });
+      if (state.failDelete) throw new Error('simulated exact stale share delete failure');
+      state.shares = state.shares.filter(
+        (share) => !(share.shareToken === input.shareToken && share.envZId === input.envZId),
+      );
+      state.names = state.names.map((name) => name.shareToken === input.shareToken ? { ...name, shareToken: '' } : name);
     },
     async startLocalShare() {
       state.startCalls += 1;
@@ -181,6 +196,24 @@ function remoteOwnerFixture(overrides: Partial<FixtureState> = {}) {
     names: [makeName(REMOTE_TOKEN)],
     shares: [makeShare(REMOTE_ENV, REMOTE_TOKEN)],
     probe: { state: 'healthy', latencyMs: 120, routedToThisMachine: false },
+    localAgentStatus: { reachable: true, shares: [] },
+    ...overrides,
+  });
+}
+
+function sameMachineStaleOwnerFixture(overrides: Partial<FixtureState> = {}) {
+  return makeFixture({
+    names: [makeName(REMOTE_TOKEN)],
+    shares: [makeShare(REMOTE_ENV, REMOTE_TOKEN)],
+    environments: [
+      { envZId: LOCAL_ENV, remoteAgent: true, description: 'mixed@LAPTOP-UNVM1ETB', host: LOCAL_HOST },
+      { envZId: REMOTE_ENV, remoteAgent: false, description: 'mixed@LAPTOP-UNVM1ETB', host: LOCAL_HOST },
+    ],
+    agentShares: new Map([
+      [LOCAL_ENV, { reachable: true, shares: [] }],
+      [REMOTE_ENV, { reachable: false, shares: [] }],
+    ]),
+    probe: { state: 'unhealthy', latencyMs: null, routedToThisMachine: null },
     localAgentStatus: { reachable: true, shares: [] },
     ...overrides,
   });
@@ -417,6 +450,40 @@ test('blocks takeover when local Agent authority is unreachable', async () => {
   assert.equal(state.startCalls, 0);
 });
 
+test('status marks only an unhealthy unenrolled predecessor on the same host/user as auto-recoverable', async () => {
+  const { service } = sameMachineStaleOwnerFixture();
+  const status = await service.getStatus();
+  assert.equal(status.status, 'standby');
+  assert.equal(status.share.owner, 'remote');
+  assert.equal(status.publicReachability.state, 'unhealthy');
+  assert.equal(status.actionability.canTakeOver, true);
+  assert.equal(status.actionability.canRecoverStaleSameMachineOwner, true);
+});
+
+test('same-machine recovery stays disabled for a different host, missing identity, or healthy route', async () => {
+  const differentHost = sameMachineStaleOwnerFixture({
+    environments: [
+      { envZId: LOCAL_ENV, remoteAgent: true, host: LOCAL_HOST },
+      { envZId: REMOTE_ENV, remoteAgent: false, host: REMOTE_HOST },
+    ],
+  });
+  const ambiguous = sameMachineStaleOwnerFixture({
+    environments: [
+      { envZId: LOCAL_ENV, remoteAgent: true, host: LOCAL_HOST },
+      { envZId: REMOTE_ENV, remoteAgent: false },
+    ],
+  });
+  const healthy = sameMachineStaleOwnerFixture({
+    probe: { state: 'healthy', latencyMs: 42, routedToThisMachine: false },
+  });
+  for (const fixture of [differentHost, ambiguous, healthy]) {
+    const status = await fixture.service.getStatus();
+    assert.equal(status.status, 'standby');
+    assert.equal(status.actionability.canRecoverStaleSameMachineOwner, false);
+    assert.equal(status.actionability.canTakeOver, false);
+  }
+});
+
 test('remote ownership stays Standby even while the local agent service is starting', async () => {
   const { service } = remoteOwnerFixture({ serviceState: 'starting' });
   const status = await service.getStatus();
@@ -538,6 +605,64 @@ test('status payload never exposes the zrok account token', async () => {
   const status = await service.getStatus();
   assert.equal(JSON.stringify(status).includes(SECRET_ACCOUNT_TOKEN), false);
   assert.equal('accountToken' in status, false);
+});
+
+test('takeover releases only the exact stale same-machine share and preserves the reserved name', async () => {
+  const { service, state } = sameMachineStaleOwnerFixture();
+  const result = await service.takeOver();
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.changed, true);
+  assert.equal(result.status.status, 'online');
+  assert.equal(result.status.share.owner, 'local');
+  assert.deepEqual(state.deleteCalls, [{ envZId: REMOTE_ENV, shareToken: REMOTE_TOKEN }]);
+  assert.equal(state.unshareCalls, 0);
+  assert.equal(state.startCalls, 1);
+  assert.equal(state.names.length, 1);
+  assert.equal(state.names[0].name, MANAGED_NAME);
+  assert.equal(state.names[0].reserved, true);
+  assert.equal(state.names[0].url, STABLE_URL);
+});
+
+test('stale same-machine takeover aborts if binding or machine identity drifts during preflight', async () => {
+  const bindingFixture = sameMachineStaleOwnerFixture();
+  let nameReads = 0;
+  bindingFixture.adapter.listNames = async () => {
+    nameReads += 1;
+    return nameReads >= 2 ? [makeName('racing-share-token')] : [makeName(REMOTE_TOKEN)];
+  };
+  const bindingResult = await createZrokRuntimeService(bindingFixture.adapter, baseConfig()).takeOver();
+  assert.equal(bindingResult.ok, false);
+  assert.equal(bindingResult.code, 'ZROK_TAKEOVER_STALE_OWNER');
+  assert.equal(bindingFixture.state.deleteCalls.length, 0);
+  assert.equal(bindingFixture.state.startCalls, 0);
+
+  const identityFixture = sameMachineStaleOwnerFixture();
+  let environmentReads = 0;
+  identityFixture.adapter.listEnvironments = async () => {
+    environmentReads += 1;
+    if (environmentReads >= 2) {
+      return [
+        { envZId: LOCAL_ENV, remoteAgent: true, host: LOCAL_HOST },
+        { envZId: REMOTE_ENV, remoteAgent: false, host: REMOTE_HOST },
+      ];
+    }
+    return identityFixture.state.environments.map((environment) => ({ ...environment }));
+  };
+  const identityResult = await createZrokRuntimeService(identityFixture.adapter, baseConfig()).takeOver();
+  assert.equal(identityResult.ok, false);
+  assert.equal(identityResult.code, 'ZROK_TAKEOVER_STALE_OWNER');
+  assert.equal(identityFixture.state.deleteCalls.length, 0);
+  assert.equal(identityFixture.state.startCalls, 0);
+});
+
+test('stale same-machine takeover fails closed when exact share deletion fails', async () => {
+  const { service, state } = sameMachineStaleOwnerFixture({ failDelete: true });
+  const result = await service.takeOver();
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'ZROK_TAKEOVER_REMOTE_FENCE_FAILED');
+  assert.deepEqual(state.deleteCalls, [{ envZId: REMOTE_ENV, shareToken: REMOTE_TOKEN }]);
+  assert.equal(state.unshareCalls, 0);
+  assert.equal(state.startCalls, 0);
 });
 
 test('takeover fences the old remote share before activating and verifying the local owner', async () => {

@@ -8,6 +8,7 @@ assert.equal(packageJson.scripts['start:all'], 'tsx scripts/start-all.ts');
 
 const {
   apiCapabilitiesUrl,
+  apiZrokTakeoverUrl,
   buildNpmInvocation,
   buildStartAllPlan,
   buildZrokBootstrapInvocation,
@@ -19,6 +20,7 @@ const {
   parseZrokBootstrapResult,
   probeZrokPublicRoute,
   probeZrokRuntimeStatus,
+  requestZrokStaleSameMachineRecovery,
   selectZrokPublicProbeUrl,
   resolveStartAllOptions,
   shouldRestartServerProcess,
@@ -182,6 +184,7 @@ const dynamicRouteProbe = await probeZrokPublicRoute(
         status: 'online',
         baseUrl: 'https://dynamic-account.example/app',
         share: { state: 'active' },
+        actionability: { canRecoverStaleSameMachineOwner: true },
       }), { status: 200, headers: { 'content-type': 'application/json' } });
     }
     return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
@@ -189,6 +192,7 @@ const dynamicRouteProbe = await probeZrokPublicRoute(
 );
 assert.equal(dynamicRouteProbe.publicUrl, 'https://dynamic-account.example/app');
 assert.equal(dynamicRouteProbe.publicProbe.ok, true);
+assert.equal(dynamicRouteProbe.runtimeStatus?.canRecoverStaleSameMachineOwner, true);
 assert.deepEqual(probedUrls, [
   'http://localhost:3456/api/zrok/status',
   'https://dynamic-account.example/app/api/capabilities',
@@ -211,6 +215,18 @@ assert.equal(
 assert.equal(classifyPublicProbeFailure({ statusCode: 503 }), 'http-5xx');
 assert.equal(classifyPublicProbeFailure({ error: Object.assign(new Error('request timed out'), { name: 'AbortError' }) }), 'timeout');
 assert.equal(classifyPublicProbeFailure({ error: Object.assign(new Error('getaddrinfo ENOTFOUND'), { code: 'ENOTFOUND' }) }), 'dns');
+assert.equal(apiZrokTakeoverUrl('http://localhost:3456'), 'http://localhost:3456/api/zrok/takeover');
+let takeoverRequest: { url?: string; method?: string } = {};
+const takeoverTrigger = await requestZrokStaleSameMachineRecovery(
+  'http://localhost:3456',
+  5000,
+  async (input, init) => {
+    takeoverRequest = { url: String(input), method: init?.method };
+    return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+  },
+);
+assert.deepEqual(takeoverRequest, { url: 'http://localhost:3456/api/zrok/takeover', method: 'POST' });
+assert.equal(takeoverTrigger.ok, true);
 
 const acceptedRestart = {
   ticket: 'restart-test',
@@ -243,6 +259,43 @@ assert.equal(getZrokRecoveryDecision({
   shuttingDown: false,
   nowMs: 40000,
 }), 'suppressed-standby');
+assert.equal(getZrokRecoveryDecision({
+  tunnelStatus: 'down',
+  consecutiveProbeFailures: 3,
+  failureThreshold: 3,
+  localApiHealthy: true,
+  zrokStatus: 'standby',
+  zrokShareState: 'remote-active',
+  canRecoverStaleSameMachineOwner: true,
+  shuttingDown: false,
+  lifecyclePhase: 'steady-state',
+  nowMs: 40000,
+}), 'recover-stale-same-machine-owner');
+assert.equal(getZrokRecoveryDecision({
+  tunnelStatus: 'down',
+  consecutiveProbeFailures: 2,
+  failureThreshold: 3,
+  localApiHealthy: true,
+  zrokStatus: 'standby',
+  zrokShareState: 'remote-active',
+  canRecoverStaleSameMachineOwner: true,
+  shuttingDown: false,
+  lifecyclePhase: 'steady-state',
+  nowMs: 40000,
+}), 'threshold-not-reached');
+assert.equal(getZrokRecoveryDecision({
+  tunnelStatus: 'down',
+  consecutiveProbeFailures: 3,
+  failureThreshold: 3,
+  localApiHealthy: true,
+  zrokStatus: 'standby',
+  zrokShareState: 'remote-active',
+  canRecoverStaleSameMachineOwner: true,
+  shuttingDown: false,
+  lifecyclePhase: 'steady-state',
+  recoveryCooldownUntilMs: 45000,
+  nowMs: 40000,
+}), 'suppressed-recovery-cooldown');
 assert.equal(getZrokRecoveryDecision({
   tunnelStatus: 'down',
   consecutiveProbeFailures: 3,

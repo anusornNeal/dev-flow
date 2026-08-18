@@ -47,6 +47,7 @@ export interface ZrokRuntimeStatus {
   actionability: {
     canRecheck: true;
     canTakeOver: boolean;
+    canRecoverStaleSameMachineOwner?: boolean;
     takeoverBlockedReason?: string;
   };
 }
@@ -95,6 +96,9 @@ export interface ZrokShareRecord {
 export interface ZrokEnvironmentRecord {
   envZId: string;
   remoteAgent: boolean;
+  description?: string;
+  host?: string;
+  address?: string;
 }
 
 export interface ZrokAgentShareRecord {
@@ -124,6 +128,7 @@ export interface ZrokRuntimeAdapter {
   listEnvironments(): Promise<ZrokEnvironmentRecord[]>;
   getAgentStatus(input: { apiEndpoint: string; accountToken: string; envZId: string }): Promise<ZrokAgentStatusSnapshot>;
   unshareRemote(input: { apiEndpoint: string; accountToken: string; envZId: string; shareToken: string }): Promise<void>;
+  deleteShare(input: { envZId: string; shareToken: string }): Promise<void>;
   startLocalShare(input: { target: string; nameSelection: string }): Promise<void>;
   probePublic(input: { baseUrl: string; expectedRuntimeInstanceId: string }): Promise<ZrokPublicProbe>;
   now(): Date;
@@ -225,6 +230,7 @@ function publicStatus(
     probe?: ZrokPublicProbe;
     message?: string;
     canTakeOver?: boolean;
+    canRecoverStaleSameMachineOwner?: boolean;
     takeoverBlockedReason?: string;
   } = {},
 ): ZrokRuntimeStatus {
@@ -250,6 +256,7 @@ function publicStatus(
     actionability: {
       canRecheck: true,
       canTakeOver: Boolean(input.canTakeOver),
+      canRecoverStaleSameMachineOwner: Boolean(input.canRecoverStaleSameMachineOwner),
       ...(input.takeoverBlockedReason ? { takeoverBlockedReason: input.takeoverBlockedReason } : {}),
     },
   };
@@ -313,6 +320,40 @@ function safeSetupError(adapter: ZrokRuntimeAdapter, message: string): ZrokRunti
 
 function isRemoteAgentEnrolled(environments: ZrokEnvironmentRecord[], envZId: string) {
   return environments.some((environment) => environment.envZId === envZId && environment.remoteAgent);
+}
+
+function environmentMachineIdentity(environment: ZrokEnvironmentRecord | undefined) {
+  const parts = String(environment?.host || '').split(';').map((part) => normalizeName(part));
+  if (!parts[0] || !parts[1]) return null;
+  return { username: parts[0], hostname: parts[1] };
+}
+
+function isSameMachinePredecessor(
+  environments: ZrokEnvironmentRecord[],
+  currentEnvZId: string | undefined,
+  ownerEnvZId: string,
+) {
+  if (!currentEnvZId || currentEnvZId === ownerEnvZId) return false;
+  const current = environmentMachineIdentity(environments.find((environment) => environment.envZId === currentEnvZId));
+  const owner = environmentMachineIdentity(environments.find((environment) => environment.envZId === ownerEnvZId));
+  return Boolean(
+    current
+    && owner
+    && current.username === owner.username
+    && current.hostname === owner.hostname,
+  );
+}
+
+function isStaleSameMachineOwner(discovery: DiscoverySnapshot) {
+  const ownerEnvZId = discovery.currentShare?.envZId;
+  return Boolean(
+    discovery.owner === 'remote'
+    && ownerEnvZId
+    && discovery.serviceState === 'running'
+    && discovery.publicProbe.state === 'unhealthy'
+    && !isRemoteAgentEnrolled(discovery.environments, ownerEnvZId)
+    && isSameMachinePredecessor(discovery.environments, discovery.environment.envZId, ownerEnvZId),
+  );
 }
 
 function localShareState(share: ZrokLocalAgentShare): ZrokShareState {
@@ -540,6 +581,7 @@ function statusFromDiscovery(adapter: ZrokRuntimeAdapter, discovery: DiscoverySn
 
   if (owner === 'remote') {
     const remoteEnrolled = Boolean(currentShare && isRemoteAgentEnrolled(environments, currentShare.envZId));
+    const staleSameMachineRecoverable = isStaleSameMachineOwner(discovery);
     const remotelyVisible = Boolean(
       remoteEnrolled
       && ownerAgentStatus?.reachable
@@ -548,6 +590,7 @@ function statusFromDiscovery(adapter: ZrokRuntimeAdapter, discovery: DiscoverySn
     );
     let blockedReason: string | undefined;
     if (serviceState !== 'running') blockedReason = 'The local zrok agent service must be running before takeover.';
+    else if (staleSameMachineRecoverable) blockedReason = undefined;
     else if (!remoteEnrolled) blockedReason = 'The active machine is not enrolled for authenticated zrok agent remoting.';
     else if (ownerAgentStatus?.remoteControl === 'unsupported') blockedReason = 'Remote zrok agent control is unsupported by the controller.';
     else if (!remotelyVisible || ownerAgentStatus?.remoteControl !== 'available') blockedReason = 'The active machine cannot be fenced through authenticated zrok agent remoting right now.';
@@ -558,8 +601,11 @@ function statusFromDiscovery(adapter: ZrokRuntimeAdapter, discovery: DiscoverySn
       shareState: 'remote-active',
       owner,
       probe: publicProbe,
-      message: 'Standby · active on another machine',
+      message: staleSameMachineRecoverable
+        ? 'Standby · stale zrok owner from this machine can be recovered safely'
+        : 'Standby · active on another machine',
       canTakeOver: !blockedReason,
+      canRecoverStaleSameMachineOwner: staleSameMachineRecoverable,
       takeoverBlockedReason: blockedReason,
     });
   }
@@ -727,13 +773,15 @@ export function createZrokRuntimeService(
 
     const remoteShare = discovery.currentShare;
     const environment = discovery.environment;
-    if (
-      discovery.serviceState !== 'running'
-      || !isRemoteAgentEnrolled(discovery.environments, remoteShare.envZId)
-      || !discovery.ownerAgentStatus?.reachable
-      || discovery.ownerAgentStatus.remoteControl !== 'available'
-      || !discovery.ownerAgentStatus.shares.some((share) => share.token === remoteShare.shareToken)
-    ) {
+    const staleSameMachineRecovery = isStaleSameMachineOwner(discovery);
+    const remoteFenceAvailable = Boolean(
+      discovery.serviceState === 'running'
+      && isRemoteAgentEnrolled(discovery.environments, remoteShare.envZId)
+      && discovery.ownerAgentStatus?.reachable
+      && discovery.ownerAgentStatus.remoteControl === 'available'
+      && discovery.ownerAgentStatus.shares.some((share) => share.token === remoteShare.shareToken),
+    );
+    if (!staleSameMachineRecovery && !remoteFenceAvailable) {
       return safeTakeoverFailure(
         'ZROK_TAKEOVER_REMOTE_FENCE_UNAVAILABLE',
         'The active machine cannot be fenced through authenticated zrok agent remoting. No ownership change was attempted.',
@@ -744,7 +792,11 @@ export function createZrokRuntimeService(
     // Fence only the exact owner we inspected. If the account binding changed while we
     // were checking remote-agent status, stop rather than racing a new owner.
     try {
-      const [freshNames, freshShares] = await Promise.all([adapter.listNames(), adapter.listShares()]);
+      const [freshNames, freshShares, freshEnvironments] = await Promise.all([
+        adapter.listNames(),
+        adapter.listShares(),
+        adapter.listEnvironments(),
+      ]);
       const freshName = freshNames.find((name) => sameManagedName(name, discovery.managedName));
       const freshShare = freshName?.shareToken
         ? freshShares.find((share) => share.shareToken === freshName.shareToken)
@@ -756,6 +808,27 @@ export function createZrokRuntimeService(
           await getStatus(),
         );
       }
+      if (staleSameMachineRecovery) {
+        const sameMachineStillProven = isSameMachinePredecessor(
+          freshEnvironments,
+          environment.envZId,
+          remoteShare.envZId,
+        );
+        const stillUnenrolled = !isRemoteAgentEnrolled(freshEnvironments, remoteShare.envZId);
+        const freshProbe = discovery.baseUrl
+          ? await adapter.probePublic({
+              baseUrl: discovery.baseUrl,
+              expectedRuntimeInstanceId: config.expectedRuntimeInstanceId,
+            })
+          : { state: 'unknown' as const, latencyMs: null, routedToThisMachine: null };
+        if (!sameMachineStillProven || !stillUnenrolled || freshProbe.state !== 'unhealthy') {
+          return safeTakeoverFailure(
+            'ZROK_TAKEOVER_STALE_OWNER',
+            'The stale same-machine zrok owner could not be revalidated immediately before release. No ownership change was attempted.',
+            await getStatus(),
+          );
+        }
+      }
     } catch {
       return safeTakeoverFailure(
         'ZROK_TAKEOVER_STALE_OWNER',
@@ -765,40 +838,51 @@ export function createZrokRuntimeService(
     }
 
     try {
-      await adapter.unshareRemote({
-        apiEndpoint: environment.apiEndpoint!,
-        accountToken: environment.accountToken!,
-        envZId: remoteShare.envZId,
-        shareToken: remoteShare.shareToken,
-      });
+      if (staleSameMachineRecovery) {
+        await adapter.deleteShare({
+          envZId: remoteShare.envZId,
+          shareToken: remoteShare.shareToken,
+        });
+      } else {
+        await adapter.unshareRemote({
+          apiEndpoint: environment.apiEndpoint!,
+          accountToken: environment.accountToken!,
+          envZId: remoteShare.envZId,
+          shareToken: remoteShare.shareToken,
+        });
+      }
     } catch {
       return safeTakeoverFailure(
         'ZROK_TAKEOVER_REMOTE_FENCE_FAILED',
-        'The active machine did not confirm release of the managed zrok share. Local activation was not attempted.',
+        staleSameMachineRecovery
+          ? 'The exact stale same-machine zrok share could not be released. Local activation was not attempted.'
+          : 'The active machine did not confirm release of the managed zrok share. Local activation was not attempted.',
         await getStatus(),
       );
     }
 
-    // Confirm the old agent no longer reports the exact share before claiming the name.
-    try {
-      const fenced = await adapter.getAgentStatus({
-        apiEndpoint: environment.apiEndpoint!,
-        accountToken: environment.accountToken!,
-        envZId: remoteShare.envZId,
-      });
-      if (!fenced.reachable || fenced.shares.some((share) => share.token === remoteShare.shareToken)) {
+    // Authenticated remote owners must be proven fenced through the remote agent.
+    if (!staleSameMachineRecovery) {
+      try {
+        const fenced = await adapter.getAgentStatus({
+          apiEndpoint: environment.apiEndpoint!,
+          accountToken: environment.accountToken!,
+          envZId: remoteShare.envZId,
+        });
+        if (!fenced.reachable || fenced.shares.some((share) => share.token === remoteShare.shareToken)) {
+          return safeTakeoverFailure(
+            'ZROK_TAKEOVER_REMOTE_FENCE_FAILED',
+            'The old machine could not be proven fenced. Local activation was not attempted.',
+            await getStatus(),
+          );
+        }
+      } catch {
         return safeTakeoverFailure(
           'ZROK_TAKEOVER_REMOTE_FENCE_FAILED',
           'The old machine could not be proven fenced. Local activation was not attempted.',
           await getStatus(),
         );
       }
-    } catch {
-      return safeTakeoverFailure(
-        'ZROK_TAKEOVER_REMOTE_FENCE_FAILED',
-        'The old machine could not be proven fenced. Local activation was not attempted.',
-        await getStatus(),
-      );
     }
 
     // A different binding appearing after the old owner was fenced is a stale/race signal.
@@ -808,6 +892,16 @@ export function createZrokRuntimeService(
       const rebound = postFenceName?.shareToken
         ? postFenceShares.find((share) => share.shareToken === postFenceName.shareToken)
         : undefined;
+      const staleShareStillPresent = postFenceShares.some(
+        (share) => share.shareToken === remoteShare.shareToken && share.envZId === remoteShare.envZId,
+      );
+      if (staleSameMachineRecovery && (postFenceName?.shareToken === remoteShare.shareToken || staleShareStillPresent)) {
+        return safeTakeoverFailure(
+          'ZROK_TAKEOVER_REMOTE_FENCE_FAILED',
+          'The old zrok share binding still exists after release. Local activation was not attempted.',
+          await getStatus(),
+        );
+      }
       if (postFenceName?.shareToken && postFenceName.shareToken !== remoteShare.shareToken && rebound?.envZId !== environment.envZId) {
         return safeTakeoverFailure(
           'ZROK_TAKEOVER_STALE_OWNER',
@@ -1107,6 +1201,9 @@ export function createDefaultZrokRuntimeAdapter(options: DefaultZrokRuntimeAdapt
         return [{
           envZId,
           remoteAgent: valueBoolean(record.remoteAgent ?? record.remote_agent ?? record.RemoteAgent),
+          description: pickString(record, 'description', 'Description'),
+          host: pickString(record, 'host', 'Host'),
+          address: pickString(record, 'address', 'Address'),
         }];
       });
     },
@@ -1143,6 +1240,11 @@ export function createDefaultZrokRuntimeAdapter(options: DefaultZrokRuntimeAdapt
         envZId: input.envZId,
         token: input.shareToken,
       });
+    },
+
+    async deleteShare(input) {
+      const result = command(['delete', 'share', '--envzid', input.envZId, input.shareToken]);
+      if (!result.ok) throw new ZrokRuntimeInternalError('ZROK_DELETE_SHARE_FAILED');
     },
 
     async startLocalShare(input) {

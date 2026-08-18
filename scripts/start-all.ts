@@ -81,6 +81,7 @@ export type ZrokRuntimeStatusProbe = {
   status?: string;
   shareState?: string;
   baseUrl?: string;
+  canRecoverStaleSameMachineOwner?: boolean;
 };
 
 const DEFAULT_PORT = 3000;
@@ -348,6 +349,7 @@ export function getZrokRecoveryDecision(input: {
   localApiHealthy: boolean;
   zrokStatus?: string;
   zrokShareState?: string;
+  canRecoverStaleSameMachineOwner?: boolean;
   shuttingDown: boolean;
   startupGraceUntilMs?: number;
   lifecyclePhase?: DevFlowTunnelHealthState['lifecyclePhase'];
@@ -359,10 +361,14 @@ export function getZrokRecoveryDecision(input: {
   if (input.tunnelStatus !== 'down' || input.consecutiveProbeFailures < Math.max(1, input.failureThreshold)) return 'threshold-not-reached' as const;
   const zrokStatus = String(input.zrokStatus || '').trim().toLowerCase();
   const zrokShareState = String(input.zrokShareState || '').trim().toLowerCase();
-  if (zrokStatus === 'standby' || zrokShareState === 'remote-active') return 'suppressed-standby' as const;
   if (!input.localApiHealthy) return 'suppressed-local-api-unhealthy' as const;
   if (input.lifecyclePhase !== 'steady-state' && input.startupGraceUntilMs && input.startupGraceUntilMs > nowMs) return 'suppressed-startup-grace' as const;
   if (input.recoveryCooldownUntilMs && input.recoveryCooldownUntilMs > nowMs) return 'suppressed-recovery-cooldown' as const;
+  if (zrokStatus === 'standby' || zrokShareState === 'remote-active') {
+    return input.canRecoverStaleSameMachineOwner
+      ? 'recover-stale-same-machine-owner' as const
+      : 'suppressed-standby' as const;
+  }
   return 'suppressed-periodic-recovery' as const;
 }
 
@@ -384,6 +390,40 @@ export function apiCapabilitiesUrl(baseUrl: string) {
 
 export function apiZrokStatusUrl(baseUrl: string) {
   return new URL('api/zrok/status', baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`).toString();
+}
+
+export function apiZrokTakeoverUrl(baseUrl: string) {
+  return new URL('api/zrok/takeover', baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`).toString();
+}
+
+export async function requestZrokStaleSameMachineRecovery(
+  baseUrl: string,
+  timeoutMs: number,
+  fetchImpl: typeof fetch = fetch,
+) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.max(100, timeoutMs));
+  timer.unref();
+  try {
+    const response = await fetchImpl(apiZrokTakeoverUrl(baseUrl), {
+      method: 'POST',
+      signal: controller.signal,
+      redirect: 'manual',
+    });
+    return {
+      ok: response.ok,
+      statusCode: response.status,
+      message: `HTTP ${response.status}`,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      statusCode: undefined,
+      message: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function probeHttpEndpoint(
@@ -443,10 +483,16 @@ export async function probeZrokRuntimeStatus(
     const share = payload.share && typeof payload.share === 'object'
       ? payload.share as Record<string, unknown>
       : undefined;
+    const actionability = payload.actionability && typeof payload.actionability === 'object'
+      ? payload.actionability as Record<string, unknown>
+      : undefined;
     return {
       status: typeof payload.status === 'string' ? payload.status : undefined,
       shareState: typeof share?.state === 'string' ? share.state : undefined,
       baseUrl: typeof payload.baseUrl === 'string' ? payload.baseUrl : undefined,
+      ...(actionability?.canRecoverStaleSameMachineOwner === true
+        ? { canRecoverStaleSameMachineOwner: true }
+        : {}),
     };
   } catch {
     return undefined;
@@ -648,6 +694,7 @@ export async function startAll(mode: StartAllMode = 'all') {
     if (mode !== 'all' || shuttingDown || tunnelProbeInFlight) return;
     tunnelProbeInFlight = true;
     const probeGeneration = currentTunnelHealth().generation;
+    let nextProbeDelayMs = options.zrokProbeIntervalMs;
     try {
       const routeProbe = await probeZrokPublicRoute(plan.appUrl, activePublicUrl, options.zrokProbeTimeoutMs);
       const localZrokStatus = routeProbe.runtimeStatus;
@@ -693,13 +740,24 @@ export async function startAll(mode: StartAllMode = 'all') {
         localApiHealthy: localProbe.ok,
         zrokStatus: localZrokStatus?.status,
         zrokShareState: localZrokStatus?.shareState,
+        canRecoverStaleSameMachineOwner: localZrokStatus?.canRecoverStaleSameMachineOwner,
         shuttingDown,
         startupGraceUntilMs: next.startupGraceUntil ? Date.parse(next.startupGraceUntil) : undefined,
         lifecyclePhase: next.lifecyclePhase,
         recoveryCooldownUntilMs,
       });
 
-      if (decision === 'suppressed-standby') {
+      if (decision === 'recover-stale-same-machine-owner') {
+        recoveryCooldownUntilMs = Date.now() + options.zrokRecoveryCooldownMs;
+        const recovery = await requestZrokStaleSameMachineRecovery(plan.appUrl, options.zrokProbeTimeoutMs);
+        updateDevFlowSupervisorTunnelHealth({
+          ...next,
+          message: recovery.ok
+            ? 'Released a proven stale zrok owner from this machine; verifying the stable public route.'
+            : `Stale same-machine zrok recovery failed safely (${recovery.message}); the reserved name was preserved.`,
+        });
+        if (recovery.ok) nextProbeDelayMs = 250;
+      } else if (decision === 'suppressed-standby') {
         updateDevFlowSupervisorTunnelHealth({
           ...next,
           message: 'Public zrok route is unavailable, but local zrok is Standby; automatic repair is suppressed.',
@@ -718,7 +776,7 @@ export async function startAll(mode: StartAllMode = 'all') {
       }
     } finally {
       tunnelProbeInFlight = false;
-      scheduleTunnelProbe();
+      scheduleTunnelProbe(nextProbeDelayMs);
     }
   }
 

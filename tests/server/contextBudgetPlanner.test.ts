@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-const { planContextBudget, rankContextEvidence } = await import('../../src/server/services/contextBudgetPlannerService.js');
+const { ADAPTIVE_SOURCE_DISCLOSURE_POLICY, planContextBudget, rankContextEvidence } = await import('../../src/server/services/contextBudgetPlannerService.js');
 
 const candidates = [
   { path: 'src/server/services/configService.ts', score: 4, symbols: ['parseConfig', 'saveConfig'] },
@@ -29,6 +29,16 @@ test('small copy/config authoring gets a narrow deterministic budget below the o
   assert.equal(first.evidence[0].rank, 'must');
   assert.equal(first.evidence[0].path, 'README.md');
   assert.ok(first.evidence[0].reasons.some((reason: string) => reason.includes('target')));
+});
+
+test('adaptive disclosure policy exposes deterministic small-file and bounded-large-file thresholds', () => {
+  assert.deepEqual(ADAPTIVE_SOURCE_DISCLOSURE_POLICY, {
+    smallFileMaxLines: 400,
+    smallFileMaxBytes: 20_000,
+    largeFileWindowLines: 300,
+    maxLargeFileWindowLines: 350,
+    tinyTailMaxLines: 50,
+  });
 });
 
 test('one-function bug ranks implementation and related test evidence with reasons', () => {

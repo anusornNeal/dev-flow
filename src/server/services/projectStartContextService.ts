@@ -10,6 +10,7 @@ import { getRepoInspectionIndex } from './repoInspectionIndexService';
 import { registerRepoCacheInvalidator } from './repoCacheInvalidationService';
 import { buildRepoEvidenceIdentity, getRepoRevisionForRoot } from './repoRevisionService';
 import { contextGovernorInputFromArgs, planContextGovernor } from './contextGovernorService';
+import { ADAPTIVE_SOURCE_DISCLOSURE_POLICY } from './contextBudgetPlannerService';
 import { ensureRepoChangeWatcher } from './workspaceChangeWatcherService';
 import { maybeRefreshAtlasOnProjectOpen } from './projectAtlasService.js';
 
@@ -652,8 +653,13 @@ export function getRepoContextBundle(state: AppState, args: Record<string, any>)
     candidates: [...indexedCandidates, ...explicitTargetCandidates],
   }));
   const snippetLimit = Math.min(contextPlan.budgets.snippetLimit, parsePositiveInt(args.snippetLimit, Math.min(indexLimit, contextPlan.budgets.snippetLimit), 20));
+  const explicitSnippetLines = args.snippetLines !== undefined && args.snippetLines !== null && String(args.snippetLines).trim() !== '';
+  const explicitMaxSnippetBytes = args.maxSnippetBytes !== undefined && args.maxSnippetBytes !== null && String(args.maxSnippetBytes).trim() !== '';
+  const explicitDisclosure = typeof args.disclosureLevel === 'string'
+    || typeof args.contextDepth === 'string'
+    || args.fullFile === true;
   const snippetLines = Math.min(contextPlan.budgets.snippetLines, parsePositiveInt(args.snippetLines, contextPlan.budgets.snippetLines, contextPlan.disclosureLevel === 'full-file' ? 1000 : 240));
-  const maxSnippetBytes = Math.min(contextPlan.budgets.perSnippetBytes, parsePositiveInt(args.maxSnippetBytes, contextPlan.budgets.perSnippetBytes, 100000));
+  const baseMaxSnippetBytes = Math.min(contextPlan.budgets.perSnippetBytes, parsePositiveInt(args.maxSnippetBytes, contextPlan.budgets.perSnippetBytes, 100000));
   const aggregateContextBudget = Math.min(contextPlan.budgets.maxContextBytes, parsePositiveInt(args.maxContextBytes, contextPlan.budgets.maxContextBytes, 500000));
   const reservedMetadataBytes = Math.min(12_000, Math.floor(aggregateContextBudget * 0.25));
   const defaultSnippetBudget = Math.min(contextPlan.budgets.snippetBytes, Math.max(1, aggregateContextBudget - reservedMetadataBytes));
@@ -661,6 +667,14 @@ export function getRepoContextBundle(state: AppState, args: Record<string, any>)
     aggregateContextBudget,
     parsePositiveInt(args.maxSnippetTotalBytes, defaultSnippetBudget, 500000),
   );
+  const automaticAdaptiveDisclosure = !explicitDisclosure && !explicitSnippetLines;
+  const maxSnippetBytes = Math.max(1, Math.min(
+    automaticAdaptiveDisclosure && !explicitMaxSnippetBytes
+      ? Math.max(baseMaxSnippetBytes, ADAPTIVE_SOURCE_DISCLOSURE_POLICY.smallFileMaxBytes)
+      : baseMaxSnippetBytes,
+    snippetByteBudget,
+    aggregateContextBudget,
+  ));
   const selectedEvidence = contextPlan.evidence
     .filter((entry) => entry.rank !== 'optional' || contextPlan.intent === 'architecture-analysis' || contextPlan.disclosureLevel === 'full-file')
     .slice(0, snippetLimit);
@@ -674,17 +688,55 @@ export function getRepoContextBundle(state: AppState, args: Record<string, any>)
     for (const match of selectedEvidence) {
       if (remainingSnippetBytes <= 0) break;
       const perReadBudget = Math.max(1, Math.min(maxSnippetBytes, remainingSnippetBytes));
-      snippetReadCount += 1;
       try {
+        const metadata = readResolvedLocalFile(state, {
+          ...args,
+          projectId: project.id,
+          filePath: match.path,
+          mode: 'metadata',
+        }, index.root);
+        const sourceBytes = Math.max(0, Number(metadata.bytes) || 0);
+        const totalLines = Math.max(1, Number(metadata.totalLines) || 1);
+        const smallFile = totalLines <= ADAPTIVE_SOURCE_DISCLOSURE_POLICY.smallFileMaxLines
+          && sourceBytes <= ADAPTIVE_SOURCE_DISCLOSURE_POLICY.smallFileMaxBytes;
+        const wholeFileFitsBudget = sourceBytes <= perReadBudget && sourceBytes <= remainingSnippetBytes;
+        let adaptiveMode = explicitSnippetLines || explicitDisclosure ? 'explicit-window' : 'profile-window';
+        let requestedEndLine = snippetLines;
+
+        if (automaticAdaptiveDisclosure && match.rank === 'must' && smallFile && wholeFileFitsBudget) {
+          adaptiveMode = 'whole-small-file';
+          requestedEndLine = totalLines;
+        } else if (automaticAdaptiveDisclosure && match.rank === 'must' && !smallFile) {
+          adaptiveMode = 'bounded-large-file';
+          const baseWindowEndLine = Math.min(totalLines, ADAPTIVE_SOURCE_DISCLOSURE_POLICY.largeFileWindowLines);
+          const remainingTailLines = Math.max(0, totalLines - baseWindowEndLine);
+          requestedEndLine = remainingTailLines > 0 && remainingTailLines <= ADAPTIVE_SOURCE_DISCLOSURE_POLICY.tinyTailMaxLines
+            ? Math.min(totalLines, ADAPTIVE_SOURCE_DISCLOSURE_POLICY.maxLargeFileWindowLines)
+            : baseWindowEndLine;
+        } else if (automaticAdaptiveDisclosure && match.rank === 'must' && smallFile && !wholeFileFitsBudget) {
+          adaptiveMode = 'budget-limited-small-file';
+        }
+
+        snippetReadCount += 1;
         const snippet = readResolvedLocalFile(state, {
           ...args,
           projectId: project.id,
           filePath: match.path,
           startLine: 1,
-          endLine: snippetLines,
+          endLine: requestedEndLine,
           maxBytes: perReadBudget,
         }, index.root);
-        const contentBytes = Buffer.byteLength(String(snippet.content || ''), 'utf8');
+        let snippetContent = String(snippet.content || '');
+        let contentBytes = Buffer.byteLength(snippetContent, 'utf8');
+        if (contentBytes > perReadBudget) {
+          snippetContent = Buffer.from(snippetContent, 'utf8').subarray(0, perReadBudget).toString('utf8');
+          while (snippetContent.length > 0 && Buffer.byteLength(snippetContent, 'utf8') > perReadBudget) {
+            snippetContent = snippetContent.slice(0, -1);
+          }
+          snippet.content = snippetContent;
+          snippet.truncated = true;
+          contentBytes = Buffer.byteLength(snippetContent, 'utf8');
+        }
         returnedSnippetBytes += contentBytes;
         remainingSnippetBytes = Math.max(0, remainingSnippetBytes - contentBytes);
         snippets.push({
@@ -698,6 +750,16 @@ export function getRepoContextBundle(state: AppState, args: Record<string, any>)
           endLine: snippet.endLine,
           totalLines: snippet.totalLines,
           truncated: snippet.truncated,
+          adaptiveDisclosure: {
+            mode: adaptiveMode,
+            automatic: automaticAdaptiveDisclosure,
+            sourceBytes,
+            totalLines,
+            requestedEndLine,
+            perReadBudget,
+            wholeFileEligible: match.rank === 'must' && smallFile,
+            wholeFileSelected: adaptiveMode === 'whole-small-file',
+          },
           revision: snippet.revision,
           fileRevision: snippet.fileRevision,
           freshnessIdentity: buildRepoEvidenceIdentity({
@@ -764,6 +826,13 @@ export function getRepoContextBundle(state: AppState, args: Record<string, any>)
     returnedSnippetBytes,
     remainingSnippetBytes,
     budgetExhausted: remainingSnippetBytes <= 0,
+    adaptiveDisclosure: {
+      automatic: automaticAdaptiveDisclosure,
+      explicitSnippetLines,
+      explicitMaxSnippetBytes,
+      explicitDisclosure,
+      policy: ADAPTIVE_SOURCE_DISCLOSURE_POLICY,
+    },
   };
 
   const response = {

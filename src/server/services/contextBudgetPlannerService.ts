@@ -8,6 +8,14 @@ export type ContextIntent =
 export type ContextEvidenceRank = 'must' | 'should' | 'optional';
 export type ContextDisclosureLevel = 'project-summary' | 'symbols' | 'snippets' | 'callers-tests' | 'full-file';
 
+export const ADAPTIVE_SOURCE_DISCLOSURE_POLICY = Object.freeze({
+  smallFileMaxLines: 400,
+  smallFileMaxBytes: 20_000,
+  largeFileWindowLines: 300,
+  maxLargeFileWindowLines: 350,
+  tinyTailMaxLines: 50,
+} as const);
+
 export interface ContextCandidate {
   path: string;
   score?: number;

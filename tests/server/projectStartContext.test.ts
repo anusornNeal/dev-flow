@@ -19,6 +19,7 @@ const {
   getRepoContextBundlePerformanceSummary,
   getRepoReadSnapshot,
 } = await import('../../src/server/services/projectStartContextService.js');
+const { ADAPTIVE_SOURCE_DISCLOSURE_POLICY } = await import('../../src/server/services/contextBudgetPlannerService.js');
 const { clearRepoInspectionIndexCache } = await import('../../src/server/services/repoInspectionIndexService.js');
 const { stopAllRepoChangeWatchers } = await import('../../src/server/services/workspaceChangeWatcherService.js');
 
@@ -26,6 +27,15 @@ fs.writeFileSync(path.join(tempDir, 'package.json'), '{"name":"fixture"}\n', 'ut
 fs.writeFileSync(path.join(tempDir, 'README.md'), '# Fixture\n', 'utf8');
 fs.mkdirSync(path.join(tempDir, 'src'));
 fs.writeFileSync(path.join(tempDir, 'src', 'snapshotService.ts'), "export function snapshotExample() { return 'snapshot'; }\n", 'utf8');
+const adaptiveFixture = (lineCount: number, payloadWidth: number) => Array.from(
+  { length: lineCount },
+  (_, index) => `// ${String(index).padStart(3, '0')} ${'x'.repeat(Math.max(1, payloadWidth))}`,
+).join('\n');
+fs.writeFileSync(path.join(tempDir, 'src', 'adaptive399.ts'), adaptiveFixture(399, 8), 'utf8');
+fs.writeFileSync(path.join(tempDir, 'src', 'adaptive400.ts'), adaptiveFixture(400, 8), 'utf8');
+fs.writeFileSync(path.join(tempDir, 'src', 'adaptive401.ts'), adaptiveFixture(401, 8), 'utf8');
+fs.writeFileSync(path.join(tempDir, 'src', 'adaptiveByteUnder.ts'), adaptiveFixture(100, 180), 'utf8');
+fs.writeFileSync(path.join(tempDir, 'src', 'adaptiveByteOver.ts'), adaptiveFixture(100, 210), 'utf8');
 for (let index = 0; index < 10; index += 1) {
   fs.writeFileSync(
     path.join(tempDir, 'src', `sharedContext${index}.ts`),
@@ -116,6 +126,69 @@ test('getRepoContextBundle applies intent-aware budgets and evidence reasons', (
   });
   assert.equal(explicitFull.contextPlan.disclosureLevel, 'full-file');
   assert.ok(explicitFull.contextPlan.budgets.snippetBytes >= 120_000);
+});
+
+test('getRepoContextBundle applies size-aware adaptive disclosure without overriding explicit smaller requests', () => {
+  const readAdaptive = (filePath: string, overrides: Record<string, any> = {}) => getRepoContextBundle(state, {
+    projectId: 'project-start-1',
+    q: 'adaptive source disclosure threshold',
+    contextIntent: 'cross-module-change',
+    targetFiles: [filePath],
+    snippetLimit: 1,
+    maxContextBytes: 40_000,
+    ...overrides,
+  });
+
+  for (const [filePath, expectedLines] of [['src/adaptive399.ts', 399], ['src/adaptive400.ts', 400]] as const) {
+    const result = readAdaptive(filePath);
+    assert.equal(result.snippets.length, 1);
+    assert.equal(result.snippets[0].totalLines, expectedLines);
+    assert.equal(result.snippets[0].endLine, expectedLines);
+    assert.equal(result.snippets[0].truncated, false);
+    assert.equal(result.snippets[0].adaptiveDisclosure.mode, 'whole-small-file');
+    assert.equal(result.snippets[0].adaptiveDisclosure.wholeFileSelected, true);
+  }
+
+  const overLineLimit = readAdaptive('src/adaptive401.ts');
+  assert.equal(overLineLimit.snippets.length, 1);
+  assert.equal(overLineLimit.snippets[0].totalLines, 401);
+  assert.equal(overLineLimit.snippets[0].adaptiveDisclosure.mode, 'bounded-large-file');
+  assert.equal(overLineLimit.snippets[0].endLine, ADAPTIVE_SOURCE_DISCLOSURE_POLICY.largeFileWindowLines);
+  assert.equal(overLineLimit.snippets[0].truncated, true);
+
+  const byteUnderPath = path.join(tempDir, 'src', 'adaptiveByteUnder.ts');
+  const byteOverPath = path.join(tempDir, 'src', 'adaptiveByteOver.ts');
+  assert.equal(fs.statSync(byteUnderPath).size < ADAPTIVE_SOURCE_DISCLOSURE_POLICY.smallFileMaxBytes, true);
+  assert.equal(fs.statSync(byteOverPath).size > ADAPTIVE_SOURCE_DISCLOSURE_POLICY.smallFileMaxBytes, true);
+
+  const underByteLimit = readAdaptive('src/adaptiveByteUnder.ts');
+  assert.equal(underByteLimit.snippets[0].adaptiveDisclosure.mode, 'whole-small-file');
+  assert.equal(underByteLimit.snippets[0].truncated, false);
+
+  const overByteLimit = readAdaptive('src/adaptiveByteOver.ts');
+  assert.equal(overByteLimit.snippets[0].adaptiveDisclosure.mode, 'bounded-large-file');
+  assert.equal(overByteLimit.snippets[0].returnedBytes <= ADAPTIVE_SOURCE_DISCLOSURE_POLICY.smallFileMaxBytes, true);
+  assert.equal(overByteLimit.snippets[0].truncated, true);
+
+  const explicitLines = readAdaptive('src/adaptive399.ts', { snippetLines: 25 });
+  assert.equal(explicitLines.contextPlan.adaptiveDisclosure.automatic, false);
+  assert.equal(explicitLines.snippets[0].endLine, 25);
+  assert.equal(explicitLines.snippets[0].adaptiveDisclosure.mode, 'explicit-window');
+
+  const explicitBytes = readAdaptive('src/adaptiveByteUnder.ts', { maxSnippetBytes: 512 });
+  assert.equal(explicitBytes.contextPlan.adaptiveDisclosure.explicitMaxSnippetBytes, true);
+  assert.equal(explicitBytes.snippets[0].returnedBytes <= 512, true);
+  assert.equal(explicitBytes.snippets[0].adaptiveDisclosure.wholeFileSelected, false);
+
+  const explicitDisclosure = readAdaptive('src/adaptive399.ts', { disclosureLevel: 'snippets' });
+  assert.equal(explicitDisclosure.contextPlan.adaptiveDisclosure.automatic, false);
+  assert.equal(explicitDisclosure.snippets[0].adaptiveDisclosure.mode, 'explicit-window');
+  assert.equal(explicitDisclosure.snippets[0].endLine, explicitDisclosure.contextPlan.budgets.snippetLines);
+
+  const constrainedAggregate = readAdaptive('src/adaptiveByteUnder.ts', { maxContextBytes: 12_000 });
+  assert.equal(constrainedAggregate.contextPlan.responseBudget.returnedBytes <= 12_000, true);
+  assert.equal(constrainedAggregate.contextPlan.maxContextBytes ?? constrainedAggregate.contextPlan.budgets.maxContextBytes, 12_000);
+  assert.equal(constrainedAggregate.snippets[0]?.adaptiveDisclosure.wholeFileSelected === true, false);
 });
 
 test('getRepoContextBundle enforces an aggregate budget for metadata-heavy project summaries', () => {

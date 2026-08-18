@@ -69,6 +69,7 @@ type FinalizedQueueWaitTelemetry = {
 
 type JobPhaseTelemetryState = {
   jobId: string;
+  toolName: string;
   resourceScope: FinalizedQueueWaitTelemetry['resourceScope'];
   admissionWaitMs: number;
   enqueuedAt: number;
@@ -315,14 +316,18 @@ function summarizeJobPhaseTelemetry() {
   const now = Date.now();
   const queuedById = new Map(queue.map((entry) => [entry.jobId, entry]));
   const activeById = new Map(Array.from(activeJobs.entries(), ([jobId, value]) => [jobId, value.entry]));
-  const timings = Array.from(jobPhaseTelemetryById.values()).map((state) => getJobPhaseTimings(state, queuedById.get(state.jobId) || activeById.get(state.jobId), now));
+  const entries = Array.from(jobPhaseTelemetryById.values()).map((state) => ({
+    toolName: state.toolName,
+    timings: getJobPhaseTimings(state, queuedById.get(state.jobId) || activeById.get(state.jobId), now),
+  }));
   const summary = (values: number[]) => ({
     count: values.length,
     totalMs: values.reduce((sum, value) => sum + value, 0),
     p50Ms: percentile(values, 50),
     p95Ms: percentile(values, 95),
+    maxMs: values.length ? Math.max(...values) : 0,
   });
-  return {
+  const summarizeTimings = (timings: JobPhaseTimings[]) => ({
     admissionWait: summary(timings.map((entry) => entry.admissionWaitMs)),
     queueWait: summary(timings.map((entry) => entry.queueWaitMs)),
     workspaceLockWait: summary(timings.map((entry) => entry.workspaceLockWaitMs).filter((value) => value > 0)),
@@ -330,7 +335,12 @@ function summarizeJobPhaseTelemetry() {
     candidatePreparation: summary(timings.map((entry) => entry.candidatePreparationMs).filter((value) => value > 0)),
     execution: summary(timings.map((entry) => entry.executionMs)),
     responseHandoff: summary(timings.map((entry) => entry.responseHandoffMs)),
-  };
+  });
+  const byTool: Record<string, ReturnType<typeof summarizeTimings>> = {};
+  for (const toolName of new Set(entries.map((entry) => entry.toolName))) {
+    byTool[toolName] = summarizeTimings(entries.filter((entry) => entry.toolName === toolName).map((entry) => entry.timings));
+  }
+  return { ...summarizeTimings(entries.map((entry) => entry.timings)), byTool };
 }
 
 function percentile(values: number[], percentileValue: number) {
@@ -928,6 +938,7 @@ function enqueueRecoveredJob(state: AppState, job: McpToolJob) {
   const enqueuedAt = Number.isFinite(parsedUpdatedAt) ? parsedUpdatedAt : Date.now();
   const phaseTelemetry: JobPhaseTelemetryState = {
     jobId: job.jobId,
+    toolName: job.toolName,
     resourceScope: resourceScopeFor(job.resourceKey),
     admissionWaitMs: 0,
     enqueuedAt,
@@ -1288,7 +1299,7 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
     const verification = verificationPolicyFor(jobArgs, schedulerProfile.accessMode, resourceKey);
     const superseding = verification ? findNewerVerification(verification) : undefined;
     if (verification && !superseding) supersedeObsoleteVerification(verification);
-    createJob(jobId, toolName, jobArgs, resourceKey);
+    createJob(jobId, toolName, jobArgs, resourceKey, { eagerArtifacts: toolName !== 'search_local_files' });
     if (verification && superseding) {
       terminalizeIncomingSupersededJob(jobId, verification, superseding);
       return {
@@ -1309,6 +1320,7 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
     const phaseTelemetry: JobPhaseTelemetryState = {
       jobId,
       resourceScope: resourceScopeFor(resourceKey),
+      toolName,
       admissionWaitMs: Math.max(0, completedAt - admissionStartedAt),
       enqueuedAt: completedAt,
       queueCompletedAt: completedAt,
@@ -1340,7 +1352,7 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
     const leaderStatus = leaderJobId ? getJob(leaderJobId) : null;
     if (leaderJobId && leaderStatus && !isTerminalStatus(leaderStatus.status)) {
       const followerJobId = `job-${Date.now()}-${randomUUID().slice(0, 8)}`;
-      createJob(followerJobId, toolName, jobArgs, resourceKey);
+      createJob(followerJobId, toolName, jobArgs, resourceKey, { eagerArtifacts: toolName !== 'search_local_files' });
       updateJobStatus(followerJobId, { status: 'running' });
       appendJobLog(followerJobId, 'stdout', `[Single Flight] Following ${leaderJobId}.\n`);
       const followers = singleFlightFollowers.get(leaderJobId) || new Set<string>();
@@ -1376,7 +1388,7 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
         enforceVerificationBackpressure(verification, resourceKey);
       }
     }
-    job = createJob(jobId, toolName, jobArgs, resourceKey);
+    job = createJob(jobId, toolName, jobArgs, resourceKey, { eagerArtifacts: toolName !== 'search_local_files' });
     if (verification && superseding) {
       terminalizeIncomingSupersededJob(jobId, verification, superseding);
       return {
@@ -1397,6 +1409,7 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
   const phaseTelemetry: JobPhaseTelemetryState = {
     jobId,
     resourceScope: resourceScopeFor(resourceKey),
+    toolName,
     admissionWaitMs: Math.max(0, enqueuedAt - admissionStartedAt),
     enqueuedAt,
     responseHandoffMs: 0,

@@ -370,10 +370,17 @@ function publishJobLifecycleEvent(job: McpToolJob, reason: string) {
   });
 }
 
-export function createJob(jobId: string, toolName: string, args: any, resourceKey: string): McpToolJob {
-  ensureJobsDir();
+export function createJob(
+  jobId: string,
+  toolName: string,
+  args: any,
+  resourceKey: string,
+  options: { eagerArtifacts?: boolean } = {},
+): McpToolJob {
+  const eagerArtifacts = options.eagerArtifacts !== false;
+  if (eagerArtifacts) ensureJobsDir();
   const artifactDir = getArtifactDir(jobId);
-  fs.mkdirSync(artifactDir, { recursive: true });
+  if (eagerArtifacts) fs.mkdirSync(artifactDir, { recursive: true });
   const safeArgs = redactValue(args);
   const verificationMetadata = verificationMetadataFromArgs(safeArgs);
   const now = new Date().toISOString();
@@ -404,10 +411,12 @@ export function createJob(jobId: string, toolName: string, args: any, resourceKe
     job.verificationGeneration ?? null, job.verificationEvidenceIntent || null,
   );
 
-  fs.writeFileSync(path.join(artifactDir, 'input.json'), JSON.stringify({ toolName, args: safeArgs, resourceKey }, null, 2));
-  fs.writeFileSync(path.join(artifactDir, 'stdout.log'), '');
-  fs.writeFileSync(path.join(artifactDir, 'stderr.log'), '');
-  writeCompatibilityStatus(job);
+  if (eagerArtifacts) {
+    fs.writeFileSync(path.join(artifactDir, 'input.json'), JSON.stringify({ toolName, args: safeArgs, resourceKey }, null, 2));
+    fs.writeFileSync(path.join(artifactDir, 'stdout.log'), '');
+    fs.writeFileSync(path.join(artifactDir, 'stderr.log'), '');
+    writeCompatibilityStatus(job);
+  }
   upsertRecentJobCache(job);
   publishJobLifecycleEvent(job, 'created');
   return job;

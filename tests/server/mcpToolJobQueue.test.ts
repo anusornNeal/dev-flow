@@ -1304,11 +1304,42 @@ test('mcpToolJobService - phase telemetry separates queue blockers from executio
     assert.equal(metrics.metrics.phaseTelemetry.queueWait.count >= 1, true);
     assert.equal(metrics.metrics.phaseTelemetry.workspaceLockWait.p95Ms > 0, true);
     assert.equal(metrics.metrics.phaseTelemetry.execution.p95Ms > 0, true);
+    assert.equal(metrics.metrics.phaseTelemetry.admissionWait.maxMs >= metrics.metrics.phaseTelemetry.admissionWait.p95Ms, true);
+    assert.equal(metrics.metrics.phaseTelemetry.byTool[toolName].queueWait.count >= 1, true);
+    assert.equal(metrics.metrics.phaseTelemetry.byTool[toolName].execution.maxMs >= metrics.metrics.phaseTelemetry.byTool[toolName].execution.p95Ms, true);
+
     assert.doesNotMatch(JSON.stringify(metrics.metrics.phaseTelemetry), /phase-telemetry|localPath|Users|\\\\/);
   } finally {
     blockers.first.resolve();
     blockers.second.resolve();
     __setToolJobTestRunner(toolName, null);
+  }
+});
+
+test('mcpToolJobService - search admission defers filesystem artifacts until execution', async () => {
+  const root = makeTempRepo('search-admission-artifacts');
+  const state = makeState(root);
+  const gate = deferred();
+  const writes: string[] = [];
+  const originalWriteFileSync = fs.writeFileSync;
+  __setToolJobTestRunner('search_local_files', async () => {
+    await gate.promise;
+    return { ok: true };
+  });
+  (fs as any).writeFileSync = (...args: any[]) => {
+    writes.push(String(args[0]));
+    return (originalWriteFileSync as any)(...args);
+  };
+
+  try {
+    const job = enqueueToolJob(state, 'search_local_files', { localPath: root, query: 'needle', singleFlight: false }, 'repo-read');
+    assert.deepEqual(writes.filter((filePath) => filePath.includes(job.jobId)), []);
+    gate.resolve();
+    await waitForStatus(job.jobId, 'succeeded');
+  } finally {
+    gate.resolve();
+    (fs as any).writeFileSync = originalWriteFileSync;
+    __setToolJobTestRunner('search_local_files', null);
   }
 });
 

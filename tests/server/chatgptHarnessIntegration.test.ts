@@ -192,6 +192,8 @@ test('combined harness envelope follows claim, context, mutation, repair, resume
       taskId: task.id,
       harnessOperationId: 'integration-commit-preview',
     });
+
+    assert.equal(commitPreview.allowed, true);
     const oldFingerprint = commitPreview.policy!.inputFingerprint;
     saveTask({ ...task, claim: claimed.claim, priority: 'high', updatedAt: new Date(Date.now() + 1000).toISOString() } as any);
     const stalePolicy = preflightHarnessExecutionGuard(state, 'commit_task_owned_changes', {

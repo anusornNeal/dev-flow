@@ -140,6 +140,17 @@ test('execution guard composes policy, ownership, lifecycle, retry identity, and
     recordHarnessExecutionOutcome(verifyDecision, { status: 'failed', ok: false });
     assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'repairing');
 
+    const recoveryFailure = preflightHarnessExecutionGuard(state, 'run_project_command', { workspaceId, harnessOperationId: 'verify-recovery-failed' });
+    const lifecycleBeforeRecoveryFailure = lifecycleEvidenceCount(session.id);
+    recordHarnessExecutionOutcome(recoveryFailure, { status: 'failed', ok: false, exitCode: 1 });
+    assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'repairing');
+    assert.equal(lifecycleEvidenceCount(session.id), lifecycleBeforeRecoveryFailure);
+    assert.equal(executionSessions.getExecutionSessionState(session.id).evidence.filter((entry: any) => entry.id === 'harness:verify-recovery-failed:verification-failure').length, 1);
+    recordHarnessExecutionOutcome(recoveryFailure, { status: 'failed', ok: false, exitCode: 1 });
+    assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'repairing');
+    assert.equal(lifecycleEvidenceCount(session.id), lifecycleBeforeRecoveryFailure);
+    assert.equal(executionSessions.getExecutionSessionState(session.id).evidence.filter((entry: any) => entry.id === 'harness:verify-recovery-failed:verification-failure').length, 1);
+
     const softOverride = preflightHarnessExecutionGuard(state, 'write_local_file', {
       workspaceId, filePath: 'value.txt',
       harnessPolicyOverride: { verificationCoverage: 'none', planningEvidenceRequired: false, contextSearchBudgetClass: 'compact' },
@@ -157,10 +168,16 @@ test('execution guard composes policy, ownership, lifecycle, retry identity, and
     assert.equal(tooEarlyOwnedCommit.reasonCode, 'EXECUTION_LIFECYCLE_STAGE_BLOCKED');
 
     const verifySuccess = preflightHarnessExecutionGuard(state, 'run_project_command', { workspaceId, harnessOperationId: 'verify-success' });
+    const lifecycleBeforeRecoverySuccess = lifecycleEvidenceCount(session.id);
     recordHarnessExecutionOutcome(verifySuccess, { status: 'passed', ok: true, exitCode: 0 });
     assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'verifying');
+    assert.equal(lifecycleEvidenceCount(session.id), lifecycleBeforeRecoverySuccess + 1);
+    recordHarnessExecutionOutcome(verifySuccess, { status: 'passed', ok: true, exitCode: 0 });
+    assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'verifying');
+    assert.equal(lifecycleEvidenceCount(session.id), lifecycleBeforeRecoverySuccess + 1);
 
     const dryCommit = preflightHarnessExecutionGuard(state, 'commit_task_owned_changes', { workspaceId, taskId: task.id, message: 'preview', harnessOperationId: 'commit-preview' });
+    assert.equal(dryCommit.allowed, true);
     assert.equal(dryCommit.allowed, true);
     recordHarnessExecutionOutcome(dryCommit, { dryRun: true, commitHash: null, hash: null });
     assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'verifying');

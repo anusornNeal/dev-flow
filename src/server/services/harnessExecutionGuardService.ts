@@ -15,6 +15,7 @@ import {
 import {
   getTaskExecutionMutationBinding,
   recordExecutionLifecycleTransition,
+  recordExecutionSessionEvidence,
   type ExecutionLifecycleTransitionInput,
 } from './executionSessionService.js';
 
@@ -403,6 +404,23 @@ function transition(sessionId: string, toStage: ExecutionLifecycleTransitionInpu
   });
 }
 
+function recordVerificationFailureEvidence(sessionId: string, decision: HarnessExecutionGuardDecision, result: any) {
+  return recordExecutionSessionEvidence(sessionId, [{
+    evidenceId: `harness:${decision.operationId}:verification-failure`,
+    kind: 'verification-result',
+    revisionIdentity: decision.operationId,
+    metadata: {
+      operationId: decision.operationId,
+      outcome: 'failed',
+      terminal: true,
+      status: typeof result?.status === 'string' ? result.status : null,
+      exitCode: typeof result?.exitCode === 'number' ? result.exitCode : null,
+      timedOut: result?.timedOut === true,
+      recoveryRequired: true,
+    },
+  }])[0] || null;
+}
+
 export function recordHarnessExecutionOutcome(decision: HarnessExecutionGuardDecision, result: any) {
   if (!decision.guarded || !decision.allowed || !decision.execution?.sessionId || !decision.action) return null;
   const sessionId = decision.execution.sessionId;
@@ -418,19 +436,25 @@ export function recordHarnessExecutionOutcome(decision: HarnessExecutionGuardDec
   }
   if (decision.action === 'verification') {
     if (!resultIsTerminal(result)) return null;
-    const current = getTaskExecutionMutationBinding({ workspaceId: decision.execution.workspaceId });
+    let current = getTaskExecutionMutationBinding({ workspaceId: decision.execution.workspaceId });
     if (!current) return null;
-    if (current.session.lifecycle.stage === 'implementing' || current.session.lifecycle.stage === 'repairing') {
-      transition(sessionId, 'verifying', 'verification-result-observed', decision, 'verification', 'verification-result');
-    }
+
     if (resultFailed(result)) {
-      const refreshed = getTaskExecutionMutationBinding({ workspaceId: decision.execution.workspaceId });
-      if (refreshed?.session.lifecycle.stage === 'verifying') {
+      recordVerificationFailureEvidence(sessionId, decision, result);
+      if (current.session.lifecycle.stage === 'implementing') {
+        transition(sessionId, 'verifying', 'verification-result-observed', decision, 'verification', 'verification-result');
+        current = getTaskExecutionMutationBinding({ workspaceId: decision.execution.workspaceId });
+      }
+      if (current?.session.lifecycle.stage === 'verifying') {
         return transition(sessionId, 'repairing', 'verification-failed-repair-required', decision, 'repair', 'verification-result');
       }
-      return null;
+      return current?.session.lifecycle || null;
     }
-    return getTaskExecutionMutationBinding({ workspaceId: decision.execution.workspaceId })?.session.lifecycle || null;
+
+    if (current.session.lifecycle.stage === 'implementing' || current.session.lifecycle.stage === 'repairing') {
+      return transition(sessionId, 'verifying', 'verification-result-observed', decision, 'verification', 'verification-result');
+    }
+    return current.session.lifecycle;
   }
   if (decision.action === 'commit') {
     if (!commitWasCreated(result)) return null;

@@ -31,6 +31,11 @@ import {
 } from './mcpToolJobScheduler';
 import { getBuiltinToolJobRecoveryPolicy, runBuiltinToolJob } from './mcpToolJobRunnerRegistry';
 import { recoveryPolicyForJobStatus, type ToolRecoveryPolicy } from './toolRecoveryPolicy.js';
+import {
+  getExecutionOwnershipState,
+  getTaskExecutionMutationBinding,
+  invalidateTaskExecutionVerificationBinding,
+} from './executionSessionService.js';
 
 type Logger = { stdout: (data: string) => void; stderr: (data: string) => void };
 type VerificationPermitDemand = Omit<VerificationProcessPermitRequest, 'jobId'>;
@@ -505,10 +510,71 @@ function staleGreenJobResult(verification: VerificationQueuePolicy | undefined) 
   };
 }
 
-function currentGreenJobResult(result: any, verification: VerificationQueuePolicy | undefined) {
-  if (verification?.evidenceIntent !== 'green' || !result || typeof result !== 'object' || Array.isArray(result)) return result;
+function taskExecutionFreshnessForArgs(args: any) {
+  try {
+    const binding = getTaskExecutionMutationBinding(args);
+    if (!binding) return { taskBound: false as const, verificationFresh: null, sessionId: undefined as string | undefined };
+    const ownership = getExecutionOwnershipState(binding.session.id, { repoRoot: binding.workspace.root });
+    return {
+      taskBound: true as const,
+      verificationFresh: ownership.verificationFresh === true,
+      sessionId: binding.session.id,
+      ownership,
+    };
+  } catch (error: any) {
+    const workspaceId = normalizedOptionalString(args?.workspaceId);
+    return {
+      taskBound: Boolean(workspaceId),
+      verificationFresh: false,
+      sessionId: undefined as string | undefined,
+      errorCode: typeof error?.code === 'string' ? error.code : undefined,
+    };
+  }
+}
+
+function invalidateFencedTaskVerification(entry: QueueEntry, reason: string) {
+  const candidate = entry.args?.__verificationCandidate;
+  const candidateId = normalizedOptionalString(candidate?.candidateId);
+  if (!candidateId) return null;
+  try {
+    return invalidateTaskExecutionVerificationBinding(entry.args, {
+      candidateId,
+      executionKey: normalizedOptionalString(candidate?.executionIdentity?.key),
+      reason,
+    });
+  } catch (error: any) {
+    appendJobLog(entry.jobId, 'stderr', `\n[Verification Binding] Failed to invalidate fenced candidate ${candidateId}: ${error?.code || error?.message || 'unknown error'}.\n`);
+    return null;
+  }
+}
+
+function resultWithTaskExecutionFreshness(result: any, args: any) {
+  if (!result || typeof result !== 'object' || Array.isArray(result) || result?.ok !== true || result?.status !== 'succeeded') return result;
+  const freshness = taskExecutionFreshnessForArgs(args);
+  if (!freshness.taskBound) return result;
   return {
     ...result,
+    executionVerificationFresh: freshness.verificationFresh,
+    ...(freshness.verificationFresh
+      ? { authoritative: true, verificationFreshness: 'current' }
+      : { authoritative: false, verificationFreshness: 'unbound', code: result.code || 'EXECUTION_VERIFICATION_NOT_AUTHORITATIVE' }),
+  };
+}
+
+function currentGreenJobResult(result: any, verification: VerificationQueuePolicy | undefined, args: any) {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return result;
+  if (result?.ok !== true || result?.status !== 'succeeded') {
+    return verification?.evidenceIntent === 'green'
+      ? { ...result, verificationFreshness: 'rejected', stale: false, superseded: false, authoritative: false }
+      : result;
+  }
+  const executionScoped = resultWithTaskExecutionFreshness(result, args);
+  if (verification?.evidenceIntent !== 'green') return executionScoped;
+  if (executionScoped?.authoritative === false) {
+    return { ...executionScoped, stale: false, superseded: false };
+  }
+  return {
+    ...executionScoped,
     verificationFreshness: 'current',
     stale: false,
     superseded: false,
@@ -536,6 +602,7 @@ function terminalizeObsoleteGreenResult(entry: QueueEntry, leaseGuard: JobLeaseG
   if (superseding) {
     if (recordSupersession(entry, superseding.candidateKey, superseding.generation, false)) {
       writeJobResult(entry.jobId, supersededJobResult(verification, superseding.candidateKey, superseding.generation));
+      invalidateFencedTaskVerification(entry, `superseded-by:${superseding.candidateKey}`);
       appendJobLog(entry.jobId, 'stderr', `\n[Verification Superseded] Late GREEN fenced by candidate ${superseding.candidateKey}.\n`);
       return true;
     }
@@ -549,6 +616,7 @@ function terminalizeObsoleteGreenResult(entry: QueueEntry, leaseGuard: JobLeaseG
   }, leaseGuard);
   if (!transitioned) return getJob(entry.jobId)?.status !== 'running';
   writeJobResult(entry.jobId, staleGreenJobResult(verification));
+  invalidateFencedTaskVerification(entry, 'candidate-stale-before-terminal-acceptance');
   appendJobLog(entry.jobId, 'stderr', '\n[Verification Stale] Repository or command configuration changed before GREEN completion.\n');
   return true;
 }
@@ -742,7 +810,22 @@ function singleFlightKeyFor(state: AppState, toolName: string, args: any, kind: 
         ? { key: capturedExecutionKey.trim() }
         : getProjectCommandExecutionIdentity(state, args);
       if (!executionIdentity) return null;
-      return createHash('sha256').update(stableStringify({ resourceKey, toolName, kind, executionKey: executionIdentity.key })).digest('hex');
+      const workspaceId = normalizedOptionalString(args?.workspaceId);
+      let executionSessionId: string | undefined;
+      if (workspaceId) {
+        try {
+          executionSessionId = getTaskExecutionMutationBinding(args)?.session.id;
+        } catch {
+          return null;
+        }
+      }
+      return createHash('sha256').update(stableStringify({
+        resourceKey,
+        toolName,
+        kind,
+        executionKey: executionIdentity.key,
+        executionSessionId,
+      })).digest('hex');
     } catch {
       return null;
     }
@@ -784,7 +867,9 @@ function finalizeSingleFlight(entry: QueueEntry) {
       notifyJobWaiters(followerJobId);
       continue;
     }
-    if (leaderResult !== null && leaderResult !== undefined) writeJobResult(followerJobId, leaderResult);
+    if (leaderResult !== null && leaderResult !== undefined) {
+      writeJobResult(followerJobId, resultWithTaskExecutionFreshness(leaderResult, followerStatus.args));
+    }
     updateJobStatus(followerJobId, {
       status: (leaderStatus?.status && isTerminalStatus(leaderStatus.status) ? leaderStatus.status : 'failed') as any,
       failureSummary: leaderStatus?.failureSummary,
@@ -1294,7 +1379,13 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
   const resourceKey = resolveAdmissionResourceKey(state, jobArgs, kind);
   const schedulerProfile = getSchedulerProfile(state, toolName, jobArgs, kind, resourceKey);
 
-  if (admissionPreflight?.cachedResult) {
+  const admissionExecutionFreshness = admissionPreflight?.cachedResult
+    ? taskExecutionFreshnessForArgs(jobArgs)
+    : null;
+  if (
+    admissionPreflight?.cachedResult
+    && (!admissionExecutionFreshness?.taskBound || admissionExecutionFreshness.verificationFresh === true)
+  ) {
     const jobId = `job-${Date.now()}-${randomUUID().slice(0, 8)}`;
     const verification = verificationPolicyFor(jobArgs, schedulerProfile.accessMode, resourceKey);
     const superseding = verification ? findNewerVerification(verification) : undefined;
@@ -1314,7 +1405,7 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
         nextAction: `Verification request was superseded by ${superseding.candidateKey}.`,
       };
     }
-    writeJobResult(jobId, admissionPreflight.cachedResult);
+    writeJobResult(jobId, currentGreenJobResult(admissionPreflight.cachedResult, verification, jobArgs));
     transitionJobStatus(jobId, ['queued'], { status: 'succeeded' });
     const completedAt = Date.now();
     const phaseTelemetry: JobPhaseTelemetryState = {
@@ -1687,7 +1778,8 @@ async function startJob(entry: QueueEntry) {
     const currentStatus = getJob(entry.jobId)?.status;
     const obsoleteGreen = currentStatus === 'running' ? terminalizeObsoleteGreenResult(entry, leaseGuard) : false;
     if (currentStatus === 'cancelled' || currentStatus === 'timed_out') {
-      // Persisted cancellation/timeout wins over a late worker result.
+      // Persisted cancellation/timeout wins over a late worker result and revokes only this candidate's binding.
+      invalidateFencedTaskVerification(entry, `terminal-status:${currentStatus}`);
     } else if (obsoleteGreen) {
       // A newer generation or changed repository fenced this GREEN before terminal acceptance.
     } else if (isTimedOutResult(result)) {
@@ -1697,7 +1789,7 @@ async function startJob(entry: QueueEntry) {
         : null;
       if (transitioned) appendJobLog(entry.jobId, 'stderr', '\n[Job Timed Out]\n');
     } else {
-      const acceptedResult = currentGreenJobResult(result, entry.verification);
+      const acceptedResult = currentGreenJobResult(result, entry.verification, entry.args);
       completedResult = acceptedResult;
       const wrote = writeJobResult(entry.jobId, acceptedResult, leaseGuard);
       if (wrote) transitionJobStatus(entry.jobId, ['running'], { status: 'succeeded' }, leaseGuard);

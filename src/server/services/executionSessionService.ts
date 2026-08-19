@@ -742,7 +742,9 @@ export function getExecutionOwnershipState(
   const currentOwnedFingerprint = ownedRevisionFingerprint(
     ownedFiles.map((entry) => ({ path: entry.path, revision: entry.currentFileRevision })),
   );
-  const verificationBinding = evidence.filter((entry) => entry.kind === 'verification-binding').at(-1);
+  const verificationBinding = evidence
+    .filter((entry) => entry.kind === 'verification-binding' && !readStringMetadata(entry.metadata || {}, 'invalidatedAt'))
+    .at(-1);
   const boundFingerprint = verificationBinding ? readStringMetadata(verificationBinding.metadata || {}, 'ownedFingerprint') : undefined;
   const verificationPolicy = verificationBinding
     ? readStringMetadata(verificationBinding.metadata || {}, 'verificationPolicy')
@@ -1083,7 +1085,11 @@ export function recordExecutionVerificationEvidence(
   let updated!: ExecutionSessionRecord;
   withDbTransaction(() => {
     binding = saveExecutionSessionEvidence({
-      id: evidenceId(id, { kind: 'verification-binding', path: null, contextHandle: session.contextHandle }),
+      id: evidenceId(id, {
+        kind: 'verification-binding',
+        path: provenance?.candidateId ? `candidate:${provenance.candidateId}` : null,
+        contextHandle: session.contextHandle,
+      }),
       sessionId: id,
       kind: 'verification-binding',
       path: null,
@@ -1113,6 +1119,73 @@ export function recordExecutionVerificationEvidence(
     })!;
   });
   return { session: updated, binding, ownership: getExecutionOwnershipState(id, { repoRoot: root }) };
+}
+
+export function invalidateTaskExecutionVerificationBinding(
+  args: Record<string, any>,
+  input: { candidateId: string; executionKey?: string; reason: string; now?: Date },
+) {
+  const binding = getTaskExecutionMutationBinding(args);
+  if (!binding) {
+    return {
+      invalidated: false as const,
+      reasonCode: 'EXECUTION_VERIFICATION_TASK_BINDING_MISSING' as const,
+      ownership: null,
+    };
+  }
+  const candidateId = String(input?.candidateId || '').trim();
+  const executionKey = String(input?.executionKey || '').trim();
+  if (!candidateId) {
+    return {
+      invalidated: false as const,
+      reasonCode: 'EXECUTION_VERIFICATION_CANDIDATE_REQUIRED' as const,
+      ownership: getExecutionOwnershipState(binding.session.id, { repoRoot: binding.workspace.root }),
+    };
+  }
+  const evidence = listExecutionSessionEvidence(binding.session.id);
+  const matched = evidence
+    .filter((entry) => entry.kind === 'verification-binding')
+    .filter((entry) => readStringMetadata(entry.metadata || {}, 'candidateId') === candidateId)
+    .filter((entry) => !executionKey || readStringMetadata(entry.metadata || {}, 'executionKey') === executionKey)
+    .at(-1);
+  if (!matched) {
+    return {
+      invalidated: false as const,
+      reasonCode: 'EXECUTION_VERIFICATION_BINDING_NOT_FOUND' as const,
+      ownership: getExecutionOwnershipState(binding.session.id, { repoRoot: binding.workspace.root }),
+    };
+  }
+  const existingInvalidatedAt = readStringMetadata(matched.metadata || {}, 'invalidatedAt');
+  if (!existingInvalidatedAt) {
+    const invalidatedAt = (input.now || new Date()).toISOString();
+    saveExecutionSessionEvidence({
+      id: matched.id,
+      sessionId: matched.sessionId,
+      kind: matched.kind,
+      path: matched.path,
+      repoRevision: matched.repoRevision,
+      fileRevision: matched.fileRevision,
+      revisionIdentity: matched.revisionIdentity,
+      contextHandle: matched.contextHandle,
+      stale: matched.stale,
+      metadata: {
+        ...(matched.metadata || {}),
+        invalidatedAt,
+        invalidationReason: String(input.reason || 'verification-result-fenced'),
+        authoritative: false,
+      },
+      createdAt: matched.createdAt,
+      updatedAt: invalidatedAt,
+    });
+  }
+  return {
+    invalidated: true as const,
+    reasonCode: existingInvalidatedAt
+      ? 'EXECUTION_VERIFICATION_BINDING_ALREADY_INVALIDATED' as const
+      : 'EXECUTION_VERIFICATION_BINDING_INVALIDATED' as const,
+    candidateId,
+    ownership: getExecutionOwnershipState(binding.session.id, { repoRoot: binding.workspace.root }),
+  };
 }
 
 function currentEvidenceStaleness(entry: ExecutionSessionEvidenceRecord, root: string, repoRevision: string) {

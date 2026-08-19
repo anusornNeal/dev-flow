@@ -4,6 +4,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { randomUUID } from 'crypto';
+import { spawnSync } from 'node:child_process';
 
 const TEST_STATE_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-mcp-job-queue-'));
 const TEST_DB_PATH = path.join(TEST_STATE_ROOT, 'devflow.sqlite');
@@ -34,6 +35,10 @@ const {
 } = await import('../../src/server/services/mcpToolJobService');
 const { getLatestAcceptedGreenGeneration, heartbeatJob, listRecoverableJobs, readJobLog, readJobResult } = await import('../../src/server/repositories/mcpToolJobRepository');
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
+const { saveTask } = await import('../../src/server/repositories/taskRepository.js');
+const workspaceService = await import('../../src/server/services/sessionWorkspaceService.js');
+const executionSessions = await import('../../src/server/services/executionSessionService.js');
+const { runProjectCommand } = await import('../../src/server/services/projectCommandService.js');
 const { registerMcpToolJobRoutes } = await import('../../src/server/routes/mcpToolJobs.js');
 const { createApiError } = await import('../../src/server/services/api.js');
 const {
@@ -107,6 +112,77 @@ function makeState(...roots: string[]) {
       localPath: root,
     })),
   } as any;
+}
+
+function git(root: string, args: string[]) {
+  const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', shell: false });
+  assert.strictEqual(result.status, 0, result.stderr || result.stdout || `git ${args.join(' ')} failed`);
+}
+
+function makeTaskBoundQueueFixture(name: string) {
+  const root = makeTempRepo(`task-${name}`);
+  fs.mkdirSync(path.join(root, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'src', 'value.txt'), 'base\n', 'utf8');
+  git(root, ['init']);
+  git(root, ['config', 'user.name', 'DevFlow Test']);
+  git(root, ['config', 'user.email', 'devflow@example.test']);
+  git(root, ['add', '.']);
+  git(root, ['commit', '-m', 'base']);
+
+  const projectId = `project-queue-${name}-${randomUUID()}`;
+  createProject({ id: projectId, name: `Queue ${name}`, repoUrl: `https://example.com/${projectId}`, localPath: root });
+  const workspace = workspaceService.createOrReuseSessionWorkspace({ id: projectId, localPath: root }, `queue-${name}-${randomUUID()}`);
+  const taskId = `task-queue-${name}-${randomUUID()}`;
+  const claimedAt = new Date().toISOString();
+  saveTask({
+    id: taskId,
+    displayId: `DVF-${randomUUID().slice(0, 8)}`,
+    title: `Queue fixture ${name}`,
+    description: 'Task-bound queue verification fixture',
+    projectId,
+    status: 'in-progress',
+    priority: 'high',
+    branch: 'develop',
+    category: 'backend',
+    tags: [],
+    targetFiles: ['src/value.txt'],
+    checklist: [],
+    logs: [],
+    claim: {
+      workspaceId: workspace.workspaceId,
+      sessionIdHash: `fixture-${name}`,
+      ownerKind: 'chat',
+      ownerLabel: 'Queue fixture',
+      claimedAt,
+      expiresAt: new Date(Date.now() + 120_000).toISOString(),
+      reservedPaths: [],
+    },
+    createdAt: claimedAt,
+    updatedAt: claimedAt,
+  } as any);
+  const session = executionSessions.createExecutionSession({
+    projectId,
+    taskId,
+    workspaceId: workspace.workspaceId,
+    branch: 'develop',
+    repoRoot: workspace.root,
+  });
+  executionSessions.recordExecutionLifecycleTransition(session.id, {
+    toStage: 'context-ready',
+    reasonCode: 'fixture-context-ready',
+    evidence: { id: `queue-context-${name}`, kind: 'test-fixture', status: 'completed' },
+  });
+  executionSessions.recordExecutionLifecycleTransition(session.id, {
+    toStage: 'implementing',
+    reasonCode: 'fixture-implementation-ready',
+    evidence: { id: `queue-implementation-${name}`, kind: 'test-fixture', status: 'completed' },
+  });
+  fs.writeFileSync(path.join(workspace.root, 'src', 'value.txt'), `owned-${name}\n`, 'utf8');
+  executionSessions.recordExecutionOwnedChanges(session.id, ['src/value.txt'], { repoRoot: workspace.root, source: 'queue-test' });
+  const state = {
+    projects: [{ id: projectId, name: `Queue ${name}`, repoUrl: `https://example.com/${projectId}`, localPath: root }],
+  } as any;
+  return { root, projectId, workspace, session, state };
 }
 
 async function waitUntil(predicate: () => boolean, message: string, retries = 80) {
@@ -559,6 +635,71 @@ test('mcpToolJobService - equivalent repo-command verification uses single-fligh
     await waitForStatus(second.jobId, 'succeeded');
     assert.strictEqual(starts, 1);
     assert.deepStrictEqual(readJobResult(second.jobId)?.result, { ok: true, shared: 'verification' });
+  } finally {
+    blocker.resolve();
+    __setToolJobTestRunner('run_project_command', null);
+  }
+});
+
+test('mcpToolJobService - task-bound admission cache hit re-enters runner until execution freshness is authoritative', async () => {
+  const fixture = makeTaskBoundQueueFixture('cache-binding');
+  const args = {
+    projectId: fixture.projectId,
+    workspaceId: fixture.workspace.workspaceId,
+    command: 'typecheck',
+    cacheResult: true,
+    singleFlight: false,
+    verificationEvidenceIntent: 'green',
+  };
+  const primed = runProjectCommand(fixture.state, args) as any;
+  assert.equal(primed.ok, true);
+  assert.equal(primed.cache?.hit, false);
+  assert.notEqual(executionSessions.getExecutionOwnershipState(fixture.session.id, { repoRoot: fixture.workspace.root }).verificationFresh, true);
+
+  const job = enqueueToolJob(fixture.state, 'run_project_command', args, 'repo-command');
+  assert.notEqual(job.status, 'succeeded', 'task-bound cache hit must not terminalize before execution binding is proven');
+  await waitForStatus(job.jobId, 'succeeded');
+  const result = readJobResult(job.jobId)?.result as any;
+  assert.equal(result?.ok, true);
+  assert.equal(result?.cache?.hit, true, 'runner may reuse the cached process result after candidate binding');
+  assert.equal(result?.authoritative, true);
+  assert.equal(result?.executionVerificationFresh, true);
+  assert.equal(executionSessions.getExecutionOwnershipState(fixture.session.id, { repoRoot: fixture.workspace.root }).verificationFresh, true);
+});
+
+test('mcpToolJobService - task-bound single-flight follower recomputes execution freshness instead of inheriting leader authority', async () => {
+  const fixture = makeTaskBoundQueueFixture('singleflight-binding');
+  const blocker = deferred();
+  let starts = 0;
+  __setToolJobTestRunner('run_project_command', async () => {
+    starts += 1;
+    await blocker.promise;
+    return { ok: true, status: 'succeeded', shared: 'verification-without-binding' };
+  });
+
+  try {
+    const args = {
+      projectId: fixture.projectId,
+      workspaceId: fixture.workspace.workspaceId,
+      command: 'typecheck',
+      singleFlight: true,
+      verificationEvidenceIntent: 'green',
+    };
+    const leader = enqueueToolJob(fixture.state, 'run_project_command', args, 'repo-command');
+    const follower = enqueueToolJob(fixture.state, 'run_project_command', args, 'repo-command');
+    assert.equal(follower.sharedWith, leader.jobId);
+    await waitUntil(() => starts === 1, 'Expected one task-bound single-flight leader');
+    blocker.resolve();
+    await waitForStatus(leader.jobId, 'succeeded');
+    await waitForStatus(follower.jobId, 'succeeded');
+
+    const leaderResult = readJobResult(leader.jobId)?.result as any;
+    const followerResult = readJobResult(follower.jobId)?.result as any;
+    assert.equal(leaderResult?.authoritative, false);
+    assert.equal(followerResult?.authoritative, false);
+    assert.equal(followerResult?.executionVerificationFresh, false);
+    assert.notEqual(followerResult?.verificationFreshness, 'current');
+    assert.notEqual(executionSessions.getExecutionOwnershipState(fixture.session.id, { repoRoot: fixture.workspace.root }).verificationFresh, true);
   } finally {
     blocker.resolve();
     __setToolJobTestRunner('run_project_command', null);
@@ -1107,6 +1248,70 @@ test('mcpToolJobService - concurrent composite transitions share one global veri
     childGates.a.resolve();
     childGates.b.resolve();
     __setToolJobTestRunner(writeTool, null);
+    resetSchedulerResourceStateForTests();
+  }
+});
+
+test('mcpToolJobService - four independent projects make fair progress while one long verify holds capacity', async () => {
+  resetSchedulerResourceStateForTests();
+  setGlobalVerifyCapacityForTests(2);
+  const roots = ['devflow', 'sumora', 'wfh', 'yhp'].map((name) => makeTempRepo(`cross-project-${name}`));
+  const state = makeState(...roots);
+  const labels = ['devflow', 'sumora', 'wfh', 'yhp'];
+  const starts: string[] = [];
+  const gates = Object.fromEntries(labels.map((label) => [label, deferred()])) as Record<string, Deferred>;
+
+  __setToolJobTestRunner('run_project_command', async (_state, args) => {
+    starts.push(args.label);
+    await gates[args.label].promise;
+    return { ok: true, status: 'succeeded', label: args.label };
+  });
+
+  try {
+    const jobs: Record<string, ReturnType<typeof enqueueToolJob>> = {};
+    jobs.devflow = enqueueToolJob(state, 'run_project_command', {
+      localPath: roots[0], command: 'typecheck', label: 'devflow', singleFlight: false,
+    }, 'repo-command');
+    await waitUntil(() => starts.includes('devflow'), 'Expected DevFlow long verification to occupy one slot');
+
+    for (let index = 1; index < labels.length; index += 1) {
+      const label = labels[index];
+      jobs[label] = enqueueToolJob(state, 'run_project_command', {
+        localPath: roots[index], command: 'typecheck', label, singleFlight: false,
+      }, 'repo-command');
+    }
+    await waitUntil(() => starts.filter((label) => label !== 'devflow').length === 1, 'Expected one independent project to use the remaining slot');
+
+    const waitingInitially = labels.slice(1).filter((label) => !starts.includes(label));
+    assert.equal(waitingInitially.length, 2);
+    for (const label of waitingInitially) {
+      const status = getToolJobStatus(jobs[label].jobId) as any;
+      assert.equal(status?.status, 'queued');
+      assert.equal(status?.waitType, 'capacity');
+      assert.equal(status?.blockReason, 'capacity_saturated');
+    }
+
+    for (let completed = 0; completed < 3; completed += 1) {
+      const activeOther = labels.slice(1).find((label) => starts.includes(label) && getToolJobStatus(jobs[label].jobId)?.status === 'running');
+      assert.ok(activeOther, 'Expected an independent project to be running beside DevFlow');
+      assert.equal(getToolJobStatus(jobs.devflow.jobId)?.status, 'running', 'DevFlow stays long-running while other projects take the spare capacity');
+      const startedBeforeRelease = starts.filter((label) => label !== 'devflow').length;
+      gates[activeOther!].resolve();
+      await waitForStatus(jobs[activeOther!].jobId, 'succeeded');
+      if (completed < 2) {
+        await waitUntil(() => starts.filter((label) => label !== 'devflow').length > startedBeforeRelease, 'Expected next independent project to progress when capacity frees');
+      }
+    }
+
+    assert.deepEqual(new Set(starts), new Set(labels));
+    gates.devflow.resolve();
+    await waitForStatus(jobs.devflow.jobId, 'succeeded');
+    const telemetry = getQueueMetrics().metrics.waitTelemetry;
+    assert.equal(Number(telemetry?.blockerReasons?.workspace_locked || 0), 0, 'independent roots must not wait on a cross-project workspace lock');
+    assert.ok(Number(telemetry?.blockerReasons?.capacity_saturated || 0) >= 1, 'remaining contention must be classified as capacity');
+  } finally {
+    Object.values(gates).forEach((gate) => gate.resolve());
+    __setToolJobTestRunner('run_project_command', null);
     resetSchedulerResourceStateForTests();
   }
 });

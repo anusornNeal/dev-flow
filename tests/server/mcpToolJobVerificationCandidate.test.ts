@@ -14,6 +14,10 @@ process.env.DEVFLOW_RUNTIME_DIR = path.join(tempRoot, 'runtime');
 const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
 executeAllMigrations();
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
+const { saveTask } = await import('../../src/server/repositories/taskRepository.js');
+const { listExecutionSessionEvidence } = await import('../../src/server/repositories/executionSessionRepository.js');
+const workspaceService = await import('../../src/server/services/sessionWorkspaceService.js');
+const executionSessions = await import('../../src/server/services/executionSessionService.js');
 const {
   createJob,
   getJob,
@@ -76,6 +80,60 @@ function makeState(root: string, projectId: string): any {
   };
 }
 
+function makeTaskBoundVerificationFixture(name: string) {
+  const { root, projectId } = makeVerificationRepo(name);
+  const workspace = workspaceService.createOrReuseSessionWorkspace({ id: projectId, localPath: root }, `candidate-${name}-${randomUUID()}`);
+  const taskId = `task-${name}-${randomUUID()}`;
+  const taskDisplayId = `DVF-${randomUUID().slice(0, 8)}`;
+  const claimedAt = new Date().toISOString();
+  saveTask({
+    id: taskId,
+    displayId: taskDisplayId,
+    title: `Verification fixture ${name}`,
+    description: 'Task-bound durable verification fixture',
+    projectId,
+    status: 'in-progress',
+    priority: 'high',
+    branch: 'develop',
+    category: 'backend',
+    tags: [],
+    targetFiles: ['src/value.txt'],
+    checklist: [],
+    logs: [],
+    claim: {
+      workspaceId: workspace.workspaceId,
+      sessionIdHash: `fixture-${name}`,
+      ownerKind: 'chat',
+      ownerLabel: 'Verification fixture',
+      claimedAt,
+      expiresAt: new Date(Date.now() + 120_000).toISOString(),
+      reservedPaths: [],
+    },
+    createdAt: claimedAt,
+    updatedAt: claimedAt,
+  } as any);
+  const session = executionSessions.createExecutionSession({
+    projectId,
+    taskId,
+    workspaceId: workspace.workspaceId,
+    branch: 'develop',
+    repoRoot: workspace.root,
+  });
+  executionSessions.recordExecutionLifecycleTransition(session.id, {
+    toStage: 'context-ready',
+    reasonCode: 'fixture-context-ready',
+    evidence: { id: `fixture-context-${name}`, kind: 'test-fixture', status: 'completed' },
+  });
+  executionSessions.recordExecutionLifecycleTransition(session.id, {
+    toStage: 'implementing',
+    reasonCode: 'fixture-implementation-ready',
+    evidence: { id: `fixture-implementation-${name}`, kind: 'test-fixture', status: 'completed' },
+  });
+  fs.writeFileSync(path.join(workspace.root, 'src', 'value.txt'), `owned-${name}\n`, 'utf8');
+  executionSessions.recordExecutionOwnedChanges(session.id, ['src/value.txt'], { repoRoot: workspace.root, source: 'queue-test' });
+  return { root, projectId, state: makeState(root, projectId), workspace, session };
+}
+
 async function waitUntil(predicate: () => boolean, message: string, timeoutMs = 8_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -130,6 +188,117 @@ test('fresh cached run_project_command completes durable job before candidate cr
   const result = readJobResult(job.jobId) as any;
   assert.equal(result?.result?.cache?.hit, true);
   assert.equal(result?.result?.processSpawns, 0);
+});
+
+test('task-bound current GREEN becomes authoritative only after execution freshness is bound', async () => {
+  const fixture = makeTaskBoundVerificationFixture('task-current-green');
+  const baseArgs = {
+    projectId: fixture.projectId,
+    workspaceId: fixture.workspace.workspaceId,
+    command: 'test',
+    cacheResult: false,
+    forceFresh: true,
+    singleFlight: false,
+    verificationSeriesKey: `series-current-${randomUUID()}`,
+    verificationCandidateKey: 'current',
+    verificationGeneration: 1,
+    verificationEvidenceIntent: 'green',
+  };
+  const candidate = prepareProjectCommandVerificationCandidate(fixture.state, baseArgs)!;
+  assert.ok(candidate);
+  __setToolJobTestRunner('run_project_command', async (_state, args) => {
+    const captured = executionSessions.captureExecutionVerificationProvenance(fixture.session.id, { repoRoot: fixture.workspace.root });
+    const result = {
+      ok: true,
+      status: 'succeeded',
+      verificationCandidate: {
+        candidateId: args.__verificationCandidate.candidateId,
+        repoRevision: args.__verificationCandidate.repoRevision,
+        executionKey: args.__verificationCandidate.executionIdentity.key,
+        current: true,
+      },
+    };
+    executionSessions.recordTaskExecutionVerificationResult(args, result, captured);
+    return result;
+  });
+
+  try {
+    const verify = enqueueToolJob(fixture.state, 'run_project_command', { ...baseArgs, __verificationCandidate: candidate }, 'repo-command');
+    await waitForStatus(verify.jobId, 'succeeded');
+    const result = readJobResult(verify.jobId) as any;
+    assert.equal(result?.result?.ok, true);
+    assert.equal(result?.result?.authoritative, true);
+    assert.equal(result?.result?.executionVerificationFresh, true);
+    assert.equal(executionSessions.getExecutionOwnershipState(fixture.session.id, { repoRoot: fixture.workspace.root }).verificationFresh, true);
+    await waitForCandidateRelease(candidate.candidateId);
+  } finally {
+    __setToolJobTestRunner('run_project_command', null);
+  }
+});
+
+test('late superseded GREEN invalidates only its candidate and cannot replace a newer fresh binding', async () => {
+  const fixture = makeTaskBoundVerificationFixture('task-late-superseded');
+  const seriesKey = `series-late-${randomUUID()}`;
+  const slowGate = deferred();
+  const starts: string[] = [];
+  const baseArgs = {
+    projectId: fixture.projectId,
+    workspaceId: fixture.workspace.workspaceId,
+    command: 'test',
+    cacheResult: false,
+    forceFresh: true,
+    singleFlight: false,
+    verificationSeriesKey: seriesKey,
+    verificationEvidenceIntent: 'green',
+  };
+  const argsA = { ...baseArgs, allowSupersedeRunning: false, verificationCandidateKey: 'A', verificationGeneration: 1 };
+  const candidateA = prepareProjectCommandVerificationCandidate(fixture.state, argsA)!;
+  const argsB = { ...baseArgs, verificationCandidateKey: 'B', verificationGeneration: 2 };
+  const candidateB = prepareProjectCommandVerificationCandidate(fixture.state, argsB)!;
+  assert.ok(candidateA && candidateB);
+
+  __setToolJobTestRunner('run_project_command', async (_state, args) => {
+    starts.push(args.verificationCandidateKey);
+    const captured = executionSessions.captureExecutionVerificationProvenance(fixture.session.id, { repoRoot: fixture.workspace.root });
+    if (args.verificationCandidateKey === 'A') await slowGate.promise;
+    const result = {
+      ok: true,
+      status: 'succeeded',
+      verificationCandidate: {
+        candidateId: args.__verificationCandidate.candidateId,
+        repoRevision: args.__verificationCandidate.repoRevision,
+        executionKey: args.__verificationCandidate.executionIdentity.key,
+        current: true,
+      },
+    };
+    executionSessions.recordTaskExecutionVerificationResult(args, result, captured);
+    return result;
+  });
+
+  try {
+    const slow = enqueueToolJob(fixture.state, 'run_project_command', { ...argsA, __verificationCandidate: candidateA }, 'repo-command');
+    await waitUntil(() => starts.includes('A'), 'Expected slow candidate A runner to start');
+    const fast = enqueueToolJob(fixture.state, 'run_project_command', { ...argsB, __verificationCandidate: candidateB }, 'repo-command');
+    await waitForStatus(slow.jobId, 'cancelled');
+    await waitForStatus(fast.jobId, 'succeeded');
+    assert.equal(executionSessions.getExecutionOwnershipState(fixture.session.id, { repoRoot: fixture.workspace.root }).verificationFresh, true);
+
+    slowGate.resolve();
+    await waitForCandidateRelease(candidateA.candidateId);
+    await waitForCandidateRelease(candidateB.candidateId);
+    const evidence = listExecutionSessionEvidence(fixture.session.id).filter((entry) => entry.kind === 'verification-binding');
+    const bindingA = evidence.find((entry) => entry.metadata?.candidateId === candidateA.candidateId);
+    const bindingB = evidence.find((entry) => entry.metadata?.candidateId === candidateB.candidateId);
+    assert.ok(bindingA?.metadata?.invalidatedAt, 'late candidate A binding must be invalidated after its worker exits');
+    assert.equal(bindingB?.metadata?.invalidatedAt, undefined, 'newer candidate B binding must remain authoritative');
+    assert.equal(executionSessions.getExecutionOwnershipState(fixture.session.id, { repoRoot: fixture.workspace.root }).verificationFresh, true);
+    const slowResult = readJobResult(slow.jobId) as any;
+    assert.equal(slowResult?.result?.authoritative, false);
+    assert.equal(slowResult?.result?.superseded, true);
+  } finally {
+    slowGate.resolve();
+    __setToolJobTestRunner('run_project_command', null);
+  }
 });
 
 test('queued cache miss persists cheap admission identity and defers immutable candidate creation', async () => {

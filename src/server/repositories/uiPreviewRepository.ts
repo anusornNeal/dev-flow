@@ -142,6 +142,8 @@ type UiPreviewRepositoryRevision = UiPreviewWorkspaceRevisionWithProvenance & Pi
 interface UiPreviewWorkspaceStorageObject {
   schemaVersion: 1;
   scope?: UiPreviewScope;
+  designProvenance?: UiPreviewRevisionDesignProvenance;
+  fontSnapshot?: UiPreviewFontSnapshot;
   title: string | null;
   screens: UiPreviewScreen[];
   defaultScreenId: string;

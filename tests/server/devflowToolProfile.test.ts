@@ -276,10 +276,10 @@ test('UI preview create/update contracts expose bounded scoped context handshake
   assert.ok(update.inputSchema.properties.taskId, 'update can declare task scope only to prove immutable-scope match');
   const createRequest = create.buildHttpRequest({ projectId: 'project-a', expectedDesignContextHash: 'a'.repeat(64), html: '<main>x</main>', spec: { schemaVersion: 1, summary: { screen: 'X' } }, exceptionRefs: [] });
   assert.equal(createRequest.method, 'POST');
-  assert.equal(createRequest.body.expectedDesignContextHash, 'a'.repeat(64));
+  assert.equal((createRequest.body as any).expectedDesignContextHash, 'a'.repeat(64));
   const updateRequest = update.buildHttpRequest({ previewId: 'uip_x', projectId: 'project-a', expectedDesignContextHash: 'b'.repeat(64), exceptionRefs: [] });
   assert.equal(updateRequest.method, 'PUT');
-  assert.equal(updateRequest.body.expectedDesignContextHash, 'b'.repeat(64));
+  assert.equal((updateRequest.body as any).expectedDesignContextHash, 'b'.repeat(64));
 });
 
 test('diagnostics MCP profile keeps the recovery handoff surface available', () => {

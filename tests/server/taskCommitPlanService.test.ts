@@ -120,8 +120,8 @@ test('commit plan distinguishes missing authoritative verification from stale ve
   assert.equal(plan.verificationState, 'missing');
   assert.equal(plan.verificationRecordedAt, null);
   const blocker = plan.blockers.find((entry: any) => entry.code === 'EXECUTION_VERIFICATION_NOT_FRESH');
-  assert.equal(blocker?.details?.verificationState, 'missing');
-  assert.equal(blocker?.details?.ownershipDriftCount, 0);
+  assert.equal((blocker?.details as any)?.verificationState, 'missing');
+  assert.equal((blocker?.details as any)?.ownershipDriftCount, 0);
 });
 
 test('task-level passed verification metadata cannot substitute for execution-bound freshness', () => {
@@ -182,8 +182,8 @@ test('commit plan blocks stale verification after an owned file changes again', 
   assert.equal(plan.verificationFresh, false);
   assert.equal(plan.verificationState, 'stale');
   const verificationBlocker = plan.blockers.find((entry: any) => entry.code === 'EXECUTION_VERIFICATION_NOT_FRESH');
-  assert.equal(verificationBlocker?.details?.verificationState, 'stale');
-  assert.ok(verificationBlocker?.details?.verificationRecordedAt);
+  assert.equal((verificationBlocker?.details as any)?.verificationState, 'stale');
+  assert.ok((verificationBlocker?.details as any)?.verificationRecordedAt);
   assert.ok(plan.blockers.some((entry: any) => entry.code === 'EXECUTION_OWNERSHIP_DRIFT'));
   assert.ok(verificationBlocker);
   assert.throws(() => commitPlan.commitTaskOwnedChanges({ countersCache: {} }, { taskId, workspaceId: workspace.workspaceId, message: 'should not commit' }), /blocked/i);

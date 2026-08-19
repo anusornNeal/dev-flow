@@ -6,11 +6,14 @@ Use this skill when the user asks DevFlow to keep taking eligible work from the 
 This skill owns board orchestration only. Load `07-authoring-execution` for implementation, edit, test, verification, commit, workspace-terminal, and recovery details.
 
 ## Goal
-Act as one cooperative board worker. Repeatedly claim one eligible scope, complete its local task loop, refresh the board, and take another eligible scope until no safe work remains for this worker.
+Act as one cooperative board worker. Repeatedly claim one eligible scope, complete its local task loop, refresh the same board, and take another eligible scope until no safe work remains for this worker.
+
+## Project boundary
+At loop start, resolve the intended board/project once and pin its `projectId` as the loop boundary. Every selection read and claim in that loop must remain inside that project. Do not infer or substitute another project from recent work, another chat, task-prefix familiarity, or the presence of runnable work elsewhere. Project switching is allowed only after the user explicitly asks to switch boards/projects.
 
 ## Required loop
-1. For ordinary next-card selection, prefer `claim_next_task` with the project id and this chat's stable session identity. It performs bounded selection and the authoritative claim under the project lock.
-2. If the user names a specific card, selection is ambiguous, the fast path is unavailable, or it reports no eligible task, fall back only to actionable task collections: use bounded `search_tasks` with `mode=minimal` or `mode=summary`, inspect `status=backlog` and `status=todo` as separate claimable lanes, then use explicit `claim_task`. Do not use an unfiltered collection, `all=true`, full/debug density, or a `done` collection for ordinary next-work selection. A backlog-only read is never proof that no eligible work remains.
+1. For ordinary next-card selection, prefer `claim_next_task` with the same pinned `projectId` and this chat's stable session identity. It performs bounded selection and the authoritative claim under that project lock.
+2. If the user names a specific card, selection is ambiguous, or the fast path is unavailable, fall back only to actionable task collections in the same pinned `projectId`: use bounded `search_tasks` with `mode=minimal` or `mode=summary`, inspect `status=backlog` and `status=todo` as separate claimable lanes, then use explicit `claim_task` only for a task returned from that same project. Do not use an unfiltered collection, `all=true`, full/debug density, or a `done` collection for ordinary next-work selection. A backlog-only read is never proof that no eligible work remains.
 3. If `claim_task` returns `TASK_ALREADY_CLAIMED`, do not override the owner. Refresh and choose another eligible task.
 4. If `claim_task` returns `TASK_SCOPE_CONFLICT`, skip the conflicting card and choose independent work. Allow overlapping scope only when the user explicitly requests coordinated overlap and the collision is understood.
 5. Use only the managed workspace returned by the successful claim. Load `07-authoring-execution` and implement exactly the claimed scope under its ownership and verification policy.
@@ -18,7 +21,7 @@ Act as one cooperative board worker. Repeatedly claim one eligible scope, comple
 7. Before terminal completion, refresh relevant local base/sibling state so integration does not overwrite newer independent work.
 8. After the execution specialist has produced a clean committed workspace and required checks, prefer `finalize_task_workspace` for the terminal task flow.
 9. If finalization reports `needs-recovery`, preserve the workspace. Inspect with `inspect_workspace_recovery` and use integration/conflict/cleanup primitives only as explicit recovery paths. Never force-clean ambiguous WIP.
-10. Refresh the board and repeat from step 1. When fallback selection is needed to prove a stop condition, exhaust both bounded claimable lanes (`status=backlog` and `status=todo`) before concluding no eligible unclaimed work remains.
+10. Refresh the same pinned project and repeat from step 1 without changing `projectId`. If `claim_next_task` reports `NO_ELIGIBLE_TASK`, or same-project fallback reads exhaust both bounded claimable lanes (`status=backlog` and `status=todo`), stop this worker. Never scan or claim from another project merely to keep the loop busy.
 
 
 ## Completed-task evidence reads
@@ -43,4 +46,4 @@ The actionable-only collection rule applies to ordinary next-work selection, not
 - Never reset, delete, or overwrite another chat's worktree, branch, or WIP to make the loop progress.
 
 ## Stop condition
-Stop successfully when fresh board state shows no eligible unclaimed task for this worker. Report blocked/conflicting work separately instead of claiming it only to keep the loop busy.
+Stop successfully when fresh state for the pinned project shows no eligible unclaimed task for this worker. `NO_ELIGIBLE_TASK` and empty actionable backlog+todo in that project are terminal for the current loop; never scan another project as fallback. Report blocked/conflicting work separately instead of claiming it only to keep the loop busy.

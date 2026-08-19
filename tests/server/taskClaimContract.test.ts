@@ -56,6 +56,11 @@ test('claim_next_task is a bounded project-level optimization with explicit sess
   assert.match(String(tool.description || ''), /bounded[\s\S]*minimal\/summary/i);
   assert.match(String(tool.description || ''), /backlog[\s\S]*todo/i);
   assert.match(String(tool.description || ''), /unfiltered[\s\S]*done[\s\S]*(?:next-work|selection)/i);
+  assert.match(String(tool.description || ''), /originating selected board boundary/i);
+  assert.match(String(tool.description || ''), /remain unchanged[\s\S]*lifetime of that loop/i);
+  assert.match(String(tool.description || ''), /NO_ELIGIBLE_TASK[\s\S]*stops the current project loop/i);
+  assert.match(String(tool.description || ''), /do not substitute another projectId/i);
+  assert.match(String((tool.inputSchema as any)?.properties?.projectId?.description || ''), /selected board boundary/i);
 
   assert.ok(devFlowToolDefinitions.some((entry) => entry.name === 'claim_next_task'));
 });

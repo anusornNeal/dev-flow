@@ -190,6 +190,12 @@ test('08 owns only board orchestration and delegates implementation policy to 07
   assert.match(boardLoopSkill, /parallel/i);
   assert.match(boardLoopSkill, /repeat|loop/i);
   assert.match(boardLoopSkill, /Do not push/i);
+  assert.match(boardLoopSkill, /pin its `projectId` as the loop boundary/i);
+  assert.match(boardLoopSkill, /same pinned `projectId`/i);
+  assert.match(boardLoopSkill, /without changing `projectId`/i);
+  assert.match(boardLoopSkill, /NO_ELIGIBLE_TASK[\s\S]*stop this worker/i);
+  assert.match(boardLoopSkill, /never scan or claim from another project/i);
+  assert.match(boardLoopSkill, /explicitly asks to switch boards\/projects/i);
   for (const delegatedDetail of [
     'RED-required',
     'RED-deferred',

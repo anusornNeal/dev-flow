@@ -118,11 +118,11 @@ export const taskToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'claim_next_task',
-    description: 'Atomically select and claim the next deterministic eligible leaf task for one board-loop worker. Selection is bounded and conservative. For explicit or ambiguous fallback work, use bounded minimal/summary search_tasks reads across both backlog and todo before claim_task; never use an unfiltered or done collection as ordinary next-work selection.',
+    description: 'Atomically select and claim the next deterministic eligible leaf task for one board-loop worker. projectId is the originating selected board boundary and must remain unchanged for the lifetime of that loop unless the user explicitly switches projects. Selection is bounded and conservative. NO_ELIGIBLE_TASK stops the current project loop; do not substitute another projectId to find work. For explicit or ambiguous fallback work, use bounded minimal/summary search_tasks reads across both backlog and todo in that same project before claim_task; never use an unfiltered or done collection as ordinary next-work selection.',
     inputSchema: {
       type: 'object',
       properties: {
-        projectId: { type: 'string', description: 'Project internal id used for bounded next-task selection.' },
+        projectId: { type: 'string', description: 'Project internal id pinned as the selected board boundary for the current board-loop worker.' },
         sessionId: { type: 'string', description: 'Opaque caller chat/session id. The raw value is never persisted on the task.' },
         ownerKind: { type: 'string', enum: ['chat', 'codex', 'claude', 'antigravity', 'agent'], description: 'Optional short owner kind for UI display.' },
         ownerLabel: { type: 'string', description: 'Optional compact owner label such as Chat A3 or Codex C7.' },

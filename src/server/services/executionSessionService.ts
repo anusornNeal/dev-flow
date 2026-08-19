@@ -126,6 +126,33 @@ export interface RecordExecutionVerificationOptions {
   provenance?: ExecutionVerificationProvenance;
 }
 
+export type TaskExecutionVerificationBindingReason =
+  | 'EXECUTION_VERIFICATION_AUTHORITATIVE'
+  | 'EXECUTION_VERIFICATION_RESULT_NOT_SUCCEEDED'
+  | 'EXECUTION_VERIFICATION_TASK_BINDING_MISSING'
+  | 'EXECUTION_VERIFICATION_PROVENANCE_REQUIRED'
+  | 'EXECUTION_VERIFICATION_CANDIDATE_REQUIRED'
+  | 'EXECUTION_VERIFICATION_REPO_REVISION_STALE'
+  | 'EXECUTION_VERIFICATION_CANDIDATE_STALE'
+  | 'EXECUTION_VERIFICATION_FINGERPRINT_STALE'
+  | 'EXECUTION_VERIFICATION_BINDING_NOT_FRESH'
+  | 'EXECUTION_VERIFICATION_REJECTED';
+
+export interface TaskExecutionVerificationBindingOutcome {
+  authoritative: boolean;
+  reasonCode: TaskExecutionVerificationBindingReason;
+  verificationFresh: boolean | null;
+  sessionId?: string;
+  repoRevision?: string;
+  ownedFingerprint?: string;
+  errorCode?: string;
+  message?: string;
+  details?: unknown;
+  session?: ExecutionSessionRecord;
+  binding?: ExecutionSessionEvidenceRecord;
+  ownership?: ExecutionOwnershipState;
+}
+
 export interface ExecutionOwnershipState {
   sessionId: string;
   repoRevision: string;
@@ -848,10 +875,25 @@ export function recordTaskExecutionVerificationResult(
   args: Record<string, any>,
   result: any,
   captured?: { repoRevision: string; ownedFingerprint: string; ownedPaths?: string[] } | null,
-) {
-  if (!result?.ok || result?.status !== 'succeeded') return null;
+): TaskExecutionVerificationBindingOutcome {
+  if (!result?.ok || result?.status !== 'succeeded') {
+    return {
+      authoritative: false,
+      reasonCode: 'EXECUTION_VERIFICATION_RESULT_NOT_SUCCEEDED',
+      verificationFresh: false,
+      message: 'Verification result did not complete successfully and cannot become authoritative evidence.',
+    };
+  }
+
   const binding = getTaskExecutionMutationBinding(args);
-  if (!binding) return null;
+  if (!binding) {
+    return {
+      authoritative: false,
+      reasonCode: 'EXECUTION_VERIFICATION_TASK_BINDING_MISSING',
+      verificationFresh: null,
+      message: 'Verification result is not bound to an active task execution workspace.',
+    };
+  }
 
   const batchCandidate = result?.verificationBatch?.canComplete === true
     ? result.verificationBatch.candidate
@@ -861,45 +903,139 @@ export function recordTaskExecutionVerificationResult(
     : null;
   const candidate = batchCandidate || commandCandidate;
   const explicitNoChecks = result?.verificationPolicy === 'no-checks-required';
-  if (explicitNoChecks) {
-    if (!captured?.repoRevision || !captured?.ownedFingerprint) return null;
-    return recordExecutionVerificationEvidence(binding.session.id, [], {
+  const ownership = getExecutionOwnershipState(binding.session.id, { repoRoot: binding.workspace.root });
+
+  if (explicitNoChecks && (!captured?.repoRevision || !captured?.ownedFingerprint)) {
+    return {
+      authoritative: false,
+      reasonCode: 'EXECUTION_VERIFICATION_PROVENANCE_REQUIRED',
+      verificationFresh: ownership.verificationFresh,
+      sessionId: binding.session.id,
+      repoRevision: ownership.repoRevision,
+      ownedFingerprint: ownership.ownedFingerprint,
+      ownership,
+      message: 'No-check-required verification must include the captured execution revision and owned fingerprint.',
+    };
+  }
+  if (!explicitNoChecks && (!candidate?.candidateId || !candidate?.repoRevision || !candidate?.executionKey)) {
+    return {
+      authoritative: false,
+      reasonCode: 'EXECUTION_VERIFICATION_CANDIDATE_REQUIRED',
+      verificationFresh: ownership.verificationFresh,
+      sessionId: binding.session.id,
+      repoRevision: ownership.repoRevision,
+      ownedFingerprint: ownership.ownedFingerprint,
+      ownership,
+      message: 'Passed task-bound verification requires candidate id, candidate revision, and execution key.',
+    };
+  }
+
+  const expectedRepoRevision = captured?.repoRevision || candidate?.repoRevision;
+  if (expectedRepoRevision && expectedRepoRevision !== ownership.repoRevision) {
+    return {
+      authoritative: false,
+      reasonCode: 'EXECUTION_VERIFICATION_REPO_REVISION_STALE',
+      verificationFresh: ownership.verificationFresh,
+      sessionId: binding.session.id,
+      repoRevision: ownership.repoRevision,
+      ownedFingerprint: ownership.ownedFingerprint,
+      ownership,
+      details: { expectedRepoRevision, currentRepoRevision: ownership.repoRevision },
+      message: 'Captured verification revision no longer matches the live execution workspace.',
+    };
+  }
+  if (candidate?.repoRevision && candidate.repoRevision !== ownership.repoRevision) {
+    return {
+      authoritative: false,
+      reasonCode: 'EXECUTION_VERIFICATION_CANDIDATE_STALE',
+      verificationFresh: ownership.verificationFresh,
+      sessionId: binding.session.id,
+      repoRevision: ownership.repoRevision,
+      ownedFingerprint: ownership.ownedFingerprint,
+      ownership,
+      details: { candidateRepoRevision: candidate.repoRevision, currentRepoRevision: ownership.repoRevision },
+      message: 'Verification candidate revision no longer matches the live execution workspace.',
+    };
+  }
+  if (captured?.ownedFingerprint && captured.ownedFingerprint !== ownership.ownedFingerprint) {
+    return {
+      authoritative: false,
+      reasonCode: 'EXECUTION_VERIFICATION_FINGERPRINT_STALE',
+      verificationFresh: ownership.verificationFresh,
+      sessionId: binding.session.id,
+      repoRevision: ownership.repoRevision,
+      ownedFingerprint: ownership.ownedFingerprint,
+      ownership,
+      details: { expectedOwnedFingerprint: captured.ownedFingerprint, currentOwnedFingerprint: ownership.ownedFingerprint },
+      message: 'Captured owned-file fingerprint no longer matches the live execution workspace.',
+    };
+  }
+
+  const checks = explicitNoChecks
+    ? []
+    : batchCandidate
+      ? (Array.isArray(result.verification)
+        ? result.verification.map((entry: any) => ({
+          name: String(entry?.command || 'verification'),
+          command: String(entry?.command || 'verification'),
+          status: entry?.ok === true ? 'passed' : 'failed',
+        }))
+        : [])
+      : [{
+        name: String(args?.command || args?.preset || 'run_project_command'),
+        command: String(args?.command || args?.preset || 'run_project_command'),
+        status: 'passed',
+      }];
+  const policy: ExecutionVerificationProvenance['policy'] = explicitNoChecks || checks.length === 0
+    ? 'no-checks-required'
+    : 'checks-passed';
+
+  try {
+    const recorded = recordExecutionVerificationEvidence(binding.session.id, checks, {
       repoRoot: binding.workspace.root,
       provenance: {
-        policy: 'no-checks-required',
-        expectedRepoRevision: captured.repoRevision,
-        expectedOwnedFingerprint: captured.ownedFingerprint,
+        policy,
+        expectedRepoRevision,
+        expectedOwnedFingerprint: captured?.ownedFingerprint,
+        candidateId: candidate?.candidateId,
+        candidateRepoRevision: candidate?.repoRevision,
+        executionKey: candidate?.executionKey,
       },
     });
+    if (recorded.ownership.verificationFresh !== true) {
+      return {
+        authoritative: false,
+        reasonCode: 'EXECUTION_VERIFICATION_BINDING_NOT_FRESH',
+        verificationFresh: recorded.ownership.verificationFresh,
+        sessionId: binding.session.id,
+        repoRevision: recorded.ownership.repoRevision,
+        ownedFingerprint: recorded.ownership.ownedFingerprint,
+        ...recorded,
+        message: 'Verification evidence was persisted but did not bind freshness to the current owned fingerprint.',
+      };
+    }
+    return {
+      authoritative: true,
+      reasonCode: 'EXECUTION_VERIFICATION_AUTHORITATIVE',
+      verificationFresh: true,
+      sessionId: binding.session.id,
+      repoRevision: recorded.ownership.repoRevision,
+      ownedFingerprint: recorded.ownership.ownedFingerprint,
+      ...recorded,
+    };
+  } catch (error: any) {
+    return {
+      authoritative: false,
+      reasonCode: 'EXECUTION_VERIFICATION_REJECTED',
+      verificationFresh: getExecutionOwnershipState(binding.session.id, { repoRoot: binding.workspace.root }).verificationFresh,
+      sessionId: binding.session.id,
+      repoRevision: ownership.repoRevision,
+      ownedFingerprint: ownership.ownedFingerprint,
+      errorCode: typeof error?.code === 'string' ? error.code : undefined,
+      message: error instanceof Error ? error.message : String(error),
+      details: error?.details,
+    };
   }
-  if (!candidate?.candidateId || !candidate?.repoRevision || !candidate?.executionKey) return null;
-
-  const checks = batchCandidate
-    ? (Array.isArray(result.verification)
-      ? result.verification.map((entry: any) => ({
-        name: String(entry?.command || 'verification'),
-        command: String(entry?.command || 'verification'),
-        status: entry?.ok === true ? 'passed' : 'failed',
-      }))
-      : [])
-    : [{
-      name: String(args?.command || args?.preset || 'run_project_command'),
-      command: String(args?.command || args?.preset || 'run_project_command'),
-      status: 'passed',
-    }];
-  const policy: ExecutionVerificationProvenance['policy'] = checks.length > 0 ? 'checks-passed' : 'no-checks-required';
-
-  return recordExecutionVerificationEvidence(binding.session.id, checks, {
-    repoRoot: binding.workspace.root,
-    provenance: {
-      policy,
-      expectedRepoRevision: captured?.repoRevision || candidate.repoRevision,
-      expectedOwnedFingerprint: captured?.ownedFingerprint,
-      candidateId: candidate.candidateId,
-      candidateRepoRevision: candidate.repoRevision,
-      executionKey: candidate.executionKey,
-    },
-  });
 }
 
 export function recordExecutionVerificationEvidence(

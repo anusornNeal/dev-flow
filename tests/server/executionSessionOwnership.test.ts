@@ -8,6 +8,7 @@ import { spawnSync } from 'node:child_process';
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-session-ownership-'));
 const repoRoot = path.join(tempRoot, 'repo');
 process.env.DEVFLOW_DB_PATH = path.join(tempRoot, 'devflow.db');
+process.env.DEVFLOW_RUNTIME_DIR = path.join(tempRoot, 'runtime');
 fs.mkdirSync(path.join(repoRoot, 'src'), { recursive: true });
 fs.writeFileSync(path.join(repoRoot, 'src', 'A.ts'), 'export const A = 1;\n', 'utf8');
 fs.writeFileSync(path.join(repoRoot, 'src', 'B.ts'), 'export const B = 1;\n', 'utf8');
@@ -25,7 +26,8 @@ git(['commit', '-m', 'initial']);
 
 const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
 executeAllMigrations();
-const { saveTask } = await import('../../src/server/repositories/taskRepository.js');
+const { getTask, saveTask } = await import('../../src/server/repositories/taskRepository.js');
+const workspaceService = await import('../../src/server/services/sessionWorkspaceService.js');
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
 const sessions = await import('../../src/server/services/executionSessionService.js');
 const { getExecutionOwnershipReviewBlockers } = await import('../../src/server/services/taskGitWorkflowService.js');
@@ -68,6 +70,47 @@ function createSession() {
     branch: 'develop',
     repoRoot,
   });
+}
+
+function createTaskBoundSession(label: string) {
+  workspaceService.resetSessionWorkspaceRuntimeForTests();
+  const workspace = workspaceService.createOrReuseSessionWorkspace({ id: 'project-owned', localPath: repoRoot }, `verification-${label}`);
+  const task = getTask('task-owned')!;
+  const claimedAt = new Date().toISOString();
+  saveTask({
+    ...task,
+    claim: {
+      workspaceId: workspace.workspaceId,
+      sessionIdHash: `fixture-${label}`,
+      ownerKind: 'chat',
+      ownerLabel: `Verification ${label}`,
+      claimedAt,
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      reservedPaths: [],
+    },
+    updatedAt: claimedAt,
+  } as any);
+  const session = sessions.createExecutionSession({
+    projectId: 'project-owned',
+    taskId: 'task-owned',
+    workspaceId: workspace.workspaceId,
+    branch: 'develop',
+    repoRoot: workspace.root,
+  });
+  return { workspace, session };
+}
+
+function currentVerificationResult(provenance: { repoRevision: string }, suffix: string) {
+  return {
+    ok: true,
+    status: 'succeeded',
+    verificationCandidate: {
+      current: true,
+      candidateId: `vc_${suffix}`,
+      repoRevision: provenance.repoRevision,
+      executionKey: `execution-${suffix}`,
+    },
+  };
 }
 
 test('separates execution-owned changes from unrelated working-tree changes and reports scope drift', () => {
@@ -289,6 +332,108 @@ test('strict verification provenance persists candidate identity only for curren
   assert.equal(recorded.ownership.verificationFresh, true);
   assert.equal(recorded.binding.metadata.candidateId, 'vc_fixture_current');
   assert.equal(recorded.binding.metadata.verificationPolicy, 'checks-passed');
+});
+
+
+test('task-bound verification result returns authoritative fresh binding and duplicate evidence is idempotent', () => {
+  resetRepo();
+  const { workspace, session } = createTaskBoundSession('authoritative');
+  fs.writeFileSync(path.join(workspace.root, 'src', 'A.ts'), 'export const A = 2;\n', 'utf8');
+  sessions.recordExecutionOwnedChanges(session.id, ['src/A.ts'], { repoRoot: workspace.root, source: 'ChatGPT' });
+  const provenance = sessions.captureExecutionVerificationProvenance(session.id, { repoRoot: workspace.root });
+  const result = currentVerificationResult(provenance, 'authoritative');
+
+  const first = sessions.recordTaskExecutionVerificationResult({ workspaceId: workspace.workspaceId, command: 'focused' }, result, provenance);
+  assert.equal(first.authoritative, true);
+  assert.equal(first.reasonCode, 'EXECUTION_VERIFICATION_AUTHORITATIVE');
+  assert.equal(first.verificationFresh, true);
+  assert.equal(sessions.getExecutionOwnershipState(session.id, { repoRoot: workspace.root }).verificationFresh, true);
+
+  const replay = sessions.recordTaskExecutionVerificationResult({ workspaceId: workspace.workspaceId, command: 'focused' }, result, provenance);
+  assert.equal(replay.authoritative, true);
+  assert.equal(replay.verificationFresh, true);
+  assert.equal(replay.binding?.id, first.binding?.id);
+});
+
+test('task-bound verification result explains missing binding, provenance, candidate, and failed verification', () => {
+  resetRepo();
+  const unbound = sessions.recordTaskExecutionVerificationResult({}, { ok: true, status: 'succeeded' }, null);
+  assert.equal(unbound.authoritative, false);
+  assert.equal(unbound.reasonCode, 'EXECUTION_VERIFICATION_TASK_BINDING_MISSING');
+
+  const { workspace, session } = createTaskBoundSession('missing');
+  fs.writeFileSync(path.join(workspace.root, 'src', 'A.ts'), 'export const A = 2;\n', 'utf8');
+  sessions.recordExecutionOwnedChanges(session.id, ['src/A.ts'], { repoRoot: workspace.root, source: 'ChatGPT' });
+
+  const missingProvenance = sessions.recordTaskExecutionVerificationResult(
+    { workspaceId: workspace.workspaceId },
+    { ok: true, status: 'succeeded', verificationPolicy: 'no-checks-required' },
+    null,
+  );
+  assert.equal(missingProvenance.reasonCode, 'EXECUTION_VERIFICATION_PROVENANCE_REQUIRED');
+  assert.notEqual(missingProvenance.verificationFresh, true);
+
+  const missingCandidate = sessions.recordTaskExecutionVerificationResult(
+    { workspaceId: workspace.workspaceId },
+    { ok: true, status: 'succeeded' },
+    sessions.captureExecutionVerificationProvenance(session.id, { repoRoot: workspace.root }),
+  );
+  assert.equal(missingCandidate.reasonCode, 'EXECUTION_VERIFICATION_CANDIDATE_REQUIRED');
+  assert.notEqual(missingCandidate.verificationFresh, true);
+
+  const failed = sessions.recordTaskExecutionVerificationResult(
+    { workspaceId: workspace.workspaceId },
+    { ok: false, status: 'failed' },
+    null,
+  );
+  assert.equal(failed.reasonCode, 'EXECUTION_VERIFICATION_RESULT_NOT_SUCCEEDED');
+  assert.equal(failed.authoritative, false);
+});
+
+test('task-bound verification rejects stale revision and fingerprint without resurrecting old freshness', () => {
+  resetRepo();
+  const { workspace, session } = createTaskBoundSession('stale');
+  const ownedPath = path.join(workspace.root, 'src', 'A.ts');
+  fs.writeFileSync(ownedPath, 'export const A = 2;\n', 'utf8');
+  sessions.recordExecutionOwnedChanges(session.id, ['src/A.ts'], { repoRoot: workspace.root, source: 'ChatGPT' });
+  const provenance = sessions.captureExecutionVerificationProvenance(session.id, { repoRoot: workspace.root });
+  const result = currentVerificationResult(provenance, 'stale');
+  const recorded = sessions.recordTaskExecutionVerificationResult({ workspaceId: workspace.workspaceId }, result, provenance);
+  assert.equal(recorded.authoritative, true);
+
+  const current = sessions.captureExecutionVerificationProvenance(session.id, { repoRoot: workspace.root });
+  const staleRepo = sessions.recordTaskExecutionVerificationResult(
+    { workspaceId: workspace.workspaceId },
+    currentVerificationResult(current, 'stale-repo'),
+    { ...current, repoRevision: 'stale-revision' },
+  );
+  assert.equal(staleRepo.reasonCode, 'EXECUTION_VERIFICATION_REPO_REVISION_STALE');
+
+  const staleFingerprint = sessions.recordTaskExecutionVerificationResult(
+    { workspaceId: workspace.workspaceId },
+    currentVerificationResult(current, 'stale-fingerprint'),
+    { ...current, ownedFingerprint: 'stale-fingerprint' },
+  );
+  assert.equal(staleFingerprint.reasonCode, 'EXECUTION_VERIFICATION_FINGERPRINT_STALE');
+
+  const staleCandidateResult = currentVerificationResult(current, 'stale-candidate');
+  staleCandidateResult.verificationCandidate.repoRevision = 'stale-candidate-revision';
+  const staleCandidate = sessions.recordTaskExecutionVerificationResult(
+    { workspaceId: workspace.workspaceId },
+    staleCandidateResult,
+    current,
+  );
+  assert.equal(staleCandidate.reasonCode, 'EXECUTION_VERIFICATION_CANDIDATE_STALE');
+
+  fs.writeFileSync(ownedPath, 'export const A = 3;\n', 'utf8');
+  assert.equal(sessions.getExecutionOwnershipState(session.id, { repoRoot: workspace.root }).verificationFresh, false);
+  const replay = sessions.recordTaskExecutionVerificationResult({ workspaceId: workspace.workspaceId }, result, provenance);
+  assert.equal(replay.authoritative, false);
+  assert.ok([
+    'EXECUTION_VERIFICATION_REPO_REVISION_STALE',
+    'EXECUTION_VERIFICATION_FINGERPRINT_STALE',
+  ].includes(replay.reasonCode));
+  assert.equal(sessions.getExecutionOwnershipState(session.id, { repoRoot: workspace.root }).verificationFresh, false);
 });
 
 test.after(() => {

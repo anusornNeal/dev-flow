@@ -72,6 +72,18 @@ function taskCommitSubject(task: any, title: string, type = 'chore') {
   return `[${task.jiraKey || task.displayId || task.id}] ${type}: ${title}`;
 }
 
+function advanceExecutionToCommitted(executionId: string, label: string) {
+  const advance = (toStage: any, id: string, kind: string) => recordExecutionLifecycleTransition(executionId, {
+    toStage,
+    reasonCode: id,
+    evidence: { id, kind, status: 'completed', operationId: `op-${id}` },
+  });
+  advance('context-ready', `${label}-context`, 'context-bundle');
+  advance('implementing', `${label}-change`, 'owned-change');
+  advance('verifying', `${label}-verify`, 'verification-candidate');
+  advance('committed', `${label}-commit`, 'git-commit');
+}
+
 test('committed workspace finalizes into local develop and removes clean worktree/branch', () => {
   const { root, task, workspace, state } = fixture('success');
   fs.writeFileSync(path.join(workspace.root, 'tracked.txt'), 'implemented\n');
@@ -82,6 +94,7 @@ test('committed workspace finalizes into local develop and removes clean worktre
   claimed.claim = { workspaceId: workspace.workspaceId, sessionIdHash: 'fixture-session', ownerLabel: 'Fixture chat', ownerKind: 'chat', claimedAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
   saveTask(claimed);
   const execution = createExecutionSession({ projectId: task.projectId, taskId: task.id, workspaceId: workspace.workspaceId, branch: workspace.branch, repoRoot: workspace.root });
+  advanceExecutionToCommitted(execution.id, 'success');
 
   const result = finalizeTaskWorkspace(state, { taskId: task.id, workspaceId: workspace.workspaceId, checks });
   assert.equal(result.status, 'completed');
@@ -96,6 +109,44 @@ test('committed workspace finalizes into local develop and removes clean worktre
   assert.equal(saved.claim, undefined);
   assert.equal(getExecutionSessionState(execution.id).session.status, 'completed');
   assert.ok((saved.logs || []).some((entry: any) => /Finalized managed workspace/.test(entry.message)));
+});
+
+test('execution-stage finalization failure keeps task, claim, and execution recoverable before idempotent retry', () => {
+  const { root, task, workspace, state } = fixture('execution-stage-retry');
+  fs.writeFileSync(path.join(workspace.root, 'tracked.txt'), 'implemented\n');
+  git(workspace.root, ['add', 'tracked.txt']);
+  git(workspace.root, ['commit', '-m', taskCommitSubject(task, 'implement task')]);
+
+  const claimed = getTask(task.id)!;
+  claimed.claim = { workspaceId: workspace.workspaceId, sessionIdHash: 'fixture-session', ownerLabel: 'Fixture chat', ownerKind: 'chat', claimedAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+  saveTask(claimed);
+  const execution = createExecutionSession({ projectId: task.projectId, taskId: task.id, workspaceId: workspace.workspaceId, branch: workspace.branch, repoRoot: workspace.root });
+
+  const first = finalizeTaskWorkspace(state, { taskId: task.id, workspaceId: workspace.workspaceId, checks });
+  assert.equal(first.status, 'continuation', JSON.stringify(first));
+  assert.equal(first.code, 'POST_INTEGRATION_FINALIZATION_REQUIRED');
+  assert.equal(first.continuation.phase, 'execution-lifecycle');
+  assert.equal(first.continuation.error.code, 'TASK_FINALIZATION_EXECUTION_STAGE_INVALID');
+  const integratedHead = git(root, ['rev-parse', 'HEAD']).stdout;
+  const afterFailure = getTask(task.id)!;
+  assert.equal(afterFailure.status, 'in-progress');
+  assert.equal(afterFailure.claim?.workspaceId, workspace.workspaceId);
+  assert.equal(getExecutionSessionState(execution.id).session.status, 'active');
+  assert.equal(getExecutionSessionState(execution.id).session.lifecycle.stage, 'created');
+  assert.equal(fs.existsSync(workspace.root), true);
+
+  advanceExecutionToCommitted(execution.id, 'stage-retry');
+  const second = finalizeTaskWorkspace(state, { taskId: task.id, workspaceId: workspace.workspaceId, checks });
+  assert.equal(second.status, 'completed', JSON.stringify(second));
+  assert.equal(second.integration.alreadyIntegrated, true);
+  assert.equal(second.integration.baseHeadBefore, integratedHead);
+  assert.equal(second.integration.baseHeadAfter, integratedHead);
+  const completedTask = getTask(task.id)!;
+  assert.equal(completedTask.status, 'done');
+  assert.equal(completedTask.claim, undefined);
+  assert.equal(getExecutionSessionState(execution.id).session.status, 'completed');
+  assert.equal(getExecutionSessionState(execution.id).session.lifecycle.stage, 'finalized');
+  assert.equal(fs.existsSync(workspace.root), false);
 });
 
 test('finalization rejects malformed task commit subjects before mutating develop', () => {

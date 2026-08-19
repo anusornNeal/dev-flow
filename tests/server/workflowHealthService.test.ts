@@ -13,11 +13,13 @@ const { executeAllMigrations } = await import('../../src/db/migrations/index.js'
 executeAllMigrations();
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
 
-const { getWorkflowHealth } = await import('../../src/server/services/workflowHealthService.js');
+const { getWorkflowHealth, getChatGptHarnessHealthSnapshot } = await import('../../src/server/services/workflowHealthService.js');
 const { getToolDefinitionByName } = await import('../../src/server/contracts/devflowContract.js');
 const serverEvents = await import('../../src/server/services/serverEventService.js');
 const { clearToolCallRecords, recordToolCall, flushPerformanceTelemetry } = await import('../../src/server/services/mcpToolMonitor.js');
 const { default: db } = await import('../../src/db/index.js');
+const { saveTask } = await import('../../src/server/repositories/taskRepository.js');
+const { createExecutionSessionRecord, queryExecutionSessions } = await import('../../src/server/repositories/executionSessionRepository.js');
 const {
   createJob,
   updateJobStatus,
@@ -51,6 +53,50 @@ function stateFor(repo: string): any {
   return {
     projectsCache: [{ id: 'project-health', name: 'Health Fixture', repoUrl: 'https://example.com/health', localPath: repo }],
   };
+}
+
+function seedHealthTask(id: string, displayId: string, claim?: any) {
+  const now = new Date().toISOString();
+  const task = {
+    id,
+    displayId,
+    title: 'Health lifecycle fixture',
+    description: 'Exercise read-only lifecycle health diagnostics.',
+    projectId: 'project-health',
+    status: 'in-progress',
+    priority: 'high',
+    category: 'backend',
+    tags: [],
+    targetFiles: ['base.txt'],
+    checklist: [],
+    logs: [],
+    bugs: [],
+    images: [],
+    createdAt: now,
+    updatedAt: now,
+    ...(claim ? { claim } : {}),
+  } as any;
+  saveTask(task);
+  return task;
+}
+
+function seedHealthExecution(id: string, taskId: string, workspaceId: string) {
+  const now = new Date();
+  return createExecutionSessionRecord({
+    id,
+    projectId: 'project-health',
+    taskId,
+    workspaceId,
+    branch: 'devflow/ws/' + id,
+    baseRevision: 'base',
+    repoRevision: 'candidate',
+    status: 'active',
+    contextHandle: null,
+    createdAt: now.toISOString(),
+    updatedAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + 60_000).toISOString(),
+    endedAt: null,
+  });
 }
 
 test('getWorkflowHealth returns ok for a clean repo', () => {
@@ -162,6 +208,58 @@ test('devflow_health_check contract defaults MCP requests to compact and permits
   assert.deepEqual(tool.inputSchema?.properties?.responseMode?.enum, ['compact', 'summary', 'full', 'debug']);
   assert.equal(tool.buildHttpRequest({ projectId: 'project-health' }).path.includes('responseMode=compact'), true);
   assert.equal(tool.buildHttpRequest({ projectId: 'project-health', responseMode: 'full' }).path.includes('responseMode=full'), true);
+});
+
+test('task-scoped health discovers orphan execution', () => {
+  const repo = createRepo('task-orphan-health');
+  const task = seedHealthTask('task-health-orphan', 'DVF-HEALTH-ORPHAN');
+  seedHealthExecution('exec-health-orphan', task.id, 'ws-health-orphan');
+  const contract: any = getToolDefinitionByName('devflow_health_check');
+  assert.equal(contract.inputSchema.properties.taskId.type, 'string');
+  const health: any = getChatGptHarnessHealthSnapshot(stateFor(repo), { projectId: 'project-health', taskId: task.displayId });
+  assert.equal(health.scope, 'task');
+  assert.equal(health.execution.sessionId, 'exec-health-orphan');
+  assert.notEqual(health.status, 'idle');
+  assert.equal(health.drift[0].code, 'ACTIVE_EXECUTION_WITHOUT_ACTIVE_CLAIM');
+});
+
+test('workspace-scoped health surfaces active execution ambiguity', () => {
+  const repo = createRepo('workspace-ambiguous-health');
+  seedHealthExecution('exec-health-ambiguous-a', 'task-health-ambiguous-a', 'ws-health-ambiguous');
+  seedHealthExecution('exec-health-ambiguous-b', 'task-health-ambiguous-b', 'ws-health-ambiguous');
+  const health: any = getChatGptHarnessHealthSnapshot(stateFor(repo), { projectId: 'project-health', workspaceId: 'ws-health-ambiguous' });
+  assert.equal(health.scope, 'workspace');
+  assert.equal(health.status, 'blocked');
+  assert.equal(health.execution.stage, 'ambiguous');
+  assert.equal(health.drift[0].code, 'MULTIPLE_ACTIVE_EXECUTIONS_FOR_WORKSPACE');
+});
+
+test('project-scoped health reports aggregate activity without fabricated execution', () => {
+  const repo = createRepo('project-aggregate-health');
+  seedHealthExecution('exec-health-project-active', 'task-health-project-active', 'ws-health-project-active');
+  const health: any = getChatGptHarnessHealthSnapshot(stateFor(repo), { projectId: 'project-health' });
+  assert.equal(health.scope, 'project-aggregate');
+  assert.equal(health.aggregate.activeExecutionCount >= 1, true);
+  assert.equal(health.execution, undefined);
+});
+
+test('unresolved task selector is blocked instead of represented as idle', () => {
+  const repo = createRepo('missing-task-health');
+  const health: any = getChatGptHarnessHealthSnapshot(stateFor(repo), { projectId: 'project-health', taskId: 'DVF-MISSING' });
+  assert.equal(health.scope, 'task');
+  assert.equal(health.status, 'blocked');
+  assert.equal(health.drift[0].code, 'TASK_SELECTOR_NOT_FOUND');
+});
+
+test('task health is read-only across repeated orphan diagnostics', () => {
+  const repo = createRepo('readonly-task-health');
+  const task = seedHealthTask('task-health-readonly', 'DVF-HEALTH-READONLY');
+  seedHealthExecution('exec-health-readonly', task.id, 'ws-health-readonly');
+  const before = JSON.stringify(queryExecutionSessions({ taskId: task.id, limit: 20 }));
+  getChatGptHarnessHealthSnapshot(stateFor(repo), { taskId: task.id });
+  getChatGptHarnessHealthSnapshot(stateFor(repo), { taskId: task.id });
+  const after = JSON.stringify(queryExecutionSessions({ taskId: task.id, limit: 20 }));
+  assert.equal(after, before);
 });
 
 

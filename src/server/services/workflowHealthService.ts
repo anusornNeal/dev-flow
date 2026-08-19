@@ -7,8 +7,13 @@ import { evaluatePerformanceSlo } from './performanceSloService';
 import { performance as nodePerformance } from 'node:perf_hooks';
 import { publishServerEvent } from './serverEventService.js';
 import { getRecoveryStatus } from './backupIntegrityService';
-import { buildChatGptHarnessEnvelope, findTaskByIdentifier } from './taskService.js';
-import { getActiveTaskExecutionSessionForWorkspace } from './executionSessionService.js';
+import { getTasks } from '../repositories/taskRepository.js';
+import { queryExecutionSessions, type ExecutionSessionRecord } from '../repositories/executionSessionRepository.js';
+import { buildChatGptHarnessEnvelope, findProjectByIdentifier, findTaskByIdentifier } from './taskService.js';
+import { getExecutionSessionOwnershipEpoch } from './executionSessionService.js';
+import { getLatestExecutionCheckpoint } from './executionCheckpointService.js';
+import { findSessionWorkspaceRecoveryCandidatesForTask, listSessionWorkspaceMetadataForRecovery } from './sessionWorkspaceService.js';
+import { inspectWorkspaceRecovery } from './workspaceRecoveryService.js';
 import { HARNESS_POLICY_VERSION } from './harnessPolicyService.js';
 import { HARNESS_STRATEGY_VERSION } from './harnessStrategyService.js';
 
@@ -68,50 +73,490 @@ function summarizeFailedJobGroups(failures: any[]) {
   return Array.from(groups.values()).sort((left, right) => right.count - left.count);
 }
 
-export const CHATGPT_HARNESS_HEALTH_VERSION = 'chatgpt-harness-health.v1' as const;
+export const CHATGPT_HARNESS_HEALTH_VERSION = 'chatgpt-harness-health.v2' as const;
 
-export function getChatGptHarnessHealthSnapshot(state: AppState, args: Record<string, any> = {}) {
-  let taskId = typeof args.taskId === 'string' ? args.taskId.trim() : '';
-  const workspaceId = typeof args.workspaceId === 'string' ? args.workspaceId.trim() : '';
-  if (!taskId && workspaceId) {
-    try {
-      taskId = getActiveTaskExecutionSessionForWorkspace(workspaceId)?.taskId || '';
-    } catch {
-      taskId = '';
-    }
-  }
-  const task = taskId ? findTaskByIdentifier(state, taskId) : null;
-  if (!task) {
-    return {
-      version: CHATGPT_HARNESS_HEALTH_VERSION,
-      status: 'idle',
-      mode: 'chatgpt-only',
-      execution: { stage: 'unclaimed', sessionId: null, workspaceId: workspaceId || null },
-      checkpoint: { freshness: 'missing', ref: null },
-      policy: { version: HARNESS_POLICY_VERSION, freshness: 'unavailable', policyId: null },
-      context: { freshness: 'missing', handle: null },
-      strategy: { version: HARNESS_STRATEGY_VERSION, mode: 'shadow', status: 'baseline', regressionState: 'unknown' },
-      recovery: { pendingOperationCount: 0 },
-      hardBlockers: [],
-    };
-  }
-  const envelope = buildChatGptHarnessEnvelope(state, task);
+type HarnessHealthDrift = {
+  code: string;
+  message: string;
+  taskIds?: string[];
+  workspaceIds?: string[];
+  executionSessionIds?: string[];
+  operationIds?: string[];
+  nextAction: string;
+};
+
+function cleanHealthSelector(value: unknown) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function activeHealthClaim(task: any) {
+  const workspaceId = cleanHealthSelector(task?.claim?.workspaceId);
+  const expiresAtMs = Date.parse(String(task?.claim?.expiresAt || ''));
+  if (!workspaceId || !Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()) return null;
+  return {
+    workspaceId,
+    ownershipEpochId: cleanHealthSelector(task?.claim?.ownershipEpochId) || null,
+    expiresAt: String(task.claim.expiresAt),
+  };
+}
+
+function pendingHealthOperations(session: ExecutionSessionRecord | null) {
+  if (!session) return { checkpoint: null as any, operationIds: [] as string[] };
+  const checkpoint = getLatestExecutionCheckpoint(session.id);
+  const operationIds = Array.isArray(checkpoint?.pendingOperations)
+    ? checkpoint.pendingOperations.map((entry: any) => cleanHealthSelector(entry?.operationId)).filter(Boolean).slice(0, 20)
+    : [];
+  return { checkpoint, operationIds };
+}
+
+function executionHealthView(session: ExecutionSessionRecord | null, stageOverride?: string) {
+  if (!session) return { stage: stageOverride || 'unclaimed', sessionId: null, workspaceId: null, ownershipEpochId: null };
+  const ownershipEpochId = getExecutionSessionOwnershipEpoch(session.id).ownershipEpochId;
+  return {
+    stage: stageOverride || session.lifecycle.stage,
+    sessionId: session.id,
+    workspaceId: session.workspaceId,
+    taskId: session.taskId,
+    status: session.status,
+    ownershipEpochId,
+    repoRevision: session.repoRevision,
+  };
+}
+
+function actionableRecoveryWorkspace(workspaceId: string) {
+  const inspection = inspectWorkspaceRecovery(workspaceId);
+  return inspection.disposition === 'needs-recovery'
+    || inspection.disposition === 'stale-registry'
+    || inspection.disposition === 'committed-not-integrated'
+    || inspection.state === 'integration-required';
+}
+
+function baselineHarnessMetadata() {
+  return {
+    policy: { version: HARNESS_POLICY_VERSION, freshness: 'unavailable', policyId: null },
+    context: { freshness: 'missing', handle: null },
+    strategy: { version: HARNESS_STRATEGY_VERSION, mode: 'shadow', status: 'baseline', regressionState: 'unknown' },
+    recovery: { pendingOperationCount: 0 },
+  };
+}
+
+function blockedHarnessHealth(scope: string, drift: HarnessHealthDrift[], extra: Record<string, any> = {}) {
   return {
     version: CHATGPT_HARNESS_HEALTH_VERSION,
-    status: envelope.execution.sessionId ? 'active' : 'idle',
+    scope,
+    status: 'blocked',
     mode: 'chatgpt-only',
-    execution: {
-      stage: envelope.execution.stage,
-      sessionId: envelope.execution.sessionId,
-      workspaceId: envelope.execution.workspaceId,
-      allowedNextActionClasses: envelope.allowedNextActionClasses,
+    ...baselineHarnessMetadata(),
+    drift: drift.slice(0, 20),
+    hardBlockers: drift.map((entry) => entry.code).slice(0, 20),
+    ...extra,
+  };
+}
+
+function taskHarnessHealth(state: AppState, taskId: string) {
+  const task = findTaskByIdentifier(state, taskId);
+  if (!task) {
+    return blockedHarnessHealth('task', [{
+      code: 'TASK_SELECTOR_NOT_FOUND',
+      message: 'The requested task selector did not resolve to a durable task.',
+      taskIds: [taskId],
+      nextAction: 'Correct the task selector before making lifecycle decisions.',
+    }], { task: null });
+  }
+
+  const claim = activeHealthClaim(task);
+  const activeQuery = queryExecutionSessions({ taskId: task.id, status: 'active', limit: 20 });
+  const active = activeQuery.sessions;
+  const drift: HarnessHealthDrift[] = [];
+  if (activeQuery.truncated || active.length > 1) {
+    drift.push({
+      code: 'MULTIPLE_ACTIVE_EXECUTIONS_FOR_TASK',
+      message: 'More than one active execution is authoritative-looking for the same task.',
+      taskIds: [task.id],
+      workspaceIds: [...new Set(active.map((entry) => entry.workspaceId).filter(Boolean) as string[])].slice(0, 20),
+      executionSessionIds: active.map((entry) => entry.id).slice(0, 20),
+      nextAction: 'Use lifecycle reconciliation; do not select an execution heuristically.',
+    });
+  }
+  const selected = active.length === 1 ? active[0] : null;
+  if (!claim && selected) {
+    drift.push({
+      code: 'ACTIVE_EXECUTION_WITHOUT_ACTIVE_CLAIM',
+      message: 'A durable active execution exists after active task-claim authority disappeared.',
+      taskIds: [task.id],
+      workspaceIds: selected.workspaceId ? [selected.workspaceId] : [],
+      executionSessionIds: [selected.id],
+      nextAction: 'Enter scoped lifecycle reconciliation or recovery; preserve workspace WIP.',
+    });
+  }
+  if (claim && !active.some((entry) => entry.workspaceId === claim.workspaceId)) {
+    drift.push({
+      code: 'ACTIVE_CLAIM_WITHOUT_ACTIVE_EXECUTION',
+      message: 'The task has an active claim but no active execution bound to its claimed workspace.',
+      taskIds: [task.id],
+      workspaceIds: [claim.workspaceId],
+      nextAction: 'Reconcile the claim epoch before creating replacement execution authority.',
+    });
+  }
+  if (claim && selected) {
+    const executionEpoch = getExecutionSessionOwnershipEpoch(selected.id).ownershipEpochId;
+    if (selected.workspaceId !== claim.workspaceId || (claim.ownershipEpochId && executionEpoch !== claim.ownershipEpochId)) {
+      drift.push({
+        code: 'CLAIM_EXECUTION_OWNERSHIP_MISMATCH',
+        message: 'Claim workspace or ownership epoch does not match the active execution.',
+        taskIds: [task.id],
+        workspaceIds: [claim.workspaceId, selected.workspaceId].filter(Boolean) as string[],
+        executionSessionIds: [selected.id],
+        nextAction: 'Use scoped lifecycle reconciliation; do not infer authority from timestamps.',
+      });
+    }
+  }
+
+  const pending = pendingHealthOperations(selected);
+  if (pending.operationIds.length > 0) {
+    drift.push({
+      code: 'PENDING_DURABLE_OPERATIONS',
+      message: 'The selected execution still has unresolved durable operations.',
+      taskIds: [task.id],
+      executionSessionIds: selected ? [selected.id] : [],
+      operationIds: pending.operationIds,
+      nextAction: 'Inspect durable job outcomes before rotating or replacing execution authority.',
+    });
+  }
+
+  let actionableWorkspaceIds: string[] = [];
+  let workspaceDiscoveryTruncated = false;
+  if (!claim) {
+    const discovery = findSessionWorkspaceRecoveryCandidatesForTask(task.projectId, task.displayId || task.id, 50);
+    workspaceDiscoveryTruncated = discovery.truncated;
+    actionableWorkspaceIds = discovery.exactMatches
+      .map((entry) => entry.workspaceId)
+      .filter(actionableRecoveryWorkspace)
+      .slice(0, 20);
+    if (workspaceDiscoveryTruncated) {
+      drift.push({
+        code: 'TASK_WORKSPACE_DISCOVERY_TRUNCATED',
+        message: 'Bounded workspace discovery cannot prove a unique recovery state for the task.',
+        taskIds: [task.id],
+        workspaceIds: discovery.exactMatches.map((entry) => entry.workspaceId).slice(0, 20),
+        nextAction: 'Use explicit workspace recovery selection; do not treat the task as idle.',
+      });
+    } else if (actionableWorkspaceIds.length > 0) {
+      drift.push({
+        code: actionableWorkspaceIds.length > 1 ? 'MULTIPLE_ACTIONABLE_TASK_WORKSPACES' : 'ACTIONABLE_WIP_WITHOUT_ACTIVE_CLAIM',
+        message: actionableWorkspaceIds.length > 1
+          ? 'Multiple exact task workspaces contain actionable recovery state.'
+          : 'Exact task-compatible workspace state remains actionable after claim loss.',
+        taskIds: [task.id],
+        workspaceIds: actionableWorkspaceIds,
+        nextAction: actionableWorkspaceIds.length > 1
+          ? 'Resolve workspace ambiguity explicitly before recovery.'
+          : 'Recover the exact workspace and preserve its WIP.',
+      });
+    }
+  }
+
+  const envelope = claim && selected && selected.workspaceId === claim.workspaceId && drift.length === 0
+    ? buildChatGptHarnessEnvelope(state, task)
+    : null;
+  const result = {
+    version: CHATGPT_HARNESS_HEALTH_VERSION,
+    scope: 'task',
+    status: drift.some((entry) => entry.code !== 'PENDING_DURABLE_OPERATIONS') ? 'blocked' : selected || claim ? 'active' : 'idle',
+    mode: 'chatgpt-only',
+    task: { id: task.id, displayId: task.displayId, status: task.status, projectId: task.projectId },
+    claim: claim ? { present: true, ...claim } : { present: false, workspaceId: null, ownershipEpochId: null, expiresAt: null },
+    execution: executionHealthView(selected),
+    checkpoint: {
+      freshness: envelope?.execution?.checkpointFreshness || (pending.checkpoint ? 'present' : 'missing'),
+      ref: envelope?.execution?.checkpointRef || pending.checkpoint?.id || null,
     },
-    checkpoint: { freshness: envelope.execution.checkpointFreshness, ref: envelope.execution.checkpointRef },
-    policy: envelope.policy,
-    context: envelope.context,
-    strategy: { ...envelope.strategy, regressionState: 'unknown' },
-    recovery: { pendingOperationCount: envelope.recovery.pendingOperationIds.length },
-    hardBlockers: envelope.hardBlockers,
+    policy: envelope?.policy || { version: HARNESS_POLICY_VERSION, freshness: 'unavailable', policyId: null },
+    context: envelope?.context || { freshness: selected?.contextHandle ? 'present' : 'missing', handle: selected?.contextHandle || null },
+    strategy: envelope ? { ...envelope.strategy, regressionState: 'unknown' } : { version: HARNESS_STRATEGY_VERSION, mode: 'shadow', status: 'baseline', regressionState: 'unknown' },
+    recovery: { pendingOperationCount: pending.operationIds.length, actionableWorkspaceIds, workspaceDiscoveryTruncated },
+    drift: drift.slice(0, 20),
+    hardBlockers: drift.map((entry) => entry.code).slice(0, 20),
+  };
+  return result;
+}
+
+function workspaceHarnessHealth(state: AppState, workspaceId: string, expectedTaskId = '') {
+  const activeQuery = queryExecutionSessions({ workspaceId, status: 'active', limit: 20 });
+  const active = activeQuery.sessions;
+  if (activeQuery.truncated || active.length > 1) {
+    return blockedHarnessHealth('workspace', [{
+      code: 'MULTIPLE_ACTIVE_EXECUTIONS_FOR_WORKSPACE',
+      message: 'The workspace has multiple active task execution sessions.',
+      workspaceIds: [workspaceId],
+      executionSessionIds: active.map((entry) => entry.id).slice(0, 20),
+      taskIds: [...new Set(active.map((entry) => entry.taskId).filter(Boolean) as string[])].slice(0, 20),
+      nextAction: 'Use lifecycle reconciliation; never select one execution by age.',
+    }], { execution: { stage: 'ambiguous', sessionId: null, workspaceId }, aggregate: { activeExecutionCount: activeQuery.total, truncated: activeQuery.truncated } });
+  }
+
+  const session = active[0] || null;
+  const tasks = getTasks();
+  const activeClaimTasks = tasks.filter((task) => activeHealthClaim(task)?.workspaceId === workspaceId);
+  const drift: HarnessHealthDrift[] = [];
+  if (activeClaimTasks.length > 1) {
+    drift.push({
+      code: 'MULTIPLE_ACTIVE_CLAIMS_FOR_WORKSPACE',
+      message: 'Multiple active task claims point at the same workspace.',
+      workspaceIds: [workspaceId],
+      taskIds: activeClaimTasks.map((task) => task.id).slice(0, 20),
+      nextAction: 'Reconcile claim authority before any workspace mutation.',
+    });
+  }
+  const task = session?.taskId ? findTaskByIdentifier(state, session.taskId) : activeClaimTasks.length === 1 ? activeClaimTasks[0] : null;
+  const claim = task ? activeHealthClaim(task) : null;
+  if (session && !claim) {
+    drift.push({
+      code: 'ACTIVE_EXECUTION_WITHOUT_ACTIVE_CLAIM',
+      message: 'A durable active execution exists for the workspace without matching active claim authority.',
+      taskIds: session.taskId ? [session.taskId] : [],
+      workspaceIds: [workspaceId],
+      executionSessionIds: [session.id],
+      nextAction: 'Enter scoped lifecycle reconciliation; preserve workspace WIP.',
+    });
+  }
+  if (!session && activeClaimTasks.length === 1) {
+    drift.push({
+      code: 'ACTIVE_CLAIM_WITHOUT_ACTIVE_EXECUTION',
+      message: 'An active claim points at the workspace but no active execution exists.',
+      taskIds: [activeClaimTasks[0].id],
+      workspaceIds: [workspaceId],
+      nextAction: 'Reconcile the claim epoch before establishing one replacement execution.',
+    });
+  }
+  if (expectedTaskId) {
+    const expectedTask = findTaskByIdentifier(state, expectedTaskId);
+    if (!expectedTask || (session?.taskId && session.taskId !== expectedTask.id) || (claim && task?.id !== expectedTask.id)) {
+      drift.push({
+        code: 'HEALTH_SELECTOR_CONFLICT',
+        message: 'Task and workspace selectors resolve to different lifecycle identities.',
+        taskIds: [expectedTask?.id || expectedTaskId, session?.taskId || task?.id].filter(Boolean) as string[],
+        workspaceIds: [workspaceId],
+        executionSessionIds: session ? [session.id] : [],
+        nextAction: 'Correct the selectors; health will not compose authority across identities.',
+      });
+    }
+  }
+  if (claim && session) {
+    const executionEpoch = getExecutionSessionOwnershipEpoch(session.id).ownershipEpochId;
+    if (session.taskId !== task?.id || (claim.ownershipEpochId && executionEpoch !== claim.ownershipEpochId)) {
+      drift.push({
+        code: 'CLAIM_EXECUTION_OWNERSHIP_MISMATCH',
+        message: 'Claim task or ownership epoch does not match the active workspace execution.',
+        taskIds: [task?.id, session.taskId].filter(Boolean) as string[],
+        workspaceIds: [workspaceId],
+        executionSessionIds: [session.id],
+        nextAction: 'Use scoped lifecycle reconciliation before mutation.',
+      });
+    }
+  }
+  const pending = pendingHealthOperations(session);
+  if (pending.operationIds.length > 0) {
+    drift.push({
+      code: 'PENDING_DURABLE_OPERATIONS',
+      message: 'The workspace execution has unresolved durable operations.',
+      workspaceIds: [workspaceId],
+      executionSessionIds: session ? [session.id] : [],
+      operationIds: pending.operationIds,
+      nextAction: 'Inspect durable job outcomes before recovery or ownership rotation.',
+    });
+  }
+  let actionableWorkspace = false;
+  if (!claim && !session) {
+    try {
+      actionableWorkspace = actionableRecoveryWorkspace(workspaceId);
+    } catch {
+      actionableWorkspace = false;
+    }
+    if (actionableWorkspace) {
+      drift.push({
+        code: 'ACTIONABLE_WIP_WITHOUT_ACTIVE_CLAIM',
+        message: 'The selected workspace still carries actionable recovery state without active claim authority.',
+        workspaceIds: [workspaceId],
+        nextAction: 'Recover or reconcile this exact workspace; preserve WIP and do not treat it as idle.',
+      });
+    }
+  }
+  return {
+    version: CHATGPT_HARNESS_HEALTH_VERSION,
+    scope: 'workspace',
+    status: drift.some((entry) => entry.code !== 'PENDING_DURABLE_OPERATIONS') ? 'blocked' : session || claim ? 'active' : 'idle',
+    mode: 'chatgpt-only',
+    task: task ? { id: task.id, displayId: task.displayId, status: task.status, projectId: task.projectId } : null,
+    claim: claim ? { present: true, ...claim } : { present: false, workspaceId: null, ownershipEpochId: null, expiresAt: null },
+    execution: executionHealthView(session),
+    checkpoint: { freshness: pending.checkpoint ? 'present' : 'missing', ref: pending.checkpoint?.id || null },
+    ...baselineHarnessMetadata(),
+    recovery: { pendingOperationCount: pending.operationIds.length },
+    drift: drift.slice(0, 20),
+    hardBlockers: drift.map((entry) => entry.code).slice(0, 20),
+  };
+}
+
+function projectHarnessHealth(state: AppState, args: Record<string, any>) {
+  let project: any = null;
+  try {
+    project = findProjectByIdentifier(state, args);
+  } catch (error: any) {
+    return blockedHarnessHealth('project-aggregate', [{
+      code: 'PROJECT_SELECTOR_AMBIGUOUS',
+      message: String(error?.message || 'Project selectors are ambiguous.'),
+      nextAction: 'Provide one exact project identifier before using aggregate lifecycle health.',
+    }], { aggregate: { activeExecutionCount: 0, activeClaimCount: 0, actionableWorkspaceCount: 0, pendingOperationCount: 0, driftCount: 1, truncated: false } });
+  }
+  if (!project) {
+    return blockedHarnessHealth('project-aggregate', [{
+      code: 'PROJECT_SELECTOR_NOT_FOUND',
+      message: 'The supplied project selector did not resolve to a project.',
+      nextAction: 'Correct the project selector before making lifecycle decisions.',
+    }], { aggregate: { activeExecutionCount: 0, activeClaimCount: 0, actionableWorkspaceCount: 0, pendingOperationCount: 0, driftCount: 1, truncated: false } });
+  }
+
+  const allProjectTasks = getTasks().filter((task) => task.projectId === project.id);
+  const tasks = allProjectTasks.slice(0, 100);
+  const activeClaims = tasks.map((task) => ({ task, claim: activeHealthClaim(task) })).filter((entry) => Boolean(entry.claim));
+  const executions = queryExecutionSessions({ projectId: project.id, status: 'active', limit: 50 });
+  const drift: HarnessHealthDrift[] = [];
+  const byTask = new Map<string, ExecutionSessionRecord[]>();
+  const byWorkspace = new Map<string, ExecutionSessionRecord[]>();
+  let pendingOperationCount = 0;
+
+  for (const session of executions.sessions) {
+    if (session.taskId) byTask.set(session.taskId, [...(byTask.get(session.taskId) || []), session]);
+    if (session.workspaceId) byWorkspace.set(session.workspaceId, [...(byWorkspace.get(session.workspaceId) || []), session]);
+    const pending = pendingHealthOperations(session);
+    pendingOperationCount += pending.operationIds.length;
+    const task = session.taskId ? tasks.find((candidate) => candidate.id === session.taskId) : null;
+    const claim = task ? activeHealthClaim(task) : null;
+    if (!claim || claim.workspaceId !== session.workspaceId) {
+      drift.push({
+        code: 'ACTIVE_EXECUTION_WITHOUT_ACTIVE_CLAIM',
+        message: 'Project aggregate found an active execution without matching active claim authority.',
+        taskIds: session.taskId ? [session.taskId] : [],
+        workspaceIds: session.workspaceId ? [session.workspaceId] : [],
+        executionSessionIds: [session.id],
+        nextAction: 'Use scoped lifecycle reconciliation for the affected task/workspace.',
+      });
+    } else if (claim.ownershipEpochId && getExecutionSessionOwnershipEpoch(session.id).ownershipEpochId !== claim.ownershipEpochId) {
+      drift.push({
+        code: 'CLAIM_EXECUTION_OWNERSHIP_MISMATCH',
+        message: 'Project aggregate found an ownership epoch mismatch.',
+        taskIds: [task!.id],
+        workspaceIds: [claim.workspaceId],
+        executionSessionIds: [session.id],
+        nextAction: 'Use scoped lifecycle reconciliation; do not infer ownership.',
+      });
+    }
+    if (pending.operationIds.length > 0) {
+      drift.push({
+        code: 'PENDING_DURABLE_OPERATIONS',
+        message: 'Project aggregate found unresolved durable execution work.',
+        taskIds: session.taskId ? [session.taskId] : [],
+        workspaceIds: session.workspaceId ? [session.workspaceId] : [],
+        executionSessionIds: [session.id],
+        operationIds: pending.operationIds,
+        nextAction: 'Inspect the durable operation outcome before ownership changes.',
+      });
+    }
+  }
+
+  for (const entry of activeClaims) {
+    const matching = executions.sessions.filter((session) => session.taskId === entry.task.id && session.workspaceId === entry.claim!.workspaceId);
+    if (matching.length === 0) {
+      drift.push({
+        code: 'ACTIVE_CLAIM_WITHOUT_ACTIVE_EXECUTION',
+        message: 'Project aggregate found an active claim with no matching active execution.',
+        taskIds: [entry.task.id],
+        workspaceIds: [entry.claim!.workspaceId],
+        nextAction: 'Reconcile the claim epoch before creating replacement execution authority.',
+      });
+    }
+  }
+  for (const [taskId, sessions] of byTask) {
+    if (sessions.length > 1) drift.push({
+      code: 'MULTIPLE_ACTIVE_EXECUTIONS_FOR_TASK',
+      message: 'Project aggregate found multiple active executions for one task.',
+      taskIds: [taskId],
+      workspaceIds: [...new Set(sessions.map((entry) => entry.workspaceId).filter(Boolean) as string[])],
+      executionSessionIds: sessions.map((entry) => entry.id),
+      nextAction: 'Use lifecycle reconciliation; do not choose one execution heuristically.',
+    });
+  }
+  for (const [workspaceId, sessions] of byWorkspace) {
+    if (sessions.length > 1) drift.push({
+      code: 'MULTIPLE_ACTIVE_EXECUTIONS_FOR_WORKSPACE',
+      message: 'Project aggregate found multiple active executions for one workspace.',
+      taskIds: [...new Set(sessions.map((entry) => entry.taskId).filter(Boolean) as string[])],
+      workspaceIds: [workspaceId],
+      executionSessionIds: sessions.map((entry) => entry.id),
+      nextAction: 'Use lifecycle reconciliation; do not choose one execution heuristically.',
+    });
+  }
+
+  const registry = listSessionWorkspaceMetadataForRecovery(project.id, 50);
+  const workspaceInspectionLimit = 10;
+  const workspaceInspectionCandidates = registry.workspaces.slice(0, workspaceInspectionLimit);
+  const actionableWorkspaceIds = workspaceInspectionCandidates
+    .map((workspace) => workspace.workspaceId)
+    .filter(actionableRecoveryWorkspace)
+    .slice(0, 20);
+  const truncated = executions.truncated
+    || registry.truncated
+    || registry.workspaces.length > workspaceInspectionCandidates.length
+    || allProjectTasks.length > tasks.length;
+  if (truncated) drift.push({
+    code: 'PROJECT_LIFECYCLE_SCAN_TRUNCATED',
+    message: 'Project aggregate exceeded a bounded lifecycle scan and cannot prove a complete all-clear.',
+    nextAction: 'Narrow health to an explicit task/workspace or inspect additional bounded pages.',
+  });
+
+  return {
+    version: CHATGPT_HARNESS_HEALTH_VERSION,
+    scope: 'project-aggregate',
+    status: drift.length > 0 ? 'blocked' : executions.total > 0 || activeClaims.length > 0 || actionableWorkspaceIds.length > 0 ? 'active' : 'idle',
+    mode: 'chatgpt-only',
+    ...baselineHarnessMetadata(),
+    project: { id: project.id, name: project.name },
+    aggregate: {
+      activeExecutionCount: executions.total,
+      activeClaimCount: activeClaims.length,
+      actionableWorkspaceCount: actionableWorkspaceIds.length,
+      pendingOperationCount,
+      driftCount: drift.length,
+      truncated,
+      executionSessionIds: executions.sessions.map((entry) => entry.id).slice(0, 20),
+      taskIds: [...new Set([...activeClaims.map((entry) => entry.task.id), ...executions.sessions.map((entry) => entry.taskId).filter(Boolean) as string[]])].slice(0, 20),
+      workspaceIds: [...new Set([...activeClaims.map((entry) => entry.claim!.workspaceId), ...executions.sessions.map((entry) => entry.workspaceId).filter(Boolean) as string[], ...actionableWorkspaceIds])].slice(0, 20),
+    },
+    recovery: { pendingOperationCount },
+    drift: drift.slice(0, 20),
+    hardBlockers: drift.map((entry) => entry.code).slice(0, 20),
+  };
+}
+
+export function getChatGptHarnessHealthSnapshot(state: AppState, args: Record<string, any> = {}): Record<string, any> {
+  const taskId = cleanHealthSelector(args.taskId);
+  const workspaceId = cleanHealthSelector(args.workspaceId);
+  if (workspaceId) return workspaceHarnessHealth(state, workspaceId, taskId);
+  if (taskId) return taskHarnessHealth(state, taskId);
+  const hasProjectSelector = ['projectId', 'projectName', 'repo', 'repoUrl', 'localPath'].some((key) => cleanHealthSelector(args[key]));
+  if (hasProjectSelector) return projectHarnessHealth(state, args);
+  return {
+    version: CHATGPT_HARNESS_HEALTH_VERSION,
+    scope: 'runtime',
+    status: 'idle',
+    mode: 'chatgpt-only',
+    ...baselineHarnessMetadata(),
+    execution: { stage: 'unclaimed', sessionId: null, workspaceId: null, ownershipEpochId: null },
+    checkpoint: { freshness: 'missing', ref: null },
+    aggregate: { activeExecutionCount: 0, activeClaimCount: 0, actionableWorkspaceCount: 0, pendingOperationCount: 0, driftCount: 0, truncated: false },
+    drift: [],
+    hardBlockers: [],
   };
 }
 

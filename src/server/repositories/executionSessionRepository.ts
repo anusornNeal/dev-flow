@@ -199,6 +199,33 @@ export function listExecutionSessionsForWorkspace(workspaceId: string): Executio
     .filter((entry): entry is ExecutionSessionRecord => Boolean(entry));
 }
 
+export function queryExecutionSessions(args: {
+  projectId?: string;
+  taskId?: string;
+  workspaceId?: string;
+  status?: ExecutionSessionStatus;
+  limit?: number;
+} = {}) {
+  const requestedLimit = Number(args.limit);
+  const limit = Math.max(1, Math.min(100, Number.isFinite(requestedLimit) ? requestedLimit : 50));
+  const clauses: string[] = [];
+  const values: string[] = [];
+  if (args.projectId) { clauses.push('projectId = ?'); values.push(String(args.projectId)); }
+  if (args.taskId) { clauses.push('taskId = ?'); values.push(String(args.taskId)); }
+  if (args.workspaceId) { clauses.push('workspaceId = ?'); values.push(String(args.workspaceId)); }
+  if (args.status) { clauses.push('status = ?'); values.push(String(args.status)); }
+  const where = clauses.length > 0 ? ' WHERE ' + clauses.join(' AND ') : '';
+  const countRow = db.prepare('SELECT COUNT(*) AS count FROM execution_sessions' + where).get(...values) as any;
+  const total = Number(countRow?.count || 0);
+  const rows = db.prepare('SELECT * FROM execution_sessions' + where + ' ORDER BY updatedAt DESC LIMIT ?').all(...values, limit) as any[];
+  return {
+    sessions: rows.map(normalizeSession).filter((entry): entry is ExecutionSessionRecord => Boolean(entry)),
+    total,
+    limit,
+    truncated: total > limit,
+  };
+}
+
 export function updateExecutionSessionRecord(
   id: string,
   patch: Partial<Pick<ExecutionSessionRecord, 'workspaceId' | 'branch' | 'baseRevision' | 'repoRevision' | 'status' | 'contextHandle' | 'changedFiles' | 'verification' | 'updatedAt' | 'expiresAt' | 'endedAt'>>,

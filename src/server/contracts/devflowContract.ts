@@ -95,6 +95,8 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
       type: 'object',
       properties: {
         ...projectIdentifierProperties,
+        taskId: { type: 'string', description: 'Optional task internal id or displayId for exact lifecycle health scope.' },
+        workspaceId: { type: 'string', description: 'Optional opaque managed workspace id for exact lifecycle health scope.' },
         windowMs: { type: 'number', description: 'Recent telemetry window in milliseconds. Default is 10 minutes.' },
         responseMode: { type: 'string', enum: ['compact', 'summary', 'full', 'debug'], description: 'Response density. MCP defaults to compact; summary aliases compact, debug aliases full.' },
       },

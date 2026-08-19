@@ -40,7 +40,10 @@ export type ZrokRuntimeStatus = {
   agentService?: string;
   share?: string;
   publicReachability?: string;
+  /** Existing backend measurement for the public zrok route's end-to-end /api/capabilities request. */
   latencyMs?: number;
+  /** Frontend-only direct measurement against the local DevFlow /api/capabilities endpoint. */
+  localApiLatencyMs?: number;
   lastCheckedAt?: string;
   message?: string;
   actionability?: ZrokActionability;
@@ -50,6 +53,16 @@ export type ZrokRuntimeStatus = {
 export type ZrokActionState = 'idle' | 'taking-over' | 'verifying' | 'success' | 'error';
 
 type FetchLike = typeof fetch;
+
+type LocalApiLatencyProbeOptions = {
+  timeoutMs?: number;
+  now?: () => number;
+  scheduleAbort?: (abort: () => void, timeoutMs: number) => unknown;
+  cancelAbort?: (handle: unknown) => void;
+};
+
+const LOCAL_API_PROBE_TIMEOUT_MS = 1_500;
+const MAX_LOCAL_API_PROBE_TIMEOUT_MS = 5_000;
 
 type ZrokStatusPanelProps = {
   initialStatus?: ZrokRuntimeStatus;
@@ -220,6 +233,51 @@ export async function requestZrokStatus(fetchImpl: FetchLike = fetch) {
   return normalizeZrokStatus(payload);
 }
 
+export async function requestLocalApiLatency(
+  fetchImpl: FetchLike = fetch,
+  options: LocalApiLatencyProbeOptions = {},
+): Promise<number | undefined> {
+  const requestedTimeout = Number(options.timeoutMs ?? LOCAL_API_PROBE_TIMEOUT_MS);
+  const timeoutMs = Number.isFinite(requestedTimeout)
+    ? Math.max(1, Math.min(MAX_LOCAL_API_PROBE_TIMEOUT_MS, Math.round(requestedTimeout)))
+    : LOCAL_API_PROBE_TIMEOUT_MS;
+  const now = options.now || (() => performance.now());
+  const scheduleAbort = options.scheduleAbort || ((abort: () => void, delayMs: number) => globalThis.setTimeout(abort, delayMs));
+  const cancelAbort = options.cancelAbort || ((handle: unknown) => globalThis.clearTimeout(handle as ReturnType<typeof setTimeout>));
+  const controller = new AbortController();
+  const startedAt = now();
+  const timeoutHandle = scheduleAbort(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetchImpl('/api/capabilities', {
+      cache: 'no-store',
+      signal: controller.signal,
+    });
+    if (!response.ok) return undefined;
+    const elapsedMs = now() - startedAt;
+    if (!Number.isFinite(elapsedMs) || elapsedMs < 0) return undefined;
+    return Math.round(elapsedMs);
+  } catch {
+    return undefined;
+  } finally {
+    cancelAbort(timeoutHandle);
+  }
+}
+
+export async function requestZrokDiagnostics(
+  fetchImpl: FetchLike = fetch,
+  localProbeOptions: LocalApiLatencyProbeOptions = {},
+): Promise<ZrokRuntimeStatus> {
+  const [status, localApiLatencyMs] = await Promise.all([
+    requestZrokStatus(fetchImpl),
+    requestLocalApiLatency(fetchImpl, localProbeOptions),
+  ]);
+  return {
+    ...status,
+    ...(localApiLatencyMs !== undefined ? { localApiLatencyMs } : {}),
+  };
+}
+
 export async function requestZrokTakeover(fetchImpl: FetchLike = fetch) {
   const response = await fetchImpl('/api/zrok/takeover', {
     method: 'POST',
@@ -278,7 +336,7 @@ export default function ZrokStatusPanel({
       setActionMessage('');
     }
     try {
-      const next = await requestZrokStatus(fetchImpl);
+      const next = await requestZrokDiagnostics(fetchImpl);
       setStatus(next);
       return next;
     } catch (error) {
@@ -325,9 +383,7 @@ export default function ZrokStatusPanel({
   const takeoverBlockedReason = status.status === 'standby' && !canTakeOver
     ? status.actionability?.takeoverBlockedReason
     : undefined;
-  const statusLabel = status.latencyMs !== undefined && status.status === 'online'
-    ? `${presentation.label} · ${status.latencyMs} ms`
-    : presentation.label;
+  const statusLabel = presentation.label;
 
   const handleCopy = async (event: React.MouseEvent) => {
     event.stopPropagation();
@@ -351,7 +407,7 @@ export default function ZrokStatusPanel({
       await requestZrokTakeover(fetchImpl);
       setActionState('verifying');
       setActionMessage('Takeover requested. Verifying the public route…');
-      const verified = await requestZrokStatus(fetchImpl);
+      const verified = await requestZrokDiagnostics(fetchImpl);
       setStatus(verified);
       if (verified.status !== 'online') {
         setActionState('error');
@@ -416,11 +472,6 @@ export default function ZrokStatusPanel({
               <div className="min-w-0 flex-1">
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-xs font-extrabold text-[#3c2a1a] dark:text-[#f3eadf]">zrok · {presentation.label}</span>
-                  {status.latencyMs !== undefined && (
-                    <span className="rounded-md bg-[#f3ecdf] px-1.5 py-0.5 text-[9px] font-mono font-bold text-[#796553] dark:bg-[#1e1914] dark:text-[#ccb9a4]">
-                      {status.latencyMs} ms
-                    </span>
-                  )}
                 </div>
                 <p className="mt-0.5 text-[10px] leading-4 text-[#816b5a] dark:text-[#d1c0ad]">
                   {status.message || presentation.description}
@@ -436,6 +487,8 @@ export default function ZrokStatusPanel({
             <DetailRow label="Agent service" value={status.agentService} icon={Server} />
             <DetailRow label="Named share" value={status.share} icon={Wifi} />
             <DetailRow label="Public health" value={status.publicReachability} icon={status.status === 'offline' ? WifiOff : CheckCircle2} />
+            <DetailRow label="Local API" value={status.localApiLatencyMs !== undefined ? `${status.localApiLatencyMs} ms` : 'Unavailable'} icon={Server} />
+            <DetailRow label="Public route (end-to-end)" value={status.latencyMs !== undefined ? `${status.latencyMs} ms` : 'Unavailable'} icon={MonitorUp} />
             <div className="my-1 border-t border-[#eee2d1] dark:border-[#584a3b]" />
             <div className="flex items-start justify-between gap-3 py-1.5 text-[10px] font-mono">
               <span className="flex shrink-0 items-center gap-1.5 text-[#8a725f] dark:text-[#cdbba7]">

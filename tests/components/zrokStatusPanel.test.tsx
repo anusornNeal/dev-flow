@@ -4,6 +4,8 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import ZrokStatusPanel, {
   normalizeZrokStatus,
+  requestLocalApiLatency,
+  requestZrokDiagnostics,
   requestZrokStatus,
   requestZrokTakeover,
   resolveMcpUrl,
@@ -84,7 +86,7 @@ test('renders Starting as a distinct non-healthy state', () => {
   assert.doesNotMatch(html, />Online</);
 });
 
-test('renders Online only from live backend status with latency and MCP URL', () => {
+test('renders local and public latency as separate diagnostics without an ambiguous compact ping', () => {
   const html = renderStatus({
     status: 'online',
     baseUrl: 'https://zrok-test.example.test',
@@ -92,11 +94,28 @@ test('renders Online only from live backend status with latency and MCP URL', ()
     share: 'ready',
     publicReachability: 'healthy',
     latencyMs: 48,
+    localApiLatencyMs: 7,
   });
-  assert.match(html, /Online · 48 ms/);
+  assert.doesNotMatch(html, /Online · 48 ms/);
+  assert.match(html, /Local API/);
+  assert.match(html, />7 ms</);
+  assert.match(html, /Public route \(end-to-end\)/);
+  assert.match(html, />48 ms</);
   assert.match(html, /https:\/\/zrok-test\.example\.test\/mcp/);
   assert.match(html, /aria-label="Copy MCP URL"/);
   assert.doesNotMatch(html, /\/sse/);
+});
+
+test('renders local and public latency availability independently', () => {
+  const localOnly = renderStatus({ status: 'online', localApiLatencyMs: 9 });
+  assert.match(localOnly, /Local API/);
+  assert.match(localOnly, />9 ms</);
+  assert.match(localOnly, /Public route \(end-to-end\)/);
+
+  const publicOnly = renderStatus({ status: 'online', latencyMs: 51 });
+  assert.match(publicOnly, /Local API/);
+  assert.match(publicOnly, /Public route \(end-to-end\)/);
+  assert.match(publicOnly, />51 ms</);
 });
 
 test('renders Degraded and Offline without healthy language', () => {
@@ -171,6 +190,76 @@ test('status request reads the live zrok endpoint and normalizes response', asyn
   assert.equal(result.mcpUrl, 'https://example.test/mcp');
   assert.equal(calls[0].url, '/api/zrok/status');
   assert.equal(calls[0].init?.cache, 'no-store');
+});
+
+test('local API latency probe is bounded, direct, and uses deterministic timing', async () => {
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  const nowValues = [100, 112.6];
+  let nowIndex = 0;
+  let scheduledTimeoutMs: number | undefined;
+  let cancelledHandle: unknown;
+  const fakeFetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    calls.push({ url: String(input), init });
+    return jsonResponse({ ok: true });
+  }) as typeof fetch;
+
+  const latencyMs = await requestLocalApiLatency(fakeFetch, {
+    timeoutMs: 750,
+    now: () => nowValues[nowIndex++]!,
+    scheduleAbort: (_abort, timeoutMs) => {
+      scheduledTimeoutMs = timeoutMs;
+      return 'local-probe-timeout';
+    },
+    cancelAbort: (handle) => {
+      cancelledHandle = handle;
+    },
+  });
+
+  assert.equal(latencyMs, 13);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, '/api/capabilities');
+  assert.equal(calls[0].init?.cache, 'no-store');
+  assert.ok(calls[0].init?.signal instanceof AbortSignal);
+  assert.equal(scheduledTimeoutMs, 750);
+  assert.equal(cancelledHandle, 'local-probe-timeout');
+});
+
+test('local probe timeout is unavailable evidence and does not change backend zrok health', async () => {
+  const calls: string[] = [];
+  let triggerAbort: (() => void) | undefined;
+  const fakeFetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    calls.push(url);
+    if (url === '/api/zrok/status') {
+      return jsonResponse({
+        status: 'online',
+        latencyMs: 51,
+        actionability: { canRecheck: true, canTakeOver: false },
+      });
+    }
+    if (url === '/api/capabilities') {
+      return await new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+        triggerAbort?.();
+      });
+    }
+    throw new Error(`Unexpected URL: ${url}`);
+  }) as typeof fetch;
+
+  const result = await requestZrokDiagnostics(fakeFetch, {
+    timeoutMs: 1_000,
+    scheduleAbort: (abort) => {
+      triggerAbort = abort;
+      return 'timeout-handle';
+    },
+    cancelAbort: () => {},
+  });
+
+  assert.deepEqual(calls.sort(), ['/api/capabilities', '/api/zrok/status']);
+  assert.equal(result.status, 'online');
+  assert.equal(result.latencyMs, 51);
+  assert.equal(result.localApiLatencyMs, undefined);
+  assert.deepEqual(result.actionability, { canRecheck: true, canTakeOver: false });
 });
 
 test('takeover request is explicit and reports backend failures without racing another action', async () => {

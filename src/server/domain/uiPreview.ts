@@ -81,10 +81,19 @@ export interface UiPreviewDesignContextSource {
   evidenceRole: 'project-foundation' | 'project-ui-reference' | 'project-repo-evidence';
 }
 
+export interface UiPreviewDesignFontMetadata {
+  family: string;
+  weight: number;
+  style: 'normal' | 'italic';
+  mimeType: string;
+  byteLength: number;
+}
+
 export interface UiPreviewDesignRenderAsset {
   assetId: string;
   kind: string;
   contentIdentity: string;
+  font?: UiPreviewDesignFontMetadata;
 }
 
 export interface UiPreviewDesignContext {

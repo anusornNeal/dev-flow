@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 
 const documentService = await import('../../src/server/services/uiPreviewDocumentService.js');
 
@@ -42,6 +43,55 @@ test('closing style and script sequences cannot escape DevFlow-owned elements', 
   assert.match(styleBody, /<\\\/style>/i);
   assert.match(scriptBody, /<\\\/script>/i);
 });
+
+test('font materialization cannot widen CSP, use paths or URLs, or materialize stale/non-font refs', () => {
+  const bytes = Buffer.from([...Buffer.from('wOF2'), 1, 2, 3, 4]);
+  const identity = `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+  const safeRef = {
+    assetId: 'font_safe',
+    kind: 'font',
+    contentIdentity: identity,
+    font: { family: 'Inter', weight: 400, style: 'normal', mimeType: 'font/woff2', byteLength: bytes.byteLength },
+  };
+  const snapshot = documentService.materializeUiPreviewFonts({
+    contextHash: 'e'.repeat(64),
+    renderAssets: [safeRef],
+    resolvedFonts: [{ assetId: safeRef.assetId, bytes, path: 'C:\\secret\\font.woff2', url: 'https://evil.example/font.woff2' } as any],
+  });
+  const rendered = composeUiPreviewDocument({ html: '<main>Safe</main>', css: '', js: '', fontSnapshot: snapshot });
+  assert.equal(rendered.csp, UI_PREVIEW_CSP);
+  assert.match(rendered.csp, /font-src data:/);
+  assert.match(rendered.csp, /connect-src 'none'/);
+  assert.match(rendered.csp, /frame-src 'none'/);
+  assert.match(rendered.csp, /img-src data: blob:/);
+  assert.doesNotMatch(rendered.csp, /font-src[^;]*(?:https?:|file:|blob:)/);
+  assert.doesNotMatch(rendered.html, /C:\\secret|evil\.example/);
+
+  const stale = documentService.materializeUiPreviewFonts({
+    contextHash: 'f'.repeat(64),
+    renderAssets: [{ ...safeRef, contentIdentity: `sha256:${'0'.repeat(64)}` }],
+    resolvedFonts: [{ assetId: safeRef.assetId, bytes }],
+  });
+  assert.equal(stale.fontRenderability, 'unavailable');
+  assert.equal(stale.unavailable[0]?.reasonCode, 'FONT_CONTENT_IDENTITY_MISMATCH');
+
+  const nonFont = documentService.materializeUiPreviewFonts({
+    contextHash: '1'.repeat(64),
+    renderAssets: [{ ...safeRef, kind: 'image' }],
+    resolvedFonts: [{ assetId: safeRef.assetId, bytes }],
+  });
+  assert.equal(nonFont.fontRenderability, 'unavailable');
+  assert.equal(nonFont.unavailable[0]?.reasonCode, 'FONT_REF_UNAUTHORIZED');
+
+  const pathLike = documentService.materializeUiPreviewFonts({
+    contextHash: '2'.repeat(64),
+    renderAssets: [{ ...safeRef, assetId: '../secret' }],
+    resolvedFonts: [{ assetId: '../secret', bytes }],
+  });
+  assert.equal(pathLike.fontRenderability, 'unavailable');
+  assert.equal(pathLike.unavailable[0]?.reasonCode, 'FONT_REF_INVALID');
+});
+
 
 test('composer does not accept caller-owned document wrappers as a separate trusted surface', () => {
   const result = composeUiPreviewDocument({

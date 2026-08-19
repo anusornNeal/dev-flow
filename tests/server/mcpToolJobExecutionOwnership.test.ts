@@ -153,7 +153,7 @@ test('successful command without authoritative verification binding stays a reco
   assert.equal(unbound.verificationBinding?.authoritative, false);
   assert.equal(unbound.verificationBinding?.recorderAccepted, false);
   assert.equal(unbound.verificationBinding?.recoveryRequired, true);
-  assert.equal(unbound.verificationBinding?.reasonCode, 'EXECUTION_VERIFICATION_BINDING_MISSING');
+  assert.equal(unbound.verificationBinding?.reasonCode, 'EXECUTION_VERIFICATION_CANDIDATE_REQUIRED');
   assert.notEqual(execution.getExecutionOwnershipState(session.id, { repoRoot: workspace.root }).verificationFresh, true);
   assert.equal(execution.getExecutionSessionState(session.id).session.lifecycle.stage, 'repairing');
 });

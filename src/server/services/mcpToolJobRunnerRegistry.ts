@@ -108,6 +108,7 @@ type TaskVerificationBindingDiagnostic = {
   reasonCode: string;
   recoveryRequired: boolean;
   message?: string;
+  errorCode?: string;
 };
 
 function bindTaskVerificationOutcome(
@@ -135,17 +136,24 @@ function bindTaskVerificationOutcome(
 
   const ownership = getExecutionOwnershipState(binding.session.id, { repoRoot: binding.workspace.root });
   const authoritative = ownership.verificationFresh === true;
+  const recorderAuthoritative = typeof recorded?.authoritative === 'boolean' ? recorded.authoritative : undefined;
+  const recorderReasonCode = typeof recorded?.reasonCode === 'string' ? recorded.reasonCode.trim() : '';
+  const recorderMessage = typeof recorded?.message === 'string' ? recorded.message : '';
+  const recorderErrorCode = typeof recorded?.errorCode === 'string' ? recorded.errorCode.trim() : '';
   const rejectionCode = String(rejection?.code || rejection?.payload?.code || '').trim();
   const diagnostic: TaskVerificationBindingDiagnostic = {
     attempted: true,
-    recorderAccepted: Boolean(recorded),
+    recorderAccepted: recorderAuthoritative !== undefined ? recorderAuthoritative : Boolean(recorded),
     authoritative,
     verificationFresh: ownership.verificationFresh,
     reasonCode: authoritative
-      ? 'EXECUTION_VERIFICATION_BOUND'
-      : rejectionCode || (recorded ? 'EXECUTION_VERIFICATION_NOT_FRESH' : 'EXECUTION_VERIFICATION_BINDING_MISSING'),
+      ? recorderReasonCode || 'EXECUTION_VERIFICATION_BOUND'
+      : rejectionCode
+        || (recorderAuthoritative === false ? recorderReasonCode : '')
+        || (recorded ? 'EXECUTION_VERIFICATION_NOT_FRESH' : 'EXECUTION_VERIFICATION_BINDING_MISSING'),
     recoveryRequired: !authoritative,
-    ...(rejection instanceof Error && rejection.message ? { message: rejection.message } : {}),
+    ...(recorderMessage ? { message: recorderMessage } : rejection instanceof Error && rejection.message ? { message: rejection.message } : {}),
+    ...(recorderErrorCode ? { errorCode: recorderErrorCode } : {}),
   };
   const surfacedResult = { ...result, verificationBinding: diagnostic };
 

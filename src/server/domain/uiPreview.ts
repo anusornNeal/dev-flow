@@ -114,6 +114,57 @@ export interface UiPreviewDesignContext {
   renderAssets: UiPreviewDesignRenderAsset[];
 }
 
+export type UiPreviewDesignGateSeverity = 'error' | 'warning';
+export type UiPreviewDesignGateCategory = 'project-style' | 'accessibility' | 'interaction' | 'destructive-safety' | 'aesthetic-heuristic';
+
+export interface UiPreviewDesignGateEvidenceRef {
+  kind: 'source' | 'design-context' | 'authority';
+  ref: string;
+  screenId?: string;
+}
+
+export interface UiPreviewDesignGateFinding {
+  ruleId: string;
+  category: UiPreviewDesignGateCategory;
+  severity: UiPreviewDesignGateSeverity;
+  reasonCode: string;
+  evidence: UiPreviewDesignGateEvidenceRef[];
+}
+
+export interface UiPreviewDesignGateAuthorityRef {
+  type: 'task-requirement' | 'frozen-ui-design';
+  authorityId: string;
+  taskId: string;
+  projectId: string;
+  current: boolean;
+  authorizedRuleIds: string[];
+  authorizedCategories: UiPreviewDesignGateCategory[];
+  evidenceId?: string;
+  frozenRevision?: number;
+}
+
+export interface UiPreviewDesignGateExceptionRef {
+  exceptionId: string;
+  ruleIds: string[];
+  categories: UiPreviewDesignGateCategory[];
+  authority?: UiPreviewDesignGateAuthorityRef;
+}
+
+export interface UiPreviewDesignGateExceptionResult {
+  exceptionId: string;
+  status: 'applied' | 'rejected';
+  reasonCode: string;
+  suppressedRuleIds: string[];
+}
+
+export interface UiPreviewDesignGateResult {
+  gatePolicyVersion: string;
+  blocked: boolean;
+  findings: UiPreviewDesignGateFinding[];
+  suppressedFindings: UiPreviewDesignGateFinding[];
+  exceptionResults: UiPreviewDesignGateExceptionResult[];
+}
+
 export class UiPreviewError extends Error {
   constructor(public readonly code: string, message: string) {
     super(message);

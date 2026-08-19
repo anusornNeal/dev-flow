@@ -1,4 +1,4 @@
-import type { JsonValue, UiPreviewScreen, UiPreviewViewport, UiSpecV1 } from '../domain/uiPreview.js';
+import type { JsonValue, UiPreviewDesignGateAuthorityRef, UiPreviewDesignGateCategory, UiPreviewDesignGateExceptionRef, UiPreviewScreen, UiPreviewViewport, UiSpecV1 } from '../domain/uiPreview.js';
 import { UI_PREVIEW_SCREEN_ID_PATTERN, UiPreviewError } from '../domain/uiPreview.js';
 
 export const UI_PREVIEW_LIMITS = Object.freeze({
@@ -189,4 +189,83 @@ export function normalizeUiPreviewInput(input: NormalizeUiPreviewInput): Normali
     spec,
   }];
   return { title, html, css, js, spec, screens, defaultScreenId: 'main', viewport };
+}
+
+export const UI_PREVIEW_DESIGN_GATE_LIMITS = Object.freeze({
+  exceptionRefs: 16,
+  targetsPerException: 16,
+  idBytes: 240,
+});
+
+const UI_PREVIEW_DESIGN_GATE_CATEGORIES = new Set<UiPreviewDesignGateCategory>([
+  'project-style',
+  'accessibility',
+  'interaction',
+  'destructive-safety',
+  'aesthetic-heuristic',
+]);
+
+function normalizeGateStringArray(value: unknown, path: string) {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.length > UI_PREVIEW_DESIGN_GATE_LIMITS.targetsPerException) {
+    validationError(`${path} must be an array with at most ${UI_PREVIEW_DESIGN_GATE_LIMITS.targetsPerException} entries.`);
+  }
+  return value.map((entry, index) => assertStringWithin(`${path}[${index}]`, entry, UI_PREVIEW_DESIGN_GATE_LIMITS.idBytes));
+}
+
+function normalizeGateCategories(value: unknown, path: string) {
+  const categories = normalizeGateStringArray(value, path);
+  for (const category of categories) {
+    if (!UI_PREVIEW_DESIGN_GATE_CATEGORIES.has(category as UiPreviewDesignGateCategory)) {
+      validationError(`${path} contains unsupported category '${category}'.`);
+    }
+  }
+  return categories as UiPreviewDesignGateCategory[];
+}
+
+function normalizeGateAuthority(value: unknown, path: string): UiPreviewDesignGateAuthorityRef | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) validationError(`${path} must be an object.`);
+  const input = value as Record<string, unknown>;
+  if (input.type !== 'task-requirement' && input.type !== 'frozen-ui-design') {
+    validationError(`${path}.type must be task-requirement or frozen-ui-design.`);
+  }
+  if (typeof input.current !== 'boolean') validationError(`${path}.current must be boolean.`);
+  const authority: UiPreviewDesignGateAuthorityRef = {
+    type: input.type,
+    authorityId: assertStringWithin(`${path}.authorityId`, input.authorityId, UI_PREVIEW_DESIGN_GATE_LIMITS.idBytes),
+    taskId: assertStringWithin(`${path}.taskId`, input.taskId, UI_PREVIEW_DESIGN_GATE_LIMITS.idBytes),
+    projectId: assertStringWithin(`${path}.projectId`, input.projectId, UI_PREVIEW_DESIGN_GATE_LIMITS.idBytes),
+    current: input.current,
+    authorizedRuleIds: normalizeGateStringArray(input.authorizedRuleIds, `${path}.authorizedRuleIds`),
+    authorizedCategories: normalizeGateCategories(input.authorizedCategories, `${path}.authorizedCategories`),
+  };
+  if (authority.type === 'frozen-ui-design') {
+    if (input.evidenceId !== undefined) {
+      authority.evidenceId = assertStringWithin(`${path}.evidenceId`, input.evidenceId, UI_PREVIEW_DESIGN_GATE_LIMITS.idBytes);
+    }
+    if (input.frozenRevision !== undefined) {
+      const revision = Number(input.frozenRevision);
+      if (!Number.isInteger(revision) || revision < 1) validationError(`${path}.frozenRevision must be a positive integer.`);
+      authority.frozenRevision = revision;
+    }
+  }
+  return authority;
+}
+
+export function normalizeUiPreviewDesignGateExceptionRefs(value: unknown): UiPreviewDesignGateExceptionRef[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.length > UI_PREVIEW_DESIGN_GATE_LIMITS.exceptionRefs) {
+    validationError(`exceptionRefs must be an array with at most ${UI_PREVIEW_DESIGN_GATE_LIMITS.exceptionRefs} entries.`);
+  }
+  return value.map((entry, index) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) validationError(`exceptionRefs[${index}] must be an object.`);
+    const input = entry as Record<string, unknown>;
+    return {
+      exceptionId: assertStringWithin(`exceptionRefs[${index}].exceptionId`, input.exceptionId, UI_PREVIEW_DESIGN_GATE_LIMITS.idBytes),
+      ruleIds: normalizeGateStringArray(input.ruleIds, `exceptionRefs[${index}].ruleIds`),
+      categories: normalizeGateCategories(input.categories, `exceptionRefs[${index}].categories`),
+      authority: normalizeGateAuthority(input.authority, `exceptionRefs[${index}].authority`),
+    };
+  });
 }

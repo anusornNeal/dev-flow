@@ -92,6 +92,43 @@ test('normalizes bounded project evidence without returning raw bodies or local 
   assert.doesNotMatch(serialized, /relevanceHint/);
 });
 
+test('preserves bounded safe font render metadata while stripping bytes paths and urls', () => {
+  const { createUiPreviewDesignContextService } = requireModule();
+  const service = createUiPreviewDesignContextService({
+    state: { countersCache: {} },
+    resolveTask: () => null,
+    resolveProject: (id: string) => ({ id, name: 'A' }),
+    getContextBundle: () => ({
+      ...foundationBundle('repo-font'),
+      renderAssets: [{
+        assetId: 'font_inter_400',
+        kind: 'font',
+        contentIdentity: `sha256:${'a'.repeat(64)}`,
+        font: { family: 'Inter', weight: 400, style: 'normal', mimeType: 'font/woff2', byteLength: 1234, bytes: 'SECRET_BYTES', path: 'C:\\secret\\Inter.woff2', url: 'https://evil.example/font.woff2' },
+        bytes: 'TOP_LEVEL_SECRET',
+        path: 'C:\\secret\\Inter.woff2',
+        url: 'https://evil.example/font.woff2',
+      }, {
+        assetId: 'font_invalid',
+        kind: 'font',
+        contentIdentity: `sha256:${'b'.repeat(64)}`,
+        font: { family: '', weight: -1, style: 'oblique', mimeType: 'font/woff2', byteLength: 0 },
+      }],
+    }),
+  });
+
+  const result = service.get({ projectId: 'project-a' });
+  assert.deepEqual(result.renderAssets[0], {
+    assetId: 'font_inter_400',
+    kind: 'font',
+    contentIdentity: `sha256:${'a'.repeat(64)}`,
+    font: { family: 'Inter', weight: 400, style: 'normal', mimeType: 'font/woff2', byteLength: 1234 },
+  });
+  assert.equal('font' in result.renderAssets[1], false, 'invalid font metadata is not promoted into normalized context');
+  const serialized = JSON.stringify(result.renderAssets);
+  assert.doesNotMatch(serialized, /SECRET_BYTES|TOP_LEVEL_SECRET|C:\\\\secret|evil\.example/);
+});
+
 test('reports sufficient only when the available evidence covers every normalized design category', () => {
   const { createUiPreviewDesignContextService } = requireModule();
   const service = createUiPreviewDesignContextService({

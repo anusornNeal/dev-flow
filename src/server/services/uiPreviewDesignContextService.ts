@@ -143,13 +143,34 @@ function buildSources(snippets: any[]): UiPreviewDesignContextSource[] {
   return sources;
 }
 
+function normalizeRenderAssetFont(asset: any) {
+  const font = asset?.font;
+  if (!font || typeof font !== 'object' || Array.isArray(font)) return undefined;
+  const family = String(font.family || '').trim();
+  const weight = Number(font.weight);
+  const style = String(font.style || '').trim();
+  const mimeType = String(font.mimeType || '').trim();
+  const byteLength = Number(font.byteLength);
+  if (!family || family.length > 120 || /[\\/\r\n<>]/.test(family) || /^[a-z][a-z0-9+.-]*:/i.test(family)) return undefined;
+  if (!Number.isInteger(weight) || weight < 1 || weight > 1000) return undefined;
+  if (style !== 'normal' && style !== 'italic') return undefined;
+  if (!mimeType || mimeType.length > 80 || /[\\/\r\n<>]/.test(mimeType.replace(/^font\//i, ''))) return undefined;
+  if (!Number.isInteger(byteLength) || byteLength < 1 || byteLength > 1_000_000_000) return undefined;
+  return { family, weight, style, mimeType, byteLength };
+}
+
 function normalizeRenderAssets(bundle: any) {
   if (!Array.isArray(bundle?.renderAssets)) return [];
-  return bundle.renderAssets.slice(0, 12).map((asset: any) => ({
-    assetId: String(asset?.assetId || asset?.id || '').trim(),
-    kind: String(asset?.kind || asset?.type || 'asset').trim(),
-    contentIdentity: String(asset?.contentIdentity || asset?.contentHash || asset?.sha256 || '').trim(),
-  })).filter((asset: any) => asset.assetId && asset.contentIdentity);
+  return bundle.renderAssets.slice(0, 12).map((asset: any) => {
+    const kind = String(asset?.kind || asset?.type || 'asset').trim();
+    const font = kind === 'font' ? normalizeRenderAssetFont(asset) : undefined;
+    return {
+      assetId: String(asset?.assetId || asset?.id || '').trim(),
+      kind,
+      contentIdentity: String(asset?.contentIdentity || asset?.contentHash || asset?.sha256 || '').trim(),
+      ...(font ? { font } : {}),
+    };
+  }).filter((asset: any) => asset.assetId && asset.contentIdentity);
 }
 
 function unknownsFor(visual: ReturnType<typeof extractVisual>, ux: ReturnType<typeof extractUx>) {

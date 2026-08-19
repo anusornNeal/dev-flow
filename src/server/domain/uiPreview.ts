@@ -98,6 +98,7 @@ export interface UiPreviewDesignContext {
   reasonCodes: string[];
   visual: {
     colors: string[];
+    semanticColors: string[];
     fontFamilies: string[];
     fontWeights: string[];
     spacing: string[];

@@ -133,6 +133,24 @@ async function withServer(run: (baseUrl: string) => Promise<void>) {
     list: (input: any) => ({ items: [{ evidenceId: 'uie_1', previewId: 'uip_route', frozenRevision: 2 }], nextCursor: null, limit: Math.min(50, input.limit || 20) }),
     attach: async (input: any) => ({ evidenceId: 'uie_1', taskId: input.taskId, previewId: input.previewId, frozenRevision: input.revision || 2 }),
   };
+  const designContextService = {
+    get: (input: any) => ({
+      taskId: input.taskId || null,
+      projectId: input.projectId || 'project-derived',
+      repositoryRevision: 'route-repo',
+      contextSchemaVersion: 1,
+      gatePolicyVersion: 'ui-preview-design-gate.v1',
+      contextHash: 'a'.repeat(64),
+      sufficiency: 'partial',
+      reasonCodes: ['VISUAL_BASIS_FOUND', 'CONTEXT_CATEGORIES_UNKNOWN'],
+      visual: { colors: ['#2457d6'], fontFamilies: ['Inter'], fontWeights: [], spacing: [], radii: [], dimensions: [], iconConventions: [], sharedComponents: [], referenceScreens: [] },
+      ux: { ruleIds: [] },
+      unknowns: ['spacing'],
+      sources: [{ path: 'src/styles/theme.css', trustClass: 'repo-evidence-untrusted', evidenceRole: 'project-foundation' }],
+      renderAssets: [],
+      relevanceHint: input.relevanceHint,
+    }),
+  };
   const artifactStore = {
     rootDir: tempRoot,
     writePng: async () => { throw new Error('not used'); },
@@ -141,7 +159,7 @@ async function withServer(run: (baseUrl: string) => Promise<void>) {
       return artifactPath;
     },
   };
-  registerUiPreviewRoutes(app, { state: { countersCache: {} }, writeAgentLog: () => {} } as any, { previewService, evidenceService, artifactStore } as any);
+  registerUiPreviewRoutes(app, { state: { countersCache: {} }, writeAgentLog: () => {} } as any, { previewService, evidenceService, designContextService, artifactStore } as any);
   const server = app.listen(0, '127.0.0.1');
   await new Promise<void>((resolve) => server.once('listening', () => resolve()));
   const address = server.address();
@@ -269,6 +287,21 @@ test('preview deletion is strict-loopback and maps standalone, linked, and missi
 
     const spoofedHost = await rawGetStatus(`${baseUrl}/api/ui-previews/uip_route`, { Host: 'attacker.example' }, 'DELETE');
     assert.equal(spoofedHost, 403);
+  });
+});
+
+test('design-context preflight route is read-only, bounded, and forwards task/project scope plus relevance hint', async () => {
+  await withServer(async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/ui-preview-design-context?taskId=DVF-0614&projectId=project-a&relevanceHint=brand%20dialog`);
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get('cache-control') || '', /no-store/);
+    const body = await response.json() as any;
+    assert.equal(body.taskId, 'DVF-0614');
+    assert.equal(body.projectId, 'project-a');
+    assert.equal(body.relevanceHint, 'brand dialog');
+    assert.match(body.contextHash, /^[0-9a-f]{64}$/);
+    assert.equal(body.sources[0].path, 'src/styles/theme.css');
+    assert.equal('content' in body.sources[0], false);
   });
 });
 

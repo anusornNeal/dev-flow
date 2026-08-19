@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
 const content = fs.readFileSync(new URL('../../skills/ui-ux-guidance.md', import.meta.url), 'utf8');
+const router = fs.readFileSync(new URL('../../skills/00-skill-router.md', import.meta.url), 'utf8');
 
 test('ui ux guidance declares stable identity, applicability, and skip boundary', () => {
   assert.match(content, /Skill id:\s*`ui-ux-guidance`/i);
@@ -30,6 +31,15 @@ test('ui ux guidance covers product inspection and coherent design decisions', (
   assert.match(content, /Accessibility/i);
   assert.match(content, /Interaction quality/i);
   assert.match(content, /trade-offs/i);
+});
+
+test('scoped UI preview guidance requires design-context preflight before authoring source', () => {
+  assert.match(content, /get_ui_design_context/);
+  assert.match(content, /before authoring/i);
+  assert.match(content, /relevance hint/i);
+  assert.match(content, /untrusted/i);
+  assert.match(router, /get_ui_design_context/);
+  assert.match(router, /before.*preview/i);
 });
 
 test('ui ux guidance uses DevFlow preview and stays decoupled from upstream runtime', () => {

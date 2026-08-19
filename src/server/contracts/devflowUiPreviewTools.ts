@@ -42,6 +42,26 @@ const previewSourceProperties = {
 
 export const uiPreviewToolDefinitions: DevFlowToolDefinition[] = [
   {
+    name: 'get_ui_design_context',
+    description: 'Read bounded project UI/UX design context before authoring scoped preview HTML/CSS/JS. Task scope derives its project server-side; relevanceHint only influences evidence ranking and is never authoritative.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        taskId: { type: 'string', description: 'Optional task scope. When supplied, DevFlow derives the authoritative project from the task.' },
+        projectId: { type: 'string', description: 'Explicit project scope. When taskId is also supplied it must match the task project.' },
+        relevanceHint: { type: 'string', maxLength: 300, description: 'Optional non-authoritative screen/flow relevance hint used only to rank nearby project evidence.' },
+      },
+      anyOf: [{ required: ['taskId'] }, { required: ['projectId'] }],
+      additionalProperties: false,
+    },
+    outputSchema: { type: 'object' },
+    lightweight: true,
+    buildHttpRequest: ({ taskId, projectId, relevanceHint }) => ({
+      method: 'GET',
+      path: withQuery('/api/ui-preview-design-context', { taskId, projectId, relevanceHint }),
+    }),
+  },
+  {
     name: 'create_ui_preview',
     description: 'Create one DevFlow-owned immutable PC/local UI preview workspace. Legacy single-screen input remains supported; canonical screens input creates one workspace revision.',
     inputSchema: {

@@ -20,8 +20,10 @@ const UNKNOWN_KEYS = [
   'validation-destructive', 'progressive-disclosure', 'responsive-window', 'accessibility', 'copy-conventions',
 ] as const;
 
+const MAX_NORMALIZED_VALUES = 32;
+
 function uniq(values: Iterable<string>) {
-  return [...new Set([...values].map((value) => String(value || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  return [...new Set([...values].map((value) => String(value || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)).slice(0, MAX_NORMALIZED_VALUES);
 }
 
 function repoRelativePath(value: unknown) {
@@ -49,6 +51,7 @@ function componentNames(path: string, content: string) {
 
 function extractVisual(snippets: Array<{ path: string; content: string }>) {
   const colors = new Set<string>();
+  const semanticColors = new Set<string>();
   const fontFamilies = new Set<string>();
   const fontWeights = new Set<string>();
   const spacing = new Set<string>();
@@ -60,6 +63,8 @@ function extractVisual(snippets: Array<{ path: string; content: string }>) {
 
   for (const snippet of snippets) {
     const content = snippet.content;
+    for (const match of content.matchAll(/--(?:color|colour)-([a-z0-9-]+)\s*:/gi)) semanticColors.add(match[1].toLowerCase());
+    for (const match of content.matchAll(/\b(primary|secondary|accent|background|foreground|surface|text|border|danger|success|warning|error)\s*:\s*['\"](?:#|rgb|hsl)/gi)) semanticColors.add(match[1].toLowerCase());
     for (const match of content.matchAll(/#[0-9a-fA-F]{3,8}\b/g)) colors.add(match[0].toLowerCase());
     for (const match of content.matchAll(/\b(?:rgb|rgba|hsl|hsla)\([^\n;)]+\)/gi)) colors.add(match[0].replace(/\s+/g, ' '));
     for (const match of content.matchAll(/font-family\s*:\s*([^;\n}]+)/gi)) {
@@ -79,6 +84,7 @@ function extractVisual(snippets: Array<{ path: string; content: string }>) {
 
   return {
     colors: uniq(colors),
+    semanticColors: uniq(semanticColors),
     fontFamilies: uniq(fontFamilies),
     fontWeights: uniq(fontWeights),
     spacing: uniq(spacing),
@@ -94,6 +100,10 @@ function extractUx(snippets: Array<{ path: string; content: string }>) {
   const rules = new Set<string>();
   for (const snippet of snippets) {
     const haystack = `${snippet.path}\n${snippet.content}`;
+    if (/:hover\b|hover:|onMouseEnter|onPointerEnter/i.test(haystack)) rules.add('hover-interaction');
+    if (/cursor\s*:\s*pointer|cursor-pointer|Cursor\.Hand/i.test(haystack)) rules.add('pointer-cursor-affordance');
+    if (/sentence[ -]?case|copy convention[^\n]*sentence/i.test(haystack)) rules.add('copy-sentence-case');
+    if (/title[ -]?case|copy convention[^\n]*title/i.test(haystack)) rules.add('copy-title-case');
     if (/focus-visible|onKeyDown|tabIndex|keyboard/i.test(haystack)) rules.add('keyboard-focus-visible');
     if (/aria-(?:label|labelledby|describedby)|role=['"](?:dialog|alert|button)/i.test(haystack)) rules.add('accessible-control-labeling');
     if (/(?:confirm|confirmation).*(?:delete|remove|destructive)|(?:delete|remove|destructive).*(?:confirm|confirmation)/is.test(haystack) || /Confirm(?:Delete|Dialog)/.test(haystack)) rules.add('destructive-action-confirmation');
@@ -144,7 +154,7 @@ function normalizeRenderAssets(bundle: any) {
 
 function unknownsFor(visual: ReturnType<typeof extractVisual>, ux: ReturnType<typeof extractUx>) {
   const unknowns = new Set<string>();
-  if (!visual.colors.length) unknowns.add('palette');
+  if (!visual.colors.length && !visual.semanticColors.length) unknowns.add('palette');
   if (!visual.fontFamilies.length && !visual.fontWeights.length) unknowns.add('typography');
   if (!visual.spacing.length) unknowns.add('spacing');
   if (!visual.radii.length) unknowns.add('radii');
@@ -158,18 +168,18 @@ function unknownsFor(visual: ReturnType<typeof extractVisual>, ux: ReturnType<ty
   if (!rules.has('modal-dialog-pattern')) unknowns.add('dialogs');
   if (!rules.has('selector-control-pattern') && !rules.has('tabular-data-presentation')) unknowns.add('selectors-tables');
   if (!rules.has('feedback-state-pattern')) unknowns.add('feedback-states');
-  if (!rules.has('keyboard-focus-visible')) unknowns.add('hover-focus-cursor-keyboard');
+  if (!rules.has('keyboard-focus-visible') && !rules.has('hover-interaction') && !rules.has('pointer-cursor-affordance')) unknowns.add('hover-focus-cursor-keyboard');
   if (!rules.has('validation-feedback') && !rules.has('destructive-action-confirmation')) unknowns.add('validation-destructive');
   if (!rules.has('progressive-disclosure')) unknowns.add('progressive-disclosure');
   if (!rules.has('responsive-window-behavior')) unknowns.add('responsive-window');
   if (!rules.has('accessible-control-labeling')) unknowns.add('accessibility');
-  unknowns.add('copy-conventions');
+  if (![...rules].some((rule) => rule.startsWith('copy-'))) unknowns.add('copy-conventions');
   return UNKNOWN_KEYS.filter((key) => unknowns.has(key));
 }
 
 function sufficiencyFor(sources: UiPreviewDesignContextSource[], visual: ReturnType<typeof extractVisual>, unknowns: string[]) {
   const hasFoundation = sources.some((source) => source.evidenceRole === 'project-foundation')
-    && Boolean(visual.colors.length || visual.fontFamilies.length || visual.spacing.length || visual.radii.length || visual.dimensions.length);
+    && Boolean(visual.colors.length || visual.semanticColors.length || visual.fontFamilies.length || visual.spacing.length || visual.radii.length || visual.dimensions.length);
   const hasUiReference = sources.some((source) => source.evidenceRole === 'project-ui-reference');
   if (!hasFoundation && !hasUiReference) return { sufficiency: 'insufficient' as UiPreviewDesignContextSufficiency, reasonCodes: ['NO_VISUAL_BASIS'] };
   if (unknowns.length > 0) return { sufficiency: 'partial' as UiPreviewDesignContextSufficiency, reasonCodes: ['VISUAL_BASIS_FOUND', 'CONTEXT_CATEGORIES_UNKNOWN'] };

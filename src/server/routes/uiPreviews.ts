@@ -10,11 +10,13 @@ import { createUiPreviewRepository } from '../repositories/uiPreviewRepository.j
 import { createUiPreviewService, type UiPreviewService } from '../services/uiPreviewService.js';
 import { createUiPreviewScreenshotService } from '../services/uiPreviewScreenshotService.js';
 import { createTaskUiEvidenceService, type TaskUiEvidenceService } from '../services/taskUiEvidenceService.js';
+import { createUiPreviewDesignContextService, type UiPreviewDesignContextService } from '../services/uiPreviewDesignContextService.js';
 import { getDevFlowApiBaseUrl } from '../services/agentRunService.js';
 
 export interface UiPreviewRouteOverrides {
   previewService?: Pick<UiPreviewService, 'create' | 'update' | 'delete' | 'get' | 'list'>;
   evidenceService?: Pick<TaskUiEvidenceService, 'attach' | 'list'>;
+  designContextService?: Pick<UiPreviewDesignContextService, 'get'>;
   artifactStore?: UiPreviewArtifactStore;
   runtimePort?: () => number;
 }
@@ -80,7 +82,7 @@ function apiErrorForUiPreview(error: unknown) {
   return error;
 }
 
-export function registerUiPreviewRoutes(app: express.Express, _deps: ApiRouteDeps, overrides: UiPreviewRouteOverrides = {}) {
+export function registerUiPreviewRoutes(app: express.Express, deps: ApiRouteDeps, overrides: UiPreviewRouteOverrides = {}) {
   const runtimePort = overrides.runtimePort ?? runtimePortFromApiBaseUrl;
   const previewRepository = createUiPreviewRepository();
   if (!overrides.previewService && !overrides.evidenceService) previewRepository.migrateLegacyRevisions();
@@ -92,7 +94,22 @@ export function registerUiPreviewRoutes(app: express.Express, _deps: ApiRouteDep
     runtimePort,
   });
   const artifactStore = overrides.artifactStore ?? screenshotService?.artifactStore ?? createUiPreviewArtifactStore();
+  const designContextService = overrides.designContextService ?? createUiPreviewDesignContextService({ state: deps.state });
   const strictLocal = createStrictLoopbackAccessMiddleware();
+
+  app.get('/api/ui-preview-design-context', (req, res) => {
+    try {
+      const result = designContextService.get({
+        taskId: typeof req.query.taskId === 'string' ? req.query.taskId : undefined,
+        projectId: typeof req.query.projectId === 'string' ? req.query.projectId : undefined,
+        relevanceHint: typeof req.query.relevanceHint === 'string' ? req.query.relevanceHint : undefined,
+      });
+      noStore(res);
+      return res.json(result);
+    } catch (error) {
+      return sendApiError(res, apiErrorForUiPreview(error));
+    }
+  });
 
   app.get('/api/ui-previews', strictLocal, (req, res) => {
     try {

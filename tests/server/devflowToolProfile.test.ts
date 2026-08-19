@@ -245,6 +245,22 @@ test('guidance MCP capability is read-only, stable-id bounded, and available on 
   assert.equal(tool.buildHttpRequest({ id: 'ui-ux-guidance' }).path, '/api/skills/guidance/ui-ux-guidance');
 });
 
+test('UI design-context preflight is a bounded read on the coding and full MCP surfaces', () => {
+  const tool = devFlowToolDefinitions.find((entry: any) => entry.name === 'get_ui_design_context');
+  assert.ok(tool);
+  assert.equal(tool.lightweight, true);
+  assert.equal(tool.inputSchema.additionalProperties, false);
+  assert.ok(Array.isArray(tool.inputSchema.anyOf));
+  assert.equal(getMcpToolList('coding').some((entry: any) => entry.name === 'get_ui_design_context'), true);
+  assert.equal(getMcpToolList('full').some((entry: any) => entry.name === 'get_ui_design_context'), true);
+  const request = tool.buildHttpRequest({ taskId: 'DVF-0614', projectId: 'project-a', relevanceHint: 'brand dialog' });
+  assert.equal(request.method, 'GET');
+  assert.match(request.path, /^\/api\/ui-preview-design-context\?/);
+  assert.match(request.path, /taskId=DVF-0614/);
+  assert.match(request.path, /projectId=project-a/);
+  assert.match(request.path, /relevanceHint=brand(?:%20|\+)dialog/);
+});
+
 test('diagnostics MCP profile keeps the recovery handoff surface available', () => {
   const names = new Set(getMcpToolList('diagnostics').map((tool: any) => tool.name));
   assert.equal(names.has('get_recovery_handoff'), true);

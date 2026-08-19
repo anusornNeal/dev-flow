@@ -24,6 +24,7 @@ import {
   authorizeTaskExecutionMutationPaths,
   captureExecutionVerificationProvenance,
   getTaskExecutionMutationBinding,
+  getExecutionOwnershipState,
   recordTaskExecutionMutationPaths,
   recordTaskExecutionVerificationResult,
 } from './executionSessionService.js';
@@ -99,6 +100,63 @@ function captureTaskVerification(args: any) {
   return captureExecutionVerificationProvenance(binding.session.id, { repoRoot: binding.workspace.root });
 }
 
+type TaskVerificationBindingDiagnostic = {
+  attempted: boolean;
+  recorderAccepted: boolean;
+  authoritative: boolean;
+  verificationFresh: boolean | null;
+  reasonCode: string;
+  recoveryRequired: boolean;
+  message?: string;
+};
+
+function bindTaskVerificationOutcome(
+  args: any,
+  result: any,
+  captured: ReturnType<typeof captureTaskVerification>,
+) {
+  if (!result?.ok || result?.status !== 'succeeded') {
+    recordTaskExecutionVerificationResult(args, result, captured);
+    return { result, harnessResult: result };
+  }
+
+  const binding = getTaskExecutionMutationBinding(args);
+  if (!binding) {
+    return { result, harnessResult: result };
+  }
+
+  let recorded: ReturnType<typeof recordTaskExecutionVerificationResult> = null;
+  let rejection: any = null;
+  try {
+    recorded = recordTaskExecutionVerificationResult(args, result, captured);
+  } catch (error: any) {
+    rejection = error;
+  }
+
+  const ownership = getExecutionOwnershipState(binding.session.id, { repoRoot: binding.workspace.root });
+  const authoritative = ownership.verificationFresh === true;
+  const rejectionCode = String(rejection?.code || rejection?.payload?.code || '').trim();
+  const diagnostic: TaskVerificationBindingDiagnostic = {
+    attempted: true,
+    recorderAccepted: Boolean(recorded),
+    authoritative,
+    verificationFresh: ownership.verificationFresh,
+    reasonCode: authoritative
+      ? 'EXECUTION_VERIFICATION_BOUND'
+      : rejectionCode || (recorded ? 'EXECUTION_VERIFICATION_NOT_FRESH' : 'EXECUTION_VERIFICATION_BINDING_MISSING'),
+    recoveryRequired: !authoritative,
+    ...(rejection instanceof Error && rejection.message ? { message: rejection.message } : {}),
+  };
+  const surfacedResult = { ...result, verificationBinding: diagnostic };
+
+  return {
+    result: surfacedResult,
+    harnessResult: authoritative
+      ? surfacedResult
+      : { ...surfacedResult, ok: false, status: 'needs-recovery' },
+  };
+}
+
 export async function runBuiltinToolJob(input: BuiltinToolJobInput, context: BuiltinToolJobContext) {
   const { toolName, state, args } = input;
   const { logger, setCancelFn, transitionAccess } = context;
@@ -114,8 +172,9 @@ export async function runBuiltinToolJob(input: BuiltinToolJobInput, context: Bui
     const guard = preflight();
     const captured = captureTaskVerification(args);
     const result = await runProjectCommandAsync(state, args, logger, setCancelFn);
-    recordTaskExecutionVerificationResult(args, result, captured);
-    return complete(guard, result);
+    const bound = bindTaskVerificationOutcome(args, result, captured);
+    if (guard) recordHarnessExecutionOutcome(guard, bound.harnessResult);
+    return bound.result;
   }
   if (toolName === 'apply_patch') {
     const guard = preflight();

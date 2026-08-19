@@ -44,21 +44,48 @@ git(repoRoot, ['commit', '-m', 'base']);
 const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
 executeAllMigrations();
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
+const { saveTask } = await import('../../src/server/repositories/taskRepository.js');
+const { claimTaskForSession } = await import('../../src/server/services/taskClaimService.js');
 const workspaceService = await import('../../src/server/services/sessionWorkspaceService.js');
 const execution = await import('../../src/server/services/executionSessionService.js');
 const commitPlan = await import('../../src/server/services/taskCommitPlanService.js');
 const { runBuiltinToolJob } = await import('../../src/server/services/mcpToolJobRunnerRegistry.js');
+const { prepareProjectCommandVerificationCandidate } = await import('../../src/server/services/projectCommandService.js');
 
 const projectId = 'project-mcp-execution-ownership';
 const taskId = 'task-mcp-execution-ownership';
 createProject({ id: projectId, name: 'Ownership Fixture', repoUrl: 'https://example.com/ownership', localPath: repoRoot });
-workspaceService.resetSessionWorkspaceRuntimeForTests();
-const workspace = workspaceService.createOrReuseSessionWorkspace({ id: projectId, localPath: repoRoot }, 'ownership');
-const session = execution.createExecutionSession({
+const now = new Date().toISOString();
+saveTask({
+  id: taskId,
+  displayId: 'DVF-OWNERSHIP-0001',
+  title: 'Execution ownership fixture',
+  description: 'Exercise task-bound MCP verification ownership.',
   projectId,
-  taskId,
-  workspaceId: workspace.workspaceId,
-  repoRoot: workspace.root,
+  status: 'todo',
+  priority: 'medium',
+  category: 'backend',
+  tags: ['ownership'],
+  targetFiles: ['src/owned.ts'],
+  checklist: [],
+  logs: [],
+  bugs: [],
+  images: [],
+  createdAt: now,
+  updatedAt: now,
+} as any);
+workspaceService.resetSessionWorkspaceRuntimeForTests();
+const claimed = claimTaskForSession(taskId, {
+  sessionId: 'ownership',
+  ownerKind: 'chat',
+  ownerLabel: 'Ownership test',
+});
+const workspace = workspaceService.resolveSessionWorkspace(claimed.claim.workspaceId)!;
+const session = execution.getActiveTaskExecutionSessionForWorkspace(workspace.workspaceId)!;
+execution.recordTaskExecutionContextReady({ workspaceId: workspace.workspaceId }, {
+  contextHandle: 'ctx-ownership',
+  repoRevision: session.repoRevision,
+  contextPlanIdentity: 'plan-ownership',
 });
 const state: any = {
   countersCache: {},
@@ -70,7 +97,21 @@ const context = {
   transitionAccess: () => {},
 };
 
-test('task-bound MCP edit and verification populate commit ownership without adopting unrelated dirt', async () => {
+function verificationArgs(command: string) {
+  const args = {
+    projectId,
+    workspaceId: workspace.workspaceId,
+    command,
+    cacheResult: false,
+    forceFresh: true,
+    singleFlight: false,
+  } as any;
+  args.__verificationCandidate = prepareProjectCommandVerificationCandidate(state, args);
+  assert.ok(args.__verificationCandidate);
+  return args;
+}
+
+test('failed MCP verification does not create authoritative freshness', async () => {
   const edited = await runBuiltinToolJob({
     toolName: 'edit_local_files_batch',
     state,
@@ -84,65 +125,60 @@ test('task-bound MCP edit and verification populate commit ownership without ado
     },
   }, context as any) as any;
   assert.equal(edited.ok, true);
-  assert.equal(fs.readFileSync(path.join(workspace.root, 'src', 'owned.ts'), 'utf8').trim(), 'export const owned = 2;');
-
   fs.writeFileSync(path.join(workspace.root, 'src', 'unrelated.ts'), 'export const unrelated = 2;\n');
 
+  const failed = await runBuiltinToolJob({
+    toolName: 'run_project_command',
+    state,
+    args: verificationArgs('fail-check'),
+  }, context as any) as any;
+
+  assert.equal(failed.ok, false);
+  assert.notEqual(execution.getExecutionOwnershipState(session.id, { repoRoot: workspace.root }).verificationFresh, true);
+  assert.equal(execution.getExecutionSessionState(session.id).session.lifecycle.stage, 'repairing');
+});
+
+test('successful command without authoritative verification binding stays a recovery outcome for Harness', async () => {
+  const staleArgs = verificationArgs('test');
+  fs.writeFileSync(path.join(workspace.root, 'src', 'unrelated.ts'), 'export const unrelated = 3;\n');
+
+  const unbound = await runBuiltinToolJob({
+    toolName: 'run_project_command',
+    state,
+    args: staleArgs,
+  }, context as any) as any;
+
+  assert.equal(unbound.ok, true);
+  assert.equal(unbound.status, 'succeeded');
+  assert.equal(unbound.verificationBinding?.authoritative, false);
+  assert.equal(unbound.verificationBinding?.recorderAccepted, false);
+  assert.equal(unbound.verificationBinding?.recoveryRequired, true);
+  assert.equal(unbound.verificationBinding?.reasonCode, 'EXECUTION_VERIFICATION_BINDING_MISSING');
+  assert.notEqual(execution.getExecutionOwnershipState(session.id, { repoRoot: workspace.root }).verificationFresh, true);
+  assert.equal(execution.getExecutionSessionState(session.id).session.lifecycle.stage, 'repairing');
+});
+
+test('task-bound MCP verification binds current ownership before Harness advances', async () => {
   const verified = await runBuiltinToolJob({
     toolName: 'run_project_command',
     state,
-    args: {
-      projectId,
-      workspaceId: workspace.workspaceId,
-      command: 'test',
-      cacheResult: false,
-      forceFresh: true,
-      singleFlight: false,
-    },
+    args: verificationArgs('test'),
   }, context as any) as any;
+
   assert.equal(verified.ok, true);
   assert.equal(verified.status, 'succeeded');
+  assert.equal(verified.verificationBinding?.authoritative, true);
+  assert.equal(verified.verificationBinding?.verificationFresh, true);
 
   const ownership = execution.getExecutionOwnershipState(session.id, { repoRoot: workspace.root });
   assert.deepEqual(ownership.ownedChanges, ['src/owned.ts']);
   assert.deepEqual(ownership.unrelatedChanges, ['src/unrelated.ts']);
   assert.equal(ownership.verificationFresh, true);
+  assert.equal(execution.getExecutionSessionState(session.id).session.lifecycle.stage, 'verifying');
 
   const plan = commitPlan.buildTaskCommitPlan(state, { taskId, workspaceId: workspace.workspaceId });
   assert.equal(plan.commitAllowed, true);
   assert.deepEqual(plan.ownedChangedFiles, ['src/owned.ts']);
   assert.deepEqual(plan.unrelatedChangedFiles, ['src/unrelated.ts']);
   assert.equal(plan.verificationFresh, true);
-});
-
-test('failed MCP verification does not refresh ownership evidence', async () => {
-  const editedAgain = await runBuiltinToolJob({
-    toolName: 'edit_local_files_batch',
-    state,
-    args: {
-      projectId,
-      workspaceId: workspace.workspaceId,
-      mode: 'apply',
-      files: [
-        { filePath: 'src/owned.ts', edits: [{ type: 'replace', find: 'owned = 2', replaceWith: 'owned = 3' }] },
-      ],
-    },
-  }, context as any) as any;
-  assert.equal(editedAgain.ok, true);
-  assert.equal(execution.getExecutionOwnershipState(session.id, { repoRoot: workspace.root }).verificationFresh, false);
-
-  const failed = await runBuiltinToolJob({
-    toolName: 'run_project_command',
-    state,
-    args: {
-      projectId,
-      workspaceId: workspace.workspaceId,
-      command: 'fail-check',
-      cacheResult: false,
-      forceFresh: true,
-      singleFlight: false,
-    },
-  }, context as any) as any;
-  assert.equal(failed.ok, false);
-  assert.equal(execution.getExecutionOwnershipState(session.id, { repoRoot: workspace.root }).verificationFresh, false);
 });

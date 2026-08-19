@@ -168,30 +168,50 @@ export function createZrokAgentConsoleClient(options: CreateZrokAgentConsoleClie
   const host = validateHost(options.host);
   const ports = validatePorts(options.ports);
   const fetchImpl = options.fetchImpl || fetch;
+  let verifiedPort: number | null = null;
+
+  const probePort = async (port: number, timeoutMs: number): Promise<ZrokLocalAgentStatus | null> => {
+    try {
+      const response = await fetchImpl(urlFor(host, port), {
+        method: 'GET',
+        headers: { accept: 'application/json' },
+        redirect: 'error',
+        signal: AbortSignal.timeout(Math.max(1, Math.min(REQUEST_TIMEOUT_MS, timeoutMs))),
+      });
+      if (response.status !== 200) return null;
+      const contentLengthHeader = response.headers.get('content-length');
+      const contentLength = contentLengthHeader ? Number(contentLengthHeader) : null;
+      if (contentLength !== null && Number.isFinite(contentLength) && contentLength > MAX_RESPONSE_BYTES) return null;
+      const body = await readResponseText(response);
+      if (body === null) return null;
+      return parseStatus(body);
+    } catch {
+      return null;
+    }
+  };
 
   return {
     async getStatus(): Promise<ZrokLocalAgentStatus> {
       const startedAt = Date.now();
+      const previouslyVerifiedPort = verifiedPort;
+
+      if (previouslyVerifiedPort !== null) {
+        const remainingMs = DISCOVERY_TIMEOUT_MS - (Date.now() - startedAt);
+        if (remainingMs > 0) {
+          const status = await probePort(previouslyVerifiedPort, remainingMs);
+          if (status) return status;
+        }
+        verifiedPort = null;
+      }
+
       for (const port of ports) {
+        if (port === previouslyVerifiedPort) continue;
         const remainingMs = DISCOVERY_TIMEOUT_MS - (Date.now() - startedAt);
         if (remainingMs <= 0) break;
-        try {
-          const response = await fetchImpl(urlFor(host, port), {
-            method: 'GET',
-            headers: { accept: 'application/json' },
-            redirect: 'error',
-            signal: AbortSignal.timeout(Math.min(REQUEST_TIMEOUT_MS, remainingMs)),
-          });
-          if (response.status !== 200) continue;
-          const contentLengthHeader = response.headers.get('content-length');
-          const contentLength = contentLengthHeader ? Number(contentLengthHeader) : null;
-          if (contentLength !== null && Number.isFinite(contentLength) && contentLength > MAX_RESPONSE_BYTES) continue;
-          const body = await readResponseText(response);
-          if (body === null) continue;
-          const status = parseStatus(body);
-          if (status) return status;
-        } catch {
-          // A local port can legitimately be closed while the agent starts.
+        const status = await probePort(port, remainingMs);
+        if (status) {
+          verifiedPort = port;
+          return status;
         }
       }
       return { reachable: false, shares: [] };

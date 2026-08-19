@@ -429,6 +429,7 @@ async function statusFromLocalAgent(
 async function loadDiscovery(
   adapter: ZrokRuntimeAdapter,
   config: ZrokRuntimeConfig,
+  trustedPublicBaseUrl: string | null = null,
 ): Promise<DiscoverySnapshot | ZrokRuntimeStatus> {
   const checkedAt = adapter.now().toISOString();
   const installed = await adapter.isInstalled();
@@ -454,10 +455,24 @@ async function loadDiscovery(
   } catch {}
   if (!localAgentStatus.reachable) {
     const blockedReason = 'The local zrok Agent authority is unreachable, so ownership cannot be determined safely.';
+    const baseUrl = normalizeBaseUrl(trustedPublicBaseUrl || config.baseUrl);
+    let probe: ZrokPublicProbe = { state: 'unknown', latencyMs: null, routedToThisMachine: null };
+    if (baseUrl) {
+      try {
+        probe = await adapter.probePublic({
+          baseUrl,
+          expectedRuntimeInstanceId: config.expectedRuntimeInstanceId,
+        });
+      } catch {
+        probe = { state: 'unhealthy', latencyMs: null, routedToThisMachine: null };
+      }
+    }
     return publicStatus('degraded', checkedAt, {
+      baseUrl,
       serviceState,
       shareState: 'unknown',
       owner: 'unknown',
+      probe,
       message: blockedReason,
       takeoverBlockedReason: blockedReason,
     });
@@ -718,11 +733,18 @@ export function createZrokRuntimeService(
   config: ZrokRuntimeConfig,
 ): ZrokRuntimeService {
   let takeoverInFlight: Promise<ZrokTakeoverResult> | null = null;
+  let trustedPublicBaseUrl = normalizeBaseUrl(config.baseUrl);
+
+  const rememberTrustedBaseUrl = (status: ZrokRuntimeStatus) => {
+    if (status.baseUrl && status.share.owner !== 'unknown') trustedPublicBaseUrl = status.baseUrl;
+    return status;
+  };
 
   const getStatus = async (): Promise<ZrokRuntimeStatus> => {
     try {
-      const discovery = await loadDiscovery(adapter, config);
-      return 'status' in discovery ? discovery : statusFromDiscovery(adapter, discovery);
+      const discovery = await loadDiscovery(adapter, config, trustedPublicBaseUrl);
+      const status = 'status' in discovery ? discovery : statusFromDiscovery(adapter, discovery);
+      return rememberTrustedBaseUrl(status);
     } catch {
       return safeSetupError(adapter, 'DevFlow could not inspect the zrok runtime safely. Run Recheck or zrok setup again.');
     }
@@ -731,7 +753,7 @@ export function createZrokRuntimeService(
   const performTakeover = async (): Promise<ZrokTakeoverResult> => {
     let discovery: DiscoverySnapshot | ZrokRuntimeStatus;
     try {
-      discovery = await loadDiscovery(adapter, config);
+      discovery = await loadDiscovery(adapter, config, trustedPublicBaseUrl);
     } catch {
       const status = safeSetupError(adapter, 'DevFlow could not inspect the zrok runtime safely.');
       return safeTakeoverFailure('ZROK_TAKEOVER_FAILED', 'Takeover could not start because zrok runtime inspection failed.', status);

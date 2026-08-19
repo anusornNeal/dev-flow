@@ -404,6 +404,57 @@ test('status reports Degraded when the local share exists but public routing is 
   assert.equal(status.publicReachability.state, 'unhealthy');
 });
 
+test('keeps public reachability healthy from previously trusted endpoint evidence when local Agent authority is unavailable', async () => {
+  const fixture = makeFixture();
+  const first = await fixture.service.getStatus();
+  assert.equal(first.status, 'online');
+
+  fixture.state.localAgentStatus = { reachable: false, shares: [] };
+  const status = await fixture.service.getStatus();
+
+  assert.equal(status.status, 'degraded');
+  assert.equal(status.baseUrl, STABLE_URL);
+  assert.equal(status.publicReachability.state, 'healthy');
+  assert.equal(status.publicReachability.routedToThisMachine, true);
+  assert.equal(status.share.owner, 'unknown');
+  assert.equal(status.share.state, 'unknown');
+  assert.equal(status.actionability.canTakeOver, false);
+  assert.match(status.actionability.takeoverBlockedReason || '', /authority is unreachable/i);
+});
+
+test('keeps public unhealthy evidence separate from local ownership authority', async () => {
+  const fixture = makeFixture({
+    localAgentStatus: { reachable: false, shares: [] },
+    probe: { state: 'unhealthy', latencyMs: 140, routedToThisMachine: null },
+  });
+  const service = createZrokRuntimeService(fixture.adapter, {
+    ...baseConfig(),
+    baseUrl: STABLE_URL,
+  });
+
+  const status = await service.getStatus();
+
+  assert.equal(status.status, 'degraded');
+  assert.equal(status.publicReachability.state, 'unhealthy');
+  assert.equal(status.share.owner, 'unknown');
+  assert.equal(status.actionability.canTakeOver, false);
+});
+
+test('leaves public reachability unknown when local authority is unavailable without a trusted public URL', async () => {
+  const { service } = makeFixture({
+    localAgentStatus: { reachable: false, shares: [] },
+  });
+
+  const status = await service.getStatus();
+
+  assert.equal(status.status, 'degraded');
+  assert.equal(status.baseUrl, null);
+  assert.equal(status.publicReachability.state, 'unknown');
+  assert.equal(status.publicReachability.routedToThisMachine, null);
+  assert.equal(status.share.owner, 'unknown');
+  assert.equal(status.actionability.canTakeOver, false);
+});
+
 test('status reports Offline when no machine currently owns the managed name', async () => {
   const { service } = makeFixture({
     names: [makeName('')],

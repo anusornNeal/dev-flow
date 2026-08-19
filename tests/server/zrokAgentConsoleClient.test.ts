@@ -49,6 +49,63 @@ test('uses only the configured loopback host and probes ports sequentially', asy
   assert.throws(() => createZrokAgentConsoleClient({ host: '127.0.0.2' }), /loopback/i);
 });
 
+test('reuses the verified Agent port and rediscovers when it becomes stale', async () => {
+  const calls: number[] = [];
+  let activePort = 8889;
+  const client = createZrokAgentConsoleClient({
+    ports: [8888, 8889, 8890],
+    fetchImpl: async (input) => {
+      const port = Number(new URL(String(input)).port);
+      calls.push(port);
+      if (port !== activePort) throw new Error('connection refused');
+      return new Response(JSON.stringify({ shares: [] }), { status: 200 });
+    },
+  });
+
+  assert.equal((await client.getStatus()).reachable, true);
+  assert.deepEqual(calls, [8888, 8889]);
+
+  calls.length = 0;
+  assert.equal((await client.getStatus()).reachable, true);
+  assert.deepEqual(calls, [8889]);
+
+  activePort = 8890;
+  calls.length = 0;
+  assert.equal((await client.getStatus()).reachable, true);
+  assert.deepEqual(calls, [8889, 8888, 8890]);
+
+  calls.length = 0;
+  assert.equal((await client.getStatus()).reachable, true);
+  assert.deepEqual(calls, [8890]);
+});
+
+test('invalidates a transiently failed verified port and can recover on the next bounded discovery', async () => {
+  const calls: number[] = [];
+  let failVerifiedOnce = false;
+  const client = createZrokAgentConsoleClient({
+    ports: [8888, 8889],
+    fetchImpl: async (input) => {
+      const port = Number(new URL(String(input)).port);
+      calls.push(port);
+      if (port !== 8889 || failVerifiedOnce) {
+        failVerifiedOnce = false;
+        throw new Error('transient timeout');
+      }
+      return new Response(JSON.stringify({ shares: [] }), { status: 200 });
+    },
+  });
+
+  assert.equal((await client.getStatus()).reachable, true);
+  calls.length = 0;
+  failVerifiedOnce = true;
+  assert.equal((await client.getStatus()).reachable, false);
+  assert.deepEqual(calls, [8889, 8888]);
+
+  calls.length = 0;
+  assert.equal((await client.getStatus()).reachable, true);
+  assert.deepEqual(calls, [8888, 8889]);
+});
+
 test('refuses redirects from the loopback Agent console', async () => {
   let redirect: RequestRedirect | undefined;
   const client = createZrokAgentConsoleClient({

@@ -325,7 +325,8 @@ test('getRepoContextBundle separates cold/warm phase timings and keeps represent
   };
 
   const cold = getRepoContextBundle(state, args);
-  assert.equal(cold.performance.cacheState, 'cold');
+  assert.equal(cold.performance.repoIndexCacheState, 'cold');
+  assert.equal(cold.index.cache.revisionSource, 'post-build');
   assert.equal(typeof cold.performance.totalMs, 'number');
   assert.equal(typeof cold.performance.phases.startContextMs, 'number');
   assert.equal(typeof cold.performance.phases.repoIndexMs, 'number');
@@ -338,16 +339,24 @@ test('getRepoContextBundle separates cold/warm phase timings and keeps represent
   const warmDurations: number[] = [];
   for (let index = 0; index < 5; index += 1) {
     const warm = getRepoContextBundle(state, args);
-    assert.equal(warm.performance.cacheState, 'warm');
+    assert.equal(warm.performance.repoIndexCacheState, 'warm');
+    assert.equal(warm.index.cache.revisionSource, 'trusted-request');
     warmDurations.push(warm.performance.totalMs);
   }
   const sortedWarm = [...warmDurations].sort((left, right) => left - right);
+  const spoofed = getRepoContextBundle(state, { ...args, repoRevision: 'caller-supplied-not-trusted' });
+  assert.equal(spoofed.index.cache.revisionSource, 'trusted-request');
+  assert.notEqual(spoofed.repoRevision, 'caller-supplied-not-trusted');
+
   const warmP95 = sortedWarm[Math.ceil(sortedWarm.length * 0.95) - 1];
   assert.equal(warmP95 <= 750, true, `representative warm bundle p95 should stay <=750ms, got ${warmP95}ms`);
 
   const summary = getRepoContextBundlePerformanceSummary({ windowMs: 60_000 });
   assert.equal(summary.cold.count >= 1, true);
   assert.equal(summary.warm.count >= 5, true);
+  assert.equal(summary.warm.repoIndexCacheState, 'warm');
+  assert.equal(summary.cold.repoIndexCacheState, 'cold');
+
   assert.equal(typeof summary.warm.p95TotalMs, 'number');
   assert.equal(typeof summary.warm.dominantPhase, 'string');
   assert.equal(typeof summary.warm.phases.snippetRead.p95Ms, 'number');

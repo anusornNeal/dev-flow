@@ -130,8 +130,10 @@ test('compact diagnostics track hit/miss and the latest invalidation reason per 
   assert.equal(result.domains[0].name, domain);
   assert.equal(result.domains[0].hits, 1);
   assert.equal(result.domains[0].misses, 1);
+  assert.equal(result.domains[0].hitRate, 0.5);
   assert.equal(result.domains[0].invalidations, 1);
   assert.equal(result.domains[0].lastInvalidationReason, 'writeLocalFile');
+  assert.equal(typeof result.domains[0].lastInvalidatedAt, 'string');
   assert.ok(result.domains[0].lineageToken);
 });
 

@@ -39,6 +39,8 @@ interface RepoIndexEntry {
   preview: string;
 }
 
+type RepoIndexLookupOptions = { trustedRepoRevision?: RepoRevision };
+
 interface RepoIndexCacheEntry {
   root: string;
   relativePath: string;
@@ -327,30 +329,31 @@ function buildIndex(root: string, relativePath: string, includeIgnored: boolean,
   };
 }
 
-function getOrBuildIndex(state: AppState, args: Record<string, any>, signal?: AbortSignal) {
+function getOrBuildIndex(state: AppState, args: Record<string, any>, signal?: AbortSignal, options: RepoIndexLookupOptions = {}) {
   const root = resolveProjectRoot(state, args);
   const relativePath = typeof args.path === 'string' && args.path.trim() ? args.path.trim() : '.';
   const includeIgnored = parseBoolean(args.includeIgnored);
   const cacheKey = `${path.resolve(root)}::${relativePath}::includeIgnored=${includeIgnored}`;
   const cached = cache.get(cacheKey);
   if (cached) {
-    const currentRevision = tryGetRepoRevision(root);
+    const currentRevision = options.trustedRepoRevision || tryGetRepoRevision(root);
+    const revisionSource = options.trustedRepoRevision ? 'trusted-request' as const : 'resolved' as const;
     if (currentRevision && cached.repoRevision) {
       if (currentRevision.token === cached.repoRevision.token) {
-        return { index: cached, cached: true, refresh: 'hit' as const, changedEntries: 0 };
+        return { index: cached, cached: true, refresh: 'hit' as const, changedEntries: 0, revisionSource };
       }
       const incremental = refreshIndexIncrementally(cached, currentRevision, includeIgnored);
       if (incremental) {
         cache.set(cacheKey, incremental.index);
-        return { index: incremental.index, cached: true, refresh: 'incremental' as const, changedEntries: incremental.changedEntries };
+        return { index: incremental.index, cached: true, refresh: 'incremental' as const, changedEntries: incremental.changedEntries, revisionSource };
       }
     } else if (Date.now() - cached.generatedAt < CACHE_TTL_MS) {
-      return { index: cached, cached: true, refresh: 'hit' as const, changedEntries: 0 };
+      return { index: cached, cached: true, refresh: 'hit' as const, changedEntries: 0, revisionSource: 'fallback-ttl' as const };
     }
   }
   const index = buildIndex(root, relativePath, includeIgnored, signal);
   cache.set(cacheKey, index);
-  return { index, cached: false, refresh: 'rebuild' as const, changedEntries: index.entries.length };
+  return { index, cached: false, refresh: 'rebuild' as const, changedEntries: index.entries.length, revisionSource: 'post-build' as const };
 }
 
 function scoreEntry(entry: RepoIndexEntry, queryTerms: string[]) {
@@ -389,8 +392,8 @@ export function getRepoSemanticIndex(state: AppState, args: Record<string, any>,
   };
 }
 
-export function getRepoInspectionIndex(state: AppState, args: Record<string, any>, signal?: AbortSignal) {
-  const { index, cached, refresh, changedEntries } = getOrBuildIndex(state, args, signal);
+export function getRepoInspectionIndex(state: AppState, args: Record<string, any>, signal?: AbortSignal, options: RepoIndexLookupOptions = {}) {
+  const { index, cached, refresh, changedEntries, revisionSource } = getOrBuildIndex(state, args, signal, options);
   recordRepoCacheAccess('repo-inspection-index', cached, index.root);
   const lineageToken = getRepoCacheLineage(index.root, ['repo-content', 'repo-revision', 'project-rules']).token;
   const queryTerms = String(args.q || args.query || '')
@@ -441,6 +444,7 @@ export function getRepoInspectionIndex(state: AppState, args: Record<string, any
       refresh,
       changedEntries,
       lineageToken,
+      revisionSource,
     },
     generatedAt: new Date(index.generatedAt).toISOString(),
     repoRevision: index.repoRevision?.token,

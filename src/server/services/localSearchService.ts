@@ -3,7 +3,7 @@ import path from 'path';
 import { spawn, spawnSync } from 'child_process';
 import { getDevFlowAppRoot } from '../../lib/devFlowPaths';
 import { createApiError } from './api';
-import { registerRepoCacheInvalidator } from './repoCacheInvalidationService';
+import { recordRepoCacheAccess, registerRepoCacheInvalidator } from './repoCacheInvalidationService';
 
 const DEFAULT_IGNORED_ENTRY_NAMES = new Set([
   '.git', '.devflow', 'node_modules', 'dist', 'build', 'coverage', '.next', '.turbo', '.vite',
@@ -365,8 +365,12 @@ function fallbackResult(root: string, searchPath: string, query: string, limit: 
 
 export function searchResolvedLocalFiles(root: string, searchPath: string, args: Record<string, any>) {
   const { query, limit, runtime, cacheKey } = prepareSearch(root, searchPath, args);
-  if (args.forceFallbackSearch === true) return fallbackResult(root, searchPath, query, limit, args, cacheKey, 'recovery-forced');
+  if (args.forceFallbackSearch === true) {
+    recordRepoCacheAccess('local-file-search', false, root);
+    return fallbackResult(root, searchPath, query, limit, args, cacheKey, 'recovery-forced');
+  }
   const cached = getCachedSearchResult(cacheKey);
+  recordRepoCacheAccess('local-file-search', Boolean(cached), root);
   if (cached) return cached;
   if (!runtime.ripgrepPath) return fallbackResult(root, searchPath, query, limit, args, cacheKey, (runtime.fallbackReason || 'ripgrep-unavailable') as SearchFallbackReason);
 
@@ -394,8 +398,12 @@ export async function searchResolvedLocalFilesAsync(
   setCancelFn: (fn: () => void) => void,
 ): Promise<SearchResult> {
   const { query, limit, runtime, cacheKey } = prepareSearch(root, searchPath, args);
-  if (args.forceFallbackSearch === true) return fallbackResult(root, searchPath, query, limit, args, cacheKey, 'recovery-forced');
+  if (args.forceFallbackSearch === true) {
+    recordRepoCacheAccess('local-file-search', false, root);
+    return fallbackResult(root, searchPath, query, limit, args, cacheKey, 'recovery-forced');
+  }
   const cached = getCachedSearchResult(cacheKey);
+  recordRepoCacheAccess('local-file-search', Boolean(cached), root);
   if (cached) return cached;
   if (!runtime.ripgrepPath) return fallbackResult(root, searchPath, query, limit, args, cacheKey, (runtime.fallbackReason || 'ripgrep-unavailable') as SearchFallbackReason);
 

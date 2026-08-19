@@ -192,6 +192,22 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
   const durableJobs = diagnostics?.mcp?.metrics?.durable || { queued: 0, running: 0, healthyRunning: 0, detached: 0, failed: 0, cancelled: 0, recovered: 0, staleRunning: 0, fencedLateWrites: 0, oldestLeaseAgeMs: 0 };
   const staleAgentRuns = Number(diagnostics?.agents?.staleCount || 0);
   const duplicateBursts = Array.isArray(diagnostics?.tools?.duplicateBursts) ? diagnostics.tools.duplicateBursts.length : 0;
+  const repoCaches = Array.isArray(diagnostics?.repoCaches?.domains) ? diagnostics.repoCaches.domains : [];
+  const compactRepoCaches = {
+    domains: repoCaches
+      .filter((domain: any) => ['local-file-search', 'repo-inspection-index', 'repo-context-bundle'].includes(domain?.name))
+      .slice(0, 3)
+      .map((domain: any) => ({
+        name: domain.name,
+        hits: Number(domain.hits || 0),
+        misses: Number(domain.misses || 0),
+        hitRate: Number(domain.hitRate || 0),
+        invalidations: Number(domain.invalidations || 0),
+        lastInvalidationReason: domain.lastInvalidationReason,
+        lastInvalidatedAt: domain.lastInvalidatedAt,
+        lineageToken: domain.lineageToken,
+      })),
+  };
   if (runtimeSupervisor?.api?.status === 'healthy' && (runtimeSupervisor?.tunnel?.status === 'degraded' || runtimeSupervisor?.tunnel?.status === 'down')) {
     recommendations.push(`Public zrok route is ${runtimeSupervisor.tunnel.status} while the local API is healthy; inspect zrok service/share state and runtime supervisor public-probe evidence.`);
   }
@@ -277,6 +293,7 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
       durableJobs,
       staleAgentRuns,
       duplicateBursts,
+      repoCaches: { domains: repoCaches },
       performance: { ...sloPerformance, history: historicalPerformance },
       telemetryPersistence: diagnostics?.telemetryPersistence,
       isolation,
@@ -338,6 +355,7 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
     regressions: compactRegressions,
     harness,
     runtime: {
+      repoCaches: compactRepoCaches,
       search: {
         backend: search.backend,
         ripgrepSource: search.ripgrepSource,

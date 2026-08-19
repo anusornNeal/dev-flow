@@ -27,7 +27,7 @@ type ToolSummary = {
   p95DurationMs?: number;
   dominantPhase?: string;
   dominantPhaseP95Ms?: number;
-  bundleCacheState?: string;
+  repoIndexCacheState?: string;
 };
 
 function budgetFor(toolName: string) {
@@ -58,7 +58,7 @@ export function evaluatePerformanceSlo(topTools: ToolSummary[]) {
       status,
       ...(typeof tool.dominantPhase === 'string' && tool.dominantPhase ? { dominantPhase: tool.dominantPhase } : {}),
       ...(Number.isFinite(Number(tool.dominantPhaseP95Ms)) ? { dominantPhaseP95Ms: Number(tool.dominantPhaseP95Ms) } : {}),
-      ...(typeof tool.bundleCacheState === 'string' && tool.bundleCacheState ? { bundleCacheState: tool.bundleCacheState } : {}),
+      ...(typeof tool.repoIndexCacheState === 'string' && tool.repoIndexCacheState ? { repoIndexCacheState: tool.repoIndexCacheState } : {}),
     };
   });
 

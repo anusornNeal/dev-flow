@@ -127,6 +127,9 @@ export function getRepoCacheDiagnostics(input: { root?: string; scope?: string; 
         dependencies: registration.dependencies,
         hits: metrics.hits,
         misses: metrics.misses,
+        hitRate: metrics.hits + metrics.misses > 0
+          ? Math.round((metrics.hits / (metrics.hits + metrics.misses)) * 10_000) / 10_000
+          : 0,
         invalidations: metrics.invalidations,
         lastInvalidationReason: metrics.lastInvalidationReason,
         lastInvalidatedAt: metrics.lastInvalidatedAt,

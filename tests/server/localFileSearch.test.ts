@@ -12,6 +12,7 @@ executeAllMigrations();
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
 createProject({ id: 'project-search-1', name: 'Search Fixture', repoUrl: 'https://example.com/search', localPath: tempDir });
 const { clearLocalFileSearchCache, clearLocalSearchRuntimeState, getLocalSearchRuntimeStatus, searchLocalFiles, searchLocalFilesAsync, writeLocalFile } = await import('../../src/server/services/localFileService.js');
+const { getRepoCacheDiagnostics } = await import('../../src/server/services/repoCacheInvalidationService.js');
 
 const state: any = {
   projectsCache: [
@@ -26,6 +27,10 @@ test.beforeEach(() => {
   clearLocalFileSearchCache();
   clearLocalSearchRuntimeState();
 });
+
+function localSearchMetrics() {
+  return getRepoCacheDiagnostics({ root: tempDir, domains: ['local-file-search'] }).domains[0];
+}
 
 test('getLocalSearchRuntimeStatus resolves a DevFlow-bundled ripgrep before PATH', () => {
   const appRoot = path.join(tempDir, 'app-root');
@@ -119,6 +124,7 @@ test('searchLocalFilesAsync falls back when no ripgrep source is available', asy
     else process.env.ProgramFiles = previousProgramFiles;
   }
 });
+
 test('searchLocalFiles rejects invalid regex before changing search backend semantics', () => {
   assert.throws(
     () => searchLocalFiles(state, { projectId: 'project-search-1', query: '(', limit: 2 }),
@@ -128,6 +134,7 @@ test('searchLocalFiles rejects invalid regex before changing search backend sema
 
 test('searchLocalFiles falls back on ripgrep runtime failure and opens a short circuit', () => {
   const previousRgPath = process.env.DEVFLOW_RG_PATH;
+  const metricsBefore = localSearchMetrics();
   process.env.DEVFLOW_RG_PATH = process.execPath;
   try {
     const first = searchLocalFiles(state, { projectId: 'project-search-1', query: 'needle', limit: 2 });
@@ -143,6 +150,9 @@ test('searchLocalFiles falls back on ripgrep runtime failure and opens a short c
     const afterCircuit = getLocalSearchRuntimeStatus();
     assert.equal(afterCircuit.infrastructureFailureCount, 1);
     assert.equal(afterCircuit.circuitBypassCount >= 1, true);
+    const metricsAfter = localSearchMetrics();
+    assert.equal(metricsAfter.misses - metricsBefore.misses, 2);
+    assert.equal(metricsAfter.hits - metricsBefore.hits, 0);
   } finally {
     if (previousRgPath === undefined) delete process.env.DEVFLOW_RG_PATH;
     else process.env.DEVFLOW_RG_PATH = previousRgPath;
@@ -152,6 +162,7 @@ test('searchLocalFiles falls back on ripgrep runtime failure and opens a short c
 
 test('searchLocalFilesAsync falls back in the same call on ripgrep runtime failure', async () => {
   const previousRgPath = process.env.DEVFLOW_RG_PATH;
+  const metricsBefore = localSearchMetrics();
   process.env.DEVFLOW_RG_PATH = process.execPath;
   try {
     const result = await searchLocalFilesAsync(
@@ -162,6 +173,9 @@ test('searchLocalFilesAsync falls back in the same call on ripgrep runtime failu
     );
     assert.equal(result.backend, 'fallback');
     assert.equal(result.fallbackReason, 'ripgrep-runtime-failure');
+    const metricsAfter = localSearchMetrics();
+    assert.equal(metricsAfter.misses - metricsBefore.misses, 1);
+    assert.equal(metricsAfter.hits - metricsBefore.hits, 0);
   } finally {
     if (previousRgPath === undefined) delete process.env.DEVFLOW_RG_PATH;
     else process.env.DEVFLOW_RG_PATH = previousRgPath;
@@ -187,7 +201,29 @@ test('searchLocalFiles returns cache metadata on repeated identical searches', (
   assert.deepEqual(second.matches, first.matches);
 });
 
+test('central cache diagnostics count exactly one sync and async cache outcome per logical search', async () => {
+  const before = localSearchMetrics();
+  const first = searchLocalFiles(state, { projectId: 'project-search-1', query: 'other', limit: 3 });
+  const second = searchLocalFiles(state, { projectId: 'project-search-1', query: 'other', limit: 3 });
+  assert.equal(first.cache.hit, false);
+  assert.equal(second.cache.hit, true);
+  const afterSync = localSearchMetrics();
+  assert.equal(afterSync.misses - before.misses, 1);
+  assert.equal(afterSync.hits - before.hits, 1);
+
+  clearLocalFileSearchCache();
+  const asyncBefore = localSearchMetrics();
+  const asyncFirst = await searchLocalFilesAsync(state, { projectId: 'project-search-1', query: 'other', limit: 3 }, { stdout: () => {}, stderr: () => {} }, () => {});
+  const asyncSecond = await searchLocalFilesAsync(state, { projectId: 'project-search-1', query: 'other', limit: 3 }, { stdout: () => {}, stderr: () => {} }, () => {});
+  assert.equal(asyncFirst.cache.hit, false);
+  assert.equal(asyncSecond.cache.hit, true);
+  const afterAsync = localSearchMetrics();
+  assert.equal(afterAsync.misses - asyncBefore.misses, 1);
+  assert.equal(afterAsync.hits - asyncBefore.hits, 1);
+});
+
 test('recovery-forced fallback bypasses an existing search cache in sync and async modes', async () => {
+  const metricsBefore = localSearchMetrics();
   const cached = searchLocalFiles(state, {
     projectId: 'project-search-1',
     query: 'needle',
@@ -219,6 +255,9 @@ test('recovery-forced fallback bypasses an existing search cache in sync and asy
   assert.equal(asyncForced.backend, 'fallback');
   assert.equal(asyncForced.fallbackReason, 'recovery-forced');
   assert.equal(asyncForced.cache.hit, false);
+  const metricsAfter = localSearchMetrics();
+  assert.equal(metricsAfter.misses - metricsBefore.misses, 3);
+  assert.equal(metricsAfter.hits - metricsBefore.hits, 0);
 });
 
 test('searchLocalFiles respects the returned global limit and reports truncation', () => {
@@ -257,6 +296,7 @@ test('searchLocalFilesAsync can terminate after the requested global result limi
 });
 
 test('writeLocalFile invalidates cached search results for the same project root', () => {
+  const metricsBefore = localSearchMetrics();
   const first = searchLocalFiles(state, {
     projectId: 'project-search-1',
     query: 'fresh-cache-token',
@@ -283,6 +323,10 @@ test('writeLocalFile invalidates cached search results for the same project root
   });
   assert.equal(afterWrite.cache.hit, false);
   assert.equal(afterWrite.count, 1);
+  const metricsAfter = localSearchMetrics();
+  assert.equal(metricsAfter.misses - metricsBefore.misses, 2);
+  assert.equal(metricsAfter.hits - metricsBefore.hits, 1);
+  assert.equal(metricsAfter.invalidations > metricsBefore.invalidations, true);
 });
 
 test('writeLocalFile preserves revision for identical existing content', () => {

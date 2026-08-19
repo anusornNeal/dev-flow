@@ -125,7 +125,7 @@ test('tool monitor attaches aggregate repo-context dominant phase without payloa
       timestamp: now + index,
     });
     recordRepoContextBundlePerformance({
-      cacheState: 'warm',
+      repoIndexCacheState: 'warm',
       totalMs: 900 + index,
       phases: {
         startContextMs: 10,
@@ -143,7 +143,8 @@ test('tool monitor attaches aggregate repo-context dominant phase without payloa
   const context = summary.topTools.find((entry) => entry.toolName === 'get_repo_context_bundle');
   assert.equal(context?.dominantPhase, 'repoIndex');
   assert.equal(context?.dominantPhaseP95Ms, 702);
-  assert.equal(context?.bundleCacheState, 'warm');
+  assert.equal(context?.repoIndexCacheState, 'warm');
+  assert.equal('bundleCacheState' in (context || {}), false);
   assert.doesNotMatch(JSON.stringify(context), /project-monitor|\.ts|content/);
 });
 
@@ -197,6 +198,11 @@ test('diagnostics expose local search backend fallback counters', () => {
   assert.ok(diagnostics.search);
   assert.equal(typeof diagnostics.search.fallbackCount, 'number');
   assert.equal(typeof diagnostics.search.infrastructureFailureCount, 'number');
+  assert.equal(Array.isArray(diagnostics.repoCaches?.domains), true);
+  const cacheNames = diagnostics.repoCaches.domains.map((domain: any) => domain.name);
+  assert.equal(cacheNames.includes('local-file-search'), true);
+  assert.equal(cacheNames.includes('repo-inspection-index'), true);
+  assert.equal(diagnostics.repoCaches.domains.every((domain: any) => typeof domain.hitRate === 'number'), true);
 });
 
 

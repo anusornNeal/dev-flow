@@ -59,7 +59,9 @@ test('getRepoInspectionIndex returns focused file and symbol matches from cachea
 
   assert.equal(first.fileCount, 2);
   assert.equal(first.cached, false);
+  assert.equal(first.cache.revisionSource, 'post-build');
   assert.equal(second.cached, true);
+  assert.equal(second.cache.revisionSource, 'resolved');
   assert.equal(typeof first.repoRevision, 'string');
   assert.equal(first.repoRevision, second.repoRevision);
   assert.ok(first.matches.some((entry: any) => entry.path.endsWith('JobDetailScreen.kt')));
@@ -114,6 +116,7 @@ test('project-rules dependency invalidation rebuilds the repo index even when th
   });
   assert.equal(first.cache.refresh, 'rebuild');
   assert.equal(warm.cache.refresh, 'hit');
+  assert.equal(warm.cache.revisionSource, 'resolved');
 
   invalidateRepoCacheDependencies({
     root: tempDir,

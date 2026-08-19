@@ -8,7 +8,7 @@ import { listLocalFiles, readLocalFile, readResolvedLocalFile, resolveProjectRoo
 import { getGitDiff } from './gitService';
 import { getRepoInspectionIndex } from './repoInspectionIndexService';
 import { registerRepoCacheInvalidator } from './repoCacheInvalidationService';
-import { buildRepoEvidenceIdentity, getRepoRevisionForRoot } from './repoRevisionService';
+import { buildRepoEvidenceIdentity, getRepoRevisionForRoot, type RepoRevision } from './repoRevisionService';
 import { contextGovernorInputFromArgs, planContextGovernor } from './contextGovernorService';
 import { ADAPTIVE_SOURCE_DISCLOSURE_POLICY } from './contextBudgetPlannerService';
 import { ensureRepoChangeWatcher } from './workspaceChangeWatcherService';
@@ -36,7 +36,7 @@ registerRepoCacheInvalidator('repo-context-bundle', clearRepoContextBundleCache)
 const MAX_REPO_CONTEXT_BUNDLE_PERFORMANCE_RECORDS = 500;
 const DEFAULT_REPO_CONTEXT_BUNDLE_PERFORMANCE_WINDOW_MS = 10 * 60 * 1000;
 
-type RepoContextBundleCacheState = 'cold' | 'warm';
+type RepoIndexCacheState = 'cold' | 'warm';
 type RepoContextBundlePhaseTimings = {
   startContextMs: number;
   repoIndexMs: number;
@@ -46,7 +46,7 @@ type RepoContextBundlePhaseTimings = {
   responseAssemblyMs: number;
 };
 type RepoContextBundlePerformanceRecord = {
-  cacheState: RepoContextBundleCacheState;
+  repoIndexCacheState: RepoIndexCacheState;
   totalMs: number;
   phases: RepoContextBundlePhaseTimings;
   timestamp: number;
@@ -81,14 +81,14 @@ export function clearRepoContextBundlePerformanceRecords() {
 }
 
 export function recordRepoContextBundlePerformance(input: {
-  cacheState: RepoContextBundleCacheState;
+  repoIndexCacheState: RepoIndexCacheState;
   totalMs: number;
   phases: RepoContextBundlePhaseTimings;
   timestamp?: number;
 }) {
   const numeric = (value: unknown) => roundDuration(Number.isFinite(Number(value)) ? Number(value) : 0);
   const record: RepoContextBundlePerformanceRecord = {
-    cacheState: input.cacheState === 'warm' ? 'warm' : 'cold',
+    repoIndexCacheState: input.repoIndexCacheState === 'warm' ? 'warm' : 'cold',
     totalMs: numeric(input.totalMs),
     phases: {
       startContextMs: numeric(input.phases?.startContextMs),
@@ -107,7 +107,7 @@ export function recordRepoContextBundlePerformance(input: {
   return record;
 }
 
-function summarizeRepoContextBundlePerformance(records: RepoContextBundlePerformanceRecord[], cacheState: RepoContextBundleCacheState) {
+function summarizeRepoContextBundlePerformance(records: RepoContextBundlePerformanceRecord[], repoIndexCacheState: RepoIndexCacheState) {
   const phase = (key: keyof Omit<RepoContextBundlePhaseTimings, 'snippetReadCount'>) => {
     const values = records.map((record) => record.phases[key]);
     return {
@@ -135,7 +135,7 @@ function summarizeRepoContextBundlePerformance(records: RepoContextBundlePerform
   const dominant = [...phaseCandidates].sort((left, right) => right[1] - left[1])[0];
   const totals = records.map((record) => record.totalMs);
   return {
-    cacheState,
+    repoIndexCacheState,
     count: records.length,
     p50TotalMs: performancePercentile(totals, 50),
     p95TotalMs: performancePercentile(totals, 95),
@@ -153,8 +153,8 @@ export function getRepoContextBundlePerformanceSummary(options: { now?: number; 
   const recent = repoContextBundlePerformanceRecords.filter((record) => record.timestamp >= now - windowMs && record.timestamp <= now);
   return {
     windowMs,
-    cold: summarizeRepoContextBundlePerformance(recent.filter((record) => record.cacheState === 'cold'), 'cold'),
-    warm: summarizeRepoContextBundlePerformance(recent.filter((record) => record.cacheState === 'warm'), 'warm'),
+    cold: summarizeRepoContextBundlePerformance(recent.filter((record) => record.repoIndexCacheState === 'cold'), 'cold'),
+    warm: summarizeRepoContextBundlePerformance(recent.filter((record) => record.repoIndexCacheState === 'warm'), 'warm'),
   };
 }
 
@@ -326,7 +326,7 @@ export function getMissingContextDelta(state: AppState, args: Record<string, any
   };
 }
 
-export function getProjectStartContext(state: AppState, args: Record<string, any>) {
+function buildProjectStartContext(state: AppState, args: Record<string, any>, captureTrustedRevision?: (revision: RepoRevision) => void) {
   const project = resolveProject(state, args);
   const root = project.localPath ? resolveProjectRoot(state, { ...args, projectId: project.id }) : '';
   const changeWatcher = root ? ensureRepoChangeWatcher(root) : { active: false, degraded: false };
@@ -339,6 +339,7 @@ export function getProjectStartContext(state: AppState, args: Record<string, any
   if (root) {
     try {
       const revision = getRepoRevisionForRoot(root);
+      captureTrustedRevision?.(revision);
       repoRevision = revision.token;
       git = {
         available: true,
@@ -410,6 +411,10 @@ export function getProjectStartContext(state: AppState, args: Record<string, any
       'get_agent_task_context',
     ],
   };
+}
+
+export function getProjectStartContext(state: AppState, args: Record<string, any>) {
+  return buildProjectStartContext(state, args);
 }
 
 function formatSymbolSummary(symbols: unknown, maxSymbols = 8) {
@@ -637,7 +642,12 @@ export function getRepoContextBundle(state: AppState, args: Record<string, any>)
       ? args.targetFiles.split(',').map((value: string) => value.trim()).filter(Boolean)
       : [];
   const startContextStartedAt = nodePerformance.now();
-  const start = getProjectStartContext(state, { ...args, projectId: project.id, limit: args.topLevelLimit || 40 });
+  let trustedRepoRevision: RepoRevision | undefined;
+  const start = buildProjectStartContext(
+    state,
+    { ...args, projectId: project.id, limit: args.topLevelLimit || 40 },
+    (revision) => { trustedRepoRevision = revision; },
+  );
   const startContextMs = roundDuration(nodePerformance.now() - startContextStartedAt);
   const changedFiles = Array.isArray(start.git?.files) ? start.git.files : [];
   const initialPlan = planContextGovernor(contextGovernorInputFromArgs(args, {
@@ -657,7 +667,7 @@ export function getRepoContextBundle(state: AppState, args: Record<string, any>)
     contextIntent: initialPlan.intent,
     targetFiles,
     changedFiles,
-  });
+  }, undefined, { trustedRepoRevision });
   const repoIndexMs = roundDuration(nodePerformance.now() - repoIndexStartedAt);
   const indexedCandidates = Array.isArray(index.matches) ? index.matches : [];
   const indexedPaths = new Set(indexedCandidates.map((entry: any) => String(entry.path || '').replace(/\\/g, '/').toLowerCase()));
@@ -888,7 +898,7 @@ export function getRepoContextBundle(state: AppState, args: Record<string, any>)
   const bundled = applyAggregateContextBudget({
     ...response,
     performance: {
-      cacheState: index.cache?.hit === true ? 'warm' as const : 'cold' as const,
+      repoIndexCacheState: index.cache?.hit === true ? 'warm' as const : 'cold' as const,
       totalMs: roundDuration(nodePerformance.now() - bundleStartedAt),
       phases: initialPhases,
       dominantPhase: dominantRepoContextPhase(initialPhases),
@@ -900,7 +910,7 @@ export function getRepoContextBundle(state: AppState, args: Record<string, any>)
     responseAssemblyMs,
   };
   bundled.performance = {
-    cacheState: index.cache?.hit === true ? 'warm' as const : 'cold' as const,
+    repoIndexCacheState: index.cache?.hit === true ? 'warm' as const : 'cold' as const,
     totalMs: roundDuration(nodePerformance.now() - bundleStartedAt),
     phases,
     dominantPhase: dominantRepoContextPhase(phases),

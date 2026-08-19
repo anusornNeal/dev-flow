@@ -9,6 +9,7 @@ import { getRepoRevisionForRoot } from './repoRevisionService.js';
 import { getJobMetrics } from './mcpToolJobService';
 import { getLocalSearchRuntimeStatus } from './localFileService';
 import { getRepoContextBundlePerformanceSummary } from './projectStartContextService';
+import { getRepoCacheDiagnostics } from './repoCacheInvalidationService';
 import { getSessionWorkspaceMetrics } from './sessionWorkspaceService';
 import { getWorkspaceIntegrationMetrics } from './workspaceIntegrationService';
 import { getMcpTransportSummary } from './mcpTransportMonitor';
@@ -383,7 +384,7 @@ export function getToolCallSummary(options?: { now?: number; windowMs?: number }
           ...(bundleEvidence && bundleEvidence.count > 0 ? {
             dominantPhase: bundleEvidence.dominantPhase,
             dominantPhaseP95Ms: bundleEvidence.dominantPhaseP95Ms,
-            bundleCacheState: bundleEvidence.cacheState,
+            repoIndexCacheState: bundleEvidence.repoIndexCacheState,
           } : {}),
         };
       })
@@ -662,6 +663,18 @@ export function getDevFlowDiagnostics(options?: {
   const runtimeDiagnosis = classifyRuntimeIdentity(runtime, options?.clientState);
   const telemetryPersistence = flushPerformanceTelemetry({ now });
   const toolSummary = getToolCallSummary({ now, windowMs: options?.windowMs });
+  const repoCaches = getRepoCacheDiagnostics({
+    domains: [
+      'local-file-search',
+      'repo-inspection-index',
+      'repo-context-bundle',
+      'context-handles',
+      'verification-results',
+      'git-remote-evidence',
+      'project-atlas',
+      'skills',
+    ],
+  });
   const mcpTransport = getMcpTransportSummary({ now, windowMs: options?.windowMs });
   const performanceHistory = getPerformanceHistoryComparison({ now, windowMs: options?.windowMs });
   const verificationResources = getVerificationResourceProfileDiagnostics();
@@ -693,6 +706,7 @@ export function getDevFlowDiagnostics(options?: {
     runtime,
     ...(runtimeDiagnosis ? { runtimeDiagnosis } : {}),
     search: getLocalSearchRuntimeStatus(),
+    repoCaches,
     runtimeSupervisor,
     isolation,
     mcp: {

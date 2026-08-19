@@ -70,6 +70,9 @@ test('getWorkflowHealth returns ok for a clean repo', () => {
   assert.equal(typeof result.diagnostics.isolation.phases.responseHandoff.p95Ms, 'number');
   assert.equal(typeof result.diagnostics.isolation.workspaces.known, 'number');
   assert.equal(typeof result.diagnostics.isolation.integrations.conflicts, 'number');
+  assert.equal(Array.isArray(result.diagnostics.repoCaches.domains), true);
+  assert.equal(result.diagnostics.repoCaches.domains.length <= 8, true);
+  assert.equal(result.diagnostics.repoCaches.domains.every((domain: any) => typeof domain.hitRate === 'number'), true);
 });
 
 test('compact health preserves operational warnings while cutting response bytes by at least half', () => {
@@ -86,6 +89,10 @@ test('compact health preserves operational warnings while cutting response bytes
   assert.equal(typeof compact.queue.depth, 'number');
   assert.equal(typeof compact.queue.capacity.saturated, 'boolean');
   assert.equal(typeof compact.runtime.search.backend, 'string');
+  assert.equal(Array.isArray(compact.runtime.repoCaches.domains), true);
+  assert.equal(compact.runtime.repoCaches.domains.length <= 3, true);
+  assert.equal(compact.runtime.repoCaches.domains.some((domain: any) => domain.name === 'local-file-search'), true);
+  assert.equal(compact.runtime.repoCaches.domains.every((domain: any) => typeof domain.hits === 'number' && typeof domain.misses === 'number' && typeof domain.hitRate === 'number' && typeof domain.invalidations === 'number' && typeof domain.lineageToken === 'string'), true);
   assert.equal(compact.runtime.capabilities.keyToolsPresent.get_repo_context_bundle, true);
   assert.equal(Array.isArray(compact.regressions), true);
   assert.equal(typeof compact.recovery.hasVerifiedGoodBackup, 'boolean');

@@ -19,7 +19,7 @@ import { uiPreviewToolDefinitions } from './devflowUiPreviewTools';
 import { buildMcpTransportInputSchema } from './mcpSchemaTransport';
 import { resolveRuntimeMcpToolProfileValue } from './mcpToolProfileConfig';
 export type { DevFlowToolDefinition, DevFlowToolHttpRequest } from './devflowContractCore';
-export const DEVFLOW_CONTRACT_VERSION = '2026-08-13.1';
+export const DEVFLOW_CONTRACT_VERSION = '2026-08-19.1';
 
 export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   {
@@ -1372,6 +1372,52 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
       path: withQuery('/api/local-files/search', args),
     }),
   },
+  {
+    name: 'execute_repo_query_plan',
+    executionPolicy: { mode: 'job', jobKind: 'repo-read' },
+    description: 'Execute one bounded read-only repository query DAG that composes parallel searches, path filtering, dedupe, candidate limiting, bounded snippet reads, and final evidence selection without arbitrary code, shell, network, or mutation operations.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...projectIdentifierProperties,
+        steps: {
+          type: 'array', minItems: 1, maxItems: 12,
+          description: 'Named Repo Query Plan V1 steps. The complete DAG is validated before repository operations execute.',
+          items: {
+            type: 'object', additionalProperties: false,
+            properties: {
+              id: { type: 'string', minLength: 1, maxLength: 32, pattern: '^[A-Za-z][A-Za-z0-9_-]{0,31}$' },
+              op: { type: 'string', enum: ['search', 'filter_path', 'dedupe', 'limit', 'read_snippets', 'select'] },
+              from: { oneOf: [
+                { type: 'string', minLength: 1, maxLength: 32 },
+                { type: 'array', minItems: 1, maxItems: 6, items: { type: 'string', minLength: 1, maxLength: 32 } },
+              ] },
+              query: { type: 'string', minLength: 1, maxLength: 500 },
+              path: { type: 'string', maxLength: 256, description: 'Repository-relative search scope.' },
+              limit: { type: 'number', minimum: 1, maximum: 100 },
+              include: { type: 'array', maxItems: 8, items: { type: 'string', minLength: 1, maxLength: 256 } },
+              exclude: { type: 'array', maxItems: 8, items: { type: 'string', minLength: 1, maxLength: 256 } },
+              by: { type: 'string', enum: ['match', 'file'] },
+              count: { type: 'number', minimum: 1, maximum: 100 },
+              contextBefore: { type: 'number', minimum: 0, maximum: 50 },
+              contextAfter: { type: 'number', minimum: 0, maximum: 50 },
+              maxBytesPerSnippet: { type: 'number', minimum: 1, maximum: 20000 },
+              maxTotalBytes: { type: 'number', minimum: 1, maximum: 100000 },
+              fields: { type: 'array', maxItems: 10, items: { type: 'string', enum: ['path', 'line', 'preview', 'startLine', 'endLine', 'content', 'returnedBytes', 'truncated'] } },
+            },
+            required: ['id', 'op'],
+          },
+        },
+        output: { type: 'string', minLength: 1, maxLength: 32, description: 'Step id of the final select operation.' },
+        allowPartial: { type: 'boolean', description: 'Allow independent successful branches to survive bounded search/read failures. Structural validation errors always fail the whole plan.' },
+        maxConcurrency: { type: 'number', minimum: 1, maximum: 4, description: 'Maximum independent steps executed concurrently.' },
+        maxReturnedBytes: { type: 'number', minimum: 1024, maximum: 100000, description: 'Final selected evidence byte budget.' },
+      },
+      required: ['steps', 'output'],
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: (args) => ({ method: 'POST', path: '/api/repo-query-plan', body: args }),
+  },
   ...gitToolDefinitions,
   {
     name: 'get_figma_authoring_context',
@@ -1587,7 +1633,7 @@ const CODING_PROFILE_TOOLS = new Set([
   'sync_task_with_git', 'submit_task_for_review',
   'get_skill_router', 'get_authoring_skill', 'get_guidance_skill', 'get_jira_authoring_bundle',
   'get_figma_authoring_context', 'attach_figma_context_to_task', 'get_project_atlas',
-  'get_repo_context_bundle', 'list_local_files', 'read_local_file', 'read_file_snippets_batch', 'search_local_files',
+  'get_repo_context_bundle', 'list_local_files', 'read_local_file', 'read_file_snippets_batch', 'search_local_files', 'execute_repo_query_plan',
   'write_local_file', 'edit_local_files_batch', 'prepare_compact_edit', 'apply_prepared_edit', 'apply_and_verify', 'delete_local_path', 'move_local_path',
   'run_project_command',
   'get_git_status', 'get_git_diff', 'get_git_log', 'get_git_show', 'get_git_branch', 'get_git_sync_status',
@@ -1649,6 +1695,7 @@ export function isToolExposedInMcp(name: string) {
 export function isToolAllowedInProfile(name: string, profile: DevFlowToolProfile) {
   if (!isToolExposedInMcp(name)) return false;
   if (profile === 'full') return true;
+  if (name === 'execute_repo_query_plan') return profile === 'coding';
   if (profile === 'coding') return CODING_PROFILE_TOOLS.has(name);
   if (profile === 'atlas') return name.includes('atlas') || ['get_repo_context_bundle', 'read_local_file', 'read_file_snippets_batch', 'search_local_files'].includes(name);
   if (profile === 'diagnostics') return /health|diagnostic|job|tool_call|restart|recovery/.test(name);

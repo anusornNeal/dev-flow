@@ -6,6 +6,7 @@ import { commitGitChanges, ensureGitBranch, pushGitBranch } from './gitService';
 import { commitTaskOwnedChanges } from './taskCommitPlanService.js';
 import { applyLocalPatchAsync } from './localPatchService';
 import { searchLocalFilesAsync } from './localFileService';
+import { executeRepoQueryPlan } from './repoQueryPlanService';
 import { deleteLocalPath, moveLocalPath } from './localPathMutationService';
 import { applyPreparedEditPlan, getPreparedEditRecoveryArgs, prepareEditPlan } from './preparedEditService';
 import { applyProjectAtlasAgentUpdate } from './projectAtlasService';
@@ -55,6 +56,7 @@ const BUILTIN_TOOL_RUNNER_NAMES = [
   'run_project_command',
   'apply_patch',
   'search_local_files',
+  'execute_repo_query_plan',
   'ensure_git_branch',
   'push_git_branch',
   'commit_git_changes',
@@ -72,6 +74,7 @@ const BUILTIN_TOOL_RUNNER_NAMES = [
 
 const RETRYABLE_AFTER_RESTART = new Set<string>([
   'search_local_files',
+  'execute_repo_query_plan',
 ]);
 
 export function getBuiltinToolRunnerNames() {
@@ -130,6 +133,9 @@ export async function runBuiltinToolJob(input: BuiltinToolJobInput, context: Bui
       args,
       (payload) => searchLocalFilesAsync(state, payload, logger, setCancelFn),
     );
+  }
+  if (toolName === 'execute_repo_query_plan') {
+    return executeRepoQueryPlan(state, args, logger, setCancelFn);
   }
   if (toolName === 'ensure_git_branch') return ensureGitBranch(state, args);
   if (toolName === 'push_git_branch') return pushGitBranch(state, args);

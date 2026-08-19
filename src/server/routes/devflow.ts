@@ -5,6 +5,7 @@ import type { ApiRouteDeps } from '../types';
 import { getCapabilityCatalog, getToolSchema } from '../contracts/devflowContract';
 import { createApiError, sendApiError } from '../services/api';
 import { listLocalFiles, readFileSnippetsBatch, readLocalFile, searchLocalFiles, writeLocalFile } from '../services/localFileService';
+import { executeRepoQueryPlan } from '../services/repoQueryPlanService';
 import { applyLocalPatch } from '../services/localPatchService';
 import { deleteLocalPath, moveLocalPath } from '../services/localPathMutationService';
 import { createPullRequest } from '../services/githubPullRequestService';
@@ -467,6 +468,14 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
   app.get('/api/local-files/search', (req, res) => {
     try {
       return res.json(searchLocalFiles(deps.state, req.query as Record<string, any>));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.post('/api/repo-query-plan', async (req, res) => {
+    try {
+      return res.json(await executeRepoQueryPlan(deps.state, req.body as Record<string, any>));
     } catch (error) {
       return sendApiError(res, error);
     }

@@ -6,6 +6,7 @@ const EXPECTED_RUNNERS = [
   'run_project_command',
   'apply_patch',
   'search_local_files',
+  'execute_repo_query_plan',
   'ensure_git_branch',
   'push_git_branch',
   'commit_git_changes',

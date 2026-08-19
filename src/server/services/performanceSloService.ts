@@ -10,6 +10,7 @@ const DEFAULT_P95_BUDGET_MS: Record<string, number> = {
   read_local_file: 100,
   read_file_snippets_batch: 250,
   search_local_files: 1000,
+  execute_repo_query_plan: 2500,
   safe_edit_local_file: 500,
   edit_local_files_batch: 1000,
   prepare_edit_plan: 1000,

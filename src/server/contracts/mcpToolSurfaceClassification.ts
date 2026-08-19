@@ -99,9 +99,11 @@ const DESTRUCTIVE_TOOLS = new Set([
 
 const EXTERNAL_EFFECT_TOOLS = new Set(['push_git_branch', 'create_pull_request']);
 const RUNTIME_CONTROL_TOOLS = new Set(['restart_devflow', 'cancel_tool_job', 'create_tool_job']);
+const READ_ONLY_REPO_TOOLS = new Set(['execute_repo_query_plan']);
 
 function inferRisk(name: string): McpToolRisk {
   if (EXTERNAL_EFFECT_TOOLS.has(name)) return 'external-effect';
+  if (READ_ONLY_REPO_TOOLS.has(name)) return 'read';
   if (DESTRUCTIVE_TOOLS.has(name)) return 'destructive';
   if (RUNTIME_CONTROL_TOOLS.has(name)) return 'runtime-control';
   if (/^(create|update|write|apply|expand|move|toggle|batch_|assign|delete|import|sync|submit|complete|retry|cancel|prepare|integrate|cleanup|ensure|commit|attach|push|restart)/.test(name)) return 'write';

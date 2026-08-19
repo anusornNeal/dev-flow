@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { getCapabilityCatalog, getMcpToolList, getToolDefinitionByName } from '../../src/server/contracts/devflowContract.js';
+import { buildMcpToolSurfaceInventory } from '../../src/server/contracts/mcpToolSurfaceClassification.js';
 
 test('devflowContract exposes safe_edit_local_file', () => {
   const tool = getToolDefinitionByName('safe_edit_local_file');
@@ -34,6 +35,26 @@ test('devflowContract exposes read_file_snippets_batch', () => {
   assert.ok(tool.inputSchema?.properties?.allowPartial);
   assert.ok(tool.inputSchema?.properties?.maxTotalBytes);
   assert.ok(tool.inputSchema?.properties?.files?.items?.properties?.includeFileRef);
+});
+
+test('devflowContract exposes execute_repo_query_plan as a bounded read-only coding/full job', () => {
+  const tool = getToolDefinitionByName('execute_repo_query_plan');
+  assert.ok(tool);
+  assert.equal(tool.executionPolicy?.mode, 'job');
+  assert.equal(tool.executionPolicy?.jobKind, 'repo-read');
+  assert.equal(tool.inputSchema?.properties?.steps?.maxItems, 12);
+  assert.equal(tool.inputSchema?.properties?.maxConcurrency?.maximum, 4);
+  assert.equal(tool.inputSchema?.properties?.maxReturnedBytes?.maximum, 100000);
+  assert.equal(tool.inputSchema?.properties?.steps?.items?.additionalProperties, false);
+  const req = tool.buildHttpRequest({ steps: [{ id: 's', op: 'search', query: 'x' }, { id: 'out', op: 'select', from: 's' }], output: 'out' });
+  assert.equal(req.method, 'POST');
+  assert.equal(req.path, '/api/repo-query-plan');
+  assert.ok(getMcpToolList('coding').some((entry) => entry.name === 'execute_repo_query_plan'));
+  assert.ok(getMcpToolList('full').some((entry) => entry.name === 'execute_repo_query_plan'));
+  assert.equal(getMcpToolList('authoring').some((entry) => entry.name === 'execute_repo_query_plan'), false);
+  const inventory = buildMcpToolSurfaceInventory([tool]);
+  assert.equal(inventory[0]?.risk, 'read');
+  assert.equal(inventory[0]?.intent, 'repo-work');
 });
 
 test('high-volume read tools default MCP requests to compact response mode', () => {
@@ -109,7 +130,7 @@ test('devflowContract exposes apply_project_atlas_agent_update as a serialized w
     edges: [],
     domains: [],
   });
-  assert.ok(getMcpToolList().some((entry) => entry.name === 'apply_project_atlas_agent_update'));
+  assert.equal(getMcpToolList().some((entry) => entry.name === 'apply_project_atlas_agent_update'), false);
   assert.equal(getToolDefinitionByName('rescan_project_atlas'), undefined);
   assert.equal(getMcpToolList().some((entry) => entry.name === 'rescan_project_atlas'), false);
 });
@@ -127,7 +148,7 @@ test('capability catalog async guidance uses result long-poll as the normal comp
   const catalogTool = getCapabilityCatalog().tools.find((tool) => tool.name === 'run_project_command');
   assert.ok(catalogTool);
   assert.match(catalogTool.description, /get_tool_job_result.*waitMs=30000/i);
-  assert.match(catalogTool.description, /diagnostic/i);
+  assert.doesNotMatch(catalogTool.description, /get_tool_job_status|get_tool_job_log/i);
   assert.doesNotMatch(catalogTool.description, /must use.*get_tool_job_status.*get_tool_job_log.*get_tool_job_result/i);
 });
 
@@ -195,6 +216,6 @@ test('devflowContract exposes open_task_bug for embedded task bug threads', () =
 
   const toolNames = getMcpToolList().map((entry) => entry.name);
   assert.ok(toolNames.includes('open_task_bug'));
-  assert.ok(toolNames.includes('create_bug_thread'));
-  assert.ok(toolNames.includes('add_task_bug'));
+  assert.equal(toolNames.includes('create_bug_thread'), false);
+  assert.equal(toolNames.includes('add_task_bug'), false);
 });

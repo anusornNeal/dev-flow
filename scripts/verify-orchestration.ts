@@ -161,8 +161,14 @@ assert.equal((taskContext as any).projectRules, undefined);
 const overrideDir = path.join(repoPathWithSpaces, '.devflow', 'prompt-overrides');
 fs.mkdirSync(overrideDir, { recursive: true });
 fs.writeFileSync(path.join(overrideDir, 'prompt.header.md'), '\nOVERRIDE HEADER {{run.id}}\n', 'utf8');
+const projectInstructionsPath = path.join(repoPathWithSpaces, '.devflow', 'agents.md');
+fs.writeFileSync(projectInstructionsPath, 'ORCHESTRATION-LOCAL-INSTRUCTION: use this project-local DevFlow rule.\n', 'utf8');
+fs.writeFileSync(path.join(repoPathWithSpaces, '.devflow', 'commands.yaml'), 'ORCHESTRATION-SIBLING-MUST-NOT-INJECT\n', 'utf8');
 const previewPrompt = renderTaskPrompt(state, 'task-1');
 assert.ok(previewPrompt.renderResult.content.includes('OVERRIDE HEADER preview-run-id'));
+assert.ok(previewPrompt.renderResult.content.includes('## DevFlow Project-Local Instructions'));
+assert.ok(previewPrompt.renderResult.content.includes('ORCHESTRATION-LOCAL-INSTRUCTION'));
+assert.ok(!previewPrompt.renderResult.content.includes('ORCHESTRATION-SIBLING-MUST-NOT-INJECT')); 
 const triggerResult = triggerTaskAgent(state._testTasks[0], deps, 'test');
 assert.equal(triggerResult.triggered, true, `triggerTaskAgent failed: ${JSON.stringify(triggerResult)} logs=${JSON.stringify(loggedMessages.slice(-3))}`);
 assert.equal(state._testTasks[0].status, 'in-progress');
@@ -215,6 +221,9 @@ assert.equal(runPrompt.context.assignment.agent, 'Codex');
 assert.equal(runPrompt.context.assignment.model, 'GPT-5.5');
 assert.equal(runPrompt.context.assignment.effort, 'xhigh');
 assert.ok(prompt.includes(`OVERRIDE HEADER ${run1!.id}`));
+assert.ok(prompt.includes('## DevFlow Project-Local Instructions'));
+assert.ok(prompt.includes('ORCHESTRATION-LOCAL-INSTRUCTION'));
+assert.ok(!prompt.includes('ORCHESTRATION-SIBLING-MUST-NOT-INJECT'));
 
 console.log('[verify] Testing failed completion leaves the card retryable...');
 completeAgentRunForTask(state._testTasks[0], run1!, deps, {

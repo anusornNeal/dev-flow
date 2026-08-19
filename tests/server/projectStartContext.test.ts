@@ -81,6 +81,61 @@ test('getProjectStartContext returns compact project and top-level file context'
   assert.equal(scheduled.length, 1);
 });
 
+test('project-local .devflow/agents.md is surfaced first without exposing sibling .devflow files', () => {
+  const hintRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-start-hints-'));
+  const devFlowDir = path.join(hintRoot, '.devflow');
+  fs.mkdirSync(devFlowDir, { recursive: true });
+  fs.writeFileSync(path.join(hintRoot, 'README.md'), '# Hints\n', 'utf8');
+  fs.writeFileSync(path.join(hintRoot, 'package.json'), '{"name":"hints"}\n', 'utf8');
+  fs.writeFileSync(path.join(hintRoot, 'AGENTS.md'), 'generic guidance\n', 'utf8');
+  fs.writeFileSync(path.join(devFlowDir, 'agents.md'), 'devflow-local guidance\n', 'utf8');
+  fs.writeFileSync(path.join(devFlowDir, 'commands.yaml'), 'commands: {}\n', 'utf8');
+  fs.writeFileSync(path.join(devFlowDir, 'secret.txt'), 'must-not-surface\n', 'utf8');
+  const hintProject = {
+    id: 'project-start-hints',
+    name: 'Hints Fixture',
+    repoUrl: 'https://example.com/start-hints',
+    localPath: hintRoot,
+  };
+  createProject(hintProject);
+  state.projectsCache.push(hintProject);
+
+  try {
+    const both = getProjectStartContext(state, { projectId: hintProject.id, atlasScheduler: () => {} });
+    assert.deepEqual(both.hints.recommendedReads.slice(0, 3), ['.devflow/agents.md', 'AGENTS.md', 'README.md']);
+    assert.equal(both.hints.present.includes('.devflow/commands.yaml'), false);
+    assert.equal(both.hints.present.includes('.devflow/secret.txt'), false);
+
+    const bundle = getRepoContextBundle(state, {
+      projectId: hintProject.id,
+      q: 'devflow commands secret project guidance',
+      limit: 20,
+      atlasScheduler: () => {},
+    });
+    assert.equal(bundle.hints.recommendedReads[0], '.devflow/agents.md');
+    assert.equal(bundle.index.matches.some((entry: any) => entry.path.replace(/\\/g, '/').startsWith('.devflow/')), false);
+
+    fs.unlinkSync(path.join(hintRoot, 'AGENTS.md'));
+    const devFlowOnly = getProjectStartContext(state, { projectId: hintProject.id, atlasScheduler: () => {} });
+    assert.equal(devFlowOnly.hints.recommendedReads[0], '.devflow/agents.md');
+    assert.equal(devFlowOnly.hints.present.includes('AGENTS.md'), false);
+
+    fs.writeFileSync(path.join(hintRoot, 'AGENTS.md'), 'generic guidance\n', 'utf8');
+    fs.unlinkSync(path.join(devFlowDir, 'agents.md'));
+    const rootOnly = getProjectStartContext(state, { projectId: hintProject.id, atlasScheduler: () => {} });
+    assert.equal(rootOnly.hints.recommendedReads[0], 'AGENTS.md');
+    assert.equal(rootOnly.hints.present.includes('.devflow/agents.md'), false);
+
+    fs.unlinkSync(path.join(hintRoot, 'AGENTS.md'));
+    const neither = getProjectStartContext(state, { projectId: hintProject.id, atlasScheduler: () => {} });
+    assert.equal(neither.hints.present.includes('.devflow/agents.md'), false);
+    assert.equal(neither.hints.present.includes('AGENTS.md'), false);
+  } finally {
+    state.projectsCache = state.projectsCache.filter((project: any) => project.id !== hintProject.id);
+    fs.rmSync(hintRoot, { recursive: true, force: true });
+  }
+});
+
 test('getRepoReadSnapshot returns compact metadata without file contents', () => {
   const result = getRepoReadSnapshot(state, { projectId: 'project-start-1', q: 'snapshot', limit: 5 });
 

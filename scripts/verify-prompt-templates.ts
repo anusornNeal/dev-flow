@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { interpolate, isAllowedPromptSkillId, isPromptValuePresent, listPromptSectionsForWorkspace, readPromptSectionForWorkspace, renderPromptTemplate, resolvePromptSectionId, writePromptOverrideForWorkspace, deletePromptOverrideForWorkspace, type PromptRenderContext } from '../src/server/services/promptTemplateService';
+import { DEVFLOW_PROJECT_INSTRUCTIONS_MAX_BYTES, interpolate, isAllowedPromptSkillId, isPromptValuePresent, listPromptSectionsForWorkspace, readPromptSectionForWorkspace, renderPromptTemplate, resolvePromptSectionId, writePromptOverrideForWorkspace, deletePromptOverrideForWorkspace, type PromptRenderContext } from '../src/server/services/promptTemplateService';
 import { getProjectRulesContext } from '../src/server/services/projectRulesService';
 import { renderTaskPrompt } from '../src/server/services/taskService';
 import { BUG_FIX_PROMPT_VARIANTS, buildBugFixPrompt } from '../src/lib/bugFixPromptTemplates';
@@ -166,6 +166,70 @@ assert.ok(noOverrideRender.content.includes('# DevFlow Implementation Worker'));
 assert.ok(noOverrideRender.content.includes('get_task'));
 assert.ok(noOverrideRender.content.includes('## Completion'));
 assert.ok(!noOverrideRender.content.includes('This prompt is the sole source of truth for your DevFlow task context.'));
+
+console.log('[verify] Testing project-local DevFlow instructions, isolation, freshness, and size bounds...');
+const projectInstructionsRootA = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-project-instructions-a-'));
+const projectInstructionsRootB = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-project-instructions-b-'));
+try {
+  const devFlowDirA = path.join(projectInstructionsRootA, '.devflow');
+  const devFlowDirB = path.join(projectInstructionsRootB, '.devflow');
+  fs.mkdirSync(devFlowDirA, { recursive: true });
+  fs.mkdirSync(devFlowDirB, { recursive: true });
+  const instructionsAPath = path.join(devFlowDirA, 'agents.md');
+  const instructionsBPath = path.join(devFlowDirB, 'agents.md');
+  fs.writeFileSync(path.join(projectInstructionsRootA, 'AGENTS.md'), 'GENERIC-A-ONLY: prefer the generic behavior.\n', 'utf8');
+  fs.writeFileSync(instructionsAPath, 'LOCAL-A-V1-ONLY: prefer the DevFlow-local behavior.\n', 'utf8');
+  fs.writeFileSync(instructionsBPath, 'LOCAL-B-ONLY: use project B rules.\n', 'utf8');
+  fs.writeFileSync(path.join(devFlowDirA, 'commands.yaml'), 'SIBLING-COMMAND-MUST-NOT-INJECT\n', 'utf8');
+
+  const renderForRoot = (localPath: string) => renderPromptTemplate('default', {
+    ...mockContext,
+    workspace: { ...mockContext.workspace, localPath },
+  });
+
+  const localA = renderForRoot(projectInstructionsRootA);
+  assert.ok(localA.content.includes('## DevFlow Project-Local Instructions'));
+  assert.ok(localA.content.includes('Source: `.devflow/agents.md`'));
+  assert.ok(localA.content.includes('LOCAL-A-V1-ONLY'));
+  assert.ok(localA.content.includes('take precedence over conflicting generic repository guidance'));
+  assert.ok(localA.content.includes('do not override system/developer instructions'));
+  assert.ok(!localA.content.includes('GENERIC-A-ONLY'));
+  assert.ok(!localA.content.includes('SIBLING-COMMAND-MUST-NOT-INJECT'));
+
+  const localB = renderForRoot(projectInstructionsRootB);
+  assert.ok(localB.content.includes('LOCAL-B-ONLY'));
+  assert.ok(!localB.content.includes('LOCAL-A-V1-ONLY'));
+
+  fs.writeFileSync(instructionsAPath, 'LOCAL-A-V2-ONLY: refreshed without restart.\n', 'utf8');
+  const refreshedStat = fs.statSync(instructionsAPath);
+  fs.utimesSync(instructionsAPath, refreshedStat.atime, new Date(refreshedStat.mtimeMs + 2_000));
+  const refreshedA = renderForRoot(projectInstructionsRootA);
+  assert.ok(refreshedA.content.includes('LOCAL-A-V2-ONLY'));
+  assert.ok(!refreshedA.content.includes('LOCAL-A-V1-ONLY'));
+
+  const overrideDirA = path.join(devFlowDirA, 'prompt-overrides');
+  fs.mkdirSync(overrideDirA, { recursive: true });
+  fs.writeFileSync(path.join(overrideDirA, 'prompt.header.md'), '# Project A Override Header', 'utf8');
+  const overrideAndInstructions = renderForRoot(projectInstructionsRootA);
+  assert.ok(overrideAndInstructions.content.includes('# Project A Override Header'));
+  assert.ok(overrideAndInstructions.content.includes('LOCAL-A-V2-ONLY'));
+
+  fs.unlinkSync(instructionsAPath);
+  const absentA = renderForRoot(projectInstructionsRootA);
+  assert.ok(!absentA.content.includes('## DevFlow Project-Local Instructions'));
+
+  fs.writeFileSync(instructionsAPath, 'x'.repeat(DEVFLOW_PROJECT_INSTRUCTIONS_MAX_BYTES + 1), 'utf8');
+  const oversizedA = renderForRoot(projectInstructionsRootA);
+  assert.ok(!oversizedA.content.includes('## DevFlow Project-Local Instructions'));
+
+  fs.unlinkSync(instructionsAPath);
+  fs.mkdirSync(instructionsAPath);
+  const unreadableShapeA = renderForRoot(projectInstructionsRootA);
+  assert.ok(!unreadableShapeA.content.includes('## DevFlow Project-Local Instructions'));
+} finally {
+  fs.rmSync(projectInstructionsRootA, { recursive: true, force: true });
+  fs.rmSync(projectInstructionsRootB, { recursive: true, force: true });
+}
 
 console.log('[verify] Testing project-local overrides change rendered prompts...');
 const legacyOverrideWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-legacy-override-'));

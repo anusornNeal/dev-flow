@@ -14,7 +14,16 @@ import { ADAPTIVE_SOURCE_DISCLOSURE_POLICY } from './contextBudgetPlannerService
 import { ensureRepoChangeWatcher } from './workspaceChangeWatcherService';
 import { maybeRefreshAtlasOnProjectOpen } from './projectAtlasService.js';
 
+const DEVFLOW_PROJECT_INSTRUCTIONS_PATH = '.devflow/agents.md';
 const HINT_FILES = ['AGENTS.md', 'README.md', 'package.json', 'tsconfig.json', 'vite.config.ts', 'gradlew.bat', 'build.gradle', 'settings.gradle'];
+
+function isRegularFile(filePath: string) {
+  try {
+    return fs.statSync(filePath).isFile();
+  } catch {
+    return false;
+  }
+}
 
 export function clearRepoContextBundleCache(_root?: string) {
   // getRepoContextBundle is intentionally assembled from fresh git/snippets plus the repo index cache.
@@ -361,9 +370,17 @@ export function getProjectStartContext(state: AppState, args: Record<string, any
     lastError: atlasRefresh.freshness?.lastError,
   };
 
-  const presentHints = root
-    ? HINT_FILES.filter((fileName) => fs.existsSync(path.join(root, fileName)))
+  const devFlowProjectInstructionsPresent = Boolean(
+    project.localPath
+    && isRegularFile(path.join(project.localPath, '.devflow', 'agents.md')),
+  );
+  const genericPresentHints = root
+    ? HINT_FILES.filter((fileName) => isRegularFile(path.join(root, fileName)))
     : [];
+  const presentHints = [
+    ...(devFlowProjectInstructionsPresent ? [DEVFLOW_PROJECT_INSTRUCTIONS_PATH] : []),
+    ...genericPresentHints,
+  ];
 
   return {
     project: {
@@ -383,7 +400,7 @@ export function getProjectStartContext(state: AppState, args: Record<string, any
     files: topLevel,
     hints: {
       present: presentHints,
-      recommendedReads: presentHints.filter((fileName) => ['AGENTS.md', 'README.md', 'package.json'].includes(fileName)),
+      recommendedReads: presentHints.filter((fileName) => [DEVFLOW_PROJECT_INSTRUCTIONS_PATH, 'AGENTS.md', 'README.md', 'package.json'].includes(fileName)),
     },
     recommendedNextTools: [
       'get_skill_router',

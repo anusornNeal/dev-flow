@@ -6,10 +6,14 @@ import { findProjectByIdentifier } from './taskService';
 import type { ProjectRulesContext } from './projectRulesService';
 
 const FILE_CACHE_TTL_MS = 30_000;
+export const DEVFLOW_PROJECT_INSTRUCTIONS_MAX_BYTES = 32 * 1024;
+const DEVFLOW_PROJECT_INSTRUCTIONS_RELATIVE_PATH = '.devflow/agents.md';
+const DEVFLOW_PROJECT_INSTRUCTIONS_SECTION_TITLE = '## DevFlow Project-Local Instructions';
 
 interface FileCacheEntry {
   data: string;
   mtimeMs: number;
+  size: number;
   cachedAt: number;
 }
 
@@ -21,16 +25,46 @@ function readFileWithCache(filePath: string): string | null {
     const existing = fileCache.get(filePath);
     const now = Date.now();
 
-    if (existing && stat.mtimeMs <= existing.mtimeMs && now - existing.cachedAt < FILE_CACHE_TTL_MS) {
+    if (existing && stat.mtimeMs === existing.mtimeMs && stat.size === existing.size && now - existing.cachedAt < FILE_CACHE_TTL_MS) {
       return existing.data;
     }
 
     const content = fs.readFileSync(filePath, 'utf8');
-    fileCache.set(filePath, { data: content, mtimeMs: stat.mtimeMs, cachedAt: now });
+    fileCache.set(filePath, { data: content, mtimeMs: stat.mtimeMs, size: stat.size, cachedAt: now });
     return content;
   } catch {
     return null;
   }
+}
+
+function readDevFlowProjectInstructions(localPath?: string): string | null {
+  if (!localPath) return null;
+  const instructionPath = path.join(localPath, '.devflow', 'agents.md');
+  try {
+    const stat = fs.statSync(instructionPath);
+    if (!stat.isFile() || stat.size > DEVFLOW_PROJECT_INSTRUCTIONS_MAX_BYTES) return null;
+    const content = readFileWithCache(instructionPath);
+    if (content === null || Buffer.byteLength(content, 'utf8') > DEVFLOW_PROJECT_INSTRUCTIONS_MAX_BYTES) return null;
+    const trimmed = content.trim();
+    return trimmed || null;
+  } catch {
+    return null;
+  }
+}
+
+function renderDevFlowProjectInstructions(localPath?: string): string | null {
+  const content = readDevFlowProjectInstructions(localPath);
+  if (!content) return null;
+  return [
+    DEVFLOW_PROJECT_INSTRUCTIONS_SECTION_TITLE,
+    `Source: \`${DEVFLOW_PROJECT_INSTRUCTIONS_RELATIVE_PATH}\``,
+    '',
+    'Within DevFlow project guidance, these instructions take precedence over conflicting generic repository guidance such as root `AGENTS.md`. They do not override system/developer instructions, DevFlow master or harness hard-safety policy, ownership/fencing rules, verification gates, or tool safety contracts.',
+    '',
+    `--- BEGIN ${DEVFLOW_PROJECT_INSTRUCTIONS_RELATIVE_PATH} ---`,
+    content,
+    `--- END ${DEVFLOW_PROJECT_INSTRUCTIONS_RELATIVE_PATH} ---`,
+  ].join('\n');
 }
 
 export interface PromptRenderContext {
@@ -201,11 +235,12 @@ export function renderPromptTemplate(pipelineId: string, context: PromptRenderCo
     }
   }
 
-  // Compose the final prompt body from the rendered sections only.
+  // Compose the final prompt body from project-local DevFlow instructions plus rendered master/override sections.
   // The internal usedSkills list is still returned in the API response for
   // logs/debugging, but we no longer emit it as an HTML comment at the top of
   // the rendered prompt.
-  const finalContent = sections.join('\n\n');
+  const projectInstructions = renderDevFlowProjectInstructions(context.workspace?.localPath);
+  const finalContent = [projectInstructions, ...sections].filter(Boolean).join('\n\n');
 
   if (mode === 'preview') {
     return {

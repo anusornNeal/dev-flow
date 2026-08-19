@@ -14,6 +14,7 @@ import {
 } from './harnessPolicyService.js';
 import {
   getTaskExecutionMutationBinding,
+  getExecutionOwnershipState,
   recordExecutionLifecycleTransition,
   recordExecutionSessionEvidence,
   type ExecutionLifecycleTransitionInput,
@@ -507,6 +508,8 @@ export function recordHarnessExecutionOutcome(decision: HarnessExecutionGuardDec
     }
 
     if (current.session.lifecycle.stage === 'implementing' || current.session.lifecycle.stage === 'repairing') {
+      const ownership = getExecutionOwnershipState(sessionId, { repoRoot: current.workspace.root });
+      if (ownership.verificationFresh !== true) return current.session.lifecycle;
       return transition(sessionId, 'verifying', 'verification-result-observed', decision, 'verification', 'verification-result');
     }
     return current.session.lifecycle;

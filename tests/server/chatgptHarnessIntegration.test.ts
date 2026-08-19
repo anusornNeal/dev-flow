@@ -179,13 +179,64 @@ test('combined harness envelope follows claim, context, mutation, repair, resume
     assert.equal(repairMutation.allowed, true);
     recordHarnessExecutionOutcome(repairMutation, { ok: true, changed: true });
 
+    const verificationBinding = executionSessions.getTaskExecutionMutationBinding({ workspaceId })!;
+    const staleProvenance = executionSessions.captureExecutionVerificationProvenance(session.id, { repoRoot: verificationBinding.workspace.root });
+    const rejectedProvenance = { ...staleProvenance, ownedFingerprint: '0'.repeat(64) };
+
     const successfulVerify = preflightHarnessExecutionGuard(state, 'run_project_command', {
       workspaceId,
       harnessOperationId: 'integration-verify-passed',
     });
     assert.equal(successfulVerify.allowed, true);
-    recordHarnessExecutionOutcome(successfulVerify, { status: 'passed', ok: true, exitCode: 0 });
+    const staleVerifyResult = {
+      status: 'succeeded', ok: true, exitCode: 0,
+      verificationCandidate: {
+        current: true,
+        candidateId: 'vc_integration_stale',
+        repoRevision: staleProvenance.repoRevision,
+        executionKey: 'integration-stale',
+      },
+    };
+    assert.throws(
+      () => executionSessions.recordTaskExecutionVerificationResult({ workspaceId, command: 'integration-focused' }, staleVerifyResult, rejectedProvenance),
+      (error: any) => error?.code === 'EXECUTION_VERIFICATION_STALE',
+    );
+    recordHarnessExecutionOutcome(successfulVerify, staleVerifyResult);
+    assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'repairing');
+    assert.notEqual(executionSessions.getExecutionOwnershipState(session.id, { repoRoot: verificationBinding.workspace.root }).verificationFresh, true);
+    health = getChatGptHarnessHealthSnapshot(state, { workspaceId });
+    assert.equal(health.execution.stage, 'repairing');
+    context = getAgentTaskContext(state, task.id, false)!;
+    assert.ok(context.harness.allowedNextActionClasses.includes('verification'));
+    assert.equal(context.harness.allowedNextActionClasses.includes('commit'), false);
+
+    const transitionCountBeforeDuplicate = executionSessions.getExecutionSessionState(session.id).evidence
+      .filter((entry: any) => entry.kind === 'lifecycle-transition').length;
+    recordHarnessExecutionOutcome(successfulVerify, staleVerifyResult);
+    assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'repairing');
+    assert.equal(
+      executionSessions.getExecutionSessionState(session.id).evidence.filter((entry: any) => entry.kind === 'lifecycle-transition').length,
+      transitionCountBeforeDuplicate,
+    );
+
+    const freshProvenance = executionSessions.captureExecutionVerificationProvenance(session.id, { repoRoot: verificationBinding.workspace.root });
+    const freshVerifyResult = {
+      status: 'succeeded', ok: true, exitCode: 0,
+      verificationCandidate: {
+        current: true,
+        candidateId: 'vc_integration_fresh',
+        repoRevision: freshProvenance.repoRevision,
+        executionKey: 'integration-fresh',
+      },
+    };
+    executionSessions.recordTaskExecutionVerificationResult({ workspaceId, command: 'integration-focused' }, freshVerifyResult, freshProvenance);
+    assert.equal(executionSessions.getExecutionOwnershipState(session.id, { repoRoot: verificationBinding.workspace.root }).verificationFresh, true);
+    recordHarnessExecutionOutcome(successfulVerify, freshVerifyResult);
     assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'verifying');
+    health = getChatGptHarnessHealthSnapshot(state, { workspaceId });
+    assert.equal(health.execution.stage, 'verifying');
+    context = getAgentTaskContext(state, task.id, false)!;
+    assert.ok(context.harness.allowedNextActionClasses.includes('commit'));
 
     const commitPreview = preflightHarnessExecutionGuard(state, 'commit_task_owned_changes', {
       workspaceId,

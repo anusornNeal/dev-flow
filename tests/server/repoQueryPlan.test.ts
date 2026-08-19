@@ -70,11 +70,11 @@ test('validates the complete plan before executing any repository operation', as
 
 test('enforces hard step, search, concurrency, and output limits', async () => {
   const execute = createRepoQueryPlanExecutor({ search: async () => searchResult([]) });
-  const tooManySteps = Array.from({ length: 12 }, (_, index) => ({ id: `s${index}`, op: 'search', query: 'x' }));
+  const tooManySteps: Record<string, any>[] = Array.from({ length: 12 }, (_, index) => ({ id: `s${index}`, op: 'search', query: 'x' }));
   tooManySteps.push({ id: 'out', op: 'select', from: 's0' });
   await assert.rejects(() => execute(state, basePlan(tooManySteps, 'out'), logger, () => {}), /at most 12 steps/i);
 
-  const tooManySearches = Array.from({ length: 7 }, (_, index) => ({ id: `s${index}`, op: 'search', query: 'x' }));
+  const tooManySearches: Record<string, any>[] = Array.from({ length: 7 }, (_, index) => ({ id: `s${index}`, op: 'search', query: 'x' }));
   tooManySearches.push({ id: 'out', op: 'select', from: 's0' });
   await assert.rejects(() => execute(state, basePlan(tooManySearches, 'out'), logger, () => {}), /at most 6 search steps/i);
 
@@ -161,6 +161,15 @@ test('read_snippets reuses bounded batch-read semantics and returns only selecte
     readSnippets: (_state, args) => {
       readArgs = args;
       return {
+        root: 'repo-root',
+        count: args.files.length,
+        requestedCount: args.files.length,
+        successCount: args.files.length,
+        errorCount: 0,
+        partial: false,
+        totalReturnedBytes: 40,
+        maxTotalBytes: args.maxTotalBytes,
+        truncated: false,
         files: args.files.map((file: any) => ({
           path: file.filePath,
           startLine: file.startLine,
@@ -169,10 +178,6 @@ test('read_snippets reuses bounded batch-read semantics and returns only selecte
           returnedBytes: 20,
           truncated: false,
         })),
-        successCount: args.files.length,
-        errorCount: 0,
-        totalReturnedBytes: 40,
-        truncated: false,
       };
     },
   });
@@ -226,11 +231,16 @@ test('output byte budget is enforced even when snippet content is much larger', 
   const execute = createRepoQueryPlanExecutor({
     search: async () => searchResult([{ path: 'src/large.ts', line: 1, preview: 'large' }]),
     readSnippets: (_state, args) => ({
-      files: [{ path: args.files[0].filePath, content: 'x'.repeat(5000), returnedBytes: 5000, truncated: false }],
+      root: 'repo-root',
+      count: 1,
+      requestedCount: 1,
       successCount: 1,
       errorCount: 0,
+      partial: false,
       totalReturnedBytes: 5000,
+      maxTotalBytes: args.maxTotalBytes,
       truncated: false,
+      files: [{ path: args.files[0].filePath, content: 'x'.repeat(5000), returnedBytes: 5000, truncated: false }],
     }),
   });
 

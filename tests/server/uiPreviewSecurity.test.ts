@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import type { UiPreviewDesignRenderAsset } from '../../src/server/domain/uiPreview.js';
 
 const documentService = await import('../../src/server/services/uiPreviewDocumentService.js');
 
@@ -52,7 +53,7 @@ test('font materialization cannot widen CSP, use paths or URLs, or materialize s
     kind: 'font',
     contentIdentity: identity,
     font: { family: 'Inter', weight: 400, style: 'normal', mimeType: 'font/woff2', byteLength: bytes.byteLength },
-  };
+  } satisfies UiPreviewDesignRenderAsset;
   const snapshot = documentService.materializeUiPreviewFonts({
     contextHash: 'e'.repeat(64),
     renderAssets: [safeRef],

@@ -9,6 +9,7 @@ import {
   UI_PREVIEW_CSP,
   UI_PREVIEW_WORKSPACE_CSP,
 } from '../../src/server/services/uiPreviewDocumentService.js';
+import type { UiPreviewDesignRenderAsset } from '../../src/server/domain/uiPreview.js';
 
 test('legacy preview document keeps direct body rendering and capability guard', () => {
   const document = composeUiPreviewDocument({
@@ -73,7 +74,7 @@ function woff2Bytes(size = 32) {
   return bytes;
 }
 
-function fontRef(bytes: Uint8Array, overrides: Record<string, any> = {}) {
+function fontRef(bytes: Uint8Array, overrides: Record<string, any> = {}): UiPreviewDesignRenderAsset {
   return {
     assetId: 'font_inter_400',
     kind: 'font',
@@ -86,7 +87,7 @@ function fontRef(bytes: Uint8Array, overrides: Record<string, any> = {}) {
       byteLength: bytes.byteLength,
     },
     ...overrides,
-  };
+  } as UiPreviewDesignRenderAsset;
 }
 
 test('materializes current content-addressed WOFF2 font refs into immutable data-font snapshots', () => {

@@ -78,24 +78,25 @@ test('uses a stable versioned rule registry without beauty or AI-slop scoring', 
   assert.equal(result.blocked, false);
 });
 
-test('hard-fails explicit project color and font violations only when project context is sufficient', () => {
-  const result = evaluate({
-    screens: [screen({ css: '.card { color: #ff00ff; font-family: Comic Sans MS, cursive; }' })],
+test('project color and font observations warn unless server-owned context explicitly enforces a closed set', () => {
+  const source = [screen({ css: '.card { color: #ff00ff; font-family: Comic Sans MS, cursive; }' })];
+  const observedOnly = evaluate({ screens: source });
+  assert.equal(observedOnly.blocked, false);
+  assert.ok(observedOnly.findings.filter((finding: any) => finding.ruleId.startsWith('project.')).every((finding: any) => finding.severity === 'warning'));
+  assert.ok(observedOnly.findings.every((finding: any) => finding.evidence.length > 0 && finding.evidence.length <= 8));
+  assert.doesNotMatch(JSON.stringify(observedOnly), /\.card \{|Comic Sans MS, cursive/);
+
+  const enforced = evaluate({
+    designContext: context({
+      reasonCodes: ['VISUAL_BASIS_FOUND', 'CONTEXT_COMPLETE', 'PROJECT_COLOR_SET_ENFORCED', 'PROJECT_FONT_SET_ENFORCED'],
+    }),
+    screens: source,
   });
-  assert.equal(result.blocked, true);
-  assert.deepEqual(result.findings.filter((finding: any) => finding.severity === 'error').map((finding: any) => finding.ruleId), [
+  assert.equal(enforced.blocked, true);
+  assert.deepEqual(enforced.findings.filter((finding: any) => finding.severity === 'error').map((finding: any) => finding.ruleId), [
     'project.explicit-color',
     'project.explicit-font-family',
   ]);
-  assert.ok(result.findings.every((finding: any) => finding.evidence.length > 0 && finding.evidence.length <= 8));
-  assert.doesNotMatch(JSON.stringify(result), /\.card \{|Comic Sans MS, cursive/);
-
-  const partial = evaluate({
-    designContext: context({ sufficiency: 'partial', unknowns: ['palette', 'typography'] }),
-    screens: [screen({ css: '.card { color: #ff00ff; font-family: Comic Sans MS, cursive; }' })],
-  });
-  assert.equal(partial.blocked, false);
-  assert.ok(partial.findings.filter((finding: any) => finding.ruleId.startsWith('project.')).every((finding: any) => finding.severity === 'warning'));
 });
 
 test('hard-fails only provable missing image alt while interaction and aesthetic guesses stay warnings', () => {

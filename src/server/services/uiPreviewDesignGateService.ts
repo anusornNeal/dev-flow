@@ -15,8 +15,8 @@ import { normalizeUiPreviewDesignGateExceptionRefs } from './uiSpecValidator.js'
 export const UI_PREVIEW_DESIGN_GATE_POLICY_VERSION = 'ui-preview-design-gate.v1';
 
 export const UI_PREVIEW_DESIGN_RULES = Object.freeze([
-  { id: 'project.explicit-color', category: 'project-style', severity: 'error' },
-  { id: 'project.explicit-font-family', category: 'project-style', severity: 'error' },
+  { id: 'project.explicit-color', category: 'project-style', severity: 'warning' },
+  { id: 'project.explicit-font-family', category: 'project-style', severity: 'warning' },
   { id: 'accessibility.image-alt', category: 'accessibility', severity: 'error' },
   { id: 'interaction.non-native-click-keyboard', category: 'interaction', severity: 'warning' },
   { id: 'destructive.confirmation-unproven', category: 'destructive-safety', severity: 'warning' },
@@ -85,19 +85,19 @@ function explicitFontFamilies(css: string) {
   return [...new Set(values)];
 }
 
-function projectSeverity(context: UiPreviewDesignContext): UiPreviewDesignGateSeverity {
-  return context.sufficiency === 'sufficient' ? 'error' : 'warning';
+function projectSeverity(context: UiPreviewDesignContext, enforcementReasonCode: string): UiPreviewDesignGateSeverity {
+  return context.sufficiency === 'sufficient' && context.reasonCodes.includes(enforcementReasonCode) ? 'error' : 'warning';
 }
 
 function projectReason(base: string, severity: UiPreviewDesignGateSeverity) {
-  return severity === 'error' ? `${base}_OUTSIDE_CONTEXT` : `${base}_UNVERIFIED`;
+  return severity === 'error' ? `${base}_CLOSED_SET_VIOLATION` : `${base}_CONTEXT_MISMATCH_UNPROVEN`;
 }
 
 function evaluateProjectColors(screens: UiPreviewScreen[], context: UiPreviewDesignContext) {
   const rule = UI_PREVIEW_DESIGN_RULES[0];
   const allowed = new Set(context.visual.colors.filter((value) => /^#[0-9a-fA-F]{3,8}$/.test(value)).map(normalizeHex));
   if (allowed.size === 0) return [] as UiPreviewDesignGateFinding[];
-  const severity = projectSeverity(context);
+  const severity = projectSeverity(context, 'PROJECT_COLOR_SET_ENFORCED');
   const findings: UiPreviewDesignGateFinding[] = [];
   for (const screen of screens) {
     const outside = explicitHexColors(screen.css).filter((color) => !allowed.has(color));
@@ -114,7 +114,7 @@ function evaluateProjectFonts(screens: UiPreviewScreen[], context: UiPreviewDesi
   const rule = UI_PREVIEW_DESIGN_RULES[1];
   const allowed = new Set(context.visual.fontFamilies.map((value) => value.trim().toLowerCase()).filter(Boolean));
   if (allowed.size === 0) return [] as UiPreviewDesignGateFinding[];
-  const severity = projectSeverity(context);
+  const severity = projectSeverity(context, 'PROJECT_FONT_SET_ENFORCED');
   const findings: UiPreviewDesignGateFinding[] = [];
   for (const screen of screens) {
     const outside = explicitFontFamilies(screen.css).filter((family) => !allowed.has(family.toLowerCase()));

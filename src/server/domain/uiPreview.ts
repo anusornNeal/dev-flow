@@ -174,6 +174,30 @@ export interface UiPreviewDesignGateResult {
   exceptionResults: UiPreviewDesignGateExceptionResult[];
 }
 
+export type UiPreviewScope =
+  | { kind: 'unscoped' }
+  | { kind: 'project'; projectId: string }
+  | { kind: 'task'; taskId: string; projectId: string };
+
+export interface UiPreviewRevisionDesignProvenance {
+  schemaVersion: 1;
+  scope: UiPreviewScope;
+  repositoryRevision: string;
+  contextHash: string;
+  contextSchemaVersion: 1;
+  gatePolicyVersion: string;
+  sufficiency: UiPreviewDesignContextSufficiency;
+  unknowns: string[];
+  sources: UiPreviewDesignContextSource[];
+  findings: UiPreviewDesignGateFinding[];
+  suppressedFindings: UiPreviewDesignGateFinding[];
+  exceptionRefs: UiPreviewDesignGateExceptionRef[];
+  exceptionResults: UiPreviewDesignGateExceptionResult[];
+  renderAssets: UiPreviewDesignRenderAsset[];
+  fontRenderability: 'not-requested' | 'available' | 'unavailable';
+  fontContentIdentities: string[];
+}
+
 export class UiPreviewError extends Error {
   constructor(public readonly code: string, message: string) {
     super(message);

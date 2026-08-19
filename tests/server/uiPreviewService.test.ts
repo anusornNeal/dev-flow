@@ -16,7 +16,7 @@ const repository = createUiPreviewRepository(db as any);
 const service = createUiPreviewService({ repository, runtimePort: () => 43123 });
 const spec = { schemaVersion: 1, summary: { screen: 'Service' }, sections: [{ id: 'main' }] };
 
-function createWorkspaceService() {
+function createWorkspaceService(serviceDeps: Record<string, any> = {}) {
   const previews = new Map<string, { record: any; revisions: any[] }>();
   const idempotency = new Map<string, { fingerprint: string; result: any }>();
   let previewId = 0;
@@ -63,12 +63,7 @@ function createWorkspaceService() {
         throw error;
       }
       const current = stored.revisions[stored.revisions.length - 1];
-      const comparable = (value: any) => JSON.stringify({
-        title: value.title,
-        screens: value.screens,
-        defaultScreenId: value.defaultScreenId,
-        viewport: value.viewport,
-      });
+      const comparable = (value: any) => value.contentHash;
       if (comparable(current) === comparable(input)) return { changed: false, preview: stored.record, revision: current };
       const nextRevision = stored.record.latestRevision + 1;
       const createdAt = `2026-08-17T00:00:0${nextRevision}.000Z`;
@@ -96,8 +91,55 @@ function createWorkspaceService() {
     },
   } as any;
   return {
-    service: createUiPreviewService({ repository, runtimePort: () => 43123, createId: () => `uip_workspace_${++previewId}` }),
+    service: createUiPreviewService({ repository, runtimePort: () => 43123, createId: () => `uip_workspace_${++previewId}`, ...serviceDeps }),
     repository,
+  };
+}
+
+function designContext(overrides: Record<string, any> = {}) {
+  return {
+    taskId: null,
+    projectId: 'project-a',
+    repositoryRevision: 'repo-a',
+    contextSchemaVersion: 1,
+    gatePolicyVersion: 'ui-preview-design-gate.v1',
+    contextHash: 'a'.repeat(64),
+    sufficiency: 'sufficient',
+    reasonCodes: ['VISUAL_BASIS_FOUND', 'CONTEXT_COMPLETE'],
+    visual: {
+      colors: ['#2457d6'], semanticColors: ['primary'], fontFamilies: ['Inter'], fontWeights: ['400'],
+      spacing: ['8px'], radii: ['8px'], dimensions: ['40px'], iconConventions: [], sharedComponents: [], referenceScreens: [],
+    },
+    ux: { ruleIds: [] },
+    unknowns: [],
+    sources: [{ path: 'src/styles/theme.css', startLine: 1, endLine: 20, trustClass: 'repo-evidence-untrusted', evidenceRole: 'project-foundation' }],
+    renderAssets: [],
+    ...overrides,
+  };
+}
+
+function createScopedWorkspaceService() {
+  let currentContext = designContext();
+  let contextCalls = 0;
+  const designContextService = {
+    get(input: any) {
+      contextCalls += 1;
+      if (input.taskId && input.projectId && input.projectId !== currentContext.projectId) {
+        const error: any = new Error('scope mismatch');
+        error.code = 'UI_PREVIEW_DESIGN_CONTEXT_PROJECT_MISMATCH';
+        throw error;
+      }
+      return JSON.parse(JSON.stringify({
+        ...currentContext,
+        taskId: input.taskId ? 'task-scoped' : null,
+      }));
+    },
+  };
+  const created = createWorkspaceService({ designContextService });
+  return {
+    ...created,
+    setContext(next: Record<string, any>) { currentContext = designContext(next); },
+    getContextCalls() { return contextCalls; },
   };
 }
 
@@ -197,6 +239,104 @@ test('multi-screen service preserves canonical workspace metadata, full replacem
   assert.throws(() => workspaceService.update({ previewId: created.previewId, html: '<main>legacy patch</main>' }), /replace the complete screens array/i);
 });
 
+test('scoped create requires a current design-context handshake and rejects mismatch or insufficient context before write', () => {
+  const scoped = createScopedWorkspaceService();
+  const source = { projectId: 'project-a', html: '<main>scoped</main>', spec: { schemaVersion: 1, summary: { screen: 'Scoped' } } };
+  assert.throws(
+    () => scoped.service.create(source as any),
+    (error: any) => error?.code === 'UI_PREVIEW_DESIGN_CONTEXT_REQUIRED',
+  );
+  assert.equal(scoped.repository.getPreview('uip_workspace_1'), null);
+
+  assert.throws(
+    () => scoped.service.create({ ...source, expectedDesignContextHash: 'b'.repeat(64) } as any),
+    (error: any) => error?.code === 'UI_PREVIEW_DESIGN_CONTEXT_STALE',
+  );
+  assert.equal(scoped.repository.getPreview('uip_workspace_1'), null);
+
+  scoped.setContext({ sufficiency: 'insufficient', reasonCodes: ['NO_VISUAL_BASIS'], unknowns: ['palette'] });
+  assert.throws(
+    () => scoped.service.create({ ...source, expectedDesignContextHash: 'a'.repeat(64) } as any),
+    (error: any) => error?.code === 'UI_PREVIEW_DESIGN_CONTEXT_INSUFFICIENT',
+  );
+
+  scoped.setContext({});
+  assert.throws(
+    () => scoped.service.create({ taskId: 'task-scoped', projectId: 'project-b', expectedDesignContextHash: 'a'.repeat(64), html: '<main>x</main>', spec } as any),
+    (error: any) => error?.code === 'UI_PREVIEW_SCOPE_MISMATCH',
+  );
+});
+
+test('accepted scoped revisions persist bounded provenance and meaningful context identity without repo-revision churn', () => {
+  const scoped = createScopedWorkspaceService();
+  const created = scoped.service.create({
+    projectId: 'project-a',
+    expectedDesignContextHash: 'a'.repeat(64),
+    html: '<main>scoped</main>',
+    spec: { schemaVersion: 1, summary: { screen: 'Scoped' } },
+  } as any);
+  assert.deepEqual(created.scope, { kind: 'project', projectId: 'project-a' });
+  assert.equal(created.designProvenance.contextHash, 'a'.repeat(64));
+  assert.equal(created.designProvenance.repositoryRevision, 'repo-a');
+  assert.equal(created.designProvenance.sufficiency, 'sufficient');
+  assert.equal('html' in created.designProvenance, false);
+  assert.equal('css' in created.designProvenance, false);
+
+  scoped.setContext({ repositoryRevision: 'repo-unrelated', contextHash: 'a'.repeat(64) });
+  const noOp = scoped.service.update({
+    previewId: created.previewId,
+    expectedRevision: 1,
+    projectId: 'project-a',
+    expectedDesignContextHash: 'a'.repeat(64),
+  } as any);
+  assert.equal(noOp.changed, false);
+  assert.equal(noOp.revision, 1);
+  assert.equal(noOp.designProvenance.repositoryRevision, 'repo-a', 'no-op retains accepted historical provenance snapshot');
+
+  scoped.setContext({ repositoryRevision: 'repo-meaningful', contextHash: 'c'.repeat(64) });
+  const changed = scoped.service.update({
+    previewId: created.previewId,
+    expectedRevision: 1,
+    projectId: 'project-a',
+    expectedDesignContextHash: 'c'.repeat(64),
+  } as any);
+  assert.equal(changed.changed, true);
+  assert.equal(changed.revision, 2);
+  assert.equal(changed.designProvenance.contextHash, 'c'.repeat(64));
+});
+
+test('scoped idempotent replay returns the originally accepted context snapshot without recomputing current context', () => {
+  const scoped = createScopedWorkspaceService();
+  const request = {
+    projectId: 'project-a',
+    expectedDesignContextHash: 'a'.repeat(64),
+    html: '<main>replay</main>',
+    spec: { schemaVersion: 1, summary: { screen: 'Replay' } },
+    idempotencyKey: 'scoped-create',
+  };
+  const first = scoped.service.create(request as any);
+  const callsAfterFirst = scoped.getContextCalls();
+  scoped.setContext({ repositoryRevision: 'repo-later', contextHash: 'f'.repeat(64) });
+  const replay = scoped.service.create(request as any);
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.previewId, first.previewId);
+  assert.equal(replay.designProvenance.contextHash, 'a'.repeat(64));
+  assert.equal(replay.designProvenance.repositoryRevision, 'repo-a');
+  assert.equal(scoped.getContextCalls(), callsAfterFirst, 'accepted replay bypasses current context recomputation');
+});
+
+test('scoped update cannot retarget immutable preview scope', () => {
+  const scoped = createScopedWorkspaceService();
+  const created = scoped.service.create({
+    projectId: 'project-a', expectedDesignContextHash: 'a'.repeat(64), html: '<main>x</main>', spec,
+  } as any);
+  assert.throws(() => scoped.service.update({
+    previewId: created.previewId,
+    projectId: 'project-b',
+    expectedDesignContextHash: 'a'.repeat(64),
+  } as any), (error: any) => error?.code === 'UI_PREVIEW_SCOPE_MISMATCH');
+});
+
 test('canonical hash is stable across spec key insertion order and exact-source significant', () => {
   const a = service.create({ html: '<main>x</main>', spec: { schemaVersion: 1, summary: { screen: 'A', b: 2, a: 1 }, z: { y: 2, x: 1 } } });
   const b = service.create({ html: '<main>x</main>', spec: { z: { x: 1, y: 2 }, summary: { a: 1, b: 2, screen: 'A' }, schemaVersion: 1 } });
@@ -272,7 +412,17 @@ test('delete removes standalone previews and rejects linked or missing previews'
   assert.equal(repository.getPreview(created.previewId), null);
 
   seedTask('task-linked-service');
-  const linked = service.create({ taskId: 'task-linked-service', html: '<main>linked</main>', spec });
+  const linkedService = createUiPreviewService({
+    repository,
+    runtimePort: () => 43123,
+    designContextService: { get: () => designContext({ taskId: 'task-linked-service' }) as any },
+  });
+  const linked = linkedService.create({
+    taskId: 'task-linked-service',
+    expectedDesignContextHash: 'a'.repeat(64),
+    html: '<main>linked</main>',
+    spec,
+  });
   assert.throws(() => (service as any).delete({ previewId: linked.previewId }), (error: any) => error?.code === 'UI_PREVIEW_DELETE_LINKED_CONFLICT');
   assert.throws(() => (service as any).delete({ previewId: 'uip_missing_service' }), (error: any) => error?.code === 'UI_PREVIEW_NOT_FOUND');
 });

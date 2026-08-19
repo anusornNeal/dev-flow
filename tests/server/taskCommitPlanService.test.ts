@@ -27,6 +27,7 @@ git(repoRoot, ['commit', '-m', 'base']);
 
 const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
 executeAllMigrations();
+const { saveTask } = await import('../../src/server/repositories/taskRepository.js');
 const workspaceService = await import('../../src/server/services/sessionWorkspaceService.js');
 const execution = await import('../../src/server/services/executionSessionService.js');
 const commitPlan = await import('../../src/server/services/taskCommitPlanService.js');
@@ -37,7 +38,7 @@ function createFixture(label: string) {
   const workspace = workspaceService.createOrReuseSessionWorkspace({ id: projectId, localPath: repoRoot }, label);
   const taskId = `task-${label}`;
   const session = execution.createExecutionSession({ projectId, taskId, workspaceId: workspace.workspaceId, repoRoot: workspace.root });
-  return { workspace, taskId, session };
+  return { projectId, workspace, taskId, session };
 }
 
 test('commit plan selects only execution-owned changed files and preserves unrelated changes', () => {
@@ -52,6 +53,8 @@ test('commit plan selects only execution-owned changed files and preserves unrel
   assert.deepEqual(plan.ownedChangedFiles, ['src/owned.ts']);
   assert.deepEqual(plan.unrelatedChangedFiles, ['src/unrelated.ts']);
   assert.equal(plan.verificationFresh, true);
+  assert.equal(plan.verificationState, 'authoritative-fresh');
+  assert.ok(plan.verificationRecordedAt);
 
   const committed = commitPlan.commitTaskOwnedChanges({ countersCache: {} }, { taskId, workspaceId: workspace.workspaceId, message: 'fix(scope): scoped owned change' });
   assert.deepEqual(committed.committedFiles, ['src/owned.ts']);
@@ -74,6 +77,8 @@ test('commit plan matches execution-owned files inside a wholly new nested direc
   assert.deepEqual(plan.ownedChangedFiles, [ownedPath]);
   assert.deepEqual(plan.unrelatedChangedFiles, []);
   assert.deepEqual(plan.scopeDrift, []);
+  assert.equal(plan.verificationState, 'authoritative-fresh');
+  assert.deepEqual(plan.blockers, []);
 });
 
 test('commit plan accepts owned repair drift only when fresh verification covers the current revisions', () => {
@@ -104,6 +109,67 @@ test('commit plan accepts owned repair drift only when fresh verification covers
   assert.ok(plan.blockers.some((entry: any) => entry.code === 'EXECUTION_VERIFICATION_NOT_FRESH'));
 });
 
+test('commit plan distinguishes missing authoritative verification from stale verification', () => {
+  const { workspace, taskId, session } = createFixture('missing-verification');
+  fs.writeFileSync(path.join(workspace.root, 'src', 'owned.ts'), 'export const owned = 20;\n');
+  execution.recordExecutionOwnedChanges(session.id, ['src/owned.ts'], { repoRoot: workspace.root, source: 'task-edit' });
+
+  const plan = commitPlan.buildTaskCommitPlan({ countersCache: {} }, { taskId, workspaceId: workspace.workspaceId });
+  assert.equal(plan.commitAllowed, false);
+  assert.equal(plan.verificationFresh, null);
+  assert.equal(plan.verificationState, 'missing');
+  assert.equal(plan.verificationRecordedAt, null);
+  const blocker = plan.blockers.find((entry: any) => entry.code === 'EXECUTION_VERIFICATION_NOT_FRESH');
+  assert.equal(blocker?.details?.verificationState, 'missing');
+  assert.equal(blocker?.details?.ownershipDriftCount, 0);
+});
+
+test('task-level passed verification metadata cannot substitute for execution-bound freshness', () => {
+  const { projectId, workspace, taskId, session } = createFixture('task-level-only');
+  const now = new Date().toISOString();
+  saveTask({
+    id: taskId,
+    displayId: 'DVF-TASK-LEVEL-ONLY',
+    title: 'Task-level verification fixture',
+    description: 'Task metadata must not substitute for execution-bound verification.',
+    projectId,
+    status: 'in-progress',
+    priority: 'medium',
+    category: 'backend',
+    tags: [],
+    targetFiles: ['src/owned.ts'],
+    checklist: [],
+    verificationEvidence: [{ name: 'task-only', command: 'task-only', status: 'passed', recordedAt: now }],
+    logs: [], bugs: [], images: [], createdAt: now, updatedAt: now,
+  } as any);
+  fs.writeFileSync(path.join(workspace.root, 'src', 'owned.ts'), 'export const owned = 21;\n');
+  execution.recordExecutionOwnedChanges(session.id, ['src/owned.ts'], { repoRoot: workspace.root, source: 'task-edit' });
+
+  const plan = commitPlan.buildTaskCommitPlan({ countersCache: {} }, { taskId, workspaceId: workspace.workspaceId });
+  assert.equal(plan.commitAllowed, false);
+  assert.equal(plan.verificationState, 'missing');
+  assert.ok(plan.blockers.some((entry: any) => entry.code === 'EXECUTION_VERIFICATION_NOT_FRESH'));
+});
+
+test('no owned changes and inactive sessions remain independent commit blockers', () => {
+  const empty = createFixture('no-owned');
+  execution.recordExecutionVerificationEvidence(empty.session.id, [{ name: 'focused', status: 'passed' }], { repoRoot: empty.workspace.root });
+  const emptyPlan = commitPlan.buildTaskCommitPlan({ countersCache: {} }, { taskId: empty.taskId, workspaceId: empty.workspace.workspaceId });
+  assert.equal(emptyPlan.verificationState, 'authoritative-fresh');
+  assert.equal(emptyPlan.commitAllowed, false);
+  assert.ok(emptyPlan.blockers.some((entry: any) => entry.code === 'TASK_COMMIT_NO_OWNED_CHANGES'));
+
+  const inactive = createFixture('inactive');
+  fs.writeFileSync(path.join(inactive.workspace.root, 'src', 'owned.ts'), 'export const owned = 22;\n');
+  execution.recordExecutionOwnedChanges(inactive.session.id, ['src/owned.ts'], { repoRoot: inactive.workspace.root, source: 'task-edit' });
+  execution.recordExecutionVerificationEvidence(inactive.session.id, [{ name: 'focused', status: 'passed' }], { repoRoot: inactive.workspace.root });
+  execution.completeExecutionSession(inactive.session.id);
+  const inactivePlan = commitPlan.buildTaskCommitPlan({ countersCache: {} }, { taskId: inactive.taskId, workspaceId: inactive.workspace.workspaceId });
+  assert.equal(inactivePlan.verificationState, 'authoritative-fresh');
+  assert.equal(inactivePlan.commitAllowed, false);
+  assert.ok(inactivePlan.blockers.some((entry: any) => entry.code === 'EXECUTION_SESSION_NOT_ACTIVE'));
+});
+
 test('commit plan blocks stale verification after an owned file changes again', () => {
   const { workspace, taskId, session } = createFixture('stale');
   fs.writeFileSync(path.join(workspace.root, 'src', 'owned.ts'), 'export const owned = 3;\n');
@@ -114,7 +180,11 @@ test('commit plan blocks stale verification after an owned file changes again', 
   const plan = commitPlan.buildTaskCommitPlan({ countersCache: {} }, { taskId, workspaceId: workspace.workspaceId });
   assert.equal(plan.commitAllowed, false);
   assert.equal(plan.verificationFresh, false);
+  assert.equal(plan.verificationState, 'stale');
+  const verificationBlocker = plan.blockers.find((entry: any) => entry.code === 'EXECUTION_VERIFICATION_NOT_FRESH');
+  assert.equal(verificationBlocker?.details?.verificationState, 'stale');
+  assert.ok(verificationBlocker?.details?.verificationRecordedAt);
   assert.ok(plan.blockers.some((entry: any) => entry.code === 'EXECUTION_OWNERSHIP_DRIFT'));
-  assert.ok(plan.blockers.some((entry: any) => entry.code === 'EXECUTION_VERIFICATION_NOT_FRESH'));
+  assert.ok(verificationBlocker);
   assert.throws(() => commitPlan.commitTaskOwnedChanges({ countersCache: {} }, { taskId, workspaceId: workspace.workspaceId, message: 'should not commit' }), /blocked/i);
 });

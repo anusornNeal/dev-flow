@@ -23,6 +23,8 @@ export type TaskCommitPlan = {
   ownershipDrift: Array<{ path: string; knownFileRevision: string; currentFileRevision: string }>;
   verifiedOwnershipDrift: Array<{ path: string; knownFileRevision: string; currentFileRevision: string }>;
   verificationFresh: boolean | null;
+  verificationState: 'authoritative-fresh' | 'missing' | 'stale';
+  verificationRecordedAt: string | null;
   commitAllowed: boolean;
   blockers: TaskCommitPlanBlocker[];
 };
@@ -40,11 +42,17 @@ function requireWorkspaceId(value: unknown) {
   return workspaceId;
 }
 
+function resolveVerificationState(verificationFresh: boolean | null): TaskCommitPlan['verificationState'] {
+  return verificationFresh === true ? 'authoritative-fresh' : verificationFresh === null ? 'missing' : 'stale';
+}
+
 function buildBlockers(input: {
   sessionStatus: string;
   ownedChangedFiles: string[];
   ownershipDrift: TaskCommitPlan['ownershipDrift'];
   verificationFresh: boolean | null;
+  verificationState: TaskCommitPlan['verificationState'];
+  verificationRecordedAt: string | null;
 }) {
   const blockers: TaskCommitPlanBlocker[] = [];
   if (input.sessionStatus !== 'active') {
@@ -63,7 +71,15 @@ function buildBlockers(input: {
   if (input.verificationFresh !== true) {
     blockers.push({
       code: 'EXECUTION_VERIFICATION_NOT_FRESH',
-      message: 'Fresh verification bound to the current owned file revisions is required before scoped commit.',
+      message: input.verificationState === 'missing'
+        ? 'Authoritative execution verification is missing for the current owned file revisions.'
+        : 'Authoritative execution verification is stale for the current owned file revisions.',
+      details: {
+        verificationState: input.verificationState,
+        verificationFresh: input.verificationFresh,
+        verificationRecordedAt: input.verificationRecordedAt,
+        ownershipDriftCount: input.ownershipDrift.length,
+      },
     });
   }
   return blockers;
@@ -90,11 +106,15 @@ export function buildTaskCommitPlan(_state: AppState, args: Record<string, any>)
   }
 
   const ownership = getExecutionOwnershipState(session.id, { repoRoot: workspace.root });
+  const verificationState = resolveVerificationState(ownership.verificationFresh);
+  const verificationRecordedAt = ownership.verificationRecordedAt || null;
   const blockers = buildBlockers({
     sessionStatus: session.status,
     ownedChangedFiles: ownership.ownedChanges,
     ownershipDrift: ownership.ownershipDrift,
     verificationFresh: ownership.verificationFresh,
+    verificationState,
+    verificationRecordedAt,
   });
   return {
     taskId,
@@ -106,6 +126,8 @@ export function buildTaskCommitPlan(_state: AppState, args: Record<string, any>)
     ownershipDrift: ownership.ownershipDrift,
     verifiedOwnershipDrift: ownership.verifiedOwnershipDrift,
     verificationFresh: ownership.verificationFresh,
+    verificationState,
+    verificationRecordedAt,
     commitAllowed: blockers.length === 0,
     blockers,
   };

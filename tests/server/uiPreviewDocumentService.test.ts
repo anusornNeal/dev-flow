@@ -129,7 +129,37 @@ test('materializes current content-addressed WOFF2 font refs into immutable data
   assert.equal(stale.unavailable[0]?.reasonCode, 'FONT_CONTENT_IDENTITY_MISMATCH');
 });
 
-test('rejects unsupported, oversize, and aggregate-oversize font materialization without injecting fallback claims', () => {
+test('rejects unsupported, oversize, and aggregate-oversize font materialization without injecting fallback claims', () => {test('supports deterministic WOFF mapping and reports missing current font bytes as unavailable', () => {
+  const missingBytes = woff2Bytes();
+  const missingRef = fontRef(missingBytes);
+  const missing = materializeUiPreviewFonts({
+    contextHash: '9'.repeat(64),
+    renderAssets: [missingRef],
+    resolvedFonts: [],
+  });
+  assert.equal(missing.fontRenderability, 'unavailable');
+  assert.equal(missing.unavailable[0]?.reasonCode, 'FONT_BYTES_UNAVAILABLE');
+  assert.equal(missing.fonts.length, 0);
+
+  const woffBytes = Buffer.alloc(24, 0x31);
+  woffBytes.set(Buffer.from('wOFF'), 0);
+  const woffRef = fontRef(woffBytes, {
+    assetId: 'font_inter_700_italic',
+    font: { family: 'Inter', weight: 700, style: 'italic', mimeType: 'font/woff', byteLength: woffBytes.byteLength },
+  });
+  const woff = materializeUiPreviewFonts({
+    contextHash: '8'.repeat(64),
+    renderAssets: [woffRef],
+    resolvedFonts: [{ assetId: woffRef.assetId, bytes: woffBytes }],
+  });
+  assert.equal(woff.fontRenderability, 'available');
+  assert.equal(woff.fonts[0]?.format, 'woff');
+  assert.equal(woff.fonts[0]?.weight, 700);
+  assert.equal(woff.fonts[0]?.style, 'italic');
+  assert.match(woff.fonts[0]?.dataUri || '', /^data:font\/woff;base64,/);
+});
+
+
   const unsupportedBytes = woff2Bytes();
   const unsupported = materializeUiPreviewFonts({
     contextHash: 'b'.repeat(64),

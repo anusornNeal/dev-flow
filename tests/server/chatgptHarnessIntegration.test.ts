@@ -197,10 +197,14 @@ test('combined harness envelope follows claim, context, mutation, repair, resume
         executionKey: 'integration-stale',
       },
     };
-    assert.throws(
-      () => executionSessions.recordTaskExecutionVerificationResult({ workspaceId, command: 'integration-focused' }, staleVerifyResult, rejectedProvenance),
-      (error: any) => error?.code === 'EXECUTION_VERIFICATION_STALE',
+    const rejectedBinding = executionSessions.recordTaskExecutionVerificationResult(
+      { workspaceId, command: 'integration-focused' },
+      staleVerifyResult,
+      rejectedProvenance,
     );
+    assert.equal(rejectedBinding.authoritative, false);
+    assert.equal(rejectedBinding.reasonCode, 'EXECUTION_VERIFICATION_FINGERPRINT_STALE');
+    assert.notEqual(rejectedBinding.verificationFresh, true);
     recordHarnessExecutionOutcome(successfulVerify, staleVerifyResult);
     assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'repairing');
     assert.notEqual(executionSessions.getExecutionOwnershipState(session.id, { repoRoot: verificationBinding.workspace.root }).verificationFresh, true);
@@ -229,7 +233,14 @@ test('combined harness envelope follows claim, context, mutation, repair, resume
         executionKey: 'integration-fresh',
       },
     };
-    executionSessions.recordTaskExecutionVerificationResult({ workspaceId, command: 'integration-focused' }, freshVerifyResult, freshProvenance);
+    const authoritativeBinding = executionSessions.recordTaskExecutionVerificationResult(
+      { workspaceId, command: 'integration-focused' },
+      freshVerifyResult,
+      freshProvenance,
+    );
+    assert.equal(authoritativeBinding.authoritative, true);
+    assert.equal(authoritativeBinding.reasonCode, 'EXECUTION_VERIFICATION_AUTHORITATIVE');
+    assert.equal(authoritativeBinding.verificationFresh, true);
     assert.equal(executionSessions.getExecutionOwnershipState(session.id, { repoRoot: verificationBinding.workspace.root }).verificationFresh, true);
     recordHarnessExecutionOutcome(successfulVerify, freshVerifyResult);
     assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'verifying');

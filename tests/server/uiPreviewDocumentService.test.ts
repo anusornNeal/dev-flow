@@ -129,7 +129,7 @@ test('materializes current content-addressed WOFF2 font refs into immutable data
   assert.equal(stale.unavailable[0]?.reasonCode, 'FONT_CONTENT_IDENTITY_MISMATCH');
 });
 
-test('rejects unsupported, oversize, and aggregate-oversize font materialization without injecting fallback claims', () => {test('supports deterministic WOFF mapping and reports missing current font bytes as unavailable', () => {
+test('supports deterministic WOFF mapping and reports missing current font bytes as unavailable', () => {
   const missingBytes = woff2Bytes();
   const missingRef = fontRef(missingBytes);
   const missing = materializeUiPreviewFonts({
@@ -160,6 +160,7 @@ test('rejects unsupported, oversize, and aggregate-oversize font materialization
 });
 
 
+test('rejects unsupported, oversize, and aggregate-oversize font materialization without injecting fallback claims', () => {
   const unsupportedBytes = woff2Bytes();
   const unsupported = materializeUiPreviewFonts({
     contextHash: 'b'.repeat(64),

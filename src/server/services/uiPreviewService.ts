@@ -135,6 +135,7 @@ type RevisionWithWorkspace = {
   screens?: UiPreviewScreen[];
   defaultScreenId?: string;
   viewport: UiPreviewViewport;
+  scope?: UiPreviewScope;
   designProvenance?: UiPreviewRevisionDesignProvenance;
   fontSnapshot?: UiPreviewFontSnapshot;
 };
@@ -251,7 +252,10 @@ export function createUiPreviewService(deps: UiPreviewServiceDependencies) {
   function assertUpdateScope(input: UpdateUiPreviewInput, preview: any, current: RevisionWithWorkspace) {
     const requestedTaskId = normalizeTaskId(input.taskId);
     const requestedProjectId = normalizeProjectId(input.projectId);
-    const scope = current.designProvenance?.scope;
+    const scope = current.scope ?? current.designProvenance?.scope;    if (scope?.kind === 'unscoped') {
+      if (requestedTaskId || requestedProjectId) throw new UiPreviewError('UI_PREVIEW_SCOPE_MISMATCH', 'An unscoped UI preview cannot be retargeted during update.');
+      return scope;
+    }
     if (!scope && !preview.taskId) {
       if (requestedTaskId || requestedProjectId) throw new UiPreviewError('UI_PREVIEW_SCOPE_MISMATCH', 'An unscoped UI preview cannot be retargeted during update.');
       return { kind: 'unscoped' } as UiPreviewScope;
@@ -283,8 +287,8 @@ export function createUiPreviewService(deps: UiPreviewServiceDependencies) {
       title: revision.title,
       contentHash: revision.contentHash,
       viewport: revision.viewport,
+      ...((revision as unknown as RevisionWithWorkspace).scope ? { scope: (revision as unknown as RevisionWithWorkspace).scope } : {}),
       ...((revision as unknown as RevisionWithWorkspace).designProvenance ? {
-        scope: (revision as unknown as RevisionWithWorkspace).designProvenance?.scope,
         designProvenance: (revision as unknown as RevisionWithWorkspace).designProvenance,
       } : {}),
       ...workspaceSummary(revision as unknown as RevisionWithWorkspace),
@@ -332,6 +336,7 @@ export function createUiPreviewService(deps: UiPreviewServiceDependencies) {
         taskId,
         ...normalized,
         contentHash,
+        scope,
         designProvenance: provenance,
         fontSnapshot,
       } as any);
@@ -404,6 +409,7 @@ export function createUiPreviewService(deps: UiPreviewServiceDependencies) {
         expectedRevision: input.expectedRevision,
         ...resolved,
         contentHash,
+        scope,
         designProvenance: provenance,
         fontSnapshot,
       } as any);
@@ -454,6 +460,10 @@ export function createUiPreviewService(deps: UiPreviewServiceDependencies) {
       title: revision.title,
       contentHash: revision.contentHash,
       viewport: revision.viewport,
+      ...((revision as unknown as RevisionWithWorkspace).scope ? { scope: (revision as unknown as RevisionWithWorkspace).scope } : {}),
+      ...((revision as unknown as RevisionWithWorkspace).designProvenance ? {
+        designProvenance: (revision as unknown as RevisionWithWorkspace).designProvenance,
+      } : {}),
       ...workspaceSummary(revision as unknown as RevisionWithWorkspace),
       previewUrl: resolveUiPreviewUrl({ previewId: preview.id, revision: revision.revision, port: deps.runtimePort() }),
     };
@@ -472,7 +482,17 @@ export function createUiPreviewService(deps: UiPreviewServiceDependencies) {
     return summary;
   }
 
-  return { create, update, delete: remove, get, list };
+  return { create, update, delete: remove, get, getForRender, list };
+  function getForRender(input: Omit<GetUiPreviewInput, 'mode'>) {
+    const publicSource = get({ ...input, mode: 'source' });
+    const revision = deps.repository.getRevision(input.previewId, publicSource.revision) as unknown as RevisionWithWorkspace | null;
+    if (!revision) throw new UiPreviewError('UI_PREVIEW_REVISION_NOT_FOUND', `UI preview '${input.previewId}' revision ${publicSource.revision} was not found.`);
+    return {
+      ...publicSource,
+      ...(revision.fontSnapshot ? { fontSnapshot: revision.fontSnapshot } : {}),
+    };
+  }
+
 }
 
 export type UiPreviewService = ReturnType<typeof createUiPreviewService>;

@@ -208,23 +208,25 @@ test('canonical workspace revisions persist immutable design provenance and font
   } as any;
   repo.createPreview({
     id: 'uip_provenance', taskId: null, title: 'Scoped', html: screens[0].html, css: '', js: '', spec,
-    screens, defaultScreenId: 'main', viewport, contentHash: 'prov-a', designProvenance: provenance, fontSnapshot,
+    screens, defaultScreenId: 'main', viewport, contentHash: 'prov-a', scope: { kind: 'project', projectId: 'project-a' }, designProvenance: provenance, fontSnapshot,
   } as any);
   const rev1 = repo.getRevision('uip_provenance', 1) as any;
   assert.deepEqual(rev1.designProvenance, provenance);
+  assert.deepEqual(rev1.scope, { kind: 'project', projectId: 'project-a' });
   assert.deepEqual(rev1.fontSnapshot, fontSnapshot);
 
   const provenance2 = { ...provenance, repositoryRevision: 'repo-b', contextHash: 'c'.repeat(64) };
   repo.appendRevision({
     previewId: 'uip_provenance', expectedRevision: 1, title: 'Scoped', html: '<main>two</main>', css: '', js: '', spec,
     screens: [{ ...screens[0], html: '<main>two</main>' }], defaultScreenId: 'main', viewport, contentHash: 'prov-b',
-    designProvenance: provenance2, fontSnapshot: { ...fontSnapshot, contextHash: 'c'.repeat(64) },
+    scope: { kind: 'project', projectId: 'project-a' }, designProvenance: provenance2, fontSnapshot: { ...fontSnapshot, contextHash: 'c'.repeat(64) },
   } as any);
   assert.deepEqual((repo.getRevision('uip_provenance', 1) as any).designProvenance, provenance, 'historical provenance remains immutable');
   assert.equal((repo.getRevision('uip_provenance', 2) as any).designProvenance.contextHash, 'c'.repeat(64));
 
   repo.createPreview({ id: 'uip_legacy_prov', taskId: null, title: null, html: '<main>legacy</main>', css: '', js: '', spec, viewport, contentHash: 'legacy-prov' });
   const legacy = repo.getRevision('uip_legacy_prov', 1) as any;
+  assert.equal(legacy.scope, undefined);
   assert.equal(legacy.designProvenance, undefined);
   assert.equal(legacy.fontSnapshot, undefined);
 });

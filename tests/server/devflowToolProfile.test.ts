@@ -261,6 +261,27 @@ test('UI design-context preflight is a bounded read on the coding and full MCP s
   assert.match(request.path, /relevanceHint=brand(?:%20|\+)dialog/);
 });
 
+test('UI preview create/update contracts expose bounded scoped context handshake and exception refs', () => {
+  const create = devFlowToolDefinitions.find((entry: any) => entry.name === 'create_ui_preview')!;
+  const update = devFlowToolDefinitions.find((entry: any) => entry.name === 'update_ui_preview')!;
+  for (const tool of [create, update]) {
+    assert.ok(tool.inputSchema.properties.projectId);
+    assert.ok(tool.inputSchema.properties.expectedDesignContextHash);
+    assert.equal(tool.inputSchema.properties.expectedDesignContextHash.minLength, 64);
+    assert.equal(tool.inputSchema.properties.expectedDesignContextHash.maxLength, 64);
+    assert.ok(tool.inputSchema.properties.exceptionRefs);
+    assert.equal(tool.inputSchema.properties.exceptionRefs.maxItems, 16);
+    assert.equal(tool.inputSchema.properties.exceptionRefs.items.additionalProperties, false);
+  }
+  assert.ok(update.inputSchema.properties.taskId, 'update can declare task scope only to prove immutable-scope match');
+  const createRequest = create.buildHttpRequest({ projectId: 'project-a', expectedDesignContextHash: 'a'.repeat(64), html: '<main>x</main>', spec: { schemaVersion: 1, summary: { screen: 'X' } }, exceptionRefs: [] });
+  assert.equal(createRequest.method, 'POST');
+  assert.equal(createRequest.body.expectedDesignContextHash, 'a'.repeat(64));
+  const updateRequest = update.buildHttpRequest({ previewId: 'uip_x', projectId: 'project-a', expectedDesignContextHash: 'b'.repeat(64), exceptionRefs: [] });
+  assert.equal(updateRequest.method, 'PUT');
+  assert.equal(updateRequest.body.expectedDesignContextHash, 'b'.repeat(64));
+});
+
 test('diagnostics MCP profile keeps the recovery handoff surface available', () => {
   const names = new Set(getMcpToolList('diagnostics').map((tool: any) => tool.name));
   assert.equal(names.has('get_recovery_handoff'), true);

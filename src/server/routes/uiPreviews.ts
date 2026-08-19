@@ -14,7 +14,7 @@ import { createUiPreviewDesignContextService, type UiPreviewDesignContextService
 import { getDevFlowApiBaseUrl } from '../services/agentRunService.js';
 
 export interface UiPreviewRouteOverrides {
-  previewService?: Pick<UiPreviewService, 'create' | 'update' | 'delete' | 'get' | 'list'>;
+  previewService?: Pick<UiPreviewService, 'create' | 'update' | 'delete' | 'get' | 'list'> & Partial<Pick<UiPreviewService, 'getForRender'>>;
   evidenceService?: Pick<TaskUiEvidenceService, 'attach' | 'list'>;
   designContextService?: Pick<UiPreviewDesignContextService, 'get'>;
   artifactStore?: UiPreviewArtifactStore;
@@ -86,7 +86,8 @@ export function registerUiPreviewRoutes(app: express.Express, deps: ApiRouteDeps
   const runtimePort = overrides.runtimePort ?? runtimePortFromApiBaseUrl;
   const previewRepository = createUiPreviewRepository();
   if (!overrides.previewService && !overrides.evidenceService) previewRepository.migrateLegacyRevisions();
-  const previewService = overrides.previewService ?? createUiPreviewService({ repository: previewRepository, runtimePort });
+  const designContextService = overrides.designContextService ?? createUiPreviewDesignContextService({ state: deps.state });
+  const previewService = overrides.previewService ?? createUiPreviewService({ repository: previewRepository, runtimePort, designContextService });
   const screenshotService = overrides.evidenceService ? null : createUiPreviewScreenshotService();
   const evidenceService = overrides.evidenceService ?? createTaskUiEvidenceService({
     previewRepository,
@@ -94,7 +95,6 @@ export function registerUiPreviewRoutes(app: express.Express, deps: ApiRouteDeps
     runtimePort,
   });
   const artifactStore = overrides.artifactStore ?? screenshotService?.artifactStore ?? createUiPreviewArtifactStore();
-  const designContextService = overrides.designContextService ?? createUiPreviewDesignContextService({ state: deps.state });
   const strictLocal = createStrictLoopbackAccessMiddleware();
 
   app.get('/api/ui-preview-design-context', (req, res) => {
@@ -198,11 +198,9 @@ export function registerUiPreviewRoutes(app: express.Express, deps: ApiRouteDeps
     try {
       const revision = parseRevision(req.query.revision);
       const requestedScreenId = parseScreenId(req.query.screenId);
-      const source = previewService.get({
-        previewId: req.params.previewId,
-        revision,
-        mode: 'source',
-      }) as any;
+      const source = typeof previewService.getForRender === 'function'
+        ? previewService.getForRender({ previewId: req.params.previewId, revision }) as any
+        : previewService.get({ previewId: req.params.previewId, revision, mode: 'source' }) as any;
       const screens = documentScreensFromSource(source);
       const defaultScreenId = typeof source.defaultScreenId === 'string' ? source.defaultScreenId : screens[0]?.screenId;
       const selectedScreenId = requestedScreenId ?? defaultScreenId;
@@ -220,6 +218,7 @@ export function registerUiPreviewRoutes(app: express.Express, deps: ApiRouteDeps
             html: selectedScreen.html,
             css: selectedScreen.css,
             js: selectedScreen.js,
+            fontSnapshot: source.fontSnapshot,
           })
         : composeUiPreviewWorkspaceDocument({
             title: source.title,
@@ -235,6 +234,7 @@ export function registerUiPreviewRoutes(app: express.Express, deps: ApiRouteDeps
                 html: screen.html,
                 css: screen.css,
                 js: screen.js,
+                fontSnapshot: source.fontSnapshot,
                 href: `/api/ui-previews/${encodeURIComponent(req.params.previewId)}/document?${query.toString()}`,
               };
             }),

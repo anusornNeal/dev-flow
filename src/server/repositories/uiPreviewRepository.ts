@@ -8,6 +8,7 @@ import type {
   UiPreviewRecord,
   UiPreviewRevision,
   UiPreviewRevisionDesignProvenance,
+  UiPreviewScope,
   UiPreviewScreen,
   UiPreviewViewport,
   UiPreviewWorkspaceRevision,
@@ -131,6 +132,7 @@ function parsePreview(row: any): UiPreviewRecord | null {
 }
 
 type UiPreviewWorkspaceRevisionWithProvenance = UiPreviewWorkspaceRevision & {
+  scope?: UiPreviewScope;
   designProvenance?: UiPreviewRevisionDesignProvenance;
   fontSnapshot?: UiPreviewFontSnapshot;
 };
@@ -139,6 +141,7 @@ type UiPreviewRepositoryRevision = UiPreviewWorkspaceRevisionWithProvenance & Pi
 
 interface UiPreviewWorkspaceStorageObject {
   schemaVersion: 1;
+  scope?: UiPreviewScope;
   title: string | null;
   screens: UiPreviewScreen[];
   defaultScreenId: string;
@@ -166,6 +169,18 @@ function projectDefaultScreen(input: UiPreviewWorkspaceRevisionWithProvenance): 
   };
 }
 
+function isUiPreviewScope(value: unknown): value is UiPreviewScope {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const scope = value as Record<string, unknown>;
+  if (scope.kind === 'unscoped') return true;
+  if (scope.kind === 'project') return typeof scope.projectId === 'string' && Boolean(scope.projectId.trim());
+  if (scope.kind === 'task') {
+    return typeof scope.taskId === 'string' && Boolean(scope.taskId.trim())
+      && typeof scope.projectId === 'string' && Boolean(scope.projectId.trim());
+  }
+  return false;
+}
+
 function parseWorkspaceStorageObject(value: string): UiPreviewWorkspaceStorageObject {
   let parsed: any;
   try {
@@ -175,6 +190,8 @@ function parseWorkspaceStorageObject(value: string): UiPreviewWorkspaceStorageOb
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || parsed.schemaVersion !== 1) {
     throw new UiPreviewError('UI_PREVIEW_STORAGE_OBJECT_INVALID', 'UI preview workspace source object has an invalid schema.');
+  }  if (parsed.scope !== undefined && !isUiPreviewScope(parsed.scope)) {
+    throw new UiPreviewError('UI_PREVIEW_STORAGE_OBJECT_INVALID', 'UI preview workspace source object has an invalid scope.');
   }
   if (!(parsed.title === null || typeof parsed.title === 'string') || !Array.isArray(parsed.screens) || parsed.screens.length === 0) {
     throw new UiPreviewError('UI_PREVIEW_STORAGE_OBJECT_INVALID', 'UI preview workspace source object is missing title or screens.');
@@ -232,6 +249,7 @@ function parseLegacyRevision(row: any): UiPreviewRepositoryRevision | null {
 export interface CreatePreviewRevisionInput {
   id: string;
   taskId: string | null;
+  scope?: UiPreviewScope;
   title: string | null;
   html: string;
   css: string;
@@ -249,6 +267,7 @@ export interface CreatePreviewRevisionInput {
 export interface AppendPreviewRevisionInput {
   previewId: string;
   expectedRevision?: number;
+  scope?: UiPreviewScope;
   title: string | null;
   html: string;
   css: string;
@@ -387,7 +406,7 @@ export function createUiPreviewRepository(databaseOrOptions: DatabaseLike | UiPr
     };
   }
 
-  function persistWorkspaceObject(input: Pick<CreatePreviewRevisionInput, 'title' | 'screens' | 'defaultScreenId' | 'viewport' | 'designProvenance' | 'fontSnapshot'>) {
+  function persistWorkspaceObject(input: Pick<CreatePreviewRevisionInput, 'title' | 'screens' | 'defaultScreenId' | 'viewport' | 'scope' | 'designProvenance' | 'fontSnapshot'>) {
     if (!input.screens?.length) return null;
     const defaultScreenId = input.defaultScreenId ?? input.screens[0].screenId;
     if (!input.screens.some((screen) => screen.screenId === defaultScreenId)) {
@@ -395,6 +414,7 @@ export function createUiPreviewRepository(databaseOrOptions: DatabaseLike | UiPr
     }
     const workspace: UiPreviewWorkspaceStorageObject = {
       schemaVersion: 1,
+      ...(input.scope ? { scope: input.scope } : {}),
       title: input.title,
       screens: input.screens,
       defaultScreenId,
@@ -433,6 +453,7 @@ export function createUiPreviewRepository(databaseOrOptions: DatabaseLike | UiPr
         viewport: workspace.viewport,
         contentHash: row.content_hash,
         createdAt: row.created_at,
+        ...(workspace.scope ? { scope: workspace.scope } : {}),
         ...(workspace.designProvenance ? { designProvenance: workspace.designProvenance } : {}),
         ...(workspace.fontSnapshot ? { fontSnapshot: workspace.fontSnapshot } : {}),
       });

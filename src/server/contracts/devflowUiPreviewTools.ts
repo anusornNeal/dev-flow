@@ -24,6 +24,44 @@ const viewportSchema = {
   additionalProperties: false,
 };
 
+const designExceptionCategorySchema = { type: 'string', enum: ['project-style', 'accessibility', 'interaction', 'destructive-safety', 'aesthetic-heuristic'] };
+
+const designExceptionAuthoritySchema = {
+  type: 'object',
+  properties: {
+    type: { type: 'string', enum: ['task-requirement', 'frozen-ui-design'] },
+    authorityId: { type: 'string', maxLength: 240 },
+    taskId: { type: 'string', maxLength: 240 },
+    projectId: { type: 'string', maxLength: 240 },
+    current: { type: 'boolean' },
+    authorizedRuleIds: { type: 'array', maxItems: 16, items: { type: 'string', maxLength: 240 } },
+    authorizedCategories: { type: 'array', maxItems: 16, items: designExceptionCategorySchema },
+    evidenceId: { type: 'string', maxLength: 240 },
+    frozenRevision: { type: 'number' },
+  },
+  required: ['type', 'authorityId', 'taskId', 'projectId', 'current', 'authorizedRuleIds', 'authorizedCategories'],
+  additionalProperties: false,
+};
+
+const designExceptionRefSchema = {
+  type: 'object',
+  properties: {
+    exceptionId: { type: 'string', maxLength: 240 },
+    ruleIds: { type: 'array', maxItems: 16, items: { type: 'string', maxLength: 240 } },
+    categories: { type: 'array', maxItems: 16, items: designExceptionCategorySchema },
+    authority: designExceptionAuthoritySchema,
+  },
+  required: ['exceptionId', 'ruleIds', 'categories'],
+  additionalProperties: false,
+};
+
+const scopedPreviewProperties = {
+  projectId: { type: 'string', description: 'Optional explicit project scope. When taskId is also supplied it must match the task project.' },
+  expectedDesignContextHash: { type: 'string', minLength: 64, maxLength: 64, pattern: '^[0-9a-fA-F]{64}$', description: 'Required for scoped writes; use the current contextHash returned by get_ui_design_context.' },
+  exceptionRefs: { type: 'array', maxItems: 16, items: designExceptionRefSchema, description: 'Optional bounded structured exception references. Free-form reasons are not enforcement authority.' },
+};
+
+
 const previewSourceProperties = {
   title: { type: ['string', 'null'] },
   html: { type: 'string' },
@@ -63,11 +101,12 @@ export const uiPreviewToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'create_ui_preview',
-    description: 'Create one DevFlow-owned immutable PC/local UI preview workspace. Legacy single-screen input remains supported; canonical screens input creates one workspace revision.',
+    description: 'Create one DevFlow-owned immutable PC/local UI preview workspace. Scoped task/project writes require expectedDesignContextHash from get_ui_design_context and are revalidated server-side before persistence; legacy unscoped input remains supported.',
     inputSchema: {
       type: 'object',
       properties: {
         taskId: { type: 'string', description: 'Optional task binding. A preview bound to one task cannot later bind to another.' },
+        ...scopedPreviewProperties,
         ...previewSourceProperties,
         idempotencyKey: { type: 'string', description: 'Optional durable operation-scoped idempotency key for safe retries.' },
       },
@@ -83,12 +122,14 @@ export const uiPreviewToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'update_ui_preview',
-    description: 'Append an immutable UI preview workspace revision. Canonical screens input replaces the complete ordered screen set; no per-screen mutation API exists. expectedRevision provides optimistic concurrency and idempotencyKey makes retries durable.',
+    description: 'Append an immutable UI preview workspace revision. Scoped updates must preserve immutable task/project scope and present current expectedDesignContextHash; canonical screens replace the complete ordered set. expectedRevision provides optimistic concurrency and idempotencyKey makes retries durable.',
     inputSchema: {
       type: 'object',
       properties: {
         previewId: { type: 'string' },
         expectedRevision: { type: 'number' },
+        taskId: { type: 'string', description: 'Optional immutable task-scope assertion for a task-bound preview update.' },
+        ...scopedPreviewProperties,
         ...previewSourceProperties,
         idempotencyKey: { type: 'string', description: 'Optional durable operation-scoped idempotency key for safe retries.' },
       },

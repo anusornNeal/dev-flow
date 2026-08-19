@@ -239,6 +239,18 @@ test('multi-screen service preserves canonical workspace metadata, full replacem
   assert.throws(() => workspaceService.update({ previewId: created.previewId, html: '<main>legacy patch</main>' }), /replace the complete screens array/i);
 });
 
+test('new unscoped preview remains unscoped after later task attachment metadata appears', () => {
+  const { service: workspaceService, repository } = createWorkspaceService();
+  const created = workspaceService.create({ html: '<main>standalone</main>', spec });
+  assert.deepEqual(created.scope, { kind: 'unscoped' });
+  repository.getPreview(created.previewId).taskId = 'task-attached-later';
+
+  const updated = workspaceService.update({ previewId: created.previewId, html: '<main>standalone v2</main>' });
+  assert.equal(updated.changed, true);
+  assert.deepEqual(updated.scope, { kind: 'unscoped' });
+  assert.deepEqual((workspaceService.get({ previewId: created.previewId, mode: 'source' }) as any).scope, { kind: 'unscoped' });
+});
+
 test('scoped create requires a current design-context handshake and rejects mismatch or insufficient context before write', () => {
   const scoped = createScopedWorkspaceService();
   const source = { projectId: 'project-a', html: '<main>scoped</main>', spec: { schemaVersion: 1, summary: { screen: 'Scoped' } } };
@@ -335,6 +347,33 @@ test('scoped update cannot retarget immutable preview scope', () => {
     projectId: 'project-b',
     expectedDesignContextHash: 'a'.repeat(64),
   } as any), (error: any) => error?.code === 'UI_PREVIEW_SCOPE_MISMATCH');
+});
+
+test('public source exposes bounded provenance but internal render read alone carries immutable font snapshot', () => {
+  const fontSnapshot = {
+    contextHash: 'a'.repeat(64),
+    fontRenderability: 'available',
+    fonts: [{ assetId: 'font_inter', contentIdentity: `sha256:${'b'.repeat(64)}`, family: 'Inter', weight: 400, style: 'normal', mimeType: 'font/woff2', format: 'woff2', dataUri: 'data:font/woff2;base64,d09GMg==' }],
+    unavailable: [],
+  } as any;
+  const current = designContext({
+    renderAssets: [{ assetId: 'font_inter', kind: 'font', contentIdentity: `sha256:${'b'.repeat(64)}`, font: { family: 'Inter', weight: 400, style: 'normal', mimeType: 'font/woff2', byteLength: 4 } }],
+  });
+  const scoped = createWorkspaceService({
+    designContextService: { get: () => JSON.parse(JSON.stringify(current)) },
+    materializeFonts: () => fontSnapshot,
+  });
+  const created = scoped.service.create({
+    projectId: 'project-a', expectedDesignContextHash: 'a'.repeat(64), html: '<main>font</main>', spec,
+  } as any);
+  const publicSource = scoped.service.get({ previewId: created.previewId, mode: 'source' }) as any;
+  assert.equal(publicSource.designProvenance.contextHash, 'a'.repeat(64));
+  assert.equal('fontSnapshot' in publicSource, false);
+  assert.doesNotMatch(JSON.stringify(publicSource), /data:font/);
+
+  const renderSource = (scoped.service as any).getForRender({ previewId: created.previewId }) as any;
+  assert.equal(renderSource.designProvenance.contextHash, 'a'.repeat(64));
+  assert.equal(renderSource.fontSnapshot.fonts[0].dataUri, 'data:font/woff2;base64,d09GMg==');
 });
 
 test('canonical hash is stable across spec key insertion order and exact-source significant', () => {

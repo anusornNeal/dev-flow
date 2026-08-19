@@ -53,6 +53,13 @@ const source = {
   previewUrl: 'http://127.0.0.1:45555/api/ui-previews/uip_route/document?revision=2',
 };
 
+const fontSnapshot = {
+  contextHash: 'a'.repeat(64),
+  fontRenderability: 'available',
+  fonts: [{ assetId: 'font_inter', contentIdentity: `sha256:${'b'.repeat(64)}`, family: 'Inter', weight: 400, style: 'normal', mimeType: 'font/woff2', format: 'woff2', dataUri: 'data:font/woff2;base64,d09GMg==' }],
+  unavailable: [],
+};
+
 const multiScreenSource = {
   ...source,
   previewId: 'uip_multi_route',
@@ -108,6 +115,11 @@ async function withServer(run: (baseUrl: string) => Promise<void>) {
         ? selectedSource
         : { ...selectedSource, html: undefined, css: undefined, js: undefined, spec: undefined, screens: undefined };
     },
+    getForRender: (input: any) => ({
+      ...(input.previewId === 'uip_multi_route' ? multiScreenSource : source),
+      ...(input.previewId === 'uip_font_route' ? { previewId: 'uip_font_route', fontSnapshot } : {}),
+    }),
+
     list: (input: any) => ({
       items: [{ previewId: 'uip_route', taskId: null, title: 'Route preview', specSummary: { screen: 'Route preview' }, latestRevision: 2, createdAt: '2026-08-11T01:00:00.000Z', updatedAt: '2026-08-11T02:00:00.000Z', latestPreviewUrl: 'http://127.0.0.1:45555/api/ui-previews/uip_route/document' }],
       nextCursor: null,
@@ -302,6 +314,20 @@ test('design-context preflight route is read-only, bounded, and forwards task/pr
     assert.match(body.contextHash, /^[0-9a-f]{64}$/);
     assert.equal(body.sources[0].path, 'src/styles/theme.css');
     assert.equal('content' in body.sources[0], false);
+  });
+});
+
+test('document route uses internal immutable font snapshot while public source does not expose data font payloads', async () => {
+  await withServer(async (baseUrl) => {
+    const rendered = await fetch(`${baseUrl}/api/ui-previews/uip_font_route/document?revision=2`);
+    assert.equal(rendered.status, 200);
+    const html = await rendered.text();
+    assert.match(html, /@font-face/);
+    assert.match(html, /data:font\/woff2;base64,d09GMg==/);
+
+    const publicSource = await fetch(`${baseUrl}/api/ui-previews/uip_font_route?revision=2&mode=source`);
+    assert.equal(publicSource.status, 200);
+    assert.doesNotMatch(JSON.stringify(await publicSource.json()), /data:font/);
   });
 });
 

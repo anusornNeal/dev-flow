@@ -155,6 +155,27 @@ test('preserves an accepted durable operation across lost client response withou
   assert.equal(completed.pendingOperations.length, 0);
 });
 
+test('terminal reconciliation removes only the captured pending operation and is idempotent', () => {
+  const session = createPreparedSession('ws_checkpoint_exact_reconcile');
+  checkpoints.recordExecutionPendingOperationReference(session.id, {
+    operationId: 'job-a',
+    evidenceId: 'mcp-job:job-a',
+    kind: 'mcp-tool-job:edit_local_files_batch',
+    status: 'accepted',
+  });
+  checkpoints.recordExecutionPendingOperationReference(session.id, {
+    operationId: 'job-b',
+    evidenceId: 'mcp-job:job-b',
+    kind: 'mcp-tool-job:run_project_command',
+    status: 'running',
+  });
+
+  checkpoints.reconcileExecutionPendingOperationReference(session.id, 'job-a');
+  assert.deepEqual(checkpoints.getLatestExecutionCheckpoint(session.id)?.pendingOperations.map((entry: any) => entry.operationId), ['job-b']);
+  checkpoints.reconcileExecutionPendingOperationReference(session.id, 'job-a');
+  assert.deepEqual(checkpoints.getLatestExecutionCheckpoint(session.id)?.pendingOperations.map((entry: any) => entry.operationId), ['job-b']);
+});
+
 test('creates a compact persisted ChatGPT→Codex handoff without source bodies or absolute workspace paths', () => {
   const session = createPreparedSession('ws_handoff_compact');
   const snapshot = handoff.createExecutionHandoffSnapshot(state, session.id, {

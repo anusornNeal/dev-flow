@@ -97,13 +97,18 @@ export function compactVerificationReferences(verification: unknown[]): Executio
   }));
 }
 
-function requireActiveSession(sessionId: string) {
+function requireSession(sessionId: string) {
   const session = getExecutionSessionById(sessionId);
   if (!session) {
     const error = new Error(`Execution session '${sessionId}' was not found.`) as Error & { code?: string };
     error.code = 'EXECUTION_SESSION_NOT_FOUND';
     throw error;
   }
+  return session;
+}
+
+function requireActiveSession(sessionId: string) {
+  const session = requireSession(sessionId);
   if (session.status !== 'active') {
     const error = new Error(`Execution session '${sessionId}' is terminal (${session.status}).`) as Error & { code?: string };
     error.code = 'EXECUTION_SESSION_TERMINAL';
@@ -192,6 +197,22 @@ export function recordExecutionPendingOperationReference(
     ...snapshot.pendingOperations.filter((entry) => entry.operationId !== operationId),
     next,
   ].slice(-MAX_PENDING_OPERATIONS);
+  return persistCheckpoint(session, snapshot, nowIso);
+}
+
+export function reconcileExecutionPendingOperationReference(
+  sessionId: string,
+  operationIdValue: string,
+  now = new Date(),
+) {
+  const operationId = compact(operationIdValue, 200);
+  if (!operationId) return getLatestExecutionCheckpoint(sessionId);
+  const session = requireSession(sessionId);
+  const previous = getLatestExecutionCheckpoint(sessionId);
+  if (!previous?.pendingOperations.some((entry) => entry.operationId === operationId)) return previous;
+  const nowIso = now.toISOString();
+  const snapshot = baseSnapshot(session, previous, nowIso);
+  snapshot.pendingOperations = snapshot.pendingOperations.filter((entry) => entry.operationId !== operationId);
   return persistCheckpoint(session, snapshot, nowIso);
 }
 

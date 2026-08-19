@@ -165,6 +165,20 @@ function bindTaskVerificationOutcome(
   };
 }
 
+export function resolveBuiltinToolJobBindingArgs(toolNameValue: string, args: any) {
+  const toolName = String(toolNameValue || '').trim();
+  if (toolName !== 'apply_prepared_edit' && toolName !== 'apply_prepared_edit_plan') return args;
+  const durableSourceArgs = args?.__preparedEditSourceArgs;
+  const sourceArgs = durableSourceArgs && typeof durableSourceArgs === 'object' && !Array.isArray(durableSourceArgs)
+    ? durableSourceArgs
+    : getPreparedEditRecoveryArgs(String(args?.editPlanId || '')) || args;
+  if (sourceArgs === args) return args;
+  return {
+    ...sourceArgs,
+    ...(args?.__executionJobBinding ? { __executionJobBinding: args.__executionJobBinding } : {}),
+  };
+}
+
 export async function runBuiltinToolJob(input: BuiltinToolJobInput, context: BuiltinToolJobContext) {
   const { toolName, state, args } = input;
   const { logger, setCancelFn, transitionAccess } = context;
@@ -225,7 +239,7 @@ export async function runBuiltinToolJob(input: BuiltinToolJobInput, context: Bui
   }
   if (toolName === 'prepare_edit_plan') return prepareEditPlan(state, args);
   if (toolName === 'apply_prepared_edit_plan') {
-    const sourceArgs = getPreparedEditRecoveryArgs(String(args?.editPlanId || '')) || args;
+    const sourceArgs = resolveBuiltinToolJobBindingArgs(toolName, args);
     const guard = preflight(sourceArgs);
     const result = await executeRecoveryAwareTool(
       state,
@@ -240,7 +254,7 @@ export async function runBuiltinToolJob(input: BuiltinToolJobInput, context: Bui
   }
   if (toolName === 'prepare_compact_edit') return prepareCompactEdit(state, args);
   if (toolName === 'apply_prepared_edit') {
-    const sourceArgs = getPreparedEditRecoveryArgs(String(args?.editPlanId || '')) || args;
+    const sourceArgs = resolveBuiltinToolJobBindingArgs(toolName, args);
     const guard = preflight(sourceArgs);
     const payload = { editPlanId: args?.editPlanId };
     const result = await executeRecoveryAwareTool(

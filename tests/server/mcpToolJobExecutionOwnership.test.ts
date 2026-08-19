@@ -50,6 +50,10 @@ const workspaceService = await import('../../src/server/services/sessionWorkspac
 const execution = await import('../../src/server/services/executionSessionService.js');
 const commitPlan = await import('../../src/server/services/taskCommitPlanService.js');
 const { runBuiltinToolJob } = await import('../../src/server/services/mcpToolJobRunnerRegistry.js');
+const jobService = await import('../../src/server/services/mcpToolJobService.js') as any;
+const jobRepo = await import('../../src/server/repositories/mcpToolJobRepository.js') as any;
+const checkpoints = await import('../../src/server/services/executionCheckpointService.js') as any;
+const preparedEdits = await import('../../src/server/services/preparedEditService.js') as any;
 const { prepareProjectCommandVerificationCandidate } = await import('../../src/server/services/projectCommandService.js');
 
 const projectId = 'project-mcp-execution-ownership';
@@ -97,6 +101,21 @@ const context = {
   transitionAccess: () => {},
 };
 
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+async function waitUntil(predicate: () => boolean, message: string) {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.fail(message);
+}
+
 function verificationArgs(command: string) {
   const args = {
     projectId,
@@ -110,6 +129,270 @@ function verificationArgs(command: string) {
   assert.ok(args.__verificationCandidate);
   return args;
 }
+
+test('production enqueue binds queued lifecycle work to the admitted execution before returning', () => {
+  const before = execution.getExecutionSessionState(session.id).session;
+  const job = jobService.enqueueToolJob(state, 'edit_local_files_batch', {
+    projectId,
+    workspaceId: workspace.workspaceId,
+    mode: 'apply',
+    files: [{ filePath: 'src/owned.ts', edits: [{ type: 'replace', find: 'owned = 1', replaceWith: 'owned = 2' }] }],
+    singleFlight: false,
+  }, 'repo-command');
+
+  const persisted = jobRepo.getJob(job.jobId);
+  assert.equal(persisted?.status, 'queued');
+  assert.deepEqual(persisted?.args?.__executionJobBinding, {
+    operationId: job.jobId,
+    executionSessionId: session.id,
+    taskId,
+    workspaceId: workspace.workspaceId,
+    projectId,
+    toolName: 'edit_local_files_batch',
+  });
+  const accepted = checkpoints.getLatestExecutionCheckpoint(session.id);
+  assert.equal(accepted?.pendingOperations.length, 1);
+  assert.equal(accepted?.pendingOperations[0]?.operationId, job.jobId);
+  assert.equal(accepted?.pendingOperations[0]?.status, 'accepted');
+  assert.equal(execution.getExecutionSessionState(session.id).session.lifecycle.stage, before.lifecycle.stage);
+  assert.deepEqual(execution.getExecutionSessionState(session.id).session.changedFiles, before.changedFiles);
+  assert.deepEqual(execution.getExecutionSessionState(session.id).session.verification, before.verification);
+
+  jobRepo.clearRecentJobCache();
+  assert.equal(jobRepo.getJob(job.jobId)?.args?.__executionJobBinding?.executionSessionId, session.id);
+  assert.equal(jobService.cancelToolJob(job.jobId), true);
+  assert.equal(jobRepo.getJob(job.jobId)?.status, 'cancelled');
+  assert.equal(checkpoints.getLatestExecutionCheckpoint(session.id)?.pendingOperations.some((entry: any) => entry.operationId === job.jobId), false);
+});
+
+test('running refresh is idempotent and active cancellation stays pending until worker exit', async () => {
+  const blocker = deferred();
+  jobService.__setToolJobTestRunner('edit_local_files_batch', async (_state: any, _args: any, _logger: any, setCancelFn: (fn: () => void) => void) => {
+    setCancelFn(() => blocker.resolve());
+    await blocker.promise;
+    return { ok: true, status: 'succeeded' };
+  });
+
+  const job = jobService.enqueueToolJob(state, 'edit_local_files_batch', {
+    projectId,
+    workspaceId: workspace.workspaceId,
+    mode: 'apply',
+    files: [{ filePath: 'src/owned.ts', edits: [{ type: 'replace', find: 'owned = 1', replaceWith: 'owned = 2' }] }],
+    singleFlight: false,
+  }, 'repo-command');
+  try {
+    await waitUntil(() => jobRepo.getJob(job.jobId)?.status === 'running', 'Expected task-bound durable job to enter running');
+    const running = checkpoints.getLatestExecutionCheckpoint(session.id);
+    assert.deepEqual(running?.pendingOperations.filter((entry: any) => entry.operationId === job.jobId).map((entry: any) => entry.status), ['running']);
+
+    assert.equal(jobService.cancelToolJob(job.jobId), true);
+    assert.equal(jobRepo.getJob(job.jobId)?.status, 'cancelled');
+    assert.equal(checkpoints.getLatestExecutionCheckpoint(session.id)?.pendingOperations.some((entry: any) => entry.operationId === job.jobId), true);
+
+    blocker.resolve();
+    await waitUntil(() => !jobService.getJobMetrics().activeJobs.some((entry: any) => entry.jobId === job.jobId), 'Expected cancelled task-bound worker to exit');
+    assert.equal(checkpoints.getLatestExecutionCheckpoint(session.id)?.pendingOperations.some((entry: any) => entry.operationId === job.jobId), false);
+    assert.equal(execution.getExecutionSessionState(session.id).session.lifecycle.stage, 'context-ready');
+  } finally {
+    blocker.resolve();
+    jobService.__setToolJobTestRunner('edit_local_files_batch', null);
+  }
+});
+
+test('prepared-edit admission resolves and persists source execution binding from editPlanId', () => {
+  const plan = preparedEdits.prepareEditPlan(state, {
+    projectId,
+    workspaceId: workspace.workspaceId,
+    files: [{ filePath: 'src/owned.ts', edits: [{ type: 'replace', find: 'owned = 1', replaceWith: 'owned = 2' }] }],
+  });
+  assert.equal(plan.ok, true);
+  assert.ok(plan.editPlanId);
+
+  const job = jobService.enqueueToolJob(state, 'apply_prepared_edit', { editPlanId: plan.editPlanId }, 'repo-command');
+  const persisted = jobRepo.getJob(job.jobId);
+  assert.equal(persisted?.status, 'queued');
+  assert.equal(persisted?.resourceKey, `workspace:${workspace.workspaceId}`);
+  assert.equal(persisted?.args?.__preparedEditSourceArgs?.workspaceId, workspace.workspaceId);
+  assert.equal(persisted?.args?.__executionJobBinding?.executionSessionId, session.id);
+  assert.equal(persisted?.args?.__executionJobBinding?.operationId, job.jobId);
+  assert.equal(checkpoints.getLatestExecutionCheckpoint(session.id)?.pendingOperations.some((entry: any) => entry.operationId === job.jobId && entry.status === 'accepted'), true);
+
+  assert.equal(jobService.cancelToolJob(job.jobId), true);
+  assert.equal(checkpoints.getLatestExecutionCheckpoint(session.id)?.pendingOperations.some((entry: any) => entry.operationId === job.jobId), false);
+});
+
+test('captured durable binding cannot transfer authority to a different active execution id', () => {
+  assert.throws(
+    () => execution.getTaskExecutionMutationBinding({
+      workspaceId: workspace.workspaceId,
+      __executionJobBinding: {
+        operationId: 'job-old-execution',
+        executionSessionId: 'exec-obsolete',
+        taskId,
+        workspaceId: workspace.workspaceId,
+        projectId,
+      },
+    }),
+    (error: any) => error?.payload?.code === 'TASK_MUTATION_EXECUTION_FENCED',
+  );
+});
+
+test('restart-like scheduler memory loss reconstructs the same accepted blocker from durable job binding', () => {
+  const job = jobService.enqueueToolJob(state, 'edit_local_files_batch', {
+    projectId,
+    workspaceId: workspace.workspaceId,
+    mode: 'apply',
+    files: [{ filePath: 'src/owned.ts', edits: [{ type: 'replace', find: 'owned = 1', replaceWith: 'owned = 2' }] }],
+    singleFlight: false,
+  }, 'repo-command');
+  assert.equal(checkpoints.getLatestExecutionCheckpoint(session.id)?.pendingOperations.some((entry: any) => entry.operationId === job.jobId && entry.status === 'accepted'), true);
+
+  jobService.__resetMcpToolJobRuntimeForTests();
+  jobRepo.clearRecentJobCache();
+  const recovered = jobService.__runDurableJobRecoveryPassForTests(state);
+  assert.equal(recovered.resumable, 1);
+  assert.equal(jobRepo.getJob(job.jobId)?.args?.__executionJobBinding?.executionSessionId, session.id);
+  assert.deepEqual(
+    checkpoints.getLatestExecutionCheckpoint(session.id)?.pendingOperations.filter((entry: any) => entry.operationId === job.jobId).map((entry: any) => entry.status),
+    ['accepted'],
+  );
+
+  assert.equal(jobService.cancelToolJob(job.jobId), true);
+  assert.equal(checkpoints.getLatestExecutionCheckpoint(session.id)?.pendingOperations.some((entry: any) => entry.operationId === job.jobId), false);
+});
+
+test('non-lifecycle read jobs never create execution pending authority even with workspace context', () => {
+  const before = checkpoints.getLatestExecutionCheckpoint(session.id)?.pendingOperations.map((entry: any) => entry.operationId) || [];
+  const job = jobService.enqueueToolJob(state, 'search_local_files', {
+    projectId,
+    workspaceId: workspace.workspaceId,
+    query: 'owned',
+    singleFlight: false,
+  }, 'repo-read');
+  assert.equal(jobRepo.getJob(job.jobId)?.args?.__executionJobBinding, undefined);
+  assert.deepEqual(checkpoints.getLatestExecutionCheckpoint(session.id)?.pendingOperations.map((entry: any) => entry.operationId) || [], before);
+  jobService.cancelToolJob(job.jobId);
+});
+
+test('success failure and timeout terminal states reconcile only their durable pending operation', async () => {
+  const cases = [
+    { label: 'success', expected: 'succeeded', run: async () => ({ ok: true, status: 'succeeded' }) },
+    { label: 'failure', expected: 'failed', run: async () => { throw new Error('expected durable failure'); } },
+    { label: 'timeout', expected: 'timed_out', run: async () => ({ ok: false, timedOut: true, status: 'timed_out' }) },
+  ];
+
+  for (const item of cases) {
+    jobService.__setToolJobTestRunner('edit_local_files_batch', item.run);
+    try {
+      const job = jobService.enqueueToolJob(state, 'edit_local_files_batch', {
+        projectId,
+        workspaceId: workspace.workspaceId,
+        mode: 'apply',
+        files: [{ filePath: 'src/owned.ts', edits: [{ type: 'replace', find: 'owned = 1', replaceWith: 'owned = 2' }] }],
+        label: item.label,
+        singleFlight: false,
+      }, 'repo-command');
+      await waitUntil(() => jobRepo.getJob(job.jobId)?.status === item.expected, `Expected ${item.label} durable job to become ${item.expected}`);
+      await waitUntil(
+        () => !checkpoints.getLatestExecutionCheckpoint(session.id)?.pendingOperations.some((entry: any) => entry.operationId === job.jobId),
+        `Expected ${item.label} durable pending operation to reconcile`,
+      );
+      assert.equal(execution.getExecutionSessionState(session.id).session.lifecycle.stage, 'context-ready');
+    } finally {
+      jobService.__setToolJobTestRunner('edit_local_files_batch', null);
+    }
+  }
+});
+
+test('single-flight follower creates no independent pending authority and follower cancel leaves leader blocker intact', async () => {
+  const blocker = deferred();
+  let starts = 0;
+  jobService.__setToolJobTestRunner('run_project_command', async (_state: any, _args: any, _logger: any, setCancelFn: (fn: () => void) => void) => {
+    starts += 1;
+    setCancelFn(() => blocker.resolve());
+    await blocker.promise;
+    return { ok: true, status: 'succeeded' };
+  });
+
+  try {
+    const args = {
+      projectId,
+      workspaceId: workspace.workspaceId,
+      command: 'test',
+      singleFlight: true,
+      verificationSeriesKey: `ownership-single-flight-${Date.now()}`,
+      verificationCandidateKey: 'leader',
+    };
+    const leader = jobService.enqueueToolJob(state, 'run_project_command', args, 'repo-command');
+    const follower = jobService.enqueueToolJob(state, 'run_project_command', args, 'repo-command');
+    assert.equal(follower.sharedWith, leader.jobId);
+    assert.equal(jobRepo.getJob(follower.jobId)?.args?.__executionJobBinding, undefined);
+    assert.deepEqual(
+      checkpoints.getLatestExecutionCheckpoint(session.id)?.pendingOperations.map((entry: any) => entry.operationId),
+      [leader.jobId],
+    );
+
+    await waitUntil(() => starts === 1, 'Expected only single-flight leader to execute');
+    assert.equal(jobService.cancelToolJob(follower.jobId), true);
+    assert.equal(jobRepo.getJob(follower.jobId)?.status, 'cancelled');
+    assert.equal(checkpoints.getLatestExecutionCheckpoint(session.id)?.pendingOperations.some((entry: any) => entry.operationId === leader.jobId), true);
+
+    blocker.resolve();
+    await waitUntil(() => jobRepo.getJob(leader.jobId)?.status === 'succeeded', 'Expected single-flight leader to succeed');
+    await waitUntil(() => !checkpoints.getLatestExecutionCheckpoint(session.id)?.pendingOperations.some((entry: any) => entry.operationId === leader.jobId), 'Expected leader pending operation to reconcile');
+  } finally {
+    blocker.resolve();
+    jobService.__setToolJobTestRunner('run_project_command', null);
+  }
+});
+
+test('active verification supersession keeps old operation pending until old worker exits and never clears replacement', async () => {
+  const gateA = deferred();
+  const gateB = deferred();
+  const starts: string[] = [];
+  jobService.__setToolJobTestRunner('run_project_command', async (_state: any, args: any, _logger: any, setCancelFn: (fn: () => void) => void) => {
+    starts.push(args.verificationCandidateKey);
+    if (args.verificationCandidateKey === 'A') {
+      setCancelFn(() => gateA.resolve());
+      await gateA.promise;
+    } else {
+      setCancelFn(() => gateB.resolve());
+      await gateB.promise;
+    }
+    return { ok: true, status: 'succeeded', candidate: args.verificationCandidateKey };
+  });
+
+  try {
+    const series = `ownership-supersession-${Date.now()}`;
+    const baseArgs = {
+      projectId,
+      workspaceId: workspace.workspaceId,
+      command: 'test',
+      singleFlight: false,
+      verificationSeriesKey: series,
+      verificationEvidenceIntent: 'green',
+    };
+    const oldJob = jobService.enqueueToolJob(state, 'run_project_command', { ...baseArgs, verificationCandidateKey: 'A' }, 'repo-command');
+    await waitUntil(() => starts.includes('A'), 'Expected old verification candidate to start');
+    const replacement = jobService.enqueueToolJob(state, 'run_project_command', { ...baseArgs, verificationCandidateKey: 'B' }, 'repo-command');
+
+    assert.equal(jobRepo.getJob(oldJob.jobId)?.status, 'cancelled');
+    assert.equal(checkpoints.getLatestExecutionCheckpoint(session.id)?.pendingOperations.some((entry: any) => entry.operationId === oldJob.jobId), true);
+    assert.equal(checkpoints.getLatestExecutionCheckpoint(session.id)?.pendingOperations.some((entry: any) => entry.operationId === replacement.jobId), true);
+
+    await waitUntil(() => !jobService.getJobMetrics().activeJobs.some((entry: any) => entry.jobId === oldJob.jobId), 'Expected superseded old worker to exit');
+    assert.equal(checkpoints.getLatestExecutionCheckpoint(session.id)?.pendingOperations.some((entry: any) => entry.operationId === oldJob.jobId), false);
+    assert.equal(checkpoints.getLatestExecutionCheckpoint(session.id)?.pendingOperations.some((entry: any) => entry.operationId === replacement.jobId), true);
+
+    gateB.resolve();
+    await waitUntil(() => jobRepo.getJob(replacement.jobId)?.status === 'succeeded', 'Expected replacement verification to succeed');
+    await waitUntil(() => !checkpoints.getLatestExecutionCheckpoint(session.id)?.pendingOperations.some((entry: any) => entry.operationId === replacement.jobId), 'Expected replacement pending operation to reconcile');
+  } finally {
+    gateA.resolve();
+    gateB.resolve();
+    jobService.__setToolJobTestRunner('run_project_command', null);
+  }
+});
 
 test('failed MCP verification does not create authoritative freshness', async () => {
   const edited = await runBuiltinToolJob({

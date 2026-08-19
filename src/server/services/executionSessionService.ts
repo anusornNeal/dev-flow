@@ -549,6 +549,33 @@ export function getTaskExecutionMutationBinding(args: Record<string, any>) {
   if (session.taskId !== task.id || session.projectId !== workspace.projectId || task.projectId !== workspace.projectId) {
     throw taskMutationError(409, 'TASK_MUTATION_BINDING_MISMATCH', `Task, execution session, and workspace '${workspaceId}' do not share one authoritative binding.`);
   }
+  const capturedJobBinding = args?.__executionJobBinding && typeof args.__executionJobBinding === 'object'
+    ? args.__executionJobBinding as Record<string, unknown>
+    : null;
+  if (capturedJobBinding) {
+    const capturedExecutionSessionId = String(capturedJobBinding.executionSessionId || '').trim();
+    const capturedTaskId = String(capturedJobBinding.taskId || '').trim();
+    const capturedWorkspaceId = String(capturedJobBinding.workspaceId || '').trim();
+    const capturedProjectId = String(capturedJobBinding.projectId || '').trim();
+    const operationId = String(capturedJobBinding.operationId || '').trim();
+    if (!capturedExecutionSessionId || !capturedTaskId || !capturedWorkspaceId || !capturedProjectId || !operationId) {
+      throw taskMutationError(409, 'TASK_MUTATION_EXECUTION_BINDING_INVALID', 'Durable job execution binding is incomplete and cannot authorize task mutation.');
+    }
+    if (
+      capturedExecutionSessionId !== session.id
+      || capturedTaskId !== task.id
+      || capturedWorkspaceId !== workspaceId
+      || capturedProjectId !== workspace.projectId
+    ) {
+      throw taskMutationError(409, 'TASK_MUTATION_EXECUTION_FENCED', `Durable operation '${operationId}' is bound to an obsolete task execution and cannot transfer authority to the current execution.`, {
+        operationId,
+        capturedExecutionSessionId,
+        currentExecutionSessionId: session.id,
+        workspaceId,
+        taskId: task.id,
+      });
+    }
+  }
   if (task.claim?.workspaceId && task.claim.workspaceId !== workspaceId) {
     throw taskMutationError(409, 'TASK_MUTATION_CLAIM_MISMATCH', `Task '${task.displayId || task.id}' is claimed by a different workspace.`);
   }

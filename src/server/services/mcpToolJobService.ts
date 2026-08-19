@@ -29,13 +29,18 @@ import {
   type ResourceAccessMode,
   type SchedulerQueueEntry,
 } from './mcpToolJobScheduler';
-import { getBuiltinToolJobRecoveryPolicy, runBuiltinToolJob } from './mcpToolJobRunnerRegistry';
+import { getBuiltinToolJobRecoveryPolicy, resolveBuiltinToolJobBindingArgs, runBuiltinToolJob } from './mcpToolJobRunnerRegistry';
 import { recoveryPolicyForJobStatus, type ToolRecoveryPolicy } from './toolRecoveryPolicy.js';
 import {
   getExecutionOwnershipState,
   getTaskExecutionMutationBinding,
   invalidateTaskExecutionVerificationBinding,
 } from './executionSessionService.js';
+import { isHarnessLifecycleAffectingTool } from './harnessExecutionGuardService.js';
+import {
+  recordExecutionPendingOperationReference,
+  reconcileExecutionPendingOperationReference,
+} from './executionCheckpointService.js';
 
 type Logger = { stdout: (data: string) => void; stderr: (data: string) => void };
 type VerificationPermitDemand = Omit<VerificationProcessPermitRequest, 'jobId'>;
@@ -51,6 +56,118 @@ type AsyncRunner = (
   setCancelFn: (fn: () => void) => void,
   transitionAccess: (accessMode: ResourceAccessMode, request?: VerificationPermitDemand) => TransitionAccessResult,
 ) => Promise<any>;
+
+type DurableExecutionJobBinding = {
+  operationId: string;
+  executionSessionId: string;
+  taskId: string;
+  workspaceId: string;
+  projectId: string;
+  toolName: string;
+};
+
+function prepareDurableExecutionJobArgs(toolName: string, args: any, jobId: string) {
+  if (!isHarnessLifecycleAffectingTool(toolName)) return args;
+  const sourceArgs = resolveBuiltinToolJobBindingArgs(toolName, args);
+  const workspaceId = normalizedOptionalString(sourceArgs?.workspaceId);
+  if (!workspaceId) return args;
+  const binding = getTaskExecutionMutationBinding(sourceArgs);
+  if (!binding) return args;
+  const baseArgs = { ...args };
+  delete baseArgs.__executionJobBinding;
+  delete baseArgs.__preparedEditSourceArgs;
+  if ((toolName === 'apply_prepared_edit' || toolName === 'apply_prepared_edit_plan') && sourceArgs !== args) {
+    baseArgs.__preparedEditSourceArgs = sourceArgs;
+  }
+  baseArgs.__executionJobBinding = {
+    operationId: jobId,
+    executionSessionId: binding.session.id,
+    taskId: binding.task.id,
+    workspaceId: binding.workspaceId,
+    projectId: binding.workspace.projectId,
+    toolName,
+  } satisfies DurableExecutionJobBinding;
+  return baseArgs;
+}
+
+function durableExecutionJobBinding(job: Pick<McpToolJob, 'jobId' | 'toolName' | 'args'> | null | undefined): DurableExecutionJobBinding | null {
+  const raw = job?.args?.__executionJobBinding;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const binding: DurableExecutionJobBinding = {
+    operationId: String(raw.operationId || '').trim(),
+    executionSessionId: String(raw.executionSessionId || '').trim(),
+    taskId: String(raw.taskId || '').trim(),
+    workspaceId: String(raw.workspaceId || '').trim(),
+    projectId: String(raw.projectId || '').trim(),
+    toolName: String(raw.toolName || '').trim(),
+  };
+  if (
+    !binding.operationId
+    || !binding.executionSessionId
+    || !binding.taskId
+    || !binding.workspaceId
+    || !binding.projectId
+    || binding.operationId !== job?.jobId
+    || binding.toolName !== job?.toolName
+  ) {
+    throw createApiError(409, 'MCP_JOB_EXECUTION_BINDING_INVALID', `Durable MCP job '${job?.jobId || 'unknown'}' has an invalid immutable execution binding.`);
+  }
+  return binding;
+}
+
+function recordDurableExecutionPending(job: Pick<McpToolJob, 'jobId' | 'toolName' | 'args'>, status: 'accepted' | 'running') {
+  const binding = durableExecutionJobBinding(job);
+  if (!binding) return null;
+  const authorityArgs = resolveBuiltinToolJobBindingArgs(job.toolName, job.args);
+  const current = getTaskExecutionMutationBinding(authorityArgs);
+  if (!current || current.session.id !== binding.executionSessionId) {
+    throw createApiError(409, 'MCP_JOB_EXECUTION_FENCED', `Durable MCP job '${job.jobId}' is no longer bound to the active admitted execution.`);
+  }
+  return recordExecutionPendingOperationReference(binding.executionSessionId, {
+    operationId: binding.operationId,
+    evidenceId: `mcp-job:${job.jobId}`,
+    kind: `mcp-tool-job:${job.toolName}`,
+    status,
+  });
+}
+
+function reconcileTerminalDurableExecution(job: McpToolJob | null | undefined) {
+  if (!job || !isTerminalStatus(job.status)) return false;
+  const binding = durableExecutionJobBinding(job);
+  if (!binding) return false;
+  reconcileExecutionPendingOperationReference(binding.executionSessionId, binding.operationId);
+  return true;
+}
+
+function safelyReconcileTerminalDurableExecution(job: McpToolJob | null | undefined) {
+  try {
+    return reconcileTerminalDurableExecution(job);
+  } catch (error) {
+    if (job?.jobId) appendJobLog(job.jobId, 'stderr', `\n[Execution Pending Reconciliation] ${summarizeError(error)}\n`);
+    return false;
+  }
+}
+
+function createAcceptedDurableToolJob(
+  jobId: string,
+  toolName: string,
+  args: any,
+  resourceKey: string,
+  options: { eagerArtifacts?: boolean } = {},
+) {
+  const durableArgs = prepareDurableExecutionJobArgs(toolName, args, jobId);
+  const job = createJob(jobId, toolName, durableArgs, resourceKey, options);
+  try {
+    recordDurableExecutionPending(job, 'accepted');
+    return job;
+  } catch (error) {
+    const cancelled = requestJobCancellation(jobId, 'Durable execution binding could not be recorded at admission.');
+    if (cancelled) safelyReconcileTerminalDurableExecution(cancelled);
+    throw createApiError(409, 'MCP_JOB_EXECUTION_BINDING_REJECTED', `Durable MCP job '${jobId}' could not bind to its admitted execution.`, {
+      details: { cause: summarizeError(error) },
+    });
+  }
+}
 
 type QueueWaitType = 'workspace_lock' | 'capacity';
 
@@ -667,6 +784,7 @@ function supersedeObsoleteVerification(policy: VerificationQueuePolicy) {
     const entry = queue[index];
     if (!shouldSupersedeExisting(entry, policy) || !canSupersedeVerification(entry)) continue;
     if (!recordSupersession(entry, policy.candidateKey, policy.generation, false)) continue;
+    safelyReconcileTerminalDurableExecution(getJob(entry.jobId));
     queue.splice(index, 1);
     writeJobResult(entry.jobId, supersededJobResult(entry.verification, policy.candidateKey, policy.generation));
     finalizeQueueWaitTelemetry(entry);
@@ -701,6 +819,7 @@ function terminalizeIncomingSupersededJob(jobId: string, verification: Verificat
     cooperativeCancellationRequested: false,
     recordedAt: Date.now(),
   });
+  safelyReconcileTerminalDurableExecution(persisted);
   writeJobResult(jobId, supersededJobResult(verification, superseding.candidateKey, superseding.generation));
   appendJobLog(jobId, 'stderr', `\n[Verification Superseded] Request is older than candidate ${superseding.candidateKey}.\n`);
   supersededQueuedJobs += 1;
@@ -1166,10 +1285,47 @@ function runDurableJobRecoveryPass(state?: AppState, nowMs = Date.now()) {
     if (followerToLeader.has(job.jobId)) continue;
     if (job.status === 'queued') {
       if (queue.some((entry) => entry.jobId === job.jobId) || activeJobs.has(job.jobId)) continue;
+      try {
+        recordDurableExecutionPending(job, 'accepted');
+      } catch (error) {
+        const failed = transitionJobStatus(job.jobId, ['queued'], {
+          status: 'failed',
+          failureSummary: `Recovered durable job binding is no longer authoritative: ${summarizeError(error)}`,
+          recoveryClassification: 'interrupted',
+        }, { nowMs });
+        if (failed) {
+          appendJobLog(job.jobId, 'stderr', `\n[Job Recovery Fenced] ${summarizeError(error)}\n`);
+          safelyReconcileTerminalDurableExecution(failed);
+          summary.interrupted += 1;
+        }
+        continue;
+      }
       const classified = setJobRecoveryClassification(job.jobId, 'resumable', nowMs);
       if (!classified) continue;
       summary.resumable += 1;
       if (state) queuedRecoveredWork = enqueueRecoveredJob(state, classified) || queuedRecoveredWork;
+      continue;
+    }
+
+    try {
+      recordDurableExecutionPending(job, 'running');
+    } catch (error) {
+      const staleActive = releaseStaleActiveLease(job);
+      const failed = transitionJobStatus(job.jobId, ['running'], {
+        status: 'failed',
+        failureSummary: `Recovered running job binding is no longer authoritative: ${summarizeError(error)}`,
+        recoveryClassification: 'interrupted',
+      }, {
+        workerId: job.leaseOwner,
+        leaseGeneration: job.leaseGeneration,
+        nowMs,
+      });
+      if (failed) {
+        appendJobLog(job.jobId, 'stderr', `\n[Job Recovery Fenced] ${summarizeError(error)}\n`);
+        safelyReconcileTerminalDurableExecution(failed);
+        if (staleActive) finalizeSingleFlight(staleActive.entry);
+        summary.interrupted += 1;
+      }
       continue;
     }
 
@@ -1195,6 +1351,7 @@ function runDurableJobRecoveryPass(state?: AppState, nowMs = Date.now()) {
     if (interrupted) {
       appendJobLog(job.jobId, 'stderr', '\n[Job Interrupted] Worker lease expired; this job is not safe to retry automatically.\n');
       releaseTerminalVerificationCandidate(interrupted);
+      safelyReconcileTerminalDurableExecution(interrupted);
       if (staleActive) finalizeSingleFlight(staleActive.entry);
       summary.interrupted += 1;
     }
@@ -1213,8 +1370,16 @@ function startDurableJobRecoveryLoop(state?: AppState) {
   durableRecoveryTimer.unref?.();
 }
 
+function reconcileTerminalDurableJobsAfterRestart() {
+  for (const job of listRecentJobs(200)) {
+    if (!isTerminalStatus(job.status) || activeJobs.has(job.jobId)) continue;
+    safelyReconcileTerminalDurableExecution(job);
+  }
+}
+
 export function initMcpToolJobs(state?: AppState) {
   if (state) durableRecoveryState = state;
+  reconcileTerminalDurableJobsAfterRestart();
   const summary = runDurableJobRecoveryPass(state, Date.now());
   if (summary.interrupted > 0) console.log(`[mcp-tool-job] Marked ${summary.interrupted} stale unsafe jobs as interrupted.`);
   startBackgroundJobCleanup();
@@ -1309,6 +1474,7 @@ export function cancelToolJob(jobId: string) {
   const qIdx = queue.findIndex(q => q.jobId === jobId);
   if (qIdx >= 0) {
     const [cancelledEntry] = queue.splice(qIdx, 1);
+    safelyReconcileTerminalDurableExecution(persisted);
     finalizeQueueWaitTelemetry(cancelledEntry);
     void releaseVerificationCandidateForArgsAsync(cancelledEntry.args).catch(() => {});
     appendJobLog(jobId, 'stderr', '\n[Job Cancelled] Cancelled before start.\n');
@@ -1326,6 +1492,7 @@ export function cancelToolJob(jobId: string) {
     return true;
   }
 
+  safelyReconcileTerminalDurableExecution(persisted);
   notifyJobWaiters(jobId);
   return true;
 }
@@ -1376,8 +1543,9 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
       : cleanArgs;
   }
 
-  const resourceKey = resolveAdmissionResourceKey(state, jobArgs, kind);
-  const schedulerProfile = getSchedulerProfile(state, toolName, jobArgs, kind, resourceKey);
+  const admissionBindingArgs = resolveBuiltinToolJobBindingArgs(toolName, jobArgs);
+  const resourceKey = resolveAdmissionResourceKey(state, admissionBindingArgs, kind);
+  const schedulerProfile = getSchedulerProfile(state, toolName, admissionBindingArgs, kind, resourceKey);
 
   const admissionExecutionFreshness = admissionPreflight?.cachedResult
     ? taskExecutionFreshnessForArgs(jobArgs)
@@ -1390,7 +1558,8 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
     const verification = verificationPolicyFor(jobArgs, schedulerProfile.accessMode, resourceKey);
     const superseding = verification ? findNewerVerification(verification) : undefined;
     if (verification && !superseding) supersedeObsoleteVerification(verification);
-    createJob(jobId, toolName, jobArgs, resourceKey, { eagerArtifacts: toolName !== 'search_local_files' });
+    const acceptedJob = createAcceptedDurableToolJob(jobId, toolName, jobArgs, resourceKey, { eagerArtifacts: toolName !== 'search_local_files' });
+    jobArgs = acceptedJob.args;
     if (verification && superseding) {
       terminalizeIncomingSupersededJob(jobId, verification, superseding);
       return {
@@ -1406,7 +1575,8 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
       };
     }
     writeJobResult(jobId, currentGreenJobResult(admissionPreflight.cachedResult, verification, jobArgs));
-    transitionJobStatus(jobId, ['queued'], { status: 'succeeded' });
+    const completedJob = transitionJobStatus(jobId, ['queued'], { status: 'succeeded' });
+    safelyReconcileTerminalDurableExecution(completedJob);
     const completedAt = Date.now();
     const phaseTelemetry: JobPhaseTelemetryState = {
       jobId,
@@ -1479,7 +1649,8 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
         enforceVerificationBackpressure(verification, resourceKey);
       }
     }
-    job = createJob(jobId, toolName, jobArgs, resourceKey, { eagerArtifacts: toolName !== 'search_local_files' });
+    job = createAcceptedDurableToolJob(jobId, toolName, jobArgs, resourceKey, { eagerArtifacts: toolName !== 'search_local_files' });
+    jobArgs = job.args;
     if (verification && superseding) {
       terminalizeIncomingSupersededJob(jobId, verification, superseding);
       return {
@@ -1721,14 +1892,33 @@ async function startJob(entry: QueueEntry) {
   const claimed = claimJob(entry.jobId, JOB_WORKER_ID, JOB_LEASE_MS);
   if (!claimed) {
     const persisted = getJob(entry.jobId);
-    if (persisted && isTerminalStatus(persisted.status)) void releaseVerificationCandidateForArgsAsync(entry.args).catch(() => {});
+    if (persisted && isTerminalStatus(persisted.status)) {
+      safelyReconcileTerminalDurableExecution(persisted);
+      void releaseVerificationCandidateForArgsAsync(entry.args).catch(() => {});
+    }
     finalizeSingleFlight(entry);
     setImmediate(processQueue);
     return;
   }
 
+  entry.args = claimed.args;
   const leaseGeneration = claimed.leaseGeneration || 0;
   const leaseGuard: JobLeaseGuard = { workerId: JOB_WORKER_ID, leaseGeneration };
+  try {
+    recordDurableExecutionPending(claimed, 'running');
+  } catch (error) {
+    const failed = transitionJobStatus(entry.jobId, ['running'], {
+      status: 'failed',
+      failureSummary: `Durable execution binding could not be refreshed before execution: ${summarizeError(error)}`,
+    }, leaseGuard);
+    if (failed) {
+      appendJobLog(entry.jobId, 'stderr', `\n[Execution Fenced Before Start] ${summarizeError(error)}\n`);
+      safelyReconcileTerminalDurableExecution(failed);
+    }
+    finalizeSingleFlight(entry);
+    setImmediate(processQueue);
+    return;
+  }
   const bufferedLogger = createBufferedJobLogger(entry.jobId, leaseGuard);
   incrementScheduledResource(entry);
   activeJobs.set(entry.jobId, { entry, leaseGeneration, closeLogs: bufferedLogger.close });
@@ -1860,6 +2050,7 @@ async function startJob(entry: QueueEntry) {
       leaseGeneration,
       Number.isFinite(completedDurationMs) && completedDurationMs > 0 ? { actualDurationMs: completedDurationMs } : undefined,
     );
+    safelyReconcileTerminalDurableExecution(getJob(entry.jobId));
     const active = activeJobs.get(entry.jobId);
     if (active?.leaseGeneration === leaseGeneration) {
       activeJobs.delete(entry.jobId);
@@ -1901,6 +2092,19 @@ export function __resetQueueWaitTelemetryForTests() {
   verificationLagWarnings = 0;
   verificationLagBlocks = 0;
   maxVerificationLagObserved = 0;
+}
+
+export function __resetMcpToolJobRuntimeForTests() {
+  if (activeJobs.size > 0) {
+    throw new Error('Cannot reset MCP tool job runtime while jobs are actively executing.');
+  }
+  queue.length = 0;
+  singleFlightLeaders.clear();
+  singleFlightFollowers.clear();
+  followerToLeader.clear();
+  jobWaiters.clear();
+  releasedSchedulerLeases.clear();
+  schedulerCapacityWaiters.clear();
 }
 
 export function __setToolJobTestRunner(toolName: string, runner: AsyncRunner | null) {

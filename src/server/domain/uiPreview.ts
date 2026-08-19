@@ -71,6 +71,48 @@ export interface TaskUiEvidence {
   supersededByEvidenceId: string | null;
 }
 
+export type UiPreviewDesignContextSufficiency = 'insufficient' | 'partial' | 'sufficient';
+
+export interface UiPreviewDesignContextSource {
+  path: string;
+  startLine?: number;
+  endLine?: number;
+  trustClass: 'repo-evidence-untrusted';
+  evidenceRole: 'project-foundation' | 'project-ui-reference' | 'project-repo-evidence';
+}
+
+export interface UiPreviewDesignRenderAsset {
+  assetId: string;
+  kind: string;
+  contentIdentity: string;
+}
+
+export interface UiPreviewDesignContext {
+  taskId: string | null;
+  projectId: string;
+  repositoryRevision: string;
+  contextSchemaVersion: 1;
+  gatePolicyVersion: string;
+  contextHash: string;
+  sufficiency: UiPreviewDesignContextSufficiency;
+  reasonCodes: string[];
+  visual: {
+    colors: string[];
+    fontFamilies: string[];
+    fontWeights: string[];
+    spacing: string[];
+    radii: string[];
+    dimensions: string[];
+    iconConventions: string[];
+    sharedComponents: string[];
+    referenceScreens: string[];
+  };
+  ux: { ruleIds: string[] };
+  unknowns: string[];
+  sources: UiPreviewDesignContextSource[];
+  renderAssets: UiPreviewDesignRenderAsset[];
+}
+
 export class UiPreviewError extends Error {
   constructor(public readonly code: string, message: string) {
     super(message);

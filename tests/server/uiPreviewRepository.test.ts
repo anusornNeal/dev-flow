@@ -180,6 +180,55 @@ test('canonical workspace hashing is stable for JSON key order and sensitive to 
   assert.notEqual(base, hashUiPreviewContent({ title: 'Workspace', screens: [{ ...screens[0], html: '<main>changed</main>' }, screens[1]], defaultScreenId: 'overview', viewport }));
 });
 
+test('canonical workspace revisions persist immutable design provenance and font snapshots while legacy revisions remain readable', () => {
+  const screens = [{ screenId: 'main', name: 'Main', html: '<main>one</main>', css: '', js: '', spec }];
+  const provenance = {
+    schemaVersion: 1,
+    scope: { kind: 'project', projectId: 'project-a' },
+    repositoryRevision: 'repo-a',
+    contextHash: 'a'.repeat(64),
+    contextSchemaVersion: 1,
+    gatePolicyVersion: 'ui-preview-design-gate.v1',
+    sufficiency: 'sufficient',
+    unknowns: [],
+    sources: [{ path: 'src/styles/theme.css', startLine: 1, endLine: 20, trustClass: 'repo-evidence-untrusted', evidenceRole: 'project-foundation' }],
+    findings: [],
+    suppressedFindings: [],
+    exceptionRefs: [],
+    exceptionResults: [],
+    renderAssets: [],
+    fontRenderability: 'available',
+    fontContentIdentities: [`sha256:${'b'.repeat(64)}`],
+  } as any;
+  const fontSnapshot = {
+    contextHash: 'a'.repeat(64),
+    fontRenderability: 'available',
+    fonts: [{ assetId: 'font_inter', contentIdentity: `sha256:${'b'.repeat(64)}`, family: 'Inter', weight: 400, style: 'normal', mimeType: 'font/woff2', format: 'woff2', dataUri: 'data:font/woff2;base64,d09GMg==' }],
+    unavailable: [],
+  } as any;
+  repo.createPreview({
+    id: 'uip_provenance', taskId: null, title: 'Scoped', html: screens[0].html, css: '', js: '', spec,
+    screens, defaultScreenId: 'main', viewport, contentHash: 'prov-a', designProvenance: provenance, fontSnapshot,
+  } as any);
+  const rev1 = repo.getRevision('uip_provenance', 1) as any;
+  assert.deepEqual(rev1.designProvenance, provenance);
+  assert.deepEqual(rev1.fontSnapshot, fontSnapshot);
+
+  const provenance2 = { ...provenance, repositoryRevision: 'repo-b', contextHash: 'c'.repeat(64) };
+  repo.appendRevision({
+    previewId: 'uip_provenance', expectedRevision: 1, title: 'Scoped', html: '<main>two</main>', css: '', js: '', spec,
+    screens: [{ ...screens[0], html: '<main>two</main>' }], defaultScreenId: 'main', viewport, contentHash: 'prov-b',
+    designProvenance: provenance2, fontSnapshot: { ...fontSnapshot, contextHash: 'c'.repeat(64) },
+  } as any);
+  assert.deepEqual((repo.getRevision('uip_provenance', 1) as any).designProvenance, provenance, 'historical provenance remains immutable');
+  assert.equal((repo.getRevision('uip_provenance', 2) as any).designProvenance.contextHash, 'c'.repeat(64));
+
+  repo.createPreview({ id: 'uip_legacy_prov', taskId: null, title: null, html: '<main>legacy</main>', css: '', js: '', spec, viewport, contentHash: 'legacy-prov' });
+  const legacy = repo.getRevision('uip_legacy_prov', 1) as any;
+  assert.equal(legacy.designProvenance, undefined);
+  assert.equal(legacy.fontSnapshot, undefined);
+});
+
 test('canonical workspace revisions persist and unchanged full replacements do not manufacture revisions', () => {
   const screens = [
     { screenId: 'overview', name: 'Overview', html: '<main>overview</main>', css: '', js: '', spec: { schemaVersion: 1 as const, summary: { screen: 'Overview' } } },

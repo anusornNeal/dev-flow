@@ -7,6 +7,7 @@ import type {
   JsonValue,
   UiPreviewRecord,
   UiPreviewRevision,
+  UiPreviewRevisionDesignProvenance,
   UiPreviewScreen,
   UiPreviewViewport,
   UiPreviewWorkspaceRevision,
@@ -22,6 +23,7 @@ import {
 import { createUiPreviewObjectMetadataRepository } from './uiPreviewObjectMetadataRepository.js';
 import { createUiPreviewSourceObjectStore, type UiPreviewSourceObjectStore } from '../services/uiPreviewSourceObjectStore.js';
 import { publishServerEvent } from '../services/serverEventService.js';
+import type { UiPreviewFontSnapshot } from '../services/uiPreviewDocumentService.js';
 
 export const UI_PREVIEW_HASH_SCHEMA_VERSION = 1;
 
@@ -77,6 +79,8 @@ export function hashUiPreviewContent(input: {
   screens?: UiPreviewScreen[];
   defaultScreenId?: string;
   viewport: UiPreviewViewport;
+  designProvenance?: UiPreviewRevisionDesignProvenance;
+  fontSnapshot?: UiPreviewFontSnapshot;
 }) {
   const viewport = {
     width: input.viewport.width,
@@ -126,7 +130,12 @@ function parsePreview(row: any): UiPreviewRecord | null {
   };
 }
 
-type UiPreviewRepositoryRevision = UiPreviewWorkspaceRevision & Pick<UiPreviewRevision, 'html' | 'css' | 'js' | 'spec'>;
+type UiPreviewWorkspaceRevisionWithProvenance = UiPreviewWorkspaceRevision & {
+  designProvenance?: UiPreviewRevisionDesignProvenance;
+  fontSnapshot?: UiPreviewFontSnapshot;
+};
+
+type UiPreviewRepositoryRevision = UiPreviewWorkspaceRevisionWithProvenance & Pick<UiPreviewRevision, 'html' | 'css' | 'js' | 'spec'>;
 
 interface UiPreviewWorkspaceStorageObject {
   schemaVersion: 1;
@@ -140,7 +149,7 @@ function defaultScreenName(title: string | null, spec: UiSpecV1) {
   return spec.summary.screen.trim() || title?.trim() || 'Main';
 }
 
-function projectDefaultScreen(input: UiPreviewWorkspaceRevision): UiPreviewRepositoryRevision {
+function projectDefaultScreen(input: UiPreviewWorkspaceRevisionWithProvenance): UiPreviewRepositoryRevision {
   const defaultScreen = input.screens.find((screen) => screen.screenId === input.defaultScreenId);
   if (!defaultScreen) {
     throw new UiPreviewError(
@@ -233,6 +242,8 @@ export interface CreatePreviewRevisionInput {
   viewport: UiPreviewViewport;
   contentHash: string;
   createdAt?: string;
+  designProvenance?: UiPreviewRevisionDesignProvenance;
+  fontSnapshot?: UiPreviewFontSnapshot;
 }
 
 export interface AppendPreviewRevisionInput {
@@ -248,6 +259,8 @@ export interface AppendPreviewRevisionInput {
   viewport: UiPreviewViewport;
   contentHash: string;
   createdAt?: string;
+  designProvenance?: UiPreviewRevisionDesignProvenance;
+  fontSnapshot?: UiPreviewFontSnapshot;
 }
 
 export type UiPreviewListFilter = 'all' | 'standalone' | 'linked';
@@ -374,7 +387,7 @@ export function createUiPreviewRepository(databaseOrOptions: DatabaseLike | UiPr
     };
   }
 
-  function persistWorkspaceObject(input: Pick<CreatePreviewRevisionInput, 'title' | 'screens' | 'defaultScreenId' | 'viewport'>) {
+  function persistWorkspaceObject(input: Pick<CreatePreviewRevisionInput, 'title' | 'screens' | 'defaultScreenId' | 'viewport' | 'designProvenance' | 'fontSnapshot'>) {
     if (!input.screens?.length) return null;
     const defaultScreenId = input.defaultScreenId ?? input.screens[0].screenId;
     if (!input.screens.some((screen) => screen.screenId === defaultScreenId)) {
@@ -386,6 +399,8 @@ export function createUiPreviewRepository(databaseOrOptions: DatabaseLike | UiPr
       screens: input.screens,
       defaultScreenId,
       viewport: input.viewport,
+      ...(input.designProvenance ? { designProvenance: input.designProvenance } : {}),
+      ...(input.fontSnapshot ? { fontSnapshot: input.fontSnapshot } : {}),
     };
     return {
       workspace,
@@ -418,6 +433,8 @@ export function createUiPreviewRepository(databaseOrOptions: DatabaseLike | UiPr
         viewport: workspace.viewport,
         contentHash: row.content_hash,
         createdAt: row.created_at,
+        ...(workspace.designProvenance ? { designProvenance: workspace.designProvenance } : {}),
+        ...(workspace.fontSnapshot ? { fontSnapshot: workspace.fontSnapshot } : {}),
       });
     }
 

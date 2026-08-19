@@ -4,11 +4,19 @@ import { listExecutionSessionsForTask } from '../repositories/executionSessionRe
 import { getTaskByIdentifier, getTasksByProjectId, saveTask } from '../repositories/taskRepository.js';
 import {
   createOrReuseSessionWorkspace,
+  findSessionWorkspaceRecoveryCandidatesForTask,
   isSessionWorkspaceCompatibleWithTask,
   resolveSessionWorkspaceForRecovery,
 } from './sessionWorkspaceService.js';
 import { createApiError } from './api.js';
-import { createExecutionSession } from './executionSessionService.js';
+import {
+  bindExecutionSessionOwnershipEpoch,
+  cancelExecutionSession,
+  createExecutionSession,
+  getExecutionSessionOwnershipEpoch,
+} from './executionSessionService.js';
+import { getLatestExecutionCheckpoint } from './executionCheckpointService.js';
+import { withDbTransaction } from '../../db/index.js';
 import { withSyncLock } from './lockAndIdempotencyService.js';
 import type { TaskClaim, TaskStatus } from '../../types.js';
 
@@ -45,6 +53,10 @@ export type ReleaseTaskClaimInput = {
 
 function sessionIdHash(sessionId: string) {
   return crypto.createHash('sha256').update(sessionId).digest('hex').slice(0, 16);
+}
+
+function newOwnershipEpochId() {
+  return `claim-epoch-${crypto.randomUUID()}`;
 }
 
 function normalizeOwnerKind(value: unknown): TaskClaimOwnerKind {
@@ -193,16 +205,75 @@ function compareNextTaskOrder(left: any, right: any) {
   return String(left.displayId || left.id || '').localeCompare(String(right.displayId || right.id || ''));
 }
 
-function ensureClaimExecutionSession(task: any, workspace: any) {
-  const existing = listExecutionSessionsForTask(task.id)
-    .find((entry) => entry.workspaceId === workspace.workspaceId && entry.status === 'active');
-  if (existing) return existing;
+function activeTaskExecutionsForWorkspace(task: any, workspaceId: string) {
+  return listExecutionSessionsForTask(task.id)
+    .filter((entry) => entry.workspaceId === workspaceId && entry.status === 'active');
+}
+
+function unresolvedExecutionOperations(sessionId: string) {
+  const checkpoint = getLatestExecutionCheckpoint(sessionId);
+  return (checkpoint?.pendingOperations || [])
+    .filter((entry) => entry.status === 'accepted' || entry.status === 'running');
+}
+
+function assertOwnershipRotationAllowed(task: any, sessions: ReturnType<typeof activeTaskExecutionsForWorkspace>) {
+  const operations = sessions.flatMap((session) => unresolvedExecutionOperations(session.id).map((entry) => ({
+    executionSessionId: session.id,
+    ownershipEpochId: getExecutionSessionOwnershipEpoch(session.id).ownershipEpochId,
+    operationId: entry.operationId,
+    evidenceId: entry.evidenceId,
+    kind: entry.kind,
+    status: entry.status,
+  })));
+  if (operations.length === 0) return;
+  throw createApiError(409, 'TASK_CLAIM_PENDING_OPERATION', `Task '${task.displayId || task.id}' cannot rotate ownership while durable lifecycle work is unresolved.`, {
+    affectedId: task.id,
+    details: {
+      operationIds: operations.map((entry) => entry.operationId),
+      operations,
+      nextAction: 'Inspect the durable job result and retry ownership rotation only after terminal reconciliation.',
+    },
+  });
+}
+
+function terminalizeActiveTaskExecutions(task: any, workspaceId: string) {
+  const active = activeTaskExecutionsForWorkspace(task, workspaceId);
+  assertOwnershipRotationAllowed(task, active);
+  for (const session of active) cancelExecutionSession(session.id);
+  return active;
+}
+
+function ensureClaimExecutionSession(task: any, workspace: any, options: { allowLegacyAdoption?: boolean } = {}) {
+  const ownershipEpochId = String(task?.claim?.ownershipEpochId || '').trim();
+  if (!ownershipEpochId) {
+    throw createApiError(409, 'TASK_CLAIM_OWNERSHIP_EPOCH_REQUIRED', `Task '${task.displayId || task.id}' claim has no authoritative ownership epoch.`, { affectedId: task.id });
+  }
+  const active = activeTaskExecutionsForWorkspace(task, workspace.workspaceId);
+  const matching = active.filter((entry) => getExecutionSessionOwnershipEpoch(entry.id).ownershipEpochId === ownershipEpochId);
+  if (matching.length > 1) {
+    throw createApiError(409, 'TASK_EXECUTION_OWNERSHIP_AMBIGUOUS', `Task '${task.displayId || task.id}' has multiple active executions for one ownership epoch.`, {
+      affectedId: task.id,
+      details: { ownershipEpochId, executionSessionIds: matching.map((entry) => entry.id) },
+    });
+  }
+  if (matching.length === 1) {
+    const stale = active.filter((entry) => entry.id !== matching[0].id);
+    assertOwnershipRotationAllowed(task, stale);
+    for (const session of stale) cancelExecutionSession(session.id);
+    return matching[0];
+  }
+  if (options.allowLegacyAdoption && active.length === 1 && !getExecutionSessionOwnershipEpoch(active[0].id).ownershipEpochId) {
+    bindExecutionSessionOwnershipEpoch(active[0].id, ownershipEpochId);
+    return active[0];
+  }
+  terminalizeActiveTaskExecutions(task, workspace.workspaceId);
   return createExecutionSession({
     projectId: task.projectId,
     taskId: task.id,
     workspaceId: workspace.workspaceId,
     repoRoot: workspace.root,
     branch: workspace.branch,
+    ownershipEpochId,
   });
 }
 
@@ -213,24 +284,29 @@ function resolveRecoverableTaskWorkspace(task: any) {
     if (preferred?.projectId === task.projectId && isSessionWorkspaceCompatibleWithTask(preferred, task.displayId)) return preferred;
   }
 
-  const candidateIds = Array.from(new Set(listExecutionSessionsForTask(task.id)
-    .filter((entry) => entry.status === 'active')
-    .map((entry) => String(entry.workspaceId || '').trim())
-    .filter(Boolean)));
-  const recovered = candidateIds
-    .map((workspaceId) => resolveSessionWorkspaceForRecovery(workspaceId))
-    .filter((workspace): workspace is NonNullable<typeof workspace> => Boolean(
-      workspace
-      && workspace.projectId === task.projectId
-      && isSessionWorkspaceCompatibleWithTask(workspace, task.displayId),
-    ));
-  if (recovered.length > 1) {
-    throw createApiError(409, 'TASK_WORKSPACE_AMBIGUOUS', `Task '${task.displayId || task.id}' has multiple recoverable managed workspaces. Recover or clean them before claiming the task again.`, {
+  const discovered = findSessionWorkspaceRecoveryCandidatesForTask(task.projectId, task.displayId, 100);
+  if (discovered.truncated) {
+    throw createApiError(409, 'TASK_WORKSPACE_DISCOVERY_TRUNCATED', `Task '${task.displayId || task.id}' workspace recovery cannot prove uniqueness within the bounded registry view.`, {
       affectedId: task.id,
-      details: { workspaceIds: recovered.map((workspace) => workspace.workspaceId) },
+      details: { total: discovered.total, visible: discovered.workspaces.length },
     });
   }
-  return recovered[0] || null;
+  if (discovered.exactMatches.length > 1) {
+    throw createApiError(409, 'TASK_WORKSPACE_AMBIGUOUS', `Task '${task.displayId || task.id}' has multiple exact recoverable managed workspaces. Recover or clean them before claiming the task again.`, {
+      affectedId: task.id,
+      details: { workspaceIds: discovered.exactMatches.map((workspace) => workspace.workspaceId) },
+    });
+  }
+  if (discovered.exactMatches.length === 1) {
+    return resolveSessionWorkspaceForRecovery(discovered.exactMatches[0].workspaceId);
+  }
+  if (discovered.legacyMatches.length > 0) {
+    throw createApiError(409, 'TASK_WORKSPACE_LEGACY_IDENTITY_AMBIGUOUS', `Task '${task.displayId || task.id}' has only legacy-compatible workspace identity; automatic reclaim is blocked.`, {
+      affectedId: task.id,
+      details: { workspaceIds: discovered.legacyMatches.map((workspace) => workspace.workspaceId) },
+    });
+  }
+  return null;
 }
 
 function promoteImmediateParentToInProgress(task: any, nowMs = Date.now()) {
@@ -273,9 +349,30 @@ function claimTaskForSessionLocked(taskId: string, input: ClaimTaskInput, cleanS
     }
     const workspace = resolveRecoverableTaskWorkspace(task)
       || createOrReuseSessionWorkspace(project, cleanSessionId, { taskDisplayId: task.displayId });
-    ensureClaimExecutionSession(task, workspace);
-    promoteImmediateParentToInProgress(task, nowMs);
-    return { task, claim: task.claim, workspace: { workspaceId: workspace.workspaceId, branch: workspace.branch, state: workspace.state }, reused: true };
+    let liveTask = task;
+    withDbTransaction(() => {
+      if (!String(task.claim?.ownershipEpochId || '').trim()) {
+        const repairedAt = new Date(nowMs).toISOString();
+        liveTask = {
+          ...task,
+          claim: { ...task.claim, ownershipEpochId: newOwnershipEpochId() },
+          updatedAt: repairedAt,
+          logs: [...(Array.isArray(task.logs) ? task.logs : []), {
+            id: `log-task-claim-epoch-repair-${nowMs}`,
+            timestamp: repairedAt,
+            message: `Legacy active claim ownership epoch initialized for ${task.claim.ownerLabel}.`,
+            type: 'update',
+          }],
+        };
+        saveTask(liveTask);
+        ensureClaimExecutionSession(liveTask, workspace, { allowLegacyAdoption: true });
+      } else {
+        ensureClaimExecutionSession(task, workspace);
+      }
+    });
+    promoteImmediateParentToInProgress(liveTask, nowMs);
+    const refreshed = getTaskByIdentifier(task.id, 'full') || liveTask;
+    return { task: refreshed, claim: refreshed.claim, workspace: { workspaceId: workspace.workspaceId, branch: workspace.branch, state: workspace.state }, reused: true };
   }
 
   if (!input.allowScopeConflict) {
@@ -294,6 +391,7 @@ function claimTaskForSessionLocked(taskId: string, input: ClaimTaskInput, cleanS
   const claimedAt = new Date(nowMs).toISOString();
   const claim: TaskClaim = {
     sessionIdHash: hash,
+    ownershipEpochId: newOwnershipEpochId(),
     workspaceId: workspace.workspaceId,
     ownerKind,
     ownerLabel: normalizeOwnerLabel(input.ownerLabel, ownerKind, hash),
@@ -312,8 +410,11 @@ function claimTaskForSessionLocked(taskId: string, input: ClaimTaskInput, cleanS
       type: 'update',
     }],
   };
-  ensureClaimExecutionSession(updated, workspace);
-  saveTask(updated);
+  withDbTransaction(() => {
+    terminalizeActiveTaskExecutions(updated, workspace.workspaceId);
+    saveTask(updated);
+    ensureClaimExecutionSession(updated, workspace);
+  });
   promoteImmediateParentToInProgress(updated, nowMs);
   return { task: getTaskByIdentifier(task.id, 'full') || updated, claim, workspace: { workspaceId: workspace.workspaceId, branch: workspace.branch, state: workspace.state }, reused: false };
 }
@@ -485,7 +586,10 @@ export function releaseTaskClaim(taskId: string, input: ReleaseTaskClaimInput) {
         type: 'update',
       }],
     };
-    saveTask(updated);
+    withDbTransaction(() => {
+      terminalizeActiveTaskExecutions(task, task.claim.workspaceId);
+      saveTask(updated);
+    });
     return { task: getTaskByIdentifier(task.id, 'full') || updated, released: true };
   });
 }

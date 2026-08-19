@@ -127,6 +127,7 @@ export interface BugThread {
 
 export interface TaskClaim {
   sessionIdHash: string;
+  ownershipEpochId?: string; // Required on newly issued claims; optional only for persisted legacy claims.
   workspaceId: string;
   ownerKind: 'chat' | 'codex' | 'claude' | 'antigravity' | 'agent';
   ownerLabel: string;

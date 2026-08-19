@@ -35,6 +35,10 @@ const { listExecutionSessionsForTask } = await import('../../src/server/reposito
 const claims = await import('../../src/server/services/taskClaimService.js');
 const commitPlan = await import('../../src/server/services/taskCommitPlanService.js');
 const workspaces = await import('../../src/server/services/sessionWorkspaceService.js');
+const execution = await import('../../src/server/services/executionSessionService.js');
+const checkpoints = await import('../../src/server/services/executionCheckpointService.js');
+const jobService = await import('../../src/server/services/mcpToolJobService.js') as any;
+const jobRepo = await import('../../src/server/repositories/mcpToolJobRepository.js') as any;
 
 const claimProject = {
   id: 'project-claim',
@@ -111,12 +115,32 @@ function seedCandidateTask(projectId: string, id: string, targetFiles: string[],
   });
 }
 
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+async function waitUntil(predicate: () => boolean, message: string) {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.fail(message);
+}
+
+function activeExecution(taskId: string) {
+  return listExecutionSessionsForTask(taskId).find((entry: any) => entry.status === 'active') || null;
+}
+
 test('claim moves task to in-progress, binds opaque workspace, and is idempotent for the same session', () => {
   const first = claims.claimTaskForSession('task-a', { sessionId: 'chat-alpha-secret', ownerKind: 'chat', ownerLabel: 'Chat A3' });
   assert.equal(first.task.status, 'in-progress');
   assert.equal(first.claim.ownerLabel, 'Chat A3');
   assert.equal(first.claim.ownerKind, 'chat');
   assert.match(first.claim.sessionIdHash, /^[a-f0-9]{16}$/);
+  assert.match(String(first.claim.ownershipEpochId || ''), /^claim-epoch-[0-9a-f-]{36}$/);
   assert.match(first.claim.workspaceId, /^ws_[a-f0-9]{16}$/);
   assert.equal(JSON.stringify(first.claim).includes('chat-alpha-secret'), false);
   assert.equal(JSON.stringify(first.claim).includes(repoRoot), false);
@@ -124,10 +148,12 @@ test('claim moves task to in-progress, binds opaque workspace, and is idempotent
   const same = claims.claimTaskForSession('task-a', { sessionId: 'chat-alpha-secret', ownerKind: 'chat', ownerLabel: 'Chat A3' });
   assert.equal(same.reused, true);
   assert.equal(same.claim.workspaceId, first.claim.workspaceId);
+  assert.equal(same.claim.ownershipEpochId, first.claim.ownershipEpochId);
   const sessions = listExecutionSessionsForTask('task-a').filter((entry: any) => entry.workspaceId === first.claim.workspaceId);
   assert.equal(sessions.length, 1);
   assert.equal(sessions[0].status, 'active');
   assert.equal(sessions[0].projectId, 'project-claim');
+  assert.equal(execution.getExecutionSessionOwnershipEpoch(sessions[0].id).ownershipEpochId, first.claim.ownershipEpochId);
   const plan = commitPlan.buildTaskCommitPlan({ countersCache: {} }, { taskId: 'task-a', workspaceId: first.claim.workspaceId });
   assert.equal(plan.executionSessionId, sessions[0].id);
   assert.ok(plan.blockers.some((entry: any) => entry.code === 'TASK_COMMIT_NO_OWNED_CHANGES'));
@@ -177,9 +203,9 @@ test('same chat session claiming different cards receives isolated task-numbered
   assert.equal(secondWorkspace.branch, '0602');
 });
 
-test('occupied task-number root fails closed instead of creating a suffixed worktree', () => {
+test('numeric task-root collision with a different exact task identity fails closed instead of creating a suffixed worktree', () => {
   seedTask('task-folder-collision', ['src/CollisionFolder.ts'], undefined, 'DVF-0500');
-  const occupied = workspaces.createOrReuseSessionWorkspace(claimProject, 'collision-owner', { taskDisplayId: 'DVF-0500' } as any);
+  const occupied = workspaces.createOrReuseSessionWorkspace(claimProject, 'collision-owner', { taskDisplayId: 'BSA-0500' } as any);
   const rootsDir = path.dirname(occupied.root);
   try {
     assert.throws(
@@ -192,21 +218,69 @@ test('occupied task-number root fails closed instead of creating a suffixed work
   }
 });
 
-test('released task resumes its existing numbered workspace instead of creating another one', () => {
+test('released task preserves WIP workspace but rotates ownership epoch and execution identity', () => {
   seedTask('task-folder-resume', ['src/ResumeFolder.ts'], undefined, 'DVF-0501');
   const first = claims.claimTaskForSession('task-folder-resume', { sessionId: 'resume-owner-a', ownerLabel: 'Chat Resume A' });
   const firstWorkspace = workspaces.resolveSessionWorkspace(first.claim.workspaceId);
+  const firstExecution = activeExecution('task-folder-resume');
   assert.ok(firstWorkspace);
+  assert.ok(firstExecution);
+  fs.writeFileSync(path.join(firstWorkspace.root, 'src', 'ResumeFolder.ts'), 'export const resumedWip = 1;\n', 'utf8');
+  execution.updateExecutionSessionProgress(firstExecution.id, {
+    contextHandle: 'ctx-old-owner',
+    changedFiles: ['src/ResumeFolder.ts'],
+    verification: [{ name: 'old-owner-check', status: 'passed' }],
+  });
+  execution.recordExecutionLifecycleTransition(firstExecution.id, {
+    toStage: 'context-ready', reasonCode: 'old-context', evidence: { id: 'old-context-0501', kind: 'context', status: 'completed' },
+  });
+  execution.recordExecutionLifecycleTransition(firstExecution.id, {
+    toStage: 'implementing', reasonCode: 'old-implementation', evidence: { id: 'old-impl-0501', kind: 'mutation', status: 'completed' },
+  });
+  execution.recordExecutionLifecycleTransition(firstExecution.id, {
+    toStage: 'verifying', reasonCode: 'old-verification', evidence: { id: 'old-verify-0501', kind: 'verification', status: 'completed' },
+  });
 
   claims.releaseTaskClaim('task-folder-resume', { sessionId: 'resume-owner-a', nextStatus: 'todo' });
+  assert.equal(listExecutionSessionsForTask('task-folder-resume').find((entry: any) => entry.id === firstExecution.id)?.status, 'cancelled');
+  assert.equal(fs.readFileSync(path.join(firstWorkspace.root, 'src', 'ResumeFolder.ts'), 'utf8'), 'export const resumedWip = 1;\n');
+
   const resumed = claims.claimTaskForSession('task-folder-resume', { sessionId: 'resume-owner-b', ownerLabel: 'Chat Resume B' });
   const resumedWorkspace = workspaces.resolveSessionWorkspace(resumed.claim.workspaceId);
+  const resumedExecution = activeExecution('task-folder-resume');
   assert.ok(resumedWorkspace);
+  assert.ok(resumedExecution);
   assert.equal(resumed.claim.workspaceId, first.claim.workspaceId);
+  assert.notEqual(resumed.claim.ownershipEpochId, first.claim.ownershipEpochId);
+  assert.notEqual(resumedExecution.id, firstExecution.id);
+  assert.equal(execution.getExecutionSessionOwnershipEpoch(resumedExecution.id).ownershipEpochId, resumed.claim.ownershipEpochId);
+  assert.equal(resumedExecution.lifecycle.stage, 'created');
+  assert.equal(resumedExecution.contextHandle, null);
+  assert.deepEqual(resumedExecution.changedFiles, []);
+  assert.deepEqual(resumedExecution.verification, []);
   assert.equal(path.basename(resumedWorkspace.root), '0501');
   assert.equal(resumedWorkspace.root, firstWorkspace.root);
   assert.equal(firstWorkspace.branch, '0501');
   assert.equal(resumedWorkspace.branch, '0501');
+  assert.equal(fs.readFileSync(path.join(resumedWorkspace.root, 'src', 'ResumeFolder.ts'), 'utf8'), 'export const resumedWip = 1;\n');
+});
+
+test('release then reclaim by the same caller still creates a new ownership epoch and execution', () => {
+  seedTask('task-same-owner-reclaim', ['src/SameOwner.ts'], undefined, 'DVF-0502');
+  const first = claims.claimTaskForSession('task-same-owner-reclaim', { sessionId: 'same-owner', ownerLabel: 'Chat Same Owner' });
+  const firstExecution = activeExecution('task-same-owner-reclaim');
+  assert.ok(firstExecution);
+
+  claims.releaseTaskClaim('task-same-owner-reclaim', { sessionId: 'same-owner', nextStatus: 'todo' });
+  const second = claims.claimTaskForSession('task-same-owner-reclaim', { sessionId: 'same-owner', ownerLabel: 'Chat Same Owner' });
+  const secondExecution = activeExecution('task-same-owner-reclaim');
+  assert.ok(secondExecution);
+  assert.equal(second.claim.sessionIdHash, first.claim.sessionIdHash);
+  assert.equal(second.claim.workspaceId, first.claim.workspaceId);
+  assert.notEqual(second.claim.ownershipEpochId, first.claim.ownershipEpochId);
+  assert.notEqual(secondExecution.id, firstExecution.id);
+  assert.equal(firstExecution.id === secondExecution.id, false);
+  assert.equal(secondExecution.lifecycle.stage, 'created');
 });
 
 test('claiming a child promotes its immediate parent without creating parent execution ownership', () => {
@@ -287,17 +361,100 @@ test('overlapping active target-file scope blocks while disjoint sibling scope c
   assert.equal(disjoint.claim.ownerLabel, 'Chat C5');
 });
 
-test('expired claim is reclaimable by another session', () => {
+test('expired claim reclaim rotates epoch and execution while reusing the same workspace', () => {
   const first = claims.claimTaskForSession('task-stale', { sessionId: 'stale-owner', ownerKind: 'chat', ownerLabel: 'Chat Old', ttlMs: 1 });
+  const firstExecution = activeExecution('task-stale');
+  assert.ok(firstExecution);
   const staleTask = getTask('task-stale');
   staleTask.claim = { ...first.claim, expiresAt: new Date(Date.now() - 1_000).toISOString() };
   staleTask.updatedAt = new Date().toISOString();
   saveTask(staleTask);
 
   const reclaimed = claims.claimTaskForSession('task-stale', { sessionId: 'fresh-owner', ownerKind: 'codex', ownerLabel: 'Codex C7' });
+  const reclaimedExecution = activeExecution('task-stale');
+  assert.ok(reclaimedExecution);
   assert.equal(reclaimed.reused, false);
   assert.equal(reclaimed.claim.ownerLabel, 'Codex C7');
   assert.notEqual(reclaimed.claim.sessionIdHash, first.claim.sessionIdHash);
+  assert.notEqual(reclaimed.claim.ownershipEpochId, first.claim.ownershipEpochId);
+  assert.equal(reclaimed.claim.workspaceId, first.claim.workspaceId);
+  assert.notEqual(reclaimedExecution.id, firstExecution.id);
+  assert.equal(listExecutionSessionsForTask('task-stale').find((entry: any) => entry.id === firstExecution.id)?.status, 'cancelled');
+  assert.equal(reclaimedExecution.lifecycle.stage, 'created');
+});
+
+test('real durable pending operation blocks normal and emergency release without partial ownership mutation', async () => {
+  seedTask('task-pending-rotation', ['src/PendingRotation.ts'], undefined, 'DVF-0503');
+  const claimed = claims.claimTaskForSession('task-pending-rotation', { sessionId: 'pending-owner', ownerLabel: 'Chat Pending' });
+  const executionBefore = activeExecution('task-pending-rotation');
+  assert.ok(executionBefore);
+  const gate = deferred();
+  jobService.__setToolJobTestRunner('run_project_command', async (_state: any, _args: any, _logger: any, setCancelFn: (fn: () => void) => void) => {
+    setCancelFn(() => gate.resolve());
+    await gate.promise;
+    return { ok: true, status: 'succeeded' };
+  });
+
+  const job = jobService.enqueueToolJob({ projects: [claimProject] } as any, 'run_project_command', {
+    projectId: claimProject.id,
+    workspaceId: claimed.claim.workspaceId,
+    command: 'typecheck',
+    singleFlight: false,
+  }, 'repo-command');
+  try {
+    await waitUntil(() => jobRepo.getJob(job.jobId)?.status === 'running', 'Expected lifecycle job to run');
+    await waitUntil(
+      () => checkpoints.getLatestExecutionCheckpoint(executionBefore.id)?.pendingOperations.some((entry: any) => entry.operationId === job.jobId) === true,
+      'Expected real durable job to populate pending execution evidence',
+    );
+    const claimBefore = getTask('task-pending-rotation')?.claim;
+
+    for (const request of [
+      { sessionId: 'pending-owner', nextStatus: 'todo' as const },
+      { sessionId: '', nextStatus: 'todo' as const, emergency: true },
+    ]) {
+      assert.throws(
+        () => claims.releaseTaskClaim('task-pending-rotation', request),
+        (error: any) => error?.payload?.code === 'TASK_CLAIM_PENDING_OPERATION'
+          && error?.payload?.details?.operationIds?.includes(job.jobId),
+      );
+      assert.deepEqual(getTask('task-pending-rotation')?.claim, claimBefore);
+      assert.equal(activeExecution('task-pending-rotation')?.id, executionBefore.id);
+    }
+
+    const expiredTask = getTask('task-pending-rotation');
+    expiredTask.claim = { ...claimBefore, expiresAt: new Date(Date.now() - 1_000).toISOString() };
+    expiredTask.updatedAt = new Date().toISOString();
+    saveTask(expiredTask);
+    const expiredClaimBefore = getTask('task-pending-rotation')?.claim;
+    assert.throws(
+      () => claims.claimTaskForSession('task-pending-rotation', { sessionId: 'replacement-owner', ownerLabel: 'Chat Replacement' }),
+      (error: any) => error?.payload?.code === 'TASK_CLAIM_PENDING_OPERATION'
+        && error?.payload?.details?.operationIds?.includes(job.jobId),
+    );
+    assert.deepEqual(getTask('task-pending-rotation')?.claim, expiredClaimBefore);
+    assert.equal(activeExecution('task-pending-rotation')?.id, executionBefore.id);
+
+    assert.equal(jobService.cancelToolJob(job.jobId), true);
+    gate.resolve();
+    await waitUntil(() => !jobService.getJobMetrics().activeJobs.some((entry: any) => entry.jobId === job.jobId), 'Expected cancelled durable worker to exit');
+    await waitUntil(
+      () => checkpoints.getLatestExecutionCheckpoint(executionBefore.id)?.pendingOperations.some((entry: any) => entry.operationId === job.jobId) !== true,
+      'Expected terminal durable operation to reconcile pending evidence',
+    );
+
+    const replacement = claims.claimTaskForSession('task-pending-rotation', { sessionId: 'replacement-owner', ownerLabel: 'Chat Replacement' });
+    const replacementExecution = activeExecution('task-pending-rotation');
+    assert.ok(replacementExecution);
+    assert.equal(replacement.claim.workspaceId, claimed.claim.workspaceId);
+    assert.notEqual(replacement.claim.ownershipEpochId, claimed.claim.ownershipEpochId);
+    assert.notEqual(replacementExecution.id, executionBefore.id);
+    assert.equal(listExecutionSessionsForTask('task-pending-rotation').find((entry: any) => entry.id === executionBefore.id)?.status, 'cancelled');
+    assert.equal(replacementExecution.lifecycle.stage, 'created');
+  } finally {
+    gate.resolve();
+    jobService.__setToolJobTestRunner('run_project_command', null);
+  }
 });
 
 test('release is owner-guarded, clears claim, and returns task to requested runnable lane', () => {

@@ -51,6 +51,31 @@ test('persists logical execution-session identity without storing the local repo
   assert.equal(JSON.stringify(reloaded).includes(repoRoot), false);
 });
 
+test('ownership epoch evidence is durable, idempotent, and cannot be rebound to another epoch', () => {
+  const created = sessions.createExecutionSession({
+    projectId: 'project-session',
+    taskId: 'task-epoch',
+    workspaceId: 'ws_epoch',
+    repoRoot,
+    ownershipEpochId: 'claim-epoch-11111111-1111-4111-8111-111111111111',
+  });
+
+  const first = sessions.getExecutionSessionOwnershipEpoch(created.id);
+  assert.equal(first.ownershipEpochId, 'claim-epoch-11111111-1111-4111-8111-111111111111');
+  assert.equal(first.evidence?.kind, 'ownership-epoch');
+  assert.equal(first.evidence?.revisionIdentity, first.ownershipEpochId);
+  const retry = sessions.bindExecutionSessionOwnershipEpoch(created.id, first.ownershipEpochId!);
+  assert.equal(retry.ownershipEpochId, first.ownershipEpochId);
+  assert.equal(repository.listExecutionSessionEvidence(created.id).filter((entry) => entry.kind === 'ownership-epoch').length, 1);
+
+  assert.throws(
+    () => sessions.bindExecutionSessionOwnershipEpoch(created.id, 'claim-epoch-22222222-2222-4222-8222-222222222222'),
+    (error: any) => error?.code === 'EXECUTION_OWNERSHIP_EPOCH_CONFLICT',
+  );
+  sessions.cancelExecutionSession(created.id);
+  assert.equal(sessions.getExecutionSessionOwnershipEpoch(created.id).ownershipEpochId, first.ownershipEpochId);
+});
+
 test('survives a fresh Node process and resolves the same logical session from SQLite', () => {
   const created = sessions.createExecutionSession({
     projectId: 'project-session',

@@ -67,6 +67,7 @@ export interface CreateExecutionSessionInput {
   repoRoot?: string;
   contextHandle?: string | null;
   ttlMs?: number;
+  ownershipEpochId?: string | null;
   now?: Date;
 }
 
@@ -292,6 +293,37 @@ function lifecycleTransitionEvidenceId(sessionId: string, originEvidenceId: stri
   return `lifecycle-${digest}`;
 }
 
+function normalizeOwnershipEpochId(value?: string | null) {
+  const normalized = String(value || '').trim();
+  if (!normalized) return null;
+  if (normalized.length > 160 || !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(normalized)) {
+    throw executionSessionError('EXECUTION_OWNERSHIP_EPOCH_INVALID', 'Execution ownership epoch must be a bounded opaque identifier.');
+  }
+  return normalized;
+}
+
+function ownershipEpochEvidenceId(sessionId: string) {
+  const digest = crypto.createHash('sha256').update(sessionId).update('|ownership-epoch|').digest('hex').slice(0, 24);
+  return `ownership-${digest}`;
+}
+
+function saveExecutionOwnershipEpochEvidence(sessionId: string, ownershipEpochId: string, nowIso: string) {
+  return saveExecutionSessionEvidence({
+    id: ownershipEpochEvidenceId(sessionId),
+    sessionId,
+    kind: 'ownership-epoch',
+    path: null,
+    repoRevision: null,
+    fileRevision: null,
+    revisionIdentity: ownershipEpochId,
+    contextHandle: null,
+    stale: false,
+    metadata: { ownershipEpochId },
+    createdAt: nowIso,
+    updatedAt: nowIso,
+  });
+}
+
 function lifecycleTransitionForOrigin(sessionId: string, originEvidenceId: string) {
   return listExecutionSessionEvidence(sessionId).find((entry) => entry.kind === 'lifecycle-transition' && entry.metadata?.originEvidenceId === originEvidenceId) || null;
 }
@@ -306,6 +338,7 @@ export function createExecutionSession(input: CreateExecutionSessionInput) {
   const now = input.now || new Date();
   const nowIso = now.toISOString();
   const workspaceId = normalizeWorkspaceIdentity(input.workspaceId);
+  const ownershipEpochId = normalizeOwnershipEpochId(input.ownershipEpochId);
   let repoRevision: ReturnType<typeof getRepoRevisionForRoot> | null = null;
   if (input.repoRoot) repoRevision = getRepoRevisionForRoot(path.resolve(input.repoRoot));
   const sessionId = `exec-${randomUUID()}`;
@@ -343,8 +376,36 @@ export function createExecutionSession(input: CreateExecutionSessionInput) {
       createdAt: nowIso,
       updatedAt: nowIso,
     });
+    if (ownershipEpochId) saveExecutionOwnershipEpochEvidence(sessionId, ownershipEpochId, nowIso);
   });
   return requireSession(sessionId);
+}
+
+export function getExecutionSessionOwnershipEpoch(id: string) {
+  const session = requireSession(id);
+  const evidence = listExecutionSessionEvidence(id).find((entry) => entry.kind === 'ownership-epoch') || null;
+  const ownershipEpochId = evidence ? normalizeOwnershipEpochId(readStringMetadata(evidence.metadata || {}, 'ownershipEpochId') || evidence.revisionIdentity) : null;
+  return { sessionId: session.id, ownershipEpochId, evidence };
+}
+
+export function bindExecutionSessionOwnershipEpoch(id: string, ownershipEpochIdValue: string, now = new Date()) {
+  const session = requireSession(id);
+  assertActive(session);
+  const ownershipEpochId = normalizeOwnershipEpochId(ownershipEpochIdValue);
+  if (!ownershipEpochId) throw executionSessionError('EXECUTION_OWNERSHIP_EPOCH_REQUIRED', 'ownershipEpochId is required to bind execution ownership.');
+  const existing = getExecutionSessionOwnershipEpoch(id);
+  if (existing.ownershipEpochId && existing.ownershipEpochId !== ownershipEpochId) {
+    throw executionSessionError('EXECUTION_OWNERSHIP_EPOCH_CONFLICT', `Execution session '${id}' is already bound to a different ownership epoch.`, {
+      sessionId: id,
+      existingOwnershipEpochId: existing.ownershipEpochId,
+      requestedOwnershipEpochId: ownershipEpochId,
+    });
+  }
+  if (existing.ownershipEpochId === ownershipEpochId) return existing;
+  const nowIso = now.toISOString();
+  const evidence = saveExecutionOwnershipEpochEvidence(id, ownershipEpochId, nowIso);
+  updateExecutionSessionRecord(id, { updatedAt: nowIso });
+  return { sessionId: id, ownershipEpochId, evidence };
 }
 
 export function getExecutionSessionState(id: string) {

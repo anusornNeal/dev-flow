@@ -41,6 +41,7 @@ import { registerTaskReadRoutes } from './taskReadRoutes';
 import { registerTaskWorkflowRoutes } from './taskWorkflowRoutes';
 import { registerTaskClaimRoutes } from './taskClaimRoutes';
 import { buildTaskGitWarnings, evaluateReviewSubmission, syncTaskWithGit } from '../services/taskGitWorkflowService';
+import { withTaskDeletionLifecycleGuard } from '../services/taskClaimService.js';
 
 import {
   applyAgentCompletionCallback,
@@ -59,7 +60,7 @@ import {
   resolveTaskBoardListQuery,
   runThrottledStaleCleanup,
   stripRequestControlFields,
-  syncTaskAgentStateForStatus,
+  persistTaskMutationWithLifecycle,
   toMutationListResponse,
   toMutationResponse,
   toTaskResponse,
@@ -420,10 +421,9 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
           continue;
         }
 
-        syncTaskAgentStateForStatus(updatedTask, currentTask.status);
-        saveTask(updatedTask);
-        updatedTasks.push(updatedTask);
-        AgentOrchestrationWorker.maybeTrigger(updatedTask, currentTask, deps, 'PUT /tasks list update');
+        const persistedTask = persistTaskMutationWithLifecycle(currentTask, updatedTask, 'PUT /tasks list update');
+        updatedTasks.push(persistedTask);
+        AgentOrchestrationWorker.maybeTrigger(persistedTask, currentTask, deps, 'PUT /tasks list update');
         continue;
       }
 
@@ -590,12 +590,9 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
       const qualityError = validateTaskQualityForMutation(updatedTask);
       if (qualityError) return res.status(400).json({ error: qualityError });
 
-      saveTask(updatedTask);
-      syncTaskAgentStateForStatus(updatedTask, currentTask.status);
-      AgentOrchestrationWorker.maybeTrigger(updatedTask, currentTask, deps, 'PUT /tasks/:id endpoint');
-
-      saveTask(updatedTask);
-      return res.json(toMutationResponse(req, updatedTask, updatedTask));
+      const persistedTask = persistTaskMutationWithLifecycle(currentTask, updatedTask, 'PUT /tasks/:id endpoint');
+      AgentOrchestrationWorker.maybeTrigger(persistedTask, currentTask, deps, 'PUT /tasks/:id endpoint');
+      return res.json(toMutationResponse(req, persistedTask, persistedTask));
     } catch (err: any) {
       if (idempotencyKey) {
         rejectPendingIdempotency(idempotencyKey, err);
@@ -635,8 +632,15 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
     const removedTasks = getTasks().filter((task) => idsToDelete.has(task.id));
     
 
-    deleteTasksByIds(Array.from(idsToDelete));
-    return res.json({ success: true, removed: removedTasks[0], removedCount: removedTasks.length });
+    try {
+      withTaskDeletionLifecycleGuard(Array.from(idsToDelete), () => {
+        deleteTasksByIds(Array.from(idsToDelete));
+        return true;
+      });
+      return res.json({ success: true, removed: removedTasks[0], removedCount: removedTasks.length });
+    } catch (error) {
+      return sendApiError(res, error);
+    }
   });
 }
 

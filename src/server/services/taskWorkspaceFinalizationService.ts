@@ -1,10 +1,8 @@
 import type { AppState } from '../types.js';
 import { getTaskByIdentifier, saveTask } from '../repositories/taskRepository.js';
-import { listExecutionSessionsForTask } from '../repositories/executionSessionRepository.js';
 import { createApiError } from './api.js';
-import { completeExecutionSession, recordExecutionLifecycleTransition } from './executionSessionService.js';
 import { normalizeVerificationEvidence } from './taskGitWorkflowService.js';
-import { clearTaskClaimWhenLeavingInProgress } from './taskClaimService.js';
+import { finalizeTaskLifecycleDisposition } from './taskClaimService.js';
 import { cleanupSessionWorkspace, getSessionWorkspaceMetadataForRecovery } from './sessionWorkspaceService.js';
 import { inspectWorkspaceRecovery } from './workspaceRecoveryService.js';
 import { integrateWorkspaceCommits, type WorkspaceIntegrationSuccess } from './workspaceIntegrationService.js';
@@ -319,40 +317,36 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
       const synced = localOnlyEvidence(evidenceTask, refreshedMetadata.baseBranch, integration.baseHeadAfter, checks);
       gitEvidence = synced.gitEvidence;
       verificationEvidence = synced.verificationEvidence;
-      finalTask = clearTaskClaimWhenLeavingInProgress({
+      finalTask = {
         ...synced.task,
+        claim: undefined,
         status: 'done',
         branch: refreshedMetadata.baseBranch,
         updatedAt: new Date().toISOString(),
-      });
+      };
       appendFinalizationLog(
         finalTask,
         `Finalized managed workspace ${workspaceId} into ${refreshedMetadata.baseBranch}@${integration.baseHeadAfter.slice(0, 12)} with ${verificationEvidence.length} passed verification check(s); combined impact covered ${integration.combinedChangedFiles.length} changed file(s).`,
       );
-      phase = 'task-save';
-      saveTask(finalTask);
     }
 
     phase = 'execution-lifecycle';
-    const session = listExecutionSessionsForTask(task.id).find((entry) => entry.workspaceId === workspaceId && entry.status === 'active');
-    if (session) {
-      if (session.lifecycle.stage === 'committed') {
-        recordExecutionLifecycleTransition(session.id, {
-          toStage: 'finalized',
-          reasonCode: 'workspace-finalization-succeeded',
-          evidence: {
-            id: `workspace-finalization:${workspaceId}:${integration.baseHeadAfter}`,
-            kind: 'workspace-finalization',
-            status: 'completed',
-            operationId: `finalize:${workspaceId}:${integration.baseHeadAfter}`,
-          },
-        });
-      }
-      completeExecutionSession(session.id, {
-        changedFiles: integration.changedFiles,
-        verification: session.verification,
-      });
-    }
+    const finalized = finalizeTaskLifecycleDisposition(task.id, workspaceId, (base) => {
+      const finalLogIds = new Set((Array.isArray(base.logs) ? base.logs : []).map((entry: any) => String(entry?.id || '')));
+      const extraLogs = (Array.isArray(finalTask.logs) ? finalTask.logs : []).filter((entry: any) => !finalLogIds.has(String(entry?.id || '')));
+      return {
+        ...base,
+        ...finalTask,
+        claim: undefined,
+        status: 'done',
+        logs: [...(Array.isArray(base.logs) ? base.logs : []), ...extraLogs],
+        updatedAt: new Date().toISOString(),
+      };
+    }, {
+      changedFiles: integration.changedFiles,
+      repoRevision: integration.baseHeadAfter,
+    });
+    finalTask = finalized.task;
 
     phase = 'cleanup';
     const cleanup = cleanupSessionWorkspace(workspaceId);

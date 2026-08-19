@@ -3,9 +3,32 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-manual-move-'));
+const repoRoot = path.join(tempDir, 'repo');
 process.env.DEVFLOW_DB_PATH = path.join(tempDir, 'devflow.db');
+process.env.DEVFLOW_RUNTIME_DIR = path.join(tempDir, 'runtime');
+fs.mkdirSync(path.join(repoRoot, 'src'), { recursive: true });
+fs.writeFileSync(path.join(repoRoot, 'src', 'shared.ts'), 'export const shared = 1;\n');
+fs.writeFileSync(path.join(repoRoot, 'src', 'other.ts'), 'export const other = 1;\n');
+fs.writeFileSync(path.join(repoRoot, 'src', 'pending.ts'), 'export const pending = 1;\n');
+function git(args: string[]) {
+  const result = spawnSync('git', args, { cwd: repoRoot, encoding: 'utf8', shell: false });
+  assert.equal(result.status, 0, result.stderr || result.stdout || `git ${args.join(' ')} failed`);
+  return (result.stdout || '').trim();
+}
+git(['init']);
+git(['config', 'user.name', 'DevFlow Test']);
+git(['config', 'user.email', 'devflow@example.test']);
+git(['add', '.']);
+git(['commit', '-m', 'base']);
+git(['branch', '-M', 'develop']);
+const remoteRoot = path.join(tempDir, 'origin.git');
+const remoteInit = spawnSync('git', ['init', '--bare', remoteRoot], { cwd: tempDir, encoding: 'utf8', shell: false });
+assert.equal(remoteInit.status, 0, remoteInit.stderr || remoteInit.stdout);
+git(['remote', 'add', 'origin', remoteRoot]);
+git(['push', '-u', 'origin', 'develop']);
 const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
 executeAllMigrations();
 const express = (await import('express')).default;
@@ -13,9 +36,15 @@ const { registerApiRoutes } = await import('../../src/server/routes/registerApiR
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
 const { saveTask, getTask } = await import('../../src/server/repositories/taskRepository.js');
 const { createAgentRun } = await import('../../src/server/repositories/agentRunRepository.js');
+const { listExecutionSessionsForTask } = await import('../../src/server/repositories/executionSessionRepository.js');
 const { buildTaskGitWarnings } = await import('../../src/server/services/taskGitWorkflowService.js');
+const claims = await import('../../src/server/services/taskClaimService.js');
+const workspaces = await import('../../src/server/services/sessionWorkspaceService.js');
+const jobService = await import('../../src/server/services/mcpToolJobService.js') as any;
+const jobRepo = await import('../../src/server/repositories/mcpToolJobRepository.js') as any;
+const checkpoints = await import('../../src/server/services/executionCheckpointService.js') as any;
 
-const project = { id: 'project-manual-move', name: 'Manual Move', repoUrl: 'https://example.com/manual', localPath: tempDir };
+const project = { id: 'project-manual-move', name: 'Manual Move', repoUrl: remoteRoot, localPath: repoRoot };
 createProject(project as any);
 const state: any = { projectsCache: [project], countersCache: {}, skillsRegistry: [] };
 
@@ -63,6 +92,67 @@ async function post(id: string, body: any, route: 'move' | 'move-to' = 'move') {
     body: JSON.stringify(body),
   });
   return { response, body: await response.json() };
+}
+
+async function jsonRequest(pathname: string, init: RequestInit) {
+  const response = await fetch(`${base}${pathname}`, {
+    ...init,
+    headers: { 'content-type': 'application/json', ...(init.headers || {}) },
+  });
+  let body: any = null;
+  try { body = await response.json(); } catch {}
+  return { response, body };
+}
+
+let lifecycleSequence = 0;
+function lifecycleTask(label: string, targetFiles?: string[], options: { parentId?: string; status?: string; agent?: string } = {}) {
+  lifecycleSequence += 1;
+  const id = `lifecycle-${label}-${lifecycleSequence}`;
+  const focusedTargets = targetFiles || [`src/${label}-${lifecycleSequence}.ts`];
+  const now = new Date().toISOString();
+  const value = {
+    id,
+    displayId: `LIFE-${String(lifecycleSequence).padStart(4, '0')}`,
+    title: label,
+    description: 'User explicitly asked to execute this lifecycle route regression fixture.',
+    reasoning: 'User explicitly asked to execute this focused lifecycle regression task.',
+    repoContext: `Implementation map:\n- File: ${focusedTargets[0]}\n- Class/function: lifecycle route regression\n- Current behavior: status writers may drift claim and execution ownership.\n- Expected change: use the coordinated lifecycle disposition boundary.`,
+    projectId: project.id,
+    status: options.status || 'todo',
+    priority: 'medium',
+    category: 'backend',
+    tags: [],
+    targetFiles: focusedTargets,
+    checklist: [],
+    parentId: options.parentId,
+    agent: options.agent,
+    branch: 'develop',
+    verificationEvidence: [],
+    createdAt: now,
+    updatedAt: now,
+    logs: [],
+    bugs: [],
+    images: [],
+  } as any;
+  saveTask(value);
+  return id;
+}
+
+function claimLifecycleTask(id: string, sessionId = `session-${id}`) {
+  return claims.claimTaskForSession(id, { sessionId, ownerKind: 'chat', ownerLabel: `Chat ${id.slice(-4)}` });
+}
+
+function activeExecution(id: string) {
+  return listExecutionSessionsForTask(id).find((entry: any) => entry.status === 'active') || null;
+}
+
+async function waitUntil(predicate: () => boolean, message: string) {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.fail(message);
 }
 
 test('manual move returns structured confirmation without mutation', async () => {
@@ -132,4 +222,144 @@ test('move-to applies the same confirmation and explicit override semantics acro
   const warning = buildTaskGitWarnings(persisted).find((entry: any) => entry.code === 'RECOVERY_DISPOSITION_RECORDED');
   assert.ok(warning);
   assert.deepEqual((warning as any).details.recoveryDisposition, recoveryDisposition);
+});
+
+test('claimed manual move disposes execution ownership before leaving in-progress', async () => {
+  const id = lifecycleTask('claimed-manual');
+  claimLifecycleTask(id);
+  const execution = activeExecution(id);
+  assert.ok(execution);
+
+  const result = await post(id, { status: 'todo', emergency: true });
+  assert.equal(result.response.status, 200, JSON.stringify(result.body));
+  assert.equal(getTask(id)?.status, 'todo');
+  assert.equal(getTask(id)?.claim, undefined);
+  assert.equal(activeExecution(id), null);
+  assert.equal(listExecutionSessionsForTask(id).find((entry: any) => entry.id === execution!.id)?.status, 'cancelled');
+});
+
+test('direct and list task updates route status exits through lifecycle disposition', async () => {
+  for (const mode of ['direct', 'list'] as const) {
+    const id = lifecycleTask(`update-${mode}`);
+    claimLifecycleTask(id);
+    const execution = activeExecution(id);
+    assert.ok(execution);
+    const result = mode === 'direct'
+      ? await jsonRequest(`/api/tasks/${id}`, { method: 'PUT', body: JSON.stringify({ status: 'todo', emergency: true }) })
+      : await jsonRequest('/api/tasks', { method: 'PUT', body: JSON.stringify([{ id, status: 'todo', emergency: true }]) });
+    assert.equal(result.response.status, 200, JSON.stringify(result.body));
+    assert.equal(getTask(id)?.status, 'todo');
+    assert.equal(getTask(id)?.claim, undefined);
+    assert.equal(activeExecution(id), null);
+    assert.equal(listExecutionSessionsForTask(id).find((entry: any) => entry.id === execution!.id)?.status, 'cancelled');
+  }
+});
+
+test('batch move routes claimed task through the same lifecycle disposition', async () => {
+  const id = lifecycleTask('batch-move');
+  claimLifecycleTask(id);
+  const execution = activeExecution(id);
+  assert.ok(execution);
+  const result = await jsonRequest('/api/tasks/batch/move', {
+    method: 'POST',
+    body: JSON.stringify({ moves: [{ taskId: id, status: 'todo', emergency: true }] }),
+  });
+  assert.equal(result.response.status, 200, JSON.stringify(result.body));
+  assert.equal(result.body.results?.[0]?.success, true, JSON.stringify(result.body));
+  assert.equal(getTask(id)?.status, 'todo');
+  assert.equal(getTask(id)?.claim, undefined);
+  assert.equal(activeExecution(id), null);
+  assert.equal(listExecutionSessionsForTask(id).find((entry: any) => entry.id === execution!.id)?.status, 'cancelled');
+});
+
+test('submit-review cannot clear claim while leaving execution active', async () => {
+  const id = lifecycleTask('submit-review');
+  const claimed = claimLifecycleTask(id);
+  const execution = activeExecution(id);
+  assert.ok(execution);
+  const result = await jsonRequest(`/api/tasks/${id}/submit-review`, {
+    method: 'POST',
+    body: JSON.stringify({
+      emergency: true,
+      workspaceId: claimed.claim.workspaceId,
+      requireCleanTree: false,
+      requirePushedHead: false,
+      requireBranchMatch: false,
+      requireChecklistComplete: false,
+      requireVerificationEvidence: false,
+    }),
+  });
+  assert.equal(result.response.status, 200, JSON.stringify(result.body));
+  assert.equal(getTask(id)?.status, 'ready-for-review');
+  assert.equal(getTask(id)?.claim, undefined);
+  assert.equal(activeExecution(id), null);
+  assert.equal(listExecutionSessionsForTask(id).find((entry: any) => entry.id === execution!.id)?.status, 'cancelled');
+});
+
+test('recursive delete fails before deleting parent or claimed descendant', async () => {
+  const parentId = lifecycleTask('delete-parent', ['src/other.ts']);
+  const childId = lifecycleTask('delete-child', ['src/shared.ts'], { parentId });
+  claimLifecycleTask(childId);
+  const result = await jsonRequest(`/api/tasks/${parentId}?emergency=true`, { method: 'DELETE' });
+  assert.equal(result.response.status, 409, JSON.stringify(result.body));
+  assert.equal(result.body?.error?.code, 'TASK_DELETE_LIFECYCLE_BLOCKED');
+  assert.ok(getTask(parentId));
+  assert.ok(getTask(childId)?.claim);
+  assert.ok(activeExecution(childId));
+});
+
+test('legacy agent cancellation settles its run without stealing Chat lifecycle ownership', async () => {
+  const id = lifecycleTask('legacy-cancel', undefined, { agent: 'Codex' });
+  const claimed = claimLifecycleTask(id);
+  const execution = activeExecution(id);
+  assert.ok(execution);
+  createAgentRun({ taskId: id, projectId: project.id, agent: 'Codex', model: 'GPT-5.5', effort: 'medium' });
+
+  const result = await jsonRequest(`/api/tasks/${id}/agent-runs/cancel`, {
+    method: 'POST',
+    body: JSON.stringify({ reason: 'test cancellation' }),
+  });
+  assert.equal(result.response.status, 200, JSON.stringify(result.body));
+  assert.ok(result.body.cancelledCount > 0);
+  assert.equal(getTask(id)?.status, 'in-progress');
+  assert.equal(getTask(id)?.claim?.workspaceId, claimed.claim.workspaceId);
+  assert.equal(activeExecution(id)?.id, execution!.id);
+});
+
+test('emergency move cannot bypass a real running durable operation', async () => {
+  const id = lifecycleTask('pending-operation', ['src/pending.ts']);
+  const claimed = claimLifecycleTask(id, 'pending-owner-session');
+  const execution = activeExecution(id);
+  assert.ok(execution);
+  const workspace = workspaces.resolveSessionWorkspace(claimed.claim.workspaceId)!;
+  let unblock!: () => void;
+  const blocked = new Promise<void>((resolve) => { unblock = resolve; });
+  jobService.__setToolJobTestRunner('edit_local_files_batch', async (_state: any, _args: any, _logger: any, setCancelFn: (fn: () => void) => void) => {
+    setCancelFn(unblock);
+    await blocked;
+    return { ok: true, status: 'succeeded' };
+  });
+  const job = jobService.enqueueToolJob(state, 'edit_local_files_batch', {
+    projectId: project.id,
+    workspaceId: workspace.workspaceId,
+    mode: 'apply',
+    files: [{ filePath: 'src/pending.ts', edits: [{ type: 'replace', find: 'pending = 1', replaceWith: 'pending = 2' }] }],
+    singleFlight: false,
+  }, 'repo-command');
+
+  try {
+    await waitUntil(() => jobRepo.getJob(job.jobId)?.status === 'running', 'Expected durable job to enter running');
+    assert.equal(checkpoints.getLatestExecutionCheckpoint(execution!.id)?.pendingOperations.some((entry: any) => entry.operationId === job.jobId && entry.status === 'running'), true);
+    const result = await post(id, { status: 'todo', emergency: true });
+    assert.equal(result.response.status, 409, JSON.stringify(result.body));
+    assert.equal(result.body?.error?.code, 'TASK_LIFECYCLE_PENDING_OPERATION');
+    assert.equal(getTask(id)?.status, 'in-progress');
+    assert.equal(getTask(id)?.claim?.workspaceId, workspace.workspaceId);
+    assert.equal(activeExecution(id)?.id, execution!.id);
+  } finally {
+    jobService.cancelToolJob(job.jobId);
+    unblock();
+    await waitUntil(() => !jobService.getJobMetrics().activeJobs.some((entry: any) => entry.jobId === job.jobId), 'Expected durable job worker to stop');
+    jobService.__setToolJobTestRunner('edit_local_files_batch', null);
+  }
 });

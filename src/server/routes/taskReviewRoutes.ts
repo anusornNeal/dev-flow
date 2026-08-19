@@ -4,6 +4,7 @@ import { saveTask } from '../repositories/taskRepository.js';
 import { sendApiError } from '../services/api';
 import { findTaskByIdentifier } from '../services/taskService';
 import { buildTaskGitWarnings, evaluateReviewSubmission, syncTaskWithGit } from '../services/taskGitWorkflowService';
+import { mutateTaskStatusWithLifecycle } from '../services/taskClaimService.js';
 import { appendTaskLog, canOverrideTaskLock, syncTaskAgentStateForStatus, toMutationResponse, toTaskResponse } from './taskRouteSupport';
 
 export function registerTaskReviewRoutes(app: express.Express, deps: ApiRouteDeps) {
@@ -63,21 +64,30 @@ export function registerTaskReviewRoutes(app: express.Express, deps: ApiRouteDep
       }
 
       const previousStatus = updatedTask.status;
-      updatedTask.status = 'ready-for-review';
-      syncTaskAgentStateForStatus(updatedTask, previousStatus);
-      appendTaskLog(updatedTask, `Submitted for review with published commit ${evaluation.gitEvidence!.commit.slice(0, 12)} and ${evaluation.verificationEvidence.length} passed verification check(s).`, 'move');
-      saveTask(updatedTask);
-      return res.json(toMutationResponse(req, updatedTask, {
+      const mutation = mutateTaskStatusWithLifecycle(task.id, 'ready-for-review', (base) => {
+        const nextTask = {
+          ...base,
+          ...(evaluation.gitEvidence && !evidenceBranchMismatch ? { gitEvidence: evaluation.gitEvidence } : {}),
+          verificationEvidence: evaluation.verificationEvidence,
+          status: 'ready-for-review',
+          updatedAt: new Date().toISOString(),
+        };
+        syncTaskAgentStateForStatus(nextTask, previousStatus);
+        appendTaskLog(nextTask, `Submitted for review with published commit ${evaluation.gitEvidence!.commit.slice(0, 12)} and ${evaluation.verificationEvidence.length} passed verification check(s).`, 'move');
+        return nextTask;
+      }, { reason: 'submit task for review' });
+      const reviewTask = mutation.task;
+      return res.json(toMutationResponse(req, reviewTask, {
         success: true,
-        status: updatedTask.status,
-        task: updatedTask,
+        status: reviewTask.status,
+        task: reviewTask,
         gitEvidence: evaluation.gitEvidence,
         verificationEvidence: evaluation.verificationEvidence,
-        workflowWarnings: buildTaskGitWarnings(updatedTask),
+        workflowWarnings: buildTaskGitWarnings(reviewTask),
       }, {
         gitEvidence: evaluation.gitEvidence,
         verificationEvidence: evaluation.verificationEvidence,
-        workflowWarnings: buildTaskGitWarnings(updatedTask),
+        workflowWarnings: buildTaskGitWarnings(reviewTask),
       }));
     } catch (error) {
       return sendApiError(res, error);

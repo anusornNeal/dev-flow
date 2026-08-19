@@ -9,11 +9,13 @@ import { saveTask } from '../repositories/taskRepository.js';
 import { getAgentRunHistoryPaths, resolveFromDevFlowAppRoot } from '../services/agentRunService';
 import { findTaskByIdentifier, normalizeAgentCompletionPayload, validateAgentCompletionPayload } from '../services/taskService';
 import { sendApiError } from '../services/api';
+import { taskHasLifecycleOwnership } from '../services/taskClaimService.js';
 import { canRetryRun as canRetryRunUseCase, validateCompletion as validateCompletionUseCase } from '../useCases/agentRunUseCases';
 import {
   appendTaskLog,
   applyRunSummaryToTask,
   continueTaskQueueForProject,
+  persistTaskMutationWithLifecycle,
   requireAgentOwnedRequest,
   type TriggerTaskAgentFailure,
 } from './taskRouteSupport';
@@ -83,14 +85,22 @@ export function registerLegacyTaskAgentRoutes(app: express.Express, deps: ApiRou
     if (!task) return res.status(404).json({ error: 'Task not found' });
     const reason = typeof req.body?.reason === 'string' && req.body.reason.trim() ? req.body.reason.trim() : 'cancelled manually';
     const cancelledCount = AgentOrchestrationWorker.cancelRuns(task.id, reason);
+    let persistedTask = task;
     if (cancelledCount > 0) {
-      task.status = 'todo';
       task.updatedAt = new Date().toISOString();
       appendTaskLog(task, `Agent run cancelled: ${reason}`, 'update');
     }
     applyRunSummaryToTask(task, getLatestAgentRunForTask(task.id));
-    saveTask(task);
-    return res.json({ success: true, cancelledCount, task, runs: listAgentRunsForTask(task.id) });
+    if (cancelledCount > 0 && !taskHasLifecycleOwnership(task)) {
+      persistedTask = persistTaskMutationWithLifecycle(task, { ...task, status: 'todo' }, 'legacy agent run cancellation');
+    } else {
+      if (cancelledCount > 0 && taskHasLifecycleOwnership(task)) {
+        appendTaskLog(task, 'Legacy agent run cancelled; Chat lifecycle ownership and task lane were preserved.', 'update');
+      }
+      saveTask(task);
+      persistedTask = task;
+    }
+    return res.json({ success: true, cancelledCount, task: persistedTask, runs: listAgentRunsForTask(task.id) });
   });
 
   app.post('/api/tasks/:id/agent-complete', (req, res) => {

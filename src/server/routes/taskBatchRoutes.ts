@@ -8,7 +8,7 @@ import { getValidationErrorMessage, isValidTransition } from '../../lib/statusTr
 import { evaluateChecklistToggleMutation } from '../useCases/taskUseCases';
 import { VALID_STATUSES } from '../constants';
 import { validateEnum } from '../validation';
-import { appendTaskLog, canOverrideTaskLock, createTaskLogEntry, getTaskIndexByIdentifier, syncTaskAgentStateForStatus, validateParentReviewMove } from './taskRouteSupport';
+import { appendTaskLog, canOverrideTaskLock, createTaskLogEntry, getTaskIndexByIdentifier, persistTaskMutationWithLifecycle, validateParentReviewMove } from './taskRouteSupport';
 import { AgentOrchestrationWorker } from '../services/agentOrchestrationWorker';
 
 export function registerTaskBatchRoutes(app: express.Express, deps: ApiRouteDeps) {  app.post('/api/tasks/batch', (req, res) => {
@@ -107,10 +107,9 @@ export function registerTaskBatchRoutes(app: express.Express, deps: ApiRouteDeps
           continue;
         }
 
-        syncTaskAgentStateForStatus(updatedTask, currentTask.status);
-        saveTask(updatedTask);
-        updatedTasks.push(updatedTask);
-        AgentOrchestrationWorker.maybeTrigger(updatedTask, currentTask, deps, 'POST /tasks/batch update');
+        const persistedTask = persistTaskMutationWithLifecycle(currentTask, updatedTask, 'POST /tasks/batch update');
+        updatedTasks.push(persistedTask);
+        AgentOrchestrationWorker.maybeTrigger(persistedTask, currentTask, deps, 'POST /tasks/batch update');
         continue;
       }
 
@@ -207,9 +206,8 @@ export function registerTaskBatchRoutes(app: express.Express, deps: ApiRouteDeps
           updatedAt: new Date().toISOString(),
           logs: [...(task.logs || []), createTaskLogEntry(`Status moved from ${task.status.toUpperCase()} to ${item.status.toUpperCase()} via Batch API`, 'move')],
         };
-        saveTask(updatedTask);
-        syncTaskAgentStateForStatus(updatedTask, task.status);
-        return { success: true, affectedId: updatedTask.id, task: updatedTask };
+        const persistedTask = persistTaskMutationWithLifecycle(task, updatedTask, 'POST /tasks/batch/move');
+        return { success: true, affectedId: persistedTask.id, task: persistedTask };
       });
 
       

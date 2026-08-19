@@ -9,6 +9,7 @@ import {
 import { initSkillsRepository } from './repositories/skillsRepository.js';
 import type { AppState } from './types.js';
 import { resolveFromDevFlowAppRoot } from '../lib/devFlowPaths.js';
+import { taskHasLifecycleOwnership } from './services/taskClaimService.js';
 
 export const AGENT_LOG_FILE = resolveFromDevFlowAppRoot('logs', 'agent-trigger.log');
 
@@ -48,11 +49,15 @@ export function generateDisplayId(state: AppState, projectId: string) {
 
 export function sanitizeStartupTasks(state: AppState): void {
   const tasks = getTasks();
+  const activeParentIds = new Set(tasks
+    .filter((task) => task.parentId && (task.status === 'in-progress' || task.claim))
+    .map((task) => String(task.parentId)));
   for (const task of tasks) {
-    if (task.status === 'in-progress' && !task.activeAgent) {
-      task.status = 'todo';
-      saveTask(task);
-    }
+    if (task.status !== 'in-progress' || task.activeAgent) continue;
+    if (taskHasLifecycleOwnership(task)) continue;
+    if (activeParentIds.has(String(task.id))) continue;
+    task.status = 'todo';
+    saveTask(task);
   }
 }
 

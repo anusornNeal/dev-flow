@@ -3,7 +3,9 @@ import type { ApiRouteDeps } from '../types';
 import type { TaskStatus } from '../../types';
 import { VALID_STATUSES } from '../constants';
 import { getActiveRunForTask } from '../repositories/agentRunRepository';
-import { getTasks, saveTask } from '../repositories/taskRepository.js';
+import { getTasks } from '../repositories/taskRepository.js';
+import { sendApiError } from '../services/api.js';
+import { mutateTaskStatusWithLifecycle } from '../services/taskClaimService.js';
 import { getTransitionPath, getValidationErrorMessage, isValidTransition } from '../../lib/statusTransitions';
 import { evaluateMove, ensureCloseWarningBug, normalizeRecoveryDisposition, requiresRecoveryDispositionForDone } from '../useCases/taskUseCases';
 import { validateEnum } from '../validation';
@@ -41,29 +43,35 @@ export function registerTaskWorkflowRoutes(app: express.Express, deps: ApiRouteD
     if (!moveDecision.allowed) return sendMoveBlocked(res, previousStatus, targetStatus, moveDecision);
     const recovery = prepareMoveRecoveryDisposition(targetStatus, moveDecision.bypassedBlockers, req.body.recoveryDisposition);
     if (recovery.error) return res.status(recovery.error.status).json(recovery.error.body);
-    if (moveDecision.bypassedBlockers.length > 0) {
-      appendTaskLog(task, `Manual override move ${previousStatus} -> ${targetStatus}; bypassed soft blockers: ${moveDecision.bypassedBlockers.map((blocker) => `${blocker.code}: ${blocker.message}`).join(' | ')}`, 'move');
+    let mutation: ReturnType<typeof mutateTaskStatusWithLifecycle>;
+    try {
+      mutation = mutateTaskStatusWithLifecycle(task.id, targetStatus, (base) => {
+      let updatedTask = {
+        ...base,
+        status: targetStatus,
+        updatedAt: new Date().toISOString(),
+        logs: [...(Array.isArray(base.logs) ? base.logs : []), {
+          id: `log-ext-move-${Date.now()}`,
+          timestamp: new Date().toISOString(),
+          message: `Status moved from ${previousStatus.toUpperCase()} to ${targetStatus.toUpperCase()} via External API Call`,
+          type: 'move',
+        }],
+      };
+      if (moveDecision.bypassedBlockers.length > 0) {
+        appendTaskLog(updatedTask, `Manual override move ${previousStatus} -> ${targetStatus}; bypassed soft blockers: ${moveDecision.bypassedBlockers.map((blocker) => `${blocker.code}: ${blocker.message}`).join(' | ')}`, 'move');
+      }
+      if (recovery.value) appendTaskLog(updatedTask, `[recovery-disposition] ${JSON.stringify(recovery.value)}`, 'update');
+      if (updatedTask.status === 'done') {
+        updatedTask = ensureCloseWarningBug(updatedTask);
+        if (updatedTask.bugs.some((bug: any) => bug.source === 'auto-close-warning')) appendTaskLog(updatedTask, 'Done warning: unresolved bug thread created for unfinished mini tasks.', 'update');
+      }
+        syncTaskAgentStateForStatus(updatedTask, previousStatus);
+        return updatedTask;
+      }, { reason: `manual move ${previousStatus} -> ${targetStatus}` });
+    } catch (error) {
+      return sendApiError(res, error);
     }
-    if (recovery.value) appendTaskLog(task, `[recovery-disposition] ${JSON.stringify(recovery.value)}`, 'update');
-
-    let updatedTask = {
-      ...task,
-      status: targetStatus,
-      updatedAt: new Date().toISOString(),
-      logs: [...task.logs, {
-        id: `log-ext-move-${Date.now()}`,
-        timestamp: new Date().toISOString(),
-        message: `Status moved from ${previousStatus.toUpperCase()} to ${targetStatus.toUpperCase()} via External API Call`,
-        type: 'move',
-      }],
-    };
-    if (updatedTask.status === 'done') {
-      updatedTask = ensureCloseWarningBug(updatedTask);
-      if (updatedTask.bugs.some((bug: any) => bug.source === 'auto-close-warning')) appendTaskLog(updatedTask, 'Done warning: unresolved bug thread created for unfinished mini tasks.', 'update');
-    }
-    saveTask(updatedTask);
-    syncTaskAgentStateForStatus(updatedTask, previousStatus);
-    saveTask(updatedTask);
+    const updatedTask = mutation.task;
     const standardPayload = {
       success: true,
       message: `Successfully relocated task schema from ${previousStatus} to ${targetStatus}`,
@@ -102,30 +110,41 @@ export function registerTaskWorkflowRoutes(app: express.Express, deps: ApiRouteD
     if (!moveDecision.allowed) return sendMoveBlocked(res, fromStatus, targetStatus, moveDecision, path);
     const recovery = prepareMoveRecoveryDisposition(targetStatus, moveDecision.bypassedBlockers, req.body.recoveryDisposition);
     if (recovery.error) return res.status(recovery.error.status).json(recovery.error.body);
-    if (moveDecision.bypassedBlockers.length > 0) appendTaskLog(task, `Manual override move ${fromStatus} -> ${targetStatus}; bypassed soft blockers: ${moveDecision.bypassedBlockers.map((blocker) => `${blocker.code}: ${blocker.message}`).join(' | ')}`, 'move');
-    if (recovery.value) appendTaskLog(task, `[recovery-disposition] ${JSON.stringify(recovery.value)}`, 'update');
-
     const movedStatuses: Array<{ from: TaskStatus; to: TaskStatus }> = [];
     for (let index = 1; index < path.length; index += 1) {
-      const previousStatus = task.status;
+      const previousStatus = path[index - 1];
       const nextStatus = path[index];
       if (!isValidTransition(previousStatus, nextStatus)) return res.status(400).json({ error: getValidationErrorMessage(previousStatus, nextStatus), path });
-      task.status = nextStatus;
-      task.updatedAt = new Date().toISOString();
-      task.logs = [...task.logs, { id: `log-ext-move-path-${Date.now()}-${index}`, timestamp: new Date().toISOString(), message: `Status moved from ${previousStatus.toUpperCase()} to ${nextStatus.toUpperCase()} via transition helper`, type: 'move' }];
-      saveTask(task);
-      syncTaskAgentStateForStatus(task, previousStatus);
       movedStatuses.push({ from: previousStatus, to: nextStatus });
     }
-    if (task.status === 'done') {
-      const updatedTask = ensureCloseWarningBug(task);
-      task.bugs = updatedTask.bugs;
-      task.updatedAt = updatedTask.updatedAt;
-      if (task.bugs.some((bug: any) => bug.source === 'auto-close-warning')) appendTaskLog(task, 'Done warning: unresolved bug thread created for unfinished mini tasks.', 'update');
+    let mutation: ReturnType<typeof mutateTaskStatusWithLifecycle>;
+    try {
+      mutation = mutateTaskStatusWithLifecycle(task.id, targetStatus, (base) => {
+      let updatedTask = { ...base, status: targetStatus, updatedAt: new Date().toISOString() };
+      for (let index = 0; index < movedStatuses.length; index += 1) {
+        const step = movedStatuses[index];
+        updatedTask.logs = [...(Array.isArray(updatedTask.logs) ? updatedTask.logs : []), {
+          id: `log-ext-move-path-${Date.now()}-${index + 1}`,
+          timestamp: new Date().toISOString(),
+          message: `Status moved from ${step.from.toUpperCase()} to ${step.to.toUpperCase()} via transition helper`,
+          type: 'move',
+        }];
+      }
+      if (moveDecision.bypassedBlockers.length > 0) appendTaskLog(updatedTask, `Manual override move ${fromStatus} -> ${targetStatus}; bypassed soft blockers: ${moveDecision.bypassedBlockers.map((blocker) => `${blocker.code}: ${blocker.message}`).join(' | ')}`, 'move');
+      if (recovery.value) appendTaskLog(updatedTask, `[recovery-disposition] ${JSON.stringify(recovery.value)}`, 'update');
+      if (updatedTask.status === 'done') {
+        updatedTask = ensureCloseWarningBug(updatedTask);
+        if (updatedTask.bugs.some((bug: any) => bug.source === 'auto-close-warning')) appendTaskLog(updatedTask, 'Done warning: unresolved bug thread created for unfinished mini tasks.', 'update');
+      }
+        syncTaskAgentStateForStatus(updatedTask, fromStatus);
+        return updatedTask;
+      }, { reason: `multi-hop move ${fromStatus} -> ${targetStatus}` });
+    } catch (error) {
+      return sendApiError(res, error);
     }
-    saveTask(task);
-    const standardPayload = { success: true, message: `Successfully moved task from ${fromStatus} to ${targetStatus}`, task, path, movedStatuses, autoWorkTrigger: null, bypassedBlockers: moveDecision.bypassedBlockers };
-    return res.json(toMutationResponse(req, task, standardPayload, {
+    const movedTask = mutation.task;
+    const standardPayload = { success: true, message: `Successfully moved task from ${fromStatus} to ${targetStatus}`, task: movedTask, path, movedStatuses, autoWorkTrigger: null, bypassedBlockers: moveDecision.bypassedBlockers };
+    return res.json(toMutationResponse(req, movedTask, standardPayload, {
       autoWorkTrigger: standardPayload.autoWorkTrigger,
       bypassedBlockers: standardPayload.bypassedBlockers,
       path,

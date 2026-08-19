@@ -25,6 +25,7 @@ import { canRetryRun as canRetryRunUseCase, canCancelRun as canCancelRunUseCase,
 import type { AgentCompletionPayload, AgentCompletionStatus, TaskStatus } from '../../types';
 import { registerTaskImportFileRoute } from './taskImportFileRoute';
 import { buildTaskGitWarnings, validateRecordedReviewSubmission } from '../services/taskGitWorkflowService';
+import { mutateTaskStatusWithLifecycle, taskHasLifecycleOwnership } from '../services/taskClaimService.js';
 
 const STALE_AGENT_RUN_MS = 30 * 60 * 1000;
 let lastCleanupCheck = 0;
@@ -369,7 +370,6 @@ function clearActiveAgentIfSettled(task: any) {
 }
 
 export function syncTaskAgentStateForStatus(task: any, previousStatus?: string) {
-  if (task.status !== 'in-progress' && task.claim) task.claim = undefined;
   if (task.status === 'backlog') {
     if (previousStatus !== 'backlog') {
       const resetReason = 'Manual reset: moved task to backlog and cancelled the active agent run.';
@@ -383,6 +383,28 @@ export function syncTaskAgentStateForStatus(task: any, previousStatus?: string) 
 
   clearActiveAgentIfSettled(task);
   applyRunSummaryToTask(task, getLatestAgentRunForTask(task.id));
+}
+
+export function persistTaskMutationWithLifecycle(currentTask: any, candidateTask: any, reason: string) {
+  const statusChanged = candidateTask.status !== currentTask.status;
+  if (!statusChanged) {
+    syncTaskAgentStateForStatus(candidateTask, currentTask.status);
+    saveTask(candidateTask);
+    return candidateTask;
+  }
+  const originalLogIds = new Set((Array.isArray(currentTask.logs) ? currentTask.logs : []).map((entry: any) => String(entry?.id || '')));
+  const extraLogs = (Array.isArray(candidateTask.logs) ? candidateTask.logs : []).filter((entry: any) => !originalLogIds.has(String(entry?.id || '')));
+  return mutateTaskStatusWithLifecycle(currentTask.id, candidateTask.status as TaskStatus, (base) => {
+    const next = {
+      ...base,
+      ...candidateTask,
+      claim: base.claim,
+      logs: [...(Array.isArray(base.logs) ? base.logs : []), ...extraLogs],
+      updatedAt: candidateTask.updatedAt || new Date().toISOString(),
+    };
+    syncTaskAgentStateForStatus(next, currentTask.status);
+    return next;
+  }, { reason }).task;
 }
 
 export function canOverrideTaskLock(task: any, body: any, query?: any, agentRequestValue?: any) {
@@ -415,6 +437,22 @@ export function applyRunSummaryToTask(task: any, run: AgentRun | null) {
 
 export function requireAgentOwnedRequest(req: express.Request) {
   return String(req.headers['x-agent-request']).toLowerCase() === 'true';
+}
+
+function persistLegacyAgentStatus(task: any, targetStatus: TaskStatus, reason: string) {
+  if (taskHasLifecycleOwnership(task) && targetStatus !== 'in-progress') {
+    task.updatedAt = new Date().toISOString();
+    appendTaskLog(task, `${reason} Legacy Agent Runner status '${targetStatus}' was not applied because Chat lifecycle ownership remains authoritative.`, 'update');
+    saveTask(task);
+    return task;
+  }
+  return mutateTaskStatusWithLifecycle(task.id, targetStatus, (current) => ({
+    ...current,
+    ...task,
+    claim: current.claim,
+    status: targetStatus,
+    updatedAt: new Date().toISOString(),
+  }), { reason }).task;
 }
 
 function formatAgentCompletionLogMessage(payload: AgentCompletionPayload) {
@@ -484,13 +522,12 @@ export function applyAgentCompletionCallback(task: any, run: AgentRun, deps: Api
     appendAgentRunLog(run.logPath, completionMessage);
   }
 
-  task.status = nextStatus;
   task.updatedAt = new Date().toISOString();
   appendTaskLog(task, completionMessage, 'update');
   applyRunSummaryToTask(task, updatedRun || getLatestAgentRunForTask(task.id));
-  saveTask(task);
+  const persistedTask = persistLegacyAgentStatus(task, nextStatus, `Agent completion ${payload.status} settled run ${run.id}.`);
 
-  return { task, run: updatedRun || run, payload };
+  return { task: persistedTask, run: updatedRun || run, payload };
 }
 
 export function cleanupStaleActiveRuns(deps: ApiRouteDeps) {
@@ -538,7 +575,6 @@ function failTaskRun(task: any, deps: ApiRouteDeps, runId: string, reason: strin
   taskMessage?: string;
 }) {
   const failedRun = updateAgentRunStatus(runId, 'failed', { errorMessage: reason });
-  task.status = 'todo';
   task.updatedAt = new Date().toISOString();
   appendTaskLog(task, options?.taskMessage || reason, 'update');
   if (options?.logPath) appendAgentRunLog(options.logPath, reason);
@@ -554,7 +590,7 @@ function failTaskRun(task: any, deps: ApiRouteDeps, runId: string, reason: strin
     }));
   }
   applyRunSummaryToTask(task, failedRun);
-  saveTask(task);
+  persistLegacyAgentStatus(task, 'todo', `Agent startup/run failure settled run ${runId}.`);
   return failedRun;
 }
 
@@ -581,10 +617,8 @@ export function completeAgentRunForTask(task: any, run: AgentRun, deps: ApiRoute
       }));
     }
     if (reviewBlockError) {
-      task.status = 'todo';
       appendTaskLog(task, `Agent run ${run.id} completed successfully, but review is still blocked. ${reviewBlockError}`, 'update');
     } else {
-      task.status = 'ready-for-review';
       appendTaskLog(task, `Agent run ${run.id} completed successfully.`, 'update');
     }
   } else {
@@ -605,13 +639,13 @@ export function completeAgentRunForTask(task: any, run: AgentRun, deps: ApiRoute
         completedAt: new Date().toISOString(),
       }));
     }
-    task.status = 'todo';
     appendTaskLog(task, `Agent run ${run.id} failed: ${errorMessage}`, 'update');
   }
 
   task.updatedAt = new Date().toISOString();
   applyRunSummaryToTask(task, updatedRun || getLatestAgentRunForTask(task.id));
-  saveTask(task);
+  const targetStatus: TaskStatus = options.success && !validateParentReviewMove(task, deps, 'ready-for-review') ? 'ready-for-review' : 'todo';
+  persistLegacyAgentStatus(task, targetStatus, `Agent run ${run.id} settled with ${options.success ? 'success' : 'failure'}.`);
   return updatedRun;
 }
 

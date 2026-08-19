@@ -12,8 +12,10 @@ import { createApiError } from './api.js';
 import {
   bindExecutionSessionOwnershipEpoch,
   cancelExecutionSession,
+  completeExecutionSession,
   createExecutionSession,
   getExecutionSessionOwnershipEpoch,
+  recordExecutionLifecycleTransition,
 } from './executionSessionService.js';
 import { getLatestExecutionCheckpoint } from './executionCheckpointService.js';
 import { withDbTransaction } from '../../db/index.js';
@@ -119,7 +121,7 @@ function findScopeConflictsForPaths(taskId: string, requestedPaths: Set<string>,
   if (requestedPaths.size === 0) return [];
   const conflicts: Array<{ taskId: string; displayId?: string; ownerLabel: string; files: string[] }> = [];
   for (const candidate of projectTasks) {
-    if (candidate.id === taskId || candidate.status !== 'in-progress' || !isActiveClaim(candidate.claim, nowMs)) continue;
+    if (candidate.id === taskId || !isActiveClaim(candidate.claim, nowMs)) continue;
     const overlap = [...effectiveClaimedScope(candidate, nowMs)].filter((file) => requestedPaths.has(file));
     if (overlap.length === 0) continue;
     conflicts.push({
@@ -214,6 +216,196 @@ function unresolvedExecutionOperations(sessionId: string) {
   const checkpoint = getLatestExecutionCheckpoint(sessionId);
   return (checkpoint?.pendingOperations || [])
     .filter((entry) => entry.status === 'accepted' || entry.status === 'running');
+}
+
+function unresolvedTaskOperations(task: any) {
+  return listExecutionSessionsForTask(task.id).flatMap((session) => unresolvedExecutionOperations(session.id).map((entry) => ({
+    executionSessionId: session.id,
+    executionStatus: session.status,
+    ownershipEpochId: getExecutionSessionOwnershipEpoch(session.id).ownershipEpochId,
+    operationId: entry.operationId,
+    evidenceId: entry.evidenceId,
+    kind: entry.kind,
+    status: entry.status,
+  })));
+}
+
+function assertNoUnresolvedTaskOperations(task: any, action: string) {
+  const operations = unresolvedTaskOperations(task);
+  if (operations.length === 0) return;
+  throw createApiError(409, 'TASK_LIFECYCLE_PENDING_OPERATION', `Task '${task.displayId || task.id}' cannot ${action} while durable lifecycle work is unresolved.`, {
+    affectedId: task.id,
+    details: {
+      action,
+      operationIds: operations.map((entry) => entry.operationId),
+      operations,
+      nextAction: 'Inspect the durable job result and retry only after terminal pending-operation reconciliation.',
+    },
+  });
+}
+
+function activeTaskExecutions(task: any) {
+  return listExecutionSessionsForTask(task.id).filter((entry) => entry.status === 'active');
+}
+
+function disposeTaskLifecycleForStatusLocked(task: any, targetStatus: TaskStatus, reason: string) {
+  if (targetStatus === 'in-progress') return { task, disposed: false, executionSessionIds: [] as string[] };
+  assertNoUnresolvedTaskOperations(task, `move to '${targetStatus}'`);
+  const active = activeTaskExecutions(task);
+  if (!task.claim && active.length > 0) {
+    throw createApiError(409, 'TASK_LIFECYCLE_RECONCILIATION_REQUIRED', `Task '${task.displayId || task.id}' has active execution ownership without a claim; lifecycle reconciliation is required before changing status.`, {
+      affectedId: task.id,
+      details: { targetStatus, executionSessionIds: active.map((entry) => entry.id) },
+    });
+  }
+  if (!task.claim) return { task, disposed: false, executionSessionIds: [] as string[] };
+  const claimWorkspaceId = String(task.claim.workspaceId || '').trim();
+  const foreign = active.filter((entry) => entry.workspaceId !== claimWorkspaceId);
+  if (foreign.length > 0) {
+    throw createApiError(409, 'TASK_EXECUTION_OWNERSHIP_AMBIGUOUS', `Task '${task.displayId || task.id}' has active execution ownership outside its claimed workspace.`, {
+      affectedId: task.id,
+      details: { claimWorkspaceId, executionSessionIds: foreign.map((entry) => entry.id) },
+    });
+  }
+  for (const session of active) cancelExecutionSession(session.id);
+  const now = new Date().toISOString();
+  const disposedTask = {
+    ...task,
+    claim: undefined,
+    updatedAt: now,
+    logs: [...(Array.isArray(task.logs) ? task.logs : []), {
+      id: `log-task-lifecycle-dispose-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`,
+      timestamp: now,
+      message: `Lifecycle ownership disposed before status transition to ${targetStatus}: ${reason}.`,
+      type: 'update',
+    }],
+  };
+  return { task: disposedTask, disposed: true, executionSessionIds: active.map((entry) => entry.id) };
+}
+
+export function taskHasLifecycleOwnership(task: any) {
+  if (!task?.id) return false;
+  return Boolean(task.claim) || activeTaskExecutions(task).length > 0;
+}
+
+export function mutateTaskStatusWithLifecycle(
+  taskId: string,
+  targetStatus: TaskStatus,
+  buildTask: (task: any) => any,
+  options: { reason?: string } = {},
+) {
+  const initial = getTaskByIdentifier(taskId, 'full');
+  if (!initial) throw createApiError(404, 'TASK_NOT_FOUND', `Task '${taskId}' was not found.`, { affectedId: taskId });
+  if (!initial.projectId) throw createApiError(400, 'TASK_PROJECT_REQUIRED', 'Task must belong to a project before lifecycle mutation.', { affectedId: initial.id });
+  const reason = String(options.reason || 'coordinated task status mutation').trim().slice(0, 240) || 'coordinated task status mutation';
+  return withSyncLock(`task-claim:${initial.projectId}`, () => withDbTransaction(() => {
+    const current = getTaskByIdentifier(taskId, 'full');
+    if (!current) throw createApiError(404, 'TASK_NOT_FOUND', `Task '${taskId}' was not found.`, { affectedId: taskId });
+    const disposition = disposeTaskLifecycleForStatusLocked(current, targetStatus, reason);
+    const next = buildTask(disposition.task);
+    if (!next || String(next.id || '') !== current.id || next.status !== targetStatus) {
+      throw createApiError(409, 'TASK_LIFECYCLE_MUTATION_INVALID', 'Lifecycle status mutation must preserve task identity and persist the requested target status.', {
+        affectedId: current.id,
+        details: { targetStatus, returnedTaskId: next?.id, returnedStatus: next?.status },
+      });
+    }
+    saveTask(next);
+    return { task: getTaskByIdentifier(current.id, 'full') || next, disposed: disposition.disposed, executionSessionIds: disposition.executionSessionIds };
+  }));
+}
+
+export function withTaskDeletionLifecycleGuard<T>(taskIds: string[], deleteFn: (tasks: any[]) => T) {
+  const ids = [...new Set(taskIds.map((value) => String(value || '').trim()).filter(Boolean))];
+  if (ids.length === 0) throw createApiError(400, 'TASK_DELETE_IDS_REQUIRED', 'At least one task id is required for guarded deletion.');
+  const initialTasks = ids.map((id) => getTaskByIdentifier(id, 'full')).filter(Boolean) as any[];
+  if (initialTasks.length !== ids.length) throw createApiError(404, 'TASK_NOT_FOUND', 'One or more tasks selected for deletion were not found.');
+  const projectIds = [...new Set(initialTasks.map((task) => String(task.projectId || '')).filter(Boolean))];
+  if (projectIds.length !== 1) throw createApiError(409, 'TASK_DELETE_PROJECT_AMBIGUOUS', 'Recursive lifecycle-guarded deletion must stay within one project.');
+  return withSyncLock(`task-claim:${projectIds[0]}`, () => withDbTransaction(() => {
+    const tasks = ids.map((id) => getTaskByIdentifier(id, 'full')).filter(Boolean) as any[];
+    if (tasks.length !== ids.length) throw createApiError(409, 'TASK_DELETE_SET_CHANGED', 'Task deletion set changed before lifecycle guard could execute.');
+    const blockers = tasks.flatMap((task) => {
+      const operations = unresolvedTaskOperations(task);
+      const active = activeTaskExecutions(task);
+      if (!task.claim && active.length === 0 && operations.length === 0) return [];
+      return [{
+        taskId: task.id,
+        displayId: task.displayId,
+        claimWorkspaceId: task.claim?.workspaceId || null,
+        executionSessionIds: active.map((entry) => entry.id),
+        operationIds: operations.map((entry) => entry.operationId),
+      }];
+    });
+    if (blockers.length > 0) {
+      throw createApiError(409, 'TASK_DELETE_LIFECYCLE_BLOCKED', 'Task deletion is blocked while any selected task owns claim/execution/pending lifecycle state.', {
+        details: { blockers, nextAction: 'Release/finalize ownership safely before deleting task records. Dirty managed WIP is not deleted by this operation.' },
+      });
+    }
+    return deleteFn(tasks);
+  }));
+}
+
+export function finalizeTaskLifecycleDisposition(
+  taskId: string,
+  workspaceId: string,
+  buildFinalTask: (task: any) => any,
+  input: { changedFiles?: string[]; verification?: unknown[]; repoRevision: string },
+) {
+  const initial = getTaskByIdentifier(taskId, 'full');
+  if (!initial) throw createApiError(404, 'TASK_NOT_FOUND', `Task '${taskId}' was not found.`, { affectedId: taskId });
+  const cleanWorkspaceId = String(workspaceId || '').trim();
+  const repoRevision = String(input?.repoRevision || '').trim();
+  if (!cleanWorkspaceId || !repoRevision) throw createApiError(400, 'TASK_FINALIZATION_IDENTITY_REQUIRED', 'workspaceId and repoRevision are required for lifecycle finalization.');
+  return withSyncLock(`task-claim:${initial.projectId}`, () => withDbTransaction(() => {
+    const current = getTaskByIdentifier(taskId, 'full');
+    if (!current) throw createApiError(404, 'TASK_NOT_FOUND', `Task '${taskId}' was not found.`, { affectedId: taskId });
+    assertNoUnresolvedTaskOperations(current, 'finalize task ownership');
+    if (current.claim?.workspaceId && current.claim.workspaceId !== cleanWorkspaceId) {
+      throw createApiError(409, 'TASK_FINALIZATION_WORKSPACE_MISMATCH', 'Task claim belongs to a different workspace than finalization.', {
+        affectedId: current.id,
+        details: { claimWorkspaceId: current.claim.workspaceId, workspaceId: cleanWorkspaceId },
+      });
+    }
+    const active = activeTaskExecutions(current);
+    const foreign = active.filter((entry) => entry.workspaceId !== cleanWorkspaceId);
+    if (foreign.length > 0) {
+      throw createApiError(409, 'TASK_FINALIZATION_EXECUTION_AMBIGUOUS', 'Task has active execution ownership outside the workspace being finalized.', {
+        affectedId: current.id,
+        details: { workspaceId: cleanWorkspaceId, executionSessionIds: foreign.map((entry) => entry.id) },
+      });
+    }
+    const session = active.find((entry) => entry.workspaceId === cleanWorkspaceId) || null;
+    if (session) {
+      if (session.lifecycle.stage === 'committed') {
+        recordExecutionLifecycleTransition(session.id, {
+          toStage: 'finalized',
+          reasonCode: 'workspace-finalization-succeeded',
+          evidence: {
+            id: `workspace-finalization:${cleanWorkspaceId}:${repoRevision}`,
+            kind: 'workspace-finalization',
+            status: 'completed',
+            operationId: `finalize:${cleanWorkspaceId}:${repoRevision}`,
+          },
+        });
+      } else if (session.lifecycle.stage !== 'finalized') {
+        throw createApiError(409, 'TASK_FINALIZATION_EXECUTION_STAGE_INVALID', `Execution '${session.id}' must be committed before task finalization.`, {
+          affectedId: current.id,
+          details: { executionSessionId: session.id, stage: session.lifecycle.stage },
+        });
+      }
+      completeExecutionSession(session.id, {
+        changedFiles: input.changedFiles || [],
+        verification: input.verification || session.verification,
+      });
+    }
+    const base = { ...current, claim: undefined };
+    const finalTask = buildFinalTask(base);
+    if (!finalTask || finalTask.id !== current.id || finalTask.status !== 'done') {
+      throw createApiError(409, 'TASK_FINALIZATION_MUTATION_INVALID', 'Finalization lifecycle boundary must persist the same task as done.', { affectedId: current.id });
+    }
+    saveTask(finalTask);
+    return { task: getTaskByIdentifier(current.id, 'full') || finalTask, executionSessionId: session?.id || null };
+  }));
 }
 
 function assertOwnershipRotationAllowed(task: any, sessions: ReturnType<typeof activeTaskExecutionsForWorkspace>) {
@@ -592,11 +784,6 @@ export function releaseTaskClaim(taskId: string, input: ReleaseTaskClaimInput) {
     });
     return { task: getTaskByIdentifier(task.id, 'full') || updated, released: true };
   });
-}
-
-export function clearTaskClaimWhenLeavingInProgress(task: any) {
-  if (task?.status !== 'in-progress' && task?.claim) task.claim = undefined;
-  return task;
 }
 
 export function taskHasActiveClaim(task: any, nowMs = Date.now()) {

@@ -6,7 +6,12 @@ import { DEVFLOW_CONTRACT_VERSION, getCapabilityCatalog } from '../contracts/dev
 import { findProjectByIdentifier } from './taskService.js';
 import { classifyRuntimeIdentity, getRuntimeIdentity, type RuntimeClientState } from './runtimeIdentityService.js';
 import { inspectWorkspaceRecovery, type WorkspaceRecoveryInspection } from './workspaceRecoveryService.js';
-import { listSessionWorkspaceMetadataForRecovery } from './sessionWorkspaceService.js';
+import {
+  classifySessionWorkspaceTaskMatch,
+  findSessionWorkspaceRecoveryCandidatesForTask,
+  getSessionWorkspaceMetadataForRecovery,
+  listSessionWorkspaceMetadataForRecovery,
+} from './sessionWorkspaceService.js';
 
 export type WorkflowRecoveryContinuationAction =
   | 'query-job'
@@ -150,8 +155,9 @@ export function getWorkflowRecoveryHandoff(state: AppState, args: RecoveryArgs =
   const jobProjectId = clean(exactJob?.args?.projectId);
   const workspaceSelectors = [explicitWorkspaceId, taskWorkspaceId, jobWorkspaceId].filter(Boolean);
   const taskMatchesJob = !task || !jobTaskId || jobTaskId === task.id || jobTaskId === task.displayId;
-  const projectSelectorsAgree = !requestedProject
-    || ((!task?.projectId || task.projectId === requestedProject.id) && (!jobProjectId || jobProjectId === requestedProject.id));
+  const taskAndJobProjectAgree = !task?.projectId || !jobProjectId || task.projectId === jobProjectId;
+  const projectSelectorsAgree = taskAndJobProjectAgree && (!requestedProject
+    || ((!task?.projectId || task.projectId === requestedProject.id) && (!jobProjectId || jobProjectId === requestedProject.id)));
   if (!taskMatchesJob || new Set(workspaceSelectors).size > 1 || !projectSelectorsAgree) {
     return blocked('Supplied recovery identifiers conflict and refer to different durable workflow state; recovery will not compose or replay across boundaries.', {
       ...(diagnosis ? { diagnosis } : {}),
@@ -161,6 +167,19 @@ export function getWorkflowRecoveryHandoff(state: AppState, args: RecoveryArgs =
         workspaces: [...new Set(workspaceSelectors)],
       },
     });
+  }
+
+  if (task && explicitWorkspaceId && !taskWorkspaceId) {
+    const explicitWorkspace = getSessionWorkspaceMetadataForRecovery(explicitWorkspaceId);
+    const expectedProjectId = clean(requestedProject?.id) || clean(task.projectId);
+    if (!explicitWorkspace || classifySessionWorkspaceTaskMatch(explicitWorkspace, expectedProjectId, task.displayId) !== 'exact') {
+      return blocked('Supplied task and workspace identifiers are not an exact persisted task/workspace identity match; recovery will not bind them by legacy folder or numeric compatibility.', {
+        ...(diagnosis ? { diagnosis } : {}),
+        ...(requestedProject ? { project: compactProject(requestedProject) } : {}),
+        task: compactTask(task),
+        candidates: { tasks: [task.id], workspaces: [explicitWorkspaceId] },
+      });
+    }
   }
 
   let workspaceId = explicitWorkspaceId || jobWorkspaceId || taskWorkspaceId;
@@ -179,6 +198,53 @@ export function getWorkflowRecoveryHandoff(state: AppState, args: RecoveryArgs =
   }
 
   let discoveredInspection: WorkspaceRecoveryInspection | undefined;
+  if (task && project && !workspaceId && !exactJob) {
+    const discovery = findSessionWorkspaceRecoveryCandidatesForTask(project.id, task.displayId, 50);
+    if (discovery.truncated) {
+      return blocked('Task recovery workspace discovery exceeded its bounded registry view; uniqueness cannot be proven, so recovery will not guess a managed workspace.', {
+        ...(diagnosis ? { diagnosis } : {}),
+        project: compactProject(project),
+        task: compactTask(task),
+        candidates: {
+          tasks: [task.id],
+          workspaces: [...discovery.exactMatches, ...discovery.legacyMatches].map((workspace) => workspace.workspaceId),
+        },
+      });
+    }
+
+    const exactInspections = discovery.exactMatches.map((workspace) => inspectWorkspaceRecovery(workspace.workspaceId));
+    const actionableInspections = exactInspections.filter(requiresRecoveryContinuation);
+    if (actionableInspections.length > 1) {
+      return blocked('Recovery is ambiguous because multiple actionable managed workspaces carry the same exact persisted task identity.', {
+        ...(diagnosis ? { diagnosis } : {}),
+        project: compactProject(project),
+        task: compactTask(task),
+        candidates: { tasks: [task.id], workspaces: actionableInspections.map((inspection) => inspection.workspaceId) },
+      });
+    }
+    if (actionableInspections.length === 1) {
+      discoveredInspection = actionableInspections[0];
+      workspaceId = actionableInspections[0].workspaceId;
+    } else if (exactInspections.length === 1) {
+      discoveredInspection = exactInspections[0];
+      workspaceId = exactInspections[0].workspaceId;
+    } else if (exactInspections.length > 1) {
+      return blocked('Recovery found multiple exact historical workspaces for the task and cannot select one without actionable-state evidence.', {
+        ...(diagnosis ? { diagnosis } : {}),
+        project: compactProject(project),
+        task: compactTask(task),
+        candidates: { tasks: [task.id], workspaces: exactInspections.map((inspection) => inspection.workspaceId) },
+      });
+    } else if (discovery.legacyMatches.length > 0) {
+      return blocked('Recovery found only legacy task-folder compatibility without an exact persisted task identity; explicit workspace selection or metadata reconciliation is required.', {
+        ...(diagnosis ? { diagnosis } : {}),
+        project: compactProject(project),
+        task: compactTask(task),
+        candidates: { tasks: [task.id], workspaces: discovery.legacyMatches.map((workspace) => workspace.workspaceId) },
+      });
+    }
+  }
+
   if (!task && project) {
     const activeClaims = getTasks().filter((candidate) =>
       candidate.projectId === project.id

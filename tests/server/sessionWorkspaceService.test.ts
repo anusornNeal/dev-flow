@@ -5,8 +5,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import {
+  classifySessionWorkspaceTaskMatch,
   cleanupSessionWorkspace,
   createOrReuseSessionWorkspace,
+  findSessionWorkspaceRecoveryCandidatesForTask,
+  listSessionWorkspaceMetadataForRecovery,
   resolveSessionWorkspace,
   resetSessionWorkspaceRuntimeForTests,
 } from '../../src/server/services/sessionWorkspaceService.js';
@@ -74,6 +77,33 @@ test('same session creates distinct task-owned workspaces while standalone reuse
   assert.equal(taskB.branch, '0490');
   assert.equal(taskAAgain.workspaceId, taskA.workspaceId);
   assert.equal(taskAAgain.root, taskA.root);
+});
+
+test('recovery metadata exposes exact task identity without leaking workspace paths or session identity', () => {
+  const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-workspace-recovery-identity-'));
+  process.env.DEVFLOW_RUNTIME_DIR = runtimeRoot;
+  resetSessionWorkspaceRuntimeForTests();
+  const repo = createRepo();
+  const workspace = createOrReuseSessionWorkspace(project(repo), 'recovery-identity-chat', { taskDisplayId: 'DVF-0607' });
+
+  const registry = listSessionWorkspaceMetadataForRecovery('project-workspace-test', 50);
+  const metadata = registry.workspaces.find((candidate) => candidate.workspaceId === workspace.workspaceId);
+  assert.ok(metadata);
+  assert.equal(metadata.taskDisplayId, 'DVF-0607');
+  assert.equal(metadata.taskRootLeaf, '0607');
+  assert.equal(Object.prototype.hasOwnProperty.call(metadata, 'root'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(metadata, 'projectRoot'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(metadata, 'sessionIdHash'), false);
+
+  const discovery = findSessionWorkspaceRecoveryCandidatesForTask('project-workspace-test', 'DVF-0607', 50);
+  assert.deepEqual(discovery.exactMatches.map((candidate) => candidate.workspaceId), [workspace.workspaceId]);
+  assert.deepEqual(discovery.legacyMatches, []);
+  assert.equal(classifySessionWorkspaceTaskMatch(metadata, 'project-workspace-test', 'DVF-0607'), 'exact');
+  assert.equal(classifySessionWorkspaceTaskMatch(metadata, 'project-workspace-test', 'BSA-0607'), 'incompatible');
+
+  const legacyOnly = { ...metadata, taskDisplayId: undefined, taskRootLeaf: '0607' };
+  assert.equal(classifySessionWorkspaceTaskMatch(legacyOnly, 'project-workspace-test', 'DVF-0607'), 'legacy-compatible');
+  assert.equal(classifySessionWorkspaceTaskMatch(legacyOnly, 'project-workspace-test', 'BSA-0607'), 'legacy-compatible');
 });
 
 test('task-owned numeric branch collisions fail closed and clean task workspaces can remove their branch', () => {

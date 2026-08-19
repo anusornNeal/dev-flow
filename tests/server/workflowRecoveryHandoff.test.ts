@@ -37,6 +37,7 @@ const jobs = await import('../../src/server/repositories/mcpToolJobRepository.js
 const {
   createOrReuseSessionWorkspace,
   markSessionWorkspaceIntegrationRequired,
+  resetSessionWorkspaceRuntimeForTests,
 } = await import('../../src/server/services/sessionWorkspaceService.js');
 const { registerDevFlowRoutes } = await import('../../src/server/routes/devflow.js');
 
@@ -94,6 +95,50 @@ function seedClaimedTask(label: string) {
     },
   });
   return { taskId, displayId: `RCH-${label.toUpperCase()}`, workspace };
+}
+
+let unclaimedTaskCounter = 7000;
+
+function workspaceRegistryPath(workspaceId: string) {
+  return path.join(process.env.DEVFLOW_RUNTIME_DIR!, 'workspaces', 'registry', `${workspaceId}.json`);
+}
+
+function rewriteWorkspaceMetadata(workspaceId: string, mutate: (metadata: any) => void) {
+  const target = workspaceRegistryPath(workspaceId);
+  const metadata = JSON.parse(fs.readFileSync(target, 'utf8')) as any;
+  mutate(metadata);
+  fs.writeFileSync(target, `${JSON.stringify(metadata, null, 2)}\n`, 'utf8');
+  resetSessionWorkspaceRuntimeForTests();
+}
+
+function seedUnclaimedTaskWorkspace(label: string, status: 'todo' | 'in-progress' | 'done' = 'in-progress') {
+  unclaimedTaskCounter += 1;
+  const isolatedProjectId = seedIsolatedProject(label);
+  const displayId = `RCI-${unclaimedTaskCounter}`;
+  const workspace = createOrReuseSessionWorkspace(
+    { id: isolatedProjectId, localPath: repoRoot },
+    `session-${label}-${unclaimedTaskCounter}`,
+    { taskDisplayId: displayId },
+  );
+  const now = new Date().toISOString();
+  const taskId = `task-${label}-${unclaimedTaskCounter}`;
+  saveTask({
+    id: taskId,
+    displayId,
+    projectId: isolatedProjectId,
+    title: `Unclaimed recovery ${label}`,
+    description: '',
+    status,
+    priority: 'high',
+    category: 'backend',
+    tags: [],
+    targetFiles: ['tracked.txt'],
+    checklist: [],
+    createdAt: now,
+    updatedAt: now,
+    logs: [],
+  });
+  return { taskId, displayId, projectId: isolatedProjectId, workspace };
 }
 
 async function withServer(run: (baseUrl: string) => Promise<void>) {
@@ -356,5 +401,132 @@ test('project-only recovery stops as ambiguous when more than one active claimed
     assert.match(body.continuation.reason, /ambiguous|multiple/i);
     assert.equal(body.candidates.tasks.includes(first.taskId), true);
     assert.equal(body.candidates.tasks.includes(second.taskId), true);
+  });
+});
+
+test('task-only recovery rediscovers exact dirty workspace after claim loss without mutating registry metadata', async () => {
+  const fixture = seedUnclaimedTaskWorkspace('task-only-dirty');
+  fs.writeFileSync(path.join(fixture.workspace.root, 'tracked.txt'), 'task-only dirty work\n', 'utf8');
+  const metadataBefore = fs.readFileSync(workspaceRegistryPath(fixture.workspace.workspaceId), 'utf8');
+
+  await withServer(async (baseUrl) => {
+    const { response, body } = await json(baseUrl, new URLSearchParams({ taskId: fixture.displayId }));
+    assert.equal(response.status, 200);
+    assert.equal(body.workspace.workspaceId, fixture.workspace.workspaceId);
+    assert.equal(body.workspace.disposition, 'needs-recovery');
+    assert.deepEqual(body.workspace.dirtyFiles, ['tracked.txt']);
+    assert.equal(body.continuation.action, 'continue-workspace');
+    assert.equal(body.continuation.workspaceId, fixture.workspace.workspaceId);
+  });
+
+  assert.equal(fs.readFileSync(workspaceRegistryPath(fixture.workspace.workspaceId), 'utf8'), metadataBefore);
+});
+
+test('task-only recovery rediscovers exact committed integration-required workspace after claim loss', async () => {
+  const fixture = seedUnclaimedTaskWorkspace('task-only-integration');
+  fs.writeFileSync(path.join(fixture.workspace.root, 'tracked.txt'), 'task-only committed work\n', 'utf8');
+  git(fixture.workspace.root, ['add', 'tracked.txt']);
+  git(fixture.workspace.root, ['commit', '-m', 'task-only recovery commit']);
+  markSessionWorkspaceIntegrationRequired(fixture.workspace.workspaceId, true);
+
+  await withServer(async (baseUrl) => {
+    const { response, body } = await json(baseUrl, new URLSearchParams({ taskId: fixture.displayId }));
+    assert.equal(response.status, 200);
+    assert.equal(body.workspace.workspaceId, fixture.workspace.workspaceId);
+    assert.equal(body.workspace.state, 'integration-required');
+    assert.equal(body.continuation.action, 'finish-integration');
+    assert.equal(body.continuation.workspaceId, fixture.workspace.workspaceId);
+  });
+});
+
+test('task-only recovery exposes a unique clean exact historical workspace without inventing actionable work', async () => {
+  const fixture = seedUnclaimedTaskWorkspace('task-only-clean', 'done');
+
+  await withServer(async (baseUrl) => {
+    const { response, body } = await json(baseUrl, new URLSearchParams({ taskId: fixture.displayId }));
+    assert.equal(response.status, 200);
+    assert.equal(body.workspace.workspaceId, fixture.workspace.workspaceId);
+    assert.equal(body.status, 'current');
+    assert.equal(body.continuation.action, 'no-action');
+  });
+});
+
+test('task-only recovery fails closed when only legacy numeric task compatibility remains', async () => {
+  const fixture = seedUnclaimedTaskWorkspace('task-only-legacy');
+  const rootLeaf = fixture.displayId.match(/(\d+)$/)?.[1];
+  rewriteWorkspaceMetadata(fixture.workspace.workspaceId, (metadata) => {
+    delete metadata.taskDisplayId;
+    metadata.taskRootLeaf = rootLeaf;
+  });
+
+  await withServer(async (baseUrl) => {
+    const { response, body } = await json(baseUrl, new URLSearchParams({ taskId: fixture.displayId }));
+    assert.equal(response.status, 200);
+    assert.equal(body.status, 'blocked');
+    assert.equal(body.continuation.action, 'blocked');
+    assert.match(body.continuation.reason, /legacy|exact persisted task identity/i);
+    assert.equal(body.candidates.workspaces.includes(fixture.workspace.workspaceId), true);
+  });
+});
+
+test('task-only recovery blocks when multiple actionable workspaces carry the same exact task identity', async () => {
+  const fixture = seedUnclaimedTaskWorkspace('task-only-ambiguous');
+  fs.writeFileSync(path.join(fixture.workspace.root, 'tracked.txt'), 'primary dirty work\n', 'utf8');
+  const duplicate = createOrReuseSessionWorkspace(
+    { id: fixture.projectId, localPath: repoRoot },
+    `session-task-only-duplicate-${unclaimedTaskCounter}`,
+  );
+  fs.writeFileSync(path.join(duplicate.root, 'tracked.txt'), 'duplicate dirty work\n', 'utf8');
+  rewriteWorkspaceMetadata(duplicate.workspaceId, (metadata) => {
+    metadata.taskDisplayId = fixture.displayId;
+    metadata.taskRootLeaf = fixture.displayId.match(/(\d+)$/)?.[1];
+  });
+
+  await withServer(async (baseUrl) => {
+    const { response, body } = await json(baseUrl, new URLSearchParams({ taskId: fixture.displayId }));
+    assert.equal(response.status, 200);
+    assert.equal(body.status, 'blocked');
+    assert.equal(body.continuation.action, 'blocked');
+    assert.match(body.continuation.reason, /multiple|ambiguous/i);
+    assert.equal(body.candidates.workspaces.includes(fixture.workspace.workspaceId), true);
+    assert.equal(body.candidates.workspaces.includes(duplicate.workspaceId), true);
+  });
+});
+
+test('task-only recovery blocks when bounded registry truncation prevents uniqueness proof', async () => {
+  const fixture = seedUnclaimedTaskWorkspace('task-only-truncated');
+  const source = JSON.parse(fs.readFileSync(workspaceRegistryPath(fixture.workspace.workspaceId), 'utf8')) as any;
+  for (let index = 0; index < 51; index += 1) {
+    const workspaceId = `ws_truncated_${String(index).padStart(3, '0')}`;
+    fs.writeFileSync(workspaceRegistryPath(workspaceId), `${JSON.stringify({
+      ...source,
+      workspaceId,
+      taskDisplayId: undefined,
+      taskRootLeaf: undefined,
+    }, null, 2)}\n`, 'utf8');
+  }
+
+  await withServer(async (baseUrl) => {
+    const { response, body } = await json(baseUrl, new URLSearchParams({ taskId: fixture.displayId }));
+    assert.equal(response.status, 200);
+    assert.equal(body.status, 'blocked');
+    assert.equal(body.continuation.action, 'blocked');
+    assert.match(body.continuation.reason, /bounded|uniqueness|registry/i);
+  });
+});
+
+test('explicit task and workspace selectors must agree by exact persisted task identity after claim loss', async () => {
+  const fixture = seedUnclaimedTaskWorkspace('task-workspace-selector-left');
+  const other = seedUnclaimedTaskWorkspace('task-workspace-selector-right');
+
+  await withServer(async (baseUrl) => {
+    const { response, body } = await json(baseUrl, new URLSearchParams({
+      taskId: fixture.displayId,
+      workspaceId: other.workspace.workspaceId,
+    }));
+    assert.equal(response.status, 200);
+    assert.equal(body.status, 'blocked');
+    assert.equal(body.continuation.action, 'blocked');
+    assert.match(body.continuation.reason, /exact persisted|identifiers|bind/i);
   });
 });

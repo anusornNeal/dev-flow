@@ -46,6 +46,11 @@ function taskNumberFolder(value: unknown) {
   const match = String(value || '').trim().match(/(\d+)$/);
   return match?.[1] || null;
 }
+function recoveryTaskRootLeaf(workspace: Pick<SessionWorkspace, 'taskRootLeaf' | 'root'>) {
+  if (workspace.taskRootLeaf) return workspace.taskRootLeaf;
+  const rootLeaf = path.basename(path.resolve(workspace.root));
+  return /^\d+$/.test(rootLeaf) ? rootLeaf : undefined;
+}
 function normalizedTaskDisplayId(value: unknown) {
   const normalized = String(value || '').trim();
   return normalized || null;
@@ -55,14 +60,33 @@ function workspaceIdentityForSession(sessionId: string, taskDisplayId: string | 
   return taskDisplayId ? `${sessionId}\u0000task:${taskDisplayId}` : sessionId;
 }
 
+export type SessionWorkspaceTaskMatch = 'exact' | 'legacy-compatible' | 'incompatible';
+
+export function classifySessionWorkspaceTaskMatch(
+  workspace: Pick<SessionWorkspace, 'projectId' | 'taskDisplayId' | 'taskRootLeaf'>,
+  projectId: unknown,
+  taskDisplayId: unknown,
+): SessionWorkspaceTaskMatch {
+  const expectedProjectId = String(projectId || '').trim();
+  const expectedDisplayId = normalizedTaskDisplayId(taskDisplayId);
+  if (!expectedProjectId || !expectedDisplayId || workspace.projectId !== expectedProjectId) return 'incompatible';
+
+  const persistedDisplayId = normalizedTaskDisplayId(workspace.taskDisplayId);
+  if (persistedDisplayId) return persistedDisplayId === expectedDisplayId ? 'exact' : 'incompatible';
+
+  const expectedRootLeaf = taskNumberFolder(expectedDisplayId);
+  return expectedRootLeaf && workspace.taskRootLeaf === expectedRootLeaf ? 'legacy-compatible' : 'incompatible';
+}
+
 export function isSessionWorkspaceCompatibleWithTask(workspace: SessionWorkspace, taskDisplayId: unknown) {
   const expectedDisplayId = normalizedTaskDisplayId(taskDisplayId);
   if (!expectedDisplayId) return true;
-  if (workspace.taskDisplayId && normalizedTaskDisplayId(workspace.taskDisplayId) !== expectedDisplayId) return false;
+  const persistedDisplayId = normalizedTaskDisplayId(workspace.taskDisplayId);
+  if (persistedDisplayId) return persistedDisplayId === expectedDisplayId;
   const expectedRootLeaf = taskNumberFolder(expectedDisplayId);
-  if (expectedRootLeaf && path.basename(path.resolve(workspace.root)) !== expectedRootLeaf) return false;
-  if (workspace.taskRootLeaf && expectedRootLeaf && workspace.taskRootLeaf !== expectedRootLeaf) return false;
-  return true;
+  if (!expectedRootLeaf) return true;
+  if (workspace.taskRootLeaf && workspace.taskRootLeaf !== expectedRootLeaf) return false;
+  return path.basename(path.resolve(workspace.root)) === expectedRootLeaf;
 }
 
 
@@ -258,9 +282,28 @@ export function listSessionWorkspaceMetadataForRecovery(projectId: string, limit
       projectId: workspace.projectId,
       state: workspace.state,
       lastUsedAt: workspace.lastUsedAt,
+      ...(workspace.taskDisplayId ? { taskDisplayId: workspace.taskDisplayId } : {}),
+      ...(recoveryTaskRootLeaf(workspace) ? { taskRootLeaf: recoveryTaskRootLeaf(workspace) } : {}),
     })),
     total: projectWorkspaces.length,
     truncated: projectWorkspaces.length > boundedLimit,
+  };
+}
+
+export function findSessionWorkspaceRecoveryCandidatesForTask(projectId: string, taskDisplayId: unknown, limit = 50) {
+  const registry = listSessionWorkspaceMetadataForRecovery(projectId, limit);
+  const exactMatches: typeof registry.workspaces = [];
+  const legacyMatches: typeof registry.workspaces = [];
+  for (const workspace of registry.workspaces) {
+    const match = classifySessionWorkspaceTaskMatch(workspace, registry.projectId, taskDisplayId);
+    if (match === 'exact') exactMatches.push(workspace);
+    else if (match === 'legacy-compatible') legacyMatches.push(workspace);
+  }
+  return {
+    ...registry,
+    taskDisplayId: normalizedTaskDisplayId(taskDisplayId),
+    exactMatches,
+    legacyMatches,
   };
 }
 

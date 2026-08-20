@@ -382,6 +382,41 @@ test('async candidate preparation still rejects a genuinely changed execution id
   );
 });
 
+test('cacheable scoped verification reuses evidence across unrelated commits and invalidates affected content', async () => {
+  const { root, projectId } = fixture('scoped-cache-reuse');
+  const state = stateFor(root, projectId);
+  const args = {
+    projectId,
+    command: 'test',
+    cacheResult: true,
+    affectedInputPaths: ['src/value.txt'],
+  };
+
+  const first = await runProjectCommandAsync(state, args, logger, () => {});
+  assert.equal(first.ok, true, first.stderr || first.stdout);
+  assert.equal(first.cache?.hit, false);
+  assert.equal(first.stdout.trim(), 'candidate-a');
+
+  fs.writeFileSync(path.join(root, 'src', 'unrelated.txt'), 'unrelated\n', 'utf8');
+  git(root, ['add', 'src/unrelated.txt']);
+  git(root, ['commit', '-m', 'unrelated change']);
+
+  const reused = await runProjectCommandAsync(state, args, logger, () => {});
+  assert.equal(reused.ok, true, reused.stderr || reused.stdout);
+  assert.equal(reused.cache?.hit, true);
+  assert.equal(reused.processSpawns, 0);
+  assert.equal(reused.stdout.trim(), 'candidate-a');
+
+  fs.writeFileSync(path.join(root, 'src', 'value.txt'), 'candidate-b\n', 'utf8');
+  git(root, ['add', 'src/value.txt']);
+  git(root, ['commit', '-m', 'affected change']);
+
+  const invalidated = await runProjectCommandAsync(state, args, logger, () => {});
+  assert.equal(invalidated.ok, true, invalidated.stderr || invalidated.stdout);
+  assert.equal(invalidated.cache?.hit, false);
+  assert.equal(invalidated.stdout.trim(), 'candidate-b');
+});
+
 test('write-access project command does not create a verification candidate', () => {
   const { root, projectId } = fixture('write-access');
   const candidate = prepareProjectCommandVerificationCandidate(stateFor(root, projectId), {

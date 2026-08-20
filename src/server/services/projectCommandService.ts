@@ -1365,8 +1365,19 @@ function commandCacheContext(
   const executionIdentity = identityOverride ?? buildProjectCommandExecutionIdentity(root, resolvedCommand, cwdPath, timeoutMs, maxOutputBytes, responseMode, {}, args);
   if (!executionIdentity) return null;
   const cacheKey = crypto.createHash('sha256').update(JSON.stringify({
-    executionKey: executionIdentity.key,
-    lineageToken: executionIdentity.lineageToken,
+    semanticKey: executionIdentity.semanticKey,
+    command: executionIdentity.command,
+    cwd: path.relative(root, cwdPath) || '.',
+    timeoutMs,
+    maxOutputBytes,
+    responseMode,
+    commandConfigFingerprint: executionIdentity.commandConfigFingerprint || null,
+    affectedInputFingerprint: executionIdentity.affectedInputFingerprint || null,
+    dependencyFingerprint: executionIdentity.dependencyFingerprint || null,
+    environmentFingerprint: executionIdentity.environmentFingerprint || null,
+    platform: executionIdentity.platform || null,
+    arch: executionIdentity.arch || null,
+    runtime: executionIdentity.runtime || null,
   })).digest('hex');
   return { ...executionIdentity, key: cacheKey };
 }

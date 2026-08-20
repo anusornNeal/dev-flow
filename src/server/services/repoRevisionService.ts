@@ -85,7 +85,6 @@ export function buildRepoAffectedInputIdentity(root: string, repoRevision: RepoR
   }
   const paths = Array.from(new Set(normalized as string[])).sort();
   const digest = crypto.createHash('sha256');
-  digest.update(repoRevision.head || repoRevision.token.split(':')[0] || 'unknown-head');
   for (const relativePath of paths) {
     digest.update('\0');
     digest.update(relativePath);

@@ -13,7 +13,7 @@ const { executeAllMigrations } = await import('../../src/db/migrations/index.js'
 executeAllMigrations();
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
 const { saveTask } = await import('../../src/server/repositories/taskRepository.js');
-const { claimTaskForSession } = await import('../../src/server/services/taskClaimService.js');
+const { claimTaskForSession, releaseTaskClaim } = await import('../../src/server/services/taskClaimService.js');
 const { cleanupSessionWorkspace, resetSessionWorkspaceRuntimeForTests } = await import('../../src/server/services/sessionWorkspaceService.js');
 const executionSessions = await import('../../src/server/services/executionSessionService.js');
 const { getHarnessExecutionEffects, preflightHarnessExecutionGuard, recordHarnessExecutionOutcome } = await import('../../src/server/services/harnessExecutionGuardService.js');
@@ -259,6 +259,7 @@ test('execution guard composes policy, ownership, lifecycle, retry identity, and
     assert.equal(getBuiltinToolJobRecoveryPolicy('apply_prepared_edit'), 'interrupted');
     assert.equal(getBuiltinToolJobRecoveryPolicy('search_local_files'), 'retryable');
   } finally {
+    releaseTaskClaim(task.id, { sessionId: 'harness-enforcement-session', nextStatus: 'todo' });
     cleanupSessionWorkspace(workspaceId);
   }
 });
@@ -332,6 +333,7 @@ test('verification OOM preserves execution for verification-only recovery', () =
     assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'verification-infra-blocked');
     assert.equal(lifecycleEvidenceCount(binding.session.id), lifecycleBeforeCompositeFailure + 1, 'composite mutation must be observed before one infra-block transition without duplicate lifecycle records');
   } finally {
+    releaseTaskClaim(task.id, { sessionId: 'verification-oom-session', nextStatus: 'todo' });
     cleanupSessionWorkspace(workspaceId);
   }
 });
@@ -402,6 +404,7 @@ test('verification debt commit gates finalization until authoritative recovery v
   } finally {
     const cleanupBinding = executionSessions.getTaskExecutionMutationBinding({ workspaceId });
     if (cleanupBinding) git(cleanupBinding.workspace.root, ['checkout', '--', 'value.txt']);
+    releaseTaskClaim(task.id, { sessionId: 'verification-debt-guard-session', nextStatus: 'todo' });
     cleanupSessionWorkspace(workspaceId);
   }
 });
@@ -469,6 +472,98 @@ test('incomplete sequential verification batch fences mutation but admits the re
   } finally {
     const workspace = executionSessions.getTaskExecutionMutationBinding({ workspaceId })?.workspace;
     if (workspace) git(workspace.root, ['checkout', '--', 'value.txt']);
+    releaseTaskClaim(task.id, { sessionId: 'sequential-batch-guard-session', nextStatus: 'todo' });
+    cleanupSessionWorkspace(workspaceId);
+  }
+});
+
+test('failed declared batch cannot be masked by diagnostic GREEN before explicit recovery batch', () => {
+  resetSessionWorkspaceRuntimeForTests();
+  const repoRoot = createRepo('failed-batch-diagnostic-green-repo');
+  const project = { id: 'project-failed-batch-diagnostic-green', name: 'Failed Batch Diagnostic Green', repoUrl: 'https://example.com/failed-batch-diagnostic-green', localPath: repoRoot };
+  createProject(project);
+  const now = new Date().toISOString();
+  const task = {
+    id: 'task-failed-batch-diagnostic-green', displayId: 'DVF-HARNESS-RECOVERY-BATCH', title: 'Failed batch recovery fixture',
+    description: 'Diagnostic GREEN must not mask failed declared verification authority.', projectId: project.id,
+    status: 'todo', priority: 'high', category: 'backend', tags: [], targetFiles: ['value.txt'],
+    checklist: [], logs: [], bugs: [], images: [], createdAt: now, updatedAt: now,
+  } as any;
+  saveTask(task);
+  const state = { projectsCache: [project], countersCache: {}, skillsRegistry: [] } as any;
+  const claimed = claimTaskForSession(task.id, { sessionId: 'failed-batch-diagnostic-green-session', ownerKind: 'chat', ownerLabel: 'Failed batch recovery' });
+  const workspaceId = claimed.claim.workspaceId;
+
+  try {
+    const binding = executionSessions.getTaskExecutionMutationBinding({ workspaceId })!;
+    executionSessions.recordTaskExecutionContextReady({ workspaceId }, {
+      contextHandle: 'ctx-failed-batch-recovery', repoRevision: binding.session.repoRevision, contextPlanIdentity: 'plan-failed-batch-recovery',
+    });
+    executionSessions.recordExecutionLifecycleTransition(binding.session.id, {
+      toStage: 'implementing', reasonCode: 'failed-batch-fixture-mutation',
+      evidence: { id: 'failed-batch-fixture-mutation', kind: 'owned-change', status: 'completed' },
+    });
+    fs.writeFileSync(path.join(binding.workspace.root, 'value.txt'), 'after\n', 'utf8');
+    executionSessions.recordExecutionOwnedChanges(binding.session.id, ['value.txt'], { repoRoot: binding.workspace.root, source: 'failed-batch-fixture' });
+    const failedRevision = executionSessions.captureExecutionVerificationProvenance(binding.session.id, { repoRoot: binding.workspace.root });
+    const requiredChecks = ['focused'];
+    const failedArgs = {
+      workspaceId, command: 'test-focused', harnessOperationId: 'failed-declared-batch',
+      verificationBatch: { id: 'declared-batch-failed', requiredChecks, checkId: 'focused' },
+    };
+    const failedDecision = preflightHarnessExecutionGuard(state, 'run_project_command', failedArgs);
+    assert.equal(failedDecision.allowed, true);
+    const failedResult = {
+      ok: false, status: 'failed', exitCode: 1, stderr: 'assertion failed',
+      verificationCandidate: { candidateId: 'vc-declared-failed', repoRevision: failedRevision.repoRevision, executionKey: 'cmd-declared-failed', current: true },
+    };
+    const failedBinding = executionSessions.recordTaskExecutionVerificationResult(failedArgs, failedResult, failedRevision);
+    assert.equal(failedBinding.authoritative, false);
+    assert.equal(failedBinding.reasonCode, 'EXECUTION_VERIFICATION_BATCH_FAILED');
+    recordHarnessExecutionOutcome(failedDecision, failedResult);
+    assert.equal(executionSessions.getExecutionVerificationBatchState(binding.session.id)?.status, 'failed');
+    assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'repairing');
+
+    fs.writeFileSync(path.join(binding.workspace.root, 'value.txt'), 'repaired\n', 'utf8');
+    executionSessions.recordExecutionOwnedChanges(binding.session.id, ['value.txt'], { repoRoot: binding.workspace.root, source: 'failed-batch-repair-fixture' });
+    const repairedRevision = executionSessions.captureExecutionVerificationProvenance(binding.session.id, { repoRoot: binding.workspace.root });
+    assert.notEqual(repairedRevision.ownedFingerprint, failedRevision.ownedFingerprint);
+
+    const diagnosticArgs = { workspaceId, command: 'typecheck', harnessOperationId: 'diagnostic-green-after-failed-batch' };
+    const diagnosticDecision = preflightHarnessExecutionGuard(state, 'run_project_command', diagnosticArgs);
+    assert.equal(diagnosticDecision.allowed, true);
+    const diagnosticResult = {
+      ok: true, status: 'succeeded', exitCode: 0,
+      verificationCandidate: { candidateId: 'vc-diagnostic-green', repoRevision: repairedRevision.repoRevision, executionKey: 'cmd-diagnostic-green', current: true },
+    };
+    const diagnosticBinding = executionSessions.recordTaskExecutionVerificationResult(diagnosticArgs, diagnosticResult, repairedRevision);
+    assert.equal(diagnosticBinding.authoritative, false);
+    assert.equal(diagnosticBinding.reasonCode, 'EXECUTION_VERIFICATION_RECOVERY_BATCH_REQUIRED');
+    assert.equal(diagnosticBinding.verificationFresh, null);
+    recordHarnessExecutionOutcome(diagnosticDecision, diagnosticResult);
+    assert.equal(executionSessions.getExecutionVerificationBatchState(binding.session.id)?.status, 'failed');
+    assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'repairing');
+
+    const recoveryArgs = {
+      workspaceId, command: 'test-focused', harnessOperationId: 'fresh-recovery-batch',
+      verificationBatch: { id: 'declared-batch-recovery', requiredChecks, checkId: 'focused' },
+    };
+    const recoveryDecision = preflightHarnessExecutionGuard(state, 'run_project_command', recoveryArgs);
+    assert.equal(recoveryDecision.allowed, true);
+    const recoveryResult = {
+      ok: true, status: 'succeeded', exitCode: 0,
+      verificationCandidate: { candidateId: 'vc-declared-recovery', repoRevision: repairedRevision.repoRevision, executionKey: 'cmd-declared-recovery', current: true },
+    };
+    const recoveryBinding = executionSessions.recordTaskExecutionVerificationResult(recoveryArgs, recoveryResult, repairedRevision);
+    assert.equal(recoveryBinding.authoritative, true);
+    assert.equal(recoveryBinding.verificationFresh, true);
+    assert.equal(executionSessions.getExecutionVerificationBatchState(binding.session.id)?.status, 'complete');
+    recordHarnessExecutionOutcome(recoveryDecision, recoveryResult);
+    assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'verifying');
+  } finally {
+    const workspace = executionSessions.getTaskExecutionMutationBinding({ workspaceId })?.workspace;
+    if (workspace) git(workspace.root, ['checkout', '--', 'value.txt']);
+    releaseTaskClaim(task.id, { sessionId: 'failed-batch-diagnostic-green-session', nextStatus: 'todo' });
     cleanupSessionWorkspace(workspaceId);
   }
 });

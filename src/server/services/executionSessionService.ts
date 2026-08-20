@@ -143,6 +143,7 @@ export type TaskExecutionVerificationBindingReason =
   | 'EXECUTION_VERIFICATION_BATCH_INCOMPLETE'
   | 'EXECUTION_VERIFICATION_BATCH_FAILED'
   | 'EXECUTION_VERIFICATION_BATCH_STALE'
+  | 'EXECUTION_VERIFICATION_RECOVERY_BATCH_REQUIRED'
   | 'EXECUTION_VERIFICATION_REJECTED';
 
 export interface TaskExecutionVerificationBindingOutcome {
@@ -1441,6 +1442,33 @@ export function recordTaskExecutionVerificationResult(
   const candidate = batchCandidate || commandCandidate;
   const explicitNoChecks = result?.verificationPolicy === 'no-checks-required';
   const ownership = getExecutionOwnershipState(binding.session.id, { repoRoot: binding.workspace.root });
+  const latestBatch = getExecutionVerificationBatchState(binding.session.id);
+  if (latestBatch?.status === 'pending') {
+    return {
+      authoritative: false,
+      reasonCode: 'EXECUTION_VERIFICATION_BATCH_INCOMPLETE',
+      verificationFresh: ownership.verificationFresh,
+      sessionId: binding.session.id,
+      repoRevision: ownership.repoRevision,
+      ownedFingerprint: ownership.ownedFingerprint,
+      ownership,
+      details: { batch: latestBatch },
+      message: `Verification batch '${latestBatch.batchId}' is incomplete and must continue through its declared batch identity.`,
+    };
+  }
+  if (latestBatch?.status === 'failed' || latestBatch?.status === 'stale') {
+    return {
+      authoritative: false,
+      reasonCode: 'EXECUTION_VERIFICATION_RECOVERY_BATCH_REQUIRED',
+      verificationFresh: ownership.verificationFresh,
+      sessionId: binding.session.id,
+      repoRevision: ownership.repoRevision,
+      ownedFingerprint: ownership.ownedFingerprint,
+      ownership,
+      details: { batch: latestBatch },
+      message: `Verification batch '${latestBatch.batchId}' is ${latestBatch.status}; diagnostic verification cannot supersede it. Start a fresh explicit verification recovery batch on the current execution ownership revision.`,
+    };
+  }
 
   if (explicitNoChecks && (!captured?.repoRevision || !captured?.ownedFingerprint)) {
     return {

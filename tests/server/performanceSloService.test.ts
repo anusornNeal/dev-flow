@@ -20,3 +20,79 @@ test('performance SLO evaluation flags a sampled p95 regression and keeps sparse
   assert.equal(result.regressions.length, 1);
   assert.equal(result.dominant?.toolName, 'get_repo_context_bundle');
 });
+
+test('run_project_command evaluates orchestration overhead instead of legitimate command execution time', () => {
+  const result = evaluatePerformanceSlo([
+    {
+      toolName: 'run_project_command',
+      count: 5,
+      p50DurationMs: 15_500,
+      p95DurationMs: 16_500,
+      logicalOperationP50Ms: 15_500,
+      logicalOperationP95Ms: 16_500,
+      executionP50Ms: 14_500,
+      executionP95Ms: 15_000,
+      completionModes: { 'inline-json': 0, 'request-stream': 5, 'durable-handoff': 0 },
+    },
+  ]);
+
+  const command = result.tools[0] as any;
+  assert.equal(command.status, 'within_budget');
+  assert.equal(command.p95DurationMs, 16_500);
+  assert.equal(command.rawP95DurationMs, 16_500);
+  assert.equal(command.logicalOperationP95Ms, 16_500);
+  assert.equal(command.executionP95Ms, 15_000);
+  assert.equal(command.orchestrationOverheadP95Ms, 1_500);
+  assert.equal(command.evaluatedP95Ms, 1_500);
+  assert.equal(command.latencyBasis, 'orchestration-overhead');
+  assert.equal(result.regressions.length, 0);
+});
+
+test('run_project_command still flags genuine orchestration overhead and orders regressions by evaluated latency', () => {
+  const result = evaluatePerformanceSlo([
+    {
+      toolName: 'run_project_command',
+      count: 5,
+      p95DurationMs: 26_000,
+      logicalOperationP95Ms: 26_000,
+      executionP95Ms: 15_000,
+    },
+    { toolName: 'get_repo_context_bundle', count: 5, p95DurationMs: 12_000 },
+  ]);
+
+  const command = result.tools.find((entry: any) => entry.toolName === 'run_project_command') as any;
+  assert.equal(command.status, 'regressed');
+  assert.equal(command.orchestrationOverheadP95Ms, 11_000);
+  assert.equal(command.evaluatedP95Ms, 11_000);
+  assert.equal(command.latencyBasis, 'orchestration-overhead');
+  assert.equal(result.regressions[0]?.toolName, 'get_repo_context_bundle');
+  assert.equal(result.regressions[1]?.toolName, 'run_project_command');
+  assert.equal(result.dominant?.toolName, 'get_repo_context_bundle');
+});
+
+test('run_project_command fails closed to observable raw latency when execution telemetry is unavailable or incoherent', () => {
+  const result = evaluatePerformanceSlo([
+    {
+      toolName: 'run_project_command',
+      count: 5,
+      p95DurationMs: 12_000,
+      logicalOperationP95Ms: 12_100,
+      executionP95Ms: 0,
+      completionModes: { 'inline-json': 0, 'request-stream': 0, 'durable-handoff': 5 },
+    },
+    {
+      toolName: 'run_project_command',
+      count: 5,
+      p95DurationMs: 13_000,
+      logicalOperationP95Ms: 10_000,
+      executionP95Ms: 11_000,
+    },
+  ]);
+
+  for (const command of result.tools as any[]) {
+    assert.equal(command.status, 'regressed');
+    assert.equal(command.latencyBasis, 'raw-duration');
+    assert.equal(command.orchestrationOverheadP95Ms, null);
+    assert.equal(command.evaluatedP95Ms, command.rawP95DurationMs);
+  }
+});

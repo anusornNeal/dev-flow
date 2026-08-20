@@ -20,11 +20,20 @@ const DEFAULT_P95_BUDGET_MS: Record<string, number> = {
   devflow_health_check: 750,
 };
 
+type CompletionMode = 'inline-json' | 'request-stream' | 'durable-handoff';
+
 type ToolSummary = {
   toolName: string;
   count?: number;
   p50DurationMs?: number;
   p95DurationMs?: number;
+  logicalOperationP50Ms?: number;
+  logicalOperationP95Ms?: number;
+  executionP50Ms?: number;
+  executionP95Ms?: number;
+  completionModes?: Partial<Record<CompletionMode, number>>;
+  handoffCount?: number;
+  pollCount?: number;
   dominantPhase?: string;
   dominantPhaseP95Ms?: number;
   repoIndexCacheState?: string;
@@ -36,17 +45,46 @@ function budgetFor(toolName: string) {
   if (Number.isFinite(configured) && configured > 0) return configured;
   return DEFAULT_P95_BUDGET_MS[toolName];
 }
+function nonNegativeMetric(value: unknown) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric >= 0 ? numeric : null;
+}
+
+function evaluateLatencyBasis(tool: ToolSummary) {
+  const rawP95DurationMs = nonNegativeMetric(tool.p95DurationMs) ?? 0;
+  const logicalOperationP95Ms = nonNegativeMetric(tool.logicalOperationP95Ms);
+  const executionP95Ms = nonNegativeMetric(tool.executionP95Ms);
+  const hasReliableExecutionDelta = tool.toolName === 'run_project_command'
+    && logicalOperationP95Ms !== null
+    && logicalOperationP95Ms > 0
+    && executionP95Ms !== null
+    && executionP95Ms > 0
+    && logicalOperationP95Ms >= executionP95Ms;
+  const orchestrationOverheadP95Ms = hasReliableExecutionDelta
+    ? Math.max(0, logicalOperationP95Ms - executionP95Ms)
+    : null;
+  return {
+    rawP95DurationMs,
+    logicalOperationP95Ms,
+    executionP95Ms,
+    orchestrationOverheadP95Ms,
+    evaluatedP95Ms: orchestrationOverheadP95Ms ?? rawP95DurationMs,
+    latencyBasis: hasReliableExecutionDelta ? 'orchestration-overhead' as const : 'raw-duration' as const,
+  };
+}
+
 
 export function evaluatePerformanceSlo(topTools: ToolSummary[]) {
   const tools = topTools.map((tool) => {
     const budgetMs = budgetFor(tool.toolName);
     const count = Number(tool.count || 0);
     const p95DurationMs = Number(tool.p95DurationMs || 0);
+    const latency = evaluateLatencyBasis(tool);
     const status = !budgetMs
       ? 'unbudgeted'
       : count < MIN_SAMPLES
         ? 'insufficient_samples'
-        : p95DurationMs > budgetMs
+        : latency.evaluatedP95Ms > budgetMs
           ? 'regressed'
           : 'within_budget';
     return {
@@ -54,6 +92,12 @@ export function evaluatePerformanceSlo(topTools: ToolSummary[]) {
       count,
       p50DurationMs: Number(tool.p50DurationMs || 0),
       p95DurationMs,
+      ...latency,
+      logicalOperationP50Ms: nonNegativeMetric(tool.logicalOperationP50Ms),
+      executionP50Ms: nonNegativeMetric(tool.executionP50Ms),
+      completionModes: tool.completionModes,
+      handoffCount: Number(tool.handoffCount || 0),
+      pollCount: Number(tool.pollCount || 0),
       budgetMs: budgetMs || null,
       status,
       ...(typeof tool.dominantPhase === 'string' && tool.dominantPhase ? { dominantPhase: tool.dominantPhase } : {}),
@@ -64,9 +108,9 @@ export function evaluatePerformanceSlo(topTools: ToolSummary[]) {
 
   const regressions = tools
     .filter((tool) => tool.status === 'regressed')
-    .sort((left, right) => (right.p95DurationMs - Number(right.budgetMs || 0)) - (left.p95DurationMs - Number(left.budgetMs || 0)));
+    .sort((left, right) => (right.evaluatedP95Ms - Number(right.budgetMs || 0)) - (left.evaluatedP95Ms - Number(left.budgetMs || 0)));
   const sampled = tools.filter((tool) => tool.count >= MIN_SAMPLES);
-  const dominant = [...sampled].sort((left, right) => right.p95DurationMs - left.p95DurationMs)[0] || null;
+  const dominant = [...sampled].sort((left, right) => right.evaluatedP95Ms - left.evaluatedP95Ms)[0] || null;
 
   return {
     minSamples: MIN_SAMPLES,

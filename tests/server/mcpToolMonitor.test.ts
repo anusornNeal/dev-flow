@@ -372,3 +372,21 @@ test('diagnostics opportunistically flush aggregate telemetry and expose history
   assert.equal(early.telemetryPersistence.skipped, true);
   assert.equal((db.prepare('SELECT COUNT(*) AS count FROM performance_telemetry_snapshots').get() as any).count, 1);
 });
+
+test('diagnostics can skip historical comparison without disabling telemetry persistence', () => {
+  clearToolCallRecords();
+  db.prepare('DELETE FROM performance_telemetry_snapshots').run();
+  const now = 90_000;
+  recordToolCall({
+    toolName: 'get_repo_context_bundle',
+    args: { projectId: 'project-compact-diagnostics' },
+    status: 200,
+    durationMs: 20,
+    timestamp: now,
+  });
+
+  const diagnostics = getDevFlowDiagnostics({ now: now + 100, windowMs: 1_000, includePerformanceHistory: false }) as any;
+  assert.equal(diagnostics.performanceHistory, undefined);
+  assert.equal(diagnostics.telemetryPersistence.inserted, 1);
+  assert.equal((db.prepare('SELECT COUNT(*) AS count FROM performance_telemetry_snapshots').get() as any).count, 1);
+});

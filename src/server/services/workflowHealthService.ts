@@ -449,7 +449,8 @@ function workspaceHarnessHealth(state: AppState, workspaceId: string, expectedTa
   };
 }
 
-function projectHarnessHealth(state: AppState, args: Record<string, any>) {
+function projectHarnessHealth(state: AppState, args: Record<string, any>, options: { deepRecoveryScan?: boolean } = {}) {
+  const deepRecoveryScan = options.deepRecoveryScan !== false;
   let project: any = null;
   try {
     project = findProjectByIdentifier(state, args);
@@ -570,14 +571,24 @@ function projectHarnessHealth(state: AppState, args: Record<string, any>) {
 
   const registry = listSessionWorkspaceMetadataForRecovery(project.id, 50);
   const workspaceInspectionLimit = 10;
-  const workspaceInspectionCandidates = registry.workspaces.slice(0, workspaceInspectionLimit);
+  const authoritativeWorkspaceIds = new Set(authoritativeWorkspaceContexts.keys());
+  const registryOutsideActiveAuthority = registry.workspaces.filter((workspace) => !authoritativeWorkspaceIds.has(workspace.workspaceId));
+  const workspaceInspectionCandidates = deepRecoveryScan
+    ? registry.workspaces.slice(0, workspaceInspectionLimit)
+    : [];
   const actionableWorkspaceIds = workspaceInspectionCandidates
     .map((workspace) => workspace.workspaceId)
     .filter(actionableRecoveryWorkspace)
     .slice(0, 20);
+  if (!deepRecoveryScan && registryOutsideActiveAuthority.length > 0) drift.push({
+    code: 'PROJECT_RECOVERY_SCAN_DEFERRED',
+    message: 'Compact project health deferred Git-backed recovery inspection for registry workspaces outside active lifecycle authority.',
+    workspaceIds: registryOutsideActiveAuthority.map((workspace) => workspace.workspaceId).slice(0, 20),
+    nextAction: 'Use full/debug project health before treating the project as lifecycle-clear or performing recovery cleanup.',
+  });
   const truncated = executions.truncated
     || registry.truncated
-    || registry.workspaces.length > workspaceInspectionCandidates.length
+    || (deepRecoveryScan && registry.workspaces.length > workspaceInspectionCandidates.length)
     || allProjectTasks.length > boundedTaskPresentation.length;
   if (truncated) drift.push({
     code: 'PROJECT_LIFECYCLE_SCAN_TRUNCATED',
@@ -615,7 +626,9 @@ export function getChatGptHarnessHealthSnapshot(state: AppState, args: Record<st
   if (workspaceId) return workspaceHarnessHealth(state, workspaceId, taskId);
   if (taskId) return taskHarnessHealth(state, taskId);
   const hasProjectSelector = ['projectId', 'projectName', 'repo', 'repoUrl', 'localPath'].some((key) => cleanHealthSelector(args[key]));
-  if (hasProjectSelector) return projectHarnessHealth(state, args);
+  if (hasProjectSelector) return projectHarnessHealth(state, args, {
+    deepRecoveryScan: resolveWorkflowHealthResponseMode(args) === 'full',
+  });
   return {
     version: CHATGPT_HARNESS_HEALTH_VERSION,
     scope: 'runtime',
@@ -646,15 +659,18 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
   const advertisedNames = new Set(advertisedTools.map((tool) => tool.name));
   const advertisedDefinitions = catalog.tools.filter((tool: any) => advertisedNames.has(tool.name));
   const catalogMs = phaseMs();
-  const diagnostics = getDevFlowDiagnostics({ windowMs });
+  const diagnostics = getDevFlowDiagnostics({ windowMs, includePerformanceHistory: responseMode === 'full' });
   const diagnosticsMs = phaseMs();
   const gitProbe = probe(() => getGitStatus(state, args));
   const gitMs = phaseMs();
   const search = getLocalSearchRuntimeStatus();
   const searchMs = phaseMs();
   const sloPerformance = evaluatePerformanceSlo(Array.isArray(diagnostics?.tools?.topTools) ? diagnostics.tools.topTools : []);
+  const sloMs = phaseMs();
   const recovery = getRecoveryStatus();
+  const recoveryMs = phaseMs();
   const harness = getChatGptHarnessHealthSnapshot(state, args);
+  const harnessMs = phaseMs();
   const historicalPerformance = diagnostics?.performanceHistory || {
     windowMs,
     minSamples: 5,
@@ -665,8 +681,6 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
     stable: [],
     insufficientSamples: [],
   };
-  const sloMs = phaseMs();
-  const harnessMs = phaseMs();
 
   const git = gitProbe.ok === true ? {
     ok: true,
@@ -847,7 +861,7 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
     },
     performance: {
       totalMs: Math.round((nodePerformance.now() - startedAt) * 100) / 100,
-      phases: { catalogMs, diagnosticsMs, gitMs, searchMs, sloMs, harnessMs },
+      phases: { catalogMs, diagnosticsMs, gitMs, searchMs, sloMs, recoveryMs, harnessMs },
     },
     recommendations,
   };

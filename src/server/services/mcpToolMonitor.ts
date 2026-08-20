@@ -649,6 +649,7 @@ export function getDevFlowDiagnostics(options?: {
   windowMs?: number;
   supervisorState?: DevFlowSupervisorState | null;
   clientState?: RuntimeClientState;
+  includePerformanceHistory?: boolean;
 }) {
   const now = options?.now ?? Date.now();
   const supervisorState = options && Object.prototype.hasOwnProperty.call(options, 'supervisorState')
@@ -678,7 +679,9 @@ export function getDevFlowDiagnostics(options?: {
     ],
   });
   const mcpTransport = getMcpTransportSummary({ now, windowMs: options?.windowMs });
-  const performanceHistory = getPerformanceHistoryComparison({ now, windowMs: options?.windowMs });
+  const performanceHistory = options?.includePerformanceHistory === false
+    ? undefined
+    : getPerformanceHistoryComparison({ now, windowMs: options?.windowMs });
   const verificationResources = getVerificationResourceProfileDiagnostics();
   const jobMetrics = getJobMetrics();
   const isolation = buildIsolationDiagnostics(jobMetrics, getSessionWorkspaceMetrics(), getWorkspaceIntegrationMetrics());
@@ -730,7 +733,7 @@ export function getDevFlowDiagnostics(options?: {
     tools: toolSummary,
     mcpTransport,
     telemetryPersistence,
-    performanceHistory,
+    ...(performanceHistory ? { performanceHistory } : {}),
     verificationResources,
     recommendations,
   };

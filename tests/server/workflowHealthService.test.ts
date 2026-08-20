@@ -251,6 +251,23 @@ test('compact health surfaces active current SLO regressions without historical 
   clearToolCallRecords();
 });
 
+test('compact project health defers unrelated registry recovery scans but fails closed', () => {
+  const repo = createRepo('compact-deferred-recovery-scan');
+  const workspace = createHealthWorkspace(repo, 'compact-deferred-recovery-session', 'DVF-HEALTH-DEFER-1');
+
+  const compact = getWorkflowHealth(stateFor(repo), { projectId: 'project-health', responseMode: 'compact' }) as any;
+  const full = getWorkflowHealth(stateFor(repo), { projectId: 'project-health', responseMode: 'full' }) as any;
+
+  assert.equal(compact.harness.hardBlockers.includes('PROJECT_RECOVERY_SCAN_DEFERRED'), true);
+  assert.equal(compact.harness.aggregate.workspaceIds.includes(workspace.workspaceId), false);
+  assert.equal(full.diagnostics.harness.hardBlockers.includes('PROJECT_RECOVERY_SCAN_DEFERRED'), false);
+  assert.equal(typeof full.performance.phases.sloMs, 'number');
+  assert.equal(typeof full.performance.phases.recoveryMs, 'number');
+  assert.equal(typeof full.performance.phases.harnessMs, 'number');
+
+  sessionWorkspaces.cleanupSessionWorkspace(workspace.workspaceId, { force: true });
+});
+
 test('full and debug health modes preserve the detailed diagnostic shape', () => {
   const repo = createRepo('full-debug-shape');
   for (const responseMode of ['full', 'debug']) {

@@ -1842,7 +1842,11 @@ async function transitionJobAccess(
   request: VerificationPermitDemand = {},
 ): Promise<void | VerificationExecutionLease> {
   const entry = assertActiveTransitionLease(jobId, leaseGeneration);
-  if (entry.accessMode === nextAccessMode) return;
+  if (entry.accessMode === nextAccessMode) {
+    if (nextAccessMode !== 'verify') return;
+    const permit = await acquireVerificationPermitForActiveJob(jobId, leaseGeneration, request);
+    return createVerificationExecutionLease(entry, leaseGeneration, permit);
+  }
 
   const permit = await acquireVerificationPermitForActiveJob(jobId, leaseGeneration, request);
   try {

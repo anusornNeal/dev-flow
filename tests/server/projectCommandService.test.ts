@@ -98,6 +98,96 @@ test('runProjectCommand returns normalized failed output', () => {
   assert.match(result.stderr, /bad/);
 });
 
+test('runProjectCommand retries proven infrastructure failure once with a revision-safe resource profile', () => {
+  const marker = path.join(tempRoot, 'infra-retry-once-count.txt');
+  const root = createConfigProject('infra-retry-once', [
+    'commands:',
+    '  infra-once:',
+    '    executable: node',
+    '    args:',
+    '      - scripts/infra-once.mjs',
+    '    category: test',
+    '',
+  ].join('\n'));
+  fs.writeFileSync(path.join(root, 'scripts', 'infra-once.mjs'), [
+    "import fs from 'node:fs';",
+    `const marker = ${JSON.stringify(marker)};`,
+    "const attempt = fs.existsSync(marker) ? Number(fs.readFileSync(marker, 'utf8')) + 1 : 1;",
+    "fs.writeFileSync(marker, String(attempt), 'utf8');",
+    "if (process.env.DEVFLOW_VERIFICATION_RECOVERY !== 'resource-safe') { process.stderr.write('java.lang.OutOfMemoryError: Java heap space\\n'); process.exit(1); }",
+    "process.stdout.write(JSON.stringify({ recovery: process.env.DEVFLOW_VERIFICATION_RECOVERY, attempt: process.env.DEVFLOW_VERIFICATION_RECOVERY_ATTEMPT }));",
+  ].join('\n'), 'utf8');
+  for (const args of [['init'], ['config', 'user.name', 'DevFlow Test'], ['config', 'user.email', 'devflow@example.test'], ['add', '.'], ['commit', '-m', 'fixture']]) {
+    const gitResult = spawnSync('git', args, { cwd: root, encoding: 'utf8', shell: false });
+    assert.equal(gitResult.status, 0, gitResult.stderr || gitResult.stdout);
+  }
+  const configBefore = fs.readFileSync(path.join(root, '.devflow', 'commands.yaml'), 'utf8');
+  const baseArgs = { projectId: 'project-command', command: 'infra-once', infrastructureRetryPolicy: 'resource-safe-once', cacheResult: false, forceFresh: true };
+  const baseIdentity = getProjectCommandExecutionIdentity(stateFor(root), baseArgs)!;
+  const recoveryIdentity = getProjectCommandExecutionIdentity(stateFor(root), { ...baseArgs, recoveryProfile: 'verification-infra-safe', retryAttempt: 1 })!;
+  assert.equal(baseIdentity.repoRevision, recoveryIdentity.repoRevision);
+  assert.notEqual(baseIdentity.key, recoveryIdentity.key, 'recovery profile must be represented in execution identity');
+
+  const result = runProjectCommand(stateFor(root), baseArgs);
+
+  assert.equal(result.ok, true);
+  assert.equal(fs.readFileSync(marker, 'utf8'), '2');
+  assert.equal(result.infrastructureRecovery?.attempted, true);
+  assert.equal(result.infrastructureRecovery?.retryCount, 1);
+  assert.equal(result.infrastructureRecovery?.firstFailure?.failureClass, 'infrastructure');
+  assert.equal(result.infrastructureRecovery?.profile?.kind, 'resource-safe');
+  assert.match(result.stdout, /resource-safe/);
+  assert.equal(fs.readFileSync(path.join(root, '.devflow', 'commands.yaml'), 'utf8'), configBefore, 'recovery must not mutate repository config');
+});
+
+test('runProjectCommand never retries code failures and never retries infrastructure more than once', () => {
+  const codeMarker = path.join(tempRoot, 'code-failure-count.txt');
+  const codeRoot = createConfigProject('code-failure-no-retry', [
+    'commands:',
+    '  code-fail:',
+    '    executable: node',
+    '    args:',
+    '      - scripts/code-fail.mjs',
+    '    category: test',
+    '',
+  ].join('\n'));
+  fs.writeFileSync(path.join(codeRoot, 'scripts', 'code-fail.mjs'), [
+    "import fs from 'node:fs';",
+    `const marker = ${JSON.stringify(codeMarker)};`,
+    "const attempt = fs.existsSync(marker) ? Number(fs.readFileSync(marker, 'utf8')) + 1 : 1;",
+    "fs.writeFileSync(marker, String(attempt), 'utf8');",
+    "process.stderr.write('AssertionError: expected true to equal false\\n'); process.exit(1);",
+  ].join('\n'), 'utf8');
+  const codeResult = runProjectCommand(stateFor(codeRoot), { projectId: 'project-command', command: 'code-fail', infrastructureRetryPolicy: 'resource-safe-once', cacheResult: false, forceFresh: true });
+  assert.equal(codeResult.ok, false);
+  assert.equal(fs.readFileSync(codeMarker, 'utf8'), '1');
+  assert.equal(codeResult.infrastructureRecovery?.attempted, false);
+
+  const oomMarker = path.join(tempRoot, 'repeated-oom-count.txt');
+  const oomRoot = createConfigProject('repeated-oom', [
+    'commands:',
+    '  repeated-oom:',
+    '    executable: node',
+    '    args:',
+    '      - scripts/repeated-oom.mjs',
+    '    category: test',
+    '',
+  ].join('\n'));
+  fs.writeFileSync(path.join(oomRoot, 'scripts', 'repeated-oom.mjs'), [
+    "import fs from 'node:fs';",
+    `const marker = ${JSON.stringify(oomMarker)};`,
+    "const attempt = fs.existsSync(marker) ? Number(fs.readFileSync(marker, 'utf8')) + 1 : 1;",
+    "fs.writeFileSync(marker, String(attempt), 'utf8');",
+    "process.stderr.write('java.lang.OutOfMemoryError: Java heap space\\n'); process.exit(1);",
+  ].join('\n'), 'utf8');
+  const oomResult = runProjectCommand(stateFor(oomRoot), { projectId: 'project-command', command: 'repeated-oom', infrastructureRetryPolicy: 'resource-safe-once', cacheResult: false, forceFresh: true });
+  assert.equal(oomResult.ok, false);
+  assert.equal(fs.readFileSync(oomMarker, 'utf8'), '2');
+  assert.equal(oomResult.infrastructureRecovery?.attempted, true);
+  assert.equal(oomResult.infrastructureRecovery?.retryCount, 1);
+  assert.equal(oomResult.infrastructureRecovery?.finalStatus, 'failed');
+});
+
 test('runProjectCommand marks empty output explicitly', () => {
   const root = createProject('empty-output', {
     build: 'node scripts/empty.mjs',

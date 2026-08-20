@@ -77,6 +77,38 @@ const PROCESS_RESOURCE_SAMPLE_DELAY_MS = 1_000;
 const PROCESS_RESOURCE_SAMPLE_INTERVAL_MS = 1_500;
 const MACHINE_RUNTIME_PROFILE = getMachineRuntimeProfile();
 
+const INFRASTRUCTURE_RETRY_POLICIES = new Set(['none', 'resource-safe-once']);
+const VERIFICATION_RECOVERY_PROFILE = 'verification-infra-safe';
+const INFRASTRUCTURE_FAILURE_OUTPUT = /(OutOfMemoryError|Java heap space|heap out of memory|allocation failed[^\n]*heap|killed process|process[^\n]*killed|worker lease|verification capacity|tool runner[^\n]*crash)/i;
+const RECOVERY_SHARED_RESOURCE = 'verification-recovery';
+const MIB = 1024 ** 2;
+
+export type VerificationInfrastructureRecoveryProfile = {
+  kind: 'resource-safe';
+  attempt: 1;
+  gradleTuned: boolean;
+  heapMb: number | null;
+  maxWorkers: number | null;
+  timeoutMs: number;
+  sharedResource: string;
+};
+
+export type VerificationInfrastructureRecoveryAudit = {
+  policy: 'resource-safe-once';
+  attempted: boolean;
+  retryCount: 0 | 1;
+  firstFailure?: {
+    failureClass: 'infrastructure';
+    status: CommandStatus;
+    exitCode: number | null;
+    timedOut: boolean;
+    signal: NodeJS.Signals | null;
+    stderr: string;
+  };
+  profile?: VerificationInfrastructureRecoveryProfile;
+  finalStatus: CommandStatus;
+};
+
 registerRepoCacheInvalidator('verification-results', () => 0, {
   dependencies: [...PROJECT_COMMAND_CACHE_DEPENDENCIES],
 });
@@ -157,6 +189,7 @@ export interface RunProjectCommandResult {
     stdoutTruncated: boolean;
     stderrTruncated: boolean;
   };
+  infrastructureRecovery?: VerificationInfrastructureRecoveryAudit;
   verificationCandidate?: {
     candidateId: string;
     repoRevision: string;
@@ -730,6 +763,158 @@ function resolveOutputBudget(args: Record<string, any>, resolvedCommand: Resolve
   };
 }
 
+type CommandExecutionOptions = {
+  args: string[];
+  env: NodeJS.ProcessEnv;
+  timeoutMs: number;
+  recoveryProfile: VerificationInfrastructureRecoveryProfile | null;
+};
+
+function resolveInfrastructureRetryPolicy(args: Record<string, any>): 'none' | 'resource-safe-once' {
+  const raw = args.infrastructureRetryPolicy == null ? 'resource-safe-once' : String(args.infrastructureRetryPolicy).trim();
+  if (!INFRASTRUCTURE_RETRY_POLICIES.has(raw)) {
+    throw createApiError(400, 'VERIFICATION_INFRA_RETRY_POLICY_INVALID', `Unsupported infrastructureRetryPolicy '${raw}'.`, {
+      details: { allowed: [...INFRASTRUCTURE_RETRY_POLICIES] },
+    });
+  }
+  return raw as 'none' | 'resource-safe-once';
+}
+
+function isGradleLikeCommand(resolvedCommand: ResolvedCommand) {
+  const material = [
+    resolvedCommand.configuredExecutable ?? resolvedCommand.executable,
+    ...(resolvedCommand.configuredArgs ?? resolvedCommand.args),
+    resolvedCommand.script || '',
+  ].join(' ');
+  return /(^|[\\/\s])gradle(?:w)?(?:\.bat)?(?:\s|$)/i.test(material);
+}
+
+function recoveryHeapMb() {
+  const machineQuarterMb = Math.floor(MACHINE_RUNTIME_PROFILE.totalMemoryBytesBucket / 4 / MIB);
+  return Math.max(1024, Math.min(4096, machineQuarterMb, Math.max(2048, 1024)));
+}
+
+function replaceGradleJvmHeap(existing: string, heapMb: number) {
+  const tokens = String(existing || '').split(/\s+/).filter(Boolean).filter((token) => !token.startsWith('-Dorg.gradle.jvmargs='));
+  tokens.push(`-Dorg.gradle.jvmargs=-Xmx${heapMb}m`);
+  return tokens.join(' ');
+}
+
+function resolveCommandExecutionOptions(resolvedCommand: ResolvedCommand, args: Record<string, any>, baseTimeoutMs: number): CommandExecutionOptions {
+  const rawProfile = args.recoveryProfile == null ? '' : String(args.recoveryProfile).trim();
+  if (rawProfile && rawProfile !== VERIFICATION_RECOVERY_PROFILE) {
+    throw createApiError(400, 'VERIFICATION_RECOVERY_PROFILE_INVALID', `Unsupported recoveryProfile '${rawProfile}'.`, {
+      details: { allowed: [VERIFICATION_RECOVERY_PROFILE] },
+    });
+  }
+  if (!rawProfile) {
+    return { args: [...resolvedCommand.args], env: { ...process.env }, timeoutMs: baseTimeoutMs, recoveryProfile: null };
+  }
+
+  const gradleTuned = isGradleLikeCommand(resolvedCommand);
+  const heapMb = gradleTuned ? recoveryHeapMb() : null;
+  const executionArgs = [...resolvedCommand.args];
+  if (gradleTuned && resolvedCommand.source === 'repository-config' && !executionArgs.some((entry) => /^--max-workers(?:=|$)/.test(entry))) {
+    executionArgs.push('--max-workers=1');
+  }
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    DEVFLOW_VERIFICATION_RECOVERY: 'resource-safe',
+    DEVFLOW_VERIFICATION_RECOVERY_ATTEMPT: '1',
+  };
+  if (gradleTuned && heapMb) env.GRADLE_OPTS = replaceGradleJvmHeap(process.env.GRADLE_OPTS || '', heapMb);
+  const timeoutMs = Math.min(MAX_TIMEOUT_MS, Math.max(baseTimeoutMs, Math.ceil(baseTimeoutMs * 1.25)));
+  return {
+    args: executionArgs,
+    env,
+    timeoutMs,
+    recoveryProfile: {
+      kind: 'resource-safe',
+      attempt: 1,
+      gradleTuned,
+      heapMb,
+      maxWorkers: gradleTuned ? 1 : null,
+      timeoutMs,
+      sharedResource: RECOVERY_SHARED_RESOURCE,
+    },
+  };
+}
+
+export function isVerificationInfrastructureFailure(result: Pick<RunProjectCommandResult, 'ok' | 'status' | 'timedOut' | 'signal' | 'stderr' | 'stdout'>) {
+  if (result.ok) return false;
+  if (result.timedOut || result.status === 'timed_out' || result.signal) return true;
+  return INFRASTRUCTURE_FAILURE_OUTPUT.test(`${result.stderr || ''}\n${result.stdout || ''}`.slice(0, 12_000));
+}
+
+export function buildProjectCommandInfrastructureRecovery(state: AppState, args: Record<string, any>) {
+  if (resolveInfrastructureRetryPolicy(args) !== 'resource-safe-once' || args.recoveryProfile) return null;
+  const root = resolveProjectRoot(state, args);
+  const command = resolveCommandLabel(args.command ?? args.preset);
+  const resolvedCommand = resolveAllowedCommand(root, command, args);
+  const baseTimeoutMs = Number.isFinite(Number(args.timeoutMs))
+    ? Math.max(1, Math.min(MAX_TIMEOUT_MS, Number(args.timeoutMs)))
+    : resolvedCommand.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const recoveryArgs = {
+    ...args,
+    recoveryProfile: VERIFICATION_RECOVERY_PROFILE,
+    retryAttempt: 1,
+    cacheResult: false,
+    forceFresh: true,
+  };
+  const execution = resolveCommandExecutionOptions(resolvedCommand, recoveryArgs, baseTimeoutMs);
+  return {
+    args: recoveryArgs,
+    profile: execution.recoveryProfile!,
+  };
+}
+
+export function attachInfrastructureRecoveryAudit(
+  firstFailure: RunProjectCommandResult,
+  finalResult: RunProjectCommandResult,
+  profile: VerificationInfrastructureRecoveryProfile,
+): RunProjectCommandResult {
+  const firstPerformance = firstFailure.performance;
+  const finalPerformance = finalResult.performance;
+  return {
+    ...finalResult,
+    processSpawns: Number(firstFailure.processSpawns || 0) + Number(finalResult.processSpawns || 0),
+    durationMs: Number(firstFailure.durationMs || 0) + Number(finalResult.durationMs || 0),
+    performance: finalPerformance ? {
+      ...finalPerformance,
+      executionMs: Number(firstPerformance?.executionMs || firstFailure.durationMs || 0) + Number(finalPerformance.executionMs || finalResult.durationMs || 0),
+      totalMs: Number(firstPerformance?.totalMs || firstFailure.durationMs || 0) + Number(finalPerformance.totalMs || finalResult.durationMs || 0),
+    } : finalPerformance,
+    infrastructureRecovery: {
+      policy: 'resource-safe-once',
+      attempted: true,
+      retryCount: 1,
+      firstFailure: {
+        failureClass: 'infrastructure',
+        status: firstFailure.status,
+        exitCode: firstFailure.exitCode,
+        timedOut: firstFailure.timedOut,
+        signal: firstFailure.signal,
+        stderr: String(firstFailure.stderr || '').slice(0, 2_000),
+      },
+      profile,
+      finalStatus: finalResult.status,
+    },
+  };
+}
+
+function attachNoInfrastructureRecoveryAudit(result: RunProjectCommandResult, args: Record<string, any>): RunProjectCommandResult {
+  if (args.recoveryProfile || resolveInfrastructureRetryPolicy(args) !== 'resource-safe-once') return result;
+  return {
+    ...result,
+    infrastructureRecovery: {
+      policy: 'resource-safe-once',
+      attempted: false,
+      retryCount: 0,
+      finalStatus: result.status,
+    },
+  };
+}
+
 export type ProjectCommandExecutionIdentity = {
   key: string;
   repoRevision: string;
@@ -790,6 +975,9 @@ function buildProjectCommandExecutionIdentity(
     CI: process.env.CI || '',
     NODE_ENV: process.env.NODE_ENV || '',
     NODE_OPTIONS: process.env.NODE_OPTIONS || '',
+    infrastructureRetryPolicy: resolveInfrastructureRetryPolicy(identityArgs),
+    recoveryProfile: identityArgs.recoveryProfile == null ? '' : String(identityArgs.recoveryProfile),
+    retryAttempt: Number.isFinite(Number(identityArgs.retryAttempt)) ? Math.max(0, Math.floor(Number(identityArgs.retryAttempt))) : 0,
   };
   const environmentFingerprint = crypto.createHash('sha256').update(JSON.stringify({
     platform: process.platform,
@@ -838,11 +1026,12 @@ export function getProjectCommandExecutionIdentity(state: AppState, args: Record
   const command = resolveCommandLabel(args.command ?? args.preset);
   const resolvedCommand = resolveAllowedCommand(root, command, args);
   const cwdPath = resolveSafeCommandCwd(root, args.cwd ?? resolvedCommand.cwd);
-  const timeoutMs = Number.isFinite(Number(args.timeoutMs))
+  const baseTimeoutMs = Number.isFinite(Number(args.timeoutMs))
     ? Math.max(1, Math.min(MAX_TIMEOUT_MS, Number(args.timeoutMs)))
     : resolvedCommand.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const execution = resolveCommandExecutionOptions(resolvedCommand, args, baseTimeoutMs);
   const { responseMode, maxOutputBytes } = resolveOutputBudget(args, resolvedCommand);
-  return buildProjectCommandExecutionIdentity(root, resolvedCommand, cwdPath, timeoutMs, maxOutputBytes, responseMode, {}, args);
+  return buildProjectCommandExecutionIdentity(root, resolvedCommand, cwdPath, execution.timeoutMs, maxOutputBytes, responseMode, {}, args);
 }
 
 export type ProjectCommandAdmissionPreflight = {
@@ -914,16 +1103,17 @@ export function bindProjectCommandVerificationCandidate(
   const command = resolveCommandLabel(args.command ?? args.preset);
   const resolvedCommand = resolveAllowedCommand(resolvedCandidate.root, command, args);
   const cwdPath = resolveSafeCommandCwd(resolvedCandidate.root, args.cwd ?? resolvedCommand.cwd);
-  const timeoutMs = Number.isFinite(Number(args.timeoutMs))
+  const baseTimeoutMs = Number.isFinite(Number(args.timeoutMs))
     ? Math.max(1, Math.min(MAX_TIMEOUT_MS, Number(args.timeoutMs)))
     : resolvedCommand.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const execution = resolveCommandExecutionOptions(resolvedCommand, args, baseTimeoutMs);
   const { responseMode, maxOutputBytes } = resolveOutputBudget(args, resolvedCommand);
   const lineageToken = options.lineageToken ?? getRepoCacheLineage(sourceRoot, [...PROJECT_COMMAND_CACHE_DEPENDENCIES]).token;
   const executionIdentity = buildProjectCommandExecutionIdentity(
     resolvedCandidate.root,
     resolvedCommand,
     cwdPath,
-    timeoutMs,
+    execution.timeoutMs,
     maxOutputBytes,
     responseMode,
     {
@@ -1143,9 +1333,11 @@ export function getProjectCommandAdmissionPreflight(
   const command = resolveCommandLabel(args.command ?? args.preset);
   const resolvedCommand = resolveAllowedCommand(root, command, args);
   const cwdPath = resolveSafeCommandCwd(root, args.cwd ?? resolvedCommand.cwd);
-  const timeoutMs = Number.isFinite(Number(args.timeoutMs))
+  const baseTimeoutMs = Number.isFinite(Number(args.timeoutMs))
     ? Math.max(1, Math.min(MAX_TIMEOUT_MS, Number(args.timeoutMs)))
     : resolvedCommand.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const execution = resolveCommandExecutionOptions(resolvedCommand, args, baseTimeoutMs);
+  const timeoutMs = execution.timeoutMs;
   const { responseMode, maxOutputBytes } = resolveOutputBudget(args, resolvedCommand);
   const executionIdentity = buildProjectCommandExecutionIdentity(root, resolvedCommand, cwdPath, timeoutMs, maxOutputBytes, responseMode, {}, args);
   const resolutionMs = Date.now() - totalStartedAt;
@@ -1203,9 +1395,11 @@ export function runProjectCommand(state: AppState, args: Record<string, any>): R
   const command = resolveCommandLabel(args.command ?? args.preset);
   const resolvedCommand = resolveAllowedCommand(root, command, args);
   const cwdPath = resolveSafeCommandCwd(root, args.cwd ?? resolvedCommand.cwd);
-  const timeoutMs = Number.isFinite(Number(args.timeoutMs))
+  const baseTimeoutMs = Number.isFinite(Number(args.timeoutMs))
     ? Math.max(1, Math.min(MAX_TIMEOUT_MS, Number(args.timeoutMs)))
     : resolvedCommand.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const execution = resolveCommandExecutionOptions(resolvedCommand, args, baseTimeoutMs);
+  const timeoutMs = execution.timeoutMs;
   const { responseMode, maxOutputBytes } = resolveOutputBudget(args, resolvedCommand);
   const resolutionMs = Date.now() - resolutionStartedAt;
 
@@ -1227,10 +1421,11 @@ export function runProjectCommand(state: AppState, args: Record<string, any>): R
   const resourcePrediction = predictVerificationResourceCost(resourceDescriptor);
   const systemResourceStart = captureSystemResourceSnapshot();
   const startedAt = Date.now();
-  const result = spawnSync(resolvedCommand.executable, resolvedCommand.args, {
+  const result = spawnSync(resolvedCommand.executable, execution.args, {
     cwd: cwdPath,
     shell: false,
     encoding: 'utf8',
+    env: execution.env,
     timeout: timeoutMs,
     maxBuffer: Math.max(maxOutputBytes * 4, 1_000_000),
   });
@@ -1272,7 +1467,15 @@ export function runProjectCommand(state: AppState, args: Record<string, any>): R
     durationMs,
     finalizedResult.status,
   );
-  return rememberSuccessfulCommandResult(cacheContext, { ...finalizedResult, resourceProfile }, args);
+  const completed = rememberSuccessfulCommandResult(cacheContext, { ...finalizedResult, resourceProfile }, args);
+  if (!args.recoveryProfile && isVerificationInfrastructureFailure(completed)) {
+    const recovery = buildProjectCommandInfrastructureRecovery(state, args);
+    if (recovery) {
+      const retried = runProjectCommand(state, recovery.args);
+      return attachInfrastructureRecoveryAudit(completed, retried, recovery.profile);
+    }
+  }
+  return attachNoInfrastructureRecoveryAudit(completed, args);
 }
 
 export async function runProjectCommandAsync(state: AppState, args: Record<string, any>, logger: { stdout: (data: string) => void, stderr: (data: string) => void }, setCancelFn: (fn: () => void) => void): Promise<RunProjectCommandResult> {
@@ -1300,9 +1503,11 @@ export async function runProjectCommandAsync(state: AppState, args: Record<strin
   const displayCwdPath = suppliedCandidate
     ? resolveSafeCommandCwd(sourceRoot, args.cwd ?? resolvedCommand.cwd)
     : executionCwdPath;
-  const timeoutMs = Number.isFinite(Number(args.timeoutMs))
+  const baseTimeoutMs = Number.isFinite(Number(args.timeoutMs))
     ? Math.max(1, Math.min(MAX_TIMEOUT_MS, Number(args.timeoutMs)))
     : resolvedCommand.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const execution = resolveCommandExecutionOptions(resolvedCommand, args, baseTimeoutMs);
+  const timeoutMs = execution.timeoutMs;
   const { responseMode, maxOutputBytes } = resolveOutputBudget(args, resolvedCommand);
 
   let executionIdentity: ProjectCommandExecutionIdentity | null = null;
@@ -1360,9 +1565,10 @@ export async function runProjectCommandAsync(state: AppState, args: Record<strin
 
   return new Promise((resolve, reject) => {
     const spawnStartedAt = Date.now();
-    const child = spawn(resolvedCommand.executable, resolvedCommand.args, {
+    const child = spawn(resolvedCommand.executable, execution.args, {
       cwd: executionCwdPath,
       shell: false,
+      env: execution.env,
     });
 
     let processStartupMs: number | undefined;
@@ -1475,7 +1681,7 @@ export async function runProjectCommandAsync(state: AppState, args: Record<strin
         processAggregate,
       );
       const candidateResult = withVerificationCandidate({ ...finalizedResult, resourceProfile }, sourceRoot, suppliedCandidate, executionIdentity);
-      resolve(rememberSuccessfulCommandResult(cacheContext, candidateResult, args));
+      resolve(attachNoInfrastructureRecoveryAudit(rememberSuccessfulCommandResult(cacheContext, candidateResult, args), args));
     });
   });
 }

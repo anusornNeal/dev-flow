@@ -549,6 +549,23 @@ test('shared-resource conflicts still block before weighted budget admission', (
   assert.equal(releaseVerificationProcessPermit(holder.permit), true);
 });
 
+test('verification recovery shared resource serializes concurrent recovery permits', () => {
+  resetSchedulerResourceStateForTests();
+  setGlobalVerifyCapacityForTests(4);
+  setVerificationResourceBudgetForTests({ targetCpuRatio: 0.9, hardCpuRatio: 0.95, targetMemoryPressure: 0.85, hardMemoryPressure: 0.95, maxAdaptiveProcesses: 6 });
+  setVerificationMachinePressureForTests({ cpuRatio: 0.1, memoryPressureRatio: 0.2, totalMemoryBytes: 8 * 1024 ** 3 });
+  const holder = tryAcquireVerificationProcessPermit({
+    jobId: 'recovery-holder', verificationClass: 'fast', sharedResources: ['project:a:verification-recovery'], resourceDemand: weightedDemand('recovery-holder', 0.1, 64),
+  });
+  const blocked = tryAcquireVerificationProcessPermit({
+    jobId: 'recovery-blocked', verificationClass: 'fast', sharedResources: ['project:a:verification-recovery'], resourceDemand: weightedDemand('recovery-blocked', 0.1, 64),
+  });
+  assert.ok(holder.permit);
+  assert.equal(blocked.permit, null);
+  assert.equal(blocked.blocker?.blockReason, 'shared_resource_conflict');
+  assert.equal(releaseVerificationProcessPermit(holder.permit), true);
+});
+
 test('measured parallel slowdown can serialize a nominally fitting profile pair', () => {
   resetSchedulerResourceStateForTests();
   setGlobalVerifyCapacityForTests(2);

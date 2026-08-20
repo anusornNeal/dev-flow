@@ -1196,6 +1196,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
         cacheVerificationResults: { type: 'boolean' },
         timeoutMs: { type: 'number' },
         maxOutputBytes: { type: 'number' },
+        infrastructureRetryPolicy: { type: 'string', enum: ['none', 'resource-safe-once'], description: 'Bounded verification infrastructure recovery policy. resource-safe-once retries proven infrastructure failures at most once without changing the repository revision.' },
       },
       anyOf: [{ required: ['editPlanId'] }, { required: ['files'] }],
     },
@@ -1273,6 +1274,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
         cacheResult: { type: 'boolean', description: 'Opt in to revision-safe reuse of a prior successful result for the exact same command/environment.' },
         cacheTtlMs: { type: 'number', description: 'Optional bounded TTL for cacheResult entries.' },
         singleFlight: { type: 'boolean', description: 'Allow identical in-flight command requests at the same repo revision to share one execution.' },
+        infrastructureRetryPolicy: { type: 'string', enum: ['none', 'resource-safe-once'], description: 'Bounded verification infrastructure recovery policy. resource-safe-once retries a proven infrastructure failure at most once using a safe machine-aware profile.' },
         verificationBatch: {
           type: 'object',
           description: 'Optional durable sequential verification batch identity. Every member must use the same id and requiredChecks set; checkId identifies this command within the batch.',

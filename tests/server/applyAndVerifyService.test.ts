@@ -214,6 +214,52 @@ test('applyAndVerifyAsync routes every parallel child through the scheduler veri
   assert.equal(maxActive, 1, 'governor capacity must bound child verification concurrency');
 });
 
+test('applyAndVerifyAsync retries infrastructure failure once on the same candidate through a serialized recovery permit', async () => {
+  const root = fixture('infra-recovery');
+  const marker = path.join(tempRoot, 'apply-infra-recovery-count.txt');
+  fs.writeFileSync(path.join(root, 'scripts', 'test.mjs'), [
+    "import fs from 'node:fs';",
+    `const marker = ${JSON.stringify(marker)};`,
+    "const attempt = fs.existsSync(marker) ? Number(fs.readFileSync(marker, 'utf8')) + 1 : 1;",
+    "fs.writeFileSync(marker, String(attempt), 'utf8');",
+    "if (process.env.DEVFLOW_VERIFICATION_RECOVERY !== 'resource-safe') { process.stderr.write('java.lang.OutOfMemoryError: Java heap space\\n'); process.exit(1); }",
+    "process.stdout.write('recovered\\n');",
+  ].join('\n'), 'utf8');
+  git(root, ['add', '.']);
+  git(root, ['commit', '-m', 'infra recovery fixture']);
+  const permitRequests: any[] = [];
+
+  const result = await applyAndVerifyAsync(
+    stateFor(root),
+    {
+      projectId: 'project-apply-verify',
+      files: [{ filePath: 'src/value.ts', edits: [{ type: 'replace', find: 'value = 1', replaceWith: 'value = 8' }] }],
+      requestedCommands: ['test'],
+      cacheVerificationResults: false,
+      forceFresh: true,
+      infrastructureRetryPolicy: 'resource-safe-once',
+    },
+    { stdout: () => {}, stderr: () => {} },
+    () => {},
+    async () => ({
+      runWithPermit: async (request: any, run: () => Promise<any>) => {
+        permitRequests.push(request);
+        return await run();
+      },
+      dispose: () => {},
+    }),
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(fs.readFileSync(marker, 'utf8'), '2');
+  assert.equal(result.verification.length, 1, 'verification keeps one final result per required check');
+  assert.equal(result.verification[0].infrastructureRecovery?.retryCount, 1);
+  assert.equal(result.verification[0].verificationCandidate?.candidateId, result.verificationBatch?.candidate.candidateId);
+  assert.equal(permitRequests.length, 2, 'first attempt and one recovery attempt each pass through capacity governance');
+  assert.equal(permitRequests[1].sharedResources?.includes('verification-recovery'), true, 'recovery attempts share a serialization resource');
+  assert.equal(result.verificationPerformance?.processSpawns, 2);
+});
+
 test('applyAndVerifyAsync requests verify access after mutation and before verification starts', async () => {
   const root = fixture('phase-transition');
   const verificationMarker = path.join(tempRoot, 'phase-transition-marker.txt');

@@ -10,7 +10,14 @@ import { executeRepoQueryPlan } from './repoQueryPlanService';
 import { deleteLocalPath, moveLocalPath } from './localPathMutationService';
 import { applyPreparedEditPlan, getPreparedEditRecoveryArgs, prepareEditPlan } from './preparedEditService';
 import { applyProjectAtlasAgentUpdate } from './projectAtlasService';
-import { runProjectCommandAsync } from './projectCommandService';
+import {
+  attachInfrastructureRecoveryAudit,
+  bindProjectCommandVerificationCandidate,
+  buildProjectCommandInfrastructureRecovery,
+  describeProjectCommandResourceProfile,
+  isVerificationInfrastructureFailure,
+  runProjectCommandAsync,
+} from './projectCommandService';
 import { prepareCompactEdit } from './stenoEditProtocolService';
 import type { ResourceAccessMode } from './mcpToolJobScheduler';
 import { executeRecoveryAwareTool } from './devFlowRecoveryRuntime.js';
@@ -30,7 +37,19 @@ import {
 } from './executionSessionService.js';
 
 type Logger = { stdout: (data: string) => void; stderr: (data: string) => void };
-type VerificationPermitDemand = { verificationClass?: 'fast' | 'heavy'; sharedResources?: string[] };
+type VerificationPermitDemand = {
+  verificationClass?: 'fast' | 'heavy';
+  sharedResources?: string[];
+  resourceDemand?: {
+    profileKey: string;
+    confidence: 'none' | 'low' | 'medium' | 'high';
+    sampleCount: number;
+    cpuRatio: number;
+    memoryBytes: number;
+    durationMs: number;
+    processCount: number;
+  };
+};
 type VerificationExecutionLease = {
   runWithPermit: <T>(request: VerificationPermitDemand, run: () => Promise<T>) => Promise<T>;
   dispose: () => void;
@@ -180,6 +199,25 @@ export function resolveBuiltinToolJobBindingArgs(toolNameValue: string, args: an
   };
 }
 
+function recoveryPermitDemand(state: AppState, args: Record<string, any>): VerificationPermitDemand {
+  const profile = describeProjectCommandResourceProfile(state, args);
+  const prediction = profile.prediction;
+  const vector = prediction.confidence === 'high' ? prediction.expected : prediction.upperBound;
+  return {
+    verificationClass: profile.descriptor.verificationClass,
+    sharedResources: Array.from(new Set([...profile.descriptor.sharedResources, 'verification-recovery'])),
+    resourceDemand: {
+      profileKey: prediction.profileKey,
+      confidence: prediction.confidence,
+      sampleCount: prediction.sampleCount,
+      cpuRatio: vector.cpuRatio,
+      memoryBytes: vector.memoryBytes,
+      durationMs: prediction.expected.durationMs,
+      processCount: vector.processCount,
+    },
+  };
+}
+
 export async function runBuiltinToolJob(input: BuiltinToolJobInput, context: BuiltinToolJobContext) {
   const { toolName, state, args } = input;
   const { logger, setCancelFn, transitionAccess } = context;
@@ -194,8 +232,31 @@ export async function runBuiltinToolJob(input: BuiltinToolJobInput, context: Bui
   if (toolName === 'run_project_command') {
     const guard = preflight();
     const captured = captureTaskVerification(args);
-    const result = await runProjectCommandAsync(state, args, logger, setCancelFn);
-    const bound = bindTaskVerificationOutcome(args, result, captured);
+    let finalArgs = args;
+    let result = await runProjectCommandAsync(state, args, logger, setCancelFn);
+    if (!result.ok && isVerificationInfrastructureFailure(result)) {
+      const recovery = buildProjectCommandInfrastructureRecovery(state, args);
+      if (recovery) {
+        const recoveryCandidate = args.__verificationCandidate
+          ? bindProjectCommandVerificationCandidate(state, recovery.args, args.__verificationCandidate)
+          : null;
+        finalArgs = {
+          ...recovery.args,
+          ...(recoveryCandidate ? { __verificationCandidate: recoveryCandidate } : {}),
+        };
+        const demand = recoveryPermitDemand(state, finalArgs);
+        const lease = await transitionAccess('verify', demand);
+        try {
+          const retried = lease
+            ? await lease.runWithPermit(demand, () => runProjectCommandAsync(state, finalArgs, logger, setCancelFn))
+            : await runProjectCommandAsync(state, finalArgs, logger, setCancelFn);
+          result = attachInfrastructureRecoveryAudit(result, retried, recovery.profile);
+        } finally {
+          lease?.dispose();
+        }
+      }
+    }
+    const bound = bindTaskVerificationOutcome(finalArgs, result, captured);
     if (guard) recordHarnessExecutionOutcome(guard, bound.harnessResult);
     return bound.result;
   }

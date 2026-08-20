@@ -4,9 +4,12 @@ import { editFilesBatch } from './fileEditBatchService';
 import { applyPreparedEditPlan } from './preparedEditService';
 import { getGitDiff } from './gitService';
 import {
+  attachInfrastructureRecoveryAudit,
   bindProjectCommandVerificationCandidate,
+  buildProjectCommandInfrastructureRecovery,
   describeProjectCommand,
   describeProjectCommandResourceProfile,
+  isVerificationInfrastructureFailure,
   runProjectCommand,
   runProjectCommandAsync,
   type RunProjectCommandResult,
@@ -325,6 +328,7 @@ export async function applyAndVerifyAsync(
     maxOutputBytes: args.maxOutputBytes,
     timeoutMs: args.timeoutMs,
     responseMode: args.responseMode ?? 'compact',
+    infrastructureRetryPolicy: args.infrastructureRetryPolicy ?? 'resource-safe-once',
   });
 
   const buildVerificationBatchSnapshot = (): VerificationBatchSnapshot | undefined => {
@@ -355,17 +359,18 @@ export async function applyAndVerifyAsync(
     return Array.from(new Set(completedVerification.flatMap(({ step }) => stale.has(step.checkId) ? [step.command] : [])));
   };
 
-  const permitDemandForStep = (step: (typeof plan.steps)[number]): VerificationPermitDemand => {
+  const permitDemandForStep = (step: (typeof plan.steps)[number], recovery = false): VerificationPermitDemand => {
     const profile = describeProjectCommandResourceProfile(state, commandArgs(step.command));
     const prediction = profile.prediction;
     const admissionVector = prediction.confidence === 'high' ? prediction.expected : prediction.upperBound;
+    const baseResources = step.sharedResources?.length
+      ? step.sharedResources
+      : step.resourceKey
+        ? [step.resourceKey]
+        : [];
     return {
       verificationClass: step.verificationClass,
-      sharedResources: step.sharedResources?.length
-        ? step.sharedResources
-        : step.resourceKey
-          ? [step.resourceKey]
-          : [],
+      sharedResources: recovery ? Array.from(new Set([...baseResources, 'verification-recovery'])) : baseResources,
       resourceDemand: {
         profileKey: prediction.profileKey,
         confidence: prediction.confidence,
@@ -381,24 +386,36 @@ export async function applyAndVerifyAsync(
 
   const runStep = async (step: (typeof plan.steps)[number]) => {
     const stepArgs = commandArgs(step.command);
-    const boundCandidate = baseCandidate
-      ? bindProjectCommandVerificationCandidate(state, stepArgs, baseCandidate)
-      : null;
-    if (boundCandidate) expectedExecutionKeys.set(step.checkId, boundCandidate.executionIdentity.key);
-    return verificationExecutionLease.runWithPermit(permitDemandForStep(step), async () => {
-      let cancelFn: (() => void) | undefined;
-      try {
-        return await runProjectCommandAsync(state, {
-          ...stepArgs,
-          ...(boundCandidate ? { __verificationCandidate: boundCandidate } : {}),
-        }, logger, (fn) => {
-          cancelFn = fn;
-          activeCancels.add(fn);
-        });
-      } finally {
-        if (cancelFn) activeCancels.delete(cancelFn);
+    const runAttempt = async (attemptArgs: Record<string, any>, recovery = false) => {
+      const boundCandidate = baseCandidate
+        ? bindProjectCommandVerificationCandidate(state, attemptArgs, baseCandidate)
+        : null;
+      if (boundCandidate) expectedExecutionKeys.set(step.checkId, boundCandidate.executionIdentity.key);
+      return verificationExecutionLease.runWithPermit(permitDemandForStep(step, recovery), async () => {
+        let cancelFn: (() => void) | undefined;
+        try {
+          return await runProjectCommandAsync(state, {
+            ...attemptArgs,
+            ...(boundCandidate ? { __verificationCandidate: boundCandidate } : {}),
+          }, logger, (fn) => {
+            cancelFn = fn;
+            activeCancels.add(fn);
+          });
+        } finally {
+          if (cancelFn) activeCancels.delete(cancelFn);
+        }
+      });
+    };
+
+    const first = await runAttempt(stepArgs, false);
+    if (!first.ok && isVerificationInfrastructureFailure(first)) {
+      const recovery = buildProjectCommandInfrastructureRecovery(state, stepArgs);
+      if (recovery) {
+        const retried = await runAttempt(recovery.args, true);
+        return attachInfrastructureRecoveryAudit(first, retried, recovery.profile);
       }
-    });
+    }
+    return first;
   };
 
   let parallelVerification = false;

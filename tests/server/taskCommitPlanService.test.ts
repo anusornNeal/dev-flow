@@ -310,6 +310,62 @@ test('ownership drift terminalizes a pending verification batch as stale and req
   assert.equal(retry.state.batchId, 'batch-stale-2');
 });
 
+test('verification debt commit requires infra-blocked authority and preserves an auditable debt without faking fresh verification', () => {
+  const { workspace, taskId, session } = createFixture('verification-debt');
+  fs.writeFileSync(path.join(workspace.root, 'src', 'owned.ts'), 'export const owned = 40;\n');
+  fs.writeFileSync(path.join(workspace.root, 'src', 'unrelated.ts'), 'export const unrelated = 40;\n');
+  execution.recordExecutionOwnedChanges(session.id, ['src/owned.ts'], { repoRoot: workspace.root, source: 'task-edit' });
+  execution.recordExecutionLifecycleTransition(session.id, {
+    toStage: 'context-ready', reasonCode: 'debt-context', evidence: { id: 'debt-context', kind: 'context-bundle', status: 'completed' },
+  });
+  execution.recordExecutionLifecycleTransition(session.id, {
+    toStage: 'implementing', reasonCode: 'debt-implementing', evidence: { id: 'debt-implementing', kind: 'owned-change', status: 'completed' },
+  });
+  execution.recordExecutionLifecycleTransition(session.id, {
+    toStage: 'verifying', reasonCode: 'debt-verifying', evidence: { id: 'debt-verifying', kind: 'verification-result', status: 'completed' },
+  });
+  execution.recordExecutionLifecycleTransition(session.id, {
+    toStage: 'verification-infra-blocked', reasonCode: 'debt-infra', evidence: { id: 'debt-infra', kind: 'verification-result', status: 'completed' },
+  });
+  execution.recordExecutionSessionEvidence(session.id, [{
+    evidenceId: 'debt-infra-failure',
+    kind: 'verification-result',
+    revisionIdentity: 'debt-infra-failure',
+    metadata: { outcome: 'failed', terminal: true, failureClass: 'infrastructure', status: 'timed_out', timedOut: true },
+  }]);
+
+  assert.throws(
+    () => commitPlan.commitTaskOwnedChanges({ countersCache: {} }, { taskId, workspaceId: workspace.workspaceId, message: 'ordinary commit stays blocked' }),
+    /blocked/i,
+  );
+  assert.throws(
+    () => commitPlan.commitTaskOwnedChanges({ countersCache: {} }, {
+      taskId, workspaceId: workspace.workspaceId, message: 'debt commit missing authorization', preserveVerificationDebt: true,
+    }),
+    /emergency|authorization|reason/i,
+  );
+
+  const committed = commitPlan.commitTaskOwnedChanges({ countersCache: {} }, {
+    taskId,
+    workspaceId: workspace.workspaceId,
+    message: 'fix: preserve verification debt',
+    preserveVerificationDebt: true,
+    emergency: true,
+    reason: 'Verification failed because the runner exhausted heap.',
+    actorLabel: 'Operator Test',
+  });
+  assert.equal(committed.verificationDebtPreserved, true);
+  assert.deepEqual(committed.committedFiles, ['src/owned.ts']);
+  assert.deepEqual(committed.unrelatedChangesPreserved, ['src/unrelated.ts']);
+  assert.equal(execution.getExecutionOwnershipState(session.id, { repoRoot: workspace.root }).verificationFresh, null);
+  const debt = execution.getExecutionSessionState(session.id).evidence.find((entry: any) => entry.kind === 'verification-debt');
+  assert.equal(debt?.metadata?.status, 'outstanding');
+  assert.equal(debt?.metadata?.failureClass, 'infrastructure');
+  assert.equal(debt?.metadata?.commitHash, committed.commitHash);
+  assert.equal(debt?.metadata?.authorization?.reason, 'Verification failed because the runner exhausted heap.');
+  assert.equal(fs.readFileSync(path.join(workspace.root, 'src', 'unrelated.ts'), 'utf8'), 'export const unrelated = 40;\n');
+});
+
 test('commit plan blocks stale verification after an owned file changes again', () => {
   const { workspace, taskId, session } = createFixture('stale');
   fs.writeFileSync(path.join(workspace.root, 'src', 'owned.ts'), 'export const owned = 3;\n');

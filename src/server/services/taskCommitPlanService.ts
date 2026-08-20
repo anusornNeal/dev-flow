@@ -2,7 +2,7 @@ import type { AppState } from '../types.js';
 import { getTaskByIdentifier } from '../repositories/taskRepository.js';
 import { listExecutionSessionsForTask } from '../repositories/executionSessionRepository.js';
 import { createApiError } from './api.js';
-import { getExecutionOwnershipState, getExecutionVerificationBatchState, type ExecutionVerificationBatchState } from './executionSessionService.js';
+import { getExecutionOwnershipState, getExecutionSessionState, getExecutionVerificationBatchState, recordExecutionSessionEvidence, type ExecutionVerificationBatchState } from './executionSessionService.js';
 import { commitGitChanges } from './gitService.js';
 import { renderTaskCommitMessage } from './projectGitWorkflowPolicyService.js';
 import { resolveSessionWorkspace } from './sessionWorkspaceService.js';
@@ -168,9 +168,52 @@ export function buildTaskCommitPlan(_state: AppState, args: Record<string, any>)
   };
 }
 
+const VERIFICATION_DEBT_BYPASS_BLOCKERS = new Set([
+  'EXECUTION_VERIFICATION_BATCH_FAILED',
+  'EXECUTION_VERIFICATION_NOT_FRESH',
+]);
+
+function latestInfrastructureFailure(executionSessionId: string) {
+  return [...getExecutionSessionState(executionSessionId).evidence]
+    .reverse()
+    .find((entry: any) => entry.kind === 'verification-result'
+      && entry.metadata?.outcome === 'failed'
+      && entry.metadata?.failureClass === 'infrastructure') || null;
+}
+
+function requireVerificationDebtAuthorization(plan: TaskCommitPlan, args: Record<string, any>) {
+  if (args.preserveVerificationDebt !== true) return null;
+  if (args.emergency !== true) {
+    throw createApiError(409, 'VERIFICATION_DEBT_EMERGENCY_AUTHORIZATION_REQUIRED', 'Verification-debt commit requires explicit emergency authorization.');
+  }
+  const reason = String(args.reason || '').trim();
+  const actorLabel = String(args.actorLabel || '').trim();
+  if (!reason || !actorLabel) {
+    throw createApiError(400, 'VERIFICATION_DEBT_AUDIT_CONTEXT_REQUIRED', 'Verification-debt commit requires non-empty reason and actorLabel audit context.');
+  }
+  const session = getExecutionSessionState(plan.executionSessionId).session;
+  if (session.status !== 'active' || session.lifecycle.stage !== 'verification-infra-blocked') {
+    throw createApiError(409, 'VERIFICATION_DEBT_INFRA_BLOCKED_STAGE_REQUIRED', 'Verification-debt commit is allowed only for an active execution in verification-infra-blocked stage.', {
+      details: { sessionStatus: session.status, lifecycleStage: session.lifecycle.stage },
+    });
+  }
+  const failureEvidence = latestInfrastructureFailure(plan.executionSessionId);
+  if (!failureEvidence) {
+    throw createApiError(409, 'VERIFICATION_DEBT_INFRA_EVIDENCE_REQUIRED', 'Verification-debt commit requires recorded infrastructure-failure evidence for this execution.');
+  }
+  const nonVerificationBlockers = plan.blockers.filter((entry) => !VERIFICATION_DEBT_BYPASS_BLOCKERS.has(entry.code));
+  if (nonVerificationBlockers.length > 0) {
+    throw createApiError(409, 'VERIFICATION_DEBT_HARD_BLOCKER', 'Verification-debt commit cannot bypass ownership, scope, pending-batch, or lifecycle authority blockers.', {
+      details: { blockers: nonVerificationBlockers, allBlockers: plan.blockers },
+    });
+  }
+  return { reason, actorLabel, failureEvidence };
+}
+
 export function commitTaskOwnedChanges(state: AppState, args: Record<string, any>) {
   const plan = buildTaskCommitPlan(state, args);
-  if (!plan.commitAllowed) {
+  const debtAuthorization = requireVerificationDebtAuthorization(plan, args);
+  if (!plan.commitAllowed && !debtAuthorization) {
     throw createApiError(409, 'TASK_COMMIT_PLAN_BLOCKED', 'Task-owned commit is blocked until all commit-plan blockers are resolved.', {
       affectedId: plan.taskId,
       details: { workspaceId: plan.workspaceId, blockers: plan.blockers },
@@ -179,6 +222,10 @@ export function commitTaskOwnedChanges(state: AppState, args: Record<string, any
   const workspace = resolveSessionWorkspace(plan.workspaceId)!;
   const task = getTaskByIdentifier(args.taskId, 'full') || { id: plan.taskId };
   const message = renderTaskCommitMessage(args.message, task as any, { gitWorkflowPolicy: workspace.gitWorkflowPolicy } as any);
+  const ownershipBeforeCommit = debtAuthorization
+    ? getExecutionOwnershipState(plan.executionSessionId, { repoRoot: workspace.root })
+    : null;
+  const batchBeforeCommit = debtAuthorization ? getExecutionVerificationBatchState(plan.executionSessionId) : null;
   const result = commitGitChanges(state, {
     localPath: workspace.root,
     message,
@@ -187,6 +234,36 @@ export function commitTaskOwnedChanges(state: AppState, args: Record<string, any
     dryRun: args.dryRun === true,
   }, { taskAware: true });
   const { root: _physicalRoot, ...safeResult } = result as any;
+  let verificationDebt: Record<string, unknown> | null = null;
+  if (debtAuthorization && args.dryRun !== true) {
+    const commitHash = String((safeResult as any).commitHash || (safeResult as any).hash || '').trim();
+    const debtEvidenceId = `verification-debt:${commitHash || plan.executionSessionId}`;
+    const failureMetadata = (debtAuthorization.failureEvidence as any).metadata || {};
+    verificationDebt = {
+      status: 'outstanding',
+      commitHash: commitHash || null,
+      candidateId: String(args.expectedCandidateId || failureMetadata.candidateId || '').trim() || null,
+      repoRevision: ownershipBeforeCommit?.repoRevision || null,
+      ownedFingerprint: ownershipBeforeCommit?.ownedFingerprint || null,
+      verificationBatchId: batchBeforeCommit?.batchId || null,
+      failedChecks: batchBeforeCommit?.failed || [],
+      failureEvidenceId: debtAuthorization.failureEvidence.id,
+      failureClass: 'infrastructure',
+      authorization: {
+        emergency: true,
+        reason: debtAuthorization.reason,
+        actorLabel: debtAuthorization.actorLabel,
+      },
+      recordedAt: new Date().toISOString(),
+    };
+    recordExecutionSessionEvidence(plan.executionSessionId, [{
+      evidenceId: debtEvidenceId,
+      kind: 'verification-debt',
+      revisionIdentity: commitHash || plan.executionSessionId,
+      metadata: verificationDebt,
+    }]);
+    (verificationDebt as any).evidenceId = debtEvidenceId;
+  }
   return {
     ...safeResult,
     taskId: plan.taskId,
@@ -194,5 +271,7 @@ export function commitTaskOwnedChanges(state: AppState, args: Record<string, any
     workspaceId: plan.workspaceId,
     committedFiles: plan.ownedChangedFiles,
     unrelatedChangesPreserved: plan.unrelatedChangedFiles,
+    verificationDebtPreserved: Boolean(debtAuthorization && args.dryRun !== true),
+    verificationDebt,
   };
 }

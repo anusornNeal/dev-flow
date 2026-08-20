@@ -38,7 +38,7 @@ const EXECUTION_LIFECYCLE_TRANSITIONS: Readonly<Record<ExecutionLifecycleStage, 
   implementing: ['verifying', 'repairing'],
   verifying: ['repairing', 'verification-infra-blocked', 'committed'],
   repairing: ['verifying', 'verification-infra-blocked'],
-  'verification-infra-blocked': ['verifying', 'repairing'],
+  'verification-infra-blocked': ['verifying', 'repairing', 'committed'],
   committed: ['finalized'],
   finalized: [],
 });

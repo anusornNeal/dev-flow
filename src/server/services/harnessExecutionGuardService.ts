@@ -36,6 +36,7 @@ export type HarnessExecutionGuardDecision = {
   guarded: boolean;
   allowed: boolean;
   action: HarnessExecutionAction | null;
+  effects?: HarnessExecutionAction[];
   toolName: string;
   reasonCode: string;
   guidance: string[];
@@ -61,7 +62,7 @@ const MUTATION_TOOLS = new Set([
   'delete_local_path',
   'move_local_path',
 ]);
-const VERIFICATION_TOOLS = new Set(['run_project_command', 'apply_and_verify']);
+const VERIFICATION_TOOLS = new Set(['run_project_command']);
 const COMMIT_TOOLS = new Set(['commit_task_owned_changes', 'commit_git_changes']);
 const FINALIZATION_TOOLS = new Set(['finalize_task_workspace']);
 const RESTART_TOOLS = new Set(['restart_devflow']);
@@ -84,17 +85,28 @@ function boundedString(value: unknown) {
   return text ? text.slice(0, 240) : null;
 }
 
-function actionForTool(toolName: string): HarnessExecutionAction | null {
-  if (MUTATION_TOOLS.has(toolName)) return 'mutation';
-  if (VERIFICATION_TOOLS.has(toolName)) return 'verification';
-  if (COMMIT_TOOLS.has(toolName)) return 'commit';
-  if (FINALIZATION_TOOLS.has(toolName)) return 'finalization';
-  if (RESTART_TOOLS.has(toolName)) return 'restart';
-  return null;
+export function getHarnessExecutionEffects(toolNameValue: string, _args: Record<string, any> = {}): HarnessExecutionAction[] {
+  const toolName = String(toolNameValue || '').trim();
+  if (toolName === 'apply_and_verify') {
+    // The current composite contract always owns a mutation phase before verification.
+    // A future verify-only mode must be introduced explicitly rather than inferred from missing edit args.
+    return ['mutation', 'verification'];
+  }
+  if (MUTATION_TOOLS.has(toolName)) return ['mutation'];
+  if (VERIFICATION_TOOLS.has(toolName)) return ['verification'];
+  if (COMMIT_TOOLS.has(toolName)) return ['commit'];
+  if (FINALIZATION_TOOLS.has(toolName)) return ['finalization'];
+  if (RESTART_TOOLS.has(toolName)) return ['restart'];
+  return [];
 }
 
-export function isHarnessLifecycleAffectingTool(toolName: string) {
-  return actionForTool(String(toolName || '').trim()) !== null;
+function actionForTool(toolName: string, args: Record<string, any> = {}): HarnessExecutionAction | null {
+  const effects = getHarnessExecutionEffects(toolName, args);
+  return effects.includes('mutation') ? 'mutation' : effects[0] || null;
+}
+
+export function isHarnessLifecycleAffectingTool(toolName: string, args: Record<string, any> = {}) {
+  return getHarnessExecutionEffects(String(toolName || '').trim(), args).length > 0;
 }
 
 function taskRisk(task: any): HarnessRisk {
@@ -210,7 +222,7 @@ function pathsLookSafe(args: Record<string, any>) {
 function operationIdentity(toolName: string, args: Record<string, any>) {
   const explicit = boundedString(args?.harnessOperationId || args?.operationId || args?.jobId || args?.editPlanId);
   if (explicit) return explicit;
-  const verificationRevision = VERIFICATION_TOOLS.has(toolName)
+  const verificationRevision = getHarnessExecutionEffects(toolName, args).includes('verification')
     ? boundedString(args?.__verificationCandidate?.repoRevision || args?.__projectCommandAdmissionIdentity?.repoRevision)
     : null;
   return `guard-op-${fingerprint({
@@ -231,7 +243,7 @@ function buildPolicyInput(toolName: string, args: Record<string, any>, binding: 
   const project = projectId ? getProject(projectId) : undefined;
   const explicit = resolveExplicitPolicy(args, task);
   const session = binding?.session;
-  const action = actionForTool(toolName);
+  const action = actionForTool(toolName, args);
   return {
     task: {
       revision: task?.updatedAt || '<unknown>',
@@ -301,6 +313,7 @@ function blockedDecision(toolName: string, action: HarnessExecutionAction, opera
     guarded: true,
     allowed: false,
     action,
+    effects: [action],
     toolName,
     reasonCode,
     guidance,
@@ -328,8 +341,9 @@ function outstandingVerificationDebt(sessionId: string) {
 
 export function preflightHarnessExecutionGuard(_state: AppState, toolNameValue: string, argsValue: Record<string, any> = {}): HarnessExecutionGuardDecision {
   const toolName = String(toolNameValue || '').trim();
-  const action = actionForTool(toolName);
   const args = argsValue || {};
+  const effects = getHarnessExecutionEffects(toolName, args);
+  const action = actionForTool(toolName, args);
   const operationId = operationIdentity(toolName, args);
   if (!action) {
     return { guarded: false, allowed: true, action: null, toolName, reasonCode: 'LIGHTWEIGHT_UNGUARDED', guidance: [], policy: null, execution: null, operationId };
@@ -381,12 +395,13 @@ export function preflightHarnessExecutionGuard(_state: AppState, toolNameValue: 
   if (binding) {
     const batchState = getExecutionVerificationBatchState(binding.session.id);
     if (batchState?.status === 'pending') {
-      if (action === 'mutation' || action === 'commit' || action === 'finalization') {
-        return blockedDecision(toolName, action, operationId, policy, binding, 'EXECUTION_VERIFICATION_BATCH_INCOMPLETE', [
+      const fencedEffect = effects.find((effect) => effect === 'mutation' || effect === 'commit' || effect === 'finalization');
+      if (fencedEffect) {
+        return blockedDecision(toolName, fencedEffect, operationId, policy, binding, 'EXECUTION_VERIFICATION_BATCH_INCOMPLETE', [
           `Verification batch '${batchState.batchId}' is incomplete; pending checks: ${batchState.pending.join(', ')}.`,
         ]);
       }
-      if (action === 'verification') {
+      if (effects.includes('verification')) {
         const requestedBatch = args?.verificationBatch && typeof args.verificationBatch === 'object' ? args.verificationBatch : null;
         const requestedId = String(requestedBatch?.id || '').trim();
         const requestedCheckId = String(requestedBatch?.checkId || args?.command || args?.preset || '').trim();
@@ -405,7 +420,7 @@ export function preflightHarnessExecutionGuard(_state: AppState, toolNameValue: 
   if (binding) {
     const stage = binding.session.lifecycle.stage;
     const verificationDebt = outstandingVerificationDebt(binding.session.id);
-    if (action === 'finalization' && verificationDebt) {
+    if (effects.includes('finalization') && verificationDebt) {
       return blockedDecision(toolName, action, operationId, policy, binding, 'EXECUTION_VERIFICATION_DEBT_OUTSTANDING', [
         `Verification debt '${verificationDebt.id}' must be settled by authoritative GREEN verification before finalization.`,
       ]);
@@ -416,16 +431,19 @@ export function preflightHarnessExecutionGuard(_state: AppState, toolNameValue: 
       commit: ['verifying'],
       finalization: ['committed'],
     };
-    const emergencyDebtCommit = action === 'commit'
-      && toolName === 'commit_task_owned_changes'
-      && stage === 'verification-infra-blocked'
-      && args.preserveVerificationDebt === true
-      && args.emergency === true;
-    const debtRecoveryVerification = action === 'verification'
-      && stage === 'committed'
-      && Boolean(verificationDebt);
-    if (action !== 'restart' && !allowedStages[action].includes(stage) && !emergencyDebtCommit && !debtRecoveryVerification) {
-      return blockedDecision(toolName, action, operationId, policy, binding, 'EXECUTION_LIFECYCLE_STAGE_BLOCKED', [`${action} is not allowed while execution stage is '${stage}'. Allowed stages: ${allowedStages[action].join(', ')}.`]);
+    for (const effect of effects) {
+      if (effect === 'restart') continue;
+      const emergencyDebtCommit = effect === 'commit'
+        && toolName === 'commit_task_owned_changes'
+        && stage === 'verification-infra-blocked'
+        && args.preserveVerificationDebt === true
+        && args.emergency === true;
+      const debtRecoveryVerification = effect === 'verification'
+        && stage === 'committed'
+        && Boolean(verificationDebt);
+      if (!allowedStages[effect].includes(stage) && !emergencyDebtCommit && !debtRecoveryVerification) {
+        return blockedDecision(toolName, effect, operationId, policy, binding, 'EXECUTION_LIFECYCLE_STAGE_BLOCKED', [`${effect} is not allowed while execution stage is '${stage}'. Allowed stages: ${allowedStages[effect].join(', ')}.`]);
+      }
     }
   }
   if (action === 'restart' && policy.restart.value.gate !== 'allowed') {
@@ -455,6 +473,7 @@ export function preflightHarnessExecutionGuard(_state: AppState, toolNameValue: 
     guarded: true,
     allowed: true,
     action,
+    effects,
     toolName,
     reasonCode: 'HARNESS_EXECUTION_ALLOWED',
     guidance,
@@ -556,7 +575,28 @@ function recordVerificationFailureEvidence(sessionId: string, decision: HarnessE
   }])[0] || null;
 }
 
+function compositeVerificationOutcome(result: any) {
+  const verification = Array.isArray(result?.verification) ? result.verification : [];
+  if (verification.length === 0) return null;
+  const failed = verification.find((entry: any) => resultFailed(entry));
+  return resultFailed(result) ? failed || result : result;
+}
+
 export function recordHarnessExecutionOutcome(decision: HarnessExecutionGuardDecision, result: any) {
+  if (Array.isArray(decision.effects) && decision.effects.length > 1) {
+    let recorded: any = null;
+    for (const effect of decision.effects) {
+      const effectResult = effect === 'mutation'
+        ? result?.edit || result
+        : effect === 'verification'
+          ? compositeVerificationOutcome(result)
+          : result;
+      if (!effectResult) continue;
+      const next = recordHarnessExecutionOutcome({ ...decision, action: effect, effects: [effect] }, effectResult);
+      if (next) recorded = next;
+    }
+    return recorded;
+  }
   if (!decision.guarded || !decision.allowed || !decision.execution?.sessionId || !decision.action) return null;
   const sessionId = decision.execution.sessionId;
 

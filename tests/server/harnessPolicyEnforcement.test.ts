@@ -16,7 +16,7 @@ const { saveTask } = await import('../../src/server/repositories/taskRepository.
 const { claimTaskForSession } = await import('../../src/server/services/taskClaimService.js');
 const { cleanupSessionWorkspace, resetSessionWorkspaceRuntimeForTests } = await import('../../src/server/services/sessionWorkspaceService.js');
 const executionSessions = await import('../../src/server/services/executionSessionService.js');
-const { preflightHarnessExecutionGuard, recordHarnessExecutionOutcome } = await import('../../src/server/services/harnessExecutionGuardService.js');
+const { getHarnessExecutionEffects, preflightHarnessExecutionGuard, recordHarnessExecutionOutcome } = await import('../../src/server/services/harnessExecutionGuardService.js');
 const { getBuiltinToolJobRecoveryPolicy } = await import('../../src/server/services/mcpToolJobRunnerRegistry.js');
 const { finalizeTaskWorkspace } = await import('../../src/server/services/taskWorkspaceFinalizationService.js');
 
@@ -95,6 +95,16 @@ test('execution guard composes policy, ownership, lifecycle, retry identity, and
       repoRevision: session.repoRevision,
       contextPlanIdentity: 'plan-harness-1',
     });
+
+    const tooEarlyComposite = preflightHarnessExecutionGuard(state, 'apply_and_verify', {
+      workspaceId,
+      files: [{ filePath: 'value.txt', edits: [{ type: 'replace', find: 'before', replaceWith: 'after' }] }],
+      requestedCommands: ['test-focused'],
+      harnessOperationId: 'context-ready-composite',
+    });
+    assert.equal(tooEarlyComposite.allowed, false, 'composite must fail before edit when verification effect is illegal');
+    assert.equal(tooEarlyComposite.action, 'verification');
+    assert.equal(tooEarlyComposite.reasonCode, 'EXECUTION_LIFECYCLE_STAGE_BLOCKED');
 
     const safe = preflightHarnessExecutionGuard(state, 'write_local_file', { workspaceId, filePath: 'value.txt', harnessOperationId: 'mutation-1' });
     assert.equal(safe.allowed, true);
@@ -285,10 +295,42 @@ test('verification OOM preserves execution for verification-only recovery', () =
     const recovery = preflightHarnessExecutionGuard(state, 'run_project_command', { workspaceId, command: 'test-focused', harnessOperationId: 'verification-oom-recovery' });
     assert.equal(recovery.allowed, true);
     assert.equal(recovery.execution?.stage, 'verification-infra-blocked');
+    const compositeArgs = {
+      workspaceId,
+      files: [{ filePath: 'value.txt', edits: [{ type: 'replace', find: 'before', replaceWith: 'after' }] }],
+      requestedCommands: ['test-focused'],
+      harnessOperationId: 'verification-oom-composite',
+    };
+    assert.deepEqual(getHarnessExecutionEffects('apply_and_verify', compositeArgs), ['mutation', 'verification']);
+    assert.deepEqual(getHarnessExecutionEffects('apply_and_verify', { workspaceId, requestedCommands: ['test-focused'] }), ['mutation', 'verification'], 'missing edit args must not implicitly downgrade the composite to verify-only');
+    assert.deepEqual(getHarnessExecutionEffects('apply_prepared_edit', { editPlanId: 'plan-1' }), ['mutation']);
+    assert.deepEqual(getHarnessExecutionEffects('apply_prepared_edit_plan', { editPlanId: 'plan-1' }), ['mutation']);
+    const blockedComposite = preflightHarnessExecutionGuard(state, 'apply_and_verify', compositeArgs);
+    assert.equal(blockedComposite.allowed, false);
+    assert.equal(blockedComposite.action, 'mutation');
+    assert.equal(blockedComposite.reasonCode, 'EXECUTION_LIFECYCLE_STAGE_BLOCKED');
     const commit = preflightHarnessExecutionGuard(state, 'commit_task_owned_changes', { workspaceId, taskId: task.id, message: 'blocked' });
     assert.equal(commit.allowed, false);
     const finalization = preflightHarnessExecutionGuard(state, 'finalize_task_workspace', { workspaceId, taskId: task.id });
     assert.equal(finalization.allowed, false);
+
+    recordHarnessExecutionOutcome(recovery, { ok: false, status: 'failed', exitCode: 1, stderr: 'assertion failed' });
+    assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'repairing');
+    const repairingComposite = preflightHarnessExecutionGuard(state, 'apply_and_verify', {
+      ...compositeArgs,
+      harnessOperationId: 'repairing-composite-infra-failure',
+    });
+    assert.equal(repairingComposite.allowed, true);
+    assert.deepEqual(repairingComposite.effects, ['mutation', 'verification']);
+    const lifecycleBeforeCompositeFailure = lifecycleEvidenceCount(binding.session.id);
+    recordHarnessExecutionOutcome(repairingComposite, {
+      ok: false,
+      status: 'verification_failed',
+      edit: { ok: true, changed: true },
+      verification: [{ ok: false, status: 'timed_out', timedOut: true, stderr: 'java.lang.OutOfMemoryError: Java heap space' }],
+    });
+    assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'verification-infra-blocked');
+    assert.equal(lifecycleEvidenceCount(binding.session.id), lifecycleBeforeCompositeFailure + 1, 'composite mutation must be observed before one infra-block transition without duplicate lifecycle records');
   } finally {
     cleanupSessionWorkspace(workspaceId);
   }

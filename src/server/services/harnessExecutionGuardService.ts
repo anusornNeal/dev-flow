@@ -15,6 +15,7 @@ import {
 import {
   getTaskExecutionMutationBinding,
   getExecutionOwnershipState,
+  getExecutionSessionState,
   getExecutionVerificationBatchState,
   recordExecutionLifecycleTransition,
   recordExecutionSessionEvidence,
@@ -310,6 +311,21 @@ function blockedDecision(toolName: string, action: HarnessExecutionAction, opera
   };
 }
 
+function outstandingVerificationDebt(sessionId: string) {
+  const evidence = getExecutionSessionState(sessionId).evidence;
+  const settledDebtIds = new Set(
+    evidence
+      .filter((entry: any) => entry.kind === 'verification-debt-settlement' && entry.metadata?.status === 'settled')
+      .map((entry: any) => boundedString(entry.metadata?.debtEvidenceId))
+      .filter(Boolean),
+  );
+  return [...evidence]
+    .reverse()
+    .find((entry: any) => entry.kind === 'verification-debt'
+      && entry.metadata?.status === 'outstanding'
+      && !settledDebtIds.has(entry.id)) || null;
+}
+
 export function preflightHarnessExecutionGuard(_state: AppState, toolNameValue: string, argsValue: Record<string, any> = {}): HarnessExecutionGuardDecision {
   const toolName = String(toolNameValue || '').trim();
   const action = actionForTool(toolName);
@@ -388,13 +404,27 @@ export function preflightHarnessExecutionGuard(_state: AppState, toolNameValue: 
 
   if (binding) {
     const stage = binding.session.lifecycle.stage;
+    const verificationDebt = outstandingVerificationDebt(binding.session.id);
+    if (action === 'finalization' && verificationDebt) {
+      return blockedDecision(toolName, action, operationId, policy, binding, 'EXECUTION_VERIFICATION_DEBT_OUTSTANDING', [
+        `Verification debt '${verificationDebt.id}' must be settled by authoritative GREEN verification before finalization.`,
+      ]);
+    }
     const allowedStages: Record<Exclude<HarnessExecutionAction, 'restart'>, readonly string[]> = {
       mutation: ['context-ready', 'plan-recorded', 'implementing', 'repairing'],
       verification: ['implementing', 'repairing', 'verification-infra-blocked'],
       commit: ['verifying'],
       finalization: ['committed'],
     };
-    if (action !== 'restart' && !allowedStages[action].includes(stage)) {
+    const emergencyDebtCommit = action === 'commit'
+      && toolName === 'commit_task_owned_changes'
+      && stage === 'verification-infra-blocked'
+      && args.preserveVerificationDebt === true
+      && args.emergency === true;
+    const debtRecoveryVerification = action === 'verification'
+      && stage === 'committed'
+      && Boolean(verificationDebt);
+    if (action !== 'restart' && !allowedStages[action].includes(stage) && !emergencyDebtCommit && !debtRecoveryVerification) {
       return blockedDecision(toolName, action, operationId, policy, binding, 'EXECUTION_LIFECYCLE_STAGE_BLOCKED', [`${action} is not allowed while execution stage is '${stage}'. Allowed stages: ${allowedStages[action].join(', ')}.`]);
     }
   }
@@ -576,6 +606,25 @@ export function recordHarnessExecutionOutcome(decision: HarnessExecutionGuardDec
       return current?.session.lifecycle || null;
     }
 
+    if (current.session.lifecycle.stage === 'committed') {
+      const debt = outstandingVerificationDebt(sessionId);
+      if (!debt) return current.session.lifecycle;
+      const ownership = getExecutionOwnershipState(sessionId, { repoRoot: current.workspace.root });
+      if (ownership.verificationFresh !== true) return current.session.lifecycle;
+      recordExecutionSessionEvidence(sessionId, [{
+        evidenceId: `harness:${decision.operationId}:verification-debt-settlement`,
+        kind: 'verification-debt-settlement',
+        revisionIdentity: decision.operationId,
+        metadata: {
+          status: 'settled',
+          debtEvidenceId: debt.id,
+          commitHash: boundedString(debt.metadata?.commitHash),
+          operationId: decision.operationId,
+          settledAt: new Date().toISOString(),
+        },
+      }]);
+      return current.session.lifecycle;
+    }
     if (current.session.lifecycle.stage === 'implementing' || current.session.lifecycle.stage === 'repairing' || current.session.lifecycle.stage === 'verification-infra-blocked') {
       const ownership = getExecutionOwnershipState(sessionId, { repoRoot: current.workspace.root });
       if (ownership.verificationFresh !== true) return current.session.lifecycle;
@@ -586,7 +635,11 @@ export function recordHarnessExecutionOutcome(decision: HarnessExecutionGuardDec
   if (decision.action === 'commit') {
     if (!commitWasCreated(result)) return null;
     const current = getTaskExecutionMutationBinding({ workspaceId: decision.execution.workspaceId });
-    if (!current || current.session.lifecycle.stage !== 'verifying') return current?.session.lifecycle || null;
+    if (!current) return null;
+    if (current.session.lifecycle.stage === 'verification-infra-blocked' && result?.verificationDebtPreserved === true) {
+      return transition(sessionId, 'committed', 'verification-debt-commit-succeeded', decision, 'verification-debt-commit', 'git-commit');
+    }
+    if (current.session.lifecycle.stage !== 'verifying') return current.session.lifecycle;
     return transition(sessionId, 'committed', 'task-owned-commit-succeeded', decision, 'commit', 'git-commit');
   }
   if (decision.action === 'finalization') {

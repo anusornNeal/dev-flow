@@ -294,6 +294,76 @@ test('verification OOM preserves execution for verification-only recovery', () =
   }
 });
 
+test('verification debt commit gates finalization until authoritative recovery verification settles the debt', () => {
+  resetSessionWorkspaceRuntimeForTests();
+  const repoRoot = createRepo('verification-debt-guard-repo');
+  const project = { id: 'project-verification-debt-guard', name: 'Verification Debt Guard', repoUrl: 'https://example.com/verification-debt-guard', localPath: repoRoot };
+  createProject(project);
+  const now = new Date().toISOString();
+  const task = {
+    id: 'task-verification-debt-guard', displayId: 'DVF-HARNESS-DEBT', title: 'Verification debt guard fixture',
+    description: 'Keep finalization blocked until authoritative recovery verification settles debt.', projectId: project.id,
+    status: 'todo', priority: 'high', category: 'backend', tags: [], targetFiles: ['value.txt'],
+    checklist: [], logs: [], bugs: [], images: [], createdAt: now, updatedAt: now,
+  } as any;
+  saveTask(task);
+  const state = { projectsCache: [project], countersCache: {}, skillsRegistry: [] } as any;
+  const claimed = claimTaskForSession(task.id, { sessionId: 'verification-debt-guard-session', ownerKind: 'chat', ownerLabel: 'Debt guard' });
+  const workspaceId = claimed.claim.workspaceId;
+  try {
+    const binding = executionSessions.getTaskExecutionMutationBinding({ workspaceId })!;
+    executionSessions.recordTaskExecutionContextReady({ workspaceId }, {
+      contextHandle: 'ctx-verification-debt', repoRevision: binding.session.repoRevision, contextPlanIdentity: 'plan-verification-debt',
+    });
+    executionSessions.recordExecutionLifecycleTransition(binding.session.id, {
+      toStage: 'implementing', reasonCode: 'debt-fixture-mutation',
+      evidence: { id: 'debt-fixture-mutation', kind: 'owned-change', status: 'completed' },
+    });
+    fs.writeFileSync(path.join(binding.workspace.root, 'value.txt'), 'after\n', 'utf8');
+    executionSessions.recordExecutionOwnedChanges(binding.session.id, ['value.txt'], { repoRoot: binding.workspace.root, source: 'debt-fixture' });
+    const failedVerification = preflightHarnessExecutionGuard(state, 'run_project_command', { workspaceId, command: 'test-focused', harnessOperationId: 'debt-infra-failure' });
+    recordHarnessExecutionOutcome(failedVerification, { ok: false, status: 'timed_out', timedOut: true, stderr: 'Java heap space' });
+    assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'verification-infra-blocked');
+
+    const ordinaryCommit = preflightHarnessExecutionGuard(state, 'commit_task_owned_changes', { workspaceId, taskId: task.id, message: 'ordinary' });
+    assert.equal(ordinaryCommit.allowed, false);
+    const debtCommit = preflightHarnessExecutionGuard(state, 'commit_task_owned_changes', {
+      workspaceId, taskId: task.id, message: 'debt', preserveVerificationDebt: true, emergency: true,
+      reason: 'runner exhausted heap', actorLabel: 'Operator Test', harnessOperationId: 'debt-commit',
+    });
+    assert.equal(debtCommit.allowed, true);
+    executionSessions.recordExecutionSessionEvidence(binding.session.id, [{
+      evidenceId: 'verification-debt:fixture', kind: 'verification-debt', revisionIdentity: 'fixture-commit',
+      metadata: { status: 'outstanding', commitHash: 'fixture-commit', failureClass: 'infrastructure', failureEvidenceId: 'harness:debt-infra-failure:verification-failure' },
+    }]);
+    recordHarnessExecutionOutcome(debtCommit, {
+      ok: true, status: 'succeeded', commitHash: 'fixture-commit', verificationDebtPreserved: true,
+      verificationDebt: { evidenceId: 'verification-debt:fixture', status: 'outstanding' },
+    });
+    assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'committed');
+
+    const blockedFinalization = preflightHarnessExecutionGuard(state, 'finalize_task_workspace', { workspaceId, taskId: task.id });
+    assert.equal(blockedFinalization.allowed, false);
+    assert.equal(blockedFinalization.reasonCode, 'EXECUTION_VERIFICATION_DEBT_OUTSTANDING');
+    const recovery = preflightHarnessExecutionGuard(state, 'run_project_command', { workspaceId, command: 'test-focused', harnessOperationId: 'debt-recovery-green' });
+    assert.equal(recovery.allowed, true);
+    executionSessions.recordExecutionVerificationEvidence(binding.session.id, [{ name: 'recovery', status: 'passed' }], { repoRoot: binding.workspace.root });
+    recordHarnessExecutionOutcome(recovery, { ok: true, status: 'succeeded', exitCode: 0 });
+    const settlement = executionSessions.getExecutionSessionState(binding.session.id).evidence.find((entry: any) => entry.kind === 'verification-debt-settlement');
+    assert.equal(settlement?.metadata?.debtEvidenceId, 'verification-debt:fixture');
+    assert.equal(settlement?.metadata?.status, 'settled');
+
+    const allowedFinalization = preflightHarnessExecutionGuard(state, 'finalize_task_workspace', { workspaceId, taskId: task.id });
+    assert.equal(allowedFinalization.allowed, true);
+    const redundantVerification = preflightHarnessExecutionGuard(state, 'run_project_command', { workspaceId, command: 'test-focused', harnessOperationId: 'debt-recovery-redundant' });
+    assert.equal(redundantVerification.allowed, false);
+  } finally {
+    const cleanupBinding = executionSessions.getTaskExecutionMutationBinding({ workspaceId });
+    if (cleanupBinding) git(cleanupBinding.workspace.root, ['checkout', '--', 'value.txt']);
+    cleanupSessionWorkspace(workspaceId);
+  }
+});
+
 test('incomplete sequential verification batch fences mutation but admits the remaining verification member', () => {
   resetSessionWorkspaceRuntimeForTests();
   const repoRoot = createRepo('sequential-batch-guard-repo');

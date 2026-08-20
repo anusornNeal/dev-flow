@@ -9,6 +9,7 @@ import { validateGitWorkflowPolicy } from '../services/projectGitWorkflowPolicyS
 import { getPromptPipelineStructure, renderPromptTemplate, PromptRenderContext } from '../services/promptTemplateService';
 import fs from 'fs';
 import path from 'path';
+import { withProjectDeletionLifecycleGuard } from '../services/taskClaimService.js';
 
 function deleteProjectById(projectId: string, deps: ApiRouteDeps) {
   
@@ -21,10 +22,11 @@ function deleteProjectById(projectId: string, deps: ApiRouteDeps) {
     throw createApiError(404, 'PROJECT_NOT_FOUND', 'Project not found', { affectedId: projectId });
   }
 
-  dbDeleteProject(projectId);
-  deleteTasksByProjectId(projectId);
-
-  return { success: true, removedId: projectId };
+  return withProjectDeletionLifecycleGuard(projectId, () => {
+    deleteTasksByProjectId(projectId);
+    dbDeleteProject(projectId);
+    return { success: true, removedId: projectId };
+  });
 }
 
 function rejectProjectIdentityConflict(res: express.Response, project: any) {

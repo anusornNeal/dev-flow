@@ -190,6 +190,48 @@ test('recursive delete fails closed before deleting any task when one descendant
   assert.ok(activeExecution(childId));
 });
 
+test('claimless exact dirty workspace blocks task deletion and preserves task plus workspace bytes', async () => {
+  const id = seedTask('delete-claimless-dirty', ['src/claimless-dirty.ts'], { status: 'todo' });
+  const sessionId = `session-${id}`;
+  const claimed = claimTask(id, sessionId);
+  const workspace = workspaces.resolveSessionWorkspace(claimed.claim.workspaceId)!;
+  claims.releaseTaskClaim(id, { sessionId, nextStatus: 'todo' });
+  fs.writeFileSync(path.join(workspace.root, 'src', 'claimless-dirty.ts'), 'export const dirty = 42;\n');
+
+  const result = await jsonRequest(`/api/tasks/${id}?emergency=true`, { method: 'DELETE' });
+  assert.equal(result.response.status, 409, JSON.stringify(result.body));
+  assert.equal(result.body?.error?.code, 'TASK_DELETE_LIFECYCLE_BLOCKED');
+  assert.ok(getTask(id));
+  assert.equal(fs.readFileSync(path.join(workspace.root, 'src', 'claimless-dirty.ts'), 'utf8'), 'export const dirty = 42;\n');
+});
+
+test('claimless exact workspace with unique commit blocks task deletion', async () => {
+  const id = seedTask('delete-claimless-commit', ['src/other.ts'], { status: 'todo' });
+  const sessionId = `session-${id}`;
+  const claimed = claimTask(id, sessionId);
+  const workspace = workspaces.resolveSessionWorkspace(claimed.claim.workspaceId)!;
+  claims.releaseTaskClaim(id, { sessionId, nextStatus: 'todo' });
+  fs.writeFileSync(path.join(workspace.root, 'src', 'other.ts'), 'export const other = 99;\n');
+  const add = spawnSync('git', ['add', 'src/other.ts'], { cwd: workspace.root, encoding: 'utf8', shell: false });
+  assert.equal(add.status, 0, add.stderr || add.stdout);
+  const commit = spawnSync('git', ['commit', '-m', 'claimless unique commit'], { cwd: workspace.root, encoding: 'utf8', shell: false });
+  assert.equal(commit.status, 0, commit.stderr || commit.stdout);
+
+  const result = await jsonRequest(`/api/tasks/${id}?emergency=true`, { method: 'DELETE' });
+  assert.equal(result.response.status, 409, JSON.stringify(result.body));
+  assert.equal(result.body?.error?.code, 'TASK_DELETE_LIFECYCLE_BLOCKED');
+  assert.ok(getTask(id));
+  assert.equal(workspaces.resolveSessionWorkspace(workspace.workspaceId)?.workspaceId, workspace.workspaceId);
+});
+
+
+test('safe unclaimed task with no lifecycle or recovery state can still be deleted', async () => {
+  const id = seedTask('delete-safe', ['src/other.ts'], { status: 'todo' });
+  const result = await jsonRequest(`/api/tasks/${id}`, { method: 'DELETE' });
+  assert.equal(result.response.status, 200, JSON.stringify(result.body));
+  assert.equal(getTask(id), undefined);
+});
+
 test('startup sanitation preserves a valid Chat claim and an unclaimed orchestration parent with an active child', () => {
   const parentId = seedTask('startup-parent', ['src/startup-parent.ts'], { status: 'in-progress' });
   const childId = seedTask('startup-child', ['src/startup-child.ts'], { parentId });

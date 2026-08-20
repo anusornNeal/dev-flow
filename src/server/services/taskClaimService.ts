@@ -1,10 +1,11 @@
 import crypto from 'node:crypto';
 import { getProject } from '../repositories/projectRepository.js';
-import { listExecutionSessionsForTask, listExecutionSessionsForWorkspace } from '../repositories/executionSessionRepository.js';
+import { listExecutionSessionsForTask, listExecutionSessionsForWorkspace, queryExecutionSessions } from '../repositories/executionSessionRepository.js';
 import { getTaskByIdentifier, getTasksByProjectId, saveTask } from '../repositories/taskRepository.js';
 import {
   createOrReuseSessionWorkspace,
   findSessionWorkspaceRecoveryCandidatesForTask,
+  listSessionWorkspaceMetadataForRecovery,
   isSessionWorkspaceCompatibleWithTask,
   resolveSessionWorkspaceForRecovery,
 } from './sessionWorkspaceService.js';
@@ -24,6 +25,7 @@ import { withDbTransaction } from '../../db/index.js';
 import { withSyncLock } from './lockAndIdempotencyService.js';
 import type { TaskClaim, TaskStatus } from '../../types.js';
 import { computeLifecycleAuthoritySnapshot } from './lifecycleAuthorityService.js';
+import { inspectWorkspaceRecovery } from './workspaceRecoveryService.js';
 
 const DEFAULT_CLAIM_TTL_MS = 24 * 60 * 60 * 1000;
 const MIN_CLAIM_TTL_MS = 60_000;
@@ -366,6 +368,59 @@ export function mutateTaskStatusWithLifecycle(
   });
 }
 
+function isActionableDeletionWorkspace(workspaceId: string) {
+  const inspection = inspectWorkspaceRecovery(workspaceId);
+  return inspection.disposition === 'needs-recovery'
+    || inspection.disposition === 'stale-registry'
+    || inspection.disposition === 'committed-not-integrated'
+    || inspection.state === 'integration-required';
+}
+
+function taskDeletionWorkspaceBlockers(task: any) {
+  const discovery = findSessionWorkspaceRecoveryCandidatesForTask(task.projectId, task.displayId || task.id, 100);
+  if (discovery.truncated) {
+    return [{
+      taskId: task.id,
+      displayId: task.displayId,
+      reason: 'workspace-discovery-truncated',
+      workspaceIds: discovery.workspaces.map((entry) => entry.workspaceId),
+    }];
+  }
+  if (discovery.legacyMatches.length > 0 || discovery.exactMatches.length > 1) {
+    return [{
+      taskId: task.id,
+      displayId: task.displayId,
+      reason: discovery.legacyMatches.length > 0 ? 'workspace-identity-legacy-ambiguous' : 'workspace-identity-ambiguous',
+      workspaceIds: [...discovery.exactMatches, ...discovery.legacyMatches].map((entry) => entry.workspaceId),
+    }];
+  }
+  return discovery.exactMatches
+    .filter((entry) => isActionableDeletionWorkspace(entry.workspaceId))
+    .map((entry) => ({
+      taskId: task.id,
+      displayId: task.displayId,
+      reason: 'actionable-workspace',
+      workspaceIds: [entry.workspaceId],
+    }));
+}
+
+function collectTaskDeletionBlockers(tasks: any[]) {
+  return tasks.flatMap((task) => {
+    const operations = unresolvedTaskOperations(task);
+    const active = activeTaskExecutions(task);
+    const workspaceBlockers = taskDeletionWorkspaceBlockers(task);
+    if (!task.claim && active.length === 0 && operations.length === 0 && workspaceBlockers.length === 0) return [];
+    return [{
+      taskId: task.id,
+      displayId: task.displayId,
+      claimWorkspaceId: task.claim?.workspaceId || null,
+      executionSessionIds: active.map((entry) => entry.id),
+      operationIds: operations.map((entry) => entry.operationId),
+      workspaceBlockers,
+    }];
+  });
+}
+
 export function withTaskDeletionLifecycleGuard<T>(taskIds: string[], deleteFn: (tasks: any[]) => T) {
   const ids = [...new Set(taskIds.map((value) => String(value || '').trim()).filter(Boolean))];
   if (ids.length === 0) throw createApiError(400, 'TASK_DELETE_IDS_REQUIRED', 'At least one task id is required for guarded deletion.');
@@ -376,21 +431,73 @@ export function withTaskDeletionLifecycleGuard<T>(taskIds: string[], deleteFn: (
   return withSyncLock(`task-claim:${projectIds[0]}`, () => withDbTransaction(() => {
     const tasks = ids.map((id) => getTaskByIdentifier(id, 'full')).filter(Boolean) as any[];
     if (tasks.length !== ids.length) throw createApiError(409, 'TASK_DELETE_SET_CHANGED', 'Task deletion set changed before lifecycle guard could execute.');
-    const blockers = tasks.flatMap((task) => {
-      const operations = unresolvedTaskOperations(task);
-      const active = activeTaskExecutions(task);
-      if (!task.claim && active.length === 0 && operations.length === 0) return [];
-      return [{
-        taskId: task.id,
-        displayId: task.displayId,
-        claimWorkspaceId: task.claim?.workspaceId || null,
-        executionSessionIds: active.map((entry) => entry.id),
-        operationIds: operations.map((entry) => entry.operationId),
-      }];
-    });
+    const blockers = collectTaskDeletionBlockers(tasks);
     if (blockers.length > 0) {
-      throw createApiError(409, 'TASK_DELETE_LIFECYCLE_BLOCKED', 'Task deletion is blocked while any selected task owns claim/execution/pending lifecycle state.', {
-        details: { blockers, nextAction: 'Release/finalize ownership safely before deleting task records. Dirty managed WIP is not deleted by this operation.' },
+      throw createApiError(409, 'TASK_DELETE_LIFECYCLE_BLOCKED', 'Task deletion is blocked while any selected task owns lifecycle or recoverable workspace state.', {
+        details: { blockers, nextAction: 'Release/finalize ownership and recover or clean exact managed workspaces before deleting task records. Dirty managed WIP is never discarded by delete.' },
+      });
+    }
+    return deleteFn(tasks);
+  }));
+}
+
+export function withProjectDeletionLifecycleGuard<T>(projectId: string, deleteFn: (tasks: any[]) => T) {
+  const cleanProjectId = String(projectId || '').trim();
+  if (!cleanProjectId) throw createApiError(400, 'PROJECT_ID_REQUIRED', 'projectId is required for guarded project deletion.');
+  return withSyncLock(`task-claim:${cleanProjectId}`, () => withDbTransaction(() => {
+    const project = getProject(cleanProjectId);
+    if (!project) throw createApiError(404, 'PROJECT_NOT_FOUND', 'Project not found', { affectedId: cleanProjectId });
+    const tasks = getTasksByProjectId(cleanProjectId);
+    const taskIds = new Set(tasks.map((task: any) => String(task.id || '')).filter(Boolean));
+    const taskDisplayIds = new Set(tasks.map((task: any) => String(task.displayId || '')).filter(Boolean));
+    const blockers: any[] = collectTaskDeletionBlockers(tasks);
+
+    const executions = queryExecutionSessions({ projectId: cleanProjectId, limit: 100 });
+    if (executions.truncated) {
+      blockers.push({ reason: 'execution-discovery-truncated', total: executions.total, visible: executions.sessions.length });
+    } else {
+      for (const session of executions.sessions) {
+        const pending = unresolvedExecutionOperations(session.id);
+        const missingTask = Boolean(session.taskId) && !taskIds.has(String(session.taskId));
+        blockers.push({
+          reason: missingTask
+            ? 'historical-execution-missing-task'
+            : session.status === 'active'
+              ? 'active-execution'
+              : pending.length > 0
+                ? 'pending-operation'
+                : 'historical-execution-record',
+          taskId: session.taskId || null,
+          executionSessionId: session.id,
+          workspaceId: session.workspaceId || null,
+          operationIds: pending.map((entry) => entry.operationId),
+        });
+      }
+    }
+
+    const registry = listSessionWorkspaceMetadataForRecovery(cleanProjectId, 100);
+    if (registry.truncated) {
+      blockers.push({ reason: 'workspace-discovery-truncated', total: registry.total, visible: registry.workspaces.length });
+    } else {
+      for (const workspace of registry.workspaces) {
+        const taskDisplayId = String(workspace.taskDisplayId || '').trim();
+        const missingTask = !taskDisplayId || !taskDisplayIds.has(taskDisplayId);
+        const actionable = isActionableDeletionWorkspace(workspace.workspaceId);
+        blockers.push({
+          reason: missingTask ? 'historical-workspace-missing-task' : actionable ? 'actionable-workspace' : 'historical-workspace-record',
+          taskDisplayId: taskDisplayId || null,
+          workspaceId: workspace.workspaceId,
+        });
+      }
+    }
+
+    if (blockers.length > 0) {
+      throw createApiError(409, 'PROJECT_DELETE_LIFECYCLE_BLOCKED', 'Project deletion is blocked until lifecycle and managed-workspace recovery state is fully resolved.', {
+        affectedId: cleanProjectId,
+        details: {
+          blockers,
+          nextAction: 'Resolve active/pending execution state and recover or explicitly clean managed workspaces before deleting the project. Truncated discovery is never treated as all-clear.',
+        },
       });
     }
     return deleteFn(tasks);

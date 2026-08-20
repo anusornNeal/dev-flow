@@ -91,6 +91,128 @@ const coverageManifest: CoverageScenario[] = [
     ],
   },
   {
+    id: 'DVF-0660-cleanup-authority-and-race',
+    file: 'tests/server/sessionWorkspaceService.test.ts',
+    requiredSnippets: [
+      "test('normal cleanup rejects an active durable claim even after in-memory workspace refs are reset'",
+      "test('normal cleanup rejects active execution ownership without a task claim'",
+      "test('unresolved durable operation blocks cleanup even after its execution is no longer active'",
+      "test('cleanup rechecks lifecycle authority immediately before deletion and fails closed on an interleaved claim'",
+    ],
+  },
+  {
+    id: 'DVF-0660-patch-equivalent-live-authority',
+    file: 'tests/server/workspaceRecoveryService.test.ts',
+    requiredSnippets: [
+      "test('inspection recognizes clean recreated patch as patch-equivalent'",
+      "test('finalize superseded workspace refuses patch-equivalent cleanup while a live execution still owns the workspace'",
+    ],
+  },
+  {
+    id: 'DVF-0661-task-deletion-actionable-wip',
+    file: 'tests/server/taskLifecycleDispositionRoutes.test.ts',
+    requiredSnippets: [
+      "test('recursive delete fails closed before deleting any task when one descendant still owns lifecycle state'",
+      "test('claimless exact dirty workspace blocks task deletion and preserves task plus workspace bytes'",
+      "test('claimless exact workspace with unique commit blocks task deletion'",
+    ],
+  },
+  {
+    id: 'DVF-0661-project-deletion-atomic-guard',
+    file: 'tests/server/projectLifecycleDeletionRoutes.test.ts',
+    requiredSnippets: [
+      "test('project deletion rejects active claim/execution without removing project or tasks'",
+      "test('project deletion rejects a durable pending operation even after claim and execution authority drift'",
+      "test('project deletion rejects claimless actionable workspace and preserves workspace bytes'",
+      "test('project deletion rejects historical execution/workspace whose task row is already missing'",
+    ],
+  },
+  {
+    id: 'DVF-0662-health-missing-workspace-authority',
+    file: 'tests/server/workflowHealthService.test.ts',
+    requiredSnippets: [
+      "test('task-scoped health fails closed when matching claim and execution point at missing workspace metadata'",
+      "test('task-scoped health distinguishes metadata-present workspace root or Git identity failure'",
+      "test('workspace-scoped health fails closed for a missing workspace id'",
+    ],
+  },
+  {
+    id: 'DVF-0663-stale-registry-recovery-ordering',
+    file: 'tests/server/workflowRecoveryHandoff.test.ts',
+    requiredSnippets: [
+      "test('stale workspace authority outranks old succeeded and unrelated running jobs'",
+    ],
+  },
+  {
+    id: 'DVF-0664-detached-integrated-convergence',
+    file: 'tests/server/breakGlassLifecycleService.test.ts',
+    requiredSnippets: [
+      "test('detached integrated recovery terminalizes exact already-integrated work without recreating or cleaning the lost workspace'",
+      "test('detached integrated recovery blocks integrated changes outside authoritative task-owned scope'",
+      "test('detached integrated recovery creates infrastructure verification debt, settles it with revision-bound GREEN, and finalizes once'",
+      "test('detached integrated recovery blocks unresolved durable operations before lifecycle convergence'",
+      "test('detached integrated recovery resumes after response loss without duplicate finalization effects'",
+    ],
+  },
+  {
+    id: 'DVF-0665-infra-blocked-composite-verification',
+    file: 'tests/server/mcpToolJobRunnerRegistry.test.ts',
+    requiredSnippets: [
+      "test('direct run_project_command retries proven infrastructure failure through a recovery capacity lease'",
+      "test('apply_and_verify async runner fails closed before source mutation in verification-infra-blocked'",
+    ],
+  },
+  {
+    id: 'DVF-0666-process-tree-and-timeout',
+    file: 'tests/server/projectCommandService.test.ts',
+    requiredSnippets: [
+      "test('Windows command termination uses the exact process-tree terminator before root-signal fallback'",
+      "test('runProjectCommand returns timed_out status when the process exceeds timeout'",
+      "test('long async project commands take bounded live process samples without requiring them for success'",
+    ],
+  },
+  {
+    id: 'DVF-0666-partial-resource-accounting',
+    file: 'tests/server/verificationResourceProfileService.test.ts',
+    requiredSnippets: [
+      "test('partial process-tree memory stays auditable but cannot teach a falsely tiny admission memory profile'",
+      "test('failed and timed-out samples remain visible without corrupting learned successful cost'",
+    ],
+  },
+  {
+    id: 'DVF-0668-runtime-source-freshness',
+    file: 'tests/server/runtimeIdentityDiagnostics.test.ts',
+    requiredSnippets: [
+      "test('dirty runtime source is ambiguous and does not claim a deployed revision'",
+      "test('advanced clean source HEAD is stale, preserves concurrent client drift, blocks restart on active lifecycle work, and converges after restart'",
+    ],
+  },
+  {
+    id: 'DVF-0668-runtime-source-health-surface',
+    file: 'tests/server/workflowHealthService.test.ts',
+    requiredSnippets: [
+      "test('workflow health surfaces stale loaded source even while runtime supervisor is otherwise healthy'",
+    ],
+  },
+  {
+    id: 'DVF-0650-late-page-health',
+    file: 'tests/server/workflowHealthService.test.ts',
+    requiredSnippets: [
+      "test('project-scoped health resolves late claimed executions while surfacing missing workspace authority'",
+      "test('project-scoped health keeps real orphan drift without fabricating a late-page claim mismatch'",
+    ],
+  },
+  {
+    id: 'DVF-0649-safe-orphan-cleanup',
+    file: 'tests/server/emergencyOrphanCleanupService.test.ts',
+    requiredSnippets: [
+      "test('dry-run classifies safe and fail-closed orphan cases without mutation'",
+      "test('apply cancels only safe orphan executions, preserves task state, and records deterministic audit evidence'",
+      "test('same apply operation id replays its frozen result and never sweeps the next bounded batch'",
+      "test('apply is transactional: injected failure rolls back cancellation and audit evidence'",
+    ],
+  },
+  {
     id: 'legacy-agent-completion-consistency',
     file: 'scripts/verify-orchestration.ts',
     requiredSnippets: [
@@ -99,6 +221,29 @@ const coverageManifest: CoverageScenario[] = [
     ],
   },
 ];
+
+const requiredConvergenceScenarioIds = [
+  'DVF-0660-cleanup-authority-and-race',
+  'DVF-0660-patch-equivalent-live-authority',
+  'DVF-0661-task-deletion-actionable-wip',
+  'DVF-0661-project-deletion-atomic-guard',
+  'DVF-0662-health-missing-workspace-authority',
+  'DVF-0663-stale-registry-recovery-ordering',
+  'DVF-0664-detached-integrated-convergence',
+  'DVF-0665-infra-blocked-composite-verification',
+  'DVF-0666-process-tree-and-timeout',
+  'DVF-0666-partial-resource-accounting',
+  'DVF-0668-runtime-source-freshness',
+  'DVF-0650-late-page-health',
+  'DVF-0649-safe-orphan-cleanup',
+] as const;
+
+test('DVF-0667 convergence gate requires every newly audited lifecycle producer and recovery class', () => {
+  const manifestIds = new Set(coverageManifest.map((entry) => entry.id));
+  for (const scenarioId of requiredConvergenceScenarioIds) {
+    assert.ok(manifestIds.has(scenarioId), `missing required convergence scenario ${scenarioId}`);
+  }
+});
 
 function sourceFor(relativePath: string) {
   return fs.readFileSync(path.join(repoRoot, relativePath), 'utf8');

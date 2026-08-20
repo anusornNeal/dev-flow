@@ -27,7 +27,6 @@ const UI_OR_INTERNAL_ONLY_TOOL_REFERENCES = new Set([
   'update_skill',
   'update_prompt_override',
   'delete_prompt_override',
-  'cancel_tool_job',
 ]);
 
 const MAINTAINED_SKILLS = fs.readdirSync(new URL('../../skills/', import.meta.url))
@@ -287,6 +286,28 @@ test('diagnostics MCP profile keeps the recovery handoff surface available', () 
   assert.equal(names.has('get_recovery_handoff'), true);
 });
 
+test('durable job cancellation stays invokable wherever ChatGPT recovery can recommend it', () => {
+  for (const profile of ['full', 'coding', 'diagnostics'] as const) {
+    const names = new Set(getMcpToolList(profile).map((tool: any) => tool.name));
+    assert.equal(names.has('cancel_tool_job'), true, `${profile} must expose cancel_tool_job`);
+  }
+  assert.equal(getMcpConsolidationReplacement('cancel_tool_job'), undefined);
+
+  const cancellation = devFlowToolDefinitions.find((tool: any) => tool.name === 'cancel_tool_job')!;
+  assert.match(cancellation.description, /selected|unrelated|job/i);
+  assert.equal(cancellation.buildHttpRequest({ jobId: 'job-exact' }).path, '/api/tool-jobs/job-exact/cancel');
+
+  const inventoryItem = buildMcpToolSurfaceInventory(devFlowToolDefinitions)
+    .find((item: any) => item.name === 'cancel_tool_job' && !item.alias)!;
+  assert.equal(inventoryItem.classification, 'first-class-intent');
+  assert.equal(inventoryItem.disposition, 'keep');
+  assert.equal(inventoryItem.risk, 'runtime-control');
+
+  const serviceSource = fs.readFileSync(new URL('../../src/server/services/mcpToolJobService.ts', import.meta.url), 'utf8');
+  assert.match(serviceSource, /cancel_tool_job/);
+  assert.doesNotMatch(serviceSource, /get_tool_job_status\/get_tool_job_log/);
+});
+
 test('full MCP surface removes globally consolidated tools while keeping high-level intents', () => {
   const fullNames = new Set(getMcpToolList('full').map((tool: any) => tool.name));
   const removedTools = [
@@ -296,7 +317,7 @@ test('full MCP surface removes globally consolidated tools while keeping high-le
     'get_project_start_context', 'repo_read_snapshot', 'get_repo_inspection_index', 'get_repo_context_delta', 'get_repo_semantic_index',
     'safe_edit_local_file', 'prepare_edit_plan', 'apply_prepared_edit_plan', 'apply_patch',
     'get_figma_file', 'get_figma_node', 'get_figma_design_spec',
-    'create_tool_job', 'get_tool_job_status', 'get_tool_job_log', 'cancel_tool_job',
+    'create_tool_job', 'get_tool_job_status', 'get_tool_job_log',
     'get_change_summary', 'get_project_atlas_status', 'parse_test_report', 'apply_project_atlas_agent_update',
   ];
   for (const removed of removedTools) {
@@ -306,7 +327,7 @@ test('full MCP surface removes globally consolidated tools while keeping high-le
     'search_tasks', 'get_task', 'update_task', 'create_task', 'move_task_to_status', 'toggle_task_checklist',
     'get_repo_context_bundle', 'prepare_compact_edit', 'apply_prepared_edit', 'edit_local_files_batch',
     'get_figma_authoring_context', 'get_git_status', 'prepare_session_workspace', 'integrate_workspace',
-    'run_project_command', 'get_tool_job_result', 'devflow_health_check', 'get_project_atlas',
+    'run_project_command', 'get_tool_job_result', 'cancel_tool_job', 'devflow_health_check', 'get_project_atlas',
   ];
   for (const replacement of replacements) {
     assert.equal(fullNames.has(replacement), true, 'full MCP surface should keep ' + replacement);

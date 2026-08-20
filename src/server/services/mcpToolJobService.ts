@@ -1091,7 +1091,7 @@ export function getToolJobWaitGuidance(status: ReturnType<typeof getToolJobStatu
     ready: false,
     nextPollAfterMs,
     recommendedWaitMs: 30_000,
-    nextAction: `Call get_tool_job_result for ${status.jobId} with waitMs=30000. Use get_tool_job_status/get_tool_job_log only for diagnostics.`,
+    nextAction: `Call get_tool_job_result for ${status.jobId} with waitMs=30000; call cancel_tool_job with this jobId only if this exact job must be stopped.`,
   };
 }
 
@@ -1118,12 +1118,12 @@ function getNextAction(status: string, recovery: ToolRecoveryPolicy | null) {
   if (status === 'timed_out' || status === 'failed') {
     return recovery
       ? `Read get_tool_job_result for the terminal error. Recovery policy: ${recovery.guidance}`
-      : 'Read get_tool_job_log/get_tool_job_result and change strategy explicitly; do not replay the same failed payload unchanged.';
+      : 'Read get_tool_job_result and change strategy explicitly; do not replay the same failed payload unchanged.';
   }
   if (status === 'cancelled') {
     return 'The job was cancelled; inspect why before deciding whether a changed tool call is still needed.';
   }
-  return 'Inspect job status, logs, and result.';
+  return 'Read get_tool_job_result or devflow_health_check for diagnostics.';
 }
 
 function getTerminalJobErrorCode(jobId: string) {
@@ -1561,18 +1561,13 @@ export function cancelToolJob(jobId: string) {
       code: 'JOB_CANCELLED',
       message: reason,
     });
-    safelyReconcileTerminalDurableExecution(persisted);
-    releaseSchedulerLease(active.entry, active.leaseGeneration);
-    activeJobs.delete(jobId);
-    finalizeSingleFlight(active.entry);
-    void releaseVerificationCandidateForArgsAsync(active.entry.args).catch(() => {});
-    appendJobLog(jobId, 'stderr', '\n[Job Cancelled] Cancellation persisted; scheduler capacity released.\n');
-    setImmediate(processQueue);
+    appendJobLog(jobId, 'stderr', '\n[Job Cancelled] Cancellation persisted; waiting for worker teardown before releasing lifecycle and scheduler authority.\n');
     try {
       active.cancelFn?.();
     } catch {
       // Persisted cancellation remains authoritative even if cooperative teardown throws.
     }
+    notifySchedulerCapacityWaiters();
     notifyJobWaiters(jobId);
     return true;
   }
@@ -1816,7 +1811,7 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
     ...(admissionBlocker || {}),
     nextAction: handoffImmediately
       ? `Call get_tool_job_result for ${jobId} with waitMs=30000; call cancel_tool_job to stop the job.`
-      : 'Wait for job completion or inspect get_tool_job_status/get_tool_job_log; call cancel_tool_job to stop the job.'
+      : `Call get_tool_job_result for ${jobId} with waitMs=30000; call cancel_tool_job with this jobId only if this exact job must be stopped.`
   };
 }
 

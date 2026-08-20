@@ -20,7 +20,7 @@ import { uiPreviewToolDefinitions } from './devflowUiPreviewTools';
 import { buildMcpTransportInputSchema } from './mcpSchemaTransport';
 import { resolveRuntimeMcpToolProfileValue } from './mcpToolProfileConfig';
 export type { DevFlowToolDefinition, DevFlowToolHttpRequest } from './devflowContractCore';
-export const DEVFLOW_CONTRACT_VERSION = '2026-08-19.1';
+export const DEVFLOW_CONTRACT_VERSION = '2026-08-21.1';
 
 export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   {
@@ -1593,7 +1593,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'cancel_tool_job',
-    description: 'Cancel a queued or running tool job.',
+    description: 'Cancel only the selected queued or running durable tool job; unrelated jobs, workspaces, and executions are preserved.',
     inputSchema: {
       type: 'object',
       properties: { jobId: { type: 'string' } },
@@ -1655,7 +1655,7 @@ const CODING_PROFILE_TOOLS = new Set([
   'run_project_command',
   'get_git_status', 'get_git_diff', 'get_git_log', 'get_git_show', 'get_git_branch', 'get_git_sync_status',
   'ensure_git_branch', 'commit_git_changes', 'push_git_branch', 'create_pull_request',
-  'prepare_session_workspace', 'integrate_workspace', 'get_tool_job_result', 'get_recovery_handoff',
+  'prepare_session_workspace', 'integrate_workspace', 'get_tool_job_result', 'cancel_tool_job', 'get_recovery_handoff',
   'break_glass_lifecycle', 'get_break_glass_operations', 'cleanup_orphan_executions',
 ]);
 
@@ -1693,7 +1693,6 @@ const MCP_CONSOLIDATION_REPLACEMENTS: Record<string, string> = {
   create_tool_job: 'normal async tool invocation',
   get_tool_job_status: 'get_tool_job_result',
   get_tool_job_log: 'devflow_health_check',
-  cancel_tool_job: 'DevFlow runtime UI',
   list_prompt_skills: 'get_authoring_skill',
   get_prompt_skill: 'get_authoring_skill',
   update_prompt_override: 'DevFlow Settings UI',

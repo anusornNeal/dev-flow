@@ -444,7 +444,7 @@ test('successful command without authoritative verification binding stays a reco
   assert.equal(unbound.verificationBinding?.recoveryRequired, true);
   assert.equal(unbound.verificationBinding?.reasonCode, 'EXECUTION_VERIFICATION_CANDIDATE_REQUIRED');
   assert.notEqual(execution.getExecutionOwnershipState(session.id, { repoRoot: workspace.root }).verificationFresh, true);
-  assert.equal(execution.getExecutionSessionState(session.id).session.lifecycle.stage, 'repairing');
+  assert.equal(execution.getExecutionSessionState(session.id).session.lifecycle.stage, 'verification-infra-blocked');
 });
 
 test('task-bound sequential MCP verification stays pending after the first check and becomes authoritative only after the final check', async () => {
@@ -464,7 +464,7 @@ test('task-bound sequential MCP verification stays pending after the first check
   assert.equal(first.verificationBinding?.reasonCode, 'EXECUTION_VERIFICATION_BATCH_INCOMPLETE');
   assert.equal(first.verificationBinding?.recoveryRequired, false);
   assert.notEqual(execution.getExecutionOwnershipState(session.id, { repoRoot: workspace.root }).verificationFresh, true);
-  assert.equal(execution.getExecutionSessionState(session.id).session.lifecycle.stage, 'repairing');
+  assert.equal(execution.getExecutionSessionState(session.id).session.lifecycle.stage, 'verification-infra-blocked');
   let plan = commitPlan.buildTaskCommitPlan(state, { taskId, workspaceId: workspace.workspaceId });
   assert.equal(plan.commitAllowed, false);
   assert.ok(plan.blockers.some((entry: any) => entry.code === 'EXECUTION_VERIFICATION_BATCH_INCOMPLETE'));

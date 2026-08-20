@@ -86,7 +86,6 @@ const ADMIN_ADVANCED = new Set([
   'delete_prompt_override',
   'abort_workspace_integration',
   'retry_workspace_integration',
-  'cancel_tool_job',
 ]);
 
 const DESTRUCTIVE_TOOLS = new Set([

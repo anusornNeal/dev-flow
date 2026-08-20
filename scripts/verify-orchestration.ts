@@ -225,6 +225,7 @@ assert.ok(prompt.includes('## DevFlow Project-Local Instructions'));
 assert.ok(prompt.includes('ORCHESTRATION-LOCAL-INSTRUCTION'));
 assert.ok(!prompt.includes('ORCHESTRATION-SIBLING-MUST-NOT-INJECT'));
 
+state._testTasks[0].claim = undefined;
 console.log('[verify] Testing failed completion leaves the card retryable...');
 completeAgentRunForTask(state._testTasks[0], run1!, deps, {
   success: false,
@@ -232,6 +233,8 @@ completeAgentRunForTask(state._testTasks[0], run1!, deps, {
   errorMessage: 'Agent process exited with code 1',
 });
 assert.equal(state._testTasks[0].status, 'todo');
+assert.equal(getTasks().find((task: any) => task.id === 'task-1')?.status, 'todo');
+assert.equal(Object.prototype.hasOwnProperty.call(state._testTasks[0], 'claim'), false);
 assert.equal(getActiveRunForTask('task-1'), null);
 assert.equal(getLatestAgentRunForTask('task-1')?.status, 'failed');
 assert.match(state._testTasks[0].logs.at(-1)?.message || '', /exitCode=1/);

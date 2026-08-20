@@ -446,13 +446,21 @@ function persistLegacyAgentStatus(task: any, targetStatus: TaskStatus, reason: s
     saveTask(task);
     return task;
   }
-  return mutateTaskStatusWithLifecycle(task.id, targetStatus, (current) => ({
+  const persistedTask = mutateTaskStatusWithLifecycle(task.id, targetStatus, (current) => ({
     ...current,
     ...task,
     claim: current.claim,
     status: targetStatus,
     updatedAt: new Date().toISOString(),
   }), { reason }).task;
+  for (const key of Object.keys(task)) {
+    if (!Object.prototype.hasOwnProperty.call(persistedTask, key) || persistedTask[key] === undefined) delete task[key];
+  }
+  Object.assign(task, persistedTask);
+  for (const key of Object.keys(task)) {
+    if (task[key] === undefined) delete task[key];
+  }
+  return task;
 }
 
 function formatAgentCompletionLogMessage(payload: AgentCompletionPayload) {

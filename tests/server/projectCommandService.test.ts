@@ -18,6 +18,7 @@ const {
   getProjectCommandExecutionIdentity,
   prepareProjectCommandVerificationCandidateAsync,
   buildProjectCommandInfrastructureRecovery,
+  getProjectCommandDurableExecutionBudgetMs,
   resolveGradleRecoveryHeapPolicy,
   terminateCommandProcess,
 } = projectCommandService;
@@ -204,6 +205,24 @@ test('recovery profile audits capped timeout and Gradle worker/heap policy witho
   assert.equal(typeof recovery!.profile.heapFloorMb, 'number');
   assert.equal(typeof recovery!.profile.heapPolicyCeilingMb, 'number');
   assert.equal(['machine-policy', 'existing-larger-safe'].includes(String(recovery!.profile.heapSource)), true);
+});  
+
+test('durable run_project_command budget includes the one allowed infrastructure recovery attempt', () => {
+  const root = createProject('durable-execution-budget', {
+    typecheck: 'node scripts/pass.mjs',
+  });
+  fs.writeFileSync(path.join(root, 'scripts', 'pass.mjs'), 'process.exit(0);\n');
+  const state = stateFor(root);
+
+  assert.equal(getProjectCommandDurableExecutionBudgetMs(state, {
+    projectId: 'project-command', command: 'typecheck', timeoutMs: 100, infrastructureRetryPolicy: 'none',
+  }), 100);
+  assert.equal(getProjectCommandDurableExecutionBudgetMs(state, {
+    projectId: 'project-command', command: 'typecheck', timeoutMs: 100, infrastructureRetryPolicy: 'resource-safe-once',
+  }), 225);
+  assert.equal(getProjectCommandDurableExecutionBudgetMs(state, {
+    projectId: 'project-command', command: 'typecheck', timeoutMs: 300_000, infrastructureRetryPolicy: 'resource-safe-once',
+  }), 600_000, 'each attempt remains capped while the durable budget covers both attempts');
 });
 
 test('Windows command termination uses the exact process-tree terminator before root-signal fallback', () => {

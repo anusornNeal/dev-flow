@@ -64,6 +64,40 @@ test('claim and heartbeat are atomic and reject competing workers', () => {
   assert.equal(repo.heartbeatJob(job.jobId, 'worker-b', 30_000, 2_001), null);
 });
 
+test('recovery deadline wins over a fresh heartbeat once run_project_command exceeds its execution budget', () => {
+  db.prepare('DELETE FROM mcp_tool_jobs').run();
+  repo.clearRecentJobCache();
+  const root = fs.mkdtempSync(path.join(tempRoot, 'deadline-recovery-repo-'));
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({
+    type: 'module',
+    scripts: { typecheck: 'node -e "process.exit(0)"' },
+  }));
+  const state = { projectsCache: [{ id: 'deadline-project', name: 'Deadline', repoUrl: 'https://example.com/deadline', localPath: root }] } as any;
+  const nowMs = Date.now();
+  const job = repo.createJob(
+    `job-deadline-${nowMs}`,
+    'run_project_command',
+    { localPath: root, command: 'typecheck', timeoutMs: 20, infrastructureRetryPolicy: 'none', singleFlight: false },
+    `repo:${root}`,
+  );
+  const claimed = repo.claimJob(job.jobId, 'worker-live', 30_000, nowMs);
+  assert.ok(claimed?.leaseGeneration);
+  const heartbeat = repo.heartbeatJob(job.jobId, 'worker-live', 30_000, nowMs + 10, claimed.leaseGeneration);
+  assert.ok(heartbeat?.leaseExpiresAt);
+  assert.equal(Date.parse(heartbeat.leaseExpiresAt) > nowMs + 20_000, true, 'fixture heartbeat must remain fresh');
+
+  db.prepare('UPDATE mcp_tool_jobs SET started_at = ? WHERE job_id = ?').run(new Date(nowMs - 5_000).toISOString(), job.jobId);
+  repo.clearRecentJobCache();
+  const summary = jobService.__runDurableJobRecoveryPassForTests(state, nowMs + 20);
+  const terminal = repo.getJob(job.jobId);
+
+  assert.equal(summary.interrupted >= 1, true);
+  assert.equal(terminal?.status, 'timed_out');
+  assert.equal(terminal?.recoveryClassification, 'interrupted');
+  assert.match(String(terminal?.failureSummary || ''), /execution deadline/i);
+  assert.equal(repo.readJobResult(job.jobId)?.result?.code, 'JOB_EXECUTION_DEADLINE_EXCEEDED');
+});
+
 test('expired lease loses heartbeat and fenced-write authority before reaping', () => {
   const job = createJob('expired-authority');
   const claimed = repo.claimJob(job.jobId, 'worker-a', 1_000, 1_000);

@@ -21,6 +21,8 @@ const { clearToolCallRecords, recordToolCall, flushPerformanceTelemetry } = awai
 const { default: db } = await import('../../src/db/index.js');
 const { saveTask } = await import('../../src/server/repositories/taskRepository.js');
 const { createExecutionSessionRecord, queryExecutionSessions } = await import('../../src/server/repositories/executionSessionRepository.js');
+const sessionWorkspaces = await import('../../src/server/services/sessionWorkspaceService.js');
+const checkpoints = await import('../../src/server/services/executionCheckpointService.js');
 const {
   createJob,
   updateJobStatus,
@@ -98,6 +100,14 @@ function seedHealthExecution(id: string, taskId: string, workspaceId: string) {
     expiresAt: new Date(now.getTime() + 60_000).toISOString(),
     endedAt: null,
   });
+}
+
+function createHealthWorkspace(repo: string, sessionId: string, taskDisplayId: string) {
+  return sessionWorkspaces.createOrReuseSessionWorkspace(
+    { id: 'project-health', localPath: repo },
+    sessionId,
+    { taskDisplayId },
+  );
 }
 
 test('getWorkflowHealth returns ok for a clean repo', () => {
@@ -274,6 +284,81 @@ test('workspace-scoped health surfaces active execution ambiguity', () => {
   assert.equal(health.drift[0].code, 'MULTIPLE_ACTIVE_EXECUTIONS_FOR_WORKSPACE');
 });
 
+test('task-scoped health fails closed when matching claim and execution point at missing workspace metadata', () => {
+  const repo = createRepo('task-missing-workspace-metadata');
+  const workspace = createHealthWorkspace(repo, 'health-missing-metadata-session', 'DVF-HEALTH-MISSING-901');
+  sessionWorkspaces.cleanupSessionWorkspace(workspace.workspaceId, { force: true });
+  const workspaceId = workspace.workspaceId;
+  const task = seedHealthTask('task-health-missing-metadata', 'DVF-HEALTH-MISSING-901', {
+    workspaceId,
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  });
+  const execution = seedHealthExecution('exec-health-missing-metadata', task.id, workspaceId);
+  checkpoints.recordExecutionPendingOperationReference(execution.id, {
+    operationId: 'job-health-missing-workspace',
+    evidenceId: 'mcp-job:job-health-missing-workspace',
+    kind: 'mcp-tool-job:run_project_command',
+    status: 'running',
+  });
+
+  const before = JSON.stringify(queryExecutionSessions({ taskId: task.id, limit: 20 }));
+  const health: any = getChatGptHarnessHealthSnapshot(stateFor(repo), { projectId: 'project-health', taskId: task.displayId });
+  const after = JSON.stringify(queryExecutionSessions({ taskId: task.id, limit: 20 }));
+  const missing = health.drift.find((entry: any) => entry.code === 'WORKSPACE_METADATA_MISSING');
+
+  assert.equal(health.status, 'blocked');
+  assert.deepEqual(missing?.taskIds, [task.id]);
+  assert.deepEqual(missing?.workspaceIds, [workspaceId]);
+  assert.deepEqual(missing?.executionSessionIds, [execution.id]);
+  assert.equal(health.drift.some((entry: any) => entry.code === 'PENDING_DURABLE_OPERATIONS'), true);
+  assert.equal(after, before, 'health must not rotate or rewrite execution authority');
+});
+
+test('task-scoped health distinguishes metadata-present workspace root or Git identity failure', () => {
+  const repo = createRepo('task-invalid-workspace-root');
+  const workspace = createHealthWorkspace(repo, 'health-invalid-root-session', 'DVF-HEALTH-ROOT-902');
+  const task = seedHealthTask('task-health-invalid-root', 'DVF-HEALTH-ROOT-902', {
+    workspaceId: workspace.workspaceId,
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  });
+  const execution = seedHealthExecution('exec-health-invalid-root', task.id, workspace.workspaceId);
+  fs.rmSync(workspace.root, { recursive: true, force: true });
+
+  const health: any = getChatGptHarnessHealthSnapshot(stateFor(repo), { taskId: task.displayId });
+  const invalid = health.drift.find((entry: any) => entry.code === 'WORKSPACE_ROOT_OR_IDENTITY_INVALID');
+
+  assert.equal(health.status, 'blocked');
+  assert.deepEqual(invalid?.workspaceIds, [workspace.workspaceId]);
+  assert.deepEqual(invalid?.executionSessionIds, [execution.id]);
+  assert.equal(health.drift.some((entry: any) => entry.code === 'WORKSPACE_METADATA_MISSING'), false);
+});
+
+test('workspace-scoped health fails closed for a missing workspace id', () => {
+  const repo = createRepo('workspace-missing-id');
+  const workspaceId = 'ws-health-does-not-exist';
+  const health: any = getChatGptHarnessHealthSnapshot(stateFor(repo), { projectId: 'project-health', workspaceId });
+
+  assert.equal(health.scope, 'workspace');
+  assert.equal(health.status, 'blocked');
+  assert.equal(health.drift.some((entry: any) => entry.code === 'WORKSPACE_METADATA_MISSING'), true);
+  assert.equal(health.drift.some((entry: any) => entry.code === 'ACTIONABLE_WIP_WITHOUT_ACTIVE_CLAIM'), false);
+});
+
+test('valid exact workspace health is read-only and does not depend on active workspace acquisition', () => {
+  const repo = createRepo('workspace-valid-not-acquired');
+  const workspace = createHealthWorkspace(repo, 'health-valid-not-acquired-session', 'DVF-HEALTH-VALID-903');
+  const before = sessionWorkspaces.getSessionWorkspaceMetadataForRecovery(workspace.workspaceId);
+
+  const first: any = getChatGptHarnessHealthSnapshot(stateFor(repo), { projectId: 'project-health', workspaceId: workspace.workspaceId });
+  const second: any = getChatGptHarnessHealthSnapshot(stateFor(repo), { projectId: 'project-health', workspaceId: workspace.workspaceId });
+  const after = sessionWorkspaces.getSessionWorkspaceMetadataForRecovery(workspace.workspaceId);
+
+  assert.equal(first.status, 'idle');
+  assert.deepEqual(first.drift, []);
+  assert.deepEqual(second.drift, []);
+  assert.equal(after?.lastUsedAt, before?.lastUsedAt, 'health must not touch managed workspace metadata');
+});
+
 test('project-scoped health reports aggregate activity without fabricated execution', () => {
   const repo = createRepo('project-aggregate-health');
   seedHealthExecution('exec-health-project-active', 'task-health-project-active', 'ws-health-project-active');
@@ -283,7 +368,7 @@ test('project-scoped health reports aggregate activity without fabricated execut
   assert.equal(health.execution, undefined);
 });
 
-test('project-scoped health resolves claimed executions beyond the bounded task presentation slice', () => {
+test('project-scoped health resolves late claimed executions while surfacing missing workspace authority', () => {
   const repo = createRepo('project-aggregate-late-claim-health');
   for (let index = 0; index < 105; index += 1) {
     seedHealthTask(`task-health-filler-${index}`, `DVF-HEALTH-FILLER-${index}`);
@@ -301,11 +386,17 @@ test('project-scoped health resolves claimed executions beyond the bounded task 
 
   assert.equal(falseOrphan, undefined);
   assert.equal(health.aggregate.activeClaimCount >= 1, true);
+  const missingWorkspace = health.drift.find((entry: any) =>
+    entry.code === 'WORKSPACE_METADATA_MISSING'
+      && entry.workspaceIds?.includes('ws-health-late-claimed'));
+
+  assert.ok(missingWorkspace);
+  assert.equal(missingWorkspace.executionSessionIds?.includes('exec-health-late-claimed'), true);
   assert.equal(health.aggregate.truncated, true);
   assert.equal(health.drift.some((entry: any) => entry.code === 'PROJECT_LIFECYCLE_SCAN_TRUNCATED'), true);
 });
 
-test('project-scoped health keeps real orphan drift while ignoring a healthy late-page claim', () => {
+test('project-scoped health keeps real orphan drift without fabricating a late-page claim mismatch', () => {
   const repo = createRepo('project-aggregate-mixed-late-health');
   for (let index = 0; index < 105; index += 1) {
     seedHealthTask(`task-health-mixed-filler-${index}`, `DVF-HEALTH-MIXED-FILLER-${index}`);

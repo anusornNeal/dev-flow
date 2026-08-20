@@ -13,7 +13,11 @@ import { listLifecycleEmergencyOperations } from '../repositories/lifecycleEmerg
 import { buildChatGptHarnessEnvelope, findProjectByIdentifier, findTaskByIdentifier } from './taskService.js';
 import { getExecutionSessionOwnershipEpoch } from './executionSessionService.js';
 import { getLatestExecutionCheckpoint } from './executionCheckpointService.js';
-import { findSessionWorkspaceRecoveryCandidatesForTask, listSessionWorkspaceMetadataForRecovery } from './sessionWorkspaceService.js';
+import {
+  findSessionWorkspaceRecoveryCandidatesForTask,
+  getSessionWorkspaceMetadataForRecovery,
+  listSessionWorkspaceMetadataForRecovery,
+} from './sessionWorkspaceService.js';
 import { inspectWorkspaceRecovery } from './workspaceRecoveryService.js';
 import { HARNESS_POLICY_VERSION } from './harnessPolicyService.js';
 import { HARNESS_STRATEGY_VERSION } from './harnessStrategyService.js';
@@ -132,6 +136,34 @@ function actionableRecoveryWorkspace(workspaceId: string) {
     || inspection.state === 'integration-required';
 }
 
+function managedWorkspaceAuthorityDrift(
+  workspaceId: string,
+  context: Pick<HarnessHealthDrift, 'taskIds' | 'executionSessionIds'> = {},
+): HarnessHealthDrift | null {
+  const metadata = getSessionWorkspaceMetadataForRecovery(workspaceId);
+  if (!metadata) {
+    return {
+      code: 'WORKSPACE_METADATA_MISSING',
+      message: 'Lifecycle authority points at a managed workspace whose durable metadata cannot be read.',
+      ...context,
+      workspaceIds: [workspaceId],
+      nextAction: 'Fail closed and recover the exact managed workspace authority before lifecycle mutation.',
+    };
+  }
+
+  const inspection = inspectWorkspaceRecovery(workspaceId);
+  if (inspection.disposition === 'stale-registry') {
+    return {
+      code: 'WORKSPACE_ROOT_OR_IDENTITY_INVALID',
+      message: 'Managed workspace metadata exists, but its root, project root, or Git identity cannot be proven valid.',
+      ...context,
+      workspaceIds: [workspaceId],
+      nextAction: 'Inspect the exact managed workspace and recover its root/identity before lifecycle mutation.',
+    };
+  }
+  return null;
+}
+
 function baselineHarnessMetadata() {
   return {
     policy: { version: HARNESS_POLICY_VERSION, freshness: 'unavailable', policyId: null },
@@ -211,6 +243,18 @@ function taskHarnessHealth(state: AppState, taskId: string) {
         nextAction: 'Use scoped lifecycle reconciliation; do not infer authority from timestamps.',
       });
     }
+  }
+
+  const authoritativeWorkspaceIds = [...new Set([
+    claim?.workspaceId,
+    selected?.workspaceId,
+  ].filter(Boolean) as string[])];
+  for (const authoritativeWorkspaceId of authoritativeWorkspaceIds) {
+    const workspaceDrift = managedWorkspaceAuthorityDrift(authoritativeWorkspaceId, {
+      taskIds: [task.id],
+      executionSessionIds: selected && selected.workspaceId === authoritativeWorkspaceId ? [selected.id] : [],
+    });
+    if (workspaceDrift) drift.push(workspaceDrift);
   }
 
   const pending = pendingHealthOperations(selected);
@@ -356,6 +400,12 @@ function workspaceHarnessHealth(state: AppState, workspaceId: string, expectedTa
       });
     }
   }
+  const workspaceAuthorityIssue = managedWorkspaceAuthorityDrift(workspaceId, {
+    taskIds: task?.id ? [task.id] : session?.taskId ? [session.taskId] : activeClaimTasks.map((entry) => entry.id).slice(0, 20),
+    executionSessionIds: session ? [session.id] : [],
+  });
+  if (workspaceAuthorityIssue) drift.push(workspaceAuthorityIssue);
+
   const pending = pendingHealthOperations(session);
   if (pending.operationIds.length > 0) {
     drift.push({
@@ -368,7 +418,7 @@ function workspaceHarnessHealth(state: AppState, workspaceId: string, expectedTa
     });
   }
   let actionableWorkspace = false;
-  if (!claim && !session) {
+  if (!claim && !session && !workspaceAuthorityIssue) {
     try {
       actionableWorkspace = actionableRecoveryWorkspace(workspaceId);
     } catch {
@@ -479,6 +529,24 @@ function projectHarnessHealth(state: AppState, args: Record<string, any>) {
       });
     }
   }
+  const authoritativeWorkspaceContexts = new Map<string, { taskIds: Set<string>; executionSessionIds: Set<string> }>();
+  const rememberAuthoritativeWorkspace = (workspaceId: string, taskId?: string | null, executionSessionId?: string | null) => {
+    if (!workspaceId) return;
+    const existing = authoritativeWorkspaceContexts.get(workspaceId) || { taskIds: new Set<string>(), executionSessionIds: new Set<string>() };
+    if (taskId) existing.taskIds.add(taskId);
+    if (executionSessionId) existing.executionSessionIds.add(executionSessionId);
+    authoritativeWorkspaceContexts.set(workspaceId, existing);
+  };
+  for (const entry of activeClaims) rememberAuthoritativeWorkspace(entry.claim!.workspaceId, entry.task.id, null);
+  for (const session of executions.sessions) rememberAuthoritativeWorkspace(session.workspaceId || '', session.taskId, session.id);
+  for (const [workspaceId, context] of authoritativeWorkspaceContexts) {
+    const workspaceDrift = managedWorkspaceAuthorityDrift(workspaceId, {
+      taskIds: [...context.taskIds].slice(0, 20),
+      executionSessionIds: [...context.executionSessionIds].slice(0, 20),
+    });
+    if (workspaceDrift) drift.push(workspaceDrift);
+  }
+
   for (const [taskId, sessions] of byTask) {
     if (sessions.length > 1) drift.push({
       code: 'MULTIPLE_ACTIVE_EXECUTIONS_FOR_TASK',

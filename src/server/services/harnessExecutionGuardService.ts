@@ -146,7 +146,7 @@ function rulesRevision(project: any) {
   }
 }
 
-const RESTART_SENSITIVE_EXECUTION_STAGES = new Set(['implementing', 'verifying', 'repairing']);
+const RESTART_SENSITIVE_EXECUTION_STAGES = new Set(['implementing', 'verifying', 'repairing', 'verification-infra-blocked']);
 const MAX_RESTART_BLOCKERS = 10;
 
 function relatedWorkActivity(projectId: string | undefined, taskId: string | undefined) {
@@ -390,7 +390,7 @@ export function preflightHarnessExecutionGuard(_state: AppState, toolNameValue: 
     const stage = binding.session.lifecycle.stage;
     const allowedStages: Record<Exclude<HarnessExecutionAction, 'restart'>, readonly string[]> = {
       mutation: ['context-ready', 'plan-recorded', 'implementing', 'repairing'],
-      verification: ['implementing', 'repairing'],
+      verification: ['implementing', 'repairing', 'verification-infra-blocked'],
       commit: ['verifying'],
       finalization: ['committed'],
     };
@@ -459,6 +459,27 @@ function resultFailed(result: any) {
     || (typeof result?.exitCode === 'number' && result.exitCode !== 0);
 }
 
+type VerificationFailureClass = 'code' | 'infrastructure';
+
+const INFRASTRUCTURE_FAILURE_STATUSES = new Set(['cancelled', 'timed_out', 'interrupted', 'blocked', 'needs-recovery', 'conflict']);
+const INFRASTRUCTURE_FAILURE_CODE = /(CAPACITY|OUT_OF_MEMORY|\bOOM\b|TIMEOUT|TIMED_OUT|WORKER.*LEASE|TOOL.*CRASH|PROCESS.*KILL|INTERRUPT)/i;
+const INFRASTRUCTURE_FAILURE_OUTPUT = /(OutOfMemoryError|Java heap space|heap out of memory|allocation failed[^\n]*heap|killed process|process[^\n]*killed|worker lease|verification capacity|tool runner[^\n]*crash)/i;
+
+function classifyVerificationFailure(result: any): VerificationFailureClass {
+  if (result?.timedOut === true) return 'infrastructure';
+  if (boundedString(result?.signal)) return 'infrastructure';
+  const status = boundedString(result?.status);
+  if (status && INFRASTRUCTURE_FAILURE_STATUSES.has(status)) return 'infrastructure';
+  const code = boundedString(result?.code || result?.error?.code);
+  if (code && INFRASTRUCTURE_FAILURE_CODE.test(code)) return 'infrastructure';
+  const diagnostics = [result?.stderr, result?.stdout, result?.message, result?.error?.message]
+    .map((value) => boundedString(value) || '')
+    .join('\n')
+    .slice(0, 12_000);
+  if (diagnostics && INFRASTRUCTURE_FAILURE_OUTPUT.test(diagnostics)) return 'infrastructure';
+  return 'code';
+}
+
 function mutationHadAuthoritativeEffect(result: any) {
   if (!resultIsTerminal(result) || resultFailed(result) || result?.dryRun === true) return false;
   const effectFlags = ['changed', 'removed', 'moved', 'applied', 'created']
@@ -485,7 +506,7 @@ function transition(sessionId: string, toStage: ExecutionLifecycleTransitionInpu
   });
 }
 
-function recordVerificationFailureEvidence(sessionId: string, decision: HarnessExecutionGuardDecision, result: any) {
+function recordVerificationFailureEvidence(sessionId: string, decision: HarnessExecutionGuardDecision, result: any, failureClass: VerificationFailureClass) {
   return recordExecutionSessionEvidence(sessionId, [{
     evidenceId: `harness:${decision.operationId}:verification-failure`,
     kind: 'verification-result',
@@ -497,6 +518,9 @@ function recordVerificationFailureEvidence(sessionId: string, decision: HarnessE
       status: typeof result?.status === 'string' ? result.status : null,
       exitCode: typeof result?.exitCode === 'number' ? result.exitCode : null,
       timedOut: result?.timedOut === true,
+      signal: boundedString(result?.signal),
+      failureClass,
+      sourceRepairRequired: failureClass === 'code',
       recoveryRequired: true,
     },
   }])[0] || null;
@@ -521,8 +545,24 @@ export function recordHarnessExecutionOutcome(decision: HarnessExecutionGuardDec
     if (!current) return null;
 
     if (resultFailed(result)) {
-      recordVerificationFailureEvidence(sessionId, decision, result);
+      const failureClass = classifyVerificationFailure(result);
+      recordVerificationFailureEvidence(sessionId, decision, result, failureClass);
       const batchState = getExecutionVerificationBatchState(sessionId);
+
+      if (failureClass === 'infrastructure') {
+        if (current.session.lifecycle.stage === 'implementing') {
+          transition(sessionId, 'verifying', 'verification-result-observed', decision, 'verification', 'verification-result');
+          current = getTaskExecutionMutationBinding({ workspaceId: decision.execution.workspaceId });
+        }
+        if (current?.session.lifecycle.stage === 'verifying' || current?.session.lifecycle.stage === 'repairing') {
+          return transition(sessionId, 'verification-infra-blocked', 'verification-infrastructure-failure-recovery-required', decision, 'infra-blocked', 'verification-result');
+        }
+        return current?.session.lifecycle || null;
+      }
+
+      if (current.session.lifecycle.stage === 'verification-infra-blocked') {
+        return transition(sessionId, 'repairing', 'verification-recovery-found-code-failure', decision, 'repair', 'verification-result');
+      }
       if ((batchState?.status === 'failed' || batchState?.status === 'stale') && current.session.lifecycle.stage === 'implementing') {
         return transition(sessionId, 'repairing', 'verification-batch-failed-repair-required', decision, 'repair', 'verification-result');
       }
@@ -536,7 +576,7 @@ export function recordHarnessExecutionOutcome(decision: HarnessExecutionGuardDec
       return current?.session.lifecycle || null;
     }
 
-    if (current.session.lifecycle.stage === 'implementing' || current.session.lifecycle.stage === 'repairing') {
+    if (current.session.lifecycle.stage === 'implementing' || current.session.lifecycle.stage === 'repairing' || current.session.lifecycle.stage === 'verification-infra-blocked') {
       const ownership = getExecutionOwnershipState(sessionId, { repoRoot: current.workspace.root });
       if (ownership.verificationFresh !== true) return current.session.lifecycle;
       return transition(sessionId, 'verifying', 'verification-result-observed', decision, 'verification', 'verification-result');

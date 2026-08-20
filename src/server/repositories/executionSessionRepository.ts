@@ -3,7 +3,7 @@ import db, { withDbTransaction } from '../../db/index.js';
 export const EXECUTION_SESSION_STATUSES = ['active', 'completed', 'cancelled', 'expired'] as const;
 export type ExecutionSessionStatus = typeof EXECUTION_SESSION_STATUSES[number];
 
-export const EXECUTION_LIFECYCLE_STAGES = ['compatibility', 'created', 'context-ready', 'plan-recorded', 'implementing', 'verifying', 'repairing', 'committed', 'finalized'] as const;
+export const EXECUTION_LIFECYCLE_STAGES = ['compatibility', 'created', 'context-ready', 'plan-recorded', 'implementing', 'verifying', 'repairing', 'verification-infra-blocked', 'committed', 'finalized'] as const;
 export type ExecutionLifecycleStage = typeof EXECUTION_LIFECYCLE_STAGES[number];
 
 export interface ExecutionLifecycleTransition {

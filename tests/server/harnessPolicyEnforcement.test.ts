@@ -253,6 +253,47 @@ test('execution guard composes policy, ownership, lifecycle, retry identity, and
   }
 });
 
+test('verification OOM preserves execution for verification-only recovery', () => {
+  resetSessionWorkspaceRuntimeForTests();
+  const repoRoot = createRepo('verification-oom-repo');
+  const project = { id: 'project-verification-oom', name: 'Verification OOM', repoUrl: 'https://example.com/verification-oom', localPath: repoRoot };
+  createProject(project);
+  const now = new Date().toISOString();
+  const task = {
+    id: 'task-verification-oom', displayId: 'DVF-HARNESS-OOM', title: 'Verification OOM fixture',
+    description: 'Keep ownership after infrastructure verification failure.', projectId: project.id,
+    status: 'todo', priority: 'high', category: 'backend', tags: [], targetFiles: ['value.txt'],
+    checklist: [], logs: [], bugs: [], images: [], createdAt: now, updatedAt: now,
+  } as any;
+  saveTask(task);
+  const state = { projectsCache: [project], countersCache: {}, skillsRegistry: [] } as any;
+  const claimed = claimTaskForSession(task.id, { sessionId: 'verification-oom-session', ownerKind: 'chat', ownerLabel: 'OOM test' });
+  const workspaceId = claimed.claim.workspaceId;
+  try {
+    const binding = executionSessions.getTaskExecutionMutationBinding({ workspaceId })!;
+    executionSessions.recordTaskExecutionContextReady({ workspaceId }, { contextHandle: 'ctx-verification-oom', repoRevision: binding.session.repoRevision, contextPlanIdentity: 'plan-verification-oom' });
+    executionSessions.recordExecutionLifecycleTransition(binding.session.id, { toStage: 'implementing', reasonCode: 'oom-fixture-mutation', evidence: { id: 'oom-fixture-mutation', kind: 'owned-change', status: 'completed' } });
+    const verification = preflightHarnessExecutionGuard(state, 'run_project_command', { workspaceId, command: 'test-focused', harnessOperationId: 'verification-oom' });
+    assert.equal(verification.allowed, true);
+    recordHarnessExecutionOutcome(verification, { ok: false, status: 'timed_out', timedOut: true, signal: 'SIGTERM', stderr: 'java.lang.OutOfMemoryError: Java heap space' });
+    const current = executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)!;
+    assert.equal(current.lifecycle.stage, 'verification-infra-blocked');
+    const failureEvidence = executionSessions.getExecutionSessionState(current.id).evidence.find((entry: any) => entry.kind === 'verification-result');
+    assert.equal(failureEvidence?.metadata?.failureClass, 'infrastructure');
+    const mutation = preflightHarnessExecutionGuard(state, 'write_local_file', { workspaceId, filePath: 'value.txt' });
+    assert.equal(mutation.allowed, false);
+    const recovery = preflightHarnessExecutionGuard(state, 'run_project_command', { workspaceId, command: 'test-focused', harnessOperationId: 'verification-oom-recovery' });
+    assert.equal(recovery.allowed, true);
+    assert.equal(recovery.execution?.stage, 'verification-infra-blocked');
+    const commit = preflightHarnessExecutionGuard(state, 'commit_task_owned_changes', { workspaceId, taskId: task.id, message: 'blocked' });
+    assert.equal(commit.allowed, false);
+    const finalization = preflightHarnessExecutionGuard(state, 'finalize_task_workspace', { workspaceId, taskId: task.id });
+    assert.equal(finalization.allowed, false);
+  } finally {
+    cleanupSessionWorkspace(workspaceId);
+  }
+});
+
 test('incomplete sequential verification batch fences mutation but admits the remaining verification member', () => {
   resetSessionWorkspaceRuntimeForTests();
   const repoRoot = createRepo('sequential-batch-guard-repo');

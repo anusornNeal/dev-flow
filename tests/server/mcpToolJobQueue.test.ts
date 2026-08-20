@@ -1319,7 +1319,7 @@ test('mcpToolJobService - four independent projects make fair progress while one
   }
 });
 
-test('mcpToolJobService - queued heavy verification yields to newer fast verification when one slot is available', async () => {
+test('mcpToolJobService - fast verification uses spare capacity while heavy verification stays serialized', async () => {
   const root = makeTempRepo('resource-aware-fast-lane');
   fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({
     type: 'module',
@@ -1372,11 +1372,12 @@ test('mcpToolJobService - queued heavy verification yields to newer fast verific
 
     gates.fast.resolve();
     await waitForStatus(fast.jobId, 'succeeded');
-    await waitUntil(() => starts.includes('heavy2'), 'Expected heavy verification to start when the fast slot is released');
+    assert.strictEqual(starts.includes('heavy2'), false, 'second heavy verification must remain serialized behind the active heavy job');
 
     gates.heavy1.resolve();
-    gates.heavy2.resolve();
     await waitForStatus(heavy1.jobId, 'succeeded');
+    await waitUntil(() => starts.includes('heavy2'), 'Expected second heavy verification to start after the active heavy job releases capacity');
+    gates.heavy2.resolve();
     await waitForStatus(heavy2.jobId, 'succeeded');
   } finally {
     Object.values(gates).forEach((gate) => gate.resolve());

@@ -283,6 +283,51 @@ test('project-scoped health reports aggregate activity without fabricated execut
   assert.equal(health.execution, undefined);
 });
 
+test('project-scoped health resolves claimed executions beyond the bounded task presentation slice', () => {
+  const repo = createRepo('project-aggregate-late-claim-health');
+  for (let index = 0; index < 105; index += 1) {
+    seedHealthTask(`task-health-filler-${index}`, `DVF-HEALTH-FILLER-${index}`);
+  }
+  const task = seedHealthTask('task-health-late-claimed', 'DVF-HEALTH-LATE-CLAIMED', {
+    workspaceId: 'ws-health-late-claimed',
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  });
+  seedHealthExecution('exec-health-late-claimed', task.id, 'ws-health-late-claimed');
+
+  const health: any = getChatGptHarnessHealthSnapshot(stateFor(repo), { projectId: 'project-health' });
+  const falseOrphan = health.drift.find((entry: any) =>
+    entry.code === 'ACTIVE_EXECUTION_WITHOUT_ACTIVE_CLAIM'
+      && entry.executionSessionIds?.includes('exec-health-late-claimed'));
+
+  assert.equal(falseOrphan, undefined);
+  assert.equal(health.aggregate.activeClaimCount >= 1, true);
+  assert.equal(health.aggregate.truncated, true);
+  assert.equal(health.drift.some((entry: any) => entry.code === 'PROJECT_LIFECYCLE_SCAN_TRUNCATED'), true);
+});
+
+test('project-scoped health keeps real orphan drift while ignoring a healthy late-page claim', () => {
+  const repo = createRepo('project-aggregate-mixed-late-health');
+  for (let index = 0; index < 105; index += 1) {
+    seedHealthTask(`task-health-mixed-filler-${index}`, `DVF-HEALTH-MIXED-FILLER-${index}`);
+  }
+  const claimedTask = seedHealthTask('task-health-mixed-late-claimed', 'DVF-HEALTH-MIXED-LATE-CLAIMED', {
+    workspaceId: 'ws-health-mixed-late-claimed',
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  });
+  seedHealthExecution('exec-health-mixed-late-claimed', claimedTask.id, 'ws-health-mixed-late-claimed');
+  const orphanTask = seedHealthTask('task-health-mixed-orphan', 'DVF-HEALTH-MIXED-ORPHAN');
+  seedHealthExecution('exec-health-mixed-orphan', orphanTask.id, 'ws-health-mixed-orphan');
+
+  const before = JSON.stringify(queryExecutionSessions({ projectId: 'project-health', status: 'active', limit: 500 }));
+  const health: any = getChatGptHarnessHealthSnapshot(stateFor(repo), { projectId: 'project-health' });
+  const after = JSON.stringify(queryExecutionSessions({ projectId: 'project-health', status: 'active', limit: 500 }));
+  const orphanDrift = health.drift.filter((entry: any) => entry.code === 'ACTIVE_EXECUTION_WITHOUT_ACTIVE_CLAIM');
+
+  assert.equal(orphanDrift.some((entry: any) => entry.executionSessionIds?.includes('exec-health-mixed-late-claimed')), false);
+  assert.equal(orphanDrift.some((entry: any) => entry.executionSessionIds?.includes('exec-health-mixed-orphan')), true);
+  assert.equal(after, before);
+});
+
 test('unresolved task selector is blocked instead of represented as idle', () => {
   const repo = createRepo('missing-task-health');
   const health: any = getChatGptHarnessHealthSnapshot(stateFor(repo), { projectId: 'project-health', taskId: 'DVF-MISSING' });

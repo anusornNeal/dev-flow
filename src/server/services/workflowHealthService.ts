@@ -419,8 +419,9 @@ function projectHarnessHealth(state: AppState, args: Record<string, any>) {
   }
 
   const allProjectTasks = getTasks().filter((task) => task.projectId === project.id);
-  const tasks = allProjectTasks.slice(0, 100);
-  const activeClaims = tasks.map((task) => ({ task, claim: activeHealthClaim(task) })).filter((entry) => Boolean(entry.claim));
+  const boundedTaskPresentation = allProjectTasks.slice(0, 100);
+  const projectTasksById = new Map(allProjectTasks.map((task) => [task.id, task]));
+  const activeClaims = allProjectTasks.map((task) => ({ task, claim: activeHealthClaim(task) })).filter((entry) => Boolean(entry.claim));
   const executions = queryExecutionSessions({ projectId: project.id, status: 'active', limit: 50 });
   const drift: HarnessHealthDrift[] = [];
   const byTask = new Map<string, ExecutionSessionRecord[]>();
@@ -432,7 +433,7 @@ function projectHarnessHealth(state: AppState, args: Record<string, any>) {
     if (session.workspaceId) byWorkspace.set(session.workspaceId, [...(byWorkspace.get(session.workspaceId) || []), session]);
     const pending = pendingHealthOperations(session);
     pendingOperationCount += pending.operationIds.length;
-    const task = session.taskId ? tasks.find((candidate) => candidate.id === session.taskId) : null;
+    const task = session.taskId ? projectTasksById.get(session.taskId) || null : null;
     const claim = task ? activeHealthClaim(task) : null;
     if (!claim || claim.workspaceId !== session.workspaceId) {
       drift.push({
@@ -509,7 +510,7 @@ function projectHarnessHealth(state: AppState, args: Record<string, any>) {
   const truncated = executions.truncated
     || registry.truncated
     || registry.workspaces.length > workspaceInspectionCandidates.length
-    || allProjectTasks.length > tasks.length;
+    || allProjectTasks.length > boundedTaskPresentation.length;
   if (truncated) drift.push({
     code: 'PROJECT_LIFECYCLE_SCAN_TRUNCATED',
     message: 'Project aggregate exceeded a bounded lifecycle scan and cannot prove a complete all-clear.',

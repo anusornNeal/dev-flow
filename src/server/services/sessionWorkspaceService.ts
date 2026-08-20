@@ -2,9 +2,13 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import db from '../../db/index.js';
 import { getDevFlowWorkspacesDir } from '../../lib/devFlowPaths';
-import { createApiError } from './api';
 import type { GitWorkflowPolicy } from '../../types.js';
+import { listExecutionSessionsForWorkspace } from '../repositories/executionSessionRepository.js';
+import { createApiError } from './api';
+import { getLatestExecutionCheckpoint } from './executionCheckpointService.js';
+import { withSyncLock } from './lockAndIdempotencyService.js';
 import { validateGitWorkflowPolicy } from './projectGitWorkflowPolicyService';
 
 export type SessionWorkspaceState = 'ready' | 'active' | 'integration-required';
@@ -36,6 +40,109 @@ const workspaceLifecycleCounters = {
   cleaned: 0,
   cleanupBlocked: 0,
 };
+
+let cleanupBeforeRemovalHookForTests: ((workspace: SessionWorkspace) => void) | null = null;
+
+type WorkspaceLifecycleAuthoritySnapshot = {
+  activeClaims: Array<{ taskId: string; displayId: string | null; expiresAt: string | null }>;
+  activeExecutions: Array<{ sessionId: string; taskId: string | null }>;
+  pendingOperations: Array<{ sessionId: string; operationId: string; kind: string; status: string }>;
+};
+
+function parseStoredClaim(value: unknown) {
+  if (!value) return null;
+  if (typeof value === 'object') return value as Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(String(value));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
+}
+
+function pendingOperationsForExecution(sessionId: string) {
+  const checkpoint = getLatestExecutionCheckpoint(sessionId);
+  return (checkpoint?.pendingOperations || [])
+    .filter((entry) => entry.status === 'accepted' || entry.status === 'running')
+    .map((entry) => ({
+      sessionId,
+      operationId: String(entry.operationId),
+      kind: String(entry.kind),
+      status: String(entry.status),
+    }));
+}
+
+function readWorkspaceLifecycleAuthority(workspace: SessionWorkspace): WorkspaceLifecycleAuthoritySnapshot {
+  try {
+    const nowMs = Date.now();
+    const taskRows = db.prepare('SELECT id, displayId, claim FROM tasks WHERE projectId = ? AND claim IS NOT NULL').all(workspace.projectId) as Array<{ id: string; displayId?: string | null; claim?: unknown }>;
+    const activeClaims = taskRows.flatMap((row) => {
+      const claim = parseStoredClaim(row.claim);
+      if (!claim || String(claim.workspaceId || '').trim() !== workspace.workspaceId) return [];
+      const expiresAt = String(claim.expiresAt || '').trim();
+      const expiresAtMs = Date.parse(expiresAt);
+      if (!Number.isFinite(expiresAtMs) || expiresAtMs <= nowMs) return [];
+      return [{ taskId: String(row.id), displayId: row.displayId == null ? null : String(row.displayId), expiresAt: expiresAt || null }];
+    });
+    const executions = listExecutionSessionsForWorkspace(workspace.workspaceId);
+    const activeExecutions = executions
+      .filter((entry) => entry.status === 'active')
+      .map((entry) => ({ sessionId: entry.id, taskId: entry.taskId }));
+    const pendingOperations = executions.flatMap((entry) => pendingOperationsForExecution(entry.id));
+    return { activeClaims, activeExecutions, pendingOperations };
+  } catch (error: any) {
+    throw createApiError(409, 'WORKSPACE_LIFECYCLE_AUTHORITY_UNAVAILABLE', 'Workspace lifecycle authority could not be proven safe for cleanup.', {
+      affectedId: workspace.workspaceId,
+      retryable: true,
+      details: { cause: String(error?.message || error || 'unknown lifecycle authority read failure') },
+    });
+  }
+}
+
+function assertWorkspaceLifecycleAuthorityReleased(workspace: SessionWorkspace) {
+  const authority = readWorkspaceLifecycleAuthority(workspace);
+  if (authority.activeClaims.length === 0 && authority.activeExecutions.length === 0 && authority.pendingOperations.length === 0) return authority;
+  throw createApiError(409, 'WORKSPACE_LIFECYCLE_AUTHORITY_ACTIVE', 'Workspace still has durable lifecycle authority or pending operations and cannot be removed.', {
+    affectedId: workspace.workspaceId,
+    retryable: true,
+    details: authority,
+  });
+}
+
+function assertWorkspaceLifecycleAuthorityReleasedForCleanup(workspace: SessionWorkspace) {
+  try {
+    return assertWorkspaceLifecycleAuthorityReleased(workspace);
+  } catch (error) {
+    workspaceLifecycleCounters.cleanupBlocked += 1;
+    throw error;
+  }
+}
+
+function assertManagedBranchLifecycleAuthorityReleased(projectId: string, branch: string) {
+  try {
+    const rows = db.prepare('SELECT id, taskId, status FROM execution_sessions WHERE projectId = ? AND branch = ?').all(projectId, branch) as Array<{ id: string; taskId?: string | null; status?: string | null }>;
+    const activeExecutions = rows
+      .filter((entry) => String(entry.status || '') === 'active')
+      .map((entry) => ({ sessionId: String(entry.id), taskId: entry.taskId == null ? null : String(entry.taskId) }));
+    const pendingOperations = rows.flatMap((entry) => pendingOperationsForExecution(String(entry.id)));
+    if (activeExecutions.length === 0 && pendingOperations.length === 0) return;
+    throw createApiError(409, 'WORKSPACE_LIFECYCLE_AUTHORITY_ACTIVE', 'Managed branch still has durable lifecycle authority or pending operations and cannot be removed.', {
+      retryable: true,
+      details: { projectId, branch, activeExecutions, pendingOperations },
+    });
+  } catch (error: any) {
+    if (error?.payload?.code === 'WORKSPACE_LIFECYCLE_AUTHORITY_ACTIVE') throw error;
+    throw createApiError(409, 'WORKSPACE_LIFECYCLE_AUTHORITY_UNAVAILABLE', 'Managed branch lifecycle authority could not be proven safe for cleanup.', {
+      retryable: true,
+      details: { projectId, branch, cause: String(error?.message || error || 'unknown lifecycle authority read failure') },
+    });
+  }
+}
+
+export function __setSessionWorkspaceCleanupBeforeRemovalHookForTests(hook: ((workspace: SessionWorkspace) => void) | null) {
+  cleanupBeforeRemovalHookForTests = hook;
+}
+
 
 function safeSegment(value: string) {
   const normalized = value.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48);
@@ -469,9 +576,10 @@ export function releaseSessionWorkspace(workspaceId: string) {
   if (workspace && next === 0 && workspace.state === 'active') writeMetadata({ ...workspace, state: 'ready' });
 }
 
-export function cleanupSessionWorkspace(workspaceId: string, options: { force?: boolean } = {}) {
+function cleanupSessionWorkspaceLocked(workspaceId: string, options: { force?: boolean } = {}) {
   const workspace = readMetadata(String(workspaceId || '').trim());
   if (!workspace) return { removed: false, reason: 'not-found' };
+  assertWorkspaceLifecycleAuthorityReleasedForCleanup(workspace);
   if (!options.force && (activeWorkspaceRefs.get(workspaceId) || 0) > 0) {
     workspaceLifecycleCounters.cleanupBlocked += 1;
     throw createApiError(409, 'WORKSPACE_ACTIVE', 'Workspace is active and cannot be removed by normal cleanup.', { affectedId: workspaceId });
@@ -501,6 +609,10 @@ export function cleanupSessionWorkspace(workspaceId: string, options: { force?: 
       });
     }
   }
+
+  cleanupBeforeRemovalHookForTests?.({ ...workspace });
+  assertWorkspaceLifecycleAuthorityReleasedForCleanup(workspace);
+
   if (fs.existsSync(root)) {
     const result = runGit(workspace.projectRoot, ['worktree', 'remove', ...(options.force ? ['--force'] : []), root], true);
     if (result.status !== 0) {
@@ -514,6 +626,31 @@ export function cleanupSessionWorkspace(workspaceId: string, options: { force?: 
   activeWorkspaceRefs.delete(workspaceId);
   workspaceLifecycleCounters.cleaned += 1;
   return { removed: true, workspaceId, branch: workspace.branch, branchRemoved: branchCleanup.removed, branchDisposition: branchCleanup.disposition };
+}
+
+export function withSessionWorkspaceLifecycleCleanupGuard<T>(
+  workspaceIdValue: string,
+  operation: (context: { workspace: SessionWorkspace; cleanup: (options?: { force?: boolean }) => any }) => T,
+) {
+  const workspaceId = String(workspaceIdValue || '').trim();
+  if (!workspaceId) throw createApiError(400, 'WORKSPACE_ID_REQUIRED', 'workspaceId is required for lifecycle-guarded cleanup.');
+  const initial = readMetadata(workspaceId);
+  if (!initial) throw createApiError(404, 'WORKSPACE_NOT_FOUND', `Workspace '${workspaceId}' was not found.`, { affectedId: workspaceId });
+  return withSyncLock(`task-claim:${initial.projectId}`, () => {
+    const workspace = readMetadata(workspaceId);
+    if (!workspace) throw createApiError(404, 'WORKSPACE_NOT_FOUND', `Workspace '${workspaceId}' was not found.`, { affectedId: workspaceId });
+    assertWorkspaceLifecycleAuthorityReleasedForCleanup(workspace);
+    return operation({
+      workspace: { ...workspace },
+      cleanup: (options = {}) => cleanupSessionWorkspaceLocked(workspaceId, options),
+    });
+  });
+}
+
+export function cleanupSessionWorkspace(workspaceId: string, options: { force?: boolean } = {}) {
+  const cleanId = String(workspaceId || '').trim();
+  if (!readMetadata(cleanId)) return { removed: false, reason: 'not-found' };
+  return withSessionWorkspaceLifecycleCleanupGuard(cleanId, ({ cleanup }) => cleanup(options));
 }
 
 export function markSessionWorkspaceIntegrationRequired(workspaceId: string, required = true) {
@@ -539,28 +676,68 @@ export function cleanupManagedWorkspaceBranches(
   options: { baseBranch?: string; dryRun?: boolean } = {},
 ) {
   if (!project?.id) throw createApiError(400, 'PROJECT_ID_REQUIRED', 'project.id is required to clean managed workspace branches.');
-  const projectRoot = ensureRepository(path.resolve(String(project.localPath || '')));
-  const baseBranch = String(options.baseBranch || currentBranch(projectRoot)).trim();
-  const prefix = managedBranchPrefix(project.id);
-  const refs = runGit(projectRoot, ['for-each-ref', '--format=%(refname:short)', `refs/heads/${prefix}`], true);
-  const branches = (refs.stdout || '').split(/\r?\n/).map((entry) => entry.trim()).filter(Boolean);
-  const removed: Array<{ branch: string; disposition: string }> = [];
-  const preserved: Array<{ branch: string; disposition: string }> = [];
-  for (const branchName of branches) {
-    const disposition = getManagedBranchDisposition(projectRoot, project.id, branchName, baseBranch);
-    if (!disposition.safe) {
-      preserved.push({ branch: branchName, disposition: disposition.reason });
-      continue;
+  return withSyncLock(`task-claim:${project.id}`, () => {
+    const projectRoot = ensureRepository(path.resolve(String(project.localPath || '')));
+    const baseBranch = String(options.baseBranch || currentBranch(projectRoot)).trim();
+    const prefix = managedBranchPrefix(project.id);
+    const refs = runGit(projectRoot, ['for-each-ref', '--format=%(refname:short)', `refs/heads/${prefix}`], true);
+    const branches = (refs.stdout || '').split(/\r?\n/).map((entry) => entry.trim()).filter(Boolean);
+    const workspaceByBranch = new Map(
+      Array.from(getSessionWorkspaceRegistrySnapshot().values())
+        .filter((workspace) => workspace.projectId === project.id)
+        .map((workspace) => [workspace.branch, workspace] as const),
+    );
+    const removed: Array<{ branch: string; disposition: string }> = [];
+    const preserved: Array<{ branch: string; disposition: string }> = [];
+
+    for (const branchName of branches) {
+      const workspace = workspaceByBranch.get(branchName);
+      if (workspace && (activeWorkspaceRefs.get(workspace.workspaceId) || 0) > 0) {
+        preserved.push({ branch: branchName, disposition: 'workspace-active' });
+        continue;
+      }
+      try {
+        if (workspace) assertWorkspaceLifecycleAuthorityReleased(workspace);
+        assertManagedBranchLifecycleAuthorityReleased(project.id, branchName);
+      } catch (error: any) {
+        const code = error?.payload?.code || error?.code;
+        if (code === 'WORKSPACE_LIFECYCLE_AUTHORITY_ACTIVE' || code === 'WORKSPACE_LIFECYCLE_AUTHORITY_UNAVAILABLE') {
+          workspaceLifecycleCounters.cleanupBlocked += 1;
+          preserved.push({ branch: branchName, disposition: code === 'WORKSPACE_LIFECYCLE_AUTHORITY_ACTIVE' ? 'lifecycle-authority-active' : 'lifecycle-authority-unavailable' });
+          continue;
+        }
+        throw error;
+      }
+
+      const disposition = getManagedBranchDisposition(projectRoot, project.id, branchName, baseBranch);
+      if (!disposition.safe) {
+        preserved.push({ branch: branchName, disposition: disposition.reason });
+        continue;
+      }
+      if (options.dryRun) {
+        removed.push({ branch: branchName, disposition: disposition.reason });
+        continue;
+      }
+
+      try {
+        if (workspace) assertWorkspaceLifecycleAuthorityReleased(workspace);
+        assertManagedBranchLifecycleAuthorityReleased(project.id, branchName);
+      } catch (error: any) {
+        const code = error?.payload?.code || error?.code;
+        if (code === 'WORKSPACE_LIFECYCLE_AUTHORITY_ACTIVE' || code === 'WORKSPACE_LIFECYCLE_AUTHORITY_UNAVAILABLE') {
+          workspaceLifecycleCounters.cleanupBlocked += 1;
+          preserved.push({ branch: branchName, disposition: code === 'WORKSPACE_LIFECYCLE_AUTHORITY_ACTIVE' ? 'lifecycle-authority-active' : 'lifecycle-authority-unavailable' });
+          continue;
+        }
+        throw error;
+      }
+
+      const deletion = runGit(projectRoot, ['branch', '-D', branchName], true);
+      if (deletion.status === 0) removed.push({ branch: branchName, disposition: disposition.reason });
+      else preserved.push({ branch: branchName, disposition: 'delete-failed' });
     }
-    if (options.dryRun) {
-      removed.push({ branch: branchName, disposition: disposition.reason });
-      continue;
-    }
-    const deletion = runGit(projectRoot, ['branch', '-D', branchName], true);
-    if (deletion.status === 0) removed.push({ branch: branchName, disposition: disposition.reason });
-    else preserved.push({ branch: branchName, disposition: 'delete-failed' });
-  }
-  return { projectId: project.id, baseBranch, dryRun: options.dryRun === true, removed, preserved };
+    return { projectId: project.id, baseBranch, dryRun: options.dryRun === true, removed, preserved };
+  });
 }
 
 export function getSessionWorkspaceMetrics() {

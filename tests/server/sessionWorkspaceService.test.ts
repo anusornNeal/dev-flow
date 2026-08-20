@@ -4,8 +4,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import db from '../../src/db/index.js';
+import { executeAllMigrations } from '../../src/db/migrations/index.js';
+import { createExecutionSessionRecord, updateExecutionSessionRecord } from '../../src/server/repositories/executionSessionRepository.js';
+import { recordExecutionPendingOperationReference, reconcileExecutionPendingOperationReference } from '../../src/server/services/executionCheckpointService.js';
 import {
+  __setSessionWorkspaceCleanupBeforeRemovalHookForTests,
   classifySessionWorkspaceTaskMatch,
+  cleanupManagedWorkspaceBranches,
   cleanupSessionWorkspace,
   createOrReuseSessionWorkspace,
   findSessionWorkspaceRecoveryCandidatesForTask,
@@ -13,6 +19,11 @@ import {
   resolveSessionWorkspace,
   resetSessionWorkspaceRuntimeForTests,
 } from '../../src/server/services/sessionWorkspaceService.js';
+
+const lifecycleDbRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-workspace-lifecycle-db-'));
+process.env.DEVFLOW_DB_PATH = path.join(lifecycleDbRoot, 'devflow.db');
+executeAllMigrations();
+let lifecycleFixtureCounter = 0;
 
 function git(root: string, args: string[]) {
   const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', shell: false });
@@ -33,6 +44,53 @@ function createRepo() {
 
 function project(root: string) {
   return { id: 'project-workspace-test', name: 'Workspace Test', localPath: root, repoUrl: 'https://example.test/workspace.git' } as any;
+}
+
+function addActiveClaim(workspace: { workspaceId: string }, label: string) {
+  lifecycleFixtureCounter += 1;
+  const taskId = `workspace-cleanup-task-${label}-${lifecycleFixtureCounter}`;
+  const now = new Date().toISOString();
+  const claim = {
+    ownerKind: 'chat',
+    ownerLabel: `test-${label}`,
+    sessionIdHash: `hash-${label}`,
+    workspaceId: workspace.workspaceId,
+    ownershipEpochId: `epoch-${label}-${lifecycleFixtureCounter}`,
+    claimedAt: now,
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  };
+  db.prepare('INSERT INTO tasks (id, displayId, title, projectId, status, createdAt, updatedAt, claim) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(taskId, `TEST-${lifecycleFixtureCounter}`, `Lifecycle ${label}`, 'project-workspace-test', 'in-progress', now, now, JSON.stringify(claim));
+  return taskId;
+}
+
+function removeLifecycleTask(taskId: string) {
+  db.prepare('DELETE FROM tasks WHERE id = ?').run(taskId);
+}
+
+function createWorkspaceExecution(workspace: { workspaceId: string; projectId: string; branch: string; baseRevision: string }, label: string, status: 'active' | 'cancelled' | 'completed' = 'active') {
+  lifecycleFixtureCounter += 1;
+  const now = new Date().toISOString();
+  return createExecutionSessionRecord({
+    id: `workspace-cleanup-exec-${label}-${lifecycleFixtureCounter}`,
+    projectId: workspace.projectId,
+    taskId: null,
+    workspaceId: workspace.workspaceId,
+    branch: workspace.branch,
+    baseRevision: workspace.baseRevision,
+    repoRevision: workspace.baseRevision,
+    status,
+    contextHandle: null,
+    createdAt: now,
+    updatedAt: now,
+    expiresAt: null,
+    endedAt: status === 'active' ? null : now,
+  });
+}
+
+function completeWorkspaceExecution(sessionId: string) {
+  const now = new Date().toISOString();
+  updateExecutionSessionRecord(sessionId, { status: 'completed', updatedAt: now, endedAt: now });
 }
 
 test('two session ids create distinct opaque workspaces and same session reuses its worktree', () => {
@@ -170,6 +228,119 @@ test('normal cleanup refuses dirty workspace and clean cleanup removes worktree'
   assert.equal(result.removed, true);
   assert.equal(result.branchRemoved, true);
   assert.equal(fs.existsSync(workspace.root), false);
+  assert.notEqual(spawnSync('git', ['show-ref', '--verify', '--quiet', `refs/heads/${workspace.branch}`], { cwd: repo, shell: false }).status, 0);
+  assert.deepEqual(cleanupSessionWorkspace(workspace.workspaceId), { removed: false, reason: 'not-found' });
+});
+
+test('normal cleanup rejects an active durable claim even after in-memory workspace refs are reset', () => {
+  const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-workspace-active-claim-'));
+  process.env.DEVFLOW_RUNTIME_DIR = runtimeRoot;
+  resetSessionWorkspaceRuntimeForTests();
+  const repo = createRepo();
+  const workspace = createOrReuseSessionWorkspace(project(repo), 'active-claim-chat');
+  resetSessionWorkspaceRuntimeForTests();
+  const taskId = addActiveClaim(workspace, 'active-claim');
+
+  assert.throws(
+    () => cleanupSessionWorkspace(workspace.workspaceId),
+    (error: any) => error?.payload?.code === 'WORKSPACE_LIFECYCLE_AUTHORITY_ACTIVE',
+  );
+  assert.equal(fs.existsSync(workspace.root), true);
+
+  removeLifecycleTask(taskId);
+  assert.equal(cleanupSessionWorkspace(workspace.workspaceId).removed, true);
+});
+
+test('normal cleanup rejects active execution ownership without a task claim', () => {
+  const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-workspace-active-execution-'));
+  process.env.DEVFLOW_RUNTIME_DIR = runtimeRoot;
+  resetSessionWorkspaceRuntimeForTests();
+  const repo = createRepo();
+  const workspace = createOrReuseSessionWorkspace(project(repo), 'active-execution-chat');
+  resetSessionWorkspaceRuntimeForTests();
+  const execution = createWorkspaceExecution(workspace, 'active-execution');
+
+  assert.throws(
+    () => cleanupSessionWorkspace(workspace.workspaceId),
+    (error: any) => error?.payload?.code === 'WORKSPACE_LIFECYCLE_AUTHORITY_ACTIVE',
+  );
+  assert.equal(fs.existsSync(workspace.root), true);
+
+  completeWorkspaceExecution(execution.id);
+  assert.equal(cleanupSessionWorkspace(workspace.workspaceId).removed, true);
+});
+
+test('unresolved durable operation blocks cleanup even after its execution is no longer active', () => {
+  const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-workspace-pending-operation-'));
+  process.env.DEVFLOW_RUNTIME_DIR = runtimeRoot;
+  resetSessionWorkspaceRuntimeForTests();
+  const repo = createRepo();
+  const workspace = createOrReuseSessionWorkspace(project(repo), 'pending-operation-chat');
+  const execution = createWorkspaceExecution(workspace, 'pending-operation');
+  recordExecutionPendingOperationReference(execution.id, {
+    operationId: 'op-pending-cleanup',
+    evidenceId: 'evidence-pending-cleanup',
+    kind: 'repo-command',
+    status: 'running',
+  });
+  const endedAt = new Date().toISOString();
+  updateExecutionSessionRecord(execution.id, { status: 'cancelled', updatedAt: endedAt, endedAt });
+
+  assert.throws(
+    () => cleanupSessionWorkspace(workspace.workspaceId),
+    (error: any) => error?.payload?.code === 'WORKSPACE_LIFECYCLE_AUTHORITY_ACTIVE'
+      && error?.payload?.details?.pendingOperations?.some((entry: any) => entry.operationId === 'op-pending-cleanup'),
+  );
+  assert.equal(fs.existsSync(workspace.root), true);
+
+  reconcileExecutionPendingOperationReference(execution.id, 'op-pending-cleanup');
+  assert.equal(cleanupSessionWorkspace(workspace.workspaceId).removed, true);
+});
+
+test('cleanup rechecks lifecycle authority immediately before deletion and fails closed on an interleaved claim', () => {
+  const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-workspace-cleanup-race-'));
+  process.env.DEVFLOW_RUNTIME_DIR = runtimeRoot;
+  resetSessionWorkspaceRuntimeForTests();
+  const repo = createRepo();
+  const workspace = createOrReuseSessionWorkspace(project(repo), 'cleanup-race-chat');
+  let injectedTaskId: string | null = null;
+  __setSessionWorkspaceCleanupBeforeRemovalHookForTests(() => {
+    injectedTaskId = addActiveClaim(workspace, 'cleanup-race');
+  });
+
+  try {
+    assert.throws(
+      () => cleanupSessionWorkspace(workspace.workspaceId),
+      (error: any) => error?.payload?.code === 'WORKSPACE_LIFECYCLE_AUTHORITY_ACTIVE',
+    );
+  } finally {
+    __setSessionWorkspaceCleanupBeforeRemovalHookForTests(null);
+  }
+  assert.equal(fs.existsSync(workspace.root), true);
+  assert.equal(spawnSync('git', ['show-ref', '--verify', '--quiet', `refs/heads/${workspace.branch}`], { cwd: repo, shell: false }).status, 0);
+
+  assert.ok(injectedTaskId);
+  removeLifecycleTask(injectedTaskId!);
+  assert.equal(cleanupSessionWorkspace(workspace.workspaceId).removed, true);
+});
+
+test('managed branch cleanup preserves a branch with active durable execution authority even if its worktree disappeared', () => {
+  const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-workspace-branch-authority-'));
+  process.env.DEVFLOW_RUNTIME_DIR = runtimeRoot;
+  resetSessionWorkspaceRuntimeForTests();
+  const repo = createRepo();
+  const workspace = createOrReuseSessionWorkspace(project(repo), 'branch-authority-chat');
+  const execution = createWorkspaceExecution(workspace, 'branch-authority');
+  git(repo, ['worktree', 'remove', workspace.root]);
+
+  const blocked = cleanupManagedWorkspaceBranches(project(repo));
+  assert.deepEqual(blocked.removed, []);
+  assert.equal(blocked.preserved.some((entry) => entry.branch === workspace.branch && entry.disposition === 'lifecycle-authority-active'), true);
+  assert.equal(spawnSync('git', ['show-ref', '--verify', '--quiet', `refs/heads/${workspace.branch}`], { cwd: repo, shell: false }).status, 0);
+
+  completeWorkspaceExecution(execution.id);
+  const cleaned = cleanupManagedWorkspaceBranches(project(repo));
+  assert.equal(cleaned.removed.some((entry) => entry.branch === workspace.branch), true);
   assert.notEqual(spawnSync('git', ['show-ref', '--verify', '--quiet', `refs/heads/${workspace.branch}`], { cwd: repo, shell: false }).status, 0);
 });
 

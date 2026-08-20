@@ -3,9 +3,9 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createApiError } from './api';
 import {
-  cleanupSessionWorkspace,
   getSessionWorkspaceMetadataForRecovery,
   markSessionWorkspaceIntegrated,
+  withSessionWorkspaceLifecycleCleanupGuard,
 } from './sessionWorkspaceService';
 
 export type WorkspaceRecoveryDisposition =
@@ -155,34 +155,36 @@ export function finalizeSupersededWorkspace(
     });
   }
 
-  const temporary = new Set((options.temporaryPaths || []).map(normalizePath));
-  const supersedingFiles = commitChangedFiles(metadata.projectRoot, commitResult.stdout);
-  const dirty = dirtyPaths(metadata.root);
-  const unsafeFiles = dirty.filter((file) => !temporary.has(file) && (!supersedingFiles.has(file) || !fileContentMatches(metadata.root, metadata.projectRoot, file)));
-  if (unsafeFiles.length > 0) {
-    return { status: 'needs-recovery' as const, inspection: inspectWorkspaceRecovery(workspaceId), unsafeFiles };
-  }
+  return withSessionWorkspaceLifecycleCleanupGuard(workspaceId, ({ workspace: guardedMetadata, cleanup }) => {
+    const temporary = new Set((options.temporaryPaths || []).map(normalizePath));
+    const supersedingFiles = commitChangedFiles(guardedMetadata.projectRoot, commitResult.stdout);
+    const dirty = dirtyPaths(guardedMetadata.root);
+    const unsafeFiles = dirty.filter((file) => !temporary.has(file) && (!supersedingFiles.has(file) || !fileContentMatches(guardedMetadata.root, guardedMetadata.projectRoot, file)));
+    if (unsafeFiles.length > 0) {
+      return { status: 'needs-recovery' as const, inspection: inspectWorkspaceRecovery(workspaceId), unsafeFiles };
+    }
 
-  for (const file of dirty) {
-    const restore = runGit(metadata.root, ['restore', '--staged', '--worktree', '--', file], true);
-    if (restore.status !== 0) runGit(metadata.root, ['clean', '-f', '--', file], true);
-  }
-  const remaining = dirtyPaths(metadata.root);
-  if (remaining.length > 0) {
-    return { status: 'needs-recovery' as const, inspection: inspectWorkspaceRecovery(workspaceId), unsafeFiles: remaining };
-  }
+    for (const file of dirty) {
+      const restore = runGit(guardedMetadata.root, ['restore', '--staged', '--worktree', '--', file], true);
+      if (restore.status !== 0) runGit(guardedMetadata.root, ['clean', '-f', '--', file], true);
+    }
+    const remaining = dirtyPaths(guardedMetadata.root);
+    if (remaining.length > 0) {
+      return { status: 'needs-recovery' as const, inspection: inspectWorkspaceRecovery(workspaceId), unsafeFiles: remaining };
+    }
 
-  const cleanInspection = inspectWorkspaceRecovery(workspaceId);
-  if (!['already-integrated', 'patch-equivalent'].includes(cleanInspection.disposition)) {
-    return { status: 'needs-recovery' as const, inspection: cleanInspection, unsafeFiles: [] as string[] };
-  }
-  markSessionWorkspaceIntegrated(workspaceId, baseHead);
-  const cleanup = cleanupSessionWorkspace(workspaceId);
-  return {
-    status: 'cleaned' as const,
-    disposition: cleanInspection.disposition,
-    supersededByCommit: commitResult.stdout,
-    discardedFiles: dirty,
-    cleanup,
-  };
+    const cleanInspection = inspectWorkspaceRecovery(workspaceId);
+    if (!['already-integrated', 'patch-equivalent'].includes(cleanInspection.disposition)) {
+      return { status: 'needs-recovery' as const, inspection: cleanInspection, unsafeFiles: [] as string[] };
+    }
+    markSessionWorkspaceIntegrated(workspaceId, baseHead);
+    const cleanupResult = cleanup();
+    return {
+      status: 'cleaned' as const,
+      disposition: cleanInspection.disposition,
+      supersededByCommit: commitResult.stdout,
+      discardedFiles: dirty,
+      cleanup: cleanupResult,
+    };
+  });
 }

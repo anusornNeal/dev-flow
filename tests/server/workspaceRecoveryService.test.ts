@@ -4,8 +4,15 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { executeAllMigrations } from '../../src/db/migrations/index.js';
+import { createExecutionSessionRecord, updateExecutionSessionRecord } from '../../src/server/repositories/executionSessionRepository.js';
 import { createOrReuseSessionWorkspace, resetSessionWorkspaceRuntimeForTests } from '../../src/server/services/sessionWorkspaceService.js';
 import { finalizeSupersededWorkspace, inspectWorkspaceRecovery } from '../../src/server/services/workspaceRecoveryService.js';
+
+const recoveryLifecycleDbRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-recovery-lifecycle-db-'));
+process.env.DEVFLOW_DB_PATH = path.join(recoveryLifecycleDbRoot, 'devflow.db');
+executeAllMigrations();
+let recoveryExecutionCounter = 0;
 
 function git(root: string, args: string[], allowFailure = false) {
   const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', shell: false });
@@ -37,6 +44,26 @@ function beginFixture(label: string) {
   return { root, workspace };
 }
 
+function createActiveRecoveryExecution(workspace: { workspaceId: string; projectId: string; branch: string; baseRevision: string }) {
+  recoveryExecutionCounter += 1;
+  const now = new Date().toISOString();
+  return createExecutionSessionRecord({
+    id: `workspace-recovery-exec-${recoveryExecutionCounter}`,
+    projectId: workspace.projectId,
+    taskId: null,
+    workspaceId: workspace.workspaceId,
+    branch: workspace.branch,
+    baseRevision: workspace.baseRevision,
+    repoRevision: workspace.baseRevision,
+    status: 'active',
+    contextHandle: null,
+    createdAt: now,
+    updatedAt: now,
+    expiresAt: null,
+    endedAt: null,
+  });
+}
+
 test('inspection recognizes clean recreated patch as patch-equivalent', () => {
   const { root, workspace } = beginFixture('equivalent');
   fs.writeFileSync(path.join(workspace.root, 'tracked.txt'), 'new\n');
@@ -51,6 +78,32 @@ test('inspection recognizes clean recreated patch as patch-equivalent', () => {
   assert.equal(inspection.dirtyFiles.length, 0);
   assert.equal(inspection.uniqueCommits.length, 0);
   assert.ok(inspection.sourceCommits.length > 0);
+});
+
+test('finalize superseded workspace refuses patch-equivalent cleanup while a live execution still owns the workspace', () => {
+  const { root, workspace } = beginFixture('equivalent-owned');
+  fs.writeFileSync(path.join(workspace.root, 'tracked.txt'), 'new\n');
+  git(workspace.root, ['add', 'tracked.txt']);
+  git(workspace.root, ['commit', '-m', 'old implementation']);
+  fs.writeFileSync(path.join(root, 'tracked.txt'), 'new\n');
+  git(root, ['add', 'tracked.txt']);
+  git(root, ['commit', '-m', 'recreated implementation']);
+  const replacement = git(root, ['rev-parse', 'HEAD']).stdout;
+  assert.equal(inspectWorkspaceRecovery(workspace.workspaceId).disposition, 'patch-equivalent');
+  const execution = createActiveRecoveryExecution(workspace);
+
+  assert.throws(
+    () => finalizeSupersededWorkspace(workspace.workspaceId, { supersededByCommit: replacement }),
+    (error: any) => error?.payload?.code === 'WORKSPACE_LIFECYCLE_AUTHORITY_ACTIVE',
+  );
+  assert.equal(fs.existsSync(workspace.root), true);
+  assert.equal(git(root, ['show-ref', '--verify', '--quiet', `refs/heads/${workspace.branch}`], true).status, 0);
+
+  const endedAt = new Date().toISOString();
+  updateExecutionSessionRecord(execution.id, { status: 'completed', updatedAt: endedAt, endedAt });
+  const result = finalizeSupersededWorkspace(workspace.workspaceId, { supersededByCommit: replacement });
+  assert.equal(result.status, 'cleaned');
+  assert.equal(fs.existsSync(workspace.root), false);
 });
 
 test('finalize superseded workspace discards only proven-equivalent dirty work and explicit temporary files', () => {

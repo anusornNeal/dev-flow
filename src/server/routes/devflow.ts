@@ -310,6 +310,9 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
 
   app.post('/api/workspaces/cleanup', (req, res) => {
     try {
+      if (req.body?.force === true) {
+        throw createApiError(400, 'WORKSPACE_CLEANUP_FORCE_UNSUPPORTED', 'Normal workspace cleanup does not expose force semantics; use the explicit audited break-glass lifecycle path for destructive cleanup.');
+      }
       return res.json(cleanupSessionWorkspace(req.body?.workspaceId));
     } catch (error) {
       return sendApiError(res, error);

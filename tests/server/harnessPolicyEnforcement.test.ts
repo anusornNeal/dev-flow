@@ -200,6 +200,15 @@ test('execution guard composes policy, ownership, lifecycle, retry identity, and
     assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'verifying');
     assert.equal(lifecycleEvidenceCount(session.id), lifecycleBeforeRecoverySuccess + 1);
 
+    const postGreenDiagnostic = preflightHarnessExecutionGuard(state, 'run_project_command', {
+      workspaceId,
+      command: 'typecheck',
+      harnessOperationId: 'diagnostic-after-green',
+      __verificationCandidate: { candidateId: 'candidate-diagnostic-after-green', repoRevision: 'revision-b', executionKey: 'diagnostic-after-green-key' },
+    });
+    assert.equal(postGreenDiagnostic.allowed, true, 'a safe diagnostic verification must remain admissible after lifecycle reaches verifying');
+    assert.equal(postGreenDiagnostic.action, 'verification');
+
     const dryCommit = preflightHarnessExecutionGuard(state, 'commit_task_owned_changes', { workspaceId, taskId: task.id, message: 'preview', harnessOperationId: 'commit-preview' });
     assert.equal(dryCommit.allowed, true);
     assert.equal(dryCommit.allowed, true);

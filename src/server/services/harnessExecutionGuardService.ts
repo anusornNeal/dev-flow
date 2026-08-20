@@ -427,7 +427,7 @@ export function preflightHarnessExecutionGuard(_state: AppState, toolNameValue: 
     }
     const allowedStages: Record<Exclude<HarnessExecutionAction, 'restart'>, readonly string[]> = {
       mutation: ['context-ready', 'plan-recorded', 'implementing', 'repairing'],
-      verification: ['implementing', 'repairing', 'verification-infra-blocked'],
+      verification: ['implementing', 'verifying', 'repairing', 'verification-infra-blocked'],
       commit: ['verifying'],
       finalization: ['committed'],
     };

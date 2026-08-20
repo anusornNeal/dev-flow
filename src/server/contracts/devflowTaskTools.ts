@@ -223,12 +223,12 @@ export const taskToolDefinitions: DevFlowToolDefinition[] = [
     buildHttpRequest: ({ taskId, isAgentRequest, responseMode, ...body }) => ({ method: 'POST', path: withQuery(`/api/tasks/${encodePathSegment(String(taskId))}/submit-review`, { responseMode: responseMode || 'summary' }), body, headers: isAgentRequest ? { 'x-agent-request': 'true' } : undefined }),
   },
   {
-    name: 'move_task_status', description: 'Move a task to a new lane/status. Strict by default; use manualOverride only after a confirmation-required response for soft workflow gates.',
+    name: 'move_task_status', description: 'Move a task to a new lane/status. Strict by default; manualOverride is a status-only compatibility path for confirmed soft gates and never replaces audited break_glass_lifecycle recovery.',
     inputSchema: { type: 'object', properties: { ...taskIdentifierProperty, status: { type: 'string', enum: VALID_STATUSES }, ...booleanFlagSchema.properties, ...manualMoveOverrideProperties, ...mutationResponseModeProperty }, required: ['taskId', 'status'] }, outputSchema: { type: 'object' },
     buildHttpRequest: ({ taskId, isAgentRequest, responseMode, ...body }) => ({ method: 'POST', path: withQuery(`/api/tasks/${encodePathSegment(String(taskId))}/move`, { responseMode: responseMode || 'summary' }), body: body.manualOverride ? { ...body, intent: 'manual' } : body, headers: isAgentRequest ? { 'x-agent-request': 'true' } : undefined }),
   },
   {
-    name: 'move_task_to_status', description: 'Move a task to a target status by following the allowed transition path automatically. Strict by default; explicit manualOverride may bypass only soft workflow gates.',
+    name: 'move_task_to_status', description: 'Move a task to a target status by following the allowed transition path automatically. Strict by default; manualOverride may bypass only soft status gates while hard lifecycle safety remains authoritative. Use break_glass_lifecycle for emergency lifecycle dispositions.',
     inputSchema: { type: 'object', properties: { ...taskIdentifierProperty, status: { type: 'string', enum: VALID_STATUSES }, ...booleanFlagSchema.properties, ...manualMoveOverrideProperties, ...mutationResponseModeProperty }, required: ['taskId', 'status'] }, outputSchema: { type: 'object' },
     buildHttpRequest: ({ taskId, isAgentRequest, responseMode, ...body }) => ({ method: 'POST', path: withQuery(`/api/tasks/${encodePathSegment(String(taskId))}/move-to`, { responseMode: responseMode || 'summary' }), body: body.manualOverride ? { ...body, intent: 'manual' } : body, headers: isAgentRequest ? { 'x-agent-request': 'true' } : undefined }),
   },

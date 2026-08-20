@@ -115,7 +115,7 @@ export interface RecordExecutionOwnedChangesOptions {
 }
 
 export interface ExecutionVerificationProvenance {
-  policy: 'checks-passed' | 'no-checks-required';
+  policy: 'checks-passed' | 'no-checks-required' | 'operator-break-glass';
   expectedRepoRevision?: string;
   expectedOwnedFingerprint?: string;
   candidateId?: string;
@@ -871,7 +871,7 @@ export function getExecutionOwnershipState(
   const verificationFresh = verificationBinding
     ? Boolean(boundFingerprint)
       && boundFingerprint === currentOwnedFingerprint
-      && (session.verification.length > 0 || verificationPolicy === 'no-checks-required')
+      && (session.verification.length > 0 || verificationPolicy === 'no-checks-required' || verificationPolicy === 'operator-break-glass')
     : session.verification.length === 0
       ? null
       : false;
@@ -1609,6 +1609,13 @@ export function recordExecutionVerificationEvidence(
       const allPassed = normalizedVerification.every((entry: any) => entry?.status === 'passed' || entry?.status === 'succeeded' || entry?.ok === true);
       if (!allPassed) {
         throw executionSessionError('EXECUTION_VERIFICATION_INCOMPLETE', 'Verification evidence contains a failed, stale, timed-out, or incomplete check.');
+      }
+    } else if (provenance.policy === 'operator-break-glass') {
+      if (!provenance.candidateId || !provenance.candidateRepoRevision || !provenance.executionKey) {
+        throw executionSessionError('EXECUTION_VERIFICATION_PROVENANCE_REQUIRED', 'Operator break-glass verification requires candidate id, candidate revision, and execution key.');
+      }
+      if (normalizedVerification.length !== 0) {
+        throw executionSessionError('EXECUTION_VERIFICATION_POLICY_INVALID', 'Operator break-glass verification authorization is explicit policy evidence and cannot impersonate executed checks.');
       }
     } else if (normalizedVerification.length !== 0) {
       throw executionSessionError('EXECUTION_VERIFICATION_POLICY_INVALID', 'No-check-required verification policy cannot include executed checks.');

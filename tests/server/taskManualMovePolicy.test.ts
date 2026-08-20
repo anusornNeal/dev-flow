@@ -57,6 +57,7 @@ test('MCP move tools stay strict by default and expose explicit manualOverride',
     const tool = getToolDefinitionByName(name)!;
     assert.ok(tool.inputSchema.properties.manualOverride);
     assert.match(tool.inputSchema.properties.manualOverride.description, /explicit/i);
+    assert.match(tool.inputSchema.properties.manualOverride.description, /break_glass_lifecycle/);
     const strictRequest = tool.buildHttpRequest({ taskId: 'DVF-0001', status: 'done' });
     assert.equal((strictRequest.body as any).manualOverride, undefined);
     assert.equal((strictRequest.body as any).intent, undefined);

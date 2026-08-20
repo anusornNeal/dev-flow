@@ -12,6 +12,7 @@ process.env.DEVFLOW_JOBS_DIR = path.join(os.tmpdir(), `devflow-health-jobs-${pat
 const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
 executeAllMigrations();
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
+const emergencyOps = await import('../../src/server/repositories/lifecycleEmergencyOperationRepository.js');
 
 const { getWorkflowHealth, getChatGptHarnessHealthSnapshot } = await import('../../src/server/services/workflowHealthService.js');
 const { getToolDefinitionByName } = await import('../../src/server/contracts/devflowContract.js');
@@ -119,6 +120,45 @@ test('getWorkflowHealth returns ok for a clean repo', () => {
   assert.equal(Array.isArray(result.diagnostics.repoCaches.domains), true);
   assert.equal(result.diagnostics.repoCaches.domains.length <= 8, true);
   assert.equal(result.diagnostics.repoCaches.domains.every((domain: any) => typeof domain.hitRate === 'number'), true);
+});
+
+test('workflow health exposes bounded audited break-glass aftermath without mutating it', () => {
+  const repo = createRepo('break-glass-observability');
+  const task = seedHealthTask('task-health-break-glass', 'DVF-HBG-1');
+  const now = new Date().toISOString();
+  const operation = emergencyOps.createLifecycleEmergencyOperation({
+    id: 'health-break-glass-active-1',
+    requestDigest: 'health-break-glass-digest',
+    action: 'release-ownership-preserve-wip',
+    projectId: 'project-health',
+    taskId: task.id,
+    workspaceId: 'ws-health-break-glass',
+    executionSessionId: null,
+    ownershipEpochId: null,
+    actorLabel: 'Health Operator',
+    reason: 'observe unresolved audited recovery',
+    status: 'partial',
+    request: { operationId: 'health-break-glass-active-1' },
+    beforeSnapshot: { classification: 'recoverable' },
+    afterSnapshot: { classification: 'recoverable' },
+    bypassedGates: ['TASK_STATUS_PROJECTION_DRIFT'],
+    hardChecks: [{ code: 'PROJECT_IDENTITY', passed: true }],
+    evidence: { bounded: true },
+    wipDisposition: 'preserved',
+    result: { cleanupPending: true },
+    failure: { code: 'WORKSPACE_ACTIVE', message: 'synthetic pending cleanup' },
+    retryCount: 0,
+    createdAt: now,
+    updatedAt: now,
+    completedAt: null,
+  });
+  const full = getWorkflowHealth(stateFor(repo), { projectId: 'project-health', responseMode: 'full' }) as any;
+  const compact = getWorkflowHealth(stateFor(repo), { projectId: 'project-health', responseMode: 'compact' }) as any;
+  assert.equal(full.diagnostics.breakGlass.unresolvedCount >= 1, true);
+  assert.equal(full.diagnostics.breakGlass.recent.some((entry: any) => entry.id === operation.id && entry.status === 'partial'), true);
+  assert.equal(compact.recovery.breakGlass.unresolvedCount >= 1, true);
+  assert.equal(emergencyOps.getLifecycleEmergencyOperation(operation.id)?.status, 'partial', 'health read must not advance emergency state');
+  emergencyOps.updateLifecycleEmergencyOperation(operation.id, { status: 'completed', completedAt: new Date().toISOString() });
 });
 
 test('compact health preserves operational warnings while cutting response bytes by at least half', () => {

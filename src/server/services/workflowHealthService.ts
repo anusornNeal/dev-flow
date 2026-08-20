@@ -9,6 +9,7 @@ import { publishServerEvent } from './serverEventService.js';
 import { getRecoveryStatus } from './backupIntegrityService';
 import { getTasks } from '../repositories/taskRepository.js';
 import { queryExecutionSessions, type ExecutionSessionRecord } from '../repositories/executionSessionRepository.js';
+import { listLifecycleEmergencyOperations } from '../repositories/lifecycleEmergencyOperationRepository.js';
 import { buildChatGptHarnessEnvelope, findProjectByIdentifier, findTaskByIdentifier } from './taskService.js';
 import { getExecutionSessionOwnershipEpoch } from './executionSessionService.js';
 import { getLatestExecutionCheckpoint } from './executionCheckpointService.js';
@@ -715,6 +716,25 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
   if (healthEventSignature) lastHealthEventSignatures.set(healthEventKey, healthEventSignature);
   else lastHealthEventSignatures.delete(healthEventKey);
 
+  const emergencyOperations = healthEventProjectId
+    ? listLifecycleEmergencyOperations({ projectId: healthEventProjectId, limit: 20 })
+    : [];
+  const unresolvedEmergencyOperations = emergencyOperations.filter((entry) => entry.status === 'active' || entry.status === 'partial');
+  const breakGlassHealth = {
+    unresolvedCount: unresolvedEmergencyOperations.length,
+    recent: emergencyOperations.slice(0, 10).map((entry) => ({
+      id: entry.id,
+      action: entry.action,
+      taskId: entry.taskId,
+      workspaceId: entry.workspaceId,
+      status: entry.status,
+      actorLabel: entry.actorLabel,
+      wipDisposition: entry.wipDisposition,
+      failure: entry.failure,
+      updatedAt: entry.updatedAt,
+    })),
+  };
+
   const fullResult = {
     ok: status !== 'error',
     status,
@@ -743,6 +763,7 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
       telemetryPersistence: diagnostics?.telemetryPersistence,
       isolation,
       recovery,
+      breakGlass: breakGlassHealth,
       runtimeSupervisor,
       harness,
     },
@@ -832,6 +853,7 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
     },
     recovery: {
       hasVerifiedGoodBackup: Boolean(recovery.lastVerifiedGoodBackup),
+      breakGlass: { unresolvedCount: breakGlassHealth.unresolvedCount, recent: breakGlassHealth.recent.slice(0, 5) },
       failureReason: recovery.failureReason
         ? { code: recovery.failureReason.code, reason: recovery.failureReason.reason, recordedAt: recovery.failureReason.recordedAt }
         : null,

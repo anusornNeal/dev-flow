@@ -6,6 +6,7 @@ import { devFlowToolDefinitions } from '../../src/server/contracts/devflowContra
 import { taskToolDefinitions } from '../../src/server/contracts/devflowTaskTools.js';
 import { gitToolDefinitions } from '../../src/server/contracts/devflowGitTools.js';
 import { workspaceToolDefinitions } from '../../src/server/contracts/devflowWorkspaceTools.js';
+import { emergencyToolDefinitions } from '../../src/server/contracts/devflowEmergencyTools.js';
 
 const TASK_TOOL_NAMES = [
   'list_tasks', 'search_tasks', 'get_task', 'get_task_images',
@@ -93,6 +94,21 @@ test('workspace finalization transport preserves verification continuation witho
   assert.equal(workspaceFinalizationHttpStatus({ status: 'needs-recovery', code: 'INTEGRATION_CONFLICT' }), 409);
   assert.equal(workspaceFinalizationHttpStatus({ status: 'needs-recovery', code: 'WORKSPACE_DIRTY' }), 409);
   assert.equal(workspaceFinalizationHttpStatus({ status: 'blocked', code: 'VERIFICATION_NOT_PASSED' }), 409);
+});
+
+test('break-glass lifecycle is exposed as one coherent audited mutation plus bounded read surface', () => {
+  assert.deepEqual(emergencyToolDefinitions.map((tool) => tool.name), ['break_glass_lifecycle', 'get_break_glass_operations']);
+  const tool = emergencyToolDefinitions[0];
+  const required = (tool.inputSchema as any).required || [];
+  for (const field of ['operationId', 'action', 'reason', 'actorLabel', 'projectId', 'taskId']) assert.ok(required.includes(field), field);
+  assert.equal((tool.inputSchema as any).properties.destructiveAck.type, 'boolean');
+  assert.match(String(tool.description || ''), /audited|reason/i);
+  assert.equal(tool.buildHttpRequest({ operationId: 'op', action: 'release-ownership-preserve-wip', reason: 'operator', actorLabel: 'human', projectId: 'p', taskId: 't' }).path, '/api/lifecycle/break-glass');
+  const aggregateNames = devFlowToolDefinitions.map((entry) => entry.name);
+  assert.ok(aggregateNames.includes('break_glass_lifecycle'));
+  assert.ok(aggregateNames.includes('get_break_glass_operations'));
+  const routeSource = fs.readFileSync('src/server/routes/devflow.ts', 'utf8');
+  assert.match(routeSource, /\/api\/lifecycle\/break-glass/);
 });
 
 test('task-domain aliases remain available through focused definitions', () => {

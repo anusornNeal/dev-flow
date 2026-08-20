@@ -36,6 +36,7 @@ const { getTask, saveTask } = await import('../../src/server/repositories/taskRe
 const { listExecutionSessionsForTask, listExecutionSessionEvidence } = await import('../../src/server/repositories/executionSessionRepository.js');
 const jobs = await import('../../src/server/repositories/mcpToolJobRepository.js') as any;
 const finalizationOps = await import('../../src/server/repositories/taskFinalizationOperationRepository.js');
+const emergencyOps = await import('../../src/server/repositories/lifecycleEmergencyOperationRepository.js');
 const {
   createOrReuseSessionWorkspace,
   markSessionWorkspaceIntegrationRequired,
@@ -411,6 +412,48 @@ test('recovery handoff exposes a durable finalization cursor instead of reconstr
     assert.equal(body.continuation.tool, 'finalize_task_workspace');
     assert.match(body.continuation.reason, /durable task finalization|retry the same operation/i);
   });
+});
+
+test('recovery handoff surfaces an unresolved audited break-glass operation as the exact continuation boundary', async () => {
+  const fixture = seedUnclaimedTaskWorkspace('durable-break-glass-cursor');
+  const now = new Date().toISOString();
+  const operation = emergencyOps.createLifecycleEmergencyOperation({
+    id: `break-glass-recovery-${Date.now()}`,
+    requestDigest: 'break-glass-recovery-digest',
+    action: 'release-ownership-preserve-wip',
+    projectId: fixture.projectId,
+    taskId: fixture.taskId,
+    workspaceId: fixture.workspace.workspaceId,
+    executionSessionId: null,
+    ownershipEpochId: null,
+    actorLabel: 'Recovery Operator',
+    reason: 'resume exact audited operation',
+    status: 'partial',
+    request: { operationId: 'break-glass-recovery' },
+    beforeSnapshot: { classification: 'recoverable' },
+    afterSnapshot: { classification: 'recoverable' },
+    bypassedGates: [],
+    hardChecks: [],
+    evidence: { preserved: true },
+    wipDisposition: 'preserved',
+    result: { pending: true },
+    failure: { code: 'RECOVERY_PENDING', message: 'synthetic continuation' },
+    retryCount: 0,
+    createdAt: now,
+    updatedAt: now,
+    completedAt: null,
+  });
+
+  await withServer(async (baseUrl) => {
+    const { response, body } = await json(baseUrl, new URLSearchParams({ taskId: fixture.displayId }));
+    assert.equal(response.status, 200);
+    assert.equal(body.continuation.action, 'continue-workspace');
+    assert.equal(body.continuation.operationId, operation.id);
+    assert.equal(body.continuation.tool, 'break_glass_lifecycle');
+    assert.equal(body.breakGlassOperations.some((entry: any) => entry.id === operation.id && entry.status === 'partial'), true);
+    assert.equal(emergencyOps.getLifecycleEmergencyOperation(operation.id)?.status, 'partial', 'recovery handoff must remain read-only');
+  });
+  emergencyOps.updateLifecycleEmergencyOperation(operation.id, { status: 'completed', completedAt: new Date().toISOString() });
 });
 
 test('project-only recovery keeps no-action when the project has no actionable managed workspace', async () => {

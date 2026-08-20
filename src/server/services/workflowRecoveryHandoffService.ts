@@ -3,6 +3,7 @@ import { getProject } from '../repositories/projectRepository.js';
 import { getTaskByIdentifier, getTasks } from '../repositories/taskRepository.js';
 import { getJob, listRecentJobs, type McpToolJob } from '../repositories/mcpToolJobRepository.js';
 import { getLatestTaskFinalizationOperation, type TaskFinalizationOperationRecord } from '../repositories/taskFinalizationOperationRepository.js';
+import { listLifecycleEmergencyOperations } from '../repositories/lifecycleEmergencyOperationRepository.js';
 import { DEVFLOW_CONTRACT_VERSION, getCapabilityCatalog } from '../contracts/devflowContract.js';
 import { findProjectByIdentifier } from './taskService.js';
 import { classifyRuntimeIdentity, getRuntimeIdentity, type RuntimeClientState } from './runtimeIdentityService.js';
@@ -346,6 +347,12 @@ export function getWorkflowRecoveryHandoff(state: AppState, args: RecoveryArgs =
     ? [exactJob]
     : listRecentJobs(200).filter((job) => jobMatches(job, task, workspaceId, projectId)).slice(0, 20);
   const jobs = relevantJobs.map(compactJob);
+  const emergencyOperations = listLifecycleEmergencyOperations({
+    ...(projectId ? { projectId } : {}),
+    ...(task?.id ? { taskId: task.id } : {}),
+    limit: 10,
+  });
+  const unresolvedEmergencyOperation = emergencyOperations.find((entry) => entry.status === 'active' || entry.status === 'partial') || null;
   const common = {
     status: 'recoverable' as const,
     generatedAt: new Date().toISOString(),
@@ -354,8 +361,22 @@ export function getWorkflowRecoveryHandoff(state: AppState, args: RecoveryArgs =
     ...(task ? { task: compactTask(task) } : {}),
     ...(inspection ? { workspace: compactWorkspace(inspection) } : {}),
     ...(finalizationOperation ? { finalizationOperation: compactFinalizationOperation(finalizationOperation) } : {}),
+    breakGlassOperations: emergencyOperations.map((entry) => ({ id: entry.id, action: entry.action, status: entry.status, workspaceId: entry.workspaceId, actorLabel: entry.actorLabel, wipDisposition: entry.wipDisposition, failure: entry.failure, updatedAt: entry.updatedAt })),
     jobs,
   };
+
+  if (unresolvedEmergencyOperation) {
+    return {
+      ...common,
+      continuation: {
+        action: 'continue-workspace' as const,
+        ...(unresolvedEmergencyOperation.workspaceId ? { workspaceId: unresolvedEmergencyOperation.workspaceId } : {}),
+        operationId: unresolvedEmergencyOperation.id,
+        tool: 'break_glass_lifecycle' as const,
+        reason: `Audited break-glass operation '${unresolvedEmergencyOperation.id}' is ${unresolvedEmergencyOperation.status}; resume/reconcile that exact durable operation instead of inventing a new force path.`,
+      },
+    };
+  }
 
   if (finalizationOperation && finalizationOperation.status !== 'completed') {
     return {

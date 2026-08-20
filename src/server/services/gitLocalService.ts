@@ -88,3 +88,21 @@ export function getGitWorkspaceSnapshotForRoot(root: string) {
   }
   return { root, branch, head, files };
 }
+
+export function getGitCommitEvidenceForRoot(root: string, revision = 'HEAD') {
+  ensureGitRepo(root);
+  const metadata = runGit(['show', '-s', '--format=%H%x00%P%x00%s', revision], root).trim();
+  const [commit = '', parentsRaw = '', subject = ''] = metadata.split('\u0000');
+  if (!commit) throw createApiError(409, 'GIT_COMMIT_EVIDENCE_MISSING', `Commit evidence for '${revision}' could not be resolved.`);
+  const files = runGit(['diff-tree', '--no-commit-id', '--name-only', '-r', commit], root)
+    .split(/\r?\n/)
+    .map((entry) => normalizeGitPath(entry.trim()))
+    .filter(Boolean)
+    .sort();
+  return {
+    commit,
+    parents: parentsRaw.split(/\s+/).filter(Boolean),
+    subject,
+    files,
+  };
+}

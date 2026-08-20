@@ -38,7 +38,7 @@ export const booleanFlagSchema = {
   type: 'object',
   properties: {
     isAgentRequest: { type: 'boolean', description: 'Marks this as an agent-owned mutation that may bypass normal task locks.' },
-    emergency: { type: 'boolean', description: 'Override task lock protections for emergency/manual recovery operations.' },
+    emergency: { type: 'boolean', description: 'Legacy lock-override compatibility only; it does not grant lifecycle break-glass authority. Use break_glass_lifecycle for audited lifecycle recovery.' },
   },
 };
 
@@ -47,7 +47,7 @@ export const mutationResponseModeProperty = {
 };
 
 export const manualMoveOverrideProperties = {
-  manualOverride: { type: 'boolean', description: 'Explicitly confirm bypassing soft workflow gates for a human/manual status move. Hard safety blockers remain enforced.' },
+  manualOverride: { type: 'boolean', description: 'Status-move compatibility only: explicitly confirm bypassing soft presentation/workflow gates. Hard lifecycle safety remains enforced; use break_glass_lifecycle for audited lifecycle recovery.' },
   recoveryDisposition: {
     type: 'object',
     description: 'Required when a manual DONE override bypasses unfinished implementation/evidence blockers. Records why remaining scope is recoverable, preserved, superseded, or delegated to follow-up work.',

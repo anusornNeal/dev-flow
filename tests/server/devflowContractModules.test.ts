@@ -97,7 +97,11 @@ test('workspace finalization transport preserves verification continuation witho
 });
 
 test('break-glass lifecycle is exposed as one coherent audited mutation plus bounded read surface', () => {
-  assert.deepEqual(emergencyToolDefinitions.map((tool) => tool.name), ['break_glass_lifecycle', 'get_break_glass_operations']);
+  assert.deepEqual(emergencyToolDefinitions.map((tool) => tool.name), [
+    'break_glass_lifecycle',
+    'cleanup_orphan_executions',
+    'get_break_glass_operations',
+  ]);
   const tool = emergencyToolDefinitions[0];
   const required = (tool.inputSchema as any).required || [];
   for (const field of ['operationId', 'action', 'reason', 'actorLabel', 'projectId', 'taskId']) assert.ok(required.includes(field), field);
@@ -107,8 +111,10 @@ test('break-glass lifecycle is exposed as one coherent audited mutation plus bou
   const aggregateNames = devFlowToolDefinitions.map((entry) => entry.name);
   assert.ok(aggregateNames.includes('break_glass_lifecycle'));
   assert.ok(aggregateNames.includes('get_break_glass_operations'));
+  assert.ok(aggregateNames.includes('cleanup_orphan_executions'));
   const routeSource = fs.readFileSync('src/server/routes/devflow.ts', 'utf8');
   assert.match(routeSource, /\/api\/lifecycle\/break-glass/);
+  assert.match(routeSource, /\/api\/lifecycle\/orphan-executions\/cleanup/);
 });
 
 test('task-domain aliases remain available through focused definitions', () => {

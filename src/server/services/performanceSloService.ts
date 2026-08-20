@@ -75,3 +75,103 @@ export function evaluatePerformanceSlo(topTools: ToolSummary[]) {
     dominant,
   };
 }
+
+export type LifecycleTaskSloInput = {
+  taskId: string;
+  outcome: 'succeeded' | 'failed' | 'blocked';
+  path: 'normal' | 'recovery' | 'break-glass';
+  phaseDurationsMs: Record<string, number>;
+  ownershipRotationsAfterInitialClaim: number;
+  reclaims: number;
+  automaticReconciliations: number;
+  emergencyOperations: number;
+  finalizationAttempts: number;
+  finalizationRetries: number;
+  cleanupPendingCount: number;
+  authoritativeTerminalOutcomes: number;
+  currentAuthorityCount: number;
+  duplicateSideEffects: number;
+  unauthorizedWipLossCount: number;
+  unrecoverableSoftStateCount: number;
+  unresolvedWriterCount: number;
+  visibleWriterBlockerCount: number;
+};
+
+export type LifecycleTaskSloViolation = {
+  code: string;
+  message: string;
+  actual: number;
+  expected: string;
+};
+
+function nonNegativeCount(value: unknown) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? Math.max(0, Math.floor(numeric)) : 0;
+}
+
+function normalizedPhaseDurations(value: Record<string, number> | undefined) {
+  return Object.fromEntries(Object.entries(value || {}).map(([phase, duration]) => [
+    phase,
+    Number.isFinite(Number(duration)) ? Math.max(0, Number(duration)) : 0,
+  ]));
+}
+
+export function evaluateLifecycleTaskSlo(input: LifecycleTaskSloInput) {
+  const metrics: LifecycleTaskSloInput = {
+    ...input,
+    taskId: String(input?.taskId || '').trim(),
+    outcome: input?.outcome || 'blocked',
+    path: input?.path || 'recovery',
+    phaseDurationsMs: normalizedPhaseDurations(input?.phaseDurationsMs),
+    ownershipRotationsAfterInitialClaim: nonNegativeCount(input?.ownershipRotationsAfterInitialClaim),
+    reclaims: nonNegativeCount(input?.reclaims),
+    automaticReconciliations: nonNegativeCount(input?.automaticReconciliations),
+    emergencyOperations: nonNegativeCount(input?.emergencyOperations),
+    finalizationAttempts: nonNegativeCount(input?.finalizationAttempts),
+    finalizationRetries: nonNegativeCount(input?.finalizationRetries),
+    cleanupPendingCount: nonNegativeCount(input?.cleanupPendingCount),
+    authoritativeTerminalOutcomes: nonNegativeCount(input?.authoritativeTerminalOutcomes),
+    currentAuthorityCount: nonNegativeCount(input?.currentAuthorityCount),
+    duplicateSideEffects: nonNegativeCount(input?.duplicateSideEffects),
+    unauthorizedWipLossCount: nonNegativeCount(input?.unauthorizedWipLossCount),
+    unrecoverableSoftStateCount: nonNegativeCount(input?.unrecoverableSoftStateCount),
+    unresolvedWriterCount: nonNegativeCount(input?.unresolvedWriterCount),
+    visibleWriterBlockerCount: nonNegativeCount(input?.visibleWriterBlockerCount),
+  };
+  const violations: LifecycleTaskSloViolation[] = [];
+  const add = (code: string, message: string, actual: number, expected: string) => {
+    violations.push({ code, message, actual, expected });
+  };
+
+  if (metrics.path === 'normal' && metrics.ownershipRotationsAfterInitialClaim > 0) {
+    add('NORMAL_PATH_OWNERSHIP_CHURN', 'Healthy normal work must not rotate ownership after the initial claim.', metrics.ownershipRotationsAfterInitialClaim, '0');
+  }
+  if (metrics.path === 'normal' && metrics.emergencyOperations > 0) {
+    add('NORMAL_PATH_EMERGENCY_USED', 'Healthy normal work must complete without break-glass operations.', metrics.emergencyOperations, '0');
+  }
+  if (metrics.outcome === 'succeeded' && metrics.authoritativeTerminalOutcomes !== 1) {
+    add('TERMINAL_OUTCOME_NOT_EXACTLY_ONCE', 'A successful logical task must have exactly one authoritative terminal outcome.', metrics.authoritativeTerminalOutcomes, '1');
+  }
+  if (metrics.currentAuthorityCount > 1) {
+    add('MULTIPLE_CURRENT_AUTHORITIES', 'At most one current lifecycle authority may exist for a task/workspace.', metrics.currentAuthorityCount, '<=1');
+  }
+  if (metrics.duplicateSideEffects > 0) {
+    add('DUPLICATE_DURABLE_SIDE_EFFECT', 'Retries must not duplicate durable Git/lifecycle effects.', metrics.duplicateSideEffects, '0');
+  }
+  if (metrics.unauthorizedWipLossCount > 0) {
+    add('UNAUTHORIZED_WIP_LOSS', 'Dirty WIP may be lost only through an explicitly acknowledged destructive action.', metrics.unauthorizedWipLossCount, '0');
+  }
+  if (metrics.unrecoverableSoftStateCount > 0) {
+    add('UNRECOVERABLE_SOFT_STATE', 'Every soft workflow incident must expose normal continuation, deterministic recovery, or audited break-glass.', metrics.unrecoverableSoftStateCount, '0');
+  }
+  if (metrics.unresolvedWriterCount > metrics.visibleWriterBlockerCount) {
+    add('UNRESOLVED_WRITER_NOT_FULLY_BLOCKED', 'Every unresolved durable writer must remain visible as an authoritative blocker.', metrics.unresolvedWriterCount - metrics.visibleWriterBlockerCount, '0 unblocked writers');
+  }
+
+  return {
+    status: violations.length === 0 ? 'within_slo' as const : 'regressed' as const,
+    metrics,
+    phaseDurationsMs: metrics.phaseDurationsMs,
+    violations,
+  };
+}

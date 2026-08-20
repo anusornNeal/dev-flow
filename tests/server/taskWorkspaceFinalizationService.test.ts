@@ -12,7 +12,8 @@ executeAllMigrations();
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
 const { saveTask, getTask } = await import('../../src/server/repositories/taskRepository.js');
 const { createOrReuseSessionWorkspace, resetSessionWorkspaceRuntimeForTests, acquireSessionWorkspace, releaseSessionWorkspace } = await import('../../src/server/services/sessionWorkspaceService.js');
-const { createExecutionSession, getExecutionSessionState, recordExecutionLifecycleTransition } = await import('../../src/server/services/executionSessionService.js');
+const { createExecutionSession, getExecutionSessionState, getExecutionSessionOwnershipEpoch, recordExecutionLifecycleTransition } = await import('../../src/server/services/executionSessionService.js');
+const { integrateWorkspaceCommits, reconstructRecordedWorkspaceIntegration } = await import('../../src/server/services/workspaceIntegrationService.js');
 const { finalizeTaskWorkspace, __setTaskFinalizationFaultBoundaryForTests } = await import('../../src/server/services/taskWorkspaceFinalizationService.js');
 const { getTaskFinalizationOperation } = await import('../../src/server/repositories/taskFinalizationOperationRepository.js');
 
@@ -97,6 +98,101 @@ function preparedFinalizationFixture(label: string) {
   advanceExecutionToCommitted(execution.id, label);
   return { ...prepared, execution };
 }
+
+function detachedFinalizationFixture(label: string) {
+  const prepared = preparedFinalizationFixture(label);
+  const sourceHead = git(prepared.workspace.root, ['rev-parse', 'HEAD']).stdout;
+  const integrated = integrateWorkspaceCommits(prepared.workspace.workspaceId, { task: getTask(prepared.task.id) });
+  assert.equal(integrated.status, 'succeeded');
+  const baseHead = git(prepared.root, ['rev-parse', 'HEAD']).stdout;
+  const reconstruction = reconstructRecordedWorkspaceIntegration({
+    workspaceId: prepared.workspace.workspaceId,
+    projectRoot: prepared.root,
+    baseBranch: prepared.workspace.baseBranch,
+    sourceBranch: prepared.workspace.branch,
+    baseRevision: prepared.workspace.baseRevision,
+    sourceHead,
+    strategy: prepared.workspace.gitWorkflowPolicy?.integrationStrategy || 'rebase-ff',
+  });
+  assert.equal(reconstruction.alreadyIntegrated, true);
+  assert.notEqual(reconstruction.patchEquivalent, true);
+  const ownershipEpochId = getExecutionSessionOwnershipEpoch(prepared.execution.id).ownershipEpochId;
+  const detachedChecks = [{
+    name: 'detached-full',
+    command: 'detached-full',
+    status: 'passed' as const,
+    scope: 'full' as const,
+    repoRevision: baseHead,
+  }];
+  return { ...prepared, sourceHead, baseHead, reconstruction, ownershipEpochId, detachedChecks };
+}
+
+test('detached finalization consumes exact already-integrated evidence and skips cleanup when the workspace root is unavailable', () => {
+  const f = detachedFinalizationFixture('detached-direct');
+  fs.rmSync(f.workspace.root, { recursive: true, force: true });
+
+  const result = finalizeTaskWorkspace(f.state, {
+    taskId: f.task.id,
+    workspaceId: f.workspace.workspaceId,
+    checks: f.detachedChecks,
+    detachedIntegrated: {
+      sourceHead: f.sourceHead,
+      baseRevision: f.workspace.baseRevision,
+      baseBranch: f.workspace.baseBranch,
+      executionSessionId: f.execution.id,
+      ownershipEpochId: f.ownershipEpochId,
+      integration: f.reconstruction,
+    },
+  });
+
+  assert.equal(result.status, 'completed', JSON.stringify(result));
+  assert.equal(result.operation?.cleanup?.reason, 'detached-workspace-already-unavailable');
+  assert.equal(getTask(f.task.id)?.status, 'done');
+  assert.equal(getTask(f.task.id)?.claim, undefined);
+  assert.equal(getExecutionSessionState(f.execution.id).session.status, 'completed');
+  assert.equal(getExecutionSessionState(f.execution.id).session.lifecycle.stage, 'finalized');
+  assert.equal(fs.existsSync(f.workspace.root), false);
+
+  const replay = finalizeTaskWorkspace(f.state, {
+    taskId: f.task.id,
+    workspaceId: f.workspace.workspaceId,
+    checks: f.detachedChecks,
+    detachedIntegrated: {
+      sourceHead: f.sourceHead,
+      baseRevision: f.workspace.baseRevision,
+      baseBranch: f.workspace.baseBranch,
+      executionSessionId: f.execution.id,
+      ownershipEpochId: f.ownershipEpochId,
+      integration: f.reconstruction,
+    },
+  });
+  assert.equal(replay.status, 'completed');
+  assert.equal(replay.operation?.id, result.operation?.id);
+  assert.equal((getTask(f.task.id)?.logs || []).filter((entry: any) => /Finalized managed workspace/.test(entry.message)).length, 1);
+});
+
+test('detached finalization rejects bypass while the original managed workspace root still exists', () => {
+  const f = detachedFinalizationFixture('detached-live');
+  assert.throws(
+    () => finalizeTaskWorkspace(f.state, {
+      taskId: f.task.id,
+      workspaceId: f.workspace.workspaceId,
+      checks: f.detachedChecks,
+      detachedIntegrated: {
+        sourceHead: f.sourceHead,
+        baseRevision: f.workspace.baseRevision,
+        baseBranch: f.workspace.baseBranch,
+        executionSessionId: f.execution.id,
+        ownershipEpochId: f.ownershipEpochId,
+        integration: f.reconstruction,
+      },
+    }),
+    (error: any) => error?.payload?.code === 'DETACHED_FINALIZATION_LIVE_WORKSPACE',
+  );
+  assert.equal(getTask(f.task.id)?.status, 'in-progress');
+  assert.equal(getExecutionSessionState(f.execution.id).session.status, 'active');
+  assert.equal(fs.existsSync(f.workspace.root), true);
+});
 
 test('committed workspace finalizes into local develop and removes clean worktree/branch', () => {
   const { root, task, workspace, state } = fixture('success');

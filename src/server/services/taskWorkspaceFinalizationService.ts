@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import type { AppState } from '../types.js';
 import { getTaskByIdentifier } from '../repositories/taskRepository.js';
 import { getProject } from '../repositories/projectRepository.js';
@@ -33,12 +34,25 @@ export type TaskWorkspaceFinalizationCheck = {
   recordedAt?: string;
 };
 
+export type DetachedIntegratedFinalizationEvidence = {
+  sourceHead: string;
+  baseRevision: string;
+  baseBranch: string;
+  executionSessionId: string | null;
+  ownershipEpochId: string | null;
+  candidateId?: string | null;
+  candidateRepoRevision?: string | null;
+  ownedFingerprint?: string | null;
+  integration: WorkspaceIntegrationSuccess;
+};
+
 export type TaskWorkspaceFinalizationInput = {
   taskId: string;
   workspaceId: string;
   checks?: TaskWorkspaceFinalizationCheck[];
   requireChecklistComplete?: boolean;
   operationId?: string;
+  detachedIntegrated?: DetachedIntegratedFinalizationEvidence;
 };
 
 type PostIntegrationRequirement = {
@@ -327,6 +341,73 @@ function freezeNewFinalizationOperation(task: any, workspaceId: string, submitte
   return { operation, metadata, inspection };
 }
 
+function freezeDetachedIntegratedFinalizationOperation(
+  task: any,
+  workspaceId: string,
+  submittedChecks: TaskWorkspaceFinalizationCheck[],
+  detached: DetachedIntegratedFinalizationEvidence,
+) {
+  const metadata = getSessionWorkspaceMetadataForRecovery(workspaceId);
+  if (metadata && fs.existsSync(metadata.root)) {
+    throw createApiError(409, 'DETACHED_FINALIZATION_LIVE_WORKSPACE', 'Detached integrated finalization is allowed only when the selected managed workspace root is unavailable.', {
+      affectedId: workspaceId,
+    });
+  }
+  const integration = detached.integration;
+  if (integration.workspaceId !== workspaceId
+    || integration.sourceHead !== detached.sourceHead
+    || integration.baseRevision !== detached.baseRevision
+    || integration.baseBranch !== detached.baseBranch
+    || integration.status !== 'succeeded'
+    || integration.alreadyIntegrated !== true
+    || integration.patchEquivalent === true) {
+    throw createApiError(409, 'DETACHED_FINALIZATION_EVIDENCE_MISMATCH', 'Detached finalization requires exact already-integrated evidence bound to the selected task/workspace/base revision.', {
+      affectedId: workspaceId,
+      details: { integration },
+    });
+  }
+  const frozen = {
+    taskId: task.id,
+    workspaceId,
+    executionSessionId: detached.executionSessionId || null,
+    ownershipEpochId: detached.ownershipEpochId || null,
+    sourceHead: detached.sourceHead,
+    baseRevision: detached.baseRevision,
+    baseBranch: detached.baseBranch,
+    candidateId: detached.candidateId || null,
+    candidateRepoRevision: detached.candidateRepoRevision || null,
+    ownedFingerprint: detached.ownedFingerprint || null,
+  };
+  const id = finalizationOperationIdentity(frozen);
+  const now = new Date().toISOString();
+  const operation = createTaskFinalizationOperation({
+    id,
+    projectId: task.projectId,
+    ...frozen,
+    phase: 'frozen',
+    status: 'active',
+    integration: integration as any,
+    verification: {
+      submittedChecks,
+      detachedIntegrated: true,
+      detachedEvidence: {
+        sourceHead: detached.sourceHead,
+        baseRevision: detached.baseRevision,
+        baseBranch: detached.baseBranch,
+        executionSessionId: detached.executionSessionId || null,
+        ownershipEpochId: detached.ownershipEpochId || null,
+      },
+    },
+    createdAt: now,
+    updatedAt: now,
+  });
+  return { operation };
+}
+
+function isDetachedIntegratedOperation(operation: TaskFinalizationOperationRecord | null | undefined) {
+  return operation?.verification?.detachedIntegrated === true;
+}
+
 function assertOperationStillBound(operation: TaskFinalizationOperationRecord, task: any, metadata: ReturnType<typeof getSessionWorkspaceMetadataForRecovery>) {
   if (operation.taskId !== task.id || operation.projectId !== task.projectId) {
     throw createApiError(409, 'FINALIZATION_OPERATION_TASK_MISMATCH', 'Finalization operation is bound to another task/project.', {
@@ -446,6 +527,7 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
   const taskId = String(input?.taskId || '').trim();
   const workspaceId = String(input?.workspaceId || '').trim();
   const requestedOperationId = String(input?.operationId || '').trim();
+  const detachedIntegrated = input.detachedIntegrated;
   if (!taskId) throw createApiError(400, 'TASK_ID_REQUIRED', 'taskId is required for task workspace finalization.');
   if (!workspaceId) throw createApiError(400, 'WORKSPACE_ID_REQUIRED', 'workspaceId is required for task workspace finalization.');
 
@@ -466,7 +548,7 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
       });
     }
 
-    if (!requestedOperationId && operation?.status === 'completed') {
+    if (!requestedOperationId && operation?.status === 'completed' && !isDetachedIntegratedOperation(operation)) {
       const metadata = getSessionWorkspaceMetadataForRecovery(workspaceId);
       if (metadata) {
         const inspection = inspectWorkspaceRecovery(workspaceId);
@@ -488,7 +570,9 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
 
     if (!operation) {
       const latestBeforeFreeze = getLatestTaskFinalizationOperation(task.id, workspaceId);
-      const frozen = freezeNewFinalizationOperation(task, workspaceId, effectiveChecks);
+      const frozen = detachedIntegrated
+        ? freezeDetachedIntegratedFinalizationOperation(task, workspaceId, effectiveChecks, detachedIntegrated)
+        : freezeNewFinalizationOperation(task, workspaceId, effectiveChecks);
       if ('blocked' in frozen) return frozen.blocked;
       operation = frozen.operation;
       if (latestBeforeFreeze && latestBeforeFreeze.status !== 'completed' && latestBeforeFreeze.id !== operation.id) {
@@ -505,7 +589,7 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
       }
     } else {
       operation = updateOperation(operation, { retryCount: operation.retryCount + 1, failure: null });
-      assertOperationStillBound(operation, task, getSessionWorkspaceMetadataForRecovery(workspaceId));
+      assertOperationStillBound(operation, task, isDetachedIntegratedOperation(operation) ? null : getSessionWorkspaceMetadataForRecovery(workspaceId));
     }
 
     if (operation.status === 'completed') {
@@ -566,7 +650,7 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
         operation = updateOperation(operation, {
           phase: 'verification-pending',
           status: 'active',
-          verification: { submittedChecks: effectiveChecks, requirement: postIntegration, evidence: verificationEvidence },
+          verification: { ...(operation.verification || {}), submittedChecks: effectiveChecks, requirement: postIntegration, evidence: verificationEvidence },
           failure: null,
         });
         return {
@@ -592,7 +676,7 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
       operation = updateOperation(operation, {
         phase: 'verification-cleared',
         status: 'active',
-        verification: { submittedChecks: effectiveChecks, requirement: postIntegration, evidence: verificationEvidence },
+        verification: { ...(operation.verification || {}), submittedChecks: effectiveChecks, requirement: postIntegration, evidence: verificationEvidence },
         failure: null,
       });
       injectFinalizationFault('after-verification-clear');
@@ -606,7 +690,7 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
           phase: 'evidence-recorded',
           status: 'active',
           gitEvidence,
-          verification: { submittedChecks: effectiveChecks, requirement: postIntegration, evidence: verificationEvidence },
+          verification: { ...(operation.verification || {}), submittedChecks: effectiveChecks, requirement: postIntegration, evidence: verificationEvidence },
           failure: null,
         });
       } else {
@@ -657,6 +741,28 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
         operation = updateOperation(operation, { phase: 'task-projected', status: 'active', failure: null });
       }
       injectFinalizationFault('after-task-projection');
+
+      if (isDetachedIntegratedOperation(operation)) {
+        operation = updateOperation(operation, {
+          phase: 'completed',
+          status: 'completed',
+          cleanup: operation.cleanup || { removed: true, reason: 'detached-workspace-already-unavailable' },
+          failure: null,
+          completedAt: new Date().toISOString(),
+        });
+        return {
+          status: 'completed' as const,
+          operation,
+          task: getTaskByIdentifier(task.id, 'full') || task,
+          integration,
+          sourcePlan,
+          combinedPlan,
+          postIntegration,
+          gitEvidence,
+          verificationEvidence,
+          cleanup: operation.cleanup,
+        };
+      }
 
       const currentMetadata = getSessionWorkspaceMetadataForRecovery(workspaceId);
       if (!currentMetadata) {

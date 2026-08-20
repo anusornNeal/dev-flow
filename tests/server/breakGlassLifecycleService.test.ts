@@ -107,6 +107,172 @@ function baseRequest(f: ReturnType<typeof fixture>, action: any, operationId: st
   } as any;
 }
 
+type DetachedFailureMode = 'none' | 'infrastructure' | 'code';
+
+function prepareDetachedIntegrated(
+  label: string,
+  options: { failureMode?: DetachedFailureMode; includeOutOfScope?: boolean } = {},
+) {
+  const f = fixture(label);
+  mutateOwned(f, `detached-${label}\n`);
+  if (options.includeOutOfScope) {
+    fs.writeFileSync(path.join(f.workspace.root, 'unrelated.txt'), `leaked-${label}\n`);
+    git(f.workspace.root, ['add', 'owned.txt', 'unrelated.txt']);
+  } else {
+    git(f.workspace.root, ['add', 'owned.txt']);
+  }
+  git(f.workspace.root, ['commit', '-m', `[${f.task.displayId}] chore: detached ${label}`]);
+  const sourceHead = git(f.workspace.root, ['rev-parse', 'HEAD']);
+  const transition = (stage: any, id: string, kind: string) => recordExecutionLifecycleTransition(f.execution.id, {
+    toStage: stage,
+    reasonCode: id,
+    evidence: { id, kind, status: 'completed', operationId: `op-${id}` },
+  });
+  transition('context-ready', `${label}-context`, 'context-bundle');
+  transition('implementing', `${label}-implementing`, 'owned-change');
+  transition('verifying', `${label}-verifying`, 'verification-candidate');
+  const failureMode = options.failureMode || 'none';
+  if (failureMode === 'infrastructure') {
+    transition('verification-infra-blocked', `${label}-infra-blocked`, 'verification-result');
+    recordExecutionSessionEvidence(f.execution.id, [{
+      evidenceId: `${label}-infra-failure`,
+      kind: 'verification-result',
+      revisionIdentity: `${label}-infra-failure`,
+      metadata: { outcome: 'failed', terminal: true, failureClass: 'infrastructure', status: 'timed_out', timedOut: true },
+    }]);
+  } else if (failureMode === 'code') {
+    recordExecutionSessionEvidence(f.execution.id, [{
+      evidenceId: `${label}-code-failure`,
+      kind: 'verification-result',
+      revisionIdentity: `${label}-code-failure`,
+      metadata: { outcome: 'failed', terminal: true, failureClass: 'code', status: 'failed' },
+    }]);
+    transition('repairing', `${label}-repairing`, 'repair');
+  } else {
+    transition('committed', `${label}-committed`, 'git-commit');
+  }
+  const integrated = integrateWorkspaceCommits(f.workspace.workspaceId, { task: getTask(f.task.id) });
+  assert.equal(integrated.status, 'succeeded');
+  const baseHead = git(f.root, ['rev-parse', 'HEAD']);
+  fs.rmSync(f.workspace.root, { recursive: true, force: true });
+  assert.equal(fs.existsSync(f.workspace.root), false);
+  return { ...f, sourceHead, baseHead, integrated };
+}
+
+function detachedRequest(f: ReturnType<typeof prepareDetachedIntegrated>, operationId: string) {
+  return {
+    ...baseRequest(f, 'reconcile-integrated-detached', operationId),
+    expectedCommit: f.sourceHead,
+    checks: [{ name: 'detached-green', command: 'detached-green', status: 'passed', scope: 'full', repoRevision: f.baseHead }],
+  } as any;
+}
+
+test('detached integrated recovery terminalizes exact already-integrated work without recreating or cleaning the lost workspace', () => {
+  const f = prepareDetachedIntegrated('detached-success');
+  const result = executeBreakGlassLifecycle(f.state, detachedRequest(f, 'bg-detached-success-1'));
+
+  assert.equal(result.operation.status, 'completed', JSON.stringify(result.operation));
+  assert.equal(getTask(f.task.id)?.status, 'done');
+  assert.equal(getTask(f.task.id)?.claim, undefined);
+  const execution = getExecutionSessionState(f.execution.id).session;
+  assert.equal(execution.status, 'completed');
+  assert.equal(execution.lifecycle.stage, 'finalized');
+  assert.equal(fs.existsSync(f.workspace.root), false);
+  assert.equal((result.operation.result as any).integratedRevision, f.baseHead);
+  assert.equal((result.operation.result as any).verificationDebtSettled, true);
+});
+
+test('detached integrated recovery is forbidden while the managed workspace root is still live', () => {
+  const f = fixture('detached-live-reject');
+  const expectedCommit = git(f.root, ['rev-parse', 'HEAD']);
+  assert.throws(
+    () => executeBreakGlassLifecycle(f.state, {
+      ...baseRequest(f, 'reconcile-integrated-detached', 'bg-detached-live-reject-1'),
+      expectedCommit,
+      checks: [{ name: 'green', command: 'green', status: 'passed', scope: 'full', repoRevision: expectedCommit }],
+    }),
+    (error: any) => error?.payload?.code === 'BREAK_GLASS_DETACHED_WORKSPACE_STILL_LIVE',
+  );
+  assert.equal(fs.existsSync(f.workspace.root), true);
+});
+
+test('detached integrated recovery blocks integrated changes outside authoritative task-owned scope', () => {
+  const f = prepareDetachedIntegrated('detached-scope-reject', { includeOutOfScope: true });
+  assert.throws(
+    () => executeBreakGlassLifecycle(f.state, detachedRequest(f, 'bg-detached-scope-reject-1')),
+    (error: any) => error?.payload?.code === 'BREAK_GLASS_DETACHED_DIFF_OUT_OF_SCOPE',
+  );
+  assert.equal(getTask(f.task.id)?.status, 'in-progress');
+  assert.equal(getExecutionSessionState(f.execution.id).session.status, 'active');
+});
+
+test('detached integrated recovery creates infrastructure verification debt, settles it with revision-bound GREEN, and finalizes once', () => {
+  const f = prepareDetachedIntegrated('detached-infra-debt', { failureMode: 'infrastructure' });
+  const request = detachedRequest(f, 'bg-detached-infra-debt-1');
+  const result = executeBreakGlassLifecycle(f.state, request);
+  assert.equal(result.operation.status, 'completed', JSON.stringify(result.operation));
+  const state = getExecutionSessionState(f.execution.id);
+  const debts = state.evidence.filter((entry: any) => entry.kind === 'verification-debt');
+  const settlements = state.evidence.filter((entry: any) => entry.kind === 'verification-debt-settlement' && entry.metadata?.status === 'settled');
+  assert.equal(debts.length, 1);
+  assert.equal(debts[0].metadata?.failureClass, 'infrastructure');
+  assert.equal(settlements.length, 1);
+  assert.equal(settlements[0].metadata?.debtEvidenceId, debts[0].id);
+  assert.equal(state.session.status, 'completed');
+  assert.equal(state.session.lifecycle.stage, 'finalized');
+  assert.equal(getTask(f.task.id)?.status, 'done');
+});
+
+test('detached integrated recovery refuses to reclassify a prior code verification failure as infrastructure', () => {
+  const f = prepareDetachedIntegrated('detached-code-reject', { failureMode: 'code' });
+  assert.throws(
+    () => executeBreakGlassLifecycle(f.state, detachedRequest(f, 'bg-detached-code-reject-1')),
+    (error: any) => error?.payload?.code === 'BREAK_GLASS_DETACHED_CODE_FAILURE_REPAIR_REQUIRED',
+  );
+  assert.equal(getTask(f.task.id)?.status, 'in-progress');
+  assert.equal(getExecutionSessionState(f.execution.id).session.status, 'active');
+});
+
+test('detached integrated recovery blocks unresolved durable operations before lifecycle convergence', () => {
+  const f = prepareDetachedIntegrated('detached-pending-reject');
+  recordExecutionPendingOperationReference(f.execution.id, {
+    operationId: 'detached-pending-writer',
+    evidenceId: 'detached-pending-evidence',
+    kind: 'mutation',
+    status: 'running',
+  });
+  assert.throws(
+    () => executeBreakGlassLifecycle(f.state, detachedRequest(f, 'bg-detached-pending-reject-1')),
+    (error: any) => error?.payload?.code === 'BREAK_GLASS_PENDING_OPERATION',
+  );
+  assert.equal(getTask(f.task.id)?.status, 'in-progress');
+});
+
+test('detached integrated recovery resumes after response loss without duplicate finalization effects', () => {
+  const f = prepareDetachedIntegrated('detached-response-loss');
+  const request = detachedRequest(f, 'bg-detached-response-loss-1');
+  __setBreakGlassFaultBoundaryForTests('after-detached-finalization-side-effect');
+  try {
+    assert.throws(
+      () => executeBreakGlassLifecycle(f.state, request),
+      (error: any) => error?.code === 'BREAK_GLASS_FAULT_INJECTED',
+    );
+  } finally {
+    __setBreakGlassFaultBoundaryForTests(null);
+  }
+  assert.equal(getBreakGlassLifecycleOperation(request.operationId).status, 'active');
+  assert.equal(getTask(f.task.id)?.status, 'done');
+  const logCountAfterSideEffect = (getTask(f.task.id)?.logs || []).filter((entry: any) => /Finalized managed workspace/.test(entry.message)).length;
+  assert.equal(logCountAfterSideEffect, 1);
+
+  const replay = executeBreakGlassLifecycle(f.state, request);
+  assert.equal(replay.operation.status, 'completed');
+  assert.equal(getTask(f.task.id)?.status, 'done');
+  assert.equal((getTask(f.task.id)?.logs || []).filter((entry: any) => /Finalized managed workspace/.test(entry.message)).length, 1);
+  assert.equal(getExecutionSessionState(f.execution.id).session.status, 'completed');
+  assert.equal(fs.existsSync(f.workspace.root), false);
+});
+
 test('emergency commit binds override to the exact owned fingerprint and preserves unrelated dirty files', () => {
   const f = fixture('commit');
   const ownership = mutateOwned(f);

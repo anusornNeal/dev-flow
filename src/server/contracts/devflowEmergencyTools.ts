@@ -4,6 +4,7 @@ const actionEnum = [
   'rotate-execution-preserve-wip',
   'release-ownership-preserve-wip',
   'finalize-as-integrated',
+  'reconcile-integrated-detached',
   'supersede-execution',
   'supersede-task-work',
   'commit-current-owned-diff',

@@ -1,8 +1,9 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import type { AppState } from '../types.js';
 import { getProject } from '../repositories/projectRepository.js';
 import { getTaskByIdentifier, saveTask } from '../repositories/taskRepository.js';
-import { getExecutionSessionById } from '../repositories/executionSessionRepository.js';
+import { getExecutionSessionById, listExecutionSessionsForTask } from '../repositories/executionSessionRepository.js';
 import {
   createLifecycleEmergencyOperation,
   getLifecycleEmergencyOperation,
@@ -21,7 +22,10 @@ import {
   cancelExecutionSession,
   getExecutionOwnershipState,
   getExecutionSessionOwnershipEpoch,
+  getExecutionSessionState,
+  recordExecutionLifecycleTransition,
   recordExecutionReconciliationEvidence,
+  recordExecutionSessionEvidence,
   recordExecutionVerificationEvidence,
 } from './executionSessionService.js';
 import { getLatestExecutionCheckpoint } from './executionCheckpointService.js';
@@ -32,12 +36,13 @@ import { inspectWorkspaceRecovery } from './workspaceRecoveryService.js';
 import { reconstructRecordedWorkspaceIntegration } from './workspaceIntegrationService.js';
 import { withSyncLock } from './lockAndIdempotencyService.js';
 import { getGitCommitEvidenceForRoot, getGitWorkspaceSnapshotForRoot } from './gitLocalService.js';
-import { renderTaskCommitMessage } from './projectGitWorkflowPolicyService.js';
+import { renderTaskCommitMessage, resolveProjectGitWorkflowPolicy, taskCommitSubjectMatchesPolicy } from './projectGitWorkflowPolicyService.js';
 
 export const BREAK_GLASS_ACTIONS = [
   'rotate-execution-preserve-wip',
   'release-ownership-preserve-wip',
   'finalize-as-integrated',
+  'reconcile-integrated-detached',
   'supersede-execution',
   'supersede-task-work',
   'commit-current-owned-diff',
@@ -100,7 +105,7 @@ function sessionIdHash(sessionId: string) {
   return crypto.createHash('sha256').update(sessionId).digest('hex').slice(0, 16);
 }
 
-export type BreakGlassFaultBoundary = 'after-commit-side-effect' | 'after-rotation-side-effect' | 'after-discard-side-effect';
+export type BreakGlassFaultBoundary = 'after-commit-side-effect' | 'after-rotation-side-effect' | 'after-discard-side-effect' | 'after-detached-green-settlement' | 'after-detached-finalization-side-effect';
 let breakGlassFaultBoundaryForTests: BreakGlassFaultBoundary | null = null;
 
 export function __setBreakGlassFaultBoundaryForTests(boundary: BreakGlassFaultBoundary | null) {
@@ -226,8 +231,16 @@ function hardSafetyChecks(authority: ReturnType<typeof computeLifecycleAuthority
     const targetedSupersession = input.action === 'supersede-execution'
       && blocker.code === 'MULTIPLE_ACTIVE_EXECUTIONS'
       && Boolean(clean(input.executionSessionId));
-    checks.push({ code: blocker.code, passed: targetedSupersession, message: blocker.message, bypass: targetedSupersession ? 'explicit-targeted-supersession' : null });
-    if (!targetedSupersession) {
+    const detachedMissingWorkspace = input.action === 'reconcile-integrated-detached'
+      && blocker.code === 'WORKSPACE_METADATA_MISSING';
+    const passed = targetedSupersession || detachedMissingWorkspace;
+    checks.push({
+      code: blocker.code,
+      passed,
+      message: blocker.message,
+      bypass: targetedSupersession ? 'explicit-targeted-supersession' : detachedMissingWorkspace ? 'detached-integrated-exact-proof' : null,
+    });
+    if (!passed) {
       throw createApiError(409, 'BREAK_GLASS_HARD_SAFETY_BLOCKED', 'Break-glass cannot bypass repository/workspace/cross-worker identity safety.', {
         details: { action: input.action, blocker },
       });
@@ -412,6 +425,329 @@ function executeCommitBreakGlass(state: AppState, operation: LifecycleEmergencyO
   }, bypassedGates, hardChecks, 'preserved-unrelated');
 }
 
+function normalizeRecoveryScopePath(value: unknown) {
+  return String(value || '').trim().replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/$/, '');
+}
+
+function recoveryPathCovered(filePath: string, scope: string[]) {
+  const normalized = normalizeRecoveryScopePath(filePath);
+  return scope.some((entry) => normalized === entry || normalized.startsWith(`${entry}/`));
+}
+
+function executionRecoveryEvidence(sessionId: string) {
+  const evidence = getExecutionSessionState(sessionId).evidence;
+  const settledDebtIds = new Set(
+    evidence
+      .filter((entry: any) => entry.kind === 'verification-debt-settlement' && entry.metadata?.status === 'settled')
+      .map((entry: any) => String(entry.metadata?.debtEvidenceId || '').trim())
+      .filter(Boolean),
+  );
+  const outstandingDebts = evidence.filter((entry: any) => entry.kind === 'verification-debt'
+    && entry.metadata?.status === 'outstanding'
+    && !settledDebtIds.has(entry.id));
+  const latestFailure = [...evidence].reverse().find((entry: any) => entry.kind === 'verification-result'
+    && entry.metadata?.outcome === 'failed'
+    && entry.metadata?.terminal === true) || null;
+  const ownedPaths = evidence
+    .filter((entry: any) => entry.kind === 'owned-change' && entry.path)
+    .map((entry: any) => normalizeRecoveryScopePath(entry.path))
+    .filter(Boolean);
+  return { outstandingDebts, latestFailure, ownedPaths };
+}
+
+function executeDetachedIntegratedRecovery(
+  state: AppState,
+  operation: LifecycleEmergencyOperationRecord,
+  input: BreakGlassLifecycleInput,
+  task: any,
+  hardChecks: Array<Record<string, unknown>>,
+) {
+  const workspaceId = clean(input.workspaceId, 200);
+  const expectedCommit = clean(input.expectedCommit, 200);
+  if (!workspaceId) throw createApiError(400, 'WORKSPACE_ID_REQUIRED', 'reconcile-integrated-detached requires the exact historical workspaceId.');
+  if (!expectedCommit) throw createApiError(400, 'BREAK_GLASS_EXPECTED_COMMIT_REQUIRED', 'reconcile-integrated-detached requires expectedCommit.');
+  const project = getProject(task.projectId);
+  if (!project?.localPath) throw createApiError(409, 'PROJECT_LOCAL_PATH_REQUIRED', 'Project local root is required to prove detached integrated Git evidence.');
+
+  const liveMetadata = getSessionWorkspaceMetadataForRecovery(workspaceId);
+  if (liveMetadata && fs.existsSync(liveMetadata.root)) {
+    throw createApiError(409, 'BREAK_GLASS_DETACHED_WORKSPACE_STILL_LIVE', 'Detached integrated recovery is forbidden while the selected managed workspace root is still available; use normal finalization.', {
+      details: { workspaceId },
+    });
+  }
+
+  const sessions = listExecutionSessionsForTask(task.id);
+  const active = sessions.filter((entry) => entry.status === 'active');
+  if (active.length > 1) {
+    throw createApiError(409, 'BREAK_GLASS_DETACHED_EXECUTION_AMBIGUOUS', 'Detached integrated recovery requires at most one active execution authority.', {
+      details: { executionSessionIds: active.map((entry) => entry.id), workspaceIds: active.map((entry) => entry.workspaceId) },
+    });
+  }
+  if (active.length === 1 && !clean(input.executionSessionId, 200)) {
+    throw createApiError(400, 'EXECUTION_SESSION_ID_REQUIRED', 'Active detached recovery requires the exact executionSessionId.');
+  }
+  if (active.length === 1 && !clean(input.ownershipEpochId, 200)) {
+    throw createApiError(400, 'OWNERSHIP_EPOCH_ID_REQUIRED', 'Active detached recovery requires the exact ownershipEpochId.');
+  }
+
+  const requestedExecutionId = clean(input.executionSessionId, 200);
+  const matchingWorkspaceSessions = sessions.filter((entry) => entry.workspaceId === workspaceId);
+  const selected = requestedExecutionId
+    ? validateExpectedExecution(task, input)
+    : matchingWorkspaceSessions.length === 1 ? matchingWorkspaceSessions[0] : null;
+  if (!selected) {
+    throw createApiError(409, 'BREAK_GLASS_DETACHED_EXECUTION_AMBIGUOUS', 'Detached integrated recovery requires one exact historical execution bound to the lost workspace.', {
+      details: { workspaceId, matchingExecutionSessionIds: matchingWorkspaceSessions.map((entry) => entry.id) },
+    });
+  }
+  if (selected.projectId !== task.projectId || selected.taskId !== task.id || selected.workspaceId !== workspaceId) {
+    throw createApiError(409, 'BREAK_GLASS_EXECUTION_IDENTITY_MISMATCH', 'Historical execution does not match the selected project/task/workspace identity.');
+  }
+  if (active.length === 1 && active[0].id !== selected.id) {
+    throw createApiError(409, 'BREAK_GLASS_DETACHED_EXECUTION_AMBIGUOUS', 'Requested historical execution is not the unique active execution authority.');
+  }
+  const pending = pendingOperations(selected.id);
+  if (pending.length > 0) {
+    throw createApiError(409, 'BREAK_GLASS_PENDING_OPERATION', 'Detached integrated recovery cannot run while the selected execution has unresolved durable work.', {
+      details: { pendingOperations: pending },
+    });
+  }
+
+  const actualEpoch = String(getExecutionSessionOwnershipEpoch(selected.id).ownershipEpochId || '').trim();
+  if (active.length === 1 && actualEpoch !== clean(input.ownershipEpochId, 200)) {
+    throw createApiError(409, 'BREAK_GLASS_OWNERSHIP_EPOCH_MISMATCH', 'Active detached recovery ownership epoch no longer matches the selected execution.', {
+      details: { expectedOwnershipEpochId: clean(input.ownershipEpochId, 200), actualOwnershipEpochId: actualEpoch || null },
+    });
+  }
+  if (task.claim?.workspaceId && task.claim.workspaceId !== workspaceId) {
+    throw createApiError(409, 'BREAK_GLASS_DETACHED_CLAIM_WORKSPACE_MISMATCH', 'Task claim points at a different workspace than detached recovery.', {
+      details: { claimWorkspaceId: task.claim.workspaceId, workspaceId },
+    });
+  }
+  if (task.claim?.ownershipEpochId && actualEpoch && task.claim.ownershipEpochId !== actualEpoch) {
+    throw createApiError(409, 'BREAK_GLASS_OWNERSHIP_EPOCH_MISMATCH', 'Task claim and historical execution ownership epochs disagree.');
+  }
+
+  const baseRevision = String(selected.baseRevision || '').trim();
+  if (!baseRevision) {
+    throw createApiError(409, 'BREAK_GLASS_DETACHED_BASE_REVISION_MISSING', 'Historical execution lacks the frozen base revision required to prove its integrated diff.');
+  }
+  const baseSnapshot = getGitWorkspaceSnapshotForRoot(project.localPath);
+  if (baseSnapshot.files.length > 0) {
+    throw createApiError(409, 'BREAK_GLASS_DETACHED_BASE_DIRTY', 'Configured local base must be clean before detached integrated recovery.', {
+      details: { changedFiles: baseSnapshot.files.map((entry) => entry.path).slice(0, 100) },
+    });
+  }
+  const commitEvidence = getGitCommitEvidenceForRoot(project.localPath, expectedCommit);
+  if (!taskCommitSubjectMatchesPolicy(commitEvidence.subject, task, project)) {
+    throw createApiError(409, 'BREAK_GLASS_DETACHED_COMMIT_TASK_MISMATCH', 'Expected commit subject does not match the selected task/ticket policy.', {
+      details: { expectedCommit: commitEvidence.commit, subject: commitEvidence.subject },
+    });
+  }
+  const integration = reconstructRecordedWorkspaceIntegration({
+    workspaceId,
+    projectRoot: project.localPath,
+    baseBranch: baseSnapshot.branch,
+    sourceBranch: selected.branch || 'lost-workspace',
+    baseRevision,
+    sourceHead: commitEvidence.commit,
+    strategy: resolveProjectGitWorkflowPolicy(project).integrationStrategy,
+  });
+  if (integration.patchEquivalent === true) {
+    throw createApiError(409, 'BREAK_GLASS_DETACHED_EXACT_ANCESTOR_REQUIRED', 'Detached integrated recovery requires expectedCommit itself to be an ancestor of the configured local base; patch equivalence is insufficient.');
+  }
+  if (integration.changedFiles.length === 0) {
+    throw createApiError(409, 'BREAK_GLASS_DETACHED_DIFF_AMBIGUOUS', 'Expected integrated commit has no provable task diff from the historical execution base revision.');
+  }
+
+  let recovery = executionRecoveryEvidence(selected.id);
+  const scope = Array.from(new Set([
+    ...(Array.isArray(task.targetFiles) ? task.targetFiles : []),
+    ...(Array.isArray(task.claim?.reservedPaths) ? task.claim.reservedPaths : []),
+    ...(Array.isArray(selected.changedFiles) ? selected.changedFiles : []),
+    ...recovery.ownedPaths,
+  ].map(normalizeRecoveryScopePath).filter(Boolean)));
+  if (scope.length === 0) {
+    throw createApiError(409, 'BREAK_GLASS_DETACHED_SCOPE_AMBIGUOUS', 'No authoritative task-owned scope survives for detached integrated recovery.');
+  }
+  const outOfScope = integration.changedFiles.filter((entry) => !recoveryPathCovered(entry, scope));
+  if (outOfScope.length > 0) {
+    throw createApiError(409, 'BREAK_GLASS_DETACHED_DIFF_OUT_OF_SCOPE', 'Integrated commit changes paths outside authoritative task-owned scope.', {
+      details: { outOfScope, authoritativeScope: scope },
+    });
+  }
+
+  const latestFailureClass = String((recovery.latestFailure as any)?.metadata?.failureClass || '').trim();
+  if (latestFailureClass === 'code') {
+    throw createApiError(409, 'BREAK_GLASS_DETACHED_CODE_FAILURE_REPAIR_REQUIRED', 'A prior code/assertion verification failure cannot be reclassified as infrastructure for detached recovery; normal repair evidence is required.', {
+      details: { failureEvidenceId: recovery.latestFailure?.id || null },
+    });
+  }
+  if (recovery.outstandingDebts.length > 1) {
+    throw createApiError(409, 'BREAK_GLASS_DETACHED_VERIFICATION_DEBT_AMBIGUOUS', 'Multiple outstanding verification debts exist for the selected execution.', {
+      details: { debtEvidenceIds: recovery.outstandingDebts.map((entry) => entry.id) },
+    });
+  }
+  if (selected.status === 'active' && !['verifying', 'verification-infra-blocked', 'committed', 'finalized'].includes(selected.lifecycle.stage)) {
+    throw createApiError(409, 'BREAK_GLASS_DETACHED_EXECUTION_STAGE_BLOCKED', `Execution '${selected.id}' cannot be reconciled from lifecycle stage '${selected.lifecycle.stage}'.`, {
+      details: { executionSessionId: selected.id, stage: selected.lifecycle.stage },
+    });
+  }
+  if (selected.status !== 'active' && !(selected.status === 'completed' && selected.lifecycle.stage === 'finalized')) {
+    throw createApiError(409, 'BREAK_GLASS_DETACHED_EXECUTION_TERMINAL_INVALID', `Execution '${selected.id}' is terminal (${selected.status}) without finalized lifecycle evidence.`);
+  }
+
+  const checks = Array.isArray(input.checks) ? input.checks : [];
+  const needsDebtCreation = recovery.outstandingDebts.length === 0 && latestFailureClass === 'infrastructure';
+  const needsGreenBinding = selected.status === 'active'
+    && (needsDebtCreation || recovery.outstandingDebts.length === 1 || selected.lifecycle.stage === 'verifying' || selected.lifecycle.stage === 'verification-infra-blocked');
+  const revisionBoundGreen = checks.filter((check) => check?.status === 'passed' && String(check.repoRevision || '').trim() === integration.baseHeadAfter);
+  if (needsGreenBinding && revisionBoundGreen.length === 0) {
+    throw createApiError(409, 'BREAK_GLASS_DETACHED_GREEN_VERIFICATION_REQUIRED', 'Detached integrated recovery requires authoritative GREEN verification bound to the current configured base revision before debt settlement/finalization.', {
+      details: { requiredRepoRevision: integration.baseHeadAfter },
+    });
+  }
+
+  operation = updateAudit(operation, {
+    evidence: {
+      ...(operation.evidence || {}),
+      detachedIntent: {
+        workspaceId,
+        executionSessionId: selected.id,
+        ownershipEpochId: actualEpoch || null,
+        expectedCommit: commitEvidence.commit,
+        baseRevision,
+        baseBranch: integration.baseBranch,
+        integratedRevision: integration.baseHeadAfter,
+        changedFiles: integration.changedFiles,
+        authoritativeScope: scope,
+        verificationDebtEvidenceId: recovery.outstandingDebts[0]?.id || null,
+      },
+    },
+    hardChecks,
+    bypassedGates: ['WORKSPACE_METADATA_OR_ROOT_MISSING'],
+    wipDisposition: 'already-integrated-workspace-unavailable',
+  });
+
+  if (needsDebtCreation) {
+    const debtEvidenceId = `verification-debt:detached:${operation.id}`;
+    recordExecutionSessionEvidence(selected.id, [{
+      evidenceId: debtEvidenceId,
+      kind: 'verification-debt',
+      revisionIdentity: commitEvidence.commit,
+      metadata: {
+        status: 'outstanding',
+        commitHash: commitEvidence.commit,
+        candidateId: `detached-integrated:${operation.id}`,
+        failureEvidenceId: recovery.latestFailure?.id || null,
+        failureClass: 'infrastructure',
+        authorization: { emergency: true, reason: input.reason, actorLabel: input.actorLabel },
+        recordedAt: new Date().toISOString(),
+      },
+    }]);
+    recovery = executionRecoveryEvidence(selected.id);
+  }
+
+  let ownership = getExecutionOwnershipState(selected.id, { repoRoot: project.localPath });
+  if (needsGreenBinding) {
+    const candidateId = `detached-integrated:${operation.id}:${integration.baseHeadAfter}`;
+    const bound = recordExecutionVerificationEvidence(selected.id, revisionBoundGreen, {
+      repoRoot: project.localPath,
+      provenance: {
+        policy: 'checks-passed',
+        expectedRepoRevision: ownership.repoRevision,
+        expectedOwnedFingerprint: ownership.ownedFingerprint,
+        candidateId,
+        candidateRepoRevision: ownership.repoRevision,
+        executionKey: `detached-integrated:${operation.id}`,
+      },
+    });
+    if (bound.ownership.verificationFresh !== true) {
+      throw createApiError(409, 'BREAK_GLASS_DETACHED_GREEN_BINDING_NOT_FRESH', 'GREEN verification could not be bound authoritatively to the current integrated candidate.');
+    }
+    ownership = bound.ownership;
+    recovery = executionRecoveryEvidence(selected.id);
+    const debt = recovery.outstandingDebts[0] || null;
+    if (debt) {
+      recordExecutionSessionEvidence(selected.id, [{
+        evidenceId: `detached:${operation.id}:verification-debt-settlement`,
+        kind: 'verification-debt-settlement',
+        revisionIdentity: integration.baseHeadAfter,
+        metadata: {
+          status: 'settled',
+          debtEvidenceId: debt.id,
+          commitHash: commitEvidence.commit,
+          operationId: operation.id,
+          repoRevision: integration.baseHeadAfter,
+          settledAt: new Date().toISOString(),
+        },
+      }]);
+    }
+    const freshSession = getExecutionSessionById(selected.id);
+    if (freshSession?.status === 'active' && (freshSession.lifecycle.stage === 'verifying' || freshSession.lifecycle.stage === 'verification-infra-blocked')) {
+      recordExecutionLifecycleTransition(selected.id, {
+        toStage: 'committed',
+        reasonCode: 'detached-integrated-green-settlement',
+        evidence: {
+          id: `detached-integrated:${operation.id}:commit-proof`,
+          kind: 'detached-integrated-recovery',
+          status: 'completed',
+          operationId: operation.id,
+        },
+      });
+    }
+    injectBreakGlassFault('after-detached-green-settlement');
+  }
+
+  const finalized = finalizeTaskWorkspace(state, {
+    taskId: task.id,
+    workspaceId,
+    operationId: clean(input.finalizationOperationId, 200) || undefined,
+    checks,
+    requireChecklistComplete: false,
+    detachedIntegrated: {
+      sourceHead: commitEvidence.commit,
+      baseRevision,
+      baseBranch: integration.baseBranch,
+      executionSessionId: selected.id,
+      ownershipEpochId: actualEpoch || null,
+      candidateId: `detached-integrated:${operation.id}`,
+      candidateRepoRevision: integration.baseHeadAfter,
+      ownedFingerprint: ownership.ownedFingerprint,
+      integration,
+    },
+  });
+  injectBreakGlassFault('after-detached-finalization-side-effect');
+  if (finalized.status !== 'completed') {
+    return updateAudit(operation, {
+      status: 'partial',
+      result: { action: input.action, finalization: finalized as any },
+      evidence: {
+        ...(operation.evidence || {}),
+        expectedCommit: commitEvidence.commit,
+        integratedRevision: integration.baseHeadAfter,
+        finalizationOperationId: finalized.operation?.id || null,
+      },
+      hardChecks,
+      wipDisposition: 'already-integrated-workspace-unavailable',
+      afterSnapshot: compactAuthority(computeLifecycleAuthoritySnapshot(task.id, { workspaceId })),
+      failure: { code: finalized.code || 'FINALIZATION_CONTINUATION_REQUIRED', message: finalized.message || 'Detached finalization requires continuation.', observedAt: new Date().toISOString() },
+    });
+  }
+  return completion(operation, task.id, workspaceId, {
+    action: input.action,
+    finalizationStatus: finalized.status,
+    finalizationOperationId: finalized.operation?.id || null,
+    integratedRevision: integration.baseHeadAfter,
+    verificationDebtSettled: executionRecoveryEvidence(selected.id).outstandingDebts.length === 0,
+  }, {
+    ...(operation.evidence || {}),
+    expectedCommit: commitEvidence.commit,
+    integratedRevision: integration.baseHeadAfter,
+    changedFiles: integration.changedFiles,
+  }, ['WORKSPACE_METADATA_OR_ROOT_MISSING'], hardChecks, 'already-integrated-workspace-unavailable');
+}
+
 function executeFinalizeAsIntegrated(state: AppState, operation: LifecycleEmergencyOperationRecord, input: BreakGlassLifecycleInput, task: any, workspace: NonNullable<ReturnType<typeof expectedWorkspace>>, hardChecks: Array<Record<string, unknown>>) {
   const expectedCommit = clean(input.expectedCommit, 200);
   if (!expectedCommit) throw createApiError(400, 'BREAK_GLASS_EXPECTED_COMMIT_REQUIRED', 'finalize-as-integrated requires expectedCommit.');
@@ -559,8 +895,10 @@ export function executeBreakGlassLifecycle(state: AppState, input: BreakGlassLif
           cleanup: { removed: true, workspaceId: requestedWorkspaceId, recoveredAfterResponseLoss: true },
         }, operation.evidence || {}, operation.bypassedGates || ['DIRTY_WIP_PRESERVATION'], operation.hardChecks || [], 'discarded-explicitly') };
       }
-      const workspaceRequired = !['supersede-task-work'].includes(input.action);
-      const workspace = expectedWorkspace(task, input, workspaceRequired);
+      const workspaceRequired = !['supersede-task-work', 'reconcile-integrated-detached'].includes(input.action);
+      const workspace = input.action === 'reconcile-integrated-detached'
+        ? null
+        : expectedWorkspace(task, input, workspaceRequired);
       const authority = computeLifecycleAuthoritySnapshot(task.id, { workspaceId: workspace?.workspaceId || input.workspaceId });
       assertCurrentCandidate(authority, input);
       hardChecks = hardSafetyChecks(authority, input);
@@ -632,6 +970,10 @@ export function executeBreakGlassLifecycle(state: AppState, input: BreakGlassLif
           replacementWorkspaceId: claimed.workspace.workspaceId,
           replacementOwnershipEpochId: claimed.claim.ownershipEpochId,
         }, operation.evidence || {}, ['EXECUTION_STAGE_OR_CLAIM_OWNER_POLICY'], hardChecks, 'preserved') };
+      }
+
+      if (input.action === 'reconcile-integrated-detached') {
+        return { replayed: false, operation: executeDetachedIntegratedRecovery(state, operation, input, task, hardChecks) };
       }
 
       if (input.action === 'finalize-as-integrated') {

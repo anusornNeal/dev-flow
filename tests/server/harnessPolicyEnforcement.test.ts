@@ -273,6 +273,64 @@ test('execution guard composes policy, ownership, lifecycle, retry identity, and
   }
 });
 
+test('diagnostic verification failure after prior GREEN revokes normal commit readiness', () => {
+  resetSessionWorkspaceRuntimeForTests();
+  const repoRoot = createRepo('diagnostic-after-green-failure-repo');
+  const project = { id: 'project-diagnostic-after-green-failure', name: 'Diagnostic After Green Failure', repoUrl: 'https://example.com/diagnostic-after-green-failure', localPath: repoRoot };
+  createProject(project);
+  const now = new Date().toISOString();
+  const task = {
+    id: 'task-diagnostic-after-green-failure', displayId: 'DVF-HARNESS-DIAGNOSTIC-FAIL', title: 'Diagnostic failure fixture',
+    description: 'A later diagnostic failure must revoke normal commit readiness after earlier GREEN.', projectId: project.id,
+    status: 'todo', priority: 'high', category: 'backend', tags: [], targetFiles: ['value.txt'],
+    checklist: [], logs: [], bugs: [], images: [], createdAt: now, updatedAt: now,
+  } as any;
+  saveTask(task);
+  const state = { projectsCache: [project], countersCache: {}, skillsRegistry: [] } as any;
+  const claimed = claimTaskForSession(task.id, { sessionId: 'diagnostic-after-green-failure-session', ownerKind: 'chat', ownerLabel: 'Diagnostic failure' });
+  const workspaceId = claimed.claim.workspaceId;
+
+  try {
+    const binding = executionSessions.getTaskExecutionMutationBinding({ workspaceId })!;
+    executionSessions.recordTaskExecutionContextReady({ workspaceId }, {
+      contextHandle: 'ctx-diagnostic-after-green', repoRevision: binding.session.repoRevision, contextPlanIdentity: 'plan-diagnostic-after-green',
+    });
+    executionSessions.recordExecutionLifecycleTransition(binding.session.id, {
+      toStage: 'implementing', reasonCode: 'diagnostic-fixture-mutation',
+      evidence: { id: 'diagnostic-fixture-mutation', kind: 'owned-change', status: 'completed' },
+    });
+    fs.writeFileSync(path.join(binding.workspace.root, 'value.txt'), 'after\n', 'utf8');
+    executionSessions.recordExecutionOwnedChanges(binding.session.id, ['value.txt'], { repoRoot: binding.workspace.root, source: 'diagnostic-fixture' });
+
+    const seedGreen = preflightHarnessExecutionGuard(state, 'run_project_command', {
+      workspaceId, command: 'test-focused', harnessOperationId: 'diagnostic-seed-green',
+    });
+    assert.equal(seedGreen.allowed, true);
+    executionSessions.recordExecutionVerificationEvidence(binding.session.id, [{ name: 'seed-green', status: 'passed' }], { repoRoot: binding.workspace.root });
+    recordHarnessExecutionOutcome(seedGreen, { ok: true, status: 'succeeded', exitCode: 0 });
+    assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'verifying');
+
+    const commitBeforeFailure = preflightHarnessExecutionGuard(state, 'commit_task_owned_changes', { workspaceId, taskId: task.id, message: 'before diagnostic failure' });
+    assert.equal(commitBeforeFailure.allowed, true);
+
+    const diagnosticFailure = preflightHarnessExecutionGuard(state, 'run_project_command', {
+      workspaceId, command: 'typecheck', harnessOperationId: 'diagnostic-after-green-failure',
+    });
+    assert.equal(diagnosticFailure.allowed, true);
+    recordHarnessExecutionOutcome(diagnosticFailure, { ok: false, status: 'failed', exitCode: 1, stderr: 'assertion failed' });
+    assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'repairing');
+
+    const commitAfterFailure = preflightHarnessExecutionGuard(state, 'commit_task_owned_changes', { workspaceId, taskId: task.id, message: 'after diagnostic failure' });
+    assert.equal(commitAfterFailure.allowed, false);
+    assert.equal(commitAfterFailure.reasonCode, 'EXECUTION_LIFECYCLE_STAGE_BLOCKED');
+  } finally {
+    const workspace = executionSessions.getTaskExecutionMutationBinding({ workspaceId })?.workspace;
+    if (workspace) git(workspace.root, ['checkout', '--', 'value.txt']);
+    releaseTaskClaim(task.id, { sessionId: 'diagnostic-after-green-failure-session', nextStatus: 'todo' });
+    cleanupSessionWorkspace(workspaceId);
+  }
+});
+
 test('verification OOM preserves execution for verification-only recovery', () => {
   resetSessionWorkspaceRuntimeForTests();
   const repoRoot = createRepo('verification-oom-repo');

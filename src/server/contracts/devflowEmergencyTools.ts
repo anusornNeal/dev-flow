@@ -67,6 +67,24 @@ export const emergencyToolDefinitions: DevFlowToolDefinition[] = [
     buildHttpRequest: (args) => ({ method: 'POST', path: '/api/lifecycle/break-glass', body: args }),
   },
   {
+    name: 'cleanup_orphan_executions',
+    description: 'Dry-run or apply a bounded operator-authorized cleanup of active execution sessions proven orphaned from task claims. Apply reclassifies transactionally, cancels only uniquely bound claimless sessions with no pending operation, preserves task/workspace/Git state, records audit evidence, and replays one stable operationId without sweeping later batches.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        projectId: { type: 'string', minLength: 1 },
+        operationId: { type: 'string', minLength: 1, maxLength: 200, description: 'Stable idempotency identity for apply mode.' },
+        mode: { type: 'string', enum: ['dry-run', 'apply'] },
+        actorLabel: { type: 'string', minLength: 1, maxLength: 100 },
+        reason: { type: 'string', minLength: 1, maxLength: 500, description: 'Human/operator reason persisted with cleanup evidence.' },
+        limit: { type: 'number', minimum: 1, maximum: 100, description: 'Maximum active executions classified in this bounded operation. Defaults to 100.' },
+      },
+      required: ['projectId', 'operationId', 'mode', 'actorLabel', 'reason'],
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: (args) => ({ method: 'POST', path: '/api/lifecycle/orphan-executions/cleanup', body: args }),
+  },
+  {
     name: 'get_break_glass_operations',
     description: 'Read bounded durable break-glass lifecycle audit records. Read-only; does not advance lifecycle state.',
     inputSchema: {

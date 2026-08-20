@@ -36,6 +36,7 @@ import { abortWorkspaceIntegration, integrateWorkspaceCommits, retryWorkspaceInt
 import { getRuntimeIdentity } from '../services/runtimeIdentityService';
 import { getWorkflowRecoveryHandoff } from '../services/workflowRecoveryHandoffService';
 import { executeBreakGlassLifecycle, getBreakGlassLifecycleOperation, listBreakGlassLifecycleOperations } from '../services/breakGlassLifecycleService.js';
+import { cleanupOrphanExecutions } from '../services/emergencyOrphanCleanupService.js';
 import { buildTaskCommitPlan, commitTaskOwnedChanges } from '../services/taskCommitPlanService.js';
 import { finalizeTaskWorkspace, type TaskWorkspaceFinalizationInput } from '../services/taskWorkspaceFinalizationService.js';
 import {
@@ -182,6 +183,14 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
         status: typeof req.query.status === 'string' ? req.query.status : undefined,
         limit: Number.isFinite(Number(req.query.limit)) ? Number(req.query.limit) : undefined,
       }) });
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.post('/api/lifecycle/orphan-executions/cleanup', (req, res) => {
+    try {
+      return res.json(cleanupOrphanExecutions(req.body as any));
     } catch (error) {
       return sendApiError(res, error);
     }

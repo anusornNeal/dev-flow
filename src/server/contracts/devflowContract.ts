@@ -1654,7 +1654,7 @@ const CODING_PROFILE_TOOLS = new Set([
   'get_git_status', 'get_git_diff', 'get_git_log', 'get_git_show', 'get_git_branch', 'get_git_sync_status',
   'ensure_git_branch', 'commit_git_changes', 'push_git_branch', 'create_pull_request',
   'prepare_session_workspace', 'integrate_workspace', 'get_tool_job_result', 'get_recovery_handoff',
-  'break_glass_lifecycle', 'get_break_glass_operations',
+  'break_glass_lifecycle', 'get_break_glass_operations', 'cleanup_orphan_executions',
 ]);
 
 const MCP_CONSOLIDATION_REPLACEMENTS: Record<string, string> = {

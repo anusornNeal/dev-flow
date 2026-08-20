@@ -35,6 +35,7 @@ const { createProject } = await import('../../src/server/repositories/projectRep
 const { getTask, saveTask } = await import('../../src/server/repositories/taskRepository.js');const executionSessions = await import('../../src/server/services/executionSessionService.js');
 const { listExecutionSessionsForTask, listExecutionSessionEvidence } = await import('../../src/server/repositories/executionSessionRepository.js');
 const jobs = await import('../../src/server/repositories/mcpToolJobRepository.js') as any;
+const finalizationOps = await import('../../src/server/repositories/taskFinalizationOperationRepository.js');
 const {
   createOrReuseSessionWorkspace,
   markSessionWorkspaceIntegrationRequired,
@@ -374,6 +375,41 @@ test('project-only recovery discovers a sole dirty workspace without an active t
     assert.equal(body.workspace.disposition, 'needs-recovery');
     assert.equal(body.continuation.action, 'continue-workspace');
     assert.equal(body.continuation.workspaceId, workspace.workspaceId);
+  });
+});
+
+test('recovery handoff exposes a durable finalization cursor instead of reconstructing from task status', async () => {
+  const fixture = seedUnclaimedTaskWorkspace('durable-finalization-cursor');
+  const sourceHead = git(fixture.workspace.root, ['rev-parse', 'HEAD']);
+  const now = new Date().toISOString();
+  const operation = finalizationOps.createTaskFinalizationOperation({
+    id: `finalize-recovery-${Date.now()}`,
+    projectId: fixture.projectId,
+    taskId: fixture.taskId,
+    workspaceId: fixture.workspace.workspaceId,
+    executionSessionId: null,
+    ownershipEpochId: null,
+    sourceHead,
+    baseRevision: fixture.workspace.baseRevision,
+    baseBranch: fixture.workspace.baseBranch,
+    candidateId: null,
+    candidateRepoRevision: null,
+    ownedFingerprint: null,
+    phase: 'evidence-recorded',
+    status: 'active',
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  await withServer(async (baseUrl) => {
+    const { response, body } = await json(baseUrl, new URLSearchParams({ taskId: fixture.displayId }));
+    assert.equal(response.status, 200);
+    assert.equal(body.finalizationOperation.id, operation.id);
+    assert.equal(body.finalizationOperation.phase, 'evidence-recorded');
+    assert.equal(body.continuation.action, 'continue-workspace');
+    assert.equal(body.continuation.operationId, operation.id);
+    assert.equal(body.continuation.tool, 'finalize_task_workspace');
+    assert.match(body.continuation.reason, /durable task finalization|retry the same operation/i);
   });
 });
 

@@ -59,16 +59,17 @@ export const workspaceToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'finalize_task_workspace',
-    description: 'Complete one clean committed managed workspace as a local-only terminal task flow: verify supplied checks, integrate into the configured local base, sync local Git evidence, mark the task done, and remove the safe clean workspace/branch. Never pushes or fetches; dirty/conflicted work is preserved for recovery.',
+    description: 'Resume or complete one durable local-only task finalization operation. The operation freezes task/workspace/execution/candidate identity, integrates exactly once, persists verification and Git evidence, terminalizes execution, projects task done, then performs cleanup. Retry with operationId after interruptions. Never pushes or fetches.',
     inputSchema: {
       type: 'object',
       properties: {
         workspaceId: { type: 'string', description: 'Opaque DevFlow workspace id.' },
         taskId: { type: 'string', description: 'DevFlow task id/displayId to finalize.' },
-        checks: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, command: { type: 'string' }, status: { type: 'string', enum: ['passed', 'failed', 'not-run'] }, scope: { type: 'string', enum: ['targeted', 'broad', 'full'], description: 'Verification coverage scope for combined-state finalization.' }, repoRevision: { type: 'string', description: 'Exact integrated Git revision this verification check was run against.' }, summary: { type: 'string' }, output: { type: 'string' }, recordedAt: { type: 'string' } }, required: ['command', 'status'] } },
+        operationId: { type: 'string', description: 'Optional durable finalization operation id returned by a prior attempt. Supplying it resumes exactly that frozen operation and refuses identity drift.' },
+        checks: { type: 'array', description: 'Verification evidence. Required when starting a new finalization and when satisfying a verification-pending continuation; may be omitted when resuming later phases because the operation persists prior submitted checks.', items: { type: 'object', properties: { name: { type: 'string' }, command: { type: 'string' }, status: { type: 'string', enum: ['passed', 'failed', 'not-run'] }, scope: { type: 'string', enum: ['targeted', 'broad', 'full'], description: 'Verification coverage scope for combined-state finalization.' }, repoRevision: { type: 'string', description: 'Exact integrated Git revision this verification check was run against.' }, summary: { type: 'string' }, output: { type: 'string' }, recordedAt: { type: 'string' } }, required: ['command', 'status'] } },
         requireChecklistComplete: { type: 'boolean', description: 'Require every checklist item complete before finalization. Defaults to true.' },
       },
-      required: ['workspaceId', 'taskId', 'checks'],
+      required: ['workspaceId', 'taskId'],
     },
     outputSchema: { type: 'object' },
     buildHttpRequest: (args) => ({ method: 'POST', path: '/api/workspaces/finalize-task', body: args }),

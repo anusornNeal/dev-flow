@@ -2,6 +2,7 @@ import type { AppState } from '../types.js';
 import { getProject } from '../repositories/projectRepository.js';
 import { getTaskByIdentifier, getTasks } from '../repositories/taskRepository.js';
 import { getJob, listRecentJobs, type McpToolJob } from '../repositories/mcpToolJobRepository.js';
+import { getLatestTaskFinalizationOperation, type TaskFinalizationOperationRecord } from '../repositories/taskFinalizationOperationRepository.js';
 import { DEVFLOW_CONTRACT_VERSION, getCapabilityCatalog } from '../contracts/devflowContract.js';
 import { findProjectByIdentifier } from './taskService.js';
 import { classifyRuntimeIdentity, getRuntimeIdentity, type RuntimeClientState } from './runtimeIdentityService.js';
@@ -107,6 +108,36 @@ function compactJob(job: McpToolJob) {
     ...(job.completedAt ? { completedAt: job.completedAt } : {}),
     ...(job.supersededAt ? { supersededAt: job.supersededAt } : {}),
   };
+}
+
+function compactFinalizationOperation(operation: TaskFinalizationOperationRecord | null) {
+  return operation ? {
+    id: operation.id,
+    taskId: operation.taskId,
+    workspaceId: operation.workspaceId,
+    executionSessionId: operation.executionSessionId,
+    ownershipEpochId: operation.ownershipEpochId,
+    sourceHead: operation.sourceHead,
+    baseBranch: operation.baseBranch,
+    candidateId: operation.candidateId,
+    candidateRepoRevision: operation.candidateRepoRevision,
+    ownedFingerprint: operation.ownedFingerprint,
+    phase: operation.phase,
+    status: operation.status,
+    retryCount: operation.retryCount,
+    failure: operation.failure,
+    verification: operation.verification?.requirement && typeof operation.verification.requirement === 'object'
+      ? {
+          repoRevision: (operation.verification.requirement as any).repoRevision || null,
+          requiredCommands: Array.isArray((operation.verification.requirement as any).requiredCommands) ? (operation.verification.requirement as any).requiredCommands : [],
+          missingCommands: Array.isArray((operation.verification.requirement as any).missingCommands) ? (operation.verification.requirement as any).missingCommands : [],
+          requiredScope: (operation.verification.requirement as any).requiredScope || null,
+          broadEvidenceRequired: (operation.verification.requirement as any).broadEvidenceRequired === true,
+        }
+      : null,
+    updatedAt: operation.updatedAt,
+    completedAt: operation.completedAt,
+  } : undefined;
 }
 
 function jobMatches(job: McpToolJob, task: any, workspaceId: string, projectId: string) {
@@ -296,6 +327,8 @@ export function getWorkflowRecoveryHandoff(state: AppState, args: RecoveryArgs =
 
   if (!project && task?.projectId) project = getProject(task.projectId);
   if (!workspaceId) workspaceId = clean(task?.claim?.workspaceId);
+  let finalizationOperation = task ? getLatestTaskFinalizationOperation(task.id, workspaceId || undefined) : null;
+  if (!workspaceId && finalizationOperation && finalizationOperation.status !== 'completed') workspaceId = finalizationOperation.workspaceId;
 
   let inspection: WorkspaceRecoveryInspection | undefined = discoveredInspection;
   if (workspaceId && !inspection) inspection = inspectWorkspaceRecovery(workspaceId);
@@ -320,8 +353,24 @@ export function getWorkflowRecoveryHandoff(state: AppState, args: RecoveryArgs =
     ...(project ? { project: compactProject(project) } : {}),
     ...(task ? { task: compactTask(task) } : {}),
     ...(inspection ? { workspace: compactWorkspace(inspection) } : {}),
+    ...(finalizationOperation ? { finalizationOperation: compactFinalizationOperation(finalizationOperation) } : {}),
     jobs,
   };
+
+  if (finalizationOperation && finalizationOperation.status !== 'completed') {
+    return {
+      ...common,
+      continuation: {
+        action: 'continue-workspace' as const,
+        workspaceId: finalizationOperation.workspaceId,
+        operationId: finalizationOperation.id,
+        tool: 'finalize_task_workspace' as const,
+        reason: finalizationOperation.status === 'cleanup-pending'
+          ? 'Task finalization is logically complete and only managed-workspace cleanup remains; retry the same durable finalization operation.'
+          : `Durable task finalization is paused at phase '${finalizationOperation.phase}'; retry the same operation id instead of reconstructing finalization from task status.`,
+      },
+    };
+  }
 
   const reusableJob = relevantJobs.find((job) => job.status === 'queued' || job.status === 'running' || job.status === 'succeeded');
   if (reusableJob) {

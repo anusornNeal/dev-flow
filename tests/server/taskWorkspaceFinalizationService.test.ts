@@ -13,7 +13,8 @@ const { createProject } = await import('../../src/server/repositories/projectRep
 const { saveTask, getTask } = await import('../../src/server/repositories/taskRepository.js');
 const { createOrReuseSessionWorkspace, resetSessionWorkspaceRuntimeForTests, acquireSessionWorkspace, releaseSessionWorkspace } = await import('../../src/server/services/sessionWorkspaceService.js');
 const { createExecutionSession, getExecutionSessionState, recordExecutionLifecycleTransition } = await import('../../src/server/services/executionSessionService.js');
-const { finalizeTaskWorkspace } = await import('../../src/server/services/taskWorkspaceFinalizationService.js');
+const { finalizeTaskWorkspace, __setTaskFinalizationFaultBoundaryForTests } = await import('../../src/server/services/taskWorkspaceFinalizationService.js');
+const { getTaskFinalizationOperation } = await import('../../src/server/repositories/taskFinalizationOperationRepository.js');
 
 function git(root: string, args: string[], allowFailure = false) {
   const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', shell: false });
@@ -84,6 +85,19 @@ function advanceExecutionToCommitted(executionId: string, label: string) {
   advance('committed', `${label}-commit`, 'git-commit');
 }
 
+function preparedFinalizationFixture(label: string) {
+  const prepared = fixture(label);
+  fs.writeFileSync(path.join(prepared.workspace.root, 'tracked.txt'), `implemented-${label}\n`);
+  git(prepared.workspace.root, ['add', 'tracked.txt']);
+  git(prepared.workspace.root, ['commit', '-m', taskCommitSubject(prepared.task, `implement ${label}`)]);
+  const claimed = getTask(prepared.task.id)!;
+  claimed.claim = { workspaceId: prepared.workspace.workspaceId, sessionIdHash: `fixture-${label}`, ownerLabel: 'Fixture chat', ownerKind: 'chat', claimedAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+  saveTask(claimed);
+  const execution = createExecutionSession({ projectId: prepared.task.projectId, taskId: prepared.task.id, workspaceId: prepared.workspace.workspaceId, branch: prepared.workspace.branch, repoRoot: prepared.workspace.root });
+  advanceExecutionToCommitted(execution.id, label);
+  return { ...prepared, execution };
+}
+
 test('committed workspace finalizes into local develop and removes clean worktree/branch', () => {
   const { root, task, workspace, state } = fixture('success');
   fs.writeFileSync(path.join(workspace.root, 'tracked.txt'), 'implemented\n');
@@ -125,7 +139,9 @@ test('execution-stage finalization failure keeps task, claim, and execution reco
   const first = finalizeTaskWorkspace(state, { taskId: task.id, workspaceId: workspace.workspaceId, checks });
   assert.equal(first.status, 'continuation', JSON.stringify(first));
   assert.equal(first.code, 'POST_INTEGRATION_FINALIZATION_REQUIRED');
-  assert.equal(first.continuation.phase, 'execution-lifecycle');
+  assert.equal(first.continuation.phase, 'evidence-recorded');
+  assert.equal(first.operation.phase, 'evidence-recorded');
+  assert.equal(first.continuation.operationId, first.operation.id);
   assert.equal(first.continuation.error.code, 'TASK_FINALIZATION_EXECUTION_STAGE_INVALID');
   const integratedHead = git(root, ['rev-parse', 'HEAD']).stdout;
   const afterFailure = getTask(task.id)!;
@@ -138,8 +154,7 @@ test('execution-stage finalization failure keeps task, claim, and execution reco
   advanceExecutionToCommitted(execution.id, 'stage-retry');
   const second = finalizeTaskWorkspace(state, { taskId: task.id, workspaceId: workspace.workspaceId, checks });
   assert.equal(second.status, 'completed', JSON.stringify(second));
-  assert.equal(second.integration.alreadyIntegrated, true);
-  assert.equal(second.integration.baseHeadBefore, integratedHead);
+  assert.equal(second.operation.id, first.operation.id);
   assert.equal(second.integration.baseHeadAfter, integratedHead);
   const completedTask = getTask(task.id)!;
   assert.equal(completedTask.status, 'done');
@@ -239,8 +254,7 @@ test('finalization blocks pre-integration evidence when sibling changes escalate
   ];
   const completed = finalizeTaskWorkspace(state, { taskId: task.id, workspaceId: workspace.workspaceId, checks: postIntegrationChecks });
   assert.equal(completed.status, 'completed');
-  assert.equal(completed.integration.alreadyIntegrated, true);
-  assert.equal(completed.integration.baseHeadBefore, integratedHead);
+  assert.equal(completed.operation.id, preIntegration.operation.id);
   assert.equal(completed.integration.baseHeadAfter, integratedHead);
   assert.equal(git(root, ['rev-parse', 'HEAD']).stdout, integratedHead);
   assert.equal(getTask(task.id)?.status, 'done');
@@ -295,7 +309,8 @@ test('post-integration evidence failure returns a resumable continuation and ret
   });
   assert.equal(first.status, 'continuation');
   assert.equal(first.code, 'POST_INTEGRATION_FINALIZATION_REQUIRED');
-  assert.equal(first.continuation.phase, 'evidence');
+  assert.equal(first.continuation.phase, 'verification-cleared');
+  assert.equal(first.operation.phase, 'verification-cleared');
   assert.equal(first.continuation.error.code, 'VERIFICATION_COMMAND_REQUIRED');
   assert.equal(first.continuation.nextAction.action, 'RETRY_FINALIZE_TASK_WORKSPACE');
   assert.equal(first.continuation.nextAction.reintegrate, false);
@@ -306,12 +321,136 @@ test('post-integration evidence failure returns a resumable continuation and ret
 
   const second = finalizeTaskWorkspace(state, { taskId: task.id, workspaceId: workspace.workspaceId, checks });
   assert.equal(second.status, 'completed', JSON.stringify(second));
-  assert.equal(second.integration.alreadyIntegrated, true);
-  assert.equal(second.integration.baseHeadBefore, integratedHead);
+  assert.equal(second.operation.id, first.operation.id);
   assert.equal(second.integration.baseHeadAfter, integratedHead);
   assert.equal(git(root, ['rev-parse', 'HEAD']).stdout, integratedHead);
   assert.equal(getTask(task.id)?.status, 'done');
   assert.equal(fs.existsSync(workspace.root), false);
+});
+
+test('durable finalization operation resumes the same identity across injected phase failures without duplicate completion effects', () => {
+  const boundaries = [
+    'after-freeze',
+    'after-integration',
+    'after-verification-clear',
+    'after-evidence',
+    'after-execution-terminalization',
+    'after-task-projection',
+    'before-cleanup',
+    'after-cleanup',
+  ] as const;
+
+  for (const boundary of boundaries) {
+    const { root, task, workspace, state, execution } = preparedFinalizationFixture(`fault-${boundary}`);
+    const baseHeadBefore = git(root, ['rev-parse', 'HEAD']).stdout;
+    __setTaskFinalizationFaultBoundaryForTests(boundary);
+    let first: any;
+    try {
+      first = finalizeTaskWorkspace(state, { taskId: task.id, workspaceId: workspace.workspaceId, checks });
+    } finally {
+      __setTaskFinalizationFaultBoundaryForTests(null);
+    }
+    assert.notEqual(first.status, 'completed', `${boundary} should interrupt the first attempt`);
+    assert.ok(first.operation?.id, `${boundary} must expose a durable operation id`);
+    const durable = getTaskFinalizationOperation(first.operation.id)!;
+    assert.equal(durable.id, first.operation.id);
+    assert.equal(durable.taskId, task.id);
+    assert.equal(durable.workspaceId, workspace.workspaceId);
+
+    const headAfterFirst = git(root, ['rev-parse', 'HEAD']).stdout;
+    const retry = finalizeTaskWorkspace(state, {
+      taskId: task.id,
+      workspaceId: workspace.workspaceId,
+      operationId: first.operation.id,
+      checks,
+    });
+    assert.equal(retry.status, 'completed', `${boundary}: ${JSON.stringify(retry)}`);
+    assert.equal(retry.operation.id, first.operation.id);
+    assert.equal(retry.operation.status, 'completed');
+    assert.equal(getTaskFinalizationOperation(first.operation.id)?.status, 'completed');
+    assert.equal(getTask(task.id)?.status, 'done');
+    assert.equal(getExecutionSessionState(execution.id).session.status, 'completed');
+    assert.equal((getTask(task.id)?.logs || []).filter((entry: any) => entry.id === `log-workspace-finalized-${first.operation.id}`).length, 1);
+    assert.equal(fs.existsSync(workspace.root), false);
+    if (boundary !== 'after-freeze') assert.equal(git(root, ['rev-parse', 'HEAD']).stdout, headAfterFirst, `${boundary} must not integrate twice`);
+    else assert.notEqual(git(root, ['rev-parse', 'HEAD']).stdout, baseHeadBefore);
+
+    const replay = finalizeTaskWorkspace(state, {
+      taskId: task.id,
+      workspaceId: workspace.workspaceId,
+      operationId: first.operation.id,
+      checks,
+    });
+    assert.equal(replay.status, 'completed');
+    assert.equal(replay.operation.id, first.operation.id);
+    assert.equal((getTask(task.id)?.logs || []).filter((entry: any) => entry.id === `log-workspace-finalized-${first.operation.id}`).length, 1);
+  }
+});
+
+test('task presentation drift after integration does not revoke a frozen finalization operation', () => {
+  const { task, workspace, state, execution } = preparedFinalizationFixture('status-drift-resume');
+  __setTaskFinalizationFaultBoundaryForTests('after-integration');
+  let first: any;
+  try {
+    first = finalizeTaskWorkspace(state, { taskId: task.id, workspaceId: workspace.workspaceId, checks });
+  } finally {
+    __setTaskFinalizationFaultBoundaryForTests(null);
+  }
+  assert.equal(first.operation.phase, 'integrated');
+  const drifted = getTask(task.id)!;
+  drifted.status = 'todo';
+  drifted.updatedAt = new Date().toISOString();
+  saveTask(drifted);
+
+  const retry = finalizeTaskWorkspace(state, { taskId: task.id, workspaceId: workspace.workspaceId, operationId: first.operation.id, checks });
+  assert.equal(retry.status, 'completed', JSON.stringify(retry));
+  assert.equal(retry.operation.id, first.operation.id);
+  assert.equal(getTask(task.id)?.status, 'done');
+  assert.equal(getExecutionSessionState(execution.id).session.status, 'completed');
+});
+
+test('fresh retry can resume a frozen post-integration operation without resupplying prior checks', () => {
+  const { task, workspace, state, execution } = preparedFinalizationFixture('resume-without-checks');
+  __setTaskFinalizationFaultBoundaryForTests('after-integration');
+  let first: any;
+  try {
+    first = finalizeTaskWorkspace(state, { taskId: task.id, workspaceId: workspace.workspaceId, checks });
+  } finally {
+    __setTaskFinalizationFaultBoundaryForTests(null);
+  }
+  assert.equal(first.operation.phase, 'integrated');
+  assert.ok(Array.isArray(getTaskFinalizationOperation(first.operation.id)?.verification?.submittedChecks));
+
+  const retry = finalizeTaskWorkspace(state, {
+    taskId: task.id,
+    workspaceId: workspace.workspaceId,
+    operationId: first.operation.id,
+  });
+  assert.equal(retry.status, 'completed', JSON.stringify(retry));
+  assert.equal(retry.operation.id, first.operation.id);
+  assert.equal(getTask(task.id)?.status, 'done');
+  assert.equal(getExecutionSessionState(execution.id).session.status, 'completed');
+});
+
+test('frozen finalization operation rejects a changed source HEAD instead of silently adopting new work', () => {
+  const { task, workspace, state } = preparedFinalizationFixture('source-fence');
+  __setTaskFinalizationFaultBoundaryForTests('after-freeze');
+  let first: any;
+  try {
+    first = finalizeTaskWorkspace(state, { taskId: task.id, workspaceId: workspace.workspaceId, checks });
+  } finally {
+    __setTaskFinalizationFaultBoundaryForTests(null);
+  }
+  fs.writeFileSync(path.join(workspace.root, 'late.txt'), 'late work\n');
+  git(workspace.root, ['add', 'late.txt']);
+  git(workspace.root, ['commit', '-m', taskCommitSubject(task, 'late work after freeze')]);
+
+  assert.throws(
+    () => finalizeTaskWorkspace(state, { taskId: task.id, workspaceId: workspace.workspaceId, operationId: first.operation.id, checks }),
+    (error: any) => error?.payload?.code === 'FINALIZATION_OPERATION_SOURCE_CHANGED',
+  );
+  assert.equal(getTask(task.id)?.status, 'in-progress');
+  assert.equal(getTaskFinalizationOperation(first.operation.id)?.phase, 'frozen');
 });
 
 test('local finalization succeeds with an origin remote but no upstream or pushed head', () => {
@@ -356,10 +495,11 @@ test('cleanup failure is resumable after task evidence and lifecycle are durable
   acquireSessionWorkspace(workspace.workspaceId);
 
   const first = finalizeTaskWorkspace(state, { taskId: task.id, workspaceId: workspace.workspaceId, checks });
-  assert.equal(first.status, 'continuation');
-  assert.equal(first.code, 'POST_INTEGRATION_FINALIZATION_REQUIRED');
-  assert.equal(first.continuation.phase, 'cleanup');
-  assert.equal(first.continuation.error.code, 'WORKSPACE_ACTIVE');
+  assert.equal(first.status, 'cleanup-pending');
+  assert.equal(first.code, 'FINALIZATION_CLEANUP_PENDING');
+  assert.equal(first.operation.phase, 'cleanup-pending');
+  assert.equal(first.operation.status, 'cleanup-pending');
+  assert.equal(first.operation.failure?.code, 'WORKSPACE_ACTIVE');
   const integratedHead = git(root, ['rev-parse', 'HEAD']).stdout;
   const durableTask = getTask(task.id)!;
   assert.equal(durableTask.status, 'done');
@@ -373,7 +513,8 @@ test('cleanup failure is resumable after task evidence and lifecycle are durable
   releaseSessionWorkspace(workspace.workspaceId);
   const second = finalizeTaskWorkspace(state, { taskId: task.id, workspaceId: workspace.workspaceId, checks });
   assert.equal(second.status, 'completed', JSON.stringify(second));
-  assert.equal(second.integration.alreadyIntegrated, true);
+  assert.equal(second.operation.id, first.operation.id);
+  assert.equal(second.integration.baseHeadAfter, integratedHead);
   assert.equal(git(root, ['rev-parse', 'HEAD']).stdout, integratedHead);
   assert.equal((getTask(task.id)?.logs || []).filter((entry: any) => /Finalized managed workspace/.test(entry.message)).length, 1);
   assert.equal(fs.existsSync(workspace.root), false);

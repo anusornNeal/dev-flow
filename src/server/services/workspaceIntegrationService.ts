@@ -421,6 +421,55 @@ function integrateWorkspaceWithMergePolicy(
   };
 }
 
+export function reconstructRecordedWorkspaceIntegration(args: {
+  workspaceId: string;
+  projectRoot: string;
+  baseBranch: string;
+  sourceBranch: string;
+  baseRevision: string;
+  sourceHead: string;
+  strategy: GitIntegrationStrategy;
+}) : WorkspaceIntegrationSuccess {
+  const projectRoot = path.resolve(args.projectRoot);
+  const baseHead = head(projectRoot);
+  if (branch(projectRoot) !== args.baseBranch) {
+    throw createApiError(409, 'FINALIZATION_BASE_BRANCH_MISMATCH', `Recorded finalization target '${args.baseBranch}' is not the active base branch.`, {
+      affectedId: args.workspaceId,
+      details: { expected: args.baseBranch, actual: branch(projectRoot) },
+    });
+  }
+  const integratedExactly = isAncestor(projectRoot, args.sourceHead, baseHead);
+  const patchEquivalent = !integratedExactly && patchEquivalentToBase(projectRoot, baseHead, args.sourceHead);
+  if (!integratedExactly && !patchEquivalent) {
+    throw createApiError(409, 'FINALIZATION_RECORDED_INTEGRATION_NOT_FOUND', 'The frozen finalization source revision is not represented in the current target branch.', {
+      affectedId: args.workspaceId,
+      details: { sourceHead: args.sourceHead, baseHead, baseBranch: args.baseBranch },
+    });
+  }
+  const sourceChanges = changedFiles(projectRoot, args.baseRevision, args.sourceHead);
+  const combinedChanges = changedFiles(projectRoot, args.baseRevision, baseHead);
+  return {
+    status: 'succeeded',
+    workspaceId: args.workspaceId,
+    strategy: args.strategy,
+    baseBranch: args.baseBranch,
+    sourceBranch: args.sourceBranch,
+    baseRevision: args.baseRevision,
+    baseHeadBefore: baseHead,
+    baseHeadAfter: baseHead,
+    sourceHead: args.sourceHead,
+    integratedHead: baseHead,
+    sourceCommits: sourceCommits(projectRoot, args.baseRevision, args.sourceHead),
+    integratedCommits: sourceCommits(projectRoot, args.baseRevision, baseHead),
+    changedFiles: sourceChanges,
+    combinedChangedFiles: combinedChanges,
+    combinedImpactBaseRevision: args.baseRevision,
+    combinedImpactHead: baseHead,
+    alreadyIntegrated: true,
+    ...(patchEquivalent ? { patchEquivalent: true } : {}),
+  };
+}
+
 export function integrateWorkspaceCommits(workspaceId: string, options: WorkspaceIntegrationOptions = {}): WorkspaceIntegrationSuccess | WorkspaceIntegrationConflict {
   integrationMetrics.attempts += 1;
   const workspace = resolveWorkspaceForIntegration(workspaceId);

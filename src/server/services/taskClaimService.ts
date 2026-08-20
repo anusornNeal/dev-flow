@@ -397,36 +397,35 @@ export function withTaskDeletionLifecycleGuard<T>(taskIds: string[], deleteFn: (
   }));
 }
 
-export function finalizeTaskLifecycleDisposition(
+export function terminalizeTaskExecutionForFinalization(
   taskId: string,
   workspaceId: string,
-  buildFinalTask: (task: any) => any,
-  input: { changedFiles?: string[]; verification?: unknown[]; repoRevision: string },
+  input: {
+    changedFiles?: string[];
+    verification?: unknown[];
+    repoRevision: string;
+    executionSessionId?: string | null;
+    ownershipEpochId?: string | null;
+    operationId?: string | null;
+  },
 ) {
   const initial = getTaskByIdentifier(taskId, 'full');
   if (!initial) throw createApiError(404, 'TASK_NOT_FOUND', `Task '${taskId}' was not found.`, { affectedId: taskId });
   const cleanWorkspaceId = String(workspaceId || '').trim();
   const repoRevision = String(input?.repoRevision || '').trim();
   if (!cleanWorkspaceId || !repoRevision) throw createApiError(400, 'TASK_FINALIZATION_IDENTITY_REQUIRED', 'workspaceId and repoRevision are required for lifecycle finalization.');
-  return withSyncLock(`task-claim:${initial.projectId}`, () => {
-    const authority = computeLifecycleAuthoritySnapshot(initial.id, { workspaceId: cleanWorkspaceId });
-    if (authority.hardBlockers.length > 0) {
-      throw createApiError(409, 'TASK_LIFECYCLE_AUTHORITY_CONFLICT', `Task '${initial.displayId || initial.id}' has ambiguous lifecycle authority and cannot finalize automatically.`, {
-        affectedId: initial.id,
-        details: { classification: authority.classification, blockers: authority.hardBlockers, workspaceId: cleanWorkspaceId },
-      });
-    }
-    return withDbTransaction(() => {
+  return withSyncLock(`task-claim:${initial.projectId}`, () => withDbTransaction(() => {
     const current = getTaskByIdentifier(taskId, 'full');
     if (!current) throw createApiError(404, 'TASK_NOT_FOUND', `Task '${taskId}' was not found.`, { affectedId: taskId });
-    assertNoUnresolvedTaskOperations(current, 'finalize task ownership');
+    assertNoUnresolvedTaskOperations(current, 'terminalize task execution for finalization');
     if (current.claim?.workspaceId && current.claim.workspaceId !== cleanWorkspaceId) {
       throw createApiError(409, 'TASK_FINALIZATION_WORKSPACE_MISMATCH', 'Task claim belongs to a different workspace than finalization.', {
         affectedId: current.id,
         details: { claimWorkspaceId: current.claim.workspaceId, workspaceId: cleanWorkspaceId },
       });
     }
-    const active = activeTaskExecutions(current);
+    const sessions = listExecutionSessionsForTask(current.id);
+    const active = sessions.filter((entry) => entry.status === 'active');
     const foreign = active.filter((entry) => entry.workspaceId !== cleanWorkspaceId);
     if (foreign.length > 0) {
       throw createApiError(409, 'TASK_FINALIZATION_EXECUTION_AMBIGUOUS', 'Task has active execution ownership outside the workspace being finalized.', {
@@ -434,39 +433,129 @@ export function finalizeTaskLifecycleDisposition(
         details: { workspaceId: cleanWorkspaceId, executionSessionIds: foreign.map((entry) => entry.id) },
       });
     }
-    const session = active.find((entry) => entry.workspaceId === cleanWorkspaceId) || null;
-    if (session) {
-      if (session.lifecycle.stage === 'committed') {
-        recordExecutionLifecycleTransition(session.id, {
-          toStage: 'finalized',
-          reasonCode: 'workspace-finalization-succeeded',
-          evidence: {
-            id: `workspace-finalization:${cleanWorkspaceId}:${repoRevision}`,
-            kind: 'workspace-finalization',
-            status: 'completed',
-            operationId: `finalize:${cleanWorkspaceId}:${repoRevision}`,
-          },
-        });
-      } else if (session.lifecycle.stage !== 'finalized') {
-        throw createApiError(409, 'TASK_FINALIZATION_EXECUTION_STAGE_INVALID', `Execution '${session.id}' must be committed before task finalization.`, {
+    const requestedSessionId = String(input.executionSessionId || '').trim();
+    const candidates = sessions.filter((entry) => entry.workspaceId === cleanWorkspaceId);
+    const session = requestedSessionId
+      ? candidates.find((entry) => entry.id === requestedSessionId) || null
+      : active.filter((entry) => entry.workspaceId === cleanWorkspaceId).length === 1
+        ? active.find((entry) => entry.workspaceId === cleanWorkspaceId) || null
+        : candidates.length === 1
+          ? candidates[0]
+          : null;
+    if (requestedSessionId && !session) {
+      throw createApiError(409, 'TASK_FINALIZATION_EXECUTION_IDENTITY_MISMATCH', 'The frozen finalization execution session is no longer associated with this task/workspace.', {
+        affectedId: current.id,
+        details: { workspaceId: cleanWorkspaceId, executionSessionId: requestedSessionId },
+      });
+    }
+    if (active.filter((entry) => entry.workspaceId === cleanWorkspaceId).length > 1) {
+      throw createApiError(409, 'TASK_FINALIZATION_EXECUTION_AMBIGUOUS', 'Multiple active executions exist in the workspace being finalized.', {
+        affectedId: current.id,
+        details: { workspaceId: cleanWorkspaceId, executionSessionIds: active.filter((entry) => entry.workspaceId === cleanWorkspaceId).map((entry) => entry.id) },
+      });
+    }
+    if (!session) return { task: current, executionSessionId: null, idempotent: true };
+    const requestedEpoch = String(input.ownershipEpochId || '').trim();
+    const actualEpoch = String(getExecutionSessionOwnershipEpoch(session.id).ownershipEpochId || '').trim();
+    if (requestedEpoch && actualEpoch !== requestedEpoch) {
+      throw createApiError(409, 'TASK_FINALIZATION_OWNERSHIP_EPOCH_MISMATCH', 'The frozen finalization operation refers to a different execution ownership epoch.', {
+        affectedId: current.id,
+        details: { executionSessionId: session.id, requestedOwnershipEpochId: requestedEpoch, actualOwnershipEpochId: actualEpoch || null },
+      });
+    }
+    if (session.status === 'completed') {
+      if (session.lifecycle.stage !== 'finalized') {
+        throw createApiError(409, 'TASK_FINALIZATION_EXECUTION_TERMINAL_INVALID', `Execution '${session.id}' is completed without finalized lifecycle evidence.`, {
           affectedId: current.id,
           details: { executionSessionId: session.id, stage: session.lifecycle.stage },
         });
       }
-      completeExecutionSession(session.id, {
-        changedFiles: input.changedFiles || [],
-        verification: input.verification || session.verification,
+      return { task: current, executionSessionId: session.id, idempotent: true };
+    }
+    if (session.status !== 'active') {
+      throw createApiError(409, 'TASK_FINALIZATION_EXECUTION_TERMINAL_INVALID', `Execution '${session.id}' is terminal (${session.status}) and cannot satisfy successful finalization.`, {
+        affectedId: current.id,
+        details: { executionSessionId: session.id, status: session.status },
       });
     }
+    if (session.lifecycle.stage === 'committed') {
+      recordExecutionLifecycleTransition(session.id, {
+        toStage: 'finalized',
+        reasonCode: 'workspace-finalization-succeeded',
+        evidence: {
+          id: `workspace-finalization:${cleanWorkspaceId}:${repoRevision}`,
+          kind: 'workspace-finalization',
+          status: 'completed',
+          operationId: String(input.operationId || '').trim() || `finalize:${cleanWorkspaceId}:${repoRevision}`,
+        },
+      });
+    } else if (session.lifecycle.stage !== 'finalized') {
+      throw createApiError(409, 'TASK_FINALIZATION_EXECUTION_STAGE_INVALID', `Execution '${session.id}' must be committed before task finalization.`, {
+        affectedId: current.id,
+        details: { executionSessionId: session.id, stage: session.lifecycle.stage },
+      });
+    }
+    completeExecutionSession(session.id, {
+      changedFiles: input.changedFiles || [],
+      verification: input.verification || session.verification,
+    });
+    return { task: getTaskByIdentifier(current.id, 'full') || current, executionSessionId: session.id, idempotent: false };
+  }));
+}
+
+export function projectTaskCompletionAfterFinalization(
+  taskId: string,
+  workspaceId: string,
+  buildFinalTask: (task: any) => any,
+) {
+  const initial = getTaskByIdentifier(taskId, 'full');
+  if (!initial) throw createApiError(404, 'TASK_NOT_FOUND', `Task '${taskId}' was not found.`, { affectedId: taskId });
+  const cleanWorkspaceId = String(workspaceId || '').trim();
+  if (!cleanWorkspaceId) throw createApiError(400, 'WORKSPACE_ID_REQUIRED', 'workspaceId is required for finalization projection.');
+  return withSyncLock(`task-claim:${initial.projectId}`, () => withDbTransaction(() => {
+    const current = getTaskByIdentifier(taskId, 'full');
+    if (!current) throw createApiError(404, 'TASK_NOT_FOUND', `Task '${taskId}' was not found.`, { affectedId: taskId });
+    assertNoUnresolvedTaskOperations(current, 'project task completion after finalization');
+    const active = activeTaskExecutions(current);
+    if (active.length > 0) {
+      throw createApiError(409, 'TASK_FINALIZATION_EXECUTION_STILL_ACTIVE', 'Task completion projection is blocked until execution ownership is terminal.', {
+        affectedId: current.id,
+        details: { executionSessionIds: active.map((entry) => entry.id) },
+      });
+    }
+    if (current.claim?.workspaceId && current.claim.workspaceId !== cleanWorkspaceId) {
+      throw createApiError(409, 'TASK_FINALIZATION_WORKSPACE_MISMATCH', 'Task claim belongs to a different workspace than finalization.', {
+        affectedId: current.id,
+        details: { claimWorkspaceId: current.claim.workspaceId, workspaceId: cleanWorkspaceId },
+      });
+    }
+    if (current.status === 'done' && !current.claim) return { task: current, idempotent: true };
     const base = { ...current, claim: undefined };
     const finalTask = buildFinalTask(base);
     if (!finalTask || finalTask.id !== current.id || finalTask.status !== 'done') {
-      throw createApiError(409, 'TASK_FINALIZATION_MUTATION_INVALID', 'Finalization lifecycle boundary must persist the same task as done.', { affectedId: current.id });
+      throw createApiError(409, 'TASK_FINALIZATION_MUTATION_INVALID', 'Finalization projection must preserve task identity and persist done status.', { affectedId: current.id });
     }
     saveTask(finalTask);
-    return { task: getTaskByIdentifier(current.id, 'full') || finalTask, executionSessionId: session?.id || null };
+    return { task: getTaskByIdentifier(current.id, 'full') || finalTask, idempotent: false };
+  }));
+}
+
+export function finalizeTaskLifecycleDisposition(
+  taskId: string,
+  workspaceId: string,
+  buildFinalTask: (task: any) => any,
+  input: { changedFiles?: string[]; verification?: unknown[]; repoRevision: string },
+) {
+  const authority = computeLifecycleAuthoritySnapshot(taskId, { workspaceId });
+  if (authority.hardBlockers.length > 0) {
+    throw createApiError(409, 'TASK_LIFECYCLE_AUTHORITY_CONFLICT', `Task '${authority.task.displayId || authority.task.id}' has ambiguous lifecycle authority and cannot use the compatibility finalization wrapper.`, {
+      affectedId: authority.task.id,
+      details: { classification: authority.classification, blockers: authority.hardBlockers, workspaceId },
     });
-  });
+  }
+  const terminalized = terminalizeTaskExecutionForFinalization(taskId, workspaceId, input);
+  const projected = projectTaskCompletionAfterFinalization(taskId, workspaceId, buildFinalTask);
+  return { task: projected.task, executionSessionId: terminalized.executionSessionId };
 }
 
 function assertOwnershipRotationAllowed(task: any, sessions: ReturnType<typeof activeTaskExecutionsForWorkspace>) {

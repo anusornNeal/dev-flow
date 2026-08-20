@@ -17,6 +17,7 @@ import { mcpToolJobVerificationLifecycleMigration } from './015-mcp-tool-job-ver
 import { uiPreviewsMigration } from './016-ui-previews.js';
 import { uiPreviewObjectStorageMigration } from './017-ui-preview-object-storage.js';
 import { uiPreviewWorkspacesMigration } from './018-ui-preview-workspaces.js';
+import { taskFinalizationOperationsMigration } from './019-task-finalization-operations.js';
 import db from '../index.js';
 
 export const DEVFLOW_MIGRATIONS = [
@@ -38,6 +39,7 @@ export const DEVFLOW_MIGRATIONS = [
   uiPreviewsMigration,
   uiPreviewObjectStorageMigration,
   uiPreviewWorkspacesMigration,
+  taskFinalizationOperationsMigration,
 ] as const;
 
 export function executeAllMigrations() {

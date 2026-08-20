@@ -78,13 +78,16 @@ test('workspace finalization is a first-class local-only terminal tool', () => {
   assert.ok(tool);
   assert.equal((tool?.inputSchema as any)?.required?.includes('workspaceId'), true);
   assert.equal((tool?.inputSchema as any)?.required?.includes('taskId'), true);
-  assert.equal((tool?.inputSchema as any)?.required?.includes('checks'), true);
+  assert.equal((tool?.inputSchema as any)?.required?.includes('checks'), false);
+  assert.ok((tool?.inputSchema as any)?.properties?.operationId);
+  assert.equal((tool?.inputSchema as any)?.required?.includes('operationId'), false);
   assert.match(String(tool?.description || ''), /Never pushes or fetches/i);
   assert.equal(tool?.buildHttpRequest({ taskId: 'DVF-1', workspaceId: 'ws_1', checks: [] }).path, '/api/workspaces/finalize-task');
 });
 
 test('workspace finalization transport preserves verification continuation without weakening hard conflicts', () => {
   assert.equal(workspaceFinalizationHttpStatus({ status: 'completed' }), 200);
+  assert.equal(workspaceFinalizationHttpStatus({ status: 'cleanup-pending', code: 'FINALIZATION_CLEANUP_PENDING' }), 200);
   assert.equal(workspaceFinalizationHttpStatus({ status: 'continuation', code: 'POST_INTEGRATION_VERIFICATION_REQUIRED' }), 200);
   assert.equal(workspaceFinalizationHttpStatus({ status: 'continuation', code: 'POST_INTEGRATION_FINALIZATION_REQUIRED' }), 200);
   assert.equal(workspaceFinalizationHttpStatus({ status: 'needs-recovery', code: 'INTEGRATION_CONFLICT' }), 409);

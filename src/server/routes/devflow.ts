@@ -50,6 +50,7 @@ import { assertHarnessExecutionAllowed, recordHarnessExecutionOutcome } from '..
 
 export function workspaceFinalizationHttpStatus(result: { status?: string; code?: string }) {
   if (result.status === 'completed') return 200;
+  if (result.status === 'cleanup-pending' && result.code === 'FINALIZATION_CLEANUP_PENDING') return 200;
   if (result.status === 'continuation' && (
     result.code === 'POST_INTEGRATION_VERIFICATION_REQUIRED'
     || result.code === 'POST_INTEGRATION_FINALIZATION_REQUIRED'

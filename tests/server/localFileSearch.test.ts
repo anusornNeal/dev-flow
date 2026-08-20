@@ -295,6 +295,35 @@ test('searchLocalFilesAsync can terminate after the requested global result limi
   assert.equal(result.truncated, true);
 });
 
+test('scoped search cache survives unrelated safe edits and invalidates intersecting edits', () => {
+  fs.mkdirSync(path.join(tempDir, 'docs'), { recursive: true });
+  fs.mkdirSync(path.join(tempDir, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(tempDir, 'docs', 'guide.txt'), 'scoped-cache-token', 'utf8');
+
+  clearLocalFileSearchCache();
+  const first = searchLocalFiles(state, { projectId: 'project-search-1', path: 'docs', query: 'scoped-cache-token', limit: 5 });
+  const warm = searchLocalFiles(state, { projectId: 'project-search-1', path: 'docs', query: 'scoped-cache-token', limit: 5 });
+  assert.equal(first.cache.hit, false);
+  assert.equal(warm.cache.hit, true);
+
+  writeLocalFile(state, {
+    projectId: 'project-search-1',
+    filePath: 'src/unrelated.txt',
+    content: 'unrelated-content',
+  });
+  const afterUnrelated = searchLocalFiles(state, { projectId: 'project-search-1', path: 'docs', query: 'scoped-cache-token', limit: 5 });
+  assert.equal(afterUnrelated.cache.hit, true);
+
+  writeLocalFile(state, {
+    projectId: 'project-search-1',
+    filePath: 'docs/guide.txt',
+    content: 'scoped-cache-token updated',
+  });
+  const afterRelevant = searchLocalFiles(state, { projectId: 'project-search-1', path: 'docs', query: 'scoped-cache-token', limit: 5 });
+  assert.equal(afterRelevant.cache.hit, false);
+  assert.equal(afterRelevant.matches[0]?.preview, 'scoped-cache-token updated');
+});
+
 test('writeLocalFile invalidates cached search results for the same project root', () => {
   const metricsBefore = localSearchMetrics();
   const first = searchLocalFiles(state, {

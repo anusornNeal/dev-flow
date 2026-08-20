@@ -284,7 +284,7 @@ function refreshIndexIncrementally(index: RepoIndexCacheEntry, currentRevision: 
 
   const refreshed: RepoIndexCacheEntry = {
     ...index,
-    generatedAt: Date.now(),
+    generatedAt: scopedPaths.length > 0 ? Date.now() : index.generatedAt,
     repoRevision: currentRevision,
     entries: Array.from(entries.values()).sort((left, right) => left.path.localeCompare(right.path)),
   };
@@ -345,7 +345,13 @@ function getOrBuildIndex(state: AppState, args: Record<string, any>, signal?: Ab
       const incremental = refreshIndexIncrementally(cached, currentRevision, includeIgnored);
       if (incremental) {
         cache.set(cacheKey, incremental.index);
-        return { index: incremental.index, cached: true, refresh: 'incremental' as const, changedEntries: incremental.changedEntries, revisionSource };
+        return {
+          index: incremental.index,
+          cached: true,
+          refresh: incremental.changedEntries === 0 ? 'hit' as const : 'incremental' as const,
+          changedEntries: incremental.changedEntries,
+          revisionSource,
+        };
       }
     } else if (Date.now() - cached.generatedAt < CACHE_TTL_MS) {
       return { index: cached, cached: true, refresh: 'hit' as const, changedEntries: 0, revisionSource: 'fallback-ttl' as const };
@@ -365,7 +371,7 @@ function scoreEntry(entry: RepoIndexEntry, queryTerms: string[]) {
 export function getRepoSemanticIndex(state: AppState, args: Record<string, any>, signal?: AbortSignal) {
   const { index, cached, refresh, changedEntries } = getOrBuildIndex(state, args, signal);
   recordRepoCacheAccess('repo-inspection-index', cached, index.root);
-  const lineageToken = getRepoCacheLineage(index.root, ['repo-content', 'repo-revision', 'project-rules']).token;
+  const lineageToken = getRepoCacheLineage(index.root, ['repo-content', 'repo-revision', 'project-rules'], undefined, { repoContentMode: 'broad-only' }).token;
   const symbol = String(args.symbol || args.q || args.query || '').trim();
   if (!symbol) {
     return { root: index.root, symbol, definitions: [], references: [], relatedTests: [], cache: { hit: cached, refresh, changedEntries, lineageToken } };
@@ -395,7 +401,7 @@ export function getRepoSemanticIndex(state: AppState, args: Record<string, any>,
 export function getRepoInspectionIndex(state: AppState, args: Record<string, any>, signal?: AbortSignal, options: RepoIndexLookupOptions = {}) {
   const { index, cached, refresh, changedEntries, revisionSource } = getOrBuildIndex(state, args, signal, options);
   recordRepoCacheAccess('repo-inspection-index', cached, index.root);
-  const lineageToken = getRepoCacheLineage(index.root, ['repo-content', 'repo-revision', 'project-rules']).token;
+  const lineageToken = getRepoCacheLineage(index.root, ['repo-content', 'repo-revision', 'project-rules'], undefined, { repoContentMode: 'broad-only' }).token;
   const queryTerms = String(args.q || args.query || '')
     .toLowerCase()
     .split(/[^a-z0-9_ก-๙]+/i)

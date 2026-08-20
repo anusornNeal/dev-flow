@@ -113,6 +113,29 @@ test('dependency lineage changes narrowly and preserves unrelated generations', 
   assert.ok(afterSkill.generations.skills > afterSource.generations.skills);
 });
 
+test('path-aware repo-content lineage ignores exact paths but advances on broad or uncertain invalidation', () => {
+  const invalidate = requireFn('invalidateRepoCacheDependencies');
+  const lineage = requireFn('getRepoCacheLineage');
+  const options = { repoContentMode: 'broad-only' };
+
+  const beforeAll = lineage(root, ['repo-content']);
+  const beforeBroad = lineage(root, ['repo-content'], undefined, options);
+
+  invalidate({ root, reason: 'exact-write', dependencies: ['repo-content'], paths: ['src/value.ts'] });
+  const afterExactAll = lineage(root, ['repo-content']);
+  const afterExactBroad = lineage(root, ['repo-content'], undefined, options);
+  assert.ok(afterExactAll.generations['repo-content'] > beforeAll.generations['repo-content']);
+  assert.equal(afterExactBroad.generations['repo-content'], beforeBroad.generations['repo-content']);
+
+  invalidate({ root, reason: 'uncertain-write', dependencies: ['repo-content'], paths: ['src/other.ts'], uncertain: true });
+  const afterUncertainBroad = lineage(root, ['repo-content'], undefined, options);
+  assert.ok(afterUncertainBroad.generations['repo-content'] > afterExactBroad.generations['repo-content']);
+
+  invalidate({ root, reason: 'broad-write', dependencies: ['repo-content'] });
+  const afterBroad = lineage(root, ['repo-content'], undefined, options);
+  assert.ok(afterBroad.generations['repo-content'] > afterUncertainBroad.generations['repo-content']);
+});
+
 test('compact diagnostics track hit/miss and the latest invalidation reason per domain', () => {
   const recordAccess = requireFn('recordRepoCacheAccess');
   const diagnostics = requireFn('getRepoCacheDiagnostics');

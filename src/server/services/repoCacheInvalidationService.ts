@@ -43,6 +43,7 @@ const DEFAULT_DOMAIN_DEPENDENCIES: Record<string, RepoCacheDependency[]> = {
 
 const invalidators = new Map<string, RegisteredInvalidator>();
 const dependencyGenerations = new Map<string, number>();
+const broadRepoContentGenerations = new Map<string, number>();
 const domainMetrics = new Map<string, CacheDomainMetrics>();
 
 export type RepoCacheInvalidationResult = {
@@ -74,17 +75,30 @@ function generationKey(scope: string, dependency: RepoCacheDependency) {
   return `${scope}::${dependency}`;
 }
 
-function dependencyGeneration(root: string | undefined, dependency: RepoCacheDependency, scope?: string) {
-  const globalGeneration = dependencyGenerations.get(generationKey('global', dependency)) || 0;
+type RepoCacheLineageOptions = { repoContentMode?: 'all' | 'broad-only' };
+
+function generationFrom(store: Map<string, number>, root: string | undefined, dependency: RepoCacheDependency, scope?: string) {
+  const globalGeneration = store.get(generationKey('global', dependency)) || 0;
   const selectedScope = scopeKey(root, scope);
   if (selectedScope === 'global') return globalGeneration;
-  return globalGeneration + (dependencyGenerations.get(generationKey(selectedScope, dependency)) || 0);
+  return globalGeneration + (store.get(generationKey(selectedScope, dependency)) || 0);
+}
+
+function dependencyGeneration(root: string | undefined, dependency: RepoCacheDependency, scope?: string, options: RepoCacheLineageOptions = {}) {
+  const store = dependency === 'repo-content' && options.repoContentMode === 'broad-only'
+    ? broadRepoContentGenerations
+    : dependencyGenerations;
+  return generationFrom(store, root, dependency, scope);
+}
+
+function bumpGeneration(store: Map<string, number>, root: string | undefined, dependency: RepoCacheDependency, scope?: string) {
+  const selectedScope = scopeKey(root, scope);
+  const key = generationKey(selectedScope, dependency);
+  store.set(key, (store.get(key) || 0) + 1);
 }
 
 function bumpDependencyGeneration(root: string | undefined, dependency: RepoCacheDependency, scope?: string) {
-  const selectedScope = scopeKey(root, scope);
-  const key = generationKey(selectedScope, dependency);
-  dependencyGenerations.set(key, (dependencyGenerations.get(key) || 0) + 1);
+  bumpGeneration(dependencyGenerations, root, dependency, scope);
 }
 
 function metricsFor(name: string) {
@@ -95,9 +109,9 @@ function metricsFor(name: string) {
   return created;
 }
 
-export function getRepoCacheLineage(root: string | undefined, dependencies: RepoCacheDependency[], scope?: string) {
+export function getRepoCacheLineage(root: string | undefined, dependencies: RepoCacheDependency[], scope?: string, options: RepoCacheLineageOptions = {}) {
   const normalized = normalizeDependencies(dependencies);
-  const generations = Object.fromEntries(normalized.map((dependency) => [dependency, dependencyGeneration(root, dependency, scope)])) as Record<RepoCacheDependency, number>;
+  const generations = Object.fromEntries(normalized.map((dependency) => [dependency, dependencyGeneration(root, dependency, scope, options)])) as Record<RepoCacheDependency, number>;
   const token = normalized.map((dependency) => `${dependency}:${generations[dependency]}`).join('|');
   return { scope: scopeKey(root, scope), generations, token };
 }
@@ -151,7 +165,16 @@ export function invalidateRepoCacheDependencies(input: {
   const dependencies = normalizeDependencies(input.dependencies);
   const normalizedPaths = normalizePaths(input.paths);
   const invalidatedAt = new Date().toISOString();
+  const exactPathRepoContentChange = Boolean(input.root)
+    && normalizedPaths.length > 0
+    && input.uncertain !== true
+    && dependencies.includes('repo-content')
+    && !dependencies.includes('project-rules')
+    && !dependencies.includes('repo-revision');
   for (const dependency of dependencies) bumpDependencyGeneration(input.root, dependency, input.scope);
+  if (dependencies.includes('repo-content') && !exactPathRepoContentChange) {
+    bumpGeneration(broadRepoContentGenerations, input.root, 'repo-content', input.scope);
+  }
 
   const journalEvent = input.root && normalizedPaths.length > 0
     ? recordRepoChanges(input.root, normalizedPaths, input.reason)

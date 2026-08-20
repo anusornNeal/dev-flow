@@ -84,6 +84,30 @@ test('getRepoInspectionIndex keeps explicit target files even when query terms d
   assert.equal(target.explicitTarget, true);
 });
 
+test('scoped repo index stays a warm hit when an exact changed path is outside its scope', () => {
+  clearRepoInspectionIndexCache();
+  const generatedPath = path.join(tempDir, 'node_modules', 'generated', 'Generated.ts');
+  const original = fs.readFileSync(generatedPath, 'utf8');
+
+  const first = getRepoInspectionIndex(state, { projectId: 'project-index-1', path: 'app/src', q: 'JobDetail' });
+  const warm = getRepoInspectionIndex(state, { projectId: 'project-index-1', path: 'app/src', q: 'JobDetail' });
+  assert.equal(first.cache.refresh, 'rebuild');
+  assert.equal(warm.cache.refresh, 'hit');
+  const warmGeneratedAt = warm.cache.generatedAt;
+
+  try {
+    fs.writeFileSync(generatedPath, 'export const GeneratedSymbol = 2;', 'utf8');
+    invalidateRepoReadCaches(tempDir, 'test-write', { paths: ['node_modules/generated/Generated.ts'] });
+    const afterUnrelated = getRepoInspectionIndex(state, { projectId: 'project-index-1', path: 'app/src', q: 'JobDetail' });
+    assert.equal(afterUnrelated.cache.refresh, 'hit');
+    assert.equal(afterUnrelated.cache.changedEntries, 0);
+    assert.equal(afterUnrelated.cache.generatedAt, warmGeneratedAt);
+  } finally {
+    fs.writeFileSync(generatedPath, original, 'utf8');
+    invalidateRepoReadCaches(tempDir, 'test-write', { paths: ['node_modules/generated/Generated.ts'] });
+  }
+});
+
 test('getRepoInspectionIndex incrementally refreshes a changed working-tree file inside the cache TTL', () => {
   clearRepoInspectionIndexCache();
   const first = getRepoInspectionIndex(state, {

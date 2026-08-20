@@ -3,7 +3,7 @@ import path from 'path';
 import { spawn, spawnSync } from 'child_process';
 import { getDevFlowAppRoot } from '../../lib/devFlowPaths';
 import { createApiError } from './api';
-import { recordRepoCacheAccess, registerRepoCacheInvalidator } from './repoCacheInvalidationService';
+import { recordRepoCacheAccess, registerRepoCacheInvalidator, type RepoCacheInvalidationContext } from './repoCacheInvalidationService';
 
 const DEFAULT_IGNORED_ENTRY_NAMES = new Set([
   '.git', '.devflow', 'node_modules', 'dist', 'build', 'coverage', '.next', '.turbo', '.vite',
@@ -322,15 +322,44 @@ function parseRipgrepMatches(stdout: string, root: string, limit: number) {
   return { matches, scannedMatchCount, truncated: scannedMatchCount > matches.length };
 }
 
-export function clearLocalFileSearchCache(root?: string) {
+function normalizeCachePath(value: string) {
+  const normalized = String(value || '').trim().replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\/+|\/+$/g, '');
+  return normalized === '.' ? '' : normalized;
+}
+
+function pathScopesIntersect(searchScope: string, changedPath: string) {
+  const scope = normalizeCachePath(searchScope);
+  const changed = normalizeCachePath(changedPath);
+  if (!scope || !changed) return true;
+  return changed === scope || changed.startsWith(`${scope}/`) || scope.startsWith(`${changed}/`);
+}
+
+function canSelectivelyInvalidateSearch(context?: RepoCacheInvalidationContext) {
+  if (!context?.paths?.length || context.uncertain === true) return false;
+  const dependencies = new Set(context.dependencies || []);
+  if (dependencies.has('project-rules') || dependencies.has('repo-revision')) return false;
+  return context.paths.every((entry) => {
+    const normalized = String(entry || '').trim().replace(/\\/g, '/');
+    return Boolean(normalized)
+      && !path.isAbsolute(normalized)
+      && !/^[A-Za-z]:\//.test(normalized)
+      && normalized !== '..'
+      && !normalized.startsWith('../');
+  });
+}
+
+export function clearLocalFileSearchCache(root?: string, context?: RepoCacheInvalidationContext) {
   if (!root) { const count = searchCache.size; searchCache.clear(); return count; }
   const normalizedRoot = path.resolve(root);
+  const selective = canSelectivelyInvalidateSearch(context);
+  const changedPaths = context?.paths || [];
   let count = 0;
   for (const [key, entry] of Array.from(searchCache.entries())) {
-    try {
-      const parsed = JSON.parse(key.split('|')[0]);
-      if (path.resolve(parsed.root) === normalizedRoot || path.resolve(entry.result.root) === normalizedRoot) { searchCache.delete(key); count += 1; }
-    } catch { searchCache.delete(key); count += 1; }
+    if (path.resolve(entry.result.root) !== normalizedRoot) continue;
+    const affected = !selective || changedPaths.some((changedPath) => pathScopesIntersect(entry.result.path, changedPath));
+    if (!affected) continue;
+    searchCache.delete(key);
+    count += 1;
   }
   return count;
 }

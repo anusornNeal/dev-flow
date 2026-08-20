@@ -311,6 +311,26 @@ export function replaceExecutionSessionEvidenceStaleness(sessionId: string, stat
   });
 }
 
+export function markExpiredExecutionSessionsForTaskWorkspace(taskIdValue: string, workspaceIdValue: string, nowIso: string) {
+  const taskId = String(taskIdValue || '').trim();
+  const workspaceId = String(workspaceIdValue || '').trim();
+  if (!taskId || !workspaceId) return [] as string[];
+  const rows = db.prepare(`
+    SELECT id FROM execution_sessions
+    WHERE taskId = ? AND workspaceId = ? AND status = 'active'
+      AND expiresAt IS NOT NULL AND expiresAt <= ?
+    ORDER BY updatedAt ASC, id ASC
+  `).all(taskId, workspaceId, nowIso) as Array<{ id: string }>;
+  if (rows.length === 0) return [] as string[];
+  db.prepare(`
+    UPDATE execution_sessions
+    SET status = 'expired', updatedAt = ?, endedAt = ?
+    WHERE taskId = ? AND workspaceId = ? AND status = 'active'
+      AND expiresAt IS NOT NULL AND expiresAt <= ?
+  `).run(nowIso, nowIso, taskId, workspaceId, nowIso);
+  return rows.map((row) => String(row.id));
+}
+
 export function markExpiredExecutionSessions(nowIso: string) {
   const result = db.prepare(`
     UPDATE execution_sessions

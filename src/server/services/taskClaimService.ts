@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { getProject } from '../repositories/projectRepository.js';
-import { listExecutionSessionsForTask } from '../repositories/executionSessionRepository.js';
+import { listExecutionSessionsForTask, listExecutionSessionsForWorkspace } from '../repositories/executionSessionRepository.js';
 import { getTaskByIdentifier, getTasksByProjectId, saveTask } from '../repositories/taskRepository.js';
 import {
   createOrReuseSessionWorkspace,
@@ -14,8 +14,10 @@ import {
   cancelExecutionSession,
   completeExecutionSession,
   createExecutionSession,
+  expireExecutionSessionsForTaskWorkspace,
   getExecutionSessionOwnershipEpoch,
   recordExecutionLifecycleTransition,
+  recordExecutionReconciliationEvidence,
 } from './executionSessionService.js';
 import { getLatestExecutionCheckpoint } from './executionCheckpointService.js';
 import { withDbTransaction } from '../../db/index.js';
@@ -211,6 +213,46 @@ function activeTaskExecutionsForWorkspace(task: any, workspaceId: string) {
   return listExecutionSessionsForTask(task.id)
     .filter((entry) => entry.workspaceId === workspaceId && entry.status === 'active');
 }
+function assertTaskExecutionScopeUnambiguous(task: any, workspaceId: string) {
+  const activeForTask = listExecutionSessionsForTask(task.id).filter((entry) => entry.status === 'active');
+  const scoped = activeForTask.filter((entry) => entry.workspaceId === workspaceId);
+  const foreignWorkspace = activeForTask.filter((entry) => entry.workspaceId !== workspaceId);
+  const foreignTask = listExecutionSessionsForWorkspace(workspaceId)
+    .filter((entry) => entry.status === 'active' && entry.taskId !== task.id);
+  if (scoped.length > 1 || foreignWorkspace.length > 0 || foreignTask.length > 0) {
+    const executionSessionIds = [...new Set([
+      ...scoped.map((entry) => entry.id),
+      ...foreignWorkspace.map((entry) => entry.id),
+      ...foreignTask.map((entry) => entry.id),
+    ])].sort();
+    throw createApiError(409, 'TASK_EXECUTION_RECONCILIATION_AMBIGUOUS', `Task '${task.displayId || task.id}' execution ownership is ambiguous and cannot be reconciled automatically.`, {
+      affectedId: task.id,
+      details: {
+        workspaceId,
+        executionSessionIds,
+        foreignWorkspaceExecutionSessionIds: foreignWorkspace.map((entry) => entry.id),
+        foreignTaskExecutionSessionIds: foreignTask.map((entry) => entry.id),
+        nextAction: 'Inspect the bounded execution/workspace identities and reconcile explicitly; DevFlow will not choose newest/oldest heuristically.',
+      },
+    });
+  }
+  return scoped;
+}
+
+function reconcileScopedExpiredTaskExecutions(task: any, workspaceId: string, now = new Date()) {
+  const nowMs = now.getTime();
+  const expiredCandidates = activeTaskExecutionsForWorkspace(task, workspaceId)
+    .filter((entry) => entry.expiresAt && Date.parse(entry.expiresAt) <= nowMs);
+  assertOwnershipRotationAllowed(task, expiredCandidates);
+  if (expiredCandidates.length === 0) return [];
+  return expireExecutionSessionsForTaskWorkspace(task.id, workspaceId, now);
+}
+
+function activeReconciledTaskExecutionsForWorkspace(task: any, workspaceId: string) {
+  reconcileScopedExpiredTaskExecutions(task, workspaceId);
+  return assertTaskExecutionScopeUnambiguous(task, workspaceId);
+}
+
 
 function unresolvedExecutionOperations(sessionId: string) {
   const checkpoint = getLatestExecutionCheckpoint(sessionId);
@@ -428,10 +470,15 @@ function assertOwnershipRotationAllowed(task: any, sessions: ReturnType<typeof a
   });
 }
 
-function terminalizeActiveTaskExecutions(task: any, workspaceId: string) {
-  const active = activeTaskExecutionsForWorkspace(task, workspaceId);
+function terminalizeActiveTaskExecutions(task: any, workspaceId: string, reasonCode = 'claim-epoch-replaced') {
+  const active = activeReconciledTaskExecutionsForWorkspace(task, workspaceId);
   assertOwnershipRotationAllowed(task, active);
-  for (const session of active) cancelExecutionSession(session.id);
+  for (const session of active) {
+    cancelExecutionSession(session.id);
+    recordExecutionReconciliationEvidence(session.id, reasonCode, {
+      ownershipEpochId: getExecutionSessionOwnershipEpoch(session.id).ownershipEpochId,
+    });
+  }
   return active;
 }
 
@@ -440,20 +487,9 @@ function ensureClaimExecutionSession(task: any, workspace: any, options: { allow
   if (!ownershipEpochId) {
     throw createApiError(409, 'TASK_CLAIM_OWNERSHIP_EPOCH_REQUIRED', `Task '${task.displayId || task.id}' claim has no authoritative ownership epoch.`, { affectedId: task.id });
   }
-  const active = activeTaskExecutionsForWorkspace(task, workspace.workspaceId);
+  const active = activeReconciledTaskExecutionsForWorkspace(task, workspace.workspaceId);
   const matching = active.filter((entry) => getExecutionSessionOwnershipEpoch(entry.id).ownershipEpochId === ownershipEpochId);
-  if (matching.length > 1) {
-    throw createApiError(409, 'TASK_EXECUTION_OWNERSHIP_AMBIGUOUS', `Task '${task.displayId || task.id}' has multiple active executions for one ownership epoch.`, {
-      affectedId: task.id,
-      details: { ownershipEpochId, executionSessionIds: matching.map((entry) => entry.id) },
-    });
-  }
-  if (matching.length === 1) {
-    const stale = active.filter((entry) => entry.id !== matching[0].id);
-    assertOwnershipRotationAllowed(task, stale);
-    for (const session of stale) cancelExecutionSession(session.id);
-    return matching[0];
-  }
+  if (matching.length === 1) return matching[0];
   if (options.allowLegacyAdoption && active.length === 1 && !getExecutionSessionOwnershipEpoch(active[0].id).ownershipEpochId) {
     bindExecutionSessionOwnershipEpoch(active[0].id, ownershipEpochId);
     return active[0];
@@ -779,7 +815,7 @@ export function releaseTaskClaim(taskId: string, input: ReleaseTaskClaimInput) {
       }],
     };
     withDbTransaction(() => {
-      terminalizeActiveTaskExecutions(task, task.claim.workspaceId);
+      terminalizeActiveTaskExecutions(task, task.claim.workspaceId, 'claim-released');
       saveTask(updated);
     });
     return { task: getTaskByIdentifier(task.id, 'full') || updated, released: true };

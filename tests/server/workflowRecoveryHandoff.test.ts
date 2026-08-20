@@ -32,7 +32,8 @@ git(repoRoot, ['commit', '-m', 'base']);
 const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
 executeAllMigrations();
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
-const { saveTask } = await import('../../src/server/repositories/taskRepository.js');
+const { saveTask } = await import('../../src/server/repositories/taskRepository.js');const executionSessions = await import('../../src/server/services/executionSessionService.js');
+const { listExecutionSessionsForTask, listExecutionSessionEvidence } = await import('../../src/server/repositories/executionSessionRepository.js');
 const jobs = await import('../../src/server/repositories/mcpToolJobRepository.js') as any;
 const {
   createOrReuseSessionWorkspace,
@@ -227,6 +228,45 @@ test('succeeded durable job remains the first reusable recovery boundary by job 
     assert.equal(body.continuation.action, 'query-job');
     assert.equal(body.continuation.jobId, job.jobId);
   });
+});
+
+test('recovery handoff observes pre-fix orphan execution without mutating lifecycle state', async () => {
+  const fixture = seedUnclaimedTaskWorkspace('orphan-readonly');
+  fs.writeFileSync(path.join(fixture.workspace.root, 'tracked.txt'), 'orphan dirty work\n', 'utf8');
+  const orphan = executionSessions.createExecutionSession({
+    projectId: fixture.projectId,
+    taskId: fixture.taskId,
+    workspaceId: fixture.workspace.workspaceId,
+    repoRoot: fixture.workspace.root,
+    branch: fixture.workspace.branch,
+  });
+  executionSessions.recordExecutionLifecycleTransition(orphan.id, {
+    toStage: 'context-ready', reasonCode: 'orphan-readonly-context', evidence: { id: 'orphan-readonly-context', kind: 'context', status: 'completed' },
+  });
+  executionSessions.recordExecutionLifecycleTransition(orphan.id, {
+    toStage: 'implementing', reasonCode: 'orphan-readonly-implementing', evidence: { id: 'orphan-readonly-implementing', kind: 'mutation', status: 'completed' },
+  });
+  executionSessions.recordExecutionLifecycleTransition(orphan.id, {
+    toStage: 'verifying', reasonCode: 'orphan-readonly-verifying', evidence: { id: 'orphan-readonly-verifying', kind: 'verification', status: 'completed' },
+  });
+  const beforeSession = listExecutionSessionsForTask(fixture.taskId).find((entry: any) => entry.id === orphan.id);
+  const beforeEvidence = listExecutionSessionEvidence(orphan.id).map((entry: any) => entry.id);
+
+  await withServer(async (baseUrl) => {
+    const { response, body } = await json(baseUrl, new URLSearchParams({ taskId: fixture.displayId }));
+    assert.equal(response.status, 200);
+    assert.equal(body.task.id, fixture.taskId);
+    assert.equal(body.workspace.workspaceId, fixture.workspace.workspaceId);
+  });
+
+  const afterSession = listExecutionSessionsForTask(fixture.taskId).find((entry: any) => entry.id === orphan.id);
+  const afterEvidence = listExecutionSessionEvidence(orphan.id).map((entry: any) => entry.id);
+  assert.equal(beforeSession?.status, 'active');
+  assert.equal(beforeSession?.lifecycle.stage, 'verifying');
+  assert.equal(afterSession?.status, 'active');
+  assert.equal(afterSession?.lifecycle.stage, 'verifying');
+  assert.deepEqual(afterEvidence, beforeEvidence);
+  assert.equal(fs.readFileSync(path.join(fixture.workspace.root, 'tracked.txt'), 'utf8'), 'orphan dirty work\n');
 });
 
 test('dirty workspace is resumed by opaque workspace id and committed integration-required work is finalized, never duplicated', async () => {

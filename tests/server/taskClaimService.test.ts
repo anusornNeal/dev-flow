@@ -31,7 +31,7 @@ const { executeAllMigrations } = await import('../../src/db/migrations/index.js'
 executeAllMigrations();
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
 const { getTask, saveTask } = await import('../../src/server/repositories/taskRepository.js');
-const { listExecutionSessionsForTask } = await import('../../src/server/repositories/executionSessionRepository.js');
+const { listExecutionSessionsForTask, listExecutionSessionEvidence } = await import('../../src/server/repositories/executionSessionRepository.js');
 const claims = await import('../../src/server/services/taskClaimService.js');
 const commitPlan = await import('../../src/server/services/taskCommitPlanService.js');
 const workspaces = await import('../../src/server/services/sessionWorkspaceService.js');
@@ -132,6 +132,18 @@ async function waitUntil(predicate: () => boolean, message: string) {
 
 function activeExecution(taskId: string) {
   return listExecutionSessionsForTask(taskId).find((entry: any) => entry.status === 'active') || null;
+}
+
+function advanceExecutionToVerifying(sessionId: string, prefix: string) {
+  execution.recordExecutionLifecycleTransition(sessionId, {
+    toStage: 'context-ready', reasonCode: `${prefix}-context`, evidence: { id: `${prefix}-context`, kind: 'context', status: 'completed' },
+  });
+  execution.recordExecutionLifecycleTransition(sessionId, {
+    toStage: 'implementing', reasonCode: `${prefix}-implementing`, evidence: { id: `${prefix}-implementing`, kind: 'mutation', status: 'completed' },
+  });
+  execution.recordExecutionLifecycleTransition(sessionId, {
+    toStage: 'verifying', reasonCode: `${prefix}-verifying`, evidence: { id: `${prefix}-verifying`, kind: 'verification', status: 'completed' },
+  });
 }
 
 test('claim moves task to in-progress, binds opaque workspace, and is idempotent for the same session', () => {
@@ -381,6 +393,123 @@ test('expired claim reclaim rotates epoch and execution while reusing the same w
   assert.notEqual(reclaimedExecution.id, firstExecution.id);
   assert.equal(listExecutionSessionsForTask('task-stale').find((entry: any) => entry.id === firstExecution.id)?.status, 'cancelled');
   assert.equal(reclaimedExecution.lifecycle.stage, 'created');
+});
+
+test('claim reconciles one pre-fix orphan execution and preserves dirty workspace bytes', () => {
+  seedTask('task-pre-fix-orphan', ['src/PreFixOrphan.ts'], undefined, 'DVF-0504');
+  const workspace = workspaces.createOrReuseSessionWorkspace(claimProject, 'pre-fix-orphan-workspace', { taskDisplayId: 'DVF-0504' } as any);
+  const wipPath = path.join(workspace.root, 'src', 'PreFixOrphan.ts');
+  fs.mkdirSync(path.dirname(wipPath), { recursive: true });
+  fs.writeFileSync(wipPath, 'export const preservedOrphanWip = 1;\n', 'utf8');
+  const orphan = execution.createExecutionSession({
+    projectId: claimProject.id,
+    taskId: 'task-pre-fix-orphan',
+    workspaceId: workspace.workspaceId,
+    repoRoot: workspace.root,
+    branch: workspace.branch,
+  });
+  advanceExecutionToVerifying(orphan.id, 'pre-fix-orphan');
+
+  const claimed = claims.claimTaskForSession('task-pre-fix-orphan', { sessionId: 'pre-fix-reclaimer', ownerLabel: 'Chat Reclaimer' });
+  const sessions = listExecutionSessionsForTask('task-pre-fix-orphan');
+  const replacement = sessions.find((entry: any) => entry.status === 'active');
+
+  assert.equal(claimed.claim.workspaceId, workspace.workspaceId);
+  assert.ok(replacement);
+  assert.notEqual(replacement.id, orphan.id);
+  assert.equal(sessions.find((entry: any) => entry.id === orphan.id)?.status, 'cancelled');
+  assert.equal(fs.readFileSync(wipPath, 'utf8'), 'export const preservedOrphanWip = 1;\n');
+  assert.ok(listExecutionSessionEvidence(orphan.id).some((entry: any) =>
+    entry.kind === 'lifecycle-reconciliation' && entry.metadata?.reasonCode === 'claim-epoch-replaced'));
+});
+
+test('claim blocks a pre-fix orphan with unresolved durable operation', () => {
+  seedTask('task-pre-fix-pending', ['src/PreFixPending.ts'], undefined, 'DVF-0505');
+  const workspace = workspaces.createOrReuseSessionWorkspace(claimProject, 'pre-fix-pending-workspace', { taskDisplayId: 'DVF-0505' } as any);
+  const orphan = execution.createExecutionSession({
+    projectId: claimProject.id,
+    taskId: 'task-pre-fix-pending',
+    workspaceId: workspace.workspaceId,
+    repoRoot: workspace.root,
+    branch: workspace.branch,
+  });
+  checkpoints.recordExecutionPendingOperationReference(orphan.id, {
+    operationId: 'job-pre-fix-pending',
+    evidenceId: 'evidence-pre-fix-pending',
+    kind: 'run_project_command',
+    status: 'running',
+  });
+
+  assert.throws(
+    () => claims.claimTaskForSession('task-pre-fix-pending', { sessionId: 'pre-fix-pending-reclaimer', ownerLabel: 'Chat Pending Reclaimer' }),
+    (error: any) => error?.payload?.code === 'TASK_CLAIM_PENDING_OPERATION'
+      && error?.payload?.details?.operationIds?.includes('job-pre-fix-pending'),
+  );
+  assert.equal(getTask('task-pre-fix-pending')?.claim, undefined);
+  assert.equal(getTask('task-pre-fix-pending')?.status, 'backlog');
+  assert.equal(listExecutionSessionsForTask('task-pre-fix-pending').find((entry: any) => entry.id === orphan.id)?.status, 'active');
+});
+
+test('multiple active executions for one task workspace fail closed without heuristic selection', () => {
+  seedTask('task-pre-fix-ambiguous', ['src/PreFixAmbiguous.ts'], undefined, 'DVF-0506');
+  const workspace = workspaces.createOrReuseSessionWorkspace(claimProject, 'pre-fix-ambiguous-workspace', { taskDisplayId: 'DVF-0506' } as any);
+  const first = execution.createExecutionSession({ projectId: claimProject.id, taskId: 'task-pre-fix-ambiguous', workspaceId: workspace.workspaceId, repoRoot: workspace.root, branch: workspace.branch });
+  const second = execution.createExecutionSession({ projectId: claimProject.id, taskId: 'task-pre-fix-ambiguous', workspaceId: workspace.workspaceId, repoRoot: workspace.root, branch: workspace.branch });
+
+  assert.throws(
+    () => claims.claimTaskForSession('task-pre-fix-ambiguous', { sessionId: 'pre-fix-ambiguous-reclaimer', ownerLabel: 'Chat Ambiguous' }),
+    (error: any) => error?.payload?.code === 'TASK_EXECUTION_RECONCILIATION_AMBIGUOUS'
+      && error?.payload?.details?.executionSessionIds?.includes(first.id)
+      && error?.payload?.details?.executionSessionIds?.includes(second.id),
+  );
+  assert.equal(listExecutionSessionsForTask('task-pre-fix-ambiguous').filter((entry: any) => entry.status === 'active').length, 2);
+  assert.equal(getTask('task-pre-fix-ambiguous')?.claim, undefined);
+});
+
+test('scoped reconciliation expires only the target execution and leaves unrelated sessions active', () => {
+  seedTask('task-pre-fix-expired', ['src/PreFixExpired.ts'], undefined, 'DVF-0507');
+  seedTask('task-pre-fix-unrelated', ['src/PreFixUnrelated.ts'], undefined, 'DVF-0508');
+  const expiredWorkspace = workspaces.createOrReuseSessionWorkspace(claimProject, 'pre-fix-expired-workspace', { taskDisplayId: 'DVF-0507' } as any);
+  const unrelatedWorkspace = workspaces.createOrReuseSessionWorkspace(claimProject, 'pre-fix-unrelated-workspace', { taskDisplayId: 'DVF-0508' } as any);
+  const expired = execution.createExecutionSession({
+    projectId: claimProject.id,
+    taskId: 'task-pre-fix-expired',
+    workspaceId: expiredWorkspace.workspaceId,
+    repoRoot: expiredWorkspace.root,
+    branch: expiredWorkspace.branch,
+    ttlMs: 1,
+    now: new Date(Date.now() - 60_000),
+  });
+  const unrelated = execution.createExecutionSession({
+    projectId: claimProject.id,
+    taskId: 'task-pre-fix-unrelated',
+    workspaceId: unrelatedWorkspace.workspaceId,
+    repoRoot: unrelatedWorkspace.root,
+    branch: unrelatedWorkspace.branch,
+  });
+
+  claims.claimTaskForSession('task-pre-fix-expired', { sessionId: 'pre-fix-expired-reclaimer', ownerLabel: 'Chat Expiry' });
+  assert.equal(listExecutionSessionsForTask('task-pre-fix-expired').find((entry: any) => entry.id === expired.id)?.status, 'expired');
+  assert.equal(listExecutionSessionsForTask('task-pre-fix-unrelated').find((entry: any) => entry.id === unrelated.id)?.status, 'active');
+  assert.ok(listExecutionSessionEvidence(expired.id).some((entry: any) =>
+    entry.kind === 'lifecycle-reconciliation' && entry.metadata?.reasonCode === 'scoped-expiry'));
+});
+
+test('active claim with missing execution recreates exactly one execution idempotently', () => {
+  seedTask('task-missing-execution', ['src/MissingExecution.ts'], undefined, 'DVF-0509');
+  const first = claims.claimTaskForSession('task-missing-execution', { sessionId: 'missing-execution-owner', ownerLabel: 'Chat Missing' });
+  const firstExecution = activeExecution('task-missing-execution');
+  assert.ok(firstExecution);
+  execution.cancelExecutionSession(firstExecution.id);
+
+  const repaired = claims.claimTaskForSession('task-missing-execution', { sessionId: 'missing-execution-owner', ownerLabel: 'Chat Missing' });
+  const repeated = claims.claimTaskForSession('task-missing-execution', { sessionId: 'missing-execution-owner', ownerLabel: 'Chat Missing' });
+  const active = listExecutionSessionsForTask('task-missing-execution').filter((entry: any) => entry.status === 'active');
+  assert.equal(repaired.claim.ownershipEpochId, first.claim.ownershipEpochId);
+  assert.equal(repeated.claim.ownershipEpochId, first.claim.ownershipEpochId);
+  assert.equal(active.length, 1);
+  assert.notEqual(active[0].id, firstExecution.id);
+  assert.equal(execution.getExecutionSessionOwnershipEpoch(active[0].id).ownershipEpochId, first.claim.ownershipEpochId);
 });
 
 test('real durable pending operation blocks normal and emergency release without partial ownership mutation', async () => {

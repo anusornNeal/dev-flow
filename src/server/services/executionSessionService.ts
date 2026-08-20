@@ -7,6 +7,7 @@ import {
   listExecutionSessionEvidence,
   listExecutionSessionsForWorkspace,
   markExpiredExecutionSessions,
+  markExpiredExecutionSessionsForTaskWorkspace,
   replaceExecutionSessionEvidenceStaleness,
   saveExecutionSessionEvidence,
   updateExecutionSessionRecord,
@@ -1369,6 +1370,42 @@ export function completeExecutionSession(id: string, patch: Pick<ExecutionSessio
     updatedAt: nowIso,
     endedAt: nowIso,
   })!;
+}
+
+export function recordExecutionReconciliationEvidence(
+  id: string,
+  reasonCodeValue: string,
+  metadata: Record<string, unknown> = {},
+  now = new Date(),
+) {
+  const session = requireSession(id);
+  const reasonCode = String(reasonCodeValue || '').trim().slice(0, 160);
+  if (!reasonCode) throw executionSessionError('EXECUTION_RECONCILIATION_REASON_REQUIRED', 'reasonCode is required for execution reconciliation evidence.');
+  const nowIso = now.toISOString();
+  const digest = crypto.createHash('sha256').update(session.id).update('|reconciliation|').update(reasonCode).digest('hex').slice(0, 24);
+  return saveExecutionSessionEvidence({
+    id: `reconciliation-${digest}`,
+    sessionId: session.id,
+    kind: 'lifecycle-reconciliation',
+    path: null,
+    repoRevision: session.repoRevision,
+    fileRevision: null,
+    revisionIdentity: reasonCode,
+    contextHandle: session.contextHandle,
+    stale: false,
+    metadata: { ...metadata, reasonCode, status: session.status, taskId: session.taskId, workspaceId: session.workspaceId },
+    createdAt: nowIso,
+    updatedAt: nowIso,
+  });
+}
+
+export function expireExecutionSessionsForTaskWorkspace(taskId: string, workspaceId: string, now = new Date()) {
+  const expiredIds = markExpiredExecutionSessionsForTaskWorkspace(taskId, workspaceId, now.toISOString());
+  return expiredIds.map((id) => {
+    const session = requireSession(id);
+    recordExecutionReconciliationEvidence(id, 'scoped-expiry', { expiresAt: session.expiresAt }, now);
+    return session;
+  });
 }
 
 export function cancelExecutionSession(id: string) {

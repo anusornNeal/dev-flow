@@ -150,6 +150,38 @@ function jobMatches(job: McpToolJob, task: any, workspaceId: string, projectId: 
   return Boolean(projectId && clean(job.args?.projectId) === projectId && !workspaceId && !task);
 }
 
+type DurableExecutionJobBinding = {
+  operationId: string;
+  executionSessionId: string;
+  taskId: string;
+  workspaceId: string;
+  projectId: string;
+  toolName: string;
+};
+
+function durableExecutionJobBinding(job: McpToolJob): DurableExecutionJobBinding | null {
+  const raw = job.args?.__executionJobBinding;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const binding = {
+    operationId: clean(raw.operationId),
+    executionSessionId: clean(raw.executionSessionId),
+    taskId: clean(raw.taskId),
+    workspaceId: clean(raw.workspaceId),
+    projectId: clean(raw.projectId),
+    toolName: clean(raw.toolName),
+  };
+  if (
+    !binding.operationId
+    || !binding.executionSessionId
+    || !binding.taskId
+    || !binding.workspaceId
+    || !binding.projectId
+    || binding.operationId !== job.jobId
+    || binding.toolName !== job.toolName
+  ) return null;
+  return binding;
+}
+
 function blocked(reason: string, extra: Record<string, any> = {}) {
   return {
     status: 'blocked' as const,
@@ -353,6 +385,38 @@ export function getWorkflowRecoveryHandoff(state: AppState, args: RecoveryArgs =
     limit: 10,
   });
   const unresolvedEmergencyOperation = emergencyOperations.find((entry) => entry.status === 'active' || entry.status === 'partial') || null;
+  let taskAuthority: ReturnType<typeof computeLifecycleAuthoritySnapshot> | null = null;
+  if (task && workspaceId) {
+    try {
+      taskAuthority = computeLifecycleAuthoritySnapshot(task.id, { workspaceId });
+    } catch {}
+  }
+  const currentExecutionId = clean(taskAuthority?.execution.current?.id);
+  const pendingOperationIds = new Set((taskAuthority?.pending.operationIds || []).map((entry) => clean(entry)).filter(Boolean));
+  const currentReusableJobs = inspection?.disposition === 'stale-registry'
+    ? []
+    : relevantJobs.filter((job) => {
+        if (job.status !== 'queued' && job.status !== 'running') return false;
+        const binding = durableExecutionJobBinding(job);
+        if (!binding || !currentExecutionId || binding.executionSessionId !== currentExecutionId) return false;
+        if (task && binding.taskId !== task.id && binding.taskId !== task.displayId) return false;
+        if (workspaceId && binding.workspaceId !== workspaceId) return false;
+        if (projectId && binding.projectId !== projectId) return false;
+        return pendingOperationIds.has(binding.operationId);
+      });
+  const ignoredJobs = relevantJobs
+    .filter((job) => (job.status === 'queued' || job.status === 'running' || job.status === 'succeeded')
+      && !currentReusableJobs.some((candidate) => candidate.jobId === job.jobId)
+      && !(explicitJobId && job.jobId === explicitJobId && job.status === 'succeeded'))
+    .map((job) => ({
+      jobId: job.jobId,
+      status: job.status,
+      reason: inspection?.disposition === 'stale-registry'
+        ? 'Ignored because managed workspace authority is stale or missing.'
+        : job.status === 'succeeded'
+          ? 'Ignored historical success because no exact response-loss job id selected this logical operation.'
+          : 'Ignored because the job is not the current execution pending operation with an exact immutable binding.',
+    }));
   const common = {
     status: 'recoverable' as const,
     generatedAt: new Date().toISOString(),
@@ -363,6 +427,7 @@ export function getWorkflowRecoveryHandoff(state: AppState, args: RecoveryArgs =
     ...(finalizationOperation ? { finalizationOperation: compactFinalizationOperation(finalizationOperation) } : {}),
     breakGlassOperations: emergencyOperations.map((entry) => ({ id: entry.id, action: entry.action, status: entry.status, workspaceId: entry.workspaceId, actorLabel: entry.actorLabel, wipDisposition: entry.wipDisposition, failure: entry.failure, updatedAt: entry.updatedAt })),
     jobs,
+    ...(ignoredJobs.length > 0 ? { ignoredJobs } : {}),
   };
 
   if (unresolvedEmergencyOperation) {
@@ -393,16 +458,62 @@ export function getWorkflowRecoveryHandoff(state: AppState, args: RecoveryArgs =
     };
   }
 
-  const reusableJob = relevantJobs.find((job) => job.status === 'queued' || job.status === 'running' || job.status === 'succeeded');
-  if (reusableJob) {
+  if (inspection?.disposition === 'stale-registry') {
+    return {
+      ...common,
+      status: 'blocked' as const,
+      continuation: {
+        action: 'blocked' as const,
+        workspaceId,
+        reason: `Managed workspace authority is stale or missing (${inspection.reason || 'stale registry'}); authoritative lifecycle recovery must be reconciled before any historical durable job can be reused.`,
+      },
+    };
+  }
+
+  if (currentReusableJobs.length > 1) {
+    return {
+      ...common,
+      status: 'blocked' as const,
+      continuation: {
+        action: 'blocked' as const,
+        ...(workspaceId ? { workspaceId } : {}),
+        reason: `Multiple current durable operations (${currentReusableJobs.map((job) => job.jobId).join(', ')}) match this execution; select an exact job id instead of guessing a continuation.`,
+      },
+    };
+  }
+
+  if (currentReusableJobs.length === 1) {
+    const reusableJob = currentReusableJobs[0];
     return {
       ...common,
       continuation: {
         action: 'query-job' as const,
         jobId: reusableJob.jobId,
-        reason: reusableJob.status === 'succeeded'
-          ? 'Durable work already succeeded; query the stored result instead of starting duplicate execution.'
-          : 'Durable work is already accepted; query or wait for this job instead of starting duplicate execution.',
+        reason: 'Durable work is still the exact accepted/running pending operation of the current execution; query or wait for that operation instead of starting duplicate execution.',
+      },
+    };
+  }
+
+  if (exactJob?.status === 'succeeded') {
+    return {
+      ...common,
+      continuation: {
+        action: 'query-job' as const,
+        jobId: exactJob.jobId,
+        reason: 'The caller supplied the exact durable job id for a completed response-loss boundary; query that stored result instead of selecting a historical success by recency.',
+      },
+    };
+  }
+
+  if (exactJob && (exactJob.status === 'queued' || exactJob.status === 'running')) {
+    return {
+      ...common,
+      status: 'blocked' as const,
+      continuation: {
+        action: 'blocked' as const,
+        jobId: exactJob.jobId,
+        ...(workspaceId ? { workspaceId } : {}),
+        reason: 'The supplied durable job is not an authoritative pending operation of the current execution/workspace; recovery will not wait on or replay it by identifier alone.',
       },
     };
   }
@@ -417,18 +528,6 @@ export function getWorkflowRecoveryHandoff(state: AppState, args: RecoveryArgs =
         jobId: interrupted.jobId,
         ...(workspaceId ? { workspaceId } : {}),
         reason: 'An unsafe mutation was interrupted. Manual continuation from durable workspace state is required; DevFlow will not replay it automatically.',
-      },
-    };
-  }
-
-  if (inspection?.disposition === 'stale-registry') {
-    return {
-      ...common,
-      status: 'blocked' as const,
-      continuation: {
-        action: 'blocked' as const,
-        workspaceId,
-        reason: `Managed workspace state is not authoritative (${inspection.reason || 'stale registry'}); stop instead of guessing or creating duplicate work.`,
       },
     };
   }

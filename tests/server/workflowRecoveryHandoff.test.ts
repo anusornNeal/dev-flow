@@ -34,6 +34,7 @@ executeAllMigrations();
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
 const { getTask, saveTask } = await import('../../src/server/repositories/taskRepository.js');const executionSessions = await import('../../src/server/services/executionSessionService.js');
 const { listExecutionSessionsForTask, listExecutionSessionEvidence } = await import('../../src/server/repositories/executionSessionRepository.js');
+const { recordExecutionPendingOperationReference } = await import('../../src/server/services/executionCheckpointService.js');
 const jobs = await import('../../src/server/repositories/mcpToolJobRepository.js') as any;
 const finalizationOps = await import('../../src/server/repositories/taskFinalizationOperationRepository.js');
 const emergencyOps = await import('../../src/server/repositories/lifecycleEmergencyOperationRepository.js');
@@ -70,12 +71,17 @@ function seedIsolatedProject(label: string) {
 }
 
 function seedClaimedTask(label: string) {
-  const workspace = createOrReuseSessionWorkspace({ id: projectId, localPath: repoRoot }, `session-${label}`);
+  const displayId = `RCH-${label.toUpperCase()}`;
+  const workspace = createOrReuseSessionWorkspace(
+    { id: projectId, localPath: repoRoot },
+    `session-${label}`,
+    { taskDisplayId: displayId },
+  );
   const now = new Date().toISOString();
   const taskId = `task-${label}`;
   saveTask({
     id: taskId,
-    displayId: `RCH-${label.toUpperCase()}`,
+    displayId,
     projectId,
     title: `Recovery ${label}`,
     description: '',
@@ -97,7 +103,61 @@ function seedClaimedTask(label: string) {
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
     },
   });
-  return { taskId, displayId: `RCH-${label.toUpperCase()}`, workspace };
+  return { taskId, displayId, workspace };
+}
+function seedCurrentExecution(fixture: ReturnType<typeof seedClaimedTask>, label: string) {
+  const task = getTask(fixture.taskId)!;
+  const ownershipEpochId = `recovery-epoch-${label}-${Date.now()}`;
+  saveTask({
+    ...task,
+    claim: { ...task.claim!, ownershipEpochId },
+    updatedAt: new Date().toISOString(),
+  });
+  return executionSessions.createExecutionSession({
+    projectId,
+    taskId: fixture.taskId,
+    workspaceId: fixture.workspace.workspaceId,
+    repoRoot: fixture.workspace.root,
+    branch: fixture.workspace.branch,
+    ownershipEpochId,
+  });
+}
+
+function createCurrentPendingJob(
+  fixture: ReturnType<typeof seedClaimedTask>,
+  execution: any,
+  label: string,
+  extraArgs: Record<string, unknown> = {},
+) {
+  const jobId = `job-${label}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const toolName = 'run_project_command';
+  const job = jobs.createJob(
+    jobId,
+    toolName,
+    {
+      projectId,
+      taskId: fixture.taskId,
+      workspaceId: fixture.workspace.workspaceId,
+      command: 'typecheck',
+      ...extraArgs,
+      __executionJobBinding: {
+        operationId: jobId,
+        executionSessionId: execution.id,
+        taskId: fixture.taskId,
+        workspaceId: fixture.workspace.workspaceId,
+        projectId,
+        toolName,
+      },
+    },
+    `workspace:${fixture.workspace.workspaceId}`,
+  );
+  recordExecutionPendingOperationReference(execution.id, {
+    operationId: jobId,
+    evidenceId: `mcp-job:${jobId}`,
+    kind: `mcp-tool-job:${toolName}`,
+    status: 'accepted',
+  });
+  return job;
 }
 
 let unclaimedTaskCounter = 7000;
@@ -172,18 +232,10 @@ async function json(baseUrl: string, query: URLSearchParams) {
 
 test('fresh client receives the accepted durable job and original managed workspace instead of replay guidance', async () => {
   const fixture = seedClaimedTask('job');
-  const job = jobs.createJob(
-    `job-handoff-${Date.now()}`,
-    'run_project_command',
-    {
-      projectId,
-      taskId: fixture.taskId,
-      workspaceId: fixture.workspace.workspaceId,
-      command: 'typecheck',
-      prompt: 'raw chat text must never appear',
-    },
-    `workspace:${fixture.workspace.workspaceId}`,
-  );
+  const execution = seedCurrentExecution(fixture, 'job');
+  const job = createCurrentPendingJob(fixture, execution, 'handoff', {
+    prompt: 'raw chat text must never appear',
+  });
 
   await withServer(async (baseUrl) => {
     const capabilities = await (await fetch(`${baseUrl}/api/capabilities`)).json() as any;
@@ -229,6 +281,81 @@ test('succeeded durable job remains the first reusable recovery boundary by job 
     assert.equal(body.jobs[0].status, 'succeeded');
     assert.equal(body.continuation.action, 'query-job');
     assert.equal(body.continuation.jobId, job.jobId);
+  });
+});
+
+test('stale workspace authority outranks old succeeded and unrelated running jobs', async () => {
+  const fixture = seedUnclaimedTaskWorkspace('stale-registry-jobs');
+  const succeeded = jobs.createJob(
+    `job-stale-success-${Date.now()}`,
+    'prepare_compact_edit',
+    { projectId: fixture.projectId, taskId: fixture.taskId, workspaceId: fixture.workspace.workspaceId },
+    `workspace:${fixture.workspace.workspaceId}`,
+  );
+  jobs.updateJobStatus(succeeded.jobId, { status: 'succeeded' });
+  const running = jobs.createJob(
+    `job-stale-running-${Date.now()}`,
+    'run_project_command',
+    { projectId: fixture.projectId, taskId: fixture.taskId, workspaceId: fixture.workspace.workspaceId, command: 'typecheck' },
+    `workspace:${fixture.workspace.workspaceId}`,
+  );
+  jobs.updateJobStatus(running.jobId, { status: 'running' });
+  fs.rmSync(fixture.workspace.root, { recursive: true, force: true });
+
+  await withServer(async (baseUrl) => {
+    const capabilities = await (await fetch(`${baseUrl}/api/capabilities`)).json() as any;
+    const query = new URLSearchParams({
+      taskId: fixture.displayId,
+      previousContractVersion: capabilities.contractVersion,
+      previousRuntimeInstanceId: capabilities.runtimeInstanceId,
+      previousToolSurfaceIdentity: capabilities.toolSurfaceIdentity,
+      clientToolsVisible: 'false',
+    });
+    const { response, body } = await json(baseUrl, query);
+    assert.equal(response.status, 200);
+    assert.equal(body.diagnosis.code, 'client-registry-desync');
+    assert.equal(body.workspace.disposition, 'stale-registry');
+    assert.equal(body.status, 'blocked');
+    assert.equal(body.continuation.action, 'blocked');
+    assert.match(body.continuation.reason, /authority|stale|missing/i);
+    assert.equal(body.ignoredJobs.some((entry: any) => entry.jobId === succeeded.jobId), true);
+    assert.equal(body.ignoredJobs.some((entry: any) => entry.jobId === running.jobId), true);
+  });
+});
+
+test('multiple exact pending durable jobs fail closed instead of selecting by recency', async () => {
+  const fixture = seedClaimedTask('multiple-current-jobs');
+  const execution = seedCurrentExecution(fixture, 'multiple-current-jobs');
+  const first = createCurrentPendingJob(fixture, execution, 'multiple-a');
+  const second = createCurrentPendingJob(fixture, execution, 'multiple-b');
+
+  await withServer(async (baseUrl) => {
+    const { response, body } = await json(baseUrl, new URLSearchParams({ taskId: fixture.displayId }));
+    assert.equal(response.status, 200);
+    assert.equal(body.status, 'blocked');
+    assert.equal(body.continuation.action, 'blocked');
+    assert.match(body.continuation.reason, /multiple current durable operations|exact job id/i);
+    assert.equal(body.jobs.some((entry: any) => entry.jobId === first.jobId), true);
+    assert.equal(body.jobs.some((entry: any) => entry.jobId === second.jobId), true);
+  });
+});
+
+test('historical succeeded job is ignored without an exact response-loss job id', async () => {
+  const fixture = seedClaimedTask('historical-success');
+  const job = jobs.createJob(
+    `job-historical-success-${Date.now()}`,
+    'run_project_command',
+    { projectId, taskId: fixture.taskId, workspaceId: fixture.workspace.workspaceId, command: 'typecheck' },
+    `workspace:${fixture.workspace.workspaceId}`,
+  );
+  jobs.updateJobStatus(job.jobId, { status: 'succeeded' });
+
+  await withServer(async (baseUrl) => {
+    const { response, body } = await json(baseUrl, new URLSearchParams({ taskId: fixture.displayId }));
+    assert.equal(response.status, 200);
+    assert.notEqual(body.continuation.action, 'query-job');
+    assert.equal(body.ignoredJobs.some((entry: any) => entry.jobId === job.jobId), true);
+    assert.match(body.ignoredJobs.find((entry: any) => entry.jobId === job.jobId).reason, /historical success|exact response-loss/i);
   });
 });
 
@@ -401,6 +528,13 @@ test('recovery handoff exposes a durable finalization cursor instead of reconstr
     createdAt: now,
     updatedAt: now,
   });
+  const oldJob = jobs.createJob(
+    `job-before-finalization-${Date.now()}`,
+    'prepare_compact_edit',
+    { projectId: fixture.projectId, taskId: fixture.taskId, workspaceId: fixture.workspace.workspaceId },
+    `workspace:${fixture.workspace.workspaceId}`,
+  );
+  jobs.updateJobStatus(oldJob.jobId, { status: 'succeeded' });
 
   await withServer(async (baseUrl) => {
     const { response, body } = await json(baseUrl, new URLSearchParams({ taskId: fixture.displayId }));
@@ -410,6 +544,7 @@ test('recovery handoff exposes a durable finalization cursor instead of reconstr
     assert.equal(body.continuation.action, 'continue-workspace');
     assert.equal(body.continuation.operationId, operation.id);
     assert.equal(body.continuation.tool, 'finalize_task_workspace');
+    assert.equal(body.ignoredJobs.some((entry: any) => entry.jobId === oldJob.jobId), true);
     assert.match(body.continuation.reason, /durable task finalization|retry the same operation/i);
   });
 });

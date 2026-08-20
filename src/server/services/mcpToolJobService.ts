@@ -268,6 +268,7 @@ const singleFlightFollowers = new Map<string, Set<string>>();
 const followerToLeader = new Map<string, string>();
 const jobSupersessionById = new Map<string, JobSupersession>();
 let singleFlightHits = 0;
+let verificationCoalescingHits = 0;
 let supersededQueuedJobs = 0;
 let cooperativeSupersedeCancellations = 0;
 let verificationBackpressureRejections = 0;
@@ -1234,6 +1235,9 @@ export function getQueueMetrics() {
       averageWaitMs: average(waitSamples),
       averageRunMs: average(runSamples),
       singleFlightHits,
+      coalescing: {
+        verificationHits: verificationCoalescingHits,
+      },
       superseded: {
         queued: supersededQueuedJobs,
         savedExecutions: supersededQueuedJobs,
@@ -1696,12 +1700,20 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
       const followerJobId = `job-${Date.now()}-${randomUUID().slice(0, 8)}`;
       createJob(followerJobId, toolName, jobArgs, resourceKey, { eagerArtifacts: toolName !== 'search_local_files' });
       updateJobStatus(followerJobId, { status: 'running' });
-      appendJobLog(followerJobId, 'stdout', `[Single Flight] Following ${leaderJobId}.\n`);
+      const verificationCoalesced = schedulerProfile.accessMode === 'verify';
+      appendJobLog(
+        followerJobId,
+        'stdout',
+        verificationCoalesced
+          ? `[Verification Coalesced] Sharing identity-matched execution ${leaderJobId}.\n`
+          : `[Single Flight] Following ${leaderJobId}.\n`,
+      );
       const followers = singleFlightFollowers.get(leaderJobId) || new Set<string>();
       followers.add(followerJobId);
       singleFlightFollowers.set(leaderJobId, followers);
       followerToLeader.set(followerJobId, leaderJobId);
       singleFlightHits += 1;
+      if (verificationCoalesced) verificationCoalescingHits += 1;
       return {
         jobId: followerJobId,
         status: 'running' as const,
@@ -2218,6 +2230,7 @@ export function __resetQueueWaitTelemetryForTests() {
   jobPhaseTelemetryById.clear();
   jobSupersessionById.clear();
   supersededQueuedJobs = 0;
+  verificationCoalescingHits = 0;
   cooperativeSupersedeCancellations = 0;
   verificationBackpressureRejections = 0;
   verificationLagWarnings = 0;

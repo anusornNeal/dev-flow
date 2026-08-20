@@ -57,11 +57,11 @@ test('writer barrier blocks later read for the same resource but not another res
 test('global verify capacity blocks a third workspace separately from correctness locks', () => {
   resetSchedulerResourceStateForTests();
   setGlobalVerifyCapacityForTests(2);
-  const activeA = entry({ jobId: 'verify-a', resourceKey: 'workspace:a', accessMode: 'verify', costClass: 'verify', kind: 'repo-command', toolName: 'run_project_command' });
-  const activeB = entry({ jobId: 'verify-b', resourceKey: 'workspace:b', accessMode: 'verify', costClass: 'verify', kind: 'repo-command', toolName: 'run_project_command' });
+  const activeA = entry({ jobId: 'verify-a', resourceKey: 'workspace:a', accessMode: 'verify', costClass: 'verify', kind: 'repo-command', toolName: 'run_project_command', verificationClass: 'fast' });
+  const activeB = entry({ jobId: 'verify-b', resourceKey: 'workspace:b', accessMode: 'verify', costClass: 'verify', kind: 'repo-command', toolName: 'run_project_command', verificationClass: 'fast' });
   incrementScheduledResource(activeA);
   incrementScheduledResource(activeB);
-  const queued = entry({ jobId: 'verify-c', resourceKey: 'workspace:c', accessMode: 'verify', costClass: 'verify', kind: 'repo-command', toolName: 'run_project_command' });
+  const queued = entry({ jobId: 'verify-c', resourceKey: 'workspace:c', accessMode: 'verify', costClass: 'verify', kind: 'repo-command', toolName: 'run_project_command', verificationClass: 'fast' });
   const blocker = getBlockerForQueueEntry(queued, 0, [queued], [activeA, activeB]);
   assert.equal(blocker?.blockReason, 'capacity_saturated');
   assert.equal(blocker?.waitType, 'capacity');
@@ -73,12 +73,12 @@ test('global verify capacity blocks a third workspace separately from correctnes
 test('verify saturation does not block interactive reads or independent workspace writes', () => {
   resetSchedulerResourceStateForTests();
   setGlobalVerifyCapacityForTests(2);
-  const activeA = entry({ jobId: 'verify-a', resourceKey: 'workspace:a', accessMode: 'verify', costClass: 'verify', kind: 'repo-command', toolName: 'run_project_command' });
-  const activeB = entry({ jobId: 'verify-b', resourceKey: 'workspace:b', accessMode: 'verify', costClass: 'verify', kind: 'repo-command', toolName: 'run_project_command' });
+  const activeA = entry({ jobId: 'verify-a', resourceKey: 'workspace:a', accessMode: 'verify', costClass: 'verify', kind: 'repo-command', toolName: 'run_project_command', verificationClass: 'fast' });
+  const activeB = entry({ jobId: 'verify-b', resourceKey: 'workspace:b', accessMode: 'verify', costClass: 'verify', kind: 'repo-command', toolName: 'run_project_command', verificationClass: 'fast' });
   incrementScheduledResource(activeA);
   incrementScheduledResource(activeB);
 
-  const queuedVerify = entry({ jobId: 'verify-c', resourceKey: 'workspace:c', accessMode: 'verify', costClass: 'verify', kind: 'repo-command', toolName: 'run_project_command' });
+  const queuedVerify = entry({ jobId: 'verify-c', resourceKey: 'workspace:c', accessMode: 'verify', costClass: 'verify', kind: 'repo-command', toolName: 'run_project_command', verificationClass: 'fast' });
   const interactiveRead = entry({ jobId: 'read-c', resourceKey: 'workspace:c', accessMode: 'read', costClass: 'light-read', kind: 'repo-read' });
   const independentWrite = entry({ jobId: 'write-c', resourceKey: 'workspace:c', accessMode: 'write', costClass: 'write', kind: 'repo-write' });
   const conflictingWrite = entry({ jobId: 'write-a', resourceKey: 'workspace:a', accessMode: 'write', costClass: 'write', kind: 'repo-write' });
@@ -399,9 +399,58 @@ test('verification capacity snapshot accounts for fast and heavy work separately
   assert.equal(snapshot.verify.active, 2);
   assert.equal(snapshot.verify.fast.active, 1);
   assert.equal(snapshot.verify.heavy.active, 1);
-  assert.equal(snapshot.verify.heavy.capacity, 2);
+  assert.equal(snapshot.verify.heavy.capacity, 1);
   decrementScheduledResource(heavy);
   decrementScheduledResource(fast);
+});
+
+test('heavy verification is serialized to one process while fast verification can use remaining machine capacity', () => {
+  resetSchedulerResourceStateForTests();
+  setGlobalVerifyCapacityForTests(2);
+  setVerificationMachinePressureForTests({ cpuRatio: 0.1, memoryPressureRatio: 0.1, totalMemoryBytes: 16 * 1024 * 1024 * 1024 });
+  setVerificationResourceBudgetForTests({
+    targetCpuRatio: 0.8,
+    hardCpuRatio: 0.95,
+    targetMemoryPressure: 0.8,
+    hardMemoryPressure: 0.95,
+    maxAdaptiveProcesses: 4,
+  });
+
+  const heavyA = entry({
+    jobId: 'heavy-a',
+    accessMode: 'verify',
+    costClass: 'verify',
+    verificationClass: 'heavy',
+    verificationDemand: weightedDemand('heavy-a', 0.1, 128),
+  });
+  incrementScheduledResource(heavyA);
+
+  const heavyB = entry({
+    jobId: 'heavy-b',
+    resourceKey: 'repo:b',
+    accessMode: 'verify',
+    costClass: 'verify',
+    verificationClass: 'heavy',
+    verificationDemand: weightedDemand('heavy-b', 0.1, 128),
+  });
+  const fast = entry({
+    jobId: 'fast-b',
+    resourceKey: 'repo:c',
+    accessMode: 'verify',
+    costClass: 'verify',
+    verificationClass: 'fast',
+    verificationDemand: weightedDemand('fast-b', 0.1, 128),
+  });
+
+  assert.equal(getBlockerForQueueEntry(heavyB, 0, [heavyB], [heavyA])?.blockReason, 'capacity_saturated');
+  assert.equal(getBlockerForQueueEntry(fast, 0, [fast], [heavyA]), null);
+  const snapshot: any = getSchedulerCapacitySnapshot();
+  assert.equal(snapshot.verify.heavy.active, 1);
+  assert.equal(snapshot.verify.heavy.capacity, 1);
+
+  decrementScheduledResource(heavyA);
+  assert.equal(getSchedulerCapacitySnapshot().verify.active, 0);
+  assert.equal(getBlockerForQueueEntry(heavyB, 0, [heavyB], []), null, 'heavy permit must be reusable after release');
 });
 
 function weightedDemand(profileKey: string, cpuRatio: number, memoryMb: number, durationMs = 10_000, confidence: 'none' | 'low' | 'medium' | 'high' = 'high') {
@@ -452,7 +501,7 @@ test('adaptive verification budget admits heavy plus multiple light jobs when we
   assert.equal(releaseVerificationProcessPermit(lightB.permit), true);
 });
 
-test('adaptive verification budget blocks heavy plus heavy on constrained CPU and memory', () => {
+test('single-machine heavy serialization takes precedence over adaptive weighted admission', () => {
   resetSchedulerResourceStateForTests();
   setGlobalVerifyCapacityForTests(2);
   setVerificationResourceBudgetForTests({ targetCpuRatio: 0.75, hardCpuRatio: 0.9, targetMemoryPressure: 0.8, hardMemoryPressure: 0.9, maxAdaptiveProcesses: 4 });
@@ -469,7 +518,7 @@ test('adaptive verification budget blocks heavy plus heavy on constrained CPU an
 
   assert.ok(first.permit);
   assert.equal(second.permit, null);
-  assert.equal(second.blocker?.blockReason, 'resource_budget_saturated');
+  assert.equal(second.blocker?.blockReason, 'capacity_saturated');
   assert.equal(getSchedulerCapacitySnapshot().verify.active, 1);
   assert.equal(releaseVerificationProcessPermit(first.permit), true);
 });

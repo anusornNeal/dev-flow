@@ -102,6 +102,7 @@ let globalVerifyCapacity = Math.max(1, Math.min(4, Number(process.env.DEVFLOW_MA
 let activeGlobalVerify = 0;
 let activeFastVerify = 0;
 let activeHeavyVerify = 0;
+const HEAVY_VERIFY_CAPACITY = 1;
 let verificationPermitSequence = 0;
 const activeVerificationPermits = new Map<string, VerificationProcessPermit>();
 const activeSharedVerificationResources = new Map<string, number>();
@@ -392,6 +393,9 @@ export function getVerificationProcessPermitBlocker(request: VerificationProcess
   if (interferencePermit) {
     return { blockedByJobId: interferencePermit.jobId, blockedByAccessMode: 'verify', blockReason: 'interference_risk', waitType: 'capacity' };
   }
+  if (verificationClassForRequest(request) === 'heavy' && activeHeavyVerify >= HEAVY_VERIFY_CAPACITY) {
+    return { blockReason: 'capacity_saturated', waitType: 'capacity' };
+  }
   if (hasAdaptiveAdmissionEvidence(request)) {
     const pressure = readVerificationMachinePressure();
     if (canUseAdaptiveAdmission(request, pressure)) {
@@ -602,7 +606,7 @@ export function getSchedulerCapacitySnapshot() {
       active: activeGlobalVerify,
       capacity: globalVerifyCapacity,
       fast: { active: activeFastVerify },
-      heavy: { active: activeHeavyVerify, capacity: globalVerifyCapacity },
+      heavy: { active: activeHeavyVerify, capacity: HEAVY_VERIFY_CAPACITY },
       mode: lastVerificationAdmissionMode,
       weighted: {
         ...weighted,

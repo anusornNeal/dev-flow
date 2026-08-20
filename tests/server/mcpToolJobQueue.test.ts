@@ -613,6 +613,7 @@ test('mcpToolJobService - identical safe in-flight reads use leader/follower sin
 });
 
 test('mcpToolJobService - equivalent repo-command verification uses single-flight by default', async () => {
+  __resetQueueWaitTelemetryForTests();
   const root = process.cwd();
   const state = makeState(root);
   const blocker = deferred();
@@ -629,6 +630,7 @@ test('mcpToolJobService - equivalent repo-command verification uses single-fligh
     const second = enqueueToolJob(state, 'run_project_command', args, 'repo-command');
     assert.notStrictEqual(first.jobId, second.jobId);
     assert.strictEqual(second.sharedWith, first.jobId);
+    assert.strictEqual((getQueueMetrics() as any).metrics.coalescing.verificationHits, 1);
 
     await waitUntil(() => starts === 1, 'Expected one repo-command leader execution');
     blocker.resolve();

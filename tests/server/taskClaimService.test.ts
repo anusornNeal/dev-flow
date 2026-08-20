@@ -295,6 +295,41 @@ test('release then reclaim by the same caller still creates a new ownership epoc
   assert.equal(secondExecution.lifecycle.stage, 'created');
 });
 
+test('same owner re-entry reconciles task presentation drift from lifecycle authority', () => {
+  seedTask('task-authority-status-reconcile', ['src/AuthorityStatusReconcile.ts'], undefined, 'DVF-0510');
+  const first = claims.claimTaskForSession('task-authority-status-reconcile', { sessionId: 'authority-status-owner', ownerLabel: 'Chat Authority' });
+  const firstExecution = activeExecution('task-authority-status-reconcile');
+  assert.ok(firstExecution);
+  const drifted = getTask('task-authority-status-reconcile');
+  drifted.status = 'todo';
+  drifted.updatedAt = new Date().toISOString();
+  saveTask(drifted);
+
+  const same = claims.claimTaskForSession('task-authority-status-reconcile', { sessionId: 'authority-status-owner', ownerLabel: 'Chat Authority' });
+  assert.equal(same.reused, true);
+  assert.equal(same.task.status, 'in-progress');
+  assert.equal(same.claim.workspaceId, first.claim.workspaceId);
+  assert.equal(activeExecution('task-authority-status-reconcile')?.id, firstExecution.id);
+  assert.ok((same.task.logs || []).some((entry: any) => /presentation reconciled.*lifecycle authority/i.test(entry.message)));
+});
+
+test('same owner can re-enter an active claim even if presentation drifted to done, then normal projection converges it', () => {
+  seedTask('task-authority-done-reconcile', ['src/AuthorityDoneReconcile.ts'], undefined, 'DVF-0511');
+  const first = claims.claimTaskForSession('task-authority-done-reconcile', { sessionId: 'authority-done-owner', ownerLabel: 'Chat Authority Done' });
+  const firstExecution = activeExecution('task-authority-done-reconcile');
+  assert.ok(firstExecution);
+  const drifted = getTask('task-authority-done-reconcile');
+  drifted.status = 'done';
+  drifted.updatedAt = new Date().toISOString();
+  saveTask(drifted);
+
+  const same = claims.claimTaskForSession('task-authority-done-reconcile', { sessionId: 'authority-done-owner', ownerLabel: 'Chat Authority Done' });
+  assert.equal(same.reused, true);
+  assert.equal(same.task.status, 'in-progress');
+  assert.equal(same.claim.workspaceId, first.claim.workspaceId);
+  assert.equal(activeExecution('task-authority-done-reconcile')?.id, firstExecution.id);
+});
+
 test('claiming a child promotes its immediate parent without creating parent execution ownership', () => {
   seedTask('parent-promote', ['src/ParentPromote.ts'], undefined, 'DVF-0700');
   seedTask('child-promote', ['src/ChildPromote.ts'], 'parent-promote', 'DVF-0701');
@@ -510,6 +545,36 @@ test('active claim with missing execution recreates exactly one execution idempo
   assert.equal(active.length, 1);
   assert.notEqual(active[0].id, firstExecution.id);
   assert.equal(execution.getExecutionSessionOwnershipEpoch(active[0].id).ownershipEpochId, first.claim.ownershipEpochId);
+});
+
+test('finalization boundary fails closed on ambiguous active execution authority before mutating task state', () => {
+  seedTask('task-finalize-authority-ambiguous', ['src/FinalizeAuthorityAmbiguous.ts'], undefined, 'DVF-0512');
+  const claimed = claims.claimTaskForSession('task-finalize-authority-ambiguous', { sessionId: 'finalize-authority-owner', ownerLabel: 'Chat Finalize Authority' });
+  const first = activeExecution('task-finalize-authority-ambiguous');
+  assert.ok(first);
+  const workspace = workspaces.resolveSessionWorkspace(claimed.claim.workspaceId)!;
+  const second = execution.createExecutionSession({
+    projectId: claimProject.id,
+    taskId: 'task-finalize-authority-ambiguous',
+    workspaceId: workspace.workspaceId,
+    repoRoot: workspace.root,
+    branch: workspace.branch,
+    ownershipEpochId: claimed.claim.ownershipEpochId,
+  });
+
+  assert.throws(
+    () => claims.finalizeTaskLifecycleDisposition(
+      'task-finalize-authority-ambiguous',
+      workspace.workspaceId,
+      (task: any) => ({ ...task, status: 'done' }),
+      { repoRevision: 'test-finalization-revision' },
+    ),
+    (error: any) => error?.payload?.code === 'TASK_LIFECYCLE_AUTHORITY_CONFLICT'
+      && error?.payload?.details?.blockers?.some((entry: any) => entry.code === 'MULTIPLE_ACTIVE_EXECUTIONS'),
+  );
+  assert.equal(getTask('task-finalize-authority-ambiguous')?.status, 'in-progress');
+  assert.equal(listExecutionSessionsForTask('task-finalize-authority-ambiguous').filter((entry: any) => entry.status === 'active').length, 2);
+  assert.equal(listExecutionSessionsForTask('task-finalize-authority-ambiguous').some((entry: any) => entry.id === second.id), true);
 });
 
 test('real durable pending operation blocks normal and emergency release without partial ownership mutation', async () => {

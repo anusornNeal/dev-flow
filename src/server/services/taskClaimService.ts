@@ -23,6 +23,7 @@ import { getLatestExecutionCheckpoint } from './executionCheckpointService.js';
 import { withDbTransaction } from '../../db/index.js';
 import { withSyncLock } from './lockAndIdempotencyService.js';
 import type { TaskClaim, TaskStatus } from '../../types.js';
+import { computeLifecycleAuthoritySnapshot } from './lifecycleAuthorityService.js';
 
 const DEFAULT_CLAIM_TTL_MS = 24 * 60 * 60 * 1000;
 const MIN_CLAIM_TTL_MS = 60_000;
@@ -340,20 +341,29 @@ export function mutateTaskStatusWithLifecycle(
   if (!initial) throw createApiError(404, 'TASK_NOT_FOUND', `Task '${taskId}' was not found.`, { affectedId: taskId });
   if (!initial.projectId) throw createApiError(400, 'TASK_PROJECT_REQUIRED', 'Task must belong to a project before lifecycle mutation.', { affectedId: initial.id });
   const reason = String(options.reason || 'coordinated task status mutation').trim().slice(0, 240) || 'coordinated task status mutation';
-  return withSyncLock(`task-claim:${initial.projectId}`, () => withDbTransaction(() => {
-    const current = getTaskByIdentifier(taskId, 'full');
-    if (!current) throw createApiError(404, 'TASK_NOT_FOUND', `Task '${taskId}' was not found.`, { affectedId: taskId });
-    const disposition = disposeTaskLifecycleForStatusLocked(current, targetStatus, reason);
-    const next = buildTask(disposition.task);
-    if (!next || String(next.id || '') !== current.id || next.status !== targetStatus) {
-      throw createApiError(409, 'TASK_LIFECYCLE_MUTATION_INVALID', 'Lifecycle status mutation must preserve task identity and persist the requested target status.', {
-        affectedId: current.id,
-        details: { targetStatus, returnedTaskId: next?.id, returnedStatus: next?.status },
+  return withSyncLock(`task-claim:${initial.projectId}`, () => {
+    const authority = computeLifecycleAuthoritySnapshot(initial.id, { workspaceId: initial.claim?.workspaceId });
+    if (authority.hardBlockers.length > 0) {
+      throw createApiError(409, 'TASK_LIFECYCLE_AUTHORITY_CONFLICT', `Task '${initial.displayId || initial.id}' has ambiguous lifecycle authority and cannot change status automatically.`, {
+        affectedId: initial.id,
+        details: { classification: authority.classification, blockers: authority.hardBlockers },
       });
     }
-    saveTask(next);
-    return { task: getTaskByIdentifier(current.id, 'full') || next, disposed: disposition.disposed, executionSessionIds: disposition.executionSessionIds };
-  }));
+    return withDbTransaction(() => {
+      const current = getTaskByIdentifier(taskId, 'full');
+      if (!current) throw createApiError(404, 'TASK_NOT_FOUND', `Task '${taskId}' was not found.`, { affectedId: taskId });
+      const disposition = disposeTaskLifecycleForStatusLocked(current, targetStatus, reason);
+      const next = buildTask(disposition.task);
+      if (!next || String(next.id || '') !== current.id || next.status !== targetStatus) {
+        throw createApiError(409, 'TASK_LIFECYCLE_MUTATION_INVALID', 'Lifecycle status mutation must preserve task identity and persist the requested target status.', {
+          affectedId: current.id,
+          details: { targetStatus, returnedTaskId: next?.id, returnedStatus: next?.status },
+        });
+      }
+      saveTask(next);
+      return { task: getTaskByIdentifier(current.id, 'full') || next, disposed: disposition.disposed, executionSessionIds: disposition.executionSessionIds };
+    });
+  });
 }
 
 export function withTaskDeletionLifecycleGuard<T>(taskIds: string[], deleteFn: (tasks: any[]) => T) {
@@ -398,7 +408,15 @@ export function finalizeTaskLifecycleDisposition(
   const cleanWorkspaceId = String(workspaceId || '').trim();
   const repoRevision = String(input?.repoRevision || '').trim();
   if (!cleanWorkspaceId || !repoRevision) throw createApiError(400, 'TASK_FINALIZATION_IDENTITY_REQUIRED', 'workspaceId and repoRevision are required for lifecycle finalization.');
-  return withSyncLock(`task-claim:${initial.projectId}`, () => withDbTransaction(() => {
+  return withSyncLock(`task-claim:${initial.projectId}`, () => {
+    const authority = computeLifecycleAuthoritySnapshot(initial.id, { workspaceId: cleanWorkspaceId });
+    if (authority.hardBlockers.length > 0) {
+      throw createApiError(409, 'TASK_LIFECYCLE_AUTHORITY_CONFLICT', `Task '${initial.displayId || initial.id}' has ambiguous lifecycle authority and cannot finalize automatically.`, {
+        affectedId: initial.id,
+        details: { classification: authority.classification, blockers: authority.hardBlockers, workspaceId: cleanWorkspaceId },
+      });
+    }
+    return withDbTransaction(() => {
     const current = getTaskByIdentifier(taskId, 'full');
     if (!current) throw createApiError(404, 'TASK_NOT_FOUND', `Task '${taskId}' was not found.`, { affectedId: taskId });
     assertNoUnresolvedTaskOperations(current, 'finalize task ownership');
@@ -447,7 +465,8 @@ export function finalizeTaskLifecycleDisposition(
     }
     saveTask(finalTask);
     return { task: getTaskByIdentifier(current.id, 'full') || finalTask, executionSessionId: session?.id || null };
-  }));
+    });
+  });
 }
 
 function assertOwnershipRotationAllowed(task: any, sessions: ReturnType<typeof activeTaskExecutionsForWorkspace>) {
@@ -559,13 +578,34 @@ function promoteImmediateParentToInProgress(task: any, nowMs = Date.now()) {
   return updated;
 }
 
+function reconcileClaimPresentationFromAuthority(task: any, nowMs: number) {
+  const snapshot = computeLifecycleAuthoritySnapshot(task.id, { workspaceId: task.claim?.workspaceId, now: new Date(nowMs) });
+  if (snapshot.hardBlockers.length > 0) {
+    throw createApiError(409, 'TASK_LIFECYCLE_AUTHORITY_CONFLICT', `Task '${task.displayId || task.id}' has ambiguous lifecycle authority and cannot reconcile presentation state.`, {
+      affectedId: task.id,
+      details: { classification: snapshot.classification, blockers: snapshot.hardBlockers },
+    });
+  }
+  if (snapshot.presentation.expectedStatus !== 'in-progress' || task.status === 'in-progress') return task;
+  const timestamp = new Date(nowMs).toISOString();
+  const updated = {
+    ...task,
+    status: 'in-progress' as TaskStatus,
+    updatedAt: timestamp,
+    logs: [...(Array.isArray(task.logs) ? task.logs : []), {
+      id: `log-task-authority-projection-${nowMs}`,
+      timestamp,
+      message: `Task presentation reconciled to in-progress from lifecycle authority (${snapshot.classification}).`,
+      type: 'update',
+    }],
+  };
+  saveTask(updated);
+  return updated;
+}
+
 function claimTaskForSessionLocked(taskId: string, input: ClaimTaskInput, cleanSessionId: string, project: any) {
   const task = getTaskByIdentifier(taskId, 'full');
   if (!task) throw createApiError(404, 'TASK_NOT_FOUND', `Task '${taskId}' was not found.`, { affectedId: taskId });
-  if (!CLAIMABLE_STATUSES.has(task.status)) {
-    throw createApiError(409, 'TASK_NOT_CLAIMABLE', `Task '${task.displayId || task.id}' is in '${task.status}' and cannot be claimed.`, { affectedId: task.id });
-  }
-
   const nowMs = Date.now();
   const hash = sessionIdHash(cleanSessionId);
   if (isActiveClaim(task.claim, nowMs)) {
@@ -598,9 +638,14 @@ function claimTaskForSessionLocked(taskId: string, input: ClaimTaskInput, cleanS
         ensureClaimExecutionSession(task, workspace);
       }
     });
+    liveTask = reconcileClaimPresentationFromAuthority(getTaskByIdentifier(task.id, 'full') || liveTask, nowMs);
     promoteImmediateParentToInProgress(liveTask, nowMs);
     const refreshed = getTaskByIdentifier(task.id, 'full') || liveTask;
     return { task: refreshed, claim: refreshed.claim, workspace: { workspaceId: workspace.workspaceId, branch: workspace.branch, state: workspace.state }, reused: true };
+  }
+
+  if (!CLAIMABLE_STATUSES.has(task.status)) {
+    throw createApiError(409, 'TASK_NOT_CLAIMABLE', `Task '${task.displayId || task.id}' is in '${task.status}' and cannot be claimed without existing active lifecycle authority.`, { affectedId: task.id });
   }
 
   if (!input.allowScopeConflict) {

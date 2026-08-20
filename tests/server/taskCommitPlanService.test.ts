@@ -27,18 +27,47 @@ git(repoRoot, ['commit', '-m', 'base']);
 
 const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
 executeAllMigrations();
-const { saveTask } = await import('../../src/server/repositories/taskRepository.js');
+const { createProject } = await import('../../src/server/repositories/projectRepository.js');
+const { getTask, saveTask } = await import('../../src/server/repositories/taskRepository.js');
+const { listExecutionSessionsForTask } = await import('../../src/server/repositories/executionSessionRepository.js');
 const workspaceService = await import('../../src/server/services/sessionWorkspaceService.js');
 const execution = await import('../../src/server/services/executionSessionService.js');
+const claims = await import('../../src/server/services/taskClaimService.js');
 const commitPlan = await import('../../src/server/services/taskCommitPlanService.js');
 
-function createFixture(label: string) {
+function createFixture(label: string, targetFiles: string[] = ['src/owned.ts']) {
   workspaceService.resetSessionWorkspaceRuntimeForTests();
   const projectId = `project-${label}`;
-  const workspace = workspaceService.createOrReuseSessionWorkspace({ id: projectId, localPath: repoRoot }, label);
+  createProject({
+    id: projectId,
+    name: projectId,
+    repoUrl: `https://example.test/${projectId}.git`,
+    localPath: repoRoot,
+    taskIdPrefix: 'TCP',
+    createdAt: new Date().toISOString(),
+  });
   const taskId = `task-${label}`;
-  const session = execution.createExecutionSession({ projectId, taskId, workspaceId: workspace.workspaceId, repoRoot: workspace.root });
-  return { projectId, workspace, taskId, session };
+  const now = new Date().toISOString();
+  saveTask({
+    id: taskId,
+    displayId: taskId,
+    title: taskId,
+    description: 'Task-aware commit-plan fixture.',
+    projectId,
+    status: 'todo',
+    priority: 'medium',
+    category: 'backend',
+    tags: [],
+    targetFiles,
+    checklist: [],
+    createdAt: now,
+    updatedAt: now,
+    logs: [],
+  } as any);
+  const claimed = claims.claimTaskForSession(taskId, { sessionId: `session-${label}`, ownerLabel: `Chat ${label}` });
+  const workspace = workspaceService.resolveSessionWorkspace(claimed.claim.workspaceId)!;
+  const session = listExecutionSessionsForTask(taskId).find((entry: any) => entry.status === 'active')!;
+  return { projectId, workspace, taskId, session, claim: claimed.claim };
 }
 
 test('commit plan selects only execution-owned changed files and preserves unrelated changes', () => {
@@ -65,8 +94,8 @@ test('commit plan selects only execution-owned changed files and preserves unrel
 });
 
 test('commit plan matches execution-owned files inside a wholly new nested directory', () => {
-  const { workspace, taskId, session } = createFixture('new-nested');
   const ownedPath = 'src/generated/region/RegionSummary.kt';
+  const { workspace, taskId, session } = createFixture('new-nested', [ownedPath]);
   fs.mkdirSync(path.dirname(path.join(workspace.root, ownedPath)), { recursive: true });
   fs.writeFileSync(path.join(workspace.root, ownedPath), 'class RegionSummary\n');
   execution.recordExecutionOwnedChanges(session.id, [ownedPath], { repoRoot: workspace.root, source: 'task-edit' });
@@ -127,20 +156,11 @@ test('commit plan distinguishes missing authoritative verification from stale ve
 test('task-level passed verification metadata cannot substitute for execution-bound freshness', () => {
   const { projectId, workspace, taskId, session } = createFixture('task-level-only');
   const now = new Date().toISOString();
+  const task = getTask(taskId)!;
   saveTask({
-    id: taskId,
-    displayId: 'DVF-TASK-LEVEL-ONLY',
-    title: 'Task-level verification fixture',
-    description: 'Task metadata must not substitute for execution-bound verification.',
-    projectId,
-    status: 'in-progress',
-    priority: 'medium',
-    category: 'backend',
-    tags: [],
-    targetFiles: ['src/owned.ts'],
-    checklist: [],
+    ...task,
     verificationEvidence: [{ name: 'task-only', command: 'task-only', status: 'passed', recordedAt: now }],
-    logs: [], bugs: [], images: [], createdAt: now, updatedAt: now,
+    updatedAt: now,
   } as any);
   fs.writeFileSync(path.join(workspace.root, 'src', 'owned.ts'), 'export const owned = 21;\n');
   execution.recordExecutionOwnedChanges(session.id, ['src/owned.ts'], { repoRoot: workspace.root, source: 'task-edit' });
@@ -172,7 +192,6 @@ test('no owned changes and inactive sessions remain independent commit blockers'
 
 test('sequential verification batch blocks commit until every declared check passes on one frozen ownership revision', () => {
   const { workspace, taskId, session } = createFixture('sequential-batch');
-  execution.bindExecutionSessionOwnershipEpoch(session.id, 'epoch-sequential-batch');
   fs.writeFileSync(path.join(workspace.root, 'src', 'owned.ts'), 'export const owned = 30;\n');
   execution.recordExecutionOwnedChanges(session.id, ['src/owned.ts'], { repoRoot: workspace.root, source: 'task-edit' });
   const captured = execution.captureExecutionVerificationProvenance(session.id, { repoRoot: workspace.root });
@@ -229,7 +248,6 @@ test('sequential verification batch blocks commit until every declared check pas
 
 test('failed batch member remains terminal and a newer explicit batch id is required for retry', () => {
   const { workspace, session } = createFixture('sequential-batch-failure');
-  execution.bindExecutionSessionOwnershipEpoch(session.id, 'epoch-sequential-batch-failure');
   fs.writeFileSync(path.join(workspace.root, 'src', 'owned.ts'), 'export const owned = 31;\n');
   execution.recordExecutionOwnedChanges(session.id, ['src/owned.ts'], { repoRoot: workspace.root, source: 'task-edit' });
   const captured = execution.captureExecutionVerificationProvenance(session.id, { repoRoot: workspace.root });
@@ -260,7 +278,6 @@ test('failed batch member remains terminal and a newer explicit batch id is requ
 
 test('ownership drift terminalizes a pending verification batch as stale and requires a new batch', () => {
   const { workspace, taskId, session } = createFixture('sequential-batch-stale');
-  execution.bindExecutionSessionOwnershipEpoch(session.id, 'epoch-sequential-batch-stale');
   fs.writeFileSync(path.join(workspace.root, 'src', 'owned.ts'), 'export const owned = 32;\n');
   execution.recordExecutionOwnedChanges(session.id, ['src/owned.ts'], { repoRoot: workspace.root, source: 'task-edit' });
   const captured = execution.captureExecutionVerificationProvenance(session.id, { repoRoot: workspace.root });

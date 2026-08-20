@@ -6,6 +6,7 @@ import { getExecutionOwnershipState, getExecutionVerificationBatchState, type Ex
 import { commitGitChanges } from './gitService.js';
 import { renderTaskCommitMessage } from './projectGitWorkflowPolicyService.js';
 import { resolveSessionWorkspace } from './sessionWorkspaceService.js';
+import { computeLifecycleAuthoritySnapshot } from './lifecycleAuthorityService.js';
 
 export type TaskCommitPlanBlocker = {
   code: string;
@@ -52,10 +53,14 @@ function buildBlockers(input: {
   ownershipDrift: TaskCommitPlan['ownershipDrift'];
   verificationFresh: boolean | null;
   verificationState: TaskCommitPlan['verificationState'];
+  authorityOwnershipActive: boolean;
   verificationBatch: ExecutionVerificationBatchState | null;
   verificationRecordedAt: string | null;
 }) {
   const blockers: TaskCommitPlanBlocker[] = [];
+  if (!input.authorityOwnershipActive) {
+    blockers.push({ code: 'LIFECYCLE_AUTHORITY_NOT_OWNED', message: 'Task-aware commit requires a unique active claim/ownership-epoch/execution authority.' });
+  }
   if (input.sessionStatus !== 'active') {
     blockers.push({ code: 'EXECUTION_SESSION_NOT_ACTIVE', message: 'Task-aware commit requires an active execution session.' });
   }
@@ -111,17 +116,24 @@ export function buildTaskCommitPlan(_state: AppState, args: Record<string, any>)
   const workspace = resolveSessionWorkspace(workspaceId);
   if (!workspace) throw createApiError(404, 'WORKSPACE_NOT_FOUND', `Workspace '${workspaceId}' was not found.`, { affectedId: workspaceId });
 
-  const session = listExecutionSessionsForTask(taskId).find((entry) => entry.workspaceId === workspaceId);
-  if (!session) {
-    throw createApiError(409, 'TASK_EXECUTION_SESSION_NOT_FOUND', 'No execution session for this task owns the selected workspace.', {
+  const authority = computeLifecycleAuthoritySnapshot(taskId, { workspaceId });
+  if (authority.hardBlockers.length > 0) {
+    throw createApiError(409, 'TASK_LIFECYCLE_AUTHORITY_CONFLICT', 'Task commit authority is ambiguous or violates a hard lifecycle identity invariant.', {
       affectedId: taskId,
-      details: { workspaceId },
+      details: { workspaceId, classification: authority.classification, blockers: authority.hardBlockers },
     });
   }
-  if (session.projectId !== workspace.projectId) {
-    throw createApiError(409, 'TASK_EXECUTION_PROJECT_MISMATCH', 'Execution session project does not match the selected workspace project.', {
+  const taskWorkspaceSessions = listExecutionSessionsForTask(taskId).filter((entry) => entry.workspaceId === workspaceId);
+  const currentSessionId = authority.execution.current?.id || null;
+  const session = currentSessionId
+    ? taskWorkspaceSessions.find((entry) => entry.id === currentSessionId) || null
+    : taskWorkspaceSessions.length === 1 && taskWorkspaceSessions[0].status !== 'active'
+      ? taskWorkspaceSessions[0]
+      : null;
+  if (!session) {
+    throw createApiError(409, 'TASK_EXECUTION_SESSION_NOT_FOUND', 'No unique current execution authority or single terminal diagnostic session for this task owns the selected workspace.', {
       affectedId: taskId,
-      details: { workspaceId, executionSessionId: session.id },
+      details: { workspaceId, authorityClassification: authority.classification, activeSessionIds: authority.execution.activeSessionIds },
     });
   }
 
@@ -130,6 +142,7 @@ export function buildTaskCommitPlan(_state: AppState, args: Record<string, any>)
   const verificationRecordedAt = ownership.verificationRecordedAt || null;
   const verificationBatch = getExecutionVerificationBatchState(session.id);
   const blockers = buildBlockers({
+    authorityOwnershipActive: authority.mutation.ownershipAuthorized,
     sessionStatus: session.status,
     ownedChangedFiles: ownership.ownedChanges,
     ownershipDrift: ownership.ownershipDrift,

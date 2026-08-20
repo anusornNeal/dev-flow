@@ -12,6 +12,7 @@ import {
   getSessionWorkspaceMetadataForRecovery,
   listSessionWorkspaceMetadataForRecovery,
 } from './sessionWorkspaceService.js';
+import { computeLifecycleAuthoritySnapshot } from './lifecycleAuthorityService.js';
 
 export type WorkflowRecoveryContinuationAction =
   | 'query-job'
@@ -246,11 +247,14 @@ export function getWorkflowRecoveryHandoff(state: AppState, args: RecoveryArgs =
   }
 
   if (!task && project) {
-    const activeClaims = getTasks().filter((candidate) =>
-      candidate.projectId === project.id
-      && candidate.status === 'in-progress'
-      && clean(candidate?.claim?.workspaceId),
-    );
+    const activeClaims = getTasks().filter((candidate) => {
+      if (candidate.projectId !== project.id || !clean(candidate?.claim?.workspaceId)) return false;
+      try {
+        return computeLifecycleAuthoritySnapshot(candidate.id, { workspaceId: clean(candidate.claim.workspaceId) }).claim.active;
+      } catch {
+        return false;
+      }
+    });
     if (activeClaims.length > 1) {
       return blocked('Recovery is ambiguous because multiple active claimed workspaces exist for this project.', {
         ...(diagnosis ? { diagnosis } : {}),
@@ -381,15 +385,21 @@ export function getWorkflowRecoveryHandoff(state: AppState, args: RecoveryArgs =
     };
   }
 
-  if (inspection && task?.status === 'in-progress') {
-    return {
-      ...common,
-      continuation: {
-        action: 'continue-workspace' as const,
-        workspaceId,
-        reason: 'The task is still in progress; continue from the existing managed workspace rather than creating a parallel workspace.',
-      },
-    };
+  if (inspection && task) {
+    let taskAuthority: ReturnType<typeof computeLifecycleAuthoritySnapshot> | null = null;
+    try {
+      taskAuthority = computeLifecycleAuthoritySnapshot(task.id, { workspaceId });
+    } catch {}
+    if (taskAuthority?.claim.active || taskAuthority?.execution.current) {
+      return {
+        ...common,
+        continuation: {
+          action: 'continue-workspace' as const,
+          workspaceId,
+          reason: 'Lifecycle authority remains active for this task/workspace; continue the existing managed workspace even if presentation status drifted.',
+        },
+      };
+    }
   }
 
   return {

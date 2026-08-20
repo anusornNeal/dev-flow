@@ -19,7 +19,7 @@ import { resolveAgentExecutionMode } from './agentRunService';
 import { renderPromptTemplate } from './promptTemplateService';
 import { createApiError } from './api';
 import { listTaskUiEvidenceForAgent } from './taskUiEvidenceService';
-import { getActiveTaskExecutionSessionForWorkspace } from './executionSessionService.js';
+import { computeLifecycleAuthoritySnapshot } from './lifecycleAuthorityService.js';
 import { getLatestExecutionCheckpoint } from './executionCheckpointService.js';
 import { preflightHarnessExecutionGuard } from './harnessExecutionGuardService.js';
 import { HARNESS_POLICY_VERSION } from './harnessPolicyService.js';
@@ -480,29 +480,28 @@ function harnessKindForTask(task: any) {
   return 'unknown' as const;
 }
 
-function activeClaimWorkspaceId(task: any) {
-  const workspaceId = typeof task?.claim?.workspaceId === 'string' ? task.claim.workspaceId.trim() : '';
-  const expiresAt = Date.parse(String(task?.claim?.expiresAt || ''));
-  return workspaceId && Number.isFinite(expiresAt) && expiresAt > Date.now() ? workspaceId : null;
-}
-
 export function buildChatGptHarnessEnvelope(state: AppState, task: any) {
-  const workspaceId = activeClaimWorkspaceId(task);
-  let session: any = null;
+  let authority: ReturnType<typeof computeLifecycleAuthoritySnapshot> | null = null;
   let bindingError: string | null = null;
-  if (workspaceId) {
-    try {
-      session = getActiveTaskExecutionSessionForWorkspace(workspaceId);
-    } catch (error: any) {
-      bindingError = String(error?.code || error?.message || 'EXECUTION_BINDING_UNAVAILABLE').slice(0, 160);
-    }
+  try {
+    authority = computeLifecycleAuthoritySnapshot(task.id, { workspaceId: task?.claim?.workspaceId });
+  } catch (error: any) {
+    bindingError = String(error?.code || error?.message || 'LIFECYCLE_AUTHORITY_UNAVAILABLE').slice(0, 160);
   }
+  const workspaceId = authority?.workspace.selectedWorkspaceId || null;
+  const currentExecution = authority?.execution.current || null;
+  const session = currentExecution ? {
+    id: currentExecution.id,
+    repoRevision: currentExecution.repoRevision,
+    contextHandle: currentExecution.contextHandle,
+    lifecycle: { stage: currentExecution.lifecycleStage },
+  } : null;
 
   const checkpoint = session ? getLatestExecutionCheckpoint(session.id) : null;
   const targetPath = Array.isArray(task?.targetFiles) && task.targetFiles.length > 0
     ? String(task.targetFiles[0])
     : 'README.md';
-  const decisions = session && workspaceId
+  const decisions = session && workspaceId && authority?.claim.active
     ? HARNESS_ACTION_PROBES.map(({ action, toolName }) => {
         const args: Record<string, any> = {
           workspaceId,
@@ -521,6 +520,7 @@ export function buildChatGptHarnessEnvelope(state: AppState, task: any) {
   const hardBlockers = [...new Set([
     ...(Array.isArray(checkpoint?.blockers) ? checkpoint.blockers.map(String) : []),
     ...policyBlockers,
+    ...(authority?.hardBlockers.map((entry) => entry.code) || []),
     ...(bindingError ? [bindingError] : []),
   ])].slice(0, 12);
 
@@ -559,7 +559,7 @@ export function buildChatGptHarnessEnvelope(state: AppState, task: any) {
     target: 'chatgpt',
     routing: 'chatgpt-only',
     execution: {
-      claimed: Boolean(workspaceId),
+      claimed: authority?.claim.active === true,
       sessionId: session?.id || null,
       workspaceId: workspaceId || null,
       stage: session?.lifecycle?.stage || 'unclaimed',
@@ -591,6 +591,13 @@ export function buildChatGptHarnessEnvelope(state: AppState, task: any) {
         ? checkpoint.pendingOperations.map((entry: any) => entry.operationId).filter(Boolean).slice(0, 8)
         : [],
     },
+    authority: authority ? {
+      version: authority.version,
+      classification: authority.classification,
+      hardReasonCodes: authority.hardBlockers.map((entry) => entry.code),
+      softReasonCodes: authority.softDrift.map((entry) => entry.code),
+      commitReady: authority.commit.ready,
+    } : null,
     allowedNextActionClasses,
     hardBlockers,
   };

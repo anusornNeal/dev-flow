@@ -50,7 +50,7 @@ export function generateDisplayId(state: AppState, projectId: string) {
 export function sanitizeStartupTasks(state: AppState): void {
   const tasks = getTasks();
   const activeParentIds = new Set(tasks
-    .filter((task) => task.parentId && (task.status === 'in-progress' || task.claim))
+    .filter((task) => task.parentId && taskHasLifecycleOwnership(task))
     .map((task) => String(task.parentId)));
   for (const task of tasks) {
     if (task.status !== 'in-progress' || task.activeAgent) continue;

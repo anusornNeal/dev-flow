@@ -32,7 +32,7 @@ git(repoRoot, ['commit', '-m', 'base']);
 const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
 executeAllMigrations();
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
-const { saveTask } = await import('../../src/server/repositories/taskRepository.js');const executionSessions = await import('../../src/server/services/executionSessionService.js');
+const { getTask, saveTask } = await import('../../src/server/repositories/taskRepository.js');const executionSessions = await import('../../src/server/services/executionSessionService.js');
 const { listExecutionSessionsForTask, listExecutionSessionEvidence } = await import('../../src/server/repositories/executionSessionRepository.js');
 const jobs = await import('../../src/server/repositories/mcpToolJobRepository.js') as any;
 const {
@@ -427,6 +427,54 @@ test('explicit workspace selector keeps precedence over project-only actionable 
     assert.equal(body.continuation.action, 'continue-workspace');
     assert.equal(body.continuation.workspaceId, selected.workspaceId);
   });
+});
+
+test('project-only recovery keeps an active claim visible when task presentation status drifted to todo', async () => {
+  const isolatedProjectId = seedIsolatedProject('status-drift-claim');
+  const displayId = `RCI-${++unclaimedTaskCounter}`;
+  const workspace = createOrReuseSessionWorkspace(
+    { id: isolatedProjectId, localPath: repoRoot },
+    `session-status-drift-${unclaimedTaskCounter}`,
+    { taskDisplayId: displayId },
+  );
+  const now = new Date().toISOString();
+  const taskId = `task-status-drift-${unclaimedTaskCounter}`;
+  saveTask({
+    id: taskId,
+    displayId,
+    projectId: isolatedProjectId,
+    title: 'Status drift active claim',
+    description: '',
+    status: 'todo',
+    priority: 'high',
+    category: 'backend',
+    tags: [],
+    targetFiles: ['tracked.txt'],
+    checklist: [],
+    createdAt: now,
+    updatedAt: now,
+    logs: [],
+    claim: {
+      sessionIdHash: workspace.sessionIdHash,
+      ownershipEpochId: 'claim-epoch-recovery-status-drift',
+      workspaceId: workspace.workspaceId,
+      ownerKind: 'chat',
+      ownerLabel: 'Chat Drift',
+      claimedAt: now,
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    },
+  } as any);
+
+  await withServer(async (baseUrl) => {
+    const { response, body } = await json(baseUrl, new URLSearchParams({ projectId: isolatedProjectId }));
+    assert.equal(response.status, 200);
+    assert.equal(body.task.id, taskId);
+    assert.equal(body.task.status, 'todo');
+    assert.equal(body.workspace.workspaceId, workspace.workspaceId);
+    assert.equal(body.continuation.action, 'continue-workspace');
+    assert.match(body.continuation.reason, /lifecycle authority|existing managed workspace/i);
+  });
+  assert.equal(getTask(taskId)?.status, 'todo');
 });
 
 test('project-only recovery stops as ambiguous when more than one active claimed workspace exists', async () => {

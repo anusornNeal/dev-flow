@@ -66,6 +66,10 @@ test('task-aware commit tools expose scoped planning and async commit wiring', (
   assert.equal((plan?.inputSchema as any)?.required?.includes('workspaceId'), true);
   assert.equal((commit?.executionPolicy as any)?.mode, 'job');
   assert.equal((commit?.inputSchema as any)?.required?.includes('message'), true);
+  assert.equal((commit?.inputSchema as any)?.properties?.preserveVerificationDebt?.type, 'boolean');
+  assert.equal((commit?.inputSchema as any)?.properties?.emergency?.type, 'boolean');
+  assert.equal((commit?.inputSchema as any)?.properties?.reason?.type, 'string');
+  assert.equal((commit?.inputSchema as any)?.properties?.actorLabel?.type, 'string');
   const messageDescription = String((commit?.inputSchema as any)?.properties?.message?.description || '');
   assert.match(messageDescription, /conventional/i);
   assert.match(messageDescription, /task|ticket|card/i);

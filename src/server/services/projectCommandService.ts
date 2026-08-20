@@ -76,6 +76,8 @@ const packageScriptsParseCache = new Map<string, { size: number; mtimeMs: number
 const PROJECT_COMMAND_CACHE_DEPENDENCIES = ['repo-content', 'repo-revision', 'project-rules'] as const;
 const PROCESS_RESOURCE_SAMPLE_DELAY_MS = 1_000;
 const PROCESS_RESOURCE_SAMPLE_INTERVAL_MS = 1_500;
+// Async command timeout must settle even if the OS process tree never reports close.
+const PROCESS_TERMINATION_GRACE_MS = 2_000;
 const MACHINE_RUNTIME_PROFILE = getMachineRuntimeProfile();
 
 const INFRASTRUCTURE_RETRY_POLICIES = new Set(['none', 'resource-safe-once']);
@@ -924,6 +926,26 @@ export function buildProjectCommandInfrastructureRecovery(state: AppState, args:
   };
 }
 
+export function getProjectCommandDurableExecutionBudgetMs(state: AppState, args: Record<string, any>) {
+  const root = resolveProjectRoot(state, args);
+  const command = resolveCommandLabel(args.command ?? args.preset);
+  const resolvedCommand = resolveAllowedCommand(root, command, args);
+  const baseTimeoutMs = Number.isFinite(Number(args.timeoutMs))
+    ? Math.max(1, Math.min(MAX_TIMEOUT_MS, Number(args.timeoutMs)))
+    : resolvedCommand.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const firstAttempt = resolveCommandExecutionOptions(resolvedCommand, args, baseTimeoutMs).timeoutMs;
+  if (args.recoveryProfile || resolveInfrastructureRetryPolicy(args) !== 'resource-safe-once') return firstAttempt;
+  const recoveryArgs = {
+    ...args,
+    recoveryProfile: VERIFICATION_RECOVERY_PROFILE,
+    retryAttempt: 1,
+    cacheResult: false,
+    forceFresh: true,
+  };
+  const recoveryAttempt = resolveCommandExecutionOptions(resolvedCommand, recoveryArgs, baseTimeoutMs).timeoutMs;
+  return firstAttempt + recoveryAttempt;
+}
+
 export function attachInfrastructureRecoveryAudit(
   firstFailure: RunProjectCommandResult,
   finalResult: RunProjectCommandResult,
@@ -1691,38 +1713,15 @@ export async function runProjectCommandAsync(state: AppState, args: Record<strin
       resourceSampleInterval = undefined;
     };
 
-    const timeoutId = setTimeout(() => {
-      timedOut = true;
-      terminateCommandProcess(child);
-    }, timeoutMs);
+    let settled = false;
+    let terminationGraceId: NodeJS.Timeout | undefined;
+    let timeoutId: NodeJS.Timeout;
 
-    setCancelFn(() => {
+    const settleCommandResult = (code: number | null, signal: NodeJS.Signals | null) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timeoutId);
-      clearResourceSampling();
-      terminateCommandProcess(child);
-      reject(new Error('Job cancelled'));
-    });
-
-    child.stdout.on('data', (data) => {
-      const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
-      stdoutCapture.append(buffer);
-      logger.stdout(buffer.toString('utf8'));
-    });
-
-    child.stderr.on('data', (data) => {
-      const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
-      stderrCapture.append(buffer);
-      logger.stderr(buffer.toString('utf8'));
-    });
-
-    child.on('error', (err) => {
-      clearTimeout(timeoutId);
-      clearResourceSampling();
-      reject(createApiError(500, 'COMMAND_EXEC_ERROR', `Failed to run '${command}'.`, { details: err.message }));
-    });
-
-    child.on('close', (code, signal) => {
-      clearTimeout(timeoutId);
+      if (terminationGraceId) clearTimeout(terminationGraceId);
       clearResourceSampling();
       const durationMs = Date.now() - startedAt;
 
@@ -1763,6 +1762,51 @@ export async function runProjectCommandAsync(state: AppState, args: Record<strin
       );
       const candidateResult = withVerificationCandidate({ ...finalizedResult, resourceProfile }, sourceRoot, suppliedCandidate, executionIdentity);
       resolve(attachNoInfrastructureRecoveryAudit(rememberSuccessfulCommandResult(cacheContext, candidateResult, args), args));
+    };
+
+    timeoutId = setTimeout(() => {
+      if (settled) return;
+      timedOut = true;
+      terminateCommandProcess(child);
+      terminationGraceId = setTimeout(() => settleCommandResult(null, null), PROCESS_TERMINATION_GRACE_MS);
+      terminationGraceId.unref?.();
+    }, timeoutMs);
+
+    setCancelFn(() => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutId);
+      if (terminationGraceId) clearTimeout(terminationGraceId);
+      clearResourceSampling();
+      terminateCommandProcess(child);
+      reject(new Error('Job cancelled'));
+    });
+
+    child.stdout.on('data', (data) => {
+      if (settled) return;
+      const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
+      stdoutCapture.append(buffer);
+      logger.stdout(buffer.toString('utf8'));
+    });
+
+    child.stderr.on('data', (data) => {
+      if (settled) return;
+      const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
+      stderrCapture.append(buffer);
+      logger.stderr(buffer.toString('utf8'));
+    });
+
+    child.on('error', (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutId);
+      if (terminationGraceId) clearTimeout(terminationGraceId);
+      clearResourceSampling();
+      reject(createApiError(500, 'COMMAND_EXEC_ERROR', `Failed to run '${command}'.`, { details: err.message }));
+    });
+
+    child.on('close', (code, signal) => {
+      settleCommandResult(code, signal);
     });
   });
 }

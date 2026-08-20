@@ -5,7 +5,7 @@ import { createApiError, normalizeUnknownError } from './api';
 import { resolveProjectResourceIdentity, resolveProjectRoot } from './localFileService';
 import { isDevFlowRestartPending, readDevFlowRestartState } from '../../lib/devFlowRestart';
 import { getRepoRevisionForRoot } from './repoRevisionService';
-import { getProjectCommandAdmissionPreflight, getProjectCommandExecutionIdentity, prepareProjectCommandVerificationCandidateAsync, type ProjectCommandExecutionIdentity } from './projectCommandService';
+import { getProjectCommandAdmissionPreflight, getProjectCommandDurableExecutionBudgetMs, getProjectCommandExecutionIdentity, prepareProjectCommandVerificationCandidateAsync, type ProjectCommandExecutionIdentity } from './projectCommandService';
 import { isVerificationCandidateCurrent, releaseVerificationCandidate, releaseVerificationCandidateAsync } from './verificationCandidateService';
 import { getToolDefinitionByName } from '../contracts/devflowContract';
 import {
@@ -287,6 +287,34 @@ const JOB_LEASE_MS = 30_000;
 const JOB_HEARTBEAT_MS = 10_000;
 const JOB_LOG_BATCH_BYTES = 32 * 1024;
 const JOB_LOG_FLUSH_MS = 75;
+// Durable completion must remain bounded even when process teardown never acknowledges cancellation.
+const JOB_EXECUTION_DEADLINE_GRACE_MAX_MS = 5_000;
+const JOB_EXECUTION_DEADLINE_GRACE_MIN_MS = 100;
+
+function durableExecutionDeadlineDelayMs(entry: Pick<QueueEntry, 'toolName' | 'state' | 'args'>) {
+  if (entry.toolName !== 'run_project_command') return null;
+  try {
+    const executionBudgetMs = Math.max(1, getProjectCommandDurableExecutionBudgetMs(entry.state, entry.args));
+    const reconciliationGraceMs = Math.max(
+      JOB_EXECUTION_DEADLINE_GRACE_MIN_MS,
+      Math.min(JOB_EXECUTION_DEADLINE_GRACE_MAX_MS, Math.ceil(executionBudgetMs * 0.1)),
+    );
+    return { executionBudgetMs, reconciliationGraceMs, delayMs: executionBudgetMs + reconciliationGraceMs };
+  } catch {
+    const baseTimeoutMs = Number.isFinite(Number(entry.args?.timeoutMs))
+      ? Math.max(1, Math.min(300_000, Number(entry.args.timeoutMs)))
+      : 120_000;
+    const retryBudgetMs = entry.args?.infrastructureRetryPolicy === 'resource-safe-once' && !entry.args?.recoveryProfile
+      ? Math.min(300_000, Math.ceil(baseTimeoutMs * 1.25))
+      : 0;
+    const executionBudgetMs = baseTimeoutMs + retryBudgetMs;
+    const reconciliationGraceMs = Math.max(
+      JOB_EXECUTION_DEADLINE_GRACE_MIN_MS,
+      Math.min(JOB_EXECUTION_DEADLINE_GRACE_MAX_MS, Math.ceil(executionBudgetMs * 0.1)),
+    );
+    return { executionBudgetMs, reconciliationGraceMs, delayMs: executionBudgetMs + reconciliationGraceMs };
+  }
+}
 
 type BufferedJobLogger = {
   logger: Logger;
@@ -1267,19 +1295,57 @@ function releaseSchedulerLease(entry: QueueEntry, leaseGeneration: number, obser
 function releaseStaleActiveLease(job: McpToolJob) {
   const active = activeJobs.get(job.jobId);
   if (!active || active.leaseGeneration !== job.leaseGeneration) return undefined;
+  active.closeLogs?.();
+  releaseSchedulerLease(active.entry, active.leaseGeneration);
+  activeJobs.delete(job.jobId);
   try {
     active.cancelFn?.();
   } catch {
-    // Lease recovery must still release scheduler capacity if cooperative cancellation throws.
+    // Durable terminal/recovery state owns convergence even if cooperative cancellation throws.
   }
-  releaseSchedulerLease(active.entry, active.leaseGeneration);
-  activeJobs.delete(job.jobId);
   return active;
 }
 
 function runDurableJobRecoveryPass(state?: AppState, nowMs = Date.now()) {
   const summary = { resumable: 0, retryable: 0, interrupted: 0 };
   let queuedRecoveredWork = false;
+
+  if (state) {
+    for (const job of listRecentJobs(200)) {
+      if (job.status !== 'running' || job.toolName !== 'run_project_command' || !job.startedAt || !job.leaseOwner || !job.leaseGeneration) continue;
+      const deadline = durableExecutionDeadlineDelayMs({ toolName: job.toolName, state, args: job.args });
+      if (!deadline || nowMs < Date.parse(job.startedAt) + deadline.delayMs) continue;
+      const failureSummary = `Execution deadline exceeded after ${deadline.executionBudgetMs}ms plus ${deadline.reconciliationGraceMs}ms reconciliation grace.`;
+      const guard: JobLeaseGuard = { workerId: job.leaseOwner, leaseGeneration: job.leaseGeneration };
+      const wrote = writeJobResult(job.jobId, {
+        ok: false,
+        status: 'timed_out',
+        code: 'JOB_EXECUTION_DEADLINE_EXCEEDED',
+        message: failureSummary,
+        timedOut: true,
+        durationMs: Math.max(0, nowMs - Date.parse(job.startedAt)),
+      }, guard);
+      const transitioned = wrote
+        ? transitionJobStatus(job.jobId, ['running'], {
+            status: 'timed_out',
+            failureSummary,
+            recoveryClassification: 'interrupted',
+          }, { workerId: job.leaseOwner, leaseGeneration: job.leaseGeneration, nowMs })
+        : null;
+      if (!transitioned) continue;
+
+      appendJobLog(job.jobId, 'stderr', `\n[Job Timed Out] ${failureSummary}\n`);
+      const staleActive = releaseStaleActiveLease(job);
+      if (staleActive) {
+        invalidateFencedTaskVerification(staleActive.entry, 'durable-execution-deadline-recovery');
+        finalizeSingleFlight(staleActive.entry);
+      }
+      safelyReconcileTerminalDurableExecution(transitioned);
+      void releaseVerificationCandidateForArgsAsync(job.args).catch(() => {});
+      summary.interrupted += 1;
+      queuedRecoveredWork = true;
+    }
+  }
 
   for (const job of listRecoverableJobs(nowMs)) {
     if (followerToLeader.has(job.jobId)) continue;
@@ -1485,9 +1551,24 @@ export function cancelToolJob(jobId: string) {
 
   const active = activeBeforeCancel ?? activeJobs.get(jobId);
   if (active) {
-    active.cancelFn?.();
-    notifySchedulerCapacityWaiters();
-    appendJobLog(jobId, 'stderr', '\n[Job Cancelled] Cancellation requested.\n');
+    writeJobResult(jobId, {
+      ok: false,
+      status: 'cancelled',
+      code: 'JOB_CANCELLED',
+      message: reason,
+    });
+    safelyReconcileTerminalDurableExecution(persisted);
+    releaseSchedulerLease(active.entry, active.leaseGeneration);
+    activeJobs.delete(jobId);
+    finalizeSingleFlight(active.entry);
+    void releaseVerificationCandidateForArgsAsync(active.entry.args).catch(() => {});
+    appendJobLog(jobId, 'stderr', '\n[Job Cancelled] Cancellation persisted; scheduler capacity released.\n');
+    setImmediate(processQueue);
+    try {
+      active.cancelFn?.();
+    } catch {
+      // Persisted cancellation remains authoritative even if cooperative teardown throws.
+    }
     notifyJobWaiters(jobId);
     return true;
   }
@@ -1939,11 +2020,56 @@ async function startJob(entry: QueueEntry) {
 
   const logger = bufferedLogger.logger;
   let completedResult: any;
+  let executionDeadlineTimer: NodeJS.Timeout | undefined;
+
+  const armExecutionDeadline = () => {
+    const deadline = durableExecutionDeadlineDelayMs(entry);
+    if (!deadline) return;
+    executionDeadlineTimer = setTimeout(() => {
+      const active = activeJobs.get(entry.jobId);
+      if (!active || active.leaseGeneration !== leaseGeneration) return;
+      active.closeLogs?.();
+      const failureSummary = `Execution deadline exceeded after ${deadline.executionBudgetMs}ms plus ${deadline.reconciliationGraceMs}ms reconciliation grace.`;
+      const timeoutResult = {
+        ok: false,
+        status: 'timed_out',
+        code: 'JOB_EXECUTION_DEADLINE_EXCEEDED',
+        message: failureSummary,
+        timedOut: true,
+        durationMs: deadline.delayMs,
+      };
+      const wrote = writeJobResult(entry.jobId, timeoutResult, leaseGuard);
+      const transitioned = wrote
+        ? transitionJobStatus(entry.jobId, ['running'], {
+            status: 'timed_out',
+            failureSummary,
+            recoveryClassification: 'interrupted',
+          }, leaseGuard)
+        : null;
+      if (!transitioned) return;
+
+      appendJobLog(entry.jobId, 'stderr', `\n[Job Timed Out] ${failureSummary}\n`);
+      invalidateFencedTaskVerification(entry, 'durable-execution-deadline');
+      safelyReconcileTerminalDurableExecution(transitioned);
+      releaseSchedulerLease(entry, leaseGeneration);
+      activeJobs.delete(entry.jobId);
+      finalizeSingleFlight(entry);
+      setImmediate(processQueue);
+      void releaseVerificationCandidateForArgsAsync(entry.args).catch(() => {});
+      try {
+        active.cancelFn?.();
+      } catch {
+        // Durable terminalization and capacity release must not depend on cooperative process teardown.
+      }
+    }, deadline.delayMs);
+    executionDeadlineTimer.unref?.();
+  };
 
   try {
     await prepareVerificationCandidateForActiveJob(entry, leaseGeneration, leaseGuard);
     if (!entry.phaseTelemetry.executionStartedAt) entry.phaseTelemetry.executionStartedAt = Date.now();
     rememberJobPhaseTelemetry(entry.phaseTelemetry);
+    armExecutionDeadline();
     let result: any;
     const testRunner = testRunners.get(entry.toolName);
 
@@ -2035,6 +2161,7 @@ async function startJob(entry: QueueEntry) {
     }
   } finally {
     clearInterval(heartbeat);
+    if (executionDeadlineTimer) clearTimeout(executionDeadlineTimer);
     bufferedLogger.close();
     const leaseKey = schedulerLeaseKey(entry.jobId, leaseGeneration);
     const leaseWasAlreadyReleased = releasedSchedulerLeases.has(leaseKey);

@@ -30,6 +30,7 @@ const {
   cancelToolJob,
   waitForToolJob,
   getQueueMetrics,
+  getJobMetrics,
   getToolJobWaitGuidance,
   __resetQueueWaitTelemetryForTests,
 } = await import('../../src/server/services/mcpToolJobService');
@@ -2025,6 +2026,67 @@ test('mcpToolJobService - stale retry-safe lease recovery releases capacity and 
   } finally {
     zombieFinish.resolve();
     __setToolJobTestRunner('search_local_files', null);
+  }
+});
+
+test('mcpToolJobService - run_project_command hard deadline releases verification capacity and fences zombie completion', async () => {
+  const root = makeTempRepo('hard-deadline');
+  const state = makeState(root);
+  const hungStarted = deferred();
+  const zombieFinish = deferred();
+  const nextStarted = deferred();
+
+  __setToolJobTestRunner('run_project_command', async (_state, args, _logger, setCancelFn) => {
+    if (args?.label === 'hung') {
+      setCancelFn(() => { /* deliberately ignore cancellation to prove durable convergence */ });
+      hungStarted.resolve();
+      await zombieFinish.promise;
+      return { ok: true, status: 'succeeded', label: 'hung-zombie' };
+    }
+    if (args?.label === 'next') nextStarted.resolve();
+    return { ok: true, status: 'succeeded', label: args?.label };
+  });
+
+  try {
+    const hung = enqueueToolJob(state, 'run_project_command', {
+      localPath: root,
+      command: 'typecheck',
+      label: 'hung',
+      timeoutMs: 20,
+      infrastructureRetryPolicy: 'none',
+      singleFlight: false,
+    }, 'repo-command');
+    await hungStarted.promise;
+
+    const next = enqueueToolJob(state, 'run_project_command', {
+      localPath: root,
+      command: 'typecheck',
+      label: 'next',
+      timeoutMs: 2_000,
+      infrastructureRetryPolicy: 'none',
+      singleFlight: false,
+    }, 'repo-command');
+
+    await waitUntil(() => getToolJobStatus(next.jobId)?.status === 'queued', 'Expected same verification resource to queue behind hung command');
+    const timedOut: any = await waitForStatus(hung.jobId, 'timed_out');
+    assert.match(String(timedOut?.failureSummary || ''), /execution deadline/i);
+    assert.equal((readJobResult(hung.jobId) as any)?.result?.code, 'JOB_EXECUTION_DEADLINE_EXCEEDED');
+    assert.equal(
+      getJobMetrics().activeJobs.some((entry: any) => entry.jobId === hung.jobId),
+      false,
+      'timed-out job must release active scheduler ownership before queue progression',
+    );
+
+    await nextStarted.promise;
+    await waitForStatus(next.jobId, 'succeeded');
+
+    zombieFinish.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal(getToolJobStatus(hung.jobId)?.status, 'timed_out');
+    assert.equal((readJobResult(hung.jobId) as any)?.result?.code, 'JOB_EXECUTION_DEADLINE_EXCEEDED');
+  } finally {
+    zombieFinish.resolve();
+    __setToolJobTestRunner('run_project_command', null);
   }
 });
 

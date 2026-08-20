@@ -82,7 +82,7 @@ test('failed and timed-out samples remain visible without corrupting learned suc
   const target = descriptor({ cost: 'low' });
   for (let index = 0; index < 3; index += 1) {
     recordVerificationResourceSample(target, {
-      status: 'succeeded', durationMs: 4_000 + index * 100, cpuRatio: 0.2, memoryBytes: 128 * 1024 ** 2, processCount: 1, recordedAt: index + 1,
+      status: 'succeeded', durationMs: 4_000 + index * 100, cpuRatio: 0.2, memoryBytes: 128 * 1024 ** 2, processCount: 1, treeAccounting: true, recordedAt: index + 1,
     });
   }
   const before = predictVerificationResourceCost(target);
@@ -110,6 +110,7 @@ test('one successful outlier is clipped so sparse history cannot make future adm
       cpuRatio: index === 3 ? 1 : 0.2,
       memoryBytes: (index === 3 ? 8_000 : 180) * 1024 ** 2,
       processCount: index === 3 ? 50 : 2,
+      treeAccounting: true,
       recordedAt: index + 1,
     });
   }
@@ -126,12 +127,12 @@ test('machine histories remain independent and per-profile retention is bounded'
   const machineB = descriptor({ machineKey: 'machine-b' });
   for (let index = 0; index < 40; index += 1) {
     recordVerificationResourceSample(machineA, {
-      status: 'succeeded', durationMs: 5_000 + index, cpuRatio: 0.2, memoryBytes: 128 * 1024 ** 2, processCount: 1, recordedAt: index + 1,
+      status: 'succeeded', durationMs: 5_000 + index, cpuRatio: 0.2, memoryBytes: 128 * 1024 ** 2, processCount: 1, treeAccounting: true, recordedAt: index + 1,
     });
   }
   for (let index = 0; index < 3; index += 1) {
     recordVerificationResourceSample(machineB, {
-      status: 'succeeded', durationMs: 40_000, cpuRatio: 0.7, memoryBytes: 900 * 1024 ** 2, processCount: 5, recordedAt: 100 + index,
+      status: 'succeeded', durationMs: 40_000, cpuRatio: 0.7, memoryBytes: 900 * 1024 ** 2, processCount: 5, treeAccounting: true, recordedAt: 100 + index,
     });
   }
 
@@ -140,6 +141,31 @@ test('machine histories remain independent and per-profile retention is bounded'
   assert.equal(a.sampleCount <= 24, true);
   assert.equal(a.expected.durationMs < b.expected.durationMs, true);
   assert.equal(getVerificationResourceProfileDiagnostics().profiles.length, 2);
+});
+
+test('partial process-tree memory stays auditable but cannot teach a falsely tiny admission memory profile', () => {
+  const target = descriptor({ cost: 'high', verificationClass: 'heavy' });
+  const cold = predictVerificationResourceCost(target);
+  for (let index = 0; index < 4; index += 1) {
+    recordVerificationResourceSample(target, {
+      status: 'succeeded',
+      durationMs: 10_000 + index,
+      cpuRatio: 0.2,
+      memoryBytes: 9 * 1024 ** 2,
+      processCount: 1,
+      memoryPressureRatio: 0.78,
+      treeAccounting: false,
+      recordedAt: index + 1,
+    });
+  }
+
+  const learned = predictVerificationResourceCost(target);
+  const diagnostics = getVerificationResourceProfileDiagnostics();
+  assert.equal(learned.expected.memoryBytes, cold.expected.memoryBytes);
+  assert.equal(learned.expected.processCount, cold.expected.processCount);
+  assert.equal(learned.expected.durationMs < cold.expected.durationMs, true, 'non-memory metrics may still learn from successful samples');
+  assert.equal(diagnostics.profiles[0].authoritativeMemorySampleCount, 0);
+  assert.equal(diagnostics.meanAbsoluteRelativeError.memory, 0);
 });
 
 test('prediction diagnostics compare predicted and actual demand', () => {
@@ -151,6 +177,7 @@ test('prediction diagnostics compare predicted and actual demand', () => {
     cpuRatio: predicted.expected.cpuRatio / 2,
     memoryBytes: predicted.expected.memoryBytes / 2,
     processCount: Math.max(1, Math.round(predicted.expected.processCount / 2)),
+    treeAccounting: true,
     predicted,
     recordedAt: 1,
   });

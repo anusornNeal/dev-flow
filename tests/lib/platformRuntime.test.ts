@@ -7,6 +7,7 @@ import {
   normalizeLocalPathIdentity,
   resolvePackageManagerInvocation,
   sampleProcessTreeResources,
+  terminateProcessTree,
 } from '../../src/lib/platformRuntime.js';
 
 test('portable local-path identity handles Windows-looking and POSIX-looking inputs deterministically', () => {
@@ -93,23 +94,99 @@ test('POSIX process sampling accounts for descendants and normalizes CPU by mach
 
   assert.equal(sample.supported, true);
   assert.equal(sample.treeAccounting, true);
+  assert.equal(sample.memoryAccounting, 'complete');
   assert.equal(sample.processCount, 3);
   assert.equal(sample.rssBytes, 6_000 * 1024);
   assert.equal(sample.cpuRatio, 0.25);
 });
 
-test('Windows process sampling uses a safe main-process memory fallback', () => {
+test('Windows process sampling aggregates the exact root descendant tree from CIM output', () => {
   const sample = sampleProcessTreeResources(123, {
     platform: 'win32',
     cpuCount: 8,
-    run: () => ({ status: 0, stdout: '"node.exe","123","Console","1","12,345 K"' }),
+    run: (executable) => {
+      assert.equal(executable, 'powershell.exe');
+      return {
+        status: 0,
+        stdout: [
+          '"ProcessId","ParentProcessId","WorkingSetSize"',
+          '"123","1","1000"',
+          '"124","123","2000"',
+          '"125","124","3000"',
+          '"999","1","9000"',
+        ].join('\n'),
+      };
+    },
   });
 
   assert.equal(sample.supported, true);
+  assert.equal(sample.treeAccounting, true);
+  assert.equal(sample.memoryAccounting, 'complete');
+  assert.equal(sample.processCount, 3);
+  assert.equal(sample.rssBytes, 6000);
+  assert.equal(sample.cpuRatio, undefined);
+});
+
+test('Windows process sampling marks tasklist root fallback as partial, never complete tree memory', () => {
+  const calls: string[] = [];
+  const sample = sampleProcessTreeResources(123, {
+    platform: 'win32',
+    run: (executable) => {
+      calls.push(executable);
+      if (executable === 'powershell.exe') return { status: 1, stdout: '', stderr: 'CIM unavailable' };
+      return { status: 0, stdout: '"node.exe","123","Console","1","12,345 K"' };
+    },
+  });
+
+  assert.deepEqual(calls, ['powershell.exe', 'tasklist']);
+  assert.equal(sample.supported, true);
   assert.equal(sample.treeAccounting, false);
+  assert.equal(sample.memoryAccounting, 'partial');
+  assert.equal(sample.partialReason, 'descendant-enumeration-failed');
   assert.equal(sample.processCount, 1);
   assert.equal(sample.rssBytes, 12_345 * 1024);
-  assert.equal(sample.cpuRatio, undefined);
+});
+
+test('Windows process sampling fails closed when CIM returns a malformed partial table', () => {
+  const calls: string[] = [];
+  const sample = sampleProcessTreeResources(123, {
+    platform: 'win32',
+    run: (executable) => {
+      calls.push(executable);
+      if (executable === 'powershell.exe') {
+        return {
+          status: 0,
+          stdout: [
+            '"ProcessId","ParentProcessId","WorkingSetSize"',
+            '"123","1","1000"',
+            '"124","123","not-a-number"',
+          ].join('\n'),
+        };
+      }
+      return { status: 0, stdout: '"node.exe","123","Console","1","10 K"' };
+    },
+  });
+
+  assert.deepEqual(calls, ['powershell.exe', 'tasklist']);
+  assert.equal(sample.memoryAccounting, 'partial');
+  assert.equal(sample.treeAccounting, false);
+  assert.equal(sample.rssBytes, 10 * 1024);
+});
+
+test('Windows process-tree termination targets only the requested root tree', () => {
+  const calls: Array<{ executable: string; args: string[] }> = [];
+  const result = terminateProcessTree(123, {
+    platform: 'win32',
+    run: (executable, args) => {
+      calls.push({ executable, args });
+      return { status: 0, stdout: 'SUCCESS' };
+    },
+  });
+
+  assert.deepEqual(calls, [{ executable: 'taskkill', args: ['/PID', '123', '/T', '/F'] }]);
+  assert.equal(calls[0].args.includes('999'), false, 'an unrelated sibling PID must never be targeted');
+  assert.equal(result.terminated, true);
+  assert.equal(result.treeTermination, true);
 });
 
 test('process sampling degrades safely when platform signals are unavailable', () => {

@@ -11,7 +11,16 @@ process.env.DEVFLOW_DB_PATH = path.join(tempRoot, 'devflow.db');
 const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
 executeAllMigrations();
 const projectCommandService = await import('../../src/server/services/projectCommandService.js');
-const { runProjectCommand, runProjectCommandAsync, describeProjectCommand, getProjectCommandExecutionIdentity, prepareProjectCommandVerificationCandidateAsync } = projectCommandService;
+const {
+  runProjectCommand,
+  runProjectCommandAsync,
+  describeProjectCommand,
+  getProjectCommandExecutionIdentity,
+  prepareProjectCommandVerificationCandidateAsync,
+  buildProjectCommandInfrastructureRecovery,
+  resolveGradleRecoveryHeapPolicy,
+  terminateCommandProcess,
+} = projectCommandService;
 const { isVerificationCandidateCurrent, releaseVerificationCandidate } = await import('../../src/server/services/verificationCandidateService.js');
 const { clearWorkspaceMetadataCache, getWorkspaceMetadataCacheStats } = await import('../../src/server/services/workspaceMetadataCacheService.js');
 const { createProject: upsertProject } = await import('../../src/server/repositories/projectRepository.js');
@@ -127,6 +136,17 @@ test('runProjectCommand retries proven infrastructure failure once with a revisi
   const recoveryIdentity = getProjectCommandExecutionIdentity(stateFor(root), { ...baseArgs, recoveryProfile: 'verification-infra-safe', retryAttempt: 1 })!;
   assert.equal(baseIdentity.repoRevision, recoveryIdentity.repoRevision);
   assert.notEqual(baseIdentity.key, recoveryIdentity.key, 'recovery profile must be represented in execution identity');
+  const previousGradleOpts = process.env.GRADLE_OPTS;
+  try {
+    process.env.GRADLE_OPTS = '-Dorg.gradle.jvmargs=-Xmx2g';
+    const heapIdentityA = getProjectCommandExecutionIdentity(stateFor(root), { ...baseArgs, recoveryProfile: 'verification-infra-safe', retryAttempt: 1 })!;
+    process.env.GRADLE_OPTS = '-Dorg.gradle.jvmargs=-Xmx3g';
+    const heapIdentityB = getProjectCommandExecutionIdentity(stateFor(root), { ...baseArgs, recoveryProfile: 'verification-infra-safe', retryAttempt: 1 })!;
+    assert.notEqual(heapIdentityA.key, heapIdentityB.key, 'effective recovery heap inputs must participate in execution identity');
+  } finally {
+    if (previousGradleOpts === undefined) delete process.env.GRADLE_OPTS;
+    else process.env.GRADLE_OPTS = previousGradleOpts;
+  }
 
   const result = runProjectCommand(stateFor(root), baseArgs);
 
@@ -138,6 +158,78 @@ test('runProjectCommand retries proven infrastructure failure once with a revisi
   assert.equal(result.infrastructureRecovery?.profile?.kind, 'resource-safe');
   assert.match(result.stdout, /resource-safe/);
   assert.equal(fs.readFileSync(path.join(root, '.devflow', 'commands.yaml'), 'utf8'), configBefore, 'recovery must not mutate repository config');
+});
+
+test('Gradle recovery heap policy scales above 2 GB and preserves an existing larger safe Xmx', () => {
+  const gib = 1024 ** 3;
+  const low = resolveGradleRecoveryHeapPolicy(2 * gib, '');
+  const medium = resolveGradleRecoveryHeapPolicy(8 * gib, '');
+  const high = resolveGradleRecoveryHeapPolicy(32 * gib, '');
+  const preserved = resolveGradleRecoveryHeapPolicy(32 * gib, '-Dorg.gradle.jvmargs=-Xmx6g');
+  const unsafeLowMachine = resolveGradleRecoveryHeapPolicy(4 * gib, '-Dorg.gradle.jvmargs=-Xmx6g');
+
+  assert.equal(low.heapMb, 1024);
+  assert.equal(medium.heapMb, 2048);
+  assert.equal(high.heapMb, 4096, 'high-memory machines must not be accidentally capped at 2 GB');
+  assert.equal(preserved.heapMb, 6144);
+  assert.equal(preserved.heapSource, 'existing-larger-safe');
+  assert.equal(preserved.heapPolicyCeilingMb, 4096);
+  assert.equal(unsafeLowMachine.heapMb, 1024, 'an existing Xmx above the machine safe bound is not blindly preserved');
+  assert.equal(unsafeLowMachine.heapSource, 'machine-policy');
+});
+
+test('recovery profile audits capped timeout and Gradle worker/heap policy without changing repo state', () => {
+  const root = createConfigProject('recovery-profile-audit', [
+    'commands:',
+    '  gradle-check:',
+    '    executable: gradlew.bat',
+    '    args:',
+    '      - test',
+    '    category: test',
+    '',
+  ].join('\n'));
+  const recovery = buildProjectCommandInfrastructureRecovery(stateFor(root), {
+    projectId: 'project-command',
+    command: 'gradle-check',
+    timeoutMs: 300_000,
+    infrastructureRetryPolicy: 'resource-safe-once',
+  });
+
+  assert.ok(recovery);
+  assert.equal(recovery!.profile.gradleTuned, true);
+  assert.equal(recovery!.profile.maxWorkers, 1);
+  assert.equal(recovery!.profile.requestedTimeoutMs, 375_000);
+  assert.equal(recovery!.profile.timeoutMs, 300_000);
+  assert.equal(recovery!.profile.timeoutCapped, true);
+  assert.equal(typeof recovery!.profile.heapFloorMb, 'number');
+  assert.equal(typeof recovery!.profile.heapPolicyCeilingMb, 'number');
+  assert.equal(['machine-policy', 'existing-larger-safe'].includes(String(recovery!.profile.heapSource)), true);
+});
+
+test('Windows command termination uses the exact process-tree terminator before root-signal fallback', () => {
+  let fallbackKills = 0;
+  const child = {
+    pid: 123,
+    kill: () => { fallbackKills += 1; return true; },
+  };
+  const treeCalls: number[] = [];
+  const tree = terminateCommandProcess(child, {
+    platform: 'win32',
+    treeTerminator: (pid: number) => {
+      treeCalls.push(pid);
+      return { attempted: true, treeTermination: true, terminated: true };
+    },
+  });
+  assert.deepEqual(treeCalls, [123]);
+  assert.equal(tree.mode, 'process-tree');
+  assert.equal(fallbackKills, 0);
+
+  const fallback = terminateCommandProcess(child, {
+    platform: 'win32',
+    treeTerminator: () => ({ attempted: true, treeTermination: true, terminated: false, reason: 'terminator-failed' }),
+  });
+  assert.equal(fallback.mode, 'root-signal');
+  assert.equal(fallbackKills, 1);
 });
 
 test('runProjectCommand never retries code failures and never retries infrastructure more than once', () => {

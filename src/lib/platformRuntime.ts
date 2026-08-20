@@ -24,10 +24,19 @@ export type SystemResourceSnapshot = {
 export type ProcessTreeResourceSample = {
   supported: boolean;
   treeAccounting: boolean;
+  memoryAccounting: 'complete' | 'partial' | 'unknown';
   processCount?: number;
   rssBytes?: number;
   cpuRatio?: number;
   reason?: 'sampler-failed' | 'unsupported-platform' | 'process-not-found';
+  partialReason?: 'descendant-enumeration-failed';
+};
+
+export type ProcessTreeTerminationResult = {
+  attempted: boolean;
+  treeTermination: boolean;
+  terminated: boolean;
+  reason?: 'invalid-pid' | 'unsupported-platform' | 'terminator-failed';
 };
 
 type ResourceCommandResult = {
@@ -201,22 +210,80 @@ function parseWindowsTasklistMemory(stdout: string) {
   return Number.isFinite(numeric) ? numeric * 1024 : undefined;
 }
 
+function parseCsvFields(line: string) {
+  const fields: string[] = [];
+  let current = '';
+  let quoted = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if (char === '"') {
+      if (quoted && line[index + 1] === '"') {
+        current += '"';
+        index += 1;
+      } else quoted = !quoted;
+    } else if (char === ',' && !quoted) {
+      fields.push(current);
+      current = '';
+    } else current += char;
+  }
+  fields.push(current);
+  return fields.map((field) => field.trim());
+}
+
+function parseWindowsProcessRows(stdout: string) {
+  const lines = String(stdout || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (lines.length < 2) return { rows: [] as Array<{ pid: number; ppid: number; rssBytes: number }>, complete: false };
+  const headers = parseCsvFields(lines[0]).map((field) => field.replace(/^\uFEFF/, '').toLowerCase());
+  const pidIndex = headers.indexOf('processid');
+  const ppidIndex = headers.indexOf('parentprocessid');
+  const rssIndex = headers.indexOf('workingsetsize');
+  if (pidIndex < 0 || ppidIndex < 0 || rssIndex < 0) return { rows: [], complete: false };
+  const rows: Array<{ pid: number; ppid: number; rssBytes: number }> = [];
+  let complete = true;
+  for (const line of lines.slice(1)) {
+    const fields = parseCsvFields(line);
+    const pid = Number(fields[pidIndex]);
+    const ppid = Number(fields[ppidIndex]);
+    const rssBytes = Number(fields[rssIndex]);
+    if (![pid, ppid, rssBytes].every(Number.isFinite)) {
+      complete = false;
+      continue;
+    }
+    rows.push({ pid, ppid, rssBytes: Math.max(0, rssBytes) });
+  }
+  return { rows, complete };
+}
+
+export function terminateProcessTree(pid: number, options: {
+  platform?: SupportedPlatform;
+  run?: ResourceCommandRunner;
+} = {}): ProcessTreeTerminationResult {
+  const rootPid = Math.floor(Number(pid));
+  if (!Number.isFinite(rootPid) || rootPid <= 0) return { attempted: false, treeTermination: false, terminated: false, reason: 'invalid-pid' };
+  const platform = options.platform ?? process.platform;
+  if (platform !== 'win32') return { attempted: false, treeTermination: false, terminated: false, reason: 'unsupported-platform' };
+  const result = (options.run ?? defaultResourceCommandRunner)('taskkill', ['/PID', String(rootPid), '/T', '/F']);
+  return result.status === 0
+    ? { attempted: true, treeTermination: true, terminated: true }
+    : { attempted: true, treeTermination: true, terminated: false, reason: 'terminator-failed' };
+}
+
 export function sampleProcessTreeResources(pid: number, options: {
   platform?: SupportedPlatform;
   cpuCount?: number;
   run?: ResourceCommandRunner;
 } = {}): ProcessTreeResourceSample {
   const rootPid = Math.floor(Number(pid));
-  if (!Number.isFinite(rootPid) || rootPid <= 0) return { supported: false, treeAccounting: false, reason: 'process-not-found' };
+  if (!Number.isFinite(rootPid) || rootPid <= 0) return { supported: false, treeAccounting: false, memoryAccounting: 'unknown', reason: 'process-not-found' };
   const platform = options.platform ?? process.platform;
   const cpuCount = Math.max(1, Math.floor(Number(options.cpuCount) || os.cpus().length || 1));
   const run = options.run ?? defaultResourceCommandRunner;
 
   if (platform === 'darwin' || platform === 'linux' || platform === 'freebsd' || platform === 'openbsd') {
     const result = run('ps', ['-axo', 'pid=,ppid=,rss=,%cpu=']);
-    if (result.status !== 0) return { supported: false, treeAccounting: false, reason: 'sampler-failed' };
+    if (result.status !== 0) return { supported: false, treeAccounting: false, memoryAccounting: 'unknown', reason: 'sampler-failed' };
     const rows = parsePosixProcessRows(result.stdout);
-    if (!rows.some((row) => row.pid === rootPid)) return { supported: false, treeAccounting: true, reason: 'process-not-found' };
+    if (!rows.some((row) => row.pid === rootPid)) return { supported: false, treeAccounting: true, memoryAccounting: 'complete', reason: 'process-not-found' };
     const included = collectDescendantPids(rootPid, rows);
     const matched = rows.filter((row) => included.has(row.pid));
     const rssBytes = matched.reduce((sum, row) => sum + Math.max(0, row.rssKb), 0) * 1024;
@@ -224,6 +291,7 @@ export function sampleProcessTreeResources(pid: number, options: {
     return {
       supported: true,
       treeAccounting: true,
+      memoryAccounting: 'complete',
       processCount: matched.length,
       rssBytes,
       cpuRatio: clampRatio(cpuPercent / (100 * cpuCount)),
@@ -231,12 +299,41 @@ export function sampleProcessTreeResources(pid: number, options: {
   }
 
   if (platform === 'win32') {
-    const result = run('tasklist', ['/FI', `PID eq ${rootPid}`, '/FO', 'CSV', '/NH']);
-    if (result.status !== 0) return { supported: false, treeAccounting: false, reason: 'sampler-failed' };
-    const rssBytes = parseWindowsTasklistMemory(result.stdout);
-    if (rssBytes === undefined) return { supported: false, treeAccounting: false, reason: 'process-not-found' };
-    return { supported: true, treeAccounting: false, processCount: 1, rssBytes };
+    const processTable = run('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,WorkingSetSize | ConvertTo-Csv -NoTypeInformation',
+    ]);
+    if (processTable.status === 0) {
+      const parsed = parseWindowsProcessRows(processTable.stdout);
+      const rows = parsed.rows;
+      if (parsed.complete && rows.some((row) => row.pid === rootPid)) {
+        const included = collectDescendantPids(rootPid, rows);
+        const matched = rows.filter((row) => included.has(row.pid));
+        return {
+          supported: true,
+          treeAccounting: true,
+          memoryAccounting: 'complete',
+          processCount: matched.length,
+          rssBytes: matched.reduce((sum, row) => sum + row.rssBytes, 0),
+        };
+      }
+    }
+
+    const fallback = run('tasklist', ['/FI', `PID eq ${rootPid}`, '/FO', 'CSV', '/NH']);
+    if (fallback.status !== 0) return { supported: false, treeAccounting: false, memoryAccounting: 'unknown', reason: 'sampler-failed' };
+    const rssBytes = parseWindowsTasklistMemory(fallback.stdout);
+    if (rssBytes === undefined) return { supported: false, treeAccounting: false, memoryAccounting: 'unknown', reason: 'process-not-found' };
+    return {
+      supported: true,
+      treeAccounting: false,
+      memoryAccounting: 'partial',
+      partialReason: 'descendant-enumeration-failed',
+      processCount: 1,
+      rssBytes,
+    };
   }
 
-  return { supported: false, treeAccounting: false, reason: 'unsupported-platform' };
+  return { supported: false, treeAccounting: false, memoryAccounting: 'unknown', reason: 'unsupported-platform' };
 }

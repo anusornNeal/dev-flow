@@ -194,11 +194,12 @@ function buildPrediction(descriptorInput: VerificationResourceProfileDescriptor,
   const descriptor = normalizeDescriptor(descriptorInput);
   const profileKey = buildVerificationResourceProfileKey(descriptor);
   const successful = (profile?.samples || []).filter((sample) => sample.status === 'succeeded');
+  const authoritativeTreeSamples = successful.filter((sample) => sample.treeAccounting === true);
   const fallback = coldStartVector(descriptor);
   const cpu = learnedMetric(successful, (sample) => sample.cpuRatio ?? sample.systemCpuRatio);
-  const memory = learnedMetric(successful, (sample) => sample.memoryBytes);
+  const memory = learnedMetric(authoritativeTreeSamples, (sample) => sample.memoryBytes);
   const duration = learnedMetric(successful, (sample) => sample.durationMs);
-  const processCount = learnedMetric(successful, (sample) => sample.processCount);
+  const processCount = learnedMetric(authoritativeTreeSamples, (sample) => sample.processCount);
   const expected = roundVector({
     cpuRatio: cpu?.expected ?? fallback.cpuRatio,
     memoryBytes: memory?.expected ?? fallback.memoryBytes,
@@ -245,7 +246,9 @@ function recordPredictionErrors(sample: StoredVerificationResourceSample) {
   let compared = false;
   const duration = relativeError(sample.predicted.expected.durationMs, finiteNonNegative(sample.durationMs));
   const cpu = relativeError(sample.predicted.expected.cpuRatio, finiteNonNegative(sample.cpuRatio ?? sample.systemCpuRatio));
-  const memory = relativeError(sample.predicted.expected.memoryBytes, finiteNonNegative(sample.memoryBytes));
+  const memory = sample.treeAccounting === true
+    ? relativeError(sample.predicted.expected.memoryBytes, finiteNonNegative(sample.memoryBytes))
+    : undefined;
   if (duration !== undefined) {
     pushBounded(predictionErrors.duration, duration);
     compared = true;
@@ -302,6 +305,7 @@ export function getVerificationResourceProfileDiagnostics() {
       sharedResources: [...profile.descriptor.sharedResources],
       sampleCount: prediction.sampleCount,
       successfulSampleCount: prediction.successfulSampleCount,
+      authoritativeMemorySampleCount: profile.samples.filter((sample) => sample.status === 'succeeded' && sample.treeAccounting === true && finiteNonNegative(sample.memoryBytes) !== undefined).length,
       confidence: prediction.confidence,
       expected: prediction.expected,
       upperBound: prediction.upperBound,

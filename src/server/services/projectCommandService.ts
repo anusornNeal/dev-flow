@@ -9,6 +9,7 @@ import {
   normalizeLocalPathIdentity,
   resolvePackageManagerInvocation,
   sampleProcessTreeResources,
+  terminateProcessTree,
 } from '../../lib/platformRuntime';
 import type { AppState } from '../types';
 import { createApiError } from './api';
@@ -88,8 +89,15 @@ export type VerificationInfrastructureRecoveryProfile = {
   attempt: 1;
   gradleTuned: boolean;
   heapMb: number | null;
+  heapFloorMb: number | null;
+  heapPolicyCeilingMb: number | null;
+  heapSafeExistingCeilingMb: number | null;
+  existingHeapMb: number | null;
+  heapSource: 'machine-policy' | 'existing-larger-safe' | null;
   maxWorkers: number | null;
+  requestedTimeoutMs: number;
   timeoutMs: number;
+  timeoutCapped: boolean;
   sharedResource: string;
 };
 
@@ -208,8 +216,10 @@ export interface RunProjectCommandResult {
       memoryPressureRatio: number;
       cpuRatio?: number;
       memoryBytes?: number;
+      partialMemoryBytes?: number;
       processCount?: number;
       processTreeAccounting: boolean;
+      processTreeMemoryAccounting: 'complete' | 'partial' | 'unknown';
       processTreeSampleAttempts: number;
       processTreeSampleCount: number;
     };
@@ -696,9 +706,11 @@ function relativePredictionError(predicted: number | undefined, actual: number |
 type ProcessResourceAggregate = {
   attempts: number;
   samples: number;
-  treeAccounting: boolean;
+  completeSamples: number;
+  partialSamples: number;
   maxCpuRatio?: number;
   maxRssBytes?: number;
+  maxPartialRssBytes?: number;
   maxProcessCount?: number;
 };
 
@@ -708,18 +720,25 @@ function finalizeResourceProfile(
   systemStart: ReturnType<typeof captureSystemResourceSnapshot>,
   durationMs: number,
   status: CommandStatus,
-  processAggregate: ProcessResourceAggregate = { attempts: 0, samples: 0, treeAccounting: false },
+  processAggregate: ProcessResourceAggregate = { attempts: 0, samples: 0, completeSamples: 0, partialSamples: 0 },
 ) {
   const systemDelta = diffSystemResourceSnapshots(systemStart, captureSystemResourceSnapshot());
   const actualCpuRatio = processAggregate.maxCpuRatio ?? systemDelta.cpuUtilization;
+  const memoryAccounting = processAggregate.completeSamples > 0
+    ? 'complete' as const
+    : processAggregate.partialSamples > 0
+      ? 'partial' as const
+      : 'unknown' as const;
   const actual = {
     durationMs,
     systemCpuRatio: systemDelta.cpuUtilization,
     memoryPressureRatio: systemDelta.peakMemoryPressure,
     ...(actualCpuRatio !== undefined ? { cpuRatio: actualCpuRatio } : {}),
     ...(processAggregate.maxRssBytes !== undefined ? { memoryBytes: processAggregate.maxRssBytes } : {}),
+    ...(processAggregate.maxPartialRssBytes !== undefined ? { partialMemoryBytes: processAggregate.maxPartialRssBytes } : {}),
     ...(processAggregate.maxProcessCount !== undefined ? { processCount: processAggregate.maxProcessCount } : {}),
-    processTreeAccounting: processAggregate.treeAccounting,
+    processTreeAccounting: processAggregate.completeSamples > 0,
+    processTreeMemoryAccounting: memoryAccounting,
     processTreeSampleAttempts: processAggregate.attempts,
     processTreeSampleCount: processAggregate.samples,
   };
@@ -789,15 +808,42 @@ function isGradleLikeCommand(resolvedCommand: ResolvedCommand) {
   return /(^|[\\/\s])gradle(?:w)?(?:\.bat)?(?:\s|$)/i.test(material);
 }
 
-function recoveryHeapMb() {
-  const machineQuarterMb = Math.floor(MACHINE_RUNTIME_PROFILE.totalMemoryBytesBucket / 4 / MIB);
-  return Math.max(1024, Math.min(4096, machineQuarterMb, Math.max(2048, 1024)));
+function parseJvmHeapMb(value: string) {
+  const match = String(value || '').match(/-Xmx(\d+(?:\.\d+)?)([kKmMgG]?)/);
+  if (!match) return null;
+  const amount = Number(match[1]);
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  const unit = match[2].toLowerCase();
+  const bytes = unit === 'g' ? amount * 1024 ** 3 : unit === 'm' ? amount * MIB : unit === 'k' ? amount * 1024 : amount;
+  return Math.max(1, Math.round(bytes / MIB));
+}
+
+export function resolveGradleRecoveryHeapPolicy(
+  totalMemoryBytes = MACHINE_RUNTIME_PROFILE.totalMemoryBytesBucket,
+  existingGradleOpts = process.env.GRADLE_OPTS || '',
+) {
+  const totalMb = Math.max(1, Math.floor(Number(totalMemoryBytes) / MIB));
+  const safeExistingCeilingMb = Math.max(128, Math.floor(totalMb / 2));
+  const heapPolicyCeilingMb = Math.max(128, Math.min(4096, safeExistingCeilingMb));
+  const heapFloorMb = Math.min(1024, heapPolicyCeilingMb);
+  const machineTargetMb = Math.min(heapPolicyCeilingMb, Math.max(heapFloorMb, Math.floor(totalMb / 4)));
+  const existingHeapMb = parseJvmHeapMb(existingGradleOpts);
+  const existingLargerSafe = existingHeapMb !== null && existingHeapMb > machineTargetMb && existingHeapMb <= safeExistingCeilingMb;
+  return {
+    heapMb: existingLargerSafe ? existingHeapMb : machineTargetMb,
+    heapFloorMb,
+    heapPolicyCeilingMb,
+    safeExistingCeilingMb,
+    existingHeapMb,
+    heapSource: existingLargerSafe ? 'existing-larger-safe' as const : 'machine-policy' as const,
+  };
 }
 
 function replaceGradleJvmHeap(existing: string, heapMb: number) {
-  const tokens = String(existing || '').split(/\s+/).filter(Boolean).filter((token) => !token.startsWith('-Dorg.gradle.jvmargs='));
-  tokens.push(`-Dorg.gradle.jvmargs=-Xmx${heapMb}m`);
-  return tokens.join(' ');
+  const raw = String(existing || '').trim();
+  const xmx = /-Xmx\d+(?:\.\d+)?[kKmMgG]?/;
+  if (xmx.test(raw)) return raw.replace(xmx, `-Xmx${heapMb}m`);
+  return [raw, `-Dorg.gradle.jvmargs=-Xmx${heapMb}m`].filter(Boolean).join(' ');
 }
 
 function resolveCommandExecutionOptions(resolvedCommand: ResolvedCommand, args: Record<string, any>, baseTimeoutMs: number): CommandExecutionOptions {
@@ -812,7 +858,9 @@ function resolveCommandExecutionOptions(resolvedCommand: ResolvedCommand, args: 
   }
 
   const gradleTuned = isGradleLikeCommand(resolvedCommand);
-  const heapMb = gradleTuned ? recoveryHeapMb() : null;
+  const gradleHeapBaseline = [process.env.GRADLE_OPTS || '', resolvedCommand.script || '', ...resolvedCommand.args].join(' ');
+  const heapPolicy = gradleTuned ? resolveGradleRecoveryHeapPolicy(MACHINE_RUNTIME_PROFILE.totalMemoryBytesBucket, gradleHeapBaseline) : null;
+  const heapMb = heapPolicy?.heapMb ?? null;
   const executionArgs = [...resolvedCommand.args];
   if (gradleTuned && resolvedCommand.source === 'repository-config' && !executionArgs.some((entry) => /^--max-workers(?:=|$)/.test(entry))) {
     executionArgs.push('--max-workers=1');
@@ -823,7 +871,8 @@ function resolveCommandExecutionOptions(resolvedCommand: ResolvedCommand, args: 
     DEVFLOW_VERIFICATION_RECOVERY_ATTEMPT: '1',
   };
   if (gradleTuned && heapMb) env.GRADLE_OPTS = replaceGradleJvmHeap(process.env.GRADLE_OPTS || '', heapMb);
-  const timeoutMs = Math.min(MAX_TIMEOUT_MS, Math.max(baseTimeoutMs, Math.ceil(baseTimeoutMs * 1.25)));
+  const requestedTimeoutMs = Math.max(baseTimeoutMs, Math.ceil(baseTimeoutMs * 1.25));
+  const timeoutMs = Math.min(MAX_TIMEOUT_MS, requestedTimeoutMs);
   return {
     args: executionArgs,
     env,
@@ -833,8 +882,15 @@ function resolveCommandExecutionOptions(resolvedCommand: ResolvedCommand, args: 
       attempt: 1,
       gradleTuned,
       heapMb,
+      heapFloorMb: heapPolicy?.heapFloorMb ?? null,
+      heapPolicyCeilingMb: heapPolicy?.heapPolicyCeilingMb ?? null,
+      heapSafeExistingCeilingMb: heapPolicy?.safeExistingCeilingMb ?? null,
+      existingHeapMb: heapPolicy?.existingHeapMb ?? null,
+      heapSource: heapPolicy?.heapSource ?? null,
       maxWorkers: gradleTuned ? 1 : null,
+      requestedTimeoutMs,
       timeoutMs,
+      timeoutCapped: timeoutMs < requestedTimeoutMs,
       sharedResource: RECOVERY_SHARED_RESOURCE,
     },
   };
@@ -975,8 +1031,16 @@ function buildProjectCommandExecutionIdentity(
     CI: process.env.CI || '',
     NODE_ENV: process.env.NODE_ENV || '',
     NODE_OPTIONS: process.env.NODE_OPTIONS || '',
+    GRADLE_OPTS: process.env.GRADLE_OPTS || '',
+    machineRuntimeProfile: MACHINE_RUNTIME_PROFILE.key,
     infrastructureRetryPolicy: resolveInfrastructureRetryPolicy(identityArgs),
     recoveryProfile: identityArgs.recoveryProfile == null ? '' : String(identityArgs.recoveryProfile),
+    recoveryHeapMb: identityArgs.recoveryProfile && isGradleLikeCommand(resolvedCommand)
+      ? resolveGradleRecoveryHeapPolicy(
+          MACHINE_RUNTIME_PROFILE.totalMemoryBytesBucket,
+          [process.env.GRADLE_OPTS || '', resolvedCommand.script || '', ...resolvedCommand.args].join(' '),
+        ).heapMb
+      : null,
     retryAttempt: Number.isFinite(Number(identityArgs.retryAttempt)) ? Math.max(0, Math.floor(Number(identityArgs.retryAttempt))) : 0,
   };
   const environmentFingerprint = crypto.createHash('sha256').update(JSON.stringify({
@@ -1478,6 +1542,24 @@ export function runProjectCommand(state: AppState, args: Record<string, any>): R
   return attachNoInfrastructureRecoveryAudit(completed, args);
 }
 
+type KillableCommandProcess = {
+  pid?: number;
+  kill: (signal?: NodeJS.Signals | number) => boolean;
+};
+
+export function terminateCommandProcess(
+  child: KillableCommandProcess,
+  options: { platform?: NodeJS.Platform; treeTerminator?: typeof terminateProcessTree } = {},
+) {
+  const platform = options.platform ?? process.platform;
+  if (platform === 'win32' && child.pid) {
+    const treeResult = (options.treeTerminator ?? terminateProcessTree)(child.pid, { platform: 'win32' });
+    if (treeResult.terminated) return { mode: 'process-tree' as const, ...treeResult };
+  }
+  const terminated = child.kill('SIGTERM');
+  return { mode: 'root-signal' as const, attempted: true, treeTermination: false, terminated };
+}
+
 export async function runProjectCommandAsync(state: AppState, args: Record<string, any>, logger: { stdout: (data: string) => void, stderr: (data: string) => void }, setCancelFn: (fn: () => void) => void): Promise<RunProjectCommandResult> {
   const totalStartedAt = Date.now();
   const resolutionStartedAt = totalStartedAt;
@@ -1579,7 +1661,7 @@ export async function runProjectCommandAsync(state: AppState, args: Record<strin
     let timedOut = false;
     const stdoutCapture = createBoundedCommandOutputCapture(maxOutputBytes);
     const stderrCapture = createBoundedCommandOutputCapture(maxOutputBytes);
-    const processAggregate: ProcessResourceAggregate = { attempts: 0, samples: 0, treeAccounting: false };
+    const processAggregate: ProcessResourceAggregate = { attempts: 0, samples: 0, completeSamples: 0, partialSamples: 0 };
     let resourceSampleInterval: NodeJS.Timeout | undefined;
     const sampleChildResources = () => {
       if (!child.pid) return;
@@ -1587,15 +1669,14 @@ export async function runProjectCommandAsync(state: AppState, args: Record<strin
       const sample = sampleProcessTreeResources(child.pid);
       if (!sample.supported) return;
       processAggregate.samples += 1;
-      processAggregate.treeAccounting = processAggregate.treeAccounting || sample.treeAccounting;
-      if (sample.cpuRatio !== undefined) {
-        processAggregate.maxCpuRatio = Math.max(processAggregate.maxCpuRatio ?? 0, sample.cpuRatio);
-      }
-      if (sample.rssBytes !== undefined) {
-        processAggregate.maxRssBytes = Math.max(processAggregate.maxRssBytes ?? 0, sample.rssBytes);
-      }
-      if (sample.processCount !== undefined) {
-        processAggregate.maxProcessCount = Math.max(processAggregate.maxProcessCount ?? 0, sample.processCount);
+      if (sample.cpuRatio !== undefined) processAggregate.maxCpuRatio = Math.max(processAggregate.maxCpuRatio ?? 0, sample.cpuRatio);
+      if (sample.memoryAccounting === 'complete' && sample.treeAccounting) {
+        processAggregate.completeSamples += 1;
+        if (sample.rssBytes !== undefined) processAggregate.maxRssBytes = Math.max(processAggregate.maxRssBytes ?? 0, sample.rssBytes);
+        if (sample.processCount !== undefined) processAggregate.maxProcessCount = Math.max(processAggregate.maxProcessCount ?? 0, sample.processCount);
+      } else if (sample.memoryAccounting === 'partial') {
+        processAggregate.partialSamples += 1;
+        if (sample.rssBytes !== undefined) processAggregate.maxPartialRssBytes = Math.max(processAggregate.maxPartialRssBytes ?? 0, sample.rssBytes);
       }
     };
     const resourceSampleDelay = setTimeout(() => {
@@ -1612,13 +1693,13 @@ export async function runProjectCommandAsync(state: AppState, args: Record<strin
 
     const timeoutId = setTimeout(() => {
       timedOut = true;
-      child.kill('SIGTERM');
+      terminateCommandProcess(child);
     }, timeoutMs);
 
     setCancelFn(() => {
       clearTimeout(timeoutId);
       clearResourceSampling();
-      child.kill('SIGTERM');
+      terminateCommandProcess(child);
       reject(new Error('Job cancelled'));
     });
 

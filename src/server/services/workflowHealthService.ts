@@ -686,6 +686,8 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
 
   const queueDepth = Number(diagnostics?.mcp?.queueDepth || 0);
   const runtimeSupervisor = diagnostics?.runtimeSupervisor;
+  const runtimeSourceFreshness = diagnostics?.runtime?.sourceFreshness || null;
+  const runtimeDiagnosis = diagnostics?.runtimeDiagnosis || null;
   const isolation = diagnostics?.isolation || {
     waits: { workspaceLockWait: { count: 0, totalMs: 0, p50Ms: 0, p95Ms: 0 }, capacityWait: { count: 0, totalMs: 0, p50Ms: 0, p95Ms: 0 }, blockerReasons: {} },
     phases: {
@@ -725,6 +727,9 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
   };
   if (runtimeSupervisor?.api?.status === 'healthy' && (runtimeSupervisor?.tunnel?.status === 'degraded' || runtimeSupervisor?.tunnel?.status === 'down')) {
     recommendations.push(`Public zrok route is ${runtimeSupervisor.tunnel.status} while the local API is healthy; inspect zrok service/share state and runtime supervisor public-probe evidence.`);
+  }
+  if (runtimeSourceFreshness && runtimeSourceFreshness.code !== 'current') {
+    recommendations.push(`DevFlow runtime source is ${runtimeSourceFreshness.code}; ${runtimeDiagnosis?.nextAction || runtimeSourceFreshness.nextAction || 'inspect runtime source freshness before treating this process as current.'}`);
   }
   if (queueDepth > 0) recommendations.push('MCP tool jobs are queued; inspect job status/log before starting conflicting repo work.');
   if (Number(durableJobs.staleRunning || 0) > 0) recommendations.push('A stale MCP tool job lease was detected in durable state; inspect recovery classification before retrying the job.');
@@ -834,6 +839,10 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
       recovery,
       breakGlass: breakGlassHealth,
       runtimeSupervisor,
+      runtimeSource: {
+        identity: diagnostics?.runtime || null,
+        diagnosis: runtimeDiagnosis,
+      },
       harness,
     },
     performance: {
@@ -890,6 +899,17 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
     regressions: compactRegressions,
     harness,
     runtime: {
+      sourceFreshness: runtimeSourceFreshness ? {
+        code: runtimeSourceFreshness.code,
+        loadedRevision: runtimeSourceFreshness.loadedRevision,
+        currentRevision: runtimeSourceFreshness.currentRevision,
+        currentSourceDirty: runtimeSourceFreshness.currentSourceDirty,
+        headMismatch: runtimeSourceFreshness.headMismatch,
+      } : null,
+      diagnosis: runtimeDiagnosis ? {
+        code: runtimeDiagnosis.code,
+        restartBlocked: runtimeDiagnosis.restartSafety?.blocked === true,
+      } : null,
       repoCaches: compactRepoCaches,
       search: {
         backend: search.backend,

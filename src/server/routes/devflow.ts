@@ -33,7 +33,7 @@ import { getRepoSemanticIndex } from '../services/repoInspectionIndexService';
 import { cleanupManagedWorkspaceBranches, cleanupSessionWorkspace, createOrReuseSessionWorkspace } from '../services/sessionWorkspaceService';
 import { finalizeSupersededWorkspace, inspectWorkspaceRecovery } from '../services/workspaceRecoveryService';
 import { abortWorkspaceIntegration, integrateWorkspaceCommits, retryWorkspaceIntegration } from '../services/workspaceIntegrationService';
-import { getRuntimeIdentity } from '../services/runtimeIdentityService';
+import { getRuntimeIdentity, getRuntimeSourceFreshness } from '../services/runtimeIdentityService';
 import { getWorkflowRecoveryHandoff } from '../services/workflowRecoveryHandoffService';
 import { executeBreakGlassLifecycle, getBreakGlassLifecycleOperation, listBreakGlassLifecycleOperations } from '../services/breakGlassLifecycleService.js';
 import { cleanupOrphanExecutions } from '../services/emergencyOrphanCleanupService.js';
@@ -94,6 +94,11 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
         toolSurfaceIdentity: catalog.mcpProfile.toolSurfaceIdentity,
         runtimeInstanceId: runtime.runtimeInstanceId,
         runtimeStartedAt: runtime.runtimeStartedAt,
+        loadedRevision: runtime.loadedRevision,
+        loadedRepoToken: runtime.loadedRepoToken,
+        loadedSourceDirty: runtime.loadedSourceDirty,
+        sourceRevisionAvailable: runtime.sourceRevisionAvailable,
+        sourceFreshness: getRuntimeSourceFreshness(),
         transport: runtime.transport,
         schemaVersion: catalog.contractVersion,
         modules: {

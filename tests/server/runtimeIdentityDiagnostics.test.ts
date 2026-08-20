@@ -8,6 +8,22 @@ import { spawnSync } from 'node:child_process';
 import express from 'express';
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-runtime-identity-'));
+const runtimeSourceRoot = path.join(tempRoot, 'runtime-source');
+fs.mkdirSync(runtimeSourceRoot, { recursive: true });
+function runtimeGit(args: string[]) {
+  const result = spawnSync('git', args, { cwd: runtimeSourceRoot, encoding: 'utf8', shell: false });
+  assert.equal(result.status, 0, result.stderr || result.stdout || `git ${args.join(' ')} failed`);
+  return (result.stdout || '').trim();
+}
+
+runtimeGit(['init']);
+runtimeGit(['config', 'user.name', 'DevFlow Test']);
+runtimeGit(['config', 'user.email', 'devflow@example.test']);
+fs.writeFileSync(path.join(runtimeSourceRoot, 'runtime-source.txt'), 'runtime source v1\n');
+runtimeGit(['add', '.']);
+runtimeGit(['commit', '-m', 'runtime source v1']);
+runtimeGit(['branch', '-M', 'develop']);
+process.env.DEVFLOW_RUNTIME_SOURCE_ROOT = runtimeSourceRoot;
 process.env.DEVFLOW_APP_ROOT = tempRoot;
 process.env.DEVFLOW_DB_PATH = path.join(tempRoot, 'devflow.db');
 process.env.DEVFLOW_JOBS_DIR = path.join(tempRoot, 'jobs');
@@ -17,6 +33,95 @@ executeAllMigrations();
 const { DEVFLOW_CONTRACT_VERSION } = await import('../../src/server/contracts/devflowContract.js');
 const { getDevFlowDiagnostics } = await import('../../src/server/services/mcpToolMonitor.js');
 const { registerDevFlowRoutes } = await import('../../src/server/routes/devflow.js');
+const executionSessions = await import('../../src/server/services/executionSessionService.js');
+
+test('dirty runtime source is ambiguous and does not claim a deployed revision', () => {
+  fs.writeFileSync(path.join(runtimeSourceRoot, 'runtime-source.txt'), 'runtime source dirty\n');
+  try {
+    const diagnostics = getDevFlowDiagnostics({ supervisorState: null } as any) as any;
+    assert.equal(diagnostics.runtime.sourceFreshness.code, 'dirty-ambiguous');
+    assert.equal(diagnostics.runtimeDiagnosis.code, 'runtime-source-dirty-ambiguous');
+    assert.equal(diagnostics.runtime.sourceFreshness.loadedRevision, runtimeGit(['rev-parse', 'HEAD']));
+    assert.equal(diagnostics.runtime.sourceFreshness.currentRevision, runtimeGit(['rev-parse', 'HEAD']));
+    assert.equal(diagnostics.runtime.sourceFreshness.currentSourceDirty, true);
+  } finally {
+    runtimeGit(['checkout', '--', 'runtime-source.txt']);
+  }
+});
+
+test('advanced clean source HEAD is stale, preserves concurrent client drift, blocks restart on active lifecycle work, and converges after restart', () => {
+  const execution = executionSessions.createExecutionSession({
+    projectId: 'project-runtime-source',
+    taskId: 'task-runtime-source-active',
+    workspaceId: 'ws-runtime-source-active',
+    repoRoot: runtimeSourceRoot,
+    branch: 'develop',
+  });
+  executionSessions.recordExecutionLifecycleTransition(execution.id, {
+    toStage: 'context-ready',
+    reasonCode: 'runtime-source-test-context',
+    evidence: { id: 'runtime-source-test-context', kind: 'context', status: 'completed' },
+  });
+  executionSessions.recordExecutionLifecycleTransition(execution.id, {
+    toStage: 'implementing',
+    reasonCode: 'runtime-source-test-implementing',
+    evidence: { id: 'runtime-source-test-implementing', kind: 'mutation', status: 'completed' },
+  });
+
+  const originalHead = runtimeGit(['rev-parse', 'HEAD']);
+  try {
+    const before = getDevFlowDiagnostics({ supervisorState: null } as any) as any;
+    assert.equal(before.runtime.sourceFreshness.code, 'current');
+    fs.writeFileSync(path.join(runtimeSourceRoot, 'runtime-source.txt'), 'runtime source v2\n');
+    runtimeGit(['add', 'runtime-source.txt']);
+    runtimeGit(['commit', '-m', 'runtime source v2']);
+    const currentHead = runtimeGit(['rev-parse', 'HEAD']);
+
+    const stale = getDevFlowDiagnostics({
+      supervisorState: null,
+      clientState: {
+        contractVersion: before.runtime.contractVersion,
+        runtimeInstanceId: before.runtime.runtimeInstanceId,
+        toolSurfaceIdentity: '0'.repeat(64),
+        toolsVisible: true,
+      },
+    } as any) as any;
+    assert.equal(stale.runtimeDiagnosis.code, 'runtime-source-stale');
+    assert.equal(stale.runtime.sourceFreshness.loadedRevision, before.runtime.loadedRevision);
+    assert.equal(stale.runtime.sourceFreshness.currentRevision, currentHead);
+    assert.equal(stale.runtimeDiagnosis.restartSafety.blocked, true);
+    assert.equal(stale.runtimeDiagnosis.restartSafety.active.some((entry: any) => entry.taskId === 'task-runtime-source-active' && entry.executionSessionId === execution.id && entry.stage === 'implementing'), true);
+    assert.equal(stale.runtimeDiagnosis.concurrentDiagnostics.some((entry: any) => entry.code === 'tool-surface-changed'), true);
+    assert.match(stale.runtimeDiagnosis.nextAction, /blocked|active|quiescent/i);
+
+    const childRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-runtime-source-restart-'));
+    const code = [
+      `process.env.DEVFLOW_APP_ROOT=${JSON.stringify(childRoot)};`,
+      `process.env.DEVFLOW_DB_PATH=${JSON.stringify(path.join(childRoot, 'devflow.db'))};`,
+      `process.env.DEVFLOW_JOBS_DIR=${JSON.stringify(path.join(childRoot, 'jobs'))};`,
+      `process.env.DEVFLOW_RUNTIME_SOURCE_ROOT=${JSON.stringify(runtimeSourceRoot)};`,
+      `const migrations=await import('./src/db/migrations/index.js');`,
+      `migrations.executeAllMigrations();`,
+      `const monitor=await import('./src/server/services/mcpToolMonitor.js');`,
+      `const diagnostics=monitor.getDevFlowDiagnostics({supervisorState:null});`,
+      `console.log(JSON.stringify({source:diagnostics.runtime.sourceFreshness, diagnosis:diagnostics.runtimeDiagnosis?.code || null}));`,
+    ].join('');
+    const child = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', code], {
+      cwd: process.cwd(),
+      env: { ...process.env },
+      encoding: 'utf8',
+    });
+    assert.equal(child.status, 0, child.stderr || child.stdout);
+    const restarted = JSON.parse(child.stdout.trim().split(/\r?\n/).at(-1) || '{}');
+    assert.equal(restarted.source.code, 'current');
+    assert.equal(restarted.source.loadedRevision, currentHead);
+    assert.equal(restarted.source.currentRevision, currentHead);
+    assert.equal(restarted.diagnosis, null);
+  } finally {
+    executionSessions.completeExecutionSession(execution.id);
+    runtimeGit(['reset', '--hard', originalHead]);
+  }
+});
 
 async function withServer(run: (baseUrl: string) => Promise<void>) {
   const app = express();
@@ -45,6 +150,9 @@ test('runtime identity is stable for one process and exposed in compact diagnost
   assert.equal(first.runtime.runtimeInstanceId, second.runtime.runtimeInstanceId);
   assert.equal(first.runtime.runtimeStartedAt, second.runtime.runtimeStartedAt);
   assert.equal(first.runtime.contractVersion, DEVFLOW_CONTRACT_VERSION);
+  assert.equal(first.runtime.loadedRevision, runtimeGit(['rev-parse', 'HEAD']));
+  assert.equal(first.runtime.sourceFreshness.code, 'current');
+  assert.equal(first.runtime.sourceFreshness.currentSourceDirty, false);
   assert.ok(Array.isArray(first.runtime.transport));
   assert.deepEqual(first.runtime.transport, ['streamable-http', 'legacy-sse']);
 });
@@ -156,6 +264,8 @@ test('capabilities and diagnostics routes expose runtime identity and accept cli
     assert.match(capabilities.toolSurfaceIdentity, /^[0-9a-f]{64}$/);
     assert.match(capabilities.runtimeInstanceId, /^[0-9a-f-]{20,}$/i);
     assert.equal(typeof capabilities.runtimeStartedAt, 'string');
+    assert.equal(capabilities.loadedRevision, runtimeGit(['rev-parse', 'HEAD']));
+    assert.equal(capabilities.sourceFreshness.code, 'current');
     assert.deepEqual(capabilities.transport, ['streamable-http', 'legacy-sse']);
     assert.equal(capabilities.modules.mcpStreamableHttp, true);
     assert.equal(capabilities.modules.mcpSse, true);

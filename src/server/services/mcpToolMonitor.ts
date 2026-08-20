@@ -18,6 +18,7 @@ import { DEVFLOW_CONTRACT_VERSION, getCapabilityCatalog } from '../contracts/dev
 import {
   classifyRuntimeIdentity,
   getRuntimeIdentity,
+  getRuntimeSourceFreshness,
   type RuntimeClientState,
 } from './runtimeIdentityService';
 
@@ -657,6 +658,7 @@ export function getDevFlowDiagnostics(options?: {
   const capabilityCatalog = getCapabilityCatalog();
   const runtime = {
     ...getRuntimeIdentity(),
+    sourceFreshness: getRuntimeSourceFreshness(),
     contractVersion: DEVFLOW_CONTRACT_VERSION,
     toolSurfaceIdentity: capabilityCatalog.mcpProfile.toolSurfaceIdentity,
   };

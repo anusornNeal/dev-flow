@@ -6,7 +6,7 @@ import { getLatestTaskFinalizationOperation, type TaskFinalizationOperationRecor
 import { listLifecycleEmergencyOperations } from '../repositories/lifecycleEmergencyOperationRepository.js';
 import { DEVFLOW_CONTRACT_VERSION, getCapabilityCatalog } from '../contracts/devflowContract.js';
 import { findProjectByIdentifier } from './taskService.js';
-import { classifyRuntimeIdentity, getRuntimeIdentity, type RuntimeClientState } from './runtimeIdentityService.js';
+import { classifyRuntimeIdentity, getRuntimeIdentity, getRuntimeSourceFreshness, type RuntimeClientState } from './runtimeIdentityService.js';
 import { inspectWorkspaceRecovery, type WorkspaceRecoveryInspection } from './workspaceRecoveryService.js';
 import {
   classifySessionWorkspaceTaskMatch,
@@ -61,6 +61,7 @@ function runtimeDiagnosis(args: RecoveryArgs) {
   const capabilityCatalog = getCapabilityCatalog();
   const current = {
     ...getRuntimeIdentity(),
+    sourceFreshness: getRuntimeSourceFreshness(),
     contractVersion: DEVFLOW_CONTRACT_VERSION,
     toolSurfaceIdentity: capabilityCatalog.mcpProfile.toolSurfaceIdentity,
   };

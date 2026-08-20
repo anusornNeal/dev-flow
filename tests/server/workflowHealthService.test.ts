@@ -6,6 +6,16 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-health-'));
+const runtimeSourceRoot = path.join(tempRoot, 'runtime-source');
+fs.mkdirSync(runtimeSourceRoot, { recursive: true });
+git(runtimeSourceRoot, ['init']);
+git(runtimeSourceRoot, ['config', 'user.name', 'DevFlow Test']);
+git(runtimeSourceRoot, ['config', 'user.email', 'devflow@example.com']);
+fs.writeFileSync(path.join(runtimeSourceRoot, 'runtime-source.txt'), 'runtime source v1\n');
+git(runtimeSourceRoot, ['add', '.']);
+git(runtimeSourceRoot, ['commit', '-m', 'runtime source v1']);
+git(runtimeSourceRoot, ['branch', '-M', 'develop']);
+process.env.DEVFLOW_RUNTIME_SOURCE_ROOT = runtimeSourceRoot;
 process.env.DEVFLOW_DB_PATH = path.join(os.tmpdir(), `devflow-health-db-${path.basename(tempRoot)}.sqlite`);
 process.env.DEVFLOW_JOBS_DIR = path.join(os.tmpdir(), `devflow-health-jobs-${path.basename(tempRoot)}`);
 
@@ -750,4 +760,19 @@ test('workflow health reports historical regressions separately from insufficien
   assert.equal(history.regressions[0].deltaPercent, 30);
   assert.equal(history.insufficientSamples.some((entry: any) => entry.toolName === 'read_local_file'), true);
   assert.match(result.recommendations.join('\n'), /Historical performance regression/);
+});
+
+test('workflow health surfaces stale loaded source even while runtime supervisor is otherwise healthy', () => {
+  const repo = createRepo('runtime-source-stale-health');
+  const before = getWorkflowHealth(stateFor(repo), { projectId: 'project-health', responseMode: 'compact' });
+  assert.equal(before.runtime.sourceFreshness.code, 'current');
+  fs.writeFileSync(path.join(runtimeSourceRoot, 'runtime-source.txt'), 'runtime source v2\n');
+  git(runtimeSourceRoot, ['add', 'runtime-source.txt']);
+  git(runtimeSourceRoot, ['commit', '-m', 'runtime source v2']);
+
+  const result = getWorkflowHealth(stateFor(repo), { projectId: 'project-health', responseMode: 'compact' });
+  assert.equal(result.runtime.sourceFreshness.code, 'stale');
+  assert.equal(result.runtime.diagnosis.code, 'runtime-source-stale');
+  assert.notEqual(result.runtime.sourceFreshness.loadedRevision, result.runtime.sourceFreshness.currentRevision);
+  assert.match(result.recommendations.join('\n'), /runtime source|restart/i);
 });

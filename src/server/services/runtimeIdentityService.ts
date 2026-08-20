@@ -1,11 +1,60 @@
+import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { getDevFlowAppRoot } from '../../lib/devFlowPaths.js';
+import { getRepoRevisionForRoot } from './repoRevisionService.js';
+import { queryExecutionSessions } from '../repositories/executionSessionRepository.js';
 
 export type DevFlowMcpTransport = 'streamable-http' | 'legacy-sse';
+
+export type RuntimeSourceFreshnessCode = 'current' | 'stale' | 'dirty-ambiguous' | 'unavailable';
+
+export interface RuntimeSourceSnapshot {
+  available: boolean;
+  revision: string | null;
+  repoToken: string | null;
+  dirty: boolean | null;
+  changedFileCount: number | null;
+  observedAt: string;
+  errorCode?: string;
+}
+
+export interface RuntimeSourceFreshness {
+  code: RuntimeSourceFreshnessCode;
+  loadedRevision: string | null;
+  currentRevision: string | null;
+  loadedRepoToken: string | null;
+  currentRepoToken: string | null;
+  loadedSourceDirty: boolean | null;
+  currentSourceDirty: boolean | null;
+  currentChangedFileCount: number | null;
+  headMismatch: boolean;
+  detail: string;
+  nextAction: string;
+}
+
+export interface RuntimeRestartSafety {
+  blocked: boolean;
+  truncated: boolean;
+  active: Array<{
+    taskId: string | null;
+    executionSessionId: string;
+    workspaceId: string | null;
+    stage: string;
+  }>;
+}
+
+const RESTART_SENSITIVE_EXECUTION_STAGES = new Set(['implementing', 'verifying', 'repairing', 'verification-infra-blocked']);
+const MAX_RUNTIME_RESTART_BLOCKERS = 10;
 
 export interface RuntimeIdentity {
   runtimeInstanceId: string;
   runtimeStartedAt: string;
   transport: DevFlowMcpTransport[];
+  loadedRevision: string | null;
+  loadedRepoToken: string | null;
+  loadedSourceDirty: boolean | null;
+  loadedSourceChangedFileCount: number | null;
+  sourceRevisionAvailable: boolean;
 }
 
 export interface RuntimeClientState {
@@ -18,6 +67,7 @@ export interface RuntimeClientState {
 export interface RuntimeIdentityWithContract extends RuntimeIdentity {
   contractVersion: string;
   toolSurfaceIdentity: string;
+  sourceFreshness?: RuntimeSourceFreshness;
 }
 
 export type RuntimeDiagnosisCode =
@@ -26,6 +76,9 @@ export type RuntimeDiagnosisCode =
   | 'deployment-changed'
   | 'client-registry-desync'
   | 'contract-changed'
+  | 'runtime-source-stale'
+  | 'runtime-source-dirty-ambiguous'
+  | 'runtime-source-unavailable'
   | 'runtime-current';
 
 export interface RuntimeDiagnosis {
@@ -33,11 +86,49 @@ export interface RuntimeDiagnosis {
   detail: string;
   nextAction: string;
   recoverySurface?: 'get_recovery_handoff';
+  sourceFreshness?: RuntimeSourceFreshness;
+  concurrentDiagnostics?: RuntimeDiagnosis[];
+  restartSafety?: RuntimeRestartSafety;
 }
 
+function runtimeSourceRoot() {
+  return path.resolve(process.env.DEVFLOW_RUNTIME_SOURCE_ROOT || getDevFlowAppRoot());
+}
+
+function readRuntimeSourceSnapshot(root = runtimeSourceRoot()): RuntimeSourceSnapshot {
+  const observedAt = new Date().toISOString();
+  try {
+    const revision = getRepoRevisionForRoot(root);
+    return {
+      available: true,
+      revision: revision.head || null,
+      repoToken: revision.token || null,
+      dirty: revision.changedFiles.length > 0,
+      changedFileCount: revision.changedFiles.length,
+      observedAt,
+    };
+  } catch (error: any) {
+    return {
+      available: false,
+      revision: null,
+      repoToken: null,
+      dirty: null,
+      changedFileCount: null,
+      observedAt,
+      errorCode: String(error?.code || error?.payload?.code || 'RUNTIME_SOURCE_REVISION_UNAVAILABLE'),
+    };
+  }
+}
+
+const loadedSource = readRuntimeSourceSnapshot();
 const runtimeIdentity: Omit<RuntimeIdentity, 'transport'> = {
   runtimeInstanceId: randomUUID(),
   runtimeStartedAt: new Date().toISOString(),
+  loadedRevision: loadedSource.revision,
+  loadedRepoToken: loadedSource.repoToken,
+  loadedSourceDirty: loadedSource.dirty,
+  loadedSourceChangedFileCount: loadedSource.changedFileCount,
+  sourceRevisionAvailable: loadedSource.available,
 };
 
 function resolveTransports(): DevFlowMcpTransport[] {
@@ -51,10 +142,78 @@ export function getRuntimeIdentity(): RuntimeIdentity {
   };
 }
 
-export function classifyRuntimeIdentity(
-  current: RuntimeIdentityWithContract,
-  clientState?: RuntimeClientState,
-): RuntimeDiagnosis | undefined {
+export function getRuntimeSourceFreshness(): RuntimeSourceFreshness {
+  const current = readRuntimeSourceSnapshot();
+  const loadedRevision = loadedSource.revision;
+  const currentRevision = current.revision;
+  const headMismatch = Boolean(loadedRevision && currentRevision && loadedRevision !== currentRevision);
+  const common = {
+    loadedRevision,
+    currentRevision,
+    loadedRepoToken: loadedSource.repoToken,
+    currentRepoToken: current.repoToken,
+    loadedSourceDirty: loadedSource.dirty,
+    currentSourceDirty: current.dirty,
+    currentChangedFileCount: current.changedFileCount,
+    headMismatch,
+  };
+
+  if (!loadedSource.available || !current.available || !loadedRevision || !currentRevision) {
+    return {
+      code: 'unavailable',
+      ...common,
+      detail: 'DevFlow could not prove the process-loaded source revision against the configured local source repository.',
+      nextAction: 'Restore a readable local DevFlow Git source root before treating runtime source freshness as current; do not fetch or mutate Git as part of this diagnostic.',
+    };
+  }
+
+  if (loadedSource.dirty || current.dirty) {
+    return {
+      code: 'dirty-ambiguous',
+      ...common,
+      detail: headMismatch
+        ? 'The configured DevFlow source HEAD moved after runtime start and the source tree is dirty, so the exact deployed source cannot be inferred from Git HEAD alone.'
+        : 'The configured DevFlow source tree is or was dirty, so Git HEAD alone cannot prove the exact source bytes loaded by this runtime.',
+      nextAction: 'Resolve or intentionally preserve local source changes, then restart only when lifecycle work is quiescent; do not label this runtime current from HEAD alone.',
+    };
+  }
+
+  if (headMismatch) {
+    return {
+      code: 'stale',
+      ...common,
+      detail: `The DevFlow process loaded ${loadedRevision} but the configured local source repository is now at ${currentRevision}.`,
+      nextAction: 'Restart the DevFlow API when lifecycle work is safely quiescent so the process loads the current local source revision; do not auto-restart or cancel active work.',
+    };
+  }
+
+  return {
+    code: 'current',
+    ...common,
+    detail: `The DevFlow process-loaded source revision matches the configured local source revision ${currentRevision}.`,
+    nextAction: 'No source-revision restart is required.',
+  };
+}
+
+export function getRuntimeRestartSafety(): RuntimeRestartSafety {
+  const query = queryExecutionSessions({ status: 'active', limit: 100 });
+  const active = query.sessions
+    .filter((session) => RESTART_SENSITIVE_EXECUTION_STAGES.has(session.lifecycle.stage))
+    .slice(0, MAX_RUNTIME_RESTART_BLOCKERS)
+    .map((session) => ({
+      taskId: session.taskId,
+      executionSessionId: session.id,
+      workspaceId: session.workspaceId,
+      stage: session.lifecycle.stage,
+    }));
+  return {
+    blocked: active.length > 0 || query.truncated,
+    truncated: query.truncated,
+    active,
+  };
+}
+
+function classifyClientRuntimeIdentity(current: RuntimeIdentityWithContract, clientState?: RuntimeClientState): RuntimeDiagnosis | undefined {
   if (!clientState) return undefined;
 
   const previousContract = String(clientState.contractVersion || '').trim();
@@ -112,4 +271,57 @@ export function classifyRuntimeIdentity(
     detail: 'The observed runtime and contract match the current DevFlow process.',
     nextAction: 'No runtime identity recovery action is required.',
   };
+}
+
+function classifySourceFreshness(source: RuntimeSourceFreshness): RuntimeDiagnosis | undefined {
+  if (source.code === 'current') return undefined;
+  if (source.code === 'stale') {
+    return {
+      code: 'runtime-source-stale',
+      detail: source.detail,
+      nextAction: source.nextAction,
+      sourceFreshness: source,
+    };
+  }
+  if (source.code === 'dirty-ambiguous') {
+    return {
+      code: 'runtime-source-dirty-ambiguous',
+      detail: source.detail,
+      nextAction: source.nextAction,
+      sourceFreshness: source,
+    };
+  }
+  return {
+    code: 'runtime-source-unavailable',
+    detail: source.detail,
+    nextAction: source.nextAction,
+    sourceFreshness: source,
+  };
+}
+
+export function classifyRuntimeIdentity(
+  current: RuntimeIdentityWithContract,
+  clientState?: RuntimeClientState,
+): RuntimeDiagnosis | undefined {
+  const source = current.sourceFreshness || getRuntimeSourceFreshness();
+  const sourceDiagnosis = classifySourceFreshness(source);
+  const clientDiagnosis = classifyClientRuntimeIdentity(current, clientState);
+
+  if (sourceDiagnosis) {
+    const restartSafety = getRuntimeRestartSafety();
+    const blockerIdentities = restartSafety.active
+      .map((entry) => `${entry.taskId || 'task-unknown'}/${entry.executionSessionId}/${entry.stage}`)
+      .join(', ');
+    const diagnosed = restartSafety.blocked
+      ? {
+          ...sourceDiagnosis,
+          restartSafety,
+          nextAction: `Restart is blocked by active lifecycle work (${blockerIdentities || 'bounded active-session scan is truncated'}). Wait for implementing/verifying/repairing/verification-infra-blocked executions to become quiescent, then restart; do not auto-restart or cancel active work.`,
+        }
+      : { ...sourceDiagnosis, restartSafety };
+    return clientDiagnosis
+      ? { ...diagnosed, concurrentDiagnostics: [clientDiagnosis] }
+      : diagnosed;
+  }
+  return clientDiagnosis;
 }

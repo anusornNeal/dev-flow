@@ -275,6 +275,8 @@ function executeCommitBreakGlass(state: AppState, operation: LifecycleEmergencyO
   const expectedSubject = renderTaskCommitMessage(rawMessage, task, { gitWorkflowPolicy: workspace.gitWorkflowPolicy } as any);
   const priorIntent = (operation.evidence as any)?.commitIntent as any;
   const snapshot = getGitWorkspaceSnapshotForRoot(workspace.root);
+  const execution = getExecutionSessionById(plan.executionSessionId);
+  const preserveVerificationDebt = execution?.status === 'active' && execution.lifecycle.stage === 'verification-infra-blocked';
   if (plan.ownedChangedFiles.length === 0 && priorIntent) {
     const headEvidence = getGitCommitEvidenceForRoot(workspace.root, snapshot.head);
     const expectedFiles = [...(Array.isArray(priorIntent.ownedFiles) ? priorIntent.ownedFiles : [])].sort();
@@ -292,10 +294,14 @@ function executeCommitBreakGlass(state: AppState, operation: LifecycleEmergencyO
       commit: headEvidence.commit,
       committedFiles: expectedFiles,
       unrelatedChangesPreserved: Array.isArray(priorIntent.unrelatedChanges) ? priorIntent.unrelatedChanges : [],
+      verificationDebtPreserved: priorIntent.verificationDebtMode === true,
       recoveredAfterResponseLoss: true,
     }, operation.evidence || {}, priorIntent.bypassedGates || [], hardChecks, 'preserved-unrelated');
   }
-  const nonSoft = plan.blockers.filter((entry) => !SOFT_COMMIT_BLOCKERS.has(entry.code));
+  const allowedDebtBlockers = new Set(['EXECUTION_VERIFICATION_BATCH_FAILED', 'EXECUTION_VERIFICATION_NOT_FRESH']);
+  const nonSoft = plan.blockers.filter((entry) => preserveVerificationDebt
+    ? !allowedDebtBlockers.has(entry.code)
+    : !SOFT_COMMIT_BLOCKERS.has(entry.code));
   if (nonSoft.length > 0) {
     throw createApiError(409, 'BREAK_GLASS_COMMIT_HARD_BLOCKER', 'Emergency commit may bypass only verification/freshness policy blockers.', {
       details: { blockers: nonSoft, allBlockers: plan.blockers },
@@ -328,12 +334,44 @@ function executeCommitBreakGlass(state: AppState, operation: LifecycleEmergencyO
         ownedFingerprint: ownership.ownedFingerprint,
         candidateId,
         bypassedGates,
+        verificationDebtMode: preserveVerificationDebt,
       },
     },
     bypassedGates,
     hardChecks,
     wipDisposition: 'preserved-unrelated',
   });
+  if (preserveVerificationDebt) {
+    const committed = commitTaskOwnedChanges(state, {
+      taskId: task.id,
+      workspaceId: workspace.workspaceId,
+      message: rawMessage,
+      preserveVerificationDebt: true,
+      emergency: true,
+      reason: input.reason,
+      actorLabel: input.actorLabel,
+      expectedCandidateId: candidateId,
+    });
+    const commitHash = (committed as any).commitHash || (committed as any).hash || null;
+    injectBreakGlassFault('after-commit-side-effect');
+    return completion(operation, task.id, workspace.workspaceId, {
+      action: input.action,
+      commit: commitHash,
+      committedFiles: (committed as any).committedFiles || plan.ownedChangedFiles,
+      unrelatedChangesPreserved: (committed as any).unrelatedChangesPreserved || plan.unrelatedChangedFiles,
+      verificationDebtPreserved: (committed as any).verificationDebtPreserved === true,
+      verificationDebt: (committed as any).verificationDebt || null,
+    }, {
+      ...(operation.evidence || {}),
+      commit: commitHash,
+      candidateId,
+      repoRevision: ownership.repoRevision,
+      ownedFingerprint: ownership.ownedFingerprint,
+      verificationDebt: (committed as any).verificationDebt || null,
+      planBlockersBypassed: bypassedGates,
+    }, bypassedGates, hardChecks, 'preserved-unrelated');
+  }
+
   recordExecutionVerificationEvidence(plan.executionSessionId, [], {
     repoRoot: workspace.root,
     provenance: {
@@ -363,6 +401,7 @@ function executeCommitBreakGlass(state: AppState, operation: LifecycleEmergencyO
     commit: commitHash,
     committedFiles: refreshed.ownedChangedFiles,
     unrelatedChangesPreserved: refreshed.unrelatedChangedFiles,
+    verificationDebtPreserved: false,
   }, {
     ...(operation.evidence || {}),
     commit: commitHash,

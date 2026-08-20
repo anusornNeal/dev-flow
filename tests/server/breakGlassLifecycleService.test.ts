@@ -18,6 +18,8 @@ const {
   getExecutionSessionOwnershipEpoch,
   recordExecutionOwnedChanges,
   recordExecutionLifecycleTransition,
+  recordExecutionSessionEvidence,
+  getExecutionSessionState,
 } = await import('../../src/server/services/executionSessionService.js');
 const { integrateWorkspaceCommits } = await import('../../src/server/services/workspaceIntegrationService.js');
 const { recordExecutionPendingOperationReference } = await import('../../src/server/services/executionCheckpointService.js');
@@ -133,6 +135,40 @@ test('emergency commit binds override to the exact owned fingerprint and preserv
     }),
     (error: any) => error?.payload?.code === 'BREAK_GLASS_OWNED_FINGERPRINT_MISMATCH',
   );
+});
+
+test('infra-blocked break-glass commit preserves verification debt instead of manufacturing fresh verification', () => {
+  const f = fixture('infra-debt-commit');
+  const ownership = mutateOwned(f, 'infra-debt-wip\n');
+  recordExecutionLifecycleTransition(f.execution.id, {
+    toStage: 'context-ready', reasonCode: 'infra-debt-context', evidence: { id: 'infra-debt-context', kind: 'context-bundle', status: 'completed' },
+  });
+  recordExecutionLifecycleTransition(f.execution.id, {
+    toStage: 'implementing', reasonCode: 'infra-debt-implementing', evidence: { id: 'infra-debt-implementing', kind: 'owned-change', status: 'completed' },
+  });
+  recordExecutionLifecycleTransition(f.execution.id, {
+    toStage: 'verifying', reasonCode: 'infra-debt-verifying', evidence: { id: 'infra-debt-verifying', kind: 'verification-result', status: 'completed' },
+  });
+  recordExecutionLifecycleTransition(f.execution.id, {
+    toStage: 'verification-infra-blocked', reasonCode: 'infra-debt-failure', evidence: { id: 'infra-debt-failure-transition', kind: 'verification-result', status: 'completed' },
+  });
+  recordExecutionSessionEvidence(f.execution.id, [{
+    evidenceId: 'infra-debt-failure', kind: 'verification-result', revisionIdentity: 'infra-debt-failure',
+    metadata: { outcome: 'failed', terminal: true, failureClass: 'infrastructure', status: 'timed_out', timedOut: true },
+  }]);
+
+  const result = executeBreakGlassLifecycle(f.state, {
+    ...baseRequest(f, 'commit-current-owned-diff', 'bg-infra-debt-commit-1'),
+    expectedOwnedFingerprint: ownership.ownedFingerprint,
+    message: 'fix: preserve infra verification debt',
+  });
+  assert.equal(result.operation.status, 'completed');
+  const state = getExecutionSessionState(f.execution.id);
+  const debt = state.evidence.find((entry: any) => entry.kind === 'verification-debt');
+  assert.equal(debt?.metadata?.status, 'outstanding');
+  assert.equal(debt?.metadata?.candidateId, 'break-glass:bg-infra-debt-commit-1');
+  assert.equal(getExecutionOwnershipState(f.execution.id, { repoRoot: f.workspace.root }).verificationFresh, null);
+  assert.equal((result.operation.result as any).verificationDebtPreserved, true);
 });
 
 test('release ownership preserves dirty managed workspace bytes and is idempotent on replay', () => {

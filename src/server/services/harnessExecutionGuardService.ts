@@ -15,6 +15,7 @@ import {
 import {
   getTaskExecutionMutationBinding,
   getExecutionOwnershipState,
+  getExecutionVerificationBatchState,
   recordExecutionLifecycleTransition,
   recordExecutionSessionEvidence,
   type ExecutionLifecycleTransitionInput,
@@ -362,6 +363,30 @@ export function preflightHarnessExecutionGuard(_state: AppState, toolNameValue: 
     return blockedDecision(toolName, action, operationId, policy, binding, 'REPO_RELATIVE_PATH_SAFETY_REQUIRED', ['Lifecycle-affecting task paths must remain repository-relative.']);
   }
   if (binding) {
+    const batchState = getExecutionVerificationBatchState(binding.session.id);
+    if (batchState?.status === 'pending') {
+      if (action === 'mutation' || action === 'commit' || action === 'finalization') {
+        return blockedDecision(toolName, action, operationId, policy, binding, 'EXECUTION_VERIFICATION_BATCH_INCOMPLETE', [
+          `Verification batch '${batchState.batchId}' is incomplete; pending checks: ${batchState.pending.join(', ')}.`,
+        ]);
+      }
+      if (action === 'verification') {
+        const requestedBatch = args?.verificationBatch && typeof args.verificationBatch === 'object' ? args.verificationBatch : null;
+        const requestedId = String(requestedBatch?.id || '').trim();
+        const requestedCheckId = String(requestedBatch?.checkId || args?.command || args?.preset || '').trim();
+        const requestedChecks = Array.isArray(requestedBatch?.requiredChecks) ? requestedBatch.requiredChecks.map(String) : [];
+        if (requestedId !== batchState.batchId
+          || JSON.stringify(requestedChecks) !== JSON.stringify(batchState.requiredChecks)
+          || !batchState.pending.includes(requestedCheckId)) {
+          return blockedDecision(toolName, action, operationId, policy, binding, 'EXECUTION_VERIFICATION_BATCH_CONTINUATION_REQUIRED', [
+            `Continue pending batch '${batchState.batchId}' with one of: ${batchState.pending.join(', ')}.`,
+          ]);
+        }
+      }
+    }
+  }
+
+  if (binding) {
     const stage = binding.session.lifecycle.stage;
     const allowedStages: Record<Exclude<HarnessExecutionAction, 'restart'>, readonly string[]> = {
       mutation: ['context-ready', 'plan-recorded', 'implementing', 'repairing'],
@@ -497,6 +522,10 @@ export function recordHarnessExecutionOutcome(decision: HarnessExecutionGuardDec
 
     if (resultFailed(result)) {
       recordVerificationFailureEvidence(sessionId, decision, result);
+      const batchState = getExecutionVerificationBatchState(sessionId);
+      if ((batchState?.status === 'failed' || batchState?.status === 'stale') && current.session.lifecycle.stage === 'implementing') {
+        return transition(sessionId, 'repairing', 'verification-batch-failed-repair-required', decision, 'repair', 'verification-result');
+      }
       if (current.session.lifecycle.stage === 'implementing') {
         transition(sessionId, 'verifying', 'verification-result-observed', decision, 'verification', 'verification-result');
         current = getTaskExecutionMutationBinding({ workspaceId: decision.execution.workspaceId });

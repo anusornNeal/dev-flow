@@ -141,9 +141,10 @@ function bindTaskVerificationOutcome(
   const recorderMessage = typeof recorded?.message === 'string' ? recorded.message : '';
   const recorderErrorCode = typeof recorded?.errorCode === 'string' ? recorded.errorCode.trim() : '';
   const rejectionCode = String(rejection?.code || rejection?.payload?.code || '').trim();
+  const batchIncomplete = recorderReasonCode === 'EXECUTION_VERIFICATION_BATCH_INCOMPLETE';
   const diagnostic: TaskVerificationBindingDiagnostic = {
     attempted: true,
-    recorderAccepted: recorderAuthoritative !== undefined ? recorderAuthoritative : Boolean(recorded),
+    recorderAccepted: recorderAuthoritative !== undefined ? recorderAuthoritative || batchIncomplete : Boolean(recorded),
     authoritative,
     verificationFresh: ownership.verificationFresh,
     reasonCode: authoritative
@@ -151,7 +152,7 @@ function bindTaskVerificationOutcome(
       : rejectionCode
         || (recorderAuthoritative === false ? recorderReasonCode : '')
         || (recorded ? 'EXECUTION_VERIFICATION_NOT_FRESH' : 'EXECUTION_VERIFICATION_BINDING_MISSING'),
-    recoveryRequired: !authoritative,
+    recoveryRequired: !authoritative && !batchIncomplete,
     ...(recorderMessage ? { message: recorderMessage } : rejection instanceof Error && rejection.message ? { message: rejection.message } : {}),
     ...(recorderErrorCode ? { errorCode: recorderErrorCode } : {}),
   };
@@ -159,7 +160,7 @@ function bindTaskVerificationOutcome(
 
   return {
     result: surfacedResult,
-    harnessResult: authoritative
+    harnessResult: authoritative || batchIncomplete
       ? surfacedResult
       : { ...surfacedResult, ok: false, status: 'needs-recovery' },
   };

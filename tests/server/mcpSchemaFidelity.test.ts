@@ -42,6 +42,19 @@ test('read_file_snippets_batch keeps per-entry fields inside every exposed anyOf
   });
 });
 
+test('run_project_command exposes bounded sequential verification batch identity', () => {
+  const canonical = getToolDefinitionByName('run_project_command');
+  assert.ok(canonical);
+  const batch = canonical.inputSchema.properties.verificationBatch;
+  assert.ok(batch, 'run_project_command must expose verificationBatch');
+  assert.equal(batch.type, 'object');
+  assert.deepEqual(batch.required, ['id', 'requiredChecks', 'checkId']);
+  assert.equal(batch.properties.id.maxLength, 160);
+  assert.equal(batch.properties.requiredChecks.maxItems, 64);
+  assert.equal(batch.properties.requiredChecks.items.maxLength, 200);
+  assert.equal(batch.properties.checkId.maxLength, 200);
+});
+
 test('transport normalization preserves nested objects, arrays, enums, descriptions, required fields, and optional fields without redundant parent properties', () => {
   const fixture = {
     type: 'object',

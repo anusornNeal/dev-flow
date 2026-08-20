@@ -24,6 +24,12 @@ fs.writeFileSync(path.join(repoRoot, '.devflow', 'commands.yaml'), [
   '      - -e',
   "      - process.exit(1)",
   '    category: test',
+  '  green-check:',
+  '    executable: node',
+  '    args:',
+  '      - -e',
+  "      - process.stdout.write('green-check')",
+  '    category: test',
   '',
 ].join('\n'));
 fs.writeFileSync(path.join(repoRoot, 'src', 'owned.ts'), 'export const owned = 1;\n');
@@ -441,17 +447,40 @@ test('successful command without authoritative verification binding stays a reco
   assert.equal(execution.getExecutionSessionState(session.id).session.lifecycle.stage, 'repairing');
 });
 
-test('task-bound MCP verification binds current ownership before Harness advances', async () => {
-  const verified = await runBuiltinToolJob({
+test('task-bound sequential MCP verification stays pending after the first check and becomes authoritative only after the final check', async () => {
+  const batchId = `ownership-sequential-${Date.now()}`;
+  const requiredChecks = ['test', 'green-check'];
+  const firstArgs = verificationArgs('test');
+  firstArgs.verificationBatch = { id: batchId, requiredChecks, checkId: 'test' };
+  const first = await runBuiltinToolJob({
     toolName: 'run_project_command',
     state,
-    args: verificationArgs('test'),
+    args: firstArgs,
   }, context as any) as any;
 
-  assert.equal(verified.ok, true);
-  assert.equal(verified.status, 'succeeded');
-  assert.equal(verified.verificationBinding?.authoritative, true);
-  assert.equal(verified.verificationBinding?.verificationFresh, true);
+  assert.equal(first.ok, true);
+  assert.equal(first.status, 'succeeded');
+  assert.equal(first.verificationBinding?.authoritative, false);
+  assert.equal(first.verificationBinding?.reasonCode, 'EXECUTION_VERIFICATION_BATCH_INCOMPLETE');
+  assert.equal(first.verificationBinding?.recoveryRequired, false);
+  assert.notEqual(execution.getExecutionOwnershipState(session.id, { repoRoot: workspace.root }).verificationFresh, true);
+  assert.equal(execution.getExecutionSessionState(session.id).session.lifecycle.stage, 'repairing');
+  let plan = commitPlan.buildTaskCommitPlan(state, { taskId, workspaceId: workspace.workspaceId });
+  assert.equal(plan.commitAllowed, false);
+  assert.ok(plan.blockers.some((entry: any) => entry.code === 'EXECUTION_VERIFICATION_BATCH_INCOMPLETE'));
+
+  const secondArgs = verificationArgs('green-check');
+  secondArgs.verificationBatch = { id: batchId, requiredChecks, checkId: 'green-check' };
+  const second = await runBuiltinToolJob({
+    toolName: 'run_project_command',
+    state,
+    args: secondArgs,
+  }, context as any) as any;
+
+  assert.equal(second.ok, true);
+  assert.equal(second.status, 'succeeded');
+  assert.equal(second.verificationBinding?.authoritative, true);
+  assert.equal(second.verificationBinding?.verificationFresh, true);
 
   const ownership = execution.getExecutionOwnershipState(session.id, { repoRoot: workspace.root });
   assert.deepEqual(ownership.ownedChanges, ['src/owned.ts']);
@@ -459,7 +488,7 @@ test('task-bound MCP verification binds current ownership before Harness advance
   assert.equal(ownership.verificationFresh, true);
   assert.equal(execution.getExecutionSessionState(session.id).session.lifecycle.stage, 'verifying');
 
-  const plan = commitPlan.buildTaskCommitPlan(state, { taskId, workspaceId: workspace.workspaceId });
+  plan = commitPlan.buildTaskCommitPlan(state, { taskId, workspaceId: workspace.workspaceId });
   assert.equal(plan.commitAllowed, true);
   assert.deepEqual(plan.ownedChangedFiles, ['src/owned.ts']);
   assert.deepEqual(plan.unrelatedChangedFiles, ['src/unrelated.ts']);

@@ -180,6 +180,7 @@ test('execution guard composes policy, ownership, lifecycle, retry identity, and
     const verifySuccess = preflightHarnessExecutionGuard(state, 'run_project_command', greenVerificationArgs);
     assert.notEqual(verifySuccess.operationId, verifyDecision.operationId);
     const lifecycleBeforeRecoverySuccess = lifecycleEvidenceCount(session.id);
+    executionSessions.recordExecutionVerificationEvidence(session.id, [{ name: 'test-focused', status: 'passed' }], { repoRoot });
     recordHarnessExecutionOutcome(verifySuccess, { status: 'passed', ok: true, exitCode: 0 });
     assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'verifying');
     assert.equal(lifecycleEvidenceCount(session.id), lifecycleBeforeRecoverySuccess + 1);
@@ -248,6 +249,73 @@ test('execution guard composes policy, ownership, lifecycle, retry identity, and
     assert.equal(getBuiltinToolJobRecoveryPolicy('apply_prepared_edit'), 'interrupted');
     assert.equal(getBuiltinToolJobRecoveryPolicy('search_local_files'), 'retryable');
   } finally {
+    cleanupSessionWorkspace(workspaceId);
+  }
+});
+
+test('incomplete sequential verification batch fences mutation but admits the remaining verification member', () => {
+  resetSessionWorkspaceRuntimeForTests();
+  const repoRoot = createRepo('sequential-batch-guard-repo');
+  const project = { id: 'project-sequential-batch-guard', name: 'Sequential Batch Guard', repoUrl: 'https://example.com/sequential-batch-guard', localPath: repoRoot };
+  createProject(project);
+  const now = new Date().toISOString();
+  const task = {
+    id: 'task-sequential-batch-guard', displayId: 'DVF-HARNESS-BATCH', title: 'Sequential verification batch guard fixture',
+    description: 'Keep batch continuation admissible while mutation and commit stay fenced.', projectId: project.id,
+    status: 'todo', priority: 'high', category: 'backend', tags: [], targetFiles: ['value.txt'],
+    checklist: [], logs: [], bugs: [], images: [], createdAt: now, updatedAt: now,
+  } as any;
+  saveTask(task);
+  const state = { projectsCache: [project], countersCache: {}, skillsRegistry: [] } as any;
+  const claimed = claimTaskForSession(task.id, { sessionId: 'sequential-batch-guard-session', ownerKind: 'chat', ownerLabel: 'Batch guard' });
+  const workspaceId = claimed.claim.workspaceId;
+
+  try {
+    const binding = executionSessions.getTaskExecutionMutationBinding({ workspaceId })!;
+    executionSessions.recordTaskExecutionContextReady({ workspaceId }, {
+      contextHandle: 'ctx-sequential-batch',
+      repoRevision: binding.session.repoRevision,
+      contextPlanIdentity: 'plan-sequential-batch',
+    });
+    executionSessions.recordExecutionLifecycleTransition(binding.session.id, {
+      toStage: 'implementing', reasonCode: 'batch-fixture-mutation',
+      evidence: { id: 'batch-fixture-mutation', kind: 'owned-change', status: 'completed' },
+    });
+    fs.writeFileSync(path.join(binding.workspace.root, 'value.txt'), 'after\n', 'utf8');
+    executionSessions.recordExecutionOwnedChanges(binding.session.id, ['value.txt'], { repoRoot: binding.workspace.root, source: 'batch-fixture' });
+    const captured = executionSessions.captureExecutionVerificationProvenance(binding.session.id, { repoRoot: binding.workspace.root });
+    const requiredChecks = ['focused', 'typecheck'];
+    const first = executionSessions.recordExecutionVerificationBatchResult(binding.session.id, {
+      repoRoot: binding.workspace.root,
+      batchId: 'guard-batch-1', requiredChecks, checkId: 'focused', status: 'passed', captured,
+      memberCandidate: { candidateId: 'vc-guard-focused', repoRevision: captured.repoRevision, executionKey: 'cmd-guard-focused' },
+    });
+    assert.equal(first.state.status, 'pending');
+    assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'implementing');
+
+    const mutation = preflightHarnessExecutionGuard(state, 'write_local_file', { workspaceId, filePath: 'value.txt' });
+    assert.equal(mutation.allowed, false);
+    assert.equal(mutation.reasonCode, 'EXECUTION_VERIFICATION_BATCH_INCOMPLETE');
+
+    const continuation = preflightHarnessExecutionGuard(state, 'run_project_command', {
+      workspaceId,
+      command: 'typecheck',
+      verificationBatch: { id: 'guard-batch-1', requiredChecks, checkId: 'typecheck' },
+    });
+    assert.equal(continuation.allowed, true);
+    assert.equal(continuation.action, 'verification');
+
+    const second = executionSessions.recordExecutionVerificationBatchResult(binding.session.id, {
+      repoRoot: binding.workspace.root,
+      batchId: 'guard-batch-1', requiredChecks, checkId: 'typecheck', status: 'passed', captured,
+      memberCandidate: { candidateId: 'vc-guard-typecheck', repoRevision: captured.repoRevision, executionKey: 'cmd-guard-typecheck' },
+    });
+    assert.equal(second.authoritative, true);
+    recordHarnessExecutionOutcome(continuation, { ok: true, status: 'succeeded', exitCode: 0 });
+    assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'verifying');
+  } finally {
+    const workspace = executionSessions.getTaskExecutionMutationBinding({ workspaceId })?.workspace;
+    if (workspace) git(workspace.root, ['checkout', '--', 'value.txt']);
     cleanupSessionWorkspace(workspaceId);
   }
 });

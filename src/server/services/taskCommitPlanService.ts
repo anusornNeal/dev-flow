@@ -2,7 +2,7 @@ import type { AppState } from '../types.js';
 import { getTaskByIdentifier } from '../repositories/taskRepository.js';
 import { listExecutionSessionsForTask } from '../repositories/executionSessionRepository.js';
 import { createApiError } from './api.js';
-import { getExecutionOwnershipState } from './executionSessionService.js';
+import { getExecutionOwnershipState, getExecutionVerificationBatchState, type ExecutionVerificationBatchState } from './executionSessionService.js';
 import { commitGitChanges } from './gitService.js';
 import { renderTaskCommitMessage } from './projectGitWorkflowPolicyService.js';
 import { resolveSessionWorkspace } from './sessionWorkspaceService.js';
@@ -52,6 +52,7 @@ function buildBlockers(input: {
   ownershipDrift: TaskCommitPlan['ownershipDrift'];
   verificationFresh: boolean | null;
   verificationState: TaskCommitPlan['verificationState'];
+  verificationBatch: ExecutionVerificationBatchState | null;
   verificationRecordedAt: string | null;
 }) {
   const blockers: TaskCommitPlanBlocker[] = [];
@@ -66,6 +67,25 @@ function buildBlockers(input: {
       code: 'EXECUTION_OWNERSHIP_DRIFT',
       message: `${input.ownershipDrift.length} owned file(s) changed outside the last known execution revision.`,
       details: { files: input.ownershipDrift },
+    });
+  }
+  if (input.verificationBatch?.status === 'pending') {
+    blockers.push({
+      code: 'EXECUTION_VERIFICATION_BATCH_INCOMPLETE',
+      message: `Verification batch '${input.verificationBatch.batchId}' still has pending required checks.`,
+      details: { batchId: input.verificationBatch.batchId, pending: input.verificationBatch.pending },
+    });
+  } else if (input.verificationBatch?.status === 'failed') {
+    blockers.push({
+      code: 'EXECUTION_VERIFICATION_BATCH_FAILED',
+      message: `Verification batch '${input.verificationBatch.batchId}' contains failed required checks.`,
+      details: { batchId: input.verificationBatch.batchId, failed: input.verificationBatch.failed },
+    });
+  } else if (input.verificationBatch?.status === 'stale') {
+    blockers.push({
+      code: 'EXECUTION_VERIFICATION_BATCH_STALE',
+      message: `Verification batch '${input.verificationBatch.batchId}' is stale for the current execution ownership revision.`,
+      details: { batchId: input.verificationBatch.batchId, stale: input.verificationBatch.stale },
     });
   }
   if (input.verificationFresh !== true) {
@@ -108,6 +128,7 @@ export function buildTaskCommitPlan(_state: AppState, args: Record<string, any>)
   const ownership = getExecutionOwnershipState(session.id, { repoRoot: workspace.root });
   const verificationState = resolveVerificationState(ownership.verificationFresh);
   const verificationRecordedAt = ownership.verificationRecordedAt || null;
+  const verificationBatch = getExecutionVerificationBatchState(session.id);
   const blockers = buildBlockers({
     sessionStatus: session.status,
     ownedChangedFiles: ownership.ownedChanges,
@@ -115,6 +136,7 @@ export function buildTaskCommitPlan(_state: AppState, args: Record<string, any>)
     verificationFresh: ownership.verificationFresh,
     verificationState,
     verificationRecordedAt,
+    verificationBatch,
   });
   return {
     taskId,

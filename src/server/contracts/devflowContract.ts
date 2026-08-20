@@ -1271,6 +1271,17 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
         cacheResult: { type: 'boolean', description: 'Opt in to revision-safe reuse of a prior successful result for the exact same command/environment.' },
         cacheTtlMs: { type: 'number', description: 'Optional bounded TTL for cacheResult entries.' },
         singleFlight: { type: 'boolean', description: 'Allow identical in-flight command requests at the same repo revision to share one execution.' },
+        verificationBatch: {
+          type: 'object',
+          description: 'Optional durable sequential verification batch identity. Every member must use the same id and requiredChecks set; checkId identifies this command within the batch.',
+          properties: {
+            id: { type: 'string', minLength: 1, maxLength: 160, description: 'Opaque verification batch id.' },
+            requiredChecks: { type: 'array', minItems: 1, maxItems: 64, items: { type: 'string', minLength: 1, maxLength: 200 }, description: 'Immutable ordered set of required check ids for this batch.' },
+            checkId: { type: 'string', minLength: 1, maxLength: 200, description: 'Required check id represented by this command.' },
+          },
+          required: ['id', 'requiredChecks', 'checkId'],
+          additionalProperties: false,
+        },
         responseMode: { type: 'string', enum: ['compact', 'standard', 'debug'], description: 'Response density. compact uses a smaller output budget while preserving status/summary metadata.' },
       },
       anyOf: [

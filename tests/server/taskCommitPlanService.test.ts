@@ -170,6 +170,129 @@ test('no owned changes and inactive sessions remain independent commit blockers'
   assert.ok(inactivePlan.blockers.some((entry: any) => entry.code === 'EXECUTION_SESSION_NOT_ACTIVE'));
 });
 
+test('sequential verification batch blocks commit until every declared check passes on one frozen ownership revision', () => {
+  const { workspace, taskId, session } = createFixture('sequential-batch');
+  execution.bindExecutionSessionOwnershipEpoch(session.id, 'epoch-sequential-batch');
+  fs.writeFileSync(path.join(workspace.root, 'src', 'owned.ts'), 'export const owned = 30;\n');
+  execution.recordExecutionOwnedChanges(session.id, ['src/owned.ts'], { repoRoot: workspace.root, source: 'task-edit' });
+  const captured = execution.captureExecutionVerificationProvenance(session.id, { repoRoot: workspace.root });
+  const requiredChecks = ['focused', 'typecheck'];
+
+  const first = execution.recordExecutionVerificationBatchResult(session.id, {
+    repoRoot: workspace.root,
+    batchId: 'batch-sequential-1',
+    requiredChecks,
+    checkId: 'focused',
+    status: 'passed',
+    captured,
+    memberCandidate: { candidateId: 'vc-focused', repoRevision: captured.repoRevision, executionKey: 'cmd-focused' },
+  });
+  assert.equal(first.authoritative, false);
+  assert.equal(first.state.status, 'pending');
+  assert.deepEqual(first.state.pending, ['typecheck']);
+
+  let plan = commitPlan.buildTaskCommitPlan({ countersCache: {} }, { taskId, workspaceId: workspace.workspaceId });
+  assert.equal(plan.commitAllowed, false);
+  assert.notEqual(plan.verificationFresh, true);
+  assert.ok(plan.blockers.some((entry: any) => entry.code === 'EXECUTION_VERIFICATION_BATCH_INCOMPLETE'));
+
+  const replay = execution.recordExecutionVerificationBatchResult(session.id, {
+    repoRoot: workspace.root,
+    batchId: 'batch-sequential-1',
+    requiredChecks,
+    checkId: 'focused',
+    status: 'passed',
+    captured,
+    memberCandidate: { candidateId: 'vc-focused', repoRevision: captured.repoRevision, executionKey: 'cmd-focused' },
+  });
+  assert.equal(replay.idempotent, true);
+  assert.deepEqual(replay.state.pending, ['typecheck']);
+
+  const second = execution.recordExecutionVerificationBatchResult(session.id, {
+    repoRoot: workspace.root,
+    batchId: 'batch-sequential-1',
+    requiredChecks,
+    checkId: 'typecheck',
+    status: 'passed',
+    captured,
+    memberCandidate: { candidateId: 'vc-typecheck', repoRevision: captured.repoRevision, executionKey: 'cmd-typecheck' },
+  });
+  assert.equal(second.authoritative, true);
+  assert.equal(second.state.status, 'complete');
+  assert.equal(second.state.canComplete, true);
+
+  plan = commitPlan.buildTaskCommitPlan({ countersCache: {} }, { taskId, workspaceId: workspace.workspaceId });
+  assert.equal(plan.commitAllowed, true);
+  assert.equal(plan.verificationFresh, true);
+  assert.equal(plan.blockers.some((entry: any) => entry.code.startsWith('EXECUTION_VERIFICATION_BATCH_')), false);
+});
+
+test('failed batch member remains terminal and a newer explicit batch id is required for retry', () => {
+  const { workspace, session } = createFixture('sequential-batch-failure');
+  execution.bindExecutionSessionOwnershipEpoch(session.id, 'epoch-sequential-batch-failure');
+  fs.writeFileSync(path.join(workspace.root, 'src', 'owned.ts'), 'export const owned = 31;\n');
+  execution.recordExecutionOwnedChanges(session.id, ['src/owned.ts'], { repoRoot: workspace.root, source: 'task-edit' });
+  const captured = execution.captureExecutionVerificationProvenance(session.id, { repoRoot: workspace.root });
+  const requiredChecks = ['focused', 'typecheck'];
+
+  execution.recordExecutionVerificationBatchResult(session.id, {
+    repoRoot: workspace.root, batchId: 'batch-fail-1', requiredChecks, checkId: 'focused', status: 'passed', captured,
+    memberCandidate: { candidateId: 'vc-fail-focused', repoRevision: captured.repoRevision, executionKey: 'cmd-fail-focused' },
+  });
+  const failed = execution.recordExecutionVerificationBatchResult(session.id, {
+    repoRoot: workspace.root, batchId: 'batch-fail-1', requiredChecks, checkId: 'typecheck', status: 'failed', captured,
+    memberCandidate: { candidateId: 'vc-fail-typecheck', repoRevision: captured.repoRevision, executionKey: 'cmd-fail-typecheck' },
+  });
+  assert.equal(failed.state.status, 'failed');
+  assert.equal(failed.authoritative, false);
+  assert.throws(() => execution.recordExecutionVerificationBatchResult(session.id, {
+    repoRoot: workspace.root, batchId: 'batch-fail-1', requiredChecks, checkId: 'typecheck', status: 'passed', captured,
+    memberCandidate: { candidateId: 'vc-fail-typecheck-retry', repoRevision: captured.repoRevision, executionKey: 'cmd-fail-typecheck-retry' },
+  }), /terminal|batch/i);
+
+  const retry = execution.recordExecutionVerificationBatchResult(session.id, {
+    repoRoot: workspace.root, batchId: 'batch-fail-2', requiredChecks, checkId: 'focused', status: 'passed', captured,
+    memberCandidate: { candidateId: 'vc-retry-focused', repoRevision: captured.repoRevision, executionKey: 'cmd-retry-focused' },
+  });
+  assert.equal(retry.state.batchId, 'batch-fail-2');
+  assert.equal(retry.state.status, 'pending');
+});
+
+test('ownership drift terminalizes a pending verification batch as stale and requires a new batch', () => {
+  const { workspace, taskId, session } = createFixture('sequential-batch-stale');
+  execution.bindExecutionSessionOwnershipEpoch(session.id, 'epoch-sequential-batch-stale');
+  fs.writeFileSync(path.join(workspace.root, 'src', 'owned.ts'), 'export const owned = 32;\n');
+  execution.recordExecutionOwnedChanges(session.id, ['src/owned.ts'], { repoRoot: workspace.root, source: 'task-edit' });
+  const captured = execution.captureExecutionVerificationProvenance(session.id, { repoRoot: workspace.root });
+  const requiredChecks = ['focused', 'typecheck'];
+  execution.recordExecutionVerificationBatchResult(session.id, {
+    repoRoot: workspace.root, batchId: 'batch-stale-1', requiredChecks, checkId: 'focused', status: 'passed', captured,
+    memberCandidate: { candidateId: 'vc-stale-focused', repoRevision: captured.repoRevision, executionKey: 'cmd-stale-focused' },
+  });
+
+  fs.writeFileSync(path.join(workspace.root, 'src', 'owned.ts'), 'export const owned = 33;\n');
+  const stale = execution.recordExecutionVerificationBatchResult(session.id, {
+    repoRoot: workspace.root, batchId: 'batch-stale-1', requiredChecks, checkId: 'typecheck', status: 'passed', captured,
+    memberCandidate: { candidateId: 'vc-stale-typecheck', repoRevision: captured.repoRevision, executionKey: 'cmd-stale-typecheck' },
+  });
+  assert.equal(stale.authoritative, false);
+  assert.equal(stale.state.status, 'stale');
+  assert.equal(stale.state.stale.includes('typecheck'), true);
+
+  let plan = commitPlan.buildTaskCommitPlan({ countersCache: {} }, { taskId, workspaceId: workspace.workspaceId });
+  assert.equal(plan.commitAllowed, false);
+  assert.ok(plan.blockers.some((entry: any) => entry.code === 'EXECUTION_VERIFICATION_BATCH_STALE'));
+
+  execution.recordExecutionOwnedChanges(session.id, ['src/owned.ts'], { repoRoot: workspace.root, source: 'task-repair' });
+  const recaptured = execution.captureExecutionVerificationProvenance(session.id, { repoRoot: workspace.root });
+  const retry = execution.recordExecutionVerificationBatchResult(session.id, {
+    repoRoot: workspace.root, batchId: 'batch-stale-2', requiredChecks, checkId: 'focused', status: 'passed', captured: recaptured,
+    memberCandidate: { candidateId: 'vc-stale-retry', repoRevision: recaptured.repoRevision, executionKey: 'cmd-stale-retry' },
+  });
+  assert.equal(retry.state.status, 'pending');
+  assert.equal(retry.state.batchId, 'batch-stale-2');
+});
+
 test('commit plan blocks stale verification after an owned file changes again', () => {
   const { workspace, taskId, session } = createFixture('stale');
   fs.writeFileSync(path.join(workspace.root, 'src', 'owned.ts'), 'export const owned = 3;\n');

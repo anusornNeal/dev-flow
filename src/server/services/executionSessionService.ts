@@ -25,6 +25,7 @@ import {
   recordAutomaticExecutionCheckpoint,
   recordExecutionPendingOperationReference,
 } from './executionCheckpointService.js';
+import { createVerificationBatch, MAX_VERIFICATION_BATCH_CHECKS, type VerificationBatchResultStatus } from './verificationBatchService.js';
 
 const DEFAULT_SESSION_TTL_MS = 24 * 60 * 60_000;
 const MAX_SESSION_TTL_MS = 30 * 24 * 60 * 60_000;
@@ -34,7 +35,7 @@ const EXECUTION_LIFECYCLE_TRANSITIONS: Readonly<Record<ExecutionLifecycleStage, 
   created: ['context-ready'],
   'context-ready': ['plan-recorded', 'implementing'],
   'plan-recorded': ['implementing'],
-  implementing: ['verifying'],
+  implementing: ['verifying', 'repairing'],
   verifying: ['repairing', 'committed'],
   repairing: ['verifying'],
   committed: ['finalized'],
@@ -138,6 +139,9 @@ export type TaskExecutionVerificationBindingReason =
   | 'EXECUTION_VERIFICATION_CANDIDATE_STALE'
   | 'EXECUTION_VERIFICATION_FINGERPRINT_STALE'
   | 'EXECUTION_VERIFICATION_BINDING_NOT_FRESH'
+  | 'EXECUTION_VERIFICATION_BATCH_INCOMPLETE'
+  | 'EXECUTION_VERIFICATION_BATCH_FAILED'
+  | 'EXECUTION_VERIFICATION_BATCH_STALE'
   | 'EXECUTION_VERIFICATION_REJECTED';
 
 export interface TaskExecutionVerificationBindingOutcome {
@@ -154,6 +158,32 @@ export interface TaskExecutionVerificationBindingOutcome {
   binding?: ExecutionSessionEvidenceRecord;
   ownership?: ExecutionOwnershipState;
 }
+
+export type ExecutionVerificationBatchStatus = 'pending' | 'complete' | 'failed' | 'stale';
+
+export type ExecutionVerificationBatchMemberCandidate = {
+  candidateId: string;
+  repoRevision: string;
+  executionKey: string;
+};
+
+export type ExecutionVerificationBatchState = {
+  batchId: string;
+  ownershipEpochId: string;
+  repoRevision: string;
+  ownedFingerprint: string;
+  requiredChecks: string[];
+  results: Record<string, VerificationBatchResultStatus>;
+  memberCandidates: Record<string, ExecutionVerificationBatchMemberCandidate>;
+  pending: string[];
+  passed: string[];
+  failed: string[];
+  stale: string[];
+  status: ExecutionVerificationBatchStatus;
+  canComplete: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
 
 export interface ExecutionOwnershipState {
   sessionId: string;
@@ -962,11 +992,426 @@ export function captureExecutionVerificationProvenance(
   };
 }
 
+function normalizeExecutionVerificationBatchChecks(values: unknown): string[] {
+  if (!Array.isArray(values) || values.length === 0 || values.length > MAX_VERIFICATION_BATCH_CHECKS) {
+    throw executionSessionError('EXECUTION_VERIFICATION_BATCH_CHECKS_REQUIRED', `Verification batch requires 1-${MAX_VERIFICATION_BATCH_CHECKS} declared checks.`);
+  }
+  const checks = values.map((value) => String(value || '').trim());
+  if (checks.some((value) => !value || value.length > 200)) {
+    throw executionSessionError('EXECUTION_VERIFICATION_BATCH_CHECK_INVALID', 'Verification batch check ids must be non-empty and bounded.');
+  }
+  if (new Set(checks).size !== checks.length) {
+    throw executionSessionError('EXECUTION_VERIFICATION_BATCH_CHECK_DUPLICATE', 'Verification batch required checks must be unique.');
+  }
+  return checks;
+}
+
+function normalizeExecutionVerificationBatchCandidate(value: any): ExecutionVerificationBatchMemberCandidate {
+  const candidateId = String(value?.candidateId || '').trim();
+  const repoRevision = String(value?.repoRevision || '').trim();
+  const executionKey = String(value?.executionKey || '').trim();
+  if (!candidateId || !repoRevision || !executionKey) {
+    throw executionSessionError('EXECUTION_VERIFICATION_BATCH_CANDIDATE_REQUIRED', 'Verification batch members require candidateId, repoRevision, and executionKey.');
+  }
+  return { candidateId, repoRevision, executionKey };
+}
+
+function executionVerificationBatchEvidenceId(sessionId: string, batchId: string) {
+  const digest = crypto.createHash('sha256').update(sessionId).update('|verification-batch|').update(batchId).digest('hex').slice(0, 24);
+  return `verification-batch-${digest}`;
+}
+
+function executionVerificationBatchStateFromEvidence(entry: ExecutionSessionEvidenceRecord): ExecutionVerificationBatchState | null {
+  if (entry.kind !== 'verification-batch') return null;
+  const metadata = entry.metadata || {};
+  const batchId = String(metadata.batchId || '').trim();
+  const ownershipEpochId = String(metadata.ownershipEpochId || '').trim();
+  const repoRevision = String(metadata.repoRevision || '').trim();
+  const ownedFingerprint = String(metadata.ownedFingerprint || '').trim();
+  const status = String(metadata.status || '') as ExecutionVerificationBatchStatus;
+  if (!batchId || !ownershipEpochId || !repoRevision || !ownedFingerprint || !['pending', 'complete', 'failed', 'stale'].includes(status)) return null;
+  const requiredChecks = Array.isArray(metadata.requiredChecks) ? metadata.requiredChecks.map(String) : [];
+  const results = metadata.results && typeof metadata.results === 'object' && !Array.isArray(metadata.results)
+    ? { ...(metadata.results as Record<string, VerificationBatchResultStatus>) }
+    : {};
+  const memberCandidates = metadata.memberCandidates && typeof metadata.memberCandidates === 'object' && !Array.isArray(metadata.memberCandidates)
+    ? { ...(metadata.memberCandidates as Record<string, ExecutionVerificationBatchMemberCandidate>) }
+    : {};
+  return {
+    batchId,
+    ownershipEpochId,
+    repoRevision,
+    ownedFingerprint,
+    requiredChecks,
+    results,
+    memberCandidates,
+    pending: Array.isArray(metadata.pending) ? metadata.pending.map(String) : [],
+    passed: Array.isArray(metadata.passed) ? metadata.passed.map(String) : [],
+    failed: Array.isArray(metadata.failed) ? metadata.failed.map(String) : [],
+    stale: Array.isArray(metadata.stale) ? metadata.stale.map(String) : [],
+    status,
+    canComplete: metadata.canComplete === true,
+    createdAt: entry.createdAt,
+    updatedAt: entry.updatedAt,
+  };
+}
+
+export function getExecutionVerificationBatchState(id: string) {
+  requireSession(id);
+  return listExecutionSessionEvidence(id)
+    .filter((entry) => entry.kind === 'verification-batch')
+    .map(executionVerificationBatchStateFromEvidence)
+    .filter((entry): entry is ExecutionVerificationBatchState => Boolean(entry))
+    .at(-1) || null;
+}
+
+function persistExecutionVerificationBatchState(id: string, state: ExecutionVerificationBatchState) {
+  const evidenceIdValue = executionVerificationBatchEvidenceId(id, state.batchId);
+  const existing = listExecutionSessionEvidence(id).find((entry) => entry.id === evidenceIdValue);
+  return saveExecutionSessionEvidence({
+    id: evidenceIdValue,
+    sessionId: id,
+    kind: 'verification-batch',
+    path: null,
+    repoRevision: state.repoRevision,
+    fileRevision: null,
+    revisionIdentity: state.ownedFingerprint,
+    contextHandle: requireSession(id).contextHandle,
+    stale: state.status === 'stale',
+    metadata: {
+      batchId: state.batchId,
+      ownershipEpochId: state.ownershipEpochId,
+      repoRevision: state.repoRevision,
+      ownedFingerprint: state.ownedFingerprint,
+      requiredChecks: state.requiredChecks,
+      results: state.results,
+      memberCandidates: state.memberCandidates,
+      pending: state.pending,
+      passed: state.passed,
+      failed: state.failed,
+      stale: state.stale,
+      status: state.status,
+      canComplete: state.canComplete,
+    },
+    createdAt: existing?.createdAt || state.createdAt,
+    updatedAt: state.updatedAt,
+  });
+}
+
+function invalidateExecutionVerificationBindingsForBatch(id: string, batchId: string, nowIso: string) {
+  for (const entry of listExecutionSessionEvidence(id)) {
+    if (entry.kind !== 'verification-binding' || readStringMetadata(entry.metadata || {}, 'invalidatedAt')) continue;
+    saveExecutionSessionEvidence({
+      id: entry.id,
+      sessionId: entry.sessionId,
+      kind: entry.kind,
+      path: entry.path,
+      repoRevision: entry.repoRevision,
+      fileRevision: entry.fileRevision,
+      revisionIdentity: entry.revisionIdentity,
+      contextHandle: entry.contextHandle,
+      stale: entry.stale,
+      metadata: {
+        ...(entry.metadata || {}),
+        invalidatedAt: nowIso,
+        invalidationReason: 'verification-batch-started',
+        invalidatedByBatchId: batchId,
+        authoritative: false,
+      },
+      createdAt: entry.createdAt,
+      updatedAt: nowIso,
+    });
+  }
+}
+
+function buildExecutionVerificationBatchState(
+  base: Pick<ExecutionVerificationBatchState, 'batchId' | 'ownershipEpochId' | 'repoRevision' | 'ownedFingerprint' | 'requiredChecks' | 'createdAt'>,
+  results: Record<string, VerificationBatchResultStatus>,
+  memberCandidates: Record<string, ExecutionVerificationBatchMemberCandidate>,
+  updatedAt: string,
+): ExecutionVerificationBatchState {
+  const canonicalCandidate = {
+    candidateId: `execution-batch:${base.batchId}`,
+    repoRevision: base.repoRevision,
+    executionKey: crypto.createHash('sha256')
+      .update(base.ownershipEpochId)
+      .update('|')
+      .update(base.ownedFingerprint)
+      .digest('hex'),
+  };
+  const canonical = createVerificationBatch(canonicalCandidate, base.requiredChecks);
+  for (const checkId of base.requiredChecks) {
+    const status = results[checkId];
+    if (status) canonical.recordResult({ checkId, status, candidate: canonicalCandidate });
+  }
+  const snapshot = canonical.snapshot();
+  const status: ExecutionVerificationBatchStatus = snapshot.stale.length > 0
+    ? 'stale'
+    : snapshot.failed.length > 0
+      ? 'failed'
+      : snapshot.canComplete
+        ? 'complete'
+        : 'pending';
+  return {
+    ...base,
+    results: { ...snapshot.results },
+    memberCandidates,
+    pending: [...snapshot.pending],
+    passed: [...snapshot.passed],
+    failed: [...snapshot.failed],
+    stale: [...snapshot.stale],
+    status,
+    canComplete: snapshot.canComplete,
+    updatedAt,
+  };
+}
+
+export function recordExecutionVerificationBatchResult(
+  id: string,
+  input: {
+    repoRoot: string;
+    batchId: string;
+    requiredChecks: string[];
+    checkId: string;
+    status: VerificationBatchResultStatus;
+    captured: { repoRevision: string; ownedFingerprint: string; ownedPaths?: string[] };
+    memberCandidate: ExecutionVerificationBatchMemberCandidate;
+    now?: Date;
+  },
+) {
+  const session = requireSession(id);
+  assertActive(session);
+  const root = requireRepoRoot(input.repoRoot);
+  const batchId = String(input.batchId || '').trim();
+  if (!batchId || batchId.length > 160) throw executionSessionError('EXECUTION_VERIFICATION_BATCH_ID_REQUIRED', 'A bounded verification batch id is required.');
+  const requiredChecks = normalizeExecutionVerificationBatchChecks(input.requiredChecks);
+  const checkId = String(input.checkId || '').trim();
+  if (!requiredChecks.includes(checkId)) throw executionSessionError('EXECUTION_VERIFICATION_BATCH_CHECK_NOT_REQUIRED', `Verification check '${checkId}' is not declared by batch '${batchId}'.`);
+  if (input.status !== 'passed' && input.status !== 'failed' && input.status !== 'stale') {
+    throw executionSessionError('EXECUTION_VERIFICATION_BATCH_STATUS_INVALID', 'Verification batch result status must be passed, failed, or stale.');
+  }
+  const capturedRepoRevision = String(input.captured?.repoRevision || '').trim();
+  const capturedOwnedFingerprint = String(input.captured?.ownedFingerprint || '').trim();
+  if (!capturedRepoRevision || !capturedOwnedFingerprint) {
+    throw executionSessionError('EXECUTION_VERIFICATION_BATCH_PROVENANCE_REQUIRED', 'Verification batch requires captured repo revision and owned fingerprint.');
+  }
+  const ownershipEpochId = String(getExecutionSessionOwnershipEpoch(id).ownershipEpochId || '').trim();
+  if (!ownershipEpochId) throw executionSessionError('EXECUTION_VERIFICATION_BATCH_OWNERSHIP_EPOCH_REQUIRED', 'Verification batch requires an authoritative execution ownership epoch.');
+  const memberCandidate = normalizeExecutionVerificationBatchCandidate(input.memberCandidate);
+  if (memberCandidate.repoRevision !== capturedRepoRevision) {
+    throw executionSessionError('EXECUTION_VERIFICATION_BATCH_CANDIDATE_MISMATCH', 'Verification batch member candidate revision does not match the frozen batch revision.');
+  }
+
+  const ownership = getExecutionOwnershipState(id, { repoRoot: root });
+  const nowIso = (input.now || new Date()).toISOString();
+  const latest = getExecutionVerificationBatchState(id);
+  const existing = latest?.batchId === batchId ? latest : null;
+  if (ownership.repoRevision !== capturedRepoRevision || ownership.ownedFingerprint !== capturedOwnedFingerprint) {
+    if (existing?.status === 'pending'
+      && existing.ownershipEpochId === ownershipEpochId
+      && existing.repoRevision === capturedRepoRevision
+      && existing.ownedFingerprint === capturedOwnedFingerprint
+      && JSON.stringify(existing.requiredChecks) === JSON.stringify(requiredChecks)) {
+      const staleState = buildExecutionVerificationBatchState({
+        batchId,
+        ownershipEpochId,
+        repoRevision: capturedRepoRevision,
+        ownedFingerprint: capturedOwnedFingerprint,
+        requiredChecks,
+        createdAt: existing.createdAt,
+      }, { ...existing.results, [checkId]: 'stale' }, { ...existing.memberCandidates, [checkId]: memberCandidate }, nowIso);
+      persistExecutionVerificationBatchState(id, staleState);
+      return {
+        authoritative: false,
+        idempotent: false,
+        state: staleState,
+        reasonCode: 'EXECUTION_VERIFICATION_BATCH_STALE' as TaskExecutionVerificationBindingReason,
+        verificationFresh: ownership.verificationFresh,
+        sessionId: id,
+        repoRevision: ownership.repoRevision,
+        ownedFingerprint: ownership.ownedFingerprint,
+      };
+    }
+    throw executionSessionError('EXECUTION_VERIFICATION_BATCH_STALE', 'Verification batch provenance no longer matches the live execution ownership revision.', {
+      expectedRepoRevision: capturedRepoRevision,
+      currentRepoRevision: ownership.repoRevision,
+      expectedOwnedFingerprint: capturedOwnedFingerprint,
+      currentOwnedFingerprint: ownership.ownedFingerprint,
+    });
+  }
+  if (!existing && latest?.status === 'pending' && latest.repoRevision === ownership.repoRevision && latest.ownedFingerprint === ownership.ownedFingerprint) {
+    throw executionSessionError('EXECUTION_VERIFICATION_BATCH_ACTIVE', `Verification batch '${latest.batchId}' is still pending and must complete or become stale before '${batchId}' can start.`);
+  }
+  if (existing) {
+    if (existing.ownershipEpochId !== ownershipEpochId || existing.repoRevision !== capturedRepoRevision || existing.ownedFingerprint !== capturedOwnedFingerprint) {
+      throw executionSessionError('EXECUTION_VERIFICATION_BATCH_IDENTITY_MISMATCH', `Verification batch '${batchId}' is bound to a different execution ownership identity.`);
+    }
+    if (JSON.stringify(existing.requiredChecks) !== JSON.stringify(requiredChecks)) {
+      throw executionSessionError('EXECUTION_VERIFICATION_BATCH_REQUIRED_SET_CHANGED', `Verification batch '${batchId}' required checks are immutable after the first member result.`);
+    }
+    const priorStatus = existing.results[checkId];
+    if (priorStatus) {
+      const priorCandidate = existing.memberCandidates[checkId];
+      if (priorStatus === input.status
+        && priorCandidate?.candidateId === memberCandidate.candidateId
+        && priorCandidate?.repoRevision === memberCandidate.repoRevision
+        && priorCandidate?.executionKey === memberCandidate.executionKey) {
+        return { authoritative: existing.canComplete, idempotent: true, state: existing, verificationFresh: getExecutionOwnershipState(id, { repoRoot: root }).verificationFresh };
+      }
+      throw executionSessionError('EXECUTION_VERIFICATION_BATCH_TERMINAL', `Verification batch '${batchId}' member '${checkId}' already has a terminal result and cannot be overwritten.`);
+    }
+    if (existing.status !== 'pending') {
+      throw executionSessionError('EXECUTION_VERIFICATION_BATCH_TERMINAL', `Verification batch '${batchId}' is terminal (${existing.status}) and cannot accept additional results.`);
+    }
+  }
+
+  const createdAt = existing?.createdAt || nowIso;
+  const results = { ...(existing?.results || {}), [checkId]: input.status };
+  const memberCandidates = { ...(existing?.memberCandidates || {}), [checkId]: memberCandidate };
+  if (!existing) invalidateExecutionVerificationBindingsForBatch(id, batchId, nowIso);
+  const state = buildExecutionVerificationBatchState({
+    batchId,
+    ownershipEpochId,
+    repoRevision: capturedRepoRevision,
+    ownedFingerprint: capturedOwnedFingerprint,
+    requiredChecks,
+    createdAt,
+  }, results, memberCandidates, nowIso);
+  persistExecutionVerificationBatchState(id, state);
+
+  if (state.canComplete) {
+    const executionKey = crypto.createHash('sha256')
+      .update(batchId)
+      .update('|')
+      .update(requiredChecks.map((requiredCheck) => memberCandidates[requiredCheck]?.executionKey || '').join('|'))
+      .digest('hex');
+    const candidateId = `batch-${crypto.createHash('sha256').update(id).update('|').update(batchId).digest('hex').slice(0, 24)}`;
+    const recorded = recordExecutionVerificationEvidence(id, requiredChecks.map((requiredCheck) => ({
+      name: requiredCheck,
+      command: requiredCheck,
+      status: 'passed',
+    })), {
+      repoRoot: root,
+      provenance: {
+        policy: 'checks-passed',
+        expectedRepoRevision: capturedRepoRevision,
+        expectedOwnedFingerprint: capturedOwnedFingerprint,
+        candidateId,
+        candidateRepoRevision: capturedRepoRevision,
+        executionKey,
+      },
+    });
+    return { authoritative: recorded.ownership.verificationFresh === true, idempotent: false, state, verificationFresh: recorded.ownership.verificationFresh, ...recorded };
+  }
+
+  const reasonCode: TaskExecutionVerificationBindingReason = state.status === 'pending'
+    ? 'EXECUTION_VERIFICATION_BATCH_INCOMPLETE'
+    : state.status === 'stale'
+      ? 'EXECUTION_VERIFICATION_BATCH_STALE'
+      : 'EXECUTION_VERIFICATION_BATCH_FAILED';
+  return {
+    authoritative: false,
+    idempotent: false,
+    state,
+    reasonCode,
+    verificationFresh: getExecutionOwnershipState(id, { repoRoot: root }).verificationFresh,
+    sessionId: id,
+    repoRevision: ownership.repoRevision,
+    ownedFingerprint: ownership.ownedFingerprint,
+  };
+}
+
 export function recordTaskExecutionVerificationResult(
   args: Record<string, any>,
   result: any,
   captured?: { repoRevision: string; ownedFingerprint: string; ownedPaths?: string[] } | null,
 ): TaskExecutionVerificationBindingOutcome {
+  const batchRequest = args?.verificationBatch && typeof args.verificationBatch === 'object' && !Array.isArray(args.verificationBatch)
+    ? args.verificationBatch as Record<string, unknown>
+    : null;
+  if (batchRequest) {
+    const binding = getTaskExecutionMutationBinding(args);
+    if (!binding) {
+      return {
+        authoritative: false,
+        reasonCode: 'EXECUTION_VERIFICATION_TASK_BINDING_MISSING',
+        verificationFresh: null,
+        message: 'Sequential verification batch result is not bound to an active task execution workspace.',
+      };
+    }
+    const ownership = getExecutionOwnershipState(binding.session.id, { repoRoot: binding.workspace.root });
+    const memberCandidate = result?.verificationCandidate;
+    if (!captured?.repoRevision || !captured?.ownedFingerprint || !memberCandidate?.candidateId || !memberCandidate?.repoRevision || !memberCandidate?.executionKey) {
+      return {
+        authoritative: false,
+        reasonCode: 'EXECUTION_VERIFICATION_CANDIDATE_REQUIRED',
+        verificationFresh: ownership.verificationFresh,
+        sessionId: binding.session.id,
+        repoRevision: ownership.repoRevision,
+        ownedFingerprint: ownership.ownedFingerprint,
+        ownership,
+        message: 'Sequential verification batch members require captured execution provenance and a verification candidate identity.',
+      };
+    }
+    const memberStatus: VerificationBatchResultStatus = result?.verificationCandidate?.current === false
+      ? 'stale'
+      : (!result?.ok || result?.status !== 'succeeded')
+        ? 'failed'
+        : 'passed';
+    try {
+      const recorded = recordExecutionVerificationBatchResult(binding.session.id, {
+        repoRoot: binding.workspace.root,
+        batchId: String(batchRequest.id || ''),
+        requiredChecks: Array.isArray(batchRequest.requiredChecks) ? batchRequest.requiredChecks.map(String) : [],
+        checkId: String(batchRequest.checkId || args?.command || args?.preset || ''),
+        status: memberStatus,
+        captured,
+        memberCandidate: {
+          candidateId: String(memberCandidate.candidateId),
+          repoRevision: String(memberCandidate.repoRevision),
+          executionKey: String(memberCandidate.executionKey),
+        },
+      });
+      const refreshedOwnership = getExecutionOwnershipState(binding.session.id, { repoRoot: binding.workspace.root });
+      const reasonCode: TaskExecutionVerificationBindingReason = recorded.authoritative
+        ? 'EXECUTION_VERIFICATION_AUTHORITATIVE'
+        : (recorded.reasonCode || (recorded.state.status === 'pending'
+          ? 'EXECUTION_VERIFICATION_BATCH_INCOMPLETE'
+          : recorded.state.status === 'stale'
+            ? 'EXECUTION_VERIFICATION_BATCH_STALE'
+            : 'EXECUTION_VERIFICATION_BATCH_FAILED'));
+      return {
+        authoritative: recorded.authoritative,
+        reasonCode,
+        verificationFresh: refreshedOwnership.verificationFresh,
+        sessionId: binding.session.id,
+        repoRevision: refreshedOwnership.repoRevision,
+        ownedFingerprint: refreshedOwnership.ownedFingerprint,
+        ownership: refreshedOwnership,
+        details: { batch: recorded.state, idempotent: recorded.idempotent },
+        message: recorded.authoritative
+          ? 'All declared sequential verification checks passed on the frozen execution ownership revision.'
+          : recorded.state.status === 'pending'
+            ? `Verification batch '${recorded.state.batchId}' is incomplete; remaining checks: ${recorded.state.pending.join(', ')}.`
+            : `Verification batch '${recorded.state.batchId}' is ${recorded.state.status} and cannot authorize commit.`,
+      };
+    } catch (error: any) {
+      return {
+        authoritative: false,
+        reasonCode: error?.code === 'EXECUTION_VERIFICATION_BATCH_STALE'
+          ? 'EXECUTION_VERIFICATION_BATCH_STALE'
+          : 'EXECUTION_VERIFICATION_REJECTED',
+        verificationFresh: getExecutionOwnershipState(binding.session.id, { repoRoot: binding.workspace.root }).verificationFresh,
+        sessionId: binding.session.id,
+        repoRevision: ownership.repoRevision,
+        ownedFingerprint: ownership.ownedFingerprint,
+        ownership,
+        errorCode: typeof error?.code === 'string' ? error.code : undefined,
+        message: error instanceof Error ? error.message : String(error),
+        details: error?.details,
+      };
+    }
+  }
   if (!result?.ok || result?.status !== 'succeeded') {
     return {
       authoritative: false,

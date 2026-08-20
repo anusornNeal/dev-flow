@@ -252,7 +252,7 @@ export async function runBuiltinToolJob(input: BuiltinToolJobInput, context: Bui
             : await runProjectCommandAsync(state, finalArgs, logger, setCancelFn);
           result = attachInfrastructureRecoveryAudit(result, retried, recovery.profile);
         } finally {
-          lease?.dispose();
+          if (lease) lease.dispose();
         }
       }
     }

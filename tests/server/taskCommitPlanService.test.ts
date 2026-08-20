@@ -362,7 +362,7 @@ test('verification debt commit requires infra-blocked authority and preserves an
   assert.equal(debt?.metadata?.status, 'outstanding');
   assert.equal(debt?.metadata?.failureClass, 'infrastructure');
   assert.equal(debt?.metadata?.commitHash, committed.commitHash);
-  assert.equal(debt?.metadata?.authorization?.reason, 'Verification failed because the runner exhausted heap.');
+  assert.equal((debt?.metadata as any)?.authorization?.reason, 'Verification failed because the runner exhausted heap.');
   assert.equal(fs.readFileSync(path.join(workspace.root, 'src', 'unrelated.ts'), 'utf8'), 'export const unrelated = 40;\n');
 });
 

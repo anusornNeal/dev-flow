@@ -12,7 +12,7 @@ const { executeAllMigrations } = await import('../../src/db/migrations/index.js'
 executeAllMigrations();
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
 const { saveTask } = await import('../../src/server/repositories/taskRepository.js');
-const { claimTaskForSession } = await import('../../src/server/services/taskClaimService.js');
+const { claimTaskForSession, releaseTaskClaim } = await import('../../src/server/services/taskClaimService.js');
 const { cleanupSessionWorkspace } = await import('../../src/server/services/sessionWorkspaceService.js');
 const executionSessions = await import('../../src/server/services/executionSessionService.js');
 const { preflightHarnessExecutionGuard, recordHarnessExecutionOutcome } = await import('../../src/server/services/harnessExecutionGuardService.js');
@@ -153,6 +153,7 @@ test('apply_and_verify async runner fails closed before source mutation in verif
     assert.equal(fs.readFileSync(path.join(binding.workspace.root, 'value.txt'), 'utf8'), before, 'composite guard must fail before any source byte changes');
     assert.equal(git(['-C', binding.workspace.root, 'status', '--porcelain']).trim(), '', 'blocked composite must not leave staging or worktree drift');
   } finally {
+    releaseTaskClaim(task.id, { sessionId: 'runner-composite-blocked-session', nextStatus: 'todo' });
     cleanupSessionWorkspace(workspaceId);
   }
 });

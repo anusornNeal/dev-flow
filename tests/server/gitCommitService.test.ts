@@ -11,7 +11,9 @@ process.env.DEVFLOW_DB_PATH = path.join(os.tmpdir(), `devflow-git-commit-db-${pa
 const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
 executeAllMigrations();
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
-const { createOrReuseSessionWorkspace, resetSessionWorkspaceRuntimeForTests } = await import('../../src/server/services/sessionWorkspaceService.js');
+const { saveTask } = await import('../../src/server/repositories/taskRepository.js');
+const { createOrReuseSessionWorkspace, cleanupSessionWorkspace, resetSessionWorkspaceRuntimeForTests } = await import('../../src/server/services/sessionWorkspaceService.js');
+const { claimTaskForSession, releaseTaskClaim } = await import('../../src/server/services/taskClaimService.js');
 
 const { commitGitChanges, getGitStatus, getGitLog, getGitBranchAsync, getGitWorkspaceSnapshotForRoot } = await import('../../src/server/services/gitService.js');
 
@@ -94,6 +96,45 @@ test('commitGitChanges rejects generic commits for task-bound managed workspaces
   }
 
   assert.match(git(workspace.root, ['status', '--porcelain']), /base\.txt/);
+});
+
+test('commitGitChanges blocks project-root fallback while task execution authority is active', () => {
+  const repo = createRepo('task-active-project-root-guard');
+  process.env.DEVFLOW_RUNTIME_DIR = path.join(tempRoot, 'runtime-task-active-project-root-guard');
+  resetSessionWorkspaceRuntimeForTests();
+  const now = new Date().toISOString();
+  const taskId = 'task-git-project-root-guard';
+  const sessionId = 'task-git-project-root-guard-session';
+  saveTask({
+    id: taskId,
+    displayId: 'CARD-9010',
+    projectId: 'project-git',
+    title: 'project root guard fixture',
+    description: '',
+    status: 'todo',
+    priority: 'high',
+    branch: git(repo, ['branch', '--show-current']),
+    category: 'backend',
+    tags: [],
+    targetFiles: ['base.txt'],
+    checklist: [],
+    logs: [],
+    createdAt: now,
+    updatedAt: now,
+  } as any);
+  const claimed = claimTaskForSession(taskId, { sessionId, ownerLabel: 'Git guard fixture' });
+  fs.writeFileSync(path.join(repo, 'base.txt'), 'must-not-commit-to-shared-root\n');
+  try {
+    assert.throws(
+      () => commitGitChanges(stateFor(repo), { projectId: 'project-git', stageAll: true, message: 'feat: must be blocked' }),
+      (error: any) => error?.payload?.code === 'TASK_MUTATION_WORKSPACE_REQUIRED',
+    );
+    assert.match(git(repo, ['status', '--porcelain']), /base\.txt/);
+  } finally {
+    git(repo, ['restore', '--staged', '--worktree', '--', 'base.txt']);
+    releaseTaskClaim(taskId, { sessionId, nextStatus: 'todo' });
+    cleanupSessionWorkspace(claimed.claim.workspaceId);
+  }
 });
 
 test('commitGitChanges stages and commits all local changes', () => {

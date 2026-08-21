@@ -21,6 +21,7 @@ import { getChangedGitFilesForRoot, getGitWorkspaceSnapshotForRoot, getGitWorksp
 export { clearGitRemoteEvidenceCache, getGitRemoteEvidenceMetrics } from './gitRemoteEvidenceService';
 export { getChangedGitFilesForRoot, getGitWorkspaceSnapshotForRoot, getGitWorkspaceStatusForRoot } from './gitLocalService';
 import { getProject } from '../repositories/projectRepository';
+import { assertTaskMutationWorkspaceBinding } from './executionSessionService.js';
 
 const MAX_DIFF_BYTES = 100_000;
 const MAX_LOG_COUNT = 500;
@@ -524,7 +525,8 @@ export function commitGitChanges(
   state: AppState,
   args: Record<string, any>,
   options: { taskAware?: boolean } = {},
-) {
+) {  assertTaskMutationWorkspaceBinding(args);
+
   const root = resolveProjectRoot(state, args);
   const managedWorkspace = resolveSessionWorkspaceByRoot(root);
   if (managedWorkspace?.taskDisplayId && options.taskAware !== true) {
@@ -629,7 +631,8 @@ export function commitGitChanges(
   };
 }
 
-export function ensureGitBranch(state: AppState, args: Record<string, any>) {
+export function ensureGitBranch(state: AppState, args: Record<string, any>) {  assertTaskMutationWorkspaceBinding(args);
+
   const root = resolveProjectRoot(state, args);
   ensureGitRepo(root);
   ensureNoInProgressOperation(root);

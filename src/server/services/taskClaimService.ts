@@ -720,11 +720,29 @@ function ensureClaimExecutionSession(task: any, workspace: any, options: { allow
   });
 }
 
+function assertTaskWorkspaceBranchAuthority(task: any, workspace: any) {
+  const expectedBranch = String(task?.branch || '').trim();
+  if (!expectedBranch) return workspace;
+  const actualBranch = String(workspace?.baseBranch || '').trim();
+  if (actualBranch !== expectedBranch) {
+    throw createApiError(409, 'TASK_WORKSPACE_BRANCH_AUTHORITY_MISMATCH', `Task '${task.displayId || task.id}' targets '${expectedBranch}', but its managed workspace is frozen to '${actualBranch || '<unknown>'}'.`, {
+      affectedId: task.id,
+      details: {
+        taskBranch: expectedBranch,
+        workspaceBaseBranch: actualBranch || null,
+        workspaceId: workspace?.workspaceId || null,
+        nextAction: 'Preserve the legacy workspace for recovery; do not silently integrate it into another branch.',
+      },
+    });
+  }
+  return workspace;
+}
+
 function resolveRecoverableTaskWorkspace(task: any) {
   const preferredWorkspaceId = String(task?.claim?.workspaceId || '').trim();
   if (preferredWorkspaceId) {
     const preferred = resolveSessionWorkspaceForRecovery(preferredWorkspaceId);
-    if (preferred?.projectId === task.projectId && isSessionWorkspaceCompatibleWithTask(preferred, task.displayId)) return preferred;
+    if (preferred?.projectId === task.projectId && isSessionWorkspaceCompatibleWithTask(preferred, task.displayId)) return assertTaskWorkspaceBranchAuthority(task, preferred);
   }
 
   const discovered = findSessionWorkspaceRecoveryCandidatesForTask(task.projectId, task.displayId, 100);
@@ -741,7 +759,8 @@ function resolveRecoverableTaskWorkspace(task: any) {
     });
   }
   if (discovered.exactMatches.length === 1) {
-    return resolveSessionWorkspaceForRecovery(discovered.exactMatches[0].workspaceId);
+    const recovered = resolveSessionWorkspaceForRecovery(discovered.exactMatches[0].workspaceId);
+    return recovered ? assertTaskWorkspaceBranchAuthority(task, recovered) : null;
   }
   if (discovered.legacyMatches.length > 0) {
     throw createApiError(409, 'TASK_WORKSPACE_LEGACY_IDENTITY_AMBIGUOUS', `Task '${task.displayId || task.id}' has only legacy-compatible workspace identity; automatic reclaim is blocked.`, {
@@ -812,7 +831,7 @@ function claimTaskForSessionLocked(taskId: string, input: ClaimTaskInput, cleanS
       });
     }
     const workspace = resolveRecoverableTaskWorkspace(task)
-      || createOrReuseSessionWorkspace(project, cleanSessionId, { taskDisplayId: task.displayId });
+      || createOrReuseSessionWorkspace(project, cleanSessionId, { taskDisplayId: task.displayId, targetBranch: task.branch });
     let liveTask = task;
     withDbTransaction(() => {
       if (!String(task.claim?.ownershipEpochId || '').trim()) {
@@ -855,7 +874,7 @@ function claimTaskForSessionLocked(taskId: string, input: ClaimTaskInput, cleanS
   }
 
   const workspace = resolveRecoverableTaskWorkspace(task)
-    || createOrReuseSessionWorkspace(project, cleanSessionId, { taskDisplayId: task.displayId });
+    || createOrReuseSessionWorkspace(project, cleanSessionId, { taskDisplayId: task.displayId, targetBranch: task.branch });
   const ownerKind = normalizeOwnerKind(input.ownerKind);
   const claimedAt = new Date(nowMs).toISOString();
   const claim: TaskClaim = {

@@ -462,13 +462,14 @@ function validateReusableWorkspace(workspace: SessionWorkspace, projectRoot: str
 export function createOrReuseSessionWorkspace(
   project: { id: string; localPath?: string | null; gitWorkflowPolicy?: unknown },
   sessionId: string,
-  options: { taskDisplayId?: string | null } = {},
+  options: { taskDisplayId?: string | null; targetBranch?: string | null } = {},
 ) {
   const cleanSessionId = String(sessionId || '').trim();
   if (!cleanSessionId) throw createApiError(400, 'SESSION_ID_REQUIRED', 'sessionId is required to create an isolated workspace.');
   if (!project?.id) throw createApiError(400, 'PROJECT_ID_REQUIRED', 'project.id is required to create an isolated workspace.');
   const projectRoot = ensureRepository(path.resolve(String(project.localPath || '')));
-  const taskDisplayId = normalizedTaskDisplayId(options.taskDisplayId);
+  const taskDisplayId = normalizedTaskDisplayId(options.taskDisplayId);  const targetBranch = String(options.targetBranch || '').trim() || null;
+
   const workspaceIdentity = workspaceIdentityForSession(cleanSessionId, taskDisplayId);
   const workspaceId = workspaceIdFor(project.id, workspaceIdentity);
   const existing = readMetadata(workspaceId);
@@ -478,7 +479,13 @@ export function createOrReuseSessionWorkspace(
         affectedId: workspaceId,
         details: { taskDisplayId, root: existing.root },
       });
+    }    if (targetBranch && existing.baseBranch !== targetBranch) {
+      throw createApiError(409, 'WORKSPACE_TARGET_BRANCH_MISMATCH', `Existing managed workspace targets '${existing.baseBranch}', not '${targetBranch}'.`, {
+        affectedId: workspaceId,
+        details: { expectedBranch: targetBranch, actualBranch: existing.baseBranch, taskDisplayId },
+      });
     }
+
     workspaceLifecycleCounters.reused += 1;
     return touch(existing);
   }
@@ -486,8 +493,28 @@ export function createOrReuseSessionWorkspace(
   const taskRootLeaf = taskNumberFolder(taskDisplayId);
   const rootLeaf = taskRootLeaf || workspaceId;
   const root = canonicalContainment(managedRootFor(project.id, rootLeaf));
-  const baseBranch = currentBranch(projectRoot);
-  const baseRevision = currentHead(projectRoot);
+  let baseBranch = currentBranch(projectRoot);
+  let baseRevision = currentHead(projectRoot);
+  if (targetBranch) {
+    const validation = runGit(projectRoot, ['check-ref-format', '--branch', targetBranch], true);
+    if (validation.status !== 0) {
+      throw createApiError(400, 'WORKSPACE_TARGET_BRANCH_INVALID', `Task target branch '${targetBranch}' is not a valid Git branch name.`, {
+        affectedId: targetBranch,
+        details: validation.stderr?.trim(),
+      });
+    }
+    if (!branchExists(projectRoot, targetBranch)) {
+      const created = runGit(projectRoot, ['branch', targetBranch, baseRevision], true);
+      if (created.status !== 0) {
+        throw createApiError(409, 'WORKSPACE_TARGET_BRANCH_CREATE_FAILED', `Task target branch '${targetBranch}' could not be created without switching the shared checkout.`, {
+          affectedId: targetBranch,
+          details: created.stderr?.trim(),
+        });
+      }
+    }
+    baseBranch = targetBranch;
+    baseRevision = (runGit(projectRoot, ['rev-parse', `refs/heads/${targetBranch}`]).stdout || '').trim();
+  }
   const branch = workspaceBranchFor(project.id, workspaceIdentity, taskRootLeaf);
 
   fs.mkdirSync(path.dirname(root), { recursive: true });

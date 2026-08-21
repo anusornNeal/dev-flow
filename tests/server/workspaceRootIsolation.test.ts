@@ -20,6 +20,7 @@ const { applyPreparedEditPlan } = await import('../../src/server/services/prepar
 const {
   cleanupSessionWorkspace,
   createOrReuseSessionWorkspace,
+  getSessionWorkspaceMetadataForRecovery,
   resetSessionWorkspaceRuntimeForTests,
 } = await import('../../src/server/services/sessionWorkspaceService.js');
 const { inspectWorkspaceRecovery } = await import('../../src/server/services/workspaceRecoveryService.js');
@@ -39,7 +40,8 @@ function createRepo(name: string, value: string) {
   fs.writeFileSync(path.join(root, 'value.txt'), value, 'utf8');
   git(root, ['init', '-b', 'develop']);
   git(root, ['config', 'user.name', 'DevFlow Test']);
-  git(root, ['config', 'user.email', 'devflow@example.test']);
+  git(root, ['config', 'user.email', 'devflow@example.test']);  git(root, ['config', 'core.autocrlf', 'false']);
+
   git(root, ['add', '.']);
   git(root, ['commit', '-m', 'fixture']);
   return root;
@@ -48,6 +50,51 @@ function createRepo(name: string, value: string) {
 function errorCode(error: unknown) {
   return (error as any)?.payload?.code;
 }
+
+function finalizeThroughContinuation(state: any, taskId: string, workspaceId: string, initialCheck: any) {
+  let result: any = finalizeTaskWorkspace(state, { taskId, workspaceId, checks: [initialCheck] });
+  for (let attempt = 0; attempt < 3 && result.status === 'continuation'; attempt += 1) {
+    const repoRevision = String(result.continuation?.repoRevision || result.postIntegration?.repoRevision || result.integration?.baseHeadAfter || '').trim();
+    const requiredCommands = Array.isArray(result.continuation?.requiredCommands) && result.continuation.requiredCommands.length > 0
+      ? result.continuation.requiredCommands
+      : Array.isArray(result.postIntegration?.requiredCommands) && result.postIntegration.requiredCommands.length > 0
+        ? result.postIntegration.requiredCommands
+        : [initialCheck.command];
+    const broad = result.continuation?.broadEvidenceRequired === true || result.postIntegration?.broadEvidenceRequired === true;
+    const checks = repoRevision
+      ? requiredCommands.map((command: string) => ({
+          name: `post-integration:${command}`,
+          command,
+          scope: broad ? 'full' as const : 'targeted' as const,
+          status: 'passed' as const,
+          repoRevision,
+          summary: 'post-integration regression evidence',
+        }))
+      : [initialCheck];
+    result = finalizeTaskWorkspace(state, {
+      taskId,
+      workspaceId,
+      operationId: result.operation?.id,
+      checks,
+    });
+  }
+  return result;
+}
+
+
+function markClaimedExecutionCommitted(workspaceId: string, label: string) {
+  const active = executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId);
+  assert.ok(active, `expected active task execution for ${workspaceId}`);
+  const stages = ['context-ready', 'implementing', 'verifying', 'committed'] as const;
+  for (const stage of stages) {
+    executionSessions.recordExecutionLifecycleTransition(active.id, {
+      toStage: stage,
+      reasonCode: `${label}-${stage}`,
+      evidence: { id: `${label}:${stage}`, kind: 'test-fixture', status: 'completed' },
+    });
+  }
+}
+
 
 test('workspaceId-only file and Git flows stay on the authoritative managed workspace root', () => {
   resetSessionWorkspaceRuntimeForTests();
@@ -229,9 +276,20 @@ test('task-bound mutation authorization requires active claimed scope and honors
     ownerLabel: 'Scope regression',
   });
   const workspaceId = claimed.claim.workspaceId;
-  const workspaceRoot = resolveProjectRoot(state, { workspaceId });
+  const workspaceRoot = resolveProjectRoot(state, { workspaceId });  const sharedValueBefore = fs.readFileSync(path.join(projectRoot, 'value.txt'), 'utf8');
+
   try {
-    assert.doesNotThrow(() => executionSessions.authorizeTaskExecutionMutationPaths({ workspaceId }, ['value.txt']));
+    assert.doesNotThrow(() => executionSessions.authorizeTaskExecutionMutationPaths({ workspaceId }, ['value.txt']));    assert.throws(
+      () => writeLocalFile(state, {
+        projectId: project.id,
+        filePath: 'value.txt',
+        content: 'shared-escape-must-be-blocked\n',
+        __authorizeOwnedChanges: (paths: string[]) => executionSessions.authorizeTaskExecutionMutationPaths({ projectId: project.id }, paths),
+      }),
+      (error: any) => error?.payload?.code === 'TASK_MUTATION_WORKSPACE_REQUIRED',
+    );
+    assert.equal(fs.readFileSync(path.join(projectRoot, 'value.txt'), 'utf8'), sharedValueBefore);
+
     assert.throws(
       () => executionSessions.authorizeTaskExecutionMutationPaths({ workspaceId }, ['extra.txt']),
       (error: any) => error?.payload?.code === 'TASK_SCOPE_EXPANSION_REQUIRED',
@@ -268,7 +326,12 @@ test('task-bound mutation authorization requires active claimed scope and honors
       (error: any) => error?.payload?.code === 'TASK_MUTATION_ACTIVE_CLAIM_REQUIRED',
     );
   } finally {
+    fs.writeFileSync(path.join(projectRoot, 'value.txt'), sharedValueBefore, 'utf8');
     git(workspaceRoot, ['restore', '--staged', '--worktree', '--', 'extra.txt']);
+    const live = getTask(task.id);
+    if (live?.claim) saveTask({ ...live, claim: undefined, updatedAt: new Date().toISOString() });
+    const activeExecution = executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId);
+    if (activeExecution) executionSessions.cancelExecutionSession(activeExecution.id);
     cleanupSessionWorkspace(workspaceId);
   }
 });
@@ -324,29 +387,98 @@ test('claimed workspace commit and finalization keep the shared base untouched u
   assert.equal(fs.readFileSync(path.join(workspaceRoot, 'value.txt'), 'utf8'), 'implemented-in-workspace\n');
   assert.deepEqual(getGitStatus(state, { workspaceId, mode: 'compact' }).files.map((entry: any) => entry.path), ['value.txt']);
 
-  const committed = commitGitChanges(state, {
-    workspaceId,
-    message: '[DVF-ROOT-0001] test: workspace root isolation',
-    files: ['value.txt'],
-    stageAll: false,
-  });
-  assert.match(String(committed.commitHash || ''), /^[0-9a-f]{40}$/);
-  assert.equal(path.resolve(committed.root), path.resolve(workspaceRoot));
+  git(workspaceRoot, ['add', 'value.txt']);
+  git(workspaceRoot, ['commit', '-m', '[DVF-ROOT-0001] test: workspace root isolation']);
+  const committedHead = git(workspaceRoot, ['rev-parse', 'HEAD']);
+  assert.match(committedHead, /^[0-9a-f]{40}$/);  markClaimedExecutionCommitted(workspaceId, 'root-isolation-finalize');
+
   assert.equal(fs.readFileSync(path.join(projectRoot, 'value.txt'), 'utf8'), 'base-before-finalize\n', 'workspace commit must not mutate shared base before integration');
   const recovery = inspectWorkspaceRecovery(workspaceId);
   assert.equal(recovery.disposition, 'committed-not-integrated');
   assert.equal(recovery.dirtyFiles.length, 0);
   assert.equal(recovery.uniqueCommits.length, 1);
 
-  const finalized = finalizeTaskWorkspace(state, {
-    taskId: task.id,
-    workspaceId,
-    checks: [{ name: 'workspace-root-isolation', command: 'focused-regression', status: 'passed', summary: 'workspace root isolation regression passed' }],
+  const finalized = finalizeThroughContinuation(state, task.id, workspaceId, {
+    name: 'workspace-root-isolation',
+    command: 'focused-regression',
+    status: 'passed',
+    summary: 'workspace root isolation regression passed',
   });
   assert.equal(finalized.status, 'completed');
   assert.equal(fs.existsSync(workspaceRoot), false);
   assert.equal(fs.readFileSync(path.join(projectRoot, 'value.txt'), 'utf8').trim(), 'implemented-in-workspace');
   assert.equal(git(projectRoot, ['status', '--porcelain']), '');
+  assert.equal(getTask(task.id)?.status, 'done');
+});
+
+
+test('feature-target finalization updates only the declared task branch while develop stays untouched', () => {
+  resetSessionWorkspaceRuntimeForTests();
+  const projectRoot = createRepo('feature-finalize-flow', 'develop-before-feature-finalize\n');
+  const project = {
+    id: 'project-workspace-feature-finalize-flow',
+    name: 'Workspace Feature Finalize Flow',
+    repoUrl: 'https://example.com/workspace-feature-finalize-flow',
+    localPath: projectRoot,
+  };
+  createProject(project);
+  const targetBranch = 'feature/workspace-finalize-target';
+  const developBefore = git(projectRoot, ['rev-parse', 'develop']);
+  const now = new Date().toISOString();
+  const task = {
+    id: 'task-workspace-feature-finalize-flow',
+    displayId: 'DVF-ROOT-0002',
+    title: 'Workspace feature target finalization regression',
+    description: 'Proves task branch authority integrates without switching or mutating the shared develop checkout.',
+    projectId: project.id,
+    status: 'todo',
+    priority: 'high',
+    branch: targetBranch,
+    category: 'backend',
+    tags: [],
+    targetFiles: ['value.txt'],
+    checklist: [{ id: 'implemented', text: 'implemented', completed: true }],
+    verificationEvidence: [],
+    logs: [],
+    bugs: [],
+    images: [],
+    designImages: [],
+    createdAt: now,
+    updatedAt: now,
+  } as any;
+  saveTask(task);
+  const state = { projectsCache: [project], countersCache: {}, skillsRegistry: [] } as any;
+  const claimed = claimTaskForSession(task.id, {
+    sessionId: 'workspace-feature-finalize-flow-session',
+    ownerKind: 'chat',
+    ownerLabel: 'Feature target regression',
+  });
+  const workspaceId = claimed.claim.workspaceId;
+  const workspaceRoot = resolveProjectRoot(state, { workspaceId });
+  assert.equal(git(projectRoot, ['branch', '--show-current']), 'develop');
+  assert.equal(getSessionWorkspaceMetadataForRecovery(workspaceId)?.baseBranch, targetBranch);
+
+  writeLocalFile(state, {
+    workspaceId,
+    filePath: 'value.txt',
+    content: 'implemented-on-feature-target\n',
+  });
+  git(workspaceRoot, ['add', 'value.txt']);
+  git(workspaceRoot, ['commit', '-m', '[DVF-ROOT-0002] test: feature target isolation']);
+  assert.match(git(workspaceRoot, ['rev-parse', 'HEAD']), /^[0-9a-f]{40}$/);  markClaimedExecutionCommitted(workspaceId, 'feature-target-finalize');
+
+
+  const finalized = finalizeThroughContinuation(state, task.id, workspaceId, {
+    name: 'feature-target-isolation',
+    command: 'focused-regression',
+    status: 'passed',
+    summary: 'feature target isolation regression passed',
+  });
+  assert.equal(finalized.status, 'completed');
+  assert.equal(git(projectRoot, ['branch', '--show-current']), 'develop');
+  assert.equal(git(projectRoot, ['rev-parse', 'develop']), developBefore);
+  assert.equal(fs.readFileSync(path.join(projectRoot, 'value.txt'), 'utf8'), 'develop-before-feature-finalize\n');
+  assert.equal(git(projectRoot, ['show', `${targetBranch}:value.txt`]), 'implemented-on-feature-target');
   assert.equal(getTask(task.id)?.status, 'done');
 });
 

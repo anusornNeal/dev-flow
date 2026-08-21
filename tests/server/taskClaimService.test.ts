@@ -50,7 +50,7 @@ const claimProject = {
 };
 createProject(claimProject);
 
-function seedTask(id: string, targetFiles: string[], parentId?: string, displayId?: string) {
+function seedTask(id: string, targetFiles: string[], parentId?: string, displayId?: string, branch?: string) {
   const now = new Date().toISOString();
   saveTask({
     id,
@@ -60,6 +60,7 @@ function seedTask(id: string, targetFiles: string[], parentId?: string, displayI
     description: '',
     status: 'backlog',
     priority: 'medium',
+    branch,
     category: 'backend',
     tags: [],
     targetFiles,
@@ -193,6 +194,42 @@ test('task claims use the trailing card number for the visible worktree folder a
   assert.equal(path.basename(bsaWorkspace.root), '0057');
   assert.match(bsaWorkspace.workspaceId, /^ws_[a-f0-9]{16}$/);
   assert.equal(bsaWorkspace.branch, '0057');
+});
+
+test('task claim freezes the declared target branch without switching the shared checkout', () => {
+  const targetBranch = 'feature/task-branch-authority-test';
+  seedTask('task-branch-authority', ['src/BranchAuthority.ts'], undefined, 'DVF-0693', targetBranch);
+  const sharedBranchBefore = git(['branch', '--show-current']);
+  assert.notEqual(sharedBranchBefore, targetBranch);
+
+  const claimed = claims.claimTaskForSession('task-branch-authority', { sessionId: 'branch-authority-owner', ownerLabel: 'Chat Branch' });
+  const workspace = workspaces.resolveSessionWorkspace(claimed.claim.workspaceId);
+  assert.ok(workspace);
+  assert.equal(workspace.baseBranch, targetBranch);
+  assert.equal(workspace.baseRevision, git(['rev-parse', targetBranch]));
+  assert.equal(git(['branch', '--show-current']), sharedBranchBefore);
+});
+
+test('claim blocks a legacy task workspace whose frozen target disagrees with task branch authority', () => {
+  const displayId = 'DVF-0694';
+  const targetBranch = 'feature/task-branch-legacy-mismatch';
+  const sessionId = 'legacy-branch-authority-owner';
+  seedTask('task-branch-legacy-mismatch', ['src/BranchLegacy.ts'], undefined, displayId, targetBranch);
+  const legacy = workspaces.createOrReuseSessionWorkspace(claimProject, sessionId, { taskDisplayId: displayId } as any);
+  let unexpectedlyClaimed = false;
+  try {
+    assert.notEqual(legacy.baseBranch, targetBranch);
+    assert.throws(
+      () => {
+        claims.claimTaskForSession('task-branch-legacy-mismatch', { sessionId, ownerLabel: 'Chat Legacy' });
+        unexpectedlyClaimed = true;
+      },
+      (error: any) => error?.payload?.code === 'TASK_WORKSPACE_BRANCH_AUTHORITY_MISMATCH',
+    );
+  } finally {
+    if (unexpectedlyClaimed) claims.releaseTaskClaim('task-branch-legacy-mismatch', { sessionId, nextStatus: 'backlog' });
+    workspaces.cleanupSessionWorkspace(legacy.workspaceId);
+  }
 });
 
 test('same chat session claiming different cards receives isolated task-numbered workspaces', () => {

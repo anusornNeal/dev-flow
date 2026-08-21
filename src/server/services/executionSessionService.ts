@@ -7,6 +7,7 @@ import {
   getExecutionSessionById,
   listExecutionSessionEvidence,
   listExecutionSessionsForWorkspace,
+  queryExecutionSessions,
   markExpiredExecutionSessions,
   markExpiredExecutionSessionsForTaskWorkspace,
   replaceExecutionSessionEvidenceStaleness,
@@ -17,6 +18,7 @@ import {
   type ExecutionSessionRecord,
 } from '../repositories/executionSessionRepository.js';
 import { getTask, getTaskByIdentifier } from '../repositories/taskRepository.js';
+import { getProjects, normalizeProjectNameAlias, normalizeProjectRepoIdentity } from '../repositories/projectRepository.js';
 import { getFileRevision, resolveSafePath } from './localFileService.js';
 import { buildRepoAffectedInputIdentity, buildRepoEvidenceIdentity, getRepoRevisionForRoot } from './repoRevisionService.js';
 import { withDbTransaction } from '../../db/index.js';
@@ -628,9 +630,59 @@ function effectiveTaskClaimScope(task: any, workspaceId: string) {
   ].map(normalizeClaimScopePath).filter(Boolean));
 }
 
+function resolveTaskMutationProjectId(args: Record<string, any>) {
+  const directProjectId = String(args?.projectId || '').trim();
+  if (directProjectId) return directProjectId;
+  const projectName = normalizeProjectNameAlias(args?.projectName);
+  const repoIdentity = normalizeProjectRepoIdentity(args?.repo || args?.repoUrl);
+  const requestedLocalPath = String(args?.localPath || '').trim();
+  const localPathKey = requestedLocalPath ? path.resolve(requestedLocalPath).replace(/\\/g, '/').toLowerCase() : '';
+  const matches = getProjects().filter((project: any) => {
+    if (projectName && normalizeProjectNameAlias(project?.name) !== projectName) return false;
+    if (repoIdentity && normalizeProjectRepoIdentity(project?.repoUrl) !== repoIdentity) return false;
+    if (localPathKey) {
+      const projectPath = String(project?.localPath || '').trim();
+      if (!projectPath || path.resolve(projectPath).replace(/\\/g, '/').toLowerCase() !== localPathKey) return false;
+    }
+    return Boolean(projectName || repoIdentity || localPathKey);
+  });
+  return matches.length === 1 ? String(matches[0].id || '').trim() || null : null;
+}
+
+export function assertTaskMutationWorkspaceBinding(args: Record<string, any>) {
+  const workspaceId = String(args?.workspaceId || '').trim();
+  if (workspaceId) return null;
+  const capturedBinding = args?.__executionJobBinding && typeof args.__executionJobBinding === 'object'
+    ? args.__executionJobBinding as Record<string, unknown>
+    : null;
+  const capturedWorkspaceId = String(capturedBinding?.workspaceId || '').trim();
+  if (capturedWorkspaceId) {
+    throw taskMutationError(409, 'TASK_MUTATION_WORKSPACE_REQUIRED', 'Task-owned mutation lost its managed workspace binding and cannot fall back to the shared project checkout.', {
+      workspaceId: capturedWorkspaceId,
+      taskId: String(capturedBinding?.taskId || '').trim() || null,
+      executionSessionId: String(capturedBinding?.executionSessionId || '').trim() || null,
+    });
+  }
+  const projectId = resolveTaskMutationProjectId(args);
+  if (!projectId) return null;
+  const active = queryExecutionSessions({ projectId, status: 'active', limit: 100 }).sessions
+    .filter((entry) => Boolean(entry.taskId && entry.workspaceId));
+  if (active.length === 0) return null;
+  throw taskMutationError(409, 'TASK_MUTATION_WORKSPACE_REQUIRED', `Project '${projectId}' has active task execution authority; mutation must target the authoritative managed workspace instead of the shared checkout.`, {
+    projectId,
+    executionSessionIds: active.map((entry) => entry.id),
+    taskIds: [...new Set(active.map((entry) => entry.taskId).filter(Boolean))],
+    workspaceIds: [...new Set(active.map((entry) => entry.workspaceId).filter(Boolean))],
+    nextAction: 'Retry the mutation with the task claim workspaceId. Explicit project-root mutation is allowed only when no active task execution authority exists.',
+  });
+}
+
 export function getTaskExecutionMutationBinding(args: Record<string, any>) {
   const workspaceId = String(args?.workspaceId || '').trim();
-  if (!workspaceId) return null;
+  if (!workspaceId) {
+    assertTaskMutationWorkspaceBinding(args);
+    return null;
+  }
   const workspace = resolveSessionWorkspace(workspaceId);
   if (!workspace) {
     throw taskMutationError(404, 'TASK_MUTATION_WORKSPACE_NOT_FOUND', `Workspace '${workspaceId}' was not found for task-bound mutation.`);

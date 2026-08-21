@@ -381,6 +381,15 @@ function operationContinuation(
   };
 }
 
+function assertTaskFinalizationBranchAuthority(task: any, baseBranch: string, workspaceId: string) {
+  const taskBranch = String(task?.branch || '').trim();
+  if (!taskBranch || taskBranch === baseBranch) return;
+  throw createApiError(409, 'TASK_WORKSPACE_BRANCH_AUTHORITY_MISMATCH', `Task '${task.displayId || task.id}' targets '${taskBranch}', but finalization is frozen to '${baseBranch}'.`, {
+    affectedId: task.id,
+    details: { taskBranch, workspaceBaseBranch: baseBranch, workspaceId },
+  });
+}
+
 function freezeNewFinalizationOperation(task: any, workspaceId: string, submittedChecks: TaskWorkspaceFinalizationCheck[]) {
   const metadata = getSessionWorkspaceMetadataForRecovery(workspaceId);
   if (!metadata) throw createApiError(404, 'WORKSPACE_NOT_FOUND', `Workspace '${workspaceId}' was not found.`, { affectedId: workspaceId });
@@ -390,6 +399,8 @@ function freezeNewFinalizationOperation(task: any, workspaceId: string, submitte
       details: { taskProjectId: task.projectId, workspaceProjectId: metadata.projectId },
     });
   }
+  assertTaskFinalizationBranchAuthority(task, metadata.baseBranch, workspaceId);
+
   const inspection = inspectWorkspaceRecovery(workspaceId);
   if (inspection.dirtyFiles.length > 0) {
     return { blocked: { status: 'needs-recovery' as const, code: 'WORKSPACE_DIRTY' as const, inspection } };
@@ -457,7 +468,8 @@ function freezeDetachedIntegratedFinalizationOperation(
       affectedId: workspaceId,
     });
   }
-  const integration = detached.integration;
+  const integration = detached.integration;  assertTaskFinalizationBranchAuthority(task, detached.baseBranch, workspaceId);
+
   if (integration.workspaceId !== workspaceId
     || integration.sourceHead !== detached.sourceHead
     || integration.baseRevision !== detached.baseRevision
@@ -512,7 +524,8 @@ function isDetachedIntegratedOperation(operation: TaskFinalizationOperationRecor
   return operation?.verification?.detachedIntegrated === true;
 }
 
-function assertOperationStillBound(operation: TaskFinalizationOperationRecord, task: any, metadata: ReturnType<typeof getSessionWorkspaceMetadataForRecovery>) {
+function assertOperationStillBound(operation: TaskFinalizationOperationRecord, task: any, metadata: ReturnType<typeof getSessionWorkspaceMetadataForRecovery>) {  assertTaskFinalizationBranchAuthority(task, operation.baseBranch, operation.workspaceId);
+
   if (operation.taskId !== task.id || operation.projectId !== task.projectId) {
     throw createApiError(409, 'FINALIZATION_OPERATION_TASK_MISMATCH', 'Finalization operation is bound to another task/project.', {
       affectedId: operation.id,

@@ -124,6 +124,69 @@ function head(root: string) {
   return runGit(root, ['rev-parse', 'HEAD']).stdout;
 }
 
+function branchHead(root: string, branchName: string) {
+  const result = runGit(root, ['rev-parse', '--verify', `refs/heads/${branchName}`], { allowFailure: true });
+  if (result.status !== 0 || !result.stdout) {
+    throw createApiError(409, 'WORKSPACE_TARGET_BRANCH_MISSING', `Target branch '${branchName}' is unavailable for workspace integration.`, {
+      affectedId: branchName,
+    });
+  }
+  return result.stdout;
+}
+
+function checkedOutBranchRoots(root: string, branchName: string) {
+  const output = runGit(root, ['worktree', 'list', '--porcelain']).stdout;
+  const matches: string[] = [];
+  let worktreeRoot = '';
+  for (const line of output.split(/\r?\n/)) {
+    if (line.startsWith('worktree ')) worktreeRoot = line.slice('worktree '.length).trim();
+    else if (line === `branch refs/heads/${branchName}` && worktreeRoot) matches.push(path.resolve(worktreeRoot));
+  }
+  return matches;
+}
+
+function applyIntegratedHeadToTarget(workspace: SessionWorkspace, expectedBaseHead: string, integratedHead: string) {
+  const observedTargetHead = branchHead(workspace.projectRoot, workspace.baseBranch);
+  if (observedTargetHead !== expectedBaseHead) {
+    throw createApiError(409, 'WORKSPACE_BASE_CHANGED_DURING_INTEGRATION', `Target branch '${workspace.baseBranch}' moved while the isolated workspace was being integrated.`, {
+      affectedId: workspace.workspaceId,
+      details: { baseBranch: workspace.baseBranch, expectedHead: expectedBaseHead, currentHead: observedTargetHead },
+    });
+  }
+  if (branch(workspace.projectRoot) === workspace.baseBranch) {
+    if (mergeInProgress(workspace.projectRoot) || !clean(workspace.projectRoot) || head(workspace.projectRoot) !== expectedBaseHead) {
+      throw createApiError(409, 'WORKSPACE_BASE_CHANGED_DURING_INTEGRATION', 'Checked-out target branch changed or became dirty during integration.', {
+        affectedId: workspace.workspaceId,
+        details: { baseBranch: workspace.baseBranch, expectedHead: expectedBaseHead, currentHead: head(workspace.projectRoot) },
+      });
+    }
+    const fastForward = runGit(workspace.projectRoot, ['merge', '--ff-only', integratedHead], { allowFailure: true, timeoutMs: 60_000 });
+    if (fastForward.status !== 0) {
+      throw createApiError(409, 'WORKSPACE_INTEGRATION_FAILED', `Integrated workspace could not fast-forward target branch '${workspace.baseBranch}'.`, {
+        affectedId: workspace.workspaceId,
+        details: { stderr: fastForward.stderr, integratedHead, expectedBaseHead },
+      });
+    }
+    return head(workspace.projectRoot);
+  }
+  const checkedOut = checkedOutBranchRoots(workspace.projectRoot, workspace.baseBranch);
+  if (checkedOut.length > 0) {
+    throw createApiError(409, 'WORKSPACE_TARGET_BRANCH_CHECKED_OUT_ELSEWHERE', `Target branch '${workspace.baseBranch}' is checked out in another worktree and cannot be updated behind that working tree.`, {
+      affectedId: workspace.workspaceId,
+      details: { baseBranch: workspace.baseBranch, worktreeRoots: checkedOut },
+    });
+  }
+  const updated = runGit(workspace.projectRoot, ['update-ref', `refs/heads/${workspace.baseBranch}`, integratedHead, expectedBaseHead], { allowFailure: true });
+  if (updated.status !== 0) {
+    throw createApiError(409, 'WORKSPACE_TARGET_BRANCH_UPDATE_FAILED', `Target branch '${workspace.baseBranch}' changed before the atomic ref update could complete.`, {
+      affectedId: workspace.workspaceId,
+      details: { stderr: updated.stderr, expectedBaseHead, integratedHead },
+    });
+  }
+  return branchHead(workspace.projectRoot, workspace.baseBranch);
+}
+
+
 function branch(root: string) {
   return runGit(root, ['branch', '--show-current']).stdout || 'HEAD';
 }
@@ -240,18 +303,18 @@ function resolveWorkspaceForIntegration(workspaceId: string) {
   throw createApiError(404, 'WORKSPACE_NOT_FOUND', `Workspace '${workspaceId}' was not found.`, { affectedId: workspaceId });
 }
 
-function validateIntegrationPreconditions(workspace: SessionWorkspace) {
+function validateIntegrationPreconditions(workspace: SessionWorkspace, task?: WorkspaceIntegrationTaskContext) {
   if (!clean(workspace.root)) {
     throw createApiError(409, 'WORKSPACE_SOURCE_DIRTY', 'Source workspace is dirty. Commit or discard workspace changes before integration.', { affectedId: workspace.workspaceId });
   }
   if (!clean(workspace.projectRoot)) {
     throw createApiError(409, 'WORKSPACE_BASE_DIRTY', 'Base workspace is dirty. Integration is blocked before mutation.', { affectedId: workspace.workspaceId });
   }
-  const baseBranch = branch(workspace.projectRoot);
-  if (baseBranch !== workspace.baseBranch) {
-    throw createApiError(409, 'WORKSPACE_BASE_BRANCH_MISMATCH', `Base workspace is on '${baseBranch}', expected '${workspace.baseBranch}'.`, {
+  const taskBranch = String(task?.branch || '').trim();
+  if (taskBranch && taskBranch !== workspace.baseBranch) {
+    throw createApiError(409, 'TASK_WORKSPACE_BRANCH_AUTHORITY_MISMATCH', `Task targets '${taskBranch}', but workspace '${workspace.workspaceId}' is frozen to '${workspace.baseBranch}'.`, {
       affectedId: workspace.workspaceId,
-      details: { expected: workspace.baseBranch, actual: baseBranch },
+      details: { taskBranch, workspaceBaseBranch: workspace.baseBranch },
     });
   }
   const sourceBranch = branch(workspace.root);
@@ -261,7 +324,7 @@ function validateIntegrationPreconditions(workspace: SessionWorkspace) {
       details: { expected: workspace.branch, actual: sourceBranch },
     });
   }
-  const baseHead = head(workspace.projectRoot);
+  const baseHead = branchHead(workspace.projectRoot, workspace.baseBranch);
   const sourceHead = head(workspace.root);
   if (!isAncestor(workspace.projectRoot, workspace.baseRevision, baseHead)) {
     throw createApiError(409, 'WORKSPACE_BASE_REWRITTEN', 'Base history no longer descends from the workspace base revision. Rebase/recreate the workspace deliberately before integration.', {
@@ -286,7 +349,9 @@ export type WorkspaceIntegrationTaskContext = {
   category?: string;
   type?: string;
   projectId?: string;
+  branch?: string;
 };
+
 
 export type WorkspaceIntegrationOptions = {
   task?: WorkspaceIntegrationTaskContext;
@@ -431,13 +496,7 @@ export function reconstructRecordedWorkspaceIntegration(args: {
   strategy: GitIntegrationStrategy;
 }) : WorkspaceIntegrationSuccess {
   const projectRoot = path.resolve(args.projectRoot);
-  const baseHead = head(projectRoot);
-  if (branch(projectRoot) !== args.baseBranch) {
-    throw createApiError(409, 'FINALIZATION_BASE_BRANCH_MISMATCH', `Recorded finalization target '${args.baseBranch}' is not the active base branch.`, {
-      affectedId: args.workspaceId,
-      details: { expected: args.baseBranch, actual: branch(projectRoot) },
-    });
-  }
+  const baseHead = branchHead(projectRoot, args.baseBranch);
   const integratedExactly = isAncestor(projectRoot, args.sourceHead, baseHead);
   const patchEquivalent = !integratedExactly && patchEquivalentToBase(projectRoot, baseHead, args.sourceHead);
   if (!integratedExactly && !patchEquivalent) {
@@ -474,7 +533,7 @@ export function integrateWorkspaceCommits(workspaceId: string, options: Workspac
   integrationMetrics.attempts += 1;
   const workspace = resolveWorkspaceForIntegration(workspaceId);
   const policy = resolveProjectGitWorkflowPolicy({ gitWorkflowPolicy: workspace.gitWorkflowPolicy } as any);
-  const { baseHead: baseHeadBefore, sourceHead } = validateIntegrationPreconditions(workspace);
+  const { baseHead: baseHeadBefore, sourceHead } = validateIntegrationPreconditions(workspace, options.task);
   const commits = sourceCommits(workspace.projectRoot, workspace.baseRevision, sourceHead);
   validateTaskCommitSubjects(workspace, commits, options.task);
   const files = changedFiles(workspace.projectRoot, workspace.baseRevision, sourceHead);
@@ -527,6 +586,12 @@ export function integrateWorkspaceCommits(workspaceId: string, options: Workspac
   }
 
   if (policy.integrationStrategy === 'merge') {
+    if (branch(workspace.projectRoot) !== workspace.baseBranch) {
+      throw createApiError(409, 'WORKSPACE_MERGE_TARGET_NOT_CHECKED_OUT', `Merge-policy integration for target '${workspace.baseBranch}' is blocked rather than mutating the currently checked-out '${branch(workspace.projectRoot)}' branch.`, {
+        affectedId: workspace.workspaceId,
+        details: { targetBranch: workspace.baseBranch, checkedOutBranch: branch(workspace.projectRoot), safeFailure: true },
+      });
+    }
     return integrateWorkspaceWithMergePolicy(workspace, baseHeadBefore, sourceHead, commits, files, policy.mergeMessageTemplate, options.task);
   }
 
@@ -587,33 +652,13 @@ export function integrateWorkspaceCommits(workspaceId: string, options: Workspac
     }
   }
 
-  const currentBaseHead = head(workspace.projectRoot);
-  if (mergeInProgress(workspace.projectRoot) || !clean(workspace.projectRoot) || branch(workspace.projectRoot) !== workspace.baseBranch || currentBaseHead !== baseHeadBefore) {
+  let baseHeadAfter: string;
+  try {
+    baseHeadAfter = applyIntegratedHeadToTarget(workspace, baseHeadBefore, integratedHead);
+  } catch (error) {
     if (integratedHead !== sourceHead) restoreSourceHead(workspace, sourceHead);
-    throw createApiError(409, 'WORKSPACE_BASE_CHANGED_DURING_INTEGRATION', 'Shared base changed while the isolated workspace was being rebased. Retry from the latest clean base.', {
-      affectedId: workspace.workspaceId,
-      details: { expectedHead: baseHeadBefore, currentHead: currentBaseHead },
-    });
+    throw error;
   }
-
-  const fastForward = runGit(workspace.projectRoot, ['merge', '--ff-only', integratedHead], { allowFailure: true, timeoutMs: 60_000 });
-  if (fastForward.status !== 0) {
-    const restoredHead = head(workspace.projectRoot);
-    const restoredClean = clean(workspace.projectRoot);
-    if (integratedHead !== sourceHead) restoreSourceHead(workspace, sourceHead);
-    if (restoredHead !== baseHeadBefore || !restoredClean) {
-      throw createApiError(500, 'WORKSPACE_BASE_RECOVERY_FAILED', 'Failed fast-forward integration did not leave the shared base at its recorded clean state.', {
-        affectedId: workspace.workspaceId,
-        details: { expectedHead: baseHeadBefore, currentHead: restoredHead },
-      });
-    }
-    throw createApiError(409, 'WORKSPACE_INTEGRATION_FAILED', 'Rebased workspace could not be applied to the shared base with fast-forward only.', {
-      affectedId: workspace.workspaceId,
-      details: { stderr: fastForward.stderr, sourceHead, integratedHead, baseHeadBefore },
-    });
-  }
-
-  const baseHeadAfter = head(workspace.projectRoot);
   clearIntegrationState(workspace.workspaceId);
   markSessionWorkspaceIntegrated(workspace.workspaceId, baseHeadAfter);
   integrationMetrics.successes += 1;

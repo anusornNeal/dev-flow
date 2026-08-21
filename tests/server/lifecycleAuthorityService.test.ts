@@ -148,7 +148,7 @@ test('parent in-progress due active child is a valid presentation projection wit
   assert.equal(snapshot.softDrift.some((entry: any) => entry.code === 'TASK_STATUS_PROJECTION_DRIFT'), false);
 });
 
-test('incomplete sequential verification is non-commit-ready and complete current verification becomes commit-ready', () => {
+test('verification quality and lifecycle stage are debt, not commit authority', () => {
   const id = seedTask('verification', 'src/E.ts');
   const claimed = claim(id, 'authority-verification');
   const binding = execution.getTaskExecutionMutationBinding({ workspaceId: claimed.claim.workspaceId })!;
@@ -176,29 +176,29 @@ test('incomplete sequential verification is non-commit-ready and complete curren
   });
 
   let snapshot = authority.computeLifecycleAuthoritySnapshot(id, { workspaceId: claimed.claim.workspaceId });
+  assert.equal(snapshot.execution.current?.lifecycleStage, 'implementing');
   assert.equal(snapshot.verification.batch?.status, 'pending');
   assert.equal(snapshot.verification.authoritative, false);
-  assert.equal(snapshot.commit.ready, false);
-  assert.ok(snapshot.commit.reasonCodes.includes('EXECUTION_VERIFICATION_BATCH_INCOMPLETE'));
+  assert.equal(snapshot.commit.ready, true);
+  assert.equal(snapshot.commit.reasonCodes.includes('EXECUTION_NOT_COMMIT_READY'), false);
+  assert.equal(snapshot.commit.reasonCodes.includes('EXECUTION_VERIFICATION_NOT_AUTHORITATIVE'), false);
+  assert.ok(snapshot.guardrails.debts.some((entry: any) => entry.code === 'EXECUTION_VERIFICATION_BATCH_INCOMPLETE'));
 
   execution.recordExecutionVerificationBatchResult(binding.session.id, {
     repoRoot: binding.workspace.root,
     batchId: 'authority-batch',
     requiredChecks,
     checkId: 'typecheck',
-    status: 'passed',
+    status: 'failed',
     captured,
     memberCandidate: { candidateId: 'authority-typecheck', repoRevision: captured.repoRevision, executionKey: 'authority-typecheck-key' },
   });
-  execution.recordExecutionLifecycleTransition(binding.session.id, {
-    toStage: 'verifying',
-    reasonCode: 'authority-fixture-verified',
-    evidence: { id: 'authority-fixture-verified', kind: 'verification', status: 'completed' },
-  });
   snapshot = authority.computeLifecycleAuthoritySnapshot(id, { workspaceId: claimed.claim.workspaceId });
-  assert.equal(snapshot.verification.batch?.status, 'complete');
-  assert.equal(snapshot.verification.authoritative, true);
+  assert.equal(snapshot.execution.current?.lifecycleStage, 'implementing');
+  assert.equal(snapshot.verification.batch?.status, 'failed');
+  assert.equal(snapshot.verification.authoritative, false);
   assert.equal(snapshot.commit.ready, true);
+  assert.ok(snapshot.guardrails.debts.some((entry: any) => entry.code === 'EXECUTION_VERIFICATION_BATCH_FAILED'));
 });
 
 test('multiple active executions fail closed without timestamp-based authority selection', () => {

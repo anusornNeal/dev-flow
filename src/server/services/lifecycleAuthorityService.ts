@@ -18,6 +18,11 @@ import {
   getSessionWorkspaceMetadataForRecovery,
   type SessionWorkspace,
 } from './sessionWorkspaceService.js';
+import {
+  createLifecycleGuardrailAssessment,
+  type LifecycleGuardrailIssue,
+  type LifecycleGuardrailOperation,
+} from './lifecycleGuardrailModel.js';
 
 /**
  * Read-only lifecycle truth model. It never reconciles, rotates, expires, touches, or writes
@@ -33,6 +38,29 @@ export type LifecycleAuthorityReason = {
   message: string;
   details?: unknown;
 };
+
+const AUTHORITY_SAFETY_OPERATIONS: LifecycleGuardrailOperation[] = [
+  'mutation', 'verification', 'commit', 'integration', 'finalization', 'status', 'restart', 'cleanup',
+];
+const PENDING_OPERATION_SAFETY_OPERATIONS: LifecycleGuardrailOperation[] = [
+  'mutation', 'commit', 'integration', 'finalization', 'status', 'restart', 'cleanup',
+];
+
+function authorityHardBlocker(entry: LifecycleAuthorityReason): LifecycleGuardrailIssue {
+  return { ...entry, category: 'ownership', appliesTo: AUTHORITY_SAFETY_OPERATIONS };
+}
+
+function authorityWarning(entry: LifecycleAuthorityReason): LifecycleGuardrailIssue {
+  return {
+    ...entry,
+    category: entry.code.includes('STATUS') || entry.code.includes('DONE') ? 'workflow' : 'metadata',
+  };
+}
+
+function verificationDebt(code: string, message: string, details?: unknown): LifecycleGuardrailIssue {
+  return { code, category: 'verification', message, ...(details === undefined ? {} : { details }) };
+}
+
 
 function clean(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
@@ -366,17 +394,12 @@ export function computeLifecycleAuthoritySnapshot(
   const commitReasonCodes: string[] = [];
   if (!ownsAuthority) commitReasonCodes.push('LIFECYCLE_AUTHORITY_NOT_OWNED');
   if (pendingOperations.length > 0) commitReasonCodes.push('TASK_PENDING_OPERATIONS');
-  if (verification.batch?.status === 'pending') commitReasonCodes.push('EXECUTION_VERIFICATION_BATCH_INCOMPLETE');
-  if (verification.batch?.status === 'failed') commitReasonCodes.push('EXECUTION_VERIFICATION_BATCH_FAILED');
-  if (verification.batch?.status === 'stale') commitReasonCodes.push('EXECUTION_VERIFICATION_BATCH_STALE');
+  if (verification.errorCode) commitReasonCodes.push(verification.errorCode);
   if (verification.ownedChanges.length === 0) commitReasonCodes.push('TASK_COMMIT_NO_OWNED_CHANGES');
-  if (!verification.authoritative) commitReasonCodes.push('EXECUTION_VERIFICATION_NOT_AUTHORITATIVE');
-  if (current && current.lifecycle.stage !== 'verifying') commitReasonCodes.push('EXECUTION_NOT_COMMIT_READY');
   const commitReady = Boolean(current
     && ownsAuthority
     && pendingOperations.length === 0
-    && verification.authoritative
-    && current.lifecycle.stage === 'verifying'
+    && !verification.errorCode
     && verification.ownedChanges.length > 0
     && commitReasonCodes.length === 0);
 
@@ -388,6 +411,56 @@ export function computeLifecycleAuthoritySnapshot(
     && hardBlockers.length === 0;
 
   let classification: LifecycleAuthorityClassification = 'healthy';
+  const guardrailDebts: LifecycleGuardrailIssue[] = [];
+  if (verification.batch?.status === 'pending') {
+    guardrailDebts.push(verificationDebt('EXECUTION_VERIFICATION_BATCH_INCOMPLETE', 'Sequential verification is incomplete.', {
+      batchId: verification.batch.batchId,
+      pending: verification.batch.pending,
+    }));
+  } else if (verification.batch?.status === 'failed') {
+    guardrailDebts.push(verificationDebt('EXECUTION_VERIFICATION_BATCH_FAILED', 'Sequential verification contains a failed required check.', {
+      batchId: verification.batch.batchId,
+      failed: verification.batch.failed,
+    }));
+  } else if (verification.batch?.status === 'stale') {
+    guardrailDebts.push(verificationDebt('EXECUTION_VERIFICATION_BATCH_STALE', 'Sequential verification is stale.', {
+      batchId: verification.batch.batchId,
+      stale: verification.batch.stale,
+    }));
+  }
+  if (current && verification.fresh === false) {
+    guardrailDebts.push(verificationDebt('EXECUTION_VERIFICATION_NOT_FRESH', 'Verification evidence is stale for the current owned content.'));
+  } else if (current && verification.fresh === null && !verification.errorCode) {
+    guardrailDebts.push(verificationDebt('EXECUTION_VERIFICATION_EVIDENCE_MISSING', 'No current authoritative verification evidence is recorded.'));
+  }
+
+  const guardrailHardBlockers: LifecycleGuardrailIssue[] = hardBlockers.map(authorityHardBlocker);
+  if (pendingOperations.length > 0) {
+    guardrailHardBlockers.push({
+      code: 'TASK_PENDING_OPERATIONS',
+      category: 'concurrency',
+      message: 'A live durable operation may race a conflicting state-changing operation.',
+      appliesTo: PENDING_OPERATION_SAFETY_OPERATIONS,
+      details: { operationIds: pendingOperations.map((entry) => entry.operationId) },
+    });
+  }
+  if (verification.errorCode) {
+    guardrailHardBlockers.push({
+      code: verification.errorCode,
+      category: 'ownership',
+      message: 'Task-owned commit scope cannot be proven from the selected workspace.',
+      appliesTo: ['commit'],
+    });
+  }
+  const guardrails = createLifecycleGuardrailAssessment({
+    hardBlockers: guardrailHardBlockers,
+    debts: guardrailDebts,
+    warnings: softDrift
+      .filter((entry) => entry.code !== 'TASK_PENDING_OPERATIONS' && !entry.code.startsWith('EXECUTION_VERIFICATION_') && entry.code !== verification.errorCode)
+      .map(authorityWarning),
+  });
+
+
   if (hardBlockers.some((entry) => entry.code === 'MULTIPLE_ACTIVE_EXECUTIONS' || entry.code === 'TASK_ACTIVE_ACROSS_WORKSPACES' || entry.code === 'WORKSPACE_ACTIVE_TASK_CONFLICT')) {
     classification = 'ambiguous';
   } else if (hardBlockers.length > 0) {
@@ -469,6 +542,7 @@ export function computeLifecycleAuthoritySnapshot(
     },
     hardBlockers,
     softDrift,
+    guardrails,
     info,
     classification,
   };

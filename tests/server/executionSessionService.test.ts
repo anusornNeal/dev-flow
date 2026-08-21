@@ -26,6 +26,7 @@ git(['commit', '-m', 'initial']);
 const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
 executeAllMigrations();
 const sessions = await import('../../src/server/services/executionSessionService.js');
+const reconciliation = await import('../../src/server/services/executionLifecycleReconciliationService.js');
 const repository = await import('../../src/server/repositories/executionSessionRepository.js');
 
 test('persists logical execution-session identity without storing the local repo path', () => {
@@ -193,6 +194,38 @@ test('tracks observable lifecycle stages independently from terminal session sta
   sessions.completeExecutionSession(created.id);
   assert.equal(repository.getExecutionSessionById(created.id)?.status, 'completed');
   assert.equal(repository.getExecutionSessionById(created.id)?.lifecycle.stage, 'finalized');
+});
+
+test('direct lifecycle reconciliation records observed state without synthetic intermediate transitions', () => {
+  const created = sessions.createExecutionSession({ projectId: 'project-session', workspaceId: 'ws_lifecycle_direct', repoRoot });
+  const transitionsBefore = repository.listExecutionSessionEvidence(created.id).filter((entry) => entry.kind === 'lifecycle-transition').length;
+  const input = {
+    toStage: 'committed' as const,
+    reasonCode: 'git-commit-observed',
+    evidence: { id: 'direct-commit-1', kind: 'git-commit', status: 'completed' as const, operationId: 'op-direct-commit-1' },
+  };
+  const first = reconciliation.reconcileExecutionLifecycleStage(created.id, input);
+  const retry = reconciliation.reconcileExecutionLifecycleStage(created.id, input);
+
+  assert.equal(first.changed, true);
+  assert.equal(first.idempotent, false);
+  assert.equal(retry.changed, false);
+  assert.equal(retry.idempotent, true);
+  assert.equal(repository.getExecutionSessionById(created.id)?.lifecycle.stage, 'committed');
+  const transitions = repository.listExecutionSessionEvidence(created.id).filter((entry) => entry.kind === 'lifecycle-transition');
+  assert.equal(transitions.length, transitionsBefore + 1);
+  const direct = transitions.find((entry) => entry.metadata?.directReconciliation === true);
+  assert.ok(direct);
+  assert.equal(direct.metadata?.fromStage, 'created');
+  assert.equal(direct.metadata?.toStage, 'committed');
+  assert.equal(direct.metadata?.skippedStageValidation, true);
+  assert.equal(transitions.some((entry) => ['context-ready', 'implementing', 'verifying'].includes(String(entry.metadata?.toStage))), false);
+
+  assert.throws(() => reconciliation.reconcileExecutionLifecycleStage(created.id, {
+    ...input,
+    toStage: 'finalized',
+    reasonCode: 'conflicting-observation',
+  }), (error: any) => error?.code === 'EXECUTION_LIFECYCLE_IDEMPOTENCY_CONFLICT');
 });
 
 test('lifecycle retries are idempotent and invalid or in-flight transitions fail closed', () => {

@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { DEVFLOW_PROJECT_INSTRUCTIONS_MAX_BYTES, interpolate, isAllowedPromptSkillId, isPromptValuePresent, listPromptSectionsForWorkspace, readPromptSectionForWorkspace, renderPromptTemplate, resolvePromptSectionId, writePromptOverrideForWorkspace, deletePromptOverrideForWorkspace, type PromptRenderContext } from '../src/server/services/promptTemplateService';
 import { getProjectRulesContext } from '../src/server/services/projectRulesService';
-import { renderTaskPrompt } from '../src/server/services/taskService';
+import { renderCodexTaskPrompt, renderTaskPrompt } from '../src/server/services/taskService';
 import { BUG_FIX_PROMPT_VARIANTS, buildBugFixPrompt } from '../src/lib/bugFixPromptTemplates';
 
 console.log('[verify] Testing prompt template interpolation with production-shaped context...');
@@ -312,6 +312,88 @@ createProject({
   localPath: fixtureLocalPath,
   createdAt: new Date().toISOString(),
 });
+const codexIsolationRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-codex-isolation-'));
+const codexProjectId = `project-codex-${promptFixtureSuffix}`;
+fs.mkdirSync(path.join(codexIsolationRoot, '.devflow', 'prompt-overrides'), { recursive: true });
+fs.writeFileSync(path.join(codexIsolationRoot, '.devflow', 'agents.md'), 'MUST-NOT-INJECT-CODEX-AGENTS', 'utf8');
+fs.writeFileSync(path.join(codexIsolationRoot, '.devflow', 'prompt-overrides', 'prompt.codex-header.md'), 'MUST-NOT-INJECT-CODEX-OVERRIDE', 'utf8');
+createProject({
+  id: codexProjectId,
+  name: 'Codex prompt fixture project',
+  repoUrl: 'https://github.com/anusornNeal/dev-flow',
+  localPath: codexIsolationRoot,
+  createdAt: new Date().toISOString(),
+});
+const richCodexTask = {
+  id: `task-codex-rich-${promptFixtureSuffix}`,
+  displayId: `DVF-CODEX-${promptFixtureSuffix}`,
+  projectId: codexProjectId,
+  title: 'Autonomous Codex prompt fixture',
+  status: 'todo',
+  priority: 'high',
+  description: 'Implement the copied card without a live DevFlow execution dependency.',
+  reasoning: 'Codex should receive complete implementation context directly.',
+  acceptanceCriteria: 'The dedicated handoff is deterministic and autonomous.',
+  verification: 'Run focused prompt contract checks and typecheck.',
+  checklist: [
+    { id: 'one', text: 'Carry card context into the prompt', completed: true },
+    { id: 'two', text: 'Keep board status synchronization best effort', completed: false },
+  ],
+  targetFiles: ['src/server/routes/taskReadRoutes.ts', 'src/server/services/taskService.ts'],
+  repoContext: 'Do not weaken the default managed execution pipeline.',
+  specUrl: 'https://example.test/spec/codex-handoff',
+  sourceUrl: 'https://example.test/source/codex-handoff',
+  jiraKey: 'QCA-9999',
+  branch: '',
+  agent: 'Codex',
+  model: '',
+  effort: '',
+  images: [{ id: 'img-rich', filename: 'handoff.png', url: '/api/static/images/handoff.png', absolutePath: 'C:/tmp/handoff.png', createdAt: new Date().toISOString() }],
+  logs: [],
+};
+const richCodexState = { _testTasks: [richCodexTask] } as any;
+saveTask(richCodexTask as any);
+const richCodexPrompt = renderCodexTaskPrompt(richCodexState, richCodexTask.id).renderResult.content;
+assert.ok(richCodexPrompt.includes('# Codex Autonomous Task Handoff'));
+assert.ok(richCodexPrompt.includes(richCodexTask.displayId));
+assert.ok(richCodexPrompt.includes(richCodexTask.id));
+assert.ok(richCodexPrompt.includes(richCodexTask.title));
+assert.ok(richCodexPrompt.includes(richCodexTask.description));
+assert.ok(richCodexPrompt.includes(richCodexTask.reasoning));
+assert.ok(richCodexPrompt.includes(richCodexTask.acceptanceCriteria));
+assert.ok(richCodexPrompt.includes('[x] Carry card context into the prompt'));
+assert.ok(richCodexPrompt.includes('[ ] Keep board status synchronization best effort'));
+assert.ok(richCodexPrompt.includes(richCodexTask.verification));
+assert.ok(richCodexPrompt.includes('src/server/routes/taskReadRoutes.ts'));
+assert.ok(richCodexPrompt.includes(richCodexTask.repoContext));
+assert.ok(richCodexPrompt.includes(richCodexTask.sourceUrl));
+assert.ok(richCodexPrompt.includes(richCodexTask.specUrl));
+assert.ok(richCodexPrompt.includes('handoff.png'));
+assert.ok(richCodexPrompt.includes('update_external_task_status'));
+assert.ok(richCodexPrompt.includes('best-effort'));
+assert.ok(richCodexPrompt.includes('not a blocking state machine'));
+assert.ok(richCodexPrompt.includes('missing, disconnected, or fails'));
+assert.ok(richCodexPrompt.includes('native Git tooling'));
+assert.ok(richCodexPrompt.includes('live DevFlow connection is not required'));
+for (const forbidden of [
+  'get_task',
+  'claim_task',
+  'prepare_session_workspace',
+  'commit_task_owned_changes',
+  'finalize_task_workspace',
+  'preview-run-id',
+  'managed workspace',
+  'verification freshness',
+  'MUST-NOT-INJECT-CODEX-AGENTS',
+  'MUST-NOT-INJECT-CODEX-OVERRIDE',
+  '## DevFlow Project-Local Instructions',
+  '.devflow/agents.md',
+]) {
+  assert.equal(richCodexPrompt.includes(forbidden), false, `Codex prompt must omit managed intent: ${forbidden}`);
+}
+assert.equal(renderCodexTaskPrompt(richCodexState, richCodexTask.id).renderResult.content, richCodexPrompt, 'Codex prompt must be deterministic for unchanged card data');
+fs.rmSync(codexIsolationRoot, { recursive: true, force: true });
+
 const sparseState = {
   _testTasks: [{
     id: 'task-sparse',
@@ -343,6 +425,14 @@ const sparseState = {
 sparseState._testTasks.forEach(t => saveTask(t)); const taskPrompt = renderTaskPrompt(sparseState, 'task-sparse').renderResult.content;
 assert.ok(!taskPrompt.includes('(none)'));
 assert.ok(!taskPrompt.includes('Attached Images API'));
+const sparseCodexPrompt = renderCodexTaskPrompt(sparseState, 'task-sparse').renderResult.content;
+assert.ok(sparseCodexPrompt.includes('Sparse Prompt Task'));
+assert.ok(!sparseCodexPrompt.includes('(none)'));
+assert.ok(!sparseCodexPrompt.includes('## Reasoning'));
+assert.ok(!sparseCodexPrompt.includes('## Acceptance criteria'));
+assert.ok(!sparseCodexPrompt.includes('## Checklist'));
+assert.ok(!sparseCodexPrompt.includes('## Target files'));
+assert.ok(!sparseCodexPrompt.includes('preview-run-id'));
 
 const imageState = {
   _testTasks: [{
@@ -432,6 +522,13 @@ assert.deepEqual(promptPipeline.default, [
 assert.ok(promptPipeline.default.every((id: string) => id.startsWith('prompt.')));
 assert.equal(promptPipeline.default.includes('brainstorming-guidance'), false);
 assert.equal(promptPipeline.default.includes('ui-ux-guidance'), false);
+assert.deepEqual(promptPipeline.codex, [
+  'prompt.codex-header',
+  'prompt.codex-task-context',
+  'prompt.codex-execution',
+  'prompt.codex-completion',
+]);
+assert.ok(promptPipeline.codex.every((id: string) => id.startsWith('prompt.codex-')));
 
 
 // Project-local overrides remain supported for canonical pipeline sections.

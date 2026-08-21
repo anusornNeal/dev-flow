@@ -14,8 +14,7 @@ import {
 } from '../services/promptTemplateService';
 import { getDevFlowAppRoot } from '../../lib/devFlowPaths';
 import { getProjectRulesContext } from '../services/projectRulesService';
-import { getActiveRunForTask, getLatestAgentRunForTask } from '../repositories/agentRunRepository';
-import { getAgentTaskContext, renderTaskPrompt } from '../services/taskService';
+import { getAgentTaskContext, renderCodexTaskPrompt } from '../services/taskService';
 
 type ProjectIdentifier = {
   projectId?: string;
@@ -47,14 +46,12 @@ export function registerPromptOverrideRoutes(app: express.Express, deps: ApiRout
       const context = getAgentTaskContext(deps.state, req.params.id, includeLogs);
       if (!context) return res.status(404).json({ error: 'Task not found' });
 
-      const activeRun = getActiveRunForTask(context.task.id) || getLatestAgentRunForTask(context.task.id);
-      const runId = activeRun?.id || 'preview-run-id';
-      const renderResult = renderTaskPrompt(deps.state, context.task.id, { runId, includeLogs }).renderResult;
+      const renderResult = renderCodexTaskPrompt(deps.state, context.task.id).renderResult;
       return res.json({
         content: renderResult.content,
         taskId: context.task.id,
         displayId: context.task.displayId,
-        runId,
+        pipelineId: 'codex',
         usedSkills: renderResult.usedSkills || [],
       });
     } catch (error) {

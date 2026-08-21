@@ -26,7 +26,9 @@ const TASK_COLUMNS = [
   'acceptanceCriteria',
   'verification',
   'repoContext',
+  'specUrl',
   'jiraKey',
+  'sourceUrl',
   'repo',
   'createdAt',
   'updatedAt',
@@ -63,7 +65,9 @@ const TASK_UPSERT_SQL = `
     acceptanceCriteria = excluded.acceptanceCriteria,
     verification = excluded.verification,
     repoContext = excluded.repoContext,
+    specUrl = excluded.specUrl,
     jiraKey = excluded.jiraKey,
+    sourceUrl = excluded.sourceUrl,
     repo = excluded.repo,
     createdAt = COALESCE(tasks.createdAt, excluded.createdAt),
     updatedAt = excluded.updatedAt,
@@ -89,7 +93,7 @@ export class StaleTaskUpdateError extends Error {
 let categoryColumnEnsured = false;
 let bugsColumnEnsured = false;
 let workflowEvidenceColumnsEnsured = false;
-let archiveColumnEnsured = false;
+let archiveColumnEnsured = false;let referenceColumnsEnsured = false;
 const DISPLAY_ID_COUNTER_MAX = 999999;
 
 function isSafeDisplayIdCounter(value: number) {
@@ -210,11 +214,24 @@ function ensureTaskArchiveColumn() {
   archiveColumnEnsured = true;
 }
 
+function ensureTaskReferenceColumns() {
+  if (referenceColumnsEnsured) return;
+  const tableInfo = db.pragma('table_info(tasks)') as Array<{ name: string }>;
+  const columns = new Set(tableInfo.map((column) => column.name));
+  if (!columns.has('specUrl')) {
+    db.prepare('ALTER TABLE tasks ADD COLUMN specUrl TEXT').run();
+  }
+  if (!columns.has('sourceUrl')) {
+    db.prepare('ALTER TABLE tasks ADD COLUMN sourceUrl TEXT').run();
+  }
+  referenceColumnsEnsured = true;
+}
+
 function ensureTaskColumns() {
   ensureTaskCategoryColumn();
   ensureTaskBugsColumn();
   ensureTaskWorkflowEvidenceColumns();
-  ensureTaskArchiveColumn();
+  ensureTaskArchiveColumn();  ensureTaskReferenceColumns();
 }
 
 export function loadCounters(state: AppState) {
@@ -581,7 +598,9 @@ function serializeTaskForRow(item: any) {
     item.acceptanceCriteria,
     item.verification,
     item.repoContext,
+    item.specUrl,
     item.jiraKey,
+    item.sourceUrl,
     item.repo,
     item.createdAt,
     item.updatedAt,

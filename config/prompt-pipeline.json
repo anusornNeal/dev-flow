@@ -4,5 +4,11 @@
     "prompt.task-context",
     "prompt.execution-rules",
     "prompt.completion-contract"
+  ],
+  "codex": [
+    "prompt.codex-header",
+    "prompt.codex-task-context",
+    "prompt.codex-execution",
+    "prompt.codex-completion"
   ]
 }

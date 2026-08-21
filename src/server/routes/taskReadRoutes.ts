@@ -1,8 +1,7 @@
 import type express from 'express';
 import type { ApiRouteDeps } from '../types';
 import { archiveInactiveDoneTasks, getTaskByIdentifier, getTasks, queryTaskBoardPage, restoreArchivedTask } from '../repositories/taskRepository.js';
-import { getActiveRunForTask, getLatestAgentRunForTask } from '../repositories/agentRunRepository';
-import { findTaskByIdentifier, getAgentTaskContext, renderTaskPrompt } from '../services/taskService';
+import { findTaskByIdentifier, getAgentTaskContext, renderCodexTaskPrompt } from '../services/taskService';
 import { buildTaskGitWarnings } from '../services/taskGitWorkflowService';
 import {
   filterTasksForList,
@@ -92,12 +91,10 @@ export function registerTaskReadRoutes(app: express.Express, deps: ApiRouteDeps)
   });
 
   app.get('/api/tasks/:id/prompt', (req, res) => {
-    const includeLogs = req.query.includeLogs === 'true' || req.query.mode === 'full' || req.query.mode === 'debug';
-    const context = getAgentTaskContext(deps.state, req.params.id, includeLogs);
+    const context = getAgentTaskContext(deps.state, req.params.id, false);
     if (!context) return res.status(404).json({ error: 'Task not found' });
-    const activeRun = getActiveRunForTask(context.task.id) || getLatestAgentRunForTask(context.task.id);
     try {
-      const renderResult = renderTaskPrompt(deps.state, context.task.id, { runId: activeRun?.id || 'preview-run-id', includeLogs }).renderResult;
+      const renderResult = renderCodexTaskPrompt(deps.state, context.task.id).renderResult;
       res.setHeader('Content-Type', 'text/plain');
       return res.send(renderResult.content);
     } catch (error: any) {

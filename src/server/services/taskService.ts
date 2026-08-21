@@ -16,7 +16,7 @@ import { validateEnum, validateString } from '../validation';
 import { buildLaunchMetadataBlock, resolveAgentLaunchPlan } from './agentLaunchConfig';
 import { getModelConfig } from '../../lib/agentsConfig';
 import { resolveAgentExecutionMode } from './agentRunService';
-import { renderPromptTemplate } from './promptTemplateService';
+import { isPromptValuePresent, renderPromptTemplate } from './promptTemplateService';
 import { createApiError } from './api';
 import { listTaskUiEvidenceForAgent } from './taskUiEvidenceService';
 import { computeLifecycleAuthoritySnapshot } from './lifecycleAuthorityService.js';
@@ -739,6 +739,88 @@ export function buildTaskPromptRenderContext(taskContext: NonNullable<ReturnType
     model: taskContext.assignment?.model || '',
     effort: taskContext.assignment?.effort || '',
   };
+}
+
+function promptText(value: unknown): string {
+  if (!isPromptValuePresent(value)) return '';
+  return String(value).trim();
+}
+
+function buildCodexCardContext(task: any, taskContext: NonNullable<ReturnType<typeof getAgentTaskContext>>): string {
+  const displayId = promptText(task.displayId) || promptText(task.id);
+  const lines = ['## Task card', `- Display ID: ${displayId}`];
+  if (promptText(task.id) && task.id !== displayId) lines.push(`- Task ID: ${task.id}`);
+  lines.push(`- Title: ${promptText(task.title)}`);
+  const repo = promptText(taskContext.workspace?.repo);
+  if (repo) lines.push(`- Repository: ${repo}`);
+
+  const addTextSection = (heading: string, value: unknown) => {
+    const text = promptText(value);
+    if (text) lines.push('', `## ${heading}`, text);
+  };
+  const addListSection = (heading: string, values: string[]) => {
+    if (values.length > 0) lines.push('', `## ${heading}`, ...values.map((value) => `- ${value}`));
+  };
+
+  addTextSection('Description', task.description);
+  addTextSection('Reasoning', task.reasoning);
+  addTextSection('Acceptance criteria', task.acceptanceCriteria);
+  const checklist = Array.isArray(task.checklist)
+    ? task.checklist.filter((item: any) => promptText(item?.text)).map((item: any) => `[${item.completed ? 'x' : ' '}] ${promptText(item.text)}`)
+    : [];
+  addListSection('Checklist', checklist);
+  addTextSection('Verification guidance', task.verification);
+  addListSection('Target files', Array.isArray(task.targetFiles) ? task.targetFiles.map(promptText).filter(Boolean) : []);
+  addTextSection('Repository context', task.repoContext);
+
+  const references: string[] = [];
+  if (promptText(task.sourceUrl)) references.push(`Source: ${promptText(task.sourceUrl)}`);
+  if (promptText(task.specUrl)) references.push(`Spec: ${promptText(task.specUrl)}`);
+  if (promptText(task.jiraKey)) references.push(`Jira: ${promptText(task.jiraKey)}`);
+  addListSection('References', references);
+
+  const evidence: string[] = [];
+  if (Array.isArray(task.images)) {
+    for (const image of task.images) {
+      const label = promptText(image?.filename) || promptText(image?.id) || 'attached image';
+      const ref = promptText(image?.url);
+      evidence.push(ref ? `${label} — ${ref}` : label);
+    }
+  }
+  if (Array.isArray((task as any).designImages)) {
+    for (const designImage of (task as any).designImages) {
+      const ref = promptText(designImage);
+      if (ref) evidence.push(`Design image — ${ref}`);
+    }
+  }
+  const uiItems = Array.isArray((taskContext as any).uiDesignEvidence?.items) ? (taskContext as any).uiDesignEvidence.items : [];
+  for (const item of uiItems) {
+    const label = promptText(item?.title) || promptText(item?.evidenceId) || 'UI design evidence';
+    const ref = promptText(item?.screenshotUrl) || promptText(item?.frozenPreviewUrl) || promptText(item?.latestPreviewUrl);
+    const summary = promptText(item?.primaryScreenSummary);
+    evidence.push([label, ref, summary].filter(Boolean).join(' — '));
+  }
+  addListSection('Attached design/image evidence', evidence.filter(Boolean).slice(0, 5));
+  return lines.join('\n');
+}
+
+export function renderCodexTaskPrompt(state: AppState, targetId: string) {
+  const task = findTaskByIdentifier(state, targetId);
+  if (!task) throw new Error('Task agent context could not be built.');
+  const context = getAgentTaskContext(state, targetId, false);
+  if (!context) throw new Error('Task agent context could not be built.');
+
+  const renderContext = buildTaskPromptRenderContext(context, '');
+  renderContext.workspace = context.workspace?.repo ? { repo: context.workspace.repo } : {};
+  renderContext.repoContext = buildCodexCardContext(task, context);
+  renderContext.agent = 'Codex';
+  renderContext.model = '';
+  renderContext.effort = '';
+  renderContext.assignment = {};
+
+  const renderResult = renderPromptTemplate('codex', renderContext);
+  if (!renderResult.content.trim()) throw new Error('Task prompt could not be built.');
+  return { context, renderResult };
 }
 
 export function renderTaskPrompt(state: AppState, targetId: string, options?: {

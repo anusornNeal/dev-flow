@@ -3,6 +3,22 @@ import { SquareTerminal, CheckCircle2, AlertCircle } from 'lucide-react';
 import type { Task } from '../types';
 import { copyText } from '../lib/clipboard';
 
+export const copyPromptPath = (taskId: string) => '/api/tasks/' + taskId + '/prompt';
+
+export const resolveCopyPromptTaskId = (task: Pick<Task, 'id' | 'displayId'>) => task.displayId || task.id;
+
+export async function runCodexPromptCopy(
+  taskId: string,
+  request: (url: string) => Promise<Response>,
+  copy: (text: string) => Promise<void>,
+) {
+  const res = await request(copyPromptPath(taskId));
+  if (!res.ok) throw new Error('Failed to load prompt');
+  const text = await res.text();
+  await copy(text);
+  return text;
+}
+
 interface CopyTemplateButtonProps {
   task: Task;
   className?: string;
@@ -15,16 +31,10 @@ export default function CopyTemplateButton({ task, className = '', variant = 'fu
   const handleCopy = async (e: React.MouseEvent) => {
     e.stopPropagation();
     
-    const displayId = task.displayId || task.id;
+    const displayId = resolveCopyPromptTaskId(task);
 
     try {
-      const res = await fetch(`/api/tasks/${displayId}/prompt`);
-      if (!res.ok) {
-        throw new Error('Failed to fetch prompt');
-      }
-      const promptText = await res.text();
-      
-      await copyText(promptText);
+      await runCodexPromptCopy(displayId, fetch, copyText);
       setStatus('copied');
       setTimeout(() => setStatus('idle'), 2000);
     } catch (err) {
@@ -37,7 +47,8 @@ export default function CopyTemplateButton({ task, className = '', variant = 'fu
   return (
     <button
       onClick={handleCopy}
-      title="Copy Prompt Template for manual agent handoff"
+      title="Copy for Codex"
+      aria-label="Copy for Codex"
       className={`flex items-center gap-1.5 px-2 py-1 text-[11px] font-mono font-extrabold rounded-lg border transition-colors cursor-pointer ${
         status === 'copied'
           ? 'bg-[#e6f4ea] dark:bg-[#292119] text-[#137333] dark:text-[#f3eadf] border-[#ceead6] dark:border-[#584a3b]'
@@ -59,7 +70,7 @@ export default function CopyTemplateButton({ task, className = '', variant = 'fu
       ) : (
         <>
           <SquareTerminal size={12} />
-          {variant === 'full' && 'Prompt Template'}
+          {variant === 'full' && 'Copy for Codex'}
         </>
       )}
     </button>

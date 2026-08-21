@@ -98,6 +98,8 @@ const DESTRUCTIVE_TOOLS = new Set([
 
 const EXTERNAL_EFFECT_TOOLS = new Set(['push_git_branch', 'create_pull_request']);
 const RUNTIME_CONTROL_TOOLS = new Set(['restart_devflow', 'cancel_tool_job', 'create_tool_job']);
+// Keep external-worker board sync canonical so consolidation never aliases it to lifecycle movement.
+const EXTERNAL_WORKER_STATUS_TOOLS = new Set(['update_external_task_status']);
 const READ_ONLY_REPO_TOOLS = new Set(['execute_repo_query_plan']);
 
 function inferRisk(name: string): McpToolRisk {
@@ -127,6 +129,16 @@ function intentFor(name: string) {
 function classifyCanonical(name: string): CanonicalDecision {
   const risk = inferRisk(name);
   const intent = intentFor(name);
+
+  if (EXTERNAL_WORKER_STATUS_TOOLS.has(name)) {
+    return {
+      classification: 'first-class-intent',
+      disposition: 'keep',
+      intent,
+      risk,
+      rationale: 'Distinct external-worker board synchronization boundary; keep separate from managed task lifecycle movement.',
+    };
+  }
 
   if (INTERNAL_TARGETS[name]) {
     return {

@@ -6,6 +6,7 @@ import { getActiveRunForTask } from '../repositories/agentRunRepository';
 import { getTasks } from '../repositories/taskRepository.js';
 import { sendApiError } from '../services/api.js';
 import { mutateTaskStatusWithLifecycle } from '../services/taskClaimService.js';
+import { updateExternalTaskStatus } from '../services/externalTaskStatusService.js';
 import { getTransitionPath, getValidationErrorMessage, isValidTransition } from '../../lib/statusTransitions';
 import { evaluateMove, ensureCloseWarningBug, normalizeRecoveryDisposition, requiresRecoveryDispositionForDone } from '../useCases/taskUseCases';
 import { validateEnum } from '../validation';
@@ -19,6 +20,24 @@ import {
 } from './taskRouteSupport';
 
 export function registerTaskWorkflowRoutes(app: express.Express, deps: ApiRouteDeps) {
+  // Status-only external handoff route: never delegate into managed movement/finalization.
+  app.post('/api/tasks/:id/external-status', (req, res) => {
+    try {
+      const result = updateExternalTaskStatus(req.params.id, req.body || {});
+      return res.json(toMutationResponse(req, result.task, result, {
+        sourceStatus: result.sourceStatus,
+        targetStatus: result.targetStatus,
+        changed: result.changed,
+        replayed: result.replayed,
+        operationId: result.operationId,
+        warnings: result.warnings,
+        externalMetadata: result.externalMetadata,
+      }));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
   app.post('/api/tasks/:id/move', (req, res) => {
     const statusErr = validateEnum(req.body.status, 'status', VALID_STATUSES, true);
     if (statusErr) return res.status(400).json({ error: statusErr });

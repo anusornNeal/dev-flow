@@ -499,6 +499,29 @@ test('guarded start-all restart refreshes MCP profile from the current env file'
   }
 });
 
+test('external task status is a first-class external-worker intent separate from managed lifecycle movement', () => {
+  const full = getMcpToolList('full');
+  const coding = getMcpToolList('coding');
+  const tool = full.find((entry: any) => entry.name === 'update_external_task_status');
+  assert.ok(tool, 'full MCP profile should expose the external status tool');  assert.match(tool.description || '', /autonomous external\/Codex workers/);
+  assert.ok(coding.some((entry: any) => entry.name === 'update_external_task_status'), 'coding MCP profile should expose the external status tool');
+  assert.deepEqual(tool.inputSchema?.properties?.status?.enum, ['in-progress', 'ready-for-review', 'done']);
+  assert.equal(tool.inputSchema?.properties?.allowManagedAuthorityOverlap?.type, 'boolean');
+  assert.equal(getMcpConsolidationReplacement('update_external_task_status'), undefined);
+
+  const inventory = buildMcpToolSurfaceInventory(devFlowToolDefinitions);
+  const classified = inventory.find((entry) => entry.name === 'update_external_task_status');
+  assert.equal(classified?.classification, 'first-class-intent');
+  assert.equal(classified?.disposition, 'keep');
+  assert.equal(classified?.target, undefined, 'external status must not alias or consolidate into managed movement');
+  assert.equal(classified?.risk, 'write');
+
+  const managed = inventory.find((entry) => entry.name === 'move_task_to_status');
+  assert.notEqual(classified?.canonicalName, managed?.canonicalName);
+  const executionSkill = fs.readFileSync(new URL('../../skills/07-authoring-execution.md', import.meta.url), 'utf8');
+  assert.doesNotMatch(executionSkill, /update_external_task_status/, 'managed ChatGPT execution skill must keep using managed lifecycle tools');
+});
+
 test('capability catalog exposes active MCP profile and schema bytes', () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-capability-profile-'));
   fs.writeFileSync(path.join(tempRoot, '.env'), 'DEVFLOW_MCP_TOOL_PROFILE="coding"\n', 'utf8');

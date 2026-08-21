@@ -222,6 +222,31 @@ export const taskToolDefinitions: DevFlowToolDefinition[] = [
     }, outputSchema: { type: 'object' },
     buildHttpRequest: ({ taskId, isAgentRequest, responseMode, ...body }) => ({ method: 'POST', path: withQuery(`/api/tasks/${encodePathSegment(String(taskId))}/submit-review`, { responseMode: responseMode || 'summary' }), body, headers: isAgentRequest ? { 'x-agent-request': 'true' } : undefined }),
   },
+  // External/Codex board synchronization is intentionally separate from managed lifecycle movement.
+  {
+    name: 'update_external_task_status',
+    description: 'Optionally synchronize DevFlow board status for autonomous external/Codex workers without entering the managed execution lifecycle. This status-only path never performs claims, workspace/finalization, checklist, verification, Git, branch, or recovery actions; failure of this tool is not repository execution failure.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...taskIdentifierProperty,
+        status: { type: 'string', enum: ['in-progress', 'ready-for-review', 'done'], description: 'Board presentation status reported by the external worker.' },
+        summary: { type: 'string', maxLength: 4000, description: 'Optional bounded external-worker summary; informational only.' },
+        commit: { type: 'string', maxLength: 1000, description: 'Optional bounded external-worker commit text; informational only and not authoritative Git evidence.' },
+        verification: { type: 'string', maxLength: 8000, description: 'Optional bounded external-worker verification text; informational only and not authoritative verification evidence.' },
+        idempotencyKey: { type: 'string', minLength: 1, maxLength: 512, description: 'Optional stable retry key. DevFlow persists only a deterministic hash plus request fingerprint in the task audit log.' },
+        allowManagedAuthorityOverlap: { type: 'boolean', description: 'Explicitly allow a status-only board update while managed claim/execution authority is active. Managed authority remains untouched and a warning is returned.' },
+        ...mutationResponseModeProperty,
+      },
+      required: ['taskId', 'status'],
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: ({ taskId, responseMode, ...body }) => ({
+      method: 'POST',
+      path: withQuery(`/api/tasks/${encodePathSegment(String(taskId))}/external-status`, { responseMode: responseMode || 'summary' }),
+      body,
+    }),
+  },
   {
     name: 'move_task_status', description: 'Move a task to a new lane/status. Strict by default; manualOverride is a status-only compatibility path for confirmed soft gates and never replaces audited break_glass_lifecycle recovery.',
     inputSchema: { type: 'object', properties: { ...taskIdentifierProperty, status: { type: 'string', enum: VALID_STATUSES }, ...booleanFlagSchema.properties, ...manualMoveOverrideProperties, ...mutationResponseModeProperty }, required: ['taskId', 'status'] }, outputSchema: { type: 'object' },

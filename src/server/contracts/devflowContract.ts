@@ -20,7 +20,7 @@ import { uiPreviewToolDefinitions } from './devflowUiPreviewTools';
 import { buildMcpTransportInputSchema } from './mcpSchemaTransport';
 import { resolveRuntimeMcpToolProfileValue } from './mcpToolProfileConfig';
 export type { DevFlowToolDefinition, DevFlowToolHttpRequest } from './devflowContractCore';
-export const DEVFLOW_CONTRACT_VERSION = '2026-08-21.1';
+export const DEVFLOW_CONTRACT_VERSION = '2026-08-21.2';
 
 export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   {
@@ -1645,7 +1645,8 @@ export function resolveDevFlowToolProfile(value?: string) {
 
 const CODING_PROFILE_TOOLS = new Set([
   'get_tool_schema', 'devflow_health_check', 'list_projects',
-  'search_tasks', 'create_task', 'get_task', 'update_task', 'move_task_to_status', 'toggle_task_checklist', 'open_task_bug',
+  'search_tasks', 'create_task', 'get_task', 'update_task', 'move_task_to_status',
+  'update_external_task_status', 'toggle_task_checklist', 'open_task_bug',
   'get_ui_design_context', 'create_ui_preview', 'update_ui_preview', 'get_ui_preview', 'attach_ui_preview_to_task',
   'sync_task_with_git', 'submit_task_for_review',
   'get_skill_router', 'get_authoring_skill', 'get_guidance_skill', 'get_jira_authoring_bundle',

@@ -510,7 +510,7 @@ function resultFailed(result: any) {
 
 type VerificationFailureClass = 'code' | 'infrastructure';
 
-const INFRASTRUCTURE_FAILURE_STATUSES = new Set(['cancelled', 'timed_out', 'interrupted', 'blocked', 'needs-recovery', 'conflict']);
+const INFRASTRUCTURE_FAILURE_STATUSES = new Set(['cancelled', 'timed_out', 'interrupted', 'blocked', 'conflict']);
 const INFRASTRUCTURE_FAILURE_CODE = /(CAPACITY|OUT_OF_MEMORY|\bOOM\b|TIMEOUT|TIMED_OUT|WORKER.*LEASE|TOOL.*CRASH|PROCESS.*KILL|INTERRUPT)/i;
 const INFRASTRUCTURE_FAILURE_OUTPUT = /(OutOfMemoryError|Java heap space|heap out of memory|allocation failed[^\n]*heap|killed process|process[^\n]*killed|worker lease|verification capacity|tool runner[^\n]*crash)/i;
 

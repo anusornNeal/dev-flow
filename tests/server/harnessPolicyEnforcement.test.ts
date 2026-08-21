@@ -405,6 +405,78 @@ test('verification OOM preserves execution for verification-only recovery', () =
   }
 });
 
+test('verification authority recovery stays on repairing path unless independent infrastructure evidence exists', () => {
+  resetSessionWorkspaceRuntimeForTests();
+  const repoRoot = createRepo('verification-authority-recovery-repo');
+  const project = { id: 'project-verification-authority-recovery', name: 'Verification Authority Recovery', repoUrl: 'https://example.com/verification-authority-recovery', localPath: repoRoot };
+  createProject(project);
+  const now = new Date().toISOString();
+  const task = {
+    id: 'task-verification-authority-recovery', displayId: 'DVF-HARNESS-AUTH-RECOVERY', title: 'Verification authority recovery fixture',
+    description: 'Distinguish authority recovery from infrastructure failure.', projectId: project.id,
+    status: 'todo', priority: 'high', category: 'backend', tags: [], targetFiles: ['value.txt'],
+    checklist: [], logs: [], bugs: [], images: [], createdAt: now, updatedAt: now,
+  } as any;
+  saveTask(task);
+  const state = { projectsCache: [project], countersCache: {}, skillsRegistry: [] } as any;
+  const claimed = claimTaskForSession(task.id, { sessionId: 'verification-authority-recovery-session', ownerKind: 'chat', ownerLabel: 'Authority recovery' });
+  const workspaceId = claimed.claim.workspaceId;
+
+  try {
+    const binding = executionSessions.getTaskExecutionMutationBinding({ workspaceId })!;
+    executionSessions.recordTaskExecutionContextReady({ workspaceId }, {
+      contextHandle: 'ctx-verification-authority-recovery', repoRevision: binding.session.repoRevision, contextPlanIdentity: 'plan-verification-authority-recovery',
+    });
+    executionSessions.recordExecutionLifecycleTransition(binding.session.id, {
+      toStage: 'implementing', reasonCode: 'authority-recovery-fixture-mutation',
+      evidence: { id: 'authority-recovery-fixture-mutation', kind: 'owned-change', status: 'completed' },
+    });
+
+    const recoveryDecision = preflightHarnessExecutionGuard(state, 'run_project_command', {
+      workspaceId, command: 'test-focused', harnessOperationId: 'authority-recovery-without-infra',
+    });
+    recordHarnessExecutionOutcome(recoveryDecision, {
+      ok: false,
+      status: 'needs-recovery',
+      verificationBinding: {
+        attempted: true,
+        recorderAccepted: false,
+        authoritative: false,
+        verificationFresh: false,
+        reasonCode: 'EXECUTION_VERIFICATION_CANDIDATE_REQUIRED',
+        recoveryRequired: true,
+      },
+    });
+    assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'repairing');
+    const recoveryEvidence = executionSessions.getExecutionSessionState(binding.session.id).evidence.find((entry: any) => entry.kind === 'verification-result' && entry.metadata?.operationId === 'authority-recovery-without-infra');
+    assert.equal(recoveryEvidence?.metadata?.failureClass, 'code');
+
+    const infraDecision = preflightHarnessExecutionGuard(state, 'run_project_command', {
+      workspaceId, command: 'test-focused', harnessOperationId: 'authority-recovery-with-infra',
+    });
+    recordHarnessExecutionOutcome(infraDecision, {
+      ok: false,
+      status: 'needs-recovery',
+      code: 'VERIFICATION_CAPACITY_EXHAUSTED',
+      stderr: 'verification capacity exhausted',
+      verificationBinding: {
+        attempted: true,
+        recorderAccepted: false,
+        authoritative: false,
+        verificationFresh: false,
+        reasonCode: 'EXECUTION_VERIFICATION_CANDIDATE_REQUIRED',
+        recoveryRequired: true,
+      },
+    });
+    assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'verification-infra-blocked');
+    const infraEvidence = executionSessions.getExecutionSessionState(binding.session.id).evidence.find((entry: any) => entry.kind === 'verification-result' && entry.metadata?.operationId === 'authority-recovery-with-infra');
+    assert.equal(infraEvidence?.metadata?.failureClass, 'infrastructure');
+  } finally {
+    releaseTaskClaim(task.id, { sessionId: 'verification-authority-recovery-session', nextStatus: 'todo' });
+    cleanupSessionWorkspace(workspaceId);
+  }
+});
+
 test('verification debt commit gates finalization until authoritative recovery verification settles the debt', () => {
   resetSessionWorkspaceRuntimeForTests();
   const repoRoot = createRepo('verification-debt-guard-repo');

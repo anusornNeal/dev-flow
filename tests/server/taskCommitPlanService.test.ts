@@ -12,6 +12,17 @@ const repoRoot = path.join(tempRoot, 'repo');
 fs.mkdirSync(path.join(repoRoot, 'src'), { recursive: true });
 fs.writeFileSync(path.join(repoRoot, 'src', 'owned.ts'), 'export const owned = 1;\n');
 fs.writeFileSync(path.join(repoRoot, 'src', 'unrelated.ts'), 'export const unrelated = 1;\n');
+fs.mkdirSync(path.join(repoRoot, '.devflow'), { recursive: true });
+fs.writeFileSync(path.join(repoRoot, '.devflow', 'commands.json'), JSON.stringify({
+  commands: {
+    'focused-check': {
+      executable: 'node',
+      args: ['-e', 'process.exit(0)'],
+      acceptsTargets: true,
+      category: 'test',
+    },
+  },
+}, null, 2));
 
 function git(root: string, args: string[]) {
   const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', shell: false });
@@ -34,6 +45,8 @@ const workspaceService = await import('../../src/server/services/sessionWorkspac
 const execution = await import('../../src/server/services/executionSessionService.js');
 const claims = await import('../../src/server/services/taskClaimService.js');
 const commitPlan = await import('../../src/server/services/taskCommitPlanService.js');
+const projectCommands = await import('../../src/server/services/projectCommandService.js');
+const verificationBatch = await import('../../src/server/services/verificationBatchService.js');
 
 function createFixture(label: string, targetFiles: string[] = ['src/owned.ts']) {
   workspaceService.resetSessionWorkspaceRuntimeForTests();
@@ -69,6 +82,80 @@ function createFixture(label: string, targetFiles: string[] = ['src/owned.ts']) 
   const session = listExecutionSessionsForTask(taskId).find((entry: any) => entry.status === 'active')!;
   return { projectId, workspace, taskId, session, claim: claimed.claim };
 }
+
+test('commit plan revalidates focused verification coverage with its recorded target paths', () => {
+  const { projectId, workspace, taskId, session } = createFixture('focused-coverage');
+  fs.writeFileSync(path.join(workspace.root, 'src', 'owned.ts'), 'export const owned = 7;\n');
+  execution.recordExecutionOwnedChanges(session.id, ['src/owned.ts'], { repoRoot: workspace.root, source: 'task-edit' });
+  const captured = execution.captureExecutionVerificationProvenance(session.id, { repoRoot: workspace.root });
+  const state = { countersCache: {} } as any;
+  const commandIdentity = projectCommands.getProjectCommandExecutionIdentity(state, {
+    projectId,
+    workspaceId: workspace.workspaceId,
+    command: 'focused-check',
+    targets: ['src/owned.ts'],
+    affectedInputPaths: ['src/owned.ts'],
+  });
+  const coverage = verificationBatch.buildVerificationCoverageIdentity(commandIdentity);
+  assert.ok(commandIdentity);
+  assert.ok(coverage);
+  execution.recordExecutionVerificationEvidence(session.id, [{ name: 'focused-check', status: 'passed' }], {
+    repoRoot: workspace.root,
+    provenance: {
+      policy: 'checks-passed',
+      expectedRepoRevision: captured.repoRevision,
+      expectedOwnedFingerprint: captured.ownedFingerprint,
+      candidateId: 'vc-focused-coverage',
+      candidateRepoRevision: captured.repoRevision,
+      executionKey: commandIdentity!.key,
+      coverage: [coverage!],
+    },
+  });
+
+  const plan = commitPlan.buildTaskCommitPlan(state, { taskId, workspaceId: workspace.workspaceId });
+  assert.equal(plan.commitAllowed, true);
+  assert.equal(plan.verificationCoverage.status, 'covered');
+  assert.deepEqual(plan.verificationCoverage.coveredCommands, ['focused-check']);
+  assert.deepEqual(plan.verificationCoverage.staleCommands, []);
+});
+
+test('commit plan marks focused coverage stale when its recorded target no longer exists', () => {
+  const { projectId, workspace, taskId, session } = createFixture('focused-coverage-missing-target');
+  const targetPath = 'src/transient-target.ts';
+  fs.writeFileSync(path.join(workspace.root, targetPath), 'export const transient = 1;\n');
+  execution.recordExecutionOwnedChanges(session.id, [targetPath], { repoRoot: workspace.root, source: 'task-edit' });
+  const captured = execution.captureExecutionVerificationProvenance(session.id, { repoRoot: workspace.root });
+  const state = { countersCache: {} } as any;
+  const commandIdentity = projectCommands.getProjectCommandExecutionIdentity(state, {
+    projectId,
+    workspaceId: workspace.workspaceId,
+    command: 'focused-check',
+    targets: [targetPath],
+    affectedInputPaths: [targetPath],
+  });
+  const coverage = verificationBatch.buildVerificationCoverageIdentity(commandIdentity);
+  assert.ok(commandIdentity);
+  assert.ok(coverage);
+  execution.recordExecutionVerificationEvidence(session.id, [{ name: 'focused-check', status: 'passed' }], {
+    repoRoot: workspace.root,
+    provenance: {
+      policy: 'checks-passed',
+      expectedRepoRevision: captured.repoRevision,
+      expectedOwnedFingerprint: captured.ownedFingerprint,
+      candidateId: 'vc-focused-missing-target',
+      candidateRepoRevision: captured.repoRevision,
+      executionKey: commandIdentity!.key,
+      coverage: [coverage!],
+    },
+  });
+  fs.unlinkSync(path.join(workspace.root, targetPath));
+
+  const plan = commitPlan.buildTaskCommitPlan(state, { taskId, workspaceId: workspace.workspaceId });
+  assert.equal(plan.commitAllowed, false);
+  assert.equal(plan.verificationCoverage.status, 'stale');
+  assert.deepEqual(plan.verificationCoverage.staleCommands, ['focused-check']);
+  assert.ok(plan.blockers.some((entry: any) => entry.code === 'EXECUTION_VERIFICATION_COVERAGE_STALE'));
+});
 
 test('commit plan selects only execution-owned changed files and preserves unrelated changes', () => {
   const { workspace, taskId, session } = createFixture('scoped');

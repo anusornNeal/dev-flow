@@ -133,22 +133,40 @@ export function resolveTaskVerificationCoverage(
   const staleCommands: string[] = [];
   const staleDetails: Array<{ command: string; changedFields: string[] }> = [];
   for (const stored of evidence.coverage) {
-    const currentExecution = getProjectCommandExecutionIdentity(state, {
+    const identityArgs = {
       projectId: input.task.projectId,
       ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
       ...(input.localPath ? { localPath: input.localPath } : {}),
       command: stored.command,
       affectedInputPaths: [...stored.affectedInputPaths],
-    });
+    };
+    let currentExecution = null;
+    try {
+      currentExecution = getProjectCommandExecutionIdentity(state, identityArgs);
+    } catch (error: any) {
+      const errorCode = String(error?.code || error?.payload?.code || '');
+      if (errorCode !== 'COMMAND_TARGETS_REQUIRED') throw error;
+      if (stored.affectedInputPaths.length > 0) {
+        try {
+          currentExecution = getProjectCommandExecutionIdentity(state, {
+            ...identityArgs,
+            targets: [...stored.affectedInputPaths],
+          });
+        } catch (targetError: any) {
+          const targetErrorCode = String(targetError?.code || targetError?.payload?.code || '');
+          if (!targetErrorCode.startsWith('COMMAND_TARGET')) throw targetError;
+        }
+      }
+    }
     const current = buildVerificationCoverageIdentity(currentExecution);
     if (current?.key === stored.key) {
       coveredCommands.push(stored.command);
     } else {
       staleCommands.push(stored.command);
-      const changedFields = [
+      const changedFields = current ? [
         'semanticKey', 'commandConfigFingerprint', 'affectedInputFingerprint', 'dependencyFingerprint',
         'environmentFingerprint', 'platform', 'arch', 'runtime',
-      ].filter((field) => (current as any)?.[field] !== (stored as any)?.[field]);
+      ].filter((field) => (current as any)?.[field] !== (stored as any)?.[field]) : ['affectedInputPaths'];
       staleDetails.push({ command: stored.command, changedFields });
     }
   }

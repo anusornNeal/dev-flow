@@ -282,7 +282,15 @@ function rejected(operation: LifecycleEmergencyOperationRecord, error: any, hard
   });
 }
 
-function executeCommitBreakGlass(state: AppState, operation: LifecycleEmergencyOperationRecord, input: BreakGlassLifecycleInput, task: any, workspace: NonNullable<ReturnType<typeof expectedWorkspace>>, _authority: ReturnType<typeof computeLifecycleAuthoritySnapshot>, hardChecks: Array<Record<string, unknown>>) {
+function executeCommitBreakGlass(
+  state: AppState,
+  operation: LifecycleEmergencyOperationRecord,
+  input: BreakGlassLifecycleInput,
+  task: any,
+  workspace: NonNullable<ReturnType<typeof expectedWorkspace>>,
+  _authority: ReturnType<typeof computeLifecycleAuthoritySnapshot>,
+  hardChecks: Array<Record<string, unknown>>,
+) {
   const plan = buildTaskCommitPlan(state, { taskId: task.id, workspaceId: workspace.workspaceId });
   const rawMessage = clean(input.message, 500) || 'chore: operator break-glass recovery';
   const expectedSubject = renderTaskCommitMessage(rawMessage, task, { gitWorkflowPolicy: workspace.gitWorkflowPolicy } as any);
@@ -385,35 +393,24 @@ function executeCommitBreakGlass(state: AppState, operation: LifecycleEmergencyO
     }, bypassedGates, hardChecks, 'preserved-unrelated');
   }
 
-  recordExecutionVerificationEvidence(plan.executionSessionId, [], {
-    repoRoot: workspace.root,
-    provenance: {
-      policy: 'operator-break-glass',
-      expectedRepoRevision: ownership.repoRevision,
-      expectedOwnedFingerprint: ownership.ownedFingerprint,
-      candidateId,
-      candidateRepoRevision: ownership.repoRevision,
-      executionKey: `operator:${operation.id}`,
-    },
-  });
-  const refreshed = buildTaskCommitPlan(state, { taskId: task.id, workspaceId: workspace.workspaceId });
-  if (!refreshed.commitAllowed) {
-    throw createApiError(409, 'BREAK_GLASS_COMMIT_RECHECK_BLOCKED', 'Exact ownership changed while emergency commit authorization was being bound.', {
-      details: { blockers: refreshed.blockers },
-    });
-  }
   const committed = commitTaskOwnedChanges(state, {
     taskId: task.id,
     workspaceId: workspace.workspaceId,
     message: rawMessage,
+    ownerBreakGlass: {
+      operationId: operation.id,
+      reason: input.reason,
+      actorLabel: input.actorLabel,
+      expectedOwnedFingerprint: ownership.ownedFingerprint,
+    },
   });
   const commitHash = (committed as any).commitHash || (committed as any).hash || null;
   injectBreakGlassFault('after-commit-side-effect');
   return completion(operation, task.id, workspace.workspaceId, {
     action: input.action,
     commit: commitHash,
-    committedFiles: refreshed.ownedChangedFiles,
-    unrelatedChangesPreserved: refreshed.unrelatedChangedFiles,
+    committedFiles: (committed as any).committedFiles || plan.ownedChangedFiles,
+    unrelatedChangesPreserved: (committed as any).unrelatedChangesPreserved || plan.unrelatedChangedFiles,
     verificationDebtPreserved: false,
   }, {
     ...(operation.evidence || {}),
@@ -774,6 +771,11 @@ function executeFinalizeAsIntegrated(state: AppState, operation: LifecycleEmerge
     operationId: clean(input.finalizationOperationId, 200) || undefined,
     checks: Array.isArray(input.checks) ? input.checks : [],
     requireChecklistComplete: false,
+    ownerBreakGlass: {
+      operationId: operation.id,
+      reason: input.reason,
+      actorLabel: input.actorLabel,
+    },
   });
   if (finalized.status !== 'completed' && finalized.status !== 'cleanup-pending') {
     return updateAudit(operation, {
@@ -791,7 +793,10 @@ function executeFinalizeAsIntegrated(state: AppState, operation: LifecycleEmerge
     finalizationStatus: finalized.status,
     finalizationOperationId: finalized.operation?.id || null,
     integratedRevision: reconstructed.baseHeadAfter,
-  }, { expectedCommit, integratedRevision: reconstructed.baseHeadAfter }, ['TASK_PRESENTATION_OR_FINALIZATION_POLICY'], hardChecks, finalized.status === 'cleanup-pending' ? 'cleanup-pending' : 'cleaned-or-safe');
+  }, { expectedCommit, integratedRevision: reconstructed.baseHeadAfter }, Array.from(new Set([
+    'TASK_PRESENTATION_OR_FINALIZATION_POLICY',
+    ...((((finalized.operation?.verification as any)?.bypassedGates) || []) as string[]),
+  ])), hardChecks, finalized.status === 'cleanup-pending' ? 'cleanup-pending' : 'cleaned-or-safe');
 }
 
 function executeSupersede(operation: LifecycleEmergencyOperationRecord, input: BreakGlassLifecycleInput, task: any, workspace: ReturnType<typeof expectedWorkspace>, hardChecks: Array<Record<string, unknown>>) {

@@ -291,6 +291,13 @@ test('emergency commit binds override to the exact owned fingerprint and preserv
   assert.match(git(f.workspace.root, ['status', '--porcelain']), /unrelated\.txt/);
   assert.doesNotMatch(git(f.workspace.root, ['status', '--porcelain']), /owned\.txt/);
   assert.ok(result.operation.bypassedGates.includes('EXECUTION_VERIFICATION_NOT_FRESH'));
+  const postCommitState = getExecutionSessionState(f.execution.id);
+  assert.equal(
+    postCommitState.evidence.some((entry: any) => entry.kind === 'verification-binding' && entry.metadata?.policy === 'operator-break-glass'),
+    false,
+    'owner break-glass must audit skipped verification rather than manufacture GREEN verification evidence',
+  );
+  assert.ok(postCommitState.evidence.some((entry: any) => entry.kind === 'lifecycle-reconciliation' && entry.metadata?.ownerBreakGlass === true));
 
   fs.writeFileSync(path.join(f.workspace.root, 'owned.txt'), 'newer-owned-wip\n');
   assert.throws(
@@ -455,6 +462,44 @@ test('finalize-as-integrated resumes normal finalization from exact Git evidence
   assert.equal(getTask(f.task.id)?.status, 'done');
   assert.equal(git(f.root, ['rev-parse', 'HEAD']), baseHead);
   assert.equal((result.operation.evidence as any).expectedCommit, sourceHead);
+});
+
+test('owner break-glass finalization bypasses verification and stale lifecycle policy without fake GREEN evidence', () => {
+  const f = fixture('owner-finalize-no-green');
+  mutateOwned(f, 'owner-finalize-no-green\n');
+  git(f.workspace.root, ['add', 'owned.txt']);
+  git(f.workspace.root, ['commit', '-m', `[${f.task.displayId}] chore: owner finalization candidate`]);
+  const sourceHead = git(f.workspace.root, ['rev-parse', 'HEAD']);
+  recordExecutionLifecycleTransition(f.execution.id, {
+    toStage: 'context-ready',
+    reasonCode: 'owner-finalize-context',
+    evidence: { id: 'owner-finalize-context', kind: 'context-bundle', status: 'completed' },
+  });
+  recordExecutionLifecycleTransition(f.execution.id, {
+    toStage: 'implementing',
+    reasonCode: 'owner-finalize-implementing',
+    evidence: { id: 'owner-finalize-implementing', kind: 'owned-change', status: 'completed' },
+  });
+  const integrated = integrateWorkspaceCommits(f.workspace.workspaceId, { task: getTask(f.task.id) });
+  assert.equal(integrated.status, 'succeeded');
+
+  const result = executeBreakGlassLifecycle(f.state, {
+    ...baseRequest(f, 'finalize-as-integrated', 'bg-owner-finalize-no-green-1'),
+    expectedCommit: sourceHead,
+    checks: [],
+  });
+
+  assert.equal(result.operation.status, 'completed', JSON.stringify(result.operation));
+  assert.equal(getTask(f.task.id)?.status, 'done');
+  const executionState = getExecutionSessionState(f.execution.id);
+  assert.equal(executionState.session.status, 'completed');
+  assert.equal(executionState.session.lifecycle.stage, 'finalized');
+  assert.equal(
+    executionState.evidence.some((entry: any) => entry.kind === 'verification-binding' && entry.metadata?.policy === 'operator-break-glass'),
+    false,
+  );
+  assert.ok(result.operation.bypassedGates.includes('VERIFICATION_EVIDENCE_MISSING'));
+  assert.ok(result.operation.bypassedGates.includes('POST_INTEGRATION_VERIFICATION_REQUIRED'));
 });
 
 test('pending durable operation blocks ownership release without discarding WIP', () => {

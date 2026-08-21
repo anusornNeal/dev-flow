@@ -19,7 +19,12 @@ import { inspectWorkspaceRecovery } from './workspaceRecoveryService.js';
 import { integrateWorkspaceCommits, reconstructRecordedWorkspaceIntegration, type WorkspaceIntegrationSuccess } from './workspaceIntegrationService.js';
 import { loadProjectVerificationImpactRules } from './projectCommandConfigService.js';
 import { planVerification, type VerificationPlan } from './verificationPlannerService.js';
-import { getExecutionSessionOwnershipEpoch } from './executionSessionService.js';
+import {
+  getExecutionSessionOwnershipEpoch,
+  getExecutionSessionState,
+  recordExecutionLifecycleTransition,
+  recordExecutionReconciliationEvidence,
+} from './executionSessionService.js';
 import { computeLifecycleAuthoritySnapshot } from './lifecycleAuthorityService.js';
 import { withSyncLock } from './lockAndIdempotencyService.js';
 
@@ -46,6 +51,12 @@ export type DetachedIntegratedFinalizationEvidence = {
   integration: WorkspaceIntegrationSuccess;
 };
 
+export type OwnerBreakGlassFinalizationAuthority = {
+  operationId: string;
+  reason: string;
+  actorLabel: string;
+};
+
 export type TaskWorkspaceFinalizationInput = {
   taskId: string;
   workspaceId: string;
@@ -53,6 +64,7 @@ export type TaskWorkspaceFinalizationInput = {
   requireChecklistComplete?: boolean;
   operationId?: string;
   detachedIntegrated?: DetachedIntegratedFinalizationEvidence;
+  ownerBreakGlass?: OwnerBreakGlassFinalizationAuthority;
 };
 
 type PostIntegrationRequirement = {
@@ -71,12 +83,84 @@ type PostIntegrationRequirement = {
   };
 };
 
+function normalizeOwnerBreakGlassAuthority(value: unknown): OwnerBreakGlassFinalizationAuthority | null {
+  if (!value || typeof value !== 'object') return null;
+  const input = value as Record<string, unknown>;
+  const operationId = String(input.operationId || '').trim();
+  const reason = String(input.reason || '').trim();
+  const actorLabel = String(input.actorLabel || '').trim();
+  if (!operationId || !reason || !actorLabel) {
+    throw createApiError(400, 'OWNER_BREAK_GLASS_AUDIT_CONTEXT_REQUIRED', 'Owner break-glass finalization requires operationId, reason, and actorLabel.');
+  }
+  return { operationId, reason, actorLabel };
+}
+
+function reconcileOwnerBreakGlassLifecycleForFinalization(
+  taskId: string,
+  workspaceId: string,
+  executionSessionId: string | null,
+  authority: OwnerBreakGlassFinalizationAuthority,
+) {
+  if (!executionSessionId) return [] as string[];
+  const session = getExecutionSessionState(executionSessionId).session;
+  if (session.taskId !== taskId || session.workspaceId !== workspaceId) {
+    throw createApiError(409, 'OWNER_BREAK_GLASS_EXECUTION_IDENTITY_MISMATCH', 'Owner break-glass finalization cannot reconcile a different task/workspace execution identity.');
+  }
+  const nextStage: Record<string, string | undefined> = {
+    compatibility: 'created',
+    created: 'context-ready',
+    'context-ready': 'implementing',
+    'plan-recorded': 'implementing',
+    implementing: 'verifying',
+    repairing: 'verifying',
+    'verification-infra-blocked': 'committed',
+    verifying: 'committed',
+  };
+  const bypassed: string[] = [];
+  let current = session.lifecycle.stage;
+  let guard = 0;
+  while (current !== 'committed' && current !== 'finalized') {
+    if (++guard > 8) throw createApiError(409, 'OWNER_BREAK_GLASS_LIFECYCLE_RECONCILIATION_LOOP', 'Owner break-glass lifecycle reconciliation could not converge safely.');
+    const next = nextStage[current];
+    if (!next) {
+      throw createApiError(409, 'OWNER_BREAK_GLASS_LIFECYCLE_STAGE_UNSUPPORTED', `Lifecycle stage '${current}' cannot be reconciled by owner break-glass finalization.`, {
+        details: { executionSessionId, currentStage: current },
+      });
+    }
+    const code = `EXECUTION_LIFECYCLE_STAGE_${current.toUpperCase().replace(/-/g, '_')}`;
+    bypassed.push(code);
+    recordExecutionLifecycleTransition(executionSessionId, {
+      toStage: next as any,
+      reasonCode: 'owner-break-glass-finalization',
+      evidence: {
+        id: `owner-break-glass:${authority.operationId}:${next}`,
+        kind: 'lifecycle-reconciliation',
+        status: 'completed',
+        operationId: authority.operationId,
+      },
+    });
+    current = getExecutionSessionState(executionSessionId).session.lifecycle.stage;
+  }
+  if (bypassed.length > 0) {
+    recordExecutionReconciliationEvidence(executionSessionId, 'operator-break-glass-finalization', {
+      ownerBreakGlass: true,
+      operationId: authority.operationId,
+      reason: authority.reason,
+      actorLabel: authority.actorLabel,
+      bypassedGates: bypassed,
+    });
+  }
+  return bypassed;
+}
+
 function verifyFinalizationInput(task: any, input: TaskWorkspaceFinalizationInput) {
   const requireChecklistComplete = input.requireChecklistComplete !== false;
   if (requireChecklistComplete && Array.isArray(task.checklist) && task.checklist.some((item: any) => !item?.completed)) {
     return { status: 'blocked' as const, code: 'CHECKLIST_INCOMPLETE' as const, message: 'Task checklist must be complete before workspace finalization.' };
   }
   const checks = Array.isArray(input.checks) ? input.checks : [];
+  const ownerBreakGlass = normalizeOwnerBreakGlassAuthority(input.ownerBreakGlass);
+  if (ownerBreakGlass) return null;
   if (checks.length === 0) {
     return { status: 'blocked' as const, code: 'VERIFICATION_EVIDENCE_MISSING' as const, message: 'At least one verification check is required before workspace finalization.' };
   }
@@ -528,6 +612,7 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
   const workspaceId = String(input?.workspaceId || '').trim();
   const requestedOperationId = String(input?.operationId || '').trim();
   const detachedIntegrated = input.detachedIntegrated;
+  const suppliedOwnerBreakGlass = normalizeOwnerBreakGlassAuthority(input.ownerBreakGlass);
   if (!taskId) throw createApiError(400, 'TASK_ID_REQUIRED', 'taskId is required for task workspace finalization.');
   if (!workspaceId) throw createApiError(400, 'WORKSPACE_ID_REQUIRED', 'workspaceId is required for task workspace finalization.');
 
@@ -561,9 +646,16 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
       : [];
     const suppliedChecks = Array.isArray(input.checks) ? input.checks : [];
     const effectiveChecks = suppliedChecks.length > 0 ? suppliedChecks : persistedChecks;
+    const persistedOwnerBreakGlass = normalizeOwnerBreakGlassAuthority(operation?.verification?.ownerBreakGlass);
+    if (suppliedOwnerBreakGlass && persistedOwnerBreakGlass
+      && JSON.stringify(suppliedOwnerBreakGlass) !== JSON.stringify(persistedOwnerBreakGlass)) {
+      throw createApiError(409, 'OWNER_BREAK_GLASS_OPERATION_MISMATCH', 'Finalization retry supplied a different owner break-glass authority than the frozen operation.');
+    }
+    const ownerBreakGlass = suppliedOwnerBreakGlass || persistedOwnerBreakGlass;
     const blocked = verifyFinalizationInput(task, {
       ...input,
       checks: effectiveChecks,
+      ownerBreakGlass: ownerBreakGlass || undefined,
       requireChecklistComplete: operation ? false : input.requireChecklistComplete,
     });
     if (blocked) return { ...blocked, ...(operation ? { operation } : {}) };
@@ -575,6 +667,11 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
         : freezeNewFinalizationOperation(task, workspaceId, effectiveChecks);
       if ('blocked' in frozen) return frozen.blocked;
       operation = frozen.operation;
+      if (ownerBreakGlass) {
+        operation = updateOperation(operation, {
+          verification: { ...(operation.verification || {}), submittedChecks: effectiveChecks, ownerBreakGlass },
+        });
+      }
       if (latestBeforeFreeze && latestBeforeFreeze.status !== 'completed' && latestBeforeFreeze.id !== operation.id) {
         throw createApiError(409, 'FINALIZATION_OPERATION_IDENTITY_CHANGED', 'An incomplete finalization operation already exists for a different frozen candidate/ownership identity.', {
           affectedId: latestBeforeFreeze.id,
@@ -646,7 +743,7 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
       sourcePlan = plans.sourcePlan;
       combinedPlan = plans.combinedPlan;
       postIntegration = evaluatePostIntegrationRequirement(integration, effectiveChecks, sourcePlan, combinedPlan);
-      if (postIntegration.required) {
+      if (postIntegration.required && !ownerBreakGlass) {
         operation = updateOperation(operation, {
           phase: 'verification-pending',
           status: 'active',
@@ -673,10 +770,22 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
           },
         };
       }
+      const ownerVerificationBypasses = ownerBreakGlass
+        ? [
+            ...(effectiveChecks.length === 0 ? ['VERIFICATION_EVIDENCE_MISSING', 'POST_INTEGRATION_VERIFICATION_REQUIRED'] : []),
+            ...(effectiveChecks.length > 0 && postIntegration.required ? ['POST_INTEGRATION_VERIFICATION_REQUIRED'] : []),
+          ]
+        : [];
       operation = updateOperation(operation, {
         phase: 'verification-cleared',
         status: 'active',
-        verification: { ...(operation.verification || {}), submittedChecks: effectiveChecks, requirement: postIntegration, evidence: verificationEvidence },
+        verification: {
+          ...(operation.verification || {}),
+          submittedChecks: effectiveChecks,
+          requirement: postIntegration,
+          evidence: verificationEvidence,
+          ...(ownerBreakGlass ? { ownerBreakGlass, bypassedGates: ownerVerificationBypasses } : {}),
+        },
         failure: null,
       });
       injectFinalizationFault('after-verification-clear');
@@ -701,6 +810,21 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
       injectFinalizationFault('after-evidence');
 
       if (operation.phase === 'evidence-recorded') {
+        const lifecycleBypasses = ownerBreakGlass
+          ? reconcileOwnerBreakGlassLifecycleForFinalization(task.id, workspaceId, operation.executionSessionId, ownerBreakGlass)
+          : [];
+        if (ownerBreakGlass && lifecycleBypasses.length > 0) {
+          operation = updateOperation(operation, {
+            verification: {
+              ...(operation.verification || {}),
+              ownerBreakGlass,
+              bypassedGates: Array.from(new Set([
+                ...((operation.verification as any)?.bypassedGates || []),
+                ...lifecycleBypasses,
+              ])),
+            },
+          });
+        }
         terminalizeTaskExecutionForFinalization(task.id, workspaceId, {
           changedFiles: integration.changedFiles,
           verification: verificationEvidence,

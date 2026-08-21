@@ -14,7 +14,7 @@ const actionEnum = [
 export const emergencyToolDefinitions: DevFlowToolDefinition[] = [
   {
     name: 'break_glass_lifecycle',
-    description: 'Run one explicit audited emergency lifecycle disposition. Requires a stable operationId, human reason, exact task/project identity, action-specific expected identities, and preserves hard project/workspace/cross-worker safety. Never enables a global emergency mode and never pushes/fetches.',
+    description: 'Run one explicit audited human owner lifecycle disposition. One stable operationId carries owner authority through bypassable verification freshness, stale lifecycle metadata, and soft workflow/finalization gates without manufacturing GREEN evidence. Hard task/project/workspace identity, cross-worker WIP, real Git conflicts, missing roots, and OS/filesystem failures remain recovery blockers. Never enables a global emergency mode and never pushes/fetches.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -46,6 +46,7 @@ export const emergencyToolDefinitions: DevFlowToolDefinition[] = [
         destructiveAck: { type: 'boolean', description: 'Required true only for discard-wip. Generic emergency intent is not destructive authorization.' },
         checks: {
           type: 'array',
+          description: 'Optional verification evidence. Owner break-glass may explicitly bypass missing/stale verification policy; skipped gates are audited and no synthetic passed verification is created.',
           items: {
             type: 'object',
             properties: {
@@ -64,7 +65,14 @@ export const emergencyToolDefinitions: DevFlowToolDefinition[] = [
       },
       required: ['operationId', 'action', 'reason', 'actorLabel', 'projectId', 'taskId'],
     },
-    outputSchema: { type: 'object' },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        replayed: { type: 'boolean' },
+        operation: { type: 'object', description: 'Durable audit record including before/after authority snapshots, bypassedGates, hardChecks, WIP disposition, and failure/recovery evidence.' },
+        result: { type: 'object', description: 'Action-specific committed/integrated/finalized disposition evidence.' },
+      },
+    },
     buildHttpRequest: (args) => ({ method: 'POST', path: '/api/lifecycle/break-glass', body: args }),
   },
   {

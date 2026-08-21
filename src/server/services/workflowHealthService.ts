@@ -470,10 +470,12 @@ function projectHarnessHealth(state: AppState, args: Record<string, any>, option
   }
 
   const allProjectTasks = getTasks().filter((task) => task.projectId === project.id);
-  const boundedTaskPresentation = allProjectTasks.slice(0, 100);
   const projectTasksById = new Map(allProjectTasks.map((task) => [task.id, task]));
   const activeClaims = allProjectTasks.map((task) => ({ task, claim: activeHealthClaim(task) })).filter((entry) => Boolean(entry.claim));
-  const executions = queryExecutionSessions({ projectId: project.id, status: 'active', limit: 50 });
+  const firstExecutionPage = queryExecutionSessions({ projectId: project.id, status: 'active', limit: 50 });
+  const executions = firstExecutionPage.truncated
+    ? queryExecutionSessions({ projectId: project.id, status: 'active', limit: 100 })
+    : firstExecutionPage;
   const drift: HarnessHealthDrift[] = [];
   const byTask = new Map<string, ExecutionSessionRecord[]>();
   const byWorkspace = new Map<string, ExecutionSessionRecord[]>();
@@ -569,27 +571,23 @@ function projectHarnessHealth(state: AppState, args: Record<string, any>, option
     });
   }
 
-  const registry = listSessionWorkspaceMetadataForRecovery(project.id, 50);
-  const workspaceInspectionLimit = 10;
+  const firstRegistryPage = listSessionWorkspaceMetadataForRecovery(project.id, 50);
+  const registry = firstRegistryPage.truncated
+    ? listSessionWorkspaceMetadataForRecovery(project.id, 100)
+    : firstRegistryPage;
   const authoritativeWorkspaceIds = new Set(authoritativeWorkspaceContexts.keys());
   const registryOutsideActiveAuthority = registry.workspaces.filter((workspace) => !authoritativeWorkspaceIds.has(workspace.workspaceId));
-  const workspaceInspectionCandidates = deepRecoveryScan
-    ? registry.workspaces.slice(0, workspaceInspectionLimit)
-    : [];
-  const actionableWorkspaceIds = workspaceInspectionCandidates
+  const workspaceInspectionCandidates = deepRecoveryScan ? registry.workspaces : [];
+  const actionableRecoveryWorkspaceIds = workspaceInspectionCandidates
     .map((workspace) => workspace.workspaceId)
-    .filter(actionableRecoveryWorkspace)
-    .slice(0, 20);
+    .filter(actionableRecoveryWorkspace);
   if (!deepRecoveryScan && registryOutsideActiveAuthority.length > 0) drift.push({
     code: 'PROJECT_RECOVERY_SCAN_DEFERRED',
     message: 'Compact project health deferred Git-backed recovery inspection for registry workspaces outside active lifecycle authority.',
     workspaceIds: registryOutsideActiveAuthority.map((workspace) => workspace.workspaceId).slice(0, 20),
     nextAction: 'Use full/debug project health before treating the project as lifecycle-clear or performing recovery cleanup.',
   });
-  const truncated = executions.truncated
-    || registry.truncated
-    || (deepRecoveryScan && registry.workspaces.length > workspaceInspectionCandidates.length)
-    || allProjectTasks.length > boundedTaskPresentation.length;
+  const truncated = executions.truncated || registry.truncated;
   if (truncated) drift.push({
     code: 'PROJECT_LIFECYCLE_SCAN_TRUNCATED',
     message: 'Project aggregate exceeded a bounded lifecycle scan and cannot prove a complete all-clear.',
@@ -599,20 +597,20 @@ function projectHarnessHealth(state: AppState, args: Record<string, any>, option
   return {
     version: CHATGPT_HARNESS_HEALTH_VERSION,
     scope: 'project-aggregate',
-    status: drift.length > 0 ? 'blocked' : executions.total > 0 || activeClaims.length > 0 || actionableWorkspaceIds.length > 0 ? 'active' : 'idle',
+    status: drift.length > 0 ? 'blocked' : executions.total > 0 || activeClaims.length > 0 || actionableRecoveryWorkspaceIds.length > 0 ? 'active' : 'idle',
     mode: 'chatgpt-only',
     ...baselineHarnessMetadata(),
     project: { id: project.id, name: project.name },
     aggregate: {
       activeExecutionCount: executions.total,
       activeClaimCount: activeClaims.length,
-      actionableWorkspaceCount: actionableWorkspaceIds.length,
+      actionableWorkspaceCount: actionableRecoveryWorkspaceIds.length,
       pendingOperationCount,
       driftCount: drift.length,
       truncated,
       executionSessionIds: executions.sessions.map((entry) => entry.id).slice(0, 20),
       taskIds: [...new Set([...activeClaims.map((entry) => entry.task.id), ...executions.sessions.map((entry) => entry.taskId).filter(Boolean) as string[]])].slice(0, 20),
-      workspaceIds: [...new Set([...activeClaims.map((entry) => entry.claim!.workspaceId), ...executions.sessions.map((entry) => entry.workspaceId).filter(Boolean) as string[], ...actionableWorkspaceIds])].slice(0, 20),
+      workspaceIds: [...new Set([...activeClaims.map((entry) => entry.claim!.workspaceId), ...executions.sessions.map((entry) => entry.workspaceId).filter(Boolean) as string[], ...actionableRecoveryWorkspaceIds])].slice(0, 20),
     },
     recovery: { pendingOperationCount },
     drift: drift.slice(0, 20),

@@ -1,165 +1,44 @@
 # Codex Workflow
 
-## Purpose
+## Current Copy Prompt contract
 
-This file defines how DevFlow should launch and manage Codex tasks.
+The card **Copy for Codex** action is an autonomous repository handoff. DevFlow supplies authoritative card-authored task information; after the prompt is copied, Codex owns repository investigation, planning, edits, shell commands, tests/builds, native Git workflow, commits, and completion judgment.
 
-This file documents optional/legacy Codex CLI launch behavior only. It does not define the manual Copy Prompt; that prompt is engine-agnostic and comes from `config/prompt-pipeline.json`.
+A live DevFlow connection is not required. Codex must not treat DevFlow as its repository execution layer and must not require DevFlow reads/edits/commands in place of native repository tools.
 
-## When to Use
+The current Copy Prompt comes from the `codex` pipeline in `config/prompt-pipeline.json`. It intentionally does not auto-inject `.devflow/agents.md`, project-local prompt overrides, active/latest run identity, managed workspace context, claim/lifecycle authority, or managed finalization instructions.
 
-Use this workflow when a task is assigned to:
+## Board synchronization
 
-```text
-agent: Codex
-```
+When available, `update_external_task_status` may be used to mirror progress to `in-progress`, `ready-for-review`, or `done`. This is best-effort presentation synchronization, not an execution lifecycle.
 
-## Launch Mode
+If status synchronization is unavailable or fails:
 
-Use interactive top-level Codex mode when Codex App/history visibility is required.
+- continue repository investigation and implementation;
+- do not roll back correct work;
+- do not re-run verification solely because board sync failed;
+- do not abandon or invalidate a valid commit;
+- do not reroute repository execution through DevFlow;
+- report the board-sync failure separately from repository-task completion.
 
-Known verified behavior:
+External summary/commit/verification fields are informational only and do not become authoritative DevFlow execution, Git, or verification evidence.
 
-- Use `codex`.
-- Use `-C` / `--cd` for local project root.
-- Use `-m` / `--model`.
-- Use `-a never` for no approval prompts.
-- Use `-s danger-full-access` for full workspace access.
-- Alternative dangerous mode: `--dangerously-bypass-approvals-and-sandbox`.
-- Do not use `codex exec` for app-history mode unless verified that exec history appears in Codex App.
-- No verified direct reasoning effort flag from the current help output, so effort should be prompt/config fallback until confirmed.
+## ChatGPT/@devflowz distinction
 
-## Command Behavior
+ChatGPT/@devflowz is a separate managed workflow that may require DevFlow claims, managed workspaces, ownership fencing, verification freshness, task-owned commits, integration, finalization, and recovery. The Codex Copy Prompt path neither replaces nor weakens that managed path; managed controls likewise are not prerequisites for Codex repository work after handoff.
 
-DevFlow should launch Codex in the DevFlow-managed workspace by resolving the physical root internally, then passing that resolved cwd to `-C` / `--cd`. Never ask the agent to derive the workspace path.
+## Optional/legacy DevFlow-launched Codex CLI behavior
 
-Conceptual command shape:
+The remainder of this file documents launch-specific compatibility behavior only. It is not authority for the card Copy Prompt.
 
-```bash
-codex -C <RESOLVED_MANAGED_WORKSPACE_ROOT> -m <MODEL> -a never -s danger-full-access
-```
+For older or explicit DevFlow-managed Codex launches, interactive top-level Codex mode may be used when Codex App/history visibility is required. Historically verified flags include `-C`/`--cd` for cwd, `-m`/`--model`, `-a never`, and configured sandbox modes. DevFlow-managed launchers may resolve an internal managed workspace cwd and maintain run logs.
 
-Alternative dangerous mode, if configured:
+Those launch-specific details must stay isolated from the current Copy Prompt. In particular, do not copy managed workspace cwd, run identity, approval/sandbox configuration, lifecycle completion callbacks, or DevFlow finalization requirements into the autonomous handoff prompt.
 
-```bash
-codex -C <RESOLVED_MANAGED_WORKSPACE_ROOT> -m <MODEL> --dangerously-bypass-approvals-and-sandbox
-```
+`codex exec` or other headless/CLI modes may be maintained as explicit launcher features when separately verified. CLI capability assumptions should be checked against the installed Codex version rather than invented.
 
-The final task prompt should be built from:
+## Failure handling for legacy launchers
 
-```text
-config/prompt-pipeline.json
-```
+A DevFlow-launched Codex process may fail because the CLI is missing, launch configuration is invalid, or a managed launch workspace cannot be resolved. Those are launcher failures. They do not redefine the semantics of a prompt that has already been copied manually to an independently running Codex session.
 
-Then the final prompt should be passed into the Codex session according to the supported local runner behavior.
-
-## App-history Mode
-
-For Codex App/history mode:
-
-- Prefer interactive top-level Codex mode.
-- Do not use `codex exec` unless verified that the execution appears in Codex App history.
-- Log that app-history mode was requested.
-- If future Codex CLI versions expose a confirmed history/session flag, update this workflow after checking `codex --help`.
-
-## Permission and Sandbox Behavior
-
-For no approval prompts:
-
-```text
--a never
-```
-
-For full workspace access:
-
-```text
--s danger-full-access
-```
-
-Alternative dangerous mode:
-
-```text
---dangerously-bypass-approvals-and-sandbox
-```
-
-Use dangerous permission/sandbox behavior only when DevFlow configuration allows it.
-
-If dangerous mode is disabled by configuration, DevFlow should not silently add it.
-
-## Reasoning Effort
-
-Current verified Codex CLI help does not confirm a direct reasoning effort flag for this workflow.
-
-Until a real flag is confirmed:
-
-- Put effort into the prompt as fallback.
-- Use config fallback if DevFlow has a supported Codex config mechanism.
-- Log effort handling as `prompt_fallback` or `config_fallback`.
-- Do not invent a CLI flag for effort.
-
-Example prompt fallback:
-
-```text
-Reasoning Effort: {task.effort}
-```
-
-## Logging
-
-Write a separate Codex run log.
-
-Log at minimum:
-
-- runId
-- taskId
-- projectId
-- project name if available
-- workspaceId (preferred); include a resolved cwd only in internal diagnostics when strictly needed, never in the task prompt
-- branch
-- model
-- effort
-- effort handling mode
-- command executable
-- command args without secrets
-- start time
-- end time
-- exit code if available
-- whether app-history mode was requested
-- approval mode
-- sandbox mode
-
-Do not leak secrets.
-
-Do not log API keys, tokens, `.env` content, cookies, or credential files.
-
-## Optional Exec / Headless Mode
-
-`codex exec` may be supported later for headless automation.
-
-Do not use `codex exec` for app-history mode until verified.
-
-If DevFlow adds a separate headless mode later, document it separately from app-history mode.
-
-## Failure Handling
-
-If `codex` is not found:
-
-- Mark the run as failed.
-- Tell the user Codex CLI is not available on PATH.
-- Do not fallback to another agent unless explicitly configured.
-
-If DevFlow cannot resolve the managed workspace root internally:
-
-- Mark the run as failed.
-- Do not guess, derive, or launch from another directory.
-
-If model is missing:
-
-- Use the task model if available.
-- Otherwise use the configured Codex default model.
-- Log which fallback was used.
-
-## Non-goals
-
-This file must not define the central task wording.
-
-This file must not define Antigravity or Claude behavior.
+Do not leak secrets in launcher logs or prompts.

@@ -154,7 +154,8 @@ test('commit plan marks focused coverage stale when its recorded target no longe
   assert.equal(plan.commitAllowed, false);
   assert.equal(plan.verificationCoverage.status, 'stale');
   assert.deepEqual(plan.verificationCoverage.staleCommands, ['focused-check']);
-  assert.ok(plan.blockers.some((entry: any) => entry.code === 'EXECUTION_VERIFICATION_COVERAGE_STALE'));
+  assert.ok(plan.blockers.some((entry: any) => entry.code === 'EXECUTION_OWNERSHIP_DRIFT'));
+  assert.ok(plan.debts.some((entry: any) => entry.code === 'EXECUTION_VERIFICATION_COVERAGE_STALE'));
 });
 
 test('commit plan selects only execution-owned changed files and preserves unrelated changes', () => {
@@ -197,7 +198,7 @@ test('commit plan matches execution-owned files inside a wholly new nested direc
   assert.deepEqual(plan.blockers, []);
 });
 
-test('commit plan accepts owned repair drift only when fresh verification covers the current revisions', () => {
+test('commit plan keeps ownership drift as hard safety even when verification is fresh', () => {
   const { workspace, taskId, session } = createFixture('verified-repair');
   fs.writeFileSync(path.join(workspace.root, 'src', 'owned.ts'), 'export const owned = 10;\n');
   execution.recordExecutionOwnedChanges(session.id, ['src/owned.ts'], { repoRoot: workspace.root, source: 'task-edit' });
@@ -212,9 +213,10 @@ test('commit plan accepts owned repair drift only when fresh verification covers
   assert.equal(ownership.verificationFresh, true);
   assert.deepEqual(ownership.verifiedOwnershipDrift.map((entry: any) => entry.path), ['src/owned.ts']);
   let plan = commitPlan.buildTaskCommitPlan({ countersCache: {} }, { taskId, workspaceId: workspace.workspaceId });
-  assert.equal(plan.commitAllowed, true);
+  assert.equal(plan.commitAllowed, false);
   assert.deepEqual(plan.verifiedOwnershipDrift.map((entry: any) => entry.path), ['src/owned.ts']);
-  assert.equal(plan.blockers.some((entry: any) => entry.code === 'EXECUTION_OWNERSHIP_DRIFT'), false);
+  assert.ok(plan.blockers.some((entry: any) => entry.code === 'EXECUTION_OWNERSHIP_DRIFT'));
+  assert.deepEqual(plan.debts, []);
 
   fs.writeFileSync(path.join(workspace.root, 'src', 'owned.ts'), 'export const owned = 12;\n');
   plan = commitPlan.buildTaskCommitPlan({ countersCache: {} }, { taskId, workspaceId: workspace.workspaceId });
@@ -222,7 +224,7 @@ test('commit plan accepts owned repair drift only when fresh verification covers
   assert.equal(plan.verificationFresh, false);
   assert.deepEqual(plan.verifiedOwnershipDrift, []);
   assert.ok(plan.blockers.some((entry: any) => entry.code === 'EXECUTION_OWNERSHIP_DRIFT'));
-  assert.ok(plan.blockers.some((entry: any) => entry.code === 'EXECUTION_VERIFICATION_NOT_FRESH'));
+  assert.ok(plan.debts.some((entry: any) => entry.code === 'EXECUTION_VERIFICATION_NOT_FRESH'));
 });
 
 test('commit plan distinguishes missing authoritative verification from stale verification', () => {
@@ -231,13 +233,14 @@ test('commit plan distinguishes missing authoritative verification from stale ve
   execution.recordExecutionOwnedChanges(session.id, ['src/owned.ts'], { repoRoot: workspace.root, source: 'task-edit' });
 
   const plan = commitPlan.buildTaskCommitPlan({ countersCache: {} }, { taskId, workspaceId: workspace.workspaceId });
-  assert.equal(plan.commitAllowed, false);
+  assert.equal(plan.commitAllowed, true);
   assert.equal(plan.verificationFresh, null);
   assert.equal(plan.verificationState, 'missing');
   assert.equal(plan.verificationRecordedAt, null);
-  const blocker = plan.blockers.find((entry: any) => entry.code === 'EXECUTION_VERIFICATION_NOT_FRESH');
-  assert.equal((blocker?.details as any)?.verificationState, 'missing');
-  assert.equal((blocker?.details as any)?.ownershipDriftCount, 0);
+  assert.deepEqual(plan.blockers, []);
+  const debt = plan.debts.find((entry: any) => entry.code === 'EXECUTION_VERIFICATION_NOT_FRESH');
+  assert.equal((debt?.details as any)?.verificationState, 'missing');
+  assert.equal((debt?.details as any)?.ownershipDriftCount, 0);
 });
 
 test('task-level passed verification metadata cannot substitute for execution-bound freshness', () => {
@@ -253,9 +256,10 @@ test('task-level passed verification metadata cannot substitute for execution-bo
   execution.recordExecutionOwnedChanges(session.id, ['src/owned.ts'], { repoRoot: workspace.root, source: 'task-edit' });
 
   const plan = commitPlan.buildTaskCommitPlan({ countersCache: {} }, { taskId, workspaceId: workspace.workspaceId });
-  assert.equal(plan.commitAllowed, false);
+  assert.equal(plan.commitAllowed, true);
   assert.equal(plan.verificationState, 'missing');
-  assert.ok(plan.blockers.some((entry: any) => entry.code === 'EXECUTION_VERIFICATION_NOT_FRESH'));
+  assert.deepEqual(plan.blockers, []);
+  assert.ok(plan.debts.some((entry: any) => entry.code === 'EXECUTION_VERIFICATION_NOT_FRESH'));
 });
 
 test('no owned changes and inactive sessions remain independent commit blockers', () => {
@@ -333,8 +337,8 @@ test('sequential verification batch blocks commit until every declared check pas
   assert.equal(plan.blockers.some((entry: any) => entry.code.startsWith('EXECUTION_VERIFICATION_BATCH_')), false);
 });
 
-test('failed batch member remains terminal and a newer explicit batch id is required for retry', () => {
-  const { workspace, session } = createFixture('sequential-batch-failure');
+test('failed batch member remains terminal debt and a newer explicit batch id is required for retry', () => {
+  const { workspace, taskId, session } = createFixture('sequential-batch-failure');
   fs.writeFileSync(path.join(workspace.root, 'src', 'owned.ts'), 'export const owned = 31;\n');
   execution.recordExecutionOwnedChanges(session.id, ['src/owned.ts'], { repoRoot: workspace.root, source: 'task-edit' });
   const captured = execution.captureExecutionVerificationProvenance(session.id, { repoRoot: workspace.root });
@@ -350,6 +354,11 @@ test('failed batch member remains terminal and a newer explicit batch id is requ
   });
   assert.equal(failed.state.status, 'failed');
   assert.equal(failed.authoritative, false);
+  const failedPlan = commitPlan.buildTaskCommitPlan({ countersCache: {} }, { taskId, workspaceId: workspace.workspaceId });
+  assert.equal(failedPlan.commitAllowed, true);
+  assert.equal(failedPlan.blockers.some((entry: any) => entry.code === 'EXECUTION_VERIFICATION_BATCH_FAILED'), false);
+  assert.ok(failedPlan.debts.some((entry: any) => entry.code === 'EXECUTION_VERIFICATION_BATCH_FAILED'));
+  assert.ok(failedPlan.debts.some((entry: any) => entry.code === 'EXECUTION_VERIFICATION_NOT_FRESH'));
   assert.throws(() => execution.recordExecutionVerificationBatchResult(session.id, {
     repoRoot: workspace.root, batchId: 'batch-fail-1', requiredChecks, checkId: 'typecheck', status: 'passed', captured,
     memberCandidate: { candidateId: 'vc-fail-typecheck-retry', repoRevision: captured.repoRevision, executionKey: 'cmd-fail-typecheck-retry' },
@@ -385,9 +394,14 @@ test('ownership drift terminalizes a pending verification batch as stale and req
 
   let plan = commitPlan.buildTaskCommitPlan({ countersCache: {} }, { taskId, workspaceId: workspace.workspaceId });
   assert.equal(plan.commitAllowed, false);
-  assert.ok(plan.blockers.some((entry: any) => entry.code === 'EXECUTION_VERIFICATION_BATCH_STALE'));
+  assert.ok(plan.blockers.some((entry: any) => entry.code === 'EXECUTION_OWNERSHIP_DRIFT'));
+  assert.ok(plan.debts.some((entry: any) => entry.code === 'EXECUTION_VERIFICATION_BATCH_STALE'));
 
   execution.recordExecutionOwnedChanges(session.id, ['src/owned.ts'], { repoRoot: workspace.root, source: 'task-repair' });
+  plan = commitPlan.buildTaskCommitPlan({ countersCache: {} }, { taskId, workspaceId: workspace.workspaceId });
+  assert.equal(plan.commitAllowed, true);
+  assert.deepEqual(plan.blockers, []);
+  assert.ok(plan.debts.some((entry: any) => entry.code === 'EXECUTION_VERIFICATION_BATCH_STALE'));
   const recaptured = execution.captureExecutionVerificationProvenance(session.id, { repoRoot: workspace.root });
   const retry = execution.recordExecutionVerificationBatchResult(session.id, {
     repoRoot: workspace.root, batchId: 'batch-stale-2', requiredChecks, checkId: 'focused', status: 'passed', captured: recaptured,
@@ -397,77 +411,53 @@ test('ownership drift terminalizes a pending verification batch as stale and req
   assert.equal(retry.state.batchId, 'batch-stale-2');
 });
 
-test('verification debt commit requires infra-blocked authority and preserves an auditable debt without faking fresh verification', () => {
+test('ordinary commit automatically preserves missing verification as auditable debt without bypass flags', () => {
   const { workspace, taskId, session } = createFixture('verification-debt');
   fs.writeFileSync(path.join(workspace.root, 'src', 'owned.ts'), 'export const owned = 40;\n');
   fs.writeFileSync(path.join(workspace.root, 'src', 'unrelated.ts'), 'export const unrelated = 40;\n');
   execution.recordExecutionOwnedChanges(session.id, ['src/owned.ts'], { repoRoot: workspace.root, source: 'task-edit' });
-  execution.recordExecutionLifecycleTransition(session.id, {
-    toStage: 'context-ready', reasonCode: 'debt-context', evidence: { id: 'debt-context', kind: 'context-bundle', status: 'completed' },
-  });
-  execution.recordExecutionLifecycleTransition(session.id, {
-    toStage: 'implementing', reasonCode: 'debt-implementing', evidence: { id: 'debt-implementing', kind: 'owned-change', status: 'completed' },
-  });
-  execution.recordExecutionLifecycleTransition(session.id, {
-    toStage: 'verifying', reasonCode: 'debt-verifying', evidence: { id: 'debt-verifying', kind: 'verification-result', status: 'completed' },
-  });
-  execution.recordExecutionLifecycleTransition(session.id, {
-    toStage: 'verification-infra-blocked', reasonCode: 'debt-infra', evidence: { id: 'debt-infra', kind: 'verification-result', status: 'completed' },
-  });
-  execution.recordExecutionSessionEvidence(session.id, [{
-    evidenceId: 'debt-infra-failure',
-    kind: 'verification-result',
-    revisionIdentity: 'debt-infra-failure',
-    metadata: { outcome: 'failed', terminal: true, failureClass: 'infrastructure', status: 'timed_out', timedOut: true },
-  }]);
 
-  assert.throws(
-    () => commitPlan.commitTaskOwnedChanges({ countersCache: {} }, { taskId, workspaceId: workspace.workspaceId, message: 'ordinary commit stays blocked' }),
-    /blocked/i,
-  );
-  assert.throws(
-    () => commitPlan.commitTaskOwnedChanges({ countersCache: {} }, {
-      taskId, workspaceId: workspace.workspaceId, message: 'debt commit missing authorization', preserveVerificationDebt: true,
-    }),
-    /emergency|authorization|reason/i,
-  );
+  const plan = commitPlan.buildTaskCommitPlan({ countersCache: {} }, { taskId, workspaceId: workspace.workspaceId });
+  assert.equal(plan.commitAllowed, true);
+  assert.deepEqual(plan.blockers, []);
+  assert.ok(plan.debts.some((entry: any) => entry.code === 'EXECUTION_VERIFICATION_NOT_FRESH'));
 
   const committed = commitPlan.commitTaskOwnedChanges({ countersCache: {} }, {
     taskId,
     workspaceId: workspace.workspaceId,
-    message: 'fix: preserve verification debt',
-    preserveVerificationDebt: true,
-    emergency: true,
-    reason: 'Verification failed because the runner exhausted heap.',
-    actorLabel: 'Operator Test',
+    message: 'fix: preserve verification debt automatically',
   });
   assert.equal(committed.verificationDebtPreserved, true);
+  assert.equal(committed.ownerBreakGlassApplied, false);
+  assert.deepEqual(committed.bypassedGates, []);
   assert.deepEqual(committed.committedFiles, ['src/owned.ts']);
   assert.deepEqual(committed.unrelatedChangesPreserved, ['src/unrelated.ts']);
-  assert.equal(execution.getExecutionOwnershipState(session.id, { repoRoot: workspace.root }).verificationFresh, null);
   const debt = execution.getExecutionSessionState(session.id).evidence.find((entry: any) => entry.kind === 'verification-debt');
   assert.equal(debt?.metadata?.status, 'outstanding');
-  assert.equal(debt?.metadata?.failureClass, 'infrastructure');
   assert.equal(debt?.metadata?.commitHash, committed.commitHash);
-  assert.equal((debt?.metadata as any)?.authorization?.reason, 'Verification failed because the runner exhausted heap.');
+  assert.equal(debt?.metadata?.verificationState, 'missing');
+  assert.deepEqual(debt?.metadata?.debtCodes, ['EXECUTION_VERIFICATION_NOT_FRESH']);
   assert.equal(fs.readFileSync(path.join(workspace.root, 'src', 'unrelated.ts'), 'utf8'), 'export const unrelated = 40;\n');
 });
 
-test('commit plan blocks stale verification after an owned file changes again', () => {
+test('stale verification is non-blocking debt once the changed ownership revision is explicitly re-adopted', () => {
   const { workspace, taskId, session } = createFixture('stale');
   fs.writeFileSync(path.join(workspace.root, 'src', 'owned.ts'), 'export const owned = 3;\n');
   execution.recordExecutionOwnedChanges(session.id, ['src/owned.ts'], { repoRoot: workspace.root, source: 'task-edit' });
   execution.recordExecutionVerificationEvidence(session.id, [{ name: 'focused', status: 'passed' }], { repoRoot: workspace.root });
   fs.writeFileSync(path.join(workspace.root, 'src', 'owned.ts'), 'export const owned = 4;\n');
+  execution.recordExecutionOwnedChanges(session.id, ['src/owned.ts'], { repoRoot: workspace.root, source: 'task-repair' });
 
   const plan = commitPlan.buildTaskCommitPlan({ countersCache: {} }, { taskId, workspaceId: workspace.workspaceId });
-  assert.equal(plan.commitAllowed, false);
+  assert.equal(plan.commitAllowed, true);
   assert.equal(plan.verificationFresh, false);
   assert.equal(plan.verificationState, 'stale');
-  const verificationBlocker = plan.blockers.find((entry: any) => entry.code === 'EXECUTION_VERIFICATION_NOT_FRESH');
-  assert.equal((verificationBlocker?.details as any)?.verificationState, 'stale');
-  assert.ok((verificationBlocker?.details as any)?.verificationRecordedAt);
-  assert.ok(plan.blockers.some((entry: any) => entry.code === 'EXECUTION_OWNERSHIP_DRIFT'));
-  assert.ok(verificationBlocker);
-  assert.throws(() => commitPlan.commitTaskOwnedChanges({ countersCache: {} }, { taskId, workspaceId: workspace.workspaceId, message: 'should not commit' }), /blocked/i);
+  assert.deepEqual(plan.ownershipDrift, []);
+  assert.deepEqual(plan.blockers, []);
+  const verificationDebt = plan.debts.find((entry: any) => entry.code === 'EXECUTION_VERIFICATION_NOT_FRESH');
+  assert.equal((verificationDebt?.details as any)?.verificationState, 'stale');
+  assert.ok((verificationDebt?.details as any)?.verificationRecordedAt);
+
+  const committed = commitPlan.commitTaskOwnedChanges({ countersCache: {} }, { taskId, workspaceId: workspace.workspaceId, message: 'fix: commit stale verification debt' });
+  assert.equal(committed.verificationDebtPreserved, true);
 });

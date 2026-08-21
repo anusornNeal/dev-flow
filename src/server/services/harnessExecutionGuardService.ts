@@ -3,6 +3,7 @@ import type { AppState } from '../types';
 import { getProject } from '../repositories/projectRepository.js';
 import { getTaskByIdentifier, getTasks, getTasksByProjectId } from '../repositories/taskRepository.js';
 import { createApiError } from './api.js';
+import { reconcileExecutionLifecycleStage } from './executionLifecycleReconciliationService.js';
 import { getProjectRulesContext } from './projectRulesService.js';
 import {
   evaluateHarnessPolicy,
@@ -384,7 +385,7 @@ export function preflightHarnessExecutionGuard(_state: AppState, toolNameValue: 
   }
 
   if (toolName === 'commit_git_changes') {
-    return blockedDecision(toolName, action, operationId, policy, binding, 'TASK_OWNED_COMMIT_REQUIRED', ['Lifecycle commits must use commit_task_owned_changes so execution ownership and verification freshness remain authoritative.']);
+    return blockedDecision(toolName, action, operationId, policy, binding, 'TASK_OWNED_COMMIT_REQUIRED', ['Task-bound execution commits must use commit_task_owned_changes so task ownership, scope, and Git safety remain authoritative.']);
   }
   if (action !== 'restart' && !binding) {
     return blockedDecision(toolName, action, operationId, policy, null, 'MANAGED_WORKSPACE_REQUIRED', ['Lifecycle-affecting execution requires an actively claimed task-bound managed workspace.']);
@@ -432,16 +433,11 @@ export function preflightHarnessExecutionGuard(_state: AppState, toolNameValue: 
       finalization: ['committed'],
     };
     for (const effect of effects) {
-      if (effect === 'restart') continue;
-      const emergencyDebtCommit = effect === 'commit'
-        && toolName === 'commit_task_owned_changes'
-        && stage === 'verification-infra-blocked'
-        && args.preserveVerificationDebt === true
-        && args.emergency === true;
+      if (effect === 'restart' || effect === 'mutation' || effect === 'commit') continue;
       const debtRecoveryVerification = effect === 'verification'
         && stage === 'committed'
         && Boolean(verificationDebt);
-      if (!allowedStages[effect].includes(stage) && !emergencyDebtCommit && !debtRecoveryVerification) {
+      if (!allowedStages[effect].includes(stage) && !debtRecoveryVerification) {
         return blockedDecision(toolName, effect, operationId, policy, binding, 'EXECUTION_LIFECYCLE_STAGE_BLOCKED', [`${effect} is not allowed while execution stage is '${stage}'. Allowed stages: ${allowedStages[effect].join(', ')}.`]);
       }
     }
@@ -676,11 +672,16 @@ export function recordHarnessExecutionOutcome(decision: HarnessExecutionGuardDec
     if (!commitWasCreated(result)) return null;
     const current = getTaskExecutionMutationBinding({ workspaceId: decision.execution.workspaceId });
     if (!current) return null;
-    if (current.session.lifecycle.stage === 'verification-infra-blocked' && result?.verificationDebtPreserved === true) {
-      return transition(sessionId, 'committed', 'verification-debt-commit-succeeded', decision, 'verification-debt-commit', 'git-commit');
-    }
-    if (current.session.lifecycle.stage !== 'verifying') return current.session.lifecycle;
-    return transition(sessionId, 'committed', 'task-owned-commit-succeeded', decision, 'commit', 'git-commit');
+    return reconcileExecutionLifecycleStage(sessionId, {
+      toStage: 'committed',
+      reasonCode: result?.verificationDebtPreserved === true ? 'task-owned-commit-succeeded-with-verification-debt' : 'task-owned-commit-succeeded',
+      evidence: {
+        id: `harness:${decision.operationId}:commit`,
+        kind: 'git-commit',
+        status: 'completed',
+        operationId: decision.operationId,
+      },
+    });
   }
   if (decision.action === 'finalization') {
     // The authoritative finalization service records the finalized lifecycle transition

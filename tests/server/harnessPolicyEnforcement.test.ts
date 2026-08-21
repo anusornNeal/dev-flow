@@ -71,23 +71,24 @@ test('execution guard composes policy, ownership, lifecycle, retry identity, and
     assert.equal(session.lifecycle.stage, 'created');
 
     const generic = preflightHarnessExecutionGuard(state, 'write_local_file', { projectId: project.id, filePath: 'value.txt' });
-    assert.equal(generic.allowed, true);
-    assert.equal(generic.guarded, false);
-    assert.equal(generic.reasonCode, 'GENERIC_NON_EXECUTION_UNGUARDED');
+    assert.equal(generic.allowed, false);
+    assert.equal(generic.guarded, true);
+    assert.equal(generic.reasonCode, 'EXECUTION_BINDING_REQUIRED');
 
     const unbound = preflightHarnessExecutionGuard(state, 'write_local_file', { projectId: project.id, taskId: task.id, filePath: 'value.txt' });
     assert.equal(unbound.allowed, false);
-    assert.equal(unbound.reasonCode, 'MANAGED_WORKSPACE_REQUIRED');
+    assert.equal(unbound.reasonCode, 'EXECUTION_BINDING_REQUIRED');
 
-    const tooEarly = preflightHarnessExecutionGuard(state, 'write_local_file', { workspaceId, filePath: 'value.txt' });
-    assert.equal(tooEarly.allowed, false);
-    assert.equal(tooEarly.reasonCode, 'EXECUTION_LIFECYCLE_STAGE_BLOCKED');
+    const mutationAtCreatedStage = preflightHarnessExecutionGuard(state, 'write_local_file', { workspaceId, filePath: 'value.txt' });
+    assert.equal(mutationAtCreatedStage.allowed, true);
+    assert.equal(mutationAtCreatedStage.guarded, true);
+    assert.equal(mutationAtCreatedStage.action, 'mutation');
+    assert.equal(mutationAtCreatedStage.execution?.stage, 'created');
 
-    const unclaimedContext = executionSessions.recordTaskExecutionContextReady({ projectId: project.id }, {
+    assert.throws(() => executionSessions.recordTaskExecutionContextReady({ projectId: project.id }, {
       contextHandle: 'ctx-unclaimed',
       repoRevision: session.repoRevision,
-    });
-    assert.equal(unclaimedContext, null);
+    }), /managed workspace|active task execution authority/i);
     assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'created');
 
     executionSessions.recordTaskExecutionContextReady({ workspaceId }, {
@@ -179,9 +180,10 @@ test('execution guard composes policy, ownership, lifecycle, retry identity, and
     assert.equal(genericCommit.allowed, false);
     assert.equal(genericCommit.reasonCode, 'TASK_OWNED_COMMIT_REQUIRED');
 
-    const tooEarlyOwnedCommit = preflightHarnessExecutionGuard(state, 'commit_task_owned_changes', { workspaceId, taskId: task.id, message: 'too early' });
-    assert.equal(tooEarlyOwnedCommit.allowed, false);
-    assert.equal(tooEarlyOwnedCommit.reasonCode, 'EXECUTION_LIFECYCLE_STAGE_BLOCKED');
+    const commitWithVerificationDebt = preflightHarnessExecutionGuard(state, 'commit_task_owned_changes', { workspaceId, taskId: task.id, message: 'commit with debt' });
+    assert.equal(commitWithVerificationDebt.allowed, true);
+    assert.equal(commitWithVerificationDebt.action, 'commit');
+    assert.equal(commitWithVerificationDebt.execution?.stage, 'repairing');
 
     const greenVerificationArgs = {
       ...verificationArgs,
@@ -228,7 +230,7 @@ test('execution guard composes policy, ownership, lifecycle, retry identity, and
       projectId: project.id, status: 'in-progress', priority: 'high', category: 'backend', tags: [], targetFiles: ['other.txt'],
       checklist: [], logs: [], bugs: [], images: [], createdAt: now, updatedAt: new Date().toISOString(),
     } as any);
-    const restart = preflightHarnessExecutionGuard(state, 'restart_devflow', { projectId: project.id });
+    const restart = preflightHarnessExecutionGuard(state, 'restart_devflow', { projectId: project.id, workspaceId });
     assert.equal(restart.allowed, true);
     assert.equal(restart.action, 'restart');
     assert.equal(restart.restartBlockers, undefined);
@@ -243,7 +245,7 @@ test('execution guard composes policy, ownership, lifecycle, retry identity, and
     const liveWorkspaceId = liveClaim.claim.workspaceId;
     const liveSession = executionSessions.getActiveTaskExecutionSessionForWorkspace(liveWorkspaceId)!;
 
-    const createdRestart = preflightHarnessExecutionGuard(state, 'restart_devflow', { projectId: project.id });
+    const createdRestart = preflightHarnessExecutionGuard(state, 'restart_devflow', { projectId: project.id, workspaceId });
     assert.equal(createdRestart.allowed, true);
     executionSessions.recordExecutionLifecycleTransition(liveSession.id, {
       toStage: 'context-ready', reasonCode: 'live-context', evidence: { id: 'live-context', kind: 'context-bundle', status: 'completed' },
@@ -252,7 +254,7 @@ test('execution guard composes policy, ownership, lifecycle, retry identity, and
       toStage: 'implementing', reasonCode: 'live-mutation', evidence: { id: 'live-mutation', kind: 'owned-change', status: 'completed' },
     });
 
-    const blockedRestart = preflightHarnessExecutionGuard(state, 'restart_devflow', { projectId: project.id });
+    const blockedRestart = preflightHarnessExecutionGuard(state, 'restart_devflow', { projectId: project.id, workspaceId });
     assert.equal(blockedRestart.allowed, false);
     assert.equal(blockedRestart.reasonCode, 'RELATED_WORK_ACTIVE');
     assert.equal(blockedRestart.restartBlockers?.length, 1);
@@ -273,7 +275,7 @@ test('execution guard composes policy, ownership, lifecycle, retry identity, and
   }
 });
 
-test('diagnostic verification failure after prior GREEN revokes normal commit readiness', () => {
+test('diagnostic verification failure after prior GREEN remains truthful debt without revoking commit admission', () => {
   resetSessionWorkspaceRuntimeForTests();
   const repoRoot = createRepo('diagnostic-after-green-failure-repo');
   const project = { id: 'project-diagnostic-after-green-failure', name: 'Diagnostic After Green Failure', repoUrl: 'https://example.com/diagnostic-after-green-failure', localPath: repoRoot };
@@ -321,8 +323,9 @@ test('diagnostic verification failure after prior GREEN revokes normal commit re
     assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'repairing');
 
     const commitAfterFailure = preflightHarnessExecutionGuard(state, 'commit_task_owned_changes', { workspaceId, taskId: task.id, message: 'after diagnostic failure' });
-    assert.equal(commitAfterFailure.allowed, false);
-    assert.equal(commitAfterFailure.reasonCode, 'EXECUTION_LIFECYCLE_STAGE_BLOCKED');
+    assert.equal(commitAfterFailure.allowed, true);
+    assert.equal(commitAfterFailure.action, 'commit');
+    assert.equal(commitAfterFailure.execution?.stage, 'repairing');
   } finally {
     const workspace = executionSessions.getTaskExecutionMutationBinding({ workspaceId })?.workspace;
     if (workspace) git(workspace.root, ['checkout', '--', 'value.txt']);
@@ -359,7 +362,8 @@ test('verification OOM preserves execution for verification-only recovery', () =
     const failureEvidence = executionSessions.getExecutionSessionState(current.id).evidence.find((entry: any) => entry.kind === 'verification-result');
     assert.equal(failureEvidence?.metadata?.failureClass, 'infrastructure');
     const mutation = preflightHarnessExecutionGuard(state, 'write_local_file', { workspaceId, filePath: 'value.txt' });
-    assert.equal(mutation.allowed, false);
+    assert.equal(mutation.allowed, true);
+    assert.equal(mutation.action, 'mutation');
     const recovery = preflightHarnessExecutionGuard(state, 'run_project_command', { workspaceId, command: 'test-focused', harnessOperationId: 'verification-oom-recovery' });
     assert.equal(recovery.allowed, true);
     assert.equal(recovery.execution?.stage, 'verification-infra-blocked');
@@ -373,12 +377,12 @@ test('verification OOM preserves execution for verification-only recovery', () =
     assert.deepEqual(getHarnessExecutionEffects('apply_and_verify', { workspaceId, requestedCommands: ['test-focused'] }), ['mutation', 'verification'], 'missing edit args must not implicitly downgrade the composite to verify-only');
     assert.deepEqual(getHarnessExecutionEffects('apply_prepared_edit', { editPlanId: 'plan-1' }), ['mutation']);
     assert.deepEqual(getHarnessExecutionEffects('apply_prepared_edit_plan', { editPlanId: 'plan-1' }), ['mutation']);
-    const blockedComposite = preflightHarnessExecutionGuard(state, 'apply_and_verify', compositeArgs);
-    assert.equal(blockedComposite.allowed, false);
-    assert.equal(blockedComposite.action, 'mutation');
-    assert.equal(blockedComposite.reasonCode, 'EXECUTION_LIFECYCLE_STAGE_BLOCKED');
-    const commit = preflightHarnessExecutionGuard(state, 'commit_task_owned_changes', { workspaceId, taskId: task.id, message: 'blocked' });
-    assert.equal(commit.allowed, false);
+    const recoveryComposite = preflightHarnessExecutionGuard(state, 'apply_and_verify', compositeArgs);
+    assert.equal(recoveryComposite.allowed, true);
+    assert.deepEqual(recoveryComposite.effects, ['mutation', 'verification']);
+    const commit = preflightHarnessExecutionGuard(state, 'commit_task_owned_changes', { workspaceId, taskId: task.id, message: 'commit with verification debt' });
+    assert.equal(commit.allowed, true);
+    assert.equal(commit.action, 'commit');
     const finalization = preflightHarnessExecutionGuard(state, 'finalize_task_workspace', { workspaceId, taskId: task.id });
     assert.equal(finalization.allowed, false);
 
@@ -508,18 +512,16 @@ test('verification debt commit gates finalization until authoritative recovery v
     recordHarnessExecutionOutcome(failedVerification, { ok: false, status: 'timed_out', timedOut: true, stderr: 'Java heap space' });
     assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'verification-infra-blocked');
 
-    const ordinaryCommit = preflightHarnessExecutionGuard(state, 'commit_task_owned_changes', { workspaceId, taskId: task.id, message: 'ordinary' });
-    assert.equal(ordinaryCommit.allowed, false);
-    const debtCommit = preflightHarnessExecutionGuard(state, 'commit_task_owned_changes', {
-      workspaceId, taskId: task.id, message: 'debt', preserveVerificationDebt: true, emergency: true,
-      reason: 'runner exhausted heap', actorLabel: 'Operator Test', harnessOperationId: 'debt-commit',
+    const ordinaryCommit = preflightHarnessExecutionGuard(state, 'commit_task_owned_changes', {
+      workspaceId, taskId: task.id, message: 'ordinary debt-preserving commit', harnessOperationId: 'debt-commit',
     });
-    assert.equal(debtCommit.allowed, true);
+    assert.equal(ordinaryCommit.allowed, true);
+    assert.equal(ordinaryCommit.action, 'commit');
     executionSessions.recordExecutionSessionEvidence(binding.session.id, [{
       evidenceId: 'verification-debt:fixture', kind: 'verification-debt', revisionIdentity: 'fixture-commit',
       metadata: { status: 'outstanding', commitHash: 'fixture-commit', failureClass: 'infrastructure', failureEvidenceId: 'harness:debt-infra-failure:verification-failure' },
     }]);
-    recordHarnessExecutionOutcome(debtCommit, {
+    recordHarnessExecutionOutcome(ordinaryCommit, {
       ok: true, status: 'succeeded', commitHash: 'fixture-commit', verificationDebtPreserved: true,
       verificationDebt: { evidenceId: 'verification-debt:fixture', status: 'outstanding' },
     });

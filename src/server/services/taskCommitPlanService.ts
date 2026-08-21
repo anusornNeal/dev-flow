@@ -5,10 +5,8 @@ import { listExecutionSessionsForTask } from '../repositories/executionSessionRe
 import { createApiError } from './api.js';
 import {
   getExecutionOwnershipState,
-  getExecutionSessionState,
   getExecutionVerificationBatchState,
   getExecutionVerificationCoverageEvidence,
-  recordExecutionReconciliationEvidence,
   recordExecutionSessionEvidence,
   type ExecutionVerificationBatchState,
 } from './executionSessionService.js';
@@ -45,6 +43,7 @@ export type TaskCommitPlan = {
   };
   commitAllowed: boolean;
   blockers: TaskCommitPlanBlocker[];
+  debts: TaskCommitPlanBlocker[];
 };
 
 function requireTaskId(value: unknown) {
@@ -185,13 +184,8 @@ function buildBlockers(input: {
   sessionStatus: string;
   ownedChangedFiles: string[];
   ownershipDrift: TaskCommitPlan['ownershipDrift'];
-  verificationFresh: boolean | null;
-  verificationState: TaskCommitPlan['verificationState'];
   authorityOwnershipActive: boolean;
   verificationBatch: ExecutionVerificationBatchState | null;
-  verificationRecordedAt: string | null;
-  verificationCoverage: { status: 'covered' | 'missing' | 'stale'; reusable: boolean; staleCommands: string[] };
-  verificationSatisfied: boolean;
 }) {
   const blockers: TaskCommitPlanBlocker[] = [];
   if (!input.authorityOwnershipActive) {
@@ -203,41 +197,55 @@ function buildBlockers(input: {
   if (input.ownedChangedFiles.length === 0) {
     blockers.push({ code: 'TASK_COMMIT_NO_OWNED_CHANGES', message: 'No current working-tree changes belong to this execution session.' });
   }
-  if (input.ownershipDrift.length > 0 && !input.verificationSatisfied) {
+  if (input.ownershipDrift.length > 0) {
     blockers.push({
       code: 'EXECUTION_OWNERSHIP_DRIFT',
-      message: `${input.ownershipDrift.length} owned file(s) changed outside the last known execution revision.`,
+      message: `${input.ownershipDrift.length} owned file(s) changed outside the last known execution revision and must be explicitly re-adopted before commit.`,
       details: { files: input.ownershipDrift },
     });
   }
   if (input.verificationBatch?.status === 'pending') {
     blockers.push({
       code: 'EXECUTION_VERIFICATION_BATCH_INCOMPLETE',
-      message: `Verification batch '${input.verificationBatch.batchId}' still has pending required checks.`,
+      message: `Verification batch '${input.verificationBatch.batchId}' still has pending required checks and may still be writing execution evidence.`,
       details: { batchId: input.verificationBatch.batchId, pending: input.verificationBatch.pending },
     });
-  } else if (input.verificationBatch?.status === 'failed') {
-    blockers.push({
+  }
+  return blockers;
+}
+
+function buildDebts(input: {
+  ownershipDrift: TaskCommitPlan['ownershipDrift'];
+  verificationFresh: boolean | null;
+  verificationState: TaskCommitPlan['verificationState'];
+  verificationBatch: ExecutionVerificationBatchState | null;
+  verificationRecordedAt: string | null;
+  verificationCoverage: { status: 'covered' | 'missing' | 'stale'; reusable: boolean; staleCommands: string[] };
+  verificationSatisfied: boolean;
+}) {
+  const debts: TaskCommitPlanBlocker[] = [];
+  if (input.verificationBatch?.status === 'failed') {
+    debts.push({
       code: 'EXECUTION_VERIFICATION_BATCH_FAILED',
       message: `Verification batch '${input.verificationBatch.batchId}' contains failed required checks.`,
       details: { batchId: input.verificationBatch.batchId, failed: input.verificationBatch.failed },
     });
   } else if (input.verificationBatch?.status === 'stale') {
-    blockers.push({
+    debts.push({
       code: 'EXECUTION_VERIFICATION_BATCH_STALE',
       message: `Verification batch '${input.verificationBatch.batchId}' is stale for the current execution ownership revision.`,
       details: { batchId: input.verificationBatch.batchId, stale: input.verificationBatch.stale },
     });
   }
   if (input.verificationCoverage.status === 'stale') {
-    blockers.push({
+    debts.push({
       code: 'EXECUTION_VERIFICATION_COVERAGE_STALE',
       message: 'Authoritative verification no longer covers the current affected inputs, dependencies, command configuration, or environment.',
       details: { staleCommands: input.verificationCoverage.staleCommands },
     });
   }
   if (!input.verificationSatisfied) {
-    blockers.push({
+    debts.push({
       code: 'EXECUTION_VERIFICATION_NOT_FRESH',
       message: input.verificationState === 'missing'
         ? 'Authoritative execution verification is missing for the current owned file revisions.'
@@ -250,7 +258,7 @@ function buildBlockers(input: {
       },
     });
   }
-  return blockers;
+  return debts;
 }
 
 export function buildTaskCommitPlan(_state: AppState, args: Record<string, any>): TaskCommitPlan {
@@ -301,6 +309,10 @@ export function buildTaskCommitPlan(_state: AppState, args: Record<string, any>)
     sessionStatus: session.status,
     ownedChangedFiles: ownership.ownedChanges,
     ownershipDrift: ownership.ownershipDrift,
+    verificationBatch,
+  });
+  const debts = buildDebts({
+    ownershipDrift: ownership.ownershipDrift,
     verificationFresh: ownership.verificationFresh,
     verificationState,
     verificationRecordedAt,
@@ -323,99 +335,13 @@ export function buildTaskCommitPlan(_state: AppState, args: Record<string, any>)
     verificationCoverage,
     commitAllowed: blockers.length === 0,
     blockers,
-  };
-}
-
-const VERIFICATION_DEBT_BYPASS_BLOCKERS = new Set([
-  'EXECUTION_VERIFICATION_BATCH_FAILED',
-  'EXECUTION_VERIFICATION_NOT_FRESH',
-]);
-
-const OWNER_BREAK_GLASS_BYPASS_BLOCKERS = new Set([
-  'LIFECYCLE_AUTHORITY_NOT_OWNED',
-  'EXECUTION_SESSION_NOT_ACTIVE',
-  'EXECUTION_OWNERSHIP_DRIFT',
-  'EXECUTION_VERIFICATION_BATCH_INCOMPLETE',
-  'EXECUTION_VERIFICATION_BATCH_FAILED',
-  'EXECUTION_VERIFICATION_BATCH_STALE',
-  'EXECUTION_VERIFICATION_NOT_FRESH',
-]);
-
-function latestInfrastructureFailure(executionSessionId: string) {
-  return [...getExecutionSessionState(executionSessionId).evidence]
-    .reverse()
-    .find((entry: any) => entry.kind === 'verification-result'
-      && entry.metadata?.outcome === 'failed'
-      && entry.metadata?.failureClass === 'infrastructure') || null;
-}
-
-function requireVerificationDebtAuthorization(plan: TaskCommitPlan, args: Record<string, any>) {
-  if (args.preserveVerificationDebt !== true) return null;
-  if (args.emergency !== true) {
-    throw createApiError(409, 'VERIFICATION_DEBT_EMERGENCY_AUTHORIZATION_REQUIRED', 'Verification-debt commit requires explicit emergency authorization.');
-  }
-  const reason = String(args.reason || '').trim();
-  const actorLabel = String(args.actorLabel || '').trim();
-  if (!reason || !actorLabel) {
-    throw createApiError(400, 'VERIFICATION_DEBT_AUDIT_CONTEXT_REQUIRED', 'Verification-debt commit requires non-empty reason and actorLabel audit context.');
-  }
-  const session = getExecutionSessionState(plan.executionSessionId).session;
-  if (session.status !== 'active' || session.lifecycle.stage !== 'verification-infra-blocked') {
-    throw createApiError(409, 'VERIFICATION_DEBT_INFRA_BLOCKED_STAGE_REQUIRED', 'Verification-debt commit is allowed only for an active execution in verification-infra-blocked stage.', {
-      details: { sessionStatus: session.status, lifecycleStage: session.lifecycle.stage },
-    });
-  }
-  const failureEvidence = latestInfrastructureFailure(plan.executionSessionId);
-  if (!failureEvidence) {
-    throw createApiError(409, 'VERIFICATION_DEBT_INFRA_EVIDENCE_REQUIRED', 'Verification-debt commit requires recorded infrastructure-failure evidence for this execution.');
-  }
-  const nonVerificationBlockers = plan.blockers.filter((entry) => !VERIFICATION_DEBT_BYPASS_BLOCKERS.has(entry.code));
-  if (nonVerificationBlockers.length > 0) {
-    throw createApiError(409, 'VERIFICATION_DEBT_HARD_BLOCKER', 'Verification-debt commit cannot bypass ownership, scope, pending-batch, or lifecycle authority blockers.', {
-      details: { blockers: nonVerificationBlockers, allBlockers: plan.blockers },
-    });
-  }
-  return { reason, actorLabel, failureEvidence };
-}
-
-function requireOwnerBreakGlassAuthorization(plan: TaskCommitPlan, args: Record<string, any>) {
-  const authority = args.ownerBreakGlass;
-  if (!authority) return null;
-  const operationId = String(authority.operationId || '').trim();
-  const reason = String(authority.reason || '').trim();
-  const actorLabel = String(authority.actorLabel || '').trim();
-  const expectedOwnedFingerprint = String(authority.expectedOwnedFingerprint || '').trim();
-  if (!operationId || !reason || !actorLabel || !expectedOwnedFingerprint) {
-    throw createApiError(400, 'OWNER_BREAK_GLASS_AUDIT_CONTEXT_REQUIRED', 'Owner break-glass commit requires operationId, reason, actorLabel, and expectedOwnedFingerprint.');
-  }
-  const workspace = resolveSessionWorkspace(plan.workspaceId);
-  if (!workspace) throw createApiError(404, 'WORKSPACE_NOT_FOUND', `Workspace '${plan.workspaceId}' was not found.`, { affectedId: plan.workspaceId });
-  const ownership = getExecutionOwnershipState(plan.executionSessionId, { repoRoot: workspace.root });
-  if (ownership.ownedFingerprint !== expectedOwnedFingerprint) {
-    throw createApiError(409, 'OWNER_BREAK_GLASS_OWNED_FINGERPRINT_MISMATCH', 'Owner break-glass authorization no longer matches the exact current owned diff.', {
-      details: { expectedOwnedFingerprint, actualOwnedFingerprint: ownership.ownedFingerprint },
-    });
-  }
-  const nonBypassable = plan.blockers.filter((entry) => !OWNER_BREAK_GLASS_BYPASS_BLOCKERS.has(entry.code));
-  if (nonBypassable.length > 0) {
-    throw createApiError(409, 'OWNER_BREAK_GLASS_HARD_BLOCKER', 'Owner break-glass cannot bypass physical, identity, or no-owned-change blockers.', {
-      details: { blockers: nonBypassable, allBlockers: plan.blockers },
-    });
-  }
-  return {
-    operationId,
-    reason,
-    actorLabel,
-    expectedOwnedFingerprint,
-    bypassedGates: plan.blockers.map((entry) => entry.code),
+    debts,
   };
 }
 
 export function commitTaskOwnedChanges(state: AppState, args: Record<string, any>) {
   const plan = buildTaskCommitPlan(state, args);
-  const debtAuthorization = requireVerificationDebtAuthorization(plan, args);
-  const ownerAuthorization = requireOwnerBreakGlassAuthorization(plan, args);
-  if (!plan.commitAllowed && !debtAuthorization && !ownerAuthorization) {
+  if (!plan.commitAllowed) {
     throw createApiError(409, 'TASK_COMMIT_PLAN_BLOCKED', 'Task-owned commit is blocked until all commit-plan blockers are resolved.', {
       affectedId: plan.taskId,
       details: { workspaceId: plan.workspaceId, blockers: plan.blockers },
@@ -424,10 +350,10 @@ export function commitTaskOwnedChanges(state: AppState, args: Record<string, any
   const workspace = resolveSessionWorkspace(plan.workspaceId)!;
   const task = getTaskByIdentifier(args.taskId, 'full') || { id: plan.taskId };
   const message = renderTaskCommitMessage(args.message, task as any, { gitWorkflowPolicy: workspace.gitWorkflowPolicy } as any);
-  const ownershipBeforeCommit = debtAuthorization || ownerAuthorization
+  const ownershipBeforeCommit = plan.debts.length > 0
     ? getExecutionOwnershipState(plan.executionSessionId, { repoRoot: workspace.root })
     : null;
-  const batchBeforeCommit = debtAuthorization ? getExecutionVerificationBatchState(plan.executionSessionId) : null;
+  const batchBeforeCommit = plan.debts.length > 0 ? getExecutionVerificationBatchState(plan.executionSessionId) : null;
   const result = commitGitChanges(state, {
     localPath: workspace.root,
     message,
@@ -437,25 +363,21 @@ export function commitTaskOwnedChanges(state: AppState, args: Record<string, any
   }, { taskAware: true });
   const { root: _physicalRoot, ...safeResult } = result as any;
   let verificationDebt: Record<string, unknown> | null = null;
-  if (debtAuthorization && args.dryRun !== true) {
+  if (plan.debts.length > 0 && args.dryRun !== true) {
     const commitHash = String((safeResult as any).commitHash || (safeResult as any).hash || '').trim();
     const debtEvidenceId = `verification-debt:${commitHash || plan.executionSessionId}`;
-    const failureMetadata = (debtAuthorization.failureEvidence as any).metadata || {};
     verificationDebt = {
       status: 'outstanding',
       commitHash: commitHash || null,
-      candidateId: String(args.expectedCandidateId || failureMetadata.candidateId || '').trim() || null,
       repoRevision: ownershipBeforeCommit?.repoRevision || null,
       ownedFingerprint: ownershipBeforeCommit?.ownedFingerprint || null,
       verificationBatchId: batchBeforeCommit?.batchId || null,
       failedChecks: batchBeforeCommit?.failed || [],
-      failureEvidenceId: debtAuthorization.failureEvidence.id,
-      failureClass: 'infrastructure',
-      authorization: {
-        emergency: true,
-        reason: debtAuthorization.reason,
-        actorLabel: debtAuthorization.actorLabel,
-      },
+      verificationState: plan.verificationState,
+      verificationFresh: plan.verificationFresh,
+      verificationCoverage: plan.verificationCoverage,
+      debtCodes: plan.debts.map((entry) => entry.code),
+      debts: plan.debts,
       recordedAt: new Date().toISOString(),
     };
     recordExecutionSessionEvidence(plan.executionSessionId, [{
@@ -466,20 +388,6 @@ export function commitTaskOwnedChanges(state: AppState, args: Record<string, any
     }]);
     (verificationDebt as any).evidenceId = debtEvidenceId;
   }
-  if (ownerAuthorization && args.dryRun !== true) {
-    const commitHash = String((safeResult as any).commitHash || (safeResult as any).hash || '').trim() || null;
-    recordExecutionReconciliationEvidence(plan.executionSessionId, 'operator-break-glass-commit', {
-      ownerBreakGlass: true,
-      operationId: ownerAuthorization.operationId,
-      reason: ownerAuthorization.reason,
-      actorLabel: ownerAuthorization.actorLabel,
-      commitHash,
-      repoRevision: ownershipBeforeCommit?.repoRevision || null,
-      ownedFingerprint: ownershipBeforeCommit?.ownedFingerprint || ownerAuthorization.expectedOwnedFingerprint,
-      bypassedGates: ownerAuthorization.bypassedGates,
-    });
-  }
-
   return {
     ...safeResult,
     taskId: plan.taskId,
@@ -487,9 +395,9 @@ export function commitTaskOwnedChanges(state: AppState, args: Record<string, any
     workspaceId: plan.workspaceId,
     committedFiles: plan.ownedChangedFiles,
     unrelatedChangesPreserved: plan.unrelatedChangedFiles,
-    verificationDebtPreserved: Boolean(debtAuthorization && args.dryRun !== true),
+    verificationDebtPreserved: Boolean(plan.debts.length > 0 && args.dryRun !== true),
     verificationDebt,
-    ownerBreakGlassApplied: Boolean(ownerAuthorization && args.dryRun !== true),
-    bypassedGates: ownerAuthorization?.bypassedGates || [],
+    ownerBreakGlassApplied: false,
+    bypassedGates: [],
   };
 }

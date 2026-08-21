@@ -22,8 +22,12 @@ export function buildVerificationCoverageIdentity(value: any): VerificationCover
   const command = typeof value.command === 'string' ? value.command.trim() : '';
   const semanticKey = typeof value.semanticKey === 'string' ? value.semanticKey.trim() : '';
   if (!command || !semanticKey) return null;
-  const affectedInputPaths = Array.isArray(value.affectedInputPaths)
-    ? Array.from(new Set(value.affectedInputPaths.map((entry: unknown) => String(entry || '').trim()).filter(Boolean))).sort()
+  const affectedInputPaths: string[] = Array.isArray(value.affectedInputPaths)
+    ? Array.from(new Set<string>(
+        value.affectedInputPaths
+          .map((entry: unknown): string => String(entry || '').trim())
+          .filter((entry: string) => entry.length > 0),
+      )).sort()
     : [];
   const comparable = {
     command,

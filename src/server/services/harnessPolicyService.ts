@@ -103,7 +103,6 @@ export type HarnessPolicy = {
       taskOwnedCommit: true;
       safeIntegration: true;
       freshPolicy: true;
-      verificationEvidenceRequired: boolean;
     };
     missingFacts: string[];
   }>;
@@ -475,10 +474,7 @@ function evaluateRestart(input: NormalizedHarnessPolicyInput): HarnessPolicyDeci
   return hardDecision({ gate: 'allowed' }, ['RELATED_WORK_INACTIVE']);
 }
 
-function evaluateFinalization(
-  input: NormalizedHarnessPolicyInput,
-  verificationEvidenceRequired: boolean,
-): HarnessPolicy['finalization'] {
+function evaluateFinalization(input: NormalizedHarnessPolicyInput): HarnessPolicy['finalization'] {
   const requiredFacts: Array<[string, boolean | undefined]> = [
     ['managedWorkspace', input.runtime.managedWorkspace],
     ['ownershipProven', input.runtime.ownershipProven],
@@ -498,7 +494,6 @@ function evaluateFinalization(
       taskOwnedCommit: true,
       safeIntegration: true,
       freshPolicy: true,
-      verificationEvidenceRequired,
     },
     missingFacts,
   }, missingFacts.length === 0
@@ -521,7 +516,7 @@ export function evaluateHarnessPolicy(rawInput: HarnessPolicyInput): HarnessPoli
   const verification = applyVerificationRiskMinimum(input, verificationResolved);
   const parallel = evaluateParallel(input, parallelResolved);
   const restart = evaluateRestart(input);
-  const finalization = evaluateFinalization(input, verification.value.required);
+  const finalization = evaluateFinalization(input);
 
   if (unknownReasons.length > 0) {
     planningEvidence.reasonCodes = [...planningEvidence.reasonCodes, ...unknownReasons, 'UNKNOWN_INPUT_CONSERVATIVE'];

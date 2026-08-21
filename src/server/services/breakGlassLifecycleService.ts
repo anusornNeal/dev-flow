@@ -39,13 +39,10 @@ import { getGitCommitEvidenceForRoot, getGitWorkspaceSnapshotForRoot } from './g
 import { renderTaskCommitMessage, resolveProjectGitWorkflowPolicy, taskCommitSubjectMatchesPolicy } from './projectGitWorkflowPolicyService.js';
 
 export const BREAK_GLASS_ACTIONS = [
-  'rotate-execution-preserve-wip',
-  'release-ownership-preserve-wip',
   'finalize-as-integrated',
   'reconcile-integrated-detached',
   'supersede-execution',
   'supersede-task-work',
-  'commit-current-owned-diff',
   'discard-wip',
 ] as const;
 
@@ -53,7 +50,7 @@ export type BreakGlassLifecycleAction = typeof BREAK_GLASS_ACTIONS[number];
 
 export type BreakGlassLifecycleInput = {
   operationId: string;
-  action: BreakGlassLifecycleAction;
+  action: string;
   reason: string;
   actorLabel: string;
   projectId: string;
@@ -586,19 +583,14 @@ function executeDetachedIntegratedRecovery(
       details: { debtEvidenceIds: recovery.outstandingDebts.map((entry) => entry.id) },
     });
   }
-  if (selected.status === 'active' && !['verifying', 'verification-infra-blocked', 'committed', 'finalized'].includes(selected.lifecycle.stage)) {
-    throw createApiError(409, 'BREAK_GLASS_DETACHED_EXECUTION_STAGE_BLOCKED', `Execution '${selected.id}' cannot be reconciled from lifecycle stage '${selected.lifecycle.stage}'.`, {
-      details: { executionSessionId: selected.id, stage: selected.lifecycle.stage },
-    });
-  }
-  if (selected.status !== 'active' && !(selected.status === 'completed' && selected.lifecycle.stage === 'finalized')) {
-    throw createApiError(409, 'BREAK_GLASS_DETACHED_EXECUTION_TERMINAL_INVALID', `Execution '${selected.id}' is terminal (${selected.status}) without finalized lifecycle evidence.`);
+  if (selected.status !== 'active' && selected.status !== 'completed') {
+    throw createApiError(409, 'BREAK_GLASS_DETACHED_EXECUTION_TERMINAL_INVALID', `Execution '${selected.id}' is terminal (${selected.status}) and cannot represent successful integrated recovery.`);
   }
 
   const checks = Array.isArray(input.checks) ? input.checks : [];
   const needsDebtCreation = recovery.outstandingDebts.length === 0 && latestFailureClass === 'infrastructure';
   const needsGreenBinding = selected.status === 'active'
-    && (needsDebtCreation || recovery.outstandingDebts.length === 1 || selected.lifecycle.stage === 'verifying' || selected.lifecycle.stage === 'verification-infra-blocked');
+    && (needsDebtCreation || recovery.outstandingDebts.length === 1);
   const revisionBoundGreen = checks.filter((check) => check?.status === 'passed' && String(check.repoRevision || '').trim() === integration.baseHeadAfter);
   if (needsGreenBinding && revisionBoundGreen.length === 0) {
     throw createApiError(409, 'BREAK_GLASS_DETACHED_GREEN_VERIFICATION_REQUIRED', 'Detached integrated recovery requires authoritative GREEN verification bound to the current configured base revision before debt settlement/finalization.', {
@@ -681,19 +673,6 @@ function executeDetachedIntegratedRecovery(
         },
       }]);
     }
-    const freshSession = getExecutionSessionById(selected.id);
-    if (freshSession?.status === 'active' && (freshSession.lifecycle.stage === 'verifying' || freshSession.lifecycle.stage === 'verification-infra-blocked')) {
-      recordExecutionLifecycleTransition(selected.id, {
-        toStage: 'committed',
-        reasonCode: 'detached-integrated-green-settlement',
-        evidence: {
-          id: `detached-integrated:${operation.id}:commit-proof`,
-          kind: 'detached-integrated-recovery',
-          status: 'completed',
-          operationId: operation.id,
-        },
-      });
-    }
     injectBreakGlassFault('after-detached-green-settlement');
   }
 
@@ -772,11 +751,6 @@ function executeFinalizeAsIntegrated(state: AppState, operation: LifecycleEmerge
     operationId: clean(input.finalizationOperationId, 200) || undefined,
     checks: Array.isArray(input.checks) ? input.checks : [],
     requireChecklistComplete: false,
-    ownerBreakGlass: {
-      operationId: operation.id,
-      reason: input.reason,
-      actorLabel: input.actorLabel,
-    },
   });
   if (finalized.status !== 'completed' && finalized.status !== 'cleanup-pending') {
     return updateAudit(operation, {
@@ -794,10 +768,7 @@ function executeFinalizeAsIntegrated(state: AppState, operation: LifecycleEmerge
     finalizationStatus: finalized.status,
     finalizationOperationId: finalized.operation?.id || null,
     integratedRevision: reconstructed.baseHeadAfter,
-  }, { expectedCommit, integratedRevision: reconstructed.baseHeadAfter }, Array.from(new Set([
-    'TASK_PRESENTATION_OR_FINALIZATION_POLICY',
-    ...((((finalized.operation?.verification as any)?.bypassedGates) || []) as string[]),
-  ])), hardChecks, finalized.status === 'cleanup-pending' ? 'cleanup-pending' : 'cleaned-or-safe');
+  }, { expectedCommit, integratedRevision: reconstructed.baseHeadAfter }, [], hardChecks, finalized.status === 'cleanup-pending' ? 'cleanup-pending' : 'cleaned-or-safe');
 }
 
 function executeSupersede(operation: LifecycleEmergencyOperationRecord, input: BreakGlassLifecycleInput, task: any, workspace: ReturnType<typeof expectedWorkspace>, hardChecks: Array<Record<string, unknown>>) {

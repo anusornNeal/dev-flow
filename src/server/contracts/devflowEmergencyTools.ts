@@ -1,20 +1,17 @@
 import { withQuery, type DevFlowToolDefinition } from './devflowContractCore.js';
 
 const actionEnum = [
-  'rotate-execution-preserve-wip',
-  'release-ownership-preserve-wip',
   'finalize-as-integrated',
   'reconcile-integrated-detached',
   'supersede-execution',
   'supersede-task-work',
-  'commit-current-owned-diff',
   'discard-wip',
 ] as const;
 
 export const emergencyToolDefinitions: DevFlowToolDefinition[] = [
   {
     name: 'break_glass_lifecycle',
-    description: 'Run one explicit audited human owner lifecycle disposition. One stable operationId carries owner authority through bypassable verification freshness, stale lifecycle metadata, and soft workflow/finalization gates without manufacturing GREEN evidence. Hard task/project/workspace identity, cross-worker WIP, real Git conflicts, missing roots, and OS/filesystem failures remain recovery blockers. Never enables a global emergency mode and never pushes/fetches.',
+    description: 'Run one explicit audited destructive or emergency lifecycle recovery disposition. Normal commit, claim release/rotation, verification debt, and ordinary status/finalization flow stay on the flexible non-emergency lifecycle path. Break-glass is reserved for exact integrated recovery, explicit supersession, or acknowledged WIP discard; hard task/project/workspace identity, cross-worker WIP, conflicting live operations, real Git conflicts, missing roots, and OS/filesystem failures remain blockers. Never enables a global emergency mode and never pushes/fetches.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -46,7 +43,7 @@ export const emergencyToolDefinitions: DevFlowToolDefinition[] = [
         destructiveAck: { type: 'boolean', description: 'Required true only for discard-wip. Generic emergency intent is not destructive authorization.' },
         checks: {
           type: 'array',
-          description: 'Optional verification evidence. Owner break-glass may explicitly bypass missing/stale verification policy; skipped gates are audited and no synthetic passed verification is created.',
+          description: 'Optional truthful verification evidence for exact emergency recovery. Missing, failed, or stale verification remains quality debt handled by the normal flexible lifecycle; break-glass does not convert it into GREEN evidence or a workflow bypass.',
           items: {
             type: 'object',
             properties: {

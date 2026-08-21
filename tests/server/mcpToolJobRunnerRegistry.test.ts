@@ -86,7 +86,7 @@ test('direct run_project_command retries proven infrastructure failure through a
   assert.equal(permitRequests.length, 1);
 });
 
-test('apply_and_verify async runner fails closed before source mutation in verification-infra-blocked', async () => {
+test('apply_and_verify async runner treats verification-infra-blocked as recoverable debt instead of mutation authority', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-runner-composite-blocked-'));
   fs.writeFileSync(path.join(root, 'value.txt'), 'before\n', 'utf8');
   const git = (args: string[]) => {
@@ -133,26 +133,24 @@ test('apply_and_verify async runner fails closed before source mutation in verif
     });
     assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'verification-infra-blocked');
 
-    const before = fs.readFileSync(path.join(binding.workspace.root, 'value.txt'), 'utf8');
-    await assert.rejects(
-      runBuiltinToolJob({
-        toolName: 'apply_and_verify', state,
-        args: {
-          projectId: project.id,
-          workspaceId,
-          files: [{ filePath: 'value.txt', edits: [{ type: 'replace', find: 'before', replaceWith: 'after' }] }],
-          requestedCommands: ['test-focused'],
-        },
-      }, {
-        logger: { stdout: () => {}, stderr: () => {} },
-        setCancelFn: () => {},
-        transitionAccess: () => {},
-      }),
-      (error: any) => error?.payload?.code === 'EXECUTION_LIFECYCLE_STAGE_BLOCKED',
-    );
-    assert.equal(fs.readFileSync(path.join(binding.workspace.root, 'value.txt'), 'utf8'), before, 'composite guard must fail before any source byte changes');
-    assert.equal(git(['-C', binding.workspace.root, 'status', '--porcelain']).trim(), '', 'blocked composite must not leave staging or worktree drift');
+    const result = await runBuiltinToolJob({
+      toolName: 'apply_and_verify', state,
+      args: {
+        projectId: project.id,
+        workspaceId,
+        files: [{ filePath: 'value.txt', edits: [{ type: 'replace', find: 'before', replaceWith: 'after' }] }],
+        requestedCommands: [],
+      },
+    }, {
+      logger: { stdout: () => {}, stderr: () => {} },
+      setCancelFn: () => {},
+      transitionAccess: () => {},
+    }) as any;
+    assert.equal(result.ok, false, 'no verification command means quality is not GREEN, but stale stage is not mutation authority');
+    assert.equal(fs.readFileSync(path.join(binding.workspace.root, 'value.txt'), 'utf8').trim(), 'after');
+    assert.match(git(['-C', binding.workspace.root, 'status', '--porcelain']), /value\.txt/);
   } finally {
+    git(['-C', executionSessions.getTaskExecutionMutationBinding({ workspaceId })?.workspace.root || root, 'checkout', '--', 'value.txt']);
     releaseTaskClaim(task.id, { sessionId: 'runner-composite-blocked-session', nextStatus: 'todo' });
     cleanupSessionWorkspace(workspaceId);
   }

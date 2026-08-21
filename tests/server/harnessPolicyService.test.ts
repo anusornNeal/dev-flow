@@ -163,8 +163,10 @@ test('finalization exposes hard lifecycle requirements and eligibility from prov
     taskOwnedCommit: true,
     safeIntegration: true,
     freshPolicy: true,
-    verificationEvidenceRequired: true,
   });
+  assert.equal(policy.verification.authority, 'soft');
+  assert.equal(policy.verification.value.required, true);
+  assert.equal('verificationEvidenceRequired' in policy.finalization.value.requirements, false);
   assert.equal(policy.integrity.requireTaskOwnedCommit.value, true);
   assert.equal(policy.integrity.requireTaskOwnedCommit.authority, 'hard');
   assert.equal(policy.integrity.requireFreshPolicyForLifecycleAction.value, true);

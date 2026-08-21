@@ -513,16 +513,28 @@ export function buildChatGptHarnessEnvelope(state: AppState, task: any) {
       })
     : [];
   const policy = decisions.find((entry) => entry.decision.policy)?.decision.policy || null;
-  const policyBlockers = decisions
-    .filter((entry) => !entry.decision.allowed && entry.decision.reasonCode !== 'EXECUTION_LIFECYCLE_STAGE_BLOCKED')
+  const deniedReasonCodes = decisions
+    .filter((entry) => !entry.decision.allowed)
     .map((entry) => entry.decision.reasonCode)
     .filter(Boolean);
+  const hardPolicyReasonCodes = new Set([
+    'EXECUTION_BINDING_REQUIRED',
+    'MANAGED_WORKSPACE_REQUIRED',
+    'REPO_RELATIVE_PATH_SAFETY_REQUIRED',
+    'TASK_OWNED_COMMIT_REQUIRED',
+    'HARNESS_POLICY_STALE',
+  ]);
   const hardBlockers = [...new Set([
-    ...(Array.isArray(checkpoint?.blockers) ? checkpoint.blockers.map(String) : []),
-    ...policyBlockers,
-    ...(authority?.hardBlockers.map((entry) => entry.code) || []),
+    ...(authority?.guardrails.hardBlockers.map((entry) => entry.code) || []),
+    ...deniedReasonCodes.filter((code) => hardPolicyReasonCodes.has(code)),
     ...(bindingError ? [bindingError] : []),
   ])].slice(0, 12);
+  const qualityDebt = [...new Set([
+    ...(authority?.guardrails.debts.map((entry) => entry.code) || []),
+    ...(Array.isArray(checkpoint?.blockers) ? checkpoint.blockers.map(String) : []),
+    ...deniedReasonCodes.filter((code) => !hardPolicyReasonCodes.has(code)),
+  ])].slice(0, 12);
+  const warnings = [...new Set(authority?.guardrails.warnings.map((entry) => entry.code) || [])].slice(0, 12);
 
   const strategy = recommendHarnessStrategy({
     task: {
@@ -594,12 +606,14 @@ export function buildChatGptHarnessEnvelope(state: AppState, task: any) {
     authority: authority ? {
       version: authority.version,
       classification: authority.classification,
-      hardReasonCodes: authority.hardBlockers.map((entry) => entry.code),
-      softReasonCodes: authority.softDrift.map((entry) => entry.code),
+      hardReasonCodes: authority.guardrails.hardBlockers.map((entry) => entry.code),
+      softReasonCodes: [...authority.guardrails.debts, ...authority.guardrails.warnings].map((entry) => entry.code),
       commitReady: authority.commit.ready,
     } : null,
     allowedNextActionClasses,
     hardBlockers,
+    qualityDebt,
+    warnings,
   };
 }
 

@@ -294,113 +294,20 @@ test('detached integrated recovery resumes after response loss without duplicate
   assert.equal(fs.existsSync(f.workspace.root), false);
 });
 
-test('emergency commit binds override to the exact owned fingerprint and preserves unrelated dirty files', () => {
-  const f = fixture('commit');
-  const ownership = mutateOwned(f);
-  fs.writeFileSync(path.join(f.workspace.root, 'unrelated.txt'), 'other-worker-wip\n');
-
-  const result = executeBreakGlassLifecycle(f.state, {
-    ...baseRequest(f, 'commit-current-owned-diff', 'bg-commit-1'),
-    expectedOwnedFingerprint: ownership.ownedFingerprint,
-    message: 'fix: emergency owned diff',
-  });
-
-  assert.equal(result.operation.status, 'completed');
-  assert.deepEqual((result.operation.result as any).committedFiles, ['owned.txt']);
-  assert.deepEqual((result.operation.result as any).unrelatedChangesPreserved, ['unrelated.txt']);
-  assert.equal(fs.readFileSync(path.join(f.workspace.root, 'unrelated.txt'), 'utf8'), 'other-worker-wip\n');
-  assert.match(git(f.workspace.root, ['status', '--porcelain']), /unrelated\.txt/);
-  assert.doesNotMatch(git(f.workspace.root, ['status', '--porcelain']), /owned\.txt/);
-  assert.ok(result.operation.bypassedGates.includes('EXECUTION_VERIFICATION_NOT_FRESH'));
-  const postCommitState = getExecutionSessionState(f.execution.id);
-  assert.equal(
-    postCommitState.evidence.some((entry: any) => entry.kind === 'verification-binding' && entry.metadata?.policy === 'operator-break-glass'),
-    false,
-    'owner break-glass must audit skipped verification rather than manufacture GREEN verification evidence',
-  );
-  assert.ok(postCommitState.evidence.some((entry: any) => entry.kind === 'lifecycle-reconciliation' && entry.metadata?.ownerBreakGlass === true));
-
-  fs.writeFileSync(path.join(f.workspace.root, 'owned.txt'), 'newer-owned-wip\n');
-  assert.throws(
-    () => executeBreakGlassLifecycle(f.state, {
-      ...baseRequest(f, 'commit-current-owned-diff', 'bg-commit-2'),
-      expectedOwnedFingerprint: ownership.ownedFingerprint,
-      message: 'fix: stale fingerprint must fail',
-    }),
-    (error: any) => error?.payload?.code === 'BREAK_GLASS_OWNED_FINGERPRINT_MISMATCH',
-  );
-});
-
-test('infra-blocked break-glass commit preserves verification debt instead of manufacturing fresh verification', () => {
-  const f = fixture('infra-debt-commit');
-  const ownership = mutateOwned(f, 'infra-debt-wip\n');
-  recordExecutionLifecycleTransition(f.execution.id, {
-    toStage: 'context-ready', reasonCode: 'infra-debt-context', evidence: { id: 'infra-debt-context', kind: 'context-bundle', status: 'completed' },
-  });
-  recordExecutionLifecycleTransition(f.execution.id, {
-    toStage: 'implementing', reasonCode: 'infra-debt-implementing', evidence: { id: 'infra-debt-implementing', kind: 'owned-change', status: 'completed' },
-  });
-  recordExecutionLifecycleTransition(f.execution.id, {
-    toStage: 'verifying', reasonCode: 'infra-debt-verifying', evidence: { id: 'infra-debt-verifying', kind: 'verification-result', status: 'completed' },
-  });
-  recordExecutionLifecycleTransition(f.execution.id, {
-    toStage: 'verification-infra-blocked', reasonCode: 'infra-debt-failure', evidence: { id: 'infra-debt-failure-transition', kind: 'verification-result', status: 'completed' },
-  });
-  recordExecutionSessionEvidence(f.execution.id, [{
-    evidenceId: 'infra-debt-failure', kind: 'verification-result', revisionIdentity: 'infra-debt-failure',
-    metadata: { outcome: 'failed', terminal: true, failureClass: 'infrastructure', status: 'timed_out', timedOut: true },
-  }]);
-
-  const result = executeBreakGlassLifecycle(f.state, {
-    ...baseRequest(f, 'commit-current-owned-diff', 'bg-infra-debt-commit-1'),
-    expectedOwnedFingerprint: ownership.ownedFingerprint,
-    message: 'fix: preserve infra verification debt',
-  });
-  assert.equal(result.operation.status, 'completed');
-  const state = getExecutionSessionState(f.execution.id);
-  const debt = state.evidence.find((entry: any) => entry.kind === 'verification-debt');
-  assert.equal(debt?.metadata?.status, 'outstanding');
-  assert.equal(debt?.metadata?.candidateId, 'break-glass:bg-infra-debt-commit-1');
-  assert.equal(getExecutionOwnershipState(f.execution.id, { repoRoot: f.workspace.root }).verificationFresh, null);
-  assert.equal((result.operation.result as any).verificationDebtPreserved, true);
-});
-
-test('release ownership preserves dirty managed workspace bytes and is idempotent on replay', () => {
-  const f = fixture('release');
-  mutateOwned(f, 'release-wip\n');
-  const request = baseRequest(f, 'release-ownership-preserve-wip', 'bg-release-1');
-  const first = executeBreakGlassLifecycle(f.state, request);
-  assert.equal(first.operation.status, 'completed');
-  assert.equal(getTask(f.task.id)?.claim, undefined);
-  assert.equal(fs.existsSync(f.workspace.root), true);
-  assert.equal(fs.readFileSync(path.join(f.workspace.root, 'owned.txt'), 'utf8'), 'release-wip\n');
-
-  const second = executeBreakGlassLifecycle(f.state, request);
-  assert.equal(second.replayed, true);
-  assert.equal(second.operation.id, first.operation.id);
-  assert.equal(fs.readFileSync(path.join(f.workspace.root, 'owned.txt'), 'utf8'), 'release-wip\n');
-});
-
-test('execution rotation preserves the exact WIP workspace and creates only one replacement epoch', () => {
-  const f = fixture('rotate');
-  mutateOwned(f, 'rotate-wip\n');
-  const request = {
-    ...baseRequest(f, 'rotate-execution-preserve-wip', 'bg-rotate-1'),
-    replacementSessionId: 'replacement-session-rotate',
-  };
-  const first = executeBreakGlassLifecycle(f.state, request);
-  assert.equal(first.operation.status, 'completed');
-  const refreshed = getTask(f.task.id)!;
-  assert.equal(refreshed.claim?.workspaceId, f.workspace.workspaceId);
-  assert.notEqual(refreshed.claim?.ownershipEpochId, f.claimed.claim.ownershipEpochId);
-  assert.equal(fs.readFileSync(path.join(f.workspace.root, 'owned.txt'), 'utf8'), 'rotate-wip\n');
-  const active = listExecutionSessionsForTask(f.task.id).filter((entry: any) => entry.status === 'active');
-  assert.equal(active.length, 1);
-  assert.notEqual(active[0].id, f.execution.id);
-
-  const replay = executeBreakGlassLifecycle(f.state, request);
-  assert.equal(replay.replayed, true);
-  assert.equal(listExecutionSessionsForTask(f.task.id).filter((entry: any) => entry.status === 'active').length, 1);
+test('workflow-only commit, release, and rotate actions are rejected before emergency audit creation', () => {
+  const f = fixture('workflow-only-actions');
+  for (const action of ['commit-current-owned-diff', 'release-ownership-preserve-wip', 'rotate-execution-preserve-wip']) {
+    const operationId = `bg-workflow-only-${action}`;
+    assert.throws(
+      () => executeBreakGlassLifecycle(f.state, baseRequest(f, action, operationId)),
+      (error: any) => error?.payload?.code === 'BREAK_GLASS_ACTION_INVALID',
+    );
+    assert.throws(
+      () => getBreakGlassLifecycleOperation(operationId),
+      (error: any) => error?.payload?.code === 'BREAK_GLASS_OPERATION_NOT_FOUND',
+      'unsupported workflow action must not create emergency audit state',
+    );
+  }
 });
 
 test('discard-wip rejects generic emergency intent without destructive acknowledgement and audits rejection', () => {
@@ -485,7 +392,7 @@ test('finalize-as-integrated resumes normal finalization from exact Git evidence
   assert.equal((result.operation.evidence as any).expectedCommit, sourceHead);
 });
 
-test('owner break-glass finalization bypasses verification and stale lifecycle policy without fake GREEN evidence', () => {
+test('integrated emergency recovery delegates verification debt to normal finalization without workflow bypass', () => {
   const f = fixture('owner-finalize-no-green');
   mutateOwned(f, 'owner-finalize-no-green\n');
   git(f.workspace.root, ['add', 'owned.txt']);
@@ -519,16 +426,19 @@ test('owner break-glass finalization bypasses verification and stale lifecycle p
     executionState.evidence.some((entry: any) => entry.kind === 'verification-binding' && entry.metadata?.policy === 'operator-break-glass'),
     false,
   );
-  assert.ok(result.operation.bypassedGates.includes('VERIFICATION_EVIDENCE_MISSING'));
-  assert.ok(result.operation.bypassedGates.includes('POST_INTEGRATION_VERIFICATION_REQUIRED'));
+  assert.equal(result.operation.bypassedGates.includes('VERIFICATION_EVIDENCE_MISSING'), false);
+  assert.equal(result.operation.bypassedGates.includes('POST_INTEGRATION_VERIFICATION_REQUIRED'), false);
 });
 
-test('pending durable operation blocks ownership release without discarding WIP', () => {
+test('pending durable operation blocks destructive execution supersession without discarding WIP', () => {
   const f = fixture('pending-operation');
   mutateOwned(f, 'pending-operation-wip\n');
   recordExecutionPendingOperationReference(f.execution.id, { operationId: 'durable-writer-1', evidenceId: 'evidence-1', kind: 'mutation', status: 'running' });
   assert.throws(
-    () => executeBreakGlassLifecycle(f.state, baseRequest(f, 'release-ownership-preserve-wip', 'bg-pending-release-1')),
+    () => executeBreakGlassLifecycle(f.state, {
+      ...baseRequest(f, 'supersede-execution', 'bg-pending-supersede-1'),
+      replacement: { commit: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' },
+    }),
     (error: any) => error?.payload?.code === 'BREAK_GLASS_PENDING_OPERATION',
   );
   assert.equal(fs.readFileSync(path.join(f.workspace.root, 'owned.txt'), 'utf8'), 'pending-operation-wip\n');
@@ -547,54 +457,6 @@ test('same operation id rejects a changed nested replacement identity', () => {
     () => executeBreakGlassLifecycle(f.state, { ...firstRequest, replacement: { commit: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' } }),
     (error: any) => error?.payload?.code === 'BREAK_GLASS_OPERATION_REPLAY_MISMATCH',
   );
-});
-
-test('response loss after emergency commit resumes from the exact committed HEAD without a second commit', () => {
-  const f = fixture('commit-response-loss');
-  const ownership = mutateOwned(f, 'commit-response-loss\n');
-  const request = {
-    ...baseRequest(f, 'commit-current-owned-diff', 'bg-commit-response-loss-1'),
-    expectedOwnedFingerprint: ownership.ownedFingerprint,
-    message: 'fix: response loss commit',
-  };
-  const headBefore = git(f.workspace.root, ['rev-parse', 'HEAD']);
-  __setBreakGlassFaultBoundaryForTests('after-commit-side-effect');
-  try {
-    assert.throws(() => executeBreakGlassLifecycle(f.state, request), (error: any) => error?.code === 'BREAK_GLASS_FAULT_INJECTED');
-  } finally {
-    __setBreakGlassFaultBoundaryForTests(null);
-  }
-  const headAfter = git(f.workspace.root, ['rev-parse', 'HEAD']);
-  assert.notEqual(headAfter, headBefore);
-  assert.equal(getBreakGlassLifecycleOperation(request.operationId).status, 'active');
-  const retried = executeBreakGlassLifecycle(f.state, request);
-  assert.equal(retried.operation.status, 'completed');
-  assert.equal((retried.operation.result as any).recoveredAfterResponseLoss, true);
-  assert.equal(git(f.workspace.root, ['rev-parse', 'HEAD']), headAfter);
-});
-
-test('response loss after execution rotation reuses the replacement epoch instead of rotating twice', () => {
-  const f = fixture('rotate-response-loss');
-  mutateOwned(f, 'rotate-response-loss\n');
-  const request = {
-    ...baseRequest(f, 'rotate-execution-preserve-wip', 'bg-rotate-response-loss-1'),
-    replacementSessionId: 'replacement-response-loss',
-  };
-  __setBreakGlassFaultBoundaryForTests('after-rotation-side-effect');
-  try {
-    assert.throws(() => executeBreakGlassLifecycle(f.state, request), (error: any) => error?.code === 'BREAK_GLASS_FAULT_INJECTED');
-  } finally {
-    __setBreakGlassFaultBoundaryForTests(null);
-  }
-  const epochAfterSideEffect = getTask(f.task.id)?.claim?.ownershipEpochId;
-  const activeAfterSideEffect = listExecutionSessionsForTask(f.task.id).filter((entry: any) => entry.status === 'active');
-  assert.equal(activeAfterSideEffect.length, 1);
-  const retried = executeBreakGlassLifecycle(f.state, request);
-  assert.equal(retried.operation.status, 'completed');
-  assert.equal((retried.operation.result as any).recoveredAfterResponseLoss, true);
-  assert.equal(getTask(f.task.id)?.claim?.ownershipEpochId, epochAfterSideEffect);
-  assert.equal(listExecutionSessionsForTask(f.task.id).filter((entry: any) => entry.status === 'active').length, 1);
-  assert.equal(fs.readFileSync(path.join(f.workspace.root, 'owned.txt'), 'utf8'), 'rotate-response-loss\n');
 });
 
 test('response loss after destructive cleanup resumes from pre-persisted discard evidence', () => {

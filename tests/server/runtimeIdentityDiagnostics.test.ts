@@ -34,6 +34,7 @@ const { DEVFLOW_CONTRACT_VERSION } = await import('../../src/server/contracts/de
 const { getDevFlowDiagnostics } = await import('../../src/server/services/mcpToolMonitor.js');
 const { registerDevFlowRoutes } = await import('../../src/server/routes/devflow.js');
 const executionSessions = await import('../../src/server/services/executionSessionService.js');
+const { recordExecutionPendingOperationReference, reconcileExecutionPendingOperationReference } = await import('../../src/server/services/executionCheckpointService.js');
 
 test('dirty runtime source is ambiguous and does not claim a deployed revision', () => {
   fs.writeFileSync(path.join(runtimeSourceRoot, 'runtime-source.txt'), 'runtime source dirty\n');
@@ -49,7 +50,7 @@ test('dirty runtime source is ambiguous and does not claim a deployed revision',
   }
 });
 
-test('advanced clean source HEAD is stale, preserves concurrent client drift, blocks restart on active lifecycle work, and converges after restart', () => {
+test('restart safety ignores stale lifecycle stage but blocks real WIP and pending durable operations', () => {
   const execution = executionSessions.createExecutionSession({
     projectId: 'project-runtime-source',
     taskId: 'task-runtime-source-active',
@@ -89,10 +90,28 @@ test('advanced clean source HEAD is stale, preserves concurrent client drift, bl
     assert.equal(stale.runtimeDiagnosis.code, 'runtime-source-stale');
     assert.equal(stale.runtime.sourceFreshness.loadedRevision, before.runtime.loadedRevision);
     assert.equal(stale.runtime.sourceFreshness.currentRevision, currentHead);
-    assert.equal(stale.runtimeDiagnosis.restartSafety.blocked, true);
-    assert.equal(stale.runtimeDiagnosis.restartSafety.active.some((entry: any) => entry.taskId === 'task-runtime-source-active' && entry.executionSessionId === execution.id && entry.stage === 'implementing'), true);
+    assert.equal(stale.runtimeDiagnosis.restartSafety.blocked, false, 'stage projection alone must not block restart');
+    assert.deepEqual(stale.runtimeDiagnosis.restartSafety.active, []);
     assert.equal(stale.runtimeDiagnosis.concurrentDiagnostics.some((entry: any) => entry.code === 'tool-surface-changed'), true);
-    assert.match(stale.runtimeDiagnosis.nextAction, /blocked|active|quiescent/i);
+
+    executionSessions.updateExecutionSessionProgress(execution.id, { changedFiles: ['runtime-source.txt'] });
+    const wipBlocked = getDevFlowDiagnostics({ supervisorState: null } as any) as any;
+    assert.equal(wipBlocked.runtimeDiagnosis.restartSafety.blocked, true);
+    assert.equal(wipBlocked.runtimeDiagnosis.restartSafety.active.some((entry: any) =>
+      entry.executionSessionId === execution.id && entry.reasonCodes?.includes('ACTIVE_WIP_RISK')), true);
+
+    executionSessions.updateExecutionSessionProgress(execution.id, { changedFiles: [] });
+    recordExecutionPendingOperationReference(execution.id, {
+      operationId: 'runtime-pending-op-1', evidenceId: 'runtime-pending-evidence-1', kind: 'mutation', status: 'running',
+    });
+    const pendingBlocked = getDevFlowDiagnostics({ supervisorState: null } as any) as any;
+    assert.equal(pendingBlocked.runtimeDiagnosis.restartSafety.blocked, true);
+    assert.equal(pendingBlocked.runtimeDiagnosis.restartSafety.active.some((entry: any) =>
+      entry.executionSessionId === execution.id
+      && entry.reasonCodes?.includes('PENDING_DURABLE_OPERATION')
+      && entry.pendingOperationIds?.includes('runtime-pending-op-1')), true);
+    assert.match(pendingBlocked.runtimeDiagnosis.nextAction, /pending|WIP|durable|active/i);
+    reconcileExecutionPendingOperationReference(execution.id, 'runtime-pending-op-1');
 
     const childRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-runtime-source-restart-'));
     const code = [

@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { getDevFlowAppRoot } from '../../lib/devFlowPaths.js';
 import { getRepoRevisionForRoot } from './repoRevisionService.js';
 import { queryExecutionSessions } from '../repositories/executionSessionRepository.js';
+import { getLatestExecutionCheckpoint } from './executionCheckpointService.js';
 
 export type DevFlowMcpTransport = 'streamable-http' | 'legacy-sse';
 
@@ -40,10 +41,11 @@ export interface RuntimeRestartSafety {
     executionSessionId: string;
     workspaceId: string | null;
     stage: string;
+    reasonCodes: string[];
+    pendingOperationIds: string[];
+    changedFiles: string[];
   }>;
 }
-
-const RESTART_SENSITIVE_EXECUTION_STAGES = new Set(['implementing', 'verifying', 'repairing', 'verification-infra-blocked']);
 const MAX_RUNTIME_RESTART_BLOCKERS = 10;
 
 export interface RuntimeIdentity {
@@ -174,7 +176,7 @@ export function getRuntimeSourceFreshness(): RuntimeSourceFreshness {
       detail: headMismatch
         ? 'The configured DevFlow source HEAD moved after runtime start and the source tree is dirty, so the exact deployed source cannot be inferred from Git HEAD alone.'
         : 'The configured DevFlow source tree is or was dirty, so Git HEAD alone cannot prove the exact source bytes loaded by this runtime.',
-      nextAction: 'Resolve or intentionally preserve local source changes, then restart only when lifecycle work is quiescent; do not label this runtime current from HEAD alone.',
+      nextAction: 'Resolve or intentionally preserve local source changes, then restart only when no durable operation or active WIP could be interrupted; do not label this runtime current from HEAD alone.',
     };
   }
 
@@ -183,7 +185,7 @@ export function getRuntimeSourceFreshness(): RuntimeSourceFreshness {
       code: 'stale',
       ...common,
       detail: `The DevFlow process loaded ${loadedRevision} but the configured local source repository is now at ${currentRevision}.`,
-      nextAction: 'Restart the DevFlow API when lifecycle work is safely quiescent so the process loads the current local source revision; do not auto-restart or cancel active work.',
+      nextAction: 'Restart the DevFlow API when no durable operation or active WIP could be interrupted so the process loads the current local source revision; do not auto-restart or cancel active work.',
     };
   }
 
@@ -198,14 +200,29 @@ export function getRuntimeSourceFreshness(): RuntimeSourceFreshness {
 export function getRuntimeRestartSafety(): RuntimeRestartSafety {
   const query = queryExecutionSessions({ status: 'active', limit: 100 });
   const active = query.sessions
-    .filter((session) => RESTART_SENSITIVE_EXECUTION_STAGES.has(session.lifecycle.stage))
-    .slice(0, MAX_RUNTIME_RESTART_BLOCKERS)
-    .map((session) => ({
-      taskId: session.taskId,
-      executionSessionId: session.id,
-      workspaceId: session.workspaceId,
-      stage: session.lifecycle.stage,
-    }));
+    .flatMap((session) => {
+      const checkpoint = getLatestExecutionCheckpoint(session.id);
+      const pendingOperationIds = (checkpoint?.pendingOperations || [])
+        .filter((entry) => entry.status === 'accepted' || entry.status === 'running')
+        .map((entry) => entry.operationId)
+        .filter(Boolean);
+      const changedFiles = Array.from(new Set(session.changedFiles || [])).slice(0, 50);
+      const reasonCodes = [
+        ...(pendingOperationIds.length > 0 ? ['PENDING_DURABLE_OPERATION'] : []),
+        ...(changedFiles.length > 0 ? ['ACTIVE_WIP_RISK'] : []),
+      ];
+      if (reasonCodes.length === 0) return [];
+      return [{
+        taskId: session.taskId,
+        executionSessionId: session.id,
+        workspaceId: session.workspaceId,
+        stage: session.lifecycle.stage,
+        reasonCodes,
+        pendingOperationIds,
+        changedFiles,
+      }];
+    })
+    .slice(0, MAX_RUNTIME_RESTART_BLOCKERS);
   return {
     blocked: active.length > 0 || query.truncated,
     truncated: query.truncated,
@@ -316,7 +333,7 @@ export function classifyRuntimeIdentity(
       ? {
           ...sourceDiagnosis,
           restartSafety,
-          nextAction: `Restart is blocked by active lifecycle work (${blockerIdentities || 'bounded active-session scan is truncated'}). Wait for implementing/verifying/repairing/verification-infra-blocked executions to become quiescent, then restart; do not auto-restart or cancel active work.`,
+          nextAction: `Restart is blocked by durable operation or active WIP risk (${blockerIdentities || 'bounded active-session scan is truncated'}). Resolve or preserve the reported pending operation/WIP safely, then restart; lifecycle stage labels alone do not authorize or block restart.`, 
         }
       : { ...sourceDiagnosis, restartSafety };
     return clientDiagnosis

@@ -13,10 +13,10 @@ const { executeAllMigrations } = await import('../../src/db/migrations/index.js'
 executeAllMigrations();
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
 const { saveTask } = await import('../../src/server/repositories/taskRepository.js');
-const { claimTaskForSession } = await import('../../src/server/services/taskClaimService.js');
+const { claimTaskForSession, releaseTaskClaim } = await import('../../src/server/services/taskClaimService.js');
 const { cleanupSessionWorkspace, resetSessionWorkspaceRuntimeForTests } = await import('../../src/server/services/sessionWorkspaceService.js');
 const executionSessions = await import('../../src/server/services/executionSessionService.js');
-const { recordExecutionPendingOperationReference } = await import('../../src/server/services/executionCheckpointService.js');
+const { recordExecutionPendingOperationReference, reconcileExecutionPendingOperationReference } = await import('../../src/server/services/executionCheckpointService.js');
 const { getExecutionSessionResumeView } = await import('../../src/server/services/executionSessionHandoffService.js');
 const { preflightHarnessExecutionGuard, recordHarnessExecutionOutcome } = await import('../../src/server/services/harnessExecutionGuardService.js');
 const { getAgentTaskContext } = await import('../../src/server/services/taskService.js');
@@ -100,9 +100,9 @@ test('combined harness envelope follows claim, context, mutation, repair, resume
   const state = { projectsCache: [project], countersCache: {}, skillsRegistry: [] } as any;
   const claimed = claimTaskForSession(task.id, { sessionId: 'chatgpt-harness-integration-session', ownerKind: 'chat', ownerLabel: 'Harness integration' });
   const workspaceId = claimed.claim.workspaceId;
+  const session = executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)!;
 
   try {
-    const session = executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)!;
     assert.equal(session.lifecycle.stage, 'created');
     executionSessions.recordTaskExecutionContextReady({ workspaceId }, {
       contextHandle: 'ctx-harness-a',
@@ -212,7 +212,8 @@ test('combined harness envelope follows claim, context, mutation, repair, resume
     assert.equal(health.execution.stage, 'repairing');
     context = getAgentTaskContext(state, task.id, false)!;
     assert.ok(context.harness.allowedNextActionClasses.includes('verification'));
-    assert.equal(context.harness.allowedNextActionClasses.includes('commit'), false);
+    assert.equal(context.harness.allowedNextActionClasses.includes('commit'), true, 'verification debt must not become global commit authority');
+    assert.equal(context.harness.qualityDebt.some((code: string) => code.startsWith('EXECUTION_VERIFICATION_')), true);
 
     const transitionCountBeforeDuplicate = executionSessions.getExecutionSessionState(session.id).evidence
       .filter((entry: any) => entry.kind === 'lifecycle-transition').length;
@@ -301,6 +302,38 @@ test('combined harness envelope follows claim, context, mutation, repair, resume
     assert.equal(health.strategy.regressionState, 'unknown');
     assert.equal(JSON.stringify(health).toLowerCase().includes(repoRoot.toLowerCase()), false);
   } finally {
+    reconcileExecutionPendingOperationReference(session.id, 'job-lost-response-1');
+    if (executionSessions.getExecutionSessionState(session.id).session.status === 'active') executionSessions.completeExecutionSession(session.id);
+    releaseTaskClaim(task.id, { sessionId: 'chatgpt-harness-integration-session', nextStatus: 'todo' });
+    cleanupSessionWorkspace(workspaceId);
+  }
+});
+
+test('harness envelope separates quality debt from operation hard blockers', () => {
+  resetSessionWorkspaceRuntimeForTests();
+  const repoRoot = createRepo('debt-separation');
+  const project = { id: 'project-chatgpt-debt-separation', name: 'ChatGPT Debt Separation', repoUrl: 'https://example.com/chatgpt-debt-separation', localPath: repoRoot };
+  createProject(project);
+  const task = createTask(project.id, 'task-chatgpt-debt-separation', 'DVF-CHATGPT-DEBT');
+  const state = { projectsCache: [project], countersCache: {}, skillsRegistry: [] } as any;
+  const claimed = claimTaskForSession(task.id, { sessionId: 'chatgpt-debt-separation-session', ownerKind: 'chat', ownerLabel: 'Debt separation' });
+  const workspaceId = claimed.claim.workspaceId;
+  const session = executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)!;
+
+  try {
+    let context = getAgentTaskContext(state, task.id, false)!;
+    assert.equal(context.harness.hardBlockers.includes('EXECUTION_VERIFICATION_EVIDENCE_MISSING'), false);
+    assert.equal(context.harness.qualityDebt.includes('EXECUTION_VERIFICATION_EVIDENCE_MISSING'), true);
+
+    recordExecutionPendingOperationReference(session.id, {
+      operationId: 'job-debt-separation-pending', evidenceId: 'evidence-debt-separation-pending', kind: 'mutation', status: 'running',
+    });
+    context = getAgentTaskContext(state, task.id, false)!;
+    assert.equal(context.harness.hardBlockers.includes('TASK_PENDING_OPERATIONS'), true);
+    assert.equal(context.harness.qualityDebt.includes('EXECUTION_VERIFICATION_EVIDENCE_MISSING'), true);
+  } finally {
+    reconcileExecutionPendingOperationReference(session.id, 'job-debt-separation-pending');
+    releaseTaskClaim(task.id, { sessionId: 'chatgpt-debt-separation-session', nextStatus: 'todo' });
     cleanupSessionWorkspace(workspaceId);
   }
 });

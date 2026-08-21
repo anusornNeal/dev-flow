@@ -59,15 +59,15 @@ export const workspaceToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'finalize_task_workspace',
-    description: 'Resume or complete one durable local-only task finalization operation. The operation freezes task/workspace/execution/candidate identity, integrates exactly once, persists verification and Git evidence, terminalizes execution, projects task done, then performs cleanup. Retry with operationId after interruptions. Never pushes or fetches.',
+    description: 'Resume or complete one durable local-only task finalization operation. Checklist incompleteness and missing, failed, stale, or not-run verification are preserved as explicit quality debt and do not by themselves block mechanically safe finalization or DONE. Foreign or ambiguous ownership, unresolved conflicts, active operations, unsafe cleanup, and Git/filesystem impossibility remain hard safety blockers. Lifecycle projection reconciles directly from observed finalization evidence instead of requiring synthetic stage walking. Retry with operationId after interruptions. Never pushes or fetches.',
     inputSchema: {
       type: 'object',
       properties: {
         workspaceId: { type: 'string', description: 'Opaque DevFlow workspace id.' },
         taskId: { type: 'string', description: 'DevFlow task id/displayId to finalize.' },
         operationId: { type: 'string', description: 'Optional durable finalization operation id returned by a prior attempt. Supplying it resumes exactly that frozen operation and refuses identity drift.' },
-        checks: { type: 'array', description: 'Verification evidence. Required when starting a new finalization and when satisfying a verification-pending continuation; may be omitted when resuming later phases because the operation persists prior submitted checks.', items: { type: 'object', properties: { name: { type: 'string' }, command: { type: 'string' }, status: { type: 'string', enum: ['passed', 'failed', 'not-run'] }, scope: { type: 'string', enum: ['targeted', 'broad', 'full'], description: 'Verification coverage scope for combined-state finalization.' }, repoRevision: { type: 'string', description: 'Exact integrated Git revision this verification check was run against.' }, summary: { type: 'string' }, output: { type: 'string' }, recordedAt: { type: 'string' } }, required: ['command', 'status'] } },
-        requireChecklistComplete: { type: 'boolean', description: 'Require every checklist item complete before finalization. Defaults to true.' },
+        checks: { type: 'array', description: 'Optional verification evidence preserved truthfully during finalization. Missing, failed, stale, or not-run evidence becomes explicit quality debt rather than a mechanical finalization blocker.', items: { type: 'object', properties: { name: { type: 'string' }, command: { type: 'string' }, status: { type: 'string', enum: ['passed', 'failed', 'not-run'] }, scope: { type: 'string', enum: ['targeted', 'broad', 'full'], description: 'Verification coverage scope for combined-state finalization.' }, repoRevision: { type: 'string', description: 'Exact integrated Git revision this verification check was run against.' }, summary: { type: 'string' }, output: { type: 'string' }, recordedAt: { type: 'string' } }, required: ['command', 'status'] } },
+        requireChecklistComplete: { type: 'boolean', description: 'Legacy compatibility hint. Incomplete checklist items are always preserved as explicit quality debt and do not by themselves block safe finalization.' },
       },
       required: ['workspaceId', 'taskId'],
     },

@@ -25,6 +25,7 @@ import { withDbTransaction } from '../../db/index.js';
 import { withSyncLock } from './lockAndIdempotencyService.js';
 import type { TaskClaim, TaskStatus } from '../../types.js';
 import { computeLifecycleAuthoritySnapshot } from './lifecycleAuthorityService.js';
+import { reconcileExecutionLifecycleStage } from './executionLifecycleReconciliationService.js';
 import { inspectWorkspaceRecovery } from './workspaceRecoveryService.js';
 
 const DEFAULT_CLAIM_TTL_MS = 24 * 60 * 60 * 1000;
@@ -572,9 +573,12 @@ export function terminalizeTaskExecutionForFinalization(
     }
     if (session.status === 'completed') {
       if (session.lifecycle.stage !== 'finalized') {
-        throw createApiError(409, 'TASK_FINALIZATION_EXECUTION_TERMINAL_INVALID', `Execution '${session.id}' is completed without finalized lifecycle evidence.`, {
-          affectedId: current.id,
-          details: { executionSessionId: session.id, stage: session.lifecycle.stage },
+        recordExecutionReconciliationEvidence(session.id, 'workspace-finalization-observed-terminal', {
+          workspaceId: cleanWorkspaceId,
+          repoRevision,
+          staleLifecycleStage: session.lifecycle.stage,
+          observedTerminalStage: 'finalized',
+          operationId: String(input.operationId || '').trim() || null,
         });
       }
       return { task: current, executionSessionId: session.id, idempotent: true };
@@ -585,8 +589,8 @@ export function terminalizeTaskExecutionForFinalization(
         details: { executionSessionId: session.id, status: session.status },
       });
     }
-    if (session.lifecycle.stage === 'committed') {
-      recordExecutionLifecycleTransition(session.id, {
+    if (session.lifecycle.stage !== 'finalized') {
+      reconcileExecutionLifecycleStage(session.id, {
         toStage: 'finalized',
         reasonCode: 'workspace-finalization-succeeded',
         evidence: {
@@ -595,11 +599,6 @@ export function terminalizeTaskExecutionForFinalization(
           status: 'completed',
           operationId: String(input.operationId || '').trim() || `finalize:${cleanWorkspaceId}:${repoRevision}`,
         },
-      });
-    } else if (session.lifecycle.stage !== 'finalized') {
-      throw createApiError(409, 'TASK_FINALIZATION_EXECUTION_STAGE_INVALID', `Execution '${session.id}' must be committed before task finalization.`, {
-        affectedId: current.id,
-        details: { executionSessionId: session.id, stage: session.lifecycle.stage },
       });
     }
     completeExecutionSession(session.id, {

@@ -23,9 +23,6 @@ import { planVerification, type VerificationPlan } from './verificationPlannerSe
 import {
   getExecutionOwnershipState,
   getExecutionSessionOwnershipEpoch,
-  getExecutionSessionState,
-  recordExecutionLifecycleTransition,
-  recordExecutionReconciliationEvidence,
 } from './executionSessionService.js';
 import { computeLifecycleAuthoritySnapshot } from './lifecycleAuthorityService.js';
 import { resolveTaskVerificationCoverage, type TaskVerificationCoverageResolution } from './taskCommitPlanService.js';
@@ -98,85 +95,51 @@ function normalizeOwnerBreakGlassAuthority(value: unknown): OwnerBreakGlassFinal
   return { operationId, reason, actorLabel };
 }
 
-function reconcileOwnerBreakGlassLifecycleForFinalization(
-  taskId: string,
-  workspaceId: string,
-  executionSessionId: string | null,
-  authority: OwnerBreakGlassFinalizationAuthority,
-) {
-  if (!executionSessionId) return [] as string[];
-  const session = getExecutionSessionState(executionSessionId).session;
-  if (session.taskId !== taskId || session.workspaceId !== workspaceId) {
-    throw createApiError(409, 'OWNER_BREAK_GLASS_EXECUTION_IDENTITY_MISMATCH', 'Owner break-glass finalization cannot reconcile a different task/workspace execution identity.');
-  }
-  const nextStage: Record<string, string | undefined> = {
-    compatibility: 'created',
-    created: 'context-ready',
-    'context-ready': 'implementing',
-    'plan-recorded': 'implementing',
-    implementing: 'verifying',
-    repairing: 'verifying',
-    'verification-infra-blocked': 'committed',
-    verifying: 'committed',
-  };
-  const bypassed: string[] = [];
-  let current = session.lifecycle.stage;
-  let guard = 0;
-  while (current !== 'committed' && current !== 'finalized') {
-    if (++guard > 8) throw createApiError(409, 'OWNER_BREAK_GLASS_LIFECYCLE_RECONCILIATION_LOOP', 'Owner break-glass lifecycle reconciliation could not converge safely.');
-    const next = nextStage[current];
-    if (!next) {
-      throw createApiError(409, 'OWNER_BREAK_GLASS_LIFECYCLE_STAGE_UNSUPPORTED', `Lifecycle stage '${current}' cannot be reconciled by owner break-glass finalization.`, {
-        details: { executionSessionId, currentStage: current },
-      });
-    }
-    const code = `EXECUTION_LIFECYCLE_STAGE_${current.toUpperCase().replace(/-/g, '_')}`;
-    bypassed.push(code);
-    recordExecutionLifecycleTransition(executionSessionId, {
-      toStage: next as any,
-      reasonCode: 'owner-break-glass-finalization',
-      evidence: {
-        id: `owner-break-glass:${authority.operationId}:${next}`,
-        kind: 'lifecycle-reconciliation',
-        status: 'completed',
-        operationId: authority.operationId,
-      },
-    });
-    current = getExecutionSessionState(executionSessionId).session.lifecycle.stage;
-  }
-  if (bypassed.length > 0) {
-    recordExecutionReconciliationEvidence(executionSessionId, 'operator-break-glass-finalization', {
-      ownerBreakGlass: true,
-      operationId: authority.operationId,
-      reason: authority.reason,
-      actorLabel: authority.actorLabel,
-      bypassedGates: bypassed,
-    });
-  }
-  return bypassed;
-}
+type FinalizationQualityDebt = {
+  code: 'CHECKLIST_INCOMPLETE' | 'VERIFICATION_EVIDENCE_MISSING' | 'VERIFICATION_NOT_PASSED' | 'POST_INTEGRATION_VERIFICATION_REQUIRED';
+  source: 'checklist' | 'verification';
+  message: string;
+  details?: Record<string, unknown>;
+};
 
-function verifyFinalizationInput(
+function collectInitialFinalizationQualityDebt(
   task: any,
   input: TaskWorkspaceFinalizationInput,
   reusableCoverage: TaskVerificationCoverageResolution | null = null,
-) {
-  const requireChecklistComplete = input.requireChecklistComplete !== false;
-  if (requireChecklistComplete && Array.isArray(task.checklist) && task.checklist.some((item: any) => !item?.completed)) {
-    return { status: 'blocked' as const, code: 'CHECKLIST_INCOMPLETE' as const, message: 'Task checklist must be complete before workspace finalization.' };
+): FinalizationQualityDebt[] {
+  const debt: FinalizationQualityDebt[] = [];
+  const incompleteChecklistItems = Array.isArray(task.checklist)
+    ? task.checklist.filter((item: any) => !item?.completed).map((item: any) => ({ id: item?.id, text: item?.text }))
+    : [];
+  if (incompleteChecklistItems.length > 0) {
+    debt.push({
+      code: 'CHECKLIST_INCOMPLETE',
+      source: 'checklist',
+      message: 'Task finalized with incomplete checklist items recorded as quality debt.',
+      details: { incompleteChecklistItems, legacyRequireChecklistComplete: input.requireChecklistComplete !== false },
+    });
   }
   const checks = Array.isArray(input.checks) ? input.checks : [];
-  const ownerBreakGlass = normalizeOwnerBreakGlassAuthority(input.ownerBreakGlass);
-  if (ownerBreakGlass) return null;
   if (checks.length === 0) {
-    if (reusableCoverage?.status === 'covered' && reusableCoverage.reusable) return null;
-    return { status: 'blocked' as const, code: 'VERIFICATION_EVIDENCE_MISSING' as const, message: 'At least one verification check or reusable authoritative verification coverage is required before workspace finalization.' };
+    if (!(reusableCoverage?.status === 'covered' && reusableCoverage.reusable)) {
+      debt.push({
+        code: 'VERIFICATION_EVIDENCE_MISSING',
+        source: 'verification',
+        message: 'Task finalized without fresh submitted verification or reusable authoritative coverage.',
+      });
+    }
+    return debt;
   }
-  const failed = checks.filter((check) => check?.status !== 'passed');
-  if (failed.length > 0) {
-    return { status: 'blocked' as const, code: 'VERIFICATION_NOT_PASSED' as const, message: 'All finalization verification checks must pass.', checks: failed };
+  const notPassed = checks.filter((check) => check?.status !== 'passed');
+  if (notPassed.length > 0) {
+    debt.push({
+      code: 'VERIFICATION_NOT_PASSED',
+      source: 'verification',
+      message: 'Task finalized with failed or not-run verification recorded as quality debt.',
+      details: { checks: notPassed },
+    });
   }
-  return null;
+  return debt;
 }
 
 function localOnlyEvidence(task: any, baseBranch: string, commit: string, checks: TaskWorkspaceFinalizationCheck[]) {
@@ -703,13 +666,11 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
           verificationFresh: sourceOwnership?.verificationFresh ?? null,
         })
       : null;
-    const blocked = verifyFinalizationInput(task, {
+    const initialQualityDebt = collectInitialFinalizationQualityDebt(task, {
       ...input,
       checks: effectiveChecks,
       ownerBreakGlass: ownerBreakGlass || undefined,
-      requireChecklistComplete: operation ? false : input.requireChecklistComplete,
     }, sourceCoverage);
-    if (blocked) return { ...blocked, ...(operation ? { operation } : {}) };
 
     if (!operation) {
       const latestBeforeFreeze = getLatestTaskFinalizationOperation(task.id, workspaceId);
@@ -718,11 +679,14 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
         : freezeNewFinalizationOperation(task, workspaceId, effectiveChecks);
       if ('blocked' in frozen) return frozen.blocked;
       operation = frozen.operation;
-      if (ownerBreakGlass) {
-        operation = updateOperation(operation, {
-          verification: { ...(operation.verification || {}), submittedChecks: effectiveChecks, ownerBreakGlass },
-        });
-      }
+      operation = updateOperation(operation, {
+        verification: {
+          ...(operation.verification || {}),
+          submittedChecks: effectiveChecks,
+          qualityDebt: initialQualityDebt,
+          ...(ownerBreakGlass ? { ownerBreakGlass } : {}),
+        },
+      });
       if (latestBeforeFreeze && latestBeforeFreeze.status !== 'completed' && latestBeforeFreeze.id !== operation.id) {
         throw createApiError(409, 'FINALIZATION_OPERATION_IDENTITY_CHANGED', 'An incomplete finalization operation already exists for a different frozen candidate/ownership identity.', {
           affectedId: latestBeforeFreeze.id,
@@ -758,6 +722,7 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
     let postIntegration: PostIntegrationRequirement | undefined;
     let gitEvidence: any = operation.gitEvidence;
     let verificationEvidence: any[] = Array.isArray(operation.verification?.evidence) ? operation.verification.evidence as any[] : [];
+    let qualityDebt: FinalizationQualityDebt[] = initialQualityDebt;
 
     try {
       if (operation.integration) {
@@ -808,39 +773,21 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
       sourcePlan = plans.sourcePlan;
       combinedPlan = plans.combinedPlan;
       postIntegration = evaluatePostIntegrationRequirement(integration, effectiveChecks, sourcePlan, combinedPlan, targetCoverage);
-      if (postIntegration.required && !ownerBreakGlass) {
-        operation = updateOperation(operation, {
-          phase: 'verification-pending',
-          status: 'active',
-          verification: { ...(operation.verification || {}), submittedChecks: effectiveChecks, requirement: postIntegration, coverage: { source: sourceCoverage, target: targetCoverage }, evidence: verificationEvidence },
-          failure: null,
-        });
-        return {
-          ...operationContinuation(operation, 'POST_INTEGRATION_VERIFICATION_REQUIRED', postIntegration.reason, {
-            integration,
-            sourcePlan,
-            combinedPlan,
-            postIntegration,
-          }),
-          continuation: {
-            code: 'POST_INTEGRATION_VERIFICATION_REQUIRED' as const,
-            operationId: operation.id,
-            phase: 'verification-pending' as const,
+      qualityDebt = [
+        ...initialQualityDebt,
+        ...(postIntegration.required ? [{
+          code: 'POST_INTEGRATION_VERIFICATION_REQUIRED' as const,
+          source: 'verification' as const,
+          message: postIntegration.reason,
+          details: {
             repoRevision: postIntegration.repoRevision,
             requiredCommands: postIntegration.requiredCommands,
             missingCommands: postIntegration.missingCommands,
             broadEvidenceRequired: postIntegration.broadEvidenceRequired,
             requiredScope: postIntegration.requiredScope,
-            nextAction: { ...postIntegration.nextAction, operationId: operation.id },
           },
-        };
-      }
-      const ownerVerificationBypasses = ownerBreakGlass
-        ? [
-            ...(effectiveChecks.length === 0 ? ['VERIFICATION_EVIDENCE_MISSING', 'POST_INTEGRATION_VERIFICATION_REQUIRED'] : []),
-            ...(effectiveChecks.length > 0 && postIntegration.required ? ['POST_INTEGRATION_VERIFICATION_REQUIRED'] : []),
-          ]
-        : [];
+        }] : []),
+      ];
       const reusedCoverageChecks: TaskWorkspaceFinalizationCheck[] = effectiveChecks.length === 0 && targetCoverage?.status === 'covered' && targetCoverage.reusable
         ? targetCoverage.coveredCommands.map((command) => ({
             name: `reused coverage: ${command}`,
@@ -861,7 +808,8 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
           requirement: postIntegration,
           evidence: verificationEvidence,
           coverage: { source: sourceCoverage, target: targetCoverage },
-          ...(ownerBreakGlass ? { ownerBreakGlass, bypassedGates: ownerVerificationBypasses } : {}),
+          qualityDebt,
+          ...(ownerBreakGlass ? { ownerBreakGlass } : {}),
         },
         failure: null,
       });
@@ -887,21 +835,6 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
       injectFinalizationFault('after-evidence');
 
       if (operation.phase === 'evidence-recorded') {
-        const lifecycleBypasses = ownerBreakGlass
-          ? reconcileOwnerBreakGlassLifecycleForFinalization(task.id, workspaceId, operation.executionSessionId, ownerBreakGlass)
-          : [];
-        if (ownerBreakGlass && lifecycleBypasses.length > 0) {
-          operation = updateOperation(operation, {
-            verification: {
-              ...(operation.verification || {}),
-              ownerBreakGlass,
-              bypassedGates: Array.from(new Set([
-                ...((operation.verification as any)?.bypassedGates || []),
-                ...lifecycleBypasses,
-              ])),
-            },
-          });
-        }
         terminalizeTaskExecutionForFinalization(task.id, workspaceId, {
           changedFiles: integration.changedFiles,
           verification: verificationEvidence,
@@ -920,10 +853,11 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
           const logId = `log-workspace-finalized-${operation!.id}`;
           const logs = Array.isArray(base.logs) ? [...base.logs] : [];
           if (!logs.some((entry: any) => entry?.id === logId)) {
+            const debtSummary = qualityDebt.length > 0 ? qualityDebt.map((entry) => entry.code).join(', ') : 'none';
             logs.push({
               id: logId,
               timestamp: new Date().toISOString(),
-              message: `Finalized managed workspace ${workspaceId} into ${operation!.baseBranch}@${integration.baseHeadAfter.slice(0, 12)} with ${verificationEvidence.length} passed verification check(s); operation ${operation!.id}.`,
+              message: `Finalized managed workspace ${workspaceId} into ${operation!.baseBranch}@${integration.baseHeadAfter.slice(0, 12)} with ${verificationEvidence.length} verification evidence item(s); quality debt: ${debtSummary}; operation ${operation!.id}.`,
               type: 'update',
             });
           }

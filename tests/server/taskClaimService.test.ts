@@ -584,6 +584,30 @@ test('active claim with missing execution recreates exactly one execution idempo
   assert.equal(execution.getExecutionSessionOwnershipEpoch(active[0].id).ownershipEpochId, first.claim.ownershipEpochId);
 });
 
+test('finalization directly reconciles stale lifecycle stage from observed terminal evidence', () => {
+  seedTask('task-finalize-direct-reconcile', ['src/FinalizeDirectReconcile.ts'], undefined, 'DVF-0709');
+  const claimed = claims.claimTaskForSession('task-finalize-direct-reconcile', { sessionId: 'finalize-direct-owner', ownerLabel: 'Chat Direct' });
+  const before = activeExecution('task-finalize-direct-reconcile');
+  assert.ok(before);
+  assert.notEqual(before.lifecycle.stage, 'finalized');
+
+  const result = claims.finalizeTaskLifecycleDisposition(
+    'task-finalize-direct-reconcile',
+    claimed.claim.workspaceId,
+    (task: any) => ({ ...task, status: 'done' }),
+    { repoRevision: 'direct-finalization-revision' },
+  );
+
+  assert.equal(result.task.status, 'done');
+  const terminal = listExecutionSessionsForTask('task-finalize-direct-reconcile').find((entry: any) => entry.id === before.id)!;
+  assert.equal(terminal.status, 'completed');
+  assert.equal(terminal.lifecycle.stage, 'finalized');
+  assert.ok(listExecutionSessionEvidence(before.id).some((entry: any) =>
+    entry.kind === 'lifecycle-transition'
+    && entry.metadata?.toStage === 'finalized'
+    && entry.metadata?.directReconciliation === true));
+});
+
 test('finalization boundary fails closed on ambiguous active execution authority before mutating task state', () => {
   seedTask('task-finalize-authority-ambiguous', ['src/FinalizeAuthorityAmbiguous.ts'], undefined, 'DVF-0512');
   const claimed = claims.claimTaskForSession('task-finalize-authority-ambiguous', { sessionId: 'finalize-authority-owner', ownerLabel: 'Chat Finalize Authority' });

@@ -209,7 +209,7 @@ export const taskToolDefinitions: DevFlowToolDefinition[] = [
     buildHttpRequest: ({ taskId, isAgentRequest, responseMode, ...body }) => ({ method: 'POST', path: withQuery(`/api/tasks/${encodePathSegment(String(taskId))}/sync-git`, { responseMode: responseMode || 'summary' }), body, headers: isAgentRequest ? { 'x-agent-request': 'true' } : undefined }),
   },
   {
-    name: 'submit_task_for_review', description: 'Submit a task for review only after configured checklist, verification, branch, clean-tree, and published-head gates pass. Returns structured blocker reasons without changing status when blocked.',
+    name: 'submit_task_for_review', description: 'Evaluate review readiness and submit only when the review-specific checklist, verification, branch, clean-tree, and publication requirements are satisfied. Readiness gaps are returned as structured reasons for this review operation; they are quality debt, not global lifecycle authority over DONE reconciliation.',
     inputSchema: {
       type: 'object', properties: {
         ...taskIdentifierProperty,
@@ -248,17 +248,17 @@ export const taskToolDefinitions: DevFlowToolDefinition[] = [
     }),
   },
   {
-    name: 'move_task_status', description: 'Move a task to a new lane/status. Strict by default; manualOverride is a status-only compatibility path for confirmed soft gates and never replaces audited break_glass_lifecycle recovery.',
+    name: 'move_task_status', description: 'Move a task to a new lane/status while preserving hard ownership and operation-safety constraints. Checklist, verification, publication, and other quality/readiness debt do not require manualOverride merely to reconcile lifecycle status; manualOverride remains only for exceptional bypassable safety gates.',
     inputSchema: { type: 'object', properties: { ...taskIdentifierProperty, status: { type: 'string', enum: VALID_STATUSES }, ...booleanFlagSchema.properties, ...manualMoveOverrideProperties, ...mutationResponseModeProperty }, required: ['taskId', 'status'] }, outputSchema: { type: 'object' },
     buildHttpRequest: ({ taskId, isAgentRequest, responseMode, ...body }) => ({ method: 'POST', path: withQuery(`/api/tasks/${encodePathSegment(String(taskId))}/move`, { responseMode: responseMode || 'summary' }), body: body.manualOverride ? { ...body, intent: 'manual' } : body, headers: isAgentRequest ? { 'x-agent-request': 'true' } : undefined }),
   },
   {
-    name: 'move_task_to_status', description: 'Move a task to a target status by following the allowed transition path automatically. Strict by default; manualOverride may bypass only soft status gates while hard lifecycle safety remains authoritative. Use break_glass_lifecycle for emergency lifecycle dispositions.',
+    name: 'move_task_to_status', description: 'Move a task to a target status by following the allowed transition path automatically. Quality/readiness debt may coexist with terminal status and is reported separately; hard ownership, pending-operation, dependency, and other material safety constraints remain authoritative. manualOverride is reserved for exceptional bypassable safety gates.',
     inputSchema: { type: 'object', properties: { ...taskIdentifierProperty, status: { type: 'string', enum: VALID_STATUSES }, ...booleanFlagSchema.properties, ...manualMoveOverrideProperties, ...mutationResponseModeProperty }, required: ['taskId', 'status'] }, outputSchema: { type: 'object' },
     buildHttpRequest: ({ taskId, isAgentRequest, responseMode, ...body }) => ({ method: 'POST', path: withQuery(`/api/tasks/${encodePathSegment(String(taskId))}/move-to`, { responseMode: responseMode || 'summary' }), body: body.manualOverride ? { ...body, intent: 'manual' } : body, headers: isAgentRequest ? { 'x-agent-request': 'true' } : undefined }),
   },
   {
-    name: 'complete_task_review', description: 'Complete a reviewed task by moving it to done through the existing transition helper. Use after verification and self-review.',
+    name: 'complete_task_review', description: 'Complete a reviewed task by moving it to done through the existing transition helper. DONE records lifecycle completion only; review approval and GREEN verification remain separate evidence and are never implied by status alone.',
     inputSchema: { type: 'object', properties: { ...taskIdentifierProperty, ...booleanFlagSchema.properties, ...mutationResponseModeProperty }, required: ['taskId'] }, outputSchema: { type: 'object' },
     buildHttpRequest: ({ taskId, isAgentRequest, responseMode, ...body }) => ({ method: 'POST', path: withQuery(`/api/tasks/${encodePathSegment(String(taskId))}/move-to`, { responseMode: responseMode || 'summary' }), body: { ...body, status: 'done' }, headers: isAgentRequest ? { 'x-agent-request': 'true' } : undefined }),
   },

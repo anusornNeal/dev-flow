@@ -336,10 +336,14 @@ export function validateRecordedReviewSubmission(task: any, args: Record<string,
   if (!task) throw createApiError(404, 'TASK_NOT_FOUND', 'Task was not found.');
   const verificationEvidence = normalizeVerificationEvidence(args, task);
   const gitEvidence = task.gitEvidence as TaskGitEvidence | undefined;
-  const blockers = validateTaskState(task, gitEvidence, verificationEvidence, args);
+  const readinessDebt = validateTaskState(task, gitEvidence, verificationEvidence, args);
   return {
-    blocked: blockers.length > 0,
-    blockers,
+    // Recorded readiness is descriptive lifecycle evidence, not global status authority.
+    // Callers that reconcile board status can proceed while preserving this debt explicitly.
+    blocked: false,
+    blockers: [],
+    ready: readinessDebt.length === 0,
+    readinessDebt,
     gitEvidence,
     verificationEvidence,
   };
@@ -349,20 +353,24 @@ export function evaluateReviewSubmission(state: AppState, task: any, args: Recor
   if (!task) throw createApiError(404, 'TASK_NOT_FOUND', 'Task was not found.');
   const verificationEvidence = normalizeVerificationEvidence(args, task);
   let gitEvidence: TaskGitEvidence | undefined;
-  const blockers: ReviewBlocker[] = [];
+  const readinessDebt: ReviewBlocker[] = [];
   try {
     gitEvidence = collectGitEvidence(state, task, args);
   } catch (error: any) {
-    addBlocker(blockers, 'GIT_EVIDENCE_UNAVAILABLE', error?.payload?.message || error?.message || 'Git evidence could not be collected.', {
+    addBlocker(readinessDebt, 'GIT_EVIDENCE_UNAVAILABLE', error?.payload?.message || error?.message || 'Git evidence could not be collected.', {
       code: error?.payload?.code,
       details: error?.payload?.details,
     });
   }
-  blockers.push(...validateTaskState(task, gitEvidence, verificationEvidence, args));
-  blockers.push(...getExecutionOwnershipReviewBlockers(state, task, args));
+  readinessDebt.push(...validateTaskState(task, gitEvidence, verificationEvidence, args));
+  readinessDebt.push(...getExecutionOwnershipReviewBlockers(state, task, args));
   return {
-    blocked: blockers.length > 0,
-    blockers,
+    // submit-review is allowed to require review readiness for that operation, while the
+    // same quality debt must not become global authority over ordinary lifecycle status.
+    blocked: readinessDebt.length > 0,
+    blockers: readinessDebt,
+    ready: readinessDebt.length === 0,
+    readinessDebt,
     gitEvidence,
     verificationEvidence,
   };
@@ -433,6 +441,31 @@ export function buildTaskGitWarnings(task: any): TaskWorkflowWarning[] {
     }
     if (task.branch && evidence.branch && task.branch !== evidence.branch) {
       addWarning(warnings, 'RECORDED_BRANCH_MISMATCH', `Recorded Git evidence is for '${evidence.branch}', not task branch '${task.branch}'.`, 'error');
+    }
+  }
+
+  if (task.status === 'done') {
+    const incomplete = Array.isArray(task.checklist) ? task.checklist.filter((item: any) => !item?.completed) : [];
+    if (incomplete.length > 0) {
+      addWarning(warnings, 'DONE_CHECKLIST_DEBT', `Task is DONE with ${incomplete.length} incomplete checklist item(s); DONE records lifecycle completion and does not imply review approval.`, 'warning', {
+        items: incomplete.map((item: any) => ({ id: item.id, text: item.text })),
+      });
+    }
+    const verificationEvidence = Array.isArray(task.verificationEvidence) ? task.verificationEvidence : [];
+    if (verificationEvidence.length === 0) {
+      addWarning(warnings, 'DONE_VERIFICATION_MISSING', 'Task is DONE without structured verification evidence; DONE does not imply GREEN verification.');
+    } else {
+      const nonPassing = verificationEvidence.filter((check: any) => check?.status !== 'passed');
+      if (nonPassing.length > 0) {
+        addWarning(warnings, 'DONE_VERIFICATION_NOT_GREEN', `Task is DONE with ${nonPassing.length} non-passing verification check(s); DONE does not imply GREEN verification.`, 'warning', {
+          checks: nonPassing.map((check: any) => ({ name: check?.name, command: check?.command, status: check?.status })),
+        });
+      }
+    }
+    if (!evidence) {
+      addWarning(warnings, 'DONE_GIT_EVIDENCE_MISSING', 'Task is DONE without recorded Git evidence; DONE does not imply review approval.');
+    } else if (!evidence.pushed) {
+      addWarning(warnings, 'DONE_HEAD_NOT_PUSHED', 'Task is DONE while the recorded HEAD is not published; DONE does not imply review approval.');
     }
   }
 

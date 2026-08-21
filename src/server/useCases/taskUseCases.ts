@@ -277,11 +277,8 @@ export interface RecoveryDisposition {
 }
 
 const RECOVERY_REQUIRED_BLOCKER_CODES = new Set([
-  'CHECKLIST_INCOMPLETE',
-  'VERIFICATION_EVIDENCE_MISSING',
-  'VERIFICATION_FAILED',
-  'VERIFICATION_NOT_RUN',
-  'GIT_EVIDENCE_MISSING',
+  // Recovery disposition is reserved for unfinished dependency/scope recovery.
+  // Checklist, verification, Git publication, and other quality debt may coexist with DONE.
   'CHILD_TASK_BLOCKING',
   'CHILD_EVIDENCE_MISSING',
 ]);

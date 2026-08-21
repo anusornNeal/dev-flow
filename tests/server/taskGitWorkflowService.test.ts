@@ -17,6 +17,7 @@ const {
   buildTaskGitWarnings,
   evaluateReviewSubmission,
   syncTaskWithGit,
+  validateRecordedReviewSubmission,
 } = await import('../../src/server/services/taskGitWorkflowService.js');
 const { pushGitBranch, clearGitRemoteEvidenceCache, getGitRemoteEvidenceMetrics } = await import('../../src/server/services/gitService.js');
 const { createOrReuseSessionWorkspace } = await import('../../src/server/services/sessionWorkspaceService.js');
@@ -250,7 +251,9 @@ test('evaluateReviewSubmission returns every material blocker without changing t
   });
 
   assert.equal(result.blocked, true);
-  const codes = new Set(result.blockers.map((blocker: any) => blocker.code));
+  assert.equal(result.ready, false);
+  assert.deepEqual(result.readinessDebt, result.blockers);
+  const codes = new Set(result.readinessDebt.map((blocker: any) => blocker.code));
   assert.ok(codes.has('WORKING_TREE_DIRTY'));
   assert.ok(codes.has('TASK_BRANCH_MISMATCH'));
   assert.ok(codes.has('CHECKLIST_INCOMPLETE'));
@@ -258,7 +261,27 @@ test('evaluateReviewSubmission returns every material blocker without changing t
   assert.ok(codes.has('CHILD_TASK_BLOCKING'));
   assert.ok(codes.has('UNRESOLVED_BUGS'));
   assert.equal(task.status, 'in-progress');
+}); 
+
+test('recorded readiness reports quality debt without making it lifecycle-blocking', () => {
+  const fixture = setup('recorded-readiness-debt');
+  const task = createTask(fixture.projectId, {
+    checklist: [{ id: 'one', text: 'Not done', completed: false }],
+    verificationEvidence: [],
+    gitEvidence: undefined,
+  });
+
+  const result = validateRecordedReviewSubmission(task);
+
+  assert.equal(result.blocked, false);
+  assert.deepEqual(result.blockers, []);
+  assert.equal(result.ready, false);
+  const debtCodes = new Set(result.readinessDebt.map((entry: any) => entry.code));
+  assert.ok(debtCodes.has('CHECKLIST_INCOMPLETE'));
+  assert.ok(debtCodes.has('VERIFICATION_EVIDENCE_MISSING'));
+  assert.ok(debtCodes.has('GIT_EVIDENCE_MISSING'));
 });
+
 
 test('evaluateReviewSubmission blocks unpublished local commits', () => {
   const fixture = setup('ahead');
@@ -273,7 +296,8 @@ test('evaluateReviewSubmission blocks unpublished local commits', () => {
     checks: passedChecks,
   });
 
-  const codes = new Set(result.blockers.map((blocker: any) => blocker.code));
+  assert.equal(result.ready, false);
+  const codes = new Set(result.readinessDebt.map((blocker: any) => blocker.code));
   assert.ok(codes.has('HEAD_NOT_PUSHED'));
   assert.ok(codes.has('LOCAL_BRANCH_AHEAD'));
 });
@@ -290,7 +314,9 @@ test('evaluateReviewSubmission passes with clean published head, completed check
   });
 
   assert.equal(result.blocked, false);
+  assert.equal(result.ready, true);
   assert.deepEqual(result.blockers, []);
+  assert.deepEqual(result.readinessDebt, []);
   assert.equal(result.gitEvidence.pushed, true);
   assert.equal(result.verificationEvidence.length, 1);
 });
@@ -372,3 +398,23 @@ test('buildTaskGitWarnings reports branch mismatch, dirty completed work, and un
   assert.ok(codes.has('UPSTREAM_NOT_CONFIGURED'));
   assert.ok(codes.has('REVIEW_HEAD_NOT_PUSHED'));
 });
+
+test('DONE warnings preserve quality debt without presenting status as GREEN or approved', () => {
+  const fixture = setup('done-readiness-debt');
+  const task = createTask(fixture.projectId, {
+    status: 'done',
+    checklist: [{ id: 'one', text: 'Deferred', completed: false }],
+    verificationEvidence: [],
+    gitEvidence: undefined,
+  });
+
+  const warnings = buildTaskGitWarnings(task);
+  const codes = new Set(warnings.map((warning: any) => warning.code));
+
+  assert.ok(codes.has('DONE_CHECKLIST_DEBT'));
+  assert.ok(codes.has('DONE_VERIFICATION_MISSING'));
+  assert.ok(codes.has('DONE_GIT_EVIDENCE_MISSING'));
+  assert.ok(warnings.some((warning: any) => /does not imply GREEN verification/.test(warning.message)));
+  assert.ok(warnings.some((warning: any) => /does not imply review approval/.test(warning.message)));
+});
+

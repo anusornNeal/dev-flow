@@ -71,7 +71,7 @@ function task(id: string) {
   } as any;
 }
 
-for (const id of ['manual-soft', 'manual-hard', 'strict-default', 'manual-path']) saveTask(task(id));
+for (const id of ['manual-debt-done', 'manual-debt-ready', 'manual-hard', 'strict-default', 'manual-path']) saveTask(task(id));
 createAgentRun({ taskId: 'manual-hard', projectId: project.id, agent: 'Codex', model: 'GPT-5.5', effort: 'medium' });
 
 const app = express();
@@ -155,23 +155,26 @@ async function waitUntil(predicate: () => boolean, message: string) {
   assert.fail(message);
 }
 
-test('manual move returns structured confirmation without mutation', async () => {
-  const result = await post('manual-soft', { status: 'ready-for-review', intent: 'manual' });
-  assert.equal(result.response.status, 409);
-  assert.equal(result.body.code, 'MOVE_CONFIRMATION_REQUIRED');
-  assert.equal(result.body.confirmationRequired, true);
-  assert.equal(result.body.retry.manualOverride, true);
-  assert.ok(result.body.blockers.some((item: any) => item.code === 'CHECKLIST_INCOMPLETE'));
-  assert.equal(getTask('manual-soft')?.status, 'in-progress');
+test('manual DONE accepts quality debt without confirmation, override, or recovery disposition', async () => {
+  const result = await post('manual-debt-done', { status: 'done' }, 'move-to');
+  assert.equal(result.response.status, 200, JSON.stringify(result.body));
+  assert.equal(result.body.task.status, 'done');
+  assert.deepEqual(result.body.bypassedBlockers, []);
+  const persisted = getTask('manual-debt-done');
+  assert.ok(persisted);
+  assert.equal((persisted?.logs || []).some((entry: any) => /\[recovery-disposition\]/.test(entry.message)), false);
+  const warningCodes = new Set(buildTaskGitWarnings(persisted).map((entry: any) => entry.code));
+  assert.ok(warningCodes.has('DONE_CHECKLIST_DEBT'));
+  assert.ok(warningCodes.has('DONE_VERIFICATION_MISSING'));
+  assert.ok(warningCodes.has('DONE_GIT_EVIDENCE_MISSING'));
 });
 
-test('manual override moves, audits bypassed blockers, and does not launch Auto Work', async () => {
-  const result = await post('manual-soft', { status: 'ready-for-review', intent: 'manual', manualOverride: true });
-  assert.equal(result.response.status, 200);
+test('manual ready-for-review move can coexist with quality debt without an escape hatch', async () => {
+  const result = await post('manual-debt-ready', { status: 'ready-for-review', intent: 'manual' });
+  assert.equal(result.response.status, 200, JSON.stringify(result.body));
   assert.equal(result.body.task.status, 'ready-for-review');
   assert.equal(result.body.autoWorkTrigger, null);
-  assert.ok(result.body.bypassedBlockers.some((item: any) => item.code === 'CHECKLIST_INCOMPLETE'));
-  assert.ok((getTask('manual-soft')?.logs || []).some((entry: any) => /Manual override move/.test(entry.message) && /CHECKLIST_INCOMPLETE/.test(entry.message)));
+  assert.deepEqual(result.body.bypassedBlockers, []);
 });
 
 test('active agent ownership stays a hard blocker even with manualOverride', async () => {
@@ -182,12 +185,11 @@ test('active agent ownership stays a hard blocker even with manualOverride', asy
   assert.equal(getTask('manual-hard')?.status, 'in-progress');
 });
 
-test('strict/default API move remains blocked rather than silently overriding', async () => {
+test('default API move does not turn quality debt into lifecycle authority', async () => {
   const result = await post('strict-default', { status: 'ready-for-review' });
-  assert.equal(result.response.status, 400);
-  assert.equal(result.body.code, 'MOVE_WORKFLOW_BLOCKED');
-  assert.equal(result.body.confirmationRequired, false);
-  assert.equal(getTask('strict-default')?.status, 'in-progress');
+  assert.equal(result.response.status, 200, JSON.stringify(result.body));
+  assert.equal(result.body.task.status, 'ready-for-review');
+  assert.deepEqual(result.body.bypassedBlockers, []);
 });
 test('move tool contract exposes structured recoveryDisposition for manual DONE recovery', async () => {
   const { getToolDefinitionByName } = await import('../../src/server/contracts/devflowContract.js');
@@ -200,28 +202,15 @@ test('move tool contract exposes structured recoveryDisposition for manual DONE 
   }
 });
 
-test('move-to applies the same confirmation and explicit override semantics across a transition path', async () => {
-  const first = await post('manual-path', { status: 'done', intent: 'manual' }, 'move-to');
-  assert.equal(first.response.status, 409);
-  assert.equal(first.body.code, 'MOVE_CONFIRMATION_REQUIRED');
-  assert.equal(getTask('manual-path')?.status, 'in-progress');
-
-  const missingDisposition = await post('manual-path', { status: 'done', intent: 'manual', manualOverride: true }, 'move-to');
-  assert.equal(missingDisposition.response.status, 409);
-  assert.equal(missingDisposition.body.code, 'MOVE_RECOVERY_DISPOSITION_REQUIRED');
-  assert.equal(getTask('manual-path')?.status, 'in-progress');
-
-  const recoveryDisposition = { classification: 'follow-up', summary: 'Finish the intentionally deferred verification and checklist scope.', followUpTaskId: 'DVF-0999', workspaceId: 'ws_recovery' };
-  const override = await post('manual-path', { status: 'done', intent: 'manual', manualOverride: true, recoveryDisposition }, 'move-to');
-  assert.equal(override.response.status, 200);
-  assert.equal(override.body.task.status, 'done');
-  assert.equal(override.body.autoWorkTrigger, null);
-  assert.ok(Array.isArray(override.body.path));
+test('move-to reaches DONE with quality debt and no manual recovery ceremony', async () => {
+  const result = await post('manual-path', { status: 'done' }, 'move-to');
+  assert.equal(result.response.status, 200, JSON.stringify(result.body));
+  assert.equal(result.body.task.status, 'done');
+  assert.equal(result.body.autoWorkTrigger, null);
+  assert.ok(Array.isArray(result.body.path));
+  assert.deepEqual(result.body.bypassedBlockers, []);
   const persisted = getTask('manual-path');
-  assert.ok((persisted?.logs || []).some((entry: any) => /\[recovery-disposition\]/.test(entry.message) && /follow-up/.test(entry.message)));
-  const warning = buildTaskGitWarnings(persisted).find((entry: any) => entry.code === 'RECOVERY_DISPOSITION_RECORDED');
-  assert.ok(warning);
-  assert.deepEqual((warning as any).details.recoveryDisposition, recoveryDisposition);
+  assert.equal((persisted?.logs || []).some((entry: any) => /\[recovery-disposition\]/.test(entry.message)), false);
 });
 
 test('claimed manual move disposes execution ownership before leaving in-progress', async () => {

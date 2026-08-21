@@ -34,10 +34,12 @@ test('strict/default callers do not inherit manual override semantics', () => {
   assert.equal(decision.outcome, 'blocked');
 });
 
-test('unfinished DONE override requires a bounded recovery disposition', () => {
-  assert.equal(requiresRecoveryDispositionForDone('done', [{ code: 'CHECKLIST_INCOMPLETE', message: 'unfinished', bypassable: true }]), true);
-  assert.equal(requiresRecoveryDispositionForDone('ready-for-review', [{ code: 'CHECKLIST_INCOMPLETE', message: 'unfinished', bypassable: true }]), false);
+test('DONE quality debt does not require recovery disposition while dependency debt still does', () => {
+  assert.equal(requiresRecoveryDispositionForDone('done', [{ code: 'CHECKLIST_INCOMPLETE', message: 'unfinished', bypassable: true }]), false);
+  assert.equal(requiresRecoveryDispositionForDone('done', [{ code: 'VERIFICATION_EVIDENCE_MISSING', message: 'missing', bypassable: true }]), false);
   assert.equal(requiresRecoveryDispositionForDone('done', [{ code: 'HEAD_NOT_PUSHED', message: 'local only', bypassable: true }]), false);
+  assert.equal(requiresRecoveryDispositionForDone('done', [{ code: 'CHILD_TASK_BLOCKING', message: 'child active', bypassable: true }]), true);
+  assert.equal(requiresRecoveryDispositionForDone('ready-for-review', [{ code: 'CHILD_TASK_BLOCKING', message: 'child active', bypassable: true }]), false);
   assert.deepEqual(normalizeRecoveryDisposition({ classification: 'follow-up', summary: '  finish remaining scope  ', followUpTaskId: ' DVF-0999 ', workspaceId: ' ws_abc123 ' }), {
     classification: 'follow-up', summary: 'finish remaining scope', followUpTaskId: 'DVF-0999', workspaceId: 'ws_abc123',
   });
@@ -52,15 +54,15 @@ test('Board move request declares manual intent and override without emergency',
   assert.deepEqual(override, { status: 'ready-for-review', intent: 'manual', manualOverride: true });
 });
 
-test('MCP move tools stay strict by default and expose explicit manualOverride', () => {
+test('MCP move tools describe readiness debt separately from lifecycle status authority', () => {
   for (const name of ['move_task_status', 'move_task_to_status']) {
     const tool = getToolDefinitionByName(name)!;
     assert.ok(tool.inputSchema.properties.manualOverride);
-    assert.match(tool.inputSchema.properties.manualOverride.description, /explicit/i);
-    assert.match(tool.inputSchema.properties.manualOverride.description, /break_glass_lifecycle/);
-    const strictRequest = tool.buildHttpRequest({ taskId: 'DVF-0001', status: 'done' });
-    assert.equal((strictRequest.body as any).manualOverride, undefined);
-    assert.equal((strictRequest.body as any).intent, undefined);
+    assert.match(tool.description, /quality|readiness/i);
+    assert.doesNotMatch(tool.description, /Strict by default/i);
+    const normalRequest = tool.buildHttpRequest({ taskId: 'DVF-0001', status: 'done' });
+    assert.equal((normalRequest.body as any).manualOverride, undefined);
+    assert.equal((normalRequest.body as any).intent, undefined);
     const overrideRequest = tool.buildHttpRequest({ taskId: 'DVF-0001', status: 'done', manualOverride: true });
     assert.equal((overrideRequest.body as any).manualOverride, true);
     assert.equal((overrideRequest.body as any).intent, 'manual');

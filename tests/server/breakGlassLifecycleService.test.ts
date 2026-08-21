@@ -182,6 +182,27 @@ test('detached integrated recovery terminalizes exact already-integrated work wi
   assert.equal((result.operation.result as any).verificationDebtSettled, true);
 });
 
+test('detached integrated recovery treats repository Git policy as authoritative over SQLite fallback', () => {
+  const f = prepareDetachedIntegrated('detached-repo-policy');
+  const devflowDir = path.join(f.root, '.devflow');
+  fs.mkdirSync(devflowDir, { recursive: true });
+  fs.writeFileSync(path.join(devflowDir, 'project.json'), JSON.stringify({
+    version: 1,
+    gitWorkflowPolicy: {
+      integrationStrategy: 'rebase-ff',
+      commitMessageTemplate: 'repo::{ticket}::{type}::{title}',
+      mergeMessageTemplate: 'Repo merge {ticket}',
+    },
+  }, null, 2), 'utf8');
+  git(f.root, ['add', '-f', '.devflow/project.json']);
+  git(f.root, ['commit', '-m', 'add repo policy']);
+
+  assert.throws(
+    () => executeBreakGlassLifecycle(f.state, detachedRequest(f, 'bg-detached-repo-policy-1')),
+    (error: any) => error?.payload?.code === 'BREAK_GLASS_DETACHED_COMMIT_TASK_MISMATCH',
+  );
+});
+
 test('detached integrated recovery is forbidden while the managed workspace root is still live', () => {
   const f = fixture('detached-live-reject');
   const expectedCommit = git(f.root, ['rev-parse', 'HEAD']);

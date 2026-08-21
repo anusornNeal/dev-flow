@@ -13,6 +13,7 @@ import { contextGovernorInputFromArgs, planContextGovernor } from './contextGove
 import { ADAPTIVE_SOURCE_DISCLOSURE_POLICY } from './contextBudgetPlannerService';
 import { ensureRepoChangeWatcher } from './workspaceChangeWatcherService';
 import { maybeRefreshAtlasOnProjectOpen } from './projectAtlasService.js';
+import { resolveProjectGitWorkflowPolicy } from './projectGitWorkflowPolicyService.js';
 
 const DEVFLOW_PROJECT_INSTRUCTIONS_PATH = '.devflow/agents.md';
 const HINT_FILES = ['AGENTS.md', 'README.md', 'package.json', 'tsconfig.json', 'vite.config.ts', 'gradlew.bat', 'build.gradle', 'settings.gradle'];
@@ -390,7 +391,7 @@ function buildProjectStartContext(state: AppState, args: Record<string, any>, ca
       repoUrl: project.repoUrl,
       localPath: project.localPath,
       taskIdPrefix: project.taskIdPrefix,
-      gitWorkflowPolicy: project.gitWorkflowPolicy,
+      gitWorkflowPolicy: resolveProjectGitWorkflowPolicy(project, { repositoryRoot: root || project.localPath }),
       workspaceId: typeof args.workspaceId === 'string' ? args.workspaceId : undefined,
       isolatedSession: Boolean(args.sessionId || args.workspaceId),
     },

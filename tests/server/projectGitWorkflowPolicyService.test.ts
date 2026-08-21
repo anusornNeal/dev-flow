@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import * as policyModule from '../../src/server/services/projectGitWorkflowPolicyService.js';
 import {
   renderGitWorkflowTemplate,
@@ -8,6 +11,14 @@ import {
   taskCommitSubjectMatchesPolicy,
   validateGitWorkflowPolicy,
 } from '../../src/server/services/projectGitWorkflowPolicyService.js';
+
+function createRepoPolicyRoot(policy: unknown) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-repo-policy-'));
+  const devflowDir = path.join(root, '.devflow');
+  fs.mkdirSync(devflowDir, { recursive: true });
+  fs.writeFileSync(path.join(devflowDir, 'project.json'), JSON.stringify(policy, null, 2), 'utf8');
+  return root;
+}
 
 test('projects without policy inherit rebase-ff with independent message defaults', () => {
   const policy = resolveProjectGitWorkflowPolicy({ id: 'p1' } as any);
@@ -89,6 +100,85 @@ test('template rendering supports ticket title and type without repo-specific br
   });
   assert.equal(rendered, '[QCA-3617] Fix: Fix installer summary');
   assert.equal(renderGitWorkflowTemplate('Merge {ticket}', { ticket: 'QCA-3617', title: '', type: '' }), 'Merge QCA-3617');
+});
+
+test('repository project policy overrides conflicting SQLite workflow policy', () => {
+  const root = createRepoPolicyRoot({
+    version: 1,
+    gitWorkflowPolicy: {
+      integrationStrategy: 'rebase-ff',
+      commitMessageTemplate: 'repo::{ticket}::{type}::{title}',
+      mergeMessageTemplate: 'Repo merge {ticket}',
+    },
+  });
+  const policy = resolveProjectGitWorkflowPolicy({
+    id: 'repo-wins',
+    gitWorkflowPolicy: { integrationStrategy: 'merge', commitMessageTemplate: 'db::{ticket}', mergeMessageTemplate: 'DB {ticket}' },
+  } as any, { repositoryRoot: root } as any);
+  assert.deepEqual(policy, {
+    integrationStrategy: 'rebase-ff',
+    commitMessageTemplate: 'repo::{ticket}::{type}::{title}',
+    mergeMessageTemplate: 'Repo merge {ticket}',
+  });
+});
+
+test('missing repository policy preserves SQLite fallback behavior', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-repo-policy-absent-'));
+  const policy = resolveProjectGitWorkflowPolicy({
+    id: 'legacy-db',
+    gitWorkflowPolicy: { integrationStrategy: 'merge', commitMessageTemplate: '{ticket}: {title}' },
+  } as any, { repositoryRoot: root } as any);
+  assert.equal(policy.integrationStrategy, 'merge');
+  assert.equal(policy.commitMessageTemplate, '{ticket}: {title}');
+});
+
+test('existing invalid repository policy fails closed instead of falling back to SQLite', () => {
+  const malformedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-repo-policy-invalid-'));
+  fs.mkdirSync(path.join(malformedRoot, '.devflow'), { recursive: true });
+  fs.writeFileSync(path.join(malformedRoot, '.devflow', 'project.json'), '{ bad json', 'utf8');
+  assert.throws(
+    () => resolveProjectGitWorkflowPolicy({ id: 'invalid', gitWorkflowPolicy: { integrationStrategy: 'merge' } } as any, { repositoryRoot: malformedRoot } as any),
+    (error: any) => error?.payload?.code === 'REPOSITORY_PROJECT_POLICY_INVALID',
+  );
+
+  const unknownRoot = createRepoPolicyRoot({ version: 1, gitWorkflowPolicy: {}, runtimeState: { unsafe: true } });
+  assert.throws(
+    () => resolveProjectGitWorkflowPolicy({ id: 'unknown-field' } as any, { repositoryRoot: unknownRoot } as any),
+    (error: any) => error?.payload?.code === 'REPOSITORY_PROJECT_POLICY_INVALID' && /runtimeState/.test(error.message),
+  );
+});
+
+test('repository policy is root-isolated and refreshed without restart', () => {
+  const rootA = createRepoPolicyRoot({ version: 1, gitWorkflowPolicy: { integrationStrategy: 'rebase-ff' } });
+  const rootB = createRepoPolicyRoot({ version: 1, gitWorkflowPolicy: { integrationStrategy: 'merge' } });
+  assert.equal(resolveProjectGitWorkflowPolicy({ id: 'a' } as any, { repositoryRoot: rootA } as any).integrationStrategy, 'rebase-ff');
+  assert.equal(resolveProjectGitWorkflowPolicy({ id: 'b' } as any, { repositoryRoot: rootB } as any).integrationStrategy, 'merge');
+
+  fs.writeFileSync(path.join(rootA, '.devflow', 'project.json'), JSON.stringify({ version: 1, gitWorkflowPolicy: { integrationStrategy: 'merge' } }), 'utf8');
+  assert.equal(resolveProjectGitWorkflowPolicy({ id: 'a' } as any, { repositoryRoot: rootA } as any).integrationStrategy, 'merge');
+});
+
+test('repository policy rejects symlink and oversized files', () => {
+  const targetRoot = createRepoPolicyRoot({ version: 1, gitWorkflowPolicy: { integrationStrategy: 'merge' } });
+  const symlinkRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-repo-policy-symlink-'));
+  fs.mkdirSync(path.join(symlinkRoot, '.devflow'), { recursive: true });
+  const linkPath = path.join(symlinkRoot, '.devflow', 'project.json');
+  try {
+    fs.symlinkSync(path.join(targetRoot, '.devflow', 'project.json'), linkPath);
+    assert.throws(
+      () => resolveProjectGitWorkflowPolicy({ id: 'symlink' } as any, { repositoryRoot: symlinkRoot } as any),
+      (error: any) => error?.payload?.code === 'REPOSITORY_PROJECT_POLICY_INVALID',
+    );
+  } catch (error: any) {
+    if (error?.code !== 'EPERM' && error?.code !== 'EACCES') throw error;
+  }
+
+  const oversizedRoot = createRepoPolicyRoot({ version: 1, gitWorkflowPolicy: {} });
+  fs.writeFileSync(path.join(oversizedRoot, '.devflow', 'project.json'), ' '.repeat(100_001), 'utf8');
+  assert.throws(
+    () => resolveProjectGitWorkflowPolicy({ id: 'oversized' } as any, { repositoryRoot: oversizedRoot } as any),
+    (error: any) => error?.payload?.code === 'REPOSITORY_PROJECT_POLICY_TOO_LARGE',
+  );
 });
 
 test('invalid integration strategies and placeholders fail with actionable policy errors', () => {

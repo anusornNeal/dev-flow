@@ -9,7 +9,7 @@ import { listExecutionSessionsForWorkspace } from '../repositories/executionSess
 import { createApiError } from './api';
 import { getLatestExecutionCheckpoint } from './executionCheckpointService.js';
 import { withSyncLock } from './lockAndIdempotencyService.js';
-import { validateGitWorkflowPolicy } from './projectGitWorkflowPolicyService';
+import { resolveProjectGitWorkflowPolicy } from './projectGitWorkflowPolicyService';
 
 export type SessionWorkspaceState = 'ready' | 'active' | 'integration-required';
 
@@ -556,7 +556,7 @@ export function createOrReuseSessionWorkspace(
     branch,
     baseBranch,
     baseRevision,
-    gitWorkflowPolicy: validateGitWorkflowPolicy(project.gitWorkflowPolicy),
+    gitWorkflowPolicy: resolveProjectGitWorkflowPolicy(project as any, { repositoryRoot: projectRoot }),
     ...(taskDisplayId ? { taskDisplayId, taskRootLeaf: taskRootLeaf || rootLeaf } : {}),
     state: 'ready',
     createdAt: new Date(now).toISOString(),

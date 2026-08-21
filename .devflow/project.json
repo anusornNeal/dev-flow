@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "gitWorkflowPolicy": {
+    "integrationStrategy": "rebase-ff",
+    "commitMessageTemplate": "[{ticket}] {type}: {title}",
+    "mergeMessageTemplate": "Merge {ticket}"
+  }
+}

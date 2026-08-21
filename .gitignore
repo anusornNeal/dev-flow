@@ -17,6 +17,9 @@ mcp-servers.json
 .commandcode/
 .devflow/*
 !.devflow/commands.yaml
+!.devflow/project.json
+!.devflow/agents.md
+!.devflow/verification-impact.json
 ORIGINAL_REQUEST.md
 
 /data/*.db

@@ -1,0 +1,17 @@
+{
+  "rules": [
+    {
+      "id": "docs-text",
+      "patterns": [
+        "README.md",
+        "AGENTS.md",
+        "docs/**"
+      ],
+      "commands": [
+        "typecheck"
+      ],
+      "lane": "fast",
+      "reason": "Documentation-only changes still receive a lightweight repository sanity check; all unmapped source, test, config, and shared-contract changes fall back to conservative verification planning."
+    }
+  ]
+}

@@ -81,6 +81,45 @@ test('getProjectStartContext returns compact project and top-level file context'
   assert.equal(scheduled.length, 1);
 });
 
+test('project start context exposes repository Git policy ahead of conflicting SQLite fallback', () => {
+  const policyRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-start-repo-policy-'));
+  const devFlowDir = path.join(policyRoot, '.devflow');
+  fs.mkdirSync(devFlowDir, { recursive: true });
+  fs.writeFileSync(path.join(devFlowDir, 'project.json'), JSON.stringify({
+    version: 1,
+    gitWorkflowPolicy: {
+      integrationStrategy: 'rebase-ff',
+      commitMessageTemplate: '[{ticket}] {type}: {title}',
+      mergeMessageTemplate: 'Merge {ticket}',
+    },
+  }, null, 2), 'utf8');
+  const policyProject = {
+    id: 'project-start-repo-policy',
+    name: 'Repo Policy Fixture',
+    repoUrl: 'https://example.com/start-repo-policy',
+    localPath: policyRoot,
+    gitWorkflowPolicy: {
+      integrationStrategy: 'merge',
+      commitMessageTemplate: 'db::{ticket}',
+      mergeMessageTemplate: 'DB merge {ticket}',
+    },
+  } as any;
+  createProject(policyProject);
+  state.projectsCache.push(policyProject);
+
+  try {
+    const result = getProjectStartContext(state, { projectId: policyProject.id, atlasScheduler: () => {} });
+    assert.deepEqual(result.project.gitWorkflowPolicy, {
+      integrationStrategy: 'rebase-ff',
+      commitMessageTemplate: '[{ticket}] {type}: {title}',
+      mergeMessageTemplate: 'Merge {ticket}',
+    });
+  } finally {
+    state.projectsCache = state.projectsCache.filter((project: any) => project.id !== policyProject.id);
+    fs.rmSync(policyRoot, { recursive: true, force: true });
+  }
+});
+
 test('project-local .devflow/agents.md is surfaced first without exposing sibling .devflow files', () => {
   const hintRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-start-hints-'));
   const devFlowDir = path.join(hintRoot, '.devflow');

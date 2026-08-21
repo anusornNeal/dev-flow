@@ -536,7 +536,8 @@ function executeDetachedIntegratedRecovery(
     });
   }
   const commitEvidence = getGitCommitEvidenceForRoot(project.localPath, expectedCommit);
-  if (!taskCommitSubjectMatchesPolicy(commitEvidence.subject, task, project)) {
+  const repositoryPolicy = resolveProjectGitWorkflowPolicy(project, { repositoryRoot: project.localPath });
+  if (!taskCommitSubjectMatchesPolicy(commitEvidence.subject, task, { gitWorkflowPolicy: repositoryPolicy } as any)) {
     throw createApiError(409, 'BREAK_GLASS_DETACHED_COMMIT_TASK_MISMATCH', 'Expected commit subject does not match the selected task/ticket policy.', {
       details: { expectedCommit: commitEvidence.commit, subject: commitEvidence.subject },
     });
@@ -548,7 +549,7 @@ function executeDetachedIntegratedRecovery(
     sourceBranch: selected.branch || 'lost-workspace',
     baseRevision,
     sourceHead: commitEvidence.commit,
-    strategy: resolveProjectGitWorkflowPolicy(project).integrationStrategy,
+    strategy: repositoryPolicy.integrationStrategy,
   });
   if (integration.patchEquivalent === true) {
     throw createApiError(409, 'BREAK_GLASS_DETACHED_EXACT_ANCESTOR_REQUIRED', 'Detached integrated recovery requires expectedCommit itself to be an ancestor of the configured local base; patch equivalence is insufficient.');

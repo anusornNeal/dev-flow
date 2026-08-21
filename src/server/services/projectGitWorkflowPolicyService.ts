@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import type { GitWorkflowPolicy, Project, ResolvedGitWorkflowPolicy } from '../../types.js';
 import { createApiError } from './api.js';
 
@@ -7,8 +9,16 @@ const DEFAULT_POLICY: ResolvedGitWorkflowPolicy = {
   mergeMessageTemplate: 'Merge {ticket}',
 };
 
+export const REPOSITORY_PROJECT_POLICY_RELATIVE_PATH = '.devflow/project.json';
+export const REPOSITORY_PROJECT_POLICY_MAX_BYTES = 100_000;
+const REPOSITORY_PROJECT_POLICY_FIELDS = new Set(['version', 'gitWorkflowPolicy']);
 const ALLOWED_TEMPLATE_FIELDS = new Set(['ticket', 'title', 'type']);
 const MAX_TEMPLATE_LENGTH = 200;
+
+type RepositoryProjectPolicy = {
+  version: 1;
+  gitWorkflowPolicy?: GitWorkflowPolicy;
+};
 
 type TaskTicketSource = {
   id?: string;
@@ -23,6 +33,10 @@ type TemplateContext = {
   ticket: string;
   title: string;
   type: string;
+};
+
+type ProjectPolicyResolutionOptions = {
+  repositoryRoot?: string | null;
 };
 
 function validateTemplate(value: unknown, field: 'commitMessageTemplate' | 'mergeMessageTemplate') {
@@ -70,8 +84,75 @@ export function validateGitWorkflowPolicy(value: unknown): GitWorkflowPolicy | u
   return policy;
 }
 
-export function resolveProjectGitWorkflowPolicy(project: Pick<Project, 'gitWorkflowPolicy'> | null | undefined): ResolvedGitWorkflowPolicy {
-  const policy = validateGitWorkflowPolicy(project?.gitWorkflowPolicy);
+function invalidRepositoryProjectPolicy(message: string, details?: Record<string, unknown>) {
+  return createApiError(400, 'REPOSITORY_PROJECT_POLICY_INVALID', message, details ? { details } : undefined);
+}
+
+export function loadRepositoryProjectPolicy(repositoryRoot: string): RepositoryProjectPolicy | null {
+  const root = String(repositoryRoot || '').trim();
+  if (!root) return null;
+  const policyPath = path.resolve(root, REPOSITORY_PROJECT_POLICY_RELATIVE_PATH);
+  if (!fs.existsSync(policyPath)) return null;
+
+  let stat: fs.Stats;
+  try {
+    stat = fs.lstatSync(policyPath);
+  } catch (error: any) {
+    throw invalidRepositoryProjectPolicy(`Repository project policy '${REPOSITORY_PROJECT_POLICY_RELATIVE_PATH}' could not be inspected.`, {
+      cause: String(error?.message || error || 'unknown file inspection failure'),
+    });
+  }
+  if (stat.isSymbolicLink() || !stat.isFile()) {
+    throw invalidRepositoryProjectPolicy(`Repository project policy '${REPOSITORY_PROJECT_POLICY_RELATIVE_PATH}' must be a regular non-symlink file.`);
+  }
+  if (stat.size > REPOSITORY_PROJECT_POLICY_MAX_BYTES) {
+    throw createApiError(400, 'REPOSITORY_PROJECT_POLICY_TOO_LARGE', `Repository project policy must be ${REPOSITORY_PROJECT_POLICY_MAX_BYTES} bytes or less.`, {
+      details: { path: REPOSITORY_PROJECT_POLICY_RELATIVE_PATH, size: stat.size },
+    });
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(policyPath, 'utf8'));
+  } catch (error: any) {
+    throw invalidRepositoryProjectPolicy(`Repository project policy '${REPOSITORY_PROJECT_POLICY_RELATIVE_PATH}' must contain valid JSON.`, {
+      cause: String(error?.message || error || 'invalid JSON'),
+    });
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw invalidRepositoryProjectPolicy(`Repository project policy '${REPOSITORY_PROJECT_POLICY_RELATIVE_PATH}' must be a JSON object.`);
+  }
+  const input = parsed as Record<string, unknown>;
+  const unknownField = Object.keys(input).find((key) => !REPOSITORY_PROJECT_POLICY_FIELDS.has(key));
+  if (unknownField) {
+    throw invalidRepositoryProjectPolicy(`Repository project policy contains unsupported field '${unknownField}'.`);
+  }
+  if (input.version !== 1) {
+    throw invalidRepositoryProjectPolicy("Repository project policy 'version' must be exactly 1.");
+  }
+
+  let gitWorkflowPolicy: GitWorkflowPolicy | undefined;
+  try {
+    gitWorkflowPolicy = validateGitWorkflowPolicy(input.gitWorkflowPolicy);
+  } catch (error: any) {
+    throw invalidRepositoryProjectPolicy(`Repository project policy has invalid gitWorkflowPolicy: ${String(error?.message || error || 'invalid policy')}`, {
+      causeCode: error?.payload?.code || null,
+    });
+  }
+  return {
+    version: 1,
+    ...(gitWorkflowPolicy ? { gitWorkflowPolicy } : {}),
+  };
+}
+
+export function resolveProjectGitWorkflowPolicy(
+  project: Pick<Project, 'gitWorkflowPolicy'> | null | undefined,
+  options: ProjectPolicyResolutionOptions = {},
+): ResolvedGitWorkflowPolicy {
+  const repositoryPolicy = options.repositoryRoot ? loadRepositoryProjectPolicy(options.repositoryRoot) : null;
+  const policy = repositoryPolicy
+    ? repositoryPolicy.gitWorkflowPolicy
+    : validateGitWorkflowPolicy(project?.gitWorkflowPolicy);
   return {
     integrationStrategy: policy?.integrationStrategy ?? DEFAULT_POLICY.integrationStrategy,
     commitMessageTemplate: policy?.commitMessageTemplate ?? DEFAULT_POLICY.commitMessageTemplate,

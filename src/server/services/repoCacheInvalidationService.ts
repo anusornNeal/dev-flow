@@ -36,7 +36,7 @@ const DEFAULT_DOMAIN_DEPENDENCIES: Record<string, RepoCacheDependency[]> = {
   'repo-inspection-index': ['repo-content', 'repo-revision', 'project-rules'],
   'repo-context-bundle': ['repo-content', 'repo-revision', 'project-rules'],
   'context-handles': ['repo-content', 'repo-revision', 'project-rules'],
-  'verification-results': ['repo-content', 'repo-revision', 'project-rules'],
+  'verification-results': ['project-rules'],
   'project-atlas': ['atlas-source', 'atlas-authored'],
   skills: ['skills'],
 };

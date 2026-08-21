@@ -451,6 +451,55 @@ test('runProjectCommand reuses an explicitly cached successful result only for t
   assert.equal(fs.readFileSync(counterPath, 'utf8'), '2');
 });
 
+test('verification cache reuses scoped GREEN evidence across unrelated commits and invalidates relevant inputs', () => {
+  const root = createProject('scoped-evidence-unrelated-commit', { test: 'node scripts/cached.mjs' });
+  const counterPath = path.join(tempRoot, 'scoped-evidence-unrelated-commit-counter.txt');
+  fs.writeFileSync(path.join(root, 'source.txt'), 'stable\n', 'utf8');
+  fs.writeFileSync(path.join(root, 'unrelated.txt'), 'one\n', 'utf8');
+  fs.writeFileSync(path.join(root, 'scripts', 'cached.mjs'), [
+    "import fs from 'node:fs';",
+    `const counterPath = ${JSON.stringify(counterPath)};`,
+    "const next = fs.existsSync(counterPath) ? Number(fs.readFileSync(counterPath, 'utf8')) + 1 : 1;",
+    "fs.writeFileSync(counterPath, String(next), 'utf8');",
+    "process.stdout.write(`run:${next}\\n`);",
+  ].join('\n'), 'utf8');
+  const git = (args: string[]) => {
+    const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', shell: false });
+    assert.equal(result.status, 0, result.stderr || result.stdout || `git ${args.join(' ')} failed`);
+  };
+  git(['init']);
+  git(['config', 'user.name', 'DevFlow Test']);
+  git(['config', 'user.email', 'devflow@example.com']);
+  git(['add', '.']);
+  git(['commit', '-m', 'initial']);
+
+  const args = {
+    projectId: 'project-command',
+    command: 'test',
+    cacheResult: true,
+    affectedInputPaths: ['source.txt'],
+    evidenceConsumerId: 'consumer-a',
+  };
+  const first = runProjectCommand(stateFor(root), args);
+  assert.equal(first.cache?.hit, false);
+  assert.equal(fs.readFileSync(counterPath, 'utf8'), '1');
+
+  fs.writeFileSync(path.join(root, 'unrelated.txt'), 'two\n', 'utf8');
+  git(['add', 'unrelated.txt']);
+  git(['commit', '-m', 'unrelated']);
+  const second = runProjectCommand(stateFor(root), { ...args, evidenceConsumerId: 'consumer-b' });
+  assert.equal(second.cache?.hit, true);
+  assert.equal(second.processSpawns, 0);
+  assert.equal(second.cache?.evidenceId, first.cache?.evidenceId);
+  assert.deepEqual(second.cache?.consumers?.sort(), ['consumer-a', 'consumer-b']);
+  assert.equal(fs.readFileSync(counterPath, 'utf8'), '1');
+
+  fs.writeFileSync(path.join(root, 'source.txt'), 'changed\n', 'utf8');
+  const third = runProjectCommand(stateFor(root), args);
+  assert.equal(third.cache?.hit, false);
+  assert.equal(fs.readFileSync(counterPath, 'utf8'), '2');
+});
+
 test('verification cache lineage invalidates only the affected repository when project rules change', () => {
   const createCachedRepo = (name: string) => {
     const root = createProject(name, { test: 'node scripts/cached.mjs' });

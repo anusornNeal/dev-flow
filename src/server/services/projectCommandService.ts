@@ -74,6 +74,7 @@ const MAX_COMMAND_TARGETS = 20;
 const MAX_COMMAND_TARGET_LENGTH = 500;
 const packageScriptsParseCache = new Map<string, { size: number; mtimeMs: number; scripts: Record<string, string> }>();
 const PROJECT_COMMAND_CACHE_DEPENDENCIES = ['repo-content', 'repo-revision', 'project-rules'] as const;
+const PROJECT_COMMAND_EVIDENCE_LINEAGE_DEPENDENCIES = ['project-rules'] as const;
 const PROCESS_RESOURCE_SAMPLE_DELAY_MS = 1_000;
 const PROCESS_RESOURCE_SAMPLE_INTERVAL_MS = 1_500;
 // Async command timeout must settle even if the OS process tree never reports close.
@@ -120,7 +121,7 @@ export type VerificationInfrastructureRecoveryAudit = {
 };
 
 registerRepoCacheInvalidator('verification-results', () => 0, {
-  dependencies: [...PROJECT_COMMAND_CACHE_DEPENDENCIES],
+  dependencies: [...PROJECT_COMMAND_EVIDENCE_LINEAGE_DEPENDENCIES],
 });
 
 type AllowedCommand = typeof ALLOWED_COMMANDS[number];
@@ -1357,6 +1358,7 @@ function commandCacheContext(
   responseMode: 'compact' | 'standard' | 'debug',
   args: Record<string, any>,
   identityOverride?: ProjectCommandExecutionIdentity | null,
+  evidenceScopeRoot?: string,
 ) {
   const explicitCache = args.cacheResult === true || String(args.cacheResult).toLowerCase() === 'true';
   const explicitlyDisabled = args.cacheResult === false || String(args.cacheResult).toLowerCase() === 'false';
@@ -1364,22 +1366,22 @@ function commandCacheContext(
   if (explicitlyDisabled || (!explicitCache && !automaticStaticCache)) return null;
   const executionIdentity = identityOverride ?? buildProjectCommandExecutionIdentity(root, resolvedCommand, cwdPath, timeoutMs, maxOutputBytes, responseMode, {}, args);
   if (!executionIdentity) return null;
+  const evidenceRepositoryScope = normalizeLocalPathIdentity(evidenceScopeRoot ?? root);
+  const evidenceLineageToken = getRepoCacheLineage(evidenceScopeRoot ?? root, [...PROJECT_COMMAND_EVIDENCE_LINEAGE_DEPENDENCIES]).token;
   const cacheKey = crypto.createHash('sha256').update(JSON.stringify({
+    repositoryScope: evidenceRepositoryScope,
     semanticKey: executionIdentity.semanticKey,
-    command: executionIdentity.command,
+    commandConfigFingerprint: executionIdentity.commandConfigFingerprint || '',
+    affectedInputFingerprint: executionIdentity.affectedInputFingerprint || '',
+    dependencyFingerprint: executionIdentity.dependencyFingerprint || '',
+    environmentFingerprint: executionIdentity.environmentFingerprint || '',
     cwd: path.relative(root, cwdPath) || '.',
     timeoutMs,
     maxOutputBytes,
     responseMode,
-    commandConfigFingerprint: executionIdentity.commandConfigFingerprint || null,
-    affectedInputFingerprint: executionIdentity.affectedInputFingerprint || null,
-    dependencyFingerprint: executionIdentity.dependencyFingerprint || null,
-    environmentFingerprint: executionIdentity.environmentFingerprint || null,
-    platform: executionIdentity.platform || null,
-    arch: executionIdentity.arch || null,
-    runtime: executionIdentity.runtime || null,
+    evidenceLineageToken,
   })).digest('hex');
-  return { ...executionIdentity, key: cacheKey };
+  return { ...executionIdentity, key: cacheKey, evidenceLineageToken };
 }
 
 function cachedCommandResult(
@@ -1464,7 +1466,7 @@ function rememberSuccessfulCommandResult(
   const reusable = !lowConfidence || args.allowLowConfidenceEvidenceReuse === true;
   const sourceConsumerId = typeof args.evidenceConsumerId === 'string' ? args.evidenceConsumerId : undefined;
   const remembered = result.ok && reusable
-    ? rememberCommandResult(cacheContext.key, result, args.cacheTtlMs, { sourceConsumerId, reusable: true })
+    ? rememberCommandResult(cacheContext.key, result, args.cacheTtlMs, { sourceConsumerId, reusable: true, retention: 'bounded' })
     : null;
   return {
     ...result,
@@ -1660,6 +1662,7 @@ export async function runProjectCommandAsync(state: AppState, args: Record<strin
     responseMode,
     args,
     executionIdentity,
+    sourceRoot,
   );
   const cached = args.forceFresh === true ? null : cachedCommandResult(cacheContext, command, resolutionMs, responseMode, args);
   const cacheLookupMs = Date.now() - cacheLookupStartedAt;

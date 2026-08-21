@@ -9,11 +9,12 @@ export type CommandResultEvidenceMetadata = {
   sourceConsumerId?: string;
   consumers: string[];
   reusable: boolean;
+  retention?: 'ttl' | 'bounded';
 };
 
 type CommandResultCacheEntry<T> = {
   createdAt: number;
-  expiresAt: number;
+  expiresAt: number | null;
   value: T;
   evidence?: CommandResultEvidenceMetadata;
 };
@@ -22,7 +23,7 @@ const cache = new Map<string, CommandResultCacheEntry<unknown>>();
 
 function prune(now = Date.now()) {
   for (const [key, entry] of cache) {
-    if (entry.expiresAt <= now) cache.delete(key);
+    if (entry.expiresAt !== null && entry.expiresAt <= now) cache.delete(key);
   }
   while (cache.size >= MAX_ENTRIES) {
     const oldest = cache.keys().next().value;
@@ -35,7 +36,7 @@ export function getCachedCommandResult<T>(key: string, consumerId?: string): { v
   const now = Date.now();
   const entry = cache.get(key) as CommandResultCacheEntry<T> | undefined;
   if (!entry) return null;
-  if (entry.expiresAt <= now) {
+  if (entry.expiresAt !== null && entry.expiresAt <= now) {
     cache.delete(key);
     return null;
   }
@@ -52,7 +53,7 @@ export function rememberCommandResult<T>(
   key: string,
   value: T,
   ttlMs?: number,
-  evidenceInput?: { sourceConsumerId?: string; reusable?: boolean },
+  evidenceInput?: { sourceConsumerId?: string; reusable?: boolean; retention?: 'ttl' | 'bounded' },
 ) {
   const now = Date.now();
   prune(now);
@@ -61,14 +62,17 @@ export function rememberCommandResult<T>(
   const sourceConsumerId = typeof evidenceInput?.sourceConsumerId === 'string' && evidenceInput.sourceConsumerId.trim()
     ? evidenceInput.sourceConsumerId.trim()
     : undefined;
+  const retention = evidenceInput?.retention === 'bounded' ? 'bounded' : 'ttl';
+  const expiresAt = retention === 'bounded' ? null : now + ttl;
   const evidence = evidenceInput ? {
     evidenceId: crypto.randomUUID(),
     ...(sourceConsumerId ? { sourceConsumerId } : {}),
     consumers: sourceConsumerId ? [sourceConsumerId] : [],
     reusable: evidenceInput.reusable !== false,
+    retention,
   } satisfies CommandResultEvidenceMetadata : undefined;
-  cache.set(key, { createdAt: now, expiresAt: now + ttl, value, ...(evidence ? { evidence } : {}) });
-  return { createdAt: now, expiresAt: now + ttl, ...(evidence ? { evidence: { ...evidence, consumers: [...evidence.consumers] } } : {}) };
+  cache.set(key, { createdAt: now, expiresAt, value, ...(evidence ? { evidence } : {}) });
+  return { createdAt: now, expiresAt, ...(evidence ? { evidence: { ...evidence, consumers: [...evidence.consumers] } } : {}) };
 }
 
 export function clearCommandResultCache() {

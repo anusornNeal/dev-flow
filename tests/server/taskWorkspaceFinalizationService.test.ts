@@ -1,3 +1,4 @@
+// DVF-0685 regression coverage for finalization-time reusable verification evidence.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -12,7 +13,17 @@ executeAllMigrations();
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
 const { saveTask, getTask } = await import('../../src/server/repositories/taskRepository.js');
 const { createOrReuseSessionWorkspace, resetSessionWorkspaceRuntimeForTests, acquireSessionWorkspace, releaseSessionWorkspace } = await import('../../src/server/services/sessionWorkspaceService.js');
-const { createExecutionSession, getExecutionSessionState, getExecutionSessionOwnershipEpoch, recordExecutionLifecycleTransition } = await import('../../src/server/services/executionSessionService.js');
+const {
+  createExecutionSession,
+  getExecutionOwnershipState,
+  getExecutionSessionState,
+  getExecutionSessionOwnershipEpoch,
+  recordExecutionLifecycleTransition,
+  recordExecutionOwnedChanges,
+  recordExecutionVerificationEvidence,
+} = await import('../../src/server/services/executionSessionService.js');
+const { getProjectCommandExecutionIdentity } = await import('../../src/server/services/projectCommandService.js');
+const { buildVerificationCoverageIdentity } = await import('../../src/server/services/verificationBatchService.js');
 const { integrateWorkspaceCommits, reconstructRecordedWorkspaceIntegration } = await import('../../src/server/services/workspaceIntegrationService.js');
 const { finalizeTaskWorkspace, __setTaskFinalizationFaultBoundaryForTests } = await import('../../src/server/services/taskWorkspaceFinalizationService.js');
 const { getTaskFinalizationOperation } = await import('../../src/server/repositories/taskFinalizationOperationRepository.js');
@@ -29,6 +40,11 @@ function createRepo(label: string) {
   git(root, ['config', 'user.email', 'devflow@example.test']);
   git(root, ['config', 'user.name', 'DevFlow Test']);
   fs.writeFileSync(path.join(root, 'tracked.txt'), 'base\n');
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({
+    name: `finalization-${label}`,
+    private: true,
+    scripts: { test: 'node -e "process.exit(0)"' },
+  }, null, 2));
   git(root, ['add', '.']);
   git(root, ['commit', '-m', 'base']);
   git(root, ['branch', '-M', 'develop']);
@@ -96,6 +112,61 @@ function preparedFinalizationFixture(label: string) {
   saveTask(claimed);
   const execution = createExecutionSession({ projectId: prepared.task.projectId, taskId: prepared.task.id, workspaceId: prepared.workspace.workspaceId, branch: prepared.workspace.branch, repoRoot: prepared.workspace.root });
   advanceExecutionToCommitted(execution.id, label);
+  return { ...prepared, execution };
+}
+
+function preparedCoverageFinalizationFixture(label: string) {
+  const prepared = fixture(label);
+  fs.writeFileSync(path.join(prepared.workspace.root, 'tracked.txt'), `implemented-${label}\n`);
+  git(prepared.workspace.root, ['add', 'tracked.txt']);
+  git(prepared.workspace.root, ['commit', '-m', taskCommitSubject(prepared.task, `implement ${label}`)]);
+  const claimed = getTask(prepared.task.id)!;
+  claimed.claim = { workspaceId: prepared.workspace.workspaceId, sessionIdHash: `fixture-${label}`, ownerLabel: 'Fixture chat', ownerKind: 'chat', claimedAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+  saveTask(claimed);
+  const execution = createExecutionSession({ projectId: prepared.task.projectId, taskId: prepared.task.id, workspaceId: prepared.workspace.workspaceId, branch: prepared.workspace.branch, repoRoot: prepared.workspace.root });
+  recordExecutionLifecycleTransition(execution.id, {
+    toStage: 'context-ready',
+    reasonCode: `${label}-context`,
+    evidence: { id: `${label}-context`, kind: 'context-bundle', status: 'completed' },
+  });
+  recordExecutionLifecycleTransition(execution.id, {
+    toStage: 'implementing',
+    reasonCode: `${label}-implementing`,
+    evidence: { id: `${label}-implementing`, kind: 'owned-change', status: 'completed' },
+  });
+  recordExecutionOwnedChanges(execution.id, ['tracked.txt'], { repoRoot: prepared.workspace.root, source: 'coverage-fixture' });
+  const ownership = getExecutionOwnershipState(execution.id, { repoRoot: prepared.workspace.root });
+  const identity = getProjectCommandExecutionIdentity(prepared.state, {
+    projectId: prepared.project.id,
+    workspaceId: prepared.workspace.workspaceId,
+    command: 'test',
+    affectedInputPaths: ['tracked.txt'],
+  });
+  assert.ok(identity);
+  const coverage = buildVerificationCoverageIdentity(identity);
+  assert.ok(coverage);
+  recordExecutionVerificationEvidence(execution.id, [{ name: 'test', command: 'test', status: 'passed' }], {
+    repoRoot: prepared.workspace.root,
+    provenance: {
+      policy: 'checks-passed',
+      expectedRepoRevision: ownership.repoRevision,
+      expectedOwnedFingerprint: ownership.ownedFingerprint,
+      candidateId: `coverage-${label}`,
+      candidateRepoRevision: ownership.repoRevision,
+      executionKey: identity!.key,
+      coverage: [coverage!],
+    },
+  });
+  recordExecutionLifecycleTransition(execution.id, {
+    toStage: 'verifying',
+    reasonCode: `${label}-verification`,
+    evidence: { id: `${label}-verification`, kind: 'verification-candidate', status: 'completed' },
+  });
+  recordExecutionLifecycleTransition(execution.id, {
+    toStage: 'committed',
+    reasonCode: `${label}-committed`,
+    evidence: { id: `${label}-committed`, kind: 'git-commit', status: 'completed' },
+  });
   return { ...prepared, execution };
 }
 
@@ -353,6 +424,25 @@ test('finalization blocks pre-integration evidence when sibling changes escalate
   assert.equal(completed.operation.id, preIntegration.operation.id);
   assert.equal(completed.integration.baseHeadAfter, integratedHead);
   assert.equal(git(root, ['rev-parse', 'HEAD']).stdout, integratedHead);
+  assert.equal(getTask(task.id)?.status, 'done');
+});
+
+test('reusable coverage finalizes after an unrelated base advance without rerunning verification', () => {
+  const { root, task, workspace, state } = preparedCoverageFinalizationFixture('coverage-unrelated-base');
+  fs.writeFileSync(path.join(root, 'notes.txt'), 'unrelated base change\n');
+  git(root, ['add', 'notes.txt']);
+  git(root, ['commit', '-m', 'unrelated sibling note']);
+
+  const result = finalizeTaskWorkspace(state, {
+    taskId: task.id,
+    workspaceId: workspace.workspaceId,
+    checks: [],
+  });
+
+  assert.equal(result.status, 'completed', JSON.stringify(result));
+  assert.equal(result.postIntegration?.required, false);
+  assert.equal((result.operation.verification as any)?.coverage?.target?.status, 'covered', JSON.stringify((result.operation.verification as any)?.coverage?.target));
+  assert.match(String(result.verificationEvidence?.[0]?.summary || ''), /Reused authoritative GREEN verification coverage/);
   assert.equal(getTask(task.id)?.status, 'done');
 });
 

@@ -1,9 +1,10 @@
+// DVF-0685 regression coverage for frozen reusable verification identities.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { createVerificationBatch } from '../../src/server/services/verificationBatchService.js';
+import { buildVerificationCoverageIdentity, createVerificationBatch } from '../../src/server/services/verificationBatchService.js';
 import { evaluateLifecycleTaskSlo } from '../../src/server/services/performanceSloService.js';
 
 const repoRoot = process.cwd();
@@ -260,6 +261,26 @@ test('DVF-0642 final gate keeps every permanent lifecycle incident/recovery scen
     }
   }
   assert.equal(new Set(coverageManifest.map((entry) => entry.id)).size, coverageManifest.length);
+});
+
+test('verification batch preserves reusable coverage identity on its frozen candidate', () => {
+  const coverage = buildVerificationCoverageIdentity({
+    command: 'test-focused',
+    semanticKey: 'semantic:test-focused',
+    affectedInputFingerprint: 'scoped:owned',
+    affectedInputPaths: ['src/owned.ts'],
+    dependencyFingerprint: 'dependency',
+    environmentFingerprint: 'environment',
+  });
+  assert.ok(coverage);
+  const batch = createVerificationBatch({
+    candidateId: 'coverage-candidate',
+    repoRevision: 'repo:coverage',
+    executionKey: 'execution:coverage',
+    coverage: coverage!,
+  }, ['focused']);
+
+  assert.equal(batch.snapshot().candidate.coverage?.key, coverage!.key);
 });
 
 test('DVF-0634 replay: verification authority belongs to one exact frozen candidate and only a complete all-green batch', () => {

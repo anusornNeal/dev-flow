@@ -1,9 +1,62 @@
+// DVF-0685: frozen verification candidates retain reusable coverage identity.
+import crypto from 'node:crypto';
+
 export const MAX_VERIFICATION_BATCH_CHECKS = 64;
+
+export type VerificationCoverageIdentity = Readonly<{
+  key: string;
+  command: string;
+  semanticKey: string;
+  commandConfigFingerprint?: string;
+  affectedInputFingerprint?: string;
+  affectedInputPaths: readonly string[];
+  dependencyFingerprint?: string;
+  environmentFingerprint?: string;
+  platform?: string;
+  arch?: string;
+  runtime?: string;
+}>;
+
+export function buildVerificationCoverageIdentity(value: any): VerificationCoverageIdentity | null {
+  if (!value || typeof value !== 'object') return null;
+  const command = typeof value.command === 'string' ? value.command.trim() : '';
+  const semanticKey = typeof value.semanticKey === 'string' ? value.semanticKey.trim() : '';
+  if (!command || !semanticKey) return null;
+  const affectedInputPaths = Array.isArray(value.affectedInputPaths)
+    ? Array.from(new Set(value.affectedInputPaths.map((entry: unknown) => String(entry || '').trim()).filter(Boolean))).sort()
+    : [];
+  const comparable = {
+    command,
+    semanticKey,
+    commandConfigFingerprint: typeof value.commandConfigFingerprint === 'string' ? value.commandConfigFingerprint : null,
+    affectedInputFingerprint: typeof value.affectedInputFingerprint === 'string' ? value.affectedInputFingerprint : null,
+    affectedInputPaths,
+    dependencyFingerprint: typeof value.dependencyFingerprint === 'string' ? value.dependencyFingerprint : null,
+    environmentFingerprint: typeof value.environmentFingerprint === 'string' ? value.environmentFingerprint : null,
+    platform: typeof value.platform === 'string' ? value.platform : null,
+    arch: typeof value.arch === 'string' ? value.arch : null,
+    runtime: typeof value.runtime === 'string' ? value.runtime : null,
+  };
+  return Object.freeze({
+    key: crypto.createHash('sha256').update(JSON.stringify(comparable)).digest('hex'),
+    command,
+    semanticKey,
+    ...(comparable.commandConfigFingerprint ? { commandConfigFingerprint: comparable.commandConfigFingerprint } : {}),
+    ...(comparable.affectedInputFingerprint ? { affectedInputFingerprint: comparable.affectedInputFingerprint } : {}),
+    affectedInputPaths: Object.freeze([...affectedInputPaths]),
+    ...(comparable.dependencyFingerprint ? { dependencyFingerprint: comparable.dependencyFingerprint } : {}),
+    ...(comparable.environmentFingerprint ? { environmentFingerprint: comparable.environmentFingerprint } : {}),
+    ...(comparable.platform ? { platform: comparable.platform } : {}),
+    ...(comparable.arch ? { arch: comparable.arch } : {}),
+    ...(comparable.runtime ? { runtime: comparable.runtime } : {}),
+  });
+}
 
 export type VerificationBatchCandidateIdentity = Readonly<{
   candidateId: string;
   repoRevision: string;
   executionKey: string;
+  coverage?: VerificationCoverageIdentity;
 }>;
 
 export type VerificationBatchResultStatus = 'passed' | 'failed' | 'stale';
@@ -40,10 +93,12 @@ function requireIdentityField(value: unknown, field: keyof VerificationBatchCand
 }
 
 function freezeCandidate(candidate: VerificationBatchCandidateIdentity): VerificationBatchCandidateIdentity {
+  const coverage = buildVerificationCoverageIdentity(candidate?.coverage);
   return Object.freeze({
     candidateId: requireIdentityField(candidate?.candidateId, 'candidateId'),
     repoRevision: requireIdentityField(candidate?.repoRevision, 'repoRevision'),
     executionKey: requireIdentityField(candidate?.executionKey, 'executionKey'),
+    ...(coverage ? { coverage } : {}),
   });
 }
 
@@ -62,6 +117,7 @@ function assertMatchingCandidate(
     expected.candidateId !== actual?.candidateId
     || expected.repoRevision !== actual?.repoRevision
     || expected.executionKey !== actual?.executionKey
+    || (expected.coverage?.key || null) !== (buildVerificationCoverageIdentity(actual?.coverage)?.key || null)
   ) {
     throw new Error('Verification batch result candidate/revision/execution identity does not match the frozen batch candidate.');
   }

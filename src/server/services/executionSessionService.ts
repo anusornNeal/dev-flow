@@ -1,3 +1,4 @@
+// DVF-0685: reusable verification coverage is keyed to relevant inputs, not repo lineage alone.
 import crypto, { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -17,7 +18,7 @@ import {
 } from '../repositories/executionSessionRepository.js';
 import { getTask, getTaskByIdentifier } from '../repositories/taskRepository.js';
 import { getFileRevision, resolveSafePath } from './localFileService.js';
-import { buildRepoEvidenceIdentity, getRepoRevisionForRoot } from './repoRevisionService.js';
+import { buildRepoAffectedInputIdentity, buildRepoEvidenceIdentity, getRepoRevisionForRoot } from './repoRevisionService.js';
 import { withDbTransaction } from '../../db/index.js';
 import { resolveSessionWorkspace } from './sessionWorkspaceService.js';
 import { createApiError } from './api.js';
@@ -25,7 +26,13 @@ import {
   recordAutomaticExecutionCheckpoint,
   recordExecutionPendingOperationReference,
 } from './executionCheckpointService.js';
-import { createVerificationBatch, MAX_VERIFICATION_BATCH_CHECKS, type VerificationBatchResultStatus } from './verificationBatchService.js';
+import {
+  buildVerificationCoverageIdentity,
+  createVerificationBatch,
+  MAX_VERIFICATION_BATCH_CHECKS,
+  type VerificationBatchResultStatus,
+  type VerificationCoverageIdentity,
+} from './verificationBatchService.js';
 
 const DEFAULT_SESSION_TTL_MS = 24 * 60 * 60_000;
 const MAX_SESSION_TTL_MS = 30 * 24 * 60 * 60_000;
@@ -122,6 +129,7 @@ export interface ExecutionVerificationProvenance {
   candidateId?: string;
   candidateRepoRevision?: string;
   executionKey?: string;
+  coverage?: VerificationCoverageIdentity[];
 }
 
 export interface RecordExecutionVerificationOptions {
@@ -167,6 +175,7 @@ export type ExecutionVerificationBatchMemberCandidate = {
   candidateId: string;
   repoRevision: string;
   executionKey: string;
+  coverage?: VerificationCoverageIdentity;
 };
 
 export type ExecutionVerificationBatchState = {
@@ -994,6 +1003,23 @@ export function captureExecutionVerificationProvenance(
   };
 }
 
+function lifecycleVerificationCoverageIdentity(
+  value: any,
+  root: string,
+  ownedPaths: string[] | undefined,
+) {
+  if (!value || typeof value !== 'object') return null;
+  const paths = Array.isArray(value.affectedInputPaths) ? value.affectedInputPaths.filter(Boolean).map(String) : [];
+  if (paths.length > 0 || !ownedPaths?.length) return buildVerificationCoverageIdentity(value);
+  const repo = getRepoRevisionForRoot(root);
+  const affected = buildRepoAffectedInputIdentity(root, repo, ownedPaths);
+  return buildVerificationCoverageIdentity({
+    ...value,
+    affectedInputFingerprint: affected.fingerprint,
+    affectedInputPaths: affected.paths,
+  });
+}
+
 function normalizeExecutionVerificationBatchChecks(values: unknown): string[] {
   if (!Array.isArray(values) || values.length === 0 || values.length > MAX_VERIFICATION_BATCH_CHECKS) {
     throw executionSessionError('EXECUTION_VERIFICATION_BATCH_CHECKS_REQUIRED', `Verification batch requires 1-${MAX_VERIFICATION_BATCH_CHECKS} declared checks.`);
@@ -1015,7 +1041,8 @@ function normalizeExecutionVerificationBatchCandidate(value: any): ExecutionVeri
   if (!candidateId || !repoRevision || !executionKey) {
     throw executionSessionError('EXECUTION_VERIFICATION_BATCH_CANDIDATE_REQUIRED', 'Verification batch members require candidateId, repoRevision, and executionKey.');
   }
-  return { candidateId, repoRevision, executionKey };
+  const coverage = buildVerificationCoverageIdentity(value?.coverage);
+  return { candidateId, repoRevision, executionKey, ...(coverage ? { coverage } : {}) };
 }
 
 function executionVerificationBatchEvidenceId(sessionId: string, batchId: string) {
@@ -1301,6 +1328,9 @@ export function recordExecutionVerificationBatchResult(
         candidateId,
         candidateRepoRevision: capturedRepoRevision,
         executionKey,
+        coverage: requiredChecks
+          .map((requiredCheck) => memberCandidates[requiredCheck]?.coverage)
+          .filter((entry): entry is VerificationCoverageIdentity => Boolean(entry)),
       },
     });
     return { authoritative: recorded.ownership.verificationFresh === true, idempotent: false, state, verificationFresh: recorded.ownership.verificationFresh, ...recorded };
@@ -1372,6 +1402,11 @@ export function recordTaskExecutionVerificationResult(
           candidateId: String(memberCandidate.candidateId),
           repoRevision: String(memberCandidate.repoRevision),
           executionKey: String(memberCandidate.executionKey),
+          coverage: lifecycleVerificationCoverageIdentity(
+            (args as any)?.__verificationCandidate?.executionIdentity,
+            binding.workspace.root,
+            captured?.ownedPaths,
+          ) || undefined,
         },
       });
       const refreshedOwnership = getExecutionOwnershipState(binding.session.id, { repoRoot: binding.workspace.root });
@@ -1565,6 +1600,13 @@ export function recordTaskExecutionVerificationResult(
         candidateId: candidate?.candidateId,
         candidateRepoRevision: candidate?.repoRevision,
         executionKey: candidate?.executionKey,
+        coverage: checks.length > 0
+          ? [lifecycleVerificationCoverageIdentity(
+              (args as any)?.__verificationCandidate?.executionIdentity,
+              binding.workspace.root,
+              captured?.ownedPaths,
+            )].filter((entry): entry is VerificationCoverageIdentity => Boolean(entry))
+          : [],
       },
     });
     if (recorded.ownership.verificationFresh !== true) {
@@ -1678,6 +1720,7 @@ export function recordExecutionVerificationEvidence(
         candidateRepoRevision: provenance?.candidateRepoRevision,
         executionKey: provenance?.executionKey,
         expectedRepoRevision: provenance?.expectedRepoRevision,
+        verificationCoverage: Array.isArray(provenance?.coverage) ? provenance.coverage : [],
       },
       createdAt: nowIso,
       updatedAt: nowIso,
@@ -1689,6 +1732,26 @@ export function recordExecutionVerificationEvidence(
     })!;
   });
   return { session: updated, binding, ownership: getExecutionOwnershipState(id, { repoRoot: root }) };
+}
+
+export function getExecutionVerificationCoverageEvidence(id: string) {
+  requireSession(id);
+  const binding = listExecutionSessionEvidence(id)
+    .filter((entry) => entry.kind === 'verification-binding' && !readStringMetadata(entry.metadata || {}, 'invalidatedAt'))
+    .at(-1);
+  if (!binding) return null;
+  const rawCoverage = Array.isArray(binding.metadata?.verificationCoverage) ? binding.metadata.verificationCoverage : [];
+  const coverage = rawCoverage
+    .map((entry) => buildVerificationCoverageIdentity(entry))
+    .filter((entry): entry is VerificationCoverageIdentity => Boolean(entry));
+  return {
+    bindingId: binding.id,
+    policy: readStringMetadata(binding.metadata || {}, 'verificationPolicy') || 'legacy',
+    ownedFingerprint: readStringMetadata(binding.metadata || {}, 'ownedFingerprint') || null,
+    recordedAt: readStringMetadata(binding.metadata || {}, 'recordedAt') || binding.updatedAt,
+    coverage,
+    coveredCommands: Array.from(new Set(coverage.map((entry) => entry.command))),
+  };
 }
 
 export function invalidateTaskExecutionVerificationBinding(

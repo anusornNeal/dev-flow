@@ -1,3 +1,4 @@
+// DVF-0685 regression coverage for commit-time reusable verification evidence.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -493,4 +494,29 @@ test('task-bound sequential MCP verification stays pending after the first check
   assert.deepEqual(plan.ownedChangedFiles, ['src/owned.ts']);
   assert.deepEqual(plan.unrelatedChangedFiles, ['src/unrelated.ts']);
   assert.equal(plan.verificationFresh, true);
+});
+
+test('verification coverage survives an unrelated workspace mutation', () => {
+  fs.writeFileSync(path.join(workspace.root, 'src', 'unrelated.ts'), 'export const unrelated = 4;\n');
+
+  const plan = commitPlan.buildTaskCommitPlan(state, { taskId, workspaceId: workspace.workspaceId });
+  assert.equal(plan.commitAllowed, true);
+  assert.equal(plan.verificationState, 'authoritative-fresh');
+  assert.equal(plan.verificationCoverage.status, 'covered');
+});
+
+test('verification coverage becomes stale when a dependency input changes', () => {
+  fs.writeFileSync(path.join(workspace.root, 'package.json'), JSON.stringify({
+    name: 'execution-ownership-fixture',
+    private: true,
+    version: '1.0.1',
+    scripts: { test: 'node -e "process.stdout.write(\'green\')"' },
+  }, null, 2));
+
+  const plan = commitPlan.buildTaskCommitPlan(state, { taskId, workspaceId: workspace.workspaceId });
+  assert.equal(plan.commitAllowed, false);
+  assert.equal(plan.verificationState, 'stale');
+  assert.equal(plan.verificationCoverage.status, 'stale');
+  assert.ok(plan.verificationCoverage.staleCommands.includes('green-check'));
+  assert.ok(plan.blockers.some((entry: any) => entry.code === 'EXECUTION_VERIFICATION_COVERAGE_STALE'));
 });

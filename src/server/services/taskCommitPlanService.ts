@@ -1,3 +1,4 @@
+// DVF-0685: commit readiness consumes authoritative reusable verification coverage.
 import type { AppState } from '../types.js';
 import { getTaskByIdentifier } from '../repositories/taskRepository.js';
 import { listExecutionSessionsForTask } from '../repositories/executionSessionRepository.js';
@@ -6,6 +7,7 @@ import {
   getExecutionOwnershipState,
   getExecutionSessionState,
   getExecutionVerificationBatchState,
+  getExecutionVerificationCoverageEvidence,
   recordExecutionReconciliationEvidence,
   recordExecutionSessionEvidence,
   type ExecutionVerificationBatchState,
@@ -14,6 +16,8 @@ import { commitGitChanges } from './gitService.js';
 import { renderTaskCommitMessage } from './projectGitWorkflowPolicyService.js';
 import { resolveSessionWorkspace } from './sessionWorkspaceService.js';
 import { computeLifecycleAuthoritySnapshot } from './lifecycleAuthorityService.js';
+import { getProjectCommandExecutionIdentity } from './projectCommandService.js';
+import { buildVerificationCoverageIdentity } from './verificationBatchService.js';
 
 export type TaskCommitPlanBlocker = {
   code: string;
@@ -33,6 +37,12 @@ export type TaskCommitPlan = {
   verificationFresh: boolean | null;
   verificationState: 'authoritative-fresh' | 'missing' | 'stale';
   verificationRecordedAt: string | null;
+  verificationCoverage: {
+    status: 'covered' | 'missing' | 'stale';
+    reusable: boolean;
+    coveredCommands: string[];
+    staleCommands: string[];
+  };
   commitAllowed: boolean;
   blockers: TaskCommitPlanBlocker[];
 };
@@ -54,6 +64,105 @@ function resolveVerificationState(verificationFresh: boolean | null): TaskCommit
   return verificationFresh === true ? 'authoritative-fresh' : verificationFresh === null ? 'missing' : 'stale';
 }
 
+export type TaskVerificationCoverageResolution = {
+  status: 'covered' | 'missing' | 'stale';
+  policy: string;
+  recordedAt: string | null;
+  reusable: boolean;
+  coveredCommands: string[];
+  staleCommands: string[];
+  staleDetails: Array<{ command: string; changedFields: string[] }>;
+};
+
+export function resolveTaskVerificationCoverage(
+  state: AppState,
+  input: {
+    task: any;
+    executionSessionId: string;
+    verificationFresh: boolean | null;
+    workspaceId?: string;
+    localPath?: string;
+  },
+): TaskVerificationCoverageResolution {
+  const evidence = getExecutionVerificationCoverageEvidence(input.executionSessionId);
+  if (!evidence) {
+    return {
+      status: input.verificationFresh === true ? 'covered' as const : 'missing' as const,
+      policy: 'legacy',
+      recordedAt: null,
+      reusable: false,
+      coveredCommands: [] as string[],
+      staleCommands: [] as string[],
+      staleDetails: [],
+    };
+  }
+  if (evidence.policy === 'operator-break-glass') {
+    return {
+      status: 'missing',
+      policy: evidence.policy,
+      recordedAt: evidence.recordedAt || null,
+      reusable: false,
+      coveredCommands: [],
+      staleCommands: [],
+      staleDetails: [],
+    };
+  }
+  if (evidence.policy === 'no-checks-required') {
+    return {
+      status: input.verificationFresh === true ? 'covered' as const : 'stale' as const,
+      policy: evidence.policy,
+      recordedAt: evidence.recordedAt || null,
+      reusable: input.verificationFresh === true,
+      coveredCommands: [] as string[],
+      staleCommands: [] as string[],
+      staleDetails: [],
+    };
+  }
+  if (evidence.coverage.length === 0) {
+    return {
+      status: input.verificationFresh === true ? 'covered' as const : 'missing' as const,
+      policy: evidence.policy,
+      recordedAt: evidence.recordedAt || null,
+      reusable: false,
+      coveredCommands: [] as string[],
+      staleCommands: [] as string[],
+      staleDetails: [],
+    };
+  }
+  const coveredCommands: string[] = [];
+  const staleCommands: string[] = [];
+  const staleDetails: Array<{ command: string; changedFields: string[] }> = [];
+  for (const stored of evidence.coverage) {
+    const currentExecution = getProjectCommandExecutionIdentity(state, {
+      projectId: input.task.projectId,
+      ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+      ...(input.localPath ? { localPath: input.localPath } : {}),
+      command: stored.command,
+      affectedInputPaths: [...stored.affectedInputPaths],
+    });
+    const current = buildVerificationCoverageIdentity(currentExecution);
+    if (current?.key === stored.key) {
+      coveredCommands.push(stored.command);
+    } else {
+      staleCommands.push(stored.command);
+      const changedFields = [
+        'semanticKey', 'commandConfigFingerprint', 'affectedInputFingerprint', 'dependencyFingerprint',
+        'environmentFingerprint', 'platform', 'arch', 'runtime',
+      ].filter((field) => (current as any)?.[field] !== (stored as any)?.[field]);
+      staleDetails.push({ command: stored.command, changedFields });
+    }
+  }
+  return {
+    status: staleCommands.length === 0 ? 'covered' as const : 'stale' as const,
+    policy: evidence.policy,
+    recordedAt: evidence.recordedAt || null,
+    reusable: staleCommands.length === 0,
+    coveredCommands: Array.from(new Set(coveredCommands)),
+    staleCommands: Array.from(new Set(staleCommands)),
+    staleDetails,
+  };
+}
+
 function buildBlockers(input: {
   sessionStatus: string;
   ownedChangedFiles: string[];
@@ -63,6 +172,8 @@ function buildBlockers(input: {
   authorityOwnershipActive: boolean;
   verificationBatch: ExecutionVerificationBatchState | null;
   verificationRecordedAt: string | null;
+  verificationCoverage: { status: 'covered' | 'missing' | 'stale'; reusable: boolean; staleCommands: string[] };
+  verificationSatisfied: boolean;
 }) {
   const blockers: TaskCommitPlanBlocker[] = [];
   if (!input.authorityOwnershipActive) {
@@ -74,7 +185,7 @@ function buildBlockers(input: {
   if (input.ownedChangedFiles.length === 0) {
     blockers.push({ code: 'TASK_COMMIT_NO_OWNED_CHANGES', message: 'No current working-tree changes belong to this execution session.' });
   }
-  if (input.ownershipDrift.length > 0 && input.verificationFresh !== true) {
+  if (input.ownershipDrift.length > 0 && !input.verificationSatisfied) {
     blockers.push({
       code: 'EXECUTION_OWNERSHIP_DRIFT',
       message: `${input.ownershipDrift.length} owned file(s) changed outside the last known execution revision.`,
@@ -100,7 +211,14 @@ function buildBlockers(input: {
       details: { batchId: input.verificationBatch.batchId, stale: input.verificationBatch.stale },
     });
   }
-  if (input.verificationFresh !== true) {
+  if (input.verificationCoverage.status === 'stale') {
+    blockers.push({
+      code: 'EXECUTION_VERIFICATION_COVERAGE_STALE',
+      message: 'Authoritative verification no longer covers the current affected inputs, dependencies, command configuration, or environment.',
+      details: { staleCommands: input.verificationCoverage.staleCommands },
+    });
+  }
+  if (!input.verificationSatisfied) {
     blockers.push({
       code: 'EXECUTION_VERIFICATION_NOT_FRESH',
       message: input.verificationState === 'missing'
@@ -145,7 +263,19 @@ export function buildTaskCommitPlan(_state: AppState, args: Record<string, any>)
   }
 
   const ownership = getExecutionOwnershipState(session.id, { repoRoot: workspace.root });
-  const verificationState = resolveVerificationState(ownership.verificationFresh);
+  const verificationCoverage = resolveTaskVerificationCoverage(_state, {
+    task: getTaskByIdentifier(taskId, 'full') || authority.task,
+    workspaceId,
+    executionSessionId: session.id,
+    verificationFresh: ownership.verificationFresh,
+  });
+  const verificationSatisfied = verificationCoverage.status === 'covered'
+    && (ownership.verificationFresh === true || verificationCoverage.reusable);
+  const verificationState = verificationCoverage.status === 'stale'
+    ? 'stale'
+    : verificationSatisfied
+      ? 'authoritative-fresh'
+      : resolveVerificationState(ownership.verificationFresh);
   const verificationRecordedAt = ownership.verificationRecordedAt || null;
   const verificationBatch = getExecutionVerificationBatchState(session.id);
   const blockers = buildBlockers({
@@ -157,6 +287,8 @@ export function buildTaskCommitPlan(_state: AppState, args: Record<string, any>)
     verificationState,
     verificationRecordedAt,
     verificationBatch,
+    verificationCoverage,
+    verificationSatisfied,
   });
   return {
     taskId,
@@ -170,6 +302,7 @@ export function buildTaskCommitPlan(_state: AppState, args: Record<string, any>)
     verificationFresh: ownership.verificationFresh,
     verificationState,
     verificationRecordedAt,
+    verificationCoverage,
     commitAllowed: blockers.length === 0,
     blockers,
   };

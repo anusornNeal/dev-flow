@@ -1,6 +1,8 @@
+// DVF-0685: canonical fingerprints must stay portable across managed worktrees and the project root.
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { getGitWorkspaceSnapshotForRoot } from './gitService';
 
 const MAX_HASH_FILE_BYTES = 2 * 1024 * 1024;
@@ -30,6 +32,28 @@ function resolveWorkingPath(statusPath: string) {
   const renameSeparator = ' -> ';
   if (!normalized.includes(renameSeparator)) return normalized;
   return normalized.split(renameSeparator).pop() || normalized;
+}
+
+function canonicalGitFingerprints(root: string, relativePaths: string[]) {
+  const fingerprints = new Map<string, string>();
+  const safePaths = relativePaths.filter((relativePath) => {
+    if (!relativePath || relativePath.includes('\n') || relativePath.includes('\r')) return false;
+    const fullPath = path.resolve(root, relativePath);
+    return fs.existsSync(fullPath) && fs.statSync(fullPath).isFile();
+  });
+  if (safePaths.length === 0) return fingerprints;
+  const result = spawnSync('git', ['hash-object', '--filters', '--stdin-paths'], {
+    cwd: root,
+    encoding: 'utf8',
+    shell: false,
+    input: `${safePaths.join('\n')}\n`,
+    maxBuffer: 1024 * 1024,
+  });
+  if (result.status !== 0) return fingerprints;
+  const hashes = String(result.stdout || '').trim().split(/\r?\n/);
+  if (hashes.length !== safePaths.length || hashes.some((hash) => !/^[a-f0-9]{40,64}$/i.test(hash))) return fingerprints;
+  safePaths.forEach((relativePath, index) => fingerprints.set(relativePath, `git:${hashes[index].toLowerCase()}`));
+  return fingerprints;
 }
 
 function fingerprintChangedFile(root: string, statusPath: string) {
@@ -84,23 +108,25 @@ export function buildRepoAffectedInputIdentity(root: string, repoRevision: RepoR
     return { mode: 'full', fingerprint: repoRevision.token, paths: [] };
   }
   const paths = Array.from(new Set(normalized as string[])).sort();
+  const canonical = canonicalGitFingerprints(root, paths);
   const digest = crypto.createHash('sha256');
   for (const relativePath of paths) {
     digest.update('\0');
     digest.update(relativePath);
     digest.update('\0');
-    digest.update(fingerprintChangedFile(root, relativePath));
+    digest.update(canonical.get(relativePath) || fingerprintChangedFile(root, relativePath));
   }
   return { mode: 'scoped', fingerprint: `scoped:${digest.digest('hex')}`, paths };
 }
 
 export function getRepoDependencyFingerprint(root: string) {
   const normalizedRoot = path.resolve(root);
-  const entries = DEPENDENCY_IDENTITY_PATHS.flatMap((relativePath) => {
-    const absolutePath = path.resolve(normalizedRoot, relativePath);
-    if (!fs.existsSync(absolutePath)) return [];
-    return [{ path: relativePath, fingerprint: fingerprintChangedFile(normalizedRoot, relativePath) }];
-  });
+  const presentPaths = DEPENDENCY_IDENTITY_PATHS.filter((relativePath) => fs.existsSync(path.resolve(normalizedRoot, relativePath)));
+  const canonical = canonicalGitFingerprints(normalizedRoot, [...presentPaths]);
+  const entries = presentPaths.map((relativePath) => ({
+    path: relativePath,
+    fingerprint: canonical.get(relativePath) || fingerprintChangedFile(normalizedRoot, relativePath),
+  }));
   return crypto.createHash('sha256').update(JSON.stringify(entries)).digest('hex');
 }
 

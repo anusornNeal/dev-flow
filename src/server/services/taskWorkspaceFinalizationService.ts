@@ -1,3 +1,4 @@
+// DVF-0685: finalization reuses authoritative coverage when relevant inputs remain unchanged.
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import type { AppState } from '../types.js';
@@ -20,12 +21,14 @@ import { integrateWorkspaceCommits, reconstructRecordedWorkspaceIntegration, typ
 import { loadProjectVerificationImpactRules } from './projectCommandConfigService.js';
 import { planVerification, type VerificationPlan } from './verificationPlannerService.js';
 import {
+  getExecutionOwnershipState,
   getExecutionSessionOwnershipEpoch,
   getExecutionSessionState,
   recordExecutionLifecycleTransition,
   recordExecutionReconciliationEvidence,
 } from './executionSessionService.js';
 import { computeLifecycleAuthoritySnapshot } from './lifecycleAuthorityService.js';
+import { resolveTaskVerificationCoverage, type TaskVerificationCoverageResolution } from './taskCommitPlanService.js';
 import { withSyncLock } from './lockAndIdempotencyService.js';
 
 export type TaskWorkspaceFinalizationCheck = {
@@ -153,7 +156,11 @@ function reconcileOwnerBreakGlassLifecycleForFinalization(
   return bypassed;
 }
 
-function verifyFinalizationInput(task: any, input: TaskWorkspaceFinalizationInput) {
+function verifyFinalizationInput(
+  task: any,
+  input: TaskWorkspaceFinalizationInput,
+  reusableCoverage: TaskVerificationCoverageResolution | null = null,
+) {
   const requireChecklistComplete = input.requireChecklistComplete !== false;
   if (requireChecklistComplete && Array.isArray(task.checklist) && task.checklist.some((item: any) => !item?.completed)) {
     return { status: 'blocked' as const, code: 'CHECKLIST_INCOMPLETE' as const, message: 'Task checklist must be complete before workspace finalization.' };
@@ -162,7 +169,8 @@ function verifyFinalizationInput(task: any, input: TaskWorkspaceFinalizationInpu
   const ownerBreakGlass = normalizeOwnerBreakGlassAuthority(input.ownerBreakGlass);
   if (ownerBreakGlass) return null;
   if (checks.length === 0) {
-    return { status: 'blocked' as const, code: 'VERIFICATION_EVIDENCE_MISSING' as const, message: 'At least one verification check is required before workspace finalization.' };
+    if (reusableCoverage?.status === 'covered' && reusableCoverage.reusable) return null;
+    return { status: 'blocked' as const, code: 'VERIFICATION_EVIDENCE_MISSING' as const, message: 'At least one verification check or reusable authoritative verification coverage is required before workspace finalization.' };
   }
   const failed = checks.filter((check) => check?.status !== 'passed');
   if (failed.length > 0) {
@@ -200,9 +208,11 @@ function planCombinedVerification(
   integration: WorkspaceIntegrationSuccess,
   checks: TaskWorkspaceFinalizationCheck[],
   impactRules: ReturnType<typeof loadProjectVerificationImpactRules>,
+  coverageCommands: string[] = [],
 ) {
   const requestedCommands = Array.from(new Set([
     ...checks.map((check) => String(check.command || '').trim()),
+    ...coverageCommands.map((command) => String(command || '').trim()),
     ...impactRules.flatMap((rule) => rule.commands.map((command) => String(command || '').trim())),
   ].filter(Boolean)));
   const sourcePlan = planVerification({
@@ -223,6 +233,7 @@ function evaluatePostIntegrationRequirement(
   checks: TaskWorkspaceFinalizationCheck[],
   sourcePlan: VerificationPlan,
   combinedPlan: VerificationPlan,
+  coverage: TaskVerificationCoverageResolution | null = null,
 ): PostIntegrationRequirement {
   const baseAdvanced = integration.baseHeadBefore !== integration.baseRevision;
   const planEscalated = combinedPlan.risk !== sourcePlan.risk
@@ -235,14 +246,23 @@ function evaluatePostIntegrationRequirement(
   const hasFullEvidence = revisionBound.some((check) => check.scope === 'full');
   const hasBroadEvidence = hasFullEvidence || revisionBound.some((check) => check.scope === 'broad');
   const broadEvidenceRequired = combinedPlan.requiresBroadVerify;
+  const reusableCommands = new Set(coverage?.status === 'covered' && coverage.reusable ? coverage.coveredCommands : []);
   const missingCommands = hasFullEvidence
     ? []
-    : combinedPlan.commands.filter((command) => !revisionBound.some((check) => check.command === command));
+    : combinedPlan.commands.filter((command) => !revisionBound.some((check) => check.command === command) && !reusableCommands.has(command));
+  const reusableCoverageSatisfied = coverage?.status === 'covered'
+    && coverage.reusable
+    && missingCommands.length === 0
+    && (combinedPlan.commands.length === 0 || combinedPlan.commands.every((command) => reusableCommands.has(command) || revisionBound.some((check) => check.command === command)));
+  const noCommandsRequired = combinedPlan.commands.length === 0;
   const evidenceSatisfied = !required
-    || (broadEvidenceRequired ? hasBroadEvidence : missingCommands.length === 0 && revisionBound.length > 0);
+    || (!broadEvidenceRequired && noCommandsRequired)
+    || (missingCommands.length === 0
+      && (broadEvidenceRequired ? hasBroadEvidence : revisionBound.length > 0 || reusableCoverageSatisfied));
 
   let reason = 'Pre-integration evidence remains valid for the integrated state.';
-  if (required && baseAdvanced) reason = 'The target branch advanced after the workspace base revision, so combined-state verification must be revision-bound to the integrated HEAD.';
+  if (required && evidenceSatisfied && reusableCoverageSatisfied) reason = 'Reusable authoritative verification coverage remains valid for the integrated affected inputs, dependencies, command configuration, and environment.';
+  else if (required && baseAdvanced) reason = 'The target branch advanced after the workspace base revision and reusable coverage is incomplete, so combined-state verification must be revision-bound to the integrated HEAD.';
   else if (required && combinedPlan.risk === 'high') reason = 'High-risk combined changes require revision-bound post-integration verification.';
   else if (required && planEscalated) reason = 'Combined-state impact escalated the verification plan after integration.';
 
@@ -652,12 +672,30 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
       throw createApiError(409, 'OWNER_BREAK_GLASS_OPERATION_MISMATCH', 'Finalization retry supplied a different owner break-glass authority than the frozen operation.');
     }
     const ownerBreakGlass = suppliedOwnerBreakGlass || persistedOwnerBreakGlass;
+    const scopedActiveExecutions = listExecutionSessionsForTask(task.id)
+      .filter((entry) => entry.status === 'active' && entry.workspaceId === workspaceId);
+    const sourceExecutionSessionId = operation?.executionSessionId
+      || (scopedActiveExecutions.length === 1 ? scopedActiveExecutions[0].id : null);
+    const detachedMode = Boolean(detachedIntegrated || (operation && isDetachedIntegratedOperation(operation)));
+    const sourceMetadataCandidate = detachedMode ? null : getSessionWorkspaceMetadataForRecovery(workspaceId);
+    const sourceMetadata = sourceMetadataCandidate && fs.existsSync(sourceMetadataCandidate.root) ? sourceMetadataCandidate : null;
+    const sourceOwnership = sourceExecutionSessionId && sourceMetadata
+      ? getExecutionOwnershipState(sourceExecutionSessionId, { repoRoot: sourceMetadata.root })
+      : null;
+    const sourceCoverage = sourceExecutionSessionId && sourceMetadata
+      ? resolveTaskVerificationCoverage(_state, {
+          task,
+          executionSessionId: sourceExecutionSessionId,
+          workspaceId,
+          verificationFresh: sourceOwnership?.verificationFresh ?? null,
+        })
+      : null;
     const blocked = verifyFinalizationInput(task, {
       ...input,
       checks: effectiveChecks,
       ownerBreakGlass: ownerBreakGlass || undefined,
       requireChecklistComplete: operation ? false : input.requireChecklistComplete,
-    });
+    }, sourceCoverage);
     if (blocked) return { ...blocked, ...(operation ? { operation } : {}) };
 
     if (!operation) {
@@ -739,15 +777,29 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
       const project = getProject(operation.projectId);
       if (!project?.localPath) throw createApiError(409, 'FINALIZATION_PROJECT_ROOT_REQUIRED', 'Project root is unavailable for finalization verification planning.', { affectedId: operation.id });
       const impactRules = loadProjectVerificationImpactRules(project.localPath);
-      const plans = planCombinedVerification(integration, effectiveChecks, impactRules);
+      const targetMetadataCandidate = detachedMode ? null : getSessionWorkspaceMetadataForRecovery(workspaceId);
+      const targetMetadata = targetMetadataCandidate && fs.existsSync(targetMetadataCandidate.root) ? targetMetadataCandidate : null;
+      const targetOwnership = operation.executionSessionId && targetMetadata
+        ? getExecutionOwnershipState(operation.executionSessionId, { repoRoot: targetMetadata.root })
+        : sourceOwnership;
+      const targetCoverage = operation.executionSessionId && targetMetadata
+        ? resolveTaskVerificationCoverage(_state, {
+            task,
+            executionSessionId: operation.executionSessionId,
+            workspaceId,
+            verificationFresh: targetOwnership?.verificationFresh ?? null,
+          })
+        : sourceCoverage;
+      const coverageCommands = targetCoverage?.status === 'covered' && targetCoverage.reusable ? targetCoverage.coveredCommands : [];
+      const plans = planCombinedVerification(integration, effectiveChecks, impactRules, coverageCommands);
       sourcePlan = plans.sourcePlan;
       combinedPlan = plans.combinedPlan;
-      postIntegration = evaluatePostIntegrationRequirement(integration, effectiveChecks, sourcePlan, combinedPlan);
+      postIntegration = evaluatePostIntegrationRequirement(integration, effectiveChecks, sourcePlan, combinedPlan, targetCoverage);
       if (postIntegration.required && !ownerBreakGlass) {
         operation = updateOperation(operation, {
           phase: 'verification-pending',
           status: 'active',
-          verification: { ...(operation.verification || {}), submittedChecks: effectiveChecks, requirement: postIntegration, evidence: verificationEvidence },
+          verification: { ...(operation.verification || {}), submittedChecks: effectiveChecks, requirement: postIntegration, coverage: { source: sourceCoverage, target: targetCoverage }, evidence: verificationEvidence },
           failure: null,
         });
         return {
@@ -776,6 +828,17 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
             ...(effectiveChecks.length > 0 && postIntegration.required ? ['POST_INTEGRATION_VERIFICATION_REQUIRED'] : []),
           ]
         : [];
+      const reusedCoverageChecks: TaskWorkspaceFinalizationCheck[] = effectiveChecks.length === 0 && targetCoverage?.status === 'covered' && targetCoverage.reusable
+        ? targetCoverage.coveredCommands.map((command) => ({
+            name: `reused coverage: ${command}`,
+            command,
+            status: 'passed' as const,
+            scope: 'targeted' as const,
+            summary: 'Reused authoritative GREEN verification coverage because affected inputs, dependencies, command configuration, and environment are unchanged.',
+            recordedAt: targetCoverage.recordedAt || undefined,
+          }))
+        : [];
+      const evidenceChecks = effectiveChecks.length > 0 ? effectiveChecks : reusedCoverageChecks;
       operation = updateOperation(operation, {
         phase: 'verification-cleared',
         status: 'active',
@@ -784,6 +847,7 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
           submittedChecks: effectiveChecks,
           requirement: postIntegration,
           evidence: verificationEvidence,
+          coverage: { source: sourceCoverage, target: targetCoverage },
           ...(ownerBreakGlass ? { ownerBreakGlass, bypassedGates: ownerVerificationBypasses } : {}),
         },
         failure: null,
@@ -792,14 +856,14 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
 
       if (!operation.gitEvidence) {
         const evidenceTask = { ...task, branch: operation.baseBranch };
-        const synced = localOnlyEvidence(evidenceTask, operation.baseBranch, integration.baseHeadAfter, effectiveChecks);
+        const synced = localOnlyEvidence(evidenceTask, operation.baseBranch, integration.baseHeadAfter, evidenceChecks);
         gitEvidence = synced.gitEvidence;
         verificationEvidence = synced.verificationEvidence;
         operation = updateOperation(operation, {
           phase: 'evidence-recorded',
           status: 'active',
           gitEvidence,
-          verification: { ...(operation.verification || {}), submittedChecks: effectiveChecks, requirement: postIntegration, evidence: verificationEvidence },
+          verification: { ...(operation.verification || {}), submittedChecks: effectiveChecks, requirement: postIntegration, coverage: { source: sourceCoverage, target: targetCoverage }, evidence: verificationEvidence },
           failure: null,
         });
       } else {

@@ -103,6 +103,17 @@ const coverageManifest: CoverageScenario[] = [
       "LIVE_AUTHORITATIVE_WORK",
     ],
   },
+  // Permanent gate: bounded migration and the long-lived soak must stay executable together.
+  {
+    id: 'DVF-0720-zero-orphan-migration-soak',
+    file: 'tests/server/emergencyOrphanCleanupService.test.ts',
+    requiredSnippets: [
+      "test('canonical cleanup preserves claimless dirty managed workspace WIP'",
+      "test('bounded migration scans past skipped rows so later safe orphans can converge'",
+      "test('long-lived deterministic cleanup soak converges 200 cycles without safe-orphan accumulation'",
+      "test('apply is transactional: injected failure rolls back cancellation and audit evidence'",
+    ],
+  },
   {
     id: 'DVF-0719-recovery-tool-surface-parity',
     file: 'tests/server/devflowContractModules.test.ts',

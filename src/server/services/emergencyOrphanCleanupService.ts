@@ -13,6 +13,7 @@ import {
 import { createApiError } from './api.js';
 import { getLatestExecutionCheckpoint } from './executionCheckpointService.js';
 import { cancelExecutionSession, recordExecutionReconciliationEvidence } from './executionSessionService.js';
+import { classifyLifecycleLiveWorkAuthority } from './lifecycleAuthorityService.js';
 
 export type EmergencyOrphanCleanupMode = 'dry-run' | 'apply';
 
@@ -36,7 +37,11 @@ export type EmergencyOrphanCleanupReasonCode =
   | 'ACTIVE_CLAIM'
   | 'PENDING_OPERATION'
   | 'MULTIPLE_ACTIVE_TASK_EXECUTIONS'
-  | 'MULTIPLE_ACTIVE_WORKSPACE_EXECUTIONS';
+  | 'MULTIPLE_ACTIVE_WORKSPACE_EXECUTIONS'
+  | 'RECOVERABLE_WIP'
+  | 'INVALID_WORKSPACE_AUTHORITY'
+  | 'AMBIGUOUS_AUTHORITY'
+  | 'TERMINAL_HISTORY';
 
 export interface EmergencyOrphanCleanupCandidate {
   executionSessionId: string;
@@ -157,35 +162,57 @@ function classifySession(
   if (claimState.code === 'workspace-mismatch') return skipped(session, 'CLAIM_WORKSPACE_MISMATCH', 'Persisted task claim points at a different workspace.');
   if (claimState.code === 'active') return skipped(session, 'ACTIVE_CLAIM', 'Task still has a live claim and cannot be treated as orphaned.');
 
-  const checkpoint = getLatestExecutionCheckpoint(session.id);
-  const pendingOperationIds = (checkpoint?.pendingOperations || [])
-    .filter((entry) => entry.status === 'accepted' || entry.status === 'running')
-    .map((entry) => entry.operationId);
-  if (pendingOperationIds.length > 0) {
-    return skipped(session, 'PENDING_OPERATION', 'Execution still has accepted/running durable operations.', { pendingOperationIds });
-  }
+  const authority = classifyLifecycleLiveWorkAuthority(task.id, { workspaceId: session.workspaceId, now: new Date(nowMs) });
+  const activeTaskExecutionIds = authority.execution.activeSessionIds;
+  const activeWorkspaceExecutionIds = authority.workspaces.some((entry) => entry.workspaceId === session.workspaceId)
+    ? listExecutionSessionsForWorkspace(session.workspaceId).filter((entry) => entry.status === 'active').map((entry) => entry.id).slice(0, 20)
+    : [];
 
-  const activeTaskExecutionIds = listExecutionSessionsForTask(session.taskId).filter((entry) => entry.status === 'active').map((entry) => entry.id);
-  if (activeTaskExecutionIds.length !== 1 || activeTaskExecutionIds[0] !== session.id) {
-    return skipped(session, 'MULTIPLE_ACTIVE_TASK_EXECUTIONS', 'Task has multiple active execution sessions; ownership is ambiguous.', { activeTaskExecutionIds });
+  if (authority.classification === 'safe-orphan') {
+    return {
+      executionSessionId: session.id,
+      taskId: session.taskId,
+      workspaceId: session.workspaceId,
+      classification: 'safe',
+      reasonCode: 'SAFE_ORPHAN',
+      reason: 'Canonical live-work authority classified this unique claimless execution as a safe orphan.',
+      pendingOperationIds: [],
+      activeTaskExecutionIds,
+      activeWorkspaceExecutionIds,
+    };
   }
-
-  const activeWorkspaceExecutionIds = listExecutionSessionsForWorkspace(session.workspaceId).filter((entry) => entry.status === 'active').map((entry) => entry.id);
-  if (activeWorkspaceExecutionIds.length !== 1 || activeWorkspaceExecutionIds[0] !== session.id) {
-    return skipped(session, 'MULTIPLE_ACTIVE_WORKSPACE_EXECUTIONS', 'Workspace has multiple active execution sessions; ownership is ambiguous.', { activeTaskExecutionIds, activeWorkspaceExecutionIds });
+  if (authority.classification === 'live-durable-operation') {
+    return skipped(session, 'PENDING_OPERATION', 'Canonical authority found accepted/running durable work.', {
+      pendingOperationIds: authority.durableOperations.operationIds,
+      activeTaskExecutionIds,
+      activeWorkspaceExecutionIds,
+    });
   }
-
-  return {
-    executionSessionId: session.id,
-    taskId: session.taskId,
-    workspaceId: session.workspaceId,
-    classification: 'safe',
-    reasonCode: 'SAFE_ORPHAN',
-    reason: 'Execution is active, uniquely bound to its task/workspace, has no live claim, and has no pending durable operation.',
-    pendingOperationIds: [],
-    activeTaskExecutionIds,
-    activeWorkspaceExecutionIds,
-  };
+  if (authority.classification === 'live-authoritative') {
+    return skipped(session, 'ACTIVE_CLAIM', 'Canonical authority found live claim/execution ownership.', { activeTaskExecutionIds, activeWorkspaceExecutionIds });
+  }
+  if (authority.classification === 'recoverable-wip') {
+    return skipped(session, 'RECOVERABLE_WIP', 'Canonical authority found recoverable workspace WIP that must be preserved.', { activeTaskExecutionIds, activeWorkspaceExecutionIds });
+  }
+  if (authority.classification === 'invalid-workspace-authority') {
+    return skipped(session, 'INVALID_WORKSPACE_AUTHORITY', 'Canonical authority could not prove the managed workspace root/identity.', { activeTaskExecutionIds, activeWorkspaceExecutionIds });
+  }
+  if (authority.classification === 'cross-project-conflict') {
+    if (authority.hardReasonCodes.includes('WORKSPACE_ACTIVE_TASK_CONFLICT') || authority.hardReasonCodes.includes('WORKSPACE_TASK_IDENTITY_MISMATCH')) {
+      return skipped(session, 'MULTIPLE_ACTIVE_WORKSPACE_EXECUTIONS', 'Canonical authority found conflicting task identity in the managed workspace.', { activeTaskExecutionIds, activeWorkspaceExecutionIds });
+    }
+    return skipped(session, 'TASK_PROJECT_MISMATCH', 'Canonical authority found a cross-project identity conflict.', { activeTaskExecutionIds, activeWorkspaceExecutionIds });
+  }
+  if (authority.classification === 'ambiguous-authority') {
+    if (authority.hardReasonCodes.includes('MULTIPLE_ACTIVE_EXECUTIONS')) {
+      return skipped(session, 'MULTIPLE_ACTIVE_TASK_EXECUTIONS', 'Canonical authority found multiple active executions for the task.', { activeTaskExecutionIds, activeWorkspaceExecutionIds });
+    }
+    if (authority.hardReasonCodes.includes('MULTIPLE_ACTIVE_EXECUTIONS_FOR_WORKSPACE') || authority.hardReasonCodes.includes('WORKSPACE_ACTIVE_TASK_CONFLICT')) {
+      return skipped(session, 'MULTIPLE_ACTIVE_WORKSPACE_EXECUTIONS', 'Canonical authority found conflicting active execution ownership for the workspace.', { activeTaskExecutionIds, activeWorkspaceExecutionIds });
+    }
+    return skipped(session, 'AMBIGUOUS_AUTHORITY', 'Canonical authority could not prove one safe orphan identity.', { activeTaskExecutionIds, activeWorkspaceExecutionIds });
+  }
+  return skipped(session, 'TERMINAL_HISTORY', 'Canonical authority classified the execution as terminal history rather than a safe orphan.', { activeTaskExecutionIds, activeWorkspaceExecutionIds });
 }
 
 function normalizedInput(input: EmergencyOrphanCleanupInput) {
@@ -220,18 +247,37 @@ function replayResult(normalized: ReturnType<typeof normalizedInput>): Emergency
   return { ...(stored as EmergencyOrphanCleanupResult), replayed: true };
 }
 
+const MAX_CLASSIFICATION_SCAN = 100;
+
 function classifyProject(normalized: ReturnType<typeof normalizedInput>) {
-  const active = queryExecutionSessions({ projectId: normalized.projectId, status: 'active', limit: normalized.limit });
   const tasks = new Map(getTasksByProjectId(normalized.projectId).map((task) => [String(task.id), task]));
   const nowMs = Date.now();
-  const candidates = active.sessions.map((session) => classifySession(session, normalized.projectId, tasks, nowMs));
-  const safeCount = candidates.filter((entry) => entry.classification === 'safe').length;
+  const candidates: EmergencyOrphanCleanupCandidate[] = [];
+  let beforeActiveCount = 0;
+  let offset = 0;
+  let safeCount = 0;
+
+  while (offset < MAX_CLASSIFICATION_SCAN && safeCount < normalized.limit) {
+    const pageLimit = Math.max(1, Math.min(normalized.limit, MAX_CLASSIFICATION_SCAN - offset));
+    const page = queryExecutionSessions({ projectId: normalized.projectId, status: 'active', limit: pageLimit, offset });
+    if (offset === 0) beforeActiveCount = page.total;
+    if (page.sessions.length === 0) break;
+    for (const session of page.sessions) {
+      const candidate = classifySession(session, normalized.projectId, tasks, nowMs);
+      candidates.push(candidate);
+      if (candidate.classification === 'safe') safeCount += 1;
+      if (safeCount >= normalized.limit) break;
+    }
+    offset += page.sessions.length;
+    if (offset >= page.total) break;
+  }
+
   return {
-    beforeActiveCount: active.total,
-    scannedCount: active.sessions.length,
+    beforeActiveCount,
+    scannedCount: candidates.length,
     safeCount,
     skippedCount: candidates.length - safeCount,
-    truncated: active.truncated,
+    truncated: candidates.length < beforeActiveCount,
     candidates,
   };
 }

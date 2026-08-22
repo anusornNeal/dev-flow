@@ -205,9 +205,12 @@ export function queryExecutionSessions(args: {
   workspaceId?: string;
   status?: ExecutionSessionStatus;
   limit?: number;
+  offset?: number;
 } = {}) {
   const requestedLimit = Number(args.limit);
   const limit = Math.max(1, Math.min(100, Number.isFinite(requestedLimit) ? requestedLimit : 50));
+  const requestedOffset = Number(args.offset);
+  const offset = Math.max(0, Math.min(10_000, Number.isFinite(requestedOffset) ? Math.floor(requestedOffset) : 0));
   const clauses: string[] = [];
   const values: string[] = [];
   if (args.projectId) { clauses.push('projectId = ?'); values.push(String(args.projectId)); }
@@ -217,12 +220,13 @@ export function queryExecutionSessions(args: {
   const where = clauses.length > 0 ? ' WHERE ' + clauses.join(' AND ') : '';
   const countRow = db.prepare('SELECT COUNT(*) AS count FROM execution_sessions' + where).get(...values) as any;
   const total = Number(countRow?.count || 0);
-  const rows = db.prepare('SELECT * FROM execution_sessions' + where + ' ORDER BY updatedAt DESC LIMIT ?').all(...values, limit) as any[];
+  const rows = db.prepare('SELECT * FROM execution_sessions' + where + ' ORDER BY updatedAt DESC LIMIT ? OFFSET ?').all(...values, limit, offset) as any[];
   return {
     sessions: rows.map(normalizeSession).filter((entry): entry is ExecutionSessionRecord => Boolean(entry)),
     total,
     limit,
-    truncated: total > limit,
+    offset,
+    truncated: total > offset + limit,
   };
 }
 

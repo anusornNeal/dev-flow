@@ -23,6 +23,7 @@ export type RepoRevisionChangedFile = {
 export type RepoRevision = {
   token: string;
   head: string;
+  treeId: string | null;
   branch: string;
   changedFiles: RepoRevisionChangedFile[];
 };
@@ -130,6 +131,18 @@ export function getRepoDependencyFingerprint(root: string) {
   return crypto.createHash('sha256').update(JSON.stringify(entries)).digest('hex');
 }
 
+function gitTreeIdentity(root: string, head: string) {
+  if (!head) return null;
+  const result = spawnSync('git', ['rev-parse', `${head}^{tree}`], {
+    cwd: root,
+    encoding: 'utf8',
+    shell: false,
+    timeout: 10_000,
+  });
+  const treeId = String(result.stdout || '').trim().toLowerCase();
+  return result.status === 0 && /^[a-f0-9]{40,64}$/.test(treeId) ? treeId : null;
+}
+
 export function getRepoRevisionForRoot(root: string): RepoRevision {
   const normalizedRoot = path.resolve(root);
   const workspace = getGitWorkspaceSnapshotForRoot(normalizedRoot);
@@ -158,6 +171,7 @@ export function getRepoRevisionForRoot(root: string): RepoRevision {
   return {
     token: `${head.slice(0, 12)}:${digest.digest('hex').slice(0, 24)}`,
     head,
+    treeId: gitTreeIdentity(normalizedRoot, head),
     branch: workspace.branch,
     changedFiles,
   };

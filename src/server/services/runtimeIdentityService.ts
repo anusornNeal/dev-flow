@@ -4,14 +4,16 @@ import { getDevFlowAppRoot } from '../../lib/devFlowPaths.js';
 import { getRepoRevisionForRoot } from './repoRevisionService.js';
 import { queryExecutionSessions } from '../repositories/executionSessionRepository.js';
 import { getLatestExecutionCheckpoint } from './executionCheckpointService.js';
+import { classifyLifecycleLiveWorkAuthority } from './lifecycleAuthorityService.js';
 
 export type DevFlowMcpTransport = 'streamable-http' | 'legacy-sse';
 
-export type RuntimeSourceFreshnessCode = 'current' | 'stale' | 'dirty-ambiguous' | 'unavailable';
+export type RuntimeSourceFreshnessCode = 'current' | 'content-equivalent' | 'stale' | 'dirty-ambiguous' | 'unavailable';
 
 export interface RuntimeSourceSnapshot {
   available: boolean;
   revision: string | null;
+  treeId: string | null;
   repoToken: string | null;
   dirty: boolean | null;
   changedFileCount: number | null;
@@ -23,6 +25,9 @@ export interface RuntimeSourceFreshness {
   code: RuntimeSourceFreshnessCode;
   loadedRevision: string | null;
   currentRevision: string | null;
+  loadedTreeId: string | null;
+  currentTreeId: string | null;
+  contentEquivalent: boolean;
   loadedRepoToken: string | null;
   currentRepoToken: string | null;
   loadedSourceDirty: boolean | null;
@@ -53,6 +58,7 @@ export interface RuntimeIdentity {
   runtimeStartedAt: string;
   transport: DevFlowMcpTransport[];
   loadedRevision: string | null;
+  loadedTreeId: string | null;
   loadedRepoToken: string | null;
   loadedSourceDirty: boolean | null;
   loadedSourceChangedFileCount: number | null;
@@ -104,6 +110,7 @@ function readRuntimeSourceSnapshot(root = runtimeSourceRoot()): RuntimeSourceSna
     return {
       available: true,
       revision: revision.head || null,
+      treeId: revision.treeId || null,
       repoToken: revision.token || null,
       dirty: revision.changedFiles.length > 0,
       changedFileCount: revision.changedFiles.length,
@@ -113,6 +120,7 @@ function readRuntimeSourceSnapshot(root = runtimeSourceRoot()): RuntimeSourceSna
     return {
       available: false,
       revision: null,
+      treeId: null,
       repoToken: null,
       dirty: null,
       changedFileCount: null,
@@ -127,6 +135,7 @@ const runtimeIdentity: Omit<RuntimeIdentity, 'transport'> = {
   runtimeInstanceId: randomUUID(),
   runtimeStartedAt: new Date().toISOString(),
   loadedRevision: loadedSource.revision,
+  loadedTreeId: loadedSource.treeId,
   loadedRepoToken: loadedSource.repoToken,
   loadedSourceDirty: loadedSource.dirty,
   loadedSourceChangedFileCount: loadedSource.changedFileCount,
@@ -149,9 +158,13 @@ export function getRuntimeSourceFreshness(): RuntimeSourceFreshness {
   const loadedRevision = loadedSource.revision;
   const currentRevision = current.revision;
   const headMismatch = Boolean(loadedRevision && currentRevision && loadedRevision !== currentRevision);
+  const contentEquivalent = Boolean(headMismatch && loadedSource.treeId && current.treeId && loadedSource.treeId === current.treeId);
   const common = {
     loadedRevision,
     currentRevision,
+    loadedTreeId: loadedSource.treeId,
+    currentTreeId: current.treeId,
+    contentEquivalent,
     loadedRepoToken: loadedSource.repoToken,
     currentRepoToken: current.repoToken,
     loadedSourceDirty: loadedSource.dirty,
@@ -180,6 +193,15 @@ export function getRuntimeSourceFreshness(): RuntimeSourceFreshness {
     };
   }
 
+  if (contentEquivalent) {
+    return {
+      code: 'content-equivalent',
+      ...common,
+      detail: `The DevFlow source commit moved from ${loadedRevision} to ${currentRevision}, but both commits resolve to the same Git tree ${current.treeId}.`,
+      nextAction: 'No source-content restart is required; the loaded and current clean source trees are content-equivalent.',
+    };
+  }
+
   if (headMismatch) {
     return {
       code: 'stale',
@@ -199,30 +221,62 @@ export function getRuntimeSourceFreshness(): RuntimeSourceFreshness {
 
 export function getRuntimeRestartSafety(): RuntimeRestartSafety {
   const query = queryExecutionSessions({ status: 'active', limit: 100 });
-  const active = query.sessions
-    .flatMap((session) => {
-      const checkpoint = getLatestExecutionCheckpoint(session.id);
-      const pendingOperationIds = (checkpoint?.pendingOperations || [])
-        .filter((entry) => entry.status === 'accepted' || entry.status === 'running')
-        .map((entry) => entry.operationId)
-        .filter(Boolean);
-      const changedFiles = Array.from(new Set(session.changedFiles || [])).slice(0, 50);
-      const reasonCodes = [
-        ...(pendingOperationIds.length > 0 ? ['PENDING_DURABLE_OPERATION'] : []),
-        ...(changedFiles.length > 0 ? ['ACTIVE_WIP_RISK'] : []),
-      ];
-      if (reasonCodes.length === 0) return [];
+  const authorityByTask = new Map<string, ReturnType<typeof classifyLifecycleLiveWorkAuthority> | null>();
+  const active = query.sessions.flatMap((session) => {
+    const checkpoint = getLatestExecutionCheckpoint(session.id);
+    const pendingOperationIds = (checkpoint?.pendingOperations || [])
+      .filter((entry) => entry.status === 'accepted' || entry.status === 'running')
+      .map((entry) => entry.operationId)
+      .filter(Boolean);
+    const changedFiles = Array.from(new Set(session.changedFiles || [])).slice(0, 50);
+    const taskId = String(session.taskId || '').trim();
+    if (!taskId) {
+      if (pendingOperationIds.length === 0) return [];
       return [{
         taskId: session.taskId,
         executionSessionId: session.id,
         workspaceId: session.workspaceId,
         stage: session.lifecycle.stage,
-        reasonCodes,
+        reasonCodes: ['PENDING_DURABLE_OPERATION'],
         pendingOperationIds,
         changedFiles,
       }];
-    })
-    .slice(0, MAX_RUNTIME_RESTART_BLOCKERS);
+    }
+
+    let authority = authorityByTask.get(taskId);
+    if (authority === undefined) {
+      try {
+        authority = classifyLifecycleLiveWorkAuthority(taskId, {
+          workspaceId: session.workspaceId || undefined,
+          deferWorkspaceInspection: true,
+        });
+      } catch {
+        authority = null;
+      }
+      authorityByTask.set(taskId, authority);
+    }
+    if (!authority) {
+      return [{
+        taskId: session.taskId,
+        executionSessionId: session.id,
+        workspaceId: session.workspaceId,
+        stage: session.lifecycle.stage,
+        reasonCodes: ['TASK_AUTHORITY_UNAVAILABLE'],
+        pendingOperationIds,
+        changedFiles,
+      }];
+    }
+    if (!authority.operations.restart.hardBlocked) return [];
+    return [{
+      taskId: session.taskId,
+      executionSessionId: session.id,
+      workspaceId: session.workspaceId,
+      stage: session.lifecycle.stage,
+      reasonCodes: authority.operations.restart.reasonCodes,
+      pendingOperationIds,
+      changedFiles,
+    }];
+  }).slice(0, MAX_RUNTIME_RESTART_BLOCKERS);
   return {
     blocked: active.length > 0 || query.truncated,
     truncated: query.truncated,
@@ -291,7 +345,7 @@ function classifyClientRuntimeIdentity(current: RuntimeIdentityWithContract, cli
 }
 
 function classifySourceFreshness(source: RuntimeSourceFreshness): RuntimeDiagnosis | undefined {
-  if (source.code === 'current') return undefined;
+  if (source.code === 'current' || source.code === 'content-equivalent') return undefined;
   if (source.code === 'stale') {
     return {
       code: 'runtime-source-stale',

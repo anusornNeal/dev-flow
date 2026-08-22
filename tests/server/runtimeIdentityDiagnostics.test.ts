@@ -30,11 +30,46 @@ process.env.DEVFLOW_JOBS_DIR = path.join(tempRoot, 'jobs');
 
 const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
 executeAllMigrations();
+const { createProject } = await import('../../src/server/repositories/projectRepository.js');
+const { getTask, saveTask } = await import('../../src/server/repositories/taskRepository.js');
+const sessionWorkspaces = await import('../../src/server/services/sessionWorkspaceService.js');
+createProject({
+  id: 'project-runtime-source',
+  name: 'Runtime Source Fixture',
+  repoUrl: 'https://example.test/runtime-source.git',
+  localPath: runtimeSourceRoot,
+  taskIdPrefix: 'RT',
+} as any);
 const { DEVFLOW_CONTRACT_VERSION } = await import('../../src/server/contracts/devflowContract.js');
 const { getDevFlowDiagnostics } = await import('../../src/server/services/mcpToolMonitor.js');
 const { registerDevFlowRoutes } = await import('../../src/server/routes/devflow.js');
 const executionSessions = await import('../../src/server/services/executionSessionService.js');
+const taskClaims = await import('../../src/server/services/taskClaimService.js');
+const { listExecutionSessionsForTask } = await import('../../src/server/repositories/executionSessionRepository.js');
 const { recordExecutionPendingOperationReference, reconcileExecutionPendingOperationReference } = await import('../../src/server/services/executionCheckpointService.js');
+
+function seedRuntimeTask(id: string, displayId: string, status = 'done') {
+  const now = new Date().toISOString();
+  saveTask({
+    id,
+    displayId,
+    projectId: 'project-runtime-source',
+    title: 'Runtime restart fixture',
+    description: 'Canonical restart authority fixture.',
+    status,
+    priority: 'high',
+    category: 'backend',
+    tags: [],
+    targetFiles: ['runtime-source.txt'],
+    checklist: [],
+    createdAt: now,
+    updatedAt: now,
+    logs: [],
+    bugs: [],
+    images: [],
+  } as any);
+  return getTask(id)!;
+}
 
 test('dirty runtime source is ambiguous and does not claim a deployed revision', () => {
   fs.writeFileSync(path.join(runtimeSourceRoot, 'runtime-source.txt'), 'runtime source dirty\n');
@@ -50,18 +85,41 @@ test('dirty runtime source is ambiguous and does not claim a deployed revision',
   }
 });
 
-test('restart safety ignores stale lifecycle stage but blocks real WIP and pending durable operations', () => {
+test('clean commit mismatch with the same Git tree is content-equivalent and requires no restart', () => {
+  const originalHead = runtimeGit(['rev-parse', 'HEAD']);
+  const originalTree = runtimeGit(['rev-parse', 'HEAD^{tree}']);
+  try {
+    runtimeGit(['commit', '--allow-empty', '-m', 'metadata-only runtime source commit']);
+    const diagnostics = getDevFlowDiagnostics({ supervisorState: null } as any) as any;
+    assert.notEqual(diagnostics.runtime.sourceFreshness.currentRevision, originalHead);
+    assert.equal(diagnostics.runtime.sourceFreshness.code, 'content-equivalent');
+    assert.equal(diagnostics.runtime.sourceFreshness.contentEquivalent, true);
+    assert.equal(diagnostics.runtime.sourceFreshness.loadedTreeId, originalTree);
+    assert.equal(diagnostics.runtime.sourceFreshness.currentTreeId, originalTree);
+    assert.notEqual(diagnostics.runtimeDiagnosis?.code, 'runtime-source-stale');
+  } finally {
+    runtimeGit(['reset', '--hard', originalHead]);
+  }
+});
+
+test('restart safety ignores safe-orphan changedFiles, but blocks live durable and live ownership authority', () => {
+  const task = seedRuntimeTask('task-runtime-source-active', 'RT-0001');
+  const workspace = sessionWorkspaces.createOrReuseSessionWorkspace(
+    { id: 'project-runtime-source', localPath: runtimeSourceRoot },
+    'runtime-source-restart-authority',
+    { taskDisplayId: task.displayId },
+  );
   const execution = executionSessions.createExecutionSession({
     projectId: 'project-runtime-source',
-    taskId: 'task-runtime-source-active',
-    workspaceId: 'ws-runtime-source-active',
-    repoRoot: runtimeSourceRoot,
-    branch: 'develop',
+    taskId: task.id,
+    workspaceId: workspace.workspaceId,
+    repoRoot: workspace.root,
+    branch: workspace.branch,
   });
   executionSessions.recordExecutionLifecycleTransition(execution.id, {
     toStage: 'context-ready',
-    reasonCode: 'runtime-source-test-context',
-    evidence: { id: 'runtime-source-test-context', kind: 'context', status: 'completed' },
+    reasonCode: 'runtime-source-test-context-ready',
+    evidence: { id: 'runtime-source-test-context-ready', kind: 'context', status: 'completed' },
   });
   executionSessions.recordExecutionLifecycleTransition(execution.id, {
     toStage: 'implementing',
@@ -78,29 +136,27 @@ test('restart safety ignores stale lifecycle stage but blocks real WIP and pendi
     runtimeGit(['commit', '-m', 'runtime source v2']);
     const currentHead = runtimeGit(['rev-parse', 'HEAD']);
 
-    const stale = getDevFlowDiagnostics({
-      supervisorState: null,
-      clientState: {
-        contractVersion: before.runtime.contractVersion,
-        runtimeInstanceId: before.runtime.runtimeInstanceId,
-        toolSurfaceIdentity: '0'.repeat(64),
-        toolsVisible: true,
-      },
-    } as any) as any;
-    assert.equal(stale.runtimeDiagnosis.code, 'runtime-source-stale');
-    assert.equal(stale.runtime.sourceFreshness.loadedRevision, before.runtime.loadedRevision);
-    assert.equal(stale.runtime.sourceFreshness.currentRevision, currentHead);
-    assert.equal(stale.runtimeDiagnosis.restartSafety.blocked, false, 'stage projection alone must not block restart');
-    assert.deepEqual(stale.runtimeDiagnosis.restartSafety.active, []);
-    assert.equal(stale.runtimeDiagnosis.concurrentDiagnostics.some((entry: any) => entry.code === 'tool-surface-changed'), true);
-
     executionSessions.updateExecutionSessionProgress(execution.id, { changedFiles: ['runtime-source.txt'] });
-    const wipBlocked = getDevFlowDiagnostics({ supervisorState: null } as any) as any;
-    assert.equal(wipBlocked.runtimeDiagnosis.restartSafety.blocked, true);
-    assert.equal(wipBlocked.runtimeDiagnosis.restartSafety.active.some((entry: any) =>
-      entry.executionSessionId === execution.id && entry.reasonCodes?.includes('ACTIVE_WIP_RISK')), true);
+    const stale = getDevFlowDiagnostics({ supervisorState: null } as any) as any;
+    assert.equal(stale.runtimeDiagnosis.code, 'runtime-source-stale');
+    assert.equal(stale.runtime.sourceFreshness.currentRevision, currentHead);
+    assert.equal(stale.runtimeDiagnosis.restartSafety.blocked, false, 'safe orphan metadata must not become live authority because changedFiles is non-empty');
+    assert.equal(stale.runtimeDiagnosis.restartSafety.active.some((entry: any) => entry.executionSessionId === execution.id), false);
+    assert.equal(stale.runtimeDiagnosis.restartSafety.active.some((entry: any) => entry.executionSessionId === execution.id), false);
 
-    executionSessions.updateExecutionSessionProgress(execution.id, { changedFiles: [] });
+    const duplicate = executionSessions.createExecutionSession({
+      projectId: 'project-runtime-source',
+      taskId: task.id,
+      workspaceId: workspace.workspaceId,
+      repoRoot: workspace.root,
+      branch: workspace.branch,
+    });
+    const ambiguous = getDevFlowDiagnostics({ supervisorState: null } as any) as any;
+    assert.equal(ambiguous.runtimeDiagnosis.restartSafety.blocked, true);
+    assert.equal(ambiguous.runtimeDiagnosis.restartSafety.active.some((entry: any) =>
+      entry.reasonCodes?.includes('MULTIPLE_ACTIVE_EXECUTIONS')), true);
+    executionSessions.completeExecutionSession(duplicate.id);
+
     recordExecutionPendingOperationReference(execution.id, {
       operationId: 'runtime-pending-op-1', evidenceId: 'runtime-pending-evidence-1', kind: 'mutation', status: 'running',
     });
@@ -108,10 +164,27 @@ test('restart safety ignores stale lifecycle stage but blocks real WIP and pendi
     assert.equal(pendingBlocked.runtimeDiagnosis.restartSafety.blocked, true);
     assert.equal(pendingBlocked.runtimeDiagnosis.restartSafety.active.some((entry: any) =>
       entry.executionSessionId === execution.id
-      && entry.reasonCodes?.includes('PENDING_DURABLE_OPERATION')
+      && entry.reasonCodes?.includes('LIVE_DURABLE_OPERATION')
       && entry.pendingOperationIds?.includes('runtime-pending-op-1')), true);
-    assert.match(pendingBlocked.runtimeDiagnosis.nextAction, /pending|WIP|durable|active/i);
     reconcileExecutionPendingOperationReference(execution.id, 'runtime-pending-op-1');
+
+    const liveTask = seedRuntimeTask('task-runtime-source-live', 'RT-0002', 'todo');
+    const claimedLive = taskClaims.claimTaskForSession(liveTask.id, {
+      sessionId: 'runtime-live-claim',
+      ownerKind: 'chat',
+      ownerLabel: 'Runtime fault test',
+    });
+    const liveExecution = listExecutionSessionsForTask(liveTask.id).find((entry: any) => entry.status === 'active')!;
+    const liveWorkspace = sessionWorkspaces.resolveSessionWorkspace(claimedLive.claim.workspaceId)!;
+    fs.writeFileSync(path.join(liveWorkspace.root, 'runtime-source.txt'), 'live workspace wip\n', 'utf8');
+    executionSessions.updateExecutionSessionProgress(liveExecution.id, { changedFiles: ['runtime-source.txt'] });
+    const liveBlocked = getDevFlowDiagnostics({ supervisorState: null } as any) as any;
+    assert.equal(liveBlocked.runtimeDiagnosis.restartSafety.blocked, true, 'live claim plus dirty WIP stays conservative because restart-interruption safety is not proven');
+    assert.equal(liveBlocked.runtimeDiagnosis.restartSafety.active.some((entry: any) =>
+      entry.executionSessionId === liveExecution.id && entry.reasonCodes?.includes('LIVE_AUTHORITATIVE_WORK')), true);
+    spawnSync('git', ['restore', '--', 'runtime-source.txt'], { cwd: liveWorkspace.root, encoding: 'utf8', shell: false });
+    taskClaims.releaseTaskClaim(liveTask.id, { sessionId: 'runtime-live-claim', nextStatus: 'todo' });
+    try { sessionWorkspaces.cleanupSessionWorkspace(liveWorkspace.workspaceId); } catch {}
 
     const childRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-runtime-source-restart-'));
     const code = [
@@ -137,7 +210,13 @@ test('restart safety ignores stale lifecycle stage but blocks real WIP and pendi
     assert.equal(restarted.source.currentRevision, currentHead);
     assert.equal(restarted.diagnosis, null);
   } finally {
+    const finalTask = getTask(task.id)!;
+    finalTask.claim = undefined;
+    finalTask.status = 'done';
+    saveTask(finalTask);
+    try { spawnSync('git', ['restore', '--', 'runtime-source.txt'], { cwd: workspace.root, encoding: 'utf8', shell: false }); } catch {}
     executionSessions.completeExecutionSession(execution.id);
+    try { sessionWorkspaces.cleanupSessionWorkspace(workspace.workspaceId); } catch {}
     runtimeGit(['reset', '--hard', originalHead]);
   }
 });

@@ -93,6 +93,17 @@ const coverageManifest: CoverageScenario[] = [
     ],
   },
   {
+    id: 'DVF-0717-runtime-restart-authority-and-source-equivalence',
+    file: 'tests/server/runtimeIdentityDiagnostics.test.ts',
+    requiredSnippets: [
+      "test('clean commit mismatch with the same Git tree is content-equivalent and requires no restart'",
+      "test('restart safety ignores safe-orphan changedFiles, but blocks live durable and live ownership authority'",
+      "MULTIPLE_ACTIVE_EXECUTIONS",
+      "LIVE_DURABLE_OPERATION",
+      "LIVE_AUTHORITATIVE_WORK",
+    ],
+  },
+  {
     id: 'DVF-0660-cleanup-authority-and-race',
     file: 'tests/server/sessionWorkspaceService.test.ts',
     requiredSnippets: [
@@ -186,7 +197,7 @@ const coverageManifest: CoverageScenario[] = [
     file: 'tests/server/runtimeIdentityDiagnostics.test.ts',
     requiredSnippets: [
       "test('dirty runtime source is ambiguous and does not claim a deployed revision'",
-      "test('restart safety ignores stale lifecycle stage but blocks real WIP and pending durable operations'",
+      "test('restart safety ignores safe-orphan changedFiles, but blocks live durable and live ownership authority'",
     ],
   },
   {

@@ -470,6 +470,7 @@ function projectHarnessHealth(state: AppState, args: Record<string, any>, option
   }
 
   const allProjectTasks = getTasks().filter((task) => task.projectId === project.id);
+  const projectTaskVolumeExceeded = allProjectTasks.length > 100;
   const projectTasksById = new Map(allProjectTasks.map((task) => [task.id, task]));
   const activeClaims = allProjectTasks.map((task) => ({ task, claim: activeHealthClaim(task) })).filter((entry) => Boolean(entry.claim));
   const firstExecutionPage = queryExecutionSessions({ projectId: project.id, status: 'active', limit: 50 });
@@ -587,7 +588,7 @@ function projectHarnessHealth(state: AppState, args: Record<string, any>, option
     workspaceIds: registryOutsideActiveAuthority.map((workspace) => workspace.workspaceId).slice(0, 20),
     nextAction: 'Use full/debug project health before treating the project as lifecycle-clear or performing recovery cleanup.',
   });
-  const truncated = executions.truncated || registry.truncated;
+  const truncated = executions.truncated || registry.truncated || projectTaskVolumeExceeded;
   if (truncated) drift.push({
     code: 'PROJECT_LIFECYCLE_SCAN_TRUNCATED',
     message: 'Project aggregate exceeded a bounded lifecycle scan and cannot prove a complete all-clear.',
@@ -917,6 +918,7 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
         currentRevision: runtimeSourceFreshness.currentRevision,
         currentSourceDirty: runtimeSourceFreshness.currentSourceDirty,
         headMismatch: runtimeSourceFreshness.headMismatch,
+        contentEquivalent: runtimeSourceFreshness.contentEquivalent,
       } : null,
       diagnosis: runtimeDiagnosis ? {
         code: runtimeDiagnosis.code,

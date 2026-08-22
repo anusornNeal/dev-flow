@@ -3,6 +3,7 @@ import {
   listExecutionSessionEvidence,
   listExecutionSessionsForTask,
   listExecutionSessionsForWorkspace,
+  queryExecutionSessions,
   type ExecutionSessionRecord,
 } from '../repositories/executionSessionRepository.js';
 import { createApiError } from './api.js';
@@ -15,6 +16,7 @@ import {
 } from './executionSessionService.js';
 import {
   classifySessionWorkspaceTaskMatch,
+  findSessionWorkspaceRecoveryCandidatesForTask,
   getSessionWorkspaceMetadataForRecovery,
   type SessionWorkspace,
 } from './sessionWorkspaceService.js';
@@ -23,6 +25,7 @@ import {
   type LifecycleGuardrailIssue,
   type LifecycleGuardrailOperation,
 } from './lifecycleGuardrailModel.js';
+import { inspectWorkspaceRecovery } from './workspaceRecoveryService.js';
 
 /**
  * Read-only lifecycle truth model. It never reconciles, rotates, expires, touches, or writes
@@ -37,6 +40,21 @@ export type LifecycleAuthorityReason = {
   code: string;
   message: string;
   details?: unknown;
+};
+
+export type LiveWorkAuthorityClassification =
+  | 'live-authoritative'
+  | 'live-durable-operation'
+  | 'safe-orphan'
+  | 'recoverable-wip'
+  | 'terminal-history'
+  | 'ambiguous-authority'
+  | 'invalid-workspace-authority'
+  | 'cross-project-conflict';
+
+export type LiveWorkAuthorityIssue = LifecycleAuthorityReason & {
+  severity: 'hard' | 'debt' | 'info';
+  appliesTo: LifecycleGuardrailOperation[];
 };
 
 const AUTHORITY_SAFETY_OPERATIONS: LifecycleGuardrailOperation[] = [
@@ -127,6 +145,272 @@ function pendingOperationsForSession(sessionId: string | null) {
       kind: String(entry.kind),
       status: String(entry.status),
     }));
+}
+
+const LIVE_WORK_OPERATIONS: LifecycleGuardrailOperation[] = [
+  'mutation', 'verification', 'commit', 'integration', 'finalization', 'status', 'restart', 'cleanup',
+];
+const LIVE_WORK_CONFLICTING_OPERATIONS: LifecycleGuardrailOperation[] = [
+  'mutation', 'commit', 'integration', 'finalization', 'status', 'restart', 'cleanup',
+];
+
+function liveWorkIssue(
+  code: string,
+  severity: LiveWorkAuthorityIssue['severity'],
+  message: string,
+  appliesTo: LifecycleGuardrailOperation[],
+  details?: unknown,
+): LiveWorkAuthorityIssue {
+  return { code, severity, message, appliesTo, ...(details === undefined ? {} : { details }) };
+}
+
+function liveWorkOperationProjection(issues: LiveWorkAuthorityIssue[]) {
+  return Object.fromEntries(LIVE_WORK_OPERATIONS.map((operation) => {
+    const relevant = issues.filter((issue) => issue.appliesTo.includes(operation));
+    return [operation, {
+      hardBlocked: relevant.some((issue) => issue.severity === 'hard'),
+      debt: relevant.some((issue) => issue.severity === 'debt'),
+      reasonCodes: [...new Set(relevant.map((issue) => issue.code))],
+    }];
+  })) as Record<LifecycleGuardrailOperation, { hardBlocked: boolean; debt: boolean; reasonCodes: string[] }>;
+}
+
+export function classifyLifecycleLiveWorkAuthority(
+  taskIdValue: string,
+  options: {
+    workspaceId?: string;
+    now?: Date;
+    workspaceInspections?: ReadonlyMap<string, ReturnType<typeof inspectWorkspaceRecovery>>;
+    deferWorkspaceInspection?: boolean;
+  } = {},
+) {
+  const task = getTaskByIdentifier(String(taskIdValue || '').trim(), 'full');
+  if (!task) throw createApiError(404, 'TASK_NOT_FOUND', `Task '${taskIdValue}' was not found.`, { affectedId: taskIdValue });
+  const now = options.now || new Date();
+  const claim = activeClaim(task, now.getTime());
+  const executionPage = queryExecutionSessions({ taskId: task.id, limit: 100 });
+  const executions = executionPage.sessions;
+  const activeExecutions = executions.filter((entry) => entry.status === 'active');
+  const pendingOperations = executions.flatMap((session) => pendingOperationsForSession(session.id).map((operation) => ({
+    ...operation,
+    executionSessionId: session.id,
+    executionStatus: session.status,
+    workspaceId: session.workspaceId,
+  })));
+  const issues: LiveWorkAuthorityIssue[] = [];
+  const candidateWorkspaceIds = new Set<string>();
+  const explicitWorkspaceId = clean(options.workspaceId);
+  if (explicitWorkspaceId) candidateWorkspaceIds.add(explicitWorkspaceId);
+  if (claim.active && claim.workspaceId) candidateWorkspaceIds.add(claim.workspaceId);
+  for (const session of activeExecutions) if (clean(session.workspaceId)) candidateWorkspaceIds.add(clean(session.workspaceId));
+  for (const operation of pendingOperations) if (clean(operation.workspaceId)) candidateWorkspaceIds.add(clean(operation.workspaceId));
+
+  if (candidateWorkspaceIds.size === 0) {
+    const discovery = findSessionWorkspaceRecoveryCandidatesForTask(task.projectId, task.displayId || task.id, 50);
+    if (discovery.truncated) {
+      issues.push(liveWorkIssue('TASK_WORKSPACE_DISCOVERY_TRUNCATED', 'hard', 'Bounded workspace discovery cannot prove a unique task recovery authority.', LIVE_WORK_OPERATIONS, {
+        visibleWorkspaceIds: discovery.workspaces.map((entry) => entry.workspaceId).slice(0, 20),
+      }));
+    } else if (discovery.exactMatches.length > 1) {
+      issues.push(liveWorkIssue('MULTIPLE_EXACT_TASK_WORKSPACES', 'hard', 'More than one exact managed workspace matches the task.', LIVE_WORK_OPERATIONS, {
+        workspaceIds: discovery.exactMatches.map((entry) => entry.workspaceId).slice(0, 20),
+      }));
+    } else if (discovery.exactMatches.length === 1) {
+      candidateWorkspaceIds.add(discovery.exactMatches[0].workspaceId);
+    } else if (discovery.legacyMatches.length > 0) {
+      issues.push(liveWorkIssue('LEGACY_TASK_WORKSPACE_IDENTITY_AMBIGUOUS', 'hard', 'Only legacy-compatible workspace identity is available for the task.', LIVE_WORK_OPERATIONS, {
+        workspaceIds: discovery.legacyMatches.map((entry) => entry.workspaceId).slice(0, 20),
+      }));
+    }
+  }
+
+  if (executionPage.truncated) {
+    issues.push(liveWorkIssue('TASK_EXECUTION_SCAN_TRUNCATED', 'hard', 'The bounded execution scan cannot prove unique task authority.', LIVE_WORK_OPERATIONS, {
+      total: executionPage.total,
+      visible: executions.length,
+    }));
+  }
+  if (activeExecutions.length > 1) {
+    issues.push(liveWorkIssue('MULTIPLE_ACTIVE_EXECUTIONS', 'hard', 'More than one active execution exists for the task.', LIVE_WORK_OPERATIONS, {
+      executionSessionIds: activeExecutions.map((entry) => entry.id).slice(0, 20),
+    }));
+  }
+  const activeWorkspaceIds = [...new Set(activeExecutions.map((entry) => clean(entry.workspaceId)).filter(Boolean))];
+  if (activeWorkspaceIds.length > 1) {
+    issues.push(liveWorkIssue('TASK_ACTIVE_ACROSS_WORKSPACES', 'hard', 'Active task executions span more than one managed workspace.', LIVE_WORK_OPERATIONS, {
+      workspaceIds: activeWorkspaceIds.slice(0, 20),
+    }));
+  }
+  const foreignProjectExecutions = executions.filter((entry) => entry.projectId !== task.projectId);
+  if (foreignProjectExecutions.length > 0) {
+    issues.push(liveWorkIssue('EXECUTION_PROJECT_IDENTITY_CONFLICT', 'hard', 'Execution rows for the task carry a foreign project identity.', LIVE_WORK_OPERATIONS, {
+      executionSessionIds: foreignProjectExecutions.map((entry) => entry.id).slice(0, 20),
+      projectIds: [...new Set(foreignProjectExecutions.map((entry) => entry.projectId))].slice(0, 20),
+    }));
+  }
+
+  const workspaceEvidence = [...candidateWorkspaceIds].slice(0, 20).map((workspaceId) => {
+    const metadata = workspaceForAuthority(workspaceId);
+    const inspectionDeferred = options.deferWorkspaceInspection === true && !options.workspaceInspections?.has(workspaceId);
+    let inspection: ReturnType<typeof inspectWorkspaceRecovery> | null = options.workspaceInspections?.get(workspaceId) || null;
+    if (!inspection && !inspectionDeferred) {
+      try { inspection = inspectWorkspaceRecovery(workspaceId); } catch { inspection = null; }
+    }
+    if (!metadata || (!inspectionDeferred && (!inspection || inspection.disposition === 'stale-registry'))) {
+      issues.push(liveWorkIssue('WORKSPACE_AUTHORITY_INVALID', 'hard', 'Managed workspace authority cannot be proven from durable metadata and Git identity.', LIVE_WORK_OPERATIONS, {
+        workspaceId,
+        reason: inspection?.reason || (inspectionDeferred ? 'inspection-deferred' : 'metadata-or-inspection-unavailable'),
+      }));
+    } else {
+      if (inspectionDeferred) {
+        issues.push(liveWorkIssue('WORKSPACE_RECOVERY_INSPECTION_DEFERRED', 'hard', 'Git-backed recovery inspection was deferred; destructive cleanup remains fenced until exact workspace inspection.', ['cleanup'], { workspaceId }));
+      }
+      if (metadata.projectId !== task.projectId) {
+        issues.push(liveWorkIssue('WORKSPACE_PROJECT_MISMATCH', 'hard', 'Managed workspace belongs to another project.', LIVE_WORK_OPERATIONS, {
+          workspaceId,
+          taskProjectId: task.projectId,
+          workspaceProjectId: metadata.projectId,
+        }));
+      }
+      const match = classifySessionWorkspaceTaskMatch(metadata, task.projectId, task.displayId);
+      if (match === 'incompatible') {
+        issues.push(liveWorkIssue('WORKSPACE_TASK_IDENTITY_MISMATCH', 'hard', 'Managed workspace identity does not match the task.', LIVE_WORK_OPERATIONS, {
+          workspaceId,
+          taskDisplayId: task.displayId,
+        }));
+      } else if (match === 'legacy-compatible') {
+        issues.push(liveWorkIssue('WORKSPACE_LEGACY_TASK_IDENTITY', 'debt', 'Managed workspace identity is legacy-compatible rather than exact.', ['mutation', 'commit', 'integration', 'finalization', 'status', 'cleanup'], { workspaceId }));
+      }
+      const workspaceExecutions = queryExecutionSessions({ workspaceId, status: 'active', limit: 100 });
+      const foreignTaskExecutions = workspaceExecutions.sessions.filter((entry) => entry.taskId && entry.taskId !== task.id);
+      if (workspaceExecutions.truncated || workspaceExecutions.sessions.length > 1) {
+        issues.push(liveWorkIssue('MULTIPLE_ACTIVE_EXECUTIONS_FOR_WORKSPACE', 'hard', 'Managed workspace has multiple active execution rows.', LIVE_WORK_OPERATIONS, {
+          workspaceId,
+          executionSessionIds: workspaceExecutions.sessions.map((entry) => entry.id).slice(0, 20),
+        }));
+      }
+      if (foreignTaskExecutions.length > 0) {
+        issues.push(liveWorkIssue('WORKSPACE_ACTIVE_TASK_CONFLICT', 'hard', 'Managed workspace has active execution authority for another task.', LIVE_WORK_OPERATIONS, {
+          workspaceId,
+          executionSessionIds: foreignTaskExecutions.map((entry) => entry.id).slice(0, 20),
+        }));
+      }
+    }
+    return {
+      workspaceId,
+      found: Boolean(metadata),
+      projectId: metadata?.projectId || null,
+      taskDisplayId: metadata?.taskDisplayId || null,
+      state: metadata?.state || null,
+      disposition: inspection?.disposition || null,
+      inspectionDeferred,
+      reason: inspection?.reason || null,
+      dirtyFiles: inspection?.dirtyFiles.slice(0, 20) || [],
+      uniqueCommits: inspection?.uniqueCommits.slice(0, 20) || [],
+    };
+  });
+
+  const uniqueActive = activeExecutions.length === 1 ? activeExecutions[0] : null;
+  if (claim.active && !uniqueActive) {
+    issues.push(liveWorkIssue('ACTIVE_CLAIM_MISSING_EXECUTION', 'hard', 'A live claim exists without one matching active execution.', LIVE_WORK_CONFLICTING_OPERATIONS, {
+      workspaceId: claim.workspaceId,
+      ownershipEpochId: claim.ownershipEpochId,
+    }));
+  }
+  if (claim.active && uniqueActive) {
+    const executionEpoch = getExecutionSessionOwnershipEpoch(uniqueActive.id).ownershipEpochId;
+    if (uniqueActive.workspaceId !== claim.workspaceId) {
+      issues.push(liveWorkIssue('CLAIM_EXECUTION_WORKSPACE_MISMATCH', 'hard', 'Live claim and execution point at different workspaces.', LIVE_WORK_OPERATIONS, {
+        claimWorkspaceId: claim.workspaceId,
+        executionWorkspaceId: uniqueActive.workspaceId,
+        executionSessionId: uniqueActive.id,
+      }));
+    }
+    if (!claim.ownershipEpochId || !executionEpoch || claim.ownershipEpochId !== executionEpoch) {
+      issues.push(liveWorkIssue('OWNERSHIP_EPOCH_MISMATCH', 'hard', 'Live claim and execution do not share one authoritative ownership epoch.', LIVE_WORK_OPERATIONS, {
+        claimOwnershipEpochId: claim.ownershipEpochId,
+        executionOwnershipEpochId: executionEpoch,
+        executionSessionId: uniqueActive.id,
+      }));
+    }
+  }
+
+  if (pendingOperations.length > 0) {
+    issues.push(liveWorkIssue('LIVE_DURABLE_OPERATION', 'hard', 'Accepted or running durable work is a live concurrency fence even when claim/execution projection drifted.', LIVE_WORK_CONFLICTING_OPERATIONS, {
+      operationIds: pendingOperations.map((entry) => entry.operationId).slice(0, 20),
+    }));
+  }
+
+  const hasInvalidWorkspace = issues.some((entry) => entry.code === 'WORKSPACE_AUTHORITY_INVALID');
+  const hasCrossProjectConflict = issues.some((entry) => entry.code === 'EXECUTION_PROJECT_IDENTITY_CONFLICT' || entry.code === 'WORKSPACE_PROJECT_MISMATCH' || entry.code === 'WORKSPACE_ACTIVE_TASK_CONFLICT' || entry.code === 'WORKSPACE_TASK_IDENTITY_MISMATCH');
+  const hasAmbiguity = issues.some((entry) => [
+    'TASK_EXECUTION_SCAN_TRUNCATED', 'MULTIPLE_ACTIVE_EXECUTIONS', 'TASK_ACTIVE_ACROSS_WORKSPACES', 'MULTIPLE_ACTIVE_EXECUTIONS_FOR_WORKSPACE',
+    'MULTIPLE_EXACT_TASK_WORKSPACES', 'LEGACY_TASK_WORKSPACE_IDENTITY_AMBIGUOUS', 'ACTIVE_CLAIM_MISSING_EXECUTION',
+    'CLAIM_EXECUTION_WORKSPACE_MISMATCH', 'OWNERSHIP_EPOCH_MISMATCH',
+  ].includes(entry.code));
+  const recoverableWorkspace = workspaceEvidence.find((entry) => entry.disposition === 'needs-recovery' || entry.disposition === 'committed-not-integrated' || entry.state === 'integration-required');
+  const liveClaimExecution = Boolean(
+    claim.active
+    && uniqueActive
+    && uniqueActive.workspaceId === claim.workspaceId
+    && claim.ownershipEpochId
+    && getExecutionSessionOwnershipEpoch(uniqueActive.id).ownershipEpochId === claim.ownershipEpochId,
+  );
+
+  let classification: LiveWorkAuthorityClassification;
+  if (hasCrossProjectConflict) classification = 'cross-project-conflict';
+  else if (hasInvalidWorkspace) classification = 'invalid-workspace-authority';
+  else if (hasAmbiguity) classification = 'ambiguous-authority';
+  else if (pendingOperations.length > 0) classification = 'live-durable-operation';
+  else if (liveClaimExecution) classification = 'live-authoritative';
+  else if (recoverableWorkspace) classification = 'recoverable-wip';
+  else if (activeExecutions.length > 0) classification = 'safe-orphan';
+  else classification = 'terminal-history';
+
+  if (classification === 'live-authoritative') {
+    issues.push(liveWorkIssue('LIVE_AUTHORITATIVE_WORK', 'hard', 'A live claim and execution share one authoritative workspace and ownership epoch.', ['restart', 'cleanup'], {
+      executionSessionId: uniqueActive?.id,
+      workspaceId: claim.workspaceId,
+    }));
+  } else if (classification === 'safe-orphan') {
+    issues.push(liveWorkIssue('SAFE_ORPHAN_EXECUTION', 'debt', 'An active execution row remains without live claim or durable operation authority.', ['status', 'restart', 'cleanup'], {
+      executionSessionIds: activeExecutions.map((entry) => entry.id).slice(0, 20),
+    }));
+  } else if (classification === 'recoverable-wip') {
+    issues.push(liveWorkIssue('RECOVERABLE_WIP_REQUIRES_RECOVERY', 'debt', 'Task-compatible workspace WIP remains without live claim authority and must be preserved for recovery.', ['mutation', 'commit', 'integration', 'finalization', 'status'], {
+      workspaceId: recoverableWorkspace?.workspaceId,
+      disposition: recoverableWorkspace?.disposition,
+      dirtyFiles: recoverableWorkspace?.dirtyFiles,
+    }));
+    issues.push(liveWorkIssue('RECOVERABLE_WIP_CLEANUP_FENCE', 'hard', 'Recoverable workspace WIP must not be destructively cleaned before explicit recovery.', ['cleanup'], {
+      workspaceId: recoverableWorkspace?.workspaceId,
+    }));
+  }
+
+  const boundedIssues = issues.slice(0, 50);
+  return {
+    version: 'live-work-authority.v1' as const,
+    generatedAt: now.toISOString(),
+    classification,
+    task: { id: task.id, displayId: task.displayId, projectId: task.projectId, status: task.status },
+    claim,
+    execution: {
+      total: executionPage.total,
+      truncated: executionPage.truncated,
+      activeSessionIds: activeExecutions.map((entry) => entry.id).slice(0, 20),
+      activeWorkspaceIds: activeWorkspaceIds.slice(0, 20),
+    },
+    durableOperations: {
+      count: pendingOperations.length,
+      operationIds: pendingOperations.map((entry) => entry.operationId).slice(0, 20),
+      executionSessionIds: [...new Set(pendingOperations.map((entry) => entry.executionSessionId))].slice(0, 20),
+    },
+    workspaces: workspaceEvidence,
+    reasons: boundedIssues,
+    hardReasonCodes: [...new Set(boundedIssues.filter((entry) => entry.severity === 'hard').map((entry) => entry.code))],
+    debtReasonCodes: [...new Set(boundedIssues.filter((entry) => entry.severity === 'debt').map((entry) => entry.code))],
+    operations: liveWorkOperationProjection(boundedIssues),
+  };
 }
 
 function childProjection(task: any, nowMs: number) {
@@ -545,5 +829,6 @@ export function computeLifecycleAuthoritySnapshot(
     guardrails,
     info,
     classification,
+    liveWorkAuthority: classifyLifecycleLiveWorkAuthority(task.id, { workspaceId: selectedWorkspaceId || undefined, now }),
   };
 }

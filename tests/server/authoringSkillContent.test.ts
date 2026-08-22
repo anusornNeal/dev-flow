@@ -196,6 +196,13 @@ test('08 owns only board orchestration and delegates implementation policy to 07
   assert.match(boardLoopSkill, /NO_ELIGIBLE_TASK[\s\S]*stop this worker/i);
   assert.match(boardLoopSkill, /never scan or claim from another project/i);
   assert.match(boardLoopSkill, /explicitly asks to switch boards\/projects/i);
+  assert.match(boardLoopSkill, /`loop board`[\s\S]*`ทำต่อ`[\s\S]*`ปิดงาน`[\s\S]*`ทำให้จบ`/i);
+  assert.match(boardLoopSkill, /continue-until-terminal/i);
+  assert.match(boardLoopSkill, /non-terminal milestones[\s\S]*tests? pass[\s\S]*accepted\/running durable job[\s\S]*child[\s\S]*parent\/program[\s\S]*clean commit[\s\S]*finalization[\s\S]*cleanup/i);
+  assert.match(boardLoopSkill, /exact accepted\/running durable job[\s\S]*get_tool_job_result[\s\S]*until terminal/i);
+  assert.match(boardLoopSkill, /foreign dirty WIP[\s\S]*safe non-overlapping eligible work[\s\S]*no safe alternate/i);
+  assert.match(boardLoopSkill, /requested parent\/program[\s\S]*terminal/i);
+  assert.match(boardLoopSkill, /tool\/runtime surface[\s\S]*unavailable/i);
   for (const delegatedDetail of [
     'RED-required',
     'RED-deferred',

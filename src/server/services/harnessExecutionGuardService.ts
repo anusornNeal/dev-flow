@@ -19,7 +19,6 @@ import {
   getExecutionSessionState,
   getExecutionVerificationBatchLiveOperations,
   getExecutionVerificationBatchState,
-  recordExecutionLifecycleTransition,
   recordExecutionSessionEvidence,
   type ExecutionLifecycleTransitionInput,
 } from './executionSessionService.js';
@@ -526,7 +525,7 @@ function commitWasCreated(result: any) {
 }
 
 function transition(sessionId: string, toStage: ExecutionLifecycleTransitionInput['toStage'], reasonCode: string, decision: HarnessExecutionGuardDecision, evidenceSuffix: string, kind: string) {
-  return recordExecutionLifecycleTransition(sessionId, {
+  return reconcileExecutionLifecycleStage(sessionId, {
     toStage,
     reasonCode,
     evidence: {
@@ -587,10 +586,8 @@ export function recordHarnessExecutionOutcome(decision: HarnessExecutionGuardDec
     if (!mutationHadAuthoritativeEffect(result)) return null;
     const current = getTaskExecutionMutationBinding({ workspaceId: decision.execution.workspaceId });
     if (!current) return null;
-    if (current.session.lifecycle.stage === 'context-ready' || current.session.lifecycle.stage === 'plan-recorded') {
-      return transition(sessionId, 'implementing', 'authoritative-mutation-succeeded', decision, 'mutation', 'tool-result');
-    }
-    return current.session.lifecycle;
+    if (current.session.lifecycle.stage === 'implementing') return current.session.lifecycle;
+    return transition(sessionId, 'implementing', 'authoritative-mutation-succeeded', decision, 'mutation', 'tool-result');
   }
   if (decision.action === 'verification') {
     if (!resultIsTerminal(result)) return null;
@@ -603,30 +600,17 @@ export function recordHarnessExecutionOutcome(decision: HarnessExecutionGuardDec
       const batchState = getExecutionVerificationBatchState(sessionId);
 
       if (failureClass === 'infrastructure') {
-        if (current.session.lifecycle.stage === 'implementing') {
-          transition(sessionId, 'verifying', 'verification-result-observed', decision, 'verification', 'verification-result');
-          current = getTaskExecutionMutationBinding({ workspaceId: decision.execution.workspaceId });
-        }
-        if (current?.session.lifecycle.stage === 'verifying' || current?.session.lifecycle.stage === 'repairing') {
-          return transition(sessionId, 'verification-infra-blocked', 'verification-infrastructure-failure-recovery-required', decision, 'infra-blocked', 'verification-result');
-        }
-        return current?.session.lifecycle || null;
+        if (current.session.lifecycle.stage === 'verification-infra-blocked') return current.session.lifecycle;
+        return transition(sessionId, 'verification-infra-blocked', 'verification-infrastructure-failure-recovery-required', decision, 'infra-blocked', 'verification-result');
       }
 
-      if (current.session.lifecycle.stage === 'verification-infra-blocked') {
-        return transition(sessionId, 'repairing', 'verification-recovery-found-code-failure', decision, 'repair', 'verification-result');
-      }
-      if ((batchState?.status === 'failed' || batchState?.status === 'stale') && current.session.lifecycle.stage === 'implementing') {
-        return transition(sessionId, 'repairing', 'verification-batch-failed-repair-required', decision, 'repair', 'verification-result');
-      }
-      if (current.session.lifecycle.stage === 'implementing') {
-        transition(sessionId, 'verifying', 'verification-result-observed', decision, 'verification', 'verification-result');
-        current = getTaskExecutionMutationBinding({ workspaceId: decision.execution.workspaceId });
-      }
-      if (current?.session.lifecycle.stage === 'verifying') {
-        return transition(sessionId, 'repairing', 'verification-failed-repair-required', decision, 'repair', 'verification-result');
-      }
-      return current?.session.lifecycle || null;
+      if (current.session.lifecycle.stage === 'repairing') return current.session.lifecycle;
+      const repairReason = current.session.lifecycle.stage === 'verification-infra-blocked'
+        ? 'verification-recovery-found-code-failure'
+        : (batchState?.status === 'failed' || batchState?.status === 'stale')
+          ? 'verification-batch-failed-repair-required'
+          : 'verification-failed-repair-required';
+      return transition(sessionId, 'repairing', repairReason, decision, 'repair', 'verification-result');
     }
 
     if (current.session.lifecycle.stage === 'committed') {
@@ -648,12 +632,9 @@ export function recordHarnessExecutionOutcome(decision: HarnessExecutionGuardDec
       }]);
       return current.session.lifecycle;
     }
-    if (current.session.lifecycle.stage === 'implementing' || current.session.lifecycle.stage === 'repairing' || current.session.lifecycle.stage === 'verification-infra-blocked') {
-      const ownership = getExecutionOwnershipState(sessionId, { repoRoot: current.workspace.root });
-      if (ownership.verificationFresh !== true) return current.session.lifecycle;
-      return transition(sessionId, 'verifying', 'verification-result-observed', decision, 'verification', 'verification-result');
-    }
-    return current.session.lifecycle;
+    const ownership = getExecutionOwnershipState(sessionId, { repoRoot: current.workspace.root });
+    if (ownership.verificationFresh !== true || current.session.lifecycle.stage === 'verifying') return current.session.lifecycle;
+    return transition(sessionId, 'verifying', 'verification-result-observed', decision, 'verification', 'verification-result');
   }
   if (decision.action === 'commit') {
     if (!commitWasCreated(result)) return null;

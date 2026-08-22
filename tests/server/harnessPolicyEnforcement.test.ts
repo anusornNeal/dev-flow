@@ -16,6 +16,7 @@ const { saveTask } = await import('../../src/server/repositories/taskRepository.
 const { claimTaskForSession, releaseTaskClaim } = await import('../../src/server/services/taskClaimService.js');
 const { cleanupSessionWorkspace, resetSessionWorkspaceRuntimeForTests } = await import('../../src/server/services/sessionWorkspaceService.js');
 const executionSessions = await import('../../src/server/services/executionSessionService.js');
+const { reconcileExecutionLifecycleStage } = await import('../../src/server/services/executionLifecycleReconciliationService.js');
 const { getHarnessExecutionEffects, preflightHarnessExecutionGuard, recordHarnessExecutionOutcome } = await import('../../src/server/services/harnessExecutionGuardService.js');
 const { getBuiltinToolJobRecoveryPolicy } = await import('../../src/server/services/mcpToolJobRunnerRegistry.js');
 const { finalizeTaskWorkspace } = await import('../../src/server/services/taskWorkspaceFinalizationService.js');
@@ -281,6 +282,52 @@ test('execution guard composes policy, ownership, lifecycle, retry identity, and
   }
 });
 
+test('normal mutation outcomes reconcile stale lifecycle projections without ordered stage walking', () => {
+  resetSessionWorkspaceRuntimeForTests();
+  const repoRoot = createRepo('stale-stage-mutation-reconciliation');
+  const project = { id: 'project-stale-stage-mutation', name: 'Stale Stage Mutation', repoUrl: 'https://example.com/stale-stage-mutation', localPath: repoRoot };
+  createProject(project);
+  const now = new Date().toISOString();
+  const task = {
+    id: 'task-stale-stage-mutation', displayId: 'DVF-HARNESS-STALE-STAGE', title: 'Stale stage mutation fixture',
+    description: 'Observed successful mutation must replace stale lifecycle projection directly.', projectId: project.id,
+    status: 'todo', priority: 'high', category: 'backend', tags: [], targetFiles: ['value.txt'],
+    checklist: [], logs: [], bugs: [], images: [], createdAt: now, updatedAt: now,
+  } as any;
+  saveTask(task);
+  const state = { projectsCache: [project], countersCache: {}, skillsRegistry: [] } as any;
+  const claimed = claimTaskForSession(task.id, { sessionId: 'stale-stage-mutation-session', ownerKind: 'chat', ownerLabel: 'Stale stage mutation' });
+  const workspaceId = claimed.claim.workspaceId;
+
+  try {
+    const session = executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)!;
+    for (const staleStage of ['verifying', 'repairing', 'verification-infra-blocked', 'committed'] as const) {
+      reconcileExecutionLifecycleStage(session.id, {
+        toStage: staleStage,
+        reasonCode: `fixture-stale-${staleStage}`,
+        evidence: { id: `fixture-stale-${staleStage}`, kind: 'fixture-observation', status: 'completed' },
+      });
+      const decision = preflightHarnessExecutionGuard(state, 'write_local_file', {
+        workspaceId,
+        filePath: 'value.txt',
+        harnessOperationId: `mutation-from-${staleStage}`,
+      });
+      assert.equal(decision.allowed, true, `safe mutation must not be blocked by stale ${staleStage} projection`);
+      recordHarnessExecutionOutcome(decision, { ok: true, status: 'succeeded', changed: true });
+      const current = executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)!;
+      assert.equal(current.lifecycle.stage, 'implementing', `successful mutation must reconcile stale ${staleStage} directly to implementing`);
+      const transitionEvidence = executionSessions.getExecutionSessionState(current.id).evidence
+        .filter((entry: any) => entry.kind === 'lifecycle-transition')
+        .at(-1);
+      assert.equal(transitionEvidence?.metadata?.directReconciliation, true);
+      assert.equal(transitionEvidence?.metadata?.fromStage, staleStage);
+    }
+  } finally {
+    releaseTaskClaim(task.id, { sessionId: 'stale-stage-mutation-session', nextStatus: 'todo' });
+    cleanupSessionWorkspace(workspaceId);
+  }
+});
+
 test('diagnostic verification failure after prior GREEN remains truthful debt without revoking commit admission', () => {
   resetSessionWorkspaceRuntimeForTests();
   const repoRoot = createRepo('diagnostic-after-green-failure-repo');
@@ -408,7 +455,7 @@ test('verification OOM preserves execution for verification-only recovery', () =
       verification: [{ ok: false, status: 'timed_out', timedOut: true, stderr: 'java.lang.OutOfMemoryError: Java heap space' }],
     });
     assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'verification-infra-blocked');
-    assert.equal(lifecycleEvidenceCount(binding.session.id), lifecycleBeforeCompositeFailure + 1, 'composite mutation must be observed before one infra-block transition without duplicate lifecycle records');
+    assert.equal(lifecycleEvidenceCount(binding.session.id), lifecycleBeforeCompositeFailure + 2, 'composite recovery must record exactly one mutation observation and one infra-block observation');
   } finally {
     releaseTaskClaim(task.id, { sessionId: 'verification-oom-session', nextStatus: 'todo' });
     cleanupSessionWorkspace(workspaceId);

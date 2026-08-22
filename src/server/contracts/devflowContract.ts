@@ -20,7 +20,7 @@ import { uiPreviewToolDefinitions } from './devflowUiPreviewTools';
 import { buildMcpTransportInputSchema } from './mcpSchemaTransport';
 import { resolveRuntimeMcpToolProfileValue } from './mcpToolProfileConfig';
 export type { DevFlowToolDefinition, DevFlowToolHttpRequest } from './devflowContractCore';
-export const DEVFLOW_CONTRACT_VERSION = '2026-08-21.2';
+export const DEVFLOW_CONTRACT_VERSION = '2026-08-22.1';
 
 export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   {
@@ -1282,6 +1282,8 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
             id: { type: 'string', minLength: 1, maxLength: 160, description: 'Opaque verification batch id.' },
             requiredChecks: { type: 'array', minItems: 1, maxItems: 64, items: { type: 'string', minLength: 1, maxLength: 200 }, description: 'Immutable ordered set of required check ids for this batch.' },
             checkId: { type: 'string', minLength: 1, maxLength: 200, description: 'Required check id represented by this command.' },
+            supersedesBatchId: { type: 'string', minLength: 1, maxLength: 160, description: 'Explicit prior pending batch id to supersede before starting this replacement batch. Allowed only after its live durable member operations terminate or are fenced.' },
+            supersessionReason: { type: 'string', minLength: 10, maxLength: 500, description: 'Auditable reason for replacing the prior pending batch.' },
           },
           required: ['id', 'requiredChecks', 'checkId'],
           additionalProperties: false,

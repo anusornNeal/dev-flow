@@ -38,6 +38,7 @@ const coverageManifest: CoverageScenario[] = [
     requiredSnippets: [
       "test('task-bound sequential MCP verification stays pending after the first check and becomes authoritative only after the final check'",
       "test('active verification supersession keeps old operation pending until old worker exits and never clears replacement'",
+      "test('verification batch replacement waits for live durable members and late old results stay non-authoritative'",
     ],
   },
   {

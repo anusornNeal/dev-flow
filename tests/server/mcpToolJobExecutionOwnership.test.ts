@@ -401,6 +401,97 @@ test('active verification supersession keeps old operation pending until old wor
   }
 });
 
+test('verification batch replacement waits for live durable members and late old results stay non-authoritative', async () => {
+  const captured = execution.captureExecutionVerificationProvenance(session.id, { repoRoot: workspace.root });
+  const oldBatchId = `ownership-old-batch-${Date.now()}`;
+  const replacementBatchId = `${oldBatchId}-replacement`;
+  const oldRequiredChecks = ['focused', 'green-check'];
+  const first = execution.recordExecutionVerificationBatchResult(session.id, {
+    repoRoot: workspace.root,
+    batchId: oldBatchId,
+    requiredChecks: oldRequiredChecks,
+    checkId: 'focused',
+    status: 'passed',
+    captured,
+    memberCandidate: { candidateId: `${oldBatchId}-focused`, repoRevision: captured.repoRevision, executionKey: `${oldBatchId}-focused-key` },
+  });
+  assert.equal(first.state.status, 'pending');
+
+  const gate = deferred();
+  let started = false;
+  jobService.__setToolJobTestRunner('run_project_command', async (_state: any, _args: any, _logger: any, setCancelFn: (fn: () => void) => void) => {
+    started = true;
+    setCancelFn(() => gate.resolve());
+    await gate.promise;
+    return { ok: true, status: 'succeeded' };
+  });
+
+  const supersessionReason = 'Replace an abandoned sequential batch only after its final durable member worker is fenced and terminal.';
+  const replacementInput = {
+    repoRoot: workspace.root,
+    batchId: replacementBatchId,
+    requiredChecks: ['replacement'],
+    checkId: 'replacement',
+    status: 'passed' as const,
+    captured,
+    memberCandidate: { candidateId: `${replacementBatchId}-candidate`, repoRevision: captured.repoRevision, executionKey: `${replacementBatchId}-key` },
+    supersedesBatchId: oldBatchId,
+    supersessionReason,
+  };
+
+  try {
+    const liveArgs = verificationArgs('green-check');
+    liveArgs.verificationBatch = { id: oldBatchId, requiredChecks: oldRequiredChecks, checkId: 'green-check' };
+    const liveJob = jobService.enqueueToolJob(state, 'run_project_command', liveArgs, 'repo-command');
+    await waitUntil(() => started, 'Expected old verification batch member to start');
+    assert.equal(execution.getExecutionVerificationBatchLiveOperations(session.id, oldBatchId).some((entry: any) => entry.operationId === liveJob.jobId), true);
+
+    assert.throws(
+      () => execution.recordExecutionVerificationBatchResult(session.id, replacementInput),
+      (error: any) => error?.code === 'EXECUTION_VERIFICATION_BATCH_LIVE_MEMBERS',
+    );
+
+    assert.equal(jobService.cancelToolJob(liveJob.jobId), true);
+    assert.equal(jobRepo.getJob(liveJob.jobId)?.status, 'cancelled');
+    assert.equal(execution.getExecutionVerificationBatchLiveOperations(session.id, oldBatchId).some((entry: any) => entry.operationId === liveJob.jobId), true);
+    assert.throws(
+      () => execution.recordExecutionVerificationBatchResult(session.id, replacementInput),
+      (error: any) => error?.code === 'EXECUTION_VERIFICATION_BATCH_LIVE_MEMBERS',
+    );
+
+    gate.resolve();
+    await waitUntil(() => execution.getExecutionVerificationBatchLiveOperations(session.id, oldBatchId).length === 0, 'Expected cancelled old batch member to leave the durable execution fence');
+
+    const replacement = execution.recordExecutionVerificationBatchResult(session.id, replacementInput);
+    assert.equal(replacement.authoritative, true);
+    assert.equal(replacement.state.batchId, replacementBatchId);
+    assert.equal(execution.getExecutionVerificationBatchStateById(session.id, oldBatchId)?.status, 'superseded');
+    assert.equal(execution.getExecutionVerificationBatchStateById(session.id, oldBatchId)?.supersededByBatchId, replacementBatchId);
+
+    const replay = execution.recordExecutionVerificationBatchResult(session.id, replacementInput);
+    assert.equal(replay.idempotent, true);
+    assert.equal(replay.authoritative, true);
+
+    const lateOldResult = execution.recordExecutionVerificationBatchResult(session.id, {
+      repoRoot: workspace.root,
+      batchId: oldBatchId,
+      requiredChecks: oldRequiredChecks,
+      checkId: 'green-check',
+      status: 'passed',
+      captured,
+      memberCandidate: { candidateId: `${oldBatchId}-late`, repoRevision: captured.repoRevision, executionKey: `${oldBatchId}-late-key` },
+    });
+    assert.equal(lateOldResult.authoritative, false);
+    assert.equal(lateOldResult.reasonCode, 'EXECUTION_VERIFICATION_BATCH_SUPERSEDED');
+    assert.equal(execution.getExecutionVerificationBatchState(session.id)?.batchId, replacementBatchId);
+    assert.equal(execution.getExecutionVerificationBatchState(session.id)?.status, 'complete');
+    assert.equal(execution.getExecutionOwnershipState(session.id, { repoRoot: workspace.root }).verificationFresh, true);
+  } finally {
+    gate.resolve();
+    jobService.__setToolJobTestRunner('run_project_command', null);
+  }
+});
+
 test('failed MCP verification does not create authoritative freshness', async () => {
   const edited = await runBuiltinToolJob({
     toolName: 'edit_local_files_batch',
@@ -467,8 +558,9 @@ test('task-bound sequential MCP verification stays pending after the first check
   assert.notEqual(execution.getExecutionOwnershipState(session.id, { repoRoot: workspace.root }).verificationFresh, true);
   assert.equal(execution.getExecutionSessionState(session.id).session.lifecycle.stage, 'repairing');
   let plan = commitPlan.buildTaskCommitPlan(state, { taskId, workspaceId: workspace.workspaceId });
-  assert.equal(plan.commitAllowed, false);
-  assert.ok(plan.blockers.some((entry: any) => entry.code === 'EXECUTION_VERIFICATION_BATCH_INCOMPLETE'));
+  assert.equal(plan.commitAllowed, true);
+  assert.equal(plan.blockers.some((entry: any) => entry.code === 'EXECUTION_VERIFICATION_BATCH_LIVE_MEMBERS'), false);
+  assert.ok(plan.debts.some((entry: any) => entry.code === 'EXECUTION_VERIFICATION_BATCH_PENDING'));
 
   const secondArgs = verificationArgs('green-check');
   secondArgs.verificationBatch = { id: batchId, requiredChecks, checkId: 'green-check' };
@@ -514,9 +606,10 @@ test('verification coverage becomes stale when a dependency input changes', () =
   }, null, 2));
 
   const plan = commitPlan.buildTaskCommitPlan(state, { taskId, workspaceId: workspace.workspaceId });
-  assert.equal(plan.commitAllowed, false);
+  assert.equal(plan.commitAllowed, true);
   assert.equal(plan.verificationState, 'stale');
   assert.equal(plan.verificationCoverage.status, 'stale');
   assert.ok(plan.verificationCoverage.staleCommands.includes('green-check'));
-  assert.ok(plan.blockers.some((entry: any) => entry.code === 'EXECUTION_VERIFICATION_COVERAGE_STALE'));
+  assert.ok(plan.debts.some((entry: any) => entry.code === 'EXECUTION_VERIFICATION_COVERAGE_STALE'));
+  assert.ok(plan.debts.some((entry: any) => entry.code === 'EXECUTION_VERIFICATION_NOT_FRESH'));
 });

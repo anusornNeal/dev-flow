@@ -17,6 +17,7 @@ import {
   type ExecutionLifecycleStage,
   type ExecutionSessionRecord,
 } from '../repositories/executionSessionRepository.js';
+import { getJob } from '../repositories/mcpToolJobRepository.js';
 import { getTask, getTaskByIdentifier } from '../repositories/taskRepository.js';
 import { getProjects, normalizeProjectNameAlias, normalizeProjectRepoIdentity } from '../repositories/projectRepository.js';
 import { getFileRevision, resolveSafePath } from './localFileService.js';
@@ -25,6 +26,7 @@ import { withDbTransaction } from '../../db/index.js';
 import { resolveSessionWorkspace } from './sessionWorkspaceService.js';
 import { createApiError } from './api.js';
 import {
+  getLatestExecutionCheckpoint,
   recordAutomaticExecutionCheckpoint,
   recordExecutionPendingOperationReference,
 } from './executionCheckpointService.js';
@@ -159,6 +161,7 @@ export type TaskExecutionVerificationBindingReason =
   | 'EXECUTION_VERIFICATION_BATCH_INCOMPLETE'
   | 'EXECUTION_VERIFICATION_BATCH_FAILED'
   | 'EXECUTION_VERIFICATION_BATCH_STALE'
+  | 'EXECUTION_VERIFICATION_BATCH_SUPERSEDED'
   | 'EXECUTION_VERIFICATION_RECOVERY_BATCH_REQUIRED'
   | 'EXECUTION_VERIFICATION_REJECTED';
 
@@ -177,7 +180,7 @@ export interface TaskExecutionVerificationBindingOutcome {
   ownership?: ExecutionOwnershipState;
 }
 
-export type ExecutionVerificationBatchStatus = 'pending' | 'complete' | 'failed' | 'stale';
+export type ExecutionVerificationBatchStatus = 'pending' | 'complete' | 'failed' | 'stale' | 'superseded';
 
 export type ExecutionVerificationBatchMemberCandidate = {
   candidateId: string;
@@ -201,6 +204,9 @@ export type ExecutionVerificationBatchState = {
   status: ExecutionVerificationBatchStatus;
   canComplete: boolean;
   createdAt: string;
+  supersededByBatchId?: string;
+  supersessionReason?: string;
+  supersededAt?: string;
   updatedAt: string;
 };
 
@@ -1354,7 +1360,7 @@ function executionVerificationBatchStateFromEvidence(entry: ExecutionSessionEvid
   const repoRevision = String(metadata.repoRevision || '').trim();
   const ownedFingerprint = String(metadata.ownedFingerprint || '').trim();
   const status = String(metadata.status || '') as ExecutionVerificationBatchStatus;
-  if (!batchId || !ownershipEpochId || !repoRevision || !ownedFingerprint || !['pending', 'complete', 'failed', 'stale'].includes(status)) return null;
+  if (!batchId || !ownershipEpochId || !repoRevision || !ownedFingerprint || !['pending', 'complete', 'failed', 'stale', 'superseded'].includes(status)) return null;
   const requiredChecks = Array.isArray(metadata.requiredChecks) ? metadata.requiredChecks.map(String) : [];
   const results = metadata.results && typeof metadata.results === 'object' && !Array.isArray(metadata.results)
     ? { ...(metadata.results as Record<string, VerificationBatchResultStatus>) }
@@ -1376,6 +1382,9 @@ function executionVerificationBatchStateFromEvidence(entry: ExecutionSessionEvid
     stale: Array.isArray(metadata.stale) ? metadata.stale.map(String) : [],
     status,
     canComplete: metadata.canComplete === true,
+    ...(typeof metadata.supersededByBatchId === 'string' && metadata.supersededByBatchId.trim() ? { supersededByBatchId: metadata.supersededByBatchId.trim() } : {}),
+    ...(typeof metadata.supersessionReason === 'string' && metadata.supersessionReason.trim() ? { supersessionReason: metadata.supersessionReason.trim() } : {}),
+    ...(typeof metadata.supersededAt === 'string' && metadata.supersededAt.trim() ? { supersededAt: metadata.supersededAt.trim() } : {}),
     createdAt: entry.createdAt,
     updatedAt: entry.updatedAt,
   };
@@ -1388,6 +1397,30 @@ export function getExecutionVerificationBatchState(id: string) {
     .map(executionVerificationBatchStateFromEvidence)
     .filter((entry): entry is ExecutionVerificationBatchState => Boolean(entry))
     .at(-1) || null;
+}
+
+export function getExecutionVerificationBatchStateById(id: string, batchIdValue: string) {
+  requireSession(id);
+  const batchId = String(batchIdValue || '').trim();
+  if (!batchId) return null;
+  return listExecutionSessionEvidence(id)
+    .filter((entry) => entry.kind === 'verification-batch')
+    .map(executionVerificationBatchStateFromEvidence)
+    .find((entry) => entry?.batchId === batchId) || null;
+}
+
+export function getExecutionVerificationBatchLiveOperations(id: string, batchIdValue: string) {
+  requireSession(id);
+  const batchId = String(batchIdValue || '').trim();
+  if (!batchId) return [] as Array<{ operationId: string; status: 'accepted' | 'running'; jobStatus: string }>;
+  const checkpoint = getLatestExecutionCheckpoint(id);
+  return (checkpoint?.pendingOperations || []).flatMap((entry) => {
+    const job = getJob(entry.operationId);
+    const jobBatchId = String(job?.args?.verificationBatch?.id || '').trim();
+    const executionSessionId = String(job?.args?.__executionJobBinding?.executionSessionId || '').trim();
+    if (!job || jobBatchId !== batchId || executionSessionId !== id) return [];
+    return [{ operationId: entry.operationId, status: entry.status, jobStatus: job.status }];
+  });
 }
 
 function persistExecutionVerificationBatchState(id: string, state: ExecutionVerificationBatchState) {
@@ -1417,6 +1450,9 @@ function persistExecutionVerificationBatchState(id: string, state: ExecutionVeri
       stale: state.stale,
       status: state.status,
       canComplete: state.canComplete,
+      supersededByBatchId: state.supersededByBatchId || null,
+      supersessionReason: state.supersessionReason || null,
+      supersededAt: state.supersededAt || null,
     },
     createdAt: existing?.createdAt || state.createdAt,
     updatedAt: state.updatedAt,
@@ -1502,6 +1538,8 @@ export function recordExecutionVerificationBatchResult(
     captured: { repoRevision: string; ownedFingerprint: string; ownedPaths?: string[] };
     memberCandidate: ExecutionVerificationBatchMemberCandidate;
     now?: Date;
+    supersedesBatchId?: string;
+    supersessionReason?: string;
   },
 ) {
   const session = requireSession(id);
@@ -1530,6 +1568,22 @@ export function recordExecutionVerificationBatchResult(
   const ownership = getExecutionOwnershipState(id, { repoRoot: root });
   const nowIso = (input.now || new Date()).toISOString();
   const latest = getExecutionVerificationBatchState(id);
+  const historical = getExecutionVerificationBatchStateById(id, batchId);
+  if (historical && latest?.batchId !== batchId) {
+    if (historical.status === 'superseded') {
+      return {
+        authoritative: false,
+        idempotent: true,
+        state: historical,
+        reasonCode: 'EXECUTION_VERIFICATION_BATCH_SUPERSEDED' as TaskExecutionVerificationBindingReason,
+        verificationFresh: ownership.verificationFresh,
+        sessionId: id,
+        repoRevision: ownership.repoRevision,
+        ownedFingerprint: ownership.ownedFingerprint,
+      };
+    }
+    throw executionSessionError('EXECUTION_VERIFICATION_BATCH_TERMINAL', `Verification batch '${batchId}' is historical and terminal (${historical.status}); its identity cannot be reused.`);
+  }
   const existing = latest?.batchId === batchId ? latest : null;
   if (ownership.repoRevision !== capturedRepoRevision || ownership.ownedFingerprint !== capturedOwnedFingerprint) {
     if (existing?.status === 'pending'
@@ -1564,8 +1618,36 @@ export function recordExecutionVerificationBatchResult(
       currentOwnedFingerprint: ownership.ownedFingerprint,
     });
   }
+  let supersededPrior: ExecutionVerificationBatchState | null = null;
   if (!existing && latest?.status === 'pending' && latest.repoRevision === ownership.repoRevision && latest.ownedFingerprint === ownership.ownedFingerprint) {
-    throw executionSessionError('EXECUTION_VERIFICATION_BATCH_ACTIVE', `Verification batch '${latest.batchId}' is still pending and must complete or become stale before '${batchId}' can start.`);
+    const supersedesBatchId = String(input.supersedesBatchId || '').trim();
+    const supersessionReason = String(input.supersessionReason || '').trim();
+    if (supersedesBatchId !== latest.batchId) {
+      throw executionSessionError('EXECUTION_VERIFICATION_BATCH_ACTIVE', `Verification batch '${latest.batchId}' is still pending. Continue it or explicitly supersede it before '${batchId}' can start.`, {
+        batchId: latest.batchId,
+        nextAction: 'start-replacement-verification-batch',
+        requiredSupersedesBatchId: latest.batchId,
+      });
+    }
+    if (supersessionReason.length < 10 || supersessionReason.length > 500) {
+      throw executionSessionError('EXECUTION_VERIFICATION_BATCH_SUPERSESSION_REASON_REQUIRED', 'Verification batch supersession requires an audit reason between 10 and 500 characters.');
+    }
+    const liveOperations = getExecutionVerificationBatchLiveOperations(id, latest.batchId);
+    if (liveOperations.length > 0) {
+      throw executionSessionError('EXECUTION_VERIFICATION_BATCH_LIVE_MEMBERS', `Verification batch '${latest.batchId}' still has live durable member operations and cannot be superseded yet.`, {
+        batchId: latest.batchId,
+        liveOperations,
+      });
+    }
+    supersededPrior = {
+      ...latest,
+      status: 'superseded',
+      canComplete: false,
+      supersededByBatchId: batchId,
+      supersessionReason,
+      supersededAt: nowIso,
+      updatedAt: nowIso,
+    };
   }
   if (existing) {
     if (existing.ownershipEpochId !== ownershipEpochId || existing.repoRevision !== capturedRepoRevision || existing.ownedFingerprint !== capturedOwnedFingerprint) {
@@ -1593,7 +1675,6 @@ export function recordExecutionVerificationBatchResult(
   const createdAt = existing?.createdAt || nowIso;
   const results = { ...(existing?.results || {}), [checkId]: input.status };
   const memberCandidates = { ...(existing?.memberCandidates || {}), [checkId]: memberCandidate };
-  if (!existing) invalidateExecutionVerificationBindingsForBatch(id, batchId, nowIso);
   const state = buildExecutionVerificationBatchState({
     batchId,
     ownershipEpochId,
@@ -1602,7 +1683,11 @@ export function recordExecutionVerificationBatchResult(
     requiredChecks,
     createdAt,
   }, results, memberCandidates, nowIso);
-  persistExecutionVerificationBatchState(id, state);
+  withDbTransaction(() => {
+    if (supersededPrior) persistExecutionVerificationBatchState(id, supersededPrior);
+    if (!existing) invalidateExecutionVerificationBindingsForBatch(id, batchId, nowIso);
+    persistExecutionVerificationBatchState(id, state);
+  });
 
   if (state.canComplete) {
     const executionKey = crypto.createHash('sha256')
@@ -1704,6 +1789,8 @@ export function recordTaskExecutionVerificationResult(
             captured?.ownedPaths,
           ) || undefined,
         },
+        supersedesBatchId: String(batchRequest.supersedesBatchId || ''),
+        supersessionReason: String(batchRequest.supersessionReason || ''),
       });
       const refreshedOwnership = getExecutionOwnershipState(binding.session.id, { repoRoot: binding.workspace.root });
       const reasonCode: TaskExecutionVerificationBindingReason = recorded.authoritative
@@ -1712,7 +1799,9 @@ export function recordTaskExecutionVerificationResult(
           ? 'EXECUTION_VERIFICATION_BATCH_INCOMPLETE'
           : recorded.state.status === 'stale'
             ? 'EXECUTION_VERIFICATION_BATCH_STALE'
-            : 'EXECUTION_VERIFICATION_BATCH_FAILED'));
+            : recorded.state.status === 'superseded'
+              ? 'EXECUTION_VERIFICATION_BATCH_SUPERSEDED'
+              : 'EXECUTION_VERIFICATION_BATCH_FAILED'));
       return {
         authoritative: recorded.authoritative,
         reasonCode,
@@ -1726,7 +1815,9 @@ export function recordTaskExecutionVerificationResult(
           ? 'All declared sequential verification checks passed on the frozen execution ownership revision.'
           : recorded.state.status === 'pending'
             ? `Verification batch '${recorded.state.batchId}' is incomplete; remaining checks: ${recorded.state.pending.join(', ')}.`
-            : `Verification batch '${recorded.state.batchId}' is ${recorded.state.status} and cannot authorize commit.`,
+            : recorded.state.status === 'superseded'
+              ? `Verification batch '${recorded.state.batchId}' was superseded by '${recorded.state.supersededByBatchId || 'a replacement batch'}' and late results are non-authoritative.`
+              : `Verification batch '${recorded.state.batchId}' is ${recorded.state.status} and cannot authorize commit.`,
       };
     } catch (error: any) {
       return {
@@ -1787,7 +1878,7 @@ export function recordTaskExecutionVerificationResult(
       message: `Verification batch '${latestBatch.batchId}' is incomplete and must continue through its declared batch identity.`,
     };
   }
-  if (latestBatch?.status === 'failed' || latestBatch?.status === 'stale') {
+  if (latestBatch?.status === 'failed' || latestBatch?.status === 'stale' || latestBatch?.status === 'superseded') {
     return {
       authoritative: false,
       reasonCode: 'EXECUTION_VERIFICATION_RECOVERY_BATCH_REQUIRED',

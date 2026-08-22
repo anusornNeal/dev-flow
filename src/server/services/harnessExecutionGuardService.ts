@@ -17,6 +17,7 @@ import {
   getTaskExecutionMutationBinding,
   getExecutionOwnershipState,
   getExecutionSessionState,
+  getExecutionVerificationBatchLiveOperations,
   getExecutionVerificationBatchState,
   recordExecutionLifecycleTransition,
   recordExecutionSessionEvidence,
@@ -396,10 +397,11 @@ export function preflightHarnessExecutionGuard(_state: AppState, toolNameValue: 
   if (binding) {
     const batchState = getExecutionVerificationBatchState(binding.session.id);
     if (batchState?.status === 'pending') {
+      const liveOperations = getExecutionVerificationBatchLiveOperations(binding.session.id, batchState.batchId);
       const fencedEffect = effects.find((effect) => effect === 'mutation' || effect === 'commit' || effect === 'finalization');
-      if (fencedEffect) {
-        return blockedDecision(toolName, fencedEffect, operationId, policy, binding, 'EXECUTION_VERIFICATION_BATCH_INCOMPLETE', [
-          `Verification batch '${batchState.batchId}' is incomplete; pending checks: ${batchState.pending.join(', ')}.`,
+      if (fencedEffect && liveOperations.length > 0) {
+        return blockedDecision(toolName, fencedEffect, operationId, policy, binding, 'EXECUTION_VERIFICATION_BATCH_LIVE_MEMBERS', [
+          `Verification batch '${batchState.batchId}' still has live durable member operations: ${liveOperations.map((entry) => entry.operationId).join(', ')}.`,
         ]);
       }
       if (effects.includes('verification')) {
@@ -407,11 +409,20 @@ export function preflightHarnessExecutionGuard(_state: AppState, toolNameValue: 
         const requestedId = String(requestedBatch?.id || '').trim();
         const requestedCheckId = String(requestedBatch?.checkId || args?.command || args?.preset || '').trim();
         const requestedChecks = Array.isArray(requestedBatch?.requiredChecks) ? requestedBatch.requiredChecks.map(String) : [];
-        if (requestedId !== batchState.batchId
-          || JSON.stringify(requestedChecks) !== JSON.stringify(batchState.requiredChecks)
-          || !batchState.pending.includes(requestedCheckId)) {
+        const continuation = requestedId === batchState.batchId
+          && JSON.stringify(requestedChecks) === JSON.stringify(batchState.requiredChecks)
+          && batchState.pending.includes(requestedCheckId);
+        const replacement = requestedId !== batchState.batchId
+          && String(requestedBatch?.supersedesBatchId || '').trim() === batchState.batchId
+          && String(requestedBatch?.supersessionReason || '').trim().length >= 10;
+        if (replacement && liveOperations.length > 0) {
+          return blockedDecision(toolName, action, operationId, policy, binding, 'EXECUTION_VERIFICATION_BATCH_LIVE_MEMBERS', [
+            `Verification batch '${batchState.batchId}' cannot be superseded until live member operations terminate or are fenced.`,
+          ]);
+        }
+        if (!continuation && !replacement) {
           return blockedDecision(toolName, action, operationId, policy, binding, 'EXECUTION_VERIFICATION_BATCH_CONTINUATION_REQUIRED', [
-            `Continue pending batch '${batchState.batchId}' with one of: ${batchState.pending.join(', ')}.`,
+            `Continue pending batch '${batchState.batchId}' with one of: ${batchState.pending.join(', ')}, or explicitly supersede it with supersedesBatchId and supersessionReason after live members terminate.`,
           ]);
         }
       }

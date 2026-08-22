@@ -556,7 +556,7 @@ test('verification debt remains observable without gating finalization and can s
   }
 });
 
-test('incomplete sequential verification batch fences mutation but admits the remaining verification member', () => {
+test('pending verification batch without live members is quality debt and admits explicit replacement', () => {
   resetSessionWorkspaceRuntimeForTests();
   const repoRoot = createRepo('sequential-batch-guard-repo');
   const project = { id: 'project-sequential-batch-guard', name: 'Sequential Batch Guard', repoUrl: 'https://example.com/sequential-batch-guard', localPath: repoRoot };
@@ -564,7 +564,7 @@ test('incomplete sequential verification batch fences mutation but admits the re
   const now = new Date().toISOString();
   const task = {
     id: 'task-sequential-batch-guard', displayId: 'DVF-HARNESS-BATCH', title: 'Sequential verification batch guard fixture',
-    description: 'Keep batch continuation admissible while mutation and commit stay fenced.', projectId: project.id,
+    description: 'Treat abandoned pending batch metadata as quality debt while live durable members remain the concurrency fence.', projectId: project.id,
     status: 'todo', priority: 'high', category: 'backend', tags: [], targetFiles: ['value.txt'],
     checklist: [], logs: [], bugs: [], images: [], createdAt: now, updatedAt: now,
   } as any;
@@ -596,25 +596,42 @@ test('incomplete sequential verification batch fences mutation but admits the re
     assert.equal(first.state.status, 'pending');
     assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'implementing');
 
+    assert.deepEqual(executionSessions.getExecutionVerificationBatchLiveOperations(binding.session.id, 'guard-batch-1'), []);
     const mutation = preflightHarnessExecutionGuard(state, 'write_local_file', { workspaceId, filePath: 'value.txt' });
-    assert.equal(mutation.allowed, false);
-    assert.equal(mutation.reasonCode, 'EXECUTION_VERIFICATION_BATCH_INCOMPLETE');
+    assert.equal(mutation.allowed, true);
 
-    const continuation = preflightHarnessExecutionGuard(state, 'run_project_command', {
+    const unrelatedVerification = preflightHarnessExecutionGuard(state, 'run_project_command', {
       workspaceId,
       command: 'typecheck',
-      verificationBatch: { id: 'guard-batch-1', requiredChecks, checkId: 'typecheck' },
+      verificationBatch: { id: 'guard-batch-2', requiredChecks: ['typecheck'], checkId: 'typecheck' },
     });
-    assert.equal(continuation.allowed, true);
-    assert.equal(continuation.action, 'verification');
+    assert.equal(unrelatedVerification.allowed, false);
+    assert.equal(unrelatedVerification.reasonCode, 'EXECUTION_VERIFICATION_BATCH_CONTINUATION_REQUIRED');
+
+    const supersessionReason = 'Replace an abandoned pending batch after confirming that no durable member operation is still live.';
+    const replacement = preflightHarnessExecutionGuard(state, 'run_project_command', {
+      workspaceId,
+      command: 'typecheck',
+      verificationBatch: {
+        id: 'guard-batch-2', requiredChecks: ['typecheck'], checkId: 'typecheck',
+        supersedesBatchId: 'guard-batch-1', supersessionReason,
+      },
+    });
+    assert.equal(replacement.allowed, true);
+    assert.equal(replacement.action, 'verification');
 
     const second = executionSessions.recordExecutionVerificationBatchResult(binding.session.id, {
       repoRoot: binding.workspace.root,
-      batchId: 'guard-batch-1', requiredChecks, checkId: 'typecheck', status: 'passed', captured,
+      batchId: 'guard-batch-2', requiredChecks: ['typecheck'], checkId: 'typecheck', status: 'passed', captured,
       memberCandidate: { candidateId: 'vc-guard-typecheck', repoRevision: captured.repoRevision, executionKey: 'cmd-guard-typecheck' },
+      supersedesBatchId: 'guard-batch-1', supersessionReason,
     });
     assert.equal(second.authoritative, true);
-    recordHarnessExecutionOutcome(continuation, { ok: true, status: 'succeeded', exitCode: 0 });
+    const superseded = executionSessions.getExecutionVerificationBatchStateById(binding.session.id, 'guard-batch-1');
+    assert.equal(superseded?.status, 'superseded');
+    assert.equal(superseded?.supersededByBatchId, 'guard-batch-2');
+    assert.equal(superseded?.supersessionReason, supersessionReason);
+    recordHarnessExecutionOutcome(replacement, { ok: true, status: 'succeeded', exitCode: 0 });
     assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'verifying');
   } finally {
     const workspace = executionSessions.getTaskExecutionMutationBinding({ workspaceId })?.workspace;

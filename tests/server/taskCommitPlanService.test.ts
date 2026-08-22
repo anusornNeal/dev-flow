@@ -359,7 +359,7 @@ test('no owned changes and inactive sessions remain independent commit blockers'
   assert.ok(inactivePlan.blockers.some((entry: any) => entry.code === 'EXECUTION_SESSION_NOT_ACTIVE'));
 });
 
-test('sequential verification batch blocks commit until every declared check passes on one frozen ownership revision', () => {
+test('sequential verification batch remains quality debt without live members until every declared check passes', () => {
   const { workspace, taskId, session } = createFixture('sequential-batch');
   fs.writeFileSync(path.join(workspace.root, 'src', 'owned.ts'), 'export const owned = 30;\n');
   execution.recordExecutionOwnedChanges(session.id, ['src/owned.ts'], { repoRoot: workspace.root, source: 'task-edit' });
@@ -380,9 +380,10 @@ test('sequential verification batch blocks commit until every declared check pas
   assert.deepEqual(first.state.pending, ['typecheck']);
 
   let plan = commitPlan.buildTaskCommitPlan({ countersCache: {} }, { taskId, workspaceId: workspace.workspaceId });
-  assert.equal(plan.commitAllowed, false);
+  assert.equal(plan.commitAllowed, true);
   assert.notEqual(plan.verificationFresh, true);
-  assert.ok(plan.blockers.some((entry: any) => entry.code === 'EXECUTION_VERIFICATION_BATCH_INCOMPLETE'));
+  assert.equal(plan.blockers.some((entry: any) => entry.code === 'EXECUTION_VERIFICATION_BATCH_LIVE_MEMBERS'), false);
+  assert.ok(plan.debts.some((entry: any) => entry.code === 'EXECUTION_VERIFICATION_BATCH_PENDING'));
 
   const replay = execution.recordExecutionVerificationBatchResult(session.id, {
     repoRoot: workspace.root,

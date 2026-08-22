@@ -5,6 +5,7 @@ import { listExecutionSessionsForTask } from '../repositories/executionSessionRe
 import { createApiError } from './api.js';
 import {
   getExecutionOwnershipState,
+  getExecutionVerificationBatchLiveOperations,
   getExecutionVerificationBatchState,
   getExecutionVerificationCoverageEvidence,
   recordExecutionSessionEvidence,
@@ -186,6 +187,7 @@ function buildBlockers(input: {
   ownershipDrift: TaskCommitPlan['ownershipDrift'];
   authorityOwnershipActive: boolean;
   verificationBatch: ExecutionVerificationBatchState | null;
+  verificationBatchLiveOperations: Array<{ operationId: string; status: string; jobStatus: string }>;
 }) {
   const blockers: TaskCommitPlanBlocker[] = [];
   if (!input.authorityOwnershipActive) {
@@ -208,11 +210,11 @@ function buildBlockers(input: {
       },
     });
   }
-  if (input.verificationBatch?.status === 'pending') {
+  if (input.verificationBatch?.status === 'pending' && input.verificationBatchLiveOperations.length > 0) {
     blockers.push({
-      code: 'EXECUTION_VERIFICATION_BATCH_INCOMPLETE',
-      message: `Verification batch '${input.verificationBatch.batchId}' still has pending required checks and may still be writing execution evidence.`,
-      details: { batchId: input.verificationBatch.batchId, pending: input.verificationBatch.pending },
+      code: 'EXECUTION_VERIFICATION_BATCH_LIVE_MEMBERS',
+      message: `Verification batch '${input.verificationBatch.batchId}' still has live durable member operations that may write execution evidence.`,
+      details: { batchId: input.verificationBatch.batchId, pending: input.verificationBatch.pending, liveOperations: input.verificationBatchLiveOperations },
     });
   }
   return blockers;
@@ -228,6 +230,19 @@ function buildDebts(input: {
   verificationSatisfied: boolean;
 }) {
   const debts: TaskCommitPlanBlocker[] = [];
+  if (input.verificationBatch?.status === 'pending') {
+    debts.push({
+      code: 'EXECUTION_VERIFICATION_BATCH_PENDING',
+      message: `Verification batch '${input.verificationBatch.batchId}' is incomplete quality state; without live member operations it does not mechanically block commit.`,
+      details: { batchId: input.verificationBatch.batchId, pending: input.verificationBatch.pending },
+    });
+  } else if (input.verificationBatch?.status === 'superseded') {
+    debts.push({
+      code: 'EXECUTION_VERIFICATION_BATCH_SUPERSEDED',
+      message: `Verification batch '${input.verificationBatch.batchId}' was superseded and remains historical audit debt.`,
+      details: { batchId: input.verificationBatch.batchId, supersededByBatchId: input.verificationBatch.supersededByBatchId, supersessionReason: input.verificationBatch.supersessionReason },
+    });
+  }
   if (input.verificationBatch?.status === 'failed') {
     debts.push({
       code: 'EXECUTION_VERIFICATION_BATCH_FAILED',
@@ -308,12 +323,16 @@ export function buildTaskCommitPlan(_state: AppState, args: Record<string, any>)
       : resolveVerificationState(ownership.verificationFresh);
   const verificationRecordedAt = ownership.verificationRecordedAt || null;
   const verificationBatch = getExecutionVerificationBatchState(session.id);
+  const verificationBatchLiveOperations = verificationBatch?.status === 'pending'
+    ? getExecutionVerificationBatchLiveOperations(session.id, verificationBatch.batchId)
+    : [];
   const blockers = buildBlockers({
     authorityOwnershipActive: authority.mutation.ownershipAuthorized,
     sessionStatus: session.status,
     ownedChangedFiles: ownership.ownedChanges,
     ownershipDrift: ownership.ownershipDrift,
     verificationBatch,
+    verificationBatchLiveOperations,
   });
   const debts = buildDebts({
     ownershipDrift: ownership.ownershipDrift,

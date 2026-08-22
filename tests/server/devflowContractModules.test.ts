@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { workspaceFinalizationHttpStatus } from '../../src/server/routes/devflow.js';
-import { devFlowToolDefinitions } from '../../src/server/contracts/devflowContract.js';
+import { CLOSURE_CRITICAL_RECOVERY_CAPABILITIES, devFlowToolDefinitions, getCapabilityCatalog, getMcpToolList, getToolDefinitionByName, isToolAllowedInProfile } from '../../src/server/contracts/devflowContract.js';
 import { taskToolDefinitions } from '../../src/server/contracts/devflowTaskTools.js';
 import { gitToolDefinitions } from '../../src/server/contracts/devflowGitTools.js';
 import { workspaceToolDefinitions } from '../../src/server/contracts/devflowWorkspaceTools.js';
@@ -129,6 +129,50 @@ test('break-glass lifecycle is exposed as one coherent audited mutation plus bou
   const routeSource = fs.readFileSync('src/server/routes/devflow.ts', 'utf8');
   assert.match(routeSource, /\/api\/lifecycle\/break-glass/);
   assert.match(routeSource, /\/api\/lifecycle\/orphan-executions\/cleanup/);
+});
+
+test('closure-critical recovery capabilities are callable end-to-end in the coding profile', () => {
+  const routeSource = fs.readFileSync('src/server/routes/devflow.ts', 'utf8');
+  const codingNames = new Set(getMcpToolList('coding').map((entry: any) => entry.name));
+  assert.deepEqual(CLOSURE_CRITICAL_RECOVERY_CAPABILITIES.map((entry) => entry.id), [
+    'recovery-handoff',
+    'orphan-cleanup',
+    'task-commit-plan',
+    'owned-revision-reconciliation',
+    'task-owned-commit',
+    'verification-batch-supersession',
+    'task-finalization',
+    'audited-break-glass',
+  ]);
+
+  for (const capability of CLOSURE_CRITICAL_RECOVERY_CAPABILITIES) {
+    const definition = getToolDefinitionByName(capability.toolName);
+    assert.ok(definition, `${capability.toolName} must have a contract definition`);
+    assert.equal(isToolAllowedInProfile(capability.toolName, 'coding'), true, `${capability.toolName} must be allowed in coding profile`);
+    assert.equal(codingNames.has(capability.toolName), true, `${capability.toolName} must be advertised in coding MCP surface`);
+    assert.match(routeSource, new RegExp(capability.route.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')));
+    assert.ok(definition?.inputSchema, `${capability.toolName} must expose an exact input schema`);
+    if ('requiredInputPaths' in capability) {
+      assert.deepEqual(capability.requiredInputPaths, ['verificationBatch.supersedesBatchId', 'verificationBatch.supersessionReason']);
+      const batch = (definition?.inputSchema as any)?.properties?.verificationBatch;
+      assert.equal(batch?.properties?.supersedesBatchId?.type, 'string');
+      assert.equal(batch?.properties?.supersessionReason?.type, 'string');
+      assert.equal(batch?.additionalProperties, false);
+    }
+  }
+});
+
+test('capability catalog reports closure recovery readiness from the active advertised tool surface', () => {
+  const catalog = getCapabilityCatalog() as any;
+  const activeNames = new Set(getMcpToolList(catalog.mcpProfile.active).map((entry: any) => entry.name));
+  assert.equal(catalog.recovery?.ready, true);
+  assert.deepEqual(catalog.recovery?.missingCapabilityIds, []);
+  assert.equal(catalog.recovery?.toolSurfaceIdentity, catalog.mcpProfile.toolSurfaceIdentity);
+  for (const capability of CLOSURE_CRITICAL_RECOVERY_CAPABILITIES) {
+    const state = catalog.recovery?.capabilities?.find((entry: any) => entry.id === capability.id);
+    assert.equal(state?.advertised, activeNames.has(capability.toolName));
+    assert.equal(state?.callable, true, `${capability.id} must be callable on active surface`);
+  }
 });
 
 test('task-domain aliases remain available through focused definitions', () => {

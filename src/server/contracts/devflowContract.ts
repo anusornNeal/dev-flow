@@ -20,7 +20,7 @@ import { uiPreviewToolDefinitions } from './devflowUiPreviewTools';
 import { buildMcpTransportInputSchema } from './mcpSchemaTransport';
 import { resolveRuntimeMcpToolProfileValue } from './mcpToolProfileConfig';
 export type { DevFlowToolDefinition, DevFlowToolHttpRequest } from './devflowContractCore';
-export const DEVFLOW_CONTRACT_VERSION = '2026-08-22.1';
+export const DEVFLOW_CONTRACT_VERSION = '2026-08-22.2';
 
 export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   {
@@ -1631,6 +1631,17 @@ export function getToolSchema(name: string) {
   };
 }
 
+export const CLOSURE_CRITICAL_RECOVERY_CAPABILITIES = Object.freeze([
+  { id: 'recovery-handoff', toolName: 'get_recovery_handoff', route: '/api/recovery/handoff' },
+  { id: 'orphan-cleanup', toolName: 'cleanup_orphan_executions', route: '/api/lifecycle/orphan-executions/cleanup' },
+  { id: 'task-commit-plan', toolName: 'plan_task_commit', route: '/api/git/task-commit/plan' },
+  { id: 'owned-revision-reconciliation', toolName: 'reconcile_task_owned_revision_drift', route: '/api/git/task-commit/reconcile-owned-revisions' },
+  { id: 'task-owned-commit', toolName: 'commit_task_owned_changes', route: '/api/git/task-commit/commit' },
+  { id: 'verification-batch-supersession', toolName: 'run_project_command', route: '/api/project-commands/run', requiredInputPaths: ['verificationBatch.supersedesBatchId', 'verificationBatch.supersessionReason'] },
+  { id: 'task-finalization', toolName: 'finalize_task_workspace', route: '/api/workspaces/finalize-task' },
+  { id: 'audited-break-glass', toolName: 'break_glass_lifecycle', route: '/api/lifecycle/break-glass' },
+] as const);
+
 export type DevFlowToolProfile = 'full' | 'coding' | 'authoring' | 'review' | 'atlas' | 'diagnostics';
 
 export const DEVFLOW_TOOL_PROFILES: DevFlowToolProfile[] = ['full', 'coding', 'authoring', 'review', 'atlas', 'diagnostics'];
@@ -1658,7 +1669,8 @@ const CODING_PROFILE_TOOLS = new Set([
   'run_project_command',
   'get_git_status', 'get_git_diff', 'get_git_log', 'get_git_show', 'get_git_branch', 'get_git_sync_status',
   'ensure_git_branch', 'commit_git_changes', 'push_git_branch', 'create_pull_request',
-  'prepare_session_workspace', 'integrate_workspace', 'get_tool_job_result', 'cancel_tool_job', 'get_recovery_handoff',
+  'plan_task_commit', 'reconcile_task_owned_revision_drift', 'commit_task_owned_changes',
+  'prepare_session_workspace', 'integrate_workspace', 'finalize_task_workspace', 'get_tool_job_result', 'cancel_tool_job', 'get_recovery_handoff',
   'break_glass_lifecycle', 'get_break_glass_operations', 'cleanup_orphan_executions',
 ]);
 
@@ -1844,6 +1856,48 @@ export function getMcpToolSurfaceIdentity(tools: readonly any[]) {
   return createHash('sha256').update(stableToolSurfaceJson(surface), 'utf8').digest('hex');
 }
 
+function inputSchemaHasPath(schema: any, pathValue: string) {
+  let current = schema;
+  for (const segment of pathValue.split('.')) {
+    current = current?.properties?.[segment];
+    if (!current) return false;
+  }
+  return true;
+}
+
+export function getClosureCriticalRecoveryCapabilityStatus(profile: DevFlowToolProfile) {
+  const advertisedTools = getMcpToolList(profile);
+  const advertisedNames = new Set(advertisedTools.map((tool: any) => String(tool.name || '')));
+  const capabilities = CLOSURE_CRITICAL_RECOVERY_CAPABILITIES.map((capability) => {
+    const definition = getToolDefinitionByName(capability.toolName);
+    const defined = Boolean(definition);
+    const allowed = defined && isToolAllowedInProfile(capability.toolName, profile);
+    const advertised = advertisedNames.has(capability.toolName);
+    const requiredInputPaths = 'requiredInputPaths' in capability ? [...capability.requiredInputPaths] : [];
+    const schemaReady = Boolean(definition?.inputSchema)
+      && requiredInputPaths.every((schemaPath) => inputSchemaHasPath(definition?.inputSchema, schemaPath));
+    return {
+      id: capability.id,
+      toolName: capability.toolName,
+      route: capability.route,
+      requiredInputPaths,
+      defined,
+      allowed,
+      advertised,
+      schemaReady,
+      callable: defined && allowed && advertised && schemaReady,
+    };
+  });
+  const missingCapabilityIds = capabilities.filter((entry) => !entry.callable).map((entry) => entry.id);
+  return deepFreezeJsonValue({
+    profile,
+    ready: missingCapabilityIds.length === 0,
+    toolSurfaceIdentity: getMcpToolSurfaceIdentity(advertisedTools),
+    missingCapabilityIds,
+    capabilities,
+  });
+}
+
 export function getToolProfileSummary() {
   if (toolProfileSummaryCache) return toolProfileSummaryCache;
   toolProfileSummaryCache = deepFreezeJsonValue(Object.fromEntries(DEVFLOW_TOOL_PROFILES.map((profile) => {
@@ -1858,13 +1912,15 @@ export function getToolProfileSummary() {
 
 export function getCapabilityCatalog() {
   const profileResolution = resolveDevFlowToolProfile();
-  const cacheKey = `${profileResolution.profile}|${profileResolution.configured ?? ''}|${profileResolution.fallback ? '1' : '0'}`;
+  const activeTools = getMcpToolList(profileResolution.profile);
+  const activeToolSurfaceIdentity = getMcpToolSurfaceIdentity(activeTools);
+  const cacheKey = `${DEVFLOW_CONTRACT_VERSION}|${profileResolution.profile}|${profileResolution.configured ?? ''}|${profileResolution.fallback ? '1' : '0'}|${activeToolSurfaceIdentity}`;
   const cached = capabilityCatalogCache.get(cacheKey);
   if (cached) return cached;
 
   const toolNames = new Set(devFlowToolDefinitions.map((tool) => tool.name));
   const activeProfileSummary = getToolProfileSummary()[profileResolution.profile];
-  const activeToolSurfaceIdentity = getMcpToolSurfaceIdentity(getMcpToolList(profileResolution.profile));
+  const recovery = getClosureCriticalRecoveryCapabilityStatus(profileResolution.profile);
   const hasTool = (name: string) => toolNames.has(name);
   const matrix = {
     git: {
@@ -1932,10 +1988,11 @@ export function getCapabilityCatalog() {
     },
     matrix,
     workflow: {
-      ready: missingSteps.length === 0,
+      ready: missingSteps.length === 0 && recovery.ready,
       steps,
       missingSteps,
     },
+    recovery,
     tools: getCapabilityToolCatalog(),
   });
   capabilityCatalogCache.set(cacheKey, catalog);

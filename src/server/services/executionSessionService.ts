@@ -124,6 +124,12 @@ export interface RecordExecutionOwnedChangesOptions {
   metadataByPath?: Record<string, Record<string, unknown>>;
 }
 
+export type ExecutionOwnedRevisionReconciliationFile = {
+  path: string;
+  expectedKnownRevision: string;
+  expectedCurrentRevision: string;
+};
+
 export interface ExecutionVerificationProvenance {
   policy: 'checks-passed' | 'no-checks-required' | 'operator-break-glass';
   expectedRepoRevision?: string;
@@ -1034,6 +1040,244 @@ export function adoptTaskExecutionOwnedChanges(args: Record<string, any>) {
     return adoptExecutionOwnedChanges(binding.session.id, files, {
       repoRoot: binding.workspace.root,
       reason: String(args.reason || ''),
+    });
+  } catch (error: any) {
+    if (error?.code) {
+      throw taskMutationError(409, String(error.code), error instanceof Error ? error.message : String(error), error?.details);
+    }
+    throw error;
+  }
+}
+
+function ownedRevisionReconciliationId(
+  sessionId: string,
+  files: ExecutionOwnedRevisionReconciliationFile[],
+  reason: string,
+  provenance: string,
+) {
+  const digest = crypto.createHash('sha256')
+    .update(sessionId)
+    .update('|owned-revision-reconciliation|')
+    .update(JSON.stringify(files))
+    .update('|')
+    .update(reason)
+    .update('|')
+    .update(provenance)
+    .digest('hex')
+    .slice(0, 24);
+  return `owned-revision-reconciliation-${digest}`;
+}
+
+function invalidateExecutionVerificationAuthorityForOwnedRevisionReconciliation(
+  id: string,
+  reconciliationId: string,
+  nowIso: string,
+) {
+  for (const entry of listExecutionSessionEvidence(id)) {
+    if (entry.kind !== 'verification-binding' || readStringMetadata(entry.metadata || {}, 'invalidatedAt')) continue;
+    saveExecutionSessionEvidence({
+      id: entry.id,
+      sessionId: entry.sessionId,
+      kind: entry.kind,
+      path: entry.path,
+      repoRevision: entry.repoRevision,
+      fileRevision: entry.fileRevision,
+      revisionIdentity: entry.revisionIdentity,
+      contextHandle: entry.contextHandle,
+      stale: true,
+      metadata: {
+        ...(entry.metadata || {}),
+        invalidatedAt: nowIso,
+        invalidationReason: 'owned-revision-reconciled',
+        invalidatedByReconciliationId: reconciliationId,
+        authoritative: false,
+      },
+      createdAt: entry.createdAt,
+      updatedAt: nowIso,
+    });
+  }
+
+  const batch = getExecutionVerificationBatchState(id);
+  if (batch && (batch.status === 'pending' || batch.status === 'complete')) {
+    const staleResults = Object.fromEntries(
+      batch.requiredChecks.map((checkId) => [checkId, 'stale' as VerificationBatchResultStatus]),
+    );
+    const staleState = buildExecutionVerificationBatchState({
+      batchId: batch.batchId,
+      ownershipEpochId: batch.ownershipEpochId,
+      repoRevision: batch.repoRevision,
+      ownedFingerprint: batch.ownedFingerprint,
+      requiredChecks: batch.requiredChecks,
+      createdAt: batch.createdAt,
+    }, staleResults, batch.memberCandidates, nowIso);
+    persistExecutionVerificationBatchState(id, staleState);
+  }
+}
+
+export function reconcileExecutionOwnedRevisionDrift(
+  id: string,
+  files: ExecutionOwnedRevisionReconciliationFile[],
+  options: { repoRoot: string; reason: string; provenance: string; now?: Date },
+) {
+  const session = requireSession(id);
+  assertActive(session);
+  const root = requireRepoRoot(options.repoRoot);
+  const reason = String(options.reason || '').trim();
+  const provenance = String(options.provenance || '').trim();
+  if (reason.length < 10 || reason.length > 500) {
+    throw executionSessionError('EXECUTION_RECONCILIATION_REASON_REQUIRED', 'Owned revision reconciliation requires an audit reason between 10 and 500 characters.');
+  }
+  if (provenance.length < 3 || provenance.length > 240) {
+    throw executionSessionError('EXECUTION_RECONCILIATION_PROVENANCE_REQUIRED', 'Owned revision reconciliation requires bounded provenance between 3 and 240 characters.');
+  }
+  if (!Array.isArray(files) || files.length === 0 || files.length > 100) {
+    throw executionSessionError('EXECUTION_RECONCILIATION_FILES_REQUIRED', 'Owned revision reconciliation requires 1-100 explicit revision-guarded files.');
+  }
+
+  const normalized = files.map((entry) => {
+    const ownedPath = normalizeEvidencePath(entry?.path);
+    if (!ownedPath) {
+      throw executionSessionError('EXECUTION_RECONCILIATION_PATH_REQUIRED', 'Owned revision reconciliation requires an explicit repository-relative path.');
+    }
+    const expectedKnownRevision = String(entry?.expectedKnownRevision || '').trim();
+    const expectedCurrentRevision = String(entry?.expectedCurrentRevision || '').trim();
+    if (!expectedKnownRevision || !expectedCurrentRevision) {
+      throw executionSessionError('EXECUTION_RECONCILIATION_REVISION_REQUIRED', `Owned revision reconciliation requires prior/current revision guards for '${ownedPath}'.`);
+    }
+    return { path: ownedPath, expectedKnownRevision, expectedCurrentRevision };
+  }).sort((left, right) => left.path.localeCompare(right.path));
+  if (new Set(normalized.map((entry) => entry.path)).size !== normalized.length) {
+    throw executionSessionError('EXECUTION_RECONCILIATION_DUPLICATE_PATH', 'Owned revision reconciliation paths must be unique.');
+  }
+
+  const ownership = getExecutionOwnershipState(id, { repoRoot: root });
+  const ownedStateByPath = new Map(ownership.ownedFiles.map((entry) => [entry.path, entry] as const));
+  const ownedEvidenceByPath = new Map(
+    listExecutionSessionEvidence(id)
+      .filter((entry) => entry.kind === 'owned-change' && entry.path)
+      .map((entry) => [entry.path!, entry] as const),
+  );
+  const reconciliationId = ownedRevisionReconciliationId(id, normalized, reason, provenance);
+  const replayFlags = normalized.map((entry) => {
+    const evidence = ownedEvidenceByPath.get(entry.path);
+    const state = ownedStateByPath.get(entry.path);
+    if (!evidence || !state) return false;
+    return readStringMetadata(evidence.metadata || {}, 'ownedRevisionReconciliationId') === reconciliationId
+      && state.knownFileRevision === entry.expectedCurrentRevision
+      && currentOwnedFileRevision(root, entry.path) === entry.expectedCurrentRevision;
+  });
+  if (replayFlags.every(Boolean)) {
+    return {
+      sessionId: id,
+      reconciliationId,
+      reconciledPaths: normalized.map((entry) => entry.path),
+      reason,
+      provenance,
+      idempotent: true,
+      ownership: getExecutionOwnershipState(id, { repoRoot: root }),
+    };
+  }
+  if (replayFlags.some(Boolean)) {
+    throw executionSessionError('EXECUTION_RECONCILIATION_PARTIAL_REPLAY', 'Owned revision reconciliation request is only partially replayed and cannot be applied safely.');
+  }
+
+  for (const entry of normalized) {
+    const state = ownedStateByPath.get(entry.path);
+    const evidence = ownedEvidenceByPath.get(entry.path);
+    if (!state || !evidence) {
+      throw executionSessionError('EXECUTION_RECONCILIATION_NOT_OWNED', `Path '${entry.path}' is not owned by the selected execution session.`);
+    }
+    if (state.knownFileRevision !== entry.expectedKnownRevision) {
+      throw executionSessionError('EXECUTION_RECONCILIATION_PRIOR_REVISION_MISMATCH', `Path '${entry.path}' prior owned revision no longer matches reconciliation evidence.`);
+    }
+    const currentRevision = currentOwnedFileRevision(root, entry.path);
+    if (currentRevision !== entry.expectedCurrentRevision) {
+      throw executionSessionError('EXECUTION_RECONCILIATION_CURRENT_REVISION_MISMATCH', `Path '${entry.path}' current revision changed since reconciliation evidence was captured.`);
+    }
+    if (!state.drifted) {
+      throw executionSessionError('EXECUTION_RECONCILIATION_NOT_DRIFTED', `Path '${entry.path}' is already aligned with its known owned revision.`);
+    }
+  }
+
+  const nowIso = (options.now || new Date()).toISOString();
+  const repo = getRepoRevisionForRoot(root);
+  withDbTransaction(() => {
+    for (const entry of normalized) {
+      const currentRevision = currentOwnedFileRevision(root, entry.path);
+      if (currentRevision !== entry.expectedCurrentRevision) {
+        throw executionSessionError('EXECUTION_RECONCILIATION_CURRENT_REVISION_MISMATCH', `Path '${entry.path}' changed while reconciliation was being applied.`);
+      }
+    }
+    for (const entry of normalized) {
+      const prior = ownedEvidenceByPath.get(entry.path)!;
+      const priorMetadata = prior.metadata || {};
+      saveExecutionSessionEvidence({
+        id: prior.id,
+        sessionId: id,
+        kind: 'owned-change',
+        path: entry.path,
+        repoRevision: repo.token,
+        fileRevision: entry.expectedCurrentRevision,
+        revisionIdentity: buildRepoEvidenceIdentity({ repoRevision: repo.token, filePath: entry.path, fileRevision: entry.expectedCurrentRevision }),
+        contextHandle: session.contextHandle,
+        stale: false,
+        metadata: {
+          ...priorMetadata,
+          executionSource: 'owned-revision-reconciliation',
+          knownFileRevision: entry.expectedCurrentRevision,
+          observedAt: nowIso,
+          ownedRevisionReconciliationId: reconciliationId,
+          reconciliationExpectedKnownRevision: entry.expectedKnownRevision,
+          reconciliationExpectedCurrentRevision: entry.expectedCurrentRevision,
+          reconciliationReason: reason,
+          reconciliationProvenance: provenance,
+          reconciledAt: nowIso,
+        },
+        createdAt: prior.createdAt,
+        updatedAt: nowIso,
+      });
+    }
+    updateExecutionSessionRecord(id, { repoRevision: repo.token, updatedAt: nowIso });
+    invalidateExecutionVerificationAuthorityForOwnedRevisionReconciliation(id, reconciliationId, nowIso);
+  });
+
+  return {
+    sessionId: id,
+    reconciliationId,
+    reconciledPaths: normalized.map((entry) => entry.path),
+    reason,
+    provenance,
+    idempotent: false,
+    ownership: getExecutionOwnershipState(id, { repoRoot: root }),
+  };
+}
+
+export function reconcileTaskExecutionOwnedRevisionDrift(args: Record<string, any>) {
+  const binding = getTaskExecutionMutationBinding(args);
+  if (!binding) {
+    throw executionSessionError('EXECUTION_RECONCILIATION_TASK_WORKSPACE_REQUIRED', 'Owned revision reconciliation requires a task-bound managed workspace.');
+  }
+  const requestedTaskId = String(args?.taskId || '').trim();
+  if (!requestedTaskId) {
+    throw executionSessionError('EXECUTION_RECONCILIATION_TASK_REQUIRED', 'Owned revision reconciliation requires the exact owning task id.');
+  }
+  if (requestedTaskId !== binding.task.id && requestedTaskId !== binding.task.displayId) {
+    throw executionSessionError('EXECUTION_RECONCILIATION_TASK_MISMATCH', 'Requested task does not own the selected execution workspace.');
+  }
+  const requestedExecutionSessionId = String(args?.executionSessionId || '').trim();
+  if (!requestedExecutionSessionId) {
+    throw executionSessionError('EXECUTION_RECONCILIATION_EXECUTION_REQUIRED', 'Owned revision reconciliation requires the exact active executionSessionId.');
+  }
+  if (requestedExecutionSessionId !== binding.session.id) {
+    throw executionSessionError('EXECUTION_RECONCILIATION_EXECUTION_MISMATCH', 'Requested execution session does not own the selected task workspace.');
+  }
+  const files = Array.isArray(args.files) ? args.files : [];
+  authorizeTaskExecutionMutationPaths(args, files.map((entry: any) => entry?.path));
+  try {
+    return reconcileExecutionOwnedRevisionDrift(binding.session.id, files, {
+      repoRoot: binding.workspace.root,
+      reason: String(args.reason || ''),
+      provenance: String(args.provenance || ''),
     });
   } catch (error: any) {
     if (error?.code) {

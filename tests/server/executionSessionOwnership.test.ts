@@ -253,6 +253,69 @@ test('legacy ownership adoption requires explicit dirty paths, revisions, and au
   );
 });
 
+test('owned revision reconciliation is guarded, atomic, audited, and idempotent without legacy adoption', () => {
+  resetRepo();
+  const session = createSession();
+  fs.writeFileSync(path.join(repoRoot, 'src', 'A.ts'), 'export const A = 20;\n', 'utf8');
+  fs.writeFileSync(path.join(repoRoot, 'src', 'B.ts'), 'export const B = 20;\n', 'utf8');
+  sessions.recordExecutionOwnedChanges(session.id, ['src/A.ts', 'src/B.ts'], { repoRoot, source: 'ChatGPT' });
+  const first = sessions.getExecutionOwnershipState(session.id, { repoRoot });
+  const known = new Map(first.ownedFiles.map((entry: any) => [entry.path, entry.knownFileRevision]));
+
+  fs.writeFileSync(path.join(repoRoot, 'src', 'A.ts'), 'export const A = 21;\n', 'utf8');
+  fs.writeFileSync(path.join(repoRoot, 'src', 'B.ts'), 'export const B = 21;\n', 'utf8');
+  const drifted = sessions.getExecutionOwnershipState(session.id, { repoRoot });
+  assert.deepEqual(drifted.ownershipDrift.map((entry: any) => entry.path), ['src/A.ts', 'src/B.ts']);
+  const current = new Map(drifted.ownershipDrift.map((entry: any) => [entry.path, entry.currentFileRevision]));
+
+  assert.throws(
+    () => sessions.adoptExecutionOwnedChanges(session.id, [
+      { path: 'src/A.ts', expectedRevision: current.get('src/A.ts')! },
+    ], { repoRoot, reason: 'Legacy adoption must not impersonate already-owned drift recovery.' }),
+    (error: any) => error?.code === 'EXECUTION_ADOPTION_NOT_UNOWNED_DIRTY',
+  );
+
+  assert.throws(
+    () => sessions.reconcileExecutionOwnedRevisionDrift(session.id, [
+      { path: 'src/A.ts', expectedKnownRevision: known.get('src/A.ts')!, expectedCurrentRevision: current.get('src/A.ts')! },
+      { path: 'src/B.ts', expectedKnownRevision: known.get('src/B.ts')!, expectedCurrentRevision: 'stale-current-revision' },
+    ], { repoRoot, reason: 'Reconcile a missed mutation recorder after exact drift evidence was captured.', provenance: 'executionSessionOwnership atomicity fixture' }),
+    (error: any) => error?.code === 'EXECUTION_RECONCILIATION_CURRENT_REVISION_MISMATCH',
+  );
+  const afterAtomicFailure = sessions.getExecutionOwnershipState(session.id, { repoRoot });
+  assert.deepEqual(afterAtomicFailure.ownershipDrift.map((entry: any) => entry.path), ['src/A.ts', 'src/B.ts']);
+  assert.equal(afterAtomicFailure.ownedFiles.find((entry: any) => entry.path === 'src/A.ts')?.knownFileRevision, known.get('src/A.ts'));
+
+  assert.throws(
+    () => sessions.reconcileExecutionOwnedRevisionDrift(session.id, [
+      { path: 'src/A.ts', expectedKnownRevision: 'stale-known-revision', expectedCurrentRevision: current.get('src/A.ts')! },
+    ], { repoRoot, reason: 'Reject stale prior ownership evidence before any reconciliation write occurs.', provenance: 'executionSessionOwnership stale guard fixture' }),
+    (error: any) => error?.code === 'EXECUTION_RECONCILIATION_PRIOR_REVISION_MISMATCH',
+  );
+
+  const input = [
+    { path: 'src/B.ts', expectedKnownRevision: known.get('src/B.ts')!, expectedCurrentRevision: current.get('src/B.ts')! },
+    { path: 'src/A.ts', expectedKnownRevision: known.get('src/A.ts')!, expectedCurrentRevision: current.get('src/A.ts')! },
+  ];
+  const reconciled = sessions.reconcileExecutionOwnedRevisionDrift(session.id, input, {
+    repoRoot,
+    reason: 'Reconcile a missed mutation recorder after exact drift evidence was captured.',
+    provenance: 'executionSessionOwnership successful recovery fixture',
+  });
+  assert.equal(reconciled.idempotent, false);
+  assert.deepEqual(reconciled.reconciledPaths, ['src/A.ts', 'src/B.ts']);
+  assert.deepEqual(reconciled.ownership.ownershipDrift, []);
+  assert.equal(reconciled.ownership.ownedFiles.every((entry: any) => entry.source === 'owned-revision-reconciliation'), true);
+
+  const replay = sessions.reconcileExecutionOwnedRevisionDrift(session.id, input, {
+    repoRoot,
+    reason: 'Reconcile a missed mutation recorder after exact drift evidence was captured.',
+    provenance: 'executionSessionOwnership successful recovery fixture',
+  });
+  assert.equal(replay.idempotent, true);
+  assert.equal(replay.reconciliationId, reconciled.reconciliationId);
+});
+
 test('explicit no-check-required verification binds freshness and later owned mutation stales it', () => {
   resetRepo();
   const session = createSession();

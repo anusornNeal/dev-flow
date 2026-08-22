@@ -63,6 +63,36 @@ export const gitToolDefinitions: DevFlowToolDefinition[] = [
     buildHttpRequest: (args) => ({ method: 'GET', path: withQuery('/api/git/task-commit/plan', args) }),
   },
   {
+    name: 'reconcile_task_owned_revision_drift',
+    description: 'Audited task-scoped recovery for already-owned files whose current revision drifted from the last known owned revision. Requires exact task/workspace/execution authority, prior/current revision guards, and bounded audit provenance; successful reconciliation invalidates prior verification authority.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...projectIdentifierProperties,
+        taskId: { type: 'string', description: 'Exact DevFlow task id/displayId that owns the selected workspace.' },
+        executionSessionId: { type: 'string', description: 'Exact active execution session id that owns the selected task workspace.' },
+        files: {
+          type: 'array', minItems: 1, maxItems: 100,
+          items: {
+            type: 'object',
+            properties: {
+              path: { type: 'string', description: 'Repository-relative path already owned by this execution.' },
+              expectedKnownRevision: { type: 'string', description: 'Exact prior owned revision reported by commit-plan ownership drift.' },
+              expectedCurrentRevision: { type: 'string', description: 'Exact current revision reported by commit-plan ownership drift.' },
+            },
+            required: ['path', 'expectedKnownRevision', 'expectedCurrentRevision'],
+          },
+          description: 'Explicit already-owned drift entries to reconcile atomically.',
+        },
+        reason: { type: 'string', description: 'Bounded audit reason explaining why the owned revision changed outside normal mutation recording.' },
+        provenance: { type: 'string', description: 'Bounded provenance for the recovery evidence, such as the missed mutation/tool path or operator source.' },
+      },
+      required: ['taskId', 'workspaceId', 'executionSessionId', 'files', 'reason', 'provenance'],
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: (args) => ({ method: 'POST', path: '/api/git/task-commit/reconcile-owned-revisions', body: args }),
+  },
+  {
     name: 'commit_task_owned_changes', executionPolicy: { mode: 'job', jobKind: 'repo-command' }, description: 'Commit only files owned by the selected task execution session when hard ownership, concurrency, path, and Git safety checks pass. Missing, failed, or stale verification remains truthful non-blocking debt and is preserved automatically.',
     inputSchema: { type: 'object', properties: { ...projectIdentifierProperties, taskId: { type: 'string', description: 'DevFlow task id/displayId whose execution ownership defines commit scope.' }, message: { type: 'string', description: 'Conventional commit input such as fix(scope): description. DevFlow normalizes it through the task/project commit policy and adds the authoritative task/ticket prefix by default.' }, dryRun: { type: 'boolean', description: 'Preview the scoped commit without creating it.' } }, required: ['taskId', 'workspaceId', 'message'] },
     outputSchema: { type: 'object' },

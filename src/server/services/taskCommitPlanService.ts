@@ -200,8 +200,12 @@ function buildBlockers(input: {
   if (input.ownershipDrift.length > 0) {
     blockers.push({
       code: 'EXECUTION_OWNERSHIP_DRIFT',
-      message: `${input.ownershipDrift.length} owned file(s) changed outside the last known execution revision and must be explicitly re-adopted before commit.`,
-      details: { files: input.ownershipDrift },
+      message: `${input.ownershipDrift.length} owned file(s) changed outside the last known execution revision and must be explicitly reconciled before commit.`,
+      details: {
+        files: input.ownershipDrift,
+        nextAction: 'reconcile_task_owned_revision_drift',
+        nextTool: 'reconcile_task_owned_revision_drift',
+      },
     });
   }
   if (input.verificationBatch?.status === 'pending') {

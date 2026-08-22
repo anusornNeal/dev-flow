@@ -262,6 +262,84 @@ test('task-level passed verification metadata cannot substitute for execution-bo
   assert.ok(plan.debts.some((entry: any) => entry.code === 'EXECUTION_VERIFICATION_NOT_FRESH'));
 });
 
+test('task-scoped owned revision reconciliation fences authority, stales verification, and unblocks the scoped commit plan', () => {
+  const { workspace, taskId, session } = createFixture('owned-reconciliation');
+  const ownedPath = path.join(workspace.root, 'src', 'owned.ts');
+  fs.writeFileSync(ownedPath, 'export const owned = 50;\n');
+  execution.recordExecutionOwnedChanges(session.id, ['src/owned.ts'], { repoRoot: workspace.root, source: 'task-edit' });
+  const captured = execution.captureExecutionVerificationProvenance(session.id, { repoRoot: workspace.root });
+  const completedBatch = execution.recordExecutionVerificationBatchResult(session.id, {
+    repoRoot: workspace.root,
+    batchId: 'batch-owned-reconciliation',
+    requiredChecks: ['focused'],
+    checkId: 'focused',
+    status: 'passed',
+    captured,
+    memberCandidate: { candidateId: 'vc-owned-reconciliation', repoRevision: captured.repoRevision, executionKey: 'cmd-owned-reconciliation' },
+  });
+  assert.equal(completedBatch.state.status, 'complete');
+  assert.equal(execution.getExecutionOwnershipState(session.id, { repoRoot: workspace.root }).verificationFresh, true);
+
+  fs.writeFileSync(ownedPath, 'export const owned = 51;\n');
+  let plan = commitPlan.buildTaskCommitPlan({ countersCache: {} }, { taskId, workspaceId: workspace.workspaceId });
+  const drift = plan.ownershipDrift[0];
+  assert.ok(drift);
+  const driftBlocker = plan.blockers.find((entry: any) => entry.code === 'EXECUTION_OWNERSHIP_DRIFT');
+  assert.equal((driftBlocker?.details as any)?.nextTool, 'reconcile_task_owned_revision_drift');
+  assert.equal(plan.commitAllowed, false);
+
+  assert.throws(
+    () => execution.reconcileTaskExecutionOwnedRevisionDrift({
+      taskId, workspaceId: 'ws_missing', executionSessionId: session.id,
+      files: [{ path: drift.path, expectedKnownRevision: drift.knownFileRevision, expectedCurrentRevision: drift.currentFileRevision }],
+      reason: 'Reject reconciliation against a workspace that does not own this task execution.', provenance: 'taskCommitPlan wrong workspace fixture',
+    }),
+    (error: any) => error?.payload?.code === 'TASK_MUTATION_WORKSPACE_NOT_FOUND',
+  );
+  assert.throws(
+    () => execution.reconcileTaskExecutionOwnedRevisionDrift({
+      taskId, workspaceId: workspace.workspaceId, executionSessionId: 'exec_foreign',
+      files: [{ path: drift.path, expectedKnownRevision: drift.knownFileRevision, expectedCurrentRevision: drift.currentFileRevision }],
+      reason: 'Reject reconciliation against a foreign execution even in the correct workspace.', provenance: 'taskCommitPlan wrong execution fixture',
+    }),
+    (error: any) => error?.code === 'EXECUTION_RECONCILIATION_EXECUTION_MISMATCH',
+  );
+  fs.writeFileSync(path.join(workspace.root, 'src', 'unrelated.ts'), 'export const unrelated = 51;\n');
+  assert.throws(
+    () => execution.reconcileTaskExecutionOwnedRevisionDrift({
+      taskId, workspaceId: workspace.workspaceId, executionSessionId: session.id,
+      files: [{ path: 'src/unrelated.ts', expectedKnownRevision: 'unknown', expectedCurrentRevision: 'unknown' }],
+      reason: 'Reject paths outside the claimed task scope before ownership can be refreshed.', provenance: 'taskCommitPlan foreign path fixture',
+    }),
+    (error: any) => error?.payload?.code === 'TASK_SCOPE_EXPANSION_REQUIRED',
+  );
+
+  const request = {
+    taskId,
+    workspaceId: workspace.workspaceId,
+    executionSessionId: session.id,
+    files: [{ path: drift.path, expectedKnownRevision: drift.knownFileRevision, expectedCurrentRevision: drift.currentFileRevision }],
+    reason: 'Recover an already-owned file after a missed mutation recorder using exact revision evidence.',
+    provenance: 'taskCommitPlan ownership drift regression fixture',
+  };
+  const reconciled = execution.reconcileTaskExecutionOwnedRevisionDrift(request);
+  assert.equal(reconciled.idempotent, false);
+  assert.deepEqual(reconciled.ownership.ownershipDrift, []);
+  assert.equal(execution.getExecutionVerificationBatchState(session.id)?.status, 'stale');
+  assert.equal(execution.getExecutionOwnershipState(session.id, { repoRoot: workspace.root }).verificationFresh, false);
+
+  plan = commitPlan.buildTaskCommitPlan({ countersCache: {} }, { taskId, workspaceId: workspace.workspaceId });
+  assert.equal(plan.commitAllowed, true);
+  assert.deepEqual(plan.ownershipDrift, []);
+  assert.equal(plan.blockers.some((entry: any) => entry.code === 'EXECUTION_OWNERSHIP_DRIFT'), false);
+  assert.ok(plan.debts.some((entry: any) => entry.code === 'EXECUTION_VERIFICATION_BATCH_STALE'));
+  assert.ok(plan.debts.some((entry: any) => entry.code === 'EXECUTION_VERIFICATION_NOT_FRESH'));
+
+  const replay = execution.reconcileTaskExecutionOwnedRevisionDrift(request);
+  assert.equal(replay.idempotent, true);
+  assert.equal(replay.reconciliationId, reconciled.reconciliationId);
+});
+
 test('no owned changes and inactive sessions remain independent commit blockers', () => {
   const empty = createFixture('no-owned');
   execution.recordExecutionVerificationEvidence(empty.session.id, [{ name: 'focused', status: 'passed' }], { repoRoot: empty.workspace.root });

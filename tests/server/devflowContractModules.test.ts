@@ -17,7 +17,7 @@ const TASK_TOOL_NAMES = [
 
 const GIT_TOOL_NAMES = [
   'get_git_log', 'get_git_diff', 'get_git_show', 'get_git_status', 'get_change_summary', 'get_git_branch',
-  'ensure_git_branch', 'push_git_branch', 'get_git_sync_status', 'create_pull_request', 'plan_task_commit', 'commit_task_owned_changes', 'commit_git_changes',
+  'ensure_git_branch', 'push_git_branch', 'get_git_sync_status', 'create_pull_request', 'plan_task_commit', 'reconcile_task_owned_revision_drift', 'commit_task_owned_changes', 'commit_git_changes',
 ];
 
 test('task-domain contracts are owned by a focused module and composed into the aggregate catalog', () => {
@@ -60,10 +60,19 @@ test('git-domain contracts are owned by a focused module and composed into the a
 
 test('task-aware commit tools expose scoped planning and async commit wiring', () => {
   const plan = gitToolDefinitions.find((tool) => tool.name === 'plan_task_commit');
+  const reconcile = gitToolDefinitions.find((tool) => tool.name === 'reconcile_task_owned_revision_drift');
   const commit = gitToolDefinitions.find((tool) => tool.name === 'commit_task_owned_changes');
   assert.equal(plan?.lightweight, true);
   assert.equal((plan?.inputSchema as any)?.required?.includes('taskId'), true);
   assert.equal((plan?.inputSchema as any)?.required?.includes('workspaceId'), true);
+  assert.equal((reconcile?.inputSchema as any)?.required?.includes('taskId'), true);
+  assert.equal((reconcile?.inputSchema as any)?.required?.includes('workspaceId'), true);
+  assert.equal((reconcile?.inputSchema as any)?.required?.includes('executionSessionId'), true);
+  assert.equal((reconcile?.inputSchema as any)?.required?.includes('files'), true);
+  assert.equal((reconcile?.inputSchema as any)?.required?.includes('reason'), true);
+  assert.equal((reconcile?.inputSchema as any)?.required?.includes('provenance'), true);
+  assert.match(String(reconcile?.description || ''), /already-owned|owned files/i);
+  assert.equal(reconcile?.buildHttpRequest({ taskId: 'DVF-1', workspaceId: 'ws_1', executionSessionId: 'exec_1', files: [], reason: 'audit reason', provenance: 'fixture' }).path, '/api/git/task-commit/reconcile-owned-revisions');
   assert.equal((commit?.executionPolicy as any)?.mode, 'job');
   assert.equal((commit?.inputSchema as any)?.required?.includes('message'), true);
   assert.equal((commit?.inputSchema as any)?.properties?.preserveVerificationDebt, undefined);
@@ -75,6 +84,7 @@ test('task-aware commit tools expose scoped planning and async commit wiring', (
   assert.match(messageDescription, /task|ticket|card/i);
   const routeSource = fs.readFileSync('src/server/routes/devflow.ts', 'utf8');
   assert.match(routeSource, /\/api\/git\/task-commit\/plan/);
+  assert.match(routeSource, /\/api\/git\/task-commit\/reconcile-owned-revisions/);
   assert.match(routeSource, /\/api\/git\/task-commit\/commit/);
 });
 

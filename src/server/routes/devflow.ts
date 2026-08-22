@@ -44,6 +44,7 @@ import {
   captureExecutionVerificationProvenance,
   getTaskExecutionMutationBinding,
   adoptTaskExecutionOwnedChanges,
+  reconcileTaskExecutionOwnedRevisionDrift,
   recordTaskExecutionContextReady,
   recordTaskExecutionMutationPaths,
   recordTaskExecutionVerificationResult,
@@ -730,6 +731,14 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
   app.post('/api/git/task-commit/adopt-owned-changes', (req, res) => {
     try {
       return res.json(adoptTaskExecutionOwnedChanges(req.body as Record<string, any>));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.post('/api/git/task-commit/reconcile-owned-revisions', (req, res) => {
+    try {
+      return res.json(reconcileTaskExecutionOwnedRevisionDrift(req.body as Record<string, any>));
     } catch (error) {
       return sendApiError(res, error);
     }

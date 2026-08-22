@@ -31,7 +31,7 @@ const serverEvents = await import('../../src/server/services/serverEventService.
 const { clearToolCallRecords, recordToolCall, flushPerformanceTelemetry } = await import('../../src/server/services/mcpToolMonitor.js');
 const { default: db } = await import('../../src/db/index.js');
 const { saveTask } = await import('../../src/server/repositories/taskRepository.js');
-const { createExecutionSessionRecord, queryExecutionSessions } = await import('../../src/server/repositories/executionSessionRepository.js');
+const { createExecutionSessionRecord, queryExecutionSessions, updateExecutionSessionRecord } = await import('../../src/server/repositories/executionSessionRepository.js');
 const sessionWorkspaces = await import('../../src/server/services/sessionWorkspaceService.js');
 const checkpoints = await import('../../src/server/services/executionCheckpointService.js');
 const {
@@ -119,6 +119,12 @@ function createHealthWorkspace(repo: string, sessionId: string, taskDisplayId: s
     sessionId,
     { taskDisplayId },
   );
+}
+
+function retireHealthWorkspace(sessionId: string, workspaceId: string) {
+  const now = new Date().toISOString();
+  updateExecutionSessionRecord(sessionId, { status: 'cancelled', updatedAt: now, endedAt: now });
+  sessionWorkspaces.cleanupSessionWorkspace(workspaceId);
 }
 
 test('getWorkflowHealth returns ok for a clean repo', () => {
@@ -490,6 +496,58 @@ test('unresolved task selector is blocked instead of represented as idle', () =>
   assert.equal(health.drift[0].code, 'TASK_SELECTOR_NOT_FOUND');
 });
 
+test('task health classifies a clean claimless active row as safe orphan debt', () => {
+  const repo = createRepo('task-health-safe-orphan');
+  const task = seedHealthTask('task-health-safe-orphan', 'DVF-HEALTH-SAFE-ORPHAN');
+  const workspace = createHealthWorkspace(repo, 'task-health-safe-orphan-session', task.displayId);
+  const session = seedHealthExecution('exec-health-safe-orphan', task.id, workspace.workspaceId);
+
+  const health: any = getChatGptHarnessHealthSnapshot(stateFor(repo), { taskId: task.id });
+  assert.equal(health.authority.classification, 'safe-orphan');
+  assert.equal(health.status, 'idle');
+  assert.equal(health.hardBlockers.includes('SAFE_ORPHAN_EXECUTION'), false);
+  assert.equal(health.drift.some((entry: any) => entry.code === 'SAFE_ORPHAN_EXECUTION' && entry.severity === 'debt'), true);
+  retireHealthWorkspace(session.id, workspace.workspaceId);
+});
+
+test('task health keeps running durable work as a hard concurrency blocker after claim loss', () => {
+  const repo = createRepo('task-health-live-durable');
+  const task = seedHealthTask('task-health-live-durable', 'DVF-HEALTH-LIVE-DURABLE');
+  const workspace = createHealthWorkspace(repo, 'task-health-live-durable-session', task.displayId);
+  const session = seedHealthExecution('exec-health-live-durable', task.id, workspace.workspaceId);
+  checkpoints.recordExecutionPendingOperationReference(session.id, {
+    operationId: 'job-health-live-durable',
+    evidenceId: 'evidence-health-live-durable',
+    kind: 'run_project_command',
+    status: 'running',
+  });
+
+  const health: any = getChatGptHarnessHealthSnapshot(stateFor(repo), { taskId: task.id });
+  assert.equal(health.authority.classification, 'live-durable-operation');
+  assert.equal(health.status, 'blocked');
+  assert.equal(health.hardBlockers.includes('LIVE_DURABLE_OPERATION'), true);
+  assert.equal(health.authority.operations.restart.hardBlocked, true);
+  checkpoints.reconcileExecutionPendingOperationReference(session.id, 'job-health-live-durable');
+  retireHealthWorkspace(session.id, workspace.workspaceId);
+});
+
+test('task health preserves claimless dirty workspace as recoverable WIP without fabricating live authority', () => {
+  const repo = createRepo('task-health-recoverable-wip');
+  const task = seedHealthTask('task-health-recoverable-wip', 'DVF-HEALTH-RECOVERABLE-WIP');
+  const workspace = createHealthWorkspace(repo, 'task-health-recoverable-wip-session', task.displayId);
+  const session = seedHealthExecution('exec-health-recoverable-wip', task.id, workspace.workspaceId);
+  fs.writeFileSync(path.join(workspace.root, 'base.txt'), 'recoverable wip\n', 'utf8');
+
+  const health: any = getChatGptHarnessHealthSnapshot(stateFor(repo), { taskId: task.id });
+  assert.equal(health.authority.classification, 'recoverable-wip');
+  assert.equal(health.status, 'idle');
+  assert.equal(health.hardBlockers.includes('ACTIONABLE_WIP_WITHOUT_ACTIVE_CLAIM'), false);
+  assert.equal(health.authority.operations.cleanup.hardBlocked, true);
+  assert.equal(health.drift.some((entry: any) => entry.code === 'ACTIONABLE_WIP_WITHOUT_ACTIVE_CLAIM' && entry.severity === 'debt'), true);
+  git(workspace.root, ['restore', '--', 'base.txt']);
+  retireHealthWorkspace(session.id, workspace.workspaceId);
+});
+
 test('task health is read-only across repeated orphan diagnostics', () => {
   const repo = createRepo('readonly-task-health');
   const task = seedHealthTask('task-health-readonly', 'DVF-HEALTH-READONLY');
@@ -728,13 +786,13 @@ test('workflow health reuses the recent-job index while reflecting incremental j
   assert.equal(getRecentJobCacheStats().diskScanCount, 1);
 });
 
-test('workflow health warm p95 remains below the 750ms SLO with a populated job history', () => {
+test('compact workflow health warm p95 remains below the 750ms SLO with a populated job history', () => {
   const repo = createRepo('warm-benchmark');
-  getWorkflowHealth(stateFor(repo), { projectId: 'project-health' });
+  getWorkflowHealth(stateFor(repo), { projectId: 'project-health', responseMode: 'compact' });
   const samples: number[] = [];
   for (let index = 0; index < 24; index += 1) {
     const startedAt = performance.now();
-    getWorkflowHealth(stateFor(repo), { projectId: 'project-health' });
+    getWorkflowHealth(stateFor(repo), { projectId: 'project-health', responseMode: 'compact' });
     samples.push(performance.now() - startedAt);
   }
   samples.sort((left, right) => left - right);

@@ -294,15 +294,55 @@ function activeTaskExecutions(task: any) {
   return listExecutionSessionsForTask(task.id).filter((entry) => entry.status === 'active');
 }
 
-function disposeTaskLifecycleForStatusLocked(task: any, targetStatus: TaskStatus, reason: string) {
+function canonicalSafeOrphanSession(
+  task: any,
+  authority: ReturnType<typeof computeLifecycleAuthoritySnapshot>,
+) {
+  if (task.claim || authority.hardBlockers.length > 0 || authority.pending.operationIds.length > 0) return null;
+  const active = activeTaskExecutions(task);
+  if (active.length !== 1) return null;
+  const session = active[0];
+  if (authority.execution.current?.id !== session.id) return null;
+  if (!authority.softDrift.some((entry) => entry.code === 'ORPHAN_ACTIVE_EXECUTION')) return null;
+  return session;
+}
+
+function disposeTaskLifecycleForStatusLocked(
+  task: any,
+  targetStatus: TaskStatus,
+  reason: string,
+  authority: ReturnType<typeof computeLifecycleAuthoritySnapshot>,
+) {
   if (targetStatus === 'in-progress') return { task, disposed: false, executionSessionIds: [] as string[] };
   assertNoUnresolvedTaskOperations(task, `move to '${targetStatus}'`);
   const active = activeTaskExecutions(task);
   if (!task.claim && active.length > 0) {
-    throw createApiError(409, 'TASK_LIFECYCLE_RECONCILIATION_REQUIRED', `Task '${task.displayId || task.id}' has active execution ownership without a claim; lifecycle reconciliation is required before changing status.`, {
-      affectedId: task.id,
-      details: { targetStatus, executionSessionIds: active.map((entry) => entry.id) },
+    const session = canonicalSafeOrphanSession(task, authority);
+    if (!session) {
+      throw createApiError(409, 'TASK_LIFECYCLE_RECONCILIATION_REQUIRED', `Task '${task.displayId || task.id}' has active execution ownership without a claim; lifecycle reconciliation is required before changing status.`, {
+        affectedId: task.id,
+        details: { targetStatus, executionSessionIds: active.map((entry) => entry.id) },
+      });
+    }
+    cancelExecutionSession(session.id);
+    recordExecutionReconciliationEvidence(session.id, 'status-safe-orphan-converged', {
+      targetStatus,
+      workspaceId: session.workspaceId,
+      reason,
     });
+    const now = new Date().toISOString();
+    const disposedTask = {
+      ...task,
+      claim: undefined,
+      updatedAt: now,
+      logs: [...(Array.isArray(task.logs) ? task.logs : []), {
+        id: `log-task-lifecycle-dispose-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`,
+        timestamp: now,
+        message: `Safe orphan execution reconciled before status transition to ${targetStatus}: ${reason}.`,
+        type: 'update',
+      }],
+    };
+    return { task: disposedTask, disposed: true, executionSessionIds: [session.id] };
   }
   if (!task.claim) return { task, disposed: false, executionSessionIds: [] as string[] };
   const claimWorkspaceId = String(task.claim.workspaceId || '').trim();
@@ -355,7 +395,7 @@ export function mutateTaskStatusWithLifecycle(
     return withDbTransaction(() => {
       const current = getTaskByIdentifier(taskId, 'full');
       if (!current) throw createApiError(404, 'TASK_NOT_FOUND', `Task '${taskId}' was not found.`, { affectedId: taskId });
-      const disposition = disposeTaskLifecycleForStatusLocked(current, targetStatus, reason);
+      const disposition = disposeTaskLifecycleForStatusLocked(current, targetStatus, reason, authority);
       const next = buildTask(disposition.task);
       if (!next || String(next.id || '') !== current.id || next.status !== targetStatus) {
         throw createApiError(409, 'TASK_LIFECYCLE_MUTATION_INVALID', 'Lifecycle status mutation must preserve task identity and persist the requested target status.', {
@@ -1050,14 +1090,54 @@ export function releaseTaskClaim(taskId: string, input: ReleaseTaskClaimInput) {
   return withSyncLock(`task-claim:${initial.projectId}`, () => {
     const task = getTaskByIdentifier(taskId, 'full');
     if (!task) throw createApiError(404, 'TASK_NOT_FOUND', `Task '${taskId}' was not found.`, { affectedId: taskId });
-    if (!task.claim) return { task, released: false };
-    const hash = cleanSessionId ? sessionIdHash(cleanSessionId) : '';
-    if (!input.emergency && task.claim.sessionIdHash !== hash) {
-      throw createApiError(403, 'TASK_CLAIM_OWNER_MISMATCH', `Task '${task.displayId || task.id}' is claimed by another session.`, { affectedId: task.id });
-    }
     const nextStatus = (input.nextStatus || 'backlog') as TaskStatus;
     if (!RELEASE_STATUSES.has(nextStatus)) {
       throw createApiError(400, 'TASK_CLAIM_RELEASE_STATUS_INVALID', `Claim release status must be backlog or todo.`, { affectedId: task.id });
+    }
+    if (!task.claim) {
+      const active = activeTaskExecutions(task);
+      if (active.length === 0) return { task, released: false };
+      assertNoUnresolvedTaskOperations(task, 'release claimless lifecycle authority');
+      const authority = computeLifecycleAuthoritySnapshot(task.id);
+      if (authority.hardBlockers.length > 0) {
+        throw createApiError(409, 'TASK_LIFECYCLE_AUTHORITY_CONFLICT', `Task '${task.displayId || task.id}' has ambiguous lifecycle authority and cannot be released automatically.`, {
+          affectedId: task.id,
+          details: { classification: authority.classification, blockers: authority.hardBlockers },
+        });
+      }
+      const session = canonicalSafeOrphanSession(task, authority);
+      if (!session) {
+        throw createApiError(409, 'TASK_LIFECYCLE_RECONCILIATION_REQUIRED', `Task '${task.displayId || task.id}' has claimless execution authority that is not safe to reconcile automatically.`, {
+          affectedId: task.id,
+          details: { executionSessionIds: active.map((entry) => entry.id), targetStatus: nextStatus },
+        });
+      }
+      const now = new Date().toISOString();
+      const updated = {
+        ...task,
+        status: nextStatus,
+        claim: undefined,
+        updatedAt: now,
+        logs: [...(Array.isArray(task.logs) ? task.logs : []), {
+          id: `log-task-claimless-release-${Date.now()}`,
+          timestamp: now,
+          message: `Claimless safe orphan execution reconciled by explicit release; returned to ${nextStatus}.`,
+          type: 'update',
+        }],
+      };
+      withDbTransaction(() => {
+        cancelExecutionSession(session.id);
+        recordExecutionReconciliationEvidence(session.id, 'release-safe-orphan-converged', {
+          workspaceId: session.workspaceId,
+          targetStatus: nextStatus,
+        });
+        saveTask(updated);
+      });
+      return { task: getTaskByIdentifier(task.id, 'full') || updated, released: true };
+    }
+    const hash = cleanSessionId ? sessionIdHash(cleanSessionId) : '';
+    if (!input.emergency && task.claim.sessionIdHash !== hash) {
+      throw createApiError(403, 'TASK_CLAIM_OWNER_MISMATCH', `Task '${task.displayId || task.id}' is claimed by another session.`, { affectedId: task.id });
     }
     const now = new Date().toISOString();
     const ownerLabel = task.claim.ownerLabel;

@@ -712,6 +712,113 @@ test('real durable pending operation blocks normal and emergency release without
   }
 });
 
+test('status mutation auto-converges one claimless safe orphan while preserving dirty workspace bytes', () => {
+  seedTask('task-status-safe-orphan', ['src/StatusSafeOrphan.ts'], undefined, 'DVF-0513');
+  seedTask('task-status-unrelated', ['src/StatusUnrelated.ts'], undefined, 'DVF-0514');
+  const workspace = workspaces.createOrReuseSessionWorkspace(claimProject, 'status-safe-orphan-workspace', { taskDisplayId: 'DVF-0513' } as any);
+  const unrelatedWorkspace = workspaces.createOrReuseSessionWorkspace(claimProject, 'status-unrelated-workspace', { taskDisplayId: 'DVF-0514' } as any);
+  const wipPath = path.join(workspace.root, 'src', 'StatusSafeOrphan.ts');
+  fs.mkdirSync(path.dirname(wipPath), { recursive: true });
+  fs.writeFileSync(wipPath, 'export const preservedStatusWip = 1;\n', 'utf8');
+  const orphan = execution.createExecutionSession({
+    projectId: claimProject.id,
+    taskId: 'task-status-safe-orphan',
+    workspaceId: workspace.workspaceId,
+    repoRoot: workspace.root,
+    branch: workspace.branch,
+  });
+  const unrelated = execution.createExecutionSession({
+    projectId: claimProject.id,
+    taskId: 'task-status-unrelated',
+    workspaceId: unrelatedWorkspace.workspaceId,
+    repoRoot: unrelatedWorkspace.root,
+    branch: unrelatedWorkspace.branch,
+  });
+
+  const result = claims.mutateTaskStatusWithLifecycle(
+    'task-status-safe-orphan',
+    'done',
+    (task: any) => ({ ...task, status: 'done' }),
+    { reason: 'operator completed task presentation' },
+  );
+
+  assert.equal(result.task.status, 'done');
+  assert.equal(result.disposed, true);
+  assert.deepEqual(result.executionSessionIds, [orphan.id]);
+  assert.equal(listExecutionSessionsForTask('task-status-safe-orphan').find((entry: any) => entry.id === orphan.id)?.status, 'cancelled');
+  assert.ok(listExecutionSessionEvidence(orphan.id).some((entry: any) =>
+    entry.kind === 'lifecycle-reconciliation' && entry.metadata?.reasonCode === 'status-safe-orphan-converged'));
+  assert.equal(fs.readFileSync(wipPath, 'utf8'), 'export const preservedStatusWip = 1;\n');
+  assert.equal(listExecutionSessionsForTask('task-status-unrelated').find((entry: any) => entry.id === unrelated.id)?.status, 'active');
+});
+
+test('claimless pending durable operation blocks status and release convergence without partial mutation', () => {
+  seedTask('task-claimless-pending', ['src/ClaimlessPending.ts'], undefined, 'DVF-0516');
+  const task = getTask('task-claimless-pending');
+  task.status = 'in-progress';
+  saveTask(task);
+  const workspace = workspaces.createOrReuseSessionWorkspace(claimProject, 'claimless-pending-workspace', { taskDisplayId: 'DVF-0516' } as any);
+  const orphan = execution.createExecutionSession({
+    projectId: claimProject.id,
+    taskId: 'task-claimless-pending',
+    workspaceId: workspace.workspaceId,
+    repoRoot: workspace.root,
+    branch: workspace.branch,
+  });
+  checkpoints.recordExecutionPendingOperationReference(orphan.id, {
+    operationId: 'job-claimless-pending',
+    evidenceId: 'evidence-claimless-pending',
+    kind: 'run_project_command',
+    status: 'running',
+  });
+
+  assert.throws(
+    () => claims.mutateTaskStatusWithLifecycle(
+      'task-claimless-pending',
+      'done',
+      (current: any) => ({ ...current, status: 'done' }),
+      { reason: 'must not cancel live durable work' },
+    ),
+    (error: any) => error?.payload?.code === 'TASK_LIFECYCLE_PENDING_OPERATION'
+      && error?.payload?.details?.operationIds?.includes('job-claimless-pending'),
+  );
+  assert.throws(
+    () => claims.releaseTaskClaim('task-claimless-pending', { sessionId: 'claimless-pending-release', nextStatus: 'todo' }),
+    (error: any) => error?.payload?.code === 'TASK_LIFECYCLE_PENDING_OPERATION'
+      && error?.payload?.details?.operationIds?.includes('job-claimless-pending'),
+  );
+  assert.equal(getTask('task-claimless-pending')?.status, 'in-progress');
+  assert.equal(getTask('task-claimless-pending')?.claim, undefined);
+  assert.equal(listExecutionSessionsForTask('task-claimless-pending').find((entry: any) => entry.id === orphan.id)?.status, 'active');
+});
+
+test('release re-entry converges one claimless safe orphan instead of leaving residual execution authority', () => {
+  seedTask('task-release-safe-orphan', ['src/ReleaseSafeOrphan.ts'], undefined, 'DVF-0515');
+  const task = getTask('task-release-safe-orphan');
+  task.status = 'in-progress';
+  saveTask(task);
+  const workspace = workspaces.createOrReuseSessionWorkspace(claimProject, 'release-safe-orphan-workspace', { taskDisplayId: 'DVF-0515' } as any);
+  const orphan = execution.createExecutionSession({
+    projectId: claimProject.id,
+    taskId: 'task-release-safe-orphan',
+    workspaceId: workspace.workspaceId,
+    repoRoot: workspace.root,
+    branch: workspace.branch,
+  });
+
+  const released = claims.releaseTaskClaim('task-release-safe-orphan', { sessionId: 'safe-orphan-release', nextStatus: 'todo' });
+  assert.equal(released.released, true);
+  assert.equal(released.task.status, 'todo');
+  assert.equal(released.task.claim, undefined);
+  assert.equal(listExecutionSessionsForTask('task-release-safe-orphan').find((entry: any) => entry.id === orphan.id)?.status, 'cancelled');
+  assert.ok(listExecutionSessionEvidence(orphan.id).some((entry: any) =>
+    entry.kind === 'lifecycle-reconciliation' && entry.metadata?.reasonCode === 'release-safe-orphan-converged'));
+
+  const replay = claims.releaseTaskClaim('task-release-safe-orphan', { sessionId: 'safe-orphan-release', nextStatus: 'todo' });
+  assert.equal(replay.released, false);
+  assert.equal(listExecutionSessionsForTask('task-release-safe-orphan').filter((entry: any) => entry.status === 'active').length, 0);
+});
+
 test('release is owner-guarded, clears claim, and returns task to requested runnable lane', () => {
   claims.claimTaskForSession('task-release', { sessionId: 'release-owner', ownerKind: 'chat', ownerLabel: 'Chat R1' });
   assert.throws(

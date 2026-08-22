@@ -104,6 +104,21 @@ const coverageManifest: CoverageScenario[] = [
     ],
   },
   {
+    id: 'DVF-0719-recovery-tool-surface-parity',
+    file: 'tests/server/devflowContractModules.test.ts',
+    requiredSnippets: [
+      "test('closure-critical recovery capabilities are callable end-to-end in the coding profile'",
+      "test('capability catalog reports closure recovery readiness from the active advertised tool surface'",
+    ],
+  },
+  {
+    id: 'DVF-0719-recovery-capability-health-drift',
+    file: 'tests/server/workflowHealthService.test.ts',
+    requiredSnippets: [
+      "test('workflow health reports closure recovery capability drift from the active advertised surface'",
+    ],
+  },
+  {
     id: 'DVF-0660-cleanup-authority-and-race',
     file: 'tests/server/sessionWorkspaceService.test.ts',
     requiredSnippets: [

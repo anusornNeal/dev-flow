@@ -24,8 +24,9 @@ executeAllMigrations();
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
 const emergencyOps = await import('../../src/server/repositories/lifecycleEmergencyOperationRepository.js');
 
-const { getWorkflowHealth, getChatGptHarnessHealthSnapshot } = await import('../../src/server/services/workflowHealthService.js');
-const { getToolDefinitionByName } = await import('../../src/server/contracts/devflowContract.js');
+const workflowHealthModule = await import('../../src/server/services/workflowHealthService.js');
+const { getWorkflowHealth, getChatGptHarnessHealthSnapshot } = workflowHealthModule;
+const { getToolDefinitionByName, getCapabilityCatalog } = await import('../../src/server/contracts/devflowContract.js');
 const serverEvents = await import('../../src/server/services/serverEventService.js');
 const { clearToolCallRecords, recordToolCall, flushPerformanceTelemetry } = await import('../../src/server/services/mcpToolMonitor.js');
 const { default: db } = await import('../../src/db/index.js');
@@ -140,6 +141,41 @@ test('getWorkflowHealth returns ok for a clean repo', () => {
   assert.equal(Array.isArray(result.diagnostics.repoCaches.domains), true);
   assert.equal(result.diagnostics.repoCaches.domains.length <= 8, true);
   assert.equal(result.diagnostics.repoCaches.domains.every((domain: any) => typeof domain.hitRate === 'number'), true);
+});
+
+test('workflow health reports closure recovery capability drift from the active advertised surface', () => {
+  const setCapabilityCatalogForTests = (workflowHealthModule as any).__setWorkflowHealthCapabilityCatalogForTests;
+  assert.equal(typeof setCapabilityCatalogForTests, 'function');
+  if (typeof setCapabilityCatalogForTests !== 'function') return;
+
+  const realCatalog = getCapabilityCatalog() as any;
+  const staleCatalog = {
+    ...realCatalog,
+    recovery: {
+      ...realCatalog.recovery,
+      ready: false,
+      missingCapabilityIds: ['orphan-cleanup'],
+      capabilities: (realCatalog.recovery?.capabilities || []).map((entry: any) =>
+        entry.id === 'orphan-cleanup' ? { ...entry, advertised: false, callable: false } : entry),
+    },
+  };
+
+  setCapabilityCatalogForTests(() => staleCatalog);
+  try {
+    const repo = createRepo('capability-drift');
+    const full = getWorkflowHealth(stateFor(repo), { projectId: 'project-health', responseMode: 'full' }) as any;
+    const compact = getWorkflowHealth(stateFor(repo), { projectId: 'project-health', responseMode: 'compact' }) as any;
+    assert.equal(full.status, 'error');
+    assert.equal(full.ok, false);
+    assert.equal(full.checks.capabilityCatalog, false);
+    assert.equal(full.capabilities.recovery.ready, false);
+    assert.deepEqual(full.capabilities.recovery.missingCapabilityIds, ['orphan-cleanup']);
+    assert.equal(compact.runtime.capabilities.recoveryReady, false);
+    assert.match(full.recommendations.join('\n'), /closure recovery capability drift/i);
+    assert.doesNotMatch(full.recommendations.join('\n'), /cleanup_orphan_executions/);
+  } finally {
+    setCapabilityCatalogForTests(null);
+  }
 });
 
 test('workflow health exposes bounded audited break-glass aftermath without mutating it', () => {

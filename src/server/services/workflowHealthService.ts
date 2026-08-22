@@ -23,6 +23,12 @@ import { HARNESS_POLICY_VERSION } from './harnessPolicyService.js';
 import { HARNESS_STRATEGY_VERSION } from './harnessStrategyService.js';
 
 const lastHealthEventSignatures = new Map<string, string>();
+let capabilityCatalogProvider: () => ReturnType<typeof getCapabilityCatalog> = getCapabilityCatalog;
+
+export function __setWorkflowHealthCapabilityCatalogForTests(provider?: (() => ReturnType<typeof getCapabilityCatalog>) | null) {
+  capabilityCatalogProvider = provider || getCapabilityCatalog;
+  lastHealthEventSignatures.clear();
+}
 
 type Probe<T> = { ok: true; value: T } | { ok: false; error: { message: string; code?: string; status?: number } };
 
@@ -653,7 +659,7 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
     return Math.round(elapsed * 100) / 100;
   };
   const windowMs = numberArg(args.windowMs, 10 * 60 * 1000);
-  const catalog = getCapabilityCatalog();
+  const catalog = capabilityCatalogProvider();
   const advertisedTools = getMcpToolList(catalog.mcpProfile.active);
   const advertisedNames = new Set(advertisedTools.map((tool) => tool.name));
   const advertisedDefinitions = catalog.tools.filter((tool: any) => advertisedNames.has(tool.name));
@@ -738,6 +744,19 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
         lineageToken: domain.lineageToken,
       })),
   };
+  const closureRecovery = catalog.recovery || {
+    profile: catalog.mcpProfile.active,
+    ready: false,
+    toolSurfaceIdentity: catalog.mcpProfile.toolSurfaceIdentity,
+    missingCapabilityIds: ['capability-status-missing'],
+    capabilities: [],
+  };
+  if (!closureRecovery.ready) {
+    const missing = Array.isArray(closureRecovery.missingCapabilityIds)
+      ? closureRecovery.missingCapabilityIds.slice(0, 8).join(', ')
+      : 'unknown';
+    recommendations.push(`Closure recovery capability drift detected for profile '${closureRecovery.profile}' (${missing || 'unknown'}); refresh/reconnect the MCP capability surface when active work is safe, and do not attempt unavailable recovery actions until the advertised surface matches the contract.`);
+  }
   if (runtimeSupervisor?.api?.status === 'healthy' && (runtimeSupervisor?.tunnel?.status === 'degraded' || runtimeSupervisor?.tunnel?.status === 'down')) {
     recommendations.push(`Public zrok route is ${runtimeSupervisor.tunnel.status} while the local API is healthy; inspect zrok service/share state and runtime supervisor public-probe evidence.`);
   }
@@ -770,12 +789,12 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
   }
 
   const keyToolsPresent = {
-    get_repo_context_bundle: catalog.tools.some((tool: any) => tool.name === 'get_repo_context_bundle'),
-    move_task_to_status: catalog.tools.some((tool: any) => tool.name === 'move_task_to_status'),
-    commit_git_changes: catalog.tools.some((tool: any) => tool.name === 'commit_git_changes'),
-    devflow_health_check: catalog.tools.some((tool: any) => tool.name === 'devflow_health_check'),
+    get_repo_context_bundle: advertisedNames.has('get_repo_context_bundle'),
+    move_task_to_status: advertisedNames.has('move_task_to_status'),
+    commit_git_changes: advertisedNames.has('commit_git_changes'),
+    devflow_health_check: advertisedNames.has('devflow_health_check'),
   };
-  const hasErrors = !git.ok || Boolean(git.ok && git.operation?.blocked) || catalog.tools.length === 0;
+  const hasErrors = !git.ok || Boolean(git.ok && git.operation?.blocked) || advertisedTools.length === 0 || !closureRecovery.ready;
   const hasWarnings = recommendations.some((recommendation) => !recommendation.startsWith('No verified recovery snapshot exists yet;'));
   const status = hasErrors ? 'error' : hasWarnings ? 'warning' : 'ok';
   const healthEventProjectId = typeof args.projectId === 'string' ? args.projectId : undefined;
@@ -791,13 +810,14 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
         git.ok ? git.operation?.code || '' : 'git-unavailable',
         git.ok ? git.operation?.kind || '' : '',
         git.ok ? git.operation?.unmergedPathCount || 0 : 0,
+        Array.isArray(closureRecovery.missingCapabilityIds) ? closureRecovery.missingCapabilityIds.length : 1,
       ].join(':');
   const priorHealthEventSignature = lastHealthEventSignatures.get(healthEventKey) || '';
   if (healthEventSignature && healthEventSignature !== priorHealthEventSignature) {
     publishServerEvent('health.regression', {
       projectId: healthEventProjectId,
       status,
-      reason: `failedJobs=${failedJobs};staleAgents=${staleAgentRuns};staleJobs=${Number(durableJobs.staleRunning || 0)};slo=${sloPerformance.regressions.length};gitBlocker=${git.ok ? git.operation?.code || 'none' : 'unavailable'};gitKind=${git.ok ? git.operation?.kind || 'none' : 'unknown'};unmerged=${git.ok ? git.operation?.unmergedPathCount || 0 : 0}`,
+      reason: `failedJobs=${failedJobs};staleAgents=${staleAgentRuns};staleJobs=${Number(durableJobs.staleRunning || 0)};slo=${sloPerformance.regressions.length};gitBlocker=${git.ok ? git.operation?.code || 'none' : 'unavailable'};gitKind=${git.ok ? git.operation?.kind || 'none' : 'unknown'};unmerged=${git.ok ? git.operation?.unmergedPathCount || 0 : 0};missingRecoveryCapabilities=${Array.isArray(closureRecovery.missingCapabilityIds) ? closureRecovery.missingCapabilityIds.length : 1}`,
     });
   }
   if (healthEventSignature) lastHealthEventSignatures.set(healthEventKey, healthEventSignature);
@@ -826,7 +846,7 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
     ok: status !== 'error',
     status,
     generatedAt: new Date().toISOString(),
-    checks: { git: git.ok, capabilityCatalog: advertisedTools.length > 0, diagnostics: true, recovery: Boolean(recovery.lastVerifiedGoodBackup) && !recovery.failureReason },
+    checks: { git: git.ok, capabilityCatalog: advertisedTools.length > 0 && closureRecovery.ready, diagnostics: true, recovery: Boolean(recovery.lastVerifiedGoodBackup) && !recovery.failureReason },
     capabilities: {
       contractVersion: catalog.contractVersion,
       toolCount: advertisedTools.length,
@@ -835,6 +855,12 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
       asyncToolCount: advertisedDefinitions.filter((tool: any) => tool.executionPolicy?.mode === 'job').length,
       search,
       keyToolsPresent,
+      recovery: {
+        profile: closureRecovery.profile,
+        ready: closureRecovery.ready,
+        toolSurfaceIdentity: closureRecovery.toolSurfaceIdentity,
+        missingCapabilityIds: Array.isArray(closureRecovery.missingCapabilityIds) ? closureRecovery.missingCapabilityIds.slice(0, 8) : ['capability-status-missing'],
+      },
     },
     git,
     diagnostics: {
@@ -938,6 +964,7 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
         toolCount: advertisedTools.length,
         backendToolCount: catalog.tools.length,
         keyToolsPresent,
+        recoveryReady: closureRecovery.ready,
       },
       supervisor: runtimeSupervisor ? {
         summary: runtimeSupervisor.summary,

@@ -418,30 +418,6 @@ export function preflightHarnessExecutionGuard(_state: AppState, toolNameValue: 
     }
   }
 
-  if (binding) {
-    const stage = binding.session.lifecycle.stage;
-    const verificationDebt = outstandingVerificationDebt(binding.session.id);
-    if (effects.includes('finalization') && verificationDebt) {
-      return blockedDecision(toolName, action, operationId, policy, binding, 'EXECUTION_VERIFICATION_DEBT_OUTSTANDING', [
-        `Verification debt '${verificationDebt.id}' must be settled by authoritative GREEN verification before finalization.`,
-      ]);
-    }
-    const allowedStages: Record<Exclude<HarnessExecutionAction, 'restart'>, readonly string[]> = {
-      mutation: ['context-ready', 'plan-recorded', 'implementing', 'repairing'],
-      verification: ['implementing', 'verifying', 'repairing', 'verification-infra-blocked'],
-      commit: ['verifying'],
-      finalization: ['committed'],
-    };
-    for (const effect of effects) {
-      if (effect === 'restart' || effect === 'mutation' || effect === 'commit') continue;
-      const debtRecoveryVerification = effect === 'verification'
-        && stage === 'committed'
-        && Boolean(verificationDebt);
-      if (!allowedStages[effect].includes(stage) && !debtRecoveryVerification) {
-        return blockedDecision(toolName, effect, operationId, policy, binding, 'EXECUTION_LIFECYCLE_STAGE_BLOCKED', [`${effect} is not allowed while execution stage is '${stage}'. Allowed stages: ${allowedStages[effect].join(', ')}.`]);
-      }
-    }
-  }
   if (action === 'restart' && policy.restart.value.gate !== 'allowed') {
     const task = binding?.task || resolveTaskWithoutBinding(args);
     const projectId = task?.projectId || boundedString(args?.projectId) || undefined;

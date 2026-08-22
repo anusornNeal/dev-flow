@@ -11,7 +11,7 @@ import { emergencyToolDefinitions } from '../../src/server/contracts/devflowEmer
 const TASK_TOOL_NAMES = [
   'list_tasks', 'search_tasks', 'get_task', 'get_task_images',
   'open_task_bug', 'update_task_bug_status', 'create_task', 'update_task', 'claim_next_task', 'claim_task', 'expand_task_scope', 'release_task_claim', 'batch_upsert_tasks', 'import_tasks_from_file',
-  'sync_task_with_git', 'submit_task_for_review', 'move_task_status', 'move_task_to_status', 'complete_task_review',
+  'sync_task_with_git', 'submit_task_for_review', 'update_external_task_status', 'move_task_status', 'move_task_to_status', 'complete_task_review',
   'batch_move_task_status', 'toggle_task_checklist', 'batch_toggle_task_checklist', 'delete_task',
 ];
 
@@ -66,10 +66,10 @@ test('task-aware commit tools expose scoped planning and async commit wiring', (
   assert.equal((plan?.inputSchema as any)?.required?.includes('workspaceId'), true);
   assert.equal((commit?.executionPolicy as any)?.mode, 'job');
   assert.equal((commit?.inputSchema as any)?.required?.includes('message'), true);
-  assert.equal((commit?.inputSchema as any)?.properties?.preserveVerificationDebt?.type, 'boolean');
-  assert.equal((commit?.inputSchema as any)?.properties?.emergency?.type, 'boolean');
-  assert.equal((commit?.inputSchema as any)?.properties?.reason?.type, 'string');
-  assert.equal((commit?.inputSchema as any)?.properties?.actorLabel?.type, 'string');
+  assert.equal((commit?.inputSchema as any)?.properties?.preserveVerificationDebt, undefined);
+  assert.equal((commit?.inputSchema as any)?.properties?.emergency, undefined);
+  assert.equal((commit?.inputSchema as any)?.properties?.reason, undefined);
+  assert.equal((commit?.inputSchema as any)?.properties?.actorLabel, undefined);
   const messageDescription = String((commit?.inputSchema as any)?.properties?.message?.description || '');
   assert.match(messageDescription, /conventional/i);
   assert.match(messageDescription, /task|ticket|card/i);

@@ -62,7 +62,7 @@ const coverageManifest: CoverageScenario[] = [
       "test('durable finalization operation resumes the same identity across injected phase failures without duplicate completion effects'",
       "test('task presentation drift after integration does not revoke a frozen finalization operation'",
       "test('cleanup failure is resumable after task evidence and lifecycle are durable'",
-      "test('finalization blocks pre-integration evidence when sibling changes escalate combined-state verification'",
+      "test('finalization records combined-state verification escalation as debt without blocking safe completion'",
     ],
   },
   {
@@ -77,10 +77,10 @@ const coverageManifest: CoverageScenario[] = [
     id: 'audited-break-glass',
     file: 'tests/server/breakGlassLifecycleService.test.ts',
     requiredSnippets: [
-      "test('emergency commit binds override to the exact owned fingerprint and preserves unrelated dirty files'",
+      "test('workflow-only commit, release, and rotate actions are rejected before emergency audit creation'",
       "test('finalize-as-integrated resumes normal finalization from exact Git evidence after task presentation drift'",
-      "test('response loss after emergency commit resumes from the exact committed HEAD without a second commit'",
-      "test('response loss after execution rotation reuses the replacement epoch instead of rotating twice'",
+      "test('integrated emergency recovery delegates verification debt to normal finalization without workflow bypass'",
+      "test('supersede-execution requires explicit replacement identity and preserves historical audit evidence'",
       "test('response loss after destructive cleanup resumes from pre-persisted discard evidence'",
     ],
   },
@@ -160,7 +160,7 @@ const coverageManifest: CoverageScenario[] = [
     file: 'tests/server/mcpToolJobRunnerRegistry.test.ts',
     requiredSnippets: [
       "test('direct run_project_command retries proven infrastructure failure through a recovery capacity lease'",
-      "test('apply_and_verify async runner fails closed before source mutation in verification-infra-blocked'",
+      "test('apply_and_verify async runner treats verification-infra-blocked as recoverable debt instead of mutation authority'",
     ],
   },
   {
@@ -185,7 +185,7 @@ const coverageManifest: CoverageScenario[] = [
     file: 'tests/server/runtimeIdentityDiagnostics.test.ts',
     requiredSnippets: [
       "test('dirty runtime source is ambiguous and does not claim a deployed revision'",
-      "test('advanced clean source HEAD is stale, preserves concurrent client drift, blocks restart on active lifecycle work, and converges after restart'",
+      "test('restart safety ignores stale lifecycle stage but blocks real WIP and pending durable operations'",
     ],
   },
   {

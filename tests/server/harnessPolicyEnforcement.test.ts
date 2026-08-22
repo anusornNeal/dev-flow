@@ -85,6 +85,12 @@ test('execution guard composes policy, ownership, lifecycle, retry identity, and
     assert.equal(mutationAtCreatedStage.action, 'mutation');
     assert.equal(mutationAtCreatedStage.execution?.stage, 'created');
 
+    const verificationAtCreatedStage = preflightHarnessExecutionGuard(state, 'run_project_command', { workspaceId, command: 'typecheck' });
+    assert.equal(verificationAtCreatedStage.allowed, true);
+    assert.equal(verificationAtCreatedStage.guarded, true);
+    assert.equal(verificationAtCreatedStage.action, 'verification');
+    assert.equal(verificationAtCreatedStage.execution?.stage, 'created');
+
     assert.throws(() => executionSessions.recordTaskExecutionContextReady({ projectId: project.id }, {
       contextHandle: 'ctx-unclaimed',
       repoRevision: session.repoRevision,
@@ -97,15 +103,15 @@ test('execution guard composes policy, ownership, lifecycle, retry identity, and
       contextPlanIdentity: 'plan-harness-1',
     });
 
-    const tooEarlyComposite = preflightHarnessExecutionGuard(state, 'apply_and_verify', {
+    const flexibleComposite = preflightHarnessExecutionGuard(state, 'apply_and_verify', {
       workspaceId,
       files: [{ filePath: 'value.txt', edits: [{ type: 'replace', find: 'before', replaceWith: 'after' }] }],
       requestedCommands: ['test-focused'],
       harnessOperationId: 'context-ready-composite',
     });
-    assert.equal(tooEarlyComposite.allowed, false, 'composite must fail before edit when verification effect is illegal');
-    assert.equal(tooEarlyComposite.action, 'verification');
-    assert.equal(tooEarlyComposite.reasonCode, 'EXECUTION_LIFECYCLE_STAGE_BLOCKED');
+    assert.equal(flexibleComposite.allowed, true, 'lifecycle stage must not block an otherwise safe composite operation');
+    assert.equal(flexibleComposite.guarded, true);
+    assert.equal(flexibleComposite.execution?.stage, 'context-ready');
 
     const safe = preflightHarnessExecutionGuard(state, 'write_local_file', { workspaceId, filePath: 'value.txt', harnessOperationId: 'mutation-1' });
     assert.equal(safe.allowed, true);
@@ -384,7 +390,7 @@ test('verification OOM preserves execution for verification-only recovery', () =
     assert.equal(commit.allowed, true);
     assert.equal(commit.action, 'commit');
     const finalization = preflightHarnessExecutionGuard(state, 'finalize_task_workspace', { workspaceId, taskId: task.id });
-    assert.equal(finalization.allowed, false);
+    assert.equal(finalization.allowed, true, 'verification infrastructure debt is quality debt, not finalization authority');
 
     recordHarnessExecutionOutcome(recovery, { ok: false, status: 'failed', exitCode: 1, stderr: 'assertion failed' });
     assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'repairing');
@@ -481,7 +487,7 @@ test('verification authority recovery stays on repairing path unless independent
   }
 });
 
-test('verification debt commit gates finalization until authoritative recovery verification settles the debt', () => {
+test('verification debt remains observable without gating finalization and can still be settled later', () => {
   resetSessionWorkspaceRuntimeForTests();
   const repoRoot = createRepo('verification-debt-guard-repo');
   const project = { id: 'project-verification-debt-guard', name: 'Verification Debt Guard', repoUrl: 'https://example.com/verification-debt-guard', localPath: repoRoot };
@@ -527,9 +533,9 @@ test('verification debt commit gates finalization until authoritative recovery v
     });
     assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'committed');
 
-    const blockedFinalization = preflightHarnessExecutionGuard(state, 'finalize_task_workspace', { workspaceId, taskId: task.id });
-    assert.equal(blockedFinalization.allowed, false);
-    assert.equal(blockedFinalization.reasonCode, 'EXECUTION_VERIFICATION_DEBT_OUTSTANDING');
+    const debtPreservingFinalization = preflightHarnessExecutionGuard(state, 'finalize_task_workspace', { workspaceId, taskId: task.id });
+    assert.equal(debtPreservingFinalization.allowed, true);
+    assert.equal(debtPreservingFinalization.execution?.stage, 'committed');
     const recovery = preflightHarnessExecutionGuard(state, 'run_project_command', { workspaceId, command: 'test-focused', harnessOperationId: 'debt-recovery-green' });
     assert.equal(recovery.allowed, true);
     executionSessions.recordExecutionVerificationEvidence(binding.session.id, [{ name: 'recovery', status: 'passed' }], { repoRoot: binding.workspace.root });
@@ -541,7 +547,7 @@ test('verification debt commit gates finalization until authoritative recovery v
     const allowedFinalization = preflightHarnessExecutionGuard(state, 'finalize_task_workspace', { workspaceId, taskId: task.id });
     assert.equal(allowedFinalization.allowed, true);
     const redundantVerification = preflightHarnessExecutionGuard(state, 'run_project_command', { workspaceId, command: 'test-focused', harnessOperationId: 'debt-recovery-redundant' });
-    assert.equal(redundantVerification.allowed, false);
+    assert.equal(redundantVerification.allowed, true, 'verification remains mechanically allowed after debt settlement');
   } finally {
     const cleanupBinding = executionSessions.getTaskExecutionMutationBinding({ workspaceId });
     if (cleanupBinding) git(cleanupBinding.workspace.root, ['checkout', '--', 'value.txt']);

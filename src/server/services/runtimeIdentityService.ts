@@ -99,6 +99,123 @@ export interface RuntimeDiagnosis {
   restartSafety?: RuntimeRestartSafety;
 }
 
+export type RuntimeRecoveryClientObservationState = 'unknown' | 'ready' | 'stale' | 'missing-tools';
+export type RuntimeRecoveryEndToEndState = 'unknown' | 'ready' | 'not-ready';
+
+export interface RuntimeServerRecoveryState {
+  scope?: string;
+  profile?: string;
+  ready: boolean;
+  serverReady?: boolean;
+  toolSurfaceIdentity?: string;
+  missingCapabilityIds?: readonly string[];
+}
+
+export interface RuntimeRecoveryParity {
+  server: {
+    scope: 'server-advertised';
+    profile: string | null;
+    ready: boolean;
+    toolSurfaceIdentity: string;
+    missingCapabilityIds: string[];
+  };
+  clientObserved: {
+    observed: boolean;
+    state: RuntimeRecoveryClientObservationState;
+    toolsVisible: boolean | null;
+    contractMatch: boolean | null;
+    runtimeMatch: boolean | null;
+    toolSurfaceMatch: boolean | null;
+  };
+  endToEnd: {
+    state: RuntimeRecoveryEndToEndState;
+    ready: boolean | null;
+    reasonCodes: string[];
+    nextAction: string;
+    recoverySurface?: 'get_recovery_handoff';
+  };
+}
+
+export function classifyRecoveryCapabilityParity(
+  current: RuntimeIdentityWithContract,
+  serverRecovery: RuntimeServerRecoveryState,
+  clientState?: RuntimeClientState,
+): RuntimeRecoveryParity {
+  const previousContract = String(clientState?.contractVersion || '').trim();
+  const previousRuntime = String(clientState?.runtimeInstanceId || '').trim();
+  const previousToolSurface = String(clientState?.toolSurfaceIdentity || '').trim();
+  const observed = Boolean(
+    previousContract
+    || previousRuntime
+    || previousToolSurface
+    || clientState?.toolsVisible !== undefined
+  );
+  const contractMatch = previousContract ? previousContract === current.contractVersion : null;
+  const runtimeMatch = previousRuntime ? previousRuntime === current.runtimeInstanceId : null;
+  const toolSurfaceMatch = previousToolSurface ? previousToolSurface === current.toolSurfaceIdentity : null;
+  const toolsVisible = clientState?.toolsVisible === undefined ? null : clientState.toolsVisible;
+  const identityMismatch = contractMatch === false || runtimeMatch === false || toolSurfaceMatch === false;
+  const clientObservationState: RuntimeRecoveryClientObservationState = !observed
+    ? 'unknown'
+    : toolsVisible === false
+      ? 'missing-tools'
+      : identityMismatch
+        ? 'stale'
+        : toolsVisible === true && contractMatch === true && runtimeMatch === true && toolSurfaceMatch === true
+          ? 'ready'
+          : 'unknown';
+  const serverReady = Boolean(serverRecovery.ready);
+  const reasonCodes: string[] = [];
+  if (!serverReady) reasonCodes.push('SERVER_RECOVERY_SURFACE_NOT_READY');
+  if (toolsVisible === false) reasonCodes.push('CLIENT_TOOLS_NOT_VISIBLE');
+  if (contractMatch === false) reasonCodes.push('CLIENT_CONTRACT_MISMATCH');
+  if (runtimeMatch === false) reasonCodes.push('CLIENT_RUNTIME_MISMATCH');
+  if (toolSurfaceMatch === false) reasonCodes.push('CLIENT_TOOL_SURFACE_MISMATCH');
+  if (serverReady && clientObservationState === 'unknown') reasonCodes.push('CLIENT_RECOVERY_PARITY_NOT_PROVEN');
+
+  const endToEndState: RuntimeRecoveryEndToEndState = !serverReady
+    ? 'not-ready'
+    : clientObservationState === 'ready'
+      ? 'ready'
+      : clientObservationState === 'stale' || clientObservationState === 'missing-tools'
+        ? 'not-ready'
+        : 'unknown';
+  const endToEndReady = endToEndState === 'ready' ? true : endToEndState === 'not-ready' ? false : null;
+  const clientNeedsRefresh = clientObservationState === 'stale' || clientObservationState === 'missing-tools';
+  const nextAction = endToEndState === 'ready'
+    ? 'No recovery-surface refresh is required; server capability and client-observed registry evidence match.'
+    : !serverReady
+      ? 'Repair the server-advertised closure recovery capability surface before relying on recovery operations.'
+      : clientNeedsRefresh
+        ? 'Reconnect or refresh the ChatGPT MCP/plugin tool registry. After tools are visible and current again, call get_recovery_handoff to continue from DevFlow-owned durable state without replaying mutations.'
+        : 'Client recovery parity is not proven. Supply the client-observed contract version, runtime instance, tool-surface fingerprint, and tool visibility before claiming end-to-end recovery readiness.';
+
+  return {
+    server: {
+      scope: 'server-advertised',
+      profile: serverRecovery.profile ? String(serverRecovery.profile) : null,
+      ready: Boolean(serverReady),
+      toolSurfaceIdentity: String(serverRecovery.toolSurfaceIdentity || current.toolSurfaceIdentity || ''),
+      missingCapabilityIds: Array.isArray(serverRecovery.missingCapabilityIds) ? [...serverRecovery.missingCapabilityIds] : [],
+    },
+    clientObserved: {
+      observed,
+      state: clientObservationState,
+      toolsVisible,
+      contractMatch,
+      runtimeMatch,
+      toolSurfaceMatch,
+    },
+    endToEnd: {
+      state: endToEndState,
+      ready: endToEndReady,
+      reasonCodes,
+      nextAction,
+      ...(clientNeedsRefresh ? { recoverySurface: 'get_recovery_handoff' as const } : {}),
+    },
+  };
+}
+
 function runtimeSourceRoot() {
   return path.resolve(process.env.DEVFLOW_RUNTIME_SOURCE_ROOT || getDevFlowAppRoot());
 }

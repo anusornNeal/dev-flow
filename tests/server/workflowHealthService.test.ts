@@ -184,6 +184,27 @@ test('workflow health reports closure recovery capability drift from the active 
   }
 });
 
+test('workflow health separates server recovery readiness from stale or unobserved client parity', () => {
+  const repo = createRepo('client-recovery-parity');
+  const full = getWorkflowHealth(stateFor(repo), {
+    projectId: 'project-health',
+    responseMode: 'full',
+    previousToolSurfaceIdentity: '0'.repeat(64),
+    clientToolsVisible: true,
+  }) as any;
+  assert.equal(full.capabilities.recovery.serverReady, true);
+  assert.equal(full.capabilities.recovery.clientObserved.state, 'stale');
+  assert.equal(full.capabilities.recovery.endToEnd.state, 'not-ready');
+  assert.equal(full.capabilities.recovery.ready, false);
+  assert.match(full.recommendations.join('\n'), /client.*recovery|recovery.*client|refresh|reconnect/i);
+
+  const unobserved = getWorkflowHealth(stateFor(repo), { projectId: 'project-health', responseMode: 'full' }) as any;
+  assert.equal(unobserved.capabilities.recovery.serverReady, true);
+  assert.equal(unobserved.capabilities.recovery.clientObserved.state, 'unknown');
+  assert.equal(unobserved.capabilities.recovery.endToEnd.state, 'unknown');
+  assert.equal(unobserved.capabilities.recovery.ready, null);
+});
+
 test('workflow health exposes bounded audited break-glass aftermath without mutating it', () => {
   const repo = createRepo('break-glass-observability');
   const task = seedHealthTask('task-health-break-glass', 'DVF-HBG-1');
@@ -325,6 +346,10 @@ test('devflow_health_check contract defaults MCP requests to compact and permits
   const tool = getToolDefinitionByName('devflow_health_check');
   assert.ok(tool);
   assert.deepEqual(tool.inputSchema?.properties?.responseMode?.enum, ['compact', 'summary', 'full', 'debug']);
+  assert.equal(tool.inputSchema?.properties?.previousContractVersion?.type, 'string');
+  assert.equal(tool.inputSchema?.properties?.previousRuntimeInstanceId?.type, 'string');
+  assert.equal(tool.inputSchema?.properties?.previousToolSurfaceIdentity?.type, 'string');
+  assert.equal(tool.inputSchema?.properties?.clientToolsVisible?.type, 'boolean');
   assert.equal(tool.buildHttpRequest({ projectId: 'project-health' }).path.includes('responseMode=compact'), true);
   assert.equal(tool.buildHttpRequest({ projectId: 'project-health', responseMode: 'full' }).path.includes('responseMode=full'), true);
 });

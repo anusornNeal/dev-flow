@@ -6,7 +6,7 @@ import { getLatestTaskFinalizationOperation, type TaskFinalizationOperationRecor
 import { listLifecycleEmergencyOperations } from '../repositories/lifecycleEmergencyOperationRepository.js';
 import { DEVFLOW_CONTRACT_VERSION, getCapabilityCatalog } from '../contracts/devflowContract.js';
 import { findProjectByIdentifier } from './taskService.js';
-import { classifyRuntimeIdentity, getRuntimeIdentity, getRuntimeSourceFreshness, type RuntimeClientState } from './runtimeIdentityService.js';
+import { classifyRecoveryCapabilityParity, classifyRuntimeIdentity, getRuntimeIdentity, getRuntimeSourceFreshness, type RuntimeClientState } from './runtimeIdentityService.js';
 import { inspectWorkspaceRecovery, type WorkspaceRecoveryInspection } from './workspaceRecoveryService.js';
 import {
   classifySessionWorkspaceTaskMatch,
@@ -57,7 +57,7 @@ function clientStateFromArgs(args: RecoveryArgs): RuntimeClientState | undefined
   return state.contractVersion || state.runtimeInstanceId || state.toolSurfaceIdentity || state.toolsVisible !== undefined ? state : undefined;
 }
 
-function runtimeDiagnosis(args: RecoveryArgs) {
+function runtimeEvidence(args: RecoveryArgs) {
   const capabilityCatalog = getCapabilityCatalog();
   const current = {
     ...getRuntimeIdentity(),
@@ -65,7 +65,17 @@ function runtimeDiagnosis(args: RecoveryArgs) {
     contractVersion: DEVFLOW_CONTRACT_VERSION,
     toolSurfaceIdentity: capabilityCatalog.mcpProfile.toolSurfaceIdentity,
   };
-  return classifyRuntimeIdentity(current, clientStateFromArgs(args));
+  const clientState = clientStateFromArgs(args);
+  const recoveryParity = classifyRecoveryCapabilityParity(current, capabilityCatalog.recovery, clientState);
+  const classifiedDiagnosis = classifyRuntimeIdentity(current, clientState);
+  const clientRecoveryCodes = new Set(['tool-surface-changed', 'deployment-changed', 'client-registry-desync', 'contract-changed']);
+  const clientDiagnosis = classifiedDiagnosis && clientRecoveryCodes.has(classifiedDiagnosis.code)
+    ? classifiedDiagnosis
+    : classifiedDiagnosis?.concurrentDiagnostics?.find((entry) => clientRecoveryCodes.has(entry.code));
+  const diagnosis = recoveryParity.endToEnd.ready === false && clientDiagnosis && clientDiagnosis !== classifiedDiagnosis
+    ? { ...clientDiagnosis, concurrentDiagnostics: [classifiedDiagnosis!] }
+    : classifiedDiagnosis;
+  return { diagnosis, recoveryParity };
 }
 
 function compactTask(task: any) {
@@ -199,7 +209,9 @@ function requiresRecoveryContinuation(inspection: WorkspaceRecoveryInspection) {
 }
 
 export function getWorkflowRecoveryHandoff(state: AppState, args: RecoveryArgs = {}) {
-  const diagnosis = runtimeDiagnosis(args);
+  const runtime = runtimeEvidence(args);
+  const diagnosis = runtime.diagnosis;
+  const recoveryParity = runtime.recoveryParity;
   const explicitTaskId = clean(args.taskId);
   const explicitWorkspaceId = clean(args.workspaceId);
   const explicitJobId = clean(args.jobId);
@@ -422,6 +434,7 @@ export function getWorkflowRecoveryHandoff(state: AppState, args: RecoveryArgs =
     status: 'recoverable' as const,
     generatedAt: new Date().toISOString(),
     ...(diagnosis ? { diagnosis } : {}),
+    recoveryParity,
     ...(project ? { project: compactProject(project) } : {}),
     ...(task ? { task: compactTask(task) } : {}),
     ...(inspection ? { workspace: compactWorkspace(inspection) } : {}),

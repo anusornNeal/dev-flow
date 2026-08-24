@@ -17,6 +17,7 @@ import { getVerificationResourceProfileDiagnostics } from './verificationResourc
 import { DEVFLOW_CONTRACT_VERSION, getCapabilityCatalog } from '../contracts/devflowContract';
 import {
   classifyRuntimeIdentity,
+  classifyRecoveryCapabilityParity,
   getRuntimeIdentity,
   getRuntimeSourceFreshness,
   type RuntimeClientState,
@@ -664,6 +665,7 @@ export function getDevFlowDiagnostics(options?: {
     toolSurfaceIdentity: capabilityCatalog.mcpProfile.toolSurfaceIdentity,
   };
   const runtimeDiagnosis = classifyRuntimeIdentity(runtime, options?.clientState);
+  const recoveryParity = classifyRecoveryCapabilityParity(runtime, capabilityCatalog.recovery, options?.clientState);
   const telemetryPersistence = flushPerformanceTelemetry({ now });
   const toolSummary = getToolCallSummary({ now, windowMs: options?.windowMs });
   const repoCaches = getRepoCacheDiagnostics({
@@ -710,6 +712,7 @@ export function getDevFlowDiagnostics(options?: {
     generatedAt: new Date(now).toISOString(),
     runtime,
     ...(runtimeDiagnosis ? { runtimeDiagnosis } : {}),
+    recoveryParity,
     search: getLocalSearchRuntimeStatus(),
     repoCaches,
     runtimeSupervisor,

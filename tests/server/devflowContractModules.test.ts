@@ -165,6 +165,8 @@ test('closure-critical recovery capabilities are callable end-to-end in the codi
 test('capability catalog reports closure recovery readiness from the active advertised tool surface', () => {
   const catalog = getCapabilityCatalog() as any;
   const activeNames = new Set(getMcpToolList(catalog.mcpProfile.active).map((entry: any) => entry.name));
+  assert.equal(catalog.recovery?.scope, 'server-advertised');
+  assert.equal(catalog.recovery?.serverReady, true);
   assert.equal(catalog.recovery?.ready, true);
   assert.deepEqual(catalog.recovery?.missingCapabilityIds, []);
   assert.equal(catalog.recovery?.toolSurfaceIdentity, catalog.mcpProfile.toolSurfaceIdentity);

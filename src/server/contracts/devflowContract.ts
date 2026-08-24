@@ -98,6 +98,10 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
         ...projectIdentifierProperties,
         taskId: { type: 'string', description: 'Optional task internal id or displayId for exact lifecycle health scope.' },
         workspaceId: { type: 'string', description: 'Optional opaque managed workspace id for exact lifecycle health scope.' },
+        previousContractVersion: { type: 'string', description: 'Contract version previously observed by this client; used only to assess client-observed recovery parity.' },
+        previousRuntimeInstanceId: { type: 'string', description: 'Runtime instance id previously observed by this client; used only to assess client-observed recovery parity.' },
+        previousToolSurfaceIdentity: { type: 'string', description: 'MCP tool-surface fingerprint previously observed by this client; used only to assess client-observed recovery parity.' },
+        clientToolsVisible: { type: 'boolean', description: 'Whether this client currently reports the DevFlow tool registry as visible.' },
         windowMs: { type: 'number', description: 'Recent telemetry window in milliseconds. Default is 10 minutes.' },
         responseMode: { type: 'string', enum: ['compact', 'summary', 'full', 'debug'], description: 'Response density. MCP defaults to compact; summary aliases compact, debug aliases full.' },
       },
@@ -1889,9 +1893,12 @@ export function getClosureCriticalRecoveryCapabilityStatus(profile: DevFlowToolP
     };
   });
   const missingCapabilityIds = capabilities.filter((entry) => !entry.callable).map((entry) => entry.id);
+  const serverReady = missingCapabilityIds.length === 0;
   return deepFreezeJsonValue({
+    scope: 'server-advertised',
     profile,
-    ready: missingCapabilityIds.length === 0,
+    serverReady,
+    ready: serverReady,
     toolSurfaceIdentity: getMcpToolSurfaceIdentity(advertisedTools),
     missingCapabilityIds,
     capabilities,

@@ -22,6 +22,7 @@ import { inspectWorkspaceRecovery } from './workspaceRecoveryService.js';
 import { HARNESS_POLICY_VERSION } from './harnessPolicyService.js';
 import { HARNESS_STRATEGY_VERSION } from './harnessStrategyService.js';
 import { classifyLifecycleLiveWorkAuthority } from './lifecycleAuthorityService.js';
+import { classifyRecoveryCapabilityParity, type RuntimeClientState } from './runtimeIdentityService.js';
 
 const lastHealthEventSignatures = new Map<string, string>();
 let capabilityCatalogProvider: () => ReturnType<typeof getCapabilityCatalog> = getCapabilityCatalog;
@@ -51,6 +52,24 @@ function probe<T>(fn: () => T): Probe<T> {
 function numberArg(value: unknown, fallback: number) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function workflowHealthClientState(args: Record<string, any>): RuntimeClientState | undefined {
+  const clean = (value: unknown) => typeof value === 'string' ? value.trim() : '';
+  const toolsVisible = args.clientToolsVisible === true || args.clientToolsVisible === 'true'
+    ? true
+    : args.clientToolsVisible === false || args.clientToolsVisible === 'false'
+      ? false
+      : undefined;
+  const state: RuntimeClientState = {
+    contractVersion: clean(args.previousContractVersion) || undefined,
+    runtimeInstanceId: clean(args.previousRuntimeInstanceId) || undefined,
+    toolSurfaceIdentity: clean(args.previousToolSurfaceIdentity) || undefined,
+    toolsVisible,
+  };
+  return state.contractVersion || state.runtimeInstanceId || state.toolSurfaceIdentity || state.toolsVisible !== undefined
+    ? state
+    : undefined;
 }
 
 type WorkflowHealthResponseMode = 'compact' | 'full';
@@ -761,12 +780,13 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
     return Math.round(elapsed * 100) / 100;
   };
   const windowMs = numberArg(args.windowMs, 10 * 60 * 1000);
+  const clientState = workflowHealthClientState(args);
   const catalog = capabilityCatalogProvider();
   const advertisedTools = getMcpToolList(catalog.mcpProfile.active);
   const advertisedNames = new Set(advertisedTools.map((tool) => tool.name));
   const advertisedDefinitions = catalog.tools.filter((tool: any) => advertisedNames.has(tool.name));
   const catalogMs = phaseMs();
-  const diagnostics = getDevFlowDiagnostics({ windowMs, includePerformanceHistory: responseMode === 'full' });
+  const diagnostics = getDevFlowDiagnostics({ windowMs, includePerformanceHistory: responseMode === 'full', clientState });
   const diagnosticsMs = phaseMs();
   const gitProbe = probe(() => getGitStatus(state, args));
   const gitMs = phaseMs();
@@ -847,17 +867,23 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
       })),
   };
   const closureRecovery = catalog.recovery || {
+    scope: 'server-advertised',
     profile: catalog.mcpProfile.active,
+    serverReady: false,
     ready: false,
     toolSurfaceIdentity: catalog.mcpProfile.toolSurfaceIdentity,
     missingCapabilityIds: ['capability-status-missing'],
     capabilities: [],
   };
+  const recoveryParity = classifyRecoveryCapabilityParity(diagnostics.runtime as any, closureRecovery as any, clientState);
   if (!closureRecovery.ready) {
     const missing = Array.isArray(closureRecovery.missingCapabilityIds)
       ? closureRecovery.missingCapabilityIds.slice(0, 8).join(', ')
       : 'unknown';
     recommendations.push(`Closure recovery capability drift detected for profile '${closureRecovery.profile}' (${missing || 'unknown'}); refresh/reconnect the MCP capability surface when active work is safe, and do not attempt unavailable recovery actions until the advertised surface matches the contract.`);
+  }
+  if (closureRecovery.ready && recoveryParity.endToEnd.ready === false) {
+    recommendations.push(`Client-observed recovery parity is not ready (${recoveryParity.endToEnd.reasonCodes.join(', ') || 'client-registry-stale'}); ${recoveryParity.endToEnd.nextAction}`);
   }
   if (runtimeSupervisor?.api?.status === 'healthy' && (runtimeSupervisor?.tunnel?.status === 'degraded' || runtimeSupervisor?.tunnel?.status === 'down')) {
     recommendations.push(`Public zrok route is ${runtimeSupervisor.tunnel.status} while the local API is healthy; inspect zrok service/share state and runtime supervisor public-probe evidence.`);
@@ -958,10 +984,15 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
       search,
       keyToolsPresent,
       recovery: {
+        scope: 'end-to-end',
+        ready: recoveryParity.endToEnd.ready,
+        serverReady: closureRecovery.serverReady ?? closureRecovery.ready,
+        serverScope: closureRecovery.scope || 'server-advertised',
         profile: closureRecovery.profile,
-        ready: closureRecovery.ready,
         toolSurfaceIdentity: closureRecovery.toolSurfaceIdentity,
         missingCapabilityIds: Array.isArray(closureRecovery.missingCapabilityIds) ? closureRecovery.missingCapabilityIds.slice(0, 8) : ['capability-status-missing'],
+        clientObserved: recoveryParity.clientObserved,
+        endToEnd: recoveryParity.endToEnd,
       },
     },
     git,
@@ -1065,7 +1096,8 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
         toolCount: advertisedTools.length,
         backendToolCount: catalog.tools.length,
         keyToolsPresent,
-        recoveryReady: closureRecovery.ready,
+        serverRecoveryReady: closureRecovery.serverReady ?? closureRecovery.ready,
+        recoveryReady: recoveryParity.endToEnd.ready,
       },
       supervisor: runtimeSupervisor ? {
         summary: runtimeSupervisor.summary,

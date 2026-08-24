@@ -289,6 +289,57 @@ test('runtime diagnostics expose tool-surface identity and distinguish schema dr
   assert.match(schemaChanged.runtimeDiagnosis.nextAction, /refresh|reconnect|registry/i);
 });
 
+test('recovery parity separates server readiness from client-observed MCP surface proof', () => {
+  const current = getDevFlowDiagnostics({ supervisorState: null } as any) as any;
+  assert.equal(current.recoveryParity.server.ready, true);
+  assert.equal(current.recoveryParity.clientObserved.state, 'unknown');
+  assert.equal(current.recoveryParity.endToEnd.state, 'unknown');
+  assert.equal(current.recoveryParity.endToEnd.ready, null);
+
+  const matching = getDevFlowDiagnostics({
+    supervisorState: null,
+    clientState: {
+      contractVersion: current.runtime.contractVersion,
+      runtimeInstanceId: current.runtime.runtimeInstanceId,
+      toolSurfaceIdentity: current.runtime.toolSurfaceIdentity,
+      toolsVisible: true,
+    },
+  } as any) as any;
+  assert.equal(matching.recoveryParity.clientObserved.state, 'ready');
+  assert.equal(matching.recoveryParity.endToEnd.state, 'ready');
+  assert.equal(matching.recoveryParity.endToEnd.ready, true);
+
+  const staleSurface = getDevFlowDiagnostics({
+    supervisorState: null,
+    clientState: {
+      contractVersion: current.runtime.contractVersion,
+      runtimeInstanceId: current.runtime.runtimeInstanceId,
+      toolSurfaceIdentity: '0'.repeat(64),
+      toolsVisible: true,
+    },
+  } as any) as any;
+  assert.equal(staleSurface.recoveryParity.server.ready, true);
+  assert.equal(staleSurface.recoveryParity.clientObserved.state, 'stale');
+  assert.equal(staleSurface.recoveryParity.endToEnd.state, 'not-ready');
+  assert.equal(staleSurface.recoveryParity.endToEnd.ready, false);
+  assert.ok(staleSurface.recoveryParity.endToEnd.reasonCodes.includes('CLIENT_TOOL_SURFACE_MISMATCH'));
+  assert.equal(staleSurface.recoveryParity.endToEnd.recoverySurface, 'get_recovery_handoff');
+
+  const missingTools = getDevFlowDiagnostics({
+    supervisorState: null,
+    clientState: {
+      contractVersion: current.runtime.contractVersion,
+      runtimeInstanceId: current.runtime.runtimeInstanceId,
+      toolSurfaceIdentity: current.runtime.toolSurfaceIdentity,
+      toolsVisible: false,
+    },
+  } as any) as any;
+  assert.equal(missingTools.recoveryParity.clientObserved.state, 'missing-tools');
+  assert.equal(missingTools.recoveryParity.endToEnd.ready, false);
+  assert.ok(missingTools.recoveryParity.endToEnd.reasonCodes.includes('CLIENT_TOOLS_NOT_VISIBLE'));
+  assert.equal(missingTools.recoveryParity.endToEnd.recoverySurface, 'get_recovery_handoff');
+});
+
 test('a fresh process receives a different runtime instance id', () => {
   const parent = getDevFlowDiagnostics({ supervisorState: null } as any) as any;
   const childRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-runtime-identity-child-'));

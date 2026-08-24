@@ -251,6 +251,10 @@ test('fresh client receives the accepted durable job and original managed worksp
     assert.equal(response.status, 200);
     assert.equal(body.diagnosis.code, 'client-registry-desync');
     assert.match(body.diagnosis.detail, /cannot repair/i);
+    assert.equal(body.recoveryParity.server.ready, true);
+    assert.equal(body.recoveryParity.clientObserved.state, 'missing-tools');
+    assert.equal(body.recoveryParity.endToEnd.ready, false);
+    assert.equal(body.recoveryParity.endToEnd.recoverySurface, 'get_recovery_handoff');
     assert.equal(body.project.id, projectId);
     assert.equal(body.task.id, fixture.taskId);
     assert.equal(body.workspace.workspaceId, fixture.workspace.workspaceId);

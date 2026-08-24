@@ -26,7 +26,7 @@ import {
 } from './executionSessionService.js';
 import { computeLifecycleAuthoritySnapshot } from './lifecycleAuthorityService.js';
 import { resolveTaskVerificationCoverage, type TaskVerificationCoverageResolution } from './taskCommitPlanService.js';
-import { summarizeQualityDebt } from './qualityDebtService.js';
+import { summarizeQualityDebt, type TaskQualityDebtSummary } from './qualityDebtService.js';
 import { withSyncLock } from './lockAndIdempotencyService.js';
 
 export type TaskWorkspaceFinalizationCheck = {
@@ -600,6 +600,7 @@ export type TaskWorkspaceFinalizationResult = {
   postIntegration?: PostIntegrationRequirement;
   gitEvidence?: any;
   verificationEvidence?: any[];
+  qualityDebt?: TaskQualityDebtSummary;
   cleanup?: any;
   blockers?: unknown;
 };

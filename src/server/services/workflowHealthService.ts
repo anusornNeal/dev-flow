@@ -691,6 +691,7 @@ function projectHarnessHealth(state: AppState, args: Record<string, any>, option
   if (truncated) drift.push({
     code: 'PROJECT_LIFECYCLE_SCAN_TRUNCATED',
     message: 'Project aggregate exceeded a bounded lifecycle scan and cannot prove a complete all-clear.',
+    severity: 'debt',
     nextAction: 'Narrow health to an explicit task/workspace or inspect additional bounded pages.',
   });
 

@@ -123,6 +123,13 @@ const coverageManifest: CoverageScenario[] = [
     ],
   },
   {
+    id: 'DVF-0722-truncation-only-health-debt',
+    file: 'tests/server/workflowHealthService.test.ts',
+    requiredSnippets: [
+      "test('project-scoped health treats truncation-only idle aggregate as debt instead of a hard blocker'",
+    ],
+  },
+  {
     id: 'DVF-0719-recovery-capability-health-drift',
     file: 'tests/server/workflowHealthService.test.ts',
     requiredSnippets: [

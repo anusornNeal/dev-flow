@@ -437,6 +437,57 @@ test('project-scoped health reports aggregate activity without fabricated execut
   assert.equal(health.execution, undefined);
 });
 
+test('project-scoped health treats truncation-only idle aggregate as debt instead of a hard blocker', () => {
+  const projectId = 'project-health-truncated-idle';
+  const repo = path.join(tempRoot, projectId);
+  fs.mkdirSync(repo, { recursive: true });
+  git(repo, ['init']);
+  git(repo, ['config', 'user.name', 'DevFlow Test']);
+  git(repo, ['config', 'user.email', 'devflow@example.com']);
+  fs.writeFileSync(path.join(repo, 'base.txt'), 'base\n');
+  git(repo, ['add', 'base.txt']);
+  git(repo, ['commit', '-m', 'initial']);
+  createProject({ id: projectId, name: 'Truncated Idle Health Fixture', repoUrl: 'https://example.com/health-truncated-idle', localPath: repo });
+
+  const now = new Date().toISOString();
+  for (let index = 0; index < 101; index += 1) {
+    saveTask({
+      id: `task-health-truncated-idle-${index}`,
+      displayId: `DVF-HEALTH-TRUNCATED-IDLE-${index}`,
+      title: 'Historical completed health fixture',
+      description: 'Force bounded project task aggregation without live lifecycle authority.',
+      projectId,
+      status: 'done',
+      priority: 'low',
+      category: 'backend',
+      tags: [],
+      targetFiles: ['base.txt'],
+      checklist: [],
+      logs: [],
+      bugs: [],
+      images: [],
+      createdAt: now,
+      updatedAt: now,
+    } as any);
+  }
+
+  const health: any = getChatGptHarnessHealthSnapshot({
+    projectsCache: [{ id: projectId, name: 'Truncated Idle Health Fixture', repoUrl: 'https://example.com/health-truncated-idle', localPath: repo }],
+  } as any, { projectId });
+  const truncation = health.drift.find((entry: any) => entry.code === 'PROJECT_LIFECYCLE_SCAN_TRUNCATED');
+
+  assert.equal(health.aggregate.activeExecutionCount, 0);
+  assert.equal(health.aggregate.activeClaimCount, 0);
+  assert.equal(health.aggregate.pendingOperationCount, 0);
+  assert.equal(health.aggregate.actionableWorkspaceCount, 0);
+  assert.equal(health.aggregate.canonicalLiveAuthorityCount, 0);
+  assert.equal(health.aggregate.truncated, true);
+  assert.ok(truncation);
+  assert.equal(truncation.severity, 'debt');
+  assert.equal(health.hardBlockers.includes('PROJECT_LIFECYCLE_SCAN_TRUNCATED'), false);
+  assert.equal(health.status, 'idle');
+});
+
 test('project-scoped health resolves late claimed executions while surfacing missing workspace authority', () => {
   const repo = createRepo('project-aggregate-late-claim-health');
   for (let index = 0; index < 105; index += 1) {

@@ -500,6 +500,9 @@ test('ordinary commit automatically preserves missing verification as auditable 
   assert.equal(plan.commitAllowed, true);
   assert.deepEqual(plan.blockers, []);
   assert.ok(plan.debts.some((entry: any) => entry.code === 'EXECUTION_VERIFICATION_NOT_FRESH'));
+  assert.equal(plan.qualityDebt.status, 'debt');
+  assert.deepEqual(plan.qualityDebt.codes, ['EXECUTION_VERIFICATION_NOT_FRESH']);
+  assert.equal(plan.qualityDebt.count, 1);
 
   const committed = commitPlan.commitTaskOwnedChanges({ countersCache: {} }, {
     taskId,

@@ -17,6 +17,7 @@ import { resolveSessionWorkspace } from './sessionWorkspaceService.js';
 import { computeLifecycleAuthoritySnapshot } from './lifecycleAuthorityService.js';
 import { getProjectCommandExecutionIdentity } from './projectCommandService.js';
 import { buildVerificationCoverageIdentity } from './verificationBatchService.js';
+import { summarizeQualityDebt, type TaskQualityDebtSummary } from './qualityDebtService.js';
 
 export type TaskCommitPlanBlocker = {
   code: string;
@@ -45,6 +46,7 @@ export type TaskCommitPlan = {
   commitAllowed: boolean;
   blockers: TaskCommitPlanBlocker[];
   debts: TaskCommitPlanBlocker[];
+  qualityDebt: TaskQualityDebtSummary;
 };
 
 function requireTaskId(value: unknown) {
@@ -359,6 +361,7 @@ export function buildTaskCommitPlan(_state: AppState, args: Record<string, any>)
     commitAllowed: blockers.length === 0,
     blockers,
     debts,
+    qualityDebt: summarizeQualityDebt(debts),
   };
 }
 

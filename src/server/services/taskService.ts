@@ -9,6 +9,8 @@ import {
   projectsShareCanonicalRepository,
 } from '../repositories/projectRepository.js';
 import { getTasks } from '../repositories/taskRepository.js';
+import { getLatestTaskFinalizationOperation } from '../repositories/taskFinalizationOperationRepository.js';
+import { summarizeQualityDebt } from './qualityDebtService.js';
 import type { AgentCompletionPayload, AgentCompletionTest, TaskCategory } from '../../types';
 import type { AppState } from '../types';
 import { VALID_AGENTS, LEGACY_VALID_EFFORTS_FALLBACK, VALID_MODELS, VALID_PRIORITIES, VALID_STATUSES, VALID_TASK_CATEGORIES } from '../constants';
@@ -529,10 +531,24 @@ export function buildChatGptHarnessEnvelope(state: AppState, task: any) {
     ...deniedReasonCodes.filter((code) => hardPolicyReasonCodes.has(code)),
     ...(bindingError ? [bindingError] : []),
   ])].slice(0, 12);
-  const qualityDebt = [...new Set([
+  const terminalFinalization = task?.status === 'done'
+    ? getLatestTaskFinalizationOperation(task.id)
+    : null;
+  const terminalDebtEntries = terminalFinalization?.status === 'completed'
+    && Array.isArray(terminalFinalization.verification?.qualityDebt)
+      ? terminalFinalization.verification.qualityDebt as any[]
+      : null;
+  const terminalQualityDebt = terminalDebtEntries === null
+    ? null
+    : summarizeQualityDebt(terminalDebtEntries);
+  const liveQualityDebt = terminalQualityDebt ? [] : [
     ...(authority?.guardrails.debts.map((entry) => entry.code) || []),
     ...(Array.isArray(checkpoint?.blockers) ? checkpoint.blockers.map(String) : []),
     ...deniedReasonCodes.filter((code) => !hardPolicyReasonCodes.has(code)),
+  ];
+  const qualityDebt = [...new Set([
+    ...(terminalQualityDebt?.codes || []),
+    ...liveQualityDebt,
   ])].slice(0, 12);
   const warnings = [...new Set(authority?.guardrails.warnings.map((entry) => entry.code) || [])].slice(0, 12);
 
@@ -613,6 +629,7 @@ export function buildChatGptHarnessEnvelope(state: AppState, task: any) {
     allowedNextActionClasses,
     hardBlockers,
     qualityDebt,
+    terminalQualityDebt,
     warnings,
   };
 }

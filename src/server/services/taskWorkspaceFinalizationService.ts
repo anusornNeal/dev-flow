@@ -26,6 +26,7 @@ import {
 } from './executionSessionService.js';
 import { computeLifecycleAuthoritySnapshot } from './lifecycleAuthorityService.js';
 import { resolveTaskVerificationCoverage, type TaskVerificationCoverageResolution } from './taskCommitPlanService.js';
+import { summarizeQualityDebt } from './qualityDebtService.js';
 import { withSyncLock } from './lockAndIdempotencyService.js';
 
 export type TaskWorkspaceFinalizationCheck = {
@@ -712,6 +713,7 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
         integration: operation.integration,
         gitEvidence: operation.gitEvidence,
         verificationEvidence: Array.isArray(operation.verification?.evidence) ? operation.verification.evidence : [],
+        qualityDebt: summarizeQualityDebt(Array.isArray(operation.verification?.qualityDebt) ? operation.verification.qualityDebt as any[] : []),
         cleanup: operation.cleanup || { removed: true, reason: 'already-completed' },
       };
     }
@@ -723,6 +725,7 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
     let gitEvidence: any = operation.gitEvidence;
     let verificationEvidence: any[] = Array.isArray(operation.verification?.evidence) ? operation.verification.evidence as any[] : [];
     let qualityDebt: FinalizationQualityDebt[] = initialQualityDebt;
+    let qualityDebtSummary = summarizeQualityDebt(qualityDebt);
 
     try {
       if (operation.integration) {
@@ -788,6 +791,7 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
           },
         }] : []),
       ];
+      qualityDebtSummary = summarizeQualityDebt(qualityDebt);
       const reusedCoverageChecks: TaskWorkspaceFinalizationCheck[] = effectiveChecks.length === 0 && targetCoverage?.status === 'covered' && targetCoverage.reusable
         ? targetCoverage.coveredCommands.map((command) => ({
             name: `reused coverage: ${command}`,
@@ -809,6 +813,7 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
           evidence: verificationEvidence,
           coverage: { source: sourceCoverage, target: targetCoverage },
           qualityDebt,
+          qualityDebtSummary,
           ...(ownerBreakGlass ? { ownerBreakGlass } : {}),
         },
         failure: null,
@@ -895,6 +900,7 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
           postIntegration,
           gitEvidence,
           verificationEvidence,
+          qualityDebt: qualityDebtSummary,
           cleanup: operation.cleanup,
         };
       }
@@ -918,6 +924,7 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
           postIntegration,
           gitEvidence,
           verificationEvidence,
+          qualityDebt: qualityDebtSummary,
           cleanup: operation.cleanup,
         };
       }
@@ -943,6 +950,7 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
           postIntegration,
           gitEvidence,
           verificationEvidence,
+          qualityDebt: qualityDebtSummary,
           cleanup,
         };
       } catch (cleanupError: any) {
@@ -963,6 +971,7 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
           postIntegration,
           gitEvidence,
           verificationEvidence,
+          qualityDebt: qualityDebtSummary,
           cleanup: { removed: false, workspaceId, error: operation.failure },
         };
       }

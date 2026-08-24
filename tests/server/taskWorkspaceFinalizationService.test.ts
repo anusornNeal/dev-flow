@@ -26,6 +26,7 @@ const { getProjectCommandExecutionIdentity } = await import('../../src/server/se
 const { buildVerificationCoverageIdentity } = await import('../../src/server/services/verificationBatchService.js');
 const { integrateWorkspaceCommits, reconstructRecordedWorkspaceIntegration } = await import('../../src/server/services/workspaceIntegrationService.js');
 const { finalizeTaskWorkspace, __setTaskFinalizationFaultBoundaryForTests } = await import('../../src/server/services/taskWorkspaceFinalizationService.js');
+const { getAgentTaskContext } = await import('../../src/server/services/taskService.js');
 const { getTaskFinalizationOperation } = await import('../../src/server/repositories/taskFinalizationOperationRepository.js');
 
 function git(root: string, args: string[], allowFailure = false) {
@@ -287,6 +288,12 @@ test('committed workspace finalizes into local develop and removes clean worktre
   assert.equal(saved.branch, 'develop');
   assert.equal(saved.gitEvidence?.commit, git(root, ['rev-parse', 'HEAD']).stdout);
   assert.equal(saved.verificationEvidence?.[0]?.status, 'passed');
+  assert.equal(result.qualityDebt.status, 'clear');
+  assert.deepEqual(result.qualityDebt.codes, []);
+  assert.deepEqual((getTaskFinalizationOperation(result.operation.id)?.verification as any)?.qualityDebtSummary, result.qualityDebt);
+  const context = getAgentTaskContext(state, task.id, false)!;
+  assert.deepEqual(context.harness.qualityDebt, []);
+  assert.deepEqual(context.harness.terminalQualityDebt, result.qualityDebt);
   assert.equal(saved.claim, undefined);
   assert.equal(getExecutionSessionState(execution.id).session.status, 'completed');
   assert.ok((saved.logs || []).some((entry: any) => /Finalized managed workspace/.test(entry.message)));
@@ -370,6 +377,12 @@ test('finalization preserves checklist and verification quality debt while still
   assert.equal(getTask(incomplete.task.id)?.checklist?.[0]?.completed, false);
   assert.equal(getTask(incomplete.task.id)?.verificationEvidence?.[0]?.status, 'failed');
   assert.deepEqual((withDebt.operation.verification as any)?.qualityDebt?.map((entry: any) => entry.code).sort(), ['CHECKLIST_INCOMPLETE', 'POST_INTEGRATION_VERIFICATION_REQUIRED', 'VERIFICATION_NOT_PASSED']);
+  assert.equal(withDebt.qualityDebt.status, 'debt');
+  assert.deepEqual(withDebt.qualityDebt.codes.slice().sort(), ['CHECKLIST_INCOMPLETE', 'POST_INTEGRATION_VERIFICATION_REQUIRED', 'VERIFICATION_NOT_PASSED']);
+  assert.deepEqual((getTaskFinalizationOperation(withDebt.operation.id)?.verification as any)?.qualityDebtSummary, withDebt.qualityDebt);
+  const debtContext = getAgentTaskContext(incomplete.state, incomplete.task.id, false)!;
+  assert.deepEqual(debtContext.harness.qualityDebt.slice().sort(), withDebt.qualityDebt.codes.slice().sort());
+  assert.deepEqual(debtContext.harness.terminalQualityDebt, withDebt.qualityDebt);
 
   const missing = fixture('guards-missing-verification');
   const withoutChecks = finalizeTaskWorkspace(missing.state, { taskId: missing.task.id, workspaceId: missing.workspace.workspaceId, checks: [] });
@@ -377,6 +390,12 @@ test('finalization preserves checklist and verification quality debt while still
   assert.equal(getTask(missing.task.id)?.status, 'done');
   assert.deepEqual(getTask(missing.task.id)?.verificationEvidence || [], []);
   assert.equal((withoutChecks.operation.verification as any)?.qualityDebt?.some((entry: any) => entry.code === 'VERIFICATION_EVIDENCE_MISSING'), true);
+  assert.equal(withoutChecks.qualityDebt.status, 'debt');
+  assert.equal(withoutChecks.qualityDebt.codes.includes('VERIFICATION_EVIDENCE_MISSING'), true);
+  assert.deepEqual((getTaskFinalizationOperation(withoutChecks.operation.id)?.verification as any)?.qualityDebtSummary, withoutChecks.qualityDebt);
+  const missingContext = getAgentTaskContext(missing.state, missing.task.id, false)!;
+  assert.deepEqual(missingContext.harness.qualityDebt.slice().sort(), withoutChecks.qualityDebt.codes.slice().sort());
+  assert.deepEqual(missingContext.harness.terminalQualityDebt, withoutChecks.qualityDebt);
 });
 
 

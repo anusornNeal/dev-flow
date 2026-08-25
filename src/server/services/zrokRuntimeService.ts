@@ -47,25 +47,40 @@ export interface ZrokRuntimeStatus {
   actionability: {
     canRecheck: true;
     canTakeOver: boolean;
+    canSwitchHere: boolean;
     canRecoverStaleSameMachineOwner?: boolean;
     takeoverBlockedReason?: string;
   };
 }
 
-export interface ZrokTakeoverResult {
+interface ZrokRuntimeTransitionResult<TCode extends string> {
   ok: boolean;
   changed: boolean;
-  code?:
-    | 'ZROK_TAKEOVER_NOT_AVAILABLE'
-    | 'ZROK_TAKEOVER_REMOTE_FENCE_UNAVAILABLE'
-    | 'ZROK_TAKEOVER_REMOTE_FENCE_FAILED'
-    | 'ZROK_TAKEOVER_STALE_OWNER'
-    | 'ZROK_TAKEOVER_LOCAL_SHARE_FAILED'
-    | 'ZROK_TAKEOVER_VERIFY_FAILED'
-    | 'ZROK_TAKEOVER_FAILED';
+  code?: TCode;
   message: string;
   status: ZrokRuntimeStatus;
 }
+
+export interface ZrokTakeoverResult extends ZrokRuntimeTransitionResult<
+  | 'ZROK_TAKEOVER_NOT_AVAILABLE'
+  | 'ZROK_TAKEOVER_IN_PROGRESS'
+  | 'ZROK_TAKEOVER_REMOTE_FENCE_UNAVAILABLE'
+  | 'ZROK_TAKEOVER_REMOTE_FENCE_FAILED'
+  | 'ZROK_TAKEOVER_STALE_OWNER'
+  | 'ZROK_TAKEOVER_LOCAL_SHARE_FAILED'
+  | 'ZROK_TAKEOVER_VERIFY_FAILED'
+  | 'ZROK_TAKEOVER_FAILED'
+> {}
+
+export interface ZrokSwitchHereResult extends ZrokRuntimeTransitionResult<
+    | 'ZROK_SWITCH_NOT_AVAILABLE'
+    | 'ZROK_SWITCH_IN_PROGRESS'
+    | 'ZROK_SWITCH_STALE_OWNER'
+    | 'ZROK_SWITCH_DELETE_FAILED'
+    | 'ZROK_SWITCH_LOCAL_SHARE_FAILED'
+    | 'ZROK_SWITCH_VERIFY_FAILED'
+    | 'ZROK_SWITCH_FAILED'
+> {}
 
 export interface ZrokEnvironmentSnapshot {
   enabled: boolean;
@@ -146,11 +161,13 @@ export interface ZrokRuntimeConfig {
 export interface ZrokRuntimeService {
   getStatus(): Promise<ZrokRuntimeStatus>;
   takeOver(): Promise<ZrokTakeoverResult>;
+  switchHere(): Promise<ZrokSwitchHereResult>;
 }
 
 interface DiscoverySnapshot {
   environment: ZrokEnvironmentSnapshot;
   serviceState: ZrokServiceState;
+  localAgentReachable: boolean;
   names: ZrokNameRecord[];
   shares: ZrokShareRecord[];
   environments: ZrokEnvironmentRecord[];
@@ -230,6 +247,7 @@ function publicStatus(
     probe?: ZrokPublicProbe;
     message?: string;
     canTakeOver?: boolean;
+    canSwitchHere?: boolean;
     canRecoverStaleSameMachineOwner?: boolean;
     takeoverBlockedReason?: string;
   } = {},
@@ -256,6 +274,7 @@ function publicStatus(
     actionability: {
       canRecheck: true,
       canTakeOver: Boolean(input.canTakeOver),
+      canSwitchHere: Boolean(input.canSwitchHere),
       canRecoverStaleSameMachineOwner: Boolean(input.canRecoverStaleSameMachineOwner),
       ...(input.takeoverBlockedReason ? { takeoverBlockedReason: input.takeoverBlockedReason } : {}),
     },
@@ -353,6 +372,35 @@ function isStaleSameMachineOwner(discovery: DiscoverySnapshot) {
     && discovery.publicProbe.state === 'unhealthy'
     && !isRemoteAgentEnrolled(discovery.environments, ownerEnvZId)
     && isSameMachinePredecessor(discovery.environments, discovery.environment.envZId, ownerEnvZId),
+  );
+}
+
+function remoteFenceAvailable(discovery: DiscoverySnapshot) {
+  const remoteShare = discovery.currentShare;
+  return Boolean(
+    discovery.owner === 'remote'
+    && remoteShare
+    && discovery.serviceState === 'running'
+    && isRemoteAgentEnrolled(discovery.environments, remoteShare.envZId)
+    && discovery.ownerAgentStatus?.reachable
+    && discovery.ownerAgentStatus.remoteControl === 'available'
+    && discovery.ownerAgentStatus.shares.some((share) => share.token === remoteShare.shareToken),
+  );
+}
+
+function canSwitchHere(discovery: DiscoverySnapshot) {
+  const remoteShare = discovery.currentShare;
+  const remoteEnrolled = Boolean(remoteShare && isRemoteAgentEnrolled(discovery.environments, remoteShare.envZId));
+  return Boolean(
+    discovery.owner === 'remote'
+    && remoteShare
+    && discovery.serviceState === 'running'
+    && discovery.localAgentReachable
+    && !isStaleSameMachineOwner(discovery)
+    && (
+      !remoteEnrolled
+      || discovery.ownerAgentStatus?.remoteControl === 'unsupported'
+    ),
   );
 }
 
@@ -577,6 +625,7 @@ async function loadDiscovery(
   return {
     environment,
     serviceState,
+    localAgentReachable: localAgentStatus.reachable,
     names,
     shares,
     environments,
@@ -620,6 +669,7 @@ function statusFromDiscovery(adapter: ZrokRuntimeAdapter, discovery: DiscoverySn
         ? 'Standby · stale zrok owner from this machine can be recovered safely'
         : 'Standby · active on another machine',
       canTakeOver: !blockedReason,
+      canSwitchHere: canSwitchHere(discovery),
       canRecoverStaleSameMachineOwner: staleSameMachineRecoverable,
       takeoverBlockedReason: blockedReason,
     });
@@ -724,6 +774,14 @@ function safeTakeoverFailure(
   return { ok: false, changed: false, code, message, status };
 }
 
+function safeSwitchFailure(
+  code: Exclude<ZrokSwitchHereResult['code'], undefined>,
+  message: string,
+  status: ZrokRuntimeStatus,
+): ZrokSwitchHereResult {
+  return { ok: false, changed: false, code, message, status };
+}
+
 function sameManagedName(left: ZrokNameRecord, right: ZrokNameRecord) {
   return left.namespaceToken === right.namespaceToken && normalizeName(left.name) === normalizeName(right.name);
 }
@@ -732,7 +790,10 @@ export function createZrokRuntimeService(
   adapter: ZrokRuntimeAdapter,
   config: ZrokRuntimeConfig,
 ): ZrokRuntimeService {
-  let takeoverInFlight: Promise<ZrokTakeoverResult> | null = null;
+  let transitionInFlight:
+    | { kind: 'takeover'; promise: Promise<ZrokTakeoverResult> }
+    | { kind: 'switchHere'; promise: Promise<ZrokSwitchHereResult> }
+    | null = null;
   let trustedPublicBaseUrl = normalizeBaseUrl(config.baseUrl);
 
   const rememberTrustedBaseUrl = (status: ZrokRuntimeStatus) => {
@@ -748,6 +809,38 @@ export function createZrokRuntimeService(
     } catch {
       return safeSetupError(adapter, 'DevFlow could not inspect the zrok runtime safely. Run Recheck or zrok setup again.');
     }
+  };
+
+  const withTakeoverTransition = async (transition: () => Promise<ZrokTakeoverResult>): Promise<ZrokTakeoverResult> => {
+    if (transitionInFlight?.kind === 'takeover') return transitionInFlight.promise;
+    if (transitionInFlight?.kind === 'switchHere') {
+      return safeTakeoverFailure(
+        'ZROK_TAKEOVER_IN_PROGRESS',
+        'Another zrok ownership transition is already in progress.',
+        await getStatus(),
+      );
+    }
+    const promise = transition().finally(() => {
+      if (transitionInFlight?.promise === promise) transitionInFlight = null;
+    });
+    transitionInFlight = { kind: 'takeover', promise };
+    return promise;
+  };
+
+  const withSwitchTransition = async (transition: () => Promise<ZrokSwitchHereResult>): Promise<ZrokSwitchHereResult> => {
+    if (transitionInFlight?.kind === 'switchHere') return transitionInFlight.promise;
+    if (transitionInFlight?.kind === 'takeover') {
+      return safeSwitchFailure(
+        'ZROK_SWITCH_IN_PROGRESS',
+        'Another zrok ownership transition is already in progress.',
+        await getStatus(),
+      );
+    }
+    const promise = transition().finally(() => {
+      if (transitionInFlight?.promise === promise) transitionInFlight = null;
+    });
+    transitionInFlight = { kind: 'switchHere', promise };
+    return promise;
   };
 
   const performTakeover = async (): Promise<ZrokTakeoverResult> => {
@@ -796,14 +889,7 @@ export function createZrokRuntimeService(
     const remoteShare = discovery.currentShare;
     const environment = discovery.environment;
     const staleSameMachineRecovery = isStaleSameMachineOwner(discovery);
-    const remoteFenceAvailable = Boolean(
-      discovery.serviceState === 'running'
-      && isRemoteAgentEnrolled(discovery.environments, remoteShare.envZId)
-      && discovery.ownerAgentStatus?.reachable
-      && discovery.ownerAgentStatus.remoteControl === 'available'
-      && discovery.ownerAgentStatus.shares.some((share) => share.token === remoteShare.shareToken),
-    );
-    if (!staleSameMachineRecovery && !remoteFenceAvailable) {
+    if (!staleSameMachineRecovery && !remoteFenceAvailable(discovery)) {
       return safeTakeoverFailure(
         'ZROK_TAKEOVER_REMOTE_FENCE_UNAVAILABLE',
         'The active machine cannot be fenced through authenticated zrok agent remoting. No ownership change was attempted.',
@@ -969,14 +1055,159 @@ export function createZrokRuntimeService(
     };
   };
 
+  const performSwitchHere = async (): Promise<ZrokSwitchHereResult> => {
+    let discovery: DiscoverySnapshot | ZrokRuntimeStatus;
+    try {
+      discovery = await loadDiscovery(adapter, config, trustedPublicBaseUrl);
+    } catch {
+      const status = safeSetupError(adapter, 'DevFlow could not inspect the zrok runtime safely.');
+      return safeSwitchFailure('ZROK_SWITCH_FAILED', 'Switch here could not start because zrok runtime inspection failed.', status);
+    }
+
+    if ('status' in discovery) {
+      if (discovery.status === 'online' && discovery.share.owner === 'local') {
+        return {
+          ok: true,
+          changed: false,
+          message: 'This machine already owns the managed zrok endpoint.',
+          status: discovery,
+        };
+      }
+      return safeSwitchFailure(
+        'ZROK_SWITCH_NOT_AVAILABLE',
+        'Switch here is unavailable until zrok setup is healthy.',
+        discovery,
+      );
+    }
+
+    const initialStatus = statusFromDiscovery(adapter, discovery);
+    if (initialStatus.status === 'online' && discovery.owner === 'local') {
+      return {
+        ok: true,
+        changed: false,
+        message: 'This machine already owns the managed zrok endpoint.',
+        status: initialStatus,
+      };
+    }
+
+    if (!canSwitchHere(discovery) || !discovery.currentShare) {
+      return safeSwitchFailure(
+        'ZROK_SWITCH_NOT_AVAILABLE',
+        'Switch here is only available while the managed zrok endpoint is active on another machine and authenticated remote fencing is unavailable.',
+        initialStatus,
+      );
+    }
+
+    const remoteShare = discovery.currentShare;
+
+    try {
+      const [freshNames, freshShares] = await Promise.all([
+        adapter.listNames(),
+        adapter.listShares(),
+      ]);
+      const freshName = freshNames.find((name) => sameManagedName(name, discovery.managedName));
+      const freshShare = freshName?.shareToken
+        ? freshShares.find((share) => share.shareToken === freshName.shareToken)
+        : undefined;
+      if (!freshName || freshName.shareToken !== remoteShare.shareToken || freshShare?.envZId !== remoteShare.envZId) {
+        return safeSwitchFailure(
+          'ZROK_SWITCH_STALE_OWNER',
+          'The active zrok owner changed during switch preflight. No ownership change was attempted.',
+          await getStatus(),
+        );
+      }
+    } catch {
+      return safeSwitchFailure(
+        'ZROK_SWITCH_STALE_OWNER',
+        'DevFlow could not confirm that the active zrok owner was unchanged. No ownership change was attempted.',
+        initialStatus,
+      );
+    }
+
+    try {
+      await adapter.deleteShare({
+        envZId: remoteShare.envZId,
+        shareToken: remoteShare.shareToken,
+      });
+    } catch {
+      return safeSwitchFailure(
+        'ZROK_SWITCH_DELETE_FAILED',
+        'The exact remote zrok share could not be released. Local activation was not attempted.',
+        await getStatus(),
+      );
+    }
+
+    try {
+      const [postDeleteNames, postDeleteShares] = await Promise.all([
+        adapter.listNames(),
+        adapter.listShares(),
+      ]);
+      const postDeleteName = postDeleteNames.find((name) => sameManagedName(name, discovery.managedName));
+      const rebound = postDeleteName?.shareToken
+        ? postDeleteShares.find((share) => share.shareToken === postDeleteName.shareToken)
+        : undefined;
+      const deletedShareStillPresent = postDeleteShares.some(
+        (share) => share.shareToken === remoteShare.shareToken && share.envZId === remoteShare.envZId,
+      );
+      if (postDeleteName?.shareToken === remoteShare.shareToken || deletedShareStillPresent) {
+        return safeSwitchFailure(
+          'ZROK_SWITCH_DELETE_FAILED',
+          'The old zrok share binding still exists after release. Local activation was not attempted.',
+          await getStatus(),
+        );
+      }
+      if (postDeleteName?.shareToken && rebound?.envZId !== discovery.environment.envZId) {
+        return safeSwitchFailure(
+          'ZROK_SWITCH_STALE_OWNER',
+          'Another machine claimed the managed zrok name after release. Local activation was not attempted.',
+          await getStatus(),
+        );
+      }
+    } catch {
+      return safeSwitchFailure(
+        'ZROK_SWITCH_STALE_OWNER',
+        'DevFlow could not confirm the managed name was free after release. Local activation was not attempted.',
+        await getStatus(),
+      );
+    }
+
+    try {
+      await adapter.startLocalShare({
+        target: config.target,
+        nameSelection: buildNameSelection(discovery.managedName),
+      });
+    } catch {
+      return safeSwitchFailure(
+        'ZROK_SWITCH_LOCAL_SHARE_FAILED',
+        'The remote zrok share was released, but the local zrok share could not be activated.',
+        await getStatus(),
+      );
+    }
+
+    const finalStatus = await getStatus();
+    if (finalStatus.status !== 'online' || finalStatus.share.owner !== 'local' || finalStatus.publicReachability.routedToThisMachine !== true) {
+      return safeSwitchFailure(
+        'ZROK_SWITCH_VERIFY_FAILED',
+        'The local share started, but the stable public URL did not verify as this DevFlow runtime.',
+        finalStatus,
+      );
+    }
+
+    return {
+      ok: true,
+      changed: true,
+      message: 'Switch complete. The stable zrok endpoint now routes to this DevFlow runtime.',
+      status: finalStatus,
+    };
+  };
+
   return {
     getStatus,
     takeOver() {
-      if (takeoverInFlight) return takeoverInFlight;
-      takeoverInFlight = performTakeover().finally(() => {
-        takeoverInFlight = null;
-      });
-      return takeoverInFlight;
+      return withTakeoverTransition(performTakeover);
+    },
+    switchHere() {
+      return withSwitchTransition(performSwitchHere);
     },
   };
 }
@@ -1043,12 +1274,23 @@ export interface DefaultZrokRuntimeAdapterOptions {
   fetchTimeoutMs?: number;
   fetchImpl?: typeof fetch;
   agentConsoleClient?: ZrokAgentConsoleClient;
+  spawnSyncImpl?: typeof spawnSync;
+}
+
+export function resolveZrokServiceProfile(input: {
+  platform?: NodeJS.Platform;
+  windowsDir?: string;
+} = {}) {
+  if ((input.platform || process.platform) !== 'win32') return null;
+  const windowsDir = input.windowsDir?.trim() || process.env.WINDIR?.trim() || 'C:\\Windows';
+  return path.win32.join(windowsDir, 'System32', 'config', 'systemprofile');
 }
 
 export function resolveZrokBinary(input: {
   binary?: string;
   platform?: NodeJS.Platform;
   programFilesDir?: string;
+  fileExists?: (candidate: string) => boolean;
 } = {}) {
   const explicit = input.binary?.trim() || process.env.DEVFLOW_ZROK_BIN?.trim();
   if (explicit) return explicit;
@@ -1058,7 +1300,8 @@ export function resolveZrokBinary(input: {
       ? input.programFilesDir.trim()
       : process.env.ProgramFiles?.trim();
     if (!programFilesDir) return 'zrok2';
-    return path.win32.join(programFilesDir, 'zrok2', 'zrok2.exe');
+    const installedBinary = path.win32.join(programFilesDir, 'zrok2', 'zrok2.exe');
+    return (input.fileExists || fs.existsSync)(installedBinary) ? installedBinary : 'zrok2';
   }
   if (platform === 'darwin') {
     const localBinary = path.join(getDevFlowRuntimeDir(), 'bin', 'zrok2');
@@ -1074,14 +1317,16 @@ export function createDefaultZrokRuntimeAdapter(options: DefaultZrokRuntimeAdapt
   const fetchTimeoutMs = options.fetchTimeoutMs ?? 5_000;
   const fetchImpl = options.fetchImpl || fetch;
   const agentConsoleClient = options.agentConsoleClient || createZrokAgentConsoleClient({ fetchImpl });
+  const spawnSyncImpl = options.spawnSyncImpl || spawnSync;
 
-  const command = (args: string[]): CommandResult => {
-    const result = spawnSync(binary, args, {
+  const command = (args: string[], envOverrides?: NodeJS.ProcessEnv): CommandResult => {
+    const result = spawnSyncImpl(binary, args, {
       encoding: 'utf8',
       shell: false,
       windowsHide: true,
       timeout: commandTimeoutMs,
       maxBuffer: 1_000_000,
+      env: envOverrides ? { ...process.env, ...envOverrides } : process.env,
     });
     const missing = Boolean((result.error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT');
     return {
@@ -1270,6 +1515,7 @@ export function createDefaultZrokRuntimeAdapter(options: DefaultZrokRuntimeAdapt
     },
 
     async startLocalShare(input) {
+      const serviceProfile = resolveZrokServiceProfile();
       const result = command([
         'share',
         'public',
@@ -1278,7 +1524,7 @@ export function createDefaultZrokRuntimeAdapter(options: DefaultZrokRuntimeAdapt
         '--open',
         '--name-selection',
         input.nameSelection,
-      ]);
+      ], serviceProfile ? { USERPROFILE: serviceProfile, HOME: serviceProfile } : undefined);
       if (!result.ok) throw new ZrokRuntimeInternalError('ZROK_LOCAL_SHARE_FAILED');
     },
 

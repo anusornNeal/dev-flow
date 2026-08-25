@@ -54,6 +54,7 @@ function New-FakeBootstrapOps {
         installNssm = 0
         enable = 0
         installService = 0
+        grantServiceProfileAccess = 0
         startService = 0
         createName = 0
         enrollRemoting = 0
@@ -125,6 +126,10 @@ function New-FakeBootstrapOps {
             & $failIf 'InstallService' 'service-install-failed'
             $state.installService++
             $state.serviceState = 'Stopped'
+        }.GetNewClosure()
+        GrantServiceProfileAccess = {
+            [void]$state.calls.Add('GrantServiceProfileAccess')
+            $state.grantServiceProfileAccess++
         }.GetNewClosure()
         StartService = {
             [void]$state.calls.Add('StartService')
@@ -255,6 +260,7 @@ Invoke-Case 'fresh machine installs, enables, creates service/name/remoting' {
     Assert-Equal $fake.State.tokenReads 1 'token prompts once'
     Assert-Equal $fake.State.enable 1 'environment enables once'
     Assert-Equal $fake.State.installService 1 'service installs once'
+    Assert-Equal $fake.State.grantServiceProfileAccess 1 'interactive user access is granted to the service profile'
     Assert-Equal $fake.State.startService 1 'service starts once'
     Assert-Equal $fake.State.createName 1 'reserved name creates once'
     Assert-Equal $fake.State.enrollRemoting 1 'remoting enrolls once'

@@ -7,6 +7,7 @@ import type { ZrokLocalAgentShare, ZrokLocalAgentStatus } from '../../src/server
 import {
   createDefaultZrokRuntimeAdapter,
   createZrokRuntimeService,
+  resolveZrokServiceProfile,
   resolveZrokBinary,
   type ZrokAgentStatusSnapshot,
   type ZrokEnvironmentRecord,
@@ -259,6 +260,7 @@ test('status reports Online only when public routing reaches this runtime', asyn
   assert.equal(status.publicReachability.state, 'healthy');
   assert.equal(status.publicReachability.routedToThisMachine, true);
   assert.equal(status.latencyMs, 87);
+  assert.equal(status.actionability.canSwitchHere, false);
 });
 
 test('uses the local Agent share across profile identities', async () => {
@@ -501,6 +503,26 @@ test('blocks takeover when local Agent authority is unreachable', async () => {
   assert.equal(state.startCalls, 0);
 });
 
+test('local Agent authority unreachable never exposes or mutates Switch here', async () => {
+  const { service, state } = remoteOwnerFixture({
+    localAgentStatus: { reachable: false, shares: [] },
+  });
+
+  const status = await service.getStatus();
+  const switchResult = await (service as typeof service & {
+    switchHere: () => Promise<{ ok: boolean; code?: string; status: { share: { owner: string }; actionability: { canSwitchHere?: boolean } } }>;
+  }).switchHere();
+
+  assert.equal(status.status, 'degraded');
+  assert.equal(status.actionability.canSwitchHere, false);
+  assert.equal(switchResult.ok, false);
+  assert.equal(switchResult.code, 'ZROK_SWITCH_NOT_AVAILABLE');
+  assert.equal(switchResult.status.share.owner, 'unknown');
+  assert.equal(state.deleteCalls.length, 0);
+  assert.equal(state.unshareCalls, 0);
+  assert.equal(state.startCalls, 0);
+});
+
 test('status marks only an unhealthy unenrolled predecessor on the same host/user as auto-recoverable', async () => {
   const { service } = sameMachineStaleOwnerFixture();
   const status = await service.getStatus();
@@ -554,6 +576,7 @@ test('status keeps Standby but blocks takeover when authenticated remote fencing
   const status = await service.getStatus();
   assert.equal(status.status, 'standby');
   assert.equal(status.actionability.canTakeOver, false);
+  assert.equal(status.actionability.canSwitchHere, false);
   assert.match(status.actionability.takeoverBlockedReason || '', /cannot be fenced/i);
 });
 
@@ -571,7 +594,53 @@ test('status keeps Standby but blocks takeover when remote fencing is explicitly
   const status = await service.getStatus();
   assert.equal(status.status, 'standby');
   assert.equal(status.actionability.canTakeOver, false);
+  assert.equal(status.actionability.canSwitchHere, true);
   assert.match(status.actionability.takeoverBlockedReason || '', /unsupported/i);
+});
+
+test('switchHere is unavailable when remote fencing is only transiently unreachable', async () => {
+  const fixture = remoteOwnerFixture({
+    agentShares: new Map([
+      [LOCAL_ENV, { reachable: true, shares: [] }],
+      [REMOTE_ENV, { reachable: false, shares: [] }],
+    ]),
+  });
+
+  const result = await (fixture.service as typeof fixture.service & {
+    switchHere: () => Promise<{ ok: boolean; code?: string }>;
+  }).switchHere();
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'ZROK_SWITCH_NOT_AVAILABLE');
+  assert.equal(fixture.state.deleteCalls.length, 0);
+  assert.equal(fixture.state.unshareCalls, 0);
+  assert.equal(fixture.state.startCalls, 0);
+});
+
+test('status exposes Switch here for an unenrolled remote owner and switchHere moves the managed share locally', async () => {
+  const fixture = remoteOwnerFixture({
+    environments: [
+      { envZId: LOCAL_ENV, remoteAgent: true, description: 'mixed@LAPTOP-UNVM1ETB', host: LOCAL_HOST },
+      { envZId: REMOTE_ENV, remoteAgent: false, description: 'mixed@OTHER-PC', host: REMOTE_HOST },
+    ],
+  });
+
+  const status = await fixture.service.getStatus();
+  assert.equal(status.status, 'standby');
+  assert.equal(status.actionability.canTakeOver, false);
+  assert.equal(status.actionability.canSwitchHere, true);
+
+  const switchResult = await (fixture.service as typeof fixture.service & {
+    switchHere: () => Promise<{ ok: boolean; changed: boolean; status: { status: string; share: { owner: string } } }>;
+  }).switchHere();
+  assert.equal(switchResult.ok, true);
+  assert.equal(switchResult.changed, true);
+  assert.equal(switchResult.status.status, 'online');
+  assert.equal(switchResult.status.share.owner, 'local');
+  assert.deepEqual(fixture.state.deleteCalls, [{ envZId: REMOTE_ENV, shareToken: REMOTE_TOKEN }]);
+  assert.equal(fixture.state.unshareCalls, 0);
+  assert.equal(fixture.state.startCalls, 1);
+  assert.equal(JSON.stringify(switchResult).includes(SECRET_ACCOUNT_TOKEN), false);
 });
 
 test('preserves unsupported remote-control capability from an HTTP 501 controller response', async () => {
@@ -587,14 +656,38 @@ test('preserves unsupported remote-control capability from an HTTP 501 controlle
   assert.deepEqual(status, { reachable: false, remoteControl: 'unsupported', shares: [] });
 });
 
-test('resolves the bootstrap-installed zrok binary from ProgramFiles and falls back to PATH', () => {
+test('resolves an existing bootstrap-installed zrok binary and otherwise falls back to PATH', () => {
+  const programFilesDir = 'C:\\Test Program Files';
+  const installedBinary = 'C:\\Test Program Files\\zrok2\\zrok2.exe';
   assert.equal(
-    resolveZrokBinary({ platform: 'win32', programFilesDir: 'C:\\Program Files' }),
-    'C:\\Program Files\\zrok2\\zrok2.exe',
+    resolveZrokBinary({ platform: 'win32', programFilesDir, fileExists: (candidate) => candidate === installedBinary }),
+    installedBinary,
+  );
+  assert.equal(
+    resolveZrokBinary({ platform: 'win32', programFilesDir, fileExists: () => false }),
+    'zrok2',
   );
   assert.equal(resolveZrokBinary({ platform: 'win32', programFilesDir: '' }), 'zrok2');
   assert.equal(resolveZrokBinary({ platform: 'linux' }), 'zrok2');
   assert.equal(resolveZrokBinary({ binary: 'D:\\tools\\zrok2.exe', platform: 'win32' }), 'D:\\tools\\zrok2.exe');
+});
+
+test('starts the local share through the LocalSystem zrok service profile on Windows', async () => {
+  const calls: Array<{ env?: NodeJS.ProcessEnv }> = [];
+  const adapter = createDefaultZrokRuntimeAdapter({
+    binary: 'zrok2',
+    spawnSyncImpl: ((_, __, options) => {
+      calls.push({ env: options?.env });
+      return { status: 0, stdout: '', stderr: '', error: undefined };
+    }) as never,
+  });
+
+  await adapter.startLocalShare({ target: 'http://127.0.0.1:3000', nameSelection: NAME_SELECTION });
+
+  assert.equal(calls.length, 1);
+  const serviceProfile = resolveZrokServiceProfile({ platform: 'win32', windowsDir: process.env.WINDIR });
+  assert.equal(calls[0].env?.USERPROFILE, serviceProfile);
+  assert.equal(calls[0].env?.HOME, serviceProfile);
 });
 
 test('saved local reserved name is read safely and explicit configuration wins', async () => {
@@ -716,6 +809,93 @@ test('stale same-machine takeover fails closed when exact share deletion fails',
   assert.equal(state.startCalls, 0);
 });
 
+test('switchHere aborts when the managed binding drifts during preflight', async () => {
+  const fixture = remoteOwnerFixture({
+    environments: [
+      { envZId: LOCAL_ENV, remoteAgent: true, host: LOCAL_HOST },
+      { envZId: REMOTE_ENV, remoteAgent: false, host: REMOTE_HOST },
+    ],
+  });
+  let nameReads = 0;
+  fixture.adapter.listNames = async () => {
+    nameReads += 1;
+    return nameReads >= 2 ? [makeName('racing-share-token')] : [makeName(REMOTE_TOKEN)];
+  };
+
+  const result = await (createZrokRuntimeService(fixture.adapter, baseConfig()) as ReturnType<typeof createZrokRuntimeService> & {
+    switchHere: () => Promise<{ ok: boolean; code?: string }>;
+  }).switchHere();
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'ZROK_SWITCH_STALE_OWNER');
+  assert.equal(fixture.state.deleteCalls.length, 0);
+  assert.equal(fixture.state.startCalls, 0);
+});
+
+test('switchHere fails closed when exact remote share deletion fails', async () => {
+  const fixture = remoteOwnerFixture({
+    failDelete: true,
+    environments: [
+      { envZId: LOCAL_ENV, remoteAgent: true, host: LOCAL_HOST },
+      { envZId: REMOTE_ENV, remoteAgent: false, host: REMOTE_HOST },
+    ],
+  });
+
+  const result = await (fixture.service as typeof fixture.service & {
+    switchHere: () => Promise<{ ok: boolean; code?: string }>;
+  }).switchHere();
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'ZROK_SWITCH_DELETE_FAILED');
+  assert.deepEqual(fixture.state.deleteCalls, [{ envZId: REMOTE_ENV, shareToken: REMOTE_TOKEN }]);
+  assert.equal(fixture.state.unshareCalls, 0);
+  assert.equal(fixture.state.startCalls, 0);
+});
+
+test('switchHere reports local activation failure after the exact remote share is released', async () => {
+  const fixture = remoteOwnerFixture({
+    failStart: true,
+    environments: [
+      { envZId: LOCAL_ENV, remoteAgent: true, host: LOCAL_HOST },
+      { envZId: REMOTE_ENV, remoteAgent: false, host: REMOTE_HOST },
+    ],
+  });
+
+  const result = await (fixture.service as typeof fixture.service & {
+    switchHere: () => Promise<{ ok: boolean; code?: string }>;
+  }).switchHere();
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'ZROK_SWITCH_LOCAL_SHARE_FAILED');
+  assert.deepEqual(fixture.state.deleteCalls, [{ envZId: REMOTE_ENV, shareToken: REMOTE_TOKEN }]);
+  assert.equal(fixture.state.startCalls, 1);
+});
+
+test('switchHere rejects success when the stable URL does not route to this runtime', async () => {
+  const fixture = remoteOwnerFixture({
+    environments: [
+      { envZId: LOCAL_ENV, remoteAgent: true, host: LOCAL_HOST },
+      { envZId: REMOTE_ENV, remoteAgent: false, host: REMOTE_HOST },
+    ],
+  });
+  let probes = 0;
+  const originalProbe = fixture.adapter.probePublic.bind(fixture.adapter);
+  fixture.adapter.probePublic = async (input) => {
+    probes += 1;
+    if (probes >= 2) return { state: 'healthy', latencyMs: 55, routedToThisMachine: false };
+    return originalProbe(input);
+  };
+
+  const result = await (createZrokRuntimeService(fixture.adapter, baseConfig()) as ReturnType<typeof createZrokRuntimeService> & {
+    switchHere: () => Promise<{ ok: boolean; code?: string }>;
+  }).switchHere();
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'ZROK_SWITCH_VERIFY_FAILED');
+  assert.deepEqual(fixture.state.deleteCalls, [{ envZId: REMOTE_ENV, shareToken: REMOTE_TOKEN }]);
+  assert.equal(fixture.state.startCalls, 1);
+});
+
 test('takeover fences the old remote share before activating and verifying the local owner', async () => {
   const { service, state } = remoteOwnerFixture();
   const result = await service.takeOver();
@@ -812,6 +992,61 @@ test('concurrent takeover requests share one fenced transfer', async () => {
   assert.equal(right.ok, true);
   assert.equal(state.unshareCalls, 1);
   assert.equal(state.startCalls, 1);
+});
+
+test('switchHere and takeover share one in-flight transition', async () => {
+  const fixture = remoteOwnerFixture({
+    environments: [
+      { envZId: LOCAL_ENV, remoteAgent: true, host: LOCAL_HOST },
+      { envZId: REMOTE_ENV, remoteAgent: false, host: REMOTE_HOST },
+    ],
+  });
+  let releaseDelete: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => { releaseDelete = resolve; });
+  const originalDelete = fixture.adapter.deleteShare.bind(fixture.adapter);
+  fixture.adapter.deleteShare = async (input) => {
+    await gate;
+    return originalDelete(input);
+  };
+  const service = createZrokRuntimeService(fixture.adapter, baseConfig());
+  const first = (service as typeof service & {
+    switchHere: () => Promise<{ ok: boolean }>;
+  }).switchHere();
+  const second = service.takeOver();
+  const takeoverResult = await second;
+  releaseDelete?.();
+  const switchResult = await first;
+
+  assert.equal(switchResult.ok, true);
+  assert.equal(takeoverResult.ok, false);
+  assert.equal(takeoverResult.code, 'ZROK_TAKEOVER_IN_PROGRESS');
+  assert.equal(fixture.state.deleteCalls.length, 1);
+  assert.equal(fixture.state.unshareCalls, 0);
+  assert.equal(fixture.state.startCalls, 1);
+});
+
+test('switchHere fails immediately while takeover is already in progress', async () => {
+  const fixture = remoteOwnerFixture();
+  let releaseFence: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => { releaseFence = resolve; });
+  const originalUnshare = fixture.adapter.unshareRemote.bind(fixture.adapter);
+  fixture.adapter.unshareRemote = async (input) => {
+    await gate;
+    return originalUnshare(input);
+  };
+  const service = createZrokRuntimeService(fixture.adapter, baseConfig());
+  const first = service.takeOver();
+  const second = await (service as typeof service & {
+    switchHere: () => Promise<{ ok: boolean; code?: string }>;
+  }).switchHere();
+  releaseFence?.();
+  const takeoverResult = await first;
+
+  assert.equal(second.ok, false);
+  assert.equal(second.code, 'ZROK_SWITCH_IN_PROGRESS');
+  assert.equal(takeoverResult.ok, true);
+  assert.equal(fixture.state.unshareCalls, 1);
+  assert.equal(fixture.state.startCalls, 1);
 });
 
 test('takeover aborts on a stale ownership race before remote unshare', async () => {

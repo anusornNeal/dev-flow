@@ -126,6 +126,10 @@ function Invoke-ZrokBootstrap {
             [void]$changed.Add('service-wrapper-installed')
         }
 
+        if ($Ops.ContainsKey('GrantServiceProfileAccess')) {
+            & $Ops.GrantServiceProfileAccess
+        }
+
         if (-not (& $Ops.TestEnvironmentEnabled $zrokPath)) {
             $token = & $Ops.ReadAccountToken
             if ($null -eq $token) {
@@ -353,6 +357,31 @@ function Test-ZrokEnvironmentEnabled([string]$ZrokDir) {
     }
 }
 
+function Grant-ZrokServiceProfileAccess([string]$ZrokDir) {
+    try {
+        New-Item -ItemType Directory -Path $ZrokDir -Force | Out-Null
+        $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+        if ($null -eq $identity -or $null -eq $identity.User) {
+            throw (New-BootstrapException 'service-profile-access-failed' 'Unable to identify the interactive Windows account for zrok service access.')
+        }
+
+        $acl = Get-Acl -LiteralPath $ZrokDir
+        $inheritance = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+        $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+            $identity.User,
+            [System.Security.AccessControl.FileSystemRights]::Modify,
+            $inheritance,
+            [System.Security.AccessControl.PropagationFlags]::None,
+            [System.Security.AccessControl.AccessControlType]::Allow
+        )
+        $acl.SetAccessRule($rule)
+        Set-Acl -LiteralPath $ZrokDir -AclObject $acl
+    } catch {
+        if ($_.Exception.Data.Contains('BootstrapCode')) { throw }
+        throw (New-BootstrapException 'service-profile-access-failed' 'Unable to grant DevFlow access to the zrok service profile.')
+    }
+}
+
 function New-DefaultZrokBootstrapOps {
     param(
         [string]$InstallDir = (Join-Path $env:ProgramFiles 'zrok2'),
@@ -376,6 +405,9 @@ function New-DefaultZrokBootstrapOps {
         InstallZrok = { return (Install-ZrokExecutable $InstallDir) }.GetNewClosure()
         GetNssmPath = { return (Find-NssmExecutable $InstallDir) }.GetNewClosure()
         InstallNssm = { return (Install-NssmExecutable $InstallDir) }.GetNewClosure()
+        GrantServiceProfileAccess = {
+            Grant-ZrokServiceProfileAccess $zrokDir
+        }.GetNewClosure()
         TestEnvironmentEnabled = {
             param($ZrokPath)
             return (Test-ZrokEnvironmentEnabled $zrokDir)

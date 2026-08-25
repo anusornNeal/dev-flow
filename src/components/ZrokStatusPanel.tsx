@@ -30,6 +30,7 @@ export type ZrokStatusKind =
 export type ZrokActionability = {
   canRecheck: boolean;
   canTakeOver: boolean;
+  canSwitchHere?: boolean;
   takeoverBlockedReason?: string;
 };
 
@@ -50,7 +51,7 @@ export type ZrokRuntimeStatus = {
   remoteOwner?: string;
 };
 
-export type ZrokActionState = 'idle' | 'taking-over' | 'verifying' | 'success' | 'error';
+export type ZrokActionState = 'idle' | 'taking-over' | 'switching-here' | 'verifying' | 'success' | 'error';
 
 type FetchLike = typeof fetch;
 
@@ -159,6 +160,7 @@ function normalizeActionability(value: unknown): ZrokActionability | undefined {
   return {
     canRecheck: input.canRecheck !== false,
     canTakeOver: input.canTakeOver === true,
+    canSwitchHere: input.canSwitchHere === true,
     ...(blockedReason ? { takeoverBlockedReason: blockedReason } : {}),
   };
 }
@@ -289,6 +291,17 @@ export async function requestZrokTakeover(fetchImpl: FetchLike = fetch) {
   return payload;
 }
 
+export async function requestZrokSwitchHere(fetchImpl: FetchLike = fetch) {
+  const response = await fetchImpl('/api/zrok/switch-here', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ explicit: true }),
+  });
+  const payload = await readResponsePayload(response);
+  if (!response.ok) throw new Error(responseErrorMessage(payload, `zrok switch failed (HTTP ${response.status})`));
+  return payload;
+}
+
 export function getZrokStatusPresentation(status: ZrokStatusKind) {
   return STATUS_PRESENTATION[status];
 }
@@ -377,13 +390,17 @@ export default function ZrokStatusPanel({
   const presentation = getZrokStatusPresentation(status.status);
   const StatusIcon = presentation.icon;
   const mcpUrl = resolveMcpUrl(status);
-  const takeoverBusy = actionState === 'taking-over' || actionState === 'verifying';
+  const transitionBusy = actionState === 'taking-over' || actionState === 'switching-here' || actionState === 'verifying';
   const canRecheck = status.actionability?.canRecheck !== false;
   const canTakeOver = status.status === 'standby' && status.actionability?.canTakeOver === true;
+  const canSwitchHere = status.status === 'standby' && status.actionability?.canSwitchHere === true;
   const takeoverBlockedReason = status.status === 'standby' && !canTakeOver
     ? status.actionability?.takeoverBlockedReason
     : undefined;
   const statusLabel = presentation.label;
+  const switchHereWarning = canSwitchHere
+    ? 'Switch here deletes the active remote share. The old Agent can reclaim the share unless it is stopped.'
+    : '';
 
   const handleCopy = async (event: React.MouseEvent) => {
     event.stopPropagation();
@@ -400,7 +417,7 @@ export default function ZrokStatusPanel({
   };
 
   const handleTakeover = async () => {
-    if (takeoverBusy || !canTakeOver) return;
+    if (transitionBusy || !canTakeOver) return;
     setActionState('taking-over');
     setActionMessage('Requesting explicit takeover…');
     try {
@@ -419,6 +436,33 @@ export default function ZrokStatusPanel({
     } catch (error) {
       setActionState('error');
       setActionMessage(error instanceof Error ? error.message : 'Takeover failed.');
+    }
+  };
+
+  const handleSwitchHere = async () => {
+    if (transitionBusy || !canSwitchHere) return;
+    const confirmed = window.confirm(
+      'Switch the managed zrok URL to this machine now?\n\nThis releases the active remote share first. The old Agent can reclaim the share unless it is stopped.',
+    );
+    if (!confirmed) return;
+    setActionState('switching-here');
+    setActionMessage('Releasing the remote share and switching this machine into service…');
+    try {
+      await requestZrokSwitchHere(fetchImpl);
+      setActionState('verifying');
+      setActionMessage('Switch requested. Verifying the public route…');
+      const verified = await requestZrokDiagnostics(fetchImpl);
+      setStatus(verified);
+      if (verified.status !== 'online') {
+        setActionState('error');
+        setActionMessage(verified.message || `Switch finished, but public health is ${getZrokStatusPresentation(verified.status).label.toLowerCase()}.`);
+        return;
+      }
+      setActionState('success');
+      setActionMessage('Switch complete and public routing is verified on this machine.');
+    } catch (error) {
+      setActionState('error');
+      setActionMessage(error instanceof Error ? error.message : 'Switch here failed.');
     }
   };
 
@@ -505,6 +549,15 @@ export default function ZrokStatusPanel({
             </div>
           </div>
 
+          {switchHereWarning && (
+            <div className="mx-3.5 mb-2 rounded-lg border border-[#e7c58d] bg-[#fff9ed] px-2.5 py-2 text-[10px] font-mono leading-4 text-[#8a5e24] dark:border-[#745d39] dark:bg-[#302719] dark:text-[#e9c785]">
+              <div className="flex items-start gap-1.5">
+                <AlertTriangle size={12} className="mt-0.5 shrink-0" aria-hidden="true" />
+                <span>{switchHereWarning}</span>
+              </div>
+            </div>
+          )}
+
           {(actionMessage || takeoverBlockedReason || status.status === 'setup-required' || status.status === 'setup-error') && (
             <div
               className={`mx-3.5 mb-2 rounded-lg border px-2.5 py-2 text-[10px] font-mono leading-4 ${
@@ -526,7 +579,7 @@ export default function ZrokStatusPanel({
             <button
               type="button"
               onClick={() => void refresh(true)}
-              disabled={!canRecheck || rechecking || takeoverBusy}
+              disabled={!canRecheck || rechecking || transitionBusy}
               className="flex min-h-7 items-center gap-1.5 rounded-lg border border-[#ddd0ba] bg-white px-2.5 py-1 text-[10px] font-bold text-[#725e4f] outline-none transition-colors hover:bg-[#f6efe3] focus-visible:ring-2 focus-visible:ring-[#d89745]/60 disabled:cursor-not-allowed disabled:opacity-50 dark:border-[#584a3b] dark:bg-[#292119] dark:text-[#e8dbcd] dark:hover:bg-[#352a21] cursor-pointer"
               aria-label="Recheck zrok status"
             >
@@ -534,16 +587,30 @@ export default function ZrokStatusPanel({
               {rechecking ? 'Checking…' : 'Recheck'}
             </button>
 
+            {canSwitchHere && (
+              <button
+                type="button"
+                onClick={() => void handleSwitchHere()}
+                disabled={transitionBusy}
+                className="flex min-h-7 items-center gap-1.5 rounded-lg border border-[#d7af79] bg-[#f5e1c6] px-2.5 py-1 text-[10px] font-extrabold text-[#5c3920] outline-none transition-colors hover:bg-[#edd3b0] focus-visible:ring-2 focus-visible:ring-[#d89745]/70 disabled:cursor-not-allowed disabled:opacity-50 dark:border-[#8d6a44] dark:bg-[#3a2b1f] dark:text-[#f2cf9e] dark:hover:bg-[#4a3525] cursor-pointer"
+                aria-label="Switch the managed zrok connection to this machine"
+                aria-busy={transitionBusy}
+              >
+                {transitionBusy ? <Loader2 size={12} className="animate-spin" aria-hidden="true" /> : <AlertTriangle size={12} aria-hidden="true" />}
+                {actionState === 'verifying' ? 'Verifying…' : actionState === 'switching-here' ? 'Switching…' : 'Switch here'}
+              </button>
+            )}
+
             {canTakeOver && (
               <button
                 type="button"
                 onClick={() => void handleTakeover()}
-                disabled={takeoverBusy}
+                disabled={transitionBusy}
                 className="flex min-h-7 items-center gap-1.5 rounded-lg bg-[#3c2a1a] px-2.5 py-1 text-[10px] font-extrabold text-white outline-none transition-colors hover:bg-[#2a1d12] focus-visible:ring-2 focus-visible:ring-[#d89745]/70 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-[#e0a070] dark:text-[#292119] dark:hover:bg-[#cc8e60] cursor-pointer"
                 aria-label="Take over zrok connection from the active machine"
-                aria-busy={takeoverBusy}
+                aria-busy={transitionBusy}
               >
-                {takeoverBusy ? <Loader2 size={12} className="animate-spin" aria-hidden="true" /> : <MonitorUp size={12} aria-hidden="true" />}
+                {transitionBusy ? <Loader2 size={12} className="animate-spin" aria-hidden="true" /> : <MonitorUp size={12} aria-hidden="true" />}
                 {actionState === 'verifying' ? 'Verifying…' : actionState === 'taking-over' ? 'Taking over…' : 'Take over'}
               </button>
             )}

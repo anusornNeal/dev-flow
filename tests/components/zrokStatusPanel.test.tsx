@@ -6,13 +6,17 @@ import ZrokStatusPanel, {
   normalizeZrokStatus,
   requestLocalApiLatency,
   requestZrokDiagnostics,
+  requestZrokSwitchHere,
   requestZrokStatus,
   requestZrokTakeover,
   resolveMcpUrl,
   type ZrokRuntimeStatus,
 } from '../../src/components/ZrokStatusPanel.js';
 
-function renderStatus(status: ZrokRuntimeStatus, actionState: 'idle' | 'taking-over' | 'verifying' | 'success' | 'error' = 'idle') {
+function renderStatus(
+  status: ZrokRuntimeStatus,
+  actionState: 'idle' | 'taking-over' | 'switching-here' | 'verifying' | 'success' | 'error' = 'idle',
+) {
   return renderToStaticMarkup(React.createElement(ZrokStatusPanel, {
     initialStatus: status,
     initialExpanded: true,
@@ -53,6 +57,7 @@ test('normalizes only the structured zrok actionability fields', () => {
     actionability: {
       canRecheck: true,
       canTakeOver: false,
+      canSwitchHere: true,
       takeoverBlockedReason: 'Remote control unsupported.',
       accountToken: 'must-not-leak',
       internalReason: 'must-not-project',
@@ -62,6 +67,7 @@ test('normalizes only the structured zrok actionability fields', () => {
   assert.deepEqual(normalized.actionability, {
     canRecheck: true,
     canTakeOver: false,
+    canSwitchHere: true,
     takeoverBlockedReason: 'Remote control unsupported.',
   });
   assert.doesNotMatch(JSON.stringify(normalized), /must-not-leak|internalReason/);
@@ -150,6 +156,7 @@ test('does not offer takeover when backend blocks it and shows the blocked reaso
     actionability: {
       canRecheck: true,
       canTakeOver: false,
+      canSwitchHere: false,
       takeoverBlockedReason: 'Remote control unsupported.',
     },
   });
@@ -157,6 +164,26 @@ test('does not offer takeover when backend blocks it and shows the blocked reaso
   assert.doesNotMatch(html, />Take over</);
   assert.match(html, /Remote control unsupported\./);
   assert.match(html, /aria-label="Recheck zrok status"/);
+});
+
+test('renders Standby with explicit Switch here action when remote fencing is unavailable', () => {
+  const html = renderStatus({
+    status: 'standby',
+    remoteOwner: 'Office PC',
+    agentService: 'running',
+    share: 'remote-active',
+    publicReachability: 'healthy',
+    actionability: {
+      canRecheck: true,
+      canTakeOver: false,
+      canSwitchHere: true,
+      takeoverBlockedReason: 'The active machine is not enrolled for authenticated zrok agent remoting.',
+    },
+  });
+
+  assert.match(html, /Switch here/);
+  assert.match(html, /aria-label="Switch the managed zrok connection to this machine"/);
+  assert.match(html, /old Agent can reclaim the share unless it is stopped/i);
 });
 
 test('renders Setup error with alert semantics', () => {
@@ -170,12 +197,24 @@ test('takeover busy state is disabled, explicit, and exposes progress accessibly
   const html = renderStatus({
     status: 'standby',
     remoteOwner: 'Laptop',
-    actionability: { canRecheck: true, canTakeOver: true },
+    actionability: { canRecheck: true, canTakeOver: true, canSwitchHere: false },
   }, 'taking-over');
   assert.match(html, /Taking over…/);
   assert.match(html, /disabled=""/);
   assert.match(html, /aria-busy="true"/);
   assert.match(html, /aria-label="Take over zrok connection from the active machine"/);
+});
+
+test('switchHere busy state is disabled, explicit, and exposes progress accessibly', () => {
+  const html = renderStatus({
+    status: 'standby',
+    remoteOwner: 'Laptop',
+    actionability: { canRecheck: true, canTakeOver: false, canSwitchHere: true },
+  }, 'switching-here');
+  assert.match(html, /Switching…/);
+  assert.match(html, /disabled=""/);
+  assert.match(html, /aria-busy="true"/);
+  assert.match(html, /aria-label="Switch the managed zrok connection to this machine"/);
 });
 
 test('status request reads the live zrok endpoint and normalizes response', async () => {
@@ -234,7 +273,7 @@ test('local probe timeout is unavailable evidence and does not change backend zr
       return jsonResponse({
         status: 'online',
         latencyMs: 51,
-        actionability: { canRecheck: true, canTakeOver: false },
+        actionability: { canRecheck: true, canTakeOver: false, canSwitchHere: false },
       });
     }
     if (url === '/api/capabilities') {
@@ -259,7 +298,7 @@ test('local probe timeout is unavailable evidence and does not change backend zr
   assert.equal(result.status, 'online');
   assert.equal(result.latencyMs, 51);
   assert.equal(result.localApiLatencyMs, undefined);
-  assert.deepEqual(result.actionability, { canRecheck: true, canTakeOver: false });
+  assert.deepEqual(result.actionability, { canRecheck: true, canTakeOver: false, canSwitchHere: false });
 });
 
 test('takeover request is explicit and reports backend failures without racing another action', async () => {
@@ -274,6 +313,20 @@ test('takeover request is explicit and reports backend failures without racing a
 
   const blockedFetch = (async () => jsonResponse({ error: 'Remote owner could not be fenced safely.' }, 409)) as typeof fetch;
   await assert.rejects(() => requestZrokTakeover(blockedFetch), /could not be fenced safely/);
+});
+
+test('switchHere request is explicit and reports backend failures safely', async () => {
+  let capturedInit: RequestInit | undefined;
+  const successFetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+    capturedInit = init;
+    return jsonResponse({ ok: true });
+  }) as typeof fetch;
+  await requestZrokSwitchHere(successFetch);
+  assert.equal(capturedInit?.method, 'POST');
+  assert.deepEqual(JSON.parse(String(capturedInit?.body)), { explicit: true });
+
+  const blockedFetch = (async () => jsonResponse({ message: 'The exact remote zrok share could not be released.' }, 502)) as typeof fetch;
+  await assert.rejects(() => requestZrokSwitchHere(blockedFetch), /could not be released/);
 });
 
 test('status request surfaces setup/API errors rather than converting them to Online', async () => {

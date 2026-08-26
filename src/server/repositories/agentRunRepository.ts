@@ -5,6 +5,80 @@ export const ACTIVE_AGENT_RUN_STATUSES = ['queued', 'starting', 'running'] as co
 
 export type AgentRunStatus = typeof AGENT_RUN_STATUSES[number];
 
+export const AGENT_NEUTRAL_ORCHESTRATION_ACTIONS = ['IMPLEMENT_TASK', 'RESOLVE_FAILURE', 'RESOLVE_CONFLICT', 'REVIEW_TASK', 'INVESTIGATE'] as const;
+export const AGENT_NEUTRAL_RESULT_STATES = ['HANDOFF_READY', 'BLOCKED', 'NEEDS_CONTEXT', 'COMPLETE'] as const;
+export const AGENT_EXECUTION_ADAPTERS = ['devflow-managed', 'worker-native', 'legacy-launcher'] as const;
+
+export type AgentNeutralOrchestrationAction = typeof AGENT_NEUTRAL_ORCHESTRATION_ACTIONS[number];
+export type AgentNeutralOrchestrationResultState = typeof AGENT_NEUTRAL_RESULT_STATES[number];
+export type AgentExecutionAdapter = typeof AGENT_EXECUTION_ADAPTERS[number];
+export type AgentOrchestrationEvidenceAuthority = 'orchestration-only';
+
+export type AgentNeutralOrchestrationEnvelope = {
+  version: 'agent-neutral-orchestration.v1';
+  projectId: string;
+  taskId: string;
+  action: AgentNeutralOrchestrationAction;
+  adapter: AgentExecutionAdapter;
+  canonicalStateOwner: 'devflow';
+  repositoryExecutionOwner: 'devflow' | 'worker';
+  disposableWorker: true;
+  contextRef: string | null;
+};
+
+export type AgentNeutralOrchestrationResult = {
+  version: 'agent-neutral-orchestration-result.v1';
+  projectId: string;
+  taskId: string;
+  action: AgentNeutralOrchestrationAction;
+  state: AgentNeutralOrchestrationResultState;
+  summary: string;
+  evidenceAuthority: AgentOrchestrationEvidenceAuthority;
+  workerReplaceable: true;
+  runId: string | null;
+};
+
+export function createAgentNeutralOrchestrationEnvelope(input: {
+  projectId: string;
+  taskId: string;
+  action: AgentNeutralOrchestrationAction;
+  adapter: AgentExecutionAdapter;
+  contextRef?: string | null;
+}): AgentNeutralOrchestrationEnvelope {
+  return {
+    version: 'agent-neutral-orchestration.v1',
+    projectId: String(input.projectId || '').trim(),
+    taskId: String(input.taskId || '').trim(),
+    action: input.action,
+    adapter: input.adapter,
+    canonicalStateOwner: 'devflow',
+    repositoryExecutionOwner: input.adapter === 'worker-native' ? 'worker' : 'devflow',
+    disposableWorker: true,
+    contextRef: String(input.contextRef || '').trim() || null,
+  };
+}
+
+export function createAgentNeutralOrchestrationResult(input: {
+  projectId: string;
+  taskId: string;
+  action: AgentNeutralOrchestrationAction;
+  state: AgentNeutralOrchestrationResultState;
+  summary: string;
+  runId?: string | null;
+}): AgentNeutralOrchestrationResult {
+  return {
+    version: 'agent-neutral-orchestration-result.v1',
+    projectId: String(input.projectId || '').trim(),
+    taskId: String(input.taskId || '').trim(),
+    action: input.action,
+    state: input.state,
+    summary: String(input.summary || '').trim(),
+    evidenceAuthority: 'orchestration-only',
+    workerReplaceable: true,
+    runId: String(input.runId || '').trim() || null,
+  };
+}
+
 export interface AgentRun {
   id: string;
   taskId: string;

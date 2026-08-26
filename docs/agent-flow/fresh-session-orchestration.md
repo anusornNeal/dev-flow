@@ -12,6 +12,16 @@ The card **Copy Prompt** action is a Codex handoff. It is not the managed ChatGP
 
 A live DevFlow connection is not required after the prompt has been copied. If board synchronization is unavailable or fails, Codex continues repository work. A status-sync failure must not cause rollback, repeated verification, abandonment of a valid commit, or rerouting repository execution through DevFlow.
 
+## Agent-neutral orchestration action/result contract
+
+DevFlow's provider-neutral boundary is workflow state, not `agent.run(prompt)` and not a shared execution harness. A disposable reasoning worker receives an action envelope keyed by canonical `projectId` + `taskId` with one action: `IMPLEMENT_TASK`, `RESOLVE_FAILURE`, `RESOLVE_CONFLICT`, `REVIEW_TASK`, or `INVESTIGATE`. The worker reports one normalized result state: `HANDOFF_READY`, `BLOCKED`, `NEEDS_CONTEXT`, or `COMPLETE`.
+
+The envelope records an execution adapter, not an engine assumption. `devflow-managed` keeps repository execution under DevFlow claims/workspaces/tool jobs; `worker-native` leaves repository/filesystem/shell/Git execution to the worker; `legacy-launcher` exists only for compatibility. Run/session identity is disposable. DevFlow remains the canonical owner of task/orchestration state, so a replacement worker reconstructs its next action from durable DevFlow state rather than replaying a prior prompt or mutation.
+
+Normalized action results are **orchestration-only evidence**. They may move or explain workflow state, but they cannot satisfy managed verification freshness, task-owned commit proof, Git integration evidence, or finalization requirements. Those authoritative managed channels remain separate even when a managed worker returns `COMPLETE`. External/native commit and verification text likewise stays informational.
+
+`HANDOFF_READY` means the current worker yielded at a safe reasoning boundary; `BLOCKED` means known conditions prevent progress; `NEEDS_CONTEXT` means more information is required before reasoning continues; `COMPLETE` means the worker believes its assigned reasoning/repository scope is complete. None of these states grants repository execution authority by itself.
+
 ## Prompt authority and isolation
 
 The production Copy Prompt source is the `codex` pipeline in `config/prompt-pipeline.json` and its `skills/prompt.codex-*.md` sections. The rendered task context contains card-authored implementation information such as title, description, reasoning, acceptance criteria, checklist, verification guidance, target files, repository context, references, and bounded design/image evidence when present.

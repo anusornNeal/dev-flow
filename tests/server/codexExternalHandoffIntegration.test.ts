@@ -299,6 +299,43 @@ test('managed authority overlap fails closed by default and explicit status-only
   assert.equal(externalLogs(managed.id).length, 1);
 });
 
+test('agent-neutral orchestration contract keeps workers replaceable without promoting result metadata to managed proof', async () => {
+  const repository = await import('../../src/server/repositories/agentRunRepository.js');
+  assert.deepEqual(repository.AGENT_NEUTRAL_ORCHESTRATION_ACTIONS, ['IMPLEMENT_TASK', 'RESOLVE_FAILURE', 'RESOLVE_CONFLICT', 'REVIEW_TASK', 'INVESTIGATE']);
+  assert.deepEqual(repository.AGENT_NEUTRAL_RESULT_STATES, ['HANDOFF_READY', 'BLOCKED', 'NEEDS_CONTEXT', 'COMPLETE']);
+  assert.deepEqual(repository.AGENT_EXECUTION_ADAPTERS, ['devflow-managed', 'worker-native', 'legacy-launcher']);
+
+  const native = repository.createAgentNeutralOrchestrationEnvelope({
+    projectId: project.id,
+    taskId: 'task-replaceable',
+    action: 'IMPLEMENT_TASK',
+    adapter: 'worker-native',
+    contextRef: 'ctx-durable',
+  });
+  assert.equal(native.canonicalStateOwner, 'devflow');
+  assert.equal(native.repositoryExecutionOwner, 'worker');
+  assert.equal(native.disposableWorker, true);
+  assert.equal((native as any).prompt, undefined, 'contract must not assume a generic prompt runner');
+
+  const result = repository.createAgentNeutralOrchestrationResult({
+    projectId: project.id,
+    taskId: 'task-replaceable',
+    action: 'IMPLEMENT_TASK',
+    state: 'HANDOFF_READY',
+    summary: 'worker yielded at a safe boundary',
+    runId: 'run-disposable',
+  });
+  assert.equal(result.evidenceAuthority, 'orchestration-only');
+  assert.equal(result.workerReplaceable, true);
+  assert.equal((result as any).verificationEvidence, undefined);
+  assert.equal((result as any).gitEvidence, undefined);
+
+  const routeSupport = await import('../../src/server/routes/taskRouteSupport.js');
+  assert.equal(routeSupport.normalizeAgentCompletionResultState({ status: 'success' }), 'COMPLETE');
+  assert.equal(routeSupport.normalizeAgentCompletionResultState({ status: 'failed' }), 'BLOCKED');
+  assert.equal(routeSupport.normalizeAgentCompletionResultState({ status: 'cancelled' }), 'HANDOFF_READY');
+});
+
 test('authoritative docs keep Codex Copy Prompt autonomous and status synchronization non-blocking', () => {
   const docs = [
     'docs/agent-flow/fresh-session-orchestration.md',
@@ -311,6 +348,11 @@ test('authoritative docs keep Codex Copy Prompt autonomous and status synchroniz
   assert.match(docs, /autonomous/i);
   assert.match(docs, /best-effort/i);
   assert.match(docs, /ChatGPT\/@devflowz/);
+  assert.match(docs, /IMPLEMENT_TASK/);
+  assert.match(docs, /HANDOFF_READY/);
+  assert.match(docs, /worker-native/);
+  assert.match(docs, /orchestration-only evidence/i);
+  assert.match(docs, /agent\.run\(prompt\)/);
   assert.match(docs, /not.*repository execution layer/i);
   assert.match(docs, /must not.*stop|must not stop|do not.*stop/i);
   assert.doesNotMatch(docs, /current card workflow is manual:[\s\S]{0,500}engine-agnostic/i);

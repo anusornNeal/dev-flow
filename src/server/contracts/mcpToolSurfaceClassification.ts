@@ -112,6 +112,7 @@ function inferRisk(name: string): McpToolRisk {
 }
 
 function intentFor(name: string) {
+  if (EXTERNAL_WORKER_STATUS_TOOLS.has(name)) return 'external-worker-sync';
   if (/task|bug|agent/.test(name)) return 'task-workflow';
   if (/repo|local_file|local_path|search_local|edit|patch/.test(name)) return 'repo-work';
   if (/git|pull_request/.test(name)) return 'git-workflow';

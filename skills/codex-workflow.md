@@ -8,6 +8,12 @@ A live DevFlow connection is not required. Codex must not treat DevFlow as its r
 
 The current Copy Prompt comes from the `codex` pipeline in `config/prompt-pipeline.json`. It intentionally does not auto-inject `.devflow/agents.md`, project-local prompt overrides, active/latest run identity, managed workspace context, claim/lifecycle authority, or managed finalization instructions.
 
+## Agent-neutral orchestration adapter
+
+Codex consumes the same provider-neutral workflow vocabulary as other reasoning workers: actions are `IMPLEMENT_TASK`, `RESOLVE_FAILURE`, `RESOLVE_CONFLICT`, `REVIEW_TASK`, or `INVESTIGATE`; results are `HANDOFF_READY`, `BLOCKED`, `NEEDS_CONTEXT`, or `COMPLETE`. This vocabulary coordinates work only. It does not turn Codex into a DevFlow-managed executor and it does not require a generic `agent.run(prompt)` abstraction.
+
+For Copy Prompt, Codex uses the `worker-native` adapter: DevFlow owns canonical task/orchestration state, while Codex owns repository/filesystem/shell/Git execution. A Codex session may disappear and be replaced; the replacement derives its next action from durable DevFlow/card state, not from hidden session memory. Any result summary, commit text, or verification text reported back is orchestration-only information and never becomes authoritative managed evidence.
+
 ## Board synchronization
 
 When available, `update_external_task_status` may be used to mirror progress to `in-progress`, `ready-for-review`, or `done`. This is best-effort presentation synchronization, not an execution lifecycle.

@@ -7,7 +7,7 @@ import db from '../../db/index';
 import type express from 'express';
 import type { ApiRouteDeps } from '../types';
 import { VALID_AGENTS, LEGACY_VALID_EFFORTS_FALLBACK, VALID_MODELS, VALID_STATUSES } from '../constants';
-import { ACTIVE_AGENT_RUN_STATUSES, cancelActiveRunsForTask, cancelStaleActiveRuns, createAgentRun, getActiveRunForProjectAndAgent, getActiveRunForTask, getLatestAgentRunForTask, listActiveRunSummariesForProject, listAgentRunsForTask, updateAgentRunStatus, type AgentRun } from '../repositories/agentRunRepository';
+import { ACTIVE_AGENT_RUN_STATUSES, cancelActiveRunsForTask, cancelStaleActiveRuns, createAgentRun, getActiveRunForProjectAndAgent, getActiveRunForTask, getLatestAgentRunForTask, listActiveRunSummariesForProject, listAgentRunsForTask, updateAgentRunStatus, type AgentRun, type AgentNeutralOrchestrationResultState } from '../repositories/agentRunRepository';
 import { deleteTasksByIds, generateDisplayId, saveTask, getTasks } from '../repositories/taskRepository.js';
 import { listAttachmentsForTask } from '../repositories/attachmentRepository';
 import { AgentOrchestrationWorker } from '../services/agentOrchestrationWorker';
@@ -44,7 +44,7 @@ type ContinueTaskQueueResult = {
 };
 type TaskReadMode = 'minimal' | 'summary' | 'board' | 'standard' | 'full' | 'agent-context' | 'debug';
 type MutationResponseMode = 'standard' | 'summary' | 'ack';
-type AgentCompletionRouteResult = { task: any; run: AgentRun; payload: AgentCompletionPayload };
+type AgentCompletionRouteResult = { task: any; run: AgentRun; payload: AgentCompletionPayload; orchestrationResultState: AgentNeutralOrchestrationResultState };
 
 function normalizeFlag(value: unknown) {
   return value === true || String(value).toLowerCase() === 'true';
@@ -494,6 +494,12 @@ function resolveAgentCompletionTargetStatus(payload: AgentCompletionPayload): Ta
   return payload.moveTo || 'todo';
 }
 
+export function normalizeAgentCompletionResultState(payload: Pick<AgentCompletionPayload, 'status'>): AgentNeutralOrchestrationResultState {
+  if (payload.status === 'success') return 'COMPLETE';
+  if (payload.status === 'failed') return 'BLOCKED';
+  return 'HANDOFF_READY';
+}
+
 export function applyAgentCompletionCallback(task: any, run: AgentRun, deps: ApiRouteDeps, payload: AgentCompletionPayload): AgentCompletionRouteResult {
   const summaryText = buildAgentCompletionSummary(payload);
   const completionMessage = formatAgentCompletionLogMessage(payload);
@@ -539,7 +545,7 @@ export function applyAgentCompletionCallback(task: any, run: AgentRun, deps: Api
   applyRunSummaryToTask(task, updatedRun || getLatestAgentRunForTask(task.id));
   const persistedTask = persistLegacyAgentStatus(task, nextStatus, `Agent completion ${payload.status} settled run ${run.id}.`);
 
-  return { task: persistedTask, run: updatedRun || run, payload };
+  return { task: persistedTask, run: updatedRun || run, payload, orchestrationResultState: normalizeAgentCompletionResultState(payload) };
 }
 
 export function cleanupStaleActiveRuns(deps: ApiRouteDeps) {

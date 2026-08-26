@@ -532,6 +532,9 @@ test('external task status is a first-class external-worker intent separate from
   assert.equal(classified?.disposition, 'keep');
   assert.equal(classified?.target, undefined, 'external status must not alias or consolidate into managed movement');
   assert.equal(classified?.risk, 'write');
+  assert.equal(classified?.intent, 'external-worker-sync');
+  assert.match(String(tool.description || ''), /normalized orchestration results/);
+  assert.match(String(tool.description || ''), /never impersonate authoritative managed verification or Git evidence/);
 
   const managed = inventory.find((entry) => entry.name === 'move_task_to_status');
   assert.notEqual(classified?.canonicalName, managed?.canonicalName);

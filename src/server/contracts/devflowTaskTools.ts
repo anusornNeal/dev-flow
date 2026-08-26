@@ -258,7 +258,7 @@ export const taskToolDefinitions: DevFlowToolDefinition[] = [
   // External/Codex board synchronization is intentionally separate from managed lifecycle movement.
   {
     name: 'update_external_task_status',
-    description: 'Optionally synchronize DevFlow board status for autonomous external/Codex workers without entering the managed execution lifecycle. This status-only path never performs claims, workspace/finalization, checklist, verification, Git, branch, or recovery actions; failure of this tool is not repository execution failure.',
+    description: 'Optionally synchronize DevFlow board status for autonomous external/Codex workers without entering the managed execution lifecycle. This is an external-worker-sync adapter boundary for normalized orchestration results, not a generic prompt runner. Status/summary/commit/verification remain orchestration-only information and can never impersonate authoritative managed verification or Git evidence. This path never performs claims, workspace/finalization, checklist, verification, Git, branch, or recovery actions; failure of this tool is not repository execution failure.',
     inputSchema: {
       type: 'object',
       properties: {

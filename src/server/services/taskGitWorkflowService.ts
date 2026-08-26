@@ -111,6 +111,17 @@ function collectGitEvidence(
     nowMs: args.nowMs,
   });
   const expectedBranch = typeof task.branch === 'string' ? task.branch.trim() : '';
+  if (workspaceId && sync.branch !== managedWorkspace!.branch) {
+    throw createApiError(409, 'TASK_GIT_EVIDENCE_WORKSPACE_BRANCH_MISMATCH', `Managed workspace Git evidence resolved physical branch '${sync.branch}', expected '${managedWorkspace!.branch}'.`, {
+      affectedId: task.displayId || task.id,
+      details: {
+        workspaceId,
+        targetBranch: managedWorkspace!.baseBranch,
+        expectedWorkspaceBranch: managedWorkspace!.branch,
+        observedWorkspaceBranch: sync.branch,
+      },
+    });
+  }
   if (options.rejectBranchMismatch && expectedBranch) {
     if (workspaceId) {
       if (managedWorkspace!.baseBranch !== expectedBranch) {
@@ -140,6 +151,8 @@ function collectGitEvidence(
     evidenceSource: workspaceId ? 'managed-workspace' : 'project-root',
     workspaceId,
     branch: sync.branch,
+    targetBranch: workspaceId ? managedWorkspace!.baseBranch : undefined,
+    workspaceBranch: workspaceId ? managedWorkspace!.branch : undefined,
     commit: sync.localHead,
     remote: sync.remote,
     trackingBranch: sync.trackingBranch,
@@ -177,6 +190,22 @@ export function syncTaskWithGit(state: AppState, task: any, args: Record<string,
 function addBlocker(blockers: ReviewBlocker[], code: string, message: string, details?: unknown) {
   if (blockers.some((blocker) => blocker.code === code)) return;
   blockers.push({ code, message, ...(details === undefined ? {} : { details }) });
+}
+
+function branchValue(value: unknown) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function isManagedWorkspaceGitEvidence(evidence: TaskGitEvidence | undefined) {
+  return Boolean(evidence && (evidence.evidenceSource === 'managed-workspace' || evidence.workspaceId));
+}
+
+function managedEvidenceIdentity(evidence: TaskGitEvidence) {
+  return {
+    targetBranch: branchValue(evidence.targetBranch),
+    workspaceBranch: branchValue(evidence.workspaceBranch),
+    observedBranch: branchValue(evidence.branch),
+  };
 }
 
 export function getExecutionOwnershipReviewBlockers(state: AppState, task: any, args: Record<string, any>): ReviewBlocker[] {
@@ -270,10 +299,38 @@ function validateTaskState(task: any, gitEvidence: TaskGitEvidence | undefined, 
     if (requireBranchMatch) {
       if (!task.branch) {
         addBlocker(blockers, 'TASK_BRANCH_MISSING', 'Task branch metadata is required before review submission.');
+      } else if (isManagedWorkspaceGitEvidence(gitEvidence)) {
+        const identity = managedEvidenceIdentity(gitEvidence);
+        if (!identity.targetBranch || !identity.workspaceBranch) {
+          addBlocker(blockers, 'TASK_BRANCH_EVIDENCE_INCOMPLETE', 'Historical managed-workspace Git evidence does not identify both the logical target branch and physical workspace branch, so task branch authority cannot be proven.', {
+            taskBranch: task.branch,
+            evidenceBranch: identity.observedBranch || null,
+            targetBranch: identity.targetBranch || null,
+            workspaceBranch: identity.workspaceBranch || null,
+            workspaceId: gitEvidence.workspaceId || null,
+          });
+        } else {
+          if (task.branch !== identity.targetBranch) {
+            addBlocker(blockers, 'TASK_BRANCH_MISMATCH', `Task expects target branch '${task.branch}', but managed workspace evidence targets '${identity.targetBranch}'.`, {
+              taskBranch: task.branch,
+              targetBranch: identity.targetBranch,
+              workspaceBranch: identity.workspaceBranch,
+              observedBranch: identity.observedBranch || null,
+            });
+          }
+          if (identity.observedBranch && identity.observedBranch !== identity.workspaceBranch) {
+            addBlocker(blockers, 'WORKSPACE_BRANCH_EVIDENCE_MISMATCH', `Managed workspace evidence was collected on '${identity.observedBranch}', but its recorded physical branch is '${identity.workspaceBranch}'.`, {
+              targetBranch: identity.targetBranch,
+              workspaceBranch: identity.workspaceBranch,
+              observedBranch: identity.observedBranch,
+            });
+          }
+        }
       } else if (task.branch !== gitEvidence.branch) {
         addBlocker(blockers, 'TASK_BRANCH_MISMATCH', `Task expects branch '${task.branch}', but the repository is on '${gitEvidence.branch}'.`, {
           taskBranch: task.branch,
           repositoryBranch: gitEvidence.branch,
+          evidenceSource: gitEvidence.evidenceSource || 'project-root',
         });
       }
     }
@@ -402,14 +459,36 @@ export function buildTaskGitWarnings(task: any): TaskWorkflowWarning[] {
   const warnings: TaskWorkflowWarning[] = [];
   if (!task?.projectId) return warnings;
 
+  const evidence = task.gitEvidence as TaskGitEvidence | undefined;
+  const claimWorkspaceId = task.claim?.workspaceId && Date.parse(String(task.claim?.expiresAt || '')) > Date.now()
+    ? String(task.claim.workspaceId)
+    : '';
+  const claimedWorkspace = claimWorkspaceId ? getSessionWorkspaceMetadataForRecovery(claimWorkspaceId) : null;
+  const hasManagedBranchContext = Boolean(claimWorkspaceId || isManagedWorkspaceGitEvidence(evidence));
+
   try {
-    const branch = getGitBranch({} as AppState, { projectId: task.projectId });
     const status = getGitStatus({} as AppState, { projectId: task.projectId });
-    if (task.branch && branch.current && task.branch !== branch.current) {
-      addWarning(warnings, 'TASK_BRANCH_MISMATCH', `Task expects '${task.branch}', but the repository is on '${branch.current}'.`, 'error', {
+    if (task.branch && claimedWorkspace && task.branch !== claimedWorkspace.baseBranch) {
+      addWarning(warnings, 'TASK_BRANCH_MISMATCH', `Task targets '${task.branch}', but its managed workspace targets '${claimedWorkspace.baseBranch}'.`, 'error', {
         taskBranch: task.branch,
-        repositoryBranch: branch.current,
+        targetBranch: claimedWorkspace.baseBranch,
+        workspaceBranch: claimedWorkspace.branch,
+        workspaceId: claimedWorkspace.workspaceId,
       });
+    } else if (task.branch && claimWorkspaceId && !claimedWorkspace) {
+      addWarning(warnings, 'TASK_BRANCH_AUTHORITY_UNAVAILABLE', 'The active managed workspace branch authority is unavailable; project-root branch state is not used as a substitute.', 'error', {
+        taskBranch: task.branch,
+        workspaceId: claimWorkspaceId,
+      });
+    } else if (task.branch && !hasManagedBranchContext) {
+      const branch = getGitBranch({} as AppState, { projectId: task.projectId });
+      if (branch.current && task.branch !== branch.current) {
+        addWarning(warnings, 'TASK_BRANCH_MISMATCH', `Task expects '${task.branch}', but the repository is on '${branch.current}'.`, 'error', {
+          taskBranch: task.branch,
+          repositoryBranch: branch.current,
+          evidenceSource: 'project-root',
+        });
+      }
     }
     const checklistComplete = !Array.isArray(task.checklist) || task.checklist.every((item: any) => item?.completed);
     if (checklistComplete && status.count > 0) {
@@ -421,7 +500,6 @@ export function buildTaskGitWarnings(task: any): TaskWorkflowWarning[] {
     addWarning(warnings, 'GIT_STATUS_UNAVAILABLE', error?.payload?.message || error?.message || 'Git status is unavailable.');
   }
 
-  const evidence = task.gitEvidence as TaskGitEvidence | undefined;
   if (evidence) {
     if (!evidence.trackingBranch) {
       addWarning(warnings, 'UPSTREAM_NOT_CONFIGURED', 'The recorded implementation branch has no upstream tracking branch.');
@@ -439,8 +517,39 @@ export function buildTaskGitWarnings(task: any): TaskWorkflowWarning[] {
         addWarning(warnings, 'LOCAL_BRANCH_BEHIND', `Recorded branch is ${evidence.behind} commit(s) behind remote.`);
       }
     }
-    if (task.branch && evidence.branch && task.branch !== evidence.branch) {
-      addWarning(warnings, 'RECORDED_BRANCH_MISMATCH', `Recorded Git evidence is for '${evidence.branch}', not task branch '${task.branch}'.`, 'error');
+    if (isManagedWorkspaceGitEvidence(evidence)) {
+      const identity = managedEvidenceIdentity(evidence);
+      if (!identity.targetBranch || !identity.workspaceBranch) {
+        addWarning(warnings, 'RECORDED_BRANCH_IDENTITY_INCOMPLETE', 'Recorded managed-workspace Git evidence predates explicit target/workspace branch identity, so branch authority cannot be assumed.', 'error', {
+          taskBranch: task.branch || null,
+          evidenceBranch: identity.observedBranch || null,
+          targetBranch: identity.targetBranch || null,
+          workspaceBranch: identity.workspaceBranch || null,
+          workspaceId: evidence.workspaceId || null,
+        });
+      } else {
+        if (task.branch && task.branch !== identity.targetBranch) {
+          addWarning(warnings, 'RECORDED_BRANCH_MISMATCH', `Recorded managed Git evidence targets '${identity.targetBranch}', not task branch '${task.branch}'.`, 'error', {
+            taskBranch: task.branch,
+            targetBranch: identity.targetBranch,
+            workspaceBranch: identity.workspaceBranch,
+            observedBranch: identity.observedBranch || null,
+          });
+        }
+        if (identity.observedBranch && identity.observedBranch !== identity.workspaceBranch) {
+          addWarning(warnings, 'RECORDED_WORKSPACE_BRANCH_MISMATCH', `Recorded Git evidence was observed on '${identity.observedBranch}', not physical workspace branch '${identity.workspaceBranch}'.`, 'error', {
+            targetBranch: identity.targetBranch,
+            workspaceBranch: identity.workspaceBranch,
+            observedBranch: identity.observedBranch,
+          });
+        }
+      }
+    } else if (task.branch && evidence.branch && task.branch !== evidence.branch) {
+      addWarning(warnings, 'RECORDED_BRANCH_MISMATCH', `Recorded project-root Git evidence is for '${evidence.branch}', not task branch '${task.branch}'.`, 'error', {
+        taskBranch: task.branch,
+        repositoryBranch: evidence.branch,
+        evidenceSource: evidence.evidenceSource || 'project-root',
+      });
     }
   }
 

@@ -50,7 +50,9 @@ export interface VerificationEvidenceCheck {
 export interface TaskGitEvidence {
   evidenceSource?: 'project-root' | 'managed-workspace';
   workspaceId?: string;
-  branch: string;
+  branch: string; // Actual branch observed where the Git evidence was collected.
+  targetBranch?: string | null; // Logical task/integration target for managed workspace evidence.
+  workspaceBranch?: string | null; // Recorded physical DevFlow workspace branch for managed evidence.
   commit: string;
   remote: string;
   trackingBranch?: string | null;

@@ -329,6 +329,25 @@ test('retry completes a deliberately resolved conflict without losing source com
 });
 
 
+test('integration rejects a worktree checked out on a branch different from its recorded physical workspace branch', () => {
+  const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-integration-physical-branch-'));
+  process.env.DEVFLOW_RUNTIME_DIR = runtimeRoot;
+  resetSessionWorkspaceRuntimeForTests();
+  const root = repoFixture();
+  const workspace = createOrReuseSessionWorkspace(project(root), 'chat-physical-branch');
+  commitFile(workspace.root, 'workspace.txt', 'workspace\n', 'workspace change');
+  git(workspace.root, ['switch', '-c', 'unexpected-physical-branch']);
+  const baseHeadBefore = git(root, ['rev-parse', 'HEAD']).stdout;
+
+  assert.throws(
+    () => integrateWorkspaceCommits(workspace.workspaceId),
+    (error: any) => error?.payload?.code === 'WORKSPACE_SOURCE_BRANCH_MISMATCH'
+      || error?.payload?.code === 'WORKSPACE_NOT_FOUND',
+  );
+  assert.equal(git(root, ['rev-parse', 'HEAD']).stdout, baseHeadBefore, 'physical branch drift must fail before mutating the shared base');
+  assert.equal(git(root, ['status', '--porcelain']).stdout, '');
+});
+
 test('integration reports combined target-branch changed files including sibling commits', () => {
   const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-integration-combined-impact-'));
   process.env.DEVFLOW_RUNTIME_DIR = runtimeRoot;

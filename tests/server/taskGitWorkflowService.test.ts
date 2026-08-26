@@ -141,6 +141,15 @@ test('workspace-bound Git evidence stays on the implementation worktree when dev
   assert.notEqual(result.gitEvidence.commit, unrelatedDevelopHead);
   assert.equal(result.gitEvidence.workspaceId, workspace.workspaceId);
   assert.equal(result.gitEvidence.evidenceSource, 'managed-workspace');
+  assert.equal(result.gitEvidence.targetBranch, 'develop');
+  assert.equal(result.gitEvidence.workspaceBranch, workspace.branch);
+  assert.notEqual(result.gitEvidence.targetBranch, result.gitEvidence.workspaceBranch);
+
+  const recorded = validateRecordedReviewSubmission(result.task, { requirePushedHead: false });
+  assert.equal(recorded.readinessDebt.some((entry: any) => entry.code === 'TASK_BRANCH_MISMATCH'), false);
+  assert.equal(recorded.readinessDebt.some((entry: any) => entry.code === 'TASK_BRANCH_EVIDENCE_INCOMPLETE'), false);
+  const warnings = buildTaskGitWarnings(result.task);
+  assert.equal(warnings.some((entry: any) => entry.code === 'TASK_BRANCH_MISMATCH' || entry.code === 'RECORDED_BRANCH_MISMATCH'), false);
 });
 
 test('workspace-bound Git evidence rejects a workspace that is not the task active claim', () => {
@@ -347,7 +356,11 @@ test('task repository persists optional Git and verification evidence', () => {
   const fixture = setup('persistence');
   const task = createTask(fixture.projectId, {
     gitEvidence: {
-      branch: 'develop',
+      branch: '0053',
+      targetBranch: 'develop',
+      workspaceBranch: '0053',
+      evidenceSource: 'managed-workspace',
+      workspaceId: 'ws-persisted',
       commit: 'abc123',
       remote: 'origin',
       trackingBranch: 'origin/develop',
@@ -366,6 +379,8 @@ test('task repository persists optional Git and verification evidence', () => {
   const loaded = getTasks().find((entry: any) => entry.id === task.id);
 
   assert.equal(loaded?.gitEvidence?.commit, 'abc123');
+  assert.equal(loaded?.gitEvidence?.targetBranch, 'develop');
+  assert.equal(loaded?.gitEvidence?.workspaceBranch, '0053');
   assert.equal(loaded?.verificationEvidence?.[0]?.status, 'passed');
 });
 
@@ -397,6 +412,36 @@ test('buildTaskGitWarnings reports branch mismatch, dirty completed work, and un
   assert.ok(codes.has('WORKING_TREE_DIRTY'));
   assert.ok(codes.has('UPSTREAM_NOT_CONFIGURED'));
   assert.ok(codes.has('REVIEW_HEAD_NOT_PUSHED'));
+});
+
+test('historical managed Git evidence without explicit branch identities is conservative', () => {
+  const fixture = setup('historical-managed-evidence');
+  const task = createTask(fixture.projectId, {
+    branch: 'develop',
+    gitEvidence: {
+      evidenceSource: 'managed-workspace',
+      workspaceId: 'ws-historical',
+      branch: '0053',
+      commit: git(fixture.root, ['rev-parse', 'HEAD']),
+      remote: 'origin',
+      trackingBranch: 'origin/0053',
+      remoteHead: null,
+      ahead: 0,
+      behind: 0,
+      diverged: false,
+      pushed: false,
+      workingTreeClean: true,
+      recordedAt: new Date().toISOString(),
+    },
+    verificationEvidence: passedChecks,
+  });
+
+  const recorded = validateRecordedReviewSubmission(task, { requirePushedHead: false });
+  assert.ok(recorded.readinessDebt.some((entry: any) => entry.code === 'TASK_BRANCH_EVIDENCE_INCOMPLETE'));
+
+  const warnings = buildTaskGitWarnings(task);
+  assert.ok(warnings.some((entry: any) => entry.code === 'RECORDED_BRANCH_IDENTITY_INCOMPLETE'));
+  assert.equal(warnings.some((entry: any) => entry.code === 'RECORDED_BRANCH_MISMATCH'), false);
 });
 
 test('DONE warnings preserve quality debt without presenting status as GREEN or approved', () => {

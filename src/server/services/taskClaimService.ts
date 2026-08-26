@@ -29,6 +29,7 @@ import { reconcileExecutionLifecycleStage } from './executionLifecycleReconcilia
 import { inspectWorkspaceRecovery } from './workspaceRecoveryService.js';
 import { assertTaskPrerequisitesSatisfied, getTaskPrerequisiteBlockers } from './taskDependencyService.js';
 import { evaluateExecutionContinuation, getProjectBoardLoopIntent, persistBoardLoopIntent, type BoardLoopIntent } from './executionContinuationService.js';
+import { classifyReasoningPipelineBoundary } from './mcpToolJobScheduler.js';
 
 const DEFAULT_CLAIM_TTL_MS = 24 * 60 * 60 * 1000;
 const MIN_CLAIM_TTL_MS = 60_000;
@@ -260,6 +261,7 @@ export function getProjectOrchestrationProjection(projectId: string) {
           jobIds: continuation.pendingOperations.slice(0, 8).map((entry) => entry.jobId).filter(Boolean),
           finalizationOperationId: continuation.finalization?.operationId || null,
           autonomousTailJobId: continuation.autonomousTail.jobId,
+          backgroundPipeline: continuation.backgroundPipeline,
         };
         if (continuation.blocked || continuation.autonomousTail.state === 'attention') return { ...base, state: 'attention' as OrchestrationState, reasons: boundedContinuationReasons(continuation), context };
         return { ...base, state: 'execution' as OrchestrationState, reasons: boundedContinuationReasons(continuation), context };
@@ -291,6 +293,7 @@ function boundedSchedulerContinuation(continuation: ReturnType<typeof evaluateEx
     jobIds: continuation.pendingOperations.slice(0, 8).map((entry) => entry.jobId).filter(Boolean),
     finalizationOperationId: continuation.finalization?.operationId || null,
     autonomousTailJobId: continuation.autonomousTail.jobId,
+    backgroundPipeline: continuation.backgroundPipeline,
   };
 }
 
@@ -339,6 +342,53 @@ function persistLoopOnClaimedTask(claimed: any, loop: { loopId: string; projectI
   });
 }
 
+function inspectOwnedReasoningTasks(projectTasks: any[], cleanSessionId: string, nowMs: number) {
+  const hash = sessionIdHash(cleanSessionId);
+  const states = projectTasks
+    .filter((task) => !task.archivedAt && task.status !== 'done' && isActiveClaim(task.claim, nowMs) && task.claim.sessionIdHash === hash)
+    .sort(compareNextTaskOrder)
+    .map((task) => {
+      const sessions = listExecutionSessionsForTask(task.id);
+      const activeSessions = sessions.filter((entry) => entry.status === 'active');
+      if (activeSessions.length > 1) {
+        return {
+          task,
+          continuation: null,
+          issue: {
+            code: 'OWNED_EXECUTION_AMBIGUOUS',
+            message: 'Owned task has multiple active execution sessions; explicit recovery is required before scheduler continuation.',
+            executionSessionIds: activeSessions.slice(0, 8).map((entry) => entry.id),
+            workspaceId: task.claim?.workspaceId || null,
+          },
+        };
+      }
+      const execution = activeSessions[0] || sessions[0] || null;
+      if (!execution) {
+        return {
+          task,
+          continuation: null,
+          issue: {
+            code: 'TASK_EXECUTION_SESSION_MISSING',
+            message: 'Owned task has no durable execution session to continue safely.',
+            workspaceId: task.claim?.workspaceId || null,
+          },
+        };
+      }
+      const continuation = evaluateExecutionContinuation({} as any, execution.id, { workspaceId: task.claim?.workspaceId || execution.workspaceId || undefined });
+      return { task, continuation, issue: null };
+    });
+  const issue = states.find((entry) => entry.issue)?.issue || null;
+  const boundary = classifyReasoningPipelineBoundary(states
+    .filter((entry) => Boolean(entry.continuation))
+    .map((entry) => ({
+      taskId: entry.task.id,
+      pipelineState: entry.continuation!.backgroundPipeline.state === 'none'
+        ? 'not-pipeline'
+        : entry.continuation!.backgroundPipeline.state,
+    })));
+  return { states, boundary, issue };
+}
+
 export function getNextActionForSession(projectId: string, input: { sessionId: string; limit?: number }) {
   const cleanProjectId = String(projectId || '').trim();
   const cleanSessionId = String(input?.sessionId || '').trim();
@@ -348,9 +398,9 @@ export function getNextActionForSession(projectId: string, input: { sessionId: s
   if (!project) throw createApiError(404, 'PROJECT_NOT_FOUND', `Project '${cleanProjectId}' was not found.`, { affectedId: cleanProjectId });
 
   const nowMs = Date.now();
-  const hash = sessionIdHash(cleanSessionId);
   const projectTasks = getTasksByProjectId(cleanProjectId);
   const boardLoop = getProjectBoardLoopIntent(cleanProjectId);
+  let loopBackgroundTaskId: string | null = null;
   if (boardLoop?.status === 'terminal') {
     return {
       action: 'no-action' as const,
@@ -374,63 +424,65 @@ export function getNextActionForSession(projectId: string, input: { sessionId: s
           loop: boardLoop,
         };
       }
-      return {
-        action: continuation.nextAction ? 'recover-current' as const : 'continue-owned' as const,
-        projectId: cleanProjectId,
-        task: { taskId: loopTask.id, displayId: loopTask.displayId },
-        reasonCodes: continuation.reasonCodes.slice(0, 8),
-        continuation: boundedSchedulerContinuation(continuation),
-        loop: boardLoop,
-      };
+      if (continuation.backgroundPipeline.state === 'in-flight') {
+        loopBackgroundTaskId = loopTask.id;
+      } else {
+        return {
+          action: continuation.nextAction ? 'recover-current' as const : 'continue-owned' as const,
+          projectId: cleanProjectId,
+          task: { taskId: loopTask.id, displayId: loopTask.displayId },
+          reasonCodes: continuation.reasonCodes.slice(0, 8),
+          continuation: boundedSchedulerContinuation(continuation),
+          loop: boardLoop,
+        };
+      }
     }
   }
-  const ownedTasks = projectTasks
-    .filter((task) => !task.archivedAt && task.status !== 'done' && isActiveClaim(task.claim, nowMs) && task.claim.sessionIdHash === hash)
-    .sort(compareNextTaskOrder);
-
-  if (ownedTasks.length > 1) {
+  const ownedInspection = inspectOwnedReasoningTasks(projectTasks, cleanSessionId, nowMs);
+  if (ownedInspection.issue) {
+    const issueState = ownedInspection.states.find((entry) => entry.issue) || null;
+    return {
+      action: 'resolve-attention' as const,
+      projectId: cleanProjectId,
+      ...(issueState ? { task: { taskId: issueState.task.id, displayId: issueState.task.displayId } } : {}),
+      reasonCodes: [ownedInspection.issue.code],
+      attention: ownedInspection.issue,
+    };
+  }
+  if (ownedInspection.boundary.ambiguousForeground) {
+    const foreground = new Set(ownedInspection.boundary.foregroundTaskIds);
     return {
       action: 'resolve-attention' as const,
       projectId: cleanProjectId,
       reasonCodes: ['OWNED_WORK_AMBIGUOUS'],
       attention: {
         code: 'OWNED_WORK_AMBIGUOUS',
-        message: 'This scheduler session owns multiple active task scopes; DevFlow will not guess which one to abandon or resume.',
-        taskRefs: ownedTasks.slice(0, 8).map((task) => ({ taskId: task.id, displayId: task.displayId, workspaceId: task.claim?.workspaceId || null })),
+        message: 'This scheduler session owns multiple foreground reasoning scopes; background pipeline work is excluded from this ambiguity check.',
+        taskRefs: ownedInspection.states.filter((entry) => foreground.has(entry.task.id)).slice(0, 8).map((entry) => ({ taskId: entry.task.id, displayId: entry.task.displayId, workspaceId: entry.task.claim?.workspaceId || null })),
       },
     };
   }
 
-  const ownedTask = ownedTasks[0] || null;
-  let ownedContinuation: ReturnType<typeof evaluateExecutionContinuation> | null = null;
-  if (ownedTask) {
-    const sessions = listExecutionSessionsForTask(ownedTask.id);
-    const activeSessions = sessions.filter((entry) => entry.status === 'active');
-    if (activeSessions.length > 1) {
-      return {
-        action: 'resolve-attention' as const,
-        projectId: cleanProjectId,
-        task: { taskId: ownedTask.id, displayId: ownedTask.displayId },
-        reasonCodes: ['OWNED_EXECUTION_AMBIGUOUS'],
-        attention: {
-          code: 'OWNED_EXECUTION_AMBIGUOUS',
-          message: 'Owned task has multiple active execution sessions; explicit recovery is required before scheduler continuation.',
-          executionSessionIds: activeSessions.slice(0, 8).map((entry) => entry.id),
-          workspaceId: ownedTask.claim?.workspaceId || null,
-        },
-      };
-    }
-    const execution = activeSessions[0] || sessions[0] || null;
-    if (!execution) {
-      return {
-        action: 'resolve-attention' as const,
-        projectId: cleanProjectId,
-        task: { taskId: ownedTask.id, displayId: ownedTask.displayId },
-        reasonCodes: ['TASK_EXECUTION_SESSION_MISSING'],
-        attention: { code: 'TASK_EXECUTION_SESSION_MISSING', message: 'Owned task has no durable execution session to continue safely.', workspaceId: ownedTask.claim?.workspaceId || null },
-      };
-    }
-    ownedContinuation = evaluateExecutionContinuation({} as any, execution.id, { workspaceId: ownedTask.claim?.workspaceId || execution.workspaceId || undefined });
+  const projection = getProjectOrchestrationProjection(cleanProjectId);
+  const ordinaryAttention = projection.entries.find((entry) => (
+    entry.state === 'attention'
+    && !((entry as any).context?.backgroundPipeline?.state === 'attention')
+  ));
+  if (ordinaryAttention) {
+    return {
+      action: 'resolve-attention' as const,
+      projectId: cleanProjectId,
+      task: { taskId: ordinaryAttention.taskId, displayId: ordinaryAttention.displayId },
+      reasonCodes: ordinaryAttention.reasons.slice(0, 8).map((entry) => entry.code),
+      attention: { reasons: ordinaryAttention.reasons.slice(0, 8), ...(('context' in ordinaryAttention && ordinaryAttention.context) ? { context: ordinaryAttention.context } : {}) },
+    };
+  }
+
+  const ownedTaskId = ownedInspection.boundary.foregroundTaskIds[0] || null;
+  const ownedState = ownedTaskId ? ownedInspection.states.find((entry) => entry.task.id === ownedTaskId) || null : null;
+  const ownedTask = ownedState?.task || null;
+  const ownedContinuation = ownedState?.continuation || null;
+  if (ownedTask && ownedContinuation) {
     if (ownedContinuation.blocked || ownedContinuation.autonomousTail.state === 'attention') {
       return {
         action: 'resolve-attention' as const,
@@ -440,21 +492,6 @@ export function getNextActionForSession(projectId: string, input: { sessionId: s
         continuation: boundedSchedulerContinuation(ownedContinuation),
       };
     }
-  }
-
-  const projection = getProjectOrchestrationProjection(cleanProjectId);
-  const attention = projection.entries.find((entry) => entry.state === 'attention' && entry.taskId !== ownedTask?.id);
-  if (attention) {
-    return {
-      action: 'resolve-attention' as const,
-      projectId: cleanProjectId,
-      task: { taskId: attention.taskId, displayId: attention.displayId },
-      reasonCodes: attention.reasons.slice(0, 8).map((entry) => entry.code),
-      attention: { reasons: attention.reasons.slice(0, 8), ...(('context' in attention && attention.context) ? { context: attention.context } : {}) },
-    };
-  }
-
-  if (ownedTask && ownedContinuation) {
     const continuation = boundedSchedulerContinuation(ownedContinuation);
     if (ownedContinuation.nextAction) {
       return {
@@ -474,6 +511,17 @@ export function getNextActionForSession(projectId: string, input: { sessionId: s
     };
   }
 
+  const attention = projection.entries.find((entry) => entry.state === 'attention' && entry.taskId !== ownedTask?.id);
+  if (attention) {
+    return {
+      action: 'resolve-attention' as const,
+      projectId: cleanProjectId,
+      task: { taskId: attention.taskId, displayId: attention.displayId },
+      reasonCodes: attention.reasons.slice(0, 8).map((entry) => entry.code),
+      attention: { reasons: attention.reasons.slice(0, 8), ...(('context' in attention && attention.context) ? { context: attention.context } : {}) },
+    };
+  }
+
   const limit = boundedNextTaskLimit(input.limit);
   const newWorkWindow = projection.entries
     .filter((entry) => entry.taskStatus === 'backlog' || entry.taskStatus === 'todo')
@@ -486,6 +534,20 @@ export function getNextActionForSession(projectId: string, input: { sessionId: s
       task: { taskId: ready.taskId, displayId: ready.displayId },
       reasonCodes: ['ELIGIBLE_NEW_WORK'],
       claim: { tool: 'claim_next_task' as const, projectId: cleanProjectId, limit },
+      ...(boardLoop ? { loop: boardLoop } : {}),
+    };
+  }
+
+  const backgroundTaskIds = [...new Set([
+    ...(loopBackgroundTaskId ? [loopBackgroundTaskId] : []),
+    ...ownedInspection.boundary.backgroundTaskIds.filter((taskId) => !ownedInspection.boundary.attentionTaskIds.includes(taskId)),
+  ])];
+  if (backgroundTaskIds.length > 0) {
+    return {
+      action: 'no-action' as const,
+      projectId: cleanProjectId,
+      reasonCodes: ['BACKGROUND_PIPELINE_IN_FLIGHT'],
+      background: { taskIds: backgroundTaskIds.slice(0, 8) },
       ...(boardLoop ? { loop: boardLoop } : {}),
     };
   }
@@ -1283,6 +1345,23 @@ export function claimNextTaskForSession(projectId: string, input: ClaimNextTaskI
   return withSyncLock(`task-claim:${cleanProjectId}`, () => {
     const nowMs = Date.now();
     const projectTasks = getTasksByProjectId(cleanProjectId);
+    const ownedInspection = inspectOwnedReasoningTasks(projectTasks, cleanSessionId, nowMs);
+    if (ownedInspection.issue || ownedInspection.boundary.ambiguousForeground || ownedInspection.boundary.foregroundTaskIds.length > 0 || ownedInspection.boundary.shouldSurfaceAttention) {
+      const reasonCode = ownedInspection.issue?.code
+        || (ownedInspection.boundary.shouldSurfaceAttention ? 'BACKGROUND_PIPELINE_ATTENTION_REQUIRED' : 'FOREGROUND_REASONING_SCOPE_ACTIVE');
+      return {
+        status: 'no-eligible' as const,
+        code: 'NO_ELIGIBLE_TASK',
+        projectId: cleanProjectId,
+        scanned: 0,
+        deferred: 0,
+        limit,
+        dependencyBlocked: [],
+        reasonCodes: [reasonCode],
+        backgroundTaskIds: ownedInspection.boundary.backgroundTaskIds.slice(0, 8),
+        foregroundTaskIds: ownedInspection.boundary.foregroundTaskIds.slice(0, 8),
+      };
+    }
     const existingLoop = getProjectBoardLoopIntent(cleanProjectId);
     const activeLoop = existingLoop?.status === 'active' ? existingLoop : null;
     const requestedTask = input.requestedTaskId ? canonicalRequestedLoopTask(cleanProjectId, input.requestedTaskId) : null;

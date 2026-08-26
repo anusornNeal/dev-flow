@@ -25,6 +25,64 @@ export interface SchedulerQueueEntry {
   verificationDemand?: VerificationResourceDemand;
 }
 
+export type BackgroundPipelineJobDisposition = {
+  pipelineCapable: boolean;
+  state: 'not-pipeline' | 'in-flight' | 'completed' | 'attention';
+  phase: 'none' | 'verification' | 'execution-tail';
+  reasonCode: string | null;
+};
+
+export function classifyBackgroundPipelineJob(job: { toolName?: string; status?: string; args?: any } | null | undefined): BackgroundPipelineJobDisposition {
+  const toolName = String(job?.toolName || '').trim();
+  const status = String(job?.status || '').trim().toLowerCase();
+  const verificationTail = toolName === 'run_project_command'
+    && job?.args?.autonomousTail?.enabled === true
+    && Boolean(String(job?.args?.autonomousTail?.commitMessage || '').trim());
+  const executionTail = toolName === 'continue_task_execution_tail';
+  const phase: BackgroundPipelineJobDisposition['phase'] = verificationTail ? 'verification' : executionTail ? 'execution-tail' : 'none';
+  if (phase === 'none') return { pipelineCapable: false, state: 'not-pipeline', phase, reasonCode: null };
+  if (status === 'queued' || status === 'running') {
+    return { pipelineCapable: true, state: 'in-flight', phase, reasonCode: phase === 'verification' ? 'BACKGROUND_VERIFICATION_IN_FLIGHT' : 'BACKGROUND_EXECUTION_TAIL_IN_FLIGHT' };
+  }
+  if (status === 'succeeded') return { pipelineCapable: true, state: 'completed', phase, reasonCode: null };
+  return { pipelineCapable: true, state: 'attention', phase, reasonCode: phase === 'verification' ? 'BACKGROUND_VERIFICATION_ATTENTION_REQUIRED' : 'BACKGROUND_EXECUTION_TAIL_ATTENTION_REQUIRED' };
+}
+
+
+export type ReasoningPipelineScope = {
+  taskId: string;
+  pipelineState: BackgroundPipelineJobDisposition['state'];
+};
+
+export type ReasoningPipelineBoundary = {
+  foregroundTaskIds: string[];
+  backgroundTaskIds: string[];
+  attentionTaskIds: string[];
+  ambiguousForeground: boolean;
+  canClaimIndependent: boolean;
+  shouldSurfaceAttention: boolean;
+};
+
+export function classifyReasoningPipelineBoundary(scopes: ReasoningPipelineScope[]): ReasoningPipelineBoundary {
+  const foregroundTaskIds = scopes
+    .filter((scope) => scope.pipelineState !== 'in-flight' && scope.pipelineState !== 'attention')
+    .map((scope) => scope.taskId);
+  const backgroundTaskIds = scopes
+    .filter((scope) => scope.pipelineState === 'in-flight' || scope.pipelineState === 'attention')
+    .map((scope) => scope.taskId);
+  const attentionTaskIds = scopes
+    .filter((scope) => scope.pipelineState === 'attention')
+    .map((scope) => scope.taskId);
+  return {
+    foregroundTaskIds,
+    backgroundTaskIds,
+    attentionTaskIds,
+    ambiguousForeground: foregroundTaskIds.length > 1,
+    canClaimIndependent: foregroundTaskIds.length === 0 && attentionTaskIds.length === 0,
+    shouldSurfaceAttention: foregroundTaskIds.length === 0 && attentionTaskIds.length > 0,
+  };
+}
+
 export interface SchedulerBlocker {
   blockedByJobId?: string;
   blockedByAccessMode?: ResourceAccessMode;

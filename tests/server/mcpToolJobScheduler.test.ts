@@ -8,6 +8,8 @@ import {
   getSchedulerPriority,
   getSchedulerProfile,
   buildQueueEntryDiagnostics,
+  classifyBackgroundPipelineJob,
+  classifyReasoningPipelineBoundary,
   scopeVerificationResources,
   resetSchedulerResourceStateForTests,
   incrementScheduledResource,
@@ -42,6 +44,69 @@ test('scheduler profile preserves read/search/write cost classes', () => {
   assert.deepEqual(getSchedulerProfile({} as any, 'search_local_files', {}, 'repo-read'), { accessMode: 'read', costClass: 'search' });
   assert.deepEqual(getSchedulerProfile({} as any, 'edit_local_files_batch', {}, 'repo-write'), { accessMode: 'write', costClass: 'write' });
   assert.deepEqual(getSchedulerProfile({} as any, 'get_authoring_skill', {}, 'skill-read'), { accessMode: 'read', costClass: 'light-read' });
+});
+
+test('background pipeline classifier distinguishes autonomous verification and execution tails', () => {
+  assert.deepEqual(classifyBackgroundPipelineJob({ toolName: 'run_project_command', status: 'queued', args: {} }), {
+    pipelineCapable: false,
+    state: 'not-pipeline',
+    phase: 'none',
+    reasonCode: null,
+  });
+  assert.deepEqual(classifyBackgroundPipelineJob({
+    toolName: 'run_project_command',
+    status: 'running',
+    args: { autonomousTail: { enabled: true, commitMessage: 'feat: finish card' } },
+  }), {
+    pipelineCapable: true,
+    state: 'in-flight',
+    phase: 'verification',
+    reasonCode: 'BACKGROUND_VERIFICATION_IN_FLIGHT',
+  });
+  assert.equal(classifyBackgroundPipelineJob({
+    toolName: 'run_project_command',
+    status: 'failed',
+    args: { autonomousTail: { enabled: true, commitMessage: 'feat: finish card' } },
+  }).state, 'attention');
+  assert.deepEqual(classifyBackgroundPipelineJob({ toolName: 'continue_task_execution_tail', status: 'running', args: {} }), {
+    pipelineCapable: true,
+    state: 'in-flight',
+    phase: 'execution-tail',
+    reasonCode: 'BACKGROUND_EXECUTION_TAIL_IN_FLIGHT',
+  });
+  assert.equal(classifyBackgroundPipelineJob({ toolName: 'continue_task_execution_tail', status: 'succeeded', args: {} }).state, 'completed');
+});
+
+test('reasoning pipeline boundary permits only safe independent foreground progression', () => {
+  const verifyingA = classifyReasoningPipelineBoundary([{ taskId: 'A', pipelineState: 'in-flight' }]);
+  assert.equal(verifyingA.canClaimIndependent, true, 'A verifying in background should allow independent B reasoning');
+  assert.deepEqual(verifyingA.backgroundTaskIds, ['A']);
+
+  const failedAWhileBAtomic = classifyReasoningPipelineBoundary([
+    { taskId: 'A', pipelineState: 'attention' },
+    { taskId: 'B', pipelineState: 'not-pipeline' },
+  ]);
+  assert.deepEqual(failedAWhileBAtomic.foregroundTaskIds, ['B']);
+  assert.deepEqual(failedAWhileBAtomic.attentionTaskIds, ['A']);
+  assert.equal(failedAWhileBAtomic.shouldSurfaceAttention, false, 'A failure must not interrupt active atomic B reasoning');
+  assert.equal(failedAWhileBAtomic.canClaimIndependent, false);
+
+  const failedAAtBoundary = classifyReasoningPipelineBoundary([{ taskId: 'A', pipelineState: 'attention' }]);
+  assert.equal(failedAAtBoundary.shouldSurfaceAttention, true, 'A failure should surface at the next safe scheduler boundary');
+  assert.equal(failedAAtBoundary.canClaimIndependent, false);
+
+  const activeB = classifyReasoningPipelineBoundary([
+    { taskId: 'A', pipelineState: 'in-flight' },
+    { taskId: 'B', pipelineState: 'not-pipeline' },
+  ]);
+  assert.deepEqual(activeB.foregroundTaskIds, ['B']);
+  assert.equal(activeB.canClaimIndependent, false, 'scheduler must not start C while B is the active foreground scope');
+
+  const ambiguous = classifyReasoningPipelineBoundary([
+    { taskId: 'B', pipelineState: 'not-pipeline' },
+    { taskId: 'C', pipelineState: 'completed' },
+  ]);
+  assert.equal(ambiguous.ambiguousForeground, true);
 });
 
 test('writer barrier blocks later read for the same resource but not another resource', () => {

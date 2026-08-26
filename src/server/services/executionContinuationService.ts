@@ -8,6 +8,7 @@ import { getSessionWorkspaceMetadataForRecovery } from './sessionWorkspaceServic
 import { getRepoRevisionForRoot } from './repoRevisionService.js';
 import { computeLifecycleAuthoritySnapshot } from './lifecycleAuthorityService.js';
 import { createApiError } from './api.js';
+import { classifyBackgroundPipelineJob } from './mcpToolJobScheduler.js';
 
 export type ExecutionContinuationNextAction =
   | {
@@ -62,6 +63,13 @@ export type ExecutionContinuationResult = {
     state: 'not-started' | 'queued' | 'running' | 'completed' | 'attention';
     jobId: string | null;
     triggerJobId: string | null;
+    reasonCode: string | null;
+    message: string | null;
+  };
+  backgroundPipeline: {
+    state: 'none' | 'in-flight' | 'completed' | 'attention';
+    phase: 'none' | 'verification' | 'execution-tail';
+    jobId: string | null;
     reasonCode: string | null;
     message: string | null;
   };
@@ -296,6 +304,39 @@ export function evaluateExecutionContinuation(
     });
   }
 
+  const latestVerificationPipeline = listRecentJobs(200)
+    .filter((job) => job.toolName === 'run_project_command' && String(job.args?.__executionJobBinding?.executionSessionId || '').trim() === session.id)
+    .map((job) => ({ job, disposition: classifyBackgroundPipelineJob(job) }))
+    .filter((entry) => entry.disposition.pipelineCapable)
+    .sort((left, right) => right.job.updatedAt.localeCompare(left.job.updatedAt))[0] || null;
+  const verificationPipelineState = latestVerificationPipeline?.disposition.state === 'not-pipeline'
+    ? 'none'
+    : latestVerificationPipeline?.disposition.state || 'none';
+  const backgroundPipeline: ExecutionContinuationResult['backgroundPipeline'] = autonomousTail.state === 'queued' || autonomousTail.state === 'running'
+    ? { state: 'in-flight', phase: 'execution-tail', jobId: autonomousTail.jobId, reasonCode: null, message: null }
+    : autonomousTail.state === 'attention'
+      ? { state: 'attention', phase: 'execution-tail', jobId: autonomousTail.jobId, reasonCode: autonomousTail.reasonCode, message: autonomousTail.message }
+      : autonomousTail.state === 'completed'
+        ? { state: 'completed', phase: 'execution-tail', jobId: autonomousTail.jobId, reasonCode: null, message: null }
+        : latestVerificationPipeline
+          ? {
+              state: verificationPipelineState,
+              phase: 'verification',
+              jobId: latestVerificationPipeline.job.jobId,
+              reasonCode: latestVerificationPipeline.disposition.reasonCode,
+              message: verificationPipelineState === 'attention'
+                ? String(latestVerificationPipeline.job.failureSummary || 'Background verification requires attention.').slice(0, 500)
+                : null,
+            }
+          : { state: 'none', phase: 'none', jobId: null, reasonCode: null, message: null };
+  if (backgroundPipeline.state === 'attention' && autonomousTail.state !== 'attention') {
+    blockers.push({
+      code: backgroundPipeline.reasonCode || 'BACKGROUND_VERIFICATION_ATTENTION_REQUIRED',
+      message: backgroundPipeline.message || 'Background verification requires attention.',
+      affectedId: backgroundPipeline.jobId,
+    });
+  }
+
   const boardLoop: ExecutionContinuationResult['boardLoop'] = persistedBoardLoop ? {
     requested: true,
     eligibilityDeferred: persistedBoardLoop.status === 'active',
@@ -341,6 +382,7 @@ export function evaluateExecutionContinuation(
     blockers,
     boardLoop,
     autonomousTail,
+    backgroundPipeline,
   };
 
   if (pendingOperations.length > 0) {

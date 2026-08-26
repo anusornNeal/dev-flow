@@ -2,12 +2,16 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import fs from 'node:fs';
-import express from 'express';import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import express from 'express';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import {
   classifyMcpTransportOperation,
   clearMcpTransportRecords,
   createMcpTransportRequestTracker,
+  getMcpTransportToolName,
+  queryMcpTransportTrace,
+  recordMcpTransportTraceEvent,
   getMcpTransportSummary,
   recordMcpStreamableHttpSessionLifecycle,
   recordMcpTransportRequest,
@@ -99,6 +103,214 @@ test('operation classifier stores only bounded method labels', () => {
   assert.equal(classifyMcpTransportOperation({ method: 'tools/list', params: { secret: 'x' } }), 'tools/list');
   assert.equal(classifyMcpTransportOperation({ method: 'tools/call', params: { name: 'commit_git_changes', arguments: { password: 'secret' } } }), 'tools/call');
   assert.equal(classifyMcpTransportOperation({ method: 'notifications/initialized' }), 'other');
+});
+
+test('trace records keep only bounded safe metadata and represent missing fields explicitly', () => {
+  clearMcpTransportRecords();
+  recordMcpTransportRequest({
+    operation: 'tools/call',
+    statusCode: 200,
+    totalMs: 42,
+    phaseMs: { parse: 1, connect: 2, handle: 35, close: 1, responseFinalize: 3 },
+    timestamp: 30_000,
+    correlationId: 'corr-123',
+    toolName: 'commit_git_changes',
+    runtimeInstanceId: 'runtime-abc',
+    outcome: 'success',
+  });
+  recordMcpTransportTraceEvent({
+    eventType: 'legacy-sse',
+    lifecycleEvent: 'sse-connect',
+    correlationId: 'sse-1',
+    runtimeInstanceId: 'runtime-abc',
+    timestamp: 30_001,
+  });
+
+  const request = queryMcpTransportTrace({ correlationId: 'corr-123' });
+  assert.equal(request.returned, 1);
+  assert.equal(request.records[0].eventType, 'request');
+  assert.equal(request.records[0].operation, 'tools/call');
+  assert.equal(request.records[0].toolName, 'commit_git_changes');
+  assert.equal(request.records[0].runtimeInstanceId, 'runtime-abc');
+  assert.equal(request.records[0].outcome, 'success');
+  assert.deepEqual(request.records[0].phaseMs, { parse: 1, connect: 2, handle: 35, close: 1, responseFinalize: 3 });
+  assert.equal(request.records[0].lifecycleEvent, null);
+
+  const lifecycle = queryMcpTransportTrace({ eventType: 'legacy-sse' });
+  assert.equal(lifecycle.records[0].lifecycleEvent, 'sse-connect');
+  assert.equal(lifecycle.records[0].operation, null);
+  assert.equal(lifecycle.records[0].toolName, null);
+  assert.equal(lifecycle.records[0].statusCode, null);
+  assert.equal(lifecycle.records[0].outcome, 'unknown');
+  assert.equal(lifecycle.records[0].phaseMs, null);
+  assert.equal(lifecycle.privacy.rawPayloadsStored, false);
+  assert.equal(lifecycle.privacy.rawHeadersStored, false);
+  assert.equal(lifecycle.privacy.toolArgumentsStored, false);
+  assert.equal(lifecycle.privacy.rawSessionIdentifiersStored, false);
+});
+
+test('unsafe trace metadata is discarded instead of retaining raw values', () => {
+  clearMcpTransportRecords();
+  const unsafeCorrelation = 'corr secret with spaces';
+  const unsafeTool = `tool-${'x'.repeat(200)}`;
+  const unsafeRuntime = 'runtime\\nsecret';
+  recordMcpTransportRequest({
+    operation: 'tools/call',
+    statusCode: 500,
+    totalMs: 10,
+    phaseMs: { parse: 0, connect: 0, handle: 10, close: 0, responseFinalize: 0 },
+    correlationId: unsafeCorrelation,
+    toolName: unsafeTool,
+    runtimeInstanceId: unsafeRuntime,
+    outcome: 'error',
+  });
+  const result = queryMcpTransportTrace();
+  assert.equal(result.records[0].correlationId, null);
+  assert.equal(result.records[0].toolName, null);
+  assert.equal(result.records[0].runtimeInstanceId, null);
+  const serialized = JSON.stringify(result);
+  assert.doesNotMatch(serialized, /corr secret with spaces/);
+  assert.doesNotMatch(serialized, /runtime\\nsecret/);
+  assert.equal(serialized.includes(unsafeTool), false);
+});
+
+test('trace retention, drop accounting, and query limits are hard bounded', () => {
+  clearMcpTransportRecords();
+  for (let index = 0; index < 550; index += 1) {
+    recordMcpTransportRequest({
+      operation: index % 2 === 0 ? 'tools/call' : 'tools/list',
+      statusCode: index % 10 === 0 ? 500 : 200,
+      totalMs: index,
+      phaseMs: { parse: 0, connect: 0, handle: index, close: 0, responseFinalize: 0 },
+      timestamp: index,
+      correlationId: `corr-${index}`,
+      runtimeInstanceId: 'runtime-retention',
+      outcome: index % 10 === 0 ? 'error' : 'success',
+    });
+  }
+  const summary = getMcpTransportSummary({ now: 600, windowMs: 10_000 });
+  assert.equal(summary.trace.retainedRecords, 500);
+  assert.equal(summary.trace.droppedRecords, 50);
+
+  const capped = queryMcpTransportTrace({ limit: 999 });
+  assert.equal(capped.limit, 100);
+  assert.equal(capped.returned, 100);
+  assert.equal(capped.totalMatched, 500);
+  assert.equal(capped.droppedRecords, 50);
+  assert.equal(capped.truncated, true);
+
+  const errors = queryMcpTransportTrace({ errorsOnly: true, runtimeInstanceId: 'runtime-retention' });
+  assert.equal(errors.records.every((entry) => entry.outcome === 'error' || (entry.statusCode || 0) >= 400), true);
+  const slow = queryMcpTransportTrace({ slowMinMs: 540 });
+  assert.equal(slow.records.every((entry) => (entry.totalMs || 0) >= 540), true);
+});
+
+test('invalid or oversized trace filters fail closed instead of broadening the query', () => {
+  clearMcpTransportRecords();
+  recordMcpTransportRequest({
+    operation: 'initialize',
+    statusCode: 200,
+    totalMs: 1,
+    phaseMs: { parse: 0, connect: 0, handle: 1, close: 0, responseFinalize: 0 },
+    correlationId: 'known-good',
+  });
+  const invalid = queryMcpTransportTrace({ correlationId: 'bad filter with spaces' });
+  assert.equal(invalid.returned, 0);
+  assert.deepEqual(invalid.invalidFilters, ['correlationId']);
+  const oversized = queryMcpTransportTrace({ toolName: 'x'.repeat(500) });
+  assert.equal(oversized.returned, 0);
+  assert.deepEqual(oversized.invalidFilters, ['toolName']);
+  const invalidSince = queryMcpTransportTrace({ since: Number.NaN });
+  assert.deepEqual(invalidSince.invalidFilters, ['since']);
+  const invalidSlow = queryMcpTransportTrace({ slowMinMs: -1 });
+  assert.deepEqual(invalidSlow.invalidFilters, ['slowMinMs']);
+});
+
+test('duplicate and malformed metadata stay bounded and explicit without throwing', () => {
+  clearMcpTransportRecords();
+  for (let index = 0; index < 2; index += 1) {
+    recordMcpTransportRequest({
+      operation: 'tools/list',
+      statusCode: 200,
+      totalMs: 1,
+      phaseMs: { parse: 0, connect: 0, handle: 1, close: 0, responseFinalize: 0 },
+      correlationId: 'duplicate-correlation',
+    });
+  }
+  const duplicates = queryMcpTransportTrace({ correlationId: 'duplicate-correlation' });
+  assert.equal(duplicates.totalMatched, 2);
+  assert.equal(duplicates.records.every((entry) => entry.outcome === 'unknown'), true);
+
+  assert.doesNotThrow(() => recordMcpTransportTraceEvent({
+    eventType: 'not-a-real-event',
+    lifecycleEvent: 'not-a-real-lifecycle',
+    correlationId: 'unsafe correlation value',
+  } as any));
+  const latest = queryMcpTransportTrace({ limit: 1 });
+  assert.equal(latest.records[0].eventType, 'session-lifecycle');
+  assert.equal(latest.records[0].lifecycleEvent, null);
+  assert.equal(latest.records[0].correlationId, null);
+  assert.equal(JSON.stringify(latest).includes('unsafe correlation value'), false);
+});
+
+test('tool-name extraction reads only already-parsed tools/call metadata', () => {
+  assert.equal(getMcpTransportToolName({ method: 'tools/call', params: { name: 'commit_git_changes', arguments: { password: 'secret' } } }), 'commit_git_changes');
+  assert.equal(getMcpTransportToolName({ method: 'tools/list', params: { name: 'should-not-be-read' } }), null);
+  assert.equal(getMcpTransportToolName({ method: 'tools/call', params: { name: 'unsafe tool name' } }), null);
+});
+
+test('representative trace bookkeeping keeps p50/p95 overhead bounded versus the pre-trace aggregate path', () => {
+  const samples = 25;
+  const recordsPerSample = 400;
+  const baselineDurations: number[] = [];
+  const tracedDurations: number[] = [];
+  const baselineRecords: any[] = [];
+  const percentile = (values: number[], ratio: number) => {
+    const sorted = [...values].sort((left, right) => left - right);
+    return sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(sorted.length * ratio) - 1))];
+  };
+  const baselineRecord = (index: number) => {
+    baselineRecords.push({
+      operation: 'tools/call',
+      statusCode: 200,
+      totalMs: index,
+      phaseMs: { parse: 0, connect: 0, handle: index, close: 0, responseFinalize: 0 },
+      timestamp: index,
+    });
+    if (baselineRecords.length > 500) baselineRecords.splice(0, baselineRecords.length - 500);
+  };
+
+  for (let sample = 0; sample < samples; sample += 1) {
+    baselineRecords.length = 0;
+    let startedAt = performance.now();
+    for (let index = 0; index < recordsPerSample; index += 1) baselineRecord(index);
+    baselineDurations.push((performance.now() - startedAt) / recordsPerSample);
+
+    clearMcpTransportRecords();
+    startedAt = performance.now();
+    for (let index = 0; index < recordsPerSample; index += 1) {
+      recordMcpTransportRequest({
+        operation: 'tools/call',
+        statusCode: 200,
+        totalMs: index,
+        phaseMs: { parse: 0, connect: 0, handle: index, close: 0, responseFinalize: 0 },
+        timestamp: index,
+        correlationId: `bench-${index}`,
+        toolName: 'get_task',
+        runtimeInstanceId: 'runtime-bench',
+        outcome: 'success',
+      });
+    }
+    tracedDurations.push((performance.now() - startedAt) / recordsPerSample);
+  }
+
+  const baselineP50 = percentile(baselineDurations, 0.5);
+  const baselineP95 = percentile(baselineDurations, 0.95);
+  const tracedP50 = percentile(tracedDurations, 0.5);
+  const tracedP95 = percentile(tracedDurations, 0.95);
+  console.log(`[transport-trace-overhead] baseline_p50_ms=${baselineP50.toFixed(6)} baseline_p95_ms=${baselineP95.toFixed(6)} traced_p50_ms=${tracedP50.toFixed(6)} traced_p95_ms=${tracedP95.toFixed(6)}`);
+  assert.equal(Number.isFinite(tracedP50) && Number.isFinite(tracedP95), true);
+  assert.equal(tracedP95 < Math.max(5, baselineP95 * 20), true);
 });
 
 test('production MCP route records transport timings and diagnostics expose the summary', () => {

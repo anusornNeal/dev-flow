@@ -66,6 +66,29 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
     }),
   },
   {
+    name: 'get_transport_trace_diagnostics',
+    description: 'Read recent bounded MCP/SSE transport trace metadata for diagnostics, including safe request phase timings. Returns compact in-memory metadata only; invalid filters fail closed and raw payloads, headers, tool arguments, or session identifiers are never returned.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        limit: { type: 'number', minimum: 1, maximum: 100, description: 'Maximum recent matching records to return. Hard-capped at 100.' },
+        since: { type: 'number', minimum: 0, description: 'Only records at or after this Unix epoch timestamp in milliseconds.' },
+        errorsOnly: { type: 'boolean', description: 'Return only error outcomes or HTTP status codes >= 400.' },
+        slowMinMs: { type: 'number', minimum: 0, description: 'Return only records whose total duration is at least this many milliseconds.' },
+        correlationId: { type: 'string', maxLength: 160, pattern: '^[A-Za-z0-9][A-Za-z0-9._:/-]*$', description: 'Exact safe correlation id.' },
+        operation: { type: 'string', enum: ['initialize', 'tools/list', 'tools/call', 'other'], description: 'Exact MCP operation classification.' },
+        toolName: { type: 'string', maxLength: 160, pattern: '^[A-Za-z0-9][A-Za-z0-9._:/-]*$', description: 'Exact already-parsed MCP tool name.' },
+        runtimeInstanceId: { type: 'string', maxLength: 160, pattern: '^[A-Za-z0-9][A-Za-z0-9._:/-]*$', description: 'Exact DevFlow runtime instance id.' },
+        eventType: { type: 'string', enum: ['request', 'session-lifecycle', 'legacy-sse'], description: 'Transport trace event family.' },
+        lifecycleEvent: { type: 'string', enum: ['request-start', 'request-end', 'created', 'ttl-expired', 'error-closed', 'capacity-evicted', 'stale-session-404', 'sse-connect', 'sse-disconnect', 'sse-error', 'sse-post-miss'], description: 'Exact session/SSE lifecycle event.' },
+      },
+    },
+    outputSchema: { type: 'object' },
+    lightweight: true,
+    buildHttpRequest: (args) => ({ method: 'GET', path: withQuery('/api/transport-trace/diagnostics', args) }),
+  },
+  {
     name: 'get_recovery_handoff',
     description: 'Read one compact DevFlow-owned recovery packet after MCP client registry loss. Reuses durable job/workspace state and never replays mutations.',
     inputSchema: {
@@ -1676,7 +1699,7 @@ export function resolveDevFlowToolProfile(value?: string) {
 }
 
 const CODING_PROFILE_TOOLS = new Set([
-  'get_tool_schema', 'devflow_health_check', 'list_projects',
+  'get_tool_schema', 'devflow_health_check', 'get_transport_trace_diagnostics', 'list_projects',
   'search_tasks', 'create_task', 'get_task', 'update_task', 'move_task_to_status',
   'update_external_task_status', 'toggle_task_checklist', 'open_task_bug',
   'get_ui_design_context', 'create_ui_preview', 'update_ui_preview', 'get_ui_preview', 'attach_ui_preview_to_task',
@@ -1749,7 +1772,7 @@ export function isToolAllowedInProfile(name: string, profile: DevFlowToolProfile
   if (name === 'execute_repo_query_plan') return profile === 'coding';
   if (profile === 'coding') return CODING_PROFILE_TOOLS.has(name);
   if (profile === 'atlas') return name.includes('atlas') || ['get_repo_context_bundle', 'read_local_file', 'read_file_snippets_batch', 'search_local_files'].includes(name);
-  if (profile === 'diagnostics') return /health|diagnostic|job|tool_call|restart|recovery/.test(name);
+  if (profile === 'diagnostics') return /health|diagnostic|transport_trace|job|tool_call|restart|recovery/.test(name);
   if (profile === 'review') return /task|review|bug|git|diff|test_report|health|execution/.test(name);
   return /task|jira|figma|repo_context|repo_inspection|read_local|search_local|authoring|skill/.test(name);
 }

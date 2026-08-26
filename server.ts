@@ -5,6 +5,7 @@ import { getSettings } from './src/server/repositories/settingsRepository.js';
  */
 
 import 'dotenv/config';
+import { randomUUID } from 'node:crypto';
 import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
@@ -20,8 +21,13 @@ import { recordToolCall } from './src/server/services/mcpToolMonitor';
 import {
   classifyMcpTransportOperation,
   createMcpTransportRequestTracker,
+  getMcpTransportToolName,
   recordMcpStreamableHttpSessionLifecycle,
+  recordMcpTransportTraceEvent,
+  type McpTransportTraceEventInput,
+  type McpTransportTraceOutcome,
 } from './src/server/services/mcpTransportMonitor';
+import { getRuntimeIdentity } from './src/server/services/runtimeIdentityService';
 
 async function startServer() {
   const { state } = bootstrap();
@@ -30,10 +36,24 @@ async function startServer() {
   const configuredPort = Number(process.env.DEVFLOW_PORT || process.env.PORT || 3000);
   const port = Number.isInteger(configuredPort) && configuredPort > 0 ? configuredPort : 3000;
   const apiBaseUrl = `http://127.0.0.1:${port}`;
+  // Reuse the process-wide runtime identity across transport trace records.
+  const runtimeInstanceId = getRuntimeIdentity().runtimeInstanceId;
 
   const activeTransports = new Map<string, SSEServerTransport>();
   const debugSse = process.env.DEBUG_SSE === '1';
   const shortId = (id: string) => id.slice(0, 8);
+  const correlationIdFor = (req: any) => {
+    const raw = req?.headers?.['x-correlation-id'];
+    const value = Array.isArray(raw) ? String(raw[0] || '').trim() : String(raw || '').trim();
+    return value.length <= 160 && /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(value) ? value : randomUUID();
+  };
+  const safeRecordTransportTrace = (event: McpTransportTraceEventInput) => {
+    try {
+      recordMcpTransportTraceEvent(event);
+    } catch {
+      // Transport telemetry is diagnostic-only and must stay fail-open.
+    }
+  };
 
   app.use('/api', (req, res, next) => {
     res.setHeader('Cache-Control', 'no-store, max-age=0');
@@ -55,6 +75,7 @@ async function startServer() {
     res.header('Access-Control-Allow-Origin', '*');
     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
     res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-correlation-id, mcp-session-id, mcp-protocol-version');
+    res.header('Access-Control-Expose-Headers', 'x-correlation-id');
     if (req.method === 'OPTIONS') {
       return res.sendStatus(200);
     }
@@ -62,40 +83,83 @@ async function startServer() {
   });
 
   app.use('/mcp', (req, res, next) => {
+    const correlationId = correlationIdFor(req);
     res.locals.mcpTransportStartedAt = Date.now();
+    res.locals.mcpTransportCorrelationId = correlationId;
+    res.locals.mcpTransportRuntimeInstanceId = runtimeInstanceId;
+    res.setHeader('x-correlation-id', correlationId);
     next();
   });
   app.use('/mcp', express.json({ limit: '1mb' }));
   const reusableMcpHttpHandler = createReusableMcpHttpHandler(apiBaseUrl, undefined, undefined, {
     idleTtlMs: Number(process.env.DEVFLOW_MCP_SESSION_IDLE_TTL_MS),
     requestHooks: (_req, res) => res.locals.mcpTransportTracker?.hooks,
+    requestTraceContext: (_req, res) => ({
+      correlationId: res.locals.mcpTransportCorrelationId,
+      runtimeInstanceId: res.locals.mcpTransportRuntimeInstanceId,
+    }),
     onSessionLifecycle: recordMcpStreamableHttpSessionLifecycle,
   });
   app.all('/mcp', async (req, res, next) => {
     const startedAt = Number(res.locals.mcpTransportStartedAt || Date.now());
+    const correlationId = String(res.locals.mcpTransportCorrelationId || '');
+    const operation = classifyMcpTransportOperation(req.body);
     const tracker = createMcpTransportRequestTracker({
-      operation: classifyMcpTransportOperation(req.body),
+      operation,
+      toolName: getMcpTransportToolName(req.body),
+      correlationId,
+      runtimeInstanceId,
       startedAt,
       parseMs: Math.max(0, Date.now() - startedAt),
     });
     res.locals.mcpTransportTracker = tracker;
     let responseFinishedAt: number | undefined;
+    let requestAborted = false;
+    let outcome: McpTransportTraceOutcome = 'success';
+    const markRequestAborted = () => { requestAborted = true; };
+    const markResponseClosed = () => { if (!res.writableEnded) requestAborted = true; };
     res.once('finish', () => { responseFinishedAt = Date.now(); });
+    req.once('aborted', markRequestAborted);
+    res.once('close', markResponseClosed);
     try {
       await reusableMcpHttpHandler(req, res, next);
+      if (res.statusCode >= 400) outcome = 'error';
+    } catch (error) {
+      outcome = 'error';
+      throw error;
     } finally {
-      tracker.complete({ statusCode: res.statusCode, responseFinishedAt });
+      if (requestAborted) outcome = 'aborted';
+      req.removeListener('aborted', markRequestAborted);
+      res.removeListener('close', markResponseClosed);
+      tracker.complete({ statusCode: res.statusCode, responseFinishedAt, outcome });
     }
   });
 
-  app.get('/sse', async (_req, res) => {
+  app.get('/sse', async (req, res) => {
+    const correlationId = correlationIdFor(req);
+    const traceContext = { correlationId, runtimeInstanceId };
     const mcpServer = createDevFlowMcpServer(apiBaseUrl);
     const transport = new SSEServerTransport('/sse', res);
+    let sseErrored = false;
     activeTransports.set(transport.sessionId, transport);
+    res.setHeader('x-correlation-id', correlationId);
+    safeRecordTransportTrace({ eventType: 'legacy-sse', lifecycleEvent: 'sse-connect', ...traceContext, outcome: 'success' });
     if (debugSse) console.log(`[sse route=/sse] open sid=${shortId(transport.sessionId)} active=${activeTransports.size}`);
 
+    const recordSseError = () => {
+      if (sseErrored) return;
+      sseErrored = true;
+      safeRecordTransportTrace({ eventType: 'legacy-sse', lifecycleEvent: 'sse-error', ...traceContext, outcome: 'error' });
+    };
+    res.on('error', recordSseError);
     res.on('close', () => {
       activeTransports.delete(transport.sessionId);
+      safeRecordTransportTrace({
+        eventType: 'legacy-sse',
+        lifecycleEvent: 'sse-disconnect',
+        ...traceContext,
+        outcome: sseErrored ? 'error' : 'success',
+      });
       if (debugSse) console.log(`[sse route=/sse] close sid=${shortId(transport.sessionId)} active=${activeTransports.size}`);
     });
 
@@ -103,13 +167,17 @@ async function startServer() {
       await mcpServer.connect(transport);
     } catch (err) {
       activeTransports.delete(transport.sessionId);
+      recordSseError();
       console.error('MCP Server connect error:', err);
     }
   });
 
   app.post('/sse', async (req, res, next) => {
+    const correlationId = correlationIdFor(req);
+    const traceContext = { correlationId, runtimeInstanceId };
     const sessionId = typeof req.query.sessionId === 'string' ? req.query.sessionId : '';
     const transport = sessionId ? activeTransports.get(sessionId) : undefined;
+    res.setHeader('x-correlation-id', correlationId);
 
     if (debugSse) {
       if (transport) {
@@ -120,6 +188,13 @@ async function startServer() {
     }
 
     if (!transport) {
+      safeRecordTransportTrace({
+        eventType: 'legacy-sse',
+        lifecycleEvent: 'sse-post-miss',
+        ...traceContext,
+        statusCode: 400,
+        outcome: 'error',
+      });
       res.status(400).json({ error: 'No active SSE connection for session' });
       return;
     }
@@ -127,6 +202,7 @@ async function startServer() {
     try {
       await transport.handlePostMessage(req, res);
     } catch (err) {
+      safeRecordTransportTrace({ eventType: 'legacy-sse', lifecycleEvent: 'sse-error', ...traceContext, outcome: 'error' });
       console.error('Error handling POST message:', err);
       next(err);
     }

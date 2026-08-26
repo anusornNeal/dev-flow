@@ -16,6 +16,7 @@ import { parseTestReport } from '../services/testReportParserService';
 import { getGitLog, getGitDiff, getGitShow, getGitStatus, getGitBranchAsync, commitGitChanges, ensureGitBranch, pushGitBranch, getGitSyncStatus, getChangeSummary } from '../services/gitService';
 import { getProjectStartContext, getRepoContextBundle, getRepoReadSnapshot } from '../services/projectStartContextService';
 import { getDevFlowDiagnostics, getToolCallSummary } from '../services/mcpToolMonitor';
+import { queryMcpTransportTrace } from '../services/mcpTransportMonitor';
 import { getWorkflowHealth } from '../services/workflowHealthService';
 import { getRepoInspectionIndex } from '../services/repoInspectionIndexService';
 import { validateTaskQuality } from '../services/taskQualityService';
@@ -578,6 +579,40 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
     try {
       const windowMs = Number.isFinite(Number(req.query.windowMs)) ? Number(req.query.windowMs) : undefined;
       return res.json(getToolCallSummary({ windowMs }));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.get('/api/transport-trace/diagnostics', (req, res) => {
+    try {
+      const errorsOnlyRaw = req.query.errorsOnly;
+      const errorsOnly = errorsOnlyRaw === undefined
+        ? undefined
+        : errorsOnlyRaw === 'true'
+          ? true
+          : errorsOnlyRaw === 'false'
+            ? false
+            : null;
+      if (errorsOnly === null) {
+        throw createApiError(400, 'TRANSPORT_TRACE_FILTER_INVALID', 'errorsOnly must be true or false.');
+      }
+      const result = queryMcpTransportTrace({
+        limit: req.query.limit === undefined ? undefined : Number(req.query.limit),
+        since: req.query.since === undefined ? undefined : Number(req.query.since),
+        errorsOnly,
+        slowMinMs: req.query.slowMinMs === undefined ? undefined : Number(req.query.slowMinMs),
+        correlationId: typeof req.query.correlationId === 'string' ? req.query.correlationId : undefined,
+        operation: typeof req.query.operation === 'string' ? req.query.operation as any : undefined,
+        toolName: typeof req.query.toolName === 'string' ? req.query.toolName : undefined,
+        runtimeInstanceId: typeof req.query.runtimeInstanceId === 'string' ? req.query.runtimeInstanceId : undefined,
+        eventType: typeof req.query.eventType === 'string' ? req.query.eventType as any : undefined,
+        lifecycleEvent: typeof req.query.lifecycleEvent === 'string' ? req.query.lifecycleEvent as any : undefined,
+      });
+      if (result.invalidFilters.length > 0) {
+        throw createApiError(400, 'TRANSPORT_TRACE_FILTER_INVALID', `Invalid transport trace filter(s): ${result.invalidFilters.join(', ')}.`);
+      }
+      return res.json(result);
     } catch (error) {
       return sendApiError(res, error);
     }

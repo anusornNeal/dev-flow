@@ -23,6 +23,7 @@ import { Header } from './components/Header';
 import ProjectSwitcher from './components/ProjectSwitcher';
 import { BoardLane } from './components/BoardLane';
 import UiPreviewLibraryPage from './components/UiPreviewLibraryPage';
+import AgentOfficePage from './components/AgentOfficePage';
 import type { UiPreviewLinkedTask } from './client/uiPreviewClient';
 import BatchImportModal from './components/BatchImportModal';
 import ConfirmModal from './components/ConfirmModal';
@@ -76,7 +77,9 @@ export default function App() {
     model?: string | null;
   } | null>(null);
   const [mounted, setMounted] = useState(false);
-  const [activePage, setActivePage] = useState<'board' | 'previews'>(() => window.location.hash === '#previews' ? 'previews' : 'board');
+  const resolveActivePage = (hash: string): 'board' | 'previews' | 'agent-office' =>
+    hash === '#previews' ? 'previews' : hash === '#agent-office' ? 'agent-office' : 'board';
+  const [activePage, setActivePage] = useState<'board' | 'previews' | 'agent-office'>(() => resolveActivePage(window.location.hash));
   const [sidebarLayout, setSidebarLayout] = useState(() =>
     resolveInitialSidebarLayout(window.localStorage, window.innerWidth)
   );
@@ -106,23 +109,22 @@ export default function App() {
         setActivePage('board');
         return;
       }
-      setActivePage(window.location.hash === '#previews' ? 'previews' : 'board');
+      setActivePage(resolveActivePage(window.location.hash));
     };
     syncPageFromHash();
     window.addEventListener('hashchange', syncPageFromHash);
     return () => window.removeEventListener('hashchange', syncPageFromHash);
   }, []);
 
-  const handleSetActivePage = (page: 'board' | 'previews') => {
+  const handleSetActivePage = (page: 'board' | 'previews' | 'agent-office') => {
     setSelectedTask(null);
     setActivePage(page);
-    if (page === 'previews') {
-      if (window.location.hash !== '#previews') window.location.hash = 'previews';
+    const hash = page === 'previews' ? 'previews' : page === 'agent-office' ? 'agent-office' : '';
+    if (hash) {
+      if (window.location.hash !== `#${hash}`) window.location.hash = hash;
       return;
     }
-    if (window.location.hash) {
-      window.history.pushState('', document.title, window.location.pathname + window.location.search);
-    }
+    if (window.location.hash) window.history.pushState('', document.title, window.location.pathname + window.location.search);
   };
 
   // Filter States
@@ -488,6 +490,16 @@ export default function App() {
     }
   };
 
+  const handleOpenAgentOfficeTask = async (taskId: string) => {
+    try {
+      const result = await apiClient.fetchJson<Task>('GET', `/api/tasks/${encodeURIComponent(taskId)}?mode=standard`);
+      setSelectedTask(result.data);
+      setPersistenceError(null);
+    } catch (error) {
+      setPersistenceError(error instanceof Error ? `Could not open monitored task: ${error.message}` : 'Could not open monitored task.');
+    }
+  };
+
   if (!mounted) {
     return (
       <div className="min-h-screen bg-[#faf6ef] dark:bg-[#292119] flex flex-col items-center justify-center text-[#8a6e5a] dark:text-[#f3eadf] font-mono text-xs gap-3">
@@ -527,7 +539,8 @@ export default function App() {
         <main className="min-w-0 flex-1 flex flex-col h-full overflow-y-auto bg-[#faf7f0] dark:bg-[#1e1914]">
           
           {/* Top Control Navigation bar */}
-          <Header
+          {activePage !== 'agent-office' && (
+            <Header
             filteredTasksCount={filteredTasks.length}
             title={activePage === 'previews' ? 'UI Previews' : 'Sprint Backlog'}
             subtitle={activePage === 'previews' ? 'Global' : 'Pocket Sandbox'}
@@ -549,7 +562,8 @@ export default function App() {
             setIsObservabilityModalOpen={setIsObservabilityModalOpen}
             setIsCreateModalOpen={setIsCreateModalOpen}
             setIsBatchModalOpen={setIsBatchModalOpen}
-          />
+            />
+          )}
 
           {persistenceError && (
             <div className="mx-5 mt-4 rounded-2xl border border-[#f0c48f] dark:border-[#584a3b] bg-[#fff7eb] dark:bg-[#292119] px-4 py-3 text-[11px] font-mono font-bold text-[#9a5b13] dark:text-[#f3eadf]">
@@ -557,7 +571,9 @@ export default function App() {
             </div>
           )}
 
-          {activePage === 'previews' ? (
+          {activePage === 'agent-office' ? (
+            <AgentOfficePage projectId={activeProjectId} onOpenTask={handleOpenAgentOfficeTask} />
+          ) : activePage === 'previews' ? (
             <UiPreviewLibraryPage onOpenTask={handleOpenPreviewTask} />
           ) : (
           <div className="flex-1 overflow-x-auto p-6 bg-[#faf7f0] dark:bg-[#1e1914]">

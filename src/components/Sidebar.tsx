@@ -18,7 +18,8 @@ import {
   ChevronRight,
   Settings,
   Search,
-  Monitor
+  Monitor,
+  Activity
 } from 'lucide-react';
 import { Task, TaskPriority, Project } from '../types';
 import { SIDEBAR_RAIL_WIDTH, resolveSidebarResize } from './layout/appShellLayout';
@@ -34,8 +35,8 @@ interface SidebarProps {
   searchQuery: string;
   setSearchQuery: (query: string) => void;
   onOpenSettings: () => void;
-  activePage?: 'board' | 'previews';
-  onSetActivePage?: (page: 'board' | 'previews') => void;
+  activePage?: 'board' | 'previews' | 'agent-office';
+  onSetActivePage?: (page: 'board' | 'previews' | 'agent-office') => void;
   isCollapsed?: boolean;
   width?: number;
   onToggleCollapsed?: () => void;
@@ -112,6 +113,16 @@ export default function Sidebar({
             className={`flex h-10 w-10 cursor-pointer items-center justify-center rounded-xl border ${activePage === 'board' ? 'border-[#d89745] bg-[#ffeace] text-[#714a1a] dark:border-[#f0b84d] dark:bg-[#3a2f26] dark:text-[#f3eadf]' : 'border-[#e5d4bb] bg-[#fff7ec] text-[#a46c24] hover:bg-[#ffeace] dark:border-[#6d5642] dark:bg-[#2b2119] dark:text-[#d6b56d]'}`}
           >
             <FolderGit size={18} />
+          </button>
+          <button
+            type="button"
+            onClick={() => onSetActivePage?.('agent-office')}
+            title="Agent Office"
+            aria-label="Agent Office"
+            aria-current={activePage === 'agent-office' ? 'page' : undefined}
+            className={`flex h-10 w-10 cursor-pointer items-center justify-center rounded-xl border ${activePage === 'agent-office' ? 'border-[#d89745] bg-[#ffeace] text-[#714a1a] dark:border-[#f0b84d] dark:bg-[#3a2f26] dark:text-[#f3eadf]' : 'border-[#e5d4bb] bg-[#fff7ec] text-[#a46c24] hover:bg-[#ffeace] dark:border-[#6d5642] dark:bg-[#2b2119] dark:text-[#d6b56d]'}`}
+          >
+            <Activity size={18} />
           </button>
           <button
             type="button"
@@ -254,6 +265,10 @@ export default function Sidebar({
           <button type="button" onClick={() => onSetActivePage?.('board')} className={`flex cursor-pointer items-center justify-between rounded-xl border px-3 py-2 text-left text-[11px] font-extrabold ${activePage === 'board' ? 'border-[#e7bc8c] bg-[#ffeace] text-[#714a1a] dark:border-[#584a3b] dark:bg-[#3a2f26] dark:text-[#f3eadf]' : 'border-[#e5d4bb] bg-[#fffbf6] text-[#6e584a] hover:bg-[#fff7ec] dark:border-[#584a3b] dark:bg-[#1e1914] dark:text-[#f3eadf]'}`}>
             <span className="flex items-center gap-2"><FolderGit size={14} /> Sprint Board</span>
             <span className="font-mono text-[9px]">{totalTasks}</span>
+          </button>
+          <button type="button" onClick={() => onSetActivePage?.('agent-office')} className={`flex cursor-pointer items-center justify-between rounded-xl border px-3 py-2 text-left text-[11px] font-extrabold ${activePage === 'agent-office' ? 'border-[#e7bc8c] bg-[#ffeace] text-[#714a1a] dark:border-[#584a3b] dark:bg-[#3a2f26] dark:text-[#f3eadf]' : 'border-[#e5d4bb] bg-[#fffbf6] text-[#6e584a] hover:bg-[#fff7ec] dark:border-[#584a3b] dark:bg-[#1e1914] dark:text-[#f3eadf]'}`}>
+            <span className="flex items-center gap-2"><Activity size={14} /> Agent Office</span>
+            <span className="font-mono text-[9px]">Live</span>
           </button>
           <button type="button" onClick={() => onSetActivePage?.('previews')} className={`flex cursor-pointer items-center justify-between rounded-xl border px-3 py-2 text-left text-[11px] font-extrabold ${activePage === 'previews' ? 'border-[#e7bc8c] bg-[#ffeace] text-[#714a1a] dark:border-[#584a3b] dark:bg-[#3a2f26] dark:text-[#f3eadf]' : 'border-[#e5d4bb] bg-[#fffbf6] text-[#6e584a] hover:bg-[#fff7ec] dark:border-[#584a3b] dark:bg-[#1e1914] dark:text-[#f3eadf]'}`}>
             <span className="flex items-center gap-2"><Monitor size={14} /> UI Previews</span>

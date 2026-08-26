@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { apiClient, apiGet, apiPost, apiPut, apiDelete, ApiError } from '../../src/client/apiClient.js';
+import { apiClient, apiGet, apiPost, apiPut, apiDelete, ApiError, getAgentOfficeProjection } from '../../src/client/apiClient.js';
 
 function mockFetchOnce(response: { status: number; body: unknown; contentType?: string; headers?: Record<string, string> }) {
   const fetchMock = async (_input: any, _init: any) => {
@@ -89,4 +89,28 @@ test('helpers route to correct methods without body for GET/DELETE', async () =>
   assert.equal(capturedInit.method, 'DELETE');
   await apiPut('/api/x', { a: 1 });
   assert.equal(capturedInit.method, 'PUT');
+});
+
+test('getAgentOfficeProjection uses the bounded monitoring GET endpoint without a request body', async () => {
+  let capturedInput: any;
+  let capturedInit: any;
+  (globalThis as any).fetch = async (input: any, init: any) => {
+    capturedInput = input;
+    capturedInit = init;
+    return new Response(JSON.stringify({ schema: 'agent-office-monitor.v1', projectId: 'project 1' }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  };
+
+  await getAgentOfficeProjection('project 1', 20);
+  assert.equal(capturedInput, '/api/agent-office?projectId=project+1&limit=20');
+  assert.equal(capturedInit.method, 'GET');
+  assert.equal(capturedInit.body, undefined);
+
+  await getAgentOfficeProjection('project 1', 999);
+  assert.equal(capturedInput, '/api/agent-office?projectId=project+1&limit=50');
+
+  await getAgentOfficeProjection('project 1', 0);
+  assert.equal(capturedInput, '/api/agent-office?projectId=project+1&limit=1');
 });

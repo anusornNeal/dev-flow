@@ -154,7 +154,8 @@ test('combined harness envelope follows claim, context, mutation, repair, resume
       status: 'accepted',
     });
     let health = getChatGptHarnessHealthSnapshot(state, { workspaceId });
-    assert.equal(health.status, 'active');
+    assert.equal(health.status, 'blocked');
+    assert.equal(health.hardBlockers.includes('PENDING_DURABLE_OPERATIONS'), true);
     assert.equal(health.execution.stage, 'repairing');
     assert.equal(health.recovery.pendingOperationCount, 1);
     assert.ok(health.checkpoint.ref);
@@ -206,10 +207,10 @@ test('combined harness envelope follows claim, context, mutation, repair, resume
     assert.equal(rejectedBinding.reasonCode, 'EXECUTION_VERIFICATION_FINGERPRINT_STALE');
     assert.notEqual(rejectedBinding.verificationFresh, true);
     recordHarnessExecutionOutcome(successfulVerify, staleVerifyResult);
-    assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'repairing');
+    assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'implementing');
     assert.notEqual(executionSessions.getExecutionOwnershipState(session.id, { repoRoot: verificationBinding.workspace.root }).verificationFresh, true);
     health = getChatGptHarnessHealthSnapshot(state, { workspaceId });
-    assert.equal(health.execution.stage, 'repairing');
+    assert.equal(health.execution.stage, 'implementing');
     context = getAgentTaskContext(state, task.id, false)!;
     assert.ok(context.harness.allowedNextActionClasses.includes('verification'));
     assert.equal(context.harness.allowedNextActionClasses.includes('commit'), true, 'verification debt must not become global commit authority');
@@ -218,7 +219,7 @@ test('combined harness envelope follows claim, context, mutation, repair, resume
     const transitionCountBeforeDuplicate = executionSessions.getExecutionSessionState(session.id).evidence
       .filter((entry: any) => entry.kind === 'lifecycle-transition').length;
     recordHarnessExecutionOutcome(successfulVerify, staleVerifyResult);
-    assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'repairing');
+    assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'implementing');
     assert.equal(
       executionSessions.getExecutionSessionState(session.id).evidence.filter((entry: any) => entry.kind === 'lifecycle-transition').length,
       transitionCountBeforeDuplicate,

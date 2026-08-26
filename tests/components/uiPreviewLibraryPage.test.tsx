@@ -109,7 +109,9 @@ test('preview library re-arms its mounted guard when StrictMode replays mount ef
 test('App and Sidebar use direct #previews history navigation without resurrecting Atlas UI', () => {
   const app = fs.readFileSync('src/App.tsx', 'utf8');
   const sidebar = fs.readFileSync('src/components/Sidebar.tsx', 'utf8');
-  assert.match(app, /window\.location\.hash === '#previews'/);
+  assert.match(app, /resolveActivePage/);
+  assert.match(app, /hash === '#previews' \? 'previews'/);
+  assert.match(app, /resolveActivePage\(window\.location\.hash\)/);
   assert.match(app, /addEventListener\('hashchange'/);
   assert.match(app, /UiPreviewLibraryPage/);
   assert.match(app, /api\/tasks\/\$\{encodeURIComponent\(task\.id\)\}\?mode=standard/);

@@ -308,6 +308,55 @@ test('completed, cancelled, and expired sessions cannot mutate as active session
   assert.equal(repository.getExecutionSessionById(expired.id)?.lifecycle.stage, 'created');
 });
 
+test('blocked verification batch member remains visible debt while independent checks continue', () => {
+  const created = sessions.createExecutionSession({
+    projectId: 'project-session',
+    workspaceId: 'ws_blocked_batch',
+    repoRoot,
+    ownershipEpochId: 'claim-epoch-33333333-3333-4333-8333-333333333333',
+  });
+  const captured = sessions.captureExecutionVerificationProvenance(created.id, { repoRoot });
+  const requiredChecks = ['unit', 'integration'];
+  const first = sessions.recordExecutionVerificationBatchResult(created.id, {
+    repoRoot,
+    batchId: 'blocked-batch',
+    requiredChecks,
+    checkId: 'unit',
+    status: 'blocked',
+    captured,
+    memberCandidate: {
+      candidateId: 'candidate-blocked-unit',
+      repoRevision: captured.repoRevision,
+      executionKey: 'execution-blocked-unit',
+    },
+  });
+  assert.equal(first.state.status, 'pending');
+  assert.deepEqual(first.state.blocked, ['unit']);
+  assert.deepEqual(first.state.pending, ['integration']);
+  assert.equal(first.state.canComplete, false);
+  assert.deepEqual(sessions.getExecutionVerificationBatchLiveOperations(created.id, 'blocked-batch'), []);
+
+  const second = sessions.recordExecutionVerificationBatchResult(created.id, {
+    repoRoot,
+    batchId: 'blocked-batch',
+    requiredChecks,
+    checkId: 'integration',
+    status: 'passed',
+    captured,
+    memberCandidate: {
+      candidateId: 'candidate-blocked-integration',
+      repoRevision: captured.repoRevision,
+      executionKey: 'execution-blocked-integration',
+    },
+  });
+  assert.equal(second.state.status, 'blocked');
+  assert.deepEqual(second.state.blocked, ['unit']);
+  assert.deepEqual(second.state.passed, ['integration']);
+  assert.deepEqual(second.state.pending, []);
+  assert.equal(second.state.canComplete, false);
+  assert.deepEqual(sessions.getExecutionVerificationBatchLiveOperations(created.id, 'blocked-batch'), []);
+});
+
 test.after(() => {
   try { fs.rmSync(repoRoot, { recursive: true, force: true }); } catch {}
 });

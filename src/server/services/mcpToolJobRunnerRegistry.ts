@@ -19,6 +19,8 @@ import {
   runProjectCommandAsync,
 } from './projectCommandService';
 import { prepareCompactEdit } from './stenoEditProtocolService';
+import { buildVerificationCoverageIdentity } from './verificationBatchService.js';
+import { classifyAndRememberVerificationBlocker, findReusableVerificationBlocker } from './verificationBlockerEvidenceService.js';
 import type { ResourceAccessMode } from './mcpToolJobScheduler';
 import { executeRecoveryAwareTool } from './devFlowRecoveryRuntime.js';
 import {
@@ -232,8 +234,58 @@ export async function runBuiltinToolJob(input: BuiltinToolJobInput, context: Bui
   if (toolName === 'run_project_command') {
     const guard = preflight();
     const captured = captureTaskVerification(args);
+    const taskBinding = getTaskExecutionMutationBinding(args);
+    const initialCoverage = buildVerificationCoverageIdentity(args?.__verificationCandidate?.executionIdentity);
+    const reusableBlocker = args?.verificationBatch && taskBinding && captured?.ownedPaths
+      ? findReusableVerificationBlocker({
+          repoRoot: taskBinding.workspace.root,
+          coverage: initialCoverage,
+          taskOwnedPaths: captured.ownedPaths,
+        })
+      : null;
+    if (reusableBlocker && args?.__verificationCandidate) {
+      const candidate = args.__verificationCandidate;
+      const skippedResult = {
+        ok: false,
+        status: 'failed',
+        command: String(args.command ?? args.preset ?? ''),
+        cwd: taskBinding!.workspace.root,
+        exitCode: null,
+        durationMs: 0,
+        timedOut: false,
+        signal: null,
+        stdout: '',
+        stderr: `Skipped known unrelated verification blocker (${reusableBlocker.evidence.id}).`,
+        stdoutTruncated: false,
+        stderrTruncated: false,
+        stdoutBytes: 0,
+        stderrBytes: 0,
+        stdoutEmpty: true,
+        stderrEmpty: false,
+        outputSummary: { hasStdout: false, hasStderr: true, stdoutBytes: 0, stderrBytes: 0, stdoutTruncated: false, stderrTruncated: false },
+        verificationCandidate: {
+          candidateId: String(candidate.candidateId),
+          repoRevision: String(candidate.repoRevision),
+          snapshotCommit: String(candidate.snapshotCommit || ''),
+          executionKey: String(candidate.executionIdentity?.key || ''),
+          current: true,
+        },
+        verificationBlocker: {
+          reused: true,
+          evidenceId: reusableBlocker.evidence.id,
+          phase: reusableBlocker.evidence.phase,
+          failureSignature: reusableBlocker.evidence.failureSignature,
+          blockerPaths: [...reusableBlocker.evidence.blockerPaths],
+          blockerSymbols: [...reusableBlocker.evidence.blockerSymbols],
+          retention: 'process-local-bounded',
+        },
+      };
+      const bound = bindTaskVerificationOutcome(args, skippedResult, captured);
+      if (guard) recordHarnessExecutionOutcome(guard, bound.harnessResult);
+      return bound.result;
+    }
     let finalArgs = args;
-    let result = await runProjectCommandAsync(state, args, logger, setCancelFn);
+    let result: any = await runProjectCommandAsync(state, args, logger, setCancelFn);
     if (!result.ok && isVerificationInfrastructureFailure(result)) {
       const recovery = buildProjectCommandInfrastructureRecovery(state, args);
       if (recovery) {
@@ -254,6 +306,30 @@ export async function runBuiltinToolJob(input: BuiltinToolJobInput, context: Bui
         } finally {
           if (lease) lease.dispose();
         }
+      }
+    }
+    if (!result.ok && !isVerificationInfrastructureFailure(result) && taskBinding && captured?.ownedPaths) {
+      const coverage = buildVerificationCoverageIdentity(finalArgs?.__verificationCandidate?.executionIdentity);
+      const blocker = classifyAndRememberVerificationBlocker({
+        repoRoot: taskBinding.workspace.root,
+        coverage,
+        taskOwnedPaths: captured.ownedPaths,
+        stdout: result.stdout,
+        stderr: result.stderr,
+      });
+      if (blocker) {
+        result = {
+          ...result,
+          verificationBlocker: {
+            recorded: true,
+            evidenceId: blocker.id,
+            phase: blocker.phase,
+            failureSignature: blocker.failureSignature,
+            blockerPaths: [...blocker.blockerPaths],
+            blockerSymbols: [...blocker.blockerSymbols],
+            retention: 'process-local-bounded',
+          },
+        };
       }
     }
     const bound = bindTaskVerificationOutcome(finalArgs, result, captured);

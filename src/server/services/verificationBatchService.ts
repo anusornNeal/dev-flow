@@ -63,7 +63,7 @@ export type VerificationBatchCandidateIdentity = Readonly<{
   coverage?: VerificationCoverageIdentity;
 }>;
 
-export type VerificationBatchResultStatus = 'passed' | 'failed' | 'stale';
+export type VerificationBatchResultStatus = 'passed' | 'failed' | 'stale' | 'blocked';
 
 export type VerificationBatchResultInput = {
   checkId: string;
@@ -79,6 +79,7 @@ export type VerificationBatchSnapshot = Readonly<{
   passed: readonly string[];
   failed: readonly string[];
   stale: readonly string[];
+  blocked: readonly string[];
   canComplete: boolean;
 }>;
 
@@ -128,8 +129,8 @@ function assertMatchingCandidate(
 }
 
 function assertResultStatus(status: unknown): asserts status is VerificationBatchResultStatus {
-  if (status !== 'passed' && status !== 'failed' && status !== 'stale') {
-    throw new Error('Verification batch result status must be passed, failed, or stale.');
+  if (status !== 'passed' && status !== 'failed' && status !== 'stale' && status !== 'blocked') {
+    throw new Error('Verification batch result status must be passed, failed, stale, or blocked.');
   }
 }
 
@@ -147,6 +148,7 @@ export function createVerificationBatch(
     const passed = requiredChecks.filter((checkId) => results.get(checkId) === 'passed');
     const failed = requiredChecks.filter((checkId) => results.get(checkId) === 'failed');
     const stale = requiredChecks.filter((checkId) => results.get(checkId) === 'stale');
+    const blocked = requiredChecks.filter((checkId) => results.get(checkId) === 'blocked');
     const resultRecord = Object.fromEntries(
       requiredChecks.flatMap((checkId) => {
         const status = results.get(checkId);
@@ -162,10 +164,12 @@ export function createVerificationBatch(
       passed: Object.freeze(passed),
       failed: Object.freeze(failed),
       stale: Object.freeze(stale),
+      blocked: Object.freeze(blocked),
       canComplete: requiredChecks.length > 0
         && pending.length === 0
         && failed.length === 0
         && stale.length === 0
+        && blocked.length === 0
         && passed.length === requiredChecks.length,
     });
   }

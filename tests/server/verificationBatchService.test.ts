@@ -10,7 +10,7 @@ const CANDIDATE = {
   executionKey: 'exec-key-a',
 };
 
-function resultFor(checkId: string, status: 'passed' | 'failed' | 'stale', overrides: Partial<typeof CANDIDATE> = {}) {
+function resultFor(checkId: string, status: 'passed' | 'failed' | 'stale' | 'blocked', overrides: Partial<typeof CANDIDATE> = {}) {
   return {
     checkId,
     status,
@@ -63,7 +63,7 @@ test('completes only when every required check passes for the frozen candidate',
   assert.equal(snapshot.canComplete, true);
 });
 
-test('failed or stale terminal results block completion', () => {
+test('failed, stale, or blocked terminal results block completion', () => {
   const failed = createVerificationBatch(CANDIDATE, ['unit', 'integration']);
   failed.recordResult(resultFor('unit', 'passed'));
   failed.recordResult(resultFor('integration', 'failed'));
@@ -74,6 +74,14 @@ test('failed or stale terminal results block completion', () => {
   stale.recordResult(resultFor('unit', 'stale'));
   assert.deepEqual(stale.snapshot().stale, ['unit']);
   assert.equal(stale.snapshot().canComplete, false);
+
+  const blocked = createVerificationBatch(CANDIDATE, ['unit', 'integration']);
+  blocked.recordResult(resultFor('unit', 'blocked'));
+  blocked.recordResult(resultFor('integration', 'passed'));
+  assert.deepEqual(blocked.snapshot().blocked, ['unit']);
+  assert.deepEqual(blocked.snapshot().passed, ['integration']);
+  assert.deepEqual(blocked.snapshot().pending, []);
+  assert.equal(blocked.snapshot().canComplete, false);
 });
 
 test('rejects cross-candidate, cross-revision, and cross-execution evidence', () => {

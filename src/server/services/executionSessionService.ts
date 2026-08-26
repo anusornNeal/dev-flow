@@ -180,7 +180,7 @@ export interface TaskExecutionVerificationBindingOutcome {
   ownership?: ExecutionOwnershipState;
 }
 
-export type ExecutionVerificationBatchStatus = 'pending' | 'complete' | 'failed' | 'stale' | 'superseded';
+export type ExecutionVerificationBatchStatus = 'pending' | 'complete' | 'failed' | 'stale' | 'blocked' | 'superseded';
 
 export type ExecutionVerificationBatchMemberCandidate = {
   candidateId: string;
@@ -201,6 +201,7 @@ export type ExecutionVerificationBatchState = {
   passed: string[];
   failed: string[];
   stale: string[];
+  blocked: string[];
   status: ExecutionVerificationBatchStatus;
   canComplete: boolean;
   createdAt: string;
@@ -1360,7 +1361,7 @@ function executionVerificationBatchStateFromEvidence(entry: ExecutionSessionEvid
   const repoRevision = String(metadata.repoRevision || '').trim();
   const ownedFingerprint = String(metadata.ownedFingerprint || '').trim();
   const status = String(metadata.status || '') as ExecutionVerificationBatchStatus;
-  if (!batchId || !ownershipEpochId || !repoRevision || !ownedFingerprint || !['pending', 'complete', 'failed', 'stale', 'superseded'].includes(status)) return null;
+  if (!batchId || !ownershipEpochId || !repoRevision || !ownedFingerprint || !['pending', 'complete', 'failed', 'stale', 'blocked', 'superseded'].includes(status)) return null;
   const requiredChecks = Array.isArray(metadata.requiredChecks) ? metadata.requiredChecks.map(String) : [];
   const results = metadata.results && typeof metadata.results === 'object' && !Array.isArray(metadata.results)
     ? { ...(metadata.results as Record<string, VerificationBatchResultStatus>) }
@@ -1380,6 +1381,7 @@ function executionVerificationBatchStateFromEvidence(entry: ExecutionSessionEvid
     passed: Array.isArray(metadata.passed) ? metadata.passed.map(String) : [],
     failed: Array.isArray(metadata.failed) ? metadata.failed.map(String) : [],
     stale: Array.isArray(metadata.stale) ? metadata.stale.map(String) : [],
+    blocked: Array.isArray(metadata.blocked) ? metadata.blocked.map(String) : [],
     status,
     canComplete: metadata.canComplete === true,
     ...(typeof metadata.supersededByBatchId === 'string' && metadata.supersededByBatchId.trim() ? { supersededByBatchId: metadata.supersededByBatchId.trim() } : {}),
@@ -1448,6 +1450,7 @@ function persistExecutionVerificationBatchState(id: string, state: ExecutionVeri
       passed: state.passed,
       failed: state.failed,
       stale: state.stale,
+      blocked: state.blocked,
       status: state.status,
       canComplete: state.canComplete,
       supersededByBatchId: state.supersededByBatchId || null,
@@ -1506,13 +1509,17 @@ function buildExecutionVerificationBatchState(
     if (status) canonical.recordResult({ checkId, status, candidate: canonicalCandidate });
   }
   const snapshot = canonical.snapshot();
-  const status: ExecutionVerificationBatchStatus = snapshot.stale.length > 0
-    ? 'stale'
-    : snapshot.failed.length > 0
-      ? 'failed'
-      : snapshot.canComplete
-        ? 'complete'
-        : 'pending';
+  const status: ExecutionVerificationBatchStatus = snapshot.pending.length > 0
+    ? 'pending'
+    : snapshot.stale.length > 0
+      ? 'stale'
+      : snapshot.blocked.length > 0
+        ? 'blocked'
+        : snapshot.failed.length > 0
+          ? 'failed'
+          : snapshot.canComplete
+            ? 'complete'
+            : 'pending';
   return {
     ...base,
     results: { ...snapshot.results },
@@ -1521,6 +1528,7 @@ function buildExecutionVerificationBatchState(
     passed: [...snapshot.passed],
     failed: [...snapshot.failed],
     stale: [...snapshot.stale],
+    blocked: [...snapshot.blocked],
     status,
     canComplete: snapshot.canComplete,
     updatedAt,
@@ -1550,8 +1558,8 @@ export function recordExecutionVerificationBatchResult(
   const requiredChecks = normalizeExecutionVerificationBatchChecks(input.requiredChecks);
   const checkId = String(input.checkId || '').trim();
   if (!requiredChecks.includes(checkId)) throw executionSessionError('EXECUTION_VERIFICATION_BATCH_CHECK_NOT_REQUIRED', `Verification check '${checkId}' is not declared by batch '${batchId}'.`);
-  if (input.status !== 'passed' && input.status !== 'failed' && input.status !== 'stale') {
-    throw executionSessionError('EXECUTION_VERIFICATION_BATCH_STATUS_INVALID', 'Verification batch result status must be passed, failed, or stale.');
+  if (input.status !== 'passed' && input.status !== 'failed' && input.status !== 'stale' && input.status !== 'blocked') {
+    throw executionSessionError('EXECUTION_VERIFICATION_BATCH_STATUS_INVALID', 'Verification batch result status must be passed, failed, stale, or blocked.');
   }
   const capturedRepoRevision = String(input.captured?.repoRevision || '').trim();
   const capturedOwnedFingerprint = String(input.captured?.ownedFingerprint || '').trim();
@@ -1768,9 +1776,11 @@ export function recordTaskExecutionVerificationResult(
     }
     const memberStatus: VerificationBatchResultStatus = result?.verificationCandidate?.current === false
       ? 'stale'
-      : (!result?.ok || result?.status !== 'succeeded')
-        ? 'failed'
-        : 'passed';
+      : result?.verificationBlocker?.reused === true
+        ? 'blocked'
+        : (!result?.ok || result?.status !== 'succeeded')
+          ? 'failed'
+          : 'passed';
     try {
       const recorded = recordExecutionVerificationBatchResult(binding.session.id, {
         repoRoot: binding.workspace.root,
@@ -1878,7 +1888,7 @@ export function recordTaskExecutionVerificationResult(
       message: `Verification batch '${latestBatch.batchId}' is incomplete and must continue through its declared batch identity.`,
     };
   }
-  if (latestBatch?.status === 'failed' || latestBatch?.status === 'stale' || latestBatch?.status === 'superseded') {
+  if (latestBatch?.status === 'failed' || latestBatch?.status === 'stale' || latestBatch?.status === 'blocked' || latestBatch?.status === 'superseded') {
     return {
       authoritative: false,
       reasonCode: 'EXECUTION_VERIFICATION_RECOVERY_BATCH_REQUIRED',

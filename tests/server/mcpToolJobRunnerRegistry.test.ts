@@ -17,6 +17,8 @@ const { cleanupSessionWorkspace } = await import('../../src/server/services/sess
 const executionSessions = await import('../../src/server/services/executionSessionService.js');
 const { preflightHarnessExecutionGuard, recordHarnessExecutionOutcome } = await import('../../src/server/services/harnessExecutionGuardService.js');
 const { getBuiltinToolRunnerNames, runBuiltinToolJob } = await import('../../src/server/services/mcpToolJobRunnerRegistry.js');
+const { prepareProjectCommandVerificationCandidate } = await import('../../src/server/services/projectCommandService.js');
+const blockerEvidence = await import('../../src/server/services/verificationBlockerEvidenceService.js');
 
 const EXPECTED_RUNNERS = [
   'run_project_command',
@@ -153,6 +155,106 @@ test('apply_and_verify async runner treats verification-infra-blocked as recover
     git(['-C', executionSessions.getTaskExecutionMutationBinding({ workspaceId })?.workspace.root || root, 'checkout', '--', 'value.txt']);
     releaseTaskClaim(task.id, { sessionId: 'runner-composite-blocked-session', nextStatus: 'todo' });
     cleanupSessionWorkspace(workspaceId);
+  }
+});
+
+test('run_project_command reuses a proven unrelated blocker across sibling task workspaces without spawning it twice', async () => {
+  blockerEvidence.clearVerificationBlockerEvidence();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-runner-known-blocker-'));
+  const marker = path.join(os.tmpdir(), `devflow-runner-known-blocker-${path.basename(root)}.txt`);
+  fs.mkdirSync(path.join(root, '.devflow'), { recursive: true });  fs.mkdirSync(path.join(root, 'scripts'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'src', 'FeatureA.kt'), 'class FeatureA\n', 'utf8');
+  fs.writeFileSync(path.join(root, 'src', 'FeatureB.kt'), 'class FeatureB\n', 'utf8');
+  fs.writeFileSync(path.join(root, 'src', 'FakeUserRepository.kt'), 'class FakeUserRepository\n', 'utf8');  fs.writeFileSync(path.join(root, 'scripts', 'blocker.mjs'), [
+    "import fs from 'node:fs';",
+    `const marker = ${JSON.stringify(marker)};`,
+    "const n = fs.existsSync(marker) ? Number(fs.readFileSync(marker, 'utf8')) + 1 : 1;",
+    "fs.writeFileSync(marker, String(n), 'utf8');",
+    "process.stderr.write('e: src/FakeUserRepository.kt:42:17 Unresolved reference verifyPassword\\nCompilation failed\\n');",
+    "process.exit(1);",
+  ].join('\n'), 'utf8');
+  fs.writeFileSync(path.join(root, '.devflow', 'commands.yaml'), [
+    'commands:',
+    '  blocker-check:',
+    '    executable: node',
+    '    args:',
+    '      - scripts/blocker.mjs',
+    '    category: test',
+    '',
+  ].join('\n'), 'utf8');
+  const git = (args: string[]) => {
+    const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', shell: false });
+    assert.equal(result.status, 0, result.stderr || result.stdout || `git ${args.join(' ')} failed`);
+    return result.stdout || '';
+  };
+  git(['init', '-b', 'develop']);
+  git(['config', 'user.name', 'DevFlow Test']);
+  git(['config', 'user.email', 'devflow@example.test']);
+  git(['add', '.']);
+  git(['commit', '-m', 'fixture']);
+
+  const project = { id: `project-known-blocker-${Date.now()}`, name: 'Known Blocker Fixture', repoUrl: `https://example.test/known-blocker-${Date.now()}`, localPath: root };
+  createProject(project);
+  const state = { projectsCache: [project], countersCache: {}, skillsRegistry: [] } as any;
+  const now = new Date().toISOString();
+  const taskA = { id: `${project.id}-a`, displayId: 'DVF-KNOWN-A', title: 'Known blocker A', description: 'Sibling A', projectId: project.id, status: 'todo', priority: 'medium', category: 'backend', tags: [], targetFiles: ['src/FeatureA.kt'], checklist: [], logs: [], bugs: [], images: [], createdAt: now, updatedAt: now } as any;
+  const taskB = { id: `${project.id}-b`, displayId: 'DVF-KNOWN-B', title: 'Known blocker B', description: 'Sibling B', projectId: project.id, status: 'todo', priority: 'medium', category: 'backend', tags: [], targetFiles: ['src/FeatureB.kt'], checklist: [], logs: [], bugs: [], images: [], createdAt: now, updatedAt: now } as any;
+  saveTask(taskA);
+  saveTask(taskB);
+
+  const runSibling = async (task: any, sessionId: string, ownedPath: string, batchId: string) => {
+    const claimed = claimTaskForSession(task.id, { sessionId, ownerKind: 'chat', ownerLabel: sessionId });
+    const workspaceId = claimed.claim.workspaceId;
+    const binding = executionSessions.getTaskExecutionMutationBinding({ workspaceId })!;
+    executionSessions.recordTaskExecutionContextReady({ workspaceId }, {
+      contextHandle: `ctx-${sessionId}`,
+      repoRevision: binding.session.repoRevision,
+      contextPlanIdentity: `plan-${sessionId}`,
+    });
+    executionSessions.recordExecutionLifecycleTransition(binding.session.id, {
+      toStage: 'implementing', reasonCode: 'fixture-mutation',
+      evidence: { id: `mutation-${sessionId}`, kind: 'owned-change', status: 'completed' },
+    });
+    fs.appendFileSync(path.join(binding.workspace.root, ownedPath), `// ${sessionId}\n`, 'utf8');
+    executionSessions.recordTaskExecutionMutationPaths({ workspaceId }, [ownedPath], 'fixture');
+    const baseArgs = {
+      projectId: project.id,
+      workspaceId,
+      command: 'blocker-check',
+      cacheResult: false,
+      forceFresh: true,
+      verificationBatch: { id: batchId, requiredChecks: ['blocker-check'], checkId: 'blocker-check' },
+    };
+    const candidate = prepareProjectCommandVerificationCandidate(state, baseArgs)!;
+    const result = await runBuiltinToolJob({ toolName: 'run_project_command', state, args: { ...baseArgs, __verificationCandidate: candidate } }, {
+      logger: { stdout: () => {}, stderr: () => {} },
+      setCancelFn: () => {},
+      transitionAccess: () => {},
+    }) as any;
+    return { result, workspaceId, sessionId, binding };
+  };
+
+  const first = await runSibling(taskA, 'known-blocker-a', 'src/FeatureA.kt', 'known-blocker-batch-a');
+  assert.equal(first.result.ok, false);
+  assert.equal(first.result.verificationBlocker?.recorded, true);
+  assert.equal(fs.readFileSync(marker, 'utf8'), '1');
+  git(['-C', first.binding.workspace.root, 'checkout', '--', 'src/FeatureA.kt']);  releaseTaskClaim(taskA.id, { sessionId: first.sessionId, nextStatus: 'todo' });
+  cleanupSessionWorkspace(first.workspaceId);
+
+  const second = await runSibling(taskB, 'known-blocker-b', 'src/FeatureB.kt', 'known-blocker-batch-b');
+  try {
+    assert.equal(second.result.ok, false);
+    assert.equal(second.result.verificationBlocker?.reused, true);
+    assert.equal(fs.readFileSync(marker, 'utf8'), '1', 'the known blocked command must not spawn a second process');
+    const batch = executionSessions.getExecutionVerificationBatchState(second.binding.session.id);
+    assert.equal(batch?.status, 'blocked');
+    assert.deepEqual(batch?.blocked, ['blocker-check']);
+    assert.equal(batch?.canComplete, false);
+    assert.deepEqual(executionSessions.getExecutionVerificationBatchLiveOperations(second.binding.session.id, 'known-blocker-batch-b'), []);
+  } finally {
+    git(['-C', second.binding.workspace.root, 'checkout', '--', 'src/FeatureB.kt']);    releaseTaskClaim(taskB.id, { sessionId: second.sessionId, nextStatus: 'todo' });
+    cleanupSessionWorkspace(second.workspaceId);
   }
 });
 

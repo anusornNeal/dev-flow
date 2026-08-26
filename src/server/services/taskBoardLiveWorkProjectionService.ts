@@ -1,7 +1,9 @@
 import type { Task, TaskLiveWorkPhase, TaskLiveWorkProjection } from '../../types.js';
-import { queryExecutionSessions, type ExecutionLifecycleStage, type ExecutionSessionRecord } from '../repositories/executionSessionRepository.js';
+import { queryExecutionSessionEvidenceForProject, queryExecutionSessions, type ExecutionLifecycleStage, type ExecutionSessionRecord } from '../repositories/executionSessionRepository.js';
 import { getLatestExecutionCheckpoint, type ExecutionCheckpointSnapshot } from './executionCheckpointService.js';
 import { getLatestExternalTaskStatusRecord, isExternalTaskStatusRecordStale } from './externalTaskStatusService.js';
+import { getTasksByProjectId } from '../repositories/taskRepository.js';
+import { getProjectOrchestrationProjection } from './taskClaimService.js';
 
 const ACTIVE_AGENT_RUN_STATUSES = new Set(['queued', 'starting', 'running']);
 const MANAGED_PHASE_COUNT = 5;
@@ -181,4 +183,180 @@ export function projectTaskBoardLiveWork(task: Task, now = new Date()): TaskLive
   const session = matching.length === 1 && activeExecutions.length === 1 ? matching[0] : null;
   const checkpoint = session ? getLatestExecutionCheckpoint(session.id) : null;
   return deriveTaskBoardLiveWorkProjection(task, { now, activeExecutions, checkpoint });
+}
+
+export type AgentOfficePipelineStage = 'waiting-verification' | 'verifying' | 'finalizing' | 'integrating' | 'cleanup';
+export type AgentOfficeWorkerSource = 'devflow-managed' | 'worker-native' | 'legacy-agent';
+
+const AGENT_OFFICE_QUEUE_STATES = ['ready', 'execution', 'attention', 'blocked'] as const;
+
+function boundedAgentOfficeLimit(value: unknown) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 20;
+  return Math.max(1, Math.min(50, Math.floor(numeric)));
+}
+
+function ageFrom(value: unknown, nowMs: number) {
+  const startedAtMs = Date.parse(clean(value));
+  return Number.isFinite(startedAtMs) ? Math.max(0, nowMs - startedAtMs) : null;
+}
+
+function projectCheckpointMap(projectId: string) {
+  const bySession = new Map<string, ExecutionCheckpointSnapshot>();
+  for (const evidence of queryExecutionSessionEvidenceForProject(projectId, 'checkpoint', 100, 'active')) {
+    const snapshot = evidence.metadata?.snapshot;
+    if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) continue;
+    const typed = snapshot as ExecutionCheckpointSnapshot;
+    if (!typed.executionSessionId || !typed.stage || bySession.has(typed.executionSessionId)) continue;
+    bySession.set(typed.executionSessionId, typed);
+  }
+  return bySession;
+}
+
+function pipelineStageFor(session: ExecutionSessionRecord, checkpoint: ExecutionCheckpointSnapshot | null) {
+  const operation = checkpoint?.pendingOperations?.at(-1) || null;
+  const kind = clean(operation?.kind).toLowerCase();
+  if (kind.includes('cleanup')) return { stage: 'cleanup' as const, operation };
+  if (kind.includes('finaliz')) return { stage: 'finalizing' as const, operation };
+  if (kind.includes('integrat') || kind.includes('rebase') || kind.includes('merge')) return { stage: 'integrating' as const, operation };
+  if (kind.includes('verif') || kind.includes('test') || kind.includes('typecheck') || kind.includes('lint')) {
+    return { stage: (operation?.status === 'accepted' ? 'waiting-verification' : 'verifying') as AgentOfficePipelineStage, operation };
+  }
+  if (session.lifecycle.stage === 'verifying') return { stage: 'verifying' as const, operation };
+  if (session.lifecycle.stage === 'verification-infra-blocked') return { stage: 'waiting-verification' as const, operation };
+  if (session.lifecycle.stage === 'committed') return { stage: 'integrating' as const, operation };
+  if (session.lifecycle.stage === 'finalized') return { stage: 'finalizing' as const, operation };
+  return null;
+}
+
+function compactOfficeReason(reason: any) {
+  return {
+    code: clean(reason?.code).slice(0, 160),
+    message: clean(reason?.message).slice(0, 240),
+  };
+}
+
+function compactOfficeQueueEntry(entry: any) {
+  return {
+    taskId: String(entry.taskId || ''),
+    displayId: entry.displayId || null,
+    title: clean(entry.title).slice(0, 240),
+    taskStatus: entry.taskStatus,
+    reasons: (Array.isArray(entry.reasons) ? entry.reasons : []).slice(0, 4).map(compactOfficeReason),
+  };
+}
+
+export function getAgentOfficeMonitoringProjection(projectIdValue: string, options: { limit?: unknown } = {}) {
+  const orchestration = getProjectOrchestrationProjection(projectIdValue);
+  const projectId = orchestration.projectId;
+  const limit = boundedAgentOfficeLimit(options.limit);
+  const now = new Date(orchestration.generatedAt);
+  const nowMs = now.getTime();
+  const tasks = getTasksByProjectId(projectId).filter((task) => !task.archivedAt && task.status !== 'done');
+  const taskById = new Map(tasks.map((task) => [String(task.id), task]));
+  const orchestrationByTask = new Map(orchestration.entries.map((entry: any) => [String(entry.taskId), entry]));
+  const activeExecutionPage = queryExecutionSessions({ projectId, status: 'active', limit: 100 });
+  const activeByTask = new Map<string, ExecutionSessionRecord[]>();
+  for (const session of activeExecutionPage.sessions) {
+    if (!session.taskId) continue;
+    const current = activeByTask.get(session.taskId) || [];
+    current.push(session);
+    activeByTask.set(session.taskId, current);
+  }
+  const checkpoints = projectCheckpointMap(projectId);
+
+  const workerRows = tasks.flatMap((task) => {
+    const activeExecutions = activeByTask.get(task.id) || [];
+    const checkpoint = activeExecutions.length === 1 ? checkpoints.get(activeExecutions[0].id) || null : null;
+    const live = deriveTaskBoardLiveWorkProjection(task, { now, activeExecutions, checkpoint });
+    if (!live) return [];
+    const orchestrationEntry: any = orchestrationByTask.get(task.id) || null;
+    const externalNative = orchestrationEntry?.context?.externalNative || null;
+    const source: AgentOfficeWorkerSource = live.source === 'managed'
+      ? 'devflow-managed'
+      : externalNative
+        ? 'worker-native'
+        : 'legacy-agent';
+    const reasonCodes = (Array.isArray(orchestrationEntry?.reasons) ? orchestrationEntry.reasons : [])
+      .map((reason: any) => clean(reason?.code))
+      .filter(Boolean)
+      .slice(0, 6);
+    const stale = live.phaseLabel === 'Disconnected' || externalNative?.stale === true;
+    const failure = reasonCodes.some((code: string) => /FAIL|ERROR|INFRA|BLOCK/.test(code));
+    const indicator = stale ? 'disconnected' : live.blocked ? 'blocked' : orchestrationEntry?.state === 'attention' ? 'attention' : null;
+    return [{
+      taskId: task.id,
+      displayId: task.displayId || null,
+      title: clean(task.title).slice(0, 240),
+      ownerLabel: live.ownerLabel,
+      ownerKind: live.ownerKind || null,
+      source,
+      action: clean(externalNative?.action) || clean(live.activity) || live.phaseLabel,
+      phase: live.phase,
+      phaseLabel: live.phaseLabel,
+      queueState: orchestrationEntry?.state || null,
+      ageMs: ageFrom(live.startedAt, nowMs),
+      updatedAt: live.updatedAt || null,
+      stale,
+      failure,
+      indicator,
+      reasonCodes,
+    }];
+  }).sort((left, right) => String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')) || left.taskId.localeCompare(right.taskId));
+
+  const pipelineRows = activeExecutionPage.sessions.flatMap((session) => {
+    if (!session.taskId) return [];
+    const task = taskById.get(session.taskId);
+    if (!task) return [];
+    const checkpoint = checkpoints.get(session.id) || null;
+    const classified = pipelineStageFor(session, checkpoint);
+    if (!classified) return [];
+    const operation = classified.operation;
+    return [{
+      taskId: task.id,
+      displayId: task.displayId || null,
+      title: clean(task.title).slice(0, 240),
+      executionSessionId: session.id,
+      ownerLabel: task.claim?.workspaceId === session.workspaceId ? task.claim.ownerLabel : null,
+      stage: classified.stage,
+      lifecycleStage: session.lifecycle.stage,
+      operationKind: operation?.kind || null,
+      operationStatus: operation?.status || null,
+      blocked: Boolean(checkpoint?.blockers?.length) || session.lifecycle.stage === 'verification-infra-blocked',
+      activity: clean(checkpoint?.blockers?.[0]) || clean(checkpoint?.pendingNextWork?.[0]) || titleCaseToken(operation?.kind) || null,
+      updatedAt: checkpoint?.updatedAt || session.updatedAt,
+    }];
+  }).sort((left, right) => String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')) || left.taskId.localeCompare(right.taskId));
+
+  const queueItems = Object.fromEntries(AGENT_OFFICE_QUEUE_STATES.map((state) => [
+    state,
+    orchestration.entries.filter((entry: any) => entry.state === state).slice(0, limit).map(compactOfficeQueueEntry),
+  ])) as Record<(typeof AGENT_OFFICE_QUEUE_STATES)[number], ReturnType<typeof compactOfficeQueueEntry>[]>;
+  const queueTruncated = Object.fromEntries(AGENT_OFFICE_QUEUE_STATES.map((state) => [
+    state,
+    orchestration.counts[state] > queueItems[state].length,
+  ])) as Record<(typeof AGENT_OFFICE_QUEUE_STATES)[number], boolean>;
+
+  return {
+    schema: 'agent-office-monitor.v1',
+    projectId,
+    generatedAt: orchestration.generatedAt,
+    limit,
+    workers: {
+      total: workerRows.length,
+      items: workerRows.slice(0, limit),
+      truncated: workerRows.length > limit,
+    },
+    pipeline: {
+      total: pipelineRows.length,
+      items: pipelineRows.slice(0, limit),
+      truncated: pipelineRows.length > limit,
+      sourceTruncated: activeExecutionPage.truncated,
+    },
+    queue: {
+      counts: orchestration.counts,
+      items: queueItems,
+      truncated: queueTruncated,
+    },
+  };
 }

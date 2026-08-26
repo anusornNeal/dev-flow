@@ -18,6 +18,7 @@ import { getProjectStartContext, getRepoContextBundle, getRepoReadSnapshot } fro
 import { getDevFlowDiagnostics, getToolCallSummary } from '../services/mcpToolMonitor';
 import { queryMcpTransportTrace } from '../services/mcpTransportMonitor';
 import { getWorkflowHealth } from '../services/workflowHealthService';
+import { getAgentOfficeMonitoringProjection } from '../services/taskBoardLiveWorkProjectionService.js';
 import { getRepoInspectionIndex } from '../services/repoInspectionIndexService';
 import { validateTaskQuality } from '../services/taskQualityService';
 import { buildJiraAuthoringBundle } from '../services/jiraAuthoringBundleService';
@@ -134,6 +135,14 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
   app.get('/api/capabilities/tools/:toolName', (req, res) => {
     try {
       return res.json(getToolSchema(req.params.toolName));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.get('/api/agent-office', (req, res) => {
+    try {
+      return res.json(getAgentOfficeMonitoringProjection(String(req.query.projectId || ''), { limit: req.query.limit }));
     } catch (error) {
       return sendApiError(res, error);
     }

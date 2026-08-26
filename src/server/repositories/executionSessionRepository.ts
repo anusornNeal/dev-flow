@@ -302,20 +302,28 @@ export function listExecutionSessionEvidence(sessionId: string): ExecutionSessio
     .filter((entry): entry is ExecutionSessionEvidenceRecord => Boolean(entry));
 }
 
-export function queryExecutionSessionEvidenceForProject(projectIdValue: string, kindValue: string, limitValue = 20): ExecutionSessionEvidenceRecord[] {
+export function queryExecutionSessionEvidenceForProject(
+  projectIdValue: string,
+  kindValue: string,
+  limitValue = 20,
+  statusValue?: ExecutionSessionStatus,
+): ExecutionSessionEvidenceRecord[] {
   const projectId = String(projectIdValue || '').trim();
   const kind = String(kindValue || '').trim();
   if (!projectId || !kind) return [];
   const numericLimit = Number(limitValue);
   const limit = Math.max(1, Math.min(100, Number.isFinite(numericLimit) ? Math.floor(numericLimit) : 20));
+  const status = statusValue ? String(statusValue) : '';
+  const statusClause = status ? ' AND session.status = ?' : '';
+  const params = status ? [projectId, kind, status, limit] : [projectId, kind, limit];
   const rows = db.prepare(`
     SELECT evidence.*
     FROM execution_session_evidence evidence
     INNER JOIN execution_sessions session ON session.id = evidence.sessionId
-    WHERE session.projectId = ? AND evidence.kind = ?
+    WHERE session.projectId = ? AND evidence.kind = ?${statusClause}
     ORDER BY evidence.updatedAt DESC, evidence.createdAt DESC, evidence.id DESC
     LIMIT ?
-  `).all(projectId, kind, limit) as any[];
+  `).all(...params) as any[];
   return rows.map(normalizeEvidence).filter((entry): entry is ExecutionSessionEvidenceRecord => Boolean(entry));
 }
 

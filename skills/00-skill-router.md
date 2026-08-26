@@ -12,8 +12,9 @@ Choose the smallest DevFlow guidance set that matches the current action. This f
 6. **Large or independently executable scope** — add `06-authoring-decomposition`. It owns parent/child boundaries, parallel slices, and prerequisite direction.
 7. **Repository implementation** — load `07-authoring-execution` when the task continues into local edits, tests, verification, commit, workspace lifecycle, or recovery.
 8. **Continuous board work** — load `08-board-loop-execution` for loop-board / keep-taking-work requests. It owns claim selection and orchestration; implementation details stay delegated to the execution specialist.
-9. **Creative feature or behavior design** — load `brainstorming-guidance` on demand before implementation when the request needs exploration, alternatives, trade-offs, or an approval gate.
-10. **UI/UX work** — load `ui-ux-guidance` on demand for screens, layout, visual hierarchy, interaction, navigation, accessibility, animation, responsive behavior, or data presentation. For a new UI feature, load `brainstorming-guidance` first and `ui-ux-guidance` second.
+9. **Final repository verification** — load `verification-preset-guidance` before choosing final verification commands. Inspect evidenced presets and reuse the existing planner instead of guessing command names or creating ad-hoc scripts.
+10. **Creative feature or behavior design** — load `brainstorming-guidance` on demand before implementation when the request needs exploration, alternatives, trade-offs, or an approval gate.
+11. **UI/UX work** — load `ui-ux-guidance` on demand for screens, layout, visual hierarchy, interaction, navigation, accessibility, animation, responsive behavior, or data presentation. For a new UI feature, load `brainstorming-guidance` first and `ui-ux-guidance` second.
 
 ## Routing rules
 - Load only the minimum set needed for the current action.

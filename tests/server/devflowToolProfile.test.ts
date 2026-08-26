@@ -234,14 +234,31 @@ test('checklist tool keeps single-item compatibility and supports one-task batch
 test('guidance MCP capability is read-only, stable-id bounded, and available on the coding surface', () => {
   const tool = devFlowToolDefinitions.find((entry: any) => entry.name === 'get_guidance_skill');
   assert.ok(tool);
-  assert.deepEqual(tool.inputSchema.properties.id.enum, ['brainstorming-guidance', 'ui-ux-guidance']);
-  assert.deepEqual(tool.inputSchema.properties.skillId.enum, ['brainstorming-guidance', 'ui-ux-guidance']);
+  assert.deepEqual(tool.inputSchema.properties.id.enum, ['brainstorming-guidance', 'ui-ux-guidance', 'verification-preset-guidance']);
+  assert.deepEqual(tool.inputSchema.properties.skillId.enum, ['brainstorming-guidance', 'ui-ux-guidance', 'verification-preset-guidance']);
   assert.equal(getMcpToolList('coding').some((entry: any) => entry.name === 'get_guidance_skill'), true);
   assert.equal(getMcpToolList('full').some((entry: any) => entry.name === 'get_guidance_skill'), true);
   assert.equal(getMcpConsolidationReplacement('get_guidance_skill'), undefined);
   assert.equal(tool.buildHttpRequest({}).method, 'GET');
   assert.equal(tool.buildHttpRequest({}).path, '/api/skills/guidance');
   assert.equal(tool.buildHttpRequest({ id: 'ui-ux-guidance' }).path, '/api/skills/guidance/ui-ux-guidance');
+  assert.equal(tool.buildHttpRequest({ id: 'verification-preset-guidance' }).path, '/api/skills/guidance/verification-preset-guidance');
+});
+
+test('verification preset inspection is a read-only lightweight capability on coding and full surfaces', () => {
+  const tool = devFlowToolDefinitions.find((entry: any) => entry.name === 'inspect_project_verification');
+  assert.ok(tool);
+  assert.equal(tool.lightweight, true);
+  assert.match(tool.description, /read-only/i);
+  assert.match(tool.description, /never executes/i);
+  assert.equal(getMcpToolList('coding').some((entry: any) => entry.name === 'inspect_project_verification'), true);
+  assert.equal(getMcpToolList('full').some((entry: any) => entry.name === 'inspect_project_verification'), true);
+  const request = tool.buildHttpRequest({ projectId: 'project-a', changedFiles: ['src/a.ts'], requestedLane: 'fast' });
+  const body = request.body as any;
+  assert.equal(request.method, 'POST');
+  assert.equal(request.path, '/api/project-commands/inspect');
+  assert.deepEqual(body.changedFiles, ['src/a.ts']);
+  assert.equal(body.requestedLane, 'fast');
 });
 
 test('UI design-context preflight is a bounded read on the coding and full MCP surfaces', () => {

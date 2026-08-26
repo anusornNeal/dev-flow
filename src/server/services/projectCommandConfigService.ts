@@ -345,6 +345,24 @@ export function loadProjectCommandPreset(root: string, commandName: string): Pro
   };
 }
 
+export function listProjectCommandPresets(root: string): ProjectCommandPreset[] {
+  const config = readConfig(root);
+  if (!config) return [];
+
+  const commands = config.parsed?.commands;
+  if (!commands || typeof commands !== 'object' || Array.isArray(commands)) {
+    throw createApiError(400, 'INVALID_COMMAND_CONFIG', "Command config '" + config.configPath + "' requires a 'commands' object.");
+  }
+
+  return Object.keys(commands).sort().map((commandName) => {
+    const preset = loadProjectCommandPreset(root, commandName);
+    if (!preset) {
+      throw createApiError(400, 'INVALID_COMMAND_CONFIG_PRESET', "Preset '" + commandName + "' could not be resolved from '" + config.configPath + "'.");
+    }
+    return preset;
+  });
+}
+
 const MAX_IMPACT_RULES = 100;
 const MAX_IMPACT_PATTERNS = 50;
 const MAX_IMPACT_COMMANDS = 20;

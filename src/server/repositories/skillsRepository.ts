@@ -22,6 +22,7 @@ const MASTER_SKILL_SEEDS = [
 const GUIDANCE_SKILL_SEEDS = [
   { id: 'brainstorming-guidance', name: 'Brainstorming Guidance', description: 'On-demand design-process guidance for shaping ideas into an approved design before implementation.', kind: 'guidance', isProtected: false },
   { id: 'ui-ux-guidance', name: 'UI/UX Guidance', description: 'On-demand visual, interaction, accessibility, and product UI quality guidance.', kind: 'guidance', isProtected: false },
+  { id: 'verification-preset-guidance', name: 'Verification Preset Guidance', description: 'On-demand guidance for discovering and selecting evidenced project verification presets before final verification.', kind: 'guidance', isProtected: false },
 ];
 
 const REPO_SKILL_SEEDS = [

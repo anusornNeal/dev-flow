@@ -11,7 +11,7 @@ import { deleteLocalPath, moveLocalPath } from '../services/localPathMutationSer
 import { createPullRequest } from '../services/githubPullRequestService';
 import { safeEditFile } from '../services/safeEditFileService';
 import { editFilesBatch } from '../services/fileEditBatchService';
-import { runProjectCommand } from '../services/projectCommandService';
+import { inspectProjectVerificationPresets, runProjectCommand } from '../services/projectCommandService';
 import { parseTestReport } from '../services/testReportParserService';
 import { getGitLog, getGitDiff, getGitShow, getGitStatus, getGitBranchAsync, commitGitChanges, ensureGitBranch, pushGitBranch, getGitSyncStatus, getChangeSummary } from '../services/gitService';
 import { getProjectStartContext, getRepoContextBundle, getRepoReadSnapshot } from '../services/projectStartContextService';
@@ -479,6 +479,16 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
         recordTaskExecutionVerificationResult(args, verified, captured);
         return verified;
       });
+      return res.json(result);
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.post('/api/project-commands/inspect', (req, res) => {
+    try {
+      const args = req.body as Record<string, any>;
+      const result = guarded('inspect_project_verification', args, () => inspectProjectVerificationPresets(deps.state, args));
       return res.json(result);
     } catch (error) {
       return sendApiError(res, error);

@@ -607,8 +607,8 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        id: { type: 'string', enum: ['brainstorming-guidance', 'ui-ux-guidance'] },
-        skillId: { type: 'string', enum: ['brainstorming-guidance', 'ui-ux-guidance'] },
+        id: { type: 'string', enum: ['brainstorming-guidance', 'ui-ux-guidance', 'verification-preset-guidance'] },
+        skillId: { type: 'string', enum: ['brainstorming-guidance', 'ui-ux-guidance', 'verification-preset-guidance'] },
       },
     },
     outputSchema: { type: 'object' },
@@ -1262,6 +1262,21 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
     buildHttpRequest: (args) => ({ method: 'GET', path: withQuery('/api/repo-inspection/semantic', args) }),
   },
   {
+    name: 'inspect_project_verification',
+    description: 'Read-only inspection of safely available project verification presets, config/build evidence, bounded telemetry quality signals, and the existing planner recommendation for supplied changed files. Never executes a verification command or writes repository files.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...projectIdentifierProperties,
+        changedFiles: { type: 'array', maxItems: 200, items: { type: 'string', minLength: 1, maxLength: 500 }, description: 'Optional complete repository-relative changed-file set used by the existing verification planner.' },
+        requestedLane: { type: 'string', enum: ['fast', 'safe', 'full'], description: 'Optional lane request; existing risk policy may escalate it.' },
+      },
+    },
+    outputSchema: { type: 'object' },
+    lightweight: true,
+    buildHttpRequest: (args) => ({ method: 'POST', path: '/api/project-commands/inspect', body: args }),
+  },
+  {
     name: 'run_project_command',
     executionPolicy: { mode: 'job', jobKind: 'repo-command' },
     description: 'Run a built-in or repository-defined verification preset inside a resolved project root. Custom presets are loaded from .devflow/commands.yaml or .devflow/commands.json and never use a shell string.',
@@ -1670,7 +1685,7 @@ const CODING_PROFILE_TOOLS = new Set([
   'get_figma_authoring_context', 'attach_figma_context_to_task', 'get_project_atlas',
   'get_repo_context_bundle', 'list_local_files', 'read_local_file', 'read_file_snippets_batch', 'search_local_files', 'execute_repo_query_plan',
   'write_local_file', 'edit_local_files_batch', 'prepare_compact_edit', 'apply_prepared_edit', 'apply_and_verify', 'delete_local_path', 'move_local_path',
-  'run_project_command',
+  'inspect_project_verification', 'run_project_command',
   'get_git_status', 'get_git_diff', 'get_git_log', 'get_git_show', 'get_git_branch', 'get_git_sync_status',
   'ensure_git_branch', 'commit_git_changes', 'push_git_branch', 'create_pull_request',
   'plan_task_commit', 'reconcile_task_owned_revision_drift', 'commit_task_owned_changes',
@@ -1948,6 +1963,7 @@ export function getCapabilityCatalog() {
     },
     commands: {
       verificationRunner: hasTool('run_project_command'),
+      presetInspection: hasTool('inspect_project_verification'),
       builtInPresets: hasTool('run_project_command'),
       repositoryPresets: hasTool('run_project_command'),
     },

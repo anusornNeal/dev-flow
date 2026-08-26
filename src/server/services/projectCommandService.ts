@@ -14,7 +14,15 @@ import {
 import type { AppState } from '../types';
 import { createApiError } from './api';
 import { resolveProjectRoot, resolveSafePath } from './localFileService';
-import { getProjectCommandConfigSnapshot, loadProjectCommandPreset } from './projectCommandConfigService';
+import {
+  getProjectCommandConfigSnapshot,
+  listProjectCommandPresets,
+  loadProjectCommandPreset,
+  loadProjectVerificationImpactRules,
+  PROJECT_COMMAND_CONFIG_RELATIVE_PATHS,
+  PROJECT_VERIFICATION_IMPACT_RELATIVE_PATH,
+  type ProjectCommandPreset,
+} from './projectCommandConfigService';
 import { buildRepoAffectedInputIdentity, getRepoDependencyFingerprint, getRepoRevisionForRoot } from './repoRevisionService';
 import {
   createVerificationCandidate,
@@ -34,6 +42,7 @@ import {
   type VerificationResourcePrediction,
   type VerificationResourceProfileDescriptor,
 } from './verificationResourceProfileService';
+import { planVerification, type ExecutionLane } from './verificationPlannerService';
 
 const ALLOWED_COMMANDS = ['typecheck', 'test', 'lint', 'build', 'verify'] as const;
 const SAFE_BENCHMARK_PACKAGE_SCRIPT = /^benchmark:[A-Za-z0-9][A-Za-z0-9:_-]*$/;
@@ -698,6 +707,239 @@ export function describeProjectCommandResourceProfile(state: AppState, args: Rec
     descriptor: commandDescriptor,
     resourceDescriptor,
     prediction: predictVerificationResourceCost(resourceDescriptor),
+  };
+}
+
+const MAX_INSPECTION_CHANGED_FILES = 200;
+const MAX_INSPECTION_CHANGED_FILE_LENGTH = 500;
+const MAX_INSPECTION_BUILD_METADATA_BYTES = 2 * 1024 * 1024;
+const VERIFICATION_BUILD_METADATA_PATHS = [
+  'package.json', 'package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock',
+  'gradle.properties', 'settings.gradle', 'settings.gradle.kts', 'build.gradle', 'build.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties',
+] as const;
+
+function getVerificationBuildMetadataFingerprint(root: string) {
+  const entries = VERIFICATION_BUILD_METADATA_PATHS.flatMap((relativePath) => {
+    const absolutePath = path.resolve(root, relativePath);
+    let stat: fs.Stats;
+    try {
+      stat = fs.lstatSync(absolutePath);
+    } catch {
+      return [];
+    }
+    if (stat.isSymbolicLink() || !stat.isFile()) return [{ relativePath, kind: 'unsupported', size: stat.size }];
+    if (stat.size > MAX_INSPECTION_BUILD_METADATA_BYTES) {
+      return [{ relativePath, kind: 'large', size: stat.size, mtimeMs: stat.mtimeMs }];
+    }
+    const metadata = readWorkspaceMetadataFile(absolutePath, MAX_INSPECTION_BUILD_METADATA_BYTES);
+    if (!metadata) return [];
+    const normalizedContent = metadata.content.replace(/\r\n/g, '\n');
+    return [{
+      relativePath,
+      kind: 'content',
+      size: Buffer.byteLength(normalizedContent, 'utf8'),
+      sha256: crypto.createHash('sha256').update(normalizedContent, 'utf8').digest('hex'),
+    }];
+  });
+  return crypto.createHash('sha256').update(JSON.stringify(entries)).digest('hex');
+}
+
+function resolveCommandForInspection(
+  root: string,
+  command: string,
+  packageScripts: Record<string, string>,
+  configuredPreset?: ProjectCommandPreset,
+): ResolvedCommand | null {
+  const isBuiltIn = (ALLOWED_COMMANDS as readonly string[]).includes(command);
+  const isSafeBenchmark = isSafeBenchmarkPackageScript(command);
+  if (isBuiltIn && packageScripts[command]) {
+    const invocation = resolvePackageManagerInvocation('npm', ['run', '--silent', command]);
+    return { command, executable: invocation.executable, args: invocation.args, source: 'package-json', script: packageScripts[command] };
+  }
+  if (configuredPreset) {
+    const invocation = configuredPreset.executable === 'npm' || configuredPreset.executable === 'npx'
+      ? resolvePackageManagerInvocation(configuredPreset.executable, configuredPreset.args)
+      : { executable: configuredPreset.executable, args: [...configuredPreset.args] };
+    return {
+      command,
+      executable: invocation.executable,
+      args: invocation.args,
+      cwd: configuredPreset.cwd,
+      timeoutMs: configuredPreset.timeoutMs,
+      maxOutputBytes: configuredPreset.maxOutputBytes,
+      source: 'repository-config',
+      configPath: configuredPreset.configPath,
+      category: configuredPreset.category,
+      sharedResources: configuredPreset.sharedResources,
+      acceptsTargets: configuredPreset.acceptsTargets,
+      configuredExecutable: configuredPreset.executable,
+      configuredArgs: [...configuredPreset.args],
+      targets: [],
+    };
+  }
+  if (isSafeBenchmark && packageScripts[command]) {
+    const invocation = resolvePackageManagerInvocation('npm', ['run', '--silent', command]);
+    return { command, executable: invocation.executable, args: invocation.args, source: 'package-json', script: packageScripts[command] };
+  }
+  return null;
+}
+
+function normalizeInspectionChangedFiles(value: unknown) {
+  if (value === undefined) return [] as string[];
+  if (!Array.isArray(value) || value.length > MAX_INSPECTION_CHANGED_FILES) {
+    throw createApiError(400, 'INVALID_VERIFICATION_INSPECTION_FILES', 'changedFiles must be an array with at most ' + MAX_INSPECTION_CHANGED_FILES + ' repository-relative paths.');
+  }
+  return Array.from(new Set(value.map((entry) => {
+    if (typeof entry !== 'string') {
+      throw createApiError(400, 'INVALID_VERIFICATION_INSPECTION_FILES', 'changedFiles entries must be strings.');
+    }
+    const raw = entry.trim();
+    const normalized = raw.replace(/\\/g, '/').replace(/^\.\//, '');
+    if (!normalized || raw.length > MAX_INSPECTION_CHANGED_FILE_LENGTH || path.isAbsolute(raw) || /(^|\/)\.\.(\/|$)/.test(normalized)) {
+      throw createApiError(400, 'INVALID_VERIFICATION_INSPECTION_FILES', "Changed file '" + raw + "' must be a bounded repository-relative path.");
+    }
+    return normalized;
+  })));
+}
+
+function regularBuildEvidencePath(root: string, relativePath: string) {
+  try {
+    const stat = fs.lstatSync(path.resolve(root, relativePath));
+    return !stat.isSymbolicLink() && stat.isFile();
+  } catch {
+    return false;
+  }
+}
+
+function detectVerificationBuildEvidence(root: string, packageJsonFound: boolean) {
+  const evidence: Array<{ kind: 'package-json' | 'gradle'; paths: string[] }> = [];
+  if (packageJsonFound) evidence.push({ kind: 'package-json', paths: ['package.json'] });
+  const gradleCandidates = ['gradlew', 'gradlew.bat', 'build.gradle', 'build.gradle.kts', 'settings.gradle', 'settings.gradle.kts'];
+  const gradlePaths = gradleCandidates.filter((relativePath) => regularBuildEvidencePath(root, relativePath));
+  if (gradlePaths.length > 0) evidence.push({ kind: 'gradle', paths: gradlePaths });
+  return evidence;
+}
+
+function buildPresetQualitySignal(descriptor: ProjectCommandDescriptor, prediction: VerificationResourcePrediction) {
+  const failedSampleCount = Math.max(0, prediction.sampleCount - prediction.successfulSampleCount);
+  const failureRate = prediction.sampleCount > 0 ? failedSampleCount / prediction.sampleCount : 0;
+  const reasons: string[] = [];
+  let status: 'insufficient-data' | 'healthy' | 'review' = 'healthy';
+
+  if (prediction.confidence === 'none' || prediction.confidence === 'low') {
+    status = 'insufficient-data';
+    reasons.push('Telemetry confidence is ' + prediction.confidence + '; keep quality conclusions advisory.');
+  } else {
+    if (failureRate >= 1 / 3) {
+      status = 'review';
+      reasons.push('Failure pressure is ' + (failureRate * 100).toFixed(0) + '% across ' + prediction.sampleCount + ' retained sample(s).');
+    }
+    if (descriptor.cost === 'low' && prediction.expected.durationMs > 60000) {
+      status = 'review';
+      reasons.push('A low-cost preset is currently predicted to take about ' + Math.round(prediction.expected.durationMs / 1000) + 's.');
+    }
+    if (reasons.length === 0) reasons.push('No bounded telemetry signal currently suggests preset refinement.');
+  }
+
+  return {
+    status,
+    confidence: prediction.confidence,
+    sampleCount: prediction.sampleCount,
+    successfulSampleCount: prediction.successfulSampleCount,
+    failedSampleCount,
+    failureRate: Number(failureRate.toFixed(3)),
+    expectedDurationMs: prediction.expected.durationMs,
+    reasons,
+  };
+}
+
+export function inspectProjectVerificationPresets(state: AppState, args: Record<string, any>) {
+  const root = resolveProjectRoot(state, args);
+  const packageConfig = readPackageScripts(root);
+  const configuredPresets = listProjectCommandPresets(root);
+  const configuredByName = new Map(configuredPresets.map((preset) => [preset.name, preset]));
+  const packageCommandNames = Object.keys(packageConfig.scripts)
+    .filter((name) => (ALLOWED_COMMANDS as readonly string[]).includes(name) || isSafeBenchmarkPackageScript(name));
+  const commandNames = Array.from(new Set([...packageCommandNames, ...configuredPresets.map((preset) => preset.name)])).sort();
+  const snapshot = getProjectCommandConfigSnapshot(root);
+  const impactRules = loadProjectVerificationImpactRules(root);
+  const changedFiles = normalizeInspectionChangedFiles(args.changedFiles);
+  const requestedLane: ExecutionLane | undefined = args.requestedLane === 'fast' || args.requestedLane === 'safe' || args.requestedLane === 'full'
+    ? args.requestedLane
+    : undefined;
+
+  const presets = commandNames.flatMap((command) => {
+    const resolved = resolveCommandForInspection(root, command, packageConfig.scripts, configuredByName.get(command));
+    if (!resolved) return [];
+    const cwdPath = resolveSafeCommandCwd(root, resolved.cwd);
+    const descriptor = buildProjectCommandDescriptor(root, command, resolved, cwdPath);
+    const resourceDescriptor = resourceProfileDescriptorFor(root, descriptor, args);
+    const resourcePrediction = predictVerificationResourceCost(resourceDescriptor);
+    return [{
+      ...descriptor,
+      acceptsTargets: resolved.acceptsTargets === true,
+      ...(resolved.category ? { category: resolved.category } : {}),
+      quality: buildPresetQualitySignal(descriptor, resourcePrediction),
+      resourcePrediction: {
+        confidence: resourcePrediction.confidence,
+        sampleCount: resourcePrediction.sampleCount,
+        successfulSampleCount: resourcePrediction.successfulSampleCount,
+        expected: resourcePrediction.expected,
+        upperBound: resourcePrediction.upperBound,
+      },
+    }];
+  });
+
+  const plan = changedFiles.length > 0
+    ? planVerification({
+        changedFiles,
+        requestedLane,
+        resolvedCommands: presets.map((preset) => ({
+          command: preset.command,
+          semanticKey: preset.semanticKey,
+          scope: preset.scope,
+          cost: preset.cost,
+          resourceKey: preset.resourceKey,
+          verificationClass: preset.verificationClass,
+          sharedResources: [...preset.sharedResources],
+        })),
+        impactRules,
+      })
+    : null;
+  const commandConfigPath = snapshot.relativePaths.find((relativePath) => PROJECT_COMMAND_CONFIG_RELATIVE_PATHS.some((candidate) => candidate === relativePath));
+  const impactMapPresent = snapshot.relativePaths.includes(PROJECT_VERIFICATION_IMPACT_RELATIVE_PATH);
+  const hasLowCostTargetedPreset = presets.some((preset) => preset.scope === 'targeted' && preset.cost === 'low');
+  const shouldSuggestPresetGeneration = presets.length === 0
+    || (changedFiles.length > 0 && plan?.lane === 'fast' && !hasLowCostTargetedPreset);
+  return {
+    ok: true,
+    readOnly: true,
+    processSpawns: 0,
+    config: {
+      fingerprint: snapshot.fingerprint,
+      commandConfigPresent: Boolean(commandConfigPath),
+      ...(commandConfigPath ? { commandConfigPath } : {}),
+      impactMapPresent,
+      impactRuleCount: impactRules.length,
+    },
+    cacheIdentity: {
+      commandConfigFingerprint: snapshot.fingerprint,
+      buildMetadataFingerprint: getVerificationBuildMetadataFingerprint(root),
+      lineageToken: getRepoCacheLineage(root, [...PROJECT_COMMAND_CACHE_DEPENDENCIES]).token,
+    },
+    buildEvidence: detectVerificationBuildEvidence(root, packageConfig.exists),
+    changedFiles,
+    presets,
+    plan,
+    guidance: {
+      recommendedCommands: plan?.commands ?? [],
+      shouldSuggestPresetGeneration,
+      autoGenerationAllowed: false,
+      temporaryScriptFallbackAllowed: false,
+      reasons: shouldSuggestPresetGeneration
+        ? ['No adequate low-cost targeted preset is evidenced for this inspection; inspect the real build/test structure before proposing reusable preset configuration.']
+        : ['Use the existing planner recommendation and do not broaden verification unless its risk policy requires escalation.'],
+    },
   };
 }
 

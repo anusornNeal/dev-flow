@@ -15,7 +15,7 @@ const AUTHORING_SKILL_IDS = [
   '08-board-loop-execution',
 ];
 const AUTHORING_SKILL_ID_SET = new Set(AUTHORING_SKILL_IDS);
-const GUIDANCE_SKILL_IDS = ['brainstorming-guidance', 'ui-ux-guidance'];
+const GUIDANCE_SKILL_IDS = ['brainstorming-guidance', 'ui-ux-guidance', 'verification-preset-guidance'];
 const GUIDANCE_SKILL_ID_SET = new Set(GUIDANCE_SKILL_IDS);
 
 

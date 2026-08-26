@@ -15,6 +15,8 @@ const {
   runProjectCommand,
   runProjectCommandAsync,
   describeProjectCommand,
+  describeProjectCommandResourceProfile,
+  inspectProjectVerificationPresets,
   getProjectCommandExecutionIdentity,
   prepareProjectCommandVerificationCandidateAsync,
   buildProjectCommandInfrastructureRecovery,
@@ -26,7 +28,7 @@ const { isVerificationCandidateCurrent, releaseVerificationCandidate } = await i
 const { clearWorkspaceMetadataCache, getWorkspaceMetadataCacheStats } = await import('../../src/server/services/workspaceMetadataCacheService.js');
 const { createProject: upsertProject } = await import('../../src/server/repositories/projectRepository.js');
 const { invalidateRepoCacheDependencies } = await import('../../src/server/services/repoCacheInvalidationService.js');
-const { clearVerificationResourceProfilesForTests, getVerificationResourceProfileDiagnostics } = await import('../../src/server/services/verificationResourceProfileService.js');
+const { clearVerificationResourceProfilesForTests, getVerificationResourceProfileDiagnostics, recordVerificationResourceSample } = await import('../../src/server/services/verificationResourceProfileService.js');
 
 function createProject(name: string, scripts: Record<string, string>) {
   const root = path.join(tempRoot, name);
@@ -1376,4 +1378,165 @@ test('low-confidence or retried PASS is not promoted to reusable evidence by def
   assert.equal(first.cache?.reusable, false);
   assert.equal(second.cache?.hit, false);
   assert.equal(fs.readFileSync(counterPath, 'utf8'), '2');
+});
+
+test('verification inspection lists only runnable package and repository presets without executing them', () => {
+  const root = createProject('inspect-presets', {
+    typecheck: 'node scripts/typecheck.mjs',
+    'benchmark:verification': 'node scripts/benchmark.mjs',
+    'admin:unsafe': 'node scripts/admin.mjs',
+  });
+  fs.mkdirSync(path.join(root, '.devflow'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.devflow', 'commands.yaml'), [
+    'commands:',
+    '  focused:',
+    '    executable: node',
+    '    args:',
+    '      - scripts/focused.mjs',
+    '    category: test',
+    '    acceptsTargets: true',
+    '',
+  ].join('\n'));
+
+  const inspection = inspectProjectVerificationPresets(stateFor(root), { projectId: 'project-command' });
+  const names = inspection.presets.map((preset: any) => preset.command);
+  assert.equal(inspection.readOnly, true);
+  assert.equal(inspection.processSpawns, 0);
+  assert.deepEqual(names, ['benchmark:verification', 'focused', 'typecheck']);
+  assert.equal(names.includes('admin:unsafe'), false);
+  assert.equal(inspection.presets.find((preset: any) => preset.command === 'typecheck')?.source, 'package-json');
+  const focused = inspection.presets.find((preset: any) => preset.command === 'focused');
+  assert.equal(focused?.source, 'repository-config');
+  assert.equal(focused?.acceptsTargets, true);
+  assert.equal(focused?.configPath, '.devflow/commands.yaml');
+  assert.equal(inspection.config.commandConfigPresent, true);
+});
+
+test('verification inspection discovers valid JSON repository presets with target metadata', () => {
+  const root = createConfigProject('inspect-json-preset', JSON.stringify({
+    commands: {
+      focusedJson: {
+        executable: 'node',
+        args: ['--version'],
+        category: 'test',
+        acceptsTargets: true,
+      },
+    },
+  }, null, 2), 'json');
+  const inspection = inspectProjectVerificationPresets(stateFor(root), { projectId: 'project-command' });
+  const preset = inspection.presets.find((entry: any) => entry.command === 'focusedJson');
+  assert.equal(preset?.source, 'repository-config');
+  assert.equal(preset?.configPath, '.devflow/commands.json');
+  assert.equal(preset?.acceptsTargets, true);
+  assert.equal(preset?.scope, 'targeted');
+  assert.equal(preset?.cost, 'low');
+});
+
+test('verification inspection reuses repository impact rules and the existing planner for changed files', () => {
+  const root = createProject('inspect-impact-plan', {
+    typecheck: 'node scripts/typecheck.mjs',
+    test: 'node scripts/test.mjs',
+    verify: 'node scripts/verify.mjs',
+  });
+  fs.mkdirSync(path.join(root, '.devflow'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.devflow', 'verification-impact.json'), JSON.stringify({ rules: [{
+    id: 'service-tests', patterns: ['src/server/services/**'], commands: ['test'], lane: 'fast', reason: 'Focused service tests cover this path.',
+  }] }));
+  const inspection = inspectProjectVerificationPresets(stateFor(root), {
+    projectId: 'project-command', changedFiles: ['src/server/services/exampleService.ts'],
+  });
+  assert.equal(inspection.plan?.impact.mode, 'configured');
+  assert.deepEqual(inspection.plan?.impact.matchedRuleIds, ['service-tests']);
+  assert.deepEqual(inspection.plan?.commands, ['test']);
+  assert.ok(inspection.plan?.impact.omittedCommands.some((entry: any) => entry.command === 'verify'));
+});
+
+test('verification inspection suggests reusable config for npm without a targeted preset and performs no write', () => {
+  const root = createProject('inspect-npm-no-target', { typecheck: 'node scripts/typecheck.mjs' });
+  const inspection = inspectProjectVerificationPresets(stateFor(root), {
+    projectId: 'project-command',
+    changedFiles: ['src/app.ts'],
+  });
+  assert.ok(inspection.buildEvidence.some((entry: any) => entry.kind === 'package-json'));
+  assert.equal(inspection.guidance.shouldSuggestPresetGeneration, true);
+  assert.equal(inspection.guidance.autoGenerationAllowed, false);
+  assert.equal(inspection.guidance.temporaryScriptFallbackAllowed, false);
+  assert.equal(fs.existsSync(path.join(root, '.devflow', 'commands.yaml')), false);
+});
+
+test('verification inspection degrades conservatively for Gradle evidence with no known runnable preset', () => {
+  const root = path.join(tempRoot, 'inspect-gradle-only');
+  fs.mkdirSync(root, { recursive: true });
+  fs.writeFileSync(path.join(root, 'settings.gradle.kts'), 'rootProject.name = "fixture"\n');
+  fs.writeFileSync(path.join(root, 'build.gradle.kts'), 'plugins {}\n');
+  const inspection = inspectProjectVerificationPresets(stateFor(root), {
+    projectId: 'project-command', changedFiles: ['src/main/kotlin/App.kt'],
+  });
+  assert.deepEqual(inspection.presets, []);
+  assert.ok(inspection.buildEvidence.some((entry: any) => entry.kind === 'gradle'));
+  assert.equal(inspection.guidance.shouldSuggestPresetGeneration, true);
+  assert.equal(inspection.guidance.autoGenerationAllowed, false);
+  assert.equal(inspection.guidance.temporaryScriptFallbackAllowed, false);
+  assert.equal(fs.existsSync(path.join(root, '.devflow', 'commands.yaml')), false);
+});
+
+test('verification inspection cache identity reacts to config, build metadata, and repository lineage', () => {
+  const root = createProject('inspect-cache-identity', { typecheck: 'node scripts/typecheck.mjs' });
+  const initial = inspectProjectVerificationPresets(stateFor(root), { projectId: 'project-command' });
+  fs.mkdirSync(path.join(root, '.devflow'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.devflow', 'verification-impact.json'), JSON.stringify({
+    rules: [{ id: 'source-check', patterns: ['src/**'], commands: ['typecheck'] }],
+  }));
+  const afterConfig = inspectProjectVerificationPresets(stateFor(root), { projectId: 'project-command' });
+  assert.notEqual(afterConfig.cacheIdentity.commandConfigFingerprint, initial.cacheIdentity.commandConfigFingerprint);
+
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({
+    type: 'module',
+    scripts: { typecheck: 'node scripts/typecheck.mjs', lint: 'node scripts/lint.mjs' },
+  }, null, 2));
+  const afterBuildMetadata = inspectProjectVerificationPresets(stateFor(root), { projectId: 'project-command' });
+  assert.notEqual(afterBuildMetadata.cacheIdentity.buildMetadataFingerprint, afterConfig.cacheIdentity.buildMetadataFingerprint);
+
+  const lineageBefore = afterBuildMetadata.cacheIdentity.lineageToken;
+  invalidateRepoCacheDependencies({ root, reason: 'verification-inspection-test', dependencies: ['repo-content'] });
+  const afterLineage = inspectProjectVerificationPresets(stateFor(root), { projectId: 'project-command' });
+  assert.notEqual(afterLineage.cacheIdentity.lineageToken, lineageBefore);
+});
+
+test('verification inspection preserves structured command-config ambiguity and parse errors', () => {
+  const ambiguousRoot = createConfigProject('inspect-ambiguous', 'commands:\n  safe:\n    executable: node\n    args:\n      - --version\n');
+  fs.writeFileSync(path.join(ambiguousRoot, '.devflow', 'commands.json'), JSON.stringify({ commands: {} }));
+  assert.throws(() => inspectProjectVerificationPresets(stateFor(ambiguousRoot), { projectId: 'project-command' }), (error: any) => error?.payload?.code === 'COMMAND_CONFIG_AMBIGUOUS');
+  const invalidRoot = createConfigProject('inspect-invalid', '{ invalid json', 'json');
+  assert.throws(() => inspectProjectVerificationPresets(stateFor(invalidRoot), { projectId: 'project-command' }), (error: any) => error?.payload?.code === 'INVALID_COMMAND_CONFIG');
+});
+
+test('verification inspection reports bounded advisory preset quality from existing resource telemetry', () => {
+  clearVerificationResourceProfilesForTests();
+  const root = createProject('inspect-quality', { test: 'node scripts/test.mjs' });
+  const state = stateFor(root);
+  const profile = describeProjectCommandResourceProfile(state, { projectId: 'project-command', command: 'test' });
+  const noneInspection = inspectProjectVerificationPresets(state, { projectId: 'project-command' });
+  const noneQuality = noneInspection.presets.find((preset: any) => preset.command === 'test')?.quality;
+  assert.equal(noneQuality?.confidence, 'none');
+  assert.equal(noneQuality?.status, 'insufficient-data');
+
+  recordVerificationResourceSample(profile.resourceDescriptor, { status: 'succeeded', durationMs: 20000 });
+  const lowInspection = inspectProjectVerificationPresets(state, { projectId: 'project-command' });
+  const lowQuality = lowInspection.presets.find((preset: any) => preset.command === 'test')?.quality;
+  assert.equal(lowQuality?.confidence, 'low');
+  assert.equal(lowQuality?.status, 'insufficient-data');
+
+  for (let index = 1; index < 3; index += 1) recordVerificationResourceSample(profile.resourceDescriptor, { status: 'succeeded', durationMs: 20000 + index * 1000 });
+  recordVerificationResourceSample(profile.resourceDescriptor, { status: 'failed', durationMs: 12000 });
+  recordVerificationResourceSample(profile.resourceDescriptor, { status: 'timed_out', durationMs: 30000 });
+  const inspection = inspectProjectVerificationPresets(state, { projectId: 'project-command' });
+  const quality = inspection.presets.find((preset: any) => preset.command === 'test')?.quality;
+  assert.equal(quality?.confidence, 'medium');
+  assert.equal(quality?.sampleCount, 5);
+  assert.equal(quality?.successfulSampleCount, 3);
+  assert.equal(quality?.failedSampleCount, 2);
+  assert.equal(quality?.failureRate, 0.4);
+  assert.equal(quality?.status, 'review');
+  clearVerificationResourceProfilesForTests();
 });

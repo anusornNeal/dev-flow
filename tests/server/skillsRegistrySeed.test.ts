@@ -41,7 +41,7 @@ test('initSkillsRepository seeds all repo authoring skills when the database is 
   assert.equal(authoringCore.isProtected, true);
 
   const guidance = getSkills().filter((skill: any) => skill.kind === 'guidance');
-  assert.deepEqual(guidance.map((skill: any) => skill.id), ['brainstorming-guidance', 'ui-ux-guidance']);
+  assert.deepEqual(guidance.map((skill: any) => skill.id), ['brainstorming-guidance', 'ui-ux-guidance', 'verification-preset-guidance']);
   for (const skill of guidance) {
     assert.equal(skill.isCustom, false);
     assert.equal(skill.isProtected, false);
@@ -148,18 +148,24 @@ test('guidance namespace lists compact metadata and retrieves only allowlisted g
   const listBody = await listResponse.json() as any[];
   const oneResponse = await fetch(`${base}/api/skills/guidance/brainstorming-guidance`);
   const oneBody = await oneResponse.json() as any;
+  const verificationResponse = await fetch(`${base}/api/skills/guidance/verification-preset-guidance`);
+  const verificationBody = await verificationResponse.json() as any;
   const unknownResponse = await fetch(`${base}/api/skills/guidance/00-skill-router`);
   const authoringResponse = await fetch(`${base}/api/skills/authoring`);
   const authoringBody = await authoringResponse.json() as any[];
   await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
 
   assert.equal(listResponse.status, 200);
-  assert.deepEqual(listBody.map((skill: any) => skill.id), ['brainstorming-guidance', 'ui-ux-guidance']);
+  assert.deepEqual(listBody.map((skill: any) => skill.id), ['brainstorming-guidance', 'ui-ux-guidance', 'verification-preset-guidance']);
   assert.ok(listBody.every((skill: any) => skill.kind === 'guidance' && !Object.hasOwn(skill, 'content')));
   assert.equal(oneResponse.status, 200);
   assert.equal(oneBody.id, 'brainstorming-guidance');
   assert.equal(oneBody.kind, 'guidance');
   assert.match(oneBody.content, /Brainstorming Guidance/i);
+  assert.equal(verificationResponse.status, 200);
+  assert.equal(verificationBody.id, 'verification-preset-guidance');
+  assert.match(verificationBody.content, /inspect_project_verification/);
+  assert.match(verificationBody.content, /do not invent|invent executable/i);
   assert.equal(unknownResponse.status, 404);
   assert.equal(authoringBody.some((skill: any) => skill.kind === 'guidance'), false);
 });

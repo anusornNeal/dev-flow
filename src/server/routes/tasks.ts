@@ -42,7 +42,7 @@ import { registerTaskReadRoutes } from './taskReadRoutes';
 import { registerTaskWorkflowRoutes } from './taskWorkflowRoutes';
 import { registerTaskClaimRoutes } from './taskClaimRoutes';
 import { buildTaskGitWarnings, evaluateReviewSubmission, syncTaskWithGit } from '../services/taskGitWorkflowService';
-import { withTaskDeletionLifecycleGuard } from '../services/taskClaimService.js';
+import { getProjectOrchestrationProjection, withTaskDeletionLifecycleGuard } from '../services/taskClaimService.js';
 
 import {
   applyAgentCompletionCallback,
@@ -73,6 +73,13 @@ export { completeAgentRunForTask, continueTaskQueueForProject, triggerTaskAgent 
 export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
   registerTaskSetAuthoringRoute(app, deps);
   registerTaskReadRoutes(app, deps);  registerTaskBugRoutes(app, deps);  registerTaskReviewRoutes(app, deps);  registerLegacyTaskAgentRoutes(app, deps);  registerTaskClaimRoutes(app, deps);
+  app.get('/api/tasks/orchestration', (req, res) => {
+    try {
+      return res.json(getProjectOrchestrationProjection(String(req.query.projectId || '')));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
   app.post('/api/tasks/draft-from-jira', async (req, res, next) => {
     try {
       const fingerprint = buildIdempotencyFingerprint(req.method, req.path, req.body);

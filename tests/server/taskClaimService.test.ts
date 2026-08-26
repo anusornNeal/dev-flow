@@ -976,6 +976,39 @@ test('expired runtime reservations stop blocking new claims', () => {
   assert.equal(contender.task.status, 'in-progress');
 });
 
+test('orchestration projection gives each task one durable state and keeps independent ready work available beside attention', () => {
+  const projectId = 'project-orchestration-projection';
+  createCandidateProject(projectId);
+  seedCandidateTask(projectId, 'queue-attention', ['src/QueueAttention.ts'], { priority: 'high' });
+  seedCandidateTask(projectId, 'queue-dependent', ['src/QueueDependent.ts'], { priority: 'high', prerequisiteTaskIds: ['queue-attention'], createdAt: '2026-08-10T00:00:01.000Z' });
+  seedCandidateTask(projectId, 'queue-ready', ['src/QueueReady.ts'], { priority: 'medium', createdAt: '2026-08-10T00:00:02.000Z' });
+  seedCandidateTask(projectId, 'queue-ready-second', ['src/QueueReadySecond.ts'], { priority: 'low', createdAt: '2026-08-10T00:00:03.000Z' });
+
+  claims.claimTaskForSession('queue-attention', { sessionId: 'queue-attention-owner', ownerLabel: 'Chat Queue Attention' });
+  const attentionExecution = listExecutionSessionsForTask('queue-attention')[0];
+  assert.ok(attentionExecution);
+  execution.cancelExecutionSession(attentionExecution.id);
+
+  const firstProjection = claims.getProjectOrchestrationProjection(projectId);
+  const ids = firstProjection.entries.map((entry: any) => entry.taskId);
+  assert.equal(new Set(ids).size, ids.length, 'one task must have exactly one canonical orchestration entry');
+  const byId = new Map(firstProjection.entries.map((entry: any) => [entry.taskId, entry]));
+  assert.equal((byId.get('queue-attention') as any)?.state, 'attention');
+  assert.equal((byId.get('queue-dependent') as any)?.state, 'blocked');
+  assert.equal((byId.get('queue-dependent') as any)?.reasons?.[0]?.code, 'TASK_PREREQUISITES_BLOCKING');
+  assert.equal((byId.get('queue-ready') as any)?.state, 'ready');
+  assert.equal(firstProjection.counts.attention >= 1, true);
+  assert.equal(firstProjection.counts.ready >= 2, true, 'attention on one task must not serialize independent runnable work');
+
+  const projectedNext = firstProjection.entries.find((entry: any) => entry.state === 'ready');
+  const claimedNext = claims.claimNextTaskForSession(projectId, { sessionId: 'queue-next-worker', ownerLabel: 'Chat Queue Next', limit: 10 });
+  assert.equal(claimedNext.status, 'claimed');
+  assert.equal(claimedNext.task.id, projectedNext?.taskId, 'claim-next and orchestration projection must share the same eligibility/order rules');
+
+  const secondProjection = claims.getProjectOrchestrationProjection(projectId);
+  assert.equal(secondProjection.entries.find((entry: any) => entry.taskId === claimedNext.task.id)?.state, 'execution');
+});
+
 test.after(() => {
   try { fs.rmSync(tempRoot, { recursive: true, force: true }); } catch {}
 });

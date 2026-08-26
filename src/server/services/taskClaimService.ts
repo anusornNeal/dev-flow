@@ -28,6 +28,7 @@ import { computeLifecycleAuthoritySnapshot } from './lifecycleAuthorityService.j
 import { reconcileExecutionLifecycleStage } from './executionLifecycleReconciliationService.js';
 import { inspectWorkspaceRecovery } from './workspaceRecoveryService.js';
 import { assertTaskPrerequisitesSatisfied, getTaskPrerequisiteBlockers } from './taskDependencyService.js';
+import { evaluateExecutionContinuation } from './executionContinuationService.js';
 
 const DEFAULT_CLAIM_TTL_MS = 24 * 60 * 60 * 1000;
 const MIN_CLAIM_TTL_MS = 60_000;
@@ -199,6 +200,78 @@ function compareNextTaskOrder(left: any, right: any) {
   const createdDelta = String(left.createdAt || '').localeCompare(String(right.createdAt || ''));
   if (createdDelta !== 0) return createdDelta;
   return String(left.displayId || left.id || '').localeCompare(String(right.displayId || right.id || ''));
+}
+
+type OrchestrationState = 'ready' | 'execution' | 'attention' | 'blocked';
+
+type OrchestrationReason = {
+  code: string;
+  message: string;
+  affectedId?: string | null;
+  details?: Record<string, unknown>;
+};
+
+function evaluateTaskClaimEligibility(task: any, projectTasks: any[], parentIds: Set<string>, nowMs: number) {
+  const reasons: OrchestrationReason[] = [];
+  if (parentIds.has(String(task.id))) reasons.push({ code: 'TASK_PARENT_COORDINATION_SCOPE', message: 'Parent/program tasks are coordination scopes and are not auto-claimed while child work exists.', affectedId: task.id });
+  if (isActiveClaim(task.claim, nowMs)) reasons.push({ code: 'TASK_ALREADY_CLAIMED', message: 'Task already has an active durable claim.', affectedId: task.id });
+  if (isExplicitFinalGate(task)) reasons.push({ code: 'TASK_FINAL_GATE', message: 'Explicit final-gate tasks require deliberate terminal orchestration instead of ordinary auto-claim.', affectedId: task.id });
+  const prerequisiteBlockers = getTaskPrerequisiteBlockers(task, projectTasks);
+  if (prerequisiteBlockers.length > 0) reasons.push({ code: 'TASK_PREREQUISITES_BLOCKING', message: 'Task prerequisites are not terminal yet.', affectedId: task.id, details: { blockers: prerequisiteBlockers.slice(0, 20) } });
+  if (normalizedTargetFiles(task).size === 0) reasons.push({ code: 'TASK_SCOPE_UNBOUNDED', message: 'Task has no bounded target-file scope for safe automatic scheduling.', affectedId: task.id });
+  const scopeConflicts = findScopeConflicts(task, projectTasks, nowMs);
+  if (scopeConflicts.length > 0) reasons.push({ code: 'TASK_SCOPE_CONFLICT', message: 'Task target scope overlaps an active claimed scope.', affectedId: task.id, details: { conflicts: scopeConflicts.slice(0, 20) } });
+  return { eligible: reasons.length === 0, reasons, prerequisiteBlockers };
+}
+
+function boundedContinuationReasons(continuation: ReturnType<typeof evaluateExecutionContinuation>) {
+  if (continuation.blockers.length > 0) return continuation.blockers.slice(0, 8).map((entry) => ({ code: entry.code, message: entry.message.slice(0, 500), affectedId: entry.affectedId ?? null }));
+  return continuation.reasonCodes.slice(0, 8).map((code) => ({ code, message: code }));
+}
+
+export function getProjectOrchestrationProjection(projectId: string) {
+  const cleanProjectId = String(projectId || '').trim();
+  if (!cleanProjectId) throw createApiError(400, 'PROJECT_ID_REQUIRED', 'projectId is required for orchestration projection.');
+  const project = getProject(cleanProjectId);
+  if (!project) throw createApiError(404, 'PROJECT_NOT_FOUND', `Project '${cleanProjectId}' was not found.`, { affectedId: cleanProjectId });
+  const nowMs = Date.now();
+  const projectTasks = getTasksByProjectId(cleanProjectId);
+  const parentIds = new Set(projectTasks.map((task) => String(task.parentId || '')).filter(Boolean));
+  const entries = projectTasks
+    .filter((task) => !task.archivedAt && task.status !== 'done')
+    .sort(compareNextTaskOrder)
+    .map((task) => {
+      const sessions = listExecutionSessionsForTask(task.id);
+      const activeExecution = sessions.find((entry) => entry.status === 'active') || null;
+      const latestExecution = activeExecution || sessions[0] || null;
+      const activeClaim = isActiveClaim(task.claim, nowMs);
+      const base = { taskId: task.id, displayId: task.displayId, title: task.title, taskStatus: task.status };
+      if (parentIds.has(String(task.id)) && !activeClaim && !activeExecution) return { ...base, state: 'blocked' as OrchestrationState, reasons: [{ code: 'TASK_PARENT_COORDINATION_SCOPE', message: 'Parent/program task is represented by its child work and is not an ordinary runnable leaf.' }] };
+      if (task.status === 'ready-for-review') return { ...base, state: 'attention' as OrchestrationState, reasons: [{ code: 'TASK_REVIEW_ATTENTION_REQUIRED', message: 'Task is waiting for review/reasoning attention.' }] };
+      if (task.status === 'in-progress') {
+        if (!latestExecution) return { ...base, state: 'attention' as OrchestrationState, reasons: [{ code: 'TASK_EXECUTION_SESSION_MISSING', message: 'In-progress task has no durable execution session to continue or recover.' }] };
+        const continuation = evaluateExecutionContinuation({} as any, latestExecution.id, { workspaceId: task.claim?.workspaceId || latestExecution.workspaceId || undefined });
+        const context = {
+          executionSessionId: continuation.executionSessionId,
+          workspaceId: continuation.execution.workspaceId,
+          pendingOperationIds: continuation.pendingOperations.slice(0, 8).map((entry) => entry.operationId),
+          jobIds: continuation.pendingOperations.slice(0, 8).map((entry) => entry.jobId).filter(Boolean),
+          finalizationOperationId: continuation.finalization?.operationId || null,
+          autonomousTailJobId: continuation.autonomousTail.jobId,
+        };
+        if (continuation.blocked || continuation.autonomousTail.state === 'attention') return { ...base, state: 'attention' as OrchestrationState, reasons: boundedContinuationReasons(continuation), context };
+        return { ...base, state: 'execution' as OrchestrationState, reasons: boundedContinuationReasons(continuation), context };
+      }
+      if (task.status === 'backlog' || task.status === 'todo') {
+        if (activeClaim) return { ...base, state: 'attention' as OrchestrationState, reasons: [{ code: 'TASK_CLAIM_STATUS_DRIFT', message: 'Task has an active claim but is not projected as in-progress.' }] };
+        const eligibility = evaluateTaskClaimEligibility(task, projectTasks, parentIds, nowMs);
+        return { ...base, state: (eligibility.eligible ? 'ready' : 'blocked') as OrchestrationState, reasons: eligibility.reasons };
+      }
+      return { ...base, state: 'blocked' as OrchestrationState, reasons: [{ code: 'TASK_STATUS_NOT_ORCHESTRATABLE', message: `Task status '${String(task.status || '')}' is not an orchestration queue state.` }] };
+    });
+  const counts: Record<OrchestrationState, number> = { ready: 0, execution: 0, attention: 0, blocked: 0 };
+  for (const entry of entries) counts[entry.state] += 1;
+  return { projectId: cleanProjectId, generatedAt: new Date(nowMs).toISOString(), entries, counts };
 }
 
 function activeTaskExecutionsForWorkspace(task: any, workspaceId: string) {
@@ -969,27 +1042,10 @@ export function claimNextTaskForSession(projectId: string, input: ClaimNextTaskI
     const dependencyBlocked: Array<{ taskId: string; displayId?: string; blockers: ReturnType<typeof getTaskPrerequisiteBlockers> }> = [];
 
     for (const task of bounded) {
-      if (parentIds.has(String(task.id))) {
+      const eligibility = evaluateTaskClaimEligibility(task, projectTasks, parentIds, nowMs);
+      if (!eligibility.eligible) {
         deferred += 1;
-        continue;
-      }
-      if (isActiveClaim(task.claim, nowMs)) continue;
-      if (isExplicitFinalGate(task)) {
-        deferred += 1;
-        continue;
-      }
-      const prerequisiteBlockers = getTaskPrerequisiteBlockers(task, projectTasks);
-      if (prerequisiteBlockers.length > 0) {
-        deferred += 1;
-        if (dependencyBlocked.length < 20) dependencyBlocked.push({ taskId: task.id, displayId: task.displayId, blockers: prerequisiteBlockers });
-        continue;
-      }
-      if (normalizedTargetFiles(task).size === 0) {
-        deferred += 1;
-        continue;
-      }
-      if (findScopeConflicts(task, projectTasks, nowMs).length > 0) {
-        deferred += 1;
+        if (eligibility.prerequisiteBlockers.length > 0 && dependencyBlocked.length < 20) dependencyBlocked.push({ taskId: task.id, displayId: task.displayId, blockers: eligibility.prerequisiteBlockers });
         continue;
       }
 

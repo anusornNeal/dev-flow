@@ -27,6 +27,23 @@ createProject({
 });
 
 taskRepository.saveTask({
+  id: 'task-read-v2-prereq',
+  displayId: 'TRV-0002',
+  title: 'Read prerequisite fixture',
+  description: '',
+  projectId: 'proj-task-read-v2',
+  status: 'done',
+  priority: 'medium',
+  category: 'backend',
+  tags: [],
+  targetFiles: [],
+  checklist: [],
+  logs: [],
+  createdAt: '2026-08-08T00:00:00.000Z',
+  updatedAt: '2026-08-08T00:00:00.000Z',
+});
+
+taskRepository.saveTask({
   id: 'task-read-v2-1',
   displayId: 'TRV-0001',
   title: 'Indexed task read fixture',
@@ -107,6 +124,24 @@ test('summary repository read omits heavy fields and only exposes the latest run
   assert.equal(task.latestAgentRun?.id, latestRun.id);
 });
 
+test('task update resolves display-id prerequisites to canonical ids and exposes them in summary and agent context', async () => {
+  const updateResponse = await fetch(`${base}/api/tasks/TRV-0001`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ prerequisiteTaskIds: ['TRV-0002'], status: 'backlog' }),
+  });
+  assert.equal(updateResponse.status, 200, await updateResponse.text());
+  assert.deepEqual(taskRepository.getTaskByIdentifier('TRV-0001', 'full').prerequisiteTaskIds, ['task-read-v2-prereq']);
+
+  const summaryResponse = await fetch(`${base}/api/tasks/TRV-0001?mode=summary`);
+  const summary = await summaryResponse.json() as any;
+  assert.deepEqual(summary.prerequisiteTaskIds, ['task-read-v2-prereq']);
+
+  const agentResponse = await fetch(`${base}/api/tasks/TRV-0001?mode=agent-context`);
+  const agent = await agentResponse.json() as any;
+  assert.deepEqual(agent.requirements.prerequisiteTaskIds, ['task-read-v2-prereq']);
+});
+
 test('single-task HTTP modes preserve compact and full response contracts', async () => {
   const summaryResponse = await fetch(`${base}/api/tasks/TRV-0001?mode=summary`);
   assert.equal(summaryResponse.status, 200);
@@ -121,7 +156,7 @@ test('single-task HTTP modes preserve compact and full response contracts', asyn
   const full = await fullResponse.json() as any;
   assert.equal(full.description, 'Heavy description that compact modes should not return.');
   assert.equal(full.reasoning, 'Heavy reasoning blob.');
-  assert.equal(full.logs.length, 1);
+  assert.equal(full.logs.length > 0, true);
 
   assert.ok(Buffer.byteLength(JSON.stringify(summary), 'utf8') < Buffer.byteLength(JSON.stringify(full), 'utf8') / 2);
 });

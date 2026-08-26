@@ -120,7 +120,7 @@ export const taskToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'claim_next_task',
-    description: 'Atomically select and claim the next deterministic eligible leaf task for one board-loop worker. projectId is the originating selected board boundary and must remain unchanged for the lifetime of that loop unless the user explicitly switches projects. Selection is bounded and conservative. NO_ELIGIBLE_TASK stops the current project loop; do not substitute another projectId to find work. For explicit or ambiguous fallback work, use bounded minimal/summary search_tasks reads across both backlog and todo in that same project before claim_task; never use an unfiltered or done collection as ordinary next-work selection.',
+    description: 'Atomically select and claim the next deterministic eligible leaf task for one board-loop worker. Structured prerequisiteTaskIds are authoritative eligibility gates; blocked dependents are skipped until their prerequisites are done, then become immediately eligible without a lane shuffle. projectId is the originating selected board boundary and must remain unchanged for the lifetime of that loop unless the user explicitly switches projects. Selection is bounded and conservative. NO_ELIGIBLE_TASK stops the current project loop; do not substitute another projectId to find work.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -138,7 +138,7 @@ export const taskToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'claim_task',
-    description: 'Atomically claim one eligible task for this caller session. Successful claims move the task to in-progress, bind a managed workspace, and reject duplicate or overlapping active work.',
+    description: 'Atomically claim one eligible task for this caller session. Successful claims move the task to in-progress, bind a managed workspace, and reject unfinished prerequisites, duplicate ownership, or overlapping active work.',
     inputSchema: {
       type: 'object',
       properties: {

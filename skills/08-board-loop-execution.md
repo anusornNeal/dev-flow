@@ -26,7 +26,7 @@ At loop start, resolve the intended board/project once and pin its `projectId` a
 5. If foreign dirty WIP owns a conflicting card, preserve it and choose safe non-overlapping eligible work. Report blocked only when no safe alternate eligible work exists.
 
 6. Use only the managed workspace returned by the successful claim. Load `07-authoring-execution` and implement exactly the claimed scope under its ownership and verification policy.
-7. Independent sibling children may run in parallel when target scope is disjoint and no real prerequisite blocks them. A shared parent does not serialize siblings by itself.
+7. Independent sibling children may run in parallel when target scope is disjoint and no real prerequisite blocks them. A shared parent does not serialize siblings by itself. Treat structured `prerequisiteTaskIds` eligibility from claim APIs as authoritative; after completing a prerequisite, immediately continue the same explicit loop so newly runnable dependents can be selected without manual status churn.
 8. Before terminal completion, refresh relevant local base/sibling state so integration does not overwrite newer independent work.
 9. After the execution specialist has produced a clean committed workspace and required checks, prefer `finalize_task_workspace` for the terminal task flow. A clean commit or passing verification is not a response boundary; continue through required finalization and cleanup.
 10. If finalization reports `needs-recovery`, preserve the workspace. Inspect with `inspect_workspace_recovery` and use integration/conflict/cleanup primitives only as explicit recovery paths. Never force-clean ambiguous WIP.

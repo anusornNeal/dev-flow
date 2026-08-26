@@ -229,6 +229,11 @@ export function validateTaskPayload(item: any, isUpdate = false): string | null 
   }
   if (item.targetFiles !== undefined && !Array.isArray(item.targetFiles)) return "Field 'targetFiles' must be an array.";
   if (item.checklist !== undefined && !Array.isArray(item.checklist)) return "Field 'checklist' must be an array.";
+  if (item.prerequisiteTaskIds !== undefined && !Array.isArray(item.prerequisiteTaskIds)) return "Field 'prerequisiteTaskIds' must be an array.";
+  if (Array.isArray(item.prerequisiteTaskIds)) {
+    if (item.prerequisiteTaskIds.length > 50) return "Field 'prerequisiteTaskIds' can contain at most 50 entries.";
+    if (item.prerequisiteTaskIds.some((entry: unknown) => typeof entry !== 'string' || !String(entry).trim())) return "Field 'prerequisiteTaskIds' must contain only non-empty strings.";
+  }
   if (item.designImages !== undefined && item.designImages !== null) {
     if (!Array.isArray(item.designImages)) return "Field 'designImages' must be an array.";
     if (item.designImages.length > 5) return "Field 'designImages' can contain at most 5 images.";
@@ -695,6 +700,7 @@ export function getAgentTaskContext(state: AppState, targetId: string, includeLo
       verification: task.verification,
       checklist: task.checklist,
       targetFiles: task.targetFiles,
+      prerequisiteTaskIds: task.prerequisiteTaskIds,
     }),
     bugSummary: buildCompactAgentBugSummary(task),
     repoContext: task.repoContext || undefined,
@@ -710,6 +716,7 @@ export function getAgentTaskContext(state: AppState, targetId: string, includeLo
         priority: subtask.priority,
         branch: subtask.branch,
         targetFiles: subtask.targetFiles,
+        prerequisiteTaskIds: subtask.prerequisiteTaskIds,
       })) : undefined,
       parentBoundary: parentRaw ? cleanObject({
         id: parentRaw.id,

@@ -9,6 +9,7 @@ import { workspaceToolDefinitions } from '../../src/server/contracts/devflowWork
 import { emergencyToolDefinitions } from '../../src/server/contracts/devflowEmergencyTools.js';
 
 const TASK_TOOL_NAMES = [
+  'get_execution_continuation',
   'list_tasks', 'search_tasks', 'get_task', 'get_task_images',
   'open_task_bug', 'update_task_bug_status', 'create_task', 'update_task', 'claim_next_task', 'claim_task', 'expand_task_scope', 'release_task_claim', 'batch_upsert_tasks', 'import_tasks_from_file',
   'sync_task_with_git', 'submit_task_for_review', 'update_external_task_status', 'move_task_status', 'move_task_to_status', 'complete_task_review',
@@ -21,6 +22,13 @@ const GIT_TOOL_NAMES = [
 ];
 
 test('task-domain contracts are owned by a focused module and composed into the aggregate catalog', () => {
+  const create = taskToolDefinitions.find((tool) => tool.name === 'create_task')!;
+  const update = taskToolDefinitions.find((tool) => tool.name === 'update_task')!;
+  assert.equal((create.inputSchema as any).properties.prerequisiteTaskIds.type, 'array');
+  assert.equal((create.inputSchema as any).properties.taskSetKey.type, 'string');
+  assert.equal((update.inputSchema as any).properties.prerequisiteTaskIds.type, 'array');
+  assert.match(String(taskToolDefinitions.find((tool) => tool.name === 'claim_next_task')?.description || ''), /prerequisiteTaskIds/);
+
   assert.deepEqual(taskToolDefinitions.map((tool) => tool.name), TASK_TOOL_NAMES);
   const aggregateNames = devFlowToolDefinitions.map((tool) => tool.name);
   const first = aggregateNames.indexOf(TASK_TOOL_NAMES[0]);

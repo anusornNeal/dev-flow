@@ -19,6 +19,7 @@ import { uiPreviewObjectStorageMigration } from './017-ui-preview-object-storage
 import { uiPreviewWorkspacesMigration } from './018-ui-preview-workspaces.js';
 import { taskFinalizationOperationsMigration } from './019-task-finalization-operations.js';
 import { lifecycleEmergencyOperationsMigration } from './020-lifecycle-emergency-operations.js';
+import { taskPrerequisitesMigration } from './021-task-prerequisites.js';
 import db from '../index.js';
 
 export const DEVFLOW_MIGRATIONS = [
@@ -42,6 +43,7 @@ export const DEVFLOW_MIGRATIONS = [
   uiPreviewWorkspacesMigration,
   taskFinalizationOperationsMigration,
   lifecycleEmergencyOperationsMigration,
+  taskPrerequisitesMigration,
 ] as const;
 
 export function executeAllMigrations() {

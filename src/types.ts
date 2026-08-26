@@ -183,6 +183,7 @@ export interface Task {
   }[];
   model?: string; // Model name
   parentId?: string; // ID of the parent task if this is a subtask
+  prerequisiteTaskIds?: string[]; // Canonical same-project prerequisite task IDs; independent siblings omit this field.
   effort?: string; // Effort level (varies by agent and model)
   reasoning?: string;
   acceptanceCriteria?: string;

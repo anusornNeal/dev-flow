@@ -2,7 +2,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import type { AppState } from '../types.js';
-import { getTaskByIdentifier } from '../repositories/taskRepository.js';
+import { getTaskByIdentifier, getTasksByProjectId } from '../repositories/taskRepository.js';
 import { getProject } from '../repositories/projectRepository.js';
 import { listExecutionSessionsForTask } from '../repositories/executionSessionRepository.js';
 import {
@@ -29,6 +29,7 @@ import { resolveTaskVerificationCoverage, type TaskVerificationCoverageResolutio
 import { summarizeQualityDebt, type TaskQualityDebtSummary } from './qualityDebtService.js';
 import { withSyncLock } from './lockAndIdempotencyService.js';
 import { evaluateExecutionContinuation } from './executionContinuationService.js';
+import { assertTaskPrerequisitesSatisfied } from './taskDependencyService.js';
 
 export type TaskWorkspaceFinalizationCheck = {
   name?: string;
@@ -629,6 +630,7 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
   return withSyncLock(`task-finalization:${taskId}:${workspaceId}`, () => {
     let task = getTaskByIdentifier(taskId, 'full');
     if (!task) throw createApiError(404, 'TASK_NOT_FOUND', `Task '${taskId}' was not found.`, { affectedId: taskId });
+    assertTaskPrerequisitesSatisfied(task, getTasksByProjectId(task.projectId), 'finalization');
 
     let operation = requestedOperationId
       ? getTaskFinalizationOperation(requestedOperationId)

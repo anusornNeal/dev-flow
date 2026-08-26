@@ -95,6 +95,7 @@ function seedCandidateTask(projectId: string, id: string, targetFiles: string[],
   tags?: string[];
   status?: 'backlog' | 'todo' | 'in-progress';
   createdAt?: string;
+  prerequisiteTaskIds?: string[];
 } = {}) {
   const now = options.createdAt || new Date().toISOString();
   saveTask({
@@ -110,6 +111,7 @@ function seedCandidateTask(projectId: string, id: string, targetFiles: string[],
     targetFiles,
     checklist: [],
     parentId: options.parentId,
+    prerequisiteTaskIds: options.prerequisiteTaskIds || [],
     createdAt: now,
     updatedAt: now,
     logs: [],
@@ -854,6 +856,40 @@ test('claim next selects the highest-priority eligible leaf and keeps final gate
   assert.equal(second.status, 'claimed');
   assert.equal(second.task.id, 'next-child');
   assert.notEqual(second.task.id, first.task.id);
+});
+
+test('structured prerequisites block direct claim, are skipped with details by claim-next, and unlock without lane churn', () => {
+  const projectId = 'project-next-prerequisites';
+  createCandidateProject(projectId);
+  seedCandidateTask(projectId, 'prereq-foundation', ['src/Foundation.ts'], { status: 'in-progress', priority: 'high' });
+  seedCandidateTask(projectId, 'prereq-dependent', ['src/Dependent.ts'], { priority: 'high', prerequisiteTaskIds: ['prereq-foundation'], createdAt: '2026-08-10T00:00:01.000Z' });
+  seedCandidateTask(projectId, 'prereq-parallel-a', ['src/ParallelA.ts'], { priority: 'medium', createdAt: '2026-08-10T00:00:02.000Z' });
+  seedCandidateTask(projectId, 'prereq-parallel-b', ['src/ParallelB.ts'], { priority: 'medium', createdAt: '2026-08-10T00:00:03.000Z' });
+
+  assert.throws(
+    () => claims.claimTaskForSession('prereq-dependent', { sessionId: 'dep-direct', ownerLabel: 'Chat Dep' }),
+    (error: any) => error?.payload?.code === 'TASK_PREREQUISITES_BLOCKING'
+      && error?.payload?.details?.blockers?.[0]?.taskId === 'prereq-foundation',
+  );
+
+  const first = claims.claimNextTaskForSession(projectId, { sessionId: 'dep-loop-a', ownerLabel: 'Chat Loop A', limit: 10 });
+  assert.equal(first.status, 'claimed');
+  assert.equal(first.task.id, 'prereq-parallel-a');
+  assert.equal(first.dependencyBlocked.some((entry: any) => entry.taskId === 'prereq-dependent'), true);
+
+  const second = claims.claimNextTaskForSession(projectId, { sessionId: 'dep-loop-b', ownerLabel: 'Chat Loop B', limit: 10 });
+  assert.equal(second.status, 'claimed');
+  assert.equal(second.task.id, 'prereq-parallel-b');
+  assert.notEqual(first.claim.workspaceId, second.claim.workspaceId, 'independent siblings remain parallel-claimable');
+
+  const prerequisite = getTask('prereq-foundation')!;
+  prerequisite.status = 'done';
+  saveTask(prerequisite);
+  assert.equal(getTask('prereq-dependent')?.status, 'backlog', 'unlock must not require lane churn');
+
+  const unlocked = claims.claimNextTaskForSession(projectId, { sessionId: 'dep-loop-c', ownerLabel: 'Chat Loop C', limit: 10 });
+  assert.equal(unlocked.status, 'claimed');
+  assert.equal(unlocked.task.id, 'prereq-dependent');
 });
 
 test('claim next defers ambiguous and conflicting scope instead of overriding it', () => {

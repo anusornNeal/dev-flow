@@ -27,6 +27,7 @@ import type { TaskClaim, TaskStatus } from '../../types.js';
 import { computeLifecycleAuthoritySnapshot } from './lifecycleAuthorityService.js';
 import { reconcileExecutionLifecycleStage } from './executionLifecycleReconciliationService.js';
 import { inspectWorkspaceRecovery } from './workspaceRecoveryService.js';
+import { assertTaskPrerequisitesSatisfied, getTaskPrerequisiteBlockers } from './taskDependencyService.js';
 
 const DEFAULT_CLAIM_TTL_MS = 24 * 60 * 60 * 1000;
 const MIN_CLAIM_TTL_MS = 60_000;
@@ -189,19 +190,6 @@ function normalizedTags(task: any) {
 
 function isExplicitFinalGate(task: any) {
   return normalizedTags(task).includes('final-gate');
-}
-
-function hasBlockingDependency(task: any, projectTasks: any[]) {
-  const dependencyTags = normalizedTags(task).filter((tag) => tag.startsWith('depends-on:') || tag.startsWith('blocked-by:'));
-  if (dependencyTags.length === 0) return false;
-  for (const tag of dependencyTags) {
-    const identifier = tag.slice(tag.indexOf(':') + 1).trim();
-    if (!identifier) return true;
-    const dependency = projectTasks.find((candidate) =>
-      String(candidate.id || '').toLowerCase() === identifier || String(candidate.displayId || '').toLowerCase() === identifier);
-    if (!dependency || dependency.status !== 'done') return true;
-  }
-  return false;
 }
 
 function compareNextTaskOrder(left: any, right: any) {
@@ -902,8 +890,11 @@ function claimTaskForSessionLocked(taskId: string, input: ClaimTaskInput, cleanS
     throw createApiError(409, 'TASK_NOT_CLAIMABLE', `Task '${task.displayId || task.id}' is in '${task.status}' and cannot be claimed without existing active lifecycle authority.`, { affectedId: task.id });
   }
 
+  const projectTasks = getTasksByProjectId(task.projectId);
+  assertTaskPrerequisitesSatisfied(task, projectTasks, 'claim');
+
   if (!input.allowScopeConflict) {
-    const conflicts = findScopeConflicts(task, getTasksByProjectId(task.projectId), nowMs);
+    const conflicts = findScopeConflicts(task, projectTasks, nowMs);
     if (conflicts.length > 0) {
       throw createApiError(409, 'TASK_SCOPE_CONFLICT', `Task '${task.displayId || task.id}' overlaps active claimed scope.`, {
         affectedId: task.id,
@@ -975,6 +966,7 @@ export function claimNextTaskForSession(projectId: string, input: ClaimNextTaskI
       .sort(compareNextTaskOrder)
       .slice(0, limit);
     let deferred = 0;
+    const dependencyBlocked: Array<{ taskId: string; displayId?: string; blockers: ReturnType<typeof getTaskPrerequisiteBlockers> }> = [];
 
     for (const task of bounded) {
       if (parentIds.has(String(task.id))) {
@@ -982,8 +974,14 @@ export function claimNextTaskForSession(projectId: string, input: ClaimNextTaskI
         continue;
       }
       if (isActiveClaim(task.claim, nowMs)) continue;
-      if (isExplicitFinalGate(task) || hasBlockingDependency(task, projectTasks)) {
+      if (isExplicitFinalGate(task)) {
         deferred += 1;
+        continue;
+      }
+      const prerequisiteBlockers = getTaskPrerequisiteBlockers(task, projectTasks);
+      if (prerequisiteBlockers.length > 0) {
+        deferred += 1;
+        if (dependencyBlocked.length < 20) dependencyBlocked.push({ taskId: task.id, displayId: task.displayId, blockers: prerequisiteBlockers });
         continue;
       }
       if (normalizedTargetFiles(task).size === 0) {
@@ -996,7 +994,7 @@ export function claimNextTaskForSession(projectId: string, input: ClaimNextTaskI
       }
 
       const claimed = claimTaskForSessionLocked(task.id, { ...input, allowScopeConflict: false }, cleanSessionId, project);
-      return { status: 'claimed' as const, ...claimed, scanned: bounded.length, deferred, limit };
+      return { status: 'claimed' as const, ...claimed, scanned: bounded.length, deferred, dependencyBlocked, limit };
     }
 
     return {
@@ -1006,6 +1004,7 @@ export function claimNextTaskForSession(projectId: string, input: ClaimNextTaskI
       scanned: bounded.length,
       deferred,
       limit,
+      dependencyBlocked,
     };
   });
 }

@@ -11,7 +11,7 @@ process.env.DEVFLOW_DB_PATH = path.join(tempDir, 'devflow.db');
 const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
 executeAllMigrations();
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
-const { getTasks } = await import('../../src/server/repositories/taskRepository.js');
+const { getTasks, saveTask } = await import('../../src/server/repositories/taskRepository.js');
 const express = (await import('express')).default;
 const { registerTaskSetAuthoringRoute } = await import('../../src/server/routes/taskSetAuthoringRoute.js');
 const { getToolDefinitionByName } = await import('../../src/server/contracts/devflowContract.js');
@@ -173,6 +173,92 @@ test('decomposition card plan can be explicitly created through atomic task-set 
   const createdParent = created.find((task: any) => !task.parentId);
   assert.ok(createdParent);
   assert.equal(created.filter((task: any) => task.parentId === createdParent.id).length, plan.children.length);
+});
+
+test('task-set authoring resolves sibling prerequisite keys to canonical ids and persists the DAG atomically', async () => {
+  const before = getTasks().length;
+  await withServer(async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/tasks/task-set?responseMode=standard`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        projectId,
+        parent: { ...parent, title: 'Dependency parent' },
+        children: [
+          { ...validChild('Foundation child'), taskSetKey: 'foundation' },
+          { ...validChild('Dependent child'), taskSetKey: 'dependent', prerequisiteTaskIds: ['foundation'] },
+          { ...validChild('Independent child'), taskSetKey: 'parallel' },
+        ],
+      }),
+    });
+    const body = await response.json() as any;
+    assert.equal(response.status, 201, JSON.stringify(body));
+    const foundation = body.children.find((child: any) => child.title === 'Foundation child');
+    const dependent = body.children.find((child: any) => child.title === 'Dependent child');
+    const parallel = body.children.find((child: any) => child.title === 'Independent child');
+    assert.ok(foundation && dependent && parallel);
+    assert.deepEqual(dependent.prerequisiteTaskIds, [foundation.id]);
+    assert.deepEqual(parallel.prerequisiteTaskIds, []);
+    assert.equal('taskSetKey' in dependent, false);
+    const persisted = getTasks().find((task: any) => task.id === dependent.id);
+    assert.deepEqual(persisted?.prerequisiteTaskIds, [foundation.id]);
+  });
+  assert.equal(getTasks().length, before + 4);
+});
+
+test('task-set prerequisite cycles and self references rollback the whole request', async () => {
+  const before = getTasks().length;
+  await withServer(async (baseUrl) => {
+    const cyclic = await fetch(`${baseUrl}/api/tasks/task-set`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ projectId, parent: { ...parent, title: 'Cycle parent' }, children: [
+        { ...validChild('Cycle A'), taskSetKey: 'a', prerequisiteTaskIds: ['b'] },
+        { ...validChild('Cycle B'), taskSetKey: 'b', prerequisiteTaskIds: ['a'] },
+      ] }),
+    });
+    const cyclicBody = await cyclic.json() as any;
+    assert.equal(cyclic.status, 400);
+    assert.equal(cyclicBody.error.code, 'TASK_SET_VALIDATION_FAILED');
+    assert.match(JSON.stringify(cyclicBody), /TASK_PREREQUISITE_CYCLE/);
+
+    const self = await fetch(`${baseUrl}/api/tasks/task-set`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ projectId, parent: { ...parent, title: 'Self parent' }, children: [
+        { ...validChild('Self child'), taskSetKey: 'self', prerequisiteTaskIds: ['self'] },
+      ] }),
+    });
+    const selfBody = await self.json() as any;
+    assert.equal(self.status, 400);
+    assert.match(JSON.stringify(selfBody), /TASK_PREREQUISITE_SELF/);
+  });
+  assert.equal(getTasks().length, before);
+});
+
+test('task-set prerequisites reject duplicate and cross-project references without partial writes', async () => {
+  const foreignProjectId = 'project-task-set-foreign';
+  createProject({ id: foreignProjectId, name: 'Foreign Task Set', repoUrl: 'https://example.invalid/foreign', localPath: tempDir, taskIdPrefix: 'FRN' });
+  saveTask({ id: 'foreign-prerequisite', displayId: 'FRN-0001', projectId: foreignProjectId, title: 'Foreign prerequisite', description: '', status: 'done', priority: 'medium', category: 'backend', tags: [], targetFiles: [], checklist: [], logs: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+  const before = getTasks().length;
+  await withServer(async (baseUrl) => {
+    const duplicate = await fetch(`${baseUrl}/api/tasks/task-set`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ projectId, parent: { ...parent, title: 'Duplicate parent' }, children: [
+        { ...validChild('Base'), taskSetKey: 'base' },
+        { ...validChild('Duplicate dependent'), taskSetKey: 'dup', prerequisiteTaskIds: ['base', 'BASE'] },
+      ] }),
+    });
+    assert.equal(duplicate.status, 400);
+    assert.match(JSON.stringify(await duplicate.json()), /TASK_PREREQUISITES_DUPLICATE/);
+
+    const crossProject = await fetch(`${baseUrl}/api/tasks/task-set`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ projectId, parent: { ...parent, title: 'Cross project parent' }, children: [
+        { ...validChild('Cross dependent'), taskSetKey: 'cross', prerequisiteTaskIds: ['FRN-0001'] },
+      ] }),
+    });
+    assert.equal(crossProject.status, 400);
+    assert.match(JSON.stringify(await crossProject.json()), /TASK_PREREQUISITE_CROSS_PROJECT/);
+  });
+  assert.equal(getTasks().length, before);
 });
 
 test.after(() => {

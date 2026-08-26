@@ -725,3 +725,44 @@ test('cleanup failure is resumable after task evidence and lifecycle are durable
   assert.equal((getTask(task.id)?.logs || []).filter((entry: any) => /Finalized managed workspace/.test(entry.message)).length, 1);
   assert.equal(fs.existsSync(workspace.root), false);
 });
+
+test('reopened prerequisite blocks terminal finalization while preserving dependent workspace WIP', () => {
+  const prepared = preparedFinalizationFixture('prerequisite-drift');
+  const prerequisite = {
+    id: `prerequisite-${prepared.task.id}`,
+    displayId: `PRE-${sequence}`,
+    title: 'Prerequisite foundation',
+    description: '',
+    projectId: prepared.project.id,
+    status: 'done',
+    priority: 'medium',
+    category: 'backend',
+    tags: [],
+    targetFiles: [],
+    checklist: [],
+    logs: [],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  } as any;
+  saveTask(prerequisite);
+  const dependent = getTask(prepared.task.id)!;
+  dependent.prerequisiteTaskIds = [prerequisite.id];
+  saveTask(dependent);
+
+  prerequisite.status = 'backlog';
+  prerequisite.updatedAt = new Date().toISOString();
+  saveTask(prerequisite);
+  const sourceHeadBefore = git(prepared.workspace.root, ['rev-parse', 'HEAD']).stdout;
+  const baseHeadBefore = git(prepared.root, ['rev-parse', 'HEAD']).stdout;
+
+  assert.throws(
+    () => finalizeTaskWorkspace(prepared.state, { taskId: prepared.task.id, workspaceId: prepared.workspace.workspaceId, checks }),
+    (error: any) => error?.payload?.code === 'TASK_PREREQUISITE_DRIFT'
+      && error?.payload?.details?.preserveWorkspace === true
+      && error?.payload?.details?.blockers?.[0]?.taskId === prerequisite.id,
+  );
+  assert.equal(fs.existsSync(prepared.workspace.root), true, 'dependent WIP workspace must be preserved');
+  assert.equal(git(prepared.workspace.root, ['rev-parse', 'HEAD']).stdout, sourceHeadBefore);
+  assert.equal(git(prepared.root, ['rev-parse', 'HEAD']).stdout, baseHeadBefore, 'blocked finalization must not integrate source commit');
+  assert.equal(getTask(prepared.task.id)?.status, 'in-progress');
+});

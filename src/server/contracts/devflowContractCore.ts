@@ -98,6 +98,8 @@ export const taskMutationProperties = {
   model: { type: 'string', enum: VALID_MODELS, description: 'Assigned model.' },
   agent: { type: 'string', enum: VALID_AGENTS, description: 'Assigned agent.' },
   parentId: { type: 'string', description: 'Parent task id.' },
+  prerequisiteTaskIds: { type: 'array', maxItems: 50, items: { type: 'string', minLength: 1 }, description: 'Prerequisite task references. Persisted values are resolved to canonical same-project task IDs; atomic task-set children may use request-local taskSetKey values.' },
+  taskSetKey: { type: 'string', minLength: 1, maxLength: 100, description: 'Request-local atomic task-set key used only to resolve sibling prerequisite references; never persisted on the task.' },
   reasoning: { type: 'string', description: 'Reasoning/context.' },
   acceptanceCriteria: { type: 'string', description: 'Acceptance criteria.' },
   verification: { type: 'string', description: 'Verification steps.' },

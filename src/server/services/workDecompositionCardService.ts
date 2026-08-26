@@ -27,6 +27,7 @@ export interface DecompositionCardDraft {
   category: 'frontend' | 'backend' | 'general';
   tags: string[];
   targetFiles: string[];
+  prerequisiteTaskIds?: string[];
   checklist: DecompositionCardChecklistItem[];
   reasoning: string;
   acceptanceCriteria: string;
@@ -231,6 +232,7 @@ function childDraft(node: WorkDecompositionNode, decomposition: WorkDecompositio
     category: categoryForNode(node),
     tags,
     targetFiles: uniqueSorted(node.targetFiles || []),
+    prerequisiteTaskIds: prerequisites,
     checklist,
     reasoning: blocked
       ? `Blocked preparation work. Do not invent implementation targets. ${blockedReasons.join(' ') || 'Repository evidence is required.'}`
@@ -419,9 +421,9 @@ function evaluatePlan(
   };
 }
 
-function stripNodeId(draft: DecompositionCardDraft): Omit<DecompositionCardDraft, 'decompositionNodeId'> {
-  const { decompositionNodeId: _ignored, ...task } = draft;
-  return task;
+function stripNodeId(draft: DecompositionCardDraft): Omit<DecompositionCardDraft, 'decompositionNodeId'> & { taskSetKey?: string } {
+  const { decompositionNodeId, ...task } = draft;
+  return decompositionNodeId ? { ...task, taskSetKey: decompositionNodeId } : task;
 }
 
 export function buildDecompositionCardPlan(input: BuildDecompositionCardPlanInput): DecompositionCardPlan {

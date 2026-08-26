@@ -37,6 +37,7 @@ test('buildDecompositionCardPlan is inspect-only by default and preserves DAG de
   assert.ok(backend);
   assert.ok(backend?.repoContext.includes('Prerequisites: contract'));
   assert.ok(backend?.checklist.some((item) => /prerequisite.*contract/i.test(item.text)));
+  assert.deepEqual(backend?.prerequisiteTaskIds, ['contract']);
   assert.deepEqual(backend?.targetFiles, ['src/server/services/accountService.ts']);
   assert.equal(backend?.category, 'backend');
   const frontend = result.children.find((child) => child.decompositionNodeId === 'frontend');
@@ -57,6 +58,11 @@ test('buildDecompositionCardPlan returns atomic task-set payload only when creat
   assert.equal(result.creationPayload?.projectId, 'project-1');
   assert.equal(result.creationPayload?.children.length, 3);
   assert.ok(result.creationPayload?.children.every((child) => !('parentId' in child)));
+  const contract = result.creationPayload?.children.find((child: any) => child.taskSetKey === 'contract') as any;
+  const backend = result.creationPayload?.children.find((child: any) => child.taskSetKey === 'backend') as any;
+  assert.ok(contract);
+  assert.ok(backend);
+  assert.deepEqual(backend.prerequisiteTaskIds, ['contract']);
 });
 
 test('buildDecompositionCardPlan preserves blocked decisions as prep cards instead of inventing targets', () => {

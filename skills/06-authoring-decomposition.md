@@ -23,6 +23,8 @@ Independent children are parallel by default when their target scope is disjoint
 
 Do not invent ordering because cards were authored sequentially. State a prerequisite only when one child truly needs another child's contract, migration, generated artifact, integrated state, or other completed output before it can proceed safely.
 
+When the task-set tool supports structured prerequisites, persist real DAG edges through `prerequisiteTaskIds` using stable request-local `taskSetKey` references. Checklist prose may explain a dependency, but it must not be the only scheduling representation. Persisted dependencies resolve to canonical same-project task IDs.
+
 When target files overlap materially, call out the ownership boundary or dependency so orchestration can avoid concurrent conflicting edits.
 
 ## Frontend/backend split

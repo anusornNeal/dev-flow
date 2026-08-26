@@ -33,6 +33,7 @@ import { canRetryRun as canRetryRunUseCase, canCancelRun as canCancelRunUseCase,
 import type { AgentCompletionPayload, AgentCompletionStatus, BugStatus, TaskStatus } from '../../types';
 import { registerTaskBatchRoutes } from './taskBatchRoutes';
 import { registerTaskSetAuthoringRoute } from './taskSetAuthoringRoute';
+import { assertTaskPrerequisiteGraph, resolveTaskPrerequisiteIds } from '../services/taskDependencyService.js';
 import { registerTaskImportFileRoute } from './taskImportFileRoute';
 import { registerTaskBugRoutes } from './taskBugRoutes';
 import { registerTaskReviewRoutes } from './taskReviewRoutes';
@@ -211,6 +212,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
           agent: item.agent || undefined,
           model: item.model || undefined,
           parentId: item.parentId || undefined,
+          prerequisiteTaskIds: Array.isArray(item.prerequisiteTaskIds) ? [...item.prerequisiteTaskIds] : [],
           effort: item.effort || undefined,
           reasoning: item.reasoning || undefined,
           acceptanceCriteria: item.acceptanceCriteria || undefined,
@@ -225,6 +227,10 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
             type: 'create',
           }],
         };
+
+        const existingTasksForDependencies = getTasks();
+        newTask.prerequisiteTaskIds = resolveTaskPrerequisiteIds(newTask, [...existingTasksForDependencies, newTask]);
+        assertTaskPrerequisiteGraph([...existingTasksForDependencies, newTask]);
 
         const qualityError = validateTaskQualityForMutation(newTask);
         if (qualityError) {
@@ -398,6 +404,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
           agent: item.agent !== undefined ? item.agent : currentTask.agent,
           model: item.model !== undefined ? item.model : currentTask.model,
           parentId: item.parentId !== undefined ? item.parentId : currentTask.parentId,
+          prerequisiteTaskIds: Array.isArray(item.prerequisiteTaskIds) ? [...item.prerequisiteTaskIds] : currentTask.prerequisiteTaskIds,
           effort: item.effort !== undefined ? item.effort : currentTask.effort,
           updatedAt: new Date().toISOString(),
           logs: [...(currentTask.logs || []), {
@@ -407,6 +414,10 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
             type: 'update',
           }],
         };
+
+        const tasksForDependencyUpdate = getTasks();
+        updatedTask.prerequisiteTaskIds = resolveTaskPrerequisiteIds(updatedTask, tasksForDependencyUpdate.map((task) => task.id === updatedTask.id ? updatedTask : task));
+        assertTaskPrerequisiteGraph(tasksForDependencyUpdate.map((task) => task.id === updatedTask.id ? updatedTask : task));
 
         const qualityError = validateTaskQualityForMutation(updatedTask);
         if (qualityError) {
@@ -456,6 +467,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
         model: item.model || undefined,
         parentId: item.parentId || undefined,
         effort: item.effort || undefined,
+        prerequisiteTaskIds: Array.isArray(item.prerequisiteTaskIds) ? [...item.prerequisiteTaskIds] : [],
         reasoning: item.reasoning || undefined,
         acceptanceCriteria: item.acceptanceCriteria || undefined,
         verification: item.verification || undefined,
@@ -471,6 +483,10 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
           type: 'create',
         }],
       };
+
+      const existingTasksForBatchCreate = getTasks();
+      newTask.prerequisiteTaskIds = resolveTaskPrerequisiteIds(newTask, [...existingTasksForBatchCreate, newTask]);
+      assertTaskPrerequisiteGraph([...existingTasksForBatchCreate, newTask]);
 
       const qualityError = validateTaskQualityForMutation(newTask);
       if (qualityError) {
@@ -586,6 +602,12 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
         images: extractImages(updateBody, currentTask) || [],
         updatedAt: new Date().toISOString(),
       };
+
+      if (Array.isArray(updateBody.prerequisiteTaskIds)) {
+        const dependencyTasks = getTasks();
+        updatedTask.prerequisiteTaskIds = resolveTaskPrerequisiteIds(updatedTask, dependencyTasks.map((task) => task.id === updatedTask.id ? updatedTask : task));
+        assertTaskPrerequisiteGraph(dependencyTasks.map((task) => task.id === updatedTask.id ? updatedTask : task));
+      }
 
       const qualityError = validateTaskQualityForMutation(updatedTask);
       if (qualityError) return res.status(400).json({ error: qualityError });

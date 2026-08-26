@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   model TEXT,
   agent TEXT,
   parentId TEXT,
+  prerequisiteTaskIds TEXT, -- JSON canonical same-project task ids
   reasoning TEXT,
   acceptanceCriteria TEXT,
   verification TEXT,

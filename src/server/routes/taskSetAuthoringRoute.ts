@@ -15,6 +15,7 @@ import {
 import { validateTaskQuality } from '../services/taskQualityService';
 import { generateDisplayId, getTasks, saveTasksAtomic } from '../repositories/taskRepository.js';
 import { buildIdempotencyFingerprint, withIdempotency } from '../services/lockAndIdempotencyService';
+import { assertTaskPrerequisiteGraph, resolveTaskPrerequisiteIds } from '../services/taskDependencyService.js';
 
 const MAX_TASK_SET_CHILDREN = 25;
 
@@ -104,6 +105,8 @@ function buildCandidate(item: any, projectId: string, id: string, parentId?: str
     agent: item.agent || undefined,
     model: item.model || undefined,
     parentId: parentId ?? item.parentId ?? undefined,
+    prerequisiteTaskIds: Array.isArray(item.prerequisiteTaskIds) ? [...item.prerequisiteTaskIds] : [],
+    taskSetKey: typeof item.taskSetKey === 'string' ? item.taskSetKey.trim() : undefined,
     effort: item.effort || undefined,
     reasoning: item.reasoning || undefined,
     acceptanceCriteria: item.acceptanceCriteria || undefined,
@@ -124,6 +127,7 @@ function taskSummary(task: any) {
     priority: task.priority,
     projectId: task.projectId,
     parentId: task.parentId,
+    prerequisiteTaskIds: task.prerequisiteTaskIds,
   };
 }
 
@@ -225,8 +229,35 @@ function preflightTaskSet(req: express.Request, deps: ApiRouteDeps) {
     prepared.push({ role: entry.role, index: entry.index, task: candidate });
   }
 
+  const localKeyToTaskId = new Map<string, string>();
+  for (const entry of prepared) {
+    const key = String(entry.task.taskSetKey || '').trim();
+    if (!key) continue;
+    const normalizedKey = key.toLowerCase();
+    if (localKeyToTaskId.has(key) || localKeyToTaskId.has(normalizedKey)) {
+      failures.push(failure(entry.role, entry.index, 'linkage', 'TASK_SET_KEY_DUPLICATE', `Duplicate taskSetKey '${key}'.`, ['taskSetKey']));
+      continue;
+    }
+    localKeyToTaskId.set(key, entry.task.id);
+    localKeyToTaskId.set(normalizedKey, entry.task.id);
+  }
+
   if (failures.length > 0 || prepared.length !== rawEntries.length) {
     throw createApiError(400, 'TASK_SET_VALIDATION_FAILED', 'Task-set validation failed. No tasks were created.', { details: { failures } });
+  }
+
+  const existingTasks = getTasks();
+  const allForResolution = [...existingTasks, ...prepared.map((entry) => entry.task)];
+  try {
+    for (const entry of prepared) {
+      entry.task.prerequisiteTaskIds = resolveTaskPrerequisiteIds(entry.task, allForResolution, { localKeyToTaskId });
+      delete entry.task.taskSetKey;
+    }
+    assertTaskPrerequisiteGraph([...existingTasks, ...prepared.map((entry) => entry.task)]);
+  } catch (error: any) {
+    throw createApiError(400, 'TASK_SET_VALIDATION_FAILED', 'Task-set prerequisite validation failed. No tasks were created.', {
+      details: { failures: [failure('child', -1, 'linkage', error?.payload?.code || error?.code || 'TASK_PREREQUISITE_INVALID', validationMessage(error), ['prerequisiteTaskIds'])] },
+    });
   }
 
   const tasks = prepared.map(({ task }) => ({

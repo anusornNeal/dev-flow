@@ -22,6 +22,7 @@ const TASK_COLUMNS = [
   'model',
   'agent',
   'parentId',
+  'prerequisiteTaskIds',
   'reasoning',
   'acceptanceCriteria',
   'verification',
@@ -61,6 +62,7 @@ const TASK_UPSERT_SQL = `
     model = excluded.model,
     agent = excluded.agent,
     parentId = excluded.parentId,
+    prerequisiteTaskIds = excluded.prerequisiteTaskIds,
     reasoning = excluded.reasoning,
     acceptanceCriteria = excluded.acceptanceCriteria,
     verification = excluded.verification,
@@ -93,7 +95,9 @@ export class StaleTaskUpdateError extends Error {
 let categoryColumnEnsured = false;
 let bugsColumnEnsured = false;
 let workflowEvidenceColumnsEnsured = false;
-let archiveColumnEnsured = false;let referenceColumnsEnsured = false;
+let archiveColumnEnsured = false;
+let referenceColumnsEnsured = false;
+let prerequisiteColumnEnsured = false;
 const DISPLAY_ID_COUNTER_MAX = 999999;
 
 function isSafeDisplayIdCounter(value: number) {
@@ -227,11 +231,22 @@ function ensureTaskReferenceColumns() {
   referenceColumnsEnsured = true;
 }
 
+function ensureTaskPrerequisiteColumn() {
+  if (prerequisiteColumnEnsured) return;
+  const tableInfo = db.pragma('table_info(tasks)') as Array<{ name: string }>;
+  if (!tableInfo.some((column) => column.name === 'prerequisiteTaskIds')) {
+    db.prepare('ALTER TABLE tasks ADD COLUMN prerequisiteTaskIds TEXT').run();
+  }
+  prerequisiteColumnEnsured = true;
+}
+
 function ensureTaskColumns() {
   ensureTaskCategoryColumn();
   ensureTaskBugsColumn();
   ensureTaskWorkflowEvidenceColumns();
-  ensureTaskArchiveColumn();  ensureTaskReferenceColumns();
+  ensureTaskArchiveColumn();
+  ensureTaskReferenceColumns();
+  ensureTaskPrerequisiteColumn();
 }
 
 export function loadCounters(state: AppState) {
@@ -310,6 +325,7 @@ function parseTaskRow(item: any, runsByTaskId: Map<string, AgentRun[]>) {
     tags: parsedTags,
     targetFiles: parseJsonArray(item.targetFiles),
     checklist: parseJsonArray(item.checklist),
+    prerequisiteTaskIds: parseJsonArray(item.prerequisiteTaskIds),
     logs: parseJsonArray(item.logs),
     bugs: parseJsonArray(item.bugs),
     gitEvidence: parseJsonObject(item.gitEvidence),
@@ -415,7 +431,7 @@ export function getTaskByIdentifier(identifier: string, mode: TaskSingleReadMode
   if (mode === 'summary') {
     const row = getTaskRowByIdentifier(
       identifier,
-      'id, displayId, title, status, priority, projectId, parentId, agent, model, effort, updatedAt, archivedAt, bugs, claim',
+      'id, displayId, title, status, priority, projectId, parentId, prerequisiteTaskIds, agent, model, effort, updatedAt, archivedAt, bugs, claim',
     );
     if (!row) return undefined;
     const latestRun = db.prepare(`
@@ -428,6 +444,7 @@ export function getTaskByIdentifier(identifier: string, mode: TaskSingleReadMode
     return {
       ...row,
       bugs: parseJsonArray(row.bugs),
+      prerequisiteTaskIds: parseJsonArray(row.prerequisiteTaskIds),
       claim: parseJsonObject(row.claim),
       latestAgentRun: latestRun || undefined,
     };
@@ -594,6 +611,7 @@ function serializeTaskForRow(item: any) {
     item.model,
     item.agent,
     item.parentId,
+    Array.isArray(item.prerequisiteTaskIds) && item.prerequisiteTaskIds.length > 0 ? JSON.stringify(item.prerequisiteTaskIds) : null,
     item.reasoning,
     item.acceptanceCriteria,
     item.verification,

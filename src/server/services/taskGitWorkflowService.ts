@@ -7,6 +7,7 @@ import { createApiError } from './api';
 import { getExecutionOwnershipState } from './executionSessionService';
 import { resolveProjectRoot } from './localFileService';
 import { getSessionWorkspaceMetadataForRecovery } from './sessionWorkspaceService';
+import { getTaskPrerequisiteBlockers } from './taskDependencyService.js';
 
 const VALID_VERIFICATION_STATUSES = new Set<VerificationEvidenceStatus>(['passed', 'failed', 'not-run']);
 const UNRESOLVED_BUG_STATUSES = new Set(['open', 'fixing', 'reopened']);
@@ -374,6 +375,14 @@ function validateTaskState(task: any, gitEvidence: TaskGitEvidence | undefined, 
         title: entry.title,
         status: entry.status,
       })),
+    });
+  }
+
+  const prerequisiteBlockers = getTaskPrerequisiteBlockers(task, getTasks().filter((entry: any) => entry.projectId === task.projectId));
+  if (prerequisiteBlockers.length > 0) {
+    addBlocker(blockers, 'TASK_PREREQUISITE_DRIFT', `${prerequisiteBlockers.length} prerequisite task(s) are not done.`, {
+      prerequisites: prerequisiteBlockers,
+      preserveWorkspace: true,
     });
   }
 

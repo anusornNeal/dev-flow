@@ -26,6 +26,7 @@ import type { AgentCompletionPayload, AgentCompletionStatus, TaskStatus } from '
 import { registerTaskImportFileRoute } from './taskImportFileRoute';
 import { buildTaskGitWarnings, validateRecordedReviewSubmission } from '../services/taskGitWorkflowService';
 import { mutateTaskStatusWithLifecycle, taskHasLifecycleOwnership } from '../services/taskClaimService.js';
+import { projectTaskBoardLiveWork } from '../services/taskBoardLiveWorkProjectionService.js';
 
 const STALE_AGENT_RUN_MS = 30 * 60 * 1000;
 let lastCleanupCheck = 0;
@@ -130,6 +131,7 @@ export function toTaskResponse(task: any, mode: TaskReadMode) {
       specUrl: task.specUrl,
       agent: task.agent,
       activeAgent: task.activeAgent,
+      liveWork: projectTaskBoardLiveWork(task),
       latestAgentRun: task.latestAgentRun,
       agentRuns: task.agentRuns,
       model: task.model,

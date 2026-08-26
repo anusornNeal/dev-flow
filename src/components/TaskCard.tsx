@@ -55,12 +55,18 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
   const completedSteps = task.checklist?.filter(item => item.completed).length || 0;
   const filesCount = task.targetFiles?.length || 0;
   const unresolvedBugCount = task.unresolvedBugCount ?? (task.bugs || []).filter((bug) => ['open', 'fixing', 'fixed', 'reopened'].includes(bug.status)).length;
-  const activeClaim = task.claim && Date.parse(task.claim.expiresAt) > Date.now() ? task.claim : null;
-  
   const hasEffectiveAssignment = Boolean(task.agent || task.model || task.effort);
 
   const latestRun = task.latestAgentRun;
   const autoWorkState = getAutoWorkState(task);
+  const liveWorkAgeMs = task.liveWork?.updatedAt ? Math.max(0, Date.now() - Date.parse(task.liveWork.updatedAt)) : null;
+  const liveWorkFreshness = liveWorkAgeMs == null || !Number.isFinite(liveWorkAgeMs)
+    ? null
+    : liveWorkAgeMs < 60_000
+      ? 'now'
+      : liveWorkAgeMs < 60 * 60_000
+        ? `${Math.floor(liveWorkAgeMs / 60_000)}m`
+        : `${Math.floor(liveWorkAgeMs / (60 * 60_000))}h`;
   const settledRunBadge = latestRun && !task.activeAgent && ['failed', 'cancelled', 'succeeded'].includes(latestRun.status)
     ? latestRun
     : null;
@@ -176,8 +182,49 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
           {task.title}
         </h4>
 
+        {task.liveWork && (
+          <div className={`mb-2 rounded-xl border px-2.5 py-2 shadow-sm ${
+            task.liveWork.blocked
+              ? 'border-[#efc0b6] bg-[#fff4f1] dark:border-[#75473f] dark:bg-[#3a2925]'
+              : 'border-[#e8c48f] bg-[#fff8ed] dark:border-[#6a5130] dark:bg-[#332c22]'
+          }`}>
+            <div className="flex items-center gap-2 min-w-0">
+              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${task.liveWork.blocked ? 'bg-[#c9553f]' : 'bg-emerald-500'}`} />
+              <span className="text-[9px] font-mono font-black uppercase tracking-[0.12em] text-[#8a6542] dark:text-[#e6c594]">Live Work</span>
+              <span className={`ml-auto shrink-0 rounded-md border px-1.5 py-0.5 text-[9px] font-mono font-black ${
+                task.liveWork.blocked
+                  ? 'border-[#e7b2a7] bg-white/60 text-[#ad4936] dark:border-[#75473f] dark:bg-[#2f211f] dark:text-[#f0a08e]'
+                  : 'border-[#e6c493] bg-white/60 text-[#9a642c] dark:border-[#6a5130] dark:bg-[#292119] dark:text-[#efc986]'
+              }`}>{task.liveWork.phaseLabel}</span>
+            </div>
+            <div className="mt-1.5 flex items-center gap-2 min-w-0">
+              <span className="truncate text-[11px] font-bold text-[#4f4034] dark:text-[#f3eadf]">{task.liveWork.ownerLabel}</span>
+              {liveWorkFreshness && <span className="ml-auto shrink-0 text-[9px] font-mono text-[#9b846f] dark:text-[#c9b59e]">{liveWorkFreshness}</span>}
+            </div>
+            {task.liveWork.activity && (
+              <div className="mt-1 truncate text-[9.5px] font-mono text-[#806957] dark:text-[#d8c4ad]" title={task.liveWork.activity}>
+                {task.liveWork.activity}
+              </div>
+            )}
+            <div className="mt-2 flex gap-1" aria-label={`Live work phase: ${task.liveWork.phaseLabel}`}>
+              {Array.from({ length: task.liveWork.phaseCount }).map((_, index) => (
+                <span
+                  key={index}
+                  className={`h-1 flex-1 rounded-full ${
+                    index <= task.liveWork!.phaseIndex
+                      ? task.liveWork!.blocked && index === task.liveWork!.phaseIndex
+                        ? 'bg-[#c9553f] dark:bg-[#e07862]'
+                        : 'bg-[#dca15a] dark:bg-[#d6a549]'
+                      : 'bg-[#eadfce] dark:bg-[#544638]'
+                  }`}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Agent & Run Status Row */}
-        {(task.activeAgent || autoWorkState) && (
+        {!task.liveWork && (task.activeAgent || autoWorkState) && (
           <div className="flex flex-wrap items-center gap-1.5 mb-2">
             {/* Locked Agent badge */}
             {task.activeAgent && (
@@ -299,15 +346,6 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
             )}
           </div>
 
-          {/* Active task claim */}
-          {activeClaim && (
-            <div className="flex items-center w-full mt-0.5">
-              <span className="flex items-center gap-1.5 px-2 py-1 rounded-md border border-[#ebdcb9] dark:border-[#584a3b]/40 bg-[#fdfbf7]/50 dark:bg-[#292119]/50 text-[#8a725f] dark:text-[#f3eadf] text-[9.5px] font-mono font-bold w-full shadow-sm overflow-hidden" title={`Claimed by ${activeClaim.ownerLabel}`}>
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
-                <span className="leading-none mt-[1px] truncate">กำลังทำ · {activeClaim.ownerLabel}</span>
-              </span>
-            </div>
-          )}
         </div>
       </div>
 

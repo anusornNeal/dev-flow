@@ -138,6 +138,22 @@ export interface TaskClaim {
   reservedPaths?: string[]; // Canonical runtime scope reserved beyond initial targetFiles.
 }
 
+export type TaskLiveWorkPhase = 'inspecting' | 'editing' | 'verifying' | 'committing' | 'integrating' | 'finalizing' | 'blocked' | 'working';
+
+export interface TaskLiveWorkProjection {
+  source: 'managed' | 'agent';
+  ownerLabel: string;
+  ownerKind?: TaskClaim['ownerKind'] | 'agent';
+  phase: TaskLiveWorkPhase;
+  phaseLabel: string;
+  activity?: string | null;
+  phaseIndex: number;
+  phaseCount: number;
+  blocked?: boolean;
+  startedAt?: string | null;
+  updatedAt?: string | null;
+}
+
 export interface Task {
   id: string;
   displayId?: string; // e.g. buddy2-0001
@@ -153,6 +169,7 @@ export interface Task {
   updatedAt: string;
   archivedAt?: string | null;
   claim?: TaskClaim;
+  liveWork?: TaskLiveWorkProjection | null;
   logs: LogEntry[];
   targetFiles?: string[];
   checklist?: ChecklistItem[];

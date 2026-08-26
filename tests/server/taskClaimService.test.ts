@@ -1009,6 +1009,91 @@ test('orchestration projection gives each task one durable state and keeps indep
   assert.equal(secondProjection.entries.find((entry: any) => entry.taskId === claimedNext.task.id)?.state, 'execution');
 });
 
+test('next action is read-only, project-pinned, and prioritizes attention over owned continuation and new work', () => {
+  const projectId = 'project-next-action-attention';
+  const otherProjectId = 'project-next-action-other';
+  createCandidateProject(projectId);
+  createCandidateProject(otherProjectId);
+  seedCandidateTask(projectId, 'next-owned', ['src/NextOwned.ts'], { priority: 'medium' });
+  seedCandidateTask(projectId, 'next-attention', ['src/NextAttention.ts'], { priority: 'high' });
+  seedCandidateTask(projectId, 'next-ready', ['src/NextReady.ts'], { priority: 'high' });
+  seedCandidateTask(otherProjectId, 'next-other-project', ['src/OtherProject.ts'], { priority: 'high' });
+
+  claims.claimTaskForSession('next-owned', { sessionId: 'scheduler-owner', ownerLabel: 'Chat Scheduler Owner' });
+  claims.claimTaskForSession('next-attention', { sessionId: 'attention-owner', ownerLabel: 'Chat Attention Owner' });
+  const attentionSession = listExecutionSessionsForTask('next-attention').find((entry: any) => entry.status === 'active');
+  assert.ok(attentionSession);
+  execution.cancelExecutionSession(attentionSession!.id);
+
+  const beforeReady = getTask('next-ready');
+  const first = claims.getNextActionForSession(projectId, { sessionId: 'scheduler-owner', limit: 10 });
+  const second = claims.getNextActionForSession(projectId, { sessionId: 'scheduler-owner', limit: 10 });
+  assert.equal(first.action, 'resolve-attention');
+  assert.equal(first.task?.taskId, 'next-attention');
+  assert.equal(second.action, first.action);
+  assert.equal(second.task?.taskId, first.task?.taskId);
+  assert.equal(getTask('next-ready')?.status, beforeReady?.status, 'scheduler pull must not claim new work');
+  assert.equal(JSON.stringify(first).includes('scheduler-owner'), false, 'raw caller session id must not be echoed');
+  assert.equal(JSON.stringify(first).includes('next-other-project'), false, 'scheduler result must stay pinned to the selected project');
+});
+
+test('next action recovers owned durable work before recommending a fresh atomic claim', () => {
+  const projectId = 'project-next-action-recovery';
+  createCandidateProject(projectId);
+  seedCandidateTask(projectId, 'recover-owned', ['src/RecoverOwned.ts'], { priority: 'medium' });
+  seedCandidateTask(projectId, 'recover-ready', ['src/RecoverReady.ts'], { priority: 'high' });
+  const owned = claims.claimTaskForSession('recover-owned', { sessionId: 'recover-worker', ownerLabel: 'Chat Recover Worker' });
+  const ownedSession = listExecutionSessionsForTask('recover-owned').find((entry: any) => entry.status === 'active');
+  assert.ok(ownedSession);
+  const jobId = 'job-next-action-recovery';
+  jobRepo.createJob(jobId, 'run_project_command', {
+    projectId,
+    taskId: 'recover-owned',
+    workspaceId: owned.claim.workspaceId,
+    __executionJobBinding: {
+      operationId: jobId,
+      executionSessionId: ownedSession!.id,
+      taskId: 'recover-owned',
+      workspaceId: owned.claim.workspaceId,
+      projectId,
+      toolName: 'run_project_command',
+    },
+  }, `next-action:${jobId}`, { eagerArtifacts: false });
+  checkpoints.recordExecutionPendingOperationReference(ownedSession!.id, { operationId: jobId, evidenceId: `pending-${jobId}`, kind: 'run_project_command', status: 'running' });
+
+  const next = claims.getNextActionForSession(projectId, { sessionId: 'recover-worker', limit: 10 });
+  assert.equal(next.action, 'recover-current');
+  assert.equal(next.task?.taskId, 'recover-owned');
+  assert.equal(next.continuation?.nextAction?.action, 'query-pending-jobs');
+  assert.deepEqual(next.continuation?.jobIds, [jobId]);
+  assert.equal(getTask('recover-ready')?.status, 'backlog');
+});
+
+test('next action recommends claim_next_task without mutating and reports bounded no-action when the window has no eligible task', () => {
+  const projectId = 'project-next-action-new';
+  createCandidateProject(projectId);
+  seedCandidateTask(projectId, 'new-ready', ['src/NewReady.ts'], { priority: 'high' });
+  const first = claims.getNextActionForSession(projectId, { sessionId: 'new-worker', limit: 10 });
+  const replay = claims.getNextActionForSession(projectId, { sessionId: 'new-worker', limit: 10 });
+  assert.equal(first.action, 'claim-new');
+  assert.equal(first.task?.taskId, 'new-ready');
+  assert.equal(first.claim?.tool, 'claim_next_task');
+  assert.equal(replay.action, 'claim-new');
+  assert.equal(getTask('new-ready')?.status, 'backlog');
+
+  const claimed = claims.claimNextTaskForSession(projectId, { sessionId: 'new-worker', ownerLabel: 'Chat New Worker', limit: 10 });
+  assert.equal(claimed.status, 'claimed');
+  assert.equal(claimed.task.id, 'new-ready');
+
+  const blockedProjectId = 'project-next-action-none';
+  createCandidateProject(blockedProjectId);
+  seedCandidateTask(blockedProjectId, 'new-unbounded', [], { priority: 'high' });
+  const none = claims.getNextActionForSession(blockedProjectId, { sessionId: 'none-worker', limit: 10 });
+  assert.equal(none.action, 'no-action');
+  assert.deepEqual(none.reasonCodes, ['NO_ELIGIBLE_TASK']);
+  assert.equal(none.blocked?.[0]?.taskId, 'new-unbounded');
+});
+
 test.after(() => {
   try { fs.rmSync(tempRoot, { recursive: true, force: true }); } catch {}
 });

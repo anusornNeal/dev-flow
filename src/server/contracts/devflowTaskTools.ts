@@ -119,8 +119,36 @@ export const taskToolDefinitions: DevFlowToolDefinition[] = [
     buildHttpRequest: ({ taskId, responseMode, ...body }) => ({ method: 'PUT', path: withQuery(`/api/tasks/${encodePathSegment(String(taskId))}`, { responseMode: responseMode || 'summary' }), body, headers: body.isAgentRequest ? { 'x-agent-request': 'true' } : undefined }),
   },
   {
+    name: 'get_next_action',
+    description: 'Read-only scheduler pull for one project-pinned reasoning worker. Returns exactly one bounded action: recover current work, resolve attention, continue owned implementation, recommend an atomic claim_next_task, or report no eligible work. It never claims, replays a mutation, or switches projectId, so repeated pulls are safe.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        projectId: { type: 'string', description: 'Project internal id pinned as the selected board boundary. DevFlow never substitutes another project.' },
+        sessionId: { type: 'string', description: 'Opaque caller session identity used only to find currently owned durable work. The raw value is not returned or persisted by this read.' },
+        limit: { type: 'number', description: 'Bounded new-work window used only when no higher-priority owned or attention work exists. Defaults to 50 and is capped at 100.' },
+      },
+      required: ['projectId', 'sessionId'],
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['recover-current', 'resolve-attention', 'continue-owned', 'claim-new', 'no-action'] },
+        projectId: { type: 'string' },
+        task: { type: 'object' },
+        reasonCodes: { type: 'array', items: { type: 'string' } },
+        continuation: { type: 'object' },
+        attention: { type: 'object' },
+        claim: { type: 'object' },
+        blocked: { type: 'array', items: { type: 'object' } },
+      },
+      required: ['action', 'projectId', 'reasonCodes'],
+    },
+    buildHttpRequest: (body) => ({ method: 'POST', path: '/api/tasks/next-action', body }),
+  },
+  {
     name: 'claim_next_task',
-    description: 'Atomically select and claim the next deterministic eligible leaf task for one board-loop worker. Structured prerequisiteTaskIds are authoritative eligibility gates; blocked dependents are skipped until their prerequisites are done, then become immediately eligible without a lane shuffle. projectId is the originating selected board boundary and must remain unchanged for the lifetime of that loop unless the user explicitly switches projects. Selection is bounded and conservative. NO_ELIGIBLE_TASK stops the current project loop; do not substitute another projectId to find work.',
+    description: 'Atomically select and claim the next deterministic eligible leaf task for one board-loop worker. Structured prerequisiteTaskIds are authoritative eligibility gates; blocked dependents are skipped until their prerequisites are done, then become immediately eligible without a lane shuffle. For explicit or ambiguous fallback discovery, use bounded minimal/summary reads across backlog and todo; never use an unfiltered or done collection as ordinary next-work selection. projectId is the originating selected board boundary and must remain unchanged for the lifetime of that loop unless the user explicitly switches projects. NO_ELIGIBLE_TASK stops the current project loop; do not substitute another projectId to find work.',
     inputSchema: {
       type: 'object',
       properties: {

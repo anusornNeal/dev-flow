@@ -274,6 +274,148 @@ export function getProjectOrchestrationProjection(projectId: string) {
   return { projectId: cleanProjectId, generatedAt: new Date(nowMs).toISOString(), entries, counts };
 }
 
+export type SchedulerNextAction = 'recover-current' | 'resolve-attention' | 'continue-owned' | 'claim-new' | 'no-action';
+
+function boundedSchedulerContinuation(continuation: ReturnType<typeof evaluateExecutionContinuation>) {
+  const nextAction = continuation.nextAction?.action === 'query-pending-jobs'
+    ? { ...continuation.nextAction, jobIds: continuation.nextAction.jobIds.slice(0, 8), operationIds: continuation.nextAction.operationIds.slice(0, 8) }
+    : continuation.nextAction;
+  return {
+    executionSessionId: continuation.executionSessionId,
+    workspaceId: continuation.execution.workspaceId,
+    reasonCodes: continuation.reasonCodes.slice(0, 8),
+    nextAction,
+    pendingOperationIds: continuation.pendingOperations.slice(0, 8).map((entry) => entry.operationId),
+    jobIds: continuation.pendingOperations.slice(0, 8).map((entry) => entry.jobId).filter(Boolean),
+    finalizationOperationId: continuation.finalization?.operationId || null,
+    autonomousTailJobId: continuation.autonomousTail.jobId,
+  };
+}
+
+export function getNextActionForSession(projectId: string, input: { sessionId: string; limit?: number }) {
+  const cleanProjectId = String(projectId || '').trim();
+  const cleanSessionId = String(input?.sessionId || '').trim();
+  if (!cleanProjectId) throw createApiError(400, 'PROJECT_ID_REQUIRED', 'projectId is required to resolve the scheduler next action.');
+  if (!cleanSessionId) throw createApiError(400, 'SESSION_ID_REQUIRED', 'sessionId is required to resolve owned scheduler work.');
+  const project = getProject(cleanProjectId);
+  if (!project) throw createApiError(404, 'PROJECT_NOT_FOUND', `Project '${cleanProjectId}' was not found.`, { affectedId: cleanProjectId });
+
+  const nowMs = Date.now();
+  const hash = sessionIdHash(cleanSessionId);
+  const projectTasks = getTasksByProjectId(cleanProjectId);
+  const ownedTasks = projectTasks
+    .filter((task) => !task.archivedAt && task.status !== 'done' && isActiveClaim(task.claim, nowMs) && task.claim.sessionIdHash === hash)
+    .sort(compareNextTaskOrder);
+
+  if (ownedTasks.length > 1) {
+    return {
+      action: 'resolve-attention' as const,
+      projectId: cleanProjectId,
+      reasonCodes: ['OWNED_WORK_AMBIGUOUS'],
+      attention: {
+        code: 'OWNED_WORK_AMBIGUOUS',
+        message: 'This scheduler session owns multiple active task scopes; DevFlow will not guess which one to abandon or resume.',
+        taskRefs: ownedTasks.slice(0, 8).map((task) => ({ taskId: task.id, displayId: task.displayId, workspaceId: task.claim?.workspaceId || null })),
+      },
+    };
+  }
+
+  const ownedTask = ownedTasks[0] || null;
+  let ownedContinuation: ReturnType<typeof evaluateExecutionContinuation> | null = null;
+  if (ownedTask) {
+    const sessions = listExecutionSessionsForTask(ownedTask.id);
+    const activeSessions = sessions.filter((entry) => entry.status === 'active');
+    if (activeSessions.length > 1) {
+      return {
+        action: 'resolve-attention' as const,
+        projectId: cleanProjectId,
+        task: { taskId: ownedTask.id, displayId: ownedTask.displayId },
+        reasonCodes: ['OWNED_EXECUTION_AMBIGUOUS'],
+        attention: {
+          code: 'OWNED_EXECUTION_AMBIGUOUS',
+          message: 'Owned task has multiple active execution sessions; explicit recovery is required before scheduler continuation.',
+          executionSessionIds: activeSessions.slice(0, 8).map((entry) => entry.id),
+          workspaceId: ownedTask.claim?.workspaceId || null,
+        },
+      };
+    }
+    const execution = activeSessions[0] || sessions[0] || null;
+    if (!execution) {
+      return {
+        action: 'resolve-attention' as const,
+        projectId: cleanProjectId,
+        task: { taskId: ownedTask.id, displayId: ownedTask.displayId },
+        reasonCodes: ['TASK_EXECUTION_SESSION_MISSING'],
+        attention: { code: 'TASK_EXECUTION_SESSION_MISSING', message: 'Owned task has no durable execution session to continue safely.', workspaceId: ownedTask.claim?.workspaceId || null },
+      };
+    }
+    ownedContinuation = evaluateExecutionContinuation({} as any, execution.id, { workspaceId: ownedTask.claim?.workspaceId || execution.workspaceId || undefined });
+    if (ownedContinuation.blocked || ownedContinuation.autonomousTail.state === 'attention') {
+      return {
+        action: 'resolve-attention' as const,
+        projectId: cleanProjectId,
+        task: { taskId: ownedTask.id, displayId: ownedTask.displayId },
+        reasonCodes: ownedContinuation.reasonCodes.slice(0, 8),
+        continuation: boundedSchedulerContinuation(ownedContinuation),
+      };
+    }
+  }
+
+  const projection = getProjectOrchestrationProjection(cleanProjectId);
+  const attention = projection.entries.find((entry) => entry.state === 'attention' && entry.taskId !== ownedTask?.id);
+  if (attention) {
+    return {
+      action: 'resolve-attention' as const,
+      projectId: cleanProjectId,
+      task: { taskId: attention.taskId, displayId: attention.displayId },
+      reasonCodes: attention.reasons.slice(0, 8).map((entry) => entry.code),
+      attention: { reasons: attention.reasons.slice(0, 8), ...(('context' in attention && attention.context) ? { context: attention.context } : {}) },
+    };
+  }
+
+  if (ownedTask && ownedContinuation) {
+    const continuation = boundedSchedulerContinuation(ownedContinuation);
+    if (ownedContinuation.nextAction) {
+      return {
+        action: 'recover-current' as const,
+        projectId: cleanProjectId,
+        task: { taskId: ownedTask.id, displayId: ownedTask.displayId },
+        reasonCodes: ownedContinuation.reasonCodes.slice(0, 8),
+        continuation,
+      };
+    }
+    return {
+      action: 'continue-owned' as const,
+      projectId: cleanProjectId,
+      task: { taskId: ownedTask.id, displayId: ownedTask.displayId },
+      reasonCodes: ownedContinuation.reasonCodes.slice(0, 8),
+      continuation,
+    };
+  }
+
+  const limit = boundedNextTaskLimit(input.limit);
+  const newWorkWindow = projection.entries
+    .filter((entry) => entry.taskStatus === 'backlog' || entry.taskStatus === 'todo')
+    .slice(0, limit);
+  const ready = newWorkWindow.find((entry) => entry.state === 'ready');
+  if (ready) {
+    return {
+      action: 'claim-new' as const,
+      projectId: cleanProjectId,
+      task: { taskId: ready.taskId, displayId: ready.displayId },
+      reasonCodes: ['ELIGIBLE_NEW_WORK'],
+      claim: { tool: 'claim_next_task' as const, projectId: cleanProjectId, limit },
+    };
+  }
+
+  return {
+    action: 'no-action' as const,
+    projectId: cleanProjectId,
+    reasonCodes: ['NO_ELIGIBLE_TASK'],
+    blocked: newWorkWindow.filter((entry) => entry.state === 'blocked').slice(0, 5).map((entry) => ({ taskId: entry.taskId, displayId: entry.displayId, reasonCodes: entry.reasons.slice(0, 5).map((reason) => reason.code) })),
+  };
+}
+
 function activeTaskExecutionsForWorkspace(task: any, workspaceId: string) {
   return listExecutionSessionsForTask(task.id)
     .filter((entry) => entry.workspaceId === workspaceId && entry.status === 'active');

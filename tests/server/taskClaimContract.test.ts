@@ -39,6 +39,28 @@ test('expand_task_scope is a bounded owner-guarded first-class write intent', ()
   assert.equal(classification?.risk, 'write');
 });
 
+test('get_next_action is a read-only project-pinned scheduler contract with no implicit claim', () => {
+  const tool = taskToolDefinitions.find((entry) => entry.name === 'get_next_action');
+  assert.ok(tool);
+  const schema = tool.inputSchema as any;
+  assert.equal(schema?.properties?.projectId?.type, 'string');
+  assert.equal(schema?.properties?.sessionId?.type, 'string');
+  assert.ok(schema?.required?.includes('projectId'));
+  assert.ok(schema?.required?.includes('sessionId'));
+  assert.deepEqual(schema?.properties?.action, undefined);
+  const request = tool.buildHttpRequest({ projectId: 'project-1', sessionId: 'chat-a', limit: 25 });
+  assert.equal(request.method, 'POST');
+  assert.equal(request.path, '/api/tasks/next-action');
+  assert.equal((request.body as any)?.projectId, 'project-1');
+  assert.equal((request.body as any)?.sessionId, 'chat-a');
+  assert.match(String(tool.description || ''), /Read-only/i);
+  assert.match(String(tool.description || ''), /never claims/i);
+  assert.match(String(tool.description || ''), /repeated pulls are safe/i);
+  const inventory = buildMcpToolSurfaceInventory(taskToolDefinitions);
+  assert.equal(inventory.find((entry) => entry.name === 'get_next_action')?.risk, 'read');
+  assert.ok(devFlowToolDefinitions.some((entry) => entry.name === 'get_next_action'));
+});
+
 test('claim_next_task is a bounded project-level optimization with explicit session identity', () => {
   const tool = taskToolDefinitions.find((entry) => entry.name === 'claim_next_task');
   assert.ok(tool);

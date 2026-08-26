@@ -1,10 +1,19 @@
 import type express from 'express';
 import type { ApiRouteDeps } from '../types.js';
 import { sendApiError } from '../services/api.js';
-import { claimNextTaskForSession, claimTaskForSession, expandTaskClaimScope, releaseTaskClaim } from '../services/taskClaimService.js';
+import { claimNextTaskForSession, claimTaskForSession, expandTaskClaimScope, getNextActionForSession, releaseTaskClaim } from '../services/taskClaimService.js';
 import { toMutationResponse } from './taskRouteSupport.js';
 
 export function registerTaskClaimRoutes(app: express.Express, _deps: ApiRouteDeps) {
+  app.post('/api/tasks/next-action', (req, res) => {
+    try {
+      const body = req.body || {};
+      return res.json(getNextActionForSession(body.projectId, body));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
   app.post('/api/tasks/claim-next', (req, res) => {
     try {
       const body = req.body || {};

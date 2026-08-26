@@ -58,9 +58,9 @@ For ChatGPT/@devflowz managed execution, completion continues to follow the mana
 
 Older DevFlow builds included fresh-process agent launchers, managed Codex workspaces, agent-run callbacks, auto-work continuation, CLI-specific launch flags, and prompt files generated per run. Those paths remain **compatibility-only quarantined behavior**, not the default local-native adapter. They may stay for explicitly supported Auto Work/legacy features until separate removal evidence proves they are unused, but new orchestration must not depend on them. Do not copy their managed-workspace or finalization requirements into the Codex handoff prompt.
 
-## Phase 0 architecture inventory
+## Post-Phase 7 architecture inventory
 
-This inventory is the migration boundary for the durable agent-neutral orchestration work. It records what is authoritative today, what still has live consumers, and which historical paths must not be duplicated by the new control plane. Classification here is evidence-based; grep presence alone is never a removal reason.
+This inventory was refreshed after the durable execution tail, scheduler next-action contract, persistent board-loop intent, background pipeline, agent-neutral status bridge, and Agent Office monitoring projection were integrated. It records the surviving authorities and the compatibility paths that still have current consumers. Classification remains evidence-based; grep presence alone is never a removal reason.
 
 ### Current authority map
 
@@ -72,8 +72,8 @@ This inventory is the migration boundary for the durable agent-neutral orchestra
 | Managed terminal integration | `src/server/services/taskWorkspaceFinalizationService.ts` exposed by `src/server/routes/devflow.ts` as `finalize_task_workspace` | Managed ChatGPT completion and break-glass recovery both call the same finalizer | **KEEP** |
 | Autonomous Codex/local-native handoff | `config/prompt-pipeline.json`, `skills/prompt.codex-*.md`, Copy Prompt route, then native Codex repository tools | Card Copy for Codex; no live DevFlow repository-execution dependency after copy | **KEEP** as an execution boundary, not a scheduler |
 | Best-effort external board synchronization | `src/server/services/externalTaskStatusService.ts` via `src/server/routes/taskWorkflowRoutes.ts`; MCP contract `update_external_task_status` | Codex may mirror `in-progress`, `ready-for-review`, or `done`; metadata is informational | **KEEP**; must stay advisory and must not become managed lifecycle evidence |
-| Board live-work projection | `src/server/services/taskBoardLiveWorkProjectionService.ts` -> `projectTaskBoardLiveWork()` -> `taskRouteSupport.toTaskResponse()` | Task board/task detail payloads; `TaskCard` consumes `task.liveWork` before falling back to legacy agent state | **KEEP / EXTEND** as the projection seam for Agent Office/live monitoring |
-| Legacy launched-agent orchestration | `AgentOrchestrationWorker`, `taskRouteSupport.triggerTaskAgent()` / `maybeTriggerTaskAgent()`, `taskLegacyAgentRoutes.ts` | Task create/update/batch/set-authoring hooks and retry/completion routes still invoke it | **REPLACE**, but not removable yet because live mutation routes still call it |
+| Canonical live-work / Agent Office projection | `src/server/services/taskBoardLiveWorkProjectionService.ts` -> `projectTaskBoardLiveWork()` / `getAgentOfficeMonitoringProjection()` | Task board/task detail payloads and the Agent Office API/page consume the same managed/external/legacy evidence ordering | **KEEP** as the single read-model seam; do not fork a second live-state projection |
+| Legacy launched-agent orchestration | `taskRouteSupport.triggerTaskAgent()` / `maybeTriggerTaskAgent()`, compatibility `AgentOrchestrationWorker`, `taskLegacyAgentRoutes.ts` | Task create/update/batch/set-authoring hooks and retry/completion routes still invoke it | **QUARANTINED COMPATIBILITY**; the worker is only a lock facade and is not a scheduler/lifecycle authority |
 | Legacy Auto Work queue | `taskRouteSupport.continueTaskQueueForProject()` plus `settings.ts` and completion callbacks | Enabling `settings.autoWork` immediately scans assigned `todo` tasks; successful legacy runs continue the queue | **REPLACE**; this is existing scheduler-like behavior that a new dispatcher must supersede, never run beside |
 | Auto Work UI/config | `src/components/AutoWorkToggle.tsx`, `settingsRepository.ts`, `/api/settings` | User-visible toggle persists `autoWork` and starts legacy queue execution | **DEPRECATE** after the replacement orchestration control is user-visible and migration-safe |
 | Legacy run history/log API | `src/server/routes/taskLegacyAgentRoutes.ts` and `agentRunRepository`/`agentRunService` | Task drawer/activity and compatibility tooling can still inspect latest/history/logs and retry/cancel old runs | **DEPRECATE / SPLIT**; retain read compatibility until Agent Office exposes equivalent history, retire launcher mutations separately |
@@ -92,13 +92,13 @@ The legacy `agentRun` record is therefore **not** the authoritative owner of a m
 
 For the current product, Copy for Codex is the authoritative autonomous local-native path. DevFlow authors the bounded task handoff, then Codex owns repository investigation, edits, commands, verification, Git and completion. `update_external_task_status` is a best-effort presentation sync only.
 
-Historical DevFlow-launched Codex/agent execution is a different path. `AgentOrchestrationWorker` still has real callers, so it cannot be called dead code, but it is compatibility orchestration rather than the authority for Copy for Codex. Future local-native agent support should follow the autonomous handoff/status-sync boundary unless a later phase intentionally defines a durable dispatcher contract.
+Historical DevFlow-launched Codex/agent execution is a different path. Phase 7 re-scanned its callers: legacy mutation routes and Auto Work still use it, so deleting it would break supported compatibility behavior. The circular orchestration dependency was removed by centralizing the `agent-orchestration-*` lock key in `taskRouteSupport`; `AgentOrchestrationWorker` now remains only as a one-way compatibility facade. Local-native agents use the autonomous handoff/status-sync boundary implemented in Phase 5 instead.
 
 ### Existing scheduler-like behavior that must not be duplicated
 
 There are two active legacy scheduling entry points:
 
-1. **Mutation-triggered launch.** `maybeTriggerTaskAgent()` runs when an assigned task reaches `todo` or its assignment changes, and several task create/update/batch routes call `AgentOrchestrationWorker.maybeTrigger(...)`.
+1. **Mutation-triggered legacy launch.** `maybeTriggerTaskAgent()` runs when an assigned task reaches `todo` or its assignment changes, and several task create/update/batch routes enter it through the compatibility facade.
 2. **Queue continuation.** `continueTaskQueueForProject()` selects project `todo` tasks with an assigned agent, sorts oldest first, skips tasks whose latest run failed, and attempts to launch every eligible task that is not blocked by per-agent concurrency. `settings.ts` calls this across projects when Auto Work is enabled, and successful legacy completion callbacks call it again.
 
 A new scheduler/dispatcher must first establish one cut-over owner for these decisions. Running a new polling/event scheduler while either legacy entry point can still launch work would create duplicate starts, contradictory concurrency policy, and two different definitions of "next task".
@@ -109,14 +109,14 @@ A new scheduler/dispatcher must first establish one cut-over owner for these dec
 | --- | --- | --- | --- |
 | `taskClaimService` managed claim APIs | **KEEP** | Current board-loop and managed ChatGPT ownership use them | No retirement planned; new orchestration should compose them |
 | `executionContinuationService` | **KEEP** | Encodes pending durable-job/finalization/recovery continuation | Retire only if its contract is fully absorbed by a single proven successor with the same durable evidence semantics |
-| `taskBoardLiveWorkProjectionService` | **KEEP / EXTEND** | Task responses and current board UI consume `liveWork` | Evolve into agent-neutral projection; do not fork a second live-state projection |
+| `taskBoardLiveWorkProjectionService` | **KEEP** | Task board, task detail and Agent Office consume the canonical live-work projection | Keep as the single monitoring read model; do not fork writable orchestration state |
 | `externalTaskStatusService` / `update_external_task_status` | **KEEP** | Codex autonomous handoff uses optional board sync | Keep while external/native workers exist; never upgrade informational metadata into managed proof |
 | `continueTaskQueueForProject()` | **REPLACE** | Called by settings enable and successful legacy run callbacks | Disable legacy launch ownership only after new dispatcher has equivalent eligibility/concurrency tests and one explicit cut-over flag/state |
-| `maybeTriggerTaskAgent()` and mutation-route `AgentOrchestrationWorker.maybeTrigger()` calls | **REPLACE** | Called from task create/update/batch/set-authoring paths | Remove trigger hooks only after the new dispatcher is the sole owner of start decisions and duplicate-start tests pass |
+| `maybeTriggerTaskAgent()` and compatibility facade calls | **REPLACE LATER** | Called from task create/update/batch/set-authoring paths | Remove trigger hooks only after supported Auto Work execution is explicitly retired or migrated; the reasoning scheduler does not silently take ownership of legacy launch semantics |
 | `AutoWorkToggle` + `settings.autoWork` | **DEPRECATE** | User-facing toggle still persists state and starts work | Remove after replacement orchestration controls are shipped, migrated settings are handled, and no API/UI caller reads the old flag |
 | `taskLegacyAgentRoutes` launcher mutations (retry/cancel/completion) | **DEPRECATE** | Registered by `tasks.ts`; active run compatibility uses them | Split read/history from mutation endpoints; remove mutations after no supported execution path creates legacy runs |
 | Legacy agent-run history/log reads | **REMOVE-LATER** or migrate | Task activity UI/history still has consumers | Remove only after equivalent Agent Office/history projection exists and all UI/API callers migrate |
-| Fresh-process launcher/config/run-file plumbing in `agentRunService` / `agentLaunchConfig` | **REMOVE-LATER** | Still reached by `AgentOrchestrationWorker.trigger()` | Delete only after all launcher mutations are retired, tests/contracts no longer require run files, and repository search confirms no runtime caller |
+| Fresh-process launcher/config/run-file plumbing in `agentRunService` / `agentLaunchConfig` | **REMOVE-LATER** | Still reached by compatibility launch through `triggerTaskAgent()` | Delete only after all launcher mutations are retired, tests/contracts no longer require run files, and repository search confirms no runtime caller |
 
 ### Dependency graph for migration phases
 
@@ -140,7 +140,8 @@ Task/card authoring
   `-- legacy Auto Work compatibility
          task mutation hooks / settings toggle
            -> continueTaskQueueForProject / maybeTriggerTaskAgent
-           -> AgentOrchestrationWorker
+           -> taskRouteSupport legacy launch helpers
+           -> compatibility AgentOrchestrationWorker lock facade
            -> legacy agentRun + launcher files
            -> completion callback
            `-> queue continuation
@@ -160,7 +161,9 @@ Task board response
 - **Recovery regression:** new orchestration must preserve durable MCP job/finalization continuation and must never replay accepted mutations just because a client reconnects.
 - **Cleanup by grep:** legacy files have broad imports and user-visible settings today. Retirement requires caller migration plus a measurable cut-over condition, not a low reference count.
 
-### Phase 7 cleanup gate
+### Phase 7 cleanup result
 
-Broad cleanup is intentionally deferred. A candidate can move from **DEPRECATE/REMOVE-LATER** to deletion only when all of the following are true: the replacement path is live, runtime callers are migrated, relevant UI/API contracts no longer expose the legacy behavior, focused regression tests cover the replacement, and a bounded repository search shows no supported runtime consumer. Historical docs may then be archived or rewritten, but evidence needed to explain migrations should be retained.
+Phase 7 removes duplicate architecture only where current evidence permits it. The route-composition file no longer carries stale launcher/run-history imports left behind by earlier route extraction, and the legacy orchestration lock is centralized so `taskRouteSupport` no longer imports its compatibility facade back into itself.
+
+The destructive retirement gate is **not** met for Auto Work, legacy retry/cancel/completion routes, run history/log reads, or fresh-process launcher files: settings, task mutation hooks, compatibility callbacks, and current UI/API consumers still reference them, while Agent Office v1 is monitoring-only and does not replace those controls/history contracts. Those paths stay quarantined and must not receive new dependencies. A later deletion still requires a live replacement, migrated callers, focused regression coverage, and a bounded repository search showing no supported runtime consumer.
 

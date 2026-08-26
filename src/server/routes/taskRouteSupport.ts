@@ -10,13 +10,12 @@ import { VALID_AGENTS, LEGACY_VALID_EFFORTS_FALLBACK, VALID_MODELS, VALID_STATUS
 import { ACTIVE_AGENT_RUN_STATUSES, cancelActiveRunsForTask, cancelStaleActiveRuns, createAgentRun, getActiveRunForProjectAndAgent, getActiveRunForTask, getLatestAgentRunForTask, listActiveRunSummariesForProject, listAgentRunsForTask, updateAgentRunStatus, type AgentRun, type AgentNeutralOrchestrationResultState } from '../repositories/agentRunRepository';
 import { deleteTasksByIds, generateDisplayId, saveTask, getTasks } from '../repositories/taskRepository.js';
 import { listAttachmentsForTask } from '../repositories/attachmentRepository';
-import { AgentOrchestrationWorker } from '../services/agentOrchestrationWorker';
 import { appendAgentRunLog, buildAgentCompletionSummary, buildAgentTriggerInvocation, createAgentRunFiles, createAgentRunResultRecord, getAgentRunHistoryPaths, getDevFlowApiBaseUrl, resolveAgentExecutionMode, resolveFromDevFlowAppRoot, writeAgentRunLaunchMetadata, writeAgentRunOutputSummary, writeAgentRunResult } from '../services/agentRunService';
 import { extractImages, extractDesignImages, findProjectByIdentifier, findTaskByIdentifier, getAgentTaskContext, normalizeAgentCompletionPayload, normalizeTaskCategoryAndTags, applyTaskCategoryAndTagsUpdate, renderTaskPrompt, resolveProjectIdFromRepo, validateAgentCompletionPayload, validateAgentParams, validateTaskPayload } from '../services/taskService';
 import { validateTaskQualityForMutation } from '../services/taskQualityService';
 import { createApiError, sendApiError } from '../services/api';
 import { draftTaskFromJiraBundle } from '../services/compositeAuthoringService';
-import { acquireLock, releaseLock, withIdempotency, getIdempotencyResult, createPendingIdempotencyWithFingerprint, resolvePendingIdempotency, rejectPendingIdempotency, buildIdempotencyFingerprint } from '../services/lockAndIdempotencyService';
+import { acquireLock, releaseLock, withIdempotency, withSyncLock, getIdempotencyResult, createPendingIdempotencyWithFingerprint, resolvePendingIdempotency, rejectPendingIdempotency, buildIdempotencyFingerprint } from '../services/lockAndIdempotencyService';
 import { validateEnum, validateString } from '../validation';
 import { isValidTransition, getValidationErrorMessage } from '../../lib/statusTransitions';
 import { buildAgentLaunchConfig, runAgentLaunchPreflight, type AgentLaunchPreflightCode } from '../services/agentLaunchConfig';
@@ -31,6 +30,10 @@ import { projectTaskBoardLiveWork } from '../services/taskBoardLiveWorkProjectio
 const STALE_AGENT_RUN_MS = 30 * 60 * 1000;
 let lastCleanupCheck = 0;
 const CLEANUP_INTERVAL_MS = 30_000;
+
+export function withAgentOrchestrationLock<T>(taskId: string, action: () => T): T {
+  return withSyncLock(`agent-orchestration-${taskId}`, action);
+}
 
 type TriggerTaskAgentResult =
   | { triggered: true; run: AgentRun }
@@ -680,7 +683,7 @@ export function continueTaskQueueForProject(projectId: string, deps: ApiRouteDep
       continue;
     }
 
-    const result = AgentOrchestrationWorker.trigger(nextTask, deps, 'queue continuation');
+    const result = withAgentOrchestrationLock(nextTask.id, () => triggerTaskAgent(nextTask, deps, 'queue continuation'));
     if (result.triggered) {
       startedRuns.push(result.run);
       continue;
@@ -931,7 +934,7 @@ export function maybeTriggerTaskAgent(task: any, previousTaskOrStatus: any, deps
     deps.writeAgentLog('INFO', `Auto Work is disabled. Task ${task.id} moved to todo but agent will not be triggered.`);
     return null;
   }
-  const result = AgentOrchestrationWorker.trigger(task, deps, routeLabel);
+  const result = triggerTaskAgent(task, deps, routeLabel);
   if (!result.triggered) {
     const blockedResult = result as TriggerTaskAgentFailure;
     deps.writeAgentLog('INFO', `Skipped agent trigger for task=${task.id}: ${blockedResult.reason}`);

@@ -17,6 +17,14 @@ Start with `00-skill-router.md`, then load only the specialist it selects:
 
 Master skills are authoritative for the managed ChatGPT/@devflowz path. Compatibility files and examples do not override them.
 
+## Current orchestration boundaries
+
+- Reasoning-worker scheduling is project-pinned: `get_next_action` resumes durable work and `claim_next_task` is the atomic ownership boundary.
+- Managed execution continuation stays in `executionContinuationService`; safe terminal integration stays in `finalize_task_workspace`. Do not create parallel lifecycle or completion state machines.
+- External/local-native agents execute with their own repository harness and report best-effort status through the agent-neutral synchronization contract.
+- Agent Office is a monitoring projection over canonical orchestration state; it is not a second writable scheduler.
+- Legacy Auto Work and fresh-process launcher routes remain compatibility-only while current callers still depend on them. New skills and features must not add dependencies on that path.
+
 ## On-demand guidance skills
 
 DevFlow also keeps repo-owned brainstorming and UI/UX guidance in a namespace separate from the protected authoring masters. These are guidance-only and do not replace managed execution policy or become automatic Codex Copy Prompt content.

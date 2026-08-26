@@ -1,24 +1,15 @@
 import { AgentOrchestrationWorker } from '../services/agentOrchestrationWorker';
-import { getSettings } from '../repositories/settingsRepository.js';
-import { execFile } from 'child_process';
-import fs from 'fs';
-import path from 'path';
-import db from '../../db/index';
 import type express from 'express';
 import type { ApiRouteDeps } from '../types';
 import { VALID_AGENTS, LEGACY_VALID_EFFORTS_FALLBACK, VALID_MODELS, VALID_STATUSES } from '../constants';
-import { ACTIVE_AGENT_RUN_STATUSES, cancelActiveRunsForTask, cancelStaleActiveRuns, createAgentRun, getActiveRunForProjectAndAgent, getActiveRunForTask, getLatestAgentRunForTask, listActiveRunSummariesForProject, listAgentRunsForTask, updateAgentRunStatus, type AgentRun } from '../repositories/agentRunRepository';
 import { archiveInactiveDoneTasks, deleteTasksByIds, generateDisplayId, queryTaskBoardPage, resolveDisplayIdForNewTask, restoreArchivedTask, saveTask, getTasks } from '../repositories/taskRepository.js';
-import { listAttachmentsForTask } from '../repositories/attachmentRepository';
-import { appendAgentRunLog, buildAgentCompletionSummary, createAgentRunFiles, createAgentRunResultRecord, getAgentRunHistoryPaths, getAgentTriggerScriptPath, getDevFlowApiBaseUrl, resolveAgentExecutionMode, resolveFromDevFlowAppRoot, writeAgentRunLaunchMetadata, writeAgentRunOutputSummary, writeAgentRunResult } from '../services/agentRunService';
-import { extractImages, extractDesignImages, findProjectByIdentifier, findTaskByIdentifier, getAgentTaskContext, normalizeAgentCompletionPayload, normalizeTaskCategoryAndTags, applyTaskCategoryAndTagsUpdate, renderTaskPrompt, resolveProjectIdFromRepo, validateAgentCompletionPayload, validateAgentParams, validateTaskPayload } from '../services/taskService';
+import { extractImages, extractDesignImages, normalizeTaskCategoryAndTags, applyTaskCategoryAndTagsUpdate, resolveProjectIdFromRepo, validateAgentParams, validateTaskPayload } from '../services/taskService';
 import { validateTaskQualityForMutation } from '../services/taskQualityService';
 import { createApiError, sendApiError } from '../services/api';
 import { draftTaskFromJiraBundle } from '../services/compositeAuthoringService';
 import { acquireLock, releaseLock, withIdempotency, getIdempotencyResult, createPendingIdempotencyWithFingerprint, resolvePendingIdempotency, rejectPendingIdempotency, buildIdempotencyFingerprint } from '../services/lockAndIdempotencyService';
 import { validateEnum, validateString } from '../validation';
 import { isValidTransition, getValidationErrorMessage, getTransitionPath } from '../../lib/statusTransitions';
-import { buildAgentLaunchConfig, runAgentLaunchPreflight, type AgentLaunchPreflightCode } from '../services/agentLaunchConfig';
 import {
   appendBugVersion,
   createBugThread,
@@ -29,7 +20,6 @@ import {
   evaluateMove,
   validateTaskPatch as validateTaskPatchUseCase,
 } from '../useCases/taskUseCases';
-import { canRetryRun as canRetryRunUseCase, canCancelRun as canCancelRunUseCase, validateCompletion as validateCompletionUseCase } from '../useCases/agentRunUseCases';
 import type { AgentCompletionPayload, AgentCompletionStatus, BugStatus, TaskStatus } from '../../types';
 import { registerTaskBatchRoutes } from './taskBatchRoutes';
 import { registerTaskSetAuthoringRoute } from './taskSetAuthoringRoute';
@@ -45,28 +35,13 @@ import { buildTaskGitWarnings, evaluateReviewSubmission, syncTaskWithGit } from 
 import { getProjectOrchestrationProjection, withTaskDeletionLifecycleGuard } from '../services/taskClaimService.js';
 
 import {
-  applyAgentCompletionCallback,
-  applyRunSummaryToTask,
   appendTaskLog,
   canOverrideTaskLock,
-  completeAgentRunForTask,
-  continueTaskQueueForProject,
-  createTaskLogEntry,
-  filterTasksForList,
   getTaskIndexByIdentifier,
-  getTaskMoveWorkflowBlockers,
-  maybeTriggerTaskAgent,
-  parseTaskReadMode,
-  requireAgentOwnedRequest,
-  resolveTaskBoardListQuery,
-  runThrottledStaleCleanup,
   stripRequestControlFields,
   persistTaskMutationWithLifecycle,
   toMutationListResponse,
   toMutationResponse,
-  toTaskResponse,
-  triggerTaskAgent,
-  type TriggerTaskAgentFailure,
   validateParentReviewMove,
 } from './taskRouteSupport';
 export { completeAgentRunForTask, continueTaskQueueForProject, triggerTaskAgent } from './taskRouteSupport';

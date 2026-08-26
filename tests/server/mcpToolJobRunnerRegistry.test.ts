@@ -38,6 +38,7 @@ const EXPECTED_RUNNERS = [
   'delete_local_path',
   'move_local_path',
   'apply_project_atlas_agent_update',
+  'continue_task_execution_tail',
 ];
 
 test('runner registry owns the complete built-in async dispatch surface', () => {

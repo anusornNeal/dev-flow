@@ -23,7 +23,23 @@ import {
   type ExecutionLifecycleTransitionInput,
 } from './executionSessionService.js';
 
-export type HarnessExecutionAction = 'mutation' | 'verification' | 'commit' | 'finalization' | 'restart';
+export type HarnessExecutionAction = 'mutation' | 'verification' | 'commit' | 'finalization' | 'restart';export type TaskOwnedCommitRoute = {
+  tool: 'commit_task_owned_changes';
+  taskId: string;
+  workspaceId: string;
+  executionSessionId: string;
+};
+
+export type HarnessExecutionRecovery = {
+  strategy: 'switch-tool';
+  nextTool: 'commit_task_owned_changes';
+  retrySamePayload: false;
+  autoApply: false;
+  taskId: string;
+  workspaceId: string;
+  executionSessionId: string;
+};
+
 
 type RestartExecutionBlocker = {
   category: 'execution-session';
@@ -48,9 +64,11 @@ export type HarnessExecutionGuardDecision = {
     workspaceId: string | null;
     stage: string;
     transitionEvidenceId: string | null;
+    commitRoute: TaskOwnedCommitRoute | null;
   };
   operationId: string;
   restartBlockers?: RestartExecutionBlocker[];
+  recovery?: HarnessExecutionRecovery;
 };
 
 const MUTATION_TOOLS = new Set([
@@ -298,6 +316,16 @@ function compactPolicy(policy: HarnessPolicy): HarnessExecutionGuardDecision['po
   };
 }
 
+function taskOwnedCommitRoute(binding: ReturnType<typeof getTaskExecutionMutationBinding> | null): TaskOwnedCommitRoute | null {
+  if (!binding?.task?.id || !binding?.workspaceId || !binding?.session?.id) return null;
+  return {
+    tool: 'commit_task_owned_changes',
+    taskId: binding.task.id,
+    workspaceId: binding.workspaceId,
+    executionSessionId: binding.session.id,
+  };
+}
+
 function executionIdentity(binding: ReturnType<typeof getTaskExecutionMutationBinding> | null): HarnessExecutionGuardDecision['execution'] {
   if (!binding) return null;
   return {
@@ -306,10 +334,11 @@ function executionIdentity(binding: ReturnType<typeof getTaskExecutionMutationBi
     workspaceId: binding.workspaceId,
     stage: binding.session.lifecycle.stage,
     transitionEvidenceId: binding.session.lifecycle.lastTransition?.evidenceId || null,
+    commitRoute: taskOwnedCommitRoute(binding),
   };
 }
 
-function blockedDecision(toolName: string, action: HarnessExecutionAction, operationId: string, policy: HarnessPolicy, binding: ReturnType<typeof getTaskExecutionMutationBinding> | null, reasonCode: string, guidance: string[], restartBlockers: RestartExecutionBlocker[] = []): HarnessExecutionGuardDecision {
+function blockedDecision(toolName: string, action: HarnessExecutionAction, operationId: string, policy: HarnessPolicy, binding: ReturnType<typeof getTaskExecutionMutationBinding> | null, reasonCode: string, guidance: string[], restartBlockers: RestartExecutionBlocker[] = [], recovery?: HarnessExecutionRecovery): HarnessExecutionGuardDecision {
   return {
     guarded: true,
     allowed: false,
@@ -322,6 +351,7 @@ function blockedDecision(toolName: string, action: HarnessExecutionAction, opera
     execution: executionIdentity(binding),
     operationId,
     ...(restartBlockers.length > 0 ? { restartBlockers } : {}),
+    ...(recovery ? { recovery } : {}),
   };
 }
 
@@ -385,7 +415,27 @@ export function preflightHarnessExecutionGuard(_state: AppState, toolNameValue: 
   }
 
   if (toolName === 'commit_git_changes') {
-    return blockedDecision(toolName, action, operationId, policy, binding, 'TASK_OWNED_COMMIT_REQUIRED', ['Task-bound execution commits must use commit_task_owned_changes so task ownership, scope, and Git safety remain authoritative.']);
+    const route = taskOwnedCommitRoute(binding);
+    const recovery = route ? {
+      strategy: 'switch-tool' as const,
+      nextTool: route.tool,
+      retrySamePayload: false as const,
+      autoApply: false as const,
+      taskId: route.taskId,
+      workspaceId: route.workspaceId,
+      executionSessionId: route.executionSessionId,
+    } : undefined;
+    return blockedDecision(
+      toolName,
+      action,
+      operationId,
+      policy,
+      binding,
+      'TASK_OWNED_COMMIT_REQUIRED',
+      ['Task-bound execution commits must use commit_task_owned_changes so task ownership, scope, and Git safety remain authoritative.'],
+      [],
+      recovery,
+    );
   }
   if (action !== 'restart' && !binding) {
     return blockedDecision(toolName, action, operationId, policy, null, 'MANAGED_WORKSPACE_REQUIRED', ['Lifecycle-affecting execution requires an actively claimed task-bound managed workspace.']);
@@ -640,6 +690,20 @@ export function recordHarnessExecutionOutcome(decision: HarnessExecutionGuardDec
     if (!commitWasCreated(result)) return null;
     const current = getTaskExecutionMutationBinding({ workspaceId: decision.execution.workspaceId });
     if (!current) return null;
+    const commitHash = boundedString(result?.commitHash || result?.hash)!;
+    recordExecutionSessionEvidence(sessionId, [{
+      evidenceId: `harness:${decision.operationId}:commit-result`,
+      kind: 'git-commit-result',
+      revisionIdentity: commitHash,
+      metadata: {
+        commitHash,
+        taskId: current.task.id,
+        workspaceId: current.workspaceId,
+        executionSessionId: current.session.id,
+        tool: 'commit_task_owned_changes',
+        owned: true,
+      },
+    }]);
     return reconcileExecutionLifecycleStage(sessionId, {
       toStage: 'committed',
       reasonCode: result?.verificationDebtPreserved === true ? 'task-owned-commit-succeeded-with-verification-debt' : 'task-owned-commit-succeeded',

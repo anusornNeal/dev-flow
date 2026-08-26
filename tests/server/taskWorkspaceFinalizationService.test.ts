@@ -20,12 +20,13 @@ const {
   getExecutionSessionOwnershipEpoch,
   recordExecutionLifecycleTransition,
   recordExecutionOwnedChanges,
+  recordExecutionSessionEvidence,
   recordExecutionVerificationEvidence,
 } = await import('../../src/server/services/executionSessionService.js');
 const { getProjectCommandExecutionIdentity } = await import('../../src/server/services/projectCommandService.js');
 const { buildVerificationCoverageIdentity } = await import('../../src/server/services/verificationBatchService.js');
 const { integrateWorkspaceCommits, reconstructRecordedWorkspaceIntegration } = await import('../../src/server/services/workspaceIntegrationService.js');
-const { finalizeTaskWorkspace, __setTaskFinalizationFaultBoundaryForTests } = await import('../../src/server/services/taskWorkspaceFinalizationService.js');
+const { finalizeTaskWorkspace, __setTaskFinalizationFaultBoundaryForTests } = await import('../../src/server/services/taskWorkspaceFinalizationService.js');const { buildTaskCommitPlan, commitTaskOwnedChanges } = await import('../../src/server/services/taskCommitPlanService.js');
 const { getAgentTaskContext } = await import('../../src/server/services/taskService.js');
 const { getTaskFinalizationOperation } = await import('../../src/server/repositories/taskFinalizationOperationRepository.js');
 
@@ -198,6 +199,35 @@ function detachedFinalizationFixture(label: string) {
   }];
   return { ...prepared, sourceHead, baseHead, reconstruction, ownershipEpochId, detachedChecks };
 }
+
+test('already-committed task skips duplicate commit and proceeds directly to finalization', () => {
+  const f = preparedFinalizationFixture('already-committed-route');
+  const sourceHead = git(f.workspace.root, ['rev-parse', 'HEAD']).stdout;
+  recordExecutionSessionEvidence(f.execution.id, [{
+    evidenceId: `task-owned-commit:${sourceHead}`,
+    kind: 'task-owned-commit',
+    revisionIdentity: sourceHead,
+    metadata: {
+      commitHash: sourceHead,
+      taskId: f.task.id,
+      workspaceId: f.workspace.workspaceId,
+      executionSessionId: f.execution.id,
+      tool: 'commit_task_owned_changes',
+      owned: true,
+    },
+  }]);
+
+  const plan = buildTaskCommitPlan(f.state, { taskId: f.task.id, workspaceId: f.workspace.workspaceId });
+  assert.equal(plan.commitDisposition, 'already-committed');
+  assert.deepEqual(plan.nextAction, { tool: 'finalize_task_workspace', taskId: f.task.id, workspaceId: f.workspace.workspaceId });
+  const commitCount = git(f.workspace.root, ['rev-list', '--count', 'HEAD']).stdout;
+  const replay = commitTaskOwnedChanges(f.state, { taskId: f.task.id, workspaceId: f.workspace.workspaceId, message: 'chore: duplicate attempt' });
+  assert.equal(replay.status, 'already-committed');
+  assert.equal(git(f.workspace.root, ['rev-list', '--count', 'HEAD']).stdout, commitCount);
+
+  const result = finalizeTaskWorkspace(f.state, { taskId: f.task.id, workspaceId: f.workspace.workspaceId, checks });
+  assert.equal(result.status, 'completed', JSON.stringify(result));
+});
 
 test('detached finalization consumes exact already-integrated evidence and skips cleanup when the workspace root is unavailable', () => {
   const f = detachedFinalizationFixture('detached-direct');

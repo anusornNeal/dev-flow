@@ -5,13 +5,14 @@ import { listExecutionSessionsForTask } from '../repositories/executionSessionRe
 import { createApiError } from './api.js';
 import {
   getExecutionOwnershipState,
+  getExecutionSessionState,
   getExecutionVerificationBatchLiveOperations,
   getExecutionVerificationBatchState,
   getExecutionVerificationCoverageEvidence,
   recordExecutionSessionEvidence,
   type ExecutionVerificationBatchState,
 } from './executionSessionService.js';
-import { commitGitChanges } from './gitService.js';
+import { commitGitChanges, getGitLog } from './gitService.js';
 import { renderTaskCommitMessage } from './projectGitWorkflowPolicyService.js';
 import { resolveSessionWorkspace } from './sessionWorkspaceService.js';
 import { computeLifecycleAuthoritySnapshot } from './lifecycleAuthorityService.js';
@@ -42,6 +43,17 @@ export type TaskCommitPlan = {
     reusable: boolean;
     coveredCommands: string[];
     staleCommands: string[];
+  };
+  commitDisposition: 'commit-required' | 'already-committed' | 'ambiguous-no-changes';
+  alreadyCommitted: null | {
+    commitHash: string;
+    evidenceId: string;
+    nextTool: 'finalize_task_workspace';
+  };
+  nextAction: null | {
+    tool: 'commit_task_owned_changes' | 'finalize_task_workspace';
+    taskId: string;
+    workspaceId: string;
   };
   commitAllowed: boolean;
   blockers: TaskCommitPlanBlocker[];
@@ -183,6 +195,40 @@ export function resolveTaskVerificationCoverage(
   };
 }
 
+function resolveAlreadyCommittedProof(
+  state: AppState,
+  input: {
+    task: any;
+    sessionId: string;
+    workspaceId: string;
+    workspaceRoot: string;
+    ownedChangedFiles: string[];
+    unrelatedChangedFiles: string[];
+    scopeDrift: string[];
+    ownershipDrift: TaskCommitPlan['ownershipDrift'];
+  },
+): TaskCommitPlan['alreadyCommitted'] {
+  if (input.ownedChangedFiles.length > 0 || input.unrelatedChangedFiles.length > 0 || input.scopeDrift.length > 0 || input.ownershipDrift.length > 0) return null;
+  const evidence = [...getExecutionSessionState(input.sessionId).evidence].reverse().find((entry: any) => {
+    if (entry.kind !== 'task-owned-commit' && entry.kind !== 'git-commit-result') return false;
+    const metadata = entry.metadata || {};
+    return metadata.owned === true
+      && String(metadata.taskId || '') === String(input.task.id || '')
+      && String(metadata.workspaceId || '') === input.workspaceId
+      && String(metadata.executionSessionId || '') === input.sessionId
+      && String(metadata.commitHash || '').trim().length > 0;
+  });
+  if (!evidence) return null;
+  const commitHash = String(evidence.metadata?.commitHash || '').trim();
+  const head = getGitLog(state, { localPath: input.workspaceRoot, limit: 1 }).commits[0];
+  if (!head?.hash || head.hash !== commitHash) return null;
+  return {
+    commitHash,
+    evidenceId: evidence.id,
+    nextTool: 'finalize_task_workspace',
+  };
+}
+
 function buildBlockers(input: {
   sessionStatus: string;
   ownedChangedFiles: string[];
@@ -190,6 +236,7 @@ function buildBlockers(input: {
   authorityOwnershipActive: boolean;
   verificationBatch: ExecutionVerificationBatchState | null;
   verificationBatchLiveOperations: Array<{ operationId: string; status: string; jobStatus: string }>;
+  alreadyCommitted: boolean;
 }) {
   const blockers: TaskCommitPlanBlocker[] = [];
   if (!input.authorityOwnershipActive) {
@@ -198,8 +245,8 @@ function buildBlockers(input: {
   if (input.sessionStatus !== 'active') {
     blockers.push({ code: 'EXECUTION_SESSION_NOT_ACTIVE', message: 'Task-aware commit requires an active execution session.' });
   }
-  if (input.ownedChangedFiles.length === 0) {
-    blockers.push({ code: 'TASK_COMMIT_NO_OWNED_CHANGES', message: 'No current working-tree changes belong to this execution session.' });
+  if (input.ownedChangedFiles.length === 0 && !input.alreadyCommitted) {
+    blockers.push({ code: 'TASK_COMMIT_NO_OWNED_CHANGES', message: 'No current working-tree changes belong to this execution session and no task-owned commit evidence matches the current HEAD.' });
   }
   if (input.ownershipDrift.length > 0) {
     blockers.push({
@@ -310,8 +357,19 @@ export function buildTaskCommitPlan(_state: AppState, args: Record<string, any>)
   }
 
   const ownership = getExecutionOwnershipState(session.id, { repoRoot: workspace.root });
+  const task = getTaskByIdentifier(taskId, 'full') || authority.task;
+  const alreadyCommitted = resolveAlreadyCommittedProof(_state, {
+    task,
+    sessionId: session.id,
+    workspaceId,
+    workspaceRoot: workspace.root,
+    ownedChangedFiles: ownership.ownedChanges,
+    unrelatedChangedFiles: ownership.unrelatedChanges,
+    scopeDrift: ownership.scopeDrift,
+    ownershipDrift: ownership.ownershipDrift,
+  });
   const verificationCoverage = resolveTaskVerificationCoverage(_state, {
-    task: getTaskByIdentifier(taskId, 'full') || authority.task,
+    task,
     workspaceId,
     executionSessionId: session.id,
     verificationFresh: ownership.verificationFresh,
@@ -335,6 +393,7 @@ export function buildTaskCommitPlan(_state: AppState, args: Record<string, any>)
     ownershipDrift: ownership.ownershipDrift,
     verificationBatch,
     verificationBatchLiveOperations,
+    alreadyCommitted: Boolean(alreadyCommitted),
   });
   const debts = buildDebts({
     ownershipDrift: ownership.ownershipDrift,
@@ -358,6 +417,17 @@ export function buildTaskCommitPlan(_state: AppState, args: Record<string, any>)
     verificationState,
     verificationRecordedAt,
     verificationCoverage,
+    commitDisposition: alreadyCommitted
+      ? 'already-committed'
+      : ownership.ownedChanges.length > 0
+        ? 'commit-required'
+        : 'ambiguous-no-changes',
+    alreadyCommitted,
+    nextAction: alreadyCommitted
+      ? { tool: 'finalize_task_workspace', taskId, workspaceId }
+      : ownership.ownedChanges.length > 0
+        ? { tool: 'commit_task_owned_changes', taskId, workspaceId }
+        : null,
     commitAllowed: blockers.length === 0,
     blockers,
     debts,
@@ -367,6 +437,25 @@ export function buildTaskCommitPlan(_state: AppState, args: Record<string, any>)
 
 export function commitTaskOwnedChanges(state: AppState, args: Record<string, any>) {
   const plan = buildTaskCommitPlan(state, args);
+  if (plan.commitDisposition === 'already-committed' && plan.alreadyCommitted) {
+    return {
+      status: 'already-committed',
+      alreadyCommitted: true,
+      idempotent: true,
+      hash: plan.alreadyCommitted.commitHash,
+      commitHash: plan.alreadyCommitted.commitHash,
+      taskId: plan.taskId,
+      executionSessionId: plan.executionSessionId,
+      workspaceId: plan.workspaceId,
+      committedFiles: [],
+      unrelatedChangesPreserved: plan.unrelatedChangedFiles,
+      verificationDebtPreserved: false,
+      verificationDebt: null,
+      nextAction: plan.nextAction,
+      ownerBreakGlassApplied: false,
+      bypassedGates: [],
+    };
+  }
   if (!plan.commitAllowed) {
     throw createApiError(409, 'TASK_COMMIT_PLAN_BLOCKED', 'Task-owned commit is blocked until all commit-plan blockers are resolved.', {
       affectedId: plan.taskId,
@@ -413,6 +502,25 @@ export function commitTaskOwnedChanges(state: AppState, args: Record<string, any
       metadata: verificationDebt,
     }]);
     (verificationDebt as any).evidenceId = debtEvidenceId;
+  }
+  if (args.dryRun !== true) {
+    const commitHash = String((safeResult as any).commitHash || (safeResult as any).hash || '').trim();
+    if (commitHash) {
+      recordExecutionSessionEvidence(plan.executionSessionId, [{
+        evidenceId: `task-owned-commit:${commitHash}`,
+        kind: 'task-owned-commit',
+        revisionIdentity: commitHash,
+        metadata: {
+          commitHash,
+          taskId: plan.taskId,
+          workspaceId: plan.workspaceId,
+          executionSessionId: plan.executionSessionId,
+          tool: 'commit_task_owned_changes',
+          owned: true,
+          recordedAt: new Date().toISOString(),
+        },
+      }]);
+    }
   }
   return {
     ...safeResult,

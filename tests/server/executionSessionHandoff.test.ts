@@ -229,7 +229,13 @@ test('resume view reports completed/pending work and keeps the same logical sess
   assert.equal(resumed.handoff?.id, first.id);
   assert.equal(resumed.handoff?.toAgent, 'Codex');
   assert.equal(resumed.reusableEvidence.length, 2);
-  assert.equal(resumed.staleEvidence.length, 0);
+  assert.equal(resumed.staleEvidence.length, 0);  assert.deepEqual(resumed.commitRoute, {
+    tool: 'commit_task_owned_changes',
+    taskId: 'task-handoff',
+    workspaceId: 'ws_handoff_resume',
+    executionSessionId: session.id,
+  });
+  assert.equal(JSON.stringify(resumed.commitRoute).includes(repoRoot), false);
 
   const second = handoff.createExecutionHandoffSnapshot(state, session.id, {
     fromAgent: 'Codex',

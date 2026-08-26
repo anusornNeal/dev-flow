@@ -17,13 +17,14 @@ const { claimTaskForSession, releaseTaskClaim } = await import('../../src/server
 const { cleanupSessionWorkspace, resetSessionWorkspaceRuntimeForTests } = await import('../../src/server/services/sessionWorkspaceService.js');
 const executionSessions = await import('../../src/server/services/executionSessionService.js');
 const { reconcileExecutionLifecycleStage } = await import('../../src/server/services/executionLifecycleReconciliationService.js');
-const { getHarnessExecutionEffects, preflightHarnessExecutionGuard, recordHarnessExecutionOutcome } = await import('../../src/server/services/harnessExecutionGuardService.js');
+const { assertHarnessExecutionAllowed, getHarnessExecutionEffects, preflightHarnessExecutionGuard, recordHarnessExecutionOutcome } = await import('../../src/server/services/harnessExecutionGuardService.js');
 const { getBuiltinToolJobRecoveryPolicy } = await import('../../src/server/services/mcpToolJobRunnerRegistry.js');
 const { finalizeTaskWorkspace } = await import('../../src/server/services/taskWorkspaceFinalizationService.js');
 
 function git(root: string, args: string[]) {
   const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', shell: false });
   assert.equal(result.status, 0, result.stderr || result.stdout || `git ${args.join(' ')} failed`);
+  return (result.stdout || '').trim();
 }
 
 function createRepo(name = 'repo') {
@@ -183,9 +184,32 @@ test('execution guard composes policy, ownership, lifecycle, retry identity, and
     assert.deepEqual(softOverride.policy?.verification.value, { required: false, coverage: 'none', mechanics: 'delegated-to-verification-planner' });
     assert.equal(softOverride.policy?.verification.source, 'explicit-user');
 
+    const workspaceRoot = executionSessions.getTaskExecutionMutationBinding({ workspaceId })!.workspace.root;
+    const genericCommitStatusBefore = git(workspaceRoot, ['status', '--porcelain']);
     const genericCommit = preflightHarnessExecutionGuard(state, 'commit_git_changes', { workspaceId, message: 'should be blocked' });
     assert.equal(genericCommit.allowed, false);
     assert.equal(genericCommit.reasonCode, 'TASK_OWNED_COMMIT_REQUIRED');
+    assert.deepEqual(genericCommit.execution?.commitRoute, {
+      tool: 'commit_task_owned_changes',
+      taskId: task.id,
+      workspaceId,
+      executionSessionId: session.id,
+    });
+    assert.deepEqual(genericCommit.recovery, {
+      strategy: 'switch-tool',
+      nextTool: 'commit_task_owned_changes',
+      retrySamePayload: false,
+      autoApply: false,
+      taskId: task.id,
+      workspaceId,
+      executionSessionId: session.id,
+    });
+    assert.throws(
+      () => assertHarnessExecutionAllowed(state, 'commit_git_changes', { workspaceId, message: 'should be blocked' }),
+      (error: any) => error?.payload?.details?.recovery?.nextTool === 'commit_task_owned_changes'
+        && error?.payload?.details?.recovery?.workspaceId === workspaceId,
+    );
+    assert.equal(git(workspaceRoot, ['status', '--porcelain']), genericCommitStatusBefore, 'blocked generic commit must not mutate Git');
 
     const commitWithVerificationDebt = preflightHarnessExecutionGuard(state, 'commit_task_owned_changes', { workspaceId, taskId: task.id, message: 'commit with debt' });
     assert.equal(commitWithVerificationDebt.allowed, true);

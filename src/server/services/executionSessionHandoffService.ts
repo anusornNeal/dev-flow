@@ -27,6 +27,13 @@ export interface CreateExecutionHandoffInput {
   note?: string | null;
 }
 
+export type ExecutionCommitRoute = {
+  tool: 'commit_task_owned_changes';
+  taskId: string;
+  workspaceId: string;
+  executionSessionId: string;
+};
+
 export interface ExecutionHandoffSnapshot {
   id: string;
   executionSessionId: string;
@@ -49,6 +56,7 @@ export interface ExecutionHandoffSnapshot {
     status: string | null;
     parentId: string | null;
   };
+  commitRoute: ExecutionCommitRoute | null;
   identity: {
     projectId: string;
     taskId: string | null;
@@ -69,6 +77,18 @@ export interface ExecutionHandoffSnapshot {
     revisionIdentity: string | null;
     stale: boolean;
   }>;
+}
+
+function canonicalCommitRoute(session: { id: string; taskId?: string | null; workspaceId?: string | null }): ExecutionCommitRoute | null {
+  const taskId = compactString(session.taskId);
+  const workspaceId = compactString(session.workspaceId);
+  if (!taskId || !workspaceId) return null;
+  return {
+    tool: 'commit_task_owned_changes',
+    taskId,
+    workspaceId,
+    executionSessionId: session.id,
+  };
 }
 
 function compactString(value: unknown) {
@@ -181,6 +201,7 @@ export function createExecutionHandoffSnapshot(
     risks,
     note,
     task: progress.task,
+    commitRoute: canonicalCommitRoute(session),
     identity: {
       projectId: session.projectId,
       taskId: session.taskId,
@@ -294,6 +315,7 @@ export function getExecutionSessionResumeView(
       contextHandle: resumed.session.contextHandle,
     },
     task: latestHandoff?.task || progress.task,
+    commitRoute: canonicalCommitRoute(resumed.session),
     stage: resumed.session.lifecycle.stage,
     lifecycle: resumed.session.lifecycle,
     lastCompletedStage: latestHandoff?.lastCompletedStage || latestCheckpoint?.stage || progress.completed.at(-1) || null,

@@ -340,13 +340,47 @@ test('task-scoped owned revision reconciliation fences authority, stales verific
   assert.equal(replay.reconciliationId, reconciled.reconciliationId);
 });
 
+test('proven task-owned commit at HEAD is idempotent and routes directly to finalization', () => {
+  const { workspace, taskId, session } = createFixture('already-committed');
+  fs.writeFileSync(path.join(workspace.root, 'src', 'owned.ts'), 'export const owned = 21;\n');
+  execution.recordExecutionOwnedChanges(session.id, ['src/owned.ts'], { repoRoot: workspace.root, source: 'task-edit' });
+  execution.recordExecutionVerificationEvidence(session.id, [{ name: 'focused', status: 'passed' }], { repoRoot: workspace.root });
+
+  const first = commitPlan.commitTaskOwnedChanges({ countersCache: {} }, {
+    taskId,
+    workspaceId: workspace.workspaceId,
+    message: 'fix: commit once',
+  });
+  const countAfterFirst = Number(git(workspace.root, ['rev-list', '--count', 'HEAD']));
+  assert.ok(first.commitHash);
+
+  const plan = commitPlan.buildTaskCommitPlan({ countersCache: {} }, { taskId, workspaceId: workspace.workspaceId });
+  assert.equal(plan.commitAllowed, true);
+  assert.equal(plan.commitDisposition, 'already-committed');
+  assert.equal(plan.alreadyCommitted?.commitHash, first.commitHash);
+  assert.deepEqual(plan.blockers, []);
+  assert.deepEqual(plan.nextAction, { tool: 'finalize_task_workspace', taskId, workspaceId: workspace.workspaceId });
+
+  const replay = commitPlan.commitTaskOwnedChanges({ countersCache: {} }, {
+    taskId,
+    workspaceId: workspace.workspaceId,
+    message: 'fix: must not commit twice',
+  });
+  assert.equal(replay.status, 'already-committed');
+  assert.equal(replay.idempotent, true);
+  assert.equal(replay.commitHash, first.commitHash);
+  assert.equal(Number(git(workspace.root, ['rev-list', '--count', 'HEAD'])), countAfterFirst, 'already-committed replay must not create another commit');
+});
+
 test('no owned changes and inactive sessions remain independent commit blockers', () => {
   const empty = createFixture('no-owned');
   execution.recordExecutionVerificationEvidence(empty.session.id, [{ name: 'focused', status: 'passed' }], { repoRoot: empty.workspace.root });
   const emptyPlan = commitPlan.buildTaskCommitPlan({ countersCache: {} }, { taskId: empty.taskId, workspaceId: empty.workspace.workspaceId });
   assert.equal(emptyPlan.verificationState, 'authoritative-fresh');
   assert.equal(emptyPlan.commitAllowed, false);
-  assert.ok(emptyPlan.blockers.some((entry: any) => entry.code === 'TASK_COMMIT_NO_OWNED_CHANGES'));
+  assert.ok(emptyPlan.blockers.some((entry: any) => entry.code === 'TASK_COMMIT_NO_OWNED_CHANGES'));  assert.equal(emptyPlan.commitDisposition, 'ambiguous-no-changes');
+  assert.equal(emptyPlan.alreadyCommitted, null);
+  assert.equal(emptyPlan.nextAction, null);
 
   const inactive = createFixture('inactive');
   fs.writeFileSync(path.join(inactive.workspace.root, 'src', 'owned.ts'), 'export const owned = 22;\n');

@@ -250,6 +250,22 @@ test('validation rejects unknown task, invalid status, malformed metadata, and o
   assert.equal(oversized.response.status, 400);
   assert.equal(oversized.body?.error?.code, 'EXTERNAL_STATUS_METADATA_TOO_LARGE');
   assert.equal(getTask(invalid.id)?.status, 'backlog');
+
+  const badAction = await post(invalid.id, { status: 'in-progress', action: 'RUN_SHELL' });
+  assert.equal(badAction.response.status, 400);
+  assert.equal(badAction.body?.error?.code, 'EXTERNAL_STATUS_INVALID_ACTION');
+
+  const missingAction = await post(invalid.id, { status: 'in-progress', resultState: 'BLOCKED' });
+  assert.equal(missingAction.response.status, 400);
+  assert.equal(missingAction.body?.error?.code, 'EXTERNAL_STATUS_ACTION_REQUIRED');
+
+  const completeMismatch = await post(invalid.id, { status: 'in-progress', action: 'IMPLEMENT_TASK', resultState: 'COMPLETE' });
+  assert.equal(completeMismatch.response.status, 400);
+  assert.equal(completeMismatch.body?.error?.code, 'EXTERNAL_STATUS_RESULT_STATUS_MISMATCH');
+
+  const attentionMismatch = await post(invalid.id, { status: 'ready-for-review', action: 'RESOLVE_FAILURE', resultState: 'NEEDS_CONTEXT' });
+  assert.equal(attentionMismatch.response.status, 400);
+  assert.equal(attentionMismatch.body?.error?.code, 'EXTERNAL_STATUS_RESULT_STATUS_MISMATCH');
 });
 
 test('empty metadata is omitted and exact maximum metadata is accepted as informational audit data only', async () => {
@@ -270,6 +286,54 @@ test('empty metadata is omitted and exact maximum metadata is accepted as inform
   assert.deepEqual(saved.verificationEvidence, task.verificationEvidence);
   assert.deepEqual(saved.checklist, task.checklist);
   assert.deepEqual(saved.bugs, task.bugs);
+});
+
+test('local-native orchestration metadata is durable, replaceable, and never creates managed execution authority', async () => {
+  const task = seedTask('backlog');
+  const before = getTask(task.id)!;
+  const started = await post(task.id, {
+    status: 'in-progress',
+    worker: 'Codex Native A',
+    action: 'IMPLEMENT_TASK',
+    contextRef: 'ctx-native-a',
+    summary: 'editing native scope',
+  });
+  assert.equal(started.response.status, 200, JSON.stringify(started.body));
+  assert.equal(started.body.externalMetadata.worker, 'Codex Native A');
+  assert.equal(started.body.externalMetadata.action, 'IMPLEMENT_TASK');
+  assert.equal(started.body.externalMetadata.contextRef, 'ctx-native-a');
+  assert.equal(listExecutionSessionsForTask(task.id).length, 0, 'native sync must not create managed execution authority');
+
+  const blocked = await post(task.id, {
+    status: 'in-progress',
+    worker: 'Codex Native A',
+    action: 'RESOLVE_FAILURE',
+    resultState: 'BLOCKED',
+    contextRef: 'ctx-native-blocked',
+    summary: 'needs an external decision',
+  });
+  assert.equal(blocked.response.status, 200, JSON.stringify(blocked.body));
+  assert.equal(blocked.body.externalMetadata.resultState, 'BLOCKED');
+
+  const completed = await post(task.id, {
+    status: 'ready-for-review',
+    worker: 'Codex Native B',
+    action: 'IMPLEMENT_TASK',
+    resultState: 'COMPLETE',
+    contextRef: 'ctx-native-replacement',
+    summary: 'replacement worker completed repository work',
+    commit: 'native-commit',
+    verification: 'native tests passed',
+  });
+  assert.equal(completed.response.status, 200, JSON.stringify(completed.body));
+  assert.equal(completed.body.externalMetadata.worker, 'Codex Native B');
+  assert.equal(completed.body.externalMetadata.resultState, 'COMPLETE');
+  assert.equal(listExecutionSessionsForTask(task.id).length, 0);
+
+  const after = getTask(task.id)!;
+  assert.deepEqual(after.gitEvidence, before.gitEvidence, 'native commit text remains informational');
+  assert.deepEqual(after.verificationEvidence, before.verificationEvidence, 'native verification text remains informational');
+  assert.equal(externalLogs(task.id).length, 3);
 });
 
 test('active managed authority blocks by default without changing status or authority', async () => {

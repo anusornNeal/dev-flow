@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import type { TaskStatus } from '../../types.js';
 import { listExecutionSessionsForTask } from '../repositories/executionSessionRepository.js';
+import { AGENT_NEUTRAL_ORCHESTRATION_ACTIONS, AGENT_NEUTRAL_RESULT_STATES, type AgentNeutralOrchestrationAction, type AgentNeutralOrchestrationResultState } from '../repositories/agentRunRepository.js';
 import { getTaskByIdentifier, saveTask } from '../repositories/taskRepository.js';
 import { createApiError } from './api.js';
 import { withSyncLock } from './lockAndIdempotencyService.js';
@@ -8,11 +9,14 @@ import { withSyncLock } from './lockAndIdempotencyService.js';
 // This service owns board presentation only; managed execution authority remains read-only here.
 const EXTERNAL_TARGET_STATUSES = new Set<TaskStatus>(['in-progress', 'ready-for-review', 'done']);
 const EXTERNAL_STATUS_LOG_PREFIX = '[external-task-status:v1] ';
+export const EXTERNAL_NATIVE_HEARTBEAT_STALE_MS = 30 * 60 * 1000;
 const METADATA_LIMITS = {
   summary: 4_000,
   commit: 1_000,
   verification: 8_000,
   idempotencyKey: 512,
+  worker: 128,
+  contextRef: 1_000,
 } as const;
 
 export type ExternalTaskStatusInput = {
@@ -20,6 +24,10 @@ export type ExternalTaskStatusInput = {
   summary?: string;
   commit?: string;
   verification?: string;
+  worker?: string;
+  action?: AgentNeutralOrchestrationAction;
+  resultState?: AgentNeutralOrchestrationResultState;
+  contextRef?: string;
   idempotencyKey?: string;
   allowManagedAuthorityOverlap?: boolean;
 };
@@ -46,6 +54,10 @@ export type ExternalTaskStatusResult = {
     summary?: string;
     commit?: string;
     verification?: string;
+    worker?: string;
+    action?: AgentNeutralOrchestrationAction;
+    resultState?: AgentNeutralOrchestrationResultState;
+    contextRef?: string;
   };
 };
 
@@ -94,11 +106,34 @@ function normalizeInput(raw: ExternalTaskStatusInput) {
     throw createApiError(400, 'EXTERNAL_STATUS_INVALID_OVERLAP_OVERRIDE', 'allowManagedAuthorityOverlap must be a boolean when supplied.');
   }
   const idempotencyKey = normalizeOptionalText(raw.idempotencyKey, 'idempotencyKey');
+  const worker = normalizeOptionalText(raw.worker, 'worker');
+  const contextRef = normalizeOptionalText(raw.contextRef, 'contextRef');
+  const action = raw.action == null ? undefined : String(raw.action).trim() as AgentNeutralOrchestrationAction;
+  const resultState = raw.resultState == null ? undefined : String(raw.resultState).trim() as AgentNeutralOrchestrationResultState;
+  if (action && !(AGENT_NEUTRAL_ORCHESTRATION_ACTIONS as readonly string[]).includes(action)) {
+    throw createApiError(400, 'EXTERNAL_STATUS_INVALID_ACTION', `action must be one of: ${AGENT_NEUTRAL_ORCHESTRATION_ACTIONS.join(', ')}.`, { affectedId: action });
+  }
+  if (resultState && !(AGENT_NEUTRAL_RESULT_STATES as readonly string[]).includes(resultState)) {
+    throw createApiError(400, 'EXTERNAL_STATUS_INVALID_RESULT_STATE', `resultState must be one of: ${AGENT_NEUTRAL_RESULT_STATES.join(', ')}.`, { affectedId: resultState });
+  }
+  if (resultState && !action) {
+    throw createApiError(400, 'EXTERNAL_STATUS_ACTION_REQUIRED', 'action is required when resultState is supplied.');
+  }
+  if (resultState === 'COMPLETE' && status === 'in-progress') {
+    throw createApiError(400, 'EXTERNAL_STATUS_RESULT_STATUS_MISMATCH', 'COMPLETE must report ready-for-review or done rather than in-progress.');
+  }
+  if (resultState && resultState !== 'COMPLETE' && status !== 'in-progress') {
+    throw createApiError(400, 'EXTERNAL_STATUS_RESULT_STATUS_MISMATCH', `${resultState} must keep board status in-progress so scheduler attention can preserve the unfinished scope.`);
+  }
   return {
     status,
     summary: normalizeOptionalText(raw.summary, 'summary'),
     commit: normalizeOptionalText(raw.commit, 'commit'),
     verification: normalizeOptionalText(raw.verification, 'verification'),
+    worker,
+    action,
+    resultState,
+    contextRef,
     idempotencyKey,
     allowManagedAuthorityOverlap: raw.allowManagedAuthorityOverlap === true,
   };
@@ -131,6 +166,10 @@ function normalizedFingerprint(taskId: string, input: ReturnType<typeof normaliz
     summary: input.summary ?? null,
     commit: input.commit ?? null,
     verification: input.verification ?? null,
+    worker: input.worker ?? null,
+    action: input.action ?? null,
+    resultState: input.resultState ?? null,
+    contextRef: input.contextRef ?? null,
     allowManagedAuthorityOverlap: input.allowManagedAuthorityOverlap,
   }));
 }
@@ -148,6 +187,22 @@ function parseOperationRecord(log: any): ExternalStatusOperationRecord | null {
   } catch {
     return null;
   }
+}
+
+export function getLatestExternalTaskStatusRecord(task: any): ExternalStatusOperationRecord | null {
+  const logs = Array.isArray(task?.logs) ? task.logs : [];
+  for (let index = logs.length - 1; index >= 0; index -= 1) {
+    const record = parseOperationRecord(logs[index]);
+    if (record) return record;
+  }
+  return null;
+}
+
+export function isExternalTaskStatusRecordStale(record: Pick<ExternalStatusOperationRecord, 'recordedAt'> | null | undefined, nowMs = Date.now()) {
+  if (!record) return true;
+  const recordedAtMs = Date.parse(String(record.recordedAt || ''));
+  if (!Number.isFinite(recordedAtMs)) return true;
+  return nowMs - recordedAtMs > EXTERNAL_NATIVE_HEARTBEAT_STALE_MS;
 }
 
 function findReplay(task: any, keyHash: string) {
@@ -229,6 +284,10 @@ export function updateExternalTaskStatus(
         ...(input.summary ? { summary: input.summary } : {}),
         ...(input.commit ? { commit: input.commit } : {}),
         ...(input.verification ? { verification: input.verification } : {}),
+        ...(input.worker ? { worker: input.worker } : {}),
+        ...(input.action ? { action: input.action } : {}),
+        ...(input.resultState ? { resultState: input.resultState } : {}),
+        ...(input.contextRef ? { contextRef: input.contextRef } : {}),
       },
       managedAuthorityOverlap: authority.active,
       warnings,

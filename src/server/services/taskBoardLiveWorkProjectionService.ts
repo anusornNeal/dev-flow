@@ -1,6 +1,7 @@
 import type { Task, TaskLiveWorkPhase, TaskLiveWorkProjection } from '../../types.js';
 import { queryExecutionSessions, type ExecutionLifecycleStage, type ExecutionSessionRecord } from '../repositories/executionSessionRepository.js';
 import { getLatestExecutionCheckpoint, type ExecutionCheckpointSnapshot } from './executionCheckpointService.js';
+import { getLatestExternalTaskStatusRecord, isExternalTaskStatusRecordStale } from './externalTaskStatusService.js';
 
 const ACTIVE_AGENT_RUN_STATUSES = new Set(['queued', 'starting', 'running']);
 const MANAGED_PHASE_COUNT = 5;
@@ -75,7 +76,42 @@ function phaseFromOperation(kind: string | null) {
   return null;
 }
 
-function externalAgentProjection(task: Task): TaskLiveWorkProjection | null {
+function externalNativeProjection(task: Task, nowMs: number): TaskLiveWorkProjection | null {
+  const record = getLatestExternalTaskStatusRecord(task);
+  if (!record || record.targetStatus !== 'in-progress' || record.managedAuthorityOverlap) return null;
+  const metadata = record.metadata || {};
+  const ownerLabel = clean(metadata.worker || task.agent) || 'External worker';
+  const resultState = clean(metadata.resultState);
+  const stale = !resultState && isExternalTaskStatusRecordStale(record, nowMs);
+  const needsAttention = stale || resultState === 'BLOCKED' || resultState === 'NEEDS_CONTEXT';
+  const handoffReady = resultState === 'HANDOFF_READY';
+  const phaseLabel = stale
+    ? 'Disconnected'
+    : resultState === 'BLOCKED'
+      ? 'Blocked'
+      : resultState === 'NEEDS_CONTEXT'
+        ? 'Needs context'
+        : handoffReady
+          ? 'Handoff ready'
+          : 'Working';
+  return {
+    source: 'agent',
+    ownerLabel,
+    ownerKind: 'agent',
+    phase: needsAttention ? 'blocked' : 'working',
+    phaseLabel,
+    activity: clean(metadata.summary) || titleCaseToken(metadata.action) || null,
+    phaseIndex: 1,
+    phaseCount: MANAGED_PHASE_COUNT,
+    blocked: needsAttention,
+    startedAt: record.recordedAt,
+    updatedAt: record.recordedAt,
+  };
+}
+
+function externalAgentProjection(task: Task, nowMs = Date.now()): TaskLiveWorkProjection | null {
+  const native = externalNativeProjection(task, nowMs);
+  if (native) return native;
   const run = task.latestAgentRun;
   const runActive = Boolean(run && ACTIVE_AGENT_RUN_STATUSES.has(run.status));
   if (!runActive && !task.activeAgent) return null;
@@ -100,12 +136,12 @@ export function deriveTaskBoardLiveWorkProjection(task: Task, inputs: Projection
   if (task.status === 'done' || task.status === 'ready-for-review') return null;
   const now = inputs.now || new Date();
   const claim = activeClaim(task, now.getTime());
-  if (!claim) return externalAgentProjection(task);
+  if (!claim) return externalAgentProjection(task, now.getTime());
 
   const activeExecutions = inputs.activeExecutions || [];
   const matching = activeExecutions.filter((entry) => entry.status === 'active' && entry.workspaceId === claim.workspaceId);
   const session = matching.length === 1 && activeExecutions.length === 1 ? matching[0] : null;
-  if (!session) return externalAgentProjection(task);
+  if (!session) return externalAgentProjection(task, now.getTime());
 
   const checkpoint = inputs.checkpoint || null;
   const latestOperation = checkpoint?.pendingOperations?.at(-1) || null;

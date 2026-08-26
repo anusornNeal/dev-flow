@@ -22,6 +22,7 @@ import {
 
 /**
  * Legacy agent-run HTTP surface kept isolated from the main task route composition.
+ * Compatibility-only quarantine: new local-native workers synchronize through external task status/orchestration metadata and must not be launched through these routes by default.
  * New execution-session architecture must not build new dependencies on these routes.
  */
 export function registerLegacyTaskAgentRoutes(app: express.Express, deps: ApiRouteDeps) {

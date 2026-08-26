@@ -60,6 +60,26 @@ function execution(stage: string, overrides: Record<string, unknown> = {}) {
   } as any;
 }
 
+function externalStatusLog(metadata: Record<string, unknown>, recordedAt = '2026-08-26T00:55:00.000Z') {
+  return {
+    id: 'external-task-status-op-native',
+    timestamp: recordedAt,
+    type: 'comment',
+    message: `[external-task-status:v1] ${JSON.stringify({
+      schema: 'external-task-status.v1',
+      operationId: 'external-task-status-op-native',
+      requestFingerprint: 'native-fingerprint',
+      sourceStatus: 'todo',
+      targetStatus: 'in-progress',
+      changed: true,
+      recordedAt,
+      metadata,
+      managedAuthorityOverlap: false,
+      warnings: [],
+    })}`,
+  };
+}
+
 function checkpoint(overrides: Record<string, unknown> = {}) {
   return {
     id: 'checkpoint-live',
@@ -129,6 +149,53 @@ test('expired claims, terminal executions, ready-for-review and done tasks do no
   }), null);
   assert.equal(deriveTaskBoardLiveWorkProjection(task({ status: 'ready-for-review' }), { now, activeExecutions: [execution('verifying')] }), null);
   assert.equal(deriveTaskBoardLiveWorkProjection(task({ status: 'done' }), { now, activeExecutions: [execution('finalized')] }), null);
+});
+
+test('local-native external status projects Agent Office progress and attention without a managed claim', () => {
+  const working = deriveTaskBoardLiveWorkProjection(task({
+    claim: undefined,
+    logs: [externalStatusLog({ worker: 'Codex Native', action: 'IMPLEMENT_TASK', summary: 'editing native files', contextRef: 'ctx-native' })],
+  }), { now });
+  assert.equal(working?.source, 'agent');
+  assert.equal(working?.ownerLabel, 'Codex Native');
+  assert.equal(working?.ownerKind, 'agent');
+  assert.equal(working?.phase, 'working');
+  assert.equal(working?.activity, 'editing native files');
+
+  const blocked = deriveTaskBoardLiveWorkProjection(task({
+    claim: undefined,
+    logs: [externalStatusLog({ worker: 'Codex Native', action: 'RESOLVE_FAILURE', resultState: 'BLOCKED', summary: 'waiting for input' })],
+  }), { now });
+  assert.equal(blocked?.phase, 'blocked');
+  assert.equal(blocked?.phaseLabel, 'Blocked');
+  assert.equal(blocked?.blocked, true);
+
+  const handoff = deriveTaskBoardLiveWorkProjection(task({
+    claim: undefined,
+    logs: [externalStatusLog({ worker: 'Codex Native', action: 'IMPLEMENT_TASK', resultState: 'HANDOFF_READY', summary: 'safe boundary' })],
+  }), { now });
+  assert.equal(handoff?.phase, 'working');
+  assert.equal(handoff?.phaseLabel, 'Handoff ready');
+  assert.equal(handoff?.blocked, false);
+
+  const oldHandoff = deriveTaskBoardLiveWorkProjection(task({
+    claim: undefined,
+    logs: [externalStatusLog({ worker: 'Codex Native', action: 'IMPLEMENT_TASK', resultState: 'HANDOFF_READY', summary: 'durable safe boundary' }, '2026-08-26T00:20:00.000Z')],
+  }), { now });
+  assert.equal(oldHandoff?.phaseLabel, 'Handoff ready', 'explicit durable handoff must not decay into disconnected state');
+  assert.equal(oldHandoff?.blocked, false);
+});
+
+test('stale local-native heartbeat becomes disconnected attention instead of permanent working state', () => {
+  const stale = deriveTaskBoardLiveWorkProjection(task({
+    claim: undefined,
+    logs: [externalStatusLog({ worker: 'Codex Native', action: 'IMPLEMENT_TASK', summary: 'last known native work', contextRef: 'ctx-stale' }, '2026-08-26T00:20:00.000Z')],
+  }), { now });
+  assert.equal(stale?.source, 'agent');
+  assert.equal(stale?.phase, 'blocked');
+  assert.equal(stale?.phaseLabel, 'Disconnected');
+  assert.equal(stale?.blocked, true);
+  assert.match(stale?.activity || '', /last known native work/i);
 });
 
 test('external agent run is the fallback only when managed live work is absent', () => {

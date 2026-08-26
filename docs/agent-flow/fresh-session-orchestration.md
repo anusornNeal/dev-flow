@@ -22,6 +22,12 @@ Normalized action results are **orchestration-only evidence**. They may move or 
 
 `HANDOFF_READY` means the current worker yielded at a safe reasoning boundary; `BLOCKED` means known conditions prevent progress; `NEEDS_CONTEXT` means more information is required before reasoning continues; `COMPLETE` means the worker believes its assigned reasoning/repository scope is complete. None of these states grants repository execution authority by itself.
 
+For local-native workers, `update_external_task_status` is the bridge into this contract. A worker may attach bounded `worker`, `action`, `resultState`, and `contextRef` metadata while continuing to use its own filesystem/shell/test/Git harness. Plain `in-progress` means the native worker is actively executing the reported action. `BLOCKED`, `NEEDS_CONTEXT`, or `HANDOFF_READY` keep the task in-progress but project it as scheduler attention so a later compatible worker can resume from the durable task/context reference. `COMPLETE` is reported with `ready-for-review` or `done`.
+
+An external in-progress task reserves its authored target-file scope for orchestration collision checks even though it has no managed claim/workspace. This reservation prevents DevFlow from scheduling overlapping managed work; it does not create managed lifecycle authority or restrict how the native worker executes repository operations. If DevFlow connectivity is lost, the local repository result remains valid and the next successful sync reconstructs orchestration state from the task record.
+
+A plain working snapshot is treated as a heartbeat: if it is not refreshed for 30 minutes, DevFlow projects `Disconnected` / `EXTERNAL_NATIVE_WORKER_STALE` attention while retaining the target-file reservation and durable `contextRef`. Explicit `BLOCKED`, `NEEDS_CONTEXT`, and `HANDOFF_READY` results are already durable attention boundaries and do not expire into disconnected state. A replacement worker resumes by reading that durable task/attention context and writing a new external status snapshot; no previous chat/session identity is required.
+
 ## Prompt authority and isolation
 
 The production Copy Prompt source is the `codex` pipeline in `config/prompt-pipeline.json` and its `skills/prompt.codex-*.md` sections. The rendered task context contains card-authored implementation information such as title, description, reasoning, acceptance criteria, checklist, verification guidance, target files, repository context, references, and bounded design/image evidence when present.
@@ -50,7 +56,7 @@ For ChatGPT/@devflowz managed execution, completion continues to follow the mana
 
 ## Historical auto-launch behavior
 
-Older DevFlow builds included fresh-process agent launchers, managed Codex workspaces, agent-run callbacks, auto-work continuation, CLI-specific launch flags, and prompt files generated per run. Those paths may remain for compatibility or separate Auto Work features, but they are **historical/non-authoritative for the current card Copy Prompt**. Do not copy their managed-workspace or finalization requirements into the Codex handoff prompt.
+Older DevFlow builds included fresh-process agent launchers, managed Codex workspaces, agent-run callbacks, auto-work continuation, CLI-specific launch flags, and prompt files generated per run. Those paths remain **compatibility-only quarantined behavior**, not the default local-native adapter. They may stay for explicitly supported Auto Work/legacy features until separate removal evidence proves they are unused, but new orchestration must not depend on them. Do not copy their managed-workspace or finalization requirements into the Codex handoff prompt.
 
 ## Phase 0 architecture inventory
 

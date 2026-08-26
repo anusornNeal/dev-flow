@@ -33,6 +33,7 @@ const { createProject } = await import('../../src/server/repositories/projectRep
 const { getTask, saveTask } = await import('../../src/server/repositories/taskRepository.js');
 const { listExecutionSessionsForTask, listExecutionSessionEvidence } = await import('../../src/server/repositories/executionSessionRepository.js');
 const claims = await import('../../src/server/services/taskClaimService.js');
+const externalStatus = await import('../../src/server/services/externalTaskStatusService.js');
 const commitPlan = await import('../../src/server/services/taskCommitPlanService.js');
 const workspaces = await import('../../src/server/services/sessionWorkspaceService.js');
 const execution = await import('../../src/server/services/executionSessionService.js');
@@ -1007,6 +1008,91 @@ test('orchestration projection gives each task one durable state and keeps indep
 
   const secondProjection = claims.getProjectOrchestrationProjection(projectId);
   assert.equal(secondProjection.entries.find((entry: any) => entry.taskId === claimedNext.task.id)?.state, 'execution');
+});
+
+test('local-native in-progress work is scheduler-visible, reserves target scope, and can yield durable attention to a replacement worker', () => {
+  const projectId = 'project-external-native-scheduler';
+  createCandidateProject(projectId);
+  seedCandidateTask(projectId, 'native-active', ['src/NativeShared.ts'], { priority: 'high', createdAt: '2026-08-10T00:00:00.000Z' });
+  seedCandidateTask(projectId, 'native-conflict', ['src/NativeShared.ts'], { priority: 'high', createdAt: '2026-08-10T00:00:01.000Z' });
+  seedCandidateTask(projectId, 'native-safe', ['src/NativeSafe.ts'], { priority: 'medium', createdAt: '2026-08-10T00:00:02.000Z' });
+
+  externalStatus.updateExternalTaskStatus('native-active', {
+    status: 'in-progress',
+    worker: 'Codex Native A',
+    action: 'IMPLEMENT_TASK',
+    contextRef: 'ctx-native-resume',
+    summary: 'editing shared native scope',
+  });
+
+  const workingProjection = claims.getProjectOrchestrationProjection(projectId);
+  const active = workingProjection.entries.find((entry: any) => entry.taskId === 'native-active') as any;
+  assert.equal(active?.state, 'execution');
+  assert.equal(active?.reasons?.[0]?.code, 'EXTERNAL_NATIVE_WORK_IN_PROGRESS');
+  assert.equal(active?.context?.externalNative?.repositoryExecutionOwner, 'worker');
+  assert.equal(active?.context?.externalNative?.evidenceAuthority, 'orchestration-only');
+
+  const claimed = claims.claimNextTaskForSession(projectId, { sessionId: 'native-parallel-chat', ownerLabel: 'Chat Native Parallel', limit: 10 });
+  assert.equal(claimed.status, 'claimed');
+  assert.equal(claimed.task.id, 'native-safe', 'overlapping managed candidate must be deferred while native worker reserves the same target file');
+  assert.equal(getTask('native-conflict')?.status, 'backlog');
+
+  externalStatus.updateExternalTaskStatus('native-active', {
+    status: 'in-progress',
+    worker: 'Codex Native A',
+    action: 'IMPLEMENT_TASK',
+    resultState: 'HANDOFF_READY',
+    contextRef: 'ctx-native-resume',
+    summary: 'yielded after an atomic local edit',
+  });
+  const attentionProjection = claims.getProjectOrchestrationProjection(projectId);
+  const attention = attentionProjection.entries.find((entry: any) => entry.taskId === 'native-active') as any;
+  assert.equal(attention?.state, 'attention');
+  assert.equal(attention?.reasons?.[0]?.code, 'EXTERNAL_NATIVE_HANDOFF_READY');
+  assert.equal(attention?.context?.externalNative?.contextRef, 'ctx-native-resume');
+  assert.equal(attention?.context?.externalNative?.workerReplaceable, true);
+
+  const replacement = claims.getNextActionForSession(projectId, { sessionId: 'replacement-native-worker', limit: 10 });
+  assert.equal(replacement.action, 'resolve-attention');
+  assert.equal(replacement.task?.taskId, 'native-active');
+});
+
+test('stale local-native work becomes scheduler attention while retaining its target-file reservation', () => {
+  const projectId = 'project-external-native-stale';
+  createCandidateProject(projectId);
+  seedCandidateTask(projectId, 'native-stale', ['src/StaleShared.ts'], { priority: 'high' });
+  seedCandidateTask(projectId, 'native-stale-conflict', ['src/StaleShared.ts'], { priority: 'medium' });
+
+  externalStatus.updateExternalTaskStatus('native-stale', {
+    status: 'in-progress',
+    worker: 'Codex Native Gone',
+    action: 'IMPLEMENT_TASK',
+    contextRef: 'ctx-native-stale',
+    summary: 'last known native edit',
+  });
+  const staleTask = getTask('native-stale')!;
+  const prefix = '[external-task-status:v1] ';
+  const lastLog = staleTask.logs.at(-1)!;
+  const record = JSON.parse(String(lastLog.message).slice(prefix.length));
+  const staleAt = new Date(Date.now() - 31 * 60 * 1000).toISOString();
+  record.recordedAt = staleAt;
+  lastLog.timestamp = staleAt;
+  lastLog.message = `${prefix}${JSON.stringify(record)}`;
+  saveTask(staleTask);
+
+  const projection = claims.getProjectOrchestrationProjection(projectId);
+  const stale = projection.entries.find((entry: any) => entry.taskId === 'native-stale') as any;
+  const conflict = projection.entries.find((entry: any) => entry.taskId === 'native-stale-conflict') as any;
+  assert.equal(stale?.state, 'attention');
+  assert.equal(stale?.reasons?.[0]?.code, 'EXTERNAL_NATIVE_WORKER_STALE');
+  assert.equal(stale?.context?.externalNative?.contextRef, 'ctx-native-stale');
+  assert.equal(stale?.context?.externalNative?.workerReplaceable, true);
+  assert.equal(conflict?.state, 'blocked');
+  assert.equal(conflict?.reasons?.some((reason: any) => reason.code === 'TASK_SCOPE_CONFLICT'), true);
+
+  const replacement = claims.getNextActionForSession(projectId, { sessionId: 'native-stale-replacement', limit: 10 });
+  assert.equal(replacement.action, 'resolve-attention');
+  assert.equal(replacement.task?.taskId, 'native-stale');
 });
 
 test('next action is read-only, project-pinned, and prioritizes attention over owned continuation and new work', () => {

@@ -30,6 +30,7 @@ import { inspectWorkspaceRecovery } from './workspaceRecoveryService.js';
 import { assertTaskPrerequisitesSatisfied, getTaskPrerequisiteBlockers } from './taskDependencyService.js';
 import { evaluateExecutionContinuation, getProjectBoardLoopIntent, persistBoardLoopIntent, type BoardLoopIntent } from './executionContinuationService.js';
 import { classifyReasoningPipelineBoundary } from './mcpToolJobScheduler.js';
+import { getLatestExternalTaskStatusRecord, isExternalTaskStatusRecordStale } from './externalTaskStatusService.js';
 
 const DEFAULT_CLAIM_TTL_MS = 24 * 60 * 60 * 1000;
 const MIN_CLAIM_TTL_MS = 60_000;
@@ -128,17 +129,27 @@ function effectiveClaimedScope(task: any, nowMs = Date.now()): Set<string> {
   return scope;
 }
 
+function activeExternalNativeWork(task: any, nowMs = Date.now()) {
+  if (task?.status !== 'in-progress' || isActiveClaim(task?.claim, nowMs)) return null;
+  const record = getLatestExternalTaskStatusRecord(task);
+  if (!record || record.targetStatus !== 'in-progress' || record.managedAuthorityOverlap) return null;
+  return record;
+}
+
 function findScopeConflictsForPaths(taskId: string, requestedPaths: Set<string>, projectTasks: any[], nowMs: number) {
   if (requestedPaths.size === 0) return [];
   const conflicts: Array<{ taskId: string; displayId?: string; ownerLabel: string; files: string[] }> = [];
   for (const candidate of projectTasks) {
-    if (candidate.id === taskId || !isActiveClaim(candidate.claim, nowMs)) continue;
+    if (candidate.id === taskId) continue;
+    const claimed = isActiveClaim(candidate.claim, nowMs);
+    const externalNative = claimed ? null : activeExternalNativeWork(candidate, nowMs);
+    if (!claimed && !externalNative) continue;
     const overlap = [...effectiveClaimedScope(candidate, nowMs)].filter((file) => requestedPaths.has(file));
     if (overlap.length === 0) continue;
     conflicts.push({
       taskId: candidate.id,
       displayId: candidate.displayId,
-      ownerLabel: candidate.claim.ownerLabel,
+      ownerLabel: claimed ? candidate.claim.ownerLabel : String(externalNative?.metadata?.worker || 'External worker'),
       files: overlap.sort(),
     });
   }
@@ -232,6 +243,44 @@ function boundedContinuationReasons(continuation: ReturnType<typeof evaluateExec
   return continuation.reasonCodes.slice(0, 8).map((code) => ({ code, message: code }));
 }
 
+function externalNativeOrchestration(task: any, nowMs: number) {
+  const record = activeExternalNativeWork(task, nowMs);
+  if (!record) return null;
+  const metadata = record.metadata || {};
+  const resultState = String(metadata.resultState || '').trim();
+  const stale = !resultState && isExternalTaskStatusRecordStale(record, nowMs);
+  const attention = stale || resultState === 'BLOCKED' || resultState === 'NEEDS_CONTEXT' || resultState === 'HANDOFF_READY';
+  const code = stale ? 'EXTERNAL_NATIVE_WORKER_STALE' : resultState ? `EXTERNAL_NATIVE_${resultState}` : 'EXTERNAL_NATIVE_WORK_IN_PROGRESS';
+  const message = stale
+    ? 'External/local-native worker heartbeat is stale; preserve its task scope and route durable context to a compatible replacement worker.'
+    : resultState === 'BLOCKED'
+      ? 'External/local-native worker reported a blocker; preserve the task scope and route it to attention.'
+      : resultState === 'NEEDS_CONTEXT'
+        ? 'External/local-native worker needs more context before work can continue.'
+        : resultState === 'HANDOFF_READY'
+          ? 'External/local-native worker yielded at a safe handoff boundary; a compatible replacement worker can resume from durable task state.'
+          : 'External/local-native worker is implementing this task with its own repository harness.';
+  return {
+    state: (attention ? 'attention' : 'execution') as OrchestrationState,
+    reasons: [{ code, message, affectedId: task.id }],
+    context: {
+      externalNative: {
+        operationId: record.operationId,
+        worker: String(metadata.worker || '').trim() || null,
+        action: String(metadata.action || '').trim() || null,
+        resultState: resultState || null,
+        contextRef: String(metadata.contextRef || '').trim() || null,
+        summary: String(metadata.summary || '').trim() || null,
+        recordedAt: record.recordedAt,
+        repositoryExecutionOwner: 'worker',
+        evidenceAuthority: 'orchestration-only',
+        workerReplaceable: true,
+        stale,
+      },
+    },
+  };
+}
+
 export function getProjectOrchestrationProjection(projectId: string) {
   const cleanProjectId = String(projectId || '').trim();
   if (!cleanProjectId) throw createApiError(400, 'PROJECT_ID_REQUIRED', 'projectId is required for orchestration projection.');
@@ -249,9 +298,22 @@ export function getProjectOrchestrationProjection(projectId: string) {
       const latestExecution = activeExecution || sessions[0] || null;
       const activeClaim = isActiveClaim(task.claim, nowMs);
       const base = { taskId: task.id, displayId: task.displayId, title: task.title, taskStatus: task.status };
+      const externalNative = !activeClaim && !activeExecution ? externalNativeOrchestration(task, nowMs) : null;
       if (parentIds.has(String(task.id)) && !activeClaim && !activeExecution) return { ...base, state: 'blocked' as OrchestrationState, reasons: [{ code: 'TASK_PARENT_COORDINATION_SCOPE', message: 'Parent/program task is represented by its child work and is not an ordinary runnable leaf.' }] };
-      if (task.status === 'ready-for-review') return { ...base, state: 'attention' as OrchestrationState, reasons: [{ code: 'TASK_REVIEW_ATTENTION_REQUIRED', message: 'Task is waiting for review/reasoning attention.' }] };
+      if (task.status === 'ready-for-review') {
+        const externalRecord = !activeClaim && !activeExecution ? getLatestExternalTaskStatusRecord(task) : null;
+        if (externalRecord?.targetStatus === 'ready-for-review') {
+          return {
+            ...base,
+            state: 'attention' as OrchestrationState,
+            reasons: [{ code: 'EXTERNAL_NATIVE_COMPLETE', message: 'External/local-native worker reported completion for review; repository evidence remains informational until independently trusted by the receiving workflow.', affectedId: task.id }],
+            context: { externalNative: { operationId: externalRecord.operationId, ...externalRecord.metadata, recordedAt: externalRecord.recordedAt, repositoryExecutionOwner: 'worker', evidenceAuthority: 'orchestration-only', workerReplaceable: true } },
+          };
+        }
+        return { ...base, state: 'attention' as OrchestrationState, reasons: [{ code: 'TASK_REVIEW_ATTENTION_REQUIRED', message: 'Task is waiting for review/reasoning attention.' }] };
+      }
       if (task.status === 'in-progress') {
+        if (externalNative) return { ...base, ...externalNative };
         if (!latestExecution) return { ...base, state: 'attention' as OrchestrationState, reasons: [{ code: 'TASK_EXECUTION_SESSION_MISSING', message: 'In-progress task has no durable execution session to continue or recover.' }] };
         const continuation = evaluateExecutionContinuation({} as any, latestExecution.id, { workspaceId: task.claim?.workspaceId || latestExecution.workspaceId || undefined });
         const context = {

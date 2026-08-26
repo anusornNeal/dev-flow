@@ -29,13 +29,17 @@ If status synchronization is unavailable or fails:
 
 External summary/commit/verification fields are informational only and do not become authoritative DevFlow execution, Git, or verification evidence.
 
+A local-native worker may additionally report `worker`, canonical `action`, `resultState`, and a bounded durable `contextRef`. DevFlow uses those fields only to project Agent Office/scheduler state and safe replacement boundaries. `BLOCKED`, `NEEDS_CONTEXT`, and `HANDOFF_READY` remain in-progress attention; `COMPLETE` accompanies `ready-for-review` or `done`. The native task's target files act as an orchestration collision reservation while it is in progress, without creating a managed claim or requiring DevFlow repository tools.
+
+While no explicit `resultState` exists, each in-progress sync is a heartbeat. After 30 minutes without refresh DevFlow shows the worker as disconnected and routes the task to attention, while preserving its target-file reservation and `contextRef` for takeover. Explicit `BLOCKED`, `NEEDS_CONTEXT`, or `HANDOFF_READY` snapshots remain durable attention regardless of age; a replacement native worker can resume by sending a fresh sync under its own worker label.
+
 ## ChatGPT/@devflowz distinction
 
 ChatGPT/@devflowz is a separate managed workflow that may require DevFlow claims, managed workspaces, ownership fencing, verification freshness, task-owned commits, integration, finalization, and recovery. The Codex Copy Prompt path neither replaces nor weakens that managed path; managed controls likewise are not prerequisites for Codex repository work after handoff.
 
 ## Optional/legacy DevFlow-launched Codex CLI behavior
 
-The remainder of this file documents launch-specific compatibility behavior only. It is not authority for the card Copy Prompt.
+The remainder of this file documents launch-specific compatibility behavior only. It is quarantined legacy/explicit Auto Work behavior, not the default local-native bridge and not authority for the card Copy Prompt. New orchestration paths must not depend on it unless a separate feature explicitly opts into the launcher.
 
 For older or explicit DevFlow-managed Codex launches, interactive top-level Codex mode may be used when Codex App/history visibility is required. Historically verified flags include `-C`/`--cd` for cwd, `-m`/`--model`, `-a never`, and configured sandbox modes. DevFlow-managed launchers may resolve an internal managed workspace cwd and maintain run logs.
 

@@ -1083,38 +1083,44 @@ export async function runTaskWorkspaceHappyPathTail(
     };
   }
 
-  let plan: ReturnType<typeof buildTaskCommitPlan>;
-  try {
-    plan = buildTaskCommitPlan(state, { taskId, workspaceId });
-  } catch (error: any) {
-    return autonomousTailAttention('commit-plan', String(error?.payload?.code || error?.code || 'AUTONOMOUS_TAIL_COMMIT_PLAN_FAILED'), String(error?.message || 'Commit planning failed.'), { transitions });
-  }
-  const planDebt = (plan as any).qualityDebt;
-  if (plan.blockers.length > 0 || plan.verificationFresh !== true || plan.verificationCoverage?.status !== 'covered' || plan.verificationCoverage?.reusable !== true || (planDebt && planDebt.status !== 'clear')) {
-    return autonomousTailAttention('commit-plan', 'AUTONOMOUS_TAIL_SOURCE_NOT_GREEN', 'Autonomous tail stops unless source verification and ownership are unambiguously GREEN and reusable.', {
-      transitions,
-      blockers: plan.blockers,
-      verificationFresh: plan.verificationFresh,
-      verificationCoverage: plan.verificationCoverage,
-      qualityDebt: planDebt || null,
-    });
-  }
-  if (plan.commitDisposition === 'ambiguous-no-changes') {
-    return autonomousTailAttention('commit-plan', 'AUTONOMOUS_TAIL_COMMIT_AMBIGUOUS', 'Autonomous tail cannot prove whether a task-owned commit is required.', { transitions });
-  }
+  let operationId = existingFinalization && existingFinalization.status !== 'completed'
+    ? existingFinalization.id
+    : undefined;
 
-  try {
-    if (plan.commitDisposition === 'commit-required') {
-      const committed = commitTaskOwnedChanges(state, { taskId, workspaceId, message: commitMessage });
-      transitions.push({ stage: 'commit', status: 'completed', detail: String((committed as any).commitHash || (committed as any).hash || '') });
-    } else {
-      transitions.push({ stage: 'commit', status: 'already-completed', detail: String(plan.alreadyCommitted?.commitHash || '') });
+  if (operationId) {
+    transitions.push({ stage: 'finalization', status: 'resuming', detail: operationId });
+  } else {
+    let plan: ReturnType<typeof buildTaskCommitPlan>;
+    try {
+      plan = buildTaskCommitPlan(state, { taskId, workspaceId });
+    } catch (error: any) {
+      return autonomousTailAttention('commit-plan', String(error?.payload?.code || error?.code || 'AUTONOMOUS_TAIL_COMMIT_PLAN_FAILED'), String(error?.message || 'Commit planning failed.'), { transitions });
     }
-  } catch (error: any) {
-    return autonomousTailAttention('commit', String(error?.payload?.code || error?.code || 'AUTONOMOUS_TAIL_COMMIT_FAILED'), String(error?.message || 'Task-owned commit failed.'), { transitions });
-  }
+    const planDebt = (plan as any).qualityDebt;
+    if (plan.blockers.length > 0 || plan.verificationFresh !== true || plan.verificationCoverage?.status !== 'covered' || plan.verificationCoverage?.reusable !== true || (planDebt && planDebt.status !== 'clear')) {
+      return autonomousTailAttention('commit-plan', 'AUTONOMOUS_TAIL_SOURCE_NOT_GREEN', 'Autonomous tail stops unless source verification and ownership are unambiguously GREEN and reusable.', {
+        transitions,
+        blockers: plan.blockers,
+        verificationFresh: plan.verificationFresh,
+        verificationCoverage: plan.verificationCoverage,
+        qualityDebt: planDebt || null,
+      });
+    }
+    if (plan.commitDisposition === 'ambiguous-no-changes') {
+      return autonomousTailAttention('commit-plan', 'AUTONOMOUS_TAIL_COMMIT_AMBIGUOUS', 'Autonomous tail cannot prove whether a task-owned commit is required.', { transitions });
+    }
 
-  let operationId: string | undefined;
+    try {
+      if (plan.commitDisposition === 'commit-required') {
+        const committed = commitTaskOwnedChanges(state, { taskId, workspaceId, message: commitMessage });
+        transitions.push({ stage: 'commit', status: 'completed', detail: String((committed as any).commitHash || (committed as any).hash || '') });
+      } else {
+        transitions.push({ stage: 'commit', status: 'already-completed', detail: String(plan.alreadyCommitted?.commitHash || '') });
+      }
+    } catch (error: any) {
+      return autonomousTailAttention('commit', String(error?.payload?.code || error?.code || 'AUTONOMOUS_TAIL_COMMIT_FAILED'), String(error?.message || 'Task-owned commit failed.'), { transitions });
+    }
+  }
   let postIntegrationChecks: TaskWorkspaceFinalizationCheck[] = [];
   for (let attempt = 0; attempt < 4; attempt += 1) {
     let result: any;

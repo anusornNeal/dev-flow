@@ -882,7 +882,12 @@ test('autonomous tail stops on post-integration verification failure and resumes
   const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
   packageJson.version = '1.0.1';
   fs.writeFileSync(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`);
-  git(prepared.root, ['add', 'package.json']);
+  const verificationImpactPath = path.join(prepared.root, '.devflow', 'verification-impact.json');
+  fs.mkdirSync(path.dirname(verificationImpactPath), { recursive: true });
+  fs.writeFileSync(verificationImpactPath, `${JSON.stringify({
+    rules: [{ id: 'package-combined-state', patterns: ['package.json'], commands: ['test'], lane: 'full' }],
+  }, null, 2)}\n`);
+  git(prepared.root, ['add', 'package.json', '.devflow/verification-impact.json']);
   git(prepared.root, ['commit', '-m', 'chore: advance dependency state']);
 
   let verificationRuns = 0;

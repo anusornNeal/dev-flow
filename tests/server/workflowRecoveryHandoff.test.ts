@@ -44,6 +44,7 @@ const {
   resetSessionWorkspaceRuntimeForTests,
 } = await import('../../src/server/services/sessionWorkspaceService.js');
 const { registerDevFlowRoutes } = await import('../../src/server/routes/devflow.js');
+const transportMonitor = await import('../../src/server/services/mcpTransportMonitor.js');
 
 const projectId = 'project-recovery-handoff';
 createProject({
@@ -834,5 +835,52 @@ test('explicit task and workspace selectors must agree by exact persisted task i
     assert.equal(body.status, 'blocked');
     assert.equal(body.continuation.action, 'blocked');
     assert.match(body.continuation.reason, /exact persisted|identifiers|bind/i);
+  });
+});
+
+test('recovery handoff correlates client registry loss with durable execution state without raw client/session identifiers', async () => {
+  transportMonitor.clearMcpTransportRecords();
+  const fixture = seedClaimedTask('cutoff-registry');
+  const execution = seedCurrentExecution(fixture, 'cutoff-registry');
+  const job = createCurrentPendingJob(fixture, execution, 'cutoff-registry');
+
+  await withServer(async (baseUrl) => {
+    const capabilities = await (await fetch(`${baseUrl}/api/capabilities`)).json() as any;
+    const { response, body } = await json(baseUrl, new URLSearchParams({
+      taskId: fixture.displayId,
+      previousContractVersion: capabilities.contractVersion,
+      previousRuntimeInstanceId: capabilities.runtimeInstanceId,
+      previousToolSurfaceIdentity: capabilities.toolSurfaceIdentity,
+      clientToolsVisible: 'false',
+    }));
+    assert.equal(response.status, 200);
+    assert.equal(body.cutoffEvidence.classification, 'client-registry-loss');
+    assert.equal(body.cutoffEvidence.execution.id, execution.id);
+    assert.equal(body.cutoffEvidence.execution.continuationRequired, true);
+    assert.equal(body.cutoffEvidence.durable.pendingJobIds.includes(job.jobId), true);
+    assert.equal(body.cutoffEvidence.privacy.rawSessionIdentifiersStored, false);
+    assert.equal(body.cutoffEvidence.privacy.rawClientIdentifiersStored, false);
+    assert.equal(body.continuation.action, 'query-job');
+  });
+});
+
+test('recovery handoff reports runtime restart from identity evidence and transport cutoff remains unknown when no trace proves abort/expiry', async () => {
+  transportMonitor.clearMcpTransportRecords();
+  const fixture = seedClaimedTask('cutoff-restart');
+  seedCurrentExecution(fixture, 'cutoff-restart');
+
+  await withServer(async (baseUrl) => {
+    const capabilities = await (await fetch(`${baseUrl}/api/capabilities`)).json() as any;
+    const { response, body } = await json(baseUrl, new URLSearchParams({
+      taskId: fixture.displayId,
+      previousContractVersion: capabilities.contractVersion,
+      previousRuntimeInstanceId: 'runtime-before-restart',
+      previousToolSurfaceIdentity: capabilities.toolSurfaceIdentity,
+      clientToolsVisible: 'true',
+    }));
+    assert.equal(response.status, 200);
+    assert.equal(body.cutoffEvidence.classification, 'runtime-restart');
+    assert.equal(body.cutoffEvidence.transport.classification, 'unknown');
+    assert.equal(body.cutoffEvidence.runtime.previousRuntimeObserved, true);
   });
 });

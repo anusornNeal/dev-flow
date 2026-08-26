@@ -390,6 +390,83 @@ function tracePrivacy() {
   };
 }
 
+const DEFAULT_CUTOFF_EVIDENCE_WINDOW_MS = 10 * 60 * 1000;
+const MAX_CUTOFF_EVIDENCE_WINDOW_MS = 60 * 60 * 1000;
+const MAX_CUTOFF_EVIDENCE_EVENTS = 8;
+
+export type McpTransportCutoffClassification = 'transport-abort' | 'idle-expiry' | 'unknown';
+
+function isTransportAbortSignal(record: McpTransportTraceRecord) {
+  return record.outcome === 'aborted'
+    || record.lifecycleEvent === 'error-closed'
+    || record.lifecycleEvent === 'sse-error'
+    || record.lifecycleEvent === 'sse-disconnect';
+}
+
+export function getMcpTransportCutoffEvidence(options: {
+  now?: number;
+  windowMs?: number;
+  runtimeInstanceIds?: string[];
+} = {}) {
+  const now = options.now ?? Date.now();
+  const requestedWindowMs = Number(options.windowMs);
+  const windowMs = Number.isFinite(requestedWindowMs)
+    ? Math.max(1, Math.min(MAX_CUTOFF_EVIDENCE_WINDOW_MS, Math.floor(requestedWindowMs)))
+    : DEFAULT_CUTOFF_EVIDENCE_WINDOW_MS;
+  const runtimeInstanceIds = new Set((options.runtimeInstanceIds || [])
+    .map((value) => normalizeSafeToken(value))
+    .filter((value): value is string => Boolean(value)));
+  const recent = traceRecords.filter((record) => (
+    record.timestamp >= now - windowMs
+    && record.timestamp <= now
+    && (runtimeInstanceIds.size === 0 || Boolean(record.runtimeInstanceId && runtimeInstanceIds.has(record.runtimeInstanceId)))
+  ));
+  const signals = recent.filter((record) => record.lifecycleEvent === 'ttl-expired' || isTransportAbortSignal(record));
+  const latestSignal = signals.at(-1) || null;
+  const classification: McpTransportCutoffClassification = latestSignal?.lifecycleEvent === 'ttl-expired'
+    ? 'idle-expiry'
+    : latestSignal && isTransportAbortSignal(latestSignal)
+      ? 'transport-abort'
+      : 'unknown';
+  const reasonCodes = latestSignal?.lifecycleEvent === 'ttl-expired'
+    ? ['MCP_SESSION_IDLE_TTL_EXPIRED']
+    : latestSignal?.outcome === 'aborted'
+      ? ['MCP_REQUEST_ABORTED']
+      : latestSignal?.lifecycleEvent === 'error-closed'
+        ? ['MCP_SESSION_ERROR_CLOSED']
+        : latestSignal?.lifecycleEvent === 'sse-error'
+          ? ['MCP_SSE_ERROR']
+          : latestSignal?.lifecycleEvent === 'sse-disconnect'
+            ? ['MCP_SSE_DISCONNECTED']
+            : ['MCP_CUTOFF_EVIDENCE_INSUFFICIENT'];
+  const selected = signals.slice(-MAX_CUTOFF_EVIDENCE_EVENTS).reverse().map((record) => ({
+    sequence: record.sequence,
+    eventType: record.eventType,
+    lifecycleEvent: record.lifecycleEvent,
+    correlationId: record.correlationId,
+    runtimeInstanceId: record.runtimeInstanceId,
+    operation: record.operation,
+    toolName: record.toolName,
+    statusCode: record.statusCode,
+    outcome: record.outcome,
+    totalMs: record.totalMs,
+    timestamp: record.timestamp,
+  }));
+
+  return {
+    classification,
+    reasonCodes,
+    observedAt: latestSignal ? new Date(latestSignal.timestamp).toISOString() : null,
+    windowMs,
+    evidenceEvents: selected,
+    evidenceEventCount: signals.length,
+    truncated: signals.length > selected.length,
+    retainedRecords: traceRecords.length,
+    droppedRecords: droppedTraceRecords,
+    privacy: tracePrivacy(),
+  };
+}
+
 export function getMcpRestartActivitySnapshot(options?: { now?: number; quiescenceWindowMs?: number }) {
   const now = options?.now ?? Date.now();
   const configuredWindowMs = Number(options?.quiescenceWindowMs);

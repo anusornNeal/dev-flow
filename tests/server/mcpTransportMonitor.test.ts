@@ -10,6 +10,7 @@ import {
   clearMcpTransportRecords,
   createMcpTransportRequestTracker,
   getMcpTransportToolName,
+  getMcpTransportCutoffEvidence,
   queryMcpTransportTrace,
   recordMcpTransportTraceEvent,
   getMcpTransportSummary,
@@ -147,6 +148,61 @@ test('trace records keep only bounded safe metadata and represent missing fields
   assert.equal(lifecycle.privacy.rawHeadersStored, false);
   assert.equal(lifecycle.privacy.toolArgumentsStored, false);
   assert.equal(lifecycle.privacy.rawSessionIdentifiersStored, false);
+});
+
+test('cutoff evidence classifies only bounded server-side abort/idle signals and stays unknown without proof', () => {
+  clearMcpTransportRecords();
+  assert.equal(getMcpTransportCutoffEvidence({ now: 40_000 }).classification, 'unknown');
+
+  recordMcpTransportRequest({
+    operation: 'tools/call',
+    statusCode: 499,
+    totalMs: 25,
+    phaseMs: { parse: 1, connect: 1, handle: 20, close: 1, responseFinalize: 2 },
+    timestamp: 40_001,
+    correlationId: 'cutoff-abort-1',
+    toolName: 'run_project_command',
+    runtimeInstanceId: 'runtime-cutoff',
+    outcome: 'aborted',
+  });
+  const aborted = getMcpTransportCutoffEvidence({ now: 40_010, runtimeInstanceIds: ['runtime-cutoff'] });
+  assert.equal(aborted.classification, 'transport-abort');
+  assert.deepEqual(aborted.reasonCodes, ['MCP_REQUEST_ABORTED']);
+  assert.equal(aborted.evidenceEvents[0].correlationId, 'cutoff-abort-1');
+
+  recordMcpTransportTraceEvent({
+    eventType: 'session-lifecycle',
+    lifecycleEvent: 'ttl-expired',
+    runtimeInstanceId: 'runtime-cutoff',
+    timestamp: 40_020,
+  });
+  const expired = getMcpTransportCutoffEvidence({ now: 40_030, runtimeInstanceIds: ['runtime-cutoff'] });
+  assert.equal(expired.classification, 'idle-expiry');
+  assert.deepEqual(expired.reasonCodes, ['MCP_SESSION_IDLE_TTL_EXPIRED']);
+  assert.equal(expired.privacy.rawSessionIdentifiersStored, false);
+  assert.equal(expired.privacy.rawClientIdentifiersStored, false);
+});
+
+test('cutoff evidence response is hard-capped and discards unsafe correlation metadata', () => {
+  clearMcpTransportRecords();
+  for (let index = 0; index < 20; index += 1) {
+    recordMcpTransportRequest({
+      operation: 'tools/call',
+      statusCode: 499,
+      totalMs: index,
+      phaseMs: { parse: 0, connect: 0, handle: index, close: 0, responseFinalize: 0 },
+      timestamp: 50_000 + index,
+      correlationId: index === 19 ? 'unsafe correlation with spaces' : `cutoff-${index}`,
+      runtimeInstanceId: 'runtime-capped',
+      outcome: 'aborted',
+    });
+  }
+  const result = getMcpTransportCutoffEvidence({ now: 50_100, runtimeInstanceIds: ['runtime-capped'] });
+  assert.equal(result.evidenceEvents.length, 8);
+  assert.equal(result.evidenceEventCount, 20);
+  assert.equal(result.truncated, true);
+  assert.equal(result.evidenceEvents[0].correlationId, null);
+  assert.doesNotMatch(JSON.stringify(result), /unsafe correlation with spaces/);
 });
 
 test('unsafe trace metadata is discarded instead of retaining raw values', () => {

@@ -16,6 +16,7 @@ import {
 } from './sessionWorkspaceService.js';
 import { computeLifecycleAuthoritySnapshot } from './lifecycleAuthorityService.js';
 import { evaluateExecutionContinuation } from './executionContinuationService.js';
+import { getMcpTransportCutoffEvidence } from './mcpTransportMonitor.js';
 
 export type WorkflowRecoveryContinuationAction =
   | 'query-job'
@@ -76,7 +77,77 @@ function runtimeEvidence(args: RecoveryArgs) {
   const diagnosis = recoveryParity.endToEnd.ready === false && clientDiagnosis && clientDiagnosis !== classifiedDiagnosis
     ? { ...clientDiagnosis, concurrentDiagnostics: [classifiedDiagnosis!] }
     : classifiedDiagnosis;
-  return { diagnosis, recoveryParity };
+  return { diagnosis, recoveryParity, current, clientState };
+}
+
+function diagnosisCodes(diagnosis: ReturnType<typeof runtimeEvidence>['diagnosis']) {
+  if (!diagnosis) return [] as string[];
+  return [diagnosis.code, ...(diagnosis.concurrentDiagnostics || []).map((entry) => entry.code)].filter(Boolean);
+}
+
+function buildCutoffCorrelation(input: {
+  args: RecoveryArgs;
+  runtime: ReturnType<typeof runtimeEvidence>;
+  executionId: string;
+  executionContinuation: ReturnType<typeof evaluateExecutionContinuation> | null;
+  currentReusableJobs: McpToolJob[];
+  finalizationOperation: TaskFinalizationOperationRecord | null;
+}) {
+  const codes = diagnosisCodes(input.runtime.diagnosis);
+  const previousRuntime = clean(input.args.previousRuntimeInstanceId);
+  const currentRuntime = clean(input.runtime.current.runtimeInstanceId);
+  const transport = getMcpTransportCutoffEvidence({
+    runtimeInstanceIds: [previousRuntime, currentRuntime].filter(Boolean),
+  });
+  const clientRegistryLoss = codes.includes('client-registry-desync');
+  const runtimeRestart = codes.includes('runtime-restarted')
+    || codes.includes('deployment-changed')
+    || (codes.includes('tool-surface-changed') && Boolean(previousRuntime && currentRuntime && previousRuntime !== currentRuntime));
+  const classification = clientRegistryLoss
+    ? 'client-registry-loss' as const
+    : runtimeRestart
+      ? 'runtime-restart' as const
+      : transport.classification;
+  const reasonCodes = [
+    ...(clientRegistryLoss ? ['CLIENT_TOOL_REGISTRY_DESYNC'] : []),
+    ...(runtimeRestart ? ['DEVFLOW_RUNTIME_IDENTITY_CHANGED'] : []),
+    ...transport.reasonCodes,
+  ];
+
+  return {
+    classification,
+    reasonCodes: [...new Set(reasonCodes)],
+    observedAt: transport.observedAt,
+    runtime: {
+      diagnosisCode: input.runtime.diagnosis?.code || null,
+      currentRuntimeInstanceId: currentRuntime || null,
+      previousRuntimeObserved: Boolean(previousRuntime),
+      clientToolsVisible: input.runtime.clientState?.toolsVisible ?? null,
+    },
+    transport,
+    execution: input.executionId ? {
+      id: input.executionId,
+      terminal: input.executionContinuation?.terminal ?? null,
+      continuationRequired: input.executionContinuation?.continuationRequired ?? null,
+      blocked: input.executionContinuation?.blocked ?? null,
+      nextAction: input.executionContinuation?.nextAction?.action || null,
+      pendingOperationCount: input.executionContinuation?.pendingOperations.length ?? 0,
+    } : null,
+    durable: {
+      pendingJobIds: input.currentReusableJobs.slice(0, 10).map((job) => job.jobId),
+      finalization: input.finalizationOperation ? {
+        id: input.finalizationOperation.id,
+        status: input.finalizationOperation.status,
+        phase: input.finalizationOperation.phase,
+      } : null,
+    },
+    privacy: {
+      rawPayloadsStored: false,
+      rawHeadersStored: false,
+      rawSessionIdentifiersStored: false,
+      rawClientIdentifiersStored: false,
+    },
+  };
 }
 
 function compactTask(task: any) {
@@ -438,10 +509,19 @@ export function getWorkflowRecoveryHandoff(state: AppState, args: RecoveryArgs =
       executionContinuation = evaluateExecutionContinuation(state, continuationExecutionId, { workspaceId: workspaceId || undefined });
     } catch {}
   }
+  const cutoffEvidence = buildCutoffCorrelation({
+    args,
+    runtime,
+    executionId: continuationExecutionId,
+    executionContinuation,
+    currentReusableJobs,
+    finalizationOperation,
+  });
   const common = {
     status: 'recoverable' as const,
     generatedAt: new Date().toISOString(),
     ...(executionContinuation ? { executionContinuation } : {}),
+    cutoffEvidence,
     ...(diagnosis ? { diagnosis } : {}),
     recoveryParity,
     ...(project ? { project: compactProject(project) } : {}),

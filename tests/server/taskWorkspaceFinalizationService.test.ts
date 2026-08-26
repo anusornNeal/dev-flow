@@ -26,7 +26,8 @@ const {
 const { getProjectCommandExecutionIdentity } = await import('../../src/server/services/projectCommandService.js');
 const { buildVerificationCoverageIdentity } = await import('../../src/server/services/verificationBatchService.js');
 const { integrateWorkspaceCommits, reconstructRecordedWorkspaceIntegration } = await import('../../src/server/services/workspaceIntegrationService.js');
-const { finalizeTaskWorkspace, __setTaskFinalizationFaultBoundaryForTests } = await import('../../src/server/services/taskWorkspaceFinalizationService.js');const { buildTaskCommitPlan, commitTaskOwnedChanges } = await import('../../src/server/services/taskCommitPlanService.js');
+const { finalizeTaskWorkspace, runTaskWorkspaceHappyPathTail, __setTaskFinalizationFaultBoundaryForTests } = await import('../../src/server/services/taskWorkspaceFinalizationService.js');
+const { buildTaskCommitPlan, commitTaskOwnedChanges } = await import('../../src/server/services/taskCommitPlanService.js');
 const { getAgentTaskContext } = await import('../../src/server/services/taskService.js');
 const { getTaskFinalizationOperation } = await import('../../src/server/repositories/taskFinalizationOperationRepository.js');
 
@@ -168,6 +169,55 @@ function preparedCoverageFinalizationFixture(label: string) {
     toStage: 'committed',
     reasonCode: `${label}-committed`,
     evidence: { id: `${label}-committed`, kind: 'git-commit', status: 'completed' },
+  });
+  return { ...prepared, execution };
+}
+
+function preparedAutonomousTailFixture(label: string) {
+  const prepared = fixture(label);
+  fs.writeFileSync(path.join(prepared.workspace.root, 'tracked.txt'), `autonomous-${label}\n`);
+  const claimed = getTask(prepared.task.id)!;
+  const ownershipEpochId = `claim-epoch-00000000-0000-4000-8000-${String(sequence).padStart(12, '0')}`;
+  claimed.claim = { workspaceId: prepared.workspace.workspaceId, sessionIdHash: prepared.workspace.sessionIdHash, ownershipEpochId, ownerLabel: 'Fixture chat', ownerKind: 'chat', claimedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString() };
+  saveTask(claimed);
+  const execution = createExecutionSession({ projectId: prepared.task.projectId, taskId: prepared.task.id, workspaceId: prepared.workspace.workspaceId, branch: prepared.workspace.branch, repoRoot: prepared.workspace.root, ownershipEpochId });
+  recordExecutionLifecycleTransition(execution.id, {
+    toStage: 'context-ready',
+    reasonCode: `${label}-context`,
+    evidence: { id: `${label}-context`, kind: 'context-bundle', status: 'completed' },
+  });
+  recordExecutionLifecycleTransition(execution.id, {
+    toStage: 'implementing',
+    reasonCode: `${label}-implementing`,
+    evidence: { id: `${label}-implementing`, kind: 'owned-change', status: 'completed' },
+  });
+  recordExecutionOwnedChanges(execution.id, ['tracked.txt'], { repoRoot: prepared.workspace.root, source: 'autonomous-tail-fixture' });
+  const ownership = getExecutionOwnershipState(execution.id, { repoRoot: prepared.workspace.root });
+  const identity = getProjectCommandExecutionIdentity(prepared.state, {
+    projectId: prepared.project.id,
+    workspaceId: prepared.workspace.workspaceId,
+    command: 'test',
+    affectedInputPaths: ['tracked.txt'],
+  });
+  assert.ok(identity);
+  const coverage = buildVerificationCoverageIdentity(identity);
+  assert.ok(coverage);
+  recordExecutionVerificationEvidence(execution.id, [{ name: 'test', command: 'test', status: 'passed' }], {
+    repoRoot: prepared.workspace.root,
+    provenance: {
+      policy: 'checks-passed',
+      expectedRepoRevision: ownership.repoRevision,
+      expectedOwnedFingerprint: ownership.ownedFingerprint,
+      candidateId: `autonomous-${label}`,
+      candidateRepoRevision: ownership.repoRevision,
+      executionKey: identity!.key,
+      coverage: [coverage!],
+    },
+  });
+  recordExecutionLifecycleTransition(execution.id, {
+    toStage: 'verifying',
+    reasonCode: `${label}-verification`,
+    evidence: { id: `${label}-verification`, kind: 'verification-candidate', status: 'completed' },
   });
   return { ...prepared, execution };
 }
@@ -791,4 +841,83 @@ test('reopened prerequisite blocks terminal finalization while preserving depend
   assert.equal(git(prepared.workspace.root, ['rev-parse', 'HEAD']).stdout, sourceHeadBefore);
   assert.equal(git(prepared.root, ['rev-parse', 'HEAD']).stdout, baseHeadBefore, 'blocked finalization must not integrate source commit');
   assert.equal(getTask(prepared.task.id)?.status, 'in-progress');
+});
+
+
+test('autonomous happy-path tail commits, finalizes, cleans up, and replays idempotently', async () => {
+  const prepared = preparedAutonomousTailFixture('autonomous-happy');
+  const beforeCommitCount = Number(git(prepared.root, ['rev-list', '--count', 'HEAD']).stdout);
+  let postIntegrationRuns = 0;
+
+  const first = await runTaskWorkspaceHappyPathTail(prepared.state, {
+    taskId: prepared.task.id,
+    workspaceId: prepared.workspace.workspaceId,
+    commitMessage: 'feat: autonomous happy path',
+    triggerJobId: 'job-green-happy',
+  }, async () => {
+    postIntegrationRuns += 1;
+    return { ok: true, status: 'succeeded', exitCode: 0 };
+  });
+
+  assert.equal(first.status, 'completed', JSON.stringify(first));
+  assert.equal(getTask(prepared.task.id)?.status, 'done');
+  assert.equal(fs.existsSync(prepared.workspace.root), false);
+  assert.equal(Number(git(prepared.root, ['rev-list', '--count', 'HEAD']).stdout), beforeCommitCount + 1);
+  assert.equal(postIntegrationRuns, 0, 'unchanged base should reuse authoritative source verification');
+
+  const replay = await runTaskWorkspaceHappyPathTail(prepared.state, {
+    taskId: prepared.task.id,
+    workspaceId: prepared.workspace.workspaceId,
+    commitMessage: 'feat: autonomous happy path',
+    triggerJobId: 'job-green-happy',
+  });
+  assert.equal(replay.status, 'completed');
+  assert.equal(replay.idempotent, true);
+  assert.equal(Number(git(prepared.root, ['rev-list', '--count', 'HEAD']).stdout), beforeCommitCount + 1, 'replay must not duplicate commit/integration');
+});
+
+test('autonomous tail stops on post-integration verification failure and resumes the same finalization operation safely', async () => {
+  const prepared = preparedAutonomousTailFixture('autonomous-post-integration');
+  const packageJsonPath = path.join(prepared.root, 'package.json');
+  const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+  packageJson.version = '1.0.1';
+  fs.writeFileSync(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`);
+  git(prepared.root, ['add', 'package.json']);
+  git(prepared.root, ['commit', '-m', 'chore: advance dependency state']);
+
+  let verificationRuns = 0;
+  const failed = await runTaskWorkspaceHappyPathTail(prepared.state, {
+    taskId: prepared.task.id,
+    workspaceId: prepared.workspace.workspaceId,
+    commitMessage: 'feat: autonomous post integration',
+    triggerJobId: 'job-green-post-integration',
+  }, async () => {
+    verificationRuns += 1;
+    return { ok: false, status: 'failed', exitCode: 1 };
+  });
+
+  assert.equal(failed.status, 'attention', JSON.stringify(failed));
+  assert.equal(failed.code, 'POST_INTEGRATION_VERIFICATION_FAILED');
+  assert.equal(getTask(prepared.task.id)?.status, 'in-progress');
+  assert.equal(fs.existsSync(prepared.workspace.root), true);
+  const integratedHead = git(prepared.root, ['rev-parse', 'HEAD']).stdout;
+  const operationId = (failed as any).operationId;
+  assert.ok(operationId);
+
+  const resumed = await runTaskWorkspaceHappyPathTail(prepared.state, {
+    taskId: prepared.task.id,
+    workspaceId: prepared.workspace.workspaceId,
+    commitMessage: 'feat: autonomous post integration',
+    triggerJobId: 'job-green-post-integration',
+  }, async () => {
+    verificationRuns += 1;
+    return { ok: true, status: 'succeeded', exitCode: 0 };
+  });
+
+  assert.equal(resumed.status, 'completed', JSON.stringify(resumed));
+  assert.equal(resumed.operationId, operationId);
+  assert.equal(git(prepared.root, ['rev-parse', 'HEAD']).stdout, integratedHead, 'resume must not integrate twice');
+  assert.equal(getTask(prepared.task.id)?.status, 'done');
+  assert.equal(fs.existsSync(prepared.workspace.root), false);
+  assert.equal(verificationRuns >= 2, true);
 });

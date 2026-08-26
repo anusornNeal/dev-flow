@@ -20,7 +20,7 @@ import { uiPreviewToolDefinitions } from './devflowUiPreviewTools';
 import { buildMcpTransportInputSchema } from './mcpSchemaTransport';
 import { resolveRuntimeMcpToolProfileValue } from './mcpToolProfileConfig';
 export type { DevFlowToolDefinition, DevFlowToolHttpRequest } from './devflowContractCore';
-export const DEVFLOW_CONTRACT_VERSION = '2026-08-22.2';
+export const DEVFLOW_CONTRACT_VERSION = '2026-08-26.1';
 
 export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   {
@@ -1317,6 +1317,16 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
         cacheTtlMs: { type: 'number', description: 'Optional bounded TTL for cacheResult entries.' },
         singleFlight: { type: 'boolean', description: 'Allow identical in-flight command requests at the same repo revision to share one execution.' },
         infrastructureRetryPolicy: { type: 'string', enum: ['none', 'resource-safe-once'], description: 'Bounded verification infrastructure recovery policy. resource-safe-once retries a proven infrastructure failure at most once using a safe machine-aware profile.' },
+        autonomousTail: {
+          type: 'object',
+          description: 'Optional one-shot handoff to DevFlow after authoritative GREEN verification. When enabled, DevFlow durably continues the deterministic commit/finalization/post-integration verification/cleanup tail without additional ChatGPT tool calls. Omit this object for normal verification-only behavior.',
+          properties: {
+            enabled: { type: 'boolean', description: 'Must be true to request autonomous tail continuation.' },
+            commitMessage: { type: 'string', minLength: 3, maxLength: 240, description: 'Conventional commit input chosen by the initiating reasoning agent. DevFlow never guesses this message.' },
+          },
+          required: ['enabled', 'commitMessage'],
+          additionalProperties: false,
+        },
         verificationBatch: {
           type: 'object',
           description: 'Optional durable sequential verification batch identity. Every member must use the same id and requiredChecks set; checkId identifies this command within the batch.',

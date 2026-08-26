@@ -66,8 +66,10 @@ type DurableExecutionJobBinding = {
   toolName: string;
 };
 
+const AUTONOMOUS_TAIL_TOOL_NAME = 'continue_task_execution_tail';
+
 function prepareDurableExecutionJobArgs(toolName: string, args: any, jobId: string) {
-  if (!isHarnessLifecycleAffectingTool(toolName)) return args;
+  if (!isHarnessLifecycleAffectingTool(toolName) && toolName !== AUTONOMOUS_TAIL_TOOL_NAME) return args;
   const sourceArgs = resolveBuiltinToolJobBindingArgs(toolName, args);
   const workspaceId = normalizedOptionalString(sourceArgs?.workspaceId);
   if (!workspaceId) return args;
@@ -113,6 +115,57 @@ function durableExecutionJobBinding(job: Pick<McpToolJob, 'jobId' | 'toolName' |
     throw createApiError(409, 'MCP_JOB_EXECUTION_BINDING_INVALID', `Durable MCP job '${job?.jobId || 'unknown'}' has an invalid immutable execution binding.`);
   }
   return binding;
+}
+
+function autonomousTailConfig(job: Pick<McpToolJob, 'args'> | null | undefined) {
+  const raw = job?.args?.autonomousTail;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw) || raw.enabled !== true) return null;
+  return { commitMessage: String(raw.commitMessage || '').trim() };
+}
+
+function existingAutonomousTailJob(triggerJobId: string) {
+  return listRecentJobs(200).find((candidate) => (
+    candidate.toolName === AUTONOMOUS_TAIL_TOOL_NAME
+    && String(candidate.args?.triggerJobId || '').trim() === triggerJobId
+  )) || null;
+}
+
+function maybeEnqueueAutonomousTail(state: AppState, verificationJob: McpToolJob | null | undefined, result: any) {
+  if (!verificationJob || verificationJob.toolName !== 'run_project_command' || verificationJob.status !== 'succeeded') return null;
+  const config = autonomousTailConfig(verificationJob);
+  if (!config) return null;
+  if (!result?.ok || result?.status !== 'succeeded' || result?.verificationBinding?.authoritative !== true) return null;
+  const binding = durableExecutionJobBinding(verificationJob);
+  if (!binding) return null;
+  const existing = existingAutonomousTailJob(verificationJob.jobId);
+  if (existing) return existing;
+  try {
+    const accepted = enqueueToolJob(state, AUTONOMOUS_TAIL_TOOL_NAME, {
+      projectId: binding.projectId,
+      taskId: binding.taskId,
+      workspaceId: binding.workspaceId,
+      triggerJobId: verificationJob.jobId,
+      commitMessage: config.commitMessage,
+    }, 'repo-write');
+    appendJobLog(verificationJob.jobId, 'stdout', `\n[Autonomous Tail] Accepted durable continuation ${accepted.jobId}.\n`);
+    return getJob(accepted.jobId);
+  } catch (error) {
+    appendJobLog(verificationJob.jobId, 'stderr', `\n[Autonomous Tail] Continuation admission stopped: ${summarizeError(error)}\n`);
+    return null;
+  }
+}
+
+function reconcileAutonomousTailsAfterRestart(state?: AppState) {
+  if (!state) return 0;
+  let accepted = 0;
+  for (const job of listRecentJobs(200)) {
+    if (job.toolName !== 'run_project_command' || job.status !== 'succeeded' || !autonomousTailConfig(job)) continue;
+    if (existingAutonomousTailJob(job.jobId)) continue;
+    const stored = readJobResult(job.jobId)?.result;
+    if (!stored) continue;
+    if (maybeEnqueueAutonomousTail(state, job, stored)) accepted += 1;
+  }
+  return accepted;
 }
 
 function recordDurableExecutionPending(job: Pick<McpToolJob, 'jobId' | 'toolName' | 'args'>, status: 'accepted' | 'running') {
@@ -1450,6 +1503,7 @@ function reconcileTerminalDurableJobsAfterRestart() {
 export function initMcpToolJobs(state?: AppState) {
   if (state) durableRecoveryState = state;
   reconcileTerminalDurableJobsAfterRestart();
+  reconcileAutonomousTailsAfterRestart(state);
   const summary = runDurableJobRecoveryPass(state, Date.now());
   if (summary.interrupted > 0) console.log(`[mcp-tool-job] Marked ${summary.interrupted} stale unsafe jobs as interrupted.`);
   startBackgroundJobCleanup();
@@ -1654,9 +1708,11 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
         nextAction: `Verification request was superseded by ${superseding.candidateKey}.`,
       };
     }
-    writeJobResult(jobId, currentGreenJobResult(admissionPreflight.cachedResult, verification, jobArgs));
+    const cachedAcceptedResult = currentGreenJobResult(admissionPreflight.cachedResult, verification, jobArgs);
+    writeJobResult(jobId, cachedAcceptedResult);
     const completedJob = transitionJobStatus(jobId, ['queued'], { status: 'succeeded' });
     safelyReconcileTerminalDurableExecution(completedJob);
+    maybeEnqueueAutonomousTail(state, completedJob, cachedAcceptedResult);
     const completedAt = Date.now();
     const phaseTelemetry: JobPhaseTelemetryState = {
       jobId,
@@ -2188,7 +2244,9 @@ async function startJob(entry: QueueEntry) {
       leaseGeneration,
       Number.isFinite(completedDurationMs) && completedDurationMs > 0 ? { actualDurationMs: completedDurationMs } : undefined,
     );
-    safelyReconcileTerminalDurableExecution(getJob(entry.jobId));
+    const terminalJob = getJob(entry.jobId);
+    safelyReconcileTerminalDurableExecution(terminalJob);
+    if (terminalJob?.status === 'succeeded') maybeEnqueueAutonomousTail(entry.state, terminalJob, completedResult);
     const active = activeJobs.get(entry.jobId);
     if (active?.leaseGeneration === leaseGeneration) {
       activeJobs.delete(entry.jobId);
@@ -2218,6 +2276,10 @@ export function getJobMetrics() {
     capacity: queueMetrics.capacity,
     recentJobs: queueMetrics.recentJobs
   };
+}
+
+export function __reconcileAutonomousTailsAfterRestartForTests(state?: AppState) {
+  return reconcileAutonomousTailsAfterRestart(state);
 }
 
 export function __resetQueueWaitTelemetryForTests() {

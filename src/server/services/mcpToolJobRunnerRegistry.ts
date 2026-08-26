@@ -4,6 +4,7 @@ import { applyAndVerifyAsync } from './applyAndVerifyService';
 import { editFilesBatch } from './fileEditBatchService';
 import { commitGitChanges, ensureGitBranch, pushGitBranch } from './gitService';
 import { commitTaskOwnedChanges } from './taskCommitPlanService.js';
+import { runTaskWorkspaceHappyPathTail } from './taskWorkspaceFinalizationService.js';
 import { applyLocalPatchAsync } from './localPatchService';
 import { searchLocalFilesAsync } from './localFileService';
 import { executeRepoQueryPlan } from './repoQueryPlanService';
@@ -92,12 +93,15 @@ const BUILTIN_TOOL_RUNNER_NAMES = [
   'delete_local_path',
   'move_local_path',
   'apply_project_atlas_agent_update',
+  'continue_task_execution_tail',
 ] as const;
 
 const RETRYABLE_AFTER_RESTART = new Set<string>([
   'search_local_files',
   'execute_repo_query_plan',
 ]);
+
+RETRYABLE_AFTER_RESTART.add('continue_task_execution_tail');
 
 export function getBuiltinToolRunnerNames() {
   return [...BUILTIN_TOOL_RUNNER_NAMES];
@@ -230,6 +234,29 @@ export async function runBuiltinToolJob(input: BuiltinToolJobInput, context: Bui
     if (decision) recordHarnessExecutionOutcome(decision, result);
     return result;
   };
+
+  if (toolName === 'continue_task_execution_tail') {
+    return await runTaskWorkspaceHappyPathTail(
+      state,
+      {
+        taskId: String(args?.taskId || ''),
+        workspaceId: String(args?.workspaceId || ''),
+        commitMessage: String(args?.commitMessage || ''),
+        triggerJobId: String(args?.triggerJobId || '') || undefined,
+      },
+      async (request) => {
+        logger.stdout(`[Autonomous Tail] Running post-integration verification '${request.command}' at ${request.repoRevision.slice(0, 12)}.\n`);
+        return await runProjectCommandAsync(state, {
+          projectId: request.projectId,
+          command: request.command,
+          cacheResult: false,
+          singleFlight: false,
+          infrastructureRetryPolicy: 'resource-safe-once',
+          responseMode: 'compact',
+        }, logger, setCancelFn);
+      },
+    );
+  }
 
   if (toolName === 'run_project_command') {
     const guard = preflight();

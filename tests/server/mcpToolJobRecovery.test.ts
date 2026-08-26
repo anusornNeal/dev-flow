@@ -156,6 +156,7 @@ test('builtin recovery policy retries only explicitly safe read jobs', () => {
   assert.equal(runnerRegistry.getBuiltinToolJobRecoveryPolicy('apply_prepared_edit'), 'interrupted');
   assert.equal(runnerRegistry.getBuiltinToolJobRecoveryPolicy('commit_git_changes'), 'interrupted');
   assert.equal(runnerRegistry.getBuiltinToolJobRecoveryPolicy('run_project_command'), 'interrupted');
+  assert.equal(runnerRegistry.getBuiltinToolJobRecoveryPolicy('continue_task_execution_tail'), 'retryable');
 });
 
 test('service execution owns a durable lease and persisted cancellation wins over late completion', async () => {

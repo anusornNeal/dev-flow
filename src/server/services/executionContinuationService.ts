@@ -2,7 +2,7 @@ import type { AppState } from '../types.js';
 import { getExecutionSessionById, listExecutionSessionEvidence } from '../repositories/executionSessionRepository.js';
 import { getTaskByIdentifier } from '../repositories/taskRepository.js';
 import { getLatestTaskFinalizationOperation } from '../repositories/taskFinalizationOperationRepository.js';
-import { getJob } from '../repositories/mcpToolJobRepository.js';
+import { getJob, listRecentJobs, readJobResult } from '../repositories/mcpToolJobRepository.js';
 import { getLatestExecutionCheckpoint } from './executionCheckpointService.js';
 import { getSessionWorkspaceMetadataForRecovery } from './sessionWorkspaceService.js';
 import { getRepoRevisionForRoot } from './repoRevisionService.js';
@@ -58,6 +58,13 @@ export type ExecutionContinuationResult = {
   execution: { status: string; stage: string; workspaceId: string | null };
   finalization: { operationId: string; status: string; phase: string; workspaceId: string } | null;
   blockers: Array<{ code: string; message: string; affectedId?: string | null }>;
+  autonomousTail: {
+    state: 'not-started' | 'queued' | 'running' | 'completed' | 'attention';
+    jobId: string | null;
+    triggerJobId: string | null;
+    reasonCode: string | null;
+    message: string | null;
+  };
   boardLoop: { requested: boolean; eligibilityDeferred: boolean };
 };
 
@@ -140,6 +147,35 @@ export function evaluateExecutionContinuation(
     affectedId: (entry as any)?.affectedId == null ? null : String((entry as any).affectedId),
   });
 
+  const tailJobs = listRecentJobs(200)
+    .filter((job) => job.toolName === 'continue_task_execution_tail' && String(job.args?.__executionJobBinding?.executionSessionId || '').trim() === session.id)
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  const latestTailJob = tailJobs[0] || null;
+  const latestTailResult = latestTailJob ? readJobResult(latestTailJob.jobId)?.result : null;
+  const autonomousTailState: ExecutionContinuationResult['autonomousTail']['state'] = !latestTailJob
+    ? 'not-started'
+    : latestTailJob.status === 'queued'
+      ? 'queued'
+      : latestTailJob.status === 'running'
+        ? 'running'
+        : latestTailJob.status === 'succeeded' && latestTailResult?.status === 'completed'
+          ? 'completed'
+          : 'attention';
+  const autonomousTail = {
+    state: autonomousTailState,
+    jobId: latestTailJob?.jobId || null,
+    triggerJobId: latestTailJob ? String(latestTailJob.args?.triggerJobId || '').trim() || null : null,
+    reasonCode: autonomousTailState === 'attention' ? String(latestTailResult?.code || latestTailJob?.failureSummary || 'AUTONOMOUS_TAIL_ATTENTION_REQUIRED').slice(0, 160) : null,
+    message: autonomousTailState === 'attention' ? String(latestTailResult?.message || latestTailJob?.failureSummary || 'Autonomous execution tail requires attention.').slice(0, 500) : null,
+  };
+  if (autonomousTail.state === 'attention') {
+    blockers.push({
+      code: autonomousTail.reasonCode || 'AUTONOMOUS_TAIL_ATTENTION_REQUIRED',
+      message: autonomousTail.message || 'Autonomous execution tail requires attention.',
+      affectedId: autonomousTail.jobId,
+    });
+  }
+
   const base = {
     executionSessionId: session.id,
     pendingOperations,
@@ -158,6 +194,7 @@ export function evaluateExecutionContinuation(
     } : null,
     blockers,
     boardLoop: { requested: options.boardLoopRequested === true, eligibilityDeferred: options.boardLoopRequested === true },
+    autonomousTail,
   };
 
   if (pendingOperations.length > 0) {

@@ -25,10 +25,11 @@ import {
   getExecutionSessionOwnershipEpoch,
 } from './executionSessionService.js';
 import { computeLifecycleAuthoritySnapshot } from './lifecycleAuthorityService.js';
-import { resolveTaskVerificationCoverage, type TaskVerificationCoverageResolution } from './taskCommitPlanService.js';
+import { buildTaskCommitPlan, commitTaskOwnedChanges, resolveTaskVerificationCoverage, type TaskVerificationCoverageResolution } from './taskCommitPlanService.js';
 import { summarizeQualityDebt, type TaskQualityDebtSummary } from './qualityDebtService.js';
 import { withSyncLock } from './lockAndIdempotencyService.js';
 import { evaluateExecutionContinuation } from './executionContinuationService.js';
+import { getRepoRevisionForRoot } from './repoRevisionService.js';
 import { assertTaskPrerequisitesSatisfied } from './taskDependencyService.js';
 
 export type TaskWorkspaceFinalizationCheck = {
@@ -1025,4 +1026,154 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
       });
     }
   });
+}
+
+export type TaskWorkspaceHappyPathTailVerificationRequest = {
+  projectId: string;
+  command: string;
+  repoRevision: string;
+  requiredScope: 'targeted' | 'broad-or-full';
+};
+
+export type TaskWorkspaceHappyPathTailInput = {
+  taskId: string;
+  workspaceId: string;
+  commitMessage: string;
+  triggerJobId?: string;
+};
+
+type TaskWorkspaceHappyPathTailVerificationRunner = (
+  request: TaskWorkspaceHappyPathTailVerificationRequest,
+) => Promise<any>;
+
+function autonomousTailAttention(stage: string, code: string, message: string, extra: Record<string, unknown> = {}) {
+  return { ok: false as const, status: 'attention' as const, stage, code, message, ...extra };
+}
+
+export async function runTaskWorkspaceHappyPathTail(
+  state: AppState,
+  input: TaskWorkspaceHappyPathTailInput,
+  runPostIntegrationVerification?: TaskWorkspaceHappyPathTailVerificationRunner,
+) {
+  const taskId = String(input.taskId || '').trim();
+  const workspaceId = String(input.workspaceId || '').trim();
+  const commitMessage = String(input.commitMessage || '').trim();
+  const transitions: Array<{ stage: string; status: string; detail?: string }> = [];
+  if (!taskId || !workspaceId) {
+    return autonomousTailAttention('admission', 'AUTONOMOUS_TAIL_IDENTITY_REQUIRED', 'Autonomous tail requires an exact task and managed workspace identity.');
+  }
+  if (!commitMessage) {
+    return autonomousTailAttention('admission', 'AUTONOMOUS_TAIL_COMMIT_MESSAGE_REQUIRED', 'Autonomous tail will not guess a commit message; the initiating verification handoff must provide one.');
+  }
+
+  const existingTask = getTaskByIdentifier(taskId, 'full');
+  const existingFinalization = existingTask ? getLatestTaskFinalizationOperation(existingTask.id, workspaceId) : null;
+  if (existingTask?.status === 'done' && existingFinalization?.status === 'completed') {
+    transitions.push({ stage: 'finalization', status: 'already-completed', detail: existingFinalization.id });
+    return {
+      ok: true as const,
+      status: 'completed' as const,
+      taskId,
+      workspaceId,
+      triggerJobId: input.triggerJobId || null,
+      operationId: existingFinalization.id,
+      idempotent: true,
+      transitions,
+      result: { status: 'completed', operation: existingFinalization, task: existingTask },
+    };
+  }
+
+  let plan: ReturnType<typeof buildTaskCommitPlan>;
+  try {
+    plan = buildTaskCommitPlan(state, { taskId, workspaceId });
+  } catch (error: any) {
+    return autonomousTailAttention('commit-plan', String(error?.payload?.code || error?.code || 'AUTONOMOUS_TAIL_COMMIT_PLAN_FAILED'), String(error?.message || 'Commit planning failed.'), { transitions });
+  }
+  const planDebt = (plan as any).qualityDebt;
+  if (plan.blockers.length > 0 || plan.verificationFresh !== true || plan.verificationCoverage?.status !== 'covered' || plan.verificationCoverage?.reusable !== true || (planDebt && planDebt.status !== 'clear')) {
+    return autonomousTailAttention('commit-plan', 'AUTONOMOUS_TAIL_SOURCE_NOT_GREEN', 'Autonomous tail stops unless source verification and ownership are unambiguously GREEN and reusable.', {
+      transitions,
+      blockers: plan.blockers,
+      verificationFresh: plan.verificationFresh,
+      verificationCoverage: plan.verificationCoverage,
+      qualityDebt: planDebt || null,
+    });
+  }
+  if (plan.commitDisposition === 'ambiguous-no-changes') {
+    return autonomousTailAttention('commit-plan', 'AUTONOMOUS_TAIL_COMMIT_AMBIGUOUS', 'Autonomous tail cannot prove whether a task-owned commit is required.', { transitions });
+  }
+
+  try {
+    if (plan.commitDisposition === 'commit-required') {
+      const committed = commitTaskOwnedChanges(state, { taskId, workspaceId, message: commitMessage });
+      transitions.push({ stage: 'commit', status: 'completed', detail: String((committed as any).commitHash || (committed as any).hash || '') });
+    } else {
+      transitions.push({ stage: 'commit', status: 'already-completed', detail: String(plan.alreadyCommitted?.commitHash || '') });
+    }
+  } catch (error: any) {
+    return autonomousTailAttention('commit', String(error?.payload?.code || error?.code || 'AUTONOMOUS_TAIL_COMMIT_FAILED'), String(error?.message || 'Task-owned commit failed.'), { transitions });
+  }
+
+  let operationId: string | undefined;
+  let postIntegrationChecks: TaskWorkspaceFinalizationCheck[] = [];
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    let result: any;
+    try {
+      result = finalizeTaskWorkspace(state, { taskId, workspaceId, ...(operationId ? { operationId } : {}), checks: postIntegrationChecks });
+    } catch (error: any) {
+      return autonomousTailAttention('finalization', String(error?.payload?.code || error?.code || 'AUTONOMOUS_TAIL_FINALIZATION_FAILED'), String(error?.message || 'Finalization failed.'), { transitions, operationId: operationId || null });
+    }
+    operationId = String(result?.operation?.id || operationId || '').trim() || undefined;
+
+    if (result?.status === 'completed') {
+      transitions.push({ stage: 'finalization', status: 'completed', detail: operationId });
+      return { ok: true as const, status: 'completed' as const, taskId, workspaceId, triggerJobId: input.triggerJobId || null, operationId: operationId || null, transitions, result };
+    }
+
+    if (result?.status === 'cleanup-pending') {
+      transitions.push({ stage: 'cleanup', status: 'retrying', detail: operationId });
+      if (attempt < 3) continue;
+      return autonomousTailAttention('cleanup', 'FINALIZATION_CLEANUP_PENDING', 'Managed workspace cleanup remains pending after bounded idempotent retry.', { transitions, operationId: operationId || null, result });
+    }
+
+    const postIntegration = result?.postIntegration;
+    if (result?.status === 'continuation' && postIntegration?.required === true) {
+      const missingCommands = Array.isArray(postIntegration.missingCommands) ? postIntegration.missingCommands.map((entry: unknown) => String(entry || '').trim()).filter(Boolean) : [];
+      const requiredCommands = Array.isArray(postIntegration.requiredCommands) ? postIntegration.requiredCommands.map((entry: unknown) => String(entry || '').trim()).filter(Boolean) : [];
+      const commandsToRun = missingCommands.length > 0 ? missingCommands : requiredCommands;
+      if (!runPostIntegrationVerification || commandsToRun.length === 0) {
+        return autonomousTailAttention('post-integration-verification', 'POST_INTEGRATION_VERIFICATION_REQUIRED', String(postIntegration.reason || 'Post-integration verification requires attention.'), { transitions, operationId: operationId || null, postIntegration });
+      }
+      const project = getProject(String(result?.operation?.projectId || '').trim());
+      if (!project?.localPath) {
+        return autonomousTailAttention('post-integration-verification', 'FINALIZATION_PROJECT_ROOT_REQUIRED', 'Project root is unavailable for autonomous post-integration verification.', { transitions, operationId: operationId || null });
+      }
+      const expectedHead = String(postIntegration.repoRevision || '').trim();
+      const before = getRepoRevisionForRoot(project.localPath);
+      if (!expectedHead || before.head !== expectedHead || before.changedFiles.length > 0) {
+        return autonomousTailAttention('post-integration-verification', 'POST_INTEGRATION_REVISION_DRIFT', 'Integrated project state changed before autonomous post-integration verification could start.', { transitions, expectedHead, observedHead: before.head, changedFiles: before.changedFiles.map((entry) => entry.path) });
+      }
+
+      const checks: TaskWorkspaceFinalizationCheck[] = [];
+      for (const command of commandsToRun) {
+        const verification = await runPostIntegrationVerification({ projectId: project.id, command, repoRevision: expectedHead, requiredScope: postIntegration.requiredScope === 'broad-or-full' ? 'broad-or-full' : 'targeted' });
+        const after = getRepoRevisionForRoot(project.localPath);
+        if (after.head !== expectedHead || after.changedFiles.length > 0) {
+          return autonomousTailAttention('post-integration-verification', 'POST_INTEGRATION_REVISION_DRIFT', 'Integrated project state changed during autonomous post-integration verification.', { transitions, command, expectedHead, observedHead: after.head, changedFiles: after.changedFiles.map((entry) => entry.path) });
+        }
+        if (!verification?.ok || verification?.status !== 'succeeded' || verification?.exitCode !== 0) {
+          return autonomousTailAttention('post-integration-verification', 'POST_INTEGRATION_VERIFICATION_FAILED', `Post-integration verification '${command}' failed; autonomous tail stopped without guessing a repair.`, { transitions, command, operationId: operationId || null, verification: { status: verification?.status || 'failed', exitCode: verification?.exitCode ?? null, timedOut: verification?.timedOut === true } });
+        }
+        checks.push({ name: `autonomous post-integration: ${command}`, command, status: 'passed', scope: postIntegration.requiredScope === 'broad-or-full' ? 'broad' : 'targeted', repoRevision: expectedHead, summary: 'Autonomous tail ran the finalizer-required post-integration verification against the exact integrated HEAD.' });
+        transitions.push({ stage: 'post-integration-verification', status: 'passed', detail: command });
+      }
+      postIntegrationChecks = checks;
+      continue;
+    }
+
+    const code = String(result?.code || result?.continuation?.error?.code || result?.operation?.failure?.code || 'AUTONOMOUS_TAIL_ATTENTION_REQUIRED');
+    return autonomousTailAttention('finalization', code, String(result?.message || result?.continuation?.message || 'Finalization requires explicit recovery or attention.'), { transitions, operationId: operationId || null, result });
+  }
+
+  return autonomousTailAttention('finalization', 'AUTONOMOUS_TAIL_RETRY_BUDGET_EXHAUSTED', 'Autonomous tail exceeded its bounded continuation retry budget.', { transitions, operationId: operationId || null });
 }

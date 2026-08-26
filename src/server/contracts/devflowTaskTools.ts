@@ -120,7 +120,7 @@ export const taskToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'get_next_action',
-    description: 'Read-only scheduler pull for one project-pinned reasoning worker. Returns exactly one bounded action: recover current work, resolve attention, continue owned implementation, recommend an atomic claim_next_task, or report no eligible work. It never claims, replays a mutation, or switches projectId, so repeated pulls are safe.',
+    description: 'Read-only scheduler pull for one project-pinned reasoning worker. Resumes DevFlow-owned durable board-loop state before unrelated work and returns exactly one bounded action: recover current work, resolve attention, continue implementation, recommend an atomic claim_next_task, confirm loop stop, or report no eligible work. It never claims, replays a mutation, or switches projectId, so repeated pulls are safe across reconnects.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -133,7 +133,7 @@ export const taskToolDefinitions: DevFlowToolDefinition[] = [
     outputSchema: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['recover-current', 'resolve-attention', 'continue-owned', 'claim-new', 'no-action'] },
+        action: { type: 'string', enum: ['recover-current', 'resolve-attention', 'continue-owned', 'claim-new', 'confirm-loop-stop', 'no-action'] },
         projectId: { type: 'string' },
         task: { type: 'object' },
         reasonCodes: { type: 'array', items: { type: 'string' } },
@@ -141,6 +141,7 @@ export const taskToolDefinitions: DevFlowToolDefinition[] = [
         attention: { type: 'object' },
         claim: { type: 'object' },
         blocked: { type: 'array', items: { type: 'object' } },
+        loop: { type: 'object', description: 'Bounded durable board-loop metadata projected from DevFlow-owned execution evidence.' },
       },
       required: ['action', 'projectId', 'reasonCodes'],
     },
@@ -148,7 +149,7 @@ export const taskToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'claim_next_task',
-    description: 'Atomically select and claim the next deterministic eligible leaf task for one board-loop worker. Structured prerequisiteTaskIds are authoritative eligibility gates; blocked dependents are skipped until their prerequisites are done, then become immediately eligible without a lane shuffle. For explicit or ambiguous fallback discovery, use bounded minimal/summary reads across backlog and todo; never use an unfiltered or done collection as ordinary next-work selection. projectId is the originating selected board boundary and must remain unchanged for the lifetime of that loop unless the user explicitly switches projects. NO_ELIGIBLE_TASK stops the current project loop; do not substitute another projectId to find work.',
+    description: 'Atomically select and claim the next deterministic eligible leaf task for one board-loop worker. This is also the mutation boundary that starts, propagates, and terminalizes durable DevFlow-owned board-loop intent. Structured prerequisiteTaskIds are authoritative eligibility gates; blocked dependents are skipped until their prerequisites are done, then become immediately eligible without a lane shuffle. For explicit or ambiguous fallback discovery, use bounded minimal/summary reads across backlog and todo; never use an unfiltered or done collection as ordinary next-work selection. projectId is the originating selected board boundary and must remain unchanged for the lifetime of that loop unless the user explicitly switches projects. NO_ELIGIBLE_TASK stops the current project loop only after the persisted requested parent/program stop condition is terminal; do not substitute another projectId to find work.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -157,6 +158,8 @@ export const taskToolDefinitions: DevFlowToolDefinition[] = [
         ownerKind: { type: 'string', enum: ['chat', 'codex', 'claude', 'antigravity', 'agent'], description: 'Optional short owner kind for UI display.' },
         ownerLabel: { type: 'string', description: 'Optional compact owner label such as Chat A3 or Codex C7.' },
         limit: { type: 'number', description: 'Maximum runnable tasks to inspect. Defaults to 50 and is capped at 100.' },
+        boardLoopRequested: { type: 'boolean', description: 'Start durable board-loop intent at this atomic claim boundary. Existing active loop intent for the project is reused instead of duplicated.' },
+        requestedTaskId: { type: 'string', description: 'Optional requested parent/program task id or displayId whose terminal state is part of the durable loop stop condition.' },
         ...mutationResponseModeProperty,
       },
       required: ['projectId', 'sessionId'],

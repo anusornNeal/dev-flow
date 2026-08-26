@@ -203,6 +203,13 @@ test('08 owns only board orchestration and delegates implementation policy to 07
   assert.match(boardLoopSkill, /foreign dirty WIP[\s\S]*safe non-overlapping eligible work[\s\S]*no safe alternate/i);
   assert.match(boardLoopSkill, /requested parent\/program[\s\S]*terminal/i);
   assert.match(boardLoopSkill, /tool\/runtime surface[\s\S]*unavailable/i);
+  assert.match(boardLoopSkill, /get_next_action/i);
+  assert.match(boardLoopSkill, /DevFlow-owned[\s\S]*(?:loop|continuation)|(?:loop|continuation)[\s\S]*DevFlow-owned/i);
+  assert.match(boardLoopSkill, /fresh[\s\S]*(?:agent|worker)[\s\S]*resume|reconnect[\s\S]*resume/i);
+  assert.match(boardLoopSkill, /boardLoopRequested/i);
+  assert.match(boardLoopSkill, /requestedTaskId/i);
+  assert.match(boardLoopSkill, /confirm-loop-stop/i);
+  assert.match(boardLoopSkill, /do not reconstruct[\s\S]*(?:chat|prompt)|(?:chat|prompt)[\s\S]*memory/i);
   for (const delegatedDetail of [
     'RED-required',
     'RED-deferred',

@@ -153,6 +153,35 @@ test('REST handoff persists a compact snapshot and resume refreshes stale eviden
   assert.deepEqual(continuation.reasonCodes, resumed.executionContinuation.reasonCodes);
 });
 
+test('continuation and resume surface persisted board-loop state without boardLoopRequested query memory', async () => {
+  const continuationModule: any = await import('../../src/server/services/executionContinuationService.js');
+  assert.equal(typeof continuationModule.persistBoardLoopIntent, 'function');
+  continuationModule.persistBoardLoopIntent(session.id, {
+    loopId: 'loop-route-fixture',
+    projectId: project.id,
+    requestedTaskId: 'task-execution-contract',
+    status: 'active',
+    startedAt: '2026-08-26T00:00:00.000Z',
+  });
+
+  const continuationResponse = await fetch(`${baseUrl}/api/execution-sessions/${encodeURIComponent(session.id)}/continuation`);
+  assert.equal(continuationResponse.status, 200);
+  const continuation = await json(continuationResponse);
+  assert.equal(continuation.boardLoop?.status, 'active');
+  assert.equal(continuation.boardLoop?.loopId, 'loop-route-fixture');
+  assert.equal(continuation.boardLoop?.requestedTaskId, 'task-execution-contract');
+
+  const resumeResponse = await fetch(`${baseUrl}/api/execution-sessions/${encodeURIComponent(session.id)}/resume`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ receivingAgent: 'Different Reasoning Worker' }),
+  });
+  assert.equal(resumeResponse.status, 200);
+  const resumed = await json(resumeResponse);
+  assert.equal(resumed.executionContinuation?.boardLoop?.status, 'active');
+  assert.equal(resumed.executionContinuation?.boardLoop?.loopId, 'loop-route-fixture');
+});
+
 test.after(async () => {
   await new Promise<void>((resolve) => server.close(() => resolve()));
   try { fs.rmSync(tempRoot, { recursive: true, force: true }); } catch {}

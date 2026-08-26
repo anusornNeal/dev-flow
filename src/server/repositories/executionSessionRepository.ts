@@ -302,6 +302,23 @@ export function listExecutionSessionEvidence(sessionId: string): ExecutionSessio
     .filter((entry): entry is ExecutionSessionEvidenceRecord => Boolean(entry));
 }
 
+export function queryExecutionSessionEvidenceForProject(projectIdValue: string, kindValue: string, limitValue = 20): ExecutionSessionEvidenceRecord[] {
+  const projectId = String(projectIdValue || '').trim();
+  const kind = String(kindValue || '').trim();
+  if (!projectId || !kind) return [];
+  const numericLimit = Number(limitValue);
+  const limit = Math.max(1, Math.min(100, Number.isFinite(numericLimit) ? Math.floor(numericLimit) : 20));
+  const rows = db.prepare(`
+    SELECT evidence.*
+    FROM execution_session_evidence evidence
+    INNER JOIN execution_sessions session ON session.id = evidence.sessionId
+    WHERE session.projectId = ? AND evidence.kind = ?
+    ORDER BY evidence.updatedAt DESC, evidence.createdAt DESC, evidence.id DESC
+    LIMIT ?
+  `).all(projectId, kind, limit) as any[];
+  return rows.map(normalizeEvidence).filter((entry): entry is ExecutionSessionEvidenceRecord => Boolean(entry));
+}
+
 export function setExecutionSessionEvidenceStale(id: string, stale: boolean, updatedAt = new Date().toISOString()) {
   db.prepare('UPDATE execution_session_evidence SET stale = ?, updatedAt = ? WHERE id = ?').run(stale ? 1 : 0, updatedAt, id);
   return getExecutionSessionEvidenceById(id);

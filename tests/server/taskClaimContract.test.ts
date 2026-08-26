@@ -61,6 +61,33 @@ test('get_next_action is a read-only project-pinned scheduler contract with no i
   assert.ok(devFlowToolDefinitions.some((entry) => entry.name === 'get_next_action'));
 });
 
+test('scheduler contracts expose durable board-loop start and stop-confirmation semantics without making get_next_action a write', () => {
+  const next = taskToolDefinitions.find((entry) => entry.name === 'get_next_action')!;
+  const claimNext = taskToolDefinitions.find((entry) => entry.name === 'claim_next_task')!;
+  const claimSchema = claimNext.inputSchema as any;
+  const nextOutput = next.outputSchema as any;
+
+  assert.equal(claimSchema?.properties?.boardLoopRequested?.type, 'boolean');
+  assert.equal(claimSchema?.properties?.requestedTaskId?.type, 'string');
+  assert.match(String(claimNext.description || ''), /durable[\s\S]*board-loop|board-loop[\s\S]*durable/i);
+  assert.ok(nextOutput?.properties?.action?.enum?.includes('confirm-loop-stop'));
+  assert.equal(nextOutput?.properties?.loop?.type, 'object');
+  assert.match(String(next.description || ''), /resume[\s\S]*board-loop|board-loop[\s\S]*resume/i);
+
+  const request = claimNext.buildHttpRequest({
+    projectId: 'project-1',
+    sessionId: 'fresh-worker',
+    boardLoopRequested: true,
+    requestedTaskId: 'DVF-100',
+    limit: 25,
+  });
+  assert.equal((request.body as any)?.boardLoopRequested, true);
+  assert.equal((request.body as any)?.requestedTaskId, 'DVF-100');
+
+  const inventory = buildMcpToolSurfaceInventory(taskToolDefinitions);
+  assert.equal(inventory.find((entry) => entry.name === 'get_next_action')?.risk, 'read');
+});
+
 test('claim_next_task is a bounded project-level optimization with explicit session identity', () => {
   const tool = taskToolDefinitions.find((entry) => entry.name === 'claim_next_task');
   assert.ok(tool);

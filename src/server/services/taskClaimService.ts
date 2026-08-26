@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { getProject } from '../repositories/projectRepository.js';
-import { listExecutionSessionsForTask, listExecutionSessionsForWorkspace, queryExecutionSessions } from '../repositories/executionSessionRepository.js';
+import { getExecutionSessionById, listExecutionSessionsForTask, listExecutionSessionsForWorkspace, queryExecutionSessions } from '../repositories/executionSessionRepository.js';
 import { getTaskByIdentifier, getTasksByProjectId, saveTask } from '../repositories/taskRepository.js';
 import {
   createOrReuseSessionWorkspace,
@@ -28,7 +28,7 @@ import { computeLifecycleAuthoritySnapshot } from './lifecycleAuthorityService.j
 import { reconcileExecutionLifecycleStage } from './executionLifecycleReconciliationService.js';
 import { inspectWorkspaceRecovery } from './workspaceRecoveryService.js';
 import { assertTaskPrerequisitesSatisfied, getTaskPrerequisiteBlockers } from './taskDependencyService.js';
-import { evaluateExecutionContinuation } from './executionContinuationService.js';
+import { evaluateExecutionContinuation, getProjectBoardLoopIntent, persistBoardLoopIntent, type BoardLoopIntent } from './executionContinuationService.js';
 
 const DEFAULT_CLAIM_TTL_MS = 24 * 60 * 60 * 1000;
 const MIN_CLAIM_TTL_MS = 60_000;
@@ -48,6 +48,8 @@ export type ClaimTaskInput = {
 
 export type ClaimNextTaskInput = Omit<ClaimTaskInput, 'allowScopeConflict'> & {
   limit?: number;
+  boardLoopRequested?: boolean;
+  requestedTaskId?: string;
 };
 
 export type ExpandTaskClaimScopeInput = {
@@ -274,7 +276,7 @@ export function getProjectOrchestrationProjection(projectId: string) {
   return { projectId: cleanProjectId, generatedAt: new Date(nowMs).toISOString(), entries, counts };
 }
 
-export type SchedulerNextAction = 'recover-current' | 'resolve-attention' | 'continue-owned' | 'claim-new' | 'no-action';
+export type SchedulerNextAction = 'recover-current' | 'resolve-attention' | 'continue-owned' | 'claim-new' | 'confirm-loop-stop' | 'no-action';
 
 function boundedSchedulerContinuation(continuation: ReturnType<typeof evaluateExecutionContinuation>) {
   const nextAction = continuation.nextAction?.action === 'query-pending-jobs'
@@ -292,6 +294,51 @@ function boundedSchedulerContinuation(continuation: ReturnType<typeof evaluateEx
   };
 }
 
+function canonicalRequestedLoopTask(projectId: string, requestedTaskId: unknown) {
+  const requested = String(requestedTaskId || '').trim();
+  if (!requested) return null;
+  const task = getTaskByIdentifier(requested, 'full');
+  if (!task) throw createApiError(404, 'TASK_NOT_FOUND', `Requested board-loop scope '${requested}' was not found.`, { affectedId: requested });
+  if (task.projectId !== projectId) {
+    throw createApiError(409, 'BOARD_LOOP_PROJECT_MISMATCH', `Requested board-loop scope '${task.displayId || task.id}' belongs to another project.`, {
+      affectedId: task.id,
+      details: { projectId, taskProjectId: task.projectId },
+    });
+  }
+  return task;
+}
+
+function boardLoopRequestedScopeTerminal(loop: BoardLoopIntent | null, projectTasks: any[]) {
+  if (!loop?.requestedTaskId) return true;
+  const task = projectTasks.find((entry) => entry.id === loop.requestedTaskId || entry.displayId === loop.requestedTaskId);
+  return Boolean(task && task.status === 'done');
+}
+
+function boardLoopPersistenceSession(loop: BoardLoopIntent | null, projectId: string, requestedTaskId: string | null) {
+  if (loop?.executionSessionId) return getExecutionSessionById(loop.executionSessionId);
+  if (requestedTaskId) {
+    const requestedSessions = listExecutionSessionsForTask(requestedTaskId);
+    if (requestedSessions[0]) return requestedSessions[0];
+  }
+  return queryExecutionSessions({ projectId, limit: 1 }).sessions[0] || null;
+}
+
+function persistLoopOnClaimedTask(claimed: any, loop: { loopId: string; projectId: string; requestedTaskId: string | null; startedAt: string }) {
+  const workspaceId = String(claimed?.workspace?.workspaceId || claimed?.task?.claim?.workspaceId || '').trim();
+  const taskSessions = listExecutionSessionsForTask(claimed.task.id);
+  const execution = taskSessions.find((entry) => entry.status === 'active' && (!workspaceId || entry.workspaceId === workspaceId)) || taskSessions[0] || null;
+  if (!execution) return null;
+  return persistBoardLoopIntent(execution.id, {
+    loopId: loop.loopId,
+    projectId: loop.projectId,
+    requestedTaskId: loop.requestedTaskId,
+    status: 'active',
+    startedAt: loop.startedAt,
+    stopEligible: false,
+    reasonCodes: [],
+  });
+}
+
 export function getNextActionForSession(projectId: string, input: { sessionId: string; limit?: number }) {
   const cleanProjectId = String(projectId || '').trim();
   const cleanSessionId = String(input?.sessionId || '').trim();
@@ -303,6 +350,40 @@ export function getNextActionForSession(projectId: string, input: { sessionId: s
   const nowMs = Date.now();
   const hash = sessionIdHash(cleanSessionId);
   const projectTasks = getTasksByProjectId(cleanProjectId);
+  const boardLoop = getProjectBoardLoopIntent(cleanProjectId);
+  if (boardLoop?.status === 'terminal') {
+    return {
+      action: 'no-action' as const,
+      projectId: cleanProjectId,
+      reasonCodes: ['BOARD_LOOP_TERMINAL'],
+      loop: boardLoop,
+    };
+  }
+  if (boardLoop?.status === 'active') {
+    const loopExecution = getExecutionSessionById(boardLoop.executionSessionId);
+    const loopTask = loopExecution?.taskId ? getTaskByIdentifier(loopExecution.taskId, 'full') : undefined;
+    if (loopExecution && loopTask && loopTask.projectId === cleanProjectId && loopTask.status !== 'done') {
+      const continuation = evaluateExecutionContinuation({} as any, loopExecution.id, { workspaceId: loopExecution.workspaceId || undefined });
+      if (loopTask.status === 'ready-for-review' || continuation.blocked || continuation.autonomousTail.state === 'attention') {
+        return {
+          action: 'resolve-attention' as const,
+          projectId: cleanProjectId,
+          task: { taskId: loopTask.id, displayId: loopTask.displayId },
+          reasonCodes: loopTask.status === 'ready-for-review' ? ['TASK_REVIEW_ATTENTION_REQUIRED'] : continuation.reasonCodes.slice(0, 8),
+          continuation: boundedSchedulerContinuation(continuation),
+          loop: boardLoop,
+        };
+      }
+      return {
+        action: continuation.nextAction ? 'recover-current' as const : 'continue-owned' as const,
+        projectId: cleanProjectId,
+        task: { taskId: loopTask.id, displayId: loopTask.displayId },
+        reasonCodes: continuation.reasonCodes.slice(0, 8),
+        continuation: boundedSchedulerContinuation(continuation),
+        loop: boardLoop,
+      };
+    }
+  }
   const ownedTasks = projectTasks
     .filter((task) => !task.archivedAt && task.status !== 'done' && isActiveClaim(task.claim, nowMs) && task.claim.sessionIdHash === hash)
     .sort(compareNextTaskOrder);
@@ -405,6 +486,33 @@ export function getNextActionForSession(projectId: string, input: { sessionId: s
       task: { taskId: ready.taskId, displayId: ready.displayId },
       reasonCodes: ['ELIGIBLE_NEW_WORK'],
       claim: { tool: 'claim_next_task' as const, projectId: cleanProjectId, limit },
+      ...(boardLoop ? { loop: boardLoop } : {}),
+    };
+  }
+
+  if (boardLoop?.status === 'active') {
+    const requestedTask = boardLoop.requestedTaskId
+      ? projectTasks.find((task) => task.id === boardLoop.requestedTaskId || task.displayId === boardLoop.requestedTaskId)
+      : null;
+    if (boardLoop.requestedTaskId && (!requestedTask || requestedTask.status !== 'done')) {
+      return {
+        action: 'resolve-attention' as const,
+        projectId: cleanProjectId,
+        ...(requestedTask ? { task: { taskId: requestedTask.id, displayId: requestedTask.displayId } } : {}),
+        reasonCodes: ['BOARD_LOOP_REQUESTED_SCOPE_NOT_TERMINAL'],
+        attention: {
+          code: 'BOARD_LOOP_REQUESTED_SCOPE_NOT_TERMINAL',
+          message: requestedTask ? 'Requested board-loop parent/program is not terminal yet.' : 'Requested board-loop parent/program could not be resolved from the pinned project.',
+        },
+        loop: { ...boardLoop, stopEligible: false, reasonCodes: ['BOARD_LOOP_REQUESTED_SCOPE_NOT_TERMINAL'] },
+      };
+    }
+    return {
+      action: 'confirm-loop-stop' as const,
+      projectId: cleanProjectId,
+      reasonCodes: ['BOARD_LOOP_STOP_CONFIRMATION_REQUIRED'],
+      claim: { tool: 'claim_next_task' as const, projectId: cleanProjectId, limit },
+      loop: { ...boardLoop, stopEligible: true, reasonCodes: ['BOARD_LOOP_STOP_CONFIRMATION_REQUIRED'] },
     };
   }
 
@@ -1175,6 +1283,16 @@ export function claimNextTaskForSession(projectId: string, input: ClaimNextTaskI
   return withSyncLock(`task-claim:${cleanProjectId}`, () => {
     const nowMs = Date.now();
     const projectTasks = getTasksByProjectId(cleanProjectId);
+    const existingLoop = getProjectBoardLoopIntent(cleanProjectId);
+    const activeLoop = existingLoop?.status === 'active' ? existingLoop : null;
+    const requestedTask = input.requestedTaskId ? canonicalRequestedLoopTask(cleanProjectId, input.requestedTaskId) : null;
+    const loopRequested = input.boardLoopRequested === true || Boolean(activeLoop);
+    const loopSeed = loopRequested ? {
+      loopId: activeLoop?.loopId || `board-loop-${crypto.randomUUID()}`,
+      projectId: cleanProjectId,
+      requestedTaskId: activeLoop?.requestedTaskId || requestedTask?.id || null,
+      startedAt: activeLoop?.startedAt || new Date(nowMs).toISOString(),
+    } : null;
     const parentIds = new Set(projectTasks.map((task) => String(task.parentId || '')).filter(Boolean));
     const bounded = projectTasks
       .filter((task) => (task.status === 'backlog' || task.status === 'todo') && !task.archivedAt)
@@ -1192,7 +1310,51 @@ export function claimNextTaskForSession(projectId: string, input: ClaimNextTaskI
       }
 
       const claimed = claimTaskForSessionLocked(task.id, { ...input, allowScopeConflict: false }, cleanSessionId, project);
-      return { status: 'claimed' as const, ...claimed, scanned: bounded.length, deferred, dependencyBlocked, limit };
+      const loop = loopSeed ? persistLoopOnClaimedTask(claimed, loopSeed) : null;
+      return {
+        status: 'claimed' as const,
+        ...claimed,
+        scanned: bounded.length,
+        deferred,
+        dependencyBlocked,
+        limit,
+        ...(loop ? { loop } : {}),
+      };
+    }
+
+    if (loopSeed) {
+      const liveLoop = activeLoop || ({
+        ...loopSeed,
+        status: 'active',
+        stopEligible: false,
+        reasonCodes: [],
+        updatedAt: loopSeed.startedAt,
+        executionSessionId: '',
+      } as BoardLoopIntent);
+      const stopEligible = boardLoopRequestedScopeTerminal(liveLoop, projectTasks);
+      const reasonCodes = stopEligible ? ['BOARD_LOOP_TERMINAL'] : ['BOARD_LOOP_REQUESTED_SCOPE_NOT_TERMINAL'];
+      const persistenceSession = boardLoopPersistenceSession(activeLoop, cleanProjectId, loopSeed.requestedTaskId);
+      const loop = persistenceSession ? persistBoardLoopIntent(persistenceSession.id, {
+        ...loopSeed,
+        status: stopEligible ? 'terminal' : 'active',
+        stopEligible,
+        reasonCodes,
+      }) : {
+        ...liveLoop,
+        status: stopEligible ? 'terminal' as const : 'active' as const,
+        stopEligible,
+        reasonCodes,
+      };
+      return {
+        status: 'no-eligible' as const,
+        code: 'NO_ELIGIBLE_TASK',
+        projectId: cleanProjectId,
+        scanned: bounded.length,
+        deferred,
+        limit,
+        dependencyBlocked,
+        loop,
+      };
     }
 
     return {

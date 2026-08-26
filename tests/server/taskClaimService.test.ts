@@ -1094,6 +1094,94 @@ test('next action recommends claim_next_task without mutating and reports bounde
   assert.equal(none.blocked?.[0]?.taskId, 'new-unbounded');
 });
 
+test('durable board-loop intent survives caller cutoff and resumes the current execution before unrelated new work', () => {
+  const projectId = 'project-board-loop-resume';
+  createCandidateProject(projectId);
+  seedCandidateTask(projectId, 'loop-current', ['src/LoopCurrent.ts'], { priority: 'high' });
+  seedCandidateTask(projectId, 'loop-next', ['src/LoopNext.ts'], { priority: 'medium' });
+
+  const started = (claims.claimNextTaskForSession as any)(projectId, {
+    sessionId: 'loop-worker-a',
+    ownerLabel: 'Chat Loop A',
+    boardLoopRequested: true,
+    limit: 10,
+  });
+  assert.equal(started.status, 'claimed');
+  assert.equal(started.task.id, 'loop-current');
+  assert.equal(started.loop?.status, 'active');
+  assert.equal(started.loop?.projectId, projectId);
+  assert.ok(started.loop?.loopId);
+
+  const resumed = claims.getNextActionForSession(projectId, { sessionId: 'fresh-worker-b', limit: 10 });
+  assert.equal(resumed.action, 'continue-owned');
+  assert.equal(resumed.task?.taskId, 'loop-current');
+  assert.equal(resumed.loop?.status, 'active');
+  assert.equal(resumed.loop?.loopId, started.loop.loopId);
+  assert.equal(resumed.loop?.projectId, projectId);
+  assert.equal(getTask('loop-next')?.status, 'backlog', 'fresh worker must resume loop work before claiming unrelated work');
+  assert.equal(JSON.stringify(resumed).includes('loop-worker-a'), false, 'durable loop state must not expose or depend on the original caller identity');
+});
+
+test('board-loop stop remains active until requested scope is terminal, then claim-next atomically marks the loop terminal', () => {
+  const projectId = 'project-board-loop-stop';
+  createCandidateProject(projectId);
+  seedCandidateTask(projectId, 'loop-parent', [], { status: 'in-progress', priority: 'high' });
+  seedCandidateTask(projectId, 'loop-child', ['src/LoopChild.ts'], { parentId: 'loop-parent', priority: 'high' });
+
+  const started = (claims.claimNextTaskForSession as any)(projectId, {
+    sessionId: 'loop-stop-a',
+    ownerLabel: 'Chat Loop Stop A',
+    boardLoopRequested: true,
+    requestedTaskId: 'loop-parent',
+    limit: 10,
+  });
+  assert.equal(started.status, 'claimed');
+  assert.equal(started.task.id, 'loop-child');
+  const loopId = started.loop?.loopId;
+  assert.ok(loopId);
+
+  const childExecution = listExecutionSessionsForTask('loop-child').find((entry: any) => entry.status === 'active');
+  assert.ok(childExecution);
+  execution.completeExecutionSession(childExecution!.id);
+  const child = getTask('loop-child')!;
+  saveTask({ ...child, status: 'done', claim: undefined, updatedAt: new Date().toISOString() });
+
+  const waiting = (claims.claimNextTaskForSession as any)(projectId, {
+    sessionId: 'loop-stop-b',
+    ownerLabel: 'Chat Loop Stop B',
+    limit: 10,
+  });
+  assert.equal(waiting.status, 'no-eligible');
+  assert.equal(waiting.loop?.status, 'active');
+  assert.equal(waiting.loop?.loopId, loopId);
+  assert.equal(waiting.loop?.requestedTaskId, 'loop-parent');
+  assert.equal(waiting.loop?.stopEligible, false);
+  assert.ok(waiting.loop?.reasonCodes?.includes('BOARD_LOOP_REQUESTED_SCOPE_NOT_TERMINAL'));
+
+  const attention = claims.getNextActionForSession(projectId, { sessionId: 'loop-stop-c', limit: 10 });
+  assert.equal(attention.action, 'resolve-attention');
+  assert.equal(attention.task?.taskId, 'loop-parent');
+  assert.ok(attention.reasonCodes.includes('BOARD_LOOP_REQUESTED_SCOPE_NOT_TERMINAL'));
+
+  const parent = getTask('loop-parent')!;
+  saveTask({ ...parent, status: 'done', updatedAt: new Date().toISOString() });
+  const stopped = (claims.claimNextTaskForSession as any)(projectId, {
+    sessionId: 'loop-stop-d',
+    ownerLabel: 'Chat Loop Stop D',
+    limit: 10,
+  });
+  assert.equal(stopped.status, 'no-eligible');
+  assert.equal(stopped.loop?.status, 'terminal');
+  assert.equal(stopped.loop?.loopId, loopId);
+  assert.equal(stopped.loop?.stopEligible, true);
+  assert.ok(stopped.loop?.reasonCodes?.includes('BOARD_LOOP_TERMINAL'));
+
+  const terminalRead = claims.getNextActionForSession(projectId, { sessionId: 'loop-stop-e', limit: 10 });
+  assert.equal(terminalRead.action, 'no-action');
+  assert.equal(terminalRead.loop?.status, 'terminal');
+  assert.equal(terminalRead.loop?.loopId, loopId);
+});
+
 test.after(() => {
   try { fs.rmSync(tempRoot, { recursive: true, force: true }); } catch {}
 });

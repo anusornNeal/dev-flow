@@ -1,5 +1,5 @@
 import type { AppState } from '../types.js';
-import { getExecutionSessionById, listExecutionSessionEvidence } from '../repositories/executionSessionRepository.js';
+import { getExecutionSessionById, listExecutionSessionEvidence, queryExecutionSessionEvidenceForProject, saveExecutionSessionEvidence, updateExecutionSessionRecord } from '../repositories/executionSessionRepository.js';
 import { getTaskByIdentifier } from '../repositories/taskRepository.js';
 import { getLatestTaskFinalizationOperation } from '../repositories/taskFinalizationOperationRepository.js';
 import { getJob, listRecentJobs, readJobResult } from '../repositories/mcpToolJobRepository.js';
@@ -65,8 +65,127 @@ export type ExecutionContinuationResult = {
     reasonCode: string | null;
     message: string | null;
   };
-  boardLoop: { requested: boolean; eligibilityDeferred: boolean };
+  boardLoop: {
+    requested: boolean;
+    eligibilityDeferred: boolean;
+    status: 'none' | 'active' | 'terminal';
+    loopId: string | null;
+    projectId: string | null;
+    requestedTaskId: string | null;
+    stopEligible: boolean;
+    reasonCodes: string[];
+    startedAt: string | null;
+    updatedAt: string | null;
+    executionSessionId: string | null;
+  };
 };
+
+const BOARD_LOOP_EVIDENCE_KIND = 'board-loop-intent';
+
+export type BoardLoopIntent = {
+  loopId: string;
+  projectId: string;
+  requestedTaskId: string | null;
+  status: 'active' | 'terminal';
+  startedAt: string;
+  updatedAt: string;
+  stopEligible: boolean;
+  reasonCodes: string[];
+  executionSessionId: string;
+};
+
+function normalizeBoardLoopIntent(entry: any): BoardLoopIntent | null {
+  if (!entry || entry.kind !== BOARD_LOOP_EVIDENCE_KIND) return null;
+  const metadata = entry.metadata && typeof entry.metadata === 'object' ? entry.metadata : {};
+  const loopId = String((metadata as any).loopId || '').trim();
+  const projectId = String((metadata as any).projectId || '').trim();
+  const status = String((metadata as any).status || '').trim();
+  if (!loopId || !projectId || (status !== 'active' && status !== 'terminal')) return null;
+  return {
+    loopId,
+    projectId,
+    requestedTaskId: String((metadata as any).requestedTaskId || '').trim() || null,
+    status,
+    startedAt: String((metadata as any).startedAt || entry.createdAt || '').trim(),
+    updatedAt: String((metadata as any).updatedAt || entry.updatedAt || '').trim(),
+    stopEligible: (metadata as any).stopEligible === true,
+    reasonCodes: Array.isArray((metadata as any).reasonCodes) ? (metadata as any).reasonCodes.map((value: unknown) => String(value || '').trim()).filter(Boolean).slice(0, 20) : [],
+    executionSessionId: String(entry.sessionId || '').trim(),
+  };
+}
+
+export function persistBoardLoopIntent(executionSessionId: string, input: {
+  loopId: string;
+  projectId: string;
+  requestedTaskId?: string | null;
+  status: 'active' | 'terminal';
+  startedAt: string;
+  stopEligible?: boolean;
+  reasonCodes?: string[];
+  updatedAt?: string;
+}) {
+  const sessionId = String(executionSessionId || '').trim();
+  const session = getExecutionSessionById(sessionId);
+  if (!session) throw createApiError(404, 'EXECUTION_SESSION_NOT_FOUND', `Execution session '${sessionId}' was not found.`, { affectedId: sessionId });
+  const projectId = String(input?.projectId || '').trim();
+  if (!projectId || projectId !== session.projectId) {
+    throw createApiError(409, 'BOARD_LOOP_PROJECT_MISMATCH', 'Board-loop intent must remain pinned to the execution session project.', {
+      affectedId: session.id,
+      details: { executionProjectId: session.projectId, requestedProjectId: projectId || null },
+    });
+  }
+  const loopId = String(input?.loopId || '').trim();
+  if (!loopId) throw createApiError(400, 'BOARD_LOOP_ID_REQUIRED', 'loopId is required to persist board-loop intent.');
+  const now = String(input.updatedAt || new Date().toISOString());
+  const startedAt = String(input.startedAt || now);
+  const metadata = {
+    loopId,
+    projectId,
+    requestedTaskId: String(input.requestedTaskId || '').trim() || null,
+    status: input.status,
+    startedAt,
+    updatedAt: now,
+    stopEligible: input.stopEligible === true,
+    reasonCodes: Array.isArray(input.reasonCodes) ? input.reasonCodes.map((value) => String(value || '').trim()).filter(Boolean).slice(0, 20) : [],
+  };
+  const saved = saveExecutionSessionEvidence({
+    id: `board-loop-intent:${session.id}:${loopId}`,
+    sessionId: session.id,
+    kind: BOARD_LOOP_EVIDENCE_KIND,
+    path: null,
+    repoRevision: null,
+    fileRevision: null,
+    revisionIdentity: null,
+    contextHandle: null,
+    stale: false,
+    metadata,
+    createdAt: now,
+    updatedAt: now,
+  });
+  updateExecutionSessionRecord(session.id, { updatedAt: now });
+  return normalizeBoardLoopIntent(saved)!;
+}
+
+export function getBoardLoopIntentForExecution(executionSessionId: string) {
+  const entries = listExecutionSessionEvidence(String(executionSessionId || '').trim())
+    .filter((entry) => entry.kind === BOARD_LOOP_EVIDENCE_KIND)
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) || right.id.localeCompare(left.id));
+  for (const entry of entries) {
+    const intent = normalizeBoardLoopIntent(entry);
+    if (intent) return intent;
+  }
+  return null;
+}
+
+export function getProjectBoardLoopIntent(projectIdValue: string) {
+  const projectId = String(projectIdValue || '').trim();
+  if (!projectId) return null;
+  for (const entry of queryExecutionSessionEvidenceForProject(projectId, BOARD_LOOP_EVIDENCE_KIND, 50)) {
+    const intent = normalizeBoardLoopIntent(entry);
+    if (intent) return intent;
+  }
+  return null;
+}
 
 function unique(values: string[]) {
   return [...new Set(values.filter(Boolean))];
@@ -95,6 +214,7 @@ export function evaluateExecutionContinuation(
   const checkpoint = getLatestExecutionCheckpoint(session.id);
   const finalization = task ? getLatestTaskFinalizationOperation(task.id, session.workspaceId || undefined) : null;
   const evidence = listExecutionSessionEvidence(session.id);
+  const persistedBoardLoop = getBoardLoopIntentForExecution(session.id);
   const staleEvidence = evidence.filter((entry) => entry.stale);
   const expectedWorkspaceId = String(options.workspaceId || '').trim() || null;
   const workspaceMismatch = Boolean(expectedWorkspaceId && session.workspaceId && expectedWorkspaceId !== session.workspaceId);
@@ -176,6 +296,32 @@ export function evaluateExecutionContinuation(
     });
   }
 
+  const boardLoop: ExecutionContinuationResult['boardLoop'] = persistedBoardLoop ? {
+    requested: true,
+    eligibilityDeferred: persistedBoardLoop.status === 'active',
+    status: persistedBoardLoop.status,
+    loopId: persistedBoardLoop.loopId,
+    projectId: persistedBoardLoop.projectId,
+    requestedTaskId: persistedBoardLoop.requestedTaskId,
+    stopEligible: persistedBoardLoop.stopEligible,
+    reasonCodes: persistedBoardLoop.reasonCodes,
+    startedAt: persistedBoardLoop.startedAt,
+    updatedAt: persistedBoardLoop.updatedAt,
+    executionSessionId: persistedBoardLoop.executionSessionId,
+  } : {
+    requested: options.boardLoopRequested === true,
+    eligibilityDeferred: options.boardLoopRequested === true,
+    status: options.boardLoopRequested === true ? 'active' : 'none',
+    loopId: null,
+    projectId: session.projectId || null,
+    requestedTaskId: null,
+    stopEligible: false,
+    reasonCodes: [],
+    startedAt: null,
+    updatedAt: null,
+    executionSessionId: null,
+  };
+
   const base = {
     executionSessionId: session.id,
     pendingOperations,
@@ -193,7 +339,7 @@ export function evaluateExecutionContinuation(
       workspaceId: finalization.workspaceId,
     } : null,
     blockers,
-    boardLoop: { requested: options.boardLoopRequested === true, eligibilityDeferred: options.boardLoopRequested === true },
+    boardLoop,
     autonomousTail,
   };
 

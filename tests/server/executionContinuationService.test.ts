@@ -16,7 +16,8 @@ const { createExecutionSession, recordExecutionLifecycleTransition } = await imp
 const { updateExecutionSessionRecord, saveExecutionSessionEvidence } = await import('../../src/server/repositories/executionSessionRepository.js');
 const { recordExecutionPendingOperationReference } = await import('../../src/server/services/executionCheckpointService.js');
 const { createJob } = await import('../../src/server/repositories/mcpToolJobRepository.js');
-const { evaluateExecutionContinuation } = await import('../../src/server/services/executionContinuationService.js');
+const continuationService: any = await import('../../src/server/services/executionContinuationService.js');
+const { evaluateExecutionContinuation } = continuationService;
 
 const project = {
   id: 'project-continuation',
@@ -169,6 +170,32 @@ test('historical completed execution stays readable and is terminal without new 
   assert.deepEqual(result.reasonCodes, ['EXECUTION_SCOPE_TERMINAL']);
   assert.equal(result.nextAction, null);
   assert.equal(result.task?.id, task.id);
+});
+
+test('persisted board-loop intent is projected by continuation without caller request memory and survives execution terminalization', () => {
+  const { task, session } = fixture({ checklistComplete: true });
+  assert.equal(typeof continuationService.persistBoardLoopIntent, 'function');
+  const persist = continuationService.persistBoardLoopIntent as any;
+  const intent = persist(session.id, {
+    loopId: 'loop-persisted-fixture',
+    projectId: project.id,
+    requestedTaskId: task.id,
+    status: 'active',
+    startedAt: '2026-08-26T00:00:00.000Z',
+  });
+  assert.equal(intent.loopId, 'loop-persisted-fixture');
+
+  const first = evaluateExecutionContinuation(state, session.id);
+  assert.equal(first.boardLoop.status, 'active');
+  assert.equal(first.boardLoop.loopId, 'loop-persisted-fixture');
+  assert.equal(first.boardLoop.requested, true);
+  assert.equal(first.boardLoop.requestedTaskId, task.id);
+
+  const now = new Date().toISOString();
+  updateExecutionSessionRecord(session.id, { status: 'completed', endedAt: now, updatedAt: now });
+  const historical = evaluateExecutionContinuation(state, session.id);
+  assert.equal(historical.boardLoop.status, 'active');
+  assert.equal(historical.boardLoop.loopId, 'loop-persisted-fixture');
 });
 
 test.after(() => {

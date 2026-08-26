@@ -5,6 +5,7 @@ import { findProjectByIdentifier } from '../services/taskService';
 import { getExecutionSessionState } from '../services/executionSessionService';
 import { createExecutionHandoffSnapshot, getExecutionSessionResumeView } from '../services/executionSessionHandoffService';
 import { resolveSessionWorkspace } from '../services/sessionWorkspaceService';
+import { evaluateExecutionContinuation } from '../services/executionContinuationService';
 
 function resolveActiveExecutionRepoRoot(deps: ApiRouteDeps, executionSessionId: string, requestedWorkspaceId?: string | null) {
   const { session } = getExecutionSessionState(executionSessionId);
@@ -46,16 +47,35 @@ function resolveActiveExecutionRepoRoot(deps: ApiRouteDeps, executionSessionId: 
 }
 
 export function registerExecutionSessionRoutes(app: express.Express, deps: ApiRouteDeps) {
+  app.get('/api/execution-sessions/:executionSessionId/continuation', (req, res) => {
+    try {
+      const executionSessionId = String(req.params.executionSessionId || '').trim();
+      const workspaceId = typeof req.query?.workspaceId === 'string' ? req.query.workspaceId : undefined;
+      const repoRoot = resolveActiveExecutionRepoRoot(deps, executionSessionId, workspaceId);
+      return res.json(evaluateExecutionContinuation(deps.state, executionSessionId, {
+        repoRoot,
+        workspaceId,
+        boardLoopRequested: req.query?.boardLoopRequested === 'true',
+      }));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
   app.post('/api/execution-sessions/:executionSessionId/resume', (req, res) => {
     try {
       const executionSessionId = String(req.params.executionSessionId || '').trim();
       const workspaceId = typeof req.body?.workspaceId === 'string' ? req.body.workspaceId : undefined;
       const repoRoot = resolveActiveExecutionRepoRoot(deps, executionSessionId, workspaceId);
-      return res.json(getExecutionSessionResumeView(deps.state, executionSessionId, {
+      const resume = getExecutionSessionResumeView(deps.state, executionSessionId, {
         repoRoot,
         workspaceId,
         receivingAgent: typeof req.body?.receivingAgent === 'string' ? req.body.receivingAgent : undefined,
-      }));
+      });
+      return res.json({
+        ...resume,
+        executionContinuation: evaluateExecutionContinuation(deps.state, executionSessionId, { repoRoot, workspaceId }),
+      });
     } catch (error) {
       return sendApiError(res, error);
     }

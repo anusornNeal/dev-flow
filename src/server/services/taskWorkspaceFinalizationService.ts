@@ -28,6 +28,7 @@ import { computeLifecycleAuthoritySnapshot } from './lifecycleAuthorityService.j
 import { resolveTaskVerificationCoverage, type TaskVerificationCoverageResolution } from './taskCommitPlanService.js';
 import { summarizeQualityDebt, type TaskQualityDebtSummary } from './qualityDebtService.js';
 import { withSyncLock } from './lockAndIdempotencyService.js';
+import { evaluateExecutionContinuation } from './executionContinuationService.js';
 
 export type TaskWorkspaceFinalizationCheck = {
   name?: string;
@@ -318,7 +319,17 @@ function updateOperation(
   return updateTaskFinalizationOperation(operation.id, { ...patch, updatedAt: new Date().toISOString() }) || operation;
 }
 
+function executionContinuationForOperation(state: AppState, operation: TaskFinalizationOperationRecord) {
+  if (!operation.executionSessionId) return null;
+  try {
+    return evaluateExecutionContinuation(state, operation.executionSessionId, { workspaceId: operation.workspaceId });
+  } catch {
+    return null;
+  }
+}
+
 function operationContinuation(
+  state: AppState,
   operation: TaskFinalizationOperationRecord,
   code: 'POST_INTEGRATION_FINALIZATION_REQUIRED' | 'POST_INTEGRATION_VERIFICATION_REQUIRED',
   message: string,
@@ -329,6 +340,7 @@ function operationContinuation(
     code,
     message,
     operation: getTaskFinalizationOperation(operation.id) || operation,
+    ...(executionContinuationForOperation(state, operation) ? { executionContinuation: executionContinuationForOperation(state, operation) } : {}),
     continuation: {
       code,
       operationId: operation.id,
@@ -699,7 +711,7 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
         injectFinalizationFault('after-freeze');
       } catch (error: any) {
         operation = updateOperation(operation, { failure: operationFailure(error, operation.phase, 'after-freeze') });
-        return operationContinuation(operation, 'POST_INTEGRATION_FINALIZATION_REQUIRED', 'Finalization authority was frozen durably; retry the same operation.', { task });
+        return operationContinuation(_state, operation, 'POST_INTEGRATION_FINALIZATION_REQUIRED', 'Finalization authority was frozen durably; retry the same operation.', { task });
       }
     } else {
       operation = updateOperation(operation, { retryCount: operation.retryCount + 1, failure: null });
@@ -974,6 +986,7 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
           verificationEvidence,
           qualityDebt: qualityDebtSummary,
           cleanup: { removed: false, workspaceId, error: operation.failure },
+          ...(executionContinuationForOperation(_state, operation) ? { executionContinuation: executionContinuationForOperation(_state, operation) } : {}),
         };
       }
     } catch (error: any) {
@@ -982,7 +995,7 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
         status: operation.phase === 'cleanup-pending' ? 'cleanup-pending' : 'active',
         failure: operationFailure(error, operation.phase),
       });
-      return operationContinuation(operation, 'POST_INTEGRATION_FINALIZATION_REQUIRED', `Finalization operation '${operation.id}' paused at phase '${operation.phase}' and can be retried safely.`, {
+      return operationContinuation(_state, operation, 'POST_INTEGRATION_FINALIZATION_REQUIRED', `Finalization operation '${operation.id}' paused at phase '${operation.phase}' and can be retried safely.`, {
         ...(integration! ? { integration: integration! } : {}),
         ...(sourcePlan ? { sourcePlan } : {}),
         ...(combinedPlan ? { combinedPlan } : {}),

@@ -13,8 +13,10 @@ import {
   withQuery,
   type DevFlowToolDefinition,
 } from './devflowContractCore';
+import { executionToolDefinitions } from './devflowExecutionTools';
 
 export const taskToolDefinitions: DevFlowToolDefinition[] = [
+  ...executionToolDefinitions,
   {
     name: 'list_tasks',
     description: 'List tasks with optional filters. Local-first and ChatGPT-friendly: defaults to a small minimal page; pass projectId/status/q and an explicit limit before asking for broader context.',

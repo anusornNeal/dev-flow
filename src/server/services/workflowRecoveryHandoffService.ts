@@ -15,6 +15,7 @@ import {
   listSessionWorkspaceMetadataForRecovery,
 } from './sessionWorkspaceService.js';
 import { computeLifecycleAuthoritySnapshot } from './lifecycleAuthorityService.js';
+import { evaluateExecutionContinuation } from './executionContinuationService.js';
 
 export type WorkflowRecoveryContinuationAction =
   | 'query-job'
@@ -430,9 +431,17 @@ export function getWorkflowRecoveryHandoff(state: AppState, args: RecoveryArgs =
           ? 'Ignored historical success because no exact response-loss job id selected this logical operation.'
           : 'Ignored because the job is not the current execution pending operation with an exact immutable binding.',
     }));
+  const continuationExecutionId = currentExecutionId || clean(finalizationOperation?.executionSessionId);
+  let executionContinuation: ReturnType<typeof evaluateExecutionContinuation> | null = null;
+  if (continuationExecutionId) {
+    try {
+      executionContinuation = evaluateExecutionContinuation(state, continuationExecutionId, { workspaceId: workspaceId || undefined });
+    } catch {}
+  }
   const common = {
     status: 'recoverable' as const,
     generatedAt: new Date().toISOString(),
+    ...(executionContinuation ? { executionContinuation } : {}),
     ...(diagnosis ? { diagnosis } : {}),
     recoveryParity,
     ...(project ? { project: compactProject(project) } : {}),

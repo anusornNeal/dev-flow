@@ -88,41 +88,25 @@ async function json(response: Response) {
   return response.json() as Promise<any>;
 }
 
-test('contract exposes lean resume_execution and handoff_execution intents', () => {
-  const resume = getToolDefinitionByName('resume_execution');
-  const handoff = getToolDefinitionByName('handoff_execution');
+test('contract exposes one lightweight read-only execution continuation intent', () => {
+  const continuation = getToolDefinitionByName('get_execution_continuation');
 
-  assert.ok(resume);
-  assert.ok(handoff);
-  assert.equal(resume.lightweight, true);
-  assert.equal(handoff.lightweight, true);
-  assert.deepEqual(resume.inputSchema.required, ['executionSessionId']);
-  assert.deepEqual(handoff.inputSchema.required, ['executionSessionId']);
+  assert.ok(continuation);
+  assert.equal(continuation.lightweight, true);
+  assert.deepEqual(continuation.inputSchema.required, ['executionSessionId']);
 
-  const resumeRequest = resume.buildHttpRequest({
+  const request = continuation.buildHttpRequest({
     executionSessionId: 'exec-1',
     workspaceId: 'ws-1',
-    receivingAgent: 'Codex',
+    boardLoopRequested: true,
   });
-  assert.equal(resumeRequest.method, 'POST');
-  assert.equal(resumeRequest.path, '/api/execution-sessions/exec-1/resume');
-  assert.deepEqual(resumeRequest.body, { workspaceId: 'ws-1', receivingAgent: 'Codex' });
-
-  const handoffRequest = handoff.buildHttpRequest({
-    executionSessionId: 'exec-1',
-    fromAgent: 'ChatGPT',
-    toAgent: 'Codex',
-    decisions: ['Keep evidence compact.'],
-  });
-  assert.equal(handoffRequest.method, 'POST');
-  assert.equal(handoffRequest.path, '/api/execution-sessions/exec-1/handoff');
-  assert.deepEqual(handoffRequest.body, {
-    fromAgent: 'ChatGPT',
-    toAgent: 'Codex',
-    decisions: ['Keep evidence compact.'],
-  });
-  assert.equal(getMcpToolList('coding').some((entry: any) => entry.name === 'resume_execution'), true);
-  assert.equal(getMcpToolList('coding').some((entry: any) => entry.name === 'handoff_execution'), true);
+  assert.equal(request.method, 'GET');
+  assert.match(request.path, /^\/api\/execution-sessions\/exec-1\/continuation\?/);
+  assert.match(request.path, /workspaceId=ws-1/);
+  assert.match(request.path, /boardLoopRequested=true/);
+  assert.equal(getMcpToolList('full').some((entry: any) => entry.name === 'get_execution_continuation'), true);
+  assert.equal(getMcpToolList('review').some((entry: any) => entry.name === 'get_execution_continuation'), true);
+  assert.equal(getMcpToolList('coding').some((entry: any) => entry.name === 'get_execution_continuation'), false);
 });
 
 test('REST handoff persists a compact snapshot and resume refreshes stale evidence', async () => {
@@ -156,6 +140,17 @@ test('REST handoff persists a compact snapshot and resume refreshes stale eviden
   assert.equal(resumed.validity, 'stale');
   assert.deepEqual(resumed.requiresFreshRead, ['src/A.ts']);
   assert.equal(resumed.handoff?.toAgent, 'Codex');
+  assert.equal(resumed.executionContinuation?.terminal, false);
+  assert.equal(resumed.executionContinuation?.continuationRequired, true);
+  assert.ok(resumed.executionContinuation?.reasonCodes.includes('EXECUTION_EVIDENCE_REVALIDATION_REQUIRED'));
+
+  const continuationResponse = await fetch(`${baseUrl}/api/execution-sessions/${encodeURIComponent(session.id)}/continuation`);
+  assert.equal(continuationResponse.status, 200);
+  const continuation = await json(continuationResponse);
+  assert.equal(continuation.executionSessionId, session.id);
+  assert.equal(continuation.terminal, false);
+  assert.equal(continuation.continuationRequired, true);
+  assert.deepEqual(continuation.reasonCodes, resumed.executionContinuation.reasonCodes);
 });
 
 test.after(async () => {

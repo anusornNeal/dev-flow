@@ -833,6 +833,23 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
         },
         failure: null,
       });
+
+      if (postIntegration.required) {
+        return operationContinuation(
+          _state,
+          operation,
+          'POST_INTEGRATION_VERIFICATION_REQUIRED',
+          postIntegration.reason,
+          {
+            integration,
+            sourcePlan,
+            combinedPlan,
+            postIntegration,
+            task: getTaskByIdentifier(task.id, 'full') || task,
+          },
+        );
+      }
+
       injectFinalizationFault('after-verification-clear');
 
       if (!operation.gitEvidence) {

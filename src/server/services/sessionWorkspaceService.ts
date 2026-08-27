@@ -373,28 +373,111 @@ function getSessionWorkspaceRegistrySnapshot() {
   return workspaces;
 }
 
-export function listSessionWorkspaceMetadataForRecovery(projectId: string, limit = 50) {
+export function queryProjectActiveTaskClaims(projectId: string, limit = 100, nowMs = Date.now()) {
+  const cleanProjectId = String(projectId || '').trim();
+  const boundedLimit = Math.max(1, Math.min(100, Math.floor(Number(limit) || 100)));
+  if (!cleanProjectId) {
+    return { projectId: cleanProjectId, claims: [], total: 0, invalidClaimCount: 0, truncated: false, complete: true };
+  }
+  const observedNowMs = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
+  const nowIso = new Date(observedNowMs).toISOString();
+  try {
+    const invalidRow = db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM tasks
+      WHERE projectId = ? AND claim IS NOT NULL AND json_valid(claim) = 0
+    `).get(cleanProjectId) as { count?: number } | undefined;
+    const invalidClaimCount = Number(invalidRow?.count || 0);
+    if (invalidClaimCount > 0) {
+      return {
+        projectId: cleanProjectId,
+        claims: [],
+        total: 0,
+        invalidClaimCount,
+        truncated: true,
+        complete: false,
+        error: `Found ${invalidClaimCount} malformed task claim record(s).`,
+      };
+    }
+    const activePredicate = `
+      projectId = ?
+      AND claim IS NOT NULL
+      AND json_valid(claim) = 1
+      AND trim(COALESCE(json_extract(claim, '$.workspaceId'), '')) <> ''
+      AND julianday(json_extract(claim, '$.expiresAt')) > julianday(?)
+    `;
+    const countRow = db.prepare(`SELECT COUNT(*) AS count FROM tasks WHERE ${activePredicate}`).get(cleanProjectId, nowIso) as { count?: number } | undefined;
+    const total = Number(countRow?.count || 0);
+    const rows = db.prepare(`
+      SELECT id, displayId, projectId, claim
+      FROM tasks
+      WHERE ${activePredicate}
+      ORDER BY updatedAt DESC, id ASC
+      LIMIT ?
+    `).all(cleanProjectId, nowIso, boundedLimit) as Array<{ id: string; displayId?: string | null; projectId: string; claim?: unknown }>;
+    const claims = rows.map((row) => ({ ...row, claim: parseStoredClaim(row.claim) })).filter((row) => Boolean(row.claim));
+    return {
+      projectId: cleanProjectId,
+      claims,
+      total,
+      invalidClaimCount: 0,
+      truncated: total > claims.length,
+      complete: total <= claims.length,
+    };
+  } catch (error: any) {
+    return {
+      projectId: cleanProjectId,
+      claims: [],
+      total: 0,
+      invalidClaimCount: 0,
+      truncated: true,
+      complete: false,
+      error: String(error?.message || error || 'project active-claim query failed'),
+    };
+  }
+}
+
+export function listSessionWorkspaceMetadataForRecovery(projectId: string, limit = 100, offset = 0) {
   const cleanProjectId = String(projectId || '').trim();
   const boundedLimit = Math.max(1, Math.min(100, Math.floor(Number(limit) || 50)));
+  const boundedOffset = Math.max(0, Math.floor(Number(offset) || 0));
   if (!cleanProjectId) {
-    return { projectId: cleanProjectId, workspaces: [], total: 0, truncated: false };
+    return { projectId: cleanProjectId, workspaces: [], total: 0, limit: boundedLimit, offset: boundedOffset, truncated: false, complete: true };
   }
-  const projectWorkspaces = Array.from(getSessionWorkspaceRegistrySnapshot().values())
-    .filter((workspace) => workspace.projectId === cleanProjectId)
-    .sort((left, right) => left.workspaceId.localeCompare(right.workspaceId));
-  return {
-    projectId: cleanProjectId,
-    workspaces: projectWorkspaces.slice(0, boundedLimit).map((workspace) => ({
-      workspaceId: workspace.workspaceId,
-      projectId: workspace.projectId,
-      state: workspace.state,
-      lastUsedAt: workspace.lastUsedAt,
-      ...(workspace.taskDisplayId ? { taskDisplayId: workspace.taskDisplayId } : {}),
-      ...(recoveryTaskRootLeaf(workspace) ? { taskRootLeaf: recoveryTaskRootLeaf(workspace) } : {}),
-    })),
-    total: projectWorkspaces.length,
-    truncated: projectWorkspaces.length > boundedLimit,
-  };
+  try {
+    const projectWorkspaces = Array.from(getSessionWorkspaceRegistrySnapshot().values())
+      .filter((workspace) => workspace.projectId === cleanProjectId)
+      .sort((left, right) => left.workspaceId.localeCompare(right.workspaceId));
+    const visible = projectWorkspaces.slice(boundedOffset, boundedOffset + boundedLimit);
+    const consumed = boundedOffset + visible.length;
+    return {
+      projectId: cleanProjectId,
+      workspaces: visible.map((workspace) => ({
+        workspaceId: workspace.workspaceId,
+        projectId: workspace.projectId,
+        state: workspace.state,
+        lastUsedAt: workspace.lastUsedAt,
+        ...(workspace.taskDisplayId ? { taskDisplayId: workspace.taskDisplayId } : {}),
+        ...(recoveryTaskRootLeaf(workspace) ? { taskRootLeaf: recoveryTaskRootLeaf(workspace) } : {}),
+      })),
+      total: projectWorkspaces.length,
+      limit: boundedLimit,
+      offset: boundedOffset,
+      truncated: consumed < projectWorkspaces.length,
+      complete: consumed >= projectWorkspaces.length,
+    };
+  } catch (error: any) {
+    return {
+      projectId: cleanProjectId,
+      workspaces: [],
+      total: 0,
+      limit: boundedLimit,
+      offset: boundedOffset,
+      truncated: true,
+      complete: false,
+      error: String(error?.message || error || 'project workspace registry query failed'),
+    };
+  }
 }
 
 export function findSessionWorkspaceRecoveryCandidatesForTask(projectId: string, taskDisplayId: unknown, limit = 50) {

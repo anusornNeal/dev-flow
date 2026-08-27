@@ -17,6 +17,7 @@ import {
   findSessionWorkspaceRecoveryCandidatesForTask,
   getSessionWorkspaceMetadataForRecovery,
   listSessionWorkspaceMetadataForRecovery,
+  queryProjectActiveTaskClaims,
 } from './sessionWorkspaceService.js';
 import { inspectWorkspaceRecovery } from './workspaceRecoveryService.js';
 import { HARNESS_POLICY_VERSION } from './harnessPolicyService.js';
@@ -105,7 +106,6 @@ function summarizeFailedJobGroups(failures: any[]) {
 }
 
 export const CHATGPT_HARNESS_HEALTH_VERSION = 'chatgpt-harness-health.v2' as const;
-const MAX_PROJECT_RECOVERY_INSPECTIONS = 8;
 
 type HarnessHealthDrift = {
   code: string;
@@ -542,10 +542,11 @@ function projectHarnessHealth(state: AppState, args: Record<string, any>, option
     }], { aggregate: { activeExecutionCount: 0, activeClaimCount: 0, actionableWorkspaceCount: 0, pendingOperationCount: 0, driftCount: 1, truncated: false } });
   }
 
-  const allProjectTasks = getTasks().filter((task) => task.projectId === project.id);
-  const projectTaskVolumeExceeded = allProjectTasks.length > 100;
-  const projectTasksById = new Map(allProjectTasks.map((task) => [task.id, task]));
-  const activeClaims = allProjectTasks.map((task) => ({ task, claim: activeHealthClaim(task) })).filter((entry) => Boolean(entry.claim));
+  const activeClaimQuery = queryProjectActiveTaskClaims(project.id, 100);
+  const activeClaims = activeClaimQuery.claims
+    .map((task) => ({ task, claim: activeHealthClaim(task) }))
+    .filter((entry) => Boolean(entry.claim));
+  const activeClaimsByTaskId = new Map(activeClaims.map((entry) => [entry.task.id, entry] as const));
   const firstExecutionPage = queryExecutionSessions({ projectId: project.id, status: 'active', limit: 50 });
   const executions = firstExecutionPage.truncated
     ? queryExecutionSessions({ projectId: project.id, status: 'active', limit: 100 })
@@ -573,8 +574,9 @@ function projectHarnessHealth(state: AppState, args: Record<string, any>, option
     if (session.workspaceId) byWorkspace.set(session.workspaceId, [...(byWorkspace.get(session.workspaceId) || []), session]);
     const pending = pendingHealthOperations(session);
     pendingOperationCount += pending.operationIds.length;
-    const task = session.taskId ? projectTasksById.get(session.taskId) || null : null;
-    const claim = task ? activeHealthClaim(task) : null;
+    const claimedEntry = session.taskId ? activeClaimsByTaskId.get(session.taskId) || null : null;
+    const task = claimedEntry?.task || (session.taskId ? findTaskByIdentifier(state, session.taskId) || null : null);
+    const claim = claimedEntry?.claim || (task ? activeHealthClaim(task) : null);
     if (!claim) {
       if (deepRecoveryScan && session.workspaceId) inspectProjectWorkspaceOnce(session.workspaceId);
       const authority = task
@@ -678,35 +680,89 @@ function projectHarnessHealth(state: AppState, args: Record<string, any>, option
     });
   }
 
-  const firstRegistryPage = listSessionWorkspaceMetadataForRecovery(project.id, 50);
-  const registry = firstRegistryPage.truncated
-    ? listSessionWorkspaceMetadataForRecovery(project.id, 100)
-    : firstRegistryPage;
   const authoritativeWorkspaceIds = new Set(authoritativeWorkspaceContexts.keys());
-  const registryOutsideActiveAuthority = registry.workspaces.filter((workspace) => !authoritativeWorkspaceIds.has(workspace.workspaceId));
-  const workspaceInspectionCandidates = deepRecoveryScan
-    ? registryOutsideActiveAuthority.slice(0, MAX_PROJECT_RECOVERY_INSPECTIONS)
-    : [];
-  const recoveryInspectionTruncated = deepRecoveryScan
-    && registryOutsideActiveAuthority.length > workspaceInspectionCandidates.length;
-  const actionableRecoveryWorkspaceIds = workspaceInspectionCandidates
-    .map((workspace) => workspace.workspaceId)
-    .filter((workspaceId) => {
-      const inspection = inspectProjectWorkspaceOnce(workspaceId);
-      return Boolean(inspection && (
-        inspection.disposition === 'needs-recovery'
+  const registryPageSize = 100;
+  let registryOffset = 0;
+  let registryScanComplete = true;
+  let registryScanError = '';
+  let registryOutsideActiveAuthorityCount = 0;
+  let actionableRecoveryWorkspaceCount = 0;
+  let recoveryInspectionUnknownCount = 0;
+  const deferredWorkspaceIds: string[] = [];
+  const actionableRecoveryWorkspaceIds: string[] = [];
+  while (true) {
+    const page = listSessionWorkspaceMetadataForRecovery(project.id, registryPageSize, registryOffset);
+    if (page.error || page.offset !== registryOffset) {
+      registryScanComplete = false;
+      registryScanError = String(page.error || `Workspace registry page offset mismatch: expected ${registryOffset}, received ${page.offset}.`);
+      break;
+    }
+    for (const workspace of page.workspaces) {
+      if (authoritativeWorkspaceIds.has(workspace.workspaceId)) continue;
+      registryOutsideActiveAuthorityCount += 1;
+      if (!deepRecoveryScan) {
+        if (deferredWorkspaceIds.length < 20) deferredWorkspaceIds.push(workspace.workspaceId);
+        continue;
+      }
+      const inspection = inspectProjectWorkspaceOnce(workspace.workspaceId);
+      if (!inspection) {
+        recoveryInspectionUnknownCount += 1;
+        continue;
+      }
+      const actionable = inspection.disposition === 'needs-recovery'
         || inspection.disposition === 'stale-registry'
         || inspection.disposition === 'committed-not-integrated'
-        || inspection.state === 'integration-required'
-      ));
-    });
-  if (!deepRecoveryScan && registryOutsideActiveAuthority.length > 0) drift.push({
+        || inspection.state === 'integration-required';
+      if (!actionable) continue;
+      actionableRecoveryWorkspaceCount += 1;
+      if (actionableRecoveryWorkspaceIds.length < 20) actionableRecoveryWorkspaceIds.push(workspace.workspaceId);
+    }
+    const nextOffset = registryOffset + page.workspaces.length;
+    if (!page.truncated) {
+      registryScanComplete = page.complete !== false && nextOffset >= page.total;
+      if (!registryScanComplete && !registryScanError) registryScanError = 'Workspace registry pagination ended before the reported total was consumed.';
+      break;
+    }
+    if (page.workspaces.length === 0 || nextOffset <= registryOffset) {
+      registryScanComplete = false;
+      registryScanError = 'Workspace registry pagination made no forward progress.';
+      break;
+    }
+    registryOffset = nextOffset;
+  }
+  if (!deepRecoveryScan && registryOutsideActiveAuthorityCount > 0) drift.push({
     code: 'PROJECT_RECOVERY_SCAN_DEFERRED',
     message: 'Compact project health deferred Git-backed recovery inspection for registry workspaces outside active lifecycle authority.',
-    workspaceIds: registryOutsideActiveAuthority.map((workspace) => workspace.workspaceId).slice(0, 20),
+    workspaceIds: deferredWorkspaceIds,
     nextAction: 'Use full/debug project health before treating the project as lifecycle-clear or performing recovery cleanup.',
   });
-  const truncated = executions.truncated || registry.truncated || projectTaskVolumeExceeded || recoveryInspectionTruncated;
+  if (!registryScanComplete) drift.push({
+    code: 'PROJECT_WORKSPACE_SCAN_UNKNOWN',
+    message: registryScanError
+      ? `Project workspace registry completeness could not be proven: ${registryScanError}`
+      : 'Project workspace registry completeness could not be proven.',
+    severity: 'debt',
+    nextAction: 'Repair workspace registry discovery before treating the project as lifecycle-clear.',
+  });
+  if (deepRecoveryScan && recoveryInspectionUnknownCount > 0) drift.push({
+    code: 'PROJECT_RECOVERY_INSPECTION_UNKNOWN',
+    message: `Recovery inspection failed for ${recoveryInspectionUnknownCount} managed workspace(s), so a complete all-clear cannot be proven.`,
+    severity: 'debt',
+    nextAction: 'Inspect the affected workspace registry/Git state before treating the project as lifecycle-clear.',
+  });
+  if (!activeClaimQuery.complete) drift.push({
+    code: 'PROJECT_LIFECYCLE_AUTHORITY_UNKNOWN',
+    message: activeClaimQuery.error
+      ? `Project active-claim authority query could not prove completeness: ${activeClaimQuery.error}`
+      : 'Project active-claim authority query could not prove completeness within the bounded live-authority view.',
+    severity: 'debt',
+    nextAction: 'Repair malformed claim metadata or the authoritative claim query before treating the project as lifecycle-clear.',
+  });
+  const truncated = executions.truncated
+    || activeClaimQuery.truncated
+    || !activeClaimQuery.complete
+    || !registryScanComplete
+    || (deepRecoveryScan && recoveryInspectionUnknownCount > 0);
   if (truncated) drift.push({
     code: 'PROJECT_LIFECYCLE_SCAN_TRUNCATED',
     message: 'Project aggregate exceeded a bounded lifecycle scan and cannot prove a complete all-clear.',
@@ -722,7 +778,7 @@ function projectHarnessHealth(state: AppState, args: Record<string, any>, option
     scope: 'project-aggregate',
     status: projectHardBlockers.length > 0
       ? 'blocked'
-      : canonicalLiveAuthorityCount > 0 || activeClaims.length > 0 || actionableRecoveryWorkspaceIds.length > 0
+      : canonicalLiveAuthorityCount > 0 || activeClaims.length > 0 || actionableRecoveryWorkspaceCount > 0
         ? 'active'
         : 'idle',
     mode: 'chatgpt-only',
@@ -730,8 +786,8 @@ function projectHarnessHealth(state: AppState, args: Record<string, any>, option
     project: { id: project.id, name: project.name },
     aggregate: {
       activeExecutionCount: executions.total,
-      activeClaimCount: activeClaims.length,
-      actionableWorkspaceCount: actionableRecoveryWorkspaceIds.length,
+      activeClaimCount: activeClaimQuery.total,
+      actionableWorkspaceCount: actionableRecoveryWorkspaceCount,
       pendingOperationCount,
       canonicalLiveAuthorityCount,
       driftCount: drift.length,

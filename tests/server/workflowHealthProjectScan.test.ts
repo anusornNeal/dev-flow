@@ -48,9 +48,9 @@ function createRepo() {
   return repo;
 }
 
-function seedTask(index: number) {
+function seedTask(index: number, overrides: Record<string, any> = {}) {
   const now = new Date().toISOString();
-  saveTask({
+  const task = {
     id: `task-health-scan-${index}`,
     displayId: `DVF-HEALTH-SCAN-${index}`,
     title: 'Health scan fixture',
@@ -67,14 +67,37 @@ function seedTask(index: number) {
     images: [],
     createdAt: now,
     updatedAt: now,
-  } as any);
+    ...overrides,
+  } as any;
+  saveTask(task);
+  return task;
 }
 
-test('project health completes bounded lifecycle scans while preserving complete aggregate counts', () => {
+test('project health proves exhaustive idle state while preserving complete aggregate counts', () => {
   const repo = createRepo();
   const baseRevision = git(repo, ['rev-parse', 'HEAD']);
-  for (let index = 0; index < 105; index += 1) seedTask(index);
+  for (let index = 0; index < 250; index += 1) seedTask(index);
+
+  const idleHealth: any = getChatGptHarnessHealthSnapshot({
+    projectsCache: [{ id: 'project-health-scan', name: 'Health Scan Fixture', repoUrl: 'https://example.com/health-scan', localPath: repo }],
+  } as any, { projectId: 'project-health-scan' });
+  assert.equal(idleHealth.status, 'idle');
+  assert.equal(idleHealth.aggregate.activeExecutionCount, 0);
+  assert.equal(idleHealth.aggregate.activeClaimCount, 0);
+  assert.equal(idleHealth.aggregate.truncated, false);
+  assert.equal(idleHealth.drift.some((entry: any) => entry.code === 'PROJECT_LIFECYCLE_SCAN_TRUNCATED'), false);
+
   const executionNow = new Date();
+  seedTask(54, {
+    status: 'in-progress',
+    claim: {
+      sessionIdHash: 'health-scan-live-claim',
+      workspaceId: 'ws-health-execution-54',
+      ownerLabel: 'Health Scan Fixture',
+      claimedAt: executionNow.toISOString(),
+      expiresAt: new Date(executionNow.getTime() + 60_000).toISOString(),
+    },
+  });
   for (let index = 0; index < 55; index += 1) {
     createExecutionSessionRecord({
       id: `exec-health-scan-${index}`,
@@ -138,7 +161,7 @@ test('project health completes bounded lifecycle scans while preserving complete
   } as any, { projectId: 'project-health-scan' });
 
   assert.equal(health.aggregate.activeExecutionCount, 55);
-  assert.equal(health.aggregate.activeClaimCount, 0);
+  assert.equal(health.aggregate.activeClaimCount, 1);
   assert.equal(health.drift.some((entry: any) => entry.code === 'ACTIVE_EXECUTION_WITHOUT_ACTIVE_CLAIM'), true);
   assert.equal(health.aggregate.actionableWorkspaceCount, 25);
   assert.equal(health.aggregate.truncated, false);

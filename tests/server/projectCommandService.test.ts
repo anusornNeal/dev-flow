@@ -227,6 +227,40 @@ test('durable run_project_command budget includes the one allowed infrastructure
   }), 600_000, 'each attempt remains capped while the durable budget covers both attempts');
 });
 
+test('runProjectCommand does not retry a bare timeout without infrastructure evidence', () => {
+  const marker = path.join(tempRoot, 'bare-timeout-no-retry-count.txt');
+  const root = createConfigProject('bare-timeout-no-retry', [
+    'commands:',
+    '  timeout-once:',
+    '    executable: node',
+    '    args:',
+    '      - scripts/timeout-once.mjs',
+    '    category: test',
+    '',
+  ].join('\n'));
+  fs.writeFileSync(path.join(root, 'scripts', 'timeout-once.mjs'), [
+    "import fs from 'node:fs';",
+    `const marker = ${JSON.stringify(marker)};`,
+    "const attempt = fs.existsSync(marker) ? Number(fs.readFileSync(marker, 'utf8')) + 1 : 1;",
+    "fs.writeFileSync(marker, String(attempt), 'utf8');",
+    "setInterval(() => {}, 1_000);",
+  ].join('\n'), 'utf8');
+
+  const result = runProjectCommand(stateFor(root), {
+    projectId: 'project-command',
+    command: 'timeout-once',
+    timeoutMs: 100,
+    infrastructureRetryPolicy: 'resource-safe-once',
+    cacheResult: false,
+    forceFresh: true,
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.timedOut, true);
+  assert.equal(fs.readFileSync(marker, 'utf8'), '1', 'a bare timeout is not proof of retryable infrastructure failure');
+  assert.equal(result.infrastructureRecovery?.attempted, false);
+});
+
 test('Windows command termination uses the exact process-tree terminator before root-signal fallback', () => {
   let fallbackKills = 0;
   const child = {

@@ -1143,7 +1143,9 @@ function resolveCommandExecutionOptions(resolvedCommand: ResolvedCommand, args: 
 
 export function isVerificationInfrastructureFailure(result: Pick<RunProjectCommandResult, 'ok' | 'status' | 'timedOut' | 'signal' | 'stderr' | 'stdout'>) {
   if (result.ok) return false;
-  if (result.timedOut || result.status === 'timed_out' || result.signal) return true;
+  // Timeout/signal alone is not proof of retryable infrastructure failure. Retrying an
+  // unresponsive command would silently turn one explicit timeout into two full budgets.
+  // Recovery is reserved for bounded diagnostic evidence such as OOM/capacity/runner failure.
   return INFRASTRUCTURE_FAILURE_OUTPUT.test(`${result.stderr || ''}\n${result.stdout || ''}`.slice(0, 12_000));
 }
 

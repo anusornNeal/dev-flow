@@ -85,6 +85,7 @@ test('recovery deadline wins over a fresh heartbeat once run_project_command exc
   const heartbeat = repo.heartbeatJob(job.jobId, 'worker-live', 30_000, nowMs + 10, claimed.leaseGeneration);
   assert.ok(heartbeat?.leaseExpiresAt);
   assert.equal(Date.parse(heartbeat.leaseExpiresAt) > nowMs + 20_000, true, 'fixture heartbeat must remain fresh');
+  repo.appendJobLog(job.jobId, 'stdout', '[Verify Step] project command service\n', { workerId: 'worker-live', leaseGeneration: claimed.leaseGeneration });
 
   db.prepare('UPDATE mcp_tool_jobs SET started_at = ? WHERE job_id = ?').run(new Date(nowMs - 5_000).toISOString(), job.jobId);
   repo.clearRecentJobCache();
@@ -95,7 +96,13 @@ test('recovery deadline wins over a fresh heartbeat once run_project_command exc
   assert.equal(terminal?.status, 'timed_out');
   assert.equal(terminal?.recoveryClassification, 'interrupted');
   assert.match(String(terminal?.failureSummary || ''), /execution deadline/i);
-  assert.equal(repo.readJobResult(job.jobId)?.result?.code, 'JOB_EXECUTION_DEADLINE_EXCEEDED');
+  const deadlineResult = repo.readJobResult(job.jobId)?.result as any;
+  assert.equal(deadlineResult?.code, 'JOB_EXECUTION_DEADLINE_EXCEEDED');
+  assert.equal(deadlineResult?.executionDeadline?.executionBudgetMs, 20);
+  assert.equal(deadlineResult?.executionDeadline?.reconciliationGraceMs, 100);
+  assert.equal(deadlineResult?.executionDeadline?.totalDeadlineMs, 120);
+  assert.equal(deadlineResult?.executionDeadline?.lastActivePhase, 'execution');
+  assert.match(String(deadlineResult?.executionDeadline?.lastLog || ''), /project command service/);
 });
 
 test('expired lease loses heartbeat and fenced-write authority before reaping', () => {

@@ -370,6 +370,29 @@ function durableExecutionDeadlineDelayMs(entry: Pick<QueueEntry, 'toolName' | 's
   }
 }
 
+function getLastActiveJobPhase(jobId: string) {
+  const phase = jobPhaseTelemetryById.get(jobId);
+  if (!phase) return 'execution';
+  if (phase.executionStartedAt && !phase.executionCompletedAt) return 'execution';
+  if (phase.candidatePreparationStartedAt && !phase.candidatePreparationCompletedAt) return 'candidate-preparation';
+  if (!phase.queueCompletedAt) return 'queue';
+  if (phase.executionCompletedAt && !phase.finalized) return 'response-handoff';
+  return 'execution';
+}
+
+function buildExecutionDeadlineEvidence(
+  jobId: string,
+  deadline: { executionBudgetMs: number; reconciliationGraceMs: number; delayMs: number },
+) {
+  return {
+    executionBudgetMs: deadline.executionBudgetMs,
+    reconciliationGraceMs: deadline.reconciliationGraceMs,
+    totalDeadlineMs: deadline.delayMs,
+    lastActivePhase: getLastActiveJobPhase(jobId),
+    lastLog: getLastLog(jobId),
+  };
+}
+
 type BufferedJobLogger = {
   logger: Logger;
   flush: () => void;
@@ -1372,7 +1395,8 @@ function runDurableJobRecoveryPass(state?: AppState, nowMs = Date.now()) {
       if (job.status !== 'running' || job.toolName !== 'run_project_command' || !job.startedAt || !job.leaseOwner || !job.leaseGeneration) continue;
       const deadline = durableExecutionDeadlineDelayMs({ toolName: job.toolName, state, args: job.args });
       if (!deadline || nowMs < Date.parse(job.startedAt) + deadline.delayMs) continue;
-      const failureSummary = `Execution deadline exceeded after ${deadline.executionBudgetMs}ms plus ${deadline.reconciliationGraceMs}ms reconciliation grace.`;
+      const executionDeadline = buildExecutionDeadlineEvidence(job.jobId, deadline);
+      const failureSummary = `Execution deadline exceeded after ${deadline.executionBudgetMs}ms plus ${deadline.reconciliationGraceMs}ms reconciliation grace. Last active phase: ${executionDeadline.lastActivePhase}.`;
       const guard: JobLeaseGuard = { workerId: job.leaseOwner, leaseGeneration: job.leaseGeneration };
       const wrote = writeJobResult(job.jobId, {
         ok: false,
@@ -1381,6 +1405,7 @@ function runDurableJobRecoveryPass(state?: AppState, nowMs = Date.now()) {
         message: failureSummary,
         timedOut: true,
         durationMs: Math.max(0, nowMs - Date.parse(job.startedAt)),
+        executionDeadline,
       }, guard);
       const transitioned = wrote
         ? transitionJobStatus(job.jobId, ['running'], {
@@ -2092,7 +2117,8 @@ async function startJob(entry: QueueEntry) {
       const active = activeJobs.get(entry.jobId);
       if (!active || active.leaseGeneration !== leaseGeneration) return;
       active.closeLogs?.();
-      const failureSummary = `Execution deadline exceeded after ${deadline.executionBudgetMs}ms plus ${deadline.reconciliationGraceMs}ms reconciliation grace.`;
+      const executionDeadline = buildExecutionDeadlineEvidence(entry.jobId, deadline);
+      const failureSummary = `Execution deadline exceeded after ${deadline.executionBudgetMs}ms plus ${deadline.reconciliationGraceMs}ms reconciliation grace. Last active phase: ${executionDeadline.lastActivePhase}.`;
       const timeoutResult = {
         ok: false,
         status: 'timed_out',
@@ -2100,6 +2126,7 @@ async function startJob(entry: QueueEntry) {
         message: failureSummary,
         timedOut: true,
         durationMs: deadline.delayMs,
+        executionDeadline,
       };
       const wrote = writeJobResult(entry.jobId, timeoutResult, leaseGuard);
       const transitioned = wrote

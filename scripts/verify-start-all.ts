@@ -14,6 +14,8 @@ const {
   buildZrokBootstrapInvocation,
   classifyPublicProbeFailure,
   apiZrokStatusUrl,
+  getZrokProbeAdmission,
+  getZrokProbeCooldownDelayMs,
   getZrokRecoveryDecision,
   normalizeZrokPublicUrl,
   shouldRecoverZrokSupervisorProcess,
@@ -29,6 +31,7 @@ const {
   advanceDevFlowTunnelHealth,
   resetDevFlowTunnelHealthForGeneration,
 } = await import('../src/lib/devFlowSupervisor');
+const { createZrokRateLimitTracker } = await import('../src/server/services/zrokRateLimitPolicy');
 
 assert.deepEqual(buildNpmInvocation(['run', 'dev:server'], { npm_execpath: 'C:\\node\\npm-cli.js' }), {
   command: process.execPath,
@@ -145,6 +148,21 @@ assert.deepEqual(dynamicRuntime, {
   shareState: 'active',
   baseUrl: 'https://dynamic-account.example/app',
 });
+const runtimeRateLimited = await probeZrokRuntimeStatus('http://localhost:3456', 500, async () => new Response(JSON.stringify({
+  status: 'degraded',
+  baseUrl: 'https://dynamic-account.example/app',
+  share: { state: 'active' },
+  rateLimit: {
+    source: 'public',
+    firstObservedAt: '2026-08-27T00:00:00.000Z',
+    lastObservedAt: '2026-08-27T00:00:00.000Z',
+    nextAttemptAt: '2026-08-27T00:00:05.000Z',
+    retryAfterMs: 5000,
+    observedCount: 1,
+  },
+}), { status: 200, headers: { 'content-type': 'application/json' } }));
+assert.equal(runtimeRateLimited?.rateLimit?.source, 'public');
+assert.equal(runtimeRateLimited?.rateLimit?.retryAfterMs, 5000);
 const oversizedByHeader = await probeZrokRuntimeStatus('http://localhost:3456', 500, async () => new Response(JSON.stringify({
   status: 'online',
   baseUrl: 'https://oversized.example',
@@ -197,6 +215,61 @@ assert.deepEqual(probedUrls, [
   'http://localhost:3456/api/zrok/status',
   'https://dynamic-account.example/app/api/capabilities',
 ]);
+const sharedCooldownUrls: string[] = [];
+const sharedCooldownResults = [];
+for (const nowMs of [1000, 2000, 4000]) {
+  sharedCooldownResults.push(await probeZrokPublicRoute(
+    'http://localhost:3456',
+    'https://configured.example',
+    500,
+    async (input) => {
+      sharedCooldownUrls.push(String(input));
+      return new Response(JSON.stringify({
+        status: 'degraded',
+        baseUrl: 'https://dynamic-account.example/app',
+        share: { state: 'active' },
+        rateLimit: {
+          source: 'public',
+          firstObservedAt: '1970-01-01T00:00:01.000Z',
+          lastObservedAt: '1970-01-01T00:00:01.000Z',
+          nextAttemptAt: '1970-01-01T00:00:05.000Z',
+          retryAfterMs: 4000,
+          observedCount: 1,
+        },
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    },
+    { now: () => nowMs },
+  ));
+}
+assert.equal(sharedCooldownResults.every((result) => result.publicProbe.failureClass === 'rate-limit'), true);
+assert.deepEqual(sharedCooldownUrls, [
+  'http://localhost:3456/api/zrok/status',
+  'http://localhost:3456/api/zrok/status',
+  'http://localhost:3456/api/zrok/status',
+], 'repeated ticks inside shared cooldown never call the public route');
+
+let directPublicCalls = 0;
+const directTracker = createZrokRateLimitTracker('public', { now: () => 1000, random: () => 0 });
+const directRateLimited = await probeZrokPublicRoute(
+  'http://localhost:3456',
+  '',
+  500,
+  async (input) => {
+    if (String(input) === 'http://localhost:3456/api/zrok/status') {
+      return new Response(JSON.stringify({
+        status: 'online',
+        baseUrl: 'https://dynamic-account.example/app',
+        share: { state: 'active' },
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    directPublicCalls += 1;
+    return new Response('{}', { status: 429, headers: { 'retry-after': '2' } });
+  },
+  { rateLimitTracker: directTracker, now: () => 1000 },
+);
+assert.equal(directPublicCalls, 1);
+assert.equal(directRateLimited.publicProbe.failureClass, 'rate-limit');
+assert.equal(directRateLimited.publicProbe.rateLimit?.retryAfterMs, 2000);
 assert.equal(
   selectZrokPublicProbeUrl('https://configured.example', dynamicRuntime),
   'https://dynamic-account.example/app',
@@ -213,6 +286,19 @@ assert.equal(
   'an invalid live base URL preserves the current public probe target',
 );
 assert.equal(classifyPublicProbeFailure({ statusCode: 503 }), 'http-5xx');
+assert.equal(classifyPublicProbeFailure({ statusCode: 429 }), 'rate-limit');
+assert.equal(getZrokProbeCooldownDelayMs('1970-01-01T00:00:05.000Z', 1000), 4000);
+assert.equal(getZrokProbeCooldownDelayMs('1970-01-01T00:00:05.000Z', 5000), 0);
+let admittedProbeCount = 0;
+for (const nowMs of [1000, 2000, 4999]) {
+  const admission = getZrokProbeAdmission({ cooldownUntilMs: 5000, nowMs });
+  if (admission.admit) admittedProbeCount += 1;
+  assert.equal(admission.admit, false);
+}
+const cooldownExpiryAdmission = getZrokProbeAdmission({ cooldownUntilMs: 5000, nowMs: 5000 });
+if (cooldownExpiryAdmission.admit) admittedProbeCount += 1;
+assert.equal(cooldownExpiryAdmission.admit, true);
+assert.equal(admittedProbeCount, 1, 'ticks inside cooldown admit zero probes and expiry admits exactly one');
 assert.equal(classifyPublicProbeFailure({ error: Object.assign(new Error('request timed out'), { name: 'AbortError' }) }), 'timeout');
 assert.equal(classifyPublicProbeFailure({ error: Object.assign(new Error('getaddrinfo ENOTFOUND'), { code: 'ENOTFOUND' }) }), 'dns');
 assert.equal(apiZrokTakeoverUrl('http://localhost:3456'), 'http://localhost:3456/api/zrok/takeover');
@@ -379,11 +465,34 @@ const firstHealthy = advanceDevFlowTunnelHealth(generationB, { ok: true, statusC
 });
 assert.equal(firstHealthy.status, 'healthy');
 assert.equal(firstHealthy.lifecyclePhase, 'steady-state');
+const throttled = advanceDevFlowTunnelHealth(firstHealthy, {
+  ok: false,
+  statusCode: 429,
+  failureClass: 'rate-limit',
+  rateLimit: { nextAttemptAt: '2026-08-16T00:00:15.000Z' },
+}, {
+  failureThreshold: 3,
+  generation: 'B',
+  now: '2026-08-16T00:00:12.000Z',
+});
+assert.equal(throttled.status, 'degraded');
+assert.equal(throttled.consecutiveProbeFailures, 0, '429 does not advance the repair failure threshold');
+assert.equal(throttled.lastErrorClass, 'rate-limit');
+assert.equal(throttled.nextProbeAt, '2026-08-16T00:00:15.000Z');
+const healthyAfterThrottle = advanceDevFlowTunnelHealth(throttled, { ok: true, statusCode: 200 }, {
+  failureThreshold: 3,
+  generation: 'B',
+  now: '2026-08-16T00:00:15.000Z',
+});
+assert.equal(healthyAfterThrottle.status, 'healthy');
+assert.equal(healthyAfterThrottle.nextProbeAt, undefined);
 
 const startAllSource = fs.readFileSync(new URL('./start-all.ts', import.meta.url), 'utf8');
 const supervisorSource = fs.readFileSync(new URL('../src/lib/devFlowSupervisor.ts', import.meta.url), 'utf8');
 assert.doesNotMatch(startAllSource, /scheduleZrokReconcile|reconcileZrok/);
 assert.match(startAllSource, /bootstrapZrokAtStartup\(\)/);
+assert.match(startAllSource, /rateLimitCooldownUntilMs/);
+assert.match(startAllSource, /publicProbe\.failureClass === 'rate-limit'/);
 const failedBootstrapSection = startAllSource.slice(
   startAllSource.indexOf('Startup zrok bootstrap failed'),
   startAllSource.indexOf('async function runTunnelProbe'),

@@ -31,6 +31,7 @@ import {
   type DevFlowSupervisorProcessLabel,
   type DevFlowTunnelHealthState,
 } from '../src/lib/devFlowSupervisor';
+import { createZrokRateLimitTracker, type ZrokRateLimitInfo } from '../src/server/services/zrokRateLimitPolicy';
 
 type StartAllOptions = {
   port: number;
@@ -75,6 +76,7 @@ type PublicProbeResult = {
   latencyMs: number;
   message: string;
   failureClass?: ReturnType<typeof classifyPublicProbeFailure> | 'public-url-unavailable';
+  rateLimit?: ZrokRateLimitInfo;
 };
 
 export type ZrokRuntimeStatusProbe = {
@@ -82,6 +84,7 @@ export type ZrokRuntimeStatusProbe = {
   shareState?: string;
   baseUrl?: string;
   canRecoverStaleSameMachineOwner?: boolean;
+  rateLimit?: ZrokRateLimitInfo;
 };
 
 const DEFAULT_PORT = 3000;
@@ -342,6 +345,40 @@ export function classifyPublicProbeFailure(input: { statusCode?: number; error?:
   return 'network' as const;
 }
 
+function normalizeZrokRateLimitInfo(value: unknown): ZrokRateLimitInfo | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const input = value as Record<string, unknown>;
+  const source = input.source;
+  if (source !== 'public' && source !== 'control' && source !== 'local-agent') return undefined;
+  const firstObservedAt = typeof input.firstObservedAt === 'string' ? input.firstObservedAt : '';
+  const lastObservedAt = typeof input.lastObservedAt === 'string' ? input.lastObservedAt : '';
+  const nextAttemptAt = typeof input.nextAttemptAt === 'string' ? input.nextAttemptAt : '';
+  const retryAfterMs = typeof input.retryAfterMs === 'number' && Number.isFinite(input.retryAfterMs)
+    ? Math.max(0, Math.min(10 * 60_000, Math.round(input.retryAfterMs)))
+    : Number.NaN;
+  const observedCount = Number.isInteger(input.observedCount) && Number(input.observedCount) > 0
+    ? Math.min(999, Number(input.observedCount))
+    : 0;
+  if (!firstObservedAt || !lastObservedAt || !nextAttemptAt || !Number.isFinite(Date.parse(nextAttemptAt)) || !Number.isFinite(retryAfterMs) || observedCount === 0) {
+    return undefined;
+  }
+  return { source, firstObservedAt, lastObservedAt, nextAttemptAt, retryAfterMs, observedCount };
+}
+
+export function getZrokProbeCooldownDelayMs(nextAttemptAt: string | undefined, nowMs = Date.now()) {
+  const nextAttemptMs = Date.parse(String(nextAttemptAt || ''));
+  if (!Number.isFinite(nextAttemptMs)) return 0;
+  return Math.max(0, Math.min(10 * 60_000, Math.round(nextAttemptMs - nowMs)));
+}
+
+export function getZrokProbeAdmission(input: { cooldownUntilMs: number; nowMs?: number }) {
+  const nowMs = input.nowMs ?? Date.now();
+  const remainingMs = Math.max(0, Math.round(input.cooldownUntilMs - nowMs));
+  return remainingMs > 0
+    ? { admit: false as const, nextDelayMs: Math.max(250, remainingMs) }
+    : { admit: true as const, nextDelayMs: 0 };
+}
+
 export function getZrokRecoveryDecision(input: {
   tunnelStatus: string;
   consecutiveProbeFailures: number;
@@ -431,6 +468,7 @@ async function probeHttpEndpoint(
   timeoutMs: number,
   requireSuccessStatus: boolean,
   fetchImpl: typeof fetch = fetch,
+  rateLimitTracker?: ReturnType<typeof createZrokRateLimitTracker>,
 ): Promise<PublicProbeResult> {
   const startedAt = Date.now();
   const controller = new AbortController();
@@ -439,14 +477,20 @@ async function probeHttpEndpoint(
   try {
     const response = await fetchImpl(url, { signal: controller.signal, redirect: 'manual' });
     const ok = requireSuccessStatus ? response.ok : response.status >= 200 && response.status < 500;
+    const rateLimit = response.status === 429
+      ? (rateLimitTracker || createZrokRateLimitTracker('public')).observe(response.headers.get('retry-after'))
+      : undefined;
+    if (response.status !== 429) rateLimitTracker?.reset();
     return {
       ok,
       statusCode: response.status,
       latencyMs: Date.now() - startedAt,
       message: `HTTP ${response.status}`,
       ...(ok ? {} : { failureClass: classifyPublicProbeFailure({ statusCode: response.status }) }),
+      ...(rateLimit ? { rateLimit } : {}),
     };
   } catch (error) {
+    rateLimitTracker?.reset();
     return {
       ok: false,
       latencyMs: Date.now() - startedAt,
@@ -486,6 +530,7 @@ export async function probeZrokRuntimeStatus(
     const actionability = payload.actionability && typeof payload.actionability === 'object'
       ? payload.actionability as Record<string, unknown>
       : undefined;
+    const rateLimit = normalizeZrokRateLimitInfo(payload.rateLimit);
     return {
       status: typeof payload.status === 'string' ? payload.status : undefined,
       shareState: typeof share?.state === 'string' ? share.state : undefined,
@@ -493,6 +538,7 @@ export async function probeZrokRuntimeStatus(
       ...(actionability?.canRecoverStaleSameMachineOwner === true
         ? { canRecoverStaleSameMachineOwner: true }
         : {}),
+      ...(rateLimit ? { rateLimit } : {}),
     };
   } catch {
     return undefined;
@@ -533,17 +579,35 @@ export async function probeZrokPublicRoute(
   currentPublicUrl: string,
   timeoutMs: number,
   fetchImpl: typeof fetch = fetch,
+  options: {
+    rateLimitTracker?: ReturnType<typeof createZrokRateLimitTracker>;
+    now?: () => number;
+  } = {},
 ) {
   const runtimeStatus = await probeZrokRuntimeStatus(localBaseUrl, timeoutMs, fetchImpl);
   const publicUrl = selectZrokPublicProbeUrl(currentPublicUrl, runtimeStatus);
-  const publicProbe: PublicProbeResult = publicUrl
-    ? await probeHttpEndpoint(apiCapabilitiesUrl(publicUrl), timeoutMs, true, fetchImpl)
-    : {
+  const nowMs = (options.now || Date.now)();
+  const sharedPublicRateLimit = runtimeStatus?.rateLimit?.source === 'public'
+    && getZrokProbeCooldownDelayMs(runtimeStatus.rateLimit.nextAttemptAt, nowMs) > 0
+    ? runtimeStatus.rateLimit
+    : undefined;
+  const publicProbe: PublicProbeResult = sharedPublicRateLimit
+    ? {
         ok: false,
+        statusCode: 429,
         latencyMs: 0,
-        message: 'zrok public URL is unavailable from live status/bootstrap/configuration.',
-        failureClass: 'public-url-unavailable',
-      };
+        message: 'HTTP 429 · shared zrok public cooldown is active',
+        failureClass: 'rate-limit',
+        rateLimit: sharedPublicRateLimit,
+      }
+    : publicUrl
+      ? await probeHttpEndpoint(apiCapabilitiesUrl(publicUrl), timeoutMs, true, fetchImpl, options.rateLimitTracker)
+      : {
+          ok: false,
+          latencyMs: 0,
+          message: 'zrok public URL is unavailable from live status/bootstrap/configuration.',
+          failureClass: 'public-url-unavailable',
+        };
   return { runtimeStatus, publicUrl, publicProbe };
 }
 
@@ -620,6 +684,8 @@ export async function startAll(mode: StartAllMode = 'all') {
   let tunnelProbeInFlight = false;
   let zrokGeneration = 0;
   let recoveryCooldownUntilMs = 0;
+  let rateLimitCooldownUntilMs = 0;
+  const publicRateLimitTracker = createZrokRateLimitTracker('public');
   let activePublicUrl = options.zrokPublicUrl;
   let shuttingDown = false;
 
@@ -670,6 +736,8 @@ export async function startAll(mode: StartAllMode = 'all') {
           : 'zrok service/share is ready; waiting for a public endpoint.',
       });
       recoveryCooldownUntilMs = 0;
+      rateLimitCooldownUntilMs = 0;
+      publicRateLimitTracker.reset();
       scheduleTunnelProbe(250);
       return;
     }
@@ -692,11 +760,23 @@ export async function startAll(mode: StartAllMode = 'all') {
 
   async function runTunnelProbe() {
     if (mode !== 'all' || shuttingDown || tunnelProbeInFlight) return;
+    const admission = getZrokProbeAdmission({ cooldownUntilMs: rateLimitCooldownUntilMs });
+    if (!admission.admit) {
+      scheduleTunnelProbe(admission.nextDelayMs);
+      return;
+    }
+
     tunnelProbeInFlight = true;
     const probeGeneration = currentTunnelHealth().generation;
     let nextProbeDelayMs = options.zrokProbeIntervalMs;
     try {
-      const routeProbe = await probeZrokPublicRoute(plan.appUrl, activePublicUrl, options.zrokProbeTimeoutMs);
+      const routeProbe = await probeZrokPublicRoute(
+        plan.appUrl,
+        activePublicUrl,
+        options.zrokProbeTimeoutMs,
+        fetch,
+        { rateLimitTracker: publicRateLimitTracker },
+      );
       const localZrokStatus = routeProbe.runtimeStatus;
       activePublicUrl = routeProbe.publicUrl;
       const publicProbe = routeProbe.publicProbe;
@@ -707,6 +787,17 @@ export async function startAll(mode: StartAllMode = 'all') {
       });
       if (probeGeneration && next.generation !== probeGeneration) return;
       updateDevFlowSupervisorTunnelHealth(next);
+
+      if (publicProbe.failureClass === 'rate-limit' || publicProbe.rateLimit) {
+        const nowMs = Date.now();
+        const sharedDelayMs = getZrokProbeCooldownDelayMs(publicProbe.rateLimit?.nextAttemptAt, nowMs);
+        const fallbackDelayMs = publicProbe.rateLimit?.retryAfterMs || options.zrokRecoveryCooldownMs;
+        const cooldownDelayMs = Math.max(250, sharedDelayMs || fallbackDelayMs);
+        rateLimitCooldownUntilMs = nowMs + cooldownDelayMs;
+        nextProbeDelayMs = cooldownDelayMs;
+        return;
+      }
+      rateLimitCooldownUntilMs = 0;
 
       const zrokProcessStatus = readDevFlowSupervisorState()?.processes.zrok?.status;
       if (shouldRecoverZrokSupervisorProcess({

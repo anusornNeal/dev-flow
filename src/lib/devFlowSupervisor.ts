@@ -25,6 +25,7 @@ export type DevFlowTunnelHealthState = {
   consecutiveProbeFailures: number;
   lastErrorCode?: string;
   lastErrorClass?: string;
+  nextProbeAt?: string;
   lastRecoveryAt?: string;
   recoveryAttempt?: number;
   nextRecoveryAt?: string;
@@ -79,6 +80,7 @@ export type DevFlowSupervisorChildDiagnostic = {
   consecutiveProbeFailures?: number;
   lastErrorCode?: string;
   lastErrorClass?: string;
+  nextProbeAt?: string;
   lastRecoveryAt?: string;
   recoveryAttempt?: number;
   nextRecoveryAt?: string;
@@ -124,6 +126,7 @@ function normalizeTunnelHealth(value: unknown): DevFlowTunnelHealthState | undef
     ...(typeof input.lastFailureAt === 'string' ? { lastFailureAt: input.lastFailureAt } : {}),
     ...(typeof input.lastErrorCode === 'string' ? { lastErrorCode: input.lastErrorCode } : {}),
     ...(typeof input.lastErrorClass === 'string' ? { lastErrorClass: input.lastErrorClass } : {}),
+    ...(typeof input.nextProbeAt === 'string' ? { nextProbeAt: input.nextProbeAt } : {}),
     ...(typeof input.lastRecoveryAt === 'string' ? { lastRecoveryAt: input.lastRecoveryAt } : {}),
     ...(Number.isInteger(input.recoveryAttempt) && Number(input.recoveryAttempt) >= 0 ? { recoveryAttempt: Number(input.recoveryAttempt) } : {}),
     ...(typeof input.nextRecoveryAt === 'string' ? { nextRecoveryAt: input.nextRecoveryAt } : {}),
@@ -266,13 +269,21 @@ export function resetDevFlowTunnelHealthForGeneration(
 
 export function advanceDevFlowTunnelHealth(
   previous: DevFlowTunnelHealthState | undefined,
-  probe: { ok: boolean; statusCode?: number; latencyMs?: number; message?: string },
+  probe: {
+    ok: boolean;
+    statusCode?: number;
+    latencyMs?: number;
+    message?: string;
+    failureClass?: string;
+    rateLimit?: { nextAttemptAt?: string };
+  },
   options: { failureThreshold: number; now?: string; generation?: string },
 ): DevFlowTunnelHealthState {
   const now = options.now || new Date().toISOString();
   const failureThreshold = Math.max(1, Math.floor(options.failureThreshold));
   const latencyMs = Number.isFinite(probe.latencyMs) && Number(probe.latencyMs) >= 0 ? Number(probe.latencyMs) : undefined;
   const statusCode = Number.isInteger(probe.statusCode) ? Number(probe.statusCode) : undefined;
+  const failureClass = typeof probe.failureClass === 'string' ? probe.failureClass : undefined;
   if (options.generation && previous?.generation && previous.generation !== options.generation) return previous;
 
   const current = {
@@ -292,8 +303,34 @@ export function advanceDevFlowTunnelHealth(
       lastProbeLatencyMs: latencyMs,
       lastSuccessAt: now,
       consecutiveProbeFailures: 0,
+      lastErrorCode: undefined,
+      lastErrorClass: undefined,
+      nextProbeAt: undefined,
       nextRecoveryAt: undefined,
       message: probe.message || 'Public tunnel probe succeeded; zrok service/share is reachable.',
+    };
+  }
+
+  if (failureClass === 'rate-limit' || statusCode === 429) {
+    const nextProbeAt = typeof probe.rateLimit?.nextAttemptAt === 'string' && Number.isFinite(Date.parse(probe.rateLimit.nextAttemptAt))
+      ? probe.rateLimit.nextAttemptAt
+      : undefined;
+    return {
+      ...current,
+      lifecyclePhase,
+      status: 'degraded',
+      lastProbeAt: now,
+      lastProbeStatusCode: statusCode,
+      lastProbeLatencyMs: latencyMs,
+      lastFailureAt: now,
+      consecutiveProbeFailures: Math.max(0, current.consecutiveProbeFailures || 0),
+      lastErrorCode: 'ZROK_PUBLIC_RATE_LIMITED',
+      lastErrorClass: 'rate-limit',
+      nextProbeAt,
+      nextRecoveryAt: undefined,
+      message: nextProbeAt
+        ? `Public zrok route is rate limited; the next probe is eligible at ${nextProbeAt}.`
+        : 'Public zrok route is rate limited; automatic repair is suppressed until the bounded probe cooldown expires.',
     };
   }
 
@@ -308,6 +345,9 @@ export function advanceDevFlowTunnelHealth(
       lastProbeLatencyMs: latencyMs,
       lastFailureAt: now,
       consecutiveProbeFailures: 0,
+      lastErrorCode: statusCode ? `ZROK_PUBLIC_HTTP_${statusCode}` : 'ZROK_PUBLIC_NETWORK_FAILURE',
+      lastErrorClass: failureClass,
+      nextProbeAt: undefined,
       message: probe.message || 'Public tunnel probe failed during zrok startup grace; recovery threshold is not advanced yet.',
     };
   }
@@ -322,6 +362,9 @@ export function advanceDevFlowTunnelHealth(
     lastProbeLatencyMs: latencyMs,
     lastFailureAt: now,
     consecutiveProbeFailures,
+    lastErrorCode: statusCode ? `ZROK_PUBLIC_HTTP_${statusCode}` : 'ZROK_PUBLIC_NETWORK_FAILURE',
+    lastErrorClass: failureClass,
+    nextProbeAt: undefined,
     message: probe.message || 'Public zrok tunnel probe failed.',
   };
 }
@@ -384,6 +427,7 @@ function tunnelDiagnostic(state: DevFlowSupervisorState): DevFlowSupervisorChild
     consecutiveProbeFailures: health.consecutiveProbeFailures,
     ...(health.lastErrorCode ? { lastErrorCode: health.lastErrorCode } : {}),
     ...(health.lastErrorClass ? { lastErrorClass: health.lastErrorClass } : {}),
+    ...(health.nextProbeAt ? { nextProbeAt: health.nextProbeAt } : {}),
     ...(health.lastRecoveryAt ? { lastRecoveryAt: health.lastRecoveryAt } : {}),
     ...(Number.isInteger(health.recoveryAttempt) ? { recoveryAttempt: health.recoveryAttempt } : {}),
     ...(health.nextRecoveryAt ? { nextRecoveryAt: health.nextRecoveryAt } : {}),

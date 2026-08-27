@@ -1180,7 +1180,7 @@ test('next action recommends claim_next_task without mutating and reports bounde
   assert.equal(none.blocked?.[0]?.taskId, 'new-unbounded');
 });
 
-test('durable board-loop intent survives caller cutoff and resumes the current execution before unrelated new work', () => {
+test('shared board-loop intent resumes current work only for the same worker and lets a different worker claim distinct work', () => {
   const projectId = 'project-board-loop-resume';
   createCandidateProject(projectId);
   seedCandidateTask(projectId, 'loop-current', ['src/LoopCurrent.ts'], { priority: 'high' });
@@ -1198,14 +1198,85 @@ test('durable board-loop intent survives caller cutoff and resumes the current e
   assert.equal(started.loop?.projectId, projectId);
   assert.ok(started.loop?.loopId);
 
-  const resumed = claims.getNextActionForSession(projectId, { sessionId: 'fresh-worker-b', limit: 10 });
-  assert.equal(resumed.action, 'continue-owned');
-  assert.equal(resumed.task?.taskId, 'loop-current');
-  assert.equal(resumed.loop?.status, 'active');
-  assert.equal(resumed.loop?.loopId, started.loop.loopId);
-  assert.equal(resumed.loop?.projectId, projectId);
-  assert.equal(getTask('loop-next')?.status, 'backlog', 'fresh worker must resume loop work before claiming unrelated work');
-  assert.equal(JSON.stringify(resumed).includes('loop-worker-a'), false, 'durable loop state must not expose or depend on the original caller identity');
+  const sameWorker = claims.getNextActionForSession(projectId, { sessionId: 'loop-worker-a', limit: 10 });
+  assert.equal(sameWorker.action, 'continue-owned');
+  assert.equal(sameWorker.task?.taskId, 'loop-current');
+  assert.equal(sameWorker.loop?.loopId, started.loop.loopId);
+
+  const differentWorker = claims.getNextActionForSession(projectId, { sessionId: 'fresh-worker-b', limit: 10 });
+  assert.equal(differentWorker.action, 'claim-new');
+  assert.equal(differentWorker.task?.taskId, 'loop-next');
+  assert.equal(differentWorker.claim?.tool, 'claim_next_task');
+  assert.equal(differentWorker.loop?.status, 'active');
+  assert.equal(differentWorker.loop?.loopId, started.loop.loopId);
+  assert.equal(differentWorker.loop?.projectId, projectId);
+  assert.equal(getTask('loop-next')?.status, 'backlog', 'scheduler pull must remain read-only for the second worker');
+  assert.equal(JSON.stringify(differentWorker).includes('loop-worker-a'), false, 'shared loop state must not expose the original caller identity');
+
+  const claimedByDifferentWorker = (claims.claimNextTaskForSession as any)(projectId, {
+    sessionId: 'fresh-worker-b', ownerLabel: 'Chat Loop B', limit: 10,
+  });
+  assert.equal(claimedByDifferentWorker.status, 'claimed');
+  assert.equal(claimedByDifferentWorker.task.id, 'loop-next');
+  assert.notEqual(claimedByDifferentWorker.claim.workspaceId, started.claim.workspaceId);
+  assert.equal(claimedByDifferentWorker.loop?.loopId, started.loop.loopId);
+
+  const resumedAgain = claims.getNextActionForSession(projectId, { sessionId: 'loop-worker-a', limit: 10 });
+  assert.equal(resumedAgain.action, 'continue-owned');
+  assert.equal(resumedAgain.task?.taskId, 'loop-current');
+});
+
+test('shared board-loop gives three chat workers distinct tasks and presence labels', () => {
+  const projectId = 'project-board-loop-three-workers';
+  createCandidateProject(projectId);
+  for (const [index, suffix] of ['a', 'b', 'c'].entries()) {
+    seedCandidateTask(projectId, `three-worker-${suffix}`, [`src/Worker${suffix.toUpperCase()}.ts`], {
+      priority: 'high', createdAt: `2026-08-10T00:00:0${index + 1}.000Z`,
+    });
+  }
+
+  const results = ['a', 'b', 'c'].map((suffix, index) => {
+    const next = claims.getNextActionForSession(projectId, { sessionId: `three-session-${suffix}`, limit: 10 });
+    assert.equal(next.action, 'claim-new');
+    return (claims.claimNextTaskForSession as any)(projectId, {
+      sessionId: `three-session-${suffix}`, ownerLabel: 'Chat Loop', boardLoopRequested: index === 0, limit: 10,
+    });
+  });
+
+  assert.equal(results.every((entry: any) => entry.status === 'claimed'), true);
+  assert.equal(new Set(results.map((entry: any) => entry.task.id)).size, 3);
+  assert.equal(new Set(results.map((entry: any) => entry.claim.workspaceId)).size, 3);
+  assert.equal(new Set(results.map((entry: any) => entry.claim.ownerLabel)).size, 3);
+  assert.equal(results.every((entry: any) => /^Chat Loop [A-F0-9]{4}$/.test(entry.claim.ownerLabel)), true);
+
+  const firstReconnect = claims.getNextActionForSession(projectId, { sessionId: 'three-session-a', limit: 10 });
+  assert.equal(firstReconnect.action, 'continue-owned');
+  assert.equal(firstReconnect.task?.taskId, results[0].task.id);
+});
+
+test('shared board-loop keeps extra workers away when one task is already owned', () => {
+  const projectId = 'project-board-loop-one-task';
+  createCandidateProject(projectId);
+  seedCandidateTask(projectId, 'one-loop-task', ['src/OneLoop.ts'], { priority: 'high' });
+  const owner = (claims.claimNextTaskForSession as any)(projectId, {
+    sessionId: 'one-worker-a', ownerLabel: 'Chat Loop', boardLoopRequested: true, limit: 10,
+  });
+  assert.equal(owner.status, 'claimed');
+
+  for (const suffix of ['b', 'c']) {
+    const next = claims.getNextActionForSession(projectId, { sessionId: `one-worker-${suffix}`, limit: 10 });
+    assert.equal(next.action, 'no-action');
+    assert.ok(next.reasonCodes.includes('BOARD_LOOP_WORKER_OWNERSHIP_MISMATCH'));
+    assert.equal(next.blocked?.[0]?.taskId, 'one-loop-task');
+  }
+
+  const miss = (claims.claimNextTaskForSession as any)(projectId, {
+    sessionId: 'one-worker-b', ownerLabel: 'Chat Loop', limit: 10,
+  });
+  assert.equal(miss.status, 'no-eligible');
+  assert.equal(miss.loop?.status, 'active');
+  assert.ok(miss.loop?.reasonCodes?.includes('BOARD_LOOP_WORKER_ACTIVE'));
+  assert.equal(getTask('one-loop-task')?.claim?.sessionIdHash, owner.claim.sessionIdHash);
 });
 
 test('board-loop stop remains active until requested scope is terminal, then claim-next atomically marks the loop terminal', () => {

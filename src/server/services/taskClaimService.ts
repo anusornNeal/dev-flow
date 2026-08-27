@@ -81,9 +81,10 @@ function normalizeOwnerKind(value: unknown): TaskClaimOwnerKind {
 
 function normalizeOwnerLabel(value: unknown, ownerKind: TaskClaimOwnerKind, hash: string) {
   const supplied = String(value || '').trim().replace(/\s+/g, ' ').slice(0, 32);
-  if (supplied) return supplied;
   const prefix = ownerKind === 'chat' ? 'Chat' : ownerKind.charAt(0).toUpperCase() + ownerKind.slice(1);
-  return `${prefix} ${hash.slice(0, 4).toUpperCase()}`;
+  const genericChatLabel = ownerKind === 'chat' && /^(chat|chatgpt|chat loop|chat loop recovery)$/i.test(supplied);
+  if (supplied && !genericChatLabel) return supplied;
+  return `${supplied || prefix} ${hash.slice(0, 4).toUpperCase()}`;
 }
 
 function boundedTtlMs(value: unknown) {
@@ -373,8 +374,12 @@ function canonicalRequestedLoopTask(projectId: string, requestedTaskId: unknown)
   return task;
 }
 
-function boardLoopRequestedScopeTerminal(loop: BoardLoopIntent | null, projectTasks: any[]) {
-  if (!loop?.requestedTaskId) return true;
+function boardLoopRequestedScopeTerminal(loop: BoardLoopIntent | null, projectTasks: any[], nowMs = Date.now()) {
+  if (!loop?.requestedTaskId) {
+    return !projectTasks.some((task) => !task.archivedAt && task.status !== 'done' && (
+      isActiveClaim(task.claim, nowMs) || task.status === 'in-progress' || task.status === 'ready-for-review'
+    ));
+  }
   const task = projectTasks.find((entry) => entry.id === loop.requestedTaskId || entry.displayId === loop.requestedTaskId);
   return Boolean(task && task.status === 'done');
 }
@@ -460,9 +465,11 @@ export function getNextActionForSession(projectId: string, input: { sessionId: s
   if (!project) throw createApiError(404, 'PROJECT_NOT_FOUND', `Project '${cleanProjectId}' was not found.`, { affectedId: cleanProjectId });
 
   const nowMs = Date.now();
+  const workerHash = sessionIdHash(cleanSessionId);
   const projectTasks = getTasksByProjectId(cleanProjectId);
   const boardLoop = getProjectBoardLoopIntent(cleanProjectId);
   let loopBackgroundTaskId: string | null = null;
+  let foreignLoopWorker: { taskId: string; displayId?: string; ownerLabel?: string | null } | null = null;
   if (boardLoop?.status === 'terminal') {
     return {
       action: 'no-action' as const,
@@ -474,7 +481,12 @@ export function getNextActionForSession(projectId: string, input: { sessionId: s
   if (boardLoop?.status === 'active') {
     const loopExecution = getExecutionSessionById(boardLoop.executionSessionId);
     const loopTask = loopExecution?.taskId ? getTaskByIdentifier(loopExecution.taskId, 'full') : undefined;
-    if (loopExecution && loopTask && loopTask.projectId === cleanProjectId && loopTask.status !== 'done') {
+    const loopClaim = loopTask?.claim;
+    const loopClaimOwnedByCurrentWorker = isActiveClaim(loopClaim, nowMs) && loopClaim.sessionIdHash === workerHash;
+    if (loopExecution && loopTask && loopTask.projectId === cleanProjectId && loopTask.status !== 'done' && isActiveClaim(loopClaim, nowMs) && !loopClaimOwnedByCurrentWorker) {
+      foreignLoopWorker = { taskId: loopTask.id, displayId: loopTask.displayId, ownerLabel: loopClaim.ownerLabel || null };
+    }
+    if (loopExecution && loopTask && loopTask.projectId === cleanProjectId && loopTask.status !== 'done' && loopClaimOwnedByCurrentWorker) {
       const continuation = evaluateExecutionContinuation({} as any, loopExecution.id, { workspaceId: loopExecution.workspaceId || undefined });
       if (loopTask.status === 'ready-for-review' || continuation.blocked || continuation.autonomousTail.state === 'attention') {
         return {
@@ -610,6 +622,21 @@ export function getNextActionForSession(projectId: string, input: { sessionId: s
       projectId: cleanProjectId,
       reasonCodes: ['BACKGROUND_PIPELINE_IN_FLIGHT'],
       background: { taskIds: backgroundTaskIds.slice(0, 8) },
+      ...(boardLoop ? { loop: boardLoop } : {}),
+    };
+  }
+
+  if (foreignLoopWorker) {
+    return {
+      action: 'no-action' as const,
+      projectId: cleanProjectId,
+      reasonCodes: ['BOARD_LOOP_WORKER_OWNERSHIP_MISMATCH'],
+      blocked: [{
+        taskId: foreignLoopWorker.taskId,
+        displayId: foreignLoopWorker.displayId,
+        ownerLabel: foreignLoopWorker.ownerLabel,
+        code: 'BOARD_LOOP_WORKER_OWNERSHIP_MISMATCH',
+      }],
       ...(boardLoop ? { loop: boardLoop } : {}),
     };
   }
@@ -1473,7 +1500,11 @@ export function claimNextTaskForSession(projectId: string, input: ClaimNextTaskI
         executionSessionId: '',
       } as BoardLoopIntent);
       const stopEligible = boardLoopRequestedScopeTerminal(liveLoop, projectTasks);
-      const reasonCodes = stopEligible ? ['BOARD_LOOP_TERMINAL'] : ['BOARD_LOOP_REQUESTED_SCOPE_NOT_TERMINAL'];
+      const reasonCodes = stopEligible
+        ? ['BOARD_LOOP_TERMINAL']
+        : liveLoop.requestedTaskId
+          ? ['BOARD_LOOP_REQUESTED_SCOPE_NOT_TERMINAL']
+          : ['BOARD_LOOP_WORKER_ACTIVE'];
       const persistenceSession = boardLoopPersistenceSession(activeLoop, cleanProjectId, loopSeed.requestedTaskId);
       const loop = persistenceSession ? persistBoardLoopIntent(persistenceSession.id, {
         ...loopSeed,

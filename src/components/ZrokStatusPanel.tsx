@@ -34,6 +34,17 @@ export type ZrokActionability = {
   takeoverBlockedReason?: string;
 };
 
+export type ZrokRateLimitSource = 'public' | 'control' | 'local-agent';
+
+export type ZrokRateLimitInfo = {
+  source: ZrokRateLimitSource;
+  firstObservedAt: string;
+  lastObservedAt: string;
+  nextAttemptAt: string;
+  retryAfterMs: number;
+  observedCount: number;
+};
+
 export type ZrokRuntimeStatus = {
   status: ZrokStatusKind;
   baseUrl?: string;
@@ -49,6 +60,7 @@ export type ZrokRuntimeStatus = {
   message?: string;
   actionability?: ZrokActionability;
   remoteOwner?: string;
+  rateLimit?: ZrokRateLimitInfo;
 };
 
 export type ZrokActionState = 'idle' | 'taking-over' | 'switching-here' | 'verifying' | 'success' | 'error';
@@ -64,6 +76,8 @@ type LocalApiLatencyProbeOptions = {
 
 const LOCAL_API_PROBE_TIMEOUT_MS = 1_500;
 const MAX_LOCAL_API_PROBE_TIMEOUT_MS = 5_000;
+const MIN_POLL_INTERVAL_MS = 5_000;
+const MAX_UI_COOLDOWN_MS = 10 * 60_000;
 
 type ZrokStatusPanelProps = {
   initialStatus?: ZrokRuntimeStatus;
@@ -163,6 +177,82 @@ function normalizeActionability(value: unknown): ZrokActionability | undefined {
     canSwitchHere: input.canSwitchHere === true,
     ...(blockedReason ? { takeoverBlockedReason: blockedReason } : {}),
   };
+}function normalizeRateLimit(value: unknown): ZrokRateLimitInfo | undefined {
+  const input = asRecord(value);
+  if (!input) return undefined;
+  const source = input.source;
+  if (source !== 'public' && source !== 'control' && source !== 'local-agent') return undefined;
+  const firstObservedAt = safeString(input.firstObservedAt);
+  const lastObservedAt = safeString(input.lastObservedAt);
+  const nextAttemptAt = safeString(input.nextAttemptAt);
+  const retryAfterMs = typeof input.retryAfterMs === 'number' && Number.isFinite(input.retryAfterMs)
+    ? Math.max(0, Math.min(MAX_UI_COOLDOWN_MS, Math.round(input.retryAfterMs)))
+    : undefined;
+  const observedCount = typeof input.observedCount === 'number' && Number.isInteger(input.observedCount) && input.observedCount > 0
+    ? Math.min(999, input.observedCount)
+    : undefined;
+  if (
+    !firstObservedAt
+    || !lastObservedAt
+    || !nextAttemptAt
+    || !Number.isFinite(Date.parse(firstObservedAt))
+    || !Number.isFinite(Date.parse(lastObservedAt))
+    || !Number.isFinite(Date.parse(nextAttemptAt))
+    || retryAfterMs === undefined
+    || observedCount === undefined
+  ) return undefined;
+  return { source, firstObservedAt, lastObservedAt, nextAttemptAt, retryAfterMs, observedCount };
+}
+
+export function getZrokRateLimitRemainingMs(status: Pick<ZrokRuntimeStatus, 'rateLimit'>, nowMs = Date.now()) {
+  const nextAttemptMs = Date.parse(status.rateLimit?.nextAttemptAt || '');
+  if (!Number.isFinite(nextAttemptMs)) return 0;
+  return Math.max(0, Math.min(MAX_UI_COOLDOWN_MS, Math.round(nextAttemptMs - nowMs)));
+}
+
+export function getZrokPollDelayMs(
+  status: Pick<ZrokRuntimeStatus, 'rateLimit'>,
+  pollIntervalMs: number,
+  nowMs = Date.now(),
+) {
+  const requestedInterval = Number.isFinite(pollIntervalMs) ? Math.round(pollIntervalMs) : 15_000;
+  const baseDelayMs = Math.max(MIN_POLL_INTERVAL_MS, requestedInterval);
+  return Math.max(baseDelayMs, getZrokRateLimitRemainingMs(status, nowMs));
+}
+
+export function createZrokStatusRefreshCoordinator(options: {
+  request: () => Promise<ZrokRuntimeStatus>;
+  now?: () => number;
+  initialStatus?: ZrokRuntimeStatus;
+}) {
+  const now = options.now || Date.now;
+  let currentStatus = options.initialStatus;
+  let inFlight: Promise<ZrokRuntimeStatus | null> | null = null;
+
+  const observe = (status: ZrokRuntimeStatus) => {
+    currentStatus = status;
+    return status;
+  };
+
+  const refresh = (): Promise<ZrokRuntimeStatus | null> => {
+    if (inFlight) return inFlight;
+    if (currentStatus && getZrokRateLimitRemainingMs(currentStatus, now()) > 0) return Promise.resolve(null);
+    const promise = options.request()
+      .then((status) => observe(status))
+      .finally(() => {
+        if (inFlight === promise) inFlight = null;
+      });
+    inFlight = promise;
+    return promise;
+  };
+
+  return {
+    refresh,
+    observe,
+    getStatus: () => currentStatus,
+    getCooldownRemainingMs: () => currentStatus ? getZrokRateLimitRemainingMs(currentStatus, now()) : 0,
+    isInFlight: () => inFlight !== null,
+  };
 }
 
 export function normalizeZrokStatusKind(value: unknown): ZrokStatusKind {
@@ -191,6 +281,7 @@ export function normalizeZrokStatus(payload: unknown): ZrokRuntimeStatus {
   const latencyMs = typeof latencyCandidate === 'number' && Number.isFinite(latencyCandidate) && latencyCandidate >= 0
     ? Math.round(latencyCandidate)
     : undefined;
+  const rateLimit = normalizeRateLimit(input.rateLimit);
 
   return {
     status: normalizeZrokStatusKind(input.status ?? input.state),
@@ -206,6 +297,7 @@ export function normalizeZrokStatus(payload: unknown): ZrokRuntimeStatus {
     ...(safeString(input.message) ? { message: safeString(input.message) } : {}),
     ...(normalizeActionability(input.actionability) ? { actionability: normalizeActionability(input.actionability) } : {}),
     ...(safeString(owner?.label ?? owner?.machineName ?? owner?.name) ? { remoteOwner: safeString(owner?.label ?? owner?.machineName ?? owner?.name) } : {}),
+    ...(rateLimit ? { rateLimit } : {}),
   };
 }
 
@@ -325,6 +417,17 @@ function formatCheckedAt(value?: string) {
   const parsed = Date.parse(value);
   if (!Number.isFinite(parsed)) return value;
   return new Date(parsed).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}function formatRateLimitSource(source: ZrokRateLimitSource) {
+  if (source === 'public') return 'Public route';
+  if (source === 'control') return 'Control plane';
+  return 'Local Agent';
+}
+
+function rateLimitMessage(status: ZrokRuntimeStatus, active: boolean) {
+  if (!status.rateLimit) return '';
+  const source = formatRateLimitSource(status.rateLimit.source);
+  if (!active) return `${source} rate limit cleared; a fresh status check is eligible.`;
+  return `${source} is rate limited. Recheck is available after ${formatCheckedAt(status.rateLimit.nextAttemptAt)}.`;
 }
 
 export default function ZrokStatusPanel({
@@ -341,34 +444,75 @@ export default function ZrokStatusPanel({
   const [actionMessage, setActionMessage] = useState('');
   const [copied, setCopied] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
+  const fetchRef = useRef(fetchImpl);
+  const statusRef = useRef(status);
+  fetchRef.current = fetchImpl;
+  const coordinatorRef = useRef<ReturnType<typeof createZrokStatusRefreshCoordinator> | null>(null);
+  if (!coordinatorRef.current) {
+    coordinatorRef.current = createZrokStatusRefreshCoordinator({
+      initialStatus: status,
+      request: () => requestZrokDiagnostics(fetchRef.current),
+    });
+  }
+
+  const applyStatus = useCallback((next: ZrokRuntimeStatus) => {
+    statusRef.current = next;
+    coordinatorRef.current?.observe(next);
+    setStatus(next);
+    return next;
+  }, []);
 
   const refresh = useCallback(async (showBusy = false) => {
+    const coordinator = coordinatorRef.current!;
+    if (showBusy && coordinator.getCooldownRemainingMs() > 0) {
+      setActionState('idle');
+      setActionMessage(rateLimitMessage(statusRef.current, true));
+      return null;
+    }
     if (showBusy) {
       setRechecking(true);
       setActionState('idle');
       setActionMessage('');
     }
     try {
-      const next = await requestZrokDiagnostics(fetchImpl);
-      setStatus(next);
+      const next = await coordinator.refresh();
+      if (next) applyStatus(next);
       return next;
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to read zrok status.';
-      setStatus((current) => ({
-        ...current,
-        status: current.status === 'setup-required' ? current.status : 'offline',
-        message,
-      }));
+      setStatus((current) => {
+        const next = {
+          ...current,
+          status: current.status === 'setup-required' ? current.status : 'offline',
+          message,
+          rateLimit: undefined,
+        } satisfies ZrokRuntimeStatus;
+        statusRef.current = next;
+        coordinator.observe(next);
+        return next;
+      });
       return null;
     } finally {
       if (showBusy) setRechecking(false);
     }
-  }, [fetchImpl]);
+  }, [applyStatus]);
 
   useEffect(() => {
-    void refresh(false);
-    const timer = window.setInterval(() => void refresh(false), Math.max(5_000, pollIntervalMs));
-    return () => window.clearInterval(timer);
+    let cancelled = false;
+    let timer: number | undefined;
+    const schedule = (delayMs: number) => {
+      timer = window.setTimeout(async () => {
+        await refresh(false);
+        if (!cancelled) schedule(getZrokPollDelayMs(statusRef.current, pollIntervalMs));
+      }, Math.max(0, delayMs));
+    };
+    void refresh(false).finally(() => {
+      if (!cancelled) schedule(getZrokPollDelayMs(statusRef.current, pollIntervalMs));
+    });
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
   }, [pollIntervalMs, refresh]);
 
   useEffect(() => {
@@ -391,13 +535,15 @@ export default function ZrokStatusPanel({
   const StatusIcon = presentation.icon;
   const mcpUrl = resolveMcpUrl(status);
   const transitionBusy = actionState === 'taking-over' || actionState === 'switching-here' || actionState === 'verifying';
-  const canRecheck = status.actionability?.canRecheck !== false;
-  const canTakeOver = status.status === 'standby' && status.actionability?.canTakeOver === true;
-  const canSwitchHere = status.status === 'standby' && status.actionability?.canSwitchHere === true;
-  const takeoverBlockedReason = status.status === 'standby' && !canTakeOver
+  const rateLimitActive = getZrokRateLimitRemainingMs(status) > 0;
+  const canRecheck = status.actionability?.canRecheck !== false && !rateLimitActive;
+  const canTakeOver = status.status === 'standby' && status.actionability?.canTakeOver === true && !rateLimitActive;
+  const canSwitchHere = status.status === 'standby' && status.actionability?.canSwitchHere === true && !rateLimitActive;
+  const takeoverBlockedReason = status.status === 'standby' && !canTakeOver && !rateLimitActive
     ? status.actionability?.takeoverBlockedReason
     : undefined;
-  const statusLabel = presentation.label;
+  const statusLabel = rateLimitActive ? 'Rate limited' : presentation.label;
+  const cooldownMessage = rateLimitMessage(status, rateLimitActive);
   const switchHereWarning = canSwitchHere
     ? 'Switch here deletes the active remote share. The old Agent can reclaim the share unless it is stopped.'
     : '';
@@ -425,7 +571,7 @@ export default function ZrokStatusPanel({
       setActionState('verifying');
       setActionMessage('Takeover requested. Verifying the public route…');
       const verified = await requestZrokDiagnostics(fetchImpl);
-      setStatus(verified);
+      applyStatus(verified);
       if (verified.status !== 'online') {
         setActionState('error');
         setActionMessage(verified.message || `Takeover finished, but public health is ${getZrokStatusPresentation(verified.status).label.toLowerCase()}.`);
@@ -452,7 +598,7 @@ export default function ZrokStatusPanel({
       setActionState('verifying');
       setActionMessage('Switch requested. Verifying the public route…');
       const verified = await requestZrokDiagnostics(fetchImpl);
-      setStatus(verified);
+      applyStatus(verified);
       if (verified.status !== 'online') {
         setActionState('error');
         setActionMessage(verified.message || `Switch finished, but public health is ${getZrokStatusPresentation(verified.status).label.toLowerCase()}.`);
@@ -515,10 +661,10 @@ export default function ZrokStatusPanel({
               </div>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs font-extrabold text-[#3c2a1a] dark:text-[#f3eadf]">zrok · {presentation.label}</span>
+                  <span className="text-xs font-extrabold text-[#3c2a1a] dark:text-[#f3eadf]">zrok · {statusLabel}</span>
                 </div>
                 <p className="mt-0.5 text-[10px] leading-4 text-[#816b5a] dark:text-[#d1c0ad]">
-                  {status.message || presentation.description}
+                  {rateLimitActive ? cooldownMessage : status.message || presentation.description}
                 </p>
                 {status.status === 'standby' && status.remoteOwner && (
                   <p className="mt-1 text-[10px] font-mono font-bold text-[#58758d] dark:text-[#a9c3d7]">Active on {status.remoteOwner}</p>
@@ -532,7 +678,13 @@ export default function ZrokStatusPanel({
             <DetailRow label="Named share" value={status.share} icon={Wifi} />
             <DetailRow label="Public health" value={status.publicReachability} icon={status.status === 'offline' ? WifiOff : CheckCircle2} />
             <DetailRow label="Local API" value={status.localApiLatencyMs !== undefined ? `${status.localApiLatencyMs} ms` : 'Unavailable'} icon={Server} />
-            <DetailRow label="Public route (end-to-end)" value={status.latencyMs !== undefined ? `${status.latencyMs} ms` : 'Unavailable'} icon={MonitorUp} />
+            <DetailRow label="Public route (end-to-end)" value={status.latencyMs !== undefined ? `${status.latencyMs} ms` : 'Unavailable'} icon={MonitorUp} />            {status.rateLimit && (
+              <DetailRow
+                label="Rate limit"
+                value={`${formatRateLimitSource(status.rateLimit.source)} · ${rateLimitActive ? `retry after ${formatCheckedAt(status.rateLimit.nextAttemptAt)}` : 'retry eligible'}`}
+                icon={AlertTriangle}
+              />
+            )}
             <div className="my-1 border-t border-[#eee2d1] dark:border-[#584a3b]" />
             <div className="flex items-start justify-between gap-3 py-1.5 text-[10px] font-mono">
               <span className="flex shrink-0 items-center gap-1.5 text-[#8a725f] dark:text-[#cdbba7]">
@@ -558,7 +710,7 @@ export default function ZrokStatusPanel({
             </div>
           )}
 
-          {(actionMessage || takeoverBlockedReason || status.status === 'setup-required' || status.status === 'setup-error') && (
+          {(actionMessage || cooldownMessage || takeoverBlockedReason || status.status === 'setup-required' || status.status === 'setup-error') && (
             <div
               className={`mx-3.5 mb-2 rounded-lg border px-2.5 py-2 text-[10px] font-mono leading-4 ${
                 actionState === 'error' || status.status === 'setup-error'
@@ -570,7 +722,7 @@ export default function ZrokStatusPanel({
             >
               <div className="flex items-start gap-1.5">
                 {actionState === 'success' ? <CheckCircle2 size={12} className="mt-0.5 shrink-0" aria-hidden="true" /> : <AlertCircle size={12} className="mt-0.5 shrink-0" aria-hidden="true" />}
-                <span>{actionMessage || takeoverBlockedReason || status.message || presentation.description}</span>
+                <span>{actionMessage || (rateLimitActive ? cooldownMessage : '') || takeoverBlockedReason || status.message || presentation.description}</span>
               </div>
             </div>
           )}
@@ -584,7 +736,7 @@ export default function ZrokStatusPanel({
               aria-label="Recheck zrok status"
             >
               <RefreshCw size={12} aria-hidden="true" className={rechecking ? 'animate-spin' : ''} />
-              {rechecking ? 'Checking…' : 'Recheck'}
+              {rechecking ? 'Checking…' : rateLimitActive ? 'Cooling down' : 'Recheck'}
             </button>
 
             {canSwitchHere && (

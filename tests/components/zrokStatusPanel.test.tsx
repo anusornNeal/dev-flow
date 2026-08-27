@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import ZrokStatusPanel, {
+  createZrokStatusRefreshCoordinator,
+  getZrokPollDelayMs,
   normalizeZrokStatus,
   requestLocalApiLatency,
   requestZrokDiagnostics,
@@ -71,6 +73,35 @@ test('normalizes only the structured zrok actionability fields', () => {
     takeoverBlockedReason: 'Remote control unsupported.',
   });
   assert.doesNotMatch(JSON.stringify(normalized), /must-not-leak|internalReason/);
+});test('normalizes bounded rate-limit metadata without projecting raw provider data', () => {
+  const normalized = normalizeZrokStatus({
+    status: 'degraded',
+    baseUrl: 'https://zrok-test.example.test',
+    agentService: { state: 'running' },
+    share: { state: 'active' },
+    rateLimit: {
+      source: 'public',
+      firstObservedAt: '2026-08-27T00:00:00.000Z',
+      lastObservedAt: '2026-08-27T00:00:01.000Z',
+      nextAttemptAt: '2026-08-27T00:00:05.000Z',
+      retryAfterMs: 4000,
+      observedCount: 2,
+      retryAfterHeader: 'secret-raw-header',
+      accountToken: 'must-not-leak',
+    },
+  });
+
+  assert.deepEqual(normalized.rateLimit, {
+    source: 'public',
+    firstObservedAt: '2026-08-27T00:00:00.000Z',
+    lastObservedAt: '2026-08-27T00:00:01.000Z',
+    nextAttemptAt: '2026-08-27T00:00:05.000Z',
+    retryAfterMs: 4000,
+    observedCount: 2,
+  });
+  assert.equal(normalized.agentService, 'running');
+  assert.equal(normalized.share, 'active');
+  assert.doesNotMatch(JSON.stringify(normalized), /secret-raw-header|must-not-leak|retryAfterHeader|accountToken/);
 });
 
 test('renders Setup required without pretending the tunnel is online', () => {
@@ -131,6 +162,36 @@ test('renders Degraded and Offline without healthy language', () => {
   assert.match(offline, /Offline/);
   assert.doesNotMatch(degraded, />Online</);
   assert.doesNotMatch(offline, />Online</);
+});test('renders active rate limiting separately while preserving last-known ownership and diagnostics', () => {
+  const html = renderStatus({
+    status: 'degraded',
+    baseUrl: 'https://zrok-test.example.test',
+    agentService: 'running',
+    share: 'active',
+    publicReachability: 'unknown',
+    latencyMs: 48,
+    localApiLatencyMs: 7,
+    actionability: { canRecheck: true, canTakeOver: false, canSwitchHere: false },
+    rateLimit: {
+      source: 'public',
+      firstObservedAt: '2099-08-27T00:00:00.000Z',
+      lastObservedAt: '2099-08-27T00:00:01.000Z',
+      nextAttemptAt: '2099-08-27T00:00:05.000Z',
+      retryAfterMs: 4000,
+      observedCount: 2,
+    },
+  });
+
+  assert.match(html, /Rate limited/);
+  assert.match(html, /Public route/);
+  assert.match(html, /Agent service/);
+  assert.match(html, />running</);
+  assert.match(html, /Named share/);
+  assert.match(html, />active</);
+  assert.match(html, /https:\/\/zrok-test\.example\.test\/mcp/);
+  assert.match(html, /Cooling down/);
+  assert.match(html, /disabled=""/);
+  assert.doesNotMatch(html, /Offline/);
 });
 
 test('renders Standby with remote ownership context and explicit Take over action', () => {
@@ -229,6 +290,88 @@ test('status request reads the live zrok endpoint and normalizes response', asyn
   assert.equal(result.mcpUrl, 'https://example.test/mcp');
   assert.equal(calls[0].url, '/api/zrok/status');
   assert.equal(calls[0].init?.cache, 'no-store');
+});test('refresh coordinator coalesces burst Recheck and automatic refresh into one request', async () => {
+  let calls = 0;
+  let release: ((status: ZrokRuntimeStatus) => void) | undefined;
+  const coordinator = createZrokStatusRefreshCoordinator({
+    now: () => 1000,
+    request: () => {
+      calls += 1;
+      return new Promise<ZrokRuntimeStatus>((resolve) => { release = resolve; });
+    },
+  });
+
+  const first = coordinator.refresh();
+  const second = coordinator.refresh();
+  const third = coordinator.refresh();
+  assert.equal(calls, 1);
+  release?.({ status: 'online', actionability: { canRecheck: true, canTakeOver: false } });
+  const results = await Promise.all([first, second, third]);
+  assert.equal(results.every((result) => result?.status === 'online'), true);
+  assert.equal(calls, 1);
+});
+
+test('refresh coordinator suppresses cooldown calls and admits one request after expiry', async () => {
+  let nowMs = 1000;
+  let calls = 0;
+  const coordinator = createZrokStatusRefreshCoordinator({
+    now: () => nowMs,
+    initialStatus: {
+      status: 'degraded',
+      rateLimit: {
+        source: 'public',
+        firstObservedAt: '1970-01-01T00:00:01.000Z',
+        lastObservedAt: '1970-01-01T00:00:01.000Z',
+        nextAttemptAt: '1970-01-01T00:00:05.000Z',
+        retryAfterMs: 4000,
+        observedCount: 1,
+      },
+    },
+    request: async () => {
+      calls += 1;
+      return {
+        status: 'degraded',
+        rateLimit: {
+          source: 'public',
+          firstObservedAt: '1970-01-01T00:00:01.000Z',
+          lastObservedAt: '1970-01-01T00:00:05.000Z',
+          nextAttemptAt: '1970-01-01T00:00:09.000Z',
+          retryAfterMs: 4000,
+          observedCount: 2,
+        },
+      };
+    },
+  });
+
+  assert.equal(await coordinator.refresh(), null);
+  nowMs = 4999;
+  assert.equal(await coordinator.refresh(), null);
+  assert.equal(calls, 0);
+  nowMs = 5000;
+  assert.equal((await coordinator.refresh())?.rateLimit?.observedCount, 2);
+  assert.equal(calls, 1);
+  nowMs = 6000;
+  assert.equal(await coordinator.refresh(), null, 'a repeated 429 extends cooldown without another request');
+  assert.equal(calls, 1);
+  nowMs = 9000;
+  await coordinator.refresh();
+  assert.equal(calls, 2, 'exactly one new request is admitted when the extended cooldown expires');
+});
+
+test('poll delay respects backend cooldown without becoming a rapid timer', () => {
+  const status: ZrokRuntimeStatus = {
+    status: 'degraded',
+    rateLimit: {
+      source: 'control',
+      firstObservedAt: '1970-01-01T00:00:01.000Z',
+      lastObservedAt: '1970-01-01T00:00:01.000Z',
+      nextAttemptAt: '1970-01-01T00:00:20.000Z',
+      retryAfterMs: 19000,
+      observedCount: 1,
+    },
+  };
+  assert.equal(getZrokPollDelayMs(status, 5000, 1000), 19000);
+  assert.equal(getZrokPollDelayMs(status, 15000, 20000), 15000);
 });
 
 test('local API latency probe is bounded, direct, and uses deterministic timing', async () => {

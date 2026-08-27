@@ -10,6 +10,8 @@ function takeoverHttpStatus(result: Awaited<ReturnType<ZrokRuntimeService['takeO
     case 'ZROK_TAKEOVER_REMOTE_FENCE_UNAVAILABLE':
     case 'ZROK_TAKEOVER_STALE_OWNER':
       return 409;
+    case 'ZROK_TAKEOVER_RATE_LIMITED':
+      return 429;
     case 'ZROK_TAKEOVER_REMOTE_FENCE_FAILED':
     case 'ZROK_TAKEOVER_LOCAL_SHARE_FAILED':
     case 'ZROK_TAKEOVER_VERIFY_FAILED':
@@ -26,6 +28,8 @@ function switchHereHttpStatus(result: Awaited<ReturnType<ZrokRuntimeService['swi
     case 'ZROK_SWITCH_IN_PROGRESS':
     case 'ZROK_SWITCH_STALE_OWNER':
       return 409;
+    case 'ZROK_SWITCH_RATE_LIMITED':
+      return 429;
     case 'ZROK_SWITCH_DELETE_FAILED':
     case 'ZROK_SWITCH_LOCAL_SHARE_FAILED':
     case 'ZROK_SWITCH_VERIFY_FAILED':

@@ -11,6 +11,13 @@ import {
   type ZrokLocalAgentShare,
   type ZrokLocalAgentStatus,
 } from './zrokAgentConsoleClient.js';
+import {
+  createZrokRateLimitTracker,
+  ZrokRateLimitError,
+  zrokMutationOutcomeUnknown,
+  zrokRateLimitFromError,
+  type ZrokRateLimitInfo,
+} from './zrokRateLimitPolicy.js';
 
 export type ZrokRuntimeStatusCode =
   | 'setup-required'
@@ -43,6 +50,7 @@ export interface ZrokRuntimeStatus {
   };
   latencyMs: number | null;
   lastCheckedAt: string;
+  rateLimit?: ZrokRateLimitInfo;
   message?: string;
   actionability: {
     canRecheck: true;
@@ -69,6 +77,7 @@ export interface ZrokTakeoverResult extends ZrokRuntimeTransitionResult<
   | 'ZROK_TAKEOVER_STALE_OWNER'
   | 'ZROK_TAKEOVER_LOCAL_SHARE_FAILED'
   | 'ZROK_TAKEOVER_VERIFY_FAILED'
+  | 'ZROK_TAKEOVER_RATE_LIMITED'
   | 'ZROK_TAKEOVER_FAILED'
 > {}
 
@@ -79,6 +88,7 @@ export interface ZrokSwitchHereResult extends ZrokRuntimeTransitionResult<
     | 'ZROK_SWITCH_DELETE_FAILED'
     | 'ZROK_SWITCH_LOCAL_SHARE_FAILED'
     | 'ZROK_SWITCH_VERIFY_FAILED'
+    | 'ZROK_SWITCH_RATE_LIMITED'
     | 'ZROK_SWITCH_FAILED'
 > {}
 
@@ -125,12 +135,14 @@ export interface ZrokAgentStatusSnapshot {
   reachable: boolean;
   shares: ZrokAgentShareRecord[];
   remoteControl?: 'available' | 'unsupported' | 'unavailable';
+  rateLimit?: ZrokRateLimitInfo;
 }
 
 export interface ZrokPublicProbe {
   state: ZrokPublicState;
   latencyMs: number | null;
   routedToThisMachine: boolean | null;
+  rateLimit?: ZrokRateLimitInfo;
 }
 
 export interface ZrokRuntimeAdapter {
@@ -156,6 +168,7 @@ export interface ZrokRuntimeConfig {
   preferredName?: string;
   baseUrl?: string;
   expectedRuntimeInstanceId: string;
+  statusFreshMs?: number;
 }
 
 export interface ZrokRuntimeService {
@@ -250,10 +263,12 @@ function publicStatus(
     canSwitchHere?: boolean;
     canRecoverStaleSameMachineOwner?: boolean;
     takeoverBlockedReason?: string;
+    rateLimit?: ZrokRateLimitInfo;
   } = {},
 ): ZrokRuntimeStatus {
   const baseUrl = normalizeBaseUrl(input.baseUrl);
   const probe = input.probe || { state: 'unknown' as const, latencyMs: null, routedToThisMachine: null };
+  const rateLimit = input.rateLimit || probe.rateLimit;
   return {
     status: code,
     statusLabel: STATUS_LABELS[code],
@@ -270,13 +285,16 @@ function publicStatus(
     },
     latencyMs: probe.latencyMs,
     lastCheckedAt: checkedAt,
+    ...(rateLimit ? { rateLimit } : {}),
     ...(input.message ? { message: input.message } : {}),
     actionability: {
       canRecheck: true,
-      canTakeOver: Boolean(input.canTakeOver),
-      canSwitchHere: Boolean(input.canSwitchHere),
-      canRecoverStaleSameMachineOwner: Boolean(input.canRecoverStaleSameMachineOwner),
-      ...(input.takeoverBlockedReason ? { takeoverBlockedReason: input.takeoverBlockedReason } : {}),
+      canTakeOver: rateLimit ? false : Boolean(input.canTakeOver),
+      canSwitchHere: rateLimit ? false : Boolean(input.canSwitchHere),
+      canRecoverStaleSameMachineOwner: rateLimit ? false : Boolean(input.canRecoverStaleSameMachineOwner),
+      ...(rateLimit
+        ? { takeoverBlockedReason: 'zrok is rate limited; wait for the next eligible attempt before changing ownership.' }
+        : input.takeoverBlockedReason ? { takeoverBlockedReason: input.takeoverBlockedReason } : {}),
     },
   };
 }
@@ -502,6 +520,17 @@ async function loadDiscovery(
     localAgentStatus = await adapter.getLocalAgentStatus();
   } catch {}
   if (!localAgentStatus.reachable) {
+    if (localAgentStatus.rateLimit) {
+      const blockedReason = 'The local zrok Agent authority is rate limited, so ownership cannot be refreshed safely yet.';
+      return publicStatus('degraded', checkedAt, {
+        serviceState,
+        shareState: 'unknown',
+        owner: 'unknown',
+        message: blockedReason,
+        takeoverBlockedReason: blockedReason,
+        rateLimit: localAgentStatus.rateLimit,
+      });
+    }
     const blockedReason = 'The local zrok Agent authority is unreachable, so ownership cannot be determined safely.';
     const baseUrl = normalizeBaseUrl(trustedPublicBaseUrl || config.baseUrl);
     let probe: ZrokPublicProbe = { state: 'unknown', latencyMs: null, routedToThisMachine: null };
@@ -566,7 +595,17 @@ async function loadDiscovery(
       adapter.listShares(),
       adapter.listEnvironments(),
     ]);
-  } catch {
+  } catch (error) {
+    const rateLimit = zrokRateLimitFromError(error);
+    if (rateLimit) {
+      return publicStatus('degraded', checkedAt, {
+        serviceState,
+        shareState: 'unknown',
+        owner: 'unknown',
+        message: 'The zrok control plane is rate limited. DevFlow will not amplify the provider cooldown.',
+        rateLimit,
+      });
+    }
     return publicStatus('setup-error', checkedAt, {
       serviceState,
       shareState: 'unknown',
@@ -617,9 +656,17 @@ async function loadDiscovery(
         accountToken: environment.accountToken,
         envZId: currentShare.envZId,
       });
-    } catch {
-      ownerAgentStatus = { reachable: false, shares: [] };
+    } catch (error) {
+      const rateLimit = zrokRateLimitFromError(error);
+      ownerAgentStatus = {
+        reachable: false,
+        shares: [],
+        ...(rateLimit ? { rateLimit } : {}),
+      };
     }
+  }
+  if (ownerAgentStatus?.rateLimit && !publicProbe.rateLimit) {
+    publicProbe = { ...publicProbe, rateLimit: ownerAgentStatus.rateLimit };
   }
 
   return {
@@ -786,6 +833,40 @@ function sameManagedName(left: ZrokNameRecord, right: ZrokNameRecord) {
   return left.namespaceToken === right.namespaceToken && normalizeName(left.name) === normalizeName(right.name);
 }
 
+function rateLimitedTransitionStatus(
+  status: ZrokRuntimeStatus,
+  rateLimit: ZrokRateLimitInfo,
+  message: string,
+): ZrokRuntimeStatus {
+  return {
+    ...status,
+    rateLimit,
+    message,
+    actionability: {
+      ...status.actionability,
+      canTakeOver: false,
+      canSwitchHere: false,
+      canRecoverStaleSameMachineOwner: false,
+      takeoverBlockedReason: 'zrok is rate limited; wait for the next eligible attempt before changing ownership.',
+    },
+  };
+}
+
+function unknownMutationStatus(status: ZrokRuntimeStatus, message: string): ZrokRuntimeStatus {
+  return {
+    ...status,
+    share: { ...status.share, owner: 'unknown', state: 'unknown' },
+    message,
+    actionability: {
+      ...status.actionability,
+      canTakeOver: false,
+      canSwitchHere: false,
+      canRecoverStaleSameMachineOwner: false,
+      takeoverBlockedReason: 'The previous ownership mutation has an unknown outcome; Recheck before any further ownership change.',
+    },
+  };
+}
+
 export function createZrokRuntimeService(
   adapter: ZrokRuntimeAdapter,
   config: ZrokRuntimeConfig,
@@ -795,21 +876,74 @@ export function createZrokRuntimeService(
     | { kind: 'switchHere'; promise: Promise<ZrokSwitchHereResult> }
     | null = null;
   let trustedPublicBaseUrl = normalizeBaseUrl(config.baseUrl);
+  let statusInFlight: Promise<ZrokRuntimeStatus> | null = null;
+  let cachedStatus: { value: ZrokRuntimeStatus; expiresAt: number } | null = null;
+  let lastKnownStatus: ZrokRuntimeStatus | null = null;
+  const statusFreshMs = Math.max(0, Math.min(5_000, config.statusFreshMs ?? 250));
 
-  const rememberTrustedBaseUrl = (status: ZrokRuntimeStatus) => {
-    if (status.baseUrl && status.share.owner !== 'unknown') trustedPublicBaseUrl = status.baseUrl;
+  const preserveKnownOwnership = (status: ZrokRuntimeStatus) => {
+    const source = status.rateLimit?.source;
+    if (
+      (source === 'public' || source === 'control')
+      && status.share.owner === 'unknown'
+      && lastKnownStatus
+      && lastKnownStatus.share.owner !== 'unknown'
+    ) {
+      const baseUrl = status.baseUrl || lastKnownStatus.baseUrl;
+      return {
+        ...status,
+        baseUrl,
+        mcpUrl: baseUrl ? `${baseUrl}/mcp` : null,
+        share: { ...lastKnownStatus.share },
+        message: `${status.message || 'zrok is rate limited.'} Showing the last known ownership until a fresh check is eligible.`,
+        actionability: {
+          ...status.actionability,
+          canTakeOver: false,
+          canSwitchHere: false,
+          canRecoverStaleSameMachineOwner: false,
+        },
+      } satisfies ZrokRuntimeStatus;
+    }
     return status;
   };
 
-  const getStatus = async (): Promise<ZrokRuntimeStatus> => {
-    try {
-      const discovery = await loadDiscovery(adapter, config, trustedPublicBaseUrl);
-      const status = 'status' in discovery ? discovery : statusFromDiscovery(adapter, discovery);
-      return rememberTrustedBaseUrl(status);
-    } catch {
-      return safeSetupError(adapter, 'DevFlow could not inspect the zrok runtime safely. Run Recheck or zrok setup again.');
-    }
+  const rememberTrustedBaseUrl = (input: ZrokRuntimeStatus) => {
+    const status = preserveKnownOwnership(input);
+    if (status.baseUrl && status.share.owner !== 'unknown') trustedPublicBaseUrl = status.baseUrl;
+    if (!status.rateLimit && status.share.owner !== 'unknown') lastKnownStatus = status;
+    return status;
   };
+
+  const readStatus = (forceFresh = false): Promise<ZrokRuntimeStatus> => {
+    const nowMs = adapter.now().getTime();
+    if (forceFresh) cachedStatus = null;
+    if (!forceFresh && cachedStatus && nowMs < cachedStatus.expiresAt) return Promise.resolve(cachedStatus.value);
+    if (statusInFlight) return statusInFlight;
+
+    const promise = (async () => {
+      try {
+        const discovery = await loadDiscovery(adapter, config, trustedPublicBaseUrl);
+        const status = rememberTrustedBaseUrl('status' in discovery ? discovery : statusFromDiscovery(adapter, discovery));
+        const nextAttemptAt = status.rateLimit ? Date.parse(status.rateLimit.nextAttemptAt) : 0;
+        cachedStatus = {
+          value: status,
+          expiresAt: Math.max(adapter.now().getTime() + statusFreshMs, Number.isFinite(nextAttemptAt) ? nextAttemptAt : 0),
+        };
+        return status;
+      } catch {
+        const status = safeSetupError(adapter, 'DevFlow could not inspect the zrok runtime safely. Run Recheck or zrok setup again.');
+        cachedStatus = { value: status, expiresAt: adapter.now().getTime() + statusFreshMs };
+        return status;
+      }
+    })().finally(() => {
+      if (statusInFlight === promise) statusInFlight = null;
+    });
+    statusInFlight = promise;
+    return promise;
+  };
+
+  const getStatus = () => readStatus(false);
+  const refreshStatus = () => readStatus(true);
 
   const withTakeoverTransition = async (transition: () => Promise<ZrokTakeoverResult>): Promise<ZrokTakeoverResult> => {
     if (transitionInFlight?.kind === 'takeover') return transitionInFlight.promise;
@@ -937,7 +1071,15 @@ export function createZrokRuntimeService(
           );
         }
       }
-    } catch {
+    } catch (error) {
+      const rateLimit = zrokRateLimitFromError(error);
+      if (rateLimit) {
+        return safeTakeoverFailure(
+          'ZROK_TAKEOVER_RATE_LIMITED',
+          'The zrok control plane is rate limited during takeover preflight. No ownership change was attempted.',
+          rateLimitedTransitionStatus(initialStatus, rateLimit, 'Takeover is paused by zrok rate limiting; the inspected owner remains unchanged.'),
+        );
+      }
       return safeTakeoverFailure(
         'ZROK_TAKEOVER_STALE_OWNER',
         'DevFlow could not confirm that the active zrok owner was unchanged. No ownership change was attempted.',
@@ -959,13 +1101,34 @@ export function createZrokRuntimeService(
           shareToken: remoteShare.shareToken,
         });
       }
-    } catch {
+    } catch (error) {
+      const rateLimit = zrokRateLimitFromError(error);
+      if (rateLimit) {
+        return safeTakeoverFailure(
+          'ZROK_TAKEOVER_RATE_LIMITED',
+          'zrok rate limited the ownership mutation. DevFlow did not replay it automatically.',
+          rateLimitedTransitionStatus(
+            zrokMutationOutcomeUnknown(error)
+              ? unknownMutationStatus(initialStatus, 'The remote fence request was rate limited with an unknown outcome; Recheck is required before another ownership change.')
+              : initialStatus,
+            rateLimit,
+            'The takeover mutation is rate limited and will not be replayed automatically.',
+          ),
+        );
+      }
+      if (zrokMutationOutcomeUnknown(error)) {
+        return safeTakeoverFailure(
+          'ZROK_TAKEOVER_REMOTE_FENCE_FAILED',
+          'The remote fence request has an unknown outcome and was not replayed. Recheck before another ownership change.',
+          unknownMutationStatus(initialStatus, 'The remote fence outcome is unknown; Recheck is required before another ownership change.'),
+        );
+      }
       return safeTakeoverFailure(
         'ZROK_TAKEOVER_REMOTE_FENCE_FAILED',
         staleSameMachineRecovery
           ? 'The exact stale same-machine zrok share could not be released. Local activation was not attempted.'
           : 'The active machine did not confirm release of the managed zrok share. Local activation was not attempted.',
-        await getStatus(),
+        initialStatus,
       );
     }
 
@@ -977,6 +1140,17 @@ export function createZrokRuntimeService(
           accountToken: environment.accountToken!,
           envZId: remoteShare.envZId,
         });
+        if (fenced.rateLimit) {
+          return safeTakeoverFailure(
+            'ZROK_TAKEOVER_RATE_LIMITED',
+            'The old machine was released, but zrok rate limited fence verification. Local activation was not attempted.',
+            rateLimitedTransitionStatus(
+              unknownMutationStatus(initialStatus, 'Fence verification is rate limited; ownership is unknown until Recheck succeeds.'),
+              fenced.rateLimit,
+              'Fence verification is rate limited; ownership is unknown until a fresh check is eligible.',
+            ),
+          );
+        }
         if (!fenced.reachable || fenced.shares.some((share) => share.token === remoteShare.shareToken)) {
           return safeTakeoverFailure(
             'ZROK_TAKEOVER_REMOTE_FENCE_FAILED',
@@ -1017,11 +1191,23 @@ export function createZrokRuntimeService(
           await getStatus(),
         );
       }
-    } catch {
+    } catch (error) {
+      const rateLimit = zrokRateLimitFromError(error);
+      if (rateLimit) {
+        return safeTakeoverFailure(
+          'ZROK_TAKEOVER_RATE_LIMITED',
+          'The old owner was fenced, but zrok rate limited post-fence verification. Local activation was not attempted.',
+          rateLimitedTransitionStatus(
+            unknownMutationStatus(initialStatus, 'Post-fence verification is rate limited; ownership is unknown until Recheck succeeds.'),
+            rateLimit,
+            'Post-fence verification is rate limited; ownership is unknown until a fresh check is eligible.',
+          ),
+        );
+      }
       return safeTakeoverFailure(
         'ZROK_TAKEOVER_STALE_OWNER',
         'DevFlow could not confirm the managed name was free after fencing. Local activation was not attempted.',
-        await getStatus(),
+        unknownMutationStatus(initialStatus, 'DevFlow could not confirm the managed name after fencing; ownership is unknown until Recheck succeeds.'),
       );
     }
 
@@ -1030,15 +1216,27 @@ export function createZrokRuntimeService(
         target: config.target,
         nameSelection: buildNameSelection(discovery.managedName),
       });
-    } catch {
+    } catch (error) {
+      const rateLimit = zrokRateLimitFromError(error);
+      if (rateLimit) {
+        return safeTakeoverFailure(
+          'ZROK_TAKEOVER_RATE_LIMITED',
+          'The old machine was fenced, but local activation was rate limited and was not replayed automatically.',
+          rateLimitedTransitionStatus(
+            unknownMutationStatus(initialStatus, 'Local activation was rate limited after fencing; ownership is unknown until Recheck succeeds.'),
+            rateLimit,
+            'Local activation is rate limited and will not be replayed automatically.',
+          ),
+        );
+      }
       return safeTakeoverFailure(
         'ZROK_TAKEOVER_LOCAL_SHARE_FAILED',
-        'The old machine was fenced, but the local zrok share could not be activated.',
-        await getStatus(),
+        'The old machine was fenced, but the local zrok share could not be activated. The mutation was not replayed automatically.',
+        unknownMutationStatus(initialStatus, 'Local activation failed after fencing; ownership is unknown until Recheck succeeds.'),
       );
     }
 
-    const finalStatus = await getStatus();
+    const finalStatus = await refreshStatus();
     if (finalStatus.status !== 'online' || finalStatus.share.owner !== 'local' || finalStatus.publicReachability.routedToThisMachine !== true) {
       return safeTakeoverFailure(
         'ZROK_TAKEOVER_VERIFY_FAILED',
@@ -1116,7 +1314,15 @@ export function createZrokRuntimeService(
           await getStatus(),
         );
       }
-    } catch {
+    } catch (error) {
+      const rateLimit = zrokRateLimitFromError(error);
+      if (rateLimit) {
+        return safeSwitchFailure(
+          'ZROK_SWITCH_RATE_LIMITED',
+          'The zrok control plane is rate limited during switch preflight. No ownership change was attempted.',
+          rateLimitedTransitionStatus(initialStatus, rateLimit, 'Switch here is paused by zrok rate limiting; the inspected owner remains unchanged.'),
+        );
+      }
       return safeSwitchFailure(
         'ZROK_SWITCH_STALE_OWNER',
         'DevFlow could not confirm that the active zrok owner was unchanged. No ownership change was attempted.',
@@ -1129,11 +1335,27 @@ export function createZrokRuntimeService(
         envZId: remoteShare.envZId,
         shareToken: remoteShare.shareToken,
       });
-    } catch {
+    } catch (error) {
+      const rateLimit = zrokRateLimitFromError(error);
+      if (rateLimit) {
+        return safeSwitchFailure(
+          'ZROK_SWITCH_RATE_LIMITED',
+          'zrok rate limited the exact-share release. DevFlow did not replay it automatically.',
+          rateLimitedTransitionStatus(
+            zrokMutationOutcomeUnknown(error)
+              ? unknownMutationStatus(initialStatus, 'The share release was rate limited with an unknown outcome; Recheck is required before another ownership change.')
+              : initialStatus,
+            rateLimit,
+            'The switch mutation is rate limited and will not be replayed automatically.',
+          ),
+        );
+      }
       return safeSwitchFailure(
         'ZROK_SWITCH_DELETE_FAILED',
-        'The exact remote zrok share could not be released. Local activation was not attempted.',
-        await getStatus(),
+        'The exact remote zrok share could not be released. Local activation was not attempted and the mutation was not replayed.',
+        zrokMutationOutcomeUnknown(error)
+          ? unknownMutationStatus(initialStatus, 'The exact-share release outcome is unknown; Recheck is required before another ownership change.')
+          : initialStatus,
       );
     }
 
@@ -1163,11 +1385,23 @@ export function createZrokRuntimeService(
           await getStatus(),
         );
       }
-    } catch {
+    } catch (error) {
+      const rateLimit = zrokRateLimitFromError(error);
+      if (rateLimit) {
+        return safeSwitchFailure(
+          'ZROK_SWITCH_RATE_LIMITED',
+          'The remote share was released, but zrok rate limited post-release verification. Local activation was not attempted.',
+          rateLimitedTransitionStatus(
+            unknownMutationStatus(initialStatus, 'Post-release verification is rate limited; ownership is unknown until Recheck succeeds.'),
+            rateLimit,
+            'Post-release verification is rate limited; ownership is unknown until a fresh check is eligible.',
+          ),
+        );
+      }
       return safeSwitchFailure(
         'ZROK_SWITCH_STALE_OWNER',
         'DevFlow could not confirm the managed name was free after release. Local activation was not attempted.',
-        await getStatus(),
+        unknownMutationStatus(initialStatus, 'DevFlow could not confirm the managed name after release; ownership is unknown until Recheck succeeds.'),
       );
     }
 
@@ -1176,15 +1410,27 @@ export function createZrokRuntimeService(
         target: config.target,
         nameSelection: buildNameSelection(discovery.managedName),
       });
-    } catch {
+    } catch (error) {
+      const rateLimit = zrokRateLimitFromError(error);
+      if (rateLimit) {
+        return safeSwitchFailure(
+          'ZROK_SWITCH_RATE_LIMITED',
+          'The remote zrok share was released, but local activation was rate limited and was not replayed automatically.',
+          rateLimitedTransitionStatus(
+            unknownMutationStatus(initialStatus, 'Local activation was rate limited after release; ownership is unknown until Recheck succeeds.'),
+            rateLimit,
+            'Local activation is rate limited and will not be replayed automatically.',
+          ),
+        );
+      }
       return safeSwitchFailure(
         'ZROK_SWITCH_LOCAL_SHARE_FAILED',
-        'The remote zrok share was released, but the local zrok share could not be activated.',
-        await getStatus(),
+        'The remote zrok share was released, but the local zrok share could not be activated. The mutation was not replayed automatically.',
+        unknownMutationStatus(initialStatus, 'Local activation failed after release; ownership is unknown until Recheck succeeds.'),
       );
     }
 
-    const finalStatus = await getStatus();
+    const finalStatus = await refreshStatus();
     if (finalStatus.status !== 'online' || finalStatus.share.owner !== 'local' || finalStatus.publicReachability.routedToThisMachine !== true) {
       return safeSwitchFailure(
         'ZROK_SWITCH_VERIFY_FAILED',
@@ -1264,7 +1510,9 @@ function arrayPayload(value: unknown, key?: string) {
 interface CommandResult {
   ok: boolean;
   stdout: string;
+  stderr: string;
   missing: boolean;
+  timedOut: boolean;
 }
 
 export interface DefaultZrokRuntimeAdapterOptions {
@@ -1275,6 +1523,8 @@ export interface DefaultZrokRuntimeAdapterOptions {
   fetchImpl?: typeof fetch;
   agentConsoleClient?: ZrokAgentConsoleClient;
   spawnSyncImpl?: typeof spawnSync;
+  now?: () => number;
+  random?: () => number;
 }
 
 export function resolveZrokServiceProfile(input: {
@@ -1316,7 +1566,14 @@ export function createDefaultZrokRuntimeAdapter(options: DefaultZrokRuntimeAdapt
   const commandTimeoutMs = options.commandTimeoutMs ?? 7_500;
   const fetchTimeoutMs = options.fetchTimeoutMs ?? 5_000;
   const fetchImpl = options.fetchImpl || fetch;
-  const agentConsoleClient = options.agentConsoleClient || createZrokAgentConsoleClient({ fetchImpl });
+  const now = options.now || Date.now;
+  const controlRateLimit = createZrokRateLimitTracker('control', { now, random: options.random });
+  const publicRateLimit = createZrokRateLimitTracker('public', { now, random: options.random });
+  const agentConsoleClient = options.agentConsoleClient || createZrokAgentConsoleClient({
+    fetchImpl,
+    now,
+    random: options.random,
+  });
   const spawnSyncImpl = options.spawnSyncImpl || spawnSync;
 
   const command = (args: string[], envOverrides?: NodeJS.ProcessEnv): CommandResult => {
@@ -1328,30 +1585,59 @@ export function createDefaultZrokRuntimeAdapter(options: DefaultZrokRuntimeAdapt
       maxBuffer: 1_000_000,
       env: envOverrides ? { ...process.env, ...envOverrides } : process.env,
     });
-    const missing = Boolean((result.error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT');
+    const errorCode = (result.error as NodeJS.ErrnoException | undefined)?.code;
     return {
       ok: result.status === 0 && !result.error,
       stdout: String(result.stdout || ''),
-      missing,
+      stderr: String(result.stderr || ''),
+      missing: errorCode === 'ENOENT',
+      timedOut: errorCode === 'ETIMEDOUT',
     };
+  };
+
+  const commandRateLimit = (result: CommandResult) => {
+    const boundedOutput = `${result.stdout}\n${result.stderr}`.slice(0, 8_192);
+    return /(?:^|\D)429(?:\D|$)|rate[- ]?limit/i.test(boundedOutput)
+      ? controlRateLimit.observe(null)
+      : undefined;
+  };
+
+  const mutationOutcomeUnknownError = (code: string) => {
+    const error = new ZrokRuntimeInternalError(code) as ZrokRuntimeInternalError & { mutationOutcomeUnknown: boolean };
+    error.mutationOutcomeUnknown = true;
+    return error;
   };
 
   const accountPost = async (
     input: { apiEndpoint: string; accountToken: string },
     endpoint: string,
     body: Record<string, unknown>,
+    operation: 'read' | 'mutation',
   ) => {
     const base = input.apiEndpoint.endsWith('/') ? input.apiEndpoint : `${input.apiEndpoint}/`;
     const url = new URL(`api/v2/${endpoint.replace(/^\/+/, '')}`, base);
-    const response = await fetchImpl(url, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/zrok.v1+json',
-        'x-token': input.accountToken,
-      },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(fetchTimeoutMs),
-    });
+    let response: Response;
+    try {
+      response = await fetchImpl(url, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/zrok.v1+json',
+          'x-token': input.accountToken,
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(fetchTimeoutMs),
+      });
+    } catch (error) {
+      if (operation === 'mutation') throw mutationOutcomeUnknownError('ZROK_AGENT_MUTATION_OUTCOME_UNKNOWN');
+      throw error;
+    }
+    if (response.status === 429) {
+      throw new ZrokRateLimitError(
+        controlRateLimit.observe(response.headers.get('retry-after')),
+        operation === 'mutation',
+      );
+    }
+    controlRateLimit.reset();
     if (!response.ok) throw new ZrokRuntimeInternalError(`ZROK_AGENT_HTTP_${response.status}`);
     const text = await response.text();
     if (!text.trim()) return null;
@@ -1419,7 +1705,12 @@ export function createDefaultZrokRuntimeAdapter(options: DefaultZrokRuntimeAdapt
 
     async listNames() {
       const result = command(['list', 'names', '--json']);
-      if (!result.ok) throw new ZrokRuntimeInternalError('ZROK_LIST_NAMES_FAILED');
+      if (!result.ok) {
+        const rateLimit = commandRateLimit(result);
+        if (rateLimit) throw new ZrokRateLimitError(rateLimit);
+        throw new ZrokRuntimeInternalError('ZROK_LIST_NAMES_FAILED');
+      }
+      controlRateLimit.reset();
       return arrayPayload(parseJson(result.stdout)).flatMap((entry): ZrokNameRecord[] => {
         if (!entry || typeof entry !== 'object') return [];
         const record = entry as Record<string, unknown>;
@@ -1439,7 +1730,12 @@ export function createDefaultZrokRuntimeAdapter(options: DefaultZrokRuntimeAdapt
 
     async listShares() {
       const result = command(['list', 'shares', '--json']);
-      if (!result.ok) throw new ZrokRuntimeInternalError('ZROK_LIST_SHARES_FAILED');
+      if (!result.ok) {
+        const rateLimit = commandRateLimit(result);
+        if (rateLimit) throw new ZrokRateLimitError(rateLimit);
+        throw new ZrokRuntimeInternalError('ZROK_LIST_SHARES_FAILED');
+      }
+      controlRateLimit.reset();
       return arrayPayload(parseJson(result.stdout), 'shares').flatMap((entry): ZrokShareRecord[] => {
         if (!entry || typeof entry !== 'object') return [];
         const record = entry as Record<string, unknown>;
@@ -1459,7 +1755,12 @@ export function createDefaultZrokRuntimeAdapter(options: DefaultZrokRuntimeAdapt
 
     async listEnvironments() {
       const result = command(['list', 'environments', '--json']);
-      if (!result.ok) throw new ZrokRuntimeInternalError('ZROK_LIST_ENVIRONMENTS_FAILED');
+      if (!result.ok) {
+        const rateLimit = commandRateLimit(result);
+        if (rateLimit) throw new ZrokRateLimitError(rateLimit);
+        throw new ZrokRuntimeInternalError('ZROK_LIST_ENVIRONMENTS_FAILED');
+      }
+      controlRateLimit.reset();
       return arrayPayload(parseJson(result.stdout), 'environments').flatMap((entry): ZrokEnvironmentRecord[] => {
         if (!entry || typeof entry !== 'object') return [];
         const record = entry as Record<string, unknown>;
@@ -1477,7 +1778,7 @@ export function createDefaultZrokRuntimeAdapter(options: DefaultZrokRuntimeAdapt
 
     async getAgentStatus(input) {
       try {
-        const payload = await accountPost(input, 'agent/status', { envZId: input.envZId });
+        const payload = await accountPost(input, 'agent/status', { envZId: input.envZId }, 'read');
         const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
         const shares = arrayPayload(record.shares).flatMap((entry): ZrokAgentShareRecord[] => {
           if (!entry || typeof entry !== 'object') return [];
@@ -1492,12 +1793,14 @@ export function createDefaultZrokRuntimeAdapter(options: DefaultZrokRuntimeAdapt
         });
         return { reachable: true, remoteControl: 'available', shares };
       } catch (error) {
+        const rateLimit = zrokRateLimitFromError(error);
         return {
           reachable: false,
           remoteControl: error instanceof ZrokRuntimeInternalError && error.code === 'ZROK_AGENT_HTTP_501'
             ? 'unsupported'
             : 'unavailable',
           shares: [],
+          ...(rateLimit ? { rateLimit } : {}),
         };
       }
     },
@@ -1506,12 +1809,17 @@ export function createDefaultZrokRuntimeAdapter(options: DefaultZrokRuntimeAdapt
       await accountPost(input, 'agent/unshare', {
         envZId: input.envZId,
         token: input.shareToken,
-      });
+      }, 'mutation');
     },
 
     async deleteShare(input) {
       const result = command(['delete', 'share', '--envzid', input.envZId, input.shareToken]);
-      if (!result.ok) throw new ZrokRuntimeInternalError('ZROK_DELETE_SHARE_FAILED');
+      if (!result.ok) {
+        const rateLimit = commandRateLimit(result);
+        if (rateLimit) throw new ZrokRateLimitError(rateLimit);
+        if (result.timedOut) throw mutationOutcomeUnknownError('ZROK_DELETE_SHARE_OUTCOME_UNKNOWN');
+        throw new ZrokRuntimeInternalError('ZROK_DELETE_SHARE_FAILED');
+      }
     },
 
     async startLocalShare(input) {
@@ -1525,20 +1833,34 @@ export function createDefaultZrokRuntimeAdapter(options: DefaultZrokRuntimeAdapt
         '--name-selection',
         input.nameSelection,
       ], serviceProfile ? { USERPROFILE: serviceProfile, HOME: serviceProfile } : undefined);
-      if (!result.ok) throw new ZrokRuntimeInternalError('ZROK_LOCAL_SHARE_FAILED');
+      if (!result.ok) {
+        const rateLimit = commandRateLimit(result);
+        if (rateLimit) throw new ZrokRateLimitError(rateLimit);
+        if (result.timedOut) throw mutationOutcomeUnknownError('ZROK_LOCAL_SHARE_OUTCOME_UNKNOWN');
+        throw new ZrokRuntimeInternalError('ZROK_LOCAL_SHARE_FAILED');
+      }
     },
 
     async probePublic(input) {
       const base = input.baseUrl.endsWith('/') ? input.baseUrl : `${input.baseUrl}/`;
       const url = new URL('api/capabilities', base);
-      const startedAt = Date.now();
+      const startedAt = now();
       try {
         const response = await fetchImpl(url, {
           method: 'GET',
           headers: { accept: 'application/json' },
           signal: AbortSignal.timeout(fetchTimeoutMs),
         });
-        const latencyMs = Date.now() - startedAt;
+        const latencyMs = now() - startedAt;
+        if (response.status === 429) {
+          return {
+            state: 'unknown',
+            latencyMs,
+            routedToThisMachine: null,
+            rateLimit: publicRateLimit.observe(response.headers.get('retry-after')),
+          };
+        }
+        publicRateLimit.reset();
         if (!response.ok) return { state: 'unhealthy', latencyMs, routedToThisMachine: null };
         const body = await response.json() as Record<string, unknown>;
         return {
@@ -1547,12 +1869,12 @@ export function createDefaultZrokRuntimeAdapter(options: DefaultZrokRuntimeAdapt
           routedToThisMachine: valueString(body.runtimeInstanceId) === input.expectedRuntimeInstanceId,
         };
       } catch {
-        return { state: 'unhealthy', latencyMs: Date.now() - startedAt, routedToThisMachine: null };
+        return { state: 'unhealthy', latencyMs: now() - startedAt, routedToThisMachine: null };
       }
     },
 
     now() {
-      return new Date();
+      return new Date(now());
     },
   };
 }

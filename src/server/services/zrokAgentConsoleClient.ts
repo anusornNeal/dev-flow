@@ -1,7 +1,10 @@
+import { createZrokRateLimitTracker, type ZrokRateLimitInfo } from './zrokRateLimitPolicy.js';
+
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORTS = Array.from({ length: 101 }, (_, index) => 8888 + index);
 const REQUEST_TIMEOUT_MS = 250;
 const DISCOVERY_TIMEOUT_MS = 1_500;
+const FRESH_RESULT_MS = 0;
 const MAX_RESPONSE_BYTES = 256 * 1024;
 const MAX_FRONTEND_ENDPOINT_LENGTH = 2_048;
 const MAX_FRONTEND_ENDPOINT_CANDIDATES = 16;
@@ -17,6 +20,7 @@ export interface ZrokLocalAgentShare {
 export interface ZrokLocalAgentStatus {
   reachable: boolean;
   shares: ZrokLocalAgentShare[];
+  rateLimit?: ZrokRateLimitInfo;
 }
 
 export interface ZrokAgentConsoleClient {
@@ -27,6 +31,9 @@ export interface CreateZrokAgentConsoleClientOptions {
   host?: string;
   ports?: number[];
   fetchImpl?: typeof fetch;
+  now?: () => number;
+  random?: () => number;
+  freshResultMs?: number;
 }
 
 function validateHost(value: string | undefined): string {
@@ -168,9 +175,22 @@ export function createZrokAgentConsoleClient(options: CreateZrokAgentConsoleClie
   const host = validateHost(options.host);
   const ports = validatePorts(options.ports);
   const fetchImpl = options.fetchImpl || fetch;
+  const now = options.now || Date.now;
+  const freshResultMs = Math.max(0, Math.min(5_000, options.freshResultMs ?? FRESH_RESULT_MS));
+  const rateLimitTracker = createZrokRateLimitTracker('local-agent', {
+    now,
+    random: options.random,
+  });
   let verifiedPort: number | null = null;
+  let inFlight: Promise<ZrokLocalAgentStatus> | null = null;
+  let cached: { value: ZrokLocalAgentStatus; expiresAt: number } | null = null;
 
-  const probePort = async (port: number, timeoutMs: number): Promise<ZrokLocalAgentStatus | null> => {
+  type ProbeResult =
+    | { kind: 'status'; status: ZrokLocalAgentStatus }
+    | { kind: 'rate-limit'; status: ZrokLocalAgentStatus }
+    | null;
+
+  const probePort = async (port: number, timeoutMs: number): Promise<ProbeResult> => {
     try {
       const response = await fetchImpl(urlFor(host, port), {
         method: 'GET',
@@ -178,43 +198,75 @@ export function createZrokAgentConsoleClient(options: CreateZrokAgentConsoleClie
         redirect: 'error',
         signal: AbortSignal.timeout(Math.max(1, Math.min(REQUEST_TIMEOUT_MS, timeoutMs))),
       });
+      if (response.status === 429) {
+        return {
+          kind: 'rate-limit',
+          status: {
+            reachable: false,
+            shares: [],
+            rateLimit: rateLimitTracker.observe(response.headers.get('retry-after')),
+          },
+        };
+      }
       if (response.status !== 200) return null;
       const contentLengthHeader = response.headers.get('content-length');
       const contentLength = contentLengthHeader ? Number(contentLengthHeader) : null;
       if (contentLength !== null && Number.isFinite(contentLength) && contentLength > MAX_RESPONSE_BYTES) return null;
       const body = await readResponseText(response);
       if (body === null) return null;
-      return parseStatus(body);
+      const status = parseStatus(body);
+      if (!status) return null;
+      rateLimitTracker.reset();
+      return { kind: 'status', status };
     } catch {
       return null;
     }
   };
 
+  const discover = async (): Promise<ZrokLocalAgentStatus> => {
+    const startedAt = now();
+    const previouslyVerifiedPort = verifiedPort;
+
+    if (previouslyVerifiedPort !== null) {
+      const remainingMs = DISCOVERY_TIMEOUT_MS - (now() - startedAt);
+      if (remainingMs > 0) {
+        const result = await probePort(previouslyVerifiedPort, remainingMs);
+        if (result?.kind === 'status') return result.status;
+        if (result?.kind === 'rate-limit') return result.status;
+      }
+      verifiedPort = null;
+    }
+
+    for (const port of ports) {
+      if (port === previouslyVerifiedPort) continue;
+      const remainingMs = DISCOVERY_TIMEOUT_MS - (now() - startedAt);
+      if (remainingMs <= 0) break;
+      const result = await probePort(port, remainingMs);
+      if (!result) continue;
+      verifiedPort = port;
+      return result.status;
+    }
+    return { reachable: false, shares: [] };
+  };
+
   return {
-    async getStatus(): Promise<ZrokLocalAgentStatus> {
-      const startedAt = Date.now();
-      const previouslyVerifiedPort = verifiedPort;
+    getStatus(): Promise<ZrokLocalAgentStatus> {
+      const currentMs = now();
+      if (cached && currentMs < cached.expiresAt) return Promise.resolve(cached.value);
+      if (inFlight) return inFlight;
 
-      if (previouslyVerifiedPort !== null) {
-        const remainingMs = DISCOVERY_TIMEOUT_MS - (Date.now() - startedAt);
-        if (remainingMs > 0) {
-          const status = await probePort(previouslyVerifiedPort, remainingMs);
-          if (status) return status;
-        }
-        verifiedPort = null;
-      }
-
-      for (const port of ports) {
-        if (port === previouslyVerifiedPort) continue;
-        const remainingMs = DISCOVERY_TIMEOUT_MS - (Date.now() - startedAt);
-        if (remainingMs <= 0) break;
-        const status = await probePort(port, remainingMs);
-        if (status) {
-          verifiedPort = port;
-          return status;
-        }
-      }
-      return { reachable: false, shares: [] };
+      const promise = discover().then((value) => {
+        const rateLimitUntil = value.rateLimit ? Date.parse(value.rateLimit.nextAttemptAt) : 0;
+        cached = {
+          value,
+          expiresAt: Math.max(now() + freshResultMs, Number.isFinite(rateLimitUntil) ? rateLimitUntil : 0),
+        };
+        return value;
+      }).finally(() => {
+        if (inFlight === promise) inFlight = null;
+      });
+      inFlight = promise;
+      return promise;
     },
   };
 }

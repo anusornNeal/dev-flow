@@ -19,6 +19,7 @@ import {
   type ZrokServiceState,
   type ZrokShareRecord,
 } from '../../src/server/services/zrokRuntimeService.js';
+import { ZrokRateLimitError, type ZrokRateLimitInfo, type ZrokRateLimitSource } from '../../src/server/services/zrokRateLimitPolicy.js';
 
 const LOCAL_ENV = 'local-env-zid';
 const REMOTE_ENV = 'remote-env-zid';
@@ -30,6 +31,18 @@ const REMOTE_TOKEN = 'remote-share-token';
 const LOCAL_TOKEN = 'local-share-token';
 const LOCAL_HOST = 'LAPTOP-UNVM1ETB\\mixed; LAPTOP-UNVM1ETB; windows; Microsoft Windows 11 Pro; standalone; 10.0.26100; 10.0.26100; amd64';
 const REMOTE_HOST = 'OTHER-PC\\mixed; OTHER-PC; windows; Microsoft Windows 11 Pro; standalone; 10.0.26100; 10.0.26100; amd64';
+
+function makeRateLimit(source: ZrokRateLimitSource, retryAfterMs = 2_000): ZrokRateLimitInfo {
+  const observedAt = Date.parse('2026-08-16T14:00:00.000Z');
+  return {
+    source,
+    firstObservedAt: new Date(observedAt).toISOString(),
+    lastObservedAt: new Date(observedAt).toISOString(),
+    nextAttemptAt: new Date(observedAt + retryAfterMs).toISOString(),
+    retryAfterMs,
+    observedCount: 1,
+  };
+}
 
 interface FixtureState {
   installed: boolean;
@@ -55,6 +68,7 @@ function baseConfig(): ZrokRuntimeConfig {
     target: 'http://127.0.0.1:3000',
     nameSelection: NAME_SELECTION,
     expectedRuntimeInstanceId: 'runtime-local',
+    statusFreshMs: 0,
   };
 }
 
@@ -134,6 +148,7 @@ function makeFixture(overrides: Partial<FixtureState> = {}) {
       return {
         reachable: state.localAgentStatus.reachable,
         shares: state.localAgentStatus.shares.map((share) => ({ ...share })),
+        ...(state.localAgentStatus.rateLimit ? { rateLimit: { ...state.localAgentStatus.rateLimit } } : {}),
       };
     },
     async listNames() {
@@ -151,6 +166,7 @@ function makeFixture(overrides: Partial<FixtureState> = {}) {
         reachable: snapshot.reachable,
         remoteControl: snapshot.remoteControl ?? 'available',
         shares: snapshot.shares.map((share) => ({ ...share })),
+        ...(snapshot.rateLimit ? { rateLimit: { ...snapshot.rateLimit } } : {}),
       };
     },
     async unshareRemote(input) {
@@ -1082,4 +1098,122 @@ test('takeover is unavailable when there is no remote owner', async () => {
   assert.equal(result.code, 'ZROK_TAKEOVER_NOT_AVAILABLE');
   assert.equal(state.unshareCalls, 0);
   assert.equal(state.startCalls, 0);
+});
+
+test('coalesces concurrent runtime status reads and reuses a short fresh result', async () => {
+  const fixture = makeFixture();
+  let probes = 0;
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const originalProbe = fixture.adapter.probePublic.bind(fixture.adapter);
+  fixture.adapter.probePublic = async (input) => {
+    probes += 1;
+    await gate;
+    return originalProbe(input);
+  };
+  const service = createZrokRuntimeService(fixture.adapter, { ...baseConfig(), statusFreshMs: 250 });
+
+  const first = service.getStatus();
+  const second = service.getStatus();
+  const third = service.getStatus();
+  release?.();
+  const statuses = await Promise.all([first, second, third]);
+  assert.equal(statuses.every((status) => status.status === 'online'), true);
+  assert.equal(probes, 1);
+
+  await service.getStatus();
+  assert.equal(probes, 1);
+});
+
+test('public 429 is degraded rate-limit state without changing known local ownership', async () => {
+  const fixture = makeFixture();
+  let probes = 0;
+  fixture.adapter.probePublic = async () => {
+    probes += 1;
+    return {
+      state: 'unknown',
+      latencyMs: 21,
+      routedToThisMachine: null,
+      rateLimit: makeRateLimit('public'),
+    };
+  };
+  const service = createZrokRuntimeService(fixture.adapter, { ...baseConfig(), statusFreshMs: 250 });
+
+  const status = await service.getStatus();
+  assert.equal(status.status, 'degraded');
+  assert.equal(status.share.owner, 'local');
+  assert.equal(status.rateLimit?.source, 'public');
+  assert.equal(status.actionability.canTakeOver, false);
+  assert.equal(status.actionability.canSwitchHere, false);
+  assert.equal(JSON.stringify(status).includes(SECRET_ACCOUNT_TOKEN), false);
+
+  await service.getStatus();
+  assert.equal(probes, 1);
+});
+
+test('control-plane 429 preserves a known remote owner and suppresses takeover', async () => {
+  const fixture = remoteOwnerFixture();
+  fixture.adapter.getAgentStatus = async () => ({
+    reachable: false,
+    remoteControl: 'unavailable',
+    shares: [],
+    rateLimit: makeRateLimit('control'),
+  });
+  const service = createZrokRuntimeService(fixture.adapter, baseConfig());
+  const status = await service.getStatus();
+
+  assert.equal(status.status, 'standby');
+  assert.equal(status.share.owner, 'remote');
+  assert.equal(status.rateLimit?.source, 'control');
+  assert.equal(status.actionability.canTakeOver, false);
+  assert.equal(status.actionability.canSwitchHere, false);
+});
+
+test('rate-limited takeover mutation is attempted once and never replayed automatically', async () => {
+  const fixture = remoteOwnerFixture();
+  fixture.adapter.unshareRemote = async () => {
+    fixture.state.unshareCalls += 1;
+    throw new ZrokRateLimitError(makeRateLimit('control'), true);
+  };
+  const service = createZrokRuntimeService(fixture.adapter, baseConfig());
+  const result = await service.takeOver();
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'ZROK_TAKEOVER_RATE_LIMITED');
+  assert.equal(fixture.state.unshareCalls, 1);
+  assert.equal(fixture.state.startCalls, 0);
+  assert.equal(result.status.rateLimit?.source, 'control');
+  assert.equal(result.status.share.owner, 'unknown');
+  assert.equal(result.status.actionability.canTakeOver, false);
+});
+
+test('default adapter classifies public and control 429 without exposing request secrets', async () => {
+  const nowMs = Date.parse('2026-08-27T03:00:00.000Z');
+  const retryAt = new Date(nowMs + 4_000).toUTCString();
+  const adapter = createDefaultZrokRuntimeAdapter({
+    now: () => nowMs,
+    random: () => 0,
+    fetchImpl: async () => new Response('', {
+      status: 429,
+      headers: { 'retry-after': retryAt },
+    }),
+  });
+
+  const publicProbe = await adapter.probePublic({
+    baseUrl: STABLE_URL,
+    expectedRuntimeInstanceId: 'runtime-local',
+  });
+  assert.equal(publicProbe.state, 'unknown');
+  assert.equal(publicProbe.rateLimit?.source, 'public');
+  assert.equal(publicProbe.rateLimit?.retryAfterMs, 4_000);
+
+  const control = await adapter.getAgentStatus({
+    apiEndpoint: 'https://api-v2.zrok.io',
+    accountToken: SECRET_ACCOUNT_TOKEN,
+    envZId: REMOTE_ENV,
+  });
+  assert.equal(control.reachable, false);
+  assert.equal(control.rateLimit?.source, 'control');
+  assert.equal(control.rateLimit?.retryAfterMs, 4_000);
+  assert.equal(JSON.stringify(control).includes(SECRET_ACCOUNT_TOKEN), false);
 });

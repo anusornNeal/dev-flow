@@ -5,6 +5,7 @@ import {
   createZrokAgentConsoleClient,
   selectTargetShare,
 } from '../../src/server/services/zrokAgentConsoleClient.js';
+import { parseZrokRetryAfterMs } from '../../src/server/services/zrokRateLimitPolicy.js';
 
 function fakeAgentFetch(payloadByPort: Record<number, unknown>, calls: string[] = []) {
   return async (input: URL | string) => {
@@ -276,4 +277,95 @@ test('returns none or ambiguous when target selection is not unique', () => {
   const share = { shareMode: 'public', backendMode: 'proxy', backendEndpoint: 'http://127.0.0.1:3000', frontendEndpoint: 'custom.example.net', status: 'active' };
   assert.equal(selectTargetShare({ reachable: false, shares: [] }, 'http://127.0.0.1:3000').kind, 'none');
   assert.deepEqual(selectTargetShare({ reachable: true, shares: [share, { ...share, frontendEndpoint: 'bare.example.net' }] }, 'http://127.0.0.1:3000'), { kind: 'ambiguous' });
+});
+
+test('parses Retry-After seconds and HTTP dates with bounded delays', () => {
+  const nowMs = Date.parse('2026-08-27T03:00:00.000Z');
+  assert.equal(parseZrokRetryAfterMs('5', nowMs), 5_000);
+  assert.equal(parseZrokRetryAfterMs(new Date(nowMs + 3_000).toUTCString(), nowMs), 3_000);
+  assert.equal(parseZrokRetryAfterMs('not-a-delay', nowMs), null);
+  assert.equal(parseZrokRetryAfterMs('999999', nowMs), 60_000);
+});
+
+test('honors local Agent 429 cooldown without probing other ports or amplifying requests', async () => {
+  let nowMs = Date.parse('2026-08-27T03:00:00.000Z');
+  let calls = 0;
+  let rateLimited = true;
+  const client = createZrokAgentConsoleClient({
+    ports: [8888, 8889],
+    now: () => nowMs,
+    random: () => 0,
+    fetchImpl: async () => {
+      calls += 1;
+      if (rateLimited) return new Response('', { status: 429, headers: { 'retry-after': '2' } });
+      return new Response(JSON.stringify({ shares: [] }), { status: 200 });
+    },
+  });
+
+  const first = await client.getStatus();
+  assert.equal(first.reachable, false);
+  assert.equal(first.rateLimit?.source, 'local-agent');
+  assert.equal(first.rateLimit?.retryAfterMs, 2_000);
+  assert.equal(calls, 1);
+
+  await client.getStatus();
+  nowMs += 1_999;
+  await client.getStatus();
+  assert.equal(calls, 1);
+
+  rateLimited = false;
+  nowMs += 1;
+  const recovered = await client.getStatus();
+  assert.equal(recovered.reachable, true);
+  assert.equal(recovered.rateLimit, undefined);
+  assert.equal(calls, 2);
+});
+
+test('uses capped exponential fallback when Retry-After is missing or malformed', async () => {
+  let nowMs = Date.parse('2026-08-27T03:00:00.000Z');
+  let calls = 0;
+  const client = createZrokAgentConsoleClient({
+    ports: [8888],
+    now: () => nowMs,
+    random: () => 0,
+    fetchImpl: async () => {
+      calls += 1;
+      return new Response('', {
+        status: 429,
+        headers: calls === 1 ? { 'retry-after': 'malformed' } : {},
+      });
+    },
+  });
+
+  const first = await client.getStatus();
+  assert.equal(first.rateLimit?.retryAfterMs, 1_000);
+  assert.equal(first.rateLimit?.observedCount, 1);
+  nowMs += 1_000;
+  const second = await client.getStatus();
+  assert.equal(second.rateLimit?.retryAfterMs, 2_000);
+  assert.equal(second.rateLimit?.observedCount, 2);
+  assert.equal(calls, 2);
+});
+
+test('coalesces concurrent local Agent status discovery into one request', async () => {
+  let calls = 0;
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const client = createZrokAgentConsoleClient({
+    ports: [8888],
+    freshResultMs: 0,
+    fetchImpl: async () => {
+      calls += 1;
+      await gate;
+      return new Response(JSON.stringify({ shares: [] }), { status: 200 });
+    },
+  });
+
+  const first = client.getStatus();
+  const second = client.getStatus();
+  const third = client.getStatus();
+  release?.();
+  const results = await Promise.all([first, second, third]);
+  assert.equal(results.every((status) => status.reachable), true);
+  assert.equal(calls, 1);
 });

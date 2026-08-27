@@ -261,6 +261,36 @@ test('runProjectCommand does not retry a bare timeout without infrastructure evi
   assert.equal(result.infrastructureRecovery?.attempted, false);
 });
 
+test('runProjectCommandAsync settles an ordinary timeout before the durable watchdog and reports termination evidence', async () => {
+  const root = createProject('async-timeout-settlement', {
+    test: 'node scripts/hang.mjs',
+  });
+  fs.writeFileSync(path.join(root, 'scripts', 'hang.mjs'), 'setInterval(() => {}, 1_000);\n', 'utf8');
+  const startedAt = Date.now();
+
+  const result = await runProjectCommandAsync(
+    stateFor(root),
+    {
+      projectId: 'project-command',
+      command: 'test',
+      timeoutMs: 50,
+      infrastructureRetryPolicy: 'resource-safe-once',
+      cacheResult: false,
+      forceFresh: true,
+    },
+    { stdout: () => {}, stderr: () => {} },
+    () => {},
+  );
+
+  assert.equal(result.status, 'timed_out');
+  assert.equal(result.timedOut, true);
+  assert.equal(result.infrastructureRecovery?.attempted, false);
+  assert.equal(result.termination?.trigger, 'timeout');
+  assert.equal(result.termination?.attempted, true);
+  assert.ok(['process-close', 'termination-grace'].includes(String(result.termination?.settledBy)));
+  assert.equal(Date.now() - startedAt < 5_000, true, 'ordinary command timeout must settle before the outer durable watchdog');
+});
+
 test('Windows command termination uses the exact process-tree terminator before root-signal fallback', () => {
   let fallbackKills = 0;
   const child = {
@@ -285,6 +315,15 @@ test('Windows command termination uses the exact process-tree terminator before 
   });
   assert.equal(fallback.mode, 'root-signal');
   assert.equal(fallbackKills, 1);
+
+  const throwingFallback = terminateCommandProcess(child, {
+    platform: 'win32',
+    treeTerminator: () => { throw new Error('taskkill unavailable'); },
+  });
+  assert.equal(throwingFallback.mode, 'root-signal');
+  assert.equal(throwingFallback.terminated, true);
+  assert.match(String(throwingFallback.terminationError || ''), /taskkill unavailable/);
+  assert.equal(fallbackKills, 2);
 });
 
 test('runProjectCommand never retries code failures and never retries infrastructure more than once', () => {

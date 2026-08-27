@@ -174,6 +174,21 @@ export type ProjectCommandDescriptor = {
   configPath?: string;
 };
 
+export type CommandTerminationResult = {
+  mode: 'process-tree' | 'root-signal';
+  attempted: boolean;
+  treeTermination: boolean;
+  terminated: boolean;
+  reason?: string;
+  terminationError?: string;
+};
+
+export type CommandTerminationEvidence = CommandTerminationResult & {
+  trigger: 'timeout';
+  graceMs: number;
+  settledBy: 'process-close' | 'termination-grace';
+};
+
 export interface RunProjectCommandResult {
   ok: boolean;
   responseMode?: 'compact' | 'standard' | 'debug';
@@ -210,6 +225,7 @@ export interface RunProjectCommandResult {
     stderrTruncated: boolean;
   };
   infrastructureRecovery?: VerificationInfrastructureRecoveryAudit;
+  termination?: CommandTerminationEvidence;
   verificationCandidate?: {
     candidateId: string;
     repoRevision: string;
@@ -1829,14 +1845,37 @@ type KillableCommandProcess = {
 export function terminateCommandProcess(
   child: KillableCommandProcess,
   options: { platform?: NodeJS.Platform; treeTerminator?: typeof terminateProcessTree } = {},
-) {
+): CommandTerminationResult {
   const platform = options.platform ?? process.platform;
+  let terminationError = '';
   if (platform === 'win32' && child.pid) {
-    const treeResult = (options.treeTerminator ?? terminateProcessTree)(child.pid, { platform: 'win32' });
-    if (treeResult.terminated) return { mode: 'process-tree' as const, ...treeResult };
+    try {
+      const treeResult = (options.treeTerminator ?? terminateProcessTree)(child.pid, { platform: 'win32' });
+      if (treeResult.terminated) return { mode: 'process-tree', ...treeResult };
+      if (treeResult.reason) terminationError = treeResult.reason;
+    } catch (error) {
+      terminationError = error instanceof Error ? error.message : String(error);
+    }
   }
-  const terminated = child.kill('SIGTERM');
-  return { mode: 'root-signal' as const, attempted: true, treeTermination: false, terminated };
+  try {
+    const terminated = child.kill('SIGTERM');
+    return {
+      mode: 'root-signal',
+      attempted: true,
+      treeTermination: false,
+      terminated,
+      ...(terminationError ? { terminationError } : {}),
+    };
+  } catch (error) {
+    const rootError = error instanceof Error ? error.message : String(error);
+    return {
+      mode: 'root-signal',
+      attempted: true,
+      treeTermination: false,
+      terminated: false,
+      terminationError: [terminationError, rootError].filter(Boolean).join('; '),
+    };
+  }
 }
 
 export async function runProjectCommandAsync(state: AppState, args: Record<string, any>, logger: { stdout: (data: string) => void, stderr: (data: string) => void }, setCancelFn: (fn: () => void) => void): Promise<RunProjectCommandResult> {
@@ -1974,8 +2013,13 @@ export async function runProjectCommandAsync(state: AppState, args: Record<strin
     let settled = false;
     let terminationGraceId: NodeJS.Timeout | undefined;
     let timeoutId: NodeJS.Timeout;
+    let terminationResult: CommandTerminationResult | undefined;
 
-    const settleCommandResult = (code: number | null, signal: NodeJS.Signals | null) => {
+    const settleCommandResult = (
+      code: number | null,
+      signal: NodeJS.Signals | null,
+      settledBy: CommandTerminationEvidence['settledBy'] = 'process-close',
+    ) => {
       if (settled) return;
       settled = true;
       clearTimeout(timeoutId);
@@ -2018,26 +2062,38 @@ export async function runProjectCommandAsync(state: AppState, args: Record<strin
         finalizedResult.status,
         processAggregate,
       );
-      const candidateResult = withVerificationCandidate({ ...finalizedResult, resourceProfile }, sourceRoot, suppliedCandidate, executionIdentity);
+      const candidateResult = withVerificationCandidate({
+        ...finalizedResult,
+        resourceProfile,
+        ...(timedOut && terminationResult ? {
+          termination: {
+            ...terminationResult,
+            trigger: 'timeout' as const,
+            graceMs: PROCESS_TERMINATION_GRACE_MS,
+            settledBy,
+          },
+        } : {}),
+      }, sourceRoot, suppliedCandidate, executionIdentity);
       resolve(attachNoInfrastructureRecoveryAudit(rememberSuccessfulCommandResult(cacheContext, candidateResult, args), args));
     };
 
     timeoutId = setTimeout(() => {
       if (settled) return;
       timedOut = true;
-      terminateCommandProcess(child);
-      terminationGraceId = setTimeout(() => settleCommandResult(null, null), PROCESS_TERMINATION_GRACE_MS);
+      terminationResult = terminateCommandProcess(child);
+      terminationGraceId = setTimeout(() => settleCommandResult(null, null, 'termination-grace'), PROCESS_TERMINATION_GRACE_MS);
       terminationGraceId.unref?.();
     }, timeoutMs);
 
     setCancelFn(() => {
-      if (settled) return;
+      if (settled) return undefined;
+      const cancellationTermination = terminateCommandProcess(child);
       settled = true;
       clearTimeout(timeoutId);
       if (terminationGraceId) clearTimeout(terminationGraceId);
       clearResourceSampling();
-      terminateCommandProcess(child);
       reject(new Error('Job cancelled'));
+      return cancellationTermination;
     });
 
     child.stdout.on('data', (data) => {

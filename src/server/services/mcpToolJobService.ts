@@ -311,7 +311,7 @@ interface QueueEntry extends SchedulerQueueEntry {
 }
 
 const queue: QueueEntry[] = [];
-const activeJobs = new Map<string, { entry: QueueEntry; cancelFn?: () => void; closeLogs?: () => void; leaseGeneration: number }>();
+const activeJobs = new Map<string, { entry: QueueEntry; cancelFn?: () => unknown; closeLogs?: () => void; leaseGeneration: number }>();
 const releasedSchedulerLeases = new Set<string>();
 const testRunners = new Map<string, AsyncRunner>();
 const jobWaiters = new Map<string, Set<(status: ReturnType<typeof getToolJobStatus>) => void>>();
@@ -380,9 +380,46 @@ function getLastActiveJobPhase(jobId: string) {
   return 'execution';
 }
 
+type DeadlineChildTerminationEvidence = {
+  status: 'unavailable' | 'reported' | 'requested' | 'threw';
+  attempted: boolean;
+  terminated?: boolean;
+  mode?: string;
+  treeTermination?: boolean;
+  terminationError?: string;
+};
+
+function cancelActiveJobForDeadline(active: { cancelFn?: () => unknown } | undefined): DeadlineChildTerminationEvidence {
+  if (!active?.cancelFn) return { status: 'unavailable', attempted: false };
+  try {
+    const result = active.cancelFn();
+    if (result && typeof result === 'object') {
+      const reported = result as Record<string, unknown>;
+      return {
+        status: 'reported',
+        attempted: reported.attempted !== false,
+        ...(typeof reported.terminated === 'boolean' ? { terminated: reported.terminated } : {}),
+        ...(typeof reported.mode === 'string' ? { mode: reported.mode } : {}),
+        ...(typeof reported.treeTermination === 'boolean' ? { treeTermination: reported.treeTermination } : {}),
+        ...(typeof reported.terminationError === 'string' && reported.terminationError ? { terminationError: reported.terminationError } : {}),
+      };
+    }
+    return { status: 'requested', attempted: true };
+  } catch (error) {
+    return {
+      status: 'threw',
+      attempted: true,
+      terminated: false,
+      terminationError: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
 function buildExecutionDeadlineEvidence(
   jobId: string,
   deadline: { executionBudgetMs: number; reconciliationGraceMs: number; delayMs: number },
+  args: Record<string, any>,
+  childTermination: DeadlineChildTerminationEvidence = { status: 'unavailable', attempted: false },
 ) {
   return {
     executionBudgetMs: deadline.executionBudgetMs,
@@ -390,6 +427,12 @@ function buildExecutionDeadlineEvidence(
     totalDeadlineMs: deadline.delayMs,
     lastActivePhase: getLastActiveJobPhase(jobId),
     lastLog: getLastLog(jobId),
+    childTermination,
+    attempt: {
+      retryAttempt: Number.isFinite(Number(args?.retryAttempt)) ? Math.max(0, Math.floor(Number(args.retryAttempt))) : 0,
+      infrastructureRetryPolicy: args?.infrastructureRetryPolicy == null ? 'resource-safe-once' : String(args.infrastructureRetryPolicy),
+      recoveryProfile: Boolean(args?.recoveryProfile),
+    },
   };
 }
 
@@ -1395,7 +1438,7 @@ function runDurableJobRecoveryPass(state?: AppState, nowMs = Date.now()) {
       if (job.status !== 'running' || job.toolName !== 'run_project_command' || !job.startedAt || !job.leaseOwner || !job.leaseGeneration) continue;
       const deadline = durableExecutionDeadlineDelayMs({ toolName: job.toolName, state, args: job.args });
       if (!deadline || nowMs < Date.parse(job.startedAt) + deadline.delayMs) continue;
-      const executionDeadline = buildExecutionDeadlineEvidence(job.jobId, deadline);
+      const executionDeadline = buildExecutionDeadlineEvidence(job.jobId, deadline, job.args);
       const failureSummary = `Execution deadline exceeded after ${deadline.executionBudgetMs}ms plus ${deadline.reconciliationGraceMs}ms reconciliation grace. Last active phase: ${executionDeadline.lastActivePhase}.`;
       const guard: JobLeaseGuard = { workerId: job.leaseOwner, leaseGeneration: job.leaseGeneration };
       const wrote = writeJobResult(job.jobId, {
@@ -1909,7 +1952,7 @@ async function processQueue() {
   }
 }
 
-function setJobActiveContext(jobId: string, cancelFn: () => void, leaseGeneration: number) {
+function setJobActiveContext(jobId: string, cancelFn: () => unknown, leaseGeneration: number) {
   const active = activeJobs.get(jobId);
   if (active?.leaseGeneration === leaseGeneration) active.cancelFn = cancelFn;
 }
@@ -2116,8 +2159,10 @@ async function startJob(entry: QueueEntry) {
     executionDeadlineTimer = setTimeout(() => {
       const active = activeJobs.get(entry.jobId);
       if (!active || active.leaseGeneration !== leaseGeneration) return;
+      const childTermination = cancelActiveJobForDeadline(active);
+      active.cancelFn = undefined;
       active.closeLogs?.();
-      const executionDeadline = buildExecutionDeadlineEvidence(entry.jobId, deadline);
+      const executionDeadline = buildExecutionDeadlineEvidence(entry.jobId, deadline, entry.args, childTermination);
       const failureSummary = `Execution deadline exceeded after ${deadline.executionBudgetMs}ms plus ${deadline.reconciliationGraceMs}ms reconciliation grace. Last active phase: ${executionDeadline.lastActivePhase}.`;
       const timeoutResult = {
         ok: false,
@@ -2146,11 +2191,6 @@ async function startJob(entry: QueueEntry) {
       finalizeSingleFlight(entry);
       setImmediate(processQueue);
       void releaseVerificationCandidateForArgsAsync(entry.args).catch(() => {});
-      try {
-        active.cancelFn?.();
-      } catch {
-        // Durable terminalization and capacity release must not depend on cooperative process teardown.
-      }
     }, deadline.delayMs);
     executionDeadlineTimer.unref?.();
   };

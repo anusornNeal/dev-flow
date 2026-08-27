@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-mcp-job-recovery-'));
 process.env.DEVFLOW_DB_PATH = path.join(tempRoot, 'devflow.sqlite');
@@ -32,6 +33,12 @@ async function waitUntil(predicate: () => boolean, message: string) {
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   assert.fail(message);
+}
+
+function git(root: string, args: string[]) {
+  const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', shell: false });
+  assert.equal(result.status, 0, result.stderr || result.stdout || `git ${args.join(' ')} failed`);
+  return String(result.stdout || '').trim();
 }
 
 test('mcp tool jobs persist lifecycle state in SQLite and survive repository cache reset', () => {
@@ -103,6 +110,68 @@ test('recovery deadline wins over a fresh heartbeat once run_project_command exc
   assert.equal(deadlineResult?.executionDeadline?.totalDeadlineMs, 120);
   assert.equal(deadlineResult?.executionDeadline?.lastActivePhase, 'execution');
   assert.match(String(deadlineResult?.executionDeadline?.lastLog || ''), /project command service/);
+  assert.equal(deadlineResult?.executionDeadline?.childTermination?.status, 'unavailable');
+  assert.equal(deadlineResult?.executionDeadline?.childTermination?.attempted, false);
+  assert.deepEqual(deadlineResult?.executionDeadline?.attempt, {
+    retryAttempt: 0,
+    infrastructureRetryPolicy: 'none',
+    recoveryProfile: false,
+  });
+});
+
+test('live run_project_command watchdog captures cooperative child termination before fencing a wedged runner', async () => {
+  db.prepare('DELETE FROM mcp_tool_jobs').run();
+  repo.clearRecentJobCache();
+  const root = fs.mkdtempSync(path.join(tempRoot, 'live-deadline-repo-'));
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({
+    type: 'module',
+    scripts: { typecheck: 'node -e "process.exit(0)"' },
+  }));
+  fs.writeFileSync(path.join(root, 'README.md'), '# live deadline fixture\n');
+  git(root, ['init', '-b', 'develop']);
+  git(root, ['config', 'user.name', 'DevFlow Test']);
+  git(root, ['config', 'user.email', 'devflow@example.test']);
+  git(root, ['add', '.']);
+  git(root, ['commit', '-m', 'initial']);
+
+  const state = { projectsCache: [{ id: 'live-deadline-project', name: 'Live Deadline', repoUrl: 'https://example.com/live-deadline', localPath: root }] } as any;
+  const blocker = deferred();
+  jobService.__setToolJobTestRunner('run_project_command', async (_state: any, _args: any, _logger: any, setCancelFn: (fn: () => unknown) => void) => {
+    setCancelFn(() => {
+      blocker.resolve();
+      return {
+        mode: 'test-stuck-child',
+        attempted: true,
+        treeTermination: true,
+        terminated: false,
+        terminationError: 'child did not acknowledge termination',
+      };
+    });
+    await blocker.promise;
+    return { ok: true, status: 'succeeded' };
+  });
+
+  const job = jobService.enqueueToolJob(state, 'run_project_command', {
+    localPath: root,
+    command: 'typecheck',
+    timeoutMs: 20,
+    infrastructureRetryPolicy: 'none',
+    singleFlight: false,
+  }, 'repo-command');
+
+  try {
+    await waitUntil(() => repo.getJob(job.jobId)?.status === 'timed_out', 'Expected live watchdog to fence the wedged runner');
+    const result = repo.readJobResult(job.jobId)?.result as any;
+    assert.equal(result?.code, 'JOB_EXECUTION_DEADLINE_EXCEEDED');
+    assert.equal(result?.executionDeadline?.childTermination?.status, 'reported');
+    assert.equal(result?.executionDeadline?.childTermination?.attempted, true);
+    assert.equal(result?.executionDeadline?.childTermination?.terminated, false);
+    assert.equal(result?.executionDeadline?.childTermination?.mode, 'test-stuck-child');
+    assert.match(String(result?.executionDeadline?.childTermination?.terminationError || ''), /did not acknowledge/);
+  } finally {
+    blocker.resolve();
+    jobService.__setToolJobTestRunner('run_project_command', null);
+  }
 });
 
 test('expired lease loses heartbeat and fenced-write authority before reaping', () => {

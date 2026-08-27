@@ -42,6 +42,8 @@ export interface VerificationEvidenceCheck {
   name: string;
   command: string;
   status: VerificationEvidenceStatus;
+  scope?: 'targeted' | 'broad' | 'full';
+  repoRevision?: string;
   summary?: string;
   output?: string;
   recordedAt?: string;

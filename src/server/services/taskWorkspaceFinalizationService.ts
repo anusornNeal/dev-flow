@@ -814,6 +814,7 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
             command,
             status: 'passed' as const,
             scope: 'targeted' as const,
+            repoRevision: integration.baseHeadAfter,
             summary: 'Reused authoritative GREEN verification coverage because affected inputs, dependencies, command configuration, and environment are unchanged.',
             recordedAt: targetCoverage.recordedAt || undefined,
           }))

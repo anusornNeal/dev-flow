@@ -358,7 +358,9 @@ test('committed workspace finalizes into local develop and removes clean worktre
   const execution = createExecutionSession({ projectId: task.projectId, taskId: task.id, workspaceId: workspace.workspaceId, branch: workspace.branch, repoRoot: workspace.root });
   advanceExecutionToCommitted(execution.id, 'success');
 
-  const result = finalizeTaskWorkspace(state, { taskId: task.id, workspaceId: workspace.workspaceId, checks });
+  const integratedRevision = git(workspace.root, ['rev-parse', 'HEAD']).stdout;
+  const scopedChecks = checks.map((check) => ({ ...check, scope: 'targeted' as const, repoRevision: integratedRevision }));
+  const result = finalizeTaskWorkspace(state, { taskId: task.id, workspaceId: workspace.workspaceId, checks: scopedChecks });
   assert.equal(result.status, 'completed');
   assert.equal(fs.existsSync(workspace.root), false);
   assert.equal(git(root, ['status', '--porcelain']).stdout, '');
@@ -368,6 +370,8 @@ test('committed workspace finalizes into local develop and removes clean worktre
   assert.equal(saved.branch, 'develop');
   assert.equal(saved.gitEvidence?.commit, git(root, ['rev-parse', 'HEAD']).stdout);
   assert.equal(saved.verificationEvidence?.[0]?.status, 'passed');
+  assert.equal(saved.verificationEvidence?.[0]?.scope, 'targeted');
+  assert.equal(saved.verificationEvidence?.[0]?.repoRevision, saved.gitEvidence?.commit);
   assert.equal(result.qualityDebt.status, 'clear');
   assert.deepEqual(result.qualityDebt.codes, []);
   assert.deepEqual((getTaskFinalizationOperation(result.operation.id)?.verification as any)?.qualityDebtSummary, result.qualityDebt);
@@ -510,6 +514,7 @@ test('reusable coverage finalizes after an unrelated base advance without rerunn
   assert.equal(result.postIntegration?.required, false);
   assert.equal((result.operation.verification as any)?.coverage?.target?.status, 'covered', JSON.stringify((result.operation.verification as any)?.coverage?.target));
   assert.match(String(result.verificationEvidence?.[0]?.summary || ''), /Reused authoritative GREEN verification coverage/);
+  assert.equal(result.verificationEvidence?.[0]?.repoRevision, result.integration.baseHeadAfter);
   assert.equal(getTask(task.id)?.status, 'done');
 });
 

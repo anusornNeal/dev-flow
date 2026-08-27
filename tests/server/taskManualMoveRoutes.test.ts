@@ -71,7 +71,7 @@ function task(id: string) {
   } as any;
 }
 
-for (const id of ['manual-debt-done', 'manual-debt-ready', 'manual-hard', 'strict-default', 'manual-path']) saveTask(task(id));
+for (const id of ['manual-debt-done', 'manual-debt-ready', 'manual-hard', 'strict-default', 'manual-path', 'manual-log-evidence']) saveTask(task(id));
 createAgentRun({ taskId: 'manual-hard', projectId: project.id, agent: 'Codex', model: 'GPT-5.5', effort: 'medium' });
 
 const app = express();
@@ -165,6 +165,24 @@ test('manual DONE accepts quality debt without confirmation, override, or recove
   assert.equal((persisted?.logs || []).some((entry: any) => /\[recovery-disposition\]/.test(entry.message)), false);
   const warningCodes = new Set(buildTaskGitWarnings(persisted).map((entry: any) => entry.code));
   assert.ok(warningCodes.has('DONE_CHECKLIST_DEBT'));
+  assert.ok(warningCodes.has('DONE_VERIFICATION_MISSING'));
+  assert.ok(warningCodes.has('DONE_GIT_EVIDENCE_MISSING'));
+});
+
+test('manual DONE does not promote free-form verification or Git logs into structured evidence', async () => {
+  const before = getTask('manual-log-evidence')!;
+  before.logs = [
+    { id: 'log-check', timestamp: new Date().toISOString(), message: 'Verification passed on develop@deadbeef', type: 'update' },
+    { id: 'log-git', timestamp: new Date().toISOString(), message: 'Integrated Git HEAD deadbeef and all tests GREEN', type: 'update' },
+  ];
+  saveTask(before);
+
+  const result = await post('manual-log-evidence', { status: 'done' }, 'move-to');
+  assert.equal(result.response.status, 200, JSON.stringify(result.body));
+  const persisted = getTask('manual-log-evidence')!;
+  assert.deepEqual(persisted.verificationEvidence || [], []);
+  assert.equal(persisted.gitEvidence, undefined);
+  const warningCodes = new Set(buildTaskGitWarnings(persisted).map((entry: any) => entry.code));
   assert.ok(warningCodes.has('DONE_VERIFICATION_MISSING'));
   assert.ok(warningCodes.has('DONE_GIT_EVIDENCE_MISSING'));
 });

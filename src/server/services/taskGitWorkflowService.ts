@@ -10,6 +10,7 @@ import { getSessionWorkspaceMetadataForRecovery } from './sessionWorkspaceServic
 import { getTaskPrerequisiteBlockers } from './taskDependencyService.js';
 
 const VALID_VERIFICATION_STATUSES = new Set<VerificationEvidenceStatus>(['passed', 'failed', 'not-run']);
+const VALID_VERIFICATION_SCOPES = new Set(['targeted', 'broad', 'full']);
 const UNRESOLVED_BUG_STATUSES = new Set(['open', 'fixing', 'reopened']);
 
 export interface ReviewBlocker {
@@ -59,10 +60,24 @@ export function normalizeVerificationEvidence(args: Record<string, any>, task?: 
         details: { index, status: entry.status ?? entry.result },
       });
     }
+    const rawScope = entry.scope == null ? '' : String(entry.scope).trim().toLowerCase();
+    if (rawScope && !VALID_VERIFICATION_SCOPES.has(rawScope)) {
+      throw createApiError(400, 'INVALID_VERIFICATION_SCOPE', `Verification check '${name}' scope must be targeted, broad, or full.`, {
+        details: { index, scope: entry.scope },
+      });
+    }
+    const repoRevision = entry.repoRevision == null ? '' : String(entry.repoRevision).trim();
+    if (entry.repoRevision != null && !repoRevision) {
+      throw createApiError(400, 'INVALID_VERIFICATION_REPO_REVISION', `Verification check '${name}' repoRevision must be a non-empty revision when supplied.`, {
+        details: { index },
+      });
+    }
     return {
       name,
       command,
       status: rawStatus,
+      ...(rawScope ? { scope: rawScope as VerificationEvidenceCheck['scope'] } : {}),
+      ...(repoRevision ? { repoRevision } : {}),
       summary: typeof entry.summary === 'string' && entry.summary.trim() ? entry.summary.trim() : undefined,
       output: typeof entry.output === 'string' && entry.output.trim() ? entry.output : undefined,
       recordedAt: typeof entry.recordedAt === 'string' && entry.recordedAt.trim() ? entry.recordedAt : now,
@@ -172,10 +187,53 @@ function collectGitEvidence(
   };
 }
 
+function hasExplicitVerificationEvidenceInput(args: Record<string, any>) {
+  return ['checks', 'verificationEvidence', 'tests'].some((key) => Object.prototype.hasOwnProperty.call(args, key));
+}
+
+function evidenceTargetBranch(evidence: TaskGitEvidence) {
+  return String(evidence.targetBranch || evidence.branch || '').trim();
+}
+
+export function deriveParentCompletionVerificationEvidence(task: any, gitEvidence: TaskGitEvidence | undefined): VerificationEvidenceCheck[] {
+  if (!task?.id || !task?.projectId || !gitEvidence?.commit) return [];
+  const children = getTasks().filter((entry) => entry.projectId === task.projectId && entry.parentId === task.id);
+  if (children.length === 0 || children.some((child) => child.status !== 'done')) return [];
+
+  const targetCommit = String(gitEvidence.commit).trim();
+  const targetBranch = evidenceTargetBranch(gitEvidence);
+  const collected: VerificationEvidenceCheck[] = [];
+  for (const child of children) {
+    const childGit = child.gitEvidence as TaskGitEvidence | undefined;
+    if (!childGit || String(childGit.commit || '').trim() !== targetCommit || childGit.workingTreeClean !== true || childGit.diverged === true) return [];
+    if (targetBranch && evidenceTargetBranch(childGit) !== targetBranch) return [];
+
+    const checks = Array.isArray(child.verificationEvidence) ? child.verificationEvidence as VerificationEvidenceCheck[] : [];
+    if (checks.length === 0) return [];
+    for (const check of checks) {
+      const scope = String(check?.scope || '').trim();
+      const repoRevision = String(check?.repoRevision || '').trim();
+      if (check?.status !== 'passed' || !VALID_VERIFICATION_SCOPES.has(scope) || repoRevision !== targetCommit) return [];
+      collected.push({ ...check, scope: scope as VerificationEvidenceCheck['scope'], repoRevision });
+    }
+  }
+
+  const seen = new Set<string>();
+  return collected.filter((check) => {
+    const key = [check.name, check.command, check.scope || '', check.repoRevision || ''].join('\u0000');
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 export function syncTaskWithGit(state: AppState, task: any, args: Record<string, any>) {
   if (!task) throw createApiError(404, 'TASK_NOT_FOUND', 'Task was not found.');
   const gitEvidence = collectGitEvidence(state, task, args, { rejectBranchMismatch: true });
-  const verificationEvidence = normalizeVerificationEvidence(args, task);
+  let verificationEvidence = normalizeVerificationEvidence(args, task);
+  if (!hasExplicitVerificationEvidenceInput(args) && verificationEvidence.length === 0) {
+    verificationEvidence = deriveParentCompletionVerificationEvidence(task, gitEvidence);
+  }
   return {
     gitEvidence,
     verificationEvidence,
@@ -417,7 +475,7 @@ export function validateRecordedReviewSubmission(task: any, args: Record<string,
 
 export function evaluateReviewSubmission(state: AppState, task: any, args: Record<string, any>) {
   if (!task) throw createApiError(404, 'TASK_NOT_FOUND', 'Task was not found.');
-  const verificationEvidence = normalizeVerificationEvidence(args, task);
+  let verificationEvidence = normalizeVerificationEvidence(args, task);
   let gitEvidence: TaskGitEvidence | undefined;
   const readinessDebt: ReviewBlocker[] = [];
   try {
@@ -427,6 +485,9 @@ export function evaluateReviewSubmission(state: AppState, task: any, args: Recor
       code: error?.payload?.code,
       details: error?.payload?.details,
     });
+  }
+  if (gitEvidence && !hasExplicitVerificationEvidenceInput(args) && verificationEvidence.length === 0) {
+    verificationEvidence = deriveParentCompletionVerificationEvidence(task, gitEvidence);
   }
   readinessDebt.push(...validateTaskState(task, gitEvidence, verificationEvidence, args));
   readinessDebt.push(...getExecutionOwnershipReviewBlockers(state, task, args));
@@ -578,6 +639,15 @@ export function buildTaskGitWarnings(task: any): TaskWorkflowWarning[] {
         addWarning(warnings, 'DONE_VERIFICATION_NOT_GREEN', `Task is DONE with ${nonPassing.length} non-passing verification check(s); DONE does not imply GREEN verification.`, 'warning', {
           checks: nonPassing.map((check: any) => ({ name: check?.name, command: check?.command, status: check?.status })),
         });
+      }
+      if (evidence?.commit) {
+        const staleRevision = verificationEvidence.filter((check: any) => check?.repoRevision && String(check.repoRevision) !== String(evidence.commit));
+        if (staleRevision.length > 0) {
+          addWarning(warnings, 'DONE_VERIFICATION_REVISION_MISMATCH', `Task is DONE with ${staleRevision.length} verification check(s) recorded for a different Git revision.`, 'warning', {
+            commit: evidence.commit,
+            checks: staleRevision.map((check: any) => ({ name: check?.name, command: check?.command, repoRevision: check?.repoRevision })),
+          });
+        }
       }
     }
     if (!evidence) {

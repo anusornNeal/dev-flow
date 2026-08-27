@@ -15,6 +15,7 @@ const { createProject } = await import('../../src/server/repositories/projectRep
 const { saveTask, getTasks } = await import('../../src/server/repositories/taskRepository.js');
 const {
   buildTaskGitWarnings,
+  deriveParentCompletionVerificationEvidence,
   evaluateReviewSubmission,
   syncTaskWithGit,
   validateRecordedReviewSubmission,
@@ -100,7 +101,17 @@ test('syncTaskWithGit records published head and normalized verification evidenc
   assert.equal(result.gitEvidence.workingTreeClean, true);
   assert.equal(result.verificationEvidence[0].status, 'passed');
   assert.ok(result.verificationEvidence[0].recordedAt);
+
+  const exactHead = git(fixture.root, ['rev-parse', 'HEAD']);
+  const exact = syncTaskWithGit(fixture.state, task, {
+    remote: 'origin',
+    fetch: false,
+    checks: [{ ...passedChecks[0], scope: 'full', repoRevision: exactHead }],
+  });
+  assert.equal(exact.verificationEvidence[0].scope, 'full');
+  assert.equal(exact.verificationEvidence[0].repoRevision, exactHead);
 });
+
 
 test('workspace-bound Git evidence stays on the implementation worktree when develop advances concurrently', () => {
   const fixture = setup('workspace-evidence');
@@ -239,6 +250,66 @@ test('workspace-bound Git evidence rejects a workspace owned by another project'
     () => syncTaskWithGit(other.state, task, { workspaceId: workspace.workspaceId, remote: 'origin', fetch: false, checks: passedChecks }),
     (error: any) => error?.payload?.code === 'WORKSPACE_NOT_FOUND',
   );
+});
+
+test('parent completion evidence reuses child GREEN checks only when every child is DONE on the exact same revision', () => {
+  const fixture = setup('parent-exact-evidence');
+  const commit = git(fixture.root, ['rev-parse', 'HEAD']);
+  const gitEvidence = {
+    evidenceSource: 'project-root' as const,
+    branch: 'develop',
+    commit,
+    remote: 'origin',
+    trackingBranch: 'origin/develop',
+    remoteHead: commit,
+    ahead: 0,
+    behind: 0,
+    diverged: false,
+    pushed: true,
+    workingTreeClean: true,
+    recordedAt: new Date().toISOString(),
+  };
+  const parent = createTask(fixture.projectId, { id: 'parent-exact', status: 'in-progress', verificationEvidence: [] });
+  const childA = createTask(fixture.projectId, {
+    id: 'child-exact-a', parentId: parent.id, status: 'done', gitEvidence,
+    verificationEvidence: [{ name: 'a', command: 'test:a', status: 'passed', scope: 'targeted', repoRevision: commit }],
+  });
+  const childB = createTask(fixture.projectId, {
+    id: 'child-exact-b', parentId: parent.id, status: 'done', gitEvidence,
+    verificationEvidence: [{ name: 'b', command: 'test:b', status: 'passed', scope: 'broad', repoRevision: commit }],
+  });
+  saveTask(parent);
+  saveTask(childA);
+  saveTask(childB);
+
+  const derived = deriveParentCompletionVerificationEvidence(parent, gitEvidence);
+  assert.deepEqual(derived.map((entry) => entry.command).sort(), ['test:a', 'test:b']);
+  const synced = syncTaskWithGit(fixture.state, parent, { remote: 'origin', fetch: false });
+  assert.equal(synced.verificationEvidence.length, 2);
+  const warningCodes = new Set(buildTaskGitWarnings({ ...synced.task, status: 'done' }).map((entry: any) => entry.code));
+  assert.equal(warningCodes.has('DONE_VERIFICATION_MISSING'), false);
+  assert.equal(warningCodes.has('DONE_GIT_EVIDENCE_MISSING'), false);
+});
+
+test('parent completion evidence rejects stale, unbound, or mixed child revisions', () => {
+  const fixture = setup('parent-stale-evidence');
+  const commit = git(fixture.root, ['rev-parse', 'HEAD']);
+  const gitEvidence = {
+    evidenceSource: 'project-root' as const,
+    branch: 'develop', commit, remote: 'origin', trackingBranch: 'origin/develop', remoteHead: commit,
+    ahead: 0, behind: 0, diverged: false, pushed: true, workingTreeClean: true, recordedAt: new Date().toISOString(),
+  };
+  const parent = createTask(fixture.projectId, { id: 'parent-stale', verificationEvidence: [] });
+  saveTask(parent);
+  saveTask(createTask(fixture.projectId, {
+    id: 'child-stale-a', parentId: parent.id, status: 'done', gitEvidence,
+    verificationEvidence: [{ name: 'a', command: 'test:a', status: 'passed', scope: 'targeted', repoRevision: 'older-revision' }],
+  }));
+  assert.deepEqual(deriveParentCompletionVerificationEvidence(parent, gitEvidence), []);
+
+  const doneParent = { ...parent, status: 'done', gitEvidence, verificationEvidence: [{ name: 'old', command: 'test:old', status: 'passed', scope: 'full', repoRevision: 'older-revision' }] };
+  const warningCodes = new Set(buildTaskGitWarnings(doneParent).map((entry: any) => entry.code));
+  assert.ok(warningCodes.has('DONE_VERIFICATION_REVISION_MISMATCH'));
 });
 
 test('evaluateReviewSubmission returns every material blocker without changing task status', () => {

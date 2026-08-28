@@ -8,6 +8,7 @@ import TaskInspectorShell, {
   TASK_INSPECTOR_MIN_WIDTH_VW,
   clampTaskInspectorWidth,
   resolveTaskInspectorResize,
+  resolveTaskInspectorStatusSummary,
   resolveTaskInspectorTabKey,
 } from '../../src/components/taskDrawer/TaskInspectorShell.js';
 
@@ -74,6 +75,52 @@ test('tab keyboard navigation resolves Arrow, Home, and End keys', () => {
   assert.equal(resolveTaskInspectorTabKey('bugs', 'Home'), 'overview');
   assert.equal(resolveTaskInspectorTabKey('work', 'End'), 'activity');
   assert.equal(resolveTaskInspectorTabKey('subtasks', 'Enter'), null);
+});
+
+test('status summary explains blocked, failed, and review-ready states with an actionable next step', () => {
+  const blocked = resolveTaskInspectorStatusSummary({
+    ...task,
+    liveWork: { blocked: true, ownerLabel: 'Chat A', phaseLabel: 'Verification', activity: 'Waiting for a prerequisite', phaseIndex: 2, phaseCount: 4, updatedAt: '2026-08-08T00:00:00.000Z' },
+  } as any);
+  assert.equal(blocked.label, 'Blocked');
+  assert.match(blocked.summary, /Waiting for a prerequisite/);
+  assert.match(blocked.nextAction, /Resolve the blocker/);
+
+  const failed = resolveTaskInspectorStatusSummary({
+    ...task,
+    activeAgent: undefined,
+    latestAgentRun: { id: 'run-failed', status: 'failed' },
+  } as any);
+  assert.equal(failed.label, 'Run needs attention');
+  assert.match(failed.nextAction, /Open Activity/);
+
+  const review = resolveTaskInspectorStatusSummary({
+    ...task,
+    status: 'ready-for-review',
+    unresolvedBugCount: 2,
+    latestAgentRun: undefined,
+  } as any);
+  assert.equal(review.label, 'Ready for review');
+  assert.match(review.summary, /2 unresolved bug threads/);
+  assert.match(review.nextAction, /Work evidence and Bugs/);
+});
+
+test('shell surfaces current state and next action above technical tabs', () => {
+  const html = renderShell();
+  assert.match(html, /data-testid="task-inspector-status-summary"/);
+  assert.match(html, /Work in progress/);
+  assert.match(html, />Next action</);
+  assert.match(html, /Track the current execution in Activity/);
+});
+
+test('edit mode has visible cancel, save, saving, and error states without duplicate preview action', () => {
+  const html = renderShell({ isEditing: true, isSaving: true, editError: 'Title is required before saving.' });
+  assert.match(html, />Cancel</);
+  assert.match(html, />Saving…</);
+  assert.match(html, /role="alert"/);
+  assert.match(html, /Title is required before saving/);
+  assert.doesNotMatch(html, /aria-label="Edit task"/);
+  assert.doesNotMatch(html, /task-inspector-status-summary/);
 });
 
 test('header and tab bar remain sticky while panel content scrolls', () => {

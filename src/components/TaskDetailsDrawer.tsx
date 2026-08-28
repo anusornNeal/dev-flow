@@ -29,7 +29,7 @@ interface TaskDetailsDrawerProps {
   initialTab?: TaskInspectorTab;
   onSelectTask?: (task: Task) => void;
   onClose: () => void;
-  onUpdate: (updatedTask: Task) => void;
+  onUpdate: (updatedTask: Task) => void | Promise<void>;
   onDelete: (id: string) => void;
   onCreateTask?: (task: Omit<Task, 'id' | 'createdAt' | 'updatedAt' | 'logs'>) => Promise<void>;
   onShowLog?: (run: { id: string; status?: string; agent?: string | null; model?: string | null }) => void;
@@ -320,8 +320,10 @@ export default function TaskDetailsDrawer({
         onToggleEdit={() => edit.setIsEditing((value) => !value)}
         parentTask={parentTask}
         onSelectParent={onSelectTask}
-        onSave={edit.handleSave}
-        onDiscard={() => edit.setIsEditing(false)}
+        onSave={() => { void edit.handleSave(); }}
+        onDiscard={edit.discardEdits}
+        isSaving={edit.isSaving}
+        editError={edit.saveError}
       >
         {content}
       </TaskInspectorShell>

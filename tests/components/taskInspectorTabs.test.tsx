@@ -184,6 +184,36 @@ test('Activity contains notes, agent execution, and task history without visible
   assert.doesNotMatch(html, /Auto[- ]Work/i);
 });
 
+test('inspector long-content contracts wrap technical metadata and progressively disclose raw execution logs', () => {
+  const overviewSource = fs.readFileSync('src/components/taskDrawer/TaskOverviewTab.tsx', 'utf8');
+  const workSource = fs.readFileSync('src/components/taskDrawer/TaskWorkTab.tsx', 'utf8');
+  const activitySource = fs.readFileSync('src/components/taskDrawer/TaskInspectorActivityTab.tsx', 'utf8');
+  const shellSource = fs.readFileSync('src/components/taskDrawer/TaskInspectorShell.tsx', 'utf8');
+
+  assert.match(overviewSource, /df-break-technical/);
+  assert.match(overviewSource, /break-words/);
+  assert.match(workSource, /df-break-technical/);
+  assert.match(activitySource, /Show latest log tail/);
+  assert.match(activitySource, /<details/);
+  assert.match(activitySource, /df-break-technical/);
+  assert.match(shellSource, /overflow-x-hidden/);
+  assert.doesNotMatch(shellSource, /<h2[^>]*truncate/);
+});
+
+test('edit mode keeps labeled core fields and routes save errors through the inspector footer', () => {
+  const overviewSource = fs.readFileSync('src/components/taskDrawer/TaskOverviewTab.tsx', 'utf8');
+  const drawerSource = fs.readFileSync('src/components/TaskDetailsDrawer.tsx', 'utf8');
+  const editStateSource = fs.readFileSync('src/components/taskDrawer/useTaskDrawerEditState.ts', 'utf8');
+
+  for (const field of ['title', 'status', 'priority', 'category', 'description', 'acceptance', 'reasoning']) {
+    assert.match(overviewSource, new RegExp(`htmlFor="task-inspector-${field}"`));
+  }
+  assert.match(drawerSource, /editError=\{edit\.saveError\}/);
+  assert.match(drawerSource, /isSaving=\{edit\.isSaving\}/);
+  assert.match(editStateSource, /Title is required before saving/);
+  assert.match(editStateSource, /await Promise\.resolve\(onUpdate\(updatedTask\)\)/);
+});
+
 test('child task renders parent navigation in the inspector header without the old content banner', () => {
   const parent = makeTask();
   const child: Task = {

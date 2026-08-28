@@ -33,6 +33,20 @@ test('section hides when there is no evidence', () => {
   assert.equal(html, '');
 });
 
+test('loading and error states stay explicit while technical evidence errors can wrap safely', () => {
+  const loading = renderToStaticMarkup(React.createElement(UiDesignEvidenceSection as any, { evidence: [], loading: true }));
+  assert.match(loading, /Loading UI Design evidence/);
+
+  const error = renderToStaticMarkup(React.createElement(UiDesignEvidenceSection as any, {
+    evidence: [],
+    error: 'preview/path/with/a/very/long/technical/error/identifier',
+  }));
+  assert.match(error, /UI Design evidence unavailable/);
+  assert.match(error, /df-feedback--danger/);
+  assert.match(error, /df-break-technical/);
+  assert.match(error, /preview\/path\/with\/a\/very\/long\/technical\/error\/identifier/);
+});
+
 test('section keeps one current card per preview, newest first, and groups older revisions', () => {
   const html = renderToStaticMarkup(React.createElement(UiDesignEvidenceSection as any, {
     evidence: [

@@ -4,11 +4,13 @@ import type { ChecklistItem, LogEntry, Task, TaskCategory, TaskImage, TaskPriori
 
 interface UseTaskDrawerEditStateInput {
   task: Task;
-  onUpdate: (updatedTask: Task) => void;
+  onUpdate: (updatedTask: Task) => void | Promise<void>;
 }
 
 export function useTaskDrawerEditState({ task, onUpdate }: UseTaskDrawerEditStateInput) {
   const [isEditing, setIsEditing] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [editedTitle, setEditedTitle] = useState(task.title);
   const [editedDesc, setEditedDesc] = useState(task.description);
   const [editedBranch, setEditedBranch] = useState(task.branch || '');
@@ -52,6 +54,7 @@ export function useTaskDrawerEditState({ task, onUpdate }: UseTaskDrawerEditStat
       setEditedJiraKey(task.jiraKey || '');
       setEditedRepo(task.repo || '');
       setEditedSourceUrl(task.sourceUrl || '');
+      setSaveError(null);
     }
   }, [task, isEditing]);
 
@@ -63,11 +66,13 @@ export function useTaskDrawerEditState({ task, onUpdate }: UseTaskDrawerEditStat
         method: 'POST',
         body: formData,
       });
-      if (res.ok) {
-        const img = await res.json();
-        setEditedImages((prev) => [...prev, img]);
-      }
+      if (!res.ok) throw new Error(`Image upload failed with status ${res.status}`);
+      const img = await res.json();
+      setEditedImages((prev) => [...prev, img]);
+      setSaveError(null);
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setSaveError(message);
       console.error('Upload failed:', err);
     }
   };
@@ -82,8 +87,18 @@ export function useTaskDrawerEditState({ task, onUpdate }: UseTaskDrawerEditStat
     await uploadImage(blob);
   };
 
-  const handleSave = () => {
-    if (!editedTitle.trim()) return;
+  const discardEdits = () => {
+    if (isSaving) return;
+    setSaveError(null);
+    setIsEditing(false);
+  };
+
+  const handleSave = async () => {
+    if (isSaving) return false;
+    if (!editedTitle.trim()) {
+      setSaveError('Title is required before saving.');
+      return false;
+    }
 
     const filesArray = editedFilesList
       .map((f) => f.trim())
@@ -102,7 +117,7 @@ export function useTaskDrawerEditState({ task, onUpdate }: UseTaskDrawerEditStat
       };
     });
 
-    const newLogs: LogEntry[] = [...task.logs];
+    const newLogs: LogEntry[] = [...(task.logs || [])];
 
     if (editedStatus !== task.status) {
       newLogs.push({
@@ -126,7 +141,7 @@ export function useTaskDrawerEditState({ task, onUpdate }: UseTaskDrawerEditStat
 
     const updatedTask: Task = {
       ...task,
-      title: editedTitle,
+      title: editedTitle.trim(),
       description: editedDesc,
       branch: editedBranch.trim(),
       priority: editedPriority,
@@ -151,13 +166,26 @@ export function useTaskDrawerEditState({ task, onUpdate }: UseTaskDrawerEditStat
       logs: newLogs,
     };
 
-    onUpdate(updatedTask);
-    setIsEditing(false);
+    setIsSaving(true);
+    setSaveError(null);
+    try {
+      await Promise.resolve(onUpdate(updatedTask));
+      setIsEditing(false);
+      return true;
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : String(error));
+      return false;
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return {
     isEditing,
     setIsEditing,
+    isSaving,
+    saveError,
+    discardEdits,
     editedTitle,
     setEditedTitle,
     editedDesc,

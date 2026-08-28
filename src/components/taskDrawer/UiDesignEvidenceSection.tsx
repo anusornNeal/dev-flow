@@ -82,9 +82,9 @@ function SpecSummary({ spec }: { spec: Record<string, unknown> }) {
   return (
     <div className="space-y-2">
       {(screen || purpose) && (
-        <div className="rounded-xl bg-[#f8f1e6] px-3 py-2 text-[12px] dark:bg-[#211a15]">
-          {screen && <div className="font-extrabold text-[#5d493a] dark:text-[#eadfd5]">{screen}</div>}
-          {purpose && <div className="mt-0.5 text-[#8b7665] dark:text-[#b7a79a]">{purpose}</div>}
+        <div className="min-w-0 rounded-xl bg-[var(--df-color-surface-subtle)] px-3 py-2 text-[12px]">
+          {screen && <div className="break-words font-extrabold text-[var(--df-color-text-strong)]">{screen}</div>}
+          {purpose && <div className="mt-0.5 break-words text-[var(--df-color-text-muted)]">{purpose}</div>}
         </div>
       )}
       <details className="rounded-xl border border-[#eadbc5] bg-white/70 p-3 dark:border-[#584a3b] dark:bg-[#211a15]/80">
@@ -108,7 +108,7 @@ function PreviewLink({ href, children }: { href: string; children: React.ReactNo
       href={href}
       target="_blank"
       rel="noopener noreferrer"
-      className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-[#dfccb1] bg-white px-2.5 py-1.5 text-[11px] font-extrabold text-[#34788f] hover:bg-[#f8f1e6] dark:border-[#584a3b] dark:bg-[#211a15] dark:hover:bg-[#2d241d]"
+      className="df-button df-button--secondary min-h-8 min-w-0 max-w-full cursor-pointer px-2.5 py-1.5 text-[var(--df-color-info)]"
     >
       <ExternalLink size={12} />
       {children}
@@ -118,7 +118,7 @@ function PreviewLink({ href, children }: { href: string; children: React.ReactNo
 
 function EvidenceMeta({ item }: { item: TaskUiEvidence }) {
   return (
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] font-bold text-[#927d6c] dark:text-[#ad9d91]">
+    <div className="df-break-technical flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-[10px] font-bold text-[var(--df-color-text-muted)]">
       <span>Revision {item.frozenRevision}</span>
       {item.latestRevision > item.frozenRevision && <span>Latest {item.latestRevision}</span>}
       {item.attachedAt && <span>{new Date(item.attachedAt).toLocaleString()}</span>}
@@ -163,7 +163,7 @@ function CurrentEvidenceCard({ item, previous }: { item: TaskUiEvidence; previou
       <div className="space-y-3 p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
-            <div className="truncate text-[13px] font-black text-[#584638] dark:text-[#f1e7de]">{title}</div>
+            <div className="break-words text-[13px] font-black text-[var(--df-color-text-strong)]">{title}</div>
             <EvidenceMeta item={item} />
           </div>
           {item.latestRevision > item.frozenRevision && item.latestPreviewUrl && (
@@ -204,11 +204,11 @@ export default function UiDesignEvidenceSection({
   if (groups.length === 0 && !loading && !error) return null;
 
   return (
-    <section className="rounded-2xl border border-[#eadbc5] bg-white/75 p-5 dark:border-[#584a3b] dark:bg-[#292119]/65">
+    <section className="df-surface min-w-0 p-5">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h3 className="text-[12px] font-black uppercase tracking-[0.08em] text-[#9a6427] dark:text-[#e0a070]">UI Design</h3>
-          <p className="mt-0.5 text-[11px] text-[#927d6c] dark:text-[#ad9d91]">Frozen task evidence. Preview links refresh with the current DevFlow runtime.</p>
+        <div className="min-w-0">
+          <h3 className="df-heading-sm uppercase tracking-[0.08em]">UI Design</h3>
+          <p className="df-meta mt-1 break-words">Frozen task evidence. Preview links refresh with the current DevFlow runtime.</p>
         </div>
         {onRefresh && (
           <button type="button" onClick={onRefresh} disabled={loading} className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-[#dfccb1] bg-white px-2.5 py-1.5 text-[11px] font-extrabold text-[#7d6048] disabled:cursor-default disabled:opacity-50 dark:border-[#584a3b] dark:bg-[#211a15] dark:text-[#e2d5ca]">
@@ -219,8 +219,9 @@ export default function UiDesignEvidenceSection({
       </div>
 
       {error && (
-        <div className="mb-3 rounded-xl border border-[#e4c9bb] bg-[#fff6f1] px-3 py-2 text-[11px] text-[#8b4f39] dark:border-[#684c3f] dark:bg-[#2b1d18] dark:text-[#efc5b3]">
-          UI Design evidence unavailable: {error}
+        <div className="df-feedback df-feedback--danger mb-3">
+          <div className="df-feedback__summary">UI Design evidence unavailable</div>
+          <div className="df-feedback__detail df-break-technical">{error}</div>
         </div>
       )}
 

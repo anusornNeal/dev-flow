@@ -37,7 +37,7 @@ Create the tunnel in OpenAI once. After DevFlow is running locally, open **Setti
 
 The Tunnel ID is stored as normal local DevFlow settings data. The Runtime API Key is stored in the secure credential vault (Windows DPAPI / macOS Keychain) and the browser receives only masked state after saving.
 
-Environment variables remain supported and take precedence over saved UI values:
+Environment variables remain supported as startup fallbacks. When a Tunnel ID or Runtime API Key is saved in Settings, the saved Settings value takes precedence so stale machine-level environment variables cannot override an in-app replacement:
 
 ```env
 DEVFLOW_OPENAI_TUNNEL_ID="tunnel_your_id"

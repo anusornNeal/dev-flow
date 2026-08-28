@@ -1,6 +1,6 @@
 ﻿import db from '../../db/index.js';
 import { publishServerEvent } from '../services/serverEventService.js';
-import { deleteCredential, getCredential, migrateLegacyCredentials, setCredential, type CredentialKey } from '../services/credentialVaultService.js';
+import { deleteCredential, getCredential, getStoredCredential, migrateLegacyCredentials, setCredential, type CredentialKey } from '../services/credentialVaultService.js';
 
 const SECRET_SETTING_KEYS: CredentialKey[] = ['githubToken', 'jiraToken', 'figmaToken', 'openAiRuntimeApiKey'];
 
@@ -35,7 +35,7 @@ export function getSettings() {
   const githubToken = resolveCredentialWithLegacyFallback('githubToken', map);
   const jiraToken = resolveCredentialWithLegacyFallback('jiraToken', map);
   const figmaToken = resolveCredentialWithLegacyFallback('figmaToken', map);
-  const openAiRuntimeApiKey = resolveCredentialWithLegacyFallback('openAiRuntimeApiKey', map);
+  const openAiRuntimeApiKey = getStoredCredential('openAiRuntimeApiKey') || resolveCredentialWithLegacyFallback('openAiRuntimeApiKey', map);
   const openAiTunnelId = map.get('openAiTunnelId') || '';
   const jiraBaseUrl = map.get('jiraBaseUrl') || process.env.JIRA_BASE_URL || '';
   const jiraEmail = map.get('jiraEmail') || process.env.JIRA_EMAIL || '';

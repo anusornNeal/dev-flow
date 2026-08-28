@@ -74,7 +74,7 @@ A full supervisor shutdown also stops the managed tunnel before stopping the loc
 
 Tunnel startup requires a Tunnel ID and Runtime API Key. They can be saved from **Settings → Integrations → OpenAI Tunnel**. The Tunnel ID is ordinary local settings data; the Runtime API Key uses the existing secure credential vault and is never returned in plaintext by `/api/settings`.
 
-Environment configuration remains supported and has higher precedence than persisted UI values:
+Environment configuration remains supported as a fallback. Persisted OpenAI Tunnel Settings take precedence when present, so replacing a Tunnel ID or Runtime API Key in the UI is effective without first removing stale machine-level environment variables:
 
 ```env
 DEVFLOW_OPENAI_TUNNEL_ID="tunnel_your_id"

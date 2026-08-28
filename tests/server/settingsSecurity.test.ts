@@ -67,6 +67,9 @@ test('saving OpenAI runtime API key uses secure vault while tunnel id remains no
   assert.equal(vault.getCredential('openAiRuntimeApiKey' as any), 'runtime-vault-secret');
   assert.equal((settingsRepository.getSettings() as any).openAiTunnelId, 'tunnel_saved123');
   assert.equal((settingsRepository.getSettings() as any).openAiRuntimeApiKey, 'runtime-vault-secret');
+  process.env.CONTROL_PLANE_API_KEY = 'stale-runtime-env';
+  assert.equal((settingsRepository.getSettings() as any).openAiRuntimeApiKey, 'runtime-vault-secret', 'saved OpenAI Runtime API Key must override stale environment config');
+  delete process.env.CONTROL_PLANE_API_KEY;
   assert.equal((db.prepare("SELECT value FROM settings WHERE key = 'openAiRuntimeApiKey'").get() as any)?.value ?? '', '');
   assert.equal((db.prepare("SELECT value FROM settings WHERE key = 'openAiTunnelId'").get() as any)?.value, 'tunnel_saved123');
 });

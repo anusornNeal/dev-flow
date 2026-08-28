@@ -119,12 +119,12 @@ export function resolveOpenAiTunnelOptions(
   const runtimeKeyEnvName = normalizeRuntimeKeyEnvName(selectRuntimeKeyEnvName(env));
   return {
     alias: normalizeAlias(env.DEVFLOW_TUNNEL_ALIAS),
-    tunnelId: normalizeTunnelId(env.DEVFLOW_OPENAI_TUNNEL_ID || env.CONTROL_PLANE_TUNNEL_ID || persisted.tunnelId),
+    tunnelId: normalizeTunnelId(persisted.tunnelId || env.DEVFLOW_OPENAI_TUNNEL_ID || env.CONTROL_PLANE_TUNNEL_ID),
     mcpServerUrl: `http://127.0.0.1:${port}/mcp`,
     clientBin: String(env.DEVFLOW_TUNNEL_CLIENT_BIN || env.TUNNEL_CLIENT_BIN || 'tunnel-client').trim() || 'tunnel-client',
     stateDir: resolveStateDir(env.TUNNEL_CLIENT_STATE_DIR, rootDir),
     runtimeKeyEnvName,
-    runtimeApiKey: String(env[runtimeKeyEnvName] || persisted.runtimeApiKey || '').trim(),
+    runtimeApiKey: String(persisted.runtimeApiKey || env[runtimeKeyEnvName] || '').trim(),
   };
 }
 
@@ -179,7 +179,7 @@ export function buildOpenAiTunnelInvocation(
     ...env,
     TUNNEL_CLIENT_STATE_DIR: options.stateDir,
   };
-  if (!String(invocationEnv[options.runtimeKeyEnvName] || '').trim() && options.runtimeApiKey) {
+  if (options.runtimeApiKey) {
     invocationEnv[options.runtimeKeyEnvName] = options.runtimeApiKey;
   }
 

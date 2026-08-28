@@ -225,11 +225,15 @@ function environmentCredential(key: CredentialKey) {
   return '';
 }
 
+export function getStoredCredential(key: CredentialKey) {
+  if (!activeProvider.isAvailable()) return '';
+  return activeProvider.get(key);
+}
+
 export function getCredential(key: CredentialKey) {
   const envValue = environmentCredential(key);
   if (envValue) return envValue;
-  if (!activeProvider.isAvailable()) return '';
-  return activeProvider.get(key);
+  return getStoredCredential(key);
 }
 
 export function setCredential(key: CredentialKey, value: string) {

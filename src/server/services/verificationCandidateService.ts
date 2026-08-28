@@ -400,3 +400,168 @@ export function releaseVerificationCandidate(candidateId: string) {
   fs.rmSync(candidateMetadataPath(normalizedId), { force: true });
   return true;
 }
+
+type ReusableVerificationCandidateEntry = {
+  candidate: VerificationCandidateIdentity;
+  sourceRoot: string;
+  activeLeaseId?: string;
+  idleTimer?: NodeJS.Timeout;
+  lastUsedAt: number;
+};
+
+type ReusableVerificationCandidateLeaseState = {
+  reuseKey: string;
+  candidateId: string;
+  pooled: boolean;
+};
+
+export type ReusableVerificationCandidateLease = {
+  candidate: VerificationCandidateIdentity;
+  leaseId: string;
+  reuseKey: string;
+  reused: boolean;
+};
+
+const REUSABLE_CANDIDATE_IDLE_TTL_MS = 15_000;
+const MAX_REUSABLE_CANDIDATES = 16;
+const reusableVerificationCandidates = new Map<string, ReusableVerificationCandidateEntry>();
+const reusableVerificationCandidateLeases = new Map<string, ReusableVerificationCandidateLeaseState>();
+const recentlyReleasedReusableLeaseIds = new Map<string, NodeJS.Timeout>();
+let reusableCandidateCreations = 0;
+let reusableCandidateHits = 0;
+
+function normalizeReuseKey(value: string) {
+  const normalized = String(value || '').trim();
+  if (!normalized || normalized.length > 256) {
+    throw createApiError(400, 'VERIFICATION_CANDIDATE_REUSE_KEY_INVALID', 'Verification candidate reuse key must be 1-256 characters.');
+  }
+  return normalized;
+}
+
+async function resetCandidateForReuse(candidate: VerificationCandidateIdentity) {
+  const resolved = resolveVerificationCandidate(candidate.candidateId);
+  await runGitAsync(resolved.root, ['reset', '--hard', candidate.snapshotCommit], { timeoutMs: 30_000 });
+  await runGitAsync(resolved.root, ['clean', '-fdx', '-e', 'node_modules', '-e', 'node_modules/**'], { timeoutMs: 30_000 });
+  await bridgeInstalledDependenciesAsync(resolved.sourceRoot, resolved.root);
+}
+
+function evictReusableCandidatesIfNeeded() {
+  if (reusableVerificationCandidates.size <= MAX_REUSABLE_CANDIDATES) return;
+  const idle = Array.from(reusableVerificationCandidates.entries())
+    .filter(([, entry]) => !entry.activeLeaseId)
+    .sort((left, right) => left[1].lastUsedAt - right[1].lastUsedAt);
+  for (const [reuseKey, entry] of idle) {
+    if (reusableVerificationCandidates.size <= MAX_REUSABLE_CANDIDATES) break;
+    if (entry.idleTimer) clearTimeout(entry.idleTimer);
+    reusableVerificationCandidates.delete(reuseKey);
+    void releaseVerificationCandidateAsync(entry.candidate.candidateId).catch(() => {});
+  }
+}
+
+export async function acquireReusableVerificationCandidateAsync(
+  repoRoot: string,
+  reuseKeyInput: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<ReusableVerificationCandidateLease> {
+  const sourceRoot = path.resolve(repoRoot);
+  const reuseKey = normalizeReuseKey(reuseKeyInput);
+  let entry = reusableVerificationCandidates.get(reuseKey);
+  if (entry && entry.sourceRoot !== sourceRoot) {
+    if (entry.idleTimer) clearTimeout(entry.idleTimer);
+    reusableVerificationCandidates.delete(reuseKey);
+    if (!entry.activeLeaseId) await releaseVerificationCandidateAsync(entry.candidate.candidateId).catch(() => {});
+    entry = undefined;
+  }
+
+  if (entry && !entry.activeLeaseId && isVerificationCandidateCurrent(sourceRoot, entry.candidate, entry.candidate.commandConfigFingerprint)) {
+    if (entry.idleTimer) clearTimeout(entry.idleTimer);
+    entry.idleTimer = undefined;
+    try {
+      await resetCandidateForReuse(entry.candidate);
+      if (options.signal?.aborted) throw abortCandidateError();
+      const leaseId = `vcl_${crypto.randomBytes(12).toString('hex')}`;
+      entry.activeLeaseId = leaseId;
+      entry.lastUsedAt = Date.now();
+      reusableVerificationCandidateLeases.set(leaseId, { reuseKey, candidateId: entry.candidate.candidateId, pooled: true });
+      reusableCandidateHits += 1;
+      return { candidate: entry.candidate, leaseId, reuseKey, reused: true };
+    } catch {
+      reusableVerificationCandidates.delete(reuseKey);
+      await releaseVerificationCandidateAsync(entry.candidate.candidateId).catch(() => {});
+      entry = undefined;
+    }
+  }
+
+  const candidate = await createVerificationCandidateAsync(sourceRoot, { signal: options.signal });
+  reusableCandidateCreations += 1;
+  const leaseId = `vcl_${crypto.randomBytes(12).toString('hex')}`;
+  if (!entry) {
+    reusableVerificationCandidates.set(reuseKey, {
+      candidate,
+      sourceRoot,
+      activeLeaseId: leaseId,
+      lastUsedAt: Date.now(),
+    });
+    reusableVerificationCandidateLeases.set(leaseId, { reuseKey, candidateId: candidate.candidateId, pooled: true });
+    evictReusableCandidatesIfNeeded();
+    return { candidate, leaseId, reuseKey, reused: false };
+  }
+
+  reusableVerificationCandidateLeases.set(leaseId, { reuseKey, candidateId: candidate.candidateId, pooled: false });
+  return { candidate, leaseId, reuseKey, reused: false };
+}
+
+function rememberReleasedReusableLease(leaseId: string) {
+  const previous = recentlyReleasedReusableLeaseIds.get(leaseId);
+  if (previous) clearTimeout(previous);
+  const timer = setTimeout(() => recentlyReleasedReusableLeaseIds.delete(leaseId), REUSABLE_CANDIDATE_IDLE_TTL_MS + 5_000);
+  timer.unref?.();
+  recentlyReleasedReusableLeaseIds.set(leaseId, timer);
+}
+
+export async function releaseReusableVerificationCandidateLeaseAsync(leaseIdInput: string) {
+  const leaseId = String(leaseIdInput || '').trim();
+  if (!leaseId) return false;
+  const lease = reusableVerificationCandidateLeases.get(leaseId);
+  if (!lease) return recentlyReleasedReusableLeaseIds.has(leaseId);
+  reusableVerificationCandidateLeases.delete(leaseId);
+  rememberReleasedReusableLease(leaseId);
+  if (!lease.pooled) return await releaseVerificationCandidateAsync(lease.candidateId);
+
+  const entry = reusableVerificationCandidates.get(lease.reuseKey);
+  if (!entry || entry.candidate.candidateId !== lease.candidateId || entry.activeLeaseId !== leaseId) {
+    return await releaseVerificationCandidateAsync(lease.candidateId);
+  }
+  entry.activeLeaseId = undefined;
+  entry.lastUsedAt = Date.now();
+  entry.idleTimer = setTimeout(() => {
+    const current = reusableVerificationCandidates.get(lease.reuseKey);
+    if (!current || current.activeLeaseId || current.candidate.candidateId !== lease.candidateId) return;
+    reusableVerificationCandidates.delete(lease.reuseKey);
+    void releaseVerificationCandidateAsync(lease.candidateId).catch(() => {});
+  }, REUSABLE_CANDIDATE_IDLE_TTL_MS);
+  entry.idleTimer.unref?.();
+  return true;
+}
+
+export function getReusableVerificationCandidateDiagnostics() {
+  return {
+    pooled: reusableVerificationCandidates.size,
+    activeLeases: reusableVerificationCandidateLeases.size,
+    creations: reusableCandidateCreations,
+    hits: reusableCandidateHits,
+  };
+}
+
+export async function clearReusableVerificationCandidatesForTests() {
+  for (const entry of reusableVerificationCandidates.values()) {
+    if (entry.idleTimer) clearTimeout(entry.idleTimer);
+    await releaseVerificationCandidateAsync(entry.candidate.candidateId).catch(() => {});
+  }
+  reusableVerificationCandidates.clear();
+  reusableVerificationCandidateLeases.clear();
+  for (const timer of recentlyReleasedReusableLeaseIds.values()) clearTimeout(timer);
+  recentlyReleasedReusableLeaseIds.clear();
+  reusableCandidateCreations = 0;
+  reusableCandidateHits = 0;
+}

@@ -24,7 +24,14 @@ const {
   resolveGradleRecoveryHeapPolicy,
   terminateCommandProcess,
 } = projectCommandService;
-const { isVerificationCandidateCurrent, releaseVerificationCandidate } = await import('../../src/server/services/verificationCandidateService.js');
+const {
+  clearReusableVerificationCandidatesForTests,
+  getReusableVerificationCandidateDiagnostics,
+  isVerificationCandidateCurrent,
+  releaseReusableVerificationCandidateLeaseAsync,
+  releaseVerificationCandidate,
+  resolveVerificationCandidate,
+} = await import('../../src/server/services/verificationCandidateService.js');
 const { clearWorkspaceMetadataCache, getWorkspaceMetadataCacheStats } = await import('../../src/server/services/workspaceMetadataCacheService.js');
 const { createProject: upsertProject } = await import('../../src/server/repositories/projectRepository.js');
 const { invalidateRepoCacheDependencies } = await import('../../src/server/services/repoCacheInvalidationService.js');
@@ -771,6 +778,64 @@ test('benchmark package scripts retain verification candidate and cache identity
   assert.equal(fs.readFileSync(counterPath, 'utf8'), '1');
   assert.equal(first.resourceProfile?.sharedResources.length, describeProjectCommand(state, args).sharedResources.length);
   releaseVerificationCandidate(candidate!.candidateId);
+});
+
+test('verification candidate reuse amortizes sequential checks and restores the immutable snapshot', async () => {
+  await clearReusableVerificationCandidatesForTests();
+  const root = createProject('candidate-reuse', {
+    typecheck: 'node scripts/pass.mjs',
+  });
+  fs.writeFileSync(path.join(root, 'scripts', 'pass.mjs'), 'process.exit(0);\n');
+  fs.writeFileSync(path.join(root, 'value.txt'), 'source\n');
+  const git = (args: string[]) => {
+    const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', shell: false });
+    assert.equal(result.status, 0, result.stderr || result.stdout || `git ${args.join(' ')} failed`);
+  };
+  git(['init']);
+  git(['config', 'user.name', 'DevFlow Test']);
+  git(['config', 'user.email', 'devflow@example.com']);
+  git(['add', '.']);
+  git(['commit', '-m', 'candidate reuse fixture']);
+
+  const state = stateFor(root);
+  const args = { projectId: 'project-command', command: 'typecheck', cacheResult: false, forceFresh: true };
+  const identity = getProjectCommandExecutionIdentity(state, args)!;
+  const candidateIds = new Set<string>();
+  const reuseFlags: boolean[] = [];
+
+  try {
+    for (let index = 0; index < 5; index += 1) {
+      const candidate: any = await prepareProjectCommandVerificationCandidateAsync(state, args, {
+        expectedExecutionKey: identity.key,
+        reuseKey: 'candidate-reuse-generation-1',
+      });
+      assert.ok(candidate);
+      candidateIds.add(candidate.candidateId);
+      reuseFlags.push(candidate.reuseLease?.reused === true);
+      const resolved = resolveVerificationCandidate(candidate.candidateId);
+      if (index === 0) {
+        fs.writeFileSync(path.join(resolved.root, 'value.txt'), 'contaminated\n');
+        fs.writeFileSync(path.join(resolved.root, 'generated.tmp'), 'remove me\n');
+      }
+      if (index === 1) {
+        assert.equal(fs.readFileSync(path.join(resolved.root, 'value.txt'), 'utf8').trim(), 'source');
+        assert.equal(fs.existsSync(path.join(resolved.root, 'generated.tmp')), false);
+      }
+      assert.equal(await releaseReusableVerificationCandidateLeaseAsync(candidate.reuseLease.leaseId), true);
+      if (index === 0) {
+        assert.equal(await releaseReusableVerificationCandidateLeaseAsync(candidate.reuseLease.leaseId), true, 'duplicate release must be idempotent without destroying the idle pooled candidate');
+      }
+    }
+
+    const diagnostics = getReusableVerificationCandidateDiagnostics();
+    assert.equal(candidateIds.size, 1, 'five compatible sequential checks should need only one candidate/worktree');
+    assert.deepEqual(reuseFlags, [false, true, true, true, true]);
+    assert.equal(diagnostics.creations, 1);
+    assert.equal(diagnostics.hits, 4);
+    assert.equal(1 - diagnostics.creations / 5 >= 0.6, true, 'candidate/worktree creation count should fall by at least 60%');
+  } finally {
+    await clearReusableVerificationCandidatesForTests();
+  }
 });
 
 test('runProjectCommand executes a repository-defined YAML preset without package.json', () => {

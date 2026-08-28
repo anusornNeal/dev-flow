@@ -25,9 +25,11 @@ import {
 } from './projectCommandConfigService';
 import { buildRepoAffectedInputIdentity, getRepoDependencyFingerprint, getRepoRevisionForRoot } from './repoRevisionService';
 import {
+  acquireReusableVerificationCandidateAsync,
   createVerificationCandidate,
   createVerificationCandidateAsync,
   isVerificationCandidateCurrent,
+  releaseReusableVerificationCandidateLeaseAsync,
   releaseVerificationCandidate,
   releaseVerificationCandidateAsync,
   resolveVerificationCandidate,
@@ -1519,7 +1521,7 @@ export function bindProjectCommandVerificationCandidate(
 export async function prepareProjectCommandVerificationCandidateAsync(
   state: AppState,
   args: Record<string, any>,
-  options: { expectedExecutionKey?: string; signal?: AbortSignal } = {},
+  options: { expectedExecutionKey?: string; signal?: AbortSignal; reuseKey?: string } = {},
 ): Promise<ProjectCommandVerificationCandidate | null> {
   const sourceRoot = resolveProjectRoot(state, args);
   const descriptor = describeProjectCommand(state, args);
@@ -1533,8 +1535,14 @@ export async function prepareProjectCommandVerificationCandidateAsync(
   }
 
   let candidate: VerificationCandidateIdentity;
+  let reuseLease: Awaited<ReturnType<typeof acquireReusableVerificationCandidateAsync>> | undefined;
   try {
-    candidate = await createVerificationCandidateAsync(sourceRoot, { signal: options.signal });
+    if (options.reuseKey) {
+      reuseLease = await acquireReusableVerificationCandidateAsync(sourceRoot, options.reuseKey, { signal: options.signal });
+      candidate = reuseLease.candidate;
+    } else {
+      candidate = await createVerificationCandidateAsync(sourceRoot, { signal: options.signal });
+    }
   } catch (error: any) {
     const code = error?.payload?.code || error?.code;
     if (code === 'NOT_GIT_REPO') return null;
@@ -1580,9 +1588,12 @@ export async function prepareProjectCommandVerificationCandidateAsync(
         },
       });
     }
-    return bound;
+    return reuseLease
+      ? Object.assign(bound, { reuseLease: { leaseId: reuseLease.leaseId, reuseKey: reuseLease.reuseKey, reused: reuseLease.reused } })
+      : bound;
   } catch (error) {
-    await releaseVerificationCandidateAsync(candidate.candidateId).catch(() => {});
+    if (reuseLease) await releaseReusableVerificationCandidateLeaseAsync(reuseLease.leaseId).catch(() => {});
+    else await releaseVerificationCandidateAsync(candidate.candidateId).catch(() => {});
     throw error;
   }
 }

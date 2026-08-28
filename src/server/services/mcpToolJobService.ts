@@ -6,7 +6,7 @@ import { resolveProjectResourceIdentity, resolveProjectRoot } from './localFileS
 import { isDevFlowRestartPending, readDevFlowRestartState } from '../../lib/devFlowRestart';
 import { getRepoRevisionForRoot } from './repoRevisionService';
 import { getProjectCommandAdmissionPreflight, getProjectCommandDurableExecutionBudgetMs, getProjectCommandExecutionIdentity, prepareProjectCommandVerificationCandidateAsync, type ProjectCommandExecutionIdentity } from './projectCommandService';
-import { isVerificationCandidateCurrent, releaseVerificationCandidate, releaseVerificationCandidateAsync } from './verificationCandidateService';
+import { isVerificationCandidateCurrent, releaseReusableVerificationCandidateLeaseAsync, releaseVerificationCandidate, releaseVerificationCandidateAsync } from './verificationCandidateService';
 import { getToolDefinitionByName } from '../contracts/devflowContract';
 import {
   buildQueueEntryDiagnostics,
@@ -1046,7 +1046,34 @@ function releaseVerificationCandidateForArgs(args: any) {
 
 async function releaseVerificationCandidateForArgsAsync(args: any) {
   const candidateId = verificationCandidateIdForArgs(args);
-  return candidateId ? await releaseVerificationCandidateAsync(candidateId) : false;
+  if (!candidateId) return false;
+  const leaseId = typeof args?.__verificationCandidate?.reuseLease?.leaseId === 'string'
+    ? args.__verificationCandidate.reuseLease.leaseId.trim()
+    : '';
+  if (!leaseId) return await releaseVerificationCandidateAsync(candidateId);
+  const releasedLease = await releaseReusableVerificationCandidateLeaseAsync(leaseId);
+  return releasedLease || await releaseVerificationCandidateAsync(candidateId);
+}
+
+function verificationCandidateReuseKeyForEntry(entry: QueueEntry) {
+  const policy = entry.verification;
+  const admission = entry.args?.__projectCommandAdmissionIdentity;
+  if (!policy?.seriesKey || !policy.candidateKey || policy.generation === undefined || !admission || typeof admission !== 'object') return undefined;
+  if (!String(admission.repoRevision || '').trim() || !String(admission.lineageToken || '').trim()) return undefined;
+  return createHash('sha256').update(stableStringify({
+    resourceKey: entry.resourceKey,
+    seriesKey: policy.seriesKey,
+    candidateKey: policy.candidateKey,
+    generation: policy.generation,
+    repoRevision: admission.repoRevision,
+    lineageToken: admission.lineageToken,
+    commandConfigFingerprint: admission.commandConfigFingerprint,
+    dependencyFingerprint: admission.dependencyFingerprint,
+    environmentFingerprint: admission.environmentFingerprint,
+    platform: admission.platform,
+    arch: admission.arch,
+    runtime: admission.runtime,
+  })).digest('hex');
 }
 
 function projectCommandAdmissionIdentityForArgs(args: any): ProjectCommandExecutionIdentity | null {
@@ -1700,9 +1727,8 @@ export function cancelToolJob(jobId: string) {
 }
 
 function releaseTerminalVerificationCandidate(job: Pick<McpToolJob, 'args'> | null | undefined) {
-  const candidateId = verificationCandidateIdForArgs(job?.args);
-  if (!candidateId) return false;
-  void releaseVerificationCandidateAsync(candidateId).catch(() => {});
+  if (!verificationCandidateIdForArgs(job?.args)) return false;
+  void releaseVerificationCandidateForArgsAsync(job?.args).catch(() => {});
   return true;
 }
 
@@ -2089,12 +2115,13 @@ async function prepareVerificationCandidateForActiveJob(entry: QueueEntry, lease
     const candidate = await prepareProjectCommandVerificationCandidateAsync(entry.state, entry.args, {
       expectedExecutionKey,
       signal: controller.signal,
+      reuseKey: verificationCandidateReuseKeyForEntry(entry),
     });
     if (!candidate) return;
     const nextArgs = { ...entry.args, __verificationCandidate: candidate };
     const persisted = transitionJobStatus(entry.jobId, ['running'], { args: nextArgs }, leaseGuard);
     if (!persisted) {
-      await releaseVerificationCandidateAsync(candidate.candidateId).catch(() => {});
+      await releaseVerificationCandidateForArgsAsync(nextArgs).catch(() => {});
       throw transitionAbortError(entry.jobId);
     }
     entry.args = nextArgs;

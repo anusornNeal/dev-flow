@@ -1,4 +1,4 @@
-import { Activity } from 'lucide-react';
+import { Activity, ShieldCheck, ShieldAlert } from 'lucide-react';
 
 interface AgentExecutionModeSectionProps {
   agentExecutionMode: string;
@@ -10,32 +10,62 @@ export default function AgentExecutionModeSection({
   onAgentExecutionModeChange,
 }: AgentExecutionModeSectionProps) {
   return (
-    <div className="pt-4 mt-2 border-t border-[#ebdcb9] dark:border-[#584a3b] flex flex-col gap-3">
-      <div className="flex flex-col gap-1">
-        <label className="flex items-center gap-1.5 text-sm font-extrabold text-[#534135] dark:text-[#f3eadf]">
-          <Activity size={14} className="text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d]" />
-          Agent Execution Mode
-        </label>
-        <p className="text-[11px] text-[#8a725f] dark:text-[#f3eadf] font-mono leading-relaxed">
-          Controls the permissions granted to agents when DevFlow auto-triggers runs.
-        </p>
+    <section className="df-surface min-w-0 p-4" aria-labelledby="settings-agent-execution-title">
+      <div className="flex min-w-0 items-start gap-2">
+        <Activity size={16} className="mt-0.5 shrink-0 text-[var(--df-color-accent)]" />
+        <div className="min-w-0">
+          <h3 id="settings-agent-execution-title" className="text-sm font-extrabold text-[var(--df-color-text-strong)]">Agent execution</h3>
+          <p className="mt-0.5 break-words text-[10px] leading-relaxed text-[var(--df-color-text-muted)]">
+            Choose the permission boundary used when DevFlow auto-triggers agent runs. This setting is saved with the rest of Settings.
+          </p>
+        </div>
       </div>
-      <div className="flex flex-col gap-2">
-        <label className={`flex items-start gap-2 p-2.5 rounded-lg border cursor-pointer transition-colors ${agentExecutionMode === 'safe' ? 'bg-[#f0f9f4] dark:bg-[#1e1914] border-[#a3e6cd] dark:border-[#584a3b] shadow-sm' : 'bg-white dark:bg-[#1e1914] border-[#ebdcb9] dark:border-[#584a3b] hover:bg-[#faf7f0] dark:bg-[#1e1914] dark:hover:bg-[#1e1914]'}`}>
-          <input type="radio" name="executionMode" value="safe" checked={agentExecutionMode === 'safe'} onChange={() => onAgentExecutionModeChange('safe')} className="mt-1" />
-          <div className="flex flex-col">
-            <span className={`text-[12px] font-bold ${agentExecutionMode === 'safe' ? 'text-[#166534] dark:text-[#f3eadf]' : 'text-[#534135] dark:text-[#f3eadf]'}`}>Safe Mode (Recommended)</span>
-            <span className="text-[10px] text-[#8a725f] dark:text-[#f3eadf] font-mono">Restricts agents to editing files within the workspace. Blocks arbitrary system commands.</span>
+
+      <div className="mt-4 grid gap-2">
+        <label className={`flex min-w-0 cursor-pointer items-start gap-3 rounded-[var(--df-radius-md)] border p-3 transition-colors ${
+          agentExecutionMode === 'safe'
+            ? 'border-[var(--df-color-success)] bg-[var(--df-color-success-surface)]'
+            : 'border-[var(--df-color-border)] bg-[var(--df-color-surface-raised)] hover:border-[var(--df-color-border-strong)]'
+        }`}>
+          <input
+            type="radio"
+            name="executionMode"
+            value="safe"
+            checked={agentExecutionMode === 'safe'}
+            onChange={() => onAgentExecutionModeChange('safe')}
+            className="mt-1 shrink-0"
+          />
+          <ShieldCheck size={16} className="mt-0.5 shrink-0 text-[var(--df-color-success)]" />
+          <div className="min-w-0">
+            <div className="text-[12px] font-extrabold text-[var(--df-color-text-strong)]">Safe Mode · recommended</div>
+            <p className="mt-0.5 break-words text-[10px] leading-relaxed text-[var(--df-color-text-muted)]">
+              Restricts agents to the managed workspace and blocks arbitrary system commands outside the safer execution boundary.
+            </p>
           </div>
         </label>
-        <label className={`flex items-start gap-2 p-2.5 rounded-lg border cursor-pointer transition-colors ${agentExecutionMode === 'full' ? 'bg-[#fff0f0] dark:bg-[#1e1914] border-[#fecaca] dark:border-[#584a3b] shadow-sm' : 'bg-white dark:bg-[#1e1914] border-[#ebdcb9] dark:border-[#584a3b] hover:bg-[#faf7f0] dark:bg-[#1e1914] dark:hover:bg-[#1e1914]'}`}>
-          <input type="radio" name="executionMode" value="full" checked={agentExecutionMode === 'full'} onChange={() => onAgentExecutionModeChange('full')} className="mt-1" />
-          <div className="flex flex-col">
-            <span className={`text-[12px] font-bold ${agentExecutionMode === 'full' ? 'text-[#991b1b] dark:text-[#f3eadf]' : 'text-[#534135] dark:text-[#f3eadf]'}`}>Full Mode</span>
-            <span className="text-[10px] text-[#8a725f] dark:text-[#f3eadf] font-mono">Grants broader permissions. Agents may run arbitrary system commands depending on their config.</span>
+
+        <label className={`flex min-w-0 cursor-pointer items-start gap-3 rounded-[var(--df-radius-md)] border p-3 transition-colors ${
+          agentExecutionMode === 'full'
+            ? 'border-[var(--df-color-danger)] bg-[var(--df-color-danger-surface)]'
+            : 'border-[var(--df-color-border)] bg-[var(--df-color-surface-raised)] hover:border-[var(--df-color-border-strong)]'
+        }`}>
+          <input
+            type="radio"
+            name="executionMode"
+            value="full"
+            checked={agentExecutionMode === 'full'}
+            onChange={() => onAgentExecutionModeChange('full')}
+            className="mt-1 shrink-0"
+          />
+          <ShieldAlert size={16} className="mt-0.5 shrink-0 text-[var(--df-color-danger)]" />
+          <div className="min-w-0">
+            <div className="text-[12px] font-extrabold text-[var(--df-color-text-strong)]">Full Mode · broader permissions</div>
+            <p className="mt-0.5 break-words text-[10px] leading-relaxed text-[var(--df-color-text-muted)]">
+              Allows broader execution. Depending on the agent configuration, system commands may run with fewer restrictions.
+            </p>
           </div>
         </label>
       </div>
-    </div>
+    </section>
   );
 }

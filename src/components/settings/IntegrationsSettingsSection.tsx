@@ -1,4 +1,4 @@
-import { FileText } from 'lucide-react';
+import { Cable, FileText, Network } from 'lucide-react';
 import TokenCredentialField from './TokenCredentialField';
 
 interface TokenFieldState {
@@ -12,6 +12,7 @@ interface TokenFieldState {
 }
 
 interface IntegrationsSettingsSectionProps {
+  section: 'runtime' | 'integrations';
   githubToken: TokenFieldState;
   jiraToken: TokenFieldState;
   figmaToken: TokenFieldState;
@@ -24,7 +25,10 @@ interface IntegrationsSettingsSectionProps {
   onOpenAiTunnelIdChange: (value: string) => void;
 }
 
+const inputClassName = 'df-control min-w-0 w-full font-mono text-sm';
+
 export default function IntegrationsSettingsSection({
+  section,
   githubToken,
   jiraToken,
   figmaToken,
@@ -36,59 +40,75 @@ export default function IntegrationsSettingsSection({
   onJiraEmailChange,
   onOpenAiTunnelIdChange,
 }: IntegrationsSettingsSectionProps) {
-  return (
-    <div className="flex flex-col gap-5 border border-[#e5d4bb] dark:border-[#584a3b] rounded-xl p-4 bg-[#fdfbf6] dark:bg-[#1e1914]">
-      <div>
-        <h3 className="text-sm font-extrabold text-[#534135] dark:text-[#f3eadf] flex items-center gap-1.5 mb-1">
-          <FileText size={14} className="text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d]" />
-          Integrations
-        </h3>
-        <p className="text-[11px] text-[#8a725f] dark:text-[#f3eadf] font-mono">
-          Configure OpenAI Tunnel and external API credentials.
-        </p>
-      </div>
-
-      <div className="flex flex-col gap-3 pt-2 border-t border-[#ebdcb9] dark:border-[#584a3b]">
-        <div>
-          <label className="text-xs font-bold text-[#685547] dark:text-[#f3eadf]">OpenAI Tunnel</label>
-          <p className="text-[11px] text-[#8a725f] dark:text-[#f3eadf] font-mono mt-1">
-            Used by Start DevFlow to connect this machine to the configured OpenAI tunnel.
-          </p>
+  if (section === 'runtime') {
+    return (
+      <section className="df-surface min-w-0 p-4" aria-labelledby="settings-runtime-title">
+        <div className="flex min-w-0 items-start gap-2">
+          <Network size={16} className="mt-0.5 shrink-0 text-[var(--df-color-accent)]" />
+          <div className="min-w-0">
+            <h3 id="settings-runtime-title" className="text-sm font-extrabold text-[var(--df-color-text-strong)]">Runtime connectivity</h3>
+            <p className="mt-0.5 break-words text-[10px] leading-relaxed text-[var(--df-color-text-muted)]">
+              Configure the OpenAI tunnel identity and the runtime API key used when DevFlow starts or reconnects this machine.
+            </p>
+          </div>
         </div>
-        <div className="flex flex-col gap-1.5">
-          <label className="text-[10px] font-bold text-[#8a725f] dark:text-[#f3eadf] uppercase tracking-wider">Tunnel ID</label>
-          <input
-            type="text"
-            value={openAiTunnelId}
-            onChange={event => onOpenAiTunnelIdChange(event.target.value)}
-            placeholder="tunnel_..."
-            spellCheck={false}
-            autoComplete="off"
-            className="w-full px-3 py-2 text-sm font-mono rounded-lg border border-[#ddd0ba] dark:border-[#584a3b] bg-white dark:bg-[#1e1914] text-[#3e3129] dark:text-[#f3eadf] focus:outline-none focus:ring-2 focus:ring-[#d89745]/50 dark:focus:ring-[#e0a070]/50 focus:border-[#d89745] dark:border-[#e0a070] dark:focus:border-[#e0a070] transition"
+
+        <div className="mt-4 grid min-w-0 gap-3">
+          <div className="min-w-0 rounded-[var(--df-radius-md)] border border-[var(--df-color-border)] bg-[var(--df-color-surface-raised)] p-3">
+            <label htmlFor="openAiTunnelId" className="text-xs font-extrabold text-[var(--df-color-text-strong)]">OpenAI Tunnel ID</label>
+            <p className="mt-0.5 break-words text-[10px] leading-relaxed text-[var(--df-color-text-muted)]">
+              Identifies the tunnel used by Start DevFlow. Long IDs stay contained inside this field.
+            </p>
+            <input
+              id="openAiTunnelId"
+              type="text"
+              value={openAiTunnelId}
+              onChange={event => onOpenAiTunnelIdChange(event.target.value)}
+              placeholder="tunnel_..."
+              spellCheck={false}
+              autoComplete="off"
+              className={`${inputClassName} mt-2`}
+            />
+          </div>
+
+          <TokenCredentialField
+            label="Runtime API Key"
+            description="Stored in the secure credential vault. The saved value is never returned to the browser after saving."
+            tokenValue={openAiRuntimeApiKey.value}
+            tokenMasked={openAiRuntimeApiKey.masked}
+            showToken={openAiRuntimeApiKey.show}
+            clearToken={openAiRuntimeApiKey.clear}
+            placeholder="Runtime API key..."
+            inputName="openAiRuntimeApiKey_devflow_prevent_autofill"
+            onTokenChange={openAiRuntimeApiKey.onValueChange}
+            onShowTokenChange={openAiRuntimeApiKey.onShowChange}
+            onClearTokenChange={openAiRuntimeApiKey.onClearChange}
           />
         </div>
-        <TokenCredentialField
-          label="Runtime API Key"
-          description="Stored in the secure credential vault and never returned to the browser after saving."
-          tokenValue={openAiRuntimeApiKey.value}
-          tokenMasked={openAiRuntimeApiKey.masked}
-          showToken={openAiRuntimeApiKey.show}
-          clearToken={openAiRuntimeApiKey.clear}
-          placeholder="Runtime API key..."
-          inputName="openAiRuntimeApiKey_devflow_prevent_autofill"
-          onTokenChange={openAiRuntimeApiKey.onValueChange}
-          onShowTokenChange={openAiRuntimeApiKey.onShowChange}
-          onClearTokenChange={openAiRuntimeApiKey.onClearChange}
-        />
-        <p className="text-[10px] text-[#8a725f] dark:text-[#d6b56d] font-mono">
-          Saved changes apply on the next tunnel start or reconnect.
-        </p>
+
+        <div className="mt-3 rounded-[var(--df-radius-sm)] border border-[var(--df-color-info)] bg-[var(--df-color-info-surface)] px-3 py-2 text-[9.5px] leading-relaxed text-[var(--df-color-text)]">
+          Saved connectivity changes take effect on the next tunnel start or reconnect.
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="df-surface min-w-0 p-4" aria-labelledby="settings-integrations-title">
+      <div className="flex min-w-0 items-start gap-2">
+        <Cable size={16} className="mt-0.5 shrink-0 text-[var(--df-color-accent)]" />
+        <div className="min-w-0">
+          <h3 id="settings-integrations-title" className="text-sm font-extrabold text-[var(--df-color-text-strong)]">Integrations & credentials</h3>
+          <p className="mt-0.5 break-words text-[10px] leading-relaxed text-[var(--df-color-text-muted)]">
+            Configure external services independently. Stored secrets remain masked until you replace or clear them.
+          </p>
+        </div>
       </div>
 
-      <div className="pt-2 border-t border-[#ebdcb9] dark:border-[#584a3b]">
+      <div className="mt-4 grid min-w-0 gap-3">
         <TokenCredentialField
           label="GitHub Access Token"
-          description="Securely stored token for GitHub API integrations. Not shown in logs."
+          description="Securely stored for GitHub API integrations and excluded from logs."
           tokenValue={githubToken.value}
           tokenMasked={githubToken.masked}
           showToken={githubToken.show}
@@ -99,56 +119,62 @@ export default function IntegrationsSettingsSection({
           onShowTokenChange={githubToken.onShowChange}
           onClearTokenChange={githubToken.onClearChange}
         />
-      </div>
 
-      <div className="flex flex-col gap-3 pt-3 border-t border-[#ebdcb9] dark:border-[#584a3b]">
-        <div className="flex flex-col gap-1">
-          <label className="text-xs font-bold text-[#685547] dark:text-[#f3eadf]">Jira Integration</label>
+        <div className="min-w-0 rounded-[var(--df-radius-md)] border border-[var(--df-color-border)] bg-[var(--df-color-surface-raised)] p-3">
+          <div className="flex min-w-0 items-start gap-2">
+            <FileText size={14} className="mt-0.5 shrink-0 text-[var(--df-color-text-muted)]" />
+            <div className="min-w-0">
+              <h4 className="text-xs font-extrabold text-[var(--df-color-text-strong)]">Jira</h4>
+              <p className="mt-0.5 break-words text-[10px] leading-relaxed text-[var(--df-color-text-muted)]">
+                Base URL, account email, and API token are saved together through the main Settings save flow.
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-3 grid min-w-0 gap-3 sm:grid-cols-2">
+            <div className="min-w-0 sm:col-span-2">
+              <label htmlFor="jiraBaseUrl" className="text-[10px] font-extrabold text-[var(--df-color-text-muted)]">Base URL</label>
+              <input
+                id="jiraBaseUrl"
+                type="url"
+                value={jiraBaseUrl}
+                onChange={event => onJiraBaseUrlChange(event.target.value)}
+                placeholder="https://your-domain.atlassian.net"
+                className={`${inputClassName} mt-1.5`}
+              />
+            </div>
+            <div className="min-w-0 sm:col-span-2">
+              <label htmlFor="jiraEmail" className="text-[10px] font-extrabold text-[var(--df-color-text-muted)]">Email</label>
+              <input
+                id="jiraEmail"
+                type="email"
+                value={jiraEmail}
+                onChange={event => onJiraEmailChange(event.target.value)}
+                placeholder="name@company.com"
+                className={`${inputClassName} mt-1.5`}
+              />
+            </div>
+          </div>
+
+          <div className="mt-3">
+            <TokenCredentialField
+              label="Jira Access Token"
+              tokenValue={jiraToken.value}
+              tokenMasked={jiraToken.masked}
+              showToken={jiraToken.show}
+              clearToken={jiraToken.clear}
+              placeholder="Jira token..."
+              inputName="jiraToken_devflow_prevent_autofill"
+              onTokenChange={jiraToken.onValueChange}
+              onShowTokenChange={jiraToken.onShowChange}
+              onClearTokenChange={jiraToken.onClearChange}
+            />
+          </div>
         </div>
 
-        <div className="flex flex-col gap-1.5">
-          <label className="text-[10px] font-bold text-[#8a725f] dark:text-[#f3eadf] uppercase tracking-wider">Base URL</label>
-          <input
-            type="url"
-            value={jiraBaseUrl}
-            onChange={event => onJiraBaseUrlChange(event.target.value)}
-            placeholder="https://your-domain.atlassian.net"
-            className="w-full px-3 py-2 text-sm font-mono rounded-lg border border-[#ddd0ba] dark:border-[#584a3b] bg-white dark:bg-[#1e1914] text-[#3e3129] dark:text-[#f3eadf] focus:outline-none focus:ring-2 focus:ring-[#d89745]/50 dark:focus:ring-[#e0a070]/50 focus:border-[#d89745] dark:border-[#e0a070] dark:focus:border-[#e0a070] transition"
-          />
-        </div>
-
-        <div className="flex flex-col gap-1.5 mt-1">
-          <label className="text-[10px] font-bold text-[#8a725f] dark:text-[#f3eadf] uppercase tracking-wider">Email</label>
-          <input
-            type="email"
-            value={jiraEmail}
-            onChange={event => onJiraEmailChange(event.target.value)}
-            placeholder="name@company.com"
-            className="w-full px-3 py-2 text-sm font-mono rounded-lg border border-[#ddd0ba] dark:border-[#584a3b] bg-white dark:bg-[#1e1914] text-[#3e3129] dark:text-[#f3eadf] focus:outline-none focus:ring-2 focus:ring-[#d89745]/50 dark:focus:ring-[#e0a070]/50 focus:border-[#d89745] dark:border-[#e0a070] dark:focus:border-[#e0a070] transition"
-          />
-        </div>
-
-        <div className="mt-1">
-          <TokenCredentialField
-            label="Access Token"
-            tokenValue={jiraToken.value}
-            tokenMasked={jiraToken.masked}
-            showToken={jiraToken.show}
-            clearToken={jiraToken.clear}
-            placeholder="Jira token..."
-            inputName="jiraToken_devflow_prevent_autofill"
-            labelClassName="text-[10px] font-bold text-[#8a725f] dark:text-[#f3eadf] uppercase tracking-wider"
-            onTokenChange={jiraToken.onValueChange}
-            onShowTokenChange={jiraToken.onShowChange}
-            onClearTokenChange={jiraToken.onClearChange}
-          />
-        </div>
-      </div>
-
-      <div className="pt-3 border-t border-[#ebdcb9] dark:border-[#584a3b]">
         <TokenCredentialField
           label="Figma Access Token"
-          description="Securely stored token for fetching design context from Figma. Not shown in logs."
+          description="Securely stored for fetching design context from Figma and excluded from logs."
           tokenValue={figmaToken.value}
           tokenMasked={figmaToken.masked}
           showToken={figmaToken.show}
@@ -160,6 +186,6 @@ export default function IntegrationsSettingsSection({
           onClearTokenChange={figmaToken.onClearChange}
         />
       </div>
-    </div>
+    </section>
   );
 }

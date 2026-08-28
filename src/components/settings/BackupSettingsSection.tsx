@@ -1,5 +1,5 @@
 import React from 'react';
-import { AlertCircle, CheckCircle2, Database, Download, Loader2, Upload } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Database, Download, FlaskConical, Loader2, ShieldAlert, Upload } from 'lucide-react';
 
 interface BackupSettingsSectionProps {
   fileInputRef: React.RefObject<HTMLInputElement | null>;
@@ -14,6 +14,8 @@ interface RecoverySummary {
   failureReason?: { code: string; reason: string; recordedAt: string } | null;
 }
 
+type RecoveryFeedback = 'idle' | 'success' | 'error';
+
 export default function BackupSettingsSection({
   fileInputRef,
   importStatus,
@@ -23,10 +25,11 @@ export default function BackupSettingsSection({
   const [recovery, setRecovery] = React.useState<RecoverySummary>({});
   const [recoveryAction, setRecoveryAction] = React.useState<'snapshot' | 'drill' | null>(null);
   const [recoveryMessage, setRecoveryMessage] = React.useState('');
+  const [recoveryFeedback, setRecoveryFeedback] = React.useState<RecoveryFeedback>('idle');
 
   const refreshRecovery = React.useCallback(() => {
     fetch('/api/recovery/status', { cache: 'no-store' })
-      .then((response) => response.json())
+      .then(response => response.json())
       .then((data: RecoverySummary) => setRecovery(data))
       .catch(() => undefined);
   }, []);
@@ -38,6 +41,7 @@ export default function BackupSettingsSection({
   const runRecoveryAction = async (action: 'snapshot' | 'drill') => {
     setRecoveryAction(action);
     setRecoveryMessage('');
+    setRecoveryFeedback('idle');
     try {
       const endpoint = action === 'snapshot' ? '/api/recovery/snapshot' : '/api/recovery/restore-drill';
       const response = await fetch(endpoint, { method: 'POST' });
@@ -45,9 +49,13 @@ export default function BackupSettingsSection({
       if (!response.ok) throw new Error(data?.drill?.reason || data?.reason || data?.error || 'Recovery verification failed');
       if (data.recovery) setRecovery(data.recovery);
       else refreshRecovery();
-      setRecoveryMessage(action === 'snapshot' ? 'Verified recovery snapshot created.' : 'Restore drill passed in an isolated temporary database.');
+      setRecoveryMessage(action === 'snapshot'
+        ? 'Verified recovery snapshot created. You can now run a restore drill against it.'
+        : 'Restore drill passed in an isolated temporary database. Your live database was not replaced.');
+      setRecoveryFeedback('success');
     } catch (error: any) {
       setRecoveryMessage(error?.message || 'Recovery verification failed');
+      setRecoveryFeedback('error');
       refreshRecovery();
     } finally {
       setRecoveryAction(null);
@@ -55,35 +63,63 @@ export default function BackupSettingsSection({
   };
 
   const formatRecoveryTime = (value?: string) => value ? new Date(value).toLocaleString() : 'Not yet';
+  const recoveryError = recovery.failureReason
+    ? `${recovery.failureReason.code}: ${recovery.failureReason.reason}`
+    : recoveryFeedback === 'error'
+      ? recoveryMessage
+      : '';
+  const recoverySuccess = !recovery.failureReason && recoveryFeedback === 'success' ? recoveryMessage : '';
 
   return (
-    <div className="pt-4 mt-2 border-t border-[#ebdcb9] dark:border-[#584a3b] flex flex-col gap-2">
-      <div className="flex flex-wrap items-start sm:items-center justify-between gap-4">
-        <div className="flex-1 min-w-[240px]">
-          <label className="flex items-center gap-1.5 text-sm font-extrabold text-[#534135] dark:text-[#f3eadf]">
-            <Database size={14} className="text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d]" />
-            Export Data
-          </label>
-          <p className="text-[11px] text-[#8a725f] dark:text-[#f3eadf] font-mono mt-0.5 leading-relaxed">
-            Download a portable backup of your DevFlow data (projects, tasks, skills) to migrate to another machine. Secrets are excluded.
+    <section className="df-surface min-w-0 p-4" aria-labelledby="settings-backup-title">
+      <div className="flex min-w-0 items-start gap-2">
+        <Database size={16} className="mt-0.5 shrink-0 text-[var(--df-color-accent)]" />
+        <div className="min-w-0">
+          <h3 id="settings-backup-title" className="text-sm font-extrabold text-[var(--df-color-text-strong)]">Backup & recovery</h3>
+          <p className="mt-0.5 break-words text-[10px] leading-relaxed text-[var(--df-color-text-muted)]">
+            Export portable data, verify recoverability, or restore a backup. Secrets are excluded from exported backups.
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+      </div>
+
+      <div className="mt-4 grid min-w-0 gap-3 lg:grid-cols-2">
+        <div className="min-w-0 rounded-[var(--df-radius-md)] border border-[var(--df-color-border)] bg-[var(--df-color-surface-raised)] p-3">
+          <div className="flex min-w-0 items-start gap-2">
+            <Download size={14} className="mt-0.5 shrink-0 text-[var(--df-color-info)]" />
+            <div className="min-w-0">
+              <h4 className="text-xs font-extrabold text-[var(--df-color-text-strong)]">Export current data</h4>
+              <p className="mt-0.5 break-words text-[9.5px] leading-relaxed text-[var(--df-color-text-muted)]">
+                Download projects, tasks, skills, and related local data for migration or safekeeping.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => { window.location.href = '/api/export'; }}
+            type="button"
+            className="df-button df-button--secondary mt-3 !min-w-0"
+          >
+            <Download size={14} /> Export Backup
+          </button>
+        </div>
+
+        <div className="min-w-0 rounded-[var(--df-radius-md)] border border-[var(--df-color-danger)] bg-[var(--df-color-danger-surface)] p-3">
+          <div className="flex min-w-0 items-start gap-2">
+            <ShieldAlert size={14} className="mt-0.5 shrink-0 text-[var(--df-color-danger)]" />
+            <div className="min-w-0">
+              <h4 className="text-xs font-extrabold text-[var(--df-color-danger)]">Restore from backup</h4>
+              <p className="mt-0.5 break-words text-[9.5px] leading-relaxed text-[var(--df-color-text)]">
+                Restoring replaces the current DevFlow database after explicit confirmation. A safety backup is created first, and DevFlow must be restarted after a successful import.
+              </p>
+            </div>
+          </div>
           <button
             onClick={() => fileInputRef.current?.click()}
             type="button"
             disabled={importStatus === 'importing'}
-            className="bg-[#faf7f0] dark:bg-[#1e1914] border border-[#e5d4bb] dark:border-[#584a3b] hover:bg-[#ebdcb9] dark:bg-[#584a3b] dark:hover:bg-[#584a3b] text-[#534135] dark:text-[#f3eadf] px-3 py-1.5 rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 whitespace-nowrap disabled:opacity-50"
+            className="df-button mt-3 !min-w-0 border border-[var(--df-color-danger)] bg-[var(--df-color-danger)] text-white disabled:opacity-60"
           >
             {importStatus === 'importing' ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
-            {importStatus === 'importing' ? 'Importing...' : 'Import Backup'}
-          </button>
-          <button
-            onClick={() => window.location.href = '/api/export'}
-            type="button"
-            className="bg-[#faf7f0] dark:bg-[#1e1914] border border-[#e5d4bb] dark:border-[#584a3b] hover:bg-[#ebdcb9] dark:bg-[#584a3b] dark:hover:bg-[#584a3b] text-[#534135] dark:text-[#f3eadf] px-3 py-1.5 rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 whitespace-nowrap"
-          >
-            <Download size={14} /> Export Backup
+            {importStatus === 'importing' ? 'Restoring…' : 'Choose Backup to Restore'}
           </button>
           <input
             type="file"
@@ -95,52 +131,96 @@ export default function BackupSettingsSection({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 rounded-xl border border-[#eadbc4] dark:border-[#584a3b] bg-[#faf7f0] dark:bg-[#1e1914] p-3">
-        <div className="min-w-0">
-          <div className="text-[11px] font-bold text-[#534135] dark:text-[#f3eadf]">Last verified backup</div>
-          <div className="text-[10px] font-mono text-[#8a725f] dark:text-[#cdbcae] truncate">
-            {formatRecoveryTime(recovery.lastVerifiedGoodBackup?.createdAt)}
-            {recovery.lastVerifiedGoodBackup?.schemaVersion ? ` · ${recovery.lastVerifiedGoodBackup.schemaVersion}` : ''}
+      {importStatus === 'importing' && (
+        <div className="mt-3 flex min-w-0 items-start gap-2 rounded-[var(--df-radius-sm)] border border-[var(--df-color-warning)] bg-[var(--df-color-warning-surface)] px-3 py-2.5" role="status">
+          <Loader2 size={14} className="mt-0.5 shrink-0 animate-spin text-[var(--df-color-warning)]" />
+          <div className="min-w-0">
+            <div className="text-[10px] font-extrabold text-[var(--df-color-warning)]">Restore in progress</div>
+            <p className="mt-0.5 break-words text-[9.5px] leading-relaxed text-[var(--df-color-text)]">Keep DevFlow open until the import finishes. The current database is being replaced only after validation.</p>
           </div>
         </div>
-        <div className="min-w-0">
-          <div className="text-[11px] font-bold text-[#534135] dark:text-[#f3eadf]">Last restore drill</div>
-          <div className="text-[10px] font-mono text-[#8a725f] dark:text-[#cdbcae] truncate">
-            {formatRecoveryTime(recovery.lastRestoreDrill?.checkedAt)}
-            {recovery.lastRestoreDrill ? ` · ${recovery.lastRestoreDrill.ok ? 'Passed' : recovery.lastRestoreDrill.code || 'Failed'}` : ''}
+      )}
+
+      {importMsg && importStatus !== 'importing' && (
+        <div className={`mt-3 flex min-w-0 items-start gap-2 rounded-[var(--df-radius-sm)] border px-3 py-2.5 ${
+          importStatus === 'error'
+            ? 'border-[var(--df-color-danger)] bg-[var(--df-color-danger-surface)]'
+            : 'border-[var(--df-color-success)] bg-[var(--df-color-success-surface)]'
+        }`} role={importStatus === 'error' ? 'alert' : 'status'}>
+          {importStatus === 'error'
+            ? <AlertCircle size={14} className="mt-0.5 shrink-0 text-[var(--df-color-danger)]" />
+            : <CheckCircle2 size={14} className="mt-0.5 shrink-0 text-[var(--df-color-success)]" />}
+          <div className="min-w-0">
+            <div className={`text-[10px] font-extrabold ${importStatus === 'error' ? 'text-[var(--df-color-danger)]' : 'text-[var(--df-color-success)]'}`}>
+              {importStatus === 'error' ? 'Restore failed' : 'Restore completed'}
+            </div>
+            <p className="mt-0.5 break-words text-[9.5px] leading-relaxed text-[var(--df-color-text)]">{importMsg}</p>
           </div>
         </div>
-        <div className="sm:col-span-2 flex flex-wrap gap-2 pt-1">
+      )}
+
+      <div className="mt-4 rounded-[var(--df-radius-md)] border border-[var(--df-color-border)] bg-[var(--df-color-surface-subtle)] p-3">
+        <div className="flex min-w-0 items-start gap-2">
+          <FlaskConical size={14} className="mt-0.5 shrink-0 text-[var(--df-color-accent)]" />
+          <div className="min-w-0">
+            <h4 className="text-xs font-extrabold text-[var(--df-color-text-strong)]">Recovery readiness</h4>
+            <p className="mt-0.5 break-words text-[9.5px] leading-relaxed text-[var(--df-color-text-muted)]">
+              Create a verified snapshot, then run a restore drill in an isolated temporary database before relying on it for recovery.
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-3 grid min-w-0 gap-2 sm:grid-cols-2">
+          <div className="min-w-0 rounded-[var(--df-radius-sm)] border border-[var(--df-color-border)] bg-[var(--df-color-surface-raised)] p-2.5">
+            <div className="text-[10px] font-extrabold text-[var(--df-color-text-strong)]">Last verified backup</div>
+            <div className="mt-0.5 break-words text-[9px] leading-relaxed text-[var(--df-color-text-muted)]" title={recovery.lastVerifiedGoodBackup?.createdAt}>
+              {formatRecoveryTime(recovery.lastVerifiedGoodBackup?.createdAt)}
+              {recovery.lastVerifiedGoodBackup?.schemaVersion ? ` · ${recovery.lastVerifiedGoodBackup.schemaVersion}` : ''}
+            </div>
+          </div>
+          <div className="min-w-0 rounded-[var(--df-radius-sm)] border border-[var(--df-color-border)] bg-[var(--df-color-surface-raised)] p-2.5">
+            <div className="text-[10px] font-extrabold text-[var(--df-color-text-strong)]">Last restore drill</div>
+            <div className="mt-0.5 break-words text-[9px] leading-relaxed text-[var(--df-color-text-muted)]" title={recovery.lastRestoreDrill?.checkedAt}>
+              {formatRecoveryTime(recovery.lastRestoreDrill?.checkedAt)}
+              {recovery.lastRestoreDrill ? ` · ${recovery.lastRestoreDrill.ok ? 'Passed' : recovery.lastRestoreDrill.code || 'Failed'}` : ''}
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-3 flex min-w-0 flex-wrap gap-2">
           <button
             type="button"
             disabled={recoveryAction !== null}
             onClick={() => runRecoveryAction('snapshot')}
-            className="bg-[#fffdfa] dark:bg-[#262019] border border-[#e5d4bb] dark:border-[#584a3b] px-2.5 py-1.5 rounded-lg text-[11px] font-bold disabled:opacity-50"
+            className="df-button df-button--secondary !min-w-0"
           >
+            {recoveryAction === 'snapshot' ? <Loader2 size={13} className="animate-spin" /> : <Database size={13} />}
             {recoveryAction === 'snapshot' ? 'Verifying…' : 'Create verified snapshot'}
           </button>
           <button
             type="button"
             disabled={recoveryAction !== null || !recovery.lastVerifiedGoodBackup}
             onClick={() => runRecoveryAction('drill')}
-            className="bg-[#fffdfa] dark:bg-[#262019] border border-[#e5d4bb] dark:border-[#584a3b] px-2.5 py-1.5 rounded-lg text-[11px] font-bold disabled:opacity-50"
+            className="df-button df-button--secondary !min-w-0"
           >
+            {recoveryAction === 'drill' ? <Loader2 size={13} className="animate-spin" /> : <FlaskConical size={13} />}
             {recoveryAction === 'drill' ? 'Running drill…' : 'Run restore drill'}
           </button>
         </div>
-        {(recovery.failureReason || recoveryMessage) && (
-          <div className={`sm:col-span-2 text-[10px] font-mono ${recovery.failureReason ? 'text-[#991b1b] dark:text-[#fca5a5]' : 'text-[#166534] dark:text-[#a7f3d0]'}`}>
-            {recovery.failureReason ? `${recovery.failureReason.code}: ${recovery.failureReason.reason}` : recoveryMessage}
+
+        {recoveryError && (
+          <div className="mt-3 flex min-w-0 items-start gap-2 rounded-[var(--df-radius-sm)] border border-[var(--df-color-danger)] bg-[var(--df-color-danger-surface)] px-3 py-2.5" role="alert">
+            <AlertCircle size={13} className="mt-0.5 shrink-0 text-[var(--df-color-danger)]" />
+            <span className="min-w-0 break-words text-[9.5px] leading-relaxed text-[var(--df-color-text)]">{recoveryError}</span>
+          </div>
+        )}
+        {recoverySuccess && (
+          <div className="mt-3 flex min-w-0 items-start gap-2 rounded-[var(--df-radius-sm)] border border-[var(--df-color-success)] bg-[var(--df-color-success-surface)] px-3 py-2.5" role="status">
+            <CheckCircle2 size={13} className="mt-0.5 shrink-0 text-[var(--df-color-success)]" />
+            <span className="min-w-0 break-words text-[9.5px] leading-relaxed text-[var(--df-color-text)]">{recoverySuccess}</span>
           </div>
         )}
       </div>
-
-      {importMsg && (
-        <div className={`mt-2 p-2 rounded-lg text-xs font-mono flex items-start gap-2 ${importStatus === 'error' ? 'bg-[#fff0f0] dark:bg-[#1e1914] text-[#991b1b] dark:text-[#f3eadf] border border-[#fecaca] dark:border-[#584a3b]' : 'bg-[#f0f9f4] dark:bg-[#1e1914] text-[#166534] dark:text-[#f3eadf] border border-[#a3e6cd] dark:border-[#584a3b]'}`}>
-          {importStatus === 'error' ? <AlertCircle size={14} className="mt-0.5 shrink-0" /> : <CheckCircle2 size={14} className="mt-0.5 shrink-0" />}
-          <span>{importMsg}</span>
-        </div>
-      )}
-    </div>
+    </section>
   );
 }

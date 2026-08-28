@@ -275,36 +275,112 @@ export function updateExecutionSessionRecord(
   return getExecutionSessionById(id);
 }
 
-export function saveExecutionSessionEvidence(input: SaveExecutionSessionEvidenceInput) {
+function evidenceLogicalConflict(input: SaveExecutionSessionEvidenceInput, existing: ExecutionSessionEvidenceRecord) {
+  const error = new Error(`Execution evidence logical slot is already occupied for kind '${input.kind}'.`) as Error & {
+    code?: string;
+    details?: Record<string, unknown>;
+  };
+  error.code = 'EXECUTION_SESSION_EVIDENCE_LOGICAL_CONFLICT';
+  error.details = {
+    kind: input.kind,
+    path: input.path,
+    contextBound: input.contextHandle != null,
+    existingEvidenceId: existing.id,
+    requestedEvidenceId: input.id,
+  };
+  return error;
+}
+
+function getExecutionSessionEvidenceByLogicalKey(input: Pick<SaveExecutionSessionEvidenceInput, 'sessionId' | 'kind' | 'path' | 'contextHandle'>) {
+  // SQLite UNIQUE indexes treat NULL values as distinct. Preserve that schema behavior so
+  // lifecycle/history evidence with nullable logical-key members can coexist intentionally.
+  if (input.path == null || input.contextHandle == null) return null;
+  return normalizeEvidence(db.prepare(`
+    SELECT * FROM execution_session_evidence
+    WHERE sessionId = ? AND kind = ? AND path = ? AND contextHandle = ?
+    ORDER BY rowid DESC
+    LIMIT 1
+  `).get(input.sessionId, input.kind, input.path, input.contextHandle));
+}
+
+function isCompatibleLogicalEvidence(existing: ExecutionSessionEvidenceRecord, input: SaveExecutionSessionEvidenceInput) {
+  return existing.revisionIdentity === input.revisionIdentity;
+}
+
+function updateEquivalentLogicalEvidence(existing: ExecutionSessionEvidenceRecord, input: SaveExecutionSessionEvidenceInput) {
   db.prepare(`
-    INSERT INTO execution_session_evidence (
-      id, sessionId, kind, path, repoRevision, fileRevision, revisionIdentity, contextHandle,
-      stale, metadataJson, createdAt, updatedAt
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET
-      kind = excluded.kind,
-      path = excluded.path,
-      repoRevision = excluded.repoRevision,
-      fileRevision = excluded.fileRevision,
-      revisionIdentity = excluded.revisionIdentity,
-      contextHandle = excluded.contextHandle,
-      stale = excluded.stale,
-      metadataJson = excluded.metadataJson,
-      updatedAt = excluded.updatedAt
+    UPDATE execution_session_evidence SET
+      repoRevision = ?,
+      fileRevision = ?,
+      revisionIdentity = ?,
+      stale = ?,
+      metadataJson = ?,
+      updatedAt = ?
+    WHERE id = ?
   `).run(
-    input.id,
-    input.sessionId,
-    input.kind,
-    input.path,
     input.repoRevision,
     input.fileRevision,
     input.revisionIdentity,
-    input.contextHandle,
     input.stale ? 1 : 0,
     JSON.stringify(input.metadata || {}),
-    input.createdAt,
     input.updatedAt,
+    existing.id,
   );
+  return getExecutionSessionEvidenceById(existing.id)!;
+}
+
+function resolveLogicalEvidenceCollision(input: SaveExecutionSessionEvidenceInput) {
+  const existing = getExecutionSessionEvidenceByLogicalKey(input);
+  if (!existing) return null;
+  if (!isCompatibleLogicalEvidence(existing, input)) throw evidenceLogicalConflict(input, existing);
+  return updateEquivalentLogicalEvidence(existing, input);
+}
+
+export function saveExecutionSessionEvidence(input: SaveExecutionSessionEvidenceInput) {
+  const existingByLogicalKey = getExecutionSessionEvidenceByLogicalKey(input);
+  if (existingByLogicalKey && existingByLogicalKey.id !== input.id) {
+    if (!isCompatibleLogicalEvidence(existingByLogicalKey, input)) {
+      throw evidenceLogicalConflict(input, existingByLogicalKey);
+    }
+    return updateEquivalentLogicalEvidence(existingByLogicalKey, input);
+  }
+
+  try {
+    db.prepare(`
+      INSERT INTO execution_session_evidence (
+        id, sessionId, kind, path, repoRevision, fileRevision, revisionIdentity, contextHandle,
+        stale, metadataJson, createdAt, updatedAt
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        kind = excluded.kind,
+        path = excluded.path,
+        repoRevision = excluded.repoRevision,
+        fileRevision = excluded.fileRevision,
+        revisionIdentity = excluded.revisionIdentity,
+        contextHandle = excluded.contextHandle,
+        stale = excluded.stale,
+        metadataJson = excluded.metadataJson,
+        updatedAt = excluded.updatedAt
+    `).run(
+      input.id,
+      input.sessionId,
+      input.kind,
+      input.path,
+      input.repoRevision,
+      input.fileRevision,
+      input.revisionIdentity,
+      input.contextHandle,
+      input.stale ? 1 : 0,
+      JSON.stringify(input.metadata || {}),
+      input.createdAt,
+      input.updatedAt,
+    );
+  } catch (error: any) {
+    if (error?.code !== 'SQLITE_CONSTRAINT_UNIQUE') throw error;
+    const resolved = resolveLogicalEvidenceCollision(input);
+    if (resolved) return resolved;
+    throw error;
+  }
   return getExecutionSessionEvidenceById(input.id)!;
 }
 

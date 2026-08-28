@@ -32,15 +32,27 @@ export interface ApiResult<T> {
 
 export type AgentOfficeQueueState = 'ready' | 'execution' | 'attention' | 'blocked';
 
+export type AgentOfficeProjectIdentity = { projectId: string; projectName: string };
+export type AgentOfficeSourcePage = { total: number; returned: number; limit: number; truncated: boolean };
+
 export interface AgentOfficeProjection {
   schema: 'agent-office-monitor.v1';
-  projectId: string;
+  scope: 'global';
+  projectId: null;
   generatedAt: string;
   limit: number;
+  partial: boolean;
+  projects: { total: number; items: AgentOfficeProjectIdentity[] };
+  sources: {
+    tasks: AgentOfficeSourcePage;
+    activeExecutions: AgentOfficeSourcePage;
+    checkpoints: AgentOfficeSourcePage;
+  };
   workers: {
     total: number;
     truncated: boolean;
-    items: Array<{
+    sourceTruncated: boolean;
+    items: Array<AgentOfficeProjectIdentity & {
       taskId: string;
       displayId: string | null;
       title: string;
@@ -63,7 +75,7 @@ export interface AgentOfficeProjection {
     total: number;
     truncated: boolean;
     sourceTruncated: boolean;
-    items: Array<{
+    items: Array<AgentOfficeProjectIdentity & {
       taskId: string;
       displayId: string | null;
       title: string;
@@ -80,7 +92,7 @@ export interface AgentOfficeProjection {
   };
   queue: {
     counts: Record<AgentOfficeQueueState, number>;
-    items: Record<AgentOfficeQueueState, Array<{
+    items: Record<AgentOfficeQueueState, Array<AgentOfficeProjectIdentity & {
       taskId: string;
       displayId: string | null;
       title: string;
@@ -88,11 +100,13 @@ export interface AgentOfficeProjection {
       reasons: Array<{ code: string; message: string }>;
     }>>;
     truncated: Record<AgentOfficeQueueState, boolean>;
+    sourceTruncated: boolean;
+    partial: boolean;
   };
 }
 
 export const apiClient = {
-  async fetchJson<T>(method: string, path: string, body?: unknown): Promise<ApiResult<T>> {
+  async fetchJson<T>(method: string, path: string, body?: unknown, options: { signal?: AbortSignal } = {}): Promise<ApiResult<T>> {
     const correlationId = newCorrelationId();
     const headers: Record<string, string> = {
       Accept: 'application/json',
@@ -106,6 +120,7 @@ export const apiClient = {
       method,
       headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal: options.signal,
     });
     const parsed = await parseBody(response);
     const durationMs = Date.now() - startedAt;
@@ -133,13 +148,13 @@ export const apiClient = {
   },
 };
 
-export const apiGet = <T>(path: string) => apiClient.fetchJson<T>('GET', path);
+export const apiGet = <T>(path: string, options?: { signal?: AbortSignal }) => apiClient.fetchJson<T>('GET', path, undefined, options);
 export const apiPost = <T>(path: string, body?: unknown) => apiClient.fetchJson<T>('POST', path, body);
 export const apiPut = <T>(path: string, body?: unknown) => apiClient.fetchJson<T>('PUT', path, body);
 export const apiDelete = <T>(path: string) => apiClient.fetchJson<T>('DELETE', path);
 
-export async function getAgentOfficeProjection(projectId: string, limit = 20): Promise<AgentOfficeProjection> {
+export async function getAgentOfficeProjection(limit = 20, options: { signal?: AbortSignal } = {}): Promise<AgentOfficeProjection> {
   const boundedLimit = Number.isFinite(limit) ? Math.max(1, Math.min(50, Math.floor(limit))) : 20;
-  const params = new URLSearchParams({ projectId, limit: String(boundedLimit) });
-  return (await apiGet<AgentOfficeProjection>(`/api/agent-office?${params.toString()}`)).data;
+  const params = new URLSearchParams({ limit: String(boundedLimit) });
+  return (await apiGet<AgentOfficeProjection>(`/api/agent-office?${params.toString()}`, options)).data;
 }

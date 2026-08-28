@@ -139,6 +139,9 @@ type ReactiveRefreshOptions = {
   eventTypes: readonly ServerEventType[];
   projectId?: string | null;
   fallbackMs?: number;
+  initialRefresh?: boolean;
+  onAvailable?: () => void;
+  onUnavailable?: () => void;
   subscribe?: typeof subscribeServerEvents;
   setIntervalFn?: (callback: () => void, delay: number) => any;
   clearIntervalFn?: (handle: any) => void;
@@ -174,7 +177,7 @@ export function startReactiveServerRefresh(options: ReactiveRefreshOptions) {
     fallbackTimer = setEvery(refresh, fallbackMs);
   };
 
-  refresh();
+  if (options.initialRefresh !== false) refresh();
   startFallback();
   const unsubscribe = subscribe((event) => {
     if (event.type === 'stream.reset') {
@@ -185,8 +188,14 @@ export function startReactiveServerRefresh(options: ReactiveRefreshOptions) {
     if (options.projectId && event.projectId && options.projectId !== event.projectId) return;
     scheduleEventRefresh();
   }, {
-    onAvailable: stopFallback,
-    onUnavailable: startFallback,
+    onAvailable: () => {
+      stopFallback();
+      options.onAvailable?.();
+    },
+    onUnavailable: () => {
+      startFallback();
+      options.onUnavailable?.();
+    },
   });
 
   return () => {

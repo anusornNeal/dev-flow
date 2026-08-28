@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
   AlertTriangle,
@@ -12,9 +12,11 @@ import {
   UserRoundCog,
 } from 'lucide-react';
 import { getAgentOfficeProjection, type AgentOfficeProjection, type AgentOfficeQueueState } from '../client/apiClient';
+import { GLOBAL_RUNTIME_INVALIDATION_EVENT_TYPES, startReactiveServerRefresh } from '../lib/serverEvents';
 
-const REFRESH_INTERVAL_MS = 5_000;
 const STALE_SNAPSHOT_MS = 15_000;
+const FALLBACK_REFRESH_MS = 60_000;
+const LOCAL_AGE_TICK_MS = 15_000;
 
 const QUEUE_META: Record<AgentOfficeQueueState, { label: string; description: string }> = {
   ready: { label: 'Ready', description: 'Runnable work' },
@@ -47,6 +49,89 @@ export function isAgentOfficeSnapshotStale(generatedAt: string | null | undefine
   return !Number.isFinite(generatedAtMs) || nowMs - generatedAtMs > STALE_SNAPSHOT_MS;
 }
 
+export function advanceActivityAge(ageMs: number | null | undefined, generatedAt: string | null | undefined, nowMs = Date.now()) {
+  if (ageMs == null || !Number.isFinite(ageMs)) return null;
+  const generatedAtMs = Date.parse(String(generatedAt || ''));
+  return Number.isFinite(generatedAtMs) ? ageMs + Math.max(0, nowMs - generatedAtMs) : ageMs;
+}
+
+type AgentOfficeRefreshGateOptions<T> = {
+  fetchSnapshot: (signal: AbortSignal) => Promise<T>;
+  isVisible: () => boolean;
+  onStart?: (background: boolean) => void;
+  onSnapshot: (snapshot: T) => void;
+  onError: (error: unknown) => void;
+  onSettled?: () => void;
+  schedule?: (callback: () => void) => void;
+};
+
+export function createAgentOfficeRefreshGate<T>(options: AgentOfficeRefreshGateOptions<T>) {
+  let disposed = false;
+  let inFlight: Promise<void> | null = null;
+  let dirty = false;
+  let sequence = 0;
+  let controller: AbortController | null = null;
+  const schedule = options.schedule || ((callback: () => void) => queueMicrotask(callback));
+
+  const request = (background = true): Promise<void> => {
+    if (disposed) return Promise.resolve();
+    if (!options.isVisible()) {
+      dirty = true;
+      return Promise.resolve();
+    }
+    if (inFlight) {
+      dirty = true;
+      return inFlight;
+    }
+
+    dirty = false;
+    const requestId = ++sequence;
+    const currentController = new AbortController();
+    controller = currentController;
+    options.onStart?.(background);
+    const run = (async () => {
+      try {
+        const next = await options.fetchSnapshot(currentController.signal);
+        if (!disposed && !currentController.signal.aborted && requestId === sequence) options.onSnapshot(next);
+      } catch (error) {
+        if (!disposed && !currentController.signal.aborted && requestId === sequence) options.onError(error);
+      } finally {
+        if (controller === currentController) controller = null;
+        inFlight = null;
+        if (!disposed) options.onSettled?.();
+        if (!disposed && dirty && options.isVisible()) {
+          dirty = false;
+          schedule(() => { void request(true); });
+        }
+      }
+    })();
+    inFlight = run;
+    return run;
+  };
+
+  return {
+    request,
+    invalidate: () => {
+      dirty = true;
+      return request(true);
+    },
+    visibilityRestored: (force = false) => {
+      if (force) dirty = true;
+      return dirty ? request(true) : Promise.resolve();
+    },
+    dispose: () => {
+      if (disposed) return;
+      disposed = true;
+      dirty = false;
+      sequence += 1;
+      controller?.abort();
+      controller = null;
+    },
+    isInFlight: () => Boolean(inFlight),
+    isDirty: () => dirty,
+  };
+}
+
 function sourceLabel(source: string) {
   if (source === 'devflow-managed') return 'DevFlow managed';
   if (source === 'worker-native') return 'Local native';
@@ -61,7 +146,6 @@ function statusDotClass(indicator: string | null, stale: boolean) {
 }
 
 interface AgentOfficePageProps {
-  projectId: string;
   onOpenTask: (taskId: string) => void | Promise<void>;
   initialSnapshot?: AgentOfficeProjection | null;
   initialError?: string | null;
@@ -69,8 +153,9 @@ interface AgentOfficePageProps {
   nowMs?: number;
 }
 
+type OfficeConnectionState = 'idle' | 'connecting' | 'connected' | 'fallback';
+
 export default function AgentOfficePage({
-  projectId,
   onOpenTask,
   initialSnapshot = null,
   initialError = null,
@@ -81,35 +166,83 @@ export default function AgentOfficePage({
   const [loading, setLoading] = useState(!initialSnapshot && !disableAutoLoad);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(initialError);
+  const [connectionState, setConnectionState] = useState<OfficeConnectionState>(disableAutoLoad ? 'idle' : 'connecting');
+  const [clockNowMs, setClockNowMs] = useState(() => nowMs ?? Date.now());
+  const snapshotRef = useRef<AgentOfficeProjection | null>(initialSnapshot);
+  const gateRef = useRef<ReturnType<typeof createAgentOfficeRefreshGate<AgentOfficeProjection>> | null>(null);
 
-  const load = useCallback(async (background = false) => {
-    if (!projectId) {
-      setSnapshot(null);
-      setLoading(false);
-      setRefreshing(false);
-      setError(null);
-      return;
+  useEffect(() => {
+    snapshotRef.current = snapshot;
+  }, [snapshot]);
+
+  useEffect(() => {
+    if (nowMs !== undefined) {
+      setClockNowMs(nowMs);
+      return undefined;
     }
-    if (background) setRefreshing(true);
-    else setLoading(true);
-    try {
-      const next = await getAgentOfficeProjection(projectId, 20);
-      setSnapshot(next);
-      setError(null);
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : 'Agent Office could not refresh.');
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, [projectId]);
+    const timer = window.setInterval(() => setClockNowMs(Date.now()), LOCAL_AGE_TICK_MS);
+    return () => window.clearInterval(timer);
+  }, [nowMs]);
 
   useEffect(() => {
     if (disableAutoLoad) return undefined;
-    void load(false);
-    const intervalId = window.setInterval(() => void load(true), REFRESH_INTERVAL_MS);
-    return () => window.clearInterval(intervalId);
-  }, [disableAutoLoad, load]);
+    const isVisible = () => typeof document === 'undefined' || document.visibilityState !== 'hidden';
+    const gate = createAgentOfficeRefreshGate<AgentOfficeProjection>({
+      fetchSnapshot: (signal) => getAgentOfficeProjection(20, { signal }),
+      isVisible,
+      onStart: (background) => {
+        if (background) setRefreshing(true);
+        else setLoading(true);
+      },
+      onSnapshot: (next) => {
+        snapshotRef.current = next;
+        setSnapshot(next);
+        setError(null);
+      },
+      onError: (loadError) => setError(loadError instanceof Error ? loadError.message : 'Agent Office could not refresh.'),
+      onSettled: () => {
+        setLoading(false);
+        setRefreshing(false);
+      },
+    });
+    gateRef.current = gate;
+    let wasUnavailable = false;
+    void gate.request(Boolean(snapshotRef.current));
+    const stopReactiveRefresh = startReactiveServerRefresh({
+      refresh: () => gate.invalidate(),
+      eventTypes: GLOBAL_RUNTIME_INVALIDATION_EVENT_TYPES,
+      fallbackMs: FALLBACK_REFRESH_MS,
+      initialRefresh: false,
+      onAvailable: () => {
+        setConnectionState('connected');
+        if (wasUnavailable) {
+          wasUnavailable = false;
+          void gate.invalidate();
+        }
+      },
+      onUnavailable: () => {
+        wasUnavailable = true;
+        setConnectionState('fallback');
+      },
+    });
+    const handleVisibility = () => {
+      if (!isVisible()) return;
+      setClockNowMs(nowMs ?? Date.now());
+      const current = snapshotRef.current;
+      void gate.visibilityRestored(!current || isAgentOfficeSnapshotStale(current.generatedAt));
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility);
+      stopReactiveRefresh();
+      if (gateRef.current === gate) gateRef.current = null;
+      gate.dispose();
+    };
+  }, [disableAutoLoad, nowMs]);
+
+  const requestRefresh = useCallback(() => {
+    void gateRef.current?.request(true);
+  }, []);
 
   const pipelineCounts = useMemo(() => {
     const counts = new Map<string, number>();
@@ -117,23 +250,25 @@ export default function AgentOfficePage({
     return counts;
   }, [snapshot]);
 
-  const staleSnapshot = snapshot ? isAgentOfficeSnapshotStale(snapshot.generatedAt, nowMs ?? Date.now()) : false;
+  const effectiveNowMs = nowMs ?? clockNowMs;
+  const staleSnapshot = snapshot ? isAgentOfficeSnapshotStale(snapshot.generatedAt, effectiveNowMs) : false;
   const queueTotal = snapshot
     ? Object.values(snapshot.queue.counts).reduce((sum, count) => sum + count, 0)
     : 0;
-  const empty = Boolean(snapshot) && snapshot!.workers.total === 0 && snapshot!.pipeline.total === 0 && queueTotal === 0;
-
-  if (!projectId) {
-    return (
-      <div className="flex flex-1 items-center justify-center p-8">
-        <div className="max-w-md rounded-2xl border border-[#e5d4bb] bg-[#fffdfa] p-6 text-center dark:border-[#584a3b] dark:bg-[#292119]">
-          <Bot className="mx-auto mb-3 text-[#d89745]" size={28} />
-          <h2 className="text-sm font-extrabold">Choose a project to open Agent Office</h2>
-          <p className="mt-2 text-xs text-[#816b5a] dark:text-[#d6b56d]">Monitoring is always scoped to one project.</p>
-        </div>
-      </div>
-    );
-  }
+  const partialSnapshot = Boolean(snapshot && (
+    snapshot.partial
+    || snapshot.workers.truncated
+    || snapshot.workers.sourceTruncated
+    || snapshot.pipeline.truncated
+    || snapshot.pipeline.sourceTruncated
+    || snapshot.queue.partial
+    || snapshot.queue.sourceTruncated
+    || Object.values(snapshot.queue.truncated).some(Boolean)
+  ));
+  const reconnecting = connectionState === 'connecting' || connectionState === 'fallback';
+  const incomplete = partialSnapshot || Boolean(error) || reconnecting;
+  const exactZero = Boolean(snapshot) && snapshot!.workers.total === 0 && snapshot!.pipeline.total === 0 && queueTotal === 0;
+  const empty = exactZero && !incomplete;
 
   if (loading && !snapshot) {
     return (
@@ -149,7 +284,7 @@ export default function AgentOfficePage({
         <div className="max-w-lg rounded-2xl border border-[#e6a994] bg-[#fff5f0] p-6 dark:border-[#70483d] dark:bg-[#32221d]">
           <div className="flex items-center gap-2 text-sm font-extrabold text-[#a33f25] dark:text-[#f0b29f]"><ShieldAlert size={18} /> Agent Office unavailable</div>
           <p className="mt-2 text-xs text-[#805446] dark:text-[#e7c3b8]">{error}</p>
-          <button type="button" onClick={() => void load(false)} className="mt-4 inline-flex cursor-pointer items-center gap-2 rounded-xl border border-[#d8c5aa] bg-white px-3 py-2 text-xs font-bold text-[#714a1a] hover:bg-[#fff7ec] dark:border-[#584a3b] dark:bg-[#292119] dark:text-[#f3eadf]">
+          <button type="button" onClick={requestRefresh} className="mt-4 inline-flex cursor-pointer items-center gap-2 rounded-xl border border-[#d8c5aa] bg-white px-3 py-2 text-xs font-bold text-[#714a1a] hover:bg-[#fff7ec] dark:border-[#584a3b] dark:bg-[#292119] dark:text-[#f3eadf]">
             <RefreshCw size={14} /> Refresh read
           </button>
         </div>
@@ -168,21 +303,25 @@ export default function AgentOfficePage({
                 <h1 className="text-lg font-extrabold tracking-tight text-[#3c2a1a] dark:text-[#f3eadf]">Agent Office</h1>
                 <span className="rounded-full border border-[#e4cfb0] bg-[#fff7eb] px-2 py-0.5 text-[9px] font-black uppercase tracking-wider text-[#8d6533] dark:border-[#584a3b] dark:bg-[#1e1914] dark:text-[#d6b56d]">Monitoring only</span>
               </div>
-              <p className="mt-1 text-[11px] font-mono text-[#816b5a] dark:text-[#d6b56d]">Canonical workers, pipeline and queue state • project {projectId}</p>
+              <p className="mt-1 text-[11px] font-mono text-[#816b5a] dark:text-[#d6b56d]">Canonical workers, pipeline and queue state • all projects</p>
             </div>
             <div className="flex items-center gap-2 text-[10px] font-mono text-[#8c7463] dark:text-[#d6b56d]">
               {snapshot && <span>Updated {new Date(snapshot.generatedAt).toLocaleTimeString()}</span>}
-              <button type="button" onClick={() => void load(true)} disabled={refreshing} className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl border border-[#d8c5aa] bg-[#fff7ec] px-2.5 py-1.5 font-bold text-[#714a1a] hover:bg-[#ffeace] disabled:cursor-default disabled:opacity-60 dark:border-[#584a3b] dark:bg-[#1e1914] dark:text-[#f3eadf]">
+              {!disableAutoLoad && <span>{connectionState === 'connected' ? 'Live' : connectionState === 'fallback' ? 'Reconnecting · fallback' : 'Connecting'}</span>}
+              <button type="button" onClick={requestRefresh} disabled={refreshing} className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl border border-[#d8c5aa] bg-[#fff7ec] px-2.5 py-1.5 font-bold text-[#714a1a] hover:bg-[#ffeace] disabled:cursor-default disabled:opacity-60 dark:border-[#584a3b] dark:bg-[#1e1914] dark:text-[#f3eadf]">
                 <RefreshCw size={12} className={refreshing ? 'animate-spin' : ''} /> Refresh
               </button>
             </div>
           </div>
         </section>
 
-        {(staleSnapshot || error) && (
+        {(staleSnapshot || incomplete) && (
           <div className="flex items-start gap-2 rounded-2xl border border-[#e5bb78] bg-[#fff7e8] px-4 py-3 text-xs text-[#81591e] dark:border-[#695232] dark:bg-[#30271c] dark:text-[#e8c98c]">
             <AlertTriangle size={16} className="mt-0.5 shrink-0" />
-            <div><strong>{staleSnapshot ? 'Snapshot is stale.' : 'Refresh failed.'}</strong> {error ? `Showing the last successful snapshot. ${error}` : 'The page will keep retrying its read-only refresh.'}</div>
+            <div>
+              <strong>{error ? 'Refresh failed.' : partialSnapshot ? 'Snapshot is partial.' : connectionState === 'fallback' ? 'Realtime stream is reconnecting.' : 'Snapshot is stale.'}</strong>{' '}
+              {error ? `Showing the last successful snapshot. ${error}` : partialSnapshot ? 'Some bounded sources were truncated, so absence is not proof that the office is quiet.' : connectionState === 'fallback' ? 'Using bounded fallback refresh until SSE reconnects.' : 'Fresh data will be requested when the page can reconcile safely.'}
+            </div>
           </div>
         )}
 
@@ -191,6 +330,12 @@ export default function AgentOfficePage({
             <CheckCircle2 className="mx-auto text-[#68a66b]" size={28} />
             <h2 className="mt-3 text-sm font-extrabold">Agent Office is quiet</h2>
             <p className="mt-1 text-xs text-[#816b5a] dark:text-[#d6b56d]">No active workers, pipeline tails, queue work or attention right now.</p>
+          </div>
+        ) : snapshot && exactZero && incomplete ? (
+          <div className="rounded-2xl border border-dashed border-[#e5bb78] bg-[#fff7e8] px-6 py-12 text-center dark:border-[#695232] dark:bg-[#30271c]">
+            <AlertTriangle className="mx-auto text-[#d89745]" size={28} />
+            <h2 className="mt-3 text-sm font-extrabold">Office state is incomplete</h2>
+            <p className="mt-1 text-xs text-[#816b5a] dark:text-[#d6b56d]">No rows are visible in the current bounded snapshot, but the monitor is partial, stale, or reconnecting.</p>
           </div>
         ) : snapshot ? (
           <>
@@ -203,17 +348,18 @@ export default function AgentOfficePage({
                 <div className="space-y-2">
                   {snapshot.workers.items.length === 0 && <p className="rounded-xl border border-dashed border-[#e5d4bb] p-4 text-xs text-[#8c7463] dark:border-[#584a3b] dark:text-[#d6b56d]">No active reasoning workers.</p>}
                   {snapshot.workers.items.map((worker) => (
-                    <button key={worker.taskId} type="button" onClick={() => void onOpenTask(worker.taskId)} className="group flex w-full cursor-pointer items-start gap-3 rounded-xl border border-[#eadbc6] bg-white px-3.5 py-3 text-left transition hover:border-[#d8a15f] hover:bg-[#fff9f1] dark:border-[#584a3b] dark:bg-[#211b16] dark:hover:bg-[#30271f]">
+                    <button key={`${worker.projectId}:${worker.taskId}`} type="button" onClick={() => void onOpenTask(worker.taskId)} className="group flex w-full cursor-pointer items-start gap-3 rounded-xl border border-[#eadbc6] bg-white px-3.5 py-3 text-left transition hover:border-[#d8a15f] hover:bg-[#fff9f1] dark:border-[#584a3b] dark:bg-[#211b16] dark:hover:bg-[#30271f]">
                       <span className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${statusDotClass(worker.indicator, worker.stale)}`} />
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="text-xs font-extrabold">{worker.ownerLabel}</span>
+                          <span className="rounded-full border border-[#e1d1bc] bg-[#fff8ee] px-1.5 py-0.5 text-[9px] font-bold text-[#714a1a] dark:border-[#584a3b] dark:bg-[#30271f] dark:text-[#f3eadf]">{worker.projectName}</span>
                           <span className="rounded-full border border-[#e1d1bc] px-1.5 py-0.5 text-[9px] font-bold text-[#816b5a] dark:border-[#584a3b] dark:text-[#d6b56d]">{sourceLabel(worker.source)}</span>
                           {worker.ownerKind && <span className="rounded-full border border-[#e1d1bc] px-1.5 py-0.5 text-[9px] font-mono font-bold text-[#816b5a] dark:border-[#584a3b] dark:text-[#d6b56d]">{worker.ownerKind}</span>}
                           {(worker.stale || worker.indicator) && <span className="text-[9px] font-black uppercase tracking-wide text-[#b65036]">{worker.stale ? 'Disconnected' : worker.indicator}</span>}
                         </div>
                         <div className="mt-1 truncate text-[11px] font-bold text-[#584638] dark:text-[#f3eadf]">{worker.displayId || worker.taskId} · {worker.title}</div>
-                        <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[10px] font-mono text-[#8c7463] dark:text-[#d6b56d]"><span>{worker.action}</span><span>{worker.phaseLabel}</span><span className="inline-flex items-center gap-1"><Clock3 size={10} /> {formatActivityAge(worker.ageMs)}</span></div>
+                        <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[10px] font-mono text-[#8c7463] dark:text-[#d6b56d]"><span>{worker.action}</span><span>{worker.phaseLabel}</span><span className="inline-flex items-center gap-1"><Clock3 size={10} /> {formatActivityAge(advanceActivityAge(worker.ageMs, snapshot.generatedAt, effectiveNowMs))}</span></div>
                       </div>
                     </button>
                   ))}
@@ -234,8 +380,8 @@ export default function AgentOfficePage({
                 <div className="space-y-2">
                   {snapshot.pipeline.items.length === 0 && <p className="rounded-xl border border-dashed border-[#e5d4bb] p-4 text-xs text-[#8c7463] dark:border-[#584a3b] dark:text-[#d6b56d]">No background pipeline tails.</p>}
                   {snapshot.pipeline.items.map((row) => (
-                    <button key={`${row.executionSessionId}:${row.stage}`} type="button" onClick={() => void onOpenTask(row.taskId)} className="flex w-full cursor-pointer items-start justify-between gap-3 rounded-xl border border-[#eadbc6] bg-white px-3 py-2.5 text-left hover:border-[#d8a15f] hover:bg-[#fff9f1] dark:border-[#584a3b] dark:bg-[#211b16] dark:hover:bg-[#30271f]">
-                      <div className="min-w-0"><div className="truncate text-[11px] font-extrabold">{row.displayId || row.taskId} · {row.title}</div><div className="mt-1 truncate text-[10px] font-mono text-[#8c7463] dark:text-[#d6b56d]">{row.activity || row.operationKind || row.lifecycleStage}</div></div>
+                    <button key={`${row.projectId}:${row.executionSessionId}:${row.stage}`} type="button" onClick={() => void onOpenTask(row.taskId)} className="flex w-full cursor-pointer items-start justify-between gap-3 rounded-xl border border-[#eadbc6] bg-white px-3 py-2.5 text-left hover:border-[#d8a15f] hover:bg-[#fff9f1] dark:border-[#584a3b] dark:bg-[#211b16] dark:hover:bg-[#30271f]">
+                      <div className="min-w-0"><div className="text-[9px] font-bold text-[#9a6b32] dark:text-[#d6b56d]">{row.projectName}</div><div className="truncate text-[11px] font-extrabold">{row.displayId || row.taskId} · {row.title}</div><div className="mt-1 truncate text-[10px] font-mono text-[#8c7463] dark:text-[#d6b56d]">{row.activity || row.operationKind || row.lifecycleStage}</div></div>
                       <span className={`shrink-0 rounded-lg px-2 py-1 text-[9px] font-black ${row.blocked ? 'bg-[#f9d9cf] text-[#a33f25] dark:bg-[#4c2c24] dark:text-[#f0b29f]' : 'bg-[#f2e5d2] text-[#71543a] dark:bg-[#3a2f26] dark:text-[#e5c99d]'}`}>{PIPELINE_LABELS[row.stage] || row.stage}</span>
                     </button>
                   ))}
@@ -255,7 +401,8 @@ export default function AgentOfficePage({
                       <div className="mt-3 space-y-1.5">
                         {items.length === 0 && <p className="py-2 text-[10px] font-mono text-[#a08a78] dark:text-[#bfa78f]">Empty</p>}
                         {items.map((item) => (
-                          <button key={item.taskId} type="button" onClick={() => void onOpenTask(item.taskId)} className="block w-full cursor-pointer rounded-lg border border-transparent px-2 py-2 text-left hover:border-[#eadbc6] hover:bg-[#fff8ee] dark:hover:border-[#584a3b] dark:hover:bg-[#30271f]">
+                          <button key={`${item.projectId}:${item.taskId}`} type="button" onClick={() => void onOpenTask(item.taskId)} className="block w-full cursor-pointer rounded-lg border border-transparent px-2 py-2 text-left hover:border-[#eadbc6] hover:bg-[#fff8ee] dark:hover:border-[#584a3b] dark:hover:bg-[#30271f]">
+                            <div className="text-[9px] font-bold text-[#9a6b32] dark:text-[#d6b56d]">{item.projectName}</div>
                             <div className="truncate text-[10px] font-extrabold">{item.displayId || item.taskId} · {item.title}</div>
                             {item.reasons[0]?.message && <div className="mt-1 line-clamp-2 text-[9px] leading-relaxed text-[#8c7463] dark:text-[#d6b56d]">{item.reasons[0].message}</div>}
                           </button>

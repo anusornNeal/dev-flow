@@ -97,20 +97,22 @@ test('getAgentOfficeProjection uses the bounded monitoring GET endpoint without 
   (globalThis as any).fetch = async (input: any, init: any) => {
     capturedInput = input;
     capturedInit = init;
-    return new Response(JSON.stringify({ schema: 'agent-office-monitor.v1', projectId: 'project 1' }), {
+    return new Response(JSON.stringify({ schema: 'agent-office-monitor.v1', scope: 'global', projectId: null }), {
       status: 200,
       headers: { 'content-type': 'application/json' },
     });
   };
 
-  await getAgentOfficeProjection('project 1', 20);
-  assert.equal(capturedInput, '/api/agent-office?projectId=project+1&limit=20');
+  const controller = new AbortController();
+  await getAgentOfficeProjection(20, { signal: controller.signal });
+  assert.equal(capturedInput, '/api/agent-office?limit=20');
+  assert.equal(capturedInit.signal, controller.signal);
   assert.equal(capturedInit.method, 'GET');
   assert.equal(capturedInit.body, undefined);
 
-  await getAgentOfficeProjection('project 1', 999);
-  assert.equal(capturedInput, '/api/agent-office?projectId=project+1&limit=50');
+  await getAgentOfficeProjection(999);
+  assert.equal(capturedInput, '/api/agent-office?limit=50');
 
-  await getAgentOfficeProjection('project 1', 0);
-  assert.equal(capturedInput, '/api/agent-office?projectId=project+1&limit=1');
+  await getAgentOfficeProjection(0);
+  assert.equal(capturedInput, '/api/agent-office?limit=1');
 });

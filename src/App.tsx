@@ -572,7 +572,7 @@ export default function App() {
           )}
 
           {activePage === 'agent-office' ? (
-            <AgentOfficePage projectId={activeProjectId} onOpenTask={handleOpenAgentOfficeTask} />
+            <AgentOfficePage onOpenTask={handleOpenAgentOfficeTask} />
           ) : activePage === 'previews' ? (
             <UiPreviewLibraryPage onOpenTask={handleOpenPreviewTask} />
           ) : (

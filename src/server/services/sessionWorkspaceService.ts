@@ -222,6 +222,54 @@ function managedRootFor(projectId: string, workspaceId: string) {
   return path.join(workspaceRootsDir(), safeSegment(projectId), safeSegment(workspaceId));
 }
 
+export type RevisionVerificationWorkspace = {
+  root: string;
+  repoRevision: string;
+  cleanup: () => { removed: boolean; cleanupError?: string };
+};
+
+export function createRevisionVerificationWorkspace(
+  project: { id: string; localPath?: string | null },
+  repoRevisionValue: string,
+  identityValue: string,
+): RevisionVerificationWorkspace {
+  const projectRoot = ensureRepository(path.resolve(String(project.localPath || '')));
+  const repoRevision = String(repoRevisionValue || '').trim();
+  const identity = String(identityValue || '').trim();
+  if (!repoRevision) throw createApiError(400, 'VERIFICATION_REVISION_REQUIRED', 'repoRevision is required for an isolated verification workspace.');
+  if (!identity) throw createApiError(400, 'VERIFICATION_IDENTITY_REQUIRED', 'verification workspace identity is required.');
+  const resolved = (runGit(projectRoot, ['rev-parse', `${repoRevision}^{commit}`]).stdout || '').trim();
+  const digest = crypto.createHash('sha256').update(`${project.id}:${identity}:${resolved}`).digest('hex').slice(0, 16);
+  const root = canonicalContainment(managedRootFor(project.id, `_verify_${digest}`));
+  fs.mkdirSync(path.dirname(root), { recursive: true });
+  runGit(projectRoot, ['worktree', 'prune'], true);
+  if (fs.existsSync(root)) {
+    const head = (runGit(root, ['rev-parse', 'HEAD'], true).stdout || '').trim();
+    const dirty = (runGit(root, ['status', '--porcelain', '--untracked-files=all'], true).stdout || '').trim();
+    if (head !== resolved || dirty) {
+      runGit(projectRoot, ['worktree', 'remove', '--force', root], true);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+  if (!fs.existsSync(root)) runGit(projectRoot, ['worktree', 'add', '--detach', root, resolved]);
+  const actual = (runGit(root, ['rev-parse', 'HEAD']).stdout || '').trim();
+  if (actual !== resolved) throw createApiError(409, 'VERIFICATION_WORKSPACE_REVISION_MISMATCH', 'Verification workspace did not resolve to the requested revision.', { details: { expected: resolved, actual } });
+  return {
+    root,
+    repoRevision: resolved,
+    cleanup: () => {
+      try {
+        const removed = runGit(projectRoot, ['worktree', 'remove', '--force', root], true);
+        if (removed.status !== 0) return { removed: false, cleanupError: removed.stderr?.trim() || 'git worktree remove failed' };
+        fs.rmSync(root, { recursive: true, force: true });
+        return { removed: true };
+      } catch (error) {
+        return { removed: false, cleanupError: error instanceof Error ? error.message : String(error) };
+      }
+    },
+  };
+}
+
 function runGit(root: string, args: string[], allowFailure = false) {
   const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', shell: false, timeout: 30_000 });
   if (!allowFailure && (result.error || result.status !== 0)) {

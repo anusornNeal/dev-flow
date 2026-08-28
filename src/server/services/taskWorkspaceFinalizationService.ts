@@ -15,11 +15,11 @@ import {
 import { createApiError } from './api.js';
 import { normalizeVerificationEvidence } from './taskGitWorkflowService.js';
 import { projectTaskCompletionAfterFinalization, terminalizeTaskExecutionForFinalization } from './taskClaimService.js';
-import { cleanupSessionWorkspace, getSessionWorkspaceMetadataForRecovery } from './sessionWorkspaceService.js';
+import { cleanupSessionWorkspace, createRevisionVerificationWorkspace, getSessionWorkspaceMetadataForRecovery } from './sessionWorkspaceService.js';
 import { inspectWorkspaceRecovery } from './workspaceRecoveryService.js';
 import { integrateWorkspaceCommits, reconstructRecordedWorkspaceIntegration, type WorkspaceIntegrationSuccess } from './workspaceIntegrationService.js';
 import { loadProjectVerificationImpactRules } from './projectCommandConfigService.js';
-import { inspectProjectVerificationPresets } from './projectCommandService.js';
+import { inspectProjectVerificationPresets, runProjectCommand } from './projectCommandService.js';
 import { planVerification, type VerificationImpactCheck, type VerificationPlan } from './verificationPlannerService.js';
 import {
   getExecutionOwnershipState,
@@ -71,6 +71,7 @@ export type TaskWorkspaceFinalizationInput = {
   operationId?: string;
   detachedIntegrated?: DetachedIntegratedFinalizationEvidence;
   ownerBreakGlass?: OwnerBreakGlassFinalizationAuthority;
+  deferPostIntegrationVerification?: boolean;
 };
 
 type PostIntegrationRequirement = {
@@ -299,6 +300,57 @@ function evaluatePostIntegrationRequirement(
       bindChecksToRepoRevision: true,
     },
   };
+}
+
+
+function executeRevisionBoundPostIntegrationVerification(
+  state: AppState,
+  project: { id: string; localPath?: string | null },
+  operationId: string,
+  requirement: PostIntegrationRequirement,
+) {
+  const sandbox = createRevisionVerificationWorkspace(project, requirement.repoRevision, operationId);
+  const checks: TaskWorkspaceFinalizationCheck[] = [];
+  let cleanup: { removed: boolean; cleanupError?: string } = { removed: false };
+  try {
+    for (const required of requirement.missingChecks) {
+      const targets = normalizeVerificationTargets(required.targets);
+      try {
+        const result = runProjectCommand(state, {
+          localPath: sandbox.root,
+          command: required.command,
+          ...(targets.length > 0 ? { targets } : {}),
+          forceFresh: true,
+          responseMode: 'compact',
+        });
+        checks.push({
+          name: `post-integration: ${verificationRequirementLabel(required)}`,
+          command: required.command,
+          ...(targets.length > 0 ? { targets } : {}),
+          status: result.ok ? 'passed' : 'failed',
+          scope: requirement.broadEvidenceRequired ? 'broad' : 'targeted',
+          repoRevision: sandbox.repoRevision,
+          summary: result.ok ? 'Passed in isolated verify-only workspace at the integrated revision.' : `Verification failed with exit code ${result.exitCode ?? 'unknown'}.`,
+          output: [result.stdout, result.stderr].filter(Boolean).join('\n').slice(0, 8000),
+          recordedAt: new Date().toISOString(),
+        });
+      } catch (error) {
+        checks.push({
+          name: `post-integration: ${verificationRequirementLabel(required)}`,
+          command: required.command,
+          ...(targets.length > 0 ? { targets } : {}),
+          status: 'failed',
+          scope: requirement.broadEvidenceRequired ? 'broad' : 'targeted',
+          repoRevision: sandbox.repoRevision,
+          summary: error instanceof Error ? error.message : String(error),
+          recordedAt: new Date().toISOString(),
+        });
+      }
+    }
+  } finally {
+    cleanup = sandbox.cleanup();
+  }
+  return { checks, cleanup, repoRevision: sandbox.repoRevision };
 }
 
 export type TaskFinalizationFaultBoundary =
@@ -709,7 +761,7 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
       ? operation.verification.submittedChecks as TaskWorkspaceFinalizationCheck[]
       : [];
     const suppliedChecks = Array.isArray(input.checks) ? input.checks : [];
-    const effectiveChecks = suppliedChecks.length > 0 ? suppliedChecks : persistedChecks;
+    const effectiveChecks = [...(suppliedChecks.length > 0 ? suppliedChecks : persistedChecks)];
     const persistedOwnerBreakGlass = normalizeOwnerBreakGlassAuthority(operation?.verification?.ownerBreakGlass);
     if (suppliedOwnerBreakGlass && persistedOwnerBreakGlass
       && JSON.stringify(suppliedOwnerBreakGlass) !== JSON.stringify(persistedOwnerBreakGlass)) {
@@ -870,7 +922,7 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
             recordedAt: targetCoverage.recordedAt || undefined,
           }))
         : [];
-      const evidenceChecks = effectiveChecks.length > 0 ? effectiveChecks : reusedCoverageChecks;
+      let evidenceChecks = effectiveChecks.length > 0 ? effectiveChecks : reusedCoverageChecks;
       operation = updateOperation(operation, {
         phase: 'verification-cleared',
         status: 'active',
@@ -887,6 +939,44 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
         failure: null,
       });
 
+      if (postIntegration.required && input.deferPostIntegrationVerification !== true) {
+        const automaticVerification = executeRevisionBoundPostIntegrationVerification(_state, project, operation.id, postIntegration);
+        effectiveChecks.push(...automaticVerification.checks);
+        evidenceChecks = effectiveChecks;
+        postIntegration = evaluatePostIntegrationRequirement(integration, effectiveChecks, sourcePlan, combinedPlan, targetCoverage);
+        qualityDebt = [
+          ...initialQualityDebt,
+          ...(postIntegration.required ? [{
+            code: 'POST_INTEGRATION_VERIFICATION_REQUIRED' as const,
+            source: 'verification' as const,
+            message: postIntegration.reason,
+            details: {
+              repoRevision: postIntegration.repoRevision,
+              requiredCommands: postIntegration.requiredCommands,
+              missingCommands: postIntegration.missingCommands,
+              broadEvidenceRequired: postIntegration.broadEvidenceRequired,
+              requiredScope: postIntegration.requiredScope,
+            },
+          }] : []),
+        ];
+        qualityDebtSummary = summarizeQualityDebt(qualityDebt);
+        operation = updateOperation(operation, {
+          phase: 'verification-cleared',
+          status: 'active',
+          verification: {
+            ...(operation.verification || {}),
+            submittedChecks: effectiveChecks,
+            requirement: postIntegration,
+            qualityDebt,
+            qualityDebtSummary,
+            verifyOnlyWorkspace: {
+              repoRevision: automaticVerification.repoRevision,
+              cleanup: automaticVerification.cleanup,
+            },
+          },
+          failure: null,
+        });
+      }
       if (postIntegration.required) {
         return operationContinuation(
           _state,
@@ -1178,7 +1268,7 @@ export async function runTaskWorkspaceHappyPathTail(
   for (let attempt = 0; attempt < 4; attempt += 1) {
     let result: any;
     try {
-      result = finalizeTaskWorkspace(state, { taskId, workspaceId, ...(operationId ? { operationId } : {}), checks: postIntegrationChecks });
+      result = finalizeTaskWorkspace(state, { taskId, workspaceId, ...(operationId ? { operationId } : {}), checks: postIntegrationChecks, deferPostIntegrationVerification: Boolean(runPostIntegrationVerification) });
     } catch (error: any) {
       return autonomousTailAttention('finalization', String(error?.payload?.code || error?.code || 'AUTONOMOUS_TAIL_FINALIZATION_FAILED'), String(error?.message || 'Finalization failed.'), { transitions, operationId: operationId || null });
     }

@@ -7,7 +7,7 @@ import fs from 'node:fs';
 
 const noop = () => {};
 
-function renderHeader() {
+function renderHeader(overrides: Record<string, unknown> = {}) {
   return renderToStaticMarkup(React.createElement(Header as any, {
     filteredTasksCount: 3,
     theme: 'light',
@@ -17,6 +17,7 @@ function renderHeader() {
     setIsObservabilityModalOpen: noop,
     setIsCreateModalOpen: noop,
     setIsBatchModalOpen: noop,
+    ...overrides,
   }));
 }
 
@@ -39,6 +40,29 @@ test('Header no longer embeds provider-specific tunnel status UI', () => {
 
   const html = renderHeader();
   assert.doesNotMatch(html, /zrok|ngrok/i);
+});
+
+test('Header keeps page context and utilities visible while board-only actions can be hidden', () => {
+  const html = renderHeader({
+    title: 'Agent Office',
+    subtitle: 'Operations',
+    contextLabel: 'Active workers across all boards',
+    showTaskActions: false,
+  });
+  assert.match(html, /Agent Office/);
+  assert.match(html, /Operations/);
+  assert.match(html, /Active workers across all boards/);
+  assert.match(html, /Developer utilities/);
+  assert.doesNotMatch(html, /New Ticket/);
+});
+
+test('Header menus expose Escape handling, focus restoration, and viewport-bounded panels', () => {
+  const source = fs.readFileSync('src/components/Header.tsx', 'utf8');
+  assert.match(source, /document\.addEventListener\('keydown', handleEscape\)/);
+  assert.match(source, /actionButtonRef\.current\?\.focus\(\)/);
+  assert.match(source, /utilityButtonRef\.current\?\.focus\(\)/);
+  assert.match(source, /max-h-\[calc\(100vh-5rem\)\]/);
+  assert.match(source, /max-w-\[calc\(100vw-2rem\)\]/);
 });
 
 test('normal Board move flow no longer emits legacy Auto Work preflight UI events', () => {

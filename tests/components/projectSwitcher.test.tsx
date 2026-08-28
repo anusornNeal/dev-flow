@@ -8,6 +8,7 @@ import ProjectSwitcher, {
   filterProjectOptions,
   formatProjectRepoLabel,
   resolveProjectSwitcherKeyAction,
+  resolveProjectSwitcherPopoverLayout,
 } from '../../src/components/ProjectSwitcher.js';
 import * as ProjectSwitcherModule from '../../src/components/ProjectSwitcher.js';
 
@@ -99,6 +100,26 @@ test('keyboard navigation resolves Escape, Up/Down, and Enter deterministically'
   assert.deepEqual(resolveProjectSwitcherKeyAction('Escape', 1, 3), { type: 'close' });
 });
 
+test('project switcher popover clamps its fixed panel inside the viewport', () => {
+  const wide = resolveProjectSwitcherPopoverLayout({ left: 900, bottom: 64 }, 1000, 700);
+  assert.equal(wide.width, 400);
+  assert.equal(wide.left + wide.width <= 984, true);
+  assert.equal(wide.top >= 16, true);
+  assert.equal(wide.top + wide.maxHeight <= 684, true);
+
+  const narrow = resolveProjectSwitcherPopoverLayout({ left: 280, bottom: 64 }, 320, 600);
+  assert.equal(narrow.width, 288);
+  assert.equal(narrow.left, 16);
+  assert.equal(narrow.left + narrow.width, 304);
+});
+
+test('project switcher uses a viewport portal and document-level Escape dismissal', () => {
+  const source = fs.readFileSync('src/components/ProjectSwitcher.tsx', 'utf8');
+  assert.match(source, /createPortal\(popover, document\.body\)/);
+  assert.match(source, /document\.addEventListener\('keydown', handleKeyDown\)/);
+  assert.match(source, /if \(event\.key === 'Escape'\) close\(true\)/);
+});
+
 test('switcher trigger gives the active project a large readable workspace control', () => {
   const html = renderToStaticMarkup(React.createElement(ProjectSwitcher as any, {
     projects,
@@ -110,7 +131,7 @@ test('switcher trigger gives the active project a large readable workspace contr
   }));
   assert.match(html, /Dev Flow/);
   assert.match(html, /github\.com\/anusornNeal\/dev-flow/);
-  assert.match(html, /aria-haspopup="listbox"/);
+  assert.match(html, /aria-haspopup="dialog"/);
   assert.match(PROJECT_SWITCHER_POPOVER_CLASS, /w-\[400px\]/);
 });
 

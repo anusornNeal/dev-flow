@@ -477,6 +477,7 @@ export default function App() {
     selectedTag,
     searchQuery,
   });
+  const activeProject = projects.find((project) => project.id === activeProjectId);
 
   const handleOpenPreviewTask = async (task: UiPreviewLinkedTask) => {
     try {
@@ -510,12 +511,12 @@ export default function App() {
   }
 
   return (
-    <div className="flex flex-col h-screen bg-[#fcfaf4] dark:bg-[#1e1914] text-[#3e3129] dark:text-[#f3eadf] font-sans antialiased overflow-hidden select-none">
+    <div className="flex h-screen flex-col overflow-hidden bg-df-canvas font-sans text-df-text antialiased">
       
       {/* Mid View container with Sidebar + Board */}
       <div className="flex flex-1 overflow-y-auto lg:overflow-hidden flex-col lg:flex-row">
         
-        {/* 1. Left Filters & Stats Sidemenu Section */}
+        {/* 1. Persistent navigation and board controls */}
         <Sidebar 
           tasks={tasks.filter(t => t.projectId === activeProjectId)}
           projects={projects}
@@ -536,15 +537,20 @@ export default function App() {
         />
 
         {/* 2. Main KanBan Board viewport area */}
-        <main className="min-w-0 flex-1 flex flex-col h-full overflow-y-auto bg-[#faf7f0] dark:bg-[#1e1914]">
+        <main className="flex h-full min-w-0 flex-1 flex-col overflow-y-auto bg-df-canvas">
           
-          {/* Top Control Navigation bar */}
-          {activePage !== 'agent-office' && (
-            <Header
+          {/* Stable page context and global actions */}
+          <Header
             filteredTasksCount={filteredTasks.length}
-            title={activePage === 'previews' ? 'UI Previews' : 'Sprint Backlog'}
-            subtitle={activePage === 'previews' ? 'Global' : 'Pocket Sandbox'}
-            contextLabel={activePage === 'previews' ? 'All local previews' : `${filteredTasks.length} tasks`}
+            title={activePage === 'previews' ? 'UI Previews' : activePage === 'agent-office' ? 'Agent Office' : 'Sprint Board'}
+            subtitle={activePage === 'previews' ? 'Preview Library' : activePage === 'agent-office' ? 'Operations' : 'Board'}
+            contextLabel={
+              activePage === 'previews'
+                ? 'Local design evidence across projects'
+                : activePage === 'agent-office'
+                  ? 'Active workers across all boards'
+                  : `${filteredTasks.length} visible tasks`
+            }
             projectSwitcher={activePage === 'board' ? (
               <ProjectSwitcher
                 projects={projects}
@@ -555,6 +561,7 @@ export default function App() {
                 onUpdateProject={handleUpdateProject}
               />
             ) : undefined}
+            showTaskActions={activePage === 'board'}
             theme={theme}
             setTheme={setTheme}
             setIsSkillsModalOpen={setIsSkillsModalOpen}
@@ -562,11 +569,10 @@ export default function App() {
             setIsObservabilityModalOpen={setIsObservabilityModalOpen}
             setIsCreateModalOpen={setIsCreateModalOpen}
             setIsBatchModalOpen={setIsBatchModalOpen}
-            />
-          )}
+          />
 
           {persistenceError && (
-            <div className="mx-5 mt-4 rounded-2xl border border-[#f0c48f] dark:border-[#584a3b] bg-[#fff7eb] dark:bg-[#292119] px-4 py-3 text-[11px] font-mono font-bold text-[#9a5b13] dark:text-[#f3eadf]">
+            <div className="mx-5 mt-4 rounded-xl border border-[var(--df-color-warning)] bg-[var(--df-color-warning-surface)] px-4 py-3 text-[11px] font-mono font-bold text-[var(--df-color-warning)]">
               Persistence warning: {persistenceError}
             </div>
           )}
@@ -576,7 +582,7 @@ export default function App() {
           ) : activePage === 'previews' ? (
             <UiPreviewLibraryPage onOpenTask={handleOpenPreviewTask} />
           ) : (
-          <div className="flex-1 overflow-x-auto p-6 bg-[#faf7f0] dark:bg-[#1e1914]">
+          <div className="flex-1 overflow-x-auto bg-df-canvas p-5 md:p-6">
               <div className="flex w-max items-stretch min-h-[calc(100vh-210px)] pb-2">
                 {BOARD_COLUMNS.map(col => {
                   const columnTasks = filteredTasks
@@ -612,18 +618,13 @@ export default function App() {
         </main>
       </div>
 
-      {/* Footer Status Bar */}
-      <footer className="h-6.5 bg-[#ebdcb9]/40 dark:bg-[#584a3b]/40 border-t border-[#ebdcb9] dark:border-[#584a3b] px-4 flex items-center justify-between shrink-0 select-none text-[10px] font-mono text-[#8c7463] dark:text-[#f3eadf] font-bold">
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-1.5">
-            <span className="w-1.5 h-1.5 rounded-full bg-orange-500 animate-pulse"></span>
-            <span>Cozy Engine Active</span>
-          </div>
-          <span className="text-[#ecd0bc] dark:text-[#d6b56d]">•</span>
-          <span>Workspace Latency: 2ms</span>
+      {/* Compact truthful context bar */}
+      <footer className="flex h-7 shrink-0 items-center justify-between gap-4 border-t border-df-border bg-df-surface px-4 text-[9px] font-mono font-semibold text-df-text-muted">
+        <div className="min-w-0 truncate" title={activeProject?.name || undefined}>
+          {activeProject ? `${activeProject.taskIdPrefix || 'Project'} · ${activeProject.name}` : 'No active project'}
         </div>
-        <div className="text-[#8c7463] dark:text-[#f3eadf]">
-          Styled cozy & warm
+        <div className="shrink-0">
+          {activePage === 'previews' ? 'UI Previews' : activePage === 'agent-office' ? 'Agent Office' : 'Sprint Board'}
         </div>
       </footer>
 

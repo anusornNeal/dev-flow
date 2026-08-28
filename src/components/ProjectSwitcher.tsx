@@ -1,15 +1,47 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { ArrowDown, ArrowUp, Check, ChevronDown, FolderGit, Pencil, Plus, Search, Trash2, X } from 'lucide-react';
 import type { Project } from '../types';
 import ConfirmModal from './ConfirmModal';
 
-export const PROJECT_SWITCHER_POPOVER_CLASS = 'absolute left-0 top-[calc(100%+8px)] z-50 w-[400px] max-w-[calc(100vw-2rem)]';
-
+export const PROJECT_SWITCHER_POPOVER_CLASS = 'fixed z-[80] w-[400px] max-w-[calc(100vw-2rem)]';
 export const PROJECT_SWITCHER_ORDER_STORAGE_KEY = 'devflow.project-switcher.order.v1';
 
 interface ProjectOrderStorage {
   getItem: (key: string) => string | null;
   setItem: (key: string, value: string) => void;
+}
+
+interface ProjectSwitcherTriggerRect {
+  left: number;
+  bottom: number;
+}
+
+export interface ProjectSwitcherPopoverLayout {
+  left: number;
+  top: number;
+  width: number;
+  maxHeight: number;
+}
+
+export function resolveProjectSwitcherPopoverLayout(
+  trigger: ProjectSwitcherTriggerRect,
+  viewportWidth: number,
+  viewportHeight: number,
+  preferredWidth = 400,
+  margin = 16,
+  gap = 8,
+): ProjectSwitcherPopoverLayout {
+  const safeWidth = Math.max(0, Number.isFinite(viewportWidth) ? viewportWidth : 0);
+  const safeHeight = Math.max(0, Number.isFinite(viewportHeight) ? viewportHeight : 0);
+  const width = Math.max(0, Math.min(preferredWidth, safeWidth - margin * 2));
+  const maxLeft = Math.max(margin, safeWidth - margin - width);
+  const left = Math.min(Math.max(trigger.left, margin), maxLeft);
+  const desiredTop = trigger.bottom + gap;
+  const latestUsefulTop = Math.max(margin, safeHeight - margin - 120);
+  const top = Math.min(Math.max(desiredTop, margin), latestUsefulTop);
+  const maxHeight = Math.max(0, safeHeight - top - margin);
+  return { left, top, width, maxHeight };
 }
 
 export function readProjectOrder(storage?: ProjectOrderStorage | null): string[] {
@@ -138,14 +170,30 @@ export default function ProjectSwitcher({
   const [editTaskIdPrefix, setEditTaskIdPrefix] = useState('');
   const [projectToDelete, setProjectToDelete] = useState<string | null>(null);
   const [projectOrder, setProjectOrder] = useState<string[]>(() => typeof window === 'undefined' ? [] : readProjectOrder(window.localStorage));
+  const [popoverLayout, setPopoverLayout] = useState<ProjectSwitcherPopoverLayout | null>(null);
   const projectsLoadedRef = useRef(projects.length > 0);
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
   const activeProject = projects.find((project) => project.id === activeProjectId) || projects[0];
   const orderedProjects = useMemo(() => orderProjects(projects, projectOrder), [projects, projectOrder]);
   const filteredProjects = useMemo(() => filterProjectOptions(orderedProjects, query), [orderedProjects, query]);
+
+  const close = useCallback((restoreFocus = false) => {
+    setOpen(false);
+    setQuery('');
+    setIsCreating(false);
+    setEditingProjectId(null);
+    if (restoreFocus) requestAnimationFrame(() => triggerRef.current?.focus());
+  }, []);
+
+  const updatePopoverLayout = useCallback(() => {
+    if (!triggerRef.current || typeof window === 'undefined') return;
+    const rect = triggerRef.current.getBoundingClientRect();
+    setPopoverLayout(resolveProjectSwitcherPopoverLayout(rect, window.innerWidth, window.innerHeight));
+  }, []);
 
   useEffect(() => {
     if (projects.length > 0) projectsLoadedRef.current = true;
@@ -161,29 +209,40 @@ export default function ProjectSwitcher({
   }, [projectOrder]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || typeof window === 'undefined') return;
+
     const handleOutside = (event: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(event.target as Node)) setOpen(false);
+      const target = event.target as Node;
+      if (rootRef.current?.contains(target) || panelRef.current?.contains(target)) return;
+      close(false);
     };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') close(true);
+    };
+    const handleViewportChange = () => updatePopoverLayout();
+
+    updatePopoverLayout();
     document.addEventListener('mousedown', handleOutside);
+    document.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('resize', handleViewportChange);
+    window.addEventListener('scroll', handleViewportChange, true);
     requestAnimationFrame(() => searchRef.current?.focus());
-    return () => document.removeEventListener('mousedown', handleOutside);
-  }, [open]);
+
+    return () => {
+      document.removeEventListener('mousedown', handleOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('resize', handleViewportChange);
+      window.removeEventListener('scroll', handleViewportChange, true);
+    };
+  }, [close, open, updatePopoverLayout]);
 
   useEffect(() => {
     setHighlightedIndex(0);
   }, [query, activeProjectId]);
 
-  const close = () => {
-    setOpen(false);
-    setQuery('');
-    setIsCreating(false);
-    setEditingProjectId(null);
-  };
-
   const selectProject = (project: Project) => {
     setActiveProjectId(project.id);
-    close();
+    close(false);
   };
 
   const moveProject = (projectId: string, direction: -1 | 1) => {
@@ -200,8 +259,7 @@ export default function ProjectSwitcher({
     if (action.type === 'none') return;
     event.preventDefault();
     if (action.type === 'close') {
-      close();
-      triggerRef.current?.focus();
+      close(true);
     } else if (action.type === 'highlight') {
       setHighlightedIndex(action.index);
     } else if (action.type === 'select') {
@@ -242,174 +300,215 @@ export default function ProjectSwitcher({
     }
   };
 
-  return (
-    <div ref={rootRef} className="relative min-w-0">
-      <button
-        ref={triggerRef}
-        type="button"
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        onClick={() => setOpen((current) => !current)}
-        className="flex min-h-12 w-full min-w-[260px] max-w-[420px] items-center gap-3 rounded-xl border border-[#e5d4bb] bg-[#fffaf2] px-3.5 py-2 text-left shadow-xs transition-colors hover:bg-[#fff4e2] dark:border-[#584a3b] dark:bg-[#211a15] dark:hover:bg-[#2d241c] md:min-w-[300px]"
-        title={[activeProject?.name, activeProject?.repoUrl, activeProject?.localPath].filter(Boolean).join('\n')}
-      >
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#ffe5bf] text-[#a46c24] dark:bg-[#3a2f26] dark:text-[#e0a070]">
-          <FolderGit size={16} />
-        </span>
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-[12px] font-black text-[#4b382b] dark:text-[#f3eadf]">
-            {activeProject?.name || 'Select project'}
-          </span>
-          <span className="mt-0.5 block truncate text-[9px] font-mono text-[#8a6e5a] dark:text-[#b8ab9f]">
-            {activeProject ? formatProjectRepoLabel(activeProject.repoUrl) : 'No active workspace'}
-          </span>
-        </span>
-        <ChevronDown size={14} className={`shrink-0 text-[#8a6e5a] transition-transform dark:text-[#b8ab9f] ${open ? 'rotate-180' : ''}`} />
-      </button>
-
-      {open && (
-        <div className={`${PROJECT_SWITCHER_POPOVER_CLASS} overflow-hidden rounded-2xl border border-[#dcc9ae] bg-[#fffefd] shadow-2xl dark:border-[#584a3b] dark:bg-[#1f1914]`}>
-          <div className="border-b border-[#eadcc8] p-3 dark:border-[#4d4033]">
-            <div className="flex items-center justify-between gap-2">
-              <div>
-                <p className="text-[10px] font-black uppercase tracking-[0.14em] text-[#9a6a34] dark:text-[#e0a070]">Project workspace</p>
-                <p className="mt-0.5 text-[10px] text-[#8a7565] dark:text-[#b8ab9f]">Switch quickly without squeezing project details into the sidebar.</p>
-              </div>
-              <button type="button" onClick={close} aria-label="Close project switcher" className="rounded-lg p-1.5 text-[#8a7565] hover:bg-[#f6ead8] dark:text-[#b8ab9f] dark:hover:bg-[#332820]">
-                <X size={14} />
-              </button>
-            </div>
-            {!isCreating && !editingProjectId && (
-              <label className="mt-3 flex items-center gap-2 rounded-xl border border-[#e4d3bd] bg-white px-3 py-2 dark:border-[#514235] dark:bg-[#261e18]">
-                <Search size={14} className="shrink-0 text-[#9a806c]" />
-                <input
-                  ref={searchRef}
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                  onKeyDown={handleSearchKeyDown}
-                  placeholder="Search name, repository, or local path…"
-                  className="min-w-0 flex-1 bg-transparent text-[11px] text-[#4b382b] outline-none placeholder:text-[#b5a18f] dark:text-[#f3eadf]"
-                />
-              </label>
-            )}
+  const popover = open && popoverLayout ? (
+    <div
+      ref={panelRef}
+      id="project-switcher-popover"
+      role="dialog"
+      aria-label="Project workspace switcher"
+      className={`${PROJECT_SWITCHER_POPOVER_CLASS} flex flex-col overflow-hidden rounded-2xl border border-df-border bg-df-surface-raised shadow-[var(--df-shadow-lg)]`}
+      style={{
+        left: `${popoverLayout.left}px`,
+        top: `${popoverLayout.top}px`,
+        width: `${popoverLayout.width}px`,
+        maxHeight: `${popoverLayout.maxHeight}px`,
+      }}
+    >
+      <div className="shrink-0 border-b border-df-border p-3">
+        <div className="flex min-w-0 items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[10px] font-black uppercase tracking-[0.14em] text-df-accent">Project workspace</p>
+            <p className="mt-0.5 truncate text-[10px] text-df-text-muted">Switch, order, or configure project bindings.</p>
           </div>
+          <button
+            type="button"
+            onClick={() => close(true)}
+            aria-label="Close project switcher"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-df-text-muted hover:bg-df-surface-muted hover:text-df-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--df-color-focus-ring)]"
+          >
+            <X size={14} />
+          </button>
+        </div>
+        {!isCreating && !editingProjectId && (
+          <label className="mt-3 flex items-center gap-2 rounded-xl border border-df-border bg-df-surface px-3 py-2 focus-within:ring-2 focus-within:ring-[var(--df-color-focus-ring)]">
+            <Search size={14} className="shrink-0 text-df-text-muted" />
+            <input
+              ref={searchRef}
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={handleSearchKeyDown}
+              placeholder="Search name, repository, or local path…"
+              aria-label="Search projects"
+              aria-controls="project-switcher-options"
+              className="min-w-0 flex-1 bg-transparent text-[11px] text-df-text outline-none placeholder:text-df-text-muted"
+            />
+          </label>
+        )}
+      </div>
 
-          {!isCreating && !editingProjectId && (
-            <div role="listbox" aria-label="Projects" className="max-h-[360px] overflow-y-auto p-2">
-              {filteredProjects.length === 0 ? (
-                <p className="px-3 py-8 text-center text-[11px] text-[#8a7565] dark:text-[#b8ab9f]">No projects match “{query}”.</p>
-              ) : filteredProjects.map((project, index) => {
-                const active = project.id === activeProjectId;
-                const highlighted = index === highlightedIndex;
-                const orderIndex = orderedProjects.findIndex((item) => item.id === project.id);
-                return (
-                  <div
-                    key={project.id}
-                    className={`group mb-1 flex items-stretch gap-1 rounded-xl border p-1 transition-colors ${
-                      active
-                        ? 'border-[#d7a45c] bg-[#fff1d8] dark:border-[#8d6738] dark:bg-[#35291f]'
-                        : highlighted
-                          ? 'border-[#e0c8aa] bg-[#fff8ed] dark:border-[#5c4939] dark:bg-[#2a211a]'
-                          : 'border-transparent hover:border-[#ead9c3] hover:bg-[#fffaf2] dark:hover:border-[#4d4033] dark:hover:bg-[#261e18]'
-                    }`}
-                  >
-                    <button
-                      type="button"
-                      role="option"
-                      aria-selected={active}
-                      onMouseEnter={() => setHighlightedIndex(index)}
-                      onClick={() => selectProject(project)}
-                      className="min-w-0 flex-1 rounded-lg px-2.5 py-2 text-left"
-                    >
-                      <span className="flex items-center gap-2">
-                        <span className="min-w-0 flex-1 truncate text-[11px] font-extrabold text-[#4b382b] dark:text-[#f3eadf]" title={project.name}>{project.name}</span>
-                        {active && <Check size={13} className="shrink-0 text-[#b77528] dark:text-[#e0a070]" />}
-                      </span>
-                      <span className="mt-1 block truncate text-[9px] font-mono text-[#806b5b] dark:text-[#c8b9ab]" title={project.repoUrl || undefined}>
-                        {formatProjectRepoLabel(project.repoUrl)}
-                      </span>
-                      <span className="mt-0.5 block truncate text-[9px] font-mono text-[#9c8878] dark:text-[#a99a8d]" title={project.localPath || undefined}>
-                        {project.localPath || 'No local path configured'}
-                      </span>
-                    </button>
-                    <div className="flex shrink-0 items-center gap-0.5 pr-1">
-                      <button
-                        type="button"
-                        aria-label={`Move ${project.name} up`}
-                        title={`Move ${project.name} up`}
-                        disabled={orderIndex <= 0}
-                        onClick={() => moveProject(project.id, -1)}
-                        className="rounded-lg p-1.5 text-[#8a7565] hover:bg-white hover:text-[#a46c24] disabled:cursor-not-allowed disabled:opacity-30 dark:text-[#b8ab9f] dark:hover:bg-[#3a2f26]"
-                      >
-                        <ArrowUp size={12} />
-                      </button>
-                      <button
-                        type="button"
-                        aria-label={`Move ${project.name} down`}
-                        title={`Move ${project.name} down`}
-                        disabled={orderIndex < 0 || orderIndex >= orderedProjects.length - 1}
-                        onClick={() => moveProject(project.id, 1)}
-                        className="rounded-lg p-1.5 text-[#8a7565] hover:bg-white hover:text-[#a46c24] disabled:cursor-not-allowed disabled:opacity-30 dark:text-[#b8ab9f] dark:hover:bg-[#3a2f26]"
-                      >
-                        <ArrowDown size={12} />
-                      </button>
-                      <button type="button" onClick={() => startEditing(project)} title={`Edit ${project.name}`} className="rounded-lg p-1.5 text-[#8a7565] hover:bg-white hover:text-[#a46c24] dark:text-[#b8ab9f] dark:hover:bg-[#3a2f26]">
-                        <Pencil size={12} />
-                      </button>
-                      <button type="button" onClick={() => setProjectToDelete(project.id)} title={`Delete ${project.name}`} className="rounded-lg p-1.5 text-[#9a7565] hover:bg-[#fff0ea] hover:text-[#b75335] dark:text-[#b8ab9f] dark:hover:bg-[#3a2420]">
-                        <Trash2 size={12} />
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          {editingProjectId && (() => {
-            const project = projects.find((item) => item.id === editingProjectId);
-            if (!project) return null;
+      {!isCreating && !editingProjectId && (
+        <div id="project-switcher-options" role="listbox" aria-label="Projects" className="min-h-0 flex-1 overflow-y-auto p-2">
+          {filteredProjects.length === 0 ? (
+            <p className="px-3 py-8 text-center text-[11px] text-df-text-muted">No projects match “{query}”.</p>
+          ) : filteredProjects.map((project, index) => {
+            const active = project.id === activeProjectId;
+            const highlighted = index === highlightedIndex;
+            const orderIndex = orderedProjects.findIndex((item) => item.id === project.id);
             return (
-              <div className="space-y-3 p-4">
-                <div>
-                  <p className="text-[11px] font-extrabold text-[#4b382b] dark:text-[#f3eadf]">Edit {project.name}</p>
-                  <p className="mt-0.5 truncate text-[9px] font-mono text-[#8a7565] dark:text-[#b8ab9f]" title={project.repoUrl || undefined}>{formatProjectRepoLabel(project.repoUrl)}</p>
-                </div>
-                <input value={editLocalPath} onChange={(event) => setEditLocalPath(event.target.value)} placeholder="Local absolute path" className="w-full rounded-xl border border-[#e4d3bd] bg-white px-3 py-2 text-[10px] font-mono outline-none focus:border-[#d19a54] dark:border-[#514235] dark:bg-[#261e18]" />
-                <input value={editTaskIdPrefix} onChange={(event) => setEditTaskIdPrefix(event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6))} placeholder="Task ID prefix" className="w-full rounded-xl border border-[#e4d3bd] bg-white px-3 py-2 text-[10px] font-mono outline-none focus:border-[#d19a54] dark:border-[#514235] dark:bg-[#261e18]" />
-                <div className="flex justify-end gap-2">
-                  <button type="button" onClick={() => setEditingProjectId(null)} className="rounded-lg border border-[#e4d3bd] px-3 py-2 text-[10px] font-bold dark:border-[#514235]">Cancel</button>
-                  <button type="button" onClick={saveEdit} className="rounded-lg bg-[#d89745] px-3 py-2 text-[10px] font-bold text-white">Save</button>
+              <div
+                key={project.id}
+                className={`group mb-1 flex min-w-0 items-stretch gap-1 rounded-xl border p-1 transition-colors ${
+                  active
+                    ? 'border-[var(--df-color-border-strong)] bg-df-surface-muted'
+                    : highlighted
+                      ? 'border-df-border bg-df-surface'
+                      : 'border-transparent hover:border-df-border hover:bg-df-surface-muted'
+                }`}
+              >
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={active}
+                  onMouseEnter={() => setHighlightedIndex(index)}
+                  onClick={() => selectProject(project)}
+                  className="min-w-0 flex-1 rounded-lg px-2.5 py-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--df-color-focus-ring)]"
+                >
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span className="min-w-0 flex-1 truncate text-[11px] font-extrabold text-df-text" title={project.name}>{project.name}</span>
+                    {active && <Check size={13} className="shrink-0 text-df-accent" />}
+                  </span>
+                  <span className="mt-1 block truncate text-[9px] font-mono text-df-text-muted" title={project.repoUrl || undefined}>
+                    {formatProjectRepoLabel(project.repoUrl)}
+                  </span>
+                  <span className="mt-0.5 block truncate text-[9px] font-mono text-[var(--df-color-text-subtle)]" title={project.localPath || undefined}>
+                    {project.localPath || 'No local path configured'}
+                  </span>
+                </button>
+                <div className="flex shrink-0 items-center gap-0.5 pr-1">
+                  <button
+                    type="button"
+                    aria-label={`Move ${project.name} up`}
+                    title={`Move ${project.name} up`}
+                    disabled={orderIndex <= 0}
+                    onClick={() => moveProject(project.id, -1)}
+                    className="rounded-lg p-1.5 text-df-text-muted hover:bg-df-surface-raised hover:text-df-accent disabled:cursor-not-allowed disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--df-color-focus-ring)]"
+                  >
+                    <ArrowUp size={12} />
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`Move ${project.name} down`}
+                    title={`Move ${project.name} down`}
+                    disabled={orderIndex < 0 || orderIndex >= orderedProjects.length - 1}
+                    onClick={() => moveProject(project.id, 1)}
+                    className="rounded-lg p-1.5 text-df-text-muted hover:bg-df-surface-raised hover:text-df-accent disabled:cursor-not-allowed disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--df-color-focus-ring)]"
+                  >
+                    <ArrowDown size={12} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => startEditing(project)}
+                    title={`Edit ${project.name}`}
+                    aria-label={`Edit ${project.name}`}
+                    className="rounded-lg p-1.5 text-df-text-muted hover:bg-df-surface-raised hover:text-df-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--df-color-focus-ring)]"
+                  >
+                    <Pencil size={12} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setProjectToDelete(project.id)}
+                    title={`Delete ${project.name}`}
+                    aria-label={`Delete ${project.name}`}
+                    className="rounded-lg p-1.5 text-df-text-muted hover:bg-[var(--df-color-danger-surface)] hover:text-df-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--df-color-focus-ring)]"
+                  >
+                    <Trash2 size={12} />
+                  </button>
                 </div>
               </div>
             );
-          })()}
-
-          {isCreating && (
-            <form onSubmit={createProject} className="space-y-2.5 p-4">
-              <p className="text-[11px] font-extrabold text-[#4b382b] dark:text-[#f3eadf]">Bind new repository</p>
-              <input required value={createForm.name} onChange={(event) => setCreateForm((current) => ({ ...current, name: event.target.value }))} placeholder="Project name" className="w-full rounded-xl border border-[#e4d3bd] bg-white px-3 py-2 text-[10px] outline-none dark:border-[#514235] dark:bg-[#261e18]" />
-              <input required type="url" value={createForm.repoUrl} onChange={(event) => setCreateForm((current) => ({ ...current, repoUrl: event.target.value }))} placeholder="Git repository URL" className="w-full rounded-xl border border-[#e4d3bd] bg-white px-3 py-2 text-[10px] font-mono outline-none dark:border-[#514235] dark:bg-[#261e18]" />
-              <input value={createForm.description} onChange={(event) => setCreateForm((current) => ({ ...current, description: event.target.value }))} placeholder="Description (optional)" className="w-full rounded-xl border border-[#e4d3bd] bg-white px-3 py-2 text-[10px] outline-none dark:border-[#514235] dark:bg-[#261e18]" />
-              <input value={createForm.localPath} onChange={(event) => setCreateForm((current) => ({ ...current, localPath: event.target.value }))} placeholder="Local path (optional)" className="w-full rounded-xl border border-[#e4d3bd] bg-white px-3 py-2 text-[10px] font-mono outline-none dark:border-[#514235] dark:bg-[#261e18]" />
-              <input value={createForm.taskIdPrefix} onChange={(event) => setCreateForm((current) => ({ ...current, taskIdPrefix: event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6) }))} placeholder="Task ID prefix (optional)" className="w-full rounded-xl border border-[#e4d3bd] bg-white px-3 py-2 text-[10px] font-mono outline-none dark:border-[#514235] dark:bg-[#261e18]" />
-              <div className="flex justify-end gap-2 pt-1">
-                <button type="button" onClick={() => setIsCreating(false)} className="rounded-lg border border-[#e4d3bd] px-3 py-2 text-[10px] font-bold dark:border-[#514235]">Cancel</button>
-                <button type="submit" className="rounded-lg bg-[#d89745] px-3 py-2 text-[10px] font-bold text-white">Create project</button>
-              </div>
-            </form>
-          )}
-
-          {!isCreating && !editingProjectId && (
-            <div className="flex items-center justify-between gap-2 border-t border-[#eadcc8] px-3 py-2.5 dark:border-[#4d4033]">
-              <span className="text-[9px] font-mono text-[#9a8879] dark:text-[#9f9185]">↑↓ navigate · Enter select · Esc close</span>
-              <button type="button" onClick={() => { setIsCreating(true); setQuery(''); }} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[10px] font-extrabold text-[#a46c24] hover:bg-[#fff1d8] dark:text-[#e0a070] dark:hover:bg-[#35291f]">
-                <Plus size={12} /> New project
-              </button>
-            </div>
-          )}
+          })}
         </div>
       )}
+
+      {editingProjectId && (() => {
+        const project = projects.find((item) => item.id === editingProjectId);
+        if (!project) return null;
+        return (
+          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
+            <div className="min-w-0">
+              <p className="truncate text-[11px] font-extrabold text-df-text" title={project.name}>Edit {project.name}</p>
+              <p className="mt-0.5 truncate text-[9px] font-mono text-df-text-muted" title={project.repoUrl || undefined}>{formatProjectRepoLabel(project.repoUrl)}</p>
+            </div>
+            <input value={editLocalPath} onChange={(event) => setEditLocalPath(event.target.value)} placeholder="Local absolute path" aria-label="Local absolute path" className="w-full rounded-xl border border-df-border bg-df-surface px-3 py-2 text-[10px] font-mono text-df-text outline-none focus:border-df-accent" />
+            <input value={editTaskIdPrefix} onChange={(event) => setEditTaskIdPrefix(event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6))} placeholder="Task ID prefix" aria-label="Task ID prefix" className="w-full rounded-xl border border-df-border bg-df-surface px-3 py-2 text-[10px] font-mono text-df-text outline-none focus:border-df-accent" />
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setEditingProjectId(null)} className="rounded-lg border border-df-border px-3 py-2 text-[10px] font-bold text-df-text-muted hover:bg-df-surface-muted">Cancel</button>
+              <button type="button" onClick={saveEdit} className="rounded-lg bg-df-primary px-3 py-2 text-[10px] font-bold text-[var(--df-color-primary-text)] hover:bg-[var(--df-color-primary-hover)]">Save</button>
+            </div>
+          </div>
+        );
+      })()}
+
+      {isCreating && (
+        <form onSubmit={createProject} className="min-h-0 flex-1 space-y-2.5 overflow-y-auto p-4">
+          <p className="text-[11px] font-extrabold text-df-text">Bind new repository</p>
+          <input required value={createForm.name} onChange={(event) => setCreateForm((current) => ({ ...current, name: event.target.value }))} placeholder="Project name" className="w-full rounded-xl border border-df-border bg-df-surface px-3 py-2 text-[10px] text-df-text outline-none focus:border-df-accent" />
+          <input required type="url" value={createForm.repoUrl} onChange={(event) => setCreateForm((current) => ({ ...current, repoUrl: event.target.value }))} placeholder="Git repository URL" className="w-full rounded-xl border border-df-border bg-df-surface px-3 py-2 text-[10px] font-mono text-df-text outline-none focus:border-df-accent" />
+          <input value={createForm.description} onChange={(event) => setCreateForm((current) => ({ ...current, description: event.target.value }))} placeholder="Description (optional)" className="w-full rounded-xl border border-df-border bg-df-surface px-3 py-2 text-[10px] text-df-text outline-none focus:border-df-accent" />
+          <input value={createForm.localPath} onChange={(event) => setCreateForm((current) => ({ ...current, localPath: event.target.value }))} placeholder="Local path (optional)" className="w-full rounded-xl border border-df-border bg-df-surface px-3 py-2 text-[10px] font-mono text-df-text outline-none focus:border-df-accent" />
+          <input value={createForm.taskIdPrefix} onChange={(event) => setCreateForm((current) => ({ ...current, taskIdPrefix: event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6) }))} placeholder="Task ID prefix (optional)" className="w-full rounded-xl border border-df-border bg-df-surface px-3 py-2 text-[10px] font-mono text-df-text outline-none focus:border-df-accent" />
+          <div className="flex justify-end gap-2 pt-1">
+            <button type="button" onClick={() => setIsCreating(false)} className="rounded-lg border border-df-border px-3 py-2 text-[10px] font-bold text-df-text-muted hover:bg-df-surface-muted">Cancel</button>
+            <button type="submit" className="rounded-lg bg-df-primary px-3 py-2 text-[10px] font-bold text-[var(--df-color-primary-text)] hover:bg-[var(--df-color-primary-hover)]">Create project</button>
+          </div>
+        </form>
+      )}
+
+      {!isCreating && !editingProjectId && (
+        <div className="flex shrink-0 items-center justify-between gap-2 border-t border-df-border px-3 py-2.5">
+          <span className="min-w-0 truncate text-[9px] font-mono text-df-text-muted">↑↓ navigate · Enter select · Esc close</span>
+          <button type="button" onClick={() => { setIsCreating(true); setQuery(''); }} className="flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[10px] font-extrabold text-df-accent hover:bg-df-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--df-color-focus-ring)]">
+            <Plus size={12} /> New project
+          </button>
+        </div>
+      )}
+    </div>
+  ) : null;
+
+  return (
+    <div ref={rootRef} className="relative min-w-0 max-w-full">
+      <button
+        ref={triggerRef}
+        type="button"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-controls="project-switcher-popover"
+        onClick={() => {
+          if (open) {
+            close(false);
+            return;
+          }
+          updatePopoverLayout();
+          setOpen(true);
+        }}
+        className="flex min-h-11 w-full min-w-0 max-w-full items-center gap-3 rounded-xl border border-df-border bg-df-surface-raised px-3 py-2 text-left shadow-[var(--df-shadow-sm)] transition-colors hover:bg-df-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--df-color-focus-ring)] sm:min-w-[280px]"
+        title={[activeProject?.name, activeProject?.repoUrl, activeProject?.localPath].filter(Boolean).join('\n')}
+      >
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-df-surface-muted text-df-accent">
+          <FolderGit size={16} />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[11px] font-black text-df-text">
+            {activeProject?.name || 'Select project'}
+          </span>
+          <span className="mt-0.5 block truncate text-[9px] font-mono text-df-text-muted">
+            {activeProject ? formatProjectRepoLabel(activeProject.repoUrl) : 'No active workspace'}
+          </span>
+        </span>
+        <ChevronDown size={14} className={`shrink-0 text-df-text-muted transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+
+      {typeof document !== 'undefined' && popover ? createPortal(popover, document.body) : null}
 
       {projectToDelete && (
         <ConfirmModal

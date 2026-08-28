@@ -51,6 +51,17 @@ test('expanded sidebar uses persisted width and exposes an accessible horizontal
   assert.match(html, /aria-label="Collapse sidebar"/);
 });
 
+test('navigation exposes one aria-current destination and keeps long project/filter labels truncatable', () => {
+  const html = renderSidebar({ activePage: 'previews' });
+  assert.equal((html.match(/aria-current="page"/g) || []).length, 1);
+  assert.match(html, /UI Previews/);
+
+  const source = fs.readFileSync('src/components/Sidebar.tsx', 'utf8');
+  assert.match(source, /title=\{activeProject\?\.name\}/);
+  assert.match(source, /max-w-\[140px\] truncate/);
+  assert.match(source, /Board filters are scoped to Sprint Board/);
+});
+
 test('sidebar keeps global Board/Preview navigation without resurrecting Atlas state', () => {
   const source = fs.readFileSync('src/components/Sidebar.tsx', 'utf8');
   const appSource = fs.readFileSync('src/App.tsx', 'utf8');

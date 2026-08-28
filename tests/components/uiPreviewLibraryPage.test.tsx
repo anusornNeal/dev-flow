@@ -3,7 +3,10 @@ import assert from 'node:assert/strict';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import fs from 'node:fs';
-import UiPreviewLibraryPage from '../../src/components/UiPreviewLibraryPage.js';
+import UiPreviewLibraryPage, {
+  previewFeedbackToneClass,
+  resolvePreviewFilterKey,
+} from '../../src/components/UiPreviewLibraryPage.js';
 
 const sample = {
   previewId: 'uip-1',
@@ -104,6 +107,79 @@ test('preview library re-arms its mounted guard when StrictMode replays mount ef
   assert.ok(setupIndex >= 0, 'mount effect setup must restore mounted.current before async requests settle');
   assert.ok(cleanupIndex >= 0, 'unmount cleanup must still mark the component unmounted');
   assert.ok(setupIndex < cleanupIndex, 'StrictMode replay requires setup to re-arm the mounted guard before cleanup can clear it');
+});
+
+test('feedback kinds map pending/success/uncertain/error outcomes to distinct design-system tones', () => {
+  assert.equal(previewFeedbackToneClass('pending'), 'df-feedback--info');
+  assert.equal(previewFeedbackToneClass('success'), 'df-feedback--success');
+  assert.equal(previewFeedbackToneClass('uncertain'), 'df-feedback--warning');
+  assert.equal(previewFeedbackToneClass('error'), 'df-feedback--danger');
+});
+
+test('preview filters support keyboard Arrow, Home, and End navigation', () => {
+  assert.equal(resolvePreviewFilterKey('all', 'ArrowRight'), 'standalone');
+  assert.equal(resolvePreviewFilterKey('standalone', 'ArrowRight'), 'linked');
+  assert.equal(resolvePreviewFilterKey('all', 'ArrowLeft'), 'linked');
+  assert.equal(resolvePreviewFilterKey('linked', 'Home'), 'all');
+  assert.equal(resolvePreviewFilterKey('all', 'End'), 'linked');
+  assert.equal(resolvePreviewFilterKey('all', 'Enter'), null);
+});
+
+test('long preview and linked-task text uses wrapping contracts instead of card-level truncation', () => {
+  const longTitle = 'Preview '.repeat(30);
+  const longTaskTitle = 'Linked task '.repeat(30);
+  const linked = {
+    ...sample,
+    title: longTitle,
+    taskId: 'task-long',
+    linkedTask: {
+      id: 'task-long',
+      displayId: 'DVF-VERY-LONG-IDENTIFIER-THAT-MUST-WRAP',
+      title: longTaskTitle,
+      projectId: 'project/with/a/very/long/technical/identifier/that/must/wrap',
+    },
+  };
+  const html = renderToStaticMarkup(React.createElement(UiPreviewLibraryPage as any, {
+    initialItems: [linked],
+    disableAutoLoad: true,
+    onOpenTask: () => {},
+  }));
+
+  assert.match(html, /break-words/);
+  assert.match(html, /df-break-technical/);
+  assert.match(html, /DVF-VERY-LONG-IDENTIFIER-THAT-MUST-WRAP/);
+  assert.match(html, /project\/with\/a\/very\/long\/technical\/identifier\/that\/must\/wrap/);
+});
+
+test('attach feedback distinguishes pending, uncertain retry, confirmed failure, and success semantics', () => {
+  const component = fs.readFileSync('src/components/UiPreviewLibraryPage.tsx', 'utf8');
+  assert.match(component, /kind: 'pending'/);
+  assert.match(component, /Capturing frozen evidence/);
+  assert.match(component, /kind: 'uncertain'/);
+  assert.match(component, /Retry will reuse the same request key/);
+  assert.match(component, /kind: 'error'/);
+  assert.match(component, /Attach failed/);
+  assert.match(component, /kind: 'success'/);
+  assert.match(component, /Frozen revision/);
+});
+
+test('delete remains explicitly confirmed and visually separated from normal preview actions', () => {
+  const component = fs.readFileSync('src/components/UiPreviewLibraryPage.tsx', 'utf8');
+  const normalActions = component.indexOf('data-preview-actions="normal"');
+  const destructiveActions = component.indexOf('data-preview-actions="destructive"');
+  assert.ok(normalActions >= 0, 'normal preview actions should have a dedicated region');
+  assert.ok(destructiveActions > normalActions, 'destructive preview actions should render after normal actions');
+  assert.match(component, /window\.confirm/);
+  assert.match(component, /df-button--secondary/);
+  assert.match(component, /text-\[var\(--df-color-danger\)\]/);
+});
+
+test('library-level loading, empty, and error states use shared feedback and surface contracts', () => {
+  const component = fs.readFileSync('src/components/UiPreviewLibraryPage.tsx', 'utf8');
+  assert.match(component, /df-feedback df-feedback--danger/);
+  assert.match(component, /Loading previews/);
+  assert.match(component, /No previews match this filter/);
+  assert.match(component, /df-surface/);
 });
 
 test('App and Sidebar use direct #previews history navigation without resurrecting Atlas UI', () => {

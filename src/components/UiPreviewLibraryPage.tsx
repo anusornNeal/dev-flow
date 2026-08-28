@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ExternalLink, Link2, RefreshCw, Paperclip, FolderOpen, Loader2, Trash2 } from 'lucide-react';
+import { ExternalLink, FolderOpen, Link2, Loader2, Paperclip, RefreshCw, Trash2 } from 'lucide-react';
 import { ApiError, apiGet } from '../client/apiClient';
 import { subscribeServerEvents } from '../lib/serverEvents';
 import {
@@ -25,6 +25,32 @@ const FILTERS: Array<{ value: UiPreviewLibraryFilter; label: string }> = [
   { value: 'linked', label: 'Linked' },
 ];
 
+export type PreviewFeedbackKind = 'pending' | 'success' | 'uncertain' | 'error' | 'info';
+
+export interface PreviewFeedbackState {
+  kind: PreviewFeedbackKind;
+  summary: string;
+  detail?: string;
+  nextAction?: string;
+}
+
+export function previewFeedbackToneClass(kind: PreviewFeedbackKind) {
+  if (kind === 'error') return 'df-feedback--danger';
+  if (kind === 'uncertain') return 'df-feedback--warning';
+  if (kind === 'success') return 'df-feedback--success';
+  return 'df-feedback--info';
+}
+
+export function resolvePreviewFilterKey(active: UiPreviewLibraryFilter, key: string): UiPreviewLibraryFilter | null {
+  const index = FILTERS.findIndex((entry) => entry.value === active);
+  if (index < 0) return null;
+  if (key === 'Home') return FILTERS[0].value;
+  if (key === 'End') return FILTERS[FILTERS.length - 1].value;
+  if (key === 'ArrowRight') return FILTERS[(index + 1) % FILTERS.length].value;
+  if (key === 'ArrowLeft') return FILTERS[(index - 1 + FILTERS.length) % FILTERS.length].value;
+  return null;
+}
+
 function formatUpdatedAt(value: string) {
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return value || 'Unknown';
@@ -35,6 +61,7 @@ function summaryLabel(item: UiPreviewLibraryItem) {
   const screen = typeof item.specSummary.screen === 'string' ? item.specSummary.screen : '';
   return item.title || screen || 'Untitled preview';
 }
+
 function workspaceSummary(item: UiPreviewLibraryItem) {
   if (!item.screenCount || item.screenCount <= 1) return null;
   const defaultName = item.defaultScreenSummary?.name
@@ -42,6 +69,24 @@ function workspaceSummary(item: UiPreviewLibraryItem) {
   return defaultName ? `${item.screenCount} screens · Default ${defaultName}` : `${item.screenCount} screens`;
 }
 
+function PreviewFeedback({ state }: { state: PreviewFeedbackState }) {
+  return (
+    <div
+      aria-live="polite"
+      data-feedback-kind={state.kind}
+      className={`df-feedback ${previewFeedbackToneClass(state.kind)} min-w-0`}
+    >
+      <div className="df-feedback__summary break-words">{state.summary}</div>
+      {state.detail && <div className="df-feedback__detail df-break-technical">{state.detail}</div>}
+      {state.nextAction && (
+        <div className="mt-2 min-w-0 border-t border-[var(--df-color-border)] pt-2 text-[10px] font-semibold leading-5">
+          <span className="font-black uppercase tracking-[0.08em] opacity-70">Next action</span>
+          <span className="ml-2 break-words">{state.nextAction}</span>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function UiPreviewLibraryPage({ onOpenTask, initialItems = [], disableAutoLoad = false }: UiPreviewLibraryPageProps) {
   const [filter, setFilter] = useState<UiPreviewLibraryFilter>('all');
@@ -50,13 +95,14 @@ export default function UiPreviewLibraryPage({ onOpenTask, initialItems = [], di
   const [loading, setLoading] = useState(!disableAutoLoad && initialItems.length === 0);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [feedback, setFeedback] = useState<Record<string, string>>({});
+  const [feedback, setFeedback] = useState<Record<string, PreviewFeedbackState>>({});
   const [taskInputs, setTaskInputs] = useState<Record<string, string>>({});
   const [pendingAttach, setPendingAttach] = useState<Record<string, string>>({});
   const [pendingDelete, setPendingDelete] = useState<Record<string, boolean>>({});
   const requestGate = useRef(createUiPreviewLibraryRequestGate());
   const attachStore = useRef(createUiPreviewAttachAttemptStore());
   const activeAttachTokens = useRef<Record<string, ReturnType<typeof attachStore.current.begin> extends infer T ? Exclude<T, null> : never>>({});
+  const filterRefs = useRef<Partial<Record<UiPreviewLibraryFilter, HTMLButtonElement | null>>>({});
   const mounted = useRef(true);
 
   useEffect(() => {
@@ -118,7 +164,14 @@ export default function UiPreviewLibraryPage({ onOpenTask, initialItems = [], di
     const confirmed = window.confirm(`Delete “${label}”? This permanently removes the standalone preview and all of its revisions.`);
     if (!confirmed) return;
     setPendingDelete((current) => ({ ...current, [item.previewId]: true }));
-    setFeedback((current) => ({ ...current, [item.previewId]: 'Deleting preview…' }));
+    setFeedback((current) => ({
+      ...current,
+      [item.previewId]: {
+        kind: 'pending',
+        summary: 'Deleting preview…',
+        detail: 'The standalone preview and all revisions are being removed.',
+      },
+    }));
     try {
       await deleteUiPreview(item.previewId);
       if (!mounted.current) return;
@@ -132,7 +185,12 @@ export default function UiPreviewLibraryPage({ onOpenTask, initialItems = [], di
       if (!mounted.current) return;
       setFeedback((current) => ({
         ...current,
-        [item.previewId]: `Delete failed: ${deleteError instanceof Error ? deleteError.message : 'Unknown error'}`,
+        [item.previewId]: {
+          kind: 'error',
+          summary: 'Delete failed',
+          detail: deleteError instanceof Error ? deleteError.message : 'Unknown error',
+          nextAction: 'The preview is still available. Review the error and retry Delete when ready.',
+        },
       }));
     } finally {
       if (mounted.current) {
@@ -148,16 +206,34 @@ export default function UiPreviewLibraryPage({ onOpenTask, initialItems = [], di
   const copyLatest = async (item: UiPreviewLibraryItem) => {
     try {
       await navigator.clipboard.writeText(item.latestPreviewUrl);
-      setFeedback((current) => ({ ...current, [item.previewId]: 'Latest link copied.' }));
+      setFeedback((current) => ({
+        ...current,
+        [item.previewId]: { kind: 'success', summary: 'Latest link copied', detail: 'The live preview URL is ready to paste.' },
+      }));
     } catch (copyError) {
-      setFeedback((current) => ({ ...current, [item.previewId]: copyError instanceof Error ? `Copy failed: ${copyError.message}` : 'Copy failed.' }));
+      setFeedback((current) => ({
+        ...current,
+        [item.previewId]: {
+          kind: 'error',
+          summary: 'Copy failed',
+          detail: copyError instanceof Error ? copyError.message : 'Clipboard access failed.',
+          nextAction: 'Check browser clipboard permission and try Copy Latest Link again.',
+        },
+      }));
     }
   };
 
   const attach = async (item: UiPreviewLibraryItem) => {
     const taskIdentifier = (taskInputs[item.previewId] || '').trim();
     if (!taskIdentifier) {
-      setFeedback((current) => ({ ...current, [item.previewId]: 'Enter a task ID or display ID.' }));
+      setFeedback((current) => ({
+        ...current,
+        [item.previewId]: {
+          kind: 'info',
+          summary: 'Task ID required',
+          detail: 'Enter a task ID or display ID before attaching evidence.',
+        },
+      }));
       return;
     }
     const token = attachStore.current.begin(item.previewId, taskIdentifier);
@@ -165,7 +241,14 @@ export default function UiPreviewLibraryPage({ onOpenTask, initialItems = [], di
     const marker = `${token.idempotencyKey}:${token.generation}`;
     activeAttachTokens.current[item.previewId] = token;
     setPendingAttach((current) => ({ ...current, [item.previewId]: marker }));
-    setFeedback((current) => ({ ...current, [item.previewId]: 'Capturing frozen evidence…' }));
+    setFeedback((current) => ({
+      ...current,
+      [item.previewId]: {
+        kind: 'pending',
+        summary: 'Capturing frozen evidence…',
+        detail: `Attaching the latest preview revision to ${taskIdentifier}.`,
+      },
+    }));
     try {
       const evidence = await attachUiPreviewToTask({
         taskId: taskIdentifier,
@@ -187,7 +270,15 @@ export default function UiPreviewLibraryPage({ onOpenTask, initialItems = [], di
           projectId: task.projectId || null,
         },
       } : candidate));
-      setFeedback((current) => ({ ...current, [item.previewId]: `Linked to ${task.displayId || task.id}. Frozen rev ${evidence.frozenRevision}.` }));
+      setFeedback((current) => ({
+        ...current,
+        [item.previewId]: {
+          kind: 'success',
+          summary: `Linked to ${task.displayId || task.id}`,
+          detail: `Frozen revision ${evidence.frozenRevision} is now attached as task evidence.`,
+          nextAction: 'Open the task to inspect the frozen evidence in context.',
+        },
+      }));
     } catch (attachError) {
       if (!mounted.current || !attachStore.current.isCurrent(token)) return;
       const uncertain = !(attachError instanceof ApiError);
@@ -196,8 +287,18 @@ export default function UiPreviewLibraryPage({ onOpenTask, initialItems = [], di
       setFeedback((current) => ({
         ...current,
         [item.previewId]: uncertain
-          ? 'Connection result is uncertain. Retry will reuse the same request key.'
-          : `Attach failed: ${attachError instanceof Error ? attachError.message : 'Unknown error'}`,
+          ? {
+              kind: 'uncertain',
+              summary: 'Connection outcome uncertain',
+              detail: 'No confirmed response was received, so the attach may already have succeeded.',
+              nextAction: 'Retry will reuse the same request key to avoid duplicate evidence. Choose Attach to Task again when you are ready.',
+            }
+          : {
+              kind: 'error',
+              summary: 'Attach failed',
+              detail: attachError instanceof Error ? attachError.message : 'Unknown error',
+              nextAction: 'Check the task identifier or reported error, then retry the attach.',
+            },
       }));
     } finally {
       if (mounted.current) {
@@ -221,79 +322,163 @@ export default function UiPreviewLibraryPage({ onOpenTask, initialItems = [], di
       delete next[previewId];
       return next;
     });
-    setFeedback((current) => ({ ...current, [previewId]: 'Attach result ignored. Retry will reuse the same request key if the outcome was uncertain.' }));
+    setFeedback((current) => ({
+      ...current,
+      [previewId]: {
+        kind: 'uncertain',
+        summary: 'Attach result ignored',
+        detail: 'The local wait was cancelled, so DevFlow cannot confirm the final connection outcome here.',
+        nextAction: 'Retry when ready. The same request key is reused if the prior outcome was uncertain.',
+      },
+    }));
   };
 
   return (
-    <section className="flex min-h-0 flex-1 flex-col bg-[#faf7f0] p-6 dark:bg-[#1e1914]" aria-label="UI Previews Library">
-      <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <div className="mb-1 flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.18em] text-[#a46c24] dark:text-[#d6b56d]">
-            <span>Global</span><span>•</span><span>All local previews</span>
+    <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--df-color-canvas)] p-4 sm:p-6" aria-label="UI Previews Library">
+      <div className="mb-5 flex min-w-0 flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0 max-w-3xl">
+          <div className="df-meta mb-1 flex flex-wrap items-center gap-2 font-black uppercase tracking-[0.16em]">
+            <span>Global</span><span aria-hidden="true">•</span><span>All local previews</span>
           </div>
-          <h2 className="text-xl font-extrabold text-[#3e3129] dark:text-[#f3eadf]">UI Previews</h2>
-          <p className="mt-1 text-xs text-[#816b5a] dark:text-[#d6b56d]">Live Library links always open the latest revision. Task Drawer evidence remains frozen.</p>
+          <h2 className="df-heading-lg break-words">UI Previews</h2>
+          <p className="df-meta mt-1 max-w-2xl break-words leading-5">Library links always open the latest revision. Linked task evidence stays frozen at the attached revision.</p>
         </div>
-        <button type="button" onClick={refresh} className="flex cursor-pointer items-center gap-2 rounded-xl border border-[#d8c5aa] bg-white px-3 py-2 text-xs font-bold text-[#714a1a] hover:bg-[#fff3de] dark:border-[#584a3b] dark:bg-[#292119] dark:text-[#f3eadf]" disabled={loading}>
+        <button type="button" onClick={refresh} className="df-button df-button--secondary shrink-0" disabled={loading}>
           <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Refresh
         </button>
       </div>
 
-      <div className="mb-5 flex gap-2" role="tablist" aria-label="Preview filters">
+      <div className="mb-5 flex min-w-0 gap-1 overflow-x-auto border-b border-[var(--df-color-border)] pb-2" role="tablist" aria-label="Preview filters">
         {FILTERS.map((entry) => (
-          <button key={entry.value} type="button" role="tab" aria-selected={filter === entry.value} onClick={() => setFilter(entry.value)} className={`cursor-pointer rounded-xl border px-3 py-2 text-xs font-extrabold ${filter === entry.value ? 'border-[#d89745] bg-[#ffeace] text-[#714a1a] dark:border-[#f0b84d] dark:bg-[#3a2f26] dark:text-[#f3eadf]' : 'border-[#e5d4bb] bg-white text-[#816b5a] hover:bg-[#fff7ec] dark:border-[#584a3b] dark:bg-[#292119] dark:text-[#d6b56d]'}`}>
+          <button
+            key={entry.value}
+            ref={(node) => { filterRefs.current[entry.value] = node; }}
+            type="button"
+            role="tab"
+            aria-selected={filter === entry.value}
+            tabIndex={filter === entry.value ? 0 : -1}
+            onClick={() => setFilter(entry.value)}
+            onKeyDown={(event) => {
+              const next = resolvePreviewFilterKey(entry.value, event.key);
+              if (!next) return;
+              event.preventDefault();
+              setFilter(next);
+              filterRefs.current[next]?.focus();
+            }}
+            className={`df-button min-h-9 flex-none px-3 ${filter === entry.value ? 'df-button--primary' : 'df-button--secondary'}`}
+          >
             {entry.label}
           </button>
         ))}
       </div>
 
-      {error && <div className="mb-4 rounded-xl border border-[#e5a07c] bg-[#fff1e8] px-4 py-3 text-xs font-bold text-[#9a4f2d] dark:border-[#6d5642] dark:bg-[#33241c] dark:text-[#f3eadf]">{error}</div>}
-      {loading && items.length === 0 && <div className="flex items-center gap-2 py-12 text-sm font-bold text-[#816b5a] dark:text-[#d6b56d]"><Loader2 size={16} className="animate-spin" /> Loading previews…</div>}
-      {!loading && !error && items.length === 0 && <div className="rounded-2xl border border-dashed border-[#d8c5aa] bg-white/60 p-10 text-center text-sm font-bold text-[#816b5a] dark:border-[#584a3b] dark:bg-[#292119]/60 dark:text-[#d6b56d]">No previews match this filter.</div>}
+      {error && (
+        <div className="df-feedback df-feedback--danger mb-4 min-w-0" role="alert">
+          <div className="df-feedback__summary">Preview library unavailable</div>
+          <div className="df-feedback__detail df-break-technical">{error}</div>
+          <div className="mt-2 text-[10px] font-semibold">Use Refresh to retry without discarding previews already shown.</div>
+        </div>
+      )}
 
-      <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+      {loading && items.length === 0 && (
+        <div className="df-surface flex min-h-40 items-center justify-center gap-2 p-8 text-sm font-bold text-[var(--df-color-text-muted)]" aria-live="polite">
+          <Loader2 size={16} className="animate-spin" /> Loading previews…
+        </div>
+      )}
+
+      {!loading && !error && items.length === 0 && (
+        <div className="df-surface min-h-40 border-dashed p-8 text-center">
+          <div className="df-heading-sm">No previews match this filter</div>
+          <p className="df-meta mt-2">Choose another filter or Refresh to check for newly created previews.</p>
+        </div>
+      )}
+
+      <div className="grid min-w-0 grid-cols-1 gap-4 xl:grid-cols-2">
         {items.map((item) => {
           const linked = Boolean(item.taskId && item.linkedTask);
           const pending = Boolean(pendingAttach[item.previewId]);
           const workspace = workspaceSummary(item);
           const deleting = Boolean(pendingDelete[item.previewId]);
+          const itemFeedback = feedback[item.previewId];
           return (
-            <article key={item.previewId} className="rounded-2xl border border-[#e5d4bb] bg-white p-4 shadow-sm dark:border-[#584a3b] dark:bg-[#292119]">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <h3 className="truncate text-sm font-extrabold text-[#3e3129] dark:text-[#f3eadf]" title={summaryLabel(item)}>{summaryLabel(item)}</h3>
-                  {workspace && <p className="mt-1 truncate text-[10px] font-bold text-[#927d6c] dark:text-[#ad9d91]">{workspace}</p>}
+            <article key={item.previewId} className="df-surface min-w-0 overflow-hidden p-4 shadow-sm sm:p-5">
+              <div className="flex min-w-0 items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <h3 className="break-words text-sm font-extrabold leading-5 text-[var(--df-color-text-strong)]" title={summaryLabel(item)}>{summaryLabel(item)}</h3>
+                  {workspace && <p className="df-meta mt-1 break-words">{workspace}</p>}
                 </div>
-                <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-black ${linked ? 'bg-[#e9f7e7] text-[#39713b] dark:bg-[#263a27] dark:text-[#b8dfb9]' : 'bg-[#fff0d6] text-[#95601e] dark:bg-[#3a2f26] dark:text-[#f0b84d]'}`}>{linked ? 'Linked' : 'Standalone'}</span>
+                <div className="shrink-0 text-right">
+                  <span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-black ${linked ? 'bg-[var(--df-color-success-surface)] text-[var(--df-color-success)]' : 'bg-[var(--df-color-warning-surface)] text-[var(--df-color-warning)]'}`}>{linked ? 'Linked' : 'Standalone'}</span>
+                  <div className="df-meta mt-1 text-[9px]">{linked ? 'Frozen task evidence' : 'Library only'}</div>
+                </div>
               </div>
 
-              <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] font-bold text-[#816b5a] dark:text-[#d6b56d]">
+              <div className="df-meta mt-3 flex min-w-0 flex-wrap gap-x-4 gap-y-1">
                 <span>Latest rev {item.latestRevision}</span>
-                <span>Updated {formatUpdatedAt(item.updatedAt)}</span>
+                <span className="break-words">Updated {formatUpdatedAt(item.updatedAt)}</span>
               </div>
 
               {linked && item.linkedTask && (
-                <div className="mt-3 rounded-xl border border-[#e7dac6] bg-[#fffaf2] px-3 py-2 text-[11px] dark:border-[#584a3b] dark:bg-[#1e1914]">
-                  <div className="font-extrabold text-[#534135] dark:text-[#f3eadf]">{item.linkedTask.displayId || item.linkedTask.id} · {item.linkedTask.title}</div>
-                  <div className="mt-0.5 font-mono text-[9px] text-[#917d71] dark:text-[#d6b56d]">Project {item.linkedTask.projectId || 'unknown'}</div>
+                <div className="mt-4 min-w-0 rounded-xl border border-[var(--df-color-border)] bg-[var(--df-color-surface-subtle)] p-3">
+                  <div className="text-[10px] font-black uppercase tracking-[0.08em] text-[var(--df-color-text-muted)]">Linked task</div>
+                  <div className="mt-1 min-w-0 break-words text-[12px] font-extrabold text-[var(--df-color-text-strong)]">
+                    <span className="df-break-technical">{item.linkedTask.displayId || item.linkedTask.id}</span>
+                    <span aria-hidden="true"> · </span>
+                    {item.linkedTask.title}
+                  </div>
+                  <div className="df-meta df-break-technical mt-1">Project {item.linkedTask.projectId || 'unknown'}</div>
                 </div>
               )}
 
-              <div className="mt-4 flex flex-wrap gap-2">
-                <a href={item.latestPreviewUrl} target="_blank" rel="noopener noreferrer" className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-[#d89745] bg-[#ffeace] px-2.5 py-2 text-[11px] font-extrabold text-[#714a1a] hover:bg-[#ffdfb4] dark:border-[#6d5642] dark:bg-[#3a2f26] dark:text-[#f3eadf]"><ExternalLink size={13} /> Open Latest Preview</a>
-                <button type="button" onClick={() => void copyLatest(item)} className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-[#d8c5aa] px-2.5 py-2 text-[11px] font-extrabold text-[#6e584a] hover:bg-[#fff7ec] dark:border-[#584a3b] dark:text-[#f3eadf]"><Link2 size={13} /> Copy Latest Link</button>
-                {!linked && <button type="button" onClick={() => void removePreview(item)} disabled={deleting} className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-[#e1aaa0] px-2.5 py-2 text-[11px] font-extrabold text-[#a03b32] hover:bg-[#fff4f1] disabled:cursor-not-allowed disabled:opacity-60 dark:border-[#76534d] dark:text-[#efb5aa]"><Trash2 size={13} /> {deleting ? 'Deleting…' : 'Delete'}</button>}
-                {linked && item.linkedTask && <button type="button" onClick={() => void onOpenTask(item.linkedTask!)} className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-[#d8c5aa] px-2.5 py-2 text-[11px] font-extrabold text-[#6e584a] hover:bg-[#fff7ec] dark:border-[#584a3b] dark:text-[#f3eadf]"><FolderOpen size={13} /> Open Task</button>}
+              <div data-preview-actions="normal" className="mt-4 flex min-w-0 flex-wrap gap-2">
+                <a href={item.latestPreviewUrl} target="_blank" rel="noopener noreferrer" className="df-button df-button--primary min-w-0 max-w-full"><ExternalLink size={13} className="shrink-0" /> <span className="break-words">Open Latest Preview</span></a>
+                <button type="button" onClick={() => void copyLatest(item)} className="df-button df-button--secondary min-w-0 max-w-full"><Link2 size={13} className="shrink-0" /> <span className="break-words">Copy Latest Link</span></button>
+                {linked && item.linkedTask && (
+                  <button type="button" onClick={() => void onOpenTask(item.linkedTask!)} className="df-button df-button--secondary min-w-0 max-w-full"><FolderOpen size={13} className="shrink-0" /> <span className="break-words">Open Task</span></button>
+                )}
               </div>
 
               {!linked && (
-                <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-[#eadcc8] bg-[#fffaf2] p-2 dark:border-[#584a3b] dark:bg-[#1e1914]">
-                  <input value={taskInputs[item.previewId] || ''} onChange={(event) => setTaskInputs((current) => ({ ...current, [item.previewId]: event.target.value }))} placeholder="Task ID, e.g. DVF-0502" className="min-w-48 flex-1 rounded-lg border border-[#d8c5aa] bg-white px-2.5 py-2 text-[11px] outline-none focus:border-[#d89745] dark:border-[#584a3b] dark:bg-[#292119] dark:text-[#f3eadf]" disabled={pending} />
-                  <button type="button" onClick={() => void attach(item)} disabled={pending} className="flex cursor-pointer items-center gap-1.5 rounded-lg bg-[#a46c24] px-3 py-2 text-[11px] font-extrabold text-white disabled:cursor-not-allowed disabled:opacity-60"><Paperclip size={13} /> {pending ? 'Attaching…' : 'Attach to Task'}</button>
-                  {pending && <button type="button" onClick={() => cancelAttach(item.previewId)} className="cursor-pointer rounded-lg border border-[#d8c5aa] px-2.5 py-2 text-[11px] font-extrabold text-[#6e584a] dark:border-[#584a3b] dark:text-[#f3eadf]">Cancel</button>}
+                <div className="mt-4 min-w-0 rounded-xl border border-[var(--df-color-border)] bg-[var(--df-color-surface-subtle)] p-3">
+                  <div className="mb-2 min-w-0">
+                    <div className="text-[10px] font-black uppercase tracking-[0.08em] text-[var(--df-color-text-muted)]">Attach frozen evidence</div>
+                    <p className="df-meta mt-1 break-words">Link this preview to a task while preserving the selected revision as evidence.</p>
+                  </div>
+                  <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center">
+                    <label className="sr-only" htmlFor={`preview-task-${item.previewId}`}>Task ID or display ID</label>
+                    <input
+                      id={`preview-task-${item.previewId}`}
+                      value={taskInputs[item.previewId] || ''}
+                      onChange={(event) => setTaskInputs((current) => ({ ...current, [item.previewId]: event.target.value }))}
+                      placeholder="Task ID, e.g. DVF-0502"
+                      className="df-control min-w-0 flex-1 text-[11px]"
+                      disabled={pending}
+                    />
+                    <button type="button" onClick={() => void attach(item)} disabled={pending} className="df-button df-button--primary shrink-0"><Paperclip size={13} /> {pending ? 'Attaching…' : 'Attach to Task'}</button>
+                    {pending && <button type="button" onClick={() => cancelAttach(item.previewId)} className="df-button df-button--secondary shrink-0">Cancel</button>}
+                  </div>
                 </div>
               )}
-              {feedback[item.previewId] && <p className="mt-2 text-[10px] font-bold text-[#816b5a] dark:text-[#d6b56d]">{feedback[item.previewId]}</p>}
+
+              {itemFeedback && <div className="mt-3"><PreviewFeedback state={itemFeedback} /></div>}
+
+              {!linked && (
+                <div data-preview-actions="destructive" className="mt-4 flex min-w-0 items-center justify-between gap-3 border-t border-[var(--df-color-border)] pt-3">
+                  <div className="min-w-0">
+                    <div className="text-[10px] font-black uppercase tracking-[0.08em] text-[var(--df-color-text-subtle)]">Destructive action</div>
+                    <p className="df-meta mt-0.5 break-words">Delete permanently removes this standalone preview and all revisions.</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void removePreview(item)}
+                    disabled={deleting || pending}
+                    aria-label={`Delete preview ${summaryLabel(item)}`}
+                    className="df-button df-button--secondary shrink-0 text-[var(--df-color-danger)] hover:!bg-[var(--df-color-danger-surface)]"
+                  >
+                    <Trash2 size={13} /> {deleting ? 'Deleting…' : 'Delete preview'}
+                  </button>
+                </div>
+              )}
             </article>
           );
         })}
@@ -301,7 +486,7 @@ export default function UiPreviewLibraryPage({ onOpenTask, initialItems = [], di
 
       {nextCursor && (
         <div className="mt-5 flex justify-center">
-          <button type="button" onClick={() => void load('append', nextCursor)} disabled={loadingMore} className="cursor-pointer rounded-xl border border-[#d8c5aa] bg-white px-4 py-2 text-xs font-extrabold text-[#714a1a] hover:bg-[#fff7ec] disabled:cursor-not-allowed disabled:opacity-60 dark:border-[#584a3b] dark:bg-[#292119] dark:text-[#f3eadf]">{loadingMore ? 'Loading…' : 'Load more'}</button>
+          <button type="button" onClick={() => void load('append', nextCursor)} disabled={loadingMore} className="df-button df-button--secondary">{loadingMore ? 'Loading…' : 'Load more'}</button>
         </div>
       )}
     </section>

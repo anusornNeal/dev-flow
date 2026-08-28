@@ -49,12 +49,13 @@ export default function CopyTemplateButton({ task, className = '', variant = 'fu
       onClick={handleCopy}
       title="Copy for Codex"
       aria-label="Copy for Codex"
-      className={`flex items-center gap-1.5 px-2 py-1 text-[11px] font-mono font-extrabold rounded-lg border transition-colors cursor-pointer ${
+      aria-live="polite"
+      className={`df-button min-h-8 min-w-0 px-2 py-1 font-mono text-[11px] ${
         status === 'copied'
-          ? 'bg-[#e6f4ea] dark:bg-[#292119] text-[#137333] dark:text-[#f3eadf] border-[#ceead6] dark:border-[#584a3b]'
+          ? 'df-button--secondary df-feedback--success'
           : status === 'error'
-          ? 'bg-[#fce8e6] dark:bg-[#292119] text-[#c5221f] dark:text-[#f3eadf] border-[#fad2cf] dark:border-[#584a3b]'
-          : 'bg-[#faf7f0] dark:bg-[#1e1914] text-[#8a725f] dark:text-[#f3eadf] border-[#ddd0ba] dark:border-[#584a3b] hover:bg-[#f3ead7] dark:hover:bg-[#292119] hover:text-[#534135] dark:text-[#f3eadf] dark:hover:text-[#f3eadf]'
+          ? 'df-button--secondary df-feedback--danger'
+          : 'df-button--secondary'
       } ${className}`}
     >
       {status === 'copied' ? (

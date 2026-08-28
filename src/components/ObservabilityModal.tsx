@@ -60,22 +60,31 @@ export default function ObservabilityModal({ onClose }: ObservabilityModalProps)
     };
   }, []);
 
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
+
   const failedJobs = (data?.mcp?.recentJobs || []).filter((job) => ['failed', 'timed_out', 'cancelled'].includes(job.status || '')).slice(0, 6);
   const recommendations = Array.from(new Set([...(data?.recommendations || []), ...(data?.tools?.recommendations || [])])).slice(0, 6);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="max-h-[90vh] w-full max-w-4xl overflow-hidden rounded-2xl bg-white shadow-2xl">
-        <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
+    <div className="df-dialog-backdrop fixed inset-0 z-50 flex items-center justify-center p-4">
+      <button type="button" aria-label="Close observability backdrop" className="fixed inset-0 cursor-default" onClick={onClose} />
+      <div className="df-dialog relative z-10 flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden" role="dialog" aria-modal="true" aria-label="Observability diagnostics">
+        <div className="df-dialog-header flex items-center justify-between gap-4 px-6 py-4">
           <div>
-            <h2 className="text-lg font-semibold text-slate-900">MCP and agent health</h2>
-            <p className="text-sm text-slate-500">{data?.generatedAt ? `Updated ${new Date(data.generatedAt).toLocaleString()}` : 'Diagnostics'}</p>
+            <h2 className="df-heading-lg">MCP and agent health</h2>
+            <p className="df-meta mt-1">{data?.generatedAt ? `Updated ${new Date(data.generatedAt).toLocaleString()}` : 'Diagnostics'}</p>
           </div>
-          <button className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm hover:bg-slate-50" onClick={onClose}>Close</button>
+          <button type="button" aria-label="Close observability" className="df-button df-button--secondary min-h-8 min-w-0" onClick={onClose}>Close</button>
         </div>
-        <div className="max-h-[calc(90vh-76px)] space-y-4 overflow-y-auto p-6">
-          {error && <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}
-          {!data && !error && <div className="rounded-xl border p-3 text-sm text-slate-500">Loading diagnostics…</div>}
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-6">
+          {error && <div className="df-feedback df-feedback--danger"><div className="df-feedback__summary">Diagnostics unavailable</div><div className="df-feedback__detail df-break-technical">{error}</div></div>}
+          {!data && !error && <div className="df-feedback df-feedback--info"><div className="df-feedback__summary">Loading diagnostics…</div><div className="df-feedback__detail">Waiting for the latest MCP and agent health snapshot.</div></div>}
           {data && (
             <>
               <div className="grid gap-3 md:grid-cols-4">
@@ -100,17 +109,17 @@ export default function ObservabilityModal({ onClose }: ObservabilityModalProps)
 }
 
 function Metric({ label, value }: { label: string; value: number }) {
-  return <div className="rounded-xl border border-slate-200 p-4"><div className="text-xs uppercase text-slate-500">{label}</div><div className="mt-2 text-3xl font-semibold text-slate-900">{value}</div></div>;
+  return <div className="df-surface min-w-0 p-4"><div className="df-meta uppercase">{label}</div><div className="mt-2 text-3xl font-semibold text-[var(--df-color-text-strong)]">{value}</div></div>;
 }
 
 function Panel({ title, children }: { title: string; children: React.ReactNode }) {
-  return <section className="space-y-2 rounded-xl border border-slate-200 p-4"><h3 className="font-semibold text-slate-900">{title}</h3>{children}</section>;
+  return <section className="df-surface min-w-0 space-y-2 p-4"><h3 className="df-heading-sm break-words">{title}</h3>{children}</section>;
 }
 
 function Row({ main, sub }: { main: string; sub: string }) {
-  return <div className="rounded-lg bg-slate-50 p-3 text-sm"><div className="font-medium text-slate-900">{main}</div><div className="text-xs text-slate-500">{sub}</div></div>;
+  return <div className="min-w-0 rounded-lg bg-[var(--df-color-surface-subtle)] p-3 text-sm"><div className="break-words font-medium text-[var(--df-color-text-strong)]">{main}</div><div className="df-meta df-break-technical mt-1">{sub}</div></div>;
 }
 
 function Empty({ text }: { text: string }) {
-  return <p className="text-sm text-slate-500">{text}</p>;
+  return <p className="df-meta break-words">{text}</p>;
 }

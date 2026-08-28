@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { X, Download, ExternalLink } from 'lucide-react';
+import { X, ExternalLink } from 'lucide-react';
 import { TaskImage } from '../types';
 
 interface ImageViewerProps {
@@ -19,7 +19,7 @@ export default function ImageViewer({ image, onClose }: ImageViewerProps) {
   if (!image) return null;
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fade-in" onClick={onClose}>
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm animate-fade-in" role="dialog" aria-modal="true" aria-label={`Image viewer: ${image.filename}`} onClick={onClose}>
       <div 
         className="relative max-w-full max-h-full flex flex-col"
         onClick={(e) => e.stopPropagation()}
@@ -34,8 +34,10 @@ export default function ImageViewer({ image, onClose }: ImageViewerProps) {
             <ExternalLink size={16} /> Open
           </a>
           <button 
+            type="button"
             onClick={onClose}
-            className="text-white/70 hover:text-white transition-colors bg-black/40 p-1.5 rounded-lg"
+            aria-label="Close image viewer"
+            className="rounded-lg bg-black/40 p-1.5 text-white/70 transition-colors hover:text-white"
           >
             <X size={24} />
           </button>
@@ -46,7 +48,7 @@ export default function ImageViewer({ image, onClose }: ImageViewerProps) {
           alt={image.filename} 
           className="max-w-[90vw] max-h-[85vh] object-contain rounded-lg shadow-2xl border border-white/10 bg-[#1e1914]"
         />
-        <div className="absolute -bottom-8 left-0 text-white/50 text-xs font-mono truncate max-w-full text-center w-full">
+        <div className="mt-2 max-w-[90vw] break-words text-center font-mono text-xs text-white/60">
           {image.filename}
         </div>
       </div>

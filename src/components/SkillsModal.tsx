@@ -60,15 +60,23 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
     void loadSkills();
   }, []);
 
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
+
   const selectedSkill = useMemo(() => {
     return skills.find((skill) => skill.id === selectedSkillId) || null;
   }, [skills, selectedSkillId]);
 
   return (
-    <div className="fixed inset-0 bg-[#3e3129]/30 dark:bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div className="df-dialog-backdrop fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="fixed inset-0" onClick={onClose} />
 
-      <div className="bg-[#fffdfa] dark:bg-[#1e1914] rounded-2xl shadow-xl w-full max-w-6xl h-[85vh] flex border border-[#e5d4bb] dark:border-[#584a3b] overflow-hidden select-none relative z-10">
+      <div className="df-dialog relative z-10 flex h-[85vh] w-full max-w-6xl overflow-hidden select-none" role="dialog" aria-modal="true" aria-label="Authoring skills">
         <div className="w-1/3 border-r border-[#ebdcb9] dark:border-[#584a3b] bg-[#fdfbf6] dark:bg-[#1e1914] flex flex-col">
           <div className="px-6 py-4 border-b border-[#ebdcb9] dark:border-[#584a3b] flex items-center justify-between shrink-0">
             <h2 className="text-[#534135] dark:text-[#f3eadf] font-extrabold font-sans text-lg flex items-center gap-2">
@@ -100,7 +108,7 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
                     }`}
                   >
                     <div className="flex-1 min-w-0 pr-6">
-                      <div className="font-extrabold text-sm flex items-center gap-1.5">
+                      <div className="flex min-w-0 items-center gap-1.5 break-words text-sm font-extrabold">
                         {skill.name}
                         <span title="Protected Master Skill">
                           <Lock size={10} className="text-[#c4a991] dark:text-[#d6b56d]" />
@@ -124,8 +132,8 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
             ) : selectedSkill ? (
               <div className="flex-1 flex items-center justify-between">
                 <div>
-                  <h3 className="text-[#534135] dark:text-[#f3eadf] font-extrabold font-sans text-base">{selectedSkill.name}</h3>
-                  <p className="text-[10px] font-mono text-[#8a725f] dark:text-[#f3eadf]">{selectedSkill.description}</p>
+                  <h3 className="break-words font-sans text-base font-extrabold text-[var(--df-color-text-strong)]">{selectedSkill.name}</h3>
+                  <p className="df-meta mt-1 break-words font-mono">{selectedSkill.description}</p>
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="bg-[#fff7eb] dark:bg-[#1e1914] border border-[#f0d9b2] dark:border-[#584a3b] text-[#9a6a27] dark:text-[#f3eadf] px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-sm">
@@ -135,7 +143,8 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
                   <button
                     type="button"
                     onClick={onClose}
-                    className="text-[#8c7463] dark:text-[#f3eadf] hover:bg-[#ebdcb9] dark:bg-[#584a3b]/40 dark:hover:bg-[#584a3b]/40 p-1.5 rounded-lg transition-colors"
+                    aria-label="Close skills dialog"
+                    className="df-icon-button"
                     title="Close"
                   >
                     <X size={18} />
@@ -147,7 +156,8 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
                 <button
                   type="button"
                   onClick={onClose}
-                  className="text-[#8c7463] dark:text-[#f3eadf] hover:bg-[#ebdcb9] dark:bg-[#584a3b]/40 dark:hover:bg-[#584a3b]/40 p-1.5 rounded-lg transition-colors"
+                  aria-label="Close skills dialog"
+                  className="df-icon-button"
                   title="Close"
                 >
                   <X size={18} />

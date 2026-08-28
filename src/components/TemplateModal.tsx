@@ -39,6 +39,14 @@ export default function TemplateModal({ onClose }: TemplateModalProps) {
     fetchSections();
   }, []);
 
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
+
   const fetchSections = async () => {
     try {
       setLoading(true);
@@ -116,8 +124,9 @@ export default function TemplateModal({ onClose }: TemplateModalProps) {
   };
 
   return (
-    <div className="fixed inset-0 bg-[#3e3129]/30 dark:bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="bg-[#fffdfa] dark:bg-[#1e1914] rounded-2xl shadow-xl w-full max-w-6xl h-[85vh] flex border border-[#e5d4bb] dark:border-[#584a3b] overflow-hidden select-none">
+    <div className="df-dialog-backdrop fixed inset-0 z-50 flex items-center justify-center p-4">
+      <button type="button" aria-label="Close prompt template backdrop" className="fixed inset-0 cursor-default" onClick={onClose} />
+      <div className="df-dialog relative z-10 flex h-[85vh] w-full max-w-6xl overflow-hidden select-none" role="dialog" aria-modal="true" aria-label="Global prompt template">
         
         {/* Left Sidebar: Section List */}
         <div className="w-1/3 border-r border-[#ebdcb9] dark:border-[#584a3b] bg-[#fdfbf6] dark:bg-[#1e1914] flex flex-col">
@@ -216,10 +225,10 @@ export default function TemplateModal({ onClose }: TemplateModalProps) {
             ) : selectedSection ? (
               <>
                 <div className="flex flex-col gap-1 min-w-0 flex-1">
-                  <h3 className="text-[#534135] dark:text-[#f3eadf] font-extrabold text-lg flex items-center gap-2 truncate">
+                  <h3 className="flex min-w-0 items-center gap-2 break-words text-lg font-extrabold text-[var(--df-color-text-strong)]">
                     {selectedSection.title}
                   </h3>
-                  <span className="text-xs font-mono text-[#8C7565] dark:text-[#8c7463] truncate" title={selectedSection.sourcePath}>
+                  <span className="df-meta df-break-technical font-mono" title={selectedSection.sourcePath}>
                     {selectedSection.sourcePath}
                   </span>
                 </div>
@@ -262,8 +271,10 @@ export default function TemplateModal({ onClose }: TemplateModalProps) {
             )}
             
             <button
+              type="button"
               onClick={onClose}
-              className="ml-4 p-1.5 hover:bg-[#ebdcb9] dark:bg-[#584a3b]/40 dark:hover:bg-[#584a3b]/40 rounded-lg text-[#8C7565] dark:text-[#f3eadf] transition-colors"
+              aria-label="Close prompt template"
+              className="df-icon-button ml-4 shrink-0"
             >
               <X size={20} />
             </button>

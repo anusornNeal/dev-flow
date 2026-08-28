@@ -95,11 +95,11 @@ export default function AgentRunLogModal({
   const subtitleParts = [agent, model, runStatus].filter(Boolean);
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in select-text">
+    <div className="df-dialog-backdrop fixed inset-0 z-50 flex items-center justify-center p-4 animate-fade-in select-text">
       <div className="fixed inset-0" onClick={onClose} />
 
-      <div className="bg-[#fcfaf5] dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] w-full max-w-3xl h-[80vh] rounded-2xl shadow-2xl relative z-10 overflow-hidden flex flex-col font-sans">
-        <div className="p-4 border-b border-[#ebdcb9] dark:border-[#584a3b] bg-[#ebdcb9]/40 dark:bg-[#584a3b]/40 flex items-center justify-between gap-3">
+      <div className="df-dialog relative z-10 flex h-[80vh] w-full max-w-3xl flex-col overflow-hidden font-sans" role="dialog" aria-modal="true" aria-label="Agent run log">
+        <div className="df-dialog-header flex items-center justify-between gap-3 p-4">
           <div className="flex items-center gap-2 min-w-0">
             <FileText size={16} className="text-[#a46c24] dark:text-[#f3eadf] shrink-0" />
             <h2 className="text-xs font-black text-[#5c493c] dark:text-[#f3eadf] tracking-tight uppercase truncate">
@@ -109,7 +109,8 @@ export default function AgentRunLogModal({
           <button
             type="button"
             onClick={onClose}
-            className="text-gray-400 dark:text-[#b8ab9f] hover:text-red-500 p-1 rounded-full hover:bg-white dark:hover:bg-[#292119]/60 transition-all cursor-pointer shrink-0"
+            className="df-icon-button shrink-0"
+            aria-label="Close agent run log"
             title="Close (Esc)"
           >
             <X size={15} />
@@ -123,7 +124,7 @@ export default function AgentRunLogModal({
             </span>
           )}
           {logPath && (
-            <span className="truncate flex-1 min-w-0" title={logPath}>
+            <span className="df-break-technical min-w-0 flex-1" title={logPath}>
               {logPath}
             </span>
           )}
@@ -141,9 +142,9 @@ export default function AgentRunLogModal({
           )}
 
           {!loading && error && (
-            <div className="flex items-center gap-2 text-[#b4432d] dark:text-[#f3eadf] text-xs font-mono">
-              <AlertTriangle size={14} />
-              {error}
+            <div className="df-feedback df-feedback--danger">
+              <div className="df-feedback__summary flex items-center gap-2"><AlertTriangle size={14} /> Log unavailable</div>
+              <div className="df-feedback__detail df-break-technical">{error}</div>
             </div>
           )}
 
@@ -160,11 +161,11 @@ export default function AgentRunLogModal({
           )}
         </div>
 
-        <div className="p-3 bg-[#f4ebd9] dark:bg-[#1e1914] border-t border-[#ebdcb9] dark:border-[#584a3b] flex items-center justify-end gap-2">
+        <div className="df-dialog-footer flex items-center justify-end gap-2 p-3">
           <button
             type="button"
             onClick={onClose}
-            className="text-[10px] font-mono font-extrabold uppercase px-4 py-2 rounded-xl border border-[#ebdcb9] dark:border-[#584a3b] bg-white dark:bg-[#292119] text-[#8a6e5a] dark:text-[#f3eadf] hover:bg-[#fff9ed] dark:hover:bg-[#3a2f26] transition-colors cursor-pointer shadow-3xs"
+            className="df-button df-button--secondary font-mono text-[10px] uppercase"
           >
             Close
           </button>
@@ -172,7 +173,7 @@ export default function AgentRunLogModal({
             type="button"
             onClick={handleCopy}
             disabled={loading || !!error || !content}
-            className="text-[10px] font-mono font-extrabold uppercase px-4 py-2 rounded-xl bg-[#d89745] dark:bg-[#a46c24] text-white hover:bg-[#c07c28] dark:hover:bg-[#8a581c] transition-colors cursor-pointer shadow-3xs inline-flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="df-button df-button--primary font-mono text-[10px] uppercase"
           >
             {copied ? <Check size={12} /> : <Copy size={12} />}
             {copied ? 'Copied' : 'Copy log'}

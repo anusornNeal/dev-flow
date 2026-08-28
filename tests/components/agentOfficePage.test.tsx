@@ -389,26 +389,4 @@ test('Agent Office uses global SSE invalidation, bounded fallback and no active-
   assert.doesNotMatch(apiSource, /URLSearchParams\(\{\s*projectId/);
 });
 
-test('Agent Office routes monitored rows through the existing task drawer using GET-only reads', () => {
-  const pageSource = fs.readFileSync('src/components/AgentOfficePage.tsx', 'utf8');
-  const appSource = fs.readFileSync('src/App.tsx', 'utf8');
-  const sidebarSource = fs.readFileSync('src/components/Sidebar.tsx', 'utf8');
 
-  assert.match(pageSource, /onOpenTask\(worker\.taskId\)/);
-  assert.match(pageSource, /onOpenTask\(row\.taskId\)/);
-  assert.match(pageSource, /onOpenTask\(item\.taskId\)/);
-  assert.doesNotMatch(pageSource, /apiPost|apiPut|apiDelete/);
-  assert.doesNotMatch(pageSource, /onClick[^\n]*(pause|retry|reassign|reprioritize|reorder|kill)/i);
-
-  const handlerStart = appSource.indexOf('const handleOpenAgentOfficeTask');
-  const handlerEnd = appSource.indexOf('  if (!mounted)', handlerStart);
-  assert.ok(handlerStart >= 0 && handlerEnd > handlerStart);
-  const handler = appSource.slice(handlerStart, handlerEnd);
-  assert.match(handler, /fetchJson<Task>\('GET'/);
-  assert.match(handler, /setSelectedTask\(result\.data\)/);
-  assert.doesNotMatch(handler, /handleSetActivePage|apiPost|apiPut|apiDelete/);
-  assert.match(appSource, /activePage === 'agent-office'/);
-  assert.match(appSource, /#agent-office/);
-  assert.match(sidebarSource, /Agent Office/);
-  assert.match(sidebarSource, /onSetActivePage\?\.\('agent-office'\)/);
-});

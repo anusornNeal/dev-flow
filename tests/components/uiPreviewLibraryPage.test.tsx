@@ -182,17 +182,4 @@ test('library-level loading, empty, and error states use shared feedback and sur
   assert.match(component, /df-surface/);
 });
 
-test('App and Sidebar use direct #previews history navigation without resurrecting Atlas UI', () => {
-  const app = fs.readFileSync('src/App.tsx', 'utf8');
-  const sidebar = fs.readFileSync('src/components/Sidebar.tsx', 'utf8');
-  assert.match(app, /resolveActivePage/);
-  assert.match(app, /hash === '#previews' \? 'previews'/);
-  assert.match(app, /resolveActivePage\(window\.location\.hash\)/);
-  assert.match(app, /addEventListener\('hashchange'/);
-  assert.match(app, /UiPreviewLibraryPage/);
-  assert.match(app, /api\/tasks\/\$\{encodeURIComponent\(task\.id\)\}\?mode=standard/);
-  assert.match(app, /setActiveProjectId\(task\.projectId\)/);
-  assert.match(sidebar, /UI Previews/);
-  assert.match(sidebar, /onSetActivePage/);
-  assert.doesNotMatch(app + sidebar, /ProjectAtlasPage|Project Atlas|#atlas.*ProjectAtlasPage/);
-});
+

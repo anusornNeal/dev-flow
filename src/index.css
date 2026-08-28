@@ -1,9 +1,25 @@
-@import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=JetBrains+Mono:wght@300;400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+@font-face {
+  font-family: "LINE Seed Sans TH";
+  src: url('/fonts/LINESeedSansTH-Regular.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "LINE Seed Sans TH";
+  src: url('/fonts/LINESeedSansTH-Bold.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 700 800;
+  font-display: swap;
+}
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 
 @theme {
-  --font-sans: "JetBrains Mono", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "LINE Seed Sans TH", "Noto Sans Thai", "Leelawadee UI", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
   --font-serif: "DM Serif Display", Georgia, ui-serif, serif;
 
@@ -27,22 +43,22 @@
 :root {
   color-scheme: light;
 
-  --df-color-canvas: #fbf9f6;
-  --df-color-surface: #fffdfa;
+  --df-color-canvas: #f7f7f8;
+  --df-color-surface: #ffffff;
   --df-color-surface-raised: #ffffff;
-  --df-color-surface-muted: #f4ebd9;
-  --df-color-surface-subtle: #f8f2e7;
-  --df-color-text: #3e322b;
-  --df-color-text-strong: #2f241d;
-  --df-color-text-muted: #816b5a;
-  --df-color-text-subtle: #9b846f;
-  --df-color-border: #e5d4bb;
-  --df-color-border-strong: #d2baa0;
-  --df-color-primary: #3c2a1a;
-  --df-color-primary-hover: #2a1d12;
+  --df-color-surface-muted: #f1f2f4;
+  --df-color-surface-subtle: #f5f5f6;
+  --df-color-text: #2f3136;
+  --df-color-text-strong: #1f2024;
+  --df-color-text-muted: #656972;
+  --df-color-text-subtle: #858a94;
+  --df-color-border: #dfe1e5;
+  --df-color-border-strong: #c8cbd1;
+  --df-color-primary: #2f3136;
+  --df-color-primary-hover: #222429;
   --df-color-primary-text: #ffffff;
-  --df-color-accent: #a46c24;
-  --df-color-accent-hover: #8a581c;
+  --df-color-accent: #a76524;
+  --df-color-accent-hover: #8b531c;
   --df-color-success: #427931;
   --df-color-success-surface: #edf7ed;
   --df-color-warning: #935919;
@@ -58,22 +74,22 @@
   --df-color-backdrop: rgb(46 35 28 / 58%);
 
   --df-space-1: 4px;
-  --df-space-2: 8px;
-  --df-space-3: 12px;
-  --df-space-4: 16px;
-  --df-space-5: 20px;
-  --df-space-6: 24px;
-  --df-space-8: 32px;
+  --df-space-2: 6px;
+  --df-space-3: 8px;
+  --df-space-4: 10px;
+  --df-space-5: 12px;
+  --df-space-6: 16px;
+  --df-space-8: 24px;
 
-  --df-radius-sm: 8px;
-  --df-radius-md: 12px;
-  --df-radius-lg: 16px;
+  --df-radius-sm: 6px;
+  --df-radius-md: 8px;
+  --df-radius-lg: 12px;
   --df-radius-pill: 9999px;
 
-  --df-control-height-compact: 32px;
-  --df-control-height: 40px;
-  --df-control-height-large: 44px;
-  --df-control-padding-x: 12px;
+  --df-control-height-compact: 30px;
+  --df-control-height: 36px;
+  --df-control-height-large: 40px;
+  --df-control-padding-x: 10px;
 
   --df-shadow-sm: 0 1px 2px rgb(62 50 43 / 7%);
   --df-shadow-md: 0 8px 24px rgb(62 50 43 / 12%);
@@ -83,22 +99,22 @@
 .dark {
   color-scheme: dark;
 
-  --df-color-canvas: #1e1914;
-  --df-color-surface: #241d17;
-  --df-color-surface-raised: #292119;
-  --df-color-surface-muted: #332c22;
-  --df-color-surface-subtle: #2c241d;
-  --df-color-text: #f3eadf;
-  --df-color-text-strong: #fff8ee;
-  --df-color-text-muted: #c9b7a6;
-  --df-color-text-subtle: #9f9185;
-  --df-color-border: #584a3b;
-  --df-color-border-strong: #6d5b48;
-  --df-color-primary: #e0a070;
-  --df-color-primary-hover: #cc8e60;
-  --df-color-primary-text: #292119;
-  --df-color-accent: #d6b56d;
-  --df-color-accent-hover: #e0c27e;
+  --df-color-canvas: #18191b;
+  --df-color-surface: #202124;
+  --df-color-surface-raised: #26282c;
+  --df-color-surface-muted: #2b2d31;
+  --df-color-surface-subtle: #24262a;
+  --df-color-text: #e8e9eb;
+  --df-color-text-strong: #f7f7f8;
+  --df-color-text-muted: #b5b8bf;
+  --df-color-text-subtle: #8d929b;
+  --df-color-border: #393c42;
+  --df-color-border-strong: #4a4e56;
+  --df-color-primary: #d79657;
+  --df-color-primary-hover: #e2a466;
+  --df-color-primary-text: #18191b;
+  --df-color-accent: #d7a05f;
+  --df-color-accent-hover: #e2ae70;
   --df-color-success: #8fce7c;
   --df-color-success-surface: #263124;
   --df-color-warning: #efc986;
@@ -162,7 +178,7 @@ select {
 .df-heading-sm {
   color: var(--df-color-text-strong);
   font-size: 13px;
-  font-weight: 800;
+  font-weight: 700;
   line-height: 1.35;
   letter-spacing: -0.01em;
 }
@@ -171,7 +187,7 @@ select {
   color: var(--df-color-text);
   font-size: 12px;
   font-weight: 500;
-  line-height: 1.65;
+  line-height: 1.5;
 }
 
 .df-meta {
@@ -201,6 +217,18 @@ select {
 
 .df-control:hover:not(:disabled) {
   border-color: var(--df-color-border-strong);
+}
+
+.df-control:focus-visible {
+  border-color: var(--df-color-focus-ring);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--df-color-focus-ring) 22%, transparent);
+  outline: none;
+}
+
+.df-control.is-selected {
+  color: var(--df-color-text-strong);
+  background: var(--df-color-surface-subtle);
+  border-color: var(--df-color-accent);
 }
 
 .df-control:disabled,
@@ -276,22 +304,22 @@ select {
 .df-select-option.is-selected {
   color: var(--df-color-text-strong);
   background: var(--df-color-surface-subtle);
-  font-weight: 800;
+  font-weight: 700;
 }
 
 /* Shared action hierarchy */
 .df-button {
   display: inline-flex;
   min-height: var(--df-control-height);
-  min-width: 88px;
+  min-width: 72px;
   align-items: center;
   justify-content: center;
-  gap: 7px;
-  padding: 8px 14px;
+  gap: 6px;
+  padding: 6px 10px;
   border-radius: var(--df-radius-md);
   border: 1px solid transparent;
   font-size: 11px;
-  font-weight: 800;
+  font-weight: 700;
   line-height: 1;
   transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease, opacity 120ms ease, transform 120ms ease;
 }

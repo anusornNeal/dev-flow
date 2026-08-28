@@ -12,6 +12,8 @@
     "tunnel:stop": "tsx scripts/openai-tunnel.ts stop",
     "doctor": "tsx scripts/doctor.ts",
     "typecheck": "tsc --noEmit",
+    "build:chatgpt-title-sync": "esbuild extensions/chatgpt-title-sync/src/contentScript.ts extensions/chatgpt-title-sync/src/background.ts extensions/chatgpt-title-sync/src/options.ts --bundle --platform=browser --format=iife --outdir=extensions/chatgpt-title-sync/dist",
+    "test:chatgpt-title-sync": "tsx --test tests/chatgptTitleSync.test.ts tests/server/chatSessionTitleRoutes.test.ts",
     "verify": "tsx scripts/verify.ts",
     "test": "tsx scripts/verify.ts",
     "test:agent-runs": "tsx scripts/verify-agent-runs.ts",

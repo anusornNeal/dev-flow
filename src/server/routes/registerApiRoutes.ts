@@ -13,6 +13,7 @@ import { registerMcpToolJobRoutes } from './mcpToolJobs';
 import { registerEventRoutes } from './events';
 import { registerExecutionSessionRoutes } from './executionSessions';
 import { registerUiPreviewRoutes } from './uiPreviews';
+import { registerChatSessionRoutes } from './chatSessions';
 import { initMcpToolJobs } from '../services/mcpToolJobService';
 import { createPrivilegedApiAccessMiddleware } from '../services/apiAccessPolicyService';
 
@@ -23,6 +24,7 @@ export function registerApiRoutes(app: express.Express, deps: ApiRouteDeps) {
   registerEventRoutes(app);
   registerDevFlowRoutes(app, deps);
   registerExecutionSessionRoutes(app, deps);
+  registerChatSessionRoutes(app, deps);
   registerSkillRoutes(app, deps);
   registerProjectRoutes(app, deps);
   registerSettingsRoutes(app, deps);

@@ -491,6 +491,22 @@ export interface ProjectAtlasUiResponse {
   message?: string;
 }
 
+export type ChatSessionTitleResolution =
+  | {
+      resolved: true;
+      executionSessionId: string;
+      conversationId: string;
+      project: string;
+      taskId: string;
+      taskTitle: string;
+      chatAlias: string | null;
+      preferredTitle: string | null;
+    }
+  | {
+      resolved: false;
+      reason: 'invalid-conversation-id' | 'unresolved-session' | 'ambiguous-session';
+    };
+
 export interface Column {
   id: TaskStatus;
   label: string;

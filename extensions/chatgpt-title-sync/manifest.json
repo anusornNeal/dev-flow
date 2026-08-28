@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "DevFlow ChatGPT Title Sync",
+  "version": "0.1.0",
+  "description": "Displays DevFlow-preferred titles for explicitly associated ChatGPT conversations without using the visible title as identity.",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "background": {
+    "service_worker": "dist/background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://www.chatgpt.com/*",
+        "https://chat.openai.com/*"
+      ],
+      "js": ["dist/contentScript.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  }
+}

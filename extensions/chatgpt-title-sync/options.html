@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DevFlow ChatGPT Title Sync</title>
+  <style>
+    :root { color-scheme: light dark; font-family: ui-sans-serif, system-ui, sans-serif; }
+    body { margin: 0; background: Canvas; color: CanvasText; }
+    main { max-width: 720px; margin: 0 auto; padding: 32px 20px 48px; }
+    h1 { margin: 0; font-size: 22px; }
+    .lead { margin: 8px 0 24px; color: color-mix(in srgb, CanvasText 68%, transparent); line-height: 1.5; }
+    form { display: grid; gap: 16px; }
+    .card { border: 1px solid color-mix(in srgb, CanvasText 18%, transparent); border-radius: 12px; padding: 16px; }
+    .row { display: flex; align-items: flex-start; gap: 10px; }
+    label { display: block; font-weight: 700; font-size: 13px; }
+    .help { margin: 5px 0 0; font-size: 12px; line-height: 1.5; color: color-mix(in srgb, CanvasText 65%, transparent); }
+    input[type="text"], input[type="url"] { box-sizing: border-box; width: 100%; margin-top: 8px; padding: 10px 12px; border-radius: 8px; border: 1px solid color-mix(in srgb, CanvasText 24%, transparent); background: Canvas; color: CanvasText; font: inherit; }
+    input:focus-visible, button:focus-visible { outline: 2px solid Highlight; outline-offset: 2px; }
+    code { font-size: 11px; overflow-wrap: anywhere; }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    button { border: 1px solid color-mix(in srgb, CanvasText 24%, transparent); border-radius: 8px; padding: 9px 14px; background: Canvas; color: CanvasText; font-weight: 700; cursor: pointer; }
+    button[type="submit"] { background: Highlight; color: HighlightText; border-color: Highlight; }
+    #status { min-height: 20px; font-size: 12px; overflow-wrap: anywhere; }
+    #status[data-tone="error"] { color: #b42318; }
+    #status[data-tone="success"] { color: #14804a; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>DevFlow ChatGPT Title Sync</h1>
+    <p class="lead">Changes only the visible ChatGPT sidebar label for conversations that DevFlow has explicitly associated. Titles are never used as task, claim, or session identity.</p>
+
+    <form id="settingsForm">
+      <section class="card">
+        <div class="row">
+          <input id="enabled" type="checkbox" />
+          <div>
+            <label for="enabled">Enable title sync</label>
+            <p class="help">Disable this to leave ChatGPT titles completely untouched.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <label for="pattern">Naming pattern</label>
+        <p class="help">Available tokens: <code>{{project}}</code>, <code>{{taskId}}</code>, <code>{{taskTitle}}</code>, <code>{{chatAlias}}</code>. Missing tokens are removed safely.</p>
+        <input id="pattern" type="text" spellcheck="false" autocomplete="off" />
+      </section>
+
+      <section class="card">
+        <label for="devflowBaseUrl">Local DevFlow URL</label>
+        <p class="help">Only loopback addresses are accepted. The extension never sends the ChatGPT conversation ID to a remote host.</p>
+        <input id="devflowBaseUrl" type="url" spellcheck="false" autocomplete="off" />
+      </section>
+
+      <div id="status" role="status" aria-live="polite"></div>
+      <div class="actions">
+        <button type="submit">Save</button>
+        <button id="reset" type="button">Restore defaults</button>
+      </div>
+    </form>
+  </main>
+  <script src="dist/options.js"></script>
+</body>
+</html>

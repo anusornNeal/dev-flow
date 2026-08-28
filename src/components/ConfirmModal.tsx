@@ -1,5 +1,5 @@
-import React from 'react';
-import { AlertTriangle, X } from 'lucide-react';
+import React, { useEffect } from 'react';
+import { AlertTriangle, Info, Loader2, X } from 'lucide-react';
 
 interface ConfirmModalProps {
   title: string;
@@ -8,56 +8,101 @@ interface ConfirmModalProps {
   onCancel: () => void;
   confirmText?: string;
   cancelText?: string;
+  variant?: 'danger' | 'primary';
+  confirmDisabled?: boolean;
+  confirming?: boolean;
+  confirmingText?: string;
 }
 
-export default function ConfirmModal({ 
-  title, 
-  message, 
-  onConfirm, 
+export default function ConfirmModal({
+  title,
+  message,
+  onConfirm,
   onCancel,
   confirmText = 'Confirm',
-  cancelText = 'Cancel'
+  cancelText = 'Cancel',
+  variant = 'danger',
+  confirmDisabled = false,
+  confirming = false,
+  confirmingText,
 }: ConfirmModalProps) {
+  const destructive = variant === 'danger';
+  const busyLabel = confirmingText || (confirmText.toLowerCase() === 'delete' ? 'Deleting…' : 'Working…');
+  const Icon = destructive ? AlertTriangle : Info;
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || confirming) return;
+      event.preventDefault();
+      onCancel();
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [confirming, onCancel]);
+
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in select-text">
-      <div className="fixed inset-0" onClick={onCancel} />
-      
-      <div className="bg-[#fcfaf5] dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] w-full max-w-sm rounded-2xl shadow-2xl relative z-10 overflow-hidden flex flex-col font-sans">
-        
-        <div className="p-4 border-b border-[#ebdcb9] dark:border-[#584a3b] bg-[#ebdcb9]/40 dark:bg-[#584a3b]/40 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <AlertTriangle size={16} className="text-[#a46c24] dark:text-[#f3eadf]" />
-            <h2 className="text-xs font-black text-[#5c493c] dark:text-[#f3eadf] tracking-tight uppercase">
-              {title}
-            </h2>
+    <div className="df-dialog-backdrop fixed inset-0 z-50 flex items-center justify-center p-4 select-text">
+      <div className="fixed inset-0" onClick={() => { if (!confirming) onCancel(); }} aria-hidden="true" />
+
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="confirm-modal-title"
+        aria-describedby="confirm-modal-message"
+        aria-busy={confirming}
+        className="df-dialog relative z-10 flex w-full max-w-sm flex-col overflow-hidden"
+      >
+        <div className="df-dialog-header flex items-start justify-between gap-3 px-5 py-4">
+          <div className="flex min-w-0 items-start gap-2.5">
+            <span className={`mt-0.5 shrink-0 ${destructive ? 'text-[var(--df-color-danger)]' : 'text-[var(--df-color-accent)]'}`}>
+              <Icon size={17} aria-hidden="true" />
+            </span>
+            <div className="min-w-0">
+              <h2 id="confirm-modal-title" className="df-heading-sm break-words">
+                {title}
+              </h2>
+              {destructive && (
+                <p className="mt-1 text-[10px] font-semibold text-[var(--df-color-text-muted)]">
+                  Review the impact before continuing.
+                </p>
+              )}
+            </div>
           </div>
           <button
             type="button"
             onClick={onCancel}
-            className="text-gray-400 dark:text-[#b8ab9f] hover:text-red-500 p-1 rounded-full hover:bg-white dark:hover:bg-[#292119]/60 transition-all cursor-pointer"
+            disabled={confirming}
+            aria-label="Close confirmation dialog"
+            className="df-icon-button df-focus-ring shrink-0"
           >
-            <X size={15} />
+            <X size={15} aria-hidden="true" />
           </button>
         </div>
 
-        <div className="p-5 text-[#5c493c] dark:text-[#f3eadf] text-xs leading-relaxed font-mono">
-          <p>{message}</p>
+        <div className="px-5 py-5">
+          <p id="confirm-modal-message" className="df-body-sm break-words">
+            {message}
+          </p>
         </div>
 
-        <div className="p-4 bg-[#f4ebd9] dark:bg-[#1e1914] border-t border-[#ebdcb9] dark:border-[#584a3b] flex items-center justify-end gap-2">
+        <div className="df-dialog-footer flex flex-col-reverse gap-2 px-5 py-4 sm:flex-row sm:items-center sm:justify-end">
           <button
             type="button"
             onClick={onCancel}
-            className="text-[10px] font-mono font-extrabold uppercase px-4 py-2 rounded-xl border border-[#ebdcb9] dark:border-[#584a3b] bg-white dark:bg-[#292119] text-[#8a6e5a] dark:text-[#f3eadf] hover:bg-[#fff9ed] dark:hover:bg-[#3a2f26] transition-colors cursor-pointer shadow-3xs"
+            disabled={confirming}
+            autoFocus
+            className="df-button df-button--secondary df-focus-ring"
           >
             {cancelText}
           </button>
           <button
             type="button"
             onClick={onConfirm}
-            className="text-[10px] font-mono font-extrabold uppercase px-4 py-2 rounded-xl bg-[#d89745] dark:bg-[#a46c24] text-white hover:bg-[#c07c28] dark:hover:bg-[#8a581c] transition-colors cursor-pointer shadow-3xs"
+            disabled={confirmDisabled || confirming}
+            className={`df-button ${destructive ? 'df-button--danger' : 'df-button--primary'} df-focus-ring`}
           >
-            {confirmText}
+            {confirming && <Loader2 size={14} className="animate-spin" aria-hidden="true" />}
+            {confirming ? busyLabel : confirmText}
           </button>
         </div>
       </div>

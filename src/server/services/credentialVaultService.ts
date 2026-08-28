@@ -3,7 +3,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { getDevFlowDataDir } from '../../lib/devFlowPaths.js';
 
-export type CredentialKey = 'githubToken' | 'jiraToken' | 'figmaToken';
+export type CredentialKey = 'githubToken' | 'jiraToken' | 'figmaToken' | 'openAiRuntimeApiKey';
 
 export interface CredentialVaultProvider {
   readonly name: string;
@@ -17,6 +17,7 @@ const ENV_KEYS: Record<CredentialKey, string[]> = {
   githubToken: ['GITHUB_PERSONAL_ACCESS_TOKEN', 'GITHUB_TOKEN'],
   jiraToken: ['JIRA_API_TOKEN', 'JIRA_PERSONAL_ACCESS_TOKEN'],
   figmaToken: ['FIGMA_ACCESS_TOKEN', 'FIGMA_PERSONAL_ACCESS_TOKEN'],
+  openAiRuntimeApiKey: ['CONTROL_PLANE_API_KEY', 'OPENAI_API_KEY'],
 };
 
 function resolveVaultPath() {
@@ -277,7 +278,7 @@ export function getCredentialVaultDiagnostics() {
 }
 
 export function redactCredentialText(text: string, secrets?: string[]) {
-  const values = (secrets || [getCredential('githubToken'), getCredential('jiraToken'), getCredential('figmaToken')])
+  const values = (secrets || [getCredential('githubToken'), getCredential('jiraToken'), getCredential('figmaToken'), getCredential('openAiRuntimeApiKey')])
     .map((value) => value.trim())
     .filter(Boolean)
     .sort((left, right) => right.length - left.length);

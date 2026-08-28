@@ -30,6 +30,7 @@ import {
   type DevFlowSupervisorProcessLabel,
 } from '../src/lib/devFlowSupervisor';
 import {
+  loadPersistedOpenAiTunnelConfig,
   resolveOpenAiTunnelOptions,
   startOpenAiTunnel,
   stopOpenAiTunnel,
@@ -231,8 +232,11 @@ export async function waitForLocalApi(baseUrl: string, timeoutMs: number, fetchI
   return { ok: false as const, message: `Timed out waiting for DevFlow API: ${lastMessage}` };
 }
 
-function tunnelOptionsForAppUrl(appUrl: string): OpenAiTunnelOptions {
-  const options = resolveOpenAiTunnelOptions();
+function tunnelOptionsForAppUrl(
+  appUrl: string,
+  persisted: Parameters<typeof resolveOpenAiTunnelOptions>[2] = {},
+): OpenAiTunnelOptions {
+  const options = resolveOpenAiTunnelOptions(process.env, undefined, persisted);
   return {
     ...options,
     mcpServerUrl: new URL('/mcp', appUrl).toString(),
@@ -331,7 +335,8 @@ function recordTunnelStopResult(result: OpenAiTunnelLifecycleResult) {
 }
 
 async function startTunnelForRuntime(appUrl: string) {
-  const options = tunnelOptionsForAppUrl(appUrl);
+  const persisted = await loadPersistedOpenAiTunnelConfig();
+  const options = tunnelOptionsForAppUrl(appUrl, persisted);
   recordTunnelStarting(`Starting OpenAI tunnel runtime "${options.alias}".`);
   const result = startOpenAiTunnel(options);
   recordTunnelStartResult(result);

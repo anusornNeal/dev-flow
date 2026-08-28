@@ -8,6 +8,8 @@ interface SettingsData {
   githubTokenMasked: boolean;
   jiraTokenMasked: boolean;
   figmaTokenMasked: boolean;
+  openAiRuntimeApiKeyMasked: boolean;
+  openAiTunnelId: string;
   jiraBaseUrl: string;
   jiraEmail: string;
   agentExecutionMode: string;
@@ -31,6 +33,10 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
   const [figmaToken, setFigmaToken] = useState('');
   const [figmaTokenMasked, setFigmaTokenMasked] = useState(false);
   const [showFigmaToken, setShowFigmaToken] = useState(false);
+  const [openAiRuntimeApiKey, setOpenAiRuntimeApiKey] = useState('');
+  const [openAiRuntimeApiKeyMasked, setOpenAiRuntimeApiKeyMasked] = useState(false);
+  const [showOpenAiRuntimeApiKey, setShowOpenAiRuntimeApiKey] = useState(false);
+  const [openAiTunnelId, setOpenAiTunnelId] = useState('');
   const [jiraBaseUrl, setJiraBaseUrl] = useState('');
   const [jiraEmail, setJiraEmail] = useState('');
   const [agentExecutionMode, setAgentExecutionMode] = useState('safe');
@@ -38,6 +44,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
   const [clearGithubToken, setClearGithubToken] = useState(false);
   const [clearJiraToken, setClearJiraToken] = useState(false);
   const [clearFigmaToken, setClearFigmaToken] = useState(false);
+  const [clearOpenAiRuntimeApiKey, setClearOpenAiRuntimeApiKey] = useState(false);
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -55,6 +62,8 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
         setGithubTokenMasked(data.githubTokenMasked ?? false);
         setJiraTokenMasked(data.jiraTokenMasked ?? false);
         setFigmaTokenMasked(data.figmaTokenMasked ?? false);
+        setOpenAiRuntimeApiKeyMasked(data.openAiRuntimeApiKeyMasked ?? false);
+        setOpenAiTunnelId(data.openAiTunnelId ?? '');
         setJiraBaseUrl(data.jiraBaseUrl ?? '');
         setJiraEmail(data.jiraEmail ?? '');
         setAgentExecutionMode(data.agentExecutionMode || 'safe');
@@ -97,7 +106,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
     setSaveStatus('idle');
 
     try {
-      const payload: Record<string, unknown> = { jiraBaseUrl, jiraEmail, agentExecutionMode };
+      const payload: Record<string, unknown> = { openAiTunnelId, jiraBaseUrl, jiraEmail, agentExecutionMode };
       if (showGithubToken && githubToken.trim() !== '') {
         payload.githubToken = githubToken;
       } else if (clearGithubToken) {
@@ -117,6 +126,13 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
       } else if (clearFigmaToken) {
         payload.figmaToken = '';
         payload.clearFigmaToken = true;
+      }
+
+      if (showOpenAiRuntimeApiKey && openAiRuntimeApiKey.trim() !== '') {
+        payload.openAiRuntimeApiKey = openAiRuntimeApiKey;
+      } else if (clearOpenAiRuntimeApiKey) {
+        payload.openAiRuntimeApiKey = '';
+        payload.clearOpenAiRuntimeApiKey = true;
       }
 
       const response = await fetch('/api/settings', {
@@ -157,6 +173,15 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
         setMasked: setFigmaTokenMasked,
         setShowToken: setShowFigmaToken,
         setClearToken: setClearFigmaToken,
+      });
+      applySavedTokenState({
+        token: openAiRuntimeApiKey,
+        showToken: showOpenAiRuntimeApiKey,
+        clearToken: clearOpenAiRuntimeApiKey,
+        setToken: setOpenAiRuntimeApiKey,
+        setMasked: setOpenAiRuntimeApiKeyMasked,
+        setShowToken: setShowOpenAiRuntimeApiKey,
+        setClearToken: setClearOpenAiRuntimeApiKey,
       });
       setTimeout(() => setSaveStatus('idle'), 3000);
     } catch (error: any) {
@@ -223,6 +248,17 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
           <>
             <div className="p-6 flex flex-col gap-6 overflow-y-auto min-h-0">
               <IntegrationsSettingsSection
+                openAiRuntimeApiKey={{
+                  value: openAiRuntimeApiKey,
+                  masked: openAiRuntimeApiKeyMasked,
+                  show: showOpenAiRuntimeApiKey,
+                  clear: clearOpenAiRuntimeApiKey,
+                  onValueChange: setOpenAiRuntimeApiKey,
+                  onShowChange: setShowOpenAiRuntimeApiKey,
+                  onClearChange: setClearOpenAiRuntimeApiKey,
+                }}
+                openAiTunnelId={openAiTunnelId}
+                onOpenAiTunnelIdChange={setOpenAiTunnelId}
                 githubToken={{
                   value: githubToken,
                   masked: githubTokenMasked,

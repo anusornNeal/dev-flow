@@ -2,7 +2,7 @@
 import { publishServerEvent } from '../services/serverEventService.js';
 import { deleteCredential, getCredential, migrateLegacyCredentials, setCredential, type CredentialKey } from '../services/credentialVaultService.js';
 
-const SECRET_SETTING_KEYS: CredentialKey[] = ['githubToken', 'jiraToken', 'figmaToken'];
+const SECRET_SETTING_KEYS: CredentialKey[] = ['githubToken', 'jiraToken', 'figmaToken', 'openAiRuntimeApiKey'];
 
 function readSettingsMap() {
   const rows = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
@@ -35,12 +35,14 @@ export function getSettings() {
   const githubToken = resolveCredentialWithLegacyFallback('githubToken', map);
   const jiraToken = resolveCredentialWithLegacyFallback('jiraToken', map);
   const figmaToken = resolveCredentialWithLegacyFallback('figmaToken', map);
+  const openAiRuntimeApiKey = resolveCredentialWithLegacyFallback('openAiRuntimeApiKey', map);
+  const openAiTunnelId = map.get('openAiTunnelId') || '';
   const jiraBaseUrl = map.get('jiraBaseUrl') || process.env.JIRA_BASE_URL || '';
   const jiraEmail = map.get('jiraEmail') || process.env.JIRA_EMAIL || '';
   const autoWork = map.get('autoWork') === 'true';
   const agentExecutionMode = map.get('agentExecutionMode') || '';
 
-  return { githubToken, jiraToken, figmaToken, jiraBaseUrl, jiraEmail, autoWork, agentExecutionMode };
+  return { githubToken, jiraToken, figmaToken, openAiRuntimeApiKey, openAiTunnelId, jiraBaseUrl, jiraEmail, autoWork, agentExecutionMode };
 }
 
 export function saveSettings(settings: Partial<ReturnType<typeof getSettings>>) {
@@ -56,6 +58,7 @@ export function saveSettings(settings: Partial<ReturnType<typeof getSettings>>) 
 
   const stmt = db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)');
   db.transaction(() => {
+    stmt.run('openAiTunnelId', updated.openAiTunnelId ?? '');
     stmt.run('jiraBaseUrl', updated.jiraBaseUrl ?? '');
     stmt.run('jiraEmail', updated.jiraEmail ?? '');
     stmt.run('autoWork', updated.autoWork ? 'true' : 'false');

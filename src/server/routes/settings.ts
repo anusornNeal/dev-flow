@@ -68,6 +68,8 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
       githubTokenMasked: (settings.githubToken?.length ?? 0) > 0,
       jiraTokenMasked: (settings.jiraToken?.length ?? 0) > 0,
       figmaTokenMasked: (settings.figmaToken?.length ?? 0) > 0,
+      openAiRuntimeApiKeyMasked: (settings.openAiRuntimeApiKey?.length ?? 0) > 0,
+      openAiTunnelId: settings.openAiTunnelId ?? '',
       jiraBaseUrl: settings.jiraBaseUrl ?? '',
       jiraEmail: settings.jiraEmail ?? '',
       autoWork: settings.autoWork ?? false,
@@ -79,7 +81,7 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
 
   app.post('/api/settings', (req, res) => {
     const settings: Partial<Parameters<typeof saveSettings>[0]> = {};
-    const { githubToken, jiraToken, figmaToken, jiraBaseUrl, jiraEmail, autoWork, agentExecutionMode, clearGithubToken, clearJiraToken, clearFigmaToken } = req.body;
+    const { githubToken, jiraToken, figmaToken, openAiRuntimeApiKey, openAiTunnelId, jiraBaseUrl, jiraEmail, autoWork, agentExecutionMode, clearGithubToken, clearJiraToken, clearFigmaToken, clearOpenAiRuntimeApiKey } = req.body;
 
     // Validate types
     if (githubToken !== undefined && typeof githubToken !== 'string') {
@@ -90,6 +92,15 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
     }
     if (figmaToken !== undefined && typeof figmaToken !== 'string') {
       return res.status(400).json({ error: 'figmaToken must be a string' });
+    }
+    if (openAiRuntimeApiKey !== undefined && typeof openAiRuntimeApiKey !== 'string') {
+      return res.status(400).json({ error: 'openAiRuntimeApiKey must be a string' });
+    }
+    if (openAiTunnelId !== undefined && typeof openAiTunnelId !== 'string') {
+      return res.status(400).json({ error: 'openAiTunnelId must be a string' });
+    }
+    if (typeof openAiTunnelId === 'string' && openAiTunnelId.trim() !== '' && !/^tunnel_[A-Za-z0-9_-]+$/.test(openAiTunnelId.trim())) {
+      return res.status(400).json({ error: 'openAiTunnelId must start with "tunnel_" and contain only URL-safe identifier characters' });
     }
     if (jiraBaseUrl !== undefined && typeof jiraBaseUrl !== 'string') {
       return res.status(400).json({ error: 'jiraBaseUrl must be a string' });
@@ -115,6 +126,9 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
     if (clearFigmaToken !== undefined && typeof clearFigmaToken !== 'boolean') {
       return res.status(400).json({ error: 'clearFigmaToken must be a boolean' });
     }
+    if (clearOpenAiRuntimeApiKey !== undefined && typeof clearOpenAiRuntimeApiKey !== 'boolean') {
+      return res.status(400).json({ error: 'clearOpenAiRuntimeApiKey must be a boolean' });
+    }
 
     if (typeof githubToken === 'string') {
       settings.githubToken = githubToken.trim();
@@ -128,9 +142,18 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
       settings.figmaToken = figmaToken.trim();
     }
 
+    if (typeof openAiRuntimeApiKey === 'string') {
+      settings.openAiRuntimeApiKey = openAiRuntimeApiKey.trim();
+    }
+
+    if (typeof openAiTunnelId === 'string') {
+      settings.openAiTunnelId = openAiTunnelId.trim();
+    }
+
     if (clearGithubToken === true) settings.githubToken = '';
     if (clearJiraToken === true) settings.jiraToken = '';
     if (clearFigmaToken === true) settings.figmaToken = '';
+    if (clearOpenAiRuntimeApiKey === true) settings.openAiRuntimeApiKey = '';
 
     if (typeof jiraBaseUrl === 'string') {
       settings.jiraBaseUrl = jiraBaseUrl.trim();

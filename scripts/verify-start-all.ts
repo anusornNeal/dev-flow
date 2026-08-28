@@ -92,6 +92,33 @@ assert.equal(tunnelOptions.mcpServerUrl, 'http://127.0.0.1:3456/mcp');
 assert.equal(tunnelOptions.runtimeKeyEnvName, 'CONTROL_PLANE_API_KEY');
 assert.equal(tunnelOptions.stateDir, path.join(tempRoot, '.devflow', 'tunnel-client'));
 
+const persistedTunnelConfig = {
+  tunnelId: 'tunnel_saved123',
+  runtimeApiKey: 'saved-runtime-secret',
+};
+const persistedTunnelOptions = resolveOpenAiTunnelOptions(
+  { DEVFLOW_PORT: '3456' },
+  tempRoot,
+  persistedTunnelConfig,
+);
+assert.equal(persistedTunnelOptions.tunnelId, 'tunnel_saved123');
+assert.equal(persistedTunnelOptions.runtimeKeyEnvName, 'CONTROL_PLANE_API_KEY');
+const persistedInvocation = buildOpenAiTunnelInvocation('start', persistedTunnelOptions, { DEVFLOW_PORT: '3456' });
+assert.equal(persistedInvocation.env.CONTROL_PLANE_API_KEY, 'saved-runtime-secret');
+assert.equal(persistedInvocation.args.includes('saved-runtime-secret'), false, 'persisted runtime key must stay out of command arguments');
+
+const envOverrideTunnelOptions = resolveOpenAiTunnelOptions({
+  DEVFLOW_PORT: '3456',
+  DEVFLOW_OPENAI_TUNNEL_ID: 'tunnel_env456',
+  CONTROL_PLANE_API_KEY: 'env-runtime-secret',
+}, tempRoot, persistedTunnelConfig);
+assert.equal(envOverrideTunnelOptions.tunnelId, 'tunnel_env456');
+const envOverrideInvocation = buildOpenAiTunnelInvocation('start', envOverrideTunnelOptions, {
+  DEVFLOW_PORT: '3456',
+  CONTROL_PLANE_API_KEY: 'env-runtime-secret',
+});
+assert.equal(envOverrideInvocation.env.CONTROL_PLANE_API_KEY, 'env-runtime-secret', 'environment runtime key must override persisted secret');
+
 const startInvocation = buildOpenAiTunnelInvocation('start', tunnelOptions, tunnelEnv);
 assert.equal(startInvocation.command, 'C:\\tools\\tunnel-client.exe');
 assert.deepEqual(startInvocation.args.slice(0, 2), ['runtimes', 'connect']);

@@ -7,6 +7,11 @@ import { fileURLToPath } from 'node:url';
 
 export type OpenAiTunnelAction = 'start' | 'status' | 'stop';
 
+export type OpenAiTunnelPersistedConfig = {
+  tunnelId?: string;
+  runtimeApiKey?: string;
+};
+
 export type OpenAiTunnelOptions = {
   alias: string;
   tunnelId: string;
@@ -14,6 +19,7 @@ export type OpenAiTunnelOptions = {
   clientBin: string;
   stateDir: string;
   runtimeKeyEnvName: string;
+  runtimeApiKey: string;
 };
 
 export type OpenAiTunnelLifecycleResult = {
@@ -107,15 +113,27 @@ function normalizeRuntimeKeyEnvName(value: string) {
 export function resolveOpenAiTunnelOptions(
   env: NodeJS.ProcessEnv = process.env,
   rootDir = projectRoot(),
+  persisted: OpenAiTunnelPersistedConfig = {},
 ): OpenAiTunnelOptions {
   const port = parsePositiveInteger(env.DEVFLOW_PORT || env.PORT, DEFAULT_PORT);
+  const runtimeKeyEnvName = normalizeRuntimeKeyEnvName(selectRuntimeKeyEnvName(env));
   return {
     alias: normalizeAlias(env.DEVFLOW_TUNNEL_ALIAS),
-    tunnelId: normalizeTunnelId(env.DEVFLOW_OPENAI_TUNNEL_ID || env.CONTROL_PLANE_TUNNEL_ID),
+    tunnelId: normalizeTunnelId(env.DEVFLOW_OPENAI_TUNNEL_ID || env.CONTROL_PLANE_TUNNEL_ID || persisted.tunnelId),
     mcpServerUrl: `http://127.0.0.1:${port}/mcp`,
     clientBin: String(env.DEVFLOW_TUNNEL_CLIENT_BIN || env.TUNNEL_CLIENT_BIN || 'tunnel-client').trim() || 'tunnel-client',
     stateDir: resolveStateDir(env.TUNNEL_CLIENT_STATE_DIR, rootDir),
-    runtimeKeyEnvName: normalizeRuntimeKeyEnvName(selectRuntimeKeyEnvName(env)),
+    runtimeKeyEnvName,
+    runtimeApiKey: String(env[runtimeKeyEnvName] || persisted.runtimeApiKey || '').trim(),
+  };
+}
+
+export async function loadPersistedOpenAiTunnelConfig(): Promise<OpenAiTunnelPersistedConfig> {
+  const { getSettings } = await import('../src/server/repositories/settingsRepository.js');
+  const settings = getSettings();
+  return {
+    tunnelId: settings.openAiTunnelId,
+    runtimeApiKey: settings.openAiRuntimeApiKey,
   };
 }
 
@@ -124,11 +142,11 @@ export function validateOpenAiTunnelStartOptions(
   env: NodeJS.ProcessEnv = process.env,
 ) {
   if (!options.tunnelId) {
-    throw new Error('OpenAI tunnel is not configured. Set DEVFLOW_OPENAI_TUNNEL_ID (or CONTROL_PLANE_TUNNEL_ID).');
+    throw new Error('OpenAI tunnel is not configured. Save a Tunnel ID in DevFlow Settings or set DEVFLOW_OPENAI_TUNNEL_ID (or CONTROL_PLANE_TUNNEL_ID).');
   }
-  if (!String(env[options.runtimeKeyEnvName] || '').trim()) {
+  if (!String(env[options.runtimeKeyEnvName] || options.runtimeApiKey || '').trim()) {
     throw new Error(
-      `OpenAI tunnel runtime key is missing. Set ${options.runtimeKeyEnvName} or point DEVFLOW_TUNNEL_RUNTIME_KEY_ENV at the environment variable that contains the runtime key.`,
+      `OpenAI tunnel runtime key is missing. Save a Runtime API Key in DevFlow Settings, set ${options.runtimeKeyEnvName}, or point DEVFLOW_TUNNEL_RUNTIME_KEY_ENV at the environment variable that contains the runtime key.`,
     );
   }
 }
@@ -157,13 +175,18 @@ export function buildOpenAiTunnelInvocation(
       ? [...baseArgs, 'status', options.alias, '--json']
       : [...baseArgs, 'stop', options.alias, '--json'];
 
+  const invocationEnv: NodeJS.ProcessEnv = {
+    ...env,
+    TUNNEL_CLIENT_STATE_DIR: options.stateDir,
+  };
+  if (!String(invocationEnv[options.runtimeKeyEnvName] || '').trim() && options.runtimeApiKey) {
+    invocationEnv[options.runtimeKeyEnvName] = options.runtimeApiKey;
+  }
+
   return {
     command: options.clientBin,
     args,
-    env: {
-      ...env,
-      TUNNEL_CLIENT_STATE_DIR: options.stateDir,
-    },
+    env: invocationEnv,
   };
 }
 
@@ -496,7 +519,8 @@ async function runCli() {
   const action = String(process.argv[2] || 'status').trim().toLowerCase() as OpenAiTunnelAction;
   let result: OpenAiTunnelLifecycleResult;
   try {
-    const options = resolveOpenAiTunnelOptions();
+    const persisted = action === 'start' ? await loadPersistedOpenAiTunnelConfig() : {};
+    const options = resolveOpenAiTunnelOptions(process.env, undefined, persisted);
     result = action === 'start'
       ? startOpenAiTunnel(options)
       : action === 'stop'

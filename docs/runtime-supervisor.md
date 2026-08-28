@@ -56,7 +56,7 @@ tunnel-client runtimes connect
 
 Before connecting, DevFlow checks local runtime status so repeated startup can reuse a running alias. After connect, status is read again before the supervisor reports success.
 
-DevFlow never puts the literal runtime key in the command line. The configured key remains in the process environment and tunnel-client receives only the `env:<name>` reference.
+DevFlow never puts the literal runtime key in the command line. Environment-provided keys remain in the process environment; a UI-saved key is loaded from the secure credential vault and injected only into the tunnel-client child environment. Tunnel-client always receives only the `env:<name>` reference.
 
 ### Status
 
@@ -72,7 +72,9 @@ A full supervisor shutdown also stops the managed tunnel before stopping the loc
 
 ## Configuration
 
-Required for tunnel startup:
+Tunnel startup requires a Tunnel ID and Runtime API Key. They can be saved from **Settings → Integrations → OpenAI Tunnel**. The Tunnel ID is ordinary local settings data; the Runtime API Key uses the existing secure credential vault and is never returned in plaintext by `/api/settings`.
+
+Environment configuration remains supported and has higher precedence than persisted UI values:
 
 ```env
 DEVFLOW_OPENAI_TUNNEL_ID="tunnel_your_id"
@@ -84,6 +86,8 @@ Accepted tunnel ID alias:
 ```env
 CONTROL_PLANE_TUNNEL_ID="tunnel_your_id"
 ```
+
+Saving tunnel settings does not restart a running tunnel. The saved values are resolved on the next tunnel start or reconnect.
 
 Optional:
 

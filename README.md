@@ -30,7 +30,14 @@ npm run setup
 
 ### 2. Configure OpenAI Tunnel
 
-Create the tunnel in OpenAI once, then put the existing tunnel ID and a runtime API key in your local environment or ignored `.env`:
+Create the tunnel in OpenAI once. After DevFlow is running locally, open **Settings → Integrations → OpenAI Tunnel** and save:
+
+- the existing `tunnel_...` Tunnel ID, and
+- the Runtime API Key.
+
+The Tunnel ID is stored as normal local DevFlow settings data. The Runtime API Key is stored in the secure credential vault (Windows DPAPI / macOS Keychain) and the browser receives only masked state after saving.
+
+Environment variables remain supported and take precedence over saved UI values:
 
 ```env
 DEVFLOW_OPENAI_TUNNEL_ID="tunnel_your_id"
@@ -48,7 +55,7 @@ DEVFLOW_TUNNEL_RUNTIME_KEY_ENV="CONTROL_PLANE_API_KEY"
 DEVFLOW_TUNNEL_STARTUP_WAIT_MS=30000
 ```
 
-DevFlow passes the runtime key to `tunnel-client` by environment reference (`env:<name>`). It does not put the literal key in tunnel command arguments, committed configuration, or DevFlow supervisor state.
+DevFlow passes the runtime key to `tunnel-client` by environment reference (`env:<name>`). A saved vault key is injected only into the child process environment for the tunnel command. DevFlow does not put the literal key in tunnel command arguments, SQLite settings, committed configuration, API responses, or supervisor state.
 
 The local tunnel runtime state defaults to ignored `.devflow/tunnel-client`. It is machine-local cache/state and does not need to be copied to another computer.
 

@@ -65,6 +65,13 @@ test('getSettings ignores a legacy ngrokUrl row while preserving unrelated setti
   assert.equal(settings.agentExecutionMode, 'safe');
 });
 
+test('saveSettings persists OpenAI tunnel id as normal settings data', () => {
+  const result = saveSettings({ openAiTunnelId: 'tunnel_saved123' } as any) as any;
+
+  assert.equal(result.openAiTunnelId, 'tunnel_saved123');
+  assert.equal(readStoredValue('openAiTunnelId'), 'tunnel_saved123');
+});
+
 test('saveSettings never writes or rewrites legacy ngrokUrl data', () => {
   const legacy = 'https://legacy-ngrok.example.invalid';
   insertLegacyNgrokUrl(legacy);
@@ -127,6 +134,28 @@ test('POST /api/settings ignores ngrokUrl input and preserves unrelated settings
     const getResponse = await fetch(`${baseUrl}/api/settings`);
     const getBody = await getResponse.json() as Record<string, unknown>;
     assert.equal(Object.prototype.hasOwnProperty.call(getBody, 'ngrokUrl'), false);
+  });
+});
+
+test('POST /api/settings validates and persists OpenAI tunnel id', async () => {
+  await withSettingsServer(async (baseUrl) => {
+    const invalid = await fetch(`${baseUrl}/api/settings`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ openAiTunnelId: 'not-a-tunnel-id' }),
+    });
+    assert.equal(invalid.status, 400);
+
+    const valid = await fetch(`${baseUrl}/api/settings`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ openAiTunnelId: 'tunnel_api123' }),
+    });
+    assert.equal(valid.status, 200);
+    assert.equal(readStoredValue('openAiTunnelId'), 'tunnel_api123');
+
+    const getResponse = await fetch(`${baseUrl}/api/settings`);
+    assert.equal((await getResponse.json() as any).openAiTunnelId, 'tunnel_api123');
   });
 });
 

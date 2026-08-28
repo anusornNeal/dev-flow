@@ -15,20 +15,26 @@ interface IntegrationsSettingsSectionProps {
   githubToken: TokenFieldState;
   jiraToken: TokenFieldState;
   figmaToken: TokenFieldState;
+  openAiRuntimeApiKey: TokenFieldState;
+  openAiTunnelId: string;
   jiraBaseUrl: string;
   jiraEmail: string;
   onJiraBaseUrlChange: (value: string) => void;
   onJiraEmailChange: (value: string) => void;
+  onOpenAiTunnelIdChange: (value: string) => void;
 }
 
 export default function IntegrationsSettingsSection({
   githubToken,
   jiraToken,
   figmaToken,
+  openAiRuntimeApiKey,
+  openAiTunnelId,
   jiraBaseUrl,
   jiraEmail,
   onJiraBaseUrlChange,
   onJiraEmailChange,
+  onOpenAiTunnelIdChange,
 }: IntegrationsSettingsSectionProps) {
   return (
     <div className="flex flex-col gap-5 border border-[#e5d4bb] dark:border-[#584a3b] rounded-xl p-4 bg-[#fdfbf6] dark:bg-[#1e1914]">
@@ -38,7 +44,44 @@ export default function IntegrationsSettingsSection({
           Integrations
         </h3>
         <p className="text-[11px] text-[#8a725f] dark:text-[#f3eadf] font-mono">
-          Configure external API credentials for GitHub and Jira.
+          Configure OpenAI Tunnel and external API credentials.
+        </p>
+      </div>
+
+      <div className="flex flex-col gap-3 pt-2 border-t border-[#ebdcb9] dark:border-[#584a3b]">
+        <div>
+          <label className="text-xs font-bold text-[#685547] dark:text-[#f3eadf]">OpenAI Tunnel</label>
+          <p className="text-[11px] text-[#8a725f] dark:text-[#f3eadf] font-mono mt-1">
+            Used by Start DevFlow to connect this machine to the configured OpenAI tunnel.
+          </p>
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <label className="text-[10px] font-bold text-[#8a725f] dark:text-[#f3eadf] uppercase tracking-wider">Tunnel ID</label>
+          <input
+            type="text"
+            value={openAiTunnelId}
+            onChange={event => onOpenAiTunnelIdChange(event.target.value)}
+            placeholder="tunnel_..."
+            spellCheck={false}
+            autoComplete="off"
+            className="w-full px-3 py-2 text-sm font-mono rounded-lg border border-[#ddd0ba] dark:border-[#584a3b] bg-white dark:bg-[#1e1914] text-[#3e3129] dark:text-[#f3eadf] focus:outline-none focus:ring-2 focus:ring-[#d89745]/50 dark:focus:ring-[#e0a070]/50 focus:border-[#d89745] dark:border-[#e0a070] dark:focus:border-[#e0a070] transition"
+          />
+        </div>
+        <TokenCredentialField
+          label="Runtime API Key"
+          description="Stored in the secure credential vault and never returned to the browser after saving."
+          tokenValue={openAiRuntimeApiKey.value}
+          tokenMasked={openAiRuntimeApiKey.masked}
+          showToken={openAiRuntimeApiKey.show}
+          clearToken={openAiRuntimeApiKey.clear}
+          placeholder="Runtime API key..."
+          inputName="openAiRuntimeApiKey_devflow_prevent_autofill"
+          onTokenChange={openAiRuntimeApiKey.onValueChange}
+          onShowTokenChange={openAiRuntimeApiKey.onShowChange}
+          onClearTokenChange={openAiRuntimeApiKey.onClearChange}
+        />
+        <p className="text-[10px] text-[#8a725f] dark:text-[#d6b56d] font-mono">
+          Saved changes apply on the next tunnel start or reconnect.
         </p>
       </div>
 

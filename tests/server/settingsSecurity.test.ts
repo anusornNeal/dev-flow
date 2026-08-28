@@ -13,6 +13,8 @@ delete process.env.JIRA_API_TOKEN;
 delete process.env.JIRA_PERSONAL_ACCESS_TOKEN;
 delete process.env.FIGMA_ACCESS_TOKEN;
 delete process.env.FIGMA_PERSONAL_ACCESS_TOKEN;
+delete process.env.CONTROL_PLANE_API_KEY;
+delete process.env.OPENAI_API_KEY;
 
 const vault = await import('../../src/server/services/credentialVaultService.js');
 const access = await import('../../src/server/services/apiAccessPolicyService.js');
@@ -54,6 +56,19 @@ test('saving integration tokens stores secrets in the vault and leaves SQLite se
   assert.equal(vault.getCredential('jiraToken'), 'new-jira-token');
   const rows = db.prepare("SELECT key, value FROM settings WHERE key IN ('githubToken', 'jiraToken', 'figmaToken')").all() as Array<{ key: string; value: string }>;
   assert.ok(rows.every((row) => row.value === ''), JSON.stringify(rows));
+});
+
+test('saving OpenAI runtime API key uses secure vault while tunnel id remains non-secret settings data', () => {
+  settingsRepository.saveSettings({
+    openAiTunnelId: 'tunnel_saved123',
+    openAiRuntimeApiKey: 'runtime-vault-secret',
+  } as any);
+
+  assert.equal(vault.getCredential('openAiRuntimeApiKey' as any), 'runtime-vault-secret');
+  assert.equal((settingsRepository.getSettings() as any).openAiTunnelId, 'tunnel_saved123');
+  assert.equal((settingsRepository.getSettings() as any).openAiRuntimeApiKey, 'runtime-vault-secret');
+  assert.equal((db.prepare("SELECT value FROM settings WHERE key = 'openAiRuntimeApiKey'").get() as any)?.value ?? '', '');
+  assert.equal((db.prepare("SELECT value FROM settings WHERE key = 'openAiTunnelId'").get() as any)?.value, 'tunnel_saved123');
 });
 
 test('macOS credential provider uses Keychain without shell execution', () => {
@@ -194,6 +209,8 @@ test('settings API exposes masked state only and clear flags remove vault creden
   const { registerSettingsRoutes } = await import('../../src/server/routes/settings.js');
   vault.setCredentialVaultProviderForTests(provider);
   vault.setCredential('githubToken', 'route-github-secret');
+  vault.setCredential('openAiRuntimeApiKey' as any, 'route-runtime-secret');
+  settingsRepository.saveSettings({ openAiTunnelId: 'tunnel_route123' } as any);
 
   const app = express();
   app.use(express.json());
@@ -208,20 +225,28 @@ test('settings API exposes masked state only and clear flags remove vault creden
     const before = await fetch(`${baseUrl}/api/settings`);
     const body = await before.json() as any;
     assert.equal(body.githubTokenMasked, true);
+    assert.equal(body.openAiRuntimeApiKeyMasked, true);
+    assert.equal(body.openAiTunnelId, 'tunnel_route123');
     assert.equal(body.githubToken, undefined);
+    assert.equal(body.openAiRuntimeApiKey, undefined);
     assert.equal(JSON.stringify(body).includes('route-github-secret'), false);
+    assert.equal(JSON.stringify(body).includes('route-runtime-secret'), false);
     assert.equal(body.credentialVault.provider, 'memory');
 
     const cleared = await fetch(`${baseUrl}/api/settings`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ clearGithubToken: true }),
+      body: JSON.stringify({ clearGithubToken: true, clearOpenAiRuntimeApiKey: true }),
     });
     assert.equal(cleared.status, 200);
     assert.equal(vault.getCredential('githubToken'), '');
+    assert.equal(vault.getCredential('openAiRuntimeApiKey' as any), '');
 
     const after = await fetch(`${baseUrl}/api/settings`);
-    assert.equal((await after.json() as any).githubTokenMasked, false);
+
+    const afterBody = await after.json() as any;
+    assert.equal(afterBody.githubTokenMasked, false);
+    assert.equal(afterBody.openAiRuntimeApiKeyMasked, false);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }

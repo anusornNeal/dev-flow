@@ -43,6 +43,13 @@ export interface AtlasTaskLike {
 
 const DEFAULT_ATLAS_OUTPUT_LIMIT = 80;
 const MAX_ATLAS_OUTPUT_LIMIT = 1000;
+const WORKER_CONTEXT_DOMAIN_LIMIT = 12;
+const WORKER_CONTEXT_NODE_LIMIT = 40;
+const WORKER_CONTEXT_READ_ORDER_LIMIT = 12;
+const WORKER_CONTEXT_MARKDOWN_BYTE_LIMIT = 24_000;
+const WORKER_CONTEXT_SUMMARY_CHAR_LIMIT = 2_000;
+const WORKER_CONTEXT_DOMAIN_SUMMARY_CHAR_LIMIT = 800;
+const WORKER_CONTEXT_READ_ORDER_REASON_CHAR_LIMIT = 500;
 
 export type ProjectAtlasLifecycleState = 'missing' | 'generating' | 'fresh' | 'stale' | 'failed-retryable';
 export type ProjectAtlasRefreshStrategy = 'bootstrap' | 'incremental' | 'full';
@@ -318,10 +325,13 @@ export function getProjectAtlasForApi(project: Project, input: ProjectAtlasApiIn
   };
 
   if (mode === 'chatgpt-context' || mode === 'agent-context') {
+    const workerContext = buildBoundedWorkerAtlasContext(atlas);
     return withAtlasPromptTemplate({
       ...base,
       format: 'markdown',
-      markdown: renderAtlasMarkdown(atlas),
+      markdown: workerContext.markdown,
+      contextCoverage: workerContext.coverage,
+      recommendedReadOrder: workerContext.recommendedReadOrder,
       guidance: mode === 'agent-context'
         ? 'Use domains and key nodes to choose focused files before broader repo reads.'
         : 'Use this compact Atlas overview as project map context.',
@@ -573,6 +583,89 @@ function buildTaskAtlasFocusQuery(task: AtlasTaskLike) {
   const pathLike = text.match(/[A-Za-z0-9_.-]+(?:\/|\\)[A-Za-z0-9_./\\-]+/g);
   if (pathLike?.length) return pathLike.slice(0, 8).join(' ');
   return text.slice(0, 800);
+}
+
+function buildBoundedWorkerAtlasContext(atlas: ProjectAtlas) {
+  const domains = [...atlas.domains]
+    .sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id))
+    .slice(0, WORKER_CONTEXT_DOMAIN_LIMIT)
+    .map((domain) => ({
+      ...domain,
+      summary: truncateWorkerContextText(domain.summary, WORKER_CONTEXT_DOMAIN_SUMMARY_CHAR_LIMIT),
+    }));
+  const sortedNodes = [...atlas.nodes]
+    .sort((left, right) => (left.path ?? left.label).localeCompare(right.path ?? right.label) || left.id.localeCompare(right.id));
+  const recommendedReadOrder = [...(atlas.authoring?.readOrder ?? [])]
+    .slice(0, WORKER_CONTEXT_READ_ORDER_LIMIT)
+    .map((entry) => ({
+      nodeId: entry.nodeId,
+      path: entry.path,
+      reason: truncateWorkerContextText(entry.reason, WORKER_CONTEXT_READ_ORDER_REASON_CHAR_LIMIT),
+    }));
+  const boundedAtlas: ProjectAtlas = {
+    ...atlas,
+    domains,
+    nodes: sortedNodes.slice(0, WORKER_CONTEXT_NODE_LIMIT),
+    edges: [],
+    summary: {
+      ...atlas.summary,
+      verified: atlas.summary.verified ? {
+        ...atlas.summary.verified,
+        description: truncateWorkerContextText(atlas.summary.verified.description, WORKER_CONTEXT_SUMMARY_CHAR_LIMIT),
+      } : undefined,
+      inferred: atlas.summary.inferred ? {
+        ...atlas.summary.inferred,
+        summary: truncateWorkerContextText(atlas.summary.inferred.summary, WORKER_CONTEXT_SUMMARY_CHAR_LIMIT),
+      } : undefined,
+      userEdited: atlas.summary.userEdited ? {
+        ...atlas.summary.userEdited,
+        notes: truncateWorkerContextText(atlas.summary.userEdited.notes, WORKER_CONTEXT_SUMMARY_CHAR_LIMIT),
+      } : undefined,
+    },
+  };
+  const rendered = renderAtlasMarkdown(boundedAtlas);
+  const markdown = truncateWorkerContextMarkdown(rendered, WORKER_CONTEXT_MARKDOWN_BYTE_LIMIT);
+  const markdownBytes = Buffer.byteLength(markdown);
+  const totalReadOrder = atlas.authoring?.readOrder?.length ?? 0;
+  const truncated = atlas.domains.length > domains.length
+    || atlas.nodes.length > boundedAtlas.nodes.length
+    || totalReadOrder > recommendedReadOrder.length
+    || Buffer.byteLength(rendered) > WORKER_CONTEXT_MARKDOWN_BYTE_LIMIT;
+
+  return {
+    markdown,
+    recommendedReadOrder,
+    coverage: {
+      truncated,
+      totalDomains: atlas.domains.length,
+      includedDomains: domains.length,
+      totalNodes: atlas.nodes.length,
+      includedNodes: boundedAtlas.nodes.length,
+      totalReadOrder,
+      includedReadOrder: recommendedReadOrder.length,
+      markdownByteLimit: WORKER_CONTEXT_MARKDOWN_BYTE_LIMIT,
+      markdownBytes,
+    },
+  };
+}
+
+function truncateWorkerContextText(value: string | undefined, maxChars: number) {
+  if (!value || value.length <= maxChars) return value;
+  return `${value.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`;
+}
+
+function truncateWorkerContextMarkdown(markdown: string, maxBytes: number) {
+  if (Buffer.byteLength(markdown) <= maxBytes) return markdown;
+  const marker = '\n\n[Project Atlas worker context truncated; use full mode for complete graph context.]\n';
+  const markerBytes = Buffer.byteLength(marker);
+  let low = 0;
+  let high = markdown.length;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if (Buffer.byteLength(markdown.slice(0, mid)) + markerBytes <= maxBytes) low = mid;
+    else high = mid - 1;
+  }
+  return `${markdown.slice(0, low).trimEnd()}${marker}`;
 }
 
 function withAtlasPromptTemplate<T extends Record<string, unknown>>(response: T, atlas: any, input: ProjectAtlasApiInput): T {

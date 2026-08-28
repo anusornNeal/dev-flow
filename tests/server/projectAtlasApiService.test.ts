@@ -76,6 +76,47 @@ test('getProjectAtlasForApi returns compact status and capped standard output', 
   assert.equal(standard.truncated, true);
 });
 
+test('getProjectAtlasForApi bounds worker context and reports deterministic coverage for large atlases', () => {
+  const largeProject = { ...project, id: 'project-api-large' };
+  const largeAtlas = {
+    ...atlas,
+    projectId: largeProject.id,
+    nodes: Array.from({ length: 240 }, (_, index) => ({
+      id: `file:large/${String(index).padStart(3, '0')}.ts`,
+      label: `${String(index).padStart(3, '0')}.ts`,
+      kind: 'file',
+      path: `large/${String(index).padStart(3, '0')}.ts`,
+      verified: { source: 'verified', description: `Large file ${index}` },
+      metadata: { domainId: `domain:${String(index % 80).padStart(3, '0')}` },
+    })),
+    edges: [],
+    domains: Array.from({ length: 80 }, (_, index) => ({
+      id: `domain:${String(index).padStart(3, '0')}`,
+      name: `Domain ${String(index).padStart(3, '0')}`,
+      nodeIds: [`file:large/${String(index).padStart(3, '0')}.ts`],
+      origin: 'verified',
+      summary: `Domain ${index} summary ${'x'.repeat(600)}`,
+    })),
+  };
+  saveLatestAtlas(largeAtlas as any);
+
+  const first = getProjectAtlasForApi(largeProject as any, { mode: 'agent-context' }) as any;
+  const second = getProjectAtlasForApi(largeProject as any, { mode: 'agent-context' }) as any;
+  const full = getProjectAtlasForApi(largeProject as any, { mode: 'full' }) as any;
+  const workerBytes = Buffer.byteLength(JSON.stringify(first));
+  const fullBytes = Buffer.byteLength(JSON.stringify(full));
+
+  assert.equal(first.format, 'markdown');
+  assert.equal(first.contextCoverage.truncated, true);
+  assert.equal(first.contextCoverage.totalDomains, 80);
+  assert.ok(first.contextCoverage.includedDomains < first.contextCoverage.totalDomains);
+  assert.equal(first.markdown, second.markdown);
+  assert.deepEqual(first.contextCoverage, second.contextCoverage);
+  assert.ok(workerBytes <= 32_000, `worker context should stay bounded, got ${workerBytes} bytes`);
+  assert.ok(workerBytes <= fullBytes * 0.2, `expected at least 80% reduction, worker=${workerBytes}, full=${fullBytes}`);
+});
+
+
 test('getProjectAtlasForApi returns markdown context and task-focused search', () => {
   const chatgpt = getProjectAtlasForApi(project, { mode: 'chatgpt-context' }) as any;
   const focused = getProjectAtlasForApi(project, { mode: 'task-focused', query: 'src/3.ts', limit: 4 }) as any;

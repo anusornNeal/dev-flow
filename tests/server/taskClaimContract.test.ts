@@ -70,6 +70,10 @@ test('scheduler contracts expose durable board-loop start and stop-confirmation 
   assert.equal(claimSchema?.properties?.boardLoopRequested?.type, 'boolean');
   assert.equal(claimSchema?.properties?.requestedTaskId?.type, 'string');
   assert.deepEqual(claimSchema?.properties?.selectionPolicy?.enum, ['todo-only', 'include-backlog']);
+  assert.equal(claimSchema?.properties?.partitionCount?.type, 'number');
+  assert.equal(claimSchema?.properties?.partitionIndex?.type, 'number');
+  assert.equal((next.inputSchema as any)?.properties?.partitionCount?.type, 'number');
+  assert.equal((next.inputSchema as any)?.properties?.partitionIndex?.type, 'number');
   assert.match(String(claimNext.description || ''), /durable[\s\S]*board-loop|board-loop[\s\S]*durable/i);
   assert.ok(nextOutput?.properties?.action?.enum?.includes('confirm-loop-stop'));
   assert.equal(nextOutput?.properties?.loop?.type, 'object');
@@ -81,11 +85,15 @@ test('scheduler contracts expose durable board-loop start and stop-confirmation 
     boardLoopRequested: true,
     requestedTaskId: 'DVF-100',
     selectionPolicy: 'include-backlog',
+    partitionCount: 3,
+    partitionIndex: 1,
     limit: 25,
   });
   assert.equal((request.body as any)?.boardLoopRequested, true);
   assert.equal((request.body as any)?.requestedTaskId, 'DVF-100');
   assert.equal((request.body as any)?.selectionPolicy, 'include-backlog');
+  assert.equal((request.body as any)?.partitionCount, 3);
+  assert.equal((request.body as any)?.partitionIndex, 1);
 
   const inventory = buildMcpToolSurfaceInventory(taskToolDefinitions);
   assert.equal(inventory.find((entry) => entry.name === 'get_next_action')?.risk, 'read');
@@ -96,6 +104,8 @@ test('claim_next_task is a bounded project-level optimization with explicit sess
   assert.ok(tool);
   assert.equal((tool.inputSchema as any)?.properties?.projectId?.type, 'string');
   assert.equal((tool.inputSchema as any)?.properties?.sessionId?.type, 'string');
+  assert.equal((tool.inputSchema as any)?.properties?.partitionCount?.type, 'number');
+  assert.equal((tool.inputSchema as any)?.properties?.partitionIndex?.type, 'number');
   assert.ok((tool.inputSchema as any)?.required?.includes('projectId'));
   assert.ok((tool.inputSchema as any)?.required?.includes('sessionId'));
   assert.equal((tool.inputSchema as any)?.required?.includes('taskId'), false);
@@ -105,6 +115,9 @@ test('claim_next_task is a bounded project-level optimization with explicit sess
   assert.equal(body.projectId, 'project-1');
   assert.equal(body.sessionId, 'chat-a');
   assert.equal(body.limit, 25);
+  const partitioned = tool.buildHttpRequest({ projectId: 'project-1', sessionId: 'chat-a', limit: 25, partitionCount: 3, partitionIndex: 1 });
+  assert.equal((partitioned.body as any).partitionCount, 3);
+  assert.equal((partitioned.body as any).partitionIndex, 1);
   assert.match(String(tool.description || ''), /bounded[\s\S]*minimal\/summary/i);
   assert.match(String(tool.description || ''), /todo-only[\s\S]*include-backlog/i);
   assert.match(String(tool.description || ''), /Explicit claim_task[\s\S]*backlog/i);

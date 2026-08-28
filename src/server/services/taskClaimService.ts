@@ -53,6 +53,8 @@ export type ClaimNextTaskInput = Omit<ClaimTaskInput, 'allowScopeConflict'> & {
   boardLoopRequested?: boolean;
   requestedTaskId?: string;
   selectionPolicy?: BoardLoopSelectionPolicy;
+  partitionCount?: number;
+  partitionIndex?: number;
 };
 
 export type ExpandTaskClaimScopeInput = {
@@ -197,6 +199,47 @@ function boundedNextTaskLimit(value: unknown) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return NEXT_TASK_DEFAULT_LIMIT;
   return Math.max(1, Math.min(NEXT_TASK_MAX_LIMIT, Math.floor(numeric)));
+}
+const NEXT_TASK_MAX_PARTITIONS = 100;
+type NextTaskPartition = { count: number; index: number };
+
+function parseNextTaskPartition(countValue: unknown, indexValue: unknown): NextTaskPartition | null {
+  const countSupplied = countValue !== undefined && countValue !== null;
+  const indexSupplied = indexValue !== undefined && indexValue !== null;
+  if (!countSupplied && !indexSupplied) return null;
+  const count = Number(countValue);
+  const index = Number(indexValue);
+  if (!countSupplied || !indexSupplied || !Number.isInteger(count) || !Number.isInteger(index) || count < 1 || count > NEXT_TASK_MAX_PARTITIONS || index < 0 || index >= count) {
+    throw createApiError(400, 'TASK_CLAIM_PARTITION_INVALID', 'partitionCount and partitionIndex must be supplied together as bounded integers with 0 <= partitionIndex < partitionCount.', {
+      details: { partitionCount: countSupplied ? countValue : null, partitionIndex: indexSupplied ? indexValue : null, maxPartitionCount: NEXT_TASK_MAX_PARTITIONS },
+    });
+  }
+  return { count, index };
+}
+
+function taskNumericSuffix(value: unknown) {
+  const match = String(value || '').trim().match(/(\d+)$/);
+  if (!match) return null;
+  const numeric = Number(match[1]);
+  return Number.isSafeInteger(numeric) ? numeric : null;
+}
+
+function taskMatchesPartition(displayId: unknown, partition: NextTaskPartition) {
+  const suffix = taskNumericSuffix(displayId);
+  return suffix !== null && suffix % partition.count === partition.index;
+}
+
+function resolveNextTaskPartition(requested: NextTaskPartition | null, loop: BoardLoopIntent | null) {
+  const persisted = loop?.partitionCount != null && loop?.partitionIndex != null
+    ? { count: loop.partitionCount, index: loop.partitionIndex }
+    : null;
+  if (requested && persisted && (requested.count !== persisted.count || requested.index !== persisted.index)) {
+    throw createApiError(409, 'BOARD_LOOP_PARTITION_CONFLICT', 'Active board-loop partition is authoritative until that loop is terminal.', {
+      affectedId: loop?.loopId,
+      details: { activePartition: persisted, requestedPartition: requested },
+    });
+  }
+  return persisted || requested;
 }
 
 function parseBoardLoopSelectionPolicyInput(value: unknown): BoardLoopSelectionPolicy | null {
@@ -407,7 +450,7 @@ function boardLoopPersistenceSession(loop: BoardLoopIntent | null, projectId: st
   return queryExecutionSessions({ projectId, limit: 1 }).sessions[0] || null;
 }
 
-function persistLoopOnClaimedTask(claimed: any, loop: { loopId: string; projectId: string; requestedTaskId: string | null; selectionPolicy: BoardLoopSelectionPolicy; startedAt: string }) {
+function persistLoopOnClaimedTask(claimed: any, loop: { loopId: string; projectId: string; requestedTaskId: string | null; selectionPolicy: BoardLoopSelectionPolicy; partitionCount: number | null; partitionIndex: number | null; startedAt: string }) {
   const workspaceId = String(claimed?.workspace?.workspaceId || claimed?.task?.claim?.workspaceId || '').trim();
   const taskSessions = listExecutionSessionsForTask(claimed.task.id);
   const execution = taskSessions.find((entry) => entry.status === 'active' && (!workspaceId || entry.workspaceId === workspaceId)) || taskSessions[0] || null;
@@ -417,6 +460,8 @@ function persistLoopOnClaimedTask(claimed: any, loop: { loopId: string; projectI
     projectId: loop.projectId,
     requestedTaskId: loop.requestedTaskId,
     selectionPolicy: loop.selectionPolicy,
+    partitionCount: loop.partitionCount,
+    partitionIndex: loop.partitionIndex,
     status: 'active',
     startedAt: loop.startedAt,
     stopEligible: false,
@@ -471,7 +516,7 @@ function inspectOwnedReasoningTasks(projectTasks: any[], cleanSessionId: string,
   return { states, boundary, issue };
 }
 
-export function getNextActionForSession(projectId: string, input: { sessionId: string; limit?: number }) {
+export function getNextActionForSession(projectId: string, input: { sessionId: string; limit?: number; partitionCount?: number; partitionIndex?: number }) {
   const cleanProjectId = String(projectId || '').trim();
   const cleanSessionId = String(input?.sessionId || '').trim();
   if (!cleanProjectId) throw createApiError(400, 'PROJECT_ID_REQUIRED', 'projectId is required to resolve the scheduler next action.');
@@ -483,6 +528,8 @@ export function getNextActionForSession(projectId: string, input: { sessionId: s
   const workerHash = sessionIdHash(cleanSessionId);
   const projectTasks = getTasksByProjectId(cleanProjectId);
   const boardLoop = getProjectBoardLoopIntent(cleanProjectId);
+  const requestedPartition = parseNextTaskPartition(input.partitionCount, input.partitionIndex);
+  const partition = resolveNextTaskPartition(requestedPartition, boardLoop?.status === 'active' ? boardLoop : null);
   let loopBackgroundTaskId: string | null = null;
   let foreignLoopWorker: { taskId: string; displayId?: string; ownerLabel?: string | null } | null = null;
   if (boardLoop?.status === 'terminal') {
@@ -615,6 +662,7 @@ export function getNextActionForSession(projectId: string, input: { sessionId: s
   const selectionPolicy = boardLoop?.selectionPolicy || DEFAULT_BOARD_LOOP_SELECTION_POLICY;
   const newWorkWindow = projection.entries
     .filter((entry) => automaticQueueStatusSelected(entry.taskStatus, selectionPolicy))
+    .filter((entry) => !partition || taskMatchesPartition(entry.displayId, partition))
     .slice(0, limit);
   const ready = newWorkWindow.find((entry) => entry.state === 'ready');
   if (ready) {
@@ -623,7 +671,7 @@ export function getNextActionForSession(projectId: string, input: { sessionId: s
       projectId: cleanProjectId,
       task: { taskId: ready.taskId, displayId: ready.displayId },
       reasonCodes: ['ELIGIBLE_NEW_WORK'],
-      claim: { tool: 'claim_next_task' as const, projectId: cleanProjectId, limit, selectionPolicy },
+      claim: { tool: 'claim_next_task' as const, projectId: cleanProjectId, limit, selectionPolicy, ...(partition ? { partitionCount: partition.count, partitionIndex: partition.index } : {}) },
       ...(boardLoop ? { loop: boardLoop } : {}),
     };
   }
@@ -678,7 +726,7 @@ export function getNextActionForSession(projectId: string, input: { sessionId: s
       action: 'confirm-loop-stop' as const,
       projectId: cleanProjectId,
       reasonCodes: ['BOARD_LOOP_STOP_CONFIRMATION_REQUIRED'],
-      claim: { tool: 'claim_next_task' as const, projectId: cleanProjectId, limit, selectionPolicy: boardLoop.selectionPolicy },
+      claim: { tool: 'claim_next_task' as const, projectId: cleanProjectId, limit, selectionPolicy: boardLoop.selectionPolicy, ...(partition ? { partitionCount: partition.count, partitionIndex: partition.index } : {}) },
       loop: { ...boardLoop, stopEligible: true, reasonCodes: ['BOARD_LOOP_STOP_CONFIRMATION_REQUIRED'] },
     };
   }
@@ -1446,6 +1494,7 @@ export function claimNextTaskForSession(projectId: string, input: ClaimNextTaskI
   const project = getProject(cleanProjectId);
   if (!project) throw createApiError(404, 'PROJECT_NOT_FOUND', `Project '${cleanProjectId}' was not found.`, { affectedId: cleanProjectId });
   const limit = boundedNextTaskLimit(input.limit);
+  const requestedPartition = parseNextTaskPartition(input.partitionCount, input.partitionIndex);
 
   return withSyncLock(`task-claim:${cleanProjectId}`, () => {
     const nowMs = Date.now();
@@ -1470,6 +1519,7 @@ export function claimNextTaskForSession(projectId: string, input: ClaimNextTaskI
     const requestedSelectionPolicy = parseBoardLoopSelectionPolicyInput(input.selectionPolicy);
     const existingLoop = getProjectBoardLoopIntent(cleanProjectId);
     const activeLoop = existingLoop?.status === 'active' ? existingLoop : null;
+    const partition = resolveNextTaskPartition(requestedPartition, activeLoop);
     if (activeLoop && requestedSelectionPolicy && requestedSelectionPolicy !== activeLoop.selectionPolicy) {
       throw createApiError(409, 'BOARD_LOOP_SELECTION_POLICY_CONFLICT', 'Active board-loop selection policy is authoritative until that loop is terminal.', {
         affectedId: activeLoop.loopId,
@@ -1484,12 +1534,17 @@ export function claimNextTaskForSession(projectId: string, input: ClaimNextTaskI
       projectId: cleanProjectId,
       requestedTaskId: activeLoop?.requestedTaskId || requestedTask?.id || null,
       selectionPolicy,
+      partitionCount: partition?.count ?? null,
+      partitionIndex: partition?.index ?? null,
       startedAt: activeLoop?.startedAt || new Date(nowMs).toISOString(),
     } : null;
     const parentIds = new Set(projectTasks.map((task) => String(task.parentId || '')).filter(Boolean));
-    const bounded = projectTasks
+    const queueCandidates = projectTasks
       .filter((task) => automaticQueueStatusSelected(task.status, selectionPolicy) && !task.archivedAt)
-      .sort(compareNextTaskOrder)
+      .sort(compareNextTaskOrder);
+    const unpartitionable = partition ? queueCandidates.filter((task) => taskNumericSuffix(task.displayId) === null).length : 0;
+    const bounded = queueCandidates
+      .filter((task) => !partition || taskMatchesPartition(task.displayId, partition))
       .slice(0, limit);
     let deferred = 0;
     const dependencyBlocked: Array<{ taskId: string; displayId?: string; blockers: ReturnType<typeof getTaskPrerequisiteBlockers> }> = [];
@@ -1511,6 +1566,7 @@ export function claimNextTaskForSession(projectId: string, input: ClaimNextTaskI
         deferred,
         dependencyBlocked,
         limit,
+        ...(partition ? { partition, unpartitionable } : {}),
         ...(loop ? { loop } : {}),
       };
     }
@@ -1550,6 +1606,7 @@ export function claimNextTaskForSession(projectId: string, input: ClaimNextTaskI
         deferred,
         limit,
         dependencyBlocked,
+        ...(partition ? { partition, unpartitionable } : {}),
         loop,
       };
     }
@@ -1562,6 +1619,7 @@ export function claimNextTaskForSession(projectId: string, input: ClaimNextTaskI
       deferred,
       limit,
       dependencyBlocked,
+      ...(partition ? { partition, unpartitionable } : {}),
     };
   });
 }

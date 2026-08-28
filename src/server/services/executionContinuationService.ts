@@ -103,6 +103,8 @@ export type BoardLoopIntent = {
   projectId: string;
   requestedTaskId: string | null;
   selectionPolicy: BoardLoopSelectionPolicy;
+  partitionCount: number | null;
+  partitionIndex: number | null;
   status: 'active' | 'terminal';
   startedAt: string;
   updatedAt: string;
@@ -123,6 +125,8 @@ function normalizeBoardLoopIntent(entry: any): BoardLoopIntent | null {
     projectId,
     requestedTaskId: String((metadata as any).requestedTaskId || '').trim() || null,
     selectionPolicy: normalizeBoardLoopSelectionPolicy((metadata as any).selectionPolicy),
+    partitionCount: Number.isInteger((metadata as any).partitionCount) ? Number((metadata as any).partitionCount) : null,
+    partitionIndex: Number.isInteger((metadata as any).partitionIndex) ? Number((metadata as any).partitionIndex) : null,
     status,
     startedAt: String((metadata as any).startedAt || entry.createdAt || '').trim(),
     updatedAt: String((metadata as any).updatedAt || entry.updatedAt || '').trim(),
@@ -137,6 +141,8 @@ export function persistBoardLoopIntent(executionSessionId: string, input: {
   projectId: string;
   requestedTaskId?: string | null;
   selectionPolicy?: BoardLoopSelectionPolicy;
+  partitionCount?: number | null;
+  partitionIndex?: number | null;
   status: 'active' | 'terminal';
   startedAt: string;
   stopEligible?: boolean;
@@ -162,6 +168,8 @@ export function persistBoardLoopIntent(executionSessionId: string, input: {
     projectId,
     requestedTaskId: String(input.requestedTaskId || '').trim() || null,
     selectionPolicy: normalizeBoardLoopSelectionPolicy(input.selectionPolicy),
+    partitionCount: Number.isInteger(input.partitionCount) ? Number(input.partitionCount) : null,
+    partitionIndex: Number.isInteger(input.partitionIndex) ? Number(input.partitionIndex) : null,
     status: input.status,
     startedAt,
     updatedAt: now,

@@ -97,11 +97,12 @@ function seedCandidateTask(projectId: string, id: string, targetFiles: string[],
   status?: 'backlog' | 'todo' | 'in-progress';
   createdAt?: string;
   prerequisiteTaskIds?: string[];
+  displayId?: string;
 } = {}) {
   const now = options.createdAt || new Date().toISOString();
   saveTask({
     id,
-    displayId: id.toUpperCase(),
+    displayId: options.displayId || id.toUpperCase(),
     projectId,
     title: id,
     description: '',
@@ -923,6 +924,84 @@ test('claim next gives one winner when multiple workers contend for one eligible
   assert.equal(getTask('next-only')?.claim?.ownerLabel, 'Chat A');
 });
 
+test('claim next partitions atomic selection before the bounded window and excludes unpartitionable tasks', () => {
+  const projectId = 'project-next-partition';
+  createCandidateProject(projectId);
+  seedCandidateTask(projectId, 'partition-other-high', ['src/PartitionOtherHigh.ts'], { priority: 'high', status: 'todo', displayId: 'NXT-099' });
+  seedCandidateTask(projectId, 'partition-other-medium', ['src/PartitionOtherMedium.ts'], { priority: 'medium', status: 'todo', displayId: 'NXT-102' });
+  seedCandidateTask(projectId, 'partition-target', ['src/PartitionTarget.ts'], { priority: 'low', status: 'todo', displayId: 'NXT-103' });
+  seedCandidateTask(projectId, 'partition-unparseable', ['src/PartitionUnknown.ts'], { priority: 'high', status: 'todo', displayId: 'NXT-UNKNOWN' });
+
+  const claimed = (claims.claimNextTaskForSession as any)(projectId, {
+    sessionId: 'partition-worker-1', ownerLabel: 'Partition 1', partitionCount: 3, partitionIndex: 1, limit: 1,
+  });
+  assert.equal(claimed.status, 'claimed');
+  assert.equal(claimed.task.id, 'partition-target');
+  assert.deepEqual(claimed.partition, { count: 3, index: 1 });
+  assert.equal(claimed.unpartitionable, 1);
+  assert.equal(getTask('partition-other-high')?.claim, undefined);
+  assert.equal(getTask('partition-unparseable')?.claim, undefined);
+});
+
+test('claim next validates partition pairs before mutation', () => {
+  const projectId = 'project-next-partition-invalid';
+  createCandidateProject(projectId);
+  seedCandidateTask(projectId, 'partition-invalid-target', ['src/PartitionInvalid.ts'], { priority: 'high', status: 'todo', displayId: 'NXT-301' });
+
+  for (const input of [
+    { partitionCount: 3 },
+    { partitionIndex: 1 },
+    { partitionCount: 0, partitionIndex: 0 },
+    { partitionCount: 3, partitionIndex: 3 },
+    { partitionCount: 3.5, partitionIndex: 1 },
+  ]) {
+    assert.throws(
+      () => (claims.claimNextTaskForSession as any)(projectId, { sessionId: 'partition-invalid-worker', ...input }),
+      (error: any) => error?.payload?.code === 'TASK_CLAIM_PARTITION_INVALID',
+    );
+  }
+  assert.equal(getTask('partition-invalid-target')?.status, 'todo');
+  assert.equal(getTask('partition-invalid-target')?.claim, undefined);
+});
+
+test('durable board loop preserves its partition across reconnects and rejects conflicting lane input', () => {
+  const projectId = 'project-next-partition-loop';
+  createCandidateProject(projectId);
+  seedCandidateTask(projectId, 'partition-loop-first', ['src/PartitionLoopFirst.ts'], { priority: 'high', status: 'todo', displayId: 'NXT-401' });
+  seedCandidateTask(projectId, 'partition-loop-other', ['src/PartitionLoopOther.ts'], { priority: 'high', status: 'todo', displayId: 'NXT-402' });
+  seedCandidateTask(projectId, 'partition-loop-second', ['src/PartitionLoopSecond.ts'], { priority: 'medium', status: 'todo', displayId: 'NXT-404' });
+
+  const started = (claims.claimNextTaskForSession as any)(projectId, {
+    sessionId: 'partition-loop-a', ownerLabel: 'Partition Loop A', boardLoopRequested: true,
+    partitionCount: 3, partitionIndex: 2, limit: 10,
+  });
+  assert.equal(started.status, 'claimed');
+  assert.equal(started.task.id, 'partition-loop-first');
+  assert.equal(started.loop?.partitionCount, 3);
+  assert.equal(started.loop?.partitionIndex, 2);
+
+  const executionSession = listExecutionSessionsForTask('partition-loop-first').find((entry: any) => entry.status === 'active');
+  assert.ok(executionSession);
+  execution.completeExecutionSession(executionSession!.id);
+  const first = getTask('partition-loop-first')!;
+  saveTask({ ...first, status: 'done', claim: undefined, updatedAt: new Date().toISOString() });
+
+  assert.throws(
+    () => (claims.claimNextTaskForSession as any)(projectId, {
+      sessionId: 'partition-loop-conflict', ownerLabel: 'Partition Loop Conflict', partitionCount: 3, partitionIndex: 0, limit: 10,
+    }),
+    (error: any) => error?.payload?.code === 'BOARD_LOOP_PARTITION_CONFLICT',
+  );
+
+  const reconnected = (claims.claimNextTaskForSession as any)(projectId, {
+    sessionId: 'partition-loop-b', ownerLabel: 'Partition Loop B', limit: 10,
+  });
+  assert.equal(reconnected.status, 'claimed');
+  assert.equal(reconnected.task.id, 'partition-loop-second');
+  assert.deepEqual(reconnected.partition, { count: 3, index: 2 });
+  assert.equal(getTask('partition-loop-other')?.claim, undefined);
+});
+
 test('runtime scope expansion reserves discovered paths without mutating targetFiles and release frees them', () => {
   seedTask('task-runtime-owner', ['src/RuntimeOwner.ts']);
   seedTask('task-runtime-contender', ['src/RuntimeShared.ts']);
@@ -1257,6 +1336,7 @@ test('todo-only loop can stop while backlog remains after prerequisite completio
   assert.equal(getTask('policy-dependent-backlog')?.status, 'backlog');
   const stopped = claims.claimNextTaskForSession(projectId, { sessionId: 'policy-terminal-b', limit: 10 });
   assert.equal(stopped.status, 'no-eligible');
+  assert.ok('loop' in stopped);
   assert.equal(stopped.loop?.status, 'terminal');
   assert.equal(getTask('policy-dependent-backlog')?.status, 'backlog');
 });

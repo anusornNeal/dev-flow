@@ -9,13 +9,14 @@ import { getProject } from '../repositories/projectRepository.js';
 import type { ChatSessionTitleResolution } from '../../types.js';
 
 export const CHAT_SESSION_TITLE_EVIDENCE_KIND = 'chat-title-preference';
+export const CHAT_SESSION_ASSOCIATION_SOURCE = 'chatgpt-structured-tool-metadata';
 const MAX_CONVERSATION_ID_LENGTH = 200;
 const MAX_ALIAS_LENGTH = 120;
 const MAX_PREFERRED_TITLE_LENGTH = 160;
 
 export class ChatSessionTitleServiceError extends Error {
   constructor(
-    public code: 'INVALID_CHAT_TITLE_BINDING' | 'EXECUTION_SESSION_NOT_FOUND' | 'TASK_NOT_FOUND' | 'PROJECT_NOT_FOUND',
+    public code: 'INVALID_CHAT_TITLE_BINDING' | 'INVALID_CHAT_ASSOCIATION_SOURCE' | 'CHAT_ASSOCIATION_CONFLICT' | 'EXECUTION_SESSION_NOT_FOUND' | 'TASK_NOT_FOUND' | 'PROJECT_NOT_FOUND',
     message: string,
     public status: number,
   ) {
@@ -34,15 +35,9 @@ export function normalizeChatConversationId(value: unknown) {
   return /^[A-Za-z0-9_-]{3,200}$/.test(normalized) ? normalized : null;
 }
 
-export function bindChatSessionTitlePreference(input: {
-  executionSessionId: unknown;
-  conversationId: unknown;
-  chatAlias?: unknown;
-  preferredTitle?: unknown;
-  now?: Date;
-}) {
-  const executionSessionId = String(input.executionSessionId || '').trim();
-  const conversationId = normalizeChatConversationId(input.conversationId);
+function resolveBindingContext(executionSessionIdValue: unknown, conversationIdValue: unknown) {
+  const executionSessionId = String(executionSessionIdValue || '').trim();
+  const conversationId = normalizeChatConversationId(conversationIdValue);
   if (!executionSessionId || !conversationId) {
     throw new ChatSessionTitleServiceError('INVALID_CHAT_TITLE_BINDING', 'executionSessionId and a valid conversationId are required.', 400);
   }
@@ -54,7 +49,54 @@ export function bindChatSessionTitlePreference(input: {
   if (!task) throw new ChatSessionTitleServiceError('TASK_NOT_FOUND', `Task '${session.taskId}' was not found.`, 404);
   const project = getProject(session.projectId);
   if (!project) throw new ChatSessionTitleServiceError('PROJECT_NOT_FOUND', `Project '${session.projectId}' was not found.`, 404);
+  return { executionSessionId, conversationId, session, task, project };
+}
 
+function saveTitleEvidence(input: {
+  session: ReturnType<typeof getExecutionSessionById> extends infer T ? Exclude<T, null | undefined> : never;
+  conversationId: string;
+  chatAlias?: unknown;
+  preferredTitle?: unknown;
+  source?: string;
+  nowIso: string;
+}) {
+  const evidence = saveExecutionSessionEvidence({
+    id: `${CHAT_SESSION_TITLE_EVIDENCE_KIND}:${input.session.id}`,
+    sessionId: input.session.id,
+    kind: CHAT_SESSION_TITLE_EVIDENCE_KIND,
+    path: null,
+    repoRevision: input.session.repoRevision,
+    fileRevision: null,
+    revisionIdentity: null,
+    contextHandle: input.session.contextHandle,
+    stale: false,
+    metadata: {
+      schema: 'chat-title-preference.v1',
+      conversationId: input.conversationId,
+      chatAlias: boundedOptionalText(input.chatAlias, MAX_ALIAS_LENGTH),
+      preferredTitle: boundedOptionalText(input.preferredTitle, MAX_PREFERRED_TITLE_LENGTH),
+      associationSource: input.source || 'manual',
+      displayOnly: true,
+    },
+    createdAt: input.nowIso,
+    updatedAt: input.nowIso,
+  });
+  return {
+    bound: true as const,
+    executionSessionId: input.session.id,
+    conversationId: input.conversationId,
+    evidenceId: evidence.id,
+  };
+}
+
+export function bindChatSessionTitlePreference(input: {
+  executionSessionId: unknown;
+  conversationId: unknown;
+  chatAlias?: unknown;
+  preferredTitle?: unknown;
+  now?: Date;
+}) {
+  const { conversationId, session } = resolveBindingContext(input.executionSessionId, input.conversationId);
   const nowIso = (input.now || new Date()).toISOString();
   const existing = queryLatestExecutionSessionEvidence(CHAT_SESSION_TITLE_EVIDENCE_KIND, 100).evidence;
   for (const evidence of existing) {
@@ -63,34 +105,46 @@ export function bindChatSessionTitlePreference(input: {
       setExecutionSessionEvidenceStale(evidence.id, true, nowIso);
     }
   }
+  return saveTitleEvidence({ session, conversationId, chatAlias: input.chatAlias, preferredTitle: input.preferredTitle, nowIso });
+}
 
-  const evidence = saveExecutionSessionEvidence({
-    id: `${CHAT_SESSION_TITLE_EVIDENCE_KIND}:${session.id}`,
-    sessionId: session.id,
-    kind: CHAT_SESSION_TITLE_EVIDENCE_KIND,
-    path: null,
-    repoRevision: session.repoRevision,
-    fileRevision: null,
-    revisionIdentity: null,
-    contextHandle: session.contextHandle,
-    stale: false,
-    metadata: {
-      schema: 'chat-title-preference.v1',
-      conversationId,
-      chatAlias: boundedOptionalText(input.chatAlias, MAX_ALIAS_LENGTH),
-      preferredTitle: boundedOptionalText(input.preferredTitle, MAX_PREFERRED_TITLE_LENGTH),
-      displayOnly: true,
-    },
-    createdAt: nowIso,
-    updatedAt: nowIso,
-  });
+export function associateChatSessionTitlePreference(input: {
+  executionSessionId: unknown;
+  conversationId: unknown;
+  previousExecutionSessionId?: unknown;
+  source?: unknown;
+  now?: Date;
+}) {
+  if (String(input.source || '') !== CHAT_SESSION_ASSOCIATION_SOURCE) {
+    throw new ChatSessionTitleServiceError('INVALID_CHAT_ASSOCIATION_SOURCE', 'Automatic chat association requires structured DevFlow tool metadata.', 400);
+  }
+  const { conversationId, session, task } = resolveBindingContext(input.executionSessionId, input.conversationId);
+  const previousExecutionSessionId = String(input.previousExecutionSessionId || '').trim() || null;
+  const nowIso = (input.now || new Date()).toISOString();
+  const existing = queryLatestExecutionSessionEvidence(CHAT_SESSION_TITLE_EVIDENCE_KIND, 100).evidence.filter(evidence => !evidence.stale);
+  const forSession = existing.find(evidence => evidence.sessionId === session.id);
 
-  return {
-    bound: true as const,
-    executionSessionId: session.id,
-    conversationId,
-    evidenceId: evidence.id,
-  };
+  if (forSession) {
+    const existingConversationId = String(forSession.metadata?.conversationId || '');
+    if (existingConversationId === conversationId) {
+      return saveTitleEvidence({ session, conversationId, source: CHAT_SESSION_ASSOCIATION_SOURCE, nowIso });
+    }
+    throw new ChatSessionTitleServiceError('CHAT_ASSOCIATION_CONFLICT', `Execution session '${session.id}' is already associated with another conversation.`, 409);
+  }
+
+  const forConversation = existing.find(evidence => String(evidence.metadata?.conversationId || '') === conversationId);
+  if (forConversation) {
+    if (!previousExecutionSessionId || previousExecutionSessionId !== forConversation.sessionId) {
+      throw new ChatSessionTitleServiceError('CHAT_ASSOCIATION_CONFLICT', 'Conversation is already associated with another execution session.', 409);
+    }
+    const previousSession = getExecutionSessionById(forConversation.sessionId);
+    if (!previousSession?.taskId || previousSession.taskId !== task.id) {
+      throw new ChatSessionTitleServiceError('CHAT_ASSOCIATION_CONFLICT', 'Conversation rebind is only allowed for another execution of the same task.', 409);
+    }
+    setExecutionSessionEvidenceStale(forConversation.id, true, nowIso);
+  }
+
+  return saveTitleEvidence({ session, conversationId, source: CHAT_SESSION_ASSOCIATION_SOURCE, nowIso });
 }
 
 export function resolveChatSessionTitle(conversationIdValue: unknown): ChatSessionTitleResolution {

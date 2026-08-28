@@ -69,6 +69,54 @@ const address = server.address();
 if (!address || typeof address === 'string') throw new Error('Failed to bind test server');
 const baseUrl = `http://127.0.0.1:${address.port}`;
 
+createExecutionSessionRecord({
+  id: 'exec-chat-title-other',
+  projectId: project.id,
+  taskId: task.id,
+  workspaceId: 'ws-chat-title-other',
+  branch: '0761-other',
+  baseRevision: null,
+  repoRevision: 'ghi789',
+  status: 'active',
+  contextHandle: null,
+  createdAt: '2026-08-28T00:30:00.000Z',
+  updatedAt: '2026-08-28T00:30:00.000Z',
+  expiresAt: null,
+  endedAt: null,
+});
+
+createExecutionSessionRecord({
+  id: 'exec-chat-title-newer',
+  projectId: project.id,
+  taskId: task.id,
+  workspaceId: 'ws-chat-title-newer',
+  branch: '0761',
+  baseRevision: null,
+  repoRevision: 'def456',
+  status: 'active',
+  contextHandle: null,
+  createdAt: '2026-08-28T01:00:00.000Z',
+  updatedAt: '2026-08-28T01:00:00.000Z',
+  expiresAt: null,
+  endedAt: null,
+});
+
+createExecutionSessionRecord({
+  id: 'exec-chat-title-rebind',
+  projectId: project.id,
+  taskId: task.id,
+  workspaceId: 'ws-chat-title-rebind',
+  branch: '0761-rebind',
+  baseRevision: null,
+  repoRevision: 'jkl012',
+  status: 'active',
+  contextHandle: null,
+  createdAt: '2026-08-28T01:30:00.000Z',
+  updatedAt: '2026-08-28T01:30:00.000Z',
+  expiresAt: null,
+  endedAt: null,
+});
+
 test.after(async () => {
   await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
 });
@@ -100,6 +148,55 @@ test('chat session title route binds presentation metadata to an execution sessi
   assert.equal(resolved.chatAlias, 'Title sync chat');
   assert.equal(resolved.preferredTitle, 'DVF-0747 · Title sync chat');
   assert.equal('ownerLabel' in resolved, false);
+});
+
+test('deterministic title association is idempotent, isolates conversations, and guards rebinds', async () => {
+  const associate = async (executionSessionId: string, conversationId: string, previousExecutionSessionId?: string) => fetch(`${baseUrl}/api/chat-sessions/title-associations`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      executionSessionId,
+      conversationId,
+      previousExecutionSessionId,
+      source: 'chatgpt-structured-tool-metadata',
+    }),
+  });
+
+  const first = await associate('exec-chat-title-other', 'conv_auto_a');
+  assert.equal(first.status, 200);
+  assert.equal((await first.json() as any).bound, true);
+
+  const replay = await associate('exec-chat-title-other', 'conv_auto_a');
+  assert.equal(replay.status, 200);
+
+  const steal = await associate('exec-chat-title-other', 'conv_auto_b');
+  assert.equal(steal.status, 409);
+
+  const second = await associate('exec-chat-title-newer', 'conv_auto_b');
+  assert.equal(second.status, 200);
+  const resolvedB = await fetch(`${baseUrl}/api/chat-sessions/title?conversationId=conv_auto_b`).then(response => response.json()) as any;
+  assert.equal(resolvedB.executionSessionId, 'exec-chat-title-newer');
+
+  const guardedRebind = await associate('exec-chat-title-rebind', 'conv_auto_a', 'exec-chat-title-other');
+  assert.equal(guardedRebind.status, 200);
+  const resolvedA = await fetch(`${baseUrl}/api/chat-sessions/title?conversationId=conv_auto_a`).then(response => response.json()) as any;
+  assert.equal(resolvedA.executionSessionId, 'exec-chat-title-rebind');
+  const stillResolvedB = await fetch(`${baseUrl}/api/chat-sessions/title?conversationId=conv_auto_b`).then(response => response.json()) as any;
+  assert.equal(stillResolvedB.resolved, true);
+  assert.equal(stillResolvedB.executionSessionId, 'exec-chat-title-newer');
+});
+
+test('automatic association rejects unsupported evidence sources', async () => {
+  const response = await fetch(`${baseUrl}/api/chat-sessions/title-associations`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      executionSessionId: 'exec-chat-title',
+      conversationId: 'conv_bad_source',
+      source: 'latest-active-session',
+    }),
+  });
+  assert.equal(response.status, 400);
 });
 
 test('unresolved or invalid chat title lookups fail closed without selecting an arbitrary session', async () => {

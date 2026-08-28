@@ -1,4 +1,4 @@
-import { getConversationIdFromUrl, resolveSidebarTitleTarget } from './chatgptAdapter.js';
+import { getConversationIdFromUrl, resolveDevFlowAssociationEvidence, resolveSidebarTitleTarget, type DocumentLike } from './chatgptAdapter.js';
 
 export interface TitleSyncEvaluationInput {
   conversationId: string;
@@ -87,6 +87,15 @@ export function hasTitleSyncSettingsChange(changes: Record<string, unknown>, are
   return areaName === 'sync' && Object.keys(changes).some(key => TITLE_SYNC_SETTING_KEYS.has(key));
 }
 
+export function createTitleResolutionRequest(documentLike: DocumentLike, conversationId: string) {
+  const evidence = resolveDevFlowAssociationEvidence(documentLike);
+  return {
+    type: 'devflow-title-sync:resolve' as const,
+    conversationId,
+    ...(evidence ? { executionSessionId: evidence.executionSessionId } : {}),
+  };
+}
+
 function sendRuntimeMessage(message: unknown) {
   return new Promise<RuntimeReply>(resolve => {
     const runtime = typeof chrome !== 'undefined' ? chrome.runtime : undefined;
@@ -144,7 +153,7 @@ function startContentScript() {
     if (attempts >= MAX_RESOLUTION_ATTEMPTS) return null;
     resolutionAttempts.set(conversationId, attempts + 1);
 
-    const reply = await sendRuntimeMessage({ type: 'devflow-title-sync:resolve', conversationId });
+    const reply = await sendRuntimeMessage(createTitleResolutionRequest(document, conversationId));
     const title = String(reply?.title || '').trim();
     if (!reply?.ok || !title) return null;
     desiredTitles.set(conversationId, title);

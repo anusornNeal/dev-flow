@@ -1,4 +1,4 @@
-import { DEFAULT_DEVFLOW_BASE_URL, resolveDevFlowTitleMetadata } from './devflowClient.js';
+import { associateDevFlowConversation, DEFAULT_DEVFLOW_BASE_URL, resolveDevFlowTitleMetadata } from './devflowClient.js';
 import { DEFAULT_TITLE_PATTERN, renderTitlePattern } from './titlePattern.js';
 
 export interface ExtensionSettings {
@@ -45,10 +45,24 @@ function readSettings() {
   });
 }
 
-export async function resolveRequestedTitle(conversationId: string) {
+export async function resolveRequestedTitle(conversationId: string, executionSessionId?: string | null) {
   const settings = await readSettings();
   if (!settings.enabled) return null;
-  const metadata = await resolveDevFlowTitleMetadata(settings.devflowBaseUrl, conversationId);
+
+  let metadata = await resolveDevFlowTitleMetadata(settings.devflowBaseUrl, conversationId);
+  const normalizedExecutionSessionId = String(executionSessionId || '').trim();
+  if (normalizedExecutionSessionId && metadata?.executionSessionId !== normalizedExecutionSessionId) {
+    const associated = await associateDevFlowConversation(
+      settings.devflowBaseUrl,
+      conversationId,
+      normalizedExecutionSessionId,
+      undefined,
+      metadata?.executionSessionId,
+    );
+    if (!associated) return null;
+    metadata = await resolveDevFlowTitleMetadata(settings.devflowBaseUrl, conversationId);
+  }
+
   if (!metadata) return null;
   const preferred = String(metadata.preferredTitle || '').trim();
   return preferred || renderTitlePattern(settings.pattern, {
@@ -63,7 +77,8 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type !== 'devflow-title-sync:resolve') return undefined;
     const conversationId = String(message?.conversationId || '').trim();
-    void resolveRequestedTitle(conversationId)
+    const executionSessionId = String(message?.executionSessionId || '').trim() || null;
+    void resolveRequestedTitle(conversationId, executionSessionId)
       .then(title => sendResponse({ ok: Boolean(title), title }))
       .catch(() => sendResponse({ ok: false, title: null }));
     return true;

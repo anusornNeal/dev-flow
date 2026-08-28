@@ -15,8 +15,14 @@ export interface SidebarTitleTarget {
   isDevFlowTitle: (title: string) => boolean;
 }
 
+export interface DevFlowAssociationEvidence {
+  executionSessionId: string;
+}
+
 const SUPPORTED_HOSTS = new Set(['chatgpt.com', 'www.chatgpt.com', 'chat.openai.com']);
 const CONVERSATION_ID_PATTERN = /^[A-Za-z0-9_-]{3,200}$/;
+const EXECUTION_SESSION_ID_PATTERN = /^exec-[A-Za-z0-9_-]{3,195}$/;
+const DEVFLOW_EXECUTION_SELECTOR = '[data-devflow-execution-session-id]';
 const TITLE_SELECTORS = [
   '[data-testid="conversation-title"]',
   '[data-testid*="conversation-title"]',
@@ -38,6 +44,13 @@ export function getConversationIdFromUrl(urlValue: string) {
   } catch {
     return null;
   }
+}
+
+export function resolveDevFlowAssociationEvidence(documentLike: DocumentLike): DevFlowAssociationEvidence | null {
+  const node = documentLike.querySelector(DEVFLOW_EXECUTION_SELECTOR);
+  const executionSessionId = String(node?.getAttribute?.('data-devflow-execution-session-id') || '').trim();
+  if (!EXECUTION_SESSION_ID_PATTERN.test(executionSessionId)) return null;
+  return { executionSessionId };
 }
 
 function safeConversationSelector(conversationId: string) {

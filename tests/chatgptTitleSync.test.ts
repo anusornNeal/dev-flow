@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { renderTitlePattern } from '../extensions/chatgpt-title-sync/src/titlePattern.js';
-import { createTitleSyncCoordinator, hasTitleSyncSettingsChange } from '../extensions/chatgpt-title-sync/src/contentScript.js';
-import { getConversationIdFromUrl, resolveSidebarTitleTarget } from '../extensions/chatgpt-title-sync/src/chatgptAdapter.js';
-import { normalizeDevFlowBaseUrl, resolveDevFlowTitleMetadata } from '../extensions/chatgpt-title-sync/src/devflowClient.js';
+import { createTitleResolutionRequest, createTitleSyncCoordinator, hasTitleSyncSettingsChange } from '../extensions/chatgpt-title-sync/src/contentScript.js';
+import { getConversationIdFromUrl, resolveDevFlowAssociationEvidence, resolveSidebarTitleTarget } from '../extensions/chatgpt-title-sync/src/chatgptAdapter.js';
+import { associateDevFlowConversation, normalizeDevFlowBaseUrl, resolveDevFlowTitleMetadata } from '../extensions/chatgpt-title-sync/src/devflowClient.js';
 
 test('title pattern renders supported tokens and falls back for malformed or empty patterns', () => {
   const tokens = {
@@ -65,6 +65,68 @@ test('conversation URL and DOM adapter are bounded and leave unsupported UI unto
 
   const unsupported = resolveSidebarTitleTarget({ querySelector: () => null } as any, 'abc_DEF-123');
   assert.equal(unsupported, null);
+});
+
+test('ChatGPT adapter accepts only bounded structured DevFlow execution metadata for association', () => {
+  const structuredNode = {
+    getAttribute: (name: string) => name === 'data-devflow-execution-session-id' ? 'exec-chat-title' : null,
+  };
+  const structuredDocument = {
+    querySelector: (selector: string) => selector.includes('data-devflow-execution-session-id') ? structuredNode : null,
+  };
+  assert.deepEqual(resolveDevFlowAssociationEvidence(structuredDocument as any), { executionSessionId: 'exec-chat-title' });
+
+  const messageOnlyDocument = {
+    querySelector: () => ({ textContent: 'DevFlow execution session exec-newer-should-not-be-read', getAttribute: () => null }),
+  };
+  assert.equal(resolveDevFlowAssociationEvidence(messageOnlyDocument as any), null);
+
+  const malformedDocument = {
+    querySelector: () => ({ getAttribute: () => 'latest active session' }),
+  };
+  assert.equal(resolveDevFlowAssociationEvidence(malformedDocument as any), null);
+});
+
+test('content title resolution request carries only structured association evidence', () => {
+  const structuredNode = { getAttribute: () => 'exec-chat-title' };
+  const structuredDocument = { querySelector: () => structuredNode };
+  assert.deepEqual(createTitleResolutionRequest(structuredDocument as any, 'conv-a'), {
+    type: 'devflow-title-sync:resolve',
+    conversationId: 'conv-a',
+    executionSessionId: 'exec-chat-title',
+  });
+
+  const unresolvedDocument = { querySelector: () => null };
+  assert.deepEqual(createTitleResolutionRequest(unresolvedDocument as any, 'conv-a'), {
+    type: 'devflow-title-sync:resolve',
+    conversationId: 'conv-a',
+  });
+});
+
+test('DevFlow association client posts deterministic evidence and fails closed offline', async () => {
+  let requestBody: any = null;
+  const associated = await associateDevFlowConversation('http://127.0.0.1:3000', 'conv-a', 'exec-chat-title', async (input, init) => {
+    assert.equal(input, 'http://127.0.0.1:3000/api/chat-sessions/title-associations');
+    assert.equal(init?.method, 'POST');
+    requestBody = JSON.parse(String(init?.body || '{}'));
+    return new Response(JSON.stringify({ bound: true, executionSessionId: 'exec-chat-title', conversationId: 'conv-a' }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  });
+  assert.equal(associated, true);
+  assert.deepEqual(requestBody, {
+    executionSessionId: 'exec-chat-title',
+    conversationId: 'conv-a',
+    source: 'chatgpt-structured-tool-metadata',
+  });
+
+  assert.equal(await associateDevFlowConversation('http://127.0.0.1:3000', 'conv-a', 'exec-chat-title', async () => {
+    throw new Error('offline');
+  }), false);
+  assert.equal(await associateDevFlowConversation('http://127.0.0.1:3000', 'conv-a', 'latest-active', async () => {
+    throw new Error('must not request');
+  }), false);
 });
 
 test('DevFlow client fails closed when server is unavailable or session is unresolved', async () => {

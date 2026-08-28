@@ -1,6 +1,7 @@
 import type express from 'express';
 import type { ApiRouteDeps } from '../types.js';
 import {
+  associateChatSessionTitlePreference,
   bindChatSessionTitlePreference,
   ChatSessionTitleServiceError,
   resolveChatSessionTitle,
@@ -26,6 +27,21 @@ export function registerChatSessionRoutes(app: express.Express, _deps: ApiRouteD
         conversationId: req.body?.conversationId,
         chatAlias: req.body?.chatAlias,
         preferredTitle: req.body?.preferredTitle,
+      });
+      res.setHeader('Cache-Control', 'no-store');
+      return res.json(result);
+    } catch (error) {
+      return sendServiceError(res, error);
+    }
+  });
+
+  app.post('/api/chat-sessions/title-associations', (req, res) => {
+    try {
+      const result = associateChatSessionTitlePreference({
+        executionSessionId: req.body?.executionSessionId,
+        conversationId: req.body?.conversationId,
+        previousExecutionSessionId: req.body?.previousExecutionSessionId,
+        source: req.body?.source,
       });
       res.setHeader('Cache-Control', 'no-store');
       return res.json(result);

@@ -48,6 +48,7 @@ import {
   adoptTaskExecutionOwnedChanges,
   reconcileTaskExecutionOwnedRevisionDrift,
   recordTaskExecutionContextReady,
+  recordTaskExecutionContextReadyIfWorkspaceBound,
   recordTaskExecutionMutationPaths,
   recordTaskExecutionVerificationResult,
 } from '../services/executionSessionService.js';
@@ -557,7 +558,7 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
       const args = req.query as Record<string, any>;
       const bundle = getRepoContextBundle(deps.state, args);
       const contextHandle = createRepoContextHandleForBundle(deps.state, args, bundle);
-      recordTaskExecutionContextReady(args, {
+      recordTaskExecutionContextReadyIfWorkspaceBound(args, {
         contextHandle,
         repoRevision: bundle.repoRevision,
         contextPlanIdentity: bundle.contextPlan?.planIdentity,

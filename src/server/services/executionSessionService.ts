@@ -764,6 +764,14 @@ export function getTaskExecutionMutationBinding(args: Record<string, any>) {
   return { workspaceId, workspace, session, task, claimedScope };
 }
 
+export function recordTaskExecutionContextReadyIfWorkspaceBound(
+  args: Record<string, any>,
+  input: { contextHandle: string; repoRevision?: string | null; contextPlanIdentity?: string | null },
+) {
+  if (!String(args?.workspaceId || '').trim()) return null;
+  return recordTaskExecutionContextReady(args, input);
+}
+
 export function recordTaskExecutionContextReady(
   args: Record<string, any>,
   input: { contextHandle: string; repoRevision?: string | null; contextPlanIdentity?: string | null },

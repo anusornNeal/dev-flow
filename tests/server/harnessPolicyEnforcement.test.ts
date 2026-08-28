@@ -99,6 +99,12 @@ test('execution guard composes policy, ownership, lifecycle, retry identity, and
     }), /managed workspace|active task execution authority/i);
     assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'created');
 
+    assert.equal(executionSessions.recordTaskExecutionContextReadyIfWorkspaceBound({ projectId: project.id }, {
+      contextHandle: 'ctx-project-read',
+      repoRevision: session.repoRevision,
+    }), null);
+    assert.equal(executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)?.lifecycle.stage, 'created');
+
     executionSessions.recordTaskExecutionContextReady({ workspaceId }, {
       contextHandle: 'ctx-harness-1',
       repoRevision: session.repoRevision,

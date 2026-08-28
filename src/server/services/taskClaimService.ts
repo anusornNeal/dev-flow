@@ -28,7 +28,7 @@ import { computeLifecycleAuthoritySnapshot } from './lifecycleAuthorityService.j
 import { reconcileExecutionLifecycleStage } from './executionLifecycleReconciliationService.js';
 import { inspectWorkspaceRecovery } from './workspaceRecoveryService.js';
 import { assertTaskPrerequisitesSatisfied, getTaskPrerequisiteBlockers } from './taskDependencyService.js';
-import { evaluateExecutionContinuation, getProjectBoardLoopIntent, persistBoardLoopIntent, type BoardLoopIntent } from './executionContinuationService.js';
+import { DEFAULT_BOARD_LOOP_SELECTION_POLICY, evaluateExecutionContinuation, getProjectBoardLoopIntent, persistBoardLoopIntent, type BoardLoopIntent, type BoardLoopSelectionPolicy } from './executionContinuationService.js';
 import { classifyReasoningPipelineBoundary } from './mcpToolJobScheduler.js';
 import { getLatestExternalTaskStatusRecord, isExternalTaskStatusRecordStale } from './externalTaskStatusService.js';
 
@@ -52,6 +52,7 @@ export type ClaimNextTaskInput = Omit<ClaimTaskInput, 'allowScopeConflict'> & {
   limit?: number;
   boardLoopRequested?: boolean;
   requestedTaskId?: string;
+  selectionPolicy?: BoardLoopSelectionPolicy;
 };
 
 export type ExpandTaskClaimScopeInput = {
@@ -196,6 +197,19 @@ function boundedNextTaskLimit(value: unknown) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return NEXT_TASK_DEFAULT_LIMIT;
   return Math.max(1, Math.min(NEXT_TASK_MAX_LIMIT, Math.floor(numeric)));
+}
+
+function parseBoardLoopSelectionPolicyInput(value: unknown): BoardLoopSelectionPolicy | null {
+  const policy = String(value || '').trim();
+  if (!policy) return null;
+  if (policy === 'todo-only' || policy === 'include-backlog') return policy;
+  throw createApiError(400, 'BOARD_LOOP_SELECTION_POLICY_INVALID', `Unsupported board-loop selection policy '${policy}'.`, {
+    details: { allowed: ['todo-only', 'include-backlog'] },
+  });
+}
+
+function automaticQueueStatusSelected(status: unknown, policy: BoardLoopSelectionPolicy) {
+  return status === 'todo' || (policy === 'include-backlog' && status === 'backlog');
 }
 
 function normalizedTags(task: any) {
@@ -393,7 +407,7 @@ function boardLoopPersistenceSession(loop: BoardLoopIntent | null, projectId: st
   return queryExecutionSessions({ projectId, limit: 1 }).sessions[0] || null;
 }
 
-function persistLoopOnClaimedTask(claimed: any, loop: { loopId: string; projectId: string; requestedTaskId: string | null; startedAt: string }) {
+function persistLoopOnClaimedTask(claimed: any, loop: { loopId: string; projectId: string; requestedTaskId: string | null; selectionPolicy: BoardLoopSelectionPolicy; startedAt: string }) {
   const workspaceId = String(claimed?.workspace?.workspaceId || claimed?.task?.claim?.workspaceId || '').trim();
   const taskSessions = listExecutionSessionsForTask(claimed.task.id);
   const execution = taskSessions.find((entry) => entry.status === 'active' && (!workspaceId || entry.workspaceId === workspaceId)) || taskSessions[0] || null;
@@ -402,6 +416,7 @@ function persistLoopOnClaimedTask(claimed: any, loop: { loopId: string; projectI
     loopId: loop.loopId,
     projectId: loop.projectId,
     requestedTaskId: loop.requestedTaskId,
+    selectionPolicy: loop.selectionPolicy,
     status: 'active',
     startedAt: loop.startedAt,
     stopEligible: false,
@@ -597,8 +612,9 @@ export function getNextActionForSession(projectId: string, input: { sessionId: s
   }
 
   const limit = boundedNextTaskLimit(input.limit);
+  const selectionPolicy = boardLoop?.selectionPolicy || DEFAULT_BOARD_LOOP_SELECTION_POLICY;
   const newWorkWindow = projection.entries
-    .filter((entry) => entry.taskStatus === 'backlog' || entry.taskStatus === 'todo')
+    .filter((entry) => automaticQueueStatusSelected(entry.taskStatus, selectionPolicy))
     .slice(0, limit);
   const ready = newWorkWindow.find((entry) => entry.state === 'ready');
   if (ready) {
@@ -607,7 +623,7 @@ export function getNextActionForSession(projectId: string, input: { sessionId: s
       projectId: cleanProjectId,
       task: { taskId: ready.taskId, displayId: ready.displayId },
       reasonCodes: ['ELIGIBLE_NEW_WORK'],
-      claim: { tool: 'claim_next_task' as const, projectId: cleanProjectId, limit },
+      claim: { tool: 'claim_next_task' as const, projectId: cleanProjectId, limit, selectionPolicy },
       ...(boardLoop ? { loop: boardLoop } : {}),
     };
   }
@@ -662,7 +678,7 @@ export function getNextActionForSession(projectId: string, input: { sessionId: s
       action: 'confirm-loop-stop' as const,
       projectId: cleanProjectId,
       reasonCodes: ['BOARD_LOOP_STOP_CONFIRMATION_REQUIRED'],
-      claim: { tool: 'claim_next_task' as const, projectId: cleanProjectId, limit },
+      claim: { tool: 'claim_next_task' as const, projectId: cleanProjectId, limit, selectionPolicy: boardLoop.selectionPolicy },
       loop: { ...boardLoop, stopEligible: true, reasonCodes: ['BOARD_LOOP_STOP_CONFIRMATION_REQUIRED'] },
     };
   }
@@ -1451,19 +1467,28 @@ export function claimNextTaskForSession(projectId: string, input: ClaimNextTaskI
         foregroundTaskIds: ownedInspection.boundary.foregroundTaskIds.slice(0, 8),
       };
     }
+    const requestedSelectionPolicy = parseBoardLoopSelectionPolicyInput(input.selectionPolicy);
     const existingLoop = getProjectBoardLoopIntent(cleanProjectId);
     const activeLoop = existingLoop?.status === 'active' ? existingLoop : null;
+    if (activeLoop && requestedSelectionPolicy && requestedSelectionPolicy !== activeLoop.selectionPolicy) {
+      throw createApiError(409, 'BOARD_LOOP_SELECTION_POLICY_CONFLICT', 'Active board-loop selection policy is authoritative until that loop is terminal.', {
+        affectedId: activeLoop.loopId,
+        details: { activeSelectionPolicy: activeLoop.selectionPolicy, requestedSelectionPolicy },
+      });
+    }
+    const selectionPolicy = activeLoop?.selectionPolicy || requestedSelectionPolicy || DEFAULT_BOARD_LOOP_SELECTION_POLICY;
     const requestedTask = input.requestedTaskId ? canonicalRequestedLoopTask(cleanProjectId, input.requestedTaskId) : null;
     const loopRequested = input.boardLoopRequested === true || Boolean(activeLoop);
     const loopSeed = loopRequested ? {
       loopId: activeLoop?.loopId || `board-loop-${crypto.randomUUID()}`,
       projectId: cleanProjectId,
       requestedTaskId: activeLoop?.requestedTaskId || requestedTask?.id || null,
+      selectionPolicy,
       startedAt: activeLoop?.startedAt || new Date(nowMs).toISOString(),
     } : null;
     const parentIds = new Set(projectTasks.map((task) => String(task.parentId || '')).filter(Boolean));
     const bounded = projectTasks
-      .filter((task) => (task.status === 'backlog' || task.status === 'todo') && !task.archivedAt)
+      .filter((task) => automaticQueueStatusSelected(task.status, selectionPolicy) && !task.archivedAt)
       .sort(compareNextTaskOrder)
       .slice(0, limit);
     let deferred = 0;

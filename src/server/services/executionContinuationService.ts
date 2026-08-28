@@ -80,6 +80,7 @@ export type ExecutionContinuationResult = {
     loopId: string | null;
     projectId: string | null;
     requestedTaskId: string | null;
+    selectionPolicy: BoardLoopSelectionPolicy;
     stopEligible: boolean;
     reasonCodes: string[];
     startedAt: string | null;
@@ -90,10 +91,18 @@ export type ExecutionContinuationResult = {
 
 const BOARD_LOOP_EVIDENCE_KIND = 'board-loop-intent';
 
+export type BoardLoopSelectionPolicy = 'todo-only' | 'include-backlog';
+export const DEFAULT_BOARD_LOOP_SELECTION_POLICY: BoardLoopSelectionPolicy = 'todo-only';
+
+export function normalizeBoardLoopSelectionPolicy(value: unknown): BoardLoopSelectionPolicy {
+  return value === 'include-backlog' ? 'include-backlog' : DEFAULT_BOARD_LOOP_SELECTION_POLICY;
+}
+
 export type BoardLoopIntent = {
   loopId: string;
   projectId: string;
   requestedTaskId: string | null;
+  selectionPolicy: BoardLoopSelectionPolicy;
   status: 'active' | 'terminal';
   startedAt: string;
   updatedAt: string;
@@ -113,6 +122,7 @@ function normalizeBoardLoopIntent(entry: any): BoardLoopIntent | null {
     loopId,
     projectId,
     requestedTaskId: String((metadata as any).requestedTaskId || '').trim() || null,
+    selectionPolicy: normalizeBoardLoopSelectionPolicy((metadata as any).selectionPolicy),
     status,
     startedAt: String((metadata as any).startedAt || entry.createdAt || '').trim(),
     updatedAt: String((metadata as any).updatedAt || entry.updatedAt || '').trim(),
@@ -126,6 +136,7 @@ export function persistBoardLoopIntent(executionSessionId: string, input: {
   loopId: string;
   projectId: string;
   requestedTaskId?: string | null;
+  selectionPolicy?: BoardLoopSelectionPolicy;
   status: 'active' | 'terminal';
   startedAt: string;
   stopEligible?: boolean;
@@ -150,6 +161,7 @@ export function persistBoardLoopIntent(executionSessionId: string, input: {
     loopId,
     projectId,
     requestedTaskId: String(input.requestedTaskId || '').trim() || null,
+    selectionPolicy: normalizeBoardLoopSelectionPolicy(input.selectionPolicy),
     status: input.status,
     startedAt,
     updatedAt: now,
@@ -344,6 +356,7 @@ export function evaluateExecutionContinuation(
     loopId: persistedBoardLoop.loopId,
     projectId: persistedBoardLoop.projectId,
     requestedTaskId: persistedBoardLoop.requestedTaskId,
+    selectionPolicy: persistedBoardLoop.selectionPolicy,
     stopEligible: persistedBoardLoop.stopEligible,
     reasonCodes: persistedBoardLoop.reasonCodes,
     startedAt: persistedBoardLoop.startedAt,
@@ -356,6 +369,7 @@ export function evaluateExecutionContinuation(
     loopId: null,
     projectId: session.projectId || null,
     requestedTaskId: null,
+    selectionPolicy: DEFAULT_BOARD_LOOP_SELECTION_POLICY,
     stopEligible: false,
     reasonCodes: [],
     startedAt: null,

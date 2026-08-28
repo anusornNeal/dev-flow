@@ -839,12 +839,12 @@ test('release is owner-guarded, clears claim, and returns task to requested runn
 test('claim next selects the highest-priority eligible leaf and keeps final gates and parents out of auto-selection', () => {
   const projectId = 'project-next-selection';
   createCandidateProject(projectId);
-  seedCandidateTask(projectId, 'next-parent', ['src/Parent.ts'], { priority: 'high', createdAt: '2026-08-10T00:00:00.000Z' });
-  seedCandidateTask(projectId, 'next-child', ['src/Child.ts'], { parentId: 'next-parent', priority: 'medium', createdAt: '2026-08-10T00:00:01.000Z' });
-  seedCandidateTask(projectId, 'next-final', ['src/Final.ts'], { priority: 'high', tags: ['final-gate'], createdAt: '2026-08-10T00:00:02.000Z' });
-  seedCandidateTask(projectId, 'next-blocked', ['src/Blocked.ts'], { priority: 'high', tags: ['depends-on:missing-task'], createdAt: '2026-08-10T00:00:02.500Z' });
-  seedCandidateTask(projectId, 'next-high', ['src/High.ts'], { priority: 'high', createdAt: '2026-08-10T00:00:03.000Z' });
-  seedCandidateTask(projectId, 'next-low', ['src/Low.ts'], { priority: 'low', createdAt: '2026-08-10T00:00:04.000Z' });
+  seedCandidateTask(projectId, 'next-parent', ['src/Parent.ts'], { priority: 'high', status: 'todo', createdAt: '2026-08-10T00:00:00.000Z' });
+  seedCandidateTask(projectId, 'next-child', ['src/Child.ts'], { parentId: 'next-parent', priority: 'medium', status: 'todo', createdAt: '2026-08-10T00:00:01.000Z' });
+  seedCandidateTask(projectId, 'next-final', ['src/Final.ts'], { priority: 'high', status: 'todo', tags: ['final-gate'], createdAt: '2026-08-10T00:00:02.000Z' });
+  seedCandidateTask(projectId, 'next-blocked', ['src/Blocked.ts'], { priority: 'high', status: 'todo', tags: ['depends-on:missing-task'], createdAt: '2026-08-10T00:00:02.500Z' });
+  seedCandidateTask(projectId, 'next-high', ['src/High.ts'], { priority: 'high', status: 'todo', createdAt: '2026-08-10T00:00:03.000Z' });
+  seedCandidateTask(projectId, 'next-low', ['src/Low.ts'], { priority: 'low', status: 'todo', createdAt: '2026-08-10T00:00:04.000Z' });
 
   const first = claims.claimNextTaskForSession(projectId, { sessionId: 'next-worker-alpha', ownerLabel: 'Chat N1', limit: 10 });
   assert.equal(first.status, 'claimed');
@@ -863,9 +863,9 @@ test('structured prerequisites block direct claim, are skipped with details by c
   const projectId = 'project-next-prerequisites';
   createCandidateProject(projectId);
   seedCandidateTask(projectId, 'prereq-foundation', ['src/Foundation.ts'], { status: 'in-progress', priority: 'high' });
-  seedCandidateTask(projectId, 'prereq-dependent', ['src/Dependent.ts'], { priority: 'high', prerequisiteTaskIds: ['prereq-foundation'], createdAt: '2026-08-10T00:00:01.000Z' });
-  seedCandidateTask(projectId, 'prereq-parallel-a', ['src/ParallelA.ts'], { priority: 'medium', createdAt: '2026-08-10T00:00:02.000Z' });
-  seedCandidateTask(projectId, 'prereq-parallel-b', ['src/ParallelB.ts'], { priority: 'medium', createdAt: '2026-08-10T00:00:03.000Z' });
+  seedCandidateTask(projectId, 'prereq-dependent', ['src/Dependent.ts'], { priority: 'high', status: 'todo', prerequisiteTaskIds: ['prereq-foundation'], createdAt: '2026-08-10T00:00:01.000Z' });
+  seedCandidateTask(projectId, 'prereq-parallel-a', ['src/ParallelA.ts'], { priority: 'medium', status: 'todo', createdAt: '2026-08-10T00:00:02.000Z' });
+  seedCandidateTask(projectId, 'prereq-parallel-b', ['src/ParallelB.ts'], { priority: 'medium', status: 'todo', createdAt: '2026-08-10T00:00:03.000Z' });
 
   assert.throws(
     () => claims.claimTaskForSession('prereq-dependent', { sessionId: 'dep-direct', ownerLabel: 'Chat Dep' }),
@@ -886,7 +886,7 @@ test('structured prerequisites block direct claim, are skipped with details by c
   const prerequisite = getTask('prereq-foundation')!;
   prerequisite.status = 'done';
   saveTask(prerequisite);
-  assert.equal(getTask('prereq-dependent')?.status, 'backlog', 'unlock must not require lane churn');
+  assert.equal(getTask('prereq-dependent')?.status, 'todo', 'unlock must not require lane churn');
 
   const unlocked = claims.claimNextTaskForSession(projectId, { sessionId: 'dep-loop-c', ownerLabel: 'Chat Loop C', limit: 10 });
   assert.equal(unlocked.status, 'claimed');
@@ -897,8 +897,8 @@ test('claim next defers ambiguous and conflicting scope instead of overriding it
   const projectId = 'project-next-deferred';
   createCandidateProject(projectId);
   seedCandidateTask(projectId, 'next-anchor', ['src/Shared.ts'], { priority: 'high' });
-  seedCandidateTask(projectId, 'next-overlap', ['src/Shared.ts'], { priority: 'high' });
-  seedCandidateTask(projectId, 'next-uncertain', [], { priority: 'high' });
+  seedCandidateTask(projectId, 'next-overlap', ['src/Shared.ts'], { priority: 'high', status: 'todo' });
+  seedCandidateTask(projectId, 'next-uncertain', [], { priority: 'high', status: 'todo' });
   claims.claimTaskForSession('next-anchor', { sessionId: 'anchor-owner', ownerLabel: 'Chat Anchor' });
 
   const result = claims.claimNextTaskForSession(projectId, { sessionId: 'deferred-worker', ownerLabel: 'Chat Deferred', limit: 10 });
@@ -911,7 +911,7 @@ test('claim next defers ambiguous and conflicting scope instead of overriding it
 test('claim next gives one winner when multiple workers contend for one eligible task', () => {
   const projectId = 'project-next-race';
   createCandidateProject(projectId);
-  seedCandidateTask(projectId, 'next-only', ['src/Only.ts'], { priority: 'high' });
+  seedCandidateTask(projectId, 'next-only', ['src/Only.ts'], { priority: 'high', status: 'todo' });
 
   const attempts = ['A', 'B', 'C', 'D', 'E'].map((label) =>
     claims.claimNextTaskForSession(projectId, { sessionId: `race-worker-${label}`, ownerLabel: `Chat ${label}`, limit: 10 }));
@@ -957,7 +957,7 @@ test('claim-next defers a candidate that overlaps an active runtime reservation'
   const projectId = 'project-runtime-next';
   createCandidateProject(projectId);
   seedCandidateTask(projectId, 'runtime-anchor', ['src/Anchor.ts'], { priority: 'high' });
-  seedCandidateTask(projectId, 'runtime-candidate', ['src/RuntimeShared.ts'], { priority: 'high' });
+  seedCandidateTask(projectId, 'runtime-candidate', ['src/RuntimeShared.ts'], { priority: 'high', status: 'todo' });
   claims.claimTaskForSession('runtime-anchor', { sessionId: 'runtime-next-owner', ownerLabel: 'Chat Runtime Next' });
   claims.expandTaskClaimScope('runtime-anchor', { sessionId: 'runtime-next-owner', paths: ['src/RuntimeShared.ts'] });
   const result = claims.claimNextTaskForSession(projectId, { sessionId: 'runtime-next-worker', ownerLabel: 'Chat Runtime Worker', limit: 10 });
@@ -981,9 +981,9 @@ test('orchestration projection gives each task one durable state and keeps indep
   const projectId = 'project-orchestration-projection';
   createCandidateProject(projectId);
   seedCandidateTask(projectId, 'queue-attention', ['src/QueueAttention.ts'], { priority: 'high' });
-  seedCandidateTask(projectId, 'queue-dependent', ['src/QueueDependent.ts'], { priority: 'high', prerequisiteTaskIds: ['queue-attention'], createdAt: '2026-08-10T00:00:01.000Z' });
-  seedCandidateTask(projectId, 'queue-ready', ['src/QueueReady.ts'], { priority: 'medium', createdAt: '2026-08-10T00:00:02.000Z' });
-  seedCandidateTask(projectId, 'queue-ready-second', ['src/QueueReadySecond.ts'], { priority: 'low', createdAt: '2026-08-10T00:00:03.000Z' });
+  seedCandidateTask(projectId, 'queue-dependent', ['src/QueueDependent.ts'], { priority: 'high', status: 'todo', prerequisiteTaskIds: ['queue-attention'], createdAt: '2026-08-10T00:00:01.000Z' });
+  seedCandidateTask(projectId, 'queue-ready', ['src/QueueReady.ts'], { priority: 'medium', status: 'todo', createdAt: '2026-08-10T00:00:02.000Z' });
+  seedCandidateTask(projectId, 'queue-ready-second', ['src/QueueReadySecond.ts'], { priority: 'low', status: 'todo', createdAt: '2026-08-10T00:00:03.000Z' });
 
   claims.claimTaskForSession('queue-attention', { sessionId: 'queue-attention-owner', ownerLabel: 'Chat Queue Attention' });
   const attentionExecution = listExecutionSessionsForTask('queue-attention')[0];
@@ -1014,8 +1014,8 @@ test('local-native in-progress work is scheduler-visible, reserves target scope,
   const projectId = 'project-external-native-scheduler';
   createCandidateProject(projectId);
   seedCandidateTask(projectId, 'native-active', ['src/NativeShared.ts'], { priority: 'high', createdAt: '2026-08-10T00:00:00.000Z' });
-  seedCandidateTask(projectId, 'native-conflict', ['src/NativeShared.ts'], { priority: 'high', createdAt: '2026-08-10T00:00:01.000Z' });
-  seedCandidateTask(projectId, 'native-safe', ['src/NativeSafe.ts'], { priority: 'medium', createdAt: '2026-08-10T00:00:02.000Z' });
+  seedCandidateTask(projectId, 'native-conflict', ['src/NativeShared.ts'], { priority: 'high', status: 'todo', createdAt: '2026-08-10T00:00:01.000Z' });
+  seedCandidateTask(projectId, 'native-safe', ['src/NativeSafe.ts'], { priority: 'medium', status: 'todo', createdAt: '2026-08-10T00:00:02.000Z' });
 
   externalStatus.updateExternalTaskStatus('native-active', {
     status: 'in-progress',
@@ -1035,7 +1035,7 @@ test('local-native in-progress work is scheduler-visible, reserves target scope,
   const claimed = claims.claimNextTaskForSession(projectId, { sessionId: 'native-parallel-chat', ownerLabel: 'Chat Native Parallel', limit: 10 });
   assert.equal(claimed.status, 'claimed');
   assert.equal(claimed.task.id, 'native-safe', 'overlapping managed candidate must be deferred while native worker reserves the same target file');
-  assert.equal(getTask('native-conflict')?.status, 'backlog');
+  assert.equal(getTask('native-conflict')?.status, 'todo');
 
   externalStatus.updateExternalTaskStatus('native-active', {
     status: 'in-progress',
@@ -1158,14 +1158,14 @@ test('next action recovers owned durable work before recommending a fresh atomic
 test('next action recommends claim_next_task without mutating and reports bounded no-action when the window has no eligible task', () => {
   const projectId = 'project-next-action-new';
   createCandidateProject(projectId);
-  seedCandidateTask(projectId, 'new-ready', ['src/NewReady.ts'], { priority: 'high' });
+  seedCandidateTask(projectId, 'new-ready', ['src/NewReady.ts'], { priority: 'high', status: 'todo' });
   const first = claims.getNextActionForSession(projectId, { sessionId: 'new-worker', limit: 10 });
   const replay = claims.getNextActionForSession(projectId, { sessionId: 'new-worker', limit: 10 });
   assert.equal(first.action, 'claim-new');
   assert.equal(first.task?.taskId, 'new-ready');
   assert.equal(first.claim?.tool, 'claim_next_task');
   assert.equal(replay.action, 'claim-new');
-  assert.equal(getTask('new-ready')?.status, 'backlog');
+  assert.equal(getTask('new-ready')?.status, 'todo');
 
   const claimed = claims.claimNextTaskForSession(projectId, { sessionId: 'new-worker', ownerLabel: 'Chat New Worker', limit: 10 });
   assert.equal(claimed.status, 'claimed');
@@ -1173,18 +1173,99 @@ test('next action recommends claim_next_task without mutating and reports bounde
 
   const blockedProjectId = 'project-next-action-none';
   createCandidateProject(blockedProjectId);
-  seedCandidateTask(blockedProjectId, 'new-unbounded', [], { priority: 'high' });
+  seedCandidateTask(blockedProjectId, 'new-unbounded', [], { priority: 'high', status: 'todo' });
   const none = claims.getNextActionForSession(blockedProjectId, { sessionId: 'none-worker', limit: 10 });
   assert.equal(none.action, 'no-action');
   assert.deepEqual(none.reasonCodes, ['NO_ELIGIBLE_TASK']);
   assert.equal(none.blocked?.[0]?.taskId, 'new-unbounded');
 });
 
+test('automatic selection defaults to todo-only and include-backlog persists across workers', () => {
+  const defaultProjectId = 'project-policy-default';
+  createCandidateProject(defaultProjectId);
+  seedCandidateTask(defaultProjectId, 'policy-backlog-high', ['src/PolicyBacklog.ts'], { priority: 'high', status: 'backlog' });
+  seedCandidateTask(defaultProjectId, 'policy-todo-low', ['src/PolicyTodo.ts'], { priority: 'low', status: 'todo' });
+
+  const defaultNext = claims.getNextActionForSession(defaultProjectId, { sessionId: 'policy-default-worker', limit: 10 });
+  assert.equal(defaultNext.action, 'claim-new');
+  assert.equal(defaultNext.task?.taskId, 'policy-todo-low');
+  assert.equal(defaultNext.claim?.selectionPolicy, 'todo-only');
+  const defaultClaim = claims.claimNextTaskForSession(defaultProjectId, { sessionId: 'policy-default-worker', limit: 10 });
+  assert.equal(defaultClaim.status, 'claimed');
+  assert.equal(defaultClaim.task.id, 'policy-todo-low');
+  assert.equal(getTask('policy-backlog-high')?.status, 'backlog');
+
+  const backlogOnlyProjectId = 'project-policy-backlog-only';
+  createCandidateProject(backlogOnlyProjectId);
+  seedCandidateTask(backlogOnlyProjectId, 'policy-backlog-only', ['src/PolicyBacklogOnly.ts'], { priority: 'high', status: 'backlog' });
+  const backlogOnlyNext = claims.getNextActionForSession(backlogOnlyProjectId, { sessionId: 'policy-backlog-only-worker', limit: 10 });
+  assert.equal(backlogOnlyNext.action, 'no-action');
+  assert.deepEqual(backlogOnlyNext.reasonCodes, ['NO_ELIGIBLE_TASK']);
+  const backlogOnlyClaim = claims.claimNextTaskForSession(backlogOnlyProjectId, { sessionId: 'policy-backlog-only-worker', limit: 10 });
+  assert.equal(backlogOnlyClaim.status, 'no-eligible');
+  assert.equal(getTask('policy-backlog-only')?.status, 'backlog');
+
+  const includeProjectId = 'project-policy-include-backlog';
+  createCandidateProject(includeProjectId);
+  seedCandidateTask(includeProjectId, 'policy-include-a', ['src/PolicyIncludeA.ts'], { priority: 'high', status: 'backlog' });
+  seedCandidateTask(includeProjectId, 'policy-include-b', ['src/PolicyIncludeB.ts'], { priority: 'medium', status: 'backlog' });
+  const includeStarted = claims.claimNextTaskForSession(includeProjectId, {
+    sessionId: 'policy-include-a', ownerLabel: 'Chat Include A', boardLoopRequested: true, selectionPolicy: 'include-backlog', limit: 10,
+  });
+  assert.equal(includeStarted.status, 'claimed');
+  assert.equal(includeStarted.task.id, 'policy-include-a');
+  assert.equal(includeStarted.loop?.selectionPolicy, 'include-backlog');
+
+  const inheritedRead = claims.getNextActionForSession(includeProjectId, { sessionId: 'policy-include-b', limit: 10 });
+  assert.equal(inheritedRead.action, 'claim-new');
+  assert.equal(inheritedRead.task?.taskId, 'policy-include-b');
+  assert.equal(inheritedRead.loop?.selectionPolicy, 'include-backlog');
+  assert.equal(inheritedRead.claim?.selectionPolicy, 'include-backlog');
+  const inheritedClaim = claims.claimNextTaskForSession(includeProjectId, { sessionId: 'policy-include-b', ownerLabel: 'Chat Include B', limit: 10 });
+  assert.equal(inheritedClaim.status, 'claimed');
+  assert.equal(inheritedClaim.task.id, 'policy-include-b');
+  assert.equal(inheritedClaim.loop?.selectionPolicy, 'include-backlog');
+
+  assert.throws(
+    () => claims.claimNextTaskForSession(includeProjectId, { sessionId: 'policy-conflict', selectionPolicy: 'todo-only', limit: 10 }),
+    (error: any) => error?.payload?.code === 'BOARD_LOOP_SELECTION_POLICY_CONFLICT',
+  );
+});
+
+test('todo-only loop can stop while backlog remains after prerequisite completion', () => {
+  const projectId = 'project-policy-terminal-backlog';
+  createCandidateProject(projectId);
+  seedCandidateTask(projectId, 'policy-prerequisite', ['src/PolicyPrerequisite.ts'], { priority: 'high', status: 'todo' });
+  seedCandidateTask(projectId, 'policy-dependent-backlog', ['src/PolicyDependent.ts'], { priority: 'high', status: 'backlog', prerequisiteTaskIds: ['policy-prerequisite'] });
+
+  const started = claims.claimNextTaskForSession(projectId, {
+    sessionId: 'policy-terminal-a', ownerLabel: 'Chat Terminal A', boardLoopRequested: true, limit: 10,
+  });
+  assert.equal(started.status, 'claimed');
+  assert.equal(started.task.id, 'policy-prerequisite');
+  assert.equal(started.loop?.selectionPolicy, 'todo-only');
+
+  const prerequisiteExecution = listExecutionSessionsForTask('policy-prerequisite').find((entry: any) => entry.status === 'active');
+  assert.ok(prerequisiteExecution);
+  execution.completeExecutionSession(prerequisiteExecution!.id);
+  const prerequisite = getTask('policy-prerequisite')!;
+  saveTask({ ...prerequisite, status: 'done', claim: undefined, updatedAt: new Date().toISOString() });
+
+  const stopRead = claims.getNextActionForSession(projectId, { sessionId: 'policy-terminal-b', limit: 10 });
+  assert.equal(stopRead.action, 'confirm-loop-stop');
+  assert.equal(stopRead.loop?.selectionPolicy, 'todo-only');
+  assert.equal(getTask('policy-dependent-backlog')?.status, 'backlog');
+  const stopped = claims.claimNextTaskForSession(projectId, { sessionId: 'policy-terminal-b', limit: 10 });
+  assert.equal(stopped.status, 'no-eligible');
+  assert.equal(stopped.loop?.status, 'terminal');
+  assert.equal(getTask('policy-dependent-backlog')?.status, 'backlog');
+});
+
 test('shared board-loop intent resumes current work only for the same worker and lets a different worker claim distinct work', () => {
   const projectId = 'project-board-loop-resume';
   createCandidateProject(projectId);
-  seedCandidateTask(projectId, 'loop-current', ['src/LoopCurrent.ts'], { priority: 'high' });
-  seedCandidateTask(projectId, 'loop-next', ['src/LoopNext.ts'], { priority: 'medium' });
+  seedCandidateTask(projectId, 'loop-current', ['src/LoopCurrent.ts'], { priority: 'high', status: 'todo' });
+  seedCandidateTask(projectId, 'loop-next', ['src/LoopNext.ts'], { priority: 'medium', status: 'todo' });
 
   const started = (claims.claimNextTaskForSession as any)(projectId, {
     sessionId: 'loop-worker-a',
@@ -1210,7 +1291,7 @@ test('shared board-loop intent resumes current work only for the same worker and
   assert.equal(differentWorker.loop?.status, 'active');
   assert.equal(differentWorker.loop?.loopId, started.loop.loopId);
   assert.equal(differentWorker.loop?.projectId, projectId);
-  assert.equal(getTask('loop-next')?.status, 'backlog', 'scheduler pull must remain read-only for the second worker');
+  assert.equal(getTask('loop-next')?.status, 'todo', 'scheduler pull must remain read-only for the second worker');
   assert.equal(JSON.stringify(differentWorker).includes('loop-worker-a'), false, 'shared loop state must not expose the original caller identity');
 
   const claimedByDifferentWorker = (claims.claimNextTaskForSession as any)(projectId, {
@@ -1231,7 +1312,7 @@ test('shared board-loop gives three chat workers distinct tasks and presence lab
   createCandidateProject(projectId);
   for (const [index, suffix] of ['a', 'b', 'c'].entries()) {
     seedCandidateTask(projectId, `three-worker-${suffix}`, [`src/Worker${suffix.toUpperCase()}.ts`], {
-      priority: 'high', createdAt: `2026-08-10T00:00:0${index + 1}.000Z`,
+      priority: 'high', status: 'todo', createdAt: `2026-08-10T00:00:0${index + 1}.000Z`,
     });
   }
 
@@ -1257,7 +1338,7 @@ test('shared board-loop gives three chat workers distinct tasks and presence lab
 test('shared board-loop keeps extra workers away when one task is already owned', () => {
   const projectId = 'project-board-loop-one-task';
   createCandidateProject(projectId);
-  seedCandidateTask(projectId, 'one-loop-task', ['src/OneLoop.ts'], { priority: 'high' });
+  seedCandidateTask(projectId, 'one-loop-task', ['src/OneLoop.ts'], { priority: 'high', status: 'todo' });
   const owner = (claims.claimNextTaskForSession as any)(projectId, {
     sessionId: 'one-worker-a', ownerLabel: 'Chat Loop', boardLoopRequested: true, limit: 10,
   });
@@ -1283,7 +1364,7 @@ test('board-loop stop remains active until requested scope is terminal, then cla
   const projectId = 'project-board-loop-stop';
   createCandidateProject(projectId);
   seedCandidateTask(projectId, 'loop-parent', [], { status: 'in-progress', priority: 'high' });
-  seedCandidateTask(projectId, 'loop-child', ['src/LoopChild.ts'], { parentId: 'loop-parent', priority: 'high' });
+  seedCandidateTask(projectId, 'loop-child', ['src/LoopChild.ts'], { parentId: 'loop-parent', priority: 'high', status: 'todo' });
 
   const started = (claims.claimNextTaskForSession as any)(projectId, {
     sessionId: 'loop-stop-a',

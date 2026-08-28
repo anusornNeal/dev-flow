@@ -38,7 +38,7 @@ export const taskToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'search_tasks',
-    description: 'Search or list local DevFlow tasks with optional query, parent, status, paging, and response-density filters. This is the single task-collection read intent for ChatGPT. Every response-density mode defaults to a bounded page of 50 items; set all=true only when the caller explicitly needs the entire matching collection. For board-loop next-work fallback, use bounded minimal/summary reads filtered across backlog and todo rather than an unfiltered or done collection; generic completed-task history, audit, and evidence reads remain supported.',
+    description: 'Search or list local DevFlow tasks with optional query, parent, status, paging, and response-density filters. This is the single task-collection read intent for ChatGPT. Every response-density mode defaults to a bounded page of 50 items; set all=true only when the caller explicitly needs the entire matching collection. For default board-loop next-work fallback, use bounded minimal/summary reads filtered to todo. Inspect backlog for automatic selection only when the active loop explicitly uses include-backlog; named backlog cards remain available through explicit claim_task. Never use an unfiltered or done collection for ordinary next-work selection; generic completed-task history, audit, and evidence reads remain supported.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -120,7 +120,7 @@ export const taskToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'get_next_action',
-    description: 'Read-only scheduler pull for one project-pinned reasoning worker. Resumes DevFlow-owned durable board-loop state before unrelated work and returns exactly one bounded action: recover current work, resolve attention, continue implementation, recommend an atomic claim_next_task, confirm loop stop, or report no eligible work. It never claims, replays a mutation, or switches projectId, so repeated pulls are safe across reconnects.',
+    description: 'Read-only scheduler pull for one project-pinned reasoning worker. Resumes DevFlow-owned durable board-loop state before unrelated work and returns exactly one bounded action: recover current work, resolve attention, continue implementation, recommend an atomic claim_next_task, confirm loop stop, or report no eligible work. Automatic new-work selection is todo-only unless the persisted active loop explicitly uses include-backlog. It never claims, replays a mutation, or switches projectId, so repeated pulls are safe across reconnects.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -149,7 +149,7 @@ export const taskToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'claim_next_task',
-    description: 'Atomically select and claim the next deterministic eligible leaf task for one board-loop worker. This is also the mutation boundary that starts, propagates, and terminalizes durable DevFlow-owned board-loop intent. Structured prerequisiteTaskIds are authoritative eligibility gates; blocked dependents are skipped until their prerequisites are done, then become immediately eligible without a lane shuffle. For explicit or ambiguous fallback discovery, use bounded minimal/summary reads across backlog and todo; never use an unfiltered or done collection as ordinary next-work selection. projectId is the originating selected board boundary and must remain unchanged for the lifetime of that loop unless the user explicitly switches projects. NO_ELIGIBLE_TASK stops the current project loop only after the persisted requested parent/program stop condition is terminal; do not substitute another projectId to find work.',
+    description: 'Atomically select and claim the next deterministic eligible leaf task for one board-loop worker. This is also the mutation boundary that starts, propagates, and terminalizes durable DevFlow-owned board-loop intent. Automatic selection defaults to todo-only; backlog participates only when selectionPolicy=include-backlog is explicitly chosen for a new loop. Generic all/continue wording does not imply backlog. An active loop persists its selection policy across reconnects/workers and rejects conflicting policy input until terminal. Structured prerequisiteTaskIds remain authoritative eligibility gates. Explicit claim_task by id can still claim an eligible backlog card. For fallback discovery, use bounded minimal/summary reads of todo by default and backlog only under explicit include-backlog; never use an unfiltered or done collection as ordinary next-work selection. projectId is the originating selected board boundary and must remain unchanged for the lifetime of that loop unless the user explicitly switches projects. NO_ELIGIBLE_TASK stops the current project loop only after the persisted requested parent/program stop condition is terminal; do not substitute another projectId to find work.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -160,6 +160,7 @@ export const taskToolDefinitions: DevFlowToolDefinition[] = [
         limit: { type: 'number', description: 'Maximum runnable tasks to inspect. Defaults to 50 and is capped at 100.' },
         boardLoopRequested: { type: 'boolean', description: 'Start durable board-loop intent at this atomic claim boundary. Existing active loop intent for the project is reused instead of duplicated.' },
         requestedTaskId: { type: 'string', description: 'Optional requested parent/program task id or displayId whose terminal state is part of the durable loop stop condition.' },
+        selectionPolicy: { type: 'string', enum: ['todo-only', 'include-backlog'], description: 'Automatic next-work selection policy. Defaults to todo-only. Use include-backlog only for explicit backlog intent. Once an active durable loop exists, its persisted policy is authoritative until terminal.' },
         ...mutationResponseModeProperty,
       },
       required: ['projectId', 'sessionId'],

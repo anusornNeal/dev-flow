@@ -142,7 +142,7 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
 
   app.get('/api/agent-office', (req, res) => {
     try {
-      return res.json(getAgentOfficeMonitoringProjection(String(req.query.projectId || ''), { limit: req.query.limit }));
+      return res.json(getAgentOfficeMonitoringProjection({ limit: req.query.limit }));
     } catch (error) {
       return sendApiError(res, error);
     }

@@ -9,7 +9,7 @@ process.env.DEVFLOW_DB_PATH = path.join(tempDir, 'devflow.db');
 const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
 executeAllMigrations();
 const { deriveTaskBoardLiveWorkProjection, getAgentOfficeMonitoringProjection } = await import('../../src/server/services/taskBoardLiveWorkProjectionService.js');
-const { createProject } = await import('../../src/server/repositories/projectRepository.js');
+const { createProject, updateProject, deleteProject } = await import('../../src/server/repositories/projectRepository.js');
 const { saveTask } = await import('../../src/server/repositories/taskRepository.js');
 const { createExecutionSessionRecord, saveExecutionSessionEvidence } = await import('../../src/server/repositories/executionSessionRepository.js');
 
@@ -237,6 +237,10 @@ test('projection service stays on lightweight execution/checkpoint reads', () =>
   assert.doesNotMatch(source, /inspectWorkspaceRecovery/);
   assert.doesNotMatch(source, /workspaceRecoveryService/);
   assert.doesNotMatch(source, /child_process|execFile|spawnSync/);
+  assert.doesNotMatch(source, /getProjectOrchestrationProjection/);
+  assert.doesNotMatch(source, /listExecutionSessionsForTask/);
+  assert.match(source, /queryAgentOfficeTaskPage/);
+  assert.match(source, /queryLatestExecutionSessionEvidence/);
   assert.match(source, /queryExecutionSessions\(\{ taskId: task\.id, status: 'active', limit: 2 \}\)/);
 });
 
@@ -453,9 +457,11 @@ test('Agent Office composes managed, local-native, pipeline, attention and queue
   seedPipeline('finalizing', 'finalized');
   seedPipeline('cleanup', 'finalized', { kind: 'cleanup_session_workspace', status: 'running' });
 
-  const result = getAgentOfficeMonitoringProjection(projectId, { limit: 10 });
+  const result = getAgentOfficeMonitoringProjection({ limit: 10 });
   assert.equal(result.schema, 'agent-office-monitor.v1');
-  assert.equal(result.projectId, projectId);
+  assert.equal(result.scope, 'global');
+  assert.equal(result.projectId, null);
+  assert.equal(result.projects.items.some((entry: any) => entry.projectId === projectId && entry.projectName === 'Agent Office Monitor'), true);
   assert.equal(result.workers.items.find((entry: any) => entry.taskId === 'managed')?.source, 'devflow-managed');
   assert.equal(result.workers.items.find((entry: any) => entry.taskId === 'managed')?.ownerKind, 'chat');
   assert.equal(result.workers.items.find((entry: any) => entry.taskId === 'native')?.source, 'worker-native');
@@ -474,13 +480,13 @@ test('Agent Office composes managed, local-native, pipeline, attention and queue
   assert.equal(result.queue.items.ready.some((entry: any) => entry.taskId === 'ready'), true);
   assert.equal(result.queue.items.blocked.some((entry: any) => entry.taskId === 'blocked'), true);
 
-  const bounded = getAgentOfficeMonitoringProjection(projectId, { limit: 1 });
+  const bounded = getAgentOfficeMonitoringProjection({ limit: 1 });
   assert.equal(bounded.workers.items.length <= 1, true);
   assert.equal(bounded.pipeline.items.length <= 1, true);
   for (const entries of Object.values(bounded.queue.items) as any[]) assert.equal(entries.length <= 1, true);
 });
 
-test('Agent Office API is GET-only, project-scoped and bounded', async () => {
+test('Agent Office API is GET-only, global and bounded', async () => {
   const express = (await import('express')).default;
   const { registerApiRoutes } = await import('../../src/server/routes/registerApiRoutes.js');
   const projectId = 'project-agent-office-route';
@@ -524,15 +530,17 @@ test('Agent Office API is GET-only, project-scoped and bounded', async () => {
     const response = await fetch(`${base}/api/agent-office?projectId=${encodeURIComponent(projectId)}&limit=1`);
     assert.equal(response.status, 200);
     const body: any = await response.json();
-    assert.equal(body.projectId, projectId);
+    assert.equal(body.scope, 'global');
+    assert.equal(body.projectId, null);
     assert.equal(body.limit, 1);
     assert.equal(body.queue.items.ready.length, 1);
     assert.equal(body.queue.truncated.ready, true);
 
     const missingProject = await fetch(`${base}/api/agent-office`);
-    assert.equal(missingProject.status, 400);
+    assert.equal(missingProject.status, 200);
     const missingBody: any = await missingProject.json();
-    assert.equal(missingBody.error?.code, 'PROJECT_ID_REQUIRED');
+    assert.equal(missingBody.scope, 'global');
+    assert.equal(missingBody.projectId, null);
 
     const mutationAttempt = await fetch(`${base}/api/agent-office?projectId=${encodeURIComponent(projectId)}`, { method: 'POST' });
     assert.equal(mutationAttempt.status, 404);
@@ -540,3 +548,61 @@ test('Agent Office API is GET-only, project-scoped and bounded', async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
+
+test('Agent Office global projection keeps project identity unambiguous and filters stale project/task rows', () => {
+  const createdAt = new Date().toISOString();
+  const future = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  const projectA = { id: 'project-agent-office-global-a', name: 'Global Alpha', repoUrl: 'https://example.test/global-alpha.git', localPath: tempDir, taskIdPrefix: 'GA', createdAt };
+  const projectB = { id: 'project-agent-office-global-b', name: 'Global Beta', repoUrl: 'https://example.test/global-beta.git', localPath: tempDir, taskIdPrefix: 'GB', createdAt };
+  const deletedProject = { id: 'project-agent-office-global-deleted', name: 'Global Deleted', repoUrl: 'https://example.test/global-deleted.git', localPath: tempDir, taskIdPrefix: 'GD', createdAt };
+  createProject(projectA as any);
+  createProject(projectB as any);
+  createProject(deletedProject as any);
+
+  const seedGlobal = (projectId: string, id: string, patch: Record<string, any> = {}) => saveTask({
+    id, displayId: id.toUpperCase(), projectId, title: 'Duplicate-looking task', description: 'global projection fixture',
+    status: 'in-progress', priority: 'medium', category: 'backend', tags: [], targetFiles: [`src/${id}.ts`], checklist: [], logs: [],
+    createdAt, updatedAt: createdAt, ...patch,
+  } as any);
+
+  seedGlobal(projectA.id, 'global-active-a', { displayId: 'DUP-001', claim: {
+    sessionIdHash: 'global-a-hash', ownershipEpochId: 'global-a-epoch', workspaceId: 'ws-global-a', ownerKind: 'chat',
+    ownerLabel: 'Chat Global A', claimedAt: createdAt, expiresAt: future,
+  } });
+  createExecutionSessionRecord({
+    id: 'exec-global-a', projectId: projectA.id, taskId: 'global-active-a', workspaceId: 'ws-global-a', branch: 'global-a',
+    baseRevision: null, repoRevision: 'global-a-revision', status: 'active', contextHandle: null,
+    createdAt, updatedAt: createdAt, expiresAt: future, endedAt: null,
+  });
+  seedGlobal(projectB.id, 'global-active-b', { displayId: 'DUP-001', logs: [externalStatusLog({ worker: 'Codex Global B', action: 'IMPLEMENT_TASK', summary: 'global native work', contextRef: 'ctx-global-b' }, createdAt)] });
+  seedGlobal(projectB.id, 'global-ready-cross-scope', { status: 'backlog', targetFiles: ['src/global-active-a.ts'] });
+  seedGlobal(projectB.id, 'global-done', { status: 'done' });
+  seedGlobal(projectA.id, 'global-archived', { status: 'backlog', archivedAt: createdAt });
+  seedGlobal(deletedProject.id, 'global-deleted-project-task');
+  deleteProject(deletedProject.id);
+  updateProject({ ...projectB, name: 'Global Beta Renamed' } as any);
+
+  const result = getAgentOfficeMonitoringProjection({ limit: 50 });
+  const rows = result.workers.items.filter((entry: any) => entry.taskId === 'global-active-a' || entry.taskId === 'global-active-b');
+  assert.equal(rows.length, 2);
+  assert.equal(rows.find((entry: any) => entry.taskId === 'global-active-a')?.projectName, 'Global Alpha');
+  assert.equal(rows.find((entry: any) => entry.taskId === 'global-active-b')?.projectName, 'Global Beta Renamed');
+  assert.equal(rows[0].displayId === rows[1].displayId, true);
+  assert.notEqual(rows[0].projectId, rows[1].projectId);
+  assert.equal(result.projects.items.some((entry: any) => entry.projectId === deletedProject.id), false);
+  const queueRows = Object.values(result.queue.items).flat() as any[];
+  assert.equal(queueRows.some((entry) => entry.taskId === 'global-done'), false);
+  assert.equal(queueRows.some((entry) => entry.taskId === 'global-archived'), false);
+  assert.equal(queueRows.some((entry) => entry.taskId === 'global-deleted-project-task'), false);
+  assert.equal(result.queue.items.ready.some((entry: any) => entry.taskId === 'global-ready-cross-scope'), true);
+  const again = getAgentOfficeMonitoringProjection({ limit: 50 });
+  assert.deepEqual(
+    again.workers.items.map((entry: any) => `${entry.projectId}:${entry.taskId}`),
+    result.workers.items.map((entry: any) => `${entry.projectId}:${entry.taskId}`),
+  );
+  assert.equal(typeof result.partial, 'boolean');
+  assert.equal(typeof result.sources.tasks.truncated, 'boolean');
+  assert.equal(typeof result.sources.activeExecutions.truncated, 'boolean');
+  assert.equal(typeof result.sources.checkpoints.truncated, 'boolean');
+});
+

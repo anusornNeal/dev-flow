@@ -230,6 +230,22 @@ export function queryExecutionSessions(args: {
   };
 }
 
+export function queryLatestExecutionSessionEvidence(kindValue: string, limitValue = 100, statusValue?: ExecutionSessionStatus) {
+  const kind = String(kindValue || '').trim();
+  const numericLimit = Number(limitValue);
+  const limit = Math.max(1, Math.min(100, Number.isFinite(numericLimit) ? Math.floor(numericLimit) : 100));
+  const status = statusValue ? String(statusValue) : '';
+  if (!kind) return { evidence: [] as ExecutionSessionEvidenceRecord[], total: 0, limit, truncated: false };
+  const statusClause = status ? ' AND session.status = ?' : '';
+  const countParams = status ? [kind, status] : [kind];
+  const totalRow = db.prepare(`SELECT COUNT(DISTINCT evidence.sessionId) AS count FROM execution_session_evidence evidence INNER JOIN execution_sessions session ON session.id = evidence.sessionId WHERE evidence.kind = ?${statusClause}`).get(...countParams) as any;
+  const params = status ? [kind, status, limit] : [kind, limit];
+  const rows = db.prepare(`SELECT evidence.* FROM execution_session_evidence evidence INNER JOIN execution_sessions session ON session.id = evidence.sessionId WHERE evidence.kind = ?${statusClause} AND evidence.rowid = (SELECT candidate.rowid FROM execution_session_evidence candidate WHERE candidate.sessionId = evidence.sessionId AND candidate.kind = evidence.kind ORDER BY candidate.updatedAt DESC, candidate.createdAt DESC, candidate.id DESC LIMIT 1) ORDER BY evidence.updatedAt DESC, evidence.id DESC LIMIT ?`).all(...params) as any[];
+  const evidence = rows.map(normalizeEvidence).filter((entry): entry is ExecutionSessionEvidenceRecord => Boolean(entry));
+  const total = Number(totalRow?.count || 0);
+  return { evidence, total, limit, truncated: total > evidence.length };
+}
+
 export function updateExecutionSessionRecord(
   id: string,
   patch: Partial<Pick<ExecutionSessionRecord, 'workspaceId' | 'branch' | 'baseRevision' | 'repoRevision' | 'status' | 'contextHandle' | 'changedFiles' | 'verification' | 'updatedAt' | 'expiresAt' | 'endedAt'>>,

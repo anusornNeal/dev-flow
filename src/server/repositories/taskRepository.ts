@@ -463,6 +463,20 @@ export function getTasksByProjectId(projectId: string): any[] {
   return rows.map(row => parseTaskRow(row, runsByTaskId));
 }
 
+export function queryAgentOfficeTaskPage(options: { limit?: number; offset?: number } = {}) {
+  ensureTaskColumns();
+  const requestedLimit = Number(options.limit);
+  const limit = Math.max(1, Math.min(500, Number.isFinite(requestedLimit) ? Math.floor(requestedLimit) : 200));
+  const requestedOffset = Number(options.offset);
+  const offset = Math.max(0, Math.min(10_000, Number.isFinite(requestedOffset) ? Math.floor(requestedOffset) : 0));
+  const totalRow = db.prepare("SELECT COUNT(*) AS total FROM tasks INNER JOIN projects ON projects.id = tasks.projectId WHERE tasks.archivedAt IS NULL AND tasks.status <> 'done'").get() as any;
+  const rows = db.prepare("SELECT tasks.*, projects.name AS projectName, projects.taskIdPrefix AS projectTaskIdPrefix FROM tasks INNER JOIN projects ON projects.id = tasks.projectId WHERE tasks.archivedAt IS NULL AND tasks.status <> 'done' ORDER BY tasks.updatedAt DESC, tasks.projectId ASC, tasks.id ASC LIMIT ? OFFSET ?").all(limit, offset) as any[];
+  const runsByTaskId = getAllAgentRunsByTaskId(rows.map((row) => row.id));
+  const items = rows.map((row) => parseTaskRow(row, runsByTaskId));
+  const total = Number(totalRow?.total || 0);
+  return { items, total, limit, offset, truncated: total > offset + items.length };
+}
+
 export type TaskBoardPageOptions = {
   projectId?: string;
   status?: string;

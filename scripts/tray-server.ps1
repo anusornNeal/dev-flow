@@ -12,8 +12,14 @@ public class IconExtractor {
 
 $projectDir = Split-Path -Parent $PSScriptRoot
 $runtimeOwnerPath = Join-Path $projectDir ".devflow\runtime-owner\owner.json"
+$runtimeOwnerProbePath = Join-Path $PSScriptRoot "tray-runtime-owner.ps1"
 $logDir = Join-Path $projectDir "logs"
 $logFile = Join-Path $logDir "tray.log"
+
+if (-not (Test-Path -LiteralPath $runtimeOwnerProbePath)) {
+    throw "Missing runtime-owner probe helper: $runtimeOwnerProbePath"
+}
+. $runtimeOwnerProbePath
 
 function Write-TrayLog([string]$Level, [string]$Message) {
     if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir | Out-Null }
@@ -116,6 +122,14 @@ $exitItem.add_Click({
     $owner = Get-RuntimeOwner
     if ($null -eq $owner -or -not $owner.controlPort -or [string]::IsNullOrWhiteSpace([string]$owner.controlToken)) {
         Show-TrayMessage "DevFlow Stop Failed" "No verified supervisor ownership record is available." 5000
+        return
+    }
+
+    if (-not (Test-RuntimeOwner -Owner $owner)) {
+        Write-TrayLog "WARN" "Stale DevFlow supervisor ownership record detected; no live supervisor is available to shut down."
+        $script:notifyIcon.Visible = $false
+        $script:notifyIcon.Dispose()
+        [System.Windows.Forms.Application]::Exit()
         return
     }
 

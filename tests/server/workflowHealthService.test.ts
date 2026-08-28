@@ -314,9 +314,43 @@ test('compact health surfaces active current SLO regressions without historical 
   clearToolCallRecords();
 });
 
+test('compact project health does not Git-inspect active claimed workspaces', () => {
+  const repo = createRepo('compact-active-claim-no-recovery-inspection');
+  const workspace = createHealthWorkspace(repo, `compact-active-claim-workspace-${path.basename(tempRoot)}`, 'DVF-HEALTH-ACTIVE-1');
+  const task = seedHealthTask('task-health-active-claim', 'DVF-HEALTH-ACTIVE-1', {
+    workspaceId: workspace.workspaceId,
+    ownershipEpochId: null,
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  });
+  const execution = seedHealthExecution('exec-health-active-claim', task.id, workspace.workspaceId);
+  const setRecoveryInspector = (workflowHealthModule as any).__setWorkflowHealthWorkspaceRecoveryInspectorForTests;
+  assert.equal(typeof setRecoveryInspector, 'function');
+  let inspectionCount = 0;
+
+  try {
+    setRecoveryInspector(() => {
+      inspectionCount += 1;
+      throw new Error('compact project health must not perform Git-backed workspace recovery inspection');
+    });
+    const compact = getWorkflowHealth(stateFor(repo), { projectId: 'project-health', responseMode: 'compact' }) as any;
+    assert.equal(inspectionCount, 0);
+    assert.equal(compact.harness.aggregate.activeClaimCount, 1);
+    assert.equal(compact.harness.aggregate.activeExecutionCount, 1);
+    assert.equal(compact.harness.hardBlockers.includes('PROJECT_RECOVERY_SCAN_DEFERRED'), true);
+  } finally {
+    if (typeof setRecoveryInspector === 'function') setRecoveryInspector(null);
+    saveTask({
+      ...task,
+      claim: { ...task.claim, expiresAt: new Date(0).toISOString() },
+      updatedAt: new Date().toISOString(),
+    });
+    retireHealthWorkspace(execution.id, workspace.workspaceId);
+  }
+});
+
 test('compact project health defers unrelated registry recovery scans but fails closed', () => {
   const repo = createRepo('compact-deferred-recovery-scan');
-  const workspace = createHealthWorkspace(repo, 'compact-deferred-recovery-session', 'DVF-HEALTH-DEFER-1');
+  const workspace = createHealthWorkspace(repo, `compact-deferred-recovery-session-${path.basename(tempRoot)}`, 'DVF-HEALTH-DEFER-1');
 
   const compact = getWorkflowHealth(stateFor(repo), { projectId: 'project-health', responseMode: 'compact' }) as any;
   const full = getWorkflowHealth(stateFor(repo), { projectId: 'project-health', responseMode: 'full' }) as any;

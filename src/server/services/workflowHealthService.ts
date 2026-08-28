@@ -27,6 +27,11 @@ import { classifyRecoveryCapabilityParity, type RuntimeClientState } from './run
 
 const lastHealthEventSignatures = new Map<string, string>();
 let capabilityCatalogProvider: () => ReturnType<typeof getCapabilityCatalog> = getCapabilityCatalog;
+let workspaceRecoveryInspector: typeof inspectWorkspaceRecovery = inspectWorkspaceRecovery;
+
+export function __setWorkflowHealthWorkspaceRecoveryInspectorForTests(provider?: (typeof inspectWorkspaceRecovery) | null) {
+  workspaceRecoveryInspector = provider || inspectWorkspaceRecovery;
+}
 
 export function __setWorkflowHealthCapabilityCatalogForTests(provider?: (() => ReturnType<typeof getCapabilityCatalog>) | null) {
   capabilityCatalogProvider = provider || getCapabilityCatalog;
@@ -561,7 +566,7 @@ function projectHarnessHealth(state: AppState, args: Record<string, any>, option
     const cached = workspaceInspectionCache.get(workspaceId);
     if (cached) return cached;
     try {
-      const inspection = inspectWorkspaceRecovery(workspaceId);
+      const inspection = workspaceRecoveryInspector(workspaceId);
       workspaceInspectionCache.set(workspaceId, inspection);
       return inspection;
     } catch {
@@ -649,9 +654,8 @@ function projectHarnessHealth(state: AppState, args: Record<string, any>, option
   };
   for (const entry of activeClaims) rememberAuthoritativeWorkspace(entry.claim!.workspaceId, entry.task.id, null);
   for (const session of executions.sessions) rememberAuthoritativeWorkspace(session.workspaceId || '', session.taskId, session.id);
-  const claimedWorkspaceIds = new Set(activeClaims.map((entry) => entry.claim!.workspaceId));
   for (const [workspaceId, context] of authoritativeWorkspaceContexts) {
-    const requiresGitInspection = deepRecoveryScan || claimedWorkspaceIds.has(workspaceId);
+    const requiresGitInspection = deepRecoveryScan;
     const workspaceDrift = managedWorkspaceAuthorityDrift(workspaceId, {
       taskIds: [...context.taskIds].slice(0, 20),
       executionSessionIds: [...context.executionSessionIds].slice(0, 20),
@@ -730,10 +734,10 @@ function projectHarnessHealth(state: AppState, args: Record<string, any>, option
     }
     registryOffset = nextOffset;
   }
-  if (!deepRecoveryScan && registryOutsideActiveAuthorityCount > 0) drift.push({
+  if (!deepRecoveryScan && (registryOutsideActiveAuthorityCount > 0 || authoritativeWorkspaceContexts.size > 0)) drift.push({
     code: 'PROJECT_RECOVERY_SCAN_DEFERRED',
-    message: 'Compact project health deferred Git-backed recovery inspection for registry workspaces outside active lifecycle authority.',
-    workspaceIds: deferredWorkspaceIds,
+    message: 'Compact project health deferred Git-backed recovery inspection; use exact scoped or full/debug health before treating workspace recovery as clear.',
+    workspaceIds: [...new Set([...authoritativeWorkspaceContexts.keys(), ...deferredWorkspaceIds])].slice(0, 20),
     nextAction: 'Use full/debug project health before treating the project as lifecycle-clear or performing recovery cleanup.',
   });
   if (!registryScanComplete) drift.push({
